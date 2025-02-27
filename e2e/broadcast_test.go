@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/0xPolygon/polygon-edge/crypto"
-	"github.com/0xPolygon/polygon-edge/e2e/framework"
-	"github.com/0xPolygon/polygon-edge/helper/tests"
-	"github.com/0xPolygon/polygon-edge/types"
+	"github.com/Vcity-Team/vcitychain/crypto"
+	"github.com/Vcity-Team/vcitychain/e2e/framework"
+	"github.com/Vcity-Team/vcitychain/helper/tests"
+	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/stretchr/testify/assert"
 )
 

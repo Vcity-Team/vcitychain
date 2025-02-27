@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/0xPolygon/polygon-edge/command/helper"
-	ibftHelper "github.com/0xPolygon/polygon-edge/command/ibft/helper"
-	ibftOp "github.com/0xPolygon/polygon-edge/consensus/ibft/proto"
-	"github.com/0xPolygon/polygon-edge/validators"
+	"github.com/Vcity-Team/vcitychain/command/helper"
+	ibftHelper "github.com/Vcity-Team/vcitychain/command/ibft/helper"
+	ibftOp "github.com/Vcity-Team/vcitychain/consensus/ibft/proto"
+	"github.com/Vcity-Team/vcitychain/validators"
 )
 
 type IBFTSnapshotVote struct {

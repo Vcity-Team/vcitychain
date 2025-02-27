@@ -1,9 +1,9 @@
 package polybft
 
 import (
-	"github.com/0xPolygon/polygon-edge/blockchain"
-	"github.com/0xPolygon/polygon-edge/consensus/polybft/contractsapi"
-	"github.com/0xPolygon/polygon-edge/types"
+	"github.com/Vcity-Team/vcitychain/blockchain"
+	"github.com/Vcity-Team/vcitychain/consensus/polybft/contractsapi"
+	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/umbracle/ethgo"
 	bolt "go.etcd.io/bbolt"
 )

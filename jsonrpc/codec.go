@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/0xPolygon/polygon-edge/helper/common"
-	"github.com/0xPolygon/polygon-edge/types"
+	"github.com/Vcity-Team/vcitychain/helper/common"
+	"github.com/Vcity-Team/vcitychain/types"
 )
 
 // Request is a jsonrpc request

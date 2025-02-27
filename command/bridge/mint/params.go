@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/0xPolygon/polygon-edge/command/helper"
-	rootHelper "github.com/0xPolygon/polygon-edge/command/rootchain/helper"
-	"github.com/0xPolygon/polygon-edge/types"
+	"github.com/Vcity-Team/vcitychain/command/helper"
+	rootHelper "github.com/Vcity-Team/vcitychain/command/rootchain/helper"
+	"github.com/Vcity-Team/vcitychain/types"
 )
 
 type mintParams struct {

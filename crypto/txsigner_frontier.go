@@ -6,7 +6,7 @@ import (
 
 	"github.com/umbracle/fastrlp"
 
-	"github.com/0xPolygon/polygon-edge/types"
+	"github.com/Vcity-Team/vcitychain/types"
 )
 
 var signerPool fastrlp.ArenaPool

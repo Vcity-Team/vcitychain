@@ -6,9 +6,9 @@ import (
 
 	"github.com/hashicorp/go-hclog"
 
-	"github.com/0xPolygon/polygon-edge/chain"
-	"github.com/0xPolygon/polygon-edge/network"
-	"github.com/0xPolygon/polygon-edge/secrets"
+	"github.com/Vcity-Team/vcitychain/chain"
+	"github.com/Vcity-Team/vcitychain/network"
+	"github.com/Vcity-Team/vcitychain/secrets"
 )
 
 const DefaultGRPCPort int = 9632

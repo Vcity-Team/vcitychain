@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/0xPolygon/polygon-edge/command"
-	"github.com/0xPolygon/polygon-edge/command/server/config"
-	"github.com/0xPolygon/polygon-edge/helper/common"
+	"github.com/Vcity-Team/vcitychain/command"
+	"github.com/Vcity-Team/vcitychain/command/server/config"
+	"github.com/Vcity-Team/vcitychain/helper/common"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )

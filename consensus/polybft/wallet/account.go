@@ -5,9 +5,9 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/0xPolygon/polygon-edge/bls"
-	"github.com/0xPolygon/polygon-edge/secrets"
-	"github.com/0xPolygon/polygon-edge/types"
+	"github.com/Vcity-Team/vcitychain/bls"
+	"github.com/Vcity-Team/vcitychain/secrets"
+	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/umbracle/ethgo/wallet"
 )
 

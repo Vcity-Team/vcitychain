@@ -3,11 +3,11 @@ package server
 import (
 	"fmt"
 
-	"github.com/0xPolygon/polygon-edge/command"
-	"github.com/0xPolygon/polygon-edge/command/helper"
-	"github.com/0xPolygon/polygon-edge/command/server/config"
-	"github.com/0xPolygon/polygon-edge/command/server/export"
-	"github.com/0xPolygon/polygon-edge/server"
+	"github.com/Vcity-Team/vcitychain/command"
+	"github.com/Vcity-Team/vcitychain/command/helper"
+	"github.com/Vcity-Team/vcitychain/command/server/config"
+	"github.com/Vcity-Team/vcitychain/command/server/export"
+	"github.com/Vcity-Team/vcitychain/server"
 	"github.com/spf13/cobra"
 )
 

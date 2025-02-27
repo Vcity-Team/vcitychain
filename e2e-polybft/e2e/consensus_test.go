@@ -15,15 +15,15 @@ import (
 	"github.com/umbracle/ethgo/abi"
 	"github.com/umbracle/ethgo/wallet"
 
-	"github.com/0xPolygon/polygon-edge/command"
-	"github.com/0xPolygon/polygon-edge/command/genesis"
-	"github.com/0xPolygon/polygon-edge/command/sidechain"
-	"github.com/0xPolygon/polygon-edge/consensus/polybft"
-	"github.com/0xPolygon/polygon-edge/consensus/polybft/contractsapi"
-	"github.com/0xPolygon/polygon-edge/contracts"
-	"github.com/0xPolygon/polygon-edge/e2e-polybft/framework"
-	"github.com/0xPolygon/polygon-edge/txrelayer"
-	"github.com/0xPolygon/polygon-edge/types"
+	"github.com/Vcity-Team/vcitychain/command"
+	"github.com/Vcity-Team/vcitychain/command/genesis"
+	"github.com/Vcity-Team/vcitychain/command/sidechain"
+	"github.com/Vcity-Team/vcitychain/consensus/polybft"
+	"github.com/Vcity-Team/vcitychain/consensus/polybft/contractsapi"
+	"github.com/Vcity-Team/vcitychain/contracts"
+	"github.com/Vcity-Team/vcitychain/e2e-polybft/framework"
+	"github.com/Vcity-Team/vcitychain/txrelayer"
+	"github.com/Vcity-Team/vcitychain/types"
 )
 
 var uint256ABIType = abi.MustNewType("tuple(uint256)")

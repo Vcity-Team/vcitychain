@@ -1,8 +1,8 @@
 package hook
 
 import (
-	"github.com/0xPolygon/polygon-edge/state"
-	"github.com/0xPolygon/polygon-edge/types"
+	"github.com/Vcity-Team/vcitychain/state"
+	"github.com/Vcity-Team/vcitychain/types"
 )
 
 type ShouldWriteTransactionsFunc func(uint64) bool

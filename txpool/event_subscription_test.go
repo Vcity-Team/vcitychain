@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/0xPolygon/polygon-edge/helper/tests"
-	"github.com/0xPolygon/polygon-edge/txpool/proto"
-	"github.com/0xPolygon/polygon-edge/types"
+	"github.com/Vcity-Team/vcitychain/helper/tests"
+	"github.com/Vcity-Team/vcitychain/txpool/proto"
+	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -3,7 +3,7 @@ package fork
 import (
 	"fmt"
 
-	"github.com/0xPolygon/polygon-edge/validators/store"
+	"github.com/Vcity-Team/vcitychain/validators/store"
 )
 
 // Define the type of the IBFT consensus

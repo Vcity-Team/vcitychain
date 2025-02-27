@@ -3,10 +3,10 @@ package propose
 import (
 	"fmt"
 
-	"github.com/0xPolygon/polygon-edge/command"
+	"github.com/Vcity-Team/vcitychain/command"
 	"github.com/spf13/cobra"
 
-	"github.com/0xPolygon/polygon-edge/command/helper"
+	"github.com/Vcity-Team/vcitychain/command/helper"
 )
 
 func GetCommand() *cobra.Command {

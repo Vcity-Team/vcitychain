@@ -1,7 +1,7 @@
 package jsonrpc
 
 import (
-	"github.com/0xPolygon/polygon-edge/types"
+	"github.com/Vcity-Team/vcitychain/types"
 )
 
 // bridgeStore interface provides access to the methods needed by bridge endpoint

@@ -1,10 +1,10 @@
 package license
 
 import (
-	"github.com/0xPolygon/polygon-edge/command"
+	"github.com/Vcity-Team/vcitychain/command"
 	"github.com/spf13/cobra"
 
-	"github.com/0xPolygon/polygon-edge/licenses"
+	"github.com/Vcity-Team/vcitychain/licenses"
 )
 
 func GetCommand() *cobra.Command {

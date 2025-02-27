@@ -3,14 +3,14 @@ package fork
 import (
 	"errors"
 
-	"github.com/0xPolygon/polygon-edge/consensus/ibft/hook"
-	"github.com/0xPolygon/polygon-edge/contracts/staking"
-	"github.com/0xPolygon/polygon-edge/helper/hex"
-	stakingHelper "github.com/0xPolygon/polygon-edge/helper/staking"
-	"github.com/0xPolygon/polygon-edge/state"
-	"github.com/0xPolygon/polygon-edge/types"
-	"github.com/0xPolygon/polygon-edge/validators"
-	"github.com/0xPolygon/polygon-edge/validators/store"
+	"github.com/Vcity-Team/vcitychain/consensus/ibft/hook"
+	"github.com/Vcity-Team/vcitychain/contracts/staking"
+	"github.com/Vcity-Team/vcitychain/helper/hex"
+	stakingHelper "github.com/Vcity-Team/vcitychain/helper/staking"
+	"github.com/Vcity-Team/vcitychain/state"
+	"github.com/Vcity-Team/vcitychain/types"
+	"github.com/Vcity-Team/vcitychain/validators"
+	"github.com/Vcity-Team/vcitychain/validators/store"
 )
 
 var (

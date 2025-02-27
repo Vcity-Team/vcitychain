@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/0xPolygon/polygon-edge/e2e/framework"
-	"github.com/0xPolygon/polygon-edge/validators"
+	"github.com/Vcity-Team/vcitychain/e2e/framework"
+	"github.com/Vcity-Team/vcitychain/validators"
 )
 
 func TestClusterBlockSync(t *testing.T) {

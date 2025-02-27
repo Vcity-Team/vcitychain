@@ -3,8 +3,8 @@ package storage
 import (
 	"math/big"
 
-	"github.com/0xPolygon/polygon-edge/helper/common"
-	"github.com/0xPolygon/polygon-edge/types"
+	"github.com/Vcity-Team/vcitychain/helper/common"
+	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/umbracle/fastrlp"
 )
 

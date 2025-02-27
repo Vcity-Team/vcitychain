@@ -4,7 +4,7 @@ import (
 	"container/heap"
 	"math/big"
 
-	"github.com/0xPolygon/polygon-edge/types"
+	"github.com/Vcity-Team/vcitychain/types"
 )
 
 type pricedQueue struct {

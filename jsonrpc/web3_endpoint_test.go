@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/0xPolygon/polygon-edge/versioning"
+	"github.com/Vcity-Team/vcitychain/versioning"
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/stretchr/testify/assert"

@@ -3,7 +3,7 @@ package proto
 import (
 	"testing"
 
-	"github.com/0xPolygon/polygon-edge/validate"
+	"github.com/Vcity-Team/vcitychain/validate"
 	"github.com/stretchr/testify/assert"
 )
 

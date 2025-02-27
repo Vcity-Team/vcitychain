@@ -1,13 +1,13 @@
 package ibft
 
 import (
-	"github.com/0xPolygon/polygon-edge/command/helper"
-	"github.com/0xPolygon/polygon-edge/command/ibft/candidates"
-	"github.com/0xPolygon/polygon-edge/command/ibft/propose"
-	"github.com/0xPolygon/polygon-edge/command/ibft/quorum"
-	"github.com/0xPolygon/polygon-edge/command/ibft/snapshot"
-	"github.com/0xPolygon/polygon-edge/command/ibft/status"
-	_switch "github.com/0xPolygon/polygon-edge/command/ibft/switch"
+	"github.com/Vcity-Team/vcitychain/command/helper"
+	"github.com/Vcity-Team/vcitychain/command/ibft/candidates"
+	"github.com/Vcity-Team/vcitychain/command/ibft/propose"
+	"github.com/Vcity-Team/vcitychain/command/ibft/quorum"
+	"github.com/Vcity-Team/vcitychain/command/ibft/snapshot"
+	"github.com/Vcity-Team/vcitychain/command/ibft/status"
+	_switch "github.com/Vcity-Team/vcitychain/command/ibft/switch"
 	"github.com/spf13/cobra"
 )
 

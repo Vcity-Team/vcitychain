@@ -7,7 +7,7 @@ Welcome to the Polygon Edge documentation, built with [the Material theme for Mk
 ### Clone the repo
 
 ```sh
-https://github.com/0xPolygon/polygon-edge.git
+https://github.com/Vcity-Team/vcitychain.git
 cd polygon-edge/docs
 ```
 

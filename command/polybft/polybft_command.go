@@ -1,16 +1,16 @@
 package polybft
 
 import (
-	"github.com/0xPolygon/polygon-edge/command/rootchain/registration"
-	"github.com/0xPolygon/polygon-edge/command/rootchain/staking"
-	"github.com/0xPolygon/polygon-edge/command/rootchain/supernet"
-	"github.com/0xPolygon/polygon-edge/command/rootchain/supernet/stakemanager"
-	"github.com/0xPolygon/polygon-edge/command/rootchain/validators"
-	"github.com/0xPolygon/polygon-edge/command/rootchain/whitelist"
-	"github.com/0xPolygon/polygon-edge/command/rootchain/withdraw"
-	"github.com/0xPolygon/polygon-edge/command/sidechain/rewards"
-	"github.com/0xPolygon/polygon-edge/command/sidechain/unstaking"
-	sidechainWithdraw "github.com/0xPolygon/polygon-edge/command/sidechain/withdraw"
+	"github.com/Vcity-Team/vcitychain/command/rootchain/registration"
+	"github.com/Vcity-Team/vcitychain/command/rootchain/staking"
+	"github.com/Vcity-Team/vcitychain/command/rootchain/supernet"
+	"github.com/Vcity-Team/vcitychain/command/rootchain/supernet/stakemanager"
+	"github.com/Vcity-Team/vcitychain/command/rootchain/validators"
+	"github.com/Vcity-Team/vcitychain/command/rootchain/whitelist"
+	"github.com/Vcity-Team/vcitychain/command/rootchain/withdraw"
+	"github.com/Vcity-Team/vcitychain/command/sidechain/rewards"
+	"github.com/Vcity-Team/vcitychain/command/sidechain/unstaking"
+	sidechainWithdraw "github.com/Vcity-Team/vcitychain/command/sidechain/withdraw"
 	"github.com/spf13/cobra"
 )
 

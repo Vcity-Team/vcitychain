@@ -3,10 +3,10 @@ package rootchain
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/0xPolygon/polygon-edge/command/rootchain/deploy"
-	"github.com/0xPolygon/polygon-edge/command/rootchain/fund"
-	"github.com/0xPolygon/polygon-edge/command/rootchain/premine"
-	"github.com/0xPolygon/polygon-edge/command/rootchain/server"
+	"github.com/Vcity-Team/vcitychain/command/rootchain/deploy"
+	"github.com/Vcity-Team/vcitychain/command/rootchain/fund"
+	"github.com/Vcity-Team/vcitychain/command/rootchain/premine"
+	"github.com/Vcity-Team/vcitychain/command/rootchain/server"
 )
 
 // GetCommand creates "rootchain" helper command

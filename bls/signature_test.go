@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	bn256 "github.com/umbracle/go-eth-bn256"
 
-	"github.com/0xPolygon/polygon-edge/crypto"
+	"github.com/Vcity-Team/vcitychain/crypto"
 )
 
 const (

@@ -6,8 +6,8 @@ import (
 	"github.com/0xPolygon/go-ibft/messages/proto"
 	"github.com/stretchr/testify/require"
 
-	"github.com/0xPolygon/polygon-edge/bls"
-	"github.com/0xPolygon/polygon-edge/consensus/polybft/signer"
+	"github.com/Vcity-Team/vcitychain/bls"
+	"github.com/Vcity-Team/vcitychain/consensus/polybft/signer"
 )
 
 func Test_RecoverAddressFromSignature(t *testing.T) {

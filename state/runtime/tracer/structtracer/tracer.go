@@ -6,11 +6,11 @@ import (
 	"math/big"
 	"sync"
 
-	"github.com/0xPolygon/polygon-edge/helper/hex"
-	"github.com/0xPolygon/polygon-edge/state/runtime"
-	"github.com/0xPolygon/polygon-edge/state/runtime/evm"
-	"github.com/0xPolygon/polygon-edge/state/runtime/tracer"
-	"github.com/0xPolygon/polygon-edge/types"
+	"github.com/Vcity-Team/vcitychain/helper/hex"
+	"github.com/Vcity-Team/vcitychain/state/runtime"
+	"github.com/Vcity-Team/vcitychain/state/runtime/evm"
+	"github.com/Vcity-Team/vcitychain/state/runtime/tracer"
+	"github.com/Vcity-Team/vcitychain/types"
 )
 
 type Config struct {

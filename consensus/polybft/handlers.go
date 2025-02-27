@@ -1,8 +1,8 @@
 package polybft
 
 import (
-	"github.com/0xPolygon/polygon-edge/consensus/polybft/validator"
-	"github.com/0xPolygon/polygon-edge/types"
+	"github.com/Vcity-Team/vcitychain/consensus/polybft/validator"
+	"github.com/Vcity-Team/vcitychain/types"
 	bolt "go.etcd.io/bbolt"
 )
 

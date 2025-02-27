@@ -10,7 +10,7 @@ import (
 
 	manet "github.com/multiformats/go-multiaddr/net"
 
-	"github.com/0xPolygon/polygon-edge/validate"
+	"github.com/Vcity-Team/vcitychain/validate"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/grpc"

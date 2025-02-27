@@ -13,16 +13,16 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/0xPolygon/polygon-edge/command"
-	bridgeCommon "github.com/0xPolygon/polygon-edge/command/bridge/common"
-	"github.com/0xPolygon/polygon-edge/command/genesis"
-	cmdHelper "github.com/0xPolygon/polygon-edge/command/helper"
-	"github.com/0xPolygon/polygon-edge/command/polybftsecrets"
-	rootHelper "github.com/0xPolygon/polygon-edge/command/rootchain/helper"
-	"github.com/0xPolygon/polygon-edge/command/rootchain/server"
-	"github.com/0xPolygon/polygon-edge/consensus/polybft"
-	"github.com/0xPolygon/polygon-edge/consensus/polybft/wallet"
-	"github.com/0xPolygon/polygon-edge/types"
+	"github.com/Vcity-Team/vcitychain/command"
+	bridgeCommon "github.com/Vcity-Team/vcitychain/command/bridge/common"
+	"github.com/Vcity-Team/vcitychain/command/genesis"
+	cmdHelper "github.com/Vcity-Team/vcitychain/command/helper"
+	"github.com/Vcity-Team/vcitychain/command/polybftsecrets"
+	rootHelper "github.com/Vcity-Team/vcitychain/command/rootchain/helper"
+	"github.com/Vcity-Team/vcitychain/command/rootchain/server"
+	"github.com/Vcity-Team/vcitychain/consensus/polybft"
+	"github.com/Vcity-Team/vcitychain/consensus/polybft/wallet"
+	"github.com/Vcity-Team/vcitychain/types"
 )
 
 type TestBridge struct {

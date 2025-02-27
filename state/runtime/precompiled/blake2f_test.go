@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/0xPolygon/polygon-edge/types"
+	"github.com/Vcity-Team/vcitychain/types"
 )
 
 func TestBlake2f(t *testing.T) {

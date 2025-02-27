@@ -1,7 +1,7 @@
 package output
 
 import (
-	"github.com/0xPolygon/polygon-edge/command"
+	"github.com/Vcity-Team/vcitychain/command"
 	"github.com/spf13/cobra"
 )
 

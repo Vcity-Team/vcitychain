@@ -4,13 +4,13 @@ manifest.json
 secretsManagerConfig.json
 *-packr.go
 config*.json
-polygon-edge
+vcitychain
 
 bin/
 
 test-chain*
 test-rootchain*
-polygon-edge-chain*
+vcity-chain*
 .idea
 
 # Exclude the build .exe file from version control

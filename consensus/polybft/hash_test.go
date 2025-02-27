@@ -3,11 +3,11 @@ package polybft
 import (
 	"testing"
 
-	"github.com/0xPolygon/polygon-edge/consensus/polybft/bitmap"
-	"github.com/0xPolygon/polygon-edge/consensus/polybft/signer"
-	"github.com/0xPolygon/polygon-edge/consensus/polybft/validator"
-	"github.com/0xPolygon/polygon-edge/consensus/polybft/wallet"
-	"github.com/0xPolygon/polygon-edge/types"
+	"github.com/Vcity-Team/vcitychain/consensus/polybft/bitmap"
+	"github.com/Vcity-Team/vcitychain/consensus/polybft/signer"
+	"github.com/Vcity-Team/vcitychain/consensus/polybft/validator"
+	"github.com/Vcity-Team/vcitychain/consensus/polybft/wallet"
+	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/stretchr/testify/assert"
 )
 

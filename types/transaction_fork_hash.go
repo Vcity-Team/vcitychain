@@ -3,8 +3,8 @@ package types
 import (
 	"math/big"
 
-	"github.com/0xPolygon/polygon-edge/forkmanager"
-	"github.com/0xPolygon/polygon-edge/helper/keccak"
+	"github.com/Vcity-Team/vcitychain/forkmanager"
+	"github.com/Vcity-Team/vcitychain/helper/keccak"
 	"github.com/umbracle/fastrlp"
 )
 

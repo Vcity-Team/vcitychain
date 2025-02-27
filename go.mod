@@ -1,6 +1,8 @@
-module github.com/0xPolygon/polygon-edge
+module github.com/Vcity-Team/vcitychain
 
-go 1.20
+go 1.21
+
+toolchain go1.21.0
 
 require (
 	github.com/btcsuite/btcd v0.22.1

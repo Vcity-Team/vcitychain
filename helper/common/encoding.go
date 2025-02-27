@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/0xPolygon/polygon-edge/helper/hex"
+	"github.com/Vcity-Team/vcitychain/helper/hex"
 )
 
 // ParseUint64orHex parses the given uint64 hex string into the number.

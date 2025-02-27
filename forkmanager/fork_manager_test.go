@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/0xPolygon/polygon-edge/helper/common"
+	"github.com/Vcity-Team/vcitychain/helper/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

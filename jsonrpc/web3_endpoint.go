@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"runtime"
 
-	"github.com/0xPolygon/polygon-edge/helper/keccak"
-	"github.com/0xPolygon/polygon-edge/versioning"
+	"github.com/Vcity-Team/vcitychain/helper/keccak"
+	"github.com/Vcity-Team/vcitychain/versioning"
 )
 
 // Web3 is the web3 jsonrpc endpoint

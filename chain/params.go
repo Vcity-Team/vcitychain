@@ -4,8 +4,8 @@ import (
 	"errors"
 	"sort"
 
-	"github.com/0xPolygon/polygon-edge/forkmanager"
-	"github.com/0xPolygon/polygon-edge/types"
+	"github.com/Vcity-Team/vcitychain/forkmanager"
+	"github.com/Vcity-Team/vcitychain/types"
 )
 
 var (
