@@ -93,7 +93,7 @@ func registerStakingContractDeploymentHooks(
 			return nil
 		}
 
-		if txn.AccountExists(staking.AddrStakingContract) {
+		if txn.AccountExists(staking.AddrStakingContract) && !fork.Redeployment {
 			// update bytecode of deployed contract
 			codeBytes, err := hex.DecodeHex(stakingHelper.StakingSCBytecode)
 			if err != nil {
@@ -120,12 +120,11 @@ func registerStakingContractDeploymentHooks(
 // getPreDeployParams returns PredeployParams for Staking Contract from IBFTFork
 func getPreDeployParams(fork *IBFTFork) stakingHelper.PredeployParams {
 	params := stakingHelper.PredeployParams{
-		MinValidatorCount: stakingHelper.MinValidatorCount,
 		MaxValidatorCount: stakingHelper.MaxValidatorCount,
 	}
 
 	if fork.MinValidatorCount != nil {
-		params.MinValidatorCount = fork.MinValidatorCount.Value
+		params.EpochSize = fork.EpochSize
 	}
 
 	if fork.MaxValidatorCount != nil {

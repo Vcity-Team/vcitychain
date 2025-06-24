@@ -4,8 +4,21 @@ const StakingJSONABI = `[
 	{
 		"inputs": [
 			{
+				"internalType": "address",
+				"name": "node",
+				"type": "address"
+			}
+		],
+		"name": "approveByzantineNode",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
 				"internalType": "uint256",
-				"name": "minNumValidators",
+				"name": "_epochSize",
 				"type": "uint256"
 			},
 			{
@@ -16,6 +29,70 @@ const StakingJSONABI = `[
 		],
 		"stateMutability": "nonpayable",
 		"type": "constructor"
+	},
+	{
+		"inputs": [],
+		"name": "EMPTY_ARRAY_POP",
+		"type": "error"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "accout",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "bytes",
+				"name": "key",
+				"type": "bytes"
+			}
+		],
+		"name": "BLSPublicKeyRegistered",
+		"type": "event"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "node",
+				"type": "address"
+			}
+		],
+		"name": "proposeByzantineNode",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "bytes",
+				"name": "blsPubKey",
+				"type": "bytes"
+			}
+		],
+		"name": "registerBLSPublicKey",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "rotate",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "stake",
+		"outputs": [],
+		"stateMutability": "payable",
+		"type": "function"
 	},
 	{
 		"anonymous": false,
@@ -37,6 +114,13 @@ const StakingJSONABI = `[
 		"type": "event"
 	},
 	{
+		"inputs": [],
+		"name": "unstake",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
 		"anonymous": false,
 		"inputs": [
 			{
@@ -56,17 +140,8 @@ const StakingJSONABI = `[
 		"type": "event"
 	},
 	{
-		"inputs": [],
-		"name": "VALIDATOR_THRESHOLD",
-		"outputs": [
-			{
-				"internalType": "uint128",
-				"name": "",
-				"type": "uint128"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
+		"stateMutability": "payable",
+		"type": "receive"
 	},
 	{
 		"inputs": [
@@ -95,108 +170,12 @@ const StakingJSONABI = `[
 				"type": "address"
 			}
 		],
-		"name": "_addressToIsValidator",
+		"name": "_validatorState",
 		"outputs": [
 			{
-				"internalType": "bool",
+				"internalType": "enum Staking.state",
 				"name": "",
-				"type": "bool"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "",
-				"type": "address"
-			}
-		],
-		"name": "_addressToStakedAmount",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "",
-				"type": "uint256"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "",
-				"type": "address"
-			}
-		],
-		"name": "_addressToValidatorIndex",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "",
-				"type": "uint256"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
-	},
-	{
-		"inputs": [],
-		"name": "_maximumNumValidators",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "",
-				"type": "uint256"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
-	},
-	{
-		"inputs": [],
-		"name": "_minimumNumValidators",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "",
-				"type": "uint256"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
-	},
-	{
-		"inputs": [],
-		"name": "_stakedAmount",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "",
-				"type": "uint256"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "uint256",
-				"name": "",
-				"type": "uint256"
-			}
-		],
-		"name": "_validators",
-		"outputs": [
-			{
-				"internalType": "address",
-				"name": "",
-				"type": "address"
+				"type": "uint8"
 			}
 		],
 		"stateMutability": "view",
@@ -222,19 +201,13 @@ const StakingJSONABI = `[
 		"type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "addr",
-				"type": "address"
-			}
-		],
-		"name": "isValidator",
+		"inputs": [],
+		"name": "epochSize",
 		"outputs": [
 			{
-				"internalType": "bool",
+				"internalType": "uint256",
 				"name": "",
-				"type": "bool"
+				"type": "uint256"
 			}
 		],
 		"stateMutability": "view",
@@ -263,32 +236,18 @@ const StakingJSONABI = `[
 				"type": "uint256"
 			}
 		],
-		"stateMutability": "view",
+		"stateMutability": "pure",
 		"type": "function"
 	},
 	{
 		"inputs": [
 			{
-				"internalType": "bytes",
-				"name": "blsPubKey",
-				"type": "bytes"
+				"internalType": "address",
+				"name": "",
+				"type": "address"
 			}
 		],
-		"name": "registerBLSPublicKey",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
-	{
-		"inputs": [],
-		"name": "stake",
-		"outputs": [],
-		"stateMutability": "payable",
-		"type": "function"
-	},
-	{
-		"inputs": [],
-		"name": "stakedAmount",
+		"name": "stakeAmount",
 		"outputs": [
 			{
 				"internalType": "uint256",
@@ -301,9 +260,28 @@ const StakingJSONABI = `[
 	},
 	{
 		"inputs": [],
-		"name": "unstake",
-		"outputs": [],
-		"stateMutability": "nonpayable",
+		"name": "totalStake",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "VALIDATOR_THRESHOLD",
+		"outputs": [
+			{
+				"internalType": "uint128",
+				"name": "",
+				"type": "uint128"
+			}
+		],
+		"stateMutability": "view",
 		"type": "function"
 	},
 	{
@@ -331,10 +309,6 @@ const StakingJSONABI = `[
 		],
 		"stateMutability": "view",
 		"type": "function"
-	},
-	{
-		"stateMutability": "payable",
-		"type": "receive"
 	}
 ]`
 

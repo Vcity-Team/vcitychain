@@ -466,7 +466,7 @@ func (p *genesisParams) predeployStakingSC() (*chain.GenesisAccount, error) {
 	stakingAccount, predeployErr := stakingHelper.PredeployStakingSC(
 		p.ibftValidators,
 		stakingHelper.PredeployParams{
-			MinValidatorCount: p.minNumValidators,
+			EpochSize:         p.epochSize,
 			MaxValidatorCount: p.maxNumValidators,
 		})
 	if predeployErr != nil {

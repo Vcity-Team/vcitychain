@@ -78,6 +78,7 @@ func NewPoSHookRegister(
 			continue
 		}
 
+		fork.EpochSize = epochSize
 		deployContractForks[fork.Deployment.Value] = fork
 	}
 
