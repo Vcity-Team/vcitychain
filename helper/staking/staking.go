@@ -227,6 +227,7 @@ func PredeployStakingSC(
 			}
 
 			// Set the value for the address -> staked amount mapping
+			// TODO: Remove this operation and inherit staking weight directly from a fixed ERC20 balance
 			storageMap[types.BytesToHash(storageIndexes.AddressToStakedAmountIndex)] =
 				types.StringToHash(hex.EncodeBig(bigDefaultStakedBalance))
 

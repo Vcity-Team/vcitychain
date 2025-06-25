@@ -34,10 +34,10 @@ type IBFTFork struct {
 	Validators validators.Validators `json:"validators,omitempty"`
 
 	// PoS
-	EpochSize         uint64
-	MaxValidatorCount *common.JSONNumber `json:"maxValidatorCount,omitempty"`
-	MinValidatorCount *common.JSONNumber `json:"minValidatorCount,omitempty"`
-	Redeployment      bool               `json:"Redeployment,omitempty"`
+	EpochSize            uint64
+	MaxValidatorCount    *common.JSONNumber `json:"maxValidatorCount,omitempty"`
+	MinValidatorCount    *common.JSONNumber `json:"minValidatorCount,omitempty"`
+	WithLegacyValidators bool               `json:"withLegacyValidators,omitempty"`
 }
 
 func (f *IBFTFork) UnmarshalJSON(data []byte) error {

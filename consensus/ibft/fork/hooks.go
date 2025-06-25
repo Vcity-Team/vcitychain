@@ -11,6 +11,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/Vcity-Team/vcitychain/validators"
 	"github.com/Vcity-Team/vcitychain/validators/store"
+	"github.com/Vcity-Team/vcitychain/validators/store/contract"
 )
 
 var (
@@ -93,7 +94,7 @@ func registerStakingContractDeploymentHooks(
 			return nil
 		}
 
-		if txn.AccountExists(staking.AddrStakingContract) && !fork.Redeployment {
+		if txn.AccountExists(staking.AddrStakingContract) && !fork.WithLegacyValidators {
 			// update bytecode of deployed contract
 			codeBytes, err := hex.DecodeHex(stakingHelper.StakingSCBytecode)
 			if err != nil {
@@ -102,9 +103,19 @@ func registerStakingContractDeploymentHooks(
 
 			return txn.SetCodeDirectly(staking.AddrStakingContract, codeBytes)
 		} else {
+
+			validators := fork.Validators
+			if fork.WithLegacyValidators {
+				vals, err := contract.FetchValidators(fork.ValidatorType, txn, types.ZeroAddress)
+				if err != nil {
+					return err
+				}
+				validators = vals
+			}
+
 			// deploy contract
 			contractState, err := stakingHelper.PredeployStakingSC(
-				fork.Validators,
+				validators,
 				getPreDeployParams(fork),
 			)
 
