@@ -15,6 +15,8 @@ import (
 const (
 	methodValidators             = "validators"
 	methodValidatorBLSPublicKeys = "validatorBLSPublicKeys"
+
+	MethodRotate = "rotate"
 )
 
 var (

@@ -19,6 +19,8 @@ type PreCommitStateFunc func(*types.Header, *state.Transition) error
 
 type PostInsertBlockFunc func(*types.Block) error
 
+type ShouldRotationFunc func(uint64) bool
+
 type Hooks struct {
 	ShouldWriteTransactionFunc ShouldWriteTransactionsFunc
 	ModifyHeaderFunc           ModifyHeaderFunc
@@ -27,6 +29,7 @@ type Hooks struct {
 	ProcessHeaderFunc          ProcessHeaderFunc
 	PreCommitStateFunc         PreCommitStateFunc
 	PostInsertBlockFunc        PostInsertBlockFunc
+	ShouldRotationFunc         ShouldRotationFunc
 }
 
 func (m *Hooks) ShouldWriteTransactions(height uint64) bool {
@@ -83,4 +86,12 @@ func (m *Hooks) PostInsertBlock(block *types.Block) error {
 	}
 
 	return nil
+}
+
+func (m *Hooks) ShouldValidateRotation(height uint64) bool {
+	if m.ShouldRotationFunc != nil {
+		return m.ShouldRotationFunc(height)
+	}
+
+	return false
 }

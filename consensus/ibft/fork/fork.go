@@ -10,10 +10,11 @@ import (
 
 const (
 	// Keys in IBFT Configuration
-	KeyType          = "type"
-	KeyTypes         = "types"
-	KeyValidatorType = "validator_type"
-	KeyBlockTime     = "blockTime"
+	KeyType              = "type"
+	KeyTypes             = "types"
+	KeyValidatorType     = "validator_type"
+	KeyBlockTime         = "blockTime"
+	KeyRotatableUpgraded = "rotable_upgraded"
 )
 
 var (
@@ -34,23 +35,23 @@ type IBFTFork struct {
 	Validators validators.Validators `json:"validators,omitempty"`
 
 	// PoS
-	EpochSize            uint64
 	MaxValidatorCount    *common.JSONNumber `json:"maxValidatorCount,omitempty"`
-	MinValidatorCount    *common.JSONNumber `json:"minValidatorCount,omitempty"`
 	WithLegacyValidators bool               `json:"withLegacyValidators,omitempty"`
+	RotableUpgraded      bool               `json:"rotableUpgraded,omitempty"`
 }
 
 func (f *IBFTFork) UnmarshalJSON(data []byte) error {
 	raw := struct {
-		Type              IBFTType                  `json:"type"`
-		ValidatorType     *validators.ValidatorType `json:"validator_type,omitempty"`
-		Deployment        *common.JSONNumber        `json:"deployment,omitempty"`
-		From              common.JSONNumber         `json:"from"`
-		To                *common.JSONNumber        `json:"to,omitempty"`
-		BlockTime         *common.Duration          `json:"blockTime,omitempty"`
-		Validators        interface{}               `json:"validators,omitempty"`
-		MaxValidatorCount *common.JSONNumber        `json:"maxValidatorCount,omitempty"`
-		MinValidatorCount *common.JSONNumber        `json:"minValidatorCount,omitempty"`
+		Type                 IBFTType                  `json:"type"`
+		ValidatorType        *validators.ValidatorType `json:"validator_type,omitempty"`
+		Deployment           *common.JSONNumber        `json:"deployment,omitempty"`
+		From                 common.JSONNumber         `json:"from"`
+		To                   *common.JSONNumber        `json:"to,omitempty"`
+		BlockTime            *common.Duration          `json:"blockTime,omitempty"`
+		Validators           interface{}               `json:"validators,omitempty"`
+		MaxValidatorCount    *common.JSONNumber        `json:"maxValidatorCount,omitempty"`
+		WithLegacyValidators bool                      `json:"with_legacy_validators,omitempty"`
+		RotableUpgraded      bool                      `json:"rotable_upgraded,omitempty"`
 	}{}
 
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -63,7 +64,8 @@ func (f *IBFTFork) UnmarshalJSON(data []byte) error {
 	f.To = raw.To
 	f.BlockTime = raw.BlockTime
 	f.MaxValidatorCount = raw.MaxValidatorCount
-	f.MinValidatorCount = raw.MinValidatorCount
+	f.WithLegacyValidators = raw.WithLegacyValidators
+	f.RotableUpgraded = raw.RotableUpgraded
 
 	f.ValidatorType = validators.ECDSAValidatorType
 	if raw.ValidatorType != nil {
@@ -115,14 +117,22 @@ func GetIBFTForks(ibftConfig map[string]interface{}) (IBFTForks, error) {
 			}
 		}
 
+		var rotatable bool
+		if r, ok := ibftConfig[KeyRotatableUpgraded]; ok {
+			if val, ok := r.(bool); ok && val {
+				rotatable = true
+			}
+		}
+
 		return IBFTForks{
 			{
-				Type:          typ,
-				Deployment:    nil,
-				ValidatorType: validatorType,
-				From:          common.JSONNumber{Value: 0},
-				To:            nil,
-				BlockTime:     blockTime,
+				Type:            typ,
+				Deployment:      nil,
+				ValidatorType:   validatorType,
+				From:            common.JSONNumber{Value: 0},
+				To:              nil,
+				BlockTime:       blockTime,
+				RotableUpgraded: rotatable,
 			},
 		}, nil
 	}

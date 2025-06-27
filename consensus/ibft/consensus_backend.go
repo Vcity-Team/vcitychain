@@ -10,8 +10,12 @@ import (
 	"github.com/0xPolygon/go-ibft/messages/proto"
 	"github.com/Vcity-Team/vcitychain/consensus"
 	"github.com/Vcity-Team/vcitychain/consensus/ibft/signer"
+	"github.com/Vcity-Team/vcitychain/contracts"
+	"github.com/Vcity-Team/vcitychain/contracts/abis"
+	"github.com/Vcity-Team/vcitychain/contracts/staking"
 	"github.com/Vcity-Team/vcitychain/helper/hex"
 	"github.com/Vcity-Team/vcitychain/state"
+	"github.com/Vcity-Team/vcitychain/txpool"
 	"github.com/Vcity-Team/vcitychain/types"
 )
 
@@ -300,6 +304,15 @@ func (i *backendIBFT) writeTransactions(
 ) (executed []*types.Transaction) {
 	executed = make([]*types.Transaction, 0)
 
+	if i.currentHooks.ShouldValidateRotation(blockNumber) {
+		tx, err := i.writeRotationTransaction(transition, blockNumber, gasLimit)
+		if err != nil {
+			i.logger.Error("Rotation transaction construction", "error", err)
+			return
+		}
+		executed = append(executed, tx)
+	}
+
 	if !i.currentHooks.ShouldWriteTransactions(blockNumber) {
 		return
 	}
@@ -421,4 +434,32 @@ func (i *backendIBFT) extractParentCommittedSeals(
 	}
 
 	return i.extractCommittedSeals(header)
+}
+
+// createRotationTransaction constructs a state transaction for validators rotation.
+func (i *backendIBFT) writeRotationTransaction(transition transitionInterface, blockNumber uint64, gasLimit uint64) (*types.Transaction, error) {
+	method, ok := abis.StakingABI.Methods[staking.MethodRotate]
+	if !ok {
+		return nil, staking.ErrMethodNotFoundInABI
+	}
+	tx := &types.Transaction{
+		From:     contracts.SystemCaller,
+		To:       staking.AddrStakingContract.Ptr(),
+		Type:     types.StateTx,
+		Input:    method.ID(),
+		Gas:      types.StateTransactionGasLimit,
+		GasPrice: big.NewInt(0),
+	}
+
+	tx = tx.ComputeHash(blockNumber)
+
+	if tx.Gas > gasLimit {
+		return nil, txpool.ErrBlockLimitExceeded
+	}
+
+	if err := transition.Write(tx); err != nil {
+		return nil, err
+	}
+
+	return tx, nil
 }

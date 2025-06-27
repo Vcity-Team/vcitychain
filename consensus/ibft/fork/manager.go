@@ -52,6 +52,7 @@ type HooksInterface interface {
 	ProcessHeader(*types.Header) error
 	PreCommitState(*types.Header, *state.Transition) error
 	PostInsertBlock(*types.Block) error
+	ShouldValidateRotation(uint64) bool
 }
 
 // ForkManager is the module that has Fork configuration and multiple version of submodules

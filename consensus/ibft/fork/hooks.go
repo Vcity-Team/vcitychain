@@ -1,9 +1,11 @@
 package fork
 
 import (
+	"bytes"
 	"errors"
 
 	"github.com/Vcity-Team/vcitychain/consensus/ibft/hook"
+	"github.com/Vcity-Team/vcitychain/contracts/abis"
 	"github.com/Vcity-Team/vcitychain/contracts/staking"
 	"github.com/Vcity-Team/vcitychain/helper/hex"
 	stakingHelper "github.com/Vcity-Team/vcitychain/helper/staking"
@@ -16,6 +18,8 @@ import (
 
 var (
 	ErrTxInLastEpochOfBlock = errors.New("block must not have transactions in the last of epoch")
+	ErrWithoutRotationTx    = errors.New("rotation operation is not involved in the last of epoch")
+	ErrInvalidRotationTx    = errors.New("invalid rotation transactions")
 )
 
 // HeaderModifier is an interface for the struct that modifies block header for additional process
@@ -63,6 +67,38 @@ func registerUpdateValidatorsHooks(
 	}
 }
 
+func registerValidatorsRotationHooks(hooks *hook.Hooks, epochSize uint64) {
+	isLastEpoch := func(height uint64) bool {
+		return height > 0 && height%epochSize == 0
+	}
+	hooks.ShouldRotationFunc = func(height uint64) bool {
+		return isLastEpoch(height)
+	}
+
+	hooks.ShouldWriteTransactionFunc = func(height uint64) bool {
+		return !isLastEpoch(height)
+	}
+
+	hooks.VerifyBlockFunc = func(block *types.Block) error {
+		if isLastEpoch(block.Number()) {
+			if len(block.Transactions) != 1 {
+				return ErrWithoutRotationTx
+			}
+
+			tx := block.Transactions[0]
+			method, ok := abis.StakingABI.Methods[staking.MethodRotate]
+			if !ok {
+				return staking.ErrMethodNotFoundInABI
+			}
+			if *tx.To != staking.AddrStakingContract && !bytes.Equal(tx.Input, method.ID()) {
+				return ErrInvalidRotationTx
+			}
+		}
+
+		return nil
+	}
+}
+
 // registerPoSVerificationHooks registers that hooks to prevent the last epoch block from having transactions
 func registerTxInclusionGuardHooks(hooks *hook.Hooks, epochSize uint64) {
 	isLastEpoch := func(height uint64) bool {
@@ -87,6 +123,7 @@ func registerTxInclusionGuardHooks(hooks *hook.Hooks, epochSize uint64) {
 func registerStakingContractDeploymentHooks(
 	hooks *hook.Hooks,
 	fork *IBFTFork,
+	epochSize uint64,
 ) {
 	hooks.PreCommitStateFunc = func(header *types.Header, txn *state.Transition) error {
 		// safe check
@@ -114,9 +151,11 @@ func registerStakingContractDeploymentHooks(
 			}
 
 			// deploy contract
+			params := getPreDeployParams(fork)
+			params.EpochSize = epochSize
 			contractState, err := stakingHelper.PredeployStakingSC(
 				validators,
-				getPreDeployParams(fork),
+				params,
 			)
 
 			if err != nil {
@@ -132,10 +171,6 @@ func registerStakingContractDeploymentHooks(
 func getPreDeployParams(fork *IBFTFork) stakingHelper.PredeployParams {
 	params := stakingHelper.PredeployParams{
 		MaxValidatorCount: stakingHelper.MaxValidatorCount,
-	}
-
-	if fork.MinValidatorCount != nil {
-		params.EpochSize = fork.EpochSize
 	}
 
 	if fork.MaxValidatorCount != nil {

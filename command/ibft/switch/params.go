@@ -55,8 +55,6 @@ type switchParams struct {
 	// PoS
 	maxValidatorCountRaw string
 	maxValidatorCount    *uint64
-	minValidatorCountRaw string
-	minValidatorCount    *uint64
 
 	genesisConfig *chain.Chain
 }
@@ -211,29 +209,6 @@ func (p *switchParams) setValidatorSetFromCli() error {
 }
 
 func (p *switchParams) initPoSConfig() error {
-	if p.ibftType != fork.PoS {
-		if p.minValidatorCountRaw != "" || p.maxValidatorCountRaw != "" {
-			return fmt.Errorf(
-				"doesn't support min validator count in %s",
-				string(p.ibftType),
-			)
-		}
-
-		return nil
-	}
-
-	if p.minValidatorCountRaw != "" {
-		value, err := common.ParseUint64orHex(&p.minValidatorCountRaw)
-		if err != nil {
-			return fmt.Errorf(
-				"unable to parse min validator count value, %w",
-				err,
-			)
-		}
-
-		p.minValidatorCount = &value
-	}
-
 	if p.maxValidatorCountRaw != "" {
 		value, err := common.ParseUint64orHex(&p.maxValidatorCountRaw)
 		if err != nil {
@@ -266,10 +241,6 @@ func (p *switchParams) validateMinMaxValidatorNumber() error {
 	// in PoSMechanism
 	minValidatorCount := uint64(1)
 	maxValidatorCount := common.MaxSafeJSInt
-
-	if p.minValidatorCount != nil {
-		minValidatorCount = *p.minValidatorCount
-	}
 
 	if p.maxValidatorCount != nil {
 		maxValidatorCount = *p.maxValidatorCount
@@ -321,7 +292,6 @@ func (p *switchParams) updateGenesisConfig() error {
 		p.deployment,
 		p.ibftValidators,
 		p.maxValidatorCount,
-		p.minValidatorCount,
 	)
 }
 
@@ -354,12 +324,6 @@ func (p *switchParams) getResult() command.CommandResult {
 		result.Deployment = &common.JSONNumber{Value: *p.deployment}
 	}
 
-	if p.minValidatorCount != nil {
-		result.MinValidatorCount = common.JSONNumber{Value: *p.minValidatorCount}
-	} else {
-		result.MinValidatorCount = common.JSONNumber{Value: 1}
-	}
-
 	if p.maxValidatorCount != nil {
 		result.MaxValidatorCount = common.JSONNumber{Value: *p.maxValidatorCount}
 	} else {
@@ -379,7 +343,6 @@ func appendIBFTForks(
 	validators validators.Validators,
 	// PoS
 	maxValidatorCount *uint64,
-	minValidatorCount *uint64,
 ) error {
 	ibftConfig, ok := cc.Params.Engine["ibft"].(map[string]interface{})
 	if !ok {
@@ -426,10 +389,6 @@ func appendIBFTForks(
 
 		if maxValidatorCount != nil {
 			newFork.MaxValidatorCount = &common.JSONNumber{Value: *maxValidatorCount}
-		}
-
-		if minValidatorCount != nil {
-			newFork.MinValidatorCount = &common.JSONNumber{Value: *minValidatorCount}
 		}
 	}
 

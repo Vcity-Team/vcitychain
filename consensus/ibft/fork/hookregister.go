@@ -78,7 +78,6 @@ func NewPoSHookRegister(
 			continue
 		}
 
-		fork.EpochSize = epochSize
 		deployContractForks[fork.Deployment.Value] = fork
 	}
 
@@ -92,12 +91,17 @@ func NewPoSHookRegister(
 // RegisterHooks registers hooks of PoA for additional block verification and contract deployment
 func (r *PoSHookRegister) RegisterHooks(hooks *hook.Hooks, height uint64) {
 	if currentFork := r.posForks.getFork(height); currentFork != nil {
-		// in PoS mode currently
-		registerTxInclusionGuardHooks(hooks, r.epochSize)
+		if currentFork.RotableUpgraded {
+			registerValidatorsRotationHooks(hooks, r.epochSize)
+		} else {
+			// in PoS mode currently
+			registerTxInclusionGuardHooks(hooks, r.epochSize)
+		}
+
 	}
 
 	if deploymentFork, ok := r.deployContractForks[height]; ok {
 		// deploy or update staking contract in deployment height
-		registerStakingContractDeploymentHooks(hooks, deploymentFork)
+		registerStakingContractDeploymentHooks(hooks, deploymentFork, r.epochSize)
 	}
 }
