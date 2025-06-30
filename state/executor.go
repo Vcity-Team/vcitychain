@@ -1022,9 +1022,9 @@ func (t *Transition) Callx(c *runtime.Contract, h runtime.Host) *runtime.Executi
 // SetAccountDirectly sets an account to the given address
 // NOTE: SetAccountDirectly changes the world state without a transaction
 func (t *Transition) SetAccountDirectly(addr types.Address, account *chain.GenesisAccount) error {
-	if t.AccountExists(addr) {
-		return fmt.Errorf("can't add account to %+v because an account exists already", addr)
-	}
+	// if t.AccountExists(addr) {
+	// 	return fmt.Errorf("can't add account to %+v because an account exists already", addr)
+	// }
 
 	t.state.SetCode(addr, account.Code)
 

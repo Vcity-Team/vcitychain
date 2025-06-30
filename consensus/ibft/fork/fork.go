@@ -50,8 +50,8 @@ func (f *IBFTFork) UnmarshalJSON(data []byte) error {
 		BlockTime            *common.Duration          `json:"blockTime,omitempty"`
 		Validators           interface{}               `json:"validators,omitempty"`
 		MaxValidatorCount    *common.JSONNumber        `json:"maxValidatorCount,omitempty"`
-		WithLegacyValidators bool                      `json:"with_legacy_validators,omitempty"`
-		RotableUpgraded      bool                      `json:"rotable_upgraded,omitempty"`
+		WithLegacyValidators bool                      `json:"withLegacyValidators,omitempty"`
+		RotableUpgraded      bool                      `json:"rotableUpgraded,omitempty"`
 	}{}
 
 	if err := json.Unmarshal(data, &raw); err != nil {

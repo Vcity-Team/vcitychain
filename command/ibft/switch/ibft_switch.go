@@ -83,6 +83,20 @@ func setFlags(cmd *cobra.Command) {
 				"Needs to be present if validators is omitted",
 		)
 
+		cmd.Flags().BoolVar(
+			&params.rotableUpgraded,
+			"rotate",
+			true,
+			"rotating validators flag",
+		)
+
+		cmd.Flags().BoolVar(
+			&params.withLegacyValidtors,
+			"with-legacy-validators",
+			true,
+			"inherits validators in legacy system staking contracts",
+		)
+
 		cmd.Flags().StringVar(
 			&params.validatorPrefixPath,
 			command.ValidatorPrefixFlag,

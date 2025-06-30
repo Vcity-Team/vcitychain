@@ -55,6 +55,8 @@ type switchParams struct {
 	// PoS
 	maxValidatorCountRaw string
 	maxValidatorCount    *uint64
+	rotableUpgraded      bool
+	withLegacyValidtors  bool
 
 	genesisConfig *chain.Chain
 }
@@ -292,6 +294,8 @@ func (p *switchParams) updateGenesisConfig() error {
 		p.deployment,
 		p.ibftValidators,
 		p.maxValidatorCount,
+		p.rotableUpgraded,
+		p.withLegacyValidtors,
 	)
 }
 
@@ -343,6 +347,8 @@ func appendIBFTForks(
 	validators validators.Validators,
 	// PoS
 	maxValidatorCount *uint64,
+	rotableUpgraded bool,
+	withLegacyValidators bool,
 ) error {
 	ibftConfig, ok := cc.Params.Engine["ibft"].(map[string]interface{})
 	if !ok {
@@ -358,7 +364,10 @@ func appendIBFTForks(
 
 	if (ibftType == lastFork.Type) &&
 		(validatorType == lastFork.ValidatorType) {
-		return ErrSameIBFTAndValidatorType
+
+		if ibftType != fork.PoS || !rotableUpgraded {
+			return ErrSameIBFTAndValidatorType
+		}
 	}
 
 	if from <= lastFork.From.Value {
@@ -373,10 +382,12 @@ func appendIBFTForks(
 	lastFork.To = &common.JSONNumber{Value: from - 1}
 
 	newFork := fork.IBFTFork{
-		Type:          ibftType,
-		ValidatorType: validatorType,
-		From:          common.JSONNumber{Value: from},
-		BlockTime:     lastFork.BlockTime,
+		Type:                 ibftType,
+		ValidatorType:        validatorType,
+		From:                 common.JSONNumber{Value: from},
+		BlockTime:            lastFork.BlockTime,
+		WithLegacyValidators: withLegacyValidators,
+		RotableUpgraded:      rotableUpgraded,
 	}
 
 	switch ibftType {
