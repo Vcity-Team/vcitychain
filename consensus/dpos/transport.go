@@ -8,7 +8,8 @@ import (
 	"time"
 
 	ibftProto "github.com/0xPolygon/go-ibft/messages/proto"
-	polybftProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
+	// polybftProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
+
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -450,69 +451,68 @@ func (p *DPoS) subscribeToIbftTopic() error {
 
 // createTopics create all topics for a DPoS instance
 func (p *DPoS) createTopics() (err error) {
-	// 实现 DPoS 的主题创建
-
-	// 创建投票主题 - 使用 JSON 序列化
-	voteTopicName := "dpos-vote"
-	voteTopic, err := p.config.Network.NewTopic(voteTopicName, &polybftProto.TransportMessage{})
-	if err != nil {
-		return fmt.Errorf("failed to create vote topic: %w", err)
-	}
-
-	// 订阅投票主题
-	if err := voteTopic.Subscribe(func(obj interface{}, from peer.ID) {
-		transportMsg, ok := obj.(*polybftProto.TransportMessage)
-		if !ok {
-			p.logger.Warn("received invalid message type on vote topic")
-			return
+	// TODO: 暂时注释掉 proto 相关代码，等 proto 问题解决后再启用
+	/*
+		// 创建投票主题
+		voteTopicName := "dpos-vote"
+		p.voteTopic, err = p.config.Network.NewTopic(voteTopicName, &TransportMessage{})
+		if err != nil {
+			return fmt.Errorf("failed to create vote topic: %w", err)
 		}
 
-		// 反序列化投票消息
-		var voteMsg VoteMessage
-		if err := json.Unmarshal(transportMsg.Data, &voteMsg); err != nil {
-			p.logger.Warn("failed to unmarshal vote message", "error", err)
-			return
+		// 订阅投票主题
+		err = p.voteTopic.Subscribe(func(obj interface{}, from peer.ID) {
+			transportMsg, ok := obj.(*TransportMessage)
+			if !ok {
+				p.logger.Warn("failed to deliver vote, invalid msg", "obj", obj)
+				return
+			}
+
+			var voteMsg VoteMessage
+			if err := json.Unmarshal(transportMsg.Data, &voteMsg); err != nil {
+				p.logger.Warn("failed to unmarshal vote message", "error", err)
+				return
+			}
+
+			if err := p.handleVoteMessage(&voteMsg, from); err != nil {
+				p.logger.Warn("failed to handle vote message", "error", err)
+			}
+		})
+		if err != nil {
+			return fmt.Errorf("failed to subscribe to vote topic: %w", err)
 		}
 
-		// 处理投票消息
-		if err := p.handleVoteMessage(&voteMsg, from); err != nil {
-			p.logger.Error("failed to handle vote message", "error", err, "from", from)
-		}
-	}); err != nil {
-		return fmt.Errorf("failed to subscribe to vote topic: %w", err)
-	}
-
-	// 创建委托主题 - 使用 JSON 序列化
-	delegateTopicName := "dpos-delegate"
-	delegateTopic, err := p.config.Network.NewTopic(delegateTopicName, &polybftProto.TransportMessage{})
-	if err != nil {
-		return fmt.Errorf("failed to create delegate topic: %w", err)
-	}
-
-	// 订阅委托主题
-	if err := delegateTopic.Subscribe(func(obj interface{}, from peer.ID) {
-		transportMsg, ok := obj.(*polybftProto.TransportMessage)
-		if !ok {
-			p.logger.Warn("received invalid message type on delegate topic")
-			return
+		// 创建受托人主题
+		delegateTopicName := "dpos-delegate"
+		p.delegateTopic, err = p.config.Network.NewTopic(delegateTopicName, &TransportMessage{})
+		if err != nil {
+			return fmt.Errorf("failed to create delegate topic: %w", err)
 		}
 
-		// 反序列化委托消息
-		var delegateMsg DelegateMessage
-		if err := json.Unmarshal(transportMsg.Data, &delegateMsg); err != nil {
-			p.logger.Warn("failed to unmarshal delegate message", "error", err)
-			return
-		}
+		// 订阅受托人主题
+		err = p.delegateTopic.Subscribe(func(obj interface{}, from peer.ID) {
+			transportMsg, ok := obj.(*TransportMessage)
+			if !ok {
+				p.logger.Warn("failed to deliver delegate, invalid msg", "obj", obj)
+				return
+			}
 
-		// 处理委托消息
-		if err := p.handleDelegateMessage(&delegateMsg, from); err != nil {
-			p.logger.Error("failed to handle delegate message", "error", err, "from", from)
-		}
-	}); err != nil {
-		return fmt.Errorf("failed to subscribe to delegate topic: %w", err)
-	}
+			var delegateMsg DelegateMessage
+			if err := json.Unmarshal(transportMsg.Data, &delegateMsg); err != nil {
+				p.logger.Warn("failed to unmarshal delegate message", "error", err)
+				return
+			}
 
-	p.logger.Info("created DPoS topics", "voteTopic", voteTopicName, "delegateTopic", delegateTopicName)
+			if err := p.handleDelegateMessage(&delegateMsg, from); err != nil {
+				p.logger.Warn("failed to handle delegate message", "error", err)
+			}
+		})
+		if err != nil {
+			return fmt.Errorf("failed to subscribe to delegate topic: %w", err)
+		}
+	*/
+
+	p.logger.Info("DPoS topics creation temporarily disabled")
 	return nil
 }
 

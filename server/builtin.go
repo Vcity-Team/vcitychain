@@ -4,6 +4,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/chain"
 	"github.com/Vcity-Team/vcitychain/consensus"
 	consensusDev "github.com/Vcity-Team/vcitychain/consensus/dev"
+	consensusDPoS "github.com/Vcity-Team/vcitychain/consensus/dpos"
 	consensusDummy "github.com/Vcity-Team/vcitychain/consensus/dummy"
 	consensusIBFT "github.com/Vcity-Team/vcitychain/consensus/ibft"
 	consensusPolyBFT "github.com/Vcity-Team/vcitychain/consensus/polybft"
@@ -28,6 +29,7 @@ const (
 	DevConsensus     ConsensusType = "dev"
 	IBFTConsensus    ConsensusType = "ibft"
 	PolyBFTConsensus ConsensusType = consensusPolyBFT.ConsensusName
+	DPoSConsensus    ConsensusType = "dpos"
 	DummyConsensus   ConsensusType = "dummy"
 )
 
@@ -35,6 +37,7 @@ var consensusBackends = map[ConsensusType]consensus.Factory{
 	DevConsensus:     consensusDev.Factory,
 	IBFTConsensus:    consensusIBFT.Factory,
 	PolyBFTConsensus: consensusPolyBFT.Factory,
+	DPoSConsensus:    consensusDPoS.Factory,
 	DummyConsensus:   consensusDummy.Factory,
 }
 
