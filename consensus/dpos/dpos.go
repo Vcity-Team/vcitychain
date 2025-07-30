@@ -680,7 +680,6 @@ var _ dposBackend = (*DPoS)(nil)
 
 // Factory 创建DPoS共识实例
 func Factory(params *consensus.Params) (consensus.Consensus, error) {
-
 	logger := params.Logger.Named("dpos")
 
 	vcity_dpos := &DPoS{
@@ -699,6 +698,18 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// 设置必要的配置字段
+	vcity_dpos.config.SecretsManager = params.SecretsManager
+	vcity_dpos.config.Blockchain = params.Blockchain
+	vcity_dpos.config.Logger = params.Logger
+	vcity_dpos.config.Network = params.Network
+	vcity_dpos.config.Executor = params.Executor
+
+	// 初始化其他必要字段
+	vcity_dpos.voters = make(map[types.Address]*VoterInfo)
+	vcity_dpos.delegates = make(validator.AccountSet, 0)
+	// vcity_dpos.validatorsCache = newValidatorsSnapshotCache() // TODO: 需要正确的参数
 
 	return vcity_dpos, nil
 }
