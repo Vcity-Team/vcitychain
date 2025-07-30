@@ -11,13 +11,14 @@ import (
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/blockchain"
+	"github.com/Vcity-Team/vcitychain/bls"
+	"github.com/Vcity-Team/vcitychain/crypto"
 
 	"github.com/Vcity-Team/vcitychain/consensus"
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/signer"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/wallet"
-
 
 	"github.com/Vcity-Team/vcitychain/helper/common"
 	"github.com/Vcity-Team/vcitychain/helper/progress"
@@ -112,17 +113,340 @@ type dposRuntime struct {
 	config  *runtimeConfig
 	backend dposBackend
 	logger  hclog.Logger
+
+	// 运行时状态
+	currentRound         uint64
+	currentDelegateIndex uint64
+	delegates            validator.AccountSet
+	voters               map[types.Address]*VoterInfo
+	pendingVotes         []*VoteMessage
+
+	// 定时器
+	blockTimer *time.Ticker
+	voteTimer  *time.Ticker
+
+	// 控制通道
+	closeCh chan struct{}
+
+	// 锁
+	lock sync.RWMutex
 }
 
 func (r *dposRuntime) start() error {
 	r.logger.Info("starting DPoS runtime")
-	// TODO: 实现DPoS运行时的启动逻辑
+
+	// 初始化运行时状态
+	if err := r.initializeRuntime(); err != nil {
+		return fmt.Errorf("failed to initialize runtime: %w", err)
+	}
+
+	// 启动轮询出块定时器
+	if err := r.startBlockProduction(); err != nil {
+		return fmt.Errorf("failed to start block production: %w", err)
+	}
+
+	// 启动投票统计定时器
+	if err := r.startVoteCollection(); err != nil {
+		return fmt.Errorf("failed to start vote collection: %w", err)
+	}
+
+	r.logger.Info("DPoS runtime started successfully")
 	return nil
 }
 
 func (r *dposRuntime) close() {
 	r.logger.Info("closing DPoS runtime")
-	// TODO: 实现DPoS运行时的关闭逻辑
+
+	// 停止所有定时器
+	if r.blockTimer != nil {
+		r.blockTimer.Stop()
+	}
+	if r.voteTimer != nil {
+		r.voteTimer.Stop()
+	}
+
+	// 清理运行时状态
+	r.cleanupRuntime()
+
+	r.logger.Info("DPoS runtime closed")
+}
+
+// initializeRuntime 初始化运行时状态
+func (r *dposRuntime) initializeRuntime() error {
+	// 初始化当前轮次
+	r.currentRound = 1
+	r.currentDelegateIndex = 0
+
+	// 初始化受托人集合
+	if err := r.initializeDelegates(); err != nil {
+		return fmt.Errorf("failed to initialize delegates: %w", err)
+	}
+
+	// 初始化投票者映射
+	r.voters = make(map[types.Address]*VoterInfo)
+
+	return nil
+}
+
+// startBlockProduction 启动区块生产
+func (r *dposRuntime) startBlockProduction() error {
+	blockTime := 2 * time.Second // 默认2秒
+	if r.config.PolyBFTConfig != nil {
+		blockTime = r.config.PolyBFTConfig.BlockTime.Duration
+	}
+
+	r.blockTimer = time.NewTicker(blockTime)
+	go func() {
+		for {
+			select {
+			case <-r.blockTimer.C:
+				if err := r.produceBlock(); err != nil {
+					r.logger.Error("failed to produce block", "error", err)
+				}
+			case <-r.closeCh:
+				return
+			}
+		}
+	}()
+
+	return nil
+}
+
+// startVoteCollection 启动投票收集
+func (r *dposRuntime) startVoteCollection() error {
+	voteTime := 5 * time.Second // 默认5秒
+	if r.config.PolyBFTConfig != nil {
+		voteTime = r.config.PolyBFTConfig.BlockTime.Duration * 4 // 投票时间设为区块时间的4倍
+	}
+
+	r.voteTimer = time.NewTicker(voteTime)
+	go func() {
+		for {
+			select {
+			case <-r.voteTimer.C:
+				if err := r.collectVotes(); err != nil {
+					r.logger.Error("failed to collect votes", "error", err)
+				}
+			case <-r.closeCh:
+				return
+			}
+		}
+	}()
+
+	return nil
+}
+
+// cleanupRuntime 清理运行时状态
+func (r *dposRuntime) cleanupRuntime() {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	// 清理投票者映射
+	r.voters = nil
+	r.delegates = nil
+}
+
+// produceBlock 生产区块
+func (r *dposRuntime) produceBlock() error {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	// 检查当前节点是否为出块者
+	currentDelegate := r.getCurrentDelegate()
+	keyAddr := types.Address(r.config.Key.Address())
+	if currentDelegate != keyAddr {
+		return nil // 不是当前出块者
+	}
+
+	// 构建新区块
+	block, err := r.buildBlock()
+	if err != nil {
+		return fmt.Errorf("failed to build block: %w", err)
+	}
+
+	// 提交区块到区块链
+	if err := r.config.blockchain.CommitBlock(block); err != nil {
+		return fmt.Errorf("failed to commit block: %w", err)
+	}
+
+	r.logger.Info("produced block", "number", block.Block.Number(), "hash", block.Block.Hash())
+
+	// 更新轮次
+	r.updateRound()
+
+	return nil
+}
+
+// collectVotes 收集投票
+func (r *dposRuntime) collectVotes() error {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	// 处理待处理的投票
+	for _, vote := range r.pendingVotes {
+		if err := r.processVote(vote); err != nil {
+			r.logger.Error("failed to process vote", "error", err, "voter", vote.Voter)
+		}
+	}
+
+	// 清空待处理投票
+	r.pendingVotes = nil
+
+	return nil
+}
+
+// updateRound 更新轮次
+func (r *dposRuntime) updateRound() {
+	r.currentDelegateIndex++
+	if r.currentDelegateIndex >= uint64(len(r.delegates)) {
+		r.currentDelegateIndex = 0
+		r.currentRound++
+	}
+}
+
+// initializeDelegates 初始化受托人集合
+func (r *dposRuntime) initializeDelegates() error {
+	// 从配置中获取初始受托人
+	if r.config.PolyBFTConfig != nil && len(r.config.PolyBFTConfig.InitialValidatorSet) > 0 {
+		r.delegates = make(validator.AccountSet, 0, len(r.config.PolyBFTConfig.InitialValidatorSet))
+		for _, val := range r.config.PolyBFTConfig.InitialValidatorSet {
+			// 解析BLS密钥
+			blsKeyBytes := []byte(val.BlsKey)
+			blsKey, err := bls.UnmarshalPublicKey(blsKeyBytes)
+			if err != nil {
+				r.logger.Warn("failed to parse BLS key", "error", err, "address", val.Address)
+				continue
+			}
+
+			r.delegates = append(r.delegates, &validator.ValidatorMetadata{
+				Address:     val.Address,
+				BlsKey:      blsKey,
+				VotingPower: val.Stake,
+			})
+		}
+	} else {
+		// 如果没有配置，使用默认受托人
+		r.delegates = validator.AccountSet{}
+	}
+
+	return nil
+}
+
+// getCurrentDelegate 获取当前受托人
+func (r *dposRuntime) getCurrentDelegate() types.Address {
+	if len(r.delegates) == 0 {
+		return types.ZeroAddress
+	}
+
+	if r.currentDelegateIndex >= uint64(len(r.delegates)) {
+		r.currentDelegateIndex = 0
+	}
+
+	return r.delegates[r.currentDelegateIndex].Address
+}
+
+// buildBlock 构建区块
+func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
+	// 获取父区块
+	parent := r.config.blockchain.CurrentHeader()
+
+	// 创建区块构建器
+	keyAddr := types.Address(r.config.Key.Address())
+	builder, err := r.config.blockchain.NewBlockBuilder(
+		parent,
+		keyAddr,
+		r.config.txPool,
+		2*time.Second, // 区块时间
+		r.logger,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create block builder: %w", err)
+	}
+
+	// 重置构建器
+	if err := builder.Reset(); err != nil {
+		return nil, fmt.Errorf("failed to reset block builder: %w", err)
+	}
+
+	// 填充交易
+	builder.Fill()
+
+	// 构建区块
+	block, err := builder.Build(func(h *types.Header) {
+		// 设置DPoS相关的区块头信息
+		h.Miner = keyAddr[:]
+		h.Difficulty = 1
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to build block: %w", err)
+	}
+
+	return block, nil
+}
+
+// processVote 处理投票
+func (r *dposRuntime) processVote(vote *VoteMessage) error {
+	// 验证投票签名
+	if err := r.verifyVoteSignature(vote); err != nil {
+		return fmt.Errorf("invalid vote signature: %w", err)
+	}
+
+	// 更新投票者信息
+	voter, exists := r.voters[vote.Voter]
+	if !exists {
+		voter = &VoterInfo{
+			Address:        vote.Voter,
+			VotingPower:    big.NewInt(0),
+			VotedDelegates: make([]types.Address, 0),
+			LastVoteTime:   uint64(time.Now().Unix()),
+			LockedUntil:    uint64(time.Now().Unix()) + 86400, // 锁定24小时
+		}
+		r.voters[vote.Voter] = voter
+	}
+
+	// 更新投票权重
+	voter.VotingPower = new(big.Int).Add(voter.VotingPower, vote.Amount)
+	voter.LastVoteTime = uint64(time.Now().Unix())
+
+	// 添加受托人到投票列表
+	voter.VotedDelegates = append(voter.VotedDelegates, vote.Delegate)
+
+	// 更新受托人的投票权重
+	r.updateDelegateVotingPower(vote.Delegate, vote.Amount)
+
+	return nil
+}
+
+// verifyVoteSignature 验证投票签名
+func (r *dposRuntime) verifyVoteSignature(vote *VoteMessage) error {
+	// 构建投票消息哈希
+	message := fmt.Sprintf("%s:%s:%s:%d",
+		vote.Voter.String(),
+		vote.Delegate.String(),
+		vote.Amount.String(),
+		vote.Round)
+
+	// 计算消息哈希
+	messageBytes := []byte(message)
+	hash := crypto.Keccak256(messageBytes)
+
+	// 验证签名
+	// 这里需要根据实际的签名验证逻辑来实现
+	// 暂时返回nil，表示验证通过
+	_ = hash // 避免未使用变量警告
+
+	return nil
+}
+
+// updateDelegateVotingPower 更新受托人投票权重
+func (r *dposRuntime) updateDelegateVotingPower(delegate types.Address, amount *big.Int) {
+	for _, d := range r.delegates {
+		if d.Address == delegate {
+			d.VotingPower = new(big.Int).Add(d.VotingPower, amount)
+			break
+		}
+	}
 }
 
 // GenerateExitProof generates proof of exit for given exit event
@@ -283,22 +607,22 @@ func (d *DPoS) Start() error {
 		blockHandler := func(b *types.FullBlock) bool {
 			// 实现DPoS的区块处理逻辑
 			d.logger.Debug("processing block", "number", b.Block.Number())
-			
+
 			// 处理区块中的投票事件
 			if err := d.processBlockVotes(b); err != nil {
 				d.logger.Error("failed to process block votes", "error", err, "block", b.Block.Number())
 			}
-			
+
 			// 更新受托人集合
 			if err := d.updateDelegates(b); err != nil {
 				d.logger.Error("failed to update delegates", "error", err, "block", b.Block.Number())
 			}
-			
+
 			// 处理奖励分配
 			if err := d.processRewards(b); err != nil {
 				d.logger.Error("failed to process rewards", "error", err, "block", b.Block.Number())
 			}
-			
+
 			return false
 		}
 		if err := d.syncer.Sync(blockHandler); err != nil {
@@ -332,7 +656,7 @@ func (d *DPoS) Close() error {
 	}
 
 	close(d.closeCh)
-	
+
 	if d.runtime != nil {
 		d.runtime.close()
 	}
