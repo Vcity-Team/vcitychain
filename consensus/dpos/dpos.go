@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 
+	"errors"
 	"fmt"
 	"math/big"
 
+	"sort"
 	"sync"
 	"time"
 
@@ -502,6 +504,11 @@ type DPoS struct {
 
 	// IBFT 共识包装器
 	ibft *IBFTConsensusWrapper
+
+	// 添加性能优化相关结构
+	cache          *DPoSCache
+	batchProcessor *BatchProcessor
+	metrics        *DPoSMetrics
 }
 
 // VoterInfo 投票者信息
@@ -511,6 +518,7 @@ type VoterInfo struct {
 	VotedDelegates []types.Address
 	LastVoteTime   uint64
 	LockedUntil    uint64
+	Nonce          map[uint64]bool // 防重放
 }
 
 // DelegateInfo 受托人信息
@@ -644,6 +652,9 @@ func (d *DPoS) Start() error {
 	if d.state != nil {
 		go d.state.startStatsReleasing()
 	}
+
+	// 初始化性能优化组件
+	d.initPerformanceOptimizations()
 
 	return nil
 }
@@ -914,13 +925,273 @@ func (d *DPoS) processBlockVotes(block *types.FullBlock) error {
 	return nil
 }
 
-func (d *DPoS) updateDelegates(block *types.FullBlock) error {
-	// 更新受托人集合
-	// TODO: 实现受托人集合更新逻辑
-	d.logger.Debug("updating delegates", "block", block.Block.Number())
+// 添加安全相关常量
+const (
+	MaxVotingPower = "1000000000000000000000000" // 1M tokens
+	MaxDelegates   = 100
+	VoteLockTime   = 86400                      // 24小时
+	MaxVoteAmount  = "100000000000000000000000" // 100K tokens
+	MinVoteAmount  = "1000000000000000000"      // 1 token
+)
+
+// 添加安全校验方法
+func (d *DPoS) validateVote(vote *VoteMessage) error {
+	// 1. 检查投票金额边界
+	if vote.Amount.Cmp(big.NewInt(0)) <= 0 {
+		return errors.New("vote amount must be positive")
+	}
+
+	maxAmount, _ := new(big.Int).SetString(MaxVoteAmount, 10)
+	if vote.Amount.Cmp(maxAmount) > 0 {
+		return errors.New("vote amount exceeds maximum")
+	}
+
+	minAmount, _ := new(big.Int).SetString(MinVoteAmount, 10)
+	if vote.Amount.Cmp(minAmount) < 0 {
+		return errors.New("vote amount below minimum")
+	}
+
+	// 2. 检查受托人是否存在且活跃
+	delegateExists := false
+	for _, del := range d.delegates {
+		if del.Address == vote.Delegate && del.IsActive {
+			delegateExists = true
+			break
+		}
+	}
+	if !delegateExists {
+		return errors.New("delegate not found or inactive")
+	}
+
+	// 3. 检查投票锁定时间
+	if voter, exists := d.voters[vote.Voter]; exists {
+		if uint64(time.Now().Unix()) < voter.LockedUntil {
+			return errors.New("voter is still locked")
+		}
+	}
+
+	// 4. 检查投票权重上限
+	totalVotingPower := big.NewInt(0)
+	if voter, exists := d.voters[vote.Voter]; exists {
+		totalVotingPower.Add(totalVotingPower, voter.VotingPower)
+	}
+	totalVotingPower.Add(totalVotingPower, vote.Amount)
+
+	maxVotingPower, _ := new(big.Int).SetString(MaxVotingPower, 10)
+	if totalVotingPower.Cmp(maxVotingPower) > 0 {
+		return errors.New("total voting power exceeds maximum")
+	}
+
 	return nil
 }
 
+// 增强的投票处理
+func (d *DPoS) processVote(vote *VoteMessage) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	// 1. 安全校验
+	if err := d.validateVote(vote); err != nil {
+		return fmt.Errorf("vote validation failed: %w", err)
+	}
+
+	// 2. 签名校验
+	if err := d.verifyVoteSignature(vote); err != nil {
+		return fmt.Errorf("vote signature verification failed: %w", err)
+	}
+
+	// 3. 防重放攻击 - 检查nonce
+	if err := d.checkVoteNonce(vote); err != nil {
+		return fmt.Errorf("vote nonce check failed: %w", err)
+	}
+
+	// 4. 更新投票者信息
+	voter, exists := d.voters[vote.Voter]
+	if !exists {
+		voter = &VoterInfo{
+			Address:        vote.Voter,
+			VotingPower:    big.NewInt(0),
+			VotedDelegates: make([]types.Address, 0),
+			LastVoteTime:   uint64(time.Now().Unix()),
+			LockedUntil:    uint64(time.Now().Unix()) + VoteLockTime,
+			Nonce:          make(map[uint64]bool), // 防重放
+		}
+		d.voters[vote.Voter] = voter
+	}
+
+	// 5. 更新投票权重
+	voter.VotingPower = new(big.Int).Add(voter.VotingPower, vote.Amount)
+	voter.LastVoteTime = uint64(time.Now().Unix())
+	voter.LockedUntil = uint64(time.Now().Unix()) + VoteLockTime
+
+	// 6. 添加受托人到投票列表（去重）
+	found := false
+	for _, del := range voter.VotedDelegates {
+		if del == vote.Delegate {
+			found = true
+			break
+		}
+	}
+	if !found {
+		voter.VotedDelegates = append(voter.VotedDelegates, vote.Delegate)
+	}
+
+	// 7. 更新受托人的投票权重
+	d.updateDelegateVotingPower(vote.Delegate, vote.Amount)
+
+	// 8. 记录nonce防止重放
+	voter.Nonce[vote.Round] = true
+
+	d.logger.Info("vote processed successfully",
+		"voter", vote.Voter,
+		"delegate", vote.Delegate,
+		"amount", vote.Amount,
+		"round", vote.Round)
+
+	return nil
+}
+
+// 检查投票nonce防重放
+func (d *DPoS) checkVoteNonce(vote *VoteMessage) error {
+	if voter, exists := d.voters[vote.Voter]; exists {
+		if voter.Nonce[vote.Round] {
+			return errors.New("vote nonce already used")
+		}
+	}
+	return nil
+}
+
+// 增强的签名验证
+func (d *DPoS) verifyVoteSignature(vote *VoteMessage) error {
+	// 构建投票消息哈希
+	message := fmt.Sprintf("%s:%s:%s:%d:%d",
+		vote.Voter.String(),
+		vote.Delegate.String(),
+		vote.Amount.String(),
+		vote.Round,
+		vote.Timestamp)
+
+	messageBytes := []byte(message)
+	hash := crypto.Keccak256(messageBytes)
+
+	// 验证签名 - 简化实现，生产环境需要完整的签名验证
+	// TODO: 实现完整的签名验证逻辑
+	_ = hash // 避免未使用变量警告
+
+	// 检查时间戳防重放
+	now := uint64(time.Now().Unix())
+	if vote.Timestamp < now-300 || vote.Timestamp > now+60 { // 5分钟时间窗口
+		return errors.New("vote timestamp out of range")
+	}
+
+	return nil
+}
+
+// 增强的受托人更新
+func (d *DPoS) updateDelegates(block *types.FullBlock) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	// 1. 参数校验
+	N := int(d.config.DelegateCount)
+	if N <= 0 {
+		N = 21 // 默认21个受托人
+	}
+	if N > MaxDelegates {
+		N = MaxDelegates
+	}
+
+	// 2. 计算受托人排名
+	delegates := make([]*DelegateInfo, 0, len(d.delegates))
+	for _, del := range d.delegates {
+		// 检查受托人是否满足最小质押要求
+		minStake, _ := new(big.Int).SetString(MinVoteAmount, 10)
+		if del.VotingPower.Cmp(minStake) < 0 {
+			del.IsActive = false
+			d.logger.Warn("delegate deactivated due to insufficient stake",
+				"address", del.Address, "stake", del.VotingPower)
+		}
+
+		delegates = append(delegates, &DelegateInfo{
+			Address:     del.Address,
+			VotingPower: del.VotingPower,
+			IsActive:    del.IsActive,
+		})
+	}
+
+	// 3. 按投票权重排序
+	sort.Slice(delegates, func(i, j int) bool {
+		if delegates[i].IsActive != delegates[j].IsActive {
+			return delegates[i].IsActive // 活跃的排在前面
+		}
+		return delegates[i].VotingPower.Cmp(delegates[j].VotingPower) > 0
+	})
+
+	// 4. 选出前N名活跃受托人
+	newSet := validator.AccountSet{}
+	activeCount := 0
+	for i := 0; i < len(delegates) && activeCount < N; i++ {
+		if delegates[i].IsActive {
+			newSet = append(newSet, &validator.ValidatorMetadata{
+				Address:     delegates[i].Address,
+				VotingPower: delegates[i].VotingPower,
+				IsActive:    true,
+			})
+			activeCount++
+		}
+	}
+
+	// 5. 检查受托人集合变化
+	oldSet := d.delegates
+	d.delegates = newSet
+
+	// 6. 记录受托人集合变化
+	if len(oldSet) != len(newSet) {
+		d.logger.Info("delegate set size changed",
+			"old_size", len(oldSet), "new_size", len(newSet))
+	}
+
+	// 检查新增和移除的受托人
+	added, removed := d.compareDelegateSets(oldSet, newSet)
+	if len(added) > 0 {
+		d.logger.Info("new delegates added", "delegates", added)
+	}
+	if len(removed) > 0 {
+		d.logger.Info("delegates removed", "delegates", removed)
+	}
+
+	d.logger.Debug("updated delegates", "block", block.Block.Number(), "count", len(newSet))
+	return nil
+}
+
+// 比较受托人集合变化
+func (d *DPoS) compareDelegateSets(oldSet, newSet validator.AccountSet) (added, removed []types.Address) {
+	oldMap := make(map[types.Address]bool)
+	newMap := make(map[types.Address]bool)
+
+	for _, del := range oldSet {
+		oldMap[del.Address] = true
+	}
+	for _, del := range newSet {
+		newMap[del.Address] = true
+	}
+
+	for _, del := range newSet {
+		if !oldMap[del.Address] {
+			added = append(added, del.Address)
+		}
+	}
+
+	for _, del := range oldSet {
+		if !newMap[del.Address] {
+			removed = append(removed, del.Address)
+		}
+	}
+
+	return added, removed
+}
+
+// 处理奖励分配
 func (d *DPoS) processRewards(block *types.FullBlock) error {
 	// 处理奖励分配
 	// TODO: 实现奖励分配逻辑
@@ -982,4 +1253,365 @@ func (d *DPoS) getVotingPowerFromStateWithTx(blockNumber uint64, delegate types.
 
 	// 如果数据库中没有，返回当前投票权重
 	return d.GetVotingPower(blockNumber, delegate)
+}
+
+// 初始化性能优化组件
+func (d *DPoS) initPerformanceOptimizations() {
+	// 初始化缓存
+	d.cache = &DPoSCache{
+		voterCache:    make(map[types.Address]*VoterInfo),
+		delegateCache: make(map[types.Address]*validator.ValidatorMetadata),
+		rewardCache:   make(map[types.Address]*big.Int),
+		cacheTTL:      5 * time.Minute,
+	}
+
+	// 初始化批量处理器
+	d.batchProcessor = &BatchProcessor{
+		voteQueue:     make(chan *VoteMessage, 1000),
+		delegateQueue: make(chan *DelegateMessage, 100),
+		batchSize:     100,
+		batchTimeout:  100 * time.Millisecond,
+		workerCount:   4,
+		stopCh:        make(chan struct{}),
+	}
+
+	// 初始化指标
+	d.metrics = &DPoSMetrics{
+		BlockRewards: big.NewInt(0),
+	}
+
+	// 启动批量处理工作协程
+	d.startBatchWorkers()
+
+	// 启动缓存清理协程
+	go d.cacheCleanupWorker()
+}
+
+// 启动批量处理工作协程
+func (d *DPoS) startBatchWorkers() {
+	for i := 0; i < d.batchProcessor.workerCount; i++ {
+		d.batchProcessor.wg.Add(1)
+		go d.batchWorker(i)
+	}
+}
+
+// 批量处理工作协程
+func (d *DPoS) batchWorker(id int) {
+	defer d.batchProcessor.wg.Done()
+
+	voteBatch := make([]*VoteMessage, 0, d.batchProcessor.batchSize)
+	delegateBatch := make([]*DelegateMessage, 0, d.batchProcessor.batchSize)
+
+	ticker := time.NewTicker(d.batchProcessor.batchTimeout)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case vote := <-d.batchProcessor.voteQueue:
+			voteBatch = append(voteBatch, vote)
+			if len(voteBatch) >= d.batchProcessor.batchSize {
+				d.processVoteBatch(voteBatch)
+				voteBatch = voteBatch[:0]
+			}
+
+		case delegate := <-d.batchProcessor.delegateQueue:
+			delegateBatch = append(delegateBatch, delegate)
+			if len(delegateBatch) >= d.batchProcessor.batchSize {
+				d.processDelegateBatch(delegateBatch)
+				delegateBatch = delegateBatch[:0]
+			}
+
+		case <-ticker.C:
+			if len(voteBatch) > 0 {
+				d.processVoteBatch(voteBatch)
+				voteBatch = voteBatch[:0]
+			}
+			if len(delegateBatch) > 0 {
+				d.processDelegateBatch(delegateBatch)
+				delegateBatch = delegateBatch[:0]
+			}
+
+		case <-d.batchProcessor.stopCh:
+			// 处理剩余批次
+			if len(voteBatch) > 0 {
+				d.processVoteBatch(voteBatch)
+			}
+			if len(delegateBatch) > 0 {
+				d.processDelegateBatch(delegateBatch)
+			}
+			return
+		}
+	}
+}
+
+// 批量处理投票
+func (d *DPoS) processVoteBatch(votes []*VoteMessage) {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	// 批量更新投票者信息
+	voterUpdates := make(map[types.Address]*VoterInfo)
+	delegateUpdates := make(map[types.Address]*big.Int)
+
+	for _, vote := range votes {
+		// 验证投票
+		if err := d.validateVote(vote); err != nil {
+			d.logger.Warn("invalid vote in batch", "error", err, "voter", vote.Voter)
+			continue
+		}
+
+		// 更新投票者
+		voter, exists := d.voters[vote.Voter]
+		if !exists {
+			voter = &VoterInfo{
+				Address:        vote.Voter,
+				VotingPower:    big.NewInt(0),
+				VotedDelegates: make([]types.Address, 0),
+				LastVoteTime:   uint64(time.Now().Unix()),
+				LockedUntil:    uint64(time.Now().Unix()) + VoteLockTime,
+				Nonce:          make(map[uint64]bool),
+			}
+			d.voters[vote.Voter] = voter
+		}
+
+		voter.VotingPower = new(big.Int).Add(voter.VotingPower, vote.Amount)
+		voter.LastVoteTime = uint64(time.Now().Unix())
+		voter.LockedUntil = uint64(time.Now().Unix()) + VoteLockTime
+		voter.Nonce[vote.Round] = true
+
+		// 添加受托人到投票列表（去重）
+		found := false
+		for _, del := range voter.VotedDelegates {
+			if del == vote.Delegate {
+				found = true
+				break
+			}
+		}
+		if !found {
+			voter.VotedDelegates = append(voter.VotedDelegates, vote.Delegate)
+		}
+
+		voterUpdates[vote.Voter] = voter
+
+		// 累计受托人更新
+		if delegateUpdates[vote.Delegate] == nil {
+			delegateUpdates[vote.Delegate] = big.NewInt(0)
+		}
+		delegateUpdates[vote.Delegate].Add(delegateUpdates[vote.Delegate], vote.Amount)
+	}
+
+	// 批量更新受托人投票权重
+	for delegate, amount := range delegateUpdates {
+		for _, del := range d.delegates {
+			if del.Address == delegate {
+				del.VotingPower = new(big.Int).Add(del.VotingPower, amount)
+				break
+			}
+		}
+	}
+
+	// 更新缓存
+	d.updateCache(voterUpdates)
+
+	// 更新指标
+	d.metrics.lock.Lock()
+	d.metrics.TotalVotes += uint64(len(votes))
+	d.metrics.ActiveVoters = uint64(len(d.voters))
+	d.metrics.lock.Unlock()
+
+	d.logger.Debug("processed vote batch", "count", len(votes))
+}
+
+// 批量处理委托
+func (d *DPoS) processDelegateBatch(delegates []*DelegateMessage) {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	for _, msg := range delegates {
+		switch msg.Action {
+		case "register":
+			found := false
+			for _, del := range d.delegates {
+				if del.Address == msg.Delegate {
+					found = true
+					break
+				}
+			}
+			if !found {
+				d.delegates = append(d.delegates, &validator.ValidatorMetadata{
+					Address:     msg.Delegate,
+					VotingPower: msg.Stake,
+					IsActive:    true,
+				})
+			}
+
+		case "unregister":
+			newSet := validator.AccountSet{}
+			for _, del := range d.delegates {
+				if del.Address != msg.Delegate {
+					newSet = append(newSet, del)
+				}
+			}
+			d.delegates = newSet
+
+		case "update":
+			for _, del := range d.delegates {
+				if del.Address == msg.Delegate {
+					del.VotingPower = msg.Stake
+					break
+				}
+			}
+		}
+	}
+
+	// 更新指标
+	d.metrics.lock.Lock()
+	d.metrics.TotalDelegates = uint64(len(d.delegates))
+	d.metrics.lock.Unlock()
+
+	d.logger.Debug("processed delegate batch", "count", len(delegates))
+}
+
+// 更新缓存
+func (d *DPoS) updateCache(voterUpdates map[types.Address]*VoterInfo) {
+	d.cache.lock.Lock()
+	defer d.cache.lock.Unlock()
+
+	for addr, voter := range voterUpdates {
+		d.cache.voterCache[addr] = voter
+	}
+	d.cache.lastUpdate = time.Now()
+}
+
+// 缓存清理工作协程
+func (d *DPoS) cacheCleanupWorker() {
+	ticker := time.NewTicker(d.cache.cacheTTL)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			d.cache.lock.Lock()
+			// 清理过期的缓存
+			if time.Since(d.cache.lastUpdate) > d.cache.cacheTTL {
+				d.cache.voterCache = make(map[types.Address]*VoterInfo)
+				d.cache.delegateCache = make(map[types.Address]*validator.ValidatorMetadata)
+				d.cache.rewardCache = make(map[types.Address]*big.Int)
+				d.logger.Debug("cache cleaned up")
+			}
+			d.cache.lock.Unlock()
+
+		case <-d.closeCh:
+			return
+		}
+	}
+}
+
+// 带缓存的投票者信息获取
+func (d *DPoS) getVoterWithCache(addr types.Address) (*VoterInfo, bool) {
+	d.cache.lock.RLock()
+	if voter, exists := d.cache.voterCache[addr]; exists {
+		d.cache.lock.RUnlock()
+		return voter, true
+	}
+	d.cache.lock.RUnlock()
+
+	d.lock.RLock()
+	voter, exists := d.voters[addr]
+	d.lock.RUnlock()
+
+	if exists {
+		// 更新缓存
+		d.cache.lock.Lock()
+		d.cache.voterCache[addr] = voter
+		d.cache.lock.Unlock()
+	}
+
+	return voter, exists
+}
+
+// 获取性能指标
+func (d *DPoS) GetMetrics() *DPoSMetrics {
+	d.metrics.lock.RLock()
+	defer d.metrics.lock.RUnlock()
+
+	return &DPoSMetrics{
+		TotalVotes:     d.metrics.TotalVotes,
+		TotalDelegates: d.metrics.TotalDelegates,
+		ActiveVoters:   d.metrics.ActiveVoters,
+		BlockRewards:   new(big.Int).Set(d.metrics.BlockRewards),
+		LastBlockTime:  d.metrics.LastBlockTime,
+	}
+}
+
+// 更新受托人投票权重
+func (d *DPoS) updateDelegateVotingPower(delegate types.Address, amount *big.Int) {
+	for _, del := range d.delegates {
+		if del.Address == delegate {
+			del.VotingPower = new(big.Int).Add(del.VotingPower, amount)
+			break
+		}
+	}
+}
+
+// calculateReward 计算奖励
+func (d *DPoS) calculateReward(staker types.Address) *big.Int {
+	// 简化的奖励计算逻辑
+	// 这里可以根据实际的奖励算法来实现
+	voter, exists := d.voters[staker]
+	if !exists {
+		return big.NewInt(0)
+	}
+
+	// 基础奖励：投票权重的1%
+	reward := new(big.Int).Div(voter.VotingPower, big.NewInt(100))
+
+	// 设置最小奖励
+	minReward := big.NewInt(100000000000000000) // 0.1 token
+	if reward.Cmp(minReward) < 0 {
+		reward = minReward
+	}
+
+	return reward
+}
+
+// DefaultDPoSConfig 返回默认配置
+func DefaultDPoSConfig() *DPoSConfig {
+	return &DPoSConfig{
+		DelegateCount:  21,
+		BlockTime:      common.Duration{Duration: 15 * time.Second},
+		RoundTime:      common.Duration{Duration: 30 * time.Second},
+		MinVotingPower: big.NewInt(1000000000000000000), // 1 token
+		VoteLockTime:   86400,                           // 24 hours
+		RewardRatio:    100,                             // 1%
+	}
+}
+
+// Validate 验证配置
+func (c *DPoSConfig) Validate() error {
+	if c.BlockTime.Duration <= 0 {
+		return fmt.Errorf("block_time must be positive")
+	}
+	if c.RoundTime.Duration <= 0 {
+		return fmt.Errorf("round_time must be positive")
+	}
+	if c.DelegateCount == 0 {
+		return fmt.Errorf("delegate_count must be positive")
+	}
+	if c.MinVotingPower.Cmp(big.NewInt(0)) <= 0 {
+		return fmt.Errorf("min_voting_power must be positive")
+	}
+	return nil
+}
+
+// GetConfigSummary 获取配置摘要
+func (c *DPoSConfig) GetConfigSummary() map[string]interface{} {
+	return map[string]interface{}{
+		"delegate_count":   c.DelegateCount,
+		"block_time":       c.BlockTime.String(),
+		"round_time":       c.RoundTime.String(),
+		"min_voting_power": c.MinVotingPower.String(),
+		"vote_lock_time":   c.VoteLockTime,
+		"reward_ratio":     c.RewardRatio,
+	}
 }
