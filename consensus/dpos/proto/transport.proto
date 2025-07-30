@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package v1;
 
-option go_package = "/consensus/polybft/proto";
+option go_package = "github.com/Vcity-Team/vcitychain/consensus/dpos/proto";
 
 message TransportMessage {
   bytes data = 1;

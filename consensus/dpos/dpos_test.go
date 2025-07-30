@@ -2,6 +2,7 @@ package dpos
 
 import (
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 
