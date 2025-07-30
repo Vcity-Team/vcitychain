@@ -1,11 +1,13 @@
 package dpos
 
 import (
+	"math/big"
 	"time"
 
 	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-hclog"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/Vcity-Team/vcitychain/types"
 )
 
 // startStatsReleasing starts the process that releases BoltDB stats into prometheus periodically.
@@ -158,7 +160,65 @@ func (s *State) startStatsReleasing() {
 
 // publishRootchainMetrics publishes rootchain related metrics
 func (p *DPoS) publishRootchainMetrics(logger hclog.Logger) {
-	// TODO: 实现 DPoS 的根链指标发布
-	// 临时禁用，等待 DPoS 配置完善
-	logger.Info("DPoS rootchain metrics publishing disabled - not implemented yet")
+	// 实现 DPoS 的根链指标发布
+	
+	// 发布受托人相关指标
+	if p.delegates != nil {
+		metrics.SetGauge(
+			[]string{"dpos", "delegates", "total"},
+			float32(len(p.delegates)),
+		)
+
+		// 发布活跃受托人数量
+		activeDelegates := 0
+		for _, delegate := range p.delegates {
+			if delegate.IsActive {
+				activeDelegates++
+			}
+		}
+		metrics.SetGauge(
+			[]string{"dpos", "delegates", "active"},
+			float32(activeDelegates),
+		)
+	}
+
+	// 发布投票者相关指标
+	if p.voters != nil {
+		metrics.SetGauge(
+			[]string{"dpos", "voters", "total"},
+			float32(len(p.voters)),
+		)
+	}
+
+	// 发布当前轮次指标
+	metrics.SetGauge(
+		[]string{"dpos", "round", "current"},
+		float32(p.currentRound),
+	)
+
+	// 发布当前受托人指标
+	currentDelegate := p.GetCurrentDelegate()
+	if currentDelegate != types.ZeroAddress {
+		metrics.SetGauge(
+			[]string{"dpos", "delegate", "current"},
+			float32(p.GetDelegateIndex(currentDelegate)),
+		)
+	}
+
+	// 发布总投票权重指标
+	totalVotingPower := big.NewInt(0)
+	for _, delegate := range p.delegates {
+		if votingPower, err := p.GetVotingPower(0, delegate.Address); err == nil {
+			totalVotingPower.Add(totalVotingPower, votingPower)
+		}
+	}
+	
+	// 转换为float64（注意：这里可能会丢失精度）
+	totalVotingPowerFloat, _ := new(big.Float).SetInt(totalVotingPower).Float64()
+	metrics.SetGauge(
+		[]string{"dpos", "voting_power", "total"},
+		float32(totalVotingPowerFloat),
+	)
+
+	logger.Debug("published DPoS rootchain metrics")
 }

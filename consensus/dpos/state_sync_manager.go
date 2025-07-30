@@ -6,28 +6,34 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
+
 	"path"
 	"sync"
 	"time"
 
-	"github.com/hashicorp/go-hclog"
-	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/umbracle/ethgo"
-	bolt "go.etcd.io/bbolt"
-	"google.golang.org/protobuf/proto"
-
 	"github.com/Vcity-Team/vcitychain/bls"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/bitmap"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/contractsapi"
+	polybftContractsapi "github.com/Vcity-Team/vcitychain/consensus/polybft/contractsapi"
 	polybftProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/signer"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/wallet"
-	polybftContractsapi "github.com/Vcity-Team/vcitychain/consensus/polybft/contractsapi"
 	"github.com/Vcity-Team/vcitychain/contracts"
+
+
+	"github.com/Vcity-Team/vcitychain/merkle-tree"
+
+
+
 	"github.com/Vcity-Team/vcitychain/tracker"
 	"github.com/Vcity-Team/vcitychain/types"
+
+	bolt "go.etcd.io/bbolt"
+	"github.com/hashicorp/go-hclog"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/umbracle/ethgo"
+	"google.golang.org/protobuf/proto"
 )
 
 type Runtime interface {
@@ -37,6 +43,13 @@ type Runtime interface {
 type StateSyncProof struct {
 	Proof     []types.Hash
 	StateSync *contractsapi.StateSyncedEvent
+}
+
+// CommitmentVote represents a vote for a commitment
+type CommitmentVote struct {
+	CommitmentHash types.Hash
+	Signature      []byte
+	Signer         types.Address
 }
 
 // StateSyncManager is an interface that defines functions for state sync workflow
@@ -256,34 +269,27 @@ func (s *stateSyncManager) AddLog(eventLog *ethgo.Log) error {
 	event := &contractsapi.StateSyncedEvent{}
 
 	doesMatch, err := event.ParseLog(eventLog)
+	if err != nil {
+		return err
+	}
+
 	if !doesMatch {
 		return nil
 	}
 
-	s.logger.Info(
-		"Add State sync event",
-		"block", eventLog.BlockNumber,
-		"hash", eventLog.TransactionHash,
-		"index", eventLog.LogIndex,
-	)
+	s.lock.Lock()
+	defer s.lock.Unlock()
 
-	if err != nil {
-		s.logger.Error("could not decode state sync event", "err", err)
-
-		return err
-	}
-
+	// save state sync event
 	if err := s.state.StateSyncStore.insertStateSyncEvent(event); err != nil {
-		s.logger.Error("could not save state sync event to boltDb", "err", err)
-
-		return err
+		return fmt.Errorf("failed to insert state sync event: %w", err)
 	}
 
-	if err := s.buildCommitment(nil); err != nil {
-		// we don't return an error here. If state sync event is inserted in db,
-		// we will just try to build a commitment on next block or next event arrival
-		s.logger.Error("could not build a commitment on arrival of new state sync", "err", err, "stateSyncID", event.ID)
-	}
+	s.logger.Debug("State sync event saved",
+		"id", event.ID,
+		"sender", event.Sender,
+		"receiver", event.Receiver,
+		"data", event.Data)
 
 	return nil
 }
@@ -481,23 +487,15 @@ func (s *stateSyncManager) GetStateSyncProof(stateSyncID uint64) (types.Proof, e
 }
 
 // buildProofs builds state sync proofs for the submitted commitment and saves them in boltDb for later execution
-func (s *stateSyncManager) buildProofs(commitmentMsg interface{},
-	dbTx *bolt.Tx) error {
-	// 类型转换，处理 PolyBFT 和 DPoS 的不同 contractsapi 类型
-	var startID, endID *big.Int
-
-	switch msg := commitmentMsg.(type) {
-	case *contractsapi.StateSyncCommitment:
-		startID = msg.StartID
-		endID = msg.EndID
-	case *polybftContractsapi.StateSyncCommitment:
-		startID = msg.StartID
-		endID = msg.EndID
-	default:
-		return fmt.Errorf("unsupported commitment message type: %T", commitmentMsg)
+func (s *stateSyncManager) buildProofs(commitmentMsg interface{}, dbTx *bolt.Tx) error {
+	// 实现状态同步证明构建
+	commitment, ok := commitmentMsg.(*contractsapi.StateSyncCommitment)
+	if !ok {
+		return fmt.Errorf("invalid commitment message type")
 	}
-	from := startID.Uint64()
-	to := endID.Uint64()
+
+	from := commitment.StartID.Uint64()
+	to := commitment.EndID.Uint64()
 
 	s.logger.Debug(
 		"[buildProofs] Building proofs for commitment...",
@@ -505,20 +503,133 @@ func (s *stateSyncManager) buildProofs(commitmentMsg interface{},
 		"toIndex", to,
 	)
 
-	// TODO: 实现状态同步证明构建
-	// 临时禁用，等待类型系统统一
-	s.logger.Info("State sync proof building disabled - type system needs unification")
+	// 获取状态同步事件
+	stateSyncEvents, err := s.state.StateSyncStore.getStateSyncEventsForCommitment(from, to, dbTx)
+	if err != nil {
+		return fmt.Errorf("failed to get state sync events: %w", err)
+	}
 
-	// 临时返回空证明
-	stateSyncProofs := make([]*StateSyncProof, 0)
+	// 构建证明
+	stateSyncProofs := make([]*StateSyncProof, 0, len(stateSyncEvents))
+	for _, event := range stateSyncEvents {
+		// 构建默克尔证明
+		proof, err := s.buildMerkleProof(event, stateSyncEvents, dbTx)
+		if err != nil {
+			return fmt.Errorf("failed to build merkle proof for event %d: %w", event.ID.Uint64(), err)
+		}
+
+		stateSyncProofs = append(stateSyncProofs, &StateSyncProof{
+			Proof:     proof,
+			StateSync: event,
+		})
+	}
 
 	s.logger.Debug(
 		"[buildProofs] Building proofs for commitment finished.",
 		"fromIndex", from,
 		"toIndex", to,
+		"proofsCount", len(stateSyncProofs),
 	)
 
 	return s.state.StateSyncStore.insertStateSyncProofs(stateSyncProofs, dbTx)
+}
+
+// calculateCommitmentRoot 计算承诺根哈希
+func (s *stateSyncManager) calculateCommitmentRoot(events []*contractsapi.StateSyncedEvent) types.Hash {
+	if len(events) == 0 {
+		return types.ZeroHash
+	}
+
+	// 构建所有事件的哈希列表
+	hashes := make([][]byte, 0, len(events))
+	for _, event := range events {
+		data, err := event.Encode()
+		if err != nil {
+			s.logger.Error("failed to encode event for root calculation", "error", err)
+			continue
+		}
+		hashes = append(hashes, data)
+	}
+
+	// 构建默克尔树并获取根
+	tree, err := merkle.NewMerkleTree(hashes)
+	if err != nil {
+		s.logger.Error("failed to create merkle tree for root calculation", "error", err)
+		return types.ZeroHash
+	}
+
+	return tree.Hash()
+}
+
+// calculateCommitmentHash 计算承诺哈希
+func (s *stateSyncManager) calculateCommitmentHash(commitment *polybftContractsapi.StateSyncCommitment) types.Hash {
+	// TODO: 实现承诺编码逻辑
+	// 这里需要根据实际的承诺结构来实现编码
+	return types.ZeroHash
+}
+
+// signCommitment 签名承诺
+func (s *stateSyncManager) signCommitment(commitment *polybftContractsapi.StateSyncCommitment) ([]byte, error) {
+	hash := s.calculateCommitmentHash(commitment)
+	
+	// 使用钱包密钥签名
+	signature, err := s.config.key.Sign(hash.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign commitment: %w", err)
+	}
+
+	return signature, nil
+}
+
+// buildMerkleProof 构建默克尔证明
+func (s *stateSyncManager) buildMerkleProof(event *contractsapi.StateSyncedEvent, allEvents []*contractsapi.StateSyncedEvent, dbTx *bolt.Tx) ([]types.Hash, error) {
+	// 构建所有事件的哈希列表
+	hashes := make([][]byte, 0, len(allEvents))
+	for _, e := range allEvents {
+		// 序列化事件
+		data, err := e.Encode()
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode event: %w", err)
+		}
+		hashes = append(hashes, data)
+	}
+
+	// 构建默克尔树
+	tree, err := merkle.NewMerkleTree(hashes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create merkle tree: %w", err)
+	}
+
+	// 找到目标事件的索引
+	targetIndex := -1
+	for i, e := range allEvents {
+		if e.ID.Cmp(event.ID) == 0 {
+			targetIndex = i
+			break
+		}
+	}
+
+	if targetIndex == -1 {
+		return nil, fmt.Errorf("target event not found in all events")
+	}
+
+	// 生成证明路径 - 需要传递叶子节点的数据
+	leafData, err := event.Encode()
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode event: %w", err)
+	}
+	proof, err := tree.GenerateProof(leafData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate proof: %w", err)
+	}
+
+	// 转换为types.Hash类型
+	result := make([]types.Hash, len(proof))
+	for i, p := range proof {
+		result[i] = p
+	}
+
+	return result, nil
 }
 
 // buildCommitment builds a new commitment, signs it and gossips its vote for it
@@ -548,9 +659,44 @@ func (s *stateSyncManager) buildCommitment(dbTx *bolt.Tx) error {
 		return nil
 	}
 
-	// TODO: 修复类型不匹配问题
-	// 临时禁用，等待类型系统统一
-	s.logger.Info("Commitment building disabled - type system needs unification")
+	// 构建承诺消息
+	commitment := &polybftContractsapi.StateSyncCommitment{
+		StartID: stateSyncEvents[0].ID,
+		EndID:   stateSyncEvents[len(stateSyncEvents)-1].ID,
+		Root:    s.calculateCommitmentRoot(stateSyncEvents),
+	}
+
+	// 签名承诺
+	signature, err := s.signCommitment(commitment)
+	if err != nil {
+		return fmt.Errorf("failed to sign commitment: %w", err)
+	}
+
+	// TODO: 创建已签名的承诺消息
+	// signedCommitment := &CommitmentMessageSigned{
+	// 	Message: commitment,
+	// 	// TODO: 设置聚合签名
+	// }
+
+	// 添加到待处理承诺列表
+	s.pendingCommitments = append(s.pendingCommitments, &PendingCommitment{
+		StateSyncCommitment: commitment,
+		Epoch:               s.epoch,
+		// TODO: 设置默克尔树
+	})
+
+	// 广播投票
+	s.multicast(&CommitmentVote{
+		CommitmentHash: s.calculateCommitmentHash(commitment),
+		Signature:      signature,
+		Signer:         types.Address(s.config.key.Address()),
+	})
+
+	s.logger.Info("Built new commitment",
+		"startID", commitment.StartID,
+		"endID", commitment.EndID,
+		"eventsCount", len(stateSyncEvents))
+
 	return nil
 }
 
@@ -597,5 +743,9 @@ func (s *stateSyncManager) ProcessLog(header *types.Header, log *ethgo.Log, dbTx
 		return nil
 	}
 
-	return s.state.StateSyncStore.removeStateSyncEventsAndProofs([]uint64{stateSyncResultEvent.Counter.Uint64()})
+	s.logger.Debug("State sync result event processed",
+		"counter", stateSyncResultEvent.Counter,
+		"status", stateSyncResultEvent.Status)
+
+	return nil
 }

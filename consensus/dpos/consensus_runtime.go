@@ -130,6 +130,9 @@ type consensusRuntime struct {
 	logger hcf.Logger
 }
 
+// consensusRuntime implements consensus.BridgeDataProvider interface
+var _ consensus.BridgeDataProvider = (*consensusRuntime)(nil)
+
 // newConsensusRuntime creates and starts a new consensus runtime instance with event tracking
 func newConsensusRuntime(log hcf.Logger, config *runtimeConfig) (*consensusRuntime, error) {
 	dbTx, err := config.State.beginDBTransaction(true)

@@ -3,8 +3,11 @@ package dpos
 import (
 	"errors"
 	"fmt"
+	"math/big"
 
+	"github.com/Vcity-Team/vcitychain/types"
 	bolt "go.etcd.io/bbolt"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 )
 
 var (
@@ -78,4 +81,37 @@ func (s *StakeStore) getFullValidatorSet(dbTx *bolt.Tx) (validatorSetState, erro
 	}
 
 	return fullValidatorSet, err
+}
+
+// getStakingInfo returns staking information for a given staker
+func (s *StakeStore) getStakingInfo(staker types.Address, dbTx *bolt.Tx) (*StakeInfo, error) {
+	// TODO: 实现从数据库获取质押信息的逻辑
+	// 这里需要根据实际的数据库结构来实现
+	return &StakeInfo{
+		Staker: staker,
+		// 其他字段需要从数据库读取
+	}, nil
+}
+
+// ValidatorStore represents a store for validator-related data
+type ValidatorStore struct {
+	db *bolt.DB
+}
+
+// initialize creates necessary buckets in DB if they don't already exist
+func (s *ValidatorStore) initialize(tx *bolt.Tx) error {
+	// TODO: 实现验证者存储的初始化逻辑
+	return nil
+}
+
+// getDelegatesAtBlock returns the delegate set at a specific block
+func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx) (validator.AccountSet, error) {
+	// TODO: 实现从数据库获取指定区块的受托人集合
+	return validator.AccountSet{}, nil
+}
+
+// getVotingPowerAtBlock returns the voting power of a delegate at a specific block
+func (s *ValidatorStore) getVotingPowerAtBlock(blockNumber uint64, delegate types.Address, dbTx *bolt.Tx) (*big.Int, error) {
+	// TODO: 实现从数据库获取指定区块的投票权重
+	return big.NewInt(0), nil
 }

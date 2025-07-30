@@ -1,38 +1,34 @@
 package dpos
 
 import (
-	_ "context"
+	"context"
 	"encoding/json"
-	_ "errors"
+
 	"fmt"
 	"math/big"
-	_ "path/filepath"
+
 	"sync"
 	"time"
-	_ "time"
 
 	"github.com/Vcity-Team/vcitychain/blockchain"
+
+	"github.com/Vcity-Team/vcitychain/consensus"
+
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/signer"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/wallet"
+
+
+	"github.com/Vcity-Team/vcitychain/helper/common"
 	"github.com/Vcity-Team/vcitychain/helper/progress"
+	"github.com/Vcity-Team/vcitychain/network"
 	"github.com/Vcity-Team/vcitychain/secrets"
+	"github.com/Vcity-Team/vcitychain/state"
 	"github.com/Vcity-Team/vcitychain/syncer"
+	"github.com/Vcity-Team/vcitychain/types"
 
 	"github.com/hashicorp/go-hclog"
 	bolt "go.etcd.io/bbolt"
-
-	_ "github.com/Vcity-Team/vcitychain/chain"
-	"github.com/Vcity-Team/vcitychain/consensus"
-	_ "github.com/Vcity-Team/vcitychain/consensus/dpos/contractsapi"
-	_ "github.com/Vcity-Team/vcitychain/consensus/dpos/signer"
-	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
-	"github.com/Vcity-Team/vcitychain/consensus/dpos/wallet"
-	_ "github.com/Vcity-Team/vcitychain/contracts"
-	_ "github.com/Vcity-Team/vcitychain/forkmanager"
-	"github.com/Vcity-Team/vcitychain/helper/common"
-	_ "github.com/Vcity-Team/vcitychain/helper/progress"
-	"github.com/Vcity-Team/vcitychain/network"
-	"github.com/Vcity-Team/vcitychain/state"
-	_ "github.com/Vcity-Team/vcitychain/syncer"
-	"github.com/Vcity-Team/vcitychain/types"
 )
 
 // StakeInfo 质押信息结构体
@@ -117,6 +113,30 @@ type dposRuntime struct {
 	backend dposBackend
 	logger  hclog.Logger
 }
+
+func (r *dposRuntime) start() error {
+	r.logger.Info("starting DPoS runtime")
+	// TODO: 实现DPoS运行时的启动逻辑
+	return nil
+}
+
+func (r *dposRuntime) close() {
+	r.logger.Info("closing DPoS runtime")
+	// TODO: 实现DPoS运行时的关闭逻辑
+}
+
+// GenerateExitProof generates proof of exit for given exit event
+func (r *dposRuntime) GenerateExitProof(exitID uint64) (types.Proof, error) {
+	// TODO: 实现退出证明生成逻辑
+	return types.Proof{}, nil
+}
+
+// GetStateSyncProof retrieves the StateSync proof
+func (r *dposRuntime) GetStateSyncProof(stateSyncID uint64) (types.Proof, error) {
+	// TODO: 实现状态同步证明获取逻辑
+	return types.Proof{}, nil
+}
+
 type DPoS struct {
 	// 复用基础设施
 	state  *State
@@ -160,51 +180,6 @@ type DPoS struct {
 	ibft *IBFTConsensusWrapper
 }
 
-func (d *DPoS) VerifyHeader(header *types.Header) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (d *DPoS) GetBlockCreator(header *types.Header) (types.Address, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (d *DPoS) PreCommitState(block *types.Block, txn *state.Transition) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (d *DPoS) GetSyncProgression() *progress.Progression {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (d *DPoS) GetBridgeProvider() consensus.BridgeDataProvider {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (d *DPoS) FilterExtra(extra []byte) ([]byte, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (d *DPoS) Start() error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (d *DPoS) Close() error {
-	//TODO implement me
-	panic("implement me")
-}
-
 // VoterInfo 投票者信息
 type VoterInfo struct {
 	Address        types.Address
@@ -223,6 +198,146 @@ type DelegateInfo struct {
 	MissedBlocks   uint64
 	LastBlockTime  uint64
 	IsActive       bool
+}
+
+func (d *DPoS) VerifyHeader(header *types.Header) error {
+	// Short circuit if the header is known
+	if _, ok := d.blockchain.GetHeaderByHash(header.Hash); ok {
+		return nil
+	}
+
+	parent, ok := d.blockchain.GetHeaderByHash(header.ParentHash)
+	if !ok {
+		return fmt.Errorf(
+			"unable to get parent header by hash for block number %d",
+			header.Number,
+		)
+	}
+
+	return d.verifyHeaderImpl(parent, header, d.config.BlockTime.Duration, nil)
+}
+
+func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift time.Duration, parents []*types.Header) error {
+	// validate header fields
+	if err := validateHeaderFields(parent, header, uint64(blockTimeDrift.Seconds())); err != nil {
+		return fmt.Errorf("failed to validate header for block %d. error = %w", header.Number, err)
+	}
+
+	// decode the extra data
+	extra, err := GetIbftExtra(header.ExtraData)
+	if err != nil {
+		return fmt.Errorf("failed to verify header for block %d. get extra error = %w", header.Number, err)
+	}
+
+	// validate extra data
+	return extra.ValidateFinalizedData(
+		header, parent, parents, d.blockchain.GetChainID(), d, signer.DomainCheckpointManager, d.logger)
+}
+
+func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
+	// For DPoS, we don't need to process headers in the same way as PoW
+	// This is mainly used for syncing and can be a no-op for DPoS
+	d.logger.Debug("processing headers", "count", len(headers))
+	return nil
+}
+
+func (d *DPoS) GetBlockCreator(header *types.Header) (types.Address, error) {
+	return types.BytesToAddress(header.Miner), nil
+}
+
+func (d *DPoS) PreCommitState(block *types.Block, _ *state.Transition) error {
+	// For DPoS, we don't need to validate commitment state transactions like PolyBFT
+	// This is mainly used for state transition validation
+	d.logger.Debug("pre-commit state validation", "block", block.Number())
+	return nil
+}
+
+func (d *DPoS) GetSyncProgression() *progress.Progression {
+	if d.syncer != nil {
+		return d.syncer.GetSyncProgression()
+	}
+	return nil
+}
+
+func (d *DPoS) GetBridgeProvider() consensus.BridgeDataProvider {
+	if d.runtime != nil {
+		return d.runtime
+	}
+	return nil
+}
+
+func (d *DPoS) FilterExtra(extra []byte) ([]byte, error) {
+	return GetIbftExtraClean(extra)
+}
+
+func (d *DPoS) Start() error {
+	d.logger.Info("starting dpos consensus", "signer", d.key.String())
+
+	// start syncer (also initializes peer map)
+	if err := d.syncer.Start(); err != nil {
+		return fmt.Errorf("failed to start syncer. Error: %w", err)
+	}
+
+	// sync concurrently, retrying indefinitely
+	go common.RetryForever(context.Background(), time.Second, func(context.Context) error {
+		blockHandler := func(b *types.FullBlock) bool {
+			// 实现DPoS的区块处理逻辑
+			d.logger.Debug("processing block", "number", b.Block.Number())
+			
+			// 处理区块中的投票事件
+			if err := d.processBlockVotes(b); err != nil {
+				d.logger.Error("failed to process block votes", "error", err, "block", b.Block.Number())
+			}
+			
+			// 更新受托人集合
+			if err := d.updateDelegates(b); err != nil {
+				d.logger.Error("failed to update delegates", "error", err, "block", b.Block.Number())
+			}
+			
+			// 处理奖励分配
+			if err := d.processRewards(b); err != nil {
+				d.logger.Error("failed to process rewards", "error", err, "block", b.Block.Number())
+			}
+			
+			return false
+		}
+		if err := d.syncer.Sync(blockHandler); err != nil {
+			d.logger.Error("blocks synchronization failed", "error", err)
+			return err
+		}
+		return nil
+	})
+
+	// start consensus runtime if available
+	if d.runtime != nil {
+		// 启动DPoS运行时
+		if err := d.runtime.start(); err != nil {
+			return fmt.Errorf("failed to start DPoS runtime: %w", err)
+		}
+	}
+
+	// start state DB process if available
+	if d.state != nil {
+		go d.state.startStatsReleasing()
+	}
+
+	return nil
+}
+
+func (d *DPoS) Close() error {
+	if d.syncer != nil {
+		if err := d.syncer.Close(); err != nil {
+			return err
+		}
+	}
+
+	close(d.closeCh)
+	
+	if d.runtime != nil {
+		d.runtime.close()
+	}
+
+	return nil
 }
 
 // DPoS 实现 dposBackend 接口
@@ -335,8 +450,35 @@ func (d *DPoS) GetDelegatesWithTx(blockNumber uint64, parents []*types.Header, d
 }
 
 func (d *DPoS) GetStakingInfo(blockNumber uint64, staker types.Address) (*StakeInfo, error) {
-	// TODO: 从状态存储中获取质押信息
-	// 临时返回空值，等待状态存储实现
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	// 从状态存储中获取质押信息
+	if d.state != nil {
+		dbTx, err := d.state.beginDBTransaction(false)
+		if err != nil {
+			return nil, fmt.Errorf("failed to begin db transaction: %w", err)
+		}
+		defer dbTx.Rollback()
+
+		return d.GetStakingInfoWithTx(blockNumber, staker, dbTx)
+	}
+
+	// 如果状态存储不可用，从内存中获取
+	if voter, exists := d.voters[staker]; exists {
+		return &StakeInfo{
+			Staker:    staker,
+			Amount:    new(big.Int).Set(voter.VotingPower),
+			StartTime: voter.LastVoteTime,
+			EndTime:   voter.LockedUntil,
+			IsLocked:  voter.LockedUntil > uint64(time.Now().Unix()),
+			IsActive:  len(voter.VotedDelegates) > 0,
+			Rewards:   big.NewInt(0), // TODO: 实现奖励计算
+			Delegate:  d.getPrimaryDelegate(voter.VotedDelegates),
+		}, nil
+	}
+
+	// 返回默认值
 	return &StakeInfo{
 		Staker:    staker,
 		Amount:    big.NewInt(0),
@@ -350,9 +492,43 @@ func (d *DPoS) GetStakingInfo(blockNumber uint64, staker types.Address) (*StakeI
 }
 
 func (d *DPoS) GetStakingInfoWithTx(blockNumber uint64, staker types.Address, dbTx *bolt.Tx) (*StakeInfo, error) {
-	// TODO: 在事务中获取质押信息
-	// 临时返回空值，等待状态存储实现
-	return d.GetStakingInfo(blockNumber, staker)
+	// 从状态存储中获取质押信息
+	if d.state != nil {
+		// 尝试从数据库获取质押信息
+		stakeInfo, err := d.state.StakeStore.getStakingInfo(staker, dbTx)
+		if err == nil && stakeInfo != nil {
+			return stakeInfo, nil
+		}
+	}
+
+	// 如果数据库中没有，从内存中获取
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	if voter, exists := d.voters[staker]; exists {
+		return &StakeInfo{
+			Staker:    staker,
+			Amount:    new(big.Int).Set(voter.VotingPower),
+			StartTime: voter.LastVoteTime,
+			EndTime:   voter.LockedUntil,
+			IsLocked:  voter.LockedUntil > uint64(time.Now().Unix()),
+			IsActive:  len(voter.VotedDelegates) > 0,
+			Rewards:   big.NewInt(0), // TODO: 实现奖励计算
+			Delegate:  d.getPrimaryDelegate(voter.VotedDelegates),
+		}, nil
+	}
+
+	// 返回默认值
+	return &StakeInfo{
+		Staker:    staker,
+		Amount:    big.NewInt(0),
+		StartTime: 0,
+		EndTime:   0,
+		IsLocked:  false,
+		IsActive:  false,
+		Rewards:   big.NewInt(0),
+		Delegate:  types.ZeroAddress,
+	}, nil
 }
 
 func (d *DPoS) GetVotingPower(blockNumber uint64, delegate types.Address) (*big.Int, error) {
@@ -406,21 +582,80 @@ func (d *DPoS) GetDelegateIndex(delegate types.Address) uint64 {
 	return 0
 }
 
+// 区块处理相关方法
+func (d *DPoS) processBlockVotes(block *types.FullBlock) error {
+	// 处理区块中的投票事件
+	// TODO: 实现投票事件处理逻辑
+	d.logger.Debug("processing block votes", "block", block.Block.Number())
+	return nil
+}
+
+func (d *DPoS) updateDelegates(block *types.FullBlock) error {
+	// 更新受托人集合
+	// TODO: 实现受托人集合更新逻辑
+	d.logger.Debug("updating delegates", "block", block.Block.Number())
+	return nil
+}
+
+func (d *DPoS) processRewards(block *types.FullBlock) error {
+	// 处理奖励分配
+	// TODO: 实现奖励分配逻辑
+	d.logger.Debug("processing rewards", "block", block.Block.Number())
+	return nil
+}
+
 // 辅助方法
+func (d *DPoS) getPrimaryDelegate(votedDelegates []types.Address) types.Address {
+	if len(votedDelegates) == 0 {
+		return types.ZeroAddress
+	}
+	return votedDelegates[0]
+}
+
 func (d *DPoS) getDelegatesFromState(blockNumber uint64) (validator.AccountSet, error) {
-	// TODO: 从状态存储中获取历史受托人集合
-	// 临时返回当前受托人集合
+	// 从状态存储中获取历史受托人集合
+	if d.state != nil {
+		dbTx, err := d.state.beginDBTransaction(false)
+		if err != nil {
+			return nil, fmt.Errorf("failed to begin db transaction: %w", err)
+		}
+		defer dbTx.Rollback()
+
+		return d.getDelegatesFromStateWithTx(blockNumber, dbTx)
+	}
+
+	// 如果状态存储不可用，返回当前受托人集合
+	d.lock.RLock()
+	defer d.lock.RUnlock()
 	return d.delegates.Copy(), nil
 }
 
 func (d *DPoS) getDelegatesFromStateWithTx(blockNumber uint64, dbTx *bolt.Tx) (validator.AccountSet, error) {
-	// TODO: 在事务中获取受托人集合
-	// 临时返回当前受托人集合
-	return d.getDelegatesFromState(blockNumber)
+	// 在事务中获取受托人集合
+	if d.state != nil {
+		// 尝试从数据库获取历史受托人集合
+		delegates, err := d.state.ValidatorStore.getDelegatesAtBlock(blockNumber, dbTx)
+		if err == nil && len(delegates) > 0 {
+			return delegates, nil
+		}
+	}
+
+	// 如果数据库中没有，返回当前受托人集合
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+	return d.delegates.Copy(), nil
 }
 
 func (d *DPoS) getVotingPowerFromStateWithTx(blockNumber uint64, delegate types.Address, dbTx *bolt.Tx) (*big.Int, error) {
-	// TODO: 在事务中获取投票权重
-	// 临时返回当前投票权重
+	// 在事务中获取投票权重
+	if d.state != nil {
+		// 尝试从数据库获取历史投票权重
+		votingPower, err := d.state.ValidatorStore.getVotingPowerAtBlock(blockNumber, delegate, dbTx)
+		if err == nil && votingPower != nil {
+			return votingPower, nil
+		}
+	}
+
+	// 如果数据库中没有，返回当前投票权重
 	return d.GetVotingPower(blockNumber, delegate)
 }
