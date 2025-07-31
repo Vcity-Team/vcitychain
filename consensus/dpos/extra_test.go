@@ -10,10 +10,10 @@ import (
 
 	"github.com/Vcity-Team/vcitychain/bls"
 	"github.com/Vcity-Team/vcitychain/chain"
-	"github.com/Vcity-Team/vcitychain/consensus/polybft/bitmap"
-	"github.com/Vcity-Team/vcitychain/consensus/polybft/signer"
-	"github.com/Vcity-Team/vcitychain/consensus/polybft/validator"
-	"github.com/Vcity-Team/vcitychain/consensus/polybft/wallet"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/bitmap"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/signer"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/wallet"
 	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
@@ -260,9 +260,25 @@ func TestExtra_ValidateFinalizedData_UnhappyPath(t *testing.T) {
 	polyBackendMock := new(polybftBackendMock)
 	polyBackendMock.On("GetValidators", mock.Anything, mock.Anything).Return(nil, errors.New("validators not found"))
 
+	// Test block 1 validation - should skip signature validation
+	block1Header := &types.Header{
+		Number: 1,
+		Hash:   types.BytesToHash(generateRandomBytes(t)),
+	}
+	block1Parent := &types.Header{
+		Number: 0,
+		Hash:   types.BytesToHash(generateRandomBytes(t)),
+	}
+
+	// Even with missing signatures and checkpoint data, block 1 should pass validation
+	block1Extra := &Extra{}
+	err := block1Extra.ValidateFinalizedData(
+		block1Header, block1Parent, nil, chainID, nil, signer.DomainCheckpointManager, hclog.NewNullLogger())
+	require.NoError(t, err, "block 1 validation should skip signature checks")
+
 	// missing Committed field
 	extra := &Extra{}
-	err := extra.ValidateFinalizedData(
+	err = extra.ValidateFinalizedData(
 		header, parent, nil, chainID, nil, signer.DomainCheckpointManager, hclog.NewNullLogger())
 	require.ErrorContains(t, err, fmt.Sprintf("failed to verify signatures for block %d, because signatures are not present", headerNum))
 

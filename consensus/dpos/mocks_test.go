@@ -1,6 +1,8 @@
 package dpos
 
 import (
+	"errors"
+	"math/big"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/blockchain"
@@ -130,6 +132,7 @@ func (m *blockchainMock) GetReceiptsByHash(hash types.Hash) ([]*types.Receipt, e
 }
 
 var _ polybftBackend = (*polybftBackendMock)(nil)
+var _ dposBackend = (*polybftBackendMock)(nil)
 
 type polybftBackendMock struct {
 	mock.Mock
@@ -165,6 +168,90 @@ func (p *polybftBackendMock) GetValidatorsWithTx(blockNumber uint64, parents []*
 	}
 
 	panic("polybftBackendMock.GetValidatorsWithTx doesn't support such combination of arguments") //nolint:gocritic
+}
+
+// DPoS backend methods
+func (p *polybftBackendMock) GetDelegates(blockNumber uint64, parents []*types.Header) (validator.AccountSet, error) {
+	return p.GetValidators(blockNumber, parents)
+}
+
+func (p *polybftBackendMock) GetDelegatesWithTx(blockNumber uint64, parents []*types.Header, dbTx *bolt.Tx) (validator.AccountSet, error) {
+	return p.GetValidatorsWithTx(blockNumber, parents, dbTx)
+}
+
+func (p *polybftBackendMock) GetStakingInfo(blockNumber uint64, staker types.Address) (*StakeInfo, error) {
+	args := p.Called(blockNumber, staker)
+	if len(args) == 1 {
+		stakeInfo, _ := args.Get(0).(*StakeInfo)
+		return stakeInfo, nil
+	} else if len(args) == 2 {
+		stakeInfo, _ := args.Get(0).(*StakeInfo)
+		return stakeInfo, args.Error(1)
+	}
+	return nil, errors.New("not implemented")
+}
+
+func (p *polybftBackendMock) GetStakingInfoWithTx(blockNumber uint64, staker types.Address, dbTx *bolt.Tx) (*StakeInfo, error) {
+	args := p.Called(blockNumber, staker, dbTx)
+	if len(args) == 1 {
+		stakeInfo, _ := args.Get(0).(*StakeInfo)
+		return stakeInfo, nil
+	} else if len(args) == 2 {
+		stakeInfo, _ := args.Get(0).(*StakeInfo)
+		return stakeInfo, args.Error(1)
+	}
+	return nil, errors.New("not implemented")
+}
+
+func (p *polybftBackendMock) GetVotingPower(blockNumber uint64, delegate types.Address) (*big.Int, error) {
+	args := p.Called(blockNumber, delegate)
+	if len(args) == 1 {
+		votingPower, _ := args.Get(0).(*big.Int)
+		return votingPower, nil
+	} else if len(args) == 2 {
+		votingPower, _ := args.Get(0).(*big.Int)
+		return votingPower, args.Error(1)
+	}
+	return big.NewInt(0), errors.New("not implemented")
+}
+
+func (p *polybftBackendMock) GetVotingPowerWithTx(blockNumber uint64, delegate types.Address, dbTx *bolt.Tx) (*big.Int, error) {
+	args := p.Called(blockNumber, delegate, dbTx)
+	if len(args) == 1 {
+		votingPower, _ := args.Get(0).(*big.Int)
+		return votingPower, nil
+	} else if len(args) == 2 {
+		votingPower, _ := args.Get(0).(*big.Int)
+		return votingPower, args.Error(1)
+	}
+	return big.NewInt(0), errors.New("not implemented")
+}
+
+func (p *polybftBackendMock) GetCurrentRound() uint64 {
+	args := p.Called()
+	if len(args) == 1 {
+		round, _ := args.Get(0).(uint64)
+		return round
+	}
+	return 0
+}
+
+func (p *polybftBackendMock) GetCurrentDelegate() types.Address {
+	args := p.Called()
+	if len(args) == 1 {
+		delegate, _ := args.Get(0).(types.Address)
+		return delegate
+	}
+	return types.ZeroAddress
+}
+
+func (p *polybftBackendMock) GetDelegateIndex(delegate types.Address) uint64 {
+	args := p.Called(delegate)
+	if len(args) == 1 {
+		index, _ := args.Get(0).(uint64)
+		return index
+	}
+	return 0
 }
 
 var _ blockBuilder = (*blockBuilderMock)(nil)

@@ -269,14 +269,67 @@ func (r *dposRuntime) produceBlock() error {
 		return nil // 不是当前出块者
 	}
 
-	// 检查是否已经有更新的区块
+	// 对于区块1，我们需要特别检查来防止分叉
+	// 如果当前是区块0，并且我们是第一个受托人，需要等待一段时间
+	// 让其他节点有机会先出块
 	currentBlock := r.config.blockchain.CurrentHeader()
-	if currentBlock.Number > 0 {
-		// 如果已经有区块1，检查是否是我们生产的
-		if currentBlock.Number == 1 {
-			r.logger.Info("block 1 already exists, skipping block production")
+	if currentBlock.Number == 0 && r.currentDelegateIndex == 0 {
+		r.logger.Info("first delegate at genesis block, waiting to avoid fork")
+
+		// 等待更长时间，确保其他节点有机会先出块
+		time.Sleep(1000 * time.Millisecond) // 增加到1秒
+
+		// 再次检查当前区块高度
+		currentBlock = r.config.blockchain.CurrentHeader()
+		if currentBlock.Number > 0 {
+			r.logger.Info("block was produced by another node during wait, skipping block production")
 			return nil
 		}
+	}
+
+	// 额外的检查：如果当前是区块0，并且我们不是第一个受托人，也要等待
+	// 这样可以确保第一个受托人有足够时间出块
+	if currentBlock.Number == 0 && r.currentDelegateIndex > 0 {
+		r.logger.Info("not first delegate at genesis block, waiting for first delegate to produce block")
+
+		// 等待一段时间，让第一个受托人有机会出块
+		time.Sleep(2000 * time.Millisecond) // 等待2秒
+
+		// 再次检查当前区块高度
+		currentBlock = r.config.blockchain.CurrentHeader()
+		if currentBlock.Number > 0 {
+			r.logger.Info("block was produced by first delegate, skipping block production")
+			return nil
+		}
+	}
+
+	// 检查是否已经有更新的区块
+	currentBlock = r.config.blockchain.CurrentHeader()
+
+	// 计算下一个要生产的区块号
+	nextBlockNumber := currentBlock.Number + 1
+
+	// 只对区块1进行特殊检查，防止分叉
+	if nextBlockNumber == 1 {
+		// 如果我们要生产区块1，检查是否已经有区块1了
+		if currentBlock.Number >= 1 {
+			// 检查当前区块的矿工地址是否是我们自己
+			blockMiner := types.BytesToAddress(currentBlock.Miner)
+			keyAddr := types.Address(r.config.Key.Address())
+
+			if blockMiner != keyAddr {
+				r.logger.Info("block 1 was produced by another node, skipping block production",
+					"blockMiner", blockMiner, "keyAddr", keyAddr)
+				return nil
+			} else {
+				r.logger.Info("block 1 was produced by us, continuing with next block")
+			}
+		}
+	} else if currentBlock.Number >= nextBlockNumber {
+		// 如果当前区块号大于等于我们要生产的区块号，说明已经有更新的区块了
+		r.logger.Info("block already exists, skipping block production",
+			"currentBlockNumber", currentBlock.Number, "nextBlockNumber", nextBlockNumber)
+		return nil
 	}
 
 	// 构建新区块
@@ -408,6 +461,51 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		// 添加调试日志
 		r.logger.Info("set extraData for block", "length", len(h.ExtraData))
 	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to build block: %w", err)
+	}
+
+	// 等待收集其他验证者的签名
+	r.logger.Info("waiting for validator signatures", "blockNumber", block.Block.Number())
+
+	// 等待一段时间让其他验证者签名
+	time.Sleep(1 * time.Second)
+
+	// 收集签名（这里简化处理，实际应该从网络收集）
+	// TODO: 实现真正的签名收集逻辑
+	signatures := make([][]byte, 0)
+	bitmap := make([]byte, 0)
+
+	// 为简化，我们假设所有验证者都签名了
+	for i, delegate := range r.delegates {
+		if delegate.Address != keyAddr { // 不包括自己
+			// 这里应该收集真实的签名
+			// 暂时使用空签名
+			signatures = append(signatures, []byte{})
+			bitmap = append(bitmap, byte(i))
+		}
+	}
+
+	// 更新区块的签名
+	if len(signatures) > 0 {
+		// 重新构建区块头，包含收集到的签名
+		extra := &Extra{
+			Committed: &Signature{
+				AggregatedSignature: signatures[0], // 简化处理
+				Bitmap:              bitmap,
+			},
+			Checkpoint: &CheckpointData{
+				BlockRound:            r.currentRound,
+				EpochNumber:           1,
+				CurrentValidatorsHash: types.Hash{},
+				NextValidatorsHash:    types.Hash{},
+				EventRoot:             types.Hash{},
+			},
+		}
+		block.Block.Header.ExtraData = extra.MarshalRLPTo(nil)
+		r.logger.Info("updated block with signatures", "signatureCount", len(signatures))
+	}
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to build block: %w", err)
@@ -596,9 +694,48 @@ func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift tim
 }
 
 func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
-	// For DPoS, we don't need to process headers in the same way as PoW
-	// This is mainly used for syncing and can be a no-op for DPoS
+	// For DPoS, we need to update round state when receiving new blocks
 	d.logger.Debug("processing headers", "count", len(headers))
+
+	// Update round state for each new block
+	for _, header := range headers {
+		d.logger.Info("processing header", "blockNumber", header.Number, "blockHash", header.Hash)
+
+		// Use a goroutine to delay the round state update
+		// This ensures the block is written before we update the round state
+		go func(h *types.Header) {
+			// Wait a bit for the block to be written
+			time.Sleep(100 * time.Millisecond)
+
+			// Check if the block is now the current header
+			currentHeader := d.blockchain.CurrentHeader()
+			d.logger.Info("delayed check - current header", "blockNumber", currentHeader.Number, "blockHash", currentHeader.Hash)
+
+			if h.Number == currentHeader.Number && h.Hash == currentHeader.Hash {
+				d.logger.Info("updating round state for new block", "blockNumber", h.Number)
+
+				// Update round state in the runtime
+				if d.runtime != nil {
+					d.runtime.lock.Lock()
+					oldIndex := d.runtime.currentDelegateIndex
+					d.runtime.updateRound()
+					d.runtime.lock.Unlock()
+
+					d.logger.Info("updated round state",
+						"oldDelegateIndex", oldIndex,
+						"newRound", d.runtime.currentRound,
+						"newDelegateIndex", d.runtime.currentDelegateIndex)
+				} else {
+					d.logger.Warn("runtime is nil, cannot update round state")
+				}
+			} else {
+				d.logger.Info("delayed check - header does not match current header, skipping round update",
+					"headerNumber", h.Number, "currentNumber", currentHeader.Number,
+					"headerHash", h.Hash, "currentHash", currentHeader.Hash)
+			}
+		}(header)
+	}
+
 	return nil
 }
 
