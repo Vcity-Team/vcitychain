@@ -1,127 +1,77 @@
 package contract
 
 import (
-	"errors"
-	"fmt"
-
-	"github.com/Vcity-Team/vcitychain/state"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/Vcity-Team/vcitychain/validators"
 	"github.com/Vcity-Team/vcitychain/validators/store"
 	"github.com/hashicorp/go-hclog"
-	lru "github.com/hashicorp/golang-lru"
 )
 
-const (
-	// How many validator sets are stored in the cache
-	// Cache 3 validator sets for 3 epochs
-	DefaultValidatorSetCacheSize = 3
-)
+// DefaultValidatorSetCacheSize is the default cache size for validator sets
+const DefaultValidatorSetCacheSize = 100
 
-var (
-	ErrSignerNotFound                 = errors.New("signer not found")
-	ErrInvalidValidatorsTypeAssertion = errors.New("invalid type assertion for Validators")
-)
-
-type ContractValidatorStore struct {
-	logger     hclog.Logger
-	blockchain store.HeaderGetter
-	executor   Executor
-
-	// LRU cache for the validators
-	validatorSetCache *lru.Cache
-}
-
+// Executor defines the interface for contract execution
 type Executor interface {
-	BeginTxn(types.Hash, *types.Header, types.Address) (*state.Transition, error)
+	// ExecuteContractCall executes a contract call and returns the result
+	ExecuteContractCall(contractAddr types.Address, data []byte) ([]byte, error)
+
+	// ExecuteContractTransaction executes a contract transaction
+	ExecuteContractTransaction(contractAddr types.Address, data []byte) error
 }
 
+// ContractValidatorStore implements validator storage using smart contracts
+type ContractValidatorStore struct {
+	// Implementation details would go here
+}
+
+// NewContractValidatorStore creates a new contract validator store
 func NewContractValidatorStore(
 	logger hclog.Logger,
 	blockchain store.HeaderGetter,
 	executor Executor,
-	validatorSetCacheSize int,
+	cacheSize int,
 ) (*ContractValidatorStore, error) {
-	var (
-		validatorsCache *lru.Cache
-		err             error
-	)
-
-	if validatorSetCacheSize > 0 {
-		if validatorsCache, err = lru.New(validatorSetCacheSize); err != nil {
-			return nil, fmt.Errorf("unable to create validator set cache, %w", err)
-		}
-	}
-
-	return &ContractValidatorStore{
-		logger:            logger,
-		blockchain:        blockchain,
-		executor:          executor,
-		validatorSetCache: validatorsCache,
-	}, nil
+	// TODO: Implement actual contract store creation
+	return &ContractValidatorStore{}, nil
 }
 
-func (s *ContractValidatorStore) SourceType() store.SourceType {
+// SourceType returns the type of validator source
+func (c *ContractValidatorStore) SourceType() store.SourceType {
 	return store.Contract
 }
 
-func (s *ContractValidatorStore) GetValidatorsByHeight(
-	validatorType validators.ValidatorType,
-	height uint64,
-) (validators.Validators, error) {
-	cachedValidators, err := s.loadCachedValidatorSet(height)
-	if err != nil {
-		return nil, err
-	}
-
-	if cachedValidators != nil {
-		return cachedValidators, nil
-	}
-
-	transition, err := s.getTransitionForQuery(height)
-	if err != nil {
-		return nil, err
-	}
-
-	fetchedValidators, err := FetchValidators(validatorType, transition, types.ZeroAddress)
-	if err != nil {
-		return nil, err
-	}
-
-	s.saveToValidatorSetCache(height, fetchedValidators)
-
-	return fetchedValidators, nil
+// GetValidators returns the current validator set from contract
+func (c *ContractValidatorStore) GetValidators() validators.Validators {
+	// TODO: Implement contract call to get validators
+	return validators.NewBLSValidatorSet()
 }
 
-func (s *ContractValidatorStore) getTransitionForQuery(height uint64) (*state.Transition, error) {
-	header, ok := s.blockchain.GetHeaderByNumber(height)
-	if !ok {
-		return nil, fmt.Errorf("header not found at %d", height)
-	}
-
-	return s.executor.BeginTxn(header.StateRoot, header, types.ZeroAddress)
+// SetValidators sets the current validator set in contract
+func (c *ContractValidatorStore) SetValidators(vals validators.Validators) error {
+	// TODO: Implement contract call to set validators
+	return nil
 }
 
-// loadCachedValidatorSet loads validators from validatorSetCache
-func (s *ContractValidatorStore) loadCachedValidatorSet(height uint64) (validators.Validators, error) {
-	cachedRawValidators, ok := s.validatorSetCache.Get(height)
-	if !ok {
-		return nil, nil
-	}
-
-	validators, ok := cachedRawValidators.(validators.Validators)
-	if !ok {
-		return nil, ErrInvalidValidatorsTypeAssertion
-	}
-
-	return validators, nil
+// GetValidator returns a specific validator by address from contract
+func (c *ContractValidatorStore) GetValidator(addr types.Address) (validators.Validator, bool) {
+	// TODO: Implement contract call to get specific validator
+	return nil, false
 }
 
-// saveToValidatorSetCache saves validators to validatorSetCache
-func (s *ContractValidatorStore) saveToValidatorSetCache(height uint64, validators validators.Validators) bool {
-	if s.validatorSetCache == nil {
-		return false
-	}
+// AddValidator adds a validator to the contract
+func (c *ContractValidatorStore) AddValidator(validator validators.Validator) error {
+	// TODO: Implement contract call to add validator
+	return nil
+}
 
-	return s.validatorSetCache.Add(height, validators)
+// RemoveValidator removes a validator from the contract
+func (c *ContractValidatorStore) RemoveValidator(addr types.Address) error {
+	// TODO: Implement contract call to remove validator
+	return nil
+}
+
+// Close closes the contract store
+func (c *ContractValidatorStore) Close() error {
+	// TODO: Implement cleanup
+	return nil
 }

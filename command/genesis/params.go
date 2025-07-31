@@ -155,6 +155,12 @@ func (p *genesisParams) validateFlags() error {
 		return errValidatorsNotSpecified
 	}
 
+	// For DPoS consensus, validators are optional but recommended
+	if p.isDPoSConsensus() && !p.areValidatorsSetByPrefix() {
+		// Log a warning but don't fail - DPoS can work without initial validators
+		// They can be added later through governance
+	}
+
 	if err := p.parsePremineInfo(); err != nil {
 		return err
 	}
@@ -187,7 +193,7 @@ func (p *genesisParams) validateFlags() error {
 	}
 
 	// Check that the epoch size is correct
-	if p.epochSize < 2 && (p.isIBFTConsensus() || p.isPolyBFTConsensus()) {
+	if p.epochSize < 2 && (p.isIBFTConsensus() || p.isPolyBFTConsensus() || p.isDPoSConsensus()) {
 		// Epoch size must be greater than 1, so new transactions have a chance to be added to a block.
 		// Otherwise, every block would be an endblock (meaning it will not have any transactions).
 		// Check is placed here to avoid additional parsing if epochSize < 2
@@ -211,6 +217,10 @@ func (p *genesisParams) isIBFTConsensus() bool {
 
 func (p *genesisParams) isPolyBFTConsensus() bool {
 	return server.ConsensusType(p.consensusRaw) == server.PolyBFTConsensus
+}
+
+func (p *genesisParams) isDPoSConsensus() bool {
+	return server.ConsensusType(p.consensusRaw) == server.DPoSConsensus
 }
 
 func (p *genesisParams) areValidatorsSetManually() bool {
@@ -630,4 +640,83 @@ func (p *genesisParams) getResult() command.CommandResult {
 	return &GenesisResult{
 		Message: fmt.Sprintf("\nGenesis written to %s\n", p.genesisPath),
 	}
+}
+
+// generateDPoSChainConfig creates and persists DPoS chain configuration to the provided file path
+func (p *genesisParams) generateDPoSChainConfig(o command.OutputFormatter) error {
+	// populate premine balance map
+	premineBalances := make(map[types.Address]*helper.PremineInfo, len(p.premine))
+
+	for _, premine := range p.premineInfos {
+		premineBalances[premine.Address] = premine
+	}
+
+	// Create chain configuration
+	chainConfig := &chain.Chain{
+		Name: p.name,
+		Genesis: &chain.Genesis{
+			GasLimit:   p.blockGasLimit,
+			Difficulty: 1,
+			Alloc:      map[types.Address]*chain.GenesisAccount{},
+			ExtraData:  []byte{},
+			GasUsed:    command.DefaultGenesisGasUsed,
+		},
+		Params: &chain.Params{
+			ChainID: int64(p.chainID),
+			Forks:   chain.AllForksEnabled,
+			Engine: map[string]interface{}{
+				string(server.DPoSConsensus): map[string]interface{}{
+					"blockTime":     p.blockTime,
+					"epochSize":     p.epochSize,
+					"delegateCount": 21, // Default delegate count for DPoS
+				},
+			},
+		},
+		Bootnodes: p.bootnodes,
+	}
+
+	// Add premine accounts
+	for address, premineInfo := range premineBalances {
+		chainConfig.Genesis.Alloc[address] = &chain.GenesisAccount{
+			Balance: premineInfo.Amount,
+		}
+	}
+
+	// Read validators from validators path if specified
+	if p.validatorsPath != "" && p.validatorsPrefixPath != "" {
+		validators, err := command.GetValidatorsFromPrefixPath(
+			p.validatorsPath,
+			p.validatorsPrefixPath,
+			validators.BLSValidatorType, // DPoS uses BLS validators
+		)
+		if err != nil {
+			return fmt.Errorf("failed to read validators from path: %w", err)
+		}
+
+		// Convert validators to DPoS format and add to genesis
+		initialDelegates := make([]map[string]interface{}, 0, validators.Len())
+		for i := uint64(0); i < uint64(validators.Len()); i++ {
+			validator := validators.At(i)
+			validatorInfo := map[string]interface{}{
+				"address":     validator.Addr().String(),
+				"votingPower": "1000000000000000000000", // Default voting power
+				"isActive":    true,
+			}
+			initialDelegates = append(initialDelegates, validatorInfo)
+		}
+
+		// Add initial delegates to engine config
+		if engineConfig, ok := chainConfig.Params.Engine[string(server.DPoSConsensus)].(map[string]interface{}); ok {
+			engineConfig["initialDelegates"] = initialDelegates
+		}
+	}
+
+	// Write genesis configuration to disk
+	if err := helper.WriteGenesisConfigToDisk(chainConfig, p.genesisPath); err != nil {
+		return fmt.Errorf("failed to write genesis config to disk: %w", err)
+	}
+
+	p.genesisConfig = chainConfig
+
+	return nil
 }

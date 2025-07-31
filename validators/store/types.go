@@ -26,11 +26,6 @@ func (t SourceType) String() string {
 	return string(t)
 }
 
-// ValidatorStore is an interface that ValidatorStore needs to implement
-type ValidatorStore interface {
-	SourceType() SourceType
-}
-
 // HeaderGetter is an interface in order each ValidatorStore gets latest header and header by number
 type HeaderGetter interface {
 	Header() *types.Header

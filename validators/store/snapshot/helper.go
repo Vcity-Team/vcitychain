@@ -1,8 +1,16 @@
 package snapshot
 
 import (
+	"errors"
+
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/Vcity-Team/vcitychain/validators"
+)
+
+var (
+	ErrIncorrectNonce = errors.New("incorrect nonce")
+	nonceAuthVote     = types.BytesToNonce(0xffffffffffffffff)
+	nonceDropVote     = types.BytesToNonce(0x0000000000000000)
 )
 
 // isAuthorize is a helper function to return the bool value from Nonce
@@ -42,6 +50,6 @@ func addsOrDelsCandidate(
 	if updateAction {
 		return validators.Add(candidate)
 	} else {
-		return validators.Del(candidate)
+		return validators.Del(candidate.Addr())
 	}
 }

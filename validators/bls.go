@@ -1,7 +1,6 @@
 package validators
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 
@@ -89,18 +88,15 @@ func (v *BLSValidator) Equal(vr Validator) bool {
 	if !ok {
 		return false
 	}
-
-	return v.Address == vv.Address && bytes.Equal(v.BLSPublicKey, vv.BLSPublicKey)
+	return v.Address == vv.Address && string(v.BLSPublicKey) == string(vv.BLSPublicKey)
 }
 
 // MarshalRLPWith is a RLP Marshaller
 func (v *BLSValidator) MarshalRLPWith(arena *fastrlp.Arena) *fastrlp.Value {
-	vv := arena.NewArray()
-
-	vv.Set(arena.NewBytes(v.Address.Bytes()))
-	vv.Set(arena.NewCopyBytes(v.BLSPublicKey))
-
-	return vv
+	list := arena.NewArray()
+	list.Set(arena.NewBytes(v.Address.Bytes()))
+	list.Set(arena.NewBytes(v.BLSPublicKey))
+	return list
 }
 
 // UnmarshalRLPFrom is a RLP Unmarshaller
@@ -109,19 +105,15 @@ func (v *BLSValidator) UnmarshalRLPFrom(p *fastrlp.Parser, val *fastrlp.Value) e
 	if err != nil {
 		return err
 	}
-
 	if len(elems) < 2 {
 		return fmt.Errorf("incorrect number of elements to decode BLSValidator, expected 2 but found %d", len(elems))
 	}
-
 	if err := elems[0].GetAddr(v.Address[:]); err != nil {
 		return fmt.Errorf("failed to decode Address: %w", err)
 	}
-
 	if v.BLSPublicKey, err = elems[1].GetBytes(v.BLSPublicKey); err != nil {
 		return fmt.Errorf("failed to decode BLSPublicKey: %w", err)
 	}
-
 	return nil
 }
 

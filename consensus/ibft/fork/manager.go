@@ -32,8 +32,8 @@ type ValidatorStore interface {
 	store.ValidatorStore
 	// Close defines termination process
 	Close() error
-	// GetValidators is a method to return validators at the given height
-	GetValidators(height, epochSize, forkFrom uint64) (validators.Validators, error)
+	// GetValidatorsAtHeight is a method to return validators at the given height
+	GetValidatorsAtHeight(height, epochSize, forkFrom uint64) (validators.Validators, error)
 }
 
 // HookRegister is an interface that ForkManager calls for hook registrations
@@ -180,7 +180,7 @@ func (m *ForkManager) GetValidators(height uint64) (validators.Validators, error
 		return nil, ErrValidatorStoreNotFound
 	}
 
-	return set.GetValidators(
+	return set.GetValidatorsAtHeight(
 		height,
 		m.epochSize,
 		fork.From.Value,

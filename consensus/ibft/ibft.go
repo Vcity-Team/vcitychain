@@ -17,10 +17,31 @@ import (
 	"github.com/Vcity-Team/vcitychain/syncer"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/Vcity-Team/vcitychain/validators"
+	"github.com/Vcity-Team/vcitychain/validators/store/contract"
 	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-hclog"
 	"google.golang.org/grpc"
 )
+
+// stateExecutorAdapter adapts state.Executor to contract.Executor
+type stateExecutorAdapter struct {
+	executor *state.Executor
+}
+
+// ExecuteContractCall implements contract.Executor
+func (a *stateExecutorAdapter) ExecuteContractCall(contractAddr types.Address, data []byte) ([]byte, error) {
+	// TODO: Implement actual contract call using state executor
+	return nil, fmt.Errorf("ExecuteContractCall not implemented")
+}
+
+// ExecuteContractTransaction implements contract.Executor
+func (a *stateExecutorAdapter) ExecuteContractTransaction(contractAddr types.Address, data []byte) error {
+	// TODO: Implement actual contract transaction using state executor
+	return fmt.Errorf("ExecuteContractTransaction not implemented")
+}
+
+// ensure contract.Executor interface is used
+var _ contract.Executor = (*stateExecutorAdapter)(nil)
 
 const (
 	DefaultEpochSize = 100000
@@ -126,7 +147,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	forkManager, err := fork.NewForkManager(
 		logger,
 		params.Blockchain,
-		params.Executor,
+		&stateExecutorAdapter{executor: params.Executor},
 		params.SecretsManager,
 		params.Config.Path,
 		epochSize,

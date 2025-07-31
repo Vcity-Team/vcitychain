@@ -45,7 +45,6 @@ func (v *ECDSAValidator) Equal(vr Validator) bool {
 	if !ok {
 		return false
 	}
-
 	return v.Address == vv.Address
 }
 

@@ -209,3 +209,13 @@ type OverrideAccount struct {
 }
 
 type StateOverride map[Address]OverrideAccount
+
+// BytesToNonce creates a Nonce from a uint64 value
+func BytesToNonce(n uint64) Nonce {
+	var nonce Nonce
+	// Convert uint64 to big-endian bytes and copy to nonce
+	for i := 0; i < 8; i++ {
+		nonce[i] = byte(n >> ((7 - i) * 8))
+	}
+	return nonce
+}

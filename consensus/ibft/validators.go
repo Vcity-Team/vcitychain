@@ -61,7 +61,7 @@ func CalcProposer(
 		offset := int64(0)
 
 		if index := validators.Index(lastProposer); index != -1 {
-			offset = index
+			offset = int64(index)
 		}
 
 		seed = uint64(offset) + round + 1

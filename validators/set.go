@@ -44,7 +44,7 @@ func (s *Set) Equal(ss Validators) bool {
 	return true
 }
 
-// Copy returns a copy of BLSValidators
+// Copy returns a copy of Validators
 func (s *Set) Copy() Validators {
 	cloneValidators := make([]Validator, len(s.Validators))
 
@@ -64,13 +64,12 @@ func (s *Set) At(index uint64) Validator {
 }
 
 // Index returns the index of the validator whose address matches with the given address
-func (s *Set) Index(addr types.Address) int64 {
+func (s *Set) Index(addr types.Address) int {
 	for i, val := range s.Validators {
 		if val.Addr() == addr {
-			return int64(i)
+			return i
 		}
 	}
-
 	return -1
 }
 
@@ -78,6 +77,16 @@ func (s *Set) Index(addr types.Address) int64 {
 // whose address matches with the given address exists or not
 func (s *Set) Includes(addr types.Address) bool {
 	return s.Index(addr) != -1
+}
+
+// GetValidator returns a validator by address
+func (s *Set) GetValidator(addr types.Address) (Validator, bool) {
+	for _, v := range s.Validators {
+		if v.Addr() == addr {
+			return v, true
+		}
+	}
+	return nil, false
 }
 
 // Add adds a validator into the collection
@@ -95,21 +104,15 @@ func (s *Set) Add(val Validator) error {
 	return nil
 }
 
-// Del removes a validator from the collection
-func (s *Set) Del(val Validator) error {
-	if s.ValidatorType != val.Type() {
-		return ErrMismatchValidatorType
+// Del removes a validator from the set
+func (s *Set) Del(addr types.Address) error {
+	for i, v := range s.Validators {
+		if v.Addr() == addr {
+			s.Validators = append(s.Validators[:i], s.Validators[i+1:]...)
+			return nil
+		}
 	}
-
-	index := s.Index(val.Addr())
-
-	if index == -1 {
-		return ErrValidatorNotFound
-	}
-
-	s.Validators = append(s.Validators[:index], s.Validators[index+1:]...)
-
-	return nil
+	return ErrValidatorNotFound
 }
 
 // Merge introduces the given collection into its collection

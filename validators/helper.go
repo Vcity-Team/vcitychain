@@ -129,3 +129,15 @@ func ParseBLSValidator(validator string) (*BLSValidator, error) {
 		BLSPublicKey: pubKeyBytes,
 	}, nil
 }
+
+// ParseValidatorType parses a validator type from string
+func ParseValidatorType(validatorType string) (ValidatorType, error) {
+	switch strings.ToLower(validatorType) {
+	case "ecdsa":
+		return ECDSAValidatorType, nil
+	case "bls":
+		return BLSValidatorType, nil
+	default:
+		return 0, fmt.Errorf("invalid validator type: %s", validatorType)
+	}
+}

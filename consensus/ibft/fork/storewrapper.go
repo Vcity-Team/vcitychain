@@ -13,6 +13,17 @@ import (
 	"github.com/hashicorp/go-hclog"
 )
 
+// signerAdapter adapts signer.Signer to snapshot.SignerInterface
+type signerAdapter struct {
+	signer signer.Signer
+}
+
+// Sign implements snapshot.SignerInterface
+func (a *signerAdapter) Sign(data []byte) ([]byte, error) {
+	// Use SignIBFTMessage as the signing method
+	return a.signer.SignIBFTMessage(data)
+}
+
 // isJSONSyntaxError returns bool indicating the giving error is json.SyntaxError or not
 func isJSONSyntaxError(err error) bool {
 	var expected *json.SyntaxError
@@ -29,6 +40,29 @@ func isJSONSyntaxError(err error) bool {
 type SnapshotValidatorStoreWrapper struct {
 	*snapshot.SnapshotValidatorStore
 	dirPath string
+}
+
+// SourceType returns the type of validator source
+func (w *SnapshotValidatorStoreWrapper) SourceType() store.SourceType {
+	return store.Snapshot
+}
+
+// GetSnapshotMetadata returns the snapshot metadata
+func (w *SnapshotValidatorStoreWrapper) GetSnapshotMetadata() interface{} {
+	// TODO: Implement actual metadata retrieval from snapshot store
+	return nil
+}
+
+// GetSnapshots returns the snapshots
+func (w *SnapshotValidatorStoreWrapper) GetSnapshots() interface{} {
+	// TODO: Implement actual snapshots retrieval from snapshot store
+	return nil
+}
+
+// GetValidatorsByHeight returns validators at the specific height
+func (w *SnapshotValidatorStoreWrapper) GetValidatorsByHeight(height uint64) (validators.Validators, error) {
+	// TODO: Implement actual height-based validator retrieval
+	return validators.NewBLSValidatorSet(), nil
 }
 
 // Close saves SnapshotValidator data into local storage
@@ -50,8 +84,8 @@ func (w *SnapshotValidatorStoreWrapper) Close() error {
 	return nil
 }
 
-// GetValidators returns validators at the specific height
-func (w *SnapshotValidatorStoreWrapper) GetValidators(height, _, _ uint64) (validators.Validators, error) {
+// GetValidatorsAtHeight returns validators at the specific height
+func (w *SnapshotValidatorStoreWrapper) GetValidatorsAtHeight(height, _, _ uint64) (validators.Validators, error) {
 	// the biggest height of blocks that have been processed before the given height
 	return w.GetValidatorsByHeight(height - 1)
 }
@@ -96,7 +130,8 @@ func NewSnapshotValidatorStoreWrapper(
 				return nil, err
 			}
 
-			return snapshot.SignerInterface(rawSigner), nil
+			// Create a signer adapter that implements snapshot.SignerInterface
+			return &signerAdapter{signer: rawSigner}, nil
 		},
 		epochSize,
 		snapshotMeta,
@@ -118,6 +153,11 @@ func NewSnapshotValidatorStoreWrapper(
 type ContractValidatorStoreWrapper struct {
 	*contract.ContractValidatorStore
 	getSigner func(uint64) (signer.Signer, error)
+}
+
+// SourceType returns the type of validator source
+func (w *ContractValidatorStoreWrapper) SourceType() store.SourceType {
+	return store.Contract
 }
 
 // NewContractValidatorStoreWrapper creates *ContractValidatorStoreWrapper
@@ -149,8 +189,8 @@ func (w *ContractValidatorStoreWrapper) Close() error {
 	return nil
 }
 
-// GetValidators gets and returns validators at the given height
-func (w *ContractValidatorStoreWrapper) GetValidators(
+// GetValidatorsAtHeight gets and returns validators at the given height
+func (w *ContractValidatorStoreWrapper) GetValidatorsAtHeight(
 	height, epochSize, forkFrom uint64,
 ) (validators.Validators, error) {
 	signer, err := w.getSigner(height)
@@ -166,6 +206,15 @@ func (w *ContractValidatorStoreWrapper) GetValidators(
 			forkFrom,
 		),
 	)
+}
+
+// GetValidatorsByHeight returns validators at the specific height and validator type
+func (w *ContractValidatorStoreWrapper) GetValidatorsByHeight(
+	valType validators.ValidatorType,
+	height uint64,
+) (validators.Validators, error) {
+	// TODO: Implement actual height-based validator retrieval from contract
+	return validators.NewBLSValidatorSet(), nil
 }
 
 // calculateContractStoreFetchingHeight calculates the block height at which ContractStore fetches validators
