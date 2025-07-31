@@ -76,6 +76,10 @@ func (b *BlockBuilder) Reset() error {
 		headerTime = time.Now().UTC()
 	}
 
+	// 创建默认的extraData - 使用Extra对象的MarshalRLPTo方法
+	extra := &Extra{} // 所有字段都是nil，会被编码为空数组
+	defaultExtraData := extra.MarshalRLPTo(nil)
+
 	b.header = &types.Header{
 		ParentHash:   b.params.Parent.Hash,
 		Number:       b.params.Parent.Number + 1,
@@ -88,6 +92,8 @@ func (b *BlockBuilder) Reset() error {
 		GasLimit:     b.params.GasLimit,
 		BaseFee:      b.params.BaseFee,
 		Timestamp:    uint64(headerTime.Unix()),
+		ExtraData:    defaultExtraData, // 设置默认的extraData
+		MixHash:      PolyBFTMixDigest, // 设置正确的MixHash
 	}
 
 	transition, err := b.params.Executor.BeginTxn(b.params.Parent.StateRoot, b.header, b.params.Coinbase)

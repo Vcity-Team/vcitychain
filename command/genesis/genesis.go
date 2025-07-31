@@ -171,7 +171,7 @@ func setFlags(cmd *cobra.Command) {
 		cmd.Flags().StringVar(
 			&params.rawIBFTValidatorType,
 			command.IBFTValidatorTypeFlag,
-			string(validators.BLSValidatorType),
+			validators.BLSValidatorType.String(),
 			"the type of validators in IBFT",
 		)
 	}

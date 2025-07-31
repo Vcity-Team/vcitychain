@@ -11,6 +11,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/chain"
 	"github.com/Vcity-Team/vcitychain/command"
 	"github.com/Vcity-Team/vcitychain/command/helper"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos"
 	"github.com/Vcity-Team/vcitychain/consensus/ibft"
 	"github.com/Vcity-Team/vcitychain/consensus/ibft/fork"
 	"github.com/Vcity-Team/vcitychain/consensus/ibft/signer"
@@ -22,6 +23,13 @@ import (
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/Vcity-Team/vcitychain/validators"
 )
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 
 const (
 	dirFlag                      = "dir"
@@ -201,7 +209,8 @@ func (p *genesisParams) validateFlags() error {
 	}
 
 	// Validate validatorsPath only if validators information were not provided via CLI flag
-	if len(p.validators) == 0 {
+	// Skip this validation for DPoS consensus as it doesn't require validators path
+	if len(p.validators) == 0 && !p.isDPoSConsensus() {
 		if _, err := os.Stat(p.validatorsPath); err != nil {
 			return fmt.Errorf("invalid validators path ('%s') provided. Error: %w", p.validatorsPath, err)
 		}
@@ -245,6 +254,12 @@ func (p *genesisParams) initRawParams() error {
 	p.consensus = server.ConsensusType(p.consensusRaw)
 
 	if p.consensus == server.PolyBFTConsensus {
+		return nil
+	}
+
+	// For DPoS consensus, we don't need IBFT validator type initialization
+	if p.consensus == server.DPoSConsensus {
+		p.initConsensusEngineConfig()
 		return nil
 	}
 
@@ -305,6 +320,12 @@ func (p *genesisParams) setValidatorSetFromPrefixPath() error {
 
 func (p *genesisParams) initIBFTValidatorType() error {
 	var err error
+
+	// For DPoS consensus, default to BLS validator type if not specified
+	if p.isDPoSConsensus() && p.rawIBFTValidatorType == "" {
+		p.rawIBFTValidatorType = validators.BLSValidatorType.String()
+	}
+
 	if p.ibftValidatorType, err = validators.ParseValidatorType(p.rawIBFTValidatorType); err != nil {
 		return err
 	}
@@ -362,6 +383,17 @@ func (p *genesisParams) initIBFTExtraData() {
 }
 
 func (p *genesisParams) initConsensusEngineConfig() {
+	if p.consensus == server.DPoSConsensus {
+		p.consensusEngineConfig = map[string]interface{}{
+			string(server.DPoSConsensus): map[string]interface{}{
+				"blockTime":     p.blockTime,
+				"epochSize":     p.epochSize,
+				"delegateCount": 21, // Default delegate count for DPoS
+			},
+		}
+		return
+	}
+
 	if p.consensus != server.IBFTConsensus {
 		p.consensusEngineConfig = map[string]interface{}{
 			p.consensusRaw: map[string]interface{}{},
@@ -658,7 +690,7 @@ func (p *genesisParams) generateDPoSChainConfig(o command.OutputFormatter) error
 			GasLimit:   p.blockGasLimit,
 			Difficulty: 1,
 			Alloc:      map[types.Address]*chain.GenesisAccount{},
-			ExtraData:  []byte{},
+			ExtraData:  []byte{}, // Will be set below for DPoS
 			GasUsed:    command.DefaultGenesisGasUsed,
 		},
 		Params: &chain.Params{
@@ -710,6 +742,30 @@ func (p *genesisParams) generateDPoSChainConfig(o command.OutputFormatter) error
 			engineConfig["initialDelegates"] = initialDelegates
 		}
 	}
+
+	// Create DPoS genesis extraData
+	// For DPoS genesis block, we need to create a valid Extra structure
+	// that can be parsed by subsequent blocks
+	// Use the same format as block 1: all fields as nil to create null arrays
+	dposExtra := &dpos.Extra{
+		Validators: nil, // No validators in genesis
+		Parent:     nil, // No parent signatures in genesis
+		Committed:  nil, // No committed signatures in genesis
+		Checkpoint: nil, // No checkpoint in genesis
+	}
+
+	// Create the extraData using the same method as block 1
+	// This ensures the format is exactly the same
+	genesisExtraData := dposExtra.MarshalRLPTo(nil)
+
+	// Add debug logging
+	fmt.Printf("DEBUG: Genesis extraData length: %d\n", len(genesisExtraData))
+	fmt.Printf("DEBUG: Genesis extraData vanity prefix length: %d\n", dpos.ExtraVanity)
+	fmt.Printf("DEBUG: Genesis extraData RLP part length: %d\n", len(genesisExtraData)-dpos.ExtraVanity)
+	fmt.Printf("DEBUG: Genesis extraData first 10 bytes: %x\n", genesisExtraData[:min(10, len(genesisExtraData))])
+	fmt.Printf("DEBUG: Genesis extraData after vanity prefix: %x\n", genesisExtraData[dpos.ExtraVanity:min(dpos.ExtraVanity+20, len(genesisExtraData))])
+
+	chainConfig.Genesis.ExtraData = genesisExtraData
 
 	// Write genesis configuration to disk
 	if err := helper.WriteGenesisConfigToDisk(chainConfig, p.genesisPath); err != nil {

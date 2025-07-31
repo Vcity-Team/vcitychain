@@ -15,6 +15,18 @@ const (
 	BLSValidatorType
 )
 
+// String returns the string representation of the validator type
+func (vt ValidatorType) String() string {
+	switch vt {
+	case ECDSAValidatorType:
+		return "ecdsa"
+	case BLSValidatorType:
+		return "bls"
+	default:
+		return "unknown"
+	}
+}
+
 // Validator represents a validator in the network
 type Validator interface {
 	Type() ValidatorType

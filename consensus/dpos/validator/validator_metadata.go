@@ -49,8 +49,11 @@ func (v *ValidatorMetadata) EqualAddressAndBlsKey(b *ValidatorMetadata) bool {
 
 // Copy returns a deep copy of ValidatorMetadata
 func (v *ValidatorMetadata) Copy() *ValidatorMetadata {
-	copiedBlsKey := v.BlsKey.Marshal()
-	blsKey, _ := bls.UnmarshalPublicKey(copiedBlsKey)
+	var blsKey *bls.PublicKey
+	if v.BlsKey != nil {
+		copiedBlsKey := v.BlsKey.Marshal()
+		blsKey, _ = bls.UnmarshalPublicKey(copiedBlsKey)
+	}
 
 	return &ValidatorMetadata{
 		Address:     types.BytesToAddress(v.Address[:]),
@@ -66,7 +69,11 @@ func (v *ValidatorMetadata) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 	// Address
 	vv.Set(ar.NewBytes(v.Address.Bytes()))
 	// BlsKey
-	vv.Set(ar.NewCopyBytes(v.BlsKey.Marshal()))
+	if v.BlsKey != nil {
+		vv.Set(ar.NewCopyBytes(v.BlsKey.Marshal()))
+	} else {
+		vv.Set(ar.NewBytes([]byte{}))
+	}
 	// VotingPower
 	vv.Set(ar.NewBigInt(v.VotingPower))
 	// IsActive
@@ -86,50 +93,90 @@ func (v *ValidatorMetadata) UnmarshalRLPWith(val *fastrlp.Value) error {
 		return fmt.Errorf("incorrect elements count to decode validator account, expected 4 but found %d", num)
 	}
 
-	// Address
-	addressRaw, err := elems[0].GetBytes(nil)
-	if err != nil {
-		return fmt.Errorf("expected 'Address' field encoded as bytes. Error: %w", err)
-	}
+	fmt.Printf("DEBUG: ValidatorMetadata.UnmarshalRLPWith - parsing %d elements\n", len(elems))
 
-	v.Address = types.BytesToAddress(addressRaw)
+	// Address
+	fmt.Printf("DEBUG: parsing Address (element 0), type: %v\n", elems[0].Type())
+	if elems[0].Type() == fastrlp.TypeNull {
+		v.Address = types.Address{}
+		fmt.Printf("DEBUG: Address is null, set to empty\n")
+	} else {
+		addressRaw, err := elems[0].GetBytes(nil)
+		if err != nil {
+			fmt.Printf("DEBUG: error getting Address bytes: %v\n", err)
+			return fmt.Errorf("expected 'Address' field encoded as bytes. Error: %w", err)
+		}
+
+		v.Address = types.BytesToAddress(addressRaw)
+		fmt.Printf("DEBUG: successfully parsed Address: %v\n", v.Address)
+	}
 
 	// BlsKey
-	blsKeyRaw, err := elems[1].GetBytes(nil)
-	if err != nil {
-		return fmt.Errorf("expected 'BlsKey' encoded as bytes: %w", err)
-	}
+	fmt.Printf("DEBUG: parsing BlsKey (element 1), type: %v\n", elems[1].Type())
+	if elems[1].Type() == fastrlp.TypeNull {
+		v.BlsKey = nil
+		fmt.Printf("DEBUG: BlsKey is null\n")
+	} else {
+		blsKeyRaw, err := elems[1].GetBytes(nil)
+		if err != nil {
+			fmt.Printf("DEBUG: error getting BlsKey bytes: %v\n", err)
+			return fmt.Errorf("expected 'BlsKey' encoded as bytes: %w", err)
+		}
 
-	blsKey, err := bls.UnmarshalPublicKey(blsKeyRaw)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal BLS public key: %w", err)
-	}
+		blsKey, err := bls.UnmarshalPublicKey(blsKeyRaw)
+		if err != nil {
+			fmt.Printf("DEBUG: error unmarshaling BLS public key: %v\n", err)
+			return fmt.Errorf("failed to unmarshal BLS public key: %w", err)
+		}
 
-	v.BlsKey = blsKey
+		v.BlsKey = blsKey
+		fmt.Printf("DEBUG: successfully parsed BlsKey\n")
+	}
 
 	// VotingPower
-	votingPower := new(big.Int)
-	if err = elems[2].GetBigInt(votingPower); err != nil {
-		return fmt.Errorf("expected 'VotingPower' encoded as big int: %w", err)
-	}
+	fmt.Printf("DEBUG: parsing VotingPower (element 2), type: %v\n", elems[2].Type())
+	if elems[2].Type() == fastrlp.TypeNull {
+		v.VotingPower = big.NewInt(0)
+		fmt.Printf("DEBUG: VotingPower is null, set to 0\n")
+	} else {
+		votingPower := new(big.Int)
+		if err = elems[2].GetBigInt(votingPower); err != nil {
+			fmt.Printf("DEBUG: error getting VotingPower big int: %v\n", err)
+			return fmt.Errorf("expected 'VotingPower' encoded as big int: %w", err)
+		}
 
-	v.VotingPower = new(big.Int).Set(votingPower)
+		v.VotingPower = new(big.Int).Set(votingPower)
+		fmt.Printf("DEBUG: successfully parsed VotingPower: %v\n", v.VotingPower)
+	}
 
 	// IsActive
-	isActive, err := elems[3].GetBool()
-	if err != nil {
-		return fmt.Errorf("expected 'IsActive' encoded as bool: %w", err)
+	fmt.Printf("DEBUG: parsing IsActive (element 3), type: %v\n", elems[3].Type())
+	if elems[3].Type() == fastrlp.TypeNull {
+		v.IsActive = false
+		fmt.Printf("DEBUG: IsActive is null, set to false\n")
+	} else {
+		isActive, err := elems[3].GetBool()
+		if err != nil {
+			fmt.Printf("DEBUG: error getting IsActive bool: %v\n", err)
+			return fmt.Errorf("expected 'IsActive' encoded as bool: %w", err)
+		}
+
+		v.IsActive = isActive
+		fmt.Printf("DEBUG: successfully parsed IsActive: %v\n", v.IsActive)
 	}
 
-	v.IsActive = isActive
-
+	fmt.Printf("DEBUG: ValidatorMetadata.UnmarshalRLPWith completed successfully\n")
 	return nil
 }
 
 // fmt.Stringer implementation
 func (v *ValidatorMetadata) String() string {
+	blsKeyStr := "nil"
+	if v.BlsKey != nil {
+		blsKeyStr = hex.EncodeToString(v.BlsKey.Marshal())
+	}
 	return fmt.Sprintf("Address=%v; Is Active=%v; Voting Power=%d; BLS Key=%v;",
-		v.Address.String(), v.IsActive, v.VotingPower, hex.EncodeToString(v.BlsKey.Marshal()))
+		v.Address.String(), v.IsActive, v.VotingPower, blsKeyStr)
 }
 
 // AccountSet is a type alias for slice of ValidatorMetadata instances
@@ -247,9 +294,16 @@ func (as AccountSet) Hash() (types.Hash, error) {
 func (as AccountSet) ToAPIBinding() []*contractsapi.Validator {
 	apiBinding := make([]*contractsapi.Validator, len(as))
 	for i, v := range as {
+		var blsKeyBigInt [4]*big.Int
+		if v.BlsKey != nil {
+			blsKeyBigInt = v.BlsKey.ToBigInt()
+		} else {
+			blsKeyBigInt = [4]*big.Int{big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0)}
+		}
+
 		apiBinding[i] = &contractsapi.Validator{
 			Address:     v.Address,
-			BlsKey:      v.BlsKey.ToBigInt(),
+			BlsKey:      blsKeyBigInt,
 			VotingPower: new(big.Int).Set(v.VotingPower),
 		}
 	}

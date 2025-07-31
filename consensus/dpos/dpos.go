@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/blockchain"
-	"github.com/Vcity-Team/vcitychain/bls"
 	"github.com/Vcity-Team/vcitychain/crypto"
 
 	"github.com/Vcity-Team/vcitychain/consensus"
@@ -256,8 +255,28 @@ func (r *dposRuntime) produceBlock() error {
 	// 检查当前节点是否为出块者
 	currentDelegate := r.getCurrentDelegate()
 	keyAddr := types.Address(r.config.Key.Address())
+
+	// 添加调试日志
+	r.logger.Info("checking block production eligibility",
+		"currentDelegate", currentDelegate,
+		"keyAddr", keyAddr,
+		"currentRound", r.currentRound,
+		"currentDelegateIndex", r.currentDelegateIndex,
+		"delegatesCount", len(r.delegates))
+
 	if currentDelegate != keyAddr {
+		r.logger.Info("not current delegate, skipping block production")
 		return nil // 不是当前出块者
+	}
+
+	// 检查是否已经有更新的区块
+	currentBlock := r.config.blockchain.CurrentHeader()
+	if currentBlock.Number > 0 {
+		// 如果已经有区块1，检查是否是我们生产的
+		if currentBlock.Number == 1 {
+			r.logger.Info("block 1 already exists, skipping block production")
+			return nil
+		}
 	}
 
 	// 构建新区块
@@ -275,6 +294,9 @@ func (r *dposRuntime) produceBlock() error {
 
 	// 更新轮次
 	r.updateRound()
+
+	// 添加调试日志
+	r.logger.Info("updated round", "newRound", r.currentRound, "newDelegateIndex", r.currentDelegateIndex)
 
 	return nil
 }
@@ -308,27 +330,18 @@ func (r *dposRuntime) updateRound() {
 
 // initializeDelegates 初始化受托人集合
 func (r *dposRuntime) initializeDelegates() error {
-	// 从配置中获取初始受托人
-	if r.config.PolyBFTConfig != nil && len(r.config.PolyBFTConfig.InitialValidatorSet) > 0 {
-		r.delegates = make(validator.AccountSet, 0, len(r.config.PolyBFTConfig.InitialValidatorSet))
-		for _, val := range r.config.PolyBFTConfig.InitialValidatorSet {
-			// 解析BLS密钥
-			blsKeyBytes := []byte(val.BlsKey)
-			blsKey, err := bls.UnmarshalPublicKey(blsKeyBytes)
-			if err != nil {
-				r.logger.Warn("failed to parse BLS key", "error", err, "address", val.Address)
-				continue
-			}
-
-			r.delegates = append(r.delegates, &validator.ValidatorMetadata{
-				Address:     val.Address,
-				BlsKey:      blsKey,
-				VotingPower: val.Stake,
-			})
+	// 从主DPoS结构体获取已初始化的受托人
+	if r.backend != nil {
+		delegates, err := r.backend.GetDelegates(0, nil)
+		if err != nil {
+			return fmt.Errorf("failed to get delegates from backend: %w", err)
 		}
+		r.delegates = delegates
+		r.logger.Info("initialized delegates from backend", "count", len(r.delegates))
 	} else {
-		// 如果没有配置，使用默认受托人
+		// 如果没有backend，使用空集合
 		r.delegates = validator.AccountSet{}
+		r.logger.Warn("no backend available, using empty delegate set")
 	}
 
 	return nil
@@ -378,6 +391,22 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		// 设置DPoS相关的区块头信息
 		h.Miner = keyAddr[:]
 		h.Difficulty = 1
+
+		// 创建正确的Extra对象，包含必要的字段
+		extra := &Extra{
+			Committed: &Signature{}, // 添加空的Committed签名
+			Checkpoint: &CheckpointData{
+				BlockRound:            r.currentRound,
+				EpochNumber:           1,
+				CurrentValidatorsHash: types.Hash{},
+				NextValidatorsHash:    types.Hash{},
+				EventRoot:             types.Hash{},
+			},
+		}
+		h.ExtraData = extra.MarshalRLPTo(nil)
+
+		// 添加调试日志
+		r.logger.Info("set extraData for block", "length", len(h.ExtraData))
 	})
 
 	if err != nil {
@@ -749,6 +778,31 @@ func (d *DPoS) Initialize() error {
 		return fmt.Errorf("failed to initialize delegates: %w", err)
 	}
 
+	// 创建DPoS runtime
+	runtimeConfig := &runtimeConfig{
+		DataDir:     d.dataDir,
+		Key:         d.key,
+		State:       d.state,
+		blockchain:  d.blockchain,
+		dposBackend: d,
+		txPool:      d.txPool,
+	}
+
+	d.runtime = &dposRuntime{
+		config:  runtimeConfig,
+		backend: d,
+		logger:  d.logger.Named("runtime"),
+		closeCh: make(chan struct{}),
+		voters:  make(map[types.Address]*VoterInfo),
+	}
+
+	// 初始化runtime
+	if err := d.runtime.initializeRuntime(); err != nil {
+		return fmt.Errorf("failed to initialize runtime: %w", err)
+	}
+
+	d.logger.Info("DPoS runtime initialized successfully")
+
 	return nil
 }
 
@@ -756,15 +810,46 @@ func (d *DPoS) Initialize() error {
 func (d *DPoS) initializeDelegates() error {
 	d.delegates = make(validator.AccountSet, 0, d.config.DelegateCount)
 
-	// 从配置中加载初始受托人
-	for _, delegate := range d.config.InitialDelegates {
-		// 使用 ToValidatorMetadata 方法正确转换
-		validatorMetadata, err := delegate.ToValidatorMetadata()
-		if err != nil {
-			return fmt.Errorf("failed to convert delegate %s to validator metadata: %w", delegate.Address, err)
-		}
+	// 添加调试日志
+	d.logger.Info("initializing delegates", "configDelegateCount", d.config.DelegateCount, "initialDelegatesCount", len(d.config.InitialDelegates))
 
-		d.delegates = append(d.delegates, validatorMetadata)
+	// 从配置中加载初始受托人
+	for i, delegate := range d.config.InitialDelegates {
+		d.logger.Info("processing delegate", "index", i, "address", delegate.Address, "stake", delegate.Stake.String())
+
+		// 检查是否有 BLS 密钥
+		if delegate.BlsKey == "" {
+			// 如果没有 BLS 密钥，创建一个默认的验证器元数据
+			validatorMetadata := &validator.ValidatorMetadata{
+				Address:     delegate.Address,
+				BlsKey:      nil, // 暂时设为 nil，后续可以从密钥管理器获取
+				VotingPower: delegate.Stake,
+				IsActive:    true,
+			}
+			d.delegates = append(d.delegates, validatorMetadata)
+			d.logger.Info("added delegate without BLS key", "address", delegate.Address)
+		} else {
+			// 使用 ToValidatorMetadata 方法正确转换
+			validatorMetadata, err := delegate.ToValidatorMetadata()
+			if err != nil {
+				return fmt.Errorf("failed to convert delegate %s to validator metadata: %w", delegate.Address, err)
+			}
+			d.delegates = append(d.delegates, validatorMetadata)
+			d.logger.Info("added delegate with BLS key", "address", delegate.Address)
+		}
+	}
+
+	// 为初始委托人自动分配投票权重，确保他们能出块
+	if len(d.delegates) > 0 {
+		d.logger.Info("auto-assigning voting power to initial delegates", "count", len(d.delegates))
+		for _, delegate := range d.delegates {
+			// 给每个初始委托人分配默认投票权重
+			defaultVotingPower, _ := new(big.Int).SetString("1000000000000000000000", 10) // 1 ETH
+			delegate.VotingPower = defaultVotingPower
+			d.logger.Info("assigned voting power to delegate",
+				"address", delegate.Address,
+				"votingPower", delegate.VotingPower.String())
+		}
 	}
 
 	// 按投票权重排序
