@@ -120,7 +120,7 @@ type dposRuntime struct {
 	// 网络主题缓存
 	signatureRequestTopic  *network.Topic
 	signatureResponseTopic *network.Topic
-	topicMutex            sync.RWMutex
+	topicMutex             sync.RWMutex
 
 	// 运行时状态
 	currentRound         uint64
@@ -2274,7 +2274,7 @@ func (r *dposRuntime) broadcastSignatureRequest(block *types.FullBlock, checkpoi
 
 	// 创建protobuf签名请求消息
 	protoRequest := &proto.SignatureRequest{}
-	
+
 	// 手动设置字段
 	protoRequest.BlockNumber = block.Block.Number()
 	protoRequest.BlockHash = block.Block.Header.Hash.Bytes()
@@ -2325,17 +2325,17 @@ func (r *dposRuntime) broadcastSignatureRequest(block *types.FullBlock, checkpoi
 	}
 
 	// 发布签名请求
-	r.logger.Debug("attempting to publish signature request", 
+	r.logger.Debug("attempting to publish signature request",
 		"blockNumber", protoRequest.BlockNumber,
 		"round", protoRequest.Round)
-	
+
 	// 暂时跳过protobuf序列化，直接使用日志记录
 	r.logger.Info("广播签名请求（临时模式）",
 		"blockNumber", protoRequest.BlockNumber,
 		"checkpointHash", checkpointHash.String(),
 		"round", protoRequest.Round)
 	return nil
-	
+
 	// if err := topic.Publish(protoRequest); err != nil {
 	// 	r.logger.Warn("failed to publish signature request, using fallback", "error", err)
 	// 	// 回退到日志记录
@@ -2615,7 +2615,7 @@ func (r *dposRuntime) generateSignatureResponse(request *SignatureRequest) error
 
 	// 创建protobuf签名响应
 	protoResponse := &proto.SignatureResponse{}
-	
+
 	// 手动设置字段
 	protoResponse.ValidatorAddr = types.Address(r.config.Key.Address()).Bytes()
 	protoResponse.Signature = signatureBytes
