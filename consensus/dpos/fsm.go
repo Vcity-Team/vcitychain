@@ -285,7 +285,7 @@ func (f *fsm) ValidateCommit(signerAddr []byte, seal []byte, proposalHash []byte
 		return fmt.Errorf("failed to unmarshall signature: %w", err)
 	}
 
-	if !signature.Verify(validator.BlsKey, proposalHash, signer.DomainCheckpointManager) {
+	if !signature.Verify(validator.BlsKey, proposalHash, signer.DomainValidatorSet) {
 		return fmt.Errorf("incorrect commit signature from %s", from)
 	}
 
@@ -328,7 +328,7 @@ func (f *fsm) Validate(proposal []byte) error {
 	}
 
 	if err := extra.ValidateParentSignatures(block.Number(), f.dposBackend, nil, f.parent, parentExtra,
-		f.backend.GetChainID(), signer.DomainCheckpointManager, f.logger); err != nil {
+		f.backend.GetChainID(), signer.DomainValidatorSet, f.logger); err != nil {
 		return err
 	}
 
@@ -518,10 +518,20 @@ func (f *fsm) Insert(proposal []byte, committedSeals []*messages.CommittedSeal) 
 		return nil, fmt.Errorf("failed to insert proposal, due to not being able to extract extra data: %w", err)
 	}
 
+	// 添加详细的日志 - 节点2产生区块2时的签名信息
+	f.logger.Info("=== 节点2产生区块2时的签名过程 ===",
+		"blockNumber", newBlock.Block.Number(),
+		"blockHash", newBlock.Block.Hash().String(),
+		"committedSealsCount", len(committedSeals),
+		"validatorsCount", f.validators.Len())
+
 	// create map for faster access to indexes
 	nodeIDIndexMap := make(map[types.Address]int, f.validators.Len())
 	for i, addr := range f.validators.Accounts().GetAddresses() {
 		nodeIDIndexMap[addr] = i
+		f.logger.Info("验证器映射",
+			"index", i,
+			"address", addr.String())
 	}
 
 	// populated bitmap according to nodeId from validator set and committed seals
@@ -529,28 +539,63 @@ func (f *fsm) Insert(proposal []byte, committedSeals []*messages.CommittedSeal) 
 	bitmap := bitmap.Bitmap{}
 	signatures := make(bls.Signatures, 0, len(committedSeals))
 
-	for _, commSeal := range committedSeals {
+	f.logger.Info("开始处理提交的签名",
+		"committedSealsCount", len(committedSeals))
+
+	for i, commSeal := range committedSeals {
 		signerAddr := types.BytesToAddress(commSeal.Signer)
+
+		f.logger.Info("处理签名",
+			"index", i,
+			"signerAddr", signerAddr.String(),
+			"signatureLength", len(commSeal.Signature),
+			"signatureBytes", fmt.Sprintf("%x", commSeal.Signature))
 
 		index, exists := nodeIDIndexMap[signerAddr]
 		if !exists {
+			f.logger.Error("无效的节点ID",
+				"signerAddr", signerAddr.String(),
+				"availableAddresses", f.validators.Accounts().GetAddresses())
 			return nil, fmt.Errorf("invalid node id = %s", signerAddr.String())
 		}
 
+		f.logger.Info("找到验证器索引",
+			"signerAddr", signerAddr.String(),
+			"validatorIndex", index)
+
 		s, err := bls.UnmarshalSignature(commSeal.Signature)
 		if err != nil {
+			f.logger.Error("签名解析失败",
+				"signerAddr", signerAddr.String(),
+				"signatureBytes", fmt.Sprintf("%x", commSeal.Signature),
+				"error", err)
 			return nil, fmt.Errorf("invalid signature = %s", commSeal.Signature)
 		}
 
 		signatures = append(signatures, s)
-
 		bitmap.Set(uint64(index))
+
+		f.logger.Info("成功添加签名",
+			"signerAddr", signerAddr.String(),
+			"validatorIndex", index,
+			"signaturesCount", len(signatures),
+			"bitmapSet", bitmap.IsSet(uint64(index)))
 	}
+
+	f.logger.Info("签名聚合前信息",
+		"signaturesCount", len(signatures),
+		"bitmapLength", len(bitmap),
+		"bitmapBytes", fmt.Sprintf("%x", bitmap))
 
 	aggregatedSignature, err := signatures.Aggregate().Marshal()
 	if err != nil {
+		f.logger.Error("签名聚合失败", "error", err)
 		return nil, fmt.Errorf("could not aggregate seals: %w", err)
 	}
+
+	f.logger.Info("签名聚合成功",
+		"aggregatedSignatureLength", len(aggregatedSignature),
+		"aggregatedSignatureBytes", fmt.Sprintf("%x", aggregatedSignature))
 
 	// include aggregated signature of all committed seals
 	// also includes bitmap which contains all indexes from validator set which provides there seals
@@ -561,6 +606,13 @@ func (f *fsm) Insert(proposal []byte, committedSeals []*messages.CommittedSeal) 
 
 	// Write extra data to header
 	newBlock.Block.Header.ExtraData = extra.MarshalRLPTo(nil)
+
+	f.logger.Info("=== 节点2区块2签名完成 ===",
+		"blockNumber", newBlock.Block.Number(),
+		"blockHash", newBlock.Block.Hash().String(),
+		"extraDataLength", len(newBlock.Block.Header.ExtraData),
+		"aggregatedSignatureLength", len(aggregatedSignature),
+		"bitmapLength", len(bitmap))
 
 	if err := f.backend.CommitBlock(newBlock); err != nil {
 		return nil, err

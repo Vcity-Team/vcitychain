@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -32,6 +33,10 @@ type Topic struct {
 }
 
 func (t *Topic) createObj() proto.Message {
+	if t.typ == nil {
+		return nil
+	}
+
 	message, ok := reflect.New(t.typ).Interface().(proto.Message)
 	if !ok {
 		return nil
@@ -57,6 +62,11 @@ func (t *Topic) Close() {
 }
 
 func (t *Topic) Publish(obj proto.Message) error {
+	// 检查消息对象是否为空
+	if obj == nil {
+		return fmt.Errorf("cannot publish nil message")
+	}
+
 	data, err := proto.Marshal(obj)
 	if err != nil {
 		return err

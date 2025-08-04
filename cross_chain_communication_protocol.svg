@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="600" height="450" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="headerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="chainGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4CAF50;stop-opacity:0.8" />
+      <stop offset="100%" style="stop-color:#2E7D32;stop-opacity:0.8" />
+    </linearGradient>
+    <linearGradient id="relayGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#2196F3;stop-opacity:0.8" />
+      <stop offset="100%" style="stop-color:#1976D2;stop-opacity:0.8" />
+    </linearGradient>
+    <linearGradient id="messageGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FF9800;stop-opacity:0.8" />
+      <stop offset="100%" style="stop-color:#F57C00;stop-opacity:0.8" />
+    </linearGradient>
+  </defs>
+  
+  <!-- 背景 -->
+  <rect width="600" height="450" fill="white"/>
+  
+  <!-- 标题 -->
+  <rect x="0" y="0" width="600" height="50" fill="url(#headerGrad)"/>
+  <text x="300" y="20" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="18" font-weight="bold">统一跨链通信协议 + 分布式中继网络</text>
+  <text x="300" y="35" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="10">消息 → 路由节点 → 目标链 | 统一标准，延迟可控，安全可验证</text>
+  
+  <!-- 源链 -->
+  <rect x="50" y="80" width="120" height="60" rx="8" fill="url(#chainGrad)" stroke="#4CAF50" stroke-width="2"/>
+  <text x="110" y="105" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="12" font-weight="bold">🔗</text>
+  <text x="110" y="120" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="10" font-weight="bold">源链</text>
+  <text x="110" y="132" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="8">Chain A</text>
+  
+  <!-- 目标链 -->
+  <rect x="430" y="80" width="120" height="60" rx="8" fill="url(#chainGrad)" stroke="#4CAF50" stroke-width="2"/>
+  <text x="490" y="105" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="12" font-weight="bold">🔗</text>
+  <text x="490" y="120" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="10" font-weight="bold">目标链</text>
+  <text x="490" y="132" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="8">Chain B</text>
+  
+  <!-- 消息 -->
+  <circle cx="170" cy="110" r="15" fill="url(#messageGrad)" stroke="#FF9800" stroke-width="2"/>
+  <text x="170" y="115" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="10" font-weight="bold">📨</text>
+  
+  <!-- 路由节点1 -->
+  <circle cx="250" cy="80" r="25" fill="url(#relayGrad)" stroke="#2196F3" stroke-width="2"/>
+  <text x="250" y="75" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="12" font-weight="bold">🔄</text>
+  <text x="250" y="90" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="8" font-weight="bold">路由节点1</text>
+  
+  <!-- 路由节点2 -->
+  <circle cx="350" cy="80" r="25" fill="url(#relayGrad)" stroke="#2196F3" stroke-width="2"/>
+  <text x="350" y="75" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="12" font-weight="bold">🔄</text>
+  <text x="350" y="90" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="8" font-weight="bold">路由节点2</text>
+  
+  <!-- 路由节点3 -->
+  <circle cx="300" cy="140" r="25" fill="url(#relayGrad)" stroke="#2196F3" stroke-width="2"/>
+  <text x="300" y="135" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="12" font-weight="bold">🔄</text>
+  <text x="300" y="150" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="8" font-weight="bold">路由节点3</text>
+  
+  <!-- 连接线 - 消息流 -->
+  <line x1="185" y1="110" x2="225" y2="80" stroke="#FF9800" stroke-width="3" stroke-dasharray="5,3"/>
+  <line x1="275" y1="80" x2="325" y2="80" stroke="#FF9800" stroke-width="3" stroke-dasharray="5,3"/>
+  <line x1="375" y1="80" x2="430" y2="110" stroke="#FF9800" stroke-width="3" stroke-dasharray="5,3"/>
+  
+  <!-- 备用路由 -->
+  <line x1="250" y1="105" x2="300" y2="115" stroke="#FF9800" stroke-width="2" stroke-dasharray="3,2" opacity="0.6"/>
+  <line x1="350" y1="105" x2="300" y2="115" stroke="#FF9800" stroke-width="2" stroke-dasharray="3,2" opacity="0.6"/>
+  <line x1="300" y1="165" x2="430" y2="110" stroke="#FF9800" stroke-width="2" stroke-dasharray="3,2" opacity="0.6"/>
+  
+  <!-- 中继网络连接 -->
+  <line x1="250" y1="80" x2="350" y2="80" stroke="#2196F3" stroke-width="1" opacity="0.4"/>
+  <line x1="250" y1="80" x2="300" y2="140" stroke="#2196F3" stroke-width="1" opacity="0.4"/>
+  <line x1="350" y1="80" x2="300" y2="140" stroke="#2196F3" stroke-width="1" opacity="0.4"/>
+  
+  <!-- 协议标准区域 -->
+  <rect x="50" y="200" width="500" height="120" rx="8" fill="#f8f9fa" stroke="#ddd" stroke-width="1"/>
+  <text x="300" y="220" text-anchor="middle" fill="#333" font-family="Arial, sans-serif" font-size="14" font-weight="bold">🔧 统一跨链通信协议标准</text>
+  
+  <!-- 协议特性 -->
+  <rect x="70" y="235" width="140" height="60" rx="6" fill="url(#headerGrad)"/>
+  <text x="140" y="250" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="12" font-weight="bold">📋</text>
+  <text x="140" y="265" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="10" font-weight="bold">统一标准</text>
+  <text x="140" y="280" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="8">协议兼容</text>
+  
+  <rect x="230" y="235" width="140" height="60" rx="6" fill="url(#headerGrad)"/>
+  <text x="300" y="250" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="12" font-weight="bold">⚡</text>
+  <text x="300" y="265" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="10" font-weight="bold">延迟可控</text>
+  <text x="300" y="280" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="8">&lt;3s确认</text>
+  
+  <rect x="390" y="235" width="140" height="60" rx="6" fill="url(#headerGrad)"/>
+  <text x="460" y="250" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="12" font-weight="bold">🔒</text>
+  <text x="460" y="265" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="10" font-weight="bold">安全可验证</text>
+  <text x="460" y="280" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="8">加密签名</text>
+  
+  <!-- 消息流程说明 -->
+  <rect x="50" y="340" width="500" height="80" rx="8" fill="#e3f2fd" stroke="#2196F3" stroke-width="1"/>
+  <text x="300" y="360" text-anchor="middle" fill="#1976D2" font-family="Arial, sans-serif" font-size="14" font-weight="bold">📡 消息路由流程</text>
+  
+  <!-- 流程步骤 -->
+  <circle cx="100" cy="380" r="15" fill="#FF9800" stroke="#F57C00" stroke-width="2"/>
+  <text x="100" y="385" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="10" font-weight="bold">1</text>
+  <text x="100" y="405" text-anchor="middle" fill="#333" font-family="Arial, sans-serif" font-size="8">消息发送</text>
+  
+  <circle cx="200" cy="380" r="15" fill="#2196F3" stroke="#1976D2" stroke-width="2"/>
+  <text x="200" y="385" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="10" font-weight="bold">2</text>
+  <text x="200" y="405" text-anchor="middle" fill="#333" font-family="Arial, sans-serif" font-size="8">路由节点</text>
+  
+  <circle cx="300" cy="380" r="15" fill="#2196F3" stroke="#1976D2" stroke-width="2"/>
+  <text x="300" y="385" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="10" font-weight="bold">3</text>
+  <text x="300" y="405" text-anchor="middle" fill="#333" font-family="Arial, sans-serif" font-size="8">中继转发</text>
+  
+  <circle cx="400" cy="380" r="15" fill="#4CAF50" stroke="#2E7D32" stroke-width="2"/>
+  <text x="400" y="385" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="10" font-weight="bold">4</text>
+  <text x="400" y="405" text-anchor="middle" fill="#333" font-family="Arial, sans-serif" font-size="8">目标接收</text>
+  
+  <circle cx="500" cy="380" r="15" fill="#4CAF50" stroke="#2E7D32" stroke-width="2"/>
+  <text x="500" y="385" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="10" font-weight="bold">5</text>
+  <text x="500" y="405" text-anchor="middle" fill="#333" font-family="Arial, sans-serif" font-size="8">确认完成</text>
+  
+  <!-- 连接箭头 -->
+  <line x1="115" y1="380" x2="185" y2="380" stroke="#666" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <line x1="215" y1="380" x2="285" y2="380" stroke="#666" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <line x1="315" y1="380" x2="385" y2="380" stroke="#666" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <line x1="415" y1="380" x2="485" y2="380" stroke="#666" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- 箭头标记定义 -->
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#666"/>
+    </marker>
+  </defs>
+  
+  <!-- 底部说明 -->
+  <text x="300" y="440" text-anchor="middle" fill="#666" font-family="Arial, sans-serif" font-size="9">🌐 统一跨链通信协议 | 🔄 分布式中继网络 | 📡 消息路由：源链 → 路由节点 → 目标链 | ⚡ 统一标准，延迟可控，安全可验证</text>
+</svg> 

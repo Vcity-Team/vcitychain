@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/Vcity-Team/vcitychain/bls"
-	"github.com/Vcity-Team/vcitychain/consensus/polybft/bitmap"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/bitmap"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

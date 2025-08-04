@@ -1,0 +1,105 @@
+{
+    "name": "polygon-edge",
+    "genesis": {
+        "nonce": "0x0000000000000000",
+        "timestamp": "0x0",
+        "extraData": "0x",
+        "gasLimit": "0x500000",
+        "difficulty": "0x1",
+        "mixHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "coinbase": "0x0000000000000000000000000000000000000000",
+        "alloc": {
+            "0x0000000000000000000000000000000000000000": {
+                "balance": "0x8ac7230489e80000"
+            }
+        },
+        "number": "0x0",
+        "gasUsed": "0x70000",
+        "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "baseFee": "0x3b9aca00",
+        "baseFeeEM": "0x2",
+        "baseFeeChangeDenom": "0x8"
+    },
+    "params": {
+        "forks": {
+            "EIP150": {
+                "block": 0
+            },
+            "EIP155": {
+                "block": 0
+            },
+            "EIP158": {
+                "block": 0
+            },
+            "byzantium": {
+                "block": 0
+            },
+            "constantinople": {
+                "block": 0
+            },
+            "homestead": {
+                "block": 0
+            },
+            "istanbul": {
+                "block": 0
+            },
+            "london": {
+                "block": 0
+            },
+            "londonfix": {
+                "block": 0
+            },
+            "petersburg": {
+                "block": 0
+            },
+            "quorumcalcalignment": {
+                "block": 0
+            },
+            "txHashWithType": {
+                "block": 0
+            }
+        },
+        "chainID": 888,
+        "engine": {
+            "dpos": {
+                "blockTime": 2000000000,
+                "delegateCount": 4,
+                "epochSize": 100000,
+                "initialDelegates": [
+                    {
+                        "address": "0x07Ed257e12E388DCE5f975B9cCf8D040e1251989",
+                        "blsKey": "1ac15b066ce7b00cb3a0fe8cfdec9887270fc196192a0bf5b535ea30f0bc126d1789553a79e497d81d9813524d98d7303925f048592867bf05b98105a5734b0c19bba10b816aa5ebeb08143fa21899cb6b7b164ccc3d906250093b04063a5d23178b6cd613d1b6f6cc14864d5b5a27fc201e534318720218ee6bc5407d3c54aa",
+                        "stake": "1000000000000000000000",
+                        "multiAddr": ""
+                    },
+                    {
+                        "address": "0x482efA39DcFd4911aD5217F2B5812dFE3cc86d7d",
+                        "blsKey": "19cf2f0b9b07d18ee2084e5b2eb9156bd31a0fb2c34bd96d2aeb131857d0de5f2acbfbb6837cb511c81f501e9f5e1700e3199ae86746c455995980eab730c51912318c9156210673bc22f3b792214b40b8de164a0b86c2ecb90b9c8924c10a9a188d10ffdf33182e13222cd71466a24f722dc168b0a2f44d5c4112bf9265671d",
+                        "stake": "1000000000000000000000",
+                        "multiAddr": ""
+                    },
+                    {
+                        "address": "0x7eBFadB54b11266A71c5D04740c9c1f8a2d45eb8",
+                        "blsKey": "19207a83ecdce7d0329afff1bec516a5e0375117e9bb731ba8519096ba2bbd6d238dab2e7ea7b85a4c2e8f8624c59bb692c86af170341d8f5b088e5578ca990926ca234507541c7e14418db0b35681a972fd73122c7f3096e35d701f1594d087220a0aa363d52d42a97dadd4159ec67f97749e49b27906125be2b221f058a8d5",
+                        "stake": "1000000000000000000000",
+                        "multiAddr": ""
+                    },
+                    {
+                        "address": "0x514292Aea20b6a012109fDB2254f7aE7A71E0424",
+                        "blsKey": "08211a3c23006157dfa84a068ff105935b1670385cf94b4dd6379a8098e56f80007d4f812ff17b89d1488af08e29da6361e8568f7de13b49cd4ae7b1fe14b074303acef0239361f404a7b14a867dbc4c0ddacba3a64b8118fc73f3a258654a5b0562724227ff98fe5484121548e36c06e46712434e666352b5cd591a9cc7f28c",
+                        "stake": "1000000000000000000000",
+                        "multiAddr": ""
+                    }
+                ]
+            }
+        },
+        "blockGasTarget": 0,
+        "burnContract": {
+            "0": "0x0000000000000000000000000000000000000000"
+        },
+        "burnContractDestinationAddress": "0x0000000000000000000000000000000000000000"
+    },
+    "bootnodes": [
+        "/ip4/127.0.0.1/tcp/30303/p2p/16Uiu2HAmB651knEWEskEGauWn5UL8HEnPvVSaVjcUgVQxP1mUJzb"
+    ]
+} 

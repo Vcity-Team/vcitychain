@@ -10,7 +10,10 @@ import (
 	ibftProto "github.com/0xPolygon/go-ibft/messages/proto"
 	// polybftProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
 
+	"github.com/Vcity-Team/vcitychain/bls"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/signer"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
+	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
@@ -48,7 +51,7 @@ func (p *DPoS) handleIbftMessage(msg *ibftProto.Message, from peer.ID) error {
 // handlePrePrepareMessage 处理预准备消息
 func (p *DPoS) handlePrePrepareMessage(msg *ibftProto.Message, from peer.ID) error {
 	// 验证发送者是否为当前提议者
-	if !p.isCurrentProposer(from) {
+	if !p.isCurrentProposerWithPeer(from) {
 		p.logger.Warn("received pre-prepare from non-proposer", "from", from.String())
 		return errors.New("pre-prepare from non-proposer")
 	}
@@ -179,6 +182,73 @@ func (p *DPoS) handleDelegateMessage(msg *DelegateMessage, from peer.ID) error {
 	}
 }
 
+// handleSignatureRequest 处理签名请求
+func (p *DPoS) handleSignatureRequest(request *SignatureRequest, from peer.ID) error {
+	p.logger.Debug("received signature request",
+		"blockNumber", request.BlockNumber,
+		"checkpointHash", request.CheckpointHash.String(),
+		"round", request.Round,
+		"proposer", request.Proposer.String(),
+		"from", from.String())
+
+	// 1. 验证请求
+	if err := p.validateSignatureRequest(request); err != nil {
+		p.logger.Warn("invalid signature request", "error", err)
+		return err
+	}
+
+	// 2. 检查自己是否为验证者
+	if !p.isActiveValidator() {
+		p.logger.Debug("not an active validator, ignoring signature request")
+		return nil
+	}
+
+	// 3. 生成签名
+	signature, err := p.generateSignatureForCheckpoint(request.CheckpointHash)
+	if err != nil {
+		p.logger.Error("failed to generate signature", "error", err)
+		return err
+	}
+
+	// 4. 发送签名响应
+	response := &SignatureResponse{
+		ValidatorAddr:  types.Address(p.key.Address()),
+		Signature:      signature,
+		CheckpointHash: request.CheckpointHash,
+		Timestamp:      uint64(time.Now().Unix()),
+	}
+
+	return p.broadcastSignatureResponse(response)
+}
+
+// handleSignatureResponse 处理签名响应
+func (p *DPoS) handleSignatureResponse(response *SignatureResponse, from peer.ID) error {
+	p.logger.Debug("received signature response",
+		"validator", response.ValidatorAddr.String(),
+		"signatureLength", len(response.Signature),
+		"checkpointHash", response.CheckpointHash.String(),
+		"from", from.String())
+
+	// 1. 验证响应
+	if err := p.validateSignatureResponse(response); err != nil {
+		p.logger.Warn("invalid signature response", "error", err)
+		return err
+	}
+
+	// 2. 验证签名
+	if err := p.verifySignatureResponse(response); err != nil {
+		p.logger.Warn("signature verification failed", "error", err)
+		return err
+	}
+
+	// 3. 转发给当前提议者（如果自己不是提议者）
+	if !p.isCurrentProposer() {
+		return p.forwardSignatureResponse(response)
+	}
+
+	return nil
+}
+
 // validateVoteMessage 验证投票消息
 func (p *DPoS) validateVoteMessage(msg *VoteMessage) error {
 	// 1. 检查基本字段
@@ -239,6 +309,239 @@ func (p *DPoS) validateDelegateMessage(msg *DelegateMessage) error {
 	}
 
 	return nil
+}
+
+// validateSignatureRequest 验证签名请求
+func (p *DPoS) validateSignatureRequest(request *SignatureRequest) error {
+	// 1. 检查基本字段
+	if request.BlockNumber == 0 {
+		return errors.New("invalid block number")
+	}
+	if request.CheckpointHash == types.ZeroHash {
+		return errors.New("invalid checkpoint hash")
+	}
+	if request.Proposer == types.ZeroAddress {
+		return errors.New("invalid proposer address")
+	}
+
+	// 2. 检查时间戳
+	now := uint64(time.Now().Unix())
+	if request.Timestamp < now-300 || request.Timestamp > now+60 {
+		return errors.New("request timestamp out of range")
+	}
+
+	// 3. 检查提议者是否为有效验证者
+	isValidValidator := false
+	for _, delegate := range p.delegates {
+		if delegate.Address == request.Proposer {
+			isValidValidator = true
+			break
+		}
+	}
+	if !isValidValidator {
+		return errors.New("proposer is not a valid validator")
+	}
+
+	return nil
+}
+
+// validateSignatureResponse 验证签名响应
+func (p *DPoS) validateSignatureResponse(response *SignatureResponse) error {
+	// 1. 检查基本字段
+	if response.ValidatorAddr == types.ZeroAddress {
+		return errors.New("invalid validator address")
+	}
+	if len(response.Signature) == 0 {
+		return errors.New("empty signature")
+	}
+	if response.CheckpointHash == types.ZeroHash {
+		return errors.New("invalid checkpoint hash")
+	}
+
+	// 2. 检查时间戳
+	now := uint64(time.Now().Unix())
+	if response.Timestamp < now-300 || response.Timestamp > now+60 {
+		return errors.New("response timestamp out of range")
+	}
+
+	// 3. 检查验证者是否为有效验证者
+	isValidValidator := false
+	for _, delegate := range p.delegates {
+		if delegate.Address == response.ValidatorAddr {
+			isValidValidator = true
+			break
+		}
+	}
+	if !isValidValidator {
+		return errors.New("validator is not a valid delegate")
+	}
+
+	return nil
+}
+
+// generateSignatureForCheckpoint 为checkpoint生成签名
+func (p *DPoS) generateSignatureForCheckpoint(checkpointHash types.Hash) ([]byte, error) {
+	// 获取自己的BLS私钥
+	blsKey, err := p.getBLSPrivateKey()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get BLS private key: %w", err)
+	}
+
+	// 对checkpointHash进行签名
+	signature, err := blsKey.Sign(checkpointHash[:], signer.DomainValidatorSet)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign checkpoint: %w", err)
+	}
+
+	// 序列化签名
+	signatureBytes, err := signature.Marshal()
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal signature: %w", err)
+	}
+
+	p.logger.Info("generated signature for checkpoint",
+		"checkpointHash", checkpointHash.String(),
+		"signatureLength", len(signatureBytes))
+
+	return signatureBytes, nil
+}
+
+// verifySignatureResponse 验证签名响应
+func (p *DPoS) verifySignatureResponse(response *SignatureResponse) error {
+	// 查找验证者的BLS公钥
+	var validatorPubKey *bls.PublicKey
+	for _, delegate := range p.delegates {
+		if delegate.Address == response.ValidatorAddr {
+			validatorPubKey = delegate.BlsKey
+			break
+		}
+	}
+
+	if validatorPubKey == nil {
+		return fmt.Errorf("validator %s not found or has no BLS key", response.ValidatorAddr)
+	}
+
+	// 检查签名长度
+	if len(response.Signature) != 64 {
+		return fmt.Errorf("signature length must be 64 bytes, got %d", len(response.Signature))
+	}
+
+	// 解析签名
+	blsSignature, err := bls.UnmarshalSignature(response.Signature)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal signature: %w", err)
+	}
+
+	// 验证签名
+	if !blsSignature.Verify(validatorPubKey, response.CheckpointHash[:], signer.DomainValidatorSet) {
+		return fmt.Errorf("signature verification failed for validator %s", response.ValidatorAddr)
+	}
+
+	return nil
+}
+
+// broadcastSignatureResponse 广播签名响应
+func (p *DPoS) broadcastSignatureResponse(response *SignatureResponse) error {
+	// 广播到网络
+	if p.consensusTopic != nil {
+		// 这里应该使用实际的网络广播机制
+		p.logger.Info("broadcasting signature response",
+			"validator", response.ValidatorAddr.String(),
+			"signatureLength", len(response.Signature))
+	}
+
+	return nil
+}
+
+// forwardSignatureResponse 转发签名响应给提议者
+func (p *DPoS) forwardSignatureResponse(response *SignatureResponse) error {
+	// 在实际实现中，这里应该将签名响应转发给当前提议者
+	p.logger.Debug("forwarding signature response to proposer",
+		"validator", response.ValidatorAddr.String())
+	return nil
+}
+
+// isActiveValidator 检查自己是否为活跃验证者
+func (p *DPoS) isActiveValidator() bool {
+	myAddr := types.Address(p.key.Address())
+	for _, delegate := range p.delegates {
+		if delegate.Address == myAddr && delegate.IsActive {
+			return true
+		}
+	}
+	return false
+}
+
+// isCurrentProposer 检查自己是否为当前提议者
+func (p *DPoS) isCurrentProposer() bool {
+	currentDelegate := p.GetCurrentDelegate()
+	myAddr := types.Address(p.key.Address())
+	return currentDelegate == myAddr
+}
+
+// getBLSPrivateKey 获取BLS私钥
+func (p *DPoS) getBLSPrivateKey() (*bls.PrivateKey, error) {
+	// 从密钥管理器获取BLS私钥
+	if p.config.SecretsManager == nil {
+		return nil, errors.New("secrets manager is not initialized")
+	}
+
+	// 尝试从密钥管理器获取BLS私钥
+	blsKey, err := p.config.SecretsManager.GetSecret("bls")
+	if err != nil {
+		// 如果BLS私钥不存在，生成一个新的
+		p.logger.Info("BLS private key not found, generating new one")
+		return p.generateBLSPrivateKey()
+	}
+
+	// 解析BLS私钥
+	privateKey, err := bls.UnmarshalPrivateKey(blsKey)
+	if err != nil {
+		p.logger.Error("failed to unmarshal BLS private key", "error", err)
+		return nil, fmt.Errorf("failed to unmarshal BLS private key: %w", err)
+	}
+
+	return privateKey, nil
+}
+
+// generateBLSPrivateKey 生成新的BLS私钥
+func (p *DPoS) generateBLSPrivateKey() (*bls.PrivateKey, error) {
+	// 使用当前节点的地址作为种子生成私钥
+	addressBytes := p.key.Address().Bytes()
+	seedHash := crypto.Keccak256(addressBytes)
+
+	// 将哈希转换为大整数作为私钥
+	privateKeyInt := new(big.Int).SetBytes(seedHash)
+
+	// 使用bn256的阶数作为模数
+	modulus, _ := new(big.Int).SetString("21888242871839275222246405745257275088548364400416034343698204186575808495617", 10)
+	privateKeyInt.Mod(privateKeyInt, modulus)
+
+	// 确保私钥不为零
+	if privateKeyInt.Cmp(big.NewInt(0)) == 0 {
+		privateKeyInt.Set(big.NewInt(1))
+	}
+
+	// 将私钥转换为字节并解析
+	privateKeyBytes := privateKeyInt.Bytes()
+	privateKey, err := bls.UnmarshalPrivateKey(privateKeyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create BLS private key: %w", err)
+	}
+
+	// 保存私钥到密钥管理器
+	blsKeyBytes, err := privateKey.Marshal()
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal BLS private key: %w", err)
+	}
+
+	if err := p.config.SecretsManager.SetSecret("bls", blsKeyBytes); err != nil {
+		p.logger.Warn("failed to save BLS private key", "error", err)
+		// 不返回错误，因为私钥已经生成成功
+	}
+
+	p.logger.Info("generated new BLS private key")
+	return privateKey, nil
 }
 
 // handleDelegateRegistration 处理受托人注册
@@ -344,8 +647,8 @@ func (p *DPoS) broadcastDelegateMessage(msg *DelegateMessage) error {
 	return p.broadcastMessage(data)
 }
 
-// isCurrentProposer 检查是否为当前提议者
-func (p *DPoS) isCurrentProposer(peerID peer.ID) bool {
+// isCurrentProposerWithPeer 检查指定peer是否为当前提议者
+func (p *DPoS) isCurrentProposerWithPeer(peerID peer.ID) bool {
 	// TODO: 实现提议者检查逻辑
 	// 这里需要根据当前的轮次和受托人集合来确定提议者
 	return true

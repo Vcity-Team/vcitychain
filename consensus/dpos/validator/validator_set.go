@@ -1,6 +1,7 @@
 package validator
 
 import (
+	"fmt"
 	"math/big"
 
 	"github.com/Vcity-Team/vcitychain/chain"
@@ -64,18 +65,44 @@ func NewValidatorSet(valz AccountSet, logger hclog.Logger) *validatorSet {
 func (vs validatorSet) HasQuorum(blockNumber uint64, signers map[types.Address]struct{}) bool {
 	aggregateVotingPower := big.NewInt(0)
 
+	// 详细记录每个签名者的投票权重
+	vs.logger.Info("HasQuorum - 开始验证法定人数",
+		"blockNumber", blockNumber,
+		"totalValidators", vs.Len(),
+		"totalVotingPower", vs.totalVotingPower,
+		"signerCount", len(signers))
+
+	// 记录所有验证者的投票权重
+	allValidatorsInfo := make([]string, 0)
+	for _, validator := range vs.validators {
+		allValidatorsInfo = append(allValidatorsInfo,
+			fmt.Sprintf("%s(vp:%s)", validator.Address.String(), validator.VotingPower.String()))
+	}
+	vs.logger.Info("HasQuorum - 所有验证者信息", "validators", allValidatorsInfo)
+
+	// 记录签名者的详细信息
+	signerDetails := make([]string, 0)
 	for address := range signers {
 		if votingPower := vs.votingPowerMap[address]; votingPower != nil {
 			_ = aggregateVotingPower.Add(aggregateVotingPower, votingPower)
+			signerDetails = append(signerDetails,
+				fmt.Sprintf("%s(vp:%s)", address.String(), votingPower.String()))
+		} else {
+			vs.logger.Warn("HasQuorum - 签名者不在验证者集合中", "address", address.String())
+			signerDetails = append(signerDetails,
+				fmt.Sprintf("%s(vp:NOT_FOUND)", address.String()))
 		}
 	}
 
 	quorumSize := getQuorumSize(blockNumber, vs.totalVotingPower)
 	hasQuorum := aggregateVotingPower.Cmp(quorumSize) >= 0
 
-	vs.logger.Debug("HasQuorum",
-		"signers", len(signers),
-		"signers voting power", aggregateVotingPower,
+	vs.logger.Info("HasQuorum - 法定人数验证结果",
+		"blockNumber", blockNumber,
+		"signers", signerDetails,
+		"aggregateVotingPower", aggregateVotingPower,
+		"quorumSize", quorumSize,
+		"totalVotingPower", vs.totalVotingPower,
 		"hasQuorum", hasQuorum)
 
 	return hasQuorum

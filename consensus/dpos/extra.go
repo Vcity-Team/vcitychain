@@ -266,30 +266,86 @@ func (s *Signature) UnmarshalRLPWith(v *fastrlp.Value) error {
 // Verify is used to verify aggregated signature based on current validator set, message hash and domain
 func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 	hash types.Hash, domain []byte, logger hclog.Logger) error {
+
+	logger.Info("Signature.Verify - 开始验证签名",
+		"blockNumber", blockNumber,
+		"validatorsCount", len(validators),
+		"bitmapLength", len(s.Bitmap),
+		"aggregatedSignatureLength", len(s.AggregatedSignature))
+
 	signers, err := validators.GetFilteredValidators(s.Bitmap)
 	if err != nil {
+		logger.Error("Signature.Verify - GetFilteredValidators失败", "error", err)
 		return err
 	}
 
+	logger.Info("Signature.Verify - 过滤后签名者信息",
+		"filteredSignersCount", len(signers),
+		"signerAddresses", signers.GetAddresses())
+
 	validatorSet := validator.NewValidatorSet(validators, logger)
 	if !validatorSet.HasQuorum(blockNumber, signers.GetAddressesAsSet()) {
+		logger.Error("Signature.Verify - 法定人数不足",
+			"blockNumber", blockNumber,
+			"signersCount", len(signers))
 		return fmt.Errorf("quorum not reached")
 	}
+
+	logger.Info("Signature.Verify - 法定人数验证通过，开始验证BLS签名")
 
 	blsPublicKeys := make([]*bls.PublicKey, len(signers))
 	for i, validator := range signers {
 		blsPublicKeys[i] = validator.BlsKey
+		logger.Info("Signature.Verify - 添加BLS公钥",
+			"index", i,
+			"address", validator.Address.String(),
+			"blsKeyExists", validator.BlsKey != nil)
 	}
+
+	logger.Info("Signature.Verify - 开始验证BLS聚合签名",
+		"aggregatedSignatureLength", len(s.AggregatedSignature),
+		"aggregatedSignatureBytes", fmt.Sprintf("%x", s.AggregatedSignature),
+		"bitmapLength", len(s.Bitmap),
+		"bitmapBytes", fmt.Sprintf("%x", s.Bitmap),
+		"hash", hash.String(),
+		"domain", fmt.Sprintf("%x", domain))
 
 	aggs, err := bls.UnmarshalSignature(s.AggregatedSignature)
 	if err != nil {
+		logger.Error("Signature.Verify - 解析聚合签名失败", "error", err)
 		return err
 	}
 
+	logger.Info("Signature.Verify - 聚合签名解析成功",
+		"signatureType", fmt.Sprintf("%T", aggs))
+
 	if !aggs.VerifyAggregated(blsPublicKeys, hash[:], domain) {
+		logger.Error("Signature.Verify - BLS签名验证失败",
+			"blockNumber", blockNumber,
+			"hash", hash.String(),
+			"domain", fmt.Sprintf("%x", domain),
+			"aggregatedSignatureLength", len(s.AggregatedSignature),
+			"publicKeysCount", len(blsPublicKeys),
+			"signersCount", len(signers))
+
+		// 添加更详细的调试信息
+		for i, pubKey := range blsPublicKeys {
+			if pubKey != nil {
+				logger.Info("Signature.Verify - BLS公钥信息",
+					"index", i,
+					"address", signers[i].Address.String(),
+					"publicKeyBytes", fmt.Sprintf("%x", pubKey.Marshal()))
+			} else {
+				logger.Error("Signature.Verify - BLS公钥为nil",
+					"index", i,
+					"address", signers[i].Address.String())
+			}
+		}
+
 		return fmt.Errorf("could not verify aggregated signature")
 	}
 
+	logger.Info("Signature.Verify - 签名验证成功")
 	return nil
 }
 

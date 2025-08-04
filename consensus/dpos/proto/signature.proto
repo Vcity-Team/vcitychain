@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package proto;
+
+option go_package = "github.com/Vcity-Team/vcitychain/consensus/dpos/proto";
+
+// 签名请求消息
+message SignatureRequest {
+  uint64 block_number = 1;
+  bytes block_hash = 2;
+  bytes checkpoint_hash = 3;
+  uint64 round = 4;
+  bytes proposer = 5;
+  uint64 timestamp = 6;
+}
+
+// 签名响应消息
+message SignatureResponse {
+  bytes validator_addr = 1;
+  bytes signature = 2;
+  bytes checkpoint_hash = 3;
+  uint64 timestamp = 4;
+} 

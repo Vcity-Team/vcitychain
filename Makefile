@@ -34,7 +34,8 @@ protoc: check-protoc
 	 ./network/proto/*.proto \
 	 ./txpool/proto/*.proto	\
 	 ./consensus/ibft/**/*.proto \
-	 ./consensus/polybft/**/*.proto
+	 ./consensus/polybft/**/*.proto \
+	 ./consensus/dpos/**/*.proto
 
 .PHONY: build
 build: check-go check-git

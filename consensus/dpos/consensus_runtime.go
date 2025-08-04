@@ -986,7 +986,7 @@ func (c *consensusRuntime) BuildPrepareMessage(proposalHash []byte, view *proto.
 
 // BuildCommitMessage builds a COMMIT message based on the passed in proposal
 func (c *consensusRuntime) BuildCommitMessage(proposalHash []byte, view *proto.View) *proto.Message {
-	committedSeal, err := c.config.Key.SignWithDomain(proposalHash, signer.DomainCheckpointManager)
+	committedSeal, err := c.config.Key.SignWithDomain(proposalHash, signer.DomainValidatorSet)
 	if err != nil {
 		c.logger.Error("Cannot create committed seal message.", "error", err)
 
