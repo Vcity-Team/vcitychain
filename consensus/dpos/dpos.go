@@ -764,9 +764,13 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		}
 		block.Block.Header.ExtraData = finalExtra.MarshalRLPTo(nil)
 
+		// 重新计算区块哈希，因为ExtraData已经更新
+		block.Block.Header.ComputeHash()
+
 		r.logger.Info("区块签名更新完成",
 			"blockNumber", block.Block.Number(),
-			"extraDataLength", len(block.Block.Header.ExtraData))
+			"extraDataLength", len(block.Block.Header.ExtraData),
+			"newBlockHash", block.Block.Header.Hash.String())
 	}
 
 	return block, nil
@@ -1164,6 +1168,9 @@ var _ dposBackend = (*DPoS)(nil)
 // Factory 创建DPoS共识实例
 func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	logger := params.Logger.Named("dpos")
+
+	// 设置自定义哈希函数
+	setupHeaderHashFunc()
 
 	vcity_dpos := &DPoS{
 		closeCh: make(chan struct{}),

@@ -194,6 +194,13 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 		return nil
 	}
 
+	// 如果当前区块没有父区块签名，且父区块是区块1，则跳过验证
+	// 因为区块1没有父区块签名，所以区块2的Parent字段为nil是正常的
+	if i.Parent == nil && parent.Number == 1 {
+		logger.Debug("skipping parent signature validation for block 2 (parent is block 1 which has no parent signature)")
+		return nil
+	}
+
 	if i.Parent == nil {
 		return fmt.Errorf("failed to verify signatures for parent of block %d because signatures are not present",
 			blockNumber)
