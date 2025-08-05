@@ -120,6 +120,7 @@ type dposRuntime struct {
 	// 网络主题缓存
 	signatureRequestTopic  *network.Topic
 	signatureResponseTopic *network.Topic
+	signatureQueryTopic    *network.Topic
 	topicMutex             sync.RWMutex
 
 	// 运行时状态
@@ -152,7 +153,7 @@ func (r *dposRuntime) start() error {
 		return fmt.Errorf("failed to initialize runtime: %w", err)
 	}
 
-	// 启动轮询出块定时器
+	// 启动区块生产定时器
 	if err := r.startBlockProduction(); err != nil {
 		return fmt.Errorf("failed to start block production: %w", err)
 	}
@@ -161,6 +162,9 @@ func (r *dposRuntime) start() error {
 	if err := r.startVoteCollection(); err != nil {
 		return fmt.Errorf("failed to start vote collection: %w", err)
 	}
+
+	// 启动持久的签名请求监听器 - 确保所有节点都能接收到广播的签名请求
+	go r.listenForSignatureRequests(context.Background())
 
 	r.logger.Info("DPoS runtime started successfully")
 	return nil
@@ -194,6 +198,10 @@ func (r *dposRuntime) initializeRuntime() error {
 	r.currentRound = 1
 	r.currentDelegateIndex = 0
 
+	r.logger.Info("=== dposRuntime.initializeRuntime ===",
+		"initialRound", r.currentRound,
+		"initialDelegateIndex", r.currentDelegateIndex)
+
 	// 初始化受托人集合
 	if err := r.initializeDelegates(); err != nil {
 		return fmt.Errorf("failed to initialize delegates: %w", err)
@@ -202,7 +210,62 @@ func (r *dposRuntime) initializeRuntime() error {
 	// 初始化投票者映射
 	r.voters = make(map[types.Address]*VoterInfo)
 
+	// 初始化签名请求存储
+	r.pendingSignatureRequests = make(map[types.Hash]*SignatureRequest)
+
+	// 设置网络事件监听（如果网络服务可用）
+	if r.network != nil {
+		r.setupNetworkEventListeners()
+	}
+
 	return nil
+}
+
+// setupNetworkEventListeners 设置网络事件监听器
+func (r *dposRuntime) setupNetworkEventListeners() {
+	// 监听新节点加入事件
+	// 注意：这里需要根据实际的网络事件系统来实现
+	// 由于当前代码中没有直接的网络事件监听机制，我们使用定时器来模拟
+
+	r.logger.Info("设置网络事件监听器")
+
+	// 启动定期检查新节点的协程
+	go r.periodicPeerCheck()
+}
+
+// periodicPeerCheck 定期检查新节点
+func (r *dposRuntime) periodicPeerCheck() {
+	ticker := time.NewTicker(30 * time.Second) // 每30秒检查一次
+	defer ticker.Stop()
+
+	lastPeerCount := 0
+
+	for {
+		select {
+		case <-ticker.C:
+			if r.network == nil {
+				continue
+			}
+
+			currentPeers := r.network.Peers()
+			currentPeerCount := len(currentPeers)
+
+			// 如果节点数量增加，说明有新节点加入
+			if currentPeerCount > lastPeerCount {
+				r.logger.Info("检测到新节点加入",
+					"previousCount", lastPeerCount,
+					"currentCount", currentPeerCount)
+
+				// 查询新节点的待处理签名请求
+				r.queryPendingSignatureRequests()
+			}
+
+			lastPeerCount = currentPeerCount
+
+		case <-r.closeCh:
+			return
+		}
+	}
 }
 
 // startBlockProduction 启动区块生产
@@ -296,8 +359,21 @@ func (r *dposRuntime) produceBlock() error {
 		"currentDelegateIndex", r.currentDelegateIndex,
 		"delegatesCount", len(r.delegates))
 
+	// 添加详细的受托人集合调试信息
+	// r.logger.Info("=== 当前受托人集合 ===")
+	// for i, delegate := range r.delegates {
+	// 	r.logger.Info("受托人",
+	// 		"index", i,
+	// 		"address", delegate.Address.String(),
+	// 		"isCurrentDelegate", delegate.Address == currentDelegate,
+	// 		"isKeyAddr", delegate.Address == keyAddr)
+	// }
+	// r.logger.Info("=== 受托人集合结束 ===")
+
 	if currentDelegate != keyAddr {
-		// r.logger.Info("not current delegate, skipping block production") // 注释掉这个日志
+		r.logger.Info("not current delegate, skipping block production",
+			"currentDelegate", currentDelegate.String(),
+			"keyAddr", keyAddr.String())
 		return nil // 不是当前出块者
 	}
 
@@ -375,9 +451,11 @@ func (r *dposRuntime) produceBlock() error {
 		return fmt.Errorf("failed to commit block: %w", err)
 	}
 
-	r.logger.Info("produced block", "number", block.Block.Number(), "hash", block.Block.Hash())
-
-	// 更新轮次
+	r.logger.Info("++++produced block+++++", "number", block.Block.Number(), "hash", block.Block.Hash())
+	r.logger.Info("++++produced block+++++", "number", block.Block.Number(), "hash", block.Block.Hash())
+	r.logger.Info("++++produced block+++++", "number", block.Block.Number(), "hash", block.Block.Hash())
+	r.logger.Info("++++produced block+++++", "number", block.Block.Number(), "hash", block.Block.Hash())
+	// 更新轮次 - 生产区块后立即更新，让下一个受托人知道轮到自己了
 	r.updateRound()
 
 	// 添加调试日志
@@ -415,20 +493,54 @@ func (r *dposRuntime) updateRound() {
 
 // initializeDelegates 初始化受托人集合
 func (r *dposRuntime) initializeDelegates() error {
+	r.logger.Info("=== dposRuntime.initializeDelegates 开始 ===")
+	r.logger.Info("backend是否为nil", "isNil", r.backend == nil)
+
 	// 从主DPoS结构体获取已初始化的受托人
 	if r.backend != nil {
 		delegates, err := r.backend.GetDelegates(0, nil)
 		if err != nil {
+			r.logger.Error("failed to get delegates from backend", "error", err)
 			return fmt.Errorf("failed to get delegates from backend: %w", err)
 		}
 		r.delegates = delegates
 		r.logger.Info("initialized delegates from backend", "count", len(r.delegates))
+
+		// 添加详细的调试日志
+		r.logger.Info("=== 受托人集合详细信息 ===")
+		for i, delegate := range r.delegates {
+			r.logger.Info("受托人信息",
+				"index", i,
+				"address", delegate.Address.String(),
+				"votingPower", delegate.VotingPower.String(),
+				"isActive", delegate.IsActive)
+		}
+		r.logger.Info("=== 受托人集合详细信息结束 ===")
+
+		// 检查当前节点的地址是否在受托人集合中
+		if r.config != nil && r.config.Key != nil {
+			keyAddr := types.Address(r.config.Key.Address())
+			r.logger.Info("当前节点地址", "keyAddr", keyAddr.String())
+
+			found := false
+			for i, delegate := range r.delegates {
+				if delegate.Address == keyAddr {
+					r.logger.Info("找到当前节点在受托人集合中", "index", i, "address", keyAddr.String())
+					found = true
+					break
+				}
+			}
+			if !found {
+				r.logger.Warn("当前节点不在受托人集合中", "keyAddr", keyAddr.String())
+			}
+		}
 	} else {
 		// 如果没有backend，使用空集合
 		r.delegates = validator.AccountSet{}
 		r.logger.Warn("no backend available, using empty delegate set")
 	}
 
+	r.logger.Info("=== dposRuntime.initializeDelegates 结束 ===")
 	return nil
 }
 
@@ -523,19 +635,11 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		EventRoot:             types.Hash{},          // 暂时为空
 	}
 
-	// 先设置区块头的ExtraData，包含空的签名
-	emptyBitmap := bitmap.Bitmap{}
-	extra := &Extra{
-		Committed: &Signature{
-			AggregatedSignature: []byte{}, // 暂时为空
-			Bitmap:              emptyBitmap,
-		},
-		Checkpoint: checkpoint, // 使用相同的checkpoint数据
-	}
-	block.Block.Header.ExtraData = extra.MarshalRLPTo(nil)
+	// 计算checkpoint哈希，使用固定的哈希值避免循环依赖
+	// 使用区块号作为哈希的基础，确保所有节点计算相同的checkpointHash
+	fixedBlockHash := types.BytesToHash([]byte(fmt.Sprintf("block_%d", block.Block.Number())))
 
-	// 计算checkpoint哈希，使用更新后的区块头哈希
-	checkpointHash, err := checkpoint.Hash(888, block.Block.Number(), block.Block.Header.Hash)
+	checkpointHash, err := checkpoint.Hash(888, block.Block.Number(), fixedBlockHash)
 	if err != nil {
 		r.logger.Error("failed to calculate checkpoint hash", "error", err)
 		return nil, fmt.Errorf("failed to calculate checkpoint hash: %w", err)
@@ -618,12 +722,47 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			return nil, fmt.Errorf("aggregated signature verification failed: %w", err)
 		}
 
-		// 更新区块的ExtraData，包含聚合签名
-		extra.Committed = &Signature{
-			AggregatedSignature: aggregatedSignature,
-			Bitmap:              signatureBitmap,
+		// 获取父区块的签名作为Parent签名
+		var parentSignature *Signature
+		if block.Block.Number() > 1 {
+			// 获取父区块头部
+			parentHeader, exists := r.config.blockchain.GetHeaderByNumber(block.Block.Number() - 1)
+			if !exists {
+				r.logger.Error("failed to get parent header", "parentNumber", block.Block.Number()-1)
+				return nil, fmt.Errorf("failed to get parent header for block %d", block.Block.Number()-1)
+			}
+
+			// 解析父区块的ExtraData
+			parentExtra, err := GetIbftExtra(parentHeader.ExtraData)
+			if err != nil {
+				r.logger.Error("failed to parse parent extra data", "error", err)
+				return nil, fmt.Errorf("failed to parse parent extra data: %w", err)
+			}
+
+			// 使用父区块的Committed签名作为当前区块的Parent签名
+			if parentExtra.Committed != nil {
+				parentSignature = parentExtra.Committed
+				r.logger.Info("设置父区块签名",
+					"blockNumber", block.Block.Number(),
+					"parentNumber", parentHeader.Number,
+					"parentSignatureLength", len(parentSignature.AggregatedSignature))
+			} else {
+				r.logger.Warn("父区块没有Committed签名",
+					"blockNumber", block.Block.Number(),
+					"parentNumber", parentHeader.Number)
+			}
 		}
-		block.Block.Header.ExtraData = extra.MarshalRLPTo(nil)
+
+		// 更新区块的ExtraData，包含聚合签名和父区块签名
+		finalExtra := &Extra{
+			Parent: parentSignature, // 父区块签名
+			Committed: &Signature{
+				AggregatedSignature: aggregatedSignature,
+				Bitmap:              signatureBitmap,
+			},
+			Checkpoint: checkpoint,
+		}
+		block.Block.Header.ExtraData = finalExtra.MarshalRLPTo(nil)
 
 		r.logger.Info("区块签名更新完成",
 			"blockNumber", block.Block.Number(),
@@ -755,6 +894,10 @@ type DPoS struct {
 	cache          *DPoSCache
 	batchProcessor *BatchProcessor
 	metrics        *DPoSMetrics
+
+	// 已处理的区块哈希集合，避免重复处理
+	processedBlocks map[types.Hash]bool
+	processedMutex  sync.RWMutex
 }
 
 // VoterInfo 投票者信息
@@ -797,7 +940,7 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 
 func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift time.Duration, parents []*types.Header) error {
 	// 添加详细的日志 - 节点3验证区块2头部
-	d.logger.Info("=== 节点3验证区块2头部开始 ===",
+	d.logger.Info("=== 验证区块头部开始 ===",
 		"blockNumber", header.Number,
 		"blockHash", header.Hash.String(),
 		"parentNumber", parent.Number,
@@ -830,12 +973,12 @@ func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift tim
 
 	if err != nil {
 		d.logger.Error("区块extraData验证失败", "error", err)
-		d.logger.Error("=== 节点3验证区块2头部失败 ===")
+		d.logger.Error("=== 验证区块头部失败 ===")
 		return err
 	}
 
 	d.logger.Info("区块extraData验证成功")
-	d.logger.Info("=== 节点3验证区块2头部成功 ===")
+	d.logger.Info("=== 验证区块头部成功 ===")
 	return nil
 }
 
@@ -847,39 +990,54 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 	for _, header := range headers {
 		d.logger.Info("processing header", "blockNumber", header.Number, "blockHash", header.Hash)
 
-		// Use a goroutine to delay the round state update
-		// This ensures the block is written before we update the round state
-		go func(h *types.Header) {
-			// Wait a bit for the block to be written
-			time.Sleep(100 * time.Millisecond)
+		// 检查是否已经处理过这个区块
+		d.processedMutex.RLock()
+		if d.processedBlocks == nil {
+			d.processedBlocks = make(map[types.Hash]bool)
+		}
+		if d.processedBlocks[header.Hash] {
+			d.processedMutex.RUnlock()
+			d.logger.Debug("block already processed, skipping", "blockNumber", header.Number, "blockHash", header.Hash)
+			continue
+		}
+		d.processedMutex.RUnlock()
 
-			// Check if the block is now the current header
-			currentHeader := d.blockchain.CurrentHeader()
-			d.logger.Info("delayed check - current header", "blockNumber", currentHeader.Number, "blockHash", currentHeader.Hash)
+		// 标记区块已处理
+		d.processedMutex.Lock()
+		d.processedBlocks[header.Hash] = true
+		d.processedMutex.Unlock()
 
-			if h.Number == currentHeader.Number && h.Hash == currentHeader.Hash {
-				d.logger.Info("updating round state for new block", "blockNumber", h.Number)
+		// 检查这个区块是否是我们自己生产的
+		blockMiner := types.BytesToAddress(header.Miner)
+		keyAddr := types.Address(d.key.Address())
 
-				// Update round state in the runtime
-				if d.runtime != nil {
-					d.runtime.lock.Lock()
-					oldIndex := d.runtime.currentDelegateIndex
-					d.runtime.updateRound()
-					d.runtime.lock.Unlock()
+		// 更新轮次状态 - 只有接收其他节点的区块时才更新轮次
+		// 如果是自己生产的区块，轮次已经在produceBlock中更新过了
+		if blockMiner != keyAddr {
+			// 接收其他节点的区块，需要更新轮次
+			if d.runtime != nil {
+				d.runtime.lock.Lock()
+				oldIndex := d.runtime.currentDelegateIndex
+				oldRound := d.runtime.currentRound
+				d.runtime.updateRound()
+				d.runtime.lock.Unlock()
 
-					d.logger.Info("updated round state",
-						"oldDelegateIndex", oldIndex,
-						"newRound", d.runtime.currentRound,
-						"newDelegateIndex", d.runtime.currentDelegateIndex)
-				} else {
-					d.logger.Warn("runtime is nil, cannot update round state")
-				}
-			} else {
-				d.logger.Info("delayed check - header does not match current header, skipping round update",
-					"headerNumber", h.Number, "currentNumber", currentHeader.Number,
-					"headerHash", h.Hash, "currentHash", currentHeader.Hash)
+				d.logger.Info("updated round state for block from another node",
+					"blockNumber", header.Number,
+					"blockMiner", blockMiner.String(),
+					"keyAddr", keyAddr.String(),
+					"oldRound", oldRound,
+					"newRound", d.runtime.currentRound,
+					"oldDelegateIndex", oldIndex,
+					"newDelegateIndex", d.runtime.currentDelegateIndex)
 			}
-		}(header)
+		} else {
+			// 自己生产的区块，轮次已经在produceBlock中更新过了
+			d.logger.Info("processed our own block (round already updated in produceBlock)",
+				"blockNumber", header.Number,
+				"currentRound", d.runtime.currentRound,
+				"currentDelegateIndex", d.runtime.currentDelegateIndex)
+		}
 	}
 
 	return nil
@@ -963,6 +1121,14 @@ func (d *DPoS) Start() error {
 		if err := d.runtime.start(); err != nil {
 			return fmt.Errorf("failed to start DPoS runtime: %w", err)
 		}
+
+		// 新节点启动后，主动查询其他节点的待处理签名请求
+		go func() {
+			// 等待一段时间让网络连接稳定
+			time.Sleep(10 * time.Second)
+			d.logger.Info("新节点启动，开始查询待处理签名请求")
+			d.runtime.queryPendingSignatureRequests()
+		}()
 	}
 
 	// start state DB process if available
@@ -1158,6 +1324,35 @@ func (d *DPoS) initializeDelegates() error {
 
 	// 按投票权重排序
 	//d.sortDelegatesByVotingPower()
+
+	// 添加详细的调试日志
+	d.logger.Info("=== 主DPoS受托人集合详细信息 ===")
+	for i, delegate := range d.delegates {
+		d.logger.Info("主DPoS受托人信息",
+			"index", i,
+			"address", delegate.Address.String(),
+			"votingPower", delegate.VotingPower.String(),
+			"isActive", delegate.IsActive)
+	}
+	d.logger.Info("=== 主DPoS受托人集合详细信息结束 ===")
+
+	// 检查当前节点的地址是否在受托人集合中
+	if d.key != nil {
+		keyAddr := types.Address(d.key.Address())
+		d.logger.Info("主DPoS当前节点地址", "keyAddr", keyAddr.String())
+
+		found := false
+		for i, delegate := range d.delegates {
+			if delegate.Address == keyAddr {
+				d.logger.Info("主DPoS找到当前节点在受托人集合中", "index", i, "address", keyAddr.String())
+				found = true
+				break
+			}
+		}
+		if !found {
+			d.logger.Warn("主DPoS当前节点不在受托人集合中", "keyAddr", keyAddr.String())
+		}
+	}
 
 	return nil
 }
@@ -2037,7 +2232,7 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 
 	// 检查网络中的活跃验证者数量
 	activeValidators := r.getActiveValidatorsCount()
-	expectedSignatures := len(r.delegates) - 1 // 不包括自己
+	expectedSignatures := len(r.delegates) // 现在包括自己
 
 	r.logger.Info("网络状态检查",
 		"activeValidators", activeValidators,
@@ -2046,7 +2241,7 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 
 	// 检查是否有足够的验证者
 	minRequired := r.calculateMinRequiredSignatures()
-	if activeValidators < minRequired+1 { // +1 因为不包括提议者自己
+	if activeValidators < minRequired { // 现在包括提议者自己
 		r.logger.Error("验证者数量不足，无法进行签名收集",
 			"activeValidators", activeValidators,
 			"minRequired", minRequired,
@@ -2116,10 +2311,10 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 				"requiredSignatures", minRequiredSignatures)
 
 			// 检查是否有足够的验证者进行签名收集
-			if activeValidators < minRequiredSignatures+1 {
+			if activeValidators < minRequiredSignatures {
 				r.logger.Warn("验证者数量不足，等待更多节点加入",
 					"activeValidators", activeValidators,
-					"minRequired", minRequiredSignatures+1)
+					"minRequired", minRequiredSignatures)
 				// 重置超时，给更多节点加入的时间
 				timeoutCh = time.After(2 * time.Minute)
 			} else if len(collectedSignatures) == 0 {
@@ -2141,9 +2336,40 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 
 processSignatures:
 	// 4. 处理收集到的签名
+	r.logger.Info("开始处理签名，按delegate索引顺序")
 	for i, delegate := range r.delegates {
+		r.logger.Info("处理delegate", "index", i, "address", delegate.Address.String())
+
 		if delegate.Address == proposerAddr {
-			continue // 跳过提议者自己
+			// 提议者自己生成签名
+			if r.config != nil && r.config.Key != nil {
+				blsKey, err := r.getBLSPrivateKey()
+				if err != nil {
+					r.logger.Warn("提议者无法获取BLS私钥", "error", err)
+					continue
+				}
+
+				signature, err := blsKey.Sign(checkpointHash[:], signer.DomainValidatorSet)
+				if err != nil {
+					r.logger.Warn("提议者签名失败", "error", err)
+					continue
+				}
+
+				signatureBytes, err := signature.Marshal()
+				if err != nil {
+					r.logger.Warn("提议者签名序列化失败", "error", err)
+					continue
+				}
+
+				signatures = append(signatures, signatureBytes)
+				signatureBitmap.Set(uint64(i))
+				r.logger.Info("提议者生成并添加签名",
+					"validator", delegate.Address.String(),
+					"index", i,
+					"signatureLength", len(signatureBytes),
+					"signatureIndex", len(signatures)-1)
+			}
+			continue
 		}
 
 		if signature, exists := collectedSignatures[delegate.Address]; exists {
@@ -2160,7 +2386,8 @@ processSignatures:
 			r.logger.Info("验证并添加签名",
 				"validator", delegate.Address.String(),
 				"index", i,
-				"signatureLength", len(signature))
+				"signatureLength", len(signature),
+				"signatureIndex", len(signatures)-1)
 		} else {
 			r.logger.Warn("未收到验证者签名",
 				"validator", delegate.Address.String())
@@ -2215,11 +2442,7 @@ func (r *dposRuntime) calculateMinRequiredSignatures() int {
 		minRequired = 1
 	}
 
-	// 不包括提议者自己
-	if minRequired >= totalValidators {
-		minRequired = totalValidators - 1
-	}
-
+	// 现在包括提议者自己，所以不需要减1
 	return minRequired
 }
 
@@ -2317,10 +2540,10 @@ func (r *dposRuntime) broadcastSignatureRequest(block *types.FullBlock, checkpoi
 	if err != nil {
 		r.logger.Warn("failed to get signature request topic, using fallback", "error", err)
 		// 回退到日志记录
-		r.logger.Info("广播签名请求（回退模式）",
-			"blockNumber", protoRequest.BlockNumber,
-			"checkpointHash", checkpointHash.String(),
-			"round", protoRequest.Round)
+		//r.logger.Info("广播签名请求（回退模式）",
+		//	"blockNumber", protoRequest.BlockNumber,
+		//	"checkpointHash", checkpointHash.String(),
+		//	"round", protoRequest.Round)
 		return nil
 	}
 
@@ -2329,27 +2552,33 @@ func (r *dposRuntime) broadcastSignatureRequest(block *types.FullBlock, checkpoi
 		"blockNumber", protoRequest.BlockNumber,
 		"round", protoRequest.Round)
 
-	// 暂时跳过protobuf序列化，直接使用日志记录
-	r.logger.Info("广播签名请求（临时模式）",
-		"blockNumber", protoRequest.BlockNumber,
-		"checkpointHash", checkpointHash.String(),
-		"round", protoRequest.Round)
-	return nil
+	// 获取签名请求主题
+	topic, err := r.getSignatureRequestTopic()
+	if err != nil {
+		r.logger.Warn("failed to get signature request topic, using fallback", "error", err)
+		// 回退到日志记录
+		//r.logger.Info("广播签名请求（回退模式）",
+		//	"blockNumber", protoRequest.BlockNumber,
+		//	"checkpointHash", checkpointHash.String(),
+		//	"round", protoRequest.Round)
+		return nil
+	}
 
-	// if err := topic.Publish(protoRequest); err != nil {
-	// 	r.logger.Warn("failed to publish signature request, using fallback", "error", err)
-	// 	// 回退到日志记录
-	// 	r.logger.Info("广播签名请求（回退模式）",
-	// 		"blockNumber", protoRequest.BlockNumber,
-	// 		"checkpointHash", checkpointHash.String(),
-	// 		"round", protoRequest.Round)
-	// 	return nil
-	// }
+	// 发布签名请求
+	if err := topic.Publish(protoRequest); err != nil {
+		r.logger.Warn("failed to publish signature request, using fallback", "error", err)
+		// 回退到日志记录
+		//r.logger.Info("广播签名请求（回退模式）",
+		//	"blockNumber", protoRequest.BlockNumber,
+		//	"checkpointHash", checkpointHash.String(),
+		//	"round", protoRequest.Round)
+		return nil
+	}
 
-	r.logger.Info("成功广播签名请求",
-		"blockNumber", protoRequest.BlockNumber,
-		"checkpointHash", checkpointHash.String(),
-		"round", protoRequest.Round)
+	//r.logger.Info("成功广播签名请求",
+	//	"blockNumber", protoRequest.BlockNumber,
+	//	"checkpointHash", checkpointHash.String(),
+	//	"round", protoRequest.Round)
 
 	return nil
 }
@@ -2536,6 +2765,13 @@ func (r *dposRuntime) handleSignatureRequestMessage(obj interface{}, from peer.I
 		return
 	}
 
+	// 检查是否是查询请求
+	if protoRequest.BlockNumber == 0 && string(protoRequest.BlockHash) == "QUERY_REQUEST" {
+		//r.logger.Info("收到签名查询请求", "from", from.String())
+		r.handleSignatureQueryRequest(from)
+		return
+	}
+
 	// 转换为内部格式
 	request := &SignatureRequest{
 		BlockNumber:    protoRequest.BlockNumber,
@@ -2546,11 +2782,11 @@ func (r *dposRuntime) handleSignatureRequestMessage(obj interface{}, from peer.I
 		Timestamp:      protoRequest.Timestamp,
 	}
 
-	r.logger.Info("收到签名请求",
-		"from", from.String(),
-		"blockNumber", request.BlockNumber,
-		"checkpointHash", request.CheckpointHash.String(),
-		"proposer", request.Proposer.String())
+	//r.logger.Info("收到签名请求",
+	//	"from", from.String(),
+	//	"blockNumber", request.BlockNumber,
+	//	"checkpointHash", request.CheckpointHash.String(),
+	//	"proposer", request.Proposer.String())
 
 	// 检查是否是自己的请求
 	if request.Proposer == types.Address(r.config.Key.Address()) {
@@ -2568,6 +2804,65 @@ func (r *dposRuntime) handleSignatureRequestMessage(obj interface{}, from peer.I
 	if err := r.generateSignatureResponse(request); err != nil {
 		r.logger.Error("failed to generate signature response", "error", err)
 	}
+}
+
+// handleSignatureQueryRequest 处理签名查询请求
+func (r *dposRuntime) handleSignatureQueryRequest(from peer.ID) {
+	//r.logger.Info("处理签名查询请求", "from", from.String())
+
+	// 获取所有待处理的签名请求
+	r.signatureRequestMutex.RLock()
+	pendingRequests := make([]*SignatureRequest, 0, len(r.pendingSignatureRequests))
+	for _, request := range r.pendingSignatureRequests {
+		pendingRequests = append(pendingRequests, request)
+	}
+	r.signatureRequestMutex.RUnlock()
+
+	//r.logger.Info("当前存储的签名请求数量", "count", len(pendingRequests))
+
+	if len(pendingRequests) == 0 {
+		//r.logger.Info("没有待处理的签名请求")
+		return
+	}
+
+	//r.logger.Info("发送待处理签名请求", "count", len(pendingRequests))
+
+	// 广播所有待处理的签名请求
+	for _, request := range pendingRequests {
+		//r.logger.Info("广播签名请求",
+		//	"blockNumber", request.BlockNumber,
+		//	"checkpointHash", request.CheckpointHash.String(),
+		//	"proposer", request.Proposer.String())
+		r.broadcastSignatureRequestToPeer(request, from)
+	}
+}
+
+// broadcastSignatureRequestToPeer 向特定节点广播签名请求
+func (r *dposRuntime) broadcastSignatureRequestToPeer(request *SignatureRequest, peerID peer.ID) {
+	// 获取签名请求主题
+	topic, err := r.getSignatureRequestTopic()
+	if err != nil {
+		r.logger.Warn("failed to get signature request topic for peer broadcast", "error", err)
+		return
+	}
+
+	// 转换为protobuf格式
+	protoRequest := &proto.SignatureRequest{
+		BlockNumber:    request.BlockNumber,
+		BlockHash:      request.BlockHash.Bytes(),
+		CheckpointHash: request.CheckpointHash.Bytes(),
+		Round:          request.Round,
+		Proposer:       request.Proposer.Bytes(),
+		Timestamp:      request.Timestamp,
+	}
+
+	// 发布签名请求
+	if err := topic.Publish(protoRequest); err != nil {
+		r.logger.Warn("failed to publish signature request to peer", "error", err, "peer", peerID.String())
+		return
+	}
+
+	//r.logger.Info("向节点广播签名请求成功", "peer", peerID.String(), "blockNumber", request.BlockNumber)
 }
 
 // isValidator 检查当前节点是否是验证者
@@ -2640,28 +2935,33 @@ func (r *dposRuntime) generateSignatureResponse(request *SignatureRequest) error
 		return nil
 	}
 
-	// 暂时跳过protobuf序列化，直接使用日志记录
-	r.logger.Info("生成签名响应（临时模式）",
-		"validator", types.Address(r.config.Key.Address()).String(),
-		"checkpointHash", request.CheckpointHash.String(),
-		"signatureLength", len(signatureBytes))
-	return nil
+	// 获取签名响应主题
+	topic, err := r.getSignatureResponseTopic()
+	if err != nil {
+		r.logger.Warn("failed to get signature response topic, using fallback", "error", err)
+		// 回退到日志记录
+		r.logger.Info("生成签名响应（回退模式）",
+			"validator", types.Address(r.config.Key.Address()).String(),
+			"checkpointHash", request.CheckpointHash.String(),
+			"signatureLength", len(signatureBytes))
+		return nil
+	}
 
-	// // 发布签名响应
-	// if err := topic.Publish(protoResponse); err != nil {
-	// 	r.logger.Warn("failed to publish signature response, using fallback", "error", err)
-	// 	// 回退到日志记录
-	// 	r.logger.Info("生成签名响应（回退模式）",
-	// 		"validator", types.Address(r.config.Key.Address()).String(),
-	// 		"checkpointHash", request.CheckpointHash.String(),
-	// 		"signatureLength", len(signatureBytes))
-	// 	return nil
-	// }
+	// 发布签名响应
+	if err := topic.Publish(protoResponse); err != nil {
+		r.logger.Warn("failed to publish signature response, using fallback", "error", err)
+		// 回退到日志记录
+		r.logger.Info("生成签名响应（回退模式）",
+			"validator", types.Address(r.config.Key.Address()).String(),
+			"checkpointHash", request.CheckpointHash.String(),
+			"signatureLength", len(signatureBytes))
+		return nil
+	}
 
-	r.logger.Info("成功生成并广播签名响应",
-		"validator", types.Address(r.config.Key.Address()).String(),
-		"checkpointHash", request.CheckpointHash.String(),
-		"signatureLength", len(signatureBytes))
+	//r.logger.Info("成功生成并广播签名响应",
+	//	"validator", types.Address(r.config.Key.Address()).String(),
+	//	"checkpointHash", request.CheckpointHash.String(),
+	//	"signatureLength", len(signatureBytes))
 
 	return nil
 }
@@ -2692,8 +2992,119 @@ func (r *dposRuntime) getBLSPrivateKey() (*bls.PrivateKey, error) {
 
 // queryPendingSignatureRequests 查询待处理的签名请求
 func (r *dposRuntime) queryPendingSignatureRequests() {
-	r.logger.Info("开始查询待处理的签名请求（回退模式）")
-	r.logger.Info("查询待处理签名请求完成")
+	//r.logger.Info("开始查询待处理的签名请求")
+
+	// 调试：检查当前节点的签名请求存储状态
+	r.debugPendingSignatureRequests()
+
+	// 检查网络服务是否可用
+	if r.network == nil {
+		r.logger.Warn("network service not available, cannot query pending signature requests")
+		return
+	}
+
+	// 获取当前连接的节点
+	peers := r.network.Peers()
+	if len(peers) == 0 {
+		r.logger.Info("no connected peers, skipping pending signature request query")
+		return
+	}
+
+	//r.logger.Info("查询待处理签名请求", "peerCount", len(peers))
+
+	// 向所有连接的节点查询待处理的签名请求
+	for _, peer := range peers {
+		go r.queryPeerForPendingRequests(peer.Info.ID)
+	}
+
+	// 实现简单的广播查询机制
+	// 通过现有的签名请求主题发送查询消息
+	r.broadcastSignatureQuery()
+}
+
+// broadcastSignatureQuery 广播签名查询请求
+func (r *dposRuntime) broadcastSignatureQuery() {
+	// 获取签名请求主题
+	topic, err := r.getSignatureRequestTopic()
+	if err != nil {
+		r.logger.Warn("failed to get signature request topic for query", "error", err)
+		return
+	}
+
+	// 创建查询请求
+	queryRequest := &proto.SignatureRequest{
+		BlockNumber:    0, // 使用0表示这是一个查询请求
+		BlockHash:      []byte("QUERY_REQUEST"),
+		CheckpointHash: []byte("QUERY_REQUEST"),
+		Round:          0,
+		Proposer:       types.Address(r.config.Key.Address()).Bytes(),
+		Timestamp:      uint64(time.Now().Unix()),
+	}
+
+	// 发布查询请求
+	if err := topic.Publish(queryRequest); err != nil {
+		r.logger.Warn("failed to publish signature query request", "error", err)
+		return
+	}
+
+	//r.logger.Info("广播签名查询请求成功")
+}
+
+// queryPeerForPendingRequests 向指定节点查询待处理的签名请求
+func (r *dposRuntime) queryPeerForPendingRequests(peerID peer.ID) {
+	//r.logger.Debug("查询节点的待处理签名请求", "peer", peerID.String())
+
+	// 实现真正的RPC查询逻辑
+	// 通过现有的签名请求主题发送查询消息
+
+	// 获取签名请求主题
+	topic, err := r.getSignatureRequestTopic()
+	if err != nil {
+		r.logger.Warn("failed to get signature request topic for peer query", "error", err, "peer", peerID.String())
+		return
+	}
+
+	// 创建查询请求 - 使用特殊的消息格式
+	queryRequest := &proto.SignatureRequest{
+		BlockNumber:    0, // 使用0表示这是一个查询请求
+		BlockHash:      []byte("QUERY_REQUEST"),
+		CheckpointHash: []byte("QUERY_REQUEST"),
+		Round:          0,
+		Proposer:       types.Address(r.config.Key.Address()).Bytes(),
+		Timestamp:      uint64(time.Now().Unix()),
+	}
+
+	// 发布查询请求到网络
+	if err := topic.Publish(queryRequest); err != nil {
+		r.logger.Warn("failed to publish signature query request", "error", err, "peer", peerID.String())
+		return
+	}
+
+	//r.logger.Info("向节点发送签名请求查询", "peer", peerID.String())
+}
+
+// getSignatureQueryTopic 获取签名查询主题
+func (r *dposRuntime) getSignatureQueryTopic() (*network.Topic, error) {
+	// 简化的实现，返回nil表示暂时不实现
+	return nil, fmt.Errorf("signature query topic not implemented")
+}
+
+// handleSignatureQueryResponse 处理签名查询响应
+func (r *dposRuntime) handleSignatureQueryResponse(obj interface{}, from peer.ID) {
+	//r.logger.Info("收到签名查询响应", "from", from.String())
+	// 简化的实现，暂时只记录日志
+}
+
+// 添加新节点加入时的处理逻辑
+func (r *dposRuntime) onNewPeerJoined(peerID peer.ID) {
+	r.logger.Info("新节点加入网络", "peer", peerID.String())
+
+	// 延迟一段时间后查询该节点的待处理签名请求
+	// 给节点一些时间完成初始化
+	go func() {
+		time.Sleep(5 * time.Second)
+		r.queryPeerForPendingRequests(peerID)
+	}()
 }
 
 // subscribeToSignatureTopic 订阅签名响应主题
@@ -2901,4 +3312,37 @@ func (r *dposRuntime) validateSignatureResponse(response *SignatureResponse) err
 	}
 
 	return nil
+}
+
+// SignatureQueryRequest 签名查询请求
+type SignatureQueryRequest struct {
+	RequesterAddr types.Address `json:"requesterAddr"`
+	Timestamp     uint64        `json:"timestamp"`
+}
+
+// debugPendingSignatureRequests 调试方法：检查待处理的签名请求
+func (r *dposRuntime) debugPendingSignatureRequests() {
+	r.signatureRequestMutex.RLock()
+	defer r.signatureRequestMutex.RUnlock()
+
+	//r.logger.Info("=== 调试：待处理签名请求状态 ===")
+	//r.logger.Info("存储映射是否为nil", "isNil", r.pendingSignatureRequests == nil)
+
+	if r.pendingSignatureRequests == nil {
+		r.logger.Info("pendingSignatureRequests映射为nil")
+		return
+	}
+
+	//r.logger.Info("存储的签名请求数量", "count", len(r.pendingSignatureRequests))
+
+	//for checkpointHash, request := range r.pendingSignatureRequests {
+	//	//r.logger.Info("存储的签名请求",
+	//	//	"checkpointHash", checkpointHash.String(),
+	//	//	"blockNumber", request.BlockNumber,
+	//	//	"blockHash", request.BlockHash.String(),
+	//	//	"round", request.Round,
+	//	//	"proposer", request.Proposer.String(),
+	//	//	"timestamp", request.Timestamp)
+	//}
+	//r.logger.Info("=== 调试结束 ===")
 }
