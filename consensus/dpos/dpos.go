@@ -351,13 +351,15 @@ func (r *dposRuntime) produceBlock() error {
 	currentDelegate := r.getCurrentDelegate()
 	keyAddr := types.Address(r.config.Key.Address())
 
-	// 添加调试日志
-	r.logger.Info("checking block production eligibility",
-		"currentDelegate", currentDelegate,
-		"keyAddr", keyAddr,
-		"currentRound", r.currentRound,
-		"currentDelegateIndex", r.currentDelegateIndex,
-		"delegatesCount", len(r.delegates))
+	// 添加调试日志 - 只有当本节点是当前受托人时才打印
+	if currentDelegate == keyAddr {
+		r.logger.Info("checking block production eligibility",
+			"currentDelegate", currentDelegate,
+			"keyAddr", keyAddr,
+			"currentRound", r.currentRound,
+			"currentDelegateIndex", r.currentDelegateIndex,
+			"delegatesCount", len(r.delegates))
+	}
 
 	// 添加详细的受托人集合调试信息
 	// r.logger.Info("=== 当前受托人集合 ===")
