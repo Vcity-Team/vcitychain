@@ -66,7 +66,7 @@ func (vs validatorSet) HasQuorum(blockNumber uint64, signers map[types.Address]s
 	aggregateVotingPower := big.NewInt(0)
 
 	// 详细记录每个签名者的投票权重
-	vs.logger.Info("HasQuorum - 开始验证法定人数",
+	vs.logger.Debug("HasQuorum - 开始验证法定人数",
 		"blockNumber", blockNumber,
 		"totalValidators", vs.Len(),
 		"totalVotingPower", vs.totalVotingPower,
@@ -78,7 +78,7 @@ func (vs validatorSet) HasQuorum(blockNumber uint64, signers map[types.Address]s
 		allValidatorsInfo = append(allValidatorsInfo,
 			fmt.Sprintf("%s(vp:%s)", validator.Address.String(), validator.VotingPower.String()))
 	}
-	vs.logger.Info("HasQuorum - 所有验证者信息", "validators", allValidatorsInfo)
+	vs.logger.Debug("HasQuorum - 所有验证者信息", "validators", allValidatorsInfo)
 
 	// 记录签名者的详细信息
 	signerDetails := make([]string, 0)
@@ -97,7 +97,7 @@ func (vs validatorSet) HasQuorum(blockNumber uint64, signers map[types.Address]s
 	quorumSize := getQuorumSize(blockNumber, vs.totalVotingPower)
 	hasQuorum := aggregateVotingPower.Cmp(quorumSize) >= 0
 
-	vs.logger.Info("HasQuorum - 法定人数验证结果",
+	vs.logger.Debug("HasQuorum - 法定人数验证结果",
 		"blockNumber", blockNumber,
 		"signers", signerDetails,
 		"aggregateVotingPower", aggregateVotingPower,

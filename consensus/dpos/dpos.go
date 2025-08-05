@@ -371,7 +371,7 @@ func (r *dposRuntime) produceBlock() error {
 	// r.logger.Info("=== 受托人集合结束 ===")
 
 	if currentDelegate != keyAddr {
-		r.logger.Info("not current delegate, skipping block production",
+		r.logger.Debug("not current delegate, skipping block production",
 			"currentDelegate", currentDelegate.String(),
 			"keyAddr", keyAddr.String())
 		return nil // 不是当前出块者
@@ -675,14 +675,14 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		time.Sleep(1 * time.Second)
 	}
 
-	r.logger.Info("签名收集完成",
+	r.logger.Debug("签名收集完成",
 		"totalSignatures", len(signatures),
 		"bitmapLength", len(signatureBitmap),
 		"bitmapBytes", fmt.Sprintf("%x", signatureBitmap))
 
 	// 更新区块的签名
 	if len(signatures) > 0 {
-		r.logger.Info("开始聚合签名",
+		r.logger.Debug("开始聚合签名",
 			"signatureCount", len(signatures))
 
 		// 正确聚合所有签名
@@ -694,13 +694,13 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				continue
 			}
 			blsSignatures = append(blsSignatures, sig)
-			r.logger.Info("成功解析签名",
+			r.logger.Debug("成功解析签名",
 				"index", i,
 				"signatureLength", len(sigBytes),
 				"signatureBytes", fmt.Sprintf("%x", sigBytes))
 		}
 
-		r.logger.Info("签名解析完成",
+		r.logger.Debug("签名解析完成",
 			"parsedSignatures", len(blsSignatures),
 			"totalSignatures", len(signatures))
 
@@ -711,7 +711,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			return nil, fmt.Errorf("failed to aggregate signatures: %w", err)
 		}
 
-		r.logger.Info("签名聚合成功",
+		r.logger.Debug("签名聚合成功",
 			"aggregatedSignatureLength", len(aggregatedSignature),
 			"aggregatedSignatureBytes", fmt.Sprintf("%x", aggregatedSignature))
 
@@ -742,12 +742,12 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			// 使用父区块的Committed签名作为当前区块的Parent签名
 			if parentExtra.Committed != nil {
 				parentSignature = parentExtra.Committed
-				r.logger.Info("设置父区块签名",
+				r.logger.Debug("设置父区块签名",
 					"blockNumber", block.Block.Number(),
 					"parentNumber", parentHeader.Number,
 					"parentSignatureLength", len(parentSignature.AggregatedSignature))
 			} else {
-				r.logger.Warn("父区块没有Committed签名",
+				r.logger.Debug("父区块没有Committed签名",
 					"blockNumber", block.Block.Number(),
 					"parentNumber", parentHeader.Number)
 			}
@@ -767,7 +767,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		// 重新计算区块哈希，因为ExtraData已经更新
 		block.Block.Header.ComputeHash()
 
-		r.logger.Info("区块签名更新完成",
+		r.logger.Debug("区块签名更新完成",
 			"blockNumber", block.Block.Number(),
 			"extraDataLength", len(block.Block.Header.ExtraData),
 			"newBlockHash", block.Block.Header.Hash.String())
@@ -944,7 +944,7 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 
 func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift time.Duration, parents []*types.Header) error {
 	// 添加详细的日志 - 节点3验证区块2头部
-	d.logger.Info("=== 验证区块头部开始 ===",
+	d.logger.Debug("=== 验证区块头部开始 ===",
 		"blockNumber", header.Number,
 		"blockHash", header.Hash.String(),
 		"parentNumber", parent.Number,
@@ -957,7 +957,7 @@ func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift tim
 		return fmt.Errorf("failed to validate header for block %d. error = %w", header.Number, err)
 	}
 
-	d.logger.Info("区块头部字段验证通过")
+	d.logger.Debug("区块头部字段验证通过")
 
 	// decode the extra data
 	extra, err := GetIbftExtra(header.ExtraData)
@@ -966,7 +966,7 @@ func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift tim
 		return fmt.Errorf("failed to verify header for block %d. get extra error = %w", header.Number, err)
 	}
 
-	d.logger.Info("区块extraData解析成功",
+	d.logger.Debug("区块extraData解析成功",
 		"committedSignatureLength", len(extra.Committed.AggregatedSignature),
 		"committedBitmapLength", len(extra.Committed.Bitmap),
 		"checkpointExists", extra.Checkpoint != nil)
@@ -981,8 +981,8 @@ func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift tim
 		return err
 	}
 
-	d.logger.Info("区块extraData验证成功")
-	d.logger.Info("=== 验证区块头部成功 ===")
+	d.logger.Debug("区块extraData验证成功")
+	d.logger.Debug("=== 验证区块头部成功 ===")
 	return nil
 }
 
@@ -2343,9 +2343,9 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 
 processSignatures:
 	// 4. 处理收集到的签名
-	r.logger.Info("开始处理签名，按delegate索引顺序")
+	r.logger.Debug("开始处理签名，按delegate索引顺序")
 	for i, delegate := range r.delegates {
-		r.logger.Info("处理delegate", "index", i, "address", delegate.Address.String())
+		r.logger.Debug("处理delegate", "index", i, "address", delegate.Address.String())
 
 		if delegate.Address == proposerAddr {
 			// 提议者自己生成签名
@@ -2370,7 +2370,7 @@ processSignatures:
 
 				signatures = append(signatures, signatureBytes)
 				signatureBitmap.Set(uint64(i))
-				r.logger.Info("提议者生成并添加签名",
+				r.logger.Debug("提议者生成并添加签名",
 					"validator", delegate.Address.String(),
 					"index", i,
 					"signatureLength", len(signatureBytes),
@@ -2390,18 +2390,18 @@ processSignatures:
 
 			signatures = append(signatures, signature)
 			signatureBitmap.Set(uint64(i))
-			r.logger.Info("验证并添加签名",
+			r.logger.Debug("验证并添加签名",
 				"validator", delegate.Address.String(),
 				"index", i,
 				"signatureLength", len(signature),
 				"signatureIndex", len(signatures)-1)
 		} else {
-			r.logger.Warn("未收到验证者签名",
+			r.logger.Debug("未收到验证者签名",
 				"validator", delegate.Address.String())
 		}
 	}
 
-	r.logger.Info("签名收集处理完成",
+	r.logger.Debug("签名收集处理完成",
 		"totalSignatures", len(signatures),
 		"bitmapLength", len(signatureBitmap),
 		"collectedCount", len(collectedSignatures),
@@ -3174,7 +3174,11 @@ func (r *dposRuntime) handleSignatureResponseMessage(obj interface{}, from peer.
 	}
 
 	// 检查是否已经收到过该验证者的签名
-	if listener.receivedSigs[response.ValidatorAddr] {
+	listener.receivedMutex.RLock()
+	alreadyReceived := listener.receivedSigs[response.ValidatorAddr]
+	listener.receivedMutex.RUnlock()
+
+	if alreadyReceived {
 		r.logger.Debug("ignoring duplicate signature from validator",
 			"validator", response.ValidatorAddr.String())
 		return
@@ -3193,12 +3197,14 @@ func (r *dposRuntime) handleSignatureResponseMessage(obj interface{}, from peer.
 	}
 
 	// 标记已收到该验证者的签名
+	listener.receivedMutex.Lock()
 	listener.receivedSigs[response.ValidatorAddr] = true
+	listener.receivedMutex.Unlock()
 
 	// 发送到签名通道
 	select {
 	case listener.signatureCh <- response:
-		r.logger.Info("received valid signature response",
+		r.logger.Debug("received valid signature response",
 			"validator", response.ValidatorAddr.String(),
 			"from", from.String(),
 			"signatureLength", len(response.Signature))
@@ -3233,6 +3239,7 @@ type SignatureListener struct {
 	checkpointHash types.Hash
 	signatureCh    chan<- *SignatureResponse
 	receivedSigs   map[types.Address]bool
+	receivedMutex  sync.RWMutex // 添加互斥锁保护 receivedSigs map
 	topic          *network.Topic
 	logger         hclog.Logger
 }

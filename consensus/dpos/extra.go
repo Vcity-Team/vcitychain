@@ -285,7 +285,7 @@ func (s *Signature) UnmarshalRLPWith(v *fastrlp.Value) error {
 func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 	hash types.Hash, domain []byte, logger hclog.Logger) error {
 
-	logger.Info("Signature.Verify - 开始验证签名",
+	logger.Debug("Signature.Verify - 开始验证签名",
 		"blockNumber", blockNumber,
 		"validatorsCount", len(validators),
 		"bitmapLength", len(s.Bitmap),
@@ -297,7 +297,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		return err
 	}
 
-	logger.Info("Signature.Verify - 过滤后签名者信息",
+	logger.Debug("Signature.Verify - 过滤后签名者信息",
 		"filteredSignersCount", len(signers),
 		"signerAddresses", signers.GetAddresses())
 
@@ -309,18 +309,18 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		return fmt.Errorf("quorum not reached")
 	}
 
-	logger.Info("Signature.Verify - 法定人数验证通过，开始验证BLS签名")
+	logger.Debug("Signature.Verify - 法定人数验证通过，开始验证BLS签名")
 
 	blsPublicKeys := make([]*bls.PublicKey, len(signers))
 	for i, validator := range signers {
 		blsPublicKeys[i] = validator.BlsKey
-		logger.Info("Signature.Verify - 添加BLS公钥",
+		logger.Debug("Signature.Verify - 添加BLS公钥",
 			"index", i,
 			"address", validator.Address.String(),
 			"blsKeyExists", validator.BlsKey != nil)
 	}
 
-	logger.Info("Signature.Verify - 开始验证BLS聚合签名",
+	logger.Debug("Signature.Verify - 开始验证BLS聚合签名",
 		"aggregatedSignatureLength", len(s.AggregatedSignature),
 		"aggregatedSignatureBytes", fmt.Sprintf("%x", s.AggregatedSignature),
 		"bitmapLength", len(s.Bitmap),
@@ -334,7 +334,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		return err
 	}
 
-	logger.Info("Signature.Verify - 聚合签名解析成功",
+	logger.Debug("Signature.Verify - 聚合签名解析成功",
 		"signatureType", fmt.Sprintf("%T", aggs))
 
 	if !aggs.VerifyAggregated(blsPublicKeys, hash[:], domain) {
@@ -363,7 +363,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		return fmt.Errorf("could not verify aggregated signature")
 	}
 
-	logger.Info("Signature.Verify - 签名验证成功")
+	logger.Debug("Signature.Verify - 签名验证成功")
 	return nil
 }
 

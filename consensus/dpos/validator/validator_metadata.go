@@ -331,17 +331,17 @@ func (as AccountSet) GetFilteredValidators(bitmap bitmap.Bitmap) (AccountSet, er
 	}
 
 	// 添加详细的bitmap解析日志
-	fmt.Printf("DEBUG: GetFilteredValidators - 开始解析bitmap\n")
-	fmt.Printf("DEBUG: 验证者总数: %d\n", len(as))
-	fmt.Printf("DEBUG: bitmap长度: %d\n", bitmap.Len())
-	fmt.Printf("DEBUG: bitmap内容: %v\n", bitmap)
+	// fmt.Printf("DEBUG: GetFilteredValidators - 开始解析bitmap\n")
+	// fmt.Printf("DEBUG: 验证者总数: %d\n", len(as))
+	// fmt.Printf("DEBUG: bitmap长度: %d\n", bitmap.Len())
+	// fmt.Printf("DEBUG: bitmap内容: %v\n", bitmap)
 
 	// 打印所有验证器的地址和索引
-	fmt.Printf("DEBUG: 验证器地址列表:\n")
-	for i, validator := range as {
-		fmt.Printf("DEBUG: 索引 %d: 地址 %s, BLS密钥存在: %v\n",
-			i, validator.Address.String(), validator.BlsKey != nil)
-	}
+	// fmt.Printf("DEBUG: 验证器地址列表:\n")
+	// for i, validator := range as {
+	// 	fmt.Printf("DEBUG: 索引 %d: 地址 %s, BLS密钥存在: %v\n",
+	// 		i, validator.Address.String(), validator.BlsKey != nil)
+	// }
 
 	// For early blocks, be more lenient with bitmap validation
 	// Only check validators within the current validator set range
@@ -352,39 +352,39 @@ func (as AccountSet) GetFilteredValidators(bitmap bitmap.Bitmap) (AccountSet, er
 	effectiveBitmapLen := bitmap.Len()
 	if effectiveBitmapLen > validatorCount {
 		effectiveBitmapLen = validatorCount
-		fmt.Printf("DEBUG: bitmap长度超过验证者数量，截断到: %d\n", effectiveBitmapLen)
+		// fmt.Printf("DEBUG: bitmap长度超过验证者数量，截断到: %d\n", effectiveBitmapLen)
 	}
 
-	fmt.Printf("DEBUG: 开始遍历bitmap位，有效长度: %d\n", effectiveBitmapLen)
+	// fmt.Printf("DEBUG: 开始遍历bitmap位，有效长度: %d\n", effectiveBitmapLen)
 
 	for i := uint64(0); i < effectiveBitmapLen; i++ {
 		if bitmap.IsSet(i) {
-			fmt.Printf("DEBUG: bitmap位 %d 已设置，验证者地址: %s\n", i, as[i].Address.String())
+			// fmt.Printf("DEBUG: bitmap位 %d 已设置，验证者地址: %s\n", i, as[i].Address.String())
 
 			// Skip validators with nil BLS keys to avoid panic
 			if as[i].BlsKey != nil {
 				filteredValidators = append(filteredValidators, as[i])
-				fmt.Printf("DEBUG: 添加验证者到过滤结果: %s (BLS key存在)\n", as[i].Address.String())
+				// fmt.Printf("DEBUG: 添加验证者到过滤结果: %s (BLS key存在)\n", as[i].Address.String())
 			} else {
-				fmt.Printf("DEBUG: 跳过验证者 (BLS key为nil): %s\n", as[i].Address.String())
+				// fmt.Printf("DEBUG: 跳过验证者 (BLS key为nil): %s\n", as[i].Address.String())
 			}
 		} else {
-			fmt.Printf("DEBUG: bitmap位 %d 未设置\n", i)
+			// fmt.Printf("DEBUG: bitmap位 %d 未设置\n", i)
 		}
 	}
 
-	fmt.Printf("DEBUG: GetFilteredValidators - 解析完成，过滤后验证者数量: %d\n", len(filteredValidators))
+	// fmt.Printf("DEBUG: GetFilteredValidators - 解析完成，过滤后验证者数量: %d\n", len(filteredValidators))
 
 	// 打印过滤后的验证者详细信息
-	fmt.Printf("DEBUG: 过滤后的验证者详细信息:\n")
-	for i, validator := range filteredValidators {
-		blsKeyStr := "nil"
-		if validator.BlsKey != nil {
-			blsKeyStr = fmt.Sprintf("%x", validator.BlsKey.Marshal())
-		}
-		fmt.Printf("DEBUG: 过滤后索引 %d: 地址 %s, BLS密钥: %s\n",
-			i, validator.Address.String(), blsKeyStr)
-	}
+	// fmt.Printf("DEBUG: 过滤后的验证者详细信息:\n")
+	// for i, validator := range filteredValidators {
+	// 	blsKeyStr := "nil"
+	// 	if validator.BlsKey != nil {
+	// 		blsKeyStr = fmt.Sprintf("%x", validator.BlsKey.Marshal())
+	// 	}
+	// 	fmt.Printf("DEBUG: 过滤后索引 %d: 地址 %s, BLS密钥: %s\n",
+	// 		i, validator.Address.String(), blsKeyStr)
+	// }
 
 	return filteredValidators, nil
 }
