@@ -856,7 +856,7 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 		logArgs = append(logArgs, "generation_time_in_seconds", diff)
 	}
 
-	b.logger.Info("new block", logArgs...)
+	b.logger.Info("新区块写入", logArgs...)
 
 	return nil
 }
@@ -927,7 +927,7 @@ func (b *Blockchain) WriteBlock(block *types.Block, source string) error {
 		logArgs = append(logArgs, "generation_time_in_seconds", diff)
 	}
 
-	b.logger.Info("new block", logArgs...)
+	b.logger.Info("新区块写入", logArgs...)
 
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -67,12 +68,25 @@ func (t *Topic) Publish(obj proto.Message) error {
 		return fmt.Errorf("cannot publish nil message")
 	}
 
+	// 检查topic是否为空
+	if t.topic == nil {
+		return fmt.Errorf("cannot publish to nil topic")
+	}
+
 	data, err := proto.Marshal(obj)
 	if err != nil {
 		return err
 	}
 
 	metrics.SetGauge([]string{networkMetrics, "egress_bytes"}, float32(len(data)))
+
+	// 只对状态广播和签名相关的topic使用INFO级别日志
+	if t.topic.String() == "syncer/status/0.1" ||
+		strings.Contains(t.topic.String(), "dpos-signature") {
+		//t.logger.Info("gossip发布消息", "topic", t.topic.String(), "消息大小", len(data))
+	} else {
+		//t.logger.Debug("gossip发布消息", "topic", t.topic.String(), "消息大小", len(data))
+	}
 
 	return t.topic.Publish(context.Background(), data)
 }
@@ -126,6 +140,11 @@ func (t *Topic) readLoop(sub *pubsub.Subscription, handler func(obj interface{},
 			}
 
 			metrics.SetGauge([]string{networkMetrics, "ingress_bytes"}, float32(len(msg.Data)))
+
+			// 只对状态广播消息使用INFO级别日志，其他消息不记录
+			if t.topic != nil && t.topic.String() == "syncer/status/0.1" {
+				t.logger.Info("状态广播消息接收", "topic", t.topic.String(), "来源", msg.GetFrom().String(), "消息大小", len(msg.Data))
+			}
 
 			handler(obj, msg.GetFrom())
 		}()

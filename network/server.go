@@ -247,7 +247,8 @@ func (s *Server) Start() error {
 		return err
 	}
 
-	s.logger.Info("LibP2P server running", "addr", addr)
+	nodeID := s.host.ID().String()
+	s.logger.Info("LibP2P server running", "addr", addr, "节点ID", nodeID)
 
 	if setupErr := s.setupIdentity(); setupErr != nil {
 		return fmt.Errorf("unable to setup identity, %w", setupErr)

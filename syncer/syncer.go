@@ -50,7 +50,7 @@ func NewSyncer(
 		logger:          logger.Named(syncerName),
 		blockchain:      blockchain,
 		syncProgression: progress.NewProgressionWrapper(progress.ChainSyncBulk),
-		syncPeerService: NewSyncPeerService(network, blockchain),
+		syncPeerService: NewSyncPeerService(logger, network, blockchain),
 		syncPeerClient:  NewSyncPeerClient(logger, network, blockchain),
 		blockTimeout:    blockTimeout,
 		newStatusCh:     make(chan struct{}),
@@ -95,8 +95,22 @@ func (s *syncer) initializePeerMap() {
 
 // startPeerStatusUpdateProcess subscribes peer status change event and updates peer map
 func (s *syncer) startPeerStatusUpdateProcess() {
+	processedCount := 0
+	lastLogTime := time.Now()
+
 	for peerStatus := range s.syncPeerClient.GetPeerStatusUpdateCh() {
 		s.putToPeerMap(peerStatus)
+
+		// 监控处理速度
+		processedCount++
+		if time.Since(lastLogTime) > 10*time.Second {
+			s.logger.Info("状态更新处理统计",
+				"处理数量", processedCount,
+				"时间间隔", time.Since(lastLogTime),
+				"处理速率", float64(processedCount)/time.Since(lastLogTime).Seconds())
+			processedCount = 0
+			lastLogTime = time.Now()
+		}
 	}
 }
 
@@ -107,8 +121,10 @@ func (s *syncer) startPeerConnectionEventProcess() {
 
 		switch e.Type {
 		case event.PeerConnected:
+			s.logger.Info("节点连接", "peer", peerID.String())
 			go s.initNewPeerStatus(peerID)
 		case event.PeerDisconnected:
+			s.logger.Info("节点断开", "peer", peerID.String())
 			s.removeFromPeerMap(peerID)
 		}
 	}
@@ -211,11 +227,14 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 // bulkSyncWithPeer syncs block with a given peer
 func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 	newBlockCallback func(*types.FullBlock) bool) (uint64, bool, error) {
+	s.logger.Info("开始区块同步", "peer", peerID.String(), "目标高度", peerLatestBlock)
+
 	localLatest := s.blockchain.Header().Number
 	shouldTerminate := false
 
 	blockCh, err := s.syncPeerClient.GetBlocks(peerID, localLatest+1, s.blockTimeout)
 	if err != nil {
+		s.logger.Error("获取区块流失败", "peer", peerID.String()[:8], "error", err)
 		return 0, false, err
 	}
 
@@ -236,11 +255,13 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 	}()
 
 	var lastReceivedNumber uint64
+	var blockCount int
 
 	for {
 		select {
 		case block, ok := <-blockCh:
 			if !ok {
+				s.logger.Info("区块同步完成", "peer", peerID.String(), "同步区块数", blockCount)
 				return lastReceivedNumber, shouldTerminate, nil
 			}
 
@@ -249,16 +270,22 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				continue
 			}
 
+			blockCount++
+			// 只在每10个区块或关键节点记录日志
+			if blockCount%10 == 0 || block.Number()%100 == 0 {
+				s.logger.Info("区块同步进度", "peer", peerID.String(), "当前区块", block.Number(), "已同步", blockCount)
+			}
+
 			fullBlock, err := s.blockchain.VerifyFinalizedBlock(block)
 			if err != nil {
 				metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
-
+				s.logger.Error("区块验证失败", "peer", peerID.String()[:8], "区块号", block.Number(), "error", err)
 				return lastReceivedNumber, false, fmt.Errorf("unable to verify block, %w", err)
 			}
 
 			if err := s.blockchain.WriteFullBlock(fullBlock, syncerName); err != nil {
 				metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
-
+				s.logger.Error("区块写入失败", "peer", peerID.String()[:8], "区块号", block.Number(), "error", err)
 				return lastReceivedNumber, false, fmt.Errorf("failed to write block while bulk syncing: %w", err)
 			}
 

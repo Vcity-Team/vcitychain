@@ -143,6 +143,18 @@ type dposRuntime struct {
 
 	// 锁
 	lock sync.RWMutex
+
+	// 签名请求去重机制 - 避免日志刷屏
+	processedSignatureRequests map[string]time.Time
+	signatureRequestDedupMutex sync.RWMutex
+
+	// 签名响应广播去重机制 - 避免日志刷屏
+	processedSignatureResponses map[string]time.Time
+	signatureResponseDedupMutex sync.RWMutex
+
+	// 签名响应生成去重机制 - 避免日志刷屏
+	processedSignatureGenerations map[string]time.Time
+	signatureGenerationDedupMutex sync.RWMutex
 }
 
 func (r *dposRuntime) start() error {
@@ -164,6 +176,7 @@ func (r *dposRuntime) start() error {
 	}
 
 	// 启动持久的签名请求监听器 - 确保所有节点都能接收到广播的签名请求
+	r.logger.Info("准备启动签名请求监听器")
 	go r.listenForSignatureRequests(context.Background())
 
 	r.logger.Info("DPoS runtime started successfully")
@@ -212,6 +225,15 @@ func (r *dposRuntime) initializeRuntime() error {
 
 	// 初始化签名请求存储
 	r.pendingSignatureRequests = make(map[types.Hash]*SignatureRequest)
+
+	// 初始化签名请求去重机制
+	r.processedSignatureRequests = make(map[string]time.Time)
+
+	// 初始化签名响应广播去重机制
+	r.processedSignatureResponses = make(map[string]time.Time)
+
+	// 初始化签名响应生成去重机制
+	r.processedSignatureGenerations = make(map[string]time.Time)
 
 	// 设置网络事件监听（如果网络服务可用）
 	if r.network != nil {
@@ -2574,6 +2596,7 @@ func (r *dposRuntime) broadcastSignatureRequest(block *types.FullBlock, checkpoi
 	}
 
 	// 发布签名请求
+	r.logger.Info("开始广播签名请求", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String())
 	if err := topic.Publish(protoRequest); err != nil {
 		r.logger.Warn("failed to publish signature request, using fallback", "error", err)
 		// 回退到日志记录
@@ -2583,6 +2606,8 @@ func (r *dposRuntime) broadcastSignatureRequest(block *types.FullBlock, checkpoi
 		//	"round", protoRequest.Round)
 		return nil
 	}
+
+	r.logger.Info("成功广播签名请求", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String())
 
 	//r.logger.Info("成功广播签名请求",
 	//	"blockNumber", protoRequest.BlockNumber,
@@ -2726,7 +2751,7 @@ func (r *dposRuntime) listenForSignatureResponses(ctx context.Context, listener 
 
 // listenForSignatureRequests 监听签名请求并生成响应
 func (r *dposRuntime) listenForSignatureRequests(ctx context.Context) {
-	r.logger.Info("开始监听签名请求")
+	r.logger.Info("开始监听签名请求", "节点地址", types.Address(r.config.Key.Address()).String())
 
 	// 检查网络服务是否可用
 	if r.network == nil {
@@ -2754,6 +2779,8 @@ func (r *dposRuntime) listenForSignatureRequests(ctx context.Context) {
 		r.logger.Debug("签名请求监听器停止（回退模式）")
 		return
 	}
+
+	r.logger.Info("成功订阅签名请求主题", "节点地址", types.Address(r.config.Key.Address()).String())
 
 	// 监听上下文取消
 	<-ctx.Done()
@@ -2791,27 +2818,77 @@ func (r *dposRuntime) handleSignatureRequestMessage(obj interface{}, from peer.I
 		Timestamp:      protoRequest.Timestamp,
 	}
 
-	//r.logger.Info("收到签名请求",
-	//	"from", from.String(),
-	//	"blockNumber", request.BlockNumber,
-	//	"checkpointHash", request.CheckpointHash.String(),
-	//	"proposer", request.Proposer.String())
+	// 检查是否已经处理过这个签名请求（去重机制）- 只用于日志去重，不影响实际处理
+	alreadyProcessed := r.isSignatureRequestProcessed(request.Proposer, request.CheckpointHash)
+
+	// 标记为已处理（无论是否重复，都要标记）
+	r.markSignatureRequestProcessed(request.Proposer, request.CheckpointHash)
+
+	// 如果是重复请求，只记录DEBUG日志，但仍然继续处理
+	if alreadyProcessed {
+		r.logger.Debug("跳过重复的签名请求日志",
+			"proposer", request.Proposer.String(),
+			"checkpointHash", request.CheckpointHash.String(),
+			"本地节点", types.Address(r.config.Key.Address()).String())
+		// 注意：这里不return，继续处理签名请求
+	}
+
+	// 获取当前区块高度
+	delegateCount := uint64(len(r.delegates))
+	if delegateCount == 0 {
+		// 如果委托者列表为空，使用默认值
+		delegateCount = 4 // 默认4个委托者
+	}
+	currentBlockNumber := r.backend.GetCurrentRound()*delegateCount + r.currentDelegateIndex
+
+	// 检查是否是过期请求（区块号差距过大）
+	if currentBlockNumber > request.BlockNumber+10 {
+		r.logger.Debug("忽略过期签名请求",
+			"from", from.String(),
+			"requestBlockNumber", request.BlockNumber,
+			"currentBlockNumber", currentBlockNumber,
+			"本地节点", types.Address(r.config.Key.Address()).String())
+		return
+	}
 
 	// 检查是否是自己的请求
 	if request.Proposer == types.Address(r.config.Key.Address()) {
-		r.logger.Debug("忽略自己的签名请求")
+		//r.logger.Info("忽略自己的签名请求", "本地节点", types.Address(r.config.Key.Address()).String())
 		return
 	}
 
 	// 检查自己是否是验证者
 	if !r.isValidator() {
-		r.logger.Debug("自己不是验证者，忽略签名请求")
+		r.logger.Info("自己不是验证者，忽略签名请求", "本地节点", types.Address(r.config.Key.Address()).String())
 		return
 	}
 
+	// 检查是否已经生成过这个签名响应（去重机制）
+	generateKey := fmt.Sprintf("generate-%s-%s", types.Address(r.config.Key.Address()).String(), request.CheckpointHash.String())
+	alreadyGenerated := r.isSignatureResponseGenerated(generateKey)
+
 	// 生成签名响应
+	if !alreadyGenerated {
+		// 记录收到签名请求（只记录一次）
+		//r.logger.Info("收到签名请求",
+		//	"from", from.String(),
+		//	"blockNumber", request.BlockNumber,
+		//	"checkpointHash", request.CheckpointHash.String(),
+		//	"proposer", request.Proposer.String(),
+		//	"本地节点", types.Address(r.config.Key.Address()).String())
+
+		//r.logger.Info("开始生成签名响应", "本地节点", types.Address(r.config.Key.Address()).String())
+	}
+
 	if err := r.generateSignatureResponse(request); err != nil {
 		r.logger.Error("failed to generate signature response", "error", err)
+	} else {
+		// 标记为已生成
+		r.markSignatureResponseGenerated(generateKey)
+
+		if !alreadyGenerated {
+			//r.logger.Info("成功生成签名响应", "本地节点", types.Address(r.config.Key.Address()).String())
+		}
 	}
 }
 
@@ -2933,18 +3010,6 @@ func (r *dposRuntime) generateSignatureResponse(request *SignatureRequest) error
 	}
 
 	// 获取签名响应主题
-	_, err2 := r.getSignatureResponseTopic()
-	if err2 != nil {
-		r.logger.Warn("failed to get signature response topic, using fallback", "error", err2)
-		// 回退到日志记录
-		r.logger.Info("生成签名响应（回退模式）",
-			"validator", types.Address(r.config.Key.Address()).String(),
-			"checkpointHash", request.CheckpointHash.String(),
-			"signatureLength", len(signatureBytes))
-		return nil
-	}
-
-	// 获取签名响应主题
 	topic, err := r.getSignatureResponseTopic()
 	if err != nil {
 		r.logger.Warn("failed to get signature response topic, using fallback", "error", err)
@@ -2956,7 +3021,26 @@ func (r *dposRuntime) generateSignatureResponse(request *SignatureRequest) error
 		return nil
 	}
 
+	// 检查topic是否为nil
+	if topic == nil {
+		r.logger.Warn("signature response topic is nil, using fallback")
+		// 回退到日志记录
+		r.logger.Info("生成签名响应（回退模式）",
+			"validator", types.Address(r.config.Key.Address()).String(),
+			"checkpointHash", request.CheckpointHash.String(),
+			"signatureLength", len(signatureBytes))
+		return nil
+	}
+
+	// 检查是否已经广播过这个签名响应（去重机制）
+	responseKey := fmt.Sprintf("response-%s-%s", types.Address(r.config.Key.Address()).String(), request.CheckpointHash.String())
+	alreadyBroadcasted := r.isSignatureResponseBroadcasted(responseKey)
+
 	// 发布签名响应
+	if !alreadyBroadcasted {
+		r.logger.Info("开始广播签名响应", "validator", types.Address(r.config.Key.Address()).String(), "checkpointHash", request.CheckpointHash.String())
+	}
+
 	if err := topic.Publish(protoResponse); err != nil {
 		r.logger.Warn("failed to publish signature response, using fallback", "error", err)
 		// 回退到日志记录
@@ -2965,6 +3049,13 @@ func (r *dposRuntime) generateSignatureResponse(request *SignatureRequest) error
 			"checkpointHash", request.CheckpointHash.String(),
 			"signatureLength", len(signatureBytes))
 		return nil
+	}
+
+	// 标记为已广播
+	r.markSignatureResponseBroadcasted(responseKey)
+
+	if !alreadyBroadcasted {
+		//r.logger.Info("成功广播签名响应", "validator", types.Address(r.config.Key.Address()).String(), "checkpointHash", request.CheckpointHash.String())
 	}
 
 	//r.logger.Info("成功生成并广播签名响应",
@@ -3153,6 +3244,7 @@ func (r *dposRuntime) subscribeToSignatureTopic(listener *SignatureListener) err
 
 // handleSignatureResponseMessage 处理签名响应消息
 func (r *dposRuntime) handleSignatureResponseMessage(obj interface{}, from peer.ID, listener *SignatureListener) {
+
 	protoResponse, ok := obj.(*proto.SignatureResponse)
 	if !ok {
 		r.logger.Warn("received invalid signature response message", "from", from.String())
@@ -3206,10 +3298,11 @@ func (r *dposRuntime) handleSignatureResponseMessage(obj interface{}, from peer.
 	// 发送到签名通道
 	select {
 	case listener.signatureCh <- response:
-		r.logger.Debug("received valid signature response",
+		r.logger.Info("成功接收签名响应",
 			"validator", response.ValidatorAddr.String(),
 			"from", from.String(),
-			"signatureLength", len(response.Signature))
+			"signatureLength", len(response.Signature),
+			"checkpointHash", response.CheckpointHash.String())
 	default:
 		r.logger.Warn("signature channel is full, dropping response",
 			"validator", response.ValidatorAddr.String())
@@ -3334,6 +3427,110 @@ func (r *dposRuntime) validateSignatureResponse(response *SignatureResponse) err
 type SignatureQueryRequest struct {
 	RequesterAddr types.Address `json:"requesterAddr"`
 	Timestamp     uint64        `json:"timestamp"`
+}
+
+// isSignatureRequestProcessed 检查签名请求是否已经处理过（去重机制）
+func (r *dposRuntime) isSignatureRequestProcessed(proposer types.Address, checkpointHash types.Hash) bool {
+	r.signatureRequestDedupMutex.RLock()
+	defer r.signatureRequestDedupMutex.RUnlock()
+
+	key := fmt.Sprintf("%s-%s", proposer.String(), checkpointHash.String())
+	lastProcessed, exists := r.processedSignatureRequests[key]
+
+	if !exists {
+		return false
+	}
+
+	// 如果超过5分钟，认为可以重新处理（避免内存泄漏）
+	if time.Since(lastProcessed) > 5*time.Minute {
+		return false
+	}
+
+	return true
+}
+
+// markSignatureRequestProcessed 标记签名请求已处理
+func (r *dposRuntime) markSignatureRequestProcessed(proposer types.Address, checkpointHash types.Hash) {
+	r.signatureRequestDedupMutex.Lock()
+	defer r.signatureRequestDedupMutex.Unlock()
+
+	key := fmt.Sprintf("%s-%s", proposer.String(), checkpointHash.String())
+	r.processedSignatureRequests[key] = time.Now()
+
+	// 清理过期的记录（超过10分钟）
+	for k, v := range r.processedSignatureRequests {
+		if time.Since(v) > 10*time.Minute {
+			delete(r.processedSignatureRequests, k)
+		}
+	}
+}
+
+// isSignatureResponseBroadcasted 检查签名响应是否已经广播过（去重机制）
+func (r *dposRuntime) isSignatureResponseBroadcasted(responseKey string) bool {
+	r.signatureResponseDedupMutex.RLock()
+	defer r.signatureResponseDedupMutex.RUnlock()
+
+	lastProcessed, exists := r.processedSignatureResponses[responseKey]
+
+	if !exists {
+		return false
+	}
+
+	// 如果超过5分钟，认为可以重新广播
+	if time.Since(lastProcessed) > 5*time.Minute {
+		return false
+	}
+
+	return true
+}
+
+// markSignatureResponseBroadcasted 标记签名响应已广播
+func (r *dposRuntime) markSignatureResponseBroadcasted(responseKey string) {
+	r.signatureResponseDedupMutex.Lock()
+	defer r.signatureResponseDedupMutex.Unlock()
+
+	r.processedSignatureResponses[responseKey] = time.Now()
+
+	// 清理过期的记录（超过10分钟）
+	for k, v := range r.processedSignatureResponses {
+		if time.Since(v) > 10*time.Minute {
+			delete(r.processedSignatureResponses, k)
+		}
+	}
+}
+
+// isSignatureResponseGenerated 检查签名响应是否已经生成过（去重机制）
+func (r *dposRuntime) isSignatureResponseGenerated(generateKey string) bool {
+	r.signatureGenerationDedupMutex.RLock()
+	defer r.signatureGenerationDedupMutex.RUnlock()
+
+	lastProcessed, exists := r.processedSignatureGenerations[generateKey]
+
+	if !exists {
+		return false
+	}
+
+	// 如果超过5分钟，认为可以重新生成
+	if time.Since(lastProcessed) > 5*time.Minute {
+		return false
+	}
+
+	return true
+}
+
+// markSignatureResponseGenerated 标记签名响应已生成
+func (r *dposRuntime) markSignatureResponseGenerated(generateKey string) {
+	r.signatureGenerationDedupMutex.Lock()
+	defer r.signatureGenerationDedupMutex.Unlock()
+
+	r.processedSignatureGenerations[generateKey] = time.Now()
+
+	// 清理过期的记录（超过10分钟）
+	for k, v := range r.processedSignatureGenerations {
+		if time.Since(v) > 10*time.Minute {
+			delete(r.processedSignatureGenerations, k)
+		}
+	}
 }
 
 // debugPendingSignatureRequests 调试方法：检查待处理的签名请求

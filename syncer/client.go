@@ -43,6 +43,11 @@ type syncPeerClient struct {
 
 	peerStatusUpdateChLock   sync.Mutex
 	peerStatusUpdateChClosed bool
+
+	// 智能日志控制字段
+	lastStatusLogTime time.Time
+	statusUpdateCount int
+	statusLogMutex    sync.Mutex
 }
 
 func NewSyncPeerClient(
@@ -50,18 +55,28 @@ func NewSyncPeerClient(
 	network Network,
 	blockchain Blockchain,
 ) SyncPeerClient {
+	nodeID := network.AddrInfo().ID.String()
+
+	// 记录节点ID信息
+	logger.Info("创建同步客户端", "节点ID", nodeID)
+
 	return &syncPeerClient{
 		logger:                 logger.Named(SyncPeerClientLoggerName),
 		network:                network,
 		blockchain:             blockchain,
-		id:                     network.AddrInfo().ID.String(),
-		peerStatusUpdateCh:     make(chan *NoForkPeer, 1),
-		peerConnectionUpdateCh: make(chan *event.PeerEvent, 1),
+		id:                     nodeID,
+		peerStatusUpdateCh:     make(chan *NoForkPeer, 100),     // 增加缓冲区大小避免阻塞
+		peerConnectionUpdateCh: make(chan *event.PeerEvent, 50), // 增加缓冲区大小避免阻塞
 		shouldEmitBlocks:       true,
 		closeCh:                make(chan struct{}),
 
 		peerStatusUpdateChLock:   sync.Mutex{},
 		peerStatusUpdateChClosed: false,
+
+		// 初始化智能日志控制字段
+		lastStatusLogTime: time.Now(),
+		statusUpdateCount: 0,
+		statusLogMutex:    sync.Mutex{},
 	}
 }
 
@@ -190,16 +205,25 @@ func (m *syncPeerClient) GetPeerConnectionUpdateEventCh() <-chan *event.PeerEven
 
 // startGossip creates new topic and starts subscribing
 func (m *syncPeerClient) startGossip() error {
+	m.logger.Info("启动gossip", "节点ID", m.id, "topic", statusTopicName)
+
+	// 记录当前连接的节点数量
+	peers := m.network.Peers()
+	m.logger.Info("当前连接节点数量", "节点ID", m.id, "连接数", len(peers))
+
 	topic, err := m.network.NewTopic(statusTopicName, &proto.SyncPeerStatus{})
 	if err != nil {
+		m.logger.Error("创建gossip topic失败", "节点ID", m.id, "error", err)
 		return err
 	}
 
 	if err := topic.Subscribe(m.handleStatusUpdate); err != nil {
+		m.logger.Error("订阅gossip topic失败", "节点ID", m.id, "error", err)
 		return fmt.Errorf("unable to subscribe to gossip topic, %w", err)
 	}
 
 	m.topic = topic
+	m.logger.Info("gossip启动成功", "节点ID", m.id, "topic", statusTopicName)
 
 	return nil
 }
@@ -213,28 +237,74 @@ func (m *syncPeerClient) handleStatusUpdate(obj interface{}, from peer.ID) {
 		return
 	}
 
+	// 记录接收到状态更新
+	m.logger.Info("接收到状态更新", "来源节点", from.String(), "区块高度", status.Number, "本地节点", m.id)
+
+	// 检查网络连接状态
 	if !m.network.IsConnected(from) {
 		if m.id != from.String() {
-			m.logger.Debug("received status from non-connected peer, ignore", "id", from)
+			m.logger.Warn("收到非连接节点的状态，忽略", "来源节点", from.String(), "本地节点", m.id)
 		}
 
 		return
 	}
 
+	// 记录连接状态确认
+	m.logger.Debug("确认网络连接", "来源节点", from.String(), "本地节点", m.id)
+
+	// 智能日志：每30秒或每10次更新记录一次汇总
+	m.statusLogMutex.Lock()
+	m.statusUpdateCount++
+	shouldLog := time.Since(m.lastStatusLogTime) > 30*time.Second || m.statusUpdateCount >= 10
+	if shouldLog {
+		m.logger.Info("状态更新汇总",
+			"更新次数", m.statusUpdateCount,
+			"时间间隔", time.Since(m.lastStatusLogTime),
+			"来源节点", from.String(),
+			"最新状态", status.Number,
+			"本地节点", m.id)
+		m.lastStatusLogTime = time.Now()
+		m.statusUpdateCount = 0
+	}
+	m.statusLogMutex.Unlock()
+
 	m.peerStatusUpdateChLock.Lock()
 	defer m.peerStatusUpdateChLock.Unlock()
 
+	// 监控channel长度，避免积压
+	channelLen := len(m.peerStatusUpdateCh)
+	if channelLen > 50 {
+		m.logger.Warn("peerStatusUpdateCh积压严重", "长度", channelLen, "来源节点", from.String())
+	}
+
 	if !m.peerStatusUpdateChClosed {
-		m.peerStatusUpdateCh <- &NoForkPeer{
+		// 使用非阻塞发送，避免阻塞gossip消息处理
+		select {
+		case m.peerStatusUpdateCh <- &NoForkPeer{
 			ID:       from,
 			Number:   status.Number,
 			Distance: m.network.GetPeerDistance(from),
+		}:
+			// 发送成功
+		case <-time.After(100 * time.Millisecond):
+			// 发送超时，记录警告但不阻塞
+			m.logger.Warn("发送状态更新超时，丢弃消息",
+				"来源节点", from.String(),
+				"区块高度", status.Number,
+				"channel长度", len(m.peerStatusUpdateCh))
+		default:
+			// 缓冲区满，丢弃消息
+			m.logger.Warn("peerStatusUpdateCh缓冲区满，丢弃状态更新",
+				"来源节点", from.String(),
+				"区块高度", status.Number)
 		}
 	}
 }
 
 // startNewBlockProcess starts blockchain event subscription
 func (m *syncPeerClient) startNewBlockProcess() {
+	m.logger.Info("启动区块事件监听", "节点ID", m.id, "shouldEmitBlocks", m.shouldEmitBlocks)
+
 	m.subscription = m.blockchain.SubscribeEvents()
 	eventCh := m.subscription.GetEventCh()
 
@@ -243,21 +313,35 @@ func (m *syncPeerClient) startNewBlockProcess() {
 
 		select {
 		case <-m.closeCh:
+			m.logger.Info("区块事件监听停止", "节点ID", m.id)
 			return
 		case event = <-eventCh:
 		}
 
+		m.logger.Debug("收到区块事件", "节点ID", m.id, "shouldEmitBlocks", m.shouldEmitBlocks, "NewChain长度", len(event.NewChain))
+
 		if !m.shouldEmitBlocks {
+			m.logger.Debug("跳过状态广播", "节点ID", m.id, "shouldEmitBlocks", m.shouldEmitBlocks)
 			continue
 		}
 
 		if l := len(event.NewChain); l > 0 {
 			latest := event.NewChain[l-1]
+
+			// 检查网络连接状态
+			peers := m.network.Peers()
+			m.logger.Info("准备广播状态", "区块高度", latest.Number, "节点ID", m.id, "连接节点数", len(peers))
+
+			// 记录状态广播开始
+			m.logger.Info("开始广播状态", "区块高度", latest.Number, "节点ID", m.id)
+
 			// Publish status
 			if err := m.topic.Publish(&proto.SyncPeerStatus{
 				Number: latest.Number,
 			}); err != nil {
-				m.logger.Warn("failed to publish status", "err", err)
+				m.logger.Error("状态广播失败", "区块高度", latest.Number, "错误", err)
+			} else {
+				m.logger.Info("状态广播成功", "区块高度", latest.Number, "节点ID", m.id)
 			}
 		}
 	}
@@ -281,7 +365,16 @@ func (m *syncPeerClient) startPeerEventProcess() {
 
 		case e := <-peerEventCh:
 			if e != nil && (e.Type == event.PeerConnected || e.Type == event.PeerDisconnected) {
-				m.peerConnectionUpdateCh <- e
+				// 使用非阻塞发送，避免阻塞网络事件处理
+				select {
+				case m.peerConnectionUpdateCh <- e:
+					// 发送成功
+				default:
+					// 缓冲区满，记录警告但不阻塞
+					m.logger.Warn("peerConnectionUpdateCh缓冲区满，丢弃连接事件",
+						"事件类型", e.Type,
+						"peer", e.PeerID.String())
+				}
 			}
 		}
 	}
@@ -298,8 +391,11 @@ func (m *syncPeerClient) GetBlocks(
 	from uint64,
 	timeoutPerBlock time.Duration,
 ) (<-chan *types.Block, error) {
+	m.logger.Info("请求区块", "peer", peerID.String(), "起始高度", from)
+
 	clt, err := m.newSyncPeerClient(peerID)
 	if err != nil {
+		m.logger.Error("创建同步客户端失败", "peer", peerID.String()[:8], "error", err)
 		return nil, fmt.Errorf("failed to create sync peer client: %w", err)
 	}
 
@@ -310,7 +406,7 @@ func (m *syncPeerClient) GetBlocks(
 	})
 	if err != nil {
 		cancel()
-
+		m.logger.Error("打开区块流失败", "peer", peerID.String()[:8], "error", err)
 		return nil, fmt.Errorf("failed to open GetBlocks stream: %w", err)
 	}
 
