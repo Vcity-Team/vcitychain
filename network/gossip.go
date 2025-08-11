@@ -20,7 +20,8 @@ const (
 	// subscribeOutputBufferSize is the size of subscribe output buffer in go-libp2p-pubsub
 	// we should have enough capacity of the queue
 	// because when queue is full, if the consumer does not read fast enough, new messages are dropped
-	subscribeOutputBufferSize = 1024
+	// 增加订阅输出缓冲区大小，防止消息丢失
+	subscribeOutputBufferSize = 8192
 )
 
 type Topic struct {
@@ -88,7 +89,27 @@ func (t *Topic) Publish(obj proto.Message) error {
 		//t.logger.Debug("gossip发布消息", "topic", t.topic.String(), "消息大小", len(data))
 	}
 
-	return t.topic.Publish(context.Background(), data)
+	// 添加网络状态监控
+	if err := t.topic.Publish(context.Background(), data); err != nil {
+		// 记录详细的网络错误信息
+		t.logger.Error("网络发布失败",
+			"topic", t.topic.String(),
+			"消息大小", len(data),
+			"错误", err)
+
+		// 检查是否是缓冲区满的错误
+		if strings.Contains(err.Error(), "buffer") ||
+			strings.Contains(err.Error(), "queue") ||
+			strings.Contains(err.Error(), "full") {
+			t.logger.Error("网络缓冲区已满，消息丢失",
+				"topic", t.topic.String(),
+				"建议增加缓冲区大小或检查网络负载")
+		}
+
+		return err
+	}
+
+	return nil
 }
 
 func (t *Topic) Subscribe(handler func(obj interface{}, from peer.ID)) error {

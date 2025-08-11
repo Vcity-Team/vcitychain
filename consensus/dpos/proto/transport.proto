@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package v1;
+package dpos;
 
 option go_package = "github.com/Vcity-Team/vcitychain/consensus/dpos/proto";
 

@@ -1,0 +1,72 @@
+version: '3.9'
+
+services:
+  ## RUN ROOTCHAIN
+  rootchain:
+    image: ghcr.io/0xpolygon/go-ethereum-console:latest
+    container_name: vcitychain-rootchain
+    command: [
+      "--dev",
+      "--dev.period", "2",
+      "--datadir", "/eth1data",
+      "--ipcpath", "/eth1data/geth.ipc",
+      "--http",
+      "--http.addr", "0.0.0.0",
+      "--http.vhosts", "*",
+      "--http.api", "eth,net,web3,debug",
+      "--ws",
+      "--ws.addr", "0.0.0.0"
+    ]
+    ports:
+      - '8545:8545'
+    volumes:
+      - eth1data:/eth1data
+    networks:
+      - vcitychain-docker
+    restart: unless-stopped
+
+  ## INITIALIZE GENESIS AND SECRETS, ETC.
+  init:
+    build:
+      context: ../../
+      dockerfile: Dockerfile
+    image: local/vcitychain
+    container_name: vcitychain-init
+    command: ["--help"]
+    depends_on:
+      rootchain:
+        condition: service_started
+    volumes:
+      - data:/data
+    networks:
+      - vcitychain-docker
+
+  ## TEST NODE
+  test-node:
+    build:
+      context: ../../
+      dockerfile: Dockerfile
+    image: local/vcitychain
+    container_name: vcitychain-test
+    command: ["--help"]
+    depends_on:
+      rootchain:
+        condition: service_started
+    ports:
+      - '10000:9632'
+      - '10002:8545'
+      - '10003:5001'
+    volumes:
+      - data:/data
+    networks:
+      - vcitychain-docker
+    restart: on-failure
+
+networks:
+  vcitychain-docker:
+    driver: bridge
+    name: vcitychain-docker
+
+volumes:
+  data:
+  eth1data:

@@ -4,7 +4,7 @@ services:
   ## RUN ROOTCHAIN
   rootchain:
     image: ghcr.io/0xpolygon/go-ethereum-console:latest
-    container_name: polygon-edge-rootchain
+    container_name: vcitychain-rootchain
     command: [
       "--dev",
       "--dev.period", "2",
@@ -22,29 +22,30 @@ services:
     volumes:
       - eth1data:/eth1data
     networks:
-      - polygon-edge-docker
+      - vcitychain-docker
+    restart: unless-stopped
 
   ## INITIALIZE GENESIS AND SECRETS, ETC.
   init:
     build:
       context: ../../
-      dockerfile: docker/local/Dockerfile
-    image: local/polygon-edge
-    container_name: polygon-edge-bootstrapper
-    command: [ "init", "${EDGE_CONSENSUS:-polybft}" ]
+      dockerfile: Dockerfile
+    image: local/vcitychain
+    container_name: vcitychain-bootstrapper
+    command: ["genesis", "--help"]
     depends_on:
       rootchain:
         condition: service_started
     volumes:
       - data:/data
     networks:
-      - polygon-edge-docker
+      - vcitychain-docker
 
   ## RUN NODES
   node-1:
-    image: local/polygon-edge
-    container_name: polygon-edge-validator-1
-    command: [ "start-node-1", "${EDGE_CONSENSUS:-polybft}" ]
+    image: local/vcitychain
+    container_name: vcitychain-validator-1
+    command: ["server", "--help"]
     depends_on:
       init:
         condition: service_completed_successfully
@@ -57,12 +58,12 @@ services:
     volumes:
       - data:/data
     networks:
-      - polygon-edge-docker
+      - vcitychain-docker
     restart: on-failure
 
   node-2:
-    image: local/polygon-edge
-    container_name: polygon-edge-validator-2
+    image: local/vcitychain
+    container_name: vcitychain-validator-2
     command: [
       "server",
       "--data-dir",
@@ -86,12 +87,12 @@ services:
     volumes:
       - data:/data
     networks:
-      - polygon-edge-docker
+      - vcitychain-docker
     restart: on-failure
 
   node-3:
-    image: local/polygon-edge
-    container_name: polygon-edge-validator-3
+    image: local/vcitychain
+    container_name: vcitychain-validator-3
     command: [
       "server",
       "--data-dir", "/data/data-3",
@@ -114,12 +115,12 @@ services:
     volumes:
       - data:/data
     networks:
-      - polygon-edge-docker
+      - vcitychain-docker
     restart: on-failure
 
   node-4:
-    image: local/polygon-edge
-    container_name: polygon-edge-validator-4
+    image: local/vcitychain
+    container_name: vcitychain-validator-4
     command: [
       "server",
       "--data-dir",  "/data/data-4",
@@ -142,13 +143,13 @@ services:
     volumes:
       - data:/data
     networks:
-      - polygon-edge-docker
+      - vcitychain-docker
     restart: on-failure
 
 networks:
-  polygon-edge-docker:
+  vcitychain-docker:
     driver: bridge
-    name: polygon-edge-docker
+    name: vcitychain-docker
 
 volumes:
   data:

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	ibftProto "github.com/0xPolygon/go-ibft/messages/proto"
-	// polybftProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
 
 	"github.com/Vcity-Team/vcitychain/bls"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/signer"
@@ -184,66 +183,55 @@ func (p *DPoS) handleDelegateMessage(msg *DelegateMessage, from peer.ID) error {
 
 // handleSignatureRequest 处理签名请求
 func (p *DPoS) handleSignatureRequest(request *SignatureRequest, from peer.ID) error {
-	p.logger.Debug("received signature request",
+	p.logger.Debug("收到签名请求",
+		"from", from.String(),
 		"blockNumber", request.BlockNumber,
-		"checkpointHash", request.CheckpointHash.String(),
-		"round", request.Round,
-		"proposer", request.Proposer.String(),
-		"from", from.String())
+		"checkpointHash", request.CheckpointHash.String())
 
-	// 1. 验证请求
+	// 验证请求
 	if err := p.validateSignatureRequest(request); err != nil {
-		p.logger.Warn("invalid signature request", "error", err)
+		p.logger.Warn("签名请求验证失败", "error", err, "from", from.String())
 		return err
 	}
 
-	// 2. 检查自己是否为验证者
+	// 检查是否为当前验证者
 	if !p.isActiveValidator() {
-		p.logger.Debug("not an active validator, ignoring signature request")
+		p.logger.Debug("非活跃验证者，跳过签名请求", "from", from.String())
 		return nil
 	}
 
-	// 3. 生成签名
-	signature, err := p.generateSignatureForCheckpoint(request.CheckpointHash)
-	if err != nil {
-		p.logger.Error("failed to generate signature", "error", err)
+	// 生成签名响应
+	if err := p.generateSignatureResponse(request); err != nil {
+		p.logger.Error("生成签名响应失败", "error", err, "from", from.String())
 		return err
 	}
 
-	// 4. 发送签名响应
-	response := &SignatureResponse{
-		ValidatorAddr:  types.Address(p.key.Address()),
-		Signature:      signature,
-		CheckpointHash: request.CheckpointHash,
-		Timestamp:      uint64(time.Now().Unix()),
-	}
-
-	return p.broadcastSignatureResponse(response)
+	return nil
 }
 
 // handleSignatureResponse 处理签名响应
 func (p *DPoS) handleSignatureResponse(response *SignatureResponse, from peer.ID) error {
-	p.logger.Debug("received signature response",
+	p.logger.Debug("收到签名响应",
+		"from", from.String(),
 		"validator", response.ValidatorAddr.String(),
-		"signatureLength", len(response.Signature),
-		"checkpointHash", response.CheckpointHash.String(),
-		"from", from.String())
+		"checkpointHash", response.CheckpointHash.String())
 
-	// 1. 验证响应
+	// 验证响应
 	if err := p.validateSignatureResponse(response); err != nil {
-		p.logger.Warn("invalid signature response", "error", err)
+		p.logger.Warn("签名响应验证失败", "error", err, "from", from.String())
 		return err
 	}
 
-	// 2. 验证签名
+	// 验证签名
 	if err := p.verifySignatureResponse(response); err != nil {
-		p.logger.Warn("signature verification failed", "error", err)
+		p.logger.Warn("签名验证失败", "error", err, "from", from.String())
 		return err
 	}
 
-	// 3. 转发给当前提议者（如果自己不是提议者）
-	if !p.isCurrentProposer() {
-		return p.forwardSignatureResponse(response)
+	// 转发签名响应
+	if err := p.forwardSignatureResponse(response); err != nil {
+		p.logger.Error("转发签名响应失败", "error", err, "from", from.String())
+		return err
 	}
 
 	return nil
@@ -313,33 +301,26 @@ func (p *DPoS) validateDelegateMessage(msg *DelegateMessage) error {
 
 // validateSignatureRequest 验证签名请求
 func (p *DPoS) validateSignatureRequest(request *SignatureRequest) error {
-	// 1. 检查基本字段
+	if request == nil {
+		return errors.New("签名请求为空")
+	}
+
 	if request.BlockNumber == 0 {
-		return errors.New("invalid block number")
-	}
-	if request.CheckpointHash == types.ZeroHash {
-		return errors.New("invalid checkpoint hash")
-	}
-	if request.Proposer == types.ZeroAddress {
-		return errors.New("invalid proposer address")
+		return errors.New("区块高度无效")
 	}
 
-	// 2. 检查时间戳
+	if request.CheckpointHash == (types.Hash{}) {
+		return errors.New("检查点哈希无效")
+	}
+
+	if request.Proposer == (types.Address{}) {
+		return errors.New("提议者地址无效")
+	}
+
+	// 检查时间戳，防止重放攻击
 	now := uint64(time.Now().Unix())
-	if request.Timestamp < now-300 || request.Timestamp > now+60 {
-		return errors.New("request timestamp out of range")
-	}
-
-	// 3. 检查提议者是否为有效验证者
-	isValidValidator := false
-	for _, delegate := range p.delegates {
-		if delegate.Address == request.Proposer {
-			isValidValidator = true
-			break
-		}
-	}
-	if !isValidValidator {
-		return errors.New("proposer is not a valid validator")
+	if request.Timestamp > now+60 || request.Timestamp < now-300 {
+		return fmt.Errorf("时间戳无效: %d, 当前时间: %d", request.Timestamp, now)
 	}
 
 	return nil
@@ -347,33 +328,26 @@ func (p *DPoS) validateSignatureRequest(request *SignatureRequest) error {
 
 // validateSignatureResponse 验证签名响应
 func (p *DPoS) validateSignatureResponse(response *SignatureResponse) error {
-	// 1. 检查基本字段
-	if response.ValidatorAddr == types.ZeroAddress {
-		return errors.New("invalid validator address")
+	if response == nil {
+		return errors.New("签名响应为空")
 	}
+
+	if response.ValidatorAddr == (types.Address{}) {
+		return errors.New("验证者地址无效")
+	}
+
 	if len(response.Signature) == 0 {
-		return errors.New("empty signature")
-	}
-	if response.CheckpointHash == types.ZeroHash {
-		return errors.New("invalid checkpoint hash")
+		return errors.New("签名为空")
 	}
 
-	// 2. 检查时间戳
+	if response.CheckpointHash == (types.Hash{}) {
+		return errors.New("检查点哈希无效")
+	}
+
+	// 检查时间戳，防止重放攻击
 	now := uint64(time.Now().Unix())
-	if response.Timestamp < now-300 || response.Timestamp > now+60 {
-		return errors.New("response timestamp out of range")
-	}
-
-	// 3. 检查验证者是否为有效验证者
-	isValidValidator := false
-	for _, delegate := range p.delegates {
-		if delegate.Address == response.ValidatorAddr {
-			isValidValidator = true
-			break
-		}
-	}
-	if !isValidValidator {
-		return errors.New("validator is not a valid delegate")
+	if response.Timestamp > now+60 || response.Timestamp < now-300 {
+		return fmt.Errorf("时间戳无效: %d, 当前时间: %d", response.Timestamp, now)
 	}
 
 	return nil
@@ -440,24 +414,147 @@ func (p *DPoS) verifySignatureResponse(response *SignatureResponse) error {
 	return nil
 }
 
+// generateSignatureResponse 生成签名响应
+func (p *DPoS) generateSignatureResponse(request *SignatureRequest) error {
+	// 检查是否已经处理过该请求
+	if p.runtime.isSignatureRequestProcessed(request.Proposer, request.CheckpointHash) {
+		p.logger.Debug("签名请求已处理，跳过",
+			"proposer", request.Proposer.String(),
+			"checkpointHash", request.CheckpointHash.String())
+		return nil
+	}
+
+	// 生成BLS私钥
+	blsPrivateKey, err := p.getBLSPrivateKey()
+	if err != nil {
+		return fmt.Errorf("获取BLS私钥失败: %w", err)
+	}
+
+	// 生成签名
+	signature, err := blsPrivateKey.Sign(request.CheckpointHash.Bytes(), nil)
+	if err != nil {
+		return fmt.Errorf("生成BLS签名失败: %w", err)
+	}
+
+	// 序列化签名
+	signatureBytes, err := signature.Marshal()
+	if err != nil {
+		return fmt.Errorf("序列化BLS签名失败: %w", err)
+	}
+
+	// 创建签名响应
+	response := &SignatureResponse{
+		ValidatorAddr:  types.Address(p.key.Address()),
+		Signature:      signatureBytes,
+		CheckpointHash: request.CheckpointHash,
+		Timestamp:      uint64(time.Now().Unix()),
+	}
+
+	// 标记请求已处理
+	p.runtime.markSignatureRequestProcessed(request.Proposer, request.CheckpointHash)
+
+	// 广播签名响应
+	if err := p.broadcastSignatureResponse(response); err != nil {
+		return fmt.Errorf("广播签名响应失败: %w", err)
+	}
+
+	p.logger.Info("生成并广播签名响应",
+		"proposer", request.Proposer.String(),
+		"checkpointHash", request.CheckpointHash.String(),
+		"signatureLength", len(signatureBytes))
+
+	return nil
+}
+
 // broadcastSignatureResponse 广播签名响应
 func (p *DPoS) broadcastSignatureResponse(response *SignatureResponse) error {
-	// 广播到网络
-	if p.consensusTopic != nil {
-		// 这里应该使用实际的网络广播机制
-		p.logger.Info("broadcasting signature response",
+	// 检查是否已经广播过该响应
+	responseKey := fmt.Sprintf("%s_%s_%d",
+		response.ValidatorAddr.String(),
+		response.CheckpointHash.String(),
+		response.Timestamp)
+
+	if p.runtime.isSignatureResponseBroadcasted(responseKey) {
+		p.logger.Debug("签名响应已广播，跳过", "responseKey", responseKey)
+		return nil
+	}
+
+	// 标记响应已广播
+	p.runtime.markSignatureResponseBroadcasted(responseKey)
+
+	// 使用新的网络集成层发送 protobuf 格式的消息
+	if p.runtime.networkIntegration != nil {
+		if err := p.runtime.networkIntegration.BroadcastSignatureResponse(response); err != nil {
+			return fmt.Errorf("通过网络集成层广播签名响应失败: %w", err)
+		}
+		p.logger.Debug("通过网络集成层广播签名响应",
 			"validator", response.ValidatorAddr.String(),
-			"signatureLength", len(response.Signature))
+			"checkpointHash", response.CheckpointHash.String())
+		return nil
+	}
+
+	// 如果没有网络集成层，使用旧的 TransportMessage 格式（兼容性）
+	p.logger.Warn("网络集成层不可用，使用旧的 TransportMessage 格式")
+	msg := &TransportMessage{
+		Hash:        response.CheckpointHash.Bytes(),
+		Signature:   response.Signature,
+		From:        response.ValidatorAddr.String(),
+		EpochNumber: p.currentRound,
+	}
+
+	// 广播消息
+	if err := p.broadcastMessage(msg); err != nil {
+		return fmt.Errorf("广播消息失败: %w", err)
 	}
 
 	return nil
 }
 
-// forwardSignatureResponse 转发签名响应给提议者
+// forwardSignatureResponse 转发签名响应
 func (p *DPoS) forwardSignatureResponse(response *SignatureResponse) error {
-	// 在实际实现中，这里应该将签名响应转发给当前提议者
-	p.logger.Debug("forwarding signature response to proposer",
-		"validator", response.ValidatorAddr.String())
+	// 检查是否已经转发过该响应
+	responseKey := fmt.Sprintf("%s_%s_%d",
+		response.ValidatorAddr.String(),
+		response.CheckpointHash.String(),
+		response.Timestamp)
+
+	if p.runtime.isSignatureResponseBroadcasted(responseKey) {
+		p.logger.Debug("签名响应已转发，跳过", "responseKey", responseKey)
+		return nil
+	}
+
+	// 标记响应已转发
+	p.runtime.markSignatureResponseBroadcasted(responseKey)
+
+	// 使用新的网络集成层发送 protobuf 格式的消息
+	if p.runtime.networkIntegration != nil {
+		if err := p.runtime.networkIntegration.BroadcastSignatureResponse(response); err != nil {
+			return fmt.Errorf("通过网络集成层转发签名响应失败: %w", err)
+		}
+		p.logger.Debug("通过网络集成层转发签名响应",
+			"validator", response.ValidatorAddr.String(),
+			"checkpointHash", response.CheckpointHash.String())
+		return nil
+	}
+
+	// 如果没有网络集成层，使用旧的 TransportMessage 格式（兼容性）
+	p.logger.Warn("网络集成层不可用，使用旧的 TransportMessage 格式")
+	msg := &TransportMessage{
+		Hash:        response.CheckpointHash.Bytes(),
+		Signature:   response.Signature,
+		From:        response.ValidatorAddr.String(),
+		EpochNumber: p.currentRound,
+	}
+
+	// 广播消息
+	if err := p.broadcastMessage(msg); err != nil {
+		return fmt.Errorf("广播消息失败: %w", err)
+	}
+
+	p.logger.Debug("转发签名响应",
+		"validator", response.ValidatorAddr.String(),
+		"checkpointHash", response.CheckpointHash.String())
+
 	return nil
 }
 

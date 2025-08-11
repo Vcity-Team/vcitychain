@@ -1,0 +1,21 @@
+version: '3.9'
+
+services:
+  vcitychain:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vcitychain-simple
+    ports:
+      - "8545:8545"  # JSON-RPC HTTP
+      - "9632:9632"  # gRPC
+      - "1478:1478"  # LibP2P
+      - "5001:5001"  # Prometheus metrics
+    volumes:
+      - vcitychain-data:/data
+    command: ["--help"]
+    restart: unless-stopped
+
+volumes:
+  vcitychain-data:
+    driver: local

@@ -1,0 +1,33 @@
+version: '3.9'
+
+services:
+  vcitychain:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vcitychain-node
+    ports:
+      - "8545:8545"  # JSON-RPC HTTP
+      - "8546:8546"  # JSON-RPC WebSocket
+      - "9632:9632"  # gRPC
+      - "1478:1478"  # LibP2P
+      - "5001:5001"  # Prometheus metrics
+    volumes:
+      - vcitychain-data:/data
+      - ./config:/app/config:ro  # Mount config directory if needed
+    environment:
+      - CGO_ENABLED=1
+      - GOOS=linux
+    command: ["--help"]  # Default command, can be overridden
+    restart: unless-stopped
+    networks:
+      - vcitychain-network
+
+networks:
+  vcitychain-network:
+    driver: bridge
+    name: vcitychain-network
+
+volumes:
+  vcitychain-data:
+    driver: local

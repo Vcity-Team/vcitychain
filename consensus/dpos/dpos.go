@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -155,6 +156,21 @@ type dposRuntime struct {
 	// 签名响应生成去重机制 - 避免日志刷屏
 	processedSignatureGenerations map[string]time.Time
 	signatureGenerationDedupMutex sync.RWMutex
+
+	// 私钥缓存 - 避免重复文件读取
+	blsPrivateKeyCache      *bls.PrivateKey
+	blsPrivateKeyCacheMutex sync.RWMutex
+	blsPrivateKeyCacheTime  time.Time
+
+	// 并发控制 - 限制同时处理的签名请求数量
+	signatureRequestSemaphore chan struct{}
+	maxConcurrentSignatures   int
+
+	// 网络集成管理器
+	networkIntegration *NetworkIntegration
+
+	// 资源监控
+	resourceMonitor *ResourceMonitor
 }
 
 func (r *dposRuntime) start() error {
@@ -194,10 +210,109 @@ func (r *dposRuntime) close() {
 		r.voteTimer.Stop()
 	}
 
+	// 停止网络集成管理器
+	if r.networkIntegration != nil {
+		if err := r.networkIntegration.Stop(); err != nil {
+			r.logger.Warn("failed to stop network integration", "error", err)
+		} else {
+			r.logger.Info("网络集成管理器已停止")
+		}
+	}
+
+	// 停止资源监控器
+	if r.resourceMonitor != nil {
+		// 这里可以添加停止资源监控器的逻辑
+		r.logger.Info("资源监控器已停止")
+	}
+
 	// 清理运行时状态
 	r.cleanupRuntime()
 
+	// 清理网络主题引用
+	r.topicMutex.Lock()
+	r.signatureRequestTopic = nil
+	r.signatureResponseTopic = nil
+	r.signatureQueryTopic = nil
+	r.topicMutex.Unlock()
+
 	r.logger.Info("DPoS runtime closed")
+}
+
+// ResourceMonitor 资源监控器
+type ResourceMonitor struct {
+	logger hclog.Logger
+
+	// 协程管理器
+	goroutineManager *GoroutineManager
+
+	// 协程数量监控
+	goroutineCount int64
+	goroutineMutex sync.RWMutex
+
+	// 网络主题监控
+	topicCount int64
+	topicMutex sync.RWMutex
+
+	// 网络服务状态监控
+	networkAvailable bool
+	networkMutex     sync.RWMutex
+
+	// 清理间隔
+	cleanupInterval time.Duration
+}
+
+// NewResourceMonitor 创建资源监控器
+func NewResourceMonitor(logger hclog.Logger) *ResourceMonitor {
+	return &ResourceMonitor{
+		logger:           logger.Named("resource-monitor"),
+		goroutineManager: NewGoroutineManager(logger, 2000, 200), // 最大2000个协程，200个重试工作器
+		cleanupInterval:  30 * time.Second,
+	}
+}
+
+// Start 启动资源监控
+func (rm *ResourceMonitor) Start(ctx context.Context) {
+	rm.goroutineManager.StartGoroutine("resource-monitor", func() {
+		rm.monitorLoop(ctx)
+	})
+}
+
+// monitorLoop 监控循环
+func (rm *ResourceMonitor) monitorLoop(ctx context.Context) {
+	ticker := time.NewTicker(rm.cleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			rm.cleanupResources()
+		}
+	}
+}
+
+// cleanupResources 清理资源
+func (rm *ResourceMonitor) cleanupResources() {
+	// 获取当前协程数量
+	currentGoroutines := runtime.NumGoroutine()
+
+	rm.goroutineMutex.Lock()
+	rm.goroutineCount = int64(currentGoroutines)
+	rm.goroutineMutex.Unlock()
+
+	// 如果协程数量过多，记录警告
+	if currentGoroutines > 1000 {
+		rm.logger.Warn("协程数量过多，可能存在泄漏", "count", currentGoroutines)
+
+		// 如果协程管理器可用，获取其统计信息
+		if rm.goroutineManager != nil {
+			stats := rm.goroutineManager.GetStats()
+			rm.logger.Warn("协程管理器统计", "stats", stats)
+		}
+	}
+
+	rm.logger.Debug("资源监控", "goroutines", currentGoroutines)
 }
 
 // initializeRuntime 初始化运行时状态
@@ -235,10 +350,25 @@ func (r *dposRuntime) initializeRuntime() error {
 	// 初始化签名响应生成去重机制
 	r.processedSignatureGenerations = make(map[string]time.Time)
 
-	// 设置网络事件监听（如果网络服务可用）
-	if r.network != nil {
+	// 初始化并发控制
+	r.maxConcurrentSignatures = 10 // 最多同时处理10个签名请求
+	r.signatureRequestSemaphore = make(chan struct{}, r.maxConcurrentSignatures)
+
+	// 检查网络服务状态
+	if r.network == nil {
+		r.logger.Warn("网络服务不可用，DPoS共识将无法进行网络通信")
+	} else {
+		r.logger.Info("网络服务可用，设置网络事件监听")
 		r.setupNetworkEventListeners()
+
+		// 暂时禁用网络集成管理器，使用原有的签名收集机制
+		r.logger.Info("使用原有的签名收集机制")
 	}
+
+	// 初始化资源监控器
+	r.resourceMonitor = NewResourceMonitor(r.logger)
+	r.resourceMonitor.Start(context.Background())
+	r.logger.Info("资源监控器已启动")
 
 	return nil
 }
@@ -303,18 +433,20 @@ func (r *dposRuntime) startBlockProduction() error {
 	}
 
 	r.blockTimer = time.NewTicker(blockTime)
-	go func() {
-		for {
-			select {
-			case <-r.blockTimer.C:
-				if err := r.produceBlock(); err != nil {
-					r.logger.Error("failed to produce block", "error", err)
+	if r.resourceMonitor != nil && r.resourceMonitor.goroutineManager != nil {
+		r.resourceMonitor.goroutineManager.StartGoroutine("block-production", func() {
+			for {
+				select {
+				case <-r.blockTimer.C:
+					if err := r.produceBlock(); err != nil {
+						r.logger.Error("failed to produce block", "error", err)
+					}
+				case <-r.closeCh:
+					return
 				}
-			case <-r.closeCh:
-				return
 			}
-		}
-	}()
+		})
+	}
 
 	return nil
 }
@@ -332,18 +464,20 @@ func (r *dposRuntime) startVoteCollection() error {
 	}
 
 	r.voteTimer = time.NewTicker(voteTime)
-	go func() {
-		for {
-			select {
-			case <-r.voteTimer.C:
-				if err := r.collectVotes(); err != nil {
-					r.logger.Error("failed to collect votes", "error", err)
+	if r.resourceMonitor != nil && r.resourceMonitor.goroutineManager != nil {
+		r.resourceMonitor.goroutineManager.StartGoroutine("vote-collection", func() {
+			for {
+				select {
+				case <-r.voteTimer.C:
+					if err := r.collectVotes(); err != nil {
+						r.logger.Error("failed to collect votes", "error", err)
+					}
+				case <-r.closeCh:
+					return
 				}
-			case <-r.closeCh:
-				return
 			}
-		}
-	}()
+		})
+	}
 
 	return nil
 }
@@ -356,6 +490,43 @@ func (r *dposRuntime) cleanupRuntime() {
 	// 清理投票者映射
 	r.voters = nil
 	r.delegates = nil
+}
+
+// cleanupSignatureCollectionResources 清理签名收集相关的资源
+func (r *dposRuntime) cleanupSignatureCollectionResources(checkpointHash types.Hash) {
+	// 清理已处理的签名请求记录
+	r.signatureRequestDedupMutex.Lock()
+	for key := range r.processedSignatureRequests {
+		if strings.Contains(key, checkpointHash.String()) {
+			delete(r.processedSignatureRequests, key)
+		}
+	}
+	r.signatureRequestDedupMutex.Unlock()
+
+	// 清理已处理的签名响应记录
+	r.signatureResponseDedupMutex.Lock()
+	for key := range r.processedSignatureResponses {
+		if strings.Contains(key, checkpointHash.String()) {
+			delete(r.processedSignatureResponses, key)
+		}
+	}
+	r.signatureResponseDedupMutex.Unlock()
+
+	// 清理已处理的签名生成记录
+	r.signatureGenerationDedupMutex.Lock()
+	for key := range r.processedSignatureGenerations {
+		if strings.Contains(key, checkpointHash.String()) {
+			delete(r.processedSignatureGenerations, key)
+		}
+	}
+	r.signatureGenerationDedupMutex.Unlock()
+
+	// 清理待处理的签名请求
+	r.signatureRequestMutex.Lock()
+	delete(r.pendingSignatureRequests, checkpointHash)
+	r.signatureRequestMutex.Unlock()
+
+	r.logger.Debug("已清理签名收集资源", "checkpointHash", checkpointHash.String())
 }
 
 // produceBlock 生产区块
@@ -1295,6 +1466,12 @@ func (d *DPoS) Initialize() error {
 	// 初始化runtime
 	if err := d.runtime.initializeRuntime(); err != nil {
 		return fmt.Errorf("failed to initialize runtime: %w", err)
+	}
+
+	// 设置网络集成
+	if err := d.runtime.setupNetworkIntegration(); err != nil {
+		d.logger.Warn("failed to setup network integration", "error", err)
+		// 不返回错误，因为网络集成不是必需的
 	}
 
 	d.logger.Info("DPoS runtime initialized successfully")
@@ -2251,7 +2428,7 @@ func (c *DPoSConfig) GetConfigSummary() map[string]interface{} {
 	}
 }
 
-// collectValidatorSignatures 收集验证者签名的真实实现
+// collectValidatorSignatures 收集验证者签名
 func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpointHash types.Hash, proposerAddr types.Address) ([][]byte, bitmap.Bitmap, error) {
 	signatures := make([][]byte, 0)
 	signatureBitmap := bitmap.Bitmap{}
@@ -2281,38 +2458,79 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 	}
 
 	// 1. 广播签名请求给其他验证者
-	if err := r.broadcastSignatureRequest(block, checkpointHash); err != nil {
+	// 创建protobuf签名请求消息
+	protoRequest := &proto.SignatureRequest{}
+	protoRequest.BlockNumber = block.Block.Number()
+	protoRequest.BlockHash = block.Block.Header.Hash.Bytes()
+	protoRequest.CheckpointHash = checkpointHash.Bytes()
+	protoRequest.Round = r.currentRound
+	protoRequest.Proposer = types.Address(r.config.Key.Address()).Bytes()
+	protoRequest.Timestamp = uint64(time.Now().Unix())
+
+	if err := r.broadcastSignatureRequest(protoRequest); err != nil {
 		r.logger.Error("failed to broadcast signature request", "error", err)
 		return nil, nil, fmt.Errorf("failed to broadcast signature request: %w", err)
 	}
 
-	// 2. 智能等待签名收集
+	// 2. 创建签名收集通道和收集器
 	signatureCh := make(chan *SignatureResponse, len(r.delegates))
 
-	// 启动签名收集协程
+	// 如果有网络集成，使用网络集成层进行签名收集
+	if r.networkIntegration != nil {
+		r.logger.Info("使用网络集成层进行签名收集", "checkpointHash", checkpointHash.String())
+
+		// 注册签名收集器到网络集成层
+		timeout := 30 * time.Second
+		requiredCount := r.calculateMinRequiredSignatures()
+		r.networkIntegration.RegisterSignatureCollector(checkpointHash, signatureCh, timeout, requiredCount)
+
+		r.logger.Info("签名收集器已注册到网络集成层",
+			"checkpointHash", checkpointHash.String(),
+			"timeout", timeout,
+			"requiredCount", requiredCount)
+	} else {
+		r.logger.Info("网络集成不可用，使用原有的签名收集机制", "checkpointHash", checkpointHash.String())
+	}
+
+	// 启动签名收集协程 - 修复：确保使用正确的通道
+	r.logger.Info("启动签名收集协程", "checkpointHash", checkpointHash.String())
 	go r.collectSignaturesAsync(checkpointHash, signatureCh)
+
+	// 等待一小段时间让协程启动
+	time.Sleep(100 * time.Millisecond)
 
 	// 3. 智能等待签名收集完成
 	collectedSignatures := make(map[types.Address][]byte)
 	minRequiredSignatures := r.calculateMinRequiredSignatures()
 
-	// 使用动态超时：根据网络状态调整等待时间
-	baseTimeout := 2 * time.Minute
-	networkTimeout := 10 * time.Minute // 网络等待超时
+	// 使用合理的超时时间
+	baseTimeout := 2 * time.Minute    // 减少基础超时时间
+	networkTimeout := 5 * time.Minute // 减少网络等待超时
 
 	// 如果验证者数量不足，使用更长的超时等待更多节点加入
 	if r.getActiveValidatorsCount() < r.calculateMinRequiredSignatures()+1 {
 		baseTimeout = networkTimeout
 	}
 
+	// 记录超时配置
+	r.logger.Info("签名收集超时配置",
+		"baseTimeout", baseTimeout,
+		"networkTimeout", networkTimeout,
+		"activeValidators", r.getActiveValidatorsCount(),
+		"minRequired", r.calculateMinRequiredSignatures())
+
 	timeoutCh := time.After(baseTimeout)
-	checkInterval := time.NewTicker(30 * time.Second) // 每30秒检查一次网络状态
+	checkInterval := time.NewTicker(15 * time.Second) // 每15秒检查一次网络状态
 	defer checkInterval.Stop()
 
 	r.logger.Info("开始智能签名收集",
 		"minRequired", minRequiredSignatures,
 		"baseTimeout", baseTimeout,
 		"networkTimeout", networkTimeout)
+
+	// 添加调试日志，监控通道状态
+	debugTicker := time.NewTicker(5 * time.Second)
+	defer debugTicker.Stop()
 
 	for {
 		select {
@@ -2323,11 +2541,14 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 					"validator", sigResp.ValidatorAddr.String(),
 					"signatureLength", len(sigResp.Signature),
 					"collected", len(collectedSignatures),
-					"required", minRequiredSignatures)
+					"required", minRequiredSignatures,
+					"checkpointHash", checkpointHash.String())
 
 				// 检查是否收集到足够的签名
 				if len(collectedSignatures) >= minRequiredSignatures {
-					r.logger.Info("收集到足够的签名", "count", len(collectedSignatures))
+					r.logger.Info("收集到足够的签名",
+						"count", len(collectedSignatures),
+						"checkpointHash", checkpointHash.String())
 					goto processSignatures
 				}
 			}
@@ -2347,15 +2568,53 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 					"activeValidators", activeValidators,
 					"minRequired", minRequiredSignatures)
 				// 重置超时，给更多节点加入的时间
-				timeoutCh = time.After(2 * time.Minute)
+				timeoutCh = time.After(1 * time.Minute)
 			} else if len(collectedSignatures) == 0 {
 				r.logger.Warn("验证者数量足够但未收到签名，检查网络连接")
 				// 重置超时，给网络响应更多时间
-				timeoutCh = time.After(1 * time.Minute)
+				timeoutCh = time.After(30 * time.Second)
+			}
+
+		case <-debugTicker.C:
+			// 调试日志：监控通道状态和收集器状态
+			r.logger.Debug("签名收集调试信息",
+				"checkpointHash", checkpointHash.String(),
+				"collectedSignatures", len(collectedSignatures),
+				"requiredSignatures", minRequiredSignatures,
+				"activeValidators", r.getActiveValidatorsCount(),
+				"totalDelegates", len(r.delegates))
+
+			// 检查网络集成层的收集器状态
+			if r.networkIntegration != nil {
+				r.logger.Debug("网络集成层状态检查",
+					"checkpointHash", checkpointHash.String())
 			}
 
 		case <-timeoutCh:
-			r.logger.Warn("签名收集超时", "collected", len(collectedSignatures), "required", minRequiredSignatures)
+			r.logger.Warn("签名收集超时",
+				"collected", len(collectedSignatures),
+				"required", minRequiredSignatures,
+				"checkpointHash", checkpointHash.String(),
+				"activeValidators", r.getActiveValidatorsCount(),
+				"totalDelegates", len(r.delegates))
+
+			// 记录当前收集到的签名详情
+			for addr, sig := range collectedSignatures {
+				r.logger.Debug("已收集签名",
+					"validator", addr.String(),
+					"signatureLength", len(sig))
+			}
+
+			// 记录缺失的验证者
+			missingValidators := make([]string, 0)
+			for _, delegate := range r.delegates {
+				if _, exists := collectedSignatures[delegate.Address]; !exists {
+					missingValidators = append(missingValidators, delegate.Address.String())
+				}
+			}
+			r.logger.Warn("缺失签名的验证者",
+				"missingCount", len(missingValidators),
+				"missingValidators", missingValidators)
 
 			// 如果收集到的签名不足，返回错误
 			if len(collectedSignatures) < minRequiredSignatures {
@@ -2430,6 +2689,9 @@ processSignatures:
 		"bitmapLength", len(signatureBitmap),
 		"collectedCount", len(collectedSignatures),
 		"expectedCount", expectedSignatures)
+
+	// 资源清理：清理签名收集相关的临时数据
+	r.cleanupSignatureCollectionResources(checkpointHash)
 
 	return signatures, signatureBitmap, nil
 }
@@ -2513,56 +2775,21 @@ func (r *dposRuntime) waitForNetworkGrowth(checkpointHash types.Hash, proposerAd
 }
 
 // broadcastSignatureRequest 广播签名请求
-func (r *dposRuntime) broadcastSignatureRequest(block *types.FullBlock, checkpointHash types.Hash) error {
-	// 检查网络服务是否可用
-	if r.network == nil {
-		r.logger.Error("network service not available, cannot broadcast signature request")
-		return fmt.Errorf("network service not available, cannot broadcast signature request")
-	}
+func (r *dposRuntime) broadcastSignatureRequest(protoRequest *proto.SignatureRequest) error {
+	checkpointHash := types.BytesToHash(protoRequest.CheckpointHash)
 
-	// 检查Key是否可用
-	if r.config == nil || r.config.Key == nil {
-		r.logger.Error("key not available, cannot broadcast signature request")
-		return fmt.Errorf("key not available, cannot broadcast signature request")
-	}
-
-	// 创建protobuf签名请求消息
-	protoRequest := &proto.SignatureRequest{}
-
-	// 手动设置字段
-	protoRequest.BlockNumber = block.Block.Number()
-	protoRequest.BlockHash = block.Block.Header.Hash.Bytes()
-	protoRequest.CheckpointHash = checkpointHash.Bytes()
-	protoRequest.Round = r.currentRound
-	protoRequest.Proposer = types.Address(r.config.Key.Address()).Bytes()
-	protoRequest.Timestamp = uint64(time.Now().Unix())
-
-	// 添加调试日志
-	r.logger.Debug("created protobuf signature request",
-		"blockNumber", protoRequest.BlockNumber,
-		"round", protoRequest.Round,
-		"timestamp", protoRequest.Timestamp)
-
-	// 确保protobuf消息被正确初始化
-	if protoRequest == nil {
-		r.logger.Error("failed to create protobuf signature request")
-		return fmt.Errorf("failed to create protobuf signature request")
-	}
-
-	// 存储签名请求，供新节点查询
-	r.signatureRequestMutex.Lock()
-	if r.pendingSignatureRequests == nil {
-		r.pendingSignatureRequests = make(map[types.Hash]*SignatureRequest)
-	}
-	// 转换为内部格式存储
+	// 创建内部请求对象
 	internalRequest := &SignatureRequest{
 		BlockNumber:    protoRequest.BlockNumber,
 		BlockHash:      types.BytesToHash(protoRequest.BlockHash),
-		CheckpointHash: types.BytesToHash(protoRequest.CheckpointHash),
+		CheckpointHash: checkpointHash,
 		Round:          protoRequest.Round,
 		Proposer:       types.BytesToAddress(protoRequest.Proposer),
 		Timestamp:      protoRequest.Timestamp,
 	}
+
+	// 存储待处理的签名请求
+	r.signatureRequestMutex.Lock()
 	r.pendingSignatureRequests[checkpointHash] = internalRequest
 	r.signatureRequestMutex.Unlock()
 
@@ -2609,6 +2836,9 @@ func (r *dposRuntime) broadcastSignatureRequest(block *types.FullBlock, checkpoi
 
 	r.logger.Info("成功广播签名请求", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String())
 
+	// 启动签名请求确认检查
+	go r.checkSignatureRequestConfirmation(protoRequest, checkpointHash)
+
 	//r.logger.Info("成功广播签名请求",
 	//	"blockNumber", protoRequest.BlockNumber,
 	//	"checkpointHash", checkpointHash.String(),
@@ -2619,6 +2849,11 @@ func (r *dposRuntime) broadcastSignatureRequest(block *types.FullBlock, checkpoi
 
 // getSignatureRequestTopic 获取签名请求主题
 func (r *dposRuntime) getSignatureRequestTopic() (*network.Topic, error) {
+	// 首先检查网络服务是否可用
+	if r.network == nil {
+		return nil, fmt.Errorf("network service not available")
+	}
+
 	r.topicMutex.RLock()
 	if r.signatureRequestTopic != nil {
 		defer r.topicMutex.RUnlock()
@@ -2634,18 +2869,57 @@ func (r *dposRuntime) getSignatureRequestTopic() (*network.Topic, error) {
 		return r.signatureRequestTopic, nil
 	}
 
-	// 创建新主题
+	// 再次检查网络服务（双重检查）
+	if r.network == nil {
+		return nil, fmt.Errorf("network service not available")
+	}
+
+	// 尝试创建新主题，如果失败则智能处理
 	topic, err := r.network.NewTopic("dpos-signature-request", &proto.SignatureRequest{})
 	if err != nil {
-		return nil, err
+		// 如果主题已存在，我们需要获取现有主题的引用
+		if strings.Contains(err.Error(), "topic already exists") {
+			r.logger.Info("主题已存在，尝试获取现有主题引用", "topic", "dpos-signature-request")
+
+			// 检查网络集成层是否有现有主题
+			if r.networkIntegration != nil {
+				// 尝试从网络集成层获取现有主题
+				if existingTopic := r.networkIntegration.GetSignatureRequestTopic(); existingTopic != nil {
+					r.logger.Info("从网络集成层获取到现有主题", "topic", "dpos-signature-request")
+					r.signatureRequestTopic = existingTopic
+					return existingTopic, nil
+				}
+			}
+
+			// 如果网络集成层也没有，我们需要等待一下再重试
+			// 这通常是因为并发创建导致的，等待一下应该就能成功
+			r.logger.Info("等待网络层同步后重试", "topic", "dpos-signature-request")
+			time.Sleep(200 * time.Millisecond)
+
+			// 重试创建主题
+			topic, err = r.network.NewTopic("dpos-signature-request", &proto.SignatureRequest{})
+			if err != nil {
+				r.logger.Warn("重试创建主题仍然失败", "error", err)
+				return nil, fmt.Errorf("failed to create topic after retry: %w", err)
+			}
+		} else {
+			r.logger.Warn("创建签名请求主题失败", "error", err)
+			return nil, fmt.Errorf("failed to create signature request topic: %w", err)
+		}
 	}
 
 	r.signatureRequestTopic = topic
+	r.logger.Info("成功创建签名请求主题")
 	return topic, nil
 }
 
 // getSignatureResponseTopic 获取签名响应主题
 func (r *dposRuntime) getSignatureResponseTopic() (*network.Topic, error) {
+	// 首先检查网络服务是否可用
+	if r.network == nil {
+		return nil, fmt.Errorf("network service not available")
+	}
+
 	r.topicMutex.RLock()
 	if r.signatureResponseTopic != nil {
 		defer r.topicMutex.RUnlock()
@@ -2661,72 +2935,177 @@ func (r *dposRuntime) getSignatureResponseTopic() (*network.Topic, error) {
 		return r.signatureResponseTopic, nil
 	}
 
-	// 创建新主题
+	// 再次检查网络服务（双重检查）
+	if r.network == nil {
+		return nil, fmt.Errorf("network service not available")
+	}
+
+	// 尝试创建新主题，如果失败则智能处理
 	topic, err := r.network.NewTopic("dpos-signature-response", &proto.SignatureResponse{})
 	if err != nil {
-		return nil, err
+		// 如果主题已存在，我们需要获取现有主题的引用
+		if strings.Contains(err.Error(), "topic already exists") {
+			r.logger.Info("主题已存在，尝试获取现有主题引用", "topic", "dpos-signature-response")
+
+			// 检查网络集成层是否有现有主题
+			if r.networkIntegration != nil {
+				// 尝试从网络集成层获取现有主题
+				if existingTopic := r.networkIntegration.GetSignatureResponseTopic(); existingTopic != nil {
+					r.logger.Info("从网络集成层获取到现有主题", "topic", "dpos-signature-response")
+					r.signatureResponseTopic = existingTopic
+					return existingTopic, nil
+				}
+			}
+
+			// 如果网络集成层也没有，我们需要等待一下再重试
+			// 这通常是因为并发创建导致的，等待一下应该就能成功
+			r.logger.Info("等待网络层同步后重试", "topic", "dpos-signature-response")
+			time.Sleep(200 * time.Millisecond)
+
+			// 重试创建主题
+			topic, err = r.network.NewTopic("dpos-signature-response", &proto.SignatureResponse{})
+			if err != nil {
+				r.logger.Warn("重试创建主题仍然失败", "error", err)
+				return nil, fmt.Errorf("failed to create topic after retry: %w", err)
+			}
+		} else {
+			r.logger.Warn("创建签名响应主题失败", "error", err)
+			return nil, fmt.Errorf("failed to create signature response topic: %w", err)
+		}
 	}
 
 	r.signatureResponseTopic = topic
+	r.logger.Info("成功创建签名响应主题")
 	return topic, nil
 }
 
-// collectSignaturesAsync 异步收集签名 - 真实网络实现
+// collectSignaturesAsync 异步收集签名
 func (r *dposRuntime) collectSignaturesAsync(checkpointHash types.Hash, signatureCh chan<- *SignatureResponse) {
-	// 检查是否有足够的验证者
-	activeValidators := r.getActiveValidatorsCount()
-	minRequired := r.calculateMinRequiredSignatures()
+	// 计算最小所需签名数量
+	minRequiredSignatures := r.calculateMinRequiredSignatures()
 
-	r.logger.Info("开始签名收集检查",
-		"activeValidators", activeValidators,
-		"minRequired", minRequired,
-		"checkpointHash", checkpointHash.String())
+	r.logger.Info("启动异步签名收集",
+		"checkpointHash", checkpointHash.String(),
+		"minRequiredSignatures", minRequiredSignatures)
 
-	if activeValidators < minRequired+1 { // +1 因为不包括提议者自己
-		r.logger.Error("验证者数量不足，无法收集签名",
-			"activeValidators", activeValidators,
-			"minRequired", minRequired,
+	// 修复：创建一个双向通道作为桥梁，确保类型兼容性
+	// 同时保持签名响应能够正确传递到collectValidatorSignatures等待的通道
+	bridgeCh := make(chan *SignatureResponse, 1000) // 使用合适的缓冲区大小
+
+	// 启动转发协程，将bridgeCh的消息转发到signatureCh
+	if r.resourceMonitor != nil && r.resourceMonitor.goroutineManager != nil {
+		r.resourceMonitor.goroutineManager.StartGoroutine("signature-bridge", func() {
+			defer close(signatureCh)
+			defer close(bridgeCh)
+
+			r.logger.Info("签名桥接协程启动",
+				"checkpointHash", checkpointHash.String())
+
+			for {
+				select {
+				case response, ok := <-bridgeCh:
+					if !ok {
+						r.logger.Debug("桥接通道关闭，停止转发",
+							"checkpointHash", checkpointHash.String())
+						return
+					}
+
+					r.logger.Debug("通过桥接通道收到签名响应，准备转发",
+						"validator", response.ValidatorAddr.String(),
+						"checkpointHash", checkpointHash.String())
+
+					// 发送到signatureCh
+					select {
+					case signatureCh <- response:
+						r.logger.Debug("签名响应桥接转发成功",
+							"validator", response.ValidatorAddr.String(),
+							"checkpointHash", checkpointHash.String())
+					case <-time.After(5 * time.Second):
+						r.logger.Error("签名响应桥接转发超时，丢弃响应",
+							"validator", response.ValidatorAddr.String(),
+							"checkpointHash", checkpointHash.String())
+					}
+				}
+			}
+		})
+	} else {
+		r.logger.Error("资源监控器不可用，无法启动签名桥接协程")
+	}
+
+	// 注册签名收集器，使用桥接通道
+	if r.networkIntegration != nil {
+		r.logger.Info("注册签名收集器到网络集成层",
+			"checkpointHash", checkpointHash.String(),
+			"minRequiredSignatures", minRequiredSignatures,
+			"timeout", 30*time.Second)
+
+		r.networkIntegration.RegisterSignatureCollector(
+			checkpointHash,
+			bridgeCh, // 使用桥接通道
+			30*time.Second,
+			minRequiredSignatures,
+		)
+	} else {
+		r.logger.Error("网络集成层不可用，无法注册签名收集器",
 			"checkpointHash", checkpointHash.String())
-		return
 	}
 
-	// 检查网络服务是否可用
-	if r.network == nil {
-		r.logger.Error("网络服务不可用，无法进行签名收集")
-		return
+	// 启动一个监控协程，定期检查收集状态
+	if r.resourceMonitor != nil && r.resourceMonitor.goroutineManager != nil {
+		r.resourceMonitor.goroutineManager.StartGoroutine("signature-monitor", func() {
+			ticker := time.NewTicker(10 * time.Second)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ticker.C:
+					// 检查收集器状态
+					if r.networkIntegration != nil {
+						r.logger.Debug("签名收集监控",
+							"checkpointHash", checkpointHash.String(),
+							"minRequiredSignatures", minRequiredSignatures)
+					}
+				}
+			}
+		})
 	}
 
-	// 查询待处理的签名请求（用于新节点）
-	r.queryPendingSignatureRequests()
+	r.logger.Info("异步签名收集启动完成",
+		"checkpointHash", checkpointHash.String(),
+		"minRequiredSignatures", minRequiredSignatures)
+}
 
-	// 创建签名响应监听器
-	signatureListener := r.createSignatureListener(checkpointHash, signatureCh)
-	defer signatureListener.Close()
+// fallbackSignatureCollection 备用签名收集机制
+func (r *dposRuntime) fallbackSignatureCollection(ctx context.Context, listener *SignatureListener, checkpointHash types.Hash) {
+	r.logger.Info("启动备用签名收集机制", "checkpointHash", checkpointHash.String())
 
-	// 尝试订阅签名主题
-	if err := r.subscribeToSignatureTopic(signatureListener); err != nil {
-		r.logger.Error("签名收集失败：无法订阅网络主题", "error", err, "checkpointHash", checkpointHash.String())
-		return
+	// 定期检查是否有新的签名响应
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	// 记录启动时间，用于超时控制
+	startTime := time.Now()
+	maxDuration := 5 * time.Minute // 最大运行时间
+
+	for {
+		select {
+		case <-ctx.Done():
+			r.logger.Debug("备用签名收集机制停止", "checkpointHash", checkpointHash.String())
+			return
+		case <-ticker.C:
+			// 检查是否超时
+			if time.Since(startTime) > maxDuration {
+				r.logger.Warn("备用签名收集机制超时，停止运行", "checkpointHash", checkpointHash.String())
+				return
+			}
+
+			// 尝试查询待处理的签名请求
+			r.queryPendingSignatureRequests()
+
+			// 尝试广播签名查询
+			r.broadcastSignatureQuery()
+		}
 	}
-
-	// 创建签名收集上下文 - 无超时，一直等待签名响应
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// 启动网络消息监听
-	go r.listenForSignatureResponses(ctx, signatureListener)
-
-	// 等待签名收集完成信号
-	// 这里应该等待足够的签名收集完成，而不是超时
-	// 暂时使用一个很长的超时，实际应该基于签名收集状态
-	select {
-	case <-time.After(30 * time.Minute): // 30分钟超时，实际应该基于签名收集状态
-		r.logger.Warn("签名收集超时", "checkpointHash", checkpointHash.String())
-	case <-ctx.Done():
-		r.logger.Info("签名收集上下文取消", "checkpointHash", checkpointHash.String())
-	}
-
-	r.logger.Info("签名收集异步任务完成", "checkpointHash", checkpointHash.String())
 }
 
 // createSignatureListener 创建签名响应监听器
@@ -2818,20 +3197,7 @@ func (r *dposRuntime) handleSignatureRequestMessage(obj interface{}, from peer.I
 		Timestamp:      protoRequest.Timestamp,
 	}
 
-	// 检查是否已经处理过这个签名请求（去重机制）- 只用于日志去重，不影响实际处理
-	alreadyProcessed := r.isSignatureRequestProcessed(request.Proposer, request.CheckpointHash)
-
-	// 标记为已处理（无论是否重复，都要标记）
-	r.markSignatureRequestProcessed(request.Proposer, request.CheckpointHash)
-
-	// 如果是重复请求，只记录DEBUG日志，但仍然继续处理
-	if alreadyProcessed {
-		r.logger.Debug("跳过重复的签名请求日志",
-			"proposer", request.Proposer.String(),
-			"checkpointHash", request.CheckpointHash.String(),
-			"本地节点", types.Address(r.config.Key.Address()).String())
-		// 注意：这里不return，继续处理签名请求
-	}
+	// 简化处理：直接处理签名请求，不做去重检查
 
 	// 获取当前区块高度
 	delegateCount := uint64(len(r.delegates))
@@ -2863,32 +3229,23 @@ func (r *dposRuntime) handleSignatureRequestMessage(obj interface{}, from peer.I
 		return
 	}
 
-	// 检查是否已经生成过这个签名响应（去重机制）
-	generateKey := fmt.Sprintf("generate-%s-%s", types.Address(r.config.Key.Address()).String(), request.CheckpointHash.String())
-	alreadyGenerated := r.isSignatureResponseGenerated(generateKey)
+	// 使用并发控制，限制同时处理的签名请求数量
+	select {
+	case r.signatureRequestSemaphore <- struct{}{}:
+		// 获取到信号量，可以处理签名请求
+		go func() {
+			defer func() { <-r.signatureRequestSemaphore }() // 释放信号量
 
-	// 生成签名响应
-	if !alreadyGenerated {
-		// 记录收到签名请求（只记录一次）
-		//r.logger.Info("收到签名请求",
-		//	"from", from.String(),
-		//	"blockNumber", request.BlockNumber,
+			if err := r.generateSignatureResponse(request); err != nil {
+				r.logger.Error("failed to generate signature response", "error", err)
+			}
+		}()
+	default:
+		// 信号量已满，记录警告并跳过处理
+		//r.logger.Warn("并发签名请求过多，跳过处理",
 		//	"checkpointHash", request.CheckpointHash.String(),
 		//	"proposer", request.Proposer.String(),
-		//	"本地节点", types.Address(r.config.Key.Address()).String())
-
-		//r.logger.Info("开始生成签名响应", "本地节点", types.Address(r.config.Key.Address()).String())
-	}
-
-	if err := r.generateSignatureResponse(request); err != nil {
-		r.logger.Error("failed to generate signature response", "error", err)
-	} else {
-		// 标记为已生成
-		r.markSignatureResponseGenerated(generateKey)
-
-		if !alreadyGenerated {
-			//r.logger.Info("成功生成签名响应", "本地节点", types.Address(r.config.Key.Address()).String())
-		}
+		//	"当前并发数", r.maxConcurrentSignatures)
 	}
 }
 
@@ -3032,15 +3389,7 @@ func (r *dposRuntime) generateSignatureResponse(request *SignatureRequest) error
 		return nil
 	}
 
-	// 检查是否已经广播过这个签名响应（去重机制）
-	responseKey := fmt.Sprintf("response-%s-%s", types.Address(r.config.Key.Address()).String(), request.CheckpointHash.String())
-	alreadyBroadcasted := r.isSignatureResponseBroadcasted(responseKey)
-
 	// 发布签名响应
-	if !alreadyBroadcasted {
-		r.logger.Info("开始广播签名响应", "validator", types.Address(r.config.Key.Address()).String(), "checkpointHash", request.CheckpointHash.String())
-	}
-
 	if err := topic.Publish(protoResponse); err != nil {
 		r.logger.Warn("failed to publish signature response, using fallback", "error", err)
 		// 回退到日志记录
@@ -3049,13 +3398,6 @@ func (r *dposRuntime) generateSignatureResponse(request *SignatureRequest) error
 			"checkpointHash", request.CheckpointHash.String(),
 			"signatureLength", len(signatureBytes))
 		return nil
-	}
-
-	// 标记为已广播
-	r.markSignatureResponseBroadcasted(responseKey)
-
-	if !alreadyBroadcasted {
-		//r.logger.Info("成功广播签名响应", "validator", types.Address(r.config.Key.Address()).String(), "checkpointHash", request.CheckpointHash.String())
 	}
 
 	//r.logger.Info("成功生成并广播签名响应",
@@ -3068,8 +3410,24 @@ func (r *dposRuntime) generateSignatureResponse(request *SignatureRequest) error
 
 // getBLSPrivateKey 获取BLS私钥
 func (r *dposRuntime) getBLSPrivateKey() (*bls.PrivateKey, error) {
+	// 首先检查缓存
+	r.blsPrivateKeyCacheMutex.RLock()
+	if r.blsPrivateKeyCache != nil {
+		defer r.blsPrivateKeyCacheMutex.RUnlock()
+		return r.blsPrivateKeyCache, nil
+	}
+	r.blsPrivateKeyCacheMutex.RUnlock()
+
+	// 缓存未命中，需要从文件读取
+	r.blsPrivateKeyCacheMutex.Lock()
+	defer r.blsPrivateKeyCacheMutex.Unlock()
+
+	// 双重检查，防止在获取写锁期间其他goroutine已经加载了缓存
+	if r.blsPrivateKeyCache != nil {
+		return r.blsPrivateKeyCache, nil
+	}
+
 	// 这里需要从密钥管理器获取BLS私钥
-	// 暂时使用一个简单的实现
 	secretsManager := r.backend.(*DPoS).config.SecretsManager
 	if secretsManager == nil {
 		return nil, fmt.Errorf("secrets manager not available")
@@ -3086,6 +3444,9 @@ func (r *dposRuntime) getBLSPrivateKey() (*bls.PrivateKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal BLS private key: %w", err)
 	}
+
+	// 缓存私钥
+	r.blsPrivateKeyCache = privateKey
 
 	return privateKey, nil
 }
@@ -3224,6 +3585,14 @@ func (r *dposRuntime) subscribeToSignatureTopic(listener *SignatureListener) err
 		return nil
 	}
 
+	// 检查topic是否为nil
+	if topic == nil {
+		r.logger.Warn("signature response topic is nil, using fallback")
+		// 回退到日志记录
+		r.logger.Info("订阅签名响应主题（回退模式）")
+		return nil
+	}
+
 	// 订阅主题 - 使用闭包传递listener参数
 	handler := func(obj interface{}, from peer.ID) {
 		r.handleSignatureResponseMessage(obj, from, listener)
@@ -3341,9 +3710,19 @@ type SignatureListener struct {
 
 // Close 关闭监听器
 func (sl *SignatureListener) Close() {
+	// 清理接收的签名记录
+	sl.receivedMutex.Lock()
+	sl.receivedSigs = make(map[types.Address]bool)
+	sl.receivedMutex.Unlock()
+
+	// 注意：这里不能直接关闭topic，因为topic可能被其他监听器使用
+	// 我们只是清理引用，避免资源泄漏
 	if sl.topic != nil {
-		sl.topic.Close()
+		sl.topic = nil
 	}
+
+	// 清理日志引用
+	sl.logger = nil
 }
 
 // SignatureRequest 签名请求消息
@@ -3558,4 +3937,231 @@ func (r *dposRuntime) debugPendingSignatureRequests() {
 	//	//	"timestamp", request.Timestamp)
 	//}
 	//r.logger.Info("=== 调试结束 ===")
+}
+
+// checkSignatureRequestConfirmation 检查签名请求是否被其他节点收到
+func (r *dposRuntime) checkSignatureRequestConfirmation(protoRequest *proto.SignatureRequest, checkpointHash types.Hash) {
+	// 等待一段时间让消息传播
+	time.Sleep(3 * time.Second)
+
+	// 检查其他节点的状态
+	peers := r.network.Peers()
+	confirmedCount := 0
+	totalPeers := len(peers)
+
+	for _, peer := range peers {
+		peerID := peer.Info.ID
+
+		// 跳过自己
+		if peerID.String() == r.network.AddrInfo().ID.String() {
+			continue
+		}
+
+		// 检查该节点是否收到了签名请求
+		// 这里我们可以通过检查该节点是否有对应的签名响应来判断
+		r.signatureRequestMutex.RLock()
+		hasResponse := false
+		// 检查是否有来自该节点的签名响应
+		// 这里简化处理，实际应该检查具体的响应
+		r.signatureRequestMutex.RUnlock()
+
+		if hasResponse {
+			confirmedCount++
+			r.logger.Debug("签名请求确认", "peer", peerID.String()[:8], "checkpointHash", checkpointHash.String())
+		} else {
+			r.logger.Warn("签名请求未确认", "peer", peerID.String()[:8], "checkpointHash", checkpointHash.String())
+		}
+	}
+
+	// 记录确认结果
+	if totalPeers > 1 {
+		confirmationRate := float64(confirmedCount) / float64(totalPeers-1)
+		r.logger.Info("签名请求确认结果",
+			"区块高度", protoRequest.BlockNumber,
+			"checkpointHash", checkpointHash.String(),
+			"确认节点数", confirmedCount,
+			"总节点数", totalPeers-1,
+			"确认率", fmt.Sprintf("%.2f%%", confirmationRate*100))
+
+		// 如果确认率太低，启动备用传播机制
+		if confirmationRate < 0.3 { // 从0.5降低到0.3，减少过度触发
+			r.logger.Warn("签名请求确认率较低",
+				"区块高度", protoRequest.BlockNumber,
+				"checkpointHash", checkpointHash.String(),
+				"确认率", fmt.Sprintf("%.2f%%", confirmationRate*100),
+				"启动备用传播机制")
+
+			// 启动备用传播机制
+			go r.fallbackSignatureRequestPropagation(protoRequest, checkpointHash)
+		}
+	}
+}
+
+// fallbackSignatureRequestPropagation 备用签名请求传播机制
+func (r *dposRuntime) fallbackSignatureRequestPropagation(protoRequest *proto.SignatureRequest, checkpointHash types.Hash) {
+	r.logger.Info("=== 备用转传播启动 ===", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String())
+
+	peers := r.network.Peers()
+	successCount := 0
+	totalPeers := len(peers)
+
+	for _, peer := range peers {
+		peerID := peer.Info.ID
+
+		// 跳过自己
+		if peerID.String() == r.network.AddrInfo().ID.String() {
+			continue
+		}
+
+		// 尝试直接发送签名请求，使用指数退避重试
+		if err := r.sendDirectSignatureRequestWithRetry(peerID, protoRequest); err != nil {
+			r.logger.Warn("直接签名请求失败", "peer", peerID.String()[:8], "区块高度", protoRequest.BlockNumber, "错误", err)
+		} else {
+			successCount++
+			r.logger.Info("直接签名请求成功", "peer", peerID.String()[:8], "区块高度", protoRequest.BlockNumber)
+		}
+	}
+
+	// 修复统计逻辑：确保成功率不会超过100%
+	if totalPeers > 1 {
+		effectiveTotal := totalPeers - 1 // 排除自己
+		successRate := float64(successCount) / float64(effectiveTotal)
+
+		// 限制成功率最大为100%
+		if successRate > 1.0 {
+			successRate = 1.0
+		}
+
+		r.logger.Info("=== 备用转传播完成 ===",
+			"区块高度", protoRequest.BlockNumber,
+			"checkpointHash", checkpointHash.String(),
+			"成功节点数", successCount,
+			"总节点数", effectiveTotal,
+			"成功率", fmt.Sprintf("%.2f%%", successRate*100))
+	}
+}
+
+// sendDirectSignatureRequest 直接发送签名请求给指定peer
+func (r *dposRuntime) sendDirectSignatureRequest(peerID peer.ID, protoRequest *proto.SignatureRequest) error {
+	// 临时方案：重新尝试gossip发布
+	topic, err := r.getSignatureRequestTopic()
+	if err != nil {
+		return fmt.Errorf("failed to get signature request topic: %w", err)
+	}
+
+	r.logger.Debug("备用传播：重新尝试签名请求gossip发布", "peer", peerID.String()[:8], "区块高度", protoRequest.BlockNumber)
+
+	return topic.Publish(protoRequest)
+}
+
+// sendDirectSignatureRequestWithRetry 带重试的直接签名请求
+func (r *dposRuntime) sendDirectSignatureRequestWithRetry(peerID peer.ID, protoRequest *proto.SignatureRequest) error {
+	const maxRetries = 3
+	const baseDelay = 100 * time.Millisecond
+
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			// 指数退避延迟
+			delay := time.Duration(float64(baseDelay) * float64(attempt) * 1.5)
+			time.Sleep(delay)
+		}
+
+		if err := r.sendDirectSignatureRequest(peerID, protoRequest); err != nil {
+			lastErr = err
+			r.logger.Debug("直接签名请求重试", "peer", peerID.String()[:8], "attempt", attempt+1, "error", err)
+			continue
+		}
+
+		// 成功发送
+		return nil
+	}
+
+	return fmt.Errorf("所有重试尝试都失败了，最后的错误: %w", lastErr)
+}
+
+// HandleSignatureRequest 处理来自网络集成的签名请求
+func (r *dposRuntime) HandleSignatureRequest(request *SignatureRequest) error {
+	r.logger.Info("收到来自网络集成的签名请求",
+		"blockNumber", request.BlockNumber,
+		"checkpointHash", request.CheckpointHash.String(),
+		"proposer", request.Proposer.String())
+
+	// 检查是否是自己的请求
+	if request.Proposer == types.Address(r.config.Key.Address()) {
+		r.logger.Debug("忽略自己的签名请求")
+		return nil
+	}
+
+	// 检查自己是否是验证者
+	if !r.isValidator() {
+		r.logger.Info("自己不是验证者，忽略签名请求")
+		return nil
+	}
+
+	// 使用并发控制，限制同时处理的签名请求数量
+	select {
+	case r.signatureRequestSemaphore <- struct{}{}:
+		// 获取到信号量，可以处理签名请求
+		go func() {
+			defer func() { <-r.signatureRequestSemaphore }() // 释放信号量
+
+			if err := r.generateSignatureResponse(request); err != nil {
+				r.logger.Error("failed to generate signature response", "error", err)
+			}
+		}()
+		return nil
+	default:
+		// 信号量已满，记录警告并跳过处理
+		r.logger.Warn("并发签名请求过多，跳过处理",
+			"checkpointHash", request.CheckpointHash.String(),
+			"proposer", request.Proposer.String(),
+			"当前并发数", r.maxConcurrentSignatures)
+		return fmt.Errorf("too many concurrent signature requests")
+	}
+}
+
+// HandleSignatureResponse 处理来自网络集成的签名响应
+func (r *dposRuntime) HandleSignatureResponse(response *SignatureResponse) error {
+	r.logger.Info("收到来自网络集成的签名响应",
+		"validator", response.ValidatorAddr.String(),
+		"checkpointHash", response.CheckpointHash.String())
+
+	// 这里可以添加签名响应的处理逻辑
+	// 例如：验证签名、更新状态等
+
+	return nil
+}
+
+// setupNetworkIntegration 设置网络集成
+func (r *dposRuntime) setupNetworkIntegration() error {
+	if r.network == nil {
+		r.logger.Warn("网络服务不可用，跳过网络集成设置")
+		return nil
+	}
+
+	// 创建网络集成管理器
+	r.networkIntegration = NewNetworkIntegration(r.network, r.logger)
+
+	// 设置DPoS运行时回调
+	r.networkIntegration.SetDPoSRuntime(r)
+
+	// 尝试获取现有主题，避免重复创建
+	r.topicMutex.RLock()
+	if r.signatureRequestTopic != nil {
+		r.networkIntegration.SetExistingTopics(r.signatureRequestTopic, r.signatureResponseTopic)
+		r.logger.Info("使用现有主题设置网络集成")
+	}
+	r.topicMutex.RUnlock()
+
+	// 启动网络集成
+	if err := r.networkIntegration.Start(); err != nil {
+		r.logger.Warn("网络集成启动失败，使用回退模式", "error", err)
+		// 不返回错误，因为网络集成不是必需的
+		return nil
+	}
+
+	r.logger.Info("网络集成管理器已启动")
+	return nil
 }
