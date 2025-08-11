@@ -7,7 +7,7 @@ import (
 	"math/big"
 	"time"
 
-	ibftProto "github.com/0xPolygon/go-ibft/messages/proto"
+	ibftMessages "github.com/0xPolygon/go-ibft/messages/proto"
 	// polybftProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
 
 	"github.com/Vcity-Team/vcitychain/bls"
@@ -24,7 +24,7 @@ type BridgeTransport interface {
 }
 
 // handleIbftMessage 处理IBFT消息
-func (p *DPoS) handleIbftMessage(msg *ibftProto.Message, from peer.ID) error {
+func (p *DPoS) handleIbftMessage(msg *ibftMessages.Message, from peer.ID) error {
 	// 记录接收到的IBFT消息
 	p.logger.Debug("received IBFT message",
 		"type", msg.Type.String(),
@@ -34,13 +34,13 @@ func (p *DPoS) handleIbftMessage(msg *ibftProto.Message, from peer.ID) error {
 
 	// 根据消息类型进行不同处理
 	switch msg.Type {
-	case ibftProto.MessageType_PREPREPARE:
+	case ibftMessages.MessageType_PREPREPARE:
 		return p.handlePrePrepareMessage(msg, from)
-	case ibftProto.MessageType_PREPARE:
+	case ibftMessages.MessageType_PREPARE:
 		return p.handlePrepareMessage(msg, from)
-	case ibftProto.MessageType_COMMIT:
+	case ibftMessages.MessageType_COMMIT:
 		return p.handleCommitMessage(msg, from)
-	case ibftProto.MessageType_ROUND_CHANGE:
+	case ibftMessages.MessageType_ROUND_CHANGE:
 		return p.handleRoundChangeMessage(msg, from)
 	default:
 		p.logger.Warn("unknown IBFT message type", "type", msg.Type.String())
@@ -49,7 +49,7 @@ func (p *DPoS) handleIbftMessage(msg *ibftProto.Message, from peer.ID) error {
 }
 
 // handlePrePrepareMessage 处理预准备消息
-func (p *DPoS) handlePrePrepareMessage(msg *ibftProto.Message, from peer.ID) error {
+func (p *DPoS) handlePrePrepareMessage(msg *ibftMessages.Message, from peer.ID) error {
 	// 验证发送者是否为当前提议者
 	if !p.isCurrentProposerWithPeer(from) {
 		p.logger.Warn("received pre-prepare from non-proposer", "from", from.String())
@@ -67,7 +67,7 @@ func (p *DPoS) handlePrePrepareMessage(msg *ibftProto.Message, from peer.ID) err
 }
 
 // handlePrepareMessage 处理准备消息
-func (p *DPoS) handlePrepareMessage(msg *ibftProto.Message, from peer.ID) error {
+func (p *DPoS) handlePrepareMessage(msg *ibftMessages.Message, from peer.ID) error {
 	// 验证准备消息
 	if err := p.validatePrepareMessage(msg); err != nil {
 		p.logger.Warn("invalid prepare message", "error", err)
@@ -85,7 +85,7 @@ func (p *DPoS) handlePrepareMessage(msg *ibftProto.Message, from peer.ID) error 
 }
 
 // handleCommitMessage 处理提交消息
-func (p *DPoS) handleCommitMessage(msg *ibftProto.Message, from peer.ID) error {
+func (p *DPoS) handleCommitMessage(msg *ibftMessages.Message, from peer.ID) error {
 	// 验证提交消息
 	if err := p.validateCommitMessage(msg); err != nil {
 		p.logger.Warn("invalid commit message", "error", err)
@@ -103,7 +103,7 @@ func (p *DPoS) handleCommitMessage(msg *ibftProto.Message, from peer.ID) error {
 }
 
 // handleRoundChangeMessage 处理轮次变更消息
-func (p *DPoS) handleRoundChangeMessage(msg *ibftProto.Message, from peer.ID) error {
+func (p *DPoS) handleRoundChangeMessage(msg *ibftMessages.Message, from peer.ID) error {
 	// 验证轮次变更消息
 	if err := p.validateRoundChangeMessage(msg); err != nil {
 		p.logger.Warn("invalid round change message", "error", err)
@@ -655,55 +655,55 @@ func (p *DPoS) isCurrentProposerWithPeer(peerID peer.ID) bool {
 }
 
 // validateProposal 验证提案
-func (p *DPoS) validateProposal(msg *ibftProto.Message) error {
+func (p *DPoS) validateProposal(msg *ibftMessages.Message) error {
 	// TODO: 实现提案验证逻辑
 	return nil
 }
 
 // validatePrepareMessage 验证准备消息
-func (p *DPoS) validatePrepareMessage(msg *ibftProto.Message) error {
+func (p *DPoS) validatePrepareMessage(msg *ibftMessages.Message) error {
 	// TODO: 实现准备消息验证逻辑
 	return nil
 }
 
 // validateCommitMessage 验证提交消息
-func (p *DPoS) validateCommitMessage(msg *ibftProto.Message) error {
+func (p *DPoS) validateCommitMessage(msg *ibftMessages.Message) error {
 	// TODO: 实现提交消息验证逻辑
 	return nil
 }
 
 // validateRoundChangeMessage 验证轮次变更消息
-func (p *DPoS) validateRoundChangeMessage(msg *ibftProto.Message) error {
+func (p *DPoS) validateRoundChangeMessage(msg *ibftMessages.Message) error {
 	// TODO: 实现轮次变更消息验证逻辑
 	return nil
 }
 
 // hasPrepareQuorum 检查是否达到准备阶段法定人数
-func (p *DPoS) hasPrepareQuorum(msg *ibftProto.Message) bool {
+func (p *DPoS) hasPrepareQuorum(msg *ibftMessages.Message) bool {
 	// TODO: 实现准备阶段法定人数检查
 	return false
 }
 
 // hasCommitQuorum 检查是否达到提交阶段法定人数
-func (p *DPoS) hasCommitQuorum(msg *ibftProto.Message) bool {
+func (p *DPoS) hasCommitQuorum(msg *ibftMessages.Message) bool {
 	// TODO: 实现提交阶段法定人数检查
 	return false
 }
 
 // shouldChangeRound 检查是否需要轮次变更
-func (p *DPoS) shouldChangeRound(msg *ibftProto.Message) bool {
+func (p *DPoS) shouldChangeRound(msg *ibftMessages.Message) bool {
 	// TODO: 实现轮次变更检查逻辑
 	return false
 }
 
 // enterCommitPhase 进入提交阶段
-func (p *DPoS) enterCommitPhase(msg *ibftProto.Message) error {
+func (p *DPoS) enterCommitPhase(msg *ibftMessages.Message) error {
 	// TODO: 实现进入提交阶段逻辑
 	return nil
 }
 
 // finalizeBlock 最终化区块
-func (p *DPoS) finalizeBlock(msg *ibftProto.Message) error {
+func (p *DPoS) finalizeBlock(msg *ibftMessages.Message) error {
 	// TODO: 实现区块最终化逻辑
 	return nil
 }
@@ -726,14 +726,14 @@ func (p *DPoS) subscribeToIbftTopic() error {
 	topicName := "dpos-ibft"
 
 	// 创建或获取主题
-	topic, err := p.config.Network.NewTopic(topicName, &ibftProto.Message{})
+	topic, err := p.config.Network.NewTopic(topicName, &ibftMessages.Message{})
 	if err != nil {
 		return fmt.Errorf("failed to create IBFT topic: %w", err)
 	}
 
 	// 订阅主题
 	if err := topic.Subscribe(func(obj interface{}, from peer.ID) {
-		msg, ok := obj.(*ibftProto.Message)
+		msg, ok := obj.(*ibftMessages.Message)
 		if !ok {
 			p.logger.Warn("received invalid message type on IBFT topic")
 			return
@@ -820,7 +820,7 @@ func (p *DPoS) createTopics() (err error) {
 }
 
 // Multicast is implementation of core.Transport interface
-func (p *DPoS) Multicast(msg *ibftProto.Message) {
+func (p *DPoS) Multicast(msg *ibftMessages.Message) {
 	if err := p.consensusTopic.Publish(msg); err != nil {
 		p.logger.Warn("failed to multicast consensus message", "error", err)
 	}

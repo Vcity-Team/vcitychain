@@ -32,12 +32,14 @@ const (
 	// peerOutboundBufferSize is the size of outbound messages to a peer buffers in go-libp2p-pubsub
 	// we should have enough capacity of the queue
 	// because we start dropping messages to a peer if the outbound queue is full
-	peerOutboundBufferSize = 1024
+	// 使用适中的值，避免与libp2p版本兼容性问题
+	peerOutboundBufferSize = 6144
 
 	// validateBufferSize is the size of validate buffers in go-libp2p-pubsub
 	// we should have enough capacity of the queue
 	// because when queue is full, validation is throttled and new messages are dropped.
-	validateBufferSize = 1024
+	// 使用适中的值，避免与libp2p版本兼容性问题
+	validateBufferSize = 6144
 
 	// networkMetrics is a prefix used for network-related metrics
 	networkMetrics = "network"
@@ -159,8 +161,12 @@ func NewServer(logger hclog.Logger, config *Config) (*Server, error) {
 	// start gossip protocol
 	ps, err := pubsub.NewGossipSub(
 		context.Background(),
-		host, pubsub.WithPeerOutboundQueueSize(peerOutboundBufferSize),
+		host,
+		pubsub.WithPeerOutboundQueueSize(peerOutboundBufferSize),
 		pubsub.WithValidateQueueSize(validateBufferSize),
+		pubsub.WithStrictSignatureVerification(false),
+		pubsub.WithMessageSigning(false),
+		// 使用默认的GossipSub参数，避免除零错误
 	)
 	if err != nil {
 		return nil, err

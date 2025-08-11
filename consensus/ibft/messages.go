@@ -3,10 +3,10 @@ package ibft
 import (
 	"google.golang.org/protobuf/proto"
 
-	protoIBFT "github.com/0xPolygon/go-ibft/messages/proto"
+	ibftMessages "github.com/0xPolygon/go-ibft/messages/proto"
 )
 
-func (i *backendIBFT) signMessage(msg *protoIBFT.Message) *protoIBFT.Message {
+func (i *backendIBFT) signMessage(msg *ibftMessages.Message) *ibftMessages.Message {
 	raw, err := proto.Marshal(msg)
 	if err != nil {
 		return nil
@@ -21,10 +21,10 @@ func (i *backendIBFT) signMessage(msg *protoIBFT.Message) *protoIBFT.Message {
 
 func (i *backendIBFT) BuildPrePrepareMessage(
 	rawProposal []byte,
-	certificate *protoIBFT.RoundChangeCertificate,
-	view *protoIBFT.View,
-) *protoIBFT.Message {
-	proposedBlock := &protoIBFT.Proposal{
+	certificate *ibftMessages.RoundChangeCertificate,
+	view *ibftMessages.View,
+) *ibftMessages.Message {
+	proposedBlock := &ibftMessages.Proposal{
 		RawProposal: rawProposal,
 		Round:       view.Round,
 	}
@@ -35,12 +35,12 @@ func (i *backendIBFT) BuildPrePrepareMessage(
 		return nil
 	}
 
-	msg := &protoIBFT.Message{
+	msg := &ibftMessages.Message{
 		View: view,
 		From: i.ID(),
-		Type: protoIBFT.MessageType_PREPREPARE,
-		Payload: &protoIBFT.Message_PreprepareData{
-			PreprepareData: &protoIBFT.PrePrepareMessage{
+		Type: ibftMessages.MessageType_PREPREPARE,
+		Payload: &ibftMessages.Message_PreprepareData{
+			PreprepareData: &ibftMessages.PrePrepareMessage{
 				Proposal:     proposedBlock,
 				ProposalHash: proposalHash.Bytes(),
 				Certificate:  certificate,
@@ -51,13 +51,13 @@ func (i *backendIBFT) BuildPrePrepareMessage(
 	return i.signMessage(msg)
 }
 
-func (i *backendIBFT) BuildPrepareMessage(proposalHash []byte, view *protoIBFT.View) *protoIBFT.Message {
-	msg := &protoIBFT.Message{
+func (i *backendIBFT) BuildPrepareMessage(proposalHash []byte, view *ibftMessages.View) *ibftMessages.Message {
+	msg := &ibftMessages.Message{
 		View: view,
 		From: i.ID(),
-		Type: protoIBFT.MessageType_PREPARE,
-		Payload: &protoIBFT.Message_PrepareData{
-			PrepareData: &protoIBFT.PrepareMessage{
+		Type: ibftMessages.MessageType_PREPARE,
+		Payload: &ibftMessages.Message_PrepareData{
+			PrepareData: &ibftMessages.PrepareMessage{
 				ProposalHash: proposalHash,
 			},
 		},
@@ -66,7 +66,7 @@ func (i *backendIBFT) BuildPrepareMessage(proposalHash []byte, view *protoIBFT.V
 	return i.signMessage(msg)
 }
 
-func (i *backendIBFT) BuildCommitMessage(proposalHash []byte, view *protoIBFT.View) *protoIBFT.Message {
+func (i *backendIBFT) BuildCommitMessage(proposalHash []byte, view *ibftMessages.View) *ibftMessages.Message {
 	committedSeal, err := i.currentSigner.CreateCommittedSeal(proposalHash)
 	if err != nil {
 		i.logger.Error("Unable to build commit message, %v", err)
@@ -74,12 +74,12 @@ func (i *backendIBFT) BuildCommitMessage(proposalHash []byte, view *protoIBFT.Vi
 		return nil
 	}
 
-	msg := &protoIBFT.Message{
+	msg := &ibftMessages.Message{
 		View: view,
 		From: i.ID(),
-		Type: protoIBFT.MessageType_COMMIT,
-		Payload: &protoIBFT.Message_CommitData{
-			CommitData: &protoIBFT.CommitMessage{
+		Type: ibftMessages.MessageType_COMMIT,
+		Payload: &ibftMessages.Message_CommitData{
+			CommitData: &ibftMessages.CommitMessage{
 				ProposalHash:  proposalHash,
 				CommittedSeal: committedSeal,
 			},
@@ -90,15 +90,15 @@ func (i *backendIBFT) BuildCommitMessage(proposalHash []byte, view *protoIBFT.Vi
 }
 
 func (i *backendIBFT) BuildRoundChangeMessage(
-	proposal *protoIBFT.Proposal,
-	certificate *protoIBFT.PreparedCertificate,
-	view *protoIBFT.View,
-) *protoIBFT.Message {
-	msg := &protoIBFT.Message{
+	proposal *ibftMessages.Proposal,
+	certificate *ibftMessages.PreparedCertificate,
+	view *ibftMessages.View,
+) *ibftMessages.Message {
+	msg := &ibftMessages.Message{
 		View: view,
 		From: i.ID(),
-		Type: protoIBFT.MessageType_ROUND_CHANGE,
-		Payload: &protoIBFT.Message_RoundChangeData{RoundChangeData: &protoIBFT.RoundChangeMessage{
+		Type: ibftMessages.MessageType_ROUND_CHANGE,
+		Payload: &ibftMessages.Message_RoundChangeData{RoundChangeData: &ibftMessages.RoundChangeMessage{
 			LastPreparedProposal:      proposal,
 			LatestPreparedCertificate: certificate,
 		}},

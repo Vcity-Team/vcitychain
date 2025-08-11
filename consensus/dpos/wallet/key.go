@@ -3,7 +3,7 @@ package wallet
 import (
 	"fmt"
 
-	"github.com/0xPolygon/go-ibft/messages/proto"
+	ibftMessages "github.com/0xPolygon/go-ibft/messages/proto"
 	"github.com/umbracle/ethgo"
 	protobuf "google.golang.org/protobuf/proto"
 
@@ -49,7 +49,7 @@ func (k *Key) SignWithDomain(digest, domain []byte) ([]byte, error) {
 }
 
 // SignIBFTMessage signs the IBFT consensus message with ECDSA key
-func (k *Key) SignIBFTMessage(msg *proto.Message) (*proto.Message, error) {
+func (k *Key) SignIBFTMessage(msg *ibftMessages.Message) (*ibftMessages.Message, error) {
 	msgRaw, err := protobuf.Marshal(msg)
 	if err != nil {
 		return nil, fmt.Errorf("cannot marshal message: %w", err)

@@ -3,7 +3,7 @@ package polybft
 import (
 	"fmt"
 
-	ibftProto "github.com/0xPolygon/go-ibft/messages/proto"
+	ibftMessages "github.com/0xPolygon/go-ibft/messages/proto"
 	polybftProto "github.com/Vcity-Team/vcitychain/consensus/polybft/proto"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -21,7 +21,7 @@ func (p *Polybft) subscribeToIbftTopic() error {
 			return
 		}
 
-		msg, ok := obj.(*ibftProto.Message)
+		msg, ok := obj.(*ibftMessages.Message)
 		if !ok {
 			p.logger.Error("consensus engine: invalid type assertion for message request")
 
@@ -49,7 +49,7 @@ func (p *Polybft) createTopics() (err error) {
 		}
 	}
 
-	p.consensusTopic, err = p.config.Network.NewTopic(pbftProto, &ibftProto.Message{})
+	p.consensusTopic, err = p.config.Network.NewTopic(pbftProto, &ibftMessages.Message{})
 	if err != nil {
 		return fmt.Errorf("failed to create consensus topic: %w", err)
 	}
@@ -58,7 +58,7 @@ func (p *Polybft) createTopics() (err error) {
 }
 
 // Multicast is implementation of core.Transport interface
-func (p *Polybft) Multicast(msg *ibftProto.Message) {
+func (p *Polybft) Multicast(msg *ibftMessages.Message) {
 	if err := p.consensusTopic.Publish(msg); err != nil {
 		p.logger.Warn("failed to multicast consensus message", "error", err)
 	}

@@ -7,16 +7,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/0xPolygon/go-ibft/messages/proto"
+	ibftMessages "github.com/0xPolygon/go-ibft/messages/proto"
 	"github.com/Vcity-Team/vcitychain/network"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-// DPOSMessage is a wrapper for DPoS messages using proto.Message
+// DPOSMessage is a wrapper for DPoS messages using ibftMessages.Message
 type DPOSMessage struct {
-	*proto.Message
+	*ibftMessages.Message
 	Data []byte
 }
 
@@ -37,7 +37,7 @@ func (m *DPOSMessage) ProtoMessage() {}
 func (tm *TransportMessage) ToDPOSMessage() *DPOSMessage {
 	data, _ := json.Marshal(tm)
 	return &DPOSMessage{
-		Message: &proto.Message{},
+		Message: &ibftMessages.Message{},
 		Data:    data,
 	}
 }
@@ -217,7 +217,7 @@ func (ni *NetworkIntegration) registerHandlers() {
 		}
 		return fmt.Errorf("invalid message type for signature request")
 	}
-	
+
 	ni.handlers["signature_response"] = func(obj interface{}, from peer.ID) error {
 		if dposMsg, ok := obj.(*DPOSMessage); ok {
 			var response SignatureResponse
@@ -228,7 +228,7 @@ func (ni *NetworkIntegration) registerHandlers() {
 		}
 		return fmt.Errorf("invalid message type for signature response")
 	}
-	
+
 	ni.handlers["vote"] = func(obj interface{}, from peer.ID) error {
 		if dposMsg, ok := obj.(*DPOSMessage); ok {
 			var vote VoteMessage
@@ -239,7 +239,7 @@ func (ni *NetworkIntegration) registerHandlers() {
 		}
 		return fmt.Errorf("invalid message type for vote message")
 	}
-	
+
 	ni.handlers["delegate"] = func(obj interface{}, from peer.ID) error {
 		if dposMsg, ok := obj.(*DPOSMessage); ok {
 			var delegate DelegateMessage
@@ -463,7 +463,7 @@ func (ni *NetworkIntegration) BroadcastSignatureRequest(request *SignatureReques
 
 	// 创建DPoS消息
 	dposMsg := &DPOSMessage{
-		Message: &proto.Message{},
+		Message: &ibftMessages.Message{},
 		Data:    requestData,
 	}
 
@@ -492,7 +492,7 @@ func (ni *NetworkIntegration) BroadcastSignatureResponse(response *SignatureResp
 
 	// 创建DPoS消息
 	dposMsg := &DPOSMessage{
-		Message: &proto.Message{},
+		Message: &ibftMessages.Message{},
 		Data:    responseData,
 	}
 
@@ -521,7 +521,7 @@ func (ni *NetworkIntegration) BroadcastVoteMessage(vote *VoteMessage) error {
 
 	// 创建DPoS消息
 	dposMsg := &DPOSMessage{
-		Message: &proto.Message{},
+		Message: &ibftMessages.Message{},
 		Data:    voteData,
 	}
 
@@ -550,7 +550,7 @@ func (ni *NetworkIntegration) BroadcastDelegateMessage(delegate *DelegateMessage
 
 	// 创建DPoS消息
 	dposMsg := &DPOSMessage{
-		Message: &proto.Message{},
+		Message: &ibftMessages.Message{},
 		Data:    delegateData,
 	}
 

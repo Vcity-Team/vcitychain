@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-hclog"
@@ -20,7 +21,7 @@ const (
 	// subscribeOutputBufferSize is the size of subscribe output buffer in go-libp2p-pubsub
 	// we should have enough capacity of the queue
 	// because when queue is full, if the consumer does not read fast enough, new messages are dropped
-	subscribeOutputBufferSize = 1024
+	subscribeOutputBufferSize = 4096
 )
 
 type Topic struct {
@@ -31,6 +32,13 @@ type Topic struct {
 	closeCh   chan struct{}
 	closed    atomic.Bool
 	waitGroup sync.WaitGroup
+
+	// 统计信息
+	statsMutex      sync.RWMutex
+	publishedCount  int64
+	receivedCount   int64
+	lastPublishTime time.Time
+	lastReceiveTime time.Time
 }
 
 func (t *Topic) createObj() proto.Message {
@@ -88,7 +96,30 @@ func (t *Topic) Publish(obj proto.Message) error {
 		//t.logger.Debug("gossip发布消息", "topic", t.topic.String(), "消息大小", len(data))
 	}
 
-	return t.topic.Publish(context.Background(), data)
+	// 更新统计信息
+	t.statsMutex.Lock()
+	t.publishedCount++
+	t.lastPublishTime = time.Now()
+	t.statsMutex.Unlock()
+
+	// 添加pubsub调试信息
+	if t.topic.String() == "syncer/status/0.1" {
+		t.logger.Info("pubsub发布状态开始", "topic", t.topic.String(), "消息大小", len(data), "时间", time.Now().Format("15:04:05.000"))
+	}
+
+	// 调用pubsub的Publish方法
+	err = t.topic.Publish(context.Background(), data)
+
+	// 记录发布结果
+	if t.topic.String() == "syncer/status/0.1" {
+		if err != nil {
+			t.logger.Error("pubsub发布状态失败", "topic", t.topic.String(), "错误", err, "时间", time.Now().Format("15:04:05.000"))
+		} else {
+			t.logger.Info("pubsub发布状态成功", "topic", t.topic.String(), "消息大小", len(data), "时间", time.Now().Format("15:04:05.000"))
+		}
+	}
+
+	return err
 }
 
 func (t *Topic) Subscribe(handler func(obj interface{}, from peer.ID)) error {
@@ -99,6 +130,11 @@ func (t *Topic) Subscribe(handler func(obj interface{}, from peer.ID)) error {
 
 	// Mark topic active.
 	t.closed.Store(false)
+
+	// 记录订阅信息
+	if t.topic.String() == "syncer/status/0.1" {
+		t.logger.Info("订阅状态广播topic", "topic", t.topic.String(), "缓冲区大小", subscribeOutputBufferSize)
+	}
 
 	go t.readLoop(sub, handler)
 
@@ -141,9 +177,18 @@ func (t *Topic) readLoop(sub *pubsub.Subscription, handler func(obj interface{},
 
 			metrics.SetGauge([]string{networkMetrics, "ingress_bytes"}, float32(len(msg.Data)))
 
+			// 更新接收统计信息
+			t.statsMutex.Lock()
+			t.receivedCount++
+			t.lastReceiveTime = time.Now()
+			t.statsMutex.Unlock()
+
 			// 只对状态广播消息使用INFO级别日志，其他消息不记录
 			if t.topic != nil && t.topic.String() == "syncer/status/0.1" {
-				t.logger.Info("状态广播消息接收", "topic", t.topic.String(), "来源", msg.GetFrom().String(), "消息大小", len(msg.Data))
+				t.logger.Info("状态广播消息接收",
+					"topic", t.topic.String(),
+					"来源", msg.GetFrom().String(),
+					"消息大小", len(msg.Data))
 			}
 
 			handler(obj, msg.GetFrom())
@@ -166,4 +211,28 @@ func (s *Server) NewTopic(protoID string, obj proto.Message) (*Topic, error) {
 	tt.closed.Store(false)
 
 	return tt, nil
+}
+
+// GetStats 获取topic的统计信息
+func (t *Topic) GetStats() map[string]interface{} {
+	t.statsMutex.RLock()
+	defer t.statsMutex.RUnlock()
+
+	stats := map[string]interface{}{
+		"publishedCount":  t.publishedCount,
+		"receivedCount":   t.receivedCount,
+		"lastPublishTime": t.lastPublishTime,
+		"lastReceiveTime": t.lastReceiveTime,
+		"topic":           t.topic.String(),
+	}
+
+	// 添加时间间隔信息
+	if !t.lastPublishTime.IsZero() {
+		stats["timeSinceLastPublish"] = time.Since(t.lastPublishTime).String()
+	}
+	if !t.lastReceiveTime.IsZero() {
+		stats["timeSinceLastReceive"] = time.Since(t.lastReceiveTime).String()
+	}
+
+	return stats
 }

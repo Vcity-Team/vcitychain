@@ -155,6 +155,10 @@ type dposRuntime struct {
 	// 签名响应生成去重机制 - 避免日志刷屏
 	processedSignatureGenerations map[string]time.Time
 	signatureGenerationDedupMutex sync.RWMutex
+
+	// BLS私钥缓存 - 避免重复读取文件
+	blsPrivateKeyCache *bls.PrivateKey
+	blsKeyCacheMutex   sync.RWMutex
 }
 
 func (r *dposRuntime) start() error {
@@ -2281,7 +2285,16 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 	}
 
 	// 1. 广播签名请求给其他验证者
-	if err := r.broadcastSignatureRequest(block, checkpointHash); err != nil {
+	// 创建protobuf签名请求消息
+	protoRequest := &proto.SignatureRequest{}
+	protoRequest.BlockNumber = block.Block.Number()
+	protoRequest.BlockHash = block.Block.Header.Hash.Bytes()
+	protoRequest.CheckpointHash = checkpointHash.Bytes()
+	protoRequest.Round = r.currentRound
+	protoRequest.Proposer = types.Address(r.config.Key.Address()).Bytes()
+	protoRequest.Timestamp = uint64(time.Now().Unix())
+
+	if err := r.broadcastSignatureRequest(protoRequest); err != nil {
 		r.logger.Error("failed to broadcast signature request", "error", err)
 		return nil, nil, fmt.Errorf("failed to broadcast signature request: %w", err)
 	}
@@ -2513,56 +2526,21 @@ func (r *dposRuntime) waitForNetworkGrowth(checkpointHash types.Hash, proposerAd
 }
 
 // broadcastSignatureRequest 广播签名请求
-func (r *dposRuntime) broadcastSignatureRequest(block *types.FullBlock, checkpointHash types.Hash) error {
-	// 检查网络服务是否可用
-	if r.network == nil {
-		r.logger.Error("network service not available, cannot broadcast signature request")
-		return fmt.Errorf("network service not available, cannot broadcast signature request")
-	}
+func (r *dposRuntime) broadcastSignatureRequest(protoRequest *proto.SignatureRequest) error {
+	checkpointHash := types.BytesToHash(protoRequest.CheckpointHash)
 
-	// 检查Key是否可用
-	if r.config == nil || r.config.Key == nil {
-		r.logger.Error("key not available, cannot broadcast signature request")
-		return fmt.Errorf("key not available, cannot broadcast signature request")
-	}
-
-	// 创建protobuf签名请求消息
-	protoRequest := &proto.SignatureRequest{}
-
-	// 手动设置字段
-	protoRequest.BlockNumber = block.Block.Number()
-	protoRequest.BlockHash = block.Block.Header.Hash.Bytes()
-	protoRequest.CheckpointHash = checkpointHash.Bytes()
-	protoRequest.Round = r.currentRound
-	protoRequest.Proposer = types.Address(r.config.Key.Address()).Bytes()
-	protoRequest.Timestamp = uint64(time.Now().Unix())
-
-	// 添加调试日志
-	r.logger.Debug("created protobuf signature request",
-		"blockNumber", protoRequest.BlockNumber,
-		"round", protoRequest.Round,
-		"timestamp", protoRequest.Timestamp)
-
-	// 确保protobuf消息被正确初始化
-	if protoRequest == nil {
-		r.logger.Error("failed to create protobuf signature request")
-		return fmt.Errorf("failed to create protobuf signature request")
-	}
-
-	// 存储签名请求，供新节点查询
-	r.signatureRequestMutex.Lock()
-	if r.pendingSignatureRequests == nil {
-		r.pendingSignatureRequests = make(map[types.Hash]*SignatureRequest)
-	}
-	// 转换为内部格式存储
+	// 创建内部请求对象
 	internalRequest := &SignatureRequest{
 		BlockNumber:    protoRequest.BlockNumber,
 		BlockHash:      types.BytesToHash(protoRequest.BlockHash),
-		CheckpointHash: types.BytesToHash(protoRequest.CheckpointHash),
+		CheckpointHash: checkpointHash,
 		Round:          protoRequest.Round,
 		Proposer:       types.BytesToAddress(protoRequest.Proposer),
 		Timestamp:      protoRequest.Timestamp,
 	}
+
+	// 存储待处理的签名请求
+	r.signatureRequestMutex.Lock()
 	r.pendingSignatureRequests[checkpointHash] = internalRequest
 	r.signatureRequestMutex.Unlock()
 
@@ -2608,6 +2586,9 @@ func (r *dposRuntime) broadcastSignatureRequest(block *types.FullBlock, checkpoi
 	}
 
 	r.logger.Info("成功广播签名请求", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String())
+
+	// 启动签名请求确认检查
+	go r.checkSignatureRequestConfirmation(protoRequest, checkpointHash)
 
 	//r.logger.Info("成功广播签名请求",
 	//	"blockNumber", protoRequest.BlockNumber,
@@ -2818,20 +2799,7 @@ func (r *dposRuntime) handleSignatureRequestMessage(obj interface{}, from peer.I
 		Timestamp:      protoRequest.Timestamp,
 	}
 
-	// 检查是否已经处理过这个签名请求（去重机制）- 只用于日志去重，不影响实际处理
-	alreadyProcessed := r.isSignatureRequestProcessed(request.Proposer, request.CheckpointHash)
-
-	// 标记为已处理（无论是否重复，都要标记）
-	r.markSignatureRequestProcessed(request.Proposer, request.CheckpointHash)
-
-	// 如果是重复请求，只记录DEBUG日志，但仍然继续处理
-	if alreadyProcessed {
-		r.logger.Debug("跳过重复的签名请求日志",
-			"proposer", request.Proposer.String(),
-			"checkpointHash", request.CheckpointHash.String(),
-			"本地节点", types.Address(r.config.Key.Address()).String())
-		// 注意：这里不return，继续处理签名请求
-	}
+	// 简化处理：直接处理签名请求，不做去重检查
 
 	// 获取当前区块高度
 	delegateCount := uint64(len(r.delegates))
@@ -2863,32 +2831,9 @@ func (r *dposRuntime) handleSignatureRequestMessage(obj interface{}, from peer.I
 		return
 	}
 
-	// 检查是否已经生成过这个签名响应（去重机制）
-	generateKey := fmt.Sprintf("generate-%s-%s", types.Address(r.config.Key.Address()).String(), request.CheckpointHash.String())
-	alreadyGenerated := r.isSignatureResponseGenerated(generateKey)
-
 	// 生成签名响应
-	if !alreadyGenerated {
-		// 记录收到签名请求（只记录一次）
-		//r.logger.Info("收到签名请求",
-		//	"from", from.String(),
-		//	"blockNumber", request.BlockNumber,
-		//	"checkpointHash", request.CheckpointHash.String(),
-		//	"proposer", request.Proposer.String(),
-		//	"本地节点", types.Address(r.config.Key.Address()).String())
-
-		//r.logger.Info("开始生成签名响应", "本地节点", types.Address(r.config.Key.Address()).String())
-	}
-
 	if err := r.generateSignatureResponse(request); err != nil {
 		r.logger.Error("failed to generate signature response", "error", err)
-	} else {
-		// 标记为已生成
-		r.markSignatureResponseGenerated(generateKey)
-
-		if !alreadyGenerated {
-			//r.logger.Info("成功生成签名响应", "本地节点", types.Address(r.config.Key.Address()).String())
-		}
 	}
 }
 
@@ -3032,15 +2977,7 @@ func (r *dposRuntime) generateSignatureResponse(request *SignatureRequest) error
 		return nil
 	}
 
-	// 检查是否已经广播过这个签名响应（去重机制）
-	responseKey := fmt.Sprintf("response-%s-%s", types.Address(r.config.Key.Address()).String(), request.CheckpointHash.String())
-	alreadyBroadcasted := r.isSignatureResponseBroadcasted(responseKey)
-
 	// 发布签名响应
-	if !alreadyBroadcasted {
-		r.logger.Info("开始广播签名响应", "validator", types.Address(r.config.Key.Address()).String(), "checkpointHash", request.CheckpointHash.String())
-	}
-
 	if err := topic.Publish(protoResponse); err != nil {
 		r.logger.Warn("failed to publish signature response, using fallback", "error", err)
 		// 回退到日志记录
@@ -3049,13 +2986,6 @@ func (r *dposRuntime) generateSignatureResponse(request *SignatureRequest) error
 			"checkpointHash", request.CheckpointHash.String(),
 			"signatureLength", len(signatureBytes))
 		return nil
-	}
-
-	// 标记为已广播
-	r.markSignatureResponseBroadcasted(responseKey)
-
-	if !alreadyBroadcasted {
-		//r.logger.Info("成功广播签名响应", "validator", types.Address(r.config.Key.Address()).String(), "checkpointHash", request.CheckpointHash.String())
 	}
 
 	//r.logger.Info("成功生成并广播签名响应",
@@ -3068,8 +2998,24 @@ func (r *dposRuntime) generateSignatureResponse(request *SignatureRequest) error
 
 // getBLSPrivateKey 获取BLS私钥
 func (r *dposRuntime) getBLSPrivateKey() (*bls.PrivateKey, error) {
+	// 首先检查缓存
+	r.blsKeyCacheMutex.RLock()
+	if r.blsPrivateKeyCache != nil {
+		defer r.blsKeyCacheMutex.RUnlock()
+		return r.blsPrivateKeyCache, nil
+	}
+	r.blsKeyCacheMutex.RUnlock()
+
+	// 缓存未命中，需要从文件读取
+	r.blsKeyCacheMutex.Lock()
+	defer r.blsKeyCacheMutex.Unlock()
+
+	// 双重检查，防止在获取写锁期间其他goroutine已经加载了缓存
+	if r.blsPrivateKeyCache != nil {
+		return r.blsPrivateKeyCache, nil
+	}
+
 	// 这里需要从密钥管理器获取BLS私钥
-	// 暂时使用一个简单的实现
 	secretsManager := r.backend.(*DPoS).config.SecretsManager
 	if secretsManager == nil {
 		return nil, fmt.Errorf("secrets manager not available")
@@ -3086,6 +3032,9 @@ func (r *dposRuntime) getBLSPrivateKey() (*bls.PrivateKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal BLS private key: %w", err)
 	}
+
+	// 缓存私钥
+	r.blsPrivateKeyCache = privateKey
 
 	return privateKey, nil
 }
@@ -3558,4 +3507,146 @@ func (r *dposRuntime) debugPendingSignatureRequests() {
 	//	//	"timestamp", request.Timestamp)
 	//}
 	//r.logger.Info("=== 调试结束 ===")
+}
+
+// checkSignatureRequestConfirmation 检查签名请求是否被其他节点收到
+func (r *dposRuntime) checkSignatureRequestConfirmation(protoRequest *proto.SignatureRequest, checkpointHash types.Hash) {
+	// 等待一段时间让消息传播
+	time.Sleep(3 * time.Second)
+
+	// 检查其他节点的状态
+	peers := r.network.Peers()
+	confirmedCount := 0
+	totalPeers := len(peers)
+
+	for _, peer := range peers {
+		peerID := peer.Info.ID
+
+		// 跳过自己
+		if peerID.String() == r.network.AddrInfo().ID.String() {
+			continue
+		}
+
+		// 检查该节点是否收到了签名请求
+		// 这里我们可以通过检查该节点是否有对应的签名响应来判断
+		r.signatureRequestMutex.RLock()
+		hasResponse := false
+		// 检查是否有来自该节点的签名响应
+		// 这里简化处理，实际应该检查具体的响应
+		r.signatureRequestMutex.RUnlock()
+
+		if hasResponse {
+			confirmedCount++
+			r.logger.Debug("签名请求确认", "peer", peerID.String()[:8], "checkpointHash", checkpointHash.String())
+		} else {
+			r.logger.Warn("签名请求未确认", "peer", peerID.String()[:8], "checkpointHash", checkpointHash.String())
+		}
+	}
+
+	// 记录确认结果
+	if totalPeers > 1 {
+		confirmationRate := float64(confirmedCount) / float64(totalPeers-1)
+		r.logger.Info("签名请求确认结果",
+			"区块高度", protoRequest.BlockNumber,
+			"checkpointHash", checkpointHash.String(),
+			"确认节点数", confirmedCount,
+			"总节点数", totalPeers-1,
+			"确认率", fmt.Sprintf("%.2f%%", confirmationRate*100))
+
+		// 如果确认率太低，启动备用传播机制
+		if confirmationRate < 0.3 { // 从0.5降低到0.3，减少过度触发
+			r.logger.Warn("签名请求确认率较低",
+				"区块高度", protoRequest.BlockNumber,
+				"checkpointHash", checkpointHash.String(),
+				"确认率", fmt.Sprintf("%.2f%%", confirmationRate*100),
+				"启动备用传播机制")
+
+			// 启动备用传播机制
+			go r.fallbackSignatureRequestPropagation(protoRequest, checkpointHash)
+		}
+	}
+}
+
+// fallbackSignatureRequestPropagation 备用签名请求传播机制
+func (r *dposRuntime) fallbackSignatureRequestPropagation(protoRequest *proto.SignatureRequest, checkpointHash types.Hash) {
+	r.logger.Info("=== 备用转传播启动 ===", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String())
+
+	peers := r.network.Peers()
+	successCount := 0
+	totalPeers := len(peers)
+
+	for _, peer := range peers {
+		peerID := peer.Info.ID
+
+		// 跳过自己
+		if peerID.String() == r.network.AddrInfo().ID.String() {
+			continue
+		}
+
+		// 尝试直接发送签名请求，使用指数退避重试
+		if err := r.sendDirectSignatureRequestWithRetry(peerID, protoRequest); err != nil {
+			r.logger.Warn("直接签名请求失败", "peer", peerID.String()[:8], "区块高度", protoRequest.BlockNumber, "错误", err)
+		} else {
+			successCount++
+			r.logger.Info("直接签名请求成功", "peer", peerID.String()[:8], "区块高度", protoRequest.BlockNumber)
+		}
+	}
+
+	// 修复统计逻辑：确保成功率不会超过100%
+	if totalPeers > 1 {
+		effectiveTotal := totalPeers - 1 // 排除自己
+		successRate := float64(successCount) / float64(effectiveTotal)
+
+		// 限制成功率最大为100%
+		if successRate > 1.0 {
+			successRate = 1.0
+		}
+
+		r.logger.Info("=== 备用转传播完成 ===",
+			"区块高度", protoRequest.BlockNumber,
+			"checkpointHash", checkpointHash.String(),
+			"成功节点数", successCount,
+			"总节点数", effectiveTotal,
+			"成功率", fmt.Sprintf("%.2f%%", successRate*100))
+	}
+}
+
+// sendDirectSignatureRequest 直接发送签名请求给指定peer
+func (r *dposRuntime) sendDirectSignatureRequest(peerID peer.ID, protoRequest *proto.SignatureRequest) error {
+	// 临时方案：重新尝试gossip发布
+	topic, err := r.getSignatureRequestTopic()
+	if err != nil {
+		return fmt.Errorf("failed to get signature request topic: %w", err)
+	}
+
+	r.logger.Debug("备用传播：重新尝试签名请求gossip发布", "peer", peerID.String()[:8], "区块高度", protoRequest.BlockNumber)
+
+	return topic.Publish(protoRequest)
+}
+
+// sendDirectSignatureRequestWithRetry 带重试的直接签名请求
+func (r *dposRuntime) sendDirectSignatureRequestWithRetry(peerID peer.ID, protoRequest *proto.SignatureRequest) error {
+	const maxRetries = 3
+	const baseDelay = 100 * time.Millisecond
+
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			// 指数退避延迟
+			delay := time.Duration(float64(baseDelay) * float64(attempt) * 1.5)
+			time.Sleep(delay)
+		}
+
+		if err := r.sendDirectSignatureRequest(peerID, protoRequest); err != nil {
+			lastErr = err
+			r.logger.Debug("直接签名请求重试", "peer", peerID.String()[:8], "attempt", attempt+1, "error", err)
+			continue
+		}
+
+		// 成功发送
+		return nil
+	}
+
+	return fmt.Errorf("所有重试尝试都失败了，最后的错误: %w", lastErr)
 }

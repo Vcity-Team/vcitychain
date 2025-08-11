@@ -1,25 +1,25 @@
 package ibft
 
 import (
-	"github.com/0xPolygon/go-ibft/messages/proto"
+	ibftMessages "github.com/0xPolygon/go-ibft/messages/proto"
 	"github.com/Vcity-Team/vcitychain/network"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 type transport interface {
-	Multicast(msg *proto.Message) error
+	Multicast(msg *ibftMessages.Message) error
 }
 
 type gossipTransport struct {
 	topic *network.Topic
 }
 
-func (g *gossipTransport) Multicast(msg *proto.Message) error {
+func (g *gossipTransport) Multicast(msg *ibftMessages.Message) error {
 	return g.topic.Publish(msg)
 }
 
-func (i *backendIBFT) Multicast(msg *proto.Message) {
+func (i *backendIBFT) Multicast(msg *ibftMessages.Message) {
 	if err := i.transport.Multicast(msg); err != nil {
 		i.logger.Error("fail to gossip", "err", err)
 	}
@@ -28,7 +28,7 @@ func (i *backendIBFT) Multicast(msg *proto.Message) {
 // setupTransport sets up the gossip transport protocol
 func (i *backendIBFT) setupTransport() error {
 	// Define a new topic
-	topic, err := i.network.NewTopic(ibftProto, &proto.Message{})
+	topic, err := i.network.NewTopic(ibftProto, &ibftMessages.Message{})
 	if err != nil {
 		return err
 	}
@@ -40,7 +40,7 @@ func (i *backendIBFT) setupTransport() error {
 				return
 			}
 
-			msg, ok := obj.(*proto.Message)
+			msg, ok := obj.(*ibftMessages.Message)
 			if !ok {
 				i.logger.Error("invalid type assertion for message request")
 
