@@ -16,7 +16,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/bls"
 	"github.com/Vcity-Team/vcitychain/consensus"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/bitmap"
-	"github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
+	dposProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/signer"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/wallet"
@@ -31,6 +31,7 @@ import (
 	"github.com/hashicorp/go-hclog"
 	"github.com/libp2p/go-libp2p/core/peer"
 	bolt "go.etcd.io/bbolt"
+	"google.golang.org/protobuf/proto"
 )
 
 // StakeInfo 质押信息结构体
@@ -816,6 +817,11 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 	// 计算checkpoint哈希用于签名
 	// 计算当前验证者集合的哈希
+	if len(r.delegates) == 0 {
+		r.logger.Error("delegates 集合为空，无法计算验证者哈希")
+		return nil, fmt.Errorf("empty delegates set: cannot calculate validators hash")
+	}
+
 	currentValidatorsHash, err := r.delegates.Hash()
 	if err != nil {
 		r.logger.Error("failed to calculate current validators hash", "error", err)
@@ -839,6 +845,27 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		r.logger.Error("failed to calculate checkpoint hash", "error", err)
 		return nil, fmt.Errorf("failed to calculate checkpoint hash: %w", err)
 	}
+
+	// 确保checkpointHash不为全零
+	if checkpointHash == (types.Hash{}) {
+		r.logger.Error("checkpointHash计算结果为全零，使用备用哈希")
+		// 使用备用哈希：区块哈希 + 当前轮次
+		backupHash := types.BytesToHash(append(block.Block.Header.Hash.Bytes(), []byte(fmt.Sprintf("_%d", r.currentRound))...))
+		checkpointHash = backupHash
+	}
+
+	// 最终验证：确保checkpointHash不为空
+	if checkpointHash == (types.Hash{}) {
+		r.logger.Error("checkpointHash 仍然为空，无法发送签名请求")
+		return nil, fmt.Errorf("invalid checkpointHash: cannot be zero")
+	}
+
+	// 添加调试日志
+	r.logger.Info("计算checkpointHash完成",
+		"blockNumber", block.Block.Number(),
+		"currentRound", r.currentRound,
+		"checkpointHash", checkpointHash.String(),
+		"fixedBlockHash", fixedBlockHash.String())
 
 	// 实现真实的签名收集机制，支持重试
 	var signatures [][]byte
@@ -1470,8 +1497,8 @@ func (d *DPoS) Initialize() error {
 
 	// 设置网络集成
 	if err := d.runtime.setupNetworkIntegration(); err != nil {
-		d.logger.Warn("failed to setup network integration", "error", err)
-		// 不返回错误，因为网络集成不是必需的
+		d.logger.Error("failed to setup network integration", "error", err)
+		return fmt.Errorf("failed to setup network integration: %w", err)
 	}
 
 	d.logger.Info("DPoS runtime initialized successfully")
@@ -2459,7 +2486,7 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 
 	// 1. 广播签名请求给其他验证者
 	// 创建protobuf签名请求消息
-	protoRequest := &proto.SignatureRequest{}
+	protoRequest := &dposProto.SignatureRequest{}
 	protoRequest.BlockNumber = block.Block.Number()
 	protoRequest.BlockHash = block.Block.Header.Hash.Bytes()
 	protoRequest.CheckpointHash = checkpointHash.Bytes()
@@ -2775,7 +2802,34 @@ func (r *dposRuntime) waitForNetworkGrowth(checkpointHash types.Hash, proposerAd
 }
 
 // broadcastSignatureRequest 广播签名请求
-func (r *dposRuntime) broadcastSignatureRequest(protoRequest *proto.SignatureRequest) error {
+func (r *dposRuntime) broadcastSignatureRequest(protoRequest *dposProto.SignatureRequest) error {
+	// 验证签名请求的有效性，防止发送无效消息
+	if protoRequest == nil {
+		return fmt.Errorf("signature request is nil")
+	}
+
+	// 检查是否是查询请求
+	if protoRequest.BlockNumber == 0 {
+		// 查询请求必须包含有效的标识符
+		if string(protoRequest.BlockHash) != "QUERY_REQUEST" && string(protoRequest.CheckpointHash) != "QUERY_REQUEST" {
+			r.logger.Warn("阻止发送无效的查询请求",
+				"blockHash", string(protoRequest.BlockHash),
+				"checkpointHash", string(protoRequest.CheckpointHash))
+			return fmt.Errorf("invalid query request: missing QUERY_REQUEST identifier")
+		}
+	} else {
+		// 正常签名请求必须包含有效字段
+		if protoRequest.BlockNumber == 0 {
+			return fmt.Errorf("invalid block number: cannot be 0 for non-query requests")
+		}
+		if len(protoRequest.CheckpointHash) == 0 {
+			return fmt.Errorf("invalid checkpoint hash: cannot be empty")
+		}
+		if len(protoRequest.Proposer) == 0 {
+			return fmt.Errorf("invalid proposer: cannot be empty")
+		}
+	}
+
 	checkpointHash := types.BytesToHash(protoRequest.CheckpointHash)
 
 	// 创建内部请求对象
@@ -2822,9 +2876,22 @@ func (r *dposRuntime) broadcastSignatureRequest(protoRequest *proto.SignatureReq
 		return nil
 	}
 
+	// 统一消息类型：使用 DPOSMessage 包装，确保与网络集成管理器兼容
+	// 序列化 SignatureRequest
+	requestData, err := proto.Marshal(protoRequest)
+	if err != nil {
+		r.logger.Warn("failed to marshal signature request", "error", err)
+		return fmt.Errorf("failed to marshal signature request: %w", err)
+	}
+
+	// 创建 DPOSMessage
+	dposMsg := &dposProto.TransportMessage{
+		Data: requestData,
+	}
+
 	// 发布签名请求
 	r.logger.Info("开始广播签名请求", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String())
-	if err := topic.Publish(protoRequest); err != nil {
+	if err := topic.Publish(dposMsg); err != nil {
 		r.logger.Warn("failed to publish signature request, using fallback", "error", err)
 		// 回退到日志记录
 		//r.logger.Info("广播签名请求（回退模式）",
@@ -2874,8 +2941,32 @@ func (r *dposRuntime) getSignatureRequestTopic() (*network.Topic, error) {
 		return nil, fmt.Errorf("network service not available")
 	}
 
+	// 使用有效的默认值创建主题，避免网络层发送零值消息
+	// 创建一个查询请求作为模板，这样网络层就不会发送无效的默认消息
+	defaultRequest := &dposProto.SignatureRequest{
+		BlockNumber:    0,
+		BlockHash:      []byte("QUERY_REQUEST"),
+		CheckpointHash: []byte("QUERY_REQUEST"),
+		Round:          0,
+		Proposer:       types.Address(r.config.Key.Address()).Bytes(),
+		Timestamp:      uint64(time.Now().Unix()),
+	}
+
+	// 序列化默认请求
+	defaultRequestData, err := proto.Marshal(defaultRequest)
+	if err != nil {
+		r.logger.Warn("failed to marshal default request template", "error", err)
+		// 如果序列化失败，使用空的但有效的消息
+		defaultRequestData = []byte("QUERY_REQUEST")
+	}
+
+	// 创建 DPOSMessage 作为模板
+	defaultDPOSMessage := &dposProto.TransportMessage{
+		Data: defaultRequestData,
+	}
+
 	// 尝试创建新主题，如果失败则智能处理
-	topic, err := r.network.NewTopic("dpos-signature-request", &proto.SignatureRequest{})
+	topic, err := r.network.NewTopic("dpos-signature-request", defaultDPOSMessage)
 	if err != nil {
 		// 如果主题已存在，我们需要获取现有主题的引用
 		if strings.Contains(err.Error(), "topic already exists") {
@@ -2897,7 +2988,7 @@ func (r *dposRuntime) getSignatureRequestTopic() (*network.Topic, error) {
 			time.Sleep(200 * time.Millisecond)
 
 			// 重试创建主题
-			topic, err = r.network.NewTopic("dpos-signature-request", &proto.SignatureRequest{})
+			topic, err = r.network.NewTopic("dpos-signature-request", defaultDPOSMessage)
 			if err != nil {
 				r.logger.Warn("重试创建主题仍然失败", "error", err)
 				return nil, fmt.Errorf("failed to create topic after retry: %w", err)
@@ -2940,8 +3031,30 @@ func (r *dposRuntime) getSignatureResponseTopic() (*network.Topic, error) {
 		return nil, fmt.Errorf("network service not available")
 	}
 
+	// 使用有效的默认值创建主题，避免网络层发送零值消息
+	// 创建一个有效的签名响应作为模板
+	defaultResponse := &dposProto.SignatureResponse{
+		ValidatorAddr:  types.Address(r.config.Key.Address()).Bytes(),
+		Signature:      []byte("DEFAULT_SIGNATURE"),
+		CheckpointHash: types.Hash{}.Bytes(), // 使用零哈希，但这是合法的
+		Timestamp:      uint64(time.Now().Unix()),
+	}
+
+	// 序列化默认响应
+	defaultResponseData, err := proto.Marshal(defaultResponse)
+	if err != nil {
+		r.logger.Warn("failed to marshal default response template", "error", err)
+		// 如果序列化失败，使用空的但有效的消息
+		defaultResponseData = []byte("DEFAULT_RESPONSE")
+	}
+
+	// 创建 DPOSMessage 作为模板
+	defaultDPOSMessage := &dposProto.TransportMessage{
+		Data: defaultResponseData,
+	}
+
 	// 尝试创建新主题，如果失败则智能处理
-	topic, err := r.network.NewTopic("dpos-signature-response", &proto.SignatureResponse{})
+	topic, err := r.network.NewTopic("dpos-signature-response", defaultDPOSMessage)
 	if err != nil {
 		// 如果主题已存在，我们需要获取现有主题的引用
 		if strings.Contains(err.Error(), "topic already exists") {
@@ -2963,7 +3076,7 @@ func (r *dposRuntime) getSignatureResponseTopic() (*network.Topic, error) {
 			time.Sleep(200 * time.Millisecond)
 
 			// 重试创建主题
-			topic, err = r.network.NewTopic("dpos-signature-response", &proto.SignatureResponse{})
+			topic, err = r.network.NewTopic("dpos-signature-response", defaultDPOSMessage)
 			if err != nil {
 				r.logger.Warn("重试创建主题仍然失败", "error", err)
 				return nil, fmt.Errorf("failed to create topic after retry: %w", err)
@@ -3174,15 +3287,15 @@ func (r *dposRuntime) handleSignatureRequestMessage(obj interface{}, from peer.I
 		return
 	}
 
-	protoRequest, ok := obj.(*proto.SignatureRequest)
+	protoRequest, ok := obj.(*dposProto.SignatureRequest)
 	if !ok {
 		r.logger.Warn("received invalid signature request message", "from", from.String())
 		return
 	}
 
 	// 检查是否是查询请求
-	if protoRequest.BlockNumber == 0 && string(protoRequest.BlockHash) == "QUERY_REQUEST" {
-		//r.logger.Info("收到签名查询请求", "from", from.String())
+	if protoRequest.BlockNumber == 0 && (string(protoRequest.BlockHash) == "QUERY_REQUEST" || string(protoRequest.CheckpointHash) == "QUERY_REQUEST") {
+		r.logger.Debug("收到签名查询请求", "from", from.String())
 		r.handleSignatureQueryRequest(from)
 		return
 	}
@@ -3195,6 +3308,45 @@ func (r *dposRuntime) handleSignatureRequestMessage(obj interface{}, from peer.I
 		Round:          protoRequest.Round,
 		Proposer:       types.BytesToAddress(protoRequest.Proposer),
 		Timestamp:      protoRequest.Timestamp,
+	}
+
+	// 验证签名请求的有效性
+	// 首先检查是否是查询请求（BlockNumber=0 且包含查询标识符）
+	if request.BlockNumber == 0 {
+		// 检查是否是查询请求 - 统一使用字符串比较
+		if string(protoRequest.BlockHash) == "QUERY_REQUEST" || string(protoRequest.CheckpointHash) == "QUERY_REQUEST" {
+			// 这是查询请求，正常处理
+			r.logger.Debug("收到查询请求，正常处理",
+				"blockNumber", request.BlockNumber,
+				"blockHash", request.BlockHash.String(),
+				"checkpointHash", request.CheckpointHash.String(),
+				"from", from.String())
+		} else {
+			// 这是无效的请求
+			r.logger.Warn("收到无效的签名请求：BlockNumber 为 0 但不是查询请求，忽略此请求",
+				"blockHash", request.BlockHash.String(),
+				"checkpointHash", request.CheckpointHash.String(),
+				"proposer", request.Proposer.String(),
+				"from", from.String())
+			return
+		}
+	} else {
+		// 对于正常的签名请求，检查其他字段
+		if request.CheckpointHash == (types.Hash{}) {
+			r.logger.Warn("收到无效的签名请求：CheckpointHash 为全零，忽略此请求",
+				"blockNumber", request.BlockNumber,
+				"proposer", request.Proposer.String(),
+				"from", from.String())
+			return
+		}
+
+		if request.Proposer == (types.Address{}) {
+			r.logger.Warn("收到无效的签名请求：Proposer 地址为空，忽略此请求",
+				"checkpointHash", request.CheckpointHash.String(),
+				"proposer", request.Proposer.String(),
+				"from", from.String())
+			return
+		}
 	}
 
 	// 简化处理：直接处理签名请求，不做去重检查
@@ -3243,8 +3395,8 @@ func (r *dposRuntime) handleSignatureRequestMessage(obj interface{}, from peer.I
 	default:
 		// 信号量已满，记录警告并跳过处理
 		//r.logger.Warn("并发签名请求过多，跳过处理",
-		//	"checkpointHash", request.CheckpointHash.String(),
-		//	"proposer", request.Proposer.String(),
+		//	"checkpointHash", protoRequest.CheckpointHash.String(),
+		//	"proposer", protoRequest.Proposer.String(),
 		//	"当前并发数", r.maxConcurrentSignatures)
 	}
 }
@@ -3290,7 +3442,7 @@ func (r *dposRuntime) broadcastSignatureRequestToPeer(request *SignatureRequest,
 	}
 
 	// 转换为protobuf格式
-	protoRequest := &proto.SignatureRequest{
+	protoRequest := &dposProto.SignatureRequest{
 		BlockNumber:    request.BlockNumber,
 		BlockHash:      request.BlockHash.Bytes(),
 		CheckpointHash: request.CheckpointHash.Bytes(),
@@ -3299,8 +3451,21 @@ func (r *dposRuntime) broadcastSignatureRequestToPeer(request *SignatureRequest,
 		Timestamp:      request.Timestamp,
 	}
 
+	// 统一消息类型：使用 DPOSMessage 包装，确保与网络集成管理器兼容
+	// 序列化签名请求
+	requestData, err := proto.Marshal(protoRequest)
+	if err != nil {
+		r.logger.Warn("failed to marshal signature request", "error", err, "peer", peerID.String())
+		return
+	}
+
+	// 创建 DPOSMessage
+	dposMsg := &dposProto.TransportMessage{
+		Data: requestData,
+	}
+
 	// 发布签名请求
-	if err := topic.Publish(protoRequest); err != nil {
+	if err := topic.Publish(dposMsg); err != nil {
 		r.logger.Warn("failed to publish signature request to peer", "error", err, "peer", peerID.String())
 		return
 	}
@@ -3351,61 +3516,38 @@ func (r *dposRuntime) generateSignatureResponse(request *SignatureRequest) error
 		return fmt.Errorf("failed to marshal signature: %w", err)
 	}
 
-	// 创建protobuf签名响应
-	protoResponse := &proto.SignatureResponse{}
-
-	// 手动设置字段
-	protoResponse.ValidatorAddr = types.Address(r.config.Key.Address()).Bytes()
-	protoResponse.Signature = signatureBytes
-	protoResponse.CheckpointHash = request.CheckpointHash.Bytes()
-	protoResponse.Timestamp = uint64(time.Now().Unix())
-
-	// 确保protobuf消息被正确初始化
-	if protoResponse == nil {
-		r.logger.Error("failed to create protobuf signature response")
-		return fmt.Errorf("failed to create protobuf signature response")
+	// 创建内部签名响应结构
+	internalResponse := &SignatureResponse{
+		ValidatorAddr:  types.Address(r.config.Key.Address()),
+		Signature:      signatureBytes,
+		CheckpointHash: request.CheckpointHash,
+		Timestamp:      uint64(time.Now().Unix()),
 	}
 
-	// 获取签名响应主题
-	topic, err := r.getSignatureResponseTopic()
-	if err != nil {
-		r.logger.Warn("failed to get signature response topic, using fallback", "error", err)
-		// 回退到日志记录
-		r.logger.Info("生成签名响应（回退模式）",
+	// 优先使用网络集成层发送消息
+	if r.networkIntegration != nil {
+		if err := r.networkIntegration.BroadcastSignatureResponse(internalResponse); err != nil {
+			r.logger.Warn("通过网络集成层发送签名响应失败，使用回退模式", "error", err)
+			// 回退到日志记录
+			r.logger.Info("生成签名响应（回退模式）",
+				"validator", types.Address(r.config.Key.Address()).String(),
+				"checkpointHash", request.CheckpointHash.String(),
+				"signatureLength", len(signatureBytes))
+			return nil
+		}
+
+		r.logger.Info("成功生成并广播签名响应",
 			"validator", types.Address(r.config.Key.Address()).String(),
 			"checkpointHash", request.CheckpointHash.String(),
 			"signatureLength", len(signatureBytes))
 		return nil
 	}
 
-	// 检查topic是否为nil
-	if topic == nil {
-		r.logger.Warn("signature response topic is nil, using fallback")
-		// 回退到日志记录
-		r.logger.Info("生成签名响应（回退模式）",
-			"validator", types.Address(r.config.Key.Address()).String(),
-			"checkpointHash", request.CheckpointHash.String(),
-			"signatureLength", len(signatureBytes))
-		return nil
-	}
-
-	// 发布签名响应
-	if err := topic.Publish(protoResponse); err != nil {
-		r.logger.Warn("failed to publish signature response, using fallback", "error", err)
-		// 回退到日志记录
-		r.logger.Info("生成签名响应（回退模式）",
-			"validator", types.Address(r.config.Key.Address()).String(),
-			"checkpointHash", request.CheckpointHash.String(),
-			"signatureLength", len(signatureBytes))
-		return nil
-	}
-
-	//r.logger.Info("成功生成并广播签名响应",
-	//	"validator", types.Address(r.config.Key.Address()).String(),
-	//	"checkpointHash", request.CheckpointHash.String(),
-	//	"signatureLength", len(signatureBytes))
-
-	return nil
+	// 如果没有网络集成层，记录错误并返回
+	r.logger.Error("网络集成层不可用，无法发送签名响应",
+		"validator", types.Address(r.config.Key.Address()).String(),
+		"checkpointHash", request.CheckpointHash.String())
+	return fmt.Errorf("网络集成层不可用，无法发送签名响应")
 }
 
 // getBLSPrivateKey 获取BLS私钥
@@ -3492,23 +3634,43 @@ func (r *dposRuntime) broadcastSignatureQuery() {
 		return
 	}
 
-	// 创建查询请求
-	queryRequest := &proto.SignatureRequest{
-		BlockNumber:    0, // 使用0表示这是一个查询请求
-		BlockHash:      []byte("QUERY_REQUEST"),
-		CheckpointHash: []byte("QUERY_REQUEST"),
+	// 创建查询请求 - 使用明确的标识符避免被误认为是无效请求
+	queryRequest := &dposProto.SignatureRequest{
+		BlockNumber:    0,                       // 使用0表示这是一个查询请求
+		BlockHash:      []byte("QUERY_REQUEST"), // 直接使用字符串标识符
+		CheckpointHash: []byte("QUERY_REQUEST"), // 直接使用字符串标识符
 		Round:          0,
 		Proposer:       types.Address(r.config.Key.Address()).Bytes(),
 		Timestamp:      uint64(time.Now().Unix()),
 	}
 
+	// 添加调试日志
+	r.logger.Debug("发送签名查询请求",
+		"blockNumber", queryRequest.BlockNumber,
+		"blockHash", string(queryRequest.BlockHash),
+		"checkpointHash", string(queryRequest.CheckpointHash),
+		"proposer", types.Address(r.config.Key.Address()).String())
+
+	// 统一消息类型：使用 DPOSMessage 包装，确保与网络集成管理器兼容
+	// 序列化查询请求
+	queryData, err := proto.Marshal(queryRequest)
+	if err != nil {
+		r.logger.Warn("failed to marshal query request", "error", err)
+		return
+	}
+
+	// 创建 DPOSMessage
+	dposMsg := &dposProto.TransportMessage{
+		Data: queryData,
+	}
+
 	// 发布查询请求
-	if err := topic.Publish(queryRequest); err != nil {
+	if err := topic.Publish(dposMsg); err != nil {
 		r.logger.Warn("failed to publish signature query request", "error", err)
 		return
 	}
 
-	//r.logger.Info("广播签名查询请求成功")
+	r.logger.Debug("广播签名查询请求成功")
 }
 
 // queryPeerForPendingRequests 向指定节点查询待处理的签名请求
@@ -3525,23 +3687,44 @@ func (r *dposRuntime) queryPeerForPendingRequests(peerID peer.ID) {
 		return
 	}
 
-	// 创建查询请求 - 使用特殊的消息格式
-	queryRequest := &proto.SignatureRequest{
-		BlockNumber:    0, // 使用0表示这是一个查询请求
-		BlockHash:      []byte("QUERY_REQUEST"),
-		CheckpointHash: []byte("QUERY_REQUEST"),
+	// 创建查询请求 - 使用明确的标识符避免被误认为是无效请求
+	queryRequest := &dposProto.SignatureRequest{
+		BlockNumber:    0,                       // 使用0表示这是一个查询请求
+		BlockHash:      []byte("QUERY_REQUEST"), // 直接使用字符串标识符
+		CheckpointHash: []byte("QUERY_REQUEST"), // 直接使用字符串标识符
 		Round:          0,
 		Proposer:       types.Address(r.config.Key.Address()).Bytes(),
 		Timestamp:      uint64(time.Now().Unix()),
 	}
 
+	// 添加调试日志
+	r.logger.Debug("向节点发送签名查询请求",
+		"peer", peerID.String(),
+		"blockNumber", queryRequest.BlockNumber,
+		"blockHash", string(queryRequest.BlockHash),
+		"checkpointHash", string(queryRequest.CheckpointHash),
+		"proposer", types.Address(r.config.Key.Address()).String())
+
+	// 统一消息类型：使用 DPOSMessage 包装，确保与网络集成管理器兼容
+	// 序列化查询请求
+	queryData, err := proto.Marshal(queryRequest)
+	if err != nil {
+		r.logger.Warn("failed to marshal query request", "error", err, "peer", peerID.String())
+		return
+	}
+
+	// 创建 DPOSMessage
+	dposMsg := &dposProto.TransportMessage{
+		Data: queryData,
+	}
+
 	// 发布查询请求到网络
-	if err := topic.Publish(queryRequest); err != nil {
+	if err := topic.Publish(dposMsg); err != nil {
 		r.logger.Warn("failed to publish signature query request", "error", err, "peer", peerID.String())
 		return
 	}
 
-	//r.logger.Info("向节点发送签名请求查询", "peer", peerID.String())
+	r.logger.Debug("向节点发送签名请求查询成功", "peer", peerID.String())
 }
 
 // getSignatureQueryTopic 获取签名查询主题
@@ -3614,7 +3797,7 @@ func (r *dposRuntime) subscribeToSignatureTopic(listener *SignatureListener) err
 // handleSignatureResponseMessage 处理签名响应消息
 func (r *dposRuntime) handleSignatureResponseMessage(obj interface{}, from peer.ID, listener *SignatureListener) {
 
-	protoResponse, ok := obj.(*proto.SignatureResponse)
+	protoResponse, ok := obj.(*dposProto.SignatureResponse)
 	if !ok {
 		r.logger.Warn("received invalid signature response message", "from", from.String())
 		return
@@ -3940,7 +4123,7 @@ func (r *dposRuntime) debugPendingSignatureRequests() {
 }
 
 // checkSignatureRequestConfirmation 检查签名请求是否被其他节点收到
-func (r *dposRuntime) checkSignatureRequestConfirmation(protoRequest *proto.SignatureRequest, checkpointHash types.Hash) {
+func (r *dposRuntime) checkSignatureRequestConfirmation(protoRequest *dposProto.SignatureRequest, checkpointHash types.Hash) {
 	// 等待一段时间让消息传播
 	time.Sleep(3 * time.Second)
 
@@ -3998,7 +4181,7 @@ func (r *dposRuntime) checkSignatureRequestConfirmation(protoRequest *proto.Sign
 }
 
 // fallbackSignatureRequestPropagation 备用签名请求传播机制
-func (r *dposRuntime) fallbackSignatureRequestPropagation(protoRequest *proto.SignatureRequest, checkpointHash types.Hash) {
+func (r *dposRuntime) fallbackSignatureRequestPropagation(protoRequest *dposProto.SignatureRequest, checkpointHash types.Hash) {
 	r.logger.Info("=== 备用转传播启动 ===", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String())
 
 	peers := r.network.Peers()
@@ -4042,7 +4225,7 @@ func (r *dposRuntime) fallbackSignatureRequestPropagation(protoRequest *proto.Si
 }
 
 // sendDirectSignatureRequest 直接发送签名请求给指定peer
-func (r *dposRuntime) sendDirectSignatureRequest(peerID peer.ID, protoRequest *proto.SignatureRequest) error {
+func (r *dposRuntime) sendDirectSignatureRequest(peerID peer.ID, protoRequest *dposProto.SignatureRequest) error {
 	// 临时方案：重新尝试gossip发布
 	topic, err := r.getSignatureRequestTopic()
 	if err != nil {
@@ -4051,11 +4234,23 @@ func (r *dposRuntime) sendDirectSignatureRequest(peerID peer.ID, protoRequest *p
 
 	r.logger.Debug("备用传播：重新尝试签名请求gossip发布", "peer", peerID.String()[:8], "区块高度", protoRequest.BlockNumber)
 
-	return topic.Publish(protoRequest)
+	// 统一消息类型：使用 DPOSMessage 包装，确保与网络集成管理器兼容
+	// 序列化签名请求
+	requestData, err := proto.Marshal(protoRequest)
+	if err != nil {
+		return fmt.Errorf("failed to marshal signature request: %w", err)
+	}
+
+	// 创建 DPOSMessage
+	dposMsg := &dposProto.TransportMessage{
+		Data: requestData,
+	}
+
+	return topic.Publish(dposMsg)
 }
 
 // sendDirectSignatureRequestWithRetry 带重试的直接签名请求
-func (r *dposRuntime) sendDirectSignatureRequestWithRetry(peerID peer.ID, protoRequest *proto.SignatureRequest) error {
+func (r *dposRuntime) sendDirectSignatureRequestWithRetry(peerID peer.ID, protoRequest *dposProto.SignatureRequest) error {
 	const maxRetries = 3
 	const baseDelay = 100 * time.Millisecond
 
@@ -4137,8 +4332,7 @@ func (r *dposRuntime) HandleSignatureResponse(response *SignatureResponse) error
 // setupNetworkIntegration 设置网络集成
 func (r *dposRuntime) setupNetworkIntegration() error {
 	if r.network == nil {
-		r.logger.Warn("网络服务不可用，跳过网络集成设置")
-		return nil
+		return fmt.Errorf("网络服务不可用，无法设置网络集成")
 	}
 
 	// 创建网络集成管理器
@@ -4157,9 +4351,7 @@ func (r *dposRuntime) setupNetworkIntegration() error {
 
 	// 启动网络集成
 	if err := r.networkIntegration.Start(); err != nil {
-		r.logger.Warn("网络集成启动失败，使用回退模式", "error", err)
-		// 不返回错误，因为网络集成不是必需的
-		return nil
+		return fmt.Errorf("网络集成启动失败: %w", err)
 	}
 
 	r.logger.Info("网络集成管理器已启动")

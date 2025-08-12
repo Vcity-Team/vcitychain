@@ -295,3 +295,4 @@ goroutineManager := NewGoroutineManager(logger, 5000, 500)
 5. **监控和诊断** - 详细的协程统计和健康检查
 
 这些改进应该显著减少协程泄漏，提高系统稳定性，并提供更好的资源使用监控能力。
+

@@ -468,6 +468,11 @@ func (p *DPoS) generateSignatureResponse(request *SignatureRequest) error {
 
 // broadcastSignatureResponse 广播签名响应
 func (p *DPoS) broadcastSignatureResponse(response *SignatureResponse) error {
+	// 检查网络集成状态
+	if err := p.checkNetworkIntegration(); err != nil {
+		return fmt.Errorf("网络集成检查失败: %w", err)
+	}
+
 	// 检查是否已经广播过该响应
 	responseKey := fmt.Sprintf("%s_%s_%d",
 		response.ValidatorAddr.String(),
@@ -482,36 +487,24 @@ func (p *DPoS) broadcastSignatureResponse(response *SignatureResponse) error {
 	// 标记响应已广播
 	p.runtime.markSignatureResponseBroadcasted(responseKey)
 
-	// 使用新的网络集成层发送 protobuf 格式的消息
-	if p.runtime.networkIntegration != nil {
-		if err := p.runtime.networkIntegration.BroadcastSignatureResponse(response); err != nil {
-			return fmt.Errorf("通过网络集成层广播签名响应失败: %w", err)
-		}
-		p.logger.Debug("通过网络集成层广播签名响应",
-			"validator", response.ValidatorAddr.String(),
-			"checkpointHash", response.CheckpointHash.String())
-		return nil
+	// 使用网络集成层发送 protobuf 格式的消息
+	if err := p.runtime.networkIntegration.BroadcastSignatureResponse(response); err != nil {
+		return fmt.Errorf("通过网络集成层广播签名响应失败: %w", err)
 	}
 
-	// 如果没有网络集成层，使用旧的 TransportMessage 格式（兼容性）
-	p.logger.Warn("网络集成层不可用，使用旧的 TransportMessage 格式")
-	msg := &TransportMessage{
-		Hash:        response.CheckpointHash.Bytes(),
-		Signature:   response.Signature,
-		From:        response.ValidatorAddr.String(),
-		EpochNumber: p.currentRound,
-	}
-
-	// 广播消息
-	if err := p.broadcastMessage(msg); err != nil {
-		return fmt.Errorf("广播消息失败: %w", err)
-	}
-
+	p.logger.Debug("通过网络集成层广播签名响应",
+		"validator", response.ValidatorAddr.String(),
+		"checkpointHash", response.CheckpointHash.String())
 	return nil
 }
 
 // forwardSignatureResponse 转发签名响应
 func (p *DPoS) forwardSignatureResponse(response *SignatureResponse) error {
+	// 检查网络集成状态
+	if err := p.checkNetworkIntegration(); err != nil {
+		return fmt.Errorf("网络集成检查失败: %w", err)
+	}
+
 	// 检查是否已经转发过该响应
 	responseKey := fmt.Sprintf("%s_%s_%d",
 		response.ValidatorAddr.String(),
@@ -526,35 +519,14 @@ func (p *DPoS) forwardSignatureResponse(response *SignatureResponse) error {
 	// 标记响应已转发
 	p.runtime.markSignatureResponseBroadcasted(responseKey)
 
-	// 使用新的网络集成层发送 protobuf 格式的消息
-	if p.runtime.networkIntegration != nil {
-		if err := p.runtime.networkIntegration.BroadcastSignatureResponse(response); err != nil {
-			return fmt.Errorf("通过网络集成层转发签名响应失败: %w", err)
-		}
-		p.logger.Debug("通过网络集成层转发签名响应",
-			"validator", response.ValidatorAddr.String(),
-			"checkpointHash", response.CheckpointHash.String())
-		return nil
+	// 使用网络集成层发送 protobuf 格式的消息
+	if err := p.runtime.networkIntegration.BroadcastSignatureResponse(response); err != nil {
+		return fmt.Errorf("通过网络集成层转发签名响应失败: %w", err)
 	}
 
-	// 如果没有网络集成层，使用旧的 TransportMessage 格式（兼容性）
-	p.logger.Warn("网络集成层不可用，使用旧的 TransportMessage 格式")
-	msg := &TransportMessage{
-		Hash:        response.CheckpointHash.Bytes(),
-		Signature:   response.Signature,
-		From:        response.ValidatorAddr.String(),
-		EpochNumber: p.currentRound,
-	}
-
-	// 广播消息
-	if err := p.broadcastMessage(msg); err != nil {
-		return fmt.Errorf("广播消息失败: %w", err)
-	}
-
-	p.logger.Debug("转发签名响应",
+	p.logger.Debug("通过网络集成层转发签名响应",
 		"validator", response.ValidatorAddr.String(),
 		"checkpointHash", response.CheckpointHash.String())
-
 	return nil
 }
 
@@ -574,6 +546,17 @@ func (p *DPoS) isCurrentProposer() bool {
 	currentDelegate := p.GetCurrentDelegate()
 	myAddr := types.Address(p.key.Address())
 	return currentDelegate == myAddr
+}
+
+// checkNetworkIntegration 检查网络集成是否可用
+func (p *DPoS) checkNetworkIntegration() error {
+	if p.runtime == nil {
+		return fmt.Errorf("runtime 未初始化")
+	}
+	if p.runtime.networkIntegration == nil {
+		return fmt.Errorf("网络集成层未初始化")
+	}
+	return nil
 }
 
 // getBLSPrivateKey 获取BLS私钥

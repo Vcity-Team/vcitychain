@@ -236,3 +236,4 @@ go build ./consensus/dpos
 4. **配置灵活性** - 支持不同环境的调优
 
 这些改进应该显著减少 "signature channel is full" 错误，提高签名收集成功率，最终改善区块确认的稳定性和速度。
+

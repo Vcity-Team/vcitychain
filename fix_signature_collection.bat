@@ -39,3 +39,4 @@ echo   go build ./consensus/dpos
 echo   go test ./consensus/dpos -v
 echo.
 pause
+

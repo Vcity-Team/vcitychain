@@ -210,3 +210,4 @@ func (gm *GoroutineManager) IsHealthy() bool {
 	active := atomic.LoadInt64(&gm.activeGoroutines)
 	return active < gm.maxGoroutines*90/100 // 使用率低于90%认为健康
 }
+

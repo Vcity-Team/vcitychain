@@ -160,6 +160,15 @@ func (t *Topic) readLoop(sub *pubsub.Subscription, handler func(obj interface{},
 				return
 			}
 
+			// 验证消息的有效性，防止零值消息被传递给处理器
+			if !t.isValidMessage(obj) {
+				t.logger.Debug("收到无效消息，跳过处理",
+					"topic", t.topic.String(),
+					"from", msg.GetFrom().String())
+				metrics.IncrCounter([]string{networkMetrics, "invalid_messages"}, float32(1))
+				return
+			}
+
 			metrics.SetGauge([]string{networkMetrics, "ingress_bytes"}, float32(len(msg.Data)))
 
 			// 只对状态广播消息使用INFO级别日志，其他消息不记录
@@ -170,6 +179,102 @@ func (t *Topic) readLoop(sub *pubsub.Subscription, handler func(obj interface{},
 			handler(obj, msg.GetFrom())
 		}()
 	}
+}
+
+// isValidMessage 验证消息的有效性，防止零值消息被处理
+func (t *Topic) isValidMessage(obj proto.Message) bool {
+	if obj == nil {
+		return false
+	}
+
+	// 针对DPoS签名请求消息的特殊验证
+	if strings.Contains(t.topic.String(), "dpos-signature-request") {
+		return t.isValidSignatureRequest(obj)
+	}
+
+	// 针对DPoS签名响应消息的特殊验证
+	if strings.Contains(t.topic.String(), "dpos-signature-response") {
+		return t.isValidSignatureResponse(obj)
+	}
+
+	// 对于其他类型的消息，默认认为是有效的
+	return true
+}
+
+// isValidSignatureRequest 验证签名请求消息的有效性
+func (t *Topic) isValidSignatureRequest(obj proto.Message) bool {
+	// 使用反射获取消息字段值
+	val := reflect.ValueOf(obj).Elem()
+
+	// 检查BlockNumber字段
+	if blockNumberField := val.FieldByName("BlockNumber"); blockNumberField.IsValid() {
+		if blockNumber, ok := blockNumberField.Interface().(uint64); ok {
+			if blockNumber == 0 {
+				// 如果是查询请求（BlockNumber=0），检查是否有有效的标识符
+				if blockHashField := val.FieldByName("BlockHash"); blockHashField.IsValid() {
+					if blockHash, ok := blockHashField.Interface().([]byte); ok {
+						if string(blockHash) == "QUERY_REQUEST" {
+							return true // 有效的查询请求
+						}
+					}
+				}
+				if checkpointHashField := val.FieldByName("CheckpointHash"); checkpointHashField.IsValid() {
+					if checkpointHash, ok := checkpointHashField.Interface().([]byte); ok {
+						if string(checkpointHash) == "QUERY_REQUEST" {
+							return true // 有效的查询请求
+						}
+					}
+				}
+				// BlockNumber=0 但没有有效标识符，认为是无效消息
+				return false
+			}
+		}
+	}
+
+	// 对于非查询请求，检查其他必要字段
+	if checkpointHashField := val.FieldByName("CheckpointHash"); checkpointHashField.IsValid() {
+		if checkpointHash, ok := checkpointHashField.Interface().([]byte); ok {
+			if len(checkpointHash) == 0 {
+				return false // CheckpointHash为空
+			}
+		}
+	}
+
+	if proposerField := val.FieldByName("Proposer"); proposerField.IsValid() {
+		if proposer, ok := proposerField.Interface().([]byte); ok {
+			if len(proposer) == 0 {
+				return false // Proposer为空
+			}
+		}
+	}
+
+	return true
+}
+
+// isValidSignatureResponse 验证签名响应消息的有效性
+func (t *Topic) isValidSignatureResponse(obj proto.Message) bool {
+	// 使用反射获取消息字段值
+	val := reflect.ValueOf(obj).Elem()
+
+	// 检查ValidatorAddr字段
+	if validatorAddrField := val.FieldByName("ValidatorAddr"); validatorAddrField.IsValid() {
+		if validatorAddr, ok := validatorAddrField.Interface().([]byte); ok {
+			if len(validatorAddr) == 0 {
+				return false // ValidatorAddr为空
+			}
+		}
+	}
+
+	// 检查Signature字段
+	if signatureField := val.FieldByName("Signature"); signatureField.IsValid() {
+		if signature, ok := signatureField.Interface().([]byte); ok {
+			if len(signature) == 0 {
+				return false // Signature为空
+			}
+		}
+	}
+
+	return true
 }
 
 func (s *Server) NewTopic(protoID string, obj proto.Message) (*Topic, error) {

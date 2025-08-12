@@ -330,9 +330,27 @@ func (ni *NetworkIntegration) createTopics() error {
 	var err error
 	var criticalTopicsCreated int
 
-	// 创建签名请求主题 - 使用protobuf序列化
-	ni.signatureRequestTopic, err = ni.network.NewTopic("dpos-signature-request", &DPOSMessage{
-		Data: nil,
+	// 创建签名请求主题 - 使用有效的默认值避免网络层发送零值消息
+	// 使用查询请求作为模板，这样网络层就不会发送无效的默认消息
+	defaultSignatureRequest := &dposProto.SignatureRequest{
+		BlockNumber:    0,
+		BlockHash:      []byte("QUERY_REQUEST"),
+		CheckpointHash: []byte("QUERY_REQUEST"),
+		Round:          0,
+		Proposer:       []byte("DEFAULT_PROPOSER"),
+		Timestamp:      uint64(time.Now().Unix()),
+	}
+
+	// 序列化默认请求作为模板
+	defaultRequestData, err := proto.Marshal(defaultSignatureRequest)
+	if err != nil {
+		ni.logger.Warn("failed to marshal default signature request template", "error", err)
+		// 如果序列化失败，使用空的但有效的消息
+		defaultRequestData = []byte("QUERY_REQUEST")
+	}
+
+	ni.signatureRequestTopic, err = ni.network.NewTopic("dpos-signature-request", &dposProto.TransportMessage{
+		Data: defaultRequestData,
 	})
 	if err != nil {
 		// 检查是否是"topic already exists"错误
@@ -347,9 +365,24 @@ func (ni *NetworkIntegration) createTopics() error {
 		ni.logger.Info("成功创建签名请求主题")
 	}
 
-	// 创建签名响应主题 - 使用protobuf序列化
-	ni.signatureResponseTopic, err = ni.network.NewTopic("dpos-signature-response", &DPOSMessage{
-		Data: nil,
+	// 创建签名响应主题 - 使用有效的默认值避免网络层发送零值消息
+	defaultSignatureResponse := &dposProto.SignatureResponse{
+		ValidatorAddr:  []byte("DEFAULT_VALIDATOR"),
+		Signature:      []byte("DEFAULT_SIGNATURE"),
+		CheckpointHash: []byte("DEFAULT_CHECKPOINT"),
+		Timestamp:      uint64(time.Now().Unix()),
+	}
+
+	// 序列化默认响应作为模板
+	defaultResponseData, err := proto.Marshal(defaultSignatureResponse)
+	if err != nil {
+		ni.logger.Warn("failed to marshal default signature response template", "error", err)
+		// 如果序列化失败，使用空的但有效的消息
+		defaultResponseData = []byte("DEFAULT_RESPONSE")
+	}
+
+	ni.signatureResponseTopic, err = ni.network.NewTopic("dpos-signature-response", &dposProto.TransportMessage{
+		Data: defaultResponseData,
 	})
 	if err != nil {
 		// 检查是否是"topic already exists"错误
@@ -549,6 +582,14 @@ func (ni *NetworkIntegration) registerHandlers() {
 
 // handleSignatureRequest 处理签名请求消息
 func (ni *NetworkIntegration) handleSignatureRequest(obj interface{}, from peer.ID) {
+	// 首先验证消息对象的有效性
+	if !ni.isValidSignatureRequestMessage(obj) {
+		ni.logger.Debug("收到无效的签名请求消息，跳过处理",
+			"from", from.String(),
+			"messageType", fmt.Sprintf("%T", obj))
+		return
+	}
+
 	dposMsg, ok := obj.(*DPOSMessage)
 	if !ok {
 		ni.logger.Warn("received invalid transport message for signature request", "from", from.String())
@@ -588,15 +629,113 @@ func (ni *NetworkIntegration) handleSignatureRequest(obj interface{}, from peer.
 		"proposer", internalRequest.Proposer.String(),
 		"from", from.String())
 
+	// 验证签名请求的有效性
+	// 首先检查是否是查询请求（BlockNumber=0 且包含查询标识符）
+	if internalRequest.BlockNumber == 0 {
+		// 检查是否是查询请求 - 统一使用字符串比较
+		blockHashStr := string(internalRequest.BlockHash.Bytes())
+		checkpointHashStr := string(internalRequest.CheckpointHash.Bytes())
+
+		if blockHashStr == "QUERY_REQUEST" || checkpointHashStr == "QUERY_REQUEST" {
+			// 这是查询请求，正常处理
+			ni.logger.Debug("收到查询请求，正常处理",
+				"blockNumber", internalRequest.BlockNumber,
+				"blockHash", internalRequest.BlockHash.String(),
+				"checkpointHash", internalRequest.CheckpointHash.String(),
+				"from", from.String())
+		} else {
+			// 这是无效的请求
+			ni.logger.Warn("收到无效的签名请求：BlockNumber 为 0 但不是查询请求，忽略此请求",
+				"blockHash", internalRequest.BlockHash.String(),
+				"checkpointHash", internalRequest.CheckpointHash.String(),
+				"proposer", internalRequest.Proposer.String(),
+				"from", from.String())
+			return
+		}
+	} else {
+		// 对于正常的签名请求，检查其他字段
+		if internalRequest.CheckpointHash == (types.Hash{}) {
+			ni.logger.Warn("收到无效的签名请求：CheckpointHash 为全零，忽略此请求",
+				"blockNumber", internalRequest.BlockNumber,
+				"proposer", internalRequest.Proposer.String(),
+				"from", from.String())
+			return
+		}
+
+		if internalRequest.Proposer == (types.Address{}) {
+			ni.logger.Warn("收到无效的签名请求：Proposer 地址为空，忽略此请求",
+				"checkpointHash", internalRequest.CheckpointHash.String(),
+				"from", from.String())
+			return
+		}
+	}
+
 	// 处理签名请求
 	if err := ni.processSignatureRequest(internalRequest); err != nil {
 		ni.logger.Error("failed to process signature request", "error", err)
-	} else {
-		ni.logger.Info("签名请求处理成功",
-			"blockNumber", internalRequest.BlockNumber,
-			"checkpointHash", internalRequest.CheckpointHash.String(),
-			"proposer", internalRequest.Proposer.String())
 	}
+}
+
+// isValidSignatureRequestMessage 验证签名请求消息的有效性
+func (ni *NetworkIntegration) isValidSignatureRequestMessage(obj interface{}) bool {
+	if obj == nil {
+		return false
+	}
+
+	// 检查是否是 DPOSMessage 类型
+	if dposMsg, ok := obj.(*DPOSMessage); ok {
+		// 检查 Data 字段是否为空
+		if len(dposMsg.Data) == 0 {
+			return false
+		}
+
+		// 尝试反序列化为 SignatureRequest
+		var request dposProto.SignatureRequest
+		if err := proto.Unmarshal(dposMsg.Data, &request); err != nil {
+			return false
+		}
+
+		// 验证 SignatureRequest 字段
+		return ni.isValidSignatureRequest(&request)
+	}
+
+	// 如果不是 DPOSMessage 类型，尝试直接作为 SignatureRequest 处理
+	if request, ok := obj.(*dposProto.SignatureRequest); ok {
+		return ni.isValidSignatureRequest(request)
+	}
+
+	return false
+}
+
+// isValidSignatureRequest 验证 SignatureRequest 的有效性
+func (ni *NetworkIntegration) isValidSignatureRequest(request *dposProto.SignatureRequest) bool {
+	if request == nil {
+		return false
+	}
+
+	// 检查是否是查询请求（BlockNumber=0）
+	if request.BlockNumber == 0 {
+		// 查询请求必须包含有效的标识符
+		blockHashStr := string(request.BlockHash)
+		checkpointHashStr := string(request.CheckpointHash)
+
+		if blockHashStr == "QUERY_REQUEST" || checkpointHashStr == "QUERY_REQUEST" {
+			return true // 有效的查询请求
+		}
+		// BlockNumber=0 但没有有效标识符，认为是无效消息
+		return false
+	}
+
+	// 对于非查询请求，检查其他必要字段
+	if len(request.CheckpointHash) == 0 {
+		return false // CheckpointHash 为空
+	}
+
+	if len(request.Proposer) == 0 {
+		return false // Proposer 为空
+	}
+
+	return true
 }
 
 // handleSignatureResponse 处理签名响应消息
@@ -927,6 +1066,33 @@ func (ni *NetworkIntegration) BroadcastSignatureRequest(request *SignatureReques
 	if ni.signatureRequestTopic == nil {
 		ni.logger.Warn("签名请求主题不可用，无法广播")
 		return fmt.Errorf("signature request topic not initialized")
+	}
+
+	// 验证签名请求的有效性，防止发送无效消息
+	if request == nil {
+		return fmt.Errorf("signature request is nil")
+	}
+
+	// 检查是否是查询请求
+	if request.BlockNumber == 0 {
+		// 查询请求必须包含有效的标识符
+		if string(request.BlockHash.Bytes()) != "QUERY_REQUEST" && string(request.CheckpointHash.Bytes()) != "QUERY_REQUEST" {
+			ni.logger.Warn("阻止发送无效的查询请求",
+				"blockHash", request.BlockHash.String(),
+				"checkpointHash", request.CheckpointHash.String())
+			return fmt.Errorf("invalid query request: missing QUERY_REQUEST identifier")
+		}
+	} else {
+		// 正常签名请求必须包含有效字段
+		if request.BlockNumber == 0 {
+			return fmt.Errorf("invalid block number: cannot be 0 for non-query requests")
+		}
+		if request.CheckpointHash == (types.Hash{}) {
+			return fmt.Errorf("invalid checkpoint hash: cannot be zero hash")
+		}
+		if request.Proposer == (types.Address{}) {
+			return fmt.Errorf("invalid proposer: cannot be zero address")
+		}
 	}
 
 	// 转换为 protobuf 消息
