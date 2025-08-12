@@ -3114,6 +3114,9 @@ func (r *dposRuntime) collectSignaturesAsync(checkpointHash types.Hash, signatur
 			r.logger.Info("签名桥接协程启动",
 				"checkpointHash", checkpointHash.String())
 
+			// 添加超时控制，避免无限运行
+			timeout := time.After(5 * time.Minute) // 5分钟后自动退出
+
 			for {
 				select {
 				case response, ok := <-bridgeCh:
@@ -3138,6 +3141,10 @@ func (r *dposRuntime) collectSignaturesAsync(checkpointHash types.Hash, signatur
 							"validator", response.ValidatorAddr.String(),
 							"checkpointHash", checkpointHash.String())
 					}
+				case <-timeout:
+					r.logger.Debug("签名桥接协程超时，自动退出",
+						"checkpointHash", checkpointHash.String())
+					return
 				}
 			}
 		})
@@ -3169,6 +3176,9 @@ func (r *dposRuntime) collectSignaturesAsync(checkpointHash types.Hash, signatur
 			ticker := time.NewTicker(10 * time.Second)
 			defer ticker.Stop()
 
+			// 添加超时控制，避免无限运行
+			timeout := time.After(5 * time.Minute) // 5分钟后自动退出
+
 			for {
 				select {
 				case <-ticker.C:
@@ -3178,6 +3188,10 @@ func (r *dposRuntime) collectSignaturesAsync(checkpointHash types.Hash, signatur
 							"checkpointHash", checkpointHash.String(),
 							"minRequiredSignatures", minRequiredSignatures)
 					}
+				case <-timeout:
+					r.logger.Debug("签名收集监控超时，自动退出",
+						"checkpointHash", checkpointHash.String())
+					return
 				}
 			}
 		})
@@ -3233,8 +3247,8 @@ func (r *dposRuntime) createSignatureListener(checkpointHash types.Hash, signatu
 
 // listenForSignatureResponses 监听签名响应消息
 func (r *dposRuntime) listenForSignatureResponses(ctx context.Context, listener *SignatureListener) {
-	// 同时监听签名请求，以便生成响应
-	go r.listenForSignatureRequests(ctx)
+	// 移除重复的签名请求监听，因为全局监听器已经处理了
+	r.logger.Debug("启动签名响应监听器", "checkpointHash", listener.checkpointHash.String())
 
 	// 监听上下文取消
 	<-ctx.Done()
@@ -3276,6 +3290,9 @@ func (r *dposRuntime) listenForSignatureRequests(ctx context.Context) {
 
 	// 监听上下文取消
 	<-ctx.Done()
+
+	// 注意：network.Topic 没有 Unsubscribe 方法，使用 Close() 会自动关闭所有订阅者
+	// 这里不需要手动取消订阅，因为主题会在程序退出时自动清理
 	r.logger.Debug("签名请求监听器停止")
 }
 
@@ -3791,6 +3808,9 @@ func (r *dposRuntime) subscribeToSignatureTopic(listener *SignatureListener) err
 	listener.topic = topic
 
 	r.logger.Info("成功订阅签名响应主题")
+
+	// 注意：network.Topic 没有 Unsubscribe 方法，使用 Close() 会自动关闭所有订阅者
+	// 在 SignatureListener.Close() 中会清理 topic 引用，避免内存泄露
 	return nil
 }
 
