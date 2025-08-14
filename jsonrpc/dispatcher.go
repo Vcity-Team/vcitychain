@@ -17,6 +17,7 @@ import (
 	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-hclog"
 
+	"github.com/Vcity-Team/vcitychain/consensus"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
@@ -690,19 +691,462 @@ func (a *dposStoreAdapter) GetBalance(root types.Hash, addr types.Address) (*big
 }
 
 func (a *dposStoreAdapter) GetDPoSState() (*dpos.State, error) {
-	// TODO: Implement actual DPoS state retrieval
-	// For now, return a mock state
-	return &dpos.State{}, nil
+	// Try to get DPoS state from the consensus engine
+	// This should connect to the actual DPoS consensus mechanism
+
+	// First, try to get from blockchain store if it has DPoS state
+	if blockchainStore, ok := a.store.(interface{ GetDPoSState() (*dpos.State, error) }); ok {
+		return blockchainStore.GetDPoSState()
+	}
+
+	// If blockchain store doesn't have DPoS state, try to get from consensus store
+	if consensusStore, ok := a.store.(interface{ GetConsensusDPoSState() (*dpos.State, error) }); ok {
+		return consensusStore.GetConsensusDPoSState()
+	}
+
+	// If no DPoS state store is available, return nil
+	// This allows the endpoint to work even when the consensus engine is not fully configured
+	return nil, nil
 }
 
 func (a *dposStoreAdapter) GetValidators() (validator.AccountSet, error) {
-	// TODO: Implement actual validator retrieval
-	// For now, return an empty set
+	// Try to get validators from the consensus engine
+	// This should connect to the actual DPoS consensus mechanism
+
+	// Debug: Print store type
+	fmt.Printf("DEBUG: Store type: %T\n", a.store)
+
+	// Try to access consensus engine directly through embedded field using reflection
+	if hub, ok := a.store.(interface {
+		GetConsensus() consensus.Consensus
+	}); ok {
+		fmt.Printf("DEBUG: Found consensus engine through hub\n")
+		consensusEngine := hub.GetConsensus()
+
+		// Try to get validators from consensus engine
+		if dposEngine, ok := consensusEngine.(interface {
+			GetDelegates() (validator.AccountSet, error)
+		}); ok {
+			fmt.Printf("DEBUG: Found GetDelegates method in consensus engine\n")
+			return dposEngine.GetDelegates()
+		}
+
+		if dposEngine, ok := consensusEngine.(interface {
+			GetValidators() (validator.AccountSet, error)
+		}); ok {
+			fmt.Printf("DEBUG: Found GetValidators method in consensus engine\n")
+			return dposEngine.GetValidators()
+		}
+	}
+
+	// Try to access consensus engine directly through embedded field using reflection
+	storeValue := reflect.ValueOf(a.store)
+	if storeValue.Kind() == reflect.Ptr {
+		storeValue = storeValue.Elem()
+	}
+
+	// Look for Consensus field
+	if consensusField := storeValue.FieldByName("Consensus"); consensusField.IsValid() {
+		fmt.Printf("DEBUG: Found Consensus field through reflection\n")
+		consensusEngine := consensusField.Interface()
+		fmt.Printf("DEBUG: Consensus engine type: %T\n", consensusEngine)
+
+		// Try to get validators from consensus engine
+		if dposEngine, ok := consensusEngine.(interface {
+			GetDelegates() (validator.AccountSet, error)
+		}); ok {
+			fmt.Printf("DEBUG: Found GetDelegates method in consensus engine\n")
+			return dposEngine.GetDelegates()
+		}
+
+		if dposEngine, ok := consensusEngine.(interface {
+			GetValidators() (validator.AccountSet, error)
+		}); ok {
+			fmt.Printf("DEBUG: Found GetValidators method in consensus engine\n")
+			return dposEngine.GetValidators()
+		}
+
+		// Try to get validators from consensus engine using reflection
+		consensusValue := reflect.ValueOf(consensusEngine)
+		if consensusValue.Kind() == reflect.Ptr {
+			consensusValue = consensusValue.Elem()
+		}
+
+		// Look for GetDelegates method
+		if getDelegatesMethod := consensusValue.MethodByName("GetDelegates"); getDelegatesMethod.IsValid() {
+			fmt.Printf("DEBUG: Found GetDelegates method through reflection\n")
+			// GetDelegates requires (blockNumber uint64, parents []*types.Header)
+			// For current block, use 0 and nil
+			blockNumber := reflect.ValueOf(uint64(0))
+			parents := reflect.ValueOf([]*types.Header(nil))
+			fmt.Printf("DEBUG: Calling GetDelegates with blockNumber=%v, parents=%v\n", blockNumber.Interface(), parents.Interface())
+			results := getDelegatesMethod.Call([]reflect.Value{blockNumber, parents})
+			fmt.Printf("DEBUG: GetDelegates returned %d results\n", len(results))
+			if len(results) == 2 && !results[1].IsNil() {
+				err := results[1].Interface().(error)
+				fmt.Printf("DEBUG: GetDelegates returned error: %v\n", err)
+				return nil, err
+			}
+			if len(results) >= 1 {
+				result := results[0].Interface()
+				fmt.Printf("DEBUG: GetDelegates returned result type: %T\n", result)
+				if accountSet, ok := result.(validator.AccountSet); ok {
+					fmt.Printf("DEBUG: Successfully converted result to AccountSet\n")
+					return accountSet, nil
+				}
+				fmt.Printf("DEBUG: Failed to convert result to AccountSet\n")
+			}
+		} else {
+			fmt.Printf("DEBUG: GetDelegates method not found\n")
+		}
+
+		// Look for GetValidators method
+		if getValidatorsMethod := consensusValue.MethodByName("GetValidators"); getValidatorsMethod.IsValid() {
+			fmt.Printf("DEBUG: Found GetValidators method through reflection\n")
+			// GetValidators requires (blockNumber uint64, parents []*types.Header)
+			// For current block, use 0 and nil
+			blockNumber := reflect.ValueOf(uint64(0))
+			parents := reflect.ValueOf([]*types.Header(nil))
+			fmt.Printf("DEBUG: Calling GetValidators with blockNumber=%v, parents=%v\n", blockNumber.Interface(), parents.Interface())
+			results := getValidatorsMethod.Call([]reflect.Value{blockNumber, parents})
+			fmt.Printf("DEBUG: GetValidators returned %d results\n", len(results))
+			if len(results) == 2 && !results[1].IsNil() {
+				err := results[1].Interface().(error)
+				fmt.Printf("DEBUG: GetValidators returned error: %v\n", err)
+				return nil, err
+			}
+			if len(results) >= 1 {
+				result := results[0].Interface()
+				fmt.Printf("DEBUG: GetValidators returned result type: %T\n", result)
+				if accountSet, ok := result.(validator.AccountSet); ok {
+					fmt.Printf("DEBUG: Successfully converted result to AccountSet\n")
+					return accountSet, nil
+				}
+				fmt.Printf("DEBUG: Failed to convert result to AccountSet\n")
+			}
+		} else {
+			fmt.Printf("DEBUG: GetValidators method not found\n")
+		}
+
+		// Debug: List all available methods on the consensus engine
+		fmt.Printf("DEBUG: Available methods on consensus engine:\n")
+		for i := 0; i < consensusValue.NumMethod(); i++ {
+			method := consensusValue.Type().Method(i)
+			fmt.Printf("DEBUG: Method %d: %s\n", i, method.Name)
+		}
+
+		// Try to access the delegates field directly if it exists
+		if delegatesField := consensusValue.FieldByName("delegates"); delegatesField.IsValid() {
+			fmt.Printf("DEBUG: Found delegates field directly\n")
+			fmt.Printf("DEBUG: Delegates field type: %s\n", delegatesField.Type().String())
+
+			// Check if it's a slice
+			if delegatesField.Kind() == reflect.Slice {
+				fmt.Printf("DEBUG: Delegates field is a slice with length: %d\n", delegatesField.Len())
+
+				// Create a new AccountSet to hold the real data
+				accountSet := make(validator.AccountSet, 0, delegatesField.Len())
+
+				// Iterate through the slice elements
+				for i := 0; i < delegatesField.Len(); i++ {
+					element := delegatesField.Index(i)
+					fmt.Printf("DEBUG: Element %d type: %s\n", i, element.Type().String())
+
+					// Handle pointer type - get the value it points to
+					var elementValue reflect.Value
+					if element.Kind() == reflect.Ptr {
+						elementValue = element.Elem()
+						fmt.Printf("DEBUG: Element %d is pointer, dereferenced to: %s\n", i, elementValue.Type().String())
+					} else {
+						elementValue = element
+					}
+
+					// Create a new ValidatorMetadata
+					validatorMeta := &validator.ValidatorMetadata{}
+
+					// Try to access Address field
+					if addressField := elementValue.FieldByName("Address"); addressField.IsValid() {
+						fmt.Printf("DEBUG: Element %d address field found\n", i)
+						// Try to get the value directly without Interface()
+						if addressField.CanAddr() {
+							// Try to get the value using reflect methods
+							addrValue := addressField
+							if addrValue.Kind() == reflect.Array {
+								// Handle array type (Address is usually [20]byte)
+								addrBytes := make([]byte, addrValue.Len())
+								for j := 0; j < addrValue.Len(); j++ {
+									addrBytes[j] = byte(addrValue.Index(j).Uint())
+								}
+								addr := types.BytesToAddress(addrBytes)
+								validatorMeta.Address = addr
+								fmt.Printf("DEBUG: Element %d address (from bytes): %s\n", i, addr.String())
+							}
+						}
+					}
+
+					// Try to access VotingPower field
+					if votingPowerField := elementValue.FieldByName("VotingPower"); votingPowerField.IsValid() {
+						fmt.Printf("DEBUG: Element %d voting power field found\n", i)
+						fmt.Printf("DEBUG: Element %d voting power field type: %s\n", i, votingPowerField.Type().String())
+						fmt.Printf("DEBUG: Element %d voting power field kind: %s\n", i, votingPowerField.Kind().String())
+						fmt.Printf("DEBUG: Element %d voting power field is nil: %v\n", i, votingPowerField.IsNil())
+
+						// Try to get the value directly
+						if votingPowerField.CanAddr() {
+							fmt.Printf("DEBUG: Element %d voting power field can addr: true\n", i)
+							if votingPowerField.Kind() == reflect.Ptr && !votingPowerField.IsNil() {
+								// Dereference the pointer
+								vpValue := votingPowerField.Elem()
+								fmt.Printf("DEBUG: Element %d voting power dereferenced type: %s\n", i, vpValue.Type().String())
+								fmt.Printf("DEBUG: Element %d voting power dereferenced kind: %s\n", i, vpValue.Kind().String())
+
+								if vpValue.Kind() == reflect.Struct {
+									// This is a big.Int struct, we need to access its internal fields
+									fmt.Printf("DEBUG: Element %d voting power is big.Int struct\n", i)
+
+									// Try to access the internal 'abs' field of big.Int
+									if absField := vpValue.FieldByName("abs"); absField.IsValid() {
+										fmt.Printf("DEBUG: Element %d voting power abs field found\n", i)
+										fmt.Printf("DEBUG: Element %d voting power abs field type: %s\n", i, absField.Type().String())
+										fmt.Printf("DEBUG: Element %d voting power abs field kind: %s\n", i, absField.Kind().String())
+										fmt.Printf("DEBUG: Element %d voting power abs field length: %d\n", i, absField.Len())
+
+										if absField.Kind() == reflect.Slice {
+											// Convert the abs slice to big.Int
+											absBytes := make([]byte, absField.Len())
+											for j := 0; j < absField.Len(); j++ {
+												absBytes[j] = byte(absField.Index(j).Uint())
+												fmt.Printf("DEBUG: Element %d voting power abs[%d] = %d\n", i, j, absBytes[j])
+											}
+											vp := new(big.Int).SetBytes(absBytes)
+											validatorMeta.VotingPower = vp
+											fmt.Printf("DEBUG: Element %d voting power (from abs): %s\n", i, vp.String())
+
+											// Also try to get the raw uint64 value if it's small enough
+											if vp.IsUint64() {
+												uint64Val := vp.Uint64()
+												fmt.Printf("DEBUG: Element %d voting power as uint64: %d\n", i, uint64Val)
+											}
+										}
+									} else {
+										fmt.Printf("DEBUG: Element %d voting power abs field not found\n", i)
+									}
+
+									// Also try to access the 'neg' field to see if it's negative
+									if negField := vpValue.FieldByName("neg"); negField.IsValid() {
+										fmt.Printf("DEBUG: Element %d voting power neg field found: %v\n", i, negField.Bool())
+									}
+
+									// Debug: List all available fields in the big.Int struct
+									fmt.Printf("DEBUG: Element %d voting power big.Int available fields:\n", i)
+									for j := 0; j < vpValue.NumField(); j++ {
+										field := vpValue.Type().Field(j)
+										fmt.Printf("DEBUG: Element %d voting power field %d: %s (type: %s)\n", i, j, field.Name, field.Type.String())
+									}
+
+									// Try to access other potential fields that might contain the full value
+									if stakeField := elementValue.FieldByName("Stake"); stakeField.IsValid() {
+										fmt.Printf("DEBUG: Element %d stake field found\n", i)
+										if stakeField.CanInterface() {
+											stake := stakeField.Interface()
+											fmt.Printf("DEBUG: Element %d stake value: %v (type: %T)\n", i, stake, stake)
+										}
+									}
+
+									if balanceField := elementValue.FieldByName("Balance"); balanceField.IsValid() {
+										fmt.Printf("DEBUG: Element %d balance field found\n", i)
+										if balanceField.CanInterface() {
+											balance := balanceField.Interface()
+											fmt.Printf("DEBUG: Element %d balance value: %v (type: %T)\n", i, balance, balance)
+										}
+									}
+
+									// List all available fields in the ValidatorMetadata struct
+									fmt.Printf("DEBUG: Element %d ValidatorMetadata available fields:\n", i)
+									for j := 0; j < elementValue.NumField(); j++ {
+										field := elementValue.Type().Field(j)
+										fmt.Printf("DEBUG: Element %d field %d: %s (type: %s)\n", i, j, field.Name, field.Type.String())
+									}
+
+									// Try to access common validator fields
+									if blsKeyField := elementValue.FieldByName("BlsKey"); blsKeyField.IsValid() {
+										fmt.Printf("DEBUG: Element %d BlsKey field found\n", i)
+									}
+
+									if metadataField := elementValue.FieldByName("Metadata"); metadataField.IsValid() {
+										fmt.Printf("DEBUG: Element %d Metadata field found\n", i)
+									}
+								} else if vpValue.Kind() == reflect.Uint64 || vpValue.Kind() == reflect.Int64 {
+									// Convert to big.Int
+									vp := new(big.Int).SetUint64(vpValue.Uint())
+									validatorMeta.VotingPower = vp
+									fmt.Printf("DEBUG: Element %d voting power: %s\n", i, vp.String())
+								} else {
+									fmt.Printf("DEBUG: Element %d voting power unexpected kind: %s\n", i, vpValue.Kind().String())
+								}
+							} else if votingPowerField.Kind() == reflect.Ptr && votingPowerField.IsNil() {
+								fmt.Printf("DEBUG: Element %d voting power field is nil pointer\n", i)
+							} else {
+								fmt.Printf("DEBUG: Element %d voting power field is not a pointer, kind: %s\n", i, votingPowerField.Kind().String())
+							}
+						} else {
+							fmt.Printf("DEBUG: Element %d voting power field cannot addr\n", i)
+						}
+					} else {
+						fmt.Printf("DEBUG: Element %d voting power field not found\n", i)
+					}
+
+					// Try to access IsActive field
+					if isActiveField := elementValue.FieldByName("IsActive"); isActiveField.IsValid() {
+						fmt.Printf("DEBUG: Element %d is active field found\n", i)
+						// Try to get the boolean value directly
+						if isActiveField.CanAddr() {
+							if isActiveField.Kind() == reflect.Bool {
+								isActive := isActiveField.Bool()
+								validatorMeta.IsActive = isActive
+								fmt.Printf("DEBUG: Element %d is active: %v\n", i, isActive)
+							}
+						}
+					}
+
+					// Add the validator to our set
+					accountSet = append(accountSet, validatorMeta)
+					fmt.Printf("DEBUG: Added validator %d to account set\n", i)
+				}
+
+				// Return the real data we found!
+				fmt.Printf("DEBUG: Returning real AccountSet with %d validators\n", len(accountSet))
+				return accountSet, nil
+			}
+		}
+	}
+
+	// First, try to get from blockchain store if it has validator information
+	if blockchainStore, ok := a.store.(interface {
+		GetValidators() (validator.AccountSet, error)
+	}); ok {
+		fmt.Printf("DEBUG: Found GetValidators method\n")
+		return blockchainStore.GetValidators()
+	}
+
+	// Try to get from consensus store with GetDelegates method
+	if consensusStore, ok := a.store.(interface {
+		GetDelegates() (validator.AccountSet, error)
+	}); ok {
+		fmt.Printf("DEBUG: Found GetDelegates method\n")
+		return consensusStore.GetDelegates()
+	}
+
+	// Try to get from consensus store with GetConsensusValidators method
+	if consensusStore, ok := a.store.(interface {
+		GetConsensusValidators() (validator.AccountSet, error)
+	}); ok {
+		fmt.Printf("DEBUG: Found GetConsensusValidators method\n")
+		return consensusStore.GetConsensusValidators()
+	}
+
+	fmt.Printf("DEBUG: No validator methods found\n")
+
+	// If no validator store is available, return empty set
+	// This allows the endpoint to work even when the consensus engine is not fully configured
 	return validator.AccountSet{}, nil
 }
 
 func (a *dposStoreAdapter) GetStakingInfo() ([]*dpos.StakeInfo, error) {
-	// TODO: Implement actual staking info retrieval
-	// For now, return an empty slice
+	// Try to get staking info from the consensus engine
+	// This should connect to the actual DPoS staking mechanism
+
+	// First, try to get from blockchain store if it has staking information
+	if blockchainStore, ok := a.store.(interface {
+		GetStakingInfo() ([]*dpos.StakeInfo, error)
+	}); ok {
+		return blockchainStore.GetStakingInfo()
+	}
+
+	// Try to get from consensus store with GetStakingInfo method (different signature)
+	if consensusStore, ok := a.store.(interface {
+		GetStakingInfo(blockNumber uint64, staker types.Address) (*dpos.StakeInfo, error)
+	}); ok {
+		// For now, get staking info for zero address (all stakers)
+		// TODO: Implement proper aggregation of all staking info
+		stakeInfo, err := consensusStore.GetStakingInfo(0, types.ZeroAddress)
+		if err == nil && stakeInfo != nil {
+			return []*dpos.StakeInfo{stakeInfo}, nil
+		}
+	}
+
+	// Try to get from consensus store with GetConsensusStakingInfo method
+	if consensusStore, ok := a.store.(interface {
+		GetConsensusStakingInfo() ([]*dpos.StakeInfo, error)
+	}); ok {
+		return consensusStore.GetConsensusStakingInfo()
+	}
+
+	// Try to access consensus engine directly through embedded field using reflection
+	storeValue := reflect.ValueOf(a.store)
+	if storeValue.Kind() == reflect.Ptr {
+		storeValue = storeValue.Elem()
+	}
+
+	// Look for Consensus field
+	if consensusField := storeValue.FieldByName("Consensus"); consensusField.IsValid() {
+		fmt.Printf("DEBUG: GetStakingInfo - Found Consensus field through reflection\n")
+		consensusEngine := consensusField.Interface()
+		fmt.Printf("DEBUG: GetStakingInfo - Consensus engine type: %T\n", consensusEngine)
+
+		// Try to get staking info from consensus engine using reflection
+		consensusValue := reflect.ValueOf(consensusEngine)
+		if consensusValue.Kind() == reflect.Ptr {
+			consensusValue = consensusValue.Elem()
+		}
+
+		// Look for GetStakingInfo method
+		if getStakingInfoMethod := consensusValue.MethodByName("GetStakingInfo"); getStakingInfoMethod.IsValid() {
+			fmt.Printf("DEBUG: GetStakingInfo - Found GetStakingInfo method through reflection\n")
+
+			// Get validators first to know which addresses to query
+			validators, err := a.GetValidators()
+			if err != nil {
+				fmt.Printf("DEBUG: GetStakingInfo - Failed to get validators: %v\n", err)
+				return []*dpos.StakeInfo{}, nil
+			}
+
+			fmt.Printf("DEBUG: GetStakingInfo - Found %d validators\n", len(validators))
+
+			// Create staking info for each validator
+			stakingInfos := make([]*dpos.StakeInfo, 0, len(validators))
+			for i, validator := range validators {
+				fmt.Printf("DEBUG: GetStakingInfo - Processing validator %d: %s\n", i, validator.Address.String())
+
+				// Call GetStakingInfo for this validator
+				blockNumber := reflect.ValueOf(uint64(0))
+				stakerAddr := reflect.ValueOf(validator.Address)
+				results := getStakingInfoMethod.Call([]reflect.Value{blockNumber, stakerAddr})
+
+				if len(results) == 2 && !results[1].IsNil() {
+					err := results[1].Interface().(error)
+					fmt.Printf("DEBUG: GetStakingInfo - Error for validator %d: %v\n", i, err)
+					continue
+				}
+
+				if len(results) >= 1 && !results[0].IsNil() {
+					stakeInfo := results[0].Interface().(*dpos.StakeInfo)
+					stakingInfos = append(stakingInfos, stakeInfo)
+					fmt.Printf("DEBUG: GetStakingInfo - Added staking info for validator %d\n", i)
+				} else {
+					fmt.Printf("DEBUG: GetStakingInfo - No staking info for validator %d\n", i)
+				}
+			}
+
+			if len(stakingInfos) > 0 {
+				fmt.Printf("DEBUG: GetStakingInfo - Returning %d staking infos\n", len(stakingInfos))
+				return stakingInfos, nil
+			}
+		}
+	}
+
+	// If no staking store is available, return empty slice
+	// This allows the endpoint to work even when the consensus engine is not fully configured
+	fmt.Printf("DEBUG: GetStakingInfo - No staking info found, returning empty slice\n")
 	return []*dpos.StakeInfo{}, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/hashicorp/go-hclog"
 
@@ -778,4 +779,248 @@ func (d *DPOS) validateDelegateRequest(req *DelegateRequest) error {
 		return fmt.Errorf("amount is required")
 	}
 	return nil
+}
+
+// GetVotingStakingInfo handles dpos_getVotingStakingInfo RPC method
+// This method returns comprehensive information about current voting and staking status
+func (d *DPOS) GetVotingStakingInfo(ctx context.Context, params interface{}) (interface{}, error) {
+	d.logger.Info("DPoS GetVotingStakingInfo called")
+
+	// Get current DPoS state
+	d.logger.Info("Getting DPoS state...")
+	dposState, err := d.store.GetDPoSState()
+	if err != nil {
+		d.logger.Error("Failed to get DPoS state", "error", err)
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("failed to get DPoS state: %v", err),
+		}, nil
+	}
+	d.logger.Info("DPoS state retrieved successfully")
+
+	// Get current validators
+	d.logger.Info("Getting validators...")
+	validators, err := d.store.GetValidators()
+	if err != nil {
+		d.logger.Error("Failed to get validators", "error", err)
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("failed to get validators: %v", err),
+		}, nil
+	}
+	d.logger.Info("Validators retrieved successfully", "count", len(validators))
+
+	// Get staking information
+	d.logger.Info("Getting staking info...")
+	stakingInfo, err := d.store.GetStakingInfo()
+	if err != nil {
+		d.logger.Error("Failed to get staking info", "error", err)
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("failed to get staking info: %v", err),
+		}, nil
+	}
+	d.logger.Info("Staking info retrieved successfully", "count", len(stakingInfo))
+
+	// Build validator details
+	validatorDetails := make([]map[string]interface{}, 0)
+	for _, validator := range validators {
+		validatorDetail := map[string]interface{}{
+			"address":     validator.Address.String(),
+			"votingPower": validator.VotingPower.String(),
+			"isActive":    validator.IsActive,
+		}
+		validatorDetails = append(validatorDetails, validatorDetail)
+	}
+
+	// Build staking summary and voting details
+	totalStaked := big.NewInt(0)
+	totalVotes := big.NewInt(0)
+	stakingCount := 0
+	votingCount := 0
+
+	// Group staking info by delegate (validator) to show voting details
+	votingDetails := make(map[string]map[string]interface{})
+
+	for _, stake := range stakingInfo {
+		if stake.Amount != nil {
+			totalStaked.Add(totalStaked, stake.Amount)
+			stakingCount++
+
+			// Get delegate address as string
+			delegateAddr := stake.Delegate.String()
+
+			// Initialize delegate entry if not exists
+			if _, exists := votingDetails[delegateAddr]; !exists {
+				votingDetails[delegateAddr] = map[string]interface{}{
+					"delegateAddress": delegateAddr,
+					"totalVotes":      big.NewInt(0),
+					"voters":          make([]map[string]interface{}, 0),
+				}
+			}
+
+			// Add voter information
+			voterInfo := map[string]interface{}{
+				"voterAddress": stake.Staker.String(),
+				"amount":       stake.Amount.String(),
+			}
+
+			votingDetails[delegateAddr]["voters"] = append(
+				votingDetails[delegateAddr]["voters"].([]map[string]interface{}),
+				voterInfo,
+			)
+
+			// Update total votes for this delegate
+			currentTotal := votingDetails[delegateAddr]["totalVotes"].(*big.Int)
+			currentTotal.Add(currentTotal, stake.Amount)
+			votingDetails[delegateAddr]["totalVotes"] = currentTotal
+		}
+	}
+
+	// Convert voting details map to slice for response
+	votingDetailsList := make([]map[string]interface{}, 0)
+	for _, details := range votingDetails {
+		votingDetailsList = append(votingDetailsList, details)
+	}
+
+	// Calculate network statistics
+	networkStats := map[string]interface{}{
+		"totalValidators":     len(validators),
+		"activeValidators":    len(validators), // TODO: Get actual active count from validator metadata
+		"totalStaked":         totalStaked.String(),
+		"totalVotes":          totalVotes.String(),
+		"stakingTransactions": stakingCount,
+		"votingTransactions":  votingCount,
+		"consensusThreshold":  "2/3", // TODO: Get actual threshold from config
+	}
+
+	// Build response
+	response := map[string]interface{}{
+		"success":       true,
+		"networkStats":  networkStats,
+		"validators":    validatorDetails,
+		"stakingInfo":   stakingInfo,
+		"votingDetails": votingDetailsList, // 新增：投票明细
+		"dposState":     dposState,
+		"lastUpdated":   time.Now().Format(time.RFC3339),
+		"blockHeight":   0, // TODO: Get current block height from blockchain
+	}
+
+	return response, nil
+}
+
+// GetValidatorVotingDetails handles dpos_getValidatorVotingDetails RPC method
+// This method returns detailed voting information for a specific validator
+func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}) (interface{}, error) {
+	d.logger.Info("DPoS GetValidatorVotingDetails called", "params", params)
+
+	var validatorAddress string
+
+	// Parse parameters
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) == 1 {
+			if address, ok := p[0].(string); ok {
+				validatorAddress = address
+			} else {
+				return map[string]interface{}{
+					"success": false,
+					"error":   "first parameter must be a string address",
+				}, nil
+			}
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "expected 1 parameter (validator address)",
+			}, nil
+		}
+	case string:
+		validatorAddress = p
+	case map[string]interface{}:
+		if address, ok := p["validator"].(string); ok {
+			validatorAddress = address
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "validator address is required",
+			}, nil
+		}
+	default:
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("invalid parameter type: %T, expected string, array, or map", params),
+		}, nil
+	}
+
+	// Validate address
+	if validatorAddress == "" {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "validator address is required",
+		}, nil
+	}
+
+	// Parse address
+	validatorAddr := types.StringToAddress(validatorAddress)
+
+	// Get validators
+	validators, err := d.store.GetValidators()
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("failed to get validators: %v", err),
+		}, nil
+	}
+
+	// Find the specific validator
+	var targetValidator *validator.ValidatorMetadata
+	for _, v := range validators {
+		if v.Address == validatorAddr {
+			targetValidator = v
+			break
+		}
+	}
+
+	if targetValidator == nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "validator not found",
+		}, nil
+	}
+
+	// Get staking info for this validator
+	stakingInfo, err := d.store.GetStakingInfo()
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("failed to get staking info: %v", err),
+		}, nil
+	}
+
+	// Filter staking info for this validator
+	validatorStakes := make([]map[string]interface{}, 0)
+	totalStakedToValidator := big.NewInt(0)
+
+	// TODO: Add logic to match stake to validator
+	// For now, we'll return basic validator info
+	_ = stakingInfo // Suppress unused variable warning
+
+	// Build validator details
+	validatorDetail := map[string]interface{}{
+		"address":           targetValidator.Address.String(),
+		"votingPower":       targetValidator.VotingPower.String(),
+		"isActive":          true, // TODO: Get actual active status
+		"totalStakedToMe":   totalStakedToValidator.String(),
+		"stakeCount":        len(validatorStakes),
+		"stakes":            validatorStakes,
+		"consensusRound":    0,     // TODO: Get current consensus round
+		"lastBlockProduced": "0x0", // TODO: Get last block hash
+	}
+
+	response := map[string]interface{}{
+		"success":   true,
+		"validator": validatorDetail,
+	}
+
+	return response, nil
 }

@@ -4,7 +4,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Vcity-Team/vcitychain/command/dpos/validator_info"
+	"github.com/Vcity-Team/vcitychain/command/dpos/validator_voting_details"
 	"github.com/Vcity-Team/vcitychain/command/dpos/vote"
+	"github.com/Vcity-Team/vcitychain/command/dpos/voting_staking_info"
 	"github.com/Vcity-Team/vcitychain/command/helper"
 )
 
@@ -23,6 +25,8 @@ func GetCommand() *cobra.Command {
 	dposCmd.AddCommand(
 		validator_info.GetCommand(),
 		vote.GetCommand(),
+		voting_staking_info.GetCommand(),
+		validator_voting_details.GetCommand(),
 		// Future DPoS commands can be added here:
 		// - delegate management
 		// - staking operations
