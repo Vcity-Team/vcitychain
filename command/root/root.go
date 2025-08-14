@@ -8,6 +8,7 @@ import (
 
 	"github.com/Vcity-Team/vcitychain/command/backup"
 	"github.com/Vcity-Team/vcitychain/command/bridge"
+	"github.com/Vcity-Team/vcitychain/command/dpos"
 	"github.com/Vcity-Team/vcitychain/command/genesis"
 	"github.com/Vcity-Team/vcitychain/command/helper"
 	"github.com/Vcity-Team/vcitychain/command/ibft"
@@ -53,6 +54,7 @@ func (rc *RootCommand) registerSubCommands() {
 		rootchain.GetCommand(),
 		monitor.GetCommand(),
 		ibft.GetCommand(),
+		dpos.GetCommand(),
 		backup.GetCommand(),
 		genesis.GetCommand(),
 		server.GetCommand(),
