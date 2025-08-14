@@ -536,7 +536,7 @@ func convertVotingPowerToStakingInfo(data interface{}) ([]*dpos.StakeInfo, error
 	if votingPowerMap != nil {
 		for delegateStr, powerData := range votingPowerMap {
 			delegate := types.StringToAddress(delegateStr)
-			
+
 			var votingPower *big.Int = big.NewInt(0)
 			switch vp := powerData.(type) {
 			case string:

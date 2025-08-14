@@ -2,10 +2,12 @@ package jsonrpc
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"reflect"
 	"strconv"
 	"strings"
@@ -14,6 +16,10 @@ import (
 
 	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-hclog"
+
+	"github.com/Vcity-Team/vcitychain/consensus/dpos"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
+	"github.com/Vcity-Team/vcitychain/types"
 )
 
 type serviceData struct {
@@ -39,6 +45,7 @@ type endpoints struct {
 	TxPool *TxPool
 	Bridge *Bridge
 	Debug  *Debug
+	DPOS   *DPOS
 }
 
 // Dispatcher handles all json rpc requests by delegating
@@ -112,6 +119,9 @@ func (d *Dispatcher) registerEndpoints(store JSONRPCStore) error {
 	}
 	d.endpoints.Debug = NewDebug(store, d.params.concurrentRequestsDebug)
 
+	// Add DPOS endpoint with store adapter
+	d.endpoints.DPOS = NewDPOS(d.logger, &dposStoreAdapter{store: store})
+
 	var err error
 
 	if err = d.registerService("eth", d.endpoints.Eth); err != nil {
@@ -134,7 +144,11 @@ func (d *Dispatcher) registerEndpoints(store JSONRPCStore) error {
 		return err
 	}
 
-	return d.registerService("debug", d.endpoints.Debug)
+	if err = d.registerService("debug", d.endpoints.Debug); err != nil {
+		return err
+	}
+
+	return d.registerService("dpos", d.endpoints.DPOS)
 }
 
 func (d *Dispatcher) getFnHandler(req Request) (*serviceData, *funcData, Error) {
@@ -342,6 +356,14 @@ func (d *Dispatcher) Handle(reqBody []byte) ([]byte, error) {
 			return NewRPCResponse(req.ID, "2.0", nil, NewInvalidRequestError("Invalid json request")).Bytes()
 		}
 
+		// Debug logging for JSON-RPC request
+		d.logger.Info("JSON-RPC request parsed",
+			"method", req.Method,
+			"id", req.ID,
+			"params_raw", string(req.Params),
+			"params_length", len(req.Params),
+			"reqBody", string(reqBody))
+
 		resp, err := d.handleReq(req)
 
 		return NewRPCResponse(req.ID, "2.0", resp, err).Bytes()
@@ -392,7 +414,7 @@ func (d *Dispatcher) Handle(reqBody []byte) ([]byte, error) {
 }
 
 func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
-	d.logger.Debug("request", "method", req.Method, "id", req.ID)
+	d.logger.Info("request received", "method", req.Method, "id", req.ID, "params_raw", string(req.Params), "params_length", len(req.Params))
 
 	service, fd, ferr := d.getFnHandler(req)
 	if ferr != nil {
@@ -402,17 +424,79 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 	inArgs := make([]reflect.Value, fd.inNum)
 	inArgs[0] = service.sv
 
-	inputs := make([]interface{}, fd.numParams())
+	// Info logging to understand the method signature
+	d.logger.Info("method signature analysis",
+		"method", req.Method,
+		"fd.inNum", fd.inNum,
+		"fd.numParams()", fd.numParams(),
+		"fd.reqt", fd.reqt)
 
-	for i := 0; i < fd.inNum-1; i++ {
-		val := reflect.New(fd.reqt[i+1])
-		inputs[i] = val.Interface()
-		inArgs[i+1] = val.Elem()
-	}
-
+	// Handle parameters based on method signature
 	if fd.numParams() > 0 {
-		if err := json.Unmarshal(req.Params, &inputs); err != nil {
-			return nil, NewInvalidParamsError("Invalid Params")
+		// Check if the last parameter is interface{} type
+		if fd.reqt[fd.inNum-1] == reflect.TypeOf((*interface{})(nil)).Elem() {
+			// For interface{} parameters, pass the raw params directly
+			d.logger.Info("entering interface{} parameter handling",
+				"method", req.Method,
+				"req.Params", string(req.Params),
+				"req.Params length", len(req.Params))
+
+			var paramValue interface{}
+			if err := json.Unmarshal(req.Params, &paramValue); err != nil {
+				d.logger.Error("failed to unmarshal params", "error", err, "params", string(req.Params))
+				return nil, NewInvalidParamsError("Invalid Params")
+			}
+
+			d.logger.Info("successfully unmarshaled params",
+				"method", req.Method,
+				"paramValue", paramValue,
+				"paramValue type", fmt.Sprintf("%T", paramValue))
+
+			// Check if paramValue is nil or contains nil values and return error if so
+			if paramValue == nil {
+				d.logger.Error("params is nil, cannot proceed",
+					"method", req.Method,
+					"params", string(req.Params))
+				return nil, NewInvalidParamsError("Params cannot be null")
+			}
+
+			// Check if paramValue is an array containing nil values
+			if arr, ok := paramValue.([]interface{}); ok {
+				for i, v := range arr {
+					if v == nil {
+						d.logger.Error("params array contains nil value",
+							"method", req.Method,
+							"index", i,
+							"params", string(req.Params))
+						return nil, NewInvalidParamsError(fmt.Sprintf("Param at index %d cannot be null", i))
+					}
+				}
+			}
+
+			// Set context.Context as the second parameter
+			inArgs[1] = reflect.ValueOf(context.Background())
+
+			// Set params as the third parameter
+			inArgs[2] = reflect.ValueOf(paramValue)
+
+			d.logger.Info("interface{} parameter handling completed",
+				"method", req.Method,
+				"inArgs[1] (context)", inArgs[1].Interface(),
+				"inArgs[2] (params)", inArgs[2].Interface())
+		} else {
+			// For multiple parameters, use the original logic
+			inputs := make([]interface{}, fd.numParams())
+
+			for i := 0; i < fd.inNum-1; i++ {
+				val := reflect.New(fd.reqt[i+1])
+				inputs[i] = val.Interface()
+				inArgs[i+1] = val.Elem()
+			}
+
+			// Unmarshal parameters
+			if err := json.Unmarshal(req.Params, &inputs); err != nil {
+				return nil, NewInvalidParamsError("Invalid Params")
+			}
 		}
 	}
 
@@ -578,4 +662,47 @@ func lowerCaseFirst(str string) string {
 	}
 
 	return ""
+}
+
+// dposStoreAdapter adapts JSONRPCStore to dposStore
+type dposStoreAdapter struct {
+	store JSONRPCStore
+}
+
+func (a *dposStoreAdapter) GetAccount(root types.Hash, addr types.Address) (*Account, error) {
+	// Use ethStore methods from JSONRPCStore
+	if ethStore, ok := a.store.(ethStore); ok {
+		return ethStore.GetAccount(root, addr)
+	}
+	return nil, fmt.Errorf("ethStore not available")
+}
+
+func (a *dposStoreAdapter) GetBalance(root types.Hash, addr types.Address) (*big.Int, error) {
+	// Use ethStore methods from JSONRPCStore
+	if ethStore, ok := a.store.(ethStore); ok {
+		account, err := ethStore.GetAccount(root, addr)
+		if err != nil {
+			return nil, err
+		}
+		return account.Balance, nil
+	}
+	return nil, fmt.Errorf("ethStore not available")
+}
+
+func (a *dposStoreAdapter) GetDPoSState() (*dpos.State, error) {
+	// TODO: Implement actual DPoS state retrieval
+	// For now, return a mock state
+	return &dpos.State{}, nil
+}
+
+func (a *dposStoreAdapter) GetValidators() (validator.AccountSet, error) {
+	// TODO: Implement actual validator retrieval
+	// For now, return an empty set
+	return validator.AccountSet{}, nil
+}
+
+func (a *dposStoreAdapter) GetStakingInfo() ([]*dpos.StakeInfo, error) {
+	// TODO: Implement actual staking info retrieval
+	// For now, return an empty slice
+	return []*dpos.StakeInfo{}, nil
 }
