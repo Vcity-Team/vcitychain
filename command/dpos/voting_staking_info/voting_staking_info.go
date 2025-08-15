@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 
 	"github.com/spf13/cobra"
@@ -50,8 +51,35 @@ func (r *VotingStakingInfoResult) GetOutput() string {
 		output += fmt.Sprintf("Network Statistics:\n")
 		output += fmt.Sprintf("- Total Validators: %v\n", r.NetworkStats["totalValidators"])
 		output += fmt.Sprintf("- Active Validators: %v\n", r.NetworkStats["activeValidators"])
-		output += fmt.Sprintf("- Total Staked: %v\n", r.NetworkStats["totalStaked"])
-		output += fmt.Sprintf("- Total Votes: %v\n", r.NetworkStats["totalVotes"])
+
+		// 格式化质押数量显示
+		if totalStaked, ok := r.NetworkStats["totalStaked"]; ok {
+			if stakedStr, ok := totalStaked.(string); ok {
+				if stakedBigInt, ok := new(big.Int).SetString(stakedStr, 10); ok {
+					ethAmount := new(big.Float).Quo(new(big.Float).SetInt(stakedBigInt), new(big.Float).SetFloat64(1e18))
+					output += fmt.Sprintf("- Total Staked: %s ETH (%s Wei)\n", ethAmount.Text('f', 2), stakedStr)
+				} else {
+					output += fmt.Sprintf("- Total Staked: %v\n", totalStaked)
+				}
+			} else {
+				output += fmt.Sprintf("- Total Staked: %v\n", totalStaked)
+			}
+		}
+
+		// 格式化投票数量显示
+		if totalVotes, ok := r.NetworkStats["totalVotes"]; ok {
+			if votesStr, ok := totalVotes.(string); ok {
+				if votesBigInt, ok := new(big.Int).SetString(votesStr, 10); ok {
+					ethAmount := new(big.Float).Quo(new(big.Float).SetInt(votesBigInt), new(big.Float).SetFloat64(1e18))
+					output += fmt.Sprintf("- Total Votes: %s ETH (%s Wei)\n", ethAmount.Text('f', 2), votesStr)
+				} else {
+					output += fmt.Sprintf("- Total Votes: %v\n", totalVotes)
+				}
+			} else {
+				output += fmt.Sprintf("- Total Votes: %v\n", totalVotes)
+			}
+		}
+
 		output += fmt.Sprintf("- Staking Transactions: %v\n", r.NetworkStats["stakingTransactions"])
 		output += fmt.Sprintf("- Voting Transactions: %v\n", r.NetworkStats["votingTransactions"])
 		output += fmt.Sprintf("- Consensus Threshold: %v\n", r.NetworkStats["consensusThreshold"])
@@ -73,13 +101,43 @@ func (r *VotingStakingInfoResult) GetOutput() string {
 		output += fmt.Sprintf("===============\n")
 		for i, votingDetail := range r.VotingDetails {
 			output += fmt.Sprintf("%d. Delegate: %v\n", i+1, votingDetail["delegateAddress"])
-			output += fmt.Sprintf("   Total Votes: %v\n", votingDetail["totalVotes"])
+
+			// 格式化 Total Votes 显示
+			if totalVotes, ok := votingDetail["totalVotes"]; ok {
+				if votesStr, ok := totalVotes.(string); ok {
+					if votesBigInt, ok := new(big.Int).SetString(votesStr, 10); ok {
+						ethAmount := new(big.Float).Quo(new(big.Float).SetInt(votesBigInt), new(big.Float).SetFloat64(1e18))
+						output += fmt.Sprintf("   Total Votes: %s ETH (%s Wei)\n", ethAmount.Text('f', 2), votesStr)
+					} else {
+						output += fmt.Sprintf("   Total Votes: %v\n", totalVotes)
+					}
+				} else {
+					output += fmt.Sprintf("   Total Votes: %v\n", totalVotes)
+				}
+			}
 
 			if voters, ok := votingDetail["voters"].([]map[string]interface{}); ok && len(voters) > 0 {
 				output += fmt.Sprintf("   Voters:\n")
 				for j, voter := range voters {
-					output += fmt.Sprintf("     %d. Voter: %v, Amount: %v\n",
-						j+1, voter["voterAddress"], voter["amount"])
+					// 格式化 Voter Amount 显示
+					if amount, ok := voter["amount"]; ok {
+						if amountStr, ok := amount.(string); ok {
+							if amountBigInt, ok := new(big.Int).SetString(amountStr, 10); ok {
+								ethAmount := new(big.Float).Quo(new(big.Float).SetInt(amountBigInt), new(big.Float).SetFloat64(1e18))
+								output += fmt.Sprintf("     %d. Voter: %v, Amount: %s ETH (%s Wei)\n",
+									j+1, voter["voterAddress"], ethAmount.Text('f', 2), amountStr)
+							} else {
+								output += fmt.Sprintf("     %d. Voter: %v, Amount: %v\n",
+									j+1, voter["voterAddress"], amount)
+							}
+						} else {
+							output += fmt.Sprintf("     %d. Voter: %v, Amount: %v\n",
+								j+1, voter["voterAddress"], amount)
+						}
+					} else {
+						output += fmt.Sprintf("     %d. Voter: %v, Amount: N/A\n",
+							j+1, voter["voterAddress"])
+					}
 				}
 			}
 			output += fmt.Sprintf("\n")
@@ -135,8 +193,8 @@ func setFlags(cmd *cobra.Command) {
 func runPreRun(cmd *cobra.Command, _ []string) error {
 	// Get JSON-RPC address from flag, with fallback to default
 	jsonRPC := "http://localhost:8545" // Default value
-	if cmd.Flags().Changed("json-rpc") {
-		jsonRPC = params.jsonRPC
+	if jsonRPCFlag := cmd.Flag("jsonrpc"); jsonRPCFlag != nil {
+		jsonRPC = jsonRPCFlag.Value.String()
 	}
 
 	// Validate JSON-RPC address
@@ -159,8 +217,8 @@ func runCommand(cmd *cobra.Command, _ []string) error {
 
 	// Get JSON-RPC address from flag
 	jsonRPC := "http://localhost:8545" // Default value
-	if cmd.Flags().Changed("jsonrpc") {
-		jsonRPC = params.jsonRPC
+	if jsonRPCFlag := cmd.Flag("jsonrpc"); jsonRPCFlag != nil {
+		jsonRPC = jsonRPCFlag.Value.String()
 	}
 
 	// 直接使用HTTP请求，跳过有问题的第三方库
