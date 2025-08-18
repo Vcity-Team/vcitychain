@@ -846,6 +846,58 @@ func (j *jsonRPCHub) GetSyncProgression() *progress.Progression {
 	return nil
 }
 
+// AddTx adds a new transaction to the transaction pool
+func (j *jsonRPCHub) AddTx(tx *types.Transaction) error {
+	return j.TxPool.AddTx(tx)
+}
+
+// GetPendingTx gets the pending transaction from the transaction pool
+func (j *jsonRPCHub) GetPendingTx(txHash types.Hash) (*types.Transaction, bool) {
+	return j.TxPool.GetPendingTx(txHash)
+}
+
+// GetNonce returns the next nonce for this address
+func (j *jsonRPCHub) GetNonce(addr types.Address) uint64 {
+	// Get the latest header to get the current state root
+	header := j.Header()
+	if header == nil {
+		return 0
+	}
+
+	// Get account from state
+	account, err := j.GetAccount(header.StateRoot, addr)
+	if err != nil {
+		return 0
+	}
+
+	return account.Nonce
+}
+
+// GetBaseFee returns the current base fee of TxPool
+func (j *jsonRPCHub) GetBaseFee() uint64 {
+	return j.TxPool.GetBaseFee()
+}
+
+// GetConsensus returns the consensus engine
+func (j *jsonRPCHub) GetConsensus() consensus.Consensus {
+	return j.Consensus
+}
+
+// GetNetwork returns the network layer
+func (j *jsonRPCHub) GetNetwork() interface{} {
+	return j.Server
+}
+
+// GetServer returns the server instance
+func (j *jsonRPCHub) GetServer() interface{} {
+	return j.Server
+}
+
+// GetTxPool returns the transaction pool
+func (j *jsonRPCHub) GetTxPool() interface{} {
+	return j.TxPool
+}
+
 // SETUP //
 
 // setupJSONRCP sets up the JSONRPC server, using the set configuration

@@ -295,6 +295,42 @@ func (p *TxPool) Close() {
 	close(p.shutdownCh)
 }
 
+// GetTopic returns the network topic for transaction broadcasting
+func (p *TxPool) GetTopic() interface{} {
+	return p.topic
+}
+
+// GetExecutablesCount returns the number of transactions in the executables queue
+func (p *TxPool) GetExecutablesCount() int {
+	if p.executables == nil {
+		return 0
+	}
+	return p.executables.length()
+}
+
+// GetPendingCount returns the number of pending transactions
+func (p *TxPool) GetPendingCount() int64 {
+	return atomic.LoadInt64(&p.pending)
+}
+
+// GetAccountsCount returns the number of accounts with transactions
+func (p *TxPool) GetAccountsCount() int {
+	return int(p.accounts.promoted())
+}
+
+// DebugInfo returns debug information about the transaction pool
+func (p *TxPool) DebugInfo() map[string]interface{} {
+	return map[string]interface{}{
+		"executablesCount": p.GetExecutablesCount(),
+		"pendingCount":     p.GetPendingCount(),
+		"accountsCount":    p.GetAccountsCount(),
+		"hasTopic":         p.topic != nil,
+		"isSealing":        p.sealing.Load(),
+		"baseFee":          p.baseFee,
+		"priceLimit":       p.priceLimit,
+	}
+}
+
 // SetSigner sets the signer the pool will use
 // to validate a transaction's signature.
 func (p *TxPool) SetSigner(s signer) {

@@ -86,6 +86,59 @@ func (r *VotingStakingInfoResult) GetOutput() string {
 		output += fmt.Sprintf("\n")
 	}
 
+	// 新增：显示质押信息
+	if stakingInfo, ok := r.StakingInfo.([]interface{}); ok && len(stakingInfo) > 0 {
+		output += fmt.Sprintf("Staking Information (%d):\n", len(stakingInfo))
+		output += fmt.Sprintf("=====================\n")
+		for i, staking := range stakingInfo {
+			if stakingMap, ok := staking.(map[string]interface{}); ok {
+				output += fmt.Sprintf("%d. Staker: %v\n", i+1, stakingMap["staker"])
+
+				// 格式化 Amount 显示
+				if amount, ok := stakingMap["amount"]; ok {
+					if amountStr, ok := amount.(string); ok {
+						if amountBigInt, ok := new(big.Int).SetString(amountStr, 10); ok {
+							ethAmount := new(big.Float).Quo(new(big.Float).SetInt(amountBigInt), new(big.Float).SetFloat64(1e18))
+							output += fmt.Sprintf("   Amount: %s ETH (%s Wei)\n", ethAmount.Text('f', 2), amountStr)
+						} else {
+							output += fmt.Sprintf("   Amount: %v\n", amount)
+						}
+					} else {
+						output += fmt.Sprintf("   Amount: %v\n", amount)
+					}
+				}
+
+				output += fmt.Sprintf("   Delegate: %v\n", stakingMap["delegate"])
+				output += fmt.Sprintf("   Active: %v\n", stakingMap["isActive"])
+				output += fmt.Sprintf("   Locked: %v\n", stakingMap["isLocked"])
+
+				// 格式化 Rewards 显示
+				if rewards, ok := stakingMap["rewards"]; ok {
+					if rewardsStr, ok := rewards.(string); ok {
+						if rewardsBigInt, ok := new(big.Int).SetString(rewardsStr, 10); ok {
+							ethAmount := new(big.Float).Quo(new(big.Float).SetInt(rewardsBigInt), new(big.Float).SetFloat64(1e18))
+							output += fmt.Sprintf("   Rewards: %s ETH (%s Wei)\n", ethAmount.Text('f', 2), rewardsStr)
+						} else {
+							output += fmt.Sprintf("   Rewards: %v\n", rewards)
+						}
+					} else {
+						output += fmt.Sprintf("   Rewards: %v\n", rewards)
+					}
+				}
+				output += fmt.Sprintf("\n")
+			}
+		}
+	} else {
+		// 调试信息：显示 StakingInfo 的类型和内容
+		output += fmt.Sprintf("StakingInfo Debug: type=%T, value=%v\n", r.StakingInfo, r.StakingInfo)
+		if r.StakingInfo != nil {
+			output += fmt.Sprintf("StakingInfo is not nil but not a slice\n")
+		} else {
+			output += fmt.Sprintf("StakingInfo is nil\n")
+		}
+		output += fmt.Sprintf("\n")
+	}
+
 	if len(r.Validators) > 0 {
 		output += fmt.Sprintf("Validators (%d):\n", len(r.Validators))
 		for i, validator := range r.Validators {
@@ -317,8 +370,13 @@ func callVotingStakingInfoRPCMethodHTTPWithAddress(method string, methodParams [
 
 // parseVotingStakingInfoResult parses the RPC result into VotingStakingInfoResult
 func parseVotingStakingInfoResult(result interface{}) (*VotingStakingInfoResult, error) {
+	// Debug: log the raw result
+	fmt.Printf("DEBUG: Raw result type: %T, value: %+v\n", result, result)
+
 	// Try to parse as map first
 	if resultMap, ok := result.(map[string]interface{}); ok {
+		fmt.Printf("DEBUG: Result is a map with keys: %v\n", getMapKeys(resultMap))
+
 		// Check if it's already in the right format
 		if success, exists := resultMap["success"]; exists {
 			// It's already in the right format, convert it
@@ -330,6 +388,17 @@ func parseVotingStakingInfoResult(result interface{}) (*VotingStakingInfoResult,
 			dposState := resultMap["dposState"]
 			lastUpdated, _ := resultMap["lastUpdated"].(string)
 			blockHeight, _ := resultMap["blockHeight"].(float64)
+
+			// Debug: log stakingInfo details
+			fmt.Printf("DEBUG: stakingInfo type: %T, value: %+v\n", stakingInfo, stakingInfo)
+			if stakingInfo != nil {
+				if stakingSlice, ok := stakingInfo.([]interface{}); ok {
+					fmt.Printf("DEBUG: stakingInfo is slice with %d elements\n", len(stakingSlice))
+					for i, item := range stakingSlice {
+						fmt.Printf("DEBUG: stakingInfo[%d] type: %T, value: %+v\n", i, item, item)
+					}
+				}
+			}
 
 			// Convert validators to the right format
 			validatorsList := make([]map[string]interface{}, 0)
@@ -372,4 +441,13 @@ func parseVotingStakingInfoResult(result interface{}) (*VotingStakingInfoResult,
 		LastUpdated: "now",
 		BlockHeight: 0,
 	}, nil
+}
+
+// getMapKeys returns all keys from a map for debugging
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

@@ -1750,8 +1750,65 @@ func (d *DPoS) GetDelegateIndex(delegate types.Address) uint64 {
 // 区块处理相关方法
 func (d *DPoS) processBlockVotes(block *types.FullBlock) error {
 	// 处理区块中的投票事件
-	// TODO: 实现投票事件处理逻辑
-	d.logger.Debug("processing block votes", "block", block.Block.Number())
+	// 遍历交易，识别并应用 DPoS 投票交易
+	d.logger.Debug("processing block votes", "block", block.Block.Number(), "txs", len(block.Block.Transactions))
+
+	// 防御：运行时未初始化则跳过
+	if d.runtime == nil {
+		d.logger.Warn("dpos runtime is nil, skipping vote processing")
+		return nil
+	}
+
+	for _, tx := range block.Block.Transactions {
+		input := tx.Input
+		if len(input) < 4 {
+			continue
+		}
+
+		// 识别前缀 "DPOS"
+		if !(input[0] == 'D' && input[1] == 'P' && input[2] == 'O' && input[3] == 'S') {
+			continue
+		}
+
+		// 期望格式: 4 bytes 标识 + 20 bytes voter + 20 bytes delegate + 32 bytes amount
+		const (
+			dposPrefixLen  = 4
+			addrLen        = 20
+			amountLen      = 32
+			expectedLength = dposPrefixLen + addrLen + addrLen + amountLen
+		)
+
+		if len(input) < expectedLength {
+			d.logger.Warn("invalid DPoS vote tx input length", "hash", tx.Hash.String(), "len", len(input))
+			continue
+		}
+
+		voter := types.BytesToAddress(input[dposPrefixLen : dposPrefixLen+addrLen])
+		delegate := types.BytesToAddress(input[dposPrefixLen+addrLen : dposPrefixLen+addrLen+addrLen])
+		amountBytes := input[dposPrefixLen+addrLen+addrLen : expectedLength]
+
+		amount := new(big.Int).SetBytes(amountBytes)
+		if amount.Sign() <= 0 {
+			d.logger.Warn("vote amount must be positive", "hash", tx.Hash.String())
+			continue
+		}
+
+		vote := &VoteMessage{
+			Voter:     voter,
+			Delegate:  delegate,
+			Amount:    amount,
+			Round:     d.runtime.currentRound,
+			Timestamp: uint64(time.Now().Unix()),
+		}
+
+		if err := d.runtime.processVote(vote); err != nil {
+			d.logger.Error("failed to process vote from tx", "err", err, "hash", tx.Hash.String(), "voter", voter, "delegate", delegate, "amount", amount)
+			continue
+		}
+
+		d.logger.Info("applied DPoS vote from tx", "hash", tx.Hash.String(), "voter", voter, "delegate", delegate, "amount", amount)
+	}
+
 	return nil
 }
 
@@ -1781,16 +1838,29 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		return errors.New("vote amount below minimum")
 	}
 
-	// 2. 检查受托人是否存在且活跃
+	// 2. 检查受托人是否存在且活跃 - 允许投票给任何地址
+	// 如果候选人是已注册的受托人，检查其状态
 	delegateExists := false
 	for _, del := range d.delegates {
-		if del.Address == vote.Delegate && del.IsActive {
+		if del.Address == vote.Delegate {
+			if !del.IsActive {
+				return errors.New("delegate is inactive")
+			}
 			delegateExists = true
 			break
 		}
 	}
+
+	// 如果候选人不在受托人列表中，自动将其添加为活跃受托人
 	if !delegateExists {
-		return errors.New("delegate not found or inactive")
+		d.logger.Info("adding new candidate as active delegate", "address", vote.Delegate)
+		newDelegate := &validator.ValidatorMetadata{
+			Address:     vote.Delegate,
+			VotingPower: big.NewInt(0), // 初始投票权重为0
+			IsActive:    true,
+		}
+		d.delegates = append(d.delegates, newDelegate)
+		d.logger.Info("new delegate added", "address", vote.Delegate, "totalDelegates", len(d.delegates))
 	}
 
 	// 3. 检查投票锁定时间
@@ -4375,5 +4445,58 @@ func (r *dposRuntime) setupNetworkIntegration() error {
 	}
 
 	r.logger.Info("网络集成管理器已启动")
+	return nil
+}
+
+// AddVote adds a vote directly to the DPoS consensus engine
+// This method is called by JSON-RPC to update DPoS state immediately
+func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big.Int) error {
+	d.logger.Info("=== AddVote 详细信息 ===")
+	d.logger.Info("投票者地址", "voter", voter.String())
+	d.logger.Info("候选人地址", "candidate", candidate.String())
+	d.logger.Info("投票金额", "amount", amount.String())
+	d.logger.Info("投票金额(ETH)", "amountETH", new(big.Float).Quo(new(big.Float).SetInt(amount), new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil))))
+	d.logger.Info("当前轮次", "round", d.runtime.currentRound)
+	d.logger.Info("=== AddVote 详细信息结束 ===")
+
+	// 防御：运行时未初始化则跳过
+	if d.runtime == nil {
+		d.logger.Warn("dpos runtime is nil, cannot add vote")
+		return fmt.Errorf("dpos runtime not initialized")
+	}
+
+	// 验证投票参数
+	if amount.Sign() <= 0 {
+		return fmt.Errorf("vote amount must be positive")
+	}
+
+	// 创建投票消息
+	vote := &VoteMessage{
+		Voter:     voter,
+		Delegate:  candidate,
+		Amount:    amount,
+		Round:     d.runtime.currentRound,
+		Timestamp: uint64(time.Now().Unix()),
+	}
+
+	// 验证投票
+	if err := d.validateVote(vote); err != nil {
+		d.logger.Error("vote validation failed", "error", err, "voter", voter, "candidate", candidate, "amount", amount)
+		return fmt.Errorf("vote validation failed: %w", err)
+	}
+
+	// 直接处理投票，更新 DPoS 状态
+	if err := d.runtime.processVote(vote); err != nil {
+		d.logger.Error("failed to process vote", "error", err, "voter", voter, "candidate", candidate, "amount", amount)
+		return fmt.Errorf("failed to process vote: %w", err)
+	}
+
+	d.logger.Info("=== 投票成功 ===")
+	d.logger.Info("投票者", "voter", voter.String())
+	d.logger.Info("候选人", "candidate", candidate.String())
+	d.logger.Info("投票金额", "amount", amount.String())
+	d.logger.Info("投票金额(ETH)", "amountETH", new(big.Float).Quo(new(big.Float).SetInt(amount), new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil))))
+	d.logger.Info("=== 投票成功结束 ===")
+
 	return nil
 }

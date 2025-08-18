@@ -18,7 +18,7 @@ import (
 	"github.com/hashicorp/go-hclog"
 
 	"github.com/Vcity-Team/vcitychain/consensus"
-	"github.com/Vcity-Team/vcitychain/consensus/dpos"
+	consensusdpos "github.com/Vcity-Team/vcitychain/consensus/dpos"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
 )
@@ -681,6 +681,17 @@ func (a *dposStoreAdapter) GetAccount(root types.Hash, addr types.Address) (*Acc
 func (a *dposStoreAdapter) GetBalance(root types.Hash, addr types.Address) (*big.Int, error) {
 	// Use ethStore methods from JSONRPCStore
 	if ethStore, ok := a.store.(ethStore); ok {
+		// If root is zero hash, try to get from latest header first
+		if root == (types.Hash{}) {
+			// Try to get the latest header to get a valid state root
+			if blockchainStore, ok := a.store.(ethBlockchainStore); ok {
+				if latestHeader := blockchainStore.Header(); latestHeader != nil {
+					// Use the latest header's state root
+					root = latestHeader.StateRoot
+				}
+			}
+		}
+
 		account, err := ethStore.GetAccount(root, addr)
 		if err != nil {
 			return nil, err
@@ -690,17 +701,112 @@ func (a *dposStoreAdapter) GetBalance(root types.Hash, addr types.Address) (*big
 	return nil, fmt.Errorf("ethStore not available")
 }
 
-func (a *dposStoreAdapter) GetDPoSState() (*dpos.State, error) {
+// AddTx adds a new transaction to the transaction pool
+func (a *dposStoreAdapter) AddTx(tx *types.Transaction) error {
+	// Try to access AddTx through the underlying JSONRPCStore
+	if addTxStore, ok := a.store.(interface {
+		AddTx(tx *types.Transaction) error
+	}); ok {
+		return addTxStore.AddTx(tx)
+	}
+	return fmt.Errorf("AddTx method not available on underlying store")
+}
+
+// GetPendingTx gets the pending transaction from the transaction pool
+func (a *dposStoreAdapter) GetPendingTx(txHash types.Hash) (*types.Transaction, bool) {
+	// Try to access GetPendingTx through the underlying JSONRPCStore
+	if getPendingTxStore, ok := a.store.(interface {
+		GetPendingTx(txHash types.Hash) (*types.Transaction, bool)
+	}); ok {
+		return getPendingTxStore.GetPendingTx(txHash)
+	}
+	return nil, false
+}
+
+// GetNonce returns the next nonce for this address
+func (a *dposStoreAdapter) GetNonce(addr types.Address) uint64 {
+	// Try to access GetNonce through the underlying JSONRPCStore
+	if nonceStore, ok := a.store.(interface {
+		GetNonce(addr types.Address) uint64
+	}); ok {
+		return nonceStore.GetNonce(addr)
+	}
+	return 0
+}
+
+// GetBaseFee returns the current base fee of TxPool
+func (a *dposStoreAdapter) GetBaseFee() uint64 {
+	// Try to access GetBaseFee through the underlying JSONRPCStore
+	if baseFeeStore, ok := a.store.(interface {
+		GetBaseFee() uint64
+	}); ok {
+		return baseFeeStore.GetBaseFee()
+	}
+	return 0
+}
+
+// GetConsensus gets the consensus engine from the underlying store
+func (a *dposStoreAdapter) GetConsensus() interface{} {
+	// Prefer strongly-typed hub getter if available
+	if hub, ok := a.store.(interface {
+		GetConsensus() consensus.Consensus // Changed interface{} to consensus.Consensus
+	}); ok {
+		return hub.GetConsensus()
+	}
+	// Fallback to generic interface{} if specific type not found
+	if consensusStore, ok := a.store.(interface {
+		GetConsensus() interface{}
+	}); ok {
+		return consensusStore.GetConsensus()
+	}
+	return nil
+}
+
+// GetNetwork gets the network layer from the underlying store
+func (a *dposStoreAdapter) GetNetwork() interface{} {
+	if networkStore, ok := a.store.(interface {
+		GetNetwork() interface{}
+	}); ok {
+		return networkStore.GetNetwork()
+	}
+	return nil
+}
+
+// GetServer gets the server instance from the underlying store
+func (a *dposStoreAdapter) GetServer() interface{} {
+	if serverStore, ok := a.store.(interface {
+		GetServer() interface{}
+	}); ok {
+		return serverStore.GetServer()
+	}
+	return nil
+}
+
+// GetTxPool gets the transaction pool from the underlying store
+func (a *dposStoreAdapter) GetTxPool() interface{} {
+	if txpoolStore, ok := a.store.(interface {
+		GetTxPool() interface{}
+	}); ok {
+		return txpoolStore.GetTxPool()
+	}
+	return nil
+}
+
+func (a *dposStoreAdapter) GetDPoSState() (*consensusdpos.State, error) {
 	// Try to get DPoS state from the consensus engine
 	// This should connect to the actual DPoS consensus mechanism
 
 	// First, try to get from blockchain store if it has DPoS state
-	if blockchainStore, ok := a.store.(interface{ GetDPoSState() (*dpos.State, error) }); ok {
+	if blockchainStore, ok := a.store.(interface {
+		GetDPoSState() (*consensusdpos.State, error)
+	}); ok {
 		return blockchainStore.GetDPoSState()
 	}
 
 	// If blockchain store doesn't have DPoS state, try to get from consensus store
-	if consensusStore, ok := a.store.(interface{ GetConsensusDPoSState() (*dpos.State, error) }); ok {
+	if consensusStore, ok := a.store.(interface {
+		GetConsensusDPoSState() (*consensusdpos.State, error)
+	}); ok {
 		return consensusStore.GetConsensusDPoSState()
 	}
 
@@ -758,51 +864,12 @@ func (a *dposStoreAdapter) GetValidators() (validator.AccountSet, error) {
 			return dposEngine.GetValidators()
 		}
 
-		// Try to get validators from consensus engine using reflection
+		// Try to access the delegates field directly if it exists
 		consensusValue := reflect.ValueOf(consensusEngine)
 		if consensusValue.Kind() == reflect.Ptr {
 			consensusValue = consensusValue.Elem()
 		}
 
-		// Look for GetDelegates method
-		if getDelegatesMethod := consensusValue.MethodByName("GetDelegates"); getDelegatesMethod.IsValid() {
-			// GetDelegates requires (blockNumber uint64, parents []*types.Header)
-			// For current block, use 0 and nil
-			blockNumber := reflect.ValueOf(uint64(0))
-			parents := reflect.ValueOf([]*types.Header(nil))
-			results := getDelegatesMethod.Call([]reflect.Value{blockNumber, parents})
-			if len(results) == 2 && !results[1].IsNil() {
-				err := results[1].Interface().(error)
-				return nil, err
-			}
-			if len(results) >= 1 {
-				result := results[0].Interface()
-				if accountSet, ok := result.(validator.AccountSet); ok {
-					return accountSet, nil
-				}
-			}
-		}
-
-		// Look for GetValidators method
-		if getValidatorsMethod := consensusValue.MethodByName("GetValidators"); getValidatorsMethod.IsValid() {
-			// GetValidators requires (blockNumber uint64, parents []*types.Header)
-			// For current block, use 0 and nil
-			blockNumber := reflect.ValueOf(uint64(0))
-			parents := reflect.ValueOf([]*types.Header(nil))
-			results := getValidatorsMethod.Call([]reflect.Value{blockNumber, parents})
-			if len(results) == 2 && !results[1].IsNil() {
-				err := results[1].Interface().(error)
-				return nil, err
-			}
-			if len(results) >= 1 {
-				result := results[0].Interface()
-				if accountSet, ok := result.(validator.AccountSet); ok {
-					return accountSet, nil
-				}
-			}
-		}
-
-		// Try to access the delegates field directly if it exists
 		if delegatesField := consensusValue.FieldByName("delegates"); delegatesField.IsValid() {
 			// Check if it's a slice
 			if delegatesField.Kind() == reflect.Slice {
@@ -895,39 +962,36 @@ func (a *dposStoreAdapter) GetValidators() (validator.AccountSet, error) {
 		}
 	}
 
-	fmt.Printf("DEBUG: No validator methods found\n")
-
-	// If no validator store is available, return empty set
-	// This allows the endpoint to work even when the consensus engine is not fully configured
+	// If no validators found, return empty set
 	return validator.AccountSet{}, nil
 }
 
-func (a *dposStoreAdapter) GetStakingInfo() ([]*dpos.StakeInfo, error) {
+func (a *dposStoreAdapter) GetStakingInfo() ([]*consensusdpos.StakeInfo, error) {
 	// Try to get staking info from the consensus engine
 	// This should connect to the actual DPoS staking mechanism
 
 	// First, try to get from blockchain store if it has staking information
 	if blockchainStore, ok := a.store.(interface {
-		GetStakingInfo() ([]*dpos.StakeInfo, error)
+		GetStakingInfo() ([]*consensusdpos.StakeInfo, error)
 	}); ok {
 		return blockchainStore.GetStakingInfo()
 	}
 
 	// Try to get from consensus store with GetStakingInfo method (different signature)
 	if consensusStore, ok := a.store.(interface {
-		GetStakingInfo(blockNumber uint64, staker types.Address) (*dpos.StakeInfo, error)
+		GetStakingInfo(blockNumber uint64, staker types.Address) (*consensusdpos.StakeInfo, error)
 	}); ok {
 		// For now, get staking info for zero address (all stakers)
 		// TODO: Implement proper aggregation of all staking info
 		stakeInfo, err := consensusStore.GetStakingInfo(0, types.ZeroAddress)
 		if err == nil && stakeInfo != nil {
-			return []*dpos.StakeInfo{stakeInfo}, nil
+			return []*consensusdpos.StakeInfo{stakeInfo}, nil
 		}
 	}
 
 	// Try to get from consensus store with GetConsensusStakingInfo method
 	if consensusStore, ok := a.store.(interface {
-		GetConsensusStakingInfo() ([]*dpos.StakeInfo, error)
+		GetConsensusStakingInfo() ([]*consensusdpos.StakeInfo, error)
 	}); ok {
 		return consensusStore.GetConsensusStakingInfo()
 	}
@@ -961,13 +1025,13 @@ func (a *dposStoreAdapter) GetStakingInfo() ([]*dpos.StakeInfo, error) {
 			validators, err := a.GetValidators()
 			if err != nil {
 				fmt.Printf("DEBUG: GetStakingInfo - Failed to get validators: %v\n", err)
-				return []*dpos.StakeInfo{}, nil
+				return []*consensusdpos.StakeInfo{}, nil
 			}
 
 			fmt.Printf("DEBUG: GetStakingInfo - Found %d validators\n", len(validators))
 
 			// Create staking info for each validator
-			stakingInfos := make([]*dpos.StakeInfo, 0, len(validators))
+			stakingInfos := make([]*consensusdpos.StakeInfo, 0, len(validators))
 			for i, validator := range validators {
 				fmt.Printf("DEBUG: GetStakingInfo - Processing validator %d: %s\n", i, validator.Address.String())
 
@@ -1000,7 +1064,7 @@ func (a *dposStoreAdapter) GetStakingInfo() ([]*dpos.StakeInfo, error) {
 				}
 
 				if len(results) >= 1 && !results[0].IsNil() {
-					stakeInfo := results[0].Interface().(*dpos.StakeInfo)
+					stakeInfo := results[0].Interface().(*consensusdpos.StakeInfo)
 					fmt.Printf("DEBUG: GetStakingInfo - SUCCESS! Got staking info for validator %d:\n", i)
 					fmt.Printf("DEBUG: GetStakingInfo -   Staker: %s\n", stakeInfo.Staker.String())
 					fmt.Printf("DEBUG: GetStakingInfo -   Amount: %s\n", stakeInfo.Amount.String())
@@ -1106,7 +1170,7 @@ func (a *dposStoreAdapter) GetStakingInfo() ([]*dpos.StakeInfo, error) {
 				if delegatesField.Kind() == reflect.Slice {
 					fmt.Printf("DEBUG: GetStakingInfo - Delegates field is a slice with length: %d\n", delegatesField.Len())
 
-					stakingInfos := make([]*dpos.StakeInfo, 0, delegatesField.Len())
+					stakingInfos := make([]*consensusdpos.StakeInfo, 0, delegatesField.Len())
 
 					// Iterate through delegates using reflection
 					for i := 0; i < delegatesField.Len(); i++ {
@@ -1160,7 +1224,7 @@ func (a *dposStoreAdapter) GetStakingInfo() ([]*dpos.StakeInfo, error) {
 							validatorAddr.String(), realStakeAmount.String())
 
 						// Create staking info from delegate with real stake amount
-						stakeInfo := &dpos.StakeInfo{
+						stakeInfo := &consensusdpos.StakeInfo{
 							Staker:    validatorAddr,
 							Amount:    realStakeAmount,           // Use real stake amount instead of VotingPower
 							StartTime: uint64(time.Now().Unix()), // Use current time as default
@@ -1190,7 +1254,7 @@ func (a *dposStoreAdapter) GetStakingInfo() ([]*dpos.StakeInfo, error) {
 	// If no staking store is available, return empty slice
 	// This allows the endpoint to work even when the consensus engine is not fully configured
 	fmt.Printf("DEBUG: GetStakingInfo - No staking info found, returning empty slice\n")
-	return []*dpos.StakeInfo{}, nil
+	return []*consensusdpos.StakeInfo{}, nil
 }
 
 // getRealStakeAmount tries to get the real staking amount for a validator

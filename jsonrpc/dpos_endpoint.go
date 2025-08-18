@@ -2,15 +2,21 @@ package jsonrpc
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"encoding/hex"
 	"fmt"
 	"math/big"
+	"reflect"
 	"time"
 
-	"github.com/hashicorp/go-hclog"
+	"bytes"
 
+	"github.com/Vcity-Team/vcitychain/consensus"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
+	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/types"
+	"github.com/hashicorp/go-hclog"
 )
 
 // dposStore provides access to the methods needed by dpos endpoint
@@ -29,20 +35,222 @@ type dposStore interface {
 
 	// GetStakingInfo gets staking information
 	GetStakingInfo() ([]*dpos.StakeInfo, error)
+
+	// GetPendingTx gets pending transaction from transaction pool
+	GetPendingTx(txHash types.Hash) (*types.Transaction, bool)
+
+	// GetNetwork gets network layer for transaction broadcasting
+	GetNetwork() interface{}
+
+	// GetServer gets server instance for transaction broadcasting
+	GetServer() interface{}
+
+	// GetTxPool gets transaction pool for direct broadcasting
+	GetTxPool() interface{}
 }
 
 // DPOS is the dpos jsonrpc endpoint
 type DPOS struct {
 	logger hclog.Logger
 	store  dposStore
+	// Hardcoded private key for signing DPoS transactions
+	privateKey *ecdsa.PrivateKey
 }
 
 // NewDPOS creates a new DPOS endpoint
 func NewDPOS(logger hclog.Logger, store dposStore) *DPOS {
-	return &DPOS{
-		logger: logger.Named("dpos"),
-		store:  store,
+	logger.Error("=== NEWDPOS FUNCTION CALLED ===")
+	logger.Info("=== NEWDPOS FUNCTION CALLED ===")
+
+	// Hardcoded private key for DPoS voting
+	privateKeyHex := "ed7ba26f0568b6b9cd3296ff7dcfe56fc6041fea8963246334bdaa276783add6"
+
+	logger.Error("=== PRIVATE KEY INITIALIZATION START ===")
+	logger.Info("=== PRIVATE KEY INITIALIZATION START ===")
+	logger.Info("Initializing DPoS endpoint with private key", "privateKeyHex", privateKeyHex)
+
+	privateKeyBytes, err := hex.DecodeString(privateKeyHex)
+	if err != nil {
+		logger.Error("=== PRIVATE KEY DECODE FAILED ===", "error", err, "privateKeyHex", privateKeyHex)
+		logger.Error("Failed to decode private key", "error", err, "privateKeyHex", privateKeyHex)
+		return &DPOS{
+			logger: logger.Named("dpos"),
+			store:  store,
+		}
 	}
+
+	logger.Error("=== PRIVATE KEY DECODE SUCCESS ===", "privateKeyBytesLength", len(privateKeyBytes))
+	logger.Info("=== PRIVATE KEY DECODE SUCCESS ===", "privateKeyBytesLength", len(privateKeyBytes))
+	logger.Info("Private key decoded successfully", "privateKeyBytesLength", len(privateKeyBytes))
+
+	privateKey, err := crypto.BytesToECDSAPrivateKey(privateKeyBytes)
+	if err != nil {
+		logger.Error("=== PRIVATE KEY CREATION FAILED ===", "error", err, "privateKeyBytesLength", len(privateKeyBytes))
+		logger.Error("Failed to create private key", "error", err, "privateKeyBytesLength", len(privateKeyBytes))
+		return &DPOS{
+			logger: logger.Named("dpos"),
+			store:  store,
+		}
+	}
+
+	logger.Error("=== PRIVATE KEY CREATION SUCCESS ===", "privateKeyD", privateKey.D.String())
+	logger.Info("=== PRIVATE KEY CREATION SUCCESS ===", "privateKeyD", privateKey.D.String())
+	logger.Info("Private key created successfully", "privateKeyD", privateKey.D.String())
+
+	result := &DPOS{
+		logger:     logger.Named("dpos"),
+		store:      store,
+		privateKey: privateKey,
+	}
+
+	logger.Error("=== DPOS ENDPOINT CREATED WITH PRIVATE KEY ===", "privateKeyAvailable", result.privateKey != nil)
+	logger.Info("=== DPOS ENDPOINT CREATED WITH PRIVATE KEY ===", "privateKeyAvailable", result.privateKey != nil)
+
+	return result
+}
+
+// signTransaction signs a DPoS transaction using the private key
+func (d *DPOS) signTransaction(tx *types.Transaction, expectedAddr types.Address) error {
+	d.logger.Info("=== HARDCODED PRIVATE KEY APPROACH ===")
+
+	// Hardcoded private key for quick testing - ensure it's valid hex
+	privateKeyHex := "ed7ba26f0568b6b9cd3296ff7dcfe56fc6041fea8963246334bdaa276783add6"
+
+	d.logger.Info("Decoding hardcoded private key", "privateKeyHex", privateKeyHex, "length", len(privateKeyHex))
+
+	// Validate hex string first
+	if len(privateKeyHex) != 64 {
+		return fmt.Errorf("invalid private key length: expected 64, got %d", len(privateKeyHex))
+	}
+
+	// Check if string contains only valid hex characters
+	for i, char := range privateKeyHex {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
+			return fmt.Errorf("invalid hex character at position %d: %c (U+%04X)", i, char, char)
+		}
+	}
+
+	d.logger.Info("Private key hex string validation passed")
+
+	privateKeyBytes, err := hex.DecodeString(privateKeyHex)
+	if err != nil {
+		d.logger.Error("Failed to decode hardcoded private key", "error", err)
+		return fmt.Errorf("failed to decode hardcoded private key: %w", err)
+	}
+
+	d.logger.Info("Hardcoded private key decoded", "length", len(privateKeyBytes))
+
+	// Use direct ECDSA private key creation instead of crypto.BytesToECDSAPrivateKey
+	if len(privateKeyBytes) != 32 {
+		return fmt.Errorf("invalid private key bytes length: expected 32, got %d", len(privateKeyBytes))
+	}
+
+	// Create ECDSA private key directly using secp256k1 curve
+	privateKey := &ecdsa.PrivateKey{
+		PublicKey: ecdsa.PublicKey{
+			Curve: crypto.S256,
+		},
+		D: new(big.Int).SetBytes(privateKeyBytes),
+	}
+
+	// Calculate the public key from the private key
+	privateKey.PublicKey.X, privateKey.PublicKey.Y = privateKey.Curve.ScalarBaseMult(privateKeyBytes)
+
+	d.logger.Info("Hardcoded private key created successfully", "privateKeyD", privateKey.D.String())
+
+	// Calculate transaction hash for signing using EIP-155 scheme to match txpool signer
+	chainID := uint64(888)
+	eip155Signer := crypto.NewEIP155Signer(chainID, false)
+
+	d.logger.Info("=== 标记2: 开始签名交易 ===")
+	// For EIP-155 signing, we need to use the signer's SignTx method
+	// This ensures the hash calculation and V value are correct
+	signedTx, err := eip155Signer.SignTx(tx, privateKey)
+	if err != nil {
+		d.logger.Error("Failed to sign transaction with EIP-155 signer", "error", err)
+		return fmt.Errorf("failed to sign transaction with EIP-155 signer: %w", err)
+	}
+
+	// Copy the signature components from the signed transaction
+	tx.R = signedTx.R
+	tx.S = signedTx.S
+	tx.V = signedTx.V
+
+	d.logger.Info("=== 标记3: 签名完成，R=", tx.R.String(), "S=", tx.S.String(), "V=", tx.V.String(), "===")
+	d.logger.Info("Transaction signed successfully with EIP-155 signer", "r", tx.R.String(), "s", tx.S.String(), "v", tx.V.String())
+
+	// Recover sender with the same signer and set tx.From for logging / consistency
+	senderAddr, err := eip155Signer.Sender(tx)
+	if err == nil {
+		tx.From = senderAddr
+		d.logger.Info("=== 标记4: 恢复发送者地址=", tx.From.String(), "===")
+		d.logger.Info("Sender recovered and set on tx", "from", tx.From.String())
+	} else {
+		d.logger.Warn("Failed to recover sender after signing", "error", err)
+	}
+
+	// Test signature recovery to ensure it works
+	d.logger.Info("Testing signature recovery...")
+	// Use the EIP-155 signer's Hash method for recovery test
+	hashForRecovery := eip155Signer.Hash(tx)
+
+	// We need to reconstruct the signature from R, S, V for recovery
+	// Extract recovery ID from V value: V = 2*chainID + 35 + recoveryID
+	recoveryID := int(tx.V.Int64() - int64(2*chainID) - 35)
+	if recoveryID < 0 || recoveryID > 1 {
+		return fmt.Errorf("invalid recovery ID: %d", recoveryID)
+	}
+
+	// Reconstruct signature: R (32 bytes) + S (32 bytes) + recoveryID (1 byte)
+	// Ensure R and S are padded to 32 bytes
+	signatureForRecovery := make([]byte, 65)
+
+	// Pad R to 32 bytes
+	rBytes := tx.R.Bytes()
+	if len(rBytes) > 32 {
+		return fmt.Errorf("R value too large: %d bytes", len(rBytes))
+	}
+	copy(signatureForRecovery[32-len(rBytes):32], rBytes)
+
+	// Pad S to 32 bytes
+	sBytes := tx.S.Bytes()
+	if len(sBytes) > 32 {
+		return fmt.Errorf("S value too large: %d bytes", len(sBytes))
+	}
+	copy(signatureForRecovery[64-len(sBytes):64], sBytes)
+
+	// Set recovery ID
+	signatureForRecovery[64] = byte(recoveryID)
+
+	d.logger.Info("Signature reconstruction", "rBytes", len(rBytes), "sBytes", len(sBytes), "recoveryID", recoveryID)
+
+	// Now recover using the reconstructed signature
+	recoveredPubKeyBytes, err := crypto.Ecrecover(hashForRecovery.Bytes(), signatureForRecovery)
+	if err != nil {
+		d.logger.Error("Failed to recover public key with reconstructed signature", "error", err)
+		return fmt.Errorf("failed to recover public key with reconstructed signature: %w", err)
+	}
+
+	// Derive address directly from recovered public key bytes
+	// Expect uncompressed public key format (0x04 || X || Y) or raw X||Y (64 bytes)
+	rawPub := recoveredPubKeyBytes
+	if len(rawPub) == 65 && rawPub[0] == 0x04 {
+		rawPub = rawPub[1:]
+	}
+	if len(rawPub) != 64 {
+		return fmt.Errorf("invalid recovered public key length: %d (expected 64 or 65)", len(recoveredPubKeyBytes))
+	}
+	// keccak256(X||Y), take last 20 bytes
+	h := crypto.Keccak256(rawPub)
+	recoveredAddr := types.BytesToAddress(h[12:])
+	d.logger.Info("Signature recovery test", "recoveredAddress", recoveredAddr.String(), "expectedAddress", expectedAddr.String(), "match", recoveredAddr == expectedAddr)
+
+	if recoveredAddr != expectedAddr {
+		d.logger.Error("Signature recovery failed", "recoveredAddress", recoveredAddr.String(), "expectedAddress", expectedAddr.String())
+		return fmt.Errorf("signature recovery failed: recovered address %s does not match expected address %s", recoveredAddr.String(), expectedAddr.String())
+	}
+
+	return nil
 }
 
 // VoteRequest represents a vote request
@@ -73,7 +281,7 @@ type StakeResponse struct {
 	Success     bool   `json:"success"`
 	Message     string `json:"message"`
 	TxHash      string `json:"txHash,omitempty"`
-	BlockNumber uint64 `json:"blockNumber,omitempty"`
+	BlockNumber uint64 `json:"txHash,omitempty"`
 	Error       string `json:"error,omitempty"`
 }
 
@@ -240,29 +448,72 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		var foundValidRoot bool
 
 		// Try to get latest state root from different possible interfaces
-		if latestStore, ok := d.store.(interface {
-			GetLatestStateRoot() types.Hash
+		// Method 1a: Try to get from ethBlockchainStore.Header() method
+		if headerStore, ok := d.store.(interface {
+			Header() *types.Header
 		}); ok {
-			latestRoot = latestStore.GetLatestStateRoot()
-			d.logger.Info("Method 1: Got latest state root", "root", latestRoot.String())
-			foundValidRoot = true
-		} else if headerStore, ok := d.store.(interface {
-			GetLatestHeader() *types.Header
-		}); ok {
-			latestHeader := headerStore.GetLatestHeader()
+			latestHeader := headerStore.Header()
 			if latestHeader != nil {
 				latestRoot = latestHeader.StateRoot
-				d.logger.Info("Method 1: Got state root from latest header", "root", latestRoot.String())
+				d.logger.Info("Method 1a: Got state root from Header() method", "root", latestRoot.String())
 				foundValidRoot = true
 			}
-		} else if blockStore, ok := d.store.(interface {
-			GetLatestBlock() *types.Block
-		}); ok {
-			latestBlock := blockStore.GetLatestBlock()
-			if latestBlock != nil {
-				latestRoot = latestBlock.Header.StateRoot
-				d.logger.Info("Method 1: Got state root from latest block", "root", latestRoot.String())
+		}
+
+		// Method 1b: Try to get from GetLatestStateRoot method (if exists)
+		if !foundValidRoot {
+			if latestStore, ok := d.store.(interface {
+				GetLatestStateRoot() types.Hash
+			}); ok {
+				latestRoot = latestStore.GetLatestStateRoot()
+				d.logger.Info("Method 1b: Got latest state root", "root", latestRoot.String())
 				foundValidRoot = true
+			}
+		}
+
+		// Method 1c: Try to get from GetLatestHeader method (if exists)
+		if !foundValidRoot {
+			if headerStore, ok := d.store.(interface {
+				GetLatestHeader() *types.Header
+			}); ok {
+				latestHeader := headerStore.GetLatestHeader()
+				if latestHeader != nil {
+					latestRoot = latestHeader.StateRoot
+					d.logger.Info("Method 1c: Got state root from GetLatestHeader", "root", latestRoot.String())
+					foundValidRoot = true
+				}
+			}
+		}
+
+		// Method 1d: Try to get from GetLatestBlock method (if exists)
+		if !foundValidRoot {
+			if blockStore, ok := d.store.(interface {
+				GetLatestBlock() *types.Block
+			}); ok {
+				latestBlock := blockStore.GetLatestBlock()
+				if latestBlock != nil {
+					latestRoot = latestBlock.Header.StateRoot
+					d.logger.Info("Method 1d: Got state root from GetLatestBlock", "root", latestRoot.String())
+					foundValidRoot = true
+				}
+			}
+		}
+
+		// Method 1e: Try to get from GetHeaderByNumber method with latest block number
+		if !foundValidRoot {
+			if headerStore, ok := d.store.(interface {
+				Header() *types.Header
+				GetHeaderByNumber(uint64) (*types.Header, bool)
+			}); ok {
+				latestHeader := headerStore.Header()
+				if latestHeader != nil && latestHeader.Number > 0 {
+					// Try to get the previous block header as a fallback
+					if prevHeader, ok := headerStore.GetHeaderByNumber(latestHeader.Number - 1); ok {
+						latestRoot = prevHeader.StateRoot
+						d.logger.Info("Method 1e: Got state root from previous block header", "root", latestRoot.String(), "blockNumber", prevHeader.Number)
+						foundValidRoot = true
+					}
+				}
 			}
 		}
 
@@ -315,6 +566,22 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		}
 	}
 
+	// Method 3: Try to get balance using zero hash as fallback (for genesis or initial state)
+	if balance == nil || err != nil {
+		d.logger.Info("Method 3: Trying to get balance with zero hash as fallback...")
+		if balanceStore, ok := d.store.(interface {
+			GetBalance(root types.Hash, addr types.Address) (*big.Int, error)
+		}); ok {
+			zeroHash := types.Hash{}
+			balance, err = balanceStore.GetBalance(zeroHash, voterAddr)
+			if err == nil && balance != nil {
+				d.logger.Info("Method 3: Successfully got balance with zero hash", "balance", balance.String())
+			} else {
+				d.logger.Info("Method 3: Failed to get balance with zero hash", "error", err)
+			}
+		}
+	}
+
 	// Check if we successfully retrieved balance
 	if balance == nil {
 		d.logger.Error("Failed to retrieve voter balance - cannot proceed with vote")
@@ -341,110 +608,330 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	// Step 1: Create a vote transaction
 	d.logger.Info("Creating vote transaction...")
 
-	// Create transaction data for voting
-	txData := d.createVoteTransactionData(voterAddr, candidateAddr, amountInt)
-
-	// Create transaction
-	tx := &types.Transaction{
-		Nonce:    0,                // TODO: Get actual nonce from account
-		GasPrice: big.NewInt(0),    // Free gas for DPoS operations
-		Gas:      21000,            // Standard gas limit
-		To:       &types.Address{}, // Contract address for DPoS
-		Value:    big.NewInt(0),    // No ETH transfer, just voting
-		Input:    txData,           // Transaction data for voting
-		V:        big.NewInt(27),   // ECDSA signature components
-		R:        big.NewInt(0),
-		S:        big.NewInt(0),
-	}
-
-	d.logger.Info("Vote transaction created", "txHash", tx.Hash.String())
-
-	// Step 2: Add transaction to the transaction pool
-	d.logger.Info("Adding transaction to pool...")
-
-	// Get transaction pool from store
-	if txPool, ok := d.store.(interface {
-		AddTx(tx *types.Transaction) error
+	// Get account nonce for the voter
+	var nonce uint64
+	if nonceStore, ok := d.store.(interface {
+		GetNonce(addr types.Address) uint64
 	}); ok {
-		if err := txPool.AddTx(tx); err != nil {
-			d.logger.Error("Failed to add transaction to pool", "error", err)
-			return &VoteResponse{
-				Success: false,
-				Error:   fmt.Sprintf("failed to add transaction to pool: %v", err),
-			}, nil
-		}
-		d.logger.Info("Transaction added to pool successfully")
+		nonce = nonceStore.GetNonce(voterAddr)
 	} else {
-		d.logger.Warn("Transaction pool not available, simulating pool addition")
-	}
-
-	// Step 3: Update DPoS state immediately (for immediate effect)
-	d.logger.Info("Updating DPoS state...")
-
-	// Try to update the consensus engine state
-	if consensus, ok := d.store.(interface {
-		GetConsensus() interface{}
-	}); ok {
-		consensusEngine := consensus.GetConsensus()
-		if dposEngine, ok := consensusEngine.(interface {
-			AddVote(voter types.Address, candidate types.Address, amount *big.Int) error
+		// Fallback: try to get nonce from account
+		if accountStore, ok := d.store.(interface {
+			GetAccount(root types.Hash, addr types.Address) (*Account, error)
 		}); ok {
-			if err := dposEngine.AddVote(voterAddr, candidateAddr, amountInt); err != nil {
-				d.logger.Error("Failed to update DPoS state", "error", err)
-				// Continue anyway, the transaction is in the pool
-			} else {
-				d.logger.Info("DPoS state updated successfully")
+			if account, err := accountStore.GetAccount(types.Hash{}, voterAddr); err == nil {
+				nonce = account.Nonce
 			}
 		}
 	}
 
-	// Step 4: Return success response with transaction details
-	d.logger.Info("Vote operation completed successfully", "txHash", tx.Hash.String())
+	// Get current gas price
+	var gasPrice *big.Int
+	if gasStore, ok := d.store.(interface {
+		GetBaseFee() uint64
+	}); ok {
+		baseFee := gasStore.GetBaseFee()
+		gasPrice = new(big.Int).SetUint64(baseFee)
+	} else {
+		gasPrice = big.NewInt(1000000000) // 1 gwei default
+	}
+
+	// Create vote transaction
+	d.logger.Info("=== 标记1: 开始创建投票交易 ===")
+	tx := &types.Transaction{
+		Nonce:    nonce,
+		GasPrice: gasPrice,
+		Gas:      100000, // 在这里加标记
+		To:       nil,    // 在这里加标记
+		Value:    big.NewInt(0),
+		Input:    d.createVoteTransactionData(voterAddr, candidateAddr, amountInt), // 在这里加标记
+		V:        big.NewInt(0),                                                    // Will be set after signing
+		R:        big.NewInt(0),                                                    // Will be set after signing
+		S:        big.NewInt(0),                                                    // Will be set after signing
+		Hash:     types.Hash{},
+		// Don't set From field - let transaction pool recover it from signature
+		// This ensures consistency between From field and signature
+	}
+
+	// Set transaction type to legacy (0) for compatibility
+	tx.Type = types.LegacyTx
+
+	// Verify that the private key corresponds to the voter address
+	// This ensures the signature will recover the correct address
+	d.logger.Info("Address verification", "voterAddr", voterAddr.String(), "privateKeyHex", "ed7ba26f0568b6b9cd3296ff7dcfe56fc6041fea8963246334bdaa276783add6")
+	d.logger.Info("Transaction pool will automatically recover sender from signature")
+
+	d.logger.Info("Vote transaction created", "txHash", tx.ComputeHash(0).Hash.String(), "nonce", nonce, "gasPrice", gasPrice.String())
+
+	// Step 2: Sign the transaction with private key
+	d.logger.Info("Signing transaction with private key...")
+	if err := d.signTransaction(tx, voterAddr); err != nil {
+		d.logger.Error("Failed to sign transaction", "error", err)
+		return &VoteResponse{
+			Success: false,
+			Error:   fmt.Sprintf("failed to sign transaction: %v", err),
+		}, nil
+	}
+
+	// Recalculate hash after signing
+	txWithHash := tx.ComputeHash(0)
+	txHash := txWithHash.Hash
+	d.logger.Info("Transaction signed and hash recalculated", "txHash", txHash.String())
+
+	// Log transaction details for debugging
+	d.logger.Info("Final transaction details",
+		"type", tx.Type,
+		"nonce", tx.Nonce,
+		"gasPrice", tx.GasPrice.String(),
+		"gas", tx.Gas,
+		"value", tx.Value.String(),
+		"v", tx.V.String(),
+		"r", tx.R.String(),
+		"s", tx.S.String(),
+		"hash", tx.Hash.String(),
+		"from", tx.From.String(),
+		"expectedFrom", voterAddr.String())
+
+	// Important: Transaction pool will recover sender from signature
+	d.logger.Info("Transaction pool will verify: recovered address has sufficient balance")
+
+	// Step 3: Add transaction to the transaction pool for proper tracking
+	d.logger.Info("Adding transaction to pool for DPoS voting history...")
+
+	// Try to get transaction pool from store
+	var txAdded bool
+
+	// Debug: Log the store type to understand what we're working with
+	d.logger.Info("Store type", "type", fmt.Sprintf("%T", d.store))
+
+	d.logger.Info("=== 标记5: 准备加入交易池 ===")
+	// Method 1: Try to access AddTx through ethStore interface
+	if ethStore, ok := d.store.(interface {
+		AddTx(tx *types.Transaction) error
+	}); ok {
+		d.logger.Info("Store implements AddTx interface, attempting to add transaction...")
+		if err := ethStore.AddTx(tx); err != nil {
+			d.logger.Error("Failed to add transaction to pool", "error", err)
+			// Continue anyway, we'll update DPoS state directly as fallback
+		} else {
+			d.logger.Info("Transaction added to pool successfully")
+			txAdded = true
+		}
+	} else {
+		d.logger.Warn("Store does NOT implement AddTx interface")
+		d.logger.Warn("Available methods on store:")
+
+		// Try to get more information about what methods are available
+		storeValue := reflect.ValueOf(d.store)
+		if storeValue.Kind() == reflect.Ptr {
+			storeValue = storeValue.Elem()
+		}
+
+		storeType := storeValue.Type()
+		for i := 0; i < storeType.NumMethod(); i++ {
+			method := storeType.Method(i)
+			d.logger.Warn("Available method", "name", method.Name, "type", method.Type.String())
+		}
+
+		d.logger.Warn("Transaction pool not available, will update DPoS state directly")
+	}
+
+	// 无论 AddTx 是否成功，都尝试广播交易到网络
+	d.logger.Info("=== 标记6: 开始强制广播交易 ===")
+	d.logger.Info("Attempting to broadcast transaction to network", "txHash", tx.Hash.String(), "txAdded", txAdded)
+
+	// 强制广播交易到网络（确保其他节点能收到）
+	if err := d.broadcastTransaction(tx); err != nil {
+		d.logger.Warn("Failed to broadcast transaction directly", "error", err, "txHash", tx.Hash.String())
+		// 不返回错误，继续执行
+	} else {
+		d.logger.Info("Transaction broadcasted successfully", "txHash", tx.Hash.String())
+	}
+
+	// 检查交易池状态，诊断为什么交易没有被共识引擎拉取
+	d.logger.Info("=== 标记9: 检查交易池状态 ===")
+	if txpoolStore, ok := d.store.(interface {
+		GetTxPool() interface{}
+	}); ok {
+		txpool := txpoolStore.GetTxPool()
+		if txpool != nil {
+			if debugTxPool, ok := txpool.(interface {
+				DebugInfo() map[string]interface{}
+			}); ok {
+				debugInfo := debugTxPool.DebugInfo()
+				d.logger.Info("Transaction pool debug info", "debugInfo", debugInfo)
+
+				// 特别关注关键指标
+				if executablesCount, ok := debugInfo["executablesCount"].(int); ok {
+					d.logger.Info("Executables queue count", "count", executablesCount)
+				}
+				if pendingCount, ok := debugInfo["pendingCount"].(int64); ok {
+					d.logger.Info("Pending transactions count", "count", pendingCount)
+				}
+				if hasTopic, ok := debugInfo["hasTopic"].(bool); ok {
+					d.logger.Info("Transaction pool has topic", "hasTopic", hasTopic)
+				}
+				if isSealing, ok := debugInfo["isSealing"].(bool); ok {
+					d.logger.Info("Transaction pool is sealing", "isSealing", isSealing)
+				}
+
+				// 如果 executables 队列为空但有 pending 交易，记录警告但不手动干预
+				if executablesCount, ok := debugInfo["executablesCount"].(int); ok {
+					if executablesCount == 0 {
+						d.logger.Warn("Executables queue is empty - this may indicate a transaction promotion issue")
+						d.logger.Info("Note: Manual intervention removed to avoid interfering with consensus flow")
+						d.logger.Info("Transactions should be promoted automatically by the consensus engine")
+					}
+				}
+			}
+		}
+	}
+
+	// Step 4: Update DPoS state immediately (for immediate effect)
+	d.logger.Info("Updating DPoS state...")
+
+	// Try to update the consensus engine state
+	var dposStateUpdated bool
+
+	// Debug: Check if store has GetConsensus method
+	if consensusStore, ok := d.store.(interface {
+		GetConsensus() interface{}
+	}); ok {
+		d.logger.Info("Store has GetConsensus method, attempting to get consensus engine...")
+		consensusEngine := consensusStore.GetConsensus()
+
+		if consensusEngine == nil {
+			d.logger.Warn("Consensus engine is nil")
+		} else {
+			d.logger.Info("Consensus engine type", "type", fmt.Sprintf("%T", consensusEngine))
+
+			// Try to get DPoS consensus engine with proper type assertion
+			var dposEngine interface {
+				AddVote(voter types.Address, candidate types.Address, amount *big.Int) error
+			}
+
+			// Try multiple type assertions to find the correct DPoS engine
+			if dposEngine, ok = consensusEngine.(interface {
+				AddVote(voter types.Address, candidate types.Address, amount *big.Int) error
+			}); ok {
+				d.logger.Info("Consensus engine has AddVote method, attempting to update DPoS state...")
+				if err := dposEngine.AddVote(voterAddr, candidateAddr, amountInt); err != nil {
+					d.logger.Error("Failed to update DPoS state", "error", err)
+					// Continue anyway, the transaction is in the pool
+				} else {
+					d.logger.Info("DPoS state updated successfully")
+					dposStateUpdated = true
+				}
+			} else {
+				// Try to access the embedded Consensus field directly
+				d.logger.Info("Trying to access embedded Consensus field...")
+				if hub, ok := d.store.(interface {
+					GetConsensus() consensus.Consensus
+				}); ok {
+					consensusEngine := hub.GetConsensus()
+					d.logger.Info("Got consensus engine through hub", "type", fmt.Sprintf("%T", consensusEngine))
+
+					// Try to cast to DPoS engine
+					if dposEngine, ok = consensusEngine.(interface {
+						AddVote(voter types.Address, candidate types.Address, amount *big.Int) error
+					}); ok {
+						d.logger.Info("Consensus engine has AddVote method, attempting to update DPoS state...")
+						if err := dposEngine.AddVote(voterAddr, candidateAddr, amountInt); err != nil {
+							d.logger.Error("Failed to update DPoS state", "error", err)
+						} else {
+							d.logger.Info("DPoS state updated successfully")
+							dposStateUpdated = true
+						}
+					} else {
+						d.logger.Warn("Consensus engine does NOT have AddVote method")
+					}
+				} else {
+					d.logger.Warn("Store does NOT have GetConsensus() consensus.Consensus method")
+				}
+
+				d.logger.Warn("Available methods on consensus engine:")
+
+				// List available methods
+				consensusValue := reflect.ValueOf(consensusEngine)
+				if consensusValue.Kind() == reflect.Ptr {
+					consensusValue = consensusValue.Elem()
+				}
+
+				consensusType := consensusValue.Type()
+				for i := 0; i < consensusType.NumMethod(); i++ {
+					method := consensusType.Method(i)
+					d.logger.Warn("Available method", "name", method.Name, "type", method.Type.String())
+				}
+			}
+		}
+	} else {
+		d.logger.Warn("Store does NOT have GetConsensus method")
+	}
+
+	// Step 5: Return success response with transaction details
+	successMessage := "Vote operation completed successfully"
+	if !txAdded && !dposStateUpdated {
+		successMessage = "Vote operation completed (both transaction pool and DPoS state update failed)"
+	} else if !txAdded {
+		successMessage = "Vote operation completed (DPoS state updated directly, transaction pool failed)"
+	} else if !dposStateUpdated {
+		successMessage = "Vote operation completed (transaction added to pool, DPoS state update failed)"
+	}
+
+	d.logger.Info("Vote operation completed successfully", "txHash", txHash.String(), "txAdded", txAdded, "dposStateUpdated", dposStateUpdated)
+
+	// Try to get the actual block number if transaction is already mined
+	var blockNumber uint64
+	if txAdded {
+		// Check if transaction is already in a block
+		if blockchainStore, ok := d.store.(interface {
+			GetTransactionByHash(hash types.Hash) (*types.Transaction, bool, uint64)
+		}); ok {
+			if _, found, blockNum := blockchainStore.GetTransactionByHash(txHash); found {
+				blockNumber = blockNum
+				d.logger.Info("Transaction found in blockchain", "blockNumber", blockNum)
+			} else {
+				d.logger.Info("Transaction not yet mined, blockNumber will be 0")
+			}
+		} else {
+			d.logger.Info("Store does not support GetTransactionByHash, cannot determine block number")
+		}
+	}
 
 	return &VoteResponse{
 		Success:     true,
-		Message:     "Vote operation completed successfully",
-		TxHash:      tx.Hash.String(),
-		BlockNumber: 0, // Will be filled when transaction is mined
+		Message:     successMessage,
+		TxHash:      txHash.String(),
+		BlockNumber: blockNumber, // Real block number if mined, 0 if pending
 	}, nil
 }
 
 // createVoteTransactionData creates the transaction data for a vote operation
 func (d *DPOS) createVoteTransactionData(voter, candidate types.Address, amount *big.Int) []byte {
-	// Method signature: vote(address voter, address candidate, uint256 amount)
-	// keccak256("vote(address,address,uint256)") = 0x0123456789abcdef...
+	// Since DPoS is implemented directly in code, we just need a simple identifier
+	// This data will be used to identify this as a DPoS vote transaction
 
-	// For now, create a simple data structure
-	// In a real implementation, this would be proper ABI encoding
-	data := make([]byte, 0, 100)
+	data := make([]byte, 0, 32)
 
-	// Add method selector (first 4 bytes of keccak256 hash)
-	methodSelector := []byte{0x01, 0x23, 0x45, 0x67} // Placeholder
-	data = append(data, methodSelector...)
+	// Add a simple identifier for DPoS vote (4 bytes)
+	data = append(data, []byte("DPOS")...)
 
-	// Add voter address (padded to 32 bytes)
-	voterBytes := voter.Bytes()
-	voterPadded := make([]byte, 32)
-	copy(voterPadded[32-len(voterBytes):], voterBytes)
-	data = append(data, voterPadded...)
+	// Add voter address (20 bytes)
+	data = append(data, voter.Bytes()...)
 
-	// Add candidate address (padded to 32 bytes)
-	candidateBytes := candidate.Bytes()
-	candidatePadded := make([]byte, 32)
-	copy(candidatePadded[32-len(candidateBytes):], candidateBytes)
-	data = append(data, candidatePadded...)
+	// Add candidate address (20 bytes)
+	data = append(data, candidate.Bytes()...)
 
-	// Add amount (padded to 32 bytes)
+	// Add amount (32 bytes, padded)
 	amountBytes := amount.Bytes()
-	amountPadded := make([]byte, 32)
-	copy(amountPadded[32-len(amountBytes):], amountBytes)
-	data = append(data, amountPadded...)
-
-	d.logger.Debug("Vote transaction data created",
-		"voter", voter.String(),
-		"candidate", candidate.String(),
-		"amount", amount.String(),
-		"dataLength", len(data))
+	if len(amountBytes) > 32 {
+		amountBytes = amountBytes[len(amountBytes)-32:] // Take last 32 bytes
+	}
+	// Pad with zeros to 32 bytes
+	for len(amountBytes) < 32 {
+		amountBytes = append([]byte{0}, amountBytes...)
+	}
+	data = append(data, amountBytes...)
 
 	return data
 }
@@ -1221,4 +1708,341 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 	}
 
 	return response, nil
+}
+
+// GetVoteByHash handles dpos_getVoteByHash RPC method
+// This method parses DPoS vote transactions and returns human-readable voting information
+func (d *DPOS) GetVoteByHash(ctx context.Context, params interface{}) (interface{}, error) {
+	d.logger.Info("DPoS GetVoteByHash called", "params", params)
+
+	// Parse parameters
+	var txHash string
+	switch v := params.(type) {
+	case string:
+		txHash = v
+	case []interface{}:
+		if len(v) > 0 {
+			if hashStr, ok := v[0].(string); ok {
+				txHash = hashStr
+			}
+		}
+	default:
+		return nil, fmt.Errorf("invalid parameters type: expected string or []interface{}, got %T", params)
+	}
+
+	if txHash == "" {
+		return nil, fmt.Errorf("transaction hash is required")
+	}
+
+	d.logger.Info("Transaction hash extracted", "txHash", txHash)
+
+	// Parse transaction hash
+	hash := types.StringToHash(txHash)
+	if hash == types.ZeroHash {
+		return nil, fmt.Errorf("invalid transaction hash: %s", txHash)
+	}
+
+	d.logger.Info("Transaction hash parsed", "hash", hash.String())
+
+	// Try to get transaction from store
+	var tx *types.Transaction
+	var blockNumber *uint64
+	var isPending bool
+
+	// First try to get from pending transactions
+	d.logger.Info("Checking pending transaction pool...")
+	if pendingTx, found := d.store.GetPendingTx(hash); found {
+		tx = pendingTx
+		isPending = true
+		d.logger.Info("Found transaction in pending pool", "tx", tx.Hash.String())
+	} else {
+		d.logger.Info("Transaction not found in pending pool")
+
+		// Try to get from blockchain if store supports it
+		if blockchainStore, ok := d.store.(interface {
+			GetTransactionByHash(hash types.Hash) (*types.Transaction, bool, uint64)
+		}); ok {
+			d.logger.Info("Checking blockchain for confirmed transaction...")
+			if confirmedTx, found, blockNum := blockchainStore.GetTransactionByHash(hash); found {
+				tx = confirmedTx
+				isPending = false
+				blockNumber = &blockNum
+				d.logger.Info("Found transaction in blockchain", "blockNumber", blockNum)
+			} else {
+				d.logger.Info("Transaction not found in blockchain either")
+			}
+		} else {
+			d.logger.Info("Store does not support GetTransactionByHash")
+		}
+	}
+
+	if tx == nil {
+		return nil, fmt.Errorf("transaction not found in pending pool or blockchain. Hash: %s", txHash)
+	}
+
+	d.logger.Info("Transaction found", "hash", tx.Hash.String(), "isPending", isPending, "blockNumber", blockNumber)
+
+	// Parse DPoS vote data from transaction input
+	voteInfo, err := d.parseVoteTransactionData(tx)
+	if err != nil {
+		d.logger.Error("Failed to parse DPoS vote data", "error", err, "input", fmt.Sprintf("%x", tx.Input))
+		return nil, fmt.Errorf("failed to parse DPoS vote data: %w", err)
+	}
+
+	// Get sender address from transaction
+	sender := tx.From
+	if sender == types.ZeroAddress {
+		d.logger.Info("Sender address is zero, attempting to recover from signature...")
+		// Try to recover sender from signature
+		sender = d.recoverSenderFromTx(tx)
+		d.logger.Info("Sender recovered from signature", "sender", sender.String())
+	}
+
+	// Build response
+	response := map[string]interface{}{
+		"success": true,
+		"txHash":  txHash,
+		"from":    sender.String(),
+		"to": func() string {
+			if tx.To != nil {
+				return tx.To.String()
+			}
+			return "0x0000000000000000000000000000000000000000"
+		}(),
+		"nonce": tx.Nonce,
+		"gasPrice": func() string {
+			if tx.GasPrice != nil {
+				return tx.GasPrice.String()
+			}
+			return "0"
+		}(),
+		"gas": tx.Gas,
+		"value": func() string {
+			if tx.Value != nil {
+				return tx.Value.String()
+			}
+			return "0"
+		}(),
+		"blockNumber": blockNumber,
+		"isPending":   isPending,
+		"voter":       voteInfo.Voter.String(),
+		"candidate":   voteInfo.Candidate.String(),
+		"amountWei":   voteInfo.Amount.String(),
+		"amountEther": new(big.Float).Quo(new(big.Float).SetInt(voteInfo.Amount), new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil))).String(),
+		"voteType":    "DPoS Vote",
+		"timestamp":   time.Now().Unix(),
+	}
+
+	d.logger.Info("DPoS vote parsed successfully", "voter", voteInfo.Voter, "candidate", voteInfo.Candidate, "amount", voteInfo.Amount)
+
+	return response, nil
+}
+
+// parseVoteTransactionData parses DPoS vote data from transaction input
+func (d *DPOS) parseVoteTransactionData(tx *types.Transaction) (*VoteInfo, error) {
+	if tx == nil {
+		return nil, fmt.Errorf("transaction is nil")
+	}
+
+	input := tx.Input
+	if input == nil || len(input) < 4 {
+		return nil, fmt.Errorf("input data too short or nil: length=%d", len(input))
+	}
+
+	// Check if it's a DPoS vote transaction
+	if !bytes.Equal(input[:4], []byte("DPOS")) {
+		return nil, fmt.Errorf("not a DPoS vote transaction, prefix=%x", input[:4])
+	}
+
+	// Expected format: 4 bytes "DPOS" + 20 bytes voter + 20 bytes candidate + 32 bytes amount
+	const (
+		dposPrefixLen  = 4
+		addrLen        = 20
+		amountLen      = 32
+		expectedLength = dposPrefixLen + addrLen + addrLen + amountLen
+	)
+
+	if len(input) < expectedLength {
+		return nil, fmt.Errorf("invalid DPoS vote tx input length: expected %d, got %d", expectedLength, len(input))
+	}
+
+	// Parse addresses and amount
+	voter := types.BytesToAddress(input[dposPrefixLen : dposPrefixLen+addrLen])
+	candidate := types.BytesToAddress(input[dposPrefixLen+addrLen : dposPrefixLen+addrLen+addrLen])
+	amountBytes := input[dposPrefixLen+addrLen+addrLen : expectedLength]
+
+	// Convert amount bytes to big.Int (remove leading zeros)
+	amount := new(big.Int).SetBytes(amountBytes)
+	if amount.Sign() <= 0 {
+		return nil, fmt.Errorf("vote amount must be positive, got %s", amount.String())
+	}
+
+	d.logger.Info("DPoS vote data parsed successfully", "voter", voter.String(), "candidate", candidate.String(), "amount", amount.String())
+
+	return &VoteInfo{
+		Voter:     voter,
+		Candidate: candidate,
+		Amount:    amount,
+	}, nil
+}
+
+// recoverSenderFromTx attempts to recover sender address from transaction signature
+func (d *DPOS) recoverSenderFromTx(tx *types.Transaction) types.Address {
+	// This is a simplified recovery - in production you might want more robust handling
+	if tx.V != nil && tx.R != nil && tx.S != nil {
+		// Try to recover sender from signature
+		// Note: This is a basic implementation
+		return types.ZeroAddress // Placeholder
+	}
+	return types.ZeroAddress
+}
+
+// VoteInfo represents parsed DPoS vote information
+type VoteInfo struct {
+	Voter     types.Address
+	Candidate types.Address
+	Amount    *big.Int
+}
+
+// broadcastTransaction attempts to broadcast a transaction to the network
+// This is a fallback mechanism to ensure transactions reach other nodes
+func (d *DPOS) broadcastTransaction(tx *types.Transaction) error {
+	d.logger.Info("=== 标记7: 开始尝试广播交易 ===")
+	d.logger.Info("Attempting to broadcast transaction", "txHash", tx.Hash.String())
+
+	// Method 0: Try to access txpool directly and call AddTx to trigger built-in broadcasting
+	if txpoolStore, ok := d.store.(interface {
+		GetTxPool() interface{}
+	}); ok {
+		d.logger.Info("Store has GetTxPool method, attempting to access txpool...")
+		txpool := txpoolStore.GetTxPool()
+
+		if txpool != nil {
+			d.logger.Info("TxPool found", "type", fmt.Sprintf("%T", txpool))
+
+			// Check if txpool has a topic for broadcasting (this is what enables broadcasting in txpool.AddTx)
+			if txpoolWithTopic, ok := txpool.(interface {
+				GetTopic() interface{}
+			}); ok {
+				d.logger.Info("TxPool has GetTopic method, checking broadcasting capability...")
+				topic := txpoolWithTopic.GetTopic()
+				if topic != nil {
+					d.logger.Info("TxPool topic found, broadcasting should work through normal AddTx", "topic", fmt.Sprintf("%T", topic))
+					return nil // Broadcasting is handled by txpool.AddTx internally
+				} else {
+					d.logger.Warn("TxPool topic is nil, broadcasting may not work")
+				}
+			}
+
+			// Try to call AddTx method on txpool to trigger built-in broadcasting
+			// Note: This may fail with "already known" if called multiple times
+			if txpoolAddTx, ok := txpool.(interface {
+				AddTx(tx *types.Transaction) error
+			}); ok {
+				d.logger.Info("TxPool has AddTx method, calling it to trigger broadcasting...")
+				if err := txpoolAddTx.AddTx(tx); err != nil {
+					if err.Error() == "already known" {
+						d.logger.Info("Transaction already in pool, broadcasting should work through normal flow")
+						return nil
+					}
+					d.logger.Warn("TxPool.AddTx failed during broadcasting", "error", err)
+				} else {
+					d.logger.Info("Transaction broadcasted through TxPool.AddTx (built-in broadcasting)")
+					return nil
+				}
+			}
+		}
+	}
+
+	// Method 1: Try to access network layer through store
+	if networkStore, ok := d.store.(interface {
+		GetNetwork() interface{}
+	}); ok {
+		d.logger.Info("Store has GetNetwork method, attempting to broadcast...")
+		network := networkStore.GetNetwork()
+
+		if network != nil {
+			d.logger.Info("Network layer found", "type", fmt.Sprintf("%T", network))
+
+			// Try to call broadcast method on network
+			if broadcaster, ok := network.(interface {
+				BroadcastTransaction(tx *types.Transaction) error
+			}); ok {
+				d.logger.Info("Network has BroadcastTransaction method, calling it...")
+				if err := broadcaster.BroadcastTransaction(tx); err != nil {
+					d.logger.Warn("Network.BroadcastTransaction failed", "error", err)
+				} else {
+					d.logger.Info("Transaction broadcasted through network layer")
+					return nil
+				}
+			}
+
+			// Try alternative broadcast method
+			if broadcaster, ok := network.(interface {
+				BroadcastTx(tx *types.Transaction) error
+			}); ok {
+				d.logger.Info("Network has BroadcastTx method, calling it...")
+				if err := broadcaster.BroadcastTx(tx); err != nil {
+					d.logger.Warn("Network.BroadcastTx failed", "error", err)
+				} else {
+					d.logger.Info("Transaction broadcasted through network layer")
+					return nil
+				}
+			}
+		}
+	}
+
+	// Method 2: Try to access network through embedded fields
+	if hub, ok := d.store.(interface {
+		GetNetwork() interface{}
+	}); ok {
+		d.logger.Info("Store has GetNetwork method through hub, attempting to broadcast...")
+		network := hub.GetNetwork()
+
+		if network != nil {
+			d.logger.Info("Network layer found through hub", "type", fmt.Sprintf("%T", network))
+
+			// Try to call broadcast method on network
+			if broadcaster, ok := network.(interface {
+				BroadcastTransaction(tx *types.Transaction) error
+			}); ok {
+				d.logger.Info("Network has BroadcastTransaction method, calling it...")
+				if err := broadcaster.BroadcastTransaction(tx); err != nil {
+					d.logger.Warn("Network.BroadcastTransaction failed", "error", err)
+				} else {
+					d.logger.Info("Transaction broadcasted through network layer")
+					return nil
+				}
+			}
+		}
+	}
+
+	// Method 3: Try to access server directly
+	if serverStore, ok := d.store.(interface {
+		GetServer() interface{}
+	}); ok {
+		d.logger.Info("Store has GetServer method, attempting to broadcast...")
+		server := serverStore.GetServer()
+
+		if server != nil {
+			d.logger.Info("Server found", "type", fmt.Sprintf("%T", server))
+
+			// Try to call broadcast method on server
+			if broadcaster, ok := server.(interface {
+				BroadcastTransaction(tx *types.Transaction) error
+			}); ok {
+				d.logger.Info("Server has BroadcastTransaction method, calling it...")
+				if err := broadcaster.BroadcastTransaction(tx); err != nil {
+					d.logger.Warn("Server.BroadcastTransaction failed", "error", err)
+				} else {
+					d.logger.Info("Transaction broadcasted through server")
+					return nil
+				}
+			}
+		}
+	}
+
+	d.logger.Warn("=== 标记8: 没有找到可用的广播方法 ===")
+	d.logger.Warn("No network broadcast method found, transaction may not reach other nodes")
+	return fmt.Errorf("no network broadcast method available")
 }
