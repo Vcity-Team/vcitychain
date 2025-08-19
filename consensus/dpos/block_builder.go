@@ -225,3 +225,8 @@ func (b *BlockBuilder) writeTxPoolTransaction(tx *types.Transaction) (bool, erro
 func (b *BlockBuilder) GetState() *state.Transition {
 	return b.state
 }
+
+// GetTransactions returns the transactions that have been added to the block
+func (b *BlockBuilder) GetTransactions() []*types.Transaction {
+	return b.txns
+}

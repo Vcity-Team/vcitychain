@@ -33,6 +33,7 @@ func (s *StakeStore) initialize(dbTx *bolt.Tx) error {
 		"DelegatesAtBlock",
 		"VotingPowerAtBlock",
 		"VoterInfo",
+		"DelegateInfo", // 🆕 新增：受托人信息存储
 		"RewardHistory",
 		"EpochRewards",
 	}
@@ -250,6 +251,13 @@ func (s *StakeStore) getVoterInfo(voter types.Address, dbTx *bolt.Tx) (*VoterInf
 
 // setVoterInfo 保存投票者信息到数据库
 func (s *StakeStore) setVoterInfo(voter types.Address, info *VoterInfo, dbTx *bolt.Tx) error {
+	// 如果 dbTx 为 nil，使用自己的数据库连接
+	if dbTx == nil {
+		return s.db.Update(func(tx *bolt.Tx) error {
+			return s.setVoterInfo(voter, info, tx)
+		})
+	}
+
 	bucket, err := dbTx.CreateBucketIfNotExists([]byte("VoterInfo"))
 	if err != nil {
 		return fmt.Errorf("failed to create voter info bucket: %w", err)
@@ -427,6 +435,64 @@ func (s *StakeStore) cleanupEpochRewards(currentBlock uint64, dbTx *bolt.Tx) err
 	}
 
 	return nil
+}
+
+// setDelegateInfo 保存受托人信息到数据库
+func (s *StakeStore) setDelegateInfo(delegate types.Address, info *DelegateInfo, dbTx *bolt.Tx) error {
+	// 如果 dbTx 为 nil，使用自己的数据库连接
+	if dbTx == nil {
+		return s.db.Update(func(tx *bolt.Tx) error {
+			return s.setDelegateInfoInternal(delegate, info, tx)
+		})
+	}
+
+	return s.setDelegateInfoInternal(delegate, info, dbTx)
+}
+
+// setDelegateInfoInternal 内部实现，避免递归调用
+func (s *StakeStore) setDelegateInfoInternal(delegate types.Address, info *DelegateInfo, dbTx *bolt.Tx) error {
+	// 添加调试日志
+	fmt.Printf("🔍 setDelegateInfoInternal called: delegate=%s, dbTx=%v\n", delegate.String(), dbTx != nil)
+
+	bucket, err := dbTx.CreateBucketIfNotExists([]byte("DelegateInfo"))
+	if err != nil {
+		fmt.Printf("❌ Failed to create bucket: %v\n", err)
+		return fmt.Errorf("failed to create delegate info bucket: %w", err)
+	}
+
+	data, err := json.Marshal(info)
+	if err != nil {
+		fmt.Printf("❌ Failed to marshal: %v\n", err)
+		return fmt.Errorf("failed to marshal delegate info: %w", err)
+	}
+
+	if err := bucket.Put(delegate[:], data); err != nil {
+		fmt.Printf("❌ Failed to put data: %v\n", err)
+		return fmt.Errorf("failed to save delegate info: %w", err)
+	}
+
+	fmt.Printf("✅ setDelegateInfoInternal completed successfully\n")
+	return nil
+}
+
+// getDelegateInfo 从数据库获取受托人信息
+func (s *StakeStore) getDelegateInfo(delegate types.Address, dbTx *bolt.Tx) (*DelegateInfo, error) {
+	bucket := dbTx.Bucket([]byte("DelegateInfo"))
+	if bucket == nil {
+		return nil, errors.New("delegate info bucket not found")
+	}
+
+	data := bucket.Get(delegate[:])
+	if data == nil {
+		return nil, errors.New("delegate info not found")
+	}
+
+	var info DelegateInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal delegate info: %w", err)
+	}
+
+	return &info, nil
 }
 
 // ValidatorStore represents a store for validator-related data

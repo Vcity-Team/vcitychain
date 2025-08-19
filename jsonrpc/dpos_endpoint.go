@@ -47,6 +47,12 @@ type dposStore interface {
 
 	// GetTxPool gets transaction pool for direct broadcasting
 	GetTxPool() interface{}
+
+	// ReadTxLookup returns the block hash using the transaction hash
+	ReadTxLookup(hash types.Hash) (types.Hash, bool)
+
+	// GetBlockByHash gets a block using the provided hash
+	GetBlockByHash(hash types.Hash, full bool) (*types.Block, bool)
 }
 
 // DPOS is the dpos jsonrpc endpoint
@@ -882,21 +888,46 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 
 	// Try to get the actual block number if transaction is already mined
 	var blockNumber uint64
+	var blockStatus string
+
 	if txAdded {
-		// Check if transaction is already in a block
+		// Check if transaction is already in a block using available methods
+		// Try to access ethBlockchainStore methods through type assertion
 		if blockchainStore, ok := d.store.(interface {
-			GetTransactionByHash(hash types.Hash) (*types.Transaction, bool, uint64)
+			ReadTxLookup(txnHash types.Hash) (types.Hash, bool)
+			GetBlockByHash(hash types.Hash, full bool) (*types.Block, bool)
 		}); ok {
-			if _, found, blockNum := blockchainStore.GetTransactionByHash(txHash); found {
-				blockNumber = blockNum
-				d.logger.Info("Transaction found in blockchain", "blockNumber", blockNum)
+			// First try to find the block hash containing this transaction
+			if blockHash, found := blockchainStore.ReadTxLookup(txHash); found {
+				// Then get the block to extract the block number
+				if block, ok := blockchainStore.GetBlockByHash(blockHash, false); ok {
+					blockNumber = block.Number()
+					blockStatus = "mined"
+					d.logger.Info("Transaction found in blockchain", "blockNumber", blockNumber, "blockHash", blockHash.String())
+				} else {
+					blockStatus = "block_found_but_no_details"
+					d.logger.Info("Block found but could not retrieve block details")
+				}
 			} else {
-				d.logger.Info("Transaction not yet mined, blockNumber will be 0")
+				blockStatus = "pending"
+				d.logger.Info("Transaction not yet mined, blockNumber will be 0 (this is normal for newly added transactions)")
 			}
 		} else {
-			d.logger.Info("Store does not support GetTransactionByHash, cannot determine block number")
+			blockStatus = "store_not_supported"
+			d.logger.Info("Store does not support ReadTxLookup/GetBlockByHash, cannot determine block number")
 		}
+	} else {
+		blockStatus = "tx_not_added"
+		d.logger.Info("Transaction was not added to pool, blockNumber will be 0")
 	}
+
+	// Log the final status
+	d.logger.Info("Final transaction status",
+		"txHash", txHash.String(),
+		"blockNumber", blockNumber,
+		"blockStatus", blockStatus,
+		"txAdded", txAdded,
+		"dposStateUpdated", dposStateUpdated)
 
 	return &VoteResponse{
 		Success:     true,
@@ -1490,17 +1521,23 @@ func (d *DPOS) GetVotingStakingInfo(ctx context.Context, params interface{}) (in
 	}
 	d.logger.Info("Validators retrieved successfully", "count", len(validators))
 
-	// Get staking information
-	d.logger.Info("Getting staking info...")
+	// Get staking information from store (genesis + persistent data)
+	d.logger.Info("Getting staking info from store...")
 	stakingInfo, err := d.store.GetStakingInfo()
 	if err != nil {
-		d.logger.Error("Failed to get staking info", "error", err)
-		return map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("failed to get staking info: %v", err),
-		}, nil
+		d.logger.Error("Failed to get staking info from store", "error", err)
+		stakingInfo = []*dpos.StakeInfo{} // Use empty slice instead of failing
 	}
-	d.logger.Info("Staking info retrieved successfully", "count", len(stakingInfo))
+	d.logger.Info("Store staking info retrieved", "count", len(stakingInfo))
+
+	// Get dynamic voting information from consensus engine
+	d.logger.Info("Getting dynamic voting info from consensus engine...")
+	dynamicVotingInfo := d.getDynamicVotingInfo()
+	d.logger.Info("Dynamic voting info retrieved", "count", len(dynamicVotingInfo))
+
+	// Merge static staking info with dynamic voting info
+	allStakingInfo := d.mergeStakingInfo(stakingInfo, dynamicVotingInfo)
+	d.logger.Info("Merged staking info", "totalCount", len(allStakingInfo))
 
 	// Build validator details
 	validatorDetails := make([]map[string]interface{}, 0)
@@ -1522,7 +1559,7 @@ func (d *DPOS) GetVotingStakingInfo(ctx context.Context, params interface{}) (in
 	// Group staking info by delegate (validator) to show voting details
 	votingDetails := make(map[string]map[string]interface{})
 
-	for _, stake := range stakingInfo {
+	for _, stake := range allStakingInfo {
 		if stake.Amount != nil {
 			totalStaked.Add(totalStaked, stake.Amount)
 			stakingCount++
@@ -1584,7 +1621,7 @@ func (d *DPOS) GetVotingStakingInfo(ctx context.Context, params interface{}) (in
 		"success":       true,
 		"networkStats":  networkStats,
 		"validators":    validatorDetails,
-		"stakingInfo":   stakingInfo,
+		"stakingInfo":   allStakingInfo,
 		"votingDetails": votingDetailsList, // 新增：投票明细
 		"dposState":     dposState,
 		"lastUpdated":   time.Now().Format(time.RFC3339),
@@ -1758,21 +1795,44 @@ func (d *DPOS) GetVoteByHash(ctx context.Context, params interface{}) (interface
 	} else {
 		d.logger.Info("Transaction not found in pending pool")
 
-		// Try to get from blockchain if store supports it
+		// Try to get from blockchain using the correct approach
 		if blockchainStore, ok := d.store.(interface {
-			GetTransactionByHash(hash types.Hash) (*types.Transaction, bool, uint64)
+			ReadTxLookup(txnHash types.Hash) (types.Hash, bool)
+			GetBlockByHash(hash types.Hash, full bool) (*types.Block, bool)
 		}); ok {
-			d.logger.Info("Checking blockchain for confirmed transaction...")
-			if confirmedTx, found, blockNum := blockchainStore.GetTransactionByHash(hash); found {
-				tx = confirmedTx
-				isPending = false
-				blockNumber = &blockNum
-				d.logger.Info("Found transaction in blockchain", "blockNumber", blockNum)
+			d.logger.Info("Checking blockchain for confirmed transaction using ReadTxLookup...")
+
+			// Step 1: Find the block hash containing this transaction
+			if blockHash, found := blockchainStore.ReadTxLookup(hash); found {
+				d.logger.Info("Found block hash for transaction", "blockHash", blockHash.String())
+
+				// Step 2: Get the block to extract transaction details
+				if block, ok := blockchainStore.GetBlockByHash(blockHash, true); ok {
+					d.logger.Info("Found block", "blockNumber", block.Number(), "txCount", len(block.Transactions))
+
+					// Step 3: Find the specific transaction in the block
+					for i, blockTx := range block.Transactions {
+						if blockTx.Hash == hash {
+							tx = blockTx
+							isPending = false
+							blockNum := block.Number()
+							blockNumber = &blockNum
+							d.logger.Info("Found transaction in blockchain", "blockNumber", blockNum, "txIndex", i)
+							break
+						}
+					}
+
+					if tx == nil {
+						d.logger.Warn("Transaction hash found in block but transaction not found in block transactions")
+					}
+				} else {
+					d.logger.Warn("Block found but could not retrieve block details")
+				}
 			} else {
-				d.logger.Info("Transaction not found in blockchain either")
+				d.logger.Info("Transaction not found in blockchain (ReadTxLookup returned false)")
 			}
 		} else {
-			d.logger.Info("Store does not support GetTransactionByHash")
+			d.logger.Info("Store does not support ReadTxLookup/GetBlockByHash")
 		}
 	}
 
@@ -2045,4 +2105,328 @@ func (d *DPOS) broadcastTransaction(tx *types.Transaction) error {
 	d.logger.Warn("=== 标记8: 没有找到可用的广播方法 ===")
 	d.logger.Warn("No network broadcast method found, transaction may not reach other nodes")
 	return fmt.Errorf("no network broadcast method available")
+}
+
+// getDynamicVotingInfo retrieves current voting information from the consensus engine
+func (d *DPOS) getDynamicVotingInfo() []*dpos.StakeInfo {
+	d.logger.Info("Getting dynamic voting info from consensus engine...")
+
+	// Try to get consensus engine through the store adapter
+	var consensus interface{}
+	if storeAdapter, ok := d.store.(interface {
+		GetConsensus() interface{}
+	}); ok {
+		consensus = storeAdapter.GetConsensus()
+		d.logger.Info("Successfully got consensus engine through store adapter", "type", fmt.Sprintf("%T", consensus))
+
+		// Debug: Check if this is the same instance that was used for AddVote
+		d.logger.Info("Consensus engine instance details",
+			"address", fmt.Sprintf("%p", consensus),
+			"type", fmt.Sprintf("%T", consensus))
+	} else {
+		d.logger.Warn("Store does not support GetConsensus method")
+		return []*dpos.StakeInfo{}
+	}
+
+	if consensus == nil {
+		d.logger.Warn("Consensus engine is nil")
+		return []*dpos.StakeInfo{}
+	}
+
+	// Try to get DPoS consensus engine
+	var dposEngine interface{}
+
+	// Try different ways to access DPoS engine
+	d.logger.Info("Checking consensus engine capabilities...")
+
+	if dposConsensus, ok := consensus.(interface {
+		GetVoters() map[types.Address]*dpos.VoterInfo
+	}); ok {
+		d.logger.Info("Consensus engine supports GetVoters method")
+		d.logger.Info("DPoS consensus engine instance details",
+			"address", fmt.Sprintf("%p", dposConsensus),
+			"type", fmt.Sprintf("%T", dposConsensus))
+		dposEngine = dposConsensus
+	} else if dposConsensus, ok := consensus.(interface {
+		GetDPoSState() (*dpos.State, error)
+	}); ok {
+		d.logger.Info("Consensus engine supports GetDPoSState method")
+		dposEngine = dposConsensus
+	} else if dposConsensus, ok := consensus.(interface {
+		GetDelegates() (validator.AccountSet, error)
+	}); ok {
+		d.logger.Info("Consensus engine supports GetDelegates method")
+		dposEngine = dposConsensus
+	} else {
+		d.logger.Warn("DPoS consensus engine not accessible - no supported methods found")
+		d.logger.Info("Available methods on consensus engine:")
+		consensusType := reflect.TypeOf(consensus)
+		for i := 0; i < consensusType.NumMethod(); i++ {
+			method := consensusType.Method(i)
+			d.logger.Info("Available method", "name", method.Name, "type", method.Type.String())
+		}
+		return []*dpos.StakeInfo{}
+	}
+
+	// Try to get voters information
+	var dynamicStakes []*dpos.StakeInfo
+
+	// Method 1: Try to get voters directly (most direct approach)
+	if voterEngine, ok := dposEngine.(interface {
+		GetVoters() map[types.Address]*dpos.VoterInfo
+	}); ok {
+		d.logger.Info("Direct access to GetVoters method available")
+		d.logger.Info("Calling GetVoters() method on consensus engine...")
+		voters := voterEngine.GetVoters()
+		d.logger.Info("GetVoters() method returned",
+			"voterCount", len(voters),
+			"votersMap", fmt.Sprintf("%p", voters))
+
+		// Debug: Check if voters map is nil or empty
+		if voters == nil {
+			d.logger.Warn("❌ GetVoters() returned nil map")
+		} else if len(voters) == 0 {
+			d.logger.Warn("❌ GetVoters() returned empty map (0 voters)")
+		} else {
+			d.logger.Info("✅ GetVoters() returned non-empty map", "voterCount", len(voters))
+		}
+
+		// Debug: Log detailed information about each voter
+		for voterAddr, voterInfo := range voters {
+			d.logger.Info("Processing voter",
+				"voterAddr", voterAddr.String(),
+				"votingPower", func() string {
+					if voterInfo.VotingPower != nil {
+						return voterInfo.VotingPower.String()
+					}
+					return "nil"
+				}(),
+				"votedDelegatesCount", len(voterInfo.VotedDelegates),
+				"lastVoteTime", voterInfo.LastVoteTime,
+				"lockedUntil", voterInfo.LockedUntil)
+
+			// Debug: Log each voted delegate
+			for i, delegateAddr := range voterInfo.VotedDelegates {
+				d.logger.Info("Voter's delegate",
+					"voterAddr", voterAddr.String(),
+					"delegateIndex", i,
+					"delegateAddr", delegateAddr.String())
+			}
+
+			if voterInfo.VotingPower != nil && voterInfo.VotingPower.Cmp(big.NewInt(0)) > 0 {
+				// For each voted delegate, create a stake info
+				for _, delegateAddr := range voterInfo.VotedDelegates {
+					stake := &dpos.StakeInfo{
+						Staker:    voterAddr,             // 投票者地址
+						Amount:    voterInfo.VotingPower, // 投票权重
+						StartTime: voterInfo.LastVoteTime,
+						EndTime:   voterInfo.LockedUntil,
+						IsLocked:  voterInfo.LockedUntil > uint64(time.Now().Unix()),
+						IsActive:  true,
+						Delegate:  delegateAddr, // 受托人地址
+						Rewards:   big.NewInt(0),
+					}
+					dynamicStakes = append(dynamicStakes, stake)
+
+					d.logger.Info("✅ Extracted vote from voter",
+						"voter", voterAddr.String(),
+						"delegate", delegateAddr.String(),
+						"amount", voterInfo.VotingPower.String())
+				}
+			} else {
+				d.logger.Warn("❌ Voter has no voting power or zero voting power",
+					"voterAddr", voterAddr.String(),
+					"votingPower", func() string {
+						if voterInfo.VotingPower != nil {
+							return voterInfo.VotingPower.String()
+						}
+						return "nil"
+					}())
+			}
+		}
+	} else {
+		d.logger.Warn("GetVoters method not accessible, trying alternative methods...")
+
+		// Method 2: Try to get from DPoS state
+		if stateEngine, ok := dposEngine.(interface {
+			GetDPoSState() (*dpos.State, error)
+		}); ok {
+			if state, err := stateEngine.GetDPoSState(); err == nil && state != nil {
+				d.logger.Info("Got DPoS state, extracting voting info...")
+				// Extract voting information from state
+				// This would depend on the actual State structure
+				dynamicStakes = d.extractVotingInfoFromState(state)
+			}
+		}
+
+		// Method 3: Try to get from validators/delegates
+		if delegateEngine, ok := dposEngine.(interface {
+			GetDelegates() (validator.AccountSet, error)
+		}); ok {
+			if delegates, err := delegateEngine.GetDelegates(); err == nil {
+				d.logger.Info("Got delegates, extracting voting info...")
+				dynamicStakes = d.extractVotingInfoFromDelegates(delegates)
+			}
+		}
+	}
+
+	d.logger.Info("Dynamic voting info extracted", "count", len(dynamicStakes))
+	return dynamicStakes
+}
+
+// extractVotingInfoFromState extracts voting information from DPoS state
+func (d *DPOS) extractVotingInfoFromState(state *dpos.State) []*dpos.StakeInfo {
+	d.logger.Info("Extracting voting info from state (placeholder)")
+
+	// Try to get consensus engine to access DPoS runtime
+	var consensus interface{}
+	if storeAdapter, ok := d.store.(interface {
+		GetConsensus() interface{}
+	}); ok {
+		consensus = storeAdapter.GetConsensus()
+	}
+
+	if consensus == nil {
+		d.logger.Warn("Consensus engine not available for state extraction")
+		return []*dpos.StakeInfo{}
+	}
+
+	// Try to access DPoS consensus engine with voters information
+	var dposEngine interface{}
+
+	// Method 1: Try to get DPoS engine with voters
+	if dposConsensus, ok := consensus.(interface {
+		GetVoters() map[types.Address]*dpos.VoterInfo
+	}); ok {
+		dposEngine = dposConsensus
+	} else if dposConsensus, ok := consensus.(interface {
+		GetDPoSState() (*dpos.State, error)
+	}); ok {
+		dposEngine = dposConsensus
+	} else {
+		d.logger.Warn("DPoS consensus engine not accessible for voters")
+		return []*dpos.StakeInfo{}
+	}
+
+	// Extract voting information from voters
+	var dynamicStakes []*dpos.StakeInfo
+
+	// Method 1: Try to get voters directly
+	if voterEngine, ok := dposEngine.(interface {
+		GetVoters() map[types.Address]*dpos.VoterInfo
+	}); ok {
+		voters := voterEngine.GetVoters()
+		d.logger.Info("Got voters from consensus engine", "voterCount", len(voters))
+
+		for voterAddr, voterInfo := range voters {
+			if voterInfo.VotingPower != nil && voterInfo.VotingPower.Cmp(big.NewInt(0)) > 0 {
+				// For each voted delegate, create a stake info
+				for _, delegateAddr := range voterInfo.VotedDelegates {
+					stake := &dpos.StakeInfo{
+						Staker:    voterAddr,             // 投票者地址
+						Amount:    voterInfo.VotingPower, // 投票权重
+						StartTime: voterInfo.LastVoteTime,
+						EndTime:   voterInfo.LockedUntil,
+						IsLocked:  voterInfo.LockedUntil > uint64(time.Now().Unix()),
+						IsActive:  true,
+						Delegate:  delegateAddr, // 受托人地址
+						Rewards:   big.NewInt(0),
+					}
+					dynamicStakes = append(dynamicStakes, stake)
+
+					d.logger.Info("Extracted vote from voter",
+						"voter", voterAddr.String(),
+						"delegate", delegateAddr.String(),
+						"amount", voterInfo.VotingPower.String())
+				}
+			}
+		}
+	}
+
+	d.logger.Info("Extracted voting info from state", "stakeCount", len(dynamicStakes))
+	return dynamicStakes
+}
+
+// extractVotingInfoFromDelegates extracts voting information from delegates
+func (d *DPOS) extractVotingInfoFromDelegates(delegates validator.AccountSet) []*dpos.StakeInfo {
+	d.logger.Info("Extracting voting info from delegates", "delegateCount", len(delegates))
+
+	var stakes []*dpos.StakeInfo
+
+	for _, delegate := range delegates {
+		// Create stake info for each delegate
+		stake := &dpos.StakeInfo{
+			Staker:    delegate.Address, // Self-delegation
+			Amount:    delegate.VotingPower,
+			StartTime: uint64(time.Now().Unix()),
+			EndTime:   0,
+			IsLocked:  false,
+			IsActive:  delegate.IsActive,
+			Delegate:  delegate.Address,
+			Rewards:   big.NewInt(0),
+		}
+		stakes = append(stakes, stake)
+	}
+
+	d.logger.Info("Extracted stake info from delegates", "stakeCount", len(stakes))
+	return stakes
+}
+
+// mergeStakingInfo merges static staking info with dynamic voting info
+func (d *DPOS) mergeStakingInfo(static []*dpos.StakeInfo, dynamic []*dpos.StakeInfo) []*dpos.StakeInfo {
+	d.logger.Info("Merging staking info", "staticCount", len(static), "dynamicCount", len(dynamic))
+
+	// Create a map to track processed addresses to avoid duplicates
+	processed := make(map[string]bool)
+	var merged []*dpos.StakeInfo
+
+	// 🆕 修复：让动态投票数据优先，确保正确的委托关系
+	// 先添加动态投票信息（来自实际的投票数据）
+	for _, stake := range dynamic {
+		if stake.Staker != types.ZeroAddress &&
+			stake.Delegate != types.ZeroAddress &&
+			stake.Amount != nil &&
+			stake.Amount.Cmp(big.NewInt(0)) > 0 {
+
+			key := fmt.Sprintf("%s-%s", stake.Staker.String(), stake.Delegate.String())
+			if !processed[key] {
+				merged = append(merged, stake)
+				processed[key] = true
+				d.logger.Info("✅ Added dynamic voting stake (priority)",
+					"staker", stake.Staker.String(),
+					"delegate", stake.Delegate.String(),
+					"amount", stake.Amount.String())
+			}
+		}
+	}
+
+	// 然后添加静态质押信息（来自创世配置），但只添加有效的
+	for _, stake := range static {
+		if stake.Staker != types.ZeroAddress &&
+			stake.Delegate != types.ZeroAddress &&
+			stake.Amount != nil &&
+			stake.Amount.Cmp(big.NewInt(0)) > 0 {
+
+			key := fmt.Sprintf("%s-%s", stake.Staker.String(), stake.Delegate.String())
+			if !processed[key] {
+				// 🆕 修复：只添加有实际委托关系的质押数据
+				// 过滤掉自委托（staker == delegate）的数据
+				if stake.Staker != stake.Delegate {
+					merged = append(merged, stake)
+					processed[key] = true
+					d.logger.Info("✅ Added valid static stake",
+						"staker", stake.Staker.String(),
+						"delegate", stake.Delegate.String(),
+						"amount", stake.Amount.String())
+				} else {
+					d.logger.Debug("⏭️ Skipped self-delegation static stake",
+						"staker", stake.Staker.String(),
+						"delegate", stake.Delegate.String())
+				}
+			}
+		}
+	}
+
+	d.logger.Info("✅ Merged staking info completed", "totalCount", len(merged))
+	return merged
 }

@@ -44,3 +44,4 @@ echo.
 echo Stopping node...
 taskkill /f /im main.exe >nul 2>&1
 echo Node stopped.
+

@@ -66,6 +66,9 @@ type blockchainBackend interface {
 
 	// GetReceiptsByHash retrieves receipts by hash
 	GetReceiptsByHash(hash types.Hash) ([]*types.Receipt, error)
+
+	// ReadTxLookup returns the block hash using the transaction hash
+	ReadTxLookup(hash types.Hash) (types.Hash, bool)
 }
 
 var _ blockchainBackend = &blockchainWrapper{}
@@ -196,6 +199,11 @@ func (p *blockchainWrapper) GetChainID() uint64 {
 
 func (p *blockchainWrapper) GetReceiptsByHash(hash types.Hash) ([]*types.Receipt, error) {
 	return p.blockchain.GetReceiptsByHash(hash)
+}
+
+// ReadTxLookup returns the block hash using the transaction hash
+func (p *blockchainWrapper) ReadTxLookup(hash types.Hash) (types.Hash, bool) {
+	return p.blockchain.ReadTxLookup(hash)
 }
 
 var _ contract.Provider = &stateProvider{}

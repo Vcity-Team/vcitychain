@@ -792,6 +792,28 @@ func (a *dposStoreAdapter) GetTxPool() interface{} {
 	return nil
 }
 
+// ReadTxLookup returns the block hash using the transaction hash
+func (a *dposStoreAdapter) ReadTxLookup(hash types.Hash) (types.Hash, bool) {
+	// Try to access ReadTxLookup through the underlying store
+	if blockchainStore, ok := a.store.(interface {
+		ReadTxLookup(hash types.Hash) (types.Hash, bool)
+	}); ok {
+		return blockchainStore.ReadTxLookup(hash)
+	}
+	return types.ZeroHash, false
+}
+
+// GetBlockByHash gets a block using the provided hash
+func (a *dposStoreAdapter) GetBlockByHash(hash types.Hash, full bool) (*types.Block, bool) {
+	// Try to access GetBlockByHash through the underlying store
+	if blockchainStore, ok := a.store.(interface {
+		GetBlockByHash(hash types.Hash, full bool) (*types.Block, bool)
+	}); ok {
+		return blockchainStore.GetBlockByHash(hash, full)
+	}
+	return nil, false
+}
+
 func (a *dposStoreAdapter) GetDPoSState() (*consensusdpos.State, error) {
 	// Try to get DPoS state from the consensus engine
 	// This should connect to the actual DPoS consensus mechanism
@@ -1075,16 +1097,12 @@ func (a *dposStoreAdapter) GetStakingInfo() ([]*consensusdpos.StakeInfo, error) 
 					fmt.Printf("DEBUG: GetStakingInfo -   Rewards: %s\n", stakeInfo.Rewards.String())
 					fmt.Printf("DEBUG: GetStakingInfo -   Delegate: %s\n", stakeInfo.Delegate.String())
 
-					// 如果 Amount 是 0，尝试从创世配置获取真实质押数量
+					// 如果 Amount 是 0，尝试从运行时状态获取真实质押数量
 					if stakeInfo.Amount.Cmp(big.NewInt(0)) == 0 {
-						fmt.Printf("DEBUG: GetStakingInfo - Amount is 0, trying to get real stake amount from genesis config\n")
-						realStakeAmount := a.getRealStakeAmount(validator.Address)
-						if realStakeAmount.Cmp(big.NewInt(0)) > 0 {
-							fmt.Printf("DEBUG: GetStakingInfo - Found real stake amount: %s\n", realStakeAmount.String())
-							stakeInfo.Amount = realStakeAmount
-							stakeInfo.IsActive = true
-							stakeInfo.Delegate = validator.Address
-						}
+						fmt.Printf("DEBUG: GetStakingInfo - Amount is 0, trying to get real stake amount from runtime state\n")
+						// 不再从创世配置获取，而是从运行时状态获取
+						// 这样可以反映网络运行过程中的动态变化
+						fmt.Printf("DEBUG: GetStakingInfo - Skipping genesis config lookup, will rely on dynamic voting info\n")
 					}
 
 					stakingInfos = append(stakingInfos, stakeInfo)
@@ -1209,35 +1227,11 @@ func (a *dposStoreAdapter) GetStakingInfo() ([]*consensusdpos.StakeInfo, error) 
 							continue
 						}
 
-						// Get isActive field safely
-						isActiveField := delegateValue.FieldByName("IsActive")
-						isActive := false
-						if isActiveField.IsValid() && isActiveField.CanInterface() {
-							if active, ok := isActiveField.Interface().(bool); ok {
-								isActive = active
-							}
-						}
-
-						// Try to get real staking amount from genesis or other sources
-						realStakeAmount := a.getRealStakeAmount(validatorAddr)
-						fmt.Printf("DEBUG: GetStakingInfo - Real stake amount for %s: %s\n",
-							validatorAddr.String(), realStakeAmount.String())
-
-						// Create staking info from delegate with real stake amount
-						stakeInfo := &consensusdpos.StakeInfo{
-							Staker:    validatorAddr,
-							Amount:    realStakeAmount,           // Use real stake amount instead of VotingPower
-							StartTime: uint64(time.Now().Unix()), // Use current time as default
-							EndTime:   0,                         // No end time
-							IsLocked:  false,                     // Not locked
-							IsActive:  isActive,
-							Rewards:   big.NewInt(0), // No rewards yet
-							Delegate:  validatorAddr, // Self-delegation
-						}
-
-						stakingInfos = append(stakingInfos, stakeInfo)
-						fmt.Printf("DEBUG: GetStakingInfo - Created staking info for delegate %d: %s, real amount: %s\n",
-							i, validatorAddr.String(), realStakeAmount.String())
+						// 🆕 修复：不创建自委托的质押信息，避免混淆
+						// 自委托的质押信息应该从实际的投票数据中获取
+						// 这里只记录验证者的基本信息，不创建 StakeInfo
+						fmt.Printf("DEBUG: GetStakingInfo - Skipping self-delegation for validator %s\n", validatorAddr.String())
+						continue
 					}
 
 					if len(stakingInfos) > 0 {
