@@ -1852,14 +1852,11 @@ func (d *DPoS) initializeDelegates() error {
 		}
 	}
 
-	// 为初始委托人自动分配投票权重，确保他们能出块
+	// 保留创世配置的质押数量，不覆盖
 	if len(d.delegates) > 0 {
-		d.logger.Info("auto-assigning voting power to initial delegates", "count", len(d.delegates))
+		d.logger.Info("preserving genesis stake amounts for initial delegates", "count", len(d.delegates))
 		for _, delegate := range d.delegates {
-			// 给每个初始委托人分配默认投票权重
-			defaultVotingPower, _ := new(big.Int).SetString("1000000000000000000000", 10) // 1 ETH
-			delegate.VotingPower = defaultVotingPower
-			d.logger.Info("assigned voting power to delegate",
+			d.logger.Info("delegate genesis stake preserved",
 				"address", delegate.Address,
 				"votingPower", delegate.VotingPower.String())
 		}
