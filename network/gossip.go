@@ -173,7 +173,7 @@ func (t *Topic) readLoop(sub *pubsub.Subscription, handler func(obj interface{},
 
 			// 只对状态广播消息使用INFO级别日志，其他消息不记录
 			if t.topic != nil && t.topic.String() == "syncer/status/0.1" {
-				t.logger.Info("状态广播消息接收", "topic", t.topic.String(), "来源", msg.GetFrom().String(), "消息大小", len(msg.Data))
+				t.logger.Debug("状态广播消息接收", "topic", t.topic.String(), "来源", msg.GetFrom().String(), "消息大小", len(msg.Data))
 			}
 
 			handler(obj, msg.GetFrom())

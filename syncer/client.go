@@ -241,7 +241,7 @@ func (m *syncPeerClient) handleStatusUpdate(obj interface{}, from peer.ID) {
 	}
 
 	// 记录接收到状态更新
-	m.logger.Info("接收到状态更新", "来源节点", from.String(), "区块高度", status.Number, "本地节点", m.id)
+	m.logger.Debug("接收到状态更新", "来源节点", from.String(), "区块高度", status.Number, "本地节点", m.id)
 
 	// 检查网络连接状态
 	if !m.network.IsConnected(from) {
@@ -271,7 +271,7 @@ func (m *syncPeerClient) handleStatusUpdate(obj interface{}, from peer.ID) {
 	m.statusUpdateCount++
 	shouldLog := time.Since(m.lastStatusLogTime) > 30*time.Second || m.statusUpdateCount >= 10
 	if shouldLog {
-		m.logger.Info("状态更新汇总",
+		m.logger.Debug("状态更新汇总",
 			"更新次数", m.statusUpdateCount,
 			"时间间隔", time.Since(m.lastStatusLogTime),
 			"来源节点", from.String(),

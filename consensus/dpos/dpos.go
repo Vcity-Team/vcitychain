@@ -673,11 +673,11 @@ func (r *dposRuntime) produceBlock() error {
 		}
 
 		// 验证交易查找表是否正确写入（关键验证）
-		r.logger.Info("开始验证交易查找表写入状态...")
+		r.logger.Debug("开始验证交易查找表写入状态...")
 		for i, tx := range block.Block.Transactions {
 			// 尝试通过交易哈希查找区块
 			if blockHash, found := r.config.blockchain.ReadTxLookup(tx.Hash); found {
-				r.logger.Info("✅ 交易查找表验证成功",
+				r.logger.Debug("✅ 交易查找表验证成功",
 					"index", i,
 					"txHash", tx.Hash.String(),
 					"blockHash", blockHash.String(),
@@ -691,7 +691,7 @@ func (r *dposRuntime) produceBlock() error {
 				return fmt.Errorf("transaction lookup table verification failed for tx %s", tx.Hash.String())
 			}
 		}
-		r.logger.Info("🎉 所有交易查找表验证完成")
+		r.logger.Debug("🎉 所有交易查找表验证完成")
 	} else {
 		r.logger.Error("区块验证失败", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
 		return fmt.Errorf("block was not written to blockchain after commit")
@@ -853,24 +853,24 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	}
 
 	// 填充交易
-	r.logger.Info("开始填充交易到区块", "txPoolType", fmt.Sprintf("%T", r.config.txPool))
+	r.logger.Debug("开始填充交易到区块", "txPoolType", fmt.Sprintf("%T", r.config.txPool))
 
 	// 检查交易池状态
 	if txPool, ok := r.config.txPool.(interface {
 		DebugInfo() map[string]interface{}
 	}); ok {
 		debugInfo := txPool.DebugInfo()
-		r.logger.Info("交易池调试信息", "debugInfo", debugInfo)
+		r.logger.Debug("交易池调试信息", "debugInfo", debugInfo)
 
 		// 特别关注关键指标
 		if executablesCount, ok := debugInfo["executablesCount"].(int); ok {
-			r.logger.Info("可执行队列数量", "count", executablesCount)
+			r.logger.Debug("可执行队列数量", "count", executablesCount)
 		}
 		if pendingCount, ok := debugInfo["pendingCount"].(int64); ok {
-			r.logger.Info("待处理交易数量", "count", pendingCount)
+			r.logger.Debug("待处理交易数量", "count", pendingCount)
 		}
 		if isSealing, ok := debugInfo["isSealing"].(bool); ok {
-			r.logger.Info("交易池密封状态", "isSealing", isSealing)
+			r.logger.Debug("交易池密封状态", "isSealing", isSealing)
 		}
 	}
 
@@ -879,29 +879,29 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		GetTxs(inclQueued bool) (map[types.Address][]*types.Transaction, map[types.Address][]*types.Transaction)
 	}); ok {
 		allPromoted, allEnqueued := txPool.GetTxs(true)
-		r.logger.Info("交易池详细状态",
+		r.logger.Debug("交易池详细状态",
 			"promotedAccounts", len(allPromoted),
 			"enqueuedAccounts", len(allEnqueued))
 
 		// 检查每个账户的状态
 		for addr, promotedTxs := range allPromoted {
-			r.logger.Info("账户已提升交易", "address", addr.String(), "count", len(promotedTxs))
+			r.logger.Debug("账户已提升交易", "address", addr.String(), "count", len(promotedTxs))
 
 			// 获取账户在区块链中的当前 nonce
 			if currentHeader := r.config.blockchain.CurrentHeader(); currentHeader != nil {
 				// 记录当前区块信息，帮助诊断 nonce 问题
-				r.logger.Info("当前区块状态", "blockNumber", currentHeader.Number, "stateRoot", currentHeader.StateRoot.String())
+				r.logger.Debug("当前区块状态", "blockNumber", currentHeader.Number, "stateRoot", currentHeader.StateRoot.String())
 			}
 
 			for i, tx := range promotedTxs {
-				r.logger.Info("已提升交易", "index", i, "hash", tx.Hash.String(), "nonce", tx.Nonce)
+				r.logger.Debug("已提升交易", "index", i, "hash", tx.Hash.String(), "nonce", tx.Nonce)
 			}
 		}
 
 		for addr, enqueuedTxs := range allEnqueued {
-			r.logger.Info("账户待提升交易", "address", addr.String(), "count", len(enqueuedTxs))
+			r.logger.Debug("账户待提升交易", "address", addr.String(), "count", len(enqueuedTxs))
 			for i, tx := range enqueuedTxs {
-				r.logger.Info("待提升交易", "index", i, "hash", tx.Hash.String(), "nonce", tx.Nonce)
+				r.logger.Debug("待提升交易", "index", i, "hash", tx.Hash.String(), "nonce", tx.Nonce)
 			}
 		}
 	}
@@ -4595,7 +4595,7 @@ func (r *dposRuntime) checkSignatureRequestConfirmation(protoRequest *dposProto.
 			confirmedCount++
 			r.logger.Debug("签名请求确认", "peer", peerID.String()[:8], "checkpointHash", checkpointHash.String())
 		} else {
-			r.logger.Warn("签名请求未确认", "peer", peerID.String()[:8], "checkpointHash", checkpointHash.String())
+			//r.logger.Warn("签名请求未确认", "peer", peerID.String()[:8], "checkpointHash", checkpointHash.String())
 		}
 	}
 
@@ -4721,7 +4721,7 @@ func (r *dposRuntime) sendDirectSignatureRequestWithRetry(peerID peer.ID, protoR
 
 // HandleSignatureRequest 处理来自网络集成的签名请求
 func (r *dposRuntime) HandleSignatureRequest(request *SignatureRequest) error {
-	r.logger.Info("收到来自网络集成的签名请求",
+	r.logger.Debug("收到来自网络集成的签名请求",
 		"blockNumber", request.BlockNumber,
 		"checkpointHash", request.CheckpointHash.String(),
 		"proposer", request.Proposer.String())

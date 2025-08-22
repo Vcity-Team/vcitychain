@@ -144,14 +144,14 @@ func (sc *SignatureCollector) AddSignature(response *SignatureResponse) bool {
 
 	sc.mutex.Unlock()
 
-	sc.logger.Info("签名收集器收到签名",
+	sc.logger.Debug("签名收集器收到签名",
 		"validator", response.ValidatorAddr.String(),
 		"collected", sc.collectedCount,
 		"required", sc.requiredCount,
 		"checkpointHash", sc.checkpointHash.String())
 
 	if completed {
-		sc.logger.Info("签名收集器完成",
+		sc.logger.Debug("签名收集器完成",
 			"checkpointHash", sc.checkpointHash.String(),
 			"collected", sc.collectedCount,
 			"required", sc.requiredCount)
@@ -918,26 +918,26 @@ func (ni *NetworkIntegration) forwardSignatureResponse(response *SignatureRespon
 	ni.lock.RUnlock()
 
 	if !exists {
-		ni.logger.Warn("未找到签名收集器，忽略响应",
-			"checkpointHash", response.CheckpointHash.String(),
-			"validator", response.ValidatorAddr.String())
+		//ni.logger.Warn("未找到签名收集器，忽略响应",
+		//	"checkpointHash", response.CheckpointHash.String(),
+		//	"validator", response.ValidatorAddr.String())
 		return
 	}
 
-	ni.logger.Info("处理签名响应",
+	ni.logger.Debug("处理签名响应",
 		"validator", response.ValidatorAddr.String(),
 		"checkpointHash", response.CheckpointHash.String(),
 		"signatureLength", len(response.Signature))
 
 	// 使用AddSignature方法处理签名，它会自动更新内部状态
 	if collector.AddSignature(response) {
-		ni.logger.Info("签名响应处理成功",
+		ni.logger.Debug("签名响应处理成功",
 			"validator", response.ValidatorAddr.String(),
 			"checkpointHash", response.CheckpointHash.String(),
 			"collectedCount", collector.GetCollectedCount(),
 			"requiredCount", collector.GetRequiredCount())
 	} else {
-		ni.logger.Warn("签名响应处理失败",
+		ni.logger.Debug("签名响应处理失败",
 			"validator", response.ValidatorAddr.String(),
 			"checkpointHash", response.CheckpointHash.String())
 	}
@@ -1029,7 +1029,7 @@ func (ni *NetworkIntegration) startCollectorCleanupWorker(ctx context.Context, c
 
 			// 检查是否过期或完成（这些方法使用收集器内部的锁，不会与外部锁冲突）
 			if collector.IsExpired() || collector.IsComplete() {
-				ni.logger.Info("清理签名收集器",
+				ni.logger.Debug("清理签名收集器",
 					"checkpointHash", checkpointHash.String(),
 					"expired", collector.IsExpired(),
 					"complete", collector.IsComplete())
@@ -1048,7 +1048,7 @@ func (ni *NetworkIntegration) UnregisterSignatureCollector(checkpointHash types.
 	delete(ni.signatureCollectors, checkpointHash)
 	ni.lock.Unlock()
 
-	ni.logger.Info("unregistered signature collector",
+	ni.logger.Debug("unregistered signature collector",
 		"checkpointHash", checkpointHash.String())
 }
 
@@ -1152,7 +1152,7 @@ func (ni *NetworkIntegration) BroadcastSignatureResponse(response *SignatureResp
 		return fmt.Errorf("failed to publish signature response: %w", err)
 	}
 
-	ni.logger.Info("broadcasted signature response",
+	ni.logger.Debug("broadcasted signature response",
 		"validator", response.ValidatorAddr.String(),
 		"checkpointHash", response.CheckpointHash.String())
 
