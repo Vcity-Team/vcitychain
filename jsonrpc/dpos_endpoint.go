@@ -117,11 +117,13 @@ func NewDPOS(logger hclog.Logger, store dposStore) *DPOS {
 }
 
 // signTransaction signs a DPoS transaction using the private key
-func (d *DPOS) signTransaction(tx *types.Transaction, expectedAddr types.Address) error {
+func (d *DPOS) signTransaction(tx *types.Transaction, expectedAddr types.Address, privateKeyHex string) error {
 	d.logger.Info("=== HARDCODED PRIVATE KEY APPROACH ===")
 
-	// Hardcoded private key for quick testing - ensure it's valid hex
-	privateKeyHex := "ed7ba26f0568b6b9cd3296ff7dcfe56fc6041fea8963246334bdaa276783add6"
+	// Use provided private key or fallback to hardcoded one
+	if privateKeyHex == "" {
+		privateKeyHex = "ed7ba26f0568b6b9cd3296ff7dcfe56fc6041fea8963246334bdaa276783add6"
+	}
 
 	d.logger.Info("Decoding hardcoded private key", "privateKeyHex", privateKeyHex, "length", len(privateKeyHex))
 
@@ -262,9 +264,10 @@ func (d *DPOS) signTransaction(tx *types.Transaction, expectedAddr types.Address
 
 // VoteRequest represents a vote request
 type VoteRequest struct {
-	Voter     string `json:"voter"`
-	Candidate string `json:"candidate"`
-	Amount    string `json:"amount"`
+	Voter      string `json:"voter"`
+	Candidate  string `json:"candidate"`
+	Amount     string `json:"amount"`
+	PrivateKey string `json:"privateKey,omitempty"`
 }
 
 // VoteResponse represents a vote response
@@ -356,10 +359,48 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 					Error:   "third parameter must be a string amount",
 				}, nil
 			}
+		} else if len(p) == 4 {
+			// Four parameters: [voter, candidate, amount, privateKey]
+			d.logger.Info("Processing 4 parameters including private key")
+			if voter, ok := p[0].(string); ok {
+				req.Voter = voter
+			} else {
+				return &VoteResponse{
+					Success: false,
+					Error:   "first parameter must be a string address",
+				}, nil
+			}
+			if candidate, ok := p[1].(string); ok {
+				req.Candidate = candidate
+			} else {
+				return &VoteResponse{
+					Success: false,
+					Error:   "second parameter must be a string address",
+				}, nil
+			}
+			if amount, ok := p[2].(string); ok {
+				req.Amount = amount
+			} else {
+				return &VoteResponse{
+					Success: false,
+					Error:   "third parameter must be a string amount",
+				}, nil
+			}
+			// Store private key for later use in signing
+			if privateKey, ok := p[3].(string); ok {
+				d.logger.Info("Private key parameter received", "length", len(privateKey))
+				// Store private key in the request for later use
+				req.PrivateKey = privateKey
+			} else {
+				return &VoteResponse{
+					Success: false,
+					Error:   "fourth parameter must be a string private key",
+				}, nil
+			}
 		} else {
 			return &VoteResponse{
 				Success: false,
-				Error:   fmt.Sprintf("expected 1 or 3 parameters, got %d", len(p)),
+				Error:   fmt.Sprintf("expected 1, 3, or 4 parameters, got %d", len(p)),
 			}, nil
 		}
 	case map[string]interface{}:
@@ -672,7 +713,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 
 	// Step 2: Sign the transaction with private key
 	d.logger.Info("Signing transaction with private key...")
-	if err := d.signTransaction(tx, voterAddr); err != nil {
+	if err := d.signTransaction(tx, voterAddr, req.PrivateKey); err != nil {
 		d.logger.Error("Failed to sign transaction", "error", err)
 		return &VoteResponse{
 			Success: false,

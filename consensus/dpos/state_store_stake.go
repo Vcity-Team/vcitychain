@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sort"
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
@@ -96,6 +97,126 @@ func (s *StakeStore) getFullValidatorSet(dbTx *bolt.Tx) (validatorSetState, erro
 	}
 
 	return fullValidatorSet, err
+}
+
+// 🆕 新增：GetValidators方法，实现与命令一致的数据源
+func (s *StakeStore) GetValidators() (validator.AccountSet, error) {
+	var validators validator.AccountSet
+
+	err := s.db.View(func(tx *bolt.Tx) error {
+		// 🆕 修正：从VoterInfo bucket读取投票信息，计算每个受托人的实际票数
+		voterBucket := tx.Bucket([]byte("VoterInfo"))
+		if voterBucket == nil {
+			return fmt.Errorf("VoterInfo bucket not found")
+		}
+
+		// 统计每个受托人的总票数
+		delegateVotes := make(map[string]*big.Int)
+		cursor := voterBucket.Cursor()
+		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
+			var voterInfo VoterInfo
+			if err := json.Unmarshal(value, &voterInfo); err != nil {
+				continue
+			}
+
+			// 统计每个受托人的票数
+			for _, delegate := range voterInfo.VotedDelegates {
+				delegateAddr := delegate.String()
+				if delegateVotes[delegateAddr] == nil {
+					delegateVotes[delegateAddr] = big.NewInt(0)
+				}
+				delegateVotes[delegateAddr].Add(delegateVotes[delegateAddr], voterInfo.VotingPower)
+			}
+		}
+
+		// 🆕 从DelegateInfo bucket读取受托人信息，并添加票数信息
+		delegateBucket := tx.Bucket([]byte("DelegateInfo"))
+		if delegateBucket == nil {
+			return fmt.Errorf("DelegateInfo bucket not found")
+		}
+
+		// 遍历所有受托人，创建带票数的验证者信息
+		cursor = delegateBucket.Cursor()
+		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
+			var delegateInfo DelegateInfo
+			if err := json.Unmarshal(value, &delegateInfo); err != nil {
+				continue
+			}
+
+			// 获取该受托人的总票数
+			delegateAddr := delegateInfo.Address.String()
+			totalVotes := delegateVotes[delegateAddr]
+			if totalVotes == nil {
+				totalVotes = big.NewInt(0) // 没有票数时设为0
+			}
+
+			// 🆕 修正：使用实际票数作为投票权重，而不是创世时的固定值
+			validatorMeta := &validator.ValidatorMetadata{
+				Address:     delegateInfo.Address,
+				VotingPower: totalVotes, // 使用实际票数
+				IsActive:    delegateInfo.IsActive,
+			}
+
+			validators = append(validators, validatorMeta)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get validators: %w", err)
+	}
+
+	// 🆕 按票数从高到低排序
+	sort.Slice(validators, func(i, j int) bool {
+		return validators[i].VotingPower.Cmp(validators[j].VotingPower) > 0
+	})
+
+	return validators, nil
+}
+
+// 🆕 新增：GetStakingInfo方法，实现与命令一致的数据源
+func (s *StakeStore) GetStakingInfo() ([]*StakeInfo, error) {
+	var stakingInfos []*StakeInfo
+
+	err := s.db.View(func(tx *bolt.Tx) error {
+		// 🆕 修正：从VoterInfo bucket读取投票者信息，这才是真正的质押信息
+		voterBucket := tx.Bucket([]byte("VoterInfo"))
+		if voterBucket == nil {
+			return fmt.Errorf("VoterInfo bucket not found")
+		}
+
+		// 遍历所有投票者
+		cursor := voterBucket.Cursor()
+		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
+			var voterInfo VoterInfo
+			if err := json.Unmarshal(value, &voterInfo); err != nil {
+				continue // 跳过解析失败的数据
+			}
+
+			// 创建StakeInfo - 这才是真正的质押信息
+			stakeInfo := &StakeInfo{
+				Staker:    voterInfo.Address,           // 投票者地址
+				Amount:    voterInfo.VotingPower,       // 投票者的总投票权重
+				Delegate:  voterInfo.VotedDelegates[0], // 投票者委托的受托人（取第一个）
+				IsActive:  true,                        // 投票者总是活跃的
+				StartTime: uint64(0),                   // 暂时使用默认值
+				EndTime:   uint64(0),                   // 暂时使用默认值
+				IsLocked:  false,                       // 暂时使用默认值
+				Rewards:   big.NewInt(0),               // 暂时使用默认值
+			}
+
+			stakingInfos = append(stakingInfos, stakeInfo)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get staking info: %w", err)
+	}
+
+	return stakingInfos, nil
 }
 
 // getStakingInfo 从数据库获取质押信息

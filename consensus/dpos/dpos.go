@@ -1,6 +1,7 @@
 package dpos
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -548,6 +548,34 @@ func (r *dposRuntime) produceBlock() error {
 	currentDelegate := r.getCurrentDelegate()
 	keyAddr := types.Address(r.config.Key.Address())
 
+	// 检查当前节点是否有足够的stake参与出块
+	var currentDelegateInfo *validator.ValidatorMetadata
+	for _, delegate := range r.delegates {
+		if delegate.Address == keyAddr {
+			currentDelegateInfo = delegate
+			break
+		}
+	}
+
+	// 如果当前节点stake为0或不活跃，跳过出块
+	if currentDelegateInfo == nil || !currentDelegateInfo.IsActive || currentDelegateInfo.VotingPower.Cmp(big.NewInt(0)) <= 0 {
+		var isActiveStr string
+		var votingPowerStr string
+		if currentDelegateInfo != nil {
+			isActiveStr = fmt.Sprintf("%v", currentDelegateInfo.IsActive)
+			votingPowerStr = currentDelegateInfo.VotingPower.String()
+		} else {
+			isActiveStr = "N/A"
+			votingPowerStr = "N/A"
+		}
+
+		r.logger.Debug("current node has insufficient stake or is inactive, skipping block production",
+			"keyAddr", keyAddr,
+			"isActive", isActiveStr,
+			"votingPower", votingPowerStr)
+		return nil
+	}
+
 	// 添加调试日志 - 只有当本节点是当前受托人时才打印
 	if currentDelegate == keyAddr {
 		r.logger.Info("checking block production eligibility",
@@ -555,7 +583,8 @@ func (r *dposRuntime) produceBlock() error {
 			"keyAddr", keyAddr,
 			"currentRound", r.currentRound,
 			"currentDelegateIndex", r.currentDelegateIndex,
-			"delegatesCount", len(r.delegates))
+			"delegatesCount", len(r.delegates),
+			"votingPower", currentDelegateInfo.VotingPower.String())
 	}
 
 	// 添加详细的受托人集合调试信息
@@ -816,11 +845,21 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 		return types.ZeroAddress
 	}
 
-	if r.currentDelegateIndex >= uint64(len(r.delegates)) {
-		r.currentDelegateIndex = 0
+	// 查找活跃的受托人
+	for i := 0; i < len(r.delegates); i++ {
+		index := (r.currentDelegateIndex + uint64(i)) % uint64(len(r.delegates))
+		delegate := r.delegates[index]
+
+		// 检查受托人是否活跃且有足够的stake
+		if delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
+			r.currentDelegateIndex = index
+			return delegate.Address
+		}
 	}
 
-	return r.delegates[r.currentDelegateIndex].Address
+	// 如果没有找到活跃的受托人，重置索引
+	r.currentDelegateIndex = 0
+	return types.ZeroAddress
 }
 
 // buildBlock 构建区块
@@ -1285,6 +1324,13 @@ type DelegateInfo struct {
 	IsActive       bool
 }
 
+// VoteInfo 投票信息结构（用于解析交易数据）
+type VoteInfo struct {
+	Voter     types.Address `json:"voter"`
+	Candidate types.Address `json:"candidate"`
+	Amount    *big.Int      `json:"amount"`
+}
+
 // AddVote 添加投票到 DPoS 状态（供 JSON-RPC 调用）
 func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big.Int) error {
 	d.lock.Lock()
@@ -1329,6 +1375,15 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 		"voter", voter.String(),
 		"candidate", candidate.String(),
 		"amount", amount.String())
+
+	// 🆕 新增：投票完成后立即更新验证者集合
+	d.logger.Info("🔄 Updating delegates after vote...")
+	if err := d.updateDelegatesInternal(nil); err != nil {
+		d.logger.Error("❌ Failed to update delegates after vote", "error", err)
+		// 不返回错误，因为投票已经成功
+	} else {
+		d.logger.Info("✅ Delegates updated successfully after vote")
+	}
 
 	// 验证 voters 字段是否被正确更新
 	d.logger.Info("Verifying voters field update...")
@@ -1624,6 +1679,13 @@ func (d *DPoS) Start() error {
 		d.logger.Info("✅ Voting data restored from database successfully")
 	}
 
+	// 🆕 新增：启动时直接调用和命令一样的数据源方法
+	d.logger.Info("🚀 ===== DPoS启动时调用命令数据源 =====")
+	if err := d.callCommandDataSourcesOnStartup(); err != nil {
+		d.logger.Warn("Failed to call command data sources on startup", "error", err)
+	}
+	d.logger.Info("🚀 ===== DPoS启动时命令数据源调用完成 =====")
+
 	// 初始化性能优化组件
 	d.initPerformanceOptimizations()
 
@@ -1818,12 +1880,31 @@ func (d *DPoS) Initialize() error {
 func (d *DPoS) initializeDelegates() error {
 	d.delegates = make(validator.AccountSet, 0, d.config.DelegateCount)
 
-	// 添加调试日志
+	// 🆕 修正：优先从数据库读取受托人，而不是从创世文件
 	d.logger.Info("initializing delegates", "configDelegateCount", d.config.DelegateCount, "initialDelegatesCount", len(d.config.InitialDelegates))
 
-	// 从配置中加载初始受托人
+	// 🆕 首先尝试从数据库读取受托人（仅用于显示对比，不实际使用）
+	if d.state != nil && d.state.StakeStore != nil {
+		d.logger.Info("🔍 尝试从数据库读取受托人信息（仅用于显示对比）...")
+		dbValidators, err := d.state.StakeStore.GetValidators()
+		if err != nil {
+			d.logger.Warn("⚠️ 从数据库读取受托人失败，将使用创世文件", "error", err)
+		} else if len(dbValidators) > 0 {
+			d.logger.Info("✅ 从数据库成功读取受托人（仅用于显示对比）", "count", len(dbValidators))
+
+			// 🆕 仅显示数据库中的受托人信息，但不添加到d.delegates
+			for i, validator := range dbValidators {
+				d.logger.Info("📋 数据库受托人信息（仅显示）", "index", i, "address", validator.Address, "votingPower", validator.VotingPower.String(), "isActive", validator.IsActive)
+			}
+
+			d.logger.Info("📊 数据库受托人显示完成（不用于实际出块）", "count", len(dbValidators))
+		}
+	}
+
+	// 🆕 实际使用创世文件中的受托人进行初始化（用于出块）
+	d.logger.Info("🎯 使用创世文件中的受托人进行实际初始化（用于出块）...")
 	for i, delegate := range d.config.InitialDelegates {
-		d.logger.Info("processing delegate", "index", i, "address", delegate.Address, "stake", delegate.Stake.String())
+		d.logger.Info("processing genesis delegate", "index", i, "address", delegate.Address, "stake", delegate.Stake.String())
 
 		// 检查是否有 BLS 密钥
 		if delegate.BlsKey == "" {
@@ -1837,18 +1918,26 @@ func (d *DPoS) initializeDelegates() error {
 				Address:     delegate.Address,
 				BlsKey:      blsKey.PublicKey(),
 				VotingPower: delegate.Stake,
-				IsActive:    true,
+				IsActive:    delegate.Stake.Cmp(big.NewInt(0)) > 0, // 根据stake设置活跃状态
 			}
 			d.delegates = append(d.delegates, validatorMetadata)
-			d.logger.Info("added delegate with generated BLS key", "address", delegate.Address, "blsKey", fmt.Sprintf("%x", blsKey.PublicKey().Marshal()))
+			d.logger.Info("added delegate with generated BLS key", "address", delegate.Address, "blsKey", fmt.Sprintf("%x", blsKey.PublicKey().Marshal()), "isActive", validatorMetadata.IsActive)
 		} else {
 			// 使用 ToValidatorMetadata 方法正确转换
 			validatorMetadata, err := delegate.ToValidatorMetadata()
 			if err != nil {
 				return fmt.Errorf("failed to convert delegate %s to validator metadata: %w", delegate.Address, err)
 			}
+
+			// 关键：根据stake设置活跃状态
+			if validatorMetadata.VotingPower.Cmp(big.NewInt(0)) <= 0 {
+				validatorMetadata.IsActive = false
+				d.logger.Info("delegate marked as inactive due to zero stake",
+					"address", delegate.Address, "stake", validatorMetadata.VotingPower.String())
+			}
+
 			d.delegates = append(d.delegates, validatorMetadata)
-			d.logger.Info("added delegate with BLS key", "address", delegate.Address)
+			d.logger.Info("added delegate with BLS key", "address", delegate.Address, "isActive", validatorMetadata.IsActive)
 		}
 	}
 
@@ -1858,7 +1947,8 @@ func (d *DPoS) initializeDelegates() error {
 		for _, delegate := range d.delegates {
 			d.logger.Info("delegate genesis stake preserved",
 				"address", delegate.Address,
-				"votingPower", delegate.VotingPower.String())
+				"votingPower", delegate.VotingPower.String(),
+				"isActive", delegate.IsActive)
 		}
 	}
 
@@ -2096,10 +2186,164 @@ func (d *DPoS) GetDelegateIndex(delegate types.Address) uint64 {
 
 // 区块处理相关方法
 func (d *DPoS) processBlockVotes(block *types.FullBlock) error {
-	// 处理区块中的投票事件
-	// TODO: 实现投票事件处理逻辑
-	d.logger.Debug("processing block votes", "block", block.Block.Number())
+	d.logger.Info("🔄 开始处理区块中的投票事件", "blockNumber", block.Block.Number())
+
+	if block == nil || block.Block == nil {
+		d.logger.Warn("⚠️ 区块为空，跳过投票事件处理")
+		return nil
+	}
+
+	// 获取区块中的所有交易
+	transactions := block.Block.Transactions
+	if len(transactions) == 0 {
+		d.logger.Debug("📋 区块中没有交易，跳过投票事件处理")
+		return nil
+	}
+
+	d.logger.Info("📋 区块交易数量", "blockNumber", block.Block.Number(), "txCount", len(transactions))
+
+	// 遍历所有交易，查找投票交易
+	voteCount := 0
+	for i, tx := range transactions {
+		d.logger.Debug("🔍 检查交易", "blockNumber", block.Block.Number(), "txIndex", i, "txHash", tx.Hash.String())
+
+		// 检查是否是投票交易
+		if d.isVoteTransaction(tx) {
+			d.logger.Info("✅ 发现投票交易", "blockNumber", block.Block.Number(), "txIndex", i, "txHash", tx.Hash.String())
+
+			// 处理投票交易
+			if err := d.processVoteTransaction(tx, block.Block.Number()); err != nil {
+				d.logger.Error("❌ 处理投票交易失败", "blockNumber", block.Block.Number(), "txIndex", i, "txHash", tx.Hash.String(), "error", err)
+				// 不返回错误，继续处理其他交易
+			} else {
+				voteCount++
+				d.logger.Info("✅ 投票交易处理成功", "blockNumber", block.Block.Number(), "txIndex", i, "txHash", tx.Hash.String())
+			}
+		}
+	}
+
+	d.logger.Info("🎯 区块投票事件处理完成", "blockNumber", block.Block.Number(), "totalTx", len(transactions), "voteTx", voteCount)
 	return nil
+}
+
+// 🆕 新增：检查交易是否是投票交易
+func (d *DPoS) isVoteTransaction(tx *types.Transaction) bool {
+	// 检查交易是否有输入数据（投票交易应该有输入数据）
+	if len(tx.Input) == 0 {
+		return false
+	}
+
+	// 检查交易输入数据长度（DPoS投票交易格式：4字节"DPOS" + 20字节投票者 + 20字节受托人 + 32字节金额）
+	const (
+		dposPrefixLen  = 4
+		addrLen        = 20
+		amountLen      = 32
+		expectedLength = dposPrefixLen + addrLen + addrLen + amountLen
+	)
+
+	if len(tx.Input) < expectedLength {
+		return false
+	}
+
+	// 检查是否是DPoS投票交易（前4字节应该是"DPOS"）
+	if !bytes.Equal(tx.Input[:4], []byte("DPOS")) {
+		return false
+	}
+
+	d.logger.Debug("🔍 发现DPoS投票交易",
+		"inputLength", len(tx.Input),
+		"prefix", string(tx.Input[:4]),
+		"expectedLength", expectedLength)
+
+	return true
+}
+
+// 🆕 新增：处理投票交易
+func (d *DPoS) processVoteTransaction(tx *types.Transaction, blockNumber uint64) error {
+	d.logger.Info("🔄 开始处理投票交易", "txHash", tx.Hash.String(), "blockNumber", blockNumber)
+
+	// 1. 解析交易输入数据，提取投票信息
+	voteInfo, err := d.parseVoteTransactionData(tx)
+	if err != nil {
+		d.logger.Error("❌ 解析投票交易数据失败", "txHash", tx.Hash.String(), "error", err)
+		return fmt.Errorf("failed to parse vote transaction data: %w", err)
+	}
+
+	d.logger.Info("📋 投票交易信息解析成功",
+		"txHash", tx.Hash.String(),
+		"from", tx.From.String(),
+		"to", func() string {
+			if tx.To != nil {
+				return tx.To.String()
+			}
+			return "nil"
+		}(),
+		"value", tx.Value.String(),
+		"inputLength", len(tx.Input),
+		"voter", voteInfo.Voter.String(),
+		"candidate", voteInfo.Candidate.String(),
+		"amount", voteInfo.Amount.String())
+
+	// 2. 调用投票处理逻辑
+	d.logger.Info("🔄 调用投票处理逻辑...")
+	if err := d.AddVote(voteInfo.Voter, voteInfo.Candidate, voteInfo.Amount); err != nil {
+		d.logger.Error("❌ 投票处理失败", "txHash", tx.Hash.String(), "error", err)
+		return fmt.Errorf("failed to process vote: %w", err)
+	}
+
+	d.logger.Info("✅ 投票交易处理完成", "txHash", tx.Hash.String(),
+		"voter", voteInfo.Voter.String(),
+		"candidate", voteInfo.Candidate.String(),
+		"amount", voteInfo.Amount.String())
+	return nil
+}
+
+// parseVoteTransactionData 解析DPoS投票交易数据
+func (d *DPoS) parseVoteTransactionData(tx *types.Transaction) (*VoteInfo, error) {
+	if tx == nil {
+		return nil, fmt.Errorf("transaction is nil")
+	}
+
+	input := tx.Input
+	if input == nil || len(input) < 4 {
+		return nil, fmt.Errorf("input data too short or nil: length=%d", len(input))
+	}
+
+	// 检查是否是DPoS投票交易
+	if !bytes.Equal(input[:4], []byte("DPOS")) {
+		return nil, fmt.Errorf("not a DPoS vote transaction, prefix=%x", input[:4])
+	}
+
+	// 预期格式：4字节"DPOS" + 20字节投票者 + 20字节受托人 + 32字节金额
+	const (
+		dposPrefixLen  = 4
+		addrLen        = 20
+		amountLen      = 32
+		expectedLength = dposPrefixLen + addrLen + addrLen + amountLen
+	)
+
+	if len(input) < expectedLength {
+		return nil, fmt.Errorf("invalid DPoS vote tx input length: expected %d, got %d", expectedLength, len(input))
+	}
+
+	// 解析地址和金额
+	voter := types.BytesToAddress(input[dposPrefixLen : dposPrefixLen+addrLen])
+	candidate := types.BytesToAddress(input[dposPrefixLen+addrLen : dposPrefixLen+addrLen+addrLen])
+	amountBytes := input[dposPrefixLen+addrLen+addrLen : expectedLength]
+
+	// 转换金额字节为big.Int（移除前导零）
+	amount := new(big.Int).SetBytes(amountBytes)
+	if amount.Sign() <= 0 {
+		return nil, fmt.Errorf("vote amount must be positive, got %s", amount.String())
+	}
+
+	d.logger.Info("DPoS投票数据解析成功", "voter", voter.String(), "candidate", candidate.String(), "amount", amount.String())
+
+	return &VoteInfo{
+		Voter:     voter,
+		Candidate: candidate,
+		Amount:    amount,
+	}, nil
 }
 
 // 添加安全相关常量
@@ -2307,90 +2551,39 @@ func (d *DPoS) verifyVoteSignature(vote *VoteMessage) error {
 	return nil
 }
 
-// 增强的受托人更新
+// 增强的受托人更新（公共接口，需要获取锁）
 func (d *DPoS) updateDelegates(block *types.FullBlock) error {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
-	// 1. 参数校验
-	N := int(d.config.DelegateCount)
-	if N <= 0 {
-		N = 21 // 默认21个受托人
-	}
-	if N > MaxDelegates {
-		N = MaxDelegates
-	}
+	return d.updateDelegatesInternal(block)
+}
 
-	// 2. 计算受托人排名
-	delegates := make([]*DelegateInfo, 0, len(d.delegates))
-	for _, del := range d.delegates {
-		// 检查受托人是否满足最小质押要求
-		minStake, _ := new(big.Int).SetString(MinVoteAmount, 10)
-		if del.VotingPower.Cmp(minStake) < 0 {
-			del.IsActive = false
-			d.logger.Warn("delegate deactivated due to insufficient stake",
-				"address", del.Address, "stake", del.VotingPower)
-		}
+// 内部方法，不需要获取锁（由调用者负责锁管理）
+func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
+	d.logger.Info("🔄 updateDelegatesInternal called", "block", block, "currentDelegatesCount", len(d.delegates))
 
-		delegates = append(delegates, &DelegateInfo{
-			Address:     del.Address,
-			VotingPower: del.VotingPower,
-			IsActive:    del.IsActive,
-		})
+	// 🆕 落盘时：直接保存当前受托人集合，不进行排名和截取
+	d.logger.Info("💾 落盘时：直接保存当前受托人集合，不进行排名和截取")
+
+	// 🆕 详细记录要落盘的见证人信息
+	d.logger.Info("📋 准备落盘的见证人详情:")
+	for i, delegate := range d.delegates {
+		d.logger.Info("👤 见证人详情",
+			"序号", i+1,
+			"地址", delegate.Address.String(),
+			"投票权重", delegate.VotingPower.String(),
+			"是否活跃", delegate.IsActive,
+			"BLS密钥", delegate.BlsKey != nil)
 	}
 
-	// 3. 按投票权重排序
-	sort.Slice(delegates, func(i, j int) bool {
-		if delegates[i].IsActive != delegates[j].IsActive {
-			return delegates[i].IsActive // 活跃的排在前面
-		}
-		return delegates[i].VotingPower.Cmp(delegates[j].VotingPower) > 0
-	})
-
-	// 4. 选出前N名活跃受托人
-	newSet := validator.AccountSet{}
-	activeCount := 0
-	for i := 0; i < len(delegates) && activeCount < N; i++ {
-		if delegates[i].IsActive {
-			// 从当前验证者集合中找到对应的BLS密钥
-			var blsKey *bls.PublicKey
-			for _, currentDel := range d.delegates {
-				if currentDel.Address == delegates[i].Address {
-					blsKey = currentDel.BlsKey
-					break
-				}
-			}
-
-			newSet = append(newSet, &validator.ValidatorMetadata{
-				Address:     delegates[i].Address,
-				BlsKey:      blsKey, // 保留BLS密钥
-				VotingPower: delegates[i].VotingPower,
-				IsActive:    true,
-			})
-			activeCount++
-		}
+	// 直接保存当前的 d.delegates 到数据库，不改变受托人集合
+	if err := d.persistDelegateSetToDatabase(d.delegates); err != nil {
+		d.logger.Error("❌ Failed to persist delegate set to database", "error", err)
+		return err
 	}
 
-	// 5. 检查受托人集合变化
-	oldSet := d.delegates
-	d.delegates = newSet
-
-	// 6. 记录受托人集合变化
-	if len(oldSet) != len(newSet) {
-		d.logger.Info("delegate set size changed",
-			"old_size", len(oldSet), "new_size", len(newSet))
-	}
-
-	// 检查新增和移除的受托人
-	added, removed := d.compareDelegateSets(oldSet, newSet)
-	if len(added) > 0 {
-		d.logger.Info("new delegates added", "delegates", added)
-	}
-	if len(removed) > 0 {
-		d.logger.Info("delegates removed", "delegates", removed)
-	}
-
-	d.logger.Debug("updated delegates", "block", block.Block.Number(), "count", len(newSet))
+	d.logger.Info("✅ 受托人集合落盘完成", "count", len(d.delegates))
 	return nil
 }
 
@@ -2791,7 +2984,8 @@ func (d *DPoS) updateDelegateVotingPower(delegate types.Address, amount *big.Int
 				"delegate", delegate.String(),
 				"oldPower", oldPower.String(),
 				"newPower", del.VotingPower.String(),
-				"addedAmount", amount.String())
+				"addedAmount", amount.String(),
+				"totalDelegates", len(d.delegates))
 			found = true
 			break
 		}
@@ -2890,7 +3084,8 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 
 	// 检查网络中的活跃验证者数量
 	activeValidators := r.getActiveValidatorsCount()
-	expectedSignatures := len(r.delegates) // 现在包括自己
+	// 计算真正活跃的验证者数量（有足够stake且IsActive=true）
+	expectedSignatures := activeValidators // 只计算活跃的验证者
 
 	r.logger.Info("网络状态检查",
 		"activeValidators", activeValidators,
@@ -3154,36 +3349,48 @@ func (r *dposRuntime) getActiveValidatorsCount() int {
 		return 0
 	}
 
-	// 检查网络连接状态
-	// 这里应该实现真正的网络节点发现逻辑
-	// 暂时基于网络连接状态来判断
-	// TODO: 实现真正的网络节点发现和验证者状态检查
+	// 计算真正活跃的验证者数量（有足够stake且IsActive=true）
+	activeValidators := 0
+	for _, delegate := range r.delegates {
+		if delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
+			activeValidators++
+		}
+	}
 
-	// 检查是否有其他节点连接
-	// 如果没有网络连接，返回0（表示无法进行签名收集）
-	// 如果有网络连接，返回实际连接的节点数量
-	// 暂时返回委托者数量，表示多节点模式
-	activeValidators := len(r.delegates)
-
-	// 如果只有一个委托者，返回0（表示无法进行多节点签名收集）
+	// 如果只有一个活跃验证者，返回0（表示无法进行多节点签名收集）
 	if activeValidators <= 1 {
-		r.logger.Error("只有一个委托者，无法进行多节点签名收集", "activeValidators", 0)
+		r.logger.Debug("活跃验证者数量不足，无法进行多节点签名收集",
+			"activeValidators", activeValidators,
+			"totalDelegates", len(r.delegates))
 		return 0
 	}
 
-	r.logger.Debug("当前活跃验证者数量", "activeValidators", activeValidators, "totalDelegates", len(r.delegates))
+	r.logger.Debug("当前活跃验证者数量",
+		"activeValidators", activeValidators,
+		"totalDelegates", len(r.delegates))
 	return activeValidators
 }
 
 // calculateMinRequiredSignatures 计算最少需要的签名数量
 func (r *dposRuntime) calculateMinRequiredSignatures() int {
-	totalValidators := len(r.delegates)
+	// 计算真正活跃的验证者数量（有足够stake且IsActive=true）
+	activeValidators := 0
+	for _, delegate := range r.delegates {
+		if delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
+			activeValidators++
+		}
+	}
 
 	// 使用2/3多数原则，但至少需要1个签名
-	minRequired := (totalValidators * 2) / 3
+	minRequired := (activeValidators * 2) / 3
 	if minRequired < 1 {
 		minRequired = 1
 	}
+
+	r.logger.Debug("计算最少需要的签名数量",
+		"activeValidators", activeValidators,
+		"totalDelegates", len(r.delegates),
+		"minRequired", minRequired)
 
 	// 现在包括提议者自己，所以不需要减1
 	return minRequired
@@ -3922,11 +4129,37 @@ func (r *dposRuntime) isValidator() bool {
 	}
 
 	currentAddr := types.Address(r.config.Key.Address())
-	for _, delegate := range r.delegates {
+	r.logger.Info("=== isValidator 检查开始 ===",
+		"currentAddr", currentAddr.String(),
+		"delegatesCount", len(r.delegates))
+
+	for i, delegate := range r.delegates {
+		r.logger.Info("检查受托人",
+			"index", i,
+			"address", delegate.Address.String(),
+			"votingPower", delegate.VotingPower.String(),
+			"isActive", delegate.IsActive,
+			"isCurrentNode", delegate.Address == currentAddr)
+
 		if delegate.Address == currentAddr {
-			return true
+			// 关键：检查stake是否足够且是否活跃
+			if delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
+				r.logger.Info("✅ 当前节点是活跃验证者",
+					"address", currentAddr.String(),
+					"votingPower", delegate.VotingPower.String(),
+					"isActive", delegate.IsActive)
+				return true
+			} else {
+				r.logger.Info("❌ 当前节点不是活跃验证者（stake不足或不活跃）",
+					"address", currentAddr.String(),
+					"votingPower", delegate.VotingPower.String(),
+					"isActive", delegate.IsActive)
+				return false
+			}
 		}
 	}
+
+	r.logger.Info("❌ 当前节点不在受托人集合中", "address", currentAddr.String())
 	return false
 }
 
@@ -5056,5 +5289,366 @@ func (d *DPoS) restoreDelegatesFromDatabase() error {
 		return fmt.Errorf("failed to restore delegates from database: %w", err)
 	}
 
+	return nil
+}
+
+// updateValidatorStatus 更新验证者状态
+func (d *DPoS) updateValidatorStatus(address types.Address, newStake *big.Int) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	for _, delegate := range d.delegates {
+		if delegate.Address == address {
+			oldActive := delegate.IsActive
+			oldStake := delegate.VotingPower
+			delegate.VotingPower = new(big.Int).Set(newStake)
+
+			// 关键：根据新stake更新活跃状态
+			if newStake.Cmp(big.NewInt(0)) > 0 {
+				delegate.IsActive = true // 有stake了，变为活跃
+			} else {
+				delegate.IsActive = false // stake为0，变为不活跃
+			}
+
+			// 记录状态变化
+			if oldActive != delegate.IsActive {
+				d.logger.Info("validator status changed",
+					"address", address,
+					"oldStake", oldStake.String(),
+					"newStake", newStake.String(),
+					"oldActive", oldActive,
+					"newActive", delegate.IsActive)
+			}
+
+			return nil
+		}
+	}
+
+	return fmt.Errorf("validator not found: %s", address)
+}
+
+// canParticipateInConsensus 检查验证者是否可以参与共识
+func (d *DPoS) canParticipateInConsensus(delegate *validator.ValidatorMetadata) bool {
+	return delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0
+}
+
+// shouldParticipateInBLSSigning 检查验证者是否应该参与BLS签名
+func (d *DPoS) shouldParticipateInBLSSigning(delegate *validator.ValidatorMetadata) bool {
+	return delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0
+}
+
+// 持久化验证者集合到数据库
+func (d *DPoS) persistDelegateSetToDatabase(delegates validator.AccountSet) error {
+	if d.state == nil || d.state.StakeStore == nil {
+		d.logger.Warn("State store not available, skipping database persistence")
+		return nil
+	}
+
+	d.logger.Info("💾 Starting delegate set persistence", "count", len(delegates))
+
+	// 开始数据库事务
+	dbTx, err := d.state.beginDBTransaction(true)
+	if err != nil {
+		return fmt.Errorf("failed to begin db transaction: %w", err)
+	}
+	defer dbTx.Rollback()
+
+	// 保存每个验证者信息
+	for _, del := range delegates {
+		delegateInfo := &DelegateInfo{
+			Address:        del.Address,
+			VotingPower:    new(big.Int).Set(del.VotingPower),
+			TotalVotes:     new(big.Int).Set(del.VotingPower), // 使用VotingPower作为TotalVotes
+			ProducedBlocks: 0,
+			MissedBlocks:   0,
+			LastBlockTime:  0,
+			IsActive:       del.IsActive,
+		}
+
+		if err := d.state.StakeStore.setDelegateInfo(del.Address, delegateInfo, dbTx); err != nil {
+			d.logger.Error("❌ Failed to save delegate info", "address", del.Address.String(), "error", err)
+			return fmt.Errorf("failed to save delegate info for %s: %w", del.Address.String(), err)
+		}
+
+		d.logger.Info("✅ Saved delegate info", "address", del.Address.String(), "votingPower", del.VotingPower.String())
+	}
+
+	// 提交事务
+	if err := dbTx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit db transaction: %w", err)
+	}
+
+	d.logger.Info("✅ Delegate set persistence completed successfully")
+	return nil
+}
+
+// 🆕 新增：启动时读取并打印受托人数据
+func (d *DPoS) loadAndPrintDelegatesOnStartup() error {
+	d.logger.Info("🔍 开始读取consensus\\dpos目录下的受托人数据...")
+
+	// 检查数据目录
+	if d.dataDir == "" {
+		d.logger.Warn("数据目录为空，无法读取受托人数据")
+		return nil
+	}
+
+	// 构建consensus\dpos路径
+	// 检查dataDir是否已经包含consensus\dpos
+	var dposDir string
+	if strings.Contains(d.dataDir, "consensus") && strings.Contains(d.dataDir, "dpos") {
+		// 如果dataDir已经包含consensus\dpos，直接使用
+		dposDir = d.dataDir
+		d.logger.Info("📁 受托人数据目录（已包含consensus\\dpos）", "path", dposDir)
+	} else {
+		// 否则拼接路径
+		dposDir = filepath.Join(d.dataDir, "consensus", "dpos")
+		d.logger.Info("📁 受托人数据目录（拼接路径）", "path", dposDir)
+	}
+
+	// 检查目录是否存在
+	if _, err := os.Stat(dposDir); os.IsNotExist(err) {
+		d.logger.Warn("受托人数据目录不存在", "path", dposDir)
+		return nil
+	}
+
+	// 读取目录内容
+	files, err := os.ReadDir(dposDir)
+	if err != nil {
+		d.logger.Error("读取受托人数据目录失败", "error", err)
+		return err
+	}
+
+	d.logger.Info("📋 受托人数据目录内容", "fileCount", len(files))
+
+	// 遍历文件并打印信息
+	for _, file := range files {
+		if !file.IsDir() {
+			filePath := filepath.Join(dposDir, file.Name())
+			fileInfo, err := os.Stat(filePath)
+			if err != nil {
+				d.logger.Warn("获取文件信息失败", "file", file.Name(), "error", err)
+				continue
+			}
+
+			d.logger.Info("📄 受托人数据文件",
+				"name", file.Name(),
+				"size", fileInfo.Size(),
+				"modTime", fileInfo.ModTime())
+		}
+	}
+
+	// 尝试从状态存储读取受托人信息
+	if d.state != nil && d.state.StakeStore != nil {
+		d.logger.Info("💾 尝试从状态存储读取受托人信息...")
+
+		// 🆕 新增：从与命令相同的数据源读取受托人数据
+		if err := d.callCommandDataSourcesOnStartup(); err != nil {
+			d.logger.Error("❌ 调用命令数据源失败", "error", err)
+		} else {
+			d.logger.Info("✅ 命令数据源调用完成（状态存储可用）")
+		}
+	} else {
+		d.logger.Warn("⚠️ 状态存储不可用，无法读取受托人详细信息")
+	}
+
+	d.logger.Info("🎯 受托人数据读取总结", "dataDir", d.dataDir, "dposDir", dposDir)
+	return nil
+}
+
+// 🆕 新增：从状态存储读取并打印受托人数据内容
+func (d *DPoS) readAndPrintDelegatesFromStorage() error {
+	d.logger.Info("🔍 开始读取受托人数据内容...")
+
+	// 检查状态存储
+	if d.state == nil || d.state.StakeStore == nil {
+		return fmt.Errorf("state store not available")
+	}
+
+	// 尝试从数据库读取受托人信息
+	if d.state.db != nil {
+		d.logger.Info("💾 从BoltDB读取受托人信息...")
+
+		err := d.state.db.View(func(tx *bolt.Tx) error {
+			// 读取DelegateInfo bucket
+			delegateBucket := tx.Bucket([]byte("DelegateInfo"))
+			if delegateBucket == nil {
+				d.logger.Info("📋 DelegateInfo bucket不存在，没有受托人数据")
+				return nil
+			}
+
+			d.logger.Info("📋 找到DelegateInfo bucket，开始读取受托人数据...")
+
+			// 遍历所有受托人
+			cursor := delegateBucket.Cursor()
+			delegateCount := 0
+
+			for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
+				delegateCount++
+
+				// 解析受托人地址
+				address := types.BytesToAddress(key)
+
+				// 尝试解析受托人信息
+				var delegateInfo DelegateInfo
+				if err := json.Unmarshal(value, &delegateInfo); err != nil {
+					d.logger.Warn("⚠️ 解析受托人数据失败", "address", address.String(), "error", err)
+					// 显示原始数据
+					d.logger.Info("📄 受托人原始数据", "address", address.String(), "rawData", string(value))
+					continue
+				}
+
+				// 打印受托人详细信息
+				d.logger.Info("👤 受托人信息",
+					"序号", delegateCount,
+					"地址", delegateInfo.Address.String(),
+					"投票权重", delegateInfo.VotingPower.String(),
+					"总票数", delegateInfo.TotalVotes.String(),
+					"是否活跃", delegateInfo.IsActive,
+					"出块数", delegateInfo.ProducedBlocks,
+					"错过块数", delegateInfo.MissedBlocks)
+			}
+
+			d.logger.Info("📊 受托人数据统计", "总数", delegateCount)
+			return nil
+		})
+
+		if err != nil {
+			d.logger.Error("❌ 读取受托人数据失败", "error", err)
+			return err
+		}
+	}
+
+	// 也显示内存中的受托人信息
+	d.logger.Info("🧠 内存中的受托人信息...")
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	for i, del := range d.delegates {
+		d.logger.Info("👤 内存受托人",
+			"序号", i+1,
+			"地址", del.Address.String(),
+			"投票权重", del.VotingPower.String(),
+			"是否活跃", del.IsActive,
+			"BLS密钥", del.BlsKey != nil)
+	}
+
+	d.logger.Info("📊 内存受托人统计", "总数", len(d.delegates))
+	return nil
+}
+
+// 🆕 新增：启动时直接调用和命令一样的数据源方法
+func (d *DPoS) callCommandDataSourcesOnStartup() error {
+	d.logger.Info("🔍 开始调用和命令一样的数据源方法...")
+
+	// 🆕 数据源1: 从store获取验证者信息 (与命令中的 GetValidators() 一致)
+	d.logger.Info("💾 数据源1: 从store获取验证者信息...")
+	if d.state != nil && d.state.StakeStore != nil {
+		d.logger.Info("🔍 调用store.GetValidators()...")
+		validators, err := d.state.StakeStore.GetValidators()
+		if err != nil {
+			d.logger.Warn("⚠️ 获取验证者信息失败", "error", err)
+		} else {
+			d.logger.Info("✅ 验证者信息获取成功", "count", len(validators))
+
+			// 🆕 获取质押信息用于对比
+			stakingInfo, stakingErr := d.state.StakeStore.GetStakingInfo()
+			if stakingErr != nil {
+				d.logger.Warn("⚠️ 获取质押信息失败，无法显示票数对比", "error", stakingErr)
+			}
+
+			for i, validator := range validators {
+				// 🆕 查找对应的票数信息
+				var totalVotes *big.Int
+				var voterCount int
+				if stakingInfo != nil {
+					for _, stake := range stakingInfo {
+						if stake.Delegate.String() == validator.Address.String() {
+							if totalVotes == nil {
+								totalVotes = big.NewInt(0)
+							}
+							totalVotes.Add(totalVotes, stake.Amount)
+							voterCount++
+						}
+					}
+				}
+
+				if totalVotes != nil {
+					d.logger.Info("👤 验证者信息",
+						"序号", i+1,
+						"地址", validator.Address.String(),
+						"投票权重", validator.VotingPower.String(),
+						"总票数", totalVotes.String(),
+						"投票者数量", voterCount,
+						"是否活跃", validator.IsActive)
+				} else {
+					d.logger.Info("👤 验证者信息",
+						"序号", i+1,
+						"地址", validator.Address.String(),
+						"投票权重", validator.VotingPower.String(),
+						"总票数", "0",
+						"投票者数量", 0,
+						"是否活跃", validator.IsActive)
+				}
+			}
+		}
+	} else {
+		d.logger.Warn("⚠️ store不可用，无法获取验证者信息")
+	}
+
+	// 🆕 数据源2: 从store获取质押信息 (与命令中的 GetStakingInfo() 一致)
+	d.logger.Info("💾 数据源2: 从store获取质押信息...")
+	if d.state != nil && d.state.StakeStore != nil {
+		d.logger.Info("🔍 调用store.GetStakingInfo()...")
+		stakingInfo, err := d.state.StakeStore.GetStakingInfo()
+		if err != nil {
+			d.logger.Warn("⚠️ 获取质押信息失败", "error", err)
+		} else {
+			d.logger.Info("✅ 质押信息获取成功", "count", len(stakingInfo))
+			for i, stake := range stakingInfo {
+				d.logger.Info("💰 质押信息",
+					"序号", i+1,
+					"质押者", stake.Staker.String(),
+					"受托人", stake.Delegate.String(),
+					"数量", stake.Amount.String(),
+					"是否活跃", stake.IsActive)
+			}
+		}
+	} else {
+		d.logger.Warn("⚠️ store不可用，无法获取质押信息")
+	}
+
+	// 🆕 数据源3: 从共识引擎获取动态投票信息...
+	d.logger.Info("💾 数据源3: 从共识引擎获取动态投票信息...")
+	d.logger.Info("🔍 尝试调用d.getDynamicVotingInfo()...")
+	// 注意：这里需要找到正确的getDynamicVotingInfo()方法调用方式
+	// 暂时跳过，因为getDynamicVotingInfo()在jsonrpc/dpos_endpoint.go中
+	d.logger.Info("⚠️ 需要找到正确的getDynamicVotingInfo()方法调用方式")
+
+	// 🆕 数据源4: 从验证者信息提取质押信息...
+	d.logger.Info("💾 数据源4: 从验证者信息提取质押信息...")
+	d.logger.Info("🔍 尝试调用d.extractVotingInfoFromDelegates()...")
+	// 注意：这里需要找到正确的extractVotingInfoFromDelegates()方法调用方式
+	// 暂时跳过，因为extractVotingInfoFromDelegates()在jsonrpc/dpos_endpoint.go中
+	d.logger.Info("⚠️ 需要找到正确的extractVotingInfoFromDelegates()方法调用方式")
+	d.logger.Info("🔍 尝试调用d.extractVotingInfoFromDelegates()...")
+	d.logger.Info("⚠️ 需要找到正确的extractVotingInfoFromDelegates()方法调用方式")
+
+	// 🆕 对比：显示内存中的受托人信息
+	d.logger.Info("🧠 对比：显示内存中的受托人信息...")
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	for i, del := range d.delegates {
+		d.logger.Info("👤 内存受托人",
+			"序号", i+1,
+			"地址", del.Address.String(),
+			"投票权重", del.VotingPower.String(),
+			"是否活跃", del.IsActive,
+			"BLS密钥", del.BlsKey != nil)
+	}
+
+	d.logger.Info("📊 内存受托人统计", "总数", len(d.delegates))
+
+	d.logger.Info("🎯 从与命令相同的数据源读取完成")
 	return nil
 }

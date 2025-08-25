@@ -66,11 +66,14 @@ func (v *GenesisValidator) ToValidatorMetadata() (*ValidatorMetadata, error) {
 		return nil, err
 	}
 
+	// 检查stake是否足够
+	isActive := v.Stake.Cmp(big.NewInt(0)) > 0
+
 	metadata := &ValidatorMetadata{
 		Address:     v.Address,
 		BlsKey:      blsKey,
 		VotingPower: new(big.Int).Set(v.Stake),
-		IsActive:    true,
+		IsActive:    isActive, // 根据stake设置活跃状态
 	}
 
 	return metadata, nil
