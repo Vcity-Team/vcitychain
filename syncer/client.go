@@ -555,11 +555,11 @@ func (m *syncPeerClient) networkHealthCheck() {
 			peers := m.network.Peers()
 			peerCount := len(peers)
 
-			// 记录网络状态
-			m.logger.Info("网络健康检查",
-				"节点ID", m.id,
-				"连接节点数", peerCount,
-				"shouldEmitBlocks", m.shouldEmitBlocks)
+			// // 记录网络状态
+			// m.logger.Info("网络健康检查",
+			// 	"节点ID", m.id,
+			// 	"连接节点数", peerCount,
+			// 	"shouldEmitBlocks", m.shouldEmitBlocks)
 
 			// 如果连接节点数过少，发出警告
 			if peerCount < 2 {

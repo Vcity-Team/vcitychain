@@ -311,13 +311,37 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 
 	logger.Debug("Signature.Verify - 法定人数验证通过，开始验证BLS签名")
 
+	// 🆕 添加详细日志：打印从数据库读取的验证者信息
+	logger.Info("🔍 Signature.Verify - 验证者详细信息",
+		"blockNumber", blockNumber,
+		"totalValidators", len(validators),
+		"filteredSigners", len(signers),
+		"bitmapLength", len(s.Bitmap),
+		"bitmapHex", fmt.Sprintf("%x", s.Bitmap))
+
 	blsPublicKeys := make([]*bls.PublicKey, len(signers))
 	for i, validator := range signers {
 		blsPublicKeys[i] = validator.BlsKey
-		logger.Debug("Signature.Verify - 添加BLS公钥",
-			"index", i,
-			"address", validator.Address.String(),
-			"blsKeyExists", validator.BlsKey != nil)
+
+		// 🆕 详细打印每个验证者的BLS公钥信息
+		if validator.BlsKey != nil {
+			pubKeyBytes := validator.BlsKey.Marshal()
+			logger.Info("🔑 Signature.Verify - 验证者BLS公钥详情",
+				"index", i,
+				"address", validator.Address.String(),
+				"votingPower", validator.VotingPower.String(),
+				"isActive", validator.IsActive,
+				"blsKeyExists", true,
+				"publicKeyBytes", fmt.Sprintf("%x", pubKeyBytes),
+				"publicKeyLength", len(pubKeyBytes))
+		} else {
+			logger.Error("❌ Signature.Verify - 验证者缺少BLS公钥",
+				"index", i,
+				"address", validator.Address.String(),
+				"votingPower", validator.VotingPower.String(),
+				"isActive", validator.IsActive,
+				"blsKeyExists", false)
+		}
 	}
 
 	logger.Debug("Signature.Verify - 开始验证BLS聚合签名",
@@ -346,13 +370,24 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 			"publicKeysCount", len(blsPublicKeys),
 			"signersCount", len(signers))
 
+		// 🆕 添加更详细的调试信息
+		logger.Error("🔍 BLS签名验证失败详细信息",
+			"hashBytes", fmt.Sprintf("%x", hash[:]),
+			"hashLength", len(hash[:]),
+			"domainBytes", fmt.Sprintf("%x", domain),
+			"domainLength", len(domain),
+			"aggregatedSignatureBytes", fmt.Sprintf("%x", s.AggregatedSignature),
+			"aggregatedSignatureLength", len(s.AggregatedSignature))
+
 		// 添加更详细的调试信息
 		for i, pubKey := range blsPublicKeys {
 			if pubKey != nil {
+				pubKeyBytes := pubKey.Marshal()
 				logger.Info("Signature.Verify - BLS公钥信息",
 					"index", i,
 					"address", signers[i].Address.String(),
-					"publicKeyBytes", fmt.Sprintf("%x", pubKey.Marshal()))
+					"publicKeyBytes", fmt.Sprintf("%x", pubKeyBytes),
+					"publicKeyLength", len(pubKeyBytes))
 			} else {
 				logger.Error("Signature.Verify - BLS公钥为nil",
 					"index", i,
