@@ -348,11 +348,11 @@ func (ni *NetworkIntegration) createTopics() error {
 	var criticalTopicsCreated int
 
 	// 创建签名请求主题 - 使用有效的默认值避免网络层发送零值消息
-	// 使用查询请求作为模板，这样网络层就不会发送无效的默认消息
+	// 使用模板消息作为主题初始化，这样网络层就不会发送无效的默认消息
 	defaultSignatureRequest := &dposProto.SignatureRequest{
 		BlockNumber:    0,
-		BlockHash:      []byte("QUERY_REQUEST"),
-		CheckpointHash: []byte("QUERY_REQUEST"),
+		BlockHash:      []byte("TEMPLATE_MSG"),
+		CheckpointHash: []byte("TEMPLATE_MSG"),
 		Round:          0,
 		Proposer:       []byte("DEFAULT_PROPOSER"),
 		Timestamp:      uint64(time.Now().Unix()),
@@ -363,7 +363,7 @@ func (ni *NetworkIntegration) createTopics() error {
 	if err != nil {
 		ni.logger.Warn("failed to marshal default signature request template", "error", err)
 		// 如果序列化失败，使用空的但有效的消息
-		defaultRequestData = []byte("QUERY_REQUEST")
+		defaultRequestData = []byte("TEMPLATE_MSG")
 	}
 
 	ni.signatureRequestTopic, err = ni.network.NewTopic("dpos-signature-request", &dposProto.TransportMessage{
@@ -410,7 +410,7 @@ func (ni *NetworkIntegration) createTopics() error {
 		}
 	} else {
 		criticalTopicsCreated++
-		ni.logger.Info("成功创建签名响应主题")
+		//ni.logger.Info("成功创建签名响应主题")
 	}
 
 	// 创建投票主题 - 使用protobuf序列化
@@ -425,7 +425,7 @@ func (ni *NetworkIntegration) createTopics() error {
 			return fmt.Errorf("failed to create vote topic: %w", err)
 		}
 	} else {
-		ni.logger.Info("成功创建投票主题")
+		//ni.logger.Info("成功创建投票主题")
 	}
 
 	// 创建委托主题 - 使用protobuf序列化
@@ -440,7 +440,7 @@ func (ni *NetworkIntegration) createTopics() error {
 			return fmt.Errorf("failed to create delegate topic: %w", err)
 		}
 	} else {
-		ni.logger.Info("成功创建委托主题")
+		//ni.logger.Info("成功创建委托主题")
 	}
 
 	// 检查是否至少有一个关键主题可用

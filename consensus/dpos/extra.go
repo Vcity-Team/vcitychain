@@ -312,7 +312,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 	logger.Debug("Signature.Verify - 法定人数验证通过，开始验证BLS签名")
 
 	// 🆕 添加详细日志：打印从数据库读取的验证者信息
-	logger.Info("🔍 Signature.Verify - 验证者详细信息",
+	logger.Debug("🔍 Signature.Verify - 验证者详细信息",
 		"blockNumber", blockNumber,
 		"totalValidators", len(validators),
 		"filteredSigners", len(signers),
@@ -326,7 +326,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		// 🆕 详细打印每个验证者的BLS公钥信息
 		if validator.BlsKey != nil {
 			pubKeyBytes := validator.BlsKey.Marshal()
-			logger.Info("🔑 Signature.Verify - 验证者BLS公钥详情",
+			logger.Debug("🔑 Signature.Verify - 验证者BLS公钥详情",
 				"index", i,
 				"address", validator.Address.String(),
 				"votingPower", validator.VotingPower.String(),
