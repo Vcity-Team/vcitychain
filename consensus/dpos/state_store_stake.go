@@ -757,10 +757,11 @@ func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx) 
 			}
 
 			// 🆕 添加详细日志：显示从数据库读取的BLS公钥
-			// fmt.Printf("🔑 getDelegatesAtBlock: 成功恢复BLS公钥 - 地址=%s, 原始数据长度=%d, 原始数据=%x\n",
-			//	delegateInfo.Address.String(), len(delegateInfo.BlsPublicKey), delegateInfo.BlsPublicKey)
+			fmt.Printf("🔑 getDelegatesAtBlock: 成功恢复BLS公钥 - 地址=%s, 原始数据长度=%d\n",
+				delegateInfo.Address.String(), len(delegateInfo.BlsPublicKey))
 		} else {
-			fmt.Printf("⚠️ getDelegatesAtBlock: 受托人缺少BLS公钥数据 - 地址=%s\n", delegateInfo.Address.String())
+			fmt.Printf("⚠️ getDelegatesAtBlock: 受托人缺少BLS公钥数据 - 地址=%s, BlsPublicKey长度=%d\n",
+				delegateInfo.Address.String(), len(delegateInfo.BlsPublicKey))
 		}
 
 		// 创建验证者元数据
@@ -769,6 +770,15 @@ func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx) 
 			VotingPower: new(big.Int).Set(delegateInfo.VotingPower),
 			IsActive:    delegateInfo.IsActive,
 			BlsKey:      blsPublicKey,
+		}
+
+		// 🆕 添加调试日志：显示创建的验证者元数据
+		if blsPublicKey != nil {
+			fmt.Printf("✅ getDelegatesAtBlock: 创建验证者元数据成功 - 地址=%s, BlsKey存在=true\n",
+				delegateInfo.Address.String())
+		} else {
+			fmt.Printf("⚠️ getDelegatesAtBlock: 创建验证者元数据 - 地址=%s, BlsKey存在=false\n",
+				delegateInfo.Address.String())
 		}
 
 		delegates = append(delegates, validatorMeta)

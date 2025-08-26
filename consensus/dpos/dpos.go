@@ -3,6 +3,7 @@ package dpos
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,7 +26,6 @@ import (
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/wallet"
 	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/helper/common"
-	"github.com/Vcity-Team/vcitychain/helper/hex"
 	"github.com/Vcity-Team/vcitychain/helper/progress"
 	"github.com/Vcity-Team/vcitychain/network"
 	"github.com/Vcity-Team/vcitychain/secrets"
@@ -799,8 +799,64 @@ func (r *dposRuntime) initializeDelegates() error {
 			r.logger.Error("failed to get delegates from backend", "error", err)
 			return fmt.Errorf("failed to get delegates from backend: %w", err)
 		}
+
+		// 🆕 应用 DelegateCount 限制，只取前N个受托人
+		if r.config != nil && r.config.DelegateCount > 0 {
+			maxDelegates := int(r.config.DelegateCount)
+			if len(delegates) > maxDelegates {
+				delegates = delegates[:maxDelegates]
+				r.logger.Info("🎯 runtime初始化：限制受托人数量为前N个",
+					"originalCount", len(delegates)+len(delegates[maxDelegates:]),
+					"limitedCount", maxDelegates,
+					"configDelegateCount", r.config.DelegateCount)
+			}
+		}
+
 		r.delegates = delegates
 		r.logger.Info("initialized delegates from backend", "count", len(r.delegates))
+
+		// 🆕 验证所有受托人都有BLS公钥，如果缺少则从genesis文件中恢复
+		for i, del := range r.delegates {
+			if del.BlsKey == nil {
+				r.logger.Warn("⚠️ runtime初始化后发现缺少BLS公钥，尝试从genesis文件中恢复", "index", i, "address", del.Address.String())
+
+				// 🆕 从genesis文件中查找对应的BLS公钥
+				var foundGenesisBlsKey string
+				if r.config != nil && r.config.InitialDelegates != nil {
+					for _, genesisDelegate := range r.config.InitialDelegates {
+						if genesisDelegate.Address == del.Address {
+							foundGenesisBlsKey = genesisDelegate.BlsKey
+							break
+						}
+					}
+				}
+
+				if foundGenesisBlsKey != "" {
+					r.logger.Info("🔑 runtime找到genesis中的BLS密钥", "address", del.Address.String(), "blsKeyLength", len(foundGenesisBlsKey))
+
+					// 解析genesis中的BLS公钥
+					decoded, err := hex.DecodeString(foundGenesisBlsKey)
+					if err != nil {
+						r.logger.Error("❌ runtime解析genesis BLS密钥失败", "address", del.Address.String(), "error", err)
+						continue
+					}
+
+					genesisBlsKey, err := bls.UnmarshalPublicKey(decoded)
+					if err != nil {
+						r.logger.Error("❌ runtime反序列化genesis BLS公钥失败", "address", del.Address.String(), "error", err)
+						continue
+					}
+
+					// 使用genesis中的BLS公钥
+					r.delegates[i].BlsKey = genesisBlsKey
+					r.logger.Info("✅ runtime成功从genesis文件恢复BLS公钥", "address", del.Address.String(), "blsKeyLength", len(genesisBlsKey.Marshal()))
+				} else {
+					r.logger.Error("❌ runtime在genesis文件中也找不到BLS密钥", "address", del.Address.String())
+				}
+			} else {
+				r.logger.Debug("✅ runtime初始化BLS公钥正常", "index", i, "address", del.Address.String(), "blsKeyLength", len(del.BlsKey.Marshal()))
+			}
+		}
 
 		// 添加详细的调试日志
 		r.logger.Info("=== 受托人集合详细信息 ===")
@@ -1899,12 +1955,14 @@ func (d *DPoS) Initialize() error {
 
 	// 创建DPoS runtime
 	runtimeConfig := &runtimeConfig{
-		DataDir:     d.dataDir,
-		Key:         d.key,
-		State:       d.state,
-		blockchain:  d.blockchain,
-		dposBackend: d,
-		txPool:      d.txPool,
+		DataDir:          d.dataDir,
+		Key:              d.key,
+		State:            d.state,
+		blockchain:       d.blockchain,
+		dposBackend:      d,
+		txPool:           d.txPool,
+		DelegateCount:    d.config.DelegateCount,
+		InitialDelegates: d.config.InitialDelegates,
 	}
 
 	// 检查runtime配置是否正确
@@ -1970,15 +2028,45 @@ func (d *DPoS) initializeDelegates() error {
 			for i, validator := range dbValidators {
 				d.logger.Info("📋 数据库受托人信息（真正用于出块，按票数排序）", "index", i, "address", validator.Address, "votingPower", validator.VotingPower.String(), "isActive", validator.IsActive)
 
-				// 检查是否有BLS密钥，如果没有则生成一个
+				// 检查BLS密钥，如果缺少则从genesis文件中查找
 				if validator.BlsKey == nil {
-					blsKey, err := bls.GenerateBlsKey()
-					if err != nil {
-						d.logger.Warn("⚠️ 为受托人生成BLS密钥失败，跳过该受托人", "address", validator.Address, "error", err)
+					d.logger.Warn("⚠️ 受托人缺少BLS密钥，尝试从genesis文件中查找", "address", validator.Address)
+
+					// 🆕 从genesis文件中查找对应的BLS公钥
+					var foundGenesisBlsKey string
+					for _, genesisDelegate := range d.config.InitialDelegates {
+						if genesisDelegate.Address == validator.Address {
+							foundGenesisBlsKey = genesisDelegate.BlsKey
+							break
+						}
+					}
+
+					if foundGenesisBlsKey != "" {
+						d.logger.Info("🔑 找到genesis中的BLS密钥", "address", validator.Address, "blsKeyLength", len(foundGenesisBlsKey))
+
+						// 解析genesis中的BLS公钥
+						decoded, err := hex.DecodeString(foundGenesisBlsKey)
+						if err != nil {
+							d.logger.Error("❌ 解析genesis BLS密钥失败", "address", validator.Address, "error", err)
+							continue
+						}
+
+						genesisBlsKey, err := bls.UnmarshalPublicKey(decoded)
+						if err != nil {
+							d.logger.Error("❌ 反序列化genesis BLS公钥失败", "address", validator.Address, "error", err)
+							continue
+						}
+
+						// 使用genesis中的BLS公钥
+						validator.BlsKey = genesisBlsKey
+						d.logger.Info("✅ 成功从genesis文件恢复BLS公钥", "address", validator.Address, "blsKeyLength", len(genesisBlsKey.Marshal()))
+					} else {
+						d.logger.Error("❌ 在genesis文件中也找不到BLS密钥", "address", validator.Address)
+						d.logger.Error("🔍 请检查genesis文件是否包含了该受托人的BLS公钥")
 						continue
 					}
-					validator.BlsKey = blsKey.PublicKey()
-					d.logger.Info("✅ 为受托人生成BLS密钥", "address", validator.Address, "blsKey", fmt.Sprintf("%x", blsKey.PublicKey().Marshal()))
+				} else {
+					d.logger.Debug("✅ 受托人BLS密钥正常", "address", validator.Address, "blsKeyLength", len(validator.BlsKey.Marshal()))
 				}
 
 				// 将数据库中的受托人添加到出块集合中
@@ -2051,7 +2139,19 @@ func (d *DPoS) initializeDelegates() error {
 
 			validatorMetadata, err := delegate.ToValidatorMetadata()
 			if err != nil {
+				d.logger.Error("❌ 转换genesis受托人失败", "address", delegate.Address, "error", err)
 				return fmt.Errorf("failed to convert delegate %s to validator metadata: %w", delegate.Address, err)
+			}
+
+			// 🆕 验证BLS公钥是否正确加载
+			if validatorMetadata.BlsKey == nil {
+				d.logger.Error("❌ genesis受托人BLS公钥加载失败", "address", delegate.Address)
+				d.logger.Error("🔍 genesis文件中的BlsKey", "blsKey", delegate.BlsKey)
+				return fmt.Errorf("genesis delegate %s has nil BLS key after conversion", delegate.Address)
+			} else {
+				d.logger.Info("✅ genesis受托人BLS公钥加载成功",
+					"address", delegate.Address,
+					"blsKeyLength", len(validatorMetadata.BlsKey.Marshal()))
 			}
 
 			// 关键：根据stake设置活跃状态
@@ -5656,13 +5756,17 @@ func (d *DPoS) persistDelegateSetToDatabase(delegates validator.AccountSet) erro
 		var blsPublicKey []byte
 		if del.BlsKey != nil {
 			blsPublicKey = del.BlsKey.Marshal()
-			d.logger.Debug("🔑 保存BLS公钥到数据库",
+			d.logger.Info("🔑 保存BLS公钥到数据库",
 				"address", del.Address.String(),
-				"publicKeyBytes", fmt.Sprintf("%x", blsPublicKey),
 				"publicKeyLength", len(blsPublicKey))
+			d.logger.Debug("🔑 BLS公钥详细数据",
+				"address", del.Address.String(),
+				"publicKeyBytes", fmt.Sprintf("%x", blsPublicKey))
 		} else {
-			d.logger.Warn("⚠️ 受托人缺少BLS公钥，将保存空值",
+			d.logger.Error("❌ 受托人缺少BLS公钥，无法保存",
 				"address", del.Address.String())
+			d.logger.Error("🔍 这是严重错误：所有受托人都应该有BLS公钥")
+			return fmt.Errorf("delegate %s is missing BLS public key", del.Address.String())
 		}
 
 		delegateInfo := &DelegateInfo{

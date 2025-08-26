@@ -84,6 +84,9 @@ type runtimeConfig struct {
 	bridgeTopic           topic
 	numBlockConfirmations uint64
 	consensusConfig       *consensus.Config
+	// DPoS specific configuration
+	DelegateCount    uint64
+	InitialDelegates []*validator.GenesisValidator
 }
 
 // consensusRuntime is a struct that provides consensus runtime features like epoch, state and event management
