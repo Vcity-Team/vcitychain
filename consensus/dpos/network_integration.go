@@ -1557,7 +1557,7 @@ func (ni *NetworkIntegration) saveBLSKey(address types.Address, blsKeyBytes []by
 
 	// 🆕 尝试持久化到数据库
 	if err := ni.persistBLSKeyToDatabase(address, blsKeyBytes); err != nil {
-		ni.logger.Warn("BLS公钥持久化到数据库失败，但缓存已保存",
+		ni.logger.Debug("BLS公钥持久化到数据库失败，但缓存已保存",
 			"address", address.String(),
 			"error", err)
 		// 不返回错误，因为缓存已经保存成功
@@ -1748,7 +1748,7 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 				blsPublicKey = keyBytes
 				ni.logger.Info("✅ 从genesis.json找到BLS公钥", "address", requestMsg.RequestedAddress.String())
 			} else {
-				ni.logger.Info("⚠️ 在genesis.json中未找到BLS公钥",
+				ni.logger.Debug("⚠️ 在genesis.json中未找到BLS公钥",
 					"address", requestMsg.RequestedAddress.String(),
 					"error", err)
 			}
@@ -1806,7 +1806,7 @@ func (ni *NetworkIntegration) handleBLSKeyResponse(obj interface{}, from peer.ID
 					"blsKeyLength", len(responseMsg.BLSPublicKey))
 			}
 		} else {
-			ni.logger.Warn("⚠️ 请求的BLS公钥在响应节点中未找到",
+			ni.logger.Debug("⚠️ 请求的BLS公钥在响应节点中未找到",
 				"address", responseMsg.RequestedAddress.String())
 		}
 	} else {

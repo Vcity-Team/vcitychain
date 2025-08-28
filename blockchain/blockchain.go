@@ -829,15 +829,23 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 	// but before it is written into the storage
 	batchWriter.PutReceipts(block.Hash(), fblock.Receipts)
 
-	// update snapshot
-	if err := b.consensus.ProcessHeaders([]*types.Header{header}); err != nil {
-		return err
-	}
-
 	// Update the average gas price
 	b.updateGasPriceAvgWithBlock(block)
 
 	if err := b.writeBatchAndUpdate(batchWriter, header, newTD, isCanonical); err != nil {
+		return err
+	}
+
+	logArgs1 := []interface{}{
+		"number", header.Number,
+		"txs", len(block.Transactions),
+		"hash", header.Hash,
+		"parent", header.ParentHash,
+		"source", source,
+	}
+	b.logger.Info("ProcessHeaders新区块", logArgs1...)
+	// update snapshot
+	if err := b.consensus.ProcessHeaders([]*types.Header{header}); err != nil {
 		return err
 	}
 

@@ -12,7 +12,6 @@ import (
 
 	"bytes"
 
-	"github.com/Vcity-Team/vcitychain/consensus"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/crypto"
@@ -853,64 +852,71 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		} else {
 			d.logger.Info("Consensus engine type", "type", fmt.Sprintf("%T", consensusEngine))
 
-			// Try to get DPoS consensus engine with proper type assertion
-			var dposEngine interface {
-				AddVote(voter types.Address, candidate types.Address, amount *big.Int) error
-			}
+			// Try to get DPoS consensus engine with proper type assertion (commented out to avoid duplicate processing)
+			// var dposEngine interface {
+			// 	AddVote(voter types.Address, candidate types.Address, amount *big.Int) error
+			// }
 
-			// Try multiple type assertions to find the correct DPoS engine
-			if dposEngine, ok = consensusEngine.(interface {
-				AddVote(voter types.Address, candidate types.Address, amount *big.Int) error
-			}); ok {
-				d.logger.Info("Consensus engine has AddVote method, attempting to update DPoS state...")
-				if err := dposEngine.AddVote(voterAddr, candidateAddr, amountInt); err != nil {
-					d.logger.Error("Failed to update DPoS state", "error", err)
-					// Continue anyway, the transaction is in the pool
-				} else {
-					d.logger.Info("DPoS state updated successfully")
-					dposStateUpdated = true
-				}
-			} else {
-				// Try to access the embedded Consensus field directly
-				d.logger.Info("Trying to access embedded Consensus field...")
-				if hub, ok := d.store.(interface {
-					GetConsensus() consensus.Consensus
+			// 🆕 修复：移除立即调用AddVote的逻辑，避免重复计算
+			// 投票数据将在区块广播接收后统一处理，确保只计算一次
+			d.logger.Info("🔄 投票交易已加入交易池，等待打包进区块后统一处理")
+			d.logger.Info("📋 投票数据将在区块广播接收后计算，避免重复处理")
+
+			// 注释掉所有立即调用AddVote的代码，避免重复计算
+			/*
+				if dposEngine, ok = consensusEngine.(interface {
+					AddVote(voter types.Address, candidate types.Address, amount *big.Int) error
 				}); ok {
-					consensusEngine := hub.GetConsensus()
-					d.logger.Info("Got consensus engine through hub", "type", fmt.Sprintf("%T", consensusEngine))
-
-					// Try to cast to DPoS engine
-					if dposEngine, ok = consensusEngine.(interface {
-						AddVote(voter types.Address, candidate types.Address, amount *big.Int) error
-					}); ok {
-						d.logger.Info("Consensus engine has AddVote method, attempting to update DPoS state...")
-						if err := dposEngine.AddVote(voterAddr, candidateAddr, amountInt); err != nil {
-							d.logger.Error("Failed to update DPoS state", "error", err)
-						} else {
-							d.logger.Info("DPoS state updated successfully")
-							dposStateUpdated = true
-						}
+					d.logger.Info("Consensus engine has AddVote method, attempting to update DPoS state...")
+					if err := dposEngine.AddVote(voterAddr, candidateAddr, amountInt); err != nil {
+						d.logger.Error("Failed to update DPoS state", "error", err)
+						// Continue anyway, the transaction is in the pool
 					} else {
-						d.logger.Warn("Consensus engine does NOT have AddVote method")
+						d.logger.Info("DPoS state updated successfully")
+						dposStateUpdated = true
 					}
 				} else {
-					d.logger.Warn("Store does NOT have GetConsensus() consensus.Consensus method")
-				}
+					// 直接进入else分支，尝试其他方法
+					d.logger.Info("Trying to access embedded Consensus field...")
+					if hub, ok := d.store.(interface {
+						GetConsensus() interface{}
+					}); ok {
+						consensusEngine := hub.GetConsensus()
+						d.logger.Info("Got consensus engine through hub", "type", fmt.Sprintf("%T", consensusEngine))
 
-				d.logger.Warn("Available methods on consensus engine:")
+						// Try to cast to DPoS engine
+						if dposEngine, ok = consensusEngine.(interface {
+							AddVote(voter types.Address, candidate types.Address, amount *big.Int) error
+						}); ok {
+							d.logger.Info("Consensus engine has AddVote method, attempting to update DPoS state...")
+							if err := dposEngine.AddVote(voterAddr, candidateAddr, amountInt); err != nil {
+								d.logger.Error("Failed to update DPoS state", "error", err)
+							} else {
+								d.logger.Info("DPoS state updated successfully")
+								dposStateUpdated = true
+							}
+						} else {
+							d.logger.Warn("Consensus engine does NOT have AddVote method")
+						}
+					} else {
+						d.logger.Warn("Store does NOT have GetConsensus() consensus.Consensus method")
+					}
 
-				// List available methods
-				consensusValue := reflect.ValueOf(consensusEngine)
-				if consensusValue.Kind() == reflect.Ptr {
-					consensusValue = consensusValue.Elem()
-				}
+					d.logger.Warn("Available methods on consensus engine:")
 
-				consensusType := consensusValue.Type()
-				for i := 0; i < consensusType.NumMethod(); i++ {
-					method := consensusType.Method(i)
-					d.logger.Warn("Available method", "name", method.Name, "type", method.Type.String())
+					// List available methods
+					consensusValue := reflect.ValueOf(consensusEngine)
+					if consensusValue.Kind() == reflect.Ptr {
+						consensusValue = consensusValue.Elem()
+					}
+
+					consensusType := consensusValue.Type()
+					for i := 0; i < consensusType.NumMethod(); i++ {
+						method := consensusType.Method(i)
+						d.logger.Warn("Available method", "name", method.Name, "type", method.Type.String())
+					}
 				}
-			}
+			*/
 		}
 	} else {
 		d.logger.Warn("Store does NOT have GetConsensus method")

@@ -52,6 +52,9 @@ type blockchainBackend interface {
 	// GetHeaderByHash returns a reference to block header for the given block hash
 	GetHeaderByHash(hash types.Hash) (*types.Header, bool)
 
+	// GetBlockByHash returns a reference to block for the given block hash
+	GetBlockByHash(hash types.Hash, full bool) (*types.Block, bool)
+
 	// GetSystemState creates a new instance of SystemState interface
 	GetSystemState(provider contract.Provider) SystemState
 
@@ -157,6 +160,11 @@ func (p *blockchainWrapper) GetHeaderByNumber(number uint64) (*types.Header, boo
 // GetHeaderByHash is an implementation of blockchainBackend interface
 func (p *blockchainWrapper) GetHeaderByHash(hash types.Hash) (*types.Header, bool) {
 	return p.blockchain.GetHeaderByHash(hash)
+}
+
+// GetBlockByHash is an implementation of blockchainBackend interface
+func (p *blockchainWrapper) GetBlockByHash(hash types.Hash, full bool) (*types.Block, bool) {
+	return p.blockchain.GetBlockByHash(hash, full)
 }
 
 // NewBlockBuilder is an implementation of blockchainBackend interface

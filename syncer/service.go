@@ -98,7 +98,7 @@ func (s *syncPeerService) GetBlocks(
 		}
 	}
 
-	s.logger.Info("区块请求完成", "peer", peerInfo, "发送区块数", blockCount)
+	s.logger.Debug("区块请求完成", "peer", peerInfo, "发送区块数", blockCount)
 	return nil
 }
 

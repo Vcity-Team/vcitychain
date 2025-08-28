@@ -345,10 +345,10 @@ func (m *syncPeerClient) startNewBlockProcess() {
 
 			// 检查网络连接状态
 			peers := m.network.Peers()
-			m.logger.Info("准备广播状态", "区块高度", latest.Number, "节点ID", m.id, "连接节点数", len(peers))
+			m.logger.Debug("准备广播状态", "区块高度", latest.Number, "节点ID", m.id, "连接节点数", len(peers))
 
 			// 记录状态广播开始
-			m.logger.Info("开始广播状态", "区块高度", latest.Number, "节点ID", m.id)
+			m.logger.Debug("开始广播状态", "区块高度", latest.Number, "节点ID", m.id)
 
 			// 添加网络状态检查
 			if len(peers) == 0 {

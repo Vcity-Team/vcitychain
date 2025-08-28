@@ -313,12 +313,17 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 	if !validatorSet.HasQuorum(blockNumber, signers.GetAddressesAsSet()) {
 		// 🆕 计算基于人数的法定人数要求（1/2多数原则）
 		requiredQuorumCount := validator.GetQuorumSizeByValidatorCount(len(validators))
-
+		
+		// 🆕 详细计算和显示法定人数要求
+		quorumCalculation := fmt.Sprintf("总验证者数: %d, 1/2多数原则: %d/2 = %d, 最小要求: %d", 
+			len(validators), len(validators), len(validators)/2, requiredQuorumCount)
+		
 		logger.Error("Signature.Verify - 法定人数不足",
 			"blockNumber", blockNumber,
 			"signersCount", len(signers),
 			"requiredQuorumCount", requiredQuorumCount,
 			"totalValidators", len(validators),
+			"quorumCalculation", quorumCalculation,
 			"signerAddresses", signers.GetAddresses())
 
 		// 🆕 详细记录每个签名者的信息
@@ -332,7 +337,9 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 
 		logger.Error("🚨 区块验证失败 - 法定人数不足，程序将终止",
 			"blockNumber", blockNumber,
-			"reason", "quorum not reached")
+			"reason", "quorum not reached",
+			"quorumDetails", fmt.Sprintf("当前签名数: %d, 需要签名数: %d, 差距: %d", 
+				len(signers), requiredQuorumCount, requiredQuorumCount-len(signers)))
 
 		// 🆕 程序终止
 		os.Exit(1)
@@ -367,7 +374,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 				"publicKeyBytes", fmt.Sprintf("%x", pubKeyBytes),
 				"publicKeyLength", len(pubKeyBytes))
 		} else {
-			logger.Warn("⚠️ Signature.Verify - 验证者缺少BLS公钥，将尝试网络获取",
+			logger.Debug("⚠️ Signature.Verify - 验证者缺少BLS公钥，将尝试网络获取",
 				"index", i,
 				"address", validator.Address.String(),
 				"votingPower", validator.VotingPower.String(),
@@ -395,10 +402,10 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 				if dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
 					myAddress := types.Address(dposInstance.key.Address())
 					if err := dposInstance.runtime.networkIntegration.RequestBLSKey(address, myAddress); err != nil {
-						logger.Warn("⚠️ 发送BLS公钥请求失败",
-							"blockNumber", blockNumber,
-							"address", address.String(),
-							"error", err)
+											logger.Debug("⚠️ 发送BLS公钥请求失败",
+						"blockNumber", blockNumber,
+						"address", address.String(),
+						"error", err)
 					} else {
 						logger.Info("📨 BLS公钥网络请求已发送",
 							"blockNumber", blockNumber,
@@ -430,7 +437,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 									"address", validator.Address.String(),
 									"blsKeyLength", len(cachedBLSKey))
 							} else {
-								logger.Warn("⚠️ 解析获取的BLS公钥失败",
+								logger.Debug("⚠️ 解析获取的BLS公钥失败",
 									"blockNumber", blockNumber,
 									"address", validator.Address.String(),
 									"error", err)
@@ -457,7 +464,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 	}
 
 	// 🆕 验证签名数据本身
-	logger.Info("🔍 聚合签名数据检查",
+	logger.Debug("🔍 聚合签名数据检查",
 		"blockNumber", blockNumber,
 		"aggregatedSignatureLength", len(s.AggregatedSignature),
 		"aggregatedSignatureBytes", fmt.Sprintf("%x", s.AggregatedSignature),
@@ -467,17 +474,17 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		"signatureType", fmt.Sprintf("%T", aggs))
 
 	// 🆕 添加BLS签名验证前的调试信息
-	logger.Info("🔍 BLS签名验证前准备",
+	logger.Debug("🔍 BLS签名验证前准备",
 		"blockNumber", blockNumber,
 		"blsPublicKeysCount", len(blsPublicKeys),
 		"hash", hash.String(),
 		"domain", fmt.Sprintf("%x", domain))
 
 	// 🆕 添加签名顺序验证日志
-	logger.Info("🔍 验证签名顺序与公钥顺序匹配:")
+	logger.Debug("🔍 验证签名顺序与公钥顺序匹配:")
 	for i, pubKey := range blsPublicKeys {
 		if pubKey != nil {
-			logger.Info("🔍 验证用BLS公钥",
+			logger.Debug("🔍 验证用BLS公钥",
 				"index", i,
 				"address", signers[i].Address.String(),
 				"pubKeyBytes", fmt.Sprintf("%x", pubKey.Marshal()))
@@ -485,7 +492,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 			// 检查公钥是否与验证者地址匹配
 			if i < len(signers) {
 				delegate := signers[i]
-				logger.Info("🔗 签名顺序验证",
+				logger.Debug("🔗 签名顺序验证",
 					"signatureIndex", i,
 					"expectedAddress", delegate.Address.String(),
 					"hasBlsKey", delegate.BlsKey != nil)
@@ -494,12 +501,12 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 	}
 
 	// 🆕 显示位图对应的签名顺序
-	logger.Info("🔗 位图对应的签名顺序:")
+	logger.Debug("🔗 位图对应的签名顺序:")
 	for i := uint64(0); i < uint64(len(validators)); i++ {
 		if s.Bitmap.IsSet(i) {
 			if int(i) < len(validators) {
 				validator := validators[int(i)]
-				logger.Info("位图顺序",
+				logger.Debug("位图顺序",
 					"bitmapIndex", i,
 					"validatorAddress", validator.Address.String(),
 					"blsKeyExists", validator.BlsKey != nil)
@@ -509,7 +516,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 
 	// 执行BLS签名验证
 	isValid := aggs.VerifyAggregated(blsPublicKeys, hash[:], domain)
-	logger.Info("🔍 BLS签名验证结果",
+	logger.Debug("🔍 BLS签名验证结果",
 		"blockNumber", blockNumber,
 		"isValid", isValid,
 		"aggregatedSignature", fmt.Sprintf("%x", s.AggregatedSignature))
@@ -536,7 +543,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		for i, pubKey := range blsPublicKeys {
 			if pubKey != nil {
 				pubKeyBytes := pubKey.Marshal()
-				logger.Info("Signature.Verify - BLS公钥信息",
+				logger.Debug("Signature.Verify - BLS公钥信息",
 					"index", i,
 					"address", signers[i].Address.String(),
 					"publicKeyBytes", fmt.Sprintf("%x", pubKeyBytes),
