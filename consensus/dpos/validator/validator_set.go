@@ -94,15 +94,16 @@ func (vs validatorSet) HasQuorum(blockNumber uint64, signers map[types.Address]s
 		}
 	}
 
-	quorumSize := getQuorumSize(blockNumber, vs.totalVotingPower)
-	hasQuorum := aggregateVotingPower.Cmp(quorumSize) >= 0
+	// 使用基于人数的法定人数计算
+	requiredQuorumCount := GetQuorumSizeByValidatorCount(vs.Len())
+	hasQuorum := len(signers) >= requiredQuorumCount
 
-	vs.logger.Debug("HasQuorum - 法定人数验证结果",
+	vs.logger.Debug("HasQuorum - 法定人数验证结果（基于人数）",
 		"blockNumber", blockNumber,
 		"signers", signerDetails,
-		"aggregateVotingPower", aggregateVotingPower,
-		"quorumSize", quorumSize,
-		"totalVotingPower", vs.totalVotingPower,
+		"signerCount", len(signers),
+		"requiredQuorumCount", requiredQuorumCount,
+		"totalValidators", vs.Len(),
 		"hasQuorum", hasQuorum)
 
 	return hasQuorum
@@ -134,8 +135,19 @@ func (vs validatorSet) TotalVotingPower() big.Int {
 	return *vs.totalVotingPower
 }
 
-// getQuorumSize calculates quorum size as 2/3 super-majority of provided total voting power
-func getQuorumSize(blockNumber uint64, totalVotingPower *big.Int) *big.Int {
+// GetQuorumSizeByValidatorCount calculates quorum size as 1/2 majority based on validator count
+// Note: This function is modified to work with validator count instead of voting power
+func GetQuorumSizeByValidatorCount(validatorCount int) int {
+	// 使用1/2多数原则，但至少需要1个签名
+	minRequired := validatorCount / 2
+	if minRequired < 1 {
+		minRequired = 1
+	}
+	return minRequired
+}
+
+// GetQuorumSize calculates quorum size as 2/3 super-majority of provided total voting power
+func GetQuorumSize(blockNumber uint64, totalVotingPower *big.Int) *big.Int {
 	quorum := new(big.Int)
 	quorum.Mul(totalVotingPower, big.NewInt(2))
 

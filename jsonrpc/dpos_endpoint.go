@@ -2453,11 +2453,13 @@ func (d *DPOS) extractVotingInfoFromDelegates(delegates validator.AccountSet) []
 }
 
 // mergeStakingInfo merges static staking info with dynamic voting info
+// 🆕 修复：按受托人地址去重，避免重复累加投票权重
 func (d *DPOS) mergeStakingInfo(static []*dpos.StakeInfo, dynamic []*dpos.StakeInfo) []*dpos.StakeInfo {
 	d.logger.Info("Merging staking info", "staticCount", len(static), "dynamicCount", len(dynamic))
 
-	// Create a map to track processed addresses to avoid duplicates
-	processed := make(map[string]bool)
+	// 🆕 修复：按受托人地址去重，而不是按staker-delegate组合去重
+	// 这样可以避免同一个受托人的投票信息被重复累加
+	delegateMap := make(map[types.Address]*dpos.StakeInfo)
 	var merged []*dpos.StakeInfo
 
 	// 🆕 修复：让动态投票数据优先，确保正确的委托关系
@@ -2468,11 +2470,10 @@ func (d *DPOS) mergeStakingInfo(static []*dpos.StakeInfo, dynamic []*dpos.StakeI
 			stake.Amount != nil &&
 			stake.Amount.Cmp(big.NewInt(0)) > 0 {
 
-			key := fmt.Sprintf("%s-%s", stake.Staker.String(), stake.Delegate.String())
-			if !processed[key] {
-				merged = append(merged, stake)
-				processed[key] = true
-				d.logger.Info("✅ Added dynamic voting stake (priority)",
+			// 🆕 修复：按受托人地址去重，优先使用动态投票数据
+			if existing, exists := delegateMap[stake.Delegate]; !exists || stake.Amount.Cmp(existing.Amount) > 0 {
+				delegateMap[stake.Delegate] = stake
+				d.logger.Info("✅ Added/Updated dynamic voting stake (priority)",
 					"staker", stake.Staker.String(),
 					"delegate", stake.Delegate.String(),
 					"amount", stake.Amount.String())
@@ -2487,20 +2488,31 @@ func (d *DPOS) mergeStakingInfo(static []*dpos.StakeInfo, dynamic []*dpos.StakeI
 			stake.Amount != nil &&
 			stake.Amount.Cmp(big.NewInt(0)) > 0 {
 
-			key := fmt.Sprintf("%s-%s", stake.Staker.String(), stake.Delegate.String())
-			if !processed[key] {
-				// 允许自委托的质押数据（创世配置中的验证者通常是自委托的）
-				merged = append(merged, stake)
-				processed[key] = true
-				d.logger.Info("✅ Added static stake (including self-delegation)",
+			// 🆕 修复：按受托人地址去重，如果动态数据中没有该受托人，则添加静态数据
+			if existing, exists := delegateMap[stake.Delegate]; !exists {
+				delegateMap[stake.Delegate] = stake
+				d.logger.Info("✅ Added static stake (delegate not in dynamic data)",
 					"staker", stake.Staker.String(),
 					"delegate", stake.Delegate.String(),
 					"amount", stake.Amount.String())
+			} else {
+				d.logger.Info("⚠️ Skipped static stake (delegate already in dynamic data)",
+					"staker", stake.Staker.String(),
+					"delegate", stake.Delegate.String(),
+					"amount", stake.Amount.String(),
+					"existingAmount", existing.Amount.String())
 			}
 		}
 	}
 
-	d.logger.Info("✅ Merged staking info completed", "totalCount", len(merged))
+	// 🆕 修复：将去重后的数据转换为切片
+	for _, stake := range delegateMap {
+		merged = append(merged, stake)
+	}
+
+	d.logger.Info("✅ Merged staking info completed (deduplicated by delegate)",
+		"totalCount", len(merged),
+		"uniqueDelegates", len(delegateMap))
 	return merged
 }
 

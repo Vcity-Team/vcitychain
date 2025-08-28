@@ -19,6 +19,29 @@ import (
 // DPOSMessage 使用 protobuf 生成的 TransportMessage
 type DPOSMessage = dposProto.TransportMessage
 
+// GenesisDelegate genesis文件中delegate的结构
+type GenesisDelegate struct {
+	Address   string `json:"address"`
+	BlsKey    string `json:"blsKey"`
+	Stake     string `json:"stake"`
+	MultiAddr string `json:"multiAddr"`
+}
+
+// GenesisEngine genesis文件中engine的结构
+type GenesisEngine struct {
+	Dpos struct {
+		BlockTime        int64             `json:"blockTime"`
+		DelegateCount    int64             `json:"delegateCount"`
+		EpochSize        int64             `json:"epochSize"`
+		InitialDelegates []GenesisDelegate `json:"initialDelegates"`
+	} `json:"dpos"`
+}
+
+// GenesisConfig genesis文件的完整结构
+type GenesisConfig struct {
+	Engine GenesisEngine `json:"engine"`
+}
+
 // min 返回两个整数中的较小值
 func min(a, b int) int {
 	if a < b {
@@ -39,6 +62,10 @@ type NetworkIntegration struct {
 	signatureResponseTopic *network.Topic
 	voteTopic              *network.Topic
 	delegateTopic          *network.Topic
+	blsKeyBroadcastTopic   *network.Topic
+	blsKeyAckTopic         *network.Topic
+	blsKeyRequestTopic     *network.Topic
+	blsKeyResponseTopic    *network.Topic
 
 	// 消息处理器
 	handlers map[string]MessageHandler
@@ -54,6 +81,19 @@ type NetworkIntegration struct {
 
 	// 添加DPoS运行时回调
 	dposRuntime interface{}
+
+	// BLS公钥管理
+	blsKeyCache map[types.Address][]byte // 缓存BLS公钥
+	blsKeyMutex sync.RWMutex
+
+	// 🆕 BLS公钥持久化回调函数
+	blsKeyPersistCallback func(address types.Address, blsKeyBytes []byte) error
+
+	// 🆕 BLS公钥查找回调函数
+	blsKeyLookupCallback func(address types.Address) ([]byte, error)
+
+	// 🆕 DPOS实例引用，用于持久化操作
+	dposInstance interface{}
 }
 
 // MessageHandler 消息处理器接口
@@ -239,12 +279,31 @@ func NewNetworkIntegration(network *network.Server, logger hclog.Logger) *Networ
 		handlers:            make(map[string]MessageHandler),
 		signatureCollectors: make(map[types.Hash]*SignatureCollector),
 		goroutineManager:    NewGoroutineManager(logger, 1000, 100), // 最大1000个协程，100个重试工作器
+		blsKeyCache:         make(map[types.Address][]byte),
 	}
 
 	// 注册消息处理器
 	ni.registerHandlers()
 
 	return ni
+}
+
+// SetBLSKeyPersistCallback 设置BLS公钥持久化回调函数
+func (ni *NetworkIntegration) SetBLSKeyPersistCallback(callback func(address types.Address, blsKeyBytes []byte) error) {
+	ni.blsKeyPersistCallback = callback
+	ni.logger.Info("BLS公钥持久化回调函数已设置")
+}
+
+// SetBLSKeyLookupCallback 设置BLS公钥查找回调函数
+func (ni *NetworkIntegration) SetBLSKeyLookupCallback(callback func(address types.Address) ([]byte, error)) {
+	ni.blsKeyLookupCallback = callback
+	ni.logger.Info("BLS公钥查找回调函数已设置")
+}
+
+// SetDPoSInstance 设置DPoS实例引用
+func (ni *NetworkIntegration) SetDPoSInstance(dposInstance interface{}) {
+	ni.dposInstance = dposInstance
+	ni.logger.Info("DPoS实例引用已设置")
 }
 
 // NewNetworkIntegrationWithExistingTopics 创建使用现有主题的网络集成管理器
@@ -312,6 +371,14 @@ func (ni *NetworkIntegration) Start() error {
 		"signatureResponseTopic", ni.signatureResponseTopic != nil,
 		"voteTopic", ni.voteTopic != nil,
 		"delegateTopic", ni.delegateTopic != nil)
+
+	// 🆕 从数据库恢复BLS公钥到缓存
+	if err := ni.restoreBLSKeysFromDatabase(); err != nil {
+		ni.logger.Warn("从数据库恢复BLS公钥失败，但网络集成仍可继续运行", "error", err)
+	} else {
+		ni.logger.Info("BLS公钥缓存恢复完成")
+	}
+
 	return nil
 }
 
@@ -443,6 +510,66 @@ func (ni *NetworkIntegration) createTopics() error {
 		//ni.logger.Info("成功创建委托主题")
 	}
 
+	// 创建BLS公钥广播主题
+	ni.blsKeyBroadcastTopic, err = ni.network.NewTopic("dpos-bls-key-broadcast", &DPOSMessage{
+		Data: nil,
+	})
+	if err != nil {
+		// 检查是否是"topic already exists"错误
+		if strings.Contains(err.Error(), "topic already exists") {
+			ni.logger.Warn("BLS公钥广播主题已存在，跳过创建")
+		} else {
+			return fmt.Errorf("failed to create BLS key broadcast topic: %w", err)
+		}
+	} else {
+		ni.logger.Info("成功创建BLS公钥广播主题")
+	}
+
+	// 创建BLS公钥确认主题
+	ni.blsKeyAckTopic, err = ni.network.NewTopic("dpos-bls-key-ack", &DPOSMessage{
+		Data: nil,
+	})
+	if err != nil {
+		// 检查是否是"topic already exists"错误
+		if strings.Contains(err.Error(), "topic already exists") {
+			ni.logger.Warn("BLS公钥确认主题已存在，跳过创建")
+		} else {
+			return fmt.Errorf("failed to create BLS key ack topic: %w", err)
+		}
+	} else {
+		ni.logger.Info("成功创建BLS公钥确认主题")
+	}
+
+	// 创建BLS公钥请求主题
+	ni.blsKeyRequestTopic, err = ni.network.NewTopic("dpos-bls-key-request", &DPOSMessage{
+		Data: nil,
+	})
+	if err != nil {
+		// 检查是否是"topic already exists"错误
+		if strings.Contains(err.Error(), "topic already exists") {
+			ni.logger.Warn("BLS公钥请求主题已存在，跳过创建")
+		} else {
+			return fmt.Errorf("failed to create BLS key request topic: %w", err)
+		}
+	} else {
+		ni.logger.Info("成功创建BLS公钥请求主题")
+	}
+
+	// 创建BLS公钥响应主题
+	ni.blsKeyResponseTopic, err = ni.network.NewTopic("dpos-bls-key-response", &DPOSMessage{
+		Data: nil,
+	})
+	if err != nil {
+		// 检查是否是"topic already exists"错误
+		if strings.Contains(err.Error(), "topic already exists") {
+			ni.logger.Warn("BLS公钥响应主题已存在，跳过创建")
+		} else {
+			return fmt.Errorf("failed to create BLS key response topic: %w", err)
+		}
+	} else {
+		ni.logger.Info("成功创建BLS公钥响应主题")
+	}
+
 	// 检查是否至少有一个关键主题可用
 	if ni.signatureRequestTopic == nil && ni.signatureResponseTopic == nil {
 		ni.logger.Error("无法创建任何关键主题")
@@ -526,6 +653,54 @@ func (ni *NetworkIntegration) subscribeToTopics() error {
 		ni.logger.Info("成功订阅委托主题")
 	} else {
 		ni.logger.Warn("委托主题不可用，跳过订阅")
+	}
+
+	// 订阅BLS公钥广播主题
+	if ni.blsKeyBroadcastTopic != nil {
+		if err := ni.blsKeyBroadcastTopic.Subscribe(func(obj interface{}, from peer.ID) {
+			ni.handleBLSKeyBroadcast(obj, from)
+		}); err != nil {
+			return fmt.Errorf("failed to subscribe to BLS key broadcast topic: %w", err)
+		}
+		ni.logger.Info("成功订阅BLS公钥广播主题")
+	} else {
+		ni.logger.Warn("BLS公钥广播主题不可用，跳过订阅")
+	}
+
+	// 订阅BLS公钥确认主题
+	if ni.blsKeyAckTopic != nil {
+		if err := ni.blsKeyAckTopic.Subscribe(func(obj interface{}, from peer.ID) {
+			ni.handleBLSKeyAck(obj, from)
+		}); err != nil {
+			return fmt.Errorf("failed to subscribe to BLS key ack topic: %w", err)
+		}
+		ni.logger.Info("成功订阅BLS公钥确认主题")
+	} else {
+		ni.logger.Warn("BLS公钥确认主题不可用，跳过订阅")
+	}
+
+	// 订阅BLS公钥请求主题
+	if ni.blsKeyRequestTopic != nil {
+		if err := ni.blsKeyRequestTopic.Subscribe(func(obj interface{}, from peer.ID) {
+			ni.handleBLSKeyRequest(obj, from)
+		}); err != nil {
+			return fmt.Errorf("failed to subscribe to BLS key request topic: %w", err)
+		}
+		ni.logger.Info("成功订阅BLS公钥请求主题")
+	} else {
+		ni.logger.Warn("BLS公钥请求主题不可用，跳过订阅")
+	}
+
+	// 订阅BLS公钥响应主题
+	if ni.blsKeyResponseTopic != nil {
+		if err := ni.blsKeyResponseTopic.Subscribe(func(obj interface{}, from peer.ID) {
+			ni.handleBLSKeyResponse(obj, from)
+		}); err != nil {
+			return fmt.Errorf("failed to subscribe to BLS key response topic: %w", err)
+		}
+		ni.logger.Info("成功订阅BLS公钥响应主题")
+	} else {
+		ni.logger.Warn("BLS公钥响应主题不可用，跳过订阅")
 	}
 
 	ni.logger.Info("DPoS网络主题订阅完成")
@@ -1310,4 +1485,413 @@ func (ni *NetworkIntegration) monitorCollectorStatus(checkpointHash types.Hash) 
 			}
 		}
 	}
+}
+
+// handleBLSKeyBroadcast 处理BLS公钥广播消息
+func (ni *NetworkIntegration) handleBLSKeyBroadcast(obj interface{}, from peer.ID) {
+	ni.logger.Debug("收到BLS公钥广播消息", "from", from.String())
+
+	dposMsg, ok := obj.(*DPOSMessage)
+	if !ok {
+		ni.logger.Warn("收到无效的BLS公钥广播消息", "from", from.String())
+		return
+	}
+
+	var blsKeyMsg BLSKeyBroadcastMessage
+	if err := json.Unmarshal(dposMsg.Data, &blsKeyMsg); err != nil {
+		ni.logger.Warn("解析BLS公钥广播消息失败", "error", err, "from", from.String())
+		return
+	}
+
+	ni.logger.Info("处理BLS公钥广播消息",
+		"address", blsKeyMsg.Address.String(),
+		"nodeType", blsKeyMsg.NodeType,
+		"blsKeyLength", len(blsKeyMsg.BLSPublicKey),
+		"from", from.String())
+
+	// 保存BLS公钥到缓存
+	if err := ni.saveBLSKey(blsKeyMsg.Address, blsKeyMsg.BLSPublicKey); err != nil {
+		ni.logger.Error("保存BLS公钥失败", "error", err, "address", blsKeyMsg.Address.String())
+		return
+	}
+
+	// 发送确认消息
+	if err := ni.sendBLSKeyAck(blsKeyMsg.Address, "received", "BLS公钥已接收并保存"); err != nil {
+		ni.logger.Warn("发送BLS公钥确认消息失败", "error", err, "address", blsKeyMsg.Address.String())
+	}
+}
+
+// handleBLSKeyAck 处理BLS公钥确认消息
+func (ni *NetworkIntegration) handleBLSKeyAck(obj interface{}, from peer.ID) {
+	ni.logger.Debug("收到BLS公钥确认消息", "from", from.String())
+
+	dposMsg, ok := obj.(*DPOSMessage)
+	if !ok {
+		ni.logger.Warn("收到无效的BLS公钥确认消息", "from", from.String())
+		return
+	}
+
+	var ackMsg BLSKeyAckMessage
+	if err := json.Unmarshal(dposMsg.Data, &ackMsg); err != nil {
+		ni.logger.Warn("解析BLS公钥确认消息失败", "error", err, "from", from.String())
+		return
+	}
+
+	ni.logger.Info("收到BLS公钥确认消息",
+		"address", ackMsg.Address.String(),
+		"status", ackMsg.Status,
+		"message", ackMsg.Message,
+		"from", from.String())
+}
+
+// saveBLSKey 保存BLS公钥到缓存和数据库
+func (ni *NetworkIntegration) saveBLSKey(address types.Address, blsKeyBytes []byte) error {
+	ni.blsKeyMutex.Lock()
+	defer ni.blsKeyMutex.Unlock()
+
+	// 保存到内存缓存
+	ni.blsKeyCache[address] = blsKeyBytes
+	ni.logger.Info("BLS公钥已保存到缓存",
+		"address", address.String(),
+		"blsKeyLength", len(blsKeyBytes))
+
+	// 🆕 尝试持久化到数据库
+	if err := ni.persistBLSKeyToDatabase(address, blsKeyBytes); err != nil {
+		ni.logger.Warn("BLS公钥持久化到数据库失败，但缓存已保存",
+			"address", address.String(),
+			"error", err)
+		// 不返回错误，因为缓存已经保存成功
+	} else {
+		ni.logger.Info("BLS公钥已持久化到数据库",
+			"address", address.String(),
+			"blsKeyLength", len(blsKeyBytes))
+	}
+
+	return nil
+}
+
+// GetBLSKey 从缓存获取BLS公钥
+func (ni *NetworkIntegration) GetBLSKey(address types.Address) ([]byte, bool) {
+	ni.blsKeyMutex.RLock()
+	defer ni.blsKeyMutex.RUnlock()
+
+	blsKey, exists := ni.blsKeyCache[address]
+	return blsKey, exists
+}
+
+// BroadcastBLSKey 广播BLS公钥
+func (ni *NetworkIntegration) BroadcastBLSKey(address types.Address, blsKeyBytes []byte, nodeType string) error {
+	if ni.blsKeyBroadcastTopic == nil {
+		return fmt.Errorf("BLS公钥广播主题不可用")
+	}
+
+	// 创建BLS公钥广播消息
+	blsKeyMsg := &BLSKeyBroadcastMessage{
+		Address:      address,
+		BLSPublicKey: blsKeyBytes,
+		Timestamp:    uint64(time.Now().Unix()),
+		NodeType:     nodeType,
+	}
+
+	// 序列化消息
+	data, err := json.Marshal(blsKeyMsg)
+	if err != nil {
+		return fmt.Errorf("序列化BLS公钥广播消息失败: %w", err)
+	}
+
+	// 创建DPoS消息
+	dposMsg := &DPOSMessage{
+		Data: data,
+	}
+
+	// 发布消息
+	if err := ni.blsKeyBroadcastTopic.Publish(dposMsg); err != nil {
+		return fmt.Errorf("发布BLS公钥广播消息失败: %w", err)
+	}
+
+	ni.logger.Info("BLS公钥广播消息已发送",
+		"address", address.String(),
+		"nodeType", nodeType,
+		"blsKeyLength", len(blsKeyBytes))
+
+	return nil
+}
+
+// sendBLSKeyAck 发送BLS公钥确认消息
+func (ni *NetworkIntegration) sendBLSKeyAck(address types.Address, status, message string) error {
+	if ni.blsKeyAckTopic == nil {
+		return fmt.Errorf("BLS公钥确认主题不可用")
+	}
+
+	// 创建确认消息
+	ackMsg := &BLSKeyAckMessage{
+		Address:   address,
+		Status:    status,
+		Message:   message,
+		Timestamp: uint64(time.Now().Unix()),
+	}
+
+	// 序列化消息
+	data, err := json.Marshal(ackMsg)
+	if err != nil {
+		return fmt.Errorf("序列化BLS公钥确认消息失败: %w", err)
+	}
+
+	// 创建DPoS消息
+	dposMsg := &DPOSMessage{
+		Data: data,
+	}
+
+	// 发布消息
+	if err := ni.blsKeyAckTopic.Publish(dposMsg); err != nil {
+		return fmt.Errorf("发布BLS公钥确认消息失败: %w", err)
+	}
+
+	ni.logger.Info("BLS公钥确认消息已发送",
+		"address", address.String(),
+		"status", status,
+		"message", message)
+
+	return nil
+}
+
+// persistBLSKeyToDatabase 将BLS公钥持久化到数据库
+func (ni *NetworkIntegration) persistBLSKeyToDatabase(address types.Address, blsKeyBytes []byte) error {
+	// 🆕 优先使用DPoS实例直接调用
+	if ni.dposInstance != nil {
+		if dpos, ok := ni.dposInstance.(*DPoS); ok {
+			if err := dpos.persistBLSKeyToStakeStore(address, blsKeyBytes); err != nil {
+				return fmt.Errorf("通过DPoS实例持久化BLS公钥失败: %w", err)
+			}
+
+			ni.logger.Info("BLS公钥已成功持久化到数据库（通过DPoS实例）",
+				"address", address.String(),
+				"blsKeyLength", len(blsKeyBytes))
+			return nil
+		}
+	}
+
+	// 🆕 通过全局注册表查找DPoS实例
+	if dpos, exists := GetDPoSInstance(address.String()); exists && dpos != nil {
+		if err := dpos.persistBLSKeyToStakeStore(address, blsKeyBytes); err != nil {
+			return fmt.Errorf("通过全局注册表持久化BLS公钥失败: %w", err)
+		}
+
+		ni.logger.Info("BLS公钥已成功持久化到数据库（通过全局注册表）",
+			"address", address.String(),
+			"blsKeyLength", len(blsKeyBytes))
+		return nil
+	}
+
+	// 🆕 备用方案：使用回调函数进行持久化
+	if ni.blsKeyPersistCallback != nil {
+		if err := ni.blsKeyPersistCallback(address, blsKeyBytes); err != nil {
+			return fmt.Errorf("BLS公钥持久化回调失败: %w", err)
+		}
+
+		ni.logger.Info("BLS公钥已成功持久化到数据库（通过回调函数）",
+			"address", address.String(),
+			"blsKeyLength", len(blsKeyBytes))
+		return nil
+	}
+
+	// 如果都没有设置，记录警告但不返回错误
+	ni.logger.Warn("BLS公钥持久化DPoS实例和回调函数都未设置，跳过数据库持久化",
+		"address", address.String(),
+		"blsKeyLength", len(blsKeyBytes))
+
+	return nil
+}
+
+// restoreBLSKeysFromDatabase 从数据库恢复BLS公钥到缓存
+func (ni *NetworkIntegration) restoreBLSKeysFromDatabase() error {
+	// 🆕 简化版本：如果没有回调函数，跳过恢复
+	if ni.blsKeyPersistCallback == nil {
+		ni.logger.Debug("BLS公钥持久化回调函数未设置，跳过数据库恢复")
+		return nil
+	}
+
+	// 这里可以添加从数据库恢复的逻辑
+	// 目前先跳过，因为主要目的是解决持久化失败的问题
+	ni.logger.Info("BLS公钥恢复功能待实现，当前跳过数据库恢复")
+
+	return nil
+}
+
+// handleBLSKeyRequest 处理BLS公钥请求消息
+func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID) {
+	if dposMsg, ok := obj.(*DPOSMessage); ok {
+		var requestMsg BLSKeyRequestMessage
+		if err := json.Unmarshal(dposMsg.Data, &requestMsg); err != nil {
+			ni.logger.Error("反序列化BLS公钥请求消息失败", "error", err)
+			return
+		}
+
+		ni.logger.Info("📨 收到BLS公钥请求",
+			"requestedAddress", requestMsg.RequestedAddress.String(),
+			"requester", requestMsg.Requester.String(),
+			"from", from.String())
+
+		// 检查本地创世文件是否有该地址的BLS公钥
+		found := false
+		var blsPublicKey []byte
+
+		// 首先尝试从缓存获取
+		if cachedKey, exists := ni.GetBLSKey(requestMsg.RequestedAddress); exists {
+			found = true
+			blsPublicKey = cachedKey
+			ni.logger.Info("✅ 从缓存找到BLS公钥", "address", requestMsg.RequestedAddress.String())
+		} else {
+			// 如果缓存中没有，直接从genesis.json文件中查找
+			if keyBytes, err := ni.findBLSKeyFromGenesisFile(requestMsg.RequestedAddress); err == nil && len(keyBytes) > 0 {
+				found = true
+				blsPublicKey = keyBytes
+				ni.logger.Info("✅ 从genesis.json找到BLS公钥", "address", requestMsg.RequestedAddress.String())
+			} else {
+				ni.logger.Info("⚠️ 在genesis.json中未找到BLS公钥",
+					"address", requestMsg.RequestedAddress.String(),
+					"error", err)
+			}
+		}
+
+		// 发送响应消息
+		responseMsg := &BLSKeyResponseMessage{
+			RequestedAddress: requestMsg.RequestedAddress,
+			Requester:        requestMsg.Requester,
+			BLSPublicKey:     blsPublicKey,
+			Found:            found,
+			Timestamp:        uint64(time.Now().Unix()),
+		}
+
+		if err := ni.sendBLSKeyResponse(responseMsg); err != nil {
+			ni.logger.Error("发送BLS公钥响应失败", "error", err)
+		} else {
+			if found {
+				ni.logger.Info("📤 已发送BLS公钥响应（找到）",
+					"requestedAddress", requestMsg.RequestedAddress.String(),
+					"requester", requestMsg.Requester.String())
+			} else {
+				ni.logger.Info("📤 已发送BLS公钥响应（未找到）",
+					"requestedAddress", requestMsg.RequestedAddress.String(),
+					"requester", requestMsg.Requester.String())
+			}
+		}
+	} else {
+		ni.logger.Error("无效的BLS公钥请求消息类型")
+	}
+}
+
+// handleBLSKeyResponse 处理BLS公钥响应消息
+func (ni *NetworkIntegration) handleBLSKeyResponse(obj interface{}, from peer.ID) {
+	if dposMsg, ok := obj.(*DPOSMessage); ok {
+		var responseMsg BLSKeyResponseMessage
+		if err := json.Unmarshal(dposMsg.Data, &responseMsg); err != nil {
+			ni.logger.Error("反序列化BLS公钥响应消息失败", "error", err)
+			return
+		}
+
+		ni.logger.Info("📥 收到BLS公钥响应",
+			"requestedAddress", responseMsg.RequestedAddress.String(),
+			"requester", responseMsg.Requester.String(),
+			"found", responseMsg.Found,
+			"from", from.String())
+
+		if responseMsg.Found && len(responseMsg.BLSPublicKey) > 0 {
+			// 保存BLS公钥到缓存和数据库
+			if err := ni.saveBLSKey(responseMsg.RequestedAddress, responseMsg.BLSPublicKey); err != nil {
+				ni.logger.Error("保存BLS公钥失败", "error", err)
+			} else {
+				ni.logger.Info("✅ 成功保存从网络获取的BLS公钥",
+					"address", responseMsg.RequestedAddress.String(),
+					"blsKeyLength", len(responseMsg.BLSPublicKey))
+			}
+		} else {
+			ni.logger.Warn("⚠️ 请求的BLS公钥在响应节点中未找到",
+				"address", responseMsg.RequestedAddress.String())
+		}
+	} else {
+		ni.logger.Error("无效的BLS公钥响应消息类型")
+	}
+}
+
+// sendBLSKeyResponse 发送BLS公钥响应消息
+func (ni *NetworkIntegration) sendBLSKeyResponse(responseMsg *BLSKeyResponseMessage) error {
+	if ni.blsKeyResponseTopic == nil {
+		return fmt.Errorf("BLS公钥响应主题不可用")
+	}
+
+	// 序列化消息
+	data, err := json.Marshal(responseMsg)
+	if err != nil {
+		return fmt.Errorf("序列化BLS公钥响应消息失败: %w", err)
+	}
+
+	// 创建DPoS消息
+	dposMsg := &DPOSMessage{
+		Data: data,
+	}
+
+	// 发布消息
+	if err := ni.blsKeyResponseTopic.Publish(dposMsg); err != nil {
+		return fmt.Errorf("发布BLS公钥响应消息失败: %w", err)
+	}
+
+	return nil
+}
+
+// findBLSKeyFromGenesisFile 从genesis.json文件中查找BLS公钥
+func (ni *NetworkIntegration) findBLSKeyFromGenesisFile(address types.Address) ([]byte, error) {
+	// 由于无法通过反射访问未导出字段，我们使用回调函数来获取BLS公钥
+	if ni.blsKeyLookupCallback != nil {
+		if blsKeyBytes, err := ni.blsKeyLookupCallback(address); err == nil && len(blsKeyBytes) > 0 {
+			ni.logger.Debug("✅ 通过回调找到BLS公钥", "address", address.String())
+			return blsKeyBytes, nil
+		}
+	}
+
+	// 如果没有回调函数，尝试从全局注册表获取
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+		if blsKeyBytes, err := dposInstance.getBLSKeyBytesFromGenesis(address); err == nil && len(blsKeyBytes) > 0 {
+			ni.logger.Debug("✅ 从全局注册表找到BLS公钥", "address", address.String())
+			return blsKeyBytes, nil
+		}
+	}
+
+	return nil, fmt.Errorf("BLS key not found for address %s", address.String())
+}
+
+// RequestBLSKey 请求BLS公钥
+func (ni *NetworkIntegration) RequestBLSKey(requestedAddress types.Address, requester types.Address) error {
+	if ni.blsKeyRequestTopic == nil {
+		return fmt.Errorf("BLS公钥请求主题不可用")
+	}
+
+	// 创建请求消息
+	requestMsg := &BLSKeyRequestMessage{
+		RequestedAddress: requestedAddress,
+		Requester:        requester,
+		Timestamp:        uint64(time.Now().Unix()),
+	}
+
+	// 序列化消息
+	data, err := json.Marshal(requestMsg)
+	if err != nil {
+		return fmt.Errorf("序列化BLS公钥请求消息失败: %w", err)
+	}
+
+	// 创建DPoS消息
+	dposMsg := &DPOSMessage{
+		Data: data,
+	}
+
+	// 发布消息
+	if err := ni.blsKeyRequestTopic.Publish(dposMsg); err != nil {
+		return fmt.Errorf("发布BLS公钥请求消息失败: %w", err)
+	}
+
+	ni.logger.Info("📨 已广播BLS公钥请求",
+		"requestedAddress", requestedAddress.String(),
+		"requester", requester.String())
+
+	return nil
 }

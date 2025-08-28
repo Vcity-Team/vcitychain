@@ -66,9 +66,45 @@ type NetworkMessage struct {
 	Data interface{} `json:"data"`
 }
 
-// MessageType 消息类型常量
+// BLS公钥广播消息
+type BLSKeyBroadcastMessage struct {
+	Address      types.Address `json:"address"`      // 节点地址
+	BLSPublicKey []byte        `json:"blsPublicKey"` // BLS公钥字节
+	Timestamp    uint64        `json:"timestamp"`    // 时间戳
+	NodeType     string        `json:"nodeType"`     // 节点类型："genesis", "sync"
+}
+
+// BLS公钥确认消息
+type BLSKeyAckMessage struct {
+	Address   types.Address `json:"address"`   // 确认的地址
+	Status    string        `json:"status"`    // 状态："received", "saved"
+	Message   string        `json:"message"`   // 状态消息
+	Timestamp uint64        `json:"timestamp"` // 时间戳
+}
+
+// BLS公钥请求消息
+type BLSKeyRequestMessage struct {
+	RequestedAddress types.Address `json:"requestedAddress"` // 请求的地址
+	Requester        types.Address `json:"requester"`        // 请求者地址
+	Timestamp        uint64        `json:"timestamp"`        // 时间戳
+}
+
+// BLS公钥响应消息
+type BLSKeyResponseMessage struct {
+	RequestedAddress types.Address `json:"requestedAddress"` // 被请求的地址
+	Requester        types.Address `json:"requester"`        // 请求者地址
+	BLSPublicKey     []byte        `json:"blsPublicKey"`     // BLS公钥（如果有的话）
+	Found            bool          `json:"found"`            // 是否找到公钥
+	Timestamp        uint64        `json:"timestamp"`        // 时间戳
+}
+
+// 消息类型常量
 const (
 	VoteMessageType     = "vote"
 	DelegateMessageType = "delegate"
 	IBFTMessageType     = "ibft"
+	BLSKeyBroadcastType = "bls_key_broadcast"
+	BLSKeyAckType       = "bls_key_ack"
+	BLSKeyRequestType   = "bls_key_request"
+	BLSKeyResponseType  = "bls_key_response"
 )

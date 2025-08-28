@@ -1,7 +1,6 @@
 package validator
 
 import (
-	"math/big"
 	"testing"
 
 	"github.com/Vcity-Team/vcitychain/types"
@@ -32,22 +31,22 @@ func TestValidatorSet_HasQuorum(t *testing.T) {
 	require.False(t, vs.HasQuorum(1, signers))
 }
 
-func TestValidatorSet_getQuorumSize(t *testing.T) {
+func TestValidatorSet_GetQuorumSizeByValidatorCount(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		totalVotingPower   int64
-		expectedQuorumSize int64
+		validatorCount     int
+		expectedQuorumSize int
 	}{
-		{10, 7},
-		{12, 8},
-		{13, 9},
-		{50, 34},
-		{100, 67},
+		{1, 1}, // 1个验证者需要1个签名
+		{2, 1}, // 2个验证者需要1个签名 (2/2 = 1)
+		{3, 2}, // 3个验证者需要2个签名 (3/2 = 1.5 → 2)
+		{4, 2}, // 4个验证者需要2个签名 (4/2 = 2)
+		{5, 3}, // 5个验证者需要3个签名 (5/2 = 2.5 → 3)
 	}
 
 	for _, c := range cases {
-		quorumSize := getQuorumSize(1, big.NewInt(c.totalVotingPower))
-		require.Equal(t, c.expectedQuorumSize, quorumSize.Int64())
+		quorumSize := GetQuorumSizeByValidatorCount(c.validatorCount)
+		require.Equal(t, c.expectedQuorumSize, quorumSize)
 	}
 }

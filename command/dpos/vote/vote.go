@@ -257,7 +257,7 @@ func voteForCandidate(client *jsonrpc.Client, voter, candidate string, amount *b
 		voter,
 		candidate,
 		amount.String(),
-		privateKey, // 添加私钥参数
+		// 注意：dpos_stake 只支持 3 个参数，不包括私钥
 	})
 	if err == nil && result != nil {
 		fmt.Printf("✅ 方法2成功: dpos_stake\n")
@@ -298,38 +298,54 @@ func callVoteRPCMethod(client *jsonrpc.Client, method string, methodParams []int
 	fmt.Printf("📡 调用RPC方法: %s\n", method)
 	fmt.Printf("📋 方法参数: %v\n", methodParams)
 
-	var result interface{}
+	// 🆕 修复：直接使用HTTP方法，避免umbracle库的bug
+	// 从节点日志看，client.Call方法传递了错误的参数 [null]
+	// 而HTTP回退方法工作正常，所以直接使用HTTP方法
+	fmt.Printf("🔄 直接使用HTTP方法，避免client.Call的bug...\n")
 
-	// Try to call the method using the client's Call method
-	fmt.Printf("🔄 尝试使用client.Call方法...\n")
-	err := client.Call(method, methodParams, &result)
-	if err != nil {
-		fmt.Printf("❌ client.Call失败: %v\n", err)
-		fmt.Printf("🔄 尝试HTTP回退方法...\n")
+	fallbackResult, fallbackErr := callVoteRPCMethodHTTP(method, methodParams)
+	if fallbackErr != nil {
+		fmt.Printf("❌ HTTP方法失败: %v\n", fallbackErr)
+		return nil, fmt.Errorf("HTTP method %s failed: %w", method, fallbackErr)
+	}
+	fmt.Printf("✅ HTTP方法成功\n")
+	return fallbackResult, nil
 
-		// If the client.Call fails, try direct HTTP request as fallback
-		// This is to work around potential issues with the umbracle/ethgo/jsonrpc library
-		fallbackResult, fallbackErr := callVoteRPCMethodHTTP(method, methodParams)
-		if fallbackErr != nil {
-			fmt.Printf("❌ HTTP回退方法也失败了: %v\n", fallbackErr)
-			return nil, fmt.Errorf("RPC method %s failed: %w (fallback also failed: %v)", method, err, fallbackErr)
+	// 注释掉有问题的client.Call方法
+	/*
+		var result interface{}
+
+		// Try to call the method using the client's Call method
+		fmt.Printf("🔄 尝试使用client.Call方法...\n")
+		err := client.Call(method, methodParams, &result)
+		if err != nil {
+			fmt.Printf("❌ client.Call失败: %v\n", err)
+			fmt.Printf("🔄 尝试HTTP回退方法...\n")
+
+			// If the client.Call fails, try direct HTTP request as fallback
+			// This is to work around potential issues with the umbracle/ethgo/jsonrpc library
+			fallbackResult, fallbackErr := callVoteRPCMethodHTTP(method, methodParams)
+			if fallbackErr != nil {
+				fmt.Printf("❌ HTTP回退方法也失败了: %v\n", fallbackErr)
+				return nil, fmt.Errorf("RPC method %s failed: %w (fallback also failed: %v)", method, err, fallbackErr)
+			}
+			fmt.Printf("✅ HTTP回退方法成功\n")
+			return fallbackResult, nil
 		}
-		fmt.Printf("✅ HTTP回退方法成功\n")
-		return fallbackResult, nil
-	}
 
-	fmt.Printf("✅ client.Call方法成功\n")
-	fmt.Printf("📊 原始结果: %v\n", result)
+		fmt.Printf("✅ client.Call方法成功\n")
+		fmt.Printf("📊 原始结果: %v\n", result)
 
-	// Parse the result
-	parsedResult, parseErr := parseVoteResult(result, method)
-	if parseErr != nil {
-		fmt.Printf("❌ 解析结果失败: %v\n", parseErr)
-	} else {
-		fmt.Printf("✅ 结果解析成功\n")
-	}
+		// Parse the result
+		parsedResult, parseErr := parseVoteResult(result, method)
+		if parseErr != nil {
+			fmt.Printf("❌ 解析结果失败: %v\n", parseErr)
+		} else {
+			fmt.Printf("✅ 结果解析成功\n")
+		}
 
-	return parsedResult, parseErr
+		return parsedResult, parseErr
+	*/
 }
 
 // callVoteRPCMethodHTTP makes a direct HTTP request to bypass potential umbracle library issues

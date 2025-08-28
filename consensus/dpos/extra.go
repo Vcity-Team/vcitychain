@@ -3,8 +3,11 @@ package dpos
 import (
 	"fmt"
 	"math/big"
+	"os"
+	"time"
 
 	"github.com/Vcity-Team/vcitychain/bls"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/bitmap"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/types"
@@ -161,8 +164,11 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 	}
 
 	if err := i.Committed.Verify(blockNumber, validators, checkpointHash, domain, logger); err != nil {
-		return fmt.Errorf("failed to verify signatures for block %d (proposal hash %s): %w",
-			blockNumber, checkpointHash, err)
+		logger.Error("🚨 区块签名验证失败，程序将终止",
+			"blockNumber", blockNumber,
+			"proposalHash", checkpointHash.String(),
+			"error", err)
+		os.Exit(1)
 	}
 
 	parentExtra, err := GetIbftExtra(parent.ExtraData)
@@ -235,7 +241,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 // (in order to be able to determine identities of each signer)
 type Signature struct {
 	AggregatedSignature []byte
-	Bitmap              []byte
+	Bitmap              bitmap.Bitmap
 }
 
 // MarshalRLPWith marshals Signature object into RLP format
@@ -247,10 +253,10 @@ func (s *Signature) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 		committed.Set(ar.NewBytes(s.AggregatedSignature))
 	}
 
-	if s.Bitmap == nil {
+	if len(s.Bitmap) == 0 {
 		committed.Set(ar.NewNull())
 	} else {
-		committed.Set(ar.NewBytes(s.Bitmap))
+		committed.Set(ar.NewBytes([]byte(s.Bitmap)))
 	}
 
 	return committed
@@ -273,10 +279,12 @@ func (s *Signature) UnmarshalRLPWith(v *fastrlp.Value) error {
 		return err
 	}
 
-	s.Bitmap, err = vals[1].GetBytes(nil)
+	var bitmapBytes []byte
+	bitmapBytes, err = vals[1].GetBytes(nil)
 	if err != nil {
 		return err
 	}
+	s.Bitmap = bitmap.Bitmap(bitmapBytes)
 
 	return nil
 }
@@ -303,10 +311,31 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 
 	validatorSet := validator.NewValidatorSet(validators, logger)
 	if !validatorSet.HasQuorum(blockNumber, signers.GetAddressesAsSet()) {
+		// 🆕 计算基于人数的法定人数要求（1/2多数原则）
+		requiredQuorumCount := validator.GetQuorumSizeByValidatorCount(len(validators))
+
 		logger.Error("Signature.Verify - 法定人数不足",
 			"blockNumber", blockNumber,
-			"signersCount", len(signers))
-		return fmt.Errorf("quorum not reached")
+			"signersCount", len(signers),
+			"requiredQuorumCount", requiredQuorumCount,
+			"totalValidators", len(validators),
+			"signerAddresses", signers.GetAddresses())
+
+		// 🆕 详细记录每个签名者的信息
+		for i, signer := range signers {
+			logger.Info("🔍 签名者详情",
+				"index", i,
+				"address", signer.Address.String(),
+				"votingPower", signer.VotingPower.String(),
+				"isActive", signer.IsActive)
+		}
+
+		logger.Error("🚨 区块验证失败 - 法定人数不足，程序将终止",
+			"blockNumber", blockNumber,
+			"reason", "quorum not reached")
+
+		// 🆕 程序终止
+		os.Exit(1)
 	}
 
 	logger.Debug("Signature.Verify - 法定人数验证通过，开始验证BLS签名")
@@ -319,7 +348,10 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		"bitmapLength", len(s.Bitmap),
 		"bitmapHex", fmt.Sprintf("%x", s.Bitmap))
 
+	// 🆕 检查并获取缺失的BLS公钥
 	blsPublicKeys := make([]*bls.PublicKey, len(signers))
+	missingBLSKeys := make([]types.Address, 0)
+
 	for i, validator := range signers {
 		blsPublicKeys[i] = validator.BlsKey
 
@@ -335,12 +367,78 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 				"publicKeyBytes", fmt.Sprintf("%x", pubKeyBytes),
 				"publicKeyLength", len(pubKeyBytes))
 		} else {
-			logger.Error("❌ Signature.Verify - 验证者缺少BLS公钥",
+			logger.Warn("⚠️ Signature.Verify - 验证者缺少BLS公钥，将尝试网络获取",
 				"index", i,
 				"address", validator.Address.String(),
 				"votingPower", validator.VotingPower.String(),
 				"isActive", validator.IsActive,
 				"blsKeyExists", false)
+			missingBLSKeys = append(missingBLSKeys, validator.Address)
+		}
+	}
+
+	// 🆕 如果有缺失的BLS公钥，尝试网络获取
+	if len(missingBLSKeys) > 0 {
+		logger.Info("🔍 发现缺失的BLS公钥，尝试网络获取",
+			"blockNumber", blockNumber,
+			"missingCount", len(missingBLSKeys),
+			"missingAddresses", missingBLSKeys)
+
+		// 尝试从全局注册表获取DPoS实例并请求BLS公钥
+		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+			for _, address := range missingBLSKeys {
+				logger.Info("📨 发起BLS公钥网络请求",
+					"blockNumber", blockNumber,
+					"address", address.String())
+
+				// 发起网络请求
+				if dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
+					myAddress := types.Address(dposInstance.key.Address())
+					if err := dposInstance.runtime.networkIntegration.RequestBLSKey(address, myAddress); err != nil {
+						logger.Warn("⚠️ 发送BLS公钥请求失败",
+							"blockNumber", blockNumber,
+							"address", address.String(),
+							"error", err)
+					} else {
+						logger.Info("📨 BLS公钥网络请求已发送",
+							"blockNumber", blockNumber,
+							"address", address.String())
+					}
+				}
+			}
+
+			// 等待一段时间让网络请求完成
+			logger.Info("⏳ 等待BLS公钥网络响应",
+				"blockNumber", blockNumber,
+				"waitTime", "3秒")
+			time.Sleep(3 * time.Second)
+
+			// 重新检查BLS公钥
+			logger.Info("🔍 重新检查BLS公钥状态",
+				"blockNumber", blockNumber)
+
+			for i, validator := range signers {
+				if blsPublicKeys[i] == nil {
+					// 尝试从网络集成层获取
+					if dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
+						if cachedBLSKey, exists := dposInstance.runtime.networkIntegration.GetBLSKey(validator.Address); exists {
+							// 解析BLS公钥
+							if blsKey, err := bls.UnmarshalPublicKey(cachedBLSKey); err == nil {
+								blsPublicKeys[i] = blsKey
+								logger.Info("✅ 成功获取BLS公钥",
+									"blockNumber", blockNumber,
+									"address", validator.Address.String(),
+									"blsKeyLength", len(cachedBLSKey))
+							} else {
+								logger.Warn("⚠️ 解析获取的BLS公钥失败",
+									"blockNumber", blockNumber,
+									"address", validator.Address.String(),
+									"error", err)
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -358,10 +456,65 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		return err
 	}
 
+	// 🆕 验证签名数据本身
+	logger.Info("🔍 聚合签名数据检查",
+		"blockNumber", blockNumber,
+		"aggregatedSignatureLength", len(s.AggregatedSignature),
+		"aggregatedSignatureBytes", fmt.Sprintf("%x", s.AggregatedSignature),
+		"signatureType", fmt.Sprintf("%T", aggs))
+
 	logger.Debug("Signature.Verify - 聚合签名解析成功",
 		"signatureType", fmt.Sprintf("%T", aggs))
 
-	if !aggs.VerifyAggregated(blsPublicKeys, hash[:], domain) {
+	// 🆕 添加BLS签名验证前的调试信息
+	logger.Info("🔍 BLS签名验证前准备",
+		"blockNumber", blockNumber,
+		"blsPublicKeysCount", len(blsPublicKeys),
+		"hash", hash.String(),
+		"domain", fmt.Sprintf("%x", domain))
+
+	// 🆕 添加签名顺序验证日志
+	logger.Info("🔍 验证签名顺序与公钥顺序匹配:")
+	for i, pubKey := range blsPublicKeys {
+		if pubKey != nil {
+			logger.Info("🔍 验证用BLS公钥",
+				"index", i,
+				"address", signers[i].Address.String(),
+				"pubKeyBytes", fmt.Sprintf("%x", pubKey.Marshal()))
+
+			// 检查公钥是否与验证者地址匹配
+			if i < len(signers) {
+				delegate := signers[i]
+				logger.Info("🔗 签名顺序验证",
+					"signatureIndex", i,
+					"expectedAddress", delegate.Address.String(),
+					"hasBlsKey", delegate.BlsKey != nil)
+			}
+		}
+	}
+
+	// 🆕 显示位图对应的签名顺序
+	logger.Info("🔗 位图对应的签名顺序:")
+	for i := uint64(0); i < uint64(len(validators)); i++ {
+		if s.Bitmap.IsSet(i) {
+			if int(i) < len(validators) {
+				validator := validators[int(i)]
+				logger.Info("位图顺序",
+					"bitmapIndex", i,
+					"validatorAddress", validator.Address.String(),
+					"blsKeyExists", validator.BlsKey != nil)
+			}
+		}
+	}
+
+	// 执行BLS签名验证
+	isValid := aggs.VerifyAggregated(blsPublicKeys, hash[:], domain)
+	logger.Info("🔍 BLS签名验证结果",
+		"blockNumber", blockNumber,
+		"isValid", isValid,
+		"aggregatedSignature", fmt.Sprintf("%x", s.AggregatedSignature))
+
+	if !isValid {
 		logger.Error("Signature.Verify - BLS签名验证失败",
 			"blockNumber", blockNumber,
 			"hash", hash.String(),
@@ -395,7 +548,12 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 			}
 		}
 
-		return fmt.Errorf("could not verify aggregated signature")
+		logger.Error("🚨 BLS签名验证失败，程序将终止",
+			"blockNumber", blockNumber,
+			"reason", "BLS signature verification failed")
+
+		// 🆕 程序终止
+		os.Exit(1)
 	}
 
 	logger.Debug("Signature.Verify - 签名验证成功")
