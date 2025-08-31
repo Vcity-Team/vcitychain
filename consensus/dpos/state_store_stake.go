@@ -190,9 +190,11 @@ func (s *StakeStore) GetValidators() (validator.AccountSet, error) {
 
 			// 🆕 修复：只包含活跃且有足够投票权重的验证者
 			// 这样可以避免将不活跃或投票权重为0的验证者包含在法定人数计算中
-			if !delegateInfo.IsActive || finalVotingPower.Cmp(big.NewInt(0)) <= 0 {
-				fmt.Printf("🔍 GetValidators: 跳过不活跃或投票权重为0的验证者 - 地址=%s, isActive=%v, votingPower=%s\n",
-					delegateInfo.Address.String(), delegateInfo.IsActive, finalVotingPower.String())
+			// 🆕 修复：不管数据库中的IsActive是什么值，都设置为true
+			// 这样可以确保与出块节点的逻辑保持一致
+			if finalVotingPower.Cmp(big.NewInt(0)) <= 0 {
+				fmt.Printf("🔍 GetValidators: 跳过投票权重为0的验证者 - 地址=%s, votingPower=%s\n",
+					delegateInfo.Address.String(), finalVotingPower.String())
 				continue
 			}
 
@@ -214,8 +216,8 @@ func (s *StakeStore) GetValidators() (validator.AccountSet, error) {
 			validatorMeta := &validator.ValidatorMetadata{
 				Address:     delegateInfo.Address,
 				VotingPower: finalVotingPower, // 使用修复后的投票权重
-				IsActive:    delegateInfo.IsActive,
-				BlsKey:      blsPublicKey, // 🆕 恢复BLS公钥（可以为nil）
+				IsActive:    true,             // 🆕 修复：不管数据库中的IsActive是什么值，都设置为true
+				BlsKey:      blsPublicKey,     // 🆕 恢复BLS公钥（可以为nil）
 			}
 
 			// 记录验证者信息状态

@@ -95,6 +95,7 @@ type BLSKeyResponseMessage struct {
 	Requester        types.Address `json:"requester"`        // 请求者地址
 	BLSPublicKey     []byte        `json:"blsPublicKey"`     // BLS公钥（如果有的话）
 	Found            bool          `json:"found"`            // 是否找到公钥
+	BlockNumber      uint64        `json:"blockNumber"`      // 请求的区块高度
 	Timestamp        uint64        `json:"timestamp"`        // 时间戳
 }
 

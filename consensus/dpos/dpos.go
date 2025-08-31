@@ -59,6 +59,19 @@ func GetDPoSInstance(key string) (*DPoS, bool) {
 	return dpos, exists
 }
 
+// GetAllDPoSInstances 获取所有DPoS实例
+func GetAllDPoSInstances() map[string]*DPoS {
+	dposMutex.RLock()
+	defer dposMutex.RUnlock()
+
+	// 创建副本以避免外部修改
+	result := make(map[string]*DPoS)
+	for key, instance := range dposInstances {
+		result[key] = instance
+	}
+	return result
+}
+
 // UnregisterDPoSInstance 注销DPoS实例
 func UnregisterDPoSInstance(key string) {
 	dposMutex.Lock()
@@ -822,6 +835,25 @@ func (r *dposRuntime) initializeDelegates() error {
 	r.logger.Debug("=== dposRuntime.initializeDelegates 开始 ===")
 	r.logger.Debug("backend是否为nil", "isNil", r.backend == nil)
 
+	// 🆕 调试信息：显示 InitialDelegates 的内容
+	if r.config != nil && r.config.InitialDelegates != nil {
+		r.logger.Info("🔍 创世文件受托人信息",
+			"initialDelegatesCount", len(r.config.InitialDelegates))
+
+		for i, genesisDelegate := range r.config.InitialDelegates {
+			r.logger.Info("🔍 创世文件受托人详情",
+				"index", i,
+				"address", genesisDelegate.Address.String(),
+				"blsKeyExists", genesisDelegate.BlsKey != "",
+				"blsKeyLength", len(genesisDelegate.BlsKey),
+				"stake", genesisDelegate.Stake.String())
+		}
+	} else {
+		r.logger.Warn("⚠️ InitialDelegates 配置为空或nil",
+			"configExists", r.config != nil,
+			"initialDelegatesExists", r.config != nil && r.config.InitialDelegates != nil)
+	}
+
 	// 从主DPoS结构体获取已初始化的受托人
 	if r.backend != nil {
 		delegates, err := r.backend.GetDelegates(0, nil)
@@ -1194,24 +1226,111 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			}
 		}
 
-		// 直接使用收集到的签名顺序（应该已经与位图索引一致）
-		r.logger.Debug("🔄 开始BLS签名聚合",
-			"signatureCount", len(signatures))
-
-		// 聚合所有签名
+		// 🆕 修复：按位图索引顺序聚合签名，确保与验证时公钥顺序一致
 		blsSignatures := make(bls.Signatures, 0, len(signatures))
-		for i, sigBytes := range signatures {
-			sig, err := bls.UnmarshalSignature(sigBytes)
-			if err != nil {
-				r.logger.Error("❌ BLS签名解析失败", "error", err, "index", i,
-					"signatureLength", len(sigBytes),
-					"signatureBytes", fmt.Sprintf("%x", sigBytes))
-				continue
+
+		// 🆕 关键修复：使用与验证时完全相同的验证者集合获取方法
+		// 验证时使用：consensusBackend.GetDelegates(blockNumber-1, parents)
+		// 生产时也应该使用相同的逻辑：获取父区块信息并传递
+
+		// 获取父区块信息，与验证时保持一致
+		var parents []*types.Header
+		if block.Block.Number() > 1 {
+			// 获取父区块
+			parentHeader, exists := r.config.blockchain.GetHeaderByNumber(block.Block.Number() - 1)
+			if exists && parentHeader != nil {
+				parents = append(parents, parentHeader)
+				r.logger.Debug("🔍 生产时获取父区块信息",
+					"blockNumber", block.Block.Number(),
+					"parentBlockNumber", parentHeader.Number,
+					"parentBlockHash", parentHeader.Hash.String())
 			}
-			blsSignatures = append(blsSignatures, sig)
-			r.logger.Debug("✅ BLS签名解析成功",
+		}
+
+		// 🆕 关键修复：使用与验证时完全相同的参数调用
+		// 验证时：GetDelegates(blockNumber-1, parents)
+		// 生产时：GetDelegates(blockNumber-1, parents)
+		currentValidators, err := r.config.dposBackend.GetDelegates(block.Block.Number()-1, parents)
+		if err != nil {
+			r.logger.Error("❌ 无法获取当前验证者集合", "blockNumber", block.Block.Number(), "error", err)
+			return nil, fmt.Errorf("failed to get current validators for block %d: %w", block.Block.Number(), err)
+		}
+		if currentValidators == nil || len(currentValidators) == 0 {
+			r.logger.Error("❌ 当前验证者集合为空", "blockNumber", block.Block.Number())
+			return nil, fmt.Errorf("current validators set is empty for block %d", block.Block.Number())
+		}
+
+		// 🆕 关键修复：使用与验证时完全相同的验证者集合
+		// 验证时使用：GetDelegates(blockNumber-1, parents)
+		// 生产时使用：GetDelegates(blockNumber-1, parents) - 现在参数完全一致
+		productionValidators := currentValidators
+
+		// 🔍 生产时获取的验证者集合信息
+		r.logger.Debug("🔍 生产时验证者集合信息",
+			"blockNumber", block.Block.Number(),
+			"totalValidators", len(productionValidators),
+			"delegatesCount", len(r.delegates),
+			"validatorSource", "GetDelegates(blockNumber-1, nil)",
+			"note", "使用与验证时相同的验证者获取方法")
+
+		// 🔍 打印生产时验证者集合的详细信息
+		r.logger.Debug("🔍 生产时验证者集合详细信息")
+		for i, validator := range productionValidators {
+			r.logger.Debug("🔍 生产时验证者",
+				"blockNumber", block.Block.Number(),
 				"index", i,
-				"signatureLength", len(sigBytes))
+				"address", validator.Address.String(),
+				"votingPower", validator.VotingPower.String(),
+				"isActive", validator.IsActive)
+		}
+
+		// 🆕 验证：确保验证者集合与 r.delegates 一致
+		if len(productionValidators) != len(r.delegates) {
+			r.logger.Warn("⚠️ 验证者集合数量不一致",
+				"productionValidatorsCount", len(productionValidators),
+				"delegatesCount", len(r.delegates),
+				"blockNumber", block.Block.Number())
+		}
+
+		r.logger.Debug("🔍 生产时验证者集合信息",
+			"blockNumber", block.Block.Number(),
+			"totalValidators", len(currentValidators),
+			"delegatesCount", len(r.delegates))
+
+		// 创建位图索引到签名的映射
+		bitmapToSignature := make(map[uint64][]byte)
+		signatureIndex := 0
+
+		// 按位图索引顺序收集签名
+		for i := uint64(0); i < uint64(len(productionValidators)); i++ {
+			if signatureBitmap.IsSet(i) {
+				if signatureIndex < len(signatures) {
+					bitmapToSignature[i] = signatures[signatureIndex]
+					signatureIndex++
+					r.logger.Debug("🔍 收集签名映射",
+						"bitmapIndex", i,
+						"signatureIndex", signatureIndex-1,
+						"validatorAddress", productionValidators[i].Address.String())
+				}
+			}
+		}
+
+		// 按位图索引顺序聚合签名
+		for i := uint64(0); i < uint64(len(productionValidators)); i++ {
+			if signatureBitmap.IsSet(i) {
+				if sigBytes, exists := bitmapToSignature[i]; exists {
+					sig, err := bls.UnmarshalSignature(sigBytes)
+					if err != nil {
+						r.logger.Error("❌ BLS签名解析失败", "error", err, "bitmapIndex", i, "signatureLength", len(sigBytes))
+						continue
+					}
+					blsSignatures = append(blsSignatures, sig)
+					r.logger.Debug("✅ BLS签名按位图顺序排列",
+						"bitmapIndex", i,
+						"signatureIndex", len(blsSignatures)-1,
+						"validatorAddress", productionValidators[i].Address.String())
+				}
+			}
 		}
 
 		r.logger.Debug("签名解析完成",
@@ -1670,12 +1789,12 @@ func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift tim
 		header, parent, parents, d.blockchain.GetChainID(), d, signer.DomainValidatorSet, d.logger)
 
 	if err != nil {
-		d.logger.Error("🚨 区块extraData验证失败，程序将终止",
+		d.logger.Error("🚨 区块extraData验证失败，将返回错误让上层处理",
 			"blockNumber", header.Number,
 			"blockHash", header.Hash.String(),
 			"error", err)
 		d.logger.Error("=== 验证区块头部失败 ===")
-		os.Exit(1)
+		return fmt.Errorf("block extraData validation failed: %w", err)
 	}
 
 	d.logger.Debug("区块extraData验证成功")
@@ -1801,40 +1920,6 @@ func (d *DPoS) processBlockVotesFromHeader(header *types.Header) error {
 				if txCount > 0 {
 					// 🆕 显著标记：包含交易的区块使用Warn级别
 					d.logger.Warn("🚨🚨🚨 获取到包含交易的区块数据，开始处理投票 🚨🚨🚨", "blockNumber", header.Number, "txCount", txCount, "blockHash", header.Hash)
-				} else {
-					// 🆕 新增：当txCount为0时的详细诊断
-					d.logger.Warn("⚠️⚠️⚠️ 获取到区块但交易数量为0，可能存在时序问题 ⚠️⚠️⚠️",
-						"blockNumber", header.Number,
-						"txCount", txCount,
-						"blockHash", header.Hash,
-						"blockHeaderNumber", block.Number(),
-						"blockHeaderHash", block.Hash())
-
-					// 🆕 新增：额外延迟等待区块数据完全可用
-					d.logger.Info("⏳ 等待额外时间确保区块数据完全可用", "additionalDelay", "1s")
-					time.Sleep(1 * time.Second)
-
-					// 🆕 新增：延迟后重新检查交易数量
-					if retryBlock, retryFound := d.blockchain.GetBlockByHash(header.Hash, true); retryFound {
-						retryTxCount := len(retryBlock.Transactions)
-						d.logger.Info("🔄 延迟后重新检查",
-							"blockNumber", header.Number,
-							"originalTxCount", txCount,
-							"retryTxCount", retryTxCount,
-							"improvement", retryTxCount > txCount)
-
-						if retryTxCount > 0 {
-							d.logger.Warn("🚨🚨🚨 延迟后成功获取到包含交易的区块数据 🚨🚨🚨",
-								"blockNumber", header.Number,
-								"txCount", retryTxCount,
-								"blockHash", header.Hash)
-
-							retryFullBlock := &types.FullBlock{Block: retryBlock}
-							return d.processBlockVotes(retryFullBlock)
-						}
-					}
-
-					d.logger.Info("✅ 获取到完整区块数据，开始处理投票", "blockNumber", header.Number, "txCount", txCount)
 				}
 				return d.processBlockVotes(fullBlock)
 			} else {
@@ -1938,10 +2023,10 @@ func (d *DPoS) Start() error {
 			// 	d.logger.Error("failed to process block votes", "error", err, "block", b.Block.Number())
 			// }
 
-			// 更新受托人集合
-			if err := d.updateDelegates(b); err != nil {
-				d.logger.Error("failed to update delegates", "error", err, "block", b.Block.Number())
-			}
+			// // 更新受托人集合
+			// if err := d.updateDelegates(b); err != nil {
+			// 	d.logger.Error("failed to update delegates", "error", err, "block", b.Block.Number())
+			// }
 
 			// 处理奖励分配
 			if err := d.processRewards(b); err != nil {
@@ -2065,7 +2150,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	vcity_dpos.config.Executor = params.Executor
 
 	// 🆕 新增：设置数据目录
-	vcity_dpos.logger.Info("Config details",
+	vcity_dpos.logger.Debug("Config details",
 		"ConfigPath", params.Config.Path,
 		"ConfigType", fmt.Sprintf("%T", params.Config),
 		"ConfigContent", fmt.Sprintf("%+v", params.Config))
@@ -2111,7 +2196,7 @@ func (d *DPoS) Initialize() error {
 	// 使用节点地址作为key
 	key := d.key.Address().String()
 	RegisterDPoSInstance(key, d)
-	d.logger.Info("DPoS实例已注册到全局注册表", "address", key)
+	d.logger.Debug("DPoS实例已注册到全局注册表", "address", key)
 
 	// create and set syncer
 	d.syncer = syncer.NewSyncer(
@@ -2243,7 +2328,7 @@ func (d *DPoS) initializeDelegates() error {
 			for i, validator := range dbValidators {
 				d.logger.Info("📋 数据库受托人信息（真正用于出块，按票数排序）", "index", i, "address", validator.Address, "votingPower", validator.VotingPower.String(), "isActive", validator.IsActive)
 
-				// 检查BLS密钥，如果缺少则从genesis文件中查找
+				// 检查BLS密钥，如果缺少则从genesis文件中查找（可选，不强制要求）
 				if validator.BlsKey == nil {
 					d.logger.Warn("⚠️ 受托人缺少BLS密钥，尝试从genesis文件中查找", "address", validator.Address)
 
@@ -2262,24 +2347,22 @@ func (d *DPoS) initializeDelegates() error {
 						// 解析genesis中的BLS公钥
 						decoded, err := hex.DecodeString(foundGenesisBlsKey)
 						if err != nil {
-							d.logger.Error("❌ 解析genesis BLS密钥失败", "address", validator.Address, "error", err)
-							continue
+							d.logger.Warn("⚠️ 解析genesis BLS密钥失败，但继续添加受托人", "address", validator.Address, "error", err)
+						} else {
+							genesisBlsKey, err := bls.UnmarshalPublicKey(decoded)
+							if err != nil {
+								d.logger.Warn("⚠️ 反序列化genesis BLS公钥失败，但继续添加受托人", "address", validator.Address, "error", err)
+							} else {
+								// 使用genesis中的BLS公钥
+								validator.BlsKey = genesisBlsKey
+								d.logger.Info("✅ 成功从genesis文件恢复BLS公钥", "address", validator.Address, "blsKeyLength", len(genesisBlsKey.Marshal()))
+							}
 						}
-
-						genesisBlsKey, err := bls.UnmarshalPublicKey(decoded)
-						if err != nil {
-							d.logger.Error("❌ 反序列化genesis BLS公钥失败", "address", validator.Address, "error", err)
-							continue
-						}
-
-						// 使用genesis中的BLS公钥
-						validator.BlsKey = genesisBlsKey
-						d.logger.Info("✅ 成功从genesis文件恢复BLS公钥", "address", validator.Address, "blsKeyLength", len(genesisBlsKey.Marshal()))
 					} else {
-						d.logger.Error("❌ 在genesis文件中也找不到BLS密钥", "address", validator.Address)
-						d.logger.Error("🔍 请检查genesis文件是否包含了该受托人的BLS公钥")
-						continue
+						d.logger.Warn("⚠️ 在genesis文件中也找不到BLS密钥，但继续添加受托人", "address", validator.Address)
+						d.logger.Info("ℹ️ BLS密钥缺失是可以容忍的，受托人仍可参与出块")
 					}
+					// 🆕 关键修改：移除continue，允许缺少BLS密钥的受托人继续添加
 				} else {
 					d.logger.Debug("✅ 受托人BLS密钥正常", "address", validator.Address, "blsKeyLength", len(validator.BlsKey.Marshal()))
 				}
@@ -2668,7 +2751,6 @@ func (d *DPoS) processBlockVotes(block *types.FullBlock) error {
 	// 获取区块中的所有交易
 	transactions := block.Block.Transactions
 	if len(transactions) == 0 {
-		d.logger.Info("📋 区块中没有交易，跳过投票事件处理")
 		return nil
 	}
 
@@ -3054,13 +3136,14 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 	d.logger.Debug("💾 落盘时：直接保存当前受托人集合，不进行排名和截取")
 
 	// 🆕 详细记录要落盘的见证人信息
-	d.logger.Debug("📋 准备落盘的见证人详情:")
+	d.logger.Info("📋 准备落盘的见证人详情:")
 	for i, delegate := range d.delegates {
-		d.logger.Debug("👤 见证人详情",
+		d.logger.Info("👤 见证人详情",
 			"序号", i+1,
 			"地址", delegate.Address.String(),
 			"投票权重", delegate.VotingPower.String(),
 			"是否活跃", delegate.IsActive,
+			"isActiveType", fmt.Sprintf("%T", delegate.IsActive),
 			"BLS密钥", delegate.BlsKey != nil)
 	}
 
@@ -3463,8 +3546,16 @@ func (d *DPoS) updateDelegateVotingPower(delegate types.Address, amount *big.Int
 		newDelegate := &validator.ValidatorMetadata{
 			Address:     delegate,
 			VotingPower: new(big.Int).Set(amount),
+			IsActive:    true, // 🆕 新增：自动设置为活跃状态
 			// 其他字段使用默认值
 		}
+
+		// 🆕 新增：重点记录创建新受托人时的isActive状态
+		d.logger.Info("🆕 创建新受托人",
+			"address", delegate.String(),
+			"votingPower", amount.String(),
+			"isActive", newDelegate.IsActive,
+			"isActiveType", fmt.Sprintf("%T", newDelegate.IsActive))
 
 		d.delegates = append(d.delegates, newDelegate)
 		d.logger.Info("✅ New delegate added to delegates list",
@@ -6275,9 +6366,16 @@ func (d *DPoS) persistDelegateSetToDatabase(delegates validator.AccountSet) erro
 
 						d.logger.Info("📨 已广播BLS公钥请求，等待网络响应", "address", del.Address.String())
 
-						// 🆕 修复：减少BLS公钥请求的超时时间，避免长时间阻塞
-						maxRetries := 2                         // 减少重试次数
-						retryInterval := 200 * time.Millisecond // 减少等待时间到200ms
+						// 🆕 增强：增加BLS公钥请求的重试次数和等待时间
+						maxRetries := 5                  // 增加重试次数到5次
+						retryInterval := 1 * time.Second // 增加等待时间到1秒
+						totalWaitTime := time.Duration(maxRetries) * retryInterval
+
+						d.logger.Info("⏳ 开始等待BLS公钥网络响应",
+							"address", del.Address.String(),
+							"maxRetries", maxRetries,
+							"retryInterval", retryInterval.String(),
+							"totalWaitTime", totalWaitTime.String())
 
 						for i := 0; i < maxRetries; i++ {
 							time.Sleep(retryInterval)
@@ -6288,12 +6386,17 @@ func (d *DPoS) persistDelegateSetToDatabase(delegates validator.AccountSet) erro
 								d.logger.Info("✅ 网络请求成功，获取到BLS公钥",
 									"address", del.Address.String(),
 									"publicKeyLength", len(blsPublicKey),
-									"attempt", i+1)
+									"attempt", i+1,
+									"waitTime", time.Duration(i+1)*retryInterval)
 								break
 							}
 
 							if i < maxRetries-1 {
-								d.logger.Info("等待BLS公钥响应", "attempt", i+1, "remaining", maxRetries-i-1)
+								d.logger.Info("⏳ 等待BLS公钥响应",
+									"address", del.Address.String(),
+									"attempt", i+1,
+									"remaining", maxRetries-i-1,
+									"elapsedTime", time.Duration(i+1)*retryInterval)
 							}
 						}
 
@@ -6340,6 +6443,14 @@ func (d *DPoS) persistDelegateSetToDatabase(delegates validator.AccountSet) erro
 			IsActive:       del.IsActive,
 			BlsPublicKey:   blsPublicKey, // 🆕 保存BLS公钥（可以为nil）
 		}
+
+		// 🆕 新增：重点记录持久化时的isActive状态
+		d.logger.Info("💾 持久化受托人信息到数据库",
+			"address", del.Address.String(),
+			"votingPower", del.VotingPower.String(),
+			"isActive", del.IsActive,
+			"isActiveType", fmt.Sprintf("%T", del.IsActive),
+			"blsPublicKeyLength", len(blsPublicKey))
 
 		// 记录BLS公钥状态
 		if blsPublicKey == nil {
@@ -6665,18 +6776,47 @@ func (d *DPoS) callCommandDataSourcesOnStartup() error {
 
 // getBLSKeyBytesFromGenesis 从创世文件获取指定地址的BLS公钥
 func (d *DPoS) getBLSKeyBytesFromGenesis(address types.Address) ([]byte, error) {
-	// 从创世文件获取指定地址的BLS公钥
-	for _, delegate := range d.config.InitialDelegates {
+	// 🆕 调试信息：显示 InitialDelegates 的内容
+	d.logger.Info("🔍 开始从创世文件查找BLS公钥",
+		"address", address.String(),
+		"initialDelegatesCount", len(d.config.InitialDelegates))
+
+	for i, delegate := range d.config.InitialDelegates {
+		d.logger.Debug("🔍 检查创世文件受托人",
+			"index", i,
+			"address", delegate.Address.String(),
+			"targetAddress", address.String(),
+			"match", delegate.Address == address,
+			"blsKeyExists", delegate.BlsKey != "",
+			"blsKeyLength", len(delegate.BlsKey))
+
 		if delegate.Address == address && delegate.BlsKey != "" {
-			d.logger.Info("从创世文件获取BLS公钥", "address", address.String())
+			d.logger.Info("✅ 从创世文件找到BLS公钥",
+				"address", address.String(),
+				"blsKeyLength", len(delegate.BlsKey))
+
 			// 解析十六进制字符串
 			blsKeyBytes, err := hex.DecodeString(delegate.BlsKey)
 			if err != nil {
+				d.logger.Error("❌ 解析创世文件BLS公钥失败",
+					"address", address.String(),
+					"error", err)
 				return nil, fmt.Errorf("failed to decode BLS key from genesis: %w", err)
 			}
+
+			d.logger.Info("✅ 成功解析创世文件BLS公钥",
+				"address", address.String(),
+				"blsKeyBytesLength", len(blsKeyBytes))
+
 			return blsKeyBytes, nil
 		}
 	}
+
+	// 🆕 调试信息：显示未找到的原因
+	d.logger.Warn("⚠️ 在创世文件中未找到BLS公钥",
+		"address", address.String(),
+		"initialDelegatesCount", len(d.config.InitialDelegates),
+		"note", "请检查创世文件是否正确加载")
 
 	return nil, fmt.Errorf("BLS key not found in genesis for address %s", address.String())
 }

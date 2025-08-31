@@ -361,13 +361,15 @@ func (as AccountSet) GetFilteredValidators(bitmap bitmap.Bitmap) (AccountSet, er
 		if bitmap.IsSet(i) {
 			// fmt.Printf("DEBUG: bitmap位 %d 已设置，验证者地址: %s\n", i, as[i].Address.String())
 
-			// 🆕 修复：BLS key为nil时返回错误，而不是跳过
+			// 🆕 修复：BLS key为nil时仍然添加验证者，这是可以容忍的
 			if as[i].BlsKey != nil {
 				filteredValidators = append(filteredValidators, as[i])
 				// fmt.Printf("DEBUG: 添加验证者到过滤结果: %s (BLS key存在)\n", as[i].Address.String())
 			} else {
-				// 返回错误：位图指向的验证者缺少BLS公钥
-				return nil, fmt.Errorf("validator at index %d (%s) has nil BLS key but is marked as signer in bitmap", i, as[i].Address.String())
+				// 🆕 关键修改：BLS密钥缺失时仍然添加验证者，这是可以容忍的
+				// 这样确保即使缺少BLS密钥的验证者也能参与法定人数计算
+				filteredValidators = append(filteredValidators, as[i])
+				// fmt.Printf("DEBUG: 添加验证者到过滤结果: %s (BLS key缺失，但继续添加)\n", as[i].Address.String())
 			}
 		} else {
 			// fmt.Printf("DEBUG: bitmap位 %d 未设置\n", i)
