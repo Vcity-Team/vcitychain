@@ -1272,30 +1272,49 @@ continueVerification:
 		}
 	}
 
-	// 🆕 方案2修复：按位图索引顺序重新排列公钥，确保与生产时的签名顺序完全一致
+	// 🆕 方案2修复：使用验证者地址映射来重新排列BLS公钥，确保与生产时的签名顺序完全一致
 	// 生产时按位图索引顺序聚合签名，验证时也应该按位图索引顺序排列公钥
 	validBLSKeys := make([]*bls.PublicKey, 0)
 	bitmapOrderedAddresses := make([]types.Address, 0)
 
 	logger.Debug("🔍 开始按位图索引顺序重新排列BLS公钥")
 
-	// 按位图索引顺序收集公钥和地址
+	// 🆕 创建地址到BLS公钥的映射，避免依赖索引位置
+	addressToBLSKey := make(map[types.Address]*bls.PublicKey)
+	for i, validator := range validators {
+		if validator.BlsKey != nil {
+			addressToBLSKey[validator.Address] = validator.BlsKey
+			logger.Debug("🔍 创建地址到BLS公钥映射",
+				"validatorIndex", i,
+				"address", validator.Address.String(),
+				"blsKeyExists", validator.BlsKey != nil,
+				"blsKeyLength", len(validator.BlsKey.Marshal()))
+		} else {
+			logger.Debug("🔍 验证者缺少BLS公钥",
+				"validatorIndex", i,
+				"address", validator.Address.String())
+		}
+	}
+
+	// 按位图索引顺序收集公钥和地址，使用地址映射查找BLS公钥
 	for i := uint64(0); i < uint64(len(validators)); i++ {
 		if s.Bitmap.IsSet(i) {
-			if int(i) < len(blsPublicKeys) && blsPublicKeys[i] != nil {
-				validBLSKeys = append(validBLSKeys, blsPublicKeys[i])
-				bitmapOrderedAddresses = append(bitmapOrderedAddresses, validators[int(i)].Address)
+			validatorAddress := validators[int(i)].Address
+			if blsKey, exists := addressToBLSKey[validatorAddress]; exists && blsKey != nil {
+				validBLSKeys = append(validBLSKeys, blsKey)
+				bitmapOrderedAddresses = append(bitmapOrderedAddresses, validatorAddress)
 				logger.Debug("🔍 按位图顺序排列BLS公钥",
 					"bitmapIndex", i,
 					"signatureIndex", len(validBLSKeys)-1,
-					"address", validators[int(i)].Address.String(),
-					"publicKeyLength", len(blsPublicKeys[i].Marshal()))
+					"address", validatorAddress.String(),
+					"publicKeyLength", len(blsKey.Marshal()))
 			} else {
 				logger.Warn("⚠️ 位图索引对应的BLS公钥不存在或为nil",
 					"bitmapIndex", i,
-					"address", validators[int(i)].Address.String(),
+					"address", validatorAddress.String(),
 					"blsPublicKeysLength", len(blsPublicKeys),
-					"hasBlsKey", int(i) < len(blsPublicKeys) && blsPublicKeys[i] != nil)
+					"hasBlsKey", exists && blsKey != nil,
+					"note", "使用地址映射查找BLS公钥")
 			}
 		}
 	}
