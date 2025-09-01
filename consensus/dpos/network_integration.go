@@ -292,13 +292,13 @@ func NewNetworkIntegration(network *network.Server, logger hclog.Logger) *Networ
 // SetBLSKeyPersistCallback 设置BLS公钥持久化回调函数
 func (ni *NetworkIntegration) SetBLSKeyPersistCallback(callback func(address types.Address, blsKeyBytes []byte) error) {
 	ni.blsKeyPersistCallback = callback
-	ni.logger.Info("BLS公钥持久化回调函数已设置")
+	ni.logger.Debug("BLS公钥持久化回调函数已设置")
 }
 
 // SetBLSKeyLookupCallback 设置BLS公钥查找回调函数
 func (ni *NetworkIntegration) SetBLSKeyLookupCallback(callback func(address types.Address) ([]byte, error)) {
 	ni.blsKeyLookupCallback = callback
-	ni.logger.Info("BLS公钥查找回调函数已设置")
+	ni.logger.Debug("BLS公钥查找回调函数已设置")
 }
 
 // SetDPoSInstance 设置DPoS实例引用
@@ -339,11 +339,11 @@ func (ni *NetworkIntegration) SetExistingTopics(signatureRequestTopic, signature
 
 // Start 启动网络集成
 func (ni *NetworkIntegration) Start() error {
-	ni.logger.Info("starting DPoS network integration")
+	ni.logger.Debug("starting DPoS network integration")
 
 	// 检查是否已经有主题（使用现有主题的情况）
 	if ni.signatureRequestTopic == nil || ni.signatureResponseTopic == nil {
-		ni.logger.Info("没有现有主题，尝试创建新主题")
+		ni.logger.Debug("没有现有主题，尝试创建新主题")
 		// 创建主题
 		if err := ni.createTopics(); err != nil {
 			ni.logger.Warn("主题创建失败，尝试使用现有主题", "error", err)
@@ -447,7 +447,7 @@ func (ni *NetworkIntegration) createTopics() error {
 		}
 	} else {
 		criticalTopicsCreated++
-		ni.logger.Info("成功创建签名请求主题")
+		ni.logger.Debug("成功创建签名请求主题")
 	}
 
 	// 创建签名响应主题 - 使用有效的默认值避免网络层发送零值消息
@@ -523,7 +523,7 @@ func (ni *NetworkIntegration) createTopics() error {
 			return fmt.Errorf("failed to create BLS key broadcast topic: %w", err)
 		}
 	} else {
-		ni.logger.Info("成功创建BLS公钥广播主题")
+		ni.logger.Debug("成功创建BLS公钥广播主题")
 	}
 
 	// 创建BLS公钥确认主题
@@ -538,7 +538,7 @@ func (ni *NetworkIntegration) createTopics() error {
 			return fmt.Errorf("failed to create BLS key ack topic: %w", err)
 		}
 	} else {
-		ni.logger.Info("成功创建BLS公钥确认主题")
+		ni.logger.Debug("成功创建BLS公钥确认主题")
 	}
 
 	// 创建BLS公钥请求主题
@@ -553,7 +553,7 @@ func (ni *NetworkIntegration) createTopics() error {
 			return fmt.Errorf("failed to create BLS key request topic: %w", err)
 		}
 	} else {
-		ni.logger.Info("成功创建BLS公钥请求主题")
+		ni.logger.Debug("成功创建BLS公钥请求主题")
 	}
 
 	// 创建BLS公钥响应主题
@@ -568,7 +568,7 @@ func (ni *NetworkIntegration) createTopics() error {
 			return fmt.Errorf("failed to create BLS key response topic: %w", err)
 		}
 	} else {
-		ni.logger.Info("成功创建BLS公钥响应主题")
+		ni.logger.Debug("成功创建BLS公钥响应主题")
 	}
 
 	// 检查是否至少有一个关键主题可用
@@ -577,7 +577,7 @@ func (ni *NetworkIntegration) createTopics() error {
 		return fmt.Errorf("failed to create any critical topics")
 	}
 
-	ni.logger.Info("DPoS网络主题创建完成",
+	ni.logger.Debug("DPoS网络主题创建完成",
 		"criticalTopicsCreated", criticalTopicsCreated,
 		"signatureRequestTopic", ni.signatureRequestTopic != nil,
 		"signatureResponseTopic", ni.signatureResponseTopic != nil)
@@ -615,7 +615,7 @@ func (ni *NetworkIntegration) subscribeToTopics() error {
 		}); err != nil {
 			return fmt.Errorf("failed to subscribe to signature request topic: %w", err)
 		}
-		ni.logger.Info("成功订阅签名请求主题")
+		ni.logger.Debug("成功订阅签名请求主题")
 	} else {
 		ni.logger.Warn("签名请求主题不可用，跳过订阅")
 	}
@@ -627,7 +627,7 @@ func (ni *NetworkIntegration) subscribeToTopics() error {
 		}); err != nil {
 			return fmt.Errorf("failed to subscribe to signature response topic: %w", err)
 		}
-		ni.logger.Info("成功订阅签名响应主题")
+		ni.logger.Debug("成功订阅签名响应主题")
 	} else {
 		ni.logger.Warn("签名响应主题不可用，跳过订阅")
 	}
@@ -639,7 +639,7 @@ func (ni *NetworkIntegration) subscribeToTopics() error {
 		}); err != nil {
 			return fmt.Errorf("failed to subscribe to vote topic: %w", err)
 		}
-		ni.logger.Info("成功订阅投票主题")
+		ni.logger.Debug("成功订阅投票主题")
 	} else {
 		ni.logger.Warn("投票主题不可用，跳过订阅")
 	}
@@ -651,7 +651,7 @@ func (ni *NetworkIntegration) subscribeToTopics() error {
 		}); err != nil {
 			return fmt.Errorf("failed to subscribe to delegate topic: %w", err)
 		}
-		ni.logger.Info("成功订阅委托主题")
+		ni.logger.Debug("成功订阅委托主题")
 	} else {
 		ni.logger.Warn("委托主题不可用，跳过订阅")
 	}
@@ -663,7 +663,7 @@ func (ni *NetworkIntegration) subscribeToTopics() error {
 		}); err != nil {
 			return fmt.Errorf("failed to subscribe to BLS key broadcast topic: %w", err)
 		}
-		ni.logger.Info("成功订阅BLS公钥广播主题")
+		ni.logger.Debug("成功订阅BLS公钥广播主题")
 	} else {
 		ni.logger.Warn("BLS公钥广播主题不可用，跳过订阅")
 	}
@@ -675,7 +675,7 @@ func (ni *NetworkIntegration) subscribeToTopics() error {
 		}); err != nil {
 			return fmt.Errorf("failed to subscribe to BLS key ack topic: %w", err)
 		}
-		ni.logger.Info("成功订阅BLS公钥确认主题")
+		ni.logger.Debug("成功订阅BLS公钥确认主题")
 	} else {
 		ni.logger.Warn("BLS公钥确认主题不可用，跳过订阅")
 	}
@@ -687,7 +687,7 @@ func (ni *NetworkIntegration) subscribeToTopics() error {
 		}); err != nil {
 			return fmt.Errorf("failed to subscribe to BLS key request topic: %w", err)
 		}
-		ni.logger.Info("成功订阅BLS公钥请求主题")
+		ni.logger.Debug("成功订阅BLS公钥请求主题")
 	} else {
 		ni.logger.Warn("BLS公钥请求主题不可用，跳过订阅")
 	}
@@ -1024,7 +1024,7 @@ func (ni *NetworkIntegration) handleDelegateMessage(obj interface{}, from peer.I
 
 // processSignatureRequest 处理签名请求
 func (ni *NetworkIntegration) processSignatureRequest(request *SignatureRequest) error {
-	ni.logger.Info("processing signature request", "blockNumber", request.BlockNumber)
+	ni.logger.Debug("processing signature request", "blockNumber", request.BlockNumber)
 
 	// 如果有DPoS运行时回调，调用它处理签名请求
 	if ni.dposRuntime != nil {
@@ -1126,7 +1126,7 @@ func (ni *NetworkIntegration) RegisterSignatureCollector(checkpointHash types.Ha
 
 	// 检查是否已存在相同checkpointHash的收集器
 	if existingCollector, exists := ni.signatureCollectors[checkpointHash]; exists {
-		ni.logger.Warn("签名收集器已存在，关闭旧的收集器",
+		ni.logger.Debug("签名收集器已存在，关闭旧的收集器",
 			"checkpointHash", checkpointHash.String(),
 			"existingRequiredCount", existingCollector.requiredCount,
 			"newRequiredCount", requiredCount)
@@ -1139,7 +1139,7 @@ func (ni *NetworkIntegration) RegisterSignatureCollector(checkpointHash types.Ha
 
 	ni.signatureCollectors[checkpointHash] = collector
 
-	ni.logger.Info("注册签名收集器成功",
+	ni.logger.Debug("注册签名收集器成功",
 		"checkpointHash", checkpointHash.String(),
 		"timeout", timeout,
 		"requiredCount", requiredCount,
@@ -1164,7 +1164,7 @@ func (ni *NetworkIntegration) RegisterSignatureCollectorLegacy(checkpointHash ty
 // SetDPoSRuntime 设置DPoS运行时回调
 func (ni *NetworkIntegration) SetDPoSRuntime(runtime interface{}) {
 	ni.dposRuntime = runtime
-	ni.logger.Info("DPoS运行时回调已设置")
+	ni.logger.Debug("DPoS运行时回调已设置")
 }
 
 // GetSignatureRequestTopic 获取签名请求主题
@@ -1552,7 +1552,7 @@ func (ni *NetworkIntegration) saveBLSKey(address types.Address, blsKeyBytes []by
 
 	// 保存到内存缓存
 	ni.blsKeyCache[address] = blsKeyBytes
-	ni.logger.Info("BLS公钥已保存到缓存",
+	ni.logger.Debug("BLS公钥已保存到缓存",
 		"address", address.String(),
 		"blsKeyLength", len(blsKeyBytes))
 
@@ -1563,7 +1563,7 @@ func (ni *NetworkIntegration) saveBLSKey(address types.Address, blsKeyBytes []by
 			"error", err)
 		// 不返回错误，因为缓存已经保存成功
 	} else {
-		ni.logger.Info("BLS公钥已持久化到数据库",
+		ni.logger.Debug("BLS公钥已持久化到数据库",
 			"address", address.String(),
 			"blsKeyLength", len(blsKeyBytes))
 	}
@@ -1665,7 +1665,7 @@ func (ni *NetworkIntegration) persistBLSKeyToDatabase(address types.Address, bls
 				return fmt.Errorf("通过DPoS实例持久化BLS公钥失败: %w", err)
 			}
 
-			ni.logger.Info("BLS公钥已成功持久化到数据库（通过DPoS实例）",
+			ni.logger.Debug("BLS公钥已成功持久化到数据库（通过DPoS实例）",
 				"address", address.String(),
 				"blsKeyLength", len(blsKeyBytes))
 			return nil
@@ -1678,7 +1678,7 @@ func (ni *NetworkIntegration) persistBLSKeyToDatabase(address types.Address, bls
 			return fmt.Errorf("通过全局注册表持久化BLS公钥失败: %w", err)
 		}
 
-		ni.logger.Info("BLS公钥已成功持久化到数据库（通过全局注册表）",
+		ni.logger.Debug("BLS公钥已成功持久化到数据库（通过全局注册表）",
 			"address", address.String(),
 			"blsKeyLength", len(blsKeyBytes))
 		return nil
@@ -1690,7 +1690,7 @@ func (ni *NetworkIntegration) persistBLSKeyToDatabase(address types.Address, bls
 			return fmt.Errorf("BLS公钥持久化回调失败: %w", err)
 		}
 
-		ni.logger.Info("BLS公钥已成功持久化到数据库（通过回调函数）",
+		ni.logger.Debug("BLS公钥已成功持久化到数据库（通过回调函数）",
 			"address", address.String(),
 			"blsKeyLength", len(blsKeyBytes))
 		return nil
@@ -1737,7 +1737,7 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 			return
 		}
 
-		ni.logger.Info("📨 收到BLS公钥请求",
+		ni.logger.Debug("📨 收到BLS公钥请求",
 			"requestedAddress", requestMsg.RequestedAddress.String(),
 			"requester", requestMsg.Requester.String(),
 			"from", from.String(),
@@ -1751,7 +1751,7 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 		if cachedKey, exists := ni.GetBLSKey(requestMsg.RequestedAddress); exists {
 			found = true
 			blsPublicKey = cachedKey
-			ni.logger.Info("✅ 从缓存找到BLS公钥", "address", requestMsg.RequestedAddress.String())
+			ni.logger.Debug("✅ 从缓存找到BLS公钥", "address", requestMsg.RequestedAddress.String())
 		} else {
 			// 如果缓存中没有，直接从genesis.json文件中查找
 			if keyBytes, err := ni.findBLSKeyFromGenesisFile(requestMsg.RequestedAddress); err == nil && len(keyBytes) > 0 {
@@ -1778,11 +1778,11 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 			ni.logger.Error("发送BLS公钥响应失败", "error", err)
 		} else {
 			if found {
-				ni.logger.Info("📤 已发送BLS公钥响应（找到）",
+				ni.logger.Debug("📤 已发送BLS公钥响应（找到）",
 					"requestedAddress", requestMsg.RequestedAddress.String(),
 					"requester", requestMsg.Requester.String())
 			} else {
-				ni.logger.Info("📤 已发送BLS公钥响应（未找到）",
+				ni.logger.Debug("📤 已发送BLS公钥响应（未找到）",
 					"requestedAddress", requestMsg.RequestedAddress.String(),
 					"requester", requestMsg.Requester.String())
 			}
@@ -1801,7 +1801,7 @@ func (ni *NetworkIntegration) handleBLSKeyResponse(obj interface{}, from peer.ID
 			return
 		}
 
-		ni.logger.Info("📥 收到BLS公钥响应",
+		ni.logger.Debug("📥 收到BLS公钥响应",
 			"requestedAddress", responseMsg.RequestedAddress.String(),
 			"requester", responseMsg.Requester.String(),
 			"found", responseMsg.Found,
@@ -1812,7 +1812,7 @@ func (ni *NetworkIntegration) handleBLSKeyResponse(obj interface{}, from peer.ID
 			if err := ni.saveBLSKey(responseMsg.RequestedAddress, responseMsg.BLSPublicKey); err != nil {
 				ni.logger.Error("保存BLS公钥失败", "error", err)
 			} else {
-				ni.logger.Info("✅ 成功保存从网络获取的BLS公钥",
+				ni.logger.Debug("✅ 成功保存从网络获取的BLS公钥",
 					"address", responseMsg.RequestedAddress.String(),
 					"blsKeyLength", len(responseMsg.BLSPublicKey))
 			}

@@ -302,7 +302,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 				addressPart := strings.Split(parts[1], ")")[0]
 				if strings.HasPrefix(addressPart, "0x") {
 					missingAddress := types.StringToAddress(addressPart)
-					logger.Info("🔍 ValidateParentSignatures - 检测到缺失BLS密钥的受托人",
+					logger.Debug("🔍 ValidateParentSignatures - 检测到缺失BLS密钥的受托人",
 						"blockNumber", blockNumber,
 						"parentBlockNumber", parentBlockNumber,
 						"missingAddress", missingAddress.String())
@@ -337,7 +337,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 					}
 
 					if found {
-						logger.Info("📨 ValidateParentSignatures - 发起BLS公钥网络请求",
+						logger.Debug("📨 ValidateParentSignatures - 发起BLS公钥网络请求",
 							"blockNumber", blockNumber,
 							"parentBlockNumber", parentBlockNumber,
 							"address", missingAddress.String())
@@ -352,7 +352,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 									"address", missingAddress.String(),
 									"error", err)
 							} else {
-								logger.Info("📨 ValidateParentSignatures - BLS公钥网络请求已发送",
+								logger.Debug("📨 ValidateParentSignatures - BLS公钥网络请求已发送",
 									"blockNumber", blockNumber,
 									"parentBlockNumber", parentBlockNumber,
 									"address", missingAddress.String())
@@ -364,7 +364,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 						retryInterval := 2 * time.Second // 每2秒检查一次
 						maxRetries := int(maxWaitTime / retryInterval)
 
-						logger.Info("⏳ ValidateParentSignatures - 开始等待BLS公钥网络响应",
+						logger.Debug("⏳ ValidateParentSignatures - 开始等待BLS公钥网络响应",
 							"blockNumber", blockNumber,
 							"parentBlockNumber", parentBlockNumber,
 							"maxWaitTime", maxWaitTime.String(),
@@ -375,7 +375,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 							time.Sleep(retryInterval)
 							elapsedTime := time.Duration(retry+1) * retryInterval
 
-							logger.Info("⏳ ValidateParentSignatures - 等待BLS公钥网络响应",
+							logger.Debug("⏳ ValidateParentSignatures - 等待BLS公钥网络响应",
 								"blockNumber", blockNumber,
 								"parentBlockNumber", parentBlockNumber,
 								"retry", retry+1,
@@ -385,7 +385,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 							// 检查是否已经获取到BLS公钥
 							if dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
 								if cachedBLSKey, exists := dposInstance.runtime.networkIntegration.GetBLSKey(missingAddress); exists {
-									logger.Info("✅ ValidateParentSignatures - 重试期间成功获取BLS公钥",
+									logger.Debug("✅ ValidateParentSignatures - 重试期间成功获取BLS公钥",
 										"blockNumber", blockNumber,
 										"parentBlockNumber", parentBlockNumber,
 										"address", missingAddress.String(),
@@ -410,7 +410,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 						maxVerifyRetries := 3
 						verifySuccess := false
 
-						logger.Info("🔄 ValidateParentSignatures - 开始重新尝试验证父区块签名",
+						logger.Debug("🔄 ValidateParentSignatures - 开始重新尝试验证父区块签名",
 							"blockNumber", blockNumber,
 							"parentBlockNumber", parentBlockNumber,
 							"maxRetries", maxVerifyRetries)
@@ -427,7 +427,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 								if verifyRetry < maxVerifyRetries-1 {
 									// 等待一段时间后重试
 									waitTime := time.Duration(verifyRetry+1) * time.Second
-									logger.Info("⏳ ValidateParentSignatures - 等待后重试验证",
+									logger.Debug("⏳ ValidateParentSignatures - 等待后重试验证",
 										"blockNumber", blockNumber,
 										"parentBlockNumber", parentBlockNumber,
 										"waitTime", waitTime.String())
@@ -442,7 +442,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 										"note", "系统将容忍此错误，继续验证流程")
 								}
 							} else {
-								logger.Info("✅ ValidateParentSignatures - 重新尝试验证父区块签名成功",
+								logger.Debug("✅ ValidateParentSignatures - 重新尝试验证父区块签名成功",
 									"blockNumber", blockNumber,
 									"parentBlockNumber", parentBlockNumber,
 									"retry", verifyRetry+1)
@@ -598,7 +598,7 @@ func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, bloc
 	}
 
 	// 发起网络请求
-	logger.Info("📨 发起BLS公钥网络请求",
+	logger.Debug("📨 发起BLS公钥网络请求",
 		"blockNumber", blockNumber,
 		"address", missingAddress.String())
 
@@ -616,7 +616,7 @@ func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, bloc
 				"address", missingAddress.String(),
 				"error", err)
 		} else {
-			logger.Info("📨 BLS公钥网络请求已发送",
+			logger.Debug("📨 BLS公钥网络请求已发送",
 				"blockNumber", blockNumber,
 				"address", missingAddress.String())
 		}
@@ -633,7 +633,7 @@ func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, bloc
 	retryInterval := 2 * time.Second // 每2秒检查一次
 	maxRetries := int(maxWaitTime / retryInterval)
 
-	logger.Info("⏳ 开始等待BLS公钥网络响应",
+	logger.Debug("⏳ 开始等待BLS公钥网络响应",
 		"blockNumber", blockNumber,
 		"maxWaitTime", maxWaitTime.String(),
 		"retryInterval", retryInterval.String(),
@@ -643,7 +643,7 @@ func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, bloc
 		time.Sleep(retryInterval)
 		elapsedTime := time.Duration(retry+1) * retryInterval
 
-		logger.Info("⏳ 等待BLS公钥网络响应",
+		logger.Debug("⏳ 等待BLS公钥网络响应",
 			"blockNumber", blockNumber,
 			"retry", retry+1,
 			"maxRetries", maxRetries,
@@ -651,36 +651,12 @@ func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, bloc
 
 		// 检查是否已经获取到BLS公钥
 		if dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
-			logger.Info("🔍 开始检查网络缓存中的BLS公钥",
+			logger.Debug("🔍 开始检查网络缓存中的BLS公钥",
 				"blockNumber", blockNumber,
 				"address", missingAddress.String())
 
 			if cachedBLSKey, exists := dposInstance.runtime.networkIntegration.GetBLSKey(missingAddress); exists {
-				logger.Info("✅ 成功从网络获取BLS公钥+++++++++++++++++++++++++++++++++++++",
-					"blockNumber", blockNumber,
-					"address", missingAddress.String(),
-					"blsKeyLength", len(cachedBLSKey),
-					"retry", retry+1,
-					"elapsedTime", elapsedTime)
-				logger.Info("✅ 成功从网络获取BLS公钥+++++++++++++++++++++++++++++++++++++",
-					"blockNumber", blockNumber,
-					"address", missingAddress.String(),
-					"blsKeyLength", len(cachedBLSKey),
-					"retry", retry+1,
-					"elapsedTime", elapsedTime)
-				logger.Info("✅ 成功从网络获取BLS公钥+++++++++++++++++++++++++++++++++++++",
-					"blockNumber", blockNumber,
-					"address", missingAddress.String(),
-					"blsKeyLength", len(cachedBLSKey),
-					"retry", retry+1,
-					"elapsedTime", elapsedTime)
-				logger.Info("✅ 成功从网络获取BLS公钥+++++++++++++++++++++++++++++++++++++",
-					"blockNumber", blockNumber,
-					"address", missingAddress.String(),
-					"blsKeyLength", len(cachedBLSKey),
-					"retry", retry+1,
-					"elapsedTime", elapsedTime)
-				logger.Info("✅ 成功从网络获取BLS公钥+++++++++++++++++++++++++++++++++++++",
+				logger.Debug("✅ 成功从网络获取BLS公钥",
 					"blockNumber", blockNumber,
 					"address", missingAddress.String(),
 					"blsKeyLength", len(cachedBLSKey),
@@ -688,20 +664,20 @@ func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, bloc
 					"elapsedTime", elapsedTime)
 
 				// 🆕 关键修复：将获取到的BLS公钥保存到验证者对象中
-				logger.Info("🔍 开始保存BLS公钥到验证者对象",
+				logger.Debug("🔍 开始保存BLS公钥到验证者对象",
 					"blockNumber", blockNumber,
 					"address", missingAddress.String(),
 					"validatorsCount", len(validators))
 
 				if validators != nil {
 					found := false
-					logger.Info("🔍 开始遍历验证者集合",
+					logger.Debug("🔍 开始遍历验证者集合",
 						"blockNumber", blockNumber,
 						"missingAddress", missingAddress.String(),
 						"validatorsCount", len(validators))
 
 					for i, validator := range validators {
-						logger.Info("🔍 检查验证者",
+						logger.Debug("🔍 检查验证者",
 							"index", i,
 							"address", validator.Address.String(),
 							"targetAddress", missingAddress.String(),
@@ -711,7 +687,7 @@ func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, bloc
 
 						if validator.Address == missingAddress {
 							found = true
-							logger.Info("🎯 找到匹配的验证者，开始保存BLS公钥",
+							logger.Debug("🎯 找到匹配的验证者，开始保存BLS公钥",
 								"blockNumber", blockNumber,
 								"address", missingAddress.String(),
 								"validatorIndex", i)
@@ -723,7 +699,7 @@ func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, bloc
 
 								// 立即验证保存结果
 								if validator.BlsKey != nil {
-									logger.Info("✅ BLS公钥保存成功",
+									logger.Debug("✅ BLS公钥保存成功",
 										"blockNumber", blockNumber,
 										"address", missingAddress.String(),
 										"validatorIndex", i,
@@ -731,7 +707,7 @@ func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, bloc
 
 									// 🆕 额外验证：检查保存后的公钥长度
 									if marshaled := validator.BlsKey.Marshal(); len(marshaled) > 0 {
-										logger.Info("🎯 BLS公钥保存验证成功",
+										logger.Debug("🎯 BLS公钥保存验证成功",
 											"blockNumber", blockNumber,
 											"address", missingAddress.String(),
 											"marshaledLength", len(marshaled))
@@ -749,7 +725,7 @@ func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, bloc
 
 								// 🆕 保存后验证：检查验证者集合中是否真的保存了BLS公钥
 								if found && validator.BlsKey != nil {
-									logger.Info("🔍 保存后验证：检查验证者集合中的BLS公钥状态",
+									logger.Debug("🔍 保存后验证：检查验证者集合中的BLS公钥状态",
 										"blockNumber", blockNumber,
 										"address", missingAddress.String(),
 										"validatorIndex", i,
@@ -761,14 +737,14 @@ func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, bloc
 											return 0
 										}())
 
-									// 🆕 立即验证：重新检查验证者集合中该地址的BLS公钥状态
-									logger.Info("🔍 立即验证：重新检查验证者集合状态",
+																	// 🆕 立即验证：重新检查验证者集合中该地址的BLS公钥状态
+								logger.Debug("🔍 立即验证：重新检查验证者集合状态",
 										"blockNumber", blockNumber,
 										"address", missingAddress.String())
 
 									for j, v := range validators {
 										if v.Address == missingAddress {
-											logger.Info("🔍 立即验证结果",
+											logger.Debug("🔍 立即验证结果",
 												"blockNumber", blockNumber,
 												"address", missingAddress.String(),
 												"validatorIndex", j,
@@ -820,7 +796,7 @@ func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, bloc
 		"note", "将使用备选方案继续验证")
 
 	// 🆕 备选方案：尝试从本地获取BLS公钥
-	logger.Info("🔍 尝试备选方案：从本地获取BLS公钥",
+	logger.Debug("🔍 尝试备选方案：从本地获取BLS公钥",
 		"blockNumber", blockNumber,
 		"address", missingAddress.String())
 
@@ -840,7 +816,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		"aggregatedSignatureLength", len(s.AggregatedSignature))
 
 	// 🆕 修复：当GetFilteredValidators失败时，尝试获取缺失的BLS密钥
-	logger.Info("🚀🚀🚀 开始执行新的方案2逻辑 🚀🚀🚀", "blockNumber", blockNumber)
+	logger.Debug("🚀🚀🚀 开始执行新的方案2逻辑 🚀🚀🚀", "blockNumber", blockNumber)
 	signers, err := validators.GetFilteredValidators(s.Bitmap)
 	if err != nil {
 		logger.Warn("⚠️ Signature.Verify - GetFilteredValidators失败，尝试获取缺失的BLS密钥", "error", err)
@@ -853,33 +829,33 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 				addressPart := strings.Split(parts[1], ")")[0]
 				if strings.HasPrefix(addressPart, "0x") {
 					missingAddress := types.StringToAddress(addressPart)
-					logger.Info("🔍 检测到缺失BLS密钥的受托人",
+					logger.Debug("🔍 检测到缺失BLS密钥的受托人",
 						"blockNumber", blockNumber,
 						"missingAddress", missingAddress.String())
 
 					// 🆕 方案2：先尝试网络获取BLS密钥，再重新验证
-					logger.Info("🚀🚀🚀 执行方案2：先网络获取，再重新验证 🚀🚀🚀")
+					logger.Debug("🚀🚀🚀 执行方案2：先网络获取，再重新验证 🚀🚀🚀")
 
 					// 尝试从网络获取BLS密钥
 					if s.tryFetchBLSKeyFromNetwork(missingAddress, blockNumber, validators, logger) {
-						logger.Info("✅ 网络获取BLS密钥成功，重新尝试GetFilteredValidators")
+						logger.Debug("✅ 网络获取BLS密钥成功，重新尝试GetFilteredValidators")
 
 						// 重新尝试GetFilteredValidators
 						signers, err = validators.GetFilteredValidators(s.Bitmap)
 						if err == nil {
-							logger.Info("✅ 网络获取BLS密钥后，GetFilteredValidators成功",
+							logger.Debug("✅ 网络获取BLS密钥后，GetFilteredValidators成功",
 								"blockNumber", blockNumber,
 								"signersCount", len(signers))
 							// 🆕 关键修复：成功获取后，直接继续后续验证逻辑
 							goto continueVerification
 						} else {
-							logger.Warn("⚠️ 网络获取BLS密钥后，GetFilteredValidators仍然失败",
+							logger.Debug("⚠️ 网络获取BLS密钥后，GetFilteredValidators仍然失败",
 								"blockNumber", blockNumber,
 								"error", err,
 								"note", "将使用备选方案继续验证")
 						}
 					} else {
-						logger.Warn("⚠️ 网络获取BLS密钥失败，将使用备选方案",
+						logger.Debug("⚠️ 网络获取BLS密钥失败，将使用备选方案",
 							"blockNumber", blockNumber,
 							"note", "系统将容忍BLS公钥缺失，继续验证流程")
 					}
@@ -997,7 +973,7 @@ continueVerification:
 
 	// 🆕 如果有缺失的BLS公钥，先尝试从本地genesis文件读取，不行再通过网络广播获取
 	if len(missingBLSKeys) > 0 {
-		logger.Info("🔍 发现缺失的BLS公钥，先尝试从本地genesis文件读取",
+		logger.Debug("🔍 发现缺失的BLS公钥，先尝试从本地genesis文件读取",
 			"blockNumber", blockNumber,
 			"missingCount", len(missingBLSKeys),
 			"missingAddresses", missingBLSKeys)
@@ -1005,7 +981,7 @@ continueVerification:
 		// 🆕 第一步：尝试从本地genesis文件读取BLS公钥
 		genesisKeysFound := 0
 		for _, address := range missingBLSKeys {
-			logger.Info("🔍 尝试从本地genesis文件读取BLS公钥",
+			logger.Debug("🔍 尝试从本地genesis文件读取BLS公钥",
 				"blockNumber", blockNumber,
 				"address", address.String())
 
@@ -1021,7 +997,7 @@ continueVerification:
 								if validators[int(i)].Address == address {
 									blsPublicKeys[i] = blsKey
 									genesisKeysFound++
-									logger.Info("✅ 从本地genesis文件成功读取BLS公钥",
+									logger.Debug("✅ 从本地genesis文件成功读取BLS公钥",
 										"blockNumber", blockNumber,
 										"address", address.String(),
 										"bitmapIndex", i,
@@ -1035,8 +1011,8 @@ continueVerification:
 								"address", address.String(),
 								"error", err)
 						}
-					} else {
-						logger.Info("⚠️ 本地genesis文件中未找到BLS公钥，将尝试网络广播获取",
+											} else {
+							logger.Debug("⚠️ 本地genesis文件中未找到BLS公钥，将尝试网络广播获取",
 							"blockNumber", blockNumber,
 							"address", address.String())
 					}
@@ -1061,7 +1037,7 @@ continueVerification:
 		}
 
 		if len(remainingMissingKeys) > 0 {
-			logger.Info("📨 本地genesis文件中未找到的BLS公钥，开始网络广播获取",
+			logger.Debug("📨 本地genesis文件中未找到的BLS公钥，开始网络广播获取",
 				"blockNumber", blockNumber,
 				"remainingCount", len(remainingMissingKeys),
 				"remainingAddresses", remainingMissingKeys,
@@ -1070,7 +1046,7 @@ continueVerification:
 			// 尝试从全局注册表获取DPoS实例并请求BLS公钥
 			if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 				for _, address := range remainingMissingKeys {
-					logger.Info("📨 发起BLS公钥网络请求",
+					logger.Debug("📨 发起BLS公钥网络请求",
 						"blockNumber", blockNumber,
 						"address", address.String())
 
@@ -1083,7 +1059,7 @@ continueVerification:
 								"address", address.String(),
 								"error", err)
 						} else {
-							logger.Info("📨 BLS公钥网络请求已发送",
+							logger.Debug("📨 BLS公钥网络请求已发送",
 								"blockNumber", blockNumber,
 								"address", address.String())
 						}
@@ -1096,7 +1072,7 @@ continueVerification:
 			retryInterval := 2 * time.Second // 每2秒检查一次
 			maxRetries := int(maxWaitTime / retryInterval)
 
-			logger.Info("⏳ 开始等待BLS公钥网络响应",
+			logger.Debug("⏳ 开始等待BLS公钥网络响应",
 				"blockNumber", blockNumber,
 				"maxWaitTime", maxWaitTime.String(),
 				"retryInterval", retryInterval.String(),
@@ -1106,7 +1082,7 @@ continueVerification:
 				time.Sleep(retryInterval)
 				elapsedTime := time.Duration(retry+1) * retryInterval
 
-				logger.Info("⏳ 等待BLS公钥网络响应",
+				logger.Debug("⏳ 等待BLS公钥网络响应",
 					"blockNumber", blockNumber,
 					"retry", retry+1,
 					"maxRetries", maxRetries,
@@ -1125,7 +1101,7 @@ continueVerification:
 									// 解析BLS公钥
 									if blsKey, err := bls.UnmarshalPublicKey(cachedBLSKey); err == nil {
 										blsPublicKeys[i] = blsKey
-										logger.Info("✅ 重试期间成功获取BLS公钥",
+										logger.Debug("✅ 重试期间成功获取BLS公钥",
 											"blockNumber", blockNumber,
 											"address", validator.Address.String(),
 											"blsKeyLength", len(cachedBLSKey),
@@ -1142,7 +1118,7 @@ continueVerification:
 
 				// 如果所有密钥都找到了，提前退出
 				if allKeysFound {
-					logger.Info("✅ 所有BLS公钥都已获取，提前退出等待",
+					logger.Debug("✅ 所有BLS公钥都已获取，提前退出等待",
 						"blockNumber", blockNumber,
 						"retry", retry+1,
 						"elapsedTime", elapsedTime)
@@ -1160,7 +1136,7 @@ continueVerification:
 
 			// 🆕 修复：移除重复的BLS公钥检查逻辑，避免与第一个逻辑冲突
 			// 第一个逻辑已经处理了BLS公钥获取和保存，这里不再重复处理
-			logger.Info("🔍 BLS公钥状态检查完成，跳过重复检查",
+			logger.Debug("🔍 BLS公钥状态检查完成，跳过重复检查",
 				"blockNumber", blockNumber,
 				"note", "第一个逻辑已处理BLS公钥获取和保存")
 		}
@@ -1244,14 +1220,14 @@ continueVerification:
 
 				// 🆕 简单修复：如果BLS公钥为空，直接网络获取
 				if validator.BlsKey == nil {
-					logger.Info("🔍 检测到空的BLS公钥，直接网络获取",
+					logger.Debug("🔍 检测到空的BLS公钥，直接网络获取",
 						"blockNumber", blockNumber,
 						"bitmapIndex", i,
 						"address", validator.Address.String())
 
 					// 直接调用网络获取
 					if s.tryFetchBLSKeyFromNetwork(validator.Address, blockNumber, validators, logger) {
-						logger.Info("✅ 直接网络获取BLS公钥成功",
+						logger.Debug("✅ 直接网络获取BLS公钥成功",
 							"blockNumber", blockNumber,
 							"address", validator.Address.String())
 					} else {
