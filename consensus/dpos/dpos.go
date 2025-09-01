@@ -3849,17 +3849,9 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 
 		case <-debugTicker.C:
 			// 调试日志：监控通道状态和收集器状态
-			r.logger.Debug("签名收集调试信息",
-				"checkpointHash", checkpointHash.String(),
-				"collectedSignatures", len(collectedSignatures),
-				"requiredSignatures", minRequiredSignatures,
-				"activeValidators", r.getActiveValidatorsCount(),
-				"totalDelegates", len(r.delegates))
-
 			// 检查网络集成层的收集器状态
 			if r.networkIntegration != nil {
-				r.logger.Debug("网络集成层状态检查",
-					"checkpointHash", checkpointHash.String())
+				// 网络集成层状态检查
 			}
 
 		case <-timeoutCh:
@@ -4249,11 +4241,7 @@ func (r *dposRuntime) calculateMinRequiredSignatures() int {
 		minRequired = 1
 	}
 
-	r.logger.Debug("🧮 法定人数计算",
-		"activeValidators", activeValidators,
-		"totalDelegates", len(r.delegates),
-		"minRequired_Signatures", minRequired,
-		"calculation_Method", "基于人数计算 (2/3多数原则)")
+
 
 	// 现在包括提议者自己，所以不需要减1
 	return minRequired
@@ -5930,7 +5918,7 @@ func (r *dposRuntime) setupNetworkIntegration() error {
 	r.networkIntegration.SetBLSKeyLookupCallback(func(address types.Address) ([]byte, error) {
 		// 通过全局注册表获取DPoS实例
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-			return dposInstance.getBLSKeyBytesFromGenesis(address)
+			return dposInstance.GetBLSKeyBytesFromGenesis(address)
 		}
 		return nil, fmt.Errorf("DPoS instance not available for BLS key lookup")
 	})
@@ -6774,8 +6762,8 @@ func (d *DPoS) callCommandDataSourcesOnStartup() error {
 // broadcastBLSKeyOnStartup 启动时广播BLS公钥 - 已移除
 // 新的机制：只有在需要BLS公钥时才通过网络请求获取
 
-// getBLSKeyBytesFromGenesis 从创世文件获取指定地址的BLS公钥
-func (d *DPoS) getBLSKeyBytesFromGenesis(address types.Address) ([]byte, error) {
+// GetBLSKeyBytesFromGenesis 从创世文件获取指定地址的BLS公钥
+func (d *DPoS) GetBLSKeyBytesFromGenesis(address types.Address) ([]byte, error) {
 	// 🆕 调试信息：显示 InitialDelegates 的内容
 	d.logger.Info("🔍 开始从创世文件查找BLS公钥",
 		"address", address.String(),

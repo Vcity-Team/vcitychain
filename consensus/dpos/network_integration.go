@@ -2048,7 +2048,7 @@ func (ni *NetworkIntegration) findBLSKeyFromGenesisFile(address types.Address) (
 			"address", address.String(),
 			"instanceType", fmt.Sprintf("%T", dposInstance))
 
-		// 使用反射调用getBLSKeyBytesFromGenesis方法
+		// 使用反射调用GetBLSKeyBytesFromGenesis方法
 		if reflectValue := reflect.ValueOf(dposInstance); reflectValue.IsValid() {
 			ni.logger.Debug("🔍 反射值有效",
 				"address", address.String(),
@@ -2057,9 +2057,9 @@ func (ni *NetworkIntegration) findBLSKeyFromGenesisFile(address types.Address) (
 			// 🆕 尝试多个可能的方法名
 			var method reflect.Value
 			var methodName string
-			
+
 			// 按优先级尝试不同的方法名
-			for _, name := range []string{"getBLSKeyBytesFromGenesis", "GetBLSKeyBytesFromGenesis", "GetBLSKey", "GetDelegates"} {
+			for _, name := range []string{"GetBLSKeyBytesFromGenesis", "GetBLSKey"} {
 				if foundMethod := reflectValue.MethodByName(name); foundMethod.IsValid() {
 					method = foundMethod
 					methodName = name
@@ -2070,16 +2070,37 @@ func (ni *NetworkIntegration) findBLSKeyFromGenesisFile(address types.Address) (
 					break
 				}
 			}
-			
+
 			if method.IsValid() {
-				ni.logger.Debug("🔍 找到getBLSKeyBytesFromGenesis方法",
+				ni.logger.Debug("🔍 找到可用方法",
 					"address", address.String(),
+					"methodName", methodName,
 					"methodType", method.Type().String())
 
-				// 调用方法
-				results := method.Call([]reflect.Value{reflect.ValueOf(address)})
+				// 根据方法名和签名调用相应的方法
+				var results []reflect.Value
+				var callErr error
+
+				switch methodName {
+				case "GetBLSKeyBytesFromGenesis", "GetBLSKey":
+					// 这些方法只需要address参数
+					results = method.Call([]reflect.Value{reflect.ValueOf(address)})
+				default:
+					callErr = fmt.Errorf("unsupported method: %s", methodName)
+				}
+
+				if callErr != nil {
+					ni.logger.Error("❌ 方法调用失败",
+						"address", address.String(),
+						"methodName", methodName,
+						"error", callErr.Error())
+					// 跳过这个方法，尝试下一个
+					return nil, callErr
+				}
+
 				ni.logger.Debug("🔍 方法调用完成",
 					"address", address.String(),
+					"methodName", methodName,
 					"resultsCount", len(results))
 
 				if len(results) >= 2 {
@@ -2124,7 +2145,7 @@ func (ni *NetworkIntegration) findBLSKeyFromGenesisFile(address types.Address) (
 						"actualCount", len(results))
 				}
 			} else {
-				ni.logger.Debug("⚠️ 未找到getBLSKeyBytesFromGenesis方法",
+				ni.logger.Debug("⚠️ 未找到可用的BLS公钥获取方法",
 					"address", address.String(),
 					"availableMethods", getAvailableMethods(reflectValue))
 			}
