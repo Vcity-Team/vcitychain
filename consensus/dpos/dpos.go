@@ -4241,8 +4241,6 @@ func (r *dposRuntime) calculateMinRequiredSignatures() int {
 		minRequired = 1
 	}
 
-
-
 	// 现在包括提议者自己，所以不需要减1
 	return minRequired
 }
