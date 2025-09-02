@@ -25,8 +25,8 @@ const (
 	subscribeOutputBufferSize = 8192
 
 	// 消息处理优化常量
-	maxMessageHandlers    = 100              // 最大消息处理器数量
-	messageHandlerTimeout = 30 * time.Second // 消息处理超时时间
+	maxMessageHandlers    = 50               // 减少最大消息处理器数量
+	messageHandlerTimeout = 10 * time.Second // 减少消息处理超时时间
 )
 
 type Topic struct {

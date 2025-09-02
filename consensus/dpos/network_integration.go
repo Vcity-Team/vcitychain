@@ -1213,11 +1213,11 @@ func (ni *NetworkIntegration) GetSignatureResponseTopic() *network.Topic {
 
 // startCollectorCleanupWorker 启动收集器清理工作器
 func (ni *NetworkIntegration) startCollectorCleanupWorker(ctx context.Context, checkpointHash types.Hash) {
-	ticker := time.NewTicker(2 * time.Second) // 更频繁的检查（2秒）
+	ticker := time.NewTicker(10 * time.Second) // 降低频率到10秒，减少goroutine压力
 	defer ticker.Stop()
 
 	// 添加超时控制，避免无限运行
-	timeout := time.After(20 * time.Minute) // 延长到20分钟
+	timeout := time.After(15 * time.Minute) // 缩短到15分钟，更快清理
 
 	for {
 		select {

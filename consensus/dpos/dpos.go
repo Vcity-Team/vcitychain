@@ -336,12 +336,19 @@ func (rm *ResourceMonitor) monitorLoop(ctx context.Context) {
 	ticker := time.NewTicker(rm.cleanupInterval)
 	defer ticker.Stop()
 
+	// 添加内存监控ticker
+	memoryTicker := time.NewTicker(60 * time.Second)
+	defer memoryTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			rm.cleanupResources()
+		case <-memoryTicker.C:
+			// 定期内存监控
+			rm.monitorMemoryUsage()
 		}
 	}
 }
@@ -369,6 +376,28 @@ func (rm *ResourceMonitor) cleanupResources() {
 	// 清理DPoS运行时缓存
 	if rm.dposRuntime != nil {
 		rm.dposRuntime.cleanupExpiredCaches()
+	}
+}
+
+// monitorMemoryUsage 监控内存使用情况
+func (rm *ResourceMonitor) monitorMemoryUsage() {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+
+	allocMB := m.Alloc / 1024 / 1024
+	sysMB := m.Sys / 1024 / 1024
+
+	// 如果内存使用超过100MB，记录警告
+	if allocMB > 100 {
+		rm.logger.Warn("内存使用较高",
+			"allocMB", allocMB,
+			"sysMB", sysMB,
+			"goroutines", runtime.NumGoroutine())
+	} else {
+		rm.logger.Debug("内存使用正常",
+			"allocMB", allocMB,
+			"sysMB", sysMB,
+			"goroutines", runtime.NumGoroutine())
 	}
 }
 
@@ -560,6 +589,15 @@ func (r *dposRuntime) startVoteCollection() error {
 	r.voteTimer = time.NewTicker(voteTime)
 	if r.resourceMonitor != nil && r.resourceMonitor.goroutineManager != nil {
 		r.resourceMonitor.goroutineManager.StartGoroutine("vote-collection", func() {
+			defer func() {
+				// 确保定时器被停止
+				if r.voteTimer != nil {
+					r.voteTimer.Stop()
+					r.voteTimer = nil
+				}
+				r.logger.Debug("投票收集goroutine已退出")
+			}()
+
 			for {
 				select {
 				case <-r.voteTimer.C:
@@ -567,6 +605,7 @@ func (r *dposRuntime) startVoteCollection() error {
 						r.logger.Error("failed to collect votes", "error", err)
 					}
 				case <-r.closeCh:
+					r.logger.Debug("投票收集goroutine收到关闭信号")
 					return
 				}
 			}
@@ -3574,7 +3613,7 @@ func (d *DPoS) updateCache(voterUpdates map[types.Address]*VoterInfo) {
 
 // 缓存清理工作协程
 func (d *DPoS) cacheCleanupWorker() {
-	ticker := time.NewTicker(d.cache.cacheTTL)
+	ticker := time.NewTicker(d.cache.cacheTTL * 2) // 降低清理频率，减少goroutine压力
 	defer ticker.Stop()
 
 	for {

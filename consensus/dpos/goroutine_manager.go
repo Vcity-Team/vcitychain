@@ -199,15 +199,15 @@ func (gm *GoroutineManager) GetStats() map[string]interface{} {
 
 // monitorLoop 监控循环
 func (gm *GoroutineManager) monitorLoop() {
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(30 * time.Second) // 降低频率到30秒
 	defer ticker.Stop()
 
 	// 添加内存监控
-	memoryTicker := time.NewTicker(30 * time.Second)
+	memoryTicker := time.NewTicker(120 * time.Second) // 降低频率到2分钟
 	defer memoryTicker.Stop()
 
 	// 添加goroutine泄漏检测
-	leakTicker := time.NewTicker(60 * time.Second)
+	leakTicker := time.NewTicker(300 * time.Second) // 降低频率到5分钟
 	defer leakTicker.Stop()
 
 	// 记录上次检查时的goroutine数量，用于检测泄漏
