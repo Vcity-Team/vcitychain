@@ -362,6 +362,7 @@ func (f *FilterManager) Run() {
 	blockWatchCh := make(chan *blockchain.Event)
 
 	go func() {
+		defer close(blockWatchCh)
 		for {
 			evnt := f.subscription.GetEvent()
 			if evnt == nil {

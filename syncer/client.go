@@ -120,6 +120,9 @@ func (m *syncPeerClient) Close() {
 	m.peerStatusUpdateChClosed = true
 	close(m.peerStatusUpdateCh)
 	m.peerStatusUpdateChLock.Unlock()
+
+	// 关闭连接更新通道
+	close(m.peerConnectionUpdateCh)
 }
 
 // DisablePublishingPeerStatus disables publishing own status via gossip

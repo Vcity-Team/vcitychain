@@ -245,8 +245,7 @@ func (gm *GoroutineManager) monitorLoop() {
 						"lastCount", lastGoroutineCount,
 						"consecutiveIncreases", consecutiveHighCount)
 
-					// 触发紧急清理
-					gm.emergencyCleanup()
+					// 只记录警告，不触发清理
 					consecutiveHighCount = 0
 				}
 			} else {
