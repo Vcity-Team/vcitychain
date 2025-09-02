@@ -84,8 +84,9 @@ type NetworkIntegration struct {
 	dposRuntime interface{}
 
 	// BLS公钥管理
-	blsKeyCache map[types.Address][]byte // 缓存BLS公钥
-	blsKeyMutex sync.RWMutex
+	blsKeyCache     map[types.Address][]byte    // 缓存BLS公钥
+	blsKeyCacheTime map[types.Address]time.Time // 缓存时间
+	blsKeyMutex     sync.RWMutex
 
 	// 🆕 BLS公钥持久化回调函数
 	blsKeyPersistCallback func(address types.Address, blsKeyBytes []byte) error
@@ -281,6 +282,7 @@ func NewNetworkIntegration(network *network.Server, logger hclog.Logger) *Networ
 		signatureCollectors: make(map[types.Hash]*SignatureCollector),
 		goroutineManager:    NewGoroutineManager(logger, 1000, 100), // 最大1000个协程，100个重试工作器
 		blsKeyCache:         make(map[types.Address][]byte),
+		blsKeyCacheTime:     make(map[types.Address]time.Time),
 	}
 
 	// 注册消息处理器
@@ -315,6 +317,8 @@ func NewNetworkIntegrationWithExistingTopics(network *network.Server, logger hcl
 		handlers:            make(map[string]MessageHandler),
 		signatureCollectors: make(map[types.Hash]*SignatureCollector),
 		goroutineManager:    NewGoroutineManager(logger, 1000, 100), // 最大1000个协程，100个重试工作器
+		blsKeyCache:         make(map[types.Address][]byte),
+		blsKeyCacheTime:     make(map[types.Address]time.Time),
 	}
 
 	// 注册消息处理器
@@ -1403,6 +1407,7 @@ func (ni *NetworkIntegration) StartCleanupWorker(ctx context.Context) {
 				return
 			case <-ticker.C:
 				ni.cleanupExpiredCollectors()
+				ni.cleanupExpiredBLSKeys()
 			}
 		}
 	})
@@ -1437,6 +1442,32 @@ func (ni *NetworkIntegration) cleanupExpiredCollectors() {
 		ni.lock.Unlock()
 
 		ni.logger.Info("cleaned up expired signature collectors", "count", len(expiredCollectors))
+	}
+}
+
+// cleanupExpiredBLSKeys 清理过期的BLS公钥缓存
+func (ni *NetworkIntegration) cleanupExpiredBLSKeys() {
+	ni.blsKeyMutex.Lock()
+	defer ni.blsKeyMutex.Unlock()
+
+	now := time.Now()
+	expiredKeys := make([]types.Address, 0)
+
+	// 收集过期的缓存项（超过1小时）
+	for address, cacheTime := range ni.blsKeyCacheTime {
+		if now.Sub(cacheTime) > time.Hour {
+			expiredKeys = append(expiredKeys, address)
+		}
+	}
+
+	// 清理过期的缓存项
+	for _, address := range expiredKeys {
+		delete(ni.blsKeyCache, address)
+		delete(ni.blsKeyCacheTime, address)
+	}
+
+	if len(expiredKeys) > 0 {
+		ni.logger.Debug("cleaned up expired BLS key cache", "count", len(expiredKeys))
 	}
 }
 
@@ -1552,6 +1583,7 @@ func (ni *NetworkIntegration) saveBLSKey(address types.Address, blsKeyBytes []by
 
 	// 保存到内存缓存
 	ni.blsKeyCache[address] = blsKeyBytes
+	ni.blsKeyCacheTime[address] = time.Now()
 	ni.logger.Debug("BLS公钥已保存到缓存",
 		"address", address.String(),
 		"blsKeyLength", len(blsKeyBytes))

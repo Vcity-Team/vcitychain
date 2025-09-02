@@ -309,14 +309,18 @@ type ResourceMonitor struct {
 
 	// 清理间隔
 	cleanupInterval time.Duration
+
+	// DPoS运行时引用，用于缓存清理
+	dposRuntime *dposRuntime
 }
 
 // NewResourceMonitor 创建资源监控器
-func NewResourceMonitor(logger hclog.Logger) *ResourceMonitor {
+func NewResourceMonitor(logger hclog.Logger, dposRuntime *dposRuntime) *ResourceMonitor {
 	return &ResourceMonitor{
 		logger:           logger.Named("resource-monitor"),
 		goroutineManager: NewGoroutineManager(logger, 2000, 200), // 最大2000个协程，200个重试工作器
 		cleanupInterval:  30 * time.Second,
+		dposRuntime:      dposRuntime,
 	}
 }
 
@@ -360,6 +364,11 @@ func (rm *ResourceMonitor) cleanupResources() {
 			stats := rm.goroutineManager.GetStats()
 			rm.logger.Warn("协程管理器统计", "stats", stats)
 		}
+	}
+
+	// 清理DPoS运行时缓存
+	if rm.dposRuntime != nil {
+		rm.dposRuntime.cleanupExpiredCaches()
 	}
 }
 
@@ -420,7 +429,7 @@ func (r *dposRuntime) initializeRuntime() error {
 	}
 
 	// 初始化资源监控器
-	r.resourceMonitor = NewResourceMonitor(r.logger)
+	r.resourceMonitor = NewResourceMonitor(r.logger, r)
 	r.resourceMonitor.Start(context.Background())
 	r.logger.Debug("资源监控器已启动")
 
@@ -612,6 +621,37 @@ func (r *dposRuntime) cleanupSignatureCollectionResources(checkpointHash types.H
 	r.signatureRequestMutex.Unlock()
 
 	r.logger.Debug("已清理签名收集资源", "checkpointHash", checkpointHash.String())
+}
+
+// cleanupExpiredCaches 清理过期的运行时缓存
+func (r *dposRuntime) cleanupExpiredCaches() {
+	now := time.Now()
+
+	// 清理过期的签名生成记录（超过10分钟）
+	r.signatureGenerationDedupMutex.Lock()
+	for key, timestamp := range r.processedSignatureGenerations {
+		if now.Sub(timestamp) > 10*time.Minute {
+			delete(r.processedSignatureGenerations, key)
+		}
+	}
+	r.signatureGenerationDedupMutex.Unlock()
+
+	// 清理过期的日志时间记录（超过1小时）
+	r.logMutex.Lock()
+	for key, timestamp := range r.lastLogTime {
+		if now.Sub(timestamp) > time.Hour {
+			delete(r.lastLogTime, key)
+		}
+	}
+	r.logMutex.Unlock()
+
+	// 清理过期的BLS私钥缓存（超过30分钟）
+	r.blsPrivateKeyCacheMutex.Lock()
+	if !r.blsPrivateKeyCacheTime.IsZero() && now.Sub(r.blsPrivateKeyCacheTime) > 30*time.Minute {
+		r.blsPrivateKeyCache = nil
+		r.blsPrivateKeyCacheTime = time.Time{}
+	}
+	r.blsPrivateKeyCacheMutex.Unlock()
 }
 
 // produceBlock 生产区块

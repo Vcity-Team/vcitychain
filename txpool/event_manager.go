@@ -43,7 +43,8 @@ func (em *eventManager) subscribe(eventTypes []proto.EventType) *subscribeResult
 		doneCh:     make(chan struct{}),
 		notifyCh:   make(chan struct{}, 10),
 		eventStore: &eventQueue{
-			events: make([]*proto.TxPoolEvent, 0),
+			events:  make([]*proto.TxPoolEvent, 0),
+			maxSize: 1000, // 最大1000个事件
 		},
 	}
 
