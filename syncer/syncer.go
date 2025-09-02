@@ -104,7 +104,7 @@ func (s *syncer) startPeerStatusUpdateProcess() {
 		// 监控处理速度
 		processedCount++
 		if time.Since(lastLogTime) > 10*time.Second {
-			s.logger.Info("状态更新处理统计",
+			s.logger.Debug("状态更新处理统计",
 				"处理数量", processedCount,
 				"时间间隔", time.Since(lastLogTime),
 				"处理速率", float64(processedCount)/time.Since(lastLogTime).Seconds())
@@ -227,7 +227,7 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 // bulkSyncWithPeer syncs block with a given peer
 func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 	newBlockCallback func(*types.FullBlock) bool) (uint64, bool, error) {
-	s.logger.Info("开始区块同步", "peer", peerID.String(), "目标高度", peerLatestBlock)
+	s.logger.Debug("开始区块同步", "peer", peerID.String(), "目标高度", peerLatestBlock)
 
 	localLatest := s.blockchain.Header().Number
 	shouldTerminate := false
@@ -261,7 +261,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 		select {
 		case block, ok := <-blockCh:
 			if !ok {
-				s.logger.Info("区块同步完成", "peer", peerID.String(), "同步区块数", blockCount)
+				s.logger.Debug("区块同步完成", "peer", peerID.String(), "同步区块数", blockCount)
 				return lastReceivedNumber, shouldTerminate, nil
 			}
 

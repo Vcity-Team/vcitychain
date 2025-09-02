@@ -1400,7 +1400,7 @@ continueVerification:
 			"hasBlsKey", i < len(validBLSKeys) && validBLSKeys[i] != nil)
 	}
 
-	logger.Info("🔍 BLS验证公钥过滤结果",
+	logger.Debug("🔍 BLS验证公钥过滤结果",
 		"blockNumber", blockNumber,
 		"totalValidators", len(validators),
 		"bitmapSetCount", bitmapSetCount,

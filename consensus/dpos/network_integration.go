@@ -1553,7 +1553,7 @@ func (ni *NetworkIntegration) monitorCollectorStatus(checkpointHash types.Hash) 
 					"collectedCount", collector.GetCollectedCount(),
 					"requiredCount", collector.GetRequiredCount())
 			} else if collector.IsComplete() {
-				ni.logger.Info("签名收集器已完成",
+				ni.logger.Debug("签名收集器已完成",
 					"checkpointHash", checkpointHash.String(),
 					"collectedCount", collector.GetCollectedCount(),
 					"requiredCount", collector.GetRequiredCount())

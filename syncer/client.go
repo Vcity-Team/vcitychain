@@ -428,7 +428,7 @@ func (m *syncPeerClient) startNewBlockProcess() {
 			if publishErr != nil {
 				m.logger.Error("状态广播最终失败", "区块高度", latest.Number, "错误", publishErr)
 			} else {
-				m.logger.Info("状态广播成功", "区块高度", latest.Number, "节点ID", m.id)
+				m.logger.Debug("状态广播成功", "区块高度", latest.Number, "节点ID", m.id)
 			}
 		}
 	}
@@ -490,7 +490,7 @@ func (m *syncPeerClient) GetBlocks(
 	from uint64,
 	timeoutPerBlock time.Duration,
 ) (<-chan *types.Block, error) {
-	m.logger.Info("请求区块", "peer", peerID.String(), "起始高度", from)
+	m.logger.Debug("请求区块", "peer", peerID.String(), "起始高度", from)
 
 	clt, err := m.newSyncPeerClient(peerID)
 	if err != nil {

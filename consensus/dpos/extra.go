@@ -737,8 +737,8 @@ func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, bloc
 											return 0
 										}())
 
-																	// 🆕 立即验证：重新检查验证者集合中该地址的BLS公钥状态
-								logger.Debug("🔍 立即验证：重新检查验证者集合状态",
+									// 🆕 立即验证：重新检查验证者集合中该地址的BLS公钥状态
+									logger.Debug("🔍 立即验证：重新检查验证者集合状态",
 										"blockNumber", blockNumber,
 										"address", missingAddress.String())
 
@@ -1011,8 +1011,8 @@ continueVerification:
 								"address", address.String(),
 								"error", err)
 						}
-											} else {
-							logger.Debug("⚠️ 本地genesis文件中未找到BLS公钥，将尝试网络广播获取",
+					} else {
+						logger.Debug("⚠️ 本地genesis文件中未找到BLS公钥，将尝试网络广播获取",
 							"blockNumber", blockNumber,
 							"address", address.String())
 					}
@@ -1313,7 +1313,7 @@ continueVerification:
 			"hasBlsKey", i < len(validBLSKeys) && validBLSKeys[i] != nil)
 	}
 
-	logger.Info("🔍 BLS验证公钥过滤结果",
+	logger.Debug("🔍 BLS验证公钥过滤结果",
 		"blockNumber", blockNumber,
 		"totalValidators", len(validators),
 		"bitmapSetCount", bitmapSetCount,

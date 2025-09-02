@@ -847,21 +847,21 @@ func (r *dposRuntime) produceBlock() error {
 	}
 
 	// 提交区块到区块链
-	r.logger.Info("开始提交区块到区块链", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
+	r.logger.Debug("开始提交区块到区块链", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
 
 	if err := r.config.blockchain.CommitBlock(block); err != nil {
 		r.logger.Error("区块提交失败", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String(), "error", err)
 		return fmt.Errorf("failed to commit block: %w", err)
 	}
 
-	r.logger.Info("区块提交成功", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
+	r.logger.Debug("区块提交成功", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
 
 	// 验证区块是否真正写入区块链
 	if writtenBlock, exists := r.config.blockchain.GetHeaderByNumber(block.Block.Number()); exists {
-		r.logger.Info("区块验证成功", "blockNumber", writtenBlock.Number, "blockHash", writtenBlock.Hash.String(), "stateRoot", writtenBlock.StateRoot.String())
+		r.logger.Debug("区块验证成功", "blockNumber", writtenBlock.Number, "blockHash", writtenBlock.Hash.String(), "stateRoot", writtenBlock.StateRoot.String())
 
 		// 进一步验证区块数据完整性
-		r.logger.Info("区块数据完整性验证", "blockNumber", block.Block.Number(), "txCount", len(block.Block.Transactions))
+		r.logger.Debug("区块数据完整性验证", "blockNumber", block.Block.Number(), "txCount", len(block.Block.Transactions))
 
 		// 记录所有交易的详细信息，帮助诊断
 		for i, tx := range block.Block.Transactions {
@@ -1238,7 +1238,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		GetTransactions() []*types.Transaction
 	}); ok {
 		txs := blockBuilder.GetTransactions()
-		r.logger.Info("区块构建器状态", "transactionCount", len(txs))
+		r.logger.Debug("区块构建器状态", "transactionCount", len(txs))
 		if len(txs) > 0 {
 			for i, tx := range txs {
 				r.logger.Info("区块中的交易", "index", i, "hash", tx.Hash.String(), "nonce", tx.Nonce)
@@ -2016,7 +2016,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 				d.runtime.updateRound()
 				d.runtime.lock.Unlock()
 
-				d.logger.Debug("updated round state for block from another node",
+				d.logger.Info("🔄 updated round state for block from another node",
 					"blockNumber", header.Number,
 					"blockMiner", blockMiner.String(),
 					"keyAddr", keyAddr.String(),
@@ -2027,7 +2027,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 			}
 		} else {
 			// 自己生产的区块，轮次已经在produceBlock中更新过了
-			d.logger.Info("processed our own block (round already updated in produceBlock)",
+			d.logger.Debug("processed our own block (round already updated in produceBlock)",
 				"blockNumber", header.Number,
 				"currentRound", d.runtime.currentRound,
 				"currentDelegateIndex", d.runtime.currentDelegateIndex)
