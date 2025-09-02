@@ -17,6 +17,12 @@ type DPoSCache struct {
 	cacheTTL      time.Duration
 	lastUpdate    time.Time
 	lock          sync.RWMutex
+
+	// 增强的缓存管理
+	voterCacheTime    map[types.Address]time.Time // 投票者缓存时间戳
+	delegateCacheTime map[types.Address]time.Time // 委托者缓存时间戳
+	rewardCacheTime   map[types.Address]time.Time // 奖励缓存时间戳
+	maxCacheSize      int                         // 最大缓存大小
 }
 
 // BatchProcessor 批量处理器

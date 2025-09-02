@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-hclog"
@@ -22,6 +23,10 @@ const (
 	// because when queue is full, if the consumer does not read fast enough, new messages are dropped
 	// 增加订阅输出缓冲区大小，防止消息丢失
 	subscribeOutputBufferSize = 8192
+
+	// 消息处理优化常量
+	maxMessageHandlers    = 100              // 最大消息处理器数量
+	messageHandlerTimeout = 30 * time.Second // 消息处理超时时间
 )
 
 type Topic struct {
@@ -32,6 +37,13 @@ type Topic struct {
 	closeCh   chan struct{}
 	closed    atomic.Bool
 	waitGroup sync.WaitGroup
+
+	// 消息处理监控
+	activeHandlers int64            // 当前活跃的消息处理器数量
+	maxHandlers    int64            // 最大消息处理器数量
+	handlerTimeout time.Duration    // 消息处理超时时间
+	messageStats   map[string]int64 // 消息统计
+	statsMutex     sync.RWMutex     // 统计锁
 }
 
 func (t *Topic) createObj() proto.Message {
@@ -151,32 +163,65 @@ func (t *Topic) readLoop(sub *pubsub.Subscription, handler func(obj interface{},
 			continue
 		}
 
+		// 检查活跃处理器数量
+		activeCount := atomic.LoadInt64(&t.activeHandlers)
+		if activeCount >= t.maxHandlers {
+			t.logger.Warn("消息处理器数量已达上限，跳过消息处理",
+				"activeHandlers", activeCount,
+				"maxHandlers", t.maxHandlers,
+				"from", msg.GetFrom().String())
+			metrics.IncrCounter([]string{networkMetrics, "dropped_messages"}, float32(1))
+			continue
+		}
+
+		// 增加活跃处理器计数
+		atomic.AddInt64(&t.activeHandlers, 1)
+
 		go func() {
-			obj := t.createObj()
-			if err := proto.Unmarshal(msg.Data, obj); err != nil {
-				t.logger.Error("failed to unmarshal topic", "err", err)
-				metrics.IncrCounter([]string{networkMetrics, "bad_messages"}, float32(1))
+			defer atomic.AddInt64(&t.activeHandlers, -1)
 
-				return
+			// 添加超时保护
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+
+				obj := t.createObj()
+				if err := proto.Unmarshal(msg.Data, obj); err != nil {
+					t.logger.Error("failed to unmarshal topic", "err", err)
+					metrics.IncrCounter([]string{networkMetrics, "bad_messages"}, float32(1))
+					return
+				}
+
+				// 验证消息的有效性，防止零值消息被传递给处理器
+				if !t.isValidMessage(obj) {
+					t.logger.Debug("收到无效消息，跳过处理",
+						"topic", t.topic.String(),
+						"from", msg.GetFrom().String())
+					metrics.IncrCounter([]string{networkMetrics, "invalid_messages"}, float32(1))
+					return
+				}
+
+				metrics.SetGauge([]string{networkMetrics, "ingress_bytes"}, float32(len(msg.Data)))
+
+				// 只对状态广播消息使用INFO级别日志，其他消息不记录
+				if t.topic != nil && t.topic.String() == "syncer/status/0.1" {
+					t.logger.Debug("状态广播消息接收", "topic", t.topic.String(), "来源", msg.GetFrom().String(), "消息大小", len(msg.Data))
+				}
+
+				handler(obj, msg.GetFrom())
+			}()
+
+			// 等待处理完成或超时
+			select {
+			case <-done:
+				// 正常完成
+			case <-time.After(t.handlerTimeout):
+				t.logger.Warn("消息处理超时",
+					"timeout", t.handlerTimeout,
+					"from", msg.GetFrom().String(),
+					"topic", t.topic.String())
+				metrics.IncrCounter([]string{networkMetrics, "timeout_messages"}, float32(1))
 			}
-
-			// 验证消息的有效性，防止零值消息被传递给处理器
-			if !t.isValidMessage(obj) {
-				t.logger.Debug("收到无效消息，跳过处理",
-					"topic", t.topic.String(),
-					"from", msg.GetFrom().String())
-				metrics.IncrCounter([]string{networkMetrics, "invalid_messages"}, float32(1))
-				return
-			}
-
-			metrics.SetGauge([]string{networkMetrics, "ingress_bytes"}, float32(len(msg.Data)))
-
-			// 只对状态广播消息使用INFO级别日志，其他消息不记录
-			if t.topic != nil && t.topic.String() == "syncer/status/0.1" {
-				t.logger.Debug("状态广播消息接收", "topic", t.topic.String(), "来源", msg.GetFrom().String(), "消息大小", len(msg.Data))
-			}
-
-			handler(obj, msg.GetFrom())
 		}()
 	}
 }
@@ -284,12 +329,56 @@ func (s *Server) NewTopic(protoID string, obj proto.Message) (*Topic, error) {
 	}
 
 	tt := &Topic{
-		logger:  s.logger.Named(protoID),
-		topic:   topic,
-		typ:     reflect.TypeOf(obj).Elem(),
-		closeCh: make(chan struct{}),
+		logger:         s.logger.Named(protoID),
+		topic:          topic,
+		typ:            reflect.TypeOf(obj).Elem(),
+		closeCh:        make(chan struct{}),
+		maxHandlers:    maxMessageHandlers,
+		handlerTimeout: messageHandlerTimeout,
+		messageStats:   make(map[string]int64),
 	}
 	tt.closed.Store(false)
 
 	return tt, nil
+}
+
+// GetMessageStats 获取消息处理统计信息
+func (t *Topic) GetMessageStats() map[string]interface{} {
+	t.statsMutex.RLock()
+	defer t.statsMutex.RUnlock()
+
+	stats := make(map[string]interface{})
+	stats["activeHandlers"] = atomic.LoadInt64(&t.activeHandlers)
+	stats["maxHandlers"] = t.maxHandlers
+	stats["handlerTimeout"] = t.handlerTimeout.String()
+
+	// 复制消息统计
+	messageStatsCopy := make(map[string]int64)
+	for k, v := range t.messageStats {
+		messageStatsCopy[k] = v
+	}
+	stats["messageStats"] = messageStatsCopy
+
+	return stats
+}
+
+// LogMessageStats 记录消息处理统计信息
+func (t *Topic) LogMessageStats() {
+	stats := t.GetMessageStats()
+	activeHandlers := stats["activeHandlers"].(int64)
+	maxHandlers := stats["maxHandlers"].(int64)
+
+	utilization := float64(activeHandlers) / float64(maxHandlers) * 100
+
+	if utilization > 80 {
+		t.logger.Warn("消息处理器使用率较高",
+			"activeHandlers", activeHandlers,
+			"maxHandlers", maxHandlers,
+			"utilization", fmt.Sprintf("%.1f%%", utilization))
+	} else {
+		t.logger.Debug("消息处理器状态正常",
+			"activeHandlers", activeHandlers,
+			"maxHandlers", maxHandlers,
+			"utilization", fmt.Sprintf("%.1f%%", utilization))
+	}
 }

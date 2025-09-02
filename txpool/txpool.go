@@ -212,11 +212,15 @@ func NewTxPool(
 		forks:       forks,
 		store:       store,
 		executables: newPricesQueue(0, nil),
-		accounts:    accountsMap{maxEnqueuedLimit: config.MaxAccountEnqueued},
-		index:       lookupMap{all: make(map[types.Hash]*types.Transaction)},
-		gauge:       slotGauge{height: 0, max: config.MaxSlots},
-		priceLimit:  config.PriceLimit,
-		chainID:     config.ChainID,
+		accounts: accountsMap{
+			maxEnqueuedLimit:  config.MaxAccountEnqueued,
+			accountLastAccess: make(map[types.Address]time.Time),
+			maxAccountCount:   10000, // 最大10000个账户
+		},
+		index:      lookupMap{all: make(map[types.Hash]*types.Transaction)},
+		gauge:      slotGauge{height: 0, max: config.MaxSlots},
+		priceLimit: config.PriceLimit,
+		chainID:    config.ChainID,
 
 		//	main loop channels
 		promoteReqCh: make(chan promoteRequest),
@@ -284,6 +288,21 @@ func (p *TxPool) Start() {
 				return
 			case req := <-p.promoteReqCh:
 				go p.handlePromoteRequest(req)
+			}
+		}
+	}()
+
+	//	run the account cleanup handler
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute) // 每5分钟清理一次
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-p.shutdownCh:
+				return
+			case <-ticker.C:
+				p.cleanupAccounts()
 			}
 		}
 	}()
@@ -1123,4 +1142,23 @@ func toHash(txs ...*types.Transaction) (hashes []types.Hash) {
 	}
 
 	return
+}
+
+// cleanupAccounts 清理不活跃和过多的账户
+func (p *TxPool) cleanupAccounts() {
+	// 清理不活跃的账户（超过30分钟未访问且为空）
+	inactiveCleaned := p.accounts.cleanupInactiveAccounts(30 * time.Minute)
+
+	// 清理过多的账户
+	oversizedCleaned := p.accounts.cleanupOversizedAccounts()
+
+	totalCleaned := inactiveCleaned + oversizedCleaned
+
+	if totalCleaned > 0 {
+		p.logger.Debug("交易池账户清理完成",
+			"不活跃账户清理", inactiveCleaned,
+			"过多账户清理", oversizedCleaned,
+			"总清理数量", totalCleaned,
+			"当前账户数", p.GetAccountsCount())
+	}
 }

@@ -124,21 +124,32 @@ type SignatureCollector struct {
 
 	// 协程管理器引用
 	goroutineManager *GoroutineManager
+
+	// 增强的清理机制
+	createdAt      time.Time     // 创建时间
+	lastActivity   time.Time     // 最后活动时间
+	cleanupTimeout time.Duration // 清理超时时间
+	maxIdleTime    time.Duration // 最大空闲时间
 }
 
 // NewSignatureCollector 创建新的签名收集器
 func NewSignatureCollector(checkpointHash types.Hash, signatureCh chan *SignatureResponse, timeout time.Duration, requiredCount int, goroutineManager *GoroutineManager) *SignatureCollector {
+	now := time.Now()
 	return &SignatureCollector{
 		checkpointHash:   checkpointHash,
 		signatureCh:      signatureCh,
 		receivedSigs:     make(map[types.Address]bool),
-		timeout:          time.Now().Add(timeout),
+		timeout:          now.Add(timeout),
 		logger:           hclog.NewNullLogger(),
 		maxRetries:       3,
 		retryInterval:    2 * time.Second,
 		isActive:         true,
 		requiredCount:    requiredCount,
 		goroutineManager: goroutineManager,
+		createdAt:        now,
+		lastActivity:     now,
+		cleanupTimeout:   15 * time.Minute, // 15分钟清理超时
+		maxIdleTime:      5 * time.Minute,  // 5分钟最大空闲时间
 	}
 }
 
@@ -177,6 +188,7 @@ func (sc *SignatureCollector) AddSignature(response *SignatureResponse) bool {
 	// 添加签名
 	sc.receivedSigs[response.ValidatorAddr] = true
 	sc.collectedCount++
+	sc.lastActivity = time.Now() // 更新最后活动时间
 
 	// 检查是否达到所需数量
 	completed := sc.collectedCount >= sc.requiredCount
@@ -242,7 +254,25 @@ func (sc *SignatureCollector) AddSignature(response *SignatureResponse) bool {
 func (sc *SignatureCollector) IsExpired() bool {
 	sc.mutex.RLock()
 	defer sc.mutex.RUnlock()
-	return time.Now().After(sc.timeout)
+
+	now := time.Now()
+
+	// 检查基本超时
+	if now.After(sc.timeout) {
+		return true
+	}
+
+	// 检查清理超时（创建后15分钟）
+	if now.Sub(sc.createdAt) > sc.cleanupTimeout {
+		return true
+	}
+
+	// 检查空闲超时（5分钟无活动）
+	if now.Sub(sc.lastActivity) > sc.maxIdleTime {
+		return true
+	}
+
+	return false
 }
 
 // IsComplete 检查收集是否完成
@@ -1183,11 +1213,11 @@ func (ni *NetworkIntegration) GetSignatureResponseTopic() *network.Topic {
 
 // startCollectorCleanupWorker 启动收集器清理工作器
 func (ni *NetworkIntegration) startCollectorCleanupWorker(ctx context.Context, checkpointHash types.Hash) {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(2 * time.Second) // 更频繁的检查（2秒）
 	defer ticker.Stop()
 
 	// 添加超时控制，避免无限运行
-	timeout := time.After(10 * time.Minute) // 10分钟后自动退出
+	timeout := time.After(20 * time.Minute) // 延长到20分钟
 
 	for {
 		select {
@@ -1208,15 +1238,29 @@ func (ni *NetworkIntegration) startCollectorCleanupWorker(ctx context.Context, c
 			}
 
 			// 检查是否过期或完成（这些方法使用收集器内部的锁，不会与外部锁冲突）
-			if collector.IsExpired() || collector.IsComplete() {
+			expired := collector.IsExpired()
+			complete := collector.IsComplete()
+
+			if expired || complete {
 				ni.logger.Debug("清理签名收集器",
 					"checkpointHash", checkpointHash.String(),
-					"expired", collector.IsExpired(),
-					"complete", collector.IsComplete())
+					"expired", expired,
+					"complete", complete,
+					"collectedCount", collector.GetCollectedCount(),
+					"requiredCount", collector.GetRequiredCount())
 
 				// 使用单独的锁操作来注销收集器，避免长时间持有锁
 				ni.UnregisterSignatureCollector(checkpointHash)
 				return
+			}
+
+			// 定期记录收集器状态（每30秒）
+			if time.Now().Unix()%30 == 0 {
+				ni.logger.Debug("签名收集器状态检查",
+					"checkpointHash", checkpointHash.String(),
+					"collectedCount", collector.GetCollectedCount(),
+					"requiredCount", collector.GetRequiredCount(),
+					"isActive", collector.isActive)
 			}
 		}
 	}
@@ -1230,6 +1274,36 @@ func (ni *NetworkIntegration) UnregisterSignatureCollector(checkpointHash types.
 
 	ni.logger.Debug("unregistered signature collector",
 		"checkpointHash", checkpointHash.String())
+}
+
+// cleanupExpiredCollectors 清理所有过期的签名收集器
+func (ni *NetworkIntegration) cleanupExpiredCollectors() {
+	ni.lock.RLock()
+	collectors := make(map[types.Hash]*SignatureCollector)
+	for hash, collector := range ni.signatureCollectors {
+		collectors[hash] = collector
+	}
+	ni.lock.RUnlock()
+
+	expiredHashes := make([]types.Hash, 0)
+
+	// 检查所有收集器
+	for hash, collector := range collectors {
+		if collector.IsExpired() || collector.IsComplete() {
+			expiredHashes = append(expiredHashes, hash)
+		}
+	}
+
+	// 清理过期的收集器
+	for _, hash := range expiredHashes {
+		ni.UnregisterSignatureCollector(hash)
+	}
+
+	if len(expiredHashes) > 0 {
+		ni.logger.Debug("批量清理过期签名收集器",
+			"清理数量", len(expiredHashes),
+			"剩余数量", len(ni.signatureCollectors))
+	}
 }
 
 // BroadcastSignatureRequest 广播签名请求
@@ -1411,38 +1485,6 @@ func (ni *NetworkIntegration) StartCleanupWorker(ctx context.Context) {
 			}
 		}
 	})
-}
-
-// cleanupExpiredCollectors 清理过期的签名收集器
-func (ni *NetworkIntegration) cleanupExpiredCollectors() {
-	// 先收集需要清理的收集器，避免在持有锁时进行耗时操作
-	var expiredCollectors []types.Hash
-
-	ni.lock.RLock()
-	for checkpointHash, collector := range ni.signatureCollectors {
-		if time.Now().After(collector.timeout) {
-			expiredCollectors = append(expiredCollectors, checkpointHash)
-		}
-	}
-	ni.lock.RUnlock()
-
-	// 批量清理过期的收集器
-	if len(expiredCollectors) > 0 {
-		ni.lock.Lock()
-		for _, checkpointHash := range expiredCollectors {
-			if collector, exists := ni.signatureCollectors[checkpointHash]; exists {
-				// 再次检查是否过期（可能在检查期间状态已改变）
-				if time.Now().After(collector.timeout) {
-					delete(ni.signatureCollectors, checkpointHash)
-					ni.logger.Debug("cleaned up expired signature collector",
-						"checkpointHash", checkpointHash.String())
-				}
-			}
-		}
-		ni.lock.Unlock()
-
-		ni.logger.Info("cleaned up expired signature collectors", "count", len(expiredCollectors))
-	}
 }
 
 // cleanupExpiredBLSKeys 清理过期的BLS公钥缓存

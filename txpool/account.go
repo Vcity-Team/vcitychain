@@ -1,8 +1,10 @@
 package txpool
 
 import (
+	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/Vcity-Team/vcitychain/types"
 )
@@ -14,6 +16,11 @@ type accountsMap struct {
 
 	count            uint64
 	maxEnqueuedLimit uint64
+
+	// 增强的账户管理
+	accountLastAccess  map[types.Address]time.Time // 账户最后访问时间
+	accountAccessMutex sync.RWMutex                // 访问时间锁
+	maxAccountCount    int                         // 最大账户数量
 }
 
 // Initializes an account for the given address.
@@ -31,6 +38,9 @@ func (m *accountsMap) initOnce(addr types.Address, nonce uint64) *account {
 		// update global count if it was a store
 		atomic.AddUint64(&m.count, 1)
 	}
+
+	// 记录访问时间
+	m.recordAccess(addr)
 
 	return newAccount
 }
@@ -78,6 +88,9 @@ func (m *accountsMap) get(addr types.Address) *account {
 	if !ok {
 		return nil
 	}
+
+	// 记录访问时间
+	m.recordAccess(addr)
 
 	return fetchedAccount
 }
@@ -383,4 +396,146 @@ func (a *account) getLowestTx() *types.Transaction {
 	}
 
 	return nil
+}
+
+// recordAccess 记录账户访问时间
+func (m *accountsMap) recordAccess(addr types.Address) {
+	m.accountAccessMutex.Lock()
+	defer m.accountAccessMutex.Unlock()
+
+	if m.accountLastAccess == nil {
+		m.accountLastAccess = make(map[types.Address]time.Time)
+	}
+	m.accountLastAccess[addr] = time.Now()
+}
+
+// cleanupInactiveAccounts 清理不活跃的账户
+func (m *accountsMap) cleanupInactiveAccounts(maxAge time.Duration) int {
+	m.accountAccessMutex.Lock()
+	defer m.accountAccessMutex.Unlock()
+
+	if m.accountLastAccess == nil {
+		return 0
+	}
+
+	now := time.Now()
+	cleanedCount := 0
+	inactiveAccounts := make([]types.Address, 0)
+
+	// 收集不活跃的账户
+	for addr, lastAccess := range m.accountLastAccess {
+		if now.Sub(lastAccess) > maxAge {
+			// 检查账户是否为空（没有待处理或已提升的交易）
+			if account := m.getWithoutAccess(addr); account != nil {
+				if m.isAccountEmpty(account) {
+					inactiveAccounts = append(inactiveAccounts, addr)
+				}
+			}
+		}
+	}
+
+	// 删除不活跃的空账户
+	for _, addr := range inactiveAccounts {
+		m.Delete(addr)
+		delete(m.accountLastAccess, addr)
+		atomic.AddUint64(&m.count, ^uint64(0)) // 减1
+		cleanedCount++
+	}
+
+	return cleanedCount
+}
+
+// cleanupOversizedAccounts 清理过多的账户
+func (m *accountsMap) cleanupOversizedAccounts() int {
+	currentCount := int(atomic.LoadUint64(&m.count))
+
+	if currentCount <= m.maxAccountCount {
+		return 0
+	}
+
+	// 计算需要清理的数量（保留80%的账户）
+	targetCount := int(float64(m.maxAccountCount) * 0.8)
+	needToClean := currentCount - targetCount
+
+	if needToClean <= 0 {
+		return 0
+	}
+
+	m.accountAccessMutex.RLock()
+	// 按访问时间排序，找出最久未访问的账户
+	accountEntries := make([]accountAccessEntry, 0, len(m.accountLastAccess))
+	for addr, lastAccess := range m.accountLastAccess {
+		accountEntries = append(accountEntries, accountAccessEntry{
+			addr:       addr,
+			lastAccess: lastAccess,
+		})
+	}
+	m.accountAccessMutex.RUnlock()
+
+	// 按访问时间排序（最旧的在前）
+	sort.Slice(accountEntries, func(i, j int) bool {
+		return accountEntries[i].lastAccess.Before(accountEntries[j].lastAccess)
+	})
+
+	// 清理最久未访问的空账户
+	cleanedCount := 0
+	for _, entry := range accountEntries {
+		if cleanedCount >= needToClean {
+			break
+		}
+
+		if account := m.getWithoutAccess(entry.addr); account != nil {
+			if m.isAccountEmpty(account) {
+				m.Delete(entry.addr)
+				m.accountAccessMutex.Lock()
+				delete(m.accountLastAccess, entry.addr)
+				m.accountAccessMutex.Unlock()
+				atomic.AddUint64(&m.count, ^uint64(0)) // 减1
+				cleanedCount++
+			}
+		}
+	}
+
+	return cleanedCount
+}
+
+// getWithoutAccess 获取账户但不记录访问时间（用于清理检查）
+func (m *accountsMap) getWithoutAccess(addr types.Address) *account {
+	a, ok := m.Load(addr)
+	if !ok {
+		return nil
+	}
+
+	fetchedAccount, ok := a.(*account)
+	if !ok {
+		return nil
+	}
+
+	return fetchedAccount
+}
+
+// isAccountEmpty 检查账户是否为空（没有待处理或已提升的交易）
+func (m *accountsMap) isAccountEmpty(account *account) bool {
+	// 检查待处理队列
+	account.enqueued.lock(false)
+	enqueuedEmpty := account.enqueued.length() == 0
+	account.enqueued.unlock()
+
+	// 检查已提升队列
+	account.promoted.lock(false)
+	promotedEmpty := account.promoted.length() == 0
+	account.promoted.unlock()
+
+	// 检查nonce映射
+	account.nonceToTx.lock()
+	nonceEmpty := len(account.nonceToTx.mapping) == 0
+	account.nonceToTx.unlock()
+
+	return enqueuedEmpty && promotedEmpty && nonceEmpty
+}
+
+// accountAccessEntry 账户访问条目，用于排序
+type accountAccessEntry struct {
+	addr       types.Address
+	lastAccess time.Time
 }
