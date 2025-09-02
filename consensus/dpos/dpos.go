@@ -185,6 +185,10 @@ type dposRuntime struct {
 	blockTimer *time.Ticker
 	voteTimer  *time.Ticker
 
+	// 🆕 网络健康监控
+	networkHealthTimer *time.Ticker
+	lastNetworkCheck   time.Time
+
 	// 控制通道
 	closeCh chan struct{}
 
@@ -245,6 +249,9 @@ func (r *dposRuntime) start() error {
 	r.logger.Debug("准备启动签名请求监听器")
 	go r.listenForSignatureRequests(context.Background())
 
+	// 🆕 启动网络健康监控
+	r.startNetworkHealthMonitoring()
+
 	r.logger.Debug("DPoS runtime started successfully")
 	return nil
 }
@@ -258,6 +265,10 @@ func (r *dposRuntime) close() {
 	}
 	if r.voteTimer != nil {
 		r.voteTimer.Stop()
+	}
+	// 🆕 停止网络健康监控定时器
+	if r.networkHealthTimer != nil {
+		r.networkHealthTimer.Stop()
 	}
 
 	// 停止网络集成管理器
@@ -2349,10 +2360,12 @@ func (d *DPoS) Initialize() error {
 	}
 
 	// 🆕 注册DPoS实例到全局注册表
-	// 使用节点地址作为key
-	key := d.key.Address().String()
-	RegisterDPoSInstance(key, d)
-	d.logger.Debug("DPoS实例已注册到全局注册表", "address", key)
+	// 使用固定key和节点地址作为key，确保能够被找到
+	fixedKey := "vcity_dpos"
+	nodeKey := d.key.Address().String()
+	RegisterDPoSInstance(fixedKey, d)
+	RegisterDPoSInstance(nodeKey, d)
+	d.logger.Debug("DPoS实例已注册到全局注册表", "fixedKey", fixedKey, "nodeKey", nodeKey)
 
 	// create and set syncer
 	d.syncer = syncer.NewSyncer(
@@ -4138,8 +4151,17 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 				timeoutCh = time.After(1 * time.Minute)
 			} else if len(collectedSignatures) == 0 {
 				r.logger.Warn("验证者数量足够但未收到签名，检查网络连接")
-				// 重置超时，给网络响应更多时间
-				timeoutCh = time.After(30 * time.Second)
+
+				// 🆕 进行网络健康检查
+				if !r.checkNetworkHealth() {
+					r.logger.Warn("网络健康检查失败，尝试自动恢复")
+					go r.recoverNetworkConnection()
+					// 给恢复更多时间
+					timeoutCh = time.After(1 * time.Minute)
+				} else {
+					// 网络健康但未收到签名，可能是其他问题，给更多时间
+					timeoutCh = time.After(30 * time.Second)
+				}
 			}
 
 		case <-debugTicker.C:
@@ -4507,11 +4529,129 @@ func (r *dposRuntime) getActiveValidatorsCount() int {
 		return 0
 	}
 
+	// 🆕 检查实际网络连接状态
+	connectedPeers := r.getConnectedPeersCount()
+	if connectedPeers < activeValidators {
+		r.logger.Debug("实际网络连接数少于活跃验证者数",
+			"connectedPeers", connectedPeers,
+			"activeValidators", activeValidators)
+		// 返回实际连接数和活跃验证者数的最小值
+		return connectedPeers
+	}
+
 	// r.logger.Info("🔢 活跃验证者统计",
 	// 	"activeValidators", activeValidators,
 	// 	"totalDelegates", len(r.delegates),
 	// 	"calculation_Method", "基于人数统计 (IsActive=true && VotingPower>0)")
 	return activeValidators
+}
+
+// getConnectedPeersCount 获取实际连接的节点数量
+func (r *dposRuntime) getConnectedPeersCount() int {
+	if r.network == nil {
+		return 0
+	}
+
+	peers := r.network.Peers()
+	connectedCount := 0
+
+	for _, peer := range peers {
+		// 检查peer是否真正连接（这里需要根据实际的peer接口调整）
+		// 假设peer有IsConnected方法或类似的状态检查
+		if peer != nil {
+			connectedCount++
+		}
+	}
+
+	return connectedCount
+}
+
+// checkNetworkHealth 检查网络健康状态
+func (r *dposRuntime) checkNetworkHealth() bool {
+	if r.network == nil {
+		r.logger.Debug("网络健康检查失败：网络服务不可用")
+		return false
+	}
+
+	// 检查主题是否可用
+	topic, err := r.getSignatureRequestTopic()
+	if err != nil || topic == nil {
+		r.logger.Debug("网络健康检查失败：签名请求主题不可用", "error", err)
+		return false
+	}
+
+	// 检查是否有足够的网络连接
+	connectedPeers := r.getConnectedPeersCount()
+	if connectedPeers < 2 {
+		r.logger.Debug("网络健康检查失败：网络连接不足", "connectedPeers", connectedPeers)
+		return false
+	}
+
+	r.logger.Debug("网络健康检查通过", "connectedPeers", connectedPeers)
+	return true
+}
+
+// recoverNetworkConnection 自动恢复网络连接
+func (r *dposRuntime) recoverNetworkConnection() {
+	r.logger.Warn("检测到网络连接问题，尝试自动恢复")
+
+	// 重新创建网络主题
+	r.topicMutex.Lock()
+	r.signatureRequestTopic = nil
+	r.signatureResponseTopic = nil
+	r.signatureQueryTopic = nil
+	r.topicMutex.Unlock()
+
+	r.logger.Debug("网络主题已重置，等待重新创建")
+
+	// 重新初始化网络集成层
+	if r.networkIntegration != nil {
+		r.logger.Debug("重新初始化网络集成层")
+		if err := r.networkIntegration.Stop(); err != nil {
+			r.logger.Warn("停止网络集成层失败", "error", err)
+		}
+
+		// 重新设置网络集成层
+		if err := r.setupNetworkIntegration(); err != nil {
+			r.logger.Error("重新设置网络集成层失败", "error", err)
+		} else {
+			r.logger.Info("网络集成层重新初始化成功")
+		}
+	}
+}
+
+// startNetworkHealthMonitoring 启动网络健康监控
+func (r *dposRuntime) startNetworkHealthMonitoring() {
+	// 每30秒检查一次网络健康状态
+	r.networkHealthTimer = time.NewTicker(30 * time.Second)
+
+	if r.resourceMonitor != nil && r.resourceMonitor.goroutineManager != nil {
+		r.resourceMonitor.goroutineManager.StartGoroutine("network-health-monitor", func() {
+			for {
+				select {
+				case <-r.networkHealthTimer.C:
+					r.performNetworkHealthCheck()
+				case <-r.closeCh:
+					return
+				}
+			}
+		})
+	}
+
+	r.logger.Debug("网络健康监控已启动")
+}
+
+// performNetworkHealthCheck 执行网络健康检查
+func (r *dposRuntime) performNetworkHealthCheck() {
+	r.lastNetworkCheck = time.Now()
+
+	// 检查网络健康状态
+	if !r.checkNetworkHealth() {
+		r.logger.Warn("定期网络健康检查失败，尝试自动恢复")
+		go r.recoverNetworkConnection()
+	} else {
+		r.logger.Debug("定期网络健康检查通过")
+	}
 }
 
 // calculateMinRequiredSignatures 计算最少需要的签名数量
@@ -4677,8 +4817,8 @@ func (r *dposRuntime) broadcastSignatureRequest(protoRequest *dposProto.Signatur
 
 	r.logger.Debug("成功广播签名请求", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String())
 
-	// 启动签名请求确认检查
-	go r.checkSignatureRequestConfirmation(protoRequest, checkpointHash)
+	// 启动基于时间的简单备用传播监控
+	go r.simpleFallbackMonitoring(protoRequest, checkpointHash)
 
 	//r.logger.Info("成功广播签名请求",
 	//	"blockNumber", protoRequest.BlockNumber,
@@ -5785,7 +5925,45 @@ type SignatureResponse struct {
 // verifyValidatorSignature 验证验证者签名
 func (r *dposRuntime) verifyValidatorSignature(delegate *validator.ValidatorMetadata, signature []byte, checkpointHash types.Hash) error {
 	if delegate.BlsKey == nil {
-		return fmt.Errorf("validator has no BLS public key")
+		// 🆕 尝试从持久化存储中获取BLS公钥
+		r.logger.Debug("验证者缺少BLS公钥，尝试从持久化存储获取", "validator", delegate.Address.String())
+
+		// 通过网络集成层获取BLS公钥
+		if r.networkIntegration != nil {
+			blsKeyBytes, exists := r.networkIntegration.GetBLSKey(delegate.Address)
+			if exists && len(blsKeyBytes) > 0 {
+				// 解析BLS公钥
+				blsKey, err := bls.UnmarshalPublicKey(blsKeyBytes)
+				if err != nil {
+					r.logger.Warn("解析持久化的BLS公钥失败", "validator", delegate.Address.String(), "error", err)
+				} else {
+					// 设置BLS公钥到delegate
+					delegate.BlsKey = blsKey
+					r.logger.Debug("成功从持久化存储恢复BLS公钥", "validator", delegate.Address.String())
+				}
+			} else {
+				// 如果缓存中没有，尝试从数据库恢复
+				r.logger.Debug("缓存中未找到BLS公钥，尝试从数据库恢复", "validator", delegate.Address.String())
+				if err := r.networkIntegration.restoreBLSKeysFromDatabase(); err != nil {
+					r.logger.Debug("从数据库恢复BLS公钥失败", "validator", delegate.Address.String(), "error", err)
+				} else {
+					// 再次尝试从缓存获取
+					blsKeyBytes, exists := r.networkIntegration.GetBLSKey(delegate.Address)
+					if exists && len(blsKeyBytes) > 0 {
+						blsKey, err := bls.UnmarshalPublicKey(blsKeyBytes)
+						if err == nil {
+							delegate.BlsKey = blsKey
+							r.logger.Debug("成功从数据库恢复BLS公钥", "validator", delegate.Address.String())
+						}
+					}
+				}
+			}
+		}
+
+		// 如果仍然没有BLS公钥，返回错误
+		if delegate.BlsKey == nil {
+			return fmt.Errorf("validator has no BLS public key")
+		}
 	}
 
 	// 检查签名长度
@@ -5978,62 +6156,41 @@ func (r *dposRuntime) debugPendingSignatureRequests() {
 	//r.logger.Info("=== 调试结束 ===")
 }
 
-// checkSignatureRequestConfirmation 检查签名请求是否被其他节点收到
-func (r *dposRuntime) checkSignatureRequestConfirmation(protoRequest *dposProto.SignatureRequest, checkpointHash types.Hash) {
-	// 等待一段时间让消息传播
-	time.Sleep(3 * time.Second)
-
-	// 检查其他节点的状态
-	peers := r.network.Peers()
-	confirmedCount := 0
-	totalPeers := len(peers)
-
-	for _, peer := range peers {
-		peerID := peer.Info.ID
-
-		// 跳过自己
-		if peerID.String() == r.network.AddrInfo().ID.String() {
-			continue
-		}
-
-		// 检查该节点是否收到了签名请求
-		// 这里我们可以通过检查该节点是否有对应的签名响应来判断
-		r.signatureRequestMutex.RLock()
-		hasResponse := false
-		// 检查是否有来自该节点的签名响应
-		// 这里简化处理，实际应该检查具体的响应
-		r.signatureRequestMutex.RUnlock()
-
-		if hasResponse {
-			confirmedCount++
-			r.logger.Debug("签名请求确认", "peer", peerID.String()[:8], "checkpointHash", checkpointHash.String())
-		} else {
-			//r.logger.Warn("签名请求未确认", "peer", peerID.String()[:8], "checkpointHash", checkpointHash.String())
-		}
-	}
-
-	// 记录确认结果
-	if totalPeers > 1 {
-		confirmationRate := float64(confirmedCount) / float64(totalPeers-1)
-		r.logger.Info("签名请求确认结果",
+// simpleFallbackMonitoring 基于时间的简单备用传播监控
+func (r *dposRuntime) simpleFallbackMonitoring(protoRequest *dposProto.SignatureRequest, checkpointHash types.Hash) {
+	// 第一层：1秒后检查进度
+	time.Sleep(1 * time.Second)
+	progress := r.getSignatureCollectionProgress(checkpointHash)
+	if progress < 0.2 { // 20%以下
+		r.logger.Warn("签名收集进度极低，启动备用传播",
 			"区块高度", protoRequest.BlockNumber,
 			"checkpointHash", checkpointHash.String(),
-			"确认节点数", confirmedCount,
-			"总节点数", totalPeers-1,
-			"确认率", fmt.Sprintf("%.2f%%", confirmationRate*100))
+			"progress", fmt.Sprintf("%.2f%%", progress*100))
+		go r.fallbackSignatureRequestPropagation(protoRequest, checkpointHash)
+		return
+	}
 
-		// 如果确认率太低，启动备用传播机制
-		if confirmationRate < 0.3 { // 从0.5降低到0.3，减少过度触发
-			r.logger.Warn("签名请求确认率较低",
-				"区块高度", protoRequest.BlockNumber,
-				"checkpointHash", checkpointHash.String(),
-				"确认率", fmt.Sprintf("%.2f%%", confirmationRate*100),
-				"启动备用传播机制")
+	// 第二层：1.5秒后再次检查
+	time.Sleep(500 * time.Millisecond) // 总共1.5秒
+	progress = r.getSignatureCollectionProgress(checkpointHash)
+	if progress < 0.5 { // 50%以下
+		r.logger.Warn("签名收集进度不足，启动备用传播",
+			"区块高度", protoRequest.BlockNumber,
+			"checkpointHash", checkpointHash.String(),
+			"progress", fmt.Sprintf("%.2f%%", progress*100))
+		go r.fallbackSignatureRequestPropagation(protoRequest, checkpointHash)
+	}
+}
 
-			// 启动备用传播机制
-			go r.fallbackSignatureRequestPropagation(protoRequest, checkpointHash)
+// getSignatureCollectionProgress 获取签名收集进度
+func (r *dposRuntime) getSignatureCollectionProgress(checkpointHash types.Hash) float64 {
+	if r.networkIntegration != nil {
+		collector := r.networkIntegration.GetSignatureCollector(checkpointHash)
+		if collector != nil {
+			return float64(collector.GetCollectedCount()) / float64(collector.requiredCount)
 		}
 	}
+	return 0.0
 }
 
 // fallbackSignatureRequestPropagation 备用签名请求传播机制
@@ -6197,11 +6354,45 @@ func (r *dposRuntime) setupNetworkIntegration() error {
 	// 设置DPoS运行时回调
 	r.networkIntegration.SetDPoSRuntime(r)
 
+	// 🆕 设置DPoS实例引用（如果backend是DPoS实例）
+	if dpos, ok := r.backend.(*DPoS); ok {
+		r.networkIntegration.SetDPoSInstance(dpos)
+		r.logger.Debug("网络集成层DPoS实例引用已设置")
+	}
+
 	// 🆕 设置BLS公钥持久化回调函数
 	r.networkIntegration.SetBLSKeyPersistCallback(func(address types.Address, blsKeyBytes []byte) error {
-		// 这里我们使用一个全局变量或者注册表来查找DPoS实例
-		// 为了简单起见，我们先返回错误，提示需要改进架构
-		r.logger.Warn("BLS公钥持久化需要DPoS实例引用，请检查系统架构",
+		// 通过backend获取DPoS实例
+		if dpos, ok := r.backend.(*DPoS); ok {
+			if err := dpos.persistBLSKeyToStakeStore(address, blsKeyBytes); err != nil {
+				r.logger.Warn("BLS公钥持久化失败",
+					"address", address.String(),
+					"blsKeyLength", len(blsKeyBytes),
+					"error", err)
+				return err
+			}
+			r.logger.Debug("BLS公钥持久化成功",
+				"address", address.String(),
+				"blsKeyLength", len(blsKeyBytes))
+			return nil
+		}
+
+		// 如果backend不是DPoS实例，尝试通过全局注册表查找
+		if dpos, exists := GetDPoSInstance(address.String()); exists && dpos != nil {
+			if err := dpos.persistBLSKeyToStakeStore(address, blsKeyBytes); err != nil {
+				r.logger.Warn("通过全局注册表BLS公钥持久化失败",
+					"address", address.String(),
+					"blsKeyLength", len(blsKeyBytes),
+					"error", err)
+				return err
+			}
+			r.logger.Debug("通过全局注册表BLS公钥持久化成功",
+				"address", address.String(),
+				"blsKeyLength", len(blsKeyBytes))
+			return nil
+		}
+
+		r.logger.Warn("无法找到DPoS实例进行BLS公钥持久化",
 			"address", address.String(),
 			"blsKeyLength", len(blsKeyBytes))
 		return fmt.Errorf("DPoS instance not available for BLS key persistence")
@@ -7094,7 +7285,7 @@ func (d *DPoS) GetBLSKeyBytesFromGenesis(address types.Address) ([]byte, error) 
 	}
 
 	// 🆕 调试信息：显示未找到的原因
-	d.logger.Warn("⚠️ 在创世文件中未找到BLS公钥",
+	d.logger.Debug("⚠️ 在创世文件中未找到BLS公钥",
 		"address", address.String(),
 		"initialDelegatesCount", len(d.config.InitialDelegates),
 		"note", "请检查创世文件是否正确加载")

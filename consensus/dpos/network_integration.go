@@ -1211,6 +1211,13 @@ func (ni *NetworkIntegration) GetSignatureResponseTopic() *network.Topic {
 	return ni.signatureResponseTopic
 }
 
+// GetSignatureCollector 获取签名收集器
+func (ni *NetworkIntegration) GetSignatureCollector(checkpointHash types.Hash) *SignatureCollector {
+	ni.lock.RLock()
+	defer ni.lock.RUnlock()
+	return ni.signatureCollectors[checkpointHash]
+}
+
 // startCollectorCleanupWorker 启动收集器清理工作器
 func (ni *NetworkIntegration) startCollectorCleanupWorker(ctx context.Context, checkpointHash types.Hash) {
 	ticker := time.NewTicker(10 * time.Second) // 降低频率到10秒，减少goroutine压力
@@ -1746,13 +1753,25 @@ func (ni *NetworkIntegration) persistBLSKeyToDatabase(address types.Address, bls
 		}
 	}
 
-	// 🆕 通过全局注册表查找DPoS实例
-	if dpos, exists := GetDPoSInstance(address.String()); exists && dpos != nil {
+	// 🆕 通过全局注册表查找DPoS实例（优先使用固定key）
+	if dpos, exists := GetDPoSInstance("vcity_dpos"); exists && dpos != nil {
 		if err := dpos.persistBLSKeyToStakeStore(address, blsKeyBytes); err != nil {
-			return fmt.Errorf("通过全局注册表持久化BLS公钥失败: %w", err)
+			return fmt.Errorf("通过全局注册表（固定key）持久化BLS公钥失败: %w", err)
 		}
 
-		ni.logger.Debug("BLS公钥已成功持久化到数据库（通过全局注册表）",
+		ni.logger.Debug("BLS公钥已成功持久化到数据库（通过全局注册表-固定key）",
+			"address", address.String(),
+			"blsKeyLength", len(blsKeyBytes))
+		return nil
+	}
+
+	// 🆕 备用方案：通过地址查找DPoS实例
+	if dpos, exists := GetDPoSInstance(address.String()); exists && dpos != nil {
+		if err := dpos.persistBLSKeyToStakeStore(address, blsKeyBytes); err != nil {
+			return fmt.Errorf("通过全局注册表（地址key）持久化BLS公钥失败: %w", err)
+		}
+
+		ni.logger.Debug("BLS公钥已成功持久化到数据库（通过全局注册表-地址key）",
 			"address", address.String(),
 			"blsKeyLength", len(blsKeyBytes))
 		return nil
