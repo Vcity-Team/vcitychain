@@ -329,7 +329,11 @@ type FilterManager struct {
 	timeouts timeHeapImpl
 
 	updateCh chan struct{}
-	closeCh  chan struct{}
+
+	// 新增：过滤器管理优化
+	maxFilters    int           // 最大过滤器数量
+	filterTimeout time.Duration // 过滤器超时时间
+	closeCh       chan struct{}
 }
 
 func NewFilterManager(logger hclog.Logger, store filterManagerStore, blockRangeLimit uint64) *FilterManager {
@@ -342,6 +346,8 @@ func NewFilterManager(logger hclog.Logger, store filterManagerStore, blockRangeL
 		timeouts:        timeHeapImpl{},
 		updateCh:        make(chan struct{}),
 		closeCh:         make(chan struct{}),
+		maxFilters:      500,             // 最大500个过滤器
+		filterTimeout:   5 * time.Minute, // 过滤器超时时间5分钟
 	}
 
 	// start blockstream with the current header
@@ -690,6 +696,17 @@ func (f *FilterManager) addFilter(filter filter) string {
 	f.Lock()
 	defer f.Unlock()
 
+	// 检查过滤器数量限制
+	if len(f.filters) >= f.maxFilters {
+		f.logger.Warn("过滤器数量已达上限，拒绝新过滤器",
+			"current", len(f.filters),
+			"max", f.maxFilters)
+		return ""
+	}
+
+	// 清理过期的过滤器
+	f.cleanupExpiredFilters()
+
 	base := filter.getFilterBase()
 
 	f.filters[base.id] = filter
@@ -700,6 +717,30 @@ func (f *FilterManager) addFilter(filter filter) string {
 	}
 
 	return base.id
+}
+
+// cleanupExpiredFilters 清理过期的过滤器
+func (f *FilterManager) cleanupExpiredFilters() {
+	now := time.Now().UTC()
+	expiredFilters := make([]string, 0)
+
+	for id, filter := range f.filters {
+		base := filter.getFilterBase()
+		// 清理超过超时时间的过滤器
+		if now.Sub(base.expiresAt) > f.filterTimeout {
+			expiredFilters = append(expiredFilters, id)
+		}
+	}
+
+	// 删除过期的过滤器
+	for _, id := range expiredFilters {
+		if filter, ok := f.filters[id]; ok {
+			base := filter.getFilterBase()
+			f.timeouts.removeFilter(base)
+			delete(f.filters, id)
+			f.logger.Debug("清理过期过滤器", "id", id)
+		}
+	}
 }
 
 func (f *FilterManager) emitSignalToUpdateCh() {

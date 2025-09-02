@@ -185,11 +185,26 @@ type PeerConnInfo struct {
 
 	connDirections  map[network.Direction]bool
 	protocolStreams map[string]*rawGrpc.ClientConn
+	lastAccess      time.Time // 最后访问时间
+	maxStreams      int       // 最大流数量限制
 }
 
 // addProtocolStream adds a protocol stream
 func (pci *PeerConnInfo) addProtocolStream(protocol string, stream *rawGrpc.ClientConn) {
+	// 检查流数量限制
+	if len(pci.protocolStreams) >= pci.maxStreams {
+		// 关闭最旧的流
+		for proto, oldStream := range pci.protocolStreams {
+			if oldStream != nil {
+				oldStream.Close()
+			}
+			delete(pci.protocolStreams, proto)
+			break
+		}
+	}
+
 	pci.protocolStreams[protocol] = stream
+	pci.lastAccess = time.Now()
 }
 
 // removeProtocolStream removes and closes a protocol stream
@@ -210,7 +225,22 @@ func (pci *PeerConnInfo) removeProtocolStream(protocol string) error {
 
 // getProtocolStream fetches the protocol stream, if any
 func (pci *PeerConnInfo) getProtocolStream(protocol string) *rawGrpc.ClientConn {
+	pci.lastAccess = time.Now()
 	return pci.protocolStreams[protocol]
+}
+
+// cleanupExpiredStreams 清理过期的流
+func (pci *PeerConnInfo) cleanupExpiredStreams() {
+	now := time.Now()
+	for protocol, stream := range pci.protocolStreams {
+		// 如果流超过超时时间，关闭它
+		if now.Sub(pci.lastAccess) > streamTimeout {
+			if stream != nil {
+				stream.Close()
+			}
+			delete(pci.protocolStreams, protocol)
+		}
+	}
 }
 
 // setupLibp2pKey is a helper method for setting up the networking private key
@@ -550,6 +580,11 @@ var (
 	// Anything below 35s is prone to false timeouts, as seen from empirical test data
 	DefaultJoinTimeout   = 100 * time.Second
 	DefaultBufferTimeout = DefaultJoinTimeout + time.Second*5
+
+	// 网络连接管理常量
+	maxProtocolStreams = 100             // 最大协议流数量
+	streamTimeout      = 5 * time.Minute // 流超时时间
+	maxStreamsPerPeer  = 10              // 每个peer的最大流数量
 )
 
 // JoinPeer attempts to add a new peer to the networking server
@@ -591,9 +626,32 @@ func (s *Server) Close() error {
 		s.discovery.Close()
 	}
 
+	// 清理所有peer的协议流
+	s.cleanupAllStreams()
+
 	close(s.closeCh)
 
 	return err
+}
+
+// cleanupAllStreams 清理所有peer的协议流
+func (s *Server) cleanupAllStreams() {
+	s.peersLock.Lock()
+	defer s.peersLock.Unlock()
+
+	for peerID, peerInfo := range s.peers {
+		if peerInfo != nil {
+			peerInfo.cleanupExpiredStreams()
+			// 关闭所有剩余的流
+			for protocol, stream := range peerInfo.protocolStreams {
+				if stream != nil {
+					stream.Close()
+				}
+				delete(peerInfo.protocolStreams, protocol)
+			}
+		}
+		delete(s.peers, peerID)
+	}
 }
 
 // NewProtoConnection opens up a new stream on the set protocol to the peer,

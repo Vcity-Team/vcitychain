@@ -1,6 +1,8 @@
 package txpool
 
 import (
+	"time"
+
 	"github.com/Vcity-Team/vcitychain/txpool/proto"
 )
 
@@ -22,6 +24,9 @@ type eventSubscription struct {
 	// eventStore is used for temporary concurrent event storage,
 	// required in order to preserve the chronological order of events
 	eventStore *eventQueue
+
+	// createdAt is the time when the subscription was created
+	createdAt time.Time
 }
 
 // eventSupported checks if the event is supported by the subscription

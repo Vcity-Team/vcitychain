@@ -102,27 +102,57 @@ func (m *syncPeerClient) Close() {
 		return
 	}
 
+	m.logger.Info("开始关闭同步客户端", "节点ID", m.id)
+
+	// 关闭所有订阅和topic
 	if m.topic != nil {
 		m.topic.Close()
+		m.topic = nil
 	}
 
 	if m.subscription != nil {
 		m.blockchain.UnsubscribeEvents(m.subscription)
-
 		m.subscription = nil
 	}
 
+	// 发送关闭信号
 	if m.closeCh != nil {
 		close(m.closeCh)
 	}
 
+	// 等待goroutine退出（最多等待5秒）
+	timeout := time.After(5 * time.Second)
+	done := make(chan struct{})
+	go func() {
+		// 等待所有goroutine退出
+		time.Sleep(100 * time.Millisecond)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		m.logger.Debug("同步客户端goroutine已退出", "节点ID", m.id)
+	case <-timeout:
+		m.logger.Warn("同步客户端关闭超时", "节点ID", m.id)
+	}
+
+	// 关闭状态更新通道
 	m.peerStatusUpdateChLock.Lock()
-	m.peerStatusUpdateChClosed = true
-	close(m.peerStatusUpdateCh)
+	if !m.peerStatusUpdateChClosed {
+		m.peerStatusUpdateChClosed = true
+		close(m.peerStatusUpdateCh)
+	}
 	m.peerStatusUpdateChLock.Unlock()
 
 	// 关闭连接更新通道
-	close(m.peerConnectionUpdateCh)
+	select {
+	case <-m.peerConnectionUpdateCh:
+		// 通道已经关闭
+	default:
+		close(m.peerConnectionUpdateCh)
+	}
+
+	m.logger.Info("同步客户端已关闭", "节点ID", m.id)
 }
 
 // DisablePublishingPeerStatus disables publishing own status via gossip
@@ -321,7 +351,18 @@ func (m *syncPeerClient) handleStatusUpdate(obj interface{}, from peer.ID) {
 
 // startNewBlockProcess starts blockchain event subscription
 func (m *syncPeerClient) startNewBlockProcess() {
+	defer func() {
+		if r := recover(); r != nil {
+			m.logger.Error("startNewBlockProcess panic", "节点ID", m.id, "error", r)
+		}
+		m.logger.Debug("startNewBlockProcess goroutine已退出", "节点ID", m.id)
+	}()
+
 	m.logger.Info("启动区块事件监听", "节点ID", m.id, "shouldEmitBlocks", m.shouldEmitBlocks)
+
+	// 添加超时保护
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
 
 	m.subscription = m.blockchain.SubscribeEvents()
 	eventCh := m.subscription.GetEventCh()
@@ -330,6 +371,9 @@ func (m *syncPeerClient) startNewBlockProcess() {
 		var event *blockchain.Event
 
 		select {
+		case <-ctx.Done():
+			m.logger.Info("区块事件监听超时退出", "节点ID", m.id)
+			return
 		case <-m.closeCh:
 			m.logger.Info("区块事件监听停止", "节点ID", m.id)
 			return
@@ -392,20 +436,32 @@ func (m *syncPeerClient) startNewBlockProcess() {
 
 // startPeerEventProcess starts subscribing peer connection change events and process them
 func (m *syncPeerClient) startPeerEventProcess() {
-	defer close(m.peerConnectionUpdateCh)
+	defer func() {
+		if r := recover(); r != nil {
+			m.logger.Error("startPeerEventProcess panic", "节点ID", m.id, "error", r)
+		}
+		close(m.peerConnectionUpdateCh)
+		m.logger.Debug("startPeerEventProcess goroutine已退出", "节点ID", m.id)
+	}()
 
-	peerEventCh, err := m.network.SubscribeCh(context.Background())
+	// 添加超时保护
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	peerEventCh, err := m.network.SubscribeCh(ctx)
 	if err != nil {
 		m.logger.Error("failed to subscribe", "err", err)
-
 		return
 	}
 
 	for {
 		select {
-		case <-m.closeCh:
+		case <-ctx.Done():
+			m.logger.Info("peer事件监听超时退出", "节点ID", m.id)
 			return
-
+		case <-m.closeCh:
+			m.logger.Info("peer事件监听停止", "节点ID", m.id)
+			return
 		case e := <-peerEventCh:
 			if e != nil && (e.Type == event.PeerConnected || e.Type == event.PeerDisconnected) {
 				// 使用非阻塞发送，避免阻塞网络事件处理

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/Vcity-Team/vcitychain/txpool/proto"
 	"github.com/Vcity-Team/vcitychain/types"
@@ -15,6 +16,7 @@ type eventManager struct {
 	subscriptions     map[subscriptionID]*eventSubscription
 	subscriptionsLock sync.RWMutex
 	numSubscriptions  int64
+	maxSubscriptions  int64 // 新增：最大订阅数量
 	logger            hclog.Logger
 }
 
@@ -23,6 +25,7 @@ func newEventManager(logger hclog.Logger) *eventManager {
 		logger:           logger.Named("event-manager"),
 		subscriptions:    make(map[subscriptionID]*eventSubscription),
 		numSubscriptions: 0,
+		maxSubscriptions: 1000, // 最大1000个订阅
 	}
 }
 
@@ -36,6 +39,17 @@ func (em *eventManager) subscribe(eventTypes []proto.EventType) *subscribeResult
 	em.subscriptionsLock.Lock()
 	defer em.subscriptionsLock.Unlock()
 
+	// 检查订阅数量限制
+	if atomic.LoadInt64(&em.numSubscriptions) >= em.maxSubscriptions {
+		em.logger.Warn("订阅数量已达上限，拒绝新订阅",
+			"current", atomic.LoadInt64(&em.numSubscriptions),
+			"max", em.maxSubscriptions)
+		return nil
+	}
+
+	// 清理过期的订阅
+	em.cleanupExpiredSubscriptions()
+
 	id := uuid.New().ID()
 	subscription := &eventSubscription{
 		eventTypes: eventTypes,
@@ -46,6 +60,7 @@ func (em *eventManager) subscribe(eventTypes []proto.EventType) *subscribeResult
 			events:  make([]*proto.TxPoolEvent, 0),
 			maxSize: 1000, // 最大1000个事件
 		},
+		createdAt: time.Now(), // 记录创建时间
 	}
 
 	em.subscriptions[subscriptionID(id)] = subscription
@@ -71,6 +86,29 @@ func (em *eventManager) cancelSubscription(id subscriptionID) {
 		em.logger.Info(fmt.Sprintf("Canceled subscription %d", id))
 		delete(em.subscriptions, id)
 		atomic.AddInt64(&em.numSubscriptions, -1)
+	}
+}
+
+// cleanupExpiredSubscriptions 清理过期的订阅
+func (em *eventManager) cleanupExpiredSubscriptions() {
+	now := time.Now()
+	expiredSubscriptions := make([]subscriptionID, 0)
+
+	for id, subscription := range em.subscriptions {
+		// 清理超过1小时未使用的订阅
+		if now.Sub(subscription.createdAt) > time.Hour {
+			expiredSubscriptions = append(expiredSubscriptions, id)
+		}
+	}
+
+	// 删除过期的订阅
+	for _, id := range expiredSubscriptions {
+		if subscription, ok := em.subscriptions[id]; ok {
+			subscription.close()
+			delete(em.subscriptions, id)
+			atomic.AddInt64(&em.numSubscriptions, -1)
+			em.logger.Debug("清理过期订阅", "id", id)
+		}
 	}
 }
 

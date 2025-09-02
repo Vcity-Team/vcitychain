@@ -3,6 +3,7 @@ package blockchain
 import (
 	"math/big"
 	"sync"
+	"time"
 
 	"github.com/Vcity-Team/vcitychain/types"
 )
@@ -24,8 +25,10 @@ type MockSubscription struct {
 func NewMockSubscription() *MockSubscription {
 	return &MockSubscription{
 		subscription: &subscription{
-			updateCh: make(chan *Event),
-			closeCh:  make(chan void),
+			updateCh:  make(chan *Event),
+			closeCh:   make(chan void),
+			timeout:   10 * time.Minute, // 10分钟超时
+			createdAt: time.Now(),
 		},
 	}
 }
@@ -35,8 +38,10 @@ func (m *MockSubscription) Push(e *Event) {
 
 // subscription is the Blockchain event subscription object
 type subscription struct {
-	updateCh chan *Event // Channel for update information
-	closeCh  chan void   // Channel for close signals
+	updateCh  chan *Event   // Channel for update information
+	closeCh   chan void     // Channel for close signals
+	timeout   time.Duration // 订阅超时时间
+	createdAt time.Time     // 创建时间
 }
 
 // GetEventCh creates a new event channel, and returns it
@@ -134,28 +139,64 @@ func (b *Blockchain) UnsubscribeEvents(sub Subscription) {
 // which it uses to notify of updates
 type eventStream struct {
 	sync.RWMutex
-	subscriptions map[*subscription]struct{}
+	subscriptions    map[*subscription]struct{}
+	maxSubscriptions int // 最大订阅数量
 }
 
 // newEventStream creates event stream and initializes subscriptions map
 func newEventStream() *eventStream {
 	return &eventStream{
-		subscriptions: make(map[*subscription]struct{}),
+		subscriptions:    make(map[*subscription]struct{}),
+		maxSubscriptions: 100, // 最大100个订阅
 	}
 }
 
 // subscribe creates a new blockchain event subscription
 func (e *eventStream) subscribe() *subscription {
-	sub := &subscription{
-		updateCh: make(chan *Event, 5),
-		closeCh:  make(chan void),
+	e.Lock()
+	defer e.Unlock()
+
+	// 检查订阅数量限制
+	if len(e.subscriptions) >= e.maxSubscriptions {
+		// 清理过期的订阅
+		e.cleanupExpiredSubscriptions()
+
+		// 如果清理后仍然超过限制，拒绝新订阅
+		if len(e.subscriptions) >= e.maxSubscriptions {
+			return nil
+		}
 	}
 
-	e.Lock()
+	sub := &subscription{
+		updateCh:  make(chan *Event, 5),
+		closeCh:   make(chan void),
+		timeout:   10 * time.Minute, // 10分钟超时
+		createdAt: time.Now(),
+	}
+
 	e.subscriptions[sub] = struct{}{}
-	e.Unlock()
 
 	return sub
+}
+
+// cleanupExpiredSubscriptions 清理过期的订阅
+func (e *eventStream) cleanupExpiredSubscriptions() {
+	now := time.Now()
+	expiredSubscriptions := make([]*subscription, 0)
+
+	for sub := range e.subscriptions {
+		// 清理超过超时时间的订阅
+		if now.Sub(sub.createdAt) > sub.timeout {
+			expiredSubscriptions = append(expiredSubscriptions, sub)
+		}
+	}
+
+	// 删除过期的订阅
+	for _, sub := range expiredSubscriptions {
+		delete(e.subscriptions, sub)
+		// 关闭订阅
+		close(sub.closeCh)
+	}
 }
 
 func (e *eventStream) unsubscribe(sub *subscription) {

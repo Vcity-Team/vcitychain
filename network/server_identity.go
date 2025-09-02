@@ -2,6 +2,7 @@ package network
 
 import (
 	"math/big"
+	"time"
 
 	"github.com/Vcity-Team/vcitychain/network/common"
 	peerEvent "github.com/Vcity-Team/vcitychain/network/event"
@@ -66,6 +67,8 @@ func (s *Server) addPeerInfo(id peer.ID, direction network.Direction) bool {
 			Info:            s.host.Peerstore().PeerInfo(id),
 			connDirections:  make(map[network.Direction]bool),
 			protocolStreams: make(map[string]*rawGrpc.ClientConn),
+			lastAccess:      time.Now(),
+			maxStreams:      maxStreamsPerPeer,
 		}
 	}
 
