@@ -210,7 +210,11 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 				blsPublicKey, err = bls.UnmarshalPublicKey(delegateInfo.BlsPublicKey)
 				if err != nil {
 					// 如果BLS密钥解析失败，记录警告但继续
-					fmt.Printf("⚠️ 解析BLS公钥失败: %v\n", err)
+					fmt.Printf("⚠️ 解析BLS公钥失败: address=%s, blsKeyLength=%d, error=%v\n",
+						delegateInfo.Address.String(), len(delegateInfo.BlsPublicKey), err)
+				} else {
+					fmt.Printf("✅ 成功从数据库解析BLS公钥: address=%s, blsKeyLength=%d\n",
+						delegateInfo.Address.String(), len(delegateInfo.BlsPublicKey))
 				}
 			} else {
 				// BLS公钥为空是允许的，记录信息但继续处理

@@ -325,7 +325,7 @@ func callVotingStakingInfoRPCMethodHTTPWithAddress(method string, methodParams [
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	fmt.Printf("Sending JSON-RPC request to %s: %s\n", jsonRPC, string(requestJSON))
+	// fmt.Printf("Sending JSON-RPC request to %s: %s\n", jsonRPC, string(requestJSON))
 
 	// Make HTTP request
 	resp, err := http.Post(jsonRPC, "application/json", bytes.NewBuffer(requestJSON))
@@ -334,7 +334,7 @@ func callVotingStakingInfoRPCMethodHTTPWithAddress(method string, methodParams [
 	}
 	defer resp.Body.Close()
 
-	fmt.Printf("HTTP response status: %s\n", resp.Status)
+	// fmt.Printf("HTTP response status: %s\n", resp.Status)
 
 	// Read response body
 	body, err := io.ReadAll(resp.Body)
@@ -342,7 +342,7 @@ func callVotingStakingInfoRPCMethodHTTPWithAddress(method string, methodParams [
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	fmt.Printf("HTTP response body: %s\n", string(body))
+	// fmt.Printf("HTTP response body: %s\n", string(body))
 
 	// Parse response
 	var response map[string]interface{}
@@ -371,11 +371,11 @@ func callVotingStakingInfoRPCMethodHTTPWithAddress(method string, methodParams [
 // parseVotingStakingInfoResult parses the RPC result into VotingStakingInfoResult
 func parseVotingStakingInfoResult(result interface{}) (*VotingStakingInfoResult, error) {
 	// Debug: log the raw result
-	fmt.Printf("DEBUG: Raw result type: %T, value: %+v\n", result, result)
+	// fmt.Printf("DEBUG: Raw result type: %T, value: %+v\n", result, result)
 
 	// Try to parse as map first
 	if resultMap, ok := result.(map[string]interface{}); ok {
-		fmt.Printf("DEBUG: Result is a map with keys: %v\n", getMapKeys(resultMap))
+		// fmt.Printf("DEBUG: Result is a map with keys: %v\n", getMapKeys(resultMap))
 
 		// Check if it's already in the right format
 		if success, exists := resultMap["success"]; exists {
@@ -390,15 +390,15 @@ func parseVotingStakingInfoResult(result interface{}) (*VotingStakingInfoResult,
 			blockHeight, _ := resultMap["blockHeight"].(float64)
 
 			// Debug: log stakingInfo details
-			fmt.Printf("DEBUG: stakingInfo type: %T, value: %+v\n", stakingInfo, stakingInfo)
-			if stakingInfo != nil {
-				if stakingSlice, ok := stakingInfo.([]interface{}); ok {
-					fmt.Printf("DEBUG: stakingInfo is slice with %d elements\n", len(stakingSlice))
-					for i, item := range stakingSlice {
-						fmt.Printf("DEBUG: stakingInfo[%d] type: %T, value: %+v\n", i, item, item)
-					}
-				}
-			}
+			// fmt.Printf("DEBUG: stakingInfo type: %T, value: %+v\n", stakingInfo, stakingInfo)
+			// if stakingInfo != nil {
+			// 	if stakingSlice, ok := stakingInfo.([]interface{}); ok {
+			// 		fmt.Printf("DEBUG: stakingInfo is slice with %d elements\n", len(stakingSlice))
+			// 		for i, item := range stakingSlice {
+			// 			fmt.Printf("DEBUG: stakingInfo[%d] type: %T, value: %+v\n", i, item, item)
+			// 		}
+			// 	}
+			// }
 
 			// Convert validators to the right format
 			validatorsList := make([]map[string]interface{}, 0)

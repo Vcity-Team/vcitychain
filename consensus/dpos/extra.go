@@ -178,6 +178,59 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"validatorSource", "GetDelegates(blockNumber-1, parents)",
 		"note", "用于BLS签名验证的验证者集合")
 
+	// 🆕 添加验证时验证者集合的详细对比日志
+	logger.Error("🔍 验证时验证者集合详细对比:")
+	for i, validator := range validators {
+		logger.Error("📝 验证时验证者",
+			"index", i,
+			"address", validator.Address.String(),
+			"hasBlsKey", validator.BlsKey != nil,
+			"votingPower", validator.VotingPower.String())
+
+		// 🆕 如果BLS公钥为nil，尝试从创世文件恢复
+		if validator.BlsKey == nil {
+			logger.Info("⚠️ 验证时发现BLS公钥为nil，尝试从创世文件恢复",
+				"index", i,
+				"address", validator.Address.String())
+
+			// 尝试从DPoS实例获取BLS公钥
+			if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+				if blsKeyBytes, err := dposInstance.GetBLSKeyBytesFromGenesis(validator.Address); err == nil {
+					if blsKey, err := bls.UnmarshalPublicKey(blsKeyBytes); err == nil {
+						validator.BlsKey = blsKey
+						logger.Info("✅ 成功从创世文件恢复BLS公钥",
+							"index", i,
+							"address", validator.Address.String(),
+							"blsKeyLength", len(blsKeyBytes))
+					} else {
+						logger.Error("❌ 解析从创世文件获取的BLS公钥失败",
+							"index", i,
+							"address", validator.Address.String(),
+							"error", err)
+					}
+				} else {
+					logger.Error("❌ 从创世文件获取BLS公钥失败",
+						"index", i,
+						"address", validator.Address.String(),
+						"error", err)
+				}
+			} else {
+				logger.Error("❌ 无法获取DPoS实例来恢复BLS公钥",
+					"index", i,
+					"address", validator.Address.String())
+			}
+		}
+	}
+
+	// 🆕 添加验证者集合顺序对比
+	logger.Error("🔍 验证者集合顺序对比:")
+	logger.Error("📊 验证时验证者地址顺序:")
+	for i, validator := range validators {
+		logger.Error("🔗 验证者地址",
+			"index", i,
+			"address", validator.Address.String())
+	}
+
 	// 🔍 打印验证时验证者集合的详细信息
 	logger.Debug("🔍 验证时验证者集合详细信息")
 	for i, validator := range validators {
@@ -959,20 +1012,25 @@ continueVerification:
 					"publicKeyBytes", fmt.Sprintf("%x", pubKeyBytes),
 					"publicKeyLength", len(pubKeyBytes))
 			} else {
-				logger.Debug("⚠️ Signature.Verify - 验证者缺少BLS公钥，将尝试网络获取",
+				logger.Debug("🔑 Signature.Verify - 验证时动态获取BLS公钥（按需获取）",
 					"bitmapIndex", i,
 					"keyIndex", i,
 					"address", validator.Address.String(),
 					"votingPower", validator.VotingPower.String(),
 					"isActive", validator.IsActive,
-					"blsKeyExists", false)
+					"blsKeyExists", false,
+					"note", "BLS公钥将在验证时动态获取")
 				missingBLSKeys = append(missingBLSKeys, validator.Address)
 			}
 		}
 	}
 
-	// 🆕 如果有缺失的BLS公钥，先尝试从本地genesis文件读取，不行再通过网络广播获取
+	// 🆕 验证时动态获取BLS公钥（按需获取机制）
 	if len(missingBLSKeys) > 0 {
+		logger.Info("🔑 验证时动态获取BLS公钥（按需获取）",
+			"blockNumber", blockNumber,
+			"missingKeysCount", len(missingBLSKeys),
+			"note", "BLS公钥只在真正验证时才获取")
 		logger.Debug("🔍 发现缺失的BLS公钥，先尝试从本地genesis文件读取",
 			"blockNumber", blockNumber,
 			"missingCount", len(missingBLSKeys),
@@ -1336,6 +1394,19 @@ continueVerification:
 			"publicKeysCount", len(blsPublicKeys),
 			"signersCount", len(signers))
 
+		// 🆕 显示参与签名的验证者详情
+		logger.Error("🔍 参与签名的验证者详情:")
+		for i, signer := range signers {
+			if i < len(validators) {
+				validator := validators[i]
+				logger.Error("📝 签名验证者",
+					"index", i,
+					"address", validator.Address.String(),
+					"hasBlsKey", validator.BlsKey != nil,
+					"signerAddress", signer.String())
+			}
+		}
+
 		// 🆕 添加更详细的调试信息
 		logger.Error("🔍 BLS签名验证失败详细信息",
 			"hashBytes", fmt.Sprintf("%x", hash[:]),
@@ -1364,14 +1435,48 @@ continueVerification:
 			} else {
 				// 🆕 修复：直接按位图索引从 validators 数组获取地址，避免访问 signers 数组
 				var addressStr string
+				var validatorAddress types.Address
 				if int(i) < len(validators) {
 					addressStr = validators[int(i)].Address.String()
+					validatorAddress = validators[int(i)].Address
 				} else {
 					addressStr = "unknown_index"
 				}
-				logger.Error("Signature.Verify - BLS公钥为nil",
+
+				logger.Info("⚠️ Signature.Verify - BLS公钥为nil，尝试从创世文件恢复",
 					"index", i,
 					"address", addressStr)
+
+				// 🆕 尝试从创世文件恢复BLS公钥
+				if validatorAddress != (types.Address{}) {
+					if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+						if blsKeyBytes, err := dposInstance.GetBLSKeyBytesFromGenesis(validatorAddress); err == nil {
+							if blsKey, err := bls.UnmarshalPublicKey(blsKeyBytes); err == nil {
+								// 更新validators数组中的BLS公钥
+								validators[int(i)].BlsKey = blsKey
+								blsPublicKeys[i] = blsKey
+								logger.Info("✅ 成功从创世文件恢复BLS公钥",
+									"index", i,
+									"address", addressStr,
+									"blsKeyLength", len(blsKeyBytes))
+							} else {
+								logger.Error("❌ 解析从创世文件获取的BLS公钥失败",
+									"index", i,
+									"address", addressStr,
+									"error", err)
+							}
+						} else {
+							logger.Error("❌ 从创世文件获取BLS公钥失败",
+								"index", i,
+								"address", addressStr,
+								"error", err)
+						}
+					} else {
+						logger.Error("❌ 无法获取DPoS实例来恢复BLS公钥",
+							"index", i,
+							"address", addressStr)
+					}
+				}
 			}
 		}
 
