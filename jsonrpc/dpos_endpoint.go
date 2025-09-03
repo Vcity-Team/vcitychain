@@ -928,11 +928,12 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	// Step 5: Return success response with transaction details
 	successMessage := "Vote operation completed successfully"
 	if !txAdded && !dposStateUpdated {
-		successMessage = "Vote operation completed (both transaction pool and DPoS state update failed)"
+		successMessage = "Vote operation failed (both transaction pool and DPoS state update failed)"
 	} else if !txAdded {
 		successMessage = "Vote operation completed (DPoS state updated directly, transaction pool failed)"
 	} else if !dposStateUpdated {
-		successMessage = "Vote operation completed (transaction added to pool, DPoS state update failed)"
+		// 修复：由于AddVote被注释是为了避免重复计算，交易池成功添加就表示投票会成功处理
+		successMessage = "Vote operation completed successfully (transaction added to pool, will be processed in next block)"
 	}
 
 	d.logger.Info("Vote operation completed successfully", "txHash", txHash.String(), "txAdded", txAdded, "dposStateUpdated", dposStateUpdated)
