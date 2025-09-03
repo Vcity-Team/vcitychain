@@ -103,6 +103,11 @@ func (s *StakeStore) getFullValidatorSet(dbTx *bolt.Tx) (validatorSetState, erro
 
 // 🆕 新增：GetValidators方法，实现与命令一致的数据源
 func (s *StakeStore) GetValidators() (validator.AccountSet, error) {
+	return s.GetValidatorsWithFilter(true)
+}
+
+// 🆕 新增：GetValidatorsWithFilter方法，支持控制是否过滤
+func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (validator.AccountSet, error) {
 	var validators validator.AccountSet
 
 	err := s.db.View(func(tx *bolt.Tx) error {
@@ -188,13 +193,13 @@ func (s *StakeStore) GetValidators() (validator.AccountSet, error) {
 
 			// fmt.Printf("  - 最终投票权重: %s (0x%x)\n", finalVotingPower.String(), finalVotingPower.Bytes())
 
-			// 🆕 修复：只包含活跃且有足够投票权重的验证者
+			// 🆕 修复：根据参数决定是否过滤投票权重为0的验证者
 			// 这样可以避免将不活跃或投票权重为0的验证者包含在法定人数计算中
 			// 🆕 修复：不管数据库中的IsActive是什么值，都设置为true
 			// 这样可以确保与出块节点的逻辑保持一致
-			if finalVotingPower.Cmp(big.NewInt(0)) <= 0 {
-				fmt.Printf("🔍 GetValidators: 跳过投票权重为0的验证者 - 地址=%s, votingPower=%s\n",
-					delegateInfo.Address.String(), finalVotingPower.String())
+			if filterZeroVotingPower && finalVotingPower.Cmp(big.NewInt(0)) <= 0 {
+				fmt.Printf("🔍 GetValidators: 跳过投票权重为0的验证者 - 地址=%s, votingPower=%s, totalVotes=%s, genesisVotingPower=%s\n",
+					delegateInfo.Address.String(), finalVotingPower.String(), totalVotes.String(), delegateInfo.VotingPower.String())
 				continue
 			}
 

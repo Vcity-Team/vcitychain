@@ -895,6 +895,7 @@ func (a *dposStoreAdapter) GetValidators() (validator.AccountSet, error) {
 		if delegatesField := consensusValue.FieldByName("delegates"); delegatesField.IsValid() {
 			// Check if it's a slice
 			if delegatesField.Kind() == reflect.Slice {
+				fmt.Printf("DEBUG: Found delegates field, length: %d\n", delegatesField.Len())
 
 				// Create a new AccountSet to hold the real data
 				accountSet := make(validator.AccountSet, 0, delegatesField.Len())
@@ -970,6 +971,179 @@ func (a *dposStoreAdapter) GetValidators() (validator.AccountSet, error) {
 								validatorMeta.IsActive = isActive
 							}
 						}
+					}
+
+					// Add the validator to the account set
+					accountSet = append(accountSet, validatorMeta)
+				}
+
+				// 循环完成后，返回完整的 AccountSet
+				if len(accountSet) > 0 {
+					return accountSet, nil
+				}
+			}
+		}
+	}
+
+	// If no validators found, return empty set
+	return validator.AccountSet{}, nil
+}
+
+func (a *dposStoreAdapter) GetValidatorsWithFilter(filterZeroVotingPower bool) (validator.AccountSet, error) {
+	// Try to get validators from the consensus engine with filtering control
+	// This should connect to the actual DPoS consensus mechanism
+
+	// Try to access consensus engine directly through embedded field using reflection
+	if hub, ok := a.store.(interface {
+		GetConsensus() consensus.Consensus
+	}); ok {
+		consensusEngine := hub.GetConsensus()
+
+		// Try to get validators from consensus engine with filtering control
+		if dposEngine, ok := consensusEngine.(interface {
+			GetValidatorsWithFilter(filterZeroVotingPower bool) (validator.AccountSet, error)
+		}); ok {
+			fmt.Printf("DEBUG: Calling GetValidatorsWithFilter on consensus engine with filterZeroVotingPower=%v\n", filterZeroVotingPower)
+			return dposEngine.GetValidatorsWithFilter(filterZeroVotingPower)
+		}
+
+		// Fallback to regular GetValidators if GetValidatorsWithFilter is not available
+		if dposEngine, ok := consensusEngine.(interface {
+			GetDelegates() (validator.AccountSet, error)
+		}); ok {
+			return dposEngine.GetDelegates()
+		}
+
+		if dposEngine, ok := consensusEngine.(interface {
+			GetValidators() (validator.AccountSet, error)
+		}); ok {
+			return dposEngine.GetValidators()
+		}
+	}
+
+	// Try to access consensus engine directly through embedded field using reflection
+	storeValue := reflect.ValueOf(a.store)
+	if storeValue.Kind() == reflect.Ptr {
+		storeValue = storeValue.Elem()
+	}
+
+	// Look for Consensus field
+	if consensusField := storeValue.FieldByName("Consensus"); consensusField.IsValid() {
+		consensusEngine := consensusField.Interface()
+
+		// Try to get validators from consensus engine with filtering control
+		if dposEngine, ok := consensusEngine.(interface {
+			GetValidatorsWithFilter(filterZeroVotingPower bool) (validator.AccountSet, error)
+		}); ok {
+			return dposEngine.GetValidatorsWithFilter(filterZeroVotingPower)
+		}
+
+		// Fallback to regular methods
+		if dposEngine, ok := consensusEngine.(interface {
+			GetDelegates() (validator.AccountSet, error)
+		}); ok {
+			fmt.Printf("DEBUG: Found GetDelegates method in consensus engine\n")
+			return dposEngine.GetDelegates()
+		}
+
+		if dposEngine, ok := consensusEngine.(interface {
+			GetValidators() (validator.AccountSet, error)
+		}); ok {
+			fmt.Printf("DEBUG: Found GetValidators method in consensus engine\n")
+			return dposEngine.GetValidators()
+		}
+
+		// Try to access the delegates field directly if it exists
+		consensusValue := reflect.ValueOf(consensusEngine)
+		if consensusValue.Kind() == reflect.Ptr {
+			consensusValue = consensusValue.Elem()
+		}
+
+		if delegatesField := consensusValue.FieldByName("delegates"); delegatesField.IsValid() {
+			// Check if it's a slice
+			if delegatesField.Kind() == reflect.Slice {
+				fmt.Printf("DEBUG: Found delegates field, length: %d\n", delegatesField.Len())
+
+				// Create a new AccountSet to hold the real data
+				accountSet := make(validator.AccountSet, 0, delegatesField.Len())
+
+				// Iterate through the slice elements
+				for i := 0; i < delegatesField.Len(); i++ {
+					element := delegatesField.Index(i)
+
+					// Handle pointer type - get the value it points to
+					var elementValue reflect.Value
+					if element.Kind() == reflect.Ptr {
+						elementValue = element.Elem()
+					} else {
+						elementValue = element
+					}
+
+					// Create a new ValidatorMetadata
+					validatorMeta := &validator.ValidatorMetadata{}
+
+					// Try to access Address field
+					if addressField := elementValue.FieldByName("Address"); addressField.IsValid() {
+						// Try to get the value directly without Interface()
+						if addressField.CanAddr() {
+							// Try to get the value using reflect methods
+							addrValue := addressField
+							if addrValue.Kind() == reflect.Array {
+								// Handle array type (Address is usually [20]byte)
+								addrBytes := make([]byte, addrValue.Len())
+								for j := 0; j < addrValue.Len(); j++ {
+									addrBytes[j] = byte(addrValue.Index(j).Uint())
+								}
+								addr := types.BytesToAddress(addrBytes)
+								validatorMeta.Address = addr
+							}
+						}
+					}
+
+					// Try to access VotingPower field
+					if votingPowerField := elementValue.FieldByName("VotingPower"); votingPowerField.IsValid() {
+						// Try to get the value directly
+						if votingPowerField.CanAddr() {
+							if votingPowerField.Kind() == reflect.Ptr && !votingPowerField.IsNil() {
+								// Dereference the pointer
+								vpValue := votingPowerField.Elem()
+								// Voting power processing - simplified logging
+								if vpValue.Kind() == reflect.Struct {
+									// This is a big.Int struct, we need to access its internal fields
+									// Try to access the internal 'abs' field of big.Int
+									if absField := vpValue.FieldByName("abs"); absField.IsValid() {
+										if absField.Kind() == reflect.Slice {
+											// Convert the abs slice to big.Int
+											absBytes := make([]byte, absField.Len())
+											for j := 0; j < absField.Len(); j++ {
+												absBytes[j] = byte(absField.Index(j).Uint())
+											}
+											vp := new(big.Int).SetBytes(absBytes)
+											validatorMeta.VotingPower = vp
+										}
+									}
+								} else if vpValue.Kind() == reflect.Uint64 || vpValue.Kind() == reflect.Int64 {
+									// Convert to big.Int
+									vp := new(big.Int).SetUint64(vpValue.Uint())
+									validatorMeta.VotingPower = vp
+								}
+							}
+						}
+					}
+
+					// Try to access IsActive field
+					if isActiveField := elementValue.FieldByName("IsActive"); isActiveField.IsValid() {
+						if isActiveField.CanInterface() {
+							if isActive, ok := isActiveField.Interface().(bool); ok {
+								validatorMeta.IsActive = isActive
+							}
+						}
+					}
+
+					// Apply filtering based on the parameter
+					if filterZeroVotingPower && validatorMeta.VotingPower != nil && validatorMeta.VotingPower.Cmp(big.NewInt(0)) <= 0 {
+						fmt.Printf("DEBUG: Filtering out validator with zero voting power: %s\n", validatorMeta.Address.String())
+						continue
 					}
 
 					// Add the validator to the account set

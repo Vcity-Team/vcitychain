@@ -3,6 +3,7 @@ package dpos
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -215,6 +216,10 @@ type dposRuntime struct {
 	// 并发控制 - 限制同时处理的签名请求数量
 	signatureRequestSemaphore chan struct{}
 	maxConcurrentSignatures   int
+
+	// 🆕 投票签名验证相关
+	processedVotes map[string]bool // 防重放：已处理的投票nonce
+	voteMutex      sync.RWMutex    // 保护processedVotes的并发访问
 
 	// 网络集成管理器
 	networkIntegration *NetworkIntegration
@@ -456,6 +461,9 @@ func (r *dposRuntime) initializeRuntime() error {
 
 	// 🆕 初始化防重复日志机制
 	r.lastLogTime = make(map[string]time.Time)
+
+	// 🆕 初始化投票签名验证相关
+	r.processedVotes = make(map[string]bool)
 
 	// 检查网络服务状态
 	if r.network == nil {
@@ -901,28 +909,13 @@ func (r *dposRuntime) produceBlock() error {
 	// 根据交易数量添加特殊标记
 	txCount := len(block.Block.Transactions)
 	if txCount == 0 {
-		r.logger.Info("⚪💎💫 EMPTY BLOCK PRODUCED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Info("⚪💎💫 EMPTY BLOCK PRODUCED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Info("⚪💎💫 EMPTY BLOCK PRODUCED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
+		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
 	} else if txCount == 1 {
 		// 包含交易的区块 - 添加明显的特殊标记
-		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK PRODUCED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK PRODUCED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK PRODUCED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK PRODUCED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK PRODUCED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK PRODUCED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK PRODUCED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK PRODUCED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK PRODUCED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK PRODUCED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
+		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK SEALED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
 	} else {
 		// 🆕 包含多个交易的区块 - 使用更显著的标记，加上各种符号
-		r.logger.Warn("🎉🎊🎆🎈 *** MULTI-TX BLOCK PRODUCED *** 🎈🎆🎊🎉", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Warn("🚀💥⭐🌟 *** MULTI-TX BLOCK PRODUCED *** 🌟⭐💥🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Warn("🔥⚡🌈✨ *** MULTI-TX BLOCK PRODUCED *** ✨🌈⚡🔥", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Warn("💎🏆🎯🎪 *** MULTI-TX BLOCK PRODUCED *** 🎪🎯🏆💎", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Warn("🎭🎨🎪🎠 *** MULTI-TX BLOCK PRODUCED *** 🎠🎪🎨🎭", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
+		r.logger.Warn("🎉🎊🎆🎈 *** MULTI-TX BLOCK SEALED *** 🎈🎆🎊🎉", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
 	}
 	// 更新轮次 - 生产区块后立即更新，让下一个受托人知道轮到自己了
 	r.updateRound()
@@ -1607,33 +1600,132 @@ func (r *dposRuntime) processVote(vote *VoteMessage) error {
 	// 添加受托人到投票列表
 	voter.VotedDelegates = append(voter.VotedDelegates, vote.Delegate)
 
-	// 🆕 修复：移除重复的updateDelegateVotingPower调用
-	// 受托人投票权重更新已经在DPoS.processVoteInternal中处理
-	// 避免重复更新导致投票权重翻倍
-	// r.updateDelegateVotingPower(vote.Delegate, vote.Amount)
-
 	return nil
 }
 
 // verifyVoteSignature 验证投票签名
 func (r *dposRuntime) verifyVoteSignature(vote *VoteMessage) error {
-	// 构建投票消息哈希
-	message := fmt.Sprintf("%s:%s:%s:%d",
+	// 1. 检查签名字段
+	if len(vote.Signature) == 0 {
+		return fmt.Errorf("vote signature is empty")
+	}
+
+	// 2. 检查签名长度（ECDSA签名应该是65字节）
+	if len(vote.Signature) != 65 {
+		return fmt.Errorf("invalid signature length: expected 65 bytes, got %d", len(vote.Signature))
+	}
+
+	// 3. 构建待签名消息
+	message := r.buildVoteMessage(vote)
+
+	// 4. 计算消息哈希
+	hash := crypto.Keccak256(message)
+
+	// 5. 恢复公钥
+	publicKey, err := crypto.RecoverPubkey(vote.Signature, hash)
+	if err != nil {
+		return fmt.Errorf("failed to recover public key: %w", err)
+	}
+
+	// 6. 验证公钥与投票者地址匹配
+	if !r.verifyAddressMatchesPublicKey(vote.Voter, publicKey) {
+		return fmt.Errorf("public key does not match voter address")
+	}
+
+	// 7. 验证签名
+	if !r.verifyECDSASignature(publicKey, hash, vote.Signature) {
+		return fmt.Errorf("signature verification failed")
+	}
+
+	// 8. 防重放验证
+	if err := r.verifyVoteNonce(vote); err != nil {
+		return fmt.Errorf("vote nonce verification failed: %w", err)
+	}
+
+	r.logger.Debug("投票签名验证成功",
+		"voter", vote.Voter.String(),
+		"delegate", vote.Delegate.String(),
+		"amount", vote.Amount.String(),
+		"round", vote.Round)
+
+	return nil
+}
+
+// buildVoteMessage 构建标准化的投票消息
+func (r *dposRuntime) buildVoteMessage(vote *VoteMessage) []byte {
+	// 使用标准化的消息格式，确保签名验证的一致性
+	// 格式：voter:delegate:amount:round:timestamp
+	message := fmt.Sprintf("%s:%s:%s:%d:%d",
 		vote.Voter.String(),
 		vote.Delegate.String(),
 		vote.Amount.String(),
-		vote.Round)
+		vote.Round,
+		vote.Timestamp)
 
-	// 计算消息哈希
-	messageBytes := []byte(message)
-	hash := crypto.Keccak256(messageBytes)
+	return []byte(message)
+}
 
-	// 验证签名
-	// 这里需要根据实际的签名验证逻辑来实现
-	// 暂时返回nil，表示验证通过
-	_ = hash // 避免未使用变量警告
+// verifyAddressMatchesPublicKey 验证地址与公钥匹配
+func (r *dposRuntime) verifyAddressMatchesPublicKey(address types.Address, publicKey *ecdsa.PublicKey) bool {
+	// 从公钥计算地址
+	computedAddress := crypto.PubKeyToAddress(publicKey)
+	return computedAddress == address
+}
+
+// verifyECDSASignature 验证ECDSA签名
+func (r *dposRuntime) verifyECDSASignature(publicKey *ecdsa.PublicKey, hash []byte, signature []byte) bool {
+	// 检查签名长度
+	if len(signature) != 65 {
+		return false
+	}
+
+	// 提取r和s值（前64字节）
+	rValue := new(big.Int).SetBytes(signature[:32])
+	sValue := new(big.Int).SetBytes(signature[32:64])
+
+	// 使用ECDSA验证签名
+	return ecdsa.Verify(publicKey, hash, rValue, sValue)
+}
+
+// verifyVoteNonce 验证投票nonce，防止重放攻击
+func (r *dposRuntime) verifyVoteNonce(vote *VoteMessage) error {
+	// 构建nonce key
+	nonceKey := fmt.Sprintf("%s:%d:%d",
+		vote.Voter.String(),
+		vote.Round,
+		vote.Timestamp)
+
+	r.voteMutex.Lock()
+	defer r.voteMutex.Unlock()
+
+	// 检查是否已经处理过这个nonce
+	if r.processedVotes[nonceKey] {
+		return fmt.Errorf("vote nonce already processed: %s", nonceKey)
+	}
+
+	// 标记为已处理
+	r.processedVotes[nonceKey] = true
+
+	// 清理过期的nonce（超过1小时的）
+	r.cleanupExpiredVotes()
 
 	return nil
+}
+
+// cleanupExpiredVotes 清理过期的投票nonce
+func (r *dposRuntime) cleanupExpiredVotes() {
+	// 这里可以实现更复杂的清理逻辑
+	// 目前使用简单的策略：当map大小超过1000时清理一半
+	if len(r.processedVotes) > 1000 {
+		// 简单清理：保留一半
+		count := 0
+		for key := range r.processedVotes {
+			if count >= 500 {
+				delete(r.processedVotes, key)
+			}
+			count++
+		}
+	}
 }
 
 // updateDelegateVotingPower 更新受托人投票权重
@@ -1975,7 +2067,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 
 	// Update round state for each new block
 	for _, header := range headers {
-		d.logger.Info("processing header", "blockNumber", header.Number, "blockHash", header.Hash)
+		d.logger.Debug("processing header", "blockNumber", header.Number, "blockHash", header.Hash)
 
 		// 检查是否已经处理过这个区块
 		d.processedMutex.RLock()
@@ -2739,6 +2831,26 @@ func (d *DPoS) GetDelegates(blockNumber uint64, parents []*types.Header) (valida
 
 	// 否则从状态存储中获取历史受托人集合
 	return d.getDelegatesFromState(blockNumber)
+}
+
+// GetValidatorsWithFilter returns validators with optional filtering
+// This method allows RPC calls to get all validators including those with zero voting power
+func (d *DPoS) GetValidatorsWithFilter(filterZeroVotingPower bool) (validator.AccountSet, error) {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	// Access the stake store directly through d.state.StakeStore
+	if d.state == nil || d.state.StakeStore == nil {
+		return nil, fmt.Errorf("DPoS state or stake store is nil")
+	}
+
+	// Get validators from stake store with filtering control
+	validators, err := d.state.StakeStore.GetValidatorsWithFilter(filterZeroVotingPower)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get validators from stake store: %w", err)
+	}
+
+	return validators, nil
 }
 
 func (d *DPoS) GetDelegatesWithTx(blockNumber uint64, parents []*types.Header, dbTx *bolt.Tx) (validator.AccountSet, error) {
@@ -6162,7 +6274,7 @@ func (r *dposRuntime) simpleFallbackMonitoring(protoRequest *dposProto.Signature
 	time.Sleep(1 * time.Second)
 	progress := r.getSignatureCollectionProgress(checkpointHash)
 	if progress < 0.2 { // 20%以下
-		r.logger.Warn("签名收集进度极低，启动备用传播",
+		r.logger.Info("签名收集进度极低，启动备用传播",
 			"区块高度", protoRequest.BlockNumber,
 			"checkpointHash", checkpointHash.String(),
 			"progress", fmt.Sprintf("%.2f%%", progress*100))
@@ -6174,7 +6286,7 @@ func (r *dposRuntime) simpleFallbackMonitoring(protoRequest *dposProto.Signature
 	time.Sleep(500 * time.Millisecond) // 总共1.5秒
 	progress = r.getSignatureCollectionProgress(checkpointHash)
 	if progress < 0.5 { // 50%以下
-		r.logger.Warn("签名收集进度不足，启动备用传播",
+		r.logger.Info("签名收集进度不足，启动备用传播",
 			"区块高度", protoRequest.BlockNumber,
 			"checkpointHash", checkpointHash.String(),
 			"progress", fmt.Sprintf("%.2f%%", progress*100))

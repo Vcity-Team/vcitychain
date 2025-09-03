@@ -1,9 +1,12 @@
 package validator_info
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/big"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -17,6 +20,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/spf13/cobra"
 	"github.com/umbracle/ethgo/jsonrpc"
+	"go.etcd.io/bbolt"
 )
 
 var (
@@ -97,16 +101,27 @@ func runCommand(cmd *cobra.Command, _ []string) error {
 	outputter := command.InitializeOutputter(cmd)
 	defer outputter.WriteOutput()
 
-	// Create JSON-RPC client
-	client, err := jsonrpc.NewClient(params.jsonRPC)
-	if err != nil {
-		return fmt.Errorf("failed to create JSON-RPC client: %w", err)
-	}
+	// Try to create JSON-RPC client and get runtime data
+	var blockNumber uint64 = 0
+	var client *jsonrpc.Client
+	var err error
 
-	// Get current block number
-	blockNumber, err := client.Eth().BlockNumber()
-	if err != nil {
-		return fmt.Errorf("failed to get current block number: %w", err)
+	// Try to connect to JSON-RPC server
+	client, err = jsonrpc.NewClient(params.jsonRPC)
+	if err == nil {
+		// Try to get current block number
+		blockNumber, err = client.Eth().BlockNumber()
+		if err != nil {
+			fmt.Printf("⚠️  Warning: Failed to get block number from JSON-RPC: %v\n", err)
+			fmt.Printf("📋 Falling back to local data sources...\n")
+			client = nil // Mark client as unavailable
+		} else {
+			fmt.Printf("✅ Connected to JSON-RPC server, block number: %d\n", blockNumber)
+		}
+	} else {
+		fmt.Printf("⚠️  Warning: Failed to connect to JSON-RPC server: %v\n", err)
+		fmt.Printf("📋 Falling back to local data sources...\n")
+		client = nil // Mark client as unavailable
 	}
 
 	// Get DPoS state information
@@ -123,27 +138,44 @@ func runCommand(cmd *cobra.Command, _ []string) error {
 
 // getDPoSState retrieves DPoS consensus state information
 func getDPoSState(client *jsonrpc.Client, blockNumber uint64) (*ValidatorInfoResult, error) {
-	// Try to get DPoS data from running node first
-	delegates, err := getDPoSDelegatesFromNode(client, blockNumber)
-	if err != nil {
-		// Fallback to local state
-		delegates, err = getDPoSDelegatesFromLocalState(blockNumber)
+	var delegates validator.AccountSet
+	var err error
+
+	// Try to get DPoS data from running node first (if client is available)
+	if client != nil {
+		fmt.Printf("🔄 Attempting to get delegates from running node (memory state)...\n")
+		delegates, err = getDPoSDelegatesFromNode(client, blockNumber)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get DPoS delegates: %w", err)
+			fmt.Printf("⚠️  Failed to get delegates from node: %v\n", err)
+			fmt.Printf("📋 Falling back to local state...\n")
+		} else {
+			fmt.Printf("✅ Successfully got delegates from running node (memory): %d delegates\n", len(delegates))
+		}
+	} else {
+		fmt.Printf("📋 JSON-RPC client not available, using local data sources...\n")
+	}
+
+	// If node data failed or client unavailable, return error (no fallback to files)
+	if client == nil || err != nil {
+		return nil, fmt.Errorf("failed to get DPoS delegates from running node: %w", err)
+	}
+
+	// Get staking information
+	var stakingInfo []*dpos.StakeInfo
+	if client != nil {
+		fmt.Printf("🔄 Attempting to get staking info from running node...\n")
+		stakingInfo, err = getDPoSStakingInfoFromNode(client, blockNumber)
+		if err != nil {
+			fmt.Printf("⚠️  Failed to get staking info from node: %v\n", err)
+			fmt.Printf("📋 Falling back to local state...\n")
+		} else {
+			fmt.Printf("✅ Successfully got staking info from running node: %d stakers\n", len(stakingInfo))
 		}
 	}
 
-	stakingInfo, err := getDPoSStakingInfoFromNode(client, blockNumber)
-	if err != nil {
-		// Fallback to local state
-		stakingInfo, err = getDPoSStakingInfoFromLocalState(blockNumber)
-		if err != nil {
-			// Don't fail completely, try to get from genesis delegates
-			stakingInfo, err = getStakingInfoFromGenesisDelegates()
-			if err != nil {
-				stakingInfo = []*dpos.StakeInfo{}
-			}
-		}
+	// If node data failed or client unavailable, return error (no fallback to files)
+	if client == nil || err != nil {
+		return nil, fmt.Errorf("failed to get DPoS staking info from running node: %w", err)
 	}
 
 	currentRound, currentDelegate, err := getDPoSConsensusStatusFromNode(client)
@@ -201,20 +233,56 @@ func getDPoSDelegatesFromNode(client *jsonrpc.Client, blockNumber uint64) (valid
 	// Try to call custom RPC methods for DPoS delegates
 	// These would need to be implemented in the node's JSON-RPC server
 
-	// Method 1: Try dpos_getDelegates
-	delegates, err := callCustomRPCMethod(client, "dpos_getDelegates", []interface{}{blockNumber})
+	// Method 1: Try dpos_getAllValidators using direct HTTP call (new method to get all validators including zero voting power)
+	fmt.Printf("🔍 Calling dpos_getAllValidators with blockNumber: %d\n", blockNumber)
+	allValidators, err := callCustomRPCMethodDirect(params.jsonRPC, "dpos_getAllValidators", []interface{}{})
+	if err == nil && allValidators != nil {
+		fmt.Printf("🔍 dpos_getAllValidators returned data: %+v\n", allValidators)
+		result, parseErr := parseDelegatesFromRPC(allValidators)
+		if parseErr == nil && len(result) > 0 {
+			fmt.Printf("✅ Successfully parsed %d delegates from dpos_getAllValidators\n", len(result))
+			return result, nil
+		} else {
+			fmt.Printf("⚠️  Failed to parse delegates from dpos_getAllValidators: %v\n", parseErr)
+		}
+	} else {
+		fmt.Printf("⚠️  dpos_getAllValidators failed: %v\n", err)
+	}
+
+	// Method 2: Try dpos_getDelegates using direct HTTP call
+	fmt.Printf("🔍 Calling dpos_getDelegates with blockNumber: %d\n", blockNumber)
+	delegates, err := callCustomRPCMethodDirect(params.jsonRPC, "dpos_getDelegates", []interface{}{})
 	if err == nil && delegates != nil {
-		return parseDelegatesFromRPC(delegates)
+		fmt.Printf("🔍 dpos_getDelegates returned data: %+v\n", delegates)
+		result, parseErr := parseDelegatesFromRPC(delegates)
+		if parseErr == nil && len(result) > 0 {
+			fmt.Printf("✅ Successfully parsed %d delegates from dpos_getDelegates\n", len(result))
+			return result, nil
+		} else {
+			fmt.Printf("⚠️  Failed to parse delegates from dpos_getDelegates: %v\n", parseErr)
+		}
+	} else {
+		fmt.Printf("⚠️  dpos_getDelegates failed: %v\n", err)
 	}
 
-	// Method 2: Try dpos_getValidatorSet
-	validators, err := callCustomRPCMethod(client, "dpos_getValidatorSet", []interface{}{blockNumber})
+	// Method 3: Try dpos_getValidatorSet using direct HTTP call
+	fmt.Printf("🔍 Calling dpos_getValidatorSet with blockNumber: %d\n", blockNumber)
+	validators, err := callCustomRPCMethodDirect(params.jsonRPC, "dpos_getValidatorSet", []interface{}{})
 	if err == nil && validators != nil {
-		return parseDelegatesFromRPC(validators)
+		fmt.Printf("🔍 dpos_getValidatorSet returned data: %+v\n", validators)
+		result, parseErr := parseDelegatesFromRPC(validators)
+		if parseErr == nil && len(result) > 0 {
+			fmt.Printf("✅ Successfully parsed %d delegates from dpos_getValidatorSet\n", len(result))
+			return result, nil
+		} else {
+			fmt.Printf("⚠️  Failed to parse delegates from dpos_getValidatorSet: %v\n", parseErr)
+		}
+	} else {
+		fmt.Printf("⚠️  dpos_getValidatorSet failed: %v\n", err)
 	}
 
-	// Method 3: Try to get from genesis if available
-	return getDelegatesFromGenesis()
+	// If all RPC methods fail, return error to trigger fallback to local state
+	return validator.AccountSet{}, fmt.Errorf("all RPC methods failed to get delegates")
 }
 
 // getDPoSStakingInfoFromNode attempts to get DPoS staking information from the running node
@@ -270,9 +338,6 @@ func getDPoSConsensusStatusFromNode(client *jsonrpc.Client) (uint64, types.Addre
 
 // callCustomRPCMethod calls a custom RPC method
 func callCustomRPCMethod(client *jsonrpc.Client, method string, params []interface{}) (interface{}, error) {
-	// For now, we'll use a simple approach since the custom RPC methods may not be implemented
-	// In a real implementation, you would need to implement these methods in the node's JSON-RPC server
-
 	// Try to call the method using the client's Call method
 	var result interface{}
 
@@ -282,12 +347,28 @@ func callCustomRPCMethod(client *jsonrpc.Client, method string, params []interfa
 		callParams = params
 	}
 
-	// Try to call the method
+	// For DPoS methods, try without parameters first (blockNumber is optional)
+	if method == "dpos_getDelegates" || method == "dpos_getValidatorSet" {
+		fmt.Printf("🔍 Trying %s without parameters first...\n", method)
+		// Use a more generic result type to avoid JSON unmarshal issues
+		var genericResult interface{}
+		err := client.Call(method, []interface{}{}, &genericResult)
+		if err == nil {
+			fmt.Printf("🔍 Raw RPC result for %s (no params): %+v (type: %T)\n", method, genericResult, genericResult)
+			return genericResult, nil
+		}
+		fmt.Printf("⚠️  %s without parameters failed: %v\n", method, err)
+	}
+
+	// Try to call the method - fix JSON unmarshal issue
 	err := client.Call(method, callParams, &result)
 	if err != nil {
-		// Return error to indicate method not implemented
-		return nil, fmt.Errorf("custom RPC method %s not implemented or failed: %w", method, err)
+		// Return error to indicate method not implemented or failed
+		return nil, fmt.Errorf("custom RPC method %s failed: %w", method, err)
 	}
+
+	// Debug: Print the raw result
+	fmt.Printf("🔍 Raw RPC result for %s: %+v (type: %T)\n", method, result, result)
 
 	return result, nil
 }
@@ -298,18 +379,23 @@ func parseDelegatesFromRPC(data interface{}) (validator.AccountSet, error) {
 		return validator.AccountSet{}, fmt.Errorf("RPC data is nil")
 	}
 
+	fmt.Printf("🔍 Parsing RPC data: type=%T, value=%+v\n", data, data)
+
 	// Try to parse as array/slice
 	var delegatesArray []interface{}
 	switch v := data.(type) {
 	case []interface{}:
 		delegatesArray = v
+		fmt.Printf("🔍 Data is []interface{} with %d items\n", len(v))
 	case []map[string]interface{}:
 		// Convert to []interface{}
 		delegatesArray = make([]interface{}, len(v))
 		for i, item := range v {
 			delegatesArray[i] = item
 		}
+		fmt.Printf("🔍 Data is []map[string]interface{} with %d items\n", len(v))
 	default:
+		fmt.Printf("⚠️  Unexpected RPC data type: %T\n", data)
 		return validator.AccountSet{}, fmt.Errorf("unexpected RPC data type: %T", data)
 	}
 
@@ -325,23 +411,46 @@ func parseDelegatesFromRPC(data interface{}) (validator.AccountSet, error) {
 			continue
 		}
 
-		// Extract address
-		addrStr, ok := delegateMap["address"].(string)
-		if !ok {
+		// Extract address - try different field name variations
+		var addrStr string
+		var addrOk bool
+		if addrStr, addrOk = delegateMap["Address"].(string); !addrOk {
+			// Fallback to lowercase
+			addrStr, addrOk = delegateMap["address"].(string)
+		}
+		if !addrOk {
+			fmt.Printf("⚠️  Failed to extract address from delegate data: %+v\n", delegateMap)
 			continue
 		}
 		addr := types.StringToAddress(addrStr)
 
-		// Extract voting power
+		// Extract voting power - handle both string and numeric formats
 		var votingPower *big.Int
-		if vpStr, ok := delegateMap["votingPower"].(string); ok {
+		// Try different field name variations
+		if vpStr, ok := delegateMap["VotingPower"].(string); ok {
+			if vp, ok := new(big.Int).SetString(vpStr, 10); ok {
+				votingPower = vp
+			}
+		} else if vpFloat, ok := delegateMap["VotingPower"].(float64); ok {
+			votingPower = new(big.Int).SetUint64(uint64(vpFloat))
+		} else if vpInt, ok := delegateMap["VotingPower"].(int64); ok {
+			votingPower = new(big.Int).SetInt64(vpInt)
+		} else if vpUint, ok := delegateMap["VotingPower"].(uint64); ok {
+			votingPower = new(big.Int).SetUint64(vpUint)
+		} else if vpStr, ok := delegateMap["votingPower"].(string); ok {
+			// Fallback to lowercase
 			if vp, ok := new(big.Int).SetString(vpStr, 10); ok {
 				votingPower = vp
 			}
 		} else if vpFloat, ok := delegateMap["votingPower"].(float64); ok {
+			// Fallback to lowercase
 			votingPower = new(big.Int).SetUint64(uint64(vpFloat))
 		} else if vpInt, ok := delegateMap["votingPower"].(int64); ok {
+			// Fallback to lowercase
 			votingPower = new(big.Int).SetInt64(vpInt)
+		} else if vpUint, ok := delegateMap["votingPower"].(uint64); ok {
+			// Fallback to lowercase
+			votingPower = new(big.Int).SetUint64(vpUint)
 		}
 
 		if votingPower == nil {
@@ -352,7 +461,10 @@ func parseDelegatesFromRPC(data interface{}) (validator.AccountSet, error) {
 
 		// Extract active status
 		isActive := true // Default to active
-		if active, ok := delegateMap["isActive"].(bool); ok {
+		if active, ok := delegateMap["IsActive"].(bool); ok {
+			isActive = active
+		} else if active, ok := delegateMap["isActive"].(bool); ok {
+			// Fallback to lowercase
 			isActive = active
 		}
 
@@ -533,75 +645,71 @@ func convertVotingPowerToStakingInfo(data interface{}) ([]*dpos.StakeInfo, error
 	stakingInfos := make([]*dpos.StakeInfo, 0)
 
 	// Handle map format
-	if votingPowerMap != nil {
-		for delegateStr, powerData := range votingPowerMap {
-			delegate := types.StringToAddress(delegateStr)
+	for delegateStr, powerData := range votingPowerMap {
+		delegate := types.StringToAddress(delegateStr)
 
-			var votingPower *big.Int = big.NewInt(0)
-			switch vp := powerData.(type) {
-			case string:
-				if vp, ok := new(big.Int).SetString(vp, 10); ok {
-					votingPower = vp
-				}
-			case float64:
-				votingPower = new(big.Int).SetUint64(uint64(vp))
-			case int64:
-				votingPower = new(big.Int).SetInt64(vp)
+		var votingPower *big.Int = big.NewInt(0)
+		switch vp := powerData.(type) {
+		case string:
+			if vp, ok := new(big.Int).SetString(vp, 10); ok {
+				votingPower = vp
 			}
-
-			stakingInfo := &dpos.StakeInfo{
-				Staker:    delegate, // Self-delegation
-				Amount:    votingPower,
-				StartTime: uint64(time.Now().Unix()),
-				EndTime:   0,
-				IsLocked:  false,
-				IsActive:  true,
-				Delegate:  delegate,
-				Rewards:   big.NewInt(0),
-			}
-
-			stakingInfos = append(stakingInfos, stakingInfo)
+		case float64:
+			votingPower = new(big.Int).SetUint64(uint64(vp))
+		case int64:
+			votingPower = new(big.Int).SetInt64(vp)
 		}
+
+		stakingInfo := &dpos.StakeInfo{
+			Staker:    delegate, // Self-delegation
+			Amount:    votingPower,
+			StartTime: uint64(time.Now().Unix()),
+			EndTime:   0,
+			IsLocked:  false,
+			IsActive:  true,
+			Delegate:  delegate,
+			Rewards:   big.NewInt(0),
+		}
+
+		stakingInfos = append(stakingInfos, stakingInfo)
 	}
 
 	// Handle array format
-	if votingPowerArray != nil {
-		for _, powerData := range votingPowerArray {
-			powerMap, ok := powerData.(map[string]interface{})
-			if !ok {
-				continue
-			}
-
-			// Extract delegate address
-			delegateStr, ok := powerMap["delegate"].(string)
-			if !ok {
-				continue
-			}
-			delegate := types.StringToAddress(delegateStr)
-
-			// Extract voting power
-			var votingPower *big.Int = big.NewInt(0)
-			if vpStr, ok := powerMap["votingPower"].(string); ok {
-				if vp, ok := new(big.Int).SetString(vpStr, 10); ok {
-					votingPower = vp
-				}
-			} else if vpFloat, ok := powerMap["votingPower"].(float64); ok {
-				votingPower = new(big.Int).SetUint64(uint64(vpFloat))
-			}
-
-			stakingInfo := &dpos.StakeInfo{
-				Staker:    delegate, // Self-delegation
-				Amount:    votingPower,
-				StartTime: uint64(time.Now().Unix()),
-				EndTime:   0,
-				IsLocked:  false,
-				IsActive:  true,
-				Delegate:  delegate,
-				Rewards:   big.NewInt(0),
-			}
-
-			stakingInfos = append(stakingInfos, stakingInfo)
+	for _, powerData := range votingPowerArray {
+		powerMap, ok := powerData.(map[string]interface{})
+		if !ok {
+			continue
 		}
+
+		// Extract delegate address
+		delegateStr, ok := powerMap["delegate"].(string)
+		if !ok {
+			continue
+		}
+		delegate := types.StringToAddress(delegateStr)
+
+		// Extract voting power
+		var votingPower *big.Int = big.NewInt(0)
+		if vpStr, ok := powerMap["votingPower"].(string); ok {
+			if vp, ok := new(big.Int).SetString(vpStr, 10); ok {
+				votingPower = vp
+			}
+		} else if vpFloat, ok := powerMap["votingPower"].(float64); ok {
+			votingPower = new(big.Int).SetUint64(uint64(vpFloat))
+		}
+
+		stakingInfo := &dpos.StakeInfo{
+			Staker:    delegate, // Self-delegation
+			Amount:    votingPower,
+			StartTime: uint64(time.Now().Unix()),
+			EndTime:   0,
+			IsLocked:  false,
+			IsActive:  true,
+			Delegate:  delegate,
+			Rewards:   big.NewInt(0),
+		}
+
+		stakingInfos = append(stakingInfos, stakingInfo)
 	}
 
 	return stakingInfos, nil
@@ -613,40 +721,237 @@ func getDPoSDelegatesFromLocalState(blockNumber uint64) (validator.AccountSet, e
 		return validator.AccountSet{}, fmt.Errorf("data directory not specified")
 	}
 
-	// Try to get from genesis first (most reliable for initial delegates)
-	delegates, err := getDelegatesFromGenesis()
+	// Try to get from local state files first (runtime state)
+	// Dynamically search for DPoS database files in the data directory
+	fmt.Printf("🔍 Searching for DPoS database files in data directory: %s\n", params.dataDir)
+
+	// Search for all .db files in the data directory and subdirectories
+	dbFiles, err := findDatabaseFiles(params.dataDir)
 	if err != nil {
-	} else if len(delegates) > 0 {
-		return delegates, nil
-	}
-
-	// If no genesis delegates, try to get from local state files
-	// Look for DPoS state files
-	statePaths := []string{
-		filepath.Join(params.dataDir, "consensus", "dpos.db"),
-		filepath.Join(params.dataDir, "dpos.db"),
-		filepath.Join(params.dataDir, "chaindata", "consensus", "dpos.db"),
-	}
-
-	for _, statePath := range statePaths {
-		if _, err := os.Stat(statePath); err == nil {
-			// Try to read delegates from this file
-			delegates, err := readDelegatesFromStateFile(statePath)
+		fmt.Printf("⚠️  Error searching for database files: %v\n", err)
+	} else {
+		fmt.Printf("🔍 Found %d potential database files\n", len(dbFiles))
+		for _, dbFile := range dbFiles {
+			fmt.Printf("🔍 Checking database file: %s\n", dbFile)
+			// Try to read delegates from this file with timeout
+			delegates, err := readDelegatesFromStateFileWithTimeout(dbFile, 10*time.Second)
 			if err == nil && len(delegates) > 0 {
+				fmt.Printf("✅ Successfully read %d delegates from database file: %s\n", len(delegates), dbFile)
 				return delegates, nil
+			} else {
+				fmt.Printf("⚠️  Failed to read delegates from database file %s: %v\n", dbFile, err)
 			}
 		}
 	}
 
-	// If still no delegates found, return empty set
-	return validator.AccountSet{}, nil
+	// If no local state delegates, try to get from genesis (fallback)
+	delegates, err := getDelegatesFromGenesis()
+	if err != nil {
+		return validator.AccountSet{}, err
+	}
+
+	return delegates, nil
+}
+
+// findDatabaseFiles recursively searches for database files in the given directory
+func findDatabaseFiles(dataDir string) ([]string, error) {
+	var dbFiles []string
+
+	// Walk through the directory tree
+	err := filepath.Walk(dataDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // Skip files we can't access
+		}
+
+		// Check if it's a .db file
+		if !info.IsDir() && strings.HasSuffix(strings.ToLower(path), ".db") {
+			dbFiles = append(dbFiles, path)
+		}
+
+		return nil
+	})
+
+	return dbFiles, err
+}
+
+// readDelegatesFromStateFileWithTimeout reads delegates from a DPoS state file with timeout
+func readDelegatesFromStateFileWithTimeout(filePath string, timeout time.Duration) (validator.AccountSet, error) {
+	resultChan := make(chan struct {
+		delegates validator.AccountSet
+		err       error
+	}, 1)
+
+	go func() {
+		delegates, err := readDelegatesFromStateFile(filePath)
+		resultChan <- struct {
+			delegates validator.AccountSet
+			err       error
+		}{delegates, err}
+	}()
+
+	select {
+	case result := <-resultChan:
+		return result.delegates, result.err
+	case <-time.After(timeout):
+		return validator.AccountSet{}, fmt.Errorf("timeout reading delegates from %s after %v", filePath, timeout)
+	}
 }
 
 // readDelegatesFromStateFile reads delegates from a DPoS state file
 func readDelegatesFromStateFile(filePath string) (validator.AccountSet, error) {
-	// This would read and parse the DPoS state file
-	// For now, return empty set
-	return validator.AccountSet{}, nil
+	fmt.Printf("🔍 Attempting to read delegates from BoltDB: %s\n", filePath)
+
+	// Open the BoltDB database with timeout
+	db, err := bbolt.Open(filePath, 0600, &bbolt.Options{
+		ReadOnly: true,
+		Timeout:  5 * time.Second, // 5 second timeout
+	})
+	if err != nil {
+		fmt.Printf("⚠️  Failed to open BoltDB file: %v\n", err)
+		return validator.AccountSet{}, fmt.Errorf("failed to open BoltDB file: %w", err)
+	}
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			fmt.Printf("⚠️  Error closing database: %v\n", closeErr)
+		}
+	}()
+
+	var delegates validator.AccountSet
+
+	// Try to read from different buckets
+	buckets := []string{
+		"fullValidatorSetBucket",
+		"DelegateInfo",
+		"validatorSet",
+		"delegates",
+	}
+
+	for _, bucketName := range buckets {
+		err = db.View(func(tx *bbolt.Tx) error {
+			bucket := tx.Bucket([]byte(bucketName))
+			if bucket == nil {
+				return nil // Bucket doesn't exist, try next one
+			}
+
+			fmt.Printf("🔍 Found bucket: %s\n", bucketName)
+
+			// Iterate through all key-value pairs in the bucket
+			cursor := bucket.Cursor()
+			for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
+				fmt.Printf("🔍 Processing key: %s, value length: %d\n", string(key), len(value))
+
+				// Try to parse as JSON
+				var delegateData map[string]interface{}
+				if err := json.Unmarshal(value, &delegateData); err != nil {
+					fmt.Printf("⚠️  Failed to parse JSON for key %s: %v\n", string(key), err)
+					continue
+				}
+
+				// Try to extract delegate information
+				if addrStr, ok := delegateData["address"].(string); ok {
+					addr := types.StringToAddress(addrStr)
+
+					// Parse voting power
+					votingPower := new(big.Int)
+					if stakeStr, ok := delegateData["stake"].(string); ok {
+						if vp, ok := new(big.Int).SetString(stakeStr, 10); ok {
+							votingPower = vp
+						}
+					} else if stakeFloat, ok := delegateData["stake"].(float64); ok {
+						votingPower.SetUint64(uint64(stakeFloat))
+					} else if stakeInt, ok := delegateData["stake"].(int64); ok {
+						votingPower.SetInt64(stakeInt)
+					}
+
+					// Check if delegate is active
+					isActive := true
+					if active, ok := delegateData["isActive"].(bool); ok {
+						isActive = active
+					}
+
+					delegate := &validator.ValidatorMetadata{
+						Address:     addr,
+						VotingPower: votingPower,
+						IsActive:    isActive,
+					}
+
+					fmt.Printf("✅ Found delegate: %s, votingPower: %s\n", addrStr, votingPower.String())
+					delegates = append(delegates, delegate)
+				}
+			}
+			return nil
+		})
+
+		if err != nil {
+			fmt.Printf("⚠️  Error reading bucket %s: %v\n", bucketName, err)
+			continue
+		}
+
+		// If we found delegates, return them
+		if len(delegates) > 0 {
+			fmt.Printf("✅ Successfully read %d delegates from bucket %s\n", len(delegates), bucketName)
+			return delegates, nil
+		}
+	}
+
+	fmt.Printf("⚠️  No delegates found in any bucket\n")
+	return validator.AccountSet{}, fmt.Errorf("no delegates found in database")
+}
+
+// callCustomRPCMethodDirect makes a direct HTTP JSON-RPC call to avoid client parsing issues
+func callCustomRPCMethodDirect(jsonRPCURL, method string, params []interface{}) (interface{}, error) {
+	// Create JSON-RPC request
+	request := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"method":  method,
+		"params":  params,
+		"id":      1,
+	}
+
+	// Marshal request to JSON
+	requestBody, err := json.Marshal(request)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	fmt.Printf("🔍 Making direct HTTP call to %s with method %s\n", jsonRPCURL, method)
+	fmt.Printf("🔍 Request body: %s\n", string(requestBody))
+
+	// Make HTTP POST request
+	resp, err := http.Post(jsonRPCURL, "application/json", bytes.NewBuffer(requestBody))
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Read response body
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	fmt.Printf("🔍 Response body: %s\n", string(responseBody))
+
+	// Parse JSON-RPC response
+	var jsonRPCResponse struct {
+		JSONRPC string      `json:"jsonrpc"`
+		Result  interface{} `json:"result"`
+		Error   *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+		ID int `json:"id"`
+	}
+
+	if err := json.Unmarshal(responseBody, &jsonRPCResponse); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON-RPC response: %w", err)
+	}
+
+	if jsonRPCResponse.Error != nil {
+		return nil, fmt.Errorf("JSON-RPC error: %s (code: %d)", jsonRPCResponse.Error.Message, jsonRPCResponse.Error.Code)
+	}
+
+	return jsonRPCResponse.Result, nil
 }
 
 // getDelegatesFromGenesis attempts to get initial delegates from genesis file
@@ -671,18 +976,25 @@ func getDelegatesFromGenesis() (validator.AccountSet, error) {
 		return validator.AccountSet{}, fmt.Errorf("failed to parse genesis file: %w", err)
 	}
 
+	// Debug: Print genesis file structure (commented out for production)
+	// fmt.Printf("🔍 DEBUG: Genesis file loaded from %s\n", genesisPath)
+	// fmt.Printf("🔍 DEBUG: Genesis keys: %v\n", getMapKeys(genesis))
+
 	// Look for DPoS configuration in genesis
 	// First try: genesis.params.engine.dpos (correct path)
 	if params, ok := genesis["params"].(map[string]interface{}); ok {
 		if engineConfig, ok := params["engine"].(map[string]interface{}); ok {
 			if dposConfig, ok := engineConfig["dpos"].(map[string]interface{}); ok {
 				if initialDelegates, ok := dposConfig["initialDelegates"].([]interface{}); ok {
+					// fmt.Printf("🔍 DEBUG: Found %d initial delegates in genesis\n", len(initialDelegates))
 					delegates := make(validator.AccountSet, 0, len(initialDelegates))
 
 					for _, delegateData := range initialDelegates {
+						// fmt.Printf("🔍 DEBUG: Processing delegate %d: %v\n", i, delegateData)
 						if delegateMap, ok := delegateData.(map[string]interface{}); ok {
 							if addrStr, ok := delegateMap["address"].(string); ok {
 								addr := types.StringToAddress(addrStr)
+								// fmt.Printf("🔍 DEBUG: Delegate %d address: %s\n", i, addrStr)
 
 								// Parse voting power from stake field
 								votingPower := new(big.Int)
@@ -693,6 +1005,12 @@ func getDelegatesFromGenesis() (validator.AccountSet, error) {
 										// Fallback to default if parsing fails
 										votingPower.SetString("1000000000000000000000", 10) // Default 1 token
 									}
+								} else if stakeFloat, ok := delegateMap["stake"].(float64); ok {
+									// Handle numeric stake values
+									votingPower.SetUint64(uint64(stakeFloat))
+								} else if stakeInt, ok := delegateMap["stake"].(int64); ok {
+									// Handle integer stake values
+									votingPower.SetInt64(stakeInt)
 								} else {
 									// Fallback to default if stake field not found
 									votingPower.SetString("1000000000000000000000", 10) // Default 1 token
@@ -707,6 +1025,7 @@ func getDelegatesFromGenesis() (validator.AccountSet, error) {
 									IsActive:    isActive,
 								}
 
+								// fmt.Printf("🔍 DEBUG: Added delegate %d: %s, votingPower: %s\n", i, addrStr, votingPower.String())
 								delegates = append(delegates, delegate)
 							}
 						}
@@ -739,6 +1058,12 @@ func getDelegatesFromGenesis() (validator.AccountSet, error) {
 								} else {
 									votingPower.SetString("1000000000000000000000", 10)
 								}
+							} else if stakeFloat, ok := delegateMap["stake"].(float64); ok {
+								// Handle numeric stake values
+								votingPower.SetUint64(uint64(stakeFloat))
+							} else if stakeInt, ok := delegateMap["stake"].(int64); ok {
+								// Handle integer stake values
+								votingPower.SetInt64(stakeInt)
 							} else {
 								votingPower.SetString("1000000000000000000000", 10)
 							}

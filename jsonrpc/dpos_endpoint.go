@@ -33,6 +33,9 @@ type dposStore interface {
 	// GetValidators gets current validators
 	GetValidators() (validator.AccountSet, error)
 
+	// GetValidatorsWithFilter gets validators with optional filtering
+	GetValidatorsWithFilter(filterZeroVotingPower bool) (validator.AccountSet, error)
+
 	// GetStakingInfo gets staking information
 	GetStakingInfo() ([]*dpos.StakeInfo, error)
 
@@ -1373,7 +1376,8 @@ func (d *DPOS) Delegate(ctx context.Context, params interface{}) (interface{}, e
 func (d *DPOS) GetDelegates(ctx context.Context, blockNumber *uint64) (validator.AccountSet, error) {
 	d.logger.Info("DPoS GetDelegates called", "blockNumber", blockNumber)
 
-	validators, err := d.store.GetValidators()
+	// 使用不过滤的版本，返回所有验证者（包括投票权重为0的）
+	validators, err := d.store.GetValidatorsWithFilter(false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get validators: %w", err)
 	}
@@ -1385,7 +1389,8 @@ func (d *DPOS) GetDelegates(ctx context.Context, blockNumber *uint64) (validator
 func (d *DPOS) GetValidatorSet(ctx context.Context, blockNumber *uint64) (validator.AccountSet, error) {
 	d.logger.Info("DPoS GetValidatorSet called", "blockNumber", blockNumber)
 
-	validators, err := d.store.GetValidators()
+	// 使用不过滤的版本，返回所有验证者（包括投票权重为0的）
+	validators, err := d.store.GetValidatorsWithFilter(false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get validators: %w", err)
 	}
@@ -1500,6 +1505,22 @@ func (d *DPOS) GetConsensusState(ctx context.Context) (map[string]interface{}, e
 	}, nil
 }
 
+// GetAllValidators handles dpos_getAllValidators RPC method
+// This method returns all validators from database, including those with zero voting power
+func (d *DPOS) GetAllValidators(ctx context.Context, blockNumber *uint64) (validator.AccountSet, error) {
+	d.logger.Info("DPoS GetAllValidators called", "blockNumber", blockNumber)
+
+	// 使用不过滤的版本，返回所有验证者（包括投票权重为0的）
+	// 直接使用 d.store.GetValidatorsWithFilter(false) 而不是通过 GetDPoSState()
+	validators, err := d.store.GetValidatorsWithFilter(false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get all validators: %w", err)
+	}
+
+	d.logger.Info("All validators retrieved successfully", "count", len(validators))
+	return validators, nil
+}
+
 // Helper validation functions
 func (d *DPOS) validateVoteRequest(req *VoteRequest) error {
 	if req.Voter == "" {
@@ -1557,9 +1578,9 @@ func (d *DPOS) GetVotingStakingInfo(ctx context.Context, params interface{}) (in
 	}
 	d.logger.Info("DPoS state retrieved successfully")
 
-	// Get current validators
+	// Get current validators (without filtering to show all validators)
 	d.logger.Info("Getting validators...")
-	validators, err := d.store.GetValidators()
+	validators, err := d.store.GetValidatorsWithFilter(false)
 	if err != nil {
 		d.logger.Error("Failed to get validators", "error", err)
 		return map[string]interface{}{
@@ -1568,6 +1589,15 @@ func (d *DPOS) GetVotingStakingInfo(ctx context.Context, params interface{}) (in
 		}, nil
 	}
 	d.logger.Info("Validators retrieved successfully", "count", len(validators))
+
+	// Debug: Print all validators
+	for i, validator := range validators {
+		d.logger.Info("Validator details",
+			"index", i,
+			"address", validator.Address.String(),
+			"votingPower", validator.VotingPower.String(),
+			"isActive", validator.IsActive)
+	}
 
 	// Get staking information from store (genesis + persistent data)
 	d.logger.Info("Getting staking info from store...")

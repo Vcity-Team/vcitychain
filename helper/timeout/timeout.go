@@ -131,3 +131,4 @@ var DefaultTimeouts = struct {
 	Medium: 30 * time.Second,
 	Long:   5 * time.Minute,
 }
+
