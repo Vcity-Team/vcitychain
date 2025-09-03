@@ -1922,21 +1922,11 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 		d.logger.Info("✅ Delegates updated successfully after vote")
 	}
 
-	// 🆕 新增：同步 dposRuntime 的 delegates 状态（使用非阻塞方式避免死锁）
-	d.logger.Info("🔄 同步 dposRuntime delegates 状态...")
-	if d.runtime != nil {
-		// 使用非阻塞方式获取锁，避免死锁
-		if d.runtime.lock.TryLock() {
-			// 同步主结构体的 delegates 到 runtime
-			d.runtime.delegates = d.delegates.Copy()
-			d.runtime.lock.Unlock()
-			d.logger.Info("✅ dposRuntime delegates 同步完成", "count", len(d.delegates))
-		} else {
-			d.logger.Warn("⚠️ 无法获取 runtime.lock，跳过 delegates 同步（避免死锁）")
-		}
-	} else {
-		d.logger.Warn("⚠️ dposRuntime 为空，无法同步 delegates")
-	}
+	// 🆕 异步同步 dposRuntime 的 delegates 状态（使用重试机制）
+	d.logger.Info("🔄 启动异步同步 dposRuntime delegates 状态...")
+	go func() {
+		d.syncRuntimeDelegatesWithRetry()
+	}()
 
 	// 🆕 新增：数据同步验证 - 确保内存和数据库中的验证者集合一致
 	// 暂时注释掉，避免阻塞投票流程
@@ -7685,4 +7675,45 @@ func (d *DPoS) persistBLSKeyToStakeStore(address types.Address, blsKeyBytes []by
 		"blsKeyLength", len(blsKeyBytes))
 
 	return nil
+}
+
+// syncRuntimeDelegatesWithRetry 异步同步 dposRuntime 的 delegates 状态，使用重试机制
+func (d *DPoS) syncRuntimeDelegatesWithRetry() {
+	maxRetries := 5
+	retryDelay := 100 * time.Millisecond
+
+	d.logger.Info("🔄 开始异步同步 dposRuntime delegates 状态", "maxRetries", maxRetries)
+
+	for i := 0; i < maxRetries; i++ {
+		if d.runtime != nil {
+			if d.runtime.lock.TryLock() {
+				// 同步主结构体的 delegates 到 runtime
+				d.runtime.delegates = d.delegates.Copy()
+				d.runtime.lock.Unlock()
+				d.logger.Info("✅ dposRuntime delegates 同步完成",
+					"count", len(d.delegates),
+					"attempt", i+1,
+					"totalAttempts", maxRetries)
+				return
+			} else {
+				d.logger.Info("⚠️ 无法获取 runtime.lock，准备重试",
+					"attempt", i+1,
+					"maxRetries", maxRetries,
+					"retryDelay", retryDelay)
+			}
+		} else {
+			d.logger.Warn("⚠️ dposRuntime 为空，无法同步 delegates")
+			return
+		}
+
+		// 如果不是最后一次尝试，等待后重试
+		if i < maxRetries-1 {
+			time.Sleep(retryDelay)
+			retryDelay *= 2 // 指数退避
+		}
+	}
+
+	d.logger.Warn("⚠️ dposRuntime delegates 同步失败，已达到最大重试次数",
+		"maxRetries", maxRetries,
+		"delegatesCount", len(d.delegates))
 }
