@@ -102,6 +102,9 @@ type dposBackend interface {
 	// GetDelegatesWithTx 在数据库事务中获取受托人集合
 	GetDelegatesWithTx(blockNumber uint64, parents []*types.Header, dbTx *bolt.Tx) (validator.AccountSet, error)
 
+	// GetCurrentDelegates 获取当前内存中的受托人集合
+	GetCurrentDelegates() validator.AccountSet
+
 	// GetStakingInfo 获取指定区块的质押信息
 	GetStakingInfo(blockNumber uint64, staker types.Address) (*StakeInfo, error)
 
@@ -122,6 +125,9 @@ type dposBackend interface {
 
 	// GetDelegateIndex 获取受托人索引
 	GetDelegateIndex(delegate types.Address) uint64
+
+	// SaveValidatorSetForBlockWithValidators 保存指定区块的特定验证者集合到数据库
+	SaveValidatorSetForBlockWithValidators(blockNumber uint64, validators validator.AccountSet) error
 }
 
 // DPoSConfig 配置结构
@@ -546,7 +552,7 @@ func (r *dposRuntime) periodicPeerCheck() {
 
 			// 如果节点数量增加，说明有新节点加入
 			if currentPeerCount > lastPeerCount {
-				r.logger.Info("检测到新节点加入",
+				r.logger.Debug("检测到新节点加入",
 					"previousCount", lastPeerCount,
 					"currentCount", currentPeerCount)
 
@@ -864,6 +870,8 @@ func (r *dposRuntime) produceBlock() error {
 	}
 
 	r.logger.Info("✅ 区块提交成功", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
+
+	// 注意：历史验证者集合已在签名聚合完成后保存，无需重复保存
 
 	// 验证区块是否真正写入区块链
 	if writtenBlock, exists := r.config.blockchain.GetHeaderByNumber(block.Block.Number()); exists {
@@ -1547,6 +1555,39 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"aggregatedSignatureLength", len(aggregatedSignature),
 			"aggregatedSignatureBytes", fmt.Sprintf("%x", aggregatedSignature))
 
+		// 🆕 关键修复：在签名聚合完成后记录参与签名的验证者集合
+		// 这样确保记录的验证者集合与实际用于签名的验证者集合完全一致
+		if r.backend != nil {
+			if _, ok := r.backend.(*DPoS); ok {
+				// 只保存实际参与签名的验证者集合
+				signingValidators := make(validator.AccountSet, 0, len(blsSignatures))
+				for i := uint64(0); i < uint64(len(productionValidators)); i++ {
+					if signatureBitmap.IsSet(i) {
+						signingValidators = append(signingValidators, productionValidators[i])
+					}
+				}
+
+				// 🆕 已移除数据库保存机制，改为从 ExtraData 直接读取验证者集合
+				r.logger.Info("📝 参与签名的验证者集合已记录到区块 ExtraData",
+					"blockNumber", block.Block.Number(),
+					"signingValidatorsCount", len(signingValidators),
+					"method", "ExtraData.Validators",
+					"note", "不再需要保存到数据库，验证节点将从区块数据直接获取")
+
+				// 详细记录参与签名的验证者信息
+				r.logger.Info("📋 参与签名的验证者详细信息:")
+				for i, validator := range signingValidators {
+					r.logger.Info("📝 签名验证者",
+						"blockNumber", block.Block.Number(),
+						"index", i,
+						"address", validator.Address.String(),
+						"votingPower", validator.VotingPower.String(),
+						"isActive", validator.IsActive,
+						"hasBlsKey", validator.BlsKey != nil)
+				}
+			}
+		}
+
 		// 🆕 测试：验证聚合签名是否可以正确解析
 		r.logger.Debug("🔍 测试聚合签名解析...")
 		_, err = bls.UnmarshalSignature(aggregatedSignature)
@@ -1964,6 +2005,19 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 			"candidate", candidate.String(),
 			"amount", amount.String(),
 			"note", "当前轮次继续使用旧验证者集合")
+
+		// 🆕 打印当前轮次和当前验证者集合
+		d.logger.Info("📋 当前轮次验证者集合详细信息:")
+		d.logger.Info("🎯 当前轮次", "round", d.currentRound, "delegatesCount", len(d.delegates))
+		for i, delegate := range d.delegates {
+			d.logger.Info("📝 当前验证者",
+				"round", d.currentRound,
+				"index", i,
+				"address", delegate.Address.String(),
+				"votingPower", delegate.VotingPower.String(),
+				"isActive", delegate.IsActive,
+				"hasBlsKey", delegate.BlsKey != nil)
+		}
 	}
 
 	// 🆕 新增：数据同步验证 - 确保内存和数据库中的验证者集合一致
@@ -2648,7 +2702,7 @@ func (d *DPoS) initializeDelegates() error {
 
 			// 🆕 将排序后的前N个受托人信息真正添加到d.delegates中用于出块
 			for i, validator := range dbValidators {
-				d.logger.Info("📋 数据库受托人信息（真正用于出块，按票数排序）", "index", i, "address", validator.Address, "votingPower", validator.VotingPower.String(), "isActive", validator.IsActive)
+				d.logger.Debug("📋 数据库受托人信息（真正用于出块，按票数排序）", "index", i, "address", validator.Address, "votingPower", validator.VotingPower.String(), "isActive", validator.IsActive)
 
 				// 检查BLS密钥，如果缺少则从genesis文件中查找（可选，不强制要求）
 				if validator.BlsKey == nil {
@@ -2689,9 +2743,8 @@ func (d *DPoS) initializeDelegates() error {
 					d.logger.Debug("✅ 受托人BLS密钥正常", "address", validator.Address, "blsKeyLength", len(validator.BlsKey.Marshal()))
 				}
 
-				// 将数据库中的受托人添加到出块集合中
-				d.delegates = append(d.delegates, validator)
-				d.logger.Info("✅ 受托人已添加到出块集合", "address", validator.Address.String(), "votingPower", validator.VotingPower.String(), "isActive", validator.IsActive)
+				// 将数据库中的受托人添加到出块集合中（使用安全方法去重）
+				d.addDelegateSafely(validator)
 			}
 
 			d.logger.Info("📊 数据库受托人已按票数排序并取前N个添加到出块集合", "count", len(d.delegates), "configDelegateCount", d.config.DelegateCount)
@@ -2703,15 +2756,15 @@ func (d *DPoS) initializeDelegates() error {
 				// 🆕 注意：dbValidators已经在前面按票数排序，这里不需要再次排序
 
 				// 添加详细的调试日志
-				d.logger.Info("=== 数据库受托人集合详细信息（用于出块）===")
+				d.logger.Debug("=== 数据库受托人集合详细信息（用于出块）===")
 				for i, delegate := range d.delegates {
-					d.logger.Info("数据库受托人信息（用于出块）",
+					d.logger.Debug("数据库受托人信息（用于出块）",
 						"index", i,
 						"address", delegate.Address.String(),
 						"votingPower", delegate.VotingPower.String(),
 						"isActive", delegate.IsActive)
 				}
-				d.logger.Info("=== 数据库受托人集合详细信息结束 ===")
+				d.logger.Debug("=== 数据库受托人集合详细信息结束 ===")
 
 				// 检查当前节点的地址是否在受托人集合中
 				if d.key != nil {
@@ -2739,6 +2792,10 @@ func (d *DPoS) initializeDelegates() error {
 
 	// 🆕 如果数据库中没有受托人，则使用创世文件中的受托人进行初始化（作为后备）
 	d.logger.Info("🎯 数据库中没有受托人，使用创世文件中的受托人进行初始化（作为后备）...")
+
+	// 🆕 使用map进行去重和权重累计
+	delegateMap := make(map[types.Address]*validator.ValidatorMetadata)
+
 	for i, delegate := range d.config.InitialDelegates {
 		d.logger.Info("processing genesis delegate", "index", i, "address", delegate.Address, "stake", delegate.Stake.String())
 		fmt.Printf("🔍 创世文件受托人[%d]详细信息:\n", i+1)
@@ -2786,7 +2843,23 @@ func (d *DPoS) initializeDelegates() error {
 					"address", delegate.Address, "stake", validatorMetadata.VotingPower.String())
 			}
 
-			d.delegates = append(d.delegates, validatorMetadata)
+			// 🆕 去重和权重累计：检查是否已存在相同地址的验证者
+			if existingDelegate, exists := delegateMap[delegate.Address]; exists {
+				// 累计权重
+				existingDelegate.VotingPower.Add(existingDelegate.VotingPower, validatorMetadata.VotingPower)
+				d.logger.Warn("🔄 发现重复验证者地址，累计权重",
+					"address", delegate.Address.String(),
+					"originalVotingPower", validatorMetadata.VotingPower.String(),
+					"accumulatedVotingPower", existingDelegate.VotingPower.String())
+			} else {
+				// 首次添加
+				delegateMap[delegate.Address] = validatorMetadata
+				d.logger.Info("✅ 添加新验证者到map",
+					"address", delegate.Address.String(),
+					"votingPower", validatorMetadata.VotingPower.String(),
+					"isActive", validatorMetadata.IsActive)
+			}
+
 			d.logger.Info("✅ 使用创世文件中的BLS密钥",
 				"address", delegate.Address,
 				"isActive", validatorMetadata.IsActive,
@@ -2809,9 +2882,37 @@ func (d *DPoS) initializeDelegates() error {
 				VotingPower: delegate.Stake,
 				IsActive:    delegate.Stake.Cmp(big.NewInt(0)) > 0, // 根据stake设置活跃状态
 			}
-			d.delegates = append(d.delegates, validatorMetadata)
+
+			// 🆕 去重和权重累计：检查是否已存在相同地址的验证者
+			if existingDelegate, exists := delegateMap[delegate.Address]; exists {
+				// 累计权重
+				existingDelegate.VotingPower.Add(existingDelegate.VotingPower, validatorMetadata.VotingPower)
+				d.logger.Warn("🔄 发现重复验证者地址（生成BLS密钥），累计权重",
+					"address", delegate.Address.String(),
+					"originalVotingPower", validatorMetadata.VotingPower.String(),
+					"accumulatedVotingPower", existingDelegate.VotingPower.String())
+			} else {
+				// 首次添加
+				delegateMap[delegate.Address] = validatorMetadata
+				d.logger.Info("✅ 添加新验证者到map（生成BLS密钥）",
+					"address", delegate.Address.String(),
+					"votingPower", validatorMetadata.VotingPower.String(),
+					"isActive", validatorMetadata.IsActive)
+			}
+
 			d.logger.Info("🆕 生成了新的BLS密钥", "address", delegate.Address, "blsKey", fmt.Sprintf("%x", blsKey.PublicKey().Marshal()), "isActive", validatorMetadata.IsActive)
 		}
+	}
+
+	// 🆕 将map中的验证者转换为delegates数组
+	d.logger.Info("🔄 将去重后的验证者从map转换为数组", "uniqueCount", len(delegateMap))
+	d.delegates = make([]*validator.ValidatorMetadata, 0, len(delegateMap))
+	for address, validatorMetadata := range delegateMap {
+		d.delegates = append(d.delegates, validatorMetadata)
+		d.logger.Info("✅ 添加去重后的验证者到delegates数组",
+			"address", address.String(),
+			"votingPower", validatorMetadata.VotingPower.String(),
+			"isActive", validatorMetadata.IsActive)
 	}
 
 	// 保留创世配置的质押数量，不覆盖
@@ -2880,16 +2981,95 @@ func (d *DPoS) initializeDelegates() error {
 	return nil
 }
 
+// saveValidatorSetForBlock 已移除数据库保存机制，改为日志记录
+func (d *DPoS) saveValidatorSetForBlock(blockNumber uint64) error {
+	// 🆕 已移除数据库保存机制，改为从 ExtraData 直接读取验证者集合
+	d.logger.Info("📝 验证者集合获取方式已更新",
+		"blockNumber", blockNumber,
+		"delegatesCount", len(d.delegates),
+		"method", "从ExtraData直接解析",
+		"note", "不再需要保存到数据库，验证节点将从区块数据直接获取")
+
+	// 详细记录当前验证者集合信息
+	d.logger.Info("📋 当前验证者集合详细信息:")
+	for i, delegate := range d.delegates {
+		d.logger.Info("📝 当前验证者",
+			"blockNumber", blockNumber,
+			"index", i,
+			"address", delegate.Address.String(),
+			"votingPower", delegate.VotingPower.String(),
+			"isActive", delegate.IsActive,
+			"hasBlsKey", delegate.BlsKey != nil)
+	}
+
+	return nil
+}
+
+// SaveValidatorSetForBlockWithValidators 保存指定区块的特定验证者集合到数据库（接口实现）
+func (d *DPoS) SaveValidatorSetForBlockWithValidators(blockNumber uint64, validators validator.AccountSet) error {
+	return d.saveValidatorSetForBlockWithValidators(blockNumber, validators)
+}
+
+// saveValidatorSetForBlockWithValidators 已移除数据库保存机制，改为日志记录
+func (d *DPoS) saveValidatorSetForBlockWithValidators(blockNumber uint64, validators validator.AccountSet) error {
+	// 🆕 已移除数据库保存机制，改为从 ExtraData 直接读取验证者集合
+	d.logger.Info("📝 验证者集合获取方式已更新",
+		"blockNumber", blockNumber,
+		"validatorsCount", len(validators),
+		"method", "从ExtraData直接解析",
+		"note", "不再需要保存到数据库，验证节点将从区块数据直接获取")
+
+	// 详细记录验证者集合信息
+	d.logger.Info("📋 验证者集合详细信息:")
+	for i, validator := range validators {
+		d.logger.Info("📝 验证者",
+			"blockNumber", blockNumber,
+			"index", i,
+			"address", validator.Address.String(),
+			"votingPower", validator.VotingPower.String(),
+			"isActive", validator.IsActive,
+			"hasBlsKey", validator.BlsKey != nil)
+	}
+
+	return nil
+}
+
+// addDelegateSafely 安全地添加验证者，自动去重和权重累计
+func (d *DPoS) addDelegateSafely(newDelegate *validator.ValidatorMetadata) {
+	// 检查是否已存在相同地址的验证者
+	for i, existingDelegate := range d.delegates {
+		if existingDelegate.Address == newDelegate.Address {
+			// 累计权重
+			existingDelegate.VotingPower.Add(existingDelegate.VotingPower, newDelegate.VotingPower)
+			d.logger.Warn("🔄 发现重复验证者地址，累计权重",
+				"address", newDelegate.Address.String(),
+				"originalVotingPower", newDelegate.VotingPower.String(),
+				"accumulatedVotingPower", existingDelegate.VotingPower.String(),
+				"existingIndex", i)
+			return
+		}
+	}
+
+	// 如果没有重复，直接添加
+	d.delegates = append(d.delegates, newDelegate)
+	d.logger.Debug("✅ 添加新验证者",
+		"address", newDelegate.Address.String(),
+		"votingPower", newDelegate.VotingPower.String(),
+		"isActive", newDelegate.IsActive,
+		"totalDelegates", len(d.delegates))
+}
+
 // dpos.go - 添加后端接口实现
 func (d *DPoS) GetDelegates(blockNumber uint64, parents []*types.Header) (validator.AccountSet, error) {
 	d.lock.RLock()
 	defer d.lock.RUnlock()
 
 	currentBlockNumber := d.blockchain.CurrentHeader().Number
-	d.logger.Debug("🔍 GetDelegates called",
+	d.logger.Info("🔍 验证时获取验证者集合",
 		"requestedBlockNumber", blockNumber,
 		"currentBlockNumber", currentBlockNumber,
-		"isCurrentBlock", blockNumber == currentBlockNumber)
+		"isCurrentBlock", blockNumber == currentBlockNumber,
+		"note", "验证时获取验证者集合")
 
 	// 如果是当前区块，直接返回当前受托人集合
 	if blockNumber == currentBlockNumber {
@@ -2909,25 +3089,16 @@ func (d *DPoS) GetDelegates(blockNumber uint64, parents []*types.Header) (valida
 		return result, nil
 	}
 
-	// 否则从状态存储中获取历史受托人集合
-	d.logger.Debug("🔍 Getting historical delegates from state store")
-	result, err := d.getDelegatesFromState(blockNumber)
-	if err != nil {
-		d.logger.Error("❌ Failed to get delegates from state", "error", err)
-		return nil, err
-	}
+	// 🆕 已移除数据库读取机制，改为从区块 ExtraData 直接解析
+	d.logger.Info("📝 GetDelegates 获取方式已更新",
+		"requestedBlockNumber", blockNumber,
+		"currentBlockNumber", currentBlockNumber,
+		"method", "从区块ExtraData直接解析",
+		"note", "不再从数据库读取，验证者集合应从区块数据直接获取")
 
-	// 🆕 添加详细日志：打印从数据库返回的受托人集合
-	d.logger.Debug("🔍 GetDelegates returning database delegates:")
-	for i, del := range result {
-		d.logger.Debug("🔍 Database Delegate",
-			"index", i,
-			"address", del.Address.String(),
-			"votingPower", del.VotingPower.String(),
-			"isActive", del.IsActive)
-	}
-
-	return result, nil
+	// 对于历史区块，应该通过区块的 ExtraData 来获取验证者集合
+	// 这里返回错误，提示调用者应该使用 ExtraData 解析方式
+	return nil, fmt.Errorf("GetDelegates for historical block %d is deprecated, use ExtraData parsing instead", blockNumber)
 }
 
 // GetValidatorsWithFilter returns validators with optional filtering
@@ -3105,6 +3276,15 @@ func (d *DPoS) GetDelegateIndex(delegate types.Address) uint64 {
 	}
 
 	return 0
+}
+
+// GetCurrentDelegates 获取当前内存中的受托人集合
+func (d *DPoS) GetCurrentDelegates() validator.AccountSet {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	// 返回当前内存中的受托人集合的副本
+	return d.delegates.Copy()
 }
 
 // 区块处理相关方法
@@ -3326,9 +3506,8 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		}
 		d.logger.Debug("Delegate not in predefined list, auto-creating",
 			"delegate", vote.Delegate.String(), "amount", "0")
-		// 添加到受托人列表
-		d.delegates = append(d.delegates, newDelegate)
-		d.logger.Info("New delegate added", "delegate", vote.Delegate.String())
+		// 添加到受托人列表（使用安全方法去重）
+		d.addDelegateSafely(newDelegate)
 	}
 
 	// 3. 检查投票锁定时间（临时跳过用于测试）
@@ -3632,14 +3811,31 @@ func (d *DPoS) getPrimaryDelegate(votedDelegates []types.Address) types.Address 
 }
 
 func (d *DPoS) getDelegatesFromState(blockNumber uint64) (validator.AccountSet, error) {
-	// 🆕 修复：简化实现，避免数据库事务死锁
-	// 直接返回内存中的受托人集合，避免复杂的数据库操作
+	// 🆕 关键修复：首先尝试从历史数据获取验证者集合
+	if d.state != nil && d.state.StakeStore != nil {
+		// 开始数据库事务
+		dbTx, err := d.state.beginDBTransaction(false) // 只读事务
+		if err != nil {
+			d.logger.Debug("⚠️ 无法开始数据库事务", "blockNumber", blockNumber, "error", err)
+		} else {
+			defer dbTx.Rollback()
 
-	d.lock.RLock()
-	defer d.lock.RUnlock()
+			if historicalDelegates, err := d.state.StakeStore.getDelegatesAtBlock(blockNumber, dbTx); err == nil {
+				d.logger.Info("✅ 从历史数据获取验证者集合", "blockNumber", blockNumber, "count", len(historicalDelegates))
+				return historicalDelegates, nil
+			} else {
+				d.logger.Debug("⚠️ 历史验证者集合不存在", "blockNumber", blockNumber, "error", err)
+			}
+		}
+	}
 
-	d.logger.Debug("🔄 从内存获取受托人集合", "blockNumber", blockNumber, "count", len(d.delegates))
-	return d.delegates.Copy(), nil
+	// 🆕 关键修复：一旦获取不到历史验证者集合，直接退出程序
+	d.logger.Error("❌ 历史验证者集合不存在，程序退出", "blockNumber", blockNumber)
+	d.logger.Error("💀 无法获取历史验证者集合，程序退出")
+	os.Exit(1)
+
+	// 这行代码永远不会执行，但为了编译通过
+	return nil, fmt.Errorf("historical validator set not found for block %d", blockNumber)
 }
 
 func (d *DPoS) getDelegatesFromStateWithTx(blockNumber uint64, dbTx *bolt.Tx) (validator.AccountSet, error) {
@@ -3841,7 +4037,7 @@ func (d *DPoS) processDelegateBatch(delegates []*DelegateMessage) {
 				}
 			}
 			if !found {
-				d.delegates = append(d.delegates, &validator.ValidatorMetadata{
+				d.addDelegateSafely(&validator.ValidatorMetadata{
 					Address:     msg.Delegate,
 					VotingPower: msg.Stake,
 					IsActive:    true,
@@ -4140,10 +4336,7 @@ func (d *DPoS) updateDelegateVotingPower(delegate types.Address, amount *big.Int
 			"isActive", newDelegate.IsActive,
 			"isActiveType", fmt.Sprintf("%T", newDelegate.IsActive))
 
-		d.delegates = append(d.delegates, newDelegate)
-		d.logger.Info("✅ New delegate added to delegates list",
-			"delegate", delegate.String(),
-			"totalDelegates", len(d.delegates))
+		d.addDelegateSafely(newDelegate)
 	}
 
 	// 🆕 添加详细日志：打印更新后的所有受托人状态

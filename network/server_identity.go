@@ -32,7 +32,7 @@ func (s *Server) NewIdentityClient(peerID peer.ID) (proto.IdentityClient, error)
 // AddPeer adds a new peer to the networking server's peer list,
 // and updates relevant counters and metrics
 func (s *Server) AddPeer(id peer.ID, direction network.Direction) {
-	s.logger.Info("Peer connected", "id", id.String())
+	s.logger.Debug("Peer connected", "id", id.String())
 
 	// Update the peer connection info
 	if connectionExists := s.addPeerInfo(id, direction); connectionExists {

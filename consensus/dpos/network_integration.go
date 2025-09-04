@@ -1828,7 +1828,7 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 			return
 		}
 
-		ni.logger.Info("📨 收到BLS公钥请求",
+		ni.logger.Debug("📨 收到BLS公钥请求",
 			"requestedAddress", requestMsg.RequestedAddress.String(),
 			"requester", requestMsg.Requester.String(),
 			"from", from.String(),

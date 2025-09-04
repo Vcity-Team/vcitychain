@@ -862,8 +862,8 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 
 			// 🆕 修复：移除立即调用AddVote的逻辑，避免重复计算
 			// 投票数据将在区块广播接收后统一处理，确保只计算一次
-			d.logger.Info("🔄 投票交易已加入交易池，等待打包进区块后统一处理")
-			d.logger.Info("📋 投票数据将在区块广播接收后计算，避免重复处理")
+			d.logger.Debug("🔄 投票交易已加入交易池，等待打包进区块后统一处理")
+			d.logger.Debug("📋 投票数据将在区块广播接收后计算，避免重复处理")
 
 			// 注释掉所有立即调用AddVote的代码，避免重复计算
 			/*

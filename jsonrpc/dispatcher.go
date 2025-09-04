@@ -1200,9 +1200,7 @@ func (a *dposStoreAdapter) GetStakingInfo() ([]*consensusdpos.StakeInfo, error) 
 
 	// Look for Consensus field
 	if consensusField := storeValue.FieldByName("Consensus"); consensusField.IsValid() {
-		fmt.Printf("DEBUG: GetStakingInfo - Found Consensus field through reflection\n")
 		consensusEngine := consensusField.Interface()
-		fmt.Printf("DEBUG: GetStakingInfo - Consensus engine type: %T\n", consensusEngine)
 
 		// Try to get staking info from consensus engine using reflection
 		consensusValue := reflect.ValueOf(consensusEngine)
@@ -1215,32 +1213,19 @@ func (a *dposStoreAdapter) GetStakingInfo() ([]*consensusdpos.StakeInfo, error) 
 		originalType := reflect.TypeOf(originalConsensus)
 
 		if getStakingInfoMethod, found := originalType.MethodByName("GetStakingInfo"); found {
-			fmt.Printf("DEBUG: GetStakingInfo - Found GetStakingInfo method on original consensus engine\n")
-
 			// Get validators first to know which addresses to query
 			validators, err := a.GetValidators()
 			if err != nil {
-				fmt.Printf("DEBUG: GetStakingInfo - Failed to get validators: %v\n", err)
 				return []*consensusdpos.StakeInfo{}, nil
 			}
-
-			fmt.Printf("DEBUG: GetStakingInfo - Found %d validators\n", len(validators))
 
 			// Create staking info for each validator
 			stakingInfos := make([]*consensusdpos.StakeInfo, 0, len(validators))
 			for i, validator := range validators {
-				fmt.Printf("DEBUG: GetStakingInfo - Processing validator %d: %s\n", i, validator.Address.String())
-
 				// Call GetStakingInfo for this validator using the original consensus engine
 				// Note: GetStakingInfo is a method on *DPoS, so we need to call it on the pointer
 				blockNumber := reflect.ValueOf(uint64(0))
 				stakerAddr := reflect.ValueOf(validator.Address)
-
-				// Call the method on the original consensus engine (pointer type)
-				fmt.Printf("DEBUG: GetStakingInfo - Calling method for validator %d: %s\n", i, validator.Address.String())
-				fmt.Printf("DEBUG: GetStakingInfo - Method receiver type: %T\n", originalConsensus)
-				fmt.Printf("DEBUG: GetStakingInfo - Block number: %v\n", blockNumber.Interface())
-				fmt.Printf("DEBUG: GetStakingInfo - Staker address: %v\n", stakerAddr.Interface())
 
 				results := getStakingInfoMethod.Func.Call([]reflect.Value{
 					reflect.ValueOf(originalConsensus), // receiver (the *DPoS instance)
