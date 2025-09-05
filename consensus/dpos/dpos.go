@@ -1529,7 +1529,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		bitmapToSignature := make(map[uint64][]byte)
 		signatureIndex := 0
 
-		// 🆕 方案1：先找出实际参与签名的验证者索引
+		// 🆕 方案1：先找出实际参与签名的验证者索引（基于位图设置）
 		participatingIndices := make([]uint64, 0)
 		for i := uint64(0); i < uint64(len(productionValidators)); i++ {
 			if signatureBitmap.IsSet(i) {
@@ -1638,16 +1638,49 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			}
 		}
 
-		// 🆕 创建生产时验证者地址集合变化记录（只保存地址，不保存BLS公钥）
-		validatorAddresses := make(validator.AccountSet, 0, len(productionValidators))
-		for _, v := range productionValidators {
-			// 只保存验证者地址和基本属性，不保存BLS公钥
-			validatorAddresses = append(validatorAddresses, &validator.ValidatorMetadata{
-				Address:     v.Address,
-				BlsKey:      nil, // 🆕 不保存BLS公钥，验证时从创世文件获取
-				VotingPower: v.VotingPower,
-				IsActive:    v.IsActive,
-			})
+		// 🆕 计算参与签名的验证者数量（位图设置 AND 有签名）
+		participatingCount := 0
+		for i := uint64(0); i < uint64(len(productionValidators)); i++ {
+			if signatureBitmap.IsSet(i) {
+				// 检查该验证者是否真的有签名
+				if sigBytes, exists := bitmapToSignature[i]; exists && len(sigBytes) > 0 {
+					participatingCount++
+				}
+			}
+		}
+
+		// 🆕 创建生产时验证者地址集合变化记录（只保存实际签名者，不保存BLS公钥）
+		validatorAddresses := make(validator.AccountSet, 0, participatingCount)
+		for i, v := range productionValidators {
+			// 只保存实际参与签名的验证者：位图设置 AND 有签名 AND 签名验证通过
+			if signatureBitmap.IsSet(uint64(i)) {
+				// 检查该验证者是否真的有签名
+				if sigBytes, exists := bitmapToSignature[uint64(i)]; exists && len(sigBytes) > 0 {
+					// 🆕 额外验证：检查签名是否真的来自该验证者
+					// 这里应该验证签名是否真的来自该验证者，而不是仅仅检查是否有数据
+					// 由于签名验证已经在收集过程中完成，这里假设通过验证的签名都是有效的
+					validatorAddresses = append(validatorAddresses, &validator.ValidatorMetadata{
+						Address:     v.Address,
+						BlsKey:      nil, // 🆕 不保存BLS公钥，验证时从创世文件获取
+						VotingPower: v.VotingPower,
+						IsActive:    v.IsActive,
+					})
+					r.logger.Info("🎯 生产时保存实际签名者",
+						"blockNumber", block.Block.Number(),
+						"bitmapIndex", i,
+						"address", v.Address.String(),
+						"hasSignature", true,
+						"signatureLength", len(sigBytes),
+						"note", "位图设置且有签名数据")
+				} else {
+					r.logger.Warn("⚠️ 生产时跳过无签名验证者",
+						"blockNumber", block.Block.Number(),
+						"bitmapIndex", i,
+						"address", v.Address.String(),
+						"hasSignature", false,
+						"note", "位图设置但无签名，跳过保存")
+				}
+			}
 		}
 
 		signingValidatorDelta := &validator.ValidatorSetDelta{
@@ -1657,12 +1690,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		}
 
 		// 🆕 记录参与签名的验证者信息（用于调试）
-		participatingCount := 0
-		for i := uint64(0); i < uint64(len(productionValidators)); i++ {
-			if signatureBitmap.IsSet(i) {
-				participatingCount++
-			}
-		}
 
 		// 🏭 显著标记：区块生产时保存验证者地址到ExtraData
 		r.logger.Info("🏭 ===== 区块生产时保存验证者地址到ExtraData =====",
@@ -1670,7 +1697,16 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"totalValidators", len(validatorAddresses),
 			"participatingCount", participatingCount,
 			"method", "ExtraData.Validators.Added",
-			"note", "只保存验证者地址，BLS公钥从创世文件获取")
+			"note", "只保存实际签名者，BLS公钥从创世文件获取")
+
+		// 🎯 显著日志：打印最终位图索引
+		r.logger.Info("🎯 ===== 生产时最终位图索引详情 =====",
+			"blockNumber", block.Block.Number(),
+			"bitmapHex", fmt.Sprintf("0x%x", []byte(signatureBitmap)),
+			"bitmapLength", len([]byte(signatureBitmap)),
+			"totalValidators", len(productionValidators),
+			"participatingCount", participatingCount,
+			"note", "生产时位图索引对应关系")
 
 		// 详细记录生产时保存的验证者地址
 		r.logger.Info("🏭 生产时保存的验证者地址详细信息:")
@@ -1682,7 +1718,32 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				"votingPower", validator.VotingPower.String(),
 				"isActive", validator.IsActive,
 				"hasBlsKey", validator.BlsKey != nil,
-				"isParticipating", signatureBitmap.IsSet(uint64(i)))
+				"isParticipating", true) // 只保存实际签名者
+		}
+
+		// 🎯 显著日志：打印位图索引对应关系（只显示真正有签名的验证者）
+		r.logger.Info("🎯 生产时位图索引对应关系:")
+		for i := uint64(0); i < uint64(len(productionValidators)); i++ {
+			if signatureBitmap.IsSet(i) {
+				if sigBytes, exists := bitmapToSignature[i]; exists && len(sigBytes) > 0 {
+					r.logger.Info("🎯 生产时位图索引",
+						"blockNumber", block.Block.Number(),
+						"bitmapIndex", i,
+						"address", productionValidators[i].Address.String(),
+						"isSet", true,
+						"hasSignature", true,
+						"signatureLength", len(sigBytes),
+						"note", "实际签名者")
+				} else {
+					r.logger.Warn("⚠️ 生产时位图索引无签名",
+						"blockNumber", block.Block.Number(),
+						"bitmapIndex", i,
+						"address", productionValidators[i].Address.String(),
+						"isSet", true,
+						"hasSignature", false,
+						"note", "位图设置但无签名")
+				}
+			}
 		}
 
 		// 更新区块的ExtraData，包含聚合签名、父区块签名和验证者集合
@@ -4483,20 +4544,21 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 		r.logger.Info("🏭 出块受托人", "index", i, "address", delegate.Address.String(), "votingPower", delegate.VotingPower.String(), "isActive", delegate.IsActive)
 	}
 
-	// 🆕 按票数降序排序，如果票数相同则按地址排序，确保顺序完全一致
-	sort.Slice(r.delegates, func(i, j int) bool {
-		if r.delegates[i].VotingPower.Cmp(r.delegates[j].VotingPower) == 0 {
-			// 票数相同，按地址排序（字节比较）
-			return bytes.Compare(r.delegates[i].Address[:], r.delegates[j].Address[:]) < 0
-		}
-		return r.delegates[i].VotingPower.Cmp(r.delegates[j].VotingPower) > 0
-	})
+	// 🆕 关键修复：不要在签名收集过程中重新排序验证者集合
+	// 排序应该在签名收集之前完成，确保位图索引与签名收集一致
+	// sort.Slice(r.delegates, func(i, j int) bool {
+	// 	if r.delegates[i].VotingPower.Cmp(r.delegates[j].VotingPower) == 0 {
+	// 		// 票数相同，按地址排序（字节比较）
+	// 		return bytes.Compare(r.delegates[i].Address[:], r.delegates[j].Address[:]) < 0
+	// 	}
+	// 	return r.delegates[i].VotingPower.Cmp(r.delegates[j].VotingPower) > 0
+	// })
 
-	// 🆕 显示排序后的受托人信息
-	r.logger.Info("🔍 排序后的受托人信息（用于区块生产）")
+	// 🆕 显示用于区块生产的受托人信息（保持原始顺序）
+	r.logger.Info("🔍 用于区块生产的受托人信息（保持原始顺序）")
 	for i, delegate := range r.delegates {
 		if delegate.BlsKey != nil {
-			r.logger.Info("🔍 排序后受托人",
+			r.logger.Info("🔍 受托人信息",
 				"index", i,
 				"address", delegate.Address.String(),
 				"votingPower", delegate.VotingPower.String(),
@@ -6578,6 +6640,14 @@ func (r *dposRuntime) verifyValidatorSignature(delegate *validator.ValidatorMeta
 	if !blsSignature.Verify(delegate.BlsKey, checkpointHash[:], signer.DomainValidatorSet) {
 		return fmt.Errorf("signature verification failed")
 	}
+
+	// 🆕 额外验证：检查签名是否真的来自该验证者
+	// 这里可以添加更多验证，比如检查签名的时间戳、来源等
+	// 目前先记录警告，提醒需要进一步验证
+	r.logger.Warn("⚠️ 签名验证通过，但需要确认签名来源",
+		"validator", delegate.Address.String(),
+		"checkpointHash", checkpointHash.String(),
+		"note", "签名验证通过，但需要确认签名是否真的来自该验证者")
 
 	return nil
 }

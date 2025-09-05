@@ -178,23 +178,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"validatorsCount", len(validators),
 		"note", "确保验证者集合与生产时位图索引对应关系一致")
 
-	// 🆕 关键修复：验证时应该使用与生产时相同的验证者集合
-	// 生产时使用 r.delegates，验证时也应该使用相同的验证者集合
-	// 通过 consensusBackend 获取当前验证者集合，确保与生产时一致
-	if consensusBackend != nil {
-		currentValidators := consensusBackend.GetCurrentDelegates()
-		if len(currentValidators) > 0 {
-			logger.Info("🔄 使用与生产时相同的验证者集合进行验证",
-				"blockNumber", blockNumber,
-				"currentValidatorsCount", len(currentValidators),
-				"extraDataValidatorsCount", len(validators),
-				"note", "使用 GetCurrentDelegates 确保与生产时 r.delegates 一致")
-
-			// 使用当前验证者集合替换从 ExtraData 解析的验证者集合
-			validators = currentValidators
-		}
-	}
-
 	// 🔍 从 ExtraData 获取的验证者集合信息
 	logger.Info("✅ 从 ExtraData 成功获取验证者集合",
 		"blockNumber", blockNumber,
@@ -918,12 +901,33 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		"validatorsCount", len(validators),
 		"note", "使用区块获取到的验证者集合，确保与签名位图匹配")
 
+	// 🎯 显著日志：打印验证时位图索引详情
+	logger.Info("🎯 ===== 验证时位图索引详情 =====",
+		"blockNumber", blockNumber,
+		"bitmapHex", fmt.Sprintf("0x%x", []byte(s.Bitmap)),
+		"bitmapLength", len([]byte(s.Bitmap)),
+		"totalValidators", len(validators),
+		"note", "验证时位图索引对应关系")
+
 	// 直接使用所有验证者作为签名者
 	signers := validators
 	logger.Info("🔍 ===== 验证时使用验证者集合进行BLS签名验证 =====",
 		"blockNumber", blockNumber,
 		"signersCount", len(signers),
 		"note", "使用从ExtraData获取的验证者集合进行签名验证")
+
+	// 🎯 显著日志：打印位图索引对应关系
+	logger.Info("🎯 验证时位图索引对应关系:")
+	for i := uint64(0); i < uint64(len(validators)); i++ {
+		if s.Bitmap.IsSet(i) {
+			logger.Info("🎯 验证时位图索引",
+				"blockNumber", blockNumber,
+				"bitmapIndex", i,
+				"address", validators[i].Address.String(),
+				"isSet", true,
+				"note", "实际签名者")
+		}
+	}
 
 	// 🆕 打印验证时使用的验证者集合详细信息
 	logger.Info("🔍 验证时使用的验证者集合详细信息:")
@@ -1340,18 +1344,21 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		}
 	}
 
-	// 按位图索引顺序收集公钥和地址，使用地址映射查找BLS公钥
+	// 🎯 显著日志：按位图索引顺序收集公钥和地址，只使用实际签名者
+	logger.Info("🎯 验证时按位图索引收集实际签名者BLS公钥:")
 	for i := uint64(0); i < uint64(len(validators)); i++ {
 		if s.Bitmap.IsSet(i) {
 			validatorAddress := validators[int(i)].Address
 			if blsKey, exists := addressToBLSKey[validatorAddress]; exists && blsKey != nil {
 				validBLSKeys = append(validBLSKeys, blsKey)
 				bitmapOrderedAddresses = append(bitmapOrderedAddresses, validatorAddress)
-				logger.Debug("🔍 按位图顺序排列BLS公钥",
+				logger.Info("🎯 验证时位图索引BLS公钥",
+					"blockNumber", blockNumber,
 					"bitmapIndex", i,
 					"signatureIndex", len(validBLSKeys)-1,
 					"address", validatorAddress.String(),
-					"publicKeyLength", len(blsKey.Marshal()))
+					"publicKeyLength", len(blsKey.Marshal()),
+					"note", "实际签名者BLS公钥")
 			} else {
 				logger.Warn("⚠️ 位图索引对应的BLS公钥不存在或为nil",
 					"bitmapIndex", i,
@@ -1362,6 +1369,15 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 			}
 		}
 	}
+
+	// 🎯 显著日志：打印最终验证时位图索引统计
+	logger.Info("🎯 ===== 验证时最终位图索引统计 =====",
+		"blockNumber", blockNumber,
+		"totalValidators", len(validators),
+		"bitmapSetCount", bitmapSetCount,
+		"validBLSKeysCount", len(validBLSKeys),
+		"bitmapOrderedAddresses", bitmapOrderedAddresses,
+		"note", "验证时实际签名者统计")
 
 	// 🆕 关键修复：记录按位图顺序排列的公钥信息，便于调试
 	logger.Debug("🔍 按位图顺序排列的公钥信息",
@@ -1791,15 +1807,15 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 
 	// 🆕 添加 parent 的 nil 检查
 	if parent == nil {
-		// 🔍 优先从当前区块ExtraData获取生产时的验证者地址集合
+		// 🔍 优先从当前区块ExtraData获取生产时的验证者地址集合（实际签名者）
 		if i.Validators != nil && !i.Validators.IsEmpty() && len(i.Validators.Added) > 0 {
-			logger.Info("🔍 ===== 验证时从当前区块ExtraData获取验证者地址集合 =====",
+			logger.Info("🔍 ===== 验证时从当前区块ExtraData获取实际签名者 =====",
 				"blockNumber", blockNumber,
-				"productionValidatorsCount", len(i.Validators.Added),
+				"actualSignersCount", len(i.Validators.Added),
 				"method", "从区块ExtraData直接获取",
-				"note", "从ExtraData获取地址，BLS公钥从创世文件获取")
+				"note", "从ExtraData获取实际签名者地址，BLS公钥从创世文件获取")
 
-			// 从ExtraData获取验证者地址，然后从创世文件获取BLS公钥
+			// 从ExtraData获取实际签名者地址，然后从创世文件获取BLS公钥
 			validatorAddresses := i.Validators.Added
 
 			logger.Info("✅ 从ExtraData获取生产时验证者地址集合成功",
