@@ -63,107 +63,78 @@ func (d *ValidatorSetDelta) UnmarshalRLPWith(v *fastrlp.Value) error {
 		return fmt.Errorf("incorrect elements count to decode validator set delta, expected 3 but found %d", num)
 	}
 
-	fmt.Printf("DEBUG: ValidatorSetDelta.UnmarshalRLPWith - parsing %d elements\n", len(elems))
-
 	// Validators (added)
 	{
-		fmt.Printf("DEBUG: parsing Added validators (element 0), type: %v\n", elems[0].Type())
 		if elems[0].Type() == fastrlp.TypeNull {
 			d.Added = nil
-			fmt.Printf("DEBUG: Added validators is null\n")
 		} else {
 			validatorsRaw, err := elems[0].GetElems()
 			if err != nil {
-				fmt.Printf("DEBUG: error getting Added validators elements: %v\n", err)
 				return fmt.Errorf("array expected for added validators")
 			}
 
-			fmt.Printf("DEBUG: parsing %d Added validators\n", len(validatorsRaw))
 			d.Added, err = unmarshalValidators(validatorsRaw)
 			if err != nil {
-				fmt.Printf("DEBUG: error parsing Added validators: %v\n", err)
 				return err
 			}
-			fmt.Printf("DEBUG: successfully parsed Added validators\n")
 		}
 	}
 
 	// Validators (updated)
 	{
-		fmt.Printf("DEBUG: parsing Updated validators (element 1), type: %v\n", elems[1].Type())
 		if elems[1].Type() == fastrlp.TypeNull {
 			d.Updated = nil
-			fmt.Printf("DEBUG: Updated validators is null\n")
 		} else {
 			validatorsRaw, err := elems[1].GetElems()
 			if err != nil {
-				fmt.Printf("DEBUG: error getting Updated validators elements: %v\n", err)
 				return fmt.Errorf("array expected for updated validators")
 			}
 
-			fmt.Printf("DEBUG: parsing %d Updated validators\n", len(validatorsRaw))
 			d.Updated, err = unmarshalValidators(validatorsRaw)
 			if err != nil {
-				fmt.Printf("DEBUG: error parsing Updated validators: %v\n", err)
 				return err
 			}
-			fmt.Printf("DEBUG: successfully parsed Updated validators\n")
 		}
 	}
 
 	// Bitmap (removed)
 	{
-		fmt.Printf("DEBUG: parsing Removed bitmap (element 2), type: %v\n", elems[2].Type())
 		if elems[2].Type() == fastrlp.TypeNull {
 			d.Removed = nil
-			fmt.Printf("DEBUG: Removed bitmap is null\n")
 		} else {
 			dst, err := elems[2].GetBytes(nil)
 			if err != nil {
-				fmt.Printf("DEBUG: error getting Removed bitmap bytes: %v\n", err)
 				return err
 			}
 
 			d.Removed = bitmap.Bitmap(dst)
-			fmt.Printf("DEBUG: successfully parsed Removed bitmap\n")
 		}
 	}
-
-	fmt.Printf("DEBUG: ValidatorSetDelta.UnmarshalRLPWith completed successfully\n")
 	return nil
 }
 
 // unmarshalValidators unmarshals RLP encoded validators and returns AccountSet instance
 func unmarshalValidators(validatorsRaw []*fastrlp.Value) (AccountSet, error) {
-	fmt.Printf("DEBUG: unmarshalValidators - parsing %d validators\n", len(validatorsRaw))
-
 	if len(validatorsRaw) == 0 {
-		fmt.Printf("DEBUG: no validators to parse\n")
 		return nil, nil
 	}
 
 	validators := make(AccountSet, 0, len(validatorsRaw))
 
-	for i, validatorRaw := range validatorsRaw {
-		fmt.Printf("DEBUG: parsing validator %d, type: %v\n", i, validatorRaw.Type())
-
+	for _, validatorRaw := range validatorsRaw {
 		// Skip null values
 		if validatorRaw.Type() == fastrlp.TypeNull {
-			fmt.Printf("DEBUG: skipping null validator %d\n", i)
 			continue
 		}
 
 		acc := &ValidatorMetadata{}
 		if err := acc.UnmarshalRLPWith(validatorRaw); err != nil {
-			fmt.Printf("DEBUG: error parsing validator %d: %v\n", i, err)
 			return nil, err
 		}
 
 		validators = append(validators, acc)
-		fmt.Printf("DEBUG: successfully parsed validator %d\n", i)
 	}
 
-	fmt.Printf("DEBUG: unmarshalValidators completed, parsed %d validators\n", len(validators))
 	return validators, nil
 }
 

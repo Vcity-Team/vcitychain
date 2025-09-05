@@ -1033,12 +1033,24 @@ func (r *dposRuntime) initializeDelegates() error {
 			"initialDelegatesExists", r.config != nil && r.config.InitialDelegates != nil)
 	}
 
-	// 从主DPoS结构体获取已初始化的受托人
+	// 🆕 修复：使用当前区块号获取受托人集合，而不是已废弃的区块0
 	if r.backend != nil {
-		delegates, err := r.backend.GetDelegates(0, nil)
+		// 获取当前区块号
+		currentBlockNumber := uint64(0)
+		if r.config != nil && r.config.blockchain != nil {
+			if currentHeader := r.config.blockchain.CurrentHeader(); currentHeader != nil {
+				currentBlockNumber = currentHeader.Number
+			}
+		}
+
+		r.logger.Info("🔄 使用当前区块号获取受托人集合",
+			"currentBlockNumber", currentBlockNumber,
+			"note", "不再使用已废弃的GetDelegates(0,nil)")
+
+		delegates, err := r.backend.GetDelegates(currentBlockNumber, nil)
 		if err != nil {
-			r.logger.Error("failed to get delegates from backend", "error", err)
-			return fmt.Errorf("failed to get delegates from backend: %w", err)
+			r.logger.Error("failed to get current delegates from backend", "error", err)
+			return fmt.Errorf("failed to get current delegates from backend: %w", err)
 		}
 
 		// 🆕 应用 DelegateCount 限制，只取前N个受托人
@@ -1472,6 +1484,15 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		// 生产时使用：GetDelegates(blockNumber-1, parents) - 现在参数完全一致
 		productionValidators := currentValidators
 
+		// 🆕 关键修复：实时同步r.delegates为productionValidators
+		// 确保位图索引和保存的验证者集合完全匹配
+		r.delegates = productionValidators
+		r.logger.Info("🔄 已同步r.delegates为productionValidators",
+			"blockNumber", block.Block.Number(),
+			"delegatesCount", len(r.delegates),
+			"productionValidatorsCount", len(productionValidators),
+			"note", "确保位图索引与验证者集合完全匹配")
+
 		// 🔍 生产时获取的验证者集合信息
 		r.logger.Debug("🔍 生产时验证者集合信息",
 			"blockNumber", block.Block.Number(),
@@ -1508,17 +1529,37 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		bitmapToSignature := make(map[uint64][]byte)
 		signatureIndex := 0
 
-		// 按位图索引顺序收集签名
+		// 🆕 方案1：先找出实际参与签名的验证者索引
+		participatingIndices := make([]uint64, 0)
 		for i := uint64(0); i < uint64(len(productionValidators)); i++ {
 			if signatureBitmap.IsSet(i) {
-				if signatureIndex < len(signatures) {
-					bitmapToSignature[i] = signatures[signatureIndex]
-					signatureIndex++
-					r.logger.Info("🔍 收集签名映射",
-						"bitmapIndex", i,
-						"signatureIndex", signatureIndex-1,
-						"validatorAddress", productionValidators[i].Address.String())
-				}
+				participatingIndices = append(participatingIndices, i)
+				r.logger.Info("🔍 参与签名的验证者索引",
+					"validatorIndex", i,
+					"validatorAddress", productionValidators[i].Address.String(),
+					"isParticipating", true)
+			} else {
+				r.logger.Info("🔍 未参与签名的验证者索引",
+					"validatorIndex", i,
+					"validatorAddress", productionValidators[i].Address.String(),
+					"isParticipating", false)
+			}
+		}
+
+		r.logger.Info("🔍 参与签名验证者统计",
+			"totalValidators", len(productionValidators),
+			"participatingCount", len(participatingIndices),
+			"signatureCount", len(signatures))
+
+		// 按实际参与签名的验证者索引收集签名
+		for _, validatorIndex := range participatingIndices {
+			if signatureIndex < len(signatures) {
+				bitmapToSignature[validatorIndex] = signatures[signatureIndex]
+				signatureIndex++
+				r.logger.Info("🔍 收集签名映射",
+					"bitmapIndex", validatorIndex,
+					"signatureIndex", signatureIndex-1,
+					"validatorAddress", productionValidators[validatorIndex].Address.String())
 			}
 		}
 
@@ -1554,39 +1595,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		r.logger.Info("✅ 签名聚合成功",
 			"aggregatedSignatureLength", len(aggregatedSignature),
 			"aggregatedSignatureBytes", fmt.Sprintf("%x", aggregatedSignature))
-
-		// 🆕 关键修复：在签名聚合完成后记录参与签名的验证者集合
-		// 这样确保记录的验证者集合与实际用于签名的验证者集合完全一致
-		if r.backend != nil {
-			if _, ok := r.backend.(*DPoS); ok {
-				// 只保存实际参与签名的验证者集合
-				signingValidators := make(validator.AccountSet, 0, len(blsSignatures))
-				for i := uint64(0); i < uint64(len(productionValidators)); i++ {
-					if signatureBitmap.IsSet(i) {
-						signingValidators = append(signingValidators, productionValidators[i])
-					}
-				}
-
-				// 🆕 已移除数据库保存机制，改为从 ExtraData 直接读取验证者集合
-				r.logger.Info("📝 参与签名的验证者集合已记录到区块 ExtraData",
-					"blockNumber", block.Block.Number(),
-					"signingValidatorsCount", len(signingValidators),
-					"method", "ExtraData.Validators",
-					"note", "不再需要保存到数据库，验证节点将从区块数据直接获取")
-
-				// 详细记录参与签名的验证者信息
-				r.logger.Info("📋 参与签名的验证者详细信息:")
-				for i, validator := range signingValidators {
-					r.logger.Info("📝 签名验证者",
-						"blockNumber", block.Block.Number(),
-						"index", i,
-						"address", validator.Address.String(),
-						"votingPower", validator.VotingPower.String(),
-						"isActive", validator.IsActive,
-						"hasBlsKey", validator.BlsKey != nil)
-				}
-			}
-		}
 
 		// 🆕 测试：验证聚合签名是否可以正确解析
 		r.logger.Debug("🔍 测试聚合签名解析...")
@@ -1630,9 +1638,57 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			}
 		}
 
-		// 更新区块的ExtraData，包含聚合签名和父区块签名
+		// 🆕 创建生产时验证者地址集合变化记录（只保存地址，不保存BLS公钥）
+		validatorAddresses := make(validator.AccountSet, 0, len(productionValidators))
+		for _, v := range productionValidators {
+			// 只保存验证者地址和基本属性，不保存BLS公钥
+			validatorAddresses = append(validatorAddresses, &validator.ValidatorMetadata{
+				Address:     v.Address,
+				BlsKey:      nil, // 🆕 不保存BLS公钥，验证时从创世文件获取
+				VotingPower: v.VotingPower,
+				IsActive:    v.IsActive,
+			})
+		}
+
+		signingValidatorDelta := &validator.ValidatorSetDelta{
+			Added:   validatorAddresses, // 🆕 只保存验证者地址，不保存BLS公钥
+			Updated: make(validator.AccountSet, 0),
+			Removed: bitmap.Bitmap{},
+		}
+
+		// 🆕 记录参与签名的验证者信息（用于调试）
+		participatingCount := 0
+		for i := uint64(0); i < uint64(len(productionValidators)); i++ {
+			if signatureBitmap.IsSet(i) {
+				participatingCount++
+			}
+		}
+
+		// 🏭 显著标记：区块生产时保存验证者地址到ExtraData
+		r.logger.Info("🏭 ===== 区块生产时保存验证者地址到ExtraData =====",
+			"blockNumber", block.Block.Number(),
+			"totalValidators", len(validatorAddresses),
+			"participatingCount", participatingCount,
+			"method", "ExtraData.Validators.Added",
+			"note", "只保存验证者地址，BLS公钥从创世文件获取")
+
+		// 详细记录生产时保存的验证者地址
+		r.logger.Info("🏭 生产时保存的验证者地址详细信息:")
+		for i, validator := range validatorAddresses {
+			r.logger.Info("🏭 生产时保存验证者地址",
+				"blockNumber", block.Block.Number(),
+				"index", i,
+				"address", validator.Address.String(),
+				"votingPower", validator.VotingPower.String(),
+				"isActive", validator.IsActive,
+				"hasBlsKey", validator.BlsKey != nil,
+				"isParticipating", signatureBitmap.IsSet(uint64(i)))
+		}
+
+		// 更新区块的ExtraData，包含聚合签名、父区块签名和验证者集合
 		finalExtra := &Extra{
-			Parent: parentSignature, // 父区块签名
+			Validators: signingValidatorDelta, // 🆕 保存参与签名的验证者集合
+			Parent:     parentSignature,       // 父区块签名
 			Committed: &Signature{
 				AggregatedSignature: aggregatedSignature,
 				Bitmap:              signatureBitmap,

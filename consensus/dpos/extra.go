@@ -920,14 +920,15 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 
 	// 直接使用所有验证者作为签名者
 	signers := validators
-	logger.Info("✅ 使用区块获取到的验证者集合作为签名者",
+	logger.Info("🔍 ===== 验证时使用验证者集合进行BLS签名验证 =====",
 		"blockNumber", blockNumber,
-		"signersCount", len(signers))
+		"signersCount", len(signers),
+		"note", "使用从ExtraData获取的验证者集合进行签名验证")
 
-	// 🆕 打印使用区块获取到的验证者集合详细信息
-	logger.Info("📋 使用区块获取到的验证者集合详细信息:")
+	// 🆕 打印验证时使用的验证者集合详细信息
+	logger.Info("🔍 验证时使用的验证者集合详细信息:")
 	for i, validator := range signers {
-		logger.Info("📝 签名验证者",
+		logger.Info("🔍 验证时签名验证者",
 			"blockNumber", blockNumber,
 			"index", i,
 			"address", validator.Address.String(),
@@ -1790,7 +1791,59 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 
 	// 🆕 添加 parent 的 nil 检查
 	if parent == nil {
-		logger.Info("📋 parent 为 nil，直接返回创世验证者集合",
+		// 🔍 优先从当前区块ExtraData获取生产时的验证者地址集合
+		if i.Validators != nil && !i.Validators.IsEmpty() && len(i.Validators.Added) > 0 {
+			logger.Info("🔍 ===== 验证时从当前区块ExtraData获取验证者地址集合 =====",
+				"blockNumber", blockNumber,
+				"productionValidatorsCount", len(i.Validators.Added),
+				"method", "从区块ExtraData直接获取",
+				"note", "从ExtraData获取地址，BLS公钥从创世文件获取")
+
+			// 从ExtraData获取验证者地址，然后从创世文件获取BLS公钥
+			validatorAddresses := i.Validators.Added
+
+			logger.Info("✅ 从ExtraData获取生产时验证者地址集合成功",
+				"blockNumber", blockNumber,
+				"productionValidatorsCount", len(validatorAddresses))
+
+			// 🆕 从创世文件获取BLS公钥，构建完整的验证者集合
+			productionValidators := make(validator.AccountSet, 0, len(validatorAddresses))
+			for _, validatorAddr := range validatorAddresses {
+				// 从创世文件获取BLS公钥
+				blsKey, err := i.getBLSKeyFromGenesis(validatorAddr.Address, logger)
+				if err != nil {
+					logger.Warn("⚠️ 从创世文件获取BLS公钥失败",
+						"blockNumber", blockNumber,
+						"address", validatorAddr.Address.String(),
+						"error", err)
+				}
+
+				// 构建完整的验证者信息
+				productionValidators = append(productionValidators, &validator.ValidatorMetadata{
+					Address:     validatorAddr.Address,
+					BlsKey:      blsKey, // 🆕 从创世文件获取的BLS公钥
+					VotingPower: validatorAddr.VotingPower,
+					IsActive:    validatorAddr.IsActive,
+				})
+			}
+
+			// 详细记录验证时从ExtraData获取的验证者集合
+			logger.Info("🔍 验证时从ExtraData获取的验证者集合详细信息:")
+			for i, validator := range productionValidators {
+				logger.Info("🔍 验证时ExtraData验证者",
+					"blockNumber", blockNumber,
+					"index", i,
+					"address", validator.Address.String(),
+					"votingPower", validator.VotingPower.String(),
+					"isActive", validator.IsActive,
+					"hasBlsKey", validator.BlsKey != nil)
+			}
+
+			return productionValidators, nil
+		}
+
+		// 备用方案：返回创世验证者集合
+		logger.Info("📋 parent 为 nil，使用备用方案返回创世验证者集合",
 			"blockNumber", blockNumber)
 
 		genesisValidators, err := i.getGenesisValidators(consensusBackend, logger)
@@ -1801,18 +1854,6 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 		logger.Info("✅ 从创世文件获取验证者集合成功",
 			"blockNumber", blockNumber,
 			"genesisValidatorsCount", len(genesisValidators))
-
-		// 🆕 打印区块79获取到的验证者集合详细信息
-		logger.Info("📋 区块79获取到的验证者集合详细信息:")
-		for i, validator := range genesisValidators {
-			logger.Info("📝 区块79验证者",
-				"blockNumber", blockNumber,
-				"index", i,
-				"address", validator.Address.String(),
-				"votingPower", validator.VotingPower.String(),
-				"isActive", validator.IsActive,
-				"hasBlsKey", validator.BlsKey != nil)
-		}
 
 		return genesisValidators, nil
 	}
@@ -1856,6 +1897,58 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 			"genesisValidatorsCount", len(genesisValidators))
 
 		return genesisValidators, nil
+	}
+
+	// 🆕 关键修复：如果当前区块的ExtraData中有验证者地址集合信息，直接使用
+	// 这确保验证时使用与生产时完全相同的验证者集合
+	if i.Validators != nil && !i.Validators.IsEmpty() && len(i.Validators.Added) > 0 {
+		logger.Info("🔍 ===== 验证时从当前区块ExtraData获取验证者地址集合 =====",
+			"blockNumber", blockNumber,
+			"productionValidatorsCount", len(i.Validators.Added),
+			"method", "从区块ExtraData直接获取",
+			"note", "从ExtraData获取地址，BLS公钥从创世文件获取")
+
+		// 从ExtraData获取验证者地址，然后从创世文件获取BLS公钥
+		validatorAddresses := i.Validators.Added
+
+		logger.Info("✅ 从ExtraData获取生产时验证者地址集合成功",
+			"blockNumber", blockNumber,
+			"productionValidatorsCount", len(validatorAddresses))
+
+		// 🆕 从创世文件获取BLS公钥，构建完整的验证者集合
+		productionValidators := make(validator.AccountSet, 0, len(validatorAddresses))
+		for _, validatorAddr := range validatorAddresses {
+			// 从创世文件获取BLS公钥
+			blsKey, err := i.getBLSKeyFromGenesis(validatorAddr.Address, logger)
+			if err != nil {
+				logger.Warn("⚠️ 从创世文件获取BLS公钥失败",
+					"blockNumber", blockNumber,
+					"address", validatorAddr.Address.String(),
+					"error", err)
+			}
+
+			// 构建完整的验证者信息
+			productionValidators = append(productionValidators, &validator.ValidatorMetadata{
+				Address:     validatorAddr.Address,
+				BlsKey:      blsKey, // 🆕 从创世文件获取的BLS公钥
+				VotingPower: validatorAddr.VotingPower,
+				IsActive:    validatorAddr.IsActive,
+			})
+		}
+
+		// 详细记录验证时从ExtraData获取的验证者集合
+		logger.Info("🔍 验证时从ExtraData获取的验证者集合详细信息:")
+		for i, validator := range productionValidators {
+			logger.Info("🔍 验证时ExtraData验证者",
+				"blockNumber", blockNumber,
+				"index", i,
+				"address", validator.Address.String(),
+				"votingPower", validator.VotingPower.String(),
+				"isActive", validator.IsActive,
+				"hasBlsKey", validator.BlsKey != nil)
+		}
+
+		return productionValidators, nil
 	}
 
 	parentValidators, err := i.getParentValidators(parent, parents, consensusBackend, logger)
@@ -2083,4 +2176,40 @@ func (i *Extra) applyValidatorSetDelta(parentValidators validator.AccountSet, de
 		"finalValidatorsCount", len(currentValidators))
 
 	return currentValidators
+}
+
+// getBLSKeyFromGenesis 从创世文件获取BLS公钥
+func (i *Extra) getBLSKeyFromGenesis(address types.Address, logger hclog.Logger) (*bls.PublicKey, error) {
+	logger.Debug("🔍 从创世文件获取BLS公钥",
+		"address", address.String())
+
+	// 尝试从DPoS实例获取BLS公钥
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+		// 从创世文件获取BLS公钥字节
+		blsKeyBytes, err := dposInstance.GetBLSKeyBytesFromGenesis(address)
+		if err != nil {
+			logger.Debug("❌ 从创世文件获取BLS公钥失败",
+				"address", address.String(),
+				"error", err)
+			return nil, err
+		}
+
+		// 解析BLS公钥
+		blsKey, err := bls.UnmarshalPublicKey(blsKeyBytes)
+		if err != nil {
+			logger.Debug("❌ 解析BLS公钥失败",
+				"address", address.String(),
+				"blsKeyLength", len(blsKeyBytes),
+				"error", err)
+			return nil, err
+		}
+
+		logger.Debug("✅ 从创世文件成功获取BLS公钥",
+			"address", address.String(),
+			"blsKeyLength", len(blsKeyBytes))
+
+		return blsKey, nil
+	}
+
+	return nil, fmt.Errorf("无法获取DPoS实例来从创世文件获取BLS公钥")
 }

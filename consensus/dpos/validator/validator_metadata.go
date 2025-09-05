@@ -92,79 +92,65 @@ func (v *ValidatorMetadata) UnmarshalRLPWith(val *fastrlp.Value) error {
 		return fmt.Errorf("incorrect elements count to decode validator account, expected 4 but found %d", num)
 	}
 
-	fmt.Printf("DEBUG: ValidatorMetadata.UnmarshalRLPWith - parsing %d elements\n", len(elems))
-
 	// Address
-	fmt.Printf("DEBUG: parsing Address (element 0), type: %v\n", elems[0].Type())
 	if elems[0].Type() == fastrlp.TypeNull {
 		v.Address = types.Address{}
-		fmt.Printf("DEBUG: Address is null, set to empty\n")
 	} else {
 		addressRaw, err := elems[0].GetBytes(nil)
 		if err != nil {
-			fmt.Printf("DEBUG: error getting Address bytes: %v\n", err)
 			return fmt.Errorf("expected 'Address' field encoded as bytes. Error: %w", err)
 		}
 
 		v.Address = types.BytesToAddress(addressRaw)
-		fmt.Printf("DEBUG: successfully parsed Address: %v\n", v.Address)
 	}
 
 	// BlsKey
-	fmt.Printf("DEBUG: parsing BlsKey (element 1), type: %v\n", elems[1].Type())
 	if elems[1].Type() == fastrlp.TypeNull {
 		v.BlsKey = nil
-		fmt.Printf("DEBUG: BlsKey is null\n")
 	} else {
 		blsKeyRaw, err := elems[1].GetBytes(nil)
 		if err != nil {
-			fmt.Printf("DEBUG: error getting BlsKey bytes: %v\n", err)
 			return fmt.Errorf("expected 'BlsKey' encoded as bytes: %w", err)
 		}
 
-		blsKey, err := bls.UnmarshalPublicKey(blsKeyRaw)
-		if err != nil {
-			fmt.Printf("DEBUG: error unmarshaling BLS public key: %v\n", err)
-			return fmt.Errorf("failed to unmarshal BLS public key: %w", err)
+		// 🆕 如果BLS公钥数据为空，则设置为nil（从创世文件获取）
+		if len(blsKeyRaw) == 0 {
+			v.BlsKey = nil
+		} else {
+			blsKey, err := bls.UnmarshalPublicKey(blsKeyRaw)
+			if err != nil {
+				// 🆕 如果BLS公钥解析失败，记录警告但继续处理（从创世文件获取）
+				fmt.Printf("WARNING: failed to unmarshal BLS public key (length=%d), will get from genesis: %v\n", len(blsKeyRaw), err)
+				v.BlsKey = nil
+			} else {
+				v.BlsKey = blsKey
+			}
 		}
-
-		v.BlsKey = blsKey
-		fmt.Printf("DEBUG: successfully parsed BlsKey\n")
 	}
 
 	// VotingPower
-	fmt.Printf("DEBUG: parsing VotingPower (element 2), type: %v\n", elems[2].Type())
 	if elems[2].Type() == fastrlp.TypeNull {
 		v.VotingPower = big.NewInt(0)
-		fmt.Printf("DEBUG: VotingPower is null, set to 0\n")
 	} else {
 		votingPower := new(big.Int)
 		if err = elems[2].GetBigInt(votingPower); err != nil {
-			fmt.Printf("DEBUG: error getting VotingPower big int: %v\n", err)
 			return fmt.Errorf("expected 'VotingPower' encoded as big int: %w", err)
 		}
 
 		v.VotingPower = new(big.Int).Set(votingPower)
-		fmt.Printf("DEBUG: successfully parsed VotingPower: %v\n", v.VotingPower)
 	}
 
 	// IsActive
-	fmt.Printf("DEBUG: parsing IsActive (element 3), type: %v\n", elems[3].Type())
 	if elems[3].Type() == fastrlp.TypeNull {
 		v.IsActive = false
-		fmt.Printf("DEBUG: IsActive is null, set to false\n")
 	} else {
 		isActive, err := elems[3].GetBool()
 		if err != nil {
-			fmt.Printf("DEBUG: error getting IsActive bool: %v\n", err)
 			return fmt.Errorf("expected 'IsActive' encoded as bool: %w", err)
 		}
 
 		v.IsActive = isActive
-		fmt.Printf("DEBUG: successfully parsed IsActive: %v\n", v.IsActive)
 	}
-
-	fmt.Printf("DEBUG: ValidatorMetadata.UnmarshalRLPWith completed successfully\n")
 	return nil
 }
 

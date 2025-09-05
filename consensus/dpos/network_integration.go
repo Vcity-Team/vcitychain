@@ -1869,11 +1869,11 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 			ni.logger.Error("发送BLS公钥响应失败", "error", err)
 		} else {
 			if found {
-				ni.logger.Info("📤 已发送BLS公钥响应（找到）",
+				ni.logger.Debug("📤 已发送BLS公钥响应（找到）",
 					"requestedAddress", requestMsg.RequestedAddress.String(),
 					"requester", requestMsg.Requester.String())
 			} else {
-				ni.logger.Info("📤 已发送BLS公钥响应（未找到）",
+				ni.logger.Debug("📤 已发送BLS公钥响应（未找到）",
 					"requestedAddress", requestMsg.RequestedAddress.String(),
 					"requester", requestMsg.Requester.String())
 			}
@@ -1893,7 +1893,7 @@ func (ni *NetworkIntegration) handleBLSKeyResponse(obj interface{}, from peer.ID
 		}
 
 		if responseMsg.Found && len(responseMsg.BLSPublicKey) > 0 {
-			ni.logger.Info("📥 收到BLS公钥响应（找到）",
+			ni.logger.Debug("📥 收到BLS公钥响应（找到）",
 				"address", responseMsg.RequestedAddress.String(),
 				"blsKeyLength", len(responseMsg.BLSPublicKey),
 				"from", from.String())
@@ -1902,12 +1902,12 @@ func (ni *NetworkIntegration) handleBLSKeyResponse(obj interface{}, from peer.ID
 			if err := ni.saveBLSKey(responseMsg.RequestedAddress, responseMsg.BLSPublicKey); err != nil {
 				ni.logger.Error("保存BLS公钥失败", "error", err)
 			} else {
-				ni.logger.Info("✅ 成功保存从网络获取的BLS公钥",
+				ni.logger.Debug("✅ 成功保存从网络获取的BLS公钥",
 					"address", responseMsg.RequestedAddress.String(),
 					"blsKeyLength", len(responseMsg.BLSPublicKey))
 			}
 		} else {
-			ni.logger.Info("📥 收到BLS公钥响应（未找到）",
+			ni.logger.Debug("📥 收到BLS公钥响应（未找到）",
 				"found", responseMsg.Found,
 				"blsKeyLength", len(responseMsg.BLSPublicKey),
 				"address", responseMsg.RequestedAddress.String(),
