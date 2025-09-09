@@ -789,42 +789,20 @@ func (r *dposRuntime) produceBlock() error {
 		return nil // 不是当前出块者
 	}
 
-	// 对于区块1，我们需要特别检查来防止分叉
-	// 如果当前是区块0，并且我们是第一个受托人，需要等待一段时间
-	// 让其他节点有机会先出块
-	currentBlock := r.config.blockchain.CurrentHeader()
-	if currentBlock.Number == 0 && r.currentDelegateIndex == 0 {
-		r.logger.Info("⏳ 创世区块第一个委托者，等待以避免分叉")
-
-		// 等待更长时间，确保其他节点有机会先出块
-		time.Sleep(1000 * time.Millisecond) // 增加到1秒
-
-		// 再次检查当前区块高度
-		currentBlock = r.config.blockchain.CurrentHeader()
-		if currentBlock.Number > 0 {
-			r.logger.Debug("block was produced by another node during wait, skipping block production")
-			return nil
-		}
-	}
-
-	// 额外的检查：如果当前是区块0，并且我们不是第一个受托人，也要等待
-	// 这样可以确保第一个受托人有足够时间出块
-	if currentBlock.Number == 0 && r.currentDelegateIndex > 0 {
-		r.logger.Info("⏳ 创世区块非第一个委托者，等待第一个委托者出块")
-
-		// 等待一段时间，让第一个受托人有机会出块
-		time.Sleep(2000 * time.Millisecond) // 等待2秒
-
-		// 再次检查当前区块高度
-		currentBlock = r.config.blockchain.CurrentHeader()
-		if currentBlock.Number > 0 {
-			r.logger.Info("✅ 第一个委托者已出块，跳过区块生产")
-			return nil
-		}
+	// 🆕 基于严格顺序的出块检查，替换原有的等待逻辑
+	if !r.shouldProduceBlock() {
+		expectedIndex := r.calculateExpectedDelegateIndex()
+		currentBlock := r.config.blockchain.CurrentHeader()
+		r.logger.Debug("不是当前轮次的委托者，跳过出块",
+			"currentBlock", currentBlock.Number,
+			"currentDelegateIndex", r.currentDelegateIndex,
+			"expectedDelegateIndex", expectedIndex,
+			"delegateCount", r.config.DelegateCount)
+		return nil
 	}
 
 	// 检查是否已经有更新的区块
-	currentBlock = r.config.blockchain.CurrentHeader()
+	currentBlock := r.config.blockchain.CurrentHeader()
 
 	// 计算下一个要生产的区块号
 	nextBlockNumber := currentBlock.Number + 1
@@ -1003,12 +981,13 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 	}
 	
 	// 统一使用相同的计算公式
+	// 修复：使用 currentBlockNumber % delegateCount，与其他方法保持一致
 	if r.config != nil && r.config.DelegateCount > 0 {
-		r.currentDelegateIndex = (currentBlockNumber - 1) % uint64(r.config.DelegateCount)
+		r.currentDelegateIndex = currentBlockNumber % uint64(r.config.DelegateCount)
 		r.logger.Debug("🔄 统一计算委托者索引",
 			"blockNumber", currentBlockNumber,
 			"delegateCount", r.config.DelegateCount,
-			"formula", fmt.Sprintf("(%d-1)%%%d=%d", currentBlockNumber, r.config.DelegateCount, r.currentDelegateIndex),
+			"formula", fmt.Sprintf("%d%%%d=%d", currentBlockNumber, r.config.DelegateCount, r.currentDelegateIndex),
 			"currentRound", r.currentRound,
 			"newDelegateIndex", r.currentDelegateIndex)
 	} else {
@@ -1241,6 +1220,55 @@ func (r *dposRuntime) calculateInitialRound() uint64 {
 	return 1 // 默认从第1轮开始
 }
 
+// shouldProduceBlock 检查当前节点是否应该出块（基于严格顺序）
+func (r *dposRuntime) shouldProduceBlock() bool {
+	currentBlock := r.config.blockchain.CurrentHeader()
+	if currentBlock == nil {
+		r.logger.Warn("无法获取当前区块头，跳过出块")
+		return false
+	}
+	
+	// 区块0：只有索引0的委托者出块
+	if currentBlock.Number == 0 {
+		shouldProduce := r.currentDelegateIndex == 0
+		r.logger.Debug("检查区块0出块资格",
+			"currentBlock", currentBlock.Number,
+			"currentDelegateIndex", r.currentDelegateIndex,
+			"shouldProduce", shouldProduce)
+		return shouldProduce
+	}
+	
+	// 其他区块：按顺序出块
+	// 修复：使用 currentBlock.Number % delegateCount，避免区块0和1都让索引0出块
+	expectedDelegateIndex := currentBlock.Number % uint64(r.config.DelegateCount)
+	shouldProduce := r.currentDelegateIndex == expectedDelegateIndex
+	
+	r.logger.Debug("检查出块资格",
+		"currentBlock", currentBlock.Number,
+		"currentDelegateIndex", r.currentDelegateIndex,
+		"expectedDelegateIndex", expectedDelegateIndex,
+		"delegateCount", r.config.DelegateCount,
+		"shouldProduce", shouldProduce,
+		"formula", fmt.Sprintf("%d%%%d=%d", currentBlock.Number, r.config.DelegateCount, expectedDelegateIndex))
+	
+	return shouldProduce
+}
+
+// calculateExpectedDelegateIndex 计算期望的委托者索引
+func (r *dposRuntime) calculateExpectedDelegateIndex() uint64 {
+	currentBlock := r.config.blockchain.CurrentHeader()
+	if currentBlock == nil {
+		return 0
+	}
+	
+	if currentBlock.Number == 0 {
+		return 0
+	}
+	
+	// 修复：使用 currentBlock.Number % delegateCount，与shouldProduceBlock保持一致
+	return currentBlock.Number % uint64(r.config.DelegateCount)
+}
+
 // calculateCurrentDelegateIndex 根据当前区块号计算委托者索引，与创世文件保持一致
 func (r *dposRuntime) calculateCurrentDelegateIndex() uint64 {
 	if r.config == nil || r.config.DelegateCount == 0 {
@@ -1255,14 +1283,14 @@ func (r *dposRuntime) calculateCurrentDelegateIndex() uint64 {
 		}
 	}
 
-	// 使用与创世文件相同的计算公式：(blockNumber - 1) % delegateCount
+	// 修复：使用 blockNumber % delegateCount，与其他方法保持一致
 	if currentBlockNumber > 0 {
-		delegateIndex := (currentBlockNumber - 1) % uint64(r.config.DelegateCount)
+		delegateIndex := currentBlockNumber % uint64(r.config.DelegateCount)
 		r.logger.Debug("🔍 根据区块号计算委托者索引",
 			"currentBlockNumber", currentBlockNumber,
 			"delegateCount", r.config.DelegateCount,
 			"calculatedIndex", delegateIndex,
-			"formula", "(blockNumber - 1) % delegateCount")
+			"formula", "blockNumber % delegateCount")
 		return delegateIndex
 	}
 
