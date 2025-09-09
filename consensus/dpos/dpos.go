@@ -1417,6 +1417,15 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		"bitmapLength", len(signatureBitmap),
 		"bitmapBytes", fmt.Sprintf("%x", signatureBitmap))
 
+	// 🆕 关键修复：检查签名收集结果
+	if len(signatures) == 0 || len(signatureBitmap) == 0 {
+		r.logger.Error("签名收集失败，无法提交区块",
+			"signaturesCount", len(signatures),
+			"bitmapLength", len(signatureBitmap),
+			"error", collectErr)
+		return nil, fmt.Errorf("cannot commit block without valid signatures: signatures=%d, bitmap=%d", len(signatures), len(signatureBitmap))
+	}
+
 	// 更新区块的签名
 	if len(signatures) > 0 {
 		r.logger.Info("开始聚合签名",
@@ -4615,6 +4624,26 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 
 	// 检查网络中的活跃验证者数量
 	activeValidators := r.getActiveValidatorsCount()
+	
+	// 🆕 打印活跃验证者详细信息
+	r.logger.Info("🎯 活跃验证者详细信息")
+	activeCount := 0
+	for i, delegate := range r.delegates {
+		if delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
+			activeCount++
+			r.logger.Info("✅ 活跃验证者",
+				"index", i,
+				"address", delegate.Address.String(),
+				"votingPower", delegate.VotingPower.String(),
+				"isActive", delegate.IsActive,
+				"hasBlsKey", delegate.BlsKey != nil)
+		}
+	}
+	r.logger.Info("📊 活跃验证者统计",
+		"activeCount", activeCount,
+		"totalDelegates", len(r.delegates),
+		"activeValidators", activeValidators)
+	
 	// 计算真正活跃的验证者数量（有足够stake且IsActive=true）
 	expectedSignatures := activeValidators // 只计算活跃的验证者
 
@@ -4631,7 +4660,9 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 			"activeValidators", activeValidators,
 			"minRequired", minRequired,
 			"totalDelegates", len(r.delegates))
-		return r.waitForNetworkGrowth(checkpointHash, keyAddr)
+		
+		// 🆕 修复：直接返回错误，而不是调用waitForNetworkGrowth
+		return nil, nil, fmt.Errorf("insufficient validators: got %d, need %d", activeValidators, minRequired)
 	}
 
 	// 1. 广播签名请求给其他验证者
@@ -5326,22 +5357,142 @@ func (r *dposRuntime) waitForNetworkGrowth(checkpointHash types.Hash, proposerAd
 		select {
 		case <-ticker.C:
 			activeValidators := r.getActiveValidatorsCount()
+			minRequired := r.calculateMinRequiredSignatures()
+			
 			r.logger.Info("检查网络状态",
 				"activeValidators", activeValidators,
+				"minRequired", minRequired,
 				"totalDelegates", len(r.delegates))
 
 			// 如果网络中有足够的验证者，重新尝试收集签名
-			if activeValidators > 1 {
-				r.logger.Info("检测到新验证者加入，重新尝试收集签名")
-				// 这里可以重新启动签名收集流程
-				// 暂时返回空结果，让上层重新调用
-				return nil, nil, fmt.Errorf("network growth detected, retry signature collection")
+			if activeValidators >= minRequired {
+				r.logger.Info("检测到足够的验证者，重新尝试收集签名",
+					"activeValidators", activeValidators,
+					"minRequired", minRequired,
+					"checkpointHash", checkpointHash.String())
+				
+				// 重新启动签名收集流程
+				// 使用更短的超时时间，避免长时间等待
+				retryTimeout := 30 * time.Second
+				retryCtx, cancel := context.WithTimeout(context.Background(), retryTimeout)
+				defer cancel()
+				
+				// 创建新的签名收集通道
+				signatureCh := make(chan *SignatureResponse, len(r.delegates))
+				
+				// 重新广播签名请求
+				currentBlockNumber := r.config.blockchain.CurrentHeader().Number + 1
+				protoRequest := &dposProto.SignatureRequest{
+					BlockNumber:    currentBlockNumber,
+					CheckpointHash: checkpointHash.Bytes(),
+					Round:         r.currentRound,
+					Proposer:      proposerAddr.Bytes(),
+					Timestamp:     uint64(time.Now().Unix()),
+				}
+				
+				if err := r.broadcastSignatureRequest(protoRequest); err != nil {
+					r.logger.Error("重新广播签名请求失败", "error", err)
+					return nil, nil, fmt.Errorf("failed to rebroadcast signature request: %w", err)
+				}
+				
+				// 等待签名收集
+				signatures, bitmap, err := r.waitForSignaturesWithContext(retryCtx, signatureCh, minRequired)
+				if err != nil {
+					r.logger.Error("重新收集签名失败", "error", err)
+					return nil, nil, fmt.Errorf("failed to collect signatures after network growth: %w", err)
+				}
+				
+				r.logger.Info("网络增长后签名收集成功",
+					"signaturesCount", len(signatures),
+					"bitmapLength", len(bitmap))
+				
+				return signatures, bitmap, nil
 			}
 
 		case <-timeoutCh:
 			r.logger.Error("等待网络增长超时，需要更多验证者节点")
 			// 超时后，返回错误
 			return nil, nil, fmt.Errorf("network growth timeout: need more validator nodes")
+		}
+	}
+}
+
+// waitForSignaturesWithContext 使用上下文控制的签名收集
+func (r *dposRuntime) waitForSignaturesWithContext(ctx context.Context, signatureCh chan *SignatureResponse, minRequired int) ([][]byte, bitmap.Bitmap, error) {
+	collectedSignatures := make(map[types.Address][]byte)
+	signatureBitmap := bitmap.Bitmap{}
+	
+	// 设置收集超时
+	collectTimeout := 20 * time.Second
+	timeoutCh := time.After(collectTimeout)
+	
+	for {
+		select {
+		case response := <-signatureCh:
+			if response == nil {
+				continue
+			}
+			
+			// 验证签名响应
+			if err := r.validateSignatureResponse(response); err != nil {
+				r.logger.Warn("签名响应验证失败", "validator", response.ValidatorAddr.String(), "error", err)
+				continue
+			}
+			
+			// 收集签名
+			collectedSignatures[response.ValidatorAddr] = response.Signature
+			
+			// 设置位图
+			for i, delegate := range r.delegates {
+				if delegate.Address == response.ValidatorAddr {
+					signatureBitmap.Set(uint64(i))
+					break
+				}
+			}
+			
+			r.logger.Info("收集到签名",
+				"validator", response.ValidatorAddr.String(),
+				"collectedCount", len(collectedSignatures),
+				"requiredCount", minRequired)
+			
+			// 检查是否收集到足够的签名
+			if len(collectedSignatures) >= minRequired {
+				// 按位图顺序排列签名
+				signatures := make([][]byte, 0, len(collectedSignatures))
+				for i := uint64(0); i < uint64(len(r.delegates)); i++ {
+					if signatureBitmap.IsSet(i) {
+						if sig, exists := collectedSignatures[r.delegates[i].Address]; exists {
+							signatures = append(signatures, sig)
+						}
+					}
+				}
+				
+				return signatures, signatureBitmap, nil
+			}
+			
+		case <-timeoutCh:
+			r.logger.Warn("签名收集超时",
+				"collected", len(collectedSignatures),
+				"required", minRequired)
+			
+			if len(collectedSignatures) >= minRequired {
+				// 即使超时，如果收集到足够的签名就返回
+				signatures := make([][]byte, 0, len(collectedSignatures))
+				for i := uint64(0); i < uint64(len(r.delegates)); i++ {
+					if signatureBitmap.IsSet(i) {
+						if sig, exists := collectedSignatures[r.delegates[i].Address]; exists {
+							signatures = append(signatures, sig)
+						}
+					}
+				}
+				return signatures, signatureBitmap, nil
+			}
+			
+			return nil, nil, fmt.Errorf("signature collection timeout: got %d, need %d", len(collectedSignatures), minRequired)
+			
+		case <-ctx.Done():
+			r.logger.Warn("签名收集被取消", "error", ctx.Err())
+			return nil, nil, fmt.Errorf("signature collection cancelled: %w", ctx.Err())
 		}
 	}
 }
