@@ -430,10 +430,8 @@ func (r *dposRuntime) initializeRuntime() error {
 		return fmt.Errorf("runtime config is nil")
 	}
 
-	// 初始化当前轮次
-	r.currentRound = 1
-
-	// 🆕 修复：根据当前区块号计算委托者索引，与创世文件保持一致
+	// 🆕 修复：根据当前区块号计算初始轮次和委托者索引
+	r.currentRound = r.calculateInitialRound()
 	r.currentDelegateIndex = r.calculateCurrentDelegateIndex()
 
 	r.logger.Info("=== dposRuntime.initializeRuntime ===",
@@ -934,8 +932,25 @@ func (r *dposRuntime) produceBlock() error {
 	// 更新轮次 - 使用区块号更新，避免时序问题
 	r.updateRound(block.Block.Number())
 
-	// 添加调试日志
-	r.logger.Info("🔄 轮次更新完成", "newRound", r.currentRound, "newDelegateIndex", r.currentDelegateIndex, "blockNumber", block.Block.Number())
+	// 🆕 增强调试日志：添加详细的计算过程
+	blockNumber := block.Block.Number()
+	delegateCount := uint64(0)
+	if r.config != nil {
+		delegateCount = r.config.DelegateCount
+	}
+	
+	// 计算期望的委托者索引用于验证
+	expectedDelegateIndex := (blockNumber - 1) % delegateCount
+	
+	r.logger.Info("🔄 轮次更新完成", 
+		"newRound", r.currentRound, 
+		"newDelegateIndex", r.currentDelegateIndex, 
+		"blockNumber", blockNumber,
+		"delegateCount", delegateCount,
+		"expectedDelegateIndex", expectedDelegateIndex,
+		"calculation", fmt.Sprintf("(%d-1)%%%d=%d", blockNumber, delegateCount, expectedDelegateIndex),
+		"isCorrect", r.currentDelegateIndex == expectedDelegateIndex,
+		"roundCalculation", fmt.Sprintf("1+(%d-1)/%d=%d", blockNumber, delegateCount, 1+(blockNumber-1)/delegateCount))
 
 	return nil
 }
@@ -960,28 +975,76 @@ func (r *dposRuntime) collectVotes() error {
 
 // updateRound 更新轮次
 func (r *dposRuntime) updateRound(blockNumber ...uint64) {
-	// 🆕 修复：支持传入区块号参数，避免时序问题
+	// 🆕 修复：统一使用区块号计算委托者索引，避免不一致
+	var currentBlockNumber uint64
+	
 	if len(blockNumber) > 0 {
-		// 使用传入的区块号计算委托者索引
-		r.currentDelegateIndex = (blockNumber[0] - 1) % uint64(r.config.DelegateCount)
-		r.logger.Debug("🔄 使用区块号更新委托者索引",
-			"blockNumber", blockNumber[0],
+		// 优先使用传入的区块号
+		currentBlockNumber = blockNumber[0]
+		r.logger.Debug("🔄 使用传入区块号更新委托者索引",
+			"blockNumber", currentBlockNumber,
+			"currentRound", r.currentRound)
+	} else {
+		// 如果没有传入区块号，从CurrentHeader获取
+		if r.config != nil && r.config.blockchain != nil {
+			if currentHeader := r.config.blockchain.CurrentHeader(); currentHeader != nil {
+				currentBlockNumber = currentHeader.Number
+				r.logger.Debug("🔄 使用CurrentHeader区块号更新委托者索引",
+					"blockNumber", currentBlockNumber,
+					"currentRound", r.currentRound)
+			} else {
+				r.logger.Warn("⚠️ 无法获取当前区块头，使用默认值0")
+				currentBlockNumber = 0
+			}
+		} else {
+			r.logger.Warn("⚠️ 配置或区块链服务不可用，使用默认值0")
+			currentBlockNumber = 0
+		}
+	}
+	
+	// 统一使用相同的计算公式
+	if r.config != nil && r.config.DelegateCount > 0 {
+		r.currentDelegateIndex = (currentBlockNumber - 1) % uint64(r.config.DelegateCount)
+		r.logger.Debug("🔄 统一计算委托者索引",
+			"blockNumber", currentBlockNumber,
+			"delegateCount", r.config.DelegateCount,
+			"formula", fmt.Sprintf("(%d-1)%%%d=%d", currentBlockNumber, r.config.DelegateCount, r.currentDelegateIndex),
 			"currentRound", r.currentRound,
 			"newDelegateIndex", r.currentDelegateIndex)
 	} else {
-		// 保持向后兼容，使用原有逻辑
-		r.currentDelegateIndex = r.calculateCurrentDelegateIndex()
-		r.logger.Debug("🔄 使用CurrentHeader更新委托者索引",
-			"currentRound", r.currentRound,
-			"newDelegateIndex", r.currentDelegateIndex)
+		r.logger.Error("❌ 配置无效，无法计算委托者索引",
+			"config", r.config != nil,
+			"delegateCount", func() uint64 {
+				if r.config != nil {
+					return r.config.DelegateCount
+				}
+				return 0
+			}())
+		r.currentDelegateIndex = 0
 	}
 
 	// 检查是否需要更新轮次
-	if r.currentDelegateIndex == 0 && r.currentRound > 1 {
-		r.currentRound++
-		r.logger.Debug("🔄 委托者索引重置为0，更新轮次",
-			"newRound", r.currentRound,
-			"newDelegateIndex", r.currentDelegateIndex)
+	// 修复：当委托者索引从最后一个回到第一个时，轮次+1
+	if r.currentDelegateIndex == 0 && r.currentRound >= 1 {
+		// 检查是否真的需要增加轮次（避免第一次就增加）
+		if r.currentRound == 1 {
+			// 第一次轮次，检查是否已经完成了一轮
+			// 如果当前区块号大于等于委托者数量，说明已经完成了一轮
+			if currentBlockNumber > uint64(r.config.DelegateCount) {
+				r.currentRound++
+				r.logger.Debug("🔄 完成第一轮，更新轮次",
+					"newRound", r.currentRound,
+					"newDelegateIndex", r.currentDelegateIndex,
+					"blockNumber", currentBlockNumber,
+					"delegateCount", r.config.DelegateCount)
+			}
+		} else {
+			// 非第一轮，直接增加轮次
+			r.currentRound++
+			r.logger.Debug("🔄 委托者索引重置为0，更新轮次",
+				"newRound", r.currentRound,
+				"newDelegateIndex", r.currentDelegateIndex)
+		}
 
 		// 🆕 方案1+方案2：轮次边界时处理延迟的验证者集合更新
 		if r.backend != nil {
@@ -1147,6 +1210,35 @@ func (r *dposRuntime) initializeDelegates() error {
 
 	r.logger.Info("✅ dposRuntime.initializeDelegates 结束")
 	return nil
+}
+
+// calculateInitialRound 根据当前区块号计算初始轮次
+func (r *dposRuntime) calculateInitialRound() uint64 {
+	if r.config == nil || r.config.DelegateCount == 0 {
+		return 1 // 默认从第1轮开始
+	}
+
+	// 获取当前区块号
+	var currentBlockNumber uint64 = 0
+	if r.config.blockchain != nil {
+		if currentHeader := r.config.blockchain.CurrentHeader(); currentHeader != nil {
+			currentBlockNumber = currentHeader.Number
+		}
+	}
+
+	// 计算轮次：每完成一轮（DelegateCount个区块）轮次+1
+	// 轮次从1开始，所以公式是：1 + (blockNumber - 1) / delegateCount
+	if currentBlockNumber > 0 {
+		round := 1 + (currentBlockNumber-1)/uint64(r.config.DelegateCount)
+		r.logger.Debug("🔍 根据区块号计算初始轮次",
+			"currentBlockNumber", currentBlockNumber,
+			"delegateCount", r.config.DelegateCount,
+			"calculatedRound", round,
+			"formula", fmt.Sprintf("1 + (%d-1)/%d=%d", currentBlockNumber, r.config.DelegateCount, round))
+		return round
+	}
+
+	return 1 // 默认从第1轮开始
 }
 
 // calculateCurrentDelegateIndex 根据当前区块号计算委托者索引，与创世文件保持一致
