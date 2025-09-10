@@ -360,10 +360,7 @@ func (m *syncPeerClient) startNewBlockProcess() {
 
 	m.logger.Info("启动区块事件监听", "节点ID", m.id, "shouldEmitBlocks", m.shouldEmitBlocks)
 
-	// 添加超时保护
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
-
+	// 移除超时保护，让同步器持续运行
 	m.subscription = m.blockchain.SubscribeEvents()
 	eventCh := m.subscription.GetEventCh()
 
@@ -371,9 +368,6 @@ func (m *syncPeerClient) startNewBlockProcess() {
 		var event *blockchain.Event
 
 		select {
-		case <-ctx.Done():
-			m.logger.Info("区块事件监听超时退出", "节点ID", m.id)
-			return
 		case <-m.closeCh:
 			m.logger.Info("区块事件监听停止", "节点ID", m.id)
 			return
@@ -450,11 +444,8 @@ func (m *syncPeerClient) startPeerEventProcess() {
 		m.logger.Debug("startPeerEventProcess goroutine已退出", "节点ID", m.id)
 	}()
 
-	// 添加超时保护
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
-
-	peerEventCh, err := m.network.SubscribeCh(ctx)
+	// 移除超时保护，让同步器持续运行
+	peerEventCh, err := m.network.SubscribeCh(context.Background())
 	if err != nil {
 		m.logger.Error("failed to subscribe", "err", err)
 		return
@@ -462,9 +453,6 @@ func (m *syncPeerClient) startPeerEventProcess() {
 
 	for {
 		select {
-		case <-ctx.Done():
-			m.logger.Info("peer事件监听超时退出", "节点ID", m.id)
-			return
 		case <-m.closeCh:
 			m.logger.Info("peer事件监听停止", "节点ID", m.id)
 			return
