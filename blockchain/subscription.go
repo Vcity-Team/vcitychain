@@ -212,6 +212,14 @@ func (e *eventStream) push(event *Event) {
 	e.RLock()
 	defer e.RUnlock()
 
+	// 添加事件推送日志跟踪
+	if event != nil && len(event.NewChain) > 0 {
+		// 注意：这里没有logger，所以暂时注释掉
+		// latest := event.NewChain[len(event.NewChain)-1]
+		// fmt.Printf("🔔 事件流推送: 区块高度=%d 区块哈希=%s 来源=%s 订阅者数量=%d\n", 
+		// 	latest.Number, latest.Hash.String(), event.Source, len(e.subscriptions))
+	}
+
 	// Notify the listeners
 	for sub := range e.subscriptions {
 		sub.updateCh <- event

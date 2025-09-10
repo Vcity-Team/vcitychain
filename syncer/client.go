@@ -381,9 +381,15 @@ func (m *syncPeerClient) startNewBlockProcess() {
 		}
 
 		m.logger.Debug("收到区块事件", "节点ID", m.id, "shouldEmitBlocks", m.shouldEmitBlocks, "NewChain长度", len(event.NewChain))
+		
+		// 添加详细的事件跟踪日志
+		if len(event.NewChain) > 0 {
+			latest := event.NewChain[len(event.NewChain)-1]
+			m.logger.Debug("🔔 区块事件详情", "节点ID", m.id, "区块高度", latest.Number, "区块哈希", latest.Hash.String(), "shouldEmitBlocks", m.shouldEmitBlocks)
+		}
 
 		if !m.shouldEmitBlocks {
-			m.logger.Debug("跳过状态广播", "节点ID", m.id, "shouldEmitBlocks", m.shouldEmitBlocks)
+			m.logger.Debug("❌ 跳过状态广播", "节点ID", m.id, "shouldEmitBlocks", m.shouldEmitBlocks, "原因", "shouldEmitBlocks为false")
 			continue
 		}
 
@@ -392,10 +398,10 @@ func (m *syncPeerClient) startNewBlockProcess() {
 
 			// 检查网络连接状态
 			peers := m.network.Peers()
-			m.logger.Debug("准备广播状态", "区块高度", latest.Number, "节点ID", m.id, "连接节点数", len(peers))
+			m.logger.Debug("📡 准备广播状态", "区块高度", latest.Number, "节点ID", m.id, "连接节点数", len(peers), "区块哈希", latest.Hash.String())
 
 			// 记录状态广播开始
-			m.logger.Debug("开始广播状态", "区块高度", latest.Number, "节点ID", m.id)
+			m.logger.Debug("🚀 开始广播状态", "区块高度", latest.Number, "节点ID", m.id, "区块哈希", latest.Hash.String())
 
 			// 添加网络状态检查
 			if len(peers) == 0 {
@@ -426,9 +432,9 @@ func (m *syncPeerClient) startNewBlockProcess() {
 			}
 
 			if publishErr != nil {
-				m.logger.Error("状态广播最终失败", "区块高度", latest.Number, "错误", publishErr)
+				m.logger.Error("❌ 状态广播最终失败", "区块高度", latest.Number, "节点ID", m.id, "错误", publishErr)
 			} else {
-				m.logger.Debug("状态广播成功", "区块高度", latest.Number, "节点ID", m.id)
+				m.logger.Debug("✅ 状态广播成功", "区块高度", latest.Number, "节点ID", m.id, "区块哈希", latest.Hash.String())
 			}
 		}
 	}

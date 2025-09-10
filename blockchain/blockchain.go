@@ -1140,6 +1140,11 @@ func (b *Blockchain) GetHashByNumber(blockNumber uint64) types.Hash {
 
 // dispatchEvent pushes a new event to the stream
 func (b *Blockchain) dispatchEvent(evnt *Event) {
+	// 添加事件分发日志跟踪
+	if evnt != nil && len(evnt.NewChain) > 0 {
+		latest := evnt.NewChain[len(evnt.NewChain)-1]
+		b.logger.Debug("🔔 区块链事件分发", "区块高度", latest.Number, "区块哈希", latest.Hash.String(), "来源", evnt.Source, "NewChain长度", len(evnt.NewChain))
+	}
 	b.stream.push(evnt)
 }
 

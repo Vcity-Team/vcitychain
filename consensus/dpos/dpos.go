@@ -399,6 +399,13 @@ func (rm *ResourceMonitor) cleanupResources() {
 	if rm.dposRuntime != nil {
 		rm.dposRuntime.cleanupExpiredCaches()
 	}
+	
+	// 🆕 添加processedBlocks清理
+	if rm.dposRuntime != nil {
+		if dpos, ok := rm.dposRuntime.backend.(*DPoS); ok {
+			dpos.cleanupProcessedBlocks()
+		}
+	}
 }
 
 // monitorMemoryUsage 监控内存使用情况
@@ -716,6 +723,74 @@ func (r *dposRuntime) cleanupExpiredCaches() {
 	r.blsPrivateKeyCacheMutex.Unlock()
 }
 
+// cleanupProcessedBlocks 清理已处理的区块记录
+func (d *DPoS) cleanupProcessedBlocks() {
+	d.processedMutex.Lock()
+	defer d.processedMutex.Unlock()
+	
+	// 只保留最近1000个区块的记录
+	if len(d.processedBlocks) > 1000 {
+		// 清理最旧的记录
+		count := 0
+		for hash := range d.processedBlocks {
+			if count >= len(d.processedBlocks)-1000 {
+				break
+			}
+			delete(d.processedBlocks, hash)
+			count++
+		}
+	}
+}
+
+// startSignatureCleanup 启动签名去重清理协程
+func (r *dposRuntime) startSignatureCleanup() {
+	go func() {
+		ticker := time.NewTicker(30 * time.Second) // 每30秒清理一次
+		defer ticker.Stop()
+		
+		for {
+			select {
+			case <-ticker.C:
+				r.cleanupSignatureMaps()
+			case <-r.closeCh:
+				return
+			}
+		}
+	}()
+}
+
+// cleanupSignatureMaps 异步清理所有签名map
+func (r *dposRuntime) cleanupSignatureMaps() {
+	now := time.Now()
+	
+	// 清理签名请求
+	r.signatureRequestDedupMutex.Lock()
+	for k, v := range r.processedSignatureRequests {
+		if now.Sub(v) > 2*time.Minute { // 改为2分钟
+			delete(r.processedSignatureRequests, k)
+		}
+	}
+	r.signatureRequestDedupMutex.Unlock()
+	
+	// 清理签名响应
+	r.signatureResponseDedupMutex.Lock()
+	for k, v := range r.processedSignatureResponses {
+		if now.Sub(v) > 2*time.Minute {
+			delete(r.processedSignatureResponses, k)
+		}
+	}
+	r.signatureResponseDedupMutex.Unlock()
+	
+	// 清理签名生成
+	r.signatureGenerationDedupMutex.Lock()
+	for k, v := range r.processedSignatureGenerations {
+		if now.Sub(v) > 2*time.Minute {
+			delete(r.processedSignatureGenerations, k)
+		}
+	}
+	r.signatureGenerationDedupMutex.Unlock()
+}
+
 // produceBlock 生产区块
 func (r *dposRuntime) produceBlock() error {
 	r.lock.Lock()
@@ -846,6 +921,9 @@ func (r *dposRuntime) produceBlock() error {
 	}
 
 	r.logger.Info("✅ 区块提交成功", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
+	
+	// 添加事件触发日志跟踪
+	r.logger.Debug("🔔 区块提交完成，等待区块链事件触发状态广播", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
 
 	// 注意：历史验证者集合已在签名聚合完成后保存，无需重复保存
 
@@ -4138,6 +4216,11 @@ func (d *DPoS) initPerformanceOptimizations() {
 
 	// 启动缓存清理协程
 	go d.cacheCleanupWorker()
+
+	// 🆕 启动签名去重清理协程
+	if d.runtime != nil {
+		d.runtime.startSignatureCleanup()
+	}
 }
 
 // 启动批量处理工作协程
@@ -4338,14 +4421,25 @@ func (d *DPoS) updateCache(voterUpdates map[types.Address]*VoterInfo) {
 
 // 缓存清理工作协程
 func (d *DPoS) cacheCleanupWorker() {
-	ticker := time.NewTicker(d.cache.cacheTTL * 2) // 降低清理频率，减少goroutine压力
+	// 改为1倍TTL，增加清理频率
+	ticker := time.NewTicker(d.cache.cacheTTL) // 从 * 2 改为直接使用
 	defer ticker.Stop()
+	
+	// 添加内存压力检测
+	memoryTicker := time.NewTicker(30 * time.Second)
+	defer memoryTicker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
 			d.cleanupExpiredCache()
-
+		case <-memoryTicker.C:
+			// 内存压力检测
+			var m runtime.MemStats
+			runtime.ReadMemStats(&m)
+			if m.Alloc > 50*1024*1024 { // 50MB阈值
+				d.cleanupExpiredCache()
+			}
 		case <-d.closeCh:
 			return
 		}
@@ -6998,13 +7092,6 @@ func (r *dposRuntime) markSignatureRequestProcessed(proposer types.Address, chec
 
 	key := fmt.Sprintf("%s-%s", proposer.String(), checkpointHash.String())
 	r.processedSignatureRequests[key] = time.Now()
-
-	// 清理过期的记录（超过10分钟）
-	for k, v := range r.processedSignatureRequests {
-		if time.Since(v) > 10*time.Minute {
-			delete(r.processedSignatureRequests, k)
-		}
-	}
 }
 
 // isSignatureResponseBroadcasted 检查签名响应是否已经广播过（去重机制）
@@ -7032,13 +7119,6 @@ func (r *dposRuntime) markSignatureResponseBroadcasted(responseKey string) {
 	defer r.signatureResponseDedupMutex.Unlock()
 
 	r.processedSignatureResponses[responseKey] = time.Now()
-
-	// 清理过期的记录（超过10分钟）
-	for k, v := range r.processedSignatureResponses {
-		if time.Since(v) > 10*time.Minute {
-			delete(r.processedSignatureResponses, k)
-		}
-	}
 }
 
 // isSignatureResponseGenerated 检查签名响应是否已经生成过（去重机制）
@@ -7066,13 +7146,6 @@ func (r *dposRuntime) markSignatureResponseGenerated(generateKey string) {
 	defer r.signatureGenerationDedupMutex.Unlock()
 
 	r.processedSignatureGenerations[generateKey] = time.Now()
-
-	// 清理过期的记录（超过10分钟）
-	for k, v := range r.processedSignatureGenerations {
-		if time.Since(v) > 10*time.Minute {
-			delete(r.processedSignatureGenerations, k)
-		}
-	}
 }
 
 // debugPendingSignatureRequests 调试方法：检查待处理的签名请求
