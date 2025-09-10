@@ -918,7 +918,7 @@ func (r *dposRuntime) produceBlock() error {
 	}
 	
 	// 计算期望的委托者索引用于验证
-	expectedDelegateIndex := (blockNumber - 1) % delegateCount
+	expectedDelegateIndex := blockNumber % delegateCount
 	
 	r.logger.Info("🔄 轮次更新完成", 
 		"newRound", r.currentRound, 
@@ -926,7 +926,7 @@ func (r *dposRuntime) produceBlock() error {
 		"blockNumber", blockNumber,
 		"delegateCount", delegateCount,
 		"expectedDelegateIndex", expectedDelegateIndex,
-		"calculation", fmt.Sprintf("(%d-1)%%%d=%d", blockNumber, delegateCount, expectedDelegateIndex),
+		"calculation", fmt.Sprintf("%d%%%d=%d", blockNumber, delegateCount, expectedDelegateIndex),
 		"isCorrect", r.currentDelegateIndex == expectedDelegateIndex,
 		"roundCalculation", fmt.Sprintf("1+(%d-1)/%d=%d", blockNumber, delegateCount, 1+(blockNumber-1)/delegateCount))
 
