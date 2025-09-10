@@ -2615,9 +2615,17 @@ func (d *DPoS) Start() error {
 			if isDelegate {
 				d.txPool.SetSealing(true)
 				d.logger.Info("transaction pool sealing state set to true (node is delegate)")
+				
+				// 🆕 只有受托人节点才启用状态广播
+				d.syncer.GetSyncPeerClient().EnablePublishingPeerStatus()
+				d.logger.Info("enabled status broadcasting (node is delegate)")
 			} else {
 				d.txPool.SetSealing(false)
 				d.logger.Info("transaction pool sealing state set to false (node is not delegate)")
+				
+				// 🆕 非受托人节点禁用状态广播
+				d.syncer.GetSyncPeerClient().DisablePublishingPeerStatus()
+				d.logger.Info("disabled status broadcasting (node is not delegate)")
 			}
 		} else {
 			d.logger.Warn("key not available, cannot determine if node is delegate")

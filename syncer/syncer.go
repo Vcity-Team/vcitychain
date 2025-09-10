@@ -304,3 +304,8 @@ func updateMetrics(fullBlock *types.FullBlock) {
 	metrics.SetGauge([]string{syncerMetrics, "receipts_num"}, float32(len(fullBlock.Receipts)))
 	metrics.SetGauge([]string{syncerMetrics, "blocks_num"}, 1)
 }
+
+// GetSyncPeerClient returns the sync peer client for controlling status broadcasting
+func (s *syncer) GetSyncPeerClient() SyncPeerClient {
+	return s.syncPeerClient
+}
