@@ -70,8 +70,6 @@ type Syncer interface {
 	HasSyncPeer() bool
 	// Sync starts routine to sync blocks
 	Sync(func(*types.FullBlock) bool) error
-	// GetSyncPeerClient returns the sync peer client for controlling status broadcasting
-	GetSyncPeerClient() SyncPeerClient
 }
 
 type Progression interface {
