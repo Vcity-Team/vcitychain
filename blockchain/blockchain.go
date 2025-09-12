@@ -843,7 +843,7 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 		"parent", header.ParentHash,
 		"source", source,
 	}
-	b.logger.Info("ProcessHeaders新区块", logArgs1...)
+	b.logger.Debug("ProcessHeaders新区块", logArgs1...)
 	// update snapshot
 	if err := b.consensus.ProcessHeaders([]*types.Header{header}); err != nil {
 		return err

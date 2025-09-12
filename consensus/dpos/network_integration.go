@@ -166,7 +166,7 @@ func (sc *SignatureCollector) AddSignature(response *SignatureResponse) bool {
 	// 检查是否已过期
 	if time.Now().After(sc.timeout) {
 		sc.mutex.RUnlock()
-		sc.logger.Warn("签名收集器已过期", "checkpointHash", sc.checkpointHash.String())
+		sc.logger.Debug("签名收集器已过期", "checkpointHash", sc.checkpointHash.String())
 		return false
 	}
 
@@ -199,11 +199,6 @@ func (sc *SignatureCollector) AddSignature(response *SignatureResponse) bool {
 
 	sc.mutex.Unlock()
 
-	sc.logger.Debug("签名收集器收到签名",
-		"validator", response.ValidatorAddr.String(),
-		"collected", sc.collectedCount,
-		"required", sc.requiredCount,
-		"checkpointHash", sc.checkpointHash.String())
 
 	if completed {
 		sc.logger.Debug("签名收集器完成",
@@ -987,10 +982,6 @@ func (ni *NetworkIntegration) handleSignatureResponse(obj interface{}, from peer
 		Timestamp:      response.Timestamp,
 	}
 
-	ni.logger.Debug("received signature response",
-		"validator", internalResponse.ValidatorAddr.String(),
-		"checkpointHash", internalResponse.CheckpointHash.String(),
-		"from", from.String())
 
 	// 转发给对应的签名收集器
 	ni.forwardSignatureResponse(internalResponse)
@@ -1124,10 +1115,6 @@ func (ni *NetworkIntegration) forwardSignatureResponse(response *SignatureRespon
 		return
 	}
 
-	ni.logger.Debug("处理签名响应",
-		"validator", response.ValidatorAddr.String(),
-		"checkpointHash", response.CheckpointHash.String(),
-		"signatureLength", len(response.Signature))
 
 	// 使用AddSignature方法处理签名，它会自动更新内部状态
 	if collector.AddSignature(response) {
@@ -1538,7 +1525,7 @@ func (ni *NetworkIntegration) monitorCollectorStatus(checkpointHash types.Hash) 
 
 			// 检查收集器状态（这些方法使用收集器内部的锁，不会与外部锁冲突）
 			if collector.IsExpired() {
-				ni.logger.Warn("签名收集器已过期",
+				ni.logger.Debug("签名收集器已过期",
 					"checkpointHash", checkpointHash.String(),
 					"collectedCount", collector.GetCollectedCount(),
 					"requiredCount", collector.GetRequiredCount())
@@ -1624,9 +1611,6 @@ func (ni *NetworkIntegration) saveBLSKey(address types.Address, blsKeyBytes []by
 	if existingKey, exists := ni.blsKeyCache[address]; exists {
 		if bytes.Equal(existingKey, blsKeyBytes) {
 			// BLS公钥已存在且相同，跳过保存
-			ni.logger.Debug("BLS公钥已存在，跳过重复保存",
-				"address", address.String(),
-				"blsKeyLength", len(blsKeyBytes))
 			return nil
 		}
 	}
@@ -1828,11 +1812,6 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 			return
 		}
 
-		ni.logger.Debug("📨 收到BLS公钥请求",
-			"requestedAddress", requestMsg.RequestedAddress.String(),
-			"requester", requestMsg.Requester.String(),
-			"from", from.String(),
-			"timestamp", requestMsg.Timestamp)
 
 		// 检查本地创世文件是否有该地址的BLS公钥
 		found := false
@@ -1842,17 +1821,11 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 		if cachedKey, exists := ni.GetBLSKey(requestMsg.RequestedAddress); exists {
 			found = true
 			blsPublicKey = cachedKey
-			ni.logger.Debug("✅ 从缓存找到BLS公钥", "address", requestMsg.RequestedAddress.String())
 		} else {
 			// 如果缓存中没有，直接从genesis.json文件中查找
 			if keyBytes, err := ni.findBLSKeyFromGenesisFile(requestMsg.RequestedAddress); err == nil && len(keyBytes) > 0 {
 				found = true
 				blsPublicKey = keyBytes
-				ni.logger.Info("✅ 从genesis.json找到BLS公钥", "address", requestMsg.RequestedAddress.String())
-			} else {
-				ni.logger.Debug("⚠️ 在genesis.json中未找到BLS公钥",
-					"address", requestMsg.RequestedAddress.String(),
-					"error", err)
 			}
 		}
 
@@ -1893,27 +1866,11 @@ func (ni *NetworkIntegration) handleBLSKeyResponse(obj interface{}, from peer.ID
 		}
 
 		if responseMsg.Found && len(responseMsg.BLSPublicKey) > 0 {
-			ni.logger.Debug("📥 收到BLS公钥响应（找到）",
-				"address", responseMsg.RequestedAddress.String(),
-				"blsKeyLength", len(responseMsg.BLSPublicKey),
-				"from", from.String())
 
 			// 保存BLS公钥到缓存和数据库
 			if err := ni.saveBLSKey(responseMsg.RequestedAddress, responseMsg.BLSPublicKey); err != nil {
 				ni.logger.Error("保存BLS公钥失败", "error", err)
-			} else {
-				ni.logger.Debug("✅ 成功保存从网络获取的BLS公钥",
-					"address", responseMsg.RequestedAddress.String(),
-					"blsKeyLength", len(responseMsg.BLSPublicKey))
 			}
-		} else {
-			ni.logger.Debug("📥 收到BLS公钥响应（未找到）",
-				"found", responseMsg.Found,
-				"blsKeyLength", len(responseMsg.BLSPublicKey),
-				"address", responseMsg.RequestedAddress.String(),
-				"from", from.String(),
-				"timestamp", time.Now().Unix(),
-				"reason", fmt.Sprintf("found=%v, blsKeyLength=%d", responseMsg.Found, len(responseMsg.BLSPublicKey)))
 		}
 	} else {
 		ni.logger.Error("无效的BLS公钥响应消息类型")
@@ -2248,7 +2205,7 @@ func (ni *NetworkIntegration) RequestBLSKey(requestedAddress types.Address, requ
 		return fmt.Errorf("发布BLS公钥请求消息失败: %w", err)
 	}
 
-	ni.logger.Info("📨 已广播BLS公钥请求",
+	ni.logger.Debug("📨 已广播BLS公钥请求",
 		"requestedAddress", requestedAddress.String(),
 		"requester", requester.String())
 

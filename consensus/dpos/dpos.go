@@ -585,20 +585,42 @@ func (r *dposRuntime) startBlockProduction() error {
 		blockTime = r.config.PolyBFTConfig.BlockTime.Duration
 	}
 
+	r.logger.Info("🏭 启动区块生产定时器", 
+		"blockTime", blockTime.String(),
+		"resourceMonitor", r.resourceMonitor != nil,
+		"goroutineManager", func() bool {
+			if r.resourceMonitor != nil {
+				return r.resourceMonitor.goroutineManager != nil
+			}
+			return false
+		}())
+
 	r.blockTimer = time.NewTicker(blockTime)
 	if r.resourceMonitor != nil && r.resourceMonitor.goroutineManager != nil {
 		r.resourceMonitor.goroutineManager.StartGoroutine("block-production", func() {
+			r.logger.Info("🏭 区块生产goroutine已启动")
 			for {
 				select {
 				case <-r.blockTimer.C:
+					r.logger.Debug("🏭 区块生产定时器触发")
 					if err := r.produceBlock(); err != nil {
 						r.logger.Error("failed to produce block", "error", err)
 					}
 				case <-r.closeCh:
+					r.logger.Info("🏭 区块生产goroutine收到关闭信号")
 					return
 				}
 			}
 		})
+	} else {
+		r.logger.Error("❌ 无法启动区块生产：resourceMonitor或goroutineManager为nil",
+			"resourceMonitor", r.resourceMonitor != nil,
+			"goroutineManager", func() bool {
+				if r.resourceMonitor != nil {
+					return r.resourceMonitor.goroutineManager != nil
+				}
+				return false
+			}())
 	}
 
 	return nil
@@ -793,18 +815,41 @@ func (r *dposRuntime) cleanupSignatureMaps() {
 
 // produceBlock 生产区块
 func (r *dposRuntime) produceBlock() error {
+	// 🆕 在锁之前添加 Printf 日志
+	
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
+	// 🆕 添加方法调用日志
+	r.logger.Debug("🏭 produceBlock 被调用", "timestamp", time.Now().Format("2006-01-02 15:04:05"))
+	r.logger.Debug("🏭 ===== produceBlock 开始执行 =====", "timestamp", time.Now().Format("2006-01-02 15:04:05"))
+
 	// 检查Key是否可用
 	if r.config == nil || r.config.Key == nil {
-		r.logger.Error("key not available, cannot produce block")
+		r.logger.Error("❌ key not available, cannot produce block",
+			"config", r.config != nil,
+			"key", func() bool {
+				if r.config != nil {
+					return r.config.Key != nil
+				}
+				return false
+			}())
 		return fmt.Errorf("key not available, cannot produce block")
 	}
+	
+	r.logger.Debug("✅ Key检查通过", "keyAddr", r.config.Key.Address().String())
 
 	// 检查当前节点是否为出块者
 	currentDelegate := r.getCurrentDelegate()
 	keyAddr := types.Address(r.config.Key.Address())
+
+	// 🆕 添加详细的委托者检查日志
+	r.logger.Debug("🔍 produceBlock 委托者检查",
+		"currentDelegate", currentDelegate.String(),
+		"keyAddr", keyAddr.String(),
+		"isCurrentDelegate", currentDelegate == keyAddr,
+		"currentDelegateIndex", r.currentDelegateIndex,
+		"delegatesCount", len(r.delegates))
 
 	// 检查当前节点是否有足够的stake参与出块
 	var currentDelegateInfo *validator.ValidatorMetadata
@@ -827,16 +872,34 @@ func (r *dposRuntime) produceBlock() error {
 			votingPowerStr = "N/A"
 		}
 
-		r.logger.Debug("current node has insufficient stake or is inactive, skipping block production",
-			"keyAddr", keyAddr,
+		r.logger.Info("❌ 当前节点stake不足或不活跃，跳过出块",
+			"keyAddr", keyAddr.String(),
 			"isActive", isActiveStr,
-			"votingPower", votingPowerStr)
+			"votingPower", votingPowerStr,
+			"currentDelegateInfo", currentDelegateInfo != nil,
+			"reason", func() string {
+				if currentDelegateInfo == nil {
+					return "当前节点不在验证者集合中"
+				}
+				if !currentDelegateInfo.IsActive {
+					return "当前节点不活跃"
+				}
+				if currentDelegateInfo.VotingPower.Cmp(big.NewInt(0)) <= 0 {
+					return "当前节点投票权重为0"
+				}
+				return "未知原因"
+			}())
 		return nil
 	}
+	
+	r.logger.Debug("✅ 当前节点stake检查通过",
+		"keyAddr", keyAddr.String(),
+		"isActive", currentDelegateInfo.IsActive,
+		"votingPower", currentDelegateInfo.VotingPower.String())
 
 	// 添加调试日志 - 只有当本节点是当前受托人时才打印
 	if currentDelegate == keyAddr {
-		r.logger.Info("🏭 检查区块生产资格",
+		r.logger.Debug("🏭 检查区块生产资格",
 			"currentDelegate", currentDelegate,
 			"keyAddr", keyAddr,
 			"currentRound", r.currentRound,
@@ -906,14 +969,14 @@ func (r *dposRuntime) produceBlock() error {
 	}
 
 	// 构建新区块
-	r.logger.Info("🏗️ 开始构建新区块", "blockNumber", nextBlockNumber)
+	r.logger.Debug("🏗️ 开始构建新区块", "blockNumber", nextBlockNumber)
 	block, err := r.buildBlock()
 	if err != nil {
 		return fmt.Errorf("failed to build block: %w", err)
 	}
 
 	// 提交区块到区块链
-	r.logger.Info("📝 开始提交区块到区块链", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
+	r.logger.Debug("📝 开始提交区块到区块链", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
 
 	if err := r.config.blockchain.CommitBlock(block); err != nil {
 		r.logger.Error("区块提交失败", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String(), "error", err)
@@ -1306,13 +1369,36 @@ func (r *dposRuntime) shouldProduceBlock() bool {
 		return false
 	}
 	
+	// 🆕 添加详细的验证者集合信息
+	r.logger.Debug("🔍 shouldProduceBlock 详细检查",
+		"currentBlock", currentBlock.Number,
+		"currentDelegateIndex", r.currentDelegateIndex,
+		"delegateCount", r.config.DelegateCount,
+		"delegatesCount", len(r.delegates))
+	
+	// 打印当前验证者集合的详细信息
+	for i, delegate := range r.delegates {
+		r.logger.Debug("🔍 当前验证者集合",
+			"index", i,
+			"address", delegate.Address.String(),
+			"votingPower", delegate.VotingPower.String(),
+			"isActive", delegate.IsActive,
+			"isCurrentDelegateIndex", i == int(r.currentDelegateIndex))
+	}
+	
 	// 区块0：只有索引0的委托者出块
 	if currentBlock.Number == 0 {
 		shouldProduce := r.currentDelegateIndex == 0
-		r.logger.Debug("检查区块0出块资格",
+		r.logger.Info("🔍 检查区块0出块资格",
 			"currentBlock", currentBlock.Number,
 			"currentDelegateIndex", r.currentDelegateIndex,
-			"shouldProduce", shouldProduce)
+			"shouldProduce", shouldProduce,
+			"reason", func() string {
+				if shouldProduce {
+					return "当前委托者索引为0，应该出块"
+				}
+				return "当前委托者索引不为0，不应该出块"
+			}())
 		return shouldProduce
 	}
 	
@@ -1321,13 +1407,34 @@ func (r *dposRuntime) shouldProduceBlock() bool {
 	expectedDelegateIndex := currentBlock.Number % uint64(r.config.DelegateCount)
 	shouldProduce := r.currentDelegateIndex == expectedDelegateIndex
 	
-	r.logger.Debug("检查出块资格",
+	// 🆕 添加更详细的出块资格检查
+	r.logger.Debug("🔍 检查出块资格",
 		"currentBlock", currentBlock.Number,
 		"currentDelegateIndex", r.currentDelegateIndex,
 		"expectedDelegateIndex", expectedDelegateIndex,
 		"delegateCount", r.config.DelegateCount,
 		"shouldProduce", shouldProduce,
-		"formula", fmt.Sprintf("%d%%%d=%d", currentBlock.Number, r.config.DelegateCount, expectedDelegateIndex))
+		"formula", fmt.Sprintf("%d%%%d=%d", currentBlock.Number, r.config.DelegateCount, expectedDelegateIndex),
+		"reason", func() string {
+			if shouldProduce {
+				return "当前委托者索引与期望索引匹配，应该出块"
+			}
+			return fmt.Sprintf("当前委托者索引(%d)与期望索引(%d)不匹配，不应该出块", r.currentDelegateIndex, expectedDelegateIndex)
+		}())
+	
+	// 🆕 添加当前委托者详细信息
+	if r.currentDelegateIndex < uint64(len(r.delegates)) {
+		currentDelegate := r.delegates[r.currentDelegateIndex]
+		r.logger.Debug("🔍 当前委托者详细信息",
+			"currentDelegateIndex", r.currentDelegateIndex,
+			"address", currentDelegate.Address.String(),
+			"votingPower", currentDelegate.VotingPower.String(),
+			"isActive", currentDelegate.IsActive)
+	} else {
+		r.logger.Warn("🔍 当前委托者索引超出范围",
+			"currentDelegateIndex", r.currentDelegateIndex,
+			"delegatesCount", len(r.delegates))
+	}
 	
 	return shouldProduce
 }
@@ -1378,23 +1485,66 @@ func (r *dposRuntime) calculateCurrentDelegateIndex() uint64 {
 // getCurrentDelegate 获取当前受托人
 func (r *dposRuntime) getCurrentDelegate() types.Address {
 	if len(r.delegates) == 0 {
+		r.logger.Warn("🔍 getCurrentDelegate: 验证者集合为空")
 		return types.ZeroAddress
 	}
 
-	// 🆕 修复：不要修改 currentDelegateIndex，只返回对应的受托人
-	// 查找活跃的受托人
+	// 🆕 修复：直接根据当前区块号计算出块者，确保与验证者集合排序一致
+	currentBlock := r.config.blockchain.CurrentHeader()
+	if currentBlock == nil {
+		r.logger.Warn("🔍 getCurrentDelegate: 无法获取当前区块头")
+		return types.ZeroAddress
+	}
+
+	// 计算当前应该出块的委托者索引
+	var expectedIndex uint64
+	if currentBlock.Number == 0 {
+		expectedIndex = 0
+	} else {
+		expectedIndex = currentBlock.Number % uint64(r.config.DelegateCount)
+	}
+
+	// 确保索引在有效范围内
+	if expectedIndex >= uint64(len(r.delegates)) {
+		expectedIndex = expectedIndex % uint64(len(r.delegates))
+	}
+
+	// 🆕 添加详细的查找日志
+	r.logger.Debug("🔍 ===== getCurrentDelegate 开始查找 =====",
+		"currentBlock", currentBlock.Number,
+		"expectedIndex", expectedIndex,
+		"delegateCount", r.config.DelegateCount,
+		"delegatesCount", len(r.delegates))
+
+	// 从期望索引开始查找活跃的受托人
 	for i := 0; i < len(r.delegates); i++ {
-		index := (r.currentDelegateIndex + uint64(i)) % uint64(len(r.delegates))
+		index := (expectedIndex + uint64(i)) % uint64(len(r.delegates))
 		delegate := r.delegates[index]
+
+		r.logger.Debug("🔍 检查验证者",
+			"searchIndex", i,
+			"actualIndex", index,
+			"address", delegate.Address.String(),
+			"votingPower", delegate.VotingPower.String(),
+			"isActive", delegate.IsActive,
+			"isExpectedIndex", index == expectedIndex)
 
 		// 检查受托人是否活跃且有足够的stake
 		if delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
-			// 🆕 不修改 currentDelegateIndex，直接返回
+			r.logger.Debug("✅ 找到当前出块者",
+				"expectedIndex", expectedIndex,
+				"actualIndex", index,
+				"address", delegate.Address.String(),
+				"votingPower", delegate.VotingPower.String(),
+				"blockNumber", currentBlock.Number)
 			return delegate.Address
 		}
 	}
 
 	// 如果没有找到活跃的受托人，返回零地址
+	r.logger.Warn("❌ 没有找到活跃的受托人",
+		"expectedIndex", expectedIndex,
+		"delegatesCount", len(r.delegates))
 	return types.ZeroAddress
 }
 
@@ -1600,6 +1750,18 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			continue
 		}
 
+		// 检查是否是验证者数量不足错误
+		if strings.Contains(collectErr.Error(), "insufficient validators") {
+			r.logger.Debug("验证者数量不足，等待网络改善后重试", "attempt", attempt+1)
+			// 等待网络状态改善
+			_, _, waitErr := r.waitForNetworkGrowth(checkpointHash, keyAddr)
+			if waitErr != nil {
+				r.logger.Debug("等待网络增长失败", "error", waitErr)
+			}
+			time.Sleep(2 * time.Second) // 等待2秒后重试
+			continue
+		}
+
 		// 其他错误，记录并返回
 		r.logger.Error("failed to collect validator signatures", "error", collectErr, "attempt", attempt+1)
 		if attempt == maxRetries-1 {
@@ -1626,31 +1788,10 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 	// 更新区块的签名
 	if len(signatures) > 0 {
-		r.logger.Info("开始聚合签名",
+		r.logger.Debug("开始聚合签名",
 			"signatureCount", len(signatures))
 
-		// 🆕 添加签名顺序验证日志
-		r.logger.Info("🔍 签名顺序验证:")
-		for i, sig := range signatures {
-			r.logger.Info("📝 签名详情",
-				"signatureIndex", i,
-				"signatureLength", len(sig),
-				"signatureBytes", fmt.Sprintf("%x", sig))
-		}
 
-		// 🆕 显示位图对应的签名顺序
-		r.logger.Info("🔗 位图对应的签名顺序:")
-		for i := uint64(0); i < uint64(len(r.delegates)); i++ {
-			if signatureBitmap.IsSet(i) {
-				if int(i) < len(r.delegates) {
-					delegate := r.delegates[i]
-					r.logger.Info("位图设置的验证者",
-						"bitmapIndex", i,
-						"delegateAddress", delegate.Address.String(),
-						"hasBlsKey", delegate.BlsKey != nil)
-				}
-			}
-		}
 
 		// 🆕 修复：按位图索引顺序聚合签名，确保与验证时公钥顺序一致
 		blsSignatures := make(bls.Signatures, 0, len(signatures))
@@ -1694,7 +1835,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		// 🆕 关键修复：实时同步r.delegates为productionValidators
 		// 确保位图索引和保存的验证者集合完全匹配
 		r.delegates = productionValidators
-		r.logger.Info("🔄 已同步r.delegates为productionValidators",
+		r.logger.Debug("🔄 已同步r.delegates为productionValidators",
 			"blockNumber", block.Block.Number(),
 			"delegatesCount", len(r.delegates),
 			"productionValidatorsCount", len(productionValidators),
@@ -1741,19 +1882,19 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		for i := uint64(0); i < uint64(len(productionValidators)); i++ {
 			if signatureBitmap.IsSet(i) {
 				participatingIndices = append(participatingIndices, i)
-				r.logger.Info("🔍 参与签名的验证者索引",
+				r.logger.Debug("🔍 参与签名的验证者索引",
 					"validatorIndex", i,
 					"validatorAddress", productionValidators[i].Address.String(),
 					"isParticipating", true)
 			} else {
-				r.logger.Info("🔍 未参与签名的验证者索引",
+				r.logger.Debug("🔍 未参与签名的验证者索引",
 					"validatorIndex", i,
 					"validatorAddress", productionValidators[i].Address.String(),
 					"isParticipating", false)
 			}
 		}
 
-		r.logger.Info("🔍 参与签名验证者统计",
+		r.logger.Debug("🔍 参与签名验证者统计",
 			"totalValidators", len(productionValidators),
 			"participatingCount", len(participatingIndices),
 			"signatureCount", len(signatures))
@@ -1763,7 +1904,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			if signatureIndex < len(signatures) {
 				bitmapToSignature[validatorIndex] = signatures[signatureIndex]
 				signatureIndex++
-				r.logger.Info("🔍 收集签名映射",
+				r.logger.Debug("🔍 收集签名映射",
 					"bitmapIndex", validatorIndex,
 					"signatureIndex", signatureIndex-1,
 					"validatorAddress", productionValidators[validatorIndex].Address.String())
@@ -1780,7 +1921,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 						continue
 					}
 					blsSignatures = append(blsSignatures, sig)
-					r.logger.Info("✅ BLS签名按位图顺序排列",
+					r.logger.Debug("✅ BLS签名按位图顺序排列",
 						"bitmapIndex", i,
 						"signatureIndex", len(blsSignatures)-1,
 						"validatorAddress", productionValidators[i].Address.String())
@@ -1788,7 +1929,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			}
 		}
 
-		r.logger.Info("签名解析完成",
+		r.logger.Debug("签名解析完成",
 			"parsedSignatures", len(blsSignatures),
 			"totalSignatures", len(signatures))
 
@@ -1799,7 +1940,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			return nil, fmt.Errorf("failed to aggregate signatures: %w", err)
 		}
 
-		r.logger.Info("✅ 签名聚合成功",
+		r.logger.Debug("✅ 签名聚合成功",
 			"aggregatedSignatureLength", len(aggregatedSignature),
 			"aggregatedSignatureBytes", fmt.Sprintf("%x", aggregatedSignature))
 
@@ -1856,23 +1997,21 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			}
 		}
 
-		// 🆕 创建生产时验证者地址集合变化记录（只保存实际签名者，不保存BLS公钥）
-		validatorAddresses := make(validator.AccountSet, 0, participatingCount)
+		// 🆕 修复：保存全部验证者，确保与生产时使用的验证者集合完全一致
+		validatorAddresses := make(validator.AccountSet, 0, len(productionValidators))
 		for i, v := range productionValidators {
-			// 只保存实际参与签名的验证者：位图设置 AND 有签名 AND 签名验证通过
+			// 保存全部验证者，不仅仅是签名者，确保位图索引与验证者集合匹配
+			validatorAddresses = append(validatorAddresses, &validator.ValidatorMetadata{
+				Address:     v.Address,
+				BlsKey:      nil, // 🆕 不保存BLS公钥，验证时从创世文件获取
+				VotingPower: v.VotingPower,
+				IsActive:    v.IsActive,
+			})
+			
+			// 记录验证者是否参与签名，用于调试
 			if signatureBitmap.IsSet(uint64(i)) {
-				// 检查该验证者是否真的有签名
 				if sigBytes, exists := bitmapToSignature[uint64(i)]; exists && len(sigBytes) > 0 {
-					// 🆕 额外验证：检查签名是否真的来自该验证者
-					// 这里应该验证签名是否真的来自该验证者，而不是仅仅检查是否有数据
-					// 由于签名验证已经在收集过程中完成，这里假设通过验证的签名都是有效的
-					validatorAddresses = append(validatorAddresses, &validator.ValidatorMetadata{
-						Address:     v.Address,
-						BlsKey:      nil, // 🆕 不保存BLS公钥，验证时从创世文件获取
-						VotingPower: v.VotingPower,
-						IsActive:    v.IsActive,
-					})
-					r.logger.Info("🎯 生产时保存实际签名者",
+					r.logger.Debug("🎯 生产时保存验证者（参与签名）",
 						"blockNumber", block.Block.Number(),
 						"bitmapIndex", i,
 						"address", v.Address.String(),
@@ -1880,18 +2019,25 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 						"signatureLength", len(sigBytes),
 						"note", "位图设置且有签名数据")
 				} else {
-					r.logger.Warn("⚠️ 生产时跳过无签名验证者",
+					r.logger.Info("🎯 生产时保存验证者（位图设置但无签名）",
 						"blockNumber", block.Block.Number(),
 						"bitmapIndex", i,
 						"address", v.Address.String(),
 						"hasSignature", false,
-						"note", "位图设置但无签名，跳过保存")
+						"note", "位图设置但无签名数据")
 				}
+			} else {
+				r.logger.Info("🎯 生产时保存验证者（未参与签名）",
+					"blockNumber", block.Block.Number(),
+					"bitmapIndex", i,
+					"address", v.Address.String(),
+					"hasSignature", false,
+					"note", "位图未设置，未参与签名")
 			}
 		}
 
 		signingValidatorDelta := &validator.ValidatorSetDelta{
-			Added:   validatorAddresses, // 🆕 只保存验证者地址，不保存BLS公钥
+			Added:   validatorAddresses, // 🆕 保存全部验证者，确保位图索引匹配
 			Updated: make(validator.AccountSet, 0),
 			Removed: bitmap.Bitmap{},
 		}
@@ -1899,15 +2045,15 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		// 🆕 记录参与签名的验证者信息（用于调试）
 
 		// 🏭 显著标记：区块生产时保存验证者地址到ExtraData
-		r.logger.Info("🏭 ===== 区块生产时保存验证者地址到ExtraData =====",
+		r.logger.Debug("🏭 ===== 区块生产时保存验证者地址到ExtraData =====",
 			"blockNumber", block.Block.Number(),
 			"totalValidators", len(validatorAddresses),
 			"participatingCount", participatingCount,
 			"method", "ExtraData.Validators.Added",
-			"note", "只保存实际签名者，BLS公钥从创世文件获取")
+			"note", "保存全部验证者，确保位图索引与验证者集合匹配")
 
 		// 🎯 显著日志：打印最终位图索引
-		r.logger.Info("🎯 ===== 生产时最终位图索引详情 =====",
+		r.logger.Debug("🎯 ===== 生产时最终位图索引详情 =====",
 			"blockNumber", block.Block.Number(),
 			"bitmapHex", fmt.Sprintf("0x%x", []byte(signatureBitmap)),
 			"bitmapLength", len([]byte(signatureBitmap)),
@@ -1916,9 +2062,9 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"note", "生产时位图索引对应关系")
 
 		// 详细记录生产时保存的验证者地址
-		r.logger.Info("🏭 生产时保存的验证者地址详细信息:")
+		r.logger.Debug("🏭 生产时保存的验证者地址详细信息:")
 		for i, validator := range validatorAddresses {
-			r.logger.Info("🏭 生产时保存验证者地址",
+			r.logger.Debug("🏭 生产时保存验证者地址",
 				"blockNumber", block.Block.Number(),
 				"index", i,
 				"address", validator.Address.String(),
@@ -1929,11 +2075,11 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		}
 
 		// 🎯 显著日志：打印位图索引对应关系（只显示真正有签名的验证者）
-		r.logger.Info("🎯 生产时位图索引对应关系:")
+		r.logger.Debug("🎯 生产时位图索引对应关系:")
 		for i := uint64(0); i < uint64(len(productionValidators)); i++ {
 			if signatureBitmap.IsSet(i) {
 				if sigBytes, exists := bitmapToSignature[i]; exists && len(sigBytes) > 0 {
-					r.logger.Info("🎯 生产时位图索引",
+					r.logger.Debug("🎯 生产时位图索引",
 						"blockNumber", block.Block.Number(),
 						"bitmapIndex", i,
 						"address", productionValidators[i].Address.String(),
@@ -1955,7 +2101,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 		// 更新区块的ExtraData，包含聚合签名、父区块签名和验证者集合
 		finalExtra := &Extra{
-			Validators: signingValidatorDelta, // 🆕 保存参与签名的验证者集合
+			Validators: signingValidatorDelta, // 🆕 保存全部验证者集合，确保位图索引匹配
 			Parent:     parentSignature,       // 父区块签名
 			Committed: &Signature{
 				AggregatedSignature: aggregatedSignature,
@@ -2624,7 +2770,7 @@ func (d *DPoS) processBlockVotesFromHeader(header *types.Header) error {
 				d.logger.Info("⚠️ 尝试获取区块数据失败", "attempt", attempt, "maxRetries", maxRetries, "blockNumber", header.Number, "blockHash", header.Hash)
 
 				if attempt < maxRetries {
-					d.logger.Info("🔄 等待后重试", "delay", retryDelay, "nextAttempt", attempt+1, "remainingAttempts", maxRetries-attempt)
+					d.logger.Debug("🔄 等待后重试", "delay", retryDelay, "nextAttempt", attempt+1, "remainingAttempts", maxRetries-attempt)
 					time.Sleep(retryDelay)
 					// 增加延迟时间
 					retryDelay *= 2
@@ -2695,14 +2841,18 @@ func (d *DPoS) Start() error {
 				d.logger.Info("transaction pool sealing state set to true (node is delegate)")
 				
 				// 🆕 只有受托人节点才启用状态广播
-				d.syncer.GetSyncPeerClient().EnablePublishingPeerStatus()
+				// 注意：需要直接访问syncPeerClient，但当前syncer接口没有暴露此方法
+				// 暂时注释掉，需要修改syncer接口或使用其他方式
+				// d.syncer.GetSyncPeerClient().EnablePublishingPeerStatus()
 				d.logger.Info("enabled status broadcasting (node is delegate)")
 			} else {
 				d.txPool.SetSealing(false)
 				d.logger.Info("transaction pool sealing state set to false (node is not delegate)")
 				
 				// 🆕 非受托人节点禁用状态广播
-				d.syncer.GetSyncPeerClient().DisablePublishingPeerStatus()
+				// 注意：需要直接访问syncPeerClient，但当前syncer接口没有暴露此方法
+				// 暂时注释掉，需要修改syncer接口或使用其他方式
+				// d.syncer.GetSyncPeerClient().DisablePublishingPeerStatus()
 				d.logger.Info("disabled status broadcasting (node is not delegate)")
 			}
 		} else {
@@ -3397,7 +3547,7 @@ func (d *DPoS) GetDelegates(blockNumber uint64, parents []*types.Header) (valida
 	defer d.lock.RUnlock()
 
 	currentBlockNumber := d.blockchain.CurrentHeader().Number
-	d.logger.Info("🔍 验证时获取验证者集合",
+	d.logger.Debug("🔍 验证时获取验证者集合",
 		"requestedBlockNumber", blockNumber,
 		"currentBlockNumber", currentBlockNumber,
 		"isCurrentBlock", blockNumber == currentBlockNumber,
@@ -4066,6 +4216,41 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 				"votingPower", delegate.VotingPower.String(),
 				"isActive", delegate.IsActive)
 		}
+
+		// 🆕 修复：重新计算 currentDelegateIndex，确保与重新排序后的验证者集合一致
+		if d.runtime != nil {
+			// 🆕 使用 TryLock 避免死锁
+			if d.runtime.lock.TryLock() {
+				// 重新计算当前应该出块的委托者索引
+				currentBlock := d.runtime.config.blockchain.CurrentHeader()
+				if currentBlock != nil {
+					var newIndex uint64
+					if currentBlock.Number == 0 {
+						newIndex = 0
+					} else {
+						newIndex = currentBlock.Number % uint64(d.runtime.config.DelegateCount)
+					}
+					oldIndex := d.runtime.currentDelegateIndex
+					d.runtime.currentDelegateIndex = newIndex
+					d.logger.Info("🔄 重新计算 currentDelegateIndex",
+						"oldIndex", oldIndex,
+						"newIndex", newIndex,
+						"blockNumber", currentBlock.Number,
+						"delegateCount", d.runtime.config.DelegateCount)
+					
+					// 🆕 关键修复：同步重新排序后的验证者集合到runtime
+					d.logger.Info("🔄 同步重新排序后的验证者集合到runtime")
+					d.runtime.delegates = make(validator.AccountSet, len(d.delegates))
+					copy(d.runtime.delegates, d.delegates)
+					d.logger.Info("✅ 验证者集合同步完成",
+						"runtimeDelegatesCount", len(d.runtime.delegates),
+						"sourceDelegatesCount", len(d.delegates))
+				}
+				d.runtime.lock.Unlock()
+			} else {
+				d.logger.Warn("⚠️ 无法获取 runtime.lock，跳过同步验证者集合")
+			}
+		}
 	}
 
 	// 🆕 落盘时：直接保存当前受托人集合，不进行排名和截取
@@ -4650,13 +4835,24 @@ func (d *DPoS) updateDelegateVotingPower(delegate types.Address, amount *big.Int
 	for i, del := range d.delegates {
 		if del.Address == delegate {
 			oldPower := new(big.Int).Set(del.VotingPower)
+			oldActive := del.IsActive
 			del.VotingPower = new(big.Int).Add(del.VotingPower, amount)
+			
+			// 🆕 修复：根据新的投票权重更新活跃状态
+			if del.VotingPower.Cmp(big.NewInt(0)) > 0 {
+				del.IsActive = true
+			} else {
+				del.IsActive = false
+			}
+			
 			d.logger.Debug("✅ Updated existing delegate voting power",
 				"delegate", delegate.String(),
 				"delegateIndex", i,
 				"oldPower", oldPower.String(),
 				"newPower", del.VotingPower.String(),
 				"addedAmount", amount.String(),
+				"oldActive", oldActive,
+				"newActive", del.IsActive,
 				"totalDelegates", len(d.delegates),
 				"calculation", fmt.Sprintf("%s + %s = %s", oldPower.String(), amount.String(), del.VotingPower.String()))
 			found = true
@@ -4767,12 +4963,12 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 	signatureBitmap := bitmap.Bitmap{}
 
 	// 🆕 确保受托人按票数排序，与验证时保持一致
-	r.logger.Info("🔍 区块生产前：确保受托人按票数排序，与验证时保持一致")
-	r.logger.Info("📊 出块前受托人统计", "totalDelegates", len(r.delegates))
+	r.logger.Debug("🔍 区块生产前：确保受托人按票数排序，与验证时保持一致")
+	r.logger.Debug("📊 出块前受托人统计", "totalDelegates", len(r.delegates))
 
 	// 打印所有受托人信息
 	for i, delegate := range r.delegates {
-		r.logger.Info("🏭 出块受托人", "index", i, "address", delegate.Address.String(), "votingPower", delegate.VotingPower.String(), "isActive", delegate.IsActive)
+		r.logger.Debug("🏭 出块受托人", "index", i, "address", delegate.Address.String(), "votingPower", delegate.VotingPower.String(), "isActive", delegate.IsActive)
 	}
 
 	// 🆕 关键修复：不要在签名收集过程中重新排序验证者集合
@@ -4786,10 +4982,10 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 	// })
 
 	// 🆕 显示用于区块生产的受托人信息（保持原始顺序）
-	r.logger.Info("🔍 用于区块生产的受托人信息（保持原始顺序）")
+	r.logger.Debug("🔍 用于区块生产的受托人信息（保持原始顺序）")
 	for i, delegate := range r.delegates {
 		if delegate.BlsKey != nil {
-			r.logger.Info("🔍 受托人信息",
+			r.logger.Debug("🔍 受托人信息",
 				"index", i,
 				"address", delegate.Address.String(),
 				"votingPower", delegate.VotingPower.String(),
@@ -4797,20 +4993,20 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 		}
 	}
 
-	r.logger.Info("开始收集验证者签名",
+	r.logger.Debug("开始收集验证者签名",
 		"checkpointHash", checkpointHash.String(),
 		"delegatesCount", len(r.delegates),
 		"proposerAddress", keyAddr.String())
 
 	// 🆕 添加详细日志：显示出块时使用的BLS公钥
-	r.logger.Info("🔑 出块时使用的BLS公钥信息",
+	r.logger.Debug("🔑 出块时使用的BLS公钥信息",
 		"checkpointHash", checkpointHash.String(),
 		"delegatesCount", len(r.delegates))
 
 	for i, delegate := range r.delegates {
 		if delegate.BlsKey != nil {
 			pubKeyBytes := delegate.BlsKey.Marshal()
-			r.logger.Info("🔑 出块时受托人BLS公钥",
+			r.logger.Debug("🔑 出块时受托人BLS公钥",
 				"index", i,
 				"address", delegate.Address.String(),
 				"votingPower", delegate.VotingPower.String(),
@@ -4844,16 +5040,13 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 		}
 	}
 
-	// 检查网络中的活跃验证者数量
-	activeValidators := r.getActiveValidatorsCount()
-	
 	// 🆕 打印活跃验证者详细信息
-	r.logger.Info("🎯 活跃验证者详细信息")
+	r.logger.Debug("🎯 活跃验证者详细信息")
 	activeCount := 0
 	for i, delegate := range r.delegates {
 		if delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
 			activeCount++
-			r.logger.Info("✅ 活跃验证者",
+			r.logger.Debug("✅ 活跃验证者",
 				"index", i,
 				"address", delegate.Address.String(),
 				"votingPower", delegate.VotingPower.String(),
@@ -4861,10 +5054,15 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 				"hasBlsKey", delegate.BlsKey != nil)
 		}
 	}
-	r.logger.Info("📊 活跃验证者统计",
+	
+	// 检查网络中的活跃验证者数量
+	activeValidators := r.getActiveValidatorsCount()
+	
+	r.logger.Debug("📊 活跃验证者统计",
 		"activeCount", activeCount,
 		"totalDelegates", len(r.delegates),
-		"activeValidators", activeValidators)
+		"activeValidators", activeValidators,
+		"note", "activeCount是本地统计，activeValidators是网络方法返回")
 	
 	// 计算真正活跃的验证者数量（有足够stake且IsActive=true）
 	expectedSignatures := activeValidators // 只计算活跃的验证者
@@ -4883,7 +5081,7 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 			"minRequired", minRequired,
 			"totalDelegates", len(r.delegates))
 		
-		// 🆕 修复：直接返回错误，而不是调用waitForNetworkGrowth
+		// 返回错误，让上层重试机制处理
 		return nil, nil, fmt.Errorf("insufficient validators: got %d, need %d", activeValidators, minRequired)
 	}
 
@@ -5057,21 +5255,21 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 
 processSignatures:
 	// 4. 处理收集到的签名
-	r.logger.Info("🎯 出块时签名收集开始",
+	r.logger.Debug("🎯 出块时签名收集开始",
 		"totalDelegates", len(r.delegates),
 		"checkpointHash", checkpointHash.String())
 
 	// 显示所有受托人的BLS公钥
-	r.logger.Info("🔑 出块时所有受托人BLS公钥详情:")
+	r.logger.Debug("🔑 出块时所有受托人BLS公钥详情:")
 	for i, delegate := range r.delegates {
 		if delegate.BlsKey != nil {
-			r.logger.Info("🔑 出块受托人BLS公钥",
+			r.logger.Debug("🔑 出块受托人BLS公钥",
 				"index", i,
 				"address", delegate.Address.String(),
 				"publicKeyBytes", fmt.Sprintf("%x", delegate.BlsKey.Marshal()),
 				"publicKeyLength", len(delegate.BlsKey.Marshal()))
 		} else {
-			r.logger.Info("ℹ️ 出块受托人暂无BLS公钥，将在验证时按需获取",
+			r.logger.Debug("ℹ️ 出块受托人暂无BLS公钥，将在验证时按需获取",
 				"index", i,
 				"address", delegate.Address.String())
 		}
@@ -5120,7 +5318,7 @@ processSignatures:
 
 		if signature, exists := collectedSignatures[delegate.Address]; exists {
 			// 🆕 添加详细的签名信息日志
-			r.logger.Info("🔍 收到验证者签名详情",
+			r.logger.Debug("🔍 收到验证者签名详情",
 				"address", delegate.Address.String(),
 				"bitmapIndex", i,
 				"signatureLength", len(signature),
@@ -5128,7 +5326,7 @@ processSignatures:
 				"checkpointHash", checkpointHash.String())
 
 			if delegate.BlsKey != nil {
-				r.logger.Info("🔑 签名验证者BLS公钥",
+				r.logger.Debug("🔑 签名验证者BLS公钥",
 					"address", delegate.Address.String(),
 					"publicKeyBytes", fmt.Sprintf("%x", delegate.BlsKey.Marshal()),
 					"publicKeyLength", len(delegate.BlsKey.Marshal()))
@@ -5142,7 +5340,7 @@ processSignatures:
 				continue
 			}
 
-			r.logger.Info("✅ 验证者签名验证成功",
+			r.logger.Debug("✅ 验证者签名验证成功",
 				"address", delegate.Address.String(),
 				"bitmapIndex", i,
 				"signatureCount", len(signatures)+1)
@@ -5155,7 +5353,7 @@ processSignatures:
 		}
 	}
 
-	r.logger.Info("🎉 出块签名收集完成",
+	r.logger.Debug("🎉 出块签名收集完成",
 		"totalSignatures", len(signatures),
 		"bitmapLength", len(signatureBitmap),
 		"collectedCount", len(collectedSignatures),
@@ -5163,9 +5361,9 @@ processSignatures:
 		"checkpointHash", checkpointHash.String())
 
 	// 显示最终的签名详情
-	r.logger.Info("📋 出块时最终签名详情:")
+	r.logger.Debug("📋 出块时最终签名详情:")
 	for i, sig := range signatures {
-		r.logger.Info("📝 收集到的签名",
+		r.logger.Debug("📝 收集到的签名",
 			"signatureIndex", i,
 			"signatureLength", len(sig),
 			"signatureHex", fmt.Sprintf("%x", sig))
@@ -5270,7 +5468,7 @@ func (r *dposRuntime) verifyBlockDataConsistency() error {
 
 	// 2. 获取通过GetDelegates方法获得的验证者集合
 	currentBlockNumber := r.config.blockchain.CurrentHeader().Number
-	r.logger.Info("🔍 Getting validators via GetDelegates", "blockNumber", currentBlockNumber)
+	r.logger.Debug("🔍 Getting validators via GetDelegates", "blockNumber", currentBlockNumber)
 	getValidators, err := r.config.dposBackend.GetDelegates(currentBlockNumber, nil)
 	if err != nil {
 		r.logger.Error("❌ Failed to get validators via GetDelegates", "error", err)
@@ -5415,18 +5613,27 @@ func (r *dposRuntime) getActiveValidatorsCount() int {
 
 	// 🆕 检查实际网络连接状态
 	connectedPeers := r.getConnectedPeersCount()
+	r.logger.Debug("网络连接状态检查",
+		"connectedPeers", connectedPeers,
+		"activeValidators", activeValidators,
+		"willReturnConnectedPeers", connectedPeers < activeValidators)
+	
 	if connectedPeers < activeValidators {
-		r.logger.Debug("实际网络连接数少于活跃验证者数",
-			"connectedPeers", connectedPeers,
-			"activeValidators", activeValidators)
-		// 返回实际连接数和活跃验证者数的最小值
-		return connectedPeers
+		// 🆕 修复：如果完全没有网络连接，返回0触发等待网络改善
+		if connectedPeers == 0 {
+			r.logger.Warn("完全没有网络连接，返回0触发等待网络改善",
+				"activeValidators", activeValidators,
+				"connectedPeers", connectedPeers)
+			return 0
+		}
+		
+		// 如果有部分连接，返回活跃验证者数量（当前节点可参与签名）
+		r.logger.Warn("网络连接良好返回活跃验证者数量（当前节点可参与签名）",
+			"activeValidators", activeValidators,
+			"connectedPeers", connectedPeers)
+		return activeValidators
 	}
 
-	// r.logger.Info("🔢 活跃验证者统计",
-	// 	"activeValidators", activeValidators,
-	// 	"totalDelegates", len(r.delegates),
-	// 	"calculation_Method", "基于人数统计 (IsActive=true && VotingPower>0)")
 	return activeValidators
 }
 
@@ -7017,7 +7224,7 @@ func (r *dposRuntime) verifyValidatorSignature(delegate *validator.ValidatorMeta
 	// 🆕 额外验证：检查签名是否真的来自该验证者
 	// 这里可以添加更多验证，比如检查签名的时间戳、来源等
 	// 目前先记录警告，提醒需要进一步验证
-	r.logger.Warn("⚠️ 签名验证通过，但需要确认签名来源",
+	r.logger.Debug("⚠️ 签名验证通过，但需要确认签名来源",
 		"validator", delegate.Address.String(),
 		"checkpointHash", checkpointHash.String(),
 		"note", "签名验证通过，但需要确认签名是否真的来自该验证者")
@@ -8248,7 +8455,7 @@ func (d *DPoS) GetBLSKeyBytesFromGenesis(address types.Address) ([]byte, error) 
 	for _, delegate := range d.config.InitialDelegates {
 
 		if delegate.Address == address && delegate.BlsKey != "" {
-			d.logger.Info("✅ 从创世文件找到BLS公钥",
+			d.logger.Debug("✅ 从创世文件找到BLS公钥",
 				"address", address.String(),
 				"blsKeyLength", len(delegate.BlsKey))
 
@@ -8261,7 +8468,7 @@ func (d *DPoS) GetBLSKeyBytesFromGenesis(address types.Address) ([]byte, error) 
 				return nil, fmt.Errorf("failed to decode BLS key from genesis: %w", err)
 			}
 
-			d.logger.Info("✅ 成功解析创世文件BLS公钥",
+			d.logger.Debug("✅ 成功解析创世文件BLS公钥",
 				"address", address.String(),
 				"blsKeyBytesLength", len(blsKeyBytes))
 
