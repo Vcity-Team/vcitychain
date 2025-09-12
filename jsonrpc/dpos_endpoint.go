@@ -62,68 +62,28 @@ type dposStore interface {
 type DPOS struct {
 	logger hclog.Logger
 	store  dposStore
-	// Hardcoded private key for signing DPoS transactions
-	privateKey *ecdsa.PrivateKey
 }
 
 // NewDPOS creates a new DPOS endpoint
 func NewDPOS(logger hclog.Logger, store dposStore) *DPOS {
-
-	// Hardcoded private key for DPoS voting
-	privateKeyHex := "ed7ba26f0568b6b9cd3296ff7dcfe56fc6041fea8963246334bdaa276783add6"
-
-	logger.Info("Initializing DPoS endpoint with private key", "privateKeyHex", privateKeyHex)
-
-	privateKeyBytes, err := hex.DecodeString(privateKeyHex)
-	if err != nil {
-		logger.Error("=== PRIVATE KEY DECODE FAILED ===", "error", err, "privateKeyHex", privateKeyHex)
-		logger.Error("Failed to decode private key", "error", err, "privateKeyHex", privateKeyHex)
-		return &DPOS{
-			logger: logger.Named("dpos"),
-			store:  store,
-		}
+	logger.Info("Initializing DPoS endpoint")
+	
+	return &DPOS{
+		logger: logger.Named("dpos"),
+		store:  store,
 	}
-
-	logger.Error("=== PRIVATE KEY DECODE SUCCESS ===", "privateKeyBytesLength", len(privateKeyBytes))
-	logger.Info("=== PRIVATE KEY DECODE SUCCESS ===", "privateKeyBytesLength", len(privateKeyBytes))
-	logger.Info("Private key decoded successfully", "privateKeyBytesLength", len(privateKeyBytes))
-
-	privateKey, err := crypto.BytesToECDSAPrivateKey(privateKeyBytes)
-	if err != nil {
-		logger.Error("=== PRIVATE KEY CREATION FAILED ===", "error", err, "privateKeyBytesLength", len(privateKeyBytes))
-		logger.Error("Failed to create private key", "error", err, "privateKeyBytesLength", len(privateKeyBytes))
-		return &DPOS{
-			logger: logger.Named("dpos"),
-			store:  store,
-		}
-	}
-
-	logger.Error("=== PRIVATE KEY CREATION SUCCESS ===", "privateKeyD", privateKey.D.String())
-	logger.Info("=== PRIVATE KEY CREATION SUCCESS ===", "privateKeyD", privateKey.D.String())
-	logger.Info("Private key created successfully", "privateKeyD", privateKey.D.String())
-
-	result := &DPOS{
-		logger:     logger.Named("dpos"),
-		store:      store,
-		privateKey: privateKey,
-	}
-
-	logger.Error("=== DPOS ENDPOINT CREATED WITH PRIVATE KEY ===", "privateKeyAvailable", result.privateKey != nil)
-	logger.Info("=== DPOS ENDPOINT CREATED WITH PRIVATE KEY ===", "privateKeyAvailable", result.privateKey != nil)
-
-	return result
 }
 
 // signTransaction signs a DPoS transaction using the private key
 func (d *DPOS) signTransaction(tx *types.Transaction, expectedAddr types.Address, privateKeyHex string) error {
-	d.logger.Info("=== HARDCODED PRIVATE KEY APPROACH ===")
+	d.logger.Info("Signing DPoS transaction with user-provided private key")
 
-	// Use provided private key or fallback to hardcoded one
+	// Force user to provide private key
 	if privateKeyHex == "" {
-		privateKeyHex = "ed7ba26f0568b6b9cd3296ff7dcfe56fc6041fea8963246334bdaa276783add6"
+		return fmt.Errorf("private key is required for signing DPoS transactions")
 	}
 
-	d.logger.Info("Decoding hardcoded private key", "privateKeyHex", privateKeyHex, "length", len(privateKeyHex))
+	d.logger.Info("Decoding user-provided private key", "privateKeyHex", privateKeyHex, "length", len(privateKeyHex))
 
 	// Validate hex string first
 	if len(privateKeyHex) != 64 {
@@ -141,11 +101,11 @@ func (d *DPOS) signTransaction(tx *types.Transaction, expectedAddr types.Address
 
 	privateKeyBytes, err := hex.DecodeString(privateKeyHex)
 	if err != nil {
-		d.logger.Error("Failed to decode hardcoded private key", "error", err)
-		return fmt.Errorf("failed to decode hardcoded private key: %w", err)
+		d.logger.Error("Failed to decode user-provided private key", "error", err)
+		return fmt.Errorf("failed to decode user-provided private key: %w", err)
 	}
 
-	d.logger.Info("Hardcoded private key decoded", "length", len(privateKeyBytes))
+	d.logger.Info("User-provided private key decoded", "length", len(privateKeyBytes))
 
 	// Use direct ECDSA private key creation instead of crypto.BytesToECDSAPrivateKey
 	if len(privateKeyBytes) != 32 {
@@ -163,7 +123,7 @@ func (d *DPOS) signTransaction(tx *types.Transaction, expectedAddr types.Address
 	// Calculate the public key from the private key
 	privateKey.PublicKey.X, privateKey.PublicKey.Y = privateKey.Curve.ScalarBaseMult(privateKeyBytes)
 
-	d.logger.Info("Hardcoded private key created successfully", "privateKeyD", privateKey.D.String())
+	d.logger.Info("User-provided private key created successfully", "privateKeyD", privateKey.D.String())
 
 	// Calculate transaction hash for signing using EIP-155 scheme to match txpool signer
 	chainID := uint64(888)
