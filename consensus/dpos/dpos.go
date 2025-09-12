@@ -751,6 +751,10 @@ func (d *DPoS) cleanupProcessedBlocks() {
 	// LRU缓存会自动管理大小，无需手动清理
 	// 这里可以添加一些统计信息
 	d.processedMutex.RLock()
+	if d.processedBlocks == nil {
+		d.processedMutex.RUnlock()
+		return // 缓存未初始化，无需清理
+	}
 	size := d.processedBlocks.Len()
 	d.processedMutex.RUnlock()
 	
