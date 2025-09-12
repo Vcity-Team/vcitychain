@@ -28,6 +28,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/helper/common"
 	"github.com/Vcity-Team/vcitychain/helper/progress"
+	"github.com/hashicorp/golang-lru"
 	"github.com/Vcity-Team/vcitychain/network"
 	"github.com/Vcity-Team/vcitychain/secrets"
 	"github.com/Vcity-Team/vcitychain/state"
@@ -745,28 +746,28 @@ func (r *dposRuntime) cleanupExpiredCaches() {
 	r.blsPrivateKeyCacheMutex.Unlock()
 }
 
-// cleanupProcessedBlocks 清理已处理的区块记录
+// cleanupProcessedBlocks 清理已处理的区块记录（LRU自动管理）
 func (d *DPoS) cleanupProcessedBlocks() {
-	d.processedMutex.Lock()
-	defer d.processedMutex.Unlock()
+	// LRU缓存会自动管理大小，无需手动清理
+	// 这里可以添加一些统计信息
+	d.processedMutex.RLock()
+	size := d.processedBlocks.Len()
+	d.processedMutex.RUnlock()
 	
-	// 只保留最近1000个区块的记录
-	if len(d.processedBlocks) > 1000 {
-		// 清理最旧的记录
-		count := 0
-		for hash := range d.processedBlocks {
-			if count >= len(d.processedBlocks)-1000 {
-				break
-			}
-			delete(d.processedBlocks, hash)
-			count++
-		}
+	if size > 800 { // 当接近上限时记录日志
+		d.logger.Debug("已处理区块缓存接近上限", "size", size, "max", 1000)
 	}
 }
 
 // startSignatureCleanup 启动签名去重清理协程
 func (r *dposRuntime) startSignatureCleanup() {
 	go func() {
+		defer func() {
+			if panicErr := recover(); panicErr != nil {
+				r.logger.Error("签名清理协程panic", "error", panicErr)
+			}
+		}()
+		
 		ticker := time.NewTicker(30 * time.Second) // 每30秒清理一次
 		defer ticker.Stop()
 		
@@ -2372,8 +2373,8 @@ type DPoS struct {
 	// 🆕 方案1+方案2：延迟验证者集合更新标志
 	pendingValidatorUpdate bool
 
-	// 已处理的区块哈希集合，避免重复处理
-	processedBlocks map[types.Hash]bool
+	// 已处理的区块哈希集合，避免重复处理（使用LRU缓存）
+	processedBlocks *lru.Cache
 	processedMutex  sync.RWMutex
 }
 
@@ -2654,18 +2655,32 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		// 检查是否已经处理过这个区块
 		d.processedMutex.RLock()
 		if d.processedBlocks == nil {
-			d.processedBlocks = make(map[types.Hash]bool)
-		}
-		if d.processedBlocks[header.Hash] {
 			d.processedMutex.RUnlock()
+			// 初始化LRU缓存
+			d.processedMutex.Lock()
+			if d.processedBlocks == nil {
+				var err error
+				d.processedBlocks, err = lru.New(1000) // 最多1000个条目
+				if err != nil {
+					d.processedMutex.Unlock()
+					return fmt.Errorf("failed to create LRU cache: %w", err)
+				}
+			}
+			d.processedMutex.Unlock()
+			d.processedMutex.RLock()
+		}
+		
+		_, exists := d.processedBlocks.Get(header.Hash)
+		d.processedMutex.RUnlock()
+		
+		if exists {
 			d.logger.Debug("block already processed, skipping", "blockNumber", header.Number, "blockHash", header.Hash)
 			continue
 		}
-		d.processedMutex.RUnlock()
 
 		// 标记区块已处理
 		d.processedMutex.Lock()
-		d.processedBlocks[header.Hash] = true
+		d.processedBlocks.Add(header.Hash, true)
 		d.processedMutex.Unlock()
 
 		// 🆕 修复：统一处理区块投票，无论是否是自己生产的区块
