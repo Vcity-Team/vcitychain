@@ -407,7 +407,6 @@ func (ni *NetworkIntegration) Start() error {
 	if err := ni.restoreBLSKeysFromDatabase(); err != nil {
 		ni.logger.Warn("从数据库恢复BLS公钥失败，但网络集成仍可继续运行", "error", err)
 	} else {
-		ni.logger.Info("BLS公钥缓存恢复完成")
 	}
 
 	return nil
@@ -1789,7 +1788,6 @@ func (ni *NetworkIntegration) restoreBLSKeysFromDatabase() error {
 
 	// 这里可以添加从数据库恢复的逻辑
 	// 目前先跳过，因为主要目的是解决持久化失败的问题
-	ni.logger.Info("BLS公钥恢复功能待实现，当前跳过数据库恢复")
 
 	return nil
 }

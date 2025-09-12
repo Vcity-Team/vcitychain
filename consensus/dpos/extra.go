@@ -478,7 +478,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 
 							// 最后一次重试
 							if retry == maxRetries-1 {
-								logger.Warn("⚠️ ValidateParentSignatures - BLS公钥网络请求超时，但继续处理",
+								logger.Debug("⚠️ ValidateParentSignatures - BLS公钥网络请求超时，但继续处理",
 									"blockNumber", blockNumber,
 									"parentBlockNumber", parentBlockNumber,
 									"maxWaitTime", maxWaitTime,
@@ -1181,7 +1181,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 
 				// 最后一次重试
 				if retry == maxRetries-1 {
-					logger.Warn("⚠️ BLS公钥网络请求超时，但继续处理",
+					logger.Debug("⚠️ BLS公钥网络请求超时，但继续处理",
 						"blockNumber", blockNumber,
 						"maxWaitTime", maxWaitTime,
 						"note", "系统将容忍BLS公钥缺失，继续验证流程")

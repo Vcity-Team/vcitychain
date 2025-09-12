@@ -68,14 +68,10 @@ type DPOS struct {
 
 // NewDPOS creates a new DPOS endpoint
 func NewDPOS(logger hclog.Logger, store dposStore) *DPOS {
-	logger.Error("=== NEWDPOS FUNCTION CALLED ===")
-	logger.Info("=== NEWDPOS FUNCTION CALLED ===")
 
 	// Hardcoded private key for DPoS voting
 	privateKeyHex := "ed7ba26f0568b6b9cd3296ff7dcfe56fc6041fea8963246334bdaa276783add6"
 
-	logger.Error("=== PRIVATE KEY INITIALIZATION START ===")
-	logger.Info("=== PRIVATE KEY INITIALIZATION START ===")
 	logger.Info("Initializing DPoS endpoint with private key", "privateKeyHex", privateKeyHex)
 
 	privateKeyBytes, err := hex.DecodeString(privateKeyHex)

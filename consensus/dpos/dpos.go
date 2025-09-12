@@ -1194,16 +1194,16 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 
 // initializeDelegates 初始化受托人集合
 func (r *dposRuntime) initializeDelegates() error {
-	r.logger.Info("🚀 dposRuntime.initializeDelegates 开始")
+	r.logger.Debug("🚀 dposRuntime.initializeDelegates 开始")
 	r.logger.Debug("backend是否为nil", "isNil", r.backend == nil)
 
 	// 🆕 调试信息：显示 InitialDelegates 的内容
 	if r.config != nil && r.config.InitialDelegates != nil {
-		r.logger.Info("🔍 创世文件受托人信息",
+		r.logger.Debug("🔍 创世文件受托人信息",
 			"initialDelegatesCount", len(r.config.InitialDelegates))
 
 		for i, genesisDelegate := range r.config.InitialDelegates {
-			r.logger.Info("🔍 创世文件受托人详情",
+			r.logger.Debug("🔍 创世文件受托人详情",
 				"index", i,
 				"address", genesisDelegate.Address.String(),
 				"blsKeyExists", genesisDelegate.BlsKey != "",
@@ -2914,7 +2914,7 @@ func (d *DPoS) Start() error {
 		go func() {
 			// 等待一段时间让网络连接稳定
 			time.Sleep(10 * time.Second)
-			d.logger.Info("新节点启动，开始查询待处理签名请求")
+			d.logger.Debug("新节点启动，开始查询待处理签名请求")
 			d.runtime.queryPendingSignatureRequests()
 		}()
 
@@ -2932,11 +2932,11 @@ func (d *DPoS) Start() error {
 		d.logger.Error("Failed to restore voting data from database", "error", err)
 		// 不返回错误，因为这是非关键操作
 	} else {
-		d.logger.Info("✅ Voting data restored from database successfully")
+		d.logger.Debug("✅ Voting data restored from database successfully")
 	}
 
 	// 🆕 新增：启动时直接调用和命令一样的数据源方法
-	d.logger.Info("🚀 ===== DPoS启动时调用命令数据源 =====")
+	d.logger.Debug("🚀 ===== DPoS启动时调用命令数据源 =====")
 	if err := d.callCommandDataSourcesOnStartup(); err != nil {
 		d.logger.Warn("Failed to call command data sources on startup", "error", err)
 	}
@@ -6382,7 +6382,7 @@ func (r *dposRuntime) listenForSignatureResponses(ctx context.Context, listener 
 
 // listenForSignatureRequests 监听签名请求并生成响应
 func (r *dposRuntime) listenForSignatureRequests(ctx context.Context) {
-	r.logger.Info("开始监听签名请求", "节点地址", types.Address(r.config.Key.Address()).String())
+	r.logger.Debug("开始监听签名请求", "节点地址", types.Address(r.config.Key.Address()).String())
 
 	// 检查网络服务是否可用
 	if r.network == nil {
@@ -6411,7 +6411,7 @@ func (r *dposRuntime) listenForSignatureRequests(ctx context.Context) {
 		return
 	}
 
-	r.logger.Info("成功订阅签名请求主题", "节点地址", types.Address(r.config.Key.Address()).String())
+	r.logger.Debug("成功订阅签名请求主题", "节点地址", types.Address(r.config.Key.Address()).String())
 
 	// 监听上下文取消
 	<-ctx.Done()
@@ -7874,7 +7874,7 @@ func (d *DPoS) restoreVotingDataFromDatabase() error {
 		return fmt.Errorf("state store not available")
 	}
 
-	d.logger.Info("🔄 Restoring voting data from database...")
+	d.logger.Debug("🔄 Restoring voting data from database...")
 
 	// 恢复投票者信息
 	if err := d.restoreVotersFromDatabase(); err != nil {
@@ -7930,7 +7930,7 @@ func (d *DPoS) restoreVotersFromDatabase() error {
 			restoredCount++
 		}
 
-		d.logger.Info("Voters restored from database", "count", restoredCount)
+		d.logger.Debug("Voters restored from database", "count", restoredCount)
 		return nil
 	})
 
@@ -7978,7 +7978,7 @@ func (d *DPoS) restoreDelegatesFromDatabase() error {
 			restoredCount++
 		}
 
-		d.logger.Info("Delegates restored from database", "count", restoredCount)
+		d.logger.Debug("Delegates restored from database", "count", restoredCount)
 		return nil
 	})
 
@@ -8340,7 +8340,7 @@ func (d *DPoS) callCommandDataSourcesOnStartup() error {
 		if err != nil {
 			d.logger.Warn("⚠️ 获取验证者信息失败", "error", err)
 		} else {
-			d.logger.Info("✅ 验证者信息获取成功", "count", len(validators))
+			d.logger.Debug("✅ 验证者信息获取成功", "count", len(validators))
 
 			// 🆕 获取质押信息用于对比
 			stakingInfo, stakingErr := d.state.StakeStore.GetStakingInfo()
@@ -8395,7 +8395,7 @@ func (d *DPoS) callCommandDataSourcesOnStartup() error {
 		if err != nil {
 			d.logger.Warn("⚠️ 获取质押信息失败", "error", err)
 		} else {
-			d.logger.Info("✅ 质押信息获取成功", "count", len(stakingInfo))
+			d.logger.Debug("✅ 质押信息获取成功", "count", len(stakingInfo))
 			for i, stake := range stakingInfo {
 				d.logger.Info("💰 质押信息",
 					"序号", i+1,

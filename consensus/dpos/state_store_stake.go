@@ -213,8 +213,8 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 					fmt.Printf("⚠️ 解析BLS公钥失败: address=%s, blsKeyLength=%d, error=%v\n",
 						delegateInfo.Address.String(), len(delegateInfo.BlsPublicKey), err)
 				} else {
-					fmt.Printf("✅ 成功从数据库解析BLS公钥: address=%s, blsKeyLength=%d\n",
-						delegateInfo.Address.String(), len(delegateInfo.BlsPublicKey))
+					// fmt.Printf("✅ 成功从数据库解析BLS公钥: address=%s, blsKeyLength=%d\n",
+					//	delegateInfo.Address.String(), len(delegateInfo.BlsPublicKey))
 				}
 			} else {
 				// BLS公钥为空是允许的，记录信息但继续处理
@@ -234,8 +234,8 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 				fmt.Printf("ℹ️ 创建验证者元数据（BLS公钥缺失）: %s, 投票权重: %s\n",
 					delegateInfo.Address.String(), finalVotingPower.String())
 			} else {
-				fmt.Printf("✅ 创建验证者元数据（BLS公钥正常）: %s, 投票权重: %s\n",
-					delegateInfo.Address.String(), finalVotingPower.String())
+				// fmt.Printf("✅ 创建验证者元数据（BLS公钥正常）: %s, 投票权重: %s\n",
+				//	delegateInfo.Address.String(), finalVotingPower.String())
 			}
 
 			validators = append(validators, validatorMeta)
