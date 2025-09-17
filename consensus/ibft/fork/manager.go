@@ -328,6 +328,16 @@ func (m *ForkManager) initializeValidatorStore(setType store.SourceType) error {
 		// Get validators from the first PoA fork
 		var initialValidators validators.Validators
 		for _, fork := range m.forks {
+			m.logger.Info("Checking fork", 
+				"fork_type", fork.Type,
+				"has_validators", fork.Validators != nil,
+				"validator_count", func() int { 
+					if fork.Validators != nil { 
+						return fork.Validators.Len() 
+					} 
+					return 0 
+				}())
+			
 			if fork.Type == PoA && fork.Validators != nil {
 				initialValidators = fork.Validators
 				m.logger.Info("Found PoA fork with validators", 
