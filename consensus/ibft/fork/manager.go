@@ -313,7 +313,10 @@ func (m *ForkManager) initializeValidatorStores() error {
 
 // initializeValidatorStore initializes the specified validator set
 func (m *ForkManager) initializeValidatorStore(setType store.SourceType) error {
+	m.logger.Info("initializeValidatorStore called", "setType", setType)
+	
 	if _, ok := m.validatorStores[setType]; ok {
+		m.logger.Info("Validator store already exists", "setType", setType)
 		return nil
 	}
 
@@ -368,6 +371,15 @@ func (m *ForkManager) initializeValidatorStore(setType store.SourceType) error {
 				m.logger.Warn("Genesis block not found, using nil initialValidators")
 			}
 		}
+		
+		m.logger.Info("Creating SnapshotValidatorStoreWrapper", 
+			"initialValidators", initialValidators != nil,
+			"initialValidatorsLen", func() int {
+				if initialValidators != nil {
+					return initialValidators.Len()
+				}
+				return 0
+			}())
 		
 		valStore, err = NewSnapshotValidatorStoreWrapper(
 			m.logger,
