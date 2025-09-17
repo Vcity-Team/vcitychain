@@ -45,6 +45,9 @@ const (
 	webSocketReadLimitFlag      = "websocket-read-limit"
 
 	metricsIntervalFlag = "metrics-interval"
+	
+	// 🆕 新增：共识切换高度参数
+	consensusSwitchHeightFlag = "consensus-switch-height"
 )
 
 // Flags that are deprecated, but need to be preserved for
@@ -94,6 +97,9 @@ type serverParams struct {
 	logFileLocation string
 
 	relayer bool
+	
+	// 🆕 新增：共识切换高度
+	consensusSwitchHeight uint64
 }
 
 func (p *serverParams) isMaxPeersSet() bool {
@@ -184,6 +190,9 @@ func (p *serverParams) generateConfig() *server.Config {
 		SecretsManager:     p.secretsConfig,
 		RestoreFile:        p.getRestoreFilePath(),
 		LogLevel:           hclog.LevelFromString(p.rawConfig.LogLevel),
+		
+		// 🆕 新增：共识切换高度
+		ConsensusSwitchHeight: p.consensusSwitchHeight,
 		JSONLogFormat:      p.rawConfig.JSONLogFormat,
 		LogFilePath:        p.logFileLocation,
 

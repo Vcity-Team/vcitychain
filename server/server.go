@@ -544,6 +544,9 @@ func (s *Server) setupConsensus() error {
 	if !ok {
 		engineConfig = map[string]interface{}{}
 	}
+	
+	// 🆕 新增：将共识切换高度添加到engineConfig中
+	engineConfig["consensusSwitchHeight"] = float64(s.config.ConsensusSwitchHeight)
 
 	var (
 		blockTime = common.Duration{Duration: 0}

@@ -46,6 +46,9 @@ type Config struct {
 
 	NumBlockConfirmations uint64
 	MetricsInterval       time.Duration
+	
+	// 🆕 新增：共识切换高度
+	ConsensusSwitchHeight uint64
 }
 
 // Telemetry holds the config details for metric services

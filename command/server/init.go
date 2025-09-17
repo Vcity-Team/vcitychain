@@ -55,6 +55,7 @@ func (p *serverParams) initRawParams() error {
 
 	p.initPeerLimits()
 	p.initLogFileLocation()
+	p.initConsensusSwitchHeight()
 
 	p.relayer = p.rawConfig.Relayer
 
@@ -72,6 +73,15 @@ func (p *serverParams) initDataDirLocation() error {
 func (p *serverParams) initLogFileLocation() {
 	if p.isLogFileLocationSet() {
 		p.logFileLocation = p.rawConfig.LogFilePath
+	}
+}
+
+// 🆕 新增：初始化共识切换高度
+func (p *serverParams) initConsensusSwitchHeight() {
+	// 如果命令行参数设置了共识切换高度，则使用该值
+	// 否则使用默认值1000
+	if p.consensusSwitchHeight == 0 {
+		p.consensusSwitchHeight = 1000 // 默认值
 	}
 }
 

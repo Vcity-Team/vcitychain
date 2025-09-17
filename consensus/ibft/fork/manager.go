@@ -122,8 +122,16 @@ func NewForkManager(
 		fm.logger.Info("Genesis extraData loaded", "length", len(fm.genesisExtraData))
 	}
 
-	// 🆕 设置共识切换高度（硬编码为1000，可以根据需要调整）
-	fm.consensusSwitchHeight = 1000
+	// 🆕 设置共识切换高度（从配置中读取，如果没有则使用默认值1000）
+	if switchHeight, ok := ibftConfig["consensusSwitchHeight"]; ok {
+		if height, ok := switchHeight.(float64); ok {
+			fm.consensusSwitchHeight = uint64(height)
+		} else {
+			fm.consensusSwitchHeight = 1000 // 默认值
+		}
+	} else {
+		fm.consensusSwitchHeight = 1000 // 默认值
+	}
 	fm.logger.Info("Consensus switch height set", "height", fm.consensusSwitchHeight)
 
 	// Need initialization of signers in the constructor

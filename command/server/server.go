@@ -249,6 +249,14 @@ func setFlags(cmd *cobra.Command) {
 		"the interval (in seconds) at which special metrics are generated. a value of zero means the metrics are disabled",
 	)
 
+	// 🆕 新增：共识切换高度参数
+	cmd.Flags().Uint64Var(
+		&params.consensusSwitchHeight,
+		consensusSwitchHeightFlag,
+		1000, // 默认值
+		"the block height at which to switch from IBFT to DPoS consensus",
+	)
+
 	setLegacyFlags(cmd)
 
 	setDevFlags(cmd)
