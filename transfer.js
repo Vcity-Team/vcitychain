@@ -25,8 +25,8 @@ const config = {
     // 链ID (根据项目配置，通常是 888)
     chainId: 888,
     
-    // Gas 价格 (1 Gwei)
-    gasPrice: ethers.parseUnits('1', 'gwei'),
+    // Gas 价格 (1 Gwei = 1000000000 wei)
+    gasPrice: '1000000000',
     
     // Gas 限制
     gasLimit: 21000
@@ -41,15 +41,16 @@ async function sendTransfer(toAddress, amount, nonce) {
     try {
         console.log(`\n正在向 ${toAddress} 转账 ${ethers.formatEther(amount)} ETH...`);
         
-        // 创建交易对象
-        const transaction = {
-            to: toAddress,
-            value: amount,
-            gasLimit: config.gasLimit,
-            gasPrice: config.gasPrice,
-            nonce: nonce,
-            chainId: config.chainId
-        };
+    // 创建交易对象 (使用 Legacy 交易类型)
+    const transaction = {
+        to: toAddress,
+        value: amount,
+        gasLimit: config.gasLimit,
+        gasPrice: config.gasPrice,
+        nonce: nonce,
+        chainId: config.chainId,
+        type: 0  // 明确指定为 Legacy 交易类型
+    };
         
         // 签名交易
         const signedTx = await wallet.signTransaction(transaction);

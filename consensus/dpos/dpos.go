@@ -2006,12 +2006,12 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		validatorAddresses := make(validator.AccountSet, 0, len(productionValidators))
 		for i, v := range productionValidators {
 			// 保存全部验证者，不仅仅是签名者，确保位图索引与验证者集合匹配
-			validatorAddresses = append(validatorAddresses, &validator.ValidatorMetadata{
-				Address:     v.Address,
-				BlsKey:      nil, // 🆕 不保存BLS公钥，验证时从创世文件获取
-				VotingPower: v.VotingPower,
-				IsActive:    v.IsActive,
-			})
+					validatorAddresses = append(validatorAddresses, &validator.ValidatorMetadata{
+						Address:     v.Address,
+						BlsKey:      nil, // 🆕 不保存BLS公钥，验证时从创世文件获取
+						VotingPower: v.VotingPower,
+						IsActive:    v.IsActive,
+					})
 			
 			// 记录验证者是否参与签名，用于调试
 			if signatureBitmap.IsSet(uint64(i)) {
@@ -2380,6 +2380,9 @@ type DPoS struct {
 	// 已处理的区块哈希集合，避免重复处理（使用LRU缓存）
 	processedBlocks *lru.Cache
 	processedMutex  sync.RWMutex
+
+	// 🆕 新增：余额查询器
+	balanceQuerier NativeTokenBalanceQuerier
 }
 
 // VoterInfo 投票者信息
@@ -2675,7 +2678,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		}
 		
 		_, exists := d.processedBlocks.Get(header.Hash)
-		d.processedMutex.RUnlock()
+			d.processedMutex.RUnlock()
 		
 		if exists {
 			d.logger.Debug("block already processed, skipping", "blockNumber", header.Number, "blockHash", header.Hash)
@@ -3088,6 +3091,10 @@ func (d *DPoS) Initialize() error {
 		blockchain: d.config.Blockchain,
 		executor:   d.config.Executor,
 	}
+
+	// 🆕 新增：设置余额查询器（使用模拟实现）
+	d.balanceQuerier = NewMockBalanceQuerier(d.logger)
+	d.logger.Info("Balance querier initialized with mock implementation")
 
 	// set block time
 	d.blockTime = d.config.BlockTime.Duration
@@ -3985,6 +3992,34 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		return errors.New("vote amount below minimum")
 	}
 
+	// 🆕 2. 检查投票者VCITY代币余额
+	if d.balanceQuerier != nil {
+		balance, err := d.balanceQuerier.GetNativeTokenBalance(vote.Voter)
+		if err != nil {
+			d.logger.Error("Failed to query voter balance", 
+				"voter", vote.Voter.String(), 
+				"error", err)
+			return fmt.Errorf("failed to query voter balance: %w", err)
+		}
+
+		// 检查余额是否足够
+		if balance.Cmp(vote.Amount) < 0 {
+			d.logger.Warn("Insufficient balance for vote", 
+				"voter", vote.Voter.String(),
+				"required", vote.Amount.String(),
+				"available", balance.String())
+			return fmt.Errorf("insufficient balance: required %s, available %s", 
+				vote.Amount.String(), balance.String())
+		}
+
+		d.logger.Info("Vote balance check passed", 
+			"voter", vote.Voter.String(),
+			"voteAmount", vote.Amount.String(),
+			"balance", balance.String())
+	} else {
+		d.logger.Warn("Balance querier not available, skipping balance check")
+	}
+
 	// 2. 检查受托人是否存在且活跃（允许投票给任何地址）
 	delegateExists := false
 	for _, del := range d.delegates {
@@ -4240,22 +4275,22 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 		if d.runtime != nil {
 			// 🆕 使用 TryLock 避免死锁
 			if d.runtime.lock.TryLock() {
-				// 重新计算当前应该出块的委托者索引
-				currentBlock := d.runtime.config.blockchain.CurrentHeader()
-				if currentBlock != nil {
-					var newIndex uint64
-					if currentBlock.Number == 0 {
-						newIndex = 0
-					} else {
-						newIndex = currentBlock.Number % uint64(d.runtime.config.DelegateCount)
-					}
-					oldIndex := d.runtime.currentDelegateIndex
-					d.runtime.currentDelegateIndex = newIndex
-					d.logger.Info("🔄 重新计算 currentDelegateIndex",
-						"oldIndex", oldIndex,
-						"newIndex", newIndex,
-						"blockNumber", currentBlock.Number,
-						"delegateCount", d.runtime.config.DelegateCount)
+			// 重新计算当前应该出块的委托者索引
+			currentBlock := d.runtime.config.blockchain.CurrentHeader()
+			if currentBlock != nil {
+				var newIndex uint64
+				if currentBlock.Number == 0 {
+					newIndex = 0
+				} else {
+					newIndex = currentBlock.Number % uint64(d.runtime.config.DelegateCount)
+				}
+				oldIndex := d.runtime.currentDelegateIndex
+				d.runtime.currentDelegateIndex = newIndex
+				d.logger.Info("🔄 重新计算 currentDelegateIndex",
+					"oldIndex", oldIndex,
+					"newIndex", newIndex,
+					"blockNumber", currentBlock.Number,
+					"delegateCount", d.runtime.config.DelegateCount)
 					
 					// 🆕 关键修复：同步重新排序后的验证者集合到runtime
 					d.logger.Info("🔄 同步重新排序后的验证者集合到runtime")
@@ -4264,8 +4299,8 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 					d.logger.Info("✅ 验证者集合同步完成",
 						"runtimeDelegatesCount", len(d.runtime.delegates),
 						"sourceDelegatesCount", len(d.delegates))
-				}
-				d.runtime.lock.Unlock()
+			}
+			d.runtime.lock.Unlock()
 			} else {
 				d.logger.Warn("⚠️ 无法获取 runtime.lock，跳过同步验证者集合")
 			}
@@ -5058,7 +5093,7 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 				"isActive", delegate.IsActive)
 		}
 	}
-
+	
 	// 🆕 打印活跃验证者详细信息
 	r.logger.Debug("🎯 活跃验证者详细信息")
 	activeCount := 0
@@ -5633,7 +5668,7 @@ func (r *dposRuntime) getActiveValidatorsCount() int {
 	// 🆕 检查实际网络连接状态
 	connectedPeers := r.getConnectedPeersCount()
 	r.logger.Debug("网络连接状态检查",
-		"connectedPeers", connectedPeers,
+			"connectedPeers", connectedPeers,
 		"activeValidators", activeValidators,
 		"willReturnConnectedPeers", connectedPeers < activeValidators)
 	

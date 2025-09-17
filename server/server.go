@@ -561,6 +561,7 @@ func (s *Server) setupConsensus() error {
 		Params:      s.config.Chain.Params,
 		Config:      engineConfig,
 		Path:        filepath.Join(s.config.DataDir, "consensus"),
+		DataDir:     s.config.DataDir, // 🆕 新增：数据目录
 		IsRelayer:   s.config.Relayer,
 		RPCEndpoint: s.config.JSONRPC.JSONRPCAddr.String(),
 	}

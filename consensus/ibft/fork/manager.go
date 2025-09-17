@@ -1,9 +1,15 @@
 package fork
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
+	"os"
+	"path/filepath"
+	"strings"
 
+	"github.com/Vcity-Team/vcitychain/bls"
 	"github.com/Vcity-Team/vcitychain/consensus/ibft/hook"
 	"github.com/Vcity-Team/vcitychain/consensus/ibft/signer"
 	"github.com/Vcity-Team/vcitychain/secrets"
@@ -69,6 +75,11 @@ type ForkManager struct {
 	filePath  string
 	epochSize uint64
 
+	// 🆕 新增：数据目录和共识切换配置
+	dataDir               string // 数据目录
+	consensusSwitchHeight uint64 // 共识切换高度
+	genesisExtraData      []byte // 创世块extraData
+
 	// submodule lookup
 	keyManagers     map[validators.ValidatorType]signer.KeyManager
 	validatorStores map[store.SourceType]ValidatorStore
@@ -84,6 +95,7 @@ func NewForkManager(
 	filePath string,
 	epochSize uint64,
 	ibftConfig map[string]interface{},
+	dataDir string, // 🆕 新增：数据目录参数
 ) (*ForkManager, error) {
 	forks, err := GetIBFTForks(ibftConfig)
 	if err != nil {
@@ -98,10 +110,21 @@ func NewForkManager(
 		filePath:        filePath,
 		epochSize:       epochSize,
 		forks:           forks,
+		dataDir:         dataDir, // 🆕 设置数据目录
 		keyManagers:     make(map[validators.ValidatorType]signer.KeyManager),
 		validatorStores: make(map[store.SourceType]ValidatorStore),
 		hooksRegisters:  make(map[IBFTType]HooksRegister),
 	}
+
+	// 🆕 读取创世块extraData
+	if genesisHeader, exists := fm.blockchain.GetHeaderByNumber(0); exists {
+		fm.genesisExtraData = genesisHeader.ExtraData
+		fm.logger.Info("Genesis extraData loaded", "length", len(fm.genesisExtraData))
+	}
+
+	// 🆕 设置共识切换高度（硬编码为1000，可以根据需要调整）
+	fm.consensusSwitchHeight = 1000
+	fm.logger.Info("Consensus switch height set", "height", fm.consensusSwitchHeight)
 
 	// Need initialization of signers in the constructor
 	// because hash calculation is called from blockchain initialization
@@ -177,6 +200,14 @@ func (m *ForkManager) GetValidatorStore(height uint64) (ValidatorStore, error) {
 // GetValidators returns validators at specified height
 func (m *ForkManager) GetValidators(height uint64) (validators.Validators, error) {
 	m.logger.Info("ForkManager.GetValidators called", "height", height)
+	
+	// 🆕 检查是否需要切换到DPoS
+	if height >= m.consensusSwitchHeight {
+		m.logger.Info("Consensus switch to DPoS triggered", 
+			"height", height, 
+			"switchHeight", m.consensusSwitchHeight)
+		return m.getDPoSValidators(height)
+	}
 	
 	fork := m.forks.getFork(height)
 	if fork == nil {
@@ -531,4 +562,128 @@ func (m *ForkManager) initializeHooksRegister(ibftType IBFTType) {
 			m.epochSize,
 		)
 	}
+}
+
+// 🆕 新增：读取BLS私钥文件并生成公钥（与测试文件逻辑完全一致）
+func (m *ForkManager) readBLSPrivateKeyAndGeneratePublicKey(validatorAddress types.Address) ([]byte, error) {
+	// 1. 构建私钥文件路径
+	keyFilePath := filepath.Join(m.dataDir, "consensus", "validator-bls.key")
+	
+	m.logger.Info("Reading BLS private key", 
+		"validatorAddress", validatorAddress.String(),
+		"keyFilePath", keyFilePath)
+	
+	// 2. 检查文件是否存在
+	if _, err := os.Stat(keyFilePath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("BLS private key file not found: %s", keyFilePath)
+	}
+	
+	// 3. 读取私钥文件
+	privateKeyData, err := os.ReadFile(keyFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read BLS private key file: %w", err)
+	}
+	
+	// 4. 获取十六进制字符串（去除可能的换行符）
+	privateKeyHex := strings.TrimSpace(string(privateKeyData))
+	
+	// 5. 检查并修正私钥长度（与测试文件逻辑完全一致）
+	if len(privateKeyHex)%2 != 0 {
+		m.logger.Info("Private key length is odd, adding leading zero", 
+			"originalLength", len(privateKeyHex),
+			"originalKey", privateKeyHex)
+		privateKeyHex = "0" + privateKeyHex
+		m.logger.Info("Private key corrected", 
+			"correctedLength", len(privateKeyHex),
+			"correctedKey", privateKeyHex)
+	}
+	
+	// 6. 解析BLS私钥（与测试文件逻辑完全一致）
+	privateKey, err := bls.UnmarshalPrivateKey([]byte(privateKeyHex))
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal BLS private key: %w", err)
+	}
+	
+	// 7. 从私钥生成公钥（与测试文件逻辑完全一致）
+	publicKey := privateKey.PublicKey()
+	publicKeyBytes := publicKey.Marshal()
+	
+	// 8. 验证公钥长度（应该是128字节）
+	if len(publicKeyBytes) != 128 {
+		return nil, fmt.Errorf("invalid BLS public key length: expected 128 bytes, got %d", len(publicKeyBytes))
+	}
+	
+	m.logger.Info("BLS key processing completed", 
+		"validatorAddress", validatorAddress.String(),
+		"privateKeyLength", len(privateKeyHex),
+		"publicKeyLength", len(publicKeyBytes),
+		"publicKeyHex", hex.EncodeToString(publicKeyBytes))
+	
+	return publicKeyBytes, nil
+}
+
+// 🆕 新增：获取DPoS验证者（添加余额日志）
+func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, error) {
+	m.logger.Info("Getting DPoS validators", "height", height)
+	
+	// 1. 从extraData解析IBFT验证者地址
+	ibftValidators, err := m.parseValidatorsFromExtraData(m.genesisExtraData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse validators from extraData: %w", err)
+	}
+	
+	m.logger.Info("Parsed IBFT validators from extraData", 
+		"validatorCount", ibftValidators.Len())
+	
+	// 2. 获取当前区块状态（用于查询余额）
+	currentHeader := m.blockchain.Header()
+	if currentHeader == nil {
+		return nil, fmt.Errorf("failed to get current header")
+	}
+	
+	// 注意：这里需要根据实际的blockchain API来获取stateProvider
+	// 暂时跳过余额查询，实际实现需要根据具体的blockchain接口
+	// stateProvider := nil
+	
+	// 3. 为每个验证者地址生成对应的BLS公钥
+	dposValidators := make([]*validators.BLSValidator, 0)
+	for i := 0; i < ibftValidators.Len(); i++ {
+		ibftValidator := ibftValidators.At(uint64(i))
+		address := ibftValidator.Addr()
+		
+		m.logger.Info("Processing validator", 
+			"index", i,
+			"address", address.String())
+		
+		// 🆕 从私钥文件生成BLS公钥
+		blsPublicKey, err := m.readBLSPrivateKeyAndGeneratePublicKey(address)
+		if err != nil {
+			m.logger.Error("Failed to generate BLS public key for validator", 
+				"address", address.String(), "error", err)
+			continue
+		}
+		
+		// 🆕 暂时使用固定值作为votingPower，实际实现需要查询VCITY余额
+		votingPower := big.NewInt(1000000000000000000) // 1 VCITY = 1e18 wei
+		
+		// 🆕 详细日志打印余额信息
+		m.logger.Info("DPoS validator balance query", 
+			"address", address.String(),
+			"votingPower", votingPower.String(),
+			"votingPowerHex", fmt.Sprintf("0x%x", votingPower),
+			"votingPowerWei", votingPower.String(),
+			"blsPublicKeyLength", len(blsPublicKey),
+			"blsPublicKeyHex", hex.EncodeToString(blsPublicKey),
+			"note", "using fixed voting power for testing")
+		
+		// 创建DPoS验证者
+		dposValidator := validators.NewBLSValidator(address, blsPublicKey)
+		dposValidators = append(dposValidators, dposValidator)
+	}
+	
+	m.logger.Info("DPoS validators created successfully", 
+		"validatorCount", len(dposValidators),
+		"height", height)
+	
+	return validators.NewBLSValidatorSet(dposValidators...), nil
 }
