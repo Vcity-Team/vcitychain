@@ -13,6 +13,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/validators/store"
 	"github.com/Vcity-Team/vcitychain/validators/store/contract"
 	"github.com/hashicorp/go-hclog"
+	"github.com/umbracle/fastrlp"
 )
 
 const (
@@ -428,63 +429,72 @@ func (m *ForkManager) parseValidatorsFromExtraData(extraData []byte) (validators
 		"extraData_length", len(extraData),
 		"extraData_hex", fmt.Sprintf("0x%x", extraData))
 	
-	// Remove the vanity bytes (32 bytes) and seal bytes (65 bytes) from extraData
-	if len(extraData) < 32+65 {
+	// Remove only the vanity bytes (32 bytes) from extraData
+	// The rest is RLP data containing validators and seals
+	if len(extraData) < 32 {
 		return nil, fmt.Errorf("extraData too short: %d bytes", len(extraData))
 	}
 	
-	// Extract the RLP-encoded validator list
-	// extraData format: [vanity(32)] + [RLP(validator_list)] + [seal(65)]
-	validatorData := extraData[32 : len(extraData)-65]
+	// Extract the RLP-encoded data
+	// extraData format: [vanity(32)] + [RLP(IstanbulExtra)]
+	rlpData := extraData[32:]
 	
-	m.logger.Info("Extracted validator data", 
-		"validatorData_length", len(validatorData),
-		"validatorData_hex", fmt.Sprintf("0x%x", validatorData))
+	m.logger.Info("Extracted RLP data", 
+		"rlpData_length", len(rlpData),
+		"rlpData_hex", fmt.Sprintf("0x%x", rlpData))
 	
 	// Create ECDSA validators
 	validatorList := make([]*validators.ECDSAValidator, 0)
 	
-	// Parse RLP data using types.UnmarshalRlp
+	// Parse RLP data using the same method as the test
 	err := types.UnmarshalRlp(func(p *fastrlp.Parser, v *fastrlp.Value) error {
-		// The validator list should be an array
+		// Get the top-level list
 		elems, err := v.GetElems()
 		if err != nil {
-			return fmt.Errorf("expected array of validators: %w", err)
+			return fmt.Errorf("expected array: %w", err)
 		}
 		
 		m.logger.Info("Found validator list in RLP", "validator_count", len(elems))
 		
-		// Handle nested RLP structure: [list_of_addresses]
-		if len(elems) > 0 {
-			// The first element should be another list containing the addresses
-			addressList, err := elems[0].GetElems()
-			if err != nil {
-				return fmt.Errorf("expected address list: %w", err)
-			}
-			
-			m.logger.Info("Found address list in nested RLP", "address_count", len(addressList))
-			
-			for i, addrElem := range addressList {
-				// Get the address bytes
-				var addrBytes []byte
-				addrBytes, err := addrElem.GetBytes(addrBytes)
-				if err != nil {
-					return fmt.Errorf("failed to get address bytes for validator %d: %w", i, err)
+		// Process each element
+		for i, elem := range elems {
+			// Try to get bytes
+			if bytes, err := elem.GetBytes(nil); err == nil {
+				// If it's 20 bytes, it might be an address
+				if len(bytes) == 20 {
+					addr := types.BytesToAddress(bytes)
+					validator := validators.NewECDSAValidator(addr)
+					validatorList = append(validatorList, validator)
+					
+					m.logger.Info("Parsed validator from extraData", 
+						"index", i,
+						"address", addr.String())
 				}
-				
-				// Convert to address
-				addr := types.BytesToAddress(addrBytes)
-				validator := validators.NewECDSAValidator(addr)
-				validatorList = append(validatorList, validator)
-				
-				m.logger.Info("Parsed validator from extraData", 
-					"index", i,
-					"address", addr.String())
+			} else {
+				// Try to get sub-elements
+				if subElems, err := elem.GetElems(); err == nil {
+					m.logger.Info("Found sub-list in RLP", "sub_count", len(subElems))
+					
+					for j, subElem := range subElems {
+						if subBytes, err := subElem.GetBytes(nil); err == nil {
+							// If it's 20 bytes, it might be an address
+							if len(subBytes) == 20 {
+								addr := types.BytesToAddress(subBytes)
+								validator := validators.NewECDSAValidator(addr)
+								validatorList = append(validatorList, validator)
+								
+								m.logger.Info("Parsed validator from extraData sub-list", 
+									"index", j,
+									"address", addr.String())
+							}
+						}
+					}
+				}
 			}
 		}
 		
 		return nil
-	}, validatorData)
+	}, rlpData)
 	
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse RLP data: %w", err)
