@@ -584,7 +584,7 @@ func (m *ForkManager) readBLSPrivateKeyAndGeneratePublicKey(validatorAddress typ
 	return publicKeyBytes, nil
 }
 
-// 🆕 新增：获取DPoS验证者（添加余额日志）
+// 🆕 新增：获取DPoS验证者（返回IBFT兼容格式）
 func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, error) {
 	// 1. 从extraData解析IBFT验证者地址
 	ibftValidators, err := m.parseValidatorsFromExtraData(m.genesisExtraData)
@@ -592,19 +592,10 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 		return nil, fmt.Errorf("failed to parse validators from extraData: %w", err)
 	}
 	
-	// 2. 获取当前区块状态（用于查询余额）
-	currentHeader := m.blockchain.Header()
-	if currentHeader == nil {
-		return nil, fmt.Errorf("failed to get current header")
-	}
+	// 2. 创建IBFT兼容的验证者集合
+	validatorSet := validators.NewValidatorSet(validators.ECDSAValidatorType)
 	
-	// 🆕 获取stateProvider用于查询余额
-	// 注意：这里需要根据实际的blockchain API来获取stateProvider
-	// 暂时跳过余额查询，实际实现需要根据具体的blockchain接口
-	// stateProvider := nil
-	
-	// 3. 为每个验证者地址生成对应的BLS公钥
-	dposValidators := make([]*validators.BLSValidator, 0)
+	// 3. 为每个验证者地址生成对应的BLS公钥，但使用ECDSA格式
 	for i := 0; i < ibftValidators.Len(); i++ {
 		ibftValidator := ibftValidators.At(uint64(i))
 		address := ibftValidator.Addr()
@@ -617,15 +608,11 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 			continue
 		}
 		
-		// 🆕 暂时使用固定值作为votingPower，实际实现需要查询VCITY余额
-		// votingPower := big.NewInt(1000000000000000000) // 1 VCITY = 1e18 wei
-		
-		// 创建DPoS验证者
-		dposValidator := validators.NewBLSValidator(address, blsPublicKey)
-		dposValidators = append(dposValidators, dposValidator)
+		// 🆕 创建IBFT兼容的验证者，但包含BLS公钥
+		ecdsaValidator := validators.NewECDSAValidatorWithBLS(address, blsPublicKey)
+		validatorSet.Add(ecdsaValidator)
 	}
 	
-	// DPoS验证者创建成功
-	
-	return validators.NewBLSValidatorSet(dposValidators...), nil
+	// 返回IBFT兼容的验证者集合
+	return validatorSet, nil
 }
