@@ -329,8 +329,15 @@ func (m *ForkManager) initializeValidatorStore(setType store.SourceType) error {
 		for _, fork := range m.forks {
 			if fork.Type == PoA && fork.Validators != nil {
 				initialValidators = fork.Validators
+				m.logger.Info("Found PoA fork with validators", 
+					"validator_count", initialValidators.Len(),
+					"validator_type", initialValidators.Type())
 				break
 			}
+		}
+		
+		if initialValidators == nil {
+			m.logger.Warn("No PoA fork with validators found, using nil initialValidators")
 		}
 		
 		valStore, err = NewSnapshotValidatorStoreWrapper(

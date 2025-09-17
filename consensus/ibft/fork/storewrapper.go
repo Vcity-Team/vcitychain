@@ -103,6 +103,9 @@ func (w *SnapshotValidatorStoreWrapper) GetValidatorsAtHeight(height, epochSize,
 	
 	// If no validators found, use initial validators from genesis
 	if validatorSet == nil || validatorSet.Len() == 0 {
+		fmt.Printf("[DEBUG] Checking initialValidators: %v (len: %d)\n", w.initialValidators != nil, 
+			func() int { if w.initialValidators != nil { return w.initialValidators.Len() } return 0 }())
+		
 		if w.initialValidators != nil && w.initialValidators.Len() > 0 {
 			fmt.Printf("[INFO] Using initial validators from genesis: %d validators\n", w.initialValidators.Len())
 			return w.initialValidators, nil
