@@ -341,6 +341,10 @@ func (m *ForkManager) initializeValidatorStore(setType store.SourceType) error {
 		if initialValidators == nil {
 			m.logger.Info("No PoA fork with validators found, trying to parse from genesis block extraData")
 			if genesisHeader, exists := m.blockchain.GetHeaderByNumber(0); exists {
+				m.logger.Info("Genesis block found", 
+					"extraData_length", len(genesisHeader.ExtraData),
+					"extraData_hex", fmt.Sprintf("0x%x", genesisHeader.ExtraData))
+				
 				// Parse validators from genesis extraData
 				parsedValidators, err := m.parseValidatorsFromExtraData(genesisHeader.ExtraData)
 				if err != nil {
@@ -384,6 +388,10 @@ func (m *ForkManager) initializeValidatorStore(setType store.SourceType) error {
 
 // parseValidatorsFromExtraData parses validators from genesis block extraData
 func (m *ForkManager) parseValidatorsFromExtraData(extraData []byte) (validators.Validators, error) {
+	m.logger.Info("Starting extraData parsing", 
+		"extraData_length", len(extraData),
+		"extraData_hex", fmt.Sprintf("0x%x", extraData))
+	
 	// Remove the vanity bytes (32 bytes) and seal bytes (65 bytes) from extraData
 	if len(extraData) < 32+65 {
 		return nil, fmt.Errorf("extraData too short: %d bytes", len(extraData))
@@ -392,6 +400,10 @@ func (m *ForkManager) parseValidatorsFromExtraData(extraData []byte) (validators
 	// Extract the RLP-encoded validator list
 	// extraData format: [vanity(32)] + [RLP(validator_list)] + [seal(65)]
 	validatorData := extraData[32 : len(extraData)-65]
+	
+	m.logger.Info("Extracted validator data", 
+		"validatorData_length", len(validatorData),
+		"validatorData_hex", fmt.Sprintf("0x%x", validatorData))
 	
 	// Create ECDSA validators
 	validatorList := make([]*validators.ECDSAValidator, 0)
