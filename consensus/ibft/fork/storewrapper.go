@@ -88,39 +88,21 @@ func (w *SnapshotValidatorStoreWrapper) Close() error {
 
 // GetValidatorsAtHeight returns validators at the specific height
 func (w *SnapshotValidatorStoreWrapper) GetValidatorsAtHeight(height, epochSize, forkFrom uint64) (validators.Validators, error) {
-	fmt.Printf("[DEBUG] SnapshotValidatorStoreWrapper.GetValidatorsAtHeight called\n")
-	fmt.Printf("[DEBUG] Parameters: height=%d, epochSize=%d, forkFrom=%d\n", height, epochSize, forkFrom)
-	
 	// For now, we need to get validators from the genesis configuration
 	// This is a temporary fix - in a full implementation, this would look up snapshots
 	
 	// Try to get validators from the underlying snapshot store
 	validatorSet, err := w.GetValidatorsByHeight(height - 1)
 	if err != nil {
-		fmt.Printf("[ERROR] Failed to get validators by height: %v\n", err)
 		return nil, err
 	}
 	
 	// If no validators found, use initial validators from genesis
 	if validatorSet == nil || validatorSet.Len() == 0 {
-		initialValidatorsLen := 0
-		if w.initialValidators != nil {
-			initialValidatorsLen = w.initialValidators.Len()
-		}
-		fmt.Printf("[DEBUG] Checking initialValidators: %v (len: %d)\n", w.initialValidators != nil, initialValidatorsLen)
-		
 		if w.initialValidators != nil && w.initialValidators.Len() > 0 {
-			fmt.Printf("[INFO] Using initial validators from genesis: %d validators\n", w.initialValidators.Len())
 			return w.initialValidators, nil
 		}
-		fmt.Printf("[WARN] No validators found, returning empty ECDSA validator set\n")
 		return validators.NewECDSAValidatorSet(), nil
-	}
-	
-	fmt.Printf("[DEBUG] SnapshotValidatorStore returned %d validators\n", validatorSet.Len())
-	for i := 0; i < validatorSet.Len(); i++ {
-		validator := validatorSet.At(uint64(i))
-		fmt.Printf("[DEBUG] SnapshotValidator[%d]: %s (type: %s)\n", i, validator.Addr().String(), validator.Type())
 	}
 	
 	return validatorSet, nil

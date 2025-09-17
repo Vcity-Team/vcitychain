@@ -273,9 +273,6 @@ func (m *syncPeerClient) handleStatusUpdate(obj interface{}, from peer.ID) {
 		return
 	}
 
-	// 记录接收到状态更新
-	m.logger.Debug("接收到状态更新", "来源节点", from.String(), "区块高度", status.Number, "本地节点", m.id)
-
 	// 检查网络连接状态
 	if !m.network.IsConnected(from) {
 		if m.id != from.String() {
@@ -284,37 +281,6 @@ func (m *syncPeerClient) handleStatusUpdate(obj interface{}, from peer.ID) {
 
 		return
 	}
-
-	// 记录连接状态确认
-	m.logger.Debug("确认网络连接", "来源节点", from.String(), "本地节点", m.id)
-
-	// 添加网络诊断信息
-	peers := m.network.Peers()
-	peerCount := len(peers)
-
-	// 记录网络状态统计
-	m.logger.Debug("网络状态统计",
-		"来源节点", from.String(),
-		"本地节点", m.id,
-		"总连接节点数", peerCount,
-		"接收消息大小", 2) // 状态消息固定为2字节
-
-	// 智能日志：每30秒或每10次更新记录一次汇总
-	m.statusLogMutex.Lock()
-	m.statusUpdateCount++
-	shouldLog := time.Since(m.lastStatusLogTime) > 30*time.Second || m.statusUpdateCount >= 10
-	if shouldLog {
-		m.logger.Debug("状态更新汇总",
-			"更新次数", m.statusUpdateCount,
-			"时间间隔", time.Since(m.lastStatusLogTime),
-			"来源节点", from.String(),
-			"最新状态", status.Number,
-			"本地节点", m.id,
-			"网络连接数", peerCount)
-		m.lastStatusLogTime = time.Now()
-		m.statusUpdateCount = 0
-	}
-	m.statusLogMutex.Unlock()
 
 	m.peerStatusUpdateChLock.Lock()
 	defer m.peerStatusUpdateChLock.Unlock()
@@ -392,12 +358,6 @@ func (m *syncPeerClient) startNewBlockProcess() {
 
 			// 检查网络连接状态
 			peers := m.network.Peers()
-			m.logger.Debug("📡 准备广播状态", "区块高度", latest.Number, "节点ID", m.id, "连接节点数", len(peers), "区块哈希", latest.Hash.String())
-
-			// 记录状态广播开始
-			m.logger.Debug("🚀 开始广播状态", "区块高度", latest.Number, "节点ID", m.id, "区块哈希", latest.Hash.String())
-
-			// 添加网络状态检查
 			if len(peers) == 0 {
 				m.logger.Warn("没有连接的节点，跳过状态广播", "区块高度", latest.Number, "节点ID", m.id)
 				continue
@@ -426,9 +386,7 @@ func (m *syncPeerClient) startNewBlockProcess() {
 			}
 
 			if publishErr != nil {
-				m.logger.Error("❌ 状态广播最终失败", "区块高度", latest.Number, "节点ID", m.id, "错误", publishErr)
-			} else {
-				m.logger.Debug("✅ 状态广播成功", "区块高度", latest.Number, "节点ID", m.id, "区块哈希", latest.Hash.String())
+				m.logger.Error("状态广播最终失败", "区块高度", latest.Number, "节点ID", m.id, "错误", publishErr)
 			}
 		}
 	}

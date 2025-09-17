@@ -207,12 +207,10 @@ func (m *ForkManager) GetValidatorStore(height uint64) (ValidatorStore, error) {
 
 // GetValidators returns validators at specified height
 func (m *ForkManager) GetValidators(height uint64) (validators.Validators, error) {
-	m.logger.Info("ForkManager.GetValidators called", "height", height)
-	
 	// 🆕 检查是否需要切换到DPoS
 	if height >= m.consensusSwitchHeight {
-		m.logger.Info("Consensus switch to DPoS triggered", 
-			"height", height, 
+		m.logger.Info("Consensus switch to DPoS triggered",
+			"height", height,
 			"switchHeight", m.consensusSwitchHeight)
 		return m.getDPoSValidators(height)
 	}
@@ -223,19 +221,6 @@ func (m *ForkManager) GetValidators(height uint64) (validators.Validators, error
 		return nil, ErrForkNotFound
 	}
 
-	// 安全地处理To字段，可能为nil
-	toValue := "nil"
-	if fork.To != nil {
-		toValue = fmt.Sprintf("%d", fork.To.Value)
-	}
-	
-	m.logger.Info("Fork found", 
-		"height", height,
-		"fork_type", fork.Type,
-		"validator_type", fork.ValidatorType,
-		"from", fork.From.Value,
-		"to", toValue)
-
 	set := m.getValidatorStoreByIBFTFork(fork)
 	if set == nil {
 		m.logger.Error("Validator store not found", 
@@ -244,12 +229,6 @@ func (m *ForkManager) GetValidators(height uint64) (validators.Validators, error
 			"source_type", ibftTypesToSourceType[fork.Type])
 		return nil, ErrValidatorStoreNotFound
 	}
-
-	m.logger.Info("Validator store found", 
-		"height", height,
-		"store_type", fmt.Sprintf("%T", set),
-		"epoch_size", m.epochSize,
-		"fork_from", fork.From.Value)
 
 	validators, err := set.GetValidatorsAtHeight(
 		height,
@@ -262,21 +241,6 @@ func (m *ForkManager) GetValidators(height uint64) (validators.Validators, error
 			"height", height,
 			"error", err)
 		return nil, err
-	}
-
-	m.logger.Info("Validators retrieved successfully", 
-		"height", height,
-		"validator_count", validators.Len(),
-		"validator_type", validators.Type())
-	
-	// 打印所有验证器地址
-	for i := 0; i < validators.Len(); i++ {
-		validator := validators.At(uint64(i))
-		m.logger.Info("Validator details", 
-			"height", height,
-			"index", i,
-			"address", validator.Addr().String(),
-			"type", validator.Type())
 	}
 
 	return validators, nil
@@ -464,9 +428,7 @@ func (m *ForkManager) initializeValidatorStore(setType store.SourceType) error {
 
 // parseValidatorsFromExtraData parses validators from genesis block extraData
 func (m *ForkManager) parseValidatorsFromExtraData(extraData []byte) (validators.Validators, error) {
-	m.logger.Info("Starting extraData parsing", 
-		"extraData_length", len(extraData),
-		"extraData_hex", fmt.Sprintf("0x%x", extraData))
+	// 开始解析extraData
 	
 	// Remove only the vanity bytes (32 bytes) from extraData
 	// The rest is RLP data containing validators and seals
@@ -478,9 +440,7 @@ func (m *ForkManager) parseValidatorsFromExtraData(extraData []byte) (validators
 	// extraData format: [vanity(32)] + [RLP(IstanbulExtra)]
 	rlpData := extraData[32:]
 	
-	m.logger.Info("Extracted RLP data", 
-		"rlpData_length", len(rlpData),
-		"rlpData_hex", fmt.Sprintf("0x%x", rlpData))
+	// 提取RLP数据
 	
 	// Create ECDSA validators
 	validatorList := make([]*validators.ECDSAValidator, 0)
@@ -493,7 +453,7 @@ func (m *ForkManager) parseValidatorsFromExtraData(extraData []byte) (validators
 			return fmt.Errorf("expected array: %w", err)
 		}
 		
-		m.logger.Info("Found validator list in RLP", "validator_count", len(elems))
+		// 找到验证者列表
 		
 		// Process each element
 		for i, elem := range elems {
@@ -505,14 +465,12 @@ func (m *ForkManager) parseValidatorsFromExtraData(extraData []byte) (validators
 					validator := validators.NewECDSAValidator(addr)
 					validatorList = append(validatorList, validator)
 					
-					m.logger.Info("Parsed validator from extraData", 
-						"index", i,
-						"address", addr.String())
+					// 解析验证者地址
 				}
 			} else {
 				// Try to get sub-elements
 				if subElems, err := elem.GetElems(); err == nil {
-					m.logger.Info("Found sub-list in RLP", "sub_count", len(subElems))
+					// 找到子列表
 					
 					for j, subElem := range subElems {
 						if subBytes, err := subElem.GetBytes(nil); err == nil {
@@ -522,9 +480,7 @@ func (m *ForkManager) parseValidatorsFromExtraData(extraData []byte) (validators
 								validator := validators.NewECDSAValidator(addr)
 								validatorList = append(validatorList, validator)
 								
-								m.logger.Info("Parsed validator from extraData sub-list", 
-									"index", j,
-									"address", addr.String())
+								// 解析子列表中的验证者地址
 							}
 						}
 					}
@@ -539,8 +495,7 @@ func (m *ForkManager) parseValidatorsFromExtraData(extraData []byte) (validators
 		return nil, fmt.Errorf("failed to parse RLP data: %w", err)
 	}
 	
-	m.logger.Info("Successfully parsed validators from extraData", 
-		"validator_count", len(validatorList))
+	// 成功解析验证者
 	
 	return validators.NewECDSAValidatorSet(validatorList...), nil
 }
@@ -632,16 +587,11 @@ func (m *ForkManager) readBLSPrivateKeyAndGeneratePublicKey(validatorAddress typ
 
 // 🆕 新增：获取DPoS验证者（添加余额日志）
 func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, error) {
-	m.logger.Info("Getting DPoS validators", "height", height)
-	
 	// 1. 从extraData解析IBFT验证者地址
 	ibftValidators, err := m.parseValidatorsFromExtraData(m.genesisExtraData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse validators from extraData: %w", err)
 	}
-	
-	m.logger.Info("Parsed IBFT validators from extraData", 
-		"validatorCount", ibftValidators.Len())
 	
 	// 2. 获取当前区块状态（用于查询余额）
 	currentHeader := m.blockchain.Header()
@@ -649,6 +599,7 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 		return nil, fmt.Errorf("failed to get current header")
 	}
 	
+	// 🆕 获取stateProvider用于查询余额
 	// 注意：这里需要根据实际的blockchain API来获取stateProvider
 	// 暂时跳过余额查询，实际实现需要根据具体的blockchain接口
 	// stateProvider := nil
@@ -658,10 +609,6 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 	for i := 0; i < ibftValidators.Len(); i++ {
 		ibftValidator := ibftValidators.At(uint64(i))
 		address := ibftValidator.Addr()
-		
-		m.logger.Info("Processing validator", 
-			"index", i,
-			"address", address.String())
 		
 		// 🆕 从私钥文件生成BLS公钥
 		blsPublicKey, err := m.readBLSPrivateKeyAndGeneratePublicKey(address)
@@ -674,24 +621,12 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 		// 🆕 暂时使用固定值作为votingPower，实际实现需要查询VCITY余额
 		votingPower := big.NewInt(1000000000000000000) // 1 VCITY = 1e18 wei
 		
-		// 🆕 详细日志打印余额信息
-		m.logger.Info("DPoS validator balance query", 
-			"address", address.String(),
-			"votingPower", votingPower.String(),
-			"votingPowerHex", fmt.Sprintf("0x%x", votingPower),
-			"votingPowerWei", votingPower.String(),
-			"blsPublicKeyLength", len(blsPublicKey),
-			"blsPublicKeyHex", hex.EncodeToString(blsPublicKey),
-			"note", "using fixed voting power for testing")
-		
 		// 创建DPoS验证者
 		dposValidator := validators.NewBLSValidator(address, blsPublicKey)
 		dposValidators = append(dposValidators, dposValidator)
 	}
 	
-	m.logger.Info("DPoS validators created successfully", 
-		"validatorCount", len(dposValidators),
-		"height", height)
+	// DPoS验证者创建成功
 	
 	return validators.NewBLSValidatorSet(dposValidators...), nil
 }
