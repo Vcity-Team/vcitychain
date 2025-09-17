@@ -321,10 +321,30 @@ func (i *backendIBFT) startConsensus() {
 
 		isValidator = i.isActiveValidator()
 
+		// 添加调试日志
+		i.logger.Info("Consensus check", 
+			"height", pending,
+			"isValidator", isValidator,
+			"signerAddress", i.currentSigner.Address().String(),
+			"validatorsCount", i.currentValidators.Len())
+		
+		// 打印所有验证器地址
+		for j := 0; j < i.currentValidators.Len(); j++ {
+			validator := i.currentValidators.At(uint64(j))
+			i.logger.Info("Validator in consensus check", 
+				"height", pending,
+				"index", j,
+				"address", validator.Addr().String(),
+				"isCurrentSigner", validator.Addr() == i.currentSigner.Address())
+		}
+
 		i.txpool.SetSealing(isValidator)
 
 		if isValidator {
+			i.logger.Info("Starting consensus sequence", "height", pending)
 			sequenceCh = i.consensus.runSequence(pending)
+		} else {
+			i.logger.Warn("Not a validator, skipping consensus", "height", pending)
 		}
 
 		select {

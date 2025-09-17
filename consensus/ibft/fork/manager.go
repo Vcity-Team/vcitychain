@@ -13,6 +13,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/validators/store"
 	"github.com/Vcity-Team/vcitychain/validators/store/contract"
 	"github.com/hashicorp/go-hclog"
+	"github.com/umbracle/fastrlp"
 )
 
 const (
@@ -339,20 +340,17 @@ func (m *ForkManager) initializeValidatorStore(setType store.SourceType) error {
 		// If no validators found in fork config, try to parse from genesis block extraData
 		if initialValidators == nil {
 			m.logger.Info("No PoA fork with validators found, trying to parse from genesis block extraData")
-			if _, exists := m.blockchain.GetHeaderByNumber(0); exists {
+			if genesisHeader, exists := m.blockchain.GetHeaderByNumber(0); exists {
 				// Parse validators from genesis extraData
-				// This is a simplified approach - we'll hardcode the validators from your genesis.json
-				// In a full implementation, this would parse the extraData properly
-				validator1 := validators.NewECDSAValidator(types.StringToAddress("0xe22611289bab9cddb85b23dc2716006f931bc41c9"))
-				validator2 := validators.NewECDSAValidator(types.StringToAddress("0x47744e828e4bd34aafbb409c3b574b3647198ee65"))
-				validator3 := validators.NewECDSAValidator(types.StringToAddress("0x94a5ce949c933e06e8395194ae147283e091ecf3c"))
-				validator4 := validators.NewECDSAValidator(types.StringToAddress("0xb945d1f45b8d5a5ec9c3beb91caeba6a3180dbec7a"))
-				
-				initialValidators = validators.NewECDSAValidatorSet(validator1, validator2, validator3, validator4)
-				
-				m.logger.Info("Parsed validators from genesis extraData", 
-					"validator_count", initialValidators.Len(),
-					"validator_type", initialValidators.Type())
+				parsedValidators, err := m.parseValidatorsFromExtraData(genesisHeader.ExtraData)
+				if err != nil {
+					m.logger.Error("Failed to parse validators from genesis extraData", "error", err)
+				} else {
+					initialValidators = parsedValidators
+					m.logger.Info("Parsed validators from genesis extraData", 
+						"validator_count", initialValidators.Len(),
+						"validator_type", initialValidators.Type())
+				}
 			} else {
 				m.logger.Warn("Genesis block not found, using nil initialValidators")
 			}
@@ -382,6 +380,56 @@ func (m *ForkManager) initializeValidatorStore(setType store.SourceType) error {
 	m.validatorStores[setType] = valStore
 
 	return nil
+}
+
+// parseValidatorsFromExtraData parses validators from genesis block extraData
+func (m *ForkManager) parseValidatorsFromExtraData(extraData []byte) (validators.Validators, error) {
+	// Remove the vanity bytes (32 bytes) and seal bytes (65 bytes) from extraData
+	if len(extraData) < 32+65 {
+		return nil, fmt.Errorf("extraData too short: %d bytes", len(extraData))
+	}
+	
+	// Extract the RLP-encoded validator list
+	// extraData format: [vanity(32)] + [RLP(validator_list)] + [seal(65)]
+	validatorData := extraData[32 : len(extraData)-65]
+	
+	// Create ECDSA validators
+	validatorList := make([]*validators.ECDSAValidator, 0)
+	
+	// Parse RLP data using types.UnmarshalRlp
+	err := types.UnmarshalRlp(func(p *fastrlp.Parser, v *fastrlp.Value) error {
+		// The validator list should be an array
+		elems, err := v.GetElems()
+		if err != nil {
+			return fmt.Errorf("expected array of validators: %w", err)
+		}
+		
+		for i, elem := range elems {
+			// Get the address bytes
+			var addrBytes []byte
+			addrBytes, err := elem.GetBytes(addrBytes)
+			if err != nil {
+				return fmt.Errorf("failed to get address bytes for validator %d: %w", i, err)
+			}
+			
+			// Convert to address
+			addr := types.BytesToAddress(addrBytes)
+			validator := validators.NewECDSAValidator(addr)
+			validatorList = append(validatorList, validator)
+			
+			m.logger.Info("Parsed validator from extraData", 
+				"index", i,
+				"address", addr.String())
+		}
+		
+		return nil
+	}, validatorData)
+	
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse RLP data: %w", err)
+	}
+	
+	return validators.NewECDSAValidatorSet(validatorList...), nil
 }
 
 // initializeHooksRegisters initialize all HookRegisters to be used
