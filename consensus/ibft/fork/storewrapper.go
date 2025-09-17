@@ -90,14 +90,20 @@ func (w *SnapshotValidatorStoreWrapper) GetValidatorsAtHeight(height, epochSize,
 	fmt.Printf("[DEBUG] SnapshotValidatorStoreWrapper.GetValidatorsAtHeight called\n")
 	fmt.Printf("[DEBUG] Parameters: height=%d, epochSize=%d, forkFrom=%d\n", height, epochSize, forkFrom)
 	
-	// the biggest height of blocks that have been processed before the given height
-	actualHeight := height - 1
-	fmt.Printf("[DEBUG] Getting validators for actual height: %d\n", actualHeight)
+	// For now, we need to get validators from the genesis configuration
+	// This is a temporary fix - in a full implementation, this would look up snapshots
 	
-	validators, err := w.GetValidatorsByHeight(actualHeight)
+	// Try to get validators from the underlying snapshot store
+	validators, err := w.GetValidatorsByHeight(height - 1)
 	if err != nil {
 		fmt.Printf("[ERROR] Failed to get validators by height: %v\n", err)
 		return nil, err
+	}
+	
+	// If no validators found, return empty ECDSA validator set
+	if validators == nil || validators.Len() == 0 {
+		fmt.Printf("[WARN] No validators found, returning empty ECDSA validator set\n")
+		return validators.NewECDSAValidatorSet(), nil
 	}
 	
 	fmt.Printf("[DEBUG] SnapshotValidatorStore returned %d validators\n", validators.Len())
