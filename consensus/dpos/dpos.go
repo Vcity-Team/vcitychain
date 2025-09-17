@@ -28,13 +28,13 @@ import (
 	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/helper/common"
 	"github.com/Vcity-Team/vcitychain/helper/progress"
-	"github.com/hashicorp/golang-lru"
 	"github.com/Vcity-Team/vcitychain/network"
 	"github.com/Vcity-Team/vcitychain/secrets"
 	"github.com/Vcity-Team/vcitychain/state"
 	"github.com/Vcity-Team/vcitychain/syncer"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
+	lru "github.com/hashicorp/golang-lru"
 	"github.com/libp2p/go-libp2p/core/peer"
 	bolt "go.etcd.io/bbolt"
 	"google.golang.org/protobuf/proto"
@@ -179,11 +179,13 @@ type dposRuntime struct {
 	topicMutex             sync.RWMutex
 
 	// 运行时状态
+	rndmux               sync.RWMutex
 	currentRound         uint64
 	currentDelegateIndex uint64
-	delegates            validator.AccountSet
-	voters               map[types.Address]*VoterInfo
-	pendingVotes         []*VoteMessage
+
+	delegates    validator.AccountSet
+	voters       map[types.Address]*VoterInfo
+	pendingVotes []*VoteMessage
 
 	// 签名请求存储 - 用于新节点查询
 	pendingSignatureRequests map[types.Hash]*SignatureRequest
@@ -400,7 +402,7 @@ func (rm *ResourceMonitor) cleanupResources() {
 	if rm.dposRuntime != nil {
 		rm.dposRuntime.cleanupExpiredCaches()
 	}
-	
+
 	// 🆕 添加processedBlocks清理
 	if rm.dposRuntime != nil {
 		if dpos, ok := rm.dposRuntime.backend.(*DPoS); ok {
@@ -439,11 +441,14 @@ func (r *dposRuntime) initializeRuntime() error {
 	}
 
 	// 🆕 修复：根据当前区块号计算初始轮次和委托者索引
-	r.currentRound = r.calculateInitialRound()
-	r.currentDelegateIndex = r.calculateCurrentDelegateIndex()
+	round, index := r.calculateInitialRound(), r.calculateCurrentDelegateIndex()
+
+	r.rndmux.Lock()
+	r.currentRound, r.currentDelegateIndex = round, index
+	r.rndmux.Unlock()
 
 	r.logger.Info("=== dposRuntime.initializeRuntime ===",
-		"initialRound", r.currentRound,
+		"initialRound", round,
 		"initialDelegateIndex", r.currentDelegateIndex,
 		"note", "根据当前区块号计算，与创世文件保持一致")
 
@@ -586,7 +591,7 @@ func (r *dposRuntime) startBlockProduction() error {
 		blockTime = r.config.PolyBFTConfig.BlockTime.Duration
 	}
 
-	r.logger.Info("🏭 启动区块生产定时器", 
+	r.logger.Info("🏭 启动区块生产定时器",
 		"blockTime", blockTime.String(),
 		"resourceMonitor", r.resourceMonitor != nil,
 		"goroutineManager", func() bool {
@@ -757,7 +762,7 @@ func (d *DPoS) cleanupProcessedBlocks() {
 	}
 	size := d.processedBlocks.Len()
 	d.processedMutex.RUnlock()
-	
+
 	if size > 800 { // 当接近上限时记录日志
 		d.logger.Debug("已处理区块缓存接近上限", "size", size, "max", 1000)
 	}
@@ -771,10 +776,10 @@ func (r *dposRuntime) startSignatureCleanup() {
 				r.logger.Error("签名清理协程panic", "error", panicErr)
 			}
 		}()
-		
+
 		ticker := time.NewTicker(30 * time.Second) // 每30秒清理一次
 		defer ticker.Stop()
-		
+
 		for {
 			select {
 			case <-ticker.C:
@@ -789,7 +794,7 @@ func (r *dposRuntime) startSignatureCleanup() {
 // cleanupSignatureMaps 异步清理所有签名map
 func (r *dposRuntime) cleanupSignatureMaps() {
 	now := time.Now()
-	
+
 	// 清理签名请求
 	r.signatureRequestDedupMutex.Lock()
 	for k, v := range r.processedSignatureRequests {
@@ -798,7 +803,7 @@ func (r *dposRuntime) cleanupSignatureMaps() {
 		}
 	}
 	r.signatureRequestDedupMutex.Unlock()
-	
+
 	// 清理签名响应
 	r.signatureResponseDedupMutex.Lock()
 	for k, v := range r.processedSignatureResponses {
@@ -807,7 +812,7 @@ func (r *dposRuntime) cleanupSignatureMaps() {
 		}
 	}
 	r.signatureResponseDedupMutex.Unlock()
-	
+
 	// 清理签名生成
 	r.signatureGenerationDedupMutex.Lock()
 	for k, v := range r.processedSignatureGenerations {
@@ -821,7 +826,7 @@ func (r *dposRuntime) cleanupSignatureMaps() {
 // produceBlock 生产区块
 func (r *dposRuntime) produceBlock() error {
 	// 🆕 在锁之前添加 Printf 日志
-	
+
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -841,19 +846,20 @@ func (r *dposRuntime) produceBlock() error {
 			}())
 		return fmt.Errorf("key not available, cannot produce block")
 	}
-	
+
 	r.logger.Debug("✅ Key检查通过", "keyAddr", r.config.Key.Address().String())
 
 	// 检查当前节点是否为出块者
 	currentDelegate := r.getCurrentDelegate()
 	keyAddr := types.Address(r.config.Key.Address())
 
+	round, index := r.getRound()
 	// 🆕 添加详细的委托者检查日志
 	r.logger.Debug("🔍 produceBlock 委托者检查",
 		"currentDelegate", currentDelegate.String(),
 		"keyAddr", keyAddr.String(),
 		"isCurrentDelegate", currentDelegate == keyAddr,
-		"currentDelegateIndex", r.currentDelegateIndex,
+		"currentDelegateIndex", index,
 		"delegatesCount", len(r.delegates))
 
 	// 检查当前节点是否有足够的stake参与出块
@@ -896,7 +902,7 @@ func (r *dposRuntime) produceBlock() error {
 			}())
 		return nil
 	}
-	
+
 	r.logger.Debug("✅ 当前节点stake检查通过",
 		"keyAddr", keyAddr.String(),
 		"isActive", currentDelegateInfo.IsActive,
@@ -907,8 +913,8 @@ func (r *dposRuntime) produceBlock() error {
 		r.logger.Debug("🏭 检查区块生产资格",
 			"currentDelegate", currentDelegate,
 			"keyAddr", keyAddr,
-			"currentRound", r.currentRound,
-			"currentDelegateIndex", r.currentDelegateIndex,
+			"currentRound", round,
+			"currentDelegateIndex", index,
 			"delegatesCount", len(r.delegates),
 			"votingPower", currentDelegateInfo.VotingPower.String())
 	}
@@ -928,7 +934,7 @@ func (r *dposRuntime) produceBlock() error {
 		r.logOnce("not_current_delegate", "info", "⏭️ 不是当前委托者，跳过区块生产",
 			"currentDelegate", currentDelegate.String(),
 			"keyAddr", keyAddr.String(),
-			"currentDelegateIndex", r.currentDelegateIndex)
+			"currentDelegateIndex", index)
 		return nil // 不是当前出块者
 	}
 
@@ -938,7 +944,7 @@ func (r *dposRuntime) produceBlock() error {
 		currentBlock := r.config.blockchain.CurrentHeader()
 		r.logger.Debug("不是当前轮次的委托者，跳过出块",
 			"currentBlock", currentBlock.Number,
-			"currentDelegateIndex", r.currentDelegateIndex,
+			"currentDelegateIndex", index,
 			"expectedDelegateIndex", expectedIndex,
 			"delegateCount", r.config.DelegateCount)
 		return nil
@@ -989,7 +995,7 @@ func (r *dposRuntime) produceBlock() error {
 	}
 
 	r.logger.Info("✅ 区块提交成功", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
-	
+
 	// 添加事件触发日志跟踪
 	r.logger.Debug("🔔 区块提交完成，等待区块链事件触发状态广播", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
 
@@ -1062,18 +1068,20 @@ func (r *dposRuntime) produceBlock() error {
 	if r.config != nil {
 		delegateCount = r.config.DelegateCount
 	}
-	
+
 	// 计算期望的委托者索引用于验证
 	expectedDelegateIndex := blockNumber % delegateCount
-	
-	r.logger.Info("🔄 轮次更新完成", 
-		"newRound", r.currentRound, 
-		"newDelegateIndex", r.currentDelegateIndex, 
+
+	round, index = r.getRound()
+
+	r.logger.Info("🔄 轮次更新完成",
+		"newRound", round,
+		"newDelegateIndex", index,
 		"blockNumber", blockNumber,
 		"delegateCount", delegateCount,
 		"expectedDelegateIndex", expectedDelegateIndex,
 		"calculation", fmt.Sprintf("%d%%%d=%d", blockNumber, delegateCount, expectedDelegateIndex),
-		"isCorrect", r.currentDelegateIndex == expectedDelegateIndex,
+		"isCorrect", index == expectedDelegateIndex,
 		"roundCalculation", fmt.Sprintf("1+(%d-1)/%d=%d", blockNumber, delegateCount, 1+(blockNumber-1)/delegateCount))
 
 	return nil
@@ -1097,11 +1105,17 @@ func (r *dposRuntime) collectVotes() error {
 	return nil
 }
 
+func (r *dposRuntime) getRound() (uint64, uint64) {
+	r.rndmux.RLock()
+	defer r.rndmux.RUnlock()
+	return r.currentRound, r.currentDelegateIndex
+}
+
 // updateRound 更新轮次
 func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 	// 🆕 修复：统一使用区块号计算委托者索引，避免不一致
 	var currentBlockNumber uint64
-	
+
 	if len(blockNumber) > 0 {
 		// 优先使用传入的区块号
 		currentBlockNumber = blockNumber[0]
@@ -1125,7 +1139,10 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 			currentBlockNumber = 0
 		}
 	}
-	
+
+	r.rndmux.Lock()
+	defer r.rndmux.Unlock()
+
 	// 统一使用相同的计算公式
 	// 修复：使用 currentBlockNumber % delegateCount，与其他方法保持一致
 	if r.config != nil && r.config.DelegateCount > 0 {
@@ -1373,14 +1390,15 @@ func (r *dposRuntime) shouldProduceBlock() bool {
 		r.logger.Warn("无法获取当前区块头，跳过出块")
 		return false
 	}
-	
+
 	// 🆕 添加详细的验证者集合信息
+	_, index := r.getRound()
 	r.logger.Debug("🔍 shouldProduceBlock 详细检查",
 		"currentBlock", currentBlock.Number,
-		"currentDelegateIndex", r.currentDelegateIndex,
+		"currentDelegateIndex", index,
 		"delegateCount", r.config.DelegateCount,
 		"delegatesCount", len(r.delegates))
-	
+
 	// 打印当前验证者集合的详细信息
 	for i, delegate := range r.delegates {
 		r.logger.Debug("🔍 当前验证者集合",
@@ -1388,15 +1406,15 @@ func (r *dposRuntime) shouldProduceBlock() bool {
 			"address", delegate.Address.String(),
 			"votingPower", delegate.VotingPower.String(),
 			"isActive", delegate.IsActive,
-			"isCurrentDelegateIndex", i == int(r.currentDelegateIndex))
+			"isCurrentDelegateIndex", i == int(index))
 	}
-	
+
 	// 区块0：只有索引0的委托者出块
 	if currentBlock.Number == 0 {
-		shouldProduce := r.currentDelegateIndex == 0
+		shouldProduce := index == 0
 		r.logger.Info("🔍 检查区块0出块资格",
 			"currentBlock", currentBlock.Number,
-			"currentDelegateIndex", r.currentDelegateIndex,
+			"currentDelegateIndex", index,
 			"shouldProduce", shouldProduce,
 			"reason", func() string {
 				if shouldProduce {
@@ -1406,16 +1424,16 @@ func (r *dposRuntime) shouldProduceBlock() bool {
 			}())
 		return shouldProduce
 	}
-	
+
 	// 其他区块：按顺序出块
 	// 修复：使用 currentBlock.Number % delegateCount，避免区块0和1都让索引0出块
 	expectedDelegateIndex := currentBlock.Number % uint64(r.config.DelegateCount)
-	shouldProduce := r.currentDelegateIndex == expectedDelegateIndex
-	
+	shouldProduce := index == expectedDelegateIndex
+
 	// 🆕 添加更详细的出块资格检查
 	r.logger.Debug("🔍 检查出块资格",
 		"currentBlock", currentBlock.Number,
-		"currentDelegateIndex", r.currentDelegateIndex,
+		"currentDelegateIndex", index,
 		"expectedDelegateIndex", expectedDelegateIndex,
 		"delegateCount", r.config.DelegateCount,
 		"shouldProduce", shouldProduce,
@@ -1424,23 +1442,23 @@ func (r *dposRuntime) shouldProduceBlock() bool {
 			if shouldProduce {
 				return "当前委托者索引与期望索引匹配，应该出块"
 			}
-			return fmt.Sprintf("当前委托者索引(%d)与期望索引(%d)不匹配，不应该出块", r.currentDelegateIndex, expectedDelegateIndex)
+			return fmt.Sprintf("当前委托者索引(%d)与期望索引(%d)不匹配，不应该出块", index, expectedDelegateIndex)
 		}())
-	
+
 	// 🆕 添加当前委托者详细信息
-	if r.currentDelegateIndex < uint64(len(r.delegates)) {
-		currentDelegate := r.delegates[r.currentDelegateIndex]
+	if index < uint64(len(r.delegates)) {
+		currentDelegate := r.delegates[index]
 		r.logger.Debug("🔍 当前委托者详细信息",
-			"currentDelegateIndex", r.currentDelegateIndex,
+			"currentDelegateIndex", index,
 			"address", currentDelegate.Address.String(),
 			"votingPower", currentDelegate.VotingPower.String(),
 			"isActive", currentDelegate.IsActive)
 	} else {
 		r.logger.Warn("🔍 当前委托者索引超出范围",
-			"currentDelegateIndex", r.currentDelegateIndex,
+			"currentDelegateIndex", index,
 			"delegatesCount", len(r.delegates))
 	}
-	
+
 	return shouldProduce
 }
 
@@ -1450,11 +1468,11 @@ func (r *dposRuntime) calculateExpectedDelegateIndex() uint64 {
 	if currentBlock == nil {
 		return 0
 	}
-	
+
 	if currentBlock.Number == 0 {
 		return 0
 	}
-	
+
 	// 修复：使用 currentBlock.Number % delegateCount，与shouldProduceBlock保持一致
 	return currentBlock.Number % uint64(r.config.DelegateCount)
 }
@@ -1654,6 +1672,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	}
 
 	// 构建区块
+	round, _ := r.getRound()
 	block, err := builder.Build(func(h *types.Header) {
 		// 设置DPoS相关的区块头信息
 		h.Miner = keyAddr[:]
@@ -1663,7 +1682,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		extra := &Extra{
 			Committed: &Signature{}, // 添加空的Committed签名
 			Checkpoint: &CheckpointData{
-				BlockRound:            r.currentRound,
+				BlockRound:            round,
 				EpochNumber:           1,
 				CurrentValidatorsHash: types.Hash{},
 				NextValidatorsHash:    types.Hash{},
@@ -1697,7 +1716,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	}
 
 	checkpoint := &CheckpointData{
-		BlockRound:            r.currentRound,
+		BlockRound:            round,
 		EpochNumber:           1,
 		CurrentValidatorsHash: currentValidatorsHash,
 		NextValidatorsHash:    currentValidatorsHash, // 暂时使用相同的哈希
@@ -1718,7 +1737,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	if checkpointHash == (types.Hash{}) {
 		r.logger.Error("checkpointHash计算结果为全零，使用备用哈希")
 		// 使用备用哈希：区块哈希 + 当前轮次
-		backupHash := types.BytesToHash(append(block.Block.Header.Hash.Bytes(), []byte(fmt.Sprintf("_%d", r.currentRound))...))
+		backupHash := types.BytesToHash(append(block.Block.Header.Hash.Bytes(), []byte(fmt.Sprintf("_%d", round))...))
 		checkpointHash = backupHash
 	}
 
@@ -1731,7 +1750,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	// 添加调试日志
 	r.logger.Debug("计算checkpointHash完成",
 		"blockNumber", block.Block.Number(),
-		"currentRound", r.currentRound,
+		"currentRound", round,
 		"checkpointHash", checkpointHash.String(),
 		"fixedBlockHash", fixedBlockHash.String())
 
@@ -1795,8 +1814,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	if len(signatures) > 0 {
 		r.logger.Debug("开始聚合签名",
 			"signatureCount", len(signatures))
-
-
 
 		// 🆕 修复：按位图索引顺序聚合签名，确保与验证时公钥顺序一致
 		blsSignatures := make(bls.Signatures, 0, len(signatures))
@@ -2012,7 +2029,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				VotingPower: v.VotingPower,
 				IsActive:    v.IsActive,
 			})
-			
+
 			// 记录验证者是否参与签名，用于调试
 			if signatureBitmap.IsSet(uint64(i)) {
 				if sigBytes, exists := bitmapToSignature[uint64(i)]; exists && len(sigBytes) > 0 {
@@ -2673,10 +2690,10 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 			d.processedMutex.Unlock()
 			d.processedMutex.RLock()
 		}
-		
+
 		_, exists := d.processedBlocks.Get(header.Hash)
 		d.processedMutex.RUnlock()
-		
+
 		if exists {
 			d.logger.Debug("block already processed, skipping", "blockNumber", header.Number, "blockHash", header.Hash)
 			continue
@@ -2703,30 +2720,30 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		if blockMiner != keyAddr {
 			// 接收其他节点的区块，需要更新轮次
 			if d.runtime != nil {
-				d.runtime.lock.Lock()
-				oldIndex := d.runtime.currentDelegateIndex
-				oldRound := d.runtime.currentRound
+				oldRound, oldIndex := d.runtime.getRound()
 
 				// 🆕 使用区块头部的区块号，确保一致性
 				d.runtime.updateRound(header.Number)
 
-				d.runtime.lock.Unlock()
+				round, index := d.runtime.getRound()
 
 				d.logger.Info("🔄 updated round state for block from another node",
 					"blockNumber", header.Number,
 					"blockMiner", blockMiner.String(),
 					"keyAddr", keyAddr.String(),
 					"oldRound", oldRound,
-					"newRound", d.runtime.currentRound,
+					"newRound", round,
 					"oldDelegateIndex", oldIndex,
-					"newDelegateIndex", d.runtime.currentDelegateIndex)
+					"newDelegateIndex", index)
 			}
 		} else {
+			round, index := d.runtime.getRound()
+
 			// 自己生产的区块，轮次已经在produceBlock中更新过了
 			d.logger.Debug("processed our own block (round already updated in produceBlock)",
 				"blockNumber", header.Number,
-				"currentRound", d.runtime.currentRound,
-				"currentDelegateIndex", d.runtime.currentDelegateIndex)
+				"currentRound", round,
+				"currentDelegateIndex", index)
 		}
 	}
 
@@ -2858,7 +2875,7 @@ func (d *DPoS) Start() error {
 			if isDelegate {
 				d.txPool.SetSealing(true)
 				d.logger.Info("transaction pool sealing state set to true (node is delegate)")
-				
+
 				// 🆕 只有受托人节点才启用状态广播
 				// 注意：需要直接访问syncPeerClient，但当前syncer接口没有暴露此方法
 				// 暂时注释掉，需要修改syncer接口或使用其他方式
@@ -2867,7 +2884,7 @@ func (d *DPoS) Start() error {
 			} else {
 				d.txPool.SetSealing(false)
 				d.logger.Info("transaction pool sealing state set to false (node is not delegate)")
-				
+
 				// 🆕 非受托人节点禁用状态广播
 				// 注意：需要直接访问syncPeerClient，但当前syncer接口没有暴露此方法
 				// 暂时注释掉，需要修改syncer接口或使用其他方式
@@ -4256,7 +4273,7 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 						"newIndex", newIndex,
 						"blockNumber", currentBlock.Number,
 						"delegateCount", d.runtime.config.DelegateCount)
-					
+
 					// 🆕 关键修复：同步重新排序后的验证者集合到runtime
 					d.logger.Info("🔄 同步重新排序后的验证者集合到runtime")
 					d.runtime.delegates = make(validator.AccountSet, len(d.delegates))
@@ -4628,7 +4645,7 @@ func (d *DPoS) cacheCleanupWorker() {
 	// 改为1倍TTL，增加清理频率
 	ticker := time.NewTicker(d.cache.cacheTTL) // 从 * 2 改为直接使用
 	defer ticker.Stop()
-	
+
 	// 添加内存压力检测
 	memoryTicker := time.NewTicker(30 * time.Second)
 	defer memoryTicker.Stop()
@@ -4856,14 +4873,14 @@ func (d *DPoS) updateDelegateVotingPower(delegate types.Address, amount *big.Int
 			oldPower := new(big.Int).Set(del.VotingPower)
 			oldActive := del.IsActive
 			del.VotingPower = new(big.Int).Add(del.VotingPower, amount)
-			
+
 			// 🆕 修复：根据新的投票权重更新活跃状态
 			if del.VotingPower.Cmp(big.NewInt(0)) > 0 {
 				del.IsActive = true
 			} else {
 				del.IsActive = false
 			}
-			
+
 			d.logger.Debug("✅ Updated existing delegate voting power",
 				"delegate", delegate.String(),
 				"delegateIndex", i,
@@ -5073,16 +5090,16 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 				"hasBlsKey", delegate.BlsKey != nil)
 		}
 	}
-	
+
 	// 检查网络中的活跃验证者数量
 	activeValidators := r.getActiveValidatorsCount()
-	
+
 	r.logger.Debug("📊 活跃验证者统计",
 		"activeCount", activeCount,
 		"totalDelegates", len(r.delegates),
 		"activeValidators", activeValidators,
 		"note", "activeCount是本地统计，activeValidators是网络方法返回")
-	
+
 	// 计算真正活跃的验证者数量（有足够stake且IsActive=true）
 	expectedSignatures := activeValidators // 只计算活跃的验证者
 
@@ -5099,10 +5116,12 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 			"activeValidators", activeValidators,
 			"minRequired", minRequired,
 			"totalDelegates", len(r.delegates))
-		
+
 		// 返回错误，让上层重试机制处理
 		return nil, nil, fmt.Errorf("insufficient validators: got %d, need %d", activeValidators, minRequired)
 	}
+
+	round, _ := r.getRound()
 
 	// 1. 广播签名请求给其他验证者
 	// 创建protobuf签名请求消息
@@ -5110,7 +5129,7 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 	protoRequest.BlockNumber = block.Block.Number()
 	protoRequest.BlockHash = block.Block.Header.Hash.Bytes()
 	protoRequest.CheckpointHash = checkpointHash.Bytes()
-	protoRequest.Round = r.currentRound
+	protoRequest.Round = round
 	protoRequest.Proposer = types.Address(r.config.Key.Address()).Bytes()
 	protoRequest.Timestamp = uint64(time.Now().Unix())
 
@@ -5636,7 +5655,7 @@ func (r *dposRuntime) getActiveValidatorsCount() int {
 		"connectedPeers", connectedPeers,
 		"activeValidators", activeValidators,
 		"willReturnConnectedPeers", connectedPeers < activeValidators)
-	
+
 	if connectedPeers < activeValidators {
 		// 🆕 修复：如果完全没有网络连接，返回0触发等待网络改善
 		if connectedPeers == 0 {
@@ -5645,7 +5664,7 @@ func (r *dposRuntime) getActiveValidatorsCount() int {
 				"connectedPeers", connectedPeers)
 			return 0
 		}
-		
+
 		// 如果有部分连接，返回活跃验证者数量（当前节点可参与签名）
 		r.logger.Warn("网络连接良好返回活跃验证者数量（当前节点可参与签名）",
 			"activeValidators", activeValidators,
@@ -5806,7 +5825,7 @@ func (r *dposRuntime) waitForNetworkGrowth(checkpointHash types.Hash, proposerAd
 		case <-ticker.C:
 			activeValidators := r.getActiveValidatorsCount()
 			minRequired := r.calculateMinRequiredSignatures()
-			
+
 			r.logger.Info("检查网络状态",
 				"activeValidators", activeValidators,
 				"minRequired", minRequired,
@@ -5818,42 +5837,44 @@ func (r *dposRuntime) waitForNetworkGrowth(checkpointHash types.Hash, proposerAd
 					"activeValidators", activeValidators,
 					"minRequired", minRequired,
 					"checkpointHash", checkpointHash.String())
-				
+
 				// 重新启动签名收集流程
 				// 使用更短的超时时间，避免长时间等待
 				retryTimeout := 30 * time.Second
 				retryCtx, cancel := context.WithTimeout(context.Background(), retryTimeout)
 				defer cancel()
-				
+
 				// 创建新的签名收集通道
 				signatureCh := make(chan *SignatureResponse, len(r.delegates))
-				
+
 				// 重新广播签名请求
+				round, _ := r.getRound()
+
 				currentBlockNumber := r.config.blockchain.CurrentHeader().Number + 1
 				protoRequest := &dposProto.SignatureRequest{
 					BlockNumber:    currentBlockNumber,
 					CheckpointHash: checkpointHash.Bytes(),
-					Round:         r.currentRound,
-					Proposer:      proposerAddr.Bytes(),
-					Timestamp:     uint64(time.Now().Unix()),
+					Round:          round,
+					Proposer:       proposerAddr.Bytes(),
+					Timestamp:      uint64(time.Now().Unix()),
 				}
-				
+
 				if err := r.broadcastSignatureRequest(protoRequest); err != nil {
 					r.logger.Error("重新广播签名请求失败", "error", err)
 					return nil, nil, fmt.Errorf("failed to rebroadcast signature request: %w", err)
 				}
-				
+
 				// 等待签名收集
 				signatures, bitmap, err := r.waitForSignaturesWithContext(retryCtx, signatureCh, minRequired)
 				if err != nil {
 					r.logger.Error("重新收集签名失败", "error", err)
 					return nil, nil, fmt.Errorf("failed to collect signatures after network growth: %w", err)
 				}
-				
+
 				r.logger.Info("网络增长后签名收集成功",
 					"signaturesCount", len(signatures),
 					"bitmapLength", len(bitmap))
-				
+
 				return signatures, bitmap, nil
 			}
 
@@ -5869,27 +5890,27 @@ func (r *dposRuntime) waitForNetworkGrowth(checkpointHash types.Hash, proposerAd
 func (r *dposRuntime) waitForSignaturesWithContext(ctx context.Context, signatureCh chan *SignatureResponse, minRequired int) ([][]byte, bitmap.Bitmap, error) {
 	collectedSignatures := make(map[types.Address][]byte)
 	signatureBitmap := bitmap.Bitmap{}
-	
+
 	// 设置收集超时
 	collectTimeout := 20 * time.Second
 	timeoutCh := time.After(collectTimeout)
-	
+
 	for {
 		select {
 		case response := <-signatureCh:
 			if response == nil {
 				continue
 			}
-			
+
 			// 验证签名响应
 			if err := r.validateSignatureResponse(response); err != nil {
 				r.logger.Warn("签名响应验证失败", "validator", response.ValidatorAddr.String(), "error", err)
 				continue
 			}
-			
+
 			// 收集签名
 			collectedSignatures[response.ValidatorAddr] = response.Signature
-			
+
 			// 设置位图
 			for i, delegate := range r.delegates {
 				if delegate.Address == response.ValidatorAddr {
@@ -5897,12 +5918,12 @@ func (r *dposRuntime) waitForSignaturesWithContext(ctx context.Context, signatur
 					break
 				}
 			}
-			
+
 			r.logger.Info("收集到签名",
 				"validator", response.ValidatorAddr.String(),
 				"collectedCount", len(collectedSignatures),
 				"requiredCount", minRequired)
-			
+
 			// 检查是否收集到足够的签名
 			if len(collectedSignatures) >= minRequired {
 				// 按位图顺序排列签名
@@ -5914,15 +5935,15 @@ func (r *dposRuntime) waitForSignaturesWithContext(ctx context.Context, signatur
 						}
 					}
 				}
-				
+
 				return signatures, signatureBitmap, nil
 			}
-			
+
 		case <-timeoutCh:
 			r.logger.Warn("签名收集超时",
 				"collected", len(collectedSignatures),
 				"required", minRequired)
-			
+
 			if len(collectedSignatures) >= minRequired {
 				// 即使超时，如果收集到足够的签名就返回
 				signatures := make([][]byte, 0, len(collectedSignatures))
@@ -5935,9 +5956,9 @@ func (r *dposRuntime) waitForSignaturesWithContext(ctx context.Context, signatur
 				}
 				return signatures, signatureBitmap, nil
 			}
-			
+
 			return nil, nil, fmt.Errorf("signature collection timeout: got %d, need %d", len(collectedSignatures), minRequired)
-			
+
 		case <-ctx.Done():
 			r.logger.Warn("签名收集被取消", "error", ctx.Err())
 			return nil, nil, fmt.Errorf("signature collection cancelled: %w", ctx.Err())
@@ -6532,7 +6553,8 @@ func (r *dposRuntime) handleSignatureRequestMessage(obj interface{}, from peer.I
 		// 如果委托者列表为空，使用默认值
 		delegateCount = 4 // 默认4个委托者
 	}
-	currentBlockNumber := r.backend.GetCurrentRound()*delegateCount + r.currentDelegateIndex
+	_, index := r.getRound()
+	currentBlockNumber := r.backend.GetCurrentRound()*delegateCount + index
 
 	// 检查是否是过期请求（区块号差距过大）
 	if currentBlockNumber > request.BlockNumber+10 {
