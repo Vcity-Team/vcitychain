@@ -179,12 +179,18 @@ func (m *ForkManager) GetValidators(height uint64) (validators.Validators, error
 		return nil, ErrForkNotFound
 	}
 
+	// 安全地处理To字段，可能为nil
+	toValue := "nil"
+	if fork.To != nil {
+		toValue = fmt.Sprintf("%d", fork.To.Value)
+	}
+	
 	m.logger.Info("Fork found", 
 		"height", height,
 		"fork_type", fork.Type,
 		"validator_type", fork.ValidatorType,
 		"from", fork.From.Value,
-		"to", fork.To.Value)
+		"to", toValue)
 
 	set := m.getValidatorStoreByIBFTFork(fork)
 	if set == nil {
