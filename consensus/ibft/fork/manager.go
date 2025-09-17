@@ -2,6 +2,7 @@ package fork
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/Vcity-Team/vcitychain/consensus/ibft/hook"
 	"github.com/Vcity-Team/vcitychain/consensus/ibft/signer"
@@ -170,21 +171,65 @@ func (m *ForkManager) GetValidatorStore(height uint64) (ValidatorStore, error) {
 
 // GetValidators returns validators at specified height
 func (m *ForkManager) GetValidators(height uint64) (validators.Validators, error) {
+	m.logger.Info("ForkManager.GetValidators called", "height", height)
+	
 	fork := m.forks.getFork(height)
 	if fork == nil {
+		m.logger.Error("Fork not found for height", "height", height)
 		return nil, ErrForkNotFound
 	}
 
+	m.logger.Info("Fork found", 
+		"height", height,
+		"fork_type", fork.Type,
+		"validator_type", fork.ValidatorType,
+		"from", fork.From.Value,
+		"to", fork.To.Value)
+
 	set := m.getValidatorStoreByIBFTFork(fork)
 	if set == nil {
+		m.logger.Error("Validator store not found", 
+			"height", height,
+			"fork_type", fork.Type,
+			"source_type", ibftTypesToSourceType[fork.Type])
 		return nil, ErrValidatorStoreNotFound
 	}
 
-	return set.GetValidatorsAtHeight(
+	m.logger.Info("Validator store found", 
+		"height", height,
+		"store_type", fmt.Sprintf("%T", set),
+		"epoch_size", m.epochSize,
+		"fork_from", fork.From.Value)
+
+	validators, err := set.GetValidatorsAtHeight(
 		height,
 		m.epochSize,
 		fork.From.Value,
 	)
+	
+	if err != nil {
+		m.logger.Error("Failed to get validators at height", 
+			"height", height,
+			"error", err)
+		return nil, err
+	}
+
+	m.logger.Info("Validators retrieved successfully", 
+		"height", height,
+		"validator_count", validators.Len(),
+		"validator_type", validators.Type())
+	
+	// 打印所有验证器地址
+	for i := 0; i < validators.Len(); i++ {
+		validator := validators.At(uint64(i))
+		m.logger.Info("Validator details", 
+			"height", height,
+			"index", i,
+			"address", validator.Addr().String(),
+			"type", validator.Type())
+	}
+
+	return validators, nil
 }
 
 // GetHooks returns a hooks at specified height

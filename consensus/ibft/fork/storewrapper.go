@@ -3,6 +3,7 @@ package fork
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 
 	"github.com/Vcity-Team/vcitychain/consensus/ibft/signer"
@@ -85,9 +86,27 @@ func (w *SnapshotValidatorStoreWrapper) Close() error {
 }
 
 // GetValidatorsAtHeight returns validators at the specific height
-func (w *SnapshotValidatorStoreWrapper) GetValidatorsAtHeight(height, _, _ uint64) (validators.Validators, error) {
+func (w *SnapshotValidatorStoreWrapper) GetValidatorsAtHeight(height, epochSize, forkFrom uint64) (validators.Validators, error) {
+	fmt.Printf("[DEBUG] SnapshotValidatorStoreWrapper.GetValidatorsAtHeight called\n")
+	fmt.Printf("[DEBUG] Parameters: height=%d, epochSize=%d, forkFrom=%d\n", height, epochSize, forkFrom)
+	
 	// the biggest height of blocks that have been processed before the given height
-	return w.GetValidatorsByHeight(height - 1)
+	actualHeight := height - 1
+	fmt.Printf("[DEBUG] Getting validators for actual height: %d\n", actualHeight)
+	
+	validators, err := w.GetValidatorsByHeight(actualHeight)
+	if err != nil {
+		fmt.Printf("[ERROR] Failed to get validators by height: %v\n", err)
+		return nil, err
+	}
+	
+	fmt.Printf("[DEBUG] SnapshotValidatorStore returned %d validators\n", validators.Len())
+	for i := 0; i < validators.Len(); i++ {
+		validator := validators.At(uint64(i))
+		fmt.Printf("[DEBUG] SnapshotValidator[%d]: %s (type: %s)\n", i, validator.Addr().String(), validator.Type())
+	}
+	
+	return validators, nil
 }
 
 // NewSnapshotValidatorStoreWrapper loads data from local storage and creates *SnapshotValidatorStoreWrapper

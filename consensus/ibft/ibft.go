@@ -595,6 +595,23 @@ func (i *backendIBFT) updateCurrentModules(height uint64) error {
 	i.currentValidators = validators
 	i.currentHooks = hooks
 
+	// 添加验证器集合状态日志
+	i.logger.Info("Current modules updated", 
+		"height", height,
+		"validator_count", validators.Len(),
+		"validator_type", validators.Type(),
+		"signer_address", signer.Address().String())
+	
+	// 打印当前验证器集合
+	for j := 0; j < validators.Len(); j++ {
+		validator := validators.At(uint64(j))
+		i.logger.Info("Current validator", 
+			"height", height,
+			"index", j,
+			"address", validator.Addr().String(),
+			"type", validator.Type())
+	}
+
 	i.logFork(lastSigner, signer)
 
 	return nil
@@ -689,10 +706,27 @@ func verifyProposerSeal(
 		return err
 	}
 
-	if !validators.Includes(proposer) {
+	// 添加详细的调试日志
+	fmt.Printf("[DEBUG] verifyProposerSeal - Block %d\n", header.Number)
+	fmt.Printf("[DEBUG] Proposer address: %s\n", proposer.String())
+	fmt.Printf("[DEBUG] Validators count: %d\n", validators.Len())
+	fmt.Printf("[DEBUG] Validators type: %s\n", validators.Type())
+	
+	// 打印所有验证器地址
+	for i := 0; i < validators.Len(); i++ {
+		validator := validators.At(uint64(i))
+		fmt.Printf("[DEBUG] Validator[%d]: %s (type: %s)\n", i, validator.Addr().String(), validator.Type())
+	}
+
+	isIncluded := validators.Includes(proposer)
+	fmt.Printf("[DEBUG] Proposer in validators: %t\n", isIncluded)
+
+	if !isIncluded {
+		fmt.Printf("[ERROR] Proposer seal by non-validator! Proposer: %s\n", proposer.String())
 		return ErrProposerSealByNonValidator
 	}
 
+	fmt.Printf("[DEBUG] Proposer seal verification passed\n")
 	return nil
 }
 
