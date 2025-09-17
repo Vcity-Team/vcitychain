@@ -113,12 +113,16 @@ func NewForkManager(
 
 // Initialize initializes ForkManager on initialization phase
 func (m *ForkManager) Initialize() error {
+	m.logger.Info("ForkManager.Initialize called")
+	
 	if err := m.initializeValidatorStores(); err != nil {
+		m.logger.Error("Failed to initialize validator stores", "error", err)
 		return err
 	}
 
 	m.initializeHooksRegisters()
 
+	m.logger.Info("ForkManager.Initialize completed successfully")
 	return nil
 }
 
@@ -301,13 +305,24 @@ func (m *ForkManager) initializeKeyManager(valType validators.ValidatorType) err
 
 // initializeValidatorStores initializes all validator sets based on Fork configuration
 func (m *ForkManager) initializeValidatorStores() error {
+	m.logger.Info("initializeValidatorStores called", "forks_count", len(m.forks))
+	
 	for _, fork := range m.forks {
 		sourceType := ibftTypesToSourceType[fork.Type]
+		m.logger.Info("Initializing validator store for fork", 
+			"fork_type", fork.Type,
+			"source_type", sourceType)
+		
 		if err := m.initializeValidatorStore(sourceType); err != nil {
+			m.logger.Error("Failed to initialize validator store", 
+				"fork_type", fork.Type,
+				"source_type", sourceType,
+				"error", err)
 			return err
 		}
 	}
 
+	m.logger.Info("initializeValidatorStores completed successfully")
 	return nil
 }
 
@@ -418,45 +433,67 @@ func (m *ForkManager) parseValidatorsFromExtraData(extraData []byte) (validators
 		return nil, fmt.Errorf("extraData too short: %d bytes", len(extraData))
 	}
 	
-	// Extract the RLP-encoded IstanbulExtra structure
-	// extraData format: [vanity(32)] + [RLP(IstanbulExtra)] + [seal(65)]
-	istanbulExtraData := extraData[32 : len(extraData)-65]
+	// Extract the RLP-encoded validator list
+	// extraData format: [vanity(32)] + [RLP(validator_list)] + [seal(65)]
+	validatorData := extraData[32 : len(extraData)-65]
 	
-	m.logger.Info("Extracted IstanbulExtra data", 
-		"istanbulExtraData_length", len(istanbulExtraData),
-		"istanbulExtraData_hex", fmt.Sprintf("0x%x", istanbulExtraData))
+	m.logger.Info("Extracted validator data", 
+		"validatorData_length", len(validatorData),
+		"validatorData_hex", fmt.Sprintf("0x%x", validatorData))
 	
-	// Parse IstanbulExtra structure
-	istanbulExtra := &signer.IstanbulExtra{}
+	// Create ECDSA validators
+	validatorList := make([]*validators.ECDSAValidator, 0)
 	
-	// Create a temporary validator set to parse the validators
-	// We need to determine the validator type from the genesis config
-	// For now, assume ECDSA validators
-	tempValidators := validators.NewECDSAValidatorSet()
-	istanbulExtra.Validators = tempValidators
+	// Parse RLP data using types.UnmarshalRlp
+	err := types.UnmarshalRlp(func(p *fastrlp.Parser, v *fastrlp.Value) error {
+		// The validator list should be an array
+		elems, err := v.GetElems()
+		if err != nil {
+			return fmt.Errorf("expected array of validators: %w", err)
+		}
+		
+		m.logger.Info("Found validator list in RLP", "validator_count", len(elems))
+		
+		// Handle nested RLP structure: [list_of_addresses]
+		if len(elems) > 0 {
+			// The first element should be another list containing the addresses
+			addressList, err := elems[0].GetElems()
+			if err != nil {
+				return fmt.Errorf("expected address list: %w", err)
+			}
+			
+			m.logger.Info("Found address list in nested RLP", "address_count", len(addressList))
+			
+			for i, addrElem := range addressList {
+				// Get the address bytes
+				var addrBytes []byte
+				addrBytes, err := addrElem.GetBytes(addrBytes)
+				if err != nil {
+					return fmt.Errorf("failed to get address bytes for validator %d: %w", i, err)
+				}
+				
+				// Convert to address
+				addr := types.BytesToAddress(addrBytes)
+				validator := validators.NewECDSAValidator(addr)
+				validatorList = append(validatorList, validator)
+				
+				m.logger.Info("Parsed validator from extraData", 
+					"index", i,
+					"address", addr.String())
+			}
+		}
+		
+		return nil
+	}, validatorData)
 	
-	// Parse the IstanbulExtra structure
-	err := types.UnmarshalRlp(istanbulExtra.UnmarshalRLPFrom, istanbulExtraData)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse IstanbulExtra: %w", err)
+		return nil, fmt.Errorf("failed to parse RLP data: %w", err)
 	}
 	
-	m.logger.Info("Successfully parsed IstanbulExtra", 
-		"validators_count", istanbulExtra.Validators.Len(),
-		"validators_type", istanbulExtra.Validators.Type(),
-		"has_proposer_seal", len(istanbulExtra.ProposerSeal) > 0,
-		"committed_seals_count", istanbulExtra.CommittedSeals.Num())
+	m.logger.Info("Successfully parsed validators from extraData", 
+		"validator_count", len(validatorList))
 	
-	// Print all validators
-	for i := 0; i < istanbulExtra.Validators.Len(); i++ {
-		validator := istanbulExtra.Validators.At(uint64(i))
-		m.logger.Info("Parsed validator from extraData", 
-			"index", i,
-			"address", validator.Addr().String(),
-			"type", validator.Type())
-	}
-	
-	return istanbulExtra.Validators, nil
+	return validators.NewECDSAValidatorSet(validatorList...), nil
 }
 
 // initializeHooksRegisters initialize all HookRegisters to be used
