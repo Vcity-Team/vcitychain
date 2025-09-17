@@ -3,7 +3,6 @@ package fork
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"path/filepath"
 
 	"github.com/Vcity-Team/vcitychain/consensus/ibft/signer"

@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -456,7 +455,7 @@ func (m *ForkManager) parseValidatorsFromExtraData(extraData []byte) (validators
 		// 找到验证者列表
 		
 		// Process each element
-		for i, elem := range elems {
+		for _, elem := range elems {
 			// Try to get bytes
 			if bytes, err := elem.GetBytes(nil); err == nil {
 				// If it's 20 bytes, it might be an address
@@ -472,7 +471,7 @@ func (m *ForkManager) parseValidatorsFromExtraData(extraData []byte) (validators
 				if subElems, err := elem.GetElems(); err == nil {
 					// 找到子列表
 					
-					for j, subElem := range subElems {
+					for _, subElem := range subElems {
 						if subBytes, err := subElem.GetBytes(nil); err == nil {
 							// If it's 20 bytes, it might be an address
 							if len(subBytes) == 20 {
@@ -619,7 +618,7 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 		}
 		
 		// 🆕 暂时使用固定值作为votingPower，实际实现需要查询VCITY余额
-		votingPower := big.NewInt(1000000000000000000) // 1 VCITY = 1e18 wei
+		// votingPower := big.NewInt(1000000000000000000) // 1 VCITY = 1e18 wei
 		
 		// 创建DPoS验证者
 		dposValidator := validators.NewBLSValidator(address, blsPublicKey)
