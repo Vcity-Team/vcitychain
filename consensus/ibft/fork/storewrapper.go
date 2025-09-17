@@ -94,25 +94,25 @@ func (w *SnapshotValidatorStoreWrapper) GetValidatorsAtHeight(height, epochSize,
 	// This is a temporary fix - in a full implementation, this would look up snapshots
 	
 	// Try to get validators from the underlying snapshot store
-	validators, err := w.GetValidatorsByHeight(height - 1)
+	validatorSet, err := w.GetValidatorsByHeight(height - 1)
 	if err != nil {
 		fmt.Printf("[ERROR] Failed to get validators by height: %v\n", err)
 		return nil, err
 	}
 	
 	// If no validators found, return empty ECDSA validator set
-	if validators == nil || validators.Len() == 0 {
+	if validatorSet == nil || validatorSet.Len() == 0 {
 		fmt.Printf("[WARN] No validators found, returning empty ECDSA validator set\n")
 		return validators.NewECDSAValidatorSet(), nil
 	}
 	
-	fmt.Printf("[DEBUG] SnapshotValidatorStore returned %d validators\n", validators.Len())
-	for i := 0; i < validators.Len(); i++ {
-		validator := validators.At(uint64(i))
+	fmt.Printf("[DEBUG] SnapshotValidatorStore returned %d validators\n", validatorSet.Len())
+	for i := 0; i < validatorSet.Len(); i++ {
+		validator := validatorSet.At(uint64(i))
 		fmt.Printf("[DEBUG] SnapshotValidator[%d]: %s (type: %s)\n", i, validator.Addr().String(), validator.Type())
 	}
 	
-	return validators, nil
+	return validatorSet, nil
 }
 
 // NewSnapshotValidatorStoreWrapper loads data from local storage and creates *SnapshotValidatorStoreWrapper
