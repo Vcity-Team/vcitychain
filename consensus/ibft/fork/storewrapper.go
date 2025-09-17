@@ -40,7 +40,8 @@ func isJSONSyntaxError(err error) bool {
 // in order to add initialization and closer process with side effect
 type SnapshotValidatorStoreWrapper struct {
 	*snapshot.SnapshotValidatorStore
-	dirPath string
+	dirPath           string
+	initialValidators validators.Validators
 }
 
 // SourceType returns the type of validator source
@@ -100,8 +101,12 @@ func (w *SnapshotValidatorStoreWrapper) GetValidatorsAtHeight(height, epochSize,
 		return nil, err
 	}
 	
-	// If no validators found, return empty ECDSA validator set
+	// If no validators found, use initial validators from genesis
 	if validatorSet == nil || validatorSet.Len() == 0 {
+		if w.initialValidators != nil && w.initialValidators.Len() > 0 {
+			fmt.Printf("[INFO] Using initial validators from genesis: %d validators\n", w.initialValidators.Len())
+			return w.initialValidators, nil
+		}
 		fmt.Printf("[WARN] No validators found, returning empty ECDSA validator set\n")
 		return validators.NewECDSAValidatorSet(), nil
 	}
@@ -122,6 +127,7 @@ func NewSnapshotValidatorStoreWrapper(
 	getSigner func(uint64) (signer.Signer, error),
 	dirPath string,
 	epochSize uint64,
+	initialValidators validators.Validators,
 ) (*SnapshotValidatorStoreWrapper, error) {
 	var (
 		snapshotMetadataPath = filepath.Join(dirPath, snapshotMetadataFilename)
@@ -170,6 +176,7 @@ func NewSnapshotValidatorStoreWrapper(
 	return &SnapshotValidatorStoreWrapper{
 		SnapshotValidatorStore: snapshotStore,
 		dirPath:                dirPath,
+		initialValidators:      initialValidators,
 	}, nil
 }
 

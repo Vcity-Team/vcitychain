@@ -324,12 +324,22 @@ func (m *ForkManager) initializeValidatorStore(setType store.SourceType) error {
 
 	switch setType {
 	case store.Snapshot:
+		// Get validators from the first PoA fork
+		var initialValidators validators.Validators
+		for _, fork := range m.forks {
+			if fork.Type == PoA && fork.Validators != nil {
+				initialValidators = fork.Validators
+				break
+			}
+		}
+		
 		valStore, err = NewSnapshotValidatorStoreWrapper(
 			m.logger,
 			m.blockchain,
 			m.GetSigner,
 			m.filePath,
 			m.epochSize,
+			initialValidators,
 		)
 	case store.Contract:
 		valStore, err = NewContractValidatorStoreWrapper(
