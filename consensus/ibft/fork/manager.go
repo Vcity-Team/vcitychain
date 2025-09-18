@@ -131,15 +131,15 @@ func NewForkManager(
 		fm.logger.Info("Genesis extraData loaded", "length", len(fm.genesisExtraData))
 	}
 
-	// 🆕 设置共识切换高度（从配置中读取，如果没有则使用默认值1000）
+	// 🆕 设置共识切换高度（从配置中读取，如果没有则使用0表示不切换）
 	if switchHeight, ok := ibftConfig["consensusSwitchHeight"]; ok {
 		if height, ok := switchHeight.(float64); ok {
 			fm.consensusSwitchHeight = uint64(height)
 		} else {
-			fm.consensusSwitchHeight = 1000 // 默认值
+			fm.consensusSwitchHeight = 0 // 默认值0表示不切换
 		}
 	} else {
-		fm.consensusSwitchHeight = 1000 // 默认值
+		fm.consensusSwitchHeight = 0 // 默认值0表示不切换
 	}
 	fm.logger.Info("Consensus switch height set", "height", fm.consensusSwitchHeight)
 
@@ -216,8 +216,8 @@ func (m *ForkManager) GetValidatorStore(height uint64) (ValidatorStore, error) {
 
 // GetValidators returns validators at specified height
 func (m *ForkManager) GetValidators(height uint64) (validators.Validators, error) {
-	// 🆕 检查是否需要切换到DPoS
-	if height >= m.consensusSwitchHeight {
+	// 🆕 检查是否需要切换到DPoS（0表示不进行切换）
+	if m.consensusSwitchHeight > 0 && height >= m.consensusSwitchHeight {
 		// 只在真正切换时打印一次日志
 		if !m.hasSwitchedToDPoS {
 			m.logger.Info("🚨 共识切换到DPoS触发",

@@ -253,8 +253,8 @@ func setFlags(cmd *cobra.Command) {
 	cmd.Flags().Uint64Var(
 		&params.consensusSwitchHeight,
 		consensusSwitchHeightFlag,
-		1000, // 默认值
-		"the block height at which to switch from IBFT to DPoS consensus",
+		0, // 默认值0表示不进行共识切换
+		"the block height at which to switch from IBFT to DPoS consensus (0 means no switch)",
 	)
 
 	// 🆕 新增：DPoS验证者数量参数
