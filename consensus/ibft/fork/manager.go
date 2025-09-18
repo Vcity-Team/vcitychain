@@ -84,11 +84,6 @@ type ForkManager struct {
 	genesisExtraData      []byte // 创世块extraData
 	hasSwitchedToDPoS     bool   // 是否已经切换到DPoS（避免重复日志）
 	lastConsensusFailure  time.Time // 上次共识失败时间（用于延迟重试）
-	
-	// 🆕 异步重试机制
-	retryTicker           *time.Ticker // 重试定时器
-	retryStopCh           chan struct{} // 停止重试信号
-	isRetrying            bool         // 是否正在重试
 
 	// submodule lookup
 	keyManagers     map[validators.ValidatorType]signer.KeyManager
@@ -170,9 +165,6 @@ func (m *ForkManager) Initialize() error {
 
 // Close calls termination process of submodules
 func (m *ForkManager) Close() error {
-	// 停止异步重试机制
-	m.stopAsyncRetry()
-	
 	for _, store := range m.validatorStores {
 		if err := store.Close(); err != nil {
 			return err
@@ -737,7 +729,7 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 	// 如果第一次检查没有找到验证者，记录警告但不阻塞
 	
 	if validValidatorCount == 0 {
-		m.logger.Warn("⚠️ 没有验证者满足DPoS质押要求，返回空验证者集合", 
+		m.logger.Error("❌ 没有验证者满足DPoS质押要求，程序退出", 
 			"height", height,
 			"totalCandidates", ibftValidators.Len(),
 			"minStakeAmount", minStakeAmount.String())
@@ -745,12 +737,8 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 		// 记录共识失败时间
 		m.lastConsensusFailure = time.Now()
 		
-		// 启动异步重试机制
-		m.startAsyncRetry(height)
-		
-		// 返回空的验证者集合，避免阻塞RPC服务
-		// 共识将暂停，等待验证者满足质押要求
-		return validators.NewValidatorSet(validators.ECDSAValidatorType), nil
+		// 程序直接退出
+		os.Exit(1)
 	}
 	
 	if validValidatorCount < 2 {
@@ -763,129 +751,3 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 	return validatorSet, nil
 }
 
-// 🆕 启动异步重试机制
-func (m *ForkManager) startAsyncRetry(height uint64) {
-	// 如果已经在重试，不重复启动
-	if m.isRetrying {
-		return
-	}
-	
-	m.isRetrying = true
-	m.retryStopCh = make(chan struct{})
-	m.retryTicker = time.NewTicker(10 * time.Second) // 每10秒重试一次
-	
-	m.logger.Info("🔄 启动异步重试机制", 
-		"height", height,
-		"retryInterval", "10s")
-	
-	go func() {
-		defer func() {
-			m.isRetrying = false
-			m.retryTicker.Stop()
-			m.logger.Info("🔄 异步重试机制已停止")
-		}()
-		
-		for {
-			select {
-			case <-m.retryTicker.C:
-				m.logger.Info("🔄 异步重试检查验证者状态", "height", height)
-				
-				// 重新检查验证者状态
-				validators, err := m.checkValidatorsAsync(height)
-				if err != nil {
-					m.logger.Error("❌ 异步重试检查失败", "error", err)
-					continue
-				}
-				
-				// 如果找到验证者，停止重试
-				if validators.Len() > 0 {
-					m.logger.Info("✅ 异步重试成功，找到验证者", 
-						"validatorsCount", validators.Len(),
-						"height", height)
-					return
-				}
-				
-				m.logger.Warn("⚠️ 异步重试未找到验证者，继续等待", 
-					"height", height,
-					"nextRetryIn", "10s")
-					
-			case <-m.retryStopCh:
-				m.logger.Info("🔄 收到停止信号，结束异步重试")
-				return
-			}
-		}
-	}()
-}
-
-// 🆕 异步检查验证者状态
-func (m *ForkManager) checkValidatorsAsync(height uint64) (validators.Validators, error) {
-	// 1. 从extraData解析IBFT验证者地址
-	ibftValidators, err := m.parseValidatorsFromExtraData(m.genesisExtraData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse validators from extraData: %w", err)
-	}
-	
-	// 2. 创建IBFT兼容的验证者集合
-	validatorSet := validators.NewValidatorSet(validators.ECDSAValidatorType)
-	
-	// 3. 解析最小质押门槛
-	minStakeAmount, ok := new(big.Int).SetString(MinStakeAmount, 10)
-	if !ok {
-		return nil, fmt.Errorf("invalid MinStakeAmount: %s", MinStakeAmount)
-	}
-	
-	validValidatorCount := 0
-	
-	// 4. 检查每个验证者地址的余额
-	for i := 0; i < ibftValidators.Len(); i++ {
-		ibftValidator := ibftValidators.At(uint64(i))
-		address := ibftValidator.Addr()
-		
-		// 查询验证者余额
-		balance, err := m.getValidatorBalance(address)
-		if err != nil {
-			m.logger.Error("❌ 异步重试余额查询失败", 
-				"address", address.String(), 
-				"error", err)
-			continue
-		}
-		
-		// 检查是否满足最小质押要求
-		if balance.Cmp(minStakeAmount) < 0 {
-			m.logger.Debug("⚠️ 异步重试验证者余额仍不足", 
-				"address", address.String(),
-				"balance", balance.String(),
-				"required", minStakeAmount.String())
-			continue
-		}
-		
-		// 生成BLS公钥
-		blsPublicKey, err := m.readBLSPrivateKeyAndGeneratePublicKey(address)
-		if err != nil {
-			m.logger.Error("❌ 异步重试BLS公钥生成失败", 
-				"address", address.String(), 
-				"error", err)
-			continue
-		}
-		
-		// 创建验证者
-		ecdsaValidator := validators.NewECDSAValidatorWithBLS(address, blsPublicKey)
-		validatorSet.Add(ecdsaValidator)
-		validValidatorCount++
-		
-		m.logger.Info("✅ 异步重试验证者创建成功", 
-			"address", address.String(),
-			"balance", balance.String(),
-			"validatorIndex", validValidatorCount)
-	}
-	
-	return validatorSet, nil
-}
-
-// 🆕 停止异步重试
-func (m *ForkManager) stopAsyncRetry() {
-	if m.isRetrying && m.retryStopCh != nil {
-		close(m.retryStopCh)
-		m.logger.Info("🔄 停止异步重试机制")
-	}
-}
