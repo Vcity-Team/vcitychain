@@ -28,6 +28,11 @@ type stateExecutorAdapter struct {
 	executor *state.Executor
 }
 
+// GetExecutor returns the underlying state.Executor
+func (a *stateExecutorAdapter) GetExecutor() *state.Executor {
+	return a.executor
+}
+
 // ExecuteContractCall implements contract.Executor
 func (a *stateExecutorAdapter) ExecuteContractCall(contractAddr types.Address, data []byte) ([]byte, error) {
 	// TODO: Implement actual contract call using state executor

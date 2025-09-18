@@ -6,7 +6,6 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"time"
 
@@ -601,7 +600,7 @@ func (m *ForkManager) getValidatorBalance(address types.Address) (*big.Int, erro
 		"address", address.String(),
 		"stateRoot", currentHeader.StateRoot.String())
 	
-	// 方法1：尝试通过反射直接访问stateExecutorAdapter的executor字段
+	// 方法1：尝试通过GetExecutor()方法获取state.Executor
 	if adapter, ok := m.executor.(interface {
 		GetExecutor() *state.Executor
 	}); ok {
@@ -646,26 +645,19 @@ func (m *ForkManager) getValidatorBalance(address types.Address) (*big.Int, erro
 		m.logger.Debug("⚠️ 方法1不可用：executor未实现GetExecutor()接口")
 	}
 	
-	// 方法2：尝试通过反射直接访问stateExecutorAdapter的executor字段
-	// 使用反射来访问私有字段
-	
-	adapterValue := reflect.ValueOf(m.executor)
-	if adapterValue.Kind() == reflect.Ptr {
-		adapterValue = adapterValue.Elem()
-	}
-	
-	// 查找executor字段
-	executorField := adapterValue.FieldByName("executor")
-	if executorField.IsValid() && !executorField.IsNil() {
-		m.logger.Debug("✅ 方法2：通过反射直接访问executor字段")
+	// 方法2：尝试通过state.Executor的State方法
+	if adapter, ok := m.executor.(interface {
+		GetExecutor() *state.Executor
+	}); ok {
+		m.logger.Debug("✅ 方法2：通过GetExecutor()方法获取state.Executor")
 		
-		// 获取state.Executor实例
-		executor := executorField.Interface().(*state.Executor)
+		executor := adapter.GetExecutor()
 		if executor != nil {
-			// 通过state.Executor的StateAt方法直接获取状态快照
-			m.logger.Debug("✅ 方法2a：通过state.Executor.StateAt()方法获取状态快照")
+			// 通过state.Executor的State方法获取状态存储
+			m.logger.Debug("✅ 方法2a：通过state.Executor.State()方法获取状态存储")
 			
-			snapshot, err := executor.StateAt(currentHeader.StateRoot)
+			state := executor.State()
+			snapshot, err := state.NewSnapshotAt(currentHeader.StateRoot)
 			if err != nil {
 				m.logger.Warn("❌ 方法2a失败：无法创建状态快照", 
 					"error", err.Error(),
@@ -688,7 +680,7 @@ func (m *ForkManager) getValidatorBalance(address types.Address) (*big.Int, erro
 			}
 			
 			// 返回账户余额
-			m.logger.Debug("✅ 方法2a成功：通过state.Executor.StateAt()获取余额", 
+			m.logger.Debug("✅ 方法2a成功：通过state.Executor.State()获取余额", 
 				"address", address.String(),
 				"balance", account.Balance.String())
 			return account.Balance, nil
@@ -696,7 +688,7 @@ func (m *ForkManager) getValidatorBalance(address types.Address) (*big.Int, erro
 			m.logger.Debug("⚠️ 方法2不可用：state.Executor为nil")
 		}
 	} else {
-		m.logger.Debug("⚠️ 方法2不可用：无法通过反射访问executor字段")
+		m.logger.Debug("⚠️ 方法2不可用：executor未实现GetExecutor()接口")
 	}
 	
 	// 如果所有方法都失败，记录警告并返回0余额
