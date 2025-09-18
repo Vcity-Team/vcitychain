@@ -734,7 +734,6 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 		"successRate", fmt.Sprintf("%.1f%%", float64(validValidatorCount)/float64(ibftValidators.Len())*100))
 	
 	// 检查是否有足够的验证者，如果没有则返回空验证者集合（避免阻塞RPC）
-	retryCount := 0
 	// 如果第一次检查没有找到验证者，记录警告但不阻塞
 	
 	if validValidatorCount == 0 {
