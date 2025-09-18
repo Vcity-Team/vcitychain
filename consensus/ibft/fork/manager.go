@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/bls"
-	"github.com/Vcity-Team/vcitychain/consensus/dpos"
 	"github.com/Vcity-Team/vcitychain/consensus/ibft/hook"
 	"github.com/Vcity-Team/vcitychain/consensus/ibft/signer"
 	"github.com/Vcity-Team/vcitychain/secrets"
@@ -596,29 +595,39 @@ func (m *ForkManager) readBLSPrivateKeyAndGeneratePublicKey(validatorAddress typ
 	return publicKeyBytes, nil
 }
 
-// 🆕 新增：查询验证者抵押数量（从DPoS模块获取）
-func (m *ForkManager) getValidatorStakeAmount(address types.Address) (*big.Int, error) {
-	// 尝试从DPoS实例获取抵押信息
-	if dposInstance, exists := dpos.GetDPoSInstance("vcity_dpos"); exists {
-		// 获取验证者的投票权重（抵押数量）
-		votingPower, err := dposInstance.GetVotingPower(0, address)
-		if err != nil {
-			m.logger.Debug("从DPoS获取投票权重失败", 
-				"address", address.String(),
-				"error", err)
-			// 如果DPoS中没有找到，返回0
-			return big.NewInt(0), nil
-		}
-		
-		m.logger.Debug("从DPoS获取抵押数量成功", 
-			"address", address.String(),
-			"stakeAmount", votingPower.String())
-		
-		return votingPower, nil
+// 🆕 新增：查询验证者VCITY代币余额（通过executor获取，与eth_getBalance行为一致）
+func (m *ForkManager) getValidatorBalance(address types.Address) (*big.Int, error) {
+	// 获取当前区块头
+	currentHeader := m.blockchain.Header()
+	if currentHeader == nil {
+		return nil, fmt.Errorf("failed to get current header")
 	}
 	
-	// 如果DPoS实例不存在，返回0抵押
-	m.logger.Warn("DPoS实例不存在，返回0抵押", "address", address.String())
+	
+	// 通过GetExecutor()方法获取state.Executor
+	if adapter, ok := m.executor.(interface {
+		GetExecutor() *state.Executor
+	}); ok {
+		executor := adapter.GetExecutor()
+		if executor != nil {
+			// 通过state.Executor的StateAt方法直接获取状态快照
+			snapshot, err := executor.StateAt(currentHeader.StateRoot)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create snapshot at state root %s: %w", currentHeader.StateRoot.String(), err)
+			}
+			
+			account, err := snapshot.GetAccount(address)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get account for address %s: %w", address.String(), err)
+			}
+			
+			// 返回账户余额
+			return account.Balance, nil
+		}
+	}
+	
+	// 如果无法获取executor，返回0余额
+	m.logger.Warn("无法获取executor，返回0余额", "address", address.String())
 	return big.NewInt(0), nil
 }
 
@@ -659,23 +668,23 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 		ibftValidator := ibftValidators.At(uint64(i))
 		address := ibftValidator.Addr()
 		
-		// 🆕 查询验证者抵押数量
-		stakeAmount, err := m.getValidatorStakeAmount(address)
+		// 🆕 查询验证者余额
+		balance, err := m.getValidatorBalance(address)
 		if err != nil {
-			m.logger.Error("❌ 抵押查询失败", 
+			m.logger.Error("❌ 余额查询失败", 
 				"address", address.String(), 
 				"error", err)
 			continue
 		}
 		
 		// 🆕 检查是否满足最小质押要求
-		if stakeAmount.Cmp(minStakeAmount) < 0 {
+		if balance.Cmp(minStakeAmount) < 0 {
 			insufficientBalanceCount++
-			m.logger.Warn("⚠️ 验证者抵押不足", 
+			m.logger.Warn("⚠️ 验证者余额不足", 
 				"address", address.String(),
-				"stakeAmount", stakeAmount.String(),
+				"balance", balance.String(),
 				"required", minStakeAmount.String(),
-				"deficit", new(big.Int).Sub(minStakeAmount, stakeAmount).String())
+				"deficit", new(big.Int).Sub(minStakeAmount, balance).String())
 			continue
 		}
 		
@@ -696,7 +705,7 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 		// 🚨 关键日志：成功创建DPoS验证者
 		m.logger.Info("✅ DPoS验证者创建成功", 
 			"address", address.String(),
-			"stakeAmount", stakeAmount.String(),
+			"balance", balance.String(),
 			"blsKeyLength", len(blsPublicKey),
 			"validatorIndex", validValidatorCount)
 	}
