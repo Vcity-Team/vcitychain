@@ -600,11 +600,11 @@ func (m *ForkManager) getValidatorBalance(address types.Address) (*big.Int, erro
 		"address", address.String(),
 		"stateRoot", currentHeader.StateRoot.String())
 	
-	// 方法1：尝试通过state.State接口获取账户信息（与eth_getBalance相同）
-	if stateStore, ok := m.blockchain.(interface {
+	// 方法1：尝试通过executor获取状态存储（与eth_getBalance相同）
+	if stateStore, ok := m.executor.(interface {
 		GetState() state.State
 	}); ok {
-		m.logger.Debug("✅ 方法1：通过state.State接口查询余额")
+		m.logger.Debug("✅ 方法1：通过executor.GetState()接口查询余额")
 		
 		state := stateStore.GetState()
 		snapshot, err := state.NewSnapshotAt(currentHeader.StateRoot)
@@ -630,30 +630,69 @@ func (m *ForkManager) getValidatorBalance(address types.Address) (*big.Int, erro
 		}
 		
 		// 返回账户余额
-		m.logger.Debug("✅ 方法1成功：通过state.State获取余额", 
+		m.logger.Debug("✅ 方法1成功：通过executor.GetState()获取余额", 
 			"address", address.String(),
 			"balance", account.Balance.String())
 		return account.Balance, nil
 	} else {
-		m.logger.Debug("⚠️ 方法1不可用：blockchain未实现GetState()接口")
+		m.logger.Debug("⚠️ 方法1不可用：executor未实现GetState()接口")
 	}
 	
-	// 方法2：尝试通过executor获取余额
-	if executor, ok := m.blockchain.(interface {
-		GetExecutor() interface {
-			GetBalance(addr types.Address) *big.Int
-		}
+	// 方法2：尝试通过executor的GetBalance方法获取余额
+	if balanceStore, ok := m.executor.(interface {
+		GetBalance(root types.Hash, addr types.Address) (*big.Int, error)
 	}); ok {
-		m.logger.Debug("✅ 方法2：通过executor接口查询余额")
+		m.logger.Debug("✅ 方法2：通过executor.GetBalance()接口查询余额")
 		
-		// 通过executor获取余额
-		balance := executor.GetExecutor().GetBalance(address)
-		m.logger.Debug("✅ 方法2成功：通过executor获取余额", 
+		// 使用当前区块的状态根查询余额
+		balance, err := balanceStore.GetBalance(currentHeader.StateRoot, address)
+		if err != nil {
+			// 如果账户不存在，返回0余额
+			if err.Error() == "state not found" {
+				m.logger.Debug("✅ 方法2成功：账户不存在，返回0余额", "address", address.String())
+				return big.NewInt(0), nil
+			}
+			m.logger.Warn("❌ 方法2失败：无法获取余额", 
+				"error", err.Error(),
+				"address", address.String())
+			return nil, fmt.Errorf("failed to get balance for address %s: %w", address.String(), err)
+		}
+		
+		// 返回余额
+		m.logger.Debug("✅ 方法2成功：通过executor.GetBalance()获取余额", 
 			"address", address.String(),
 			"balance", balance.String())
 		return balance, nil
 	} else {
-		m.logger.Debug("⚠️ 方法2不可用：blockchain未实现GetExecutor()接口")
+		m.logger.Debug("⚠️ 方法2不可用：executor未实现GetBalance()接口")
+	}
+	
+	// 方法3：尝试通过executor的GetAccount方法获取余额
+	if accountStore, ok := m.executor.(interface {
+		GetAccount(root types.Hash, addr types.Address) (*state.Account, error)
+	}); ok {
+		m.logger.Debug("✅ 方法3：通过executor.GetAccount()接口查询余额")
+		
+		account, err := accountStore.GetAccount(currentHeader.StateRoot, address)
+		if err != nil {
+			// 如果账户不存在，返回0余额
+			if err.Error() == "state not found" {
+				m.logger.Debug("✅ 方法3成功：账户不存在，返回0余额", "address", address.String())
+				return big.NewInt(0), nil
+			}
+			m.logger.Warn("❌ 方法3失败：无法获取账户信息", 
+				"error", err.Error(),
+				"address", address.String())
+			return nil, fmt.Errorf("failed to get account for address %s: %w", address.String(), err)
+		}
+		
+		// 返回账户余额
+		m.logger.Debug("✅ 方法3成功：通过executor.GetAccount()获取余额", 
+			"address", address.String(),
+			"balance", account.Balance.String())
+		return account.Balance, nil
+	} else {
+		m.logger.Debug("⚠️ 方法3不可用：executor未实现GetAccount()接口")
 	}
 	
 	// 如果都没有实现，记录警告并返回0余额
