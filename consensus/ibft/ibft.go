@@ -3,6 +3,7 @@ package ibft
 import (
 	"errors"
 	"fmt"
+	"math/big"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/blockchain"
@@ -156,6 +157,16 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		}
 		dposValidatorsCount = uint64(readDPoSValidatorsCount)
 	}
+	
+	// 🆕 新增：从配置中读取DPoS最小质押门槛
+	var dposDelegateThreshold *big.Int = nil
+	if rawDPoSDelegateThreshold, ok := params.Config.Config["dposDelegateThreshold"]; ok {
+		if thresholdStr, ok := rawDPoSDelegateThreshold.(string); ok && thresholdStr != "" {
+			if threshold, ok := new(big.Int).SetString(thresholdStr, 10); ok {
+				dposDelegateThreshold = threshold
+			}
+		}
+	}
 
 	logger := params.Logger.Named("ibft")
 
@@ -169,6 +180,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		params.Config.Config,
 		params.Config.DataDir, // 🆕 新增：数据目录参数
 		dposValidatorsCount, // 🆕 新增：DPoS验证者数量参数（从配置读取）
+		dposDelegateThreshold, // 🆕 新增：DPoS最小质押门槛参数（从配置读取）
 	)
 
 	if err != nil {

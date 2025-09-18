@@ -43,6 +43,9 @@ type Config struct {
 	
 	// 🆕 新增：DPoS验证者数量配置
 	DPoSValidatorsCount uint64 `json:"dpos_validators_count" yaml:"dpos_validators_count"`
+	
+	// 🆕 新增：DPoS最小质押门槛配置
+	DPoSDelegateThreshold string `json:"dpos_delegate_threshold" yaml:"dpos_delegate_threshold"`
 }
 
 // Telemetry holds the config details for metric services.
@@ -143,6 +146,9 @@ func DefaultConfig() *Config {
 		
 		// 🆕 新增：DPoS验证者数量默认值
 		DPoSValidatorsCount: 4, // 默认4个验证者
+		
+		// 🆕 新增：DPoS最小质押门槛默认值
+		DPoSDelegateThreshold: "1000000000000000000000", // 默认1000 VCITY
 	}
 }
 

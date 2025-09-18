@@ -1,6 +1,7 @@
 package server
 
 import (
+	"math/big"
 	"net"
 	"time"
 
@@ -52,6 +53,9 @@ type Config struct {
 	
 	// 🆕 新增：DPoS验证者数量
 	DPoSValidatorsCount   uint64
+	
+	// 🆕 新增：DPoS最小质押门槛
+	DPoSDelegateThreshold *big.Int
 }
 
 // Telemetry holds the config details for metric services

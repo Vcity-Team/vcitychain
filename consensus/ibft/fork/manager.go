@@ -28,8 +28,9 @@ const (
 	snapshotMetadataFilename  = "metadata"
 	snapshotSnapshotsFilename = "snapshots"
 	
-	// DPoS最小质押门槛：1000 VCITY = 1000 * 1e18 wei
-	MinStakeAmount = "1000000000000000000000"
+	// DPoS最小质押门槛：从配置文件读取 dpos_delegate_threshold
+	// 默认值：1000 VCITY = 1000 * 1e18 wei
+	DefaultMinStakeAmount = "1000000000000000000000"
 )
 
 var (
@@ -83,6 +84,7 @@ type ForkManager struct {
 	dataDir               string // 数据目录
 	consensusSwitchHeight uint64 // 共识切换高度
 	dposValidatorsCount   uint64 // DPoS验证者数量
+	dposDelegateThreshold *big.Int // DPoS最小质押门槛（从配置文件读取）
 	genesisExtraData      []byte // 创世块extraData
 	hasSwitchedToDPoS     bool   // 是否已经切换到DPoS（避免重复日志）
 	lastConsensusFailure  time.Time // 上次共识失败时间（用于延迟重试）
@@ -104,6 +106,7 @@ func NewForkManager(
 	ibftConfig map[string]interface{},
 	dataDir string, // 🆕 新增：数据目录参数
 	dposValidatorsCount uint64, // 🆕 新增：DPoS验证者数量参数
+	dposDelegateThreshold *big.Int, // 🆕 新增：DPoS最小质押门槛参数
 ) (*ForkManager, error) {
 	forks, err := GetIBFTForks(ibftConfig)
 	if err != nil {
@@ -111,18 +114,19 @@ func NewForkManager(
 	}
 
 	fm := &ForkManager{
-		logger:              logger.Named(loggerName),
-		blockchain:          blockchain,
-		executor:            executor,
-		secretsManager:      secretManager,
-		filePath:            filePath,
-		epochSize:           epochSize,
-		forks:               forks,
-		dataDir:             dataDir, // 🆕 设置数据目录
-		dposValidatorsCount: dposValidatorsCount, // 🆕 设置DPoS验证者数量
-		keyManagers:         make(map[validators.ValidatorType]signer.KeyManager),
-		validatorStores:     make(map[store.SourceType]ValidatorStore),
-		hooksRegisters:      make(map[IBFTType]HooksRegister),
+		logger:                logger.Named(loggerName),
+		blockchain:            blockchain,
+		executor:              executor,
+		secretsManager:        secretManager,
+		filePath:              filePath,
+		epochSize:             epochSize,
+		forks:                 forks,
+		dataDir:               dataDir, // 🆕 设置数据目录
+		dposValidatorsCount:   dposValidatorsCount, // 🆕 设置DPoS验证者数量
+		dposDelegateThreshold: dposDelegateThreshold, // 🆕 设置DPoS最小质押门槛
+		keyManagers:           make(map[validators.ValidatorType]signer.KeyManager),
+		validatorStores:       make(map[store.SourceType]ValidatorStore),
+		hooksRegisters:        make(map[IBFTType]HooksRegister),
 	}
 
 	// 🆕 读取创世块extraData
@@ -618,55 +622,27 @@ func (m *ForkManager) getValidatorStakeAmount(address types.Address) (*big.Int, 
 	return big.NewInt(0), nil
 }
 
-// 🆕 新增：根据配置生成DPoS验证者地址
-func (m *ForkManager) generateDPoSValidators() (validators.Validators, error) {
-	// 预定义的验证者地址池（可以根据需要扩展）
-	validatorAddresses := []string{
-		"0xe22611289BAb9CDDB85B23Dc2716006f931Bc41C",
-		"0x7744E828e4Bd34aAfBB409C3b574B3647198EE65", 
-		"0xa5Ce949C933e06E8395194AE147283e091EcF3Cb",
-		"0x5d1F45B8D5a5eC9c3BEb91cAEbA6a3180DBeC7A9",
-		"0x1234567890123456789012345678901234567890",
-		"0x2345678901234567890123456789012345678901",
-		"0x3456789012345678901234567890123456789012",
-		"0x4567890123456789012345678901234567890123",
-	}
-	
-	// 根据配置的验证者数量选择地址
-	validatorCount := int(m.dposValidatorsCount)
-	if validatorCount > len(validatorAddresses) {
-		validatorCount = len(validatorAddresses)
-	}
-	
-	validatorList := make([]*validators.ECDSAValidator, 0, validatorCount)
-	for i := 0; i < validatorCount; i++ {
-		address := types.StringToAddress(validatorAddresses[i])
-		validator := validators.NewECDSAValidator(address)
-		validatorList = append(validatorList, validator)
-	}
-	
-	m.logger.Info("生成DPoS验证者地址", 
-		"requestedCount", m.dposValidatorsCount,
-		"actualCount", len(validatorList))
-	
-	return validators.NewECDSAValidatorSet(validatorList...), nil
-}
 
 // 🆕 新增：获取DPoS验证者（返回IBFT兼容格式，包含抵押检查）
 func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, error) {
-	// 1. 根据配置的验证者数量生成验证者地址
-	ibftValidators, err := m.generateDPoSValidators()
+	// 1. 从创世文件extraData解析验证者地址
+	ibftValidators, err := m.parseValidatorsFromExtraData(m.genesisExtraData)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate DPoS validators: %w", err)
+		return nil, fmt.Errorf("failed to parse validators from extraData: %w", err)
 	}
 	
 	// 2. 创建IBFT兼容的验证者集合
 	validatorSet := validators.NewValidatorSet(validators.ECDSAValidatorType)
 	
-	// 3. 解析最小质押门槛
-	minStakeAmount, ok := new(big.Int).SetString(MinStakeAmount, 10)
-	if !ok {
-		return nil, fmt.Errorf("invalid MinStakeAmount: %s", MinStakeAmount)
+	// 3. 获取最小质押门槛（从配置文件读取）
+	minStakeAmount := m.dposDelegateThreshold
+	if minStakeAmount == nil {
+		// 如果配置中没有设置，使用默认值
+		minStakeAmount, ok := new(big.Int).SetString(DefaultMinStakeAmount, 10)
+		if !ok {
+			return nil, fmt.Errorf("invalid DefaultMinStakeAmount: %s", DefaultMinStakeAmount)
+		}
+		m.dposDelegateThreshold = minStakeAmount
 	}
 	
 	// 🚨 关键日志：开始DPoS验证者筛选
