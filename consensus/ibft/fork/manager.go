@@ -81,6 +81,7 @@ type ForkManager struct {
 	dataDir               string // 数据目录
 	consensusSwitchHeight uint64 // 共识切换高度
 	genesisExtraData      []byte // 创世块extraData
+	hasSwitchedToDPoS     bool   // 是否已经切换到DPoS（避免重复日志）
 
 	// submodule lookup
 	keyManagers     map[validators.ValidatorType]signer.KeyManager
@@ -211,9 +212,13 @@ func (m *ForkManager) GetValidatorStore(height uint64) (ValidatorStore, error) {
 func (m *ForkManager) GetValidators(height uint64) (validators.Validators, error) {
 	// 🆕 检查是否需要切换到DPoS
 	if height >= m.consensusSwitchHeight {
-		m.logger.Info("Consensus switch to DPoS triggered",
-			"height", height,
-			"switchHeight", m.consensusSwitchHeight)
+		// 只在真正切换时打印一次日志
+		if !m.hasSwitchedToDPoS {
+			m.logger.Info("🚨 共识切换到DPoS触发",
+				"height", height,
+				"switchHeight", m.consensusSwitchHeight)
+			m.hasSwitchedToDPoS = true
+		}
 		return m.getDPoSValidators(height)
 	}
 	
@@ -589,16 +594,27 @@ func (m *ForkManager) getValidatorBalance(address types.Address) (*big.Int, erro
 		return nil, fmt.Errorf("failed to get current header")
 	}
 	
-	// 通过blockchain获取状态提供者
-	// 注意：这里需要根据实际的blockchain接口来实现
-	// 暂时返回模拟余额用于测试
-	// TODO: 实现真实的余额查询
-	balance, _ := new(big.Int).SetString("1000000000000000000000", 10) // 1000 VCITY for testing
-	if balance == nil {
-		balance = big.NewInt(0)
+	// 通过blockchain的GetAccount方法获取真实余额
+	// 检查blockchain是否实现了GetAccount方法
+	if accountStore, ok := m.blockchain.(interface {
+		GetAccount(root types.Hash, addr types.Address) (*state.Account, error)
+	}); ok {
+		// 使用当前区块的状态根查询余额
+		account, err := accountStore.GetAccount(currentHeader.StateRoot, address)
+		if err != nil {
+			// 如果账户不存在，返回0余额
+			if err.Error() == "state not found" {
+				return big.NewInt(0), nil
+			}
+			return nil, fmt.Errorf("failed to get account for address %s: %w", address.String(), err)
+		}
+		
+		// 返回账户余额
+		return account.Balance, nil
 	}
 	
-	return balance, nil
+	// 如果blockchain没有实现GetAccount方法，返回错误
+	return nil, fmt.Errorf("blockchain does not support GetAccount method")
 }
 
 // 🆕 新增：获取DPoS验证者（返回IBFT兼容格式，包含余额检查）

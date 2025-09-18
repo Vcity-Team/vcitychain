@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/Vcity-Team/vcitychain/state"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
 )
@@ -14,32 +15,57 @@ type NativeTokenBalanceQuerier interface {
 	GetNativeTokenBalance(address types.Address) (*big.Int, error)
 }
 
-// MockBalanceQuerier 模拟余额查询实现（用于测试）
-type MockBalanceQuerier struct {
-	logger hclog.Logger
-}
-
-// NewMockBalanceQuerier 创建新的模拟余额查询器
-func NewMockBalanceQuerier(logger hclog.Logger) *MockBalanceQuerier {
-	return &MockBalanceQuerier{
-		logger: logger,
+// RealBalanceQuerier 真实余额查询实现
+type RealBalanceQuerier struct {
+	logger     hclog.Logger
+	blockchain interface {
+		Header() *types.Header
+		GetAccount(root types.Hash, addr types.Address) (*state.Account, error)
 	}
 }
 
-// GetNativeTokenBalance 获取指定地址的原生代币余额（模拟实现）
-func (q *MockBalanceQuerier) GetNativeTokenBalance(address types.Address) (*big.Int, error) {
-	// 模拟返回固定余额（1 VCITY = 1e18 wei）
-	balance := big.NewInt(1000000000000000000) // 1 VCITY
+// NewRealBalanceQuerier 创建新的真实余额查询器
+func NewRealBalanceQuerier(logger hclog.Logger, blockchain interface {
+	Header() *types.Header
+	GetAccount(root types.Hash, addr types.Address) (*state.Account, error)
+}) *RealBalanceQuerier {
+	return &RealBalanceQuerier{
+		logger:     logger,
+		blockchain: blockchain,
+	}
+}
+
+// GetNativeTokenBalance 获取指定地址的原生代币余额（真实实现）
+func (q *RealBalanceQuerier) GetNativeTokenBalance(address types.Address) (*big.Int, error) {
+	// 获取当前区块头
+	currentHeader := q.blockchain.Header()
+	if currentHeader == nil {
+		return nil, fmt.Errorf("failed to get current header")
+	}
 	
-	// 记录详细的余额查询日志
-	q.logger.Info("Native token balance queried (mock)", 
+	// 查询账户余额
+	account, err := q.blockchain.GetAccount(currentHeader.StateRoot, address)
+	if err != nil {
+		// 如果账户不存在，返回0余额
+		if err.Error() == "state not found" {
+			q.logger.Info("Native token balance queried (real)", 
+				"address", address.String(),
+				"balance", "0",
+				"note", "account not found, returning 0 balance")
+			return big.NewInt(0), nil
+		}
+		return nil, fmt.Errorf("failed to get account for address %s: %w", address.String(), err)
+	}
+	
+	// 记录真实的余额查询日志
+	q.logger.Info("Native token balance queried (real)", 
 		"address", address.String(),
-		"balance", balance.String(),
-		"balanceHex", fmt.Sprintf("0x%x", balance),
-		"balanceWei", balance.String(),
-		"note", "using mock balance for testing")
+		"balance", account.Balance.String(),
+		"balanceHex", fmt.Sprintf("0x%x", account.Balance),
+		"balanceWei", account.Balance.String(),
+		"note", "using real balance from blockchain state")
 	
-	return balance, nil
+	return account.Balance, nil
 }
 
 // getNativeTokenBalance 便捷函数，用于获取原生代币余额

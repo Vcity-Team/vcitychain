@@ -3092,9 +3092,11 @@ func (d *DPoS) Initialize() error {
 		executor:   d.config.Executor,
 	}
 
-	// 🆕 新增：设置余额查询器（使用模拟实现）
-	d.balanceQuerier = NewMockBalanceQuerier(d.logger)
-	d.logger.Info("Balance querier initialized with mock implementation")
+	// 🆕 新增：设置余额查询器（使用真实实现）
+	// 注意：这里需要传入blockchain实例，暂时使用nil
+	// TODO: 传入真实的blockchain实例
+	d.balanceQuerier = nil // 暂时禁用，等待blockchain实例传入
+	d.logger.Info("Balance querier initialized (disabled for now)")
 
 	// set block time
 	d.blockTime = d.config.BlockTime.Duration
