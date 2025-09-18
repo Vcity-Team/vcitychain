@@ -644,10 +644,13 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 	validatorSet := validators.NewValidatorSet(validators.ECDSAValidatorType)
 	
 	// 3. 获取最小质押门槛（从配置文件读取）
-	minStakeAmount := m.dposDelegateThreshold
-	if minStakeAmount == nil {
+	var minStakeAmount *big.Int
+	if m.dposDelegateThreshold != nil {
+		minStakeAmount = m.dposDelegateThreshold
+	} else {
 		// 如果配置中没有设置，使用默认值
-		minStakeAmount, ok := new(big.Int).SetString(DefaultMinStakeAmount, 10)
+		var ok bool
+		minStakeAmount, ok = new(big.Int).SetString(DefaultMinStakeAmount, 10)
 		if !ok {
 			return nil, fmt.Errorf("invalid DefaultMinStakeAmount: %s", DefaultMinStakeAmount)
 		}
