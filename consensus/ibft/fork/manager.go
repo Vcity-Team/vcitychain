@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Vcity-Team/vcitychain/bls"
 	"github.com/Vcity-Team/vcitychain/consensus/ibft/hook"
@@ -82,6 +83,7 @@ type ForkManager struct {
 	consensusSwitchHeight uint64 // 共识切换高度
 	genesisExtraData      []byte // 创世块extraData
 	hasSwitchedToDPoS     bool   // 是否已经切换到DPoS（避免重复日志）
+	lastConsensusFailure  time.Time // 上次共识失败时间（用于延迟重试）
 
 	// submodule lookup
 	keyManagers     map[validators.ValidatorType]signer.KeyManager
@@ -594,27 +596,52 @@ func (m *ForkManager) getValidatorBalance(address types.Address) (*big.Int, erro
 		return nil, fmt.Errorf("failed to get current header")
 	}
 	
-	// 通过blockchain的GetAccount方法获取真实余额
-	// 检查blockchain是否实现了GetAccount方法
-	if accountStore, ok := m.blockchain.(interface {
-		GetAccount(root types.Hash, addr types.Address) (*state.Account, error)
+	// 方法1：尝试通过executor获取余额
+	if executor, ok := m.blockchain.(interface {
+		GetExecutor() interface {
+			GetBalance(addr types.Address) *big.Int
+		}
+	}); ok {
+		// 通过executor获取余额
+		balance := executor.GetExecutor().GetBalance(address)
+		return balance, nil
+	}
+	
+	// 方法2：尝试通过blockchain的GetBalance方法获取真实余额
+	if balanceStore, ok := m.blockchain.(interface {
+		GetBalance(root types.Hash, addr types.Address) (*big.Int, error)
 	}); ok {
 		// 使用当前区块的状态根查询余额
-		account, err := accountStore.GetAccount(currentHeader.StateRoot, address)
+		balance, err := balanceStore.GetBalance(currentHeader.StateRoot, address)
 		if err != nil {
 			// 如果账户不存在，返回0余额
 			if err.Error() == "state not found" {
 				return big.NewInt(0), nil
 			}
-			return nil, fmt.Errorf("failed to get account for address %s: %w", address.String(), err)
+			return nil, fmt.Errorf("failed to get balance for address %s: %w", address.String(), err)
 		}
 		
-		// 返回账户余额
+		// 返回余额
+		return balance, nil
+	}
+	
+	// 方法3：尝试通过GetAccount方法获取
+	if accountStore, ok := m.blockchain.(interface {
+		GetAccount(root types.Hash, addr types.Address) (*state.Account, error)
+	}); ok {
+		account, err := accountStore.GetAccount(currentHeader.StateRoot, address)
+		if err != nil {
+			if err.Error() == "state not found" {
+				return big.NewInt(0), nil
+			}
+			return nil, fmt.Errorf("failed to get account for address %s: %w", address.String(), err)
+		}
 		return account.Balance, nil
 	}
 	
-	// 如果blockchain没有实现GetAccount方法，返回错误
-	return nil, fmt.Errorf("blockchain does not support GetAccount method")
+	// 如果都没有实现，暂时返回0余额（避免阻塞共识）
+	m.logger.Warn("无法查询余额，返回0余额", "address", address.String())
+	return big.NewInt(0), nil
 }
 
 // 🆕 新增：获取DPoS验证者（返回IBFT兼容格式，包含余额检查）
@@ -700,6 +727,13 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 	
 	// 检查是否有足够的验证者
 	if validValidatorCount == 0 {
+		// 记录共识失败时间
+		m.lastConsensusFailure = time.Now()
+		
+		// 等待10秒后重试
+		m.logger.Warn("⚠️ 没有验证者满足DPoS质押要求，等待10秒后重试")
+		time.Sleep(10 * time.Second)
+		
 		return nil, fmt.Errorf("❌ 没有验证者满足DPoS质押要求，无法进行共识")
 	}
 	

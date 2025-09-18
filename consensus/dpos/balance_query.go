@@ -20,6 +20,7 @@ type RealBalanceQuerier struct {
 	logger     hclog.Logger
 	blockchain interface {
 		Header() *types.Header
+		GetBalance(root types.Hash, addr types.Address) (*big.Int, error)
 		GetAccount(root types.Hash, addr types.Address) (*state.Account, error)
 	}
 }
@@ -27,6 +28,7 @@ type RealBalanceQuerier struct {
 // NewRealBalanceQuerier 创建新的真实余额查询器
 func NewRealBalanceQuerier(logger hclog.Logger, blockchain interface {
 	Header() *types.Header
+	GetBalance(root types.Hash, addr types.Address) (*big.Int, error)
 	GetAccount(root types.Hash, addr types.Address) (*state.Account, error)
 }) *RealBalanceQuerier {
 	return &RealBalanceQuerier{
@@ -43,7 +45,24 @@ func (q *RealBalanceQuerier) GetNativeTokenBalance(address types.Address) (*big.
 		return nil, fmt.Errorf("failed to get current header")
 	}
 	
-	// 查询账户余额
+	// 方法1：尝试使用GetBalance方法
+	if balance, err := q.blockchain.GetBalance(currentHeader.StateRoot, address); err == nil {
+		q.logger.Info("Native token balance queried (real)", 
+			"address", address.String(),
+			"balance", balance.String(),
+			"balanceHex", fmt.Sprintf("0x%x", balance),
+			"balanceWei", balance.String(),
+			"note", "using real balance from GetBalance method")
+		return balance, nil
+	} else if err.Error() == "state not found" {
+		q.logger.Info("Native token balance queried (real)", 
+			"address", address.String(),
+			"balance", "0",
+			"note", "account not found, returning 0 balance")
+		return big.NewInt(0), nil
+	}
+	
+	// 方法2：尝试使用GetAccount方法
 	account, err := q.blockchain.GetAccount(currentHeader.StateRoot, address)
 	if err != nil {
 		// 如果账户不存在，返回0余额
@@ -63,7 +82,7 @@ func (q *RealBalanceQuerier) GetNativeTokenBalance(address types.Address) (*big.
 		"balance", account.Balance.String(),
 		"balanceHex", fmt.Sprintf("0x%x", account.Balance),
 		"balanceWei", account.Balance.String(),
-		"note", "using real balance from blockchain state")
+		"note", "using real balance from GetAccount method")
 	
 	return account.Balance, nil
 }
