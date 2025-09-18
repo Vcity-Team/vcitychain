@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +26,9 @@ const (
 	loggerName                = "fork_manager"
 	snapshotMetadataFilename  = "metadata"
 	snapshotSnapshotsFilename = "snapshots"
+	
+	// DPoS最小质押门槛：1000 VCITY = 1000 * 1e18 wei
+	MinStakeAmount = "1000000000000000000000"
 )
 
 var (
@@ -78,6 +82,7 @@ type ForkManager struct {
 	dataDir               string // 数据目录
 	consensusSwitchHeight uint64 // 共识切换高度
 	genesisExtraData      []byte // 创世块extraData
+	stateProvider         state.StateProvider // 状态提供者，用于查询余额
 
 	// submodule lookup
 	keyManagers     map[validators.ValidatorType]signer.KeyManager
@@ -95,6 +100,7 @@ func NewForkManager(
 	epochSize uint64,
 	ibftConfig map[string]interface{},
 	dataDir string, // 🆕 新增：数据目录参数
+	stateProvider state.StateProvider, // 🆕 新增：状态提供者参数
 ) (*ForkManager, error) {
 	forks, err := GetIBFTForks(ibftConfig)
 	if err != nil {
@@ -110,6 +116,7 @@ func NewForkManager(
 		epochSize:       epochSize,
 		forks:           forks,
 		dataDir:         dataDir, // 🆕 设置数据目录
+		stateProvider:   stateProvider, // 🆕 设置状态提供者
 		keyManagers:     make(map[validators.ValidatorType]signer.KeyManager),
 		validatorStores: make(map[store.SourceType]ValidatorStore),
 		hooksRegisters:  make(map[IBFTType]HooksRegister),
@@ -531,9 +538,7 @@ func (m *ForkManager) readBLSPrivateKeyAndGeneratePublicKey(validatorAddress typ
 	// 1. 构建私钥文件路径
 	keyFilePath := filepath.Join(m.dataDir, "consensus", "validator-bls.key")
 	
-	m.logger.Info("Reading BLS private key", 
-		"validatorAddress", validatorAddress.String(),
-		"keyFilePath", keyFilePath)
+	// 读取BLS私钥文件
 	
 	// 2. 检查文件是否存在
 	if _, err := os.Stat(keyFilePath); os.IsNotExist(err) {
@@ -575,16 +580,29 @@ func (m *ForkManager) readBLSPrivateKeyAndGeneratePublicKey(validatorAddress typ
 		return nil, fmt.Errorf("invalid BLS public key length: expected 128 bytes, got %d", len(publicKeyBytes))
 	}
 	
-	m.logger.Info("BLS key processing completed", 
-		"validatorAddress", validatorAddress.String(),
-		"privateKeyLength", len(privateKeyHex),
-		"publicKeyLength", len(publicKeyBytes),
-		"publicKeyHex", hex.EncodeToString(publicKeyBytes))
+	// BLS密钥处理完成（简化日志）
 	
 	return publicKeyBytes, nil
 }
 
-// 🆕 新增：获取DPoS验证者（返回IBFT兼容格式）
+// 🆕 新增：查询验证者VCITY代币余额
+func (m *ForkManager) getValidatorBalance(address types.Address) (*big.Int, error) {
+	// 获取当前区块头
+	currentHeader := m.blockchain.Header()
+	if currentHeader == nil {
+		return nil, fmt.Errorf("failed to get current header")
+	}
+	
+	// 查询地址的VCITY代币余额
+	balance, err := m.stateProvider.GetBalance(address, currentHeader.StateRoot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get balance for address %s: %w", address.String(), err)
+	}
+	
+	return balance, nil
+}
+
+// 🆕 新增：获取DPoS验证者（返回IBFT兼容格式，包含余额检查）
 func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, error) {
 	// 1. 从extraData解析IBFT验证者地址
 	ibftValidators, err := m.parseValidatorsFromExtraData(m.genesisExtraData)
@@ -595,22 +613,85 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 	// 2. 创建IBFT兼容的验证者集合
 	validatorSet := validators.NewValidatorSet(validators.ECDSAValidatorType)
 	
-	// 3. 为每个验证者地址生成对应的BLS公钥，但使用ECDSA格式
+	// 3. 解析最小质押门槛
+	minStakeAmount, ok := new(big.Int).SetString(MinStakeAmount, 10)
+	if !ok {
+		return nil, fmt.Errorf("invalid MinStakeAmount: %s", MinStakeAmount)
+	}
+	
+	// 🚨 关键日志：开始DPoS验证者筛选
+	m.logger.Info("🚨 DPoS验证者筛选开始", 
+		"height", height,
+		"totalCandidates", ibftValidators.Len(),
+		"minStakeAmount", minStakeAmount.String())
+	
+	validValidatorCount := 0
+	insufficientBalanceCount := 0
+	
+	// 4. 为每个验证者地址检查余额并生成BLS公钥
 	for i := 0; i < ibftValidators.Len(); i++ {
 		ibftValidator := ibftValidators.At(uint64(i))
 		address := ibftValidator.Addr()
 		
+		// 🆕 查询验证者余额
+		balance, err := m.getValidatorBalance(address)
+		if err != nil {
+			m.logger.Error("❌ 余额查询失败", 
+				"address", address.String(), 
+				"error", err)
+			continue
+		}
+		
+		// 🆕 检查是否满足最小质押要求
+		if balance.Cmp(minStakeAmount) < 0 {
+			insufficientBalanceCount++
+			m.logger.Warn("⚠️ 验证者余额不足", 
+				"address", address.String(),
+				"balance", balance.String(),
+				"required", minStakeAmount.String(),
+				"deficit", new(big.Int).Sub(minStakeAmount, balance).String())
+			continue
+		}
+		
 		// 🆕 从私钥文件生成BLS公钥
 		blsPublicKey, err := m.readBLSPrivateKeyAndGeneratePublicKey(address)
 		if err != nil {
-			m.logger.Error("Failed to generate BLS public key for validator", 
-				"address", address.String(), "error", err)
+			m.logger.Error("❌ BLS公钥生成失败", 
+				"address", address.String(), 
+				"error", err)
 			continue
 		}
 		
 		// 🆕 创建IBFT兼容的验证者，但包含BLS公钥
 		ecdsaValidator := validators.NewECDSAValidatorWithBLS(address, blsPublicKey)
 		validatorSet.Add(ecdsaValidator)
+		validValidatorCount++
+		
+		// 🚨 关键日志：成功创建DPoS验证者
+		m.logger.Info("✅ DPoS验证者创建成功", 
+			"address", address.String(),
+			"balance", balance.String(),
+			"blsKeyLength", len(blsPublicKey),
+			"validatorIndex", validValidatorCount)
+	}
+	
+	// 🚨 关键日志：DPoS验证者筛选结果汇总
+	m.logger.Info("🚨 DPoS验证者筛选完成", 
+		"height", height,
+		"totalCandidates", ibftValidators.Len(),
+		"validValidators", validValidatorCount,
+		"insufficientBalance", insufficientBalanceCount,
+		"successRate", fmt.Sprintf("%.1f%%", float64(validValidatorCount)/float64(ibftValidators.Len())*100))
+	
+	// 检查是否有足够的验证者
+	if validValidatorCount == 0 {
+		return nil, fmt.Errorf("❌ 没有验证者满足DPoS质押要求，无法进行共识")
+	}
+	
+	if validValidatorCount < 2 {
+		m.logger.Warn("⚠️ 警告：DPoS验证者数量过少", 
+			"validValidators", validValidatorCount,
+			"建议至少需要2个验证者")
 	}
 	
 	// 返回IBFT兼容的验证者集合

@@ -153,6 +153,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		epochSize,
 		params.Config.Config,
 		params.Config.DataDir, // 🆕 新增：数据目录参数
+		params.StateProvider, // 🆕 新增：状态提供者参数
 	)
 
 	if err != nil {
