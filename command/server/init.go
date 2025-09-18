@@ -56,6 +56,7 @@ func (p *serverParams) initRawParams() error {
 	p.initPeerLimits()
 	p.initLogFileLocation()
 	p.initConsensusSwitchHeight()
+	p.initDPoSValidatorsCount()
 
 	p.relayer = p.rawConfig.Relayer
 
@@ -82,6 +83,15 @@ func (p *serverParams) initConsensusSwitchHeight() {
 	// 否则使用默认值1000
 	if p.consensusSwitchHeight == 0 {
 		p.consensusSwitchHeight = 1000 // 默认值
+	}
+}
+
+// 🆕 新增：初始化DPoS验证者数量
+func (p *serverParams) initDPoSValidatorsCount() {
+	// 从配置文件读取DPoS验证者数量
+	p.dposValidatorsCount = p.rawConfig.DPoSValidatorsCount
+	if p.dposValidatorsCount == 0 {
+		p.dposValidatorsCount = 4 // 默认值
 	}
 }
 

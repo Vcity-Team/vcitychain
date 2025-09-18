@@ -257,6 +257,14 @@ func setFlags(cmd *cobra.Command) {
 		"the block height at which to switch from IBFT to DPoS consensus",
 	)
 
+	// 🆕 新增：DPoS验证者数量参数
+	cmd.Flags().Uint64Var(
+		&params.rawConfig.DPoSValidatorsCount,
+		"dpos-validators-count",
+		defaultConfig.DPoSValidatorsCount,
+		"the number of DPoS validators to use",
+	)
+
 	setLegacyFlags(cmd)
 
 	setDevFlags(cmd)

@@ -100,6 +100,9 @@ type serverParams struct {
 	
 	// 🆕 新增：共识切换高度
 	consensusSwitchHeight uint64
+	
+	// 🆕 新增：DPoS验证者数量
+	dposValidatorsCount uint64
 }
 
 func (p *serverParams) isMaxPeersSet() bool {
@@ -193,6 +196,8 @@ func (p *serverParams) generateConfig() *server.Config {
 		
 		// 🆕 新增：共识切换高度
 		ConsensusSwitchHeight: p.consensusSwitchHeight,
+		// 🆕 新增：DPoS验证者数量
+		DPoSValidatorsCount:   p.dposValidatorsCount,
 		JSONLogFormat:      p.rawConfig.JSONLogFormat,
 		LogFilePath:        p.logFileLocation,
 

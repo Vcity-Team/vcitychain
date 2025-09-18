@@ -547,6 +547,9 @@ func (s *Server) setupConsensus() error {
 	
 	// 🆕 新增：将共识切换高度添加到engineConfig中
 	engineConfig["consensusSwitchHeight"] = float64(s.config.ConsensusSwitchHeight)
+	
+	// 🆕 新增：将DPoS验证者数量添加到engineConfig中
+	engineConfig["dposValidatorsCount"] = float64(s.config.DPoSValidatorsCount)
 
 	var (
 		blockTime = common.Duration{Duration: 0}

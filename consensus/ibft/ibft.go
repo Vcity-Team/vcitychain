@@ -147,6 +147,16 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		quorumSizeBlockNum = uint64(readBlockNum)
 	}
 
+	// 🆕 新增：从配置中读取DPoS验证者数量
+	var dposValidatorsCount = uint64(4) // 默认值
+	if rawDPoSValidatorsCount, ok := params.Config.Config["dposValidatorsCount"]; ok {
+		readDPoSValidatorsCount, ok := rawDPoSValidatorsCount.(float64)
+		if !ok {
+			return nil, errors.New("invalid type assertion for dposValidatorsCount")
+		}
+		dposValidatorsCount = uint64(readDPoSValidatorsCount)
+	}
+
 	logger := params.Logger.Named("ibft")
 
 	forkManager, err := fork.NewForkManager(
@@ -158,6 +168,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		epochSize,
 		params.Config.Config,
 		params.Config.DataDir, // 🆕 新增：数据目录参数
+		dposValidatorsCount, // 🆕 新增：DPoS验证者数量参数（从配置读取）
 	)
 
 	if err != nil {

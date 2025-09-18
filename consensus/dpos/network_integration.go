@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Vcity-Team/vcitychain/bls"
 	dposProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
 	"github.com/Vcity-Team/vcitychain/network"
 	"github.com/Vcity-Team/vcitychain/types"
@@ -1900,250 +1903,86 @@ func (ni *NetworkIntegration) sendBLSKeyResponse(responseMsg *BLSKeyResponseMess
 	return nil
 }
 
-// findBLSKeyFromGenesisFile 从genesis.json文件中查找BLS公钥
+// findBLSKeyFromGenesisFile 从validator-bls.key文件中查找BLS公钥
 func (ni *NetworkIntegration) findBLSKeyFromGenesisFile(address types.Address) ([]byte, error) {
-	// 由于无法通过反射访问未导出字段，我们使用回调函数来获取BLS公钥
-	if ni.blsKeyLookupCallback != nil {
-		if blsKeyBytes, err := ni.blsKeyLookupCallback(address); err == nil && len(blsKeyBytes) > 0 {
-			ni.logger.Debug("✅ 通过回调找到BLS公钥", "address", address.String())
-			return blsKeyBytes, nil
-		}
+	// 🆕 修改：不再从创世文件查找，而是从validator-bls.key文件查找
+	
+	// 1. 获取数据目录路径
+	dataDir := ni.getDataDir()
+	if dataDir == "" {
+		return nil, fmt.Errorf("data directory not available")
 	}
-
-	// 🆕 尝试从全局注册表获取BLS公钥
-	// 首先尝试常见的实例名称，然后尝试使用第一个可用的实例
-	var dposInstance interface{}
-	var exists bool
-
-	// 尝试常见的实例名称
-	for _, instanceName := range []string{"vcity_dpos", "dpos", "polygon_dpos"} {
-		if instance, found := GetDPoSInstance(instanceName); found {
-			dposInstance = instance
-			exists = true
-
-			break
-		}
+	
+	// 2. 构建BLS私钥文件路径
+	keyFilePath := filepath.Join(dataDir, "consensus", "validator-bls.key")
+	
+	// 3. 检查文件是否存在
+	if _, err := os.Stat(keyFilePath); os.IsNotExist(err) {
+		ni.logger.Debug("❌ BLS private key file not found", 
+			"address", address.String(),
+			"filePath", keyFilePath)
+		return nil, fmt.Errorf("BLS private key file not found: %s", keyFilePath)
 	}
-
-	// 如果没找到，使用第一个可用的实例
-	if !exists {
-		allInstances := GetAllDPoSInstances()
-		if len(allInstances) > 0 {
-			for _, instance := range allInstances {
-				if instance != nil {
-					dposInstance = instance
-					exists = true
-
-					break
-				}
-			}
-		}
+	
+	// 4. 读取私钥文件
+	privateKeyData, err := os.ReadFile(keyFilePath)
+	if err != nil {
+		ni.logger.Error("❌ Failed to read BLS private key file", 
+			"address", address.String(),
+			"filePath", keyFilePath,
+			"error", err)
+		return nil, fmt.Errorf("failed to read BLS private key file: %w", err)
 	}
-
-	// 🆕 直接打印创世文件中的initialDelegates内容
-	if exists && dposInstance != nil {
-
-		// 使用反射获取config字段
-		if reflectValue := reflect.ValueOf(dposInstance); reflectValue.IsValid() {
-			// 获取config字段
-			if configField := reflectValue.Elem().FieldByName("config"); configField.IsValid() {
-
-				// 🆕 如果configField是指针，需要先解引用
-				var configValue reflect.Value
-				if configField.Kind() == reflect.Ptr {
-					if configField.IsNil() {
-						ni.logger.Warn("⚠️ config字段为nil指针",
-							"address", address.String())
-						return nil, fmt.Errorf("config field is nil pointer")
-					}
-					configValue = configField.Elem()
-
-				} else {
-					configValue = configField
-				}
-
-				// 获取InitialDelegates字段
-				if initialDelegatesField := configValue.FieldByName("InitialDelegates"); initialDelegatesField.IsValid() {
-
-					// 打印InitialDelegates的数量
-					if initialDelegatesField.Kind() == reflect.Slice {
-
-						// 遍历并打印每个delegate的详细信息
-						for i := 0; i < initialDelegatesField.Len(); i++ {
-							delegate := initialDelegatesField.Index(i)
-							if delegate.IsValid() {
-
-								// 🆕 如果delegate是指针，需要先解引用
-								var delegateValue reflect.Value
-								if delegate.Kind() == reflect.Ptr {
-									if delegate.IsNil() {
-										ni.logger.Warn("⚠️ delegate元素为nil指针",
-											"index", i,
-											"address", address.String())
-										continue
-									}
-									delegateValue = delegate.Elem()
-
-								} else {
-									delegateValue = delegate
-								}
-
-								// 获取Address字段
-								if addressField := delegateValue.FieldByName("Address"); addressField.IsValid() {
-
-									// 🆕 检查字段是否可以被访问
-									if addressField.CanInterface() {
-										_ = addressField.Interface()
-
-										// 获取BlsKey字段
-										if blsKeyField := delegateValue.FieldByName("BlsKey"); blsKeyField.IsValid() {
-
-											if blsKeyField.CanInterface() {
-												_ = blsKeyField.Interface()
-
-											} else {
-												ni.logger.Warn("⚠️ BlsKey字段无法访问（可能是未导出的）",
-													"index", i,
-													"address", address.String())
-											}
-										} else {
-											ni.logger.Warn("⚠️ 未找到BlsKey字段",
-												"index", i,
-												"address", address.String(),
-												"availableFields", getAvailableFields(delegateValue))
-										}
-									} else {
-
-										// 🆕 尝试使用String()方法（如果存在）
-										if stringMethod := delegateValue.MethodByName("String"); stringMethod.IsValid() {
-
-											if results := stringMethod.Call(nil); len(results) > 0 {
-												if result := results[0]; result.CanInterface() {
-													_ = result.Interface().(string)
-
-												}
-											}
-										}
-									}
-								} else {
-									ni.logger.Warn("⚠️ 未找到Address字段",
-										"index", i,
-										"address", address.String(),
-										"availableFields", getAvailableFields(delegateValue))
-								}
-							}
-						}
-					}
-				} else {
-					ni.logger.Warn("⚠️ 未找到InitialDelegates字段",
-						"address", address.String(),
-						"availableFields", getAvailableFields(configField))
-				}
-			} else {
-				ni.logger.Warn("⚠️ 未找到config字段",
-					"address", address.String(),
-					"availableFields", getAvailableFields(reflectValue.Elem()))
-			}
-		}
-
-		// 使用反射调用GetBLSKeyBytesFromGenesis方法
-		if reflectValue := reflect.ValueOf(dposInstance); reflectValue.IsValid() {
-
-			// 🆕 尝试多个可能的方法名
-			var method reflect.Value
-			var methodName string
-
-			// 按优先级尝试不同的方法名
-			for _, name := range []string{"GetBLSKeyBytesFromGenesis", "GetBLSKey"} {
-				if foundMethod := reflectValue.MethodByName(name); foundMethod.IsValid() {
-					method = foundMethod
-					methodName = name
-
-					break
-				}
-			}
-
-			if method.IsValid() {
-
-				// 根据方法名和签名调用相应的方法
-				var results []reflect.Value
-				var callErr error
-
-				switch methodName {
-				case "GetBLSKeyBytesFromGenesis", "GetBLSKey":
-					// 这些方法只需要address参数
-					results = method.Call([]reflect.Value{reflect.ValueOf(address)})
-				default:
-					callErr = fmt.Errorf("unsupported method: %s", methodName)
-				}
-
-				if callErr != nil {
-					ni.logger.Error("❌ 方法调用失败",
-						"address", address.String(),
-						"methodName", methodName,
-						"error", callErr.Error())
-					// 跳过这个方法，尝试下一个
-					return nil, callErr
-				}
-
-				ni.logger.Debug("🔍 方法调用完成",
-					"address", address.String(),
-					"methodName", methodName,
-					"resultsCount", len(results))
-
-				if len(results) >= 2 {
-					// 检查错误
-					if results[1].IsNil() { // err == nil
-						ni.logger.Debug("🔍 方法调用无错误",
-							"address", address.String())
-
-						if blsKeyBytes, ok := results[0].Interface().([]byte); ok {
-							ni.logger.Debug("🔍 成功获取BLS公钥字节",
-								"address", address.String(),
-								"blsKeyLength", len(blsKeyBytes))
-
-							if len(blsKeyBytes) > 0 {
-								ni.logger.Debug("✅ 从全局注册表找到BLS公钥", "address", address.String())
-								return blsKeyBytes, nil
-							} else {
-								ni.logger.Debug("⚠️ BLS公钥字节长度为0",
-									"address", address.String())
-							}
-						} else {
-							ni.logger.Debug("⚠️ 无法将结果转换为字节数组",
-								"address", address.String(),
-								"resultType", fmt.Sprintf("%T", results[0].Interface()))
-						}
-					} else {
-						// 有错误
-						if err, ok := results[1].Interface().(error); ok {
-							ni.logger.Debug("⚠️ 方法调用返回错误",
-								"address", address.String(),
-								"error", err.Error())
-						} else {
-							ni.logger.Debug("⚠️ 方法调用返回非错误类型",
-								"address", address.String(),
-								"errorType", fmt.Sprintf("%T", results[1].Interface()))
-						}
-					}
-				} else {
-					ni.logger.Debug("⚠️ 方法返回结果数量不足",
-						"address", address.String(),
-						"expectedCount", 2,
-						"actualCount", len(results))
-				}
-			} else {
-				ni.logger.Debug("⚠️ 未找到可用的BLS公钥获取方法",
-					"address", address.String(),
-					"availableMethods", getAvailableMethods(reflectValue))
-			}
-		} else {
-			ni.logger.Debug("⚠️ 反射值无效",
-				"address", address.String())
-		}
+	
+	// 5. 获取十六进制字符串（去除可能的换行符）
+	privateKeyHex := strings.TrimSpace(string(privateKeyData))
+	
+	// 6. 检查并修正私钥长度
+	if len(privateKeyHex)%2 != 0 {
+		privateKeyHex = "0" + privateKeyHex
 	}
+	
+	// 7. 解析BLS私钥
+	privateKey, err := bls.UnmarshalPrivateKey([]byte(privateKeyHex))
+	if err != nil {
+		ni.logger.Error("❌ Failed to unmarshal BLS private key", 
+			"address", address.String(),
+			"error", err)
+		return nil, fmt.Errorf("failed to unmarshal BLS private key: %w", err)
+	}
+	
+	// 8. 从私钥生成公钥
+	publicKey := privateKey.PublicKey()
+	publicKeyBytes := publicKey.Marshal()
+	
+	// 9. 验证公钥长度（应该是128字节）
+	if len(publicKeyBytes) != 128 {
+		return nil, fmt.Errorf("invalid BLS public key length: expected 128 bytes, got %d", len(publicKeyBytes))
+	}
+	
+	ni.logger.Debug("✅ 从validator-bls.key文件成功获取BLS公钥", 
+		"address", address.String(),
+		"filePath", keyFilePath,
+		"blsKeyLength", len(publicKeyBytes))
+	
+	return publicKeyBytes, nil
+}
 
-	return nil, fmt.Errorf("BLS key not found for address %s", address.String())
+// 🆕 新增：获取数据目录路径
+func (ni *NetworkIntegration) getDataDir() string {
+	// 尝试从DPoS实例获取数据目录
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+		// 这里需要添加获取数据目录的逻辑
+		// 可以通过配置或其他方式获取
+		return dposInstance.getDataDir()
+	}
+	
+	// 备用方案：从环境变量或默认路径获取
+	if dataDir := os.Getenv("VCITY_DATA_DIR"); dataDir != "" {
+		return dataDir
+	}
+	
+	return "" // 返回空字符串表示未找到
 }
 
 // getAvailableMethods 获取结构体的所有可用方法（用于调试）

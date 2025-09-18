@@ -2143,17 +2143,17 @@ func (i *Extra) applyValidatorSetDelta(parentValidators validator.AccountSet, de
 	return currentValidators
 }
 
-// getBLSKeyFromGenesis 从创世文件获取BLS公钥
+// getBLSKeyFromGenesis 从validator-bls.key文件获取BLS公钥
 func (i *Extra) getBLSKeyFromGenesis(address types.Address, logger hclog.Logger) (*bls.PublicKey, error) {
-	logger.Debug("🔍 从创世文件获取BLS公钥",
+	logger.Debug("🔍 从validator-bls.key文件获取BLS公钥",
 		"address", address.String())
 
 	// 尝试从DPoS实例获取BLS公钥
 	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-		// 从创世文件获取BLS公钥字节
+		// 从validator-bls.key文件获取BLS公钥字节
 		blsKeyBytes, err := dposInstance.GetBLSKeyBytesFromGenesis(address)
 		if err != nil {
-			logger.Debug("❌ 从创世文件获取BLS公钥失败",
+			logger.Debug("❌ 从validator-bls.key文件获取BLS公钥失败",
 				"address", address.String(),
 				"error", err)
 			return nil, err
@@ -2169,12 +2169,12 @@ func (i *Extra) getBLSKeyFromGenesis(address types.Address, logger hclog.Logger)
 			return nil, err
 		}
 
-		logger.Debug("✅ 从创世文件成功获取BLS公钥",
+		logger.Debug("✅ 从validator-bls.key文件成功获取BLS公钥",
 			"address", address.String(),
 			"blsKeyLength", len(blsKeyBytes))
 
 		return blsKey, nil
 	}
 
-	return nil, fmt.Errorf("无法获取DPoS实例来从创世文件获取BLS公钥")
+	return nil, fmt.Errorf("无法获取DPoS实例来从validator-bls.key文件获取BLS公钥")
 }

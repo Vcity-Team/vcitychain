@@ -40,6 +40,9 @@ type Config struct {
 	WebSocketReadLimit      uint64 `json:"web_socket_read_limit" yaml:"web_socket_read_limit"`
 
 	MetricsInterval time.Duration `json:"metrics_interval" yaml:"metrics_interval"`
+	
+	// 🆕 新增：DPoS验证者数量配置
+	DPoSValidatorsCount uint64 `json:"dpos_validators_count" yaml:"dpos_validators_count"`
 }
 
 // Telemetry holds the config details for metric services.
@@ -137,6 +140,9 @@ func DefaultConfig() *Config {
 		ConcurrentRequestsDebug:  DefaultConcurrentRequestsDebug,
 		WebSocketReadLimit:       DefaultWebSocketReadLimit,
 		MetricsInterval:          DefaultMetricsInterval,
+		
+		// 🆕 新增：DPoS验证者数量默认值
+		DPoSValidatorsCount: 4, // 默认4个验证者
 	}
 }
 

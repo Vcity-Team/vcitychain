@@ -8505,34 +8505,84 @@ func (d *DPoS) callCommandDataSourcesOnStartup() error {
 // broadcastBLSKeyOnStartup 启动时广播BLS公钥 - 已移除
 // 新的机制：只有在需要BLS公钥时才通过网络请求获取
 
-// GetBLSKeyBytesFromGenesis 从创世文件获取指定地址的BLS公钥
+// GetBLSKeyBytesFromGenesis 从validator-bls.key文件获取指定地址的BLS公钥
 func (d *DPoS) GetBLSKeyBytesFromGenesis(address types.Address) ([]byte, error) {
-
-	for _, delegate := range d.config.InitialDelegates {
-
-		if delegate.Address == address && delegate.BlsKey != "" {
-			d.logger.Debug("✅ 从创世文件找到BLS公钥",
-				"address", address.String(),
-				"blsKeyLength", len(delegate.BlsKey))
-
-			// 解析十六进制字符串
-			blsKeyBytes, err := hex.DecodeString(delegate.BlsKey)
-			if err != nil {
-				d.logger.Error("❌ 解析创世文件BLS公钥失败",
-					"address", address.String(),
-					"error", err)
-				return nil, fmt.Errorf("failed to decode BLS key from genesis: %w", err)
-			}
-
-			d.logger.Debug("✅ 成功解析创世文件BLS公钥",
-				"address", address.String(),
-				"blsKeyBytesLength", len(blsKeyBytes))
-
-			return blsKeyBytes, nil
-		}
+	// 🆕 修改：不再从创世文件查找，而是从validator-bls.key文件查找
+	
+	// 1. 获取数据目录路径
+	dataDir := d.getDataDir()
+	if dataDir == "" {
+		return nil, fmt.Errorf("data directory not available")
 	}
+	
+	// 2. 构建BLS私钥文件路径
+	keyFilePath := filepath.Join(dataDir, "consensus", "validator-bls.key")
+	
+	// 3. 检查文件是否存在
+	if _, err := os.Stat(keyFilePath); os.IsNotExist(err) {
+		d.logger.Debug("❌ BLS private key file not found", 
+			"address", address.String(),
+			"filePath", keyFilePath)
+		return nil, fmt.Errorf("BLS private key file not found: %s", keyFilePath)
+	}
+	
+	// 4. 读取私钥文件
+	privateKeyData, err := os.ReadFile(keyFilePath)
+	if err != nil {
+		d.logger.Error("❌ Failed to read BLS private key file", 
+			"address", address.String(),
+			"filePath", keyFilePath,
+			"error", err)
+		return nil, fmt.Errorf("failed to read BLS private key file: %w", err)
+	}
+	
+	// 5. 获取十六进制字符串（去除可能的换行符）
+	privateKeyHex := strings.TrimSpace(string(privateKeyData))
+	
+	// 6. 检查并修正私钥长度
+	if len(privateKeyHex)%2 != 0 {
+		privateKeyHex = "0" + privateKeyHex
+	}
+	
+	// 7. 解析BLS私钥
+	privateKey, err := bls.UnmarshalPrivateKey([]byte(privateKeyHex))
+	if err != nil {
+		d.logger.Error("❌ Failed to unmarshal BLS private key", 
+			"address", address.String(),
+			"error", err)
+		return nil, fmt.Errorf("failed to unmarshal BLS private key: %w", err)
+	}
+	
+	// 8. 从私钥生成公钥
+	publicKey := privateKey.PublicKey()
+	publicKeyBytes := publicKey.Marshal()
+	
+	// 9. 验证公钥长度（应该是128字节）
+	if len(publicKeyBytes) != 128 {
+		return nil, fmt.Errorf("invalid BLS public key length: expected 128 bytes, got %d", len(publicKeyBytes))
+	}
+	
+	d.logger.Debug("✅ 从validator-bls.key文件成功获取BLS公钥", 
+		"address", address.String(),
+		"filePath", keyFilePath,
+		"blsKeyLength", len(publicKeyBytes))
+	
+	return publicKeyBytes, nil
+}
 
-	return nil, fmt.Errorf("BLS key not found in genesis for address %s", address.String())
+// 🆕 新增：获取数据目录路径
+func (d *DPoS) getDataDir() string {
+	// 从DPoS实例的数据目录字段获取
+	if d.dataDir != "" {
+		return d.dataDir
+	}
+	
+	// 备用方案：从环境变量获取
+	if dataDir := os.Getenv("VCITY_DATA_DIR"); dataDir != "" {
+		return dataDir
+	}
+	
+	return "" // 返回空字符串表示未找到
 }
 
 // getBLSKeyBytes 获取BLS公钥字节

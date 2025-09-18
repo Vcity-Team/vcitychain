@@ -49,6 +49,9 @@ type Config struct {
 	
 	// 🆕 新增：共识切换高度
 	ConsensusSwitchHeight uint64
+	
+	// 🆕 新增：DPoS验证者数量
+	DPoSValidatorsCount   uint64
 }
 
 // Telemetry holds the config details for metric services
