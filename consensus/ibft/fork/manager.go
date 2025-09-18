@@ -725,17 +725,96 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 		"insufficientBalance", insufficientBalanceCount,
 		"successRate", fmt.Sprintf("%.1f%%", float64(validValidatorCount)/float64(ibftValidators.Len())*100))
 	
-	// 检查是否有足够的验证者
-	if validValidatorCount == 0 {
-		// 记录共识失败时间
-		m.lastConsensusFailure = time.Now()
+	// 检查是否有足够的验证者，如果没有则循环重试
+	retryCount := 0
+	// 无限重试直到满足条件
+	
+	for validValidatorCount == 0 {
+		if retryCount > 0 {
+			// 记录共识失败时间
+			m.lastConsensusFailure = time.Now()
+			
+			// 等待10秒后重新查询余额
+			m.logger.Warn("⚠️ 没有验证者满足DPoS质押要求，等待10秒后重新查询余额", 
+				"retryCount", retryCount)
+			time.Sleep(10 * time.Second)
+		}
 		
-		// 等待10秒后重试
-		m.logger.Warn("⚠️ 没有验证者满足DPoS质押要求，等待10秒后重试")
-		time.Sleep(10 * time.Second)
+		// 重新查询所有验证者的余额
+		m.logger.Info("🔄 重新查询验证者余额...", 
+			"retryCount", retryCount+1)
 		
-		return nil, fmt.Errorf("❌ 没有验证者满足DPoS质押要求，无法进行共识")
+		// 重置计数器（只在重试时重置）
+		validValidatorCount = 0
+		insufficientBalanceCount = 0
+		
+		// 重新创建验证者集合
+		validatorSet = validators.NewValidatorSet(validators.ECDSAValidatorType)
+		
+		// 重新检查每个验证者
+		for i := 0; i < ibftValidators.Len(); i++ {
+			ibftValidator := ibftValidators.At(uint64(i))
+			address := ibftValidator.Addr()
+			
+			// 重新查询验证者余额
+			balance, err := m.getValidatorBalance(address)
+			if err != nil {
+				m.logger.Error("❌ 重新查询余额失败", 
+					"address", address.String(), 
+					"error", err,
+					"retryCount", retryCount+1)
+				continue
+			}
+			
+			// 重新检查是否满足最小质押要求
+			if balance.Cmp(minStakeAmount) < 0 {
+				insufficientBalanceCount++
+				m.logger.Warn("⚠️ 重新查询后验证者余额仍不足", 
+					"address", address.String(),
+					"balance", balance.String(),
+					"required", minStakeAmount.String(),
+					"deficit", new(big.Int).Sub(minStakeAmount, balance).String(),
+					"retryCount", retryCount+1)
+				continue
+			}
+			
+			// 重新生成BLS公钥
+			blsPublicKey, err := m.readBLSPrivateKeyAndGeneratePublicKey(address)
+			if err != nil {
+				m.logger.Error("❌ 重新生成BLS公钥失败", 
+					"address", address.String(), 
+					"error", err,
+					"retryCount", retryCount+1)
+				continue
+			}
+			
+			// 重新创建验证者
+			ecdsaValidator := validators.NewECDSAValidatorWithBLS(address, blsPublicKey)
+			validatorSet.Add(ecdsaValidator)
+			validValidatorCount++
+			
+			// 记录重新查询成功
+			m.logger.Info("✅ 重新查询后DPoS验证者创建成功", 
+				"address", address.String(),
+				"balance", balance.String(),
+				"blsKeyLength", len(blsPublicKey),
+				"validatorIndex", validValidatorCount,
+				"retryCount", retryCount+1)
+		}
+		
+		// 记录重试结果
+		m.logger.Info("🚨 重新查询后DPoS验证者筛选完成", 
+			"height", height,
+			"totalCandidates", ibftValidators.Len(),
+			"validValidators", validValidatorCount,
+			"insufficientBalance", insufficientBalanceCount,
+			"successRate", fmt.Sprintf("%.1f%%", float64(validValidatorCount)/float64(ibftValidators.Len())*100),
+			"retryCount", retryCount+1)
+		
+		retryCount++
 	}
+	
+	// 由于使用无限重试，这里不会执行到（循环会一直继续直到有验证者）
 	
 	if validValidatorCount < 2 {
 		m.logger.Warn("⚠️ 警告：DPoS验证者数量过少", 
