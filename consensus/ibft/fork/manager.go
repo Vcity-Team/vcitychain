@@ -276,20 +276,22 @@ func (m *ForkManager) GetValidators(height uint64) (validators.Validators, error
 			}
 		}
 		
-	// 如果DPoS引擎正在运行，使用DPoS引擎获取验证者
-	if m.isDPoSRunning && m.dposEngine != nil {
-		m.logger.Info("📋 使用DPoS引擎获取验证者", "height", height)
-		validators, err := m.dposEngine.GetValidators(height)
-		if err != nil {
-			m.logger.Error("❌ DPoS引擎获取验证者失败", "error", err)
-			return nil, err
+		// 如果DPoS引擎正在运行，使用DPoS引擎获取验证者
+		if m.isDPoSRunning && m.dposEngine != nil {
+			m.logger.Info("📋 使用DPoS引擎获取验证者", "height", height)
+			validators, err := m.dposEngine.GetValidators(height)
+			if err != nil {
+				m.logger.Error("❌ DPoS引擎获取验证者失败", "error", err)
+				return nil, err
+			}
+			m.logger.Info("✅ DPoS引擎返回验证者", "count", validators.Len())
+			return validators, nil
 		}
-		m.logger.Info("✅ DPoS引擎返回验证者", "count", validators.Len())
-		return validators, nil
-	}
 		
-		// 否则使用原来的DPoS验证者筛选逻辑
-		return m.getDPoSValidators(height)
+		// 🆕 注意：不再使用ForkManager的DPoS验证者筛选逻辑
+		// DPoS插件现在会自己解析验证者，这里应该返回空验证者集合
+		m.logger.Warn("⚠️ DPoS引擎未运行，返回空验证者集合", "height", height)
+		return validators.NewECDSAValidatorSet(), nil
 	}
 	
 	fork := m.forks.getFork(height)
@@ -839,20 +841,28 @@ func (e *DPoSEngineWrapper) IsRunning() bool {
 func (e *DPoSEngineWrapper) GetValidators(height uint64) (validators.Validators, error) {
 	e.logger.Info("📋 DPoS引擎获取验证者", "height", height)
 	
-	// 使用ForkManager的getDPoSValidators方法获取验证者
-	if e.forkManager == nil {
-		e.logger.Error("❌ ForkManager不可用")
-		return nil, fmt.Errorf("ForkManager is nil")
+	// 使用DPoS插件自己解析的验证者
+	if e.dpos == nil {
+		e.logger.Error("❌ DPoS实例不可用")
+		return nil, fmt.Errorf("DPoS instance is nil")
 	}
 	
-	validators, err := e.forkManager.getDPoSValidators(height)
-	if err != nil {
-		e.logger.Error("❌ 获取DPoS验证者失败", "error", err)
-		return nil, err
+	// 检查DPoS插件是否有解析出的验证者
+	dposValidators := e.dpos.GetValidators()
+	if dposValidators == nil || len(dposValidators) == 0 {
+		e.logger.Warn("⚠️ DPoS插件没有解析出验证者，返回空验证者集合")
+		return validators.NewECDSAValidatorSet(), nil
+	}
+
+	// 将DPoS验证者转换为IBFT兼容格式
+	ibftValidators := validators.NewECDSAValidatorSet()
+	for _, dposValidator := range dposValidators {
+		ibftValidator := validators.NewECDSAValidator(dposValidator.Address)
+		ibftValidators.Add(ibftValidator)
 	}
 	
-	e.logger.Info("✅ DPoS引擎返回验证者", "count", validators.Len())
-	return validators, nil
+	e.logger.Info("✅ DPoS引擎返回验证者", "count", ibftValidators.Len())
+	return ibftValidators, nil
 }
 
 // 🆕 新增：检查是否需要切换到DPoS
@@ -1004,10 +1014,23 @@ func (m *ForkManager) createRealDPoSEngine() (DPoSEngine, error) {
 	}
 	
 	if m.executor != nil {
-		// m.executor是contract.Executor接口，需要创建state.Executor包装器
-		// 暂时使用nil，等待正确的实现
+		// m.executor是contract.Executor接口，需要从中获取state.Executor
+		if adapter, ok := m.executor.(interface {
+			GetExecutor() *state.Executor
+		}); ok {
+			executorInstance = adapter.GetExecutor()
+			if executorInstance != nil {
+				m.logger.Info("✅ 成功获取state.Executor")
+			} else {
+				m.logger.Warn("⚠️ GetExecutor()返回nil")
+			}
+		} else {
+			m.logger.Warn("⚠️ Executor类型不匹配，无法获取state.Executor")
+			executorInstance = nil
+		}
+	} else {
+		m.logger.Warn("⚠️ m.executor为nil")
 		executorInstance = nil
-		m.logger.Warn("⚠️ Executor类型不匹配，暂时使用nil")
 	}
 	
 	if m.txPool != nil {

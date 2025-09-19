@@ -36,6 +36,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/umbracle/fastrlp"
 	bolt "go.etcd.io/bbolt"
 	"google.golang.org/protobuf/proto"
 )
@@ -2383,6 +2384,11 @@ type DPoS struct {
 
 	// 🆕 新增：余额查询器
 	balanceQuerier NativeTokenBalanceQuerier
+
+	// 🆕 新增：DPoS验证者相关字段
+	validators        validator.AccountSet // 解析出的验证者集合
+	minStakeAmount    *big.Int             // 最小质押门槛
+	genesisExtraData  []byte               // 创世块extraData
 }
 
 // VoterInfo 投票者信息
@@ -3130,6 +3136,13 @@ func (d *DPoS) Initialize() error {
 		d.logger.Warn("Data directory not set, state store will not be initialized")
 	}
 
+	// 🆕 新增：解析DPoS验证者（从创世块extraData）
+	if err := d.parseValidatorsFromGenesis(); err != nil {
+		d.logger.Error("Failed to parse validators from genesis", "error", err)
+		// 不返回错误，因为验证者解析失败不应该阻止DPoS启动
+		// 后续可以通过其他方式获取验证者
+	}
+
 	// initialize delegates
 	if err := d.initializeDelegates(); err != nil {
 		return fmt.Errorf("failed to initialize delegates: %w", err)
@@ -3175,6 +3188,307 @@ func (d *DPoS) Initialize() error {
 	d.logger.Info("DPoS runtime initialized successfully")
 
 	return nil
+}
+
+// 🆕 新增：从创世块解析DPoS验证者
+func (d *DPoS) parseValidatorsFromGenesis() error {
+	d.logger.Info("🔍 开始从创世块解析DPoS验证者")
+	
+	// 1. 获取创世块
+	genesisHeader, exists := d.config.Blockchain.GetHeaderByNumber(0)
+	if !exists {
+		return fmt.Errorf("genesis block not found")
+	}
+	
+	// 保存创世块extraData
+	d.genesisExtraData = genesisHeader.ExtraData
+	d.logger.Info("📋 创世块extraData已加载", "length", len(d.genesisExtraData))
+	
+	// 2. 解析验证者地址
+	ibftValidators, err := d.parseValidatorsFromExtraData(d.genesisExtraData)
+	if err != nil {
+		return fmt.Errorf("failed to parse validators from extraData: %w", err)
+	}
+	
+	// 3. 设置最小质押门槛
+	d.minStakeAmount = d.config.MinVotingPower
+	if d.minStakeAmount == nil {
+		// 使用默认值：1000 VCITY = 1000 * 1e18 wei
+		d.minStakeAmount, _ = new(big.Int).SetString("1000000000000000000000", 10)
+		d.logger.Info("使用默认最小质押门槛", "amount", d.minStakeAmount.String())
+	}
+	
+	// 4. 创建DPoS验证者集合
+	d.validators = make(validator.AccountSet, 0)
+	
+	d.logger.Info("🚨 DPoS验证者筛选开始", 
+		"totalCandidates", ibftValidators.Len(),
+		"minStakeAmount", d.minStakeAmount.String())
+	
+	validValidatorCount := 0
+	insufficientBalanceCount := 0
+	
+	// 5. 为每个验证者地址检查余额并生成BLS公钥
+	for i := 0; i < ibftValidators.Len(); i++ {
+		ibftValidator := ibftValidators[i]
+		address := ibftValidator.Address
+		
+		// 查询验证者余额
+		balance, err := d.getValidatorBalance(address)
+		if err != nil {
+			d.logger.Error("❌ 余额查询失败", 
+				"address", address.String(), 
+				"error", err)
+			continue
+		}
+		
+		// 检查是否满足最小质押要求
+		if balance.Cmp(d.minStakeAmount) < 0 {
+			insufficientBalanceCount++
+			d.logger.Warn("⚠️ 验证者余额不足", 
+				"address", address.String(),
+				"balance", balance.String(),
+				"required", d.minStakeAmount.String(),
+				"deficit", new(big.Int).Sub(d.minStakeAmount, balance).String())
+			continue
+		}
+		
+		// 从私钥文件生成BLS公钥
+		blsPublicKey, err := d.readBLSPrivateKeyAndGeneratePublicKey(address)
+		if err != nil {
+			d.logger.Error("❌ BLS公钥生成失败", 
+				"address", address.String(), 
+				"error", err)
+			continue
+		}
+		
+		// 解析BLS公钥
+		blsKey, err := bls.UnmarshalPublicKey(blsPublicKey)
+		if err != nil {
+			d.logger.Error("❌ BLS公钥解析失败", 
+				"address", address.String(), 
+				"error", err)
+			continue
+		}
+		
+		// 创建DPoS验证者
+		delegate := &validator.ValidatorMetadata{
+			Address:     address,
+			VotingPower: balance,
+			BlsKey:      blsKey,
+			IsActive:    true,
+		}
+		
+		d.validators = append(d.validators, delegate)
+		validValidatorCount++
+		
+		// 关键日志：成功创建DPoS验证者
+		d.logger.Info("✅ DPoS验证者创建成功", 
+			"address", address.String(),
+			"balance", balance.String(),
+			"blsKeyLength", len(blsPublicKey),
+			"validatorIndex", validValidatorCount)
+	}
+	
+	// 关键日志：DPoS验证者筛选结果汇总
+	d.logger.Info("🚨 DPoS验证者筛选完成", 
+		"totalCandidates", ibftValidators.Len(),
+		"validValidators", validValidatorCount,
+		"insufficientBalance", insufficientBalanceCount,
+		"successRate", fmt.Sprintf("%.1f%%", float64(validValidatorCount)/float64(ibftValidators.Len())*100))
+	
+	if validValidatorCount == 0 {
+		d.logger.Error("❌ 没有验证者满足DPoS质押要求", 
+			"totalCandidates", ibftValidators.Len(),
+			"minStakeAmount", d.minStakeAmount.String())
+		return fmt.Errorf("no validators meet DPoS stake requirements")
+	}
+	
+	if validValidatorCount < 2 {
+		d.logger.Warn("⚠️ 警告：DPoS验证者数量过少", 
+			"validValidators", validValidatorCount,
+			"建议至少需要2个验证者")
+	}
+	
+	d.logger.Info("✅ DPoS验证者解析完成", "count", len(d.validators))
+	return nil
+}
+
+// 🆕 新增：从extraData解析验证者地址
+func (d *DPoS) parseValidatorsFromExtraData(extraData []byte) (validator.AccountSet, error) {
+	// 开始解析extraData
+	
+	// Remove only the vanity bytes (32 bytes) from extraData
+	// The rest is RLP data containing validators and seals
+	if len(extraData) < 32 {
+		return nil, fmt.Errorf("extraData too short: %d bytes", len(extraData))
+	}
+	
+	// Extract the RLP-encoded data
+	// extraData format: [vanity(32)] + [RLP(IstanbulExtra)]
+	rlpData := extraData[32:]
+	
+	// 提取RLP数据
+	
+	// Create validator accounts
+	validatorList := make([]*validator.ValidatorMetadata, 0)
+	
+	// Parse RLP data using the same method as the test
+	err := types.UnmarshalRlp(func(p *fastrlp.Parser, v *fastrlp.Value) error {
+		// Get the top-level list
+		elems, err := v.GetElems()
+		if err != nil {
+			return fmt.Errorf("expected array: %w", err)
+		}
+		
+		// 找到验证者列表
+		
+		// Process each element
+		for _, elem := range elems {
+			// Try to get bytes
+			if bytes, err := elem.GetBytes(nil); err == nil {
+				// If it's 20 bytes, it might be an address
+				if len(bytes) == 20 {
+					addr := types.BytesToAddress(bytes)
+					validator := &validator.ValidatorMetadata{
+						Address:     addr,
+						VotingPower: big.NewInt(0), // 初始化为0，后续会更新
+						IsActive:    true,
+					}
+					validatorList = append(validatorList, validator)
+					
+					// 解析验证者地址
+				}
+			} else {
+				// Try to get sub-elements
+				if subElems, err := elem.GetElems(); err == nil {
+					// 找到子列表
+					
+					for _, subElem := range subElems {
+						if subBytes, err := subElem.GetBytes(nil); err == nil {
+							// If it's 20 bytes, it might be an address
+							if len(subBytes) == 20 {
+								addr := types.BytesToAddress(subBytes)
+								validator := &validator.ValidatorMetadata{
+									Address:     addr,
+									VotingPower: big.NewInt(0), // 初始化为0，后续会更新
+									IsActive:    true,
+								}
+								validatorList = append(validatorList, validator)
+								
+								// 解析子列表中的验证者地址
+							}
+						}
+					}
+				}
+			}
+		}
+		
+		return nil
+	}, rlpData)
+	
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse RLP data: %w", err)
+	}
+	
+	// 成功解析验证者
+	
+	return validator.AccountSet(validatorList), nil
+}
+
+// 🆕 新增：查询验证者余额
+func (d *DPoS) getValidatorBalance(address types.Address) (*big.Int, error) {
+	d.logger.Debug("🔍 开始查询验证者余额", "address", address.String())
+	
+	// 检查config和executor
+	if d.config == nil {
+		d.logger.Error("❌ DPoS config is nil")
+		return big.NewInt(0), nil
+	}
+	
+	if d.config.Executor == nil {
+		d.logger.Error("❌ DPoS config.Executor is nil")
+		return big.NewInt(0), nil
+	}
+	
+	// 获取当前区块头
+	currentHeader := d.config.Blockchain.Header()
+	if currentHeader == nil {
+		d.logger.Error("❌ 无法获取当前区块头")
+		return nil, fmt.Errorf("failed to get current header")
+	}
+	
+	d.logger.Debug("📋 当前区块头信息", "number", currentHeader.Number, "stateRoot", currentHeader.StateRoot.String())
+	
+	// 通过executor查询余额
+	if d.config.Executor != nil {
+		// 通过state.Executor的StateAt方法直接获取状态快照
+		snapshot, err := d.config.Executor.StateAt(currentHeader.StateRoot)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create snapshot at state root %s: %w", currentHeader.StateRoot.String(), err)
+		}
+		
+		account, err := snapshot.GetAccount(address)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get account for address %s: %w", address.String(), err)
+		}
+		
+		// 返回账户余额
+		d.logger.Debug("✅ 成功查询到验证者余额", "address", address.String(), "balance", account.Balance.String())
+		return account.Balance, nil
+	}
+	
+	// 如果无法获取executor，返回0余额
+	d.logger.Warn("无法获取executor，返回0余额", "address", address.String())
+	return big.NewInt(0), nil
+}
+
+// 🆕 新增：从私钥文件生成BLS公钥
+func (d *DPoS) readBLSPrivateKeyAndGeneratePublicKey(validatorAddress types.Address) ([]byte, error) {
+	// 1. 构建私钥文件路径
+	keyFilePath := filepath.Join(d.dataDir, "consensus", "validator-bls.key")
+	
+	// 2. 检查文件是否存在
+	if _, err := os.Stat(keyFilePath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("BLS private key file not found: %s", keyFilePath)
+	}
+	
+	// 3. 读取私钥文件
+	privateKeyData, err := os.ReadFile(keyFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read BLS private key file: %w", err)
+	}
+	
+	// 4. 获取十六进制字符串（去除可能的换行符）
+	privateKeyHex := strings.TrimSpace(string(privateKeyData))
+	
+	// 5. 检查并修正私钥长度
+	if len(privateKeyHex)%2 != 0 {
+		d.logger.Info("Private key length is odd, adding leading zero", 
+			"originalLength", len(privateKeyHex),
+			"originalKey", privateKeyHex)
+		privateKeyHex = "0" + privateKeyHex
+		d.logger.Info("Private key corrected", 
+			"correctedLength", len(privateKeyHex),
+			"correctedKey", privateKeyHex)
+	}
+	
+	// 6. 解析BLS私钥
+	privateKey, err := bls.UnmarshalPrivateKey([]byte(privateKeyHex))
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal BLS private key: %w", err)
+	}
+	
+	// 7. 从私钥生成公钥
+	publicKey := privateKey.PublicKey()
+	publicKeyBytes := publicKey.Marshal()
+	
+	// 8. 验证公钥长度（应该是128字节）
+	if len(publicKeyBytes) != 128 {
+		return nil, fmt.Errorf("invalid BLS public key length: expected 128 bytes, got %d", len(publicKeyBytes))
+	}
+	
+	return publicKeyBytes, nil
 }
 
 // initializeDelegates 初始化受托人集合
@@ -8727,4 +9041,12 @@ func (d *DPoS) syncRuntimeDelegatesWithRetry() {
 	d.logger.Warn("⚠️ dposRuntime delegates 同步失败，已达到最大重试次数",
 		"maxRetries", maxRetries,
 		"delegatesCount", len(d.delegates))
+}
+
+// GetValidators 获取DPoS验证者集合（公共方法）
+func (d *DPoS) GetValidators() validator.AccountSet {
+	if d.validators == nil {
+		return validator.AccountSet{}
+	}
+	return d.validators
 }
