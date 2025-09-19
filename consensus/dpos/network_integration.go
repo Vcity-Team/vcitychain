@@ -323,19 +323,16 @@ func NewNetworkIntegration(network *network.Server, logger hclog.Logger) *Networ
 // SetBLSKeyPersistCallback 设置BLS公钥持久化回调函数
 func (ni *NetworkIntegration) SetBLSKeyPersistCallback(callback func(address types.Address, blsKeyBytes []byte) error) {
 	ni.blsKeyPersistCallback = callback
-	ni.logger.Debug("BLS公钥持久化回调函数已设置")
 }
 
 // SetBLSKeyLookupCallback 设置BLS公钥查找回调函数
 func (ni *NetworkIntegration) SetBLSKeyLookupCallback(callback func(address types.Address) ([]byte, error)) {
 	ni.blsKeyLookupCallback = callback
-	ni.logger.Debug("BLS公钥查找回调函数已设置")
 }
 
 // SetDPoSInstance 设置DPoS实例引用
 func (ni *NetworkIntegration) SetDPoSInstance(dposInstance interface{}) {
 	ni.dposInstance = dposInstance
-	ni.logger.Info("DPoS实例引用已设置")
 }
 
 // NewNetworkIntegrationWithExistingTopics 创建使用现有主题的网络集成管理器
@@ -372,11 +369,9 @@ func (ni *NetworkIntegration) SetExistingTopics(signatureRequestTopic, signature
 
 // Start 启动网络集成
 func (ni *NetworkIntegration) Start() error {
-	ni.logger.Debug("starting DPoS network integration")
 
 	// 检查是否已经有主题（使用现有主题的情况）
 	if ni.signatureRequestTopic == nil || ni.signatureResponseTopic == nil {
-		ni.logger.Debug("没有现有主题，尝试创建新主题")
 		// 创建主题
 		if err := ni.createTopics(); err != nil {
 			ni.logger.Warn("主题创建失败，尝试使用现有主题", "error", err)
@@ -400,11 +395,6 @@ func (ni *NetworkIntegration) Start() error {
 		return fmt.Errorf("failed to subscribe to topics: %w", err)
 	}
 
-	ni.logger.Info("DPoS network integration started successfully",
-		"signatureRequestTopic", ni.signatureRequestTopic != nil,
-		"signatureResponseTopic", ni.signatureResponseTopic != nil,
-		"voteTopic", ni.voteTopic != nil,
-		"delegateTopic", ni.delegateTopic != nil)
 
 	// 🆕 从数据库恢复BLS公钥到缓存
 	if err := ni.restoreBLSKeysFromDatabase(); err != nil {
@@ -479,7 +469,6 @@ func (ni *NetworkIntegration) createTopics() error {
 		}
 	} else {
 		criticalTopicsCreated++
-		ni.logger.Debug("成功创建签名请求主题")
 	}
 
 	// 创建签名响应主题 - 使用有效的默认值避免网络层发送零值消息
@@ -555,7 +544,6 @@ func (ni *NetworkIntegration) createTopics() error {
 			return fmt.Errorf("failed to create BLS key broadcast topic: %w", err)
 		}
 	} else {
-		ni.logger.Debug("成功创建BLS公钥广播主题")
 	}
 
 	// 创建BLS公钥确认主题
@@ -570,7 +558,6 @@ func (ni *NetworkIntegration) createTopics() error {
 			return fmt.Errorf("failed to create BLS key ack topic: %w", err)
 		}
 	} else {
-		ni.logger.Debug("成功创建BLS公钥确认主题")
 	}
 
 	// 创建BLS公钥请求主题
@@ -585,7 +572,6 @@ func (ni *NetworkIntegration) createTopics() error {
 			return fmt.Errorf("failed to create BLS key request topic: %w", err)
 		}
 	} else {
-		ni.logger.Debug("成功创建BLS公钥请求主题")
 	}
 
 	// 创建BLS公钥响应主题
@@ -600,7 +586,6 @@ func (ni *NetworkIntegration) createTopics() error {
 			return fmt.Errorf("failed to create BLS key response topic: %w", err)
 		}
 	} else {
-		ni.logger.Debug("成功创建BLS公钥响应主题")
 	}
 
 	// 检查是否至少有一个关键主题可用
@@ -609,10 +594,6 @@ func (ni *NetworkIntegration) createTopics() error {
 		return fmt.Errorf("failed to create any critical topics")
 	}
 
-	ni.logger.Debug("DPoS网络主题创建完成",
-		"criticalTopicsCreated", criticalTopicsCreated,
-		"signatureRequestTopic", ni.signatureRequestTopic != nil,
-		"signatureResponseTopic", ni.signatureResponseTopic != nil)
 	return nil
 }
 
@@ -647,7 +628,6 @@ func (ni *NetworkIntegration) subscribeToTopics() error {
 		}); err != nil {
 			return fmt.Errorf("failed to subscribe to signature request topic: %w", err)
 		}
-		ni.logger.Debug("成功订阅签名请求主题")
 	} else {
 		ni.logger.Warn("签名请求主题不可用，跳过订阅")
 	}
@@ -659,7 +639,6 @@ func (ni *NetworkIntegration) subscribeToTopics() error {
 		}); err != nil {
 			return fmt.Errorf("failed to subscribe to signature response topic: %w", err)
 		}
-		ni.logger.Debug("成功订阅签名响应主题")
 	} else {
 		ni.logger.Warn("签名响应主题不可用，跳过订阅")
 	}
@@ -671,7 +650,6 @@ func (ni *NetworkIntegration) subscribeToTopics() error {
 		}); err != nil {
 			return fmt.Errorf("failed to subscribe to vote topic: %w", err)
 		}
-		ni.logger.Debug("成功订阅投票主题")
 	} else {
 		ni.logger.Warn("投票主题不可用，跳过订阅")
 	}
@@ -683,7 +661,6 @@ func (ni *NetworkIntegration) subscribeToTopics() error {
 		}); err != nil {
 			return fmt.Errorf("failed to subscribe to delegate topic: %w", err)
 		}
-		ni.logger.Debug("成功订阅委托主题")
 	} else {
 		ni.logger.Warn("委托主题不可用，跳过订阅")
 	}
@@ -695,7 +672,6 @@ func (ni *NetworkIntegration) subscribeToTopics() error {
 		}); err != nil {
 			return fmt.Errorf("failed to subscribe to BLS key broadcast topic: %w", err)
 		}
-		ni.logger.Debug("成功订阅BLS公钥广播主题")
 	} else {
 		ni.logger.Warn("BLS公钥广播主题不可用，跳过订阅")
 	}
@@ -707,7 +683,6 @@ func (ni *NetworkIntegration) subscribeToTopics() error {
 		}); err != nil {
 			return fmt.Errorf("failed to subscribe to BLS key ack topic: %w", err)
 		}
-		ni.logger.Debug("成功订阅BLS公钥确认主题")
 	} else {
 		ni.logger.Warn("BLS公钥确认主题不可用，跳过订阅")
 	}
@@ -719,7 +694,6 @@ func (ni *NetworkIntegration) subscribeToTopics() error {
 		}); err != nil {
 			return fmt.Errorf("failed to subscribe to BLS key request topic: %w", err)
 		}
-		ni.logger.Debug("成功订阅BLS公钥请求主题")
 	} else {
 		ni.logger.Warn("BLS公钥请求主题不可用，跳过订阅")
 	}
@@ -731,12 +705,10 @@ func (ni *NetworkIntegration) subscribeToTopics() error {
 		}); err != nil {
 			return fmt.Errorf("failed to subscribe to BLS key response topic: %w", err)
 		}
-		ni.logger.Info("成功订阅BLS公钥响应主题")
 	} else {
 		ni.logger.Warn("BLS公钥响应主题不可用，跳过订阅")
 	}
 
-	ni.logger.Info("DPoS网络主题订阅完成")
 	return nil
 }
 
@@ -1177,7 +1149,6 @@ func (ni *NetworkIntegration) RegisterSignatureCollectorLegacy(checkpointHash ty
 // SetDPoSRuntime 设置DPoS运行时回调
 func (ni *NetworkIntegration) SetDPoSRuntime(runtime interface{}) {
 	ni.dposRuntime = runtime
-	ni.logger.Debug("DPoS运行时回调已设置")
 }
 
 // GetSignatureRequestTopic 获取签名请求主题

@@ -219,14 +219,12 @@ func (d *DiscoveryService) addPeersToTable(nodeAddrStrs []string) {
 // attemptToFindPeers dials the specified peer and requests
 // to see their peer list
 func (d *DiscoveryService) attemptToFindPeers(peerID peer.ID) error {
-	d.logger.Debug("Querying a peer for near peers", "peer", peerID)
 	nodes, err := d.findPeersCall(peerID, false)
 
 	if err != nil {
 		return err
 	}
 
-	d.logger.Debug("Found new near peers", "peer", len(nodes))
 	d.addPeersToTable(nodes)
 
 	return nil
@@ -303,7 +301,6 @@ func (d *DiscoveryService) regularPeerDiscovery() {
 		return
 	}
 
-	d.logger.Debug("running regular peer discovery", "peer", peerID.String())
 	// Try to discover the peers connected to the reference peer
 	if err := d.attemptToFindPeers(*peerID); err != nil {
 		d.logger.Error(

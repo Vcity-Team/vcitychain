@@ -121,7 +121,6 @@ func (s *syncer) startPeerConnectionEventProcess() {
 
 		switch e.Type {
 		case event.PeerConnected:
-			s.logger.Debug("节点连接", "peer", peerID.String())
 			go s.initNewPeerStatus(peerID)
 		case event.PeerDisconnected:
 			s.logger.Info("节点断开", "peer", peerID.String())

@@ -86,7 +86,6 @@ func (i *IdentityService) GetNotifyBundle() *network.NotifyBundle {
 	return &network.NotifyBundle{
 		ConnectedF: func(net network.Network, conn network.Conn) {
 			peerID := conn.RemotePeer()
-			i.logger.Debug("Conn", "peer", peerID, "direction", conn.Stat().Direction)
 
 			if i.hasPendingStatus(peerID) {
 				// handshake has already started

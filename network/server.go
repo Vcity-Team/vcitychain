@@ -275,14 +275,6 @@ func setupLibp2pKey(secretsManager secrets.SecretsManager) (crypto.PrivKey, erro
 
 // Start starts the networking services
 func (s *Server) Start() error {
-	addr, err := common.AddrInfoToString(s.AddrInfo())
-	if err != nil {
-		return err
-	}
-
-	nodeID := s.host.ID().String()
-	s.logger.Info("LibP2P server running", "addr", addr, "节点ID", nodeID)
-
 	if setupErr := s.setupIdentity(); setupErr != nil {
 		return fmt.Errorf("unable to setup identity, %w", setupErr)
 	}
@@ -336,7 +328,6 @@ func (s *Server) setupBootnodes() error {
 		}
 
 		if bootnode.ID == s.host.ID() {
-			s.logger.Info("Omitting bootnode with same ID as host", "id", bootnode.ID)
 
 			continue
 		}
@@ -400,7 +391,6 @@ func (s *Server) runDial() {
 			peerEvent.PeerFailedToConnect,
 			peerEvent.PeerDisconnected:
 			slots.Release()
-			s.logger.Debug("slot released", "event", event.Type, "peerID", event.PeerID)
 		}
 	}); err != nil {
 		s.logger.Error(
@@ -432,7 +422,6 @@ func (s *Server) runDial() {
 				continue
 			}
 
-			s.logger.Debug("Waiting for a dialing slot", "addr", peerInfo, "local", s.host.ID())
 
 			if closed := slots.Take(ctx); closed {
 				return
@@ -692,9 +681,6 @@ func (s *Server) RegisterProtocol(id string, p Protocol) {
 
 func (s *Server) wrapStream(id string, handle func(network.Stream)) {
 	s.host.SetStreamHandler(protocol.ID(id), func(stream network.Stream) {
-		peerID := stream.Conn().RemotePeer()
-		s.logger.Debug("open stream", "protocol", id, "peer", peerID)
-
 		handle(stream)
 	})
 }

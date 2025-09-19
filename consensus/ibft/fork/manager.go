@@ -1080,14 +1080,15 @@ func (m *ForkManager) createRealDPoSEngine() (DPoSEngine, error) {
 		return nil, fmt.Errorf("failed to initialize DPoS: %w", err)
 	}
 	
-	m.logger.Info("✅ 真正的DPoS引擎创建成功")
-	
-	// 返回DPoS引擎包装器
-	return &DPoSEngineWrapper{
+	// 🆕 保存DPoS实例到ForkManager中，确保使用同一个实例
+	m.dposEngine = &DPoSEngineWrapper{
 		logger:      m.logger,
 		forkManager: m,
 		dpos:        dposInstance.(*dpos.DPoS),
-	}, nil
+	}
+	
+	// 返回DPoS引擎包装器
+	return m.dposEngine, nil
 }
 
 // 🆕 新增：获取DPoS验证者（返回IBFT兼容格式，包含抵押检查）

@@ -960,7 +960,6 @@ func (s *Server) setupGRPC() error {
 		}
 	}()
 
-	s.logger.Info("GRPC server running", "addr", s.config.GRPCAddr.String())
 
 	return nil
 }

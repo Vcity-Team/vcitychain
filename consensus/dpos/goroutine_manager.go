@@ -95,7 +95,6 @@ func (gm *GoroutineManager) StartGoroutine(name string, fn func()) bool {
 		fn()
 	}()
 
-	gm.logger.Debug("启动协程", "name", name, "active", atomic.LoadInt64(&gm.activeGoroutines))
 	return true
 }
 
