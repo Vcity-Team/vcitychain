@@ -109,6 +109,10 @@ type backendIBFT struct {
 	currentSigner     signer.Signer         // Signer at current sequence
 	currentValidators validators.Validators // signer at current sequence
 	currentHooks      fork.HooksInterface   // Hooks at current sequence
+	
+	// 🆕 新增：共识引擎管理
+	currentEngine    interface{} // 当前运行的共识引擎
+	engineType       string      // "ibft" 或 "dpos"
 
 	// Configurations
 	config             *consensus.Config // Consensus configuration
@@ -181,6 +185,9 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		params.Config.DataDir, // 🆕 新增：数据目录参数
 		dposValidatorsCount, // 🆕 新增：DPoS验证者数量参数（从配置读取）
 		dposDelegateThreshold, // 🆕 新增：DPoS最小质押门槛参数（从配置读取）
+		params.Network, // 🆕 新增：网络组件参数
+		params.TxPool,  // 🆕 新增：交易池参数
+		params.Config,  // 🆕 新增：配置参数
 	)
 
 	if err != nil {
@@ -294,6 +301,68 @@ func (i *backendIBFT) Start() error {
 	return nil
 }
 
+// 🆕 新增：检查是否需要切换共识引擎
+func (i *backendIBFT) checkConsensusSwitch(height uint64) bool {
+	// 检查当前高度是否达到切换高度
+	if forkManager, ok := i.forkManager.(interface {
+		ShouldSwitchToDPoS(height uint64) bool
+	}); ok {
+		shouldSwitch := forkManager.ShouldSwitchToDPoS(height)
+		i.logger.Info("🔍 ForkManager.ShouldSwitchToDPoS", "height", height, "shouldSwitch", shouldSwitch)
+		return shouldSwitch
+	}
+	i.logger.Warn("⚠️ ForkManager不支持ShouldSwitchToDPoS方法")
+	return false
+}
+
+// 🆕 新增：检查IBFT是否应该停止
+func (i *backendIBFT) checkShouldStopIBFT(height uint64) bool {
+	// 检查ForkManager是否支持ShouldStopIBFT方法
+	if forkManager, ok := i.forkManager.(interface {
+		ShouldStopIBFT(height uint64) bool
+	}); ok {
+		shouldStop := forkManager.ShouldStopIBFT(height)
+		i.logger.Info("🔍 ForkManager.ShouldStopIBFT", "height", height, "shouldStop", shouldStop)
+		return shouldStop
+	}
+	i.logger.Warn("⚠️ ForkManager不支持ShouldStopIBFT方法")
+	return false
+}
+
+// 🆕 新增：切换共识引擎
+func (i *backendIBFT) switchConsensusEngine(height uint64) error {
+	i.logger.Info("🔄 切换共识引擎", "height", height)
+	
+	// 调用ForkManager的SwitchToDPoS方法
+	if forkManager, ok := i.forkManager.(interface {
+		SwitchToDPoS(height uint64) error
+	}); ok {
+		if err := forkManager.SwitchToDPoS(height); err != nil {
+			i.logger.Error("❌ 共识切换失败", "error", err)
+			return err
+		}
+		i.engineType = "dpos" // 更新引擎类型
+		i.logger.Info("✅ 共识引擎切换完成", "newType", i.engineType)
+		return nil
+	}
+	
+	return fmt.Errorf("ForkManager does not support SwitchToDPoS")
+}
+
+// 🆕 新增：运行DPoS共识逻辑
+func (i *backendIBFT) runDPoSConsensus(height uint64) error {
+	// 在DPoS模式下，跳过IBFT的共识逻辑
+	// 真正的DPoS共识应该由DPoS引擎自己处理
+	i.logger.Info("🔄 DPoS模式：跳过IBFT共识，让DPoS引擎处理", "height", height)
+	
+	// 这里不需要做任何事情，因为：
+	// 1. DPoS引擎已经在后台运行
+	// 2. DPoS会自己处理区块生成和共识
+	// 3. 我们只需要跳过IBFT的共识逻辑即可
+	
+	return nil
+}
+
 // GetSyncProgression gets the latest sync progression, if any
 func (i *backendIBFT) GetSyncProgression() *progress.Progression {
 	return i.syncer.GetSyncProgression()
@@ -336,6 +405,30 @@ func (i *backendIBFT) startConsensus() {
 			latest  = i.blockchain.Header().Number
 			pending = latest + 1
 		)
+
+		// 🆕 检查是否需要切换共识引擎（只在指定高度检查一次）
+		if i.forkManager != nil {
+			// 检查是否需要停止IBFT（DPoS已运行或达到切换高度）
+			if shouldStop := i.checkShouldStopIBFT(pending); shouldStop {
+				i.logger.Info("🛑 IBFT主循环退出：DPoS已接管", "height", pending)
+				return
+			}
+			
+			// 只在指定高度检查是否需要切换（避免每个区块都检查）
+			if shouldSwitch := i.checkConsensusSwitch(pending); shouldSwitch {
+				i.logger.Info("🔍 检查共识切换", "height", pending, "currentEngine", i.engineType)
+				i.logger.Info("✅ 需要切换共识引擎", "height", pending)
+				if err := i.switchConsensusEngine(pending); err != nil {
+					i.logger.Error("❌ 共识切换失败", "error", err)
+					continue
+				}
+				// 切换成功后，退出IBFT主循环，让DPoS接管
+				i.logger.Info("🔄 共识切换完成，退出IBFT主循环", "height", pending)
+				return
+			}
+		} else {
+			i.logger.Warn("⚠️ ForkManager为空，无法检查共识切换", "height", pending)
+		}
 
 		if err := i.updateCurrentModules(pending); err != nil {
 			i.logger.Error(
