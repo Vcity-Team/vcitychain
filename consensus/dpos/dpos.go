@@ -632,8 +632,8 @@ func (r *dposRuntime) parseValidatorsFromExtraData(extraData []byte) (validator.
 		return nil, fmt.Errorf("extraData too short")
 	}
 	
-	// 解析IBFT验证者
-	ibftValidators, err := r.parseIBFTValidatorsFromExtraData(extraData)
+	// 使用与 ForkManager 相同的解析逻辑
+	ibftValidators, err := r.parseValidatorsFromExtraDataDirectly(extraData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse IBFT validators: %w", err)
 	}
@@ -669,9 +669,8 @@ func (r *dposRuntime) parseIBFTValidatorsFromExtraData(extraData []byte) (valida
 	if err := istanbulExtra.UnmarshalRLPFrom(&parser, val); err != nil {
 		r.logger.Error("❌ IstanbulExtra解析失败", "error", err)
 		
-		// 如果 IstanbulExtra 解析失败，尝试直接解析验证者地址
-		// 这可能是一个简化的格式，直接包含验证者地址
-		return r.parseSimpleValidatorsFromExtraData(extraData)
+		// 尝试直接解析验证者地址，不使用模拟数据
+		return r.parseValidatorsFromExtraDataDirectly(extraData)
 	}
 	
 	r.logger.Debug("✅ IstanbulExtra解析成功", "validatorsCount", istanbulExtra.Validators.Len())
@@ -697,38 +696,80 @@ func (r *dposRuntime) parseIBFTValidatorsFromExtraData(extraData []byte) (valida
 	return accountSet, nil
 }
 
-// parseSimpleValidatorsFromExtraData 解析简化的验证者格式
-func (r *dposRuntime) parseSimpleValidatorsFromExtraData(extraData []byte) (validator.AccountSet, error) {
-	r.logger.Info("🔍 尝试解析简化格式的验证者")
+// parseValidatorsFromExtraDataDirectly 直接解析extraData中的验证者地址
+func (r *dposRuntime) parseValidatorsFromExtraDataDirectly(extraData []byte) (validator.AccountSet, error) {
+	r.logger.Info("🔍 直接解析extraData中的验证者地址")
 	
-	// 这里需要根据实际的 extraData 格式来实现
-	// 暂时返回一个模拟的验证者集合用于测试
-	accountSet := make(validator.AccountSet, 0)
-	
-	// 模拟验证者地址（从之前的日志中获取）
-	addresses := []string{
-		"0xe22611289BAb9CDDB85B23Dc2716006f931Bc41C",
-		"0x7744E828e4Bd34aAfBB409C3b574B3647198EE65", 
-		"0xa5Ce949C933e06E8395194AE147283e091EcF3Cb",
-		"0x5d1F45B8D5a5eC9c3BEb91cAEbA6a3180DBeC7A9",
+	// 使用与 ForkManager 相同的解析逻辑
+	// Remove only the vanity bytes (32 bytes) from extraData
+	// The rest is RLP data containing validators and seals
+	if len(extraData) < 32 {
+		return nil, fmt.Errorf("extraData too short: %d bytes", len(extraData))
 	}
 	
-	for i, addrStr := range addresses {
-		address := types.StringToAddress(addrStr)
-		
-		delegate := &validator.ValidatorMetadata{
-			Address:     address,
-			VotingPower: big.NewInt(0), // 将在后续步骤中设置
-			BlsKey:      nil,           // BLS公钥将在需要时获取
-			IsActive:    true,
+	// Extract the RLP-encoded data
+	// extraData format: [vanity(32)] + [RLP(IstanbulExtra)]
+	rlpData := extraData[32:]
+	
+	// 创建验证者列表
+	validatorList := make([]*validator.ValidatorMetadata, 0)
+	
+	// Parse RLP data using the same method as ForkManager
+	err := types.UnmarshalRlp(func(p *fastrlp.Parser, v *fastrlp.Value) error {
+		// Get the top-level list
+		elems, err := v.GetElems()
+		if err != nil {
+			return fmt.Errorf("expected array: %w", err)
 		}
 		
-		accountSet = append(accountSet, delegate)
-		r.logger.Debug("🔍 添加模拟验证者", "index", i, "address", address.String())
+		// Process each element
+		for _, elem := range elems {
+			// Try to get bytes
+			if bytes, err := elem.GetBytes(nil); err == nil {
+				// If it's 20 bytes, it might be an address
+				if len(bytes) == 20 {
+					addr := types.BytesToAddress(bytes)
+					delegate := &validator.ValidatorMetadata{
+						Address:     addr,
+						VotingPower: big.NewInt(0), // 将在后续步骤中设置
+						BlsKey:      nil,           // BLS公钥将在需要时获取
+						IsActive:    true,
+					}
+					validatorList = append(validatorList, delegate)
+					r.logger.Debug("🔍 解析出验证者地址", "address", addr.String())
+				}
+			} else {
+				// Try to get sub-elements
+				if subElems, err := elem.GetElems(); err == nil {
+					for _, subElem := range subElems {
+						if subBytes, err := subElem.GetBytes(nil); err == nil {
+							// If it's 20 bytes, it might be an address
+							if len(subBytes) == 20 {
+								addr := types.BytesToAddress(subBytes)
+								delegate := &validator.ValidatorMetadata{
+									Address:     addr,
+									VotingPower: big.NewInt(0), // 将在后续步骤中设置
+									BlsKey:      nil,           // BLS公钥将在需要时获取
+									IsActive:    true,
+								}
+								validatorList = append(validatorList, delegate)
+								r.logger.Debug("🔍 解析出验证者地址", "address", addr.String())
+							}
+						}
+					}
+				}
+			}
+		}
+		
+		return nil
+	}, rlpData)
+	
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse RLP data: %w", err)
 	}
 	
-	r.logger.Info("✅ 使用模拟验证者集合", "count", len(accountSet))
-	return accountSet, nil
+	r.logger.Info("✅ 直接解析验证者成功", "count", len(validatorList))
+	return validatorList, nil
 }
 
 // getValidatorBalance 获取验证者余额

@@ -67,7 +67,7 @@ func (em *eventManager) subscribe(eventTypes []proto.EventType) *subscribeResult
 
 	go subscription.runLoop()
 
-	em.logger.Info(fmt.Sprintf("Added new subscription %d", id))
+	// 删除订阅日志
 	atomic.AddInt64(&em.numSubscriptions, 1)
 
 	return &subscribeResult{

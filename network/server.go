@@ -430,10 +430,10 @@ func (s *Server) runDial() {
 			// the connection process is async because it involves connection (here) +
 			// the handshake done in the identity service.
 			go func() {
-				s.logger.Debug("Dialing peer", "addr", peerInfo, "local", s.host.ID())
+				// 删除拨号日志
 
 				if err := s.host.Connect(ctx, *peerInfo); err != nil {
-					s.logger.Debug("failed to dial", "addr", peerInfo, "err", err.Error())
+					// 删除拨号失败日志
 
 					s.emitEvent(peerInfo.ID, peerEvent.PeerFailedToConnect)
 				}
