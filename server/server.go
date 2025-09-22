@@ -23,6 +23,8 @@ import (
 	"github.com/Vcity-Team/vcitychain/blockchain"
 	"github.com/Vcity-Team/vcitychain/chain"
 	"github.com/Vcity-Team/vcitychain/consensus"
+	consensusDPoS "github.com/Vcity-Team/vcitychain/consensus/dpos"
+	consensusIBFT "github.com/Vcity-Team/vcitychain/consensus/ibft"
 	"github.com/Vcity-Team/vcitychain/contracts"
 	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/helper/common"
@@ -58,6 +60,7 @@ type Server struct {
 	stateStorage itrie.Storage
 
 	consensus consensus.Consensus
+	dposEngine consensus.Consensus // DPoS引擎
 
 	// blockchain stack
 	blockchain *blockchain.Blockchain
@@ -88,6 +91,81 @@ type Server struct {
 
 	// gasHelper is providing functions regarding gas and fees
 	gasHelper *gasprice.GasHelper
+}
+
+// StartDPoSEngine 实现DPoSEngineStarter接口，启动DPoS引擎
+func (s *Server) StartDPoSEngine(height uint64) error {
+	s.logger.Info("🚀 开始启动DPoS引擎", "height", height)
+	
+	// 如果DPoS引擎已经存在，先停止它
+	if s.dposEngine != nil {
+		s.logger.Info("🛑 停止现有的DPoS引擎")
+		if err := s.dposEngine.Close(); err != nil {
+			s.logger.Error("❌ 停止现有DPoS引擎失败", "error", err)
+		}
+	}
+	
+	// 创建DPoS引擎配置
+	engineConfig := map[string]interface{}{
+		"consensusSwitchHeight": float64(s.config.ConsensusSwitchHeight),
+		"delegateCount":         float64(s.config.DPoSValidatorsCount), // 使用正确的字段名
+		"delegateThreshold":     s.config.DPoSDelegateThreshold,
+		"blockTime":             "2s", // 设置默认区块时间为2秒
+	}
+	
+	// 获取区块时间
+	blockTime, err := extractBlockTime(engineConfig)
+	if err != nil {
+		return fmt.Errorf("failed to extract block time: %w", err)
+	}
+	
+	config := &consensus.Config{
+		Params:      s.config.Chain.Params,
+		Config:      engineConfig,
+		Path:        filepath.Join(s.config.DataDir, "consensus"),
+		DataDir:     s.config.DataDir,
+		IsRelayer:   s.config.Relayer,
+		RPCEndpoint: s.config.JSONRPC.JSONRPCAddr.String(),
+	}
+	
+	// 创建DPoS引擎
+	dposEngine, err := consensusDPoS.Factory(
+		&consensus.Params{
+			Context:               context.Background(),
+			Config:                config,
+			TxPool:                s.txpool,
+			Network:               s.network,
+			Blockchain:            s.blockchain,
+			Executor:              s.executor,
+			Grpc:                  s.grpcServer,
+			Logger:                s.logger.Named("dpos"),
+			SecretsManager:        s.secretsManager,
+			BlockTime:             uint64(blockTime.Seconds()),
+			NumBlockConfirmations: s.config.NumBlockConfirmations,
+			MetricsInterval:       s.config.MetricsInterval,
+		},
+	)
+	
+	if err != nil {
+		return fmt.Errorf("failed to create DPoS engine: %w", err)
+	}
+	
+	// 初始化DPoS引擎
+	if err := dposEngine.Initialize(); err != nil {
+		return fmt.Errorf("failed to initialize DPoS engine: %w", err)
+	}
+	
+	// 启动DPoS引擎
+	if err := dposEngine.Start(); err != nil {
+		return fmt.Errorf("failed to start DPoS engine: %w", err)
+	}
+	
+	// 更新区块链的共识引擎
+	s.blockchain.SetConsensus(dposEngine)
+	s.dposEngine = dposEngine
+	
+	s.logger.Info("✅ DPoS引擎启动成功", "height", height)
+	return nil
 }
 
 // newFileLogger returns logger instance that writes all logs to a specified file.
@@ -594,6 +672,16 @@ func (s *Server) setupConsensus() error {
 	}
 
 	s.consensus = consensus
+	
+	// 🆕 如果是IBFT共识，设置DPoS引擎启动器
+	if engineName == string(IBFTConsensus) {
+		if ibftConsensus, ok := consensus.(interface{ SetDPoSEngineStarter(starter consensusIBFT.DPoSEngineStarter) }); ok {
+			ibftConsensus.SetDPoSEngineStarter(s)
+			s.logger.Info("✅ 已设置DPoS引擎启动器到IBFT共识")
+		} else {
+			s.logger.Warn("⚠️ IBFT共识不支持设置DPoS引擎启动器")
+		}
+	}
 
 	return nil
 }
@@ -1038,6 +1126,53 @@ func (s *Server) startPrometheusServer(listenAddr *net.TCPAddr) *http.Server {
 	}()
 
 	return srv
+}
+
+
+// createDPoSEngine 创建DPoS引擎
+func (s *Server) createDPoSEngine() (consensus.Consensus, error) {
+	// 获取DPoS引擎工厂
+	engine, ok := consensusBackends[DPoSConsensus]
+	if !ok {
+		return nil, fmt.Errorf("DPoS consensus engine not found")
+	}
+	
+	// 创建DPoS引擎配置
+	engineConfig := map[string]interface{}{
+		"consensusSwitchHeight": float64(s.config.ConsensusSwitchHeight),
+		"dposValidatorsCount":   float64(s.config.DPoSValidatorsCount),
+	}
+	
+	config := &consensus.Config{
+		Params:      s.config.Chain.Params,
+		Config:      engineConfig,
+		Path:        filepath.Join(s.config.DataDir, "dpos"),
+		DataDir:     s.config.DataDir,
+		IsRelayer:   s.config.Relayer,
+		RPCEndpoint: s.config.JSONRPC.JSONRPCAddr.String(),
+	}
+	
+	// 创建DPoS引擎实例
+	dposEngine, err := engine(&consensus.Params{
+		Context:               context.Background(),
+		Config:                config,
+		TxPool:                s.txpool,
+		Network:               s.network,
+		Blockchain:            s.blockchain,
+		Executor:              s.executor,
+		Grpc:                  s.grpcServer,
+		Logger:                s.logger,
+		SecretsManager:        s.secretsManager,
+		BlockTime:             2, // DPoS区块时间
+		NumBlockConfirmations: s.config.NumBlockConfirmations,
+		MetricsInterval:       s.config.MetricsInterval,
+	})
+	
+	if err != nil {
+		return nil, fmt.Errorf("failed to create DPoS engine: %w", err)
+	}
+	
+	return dposEngine, nil
 }
 
 func initForkManager(engineName string, config *chain.Chain) error {

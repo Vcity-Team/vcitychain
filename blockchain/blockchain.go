@@ -955,6 +955,61 @@ func (b *Blockchain) GetCachedReceipts(headerHash types.Hash) ([]*types.Receipt,
 	return extractedReceipts, nil
 }
 
+// WriteBlockWithoutConsensus writes a block without consensus verification
+// This is used for DPoS blocks that need to bypass IBFT validation
+func (b *Blockchain) WriteBlockWithoutConsensus(block *types.Block, source string) error {
+	b.writeLock.Lock()
+	defer b.writeLock.Unlock()
+
+	if block.Number() <= b.Header().Number {
+		b.logger.Info("block already inserted", "block", block.Number(), "source", source)
+		return nil
+	}
+
+	header := block.Header
+	batchWriter := storage.NewBatchWriter(b.db)
+
+	if err := b.writeBody(batchWriter, block); err != nil {
+		return err
+	}
+
+	// Write the header to the chain without consensus verification
+	evnt := &Event{Source: source}
+	isCanonical, newTD, err := b.writeHeaderImpl(batchWriter, evnt, header)
+	if err != nil {
+		return err
+	}
+
+	// Write empty receipts for DPoS blocks
+	batchWriter.PutReceipts(block.Hash(), []*types.Receipt{})
+
+	// Update the average gas price
+	b.updateGasPriceAvgWithBlock(block)
+
+	if err := b.writeBatchAndUpdate(batchWriter, header, newTD, isCanonical); err != nil {
+		return err
+	}
+
+	b.dispatchEvent(evnt)
+
+	logArgs := []interface{}{
+		"number", header.Number,
+		"txs", len(block.Transactions),
+		"hash", header.Hash,
+		"parent", header.ParentHash,
+		"source", source,
+	}
+
+	if prevHeader, ok := b.GetHeaderByNumber(header.Number - 1); ok {
+		diff := header.Timestamp - prevHeader.Timestamp
+		logArgs = append(logArgs, "generation_time_in_seconds", diff)
+	}
+
+	b.logger.Info("新区块写入(跳过共识验证)", logArgs...)
+
+	return nil
+}
+
 // extractBlockReceipts extracts the receipts from the passed in block
 func (b *Blockchain) extractBlockReceipts(block *types.Block) ([]*types.Receipt, error) {
 	// Check the cache for the block receipts

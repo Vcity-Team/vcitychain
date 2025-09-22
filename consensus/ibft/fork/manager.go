@@ -10,12 +10,7 @@ import (
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/bls"
-	"github.com/Vcity-Team/vcitychain/blockchain"
-	"github.com/Vcity-Team/vcitychain/consensus"
-	"github.com/Vcity-Team/vcitychain/consensus/dpos"
-	"github.com/Vcity-Team/vcitychain/network"
 	"github.com/Vcity-Team/vcitychain/state"
-	"github.com/Vcity-Team/vcitychain/txpool"
 	"github.com/Vcity-Team/vcitychain/consensus/ibft/hook"
 	"github.com/Vcity-Team/vcitychain/consensus/ibft/signer"
 	"github.com/Vcity-Team/vcitychain/secrets"
@@ -195,6 +190,24 @@ func (m *ForkManager) Initialize() error {
 
 	m.initializeHooksRegisters()
 
+	// 🆕 检查启动时是否需要立即切换到DPoS
+	if m.consensusSwitchHeight > 0 {
+		currentHeight := m.blockchain.Header().Number
+		m.logger.Info("🔍 启动时检查切换状态", 
+			"currentHeight", currentHeight, 
+			"switchHeight", m.consensusSwitchHeight)
+		
+		// 修复：检查是否已经达到或超过切换高度（包括重启后的情况）
+		if currentHeight >= m.consensusSwitchHeight {
+			m.logger.Info("🚨 启动时发现已达到或超过切换高度，立即切换到DPoS", 
+				"currentHeight", currentHeight, 
+				"switchHeight", m.consensusSwitchHeight)
+			
+			// DPoS应该在服务器层面独立启动，这里只标记状态
+			m.logger.Info("✅ 已达到DPoS切换高度，DPoS应该在服务器层面独立启动")
+		}
+	}
+
 	m.logger.Info("ForkManager.Initialize completed successfully")
 	return nil
 }
@@ -208,6 +221,16 @@ func (m *ForkManager) Close() error {
 	}
 
 	return nil
+}
+
+// GetConsensusSwitchHeight 获取共识切换高度
+func (m *ForkManager) GetConsensusSwitchHeight() uint64 {
+	return m.consensusSwitchHeight
+}
+
+// IsDPoSTransition 检查指定高度是否在DPoS切换期间
+func (m *ForkManager) IsDPoSTransition(blockNumber uint64) bool {
+	return m.consensusSwitchHeight > 0 && blockNumber >= m.consensusSwitchHeight
 }
 
 // GetSigner returns a proper signer at specified height
@@ -228,6 +251,7 @@ func (m *ForkManager) GetSigner(height uint64) (signer.Signer, error) {
 	return signer.NewSigner(
 		keyManager,
 		parentKeyManager,
+		m.consensusSwitchHeight,
 	), nil
 }
 
@@ -254,45 +278,13 @@ func (m *ForkManager) GetValidators(height uint64) (validators.Validators, error
 		"isDPoSRunning", m.isDPoSRunning,
 		"dposEngine", m.dposEngine != nil)
 	
-	// 如果DPoS已经运行，直接使用DPoS引擎获取验证者
-	if m.isDPoSRunning && m.dposEngine != nil {
-		m.logger.Info("📋 DPoS引擎获取验证者", "height", height)
-		return m.dposEngine.GetValidators(height)
-	}
 	
-	// 🆕 检查是否需要切换到DPoS（0表示不进行切换）
-	if m.consensusSwitchHeight > 0 && height >= m.consensusSwitchHeight {
-		// 只在真正切换时打印一次日志
-		if !m.hasSwitchedToDPoS {
-			m.logger.Info("🚨 共识切换到DPoS触发",
-				"height", height,
-				"switchHeight", m.consensusSwitchHeight)
-			m.hasSwitchedToDPoS = true
-			
-			// 🆕 执行真正的共识切换
-			if err := m.SwitchToDPoS(height); err != nil {
-				m.logger.Error("❌ 共识切换失败", "error", err)
-				return nil, err
-			}
+		// 🆕 检查是否需要切换到DPoS（0表示不进行切换）
+		if m.consensusSwitchHeight > 0 && height >= m.consensusSwitchHeight {
+			// 如果达到切换高度，返回空验证者集合，让IBFT停止
+			m.logger.Info("🛑 已达到DPoS切换高度，返回空验证者集合让IBFT停止", "height", height)
+			return validators.NewECDSAValidatorSet(), nil
 		}
-		
-		// 如果DPoS引擎正在运行，使用DPoS引擎获取验证者
-		if m.isDPoSRunning && m.dposEngine != nil {
-			m.logger.Info("📋 使用DPoS引擎获取验证者", "height", height)
-			validators, err := m.dposEngine.GetValidators(height)
-			if err != nil {
-				m.logger.Error("❌ DPoS引擎获取验证者失败", "error", err)
-				return nil, err
-			}
-			m.logger.Info("✅ DPoS引擎返回验证者", "count", validators.Len())
-			return validators, nil
-		}
-		
-		// 🆕 注意：不再使用ForkManager的DPoS验证者筛选逻辑
-		// DPoS插件现在会自己解析验证者，这里应该返回空验证者集合
-		m.logger.Warn("⚠️ DPoS引擎未运行，返回空验证者集合", "height", height)
-		return validators.NewECDSAValidatorSet(), nil
-	}
 	
 	fork := m.forks.getFork(height)
 	if fork == nil {
@@ -694,402 +686,16 @@ func (m *ForkManager) getValidatorBalance(address types.Address) (*big.Int, erro
 	return big.NewInt(0), nil
 }
 
-// 🆕 新增：真正的共识切换方法
-func (m *ForkManager) SwitchToDPoS(height uint64) error {
-	if m.isDPoSRunning {
-		m.logger.Info("DPoS引擎已经在运行", "height", height)
-		return nil // 已经切换过了
-	}
-	
-	m.logger.Info("🚀 开始真正的共识切换", "height", height)
-	
-	// 1. 启动DPoS共识引擎
-	if err := m.startDPoSEngine(); err != nil {
-		return fmt.Errorf("failed to start DPoS engine: %w", err)
-	}
-	
-	// 2. 注册DPoS RPC方法
-	if err := m.registerDPoSRPCMethods(); err != nil {
-		return fmt.Errorf("failed to register DPoS RPC methods: %w", err)
-	}
-	
-	// 3. 启动真正的DPoS插件
-	m.logger.Info("🔧 准备启动真正的DPoS插件", "height", height)
-	if err := m.startRealDPoSEngine(height); err != nil {
-		m.logger.Error("❌ 启动真正的DPoS插件失败", "error", err)
-		return fmt.Errorf("failed to start real DPoS engine: %w", err)
-	}
-	m.logger.Info("✅ 真正的DPoS插件启动成功", "height", height)
-	
-	m.isDPoSRunning = true
-	m.logger.Info("✅ 共识切换完成，DPoS已接管", "height", height)
-	
-	return nil
-}
 
-// 🆕 新增：停止IBFT引擎
-func (m *ForkManager) stopIBFTEngine() error {
-	m.logger.Info("🛑 停止IBFT共识引擎")
-	
-	// 设置IBFT停止标志，让IBFT主循环退出
-	m.isDPoSRunning = true // 这个标志已经在SwitchToDPoS中设置
-	
-	// 记录停止日志
-	m.logger.Info("✅ IBFT引擎已标记为停止，主循环将退出")
-	
-	return nil
-}
 
-// 🆕 新增：启动DPoS引擎
-func (m *ForkManager) startDPoSEngine() error {
-	m.logger.Info("🚀 启动DPoS共识引擎")
-	
-	// 创建DPoS引擎实例
-	dposEngine, err := m.createDPoSEngine()
-	if err != nil {
-		return fmt.Errorf("failed to create DPoS engine: %w", err)
-	}
-	
-	// 启动DPoS引擎
-	if err := dposEngine.Start(); err != nil {
-		return fmt.Errorf("failed to start DPoS engine: %w", err)
-	}
-	
-	m.dposEngine = dposEngine
-	m.consensusEngine = dposEngine
-	
-	return nil
-}
 
-// 🆕 新增：创建DPoS引擎
-func (m *ForkManager) createDPoSEngine() (DPoSEngine, error) {
-	// 创建真正的DPoS引擎实例
-	m.logger.Info("🔧 创建DPoS引擎实例")
-	
-	// 创建基本的DPoS实例
-	// 由于DPoS需要很多依赖（blockchain、network、executor等），
-	// 我们暂时创建一个基本实例，后续需要传入正确的依赖
-	dposInstance := &dpos.DPoS{
-		// 基本字段设置
-		// 其他字段需要在运行时通过Initialize方法设置
-	}
-	
-	return &DPoSEngineWrapper{
-		logger:      m.logger,
-		forkManager: m, // 传递ForkManager引用
-		dpos:        dposInstance,
-	}, nil
-}
 
-// 🆕 新增：注册DPoS RPC方法
-func (m *ForkManager) registerDPoSRPCMethods() error {
-	m.logger.Info("📡 注册DPoS RPC方法")
-	
-	// DPoS RPC方法已经在服务器启动时通过dispatcher.registerService("dpos", d.endpoints.DPOS)注册
-	// 这里只需要确认DPoS引擎已经启动，RPC方法就可以使用
-	m.logger.Info("✅ DPoS RPC方法已可用", 
-		"methods", []string{"dpos_vote", "dpos_stake", "dpos_delegate", "dpos_getValidators"})
-	
-	return nil
-}
-
-// DPoSEngineWrapper DPoS引擎包装器
-type DPoSEngineWrapper struct {
-	logger      hclog.Logger
-	running     bool
-	forkManager *ForkManager // 添加ForkManager引用
-	dpos        *dpos.DPoS   // 真正的DPoS实例
-}
-
-// DPoSEngineWrapper 方法实现
-func (e *DPoSEngineWrapper) Start() error {
-	e.logger.Info("🚀 启动DPoS引擎")
-	if e.dpos == nil {
-		e.logger.Warn("⚠️ DPoS实例为空，跳过启动")
-		e.running = true
-		return nil
-	}
-	
-	// 暂时跳过DPoS启动，因为需要完整的初始化
-	// TODO: 需要正确初始化DPoS实例后再启动
-	e.logger.Info("📝 DPoS引擎已就绪（未完全初始化）")
-	e.running = true
-	return nil
-}
-
-func (e *DPoSEngineWrapper) Stop() error {
-	e.logger.Info("🛑 停止DPoS引擎")
-	if e.dpos == nil {
-		e.logger.Warn("⚠️ DPoS实例为空，跳过停止")
-		e.running = false
-		return nil
-	}
-	
-	// 停止DPoS引擎
-	if err := e.dpos.Close(); err != nil {
-		return fmt.Errorf("failed to stop DPoS engine: %w", err)
-	}
-	
-	e.running = false
-	return nil
-}
-
-func (e *DPoSEngineWrapper) IsRunning() bool {
-	return e.running
-}
-
-func (e *DPoSEngineWrapper) GetValidators(height uint64) (validators.Validators, error) {
-	e.logger.Info("📋 DPoS引擎获取验证者", "height", height)
-	
-	// 使用DPoS插件自己解析的验证者
-	if e.dpos == nil {
-		e.logger.Error("❌ DPoS实例不可用")
-		return nil, fmt.Errorf("DPoS instance is nil")
-	}
-	
-	// 检查DPoS插件是否有解析出的验证者
-	dposValidators := e.dpos.GetValidators()
-	if dposValidators == nil || len(dposValidators) == 0 {
-		e.logger.Warn("⚠️ DPoS插件没有解析出验证者，返回空验证者集合")
-		return validators.NewECDSAValidatorSet(), nil
-	}
-
-	// 将DPoS验证者转换为IBFT兼容格式
-	ibftValidators := validators.NewECDSAValidatorSet()
-	for _, dposValidator := range dposValidators {
-		ibftValidator := validators.NewECDSAValidator(dposValidator.Address)
-		ibftValidators.Add(ibftValidator)
-	}
-	
-	e.logger.Info("✅ DPoS引擎返回验证者", "count", ibftValidators.Len())
-	return ibftValidators, nil
-}
-
-// 🆕 新增：检查是否需要切换到DPoS
-func (m *ForkManager) ShouldSwitchToDPoS(height uint64) bool {
-	condition1 := m.consensusSwitchHeight > 0
-	condition2 := height >= m.consensusSwitchHeight
-	condition3 := !m.isDPoSRunning
-	
-	shouldSwitch := condition1 && condition2 && condition3
-	
-	m.logger.Info("🔍 ShouldSwitchToDPoS检查", 
-		"height", height,
-		"switchHeight", m.consensusSwitchHeight,
-		"isDPoSRunning", m.isDPoSRunning,
-		"condition1_switchHeight>0", condition1,
-		"condition2_height>=switchHeight", condition2,
-		"condition3_notDPoSRunning", condition3,
-		"shouldSwitch", shouldSwitch)
-	return shouldSwitch
-}
-
-// 🆕 新增：检查IBFT是否应该停止（用于IBFT主循环退出检查）
-func (m *ForkManager) ShouldStopIBFT(height uint64) bool {
-	// 如果DPoS已经运行，IBFT应该停止
-	if m.isDPoSRunning {
-		m.logger.Info("🛑 IBFT应该停止：DPoS已运行", "height", height)
-		return true
-	}
-	
-	// 如果达到切换高度，IBFT也应该停止
-	if m.consensusSwitchHeight > 0 && height >= m.consensusSwitchHeight {
-		m.logger.Info("🛑 IBFT应该停止：已达到切换高度", "height", height, "switchHeight", m.consensusSwitchHeight)
-		return true
-	}
-	
-	return false
-}
-
-// 🆕 新增：检查DPoS是否正在运行
-func (m *ForkManager) IsDPoSRunning() bool {
-	return m.isDPoSRunning
-}
-
-// 🆕 新增：获取DPoS引擎
-func (m *ForkManager) GetDPoSEngine() interface{} {
-	return m.dposEngine
-}
 
 // 🆕 新增：获取切换高度
 func (m *ForkManager) GetSwitchHeight() uint64 {
 	return m.consensusSwitchHeight
 }
 
-// 🆕 新增：启动真正的DPoS插件
-func (m *ForkManager) startRealDPoSEngine(startHeight uint64) error {
-	m.logger.Info("🚀 启动真正的DPoS插件", "startHeight", startHeight)
-	
-	// 创建真正的DPoS实例
-	dposInstance, err := m.createRealDPoSEngine()
-	if err != nil {
-		return fmt.Errorf("failed to create real DPoS engine: %w", err)
-	}
-	
-	// 启动真正的DPoS引擎
-	if err := dposInstance.Start(); err != nil {
-		return fmt.Errorf("failed to start real DPoS engine: %w", err)
-	}
-	
-	m.logger.Info("✅ 真正的DPoS插件启动成功", "startHeight", startHeight)
-	
-	// 在goroutine中运行DPoS主循环
-	go func() {
-		m.logger.Info("🔄 真正的DPoS插件主循环开始运行", "startHeight", startHeight)
-		
-		// 运行真正的DPoS主循环
-		for {
-			// 获取当前区块高度
-			currentHeight := m.blockchain.Header().Number
-			nextHeight := currentHeight + 1
-			
-			// 调试功能：在切换高度+2后退出程序
-			if nextHeight > m.consensusSwitchHeight+2 {
-				m.logger.Info("🛑 调试模式：已达到切换高度+2，退出程序", 
-					"currentHeight", nextHeight, 
-					"switchHeight", m.consensusSwitchHeight, 
-					"exitHeight", m.consensusSwitchHeight+2)
-				os.Exit(0)
-			}
-			
-			// 调用真正的DPoS共识逻辑
-			//m.logger.Info("📋 调用真正的DPoS共识逻辑", "height", nextHeight)
-			
-			// 等待一段时间（模拟区块时间）
-			//time.Sleep(2 * time.Second)
-		}
-	}()
-	
-	return nil
-}
-
-// 🆕 新增：创建真正的DPoS引擎
-func (m *ForkManager) createRealDPoSEngine() (DPoSEngine, error) {
-	m.logger.Info("🔧 创建真正的DPoS引擎实例")
-	
-	// 创建完整的DPoS配置
-	var minVotingPower *big.Int
-	if m.dposDelegateThreshold != nil {
-		minVotingPower = m.dposDelegateThreshold
-	} else {
-		// 使用字符串创建大整数，避免溢出
-		minVotingPower, _ = new(big.Int).SetString("1000000000000000000000", 10)
-	}
-	
-	dposConfig := map[string]interface{}{
-		"delegateCount":    m.dposValidatorsCount,
-		"blockTime":        "2s",
-		"roundTime":        "10s", 
-		"minVotingPower":   minVotingPower,
-	}
-	
-	// 创建consensus.Config
-	config := &consensus.Config{
-		Path:   m.dataDir,
-		Config: dposConfig,
-	}
-	
-	// 获取真实的组件实例
-	var blockchainInstance *blockchain.Blockchain
-	var networkServer *network.Server
-	var executorInstance *state.Executor
-	var txPoolInstance *txpool.TxPool
-	
-	// 从ForkManager中获取真实组件
-	if m.blockchain != nil {
-		// 需要类型断言获取真实的Blockchain实例
-		if bc, ok := m.blockchain.(*blockchain.Blockchain); ok {
-			blockchainInstance = bc
-		}
-	}
-	
-	if m.network != nil {
-		if net, ok := m.network.(*network.Server); ok {
-			networkServer = net
-		} else {
-			m.logger.Warn("⚠️ Network类型不匹配", "type", fmt.Sprintf("%T", m.network))
-		}
-	} else {
-		m.logger.Warn("⚠️ Network为nil，无法创建完整的DPoS")
-	}
-	
-	if m.executor != nil {
-		// m.executor是contract.Executor接口，需要从中获取state.Executor
-		if adapter, ok := m.executor.(interface {
-			GetExecutor() *state.Executor
-		}); ok {
-			executorInstance = adapter.GetExecutor()
-			if executorInstance != nil {
-				m.logger.Info("✅ 成功获取state.Executor")
-			} else {
-				m.logger.Warn("⚠️ GetExecutor()返回nil")
-			}
-		} else {
-			m.logger.Warn("⚠️ Executor类型不匹配，无法获取state.Executor")
-			executorInstance = nil
-		}
-	} else {
-		m.logger.Warn("⚠️ m.executor为nil")
-		executorInstance = nil
-	}
-	
-	if m.txPool != nil {
-		if pool, ok := m.txPool.(*txpool.TxPool); ok {
-			txPoolInstance = pool
-		}
-	}
-	
-	// 创建consensus.Params
-	params := &consensus.Params{
-		Logger:         m.logger.Named("dpos"),
-		Config:         config,
-		SecretsManager: m.secretsManager,
-		Blockchain:     blockchainInstance,
-		Network:        networkServer,
-		Executor:       executorInstance,
-		TxPool:         txPoolInstance,
-	}
-	
-	m.logger.Info("🔧 使用完整的DPoS配置", 
-		"blockchain", blockchainInstance != nil,
-		"network", networkServer != nil,
-		"executor", executorInstance != nil,
-		"txPool", txPoolInstance != nil)
-	
-	// 使用DPoS Factory创建真正的DPoS实例
-	dposInstance, err := dpos.Factory(params)
-	if err != nil {
-		m.logger.Error("❌ 创建DPoS实例失败", "error", err)
-		return nil, fmt.Errorf("failed to create DPoS instance: %w", err)
-	}
-	
-	// 检查必要组件是否可用
-	if networkServer == nil {
-		m.logger.Error("❌ Network组件缺失，无法启动DPoS")
-		return nil, fmt.Errorf("Network component is required but not available")
-	}
-	
-	if blockchainInstance == nil {
-		m.logger.Error("❌ Blockchain组件缺失，无法启动DPoS")
-		return nil, fmt.Errorf("Blockchain component is required but not available")
-	}
-	
-	// 初始化DPoS
-	if err := dposInstance.Initialize(); err != nil {
-		m.logger.Error("❌ 初始化DPoS失败", "error", err)
-		return nil, fmt.Errorf("failed to initialize DPoS: %w", err)
-	}
-	
-	// 🆕 保存DPoS实例到ForkManager中，确保使用同一个实例
-	m.dposEngine = &DPoSEngineWrapper{
-		logger:      m.logger,
-		forkManager: m,
-		dpos:        dposInstance.(*dpos.DPoS),
-	}
-	
-	// 返回DPoS引擎包装器
-	return m.dposEngine, nil
-}
 
 // 🆕 新增：获取DPoS验证者（返回IBFT兼容格式，包含抵押检查）
 func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, error) {
@@ -1205,4 +811,5 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 	// 返回IBFT兼容的验证者集合
 	return validatorSet, nil
 }
+
 

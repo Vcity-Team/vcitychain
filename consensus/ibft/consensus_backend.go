@@ -107,14 +107,16 @@ func (i *backendIBFT) InsertProposal(
 
 	i.updateMetrics(newBlock)
 
-	i.logger.Info(
-		"block committed",
+	i.logger.Info("✅ IBFT区块提交成功",
 		"number", newBlock.Number(),
-		"hash", newBlock.Hash(),
+		"hash", newBlock.Hash().String()[:16],
 		"validation_type", i.currentSigner.Type(),
 		"validators", i.currentValidators.Len(),
 		"committed", len(committedSeals),
-	)
+		"txs", len(newBlock.Transactions),
+		"difficulty", newBlock.Header.Difficulty,
+		"gasUsed", newBlock.Header.GasUsed,
+		"timestamp", newBlock.Header.Timestamp)
 
 	if err := i.currentHooks.PostInsertBlock(newBlock); err != nil {
 		i.logger.Error(
@@ -245,7 +247,13 @@ func (i *backendIBFT) buildBlock(parent *types.Header) (*types.Block, error) {
 	// is sealed after all the committed seals
 	block.Header.ComputeHash()
 
-	i.logger.Info("build block", "number", header.Number, "txs", len(txs))
+	i.logger.Info("🏗️ IBFT区块构建完成", 
+		"number", header.Number, 
+		"txs", len(txs),
+		"difficulty", header.Difficulty,
+		"gasLimit", header.GasLimit,
+		"timestamp", header.Timestamp,
+		"hash", header.Hash.String()[:16])
 
 	return block, nil
 }

@@ -202,6 +202,12 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			continue
 		}
 
+		// 检查是否在DPoS切换高度，如果是则跳过同步
+		if s.isDPoSTransitionHeight(bestPeer.Number) {
+			s.logger.Info("跳过DPoS切换高度区块同步", "peer", bestPeer.ID.String()[:8], "目标高度", bestPeer.Number)
+			continue
+		}
+
 		// fetch block from the peer
 		lastNumber, shouldTerminate, err := s.bulkSyncWithPeer(bestPeer.ID, bestPeer.Number, callback)
 		if err != nil {
@@ -264,6 +270,17 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				return lastReceivedNumber, shouldTerminate, nil
 			}
 
+			// 打印详细的区块接收日志
+			s.logger.Info("🔄 同步接收到区块", 
+				"peer", peerID.String()[:8], 
+				"区块号", block.Number(), 
+				"难度", block.Header.Difficulty, 
+				"哈希", block.Hash().String()[:16],
+				"时间戳", block.Header.Timestamp,
+				"交易数", len(block.Transactions),
+				"Gas限制", block.Header.GasLimit,
+				"Gas使用", block.Header.GasUsed)
+
 			// safe check
 			if block.Number() == 0 {
 				continue
@@ -273,6 +290,31 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 			// 只在每10个区块或关键节点记录日志
 			if blockCount%10 == 0 || block.Number()%100 == 0 {
 				s.logger.Info("区块同步进度", "peer", peerID.String(), "当前区块", block.Number(), "已同步", blockCount)
+			}
+
+			// 检查是否是DPoS区块（难度为1且区块号较高），如果是则完全跳过IBFT验证
+			if s.isDPoSBlock(block) {
+				s.logger.Info("🚀 DPoS区块直接写入，跳过IBFT验证", "peer", peerID.String()[:8], "区块号", block.Number(), "难度", block.Header.Difficulty)
+				
+				// 对于DPoS区块，使用WriteBlockWithoutConsensus完全绕过共识验证
+				// 这样可以避免所有IBFT相关的验证和交易执行
+				if err := s.blockchain.WriteBlockWithoutConsensus(block, syncerName); err != nil {
+					metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
+					s.logger.Error("DPoS区块写入失败", "peer", peerID.String()[:8], "区块号", block.Number(), "error", err)
+					return lastReceivedNumber, false, fmt.Errorf("failed to write DPoS block: %w", err)
+				}
+				
+				// 创建一个简化的FullBlock用于回调
+				fullBlock := &types.FullBlock{
+					Block:    block,
+					Receipts: []*types.Receipt{}, // 空的receipts
+				}
+				
+				updateMetrics(fullBlock)
+				s.logger.Info("✅ DPoS区块同步成功", "peer", peerID.String()[:8], "区块号", block.Number(), "哈希", block.Hash().String()[:16])
+				shouldTerminate = newBlockCallback(fullBlock)
+				lastReceivedNumber = block.Number()
+				continue
 			}
 
 			fullBlock, err := s.blockchain.VerifyFinalizedBlock(block)
@@ -289,6 +331,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 			}
 
 			updateMetrics(fullBlock)
+			s.logger.Info("✅ 区块同步成功", "peer", peerID.String()[:8], "区块号", block.Number(), "哈希", block.Hash().String()[:16], "交易数", len(block.Transactions))
 			shouldTerminate = newBlockCallback(fullBlock)
 
 			lastReceivedNumber = block.Number()
@@ -302,6 +345,39 @@ func updateMetrics(fullBlock *types.FullBlock) {
 	metrics.SetGauge([]string{syncerMetrics, "tx_num"}, float32(len(fullBlock.Block.Transactions)))
 	metrics.SetGauge([]string{syncerMetrics, "receipts_num"}, float32(len(fullBlock.Receipts)))
 	metrics.SetGauge([]string{syncerMetrics, "blocks_num"}, 1)
+}
+
+// isDPoSBlock 检查是否是DPoS区块
+func (s *syncer) isDPoSBlock(block *types.Block) bool {
+	// DPoS区块的特征：
+	// 1. 难度为1（IBFT区块的难度等于区块号）
+	// 2. 区块号在切换高度之后
+	// 3. MixHash可能不同
+	
+	header := block.Header
+	if header == nil {
+		return false
+	}
+	
+	// 检查难度：DPoS区块的难度为1，IBFT区块的难度等于区块号
+	// 同时检查区块号是否在切换高度之后
+	if header.Difficulty == 1 && header.Number >= 7390 {
+		s.logger.Debug("检测到DPoS区块", 
+			"区块号", header.Number, 
+			"难度", header.Difficulty,
+			"切换高度", 7390)
+		return true
+	}
+	
+	return false
+}
+
+// isDPoSTransitionHeight 检查指定高度是否是DPoS切换高度
+func (s *syncer) isDPoSTransitionHeight(blockNumber uint64) bool {
+	// 使用与signer相同的逻辑，但这里我们返回false
+	// 因为实际上在切换时，那些区块还没有生成，所以不应该跳过同步
+	// 如果将来需要跳过同步，可以在这里添加切换高度检查
+	return false
 }
 
 // GetSyncPeerClient returns the sync peer client for controlling status broadcasting

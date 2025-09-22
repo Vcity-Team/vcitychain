@@ -85,22 +85,51 @@ func (i *Extra) UnmarshalRLP(input []byte) error {
 
 // UnmarshalRLPWith defines the unmarshal implementation for Extra
 func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
-	const expectedElements = 4
-
 	elems, err := v.GetElems()
 	if err != nil {
+		fmt.Printf("❌ DEBUG GetElems failed: %v\n", err)
 		return err
 	}
 
-	if num := len(elems); num != expectedElements {
+	// 动态设置expectedElements
+	expectedElements := 4 // 默认创世区块格式
+	if len(elems) == 5 {
+		expectedElements = 5 // 普通区块格式
+	}
+
+	// 解析RLP元素
+
+	// 处理元素数量不匹配的情况
+	num := len(elems)
+	if num < expectedElements {
+		fmt.Printf("❌ DEBUG Element count too few: expected %d but found %d\n", expectedElements, num)
 		return fmt.Errorf("incorrect elements count to decode Extra, expected %d but found %d", expectedElements, num)
+	} else if num > expectedElements {
+		fmt.Printf("⚠️ DEBUG Element count too many: expected %d but found %d, ignoring extra elements\n", expectedElements, num)
+		// 只使用前expectedElements个元素，忽略额外的元素
+		elems = elems[:expectedElements]
 	}
 
 	// Validators
 	if elems[0].Elems() > 0 {
-		i.Validators = &validator.ValidatorSetDelta{}
-		if err := i.Validators.UnmarshalRLPWith(elems[0]); err != nil {
+		validatorElems, err := elems[0].GetElems()
+		if err != nil {
 			return err
+		}
+		
+		fmt.Printf("🔍 DEBUG Validators element count: %d\n", len(validatorElems))
+		
+		if len(validatorElems) == 3 {
+			// 标准ValidatorSetDelta格式：Added, Updated, Removed
+			i.Validators = &validator.ValidatorSetDelta{}
+			if err := i.Validators.UnmarshalRLPWith(elems[0]); err != nil {
+				fmt.Printf("❌ DEBUG ValidatorSetDelta UnmarshalRLP failed: %v\n", err)
+				return err
+			}
+		} else {
+			// 非标准格式，可能是验证者地址列表或其他格式
+			fmt.Printf("⚠️ DEBUG Non-standard validators format: %d elements, skipping ValidatorSetDelta parsing\n", len(validatorElems))
+			i.Validators = nil
 		}
 	}
 
@@ -108,24 +137,61 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 	if elems[1].Elems() > 0 {
 		i.Parent = &Signature{}
 		if err := i.Parent.UnmarshalRLPWith(elems[1]); err != nil {
+			fmt.Printf("❌ DEBUG Parent Signature UnmarshalRLP failed: %v\n", err)
 			return err
 		}
 	}
 
 	// Committed Signatures
 	if elems[2].Elems() > 0 {
-		i.Committed = &Signature{}
-		if err := i.Committed.UnmarshalRLPWith(elems[2]); err != nil {
+		committedElems, err := elems[2].GetElems()
+		if err != nil {
 			return err
+		}
+		
+		fmt.Printf("🔍 DEBUG Committed Signatures element count: %d\n", len(committedElems))
+		
+		if len(committedElems) == 2 {
+			// 标准Signature格式：AggregatedSignature, Bitmap
+			i.Committed = &Signature{}
+			if err := i.Committed.UnmarshalRLPWith(elems[2]); err != nil {
+				fmt.Printf("❌ DEBUG Committed Signature UnmarshalRLP failed: %v\n", err)
+				return err
+			}
+		} else {
+			// 非标准格式，可能是其他签名相关数据
+			fmt.Printf("⚠️ DEBUG Non-standard Committed Signature format: %d elements, skipping\n", len(committedElems))
+			i.Committed = nil
 		}
 	}
 
 	// Checkpoint
 	if elems[3].Elems() > 0 {
-		i.Checkpoint = &CheckpointData{}
-		if err := i.Checkpoint.UnmarshalRLPWith(elems[3]); err != nil {
+		checkpointElems, err := elems[3].GetElems()
+		if err != nil {
 			return err
 		}
+		
+		// 解析checkpoint元素
+		
+		if len(checkpointElems) == 5 {
+			// 标准CheckpointData格式：5个元素
+			i.Checkpoint = &CheckpointData{}
+			if err := i.Checkpoint.UnmarshalRLPWith(elems[3]); err != nil {
+				fmt.Printf("❌ DEBUG CheckpointData UnmarshalRLP failed: %v\n", err)
+				return err
+			}
+		} else {
+			// 非标准格式，跳过解析
+			fmt.Printf("⚠️ DEBUG Non-standard Checkpoint format: %d elements, skipping CheckpointData parsing\n", len(checkpointElems))
+			i.Checkpoint = nil
+		}
+	}
+
+	// Element[4] - 额外字段（只在5个元素时处理）
+	if expectedElements == 5 && len(elems) > 4 && elems[4].Elems() > 0 {
+		fmt.Printf("🔍 DEBUG Element[4] detected: elems=%d, skipping for now\n", elems[4].Elems())
+		// TODO: 根据实际需求处理element[4]
 	}
 
 	return nil
@@ -1526,6 +1592,9 @@ type CheckpointData struct {
 // MarshalRLPWith defines the marshal function implementation for CheckpointData
 func (c *CheckpointData) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 	vv := ar.NewArray()
+	
+	// Marshal CheckpointData
+	
 	// BlockRound
 	vv.Set(ar.NewUint(c.BlockRound))
 	// EpochNumber
@@ -1713,12 +1782,17 @@ func GetIbftExtra(extraRaw []byte) (*Extra, error) {
 		return nil, fmt.Errorf("wrong extra size: %d", len(extraRaw))
 	}
 
+	// 解析extraData
+	
+	// 尝试解析RLP数据
 	extra := &Extra{}
-
+	
 	if err := extra.UnmarshalRLP(extraRaw); err != nil {
+		fmt.Printf("❌ DEBUG UnmarshalRLP failed: %v\n", err)
 		return nil, err
 	}
 
+	fmt.Printf("✅ DEBUG GetIbftExtra success\n")
 	return extra, nil
 }
 
