@@ -990,6 +990,24 @@ func (b *Blockchain) WriteBlockWithoutConsensus(block *types.Block, source strin
 		return err
 	}
 
+	// 🆕 关键修复：添加ProcessHeaders调用，确保DPoS轮次状态更新
+	b.logger.Debug("🔍 WriteBlockWithoutConsensus: 准备调用ProcessHeaders", 
+		"blockNumber", header.Number, 
+		"source", source,
+		"consensusType", fmt.Sprintf("%T", b.consensus))
+	
+	// update snapshot - 这是关键的缺失部分！
+	if err := b.consensus.ProcessHeaders([]*types.Header{header}); err != nil {
+		b.logger.Error("❌ WriteBlockWithoutConsensus: ProcessHeaders调用失败", 
+			"blockNumber", header.Number, 
+			"error", err)
+		return err
+	}
+	
+	b.logger.Info("✅ WriteBlockWithoutConsensus: ProcessHeaders调用成功", 
+		"blockNumber", header.Number, 
+		"source", source)
+
 	b.dispatchEvent(evnt)
 
 	logArgs := []interface{}{

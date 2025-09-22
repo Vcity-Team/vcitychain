@@ -410,22 +410,6 @@ func (i *backendIBFT) startConsensus() {
 
 		isValidator = i.isActiveValidator()
 
-		// 添加调试日志
-		i.logger.Info("Consensus check", 
-			"height", pending,
-			"isValidator", isValidator,
-			"signerAddress", i.currentSigner.Address().String(),
-			"validatorsCount", i.currentValidators.Len())
-		
-		// 打印所有验证器地址
-		for j := 0; j < i.currentValidators.Len(); j++ {
-			validator := i.currentValidators.At(uint64(j))
-			i.logger.Info("Validator in consensus check", 
-				"height", pending,
-				"index", j,
-				"address", validator.Addr().String(),
-				"isCurrentSigner", validator.Addr() == i.currentSigner.Address())
-		}
 
 		i.txpool.SetSealing(isValidator)
 
@@ -741,22 +725,6 @@ func (i *backendIBFT) updateCurrentModules(height uint64) error {
 	i.currentValidators = validators
 	i.currentHooks = hooks
 
-	// 添加验证器集合状态日志
-	i.logger.Info("Current modules updated", 
-		"height", height,
-		"validator_count", validators.Len(),
-		"validator_type", validators.Type(),
-		"signer_address", signer.Address().String())
-	
-	// 打印当前验证器集合
-	for j := 0; j < validators.Len(); j++ {
-		validator := validators.At(uint64(j))
-		i.logger.Info("Current validator", 
-			"height", height,
-			"index", j,
-			"address", validator.Addr().String(),
-			"type", validator.Type())
-	}
 
 	i.logFork(lastSigner, signer)
 

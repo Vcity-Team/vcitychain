@@ -340,13 +340,6 @@ func (m *syncPeerClient) startNewBlockProcess() {
 		case event = <-eventCh:
 		}
 
-		m.logger.Debug("收到区块事件", "节点ID", m.id, "shouldEmitBlocks", m.shouldEmitBlocks, "NewChain长度", len(event.NewChain))
-		
-		// 添加详细的事件跟踪日志
-		if len(event.NewChain) > 0 {
-			latest := event.NewChain[len(event.NewChain)-1]
-			m.logger.Debug("🔔 区块事件详情", "节点ID", m.id, "区块高度", latest.Number, "区块哈希", latest.Hash.String(), "shouldEmitBlocks", m.shouldEmitBlocks)
-		}
 
 		if !m.shouldEmitBlocks {
 			m.logger.Debug("❌ 跳过状态广播", "节点ID", m.id, "shouldEmitBlocks", m.shouldEmitBlocks, "原因", "shouldEmitBlocks为false")
