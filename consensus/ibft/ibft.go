@@ -820,27 +820,11 @@ func verifyProposerSeal(
 		return err
 	}
 
-	// 添加详细的调试日志
-	fmt.Printf("[DEBUG] verifyProposerSeal - Block %d\n", header.Number)
-	fmt.Printf("[DEBUG] Proposer address: %s\n", proposer.String())
-	fmt.Printf("[DEBUG] Validators count: %d\n", validators.Len())
-	fmt.Printf("[DEBUG] Validators type: %s\n", validators.Type())
-	
-	// 打印所有验证器地址
-	for i := 0; i < validators.Len(); i++ {
-		validator := validators.At(uint64(i))
-		fmt.Printf("[DEBUG] Validator[%d]: %s (type: %s)\n", i, validator.Addr().String(), validator.Type())
-	}
-
+	// 验证提议者是否在验证者集合中
 	isIncluded := validators.Includes(proposer)
-	fmt.Printf("[DEBUG] Proposer in validators: %t\n", isIncluded)
-
 	if !isIncluded {
-		fmt.Printf("[ERROR] Proposer seal by non-validator! Proposer: %s\n", proposer.String())
 		return ErrProposerSealByNonValidator
 	}
-
-	fmt.Printf("[DEBUG] Proposer seal verification passed\n")
 	return nil
 }
 

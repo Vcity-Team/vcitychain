@@ -16,6 +16,7 @@ import (
 	dposProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
 	"github.com/Vcity-Team/vcitychain/network"
 	"github.com/Vcity-Team/vcitychain/types"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/hashicorp/go-hclog"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/protobuf/proto"
@@ -1709,6 +1710,39 @@ func (ni *NetworkIntegration) restoreBLSKeysFromDatabase() error {
 	return nil
 }
 
+// 🆕 新增：批量恢复BLS公钥
+func (ni *NetworkIntegration) RestoreBLSKeysForDelegates(delegates []*validator.ValidatorMetadata) error {
+	if ni.blsKeyPersistCallback == nil {
+		ni.logger.Debug("BLS公钥持久化回调函数未设置，跳过批量恢复")
+		return nil
+	}
+
+	ni.logger.Debug("🔄 开始批量恢复BLS公钥", "delegatesCount", len(delegates))
+	
+	restoredCount := 0
+	for _, delegate := range delegates {
+		if delegate.BlsKey == nil {
+			// 尝试从缓存获取
+			blsKeyBytes, exists := ni.GetBLSKey(delegate.Address)
+			if exists && len(blsKeyBytes) > 0 {
+				blsKey, err := bls.UnmarshalPublicKey(blsKeyBytes)
+				if err == nil {
+					delegate.BlsKey = blsKey
+					restoredCount++
+					ni.logger.Debug("✅ 从缓存恢复BLS公钥", 
+						"address", delegate.Address.String())
+				}
+			}
+		}
+	}
+	
+	ni.logger.Debug("🔄 批量恢复BLS公钥完成", 
+		"totalDelegates", len(delegates),
+		"restoredCount", restoredCount)
+	
+	return nil
+}
+
 // handleBLSKeyRequest 处理BLS公钥请求消息
 func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID) {
 	if dposMsg, ok := obj.(*DPOSMessage); ok {
@@ -1766,11 +1800,7 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 		if cachedKey, exists := ni.GetBLSKey(requestMsg.RequestedAddress); exists {
 			found = true
 			blsPublicKey = cachedKey
-			if isLocalRequest {
-				ni.logger.Info("✅ 从缓存找到本地BLS公钥",
-					"requestedAddress", requestMsg.RequestedAddress.String(),
-					"keyLength", len(cachedKey))
-			}
+			// 从缓存找到BLS公钥，静默处理
 		} else {
 			// 如果缓存中没有，检查是否是本地节点的地址
 			// 只有本地节点才能提供自己的BLS公钥
@@ -1792,10 +1822,7 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 				if keyBytes, err := ni.findBLSKeyFromGenesisFile(requestMsg.RequestedAddress); err == nil && len(keyBytes) > 0 {
 					found = true
 					blsPublicKey = keyBytes
-					ni.logger.Info("✅ 成功从文件加载本地BLS公钥",
-						"requestedAddress", requestMsg.RequestedAddress.String(),
-						"filePath", keyFilePath,
-						"keyLength", len(keyBytes))
+				// 成功从文件加载本地BLS公钥，静默处理
 				} else {
 					ni.logger.Warn("❌ 从文件加载本地BLS公钥失败",
 						"requestedAddress", requestMsg.RequestedAddress.String(),
@@ -1823,15 +1850,7 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 		if err := ni.sendBLSKeyResponse(responseMsg); err != nil {
 			ni.logger.Error("发送BLS公钥响应失败", "error", err)
 		} else {
-			if found {
-				ni.logger.Debug("📤 已发送BLS公钥响应（找到）",
-					"requestedAddress", requestMsg.RequestedAddress.String(),
-					"requester", requestMsg.Requester.String())
-			} else {
-				ni.logger.Debug("📤 已发送BLS公钥响应（未找到）",
-					"requestedAddress", requestMsg.RequestedAddress.String(),
-					"requester", requestMsg.Requester.String())
-			}
+			// BLS公钥响应已发送，静默处理
 		}
 	} else {
 		ni.logger.Error("无效的BLS公钥请求消息类型")
@@ -1856,7 +1875,7 @@ func (ni *NetworkIntegration) handleBLSKeyResponse(obj interface{}, from peer.ID
 
 			// 将响应转发给DPoS实例的BLS请求处理器
 			if err := ni.forwardBLSResponseToDPoS(&responseMsg); err != nil {
-				ni.logger.Error("转发BLS响应到DPoS失败", "error", err)
+				//ni.logger.Error("转发BLS响应到DPoS失败", "error", err)
 			}
 		}
 	} else {

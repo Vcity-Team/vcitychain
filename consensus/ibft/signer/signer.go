@@ -2,7 +2,6 @@ package signer
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/types"
@@ -137,7 +136,6 @@ func (s *SignerImpl) GetIBFTExtra(header *types.Header) (*IstanbulExtra, error) 
 
 	// 检查是否在DPoS切换期间，如果是则使用兼容性解析
 	if s.isDPoSTransition(header.Number) {
-		fmt.Printf("🔍 DEBUG GetIBFTExtra: DPoS切换期间，使用兼容性解析 blockNumber=%d\n", header.Number)
 		return s.parseDPoSCompatibleExtra(data, extra)
 	}
 
@@ -156,23 +154,17 @@ func (s *SignerImpl) isDPoSTransition(blockNumber uint64) bool {
 
 // parseDPoSCompatibleExtra 解析DPoS兼容的Extra数据
 func (s *SignerImpl) parseDPoSCompatibleExtra(data []byte, extra *IstanbulExtra) (*IstanbulExtra, error) {
-	fmt.Printf("🔍 DEBUG parseDPoSCompatibleExtra: 开始解析DPoS兼容Extra data长度=%d\n", len(data))
-	
 	// 尝试解析DPoS Extra格式
 	parser := fastrlp.Parser{}
 	val, err := parser.Parse(data)
 	if err != nil {
-		fmt.Printf("❌ DEBUG parseDPoSCompatibleExtra: RLP解析失败 %v\n", err)
 		return nil, err
 	}
 	
 	elems, err := val.GetElems()
 	if err != nil {
-		fmt.Printf("❌ DEBUG parseDPoSCompatibleExtra: 获取元素失败 %v\n", err)
 		return nil, err
 	}
-	
-	fmt.Printf("🔍 DEBUG parseDPoSCompatibleExtra: 解析出%d个元素\n", len(elems))
 	
 	// 对于DPoS区块，我们创建一个简化的IstanbulExtra
 	// 只设置必要的字段，其他字段保持默认值
@@ -185,12 +177,11 @@ func (s *SignerImpl) parseDPoSCompatibleExtra(data []byte, extra *IstanbulExtra)
 	if len(elems) > 0 {
 		// 第一个元素可能是验证者信息
 		if validatorElems, err := elems[0].GetElems(); err == nil {
-			fmt.Printf("🔍 DEBUG parseDPoSCompatibleExtra: 验证者元素数量=%d\n", len(validatorElems))
 			// 这里可以尝试解析验证者，但为了兼容性，我们暂时跳过
+			_ = validatorElems
 		}
 	}
 	
-	fmt.Printf("✅ DEBUG parseDPoSCompatibleExtra: DPoS兼容解析完成\n")
 	return extra, nil
 }
 

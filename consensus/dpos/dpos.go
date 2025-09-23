@@ -1949,9 +1949,46 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	// 使用区块号作为哈希的基础，确保所有节点计算相同的checkpointHash
 	fixedBlockHash := types.BytesToHash([]byte(fmt.Sprintf("block_%d", block.Block.Number())))
 	
+	// 🆕 添加生产时区块头详细信息
+	r.logger.Info("🏭 ===== 生产时区块头详细信息 =====",
+		"blockNumber", block.Block.Number(),
+		"blockHash", block.Block.Hash().String(),
+		"parentHash", block.Block.ParentHash().String(),
+		"timestamp", block.Block.Header.Timestamp,
+		"gasLimit", block.Block.Header.GasLimit,
+		"gasUsed", block.Block.Header.GasUsed,
+		"difficulty", block.Block.Header.Difficulty,
+		"stateRoot", block.Block.Header.StateRoot.String(),
+		"transactionsRoot", block.Block.Header.TxRoot.String(),
+		"receiptsRoot", block.Block.Header.ReceiptsRoot.String(),
+		"miner", types.BytesToAddress(block.Block.Header.Miner).String(),
+		"nonce", block.Block.Header.Nonce.String(),
+		"extraDataLength", len(block.Block.Header.ExtraData),
+		"说明", "生产时区块头的所有关键字段")
+
+	// 🆕 添加生产时关键参数显著日志
+	r.logger.Info("🏭 ===== 生产时CheckpointHash计算参数 =====", 
+		"blockNumber", block.Block.Number(),
+		"chainID", r.config.blockchain.GetChainID(),
+		"fixedBlockHash", fixedBlockHash.String(),
+		"currentValidatorsHash", checkpoint.CurrentValidatorsHash.String(),
+		"nextValidatorsHash", checkpoint.NextValidatorsHash.String(),
+		"blockRound", checkpoint.BlockRound,
+		"epochNumber", checkpoint.EpochNumber,
+		"eventRoot", checkpoint.EventRoot.String(),
+		"说明", "生产时用于计算checkpointHash的所有参数")
+	
+	// 🆕 添加生产时轮次计算详细日志
+	r.logger.Info("🏭 ===== 生产时轮次计算详情 ===== ",
+		"blockNumber", block.Block.Number(),
+		"currentRound", r.currentRound,
+		"checkpointBlockRound", checkpoint.BlockRound,
+		"delegateCount", r.config.DelegateCount,
+		"说明", "生产时轮次计算过程")
+	
 	r.logger.Debug("🔍 生产时开始计算checkpoint哈希", 
 		"blockNumber", block.Block.Number(),
-		"chainID", 888,
+		"chainID", r.config.blockchain.GetChainID(),
 		"fixedBlockHash", fixedBlockHash.String(),
 		"currentValidatorsHash", checkpoint.CurrentValidatorsHash.String(),
 		"nextValidatorsHash", checkpoint.NextValidatorsHash.String(),
@@ -1961,7 +1998,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	// 🆕 添加详细的CheckpointData内容对比日志
 	r.logger.Debug("🔍 生产时CheckpointData详细信息",
 		"blockNumber", block.Block.Number(),
-		"chainID", 888,
+		"chainID", r.config.blockchain.GetChainID(),
 		"blockHash", fixedBlockHash.String(),
 		"blockRound", checkpoint.BlockRound,
 		"epochNumber", checkpoint.EpochNumber,
@@ -1980,11 +2017,17 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"isActive", validator.IsActive)
 	}
 
-	checkpointHash, err := checkpoint.Hash(888, block.Block.Number(), fixedBlockHash)
+	checkpointHash, err := checkpoint.Hash(r.config.blockchain.GetChainID(), block.Block.Number(), fixedBlockHash)
 	if err != nil {
 		r.logger.Error("failed to calculate checkpoint hash", "error", err)
 		return nil, fmt.Errorf("failed to calculate checkpoint hash: %w", err)
 	}
+	
+	// 🆕 添加生产时checkpointHash结果显著日志
+	r.logger.Info("🏭 ===== 生产时CheckpointHash计算结果 =====", 
+		"blockNumber", block.Block.Number(),
+		"checkpointHash", checkpointHash.String(),
+		"说明", "生产时最终计算出的checkpointHash")
 	
 	r.logger.Debug("🔍 生产时checkpoint哈希计算结果", "checkpointHash", checkpointHash.String())
 
@@ -2879,6 +2922,23 @@ func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift tim
 		"parentNumber", parent.Number,
 		"parentHash", parent.Hash.String(),
 		"extraDataLength", len(header.ExtraData))
+
+	// 🆕 添加验证时区块头详细信息
+	d.logger.Info("🔍 ===== 验证时区块头详细信息 =====",
+		"blockNumber", header.Number,
+		"blockHash", header.Hash.String(),
+		"parentHash", header.ParentHash.String(),
+		"timestamp", header.Timestamp,
+		"gasLimit", header.GasLimit,
+		"gasUsed", header.GasUsed,
+		"difficulty", header.Difficulty,
+		"stateRoot", header.StateRoot.String(),
+		"transactionsRoot", header.TxRoot.String(),
+		"receiptsRoot", header.ReceiptsRoot.String(),
+		"miner", types.BytesToAddress(header.Miner).String(),
+		"nonce", header.Nonce.String(),
+		"extraDataLength", len(header.ExtraData),
+		"说明", "验证时区块头的所有关键字段")
 
 	// validate header fields
 	if err := validateHeaderFields(parent, header, uint64(blockTimeDrift.Seconds())); err != nil {
@@ -5753,6 +5813,74 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 	// 打印所有受托人信息
 	for i, delegate := range r.delegates {
 		r.logger.Debug("🏭 出块受托人", "index", i, "address", delegate.Address.String(), "votingPower", delegate.VotingPower.String(), "isActive", delegate.IsActive)
+	}
+
+	// 🆕 关键修复：在签名收集前主动获取所有受托人的BLS公钥
+	r.logger.Debug("🔑 开始主动获取所有受托人的BLS公钥")
+	myAddress := types.Address(r.config.Key.Address())
+	
+	for i, delegate := range r.delegates {
+		if delegate.BlsKey == nil {
+			r.logger.Debug("🔑 出块时受托人缺少BLS公钥，将在验证时按需获取", 
+				"index", i, 
+				"address", delegate.Address.String(), 
+				"votingPower", delegate.VotingPower.String(), 
+				"isActive", delegate.IsActive)
+			
+			// 主动请求BLS公钥
+			if r.networkIntegration != nil {
+				if err := r.networkIntegration.RequestBLSKey(delegate.Address, myAddress); err != nil {
+					r.logger.Warn("⚠️ 请求BLS公钥失败", 
+						"address", delegate.Address.String(), 
+						"error", err)
+				} else {
+					r.logger.Debug("📨 已发送BLS公钥请求", 
+						"address", delegate.Address.String())
+				}
+			}
+		} else {
+			r.logger.Debug("🔑 出块时受托人BLS公钥已存在", 
+				"index", i, 
+				"address", delegate.Address.String(), 
+				"publicKeyLength", len(delegate.BlsKey.Marshal()))
+		}
+	}
+	
+	// 等待一小段时间让BLS公钥请求完成
+	time.Sleep(100 * time.Millisecond)
+	
+	// 🆕 尝试从缓存中恢复BLS公钥
+	r.logger.Debug("🔄 尝试从缓存恢复BLS公钥")
+	if r.networkIntegration != nil {
+		// 使用批量恢复函数
+		if err := r.networkIntegration.RestoreBLSKeysForDelegates(r.delegates); err != nil {
+			r.logger.Warn("⚠️ 批量恢复BLS公钥失败", "error", err)
+		}
+	}
+	
+	// 🆕 验证BLS公钥可用性
+	r.logger.Debug("🔍 验证所有受托人BLS公钥可用性")
+	missingBlsKeys := 0
+	for i, delegate := range r.delegates {
+		if delegate.BlsKey == nil {
+			missingBlsKeys++
+			r.logger.Warn("⚠️ 受托人缺少BLS公钥", 
+				"index", i, 
+				"address", delegate.Address.String())
+		} else {
+			r.logger.Debug("✅ 受托人BLS公钥可用", 
+				"index", i, 
+				"address", delegate.Address.String(),
+				"publicKeyLength", len(delegate.BlsKey.Marshal()))
+		}
+	}
+	
+	if missingBlsKeys > 0 {
+		r.logger.Warn("⚠️ 部分受托人缺少BLS公钥，将在验证时按需获取", 
+			"missingCount", missingBlsKeys,
+			"totalDelegates", len(r.delegates))
+	} else {
+		r.logger.Info("✅ 所有受托人BLS公钥可用", "totalDelegates", len(r.delegates))
 	}
 
 	// 🆕 关键修复：不要在签名收集过程中重新排序验证者集合
