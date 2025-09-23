@@ -807,11 +807,6 @@ func (ni *NetworkIntegration) handleSignatureRequest(obj interface{}, from peer.
 		Timestamp:      request.Timestamp,
 	}
 
-	ni.logger.Debug("received signature request",
-		"blockNumber", internalRequest.BlockNumber,
-		"checkpointHash", internalRequest.CheckpointHash.String(),
-		"proposer", internalRequest.Proposer.String(),
-		"from", from.String())
 
 	// 验证签名请求的有效性
 	// 首先检查是否是查询请求（BlockNumber=0 且包含查询标识符）
@@ -1332,9 +1327,7 @@ func (ni *NetworkIntegration) BroadcastSignatureResponse(response *SignatureResp
 		return fmt.Errorf("failed to publish signature response: %w", err)
 	}
 
-	ni.logger.Debug("broadcasted signature response",
-		"validator", response.ValidatorAddr.String(),
-		"checkpointHash", response.CheckpointHash.String())
+	// 签名响应已广播
 
 	return nil
 }
@@ -1564,9 +1557,6 @@ func (ni *NetworkIntegration) saveBLSKey(address types.Address, blsKeyBytes []by
 			"error", err)
 		// 不返回错误，因为缓存已经保存成功
 	} else {
-		ni.logger.Debug("BLS公钥已持久化到数据库",
-			"address", address.String(),
-			"blsKeyLength", len(blsKeyBytes))
 	}
 
 	return nil
@@ -1666,9 +1656,6 @@ func (ni *NetworkIntegration) persistBLSKeyToDatabase(address types.Address, bls
 				return fmt.Errorf("通过DPoS实例持久化BLS公钥失败: %w", err)
 			}
 
-			ni.logger.Debug("BLS公钥已成功持久化到数据库（通过DPoS实例）",
-				"address", address.String(),
-				"blsKeyLength", len(blsKeyBytes))
 			return nil
 		}
 	}
@@ -1679,9 +1666,6 @@ func (ni *NetworkIntegration) persistBLSKeyToDatabase(address types.Address, bls
 			return fmt.Errorf("通过全局注册表（固定key）持久化BLS公钥失败: %w", err)
 		}
 
-		ni.logger.Debug("BLS公钥已成功持久化到数据库（通过全局注册表-固定key）",
-			"address", address.String(),
-			"blsKeyLength", len(blsKeyBytes))
 		return nil
 	}
 
@@ -1691,9 +1675,6 @@ func (ni *NetworkIntegration) persistBLSKeyToDatabase(address types.Address, bls
 			return fmt.Errorf("通过全局注册表（地址key）持久化BLS公钥失败: %w", err)
 		}
 
-		ni.logger.Debug("BLS公钥已成功持久化到数据库（通过全局注册表-地址key）",
-			"address", address.String(),
-			"blsKeyLength", len(blsKeyBytes))
 		return nil
 	}
 
@@ -1703,9 +1684,6 @@ func (ni *NetworkIntegration) persistBLSKeyToDatabase(address types.Address, bls
 			return fmt.Errorf("BLS公钥持久化回调失败: %w", err)
 		}
 
-		ni.logger.Debug("BLS公钥已成功持久化到数据库（通过回调函数）",
-			"address", address.String(),
-			"blsKeyLength", len(blsKeyBytes))
 		return nil
 	}
 
@@ -1761,10 +1739,7 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 		
 		// 只对本地节点地址的请求进行详细跟踪
 		if isLocalRequest {
-			ni.logger.Info("🎯 收到本地节点BLS公钥请求",
-				"requestedAddress", requestMsg.RequestedAddress.String(),
-				"localNodeAddress", localNodeAddress,
-				"requester", requestMsg.Requester.String())
+			// 静默处理，不打印日志
 		} else {
 			// 非本地节点请求，完全静默处理，不打印任何日志
 			// 直接发送"未找到"响应
@@ -1800,8 +1775,6 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 			// 如果缓存中没有，检查是否是本地节点的地址
 			// 只有本地节点才能提供自己的BLS公钥
 			if isLocalRequest {
-				ni.logger.Info("🔍 本地节点BLS公钥不在缓存中，从文件加载",
-					"requestedAddress", requestMsg.RequestedAddress.String())
 				
 				// 先获取文件路径用于日志
 				dataDir := ni.getDataDir()
@@ -1815,10 +1788,6 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 					}
 				}
 				
-				ni.logger.Info("📁 开始查找BLS私钥文件",
-					"requestedAddress", requestMsg.RequestedAddress.String(),
-					"dataDir", dataDir,
-					"filePath", keyFilePath)
 				
 				if keyBytes, err := ni.findBLSKeyFromGenesisFile(requestMsg.RequestedAddress); err == nil && len(keyBytes) > 0 {
 					found = true
@@ -1878,10 +1847,6 @@ func (ni *NetworkIntegration) handleBLSKeyResponse(obj interface{}, from peer.ID
 			return
 		}
 
-		ni.logger.Debug("📨 收到BLS公钥响应", 
-			"requestedAddress", responseMsg.RequestedAddress.String(),
-			"requester", responseMsg.Requester.String(),
-			"found", responseMsg.Found)
 
 		if responseMsg.Found && len(responseMsg.BLSPublicKey) > 0 {
 			// 保存BLS公钥到缓存和数据库
@@ -1893,9 +1858,6 @@ func (ni *NetworkIntegration) handleBLSKeyResponse(obj interface{}, from peer.ID
 			if err := ni.forwardBLSResponseToDPoS(&responseMsg); err != nil {
 				ni.logger.Error("转发BLS响应到DPoS失败", "error", err)
 			}
-		} else {
-			ni.logger.Debug("BLS公钥未找到", 
-				"requestedAddress", responseMsg.RequestedAddress.String())
 		}
 	} else {
 		ni.logger.Error("无效的BLS公钥响应消息类型")
@@ -1964,10 +1926,6 @@ func (ni *NetworkIntegration) findBLSKeyFromGenesisFile(address types.Address) (
 	isLocalNode := ni.isLocalNode(address)
 	
 	if isLocalNode {
-		ni.logger.Info("🔍 检查BLS私钥文件",
-			"address", address.String(),
-			"dataDir", dataDir,
-			"filePath", keyFilePath)
 	}
 		
 	if _, err := os.Stat(keyFilePath); os.IsNotExist(err) {
@@ -1980,9 +1938,7 @@ func (ni *NetworkIntegration) findBLSKeyFromGenesisFile(address types.Address) (
 	}
 	
 	if isLocalNode {
-		ni.logger.Info("✅ BLS private key file exists",
-			"address", address.String(),
-			"filePath", keyFilePath)
+		// 静默处理，不打印日志
 	}
 	
 	// 4. 读取私钥文件
@@ -2021,10 +1977,7 @@ func (ni *NetworkIntegration) findBLSKeyFromGenesisFile(address types.Address) (
 		return nil, fmt.Errorf("invalid BLS public key length: expected 128 bytes, got %d", len(publicKeyBytes))
 	}
 	
-	ni.logger.Debug("✅ 从validator-bls.key文件成功获取BLS公钥", 
-		"address", address.String(),
-		"filePath", keyFilePath,
-		"blsKeyLength", len(publicKeyBytes))
+	// 静默处理，不打印日志
 	
 	return publicKeyBytes, nil
 }

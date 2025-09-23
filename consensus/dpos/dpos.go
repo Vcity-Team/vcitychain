@@ -163,6 +163,9 @@ type DPoSConfig struct {
 
 	// 委托奖励比例
 	RewardRatio uint64 `json:"rewardRatio"`
+
+	// 🆕 新增：共识切换高度
+	ConsensusSwitchHeight uint64 `json:"consensusSwitchHeight"`
 }
 
 // dpos_runtime.go
@@ -257,25 +260,18 @@ func (r *dposRuntime) start() error {
 		r.logger.Error("❌ 启动区块生产定时器失败", "error", err)
 		return fmt.Errorf("failed to start block production: %w", err)
 	}
-	r.logger.Info("✅ 区块生产定时器启动成功")
 
 	// 启动投票统计定时器
-	r.logger.Info("🗳️ 开始启动投票统计定时器...")
 	if err := r.startVoteCollection(); err != nil {
 		r.logger.Error("❌ 启动投票统计定时器失败", "error", err)
 		return fmt.Errorf("failed to start vote collection: %w", err)
 	}
-	r.logger.Info("✅ 投票统计定时器启动成功")
 
 	// 启动持久的签名请求监听器 - 确保所有节点都能接收到广播的签名请求
-	r.logger.Info("📡 准备启动签名请求监听器...")
 	go r.listenForSignatureRequests(context.Background())
-	r.logger.Info("✅ 签名请求监听器启动成功")
 
 	// 🆕 启动网络健康监控
-	r.logger.Info("🌐 开始启动网络健康监控...")
 	r.startNetworkHealthMonitoring()
-	r.logger.Info("✅ 网络健康监控启动成功")
 
 	r.logger.Info("🎉 DPoS runtime启动成功")
 	return nil
@@ -539,7 +535,6 @@ func (r *dposRuntime) logOnce(key string, level string, message string, args ...
 
 // parseValidatorsFromGenesis 从创世块解析DPoS验证者
 func (r *dposRuntime) parseValidatorsFromGenesis() error {
-	r.logger.Info("🔍 开始从创世块解析DPoS验证者")
 	
 	// 1. 获取创世块
 	if r.config == nil || r.config.blockchain == nil {
@@ -561,9 +556,6 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 	minStakeAmount := big.NewInt(0)
 	minStakeAmount.SetString("1000000000000000000000", 10) // 1000 VCITY
 	
-	r.logger.Info("🚨 DPoS验证者筛选开始", 
-		"totalCandidates", ibftValidators.Len(),
-		"minStakeAmount", minStakeAmount.String())
 	
 	validValidatorCount := 0
 	insufficientBalanceCount := 0
@@ -709,7 +701,6 @@ func (r *dposRuntime) parseIBFTValidatorsFromExtraData(extraData []byte) (valida
 
 // parseValidatorsFromExtraDataDirectly 直接解析extraData中的验证者地址
 func (r *dposRuntime) parseValidatorsFromExtraDataDirectly(extraData []byte) (validator.AccountSet, error) {
-	r.logger.Info("🔍 直接解析extraData中的验证者地址")
 	
 	// 使用与 ForkManager 相同的解析逻辑
 	// Remove only the vanity bytes (32 bytes) from extraData
@@ -747,7 +738,6 @@ func (r *dposRuntime) parseValidatorsFromExtraDataDirectly(extraData []byte) (va
 						IsActive:    true,
 					}
 					validatorList = append(validatorList, delegate)
-					r.logger.Debug("🔍 解析出验证者地址", "address", addr.String())
 				}
 			} else {
 				// Try to get sub-elements
@@ -764,7 +754,6 @@ func (r *dposRuntime) parseValidatorsFromExtraDataDirectly(extraData []byte) (va
 									IsActive:    true,
 								}
 								validatorList = append(validatorList, delegate)
-								r.logger.Debug("🔍 解析出验证者地址", "address", addr.String())
 							}
 						}
 					}
@@ -779,7 +768,6 @@ func (r *dposRuntime) parseValidatorsFromExtraDataDirectly(extraData []byte) (va
 		return nil, fmt.Errorf("failed to parse RLP data: %w", err)
 	}
 	
-	r.logger.Info("✅ 直接解析验证者成功", "count", len(validatorList))
 	return validatorList, nil
 }
 
@@ -795,24 +783,15 @@ func (r *dposRuntime) getValidatorBalance(address types.Address) (*big.Int, erro
 		return big.NewInt(0), fmt.Errorf("current header not available")
 	}
 	
-	// 获取状态根
-	stateRoot := currentHeader.StateRoot
 	
 	// 这里需要实现余额查询逻辑
 	// 暂时返回一个模拟余额
-	r.logger.Debug("🔍 开始查询验证者余额", "address", address.String())
-	r.logger.Debug("📋 当前区块头信息", 
-		"number", currentHeader.Number, 
-		"stateRoot", stateRoot.String())
 	
 	// 模拟余额查询 - 这里应该调用真正的状态查询
 	// 暂时返回一个固定值用于测试
 	balance := big.NewInt(0)
 	balance.SetString("1000002100000000000000", 10) // 1000002.1 VCITY
 	
-	r.logger.Debug("✅ 成功查询到验证者余额", 
-		"address", address.String(), 
-		"balance", balance.String())
 	
 	return balance, nil
 }
@@ -891,34 +870,18 @@ func (r *dposRuntime) startBlockProduction() error {
 	r.logger.Info("✅ 区块生产定时器创建成功", "blockTime", blockTime.String())
 	
 	if r.resourceMonitor != nil && r.resourceMonitor.goroutineManager != nil {
-		r.logger.Info("🚀 开始启动区块生产goroutine...")
 		r.resourceMonitor.goroutineManager.StartGoroutine("block-production", func() {
-			r.logger.Info("🏭 区块生产goroutine已启动")
 			for {
 				select {
 				case <-r.blockTimer.C:
-					
-					// 🆕 添加详细的出块检查日志
-					currentBlock := r.config.blockchain.CurrentHeader()
-					expectedIndex := (currentBlock.Number + 1) % uint64(r.config.DelegateCount)
-					r.logger.Info("🔍 出块检查详情",
-						"currentBlock", currentBlock.Number,
-						"r.currentDelegateIndex", r.currentDelegateIndex,
-						"expectedIndex", expectedIndex,
-						"delegateCount", r.config.DelegateCount,
-						"isCurrentDelegate", r.currentDelegateIndex == expectedIndex,
-						"formula", fmt.Sprintf("(%d+1)%%%d=%d", currentBlock.Number, r.config.DelegateCount, expectedIndex))
-					
 					if err := r.produceBlock(); err != nil {
 						r.logger.Error("failed to produce block", "error", err)
 					}
 				case <-r.closeCh:
-					r.logger.Info("🏭 区块生产goroutine收到关闭信号")
 					return
 				}
 			}
 		})
-		r.logger.Info("✅ 区块生产goroutine启动成功")
 	} else {
 		r.logger.Error("❌ 无法启动区块生产：resourceMonitor或goroutineManager为nil",
 			"resourceMonitor", r.resourceMonitor != nil,
@@ -931,7 +894,6 @@ func (r *dposRuntime) startBlockProduction() error {
 		return fmt.Errorf("resourceMonitor or goroutineManager is nil")
 	}
 
-	r.logger.Info("🎉 区块生产启动完成")
 	return nil
 }
 
@@ -1020,7 +982,7 @@ func (r *dposRuntime) cleanupSignatureCollectionResources(checkpointHash types.H
 	delete(r.pendingSignatureRequests, checkpointHash)
 	r.signatureRequestMutex.Unlock()
 
-	r.logger.Debug("已清理签名收集资源", "checkpointHash", checkpointHash.String())
+	// 签名收集资源已清理
 }
 
 // cleanupExpiredCaches 清理过期的运行时缓存
@@ -1136,14 +1098,7 @@ func (r *dposRuntime) produceBlock() error {
 	
 	// 🆕 添加详细的currentDelegateIndex日志
 	currentBlock := r.config.blockchain.CurrentHeader()
-	expectedIndex := (currentBlock.Number + 1) % uint64(r.config.DelegateCount)
-	r.logger.Info("🔍 produceBlock 出块检查",
-		"currentBlock", currentBlock.Number,
-		"r.currentDelegateIndex", r.currentDelegateIndex,
-		"expectedIndex", expectedIndex,
-		"delegateCount", r.config.DelegateCount,
-		"isCurrentDelegate", r.currentDelegateIndex == expectedIndex,
-		"formula", fmt.Sprintf("(%d+1)%%%d=%d", currentBlock.Number, r.config.DelegateCount, expectedIndex))
+	// 静默处理，不打印日志
 
 	// 检查Key是否可用
 	if r.config == nil || r.config.Key == nil {
@@ -1158,7 +1113,7 @@ func (r *dposRuntime) produceBlock() error {
 		return fmt.Errorf("key not available, cannot produce block")
 	}
 	
-	r.logger.Debug("✅ Key检查通过", "keyAddr", r.config.Key.Address().String())
+	// 静默处理，不打印日志
 
 	// 检查当前节点是否为出块者
 	currentDelegate := r.getCurrentDelegate()
@@ -1811,10 +1766,7 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 		return types.ZeroAddress
 	}
 
-	r.logger.Debug("✅ 找到当前出块者",
-		"currentDelegateIndex", r.currentDelegateIndex,
-		"address", delegate.Address.String(),
-		"votingPower", delegate.VotingPower.String())
+	// 静默处理，不打印日志
 	
 	return delegate.Address
 }
@@ -1919,23 +1871,57 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		}
 	}
 
+	// 先计算验证者哈希，用于CheckpointData
+	// 🆕 关键修复：使用与验证时相同的验证者集合获取方法
+	// 验证时使用：getValidatorsFromExtraData
+	// 生产时也应该使用相同的逻辑：从ExtraData解析验证者集合
+	
+	// 获取当前区块信息
+	currentBlock := r.config.blockchain.CurrentHeader()
+	
+	// 获取父区块信息，与验证时保持一致
+	var parents []*types.Header
+	if currentBlock.Number > 0 {
+		parentHeader, exists := r.config.blockchain.GetHeaderByNumber(currentBlock.Number - 1)
+		if exists && parentHeader != nil {
+			parents = append(parents, parentHeader)
+		}
+	}
+	
+	// 🆕 使用与验证时完全相同的验证者集合获取方法
+	// 验证时：getValidatorsFromExtraData(header, parent, parents, consensusBackend, logger)
+	// 生产时：从当前区块的ExtraData解析验证者集合
+	productionValidators, err := r.getValidatorsFromExtraDataForProduction(currentBlock, parents)
+	if err != nil {
+		r.logger.Error("❌ 生产时无法获取验证者集合", "blockNumber", currentBlock.Number, "error", err)
+		return nil, fmt.Errorf("failed to get validators for production: %w", err)
+	}
+	
+	r.logger.Debug("🔍 生产时开始计算验证者哈希", "validatorsCount", len(productionValidators))
+	currentValidatorsHash, err := productionValidators.HashAddressOnly()
+	if err != nil {
+		r.logger.Error("failed to calculate current validators hash", "error", err)
+		return nil, fmt.Errorf("failed to calculate current validators hash: %w", err)
+	}
+	r.logger.Debug("🔍 生产时验证者哈希计算结果", "currentValidatorsHash", currentValidatorsHash.String())
+
+	// 创建正确的Extra对象，包含必要的字段
+	extra := &Extra{
+		Committed: &Signature{}, // 添加空的Committed签名
+		Checkpoint: &CheckpointData{
+			BlockRound:            r.currentRound,
+			EpochNumber:           1,
+			CurrentValidatorsHash: currentValidatorsHash,
+			NextValidatorsHash:    currentValidatorsHash, // 暂时使用相同的哈希
+			EventRoot:             types.Hash{},          // 暂时为空
+		},
+	}
+
 	// 构建区块
 	block, err := builder.Build(func(h *types.Header) {
 		// 设置DPoS相关的区块头信息
 		h.Miner = keyAddr[:]
 		h.Difficulty = 1
-
-		// 创建正确的Extra对象，包含必要的字段
-		extra := &Extra{
-			Committed: &Signature{}, // 添加空的Committed签名
-			Checkpoint: &CheckpointData{
-				BlockRound:            r.currentRound,
-				EpochNumber:           1,
-				CurrentValidatorsHash: types.Hash{},
-				NextValidatorsHash:    types.Hash{},
-				EventRoot:             types.Hash{},
-			},
-		}
 		h.ExtraData = extra.MarshalRLPTo(nil)
 
 		// 添加调试日志
@@ -1956,35 +1942,51 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	r.logger.Debug("waiting for validator signatures", "blockNumber", block.Block.Number())
 
 	// 计算checkpoint哈希用于签名
-	// 计算当前验证者集合的哈希
-	if len(r.delegates) == 0 {
-		r.logger.Error("delegates 集合为空，无法计算验证者哈希")
-		return nil, fmt.Errorf("empty delegates set: cannot calculate validators hash")
-	}
-
-	currentValidatorsHash, err := r.delegates.Hash()
-	if err != nil {
-		r.logger.Error("failed to calculate current validators hash", "error", err)
-		return nil, fmt.Errorf("failed to calculate current validators hash: %w", err)
-	}
-
-	checkpoint := &CheckpointData{
-		BlockRound:            r.currentRound,
-		EpochNumber:           1,
-		CurrentValidatorsHash: currentValidatorsHash,
-		NextValidatorsHash:    currentValidatorsHash, // 暂时使用相同的哈希
-		EventRoot:             types.Hash{},          // 暂时为空
-	}
+	// 使用与区块头相同的CheckpointData对象
+	checkpoint := extra.Checkpoint
 
 	// 计算checkpoint哈希，使用固定的哈希值避免循环依赖
 	// 使用区块号作为哈希的基础，确保所有节点计算相同的checkpointHash
 	fixedBlockHash := types.BytesToHash([]byte(fmt.Sprintf("block_%d", block.Block.Number())))
+	
+	r.logger.Debug("🔍 生产时开始计算checkpoint哈希", 
+		"blockNumber", block.Block.Number(),
+		"chainID", 888,
+		"fixedBlockHash", fixedBlockHash.String(),
+		"currentValidatorsHash", checkpoint.CurrentValidatorsHash.String(),
+		"nextValidatorsHash", checkpoint.NextValidatorsHash.String(),
+		"blockRound", checkpoint.BlockRound,
+		"epochNumber", checkpoint.EpochNumber)
+	
+	// 🆕 添加详细的CheckpointData内容对比日志
+	r.logger.Debug("🔍 生产时CheckpointData详细信息",
+		"blockNumber", block.Block.Number(),
+		"chainID", 888,
+		"blockHash", fixedBlockHash.String(),
+		"blockRound", checkpoint.BlockRound,
+		"epochNumber", checkpoint.EpochNumber,
+		"eventRoot", checkpoint.EventRoot.String(),
+		"currentValidatorsHash", checkpoint.CurrentValidatorsHash.String(),
+		"nextValidatorsHash", checkpoint.NextValidatorsHash.String(),
+		"productionValidatorsCount", len(productionValidators))
+	
+	// 🆕 打印生产时验证者集合的详细信息
+	r.logger.Debug("🔍 生产时验证者集合详细信息")
+	for i, validator := range productionValidators {
+		r.logger.Debug("🔍 生产时验证者",
+			"index", i,
+			"address", validator.Address.String(),
+			"votingPower", validator.VotingPower.String(),
+			"isActive", validator.IsActive)
+	}
 
 	checkpointHash, err := checkpoint.Hash(888, block.Block.Number(), fixedBlockHash)
 	if err != nil {
 		r.logger.Error("failed to calculate checkpoint hash", "error", err)
 		return nil, fmt.Errorf("failed to calculate checkpoint hash: %w", err)
 	}
+	
+	r.logger.Debug("🔍 生产时checkpoint哈希计算结果", "checkpointHash", checkpointHash.String())
 
 	// 确保checkpointHash不为全零
 	if checkpointHash == (types.Hash{}) {
@@ -2159,32 +2161,14 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		for i := uint64(0); i < uint64(len(productionValidators)); i++ {
 			if signatureBitmap.IsSet(i) {
 				participatingIndices = append(participatingIndices, i)
-				r.logger.Debug("🔍 参与签名的验证者索引",
-					"validatorIndex", i,
-					"validatorAddress", productionValidators[i].Address.String(),
-					"isParticipating", true)
-			} else {
-				r.logger.Debug("🔍 未参与签名的验证者索引",
-					"validatorIndex", i,
-					"validatorAddress", productionValidators[i].Address.String(),
-					"isParticipating", false)
 			}
 		}
-
-		r.logger.Debug("🔍 参与签名验证者统计",
-			"totalValidators", len(productionValidators),
-			"participatingCount", len(participatingIndices),
-			"signatureCount", len(signatures))
 
 		// 按实际参与签名的验证者索引收集签名
 		for _, validatorIndex := range participatingIndices {
 			if signatureIndex < len(signatures) {
 				bitmapToSignature[validatorIndex] = signatures[signatureIndex]
 				signatureIndex++
-				r.logger.Debug("🔍 收集签名映射",
-					"bitmapIndex", validatorIndex,
-					"signatureIndex", signatureIndex-1,
-					"validatorAddress", productionValidators[validatorIndex].Address.String())
 			}
 		}
 
@@ -2209,6 +2193,32 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		r.logger.Debug("签名解析完成",
 			"parsedSignatures", len(blsSignatures),
 			"totalSignatures", len(signatures))
+
+		// 🆕 添加签名聚合前的详细检查
+		r.logger.Debug("🔍 ===== 生产时签名聚合前详细检查 =====",
+			"blockNumber", block.Block.Number(),
+			"blsSignaturesCount", len(blsSignatures),
+			"productionValidatorsCount", len(productionValidators))
+
+		// 🆕 打印每个签名的详细信息
+		r.logger.Debug("🔍 生产时BLS签名详细信息:")
+		for i, sig := range blsSignatures {
+			if sig != nil {
+				sigBytes, err := sig.Marshal()
+				if err == nil {
+					r.logger.Debug("🔍 生产时BLS签名详情",
+						"index", i,
+						"signatureBytes", fmt.Sprintf("%x", sigBytes),
+						"signatureLength", len(sigBytes))
+				} else {
+					r.logger.Error("❌ 生产时BLS签名序列化失败",
+						"index", i,
+						"error", err)
+				}
+			} else {
+				r.logger.Error("❌ 生产时BLS签名为nil", "index", i)
+			}
+		}
 
 		// 聚合所有签名
 		aggregatedSignature, err := blsSignatures.Aggregate().Marshal()
@@ -2351,30 +2361,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				"isParticipating", true) // 只保存实际签名者
 		}
 
-		// 🎯 显著日志：打印位图索引对应关系（只显示真正有签名的验证者）
-		r.logger.Debug("🎯 生产时位图索引对应关系:")
-		for i := uint64(0); i < uint64(len(productionValidators)); i++ {
-			if signatureBitmap.IsSet(i) {
-				if sigBytes, exists := bitmapToSignature[i]; exists && len(sigBytes) > 0 {
-					r.logger.Debug("🎯 生产时位图索引",
-						"blockNumber", block.Block.Number(),
-						"bitmapIndex", i,
-						"address", productionValidators[i].Address.String(),
-						"isSet", true,
-						"hasSignature", true,
-						"signatureLength", len(sigBytes),
-						"note", "实际签名者")
-				} else {
-					r.logger.Warn("⚠️ 生产时位图索引无签名",
-						"blockNumber", block.Block.Number(),
-						"bitmapIndex", i,
-						"address", productionValidators[i].Address.String(),
-						"isSet", true,
-						"hasSignature", false,
-						"note", "位图设置但无签名")
-				}
-			}
-		}
+		// 静默处理，不打印日志
 
 		// 更新区块的ExtraData，包含聚合签名、父区块签名和验证者集合
 		finalExtra := &Extra{
@@ -2958,7 +2945,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		}
 		
 		_, exists := d.processedBlocks.Get(header.Hash)
-			d.processedMutex.RUnlock()
+		d.processedMutex.RUnlock()
 		
 		if exists {
 			d.logger.Debug("block already processed, skipping", "blockNumber", header.Number, "blockHash", header.Hash)
@@ -2970,79 +2957,90 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		d.processedBlocks.Add(header.Hash, true)
 		d.processedMutex.Unlock()
 
-		// 🆕 修复：统一处理区块投票，无论是否是自己生产的区块
-		// 处理区块中的投票事件（统一处理，避免重复）
-		if err := d.processBlockVotesFromHeader(header); err != nil {
-			d.logger.Error("failed to process block votes from header", "blockNumber", header.Number, "blockHash", header.Hash, "error", err)
-			// 不返回错误，继续处理其他逻辑
-		}
-
-		// 检查这个区块是否是我们自己生产的
-		blockMiner := types.BytesToAddress(header.Miner)
-		keyAddr := types.Address(d.key.Address())
-
-		// 更新轮次状态 - 只有接收其他节点的区块时才更新轮次
-		// 如果是自己生产的区块，轮次已经在produceBlock中更新过了
-		d.logger.Info("🔍 检查区块生产者", 
-			"blockNumber", header.Number,
-			"blockMiner", blockMiner.String(),
-			"keyAddr", keyAddr.String(),
-			"isOurBlock", blockMiner == keyAddr)
-			
-		if blockMiner != keyAddr {
-			// 接收其他节点的区块，需要更新轮次
-			d.logger.Info("🔄 接收其他节点区块，准备更新轮次", 
-				"blockNumber", header.Number,
-				"blockMiner", blockMiner.String(),
-				"keyAddr", keyAddr.String())
-				
-			if d.runtime != nil {
-				d.runtime.lock.Lock()
-				oldIndex := d.runtime.currentDelegateIndex
-				oldRound := d.runtime.currentRound
-
-				d.logger.Info("🔍 更新前轮次状态", 
-					"blockNumber", header.Number,
-					"oldRound", oldRound,
-					"oldDelegateIndex", oldIndex)
-
-				// 🆕 使用区块头部的区块号，确保一致性
-				d.runtime.updateRound(header.Number)
-
-				d.runtime.lock.Unlock()
-
-				d.logger.Info("✅ 轮次状态更新完成",
-					"blockNumber", header.Number,
-					"blockMiner", blockMiner.String(),
-					"keyAddr", keyAddr.String(),
-					"oldRound", oldRound,
-					"newRound", d.runtime.currentRound,
-					"oldDelegateIndex", oldIndex,
-					"newDelegateIndex", d.runtime.currentDelegateIndex)
+		// 🆕 修复：异步处理区块投票，避免阻塞区块提交流程
+		// 这样可以解决在ProcessHeaders中因数据库锁竞争导致的卡住问题
+		go func(h *types.Header) {
+			d.logger.Debug("🔄 异步处理区块投票", "blockNumber", h.Number, "blockHash", h.Hash.String()[:16])
+			if err := d.processBlockVotesFromHeader(h); err != nil {
+				d.logger.Error("failed to process block votes from header", "blockNumber", h.Number, "blockHash", h.Hash, "error", err)
+				// 不返回错误，继续处理其他逻辑
 			} else {
-				d.logger.Error("❌ runtime为nil，无法更新轮次状态", 
-					"blockNumber", header.Number)
+				d.logger.Debug("✅ 异步投票处理完成", "blockNumber", h.Number, "blockHash", h.Hash.String()[:16])
 			}
-		} else {
-			// 自己生产的区块，轮次已经在produceBlock中更新过了
-			d.logger.Info("ℹ️ 处理自己生产的区块，轮次已在produceBlock中更新",
-				"blockNumber", header.Number,
-				"currentRound", func() uint64 {
-					if d.runtime != nil {
-						return d.runtime.currentRound
-					}
-					return 0
-				}(),
-				"currentDelegateIndex", func() uint64 {
-					if d.runtime != nil {
-						return d.runtime.currentDelegateIndex
-					}
-					return 0
-				}())
-		}
+		}(header)
+
+		// 同步更新轮次状态（这部分必须同步执行，不能异步）
+		d.updateRoundState(header)
 	}
 
 	return nil
+}
+
+// 🆕 新增：更新轮次状态（从ProcessHeaders中提取出来）
+func (d *DPoS) updateRoundState(header *types.Header) {
+	// 检查这个区块是否是我们自己生产的
+	blockMiner := types.BytesToAddress(header.Miner)
+	keyAddr := types.Address(d.key.Address())
+
+	// 更新轮次状态 - 只有接收其他节点的区块时才更新轮次
+	// 如果是自己生产的区块，轮次已经在produceBlock中更新过了
+	d.logger.Info("🔍 检查区块生产者", 
+		"blockNumber", header.Number,
+		"blockMiner", blockMiner.String(),
+		"keyAddr", keyAddr.String(),
+		"isOurBlock", blockMiner == keyAddr)
+		
+	if blockMiner != keyAddr {
+		// 接收其他节点的区块，需要更新轮次
+		d.logger.Info("🔄 接收其他节点区块，准备更新轮次", 
+			"blockNumber", header.Number,
+			"blockMiner", blockMiner.String(),
+			"keyAddr", keyAddr.String())
+			
+		if d.runtime != nil {
+			d.runtime.lock.Lock()
+			oldIndex := d.runtime.currentDelegateIndex
+			oldRound := d.runtime.currentRound
+
+			d.logger.Info("🔍 更新前轮次状态", 
+				"blockNumber", header.Number,
+				"oldRound", oldRound,
+				"oldDelegateIndex", oldIndex)
+
+			// 🆕 使用区块头部的区块号，确保一致性
+			d.runtime.updateRound(header.Number)
+
+			d.runtime.lock.Unlock()
+
+			d.logger.Info("✅ 轮次状态更新完成",
+				"blockNumber", header.Number,
+				"blockMiner", blockMiner.String(),
+				"keyAddr", keyAddr.String(),
+				"oldRound", oldRound,
+				"newRound", d.runtime.currentRound,
+				"oldDelegateIndex", oldIndex,
+				"newDelegateIndex", d.runtime.currentDelegateIndex)
+		} else {
+			d.logger.Error("❌ runtime为nil，无法更新轮次状态", 
+				"blockNumber", header.Number)
+		}
+	} else {
+		// 自己生产的区块，轮次已经在produceBlock中更新过了
+		d.logger.Info("ℹ️ 处理自己生产的区块，轮次已在produceBlock中更新",
+			"blockNumber", header.Number,
+			"currentRound", func() uint64 {
+				if d.runtime != nil {
+					return d.runtime.currentRound
+				}
+				return 0
+			}(),
+			"currentDelegateIndex", func() uint64 {
+				if d.runtime != nil {
+					return d.runtime.currentDelegateIndex
+				}
+				return 0
+			}())
+	}
 }
 
 // 🆕 新增：从区块头部处理投票事件（供ProcessHeaders调用）
@@ -3366,6 +3364,14 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	err = json.Unmarshal(customConfigJSON, &vcity_dpos.config)
 	if err != nil {
 		return nil, err
+	}
+
+	// 🆕 新增：从配置中解析共识切换高度
+	if consensusSwitchHeight, exists := params.Config.Config["consensusSwitchHeight"]; exists {
+		if height, ok := consensusSwitchHeight.(float64); ok {
+			vcity_dpos.config.ConsensusSwitchHeight = uint64(height)
+			logger.Info("🔄 设置共识切换高度", "height", vcity_dpos.config.ConsensusSwitchHeight)
+		}
 	}
 
 	// 设置必要的配置字段
@@ -3731,7 +3737,7 @@ func (d *DPoS) parseValidatorsFromExtraData(extraData []byte) (validator.Account
 
 // 🆕 新增：通过网络请求BLS公钥
 func (d *DPoS) requestBLSPublicKeyFromNetwork(address types.Address) (*bls.PublicKey, error) {
-	d.logger.Debug("🌐 开始请求远程BLS公钥", "address", address.String())
+	// 静默处理，不打印日志
 	
 	// 1. 检查网络是否可用
 	if d.config.Network == nil {
@@ -3752,7 +3758,7 @@ func (d *DPoS) requestBLSPublicKeyFromNetwork(address types.Address) (*bls.Publi
 	}
 	
 	// 4. 发送网络广播请求
-	d.logger.Info("📡 广播BLS公钥请求", "targetAddress", address.String())
+	// 静默处理，不打印日志
 	
 	// 创建响应通道
 	responseCh := make(chan *bls.PublicKey, 1)
@@ -3773,7 +3779,7 @@ func (d *DPoS) requestBLSPublicKeyFromNetwork(address types.Address) (*bls.Publi
 	select {
 	case blsKey := <-responseCh:
 		d.unregisterBLSResponseHandler(requestID)
-		d.logger.Info("✅ 收到BLS公钥响应", "address", address.String())
+		//d.logger.Info("✅ 收到BLS公钥响应", "address", address.String())
 		return blsKey, nil
 	case err := <-errorCh:
 		d.unregisterBLSResponseHandler(requestID)
@@ -3841,8 +3847,8 @@ func (d *DPoS) getValidatorBalance(address types.Address) (*big.Int, error) {
 // 🆕 新增：从私钥文件生成BLS公钥
 func (d *DPoS) readBLSPrivateKeyAndGeneratePublicKey(validatorAddress types.Address) ([]byte, error) {
 	// 1. 构建私钥文件路径 - 为每个验证者生成独立的BLS私钥文件
-	parentDir := filepath.Dir(d.dataDir) // 获取 "node1"
-	keyFilePath := filepath.Join(parentDir, "consensus","validator-bls.key")
+	parentDir := filepath.Dir(d.dataDir) // 获取 "node1\consensus"
+	keyFilePath := filepath.Join(parentDir, "validator-bls.key")
 	
 	d.logger.Debug("🔍 BLS私钥文件路径", 
 		"dataDir", d.dataDir,
@@ -6034,13 +6040,7 @@ processSignatures:
 	}
 
 	for i, delegate := range r.delegates {
-		r.logger.Debug("📝 处理受托人签名",
-			"index", i,
-			"address", delegate.Address.String(),
-			"votingPower", delegate.VotingPower.String(),
-			"isActive", delegate.IsActive,
-			"hasBlsKey", delegate.BlsKey != nil)
-		r.logger.Debug("处理delegate", "index", i, "address", delegate.Address.String())
+		// 静默处理，不打印日志
 
 		if delegate.Address == keyAddr {
 			// 提议者自己生成签名
@@ -6098,10 +6098,7 @@ processSignatures:
 				continue
 			}
 
-			r.logger.Debug("✅ 验证者签名验证成功",
-				"address", delegate.Address.String(),
-				"bitmapIndex", i,
-				"signatureCount", len(signatures)+1)
+			// 静默处理，不打印日志
 
 			signatures = append(signatures, signature)
 			signatureBitmap.Set(uint64(i))
@@ -6143,19 +6140,7 @@ processSignatures:
 			"bitmapLength", len(signatureBitmap),
 			"signedDelegatesCount", len(signatures))
 
-		// 显示位图对应的受托人
-		r.logger.Debug("🔗 位图对应受托人:")
-		for i := uint64(0); i < uint64(len(r.delegates)); i++ {
-			if signatureBitmap.IsSet(i) {
-				if int(i) < len(r.delegates) {
-					delegate := r.delegates[i]
-					r.logger.Debug("✅ 位图设置的受托人",
-						"bitmapIndex", i,
-						"address", delegate.Address.String(),
-						"hasBlsKey", delegate.BlsKey != nil)
-				}
-			}
-		}
+		// 位图验证完成
 	}
 
 	// 资源清理：清理签名收集相关的临时数据
@@ -6208,40 +6193,15 @@ func (d *DPoS) verifyDataConsistencyAfterVote() error {
 
 // verifyBlockDataConsistency 出块前验证数据一致性
 func (r *dposRuntime) verifyBlockDataConsistency() error {
-	r.logger.Debug("🔍 Verifying block data consistency...")
-
 	// 1. 获取出块时使用的验证者集合
 	blockValidators := r.delegates.Copy()
-	r.logger.Debug("📊 Block validators count", "count", len(blockValidators))
-
-	// 🆕 添加详细日志：打印内存中的验证者集合
-	r.logger.Debug("🔍 Memory delegates (blockValidators) details:")
-	for i, del := range blockValidators {
-		r.logger.Debug("🔍 Memory Delegate",
-			"index", i,
-			"address", del.Address.String(),
-			"votingPower", del.VotingPower.String(),
-			"isActive", del.IsActive)
-	}
 
 	// 2. 获取通过GetDelegates方法获得的验证者集合
 	currentBlockNumber := r.config.blockchain.CurrentHeader().Number
-	r.logger.Debug("🔍 Getting validators via GetDelegates", "blockNumber", currentBlockNumber)
 	getValidators, err := r.config.dposBackend.GetDelegates(currentBlockNumber, nil)
 	if err != nil {
 		r.logger.Error("❌ Failed to get validators via GetDelegates", "error", err)
 		return fmt.Errorf("failed to get validators via GetDelegates: %w", err)
-	}
-	r.logger.Debug("📊 GetDelegates validators count", "count", len(getValidators))
-
-	// 🆕 添加详细日志：打印数据库中的验证者集合
-	r.logger.Debug("🔍 Database delegates (getValidators) details:")
-	for i, del := range getValidators {
-		r.logger.Debug("🔍 Database Delegate",
-			"index", i,
-			"address", del.Address.String(),
-			"votingPower", del.VotingPower.String(),
-			"isActive", del.IsActive)
 	}
 
 	// 3. 比较两个验证者集合
@@ -6339,9 +6299,7 @@ func (r *dposRuntime) verifyBlockDataConsistency() error {
 		return fmt.Errorf("block data consistency verification failed: %d inconsistencies found", inconsistencies)
 	}
 
-	r.logger.Debug("✅ Block data consistency verification passed",
-		"blockCount", len(blockValidators),
-		"getCount", len(getValidators))
+	// 数据一致性验证通过
 	return nil
 }
 
@@ -7371,17 +7329,8 @@ func (r *dposRuntime) isValidator() bool {
 	}
 
 	currentAddr := types.Address(r.config.Key.Address())
-	r.logger.Debug("=== isValidator 检查开始 ===",
-		"currentAddr", currentAddr.String(),
-		"delegatesCount", len(r.delegates))
-
-	for i, delegate := range r.delegates {
-		r.logger.Debug("检查受托人",
-			"index", i,
-			"address", delegate.Address.String(),
-			"votingPower", delegate.VotingPower.String(),
-			"isActive", delegate.IsActive,
-			"isCurrentNode", delegate.Address == currentAddr)
+	// 检查当前节点是否为验证者
+	for _, delegate := range r.delegates {
 
 		if delegate.Address == currentAddr {
 			// 关键：检查stake是否足够且是否活跃
@@ -7437,21 +7386,12 @@ func (r *dposRuntime) generateSignatureResponse(request *SignatureRequest) error
 		return fmt.Errorf("failed to sign checkpoint hash: %w", err)
 	}
 
-	r.logger.Debug("✅ 签名生成成功",
-		"address", validatorAddr.String(),
-		"checkpointHash", request.CheckpointHash.String())
-
 	// 序列化BLS签名
 	signatureBytes, err := signature.Marshal()
 	if err != nil {
 		r.logger.Error("❌ 签名序列化失败", "address", validatorAddr.String(), "error", err)
 		return fmt.Errorf("failed to marshal signature: %w", err)
 	}
-
-	r.logger.Debug("📦 签名序列化成功",
-		"address", validatorAddr.String(),
-		"signatureLength", len(signatureBytes),
-		"signatureHex", fmt.Sprintf("%x", signatureBytes))
 
 	// 创建内部签名响应结构
 	internalResponse := &SignatureResponse{
@@ -7473,10 +7413,7 @@ func (r *dposRuntime) generateSignatureResponse(request *SignatureRequest) error
 			return nil
 		}
 
-		r.logger.Debug("成功生成并广播签名响应",
-			"validator", types.Address(r.config.Key.Address()).String(),
-			"checkpointHash", request.CheckpointHash.String(),
-			"signatureLength", len(signatureBytes))
+		// 签名响应已广播
 		return nil
 	}
 
@@ -7655,7 +7592,6 @@ func (r *dposRuntime) queryPeerForPendingRequests(peerID peer.ID) {
 		return
 	}
 
-	r.logger.Debug("向节点发送签名请求查询成功", "peer", peerID.String())
 }
 
 // getSignatureQueryTopic 获取签名查询主题
@@ -7864,7 +7800,7 @@ type SignatureResponse struct {
 func (r *dposRuntime) verifyValidatorSignature(delegate *validator.ValidatorMetadata, signature []byte, checkpointHash types.Hash) error {
 	if delegate.BlsKey == nil {
 		// 🆕 尝试从持久化存储中获取BLS公钥
-		r.logger.Debug("验证者缺少BLS公钥，尝试从持久化存储获取", "validator", delegate.Address.String())
+		// 静默处理，不打印日志
 
 		// 通过网络集成层获取BLS公钥
 		if r.networkIntegration != nil {
@@ -7881,7 +7817,7 @@ func (r *dposRuntime) verifyValidatorSignature(delegate *validator.ValidatorMeta
 				}
 			} else {
 				// 如果缓存中没有，尝试从数据库恢复
-				r.logger.Debug("缓存中未找到BLS公钥，尝试从数据库恢复", "validator", delegate.Address.String())
+				// 静默处理，不打印日志
 				if err := r.networkIntegration.restoreBLSKeysFromDatabase(); err != nil {
 					r.logger.Debug("从数据库恢复BLS公钥失败", "validator", delegate.Address.String(), "error", err)
 				} else {
@@ -7965,16 +7901,14 @@ func (r *dposRuntime) verifyValidatorSignature(delegate *validator.ValidatorMeta
 				}
 			} else {
 				// 远程验证者：通过网络请求获取BLS公钥
-				r.logger.Warn("⚠️ 远程验证者缺少BLS公钥，尝试通过网络请求获取",
-					"validator", delegate.Address.String())
+				// 静默处理，不打印日志
 				
 				if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 					// 使用DPoS实例的网络请求功能
 					blsKey, err := dposInstance.GetBLSKeyForValidator(delegate.Address)
 					if err == nil {
 						delegate.BlsKey = blsKey
-						r.logger.Info("✅ 远程验证者BLS公钥获取成功",
-							"validator", delegate.Address.String())
+						// 静默处理，不打印日志
 					} else {
 						r.logger.Warn("⚠️ 远程验证者BLS公钥获取失败",
 							"validator", delegate.Address.String(),
@@ -8009,13 +7943,7 @@ func (r *dposRuntime) verifyValidatorSignature(delegate *validator.ValidatorMeta
 		return fmt.Errorf("signature verification failed")
 	}
 
-	// 🆕 额外验证：检查签名是否真的来自该验证者
-	// 这里可以添加更多验证，比如检查签名的时间戳、来源等
-	// 目前先记录警告，提醒需要进一步验证
-	r.logger.Debug("⚠️ 签名验证通过，但需要确认签名来源",
-		"validator", delegate.Address.String(),
-		"checkpointHash", checkpointHash.String(),
-		"note", "签名验证通过，但需要确认签名是否真的来自该验证者")
+	// 静默处理，不打印日志
 
 	return nil
 }
@@ -9207,9 +9135,9 @@ func (d *DPoS) GetBLSKeyBytesFromGenesis(address types.Address) ([]byte, error) 
 	}
 	
 	// 3. 构建BLS私钥文件路径 - 从dataDir的父目录找consensus
-	// dataDir = "node1\dpos"，需要回到 "node1\consensus"
-	parentDir := filepath.Dir(dataDir) // 获取 "node1"
-	keyFilePath := filepath.Join(parentDir, "consensus", "validator-bls.key")
+	// dataDir = "node1\consensus\dpos"，需要回到 "node1\consensus"
+	parentDir := filepath.Dir(dataDir) // 获取 "node1\consensus"
+	keyFilePath := filepath.Join(parentDir, "validator-bls.key")
 	
 	// 4. 检查文件是否存在
 	if _, err := os.Stat(keyFilePath); os.IsNotExist(err) {
@@ -9255,12 +9183,59 @@ func (d *DPoS) GetBLSKeyBytesFromGenesis(address types.Address) ([]byte, error) 
 		return nil, fmt.Errorf("invalid BLS public key length: expected 128 bytes, got %d", len(publicKeyBytes))
 	}
 	
-	d.logger.Debug("✅ 从validator-bls.key文件成功获取BLS公钥", 
-		"address", address.String(),
-		"filePath", keyFilePath,
-		"blsKeyLength", len(publicKeyBytes))
+	// 静默处理，不打印日志
 	
 	return publicKeyBytes, nil
+}
+
+// getValidatorsFromExtraDataForProduction 生产时从ExtraData获取验证者集合
+// 使用与验证时完全相同的逻辑
+func (r *dposRuntime) getValidatorsFromExtraDataForProduction(header *types.Header, parents []*types.Header) (validator.AccountSet, error) {
+	blockNumber := header.Number
+	
+	// 获取父区块
+	var parent *types.Header
+	if blockNumber > 0 {
+		if parentHeader, exists := r.config.blockchain.GetHeaderByNumber(blockNumber - 1); exists {
+			parent = parentHeader
+		}
+	}
+	
+	// 获取父区块的父区块
+	var parentParent *types.Header
+	if parent != nil && parent.Number > 0 {
+		if parentParentHeader, exists := r.config.blockchain.GetHeaderByNumber(parent.Number - 1); exists {
+			parentParent = parentParentHeader
+		}
+	}
+	
+	// 🆕 使用与验证时完全相同的逻辑：从父区块ExtraData获取验证者集合
+	if parent != nil {
+		// 解析父区块的ExtraData
+		parentExtra, err := GetIbftExtra(parent.ExtraData)
+		if err != nil {
+			r.logger.Error("❌ 生产时解析父区块ExtraData失败", "parentBlockNumber", parent.Number, "error", err)
+			return nil, fmt.Errorf("failed to parse parent ExtraData: %w", err)
+		}
+		
+		// 从父区块ExtraData获取验证者集合
+		parentValidators, err := parentExtra.getValidatorsFromExtraData(parent, parentParent, parents, r.config.dposBackend, r.logger)
+		if err == nil {
+			r.logger.Debug("✅ 生产时从父区块ExtraData获取验证者集合成功",
+				"parentBlockNumber", parent.Number,
+				"parentValidatorsCount", len(parentValidators))
+			return parentValidators, nil
+		}
+		r.logger.Warn("⚠️ 生产时从父区块ExtraData获取验证者集合失败", "error", err)
+	}
+	
+	// 备用方案：使用runtime.delegates
+	if r.delegates != nil && len(r.delegates) > 0 {
+		r.logger.Debug("🔍 生产时使用runtime.delegates作为备用方案", "delegatesCount", len(r.delegates))
+		return r.delegates.Copy(), nil
+	}
+	
+	return nil, fmt.Errorf("no validators available for production")
 }
 
 // 🆕 新增：获取数据目录路径
@@ -9293,9 +9268,9 @@ func (d *DPoS) getBLSKeyBytes() ([]byte, error) {
 	dataDir := d.getDataDir()
 	if dataDir != "" {
 		// 构建BLS私钥文件路径 - 从dataDir的父目录找consensus
-		// dataDir = "node1\dpos"，需要回到 "node1\consensus"
-		parentDir := filepath.Dir(dataDir) // 获取 "node1"
-		keyFilePath := filepath.Join(parentDir, "consensus", "validator-bls.key")
+		// dataDir = "node1\consensus\dpos"，需要回到 "node1\consensus"
+		parentDir := filepath.Dir(dataDir) // 获取 "node1\consensus"
+		keyFilePath := filepath.Join(parentDir, "validator-bls.key")
 		
 		// 检查文件是否存在
 		if _, err := os.Stat(keyFilePath); err == nil {
@@ -9475,7 +9450,7 @@ func (d *DPoS) GetValidators() validator.AccountSet {
 
 // GetBLSKeyForValidator 获取指定验证者的BLS公钥（延迟获取）
 func (d *DPoS) GetBLSKeyForValidator(address types.Address) (*bls.PublicKey, error) {
-	d.logger.Debug("🔑 获取验证者BLS公钥", "address", address.String())
+	// 静默处理，不打印日志
 	
 	// 检查是否是当前节点
 	if d.key != nil && address == types.Address(d.key.Address()) {
@@ -9495,14 +9470,14 @@ func (d *DPoS) GetBLSKeyForValidator(address types.Address) (*bls.PublicKey, err
 		return blsKey, nil
 	} else {
 		// 其他节点：通过网络请求BLS公钥
-		d.logger.Info("🌐 请求远程BLS公钥", "address", address.String())
+		// 静默处理，不打印日志
 		
 		blsKey, err := d.requestBLSPublicKeyFromNetwork(address)
 		if err != nil {
 			return nil, fmt.Errorf("failed to request remote BLS key: %w", err)
 		}
 		
-		d.logger.Info("✅ 远程BLS公钥获取成功", "address", address.String())
+		// 静默处理，不打印日志
 		return blsKey, nil
 	}
 }
@@ -9538,7 +9513,7 @@ func (d *DPoS) registerBLSResponseHandler(requestID string, responseCh chan *bls
 	blsResponseHandlers[requestID] = responseCh
 	blsErrorHandlers[requestID] = errorCh
 	
-	d.logger.Debug("📝 注册BLS响应处理器", "requestID", requestID)
+	// 静默处理，不打印日志
 }
 
 // unregisterBLSResponseHandler 注销BLS响应处理器
@@ -9556,7 +9531,7 @@ func (d *DPoS) unregisterBLSResponseHandler(requestID string) {
 		delete(blsErrorHandlers, requestID)
 	}
 	
-	d.logger.Debug("🗑️ 注销BLS响应处理器", "requestID", requestID)
+	// 静默处理，不打印日志
 }
 
 // initializeBLSNetworking 初始化BLS网络通信
@@ -9582,7 +9557,7 @@ func (d *DPoS) broadcastBLSRequest(requestData []byte, requestID string) error {
 	}
 	
 	// 通过P2P网络广播BLS公钥请求
-	d.logger.Info("📡 广播BLS公钥请求", "requestID", requestID, "targetAddress", request.TargetAddress.String())
+	// 静默处理，不打印日志
 	
 	// 使用网络集成层进行真实的P2P广播
 	if d.runtime != nil && d.runtime.networkIntegration != nil {
@@ -9608,7 +9583,6 @@ func (d *DPoS) handleBLSResponse(requestID string, blsKey *bls.PublicKey) error 
 	blsHandlerMutex.RUnlock()
 	
 	if !exists {
-		d.logger.Warn("⚠️ 未找到BLS响应处理器", "requestID", requestID)
 		return fmt.Errorf("BLS response handler not found for requestID: %s", requestID)
 	}
 	
@@ -9631,7 +9605,6 @@ func (d *DPoS) simulateBLSResponse(requestID string) {
 	blsHandlerMutex.RUnlock()
 	
 	if !exists {
-		d.logger.Warn("⚠️ 未找到BLS响应处理器", "requestID", requestID)
 		return
 	}
 	
