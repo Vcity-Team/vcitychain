@@ -1949,42 +1949,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	// 使用区块号作为哈希的基础，确保所有节点计算相同的checkpointHash
 	fixedBlockHash := types.BytesToHash([]byte(fmt.Sprintf("block_%d", block.Block.Number())))
 	
-	// 🆕 添加生产时区块头详细信息
-	r.logger.Info("🏭 ===== 生产时区块头详细信息 =====",
-		"blockNumber", block.Block.Number(),
-		"blockHash", block.Block.Hash().String(),
-		"parentHash", block.Block.ParentHash().String(),
-		"timestamp", block.Block.Header.Timestamp,
-		"gasLimit", block.Block.Header.GasLimit,
-		"gasUsed", block.Block.Header.GasUsed,
-		"difficulty", block.Block.Header.Difficulty,
-		"stateRoot", block.Block.Header.StateRoot.String(),
-		"transactionsRoot", block.Block.Header.TxRoot.String(),
-		"receiptsRoot", block.Block.Header.ReceiptsRoot.String(),
-		"miner", types.BytesToAddress(block.Block.Header.Miner).String(),
-		"nonce", block.Block.Header.Nonce.String(),
-		"extraDataLength", len(block.Block.Header.ExtraData),
-		"说明", "生产时区块头的所有关键字段")
 
-	// 🆕 添加生产时关键参数显著日志
-	r.logger.Info("🏭 ===== 生产时CheckpointHash计算参数 =====", 
-		"blockNumber", block.Block.Number(),
-		"chainID", r.config.blockchain.GetChainID(),
-		"fixedBlockHash", fixedBlockHash.String(),
-		"currentValidatorsHash", checkpoint.CurrentValidatorsHash.String(),
-		"nextValidatorsHash", checkpoint.NextValidatorsHash.String(),
-		"blockRound", checkpoint.BlockRound,
-		"epochNumber", checkpoint.EpochNumber,
-		"eventRoot", checkpoint.EventRoot.String(),
-		"说明", "生产时用于计算checkpointHash的所有参数")
-	
-	// 🆕 添加生产时轮次计算详细日志
-	r.logger.Info("🏭 ===== 生产时轮次计算详情 ===== ",
-		"blockNumber", block.Block.Number(),
-		"currentRound", r.currentRound,
-		"checkpointBlockRound", checkpoint.BlockRound,
-		"delegateCount", r.config.DelegateCount,
-		"说明", "生产时轮次计算过程")
 	
 	r.logger.Debug("🔍 生产时开始计算checkpoint哈希", 
 		"blockNumber", block.Block.Number(),
@@ -2023,13 +1988,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		return nil, fmt.Errorf("failed to calculate checkpoint hash: %w", err)
 	}
 	
-	// 🆕 添加生产时checkpointHash结果显著日志
-	r.logger.Info("🏭 ===== 生产时CheckpointHash计算结果 =====", 
-		"blockNumber", block.Block.Number(),
-		"checkpointHash", checkpointHash.String(),
-		"说明", "生产时最终计算出的checkpointHash")
-	
-	r.logger.Debug("🔍 生产时checkpoint哈希计算结果", "checkpointHash", checkpointHash.String())
 
 	// 确保checkpointHash不为全零
 	if checkpointHash == (types.Hash{}) {
@@ -2237,11 +2195,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"parsedSignatures", len(blsSignatures),
 			"totalSignatures", len(signatures))
 
-		// 🆕 添加签名聚合前的详细检查
-		r.logger.Debug("🔍 ===== 生产时签名聚合前详细检查 =====",
-			"blockNumber", block.Block.Number(),
-			"blsSignaturesCount", len(blsSignatures),
-			"productionValidatorsCount", len(productionValidators))
 
 		// 🆕 打印每个签名的详细信息
 		r.logger.Debug("🔍 生产时BLS签名详细信息:")
@@ -2374,22 +2327,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 		// 🆕 记录参与签名的验证者信息（用于调试）
 
-		// 🏭 显著标记：区块生产时保存验证者地址到ExtraData
-		r.logger.Debug("🏭 ===== 区块生产时保存验证者地址到ExtraData =====",
-			"blockNumber", block.Block.Number(),
-			"totalValidators", len(validatorAddresses),
-			"participatingCount", participatingCount,
-			"method", "ExtraData.Validators.Added",
-			"note", "保存全部验证者，确保位图索引与验证者集合匹配")
 
-		// 🎯 显著日志：打印最终位图索引
-		r.logger.Debug("🎯 ===== 生产时最终位图索引详情 =====",
-			"blockNumber", block.Block.Number(),
-			"bitmapHex", fmt.Sprintf("0x%x", []byte(signatureBitmap)),
-			"bitmapLength", len([]byte(signatureBitmap)),
-			"totalValidators", len(productionValidators),
-			"participatingCount", participatingCount,
-			"note", "生产时位图索引对应关系")
 
 		// 详细记录生产时保存的验证者地址
 		r.logger.Debug("🏭 生产时保存的验证者地址详细信息:")
@@ -5910,47 +5848,6 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 		"delegatesCount", len(r.delegates),
 		"proposerAddress", keyAddr.String())
 
-	// 🆕 添加详细日志：显示出块时使用的BLS公钥
-	r.logger.Debug("🔑 出块时使用的BLS公钥信息",
-		"checkpointHash", checkpointHash.String(),
-		"delegatesCount", len(r.delegates))
-
-	for i, delegate := range r.delegates {
-		if delegate.BlsKey != nil {
-			pubKeyBytes := delegate.BlsKey.Marshal()
-			r.logger.Debug("🔑 出块时受托人BLS公钥",
-				"index", i,
-				"address", delegate.Address.String(),
-				"votingPower", delegate.VotingPower.String(),
-				"isActive", delegate.IsActive,
-				"publicKeyBytes", fmt.Sprintf("%x", pubKeyBytes),
-				"publicKeyLength", len(pubKeyBytes))
-		} else {
-			r.logger.Debug("ℹ️ 出块时受托人暂无BLS公钥，将在验证时按需获取",
-				"index", i,
-				"address", delegate.Address.String(),
-				"votingPower", delegate.VotingPower.String(),
-				"isActive", delegate.IsActive)
-		}
-
-		// 🆕 总是记录出块时的BLS公钥信息（Debug级别）
-		if delegate.BlsKey != nil {
-			pubKeyBytes := delegate.BlsKey.Marshal()
-			r.logger.Debug("🔑 出块时使用的BLS公钥",
-				"index", i,
-				"address", delegate.Address.String(),
-				"votingPower", delegate.VotingPower.String(),
-				"isActive", delegate.IsActive,
-				"publicKeyBytes", fmt.Sprintf("%x", pubKeyBytes),
-				"publicKeyLength", len(pubKeyBytes))
-		} else {
-			r.logger.Debug("🔑 出块时受托人缺少BLS公钥",
-				"index", i,
-				"address", delegate.Address.String(),
-				"votingPower", delegate.VotingPower.String(),
-				"isActive", delegate.IsActive)
-		}
-	}
 	
 	// 统计活跃验证者数量
 	activeCount := 0
@@ -6151,21 +6048,6 @@ processSignatures:
 		"totalDelegates", len(r.delegates),
 		"checkpointHash", checkpointHash.String())
 
-	// 显示所有受托人的BLS公钥
-	r.logger.Debug("🔑 出块时所有受托人BLS公钥详情:")
-	for i, delegate := range r.delegates {
-		if delegate.BlsKey != nil {
-			r.logger.Debug("🔑 出块受托人BLS公钥",
-				"index", i,
-				"address", delegate.Address.String(),
-				"publicKeyBytes", fmt.Sprintf("%x", delegate.BlsKey.Marshal()),
-				"publicKeyLength", len(delegate.BlsKey.Marshal()))
-		} else {
-			r.logger.Debug("ℹ️ 出块受托人暂无BLS公钥，将在验证时按需获取",
-				"index", i,
-				"address", delegate.Address.String())
-		}
-	}
 
 	for i, delegate := range r.delegates {
 		// 静默处理，不打印日志
@@ -6211,12 +6093,6 @@ processSignatures:
 				"hasBlsKey", delegate.BlsKey != nil,
 				"checkpointHash", checkpointHash.String())
 
-			if delegate.BlsKey != nil {
-				r.logger.Debug("🔑 签名验证者BLS公钥",
-					"address", delegate.Address.String(),
-					"publicKeyBytes", fmt.Sprintf("%x", delegate.BlsKey.Marshal()),
-					"publicKeyLength", len(delegate.BlsKey.Marshal()))
-			}
 
 			// 验证签名
 			if err := r.verifyValidatorSignature(delegate, signature, checkpointHash); err != nil {

@@ -152,7 +152,6 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 			return err
 		}
 		
-		fmt.Printf("🔍 DEBUG Validators element count: %d\n", len(validatorElems))
 		
 		if len(validatorElems) == 3 {
 			// 标准ValidatorSetDelta格式：Added, Updated, Removed
@@ -184,7 +183,6 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 			return err
 		}
 		
-		fmt.Printf("🔍 DEBUG Committed Signatures element count: %d\n", len(committedElems))
 		
 		if len(committedElems) == 2 {
 			// 标准Signature格式：AggregatedSignature, Bitmap
@@ -1731,7 +1729,6 @@ func GetIbftExtra(extraRaw []byte) (*Extra, error) {
 		return nil, err
 	}
 
-	fmt.Printf("✅ DEBUG GetIbftExtra success\n")
 	return extra, nil
 }
 

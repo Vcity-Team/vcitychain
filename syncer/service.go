@@ -70,8 +70,6 @@ func (s *syncPeerService) GetBlocks(
 		}
 	}
 
-	// 记录区块请求
-	s.logger.Debug("收到区块请求", "peer", peerInfo, "起始高度", req.From, "本地最新高度", s.blockchain.Header().Number)
 
 	var blockCount int
 	// from to latest
@@ -98,7 +96,6 @@ func (s *syncPeerService) GetBlocks(
 		}
 	}
 
-	s.logger.Debug("区块请求完成", "peer", peerInfo, "发送区块数", blockCount)
 	return nil
 }
 

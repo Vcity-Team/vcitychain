@@ -187,21 +187,37 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 		// fetch local latest block
 		if header := s.blockchain.Header(); header != nil {
 			localLatest = header.Number
+			s.logger.Debug("同步器状态更新", "localLatest", localLatest)
 		}
 
 		// pick one best peer
 		bestPeer := s.peerMap.BestPeer(skipList)
 		if bestPeer == nil {
+			s.logger.Debug("没有可用的对等节点", "skipListSize", len(skipList))
 			// Empty skipList map if there are no best peers
 			skipList = make(map[peer.ID]bool)
 
 			continue
 		}
+		
+		s.logger.Debug("找到最佳对等节点", 
+			"peer", bestPeer.ID.String()[:8], 
+			"peerNumber", bestPeer.Number, 
+			"localLatest", localLatest)
 
 		// if the bestPeer does not have a new block continue
 		if bestPeer.Number <= localLatest {
+			s.logger.Debug("跳过同步：对等节点没有新区块", 
+				"peer", bestPeer.ID.String()[:8], 
+				"peerNumber", bestPeer.Number, 
+				"localLatest", localLatest)
 			continue
 		}
+		
+		s.logger.Debug("选择最佳对等节点进行同步", 
+			"peer", bestPeer.ID.String()[:8], 
+			"peerNumber", bestPeer.Number, 
+			"localLatest", localLatest)
 
 		// 检查是否在DPoS切换高度，如果是则跳过同步
 		if s.isDPoSTransitionHeight(bestPeer.Number) {
@@ -237,6 +253,12 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 
 	localLatest := s.blockchain.Header().Number
 	shouldTerminate := false
+	
+	s.logger.Debug("同步参数", 
+		"peer", peerID.String()[:8], 
+		"peerLatestBlock", peerLatestBlock, 
+		"localLatest", localLatest, 
+		"startFrom", localLatest+1)
 
 	blockCh, err := s.syncPeerClient.GetBlocks(peerID, localLatest+1, s.blockTimeout)
 	if err != nil {

@@ -22,56 +22,22 @@ type Signature struct {
 
 // Verify checks the BLS signature of the message against the public key of its signer
 func (s *Signature) Verify(pub *PublicKey, message, domain []byte) bool {
-	fmt.Printf("DEBUG: BLS Verify - 开始验证单个签名\n")
-	
-	sigBytes := s.g1.Marshal()
-	pubBytes := pub.Marshal()
-	fmt.Printf("DEBUG: 签名点: %x (长度: %d)\n", sigBytes, len(sigBytes))
-	fmt.Printf("DEBUG: 公钥: %x (长度: %d)\n", pubBytes, len(pubBytes))
-	fmt.Printf("DEBUG: 消息: %x (长度: %d)\n", message, len(message))
-	fmt.Printf("DEBUG: 域: %x (长度: %d)\n", domain, len(domain))
-
 	point, err := hashToPoint(message, domain)
 	if err != nil {
-		fmt.Printf("DEBUG: BLS Verify - hashToPoint失败: %v\n", err)
 		return false
 	}
 
-	pointBytes := point.Marshal()
-	fmt.Printf("DEBUG: BLS Verify - hashToPoint成功: %x (长度: %d)\n", pointBytes, len(pointBytes))
-
 	result := bn256.PairingCheck([]*bn256.G1{s.g1, point}, []*bn256.G2{negG2Point, pub.g2})
-	fmt.Printf("DEBUG: BLS Verify - 配对检查结果: %v\n", result)
-
 	return result
 }
 
 // VerifyAggregated checks the BLS signature of the message against the aggregated public keys of its signers
 func (s *Signature) VerifyAggregated(publicKeys []*PublicKey, msg, domain []byte) bool {
-	fmt.Printf("DEBUG: BLS VerifyAggregated - 开始验证聚合签名\n")
-	fmt.Printf("DEBUG: 消息长度: %d, 消息内容: %x\n", len(msg), msg)
-	fmt.Printf("DEBUG: 域长度: %d, 域内容: %x\n", len(domain), domain)
-	fmt.Printf("DEBUG: 公钥数量: %d\n", len(publicKeys))
-
-	// 打印每个公钥的信息
-	for i, pubKey := range publicKeys {
-		if pubKey != nil {
-			pubKeyBytes := pubKey.Marshal()
-			fmt.Printf("DEBUG: 公钥 %d: %x (长度: %d)\n", i, pubKeyBytes, len(pubKeyBytes))
-		} else {
-			fmt.Printf("DEBUG: 公钥 %d: nil\n", i)
-		}
-	}
-
 	// 聚合公钥
 	aggregatedPubKey := PublicKeys(publicKeys).Aggregate()
-	aggregatedPubKeyBytes := aggregatedPubKey.Marshal()
-	fmt.Printf("DEBUG: 聚合公钥: %x (长度: %d)\n", aggregatedPubKeyBytes, len(aggregatedPubKeyBytes))
 
 	// 调用单个验证
 	result := s.Verify(aggregatedPubKey, msg, domain)
-	fmt.Printf("DEBUG: BLS VerifyAggregated - 验证结果: %v\n", result)
-
 	return result
 }
 
