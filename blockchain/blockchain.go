@@ -797,19 +797,23 @@ func (b *Blockchain) executeBlockTransactions(block *types.Block) (*BlockResult,
 // This function is a copy of WriteBlock but with a full block which does not
 // require to compute again the Receipts.
 func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) error {
+	b.logger.Debug("🔒 WriteFullBlock 开始获取写锁", "blockNumber", fblock.Block.Number(), "source", source)
 	b.writeLock.Lock()
-	defer b.writeLock.Unlock()
+	b.logger.Debug("✅ WriteFullBlock 成功获取写锁", "blockNumber", fblock.Block.Number(), "source", source)
+	defer func() {
+		b.logger.Debug("🔓 WriteFullBlock 准备释放写锁", "blockNumber", fblock.Block.Number(), "source", source)
+		b.writeLock.Unlock()
+		b.logger.Debug("✅ WriteFullBlock 成功释放写锁", "blockNumber", fblock.Block.Number(), "source", source)
+	}()
 
 	block := fblock.Block
 
 	if block.Number() <= b.Header().Number {
 		b.logger.Info("block already inserted", "block", block.Number(), "source", source)
-
 		return nil
 	}
 
 	header := block.Header
-
 	batchWriter := storage.NewBatchWriter(b.db)
 
 	if err := b.writeBody(batchWriter, block); err != nil {
@@ -836,14 +840,6 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 		return err
 	}
 
-	logArgs1 := []interface{}{
-		"number", header.Number,
-		"txs", len(block.Transactions),
-		"hash", header.Hash,
-		"parent", header.ParentHash,
-		"source", source,
-	}
-	b.logger.Debug("ProcessHeaders新区块", logArgs1...)
 	// update snapshot
 	if err := b.consensus.ProcessHeaders([]*types.Header{header}); err != nil {
 		return err
@@ -865,15 +861,21 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 	}
 
 	b.logger.Info("新区块写入", logArgs...)
-
+	
 	return nil
 }
 
 // WriteBlock writes a single block to the local blockchain.
 // It doesn't do any kind of verification, only commits the block to the DB
 func (b *Blockchain) WriteBlock(block *types.Block, source string) error {
+	b.logger.Debug("🔒 WriteBlock 开始获取写锁", "blockNumber", block.Number(), "source", source)
 	b.writeLock.Lock()
-	defer b.writeLock.Unlock()
+	b.logger.Debug("✅ WriteBlock 成功获取写锁", "blockNumber", block.Number(), "source", source)
+	defer func() {
+		b.logger.Debug("🔓 WriteBlock 准备释放写锁", "blockNumber", block.Number(), "source", source)
+		b.writeLock.Unlock()
+		b.logger.Debug("✅ WriteBlock 成功释放写锁", "blockNumber", block.Number(), "source", source)
+	}()
 
 	if block.Number() <= b.Header().Number {
 		b.logger.Info("block already inserted", "block", block.Number(), "source", source)
@@ -958,8 +960,14 @@ func (b *Blockchain) GetCachedReceipts(headerHash types.Hash) ([]*types.Receipt,
 // WriteBlockWithoutConsensus writes a block without consensus verification
 // This is used for DPoS blocks that need to bypass IBFT validation
 func (b *Blockchain) WriteBlockWithoutConsensus(block *types.Block, source string) error {
+	b.logger.Debug("🔒 WriteBlockWithoutConsensus 开始获取写锁", "blockNumber", block.Number(), "source", source)
 	b.writeLock.Lock()
-	defer b.writeLock.Unlock()
+	b.logger.Debug("✅ WriteBlockWithoutConsensus 成功获取写锁", "blockNumber", block.Number(), "source", source)
+	defer func() {
+		b.logger.Debug("🔓 WriteBlockWithoutConsensus 准备释放写锁", "blockNumber", block.Number(), "source", source)
+		b.writeLock.Unlock()
+		b.logger.Debug("✅ WriteBlockWithoutConsensus 成功释放写锁", "blockNumber", block.Number(), "source", source)
+	}()
 
 	if block.Number() <= b.Header().Number {
 		b.logger.Info("block already inserted", "block", block.Number(), "source", source)
@@ -990,23 +998,10 @@ func (b *Blockchain) WriteBlockWithoutConsensus(block *types.Block, source strin
 		return err
 	}
 
-	// 🆕 关键修复：添加ProcessHeaders调用，确保DPoS轮次状态更新
-	b.logger.Debug("🔍 WriteBlockWithoutConsensus: 准备调用ProcessHeaders", 
-		"blockNumber", header.Number, 
-		"source", source,
-		"consensusType", fmt.Sprintf("%T", b.consensus))
-	
-	// update snapshot - 这是关键的缺失部分！
+	// update snapshot
 	if err := b.consensus.ProcessHeaders([]*types.Header{header}); err != nil {
-		b.logger.Error("❌ WriteBlockWithoutConsensus: ProcessHeaders调用失败", 
-			"blockNumber", header.Number, 
-			"error", err)
 		return err
 	}
-	
-	b.logger.Info("✅ WriteBlockWithoutConsensus: ProcessHeaders调用成功", 
-		"blockNumber", header.Number, 
-		"source", source)
 
 	b.dispatchEvent(evnt)
 

@@ -88,6 +88,7 @@ func (p *blockchainWrapper) CurrentHeader() *types.Header {
 
 // CommitBlock commits a block to the chain
 func (p *blockchainWrapper) CommitBlock(block *types.FullBlock) error {
+	// 注意：WriteFullBlock 内部已经有写锁跟踪日志
 	return p.blockchain.WriteFullBlock(block, consensusSource)
 }
 

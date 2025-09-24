@@ -201,27 +201,27 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 		}
 		
 		s.logger.Debug("找到最佳对等节点", 
-			"peer", bestPeer.ID.String()[:8], 
+			"peer", bestPeer.ID.String(), 
 			"peerNumber", bestPeer.Number, 
 			"localLatest", localLatest)
 
 		// if the bestPeer does not have a new block continue
 		if bestPeer.Number <= localLatest {
 			s.logger.Debug("跳过同步：对等节点没有新区块", 
-				"peer", bestPeer.ID.String()[:8], 
+				"peer", bestPeer.ID.String(), 
 				"peerNumber", bestPeer.Number, 
 				"localLatest", localLatest)
 			continue
 		}
 		
 		s.logger.Debug("选择最佳对等节点进行同步", 
-			"peer", bestPeer.ID.String()[:8], 
+			"peer", bestPeer.ID.String(), 
 			"peerNumber", bestPeer.Number, 
 			"localLatest", localLatest)
 
 		// 检查是否在DPoS切换高度，如果是则跳过同步
 		if s.isDPoSTransitionHeight(bestPeer.Number) {
-			s.logger.Info("跳过DPoS切换高度区块同步", "peer", bestPeer.ID.String()[:8], "目标高度", bestPeer.Number)
+			s.logger.Info("跳过DPoS切换高度区块同步", "peer", bestPeer.ID.String(), "目标高度", bestPeer.Number)
 			continue
 		}
 
@@ -255,14 +255,14 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 	shouldTerminate := false
 	
 	s.logger.Debug("同步参数", 
-		"peer", peerID.String()[:8], 
+		"peer", peerID.String(), 
 		"peerLatestBlock", peerLatestBlock, 
 		"localLatest", localLatest, 
 		"startFrom", localLatest+1)
 
 	blockCh, err := s.syncPeerClient.GetBlocks(peerID, localLatest+1, s.blockTimeout)
 	if err != nil {
-		s.logger.Error("获取区块流失败", "peer", peerID.String()[:8], "error", err)
+		s.logger.Error("获取区块流失败", "peer", peerID.String(), "error", err)
 		return 0, false, err
 	}
 
@@ -317,13 +317,14 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 
 			// 检查是否是DPoS区块（难度为1且区块号较高），如果是则完全跳过IBFT验证
 			if s.isDPoSBlock(block) {
-				s.logger.Info("🚀 DPoS区块直接写入，跳过IBFT验证", "peer", peerID.String()[:8], "区块号", block.Number(), "难度", block.Header.Difficulty)
+				s.logger.Info("🚀 DPoS区块直接写入，跳过IBFT验证", "peer", peerID.String(), "区块号", block.Number(), "难度", block.Header.Difficulty)
 				
 				// 对于DPoS区块，使用WriteBlockWithoutConsensus完全绕过共识验证
 				// 这样可以避免所有IBFT相关的验证和交易执行
+				s.logger.Debug("🔒 同步器调用WriteBlockWithoutConsensus", "blockNumber", block.Number(), "peer", peerID.String())
 				if err := s.blockchain.WriteBlockWithoutConsensus(block, syncerName); err != nil {
 					metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
-					s.logger.Error("DPoS区块写入失败", "peer", peerID.String()[:8], "区块号", block.Number(), "error", err)
+					s.logger.Error("DPoS区块写入失败", "peer", peerID.String(), "区块号", block.Number(), "error", err)
 					return lastReceivedNumber, false, fmt.Errorf("failed to write DPoS block: %w", err)
 				}
 				
@@ -334,7 +335,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				}
 				
 				updateMetrics(fullBlock)
-				s.logger.Info("✅ DPoS区块同步成功", "peer", peerID.String()[:8], "区块号", block.Number(), "哈希", block.Hash().String()[:16])
+				s.logger.Info("✅ DPoS区块同步成功", "peer", peerID.String(), "区块号", block.Number(), "哈希", block.Hash().String()[:16])
 				shouldTerminate = newBlockCallback(fullBlock)
 				lastReceivedNumber = block.Number()
 				continue
@@ -343,18 +344,19 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 			fullBlock, err := s.blockchain.VerifyFinalizedBlock(block)
 			if err != nil {
 				metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
-				s.logger.Error("区块验证失败", "peer", peerID.String()[:8], "区块号", block.Number(), "error", err)
+				s.logger.Error("区块验证失败", "peer", peerID.String(), "区块号", block.Number(), "error", err)
 				return lastReceivedNumber, false, fmt.Errorf("unable to verify block, %w", err)
 			}
 
+			s.logger.Debug("🔒 同步器调用WriteFullBlock", "blockNumber", block.Number(), "peer", peerID.String())
 			if err := s.blockchain.WriteFullBlock(fullBlock, syncerName); err != nil {
 				metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
-				s.logger.Error("区块写入失败", "peer", peerID.String()[:8], "区块号", block.Number(), "error", err)
+				s.logger.Error("区块写入失败", "peer", peerID.String(), "区块号", block.Number(), "error", err)
 				return lastReceivedNumber, false, fmt.Errorf("failed to write block while bulk syncing: %w", err)
 			}
 
 			updateMetrics(fullBlock)
-			s.logger.Info("✅ 区块同步成功", "peer", peerID.String()[:8], "区块号", block.Number(), "哈希", block.Hash().String()[:16], "交易数", len(block.Transactions))
+			s.logger.Info("✅ 区块同步成功", "peer", peerID.String(), "区块号", block.Number(), "哈希", block.Hash().String()[:16], "交易数", len(block.Transactions))
 			shouldTerminate = newBlockCallback(fullBlock)
 
 			lastReceivedNumber = block.Number()

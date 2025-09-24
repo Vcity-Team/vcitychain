@@ -273,6 +273,12 @@ func (m *syncPeerClient) handleStatusUpdate(obj interface{}, from peer.ID) {
 		return
 	}
 
+	// 🆕 添加状态接收日志
+	m.logger.Info("📨 收到状态广播", 
+		"来源节点", from.String(), 
+		"区块高度", status.Number,
+		"本地节点", m.id)
+
 	// 检查网络连接状态
 	if !m.network.IsConnected(from) {
 		if m.id != from.String() {
@@ -349,6 +355,13 @@ func (m *syncPeerClient) startNewBlockProcess() {
 		if l := len(event.NewChain); l > 0 {
 			latest := event.NewChain[l-1]
 
+			// 🆕 添加详细的状态广播日志
+			m.logger.Info("🔔 检测到新区块事件，准备状态广播", 
+				"区块高度", latest.Number, 
+				"区块哈希", latest.Hash.String()[:16],
+				"节点ID", m.id,
+				"NewChain长度", l)
+
 			// 检查网络连接状态
 			peers := m.network.Peers()
 			if len(peers) == 0 {
@@ -356,9 +369,20 @@ func (m *syncPeerClient) startNewBlockProcess() {
 				continue
 			}
 
+			// 🆕 添加网络连接状态日志
+			m.logger.Info("🌐 网络连接状态检查", 
+				"区块高度", latest.Number,
+				"连接节点数", len(peers),
+				"节点ID", m.id)
+
 			// Publish status with retry mechanism
 			var publishErr error
 			maxRetries := 3
+			m.logger.Info("📡 开始状态广播", 
+				"区块高度", latest.Number,
+				"最大重试次数", maxRetries,
+				"节点ID", m.id)
+			
 			for retry := 0; retry < maxRetries; retry++ {
 				if err := m.topic.Publish(&proto.SyncPeerStatus{
 					Number: latest.Number,
@@ -374,12 +398,18 @@ func (m *syncPeerClient) startNewBlockProcess() {
 					time.Sleep(100 * time.Millisecond)
 				} else {
 					publishErr = nil
+					m.logger.Info("✅ 状态广播成功", 
+						"区块高度", latest.Number,
+						"重试次数", retry+1,
+						"节点ID", m.id)
 					break
 				}
 			}
 
 			if publishErr != nil {
-				m.logger.Error("状态广播最终失败", "区块高度", latest.Number, "节点ID", m.id, "错误", publishErr)
+				m.logger.Error("❌ 状态广播最终失败", "区块高度", latest.Number, "节点ID", m.id, "错误", publishErr)
+			} else {
+				m.logger.Info("🎉 状态广播完成", "区块高度", latest.Number, "节点ID", m.id)
 			}
 		}
 	}
@@ -439,7 +469,7 @@ func (m *syncPeerClient) GetBlocks(
 
 	clt, err := m.newSyncPeerClient(peerID)
 	if err != nil {
-		m.logger.Error("创建同步客户端失败", "peer", peerID.String()[:8], "error", err)
+		m.logger.Error("创建同步客户端失败", "peer", peerID.String(), "error", err)
 		return nil, fmt.Errorf("failed to create sync peer client: %w", err)
 	}
 
@@ -450,7 +480,7 @@ func (m *syncPeerClient) GetBlocks(
 	})
 	if err != nil {
 		cancel()
-		m.logger.Error("打开区块流失败", "peer", peerID.String()[:8], "error", err)
+		m.logger.Error("打开区块流失败", "peer", peerID.String(), "error", err)
 		return nil, fmt.Errorf("failed to open GetBlocks stream: %w", err)
 	}
 

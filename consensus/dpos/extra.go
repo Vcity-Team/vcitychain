@@ -122,7 +122,6 @@ func (i *Extra) UnmarshalRLP(input []byte) error {
 func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 	elems, err := v.GetElems()
 	if err != nil {
-		fmt.Printf("❌ DEBUG GetElems failed: %v\n", err)
 		return err
 	}
 
@@ -137,10 +136,8 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 	// 处理元素数量不匹配的情况
 	num := len(elems)
 	if num < expectedElements {
-		fmt.Printf("❌ DEBUG Element count too few: expected %d but found %d\n", expectedElements, num)
 		return fmt.Errorf("incorrect elements count to decode Extra, expected %d but found %d", expectedElements, num)
 	} else if num > expectedElements {
-		fmt.Printf("⚠️ DEBUG Element count too many: expected %d but found %d, ignoring extra elements\n", expectedElements, num)
 		// 只使用前expectedElements个元素，忽略额外的元素
 		elems = elems[:expectedElements]
 	}
@@ -157,12 +154,10 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 			// 标准ValidatorSetDelta格式：Added, Updated, Removed
 			i.Validators = &validator.ValidatorSetDelta{}
 			if err := i.Validators.UnmarshalRLPWith(elems[0]); err != nil {
-				fmt.Printf("❌ DEBUG ValidatorSetDelta UnmarshalRLP failed: %v\n", err)
 				return err
 			}
 		} else {
 			// 非标准格式，可能是验证者地址列表或其他格式
-			fmt.Printf("⚠️ DEBUG Non-standard validators format: %d elements, skipping ValidatorSetDelta parsing\n", len(validatorElems))
 			i.Validators = nil
 		}
 	}

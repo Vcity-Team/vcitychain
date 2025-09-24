@@ -1801,25 +1801,12 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	}
 
 	// 填充交易
-	r.logger.Debug("开始填充交易到区块", "txPoolType", fmt.Sprintf("%T", r.config.txPool))
 
 	// 检查交易池状态
-	if txPool, ok := r.config.txPool.(interface {
+	if _, ok := r.config.txPool.(interface {
 		DebugInfo() map[string]interface{}
 	}); ok {
-		debugInfo := txPool.DebugInfo()
-		r.logger.Debug("交易池调试信息", "debugInfo", debugInfo)
-
-		// 特别关注关键指标
-		if executablesCount, ok := debugInfo["executablesCount"].(int); ok {
-			r.logger.Debug("可执行队列数量", "count", executablesCount)
-		}
-		if pendingCount, ok := debugInfo["pendingCount"].(int64); ok {
-			r.logger.Debug("待处理交易数量", "count", pendingCount)
-		}
-		if isSealing, ok := debugInfo["isSealing"].(bool); ok {
-			r.logger.Debug("交易池密封状态", "isSealing", isSealing)
-		}
+		// 交易池状态检查
 	}
 
 	// 尝试获取更详细的交易池信息
@@ -1827,9 +1814,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		GetTxs(inclQueued bool) (map[types.Address][]*types.Transaction, map[types.Address][]*types.Transaction)
 	}); ok {
 		allPromoted, allEnqueued := txPool.GetTxs(true)
-		r.logger.Debug("交易池详细状态",
-			"promotedAccounts", len(allPromoted),
-			"enqueuedAccounts", len(allEnqueued))
 
 		// 检查每个账户的状态
 		for addr, promotedTxs := range allPromoted {
@@ -1861,7 +1845,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		GetTransactions() []*types.Transaction
 	}); ok {
 		txs := blockBuilder.GetTransactions()
-		r.logger.Debug("区块构建器状态", "transactionCount", len(txs))
 		if len(txs) > 0 {
 			for i, tx := range txs {
 				r.logger.Info("区块中的交易", "index", i, "hash", tx.Hash.String(), "nonce", tx.Nonce)
@@ -2282,7 +2265,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 		// 🆕 修复：保存全部验证者，确保与生产时使用的验证者集合完全一致
 		validatorAddresses := make(validator.AccountSet, 0, len(productionValidators))
-		for i, v := range productionValidators {
+		for _, v := range productionValidators {
 			// 保存全部验证者，不仅仅是签名者，确保位图索引与验证者集合匹配
 					validatorAddresses = append(validatorAddresses, &validator.ValidatorMetadata{
 						Address:     v.Address,
@@ -2291,32 +2274,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 						IsActive:    v.IsActive,
 					})
 			
-			// 记录验证者是否参与签名，用于调试
-			if signatureBitmap.IsSet(uint64(i)) {
-				if sigBytes, exists := bitmapToSignature[uint64(i)]; exists && len(sigBytes) > 0 {
-					r.logger.Debug("🎯 生产时保存验证者（参与签名）",
-						"blockNumber", block.Block.Number(),
-						"bitmapIndex", i,
-						"address", v.Address.String(),
-						"hasSignature", true,
-						"signatureLength", len(sigBytes),
-						"note", "位图设置且有签名数据")
-				} else {
-					r.logger.Info("🎯 生产时保存验证者（位图设置但无签名）",
-						"blockNumber", block.Block.Number(),
-						"bitmapIndex", i,
-						"address", v.Address.String(),
-						"hasSignature", false,
-						"note", "位图设置但无签名数据")
-				}
-			} else {
-				r.logger.Info("🎯 生产时保存验证者（未参与签名）",
-					"blockNumber", block.Block.Number(),
-					"bitmapIndex", i,
-					"address", v.Address.String(),
-					"hasSignature", false,
-					"note", "位图未设置，未参与签名")
-			}
 		}
 
 		signingValidatorDelta := &validator.ValidatorSetDelta{
@@ -2955,17 +2912,15 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		d.processedBlocks.Add(header.Hash, true)
 		d.processedMutex.Unlock()
 
-		// 🆕 修复：异步处理区块投票，避免阻塞区块提交流程
-		// 这样可以解决在ProcessHeaders中因数据库锁竞争导致的卡住问题
-		go func(h *types.Header) {
-			d.logger.Debug("🔄 异步处理区块投票", "blockNumber", h.Number, "blockHash", h.Hash.String()[:16])
-			if err := d.processBlockVotesFromHeader(h); err != nil {
-				d.logger.Error("failed to process block votes from header", "blockNumber", h.Number, "blockHash", h.Hash, "error", err)
-				// 不返回错误，继续处理其他逻辑
-			} else {
-				d.logger.Debug("✅ 异步投票处理完成", "blockNumber", h.Number, "blockHash", h.Hash.String()[:16])
-			}
-		}(header)
+		// 🆕 修复：简化区块投票处理，避免数据库锁竞争
+		// 直接使用header数据，不进行异步处理
+		d.logger.Debug("🔄 处理区块投票", "blockNumber", header.Number, "blockHash", header.Hash.String()[:16])
+		if err := d.processBlockVotesFromHeader(header); err != nil {
+			d.logger.Error("failed to process block votes from header", "blockNumber", header.Number, "blockHash", header.Hash, "error", err)
+			// 不返回错误，继续处理其他逻辑
+		} else {
+			d.logger.Debug("✅ 投票处理完成", "blockNumber", header.Number, "blockHash", header.Hash.String()[:16])
+		}
 
 		// 同步更新轮次状态（这部分必须同步执行，不能异步）
 		d.updateRoundState(header)
@@ -3050,68 +3005,26 @@ func (d *DPoS) processBlockVotesFromHeader(header *types.Header) error {
 		return nil
 	}
 
-	// 🆕 添加更多诊断信息
-	d.logger.Debug("🔍 区块头部信息",
-		"blockNumber", header.Number,
-		"blockHash", header.Hash,
-		"parentHash", header.ParentHash,
-		"timestamp", header.Timestamp,
-		"miner", types.BytesToAddress(header.Miner).String())
-
-	// 🆕 关键修复：由于ProcessHeaders在区块写入后调用，
-	// 此时区块数据可能在区块链中，我们需要通过blockchain来获取完整区块
-	if d.blockchain != nil {
-		d.logger.Debug("🔍 开始尝试获取区块数据", "blockNumber", header.Number, "blockHash", header.Hash, "blockchainAvailable", true)
-		// 🆕 修复：添加重试机制，处理区块写入和索引的时序问题
-		maxRetries := 5
-		retryDelay := 500 * time.Millisecond
-
-		for attempt := 1; attempt <= maxRetries; attempt++ {
-			d.logger.Debug("🔄 尝试获取区块数据", "blockNumber", header.Number, "attempt", attempt, "maxRetries", maxRetries)
-
-			// 通过blockchain获取区块数据
-			if block, found := d.blockchain.GetBlockByHash(header.Hash, true); found {
-				// 🆕 新增：详细诊断区块数据
-				d.logger.Debug("🔍 获取到区块对象",
-					"blockNumber", header.Number,
-					"blockHash", header.Hash,
-					"blockTransactionsLength", len(block.Transactions),
-					"blockTransactionsCap", cap(block.Transactions),
-					"blockIsNil", block == nil,
-					"blockTransactionsIsNil", block.Transactions == nil)
-
-				// 转换为FullBlock格式
-				fullBlock := &types.FullBlock{
-					Block: block,
-					// Receipts可能为空，但不影响投票处理
-				}
-
-				// 调用现有的投票处理逻辑
-				txCount := len(block.Transactions)
-				if txCount > 0 {
-					// 🆕 显著标记：包含交易的区块使用Warn级别
-					d.logger.Warn("🚨🚨🚨 获取到包含交易的区块数据，开始处理投票 🚨🚨🚨", "blockNumber", header.Number, "txCount", txCount, "blockHash", header.Hash)
-				}
-				return d.processBlockVotes(fullBlock)
-			} else {
-				d.logger.Info("⚠️ 尝试获取区块数据失败", "attempt", attempt, "maxRetries", maxRetries, "blockNumber", header.Number, "blockHash", header.Hash)
-
-				if attempt < maxRetries {
-					d.logger.Debug("🔄 等待后重试", "delay", retryDelay, "nextAttempt", attempt+1, "remainingAttempts", maxRetries-attempt)
-					time.Sleep(retryDelay)
-					// 增加延迟时间
-					retryDelay *= 2
-				} else {
-					d.logger.Info("⚠️ 多次尝试后仍无法获取完整区块数据，跳过投票处理",
-						"blockNumber", header.Number, "blockHash", header.Hash, "attempts", maxRetries, "totalDelay", (500+1000+2000+4000+8000)*time.Millisecond)
-					return nil
-				}
-			}
-		}
+	// 🆕 修复：简化投票处理，直接使用header数据，避免数据库锁竞争
+	// 创建一个简化的区块对象用于投票处理
+	block := &types.Block{
+		Header: header,
+		// 对于投票处理，我们不需要完整的交易数据
+		Transactions: []*types.Transaction{},
 	}
 
-	d.logger.Warn("⚠️ Blockchain不可用，跳过投票处理", "blockNumber", header.Number, "blockchainNil", true)
-	return nil
+	// 转换为FullBlock格式
+	fullBlock := &types.FullBlock{
+		Block:    block,
+		Receipts: []*types.Receipt{}, // 空的receipts
+	}
+
+	d.logger.Debug("🔍 使用简化的区块数据进行投票处理",
+		"blockNumber", header.Number,
+		"blockHash", header.Hash)
+
+	// 调用现有的投票处理逻辑
+	return d.processBlockVotes(fullBlock)
 }
 
 func (d *DPoS) GetBlockCreator(header *types.Header) (types.Address, error) {
@@ -3522,7 +3435,6 @@ func (d *DPoS) Initialize() error {
 		voters:  make(map[types.Address]*VoterInfo),
 	}
 	
-	fmt.Printf("🔍 DEBUG: d.runtime 已设置，runtime=%v\n", d.runtime != nil)
 
 	// 初始化runtime
 	if err := d.runtime.initializeRuntime(); err != nil {
@@ -5797,7 +5709,6 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 	}
 	
 	// 🆕 验证BLS公钥可用性
-	r.logger.Debug("🔍 验证所有受托人BLS公钥可用性")
 	missingBlsKeys := 0
 	for i, delegate := range r.delegates {
 		if delegate.BlsKey == nil {
@@ -5805,11 +5716,6 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 			r.logger.Warn("⚠️ 受托人缺少BLS公钥", 
 				"index", i, 
 				"address", delegate.Address.String())
-		} else {
-			r.logger.Debug("✅ 受托人BLS公钥可用", 
-				"index", i, 
-				"address", delegate.Address.String(),
-				"publicKeyLength", len(delegate.BlsKey.Marshal()))
 		}
 	}
 	
@@ -5817,8 +5723,6 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 		r.logger.Warn("⚠️ 部分受托人缺少BLS公钥，将在验证时按需获取", 
 			"missingCount", missingBlsKeys,
 			"totalDelegates", len(r.delegates))
-	} else {
-		r.logger.Info("✅ 所有受托人BLS公钥可用", "totalDelegates", len(r.delegates))
 	}
 
 	// 🆕 关键修复：不要在签名收集过程中重新排序验证者集合
@@ -5831,17 +5735,6 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 	// 	return r.delegates[i].VotingPower.Cmp(r.delegates[j].VotingPower) > 0
 	// })
 
-	// 🆕 显示用于区块生产的受托人信息（保持原始顺序）
-	r.logger.Debug("🔍 用于区块生产的受托人信息（保持原始顺序）")
-	for i, delegate := range r.delegates {
-		if delegate.BlsKey != nil {
-			r.logger.Debug("🔍 受托人信息",
-				"index", i,
-				"address", delegate.Address.String(),
-				"votingPower", delegate.VotingPower.String(),
-				"isActive", delegate.IsActive)
-		}
-	}
 
 	r.logger.Debug("开始收集验证者签名",
 		"checkpointHash", checkpointHash.String(),
@@ -6085,13 +5978,6 @@ processSignatures:
 		}
 
 		if signature, exists := collectedSignatures[delegate.Address]; exists {
-			// 🆕 添加详细的签名信息日志
-			r.logger.Debug("🔍 收到验证者签名详情",
-				"address", delegate.Address.String(),
-				"bitmapIndex", i,
-				"signatureLength", len(signature),
-				"hasBlsKey", delegate.BlsKey != nil,
-				"checkpointHash", checkpointHash.String())
 
 
 			// 验证签名
