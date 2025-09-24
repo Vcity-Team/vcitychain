@@ -218,8 +218,8 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 				}
 			} else {
 				// BLS公钥为空是允许的，记录信息但继续处理
-				fmt.Printf("ℹ️ 受托人BLS公钥为空: %s (这是正常情况，系统容忍BLS公钥缺失)\n",
-					delegateInfo.Address.String())
+				// fmt.Printf("ℹ️ 受托人BLS公钥为空: %s (这是正常情况，系统容忍BLS公钥缺失)\n",
+				//	delegateInfo.Address.String())
 			}
 
 			validatorMeta := &validator.ValidatorMetadata{
@@ -231,8 +231,8 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 
 			// 记录验证者信息状态
 			if blsPublicKey == nil {
-				fmt.Printf("ℹ️ 创建验证者元数据（BLS公钥缺失）: %s, 投票权重: %s\n",
-					delegateInfo.Address.String(), finalVotingPower.String())
+				// fmt.Printf("ℹ️ 创建验证者元数据（BLS公钥缺失）: %s, 投票权重: %s\n",
+				//	delegateInfo.Address.String(), finalVotingPower.String())
 			} else {
 				// fmt.Printf("✅ 创建验证者元数据（BLS公钥正常）: %s, 投票权重: %s\n",
 				//	delegateInfo.Address.String(), finalVotingPower.String())

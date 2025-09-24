@@ -604,22 +604,22 @@ func (b *Blockchain) VerifyPotentialBlock(block *types.Block) error {
 // It is assumed that the block status is sealed (committed)
 func (b *Blockchain) VerifyFinalizedBlock(block *types.Block) (*types.FullBlock, error) {
 	blockNumber := block.Number()
-	b.logger.Info("🔍 VerifyFinalizedBlock 开始验证区块", "blockNumber", blockNumber, "交易数", len(block.Transactions))
+	b.logger.Debug("🔍 VerifyFinalizedBlock 开始验证区块", "blockNumber", blockNumber, "交易数", len(block.Transactions))
 	
 	// Make sure the consensus layer verifies this block header
-	b.logger.Info("🔍 VerifyFinalizedBlock 开始共识验证", "blockNumber", blockNumber)
+	b.logger.Debug("🔍 VerifyFinalizedBlock 开始共识验证", "blockNumber", blockNumber)
 	if err := b.consensus.VerifyHeader(block.Header); err != nil {
 		return nil, fmt.Errorf("failed to verify the header: %w", err)
 	}
-	b.logger.Info("✅ VerifyFinalizedBlock 共识验证完成", "blockNumber", blockNumber)
+	b.logger.Debug("✅ VerifyFinalizedBlock 共识验证完成", "blockNumber", blockNumber)
 
 	// Do the initial block verification
-	b.logger.Info("🔍 VerifyFinalizedBlock 开始区块验证", "blockNumber", blockNumber)
+	b.logger.Debug("🔍 VerifyFinalizedBlock 开始区块验证", "blockNumber", blockNumber)
 	receipts, err := b.verifyBlock(block)
 	if err != nil {
 		return nil, err
 	}
-	b.logger.Info("✅ VerifyFinalizedBlock 区块验证完成", "blockNumber", blockNumber)
+	b.logger.Debug("✅ VerifyFinalizedBlock 区块验证完成", "blockNumber", blockNumber)
 
 	return &types.FullBlock{Block: block, Receipts: receipts}, nil
 }
@@ -634,19 +634,19 @@ func (b *Blockchain) verifyBlock(block *types.Block) ([]*types.Receipt, error) {
 	}
 
 	// Make sure the block is in line with the parent block
-	b.logger.Info("🔍 verifyBlock 开始父区块验证", "blockNumber", blockNumber)
+	b.logger.Debug("🔍 verifyBlock 开始父区块验证", "blockNumber", blockNumber)
 	if err := b.verifyBlockParent(block); err != nil {
 		return nil, err
 	}
-	b.logger.Info("✅ verifyBlock 父区块验证完成", "blockNumber", blockNumber)
+	b.logger.Debug("✅ verifyBlock 父区块验证完成", "blockNumber", blockNumber)
 
 	// Make sure the block body data is valid
-	b.logger.Info("🔍 verifyBlock 开始区块体验证", "blockNumber", blockNumber)
+	b.logger.Debug("🔍 verifyBlock 开始区块体验证", "blockNumber", blockNumber)
 	receipts, err := b.verifyBlockBody(block)
 	if err != nil {
 		return nil, err
 	}
-	b.logger.Info("✅ verifyBlock 区块体验证完成", "blockNumber", blockNumber)
+	b.logger.Debug("✅ verifyBlock 区块体验证完成", "blockNumber", blockNumber)
 	
 	return receipts, nil
 }
@@ -710,7 +710,7 @@ func (b *Blockchain) verifyBlockBody(block *types.Block) ([]*types.Receipt, erro
 	blockNumber := block.Number()
 	
 	// Make sure the Uncles root matches up
-	b.logger.Info("🔍 verifyBlockBody 开始Uncles根验证", "blockNumber", blockNumber)
+	b.logger.Debug("🔍 verifyBlockBody 开始Uncles根验证", "blockNumber", blockNumber)
 	if hash := buildroot.CalculateUncleRoot(block.Uncles); hash != block.Header.Sha3Uncles {
 		b.logger.Error(fmt.Sprintf(
 			"uncle root hash mismatch: have %s, want %s",
@@ -720,10 +720,10 @@ func (b *Blockchain) verifyBlockBody(block *types.Block) ([]*types.Receipt, erro
 
 		return nil, ErrInvalidSha3Uncles
 	}
-	b.logger.Info("✅ verifyBlockBody Uncles根验证完成", "blockNumber", blockNumber)
+	b.logger.Debug("✅ verifyBlockBody Uncles根验证完成", "blockNumber", blockNumber)
 
 	// Make sure the transactions root matches up
-	b.logger.Info("🔍 verifyBlockBody 开始交易根验证", "blockNumber", blockNumber)
+	b.logger.Debug("🔍 verifyBlockBody 开始交易根验证", "blockNumber", blockNumber)
 	if hash := buildroot.CalculateTransactionsRoot(block.Transactions, block.Number()); hash != block.Header.TxRoot {
 		b.logger.Error(fmt.Sprintf(
 			"incorrect tx root (expected: %s, actual: %s)",
@@ -733,22 +733,22 @@ func (b *Blockchain) verifyBlockBody(block *types.Block) ([]*types.Receipt, erro
 
 		return nil, ErrInvalidTxRoot
 	}
-	b.logger.Info("✅ verifyBlockBody 交易根验证完成", "blockNumber", blockNumber)
+	b.logger.Debug("✅ verifyBlockBody 交易根验证完成", "blockNumber", blockNumber)
 
 	// Execute the transactions in the block and grab the result
-	b.logger.Info("🔍 verifyBlockBody 开始执行交易", "blockNumber", blockNumber, "交易数", len(block.Transactions))
+	b.logger.Debug("🔍 verifyBlockBody 开始执行交易", "blockNumber", blockNumber, "交易数", len(block.Transactions))
 	blockResult, executeErr := b.executeBlockTransactions(block)
 	if executeErr != nil {
 		return nil, fmt.Errorf("unable to execute block transactions, %w", executeErr)
 	}
-	b.logger.Info("✅ verifyBlockBody 交易执行完成", "blockNumber", blockNumber)
+	b.logger.Debug("✅ verifyBlockBody 交易执行完成", "blockNumber", blockNumber)
 
 	// Verify the local execution result with the proposed block data
-	b.logger.Info("🔍 verifyBlockBody 开始验证执行结果", "blockNumber", blockNumber)
+	b.logger.Debug("🔍 verifyBlockBody 开始验证执行结果", "blockNumber", blockNumber)
 	if err := blockResult.verifyBlockResult(block); err != nil {
 		return nil, fmt.Errorf("unable to verify block execution result, %w", err)
 	}
-	b.logger.Info("✅ verifyBlockBody 执行结果验证完成", "blockNumber", blockNumber)
+	b.logger.Debug("✅ verifyBlockBody 执行结果验证完成", "blockNumber", blockNumber)
 
 	return blockResult.Receipts, nil
 }
@@ -786,39 +786,39 @@ func (b *Blockchain) executeBlockTransactions(block *types.Block) (*BlockResult,
 	header := block.Header
 	blockNumber := block.Number()
 
-	b.logger.Info("🔍 executeBlockTransactions 开始执行", "blockNumber", blockNumber, "交易数", len(block.Transactions))
+	b.logger.Debug("🔍 executeBlockTransactions 开始执行", "blockNumber", blockNumber, "交易数", len(block.Transactions))
 
 	parent, ok := b.readHeader(header.ParentHash)
 	if !ok {
 		return nil, ErrParentNotFound
 	}
 
-	b.logger.Info("🔍 executeBlockTransactions 获取区块创建者", "blockNumber", blockNumber)
+	b.logger.Debug("🔍 executeBlockTransactions 获取区块创建者", "blockNumber", blockNumber)
 	blockCreator, err := b.consensus.GetBlockCreator(header)
 	if err != nil {
 		return nil, err
 	}
-	b.logger.Info("✅ executeBlockTransactions 区块创建者获取完成", "blockNumber", blockNumber, "创建者", blockCreator.String())
+	b.logger.Debug("✅ executeBlockTransactions 区块创建者获取完成", "blockNumber", blockNumber, "创建者", blockCreator.String())
 
-	b.logger.Info("🔍 executeBlockTransactions 开始处理区块", "blockNumber", blockNumber)
+	b.logger.Debug("🔍 executeBlockTransactions 开始处理区块", "blockNumber", blockNumber)
 	txn, err := b.executor.ProcessBlock(parent.StateRoot, block, blockCreator)
 	if err != nil {
 		return nil, err
 	}
-	b.logger.Info("✅ executeBlockTransactions 区块处理完成", "blockNumber", blockNumber)
+	b.logger.Debug("✅ executeBlockTransactions 区块处理完成", "blockNumber", blockNumber)
 
-	b.logger.Info("🔍 executeBlockTransactions 开始预提交状态", "blockNumber", blockNumber)
+	b.logger.Debug("🔍 executeBlockTransactions 开始预提交状态", "blockNumber", blockNumber)
 	if err := b.consensus.PreCommitState(block, txn); err != nil {
 		return nil, err
 	}
-	b.logger.Info("✅ executeBlockTransactions 预提交状态完成", "blockNumber", blockNumber)
+	b.logger.Debug("✅ executeBlockTransactions 预提交状态完成", "blockNumber", blockNumber)
 
-	b.logger.Info("🔍 executeBlockTransactions 开始提交状态", "blockNumber", blockNumber)
+	b.logger.Debug("🔍 executeBlockTransactions 开始提交状态", "blockNumber", blockNumber)
 	_, root, err := txn.Commit()
 	if err != nil {
 		return nil, fmt.Errorf("failed to commit the state changes: %w", err)
 	}
-	b.logger.Info("✅ executeBlockTransactions 状态提交完成", "blockNumber", blockNumber)
+	b.logger.Debug("✅ executeBlockTransactions 状态提交完成", "blockNumber", blockNumber)
 
 	// Append the receipts to the receipts cache
 	b.receiptsCache.Add(header.Hash, txn.Receipts())
@@ -837,13 +837,13 @@ func (b *Blockchain) executeBlockTransactions(block *types.Block) (*BlockResult,
 func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) error {
 	blockNumber := fblock.Block.Number()
 	defer func() {
-		b.logger.Info("🔓 WriteFullBlock 准备释放写锁", "blockNumber", blockNumber, "source", source)
+		b.logger.Debug("🔓 WriteFullBlock 准备释放写锁", "blockNumber", blockNumber, "source", source)
 		b.writeLock.Unlock()
-		b.logger.Info("✅ WriteFullBlock 成功释放写锁", "blockNumber", blockNumber, "source", source)
+		b.logger.Debug("✅ WriteFullBlock 成功释放写锁", "blockNumber", blockNumber, "source", source)
 	}()
-	b.logger.Info("🔒 WriteFullBlock 开始获取写锁", "blockNumber", blockNumber, "source", source)
+	b.logger.Debug("🔒 WriteFullBlock 开始获取写锁", "blockNumber", blockNumber, "source", source)
 	b.writeLock.Lock()
-	b.logger.Info("✅ WriteFullBlock 成功获取写锁", "blockNumber", blockNumber, "source", source)
+	b.logger.Debug("✅ WriteFullBlock 成功获取写锁", "blockNumber", blockNumber, "source", source)
 
 
 	block := fblock.Block
@@ -856,51 +856,51 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 	header := block.Header
 	batchWriter := storage.NewBatchWriter(b.db)
 
-	b.logger.Info("🔍 WriteFullBlock 准备写入区块体", "blockNumber", blockNumber, "source", source)
+	b.logger.Debug("🔍 WriteFullBlock 准备写入区块体", "blockNumber", blockNumber, "source", source)
 	if err := b.writeBody(batchWriter, block); err != nil {
 		return err
 	}
-	b.logger.Info("✅ WriteFullBlock 区块体写入完成", "blockNumber", blockNumber, "source", source)
+	b.logger.Debug("✅ WriteFullBlock 区块体写入完成", "blockNumber", blockNumber, "source", source)
 
 	// Write the header to the chain
 	evnt := &Event{Source: source}
 
-	b.logger.Info("🔍 WriteFullBlock 准备写入区块头", "blockNumber", blockNumber, "source", source)
+	b.logger.Debug("🔍 WriteFullBlock 准备写入区块头", "blockNumber", blockNumber, "source", source)
 	isCanonical, newTD, err := b.writeHeaderImpl(batchWriter, evnt, header)
 	if err != nil {
 		return err
 	}
-	b.logger.Info("✅ WriteFullBlock 区块头写入完成", "blockNumber", blockNumber, "source", source)
+	b.logger.Debug("✅ WriteFullBlock 区块头写入完成", "blockNumber", blockNumber, "source", source)
 
 	// write the receipts, do it only after the header has been written.
 	// Otherwise, a client might ask for a header once the receipt is valid,
 	// but before it is written into the storage
-	b.logger.Info("🔍 WriteFullBlock 准备写入收据", "blockNumber", blockNumber, "source", source)
+	b.logger.Debug("🔍 WriteFullBlock 准备写入收据", "blockNumber", blockNumber, "source", source)
 	batchWriter.PutReceipts(block.Hash(), fblock.Receipts)
-	b.logger.Info("✅ WriteFullBlock 收据写入完成", "blockNumber", blockNumber, "source", source)
+	b.logger.Debug("✅ WriteFullBlock 收据写入完成", "blockNumber", blockNumber, "source", source)
 
 	// Update the average gas price
-	b.logger.Info("🔍 WriteFullBlock 准备更新Gas价格", "blockNumber", blockNumber, "source", source)
+	b.logger.Debug("🔍 WriteFullBlock 准备更新Gas价格", "blockNumber", blockNumber, "source", source)
 	b.updateGasPriceAvgWithBlock(block)
-	b.logger.Info("✅ WriteFullBlock Gas价格更新完成", "blockNumber", blockNumber, "source", source)
+	b.logger.Debug("✅ WriteFullBlock Gas价格更新完成", "blockNumber", blockNumber, "source", source)
 
-	b.logger.Info("🔍 WriteFullBlock 准备批量写入和更新", "blockNumber", blockNumber, "source", source)
+	b.logger.Debug("🔍 WriteFullBlock 准备批量写入和更新", "blockNumber", blockNumber, "source", source)
 	if err := b.writeBatchAndUpdate(batchWriter, header, newTD, isCanonical); err != nil {
 		return err
 	}
-	b.logger.Info("✅ WriteFullBlock 批量写入和更新完成", "blockNumber", blockNumber, "source", source)
+	b.logger.Debug("✅ WriteFullBlock 批量写入和更新完成", "blockNumber", blockNumber, "source", source)
 
 	// update snapshot
-	b.logger.Info("🔍 WriteFullBlock 准备调用ProcessHeaders", "blockNumber", blockNumber, "source", source)
+	b.logger.Debug("🔍 WriteFullBlock 准备调用ProcessHeaders", "blockNumber", blockNumber, "source", source)
 	if err := b.consensus.ProcessHeaders([]*types.Header{header}); err != nil {
 		b.logger.Info("❌ WriteFullBlock ProcessHeaders失败", "blockNumber", blockNumber, "source", source, "error", err)
 		return err
 	}
-	b.logger.Info("✅ WriteFullBlock ProcessHeaders完成", "blockNumber", blockNumber, "source", source)
+	b.logger.Debug("✅ WriteFullBlock ProcessHeaders完成", "blockNumber", blockNumber, "source", source)
 
-	b.logger.Info("🔍 WriteFullBlock 准备调用dispatchEvent", "blockNumber", blockNumber, "source", source)
+	b.logger.Debug("🔍 WriteFullBlock 准备调用dispatchEvent", "blockNumber", blockNumber, "source", source)
 	b.dispatchEvent(evnt)
-	b.logger.Info("✅ WriteFullBlock dispatchEvent完成", "blockNumber", blockNumber, "source", source)
+	b.logger.Debug("✅ WriteFullBlock dispatchEvent完成", "blockNumber", blockNumber, "source", source)
 
 	logArgs := []interface{}{
 		"number", header.Number,
@@ -917,7 +917,7 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 
 	b.logger.Info("新区块写入", logArgs...)
 	
-	b.logger.Info("🎉 WriteFullBlock 函数即将完成", "blockNumber", blockNumber, "source", source)
+	b.logger.Debug("🎉 WriteFullBlock 函数即将完成", "blockNumber", blockNumber, "source", source)
 	return nil
 }
 
@@ -925,13 +925,13 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 // It doesn't do any kind of verification, only commits the block to the DB
 func (b *Blockchain) WriteBlock(block *types.Block, source string) error {
 	blockNumber := block.Number()
-	b.logger.Info("🔒 WriteBlock 开始获取写锁", "blockNumber", blockNumber, "source", source)
+	b.logger.Debug("🔒 WriteBlock 开始获取写锁", "blockNumber", blockNumber, "source", source)
 	b.writeLock.Lock()
-	b.logger.Info("✅ WriteBlock 成功获取写锁", "blockNumber", blockNumber, "source", source)
+	b.logger.Debug("✅ WriteBlock 成功获取写锁", "blockNumber", blockNumber, "source", source)
 	defer func() {
-		b.logger.Info("🔓 WriteBlock 准备释放写锁", "blockNumber", blockNumber, "source", source)
+		b.logger.Debug("🔓 WriteBlock 准备释放写锁", "blockNumber", blockNumber, "source", source)
 		b.writeLock.Unlock()
-		b.logger.Info("✅ WriteBlock 成功释放写锁", "blockNumber", blockNumber, "source", source)
+		b.logger.Debug("✅ WriteBlock 成功释放写锁", "blockNumber", blockNumber, "source", source)
 	}()
 
 	if block.Number() <= b.Header().Number {
