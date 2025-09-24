@@ -256,13 +256,13 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		logger.Error("❌ ValidateFinalizedData 签名数据缺失", "blockNumber", blockNumber)
 		return fmt.Errorf("failed to verify signatures for block %d, because signatures are not present", blockNumber)
 	}
-	logger.Info("✅ ValidateFinalizedData 签名数据存在", "blockNumber", blockNumber)
+	logger.Debug("✅ ValidateFinalizedData 签名数据存在", "blockNumber", blockNumber)
 
 	if i.Checkpoint == nil {
 		logger.Error("❌ ValidateFinalizedData 检查点数据缺失", "blockNumber", blockNumber)
 		return fmt.Errorf("failed to verify signatures for block %d, because checkpoint data are not present", blockNumber)
 	}
-	logger.Info("✅ ValidateFinalizedData 检查点数据存在", "blockNumber", blockNumber)
+	logger.Debug("✅ ValidateFinalizedData 检查点数据存在", "blockNumber", blockNumber)
 
 	// validate current block signatures
 	// 🆕 修复：使用与生产时完全相同的哈希计算方式

@@ -353,7 +353,7 @@ func newBlockChain(config *chain.Chain, executor Executor) (*Blockchain, error) 
 		return nil, err
 	}
 
-	b, err := NewBlockchain(hclog.NewNullLogger(), db, config, &MockVerifier{}, executor, &mockSigner{})
+	b, err := NewBlockchain(hclog.NewNullLogger(), db, config, &MockVerifier{}, executor, &mockSigner{}, 0)
 	if err != nil {
 		return nil, err
 	}

@@ -401,6 +401,7 @@ func NewServer(config *Config) (*Server, error) {
 		nil,
 		m.executor,
 		signer,
+		config.ConsensusSwitchHeight,
 	)
 	if err != nil {
 		return nil, err

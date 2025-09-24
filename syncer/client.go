@@ -274,7 +274,7 @@ func (m *syncPeerClient) handleStatusUpdate(obj interface{}, from peer.ID) {
 	}
 
 	// 🆕 添加状态接收日志
-	m.logger.Info("📨 收到状态广播", 
+	m.logger.Debug("📨 收到状态广播", 
 		"来源节点", from.String(), 
 		"区块高度", status.Number,
 		"本地节点", m.id)
@@ -356,7 +356,7 @@ func (m *syncPeerClient) startNewBlockProcess() {
 			latest := event.NewChain[l-1]
 
 			// 🆕 添加详细的状态广播日志
-			m.logger.Info("🔔 检测到新区块事件，准备状态广播", 
+			m.logger.Debug("🔔 检测到新区块事件，准备状态广播", 
 				"区块高度", latest.Number, 
 				"区块哈希", latest.Hash.String()[:16],
 				"节点ID", m.id,
@@ -370,7 +370,7 @@ func (m *syncPeerClient) startNewBlockProcess() {
 			}
 
 			// 🆕 添加网络连接状态日志
-			m.logger.Info("🌐 网络连接状态检查", 
+			m.logger.Debug("🌐 网络连接状态检查", 
 				"区块高度", latest.Number,
 				"连接节点数", len(peers),
 				"节点ID", m.id)
@@ -378,7 +378,7 @@ func (m *syncPeerClient) startNewBlockProcess() {
 			// Publish status with retry mechanism
 			var publishErr error
 			maxRetries := 3
-			m.logger.Info("📡 开始状态广播", 
+			m.logger.Debug("📡 开始状态广播", 
 				"区块高度", latest.Number,
 				"最大重试次数", maxRetries,
 				"节点ID", m.id)
@@ -398,7 +398,7 @@ func (m *syncPeerClient) startNewBlockProcess() {
 					time.Sleep(100 * time.Millisecond)
 				} else {
 					publishErr = nil
-					m.logger.Info("✅ 状态广播成功", 
+					m.logger.Debug("✅ 状态广播成功", 
 						"区块高度", latest.Number,
 						"重试次数", retry+1,
 						"节点ID", m.id)
@@ -409,7 +409,7 @@ func (m *syncPeerClient) startNewBlockProcess() {
 			if publishErr != nil {
 				m.logger.Error("❌ 状态广播最终失败", "区块高度", latest.Number, "节点ID", m.id, "错误", publishErr)
 			} else {
-				m.logger.Info("🎉 状态广播完成", "区块高度", latest.Number, "节点ID", m.id)
+				m.logger.Debug("🎉 状态广播完成", "区块高度", latest.Number, "节点ID", m.id)
 			}
 		}
 	}

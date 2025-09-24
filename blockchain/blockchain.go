@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/Vcity-Team/vcitychain/blockchain/storage"
 	"github.com/Vcity-Team/vcitychain/chain"
@@ -74,6 +75,9 @@ type Blockchain struct {
 	gpAverage *gasPriceAverage // A reference to the average gas price
 
 	writeLock sync.Mutex
+	
+	// 🆕 新增：共识切换高度
+	consensusSwitchHeight uint64
 }
 
 // gasPriceAverage keeps track of the average gas price (rolling average)
@@ -192,6 +196,7 @@ func NewBlockchain(
 	consensus Verifier,
 	executor Executor,
 	txSigner TxSigner,
+	consensusSwitchHeight uint64,
 ) (*Blockchain, error) {
 	b := &Blockchain{
 		logger:    logger.Named("blockchain"),
@@ -205,6 +210,7 @@ func NewBlockchain(
 			price: big.NewInt(0),
 			count: big.NewInt(0),
 		},
+		consensusSwitchHeight: consensusSwitchHeight,
 	}
 
 	if err := b.initCaches(defaultCacheSize); err != nil {
@@ -606,6 +612,15 @@ func (b *Blockchain) VerifyFinalizedBlock(block *types.Block) (*types.FullBlock,
 	blockNumber := block.Number()
 	b.logger.Debug("🔍 VerifyFinalizedBlock 开始验证区块", "blockNumber", blockNumber, "交易数", len(block.Transactions))
 	
+	// 🆕 检查BLS公钥是否已就绪（仅对DPoS区块）
+	if b.isDPoSBlock(block) {
+		if !b.checkBLSKeysReady(block) {
+			b.logger.Warn("⚠️ BLS公钥未就绪，等待BLS公钥预加载完成", "blockNumber", blockNumber)
+			// 等待BLS公钥预加载完成
+			b.waitForBLSKeysReady(block)
+		}
+	}
+	
 	// Make sure the consensus layer verifies this block header
 	b.logger.Debug("🔍 VerifyFinalizedBlock 开始共识验证", "blockNumber", blockNumber)
 	if err := b.consensus.VerifyHeader(block.Header); err != nil {
@@ -622,6 +637,69 @@ func (b *Blockchain) VerifyFinalizedBlock(block *types.Block) (*types.FullBlock,
 	b.logger.Debug("✅ VerifyFinalizedBlock 区块验证完成", "blockNumber", blockNumber)
 
 	return &types.FullBlock{Block: block, Receipts: receipts}, nil
+}
+
+// isDPoSBlock 检查是否是DPoS区块
+func (b *Blockchain) isDPoSBlock(block *types.Block) bool {
+	blockNumber := block.Number()
+	
+	// 检查是否是DPoS切换高度的区块
+	// 使用配置中的切换高度，而不是硬编码
+	if b.consensusSwitchHeight > 0 && blockNumber >= b.consensusSwitchHeight {
+		b.logger.Debug("🔍 检测到DPoS切换高度区块，需要BLS公钥检查", 
+			"blockNumber", blockNumber, 
+			"consensusSwitchHeight", b.consensusSwitchHeight)
+		return true
+	}
+	
+	return false
+}
+
+// checkBLSKeysReady 检查BLS公钥是否已就绪
+func (b *Blockchain) checkBLSKeysReady(block *types.Block) bool {
+	blockNumber := block.Number()
+	b.logger.Debug("🔍 检查BLS公钥状态", "blockNumber", blockNumber, "consensusType", fmt.Sprintf("%T", b.consensus))
+	
+	// 检查consensus是否是DPoS类型
+	if dposConsensus, ok := b.consensus.(interface {
+		IsBLSKeysReady() bool
+	}); ok {
+		b.logger.Debug("🔍 检测到DPoS共识，检查BLS公钥状态", "blockNumber", blockNumber)
+		isReady := dposConsensus.IsBLSKeysReady()
+		b.logger.Debug("🔍 BLS公钥状态检查结果", "blockNumber", blockNumber, "isReady", isReady)
+		return isReady
+	}
+	
+	// 如果不是DPoS共识，但区块需要BLS公钥验证（如切换高度区块）
+	// 我们需要检查是否有可用的DPoS实例来获取BLS公钥状态
+	b.logger.Debug("🔍 非DPoS共识，但需要检查BLS公钥状态", "blockNumber", blockNumber, "consensusType", fmt.Sprintf("%T", b.consensus))
+	
+	// 这里可以添加其他检查逻辑，比如检查是否有DPoS实例可用
+	// 暂时返回false，强制等待BLS公钥就绪
+	return false
+}
+
+// waitForBLSKeysReady 等待BLS公钥预加载完成
+func (b *Blockchain) waitForBLSKeysReady(block *types.Block) {
+	blockNumber := block.Number()
+	b.logger.Info("⏳ 等待BLS公钥预加载完成", "blockNumber", blockNumber)
+	
+	// 等待BLS公钥预加载完成，最多等待30秒
+	maxWaitTime := 30 * time.Second
+	checkInterval := 1 * time.Second
+	startTime := time.Now()
+	
+	for time.Since(startTime) < maxWaitTime {
+		if b.checkBLSKeysReady(block) {
+			b.logger.Info("✅ BLS公钥预加载完成，可以继续验证", "blockNumber", blockNumber, "waitTime", time.Since(startTime))
+			return
+		}
+		
+		b.logger.Debug("⏳ BLS公钥仍在预加载中，继续等待", "blockNumber", blockNumber, "waitTime", time.Since(startTime))
+		time.Sleep(checkInterval)
+	}
+	
+	b.logger.Warn("⚠️ BLS公钥预加载超时，继续验证", "blockNumber", blockNumber, "maxWaitTime", maxWaitTime)
 }
 
 // verifyBlock does the base (common) block verification steps by
