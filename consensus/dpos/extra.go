@@ -349,7 +349,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"说明", "直接使用ExtraData中的轮次值，与生产时完全一致")
 	
 	// 🆕 添加验证时区块头详细信息（从header参数获取）
-	logger.Info("🔍 ===== 验证时区块头详细信息（CheckpointHash计算前） =====",
+	logger.Debug("🔍 ===== 验证时区块头详细信息（CheckpointHash计算前） =====",
 		"blockNumber", blockNumber,
 		"blockHash", header.Hash.String(),
 		"parentHash", header.ParentHash.String(),
@@ -366,7 +366,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"说明", "验证时用于CheckpointHash计算的区块头字段")
 
 	// 🆕 添加验证时关键参数显著日志
-	logger.Info("🔍 ===== 验证时CheckpointHash计算参数 =====", 
+	logger.Debug("🔍 ===== 验证时CheckpointHash计算参数 =====", 
 		"blockNumber", blockNumber,
 		"chainID", productionChainID,
 		"fixedBlockHash", fixedBlockHash.String(),
@@ -378,7 +378,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"说明", "验证时用于计算checkpointHash的所有参数")
 	
 	// 🆕 添加验证时轮次计算详细日志
-	logger.Info("🔍 ===== 验证时轮次计算详情 =====",
+	logger.Debug("🔍 ===== 验证时轮次计算详情 =====",
 		"blockNumber", blockNumber,
 		"originalBlockRound", i.Checkpoint.BlockRound,
 		"recalculatedBlockRound", recalculatedCheckpoint.BlockRound,
@@ -416,19 +416,36 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 			"isActive", validator.IsActive)
 	}
 
+	// 🆕 添加CheckpointData.Hash()调用前的详细参数日志
+	logger.Debug("🔍 DEBUG CheckpointData.Hash() 参数详情", 
+		"blockNumber", blockNumber,
+		"chainId", productionChainID,
+		"blockNumber", blockNumber,
+		"blockHash", fixedBlockHash.String(),
+		"blockRound", recalculatedCheckpoint.BlockRound,
+		"epochNumber", recalculatedCheckpoint.EpochNumber,
+		"eventRoot", recalculatedCheckpoint.EventRoot.String(),
+		"currentValidatorsHash", recalculatedCheckpoint.CurrentValidatorsHash.String(),
+		"nextValidatorsHash", recalculatedCheckpoint.NextValidatorsHash.String())
+
 	checkpointHash, err := recalculatedCheckpoint.Hash(productionChainID, blockNumber, fixedBlockHash)
 	if err != nil {
 		return fmt.Errorf("failed to calculate proposal hash: %w", err)
 	}
 	
+	// 🆕 添加CheckpointData.Hash()调用后的结果日志
+	logger.Debug("🔍 DEBUG CheckpointData.Hash() 结果", 
+		"blockNumber", blockNumber, 
+		"checkpointHash", checkpointHash.String())
+	
 	// 🆕 添加验证时checkpointHash结果显著日志
-	logger.Info("🔍 ===== 验证时CheckpointHash计算结果 =====", 
+	logger.Debug("🔍 ===== 验证时CheckpointHash计算结果 =====", 
 		"blockNumber", blockNumber,
 		"checkpointHash", checkpointHash.String(),
 		"说明", "验证时最终计算出的checkpointHash")
 	
 	// 🆕 添加生产和验证时参数对比日志
-	logger.Info("🔍 ===== 生产vs验证CheckpointData参数对比 =====",
+	logger.Debug("🔍 ===== 生产vs验证CheckpointData参数对比 =====",
 		"blockNumber", blockNumber,
 		"生产时轮次", i.Checkpoint.BlockRound,
 		"验证时轮次", recalculatedCheckpoint.BlockRound,
@@ -441,7 +458,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"说明", "对比生产和验证时的CheckpointData参数")
 
 	// 🆕 添加生产和验证时区块头字段对比日志
-	logger.Info("🔍 ===== 生产vs验证区块头字段对比 =====",
+	logger.Debug("🔍 ===== 生产vs验证区块头字段对比 =====",
 		"blockNumber", blockNumber,
 		"生产时blockHash", "需要从生产日志获取",
 		"验证时blockHash", header.Hash.String(),
@@ -480,7 +497,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		summaryTitle = "📊 ===== 切换高度生产vs验证参数对比总结（方案2） ====="
 	}
 	
-	logger.Info(summaryTitle, 
+	logger.Debug(summaryTitle, 
 		"blockNumber", blockNumber,
 		"chainID", fmt.Sprintf("生产时=%d, 验证时=%d", productionChainID, productionChainID),
 		"fixedBlockHash", "生产时=block_"+fmt.Sprintf("%d", blockNumber)+", 验证时=block_"+fmt.Sprintf("%d", blockNumber),
@@ -1599,16 +1616,6 @@ func (c *CheckpointData) Hash(chainID uint64, blockNumber uint64, blockHash type
 		"nextValidatorsHash":    c.NextValidatorsHash,
 	}
 
-	// 🆕 添加CheckpointData.Hash()方法的详细参数日志
-	fmt.Printf("🔍 DEBUG CheckpointData.Hash() 参数详情: blockNumber=%d\n", blockNumber)
-	fmt.Printf("  chainId: %d\n", chainID)
-	fmt.Printf("  blockNumber: %d\n", blockNumber)
-	fmt.Printf("  blockHash: %s\n", blockHash.String())
-	fmt.Printf("  blockRound: %d\n", c.BlockRound)
-	fmt.Printf("  epochNumber: %d\n", c.EpochNumber)
-	fmt.Printf("  eventRoot: %s\n", c.EventRoot.String())
-	fmt.Printf("  currentValidatorsHash: %s\n", c.CurrentValidatorsHash.String())
-	fmt.Printf("  nextValidatorsHash: %s\n", c.NextValidatorsHash.String())
 
 	abiEncoded, err := checkpointDataABIType.Encode(checkpointMap)
 	if err != nil {
@@ -1616,9 +1623,6 @@ func (c *CheckpointData) Hash(chainID uint64, blockNumber uint64, blockHash type
 	}
 
 	result := types.BytesToHash(crypto.Keccak256(abiEncoded))
-	
-	// 🆕 添加最终结果日志
-	fmt.Printf("🔍 DEBUG CheckpointData.Hash() 结果: blockNumber=%d checkpointHash=%s\n", blockNumber, result.String())
 	
 	return result, nil
 }

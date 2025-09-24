@@ -1243,7 +1243,7 @@ func (r *dposRuntime) produceBlock() error {
 	}
 
 	// 提交区块到区块链
-	r.logger.Debug("📝 开始提交区块到区块链", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
+	r.logger.Info("📝 开始提交区块到区块链", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
 
 	if err := r.config.blockchain.CommitBlock(block); err != nil {
 		r.logger.Error("区块提交失败", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String(), "error", err)
@@ -1260,7 +1260,7 @@ func (r *dposRuntime) produceBlock() error {
 		"delegate", r.config.Key.Address().String()[:16])
 	
 	// 添加事件触发日志跟踪
-	r.logger.Debug("🔔 区块提交完成，等待区块链事件触发状态广播", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
+	r.logger.Info("🔔 区块提交完成，等待区块链事件触发状态广播", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
 
 	// 注意：历史验证者集合已在签名聚合完成后保存，无需重复保存
 
@@ -2035,7 +2035,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		time.Sleep(1 * time.Second)
 	}
 
-	r.logger.Debug("签名收集完成",
+	r.logger.Info("签名收集完成",
 		"totalSignatures", len(signatures),
 		"bitmapLength", len(signatureBitmap),
 		"bitmapBytes", fmt.Sprintf("%x", signatureBitmap))
@@ -2051,7 +2051,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 	// 更新区块的签名
 	if len(signatures) > 0 {
-		r.logger.Debug("开始聚合签名",
+		r.logger.Info("开始聚合签名",
 			"signatureCount", len(signatures))
 
 
@@ -2819,7 +2819,7 @@ func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift tim
 		"extraDataLength", len(header.ExtraData))
 
 	// 🆕 添加验证时区块头详细信息
-	d.logger.Info("🔍 ===== 验证时区块头详细信息 =====",
+	d.logger.Debug("🔍 ===== 验证时区块头详细信息 =====",
 		"blockNumber", header.Number,
 		"blockHash", header.Hash.String(),
 		"parentHash", header.ParentHash.String(),
@@ -6585,7 +6585,7 @@ func (r *dposRuntime) broadcastSignatureRequest(protoRequest *dposProto.Signatur
 	}
 
 	// 发布签名请求
-	r.logger.Debug("attempting to publish signature request",
+	r.logger.Info("attempting to publish signature request",
 		"blockNumber", protoRequest.BlockNumber,
 		"round", protoRequest.Round)
 
@@ -6615,7 +6615,7 @@ func (r *dposRuntime) broadcastSignatureRequest(protoRequest *dposProto.Signatur
 	}
 
 	// 发布签名请求
-	r.logger.Debug("开始广播签名请求", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String())
+	r.logger.Info("开始广播签名请求", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String())
 	if err := topic.Publish(dposMsg); err != nil {
 		r.logger.Warn("failed to publish signature request, using fallback", "error", err)
 		// 回退到日志记录
@@ -6626,7 +6626,7 @@ func (r *dposRuntime) broadcastSignatureRequest(protoRequest *dposProto.Signatur
 		return nil
 	}
 
-	r.logger.Debug("成功广播签名请求", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String())
+	r.logger.Info("成功广播签名请求", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String())
 
 	// 启动基于时间的简单备用传播监控
 	go r.simpleFallbackMonitoring(protoRequest, checkpointHash)

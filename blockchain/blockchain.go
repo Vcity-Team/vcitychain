@@ -797,14 +797,16 @@ func (b *Blockchain) executeBlockTransactions(block *types.Block) (*BlockResult,
 // This function is a copy of WriteBlock but with a full block which does not
 // require to compute again the Receipts.
 func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) error {
-	b.logger.Debug("🔒 WriteFullBlock 开始获取写锁", "blockNumber", fblock.Block.Number(), "source", source)
-	b.writeLock.Lock()
-	b.logger.Debug("✅ WriteFullBlock 成功获取写锁", "blockNumber", fblock.Block.Number(), "source", source)
+	blockNumber := fblock.Block.Number()
 	defer func() {
-		b.logger.Debug("🔓 WriteFullBlock 准备释放写锁", "blockNumber", fblock.Block.Number(), "source", source)
+		b.logger.Info("🔓 WriteFullBlock 准备释放写锁", "blockNumber", blockNumber, "source", source)
 		b.writeLock.Unlock()
-		b.logger.Debug("✅ WriteFullBlock 成功释放写锁", "blockNumber", fblock.Block.Number(), "source", source)
+		b.logger.Info("✅ WriteFullBlock 成功释放写锁", "blockNumber", blockNumber, "source", source)
 	}()
+	b.logger.Info("🔒 WriteFullBlock 开始获取写锁", "blockNumber", blockNumber, "source", source)
+	b.writeLock.Lock()
+	b.logger.Info("✅ WriteFullBlock 成功获取写锁", "blockNumber", blockNumber, "source", source)
+
 
 	block := fblock.Block
 
@@ -816,36 +818,51 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 	header := block.Header
 	batchWriter := storage.NewBatchWriter(b.db)
 
+	b.logger.Info("🔍 WriteFullBlock 准备写入区块体", "blockNumber", blockNumber, "source", source)
 	if err := b.writeBody(batchWriter, block); err != nil {
 		return err
 	}
+	b.logger.Info("✅ WriteFullBlock 区块体写入完成", "blockNumber", blockNumber, "source", source)
 
 	// Write the header to the chain
 	evnt := &Event{Source: source}
 
+	b.logger.Info("🔍 WriteFullBlock 准备写入区块头", "blockNumber", blockNumber, "source", source)
 	isCanonical, newTD, err := b.writeHeaderImpl(batchWriter, evnt, header)
 	if err != nil {
 		return err
 	}
+	b.logger.Info("✅ WriteFullBlock 区块头写入完成", "blockNumber", blockNumber, "source", source)
 
 	// write the receipts, do it only after the header has been written.
 	// Otherwise, a client might ask for a header once the receipt is valid,
 	// but before it is written into the storage
+	b.logger.Info("🔍 WriteFullBlock 准备写入收据", "blockNumber", blockNumber, "source", source)
 	batchWriter.PutReceipts(block.Hash(), fblock.Receipts)
+	b.logger.Info("✅ WriteFullBlock 收据写入完成", "blockNumber", blockNumber, "source", source)
 
 	// Update the average gas price
+	b.logger.Info("🔍 WriteFullBlock 准备更新Gas价格", "blockNumber", blockNumber, "source", source)
 	b.updateGasPriceAvgWithBlock(block)
+	b.logger.Info("✅ WriteFullBlock Gas价格更新完成", "blockNumber", blockNumber, "source", source)
 
+	b.logger.Info("🔍 WriteFullBlock 准备批量写入和更新", "blockNumber", blockNumber, "source", source)
 	if err := b.writeBatchAndUpdate(batchWriter, header, newTD, isCanonical); err != nil {
 		return err
 	}
+	b.logger.Info("✅ WriteFullBlock 批量写入和更新完成", "blockNumber", blockNumber, "source", source)
 
 	// update snapshot
+	b.logger.Info("🔍 WriteFullBlock 准备调用ProcessHeaders", "blockNumber", blockNumber, "source", source)
 	if err := b.consensus.ProcessHeaders([]*types.Header{header}); err != nil {
+		b.logger.Info("❌ WriteFullBlock ProcessHeaders失败", "blockNumber", blockNumber, "source", source, "error", err)
 		return err
 	}
+	b.logger.Info("✅ WriteFullBlock ProcessHeaders完成", "blockNumber", blockNumber, "source", source)
 
+	b.logger.Info("🔍 WriteFullBlock 准备调用dispatchEvent", "blockNumber", blockNumber, "source", source)
 	b.dispatchEvent(evnt)
+	b.logger.Info("✅ WriteFullBlock dispatchEvent完成", "blockNumber", blockNumber, "source", source)
 
 	logArgs := []interface{}{
 		"number", header.Number,
@@ -862,19 +879,21 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 
 	b.logger.Info("新区块写入", logArgs...)
 	
+	b.logger.Info("🎉 WriteFullBlock 函数即将完成", "blockNumber", blockNumber, "source", source)
 	return nil
 }
 
 // WriteBlock writes a single block to the local blockchain.
 // It doesn't do any kind of verification, only commits the block to the DB
 func (b *Blockchain) WriteBlock(block *types.Block, source string) error {
-	b.logger.Debug("🔒 WriteBlock 开始获取写锁", "blockNumber", block.Number(), "source", source)
+	blockNumber := block.Number()
+	b.logger.Info("🔒 WriteBlock 开始获取写锁", "blockNumber", blockNumber, "source", source)
 	b.writeLock.Lock()
-	b.logger.Debug("✅ WriteBlock 成功获取写锁", "blockNumber", block.Number(), "source", source)
+	b.logger.Info("✅ WriteBlock 成功获取写锁", "blockNumber", blockNumber, "source", source)
 	defer func() {
-		b.logger.Debug("🔓 WriteBlock 准备释放写锁", "blockNumber", block.Number(), "source", source)
+		b.logger.Info("🔓 WriteBlock 准备释放写锁", "blockNumber", blockNumber, "source", source)
 		b.writeLock.Unlock()
-		b.logger.Debug("✅ WriteBlock 成功释放写锁", "blockNumber", block.Number(), "source", source)
+		b.logger.Info("✅ WriteBlock 成功释放写锁", "blockNumber", blockNumber, "source", source)
 	}()
 
 	if block.Number() <= b.Header().Number {
@@ -960,13 +979,14 @@ func (b *Blockchain) GetCachedReceipts(headerHash types.Hash) ([]*types.Receipt,
 // WriteBlockWithoutConsensus writes a block without consensus verification
 // This is used for DPoS blocks that need to bypass IBFT validation
 func (b *Blockchain) WriteBlockWithoutConsensus(block *types.Block, source string) error {
-	b.logger.Debug("🔒 WriteBlockWithoutConsensus 开始获取写锁", "blockNumber", block.Number(), "source", source)
+	blockNumber := block.Number()
+	b.logger.Info("🔒 WriteBlockWithoutConsensus 开始获取写锁", "blockNumber", blockNumber, "source", source)
 	b.writeLock.Lock()
-	b.logger.Debug("✅ WriteBlockWithoutConsensus 成功获取写锁", "blockNumber", block.Number(), "source", source)
+	b.logger.Info("✅ WriteBlockWithoutConsensus 成功获取写锁", "blockNumber", blockNumber, "source", source)
 	defer func() {
-		b.logger.Debug("🔓 WriteBlockWithoutConsensus 准备释放写锁", "blockNumber", block.Number(), "source", source)
+		b.logger.Info("🔓 WriteBlockWithoutConsensus 准备释放写锁", "blockNumber", blockNumber, "source", source)
 		b.writeLock.Unlock()
-		b.logger.Debug("✅ WriteBlockWithoutConsensus 成功释放写锁", "blockNumber", block.Number(), "source", source)
+		b.logger.Info("✅ WriteBlockWithoutConsensus 成功释放写锁", "blockNumber", blockNumber, "source", source)
 	}()
 
 	if block.Number() <= b.Header().Number {

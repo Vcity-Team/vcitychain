@@ -222,6 +222,12 @@ func (e *eventStream) push(event *Event) {
 
 	// Notify the listeners
 	for sub := range e.subscriptions {
-		sub.updateCh <- event
+		select {
+		case sub.updateCh <- event:
+			// 成功发送
+		default:
+			// 如果channel满了，跳过这个订阅者，避免阻塞
+			// 可以选择记录日志或采取其他处理方式
+		}
 	}
 }

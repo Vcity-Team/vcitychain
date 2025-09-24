@@ -249,7 +249,7 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 // bulkSyncWithPeer syncs block with a given peer
 func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 	newBlockCallback func(*types.FullBlock) bool) (uint64, bool, error) {
-	s.logger.Debug("开始区块同步", "peer", peerID.String(), "目标高度", peerLatestBlock)
+	s.logger.Info("开始区块同步", "peer", peerID.String(), "目标高度", peerLatestBlock)
 
 	localLatest := s.blockchain.Header().Number
 	shouldTerminate := false
@@ -289,7 +289,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 		select {
 		case block, ok := <-blockCh:
 			if !ok {
-				s.logger.Debug("区块同步完成", "peer", peerID.String(), "同步区块数", blockCount)
+				s.logger.Info("区块同步完成", "peer", peerID.String(), "同步区块数", blockCount)
 				return lastReceivedNumber, shouldTerminate, nil
 			}
 
@@ -321,7 +321,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				
 				// 对于DPoS区块，使用WriteBlockWithoutConsensus完全绕过共识验证
 				// 这样可以避免所有IBFT相关的验证和交易执行
-				s.logger.Debug("🔒 同步器调用WriteBlockWithoutConsensus", "blockNumber", block.Number(), "peer", peerID.String())
+				s.logger.Info("🔒 同步器调用WriteBlockWithoutConsensus", "blockNumber", block.Number(), "peer", peerID.String())
 				if err := s.blockchain.WriteBlockWithoutConsensus(block, syncerName); err != nil {
 					metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
 					s.logger.Error("DPoS区块写入失败", "peer", peerID.String(), "区块号", block.Number(), "error", err)
@@ -348,7 +348,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				return lastReceivedNumber, false, fmt.Errorf("unable to verify block, %w", err)
 			}
 
-			s.logger.Debug("🔒 同步器调用WriteFullBlock", "blockNumber", block.Number(), "peer", peerID.String())
+			s.logger.Info("🔒 同步器调用WriteFullBlock", "blockNumber", block.Number(), "peer", peerID.String())
 			if err := s.blockchain.WriteFullBlock(fullBlock, syncerName); err != nil {
 				metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
 				s.logger.Error("区块写入失败", "peer", peerID.String(), "区块号", block.Number(), "error", err)
