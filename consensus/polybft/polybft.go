@@ -441,6 +441,7 @@ func (p *Polybft) Initialize() error {
 		p.config.Network,
 		p.config.Blockchain,
 		time.Duration(p.config.BlockTime)*3*time.Second,
+		0, // PolyBFT不需要共识切换高度
 	)
 
 	// set blockchain backend

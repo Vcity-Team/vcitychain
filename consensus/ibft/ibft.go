@@ -214,6 +214,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 			params.Network,
 			params.Blockchain,
 			time.Duration(params.BlockTime)*3*time.Second,
+			0, // IBFT不需要共识切换高度
 		),
 		secretsManager: params.SecretsManager,
 		Grpc:           params.Grpc,

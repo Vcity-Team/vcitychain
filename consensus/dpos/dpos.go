@@ -3389,6 +3389,7 @@ func (d *DPoS) Initialize() error {
 		d.config.Network,
 		d.config.Blockchain,
 		d.config.BlockTime.Duration*3*time.Second,
+		d.config.ConsensusSwitchHeight,
 	)
 
 	// set blockchain backend

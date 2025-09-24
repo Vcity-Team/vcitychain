@@ -39,6 +39,9 @@ type syncer struct {
 
 	// Channel to notify Sync that a new status arrived
 	newStatusCh chan struct{}
+
+	// 🆕 新增：共识切换高度
+	consensusSwitchHeight uint64
 }
 
 func NewSyncer(
@@ -46,16 +49,18 @@ func NewSyncer(
 	network Network,
 	blockchain Blockchain,
 	blockTimeout time.Duration,
+	consensusSwitchHeight uint64,
 ) Syncer {
 	return &syncer{
-		logger:          logger.Named(syncerName),
-		blockchain:      blockchain,
-		syncProgression: progress.NewProgressionWrapper(progress.ChainSyncBulk),
-		syncPeerService: NewSyncPeerService(logger, network, blockchain),
-		syncPeerClient:  NewSyncPeerClient(logger, network, blockchain),
-		blockTimeout:    blockTimeout,
-		newStatusCh:     make(chan struct{}),
-		peerMap:         new(PeerMap),
+		logger:                logger.Named(syncerName),
+		blockchain:            blockchain,
+		syncProgression:       progress.NewProgressionWrapper(progress.ChainSyncBulk),
+		syncPeerService:       NewSyncPeerService(logger, network, blockchain),
+		syncPeerClient:        NewSyncPeerClient(logger, network, blockchain),
+		blockTimeout:          blockTimeout,
+		newStatusCh:           make(chan struct{}),
+		peerMap:               new(PeerMap),
+		consensusSwitchHeight: consensusSwitchHeight,
 	}
 }
 
@@ -319,17 +324,17 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				s.logger.Info("区块同步进度", "peer", peerID.String(), "当前区块", block.Number(), "已同步", blockCount)
 			}
 
-			// 检查是否是DPoS区块（难度为1且区块号较高），如果是则完全跳过IBFT验证
-			if s.isDPoSBlock(block) {
-				s.logger.Info("🚀 DPoS区块直接写入，跳过IBFT验证", "peer", peerID.String(), "区块号", block.Number(), "难度", block.Header.Difficulty)
+			// 检查是否是共识切换高度，如果是则使用WriteBlockWithoutConsensus
+			if s.isConsensusSwitchHeight(block) {
+				s.logger.Info("🚀 共识切换高度区块，使用WriteBlockWithoutConsensus", "peer", peerID.String(), "区块号", block.Number(), "难度", block.Header.Difficulty)
 				
-				// 对于DPoS区块，使用WriteBlockWithoutConsensus完全绕过共识验证
+				// 对于共识切换高度区块，使用WriteBlockWithoutConsensus完全绕过共识验证
 				// 这样可以避免所有IBFT相关的验证和交易执行
 				s.logger.Info("🔒 同步器调用WriteBlockWithoutConsensus", "blockNumber", block.Number(), "peer", peerID.String())
 				if err := s.blockchain.WriteBlockWithoutConsensus(block, syncerName); err != nil {
 					metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
-					s.logger.Error("DPoS区块写入失败", "peer", peerID.String(), "区块号", block.Number(), "error", err)
-					return lastReceivedNumber, false, fmt.Errorf("failed to write DPoS block: %w", err)
+					s.logger.Error("共识切换高度区块写入失败", "peer", peerID.String(), "区块号", block.Number(), "error", err)
+					return lastReceivedNumber, false, fmt.Errorf("failed to write consensus switch height block: %w", err)
 				}
 				
 				// 创建一个简化的FullBlock用于回调
@@ -378,25 +383,22 @@ func updateMetrics(fullBlock *types.FullBlock) {
 	metrics.SetGauge([]string{syncerMetrics, "blocks_num"}, 1)
 }
 
-// isDPoSBlock 检查是否是DPoS区块
-func (s *syncer) isDPoSBlock(block *types.Block) bool {
-	// DPoS区块的特征：
-	// 1. 难度为1（IBFT区块的难度等于区块号）
-	// 2. 区块号在切换高度之后
-	// 3. MixHash可能不同
+// isConsensusSwitchHeight 检查是否是共识切换高度
+func (s *syncer) isConsensusSwitchHeight(block *types.Block) bool {
+	// 只在指定的共识切换高度使用WriteBlockWithoutConsensus
+	// 其他DPoS区块正常进行验证
 	
 	header := block.Header
 	if header == nil {
 		return false
 	}
 	
-	// 检查难度：DPoS区块的难度为1，IBFT区块的难度等于区块号
-	// 同时检查区块号是否在切换高度之后
-	if header.Difficulty == 1 && header.Number >= 7390 {
-		s.logger.Debug("检测到DPoS区块", 
+	// 检查是否是共识切换高度
+	if s.consensusSwitchHeight > 0 && header.Number == s.consensusSwitchHeight {
+		s.logger.Info("🔄 检测到共识切换高度，使用WriteBlockWithoutConsensus", 
 			"区块号", header.Number, 
 			"难度", header.Difficulty,
-			"切换高度", 7390)
+			"切换高度", s.consensusSwitchHeight)
 		return true
 	}
 	
