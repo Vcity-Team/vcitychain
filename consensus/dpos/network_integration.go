@@ -1572,6 +1572,11 @@ func (ni *NetworkIntegration) GetBLSKey(address types.Address) ([]byte, bool) {
 	return blsKey, exists
 }
 
+// SaveBLSKey 保存BLS公钥到缓存和数据库
+func (ni *NetworkIntegration) SaveBLSKey(address types.Address, blsKeyBytes []byte) error {
+	return ni.saveBLSKey(address, blsKeyBytes)
+}
+
 // BroadcastBLSKey 广播BLS公钥
 func (ni *NetworkIntegration) BroadcastBLSKey(address types.Address, blsKeyBytes []byte, nodeType string) error {
 	if ni.blsKeyBroadcastTopic == nil {

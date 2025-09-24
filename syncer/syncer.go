@@ -260,11 +260,13 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 		"localLatest", localLatest, 
 		"startFrom", localLatest+1)
 
+	s.logger.Info("🔍 准备获取区块流", "peer", peerID.String(), "从高度", localLatest+1, "到高度", peerLatestBlock)
 	blockCh, err := s.syncPeerClient.GetBlocks(peerID, localLatest+1, s.blockTimeout)
 	if err != nil {
 		s.logger.Error("获取区块流失败", "peer", peerID.String(), "error", err)
 		return 0, false, err
 	}
+	s.logger.Info("✅ 区块流获取成功", "peer", peerID.String(), "从高度", localLatest+1)
 
 	// Create a blockchain subscription for the sync progression and start tracking
 	subscription := s.blockchain.SubscribeEvents()
@@ -285,13 +287,15 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 	var lastReceivedNumber uint64
 	var blockCount int
 
-	for {
+		for {
 		select {
 		case block, ok := <-blockCh:
 			if !ok {
 				s.logger.Info("区块同步完成", "peer", peerID.String(), "同步区块数", blockCount)
 				return lastReceivedNumber, shouldTerminate, nil
 			}
+			
+			s.logger.Info("🔍 从区块流接收到区块", "peer", peerID.String()[:8], "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
 
 			// 打印详细的区块接收日志
 			s.logger.Info("🔄 同步接收到区块", 
@@ -341,12 +345,14 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				continue
 			}
 
+			s.logger.Info("🔍 开始验证区块", "peer", peerID.String()[:8], "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
 			fullBlock, err := s.blockchain.VerifyFinalizedBlock(block)
 			if err != nil {
 				metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
 				s.logger.Error("区块验证失败", "peer", peerID.String(), "区块号", block.Number(), "error", err)
 				return lastReceivedNumber, false, fmt.Errorf("unable to verify block, %w", err)
 			}
+			s.logger.Info("✅ 区块验证完成", "peer", peerID.String()[:8], "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
 
 			s.logger.Info("🔒 同步器调用WriteFullBlock", "blockNumber", block.Number(), "peer", peerID.String())
 			if err := s.blockchain.WriteFullBlock(fullBlock, syncerName); err != nil {

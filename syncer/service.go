@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/Vcity-Team/vcitychain/network/grpc"
 	"github.com/Vcity-Team/vcitychain/syncer/proto"
@@ -72,8 +73,10 @@ func (s *syncPeerService) GetBlocks(
 
 
 	var blockCount int
+	s.logger.Info("🔍 开始发送区块", "peer", peerInfo, "从高度", req.From, "到高度", s.blockchain.Header().Number)
 	// from to latest
 	for i := req.From; i <= s.blockchain.Header().Number; i++ {
+		s.logger.Debug("🔍 准备发送区块", "peer", peerInfo, "区块号", i, "时间戳", time.Now().Format("15:04:05.000"))
 		block, ok := s.blockchain.GetBlockByNumber(i, true)
 		if !ok {
 			s.logger.Error("区块未找到", "peer", peerInfo, "区块号", i)
@@ -84,10 +87,12 @@ func (s *syncPeerService) GetBlocks(
 		metrics.SetGauge([]string{syncerMetrics, "egress_bytes"}, float32(len(resp.Block)))
 
 		// if client closes stream, context.Canceled is given
+		s.logger.Debug("🔍 准备发送区块数据", "peer", peerInfo, "区块号", i, "时间戳", time.Now().Format("15:04:05.000"))
 		if err := stream.Send(resp); err != nil {
 			s.logger.Warn("发送区块失败", "peer", peerInfo, "区块号", i, "error", err)
 			break
 		}
+		s.logger.Debug("✅ 区块发送成功", "peer", peerInfo, "区块号", i, "时间戳", time.Now().Format("15:04:05.000"))
 
 		blockCount++
 		// 只在每10个区块记录一次日志

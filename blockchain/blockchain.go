@@ -603,16 +603,23 @@ func (b *Blockchain) VerifyPotentialBlock(block *types.Block) error {
 // VerifyFinalizedBlock verifies that the block is valid by performing a series of checks.
 // It is assumed that the block status is sealed (committed)
 func (b *Blockchain) VerifyFinalizedBlock(block *types.Block) (*types.FullBlock, error) {
+	blockNumber := block.Number()
+	b.logger.Info("🔍 VerifyFinalizedBlock 开始验证区块", "blockNumber", blockNumber, "交易数", len(block.Transactions))
+	
 	// Make sure the consensus layer verifies this block header
+	b.logger.Info("🔍 VerifyFinalizedBlock 开始共识验证", "blockNumber", blockNumber)
 	if err := b.consensus.VerifyHeader(block.Header); err != nil {
 		return nil, fmt.Errorf("failed to verify the header: %w", err)
 	}
+	b.logger.Info("✅ VerifyFinalizedBlock 共识验证完成", "blockNumber", blockNumber)
 
 	// Do the initial block verification
+	b.logger.Info("🔍 VerifyFinalizedBlock 开始区块验证", "blockNumber", blockNumber)
 	receipts, err := b.verifyBlock(block)
 	if err != nil {
 		return nil, err
 	}
+	b.logger.Info("✅ VerifyFinalizedBlock 区块验证完成", "blockNumber", blockNumber)
 
 	return &types.FullBlock{Block: block, Receipts: receipts}, nil
 }
@@ -620,18 +627,28 @@ func (b *Blockchain) VerifyFinalizedBlock(block *types.Block) (*types.FullBlock,
 // verifyBlock does the base (common) block verification steps by
 // verifying the block body as well as the parent information
 func (b *Blockchain) verifyBlock(block *types.Block) ([]*types.Receipt, error) {
+	blockNumber := block.Number()
 	// Make sure the block is present
 	if block == nil {
 		return nil, ErrNoBlock
 	}
 
 	// Make sure the block is in line with the parent block
+	b.logger.Info("🔍 verifyBlock 开始父区块验证", "blockNumber", blockNumber)
 	if err := b.verifyBlockParent(block); err != nil {
 		return nil, err
 	}
+	b.logger.Info("✅ verifyBlock 父区块验证完成", "blockNumber", blockNumber)
 
 	// Make sure the block body data is valid
-	return b.verifyBlockBody(block)
+	b.logger.Info("🔍 verifyBlock 开始区块体验证", "blockNumber", blockNumber)
+	receipts, err := b.verifyBlockBody(block)
+	if err != nil {
+		return nil, err
+	}
+	b.logger.Info("✅ verifyBlock 区块体验证完成", "blockNumber", blockNumber)
+	
+	return receipts, nil
 }
 
 // verifyBlockParent makes sure that the child block is in line
@@ -690,7 +707,10 @@ func (b *Blockchain) verifyBlockParent(childBlock *types.Block) error {
 // - The receipts match up
 // - The execution result matches up
 func (b *Blockchain) verifyBlockBody(block *types.Block) ([]*types.Receipt, error) {
+	blockNumber := block.Number()
+	
 	// Make sure the Uncles root matches up
+	b.logger.Info("🔍 verifyBlockBody 开始Uncles根验证", "blockNumber", blockNumber)
 	if hash := buildroot.CalculateUncleRoot(block.Uncles); hash != block.Header.Sha3Uncles {
 		b.logger.Error(fmt.Sprintf(
 			"uncle root hash mismatch: have %s, want %s",
@@ -700,8 +720,10 @@ func (b *Blockchain) verifyBlockBody(block *types.Block) ([]*types.Receipt, erro
 
 		return nil, ErrInvalidSha3Uncles
 	}
+	b.logger.Info("✅ verifyBlockBody Uncles根验证完成", "blockNumber", blockNumber)
 
 	// Make sure the transactions root matches up
+	b.logger.Info("🔍 verifyBlockBody 开始交易根验证", "blockNumber", blockNumber)
 	if hash := buildroot.CalculateTransactionsRoot(block.Transactions, block.Number()); hash != block.Header.TxRoot {
 		b.logger.Error(fmt.Sprintf(
 			"incorrect tx root (expected: %s, actual: %s)",
@@ -711,17 +733,22 @@ func (b *Blockchain) verifyBlockBody(block *types.Block) ([]*types.Receipt, erro
 
 		return nil, ErrInvalidTxRoot
 	}
+	b.logger.Info("✅ verifyBlockBody 交易根验证完成", "blockNumber", blockNumber)
 
 	// Execute the transactions in the block and grab the result
+	b.logger.Info("🔍 verifyBlockBody 开始执行交易", "blockNumber", blockNumber, "交易数", len(block.Transactions))
 	blockResult, executeErr := b.executeBlockTransactions(block)
 	if executeErr != nil {
 		return nil, fmt.Errorf("unable to execute block transactions, %w", executeErr)
 	}
+	b.logger.Info("✅ verifyBlockBody 交易执行完成", "blockNumber", blockNumber)
 
 	// Verify the local execution result with the proposed block data
+	b.logger.Info("🔍 verifyBlockBody 开始验证执行结果", "blockNumber", blockNumber)
 	if err := blockResult.verifyBlockResult(block); err != nil {
 		return nil, fmt.Errorf("unable to verify block execution result, %w", err)
 	}
+	b.logger.Info("✅ verifyBlockBody 执行结果验证完成", "blockNumber", blockNumber)
 
 	return blockResult.Receipts, nil
 }
@@ -757,30 +784,41 @@ func (br *BlockResult) verifyBlockResult(referenceBlock *types.Block) error {
 // and reports back the block execution result
 func (b *Blockchain) executeBlockTransactions(block *types.Block) (*BlockResult, error) {
 	header := block.Header
+	blockNumber := block.Number()
+
+	b.logger.Info("🔍 executeBlockTransactions 开始执行", "blockNumber", blockNumber, "交易数", len(block.Transactions))
 
 	parent, ok := b.readHeader(header.ParentHash)
 	if !ok {
 		return nil, ErrParentNotFound
 	}
 
+	b.logger.Info("🔍 executeBlockTransactions 获取区块创建者", "blockNumber", blockNumber)
 	blockCreator, err := b.consensus.GetBlockCreator(header)
 	if err != nil {
 		return nil, err
 	}
+	b.logger.Info("✅ executeBlockTransactions 区块创建者获取完成", "blockNumber", blockNumber, "创建者", blockCreator.String())
 
+	b.logger.Info("🔍 executeBlockTransactions 开始处理区块", "blockNumber", blockNumber)
 	txn, err := b.executor.ProcessBlock(parent.StateRoot, block, blockCreator)
 	if err != nil {
 		return nil, err
 	}
+	b.logger.Info("✅ executeBlockTransactions 区块处理完成", "blockNumber", blockNumber)
 
+	b.logger.Info("🔍 executeBlockTransactions 开始预提交状态", "blockNumber", blockNumber)
 	if err := b.consensus.PreCommitState(block, txn); err != nil {
 		return nil, err
 	}
+	b.logger.Info("✅ executeBlockTransactions 预提交状态完成", "blockNumber", blockNumber)
 
+	b.logger.Info("🔍 executeBlockTransactions 开始提交状态", "blockNumber", blockNumber)
 	_, root, err := txn.Commit()
 	if err != nil {
 		return nil, fmt.Errorf("failed to commit the state changes: %w", err)
 	}
+	b.logger.Info("✅ executeBlockTransactions 状态提交完成", "blockNumber", blockNumber)
 
 	// Append the receipts to the receipts cache
 	b.receiptsCache.Add(header.Hash, txn.Receipts())

@@ -230,10 +230,11 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 	chainID uint64, consensusBackend dposBackend, domain []byte, logger hclog.Logger) error {
 	// validate committed signatures
 	blockNumber := header.Number
+	logger.Info("🔍 ValidateFinalizedData 开始验证", "blockNumber", blockNumber, "extraDataLength", len(header.ExtraData))
 
 	// skip block 1 because genesis does not have committed signatures
 	if blockNumber <= 1 {
-		logger.Debug("skipping signature validation for block 1 (first block after genesis)")
+		logger.Info("✅ ValidateFinalizedData 跳过创世区块验证", "blockNumber", blockNumber)
 		return nil
 	}
 
@@ -250,13 +251,18 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		}
 	}
 
+	logger.Info("🔍 ValidateFinalizedData 检查签名和检查点数据", "blockNumber", blockNumber)
 	if i.Committed == nil {
+		logger.Error("❌ ValidateFinalizedData 签名数据缺失", "blockNumber", blockNumber)
 		return fmt.Errorf("failed to verify signatures for block %d, because signatures are not present", blockNumber)
 	}
+	logger.Info("✅ ValidateFinalizedData 签名数据存在", "blockNumber", blockNumber)
 
 	if i.Checkpoint == nil {
+		logger.Error("❌ ValidateFinalizedData 检查点数据缺失", "blockNumber", blockNumber)
 		return fmt.Errorf("failed to verify signatures for block %d, because checkpoint data are not present", blockNumber)
 	}
+	logger.Info("✅ ValidateFinalizedData 检查点数据存在", "blockNumber", blockNumber)
 
 	// validate current block signatures
 	// 🆕 修复：使用与生产时完全相同的哈希计算方式
@@ -271,11 +277,13 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 	productionChainID := chainID
 	
 	// 🆕 从 ExtraData 中获取验证者集合
+	logger.Info("🔍 ValidateFinalizedData 开始获取验证者集合", "blockNumber", blockNumber)
 	validators, err := i.getValidatorsFromExtraData(header, parent, parents, consensusBackend, logger)
 	if err != nil {
 		logger.Error("❌ 从 ExtraData 获取验证者集合失败", "blockNumber", blockNumber, "error", err)
 		return fmt.Errorf("failed to get validators from ExtraData for block %d: %w", blockNumber, err)
 	}
+	logger.Info("✅ ValidateFinalizedData 验证者集合获取成功", "blockNumber", blockNumber, "validatorsCount", len(validators))
 
 	// 🆕 关键修复：重新计算CheckpointData的哈希值，确保与生产时一致
 	// 生产时使用r.delegates.Hash()计算CurrentValidatorsHash和NextValidatorsHash
@@ -286,13 +294,14 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 	var nextValidatorsHash types.Hash
 	
 	// 如果有验证者集合，重新计算哈希值
+	logger.Info("🔍 ValidateFinalizedData 开始计算验证者哈希", "blockNumber", blockNumber, "validatorsCount", len(validators))
 	if len(validators) > 0 {
 		logger.Debug("🔍 验证时开始计算验证者哈希", "validatorsCount", len(validators))
 		// 使用与生产时相同的validator.AccountSet.HashAddressOnly()方法
 		if hash, err := validators.HashAddressOnly(); err == nil {
 			currentValidatorsHash = hash
 			nextValidatorsHash = hash // 暂时使用相同的哈希
-			logger.Debug("🔍 验证时验证者哈希计算结果", "currentValidatorsHash", currentValidatorsHash.String())
+			logger.Info("✅ ValidateFinalizedData 验证者哈希计算成功", "blockNumber", blockNumber, "currentValidatorsHash", currentValidatorsHash.String()[:16])
 		} else {
 			// 如果计算失败，使用空哈希
 			logger.Error("❌ 验证时验证者哈希计算失败", "error", err)
@@ -301,7 +310,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		}
 	} else {
 		// 如果没有验证者集合，使用空哈希
-		logger.Debug("🔍 验证时没有验证者集合，使用空哈希")
+		logger.Info("🔍 ValidateFinalizedData 没有验证者集合，使用空哈希", "blockNumber", blockNumber)
 		currentValidatorsHash = types.Hash{}
 		nextValidatorsHash = types.Hash{}
 	}
@@ -428,10 +437,13 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"currentValidatorsHash", recalculatedCheckpoint.CurrentValidatorsHash.String(),
 		"nextValidatorsHash", recalculatedCheckpoint.NextValidatorsHash.String())
 
+	logger.Info("🔍 ValidateFinalizedData 开始计算checkpoint哈希", "blockNumber", blockNumber)
 	checkpointHash, err := recalculatedCheckpoint.Hash(productionChainID, blockNumber, fixedBlockHash)
 	if err != nil {
+		logger.Error("❌ ValidateFinalizedData checkpoint哈希计算失败", "blockNumber", blockNumber, "error", err)
 		return fmt.Errorf("failed to calculate proposal hash: %w", err)
 	}
+	logger.Info("✅ ValidateFinalizedData checkpoint哈希计算成功", "blockNumber", blockNumber, "checkpointHash", checkpointHash.String()[:16])
 	
 	// 🆕 添加CheckpointData.Hash()调用后的结果日志
 	logger.Debug("🔍 DEBUG CheckpointData.Hash() 结果", 
@@ -563,6 +575,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		}
 	}
 
+	logger.Info("🔍 ValidateFinalizedData 开始验证BLS签名", "blockNumber", blockNumber)
 	if err := i.Committed.Verify(blockNumber, validators, checkpointHash, domain, logger); err != nil {
 		logger.Error("🚨 区块签名验证失败，程序将退出",
 			"blockNumber", blockNumber,
@@ -573,6 +586,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		logger.Error("💀 区块验证失败，程序退出")
 		os.Exit(1)
 	}
+	logger.Info("✅ ValidateFinalizedData BLS签名验证成功", "blockNumber", blockNumber)
 
 	// 🆕 已移除数据库保存机制，改为从 ExtraData 直接读取验证者集合
 	logger.Debug("📝 验证者集合获取方式已更新",
@@ -580,27 +594,38 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"method", "从ExtraData直接解析",
 		"note", "不再需要保存到数据库，直接从区块数据获取")
 
+	logger.Info("🔍 ValidateFinalizedData 开始验证父区块签名", "blockNumber", blockNumber)
 	parentExtra, err := GetIbftExtra(parent.ExtraData)
 	if err != nil {
+		logger.Error("❌ ValidateFinalizedData 解析父区块ExtraData失败", "blockNumber", blockNumber, "error", err)
 		return fmt.Errorf("failed to verify signatures for block %d: %w", blockNumber, err)
 	}
+	logger.Info("✅ ValidateFinalizedData 父区块ExtraData解析成功", "blockNumber", blockNumber)
 
 	// validate parent signatures
 	if err := i.ValidateParentSignatures(blockNumber, consensusBackend, parents,
 		parent, parentExtra, chainID, domain, logger); err != nil {
+		logger.Error("❌ ValidateFinalizedData 父区块签名验证失败", "blockNumber", blockNumber, "error", err)
 		return err
 	}
+	logger.Info("✅ ValidateFinalizedData 父区块签名验证成功", "blockNumber", blockNumber)
 
 	// 🆕 新增：检查parentExtra.Checkpoint是否为nil，避免空指针异常
 	if parentExtra == nil || parentExtra.Checkpoint == nil {
-		logger.Debug("🔄 父区块Checkpoint为nil，跳过Checkpoint验证",
-			"blockNumber", blockNumber,
-			"parentBlockNumber", parent.Number,
-			"reason", "父区块可能使用IBFT共识，没有Checkpoint数据")
+		logger.Info("🔄 ValidateFinalizedData 父区块Checkpoint为nil，跳过Checkpoint验证", "blockNumber", blockNumber, "parentBlockNumber", parent.Number)
 		return nil
 	}
 
-	return i.Checkpoint.ValidateBasic(parentExtra.Checkpoint)
+	logger.Info("🔍 ValidateFinalizedData 开始验证Checkpoint基本数据", "blockNumber", blockNumber)
+	err = i.Checkpoint.ValidateBasic(parentExtra.Checkpoint)
+	if err != nil {
+		logger.Error("❌ ValidateFinalizedData Checkpoint基本验证失败", "blockNumber", blockNumber, "error", err)
+		return err
+	}
+	logger.Info("✅ ValidateFinalizedData Checkpoint基本验证成功", "blockNumber", blockNumber)
+	
+	logger.Info("✅ ValidateFinalizedData 验证完成", "blockNumber", blockNumber)
+	return nil
 }
 
 // ValidateParentSignatures validates signatures for parent block
@@ -1167,128 +1192,87 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 	blsPublicKeys := make([]*bls.PublicKey, len(validators))
 	missingBLSKeys := make([]types.Address, 0)
 
-	// 按位图索引填充BLS公钥数组，保持与validators数组的索引对应关系
+	// 🆕 方案2：统一从网络集成层缓存获取BLS公钥，不依赖validator.BlsKey字段
+	logger.Info("🔍 开始从网络集成层缓存获取BLS公钥", 
+		"blockNumber", blockNumber,
+		"validatorsCount", len(validators),
+		"bitmapSetCount", bitmapSetCount)
+	
 	for i := uint64(0); i < uint64(len(validators)); i++ {
 		if s.Bitmap.IsSet(i) {
 			validator := validators[int(i)]
-			if validator.BlsKey != nil {
-				blsPublicKeys[i] = validator.BlsKey
-			} else {
-				missingBLSKeys = append(missingBLSKeys, validator.Address)
-			}
-		}
-	}
-
-	// 🆕 验证时动态获取BLS公钥（按需获取机制）
-	if len(missingBLSKeys) > 0 {
-
-		// 🆕 第一步：尝试从本地genesis文件读取BLS公钥
-		genesisKeysFound := 0
-		for _, address := range missingBLSKeys {
-
-			// 尝试从genesis文件或本地存储中获取BLS公钥
+			logger.Info("🔍 处理位图索引验证者", 
+				"blockNumber", blockNumber,
+				"bitmapIndex", i,
+				"address", validator.Address.String())
+			
+			// 优先从网络集成层缓存获取BLS公钥
 			if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-				// 尝试从本地genesis文件读取
+				logger.Info("🔍 DPoS实例存在，检查网络集成层", 
+					"blockNumber", blockNumber,
+					"address", validator.Address.String(),
+					"runtimeIsNil", dposInstance.runtime == nil)
 				if dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
-					if cachedBLSKey, exists := dposInstance.runtime.networkIntegration.GetBLSKey(address); exists {
+					logger.Info("🔍 网络集成层存在，尝试获取BLS公钥", 
+						"blockNumber", blockNumber,
+						"address", validator.Address.String())
+					if cachedBLSKey, exists := dposInstance.runtime.networkIntegration.GetBLSKey(validator.Address); exists {
+						logger.Info("🔍 从缓存中找到BLS公钥，开始解析", 
+							"blockNumber", blockNumber,
+							"address", validator.Address.String(),
+							"cachedBLSKeyLength", len(cachedBLSKey))
 						// 解析BLS公钥
 						if blsKey, err := bls.UnmarshalPublicKey(cachedBLSKey); err == nil {
-							// 找到对应的验证者索引并设置BLS公钥
-							for i := uint64(0); i < uint64(len(validators)); i++ {
-								if validators[int(i)].Address == address {
-									blsPublicKeys[i] = blsKey
-									genesisKeysFound++
-									break
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-
-		// 🆕 第二步：如果本地genesis文件中没有找到，则通过网络广播获取
-		remainingMissingKeys := make([]types.Address, 0)
-		for _, address := range missingBLSKeys {
-			// 检查是否已经从本地genesis文件获取到
-			found := false
-			for i := uint64(0); i < uint64(len(validators)); i++ {
-				if validators[int(i)].Address == address && blsPublicKeys[i] != nil {
-					found = true
-					break
-				}
-			}
-			if !found {
-				remainingMissingKeys = append(remainingMissingKeys, address)
-			}
-		}
-
-		if len(remainingMissingKeys) > 0 {
-			logger.Debug("📨 本地genesis文件中未找到的BLS公钥，开始网络广播获取",
-				"blockNumber", blockNumber,
-				"remainingCount", len(remainingMissingKeys),
-				"remainingAddresses", remainingMissingKeys,
-				"genesisKeysFound", genesisKeysFound)
-
-			// 尝试从全局注册表获取DPoS实例并请求BLS公钥
-			if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-				for _, address := range remainingMissingKeys {
-					// 发起网络请求
-					if dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
-						myAddress := types.Address(dposInstance.key.Address())
-						if err := dposInstance.runtime.networkIntegration.RequestBLSKey(address, myAddress); err != nil {
-							logger.Debug("⚠️ 发送BLS公钥请求失败",
+							blsPublicKeys[i] = blsKey
+							logger.Info("✅ 从网络集成层缓存获取BLS公钥成功",
 								"blockNumber", blockNumber,
-								"address", address.String(),
+								"address", validator.Address.String(),
+								"blsKeyLength", len(cachedBLSKey))
+						} else {
+							logger.Warn("⚠️ 解析BLS公钥失败",
+								"blockNumber", blockNumber,
+								"address", validator.Address.String(),
 								"error", err)
+							missingBLSKeys = append(missingBLSKeys, validator.Address)
 						}
+					} else {
+						// 缓存中没有找到，添加到缺失列表
+						missingBLSKeys = append(missingBLSKeys, validator.Address)
+						logger.Error("❌ 网络集成层缓存中未找到BLS公钥",
+							"blockNumber", blockNumber,
+							"address", validator.Address.String(),
+							"note", "BLS公钥应在节点启动时预加载到缓存")
 					}
+				} else {
+					// 网络集成层不可用
+					missingBLSKeys = append(missingBLSKeys, validator.Address)
+					logger.Error("❌ 网络集成层不可用",
+						"blockNumber", blockNumber,
+						"address", validator.Address.String())
 				}
+			} else {
+				// DPoS实例不可用
+				missingBLSKeys = append(missingBLSKeys, validator.Address)
+				logger.Error("❌ DPoS实例不可用",
+					"blockNumber", blockNumber,
+					"address", validator.Address.String())
 			}
-
-			// 🆕 增强：增加BLS公钥网络请求的等待时间和重试机制
-			maxWaitTime := 10 * time.Second  // 增加等待时间到10秒
-			retryInterval := 2 * time.Second // 每2秒检查一次
-			maxRetries := int(maxWaitTime / retryInterval)
-
-			for retry := 0; retry < maxRetries; retry++ {
-				time.Sleep(retryInterval)
-
-				// 🆕 修复：直接按位图索引检查BLS公钥，避免访问 signers 数组
-				// 检查是否已经获取到所有需要的BLS公钥
-				allKeysFound := true
-				for i := uint64(0); i < uint64(len(validators)); i++ {
-					if s.Bitmap.IsSet(i) && int(i) < len(blsPublicKeys) && blsPublicKeys[i] == nil {
-						validator := validators[int(i)]
-						// 重新获取dposInstance以确保作用域正确
-						if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-							if dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
-								if cachedBLSKey, exists := dposInstance.runtime.networkIntegration.GetBLSKey(validator.Address); exists {
-									// 解析BLS公钥
-									if blsKey, err := bls.UnmarshalPublicKey(cachedBLSKey); err == nil {
-										blsPublicKeys[i] = blsKey
-									logger.Debug("✅ 重试期间成功获取BLS公钥",
-										"blockNumber", blockNumber,
-										"address", validator.Address.String(),
-										"blsKeyLength", len(cachedBLSKey),
-										"retry", retry+1)
-									}
-								} else {
-									allKeysFound = false
-								}
-							}
-						}
-					}
-				}
-
-				// 如果所有密钥都找到了，提前退出
-				if allKeysFound {
-					break
-				}
-			}
-
 		}
 	}
+
+	// 🆕 方案2：如果还有缺失的BLS公钥，说明启动时预加载失败，这是严重错误
+	if len(missingBLSKeys) > 0 {
+		logger.Error("❌ 发现缺失的BLS公钥，启动时预加载应该已确保所有公钥可用",
+			"blockNumber", blockNumber,
+			"missingCount", len(missingBLSKeys),
+			"missingAddresses", missingBLSKeys,
+			"note", "BLS公钥应在节点启动时预加载到缓存，缺失说明启动流程有问题")
+		
+		// 返回错误，因为BLS公钥缺失会导致签名验证失败
+		return fmt.Errorf("missing BLS keys for %d validators: %v", len(missingBLSKeys), missingBLSKeys)
+	}
+
+	// 🆕 方案2：BLS公钥获取逻辑已简化，所有公钥应在启动时预加载完成
 
 
 	aggs, err := bls.UnmarshalSignature(s.AggregatedSignature)
@@ -1298,40 +1282,23 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 	}
 
 
-	// 🆕 显示位图对应的签名顺序，并直接获取缺失的BLS公钥
-	for i := uint64(0); i < uint64(len(validators)); i++ {
-		if s.Bitmap.IsSet(i) {
-			if int(i) < len(validators) {
-				validator := validators[int(i)]
-
-				// 🆕 简单修复：如果BLS公钥为空，直接网络获取
-				if validator.BlsKey == nil {
-					// 直接调用网络获取
-					if s.tryFetchBLSKeyFromNetwork(validator.Address, blockNumber, validators, logger) {
-						// BLS公钥获取成功
-					} else {
-						logger.Warn("⚠️ 直接网络获取BLS公钥失败",
-							"blockNumber", blockNumber,
-							"address", validator.Address.String())
-
-						// 这里可以添加从本地存储获取BLS公钥的逻辑
-						// 暂时跳过，让上层处理
-					}
-				}
-			}
-		}
-	}
+	// 🆕 方案2：BLS公钥获取逻辑已统一到前面的循环中，这里不再需要额外处理
 
 	// 🆕 方案2修复：使用验证者地址映射来重新排列BLS公钥，确保与生产时的签名顺序完全一致
 	// 生产时按位图索引顺序聚合签名，验证时也应该按位图索引顺序排列公钥
 	validBLSKeys := make([]*bls.PublicKey, 0)
 	bitmapOrderedAddresses := make([]types.Address, 0)
 
-	// 🆕 创建地址到BLS公钥的映射，避免依赖索引位置
+	// 🆕 方案2：创建地址到BLS公钥的映射，使用从网络集成层缓存获取的BLS公钥
 	addressToBLSKey := make(map[types.Address]*bls.PublicKey)
-	for _, validator := range validators {
-		if validator.BlsKey != nil {
-			addressToBLSKey[validator.Address] = validator.BlsKey
+	for i := uint64(0); i < uint64(len(validators)); i++ {
+		if s.Bitmap.IsSet(i) && int(i) < len(blsPublicKeys) && blsPublicKeys[i] != nil {
+			validator := validators[int(i)]
+			addressToBLSKey[validator.Address] = blsPublicKeys[i]
+			logger.Info("✅ 将BLS公钥添加到地址映射", 
+				"blockNumber", blockNumber,
+				"address", validator.Address.String(),
+				"bitmapIndex", i)
 		}
 	}
 
