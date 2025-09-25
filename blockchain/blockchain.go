@@ -786,6 +786,9 @@ func (b *Blockchain) executeBlockTransactions(block *types.Block) (*BlockResult,
 	header := block.Header
 	blockNumber := block.Number()
 
+	fmt.Printf("🔍 executeBlockTransactions: 开始执行区块交易 blockNumber=%d transactionCount=%d\n", 
+		blockNumber, len(block.Transactions))
+	
 	b.logger.Debug("🔍 executeBlockTransactions 开始执行", "blockNumber", blockNumber, "交易数", len(block.Transactions))
 
 	parent, ok := b.readHeader(header.ParentHash)

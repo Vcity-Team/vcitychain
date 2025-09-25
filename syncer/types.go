@@ -35,6 +35,8 @@ type Blockchain interface {
 	WriteFullBlock(*types.FullBlock, string) error
 	// WriteBlockWithoutConsensus writes a block without consensus verification
 	WriteBlockWithoutConsensus(*types.Block, string) error
+	// GetConsensus returns the consensus verifier
+	GetConsensus() blockchain.Verifier
 }
 
 type Network interface {

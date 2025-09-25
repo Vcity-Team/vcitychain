@@ -198,8 +198,6 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 			// 🆕 修复：不管数据库中的IsActive是什么值，都设置为true
 			// 这样可以确保与出块节点的逻辑保持一致
 			if filterZeroVotingPower && finalVotingPower.Cmp(big.NewInt(0)) <= 0 {
-				fmt.Printf("🔍 GetValidators: 跳过投票权重为0的验证者 - 地址=%s, votingPower=%s, totalVotes=%s, genesisVotingPower=%s\n",
-					delegateInfo.Address.String(), finalVotingPower.String(), totalVotes.String(), delegateInfo.VotingPower.String())
 				continue
 			}
 

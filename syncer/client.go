@@ -58,7 +58,7 @@ func NewSyncPeerClient(
 	nodeID := network.AddrInfo().ID.String()
 
 	// 记录节点ID信息
-	logger.Info("创建同步客户端", "节点ID", nodeID)
+	logger.Debug("创建同步客户端", "节点ID", nodeID)
 
 	return &syncPeerClient{
 		logger:                 logger.Named(SyncPeerClientLoggerName),
@@ -238,11 +238,11 @@ func (m *syncPeerClient) GetPeerConnectionUpdateEventCh() <-chan *event.PeerEven
 
 // startGossip creates new topic and starts subscribing
 func (m *syncPeerClient) startGossip() error {
-	m.logger.Info("启动gossip", "节点ID", m.id, "topic", statusTopicName)
+	m.logger.Debug("启动gossip", "节点ID", m.id, "topic", statusTopicName)
 
 	// 记录当前连接的节点数量
 	peers := m.network.Peers()
-	m.logger.Info("当前连接节点数量", "节点ID", m.id, "连接数", len(peers))
+	m.logger.Debug("当前连接节点数量", "节点ID", m.id, "连接数", len(peers))
 
 	topic, err := m.network.NewTopic(statusTopicName, &proto.SyncPeerStatus{})
 	if err != nil {
@@ -330,7 +330,7 @@ func (m *syncPeerClient) startNewBlockProcess() {
 		m.logger.Debug("startNewBlockProcess goroutine已退出", "节点ID", m.id)
 	}()
 
-	m.logger.Info("启动区块事件监听", "节点ID", m.id, "shouldEmitBlocks", m.shouldEmitBlocks)
+	m.logger.Debug("启动区块事件监听", "节点ID", m.id, "shouldEmitBlocks", m.shouldEmitBlocks)
 
 	// 移除超时保护，让同步器持续运行
 	m.subscription = m.blockchain.SubscribeEvents()

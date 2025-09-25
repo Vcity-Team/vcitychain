@@ -417,6 +417,9 @@ func (f *fsm) ValidateSender(msg *proto.Message) error {
 }
 
 func (f *fsm) VerifyStateTransactions(transactions []*types.Transaction) error {
+	fmt.Printf("🔍 VerifyStateTransactions: 开始验证状态交易 blockNumber=%d transactionCount=%d\n", 
+		f.Height(), len(transactions))
+	
 	var (
 		commitmentTxExists        bool
 		commitEpochTxExists       bool
@@ -689,6 +692,33 @@ func verifyBridgeCommitmentTx(blockNumber uint64, txHash types.Hash,
 		return fmt.Errorf("quorum size not reached for state tx (%s)", txHash)
 	}
 
+	// 🆕 添加BLS公钥等待机制
+	fmt.Printf("🔍 verifyBridgeCommitmentTx: 开始检查BLS公钥状态 blockNumber=%d txHash=%s\n", blockNumber, txHash.String()[:16])
+	
+	// 检查所有签名者是否有BLS公钥
+	missingBlsKeys := make([]string, 0)
+	blsKeys := signers.GetBlsKeys()
+	for i, signer := range signers {
+		if blsKeys[i] == nil {
+			missingBlsKeys = append(missingBlsKeys, signer.Address.String())
+		}
+	}
+	
+	if len(missingBlsKeys) > 0 {
+		fmt.Printf("⚠️ verifyBridgeCommitmentTx: 发现缺失BLS公钥的签名者 blockNumber=%d missingCount=%d missingAddresses=%v\n", 
+			blockNumber, len(missingBlsKeys), missingBlsKeys)
+		
+		// 等待BLS公钥加载完成
+		fmt.Printf("⏳ verifyBridgeCommitmentTx: 等待BLS公钥加载完成 blockNumber=%d\n", blockNumber)
+		
+		// 这里需要获取DPoS实例来调用waitForBLSKeysLoaded
+		// 暂时返回错误，提示需要等待BLS公钥
+		return fmt.Errorf("BLS keys not loaded for signers: %v", missingBlsKeys)
+	}
+	
+	fmt.Printf("✅ verifyBridgeCommitmentTx: 所有签名者BLS公钥已就绪 blockNumber=%d signerCount=%d\n", 
+		blockNumber, len(signers))
+
 	commitmentHash, err := commitment.Hash()
 	if err != nil {
 		return err
@@ -699,10 +729,18 @@ func verifyBridgeCommitmentTx(blockNumber uint64, txHash types.Hash,
 		return fmt.Errorf("error for state tx (%s) while unmarshaling signature: %w", txHash, err)
 	}
 
-	verified := signature.VerifyAggregated(signers.GetBlsKeys(), commitmentHash.Bytes(), signer.DomainStateReceiver)
+	fmt.Printf("🔍 verifyBridgeCommitmentTx: 开始验证聚合签名 blockNumber=%d blsKeyCount=%d\n", 
+		blockNumber, len(blsKeys))
+	
+	verified := signature.VerifyAggregated(blsKeys, commitmentHash.Bytes(), signer.DomainStateReceiver)
 	if !verified {
+		fmt.Printf("❌ verifyBridgeCommitmentTx: 签名验证失败 blockNumber=%d txHash=%s\n", 
+			blockNumber, txHash.String()[:16])
 		return fmt.Errorf("invalid signature for state tx (%s)", txHash)
 	}
+	
+	fmt.Printf("✅ verifyBridgeCommitmentTx: 签名验证成功 blockNumber=%d txHash=%s\n", 
+		blockNumber, txHash.String()[:16])
 
 	return nil
 }

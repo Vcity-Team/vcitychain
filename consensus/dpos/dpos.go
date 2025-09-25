@@ -783,16 +783,39 @@ func (r *dposRuntime) getValidatorBalance(address types.Address) (*big.Int, erro
 		return big.NewInt(0), fmt.Errorf("current header not available")
 	}
 	
+	r.logger.Debug("🔍 开始查询验证者余额", "address", address.String())
 	
-	// 这里需要实现余额查询逻辑
-	// 暂时返回一个模拟余额
+	// 通过backend获取DPoS实例，然后查询真实余额
+	if r.backend != nil {
+		if dposInstance, ok := r.backend.(*DPoS); ok && dposInstance.config != nil && dposInstance.config.Executor != nil {
+			// 通过executor查询余额
+			snapshot, err := dposInstance.config.Executor.StateAt(currentHeader.StateRoot)
+			if err != nil {
+				r.logger.Warn("⚠️ 无法创建状态快照，使用默认余额", "error", err)
+				// 回退到默认值
+				balance := big.NewInt(0)
+				balance.SetString("1000002100000000000000", 10) // 1000002.1 VCITY
+				return balance, nil
+			}
+			
+			account, err := snapshot.GetAccount(address)
+			if err != nil {
+				r.logger.Warn("⚠️ 无法获取账户信息，使用默认余额", "address", address.String(), "error", err)
+				// 回退到默认值
+				balance := big.NewInt(0)
+				balance.SetString("1000002100000000000000", 10) // 1000002.1 VCITY
+				return balance, nil
+			}
+			
+			r.logger.Debug("✅ 成功查询到验证者余额", "address", address.String(), "balance", account.Balance.String())
+			return account.Balance, nil
+		}
+	}
 	
-	// 模拟余额查询 - 这里应该调用真正的状态查询
-	// 暂时返回一个固定值用于测试
+	// 如果无法通过backend查询，回退到默认值
+	r.logger.Warn("⚠️ 无法通过backend查询余额，使用默认余额", "address", address.String())
 	balance := big.NewInt(0)
 	balance.SetString("1000002100000000000000", 10) // 1000002.1 VCITY
-	
-	
 	return balance, nil
 }
 
@@ -1473,6 +1496,7 @@ func (r *dposRuntime) initializeDelegates() error {
 	r.logger.Debug("backend是否为nil", "isNil", r.backend == nil)
 
 	// 🆕 修复：使用当前区块号获取受托人集合，而不是已废弃的区块0
+	fromExtraData := false
 	if r.backend != nil {
 		// 获取当前区块号
 		currentBlockNumber := uint64(0)
@@ -1513,9 +1537,41 @@ func (r *dposRuntime) initializeDelegates() error {
 				// 继续使用空集合
 			} else {
 				r.logger.Info("✅ 已从extraData解析验证者", "count", len(r.delegates))
+				fromExtraData = true
 			}
+		} else {
+			r.logger.Info("✅ 从backend获取到验证者，跳过extraData解析", "count", len(r.delegates))
 		}
 
+		// 🆕 按voterpower排序并截取前N个验证者
+		if len(r.delegates) > 0 {
+			r.logger.Info("🔍 开始按voterpower排序并截取前N个验证者", 
+				"originalCount", len(r.delegates),
+				"configDelegateCount", r.config.DelegateCount)
+			
+			// 按votingPower降序排序
+			sort.Slice(r.delegates, func(i, j int) bool {
+				if r.delegates[i].VotingPower.Cmp(r.delegates[j].VotingPower) == 0 {
+					return bytes.Compare(r.delegates[i].Address[:], r.delegates[j].Address[:]) < 0
+				}
+				return r.delegates[i].VotingPower.Cmp(r.delegates[j].VotingPower) > 0
+			})
+			
+			// 截取前N个验证者
+			maxDelegates := int(r.config.DelegateCount)
+			originalCount := len(r.delegates)
+			if len(r.delegates) > maxDelegates {
+				r.delegates = r.delegates[:maxDelegates]
+				r.logger.Info("🎯 限制验证者数量为前N个",
+					"originalCount", originalCount,
+					"limitedCount", maxDelegates,
+					"configDelegateCount", r.config.DelegateCount)
+			}
+			
+			r.logger.Info("✅ 验证者排序和截取完成", 
+				"finalCount", len(r.delegates),
+				"maxDelegates", maxDelegates)
+		}
 
 		r.logger.Debug("=== 受托人集合详细信息 ===")
 		for i, delegate := range r.delegates {
@@ -1559,11 +1615,15 @@ func (r *dposRuntime) initializeDelegates() error {
 			dposInstance.delegates = r.delegates.Copy() 
 			r.logger.Info("✅ 已同步验证者数据到 d.runtime.delegates 和 d.delegates", "count", len(dposInstance.runtime.delegates))
 			
-			// 🆕 将验证者数据同步到数据库
-			if err := dposInstance.syncDelegatesToDatabase(r.delegates); err != nil {
-				r.logger.Warn("⚠️ 同步验证者数据到数据库失败", "error", err)
+			// 🆕 只有在从extraData解析验证者时才同步到数据库
+			if fromExtraData {
+				if err := dposInstance.syncDelegatesToDatabase(r.delegates); err != nil {
+					r.logger.Warn("⚠️ 同步验证者数据到数据库失败", "error", err)
+				} else {
+					r.logger.Info("✅ 验证者数据已准备，将在BLS公钥获取完成后保存到数据库", "count", len(r.delegates))
+				}
 			} else {
-				r.logger.Info("✅ 已同步验证者数据到数据库", "count", len(r.delegates))
+				r.logger.Info("✅ 验证者数据来自数据库，无需同步", "count", len(r.delegates))
 			}
 		} else {
 			r.logger.Warn("⚠️ 无法访问 d.runtime，验证者数据同步失败")
@@ -2568,6 +2628,11 @@ type DPoS struct {
 	// 🆕 新增：BLS网络通信相关字段
 	blsRequestTopic  *network.Topic // BLS公钥请求Topic
 	blsResponseTopic *network.Topic // BLS公钥响应Topic
+	
+	// 🆕 新增：BLS加载状态管理
+	blsLoadingComplete    bool
+	blsLoadingMutex       sync.RWMutex
+	blsLoadingWaitCh      chan struct{}
 }
 
 // VoterInfo 投票者信息
@@ -2739,6 +2804,12 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 func (d *DPoS) VerifyHeader(header *types.Header) error {
 	blockNumber := header.Number
 	d.logger.Debug("🔍 DPoS VerifyHeader 开始验证", "blockNumber", blockNumber, "blockHash", header.Hash.String()[:16])
+	
+	// 🆕 关键：在验证前等待BLS公钥加载完成
+	if err := d.waitForBLSKeysLoaded(); err != nil {
+		d.logger.Error("❌ 等待BLS公钥加载失败", "blockNumber", blockNumber, "error", err)
+		return fmt.Errorf("BLS keys not loaded: %w", err)
+	}
 	
 	// Short circuit if the header is known
 	if _, ok := d.blockchain.GetHeaderByHash(header.Hash); ok {
@@ -3070,13 +3141,20 @@ func (d *DPoS) Start() error {
 		"stateIsNil", d.state == nil,
 		"delegatesCount", len(d.delegates))
 
-	// 🆕 关键：首先预加载BLS公钥，确保所有验证者BLS公钥都可用
-	d.logger.Info("🔑 开始预加载BLS公钥（启动前必须完成）...")
-	if err := d.preloadBLSKeysOnStartup(); err != nil {
-		d.logger.Error("❌ BLS公钥预加载失败，启动终止", "error", err)
-		return fmt.Errorf("failed to preload BLS keys on startup: %w", err)
+	// 🆕 1. 初始化BLS加载状态
+	d.initializeBLSLoadingState()
+
+	// 🆕 2. 从数据库加载验证者信息（按voterpower排序并截取前N个）
+	if err := d.loadValidatorsFromDatabaseWithLimit(); err != nil {
+		d.logger.Warn("⚠️ 从数据库加载验证者失败，将使用runtime中的验证者", "error", err)
+		// 如果数据库为空，使用runtime中已经解析和排序的验证者
+		if d.runtime != nil && len(d.runtime.delegates) > 0 {
+			d.delegates = d.runtime.delegates.Copy()
+			d.logger.Info("✅ 使用runtime中的验证者", "count", len(d.delegates))
+		} else {
+			return fmt.Errorf("no validators available from database or runtime")
+		}
 	}
-	d.logger.Info("✅ BLS公钥预加载完成，可以继续启动其他组件")
 
 	// 设置交易池为密封状态，允许交易提升和区块构建
 	// 注意：只有当前节点是出块者时才设置 sealing=true
@@ -3121,7 +3199,15 @@ func (d *DPoS) Start() error {
 		d.logger.Warn("transaction pool not available, cannot set sealing state")
 	}
 
-	// start syncer (also initializes peer map)
+	// 🆕 3. 先同步获取BLS公钥（确保网络集成层已就绪）
+	d.logger.Info("🔑 开始同步获取BLS公钥...")
+	if err := d.syncLoadBLSKeys(); err != nil {
+		d.logger.Error("❌ BLS公钥同步获取失败", "error", err)
+		return fmt.Errorf("failed to sync load BLS keys: %w", err)
+	}
+	d.logger.Info("✅ BLS公钥同步获取完成")
+
+	// 🆕 4. 启动syncer（BLS公钥加载完成后）
 	d.logger.Info("🌐 开始启动syncer...")
 	if err := d.syncer.Start(); err != nil {
 		// 🆕 检查是否是topic冲突错误，如果是则忽略
@@ -3135,12 +3221,20 @@ func (d *DPoS) Start() error {
 		d.logger.Info("✅ syncer启动成功")
 	}
 
+	// 🆕 5. 注意：不在这里设置blsLoadingComplete，让syncLoadBLSKeys自己设置
+
 	// 🆕 添加关键检查点日志
 	d.logger.Info("🔍 准备启动DPoS runtime，检查runtime状态",
 		"runtimeIsNil", d.runtime == nil)
 
 	// sync concurrently, retrying indefinitely
 	go common.RetryForever(context.Background(), time.Second, func(context.Context) error {
+		// 🆕 在区块同步前检查BLS公钥是否加载完成
+		if err := d.waitForBLSKeysLoaded(); err != nil {
+			d.logger.Warn("⚠️ 等待BLS公钥加载完成失败，继续尝试同步", "error", err)
+			// 不返回错误，继续尝试同步
+		}
+		
 		blockHandler := func(b *types.FullBlock) bool {
 			// 实现DPoS的区块处理逻辑
 			d.logger.Debug("processing block", "number", b.Block.Number())
@@ -3200,6 +3294,8 @@ func (d *DPoS) Start() error {
 			return fmt.Errorf("failed to start DPoS runtime: %w", err)
 		}
 		d.logger.Info("✅ DPoS runtime启动成功")
+
+		// BLS公钥已在runtime启动前同步加载完成
 
 		// 新节点启动后，主动查询其他节点的待处理签名请求
 		go func() {
@@ -3294,7 +3390,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	if consensusSwitchHeight, exists := params.Config.Config["consensusSwitchHeight"]; exists {
 		if height, ok := consensusSwitchHeight.(float64); ok {
 			vcity_dpos.config.ConsensusSwitchHeight = uint64(height)
-			logger.Info("🔄 设置共识切换高度", "height", vcity_dpos.config.ConsensusSwitchHeight)
+			logger.Debug("🔄 设置共识切换高度", "height", vcity_dpos.config.ConsensusSwitchHeight)
 		}
 	}
 
@@ -3313,7 +3409,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 
 	if params.Config.Path != "" {
 		vcity_dpos.dataDir = filepath.Join(params.Config.Path, "dpos")
-		vcity_dpos.logger.Info("DPoS data directory set", "path", vcity_dpos.dataDir)
+		vcity_dpos.logger.Debug("DPoS data directory set", "path", vcity_dpos.dataDir)
 	} else {
 		vcity_dpos.logger.Warn("Config path not set, DPoS data directory will not be available")
 		// 尝试使用默认路径
@@ -3332,7 +3428,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 
 // Initialize 初始化DPoS
 func (d *DPoS) Initialize() error {
-	d.logger.Info("initializing dpos...")
+	d.logger.Debug("initializing dpos...")
 
 	// read account
 	account, err := wallet.NewAccountFromSecret(d.config.SecretsManager)
@@ -3375,13 +3471,13 @@ func (d *DPoS) Initialize() error {
 	// 注意：这里需要传入blockchain实例，暂时使用nil
 	// TODO: 传入真实的blockchain实例
 	d.balanceQuerier = nil // 暂时禁用，等待blockchain实例传入
-	d.logger.Info("Balance querier initialized (disabled for now)")
+	d.logger.Debug("Balance querier initialized (disabled for now)")
 
 	// set block time
 	d.blockTime = d.config.BlockTime.Duration
 
 	// 🆕 新增：初始化状态存储
-	d.logger.Info("Attempting to initialize state store",
+	d.logger.Debug("Attempting to initialize state store",
 		"dataDir", d.dataDir,
 		"dataDirEmpty", d.dataDir == "",
 		"dataDirLength", len(d.dataDir))
@@ -3698,8 +3794,8 @@ func (d *DPoS) requestBLSPublicKeyFromNetwork(address types.Address) (*bls.Publi
 		return nil, fmt.Errorf("failed to broadcast BLS request: %w", err)
 	}
 	
-	// 等待响应（设置超时）
-	timeout := time.After(10 * time.Second)
+	// 等待响应（设置超时，增加到30秒）
+	timeout := time.After(30 * time.Second)
 	select {
 	case blsKey := <-responseCh:
 		d.unregisterBLSResponseHandler(requestID)
@@ -3832,7 +3928,7 @@ func (d *DPoS) initializeDelegates() error {
 	// 🆕 首先尝试从数据库读取受托人（真正用于出块）
 	if d.state != nil && d.state.StakeStore != nil {
 		d.logger.Debug("🔍 尝试从数据库读取受托人信息（真正用于出块）...")
-		dbValidators, err := d.state.StakeStore.GetValidators()
+		dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
 		if err != nil {
 			d.logger.Warn("⚠️ 从数据库读取受托人失败，将使用创世文件", "error", err)
 		} else if len(dbValidators) > 0 {
@@ -3859,43 +3955,11 @@ func (d *DPoS) initializeDelegates() error {
 			for i, validator := range dbValidators {
 				d.logger.Debug("📋 数据库受托人信息（真正用于出块，按票数排序）", "index", i, "address", validator.Address, "votingPower", validator.VotingPower.String(), "isActive", validator.IsActive)
 
-				// 检查BLS密钥，如果缺少则从genesis文件中查找（可选，不强制要求）
+				// BLS密钥将在异步加载过程中获取，这里不进行任何处理
 				if validator.BlsKey == nil {
-					d.logger.Warn("⚠️ 受托人缺少BLS密钥，尝试从genesis文件中查找", "address", validator.Address)
-
-					// 🆕 从genesis文件中查找对应的BLS公钥
-					var foundGenesisBlsKey string
-					for _, genesisDelegate := range d.config.InitialDelegates {
-						if genesisDelegate.Address == validator.Address {
-							foundGenesisBlsKey = genesisDelegate.BlsKey
-							break
-						}
-					}
-
-					if foundGenesisBlsKey != "" {
-						d.logger.Info("🔑 找到genesis中的BLS密钥", "address", validator.Address, "blsKeyLength", len(foundGenesisBlsKey))
-
-						// 解析genesis中的BLS公钥
-						decoded, err := hex.DecodeString(foundGenesisBlsKey)
-						if err != nil {
-							d.logger.Warn("⚠️ 解析genesis BLS密钥失败，但继续添加受托人", "address", validator.Address, "error", err)
-						} else {
-							genesisBlsKey, err := bls.UnmarshalPublicKey(decoded)
-							if err != nil {
-								d.logger.Warn("⚠️ 反序列化genesis BLS公钥失败，但继续添加受托人", "address", validator.Address, "error", err)
-							} else {
-								// 使用genesis中的BLS公钥
-								validator.BlsKey = genesisBlsKey
-								d.logger.Info("✅ 成功从genesis文件恢复BLS公钥", "address", validator.Address, "blsKeyLength", len(genesisBlsKey.Marshal()))
-							}
-						}
-					} else {
-						d.logger.Warn("⚠️ 在genesis文件中也找不到BLS密钥，但继续添加受托人", "address", validator.Address)
-						d.logger.Info("ℹ️ BLS密钥缺失是可以容忍的，受托人仍可参与出块")
-					}
-					// 🆕 关键修改：移除continue，允许缺少BLS密钥的受托人继续添加
+					d.logger.Debug("🔑 受托人BLS密钥将在异步加载过程中获取", "address", validator.Address)
 				} else {
-					d.logger.Debug("✅ 受托人BLS密钥正常", "address", validator.Address, "blsKeyLength", len(validator.BlsKey.Marshal()))
+					d.logger.Debug("✅ 受托人BLS密钥已存在", "address", validator.Address, "blsKeyLength", len(validator.BlsKey.Marshal()))
 				}
 
 				// 将数据库中的受托人添加到出块集合中（使用安全方法去重）
@@ -4035,6 +4099,611 @@ func (d *DPoS) addDelegateSafely(newDelegate *validator.ValidatorMetadata) {
 		"totalDelegates", len(d.delegates))
 }
 
+// 🆕 新增：从数据库加载验证者并按voterpower排序截取前N个
+func (d *DPoS) loadValidatorsFromDatabaseWithLimit() error {
+	d.logger.Info("🔍 开始从数据库加载验证者并按voterpower排序截取前N个")
+	
+	if d.state == nil || d.state.StakeStore == nil {
+		return fmt.Errorf("state store not available")
+	}
+	
+	// 从数据库获取所有验证者
+	dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	if err != nil {
+		return fmt.Errorf("failed to get validators from database: %w", err)
+	}
+	
+	if len(dbValidators) == 0 {
+		return fmt.Errorf("no validators in database")
+	}
+	
+	d.logger.Info("✅ 从数据库成功读取验证者", "count", len(dbValidators))
+	
+	// 按VotingPower降序排序
+	d.logger.Debug("🔍 按voterpower降序排序验证者...")
+	sort.Slice(dbValidators, func(i, j int) bool {
+		if dbValidators[i].VotingPower.Cmp(dbValidators[j].VotingPower) == 0 {
+			// 票数相同，按地址排序
+			return bytes.Compare(dbValidators[i].Address[:], dbValidators[j].Address[:]) < 0
+		}
+		return dbValidators[i].VotingPower.Cmp(dbValidators[j].VotingPower) > 0
+	})
+	
+	// 根据配置文件限制数量
+	maxDelegates := int(d.config.DelegateCount)
+	originalCount := len(dbValidators)
+	if len(dbValidators) > maxDelegates {
+		dbValidators = dbValidators[:maxDelegates]
+		d.logger.Info("🎯 限制验证者数量为前N个", 
+			"originalCount", originalCount, 
+			"limitedCount", maxDelegates, 
+			"configDelegateCount", d.config.DelegateCount)
+	}
+	
+	// 设置验证者到runtime
+	if d.runtime != nil {
+		d.runtime.delegates = dbValidators
+	}
+	d.delegates = dbValidators
+	
+	d.logger.Info("✅ 从数据库加载验证者完成", 
+		"count", len(dbValidators), 
+		"maxDelegates", maxDelegates)
+	
+	// 详细记录验证者信息
+	for i, validator := range dbValidators {
+		d.logger.Debug("📋 验证者信息",
+			"index", i,
+			"address", validator.Address.String(),
+			"votingPower", validator.VotingPower.String(),
+			"isActive", validator.IsActive,
+			"hasBlsKey", validator.BlsKey != nil)
+	}
+	
+	return nil
+}
+
+// 🆕 新增：初始化BLS加载状态
+func (d *DPoS) initializeBLSLoadingState() {
+	d.blsLoadingComplete = false
+	d.blsLoadingWaitCh = make(chan struct{})
+	d.logger.Debug("🔑 BLS加载状态已初始化")
+}
+
+// 🆕 新增：等待BLS公钥加载完成
+func (d *DPoS) waitForBLSKeysLoaded() error {
+	d.blsLoadingMutex.RLock()
+	if d.blsLoadingComplete {
+		d.blsLoadingMutex.RUnlock()
+		return nil
+	}
+	d.blsLoadingMutex.RUnlock()
+	
+	d.logger.Info("⏳ 等待BLS公钥加载完成...")
+	
+	// 等待BLS加载完成信号
+	select {
+	case <-d.blsLoadingWaitCh:
+		d.logger.Info("✅ BLS公钥加载完成，可以开始区块验证")
+		return nil
+	case <-time.After(5 * time.Minute): // 5分钟超时
+		return fmt.Errorf("timeout waiting for BLS keys to load")
+	}
+}
+
+// 🆕 新增：异步加载BLS公钥（严格等待所有BLS加载完成）
+func (d *DPoS) asyncLoadBLSKeys() {
+	d.logger.Info("🔑 开始异步加载BLS公钥...")
+	
+	// 1. 首先尝试从数据库加载已缓存的BLS公钥
+	if err := d.loadBLSKeysFromDatabase(); err != nil {
+		d.logger.Warn("⚠️ 从数据库加载BLS公钥失败", "error", err)
+		// 数据库加载失败不阻止启动，继续尝试网络获取
+	}
+	
+	validators := d.getAllValidators()
+	
+	for {
+		allBLSLoaded := true
+		failedValidators := []types.Address{}
+		
+		for _, validator := range validators {
+			if validator.BlsKey == nil {
+				allBLSLoaded = false
+				
+				// 尝试获取BLS公钥
+				blsKey, err := d.getBLSKeyForValidator(validator.Address)
+				if err != nil {
+					d.logger.Warn("BLS公钥获取失败", "address", validator.Address.String(), "error", err)
+					failedValidators = append(failedValidators, validator.Address)
+					continue
+				}
+				
+				// 保存BLS公钥
+				validator.BlsKey = blsKey
+				d.saveBLSKeyToCache(validator.Address, blsKey)
+				d.saveBLSKeyToDatabase(validator.Address, blsKey)
+				
+				d.logger.Debug("✅ BLS公钥获取成功", "address", validator.Address.String())
+			}
+		}
+		
+		// 如果所有BLS都加载完成，发送完成信号
+		if allBLSLoaded {
+			d.logger.Info("✅ 所有BLS公钥加载完成，可以开始区块验证")
+			
+			// 设置完成状态并发送信号
+			d.blsLoadingMutex.Lock()
+			d.blsLoadingComplete = true
+			d.blsLoadingMutex.Unlock()
+			
+			// 发送完成信号（非阻塞）
+			select {
+			case d.blsLoadingWaitCh <- struct{}{}:
+			default:
+			}
+			
+			break
+		}
+		
+		// 如果还有失败的，等待后重试
+		if len(failedValidators) > 0 {
+			d.logger.Warn("部分BLS公钥获取失败，等待重试", "failedCount", len(failedValidators))
+			time.Sleep(10 * time.Second) // 等待10秒后重试
+		}
+	}
+}
+
+// 🆕 新增：获取所有验证者
+func (d *DPoS) getAllValidators() validator.AccountSet {
+	if d.runtime != nil && len(d.runtime.delegates) > 0 {
+		d.logger.Info("🔍 getAllValidators: 使用runtime.delegates", "count", len(d.runtime.delegates))
+		// 🆕 添加详细日志：打印每个验证者的VotingPower
+		for i, validator := range d.runtime.delegates {
+			d.logger.Info("🔍 runtime.delegates验证者信息",
+				"index", i,
+				"address", validator.Address.String(),
+				"votingPower", validator.VotingPower.String(),
+				"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
+				"isActive", validator.IsActive,
+				"hasBlsKey", validator.BlsKey != nil)
+		}
+		return d.runtime.delegates
+	}
+	d.logger.Info("🔍 getAllValidators: 使用d.delegates", "count", len(d.delegates))
+	// 🆕 添加详细日志：打印每个验证者的VotingPower
+	for i, validator := range d.delegates {
+		d.logger.Info("🔍 d.delegates验证者信息",
+			"index", i,
+			"address", validator.Address.String(),
+			"votingPower", validator.VotingPower.String(),
+			"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
+			"isActive", validator.IsActive,
+			"hasBlsKey", validator.BlsKey != nil)
+	}
+	return d.delegates
+}
+
+// 🆕 新增：获取指定验证者的BLS公钥
+func (d *DPoS) getBLSKeyForValidator(address types.Address) (*bls.PublicKey, error) {
+	// 检查是否是当前节点
+	if d.key != nil && address == types.Address(d.key.Address()) {
+		// 当前节点：从本地文件读取BLS私钥
+		blsPublicKey, err := d.readBLSPrivateKeyAndGeneratePublicKey(address)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read local BLS key: %w", err)
+		}
+		
+		// 解析BLS公钥
+		blsKey, err := bls.UnmarshalPublicKey(blsPublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal BLS key: %w", err)
+		}
+		
+		d.logger.Debug("✅ 本地BLS公钥获取成功", "address", address.String())
+		return blsKey, nil
+	} else {
+		// 其他节点：通过网络请求BLS公钥
+		blsKey, err := d.requestBLSPublicKeyFromNetwork(address)
+		if err != nil {
+			return nil, fmt.Errorf("failed to request remote BLS key: %w", err)
+		}
+		
+		d.logger.Debug("✅ 远程BLS公钥获取成功", "address", address.String())
+		return blsKey, nil
+	}
+}
+
+// 🆕 新增：保存BLS公钥到缓存
+func (d *DPoS) saveBLSKeyToCache(address types.Address, blsKey *bls.PublicKey) {
+	if d.runtime != nil && d.runtime.networkIntegration != nil {
+		blsKeyBytes := blsKey.Marshal()
+		if err := d.runtime.networkIntegration.SaveBLSKey(address, blsKeyBytes); err != nil {
+			d.logger.Warn("⚠️ 保存BLS公钥到缓存失败", 
+				"address", address.String(), 
+				"error", err)
+		} else {
+			d.logger.Debug("✅ BLS公钥已保存到缓存", "address", address.String())
+		}
+	}
+}
+
+// 🆕 新增：同步加载BLS公钥
+func (d *DPoS) syncLoadBLSKeys() error {
+	d.logger.Info("🔑 开始同步加载BLS公钥...")
+	
+	// 1. 从数据库加载已缓存的BLS公钥
+	if err := d.loadBLSKeysFromDatabase(); err != nil {
+		d.logger.Warn("⚠️ 从数据库加载BLS公钥失败", "error", err)
+		// 数据库加载失败不阻止启动，继续尝试网络获取
+	}
+	
+	// 2. 获取所有验证者
+	validators := d.getAllValidators()
+	d.logger.Info("🔍 获取到验证者数量", "count", len(validators))
+	if len(validators) == 0 {
+		d.logger.Warn("⚠️ 当前没有验证者，无需获取BLS公钥")
+		return nil
+	}
+	
+	// 记录验证者状态
+	for i, validator := range validators {
+		d.logger.Info("🔍 验证者状态", 
+			"index", i,
+			"address", validator.Address.String(),
+			"hasBlsKey", validator.BlsKey != nil,
+			"votingPower", validator.VotingPower.String())
+	}
+	
+	// 3. 同步获取缺失的BLS公钥（带重试机制）
+	maxRetries := 3
+	retryDelay := 5 * time.Second
+	
+	for _, validator := range validators {
+		if validator.BlsKey == nil {
+			d.logger.Debug("🔑 开始获取BLS公钥", "address", validator.Address.String())
+			
+			var blsKey *bls.PublicKey
+			var err error
+			
+			// 重试机制
+			for retry := 0; retry < maxRetries; retry++ {
+				blsKey, err = d.getBLSKeyForValidator(validator.Address)
+				if err == nil {
+					break // 成功获取，跳出重试循环
+				}
+				
+				if retry < maxRetries-1 {
+					d.logger.Warn("⚠️ BLS公钥获取失败，准备重试", 
+						"address", validator.Address.String(),
+						"retry", retry+1,
+						"maxRetries", maxRetries,
+						"error", err)
+					time.Sleep(retryDelay)
+				} else {
+					d.logger.Error("❌ BLS公钥获取失败，已达到最大重试次数", 
+						"address", validator.Address.String(),
+						"maxRetries", maxRetries,
+						"error", err)
+				}
+			}
+			
+			if err != nil {
+				return fmt.Errorf("failed to get BLS key for %s after %d retries: %w", validator.Address.String(), maxRetries, err)
+			}
+			
+			// 保存BLS公钥
+			validator.BlsKey = blsKey
+			d.saveBLSKeyToCache(validator.Address, blsKey)
+			d.saveBLSKeyToDatabase(validator.Address, blsKey)
+			
+			d.logger.Info("✅ BLS公钥获取成功", "address", validator.Address.String())
+		} else {
+			d.logger.Debug("✅ BLS公钥已存在", "address", validator.Address.String())
+		}
+	}
+	
+	// 🆕 修复：检查所有验证者是否都有BLS公钥
+	allBLSLoaded := true
+	for _, validator := range validators {
+		if validator.BlsKey == nil {
+			allBLSLoaded = false
+			d.logger.Warn("⚠️ 验证者BLS公钥未加载", "address", validator.Address.String())
+		}
+	}
+	
+	if !allBLSLoaded {
+		d.logger.Warn("⚠️ 部分验证者BLS公钥未加载完成，但继续启动流程")
+	} else {
+		d.logger.Info("✅ 所有BLS公钥同步加载完成")
+	}
+	
+	// 🆕 修复：设置BLS加载完成状态
+	d.blsLoadingMutex.Lock()
+	d.blsLoadingComplete = true
+	d.blsLoadingMutex.Unlock()
+	d.logger.Info("✅ BLS加载状态已设置为完成")
+	
+	// 发送完成信号
+	select {
+	case d.blsLoadingWaitCh <- struct{}{}:
+		d.logger.Debug("✅ BLS加载完成信号已发送")
+	default:
+		d.logger.Debug("ℹ️ BLS加载完成信号通道已满")
+	}
+	
+	// 4. 检查数据库是否已有验证者，只有没有时才保存
+	d.logger.Info("🔍 开始检查数据库验证者状态...")
+	if d.state != nil && d.state.StakeStore != nil {
+		d.logger.Info("🔍 状态存储可用，开始获取数据库验证者...")
+		d.logger.Info("🔍 当前state和StakeStore状态", 
+			"stateIsNil", d.state == nil,
+			"stakeStoreIsNil", d.state.StakeStore == nil)
+		
+		// 🆕 直接使用GetValidatorsWithFilter(false)查询数据库，避免内存和数据库不一致
+		dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+		d.logger.Info("🔍 GetValidatorsWithFilter(false)结果", "count", len(dbValidators), "error", err)
+		
+		if err == nil && len(dbValidators) > 0 {
+			// 打印数据库验证者的详细信息
+			d.logger.Info("🔍 数据库验证者详细信息:")
+			for i, validator := range dbValidators {
+				d.logger.Info("🔍 数据库验证者",
+					"index", i,
+					"address", validator.Address.String(),
+					"votingPower", validator.VotingPower.String(),
+					"isActive", validator.IsActive,
+					"hasBlsKey", validator.BlsKey != nil)
+			}
+			d.logger.Info("✅ 数据库已有验证者，跳过保存", "count", len(dbValidators))
+		} else {
+			d.logger.Info("🔍 数据库无验证者或获取失败，准备保存", "count", len(dbValidators), "error", err)
+			// 数据库没有验证者，保存验证者信息到数据库
+			if err := d.saveValidatorsWithBLSKeysToDatabase(); err != nil {
+				d.logger.Warn("⚠️ 保存验证者信息到数据库失败", "error", err)
+				// 不返回错误，继续启动流程
+			} else {
+				d.logger.Info("✅ 验证者信息（含BLS公钥）已保存到数据库")
+			}
+		}
+	} else {
+		d.logger.Warn("⚠️ 状态存储不可用，无法检查数据库状态")
+	}
+	
+	return nil
+}
+
+// 🆕 新增：保存验证者信息（含BLS公钥）到数据库
+func (d *DPoS) saveValidatorsWithBLSKeysToDatabase() error {
+	d.logger.Info("💾 开始保存验证者信息（含BLS公钥）到数据库...")
+	
+	if d.state == nil || d.state.StakeStore == nil {
+		d.logger.Warn("⚠️ 状态存储不可用，无法保存验证者信息到数据库")
+		return fmt.Errorf("state store not available")
+	}
+	
+	validators := d.getAllValidators()
+	if len(validators) == 0 {
+		d.logger.Warn("⚠️ 当前没有验证者，无需保存到数据库")
+		return nil
+	}
+	
+	if len(validators) == 0 {
+		d.logger.Warn("⚠️ 当前没有验证者，无需保存到数据库")
+		return nil
+	}
+	
+	syncedCount := 0
+	for i, validator := range validators {
+		// 🆕 添加详细日志：打印验证者信息
+		d.logger.Info("🔍 准备保存验证者信息到数据库",
+			"index", i,
+			"address", validator.Address.String(),
+			"votingPower", validator.VotingPower.String(),
+			"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
+			"isActive", validator.IsActive,
+			"hasBlsKey", validator.BlsKey != nil)
+		
+		// 创建DelegateInfo结构
+		delegateInfo := &DelegateInfo{
+			Address:        validator.Address,
+			VotingPower:    new(big.Int).Set(validator.VotingPower),
+			TotalVotes:     new(big.Int).Set(validator.VotingPower), // 使用VotingPower作为TotalVotes
+			ProducedBlocks: 0,
+			MissedBlocks:   0,
+			LastBlockTime:  0,
+			IsActive:       validator.IsActive,
+			BlsPublicKey:   []byte{}, // 初始为空
+		}
+		
+		// 🆕 添加详细日志：打印DelegateInfo信息
+		d.logger.Info("🔍 DelegateInfo详细信息",
+			"address", delegateInfo.Address.String(),
+			"votingPower", delegateInfo.VotingPower.String(),
+			"votingPowerHex", fmt.Sprintf("0x%x", delegateInfo.VotingPower.Bytes()),
+			"totalVotes", delegateInfo.TotalVotes.String(),
+			"totalVotesHex", fmt.Sprintf("0x%x", delegateInfo.TotalVotes.Bytes()),
+			"isActive", delegateInfo.IsActive,
+			"blsPublicKeyLength", len(delegateInfo.BlsPublicKey))
+		
+		// 如果有BLS公钥，保存到DelegateInfo中
+		if validator.BlsKey != nil {
+			blsKeyBytes := validator.BlsKey.Marshal()
+			delegateInfo.BlsPublicKey = blsKeyBytes
+			d.logger.Debug("✅ 保存验证者BLS公钥到数据库", 
+				"address", validator.Address.String(),
+				"blsKeyLength", len(blsKeyBytes))
+		}
+		
+		// 保存到数据库
+		if err := d.state.StakeStore.setDelegateInfo(validator.Address, delegateInfo, nil); err != nil {
+			d.logger.Warn("⚠️ 保存验证者信息到数据库失败", 
+				"address", validator.Address.String(), 
+				"error", err)
+		} else {
+			syncedCount++
+			// 🆕 添加详细日志：打印保存成功后的信息
+			d.logger.Info("✅ 验证者信息已保存到数据库",
+				"address", validator.Address.String(),
+				"votingPower", validator.VotingPower.String(),
+				"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
+				"isActive", validator.IsActive,
+				"hasBlsKey", validator.BlsKey != nil)
+			
+			// 打印BLS公钥详细信息
+			if validator.BlsKey != nil {
+				blsKeyBytes := validator.BlsKey.Marshal()
+				d.logger.Info("✅ 验证者信息（含BLS公钥）已保存到数据库", 
+					"address", validator.Address.String(),
+					"votingPower", validator.VotingPower.String(),
+					"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
+					"isActive", validator.IsActive,
+					"hasBlsKey", true,
+					"blsKeyLength", len(blsKeyBytes),
+					"blsKeyHex", fmt.Sprintf("%x", blsKeyBytes[:16])+"...")
+			} else {
+				d.logger.Info("✅ 验证者信息（无BLS公钥）已保存到数据库", 
+					"address", validator.Address.String(),
+					"votingPower", validator.VotingPower.String(),
+					"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
+					"isActive", validator.IsActive,
+					"hasBlsKey", false)
+			}
+		}
+	}
+	
+	d.logger.Info("💾 验证者信息（含BLS公钥）保存到数据库完成", "syncedCount", syncedCount, "totalValidators", len(validators))
+	return nil
+}
+
+// 🆕 新增：保存BLS公钥到数据库
+func (d *DPoS) saveBLSKeyToDatabase(address types.Address, blsKey *bls.PublicKey) {
+	if d.state == nil || d.state.StakeStore == nil {
+		d.logger.Warn("⚠️ 状态存储不可用，无法保存BLS公钥到数据库")
+		return
+	}
+	
+	// 获取验证者信息
+	validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	if err != nil {
+		d.logger.Warn("⚠️ 获取验证者信息失败", "error", err)
+		return
+	}
+	
+	// 查找并更新对应验证者的BLS公钥
+	for _, validator := range validators {
+		if validator.Address == address {
+			// 🆕 重新查询账户余额作为VotingPower
+			balance, err := d.getValidatorBalance(address)
+			if err != nil {
+				d.logger.Warn("⚠️ 查询账户余额失败，使用数据库中的VotingPower", 
+					"address", address.String(), 
+					"error", err)
+				balance = validator.VotingPower
+			} else {
+				d.logger.Info("🔍 重新查询到账户余额", 
+					"address", address.String(),
+					"balance", balance.String(),
+					"balanceHex", fmt.Sprintf("0x%x", balance.Bytes()))
+			}
+			
+			// 🆕 添加详细日志：打印保存前的信息
+			d.logger.Info("🔍 准备保存BLS公钥到数据库",
+				"address", address.String(),
+				"originalVotingPower", validator.VotingPower.String(),
+				"newVotingPower", balance.String(),
+				"votingPowerHex", fmt.Sprintf("0x%x", balance.Bytes()),
+				"isActive", validator.IsActive,
+				"hasBlsKey", validator.BlsKey != nil)
+			
+			// 更新BLS公钥和VotingPower
+			validator.BlsKey = blsKey
+			validator.VotingPower = balance
+			
+			// 🆕 创建DelegateInfo并保存到数据库
+			delegateInfo := &DelegateInfo{
+				Address:        validator.Address,
+				VotingPower:    new(big.Int).Set(balance), // 使用重新查询的余额
+				TotalVotes:     new(big.Int).Set(balance), // 使用重新查询的余额
+				ProducedBlocks: 0,
+				MissedBlocks:   0,
+				LastBlockTime:  0,
+				IsActive:       validator.IsActive,
+				BlsPublicKey:   []byte{}, // 初始为空
+			}
+			
+			// 保存BLS公钥到DelegateInfo
+			if blsKey != nil {
+				blsKeyBytes := blsKey.Marshal()
+				delegateInfo.BlsPublicKey = blsKeyBytes
+				d.logger.Info("🔍 DelegateInfo详细信息",
+					"address", delegateInfo.Address.String(),
+					"votingPower", delegateInfo.VotingPower.String(),
+					"votingPowerHex", fmt.Sprintf("0x%x", delegateInfo.VotingPower.Bytes()),
+					"totalVotes", delegateInfo.TotalVotes.String(),
+					"totalVotesHex", fmt.Sprintf("0x%x", delegateInfo.TotalVotes.Bytes()),
+					"isActive", delegateInfo.IsActive,
+					"blsPublicKeyLength", len(delegateInfo.BlsPublicKey))
+			}
+			
+			// 保存到数据库
+			if err := d.state.StakeStore.setDelegateInfo(address, delegateInfo, nil); err != nil {
+				d.logger.Warn("⚠️ 保存BLS公钥到数据库失败", 
+					"address", address.String(), 
+					"error", err)
+			} else {
+				d.logger.Info("✅ BLS公钥已保存到数据库",
+					"address", address.String(),
+					"votingPower", balance.String(),
+					"votingPowerHex", fmt.Sprintf("0x%x", balance.Bytes()),
+					"isActive", validator.IsActive,
+					"blsKeyLength", len(blsKey.Marshal()))
+			}
+			break
+		}
+	}
+}
+
+// 🆕 新增：从数据库加载BLS公钥到缓存
+func (d *DPoS) loadBLSKeysFromDatabase() error {
+	d.logger.Debug("📚 从数据库加载BLS公钥到缓存...")
+	
+	if d.state == nil || d.state.StakeStore == nil {
+		d.logger.Warn("⚠️ 状态存储不可用，无法从数据库加载BLS公钥")
+		return fmt.Errorf("state store not available")
+	}
+	
+	// 从数据库获取所有验证者信息
+	validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	if err != nil {
+		d.logger.Warn("⚠️ 获取验证者信息失败", "error", err)
+		return err
+	}
+	
+	loadedCount := 0
+	for _, validator := range validators {
+		if validator.BlsKey != nil {
+			// 将BLS公钥保存到网络集成层缓存
+			if d.runtime != nil && d.runtime.networkIntegration != nil {
+				blsKeyBytes := validator.BlsKey.Marshal()
+				if err := d.runtime.networkIntegration.SaveBLSKey(validator.Address, blsKeyBytes); err != nil {
+					d.logger.Warn("⚠️ 保存BLS公钥到缓存失败", 
+						"address", validator.Address.String(), 
+						"error", err)
+				} else {
+					loadedCount++
+					d.logger.Debug("✅ 从数据库加载BLS公钥成功", 
+						"address", validator.Address.String(),
+						"blsKeyLength", len(blsKeyBytes))
+				}
+			}
+		}
+	}
+	
+	d.logger.Debug("📚 数据库BLS公钥加载完成", "loadedCount", loadedCount, "totalValidators", len(validators))
+	return nil
+}
+
 // dpos.go - 添加后端接口实现
 func (d *DPoS) GetDelegates(blockNumber uint64, parents []*types.Header) (validator.AccountSet, error) {
 	d.lock.RLock()
@@ -4047,18 +4716,24 @@ func (d *DPoS) GetDelegates(blockNumber uint64, parents []*types.Header) (valida
 		"isCurrentBlock", blockNumber == currentBlockNumber,
 		"note", "验证时获取验证者集合")
 
-	// 如果是当前区块，优先返回从extraData解析的验证者
+	// 如果是当前区块，优先返回从runtime.delegates获取的验证者
 	if blockNumber == currentBlockNumber {
 		d.logger.Debug("🔍 Returning current delegates from memory")
 		
-		// 🆕 只使用 runtime.delegates 作为唯一数据源
+		// 🆕 优先使用 runtime.delegates，如果为空则从数据库读取
 		if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
 			d.logger.Debug("🔍 使用从runtime.delegates获取的验证者")
 			result := d.runtime.delegates.Copy()
-			
-			// 返回runtime delegates（静默处理）
-			
 			return result, nil
+		}
+		
+		// 🆕 如果runtime.delegates为空，尝试从数据库读取
+		if d.state != nil && d.state.StakeStore != nil {
+			d.logger.Debug("🔍 runtime.delegates为空，尝试从数据库读取验证者")
+			if dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false); err == nil && len(dbValidators) > 0 {
+				d.logger.Debug("🔍 从数据库成功读取验证者", "count", len(dbValidators))
+				return dbValidators, nil
+			}
 		}
 
 		return validator.AccountSet{}, nil
@@ -7046,19 +7721,52 @@ func (r *dposRuntime) isValidator() bool {
 	}
 
 	currentAddr := types.Address(r.config.Key.Address())
-	// 检查当前节点是否为验证者
+	
+	// 🆕 优先从数据库获取验证者信息，确保数据一致性
+	if r.backend != nil {
+		// 通过backend获取当前验证者集合
+		currentDelegates := r.backend.GetCurrentDelegates()
+		if len(currentDelegates) > 0 {
+			r.logger.Debug("🔍 从backend检查验证者状态", "address", currentAddr.String(), "delegatesCount", len(currentDelegates))
+			
+			for _, delegate := range currentDelegates {
+				if delegate.Address == currentAddr {
+					// 关键：检查stake是否足够且是否活跃
+					if delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
+						r.logOnce("active_validator", "debug", "✅ 当前节点是活跃验证者（从backend）",
+							"address", currentAddr.String(),
+							"votingPower", delegate.VotingPower.String(),
+							"isActive", delegate.IsActive)
+						return true
+					} else {
+						r.logger.Info("❌ 当前节点不是活跃验证者（stake不足或不活跃，从backend）",
+							"address", currentAddr.String(),
+							"votingPower", delegate.VotingPower.String(),
+							"isActive", delegate.IsActive)
+						return false
+					}
+				}
+			}
+			
+			r.logger.Info("❌ 当前节点不在backend受托人集合中", "address", currentAddr.String())
+			return false
+		} else {
+			r.logger.Debug("⚠️ backend返回空验证者集合，回退到内存检查")
+		}
+	}
+	
+	// 回退方案：检查内存中的验证者
 	for _, delegate := range r.delegates {
-
 		if delegate.Address == currentAddr {
 			// 关键：检查stake是否足够且是否活跃
 			if delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
-				r.logOnce("active_validator", "debug", "✅ 当前节点是活跃验证者",
+				r.logOnce("active_validator", "debug", "✅ 当前节点是活跃验证者（从内存）",
 					"address", currentAddr.String(),
 					"votingPower", delegate.VotingPower.String(),
 					"isActive", delegate.IsActive)
 				return true
 			} else {
-				r.logger.Info("❌ 当前节点不是活跃验证者（stake不足或不活跃）",
+				r.logger.Info("❌ 当前节点不是活跃验证者（stake不足或不活跃，从内存）",
 					"address", currentAddr.String(),
 					"votingPower", delegate.VotingPower.String(),
 					"isActive", delegate.IsActive)
@@ -8774,7 +9482,7 @@ func (d *DPoS) readAndPrintDelegatesFromStorage() error {
 func (d *DPoS) callCommandDataSourcesOnStartup() error {
 	// 🆕 数据源1: 从store获取验证者信息 (与命令中的 GetValidators() 一致)
 	if d.state != nil && d.state.StakeStore != nil {
-		validators, err := d.state.StakeStore.GetValidators()
+		validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
 		if err != nil {
 			d.logger.Warn("⚠️ 获取验证者信息失败", "error", err)
 		} else {
@@ -8853,59 +9561,16 @@ func (d *DPoS) preloadBLSKeysOnStartup() error {
 }
 
 // 🆕 新增：从数据库加载BLS公钥到缓存
-func (d *DPoS) loadBLSKeysFromDatabase() error {
-	d.logger.Debug("📚 从数据库加载BLS公钥到缓存...")
-	
-	if d.state == nil || d.state.StakeStore == nil {
-		d.logger.Warn("⚠️ 状态存储不可用，无法从数据库加载BLS公钥")
-		return fmt.Errorf("state store not available")
-	}
-	
-	// 从数据库获取所有验证者信息
-	validators, err := d.state.StakeStore.GetValidators()
-	if err != nil {
-		d.logger.Warn("⚠️ 获取验证者信息失败", "error", err)
-		return err
-	}
-	
-	loadedCount := 0
-	for _, validator := range validators {
-		if validator.BlsKey != nil {
-			// 将BLS公钥保存到网络集成层缓存
-			if d.runtime != nil && d.runtime.networkIntegration != nil {
-				blsKeyBytes := validator.BlsKey.Marshal()
-				if err := d.runtime.networkIntegration.SaveBLSKey(validator.Address, blsKeyBytes); err != nil {
-					d.logger.Warn("⚠️ 保存BLS公钥到缓存失败", 
-						"address", validator.Address.String(), 
-						"error", err)
-				} else {
-					loadedCount++
-					d.logger.Info("✅ 从数据库加载BLS公钥成功", 
-						"address", validator.Address.String(),
-						"blsKeyLength", len(blsKeyBytes))
-				}
-			}
-		}
-	}
-	
-	d.logger.Debug("📚 数据库BLS公钥加载完成", "loadedCount", loadedCount, "totalValidators", len(validators))
-	return nil
-}
 
 // 🆕 新增：网络获取缺失的BLS公钥（严格模式，确保不遗漏）
 func (d *DPoS) fetchMissingBLSKeysFromNetwork() error {
 	d.logger.Debug("🌐 开始网络获取缺失的BLS公钥（严格模式）...")
 	
-	if d.state == nil || d.state.StakeStore == nil {
-		d.logger.Warn("⚠️ 状态存储不可用，无法获取验证者信息")
-		return fmt.Errorf("state store not available")
-	}
-	
-	// 从数据库获取所有验证者信息
-	validators, err := d.state.StakeStore.GetValidators()
-	if err != nil {
-		d.logger.Warn("⚠️ 获取验证者信息失败", "error", err)
-		return err
+	// 从当前内存中的验证者集合获取验证者信息
+	validators := d.getAllValidators()
+	if len(validators) == 0 {
+		d.logger.Warn("⚠️ 当前没有验证者，无需获取BLS公钥")
+		return nil
 	}
 	
 	// 获取本地节点地址
@@ -9097,53 +9762,8 @@ func (d *DPoS) syncDelegatesToDatabase(delegates validator.AccountSet) error {
 		return nil
 	}
 	
-	// 🆕 开始预加载BLS公钥（启动前必须完成）
-	d.logger.Info("🔑 开始预加载BLS公钥（启动前必须完成）...")
-	if err := d.preloadBLSKeysOnStartup(); err != nil {
-		d.logger.Error("❌ BLS公钥预加载失败", "error", err)
-		return fmt.Errorf("failed to preload BLS keys: %w", err)
-	}
-	d.logger.Info("✅ BLS公钥预加载完成，所有验证者BLS公钥已获取")
-	
-	syncedCount := 0
-	for _, delegate := range delegates {
-		// 创建DelegateInfo结构
-		delegateInfo := &DelegateInfo{
-			Address:        delegate.Address,
-			VotingPower:    new(big.Int).Set(delegate.VotingPower),
-			TotalVotes:     new(big.Int).Set(delegate.VotingPower), // 使用VotingPower作为TotalVotes
-			ProducedBlocks: 0,
-			MissedBlocks:   0,
-			LastBlockTime:  0,
-			IsActive:       delegate.IsActive,
-			BlsPublicKey:   []byte{}, // 初始为空，BLS公钥将在后续获取
-		}
-		
-		// 如果有BLS公钥，保存到DelegateInfo中
-		if delegate.BlsKey != nil {
-			blsKeyBytes := delegate.BlsKey.Marshal()
-			delegateInfo.BlsPublicKey = blsKeyBytes
-			d.logger.Info("✅ 保存验证者BLS公钥到数据库", 
-				"address", delegate.Address.String(),
-				"blsKeyLength", len(blsKeyBytes))
-		}
-		
-		// 保存到数据库
-		if err := d.state.StakeStore.setDelegateInfo(delegate.Address, delegateInfo, nil); err != nil {
-			d.logger.Warn("⚠️ 保存验证者信息到数据库失败", 
-				"address", delegate.Address.String(), 
-				"error", err)
-		} else {
-			syncedCount++
-			d.logger.Info("✅ 验证者信息已保存到数据库", 
-				"address", delegate.Address.String(),
-				"votingPower", delegate.VotingPower.String(),
-				"isActive", delegate.IsActive,
-				"hasBlsKey", delegate.BlsKey != nil)
-		}
-	}
-	
-	d.logger.Info("💾 验证者数据同步到数据库完成", "syncedCount", syncedCount, "totalDelegates", len(delegates))
+	// 验证者信息将在BLS公钥获取完成后统一保存到数据库
+	d.logger.Info("💾 验证者信息将在BLS公钥获取完成后统一保存到数据库", "count", len(delegates))
 	return nil
 }
 
@@ -9592,7 +10212,7 @@ func (d *DPoS) broadcastBLSRequest(requestData []byte, requestID string) error {
 			return fmt.Errorf("failed to request BLS key: %w", err)
 		}
 		
-		d.logger.Info("✅ BLS公钥请求发送成功", "requestID", requestID)
+		d.logger.Debug("✅ BLS公钥请求发送成功", "requestID", requestID)
 	} else {
 		d.logger.Warn("⚠️ 网络集成层不可用，无法请求BLS公钥")
 		return fmt.Errorf("network integration not available")
@@ -9614,7 +10234,7 @@ func (d *DPoS) handleBLSResponse(requestID string, blsKey *bls.PublicKey) error 
 	// 发送响应
 	select {
 	case responseCh <- blsKey:
-		d.logger.Info("✅ 发送真实BLS响应", "requestID", requestID)
+		d.logger.Debug("✅ 发送真实BLS响应", "requestID", requestID)
 	default:
 		d.logger.Warn("⚠️ BLS响应通道已满", "requestID", requestID)
 		return fmt.Errorf("BLS response channel is full")
