@@ -4370,14 +4370,6 @@ func (d *DPoS) syncLoadBLSKeys() error {
 		return nil
 	}
 	
-	// 记录验证者状态
-	for i, validator := range validators {
-		d.logger.Info("🔍 验证者状态", 
-			"index", i,
-			"address", validator.Address.String(),
-			"hasBlsKey", validator.BlsKey != nil,
-			"votingPower", validator.VotingPower.String())
-	}
 	
 	// 3. 同步获取缺失的BLS公钥（带重试机制）
 	maxRetries := 3
@@ -4707,16 +4699,16 @@ func (d *DPoS) loadBLSKeysFromDatabase() error {
 	loadedCount := 0
 	for _, validator := range validators {
 		if validator.BlsKey != nil {
-			// 将BLS公钥保存到网络集成层缓存
+			// 将BLS公钥只加载到网络集成层缓存，不写入数据库
 			if d.runtime != nil && d.runtime.networkIntegration != nil {
 				blsKeyBytes := validator.BlsKey.Marshal()
-				if err := d.runtime.networkIntegration.SaveBLSKey(validator.Address, blsKeyBytes); err != nil {
-					d.logger.Warn("⚠️ 保存BLS公钥到缓存失败", 
+				if err := d.runtime.networkIntegration.LoadBLSKeyToCache(validator.Address, blsKeyBytes); err != nil {
+					d.logger.Warn("⚠️ 加载BLS公钥到缓存失败", 
 						"address", validator.Address.String(), 
 						"error", err)
 				} else {
 					loadedCount++
-					d.logger.Debug("✅ 从数据库加载BLS公钥成功", 
+					d.logger.Debug("✅ 从数据库加载BLS公钥到缓存成功", 
 						"address", validator.Address.String(),
 						"blsKeyLength", len(blsKeyBytes))
 				}

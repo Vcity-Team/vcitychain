@@ -1577,6 +1577,26 @@ func (ni *NetworkIntegration) SaveBLSKey(address types.Address, blsKeyBytes []by
 	return ni.saveBLSKey(address, blsKeyBytes)
 }
 
+// LoadBLSKeyToCache 只加载BLS公钥到缓存，不写入数据库（用于从数据库加载场景）
+func (ni *NetworkIntegration) LoadBLSKeyToCache(address types.Address, blsKeyBytes []byte) error {
+	ni.blsKeyMutex.Lock()
+	defer ni.blsKeyMutex.Unlock()
+
+	// 🆕 检查是否已经存在相同的BLS公钥，避免重复保存
+	if existingKey, exists := ni.blsKeyCache[address]; exists {
+		if bytes.Equal(existingKey, blsKeyBytes) {
+			// BLS公钥已存在且相同，跳过保存
+			return nil
+		}
+	}
+
+	// 只保存到内存缓存，不写入数据库
+	ni.blsKeyCache[address] = blsKeyBytes
+	ni.blsKeyCacheTime[address] = time.Now()
+
+	return nil
+}
+
 // BroadcastBLSKey 广播BLS公钥
 func (ni *NetworkIntegration) BroadcastBLSKey(address types.Address, blsKeyBytes []byte, nodeType string) error {
 	if ni.blsKeyBroadcastTopic == nil {

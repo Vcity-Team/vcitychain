@@ -134,8 +134,9 @@ func (ni *NetworkIntegration) saveBLSKey(address types.Address, blsKeyBytes []by
     // 1. 保存到内存缓存（快速访问）
     ni.blsKeyCache[address] = blsKeyBytes
     
+    return nil
     // 2. 持久化到数据库（重启恢复）
-    return ni.persistBLSKeyToDatabase(address, blsKeyBytes)
+    //return ni.persistBLSKeyToDatabase(address, blsKeyBytes)
 }
 
 // 持久化回调函数机制
