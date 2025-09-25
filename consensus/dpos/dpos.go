@@ -3933,6 +3933,18 @@ func (d *DPoS) initializeDelegates() error {
 			d.logger.Warn("⚠️ 从数据库读取受托人失败，将使用创世文件", "error", err)
 		} else if len(dbValidators) > 0 {
 			d.logger.Info("✅ 从数据库成功读取受托人（真正用于出块）", "count", len(dbValidators))
+			
+			// 🆕 添加详细日志：打印从数据库读取的验证者信息
+			d.logger.Info("🔍 数据库验证者详细信息:")
+			for i, validator := range dbValidators {
+				d.logger.Info("🔍 数据库验证者",
+					"index", i,
+					"address", validator.Address.String(),
+					"votingPower", validator.VotingPower.String(),
+					"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
+					"isActive", validator.IsActive,
+					"hasBlsKey", validator.BlsKey != nil)
+			}
 
 			// 🆕 修复：按票数降序排序，如果票数相同则按地址排序，确保顺序完全一致
 			d.logger.Debug("🔍 按票数降序排序数据库受托人...")
@@ -4118,6 +4130,18 @@ func (d *DPoS) loadValidatorsFromDatabaseWithLimit() error {
 	}
 	
 	d.logger.Info("✅ 从数据库成功读取验证者", "count", len(dbValidators))
+	
+	// 🆕 添加详细日志：打印从数据库读取的验证者信息
+	d.logger.Info("🔍 数据库验证者详细信息:")
+	for i, validator := range dbValidators {
+		d.logger.Info("🔍 数据库验证者",
+			"index", i,
+			"address", validator.Address.String(),
+			"votingPower", validator.VotingPower.String(),
+			"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
+			"isActive", validator.IsActive,
+			"hasBlsKey", validator.BlsKey != nil)
+	}
 	
 	// 按VotingPower降序排序
 	d.logger.Debug("🔍 按voterpower降序排序验证者...")
@@ -4729,9 +4753,22 @@ func (d *DPoS) GetDelegates(blockNumber uint64, parents []*types.Header) (valida
 		
 		// 🆕 如果runtime.delegates为空，尝试从数据库读取
 		if d.state != nil && d.state.StakeStore != nil {
-			d.logger.Debug("🔍 runtime.delegates为空，尝试从数据库读取验证者")
+			d.logger.Info("🔍 runtime.delegates为空，尝试从数据库读取验证者")
 			if dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false); err == nil && len(dbValidators) > 0 {
-				d.logger.Debug("🔍 从数据库成功读取验证者", "count", len(dbValidators))
+				d.logger.Info("🔍 从数据库成功读取验证者", "count", len(dbValidators))
+				
+				// 🆕 添加详细日志：打印从数据库读取的验证者信息
+				d.logger.Info("🔍 数据库验证者详细信息:")
+				for i, validator := range dbValidators {
+					d.logger.Info("🔍 数据库验证者",
+						"index", i,
+						"address", validator.Address.String(),
+						"votingPower", validator.VotingPower.String(),
+						"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
+						"isActive", validator.IsActive,
+						"hasBlsKey", validator.BlsKey != nil)
+				}
+				
 				return dbValidators, nil
 			}
 		}
