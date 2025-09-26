@@ -1523,14 +1523,20 @@ func (d *DPOS) GetVotingStakingInfo(ctx context.Context, params interface{}) (in
 	dynamicVotingInfo := d.getDynamicVotingInfoFromDPoSEngine()
 	d.logger.Info("Dynamic voting info retrieved", "count", len(dynamicVotingInfo))
 
+	// 🆕 新增：从数据库查询所有受托人信息
+	d.logger.Info("🔄 从数据库中查询所有受托人信息...")
+	dbDelegatesInfo := d.getDelegatesFromDatabase()
+	d.logger.Info("Database delegates info retrieved", "count", len(dbDelegatesInfo))
+
 	// 🆕 修复：确保创世配置中的初始验证者质押信息被包含
 	// 从验证者信息中提取质押信息，确保创世配置的质押数量被正确显示
 	genesisStakingInfo := d.extractVotingInfoFromDelegates(validators)
 	d.logger.Info("Genesis staking info extracted", "count", len(genesisStakingInfo))
 
-	// Merge all staking info: genesis + store + dynamic voting
+	// Merge all staking info: genesis + store + dynamic voting + database delegates
 	allStakingInfo := d.mergeStakingInfo(genesisStakingInfo, stakingInfo)
 	allStakingInfo = d.mergeStakingInfo(allStakingInfo, dynamicVotingInfo)
+	allStakingInfo = d.mergeStakingInfo(allStakingInfo, dbDelegatesInfo)
 
 	// 🆕 新增：按质押数量从大到小排序
 	allStakingInfo = d.sortStakingInfoByAmount(allStakingInfo)
@@ -2119,7 +2125,44 @@ func (d *DPOS) getDynamicVotingInfoFromDPoSEngine() []*dpos.StakeInfo {
 		if dposEngine != nil {
 			d.logger.Info("✅ Successfully got DPoS engine using getDPoSEngineDirectly", "type", fmt.Sprintf("%T", dposEngine))
 			
-			// Try to get voters information directly from DPoS engine
+			// Try to get delegates information directly from DPoS engine
+			if delegateEngine, ok := dposEngine.(interface {
+				GetDelegates() validator.AccountSet
+			}); ok {
+				d.logger.Info("DPoS engine supports GetDelegates method, calling it...")
+				delegates := delegateEngine.GetDelegates()
+				d.logger.Info("GetDelegates() method returned", "delegateCount", len(delegates))
+
+				// Process delegates data - create stake info for each delegate
+				var dynamicStakes []*dpos.StakeInfo
+				for _, delegate := range delegates {
+					if delegate.VotingPower != nil && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
+						stake := &dpos.StakeInfo{
+							Staker:    delegate.Address,        // 受托人地址（自己给自己投票）
+							Amount:    delegate.VotingPower,     // 投票权重
+							StartTime: uint64(time.Now().Unix()), // 当前时间
+							EndTime:   0,                        // 无锁定时间
+							IsLocked:  false,                    // 未锁定
+							IsActive:  delegate.IsActive,        // 是否活跃
+							Delegate:  delegate.Address,         // 受托人地址
+							Rewards:   big.NewInt(0),            // 奖励为0
+						}
+						dynamicStakes = append(dynamicStakes, stake)
+
+						d.logger.Info("✅ Extracted delegate from DPoS engine",
+							"delegate", delegate.Address.String(),
+							"votingPower", delegate.VotingPower.String(),
+							"isActive", delegate.IsActive)
+					}
+				}
+				
+				d.logger.Info("Dynamic voting info extracted from DPoS engine", "count", len(dynamicStakes))
+				return dynamicStakes
+			} else {
+				d.logger.Warn("DPoS engine does not support GetDelegates method")
+			}
+
+			// Fallback: Try to get voters information
 			if voterEngine, ok := dposEngine.(interface {
 				GetVoters() map[types.Address]*dpos.VoterInfo
 			}); ok {
@@ -2165,9 +2208,196 @@ func (d *DPOS) getDynamicVotingInfoFromDPoSEngine() []*dpos.StakeInfo {
 		d.logger.Warn("Store does not support GetConsensus method")
 	}
 
-	// Fallback to empty result
+	// 🆕 备用方案：从数据库中查询所有受托人信息
+	d.logger.Info("🔄 从数据库中查询所有受托人信息...")
+	
+	// 尝试从store中获取所有受托人
+	if store, ok := d.store.(interface {
+		GetDelegates() validator.AccountSet
+	}); ok {
+		delegates := store.GetDelegates()
+		if delegates != nil && len(delegates) > 0 {
+			d.logger.Info("✅ 从数据库获取到受托人信息", "delegateCount", len(delegates))
+			
+			// 为每个受托人创建stake info
+			var dynamicStakes []*dpos.StakeInfo
+			for _, delegate := range delegates {
+				if delegate.VotingPower != nil && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
+					stake := &dpos.StakeInfo{
+						Staker:    delegate.Address,        // 受托人地址（自己给自己投票）
+						Amount:    delegate.VotingPower,     // 投票权重
+						StartTime: uint64(time.Now().Unix()), // 当前时间
+						EndTime:   0,                        // 无锁定时间
+						IsLocked:  false,                    // 未锁定
+						IsActive:  delegate.IsActive,        // 是否活跃
+						Delegate:  delegate.Address,         // 受托人地址
+						Rewards:   big.NewInt(0),            // 奖励为0
+					}
+					dynamicStakes = append(dynamicStakes, stake)
+
+					d.logger.Info("✅ 从数据库提取受托人信息",
+						"delegate", delegate.Address.String(),
+						"votingPower", delegate.VotingPower.String(),
+						"isActive", delegate.IsActive)
+				}
+			}
+			
+			d.logger.Info("✅ 从数据库获取的动态投票信息", "count", len(dynamicStakes))
+			return dynamicStakes
+		}
+	}
+	
+	// 最终备用方案：返回空结果
 	d.logger.Info("No dynamic voting info available, returning empty result")
 	return []*dpos.StakeInfo{}
+}
+
+// getDelegatesFromDatabase 从数据库查询所有受托人信息
+func (d *DPOS) getDelegatesFromDatabase() []*dpos.StakeInfo {
+	d.logger.Info("🔄 从数据库中查询所有受托人信息...")
+	
+	// 直接获取DPoS引擎
+	// 需要将dposStore转换为有GetConsensus方法的接口
+	var consensusStore interface{GetConsensus() interface{}}
+	if store, ok := d.store.(interface{GetConsensus() interface{}}); ok {
+		consensusStore = store
+	} else {
+		// 如果dposStore没有GetConsensus方法，尝试通过反射获取
+		d.logger.Info("dposStore没有GetConsensus方法，尝试通过反射获取DPoS引擎...")
+		storeValue := reflect.ValueOf(d.store)
+		if storeValue.Kind() == reflect.Ptr {
+			storeValue = storeValue.Elem()
+		}
+		
+		// 查找Consensus字段
+		if consensusField := storeValue.FieldByName("Consensus"); consensusField.IsValid() {
+			consensusEngine := consensusField.Interface()
+			d.logger.Info("通过反射找到Consensus字段", "type", reflect.TypeOf(consensusEngine))
+			
+			// 尝试调用GetDelegates或GetValidators
+			if getDelegatesMethod := reflect.ValueOf(consensusEngine).MethodByName("GetDelegates"); getDelegatesMethod.IsValid() {
+				d.logger.Info("✅ 通过反射找到GetDelegates方法，正在调用...")
+				results := getDelegatesMethod.Call([]reflect.Value{})
+				if len(results) >= 2 {
+					if err, ok := results[1].Interface().(error); ok && err != nil {
+						d.logger.Error("GetDelegates method returned error", "error", err)
+					} else if delegates, ok := results[0].Interface().(validator.AccountSet); ok {
+						return d.convertDelegatesToStakeInfo(delegates, "反射GetDelegates")
+					}
+				}
+			}
+			
+			if getValidatorsMethod := reflect.ValueOf(consensusEngine).MethodByName("GetValidators"); getValidatorsMethod.IsValid() {
+				d.logger.Info("✅ 通过反射找到GetValidators方法，正在调用...")
+				results := getValidatorsMethod.Call([]reflect.Value{})
+				if len(results) >= 2 {
+					if err, ok := results[1].Interface().(error); ok && err != nil {
+						d.logger.Error("GetValidators method returned error", "error", err)
+					} else if delegates, ok := results[0].Interface().(validator.AccountSet); ok {
+						return d.convertDelegatesToStakeInfo(delegates, "反射GetValidators")
+					}
+				}
+			}
+		}
+		
+		d.logger.Error("无法通过反射获取DPoS引擎")
+		return []*dpos.StakeInfo{}
+	}
+	
+	dposEngine := d.getDPoSEngineDirectly(consensusStore)
+	if dposEngine == nil {
+		d.logger.Error("Failed to get DPoS engine directly")
+		return []*dpos.StakeInfo{}
+	}
+	
+	// 优先尝试GetValidators方法（不需要参数，更简单）
+	if getValidatorsMethod := reflect.ValueOf(dposEngine).MethodByName("GetValidators"); getValidatorsMethod.IsValid() {
+		d.logger.Info("✅ 找到GetValidators方法，正在调用...")
+		results := getValidatorsMethod.Call([]reflect.Value{})
+		if len(results) >= 1 {
+			if delegates, ok := results[0].Interface().(validator.AccountSet); ok {
+				return d.convertDelegatesToStakeInfo(delegates, "DPoS引擎GetValidators")
+			}
+		}
+	}
+	
+	// 如果GetValidators失败，尝试GetDelegates方法
+	if getDelegatesMethod := reflect.ValueOf(dposEngine).MethodByName("GetDelegates"); getDelegatesMethod.IsValid() {
+		d.logger.Info("✅ 找到GetDelegates方法，正在调用...")
+		
+		// 获取当前区块号
+		currentBlockNumber := uint64(0)
+		
+		// 尝试通过DPoS引擎获取当前区块号
+		if getCurrentHeaderMethod := reflect.ValueOf(dposEngine).MethodByName("GetCurrentHeader"); getCurrentHeaderMethod.IsValid() {
+			d.logger.Info("✅ 通过GetCurrentHeader获取当前区块号...")
+			headerResults := getCurrentHeaderMethod.Call([]reflect.Value{})
+			if len(headerResults) > 0 && !headerResults[0].IsNil() {
+				if header, ok := headerResults[0].Interface().(*types.Header); ok {
+					currentBlockNumber = header.Number
+					d.logger.Info("✅ 获取到当前区块号", "blockNumber", currentBlockNumber)
+				}
+			}
+		}
+		
+		// 如果无法获取当前区块号，尝试通过store获取
+		if currentBlockNumber == 0 {
+			d.logger.Info("⚠️ 无法通过DPoS引擎获取当前区块号，尝试通过store获取...")
+			// 这里可以添加通过store获取当前区块号的逻辑
+			// 暂时使用一个较大的区块号作为备用
+			currentBlockNumber = uint64(10000)
+			d.logger.Info("⚠️ 使用备用区块号", "blockNumber", currentBlockNumber)
+		}
+		
+		// GetDelegates需要两个参数：blockNumber uint64 和 parents []*types.Header
+		blockNumberValue := reflect.ValueOf(currentBlockNumber)
+		parentsValue := reflect.ValueOf([]*types.Header(nil))
+		
+		results := getDelegatesMethod.Call([]reflect.Value{blockNumberValue, parentsValue})
+		if len(results) >= 2 {
+			if err, ok := results[1].Interface().(error); ok && err != nil {
+				d.logger.Error("GetDelegates method returned error", "error", err)
+			} else if delegates, ok := results[0].Interface().(validator.AccountSet); ok {
+				return d.convertDelegatesToStakeInfo(delegates, "DPoS引擎GetDelegates")
+			}
+		}
+	}
+	
+	
+	// 如果无法获取，返回空结果
+	d.logger.Info("No database delegates info available, returning empty result")
+	return []*dpos.StakeInfo{}
+}
+
+// convertDelegatesToStakeInfo 将受托人信息转换为StakeInfo
+func (d *DPOS) convertDelegatesToStakeInfo(delegates validator.AccountSet, source string) []*dpos.StakeInfo {
+	d.logger.Info("✅ 从"+source+"获取到受托人信息", "delegateCount", len(delegates))
+	
+	// 为每个受托人创建stake info
+	var dynamicStakes []*dpos.StakeInfo
+	for _, delegate := range delegates {
+		if delegate.VotingPower != nil && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
+			stake := &dpos.StakeInfo{
+				Staker:    delegate.Address,        // 受托人地址（自己给自己投票）
+				Amount:    delegate.VotingPower,     // 投票权重
+				StartTime: uint64(time.Now().Unix()), // 当前时间
+				EndTime:   0,                        // 无锁定时间
+				IsLocked:  false,                    // 未锁定
+				IsActive:  delegate.IsActive,        // 是否活跃
+				Delegate:  delegate.Address,         // 受托人地址
+				Rewards:   big.NewInt(0),            // 奖励为0
+			}
+			dynamicStakes = append(dynamicStakes, stake)
+
+			d.logger.Info("✅ 从"+source+"提取受托人信息",
+				"delegate", delegate.Address.String(),
+				"votingPower", delegate.VotingPower.String(),
+				"isActive", delegate.IsActive)
+		}
+	}
+	
+	d.logger.Info("✅ 从"+source+"获取的动态投票信息", "count", len(dynamicStakes))
+	return dynamicStakes
 }
 
 // getDynamicVotingInfo retrieves current voting information from the consensus engine
