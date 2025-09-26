@@ -723,6 +723,9 @@ type jsonRPCHub struct {
 	consensus.Consensus
 	consensus.BridgeDataProvider
 	gasprice.GasStore
+	
+	// 🆕 新增：Server引用，用于访问DPoS引擎
+	server *Server
 }
 
 func (j *jsonRPCHub) GetPeers() int {
@@ -1007,6 +1010,7 @@ func (s *Server) setupJSONRPC() error {
 		Server:             s.network,
 		BridgeDataProvider: s.consensus.GetBridgeProvider(),
 		GasStore:           s.gasHelper,
+		server:             s, // 🆕 新增：Server引用
 	}
 
 	conf := &jsonrpc.Config{
@@ -1173,6 +1177,19 @@ func (s *Server) createDPoSEngine() (consensus.Consensus, error) {
 	}
 	
 	return dposEngine, nil
+}
+
+// GetDPoSEngine returns the DPoS engine instance
+func (s *Server) GetDPoSEngine() interface{} {
+	return s.dposEngine
+}
+
+// GetDPoSEngine returns the DPoS engine instance from jsonRPCHub
+func (j *jsonRPCHub) GetDPoSEngine() interface{} {
+	if j.server != nil {
+		return j.server.GetDPoSEngine()
+	}
+	return nil
 }
 
 func initForkManager(engineName string, config *chain.Chain) error {

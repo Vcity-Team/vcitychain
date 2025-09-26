@@ -804,78 +804,31 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		GetConsensus() interface{}
 	}); ok {
 		d.logger.Info("Store has GetConsensus method, attempting to get consensus engine...")
-		consensusEngine := consensusStore.GetConsensus()
+		
+		// 🆕 新增：直接获取DPoS引擎
+		consensusEngine := d.getDPoSEngineDirectly(consensusStore)
 
 		if consensusEngine == nil {
 			d.logger.Warn("Consensus engine is nil")
 		} else {
 			d.logger.Info("Consensus engine type", "type", fmt.Sprintf("%T", consensusEngine))
 
-			// Try to get DPoS consensus engine with proper type assertion (commented out to avoid duplicate processing)
-			// var dposEngine interface {
-			// 	AddVote(voter types.Address, candidate types.Address, amount *big.Int) error
-			// }
-
-			// 🆕 修复：移除立即调用AddVote的逻辑，避免重复计算
-			// 投票数据将在区块广播接收后统一处理，确保只计算一次
-			d.logger.Debug("🔄 投票交易已加入交易池，等待打包进区块后统一处理")
-			d.logger.Debug("📋 投票数据将在区块广播接收后计算，避免重复处理")
-
-			// 注释掉所有立即调用AddVote的代码，避免重复计算
-			/*
-				if dposEngine, ok = consensusEngine.(interface {
-					AddVote(voter types.Address, candidate types.Address, amount *big.Int) error
-				}); ok {
-					d.logger.Info("Consensus engine has AddVote method, attempting to update DPoS state...")
-					if err := dposEngine.AddVote(voterAddr, candidateAddr, amountInt); err != nil {
-						d.logger.Error("Failed to update DPoS state", "error", err)
-						// Continue anyway, the transaction is in the pool
-					} else {
-						d.logger.Info("DPoS state updated successfully")
-						dposStateUpdated = true
-					}
+			// 🆕 现在DPoS引擎获取成功，启用状态更新逻辑
+			// 尝试调用DPoS引擎的AddVote方法
+			if dposEngine, ok := consensusEngine.(interface {
+				AddVote(voter types.Address, candidate types.Address, amount *big.Int) error
+			}); ok {
+				d.logger.Info("✅ DPoS引擎有AddVote方法，尝试更新DPoS状态...")
+				if err := dposEngine.AddVote(voterAddr, candidateAddr, amountInt); err != nil {
+					d.logger.Error("❌ 更新DPoS状态失败", "error", err)
+					// 继续执行，交易已在池中
 				} else {
-					// 直接进入else分支，尝试其他方法
-					d.logger.Info("Trying to access embedded Consensus field...")
-					if hub, ok := d.store.(interface {
-						GetConsensus() interface{}
-					}); ok {
-						consensusEngine := hub.GetConsensus()
-						d.logger.Info("Got consensus engine through hub", "type", fmt.Sprintf("%T", consensusEngine))
-
-						// Try to cast to DPoS engine
-						if dposEngine, ok = consensusEngine.(interface {
-							AddVote(voter types.Address, candidate types.Address, amount *big.Int) error
-						}); ok {
-							d.logger.Info("Consensus engine has AddVote method, attempting to update DPoS state...")
-							if err := dposEngine.AddVote(voterAddr, candidateAddr, amountInt); err != nil {
-								d.logger.Error("Failed to update DPoS state", "error", err)
-							} else {
-								d.logger.Info("DPoS state updated successfully")
-								dposStateUpdated = true
-							}
-						} else {
-							d.logger.Warn("Consensus engine does NOT have AddVote method")
-						}
-					} else {
-						d.logger.Warn("Store does NOT have GetConsensus() consensus.Consensus method")
-					}
-
-					d.logger.Warn("Available methods on consensus engine:")
-
-					// List available methods
-					consensusValue := reflect.ValueOf(consensusEngine)
-					if consensusValue.Kind() == reflect.Ptr {
-						consensusValue = consensusValue.Elem()
-					}
-
-					consensusType := consensusValue.Type()
-					for i := 0; i < consensusType.NumMethod(); i++ {
-						method := consensusType.Method(i)
-						d.logger.Warn("Available method", "name", method.Name, "type", method.Type.String())
-					}
+					d.logger.Info("✅ DPoS状态更新成功")
+					dposStateUpdated = true
 				}
-			*/
+			} else {
+				d.logger.Warn("⚠️ DPoS引擎没有AddVote方法")
+			}
 		}
 	} else {
 		d.logger.Warn("Store does NOT have GetConsensus method")
@@ -1565,9 +1518,9 @@ func (d *DPOS) GetVotingStakingInfo(ctx context.Context, params interface{}) (in
 	}
 	d.logger.Info("Store staking info retrieved", "count", len(stakingInfo))
 
-	// Get dynamic voting information from consensus engine
-	d.logger.Info("Getting dynamic voting info from consensus engine...")
-	dynamicVotingInfo := d.getDynamicVotingInfo()
+	// Get dynamic voting information from consensus engine using the same method as vote command
+	d.logger.Info("Getting dynamic voting info from consensus engine using getDPoSEngineDirectly...")
+	dynamicVotingInfo := d.getDynamicVotingInfoFromDPoSEngine()
 	d.logger.Info("Dynamic voting info retrieved", "count", len(dynamicVotingInfo))
 
 	// 🆕 修复：确保创世配置中的初始验证者质押信息被包含
@@ -2154,6 +2107,69 @@ func (d *DPOS) broadcastTransaction(tx *types.Transaction) error {
 	return fmt.Errorf("no network broadcast method available")
 }
 
+// getDynamicVotingInfoFromDPoSEngine retrieves current voting information using the same method as vote command
+func (d *DPOS) getDynamicVotingInfoFromDPoSEngine() []*dpos.StakeInfo {
+	d.logger.Info("Getting dynamic voting info using getDPoSEngineDirectly method...")
+
+	// Use the same method as vote command to get DPoS engine
+	if consensusStore, ok := d.store.(interface {
+		GetConsensus() interface{}
+	}); ok {
+		dposEngine := d.getDPoSEngineDirectly(consensusStore)
+		if dposEngine != nil {
+			d.logger.Info("✅ Successfully got DPoS engine using getDPoSEngineDirectly", "type", fmt.Sprintf("%T", dposEngine))
+			
+			// Try to get voters information directly from DPoS engine
+			if voterEngine, ok := dposEngine.(interface {
+				GetVoters() map[types.Address]*dpos.VoterInfo
+			}); ok {
+				d.logger.Info("DPoS engine supports GetVoters method, calling it...")
+				voters := voterEngine.GetVoters()
+				d.logger.Info("GetVoters() method returned", "voterCount", len(voters))
+
+				// Process voters data
+				var dynamicStakes []*dpos.StakeInfo
+				for voterAddr, voterInfo := range voters {
+					if voterInfo.VotingPower != nil && voterInfo.VotingPower.Cmp(big.NewInt(0)) > 0 {
+						// For each voted delegate, create a stake info
+						for _, delegateAddr := range voterInfo.VotedDelegates {
+							stake := &dpos.StakeInfo{
+								Staker:    voterAddr,             // 投票者地址
+								Amount:    voterInfo.VotingPower, // 投票权重
+								StartTime: voterInfo.LastVoteTime,
+								EndTime:   voterInfo.LockedUntil,
+								IsLocked:  voterInfo.LockedUntil > uint64(time.Now().Unix()),
+								IsActive:  true,
+								Delegate:  delegateAddr, // 受托人地址
+								Rewards:   big.NewInt(0),
+							}
+							dynamicStakes = append(dynamicStakes, stake)
+
+							d.logger.Info("✅ Extracted vote from DPoS engine",
+								"voter", voterAddr.String(),
+								"delegate", delegateAddr.String(),
+								"amount", voterInfo.VotingPower.String())
+						}
+					}
+				}
+				
+				d.logger.Info("Dynamic voting info extracted from DPoS engine", "count", len(dynamicStakes))
+				return dynamicStakes
+			} else {
+				d.logger.Warn("DPoS engine does not support GetVoters method")
+			}
+		} else {
+			d.logger.Warn("Failed to get DPoS engine using getDPoSEngineDirectly")
+		}
+	} else {
+		d.logger.Warn("Store does not support GetConsensus method")
+	}
+
+	// Fallback to empty result
+	d.logger.Info("No dynamic voting info available, returning empty result")
+	return []*dpos.StakeInfo{}
+}
+
 // getDynamicVotingInfo retrieves current voting information from the consensus engine
 func (d *DPOS) getDynamicVotingInfo() []*dpos.StakeInfo {
 	d.logger.Info("Getting dynamic voting info from consensus engine...")
@@ -2591,4 +2607,321 @@ func (d *DPOS) sortVotingDetailsByTotalVotes(votingDetails []map[string]interfac
 
 	d.logger.Info("Voting details sorted by total votes", "count", len(sorted))
 	return sorted
+}
+
+// getConsensusEngineByHeight 根据当前区块高度判断选择正确的共识引擎
+func (d *DPOS) getConsensusEngineByHeight(consensusStore interface {
+	GetConsensus() interface{}
+}, currentHeight uint64) interface{} {
+	d.logger.Debug("Current block height", "height", currentHeight)
+	
+	// 获取共识切换高度配置
+	consensusSwitchHeight := d.getConsensusSwitchHeight()
+	d.logger.Debug("Consensus switch height", "switchHeight", consensusSwitchHeight)
+	
+	// 如果当前高度 >= 切换高度，尝试获取DPoS引擎
+	if consensusSwitchHeight > 0 && currentHeight >= consensusSwitchHeight {
+		d.logger.Info("🔄 当前高度已达到DPoS切换高度，尝试获取DPoS引擎", 
+			"currentHeight", currentHeight, 
+			"switchHeight", consensusSwitchHeight)
+		
+		// 尝试获取DPoS引擎
+		if dposEngine := d.getDPoSEngine(); dposEngine != nil {
+			d.logger.Info("✅ 成功获取DPoS引擎")
+			return dposEngine
+		}
+		
+		d.logger.Warn("⚠️ 无法获取DPoS引擎，使用默认共识引擎")
+	}
+	
+	// 否则使用默认共识引擎
+	d.logger.Debug("使用默认共识引擎", "height", currentHeight)
+	return consensusStore.GetConsensus()
+}
+
+// getConsensusSwitchHeight 获取共识切换高度配置
+func (d *DPOS) getConsensusSwitchHeight() uint64 {
+	// 尝试从共识引擎中获取配置
+	if consensusStore, ok := d.store.(interface {
+		GetConsensus() interface{}
+	}); ok {
+		consensusEngine := consensusStore.GetConsensus()
+		d.logger.Debug("获取到共识引擎", "type", fmt.Sprintf("%T", consensusEngine))
+		
+		// 尝试从IBFT引擎中获取配置
+		if ibftEngine, ok := consensusEngine.(interface {
+			GetConsensusSwitchHeight() uint64
+		}); ok {
+			height := ibftEngine.GetConsensusSwitchHeight()
+			d.logger.Debug("从IBFT引擎获取共识切换高度", "height", height)
+			return height
+		}
+		
+		// 尝试从DPoS引擎中获取配置
+		if dposEngine, ok := consensusEngine.(interface {
+			GetConsensusSwitchHeight() uint64
+		}); ok {
+			height := dposEngine.GetConsensusSwitchHeight()
+			d.logger.Debug("从DPoS引擎获取共识切换高度", "height", height)
+			return height
+		}
+		
+		// 尝试通过反射获取配置
+		d.logger.Debug("尝试通过反射获取共识切换高度配置")
+		if height := d.getConsensusSwitchHeightByReflection(consensusEngine); height > 0 {
+			d.logger.Debug("通过反射获取共识切换高度", "height", height)
+			return height
+		}
+	}
+	
+	// 如果无法获取，返回0（表示不进行切换）
+	d.logger.Warn("无法获取共识切换高度配置，使用默认值0")
+	return 0
+}
+
+// getConsensusSwitchHeightByReflection 通过反射获取共识切换高度
+func (d *DPOS) getConsensusSwitchHeightByReflection(consensusEngine interface{}) uint64 {
+	// 使用反射查找GetConsensusSwitchHeight方法
+	consensusValue := reflect.ValueOf(consensusEngine)
+	if consensusValue.Kind() == reflect.Ptr {
+		consensusValue = consensusValue.Elem()
+	}
+	
+	consensusType := consensusValue.Type()
+	for i := 0; i < consensusType.NumMethod(); i++ {
+		method := consensusType.Method(i)
+		if method.Name == "GetConsensusSwitchHeight" {
+			d.logger.Debug("找到GetConsensusSwitchHeight方法")
+			// 调用方法
+			results := consensusValue.Method(i).Call([]reflect.Value{})
+			if len(results) > 0 && results[0].Kind() == reflect.Uint64 {
+				height := results[0].Uint()
+				d.logger.Debug("通过反射获取共识切换高度", "height", height)
+				return height
+			}
+		}
+	}
+	
+	d.logger.Debug("未找到GetConsensusSwitchHeight方法")
+	return 0
+}
+
+// getDPoSEngine 获取DPoS引擎
+func (d *DPOS) getDPoSEngine() interface{} {
+	// 尝试从store中获取DPoS引擎
+	if dposStore, ok := d.store.(interface {
+		GetDPoSEngine() interface{}
+	}); ok {
+		dposEngine := dposStore.GetDPoSEngine()
+		if dposEngine != nil {
+			d.logger.Debug("从store获取DPoS引擎成功")
+			return dposEngine
+		}
+	}
+	
+	// 尝试从共识引擎中获取DPoS引擎
+	if consensusStore, ok := d.store.(interface {
+		GetConsensus() interface{}
+	}); ok {
+		consensusEngine := consensusStore.GetConsensus()
+		
+		// 尝试从IBFT引擎中获取DPoS引擎
+		if ibftEngine, ok := consensusEngine.(interface {
+			GetDPoSEngine() interface{}
+		}); ok {
+			dposEngine := ibftEngine.GetDPoSEngine()
+			if dposEngine != nil {
+				d.logger.Debug("从IBFT引擎获取DPoS引擎成功")
+				return dposEngine
+			}
+		}
+	}
+	
+	d.logger.Warn("无法获取DPoS引擎")
+	return nil
+}
+
+// getCurrentBlockHeight 获取当前区块高度
+func (d *DPOS) getCurrentBlockHeight() uint64 {
+	// 尝试从ethBlockchainStore获取区块高度
+	if blockchainStore, ok := d.store.(interface {
+		Header() *types.Header
+	}); ok {
+		header := blockchainStore.Header()
+		if header != nil {
+			d.logger.Debug("从ethBlockchainStore.Header()方法获取区块高度", "height", header.Number)
+			return header.Number
+		}
+	}
+	
+	// 尝试从GetLatestHeader方法获取
+	if headerStore, ok := d.store.(interface {
+		GetLatestHeader() *types.Header
+	}); ok {
+		header := headerStore.GetLatestHeader()
+		if header != nil {
+			d.logger.Debug("从GetLatestHeader()方法获取区块高度", "height", header.Number)
+			return header.Number
+		}
+	}
+	
+	// 尝试从GetLatestBlock方法获取
+	if blockStore, ok := d.store.(interface {
+		GetLatestBlock() *types.Block
+	}); ok {
+		block := blockStore.GetLatestBlock()
+		if block != nil {
+			d.logger.Debug("从GetLatestBlock()方法获取区块高度", "height", block.Header.Number)
+			return block.Header.Number
+		}
+	}
+	
+	// 如果无法获取，返回0
+	d.logger.Warn("无法获取当前区块高度，返回0")
+	return 0
+}
+
+// getCurrentBlockHeightFromExternal 从外部获取当前区块高度
+func (d *DPOS) getCurrentBlockHeightFromExternal() uint64 {
+	// 方法1: 尝试从共识引擎中获取当前高度
+	if consensusStore, ok := d.store.(interface {
+		GetConsensus() interface{}
+	}); ok {
+		consensusEngine := consensusStore.GetConsensus()
+		
+		// 尝试从IBFT引擎中获取当前高度
+		if ibftEngine, ok := consensusEngine.(interface {
+			GetCurrentHeight() uint64
+		}); ok {
+			height := ibftEngine.GetCurrentHeight()
+			d.logger.Debug("从IBFT引擎获取当前高度", "height", height)
+			return height
+		}
+		
+		// 尝试从DPoS引擎中获取当前高度
+		if dposEngine, ok := consensusEngine.(interface {
+			GetCurrentHeight() uint64
+		}); ok {
+			height := dposEngine.GetCurrentHeight()
+			d.logger.Debug("从DPoS引擎获取当前高度", "height", height)
+			return height
+		}
+		
+		// 尝试通过反射获取当前高度
+		if height := d.getCurrentHeightByReflection(consensusEngine); height > 0 {
+			d.logger.Debug("通过反射获取当前高度", "height", height)
+			return height
+		}
+	}
+	
+	// 方法2: 尝试从区块链中获取
+	if height := d.getCurrentBlockHeight(); height > 0 {
+		return height
+	}
+	
+	// 方法3: 如果无法获取，返回0（表示无法确定高度）
+	d.logger.Warn("无法获取当前区块高度，返回0")
+	return 0
+}
+
+// getCurrentHeightByReflection 通过反射获取当前高度
+func (d *DPOS) getCurrentHeightByReflection(consensusEngine interface{}) uint64 {
+	// 使用反射查找GetCurrentHeight方法
+	consensusValue := reflect.ValueOf(consensusEngine)
+	if consensusValue.Kind() == reflect.Ptr {
+		consensusValue = consensusValue.Elem()
+	}
+	
+	consensusType := consensusValue.Type()
+	for i := 0; i < consensusType.NumMethod(); i++ {
+		method := consensusType.Method(i)
+		if method.Name == "GetCurrentHeight" {
+			d.logger.Debug("找到GetCurrentHeight方法")
+			// 调用方法
+			results := consensusValue.Method(i).Call([]reflect.Value{})
+			if len(results) > 0 && results[0].Kind() == reflect.Uint64 {
+				height := results[0].Uint()
+				d.logger.Debug("通过反射获取当前高度", "height", height)
+				return height
+			}
+		}
+	}
+	
+	d.logger.Debug("未找到GetCurrentHeight方法")
+	return 0
+}
+
+// getDPoSEngineDirectly 直接获取DPoS引擎
+func (d *DPOS) getDPoSEngineDirectly(consensusStore interface {
+	GetConsensus() interface{}
+}) interface{} {
+	d.logger.Info("🔄 直接尝试获取DPoS引擎")
+	
+	// 方法1: 尝试从store中获取DPoS引擎
+	if dposStore, ok := d.store.(interface {
+		GetDPoSEngine() interface{}
+	}); ok {
+		dposEngine := dposStore.GetDPoSEngine()
+		if dposEngine != nil {
+			d.logger.Info("✅ 从store获取DPoS引擎成功")
+			return dposEngine
+		}
+	}
+	
+	// 方法2: 尝试从共识引擎中获取DPoS引擎
+	consensusEngine := consensusStore.GetConsensus()
+	if consensusEngine == nil {
+		d.logger.Warn("共识引擎为nil")
+		return nil
+	}
+	
+	d.logger.Debug("获取到共识引擎", "type", fmt.Sprintf("%T", consensusEngine))
+	
+	// 尝试从IBFT引擎中获取DPoS引擎
+	if ibftEngine, ok := consensusEngine.(interface {
+		GetDPoSEngine() interface{}
+	}); ok {
+		dposEngine := ibftEngine.GetDPoSEngine()
+		if dposEngine != nil {
+			d.logger.Info("✅ 从IBFT引擎获取DPoS引擎成功")
+			return dposEngine
+		}
+	}
+	
+	// 方法3: 尝试通过反射获取DPoS引擎
+	if dposEngine := d.getDPoSEngineByReflection(consensusEngine); dposEngine != nil {
+		d.logger.Info("✅ 通过反射获取DPoS引擎成功")
+		return dposEngine
+	}
+	
+	// 方法4: 如果无法获取DPoS引擎，返回默认共识引擎
+	d.logger.Warn("⚠️ 无法获取DPoS引擎，使用默认共识引擎")
+	return consensusEngine
+}
+
+// getDPoSEngineByReflection 通过反射获取DPoS引擎
+func (d *DPOS) getDPoSEngineByReflection(consensusEngine interface{}) interface{} {
+	// 使用反射查找GetDPoSEngine方法
+	consensusValue := reflect.ValueOf(consensusEngine)
+	if consensusValue.Kind() == reflect.Ptr {
+		consensusValue = consensusValue.Elem()
+	}
+	
+	consensusType := consensusValue.Type()
+	for i := 0; i < consensusType.NumMethod(); i++ {
+		method := consensusType.Method(i)
+		if method.Name == "GetDPoSEngine" {
+			d.logger.Debug("找到GetDPoSEngine方法")
+			// 调用方法
+			results := consensusValue.Method(i).Call([]reflect.Value{})
+			if len(results) > 0 && !results[0].IsNil() {
+				dposEngine := results[0].Interface()
+				d.logger.Debug("通过反射获取DPoS引擎", "type", fmt.Sprintf("%T", dposEngine))
+				return dposEngine
+			}
+		}
+	}
+	
+	d.logger.Debug("未找到GetDPoSEngine方法")
+	return nil
 }

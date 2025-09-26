@@ -87,6 +87,7 @@ type runtimeConfig struct {
 	// DPoS specific configuration
 	DelegateCount    uint64
 	InitialDelegates []*validator.GenesisValidator
+	ValidatorsCount  uint64  // 🆕 新增：DPoS验证者数量配置
 }
 
 // consensusRuntime is a struct that provides consensus runtime features like epoch, state and event management

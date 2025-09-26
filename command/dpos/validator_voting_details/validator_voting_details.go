@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/umbracle/ethgo/jsonrpc"
 
 	"github.com/Vcity-Team/vcitychain/command"
 	"github.com/Vcity-Team/vcitychain/command/helper"
@@ -149,29 +148,7 @@ func runCommand(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-// callValidatorVotingDetailsRPCMethod calls the dpos_getValidatorVotingDetails RPC method
-func callValidatorVotingDetailsRPCMethod(client *jsonrpc.Client, validatorAddr string) (*ValidatorVotingDetailsResult, error) {
-	var result interface{}
 
-	// Try to call the method using the client's Call method
-	err := client.Call("dpos_getValidatorVotingDetails", []interface{}{validatorAddr}, &result)
-	if err != nil {
-		// If the client.Call fails, try direct HTTP request as fallback
-		fallbackResult, fallbackErr := callValidatorVotingDetailsRPCMethodHTTP("dpos_getValidatorVotingDetails", []interface{}{validatorAddr})
-		if fallbackErr != nil {
-			return nil, fmt.Errorf("RPC method dpos_getValidatorVotingDetails failed: %w (fallback also failed: %v)", err, fallbackErr)
-		}
-		return fallbackResult, nil
-	}
-
-	// Parse the result
-	return parseValidatorVotingDetailsResult(result)
-}
-
-// callValidatorVotingDetailsRPCMethodHTTP makes a direct HTTP request to bypass potential umbracle library issues
-func callValidatorVotingDetailsRPCMethodHTTP(method string, methodParams []interface{}) (*ValidatorVotingDetailsResult, error) {
-	return callValidatorVotingDetailsRPCMethodHTTPWithAddress(method, methodParams, "http://localhost:8545")
-}
 
 // callValidatorVotingDetailsRPCMethodHTTPWithAddress makes a direct HTTP request with specified JSON-RPC address
 func callValidatorVotingDetailsRPCMethodHTTPWithAddress(method string, methodParams []interface{}, jsonRPC string) (*ValidatorVotingDetailsResult, error) {

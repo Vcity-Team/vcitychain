@@ -814,6 +814,17 @@ func (a *dposStoreAdapter) GetBlockByHash(hash types.Hash, full bool) (*types.Bl
 	return nil, false
 }
 
+// GetDPoSEngine gets the DPoS engine from the underlying store
+func (a *dposStoreAdapter) GetDPoSEngine() interface{} {
+	// Try to access GetDPoSEngine through the underlying store
+	if dposStore, ok := a.store.(interface {
+		GetDPoSEngine() interface{}
+	}); ok {
+		return dposStore.GetDPoSEngine()
+	}
+	return nil
+}
+
 func (a *dposStoreAdapter) GetDPoSState() (*consensusdpos.State, error) {
 	// Try to get DPoS state from the consensus engine
 	// This should connect to the actual DPoS consensus mechanism

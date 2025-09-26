@@ -350,6 +350,11 @@ func callVoteRPCMethod(client *jsonrpc.Client, method string, methodParams []int
 
 // callVoteRPCMethodHTTP makes a direct HTTP request to bypass potential umbracle library issues
 func callVoteRPCMethodHTTP(method string, methodParams []interface{}) (*VoteResult, error) {
+	return callVoteRPCMethodHTTPWithAddress(method, methodParams, params.jsonRPC)
+}
+
+// callVoteRPCMethodHTTPWithAddress makes a direct HTTP request with specified JSON-RPC address
+func callVoteRPCMethodHTTPWithAddress(method string, methodParams []interface{}, jsonRPC string) (*VoteResult, error) {
 	// Construct JSON-RPC request manually
 	request := map[string]interface{}{
 		"jsonrpc": "2.0",
@@ -365,7 +370,7 @@ func callVoteRPCMethodHTTP(method string, methodParams []interface{}) (*VoteResu
 	}
 
 	// Make HTTP request
-	resp, err := http.Post("http://localhost:8545", "application/json", bytes.NewReader(requestJSON))
+	resp, err := http.Post(jsonRPC, "application/json", bytes.NewReader(requestJSON))
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}

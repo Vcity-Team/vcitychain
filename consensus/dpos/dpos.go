@@ -166,6 +166,9 @@ type DPoSConfig struct {
 
 	// 🆕 新增：共识切换高度
 	ConsensusSwitchHeight uint64 `json:"consensusSwitchHeight"`
+
+	// 🆕 新增：DPoS验证者数量配置
+	ValidatorsCount uint64 `json:"validatorsCount" yaml:"validatorsCount"`
 }
 
 // dpos_runtime.go
@@ -219,6 +222,9 @@ type dposRuntime struct {
 	// 签名响应生成去重机制 - 避免日志刷屏
 	processedSignatureGenerations map[string]time.Time
 	signatureGenerationDedupMutex sync.RWMutex
+
+	// 🆕 缓存第一次成功获取的4个验证者，确保整个区块生产过程中使用相同的验证者集合
+	cachedProductionValidators validator.AccountSet
 
 	// 私钥缓存 - 避免重复文件读取
 	blsPrivateKeyCache      *bls.PrivateKey
@@ -1920,6 +1926,10 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		return nil, fmt.Errorf("failed to get validators for production: %w", err)
 	}
 	
+	// 🆕 缓存第一次成功获取的验证者集合，确保整个区块生产过程中使用相同的验证者
+	r.cachedProductionValidators = productionValidators.Copy()
+	r.logger.Debug("💾 已缓存生产时验证者集合", "validatorsCount", len(productionValidators))
+	
 	r.logger.Debug("🔍 生产时开始计算验证者哈希", "validatorsCount", len(productionValidators))
 	currentValidatorsHash, err := productionValidators.HashAddressOnly()
 	if err != nil {
@@ -2117,23 +2127,26 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			}
 		}
 
-		// 🆕 关键修复：使用与验证时完全相同的参数调用
-		// 验证时：GetDelegates(blockNumber-1, parents)
-		// 生产时：GetDelegates(blockNumber-1, parents)
-		currentValidators, err := r.config.dposBackend.GetDelegates(block.Block.Number()-1, parents)
-		if err != nil {
-			r.logger.Error("❌ 无法获取当前验证者集合", "blockNumber", block.Block.Number(), "error", err)
-			return nil, fmt.Errorf("failed to get current validators for block %d: %w", block.Block.Number(), err)
+		// 🆕 关键修复：使用缓存的验证者集合，确保与第一次获取完全一致
+		var productionValidators validator.AccountSet
+		if r.cachedProductionValidators != nil && len(r.cachedProductionValidators) > 0 {
+			// 使用缓存的4个验证者
+			productionValidators = r.cachedProductionValidators.Copy()
+			r.logger.Debug("💾 使用缓存的验证者集合", "validatorsCount", len(productionValidators))
+		} else {
+			// 如果缓存为空，则重新获取（备用方案）
+			r.logger.Warn("⚠️ 缓存为空，重新获取验证者集合")
+			var err error
+			productionValidators, err = r.getValidatorsFromExtraDataForProduction(block.Block.Header, parents)
+			if err != nil {
+				r.logger.Error("❌ 无法获取当前验证者集合", "blockNumber", block.Block.Number(), "error", err)
+				return nil, fmt.Errorf("failed to get current validators for block %d: %w", block.Block.Number(), err)
+			}
+			if productionValidators == nil || len(productionValidators) == 0 {
+				r.logger.Error("❌ 当前验证者集合为空", "blockNumber", block.Block.Number())
+				return nil, fmt.Errorf("current validators set is empty for block %d", block.Block.Number())
+			}
 		}
-		if currentValidators == nil || len(currentValidators) == 0 {
-			r.logger.Error("❌ 当前验证者集合为空", "blockNumber", block.Block.Number())
-			return nil, fmt.Errorf("current validators set is empty for block %d", block.Block.Number())
-		}
-
-		// 🆕 关键修复：使用与验证时完全相同的验证者集合
-		// 验证时使用：GetDelegates(blockNumber-1, parents)
-		// 生产时使用：GetDelegates(blockNumber-1, parents) - 现在参数完全一致
-		productionValidators := currentValidators
 
 		// 🆕 关键修复：实时同步r.delegates为productionValidators
 		// 确保位图索引和保存的验证者集合完全匹配
@@ -2173,7 +2186,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 		r.logger.Debug("🔍 生产时验证者集合信息",
 			"blockNumber", block.Block.Number(),
-			"totalValidators", len(currentValidators),
+			"totalValidators", len(productionValidators),
 			"delegatesCount", len(r.delegates))
 
 		// 创建位图索引到签名的映射
@@ -2361,6 +2374,10 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"extraDataLength", len(block.Block.Header.ExtraData),
 			"newBlockHash", block.Block.Header.Hash.String())
 	}
+
+	// 🆕 清理缓存，为下一个区块做准备
+	r.cachedProductionValidators = nil
+	r.logger.Debug("🧹 已清理验证者缓存，为下一个区块做准备")
 
 	return block, nil
 }
@@ -6878,27 +6895,28 @@ func (r *dposRuntime) performNetworkHealthCheck() {
 
 // calculateMinRequiredSignatures 计算最少需要的签名数量
 func (r *dposRuntime) calculateMinRequiredSignatures() int {
-	// 🆕 打印调试信息：确认受托人数量
-	// r.logger.Info("🧮 计算法定人数", "totalDelegates", len(r.delegates))
-	// for i, delegate := range r.delegates {
-	// 	r.logger.Info("📋 参与计算的受托人", "index", i, "address", delegate.Address.String(), "votingPower", delegate.VotingPower.String(), "isActive", delegate.IsActive)
-	// }
-
-	// 计算真正活跃的验证者数量（有足够stake且IsActive=true）
-	activeValidators := 0
-	for _, delegate := range r.delegates {
-		if delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
-			activeValidators++
-		}
+	// 🆕 使用配置的验证者数量而不是实际活跃验证者数量
+	validatorsCount := r.config.ValidatorsCount
+	if validatorsCount == 0 {
+		// 如果配置中没有设置，使用默认值4
+		validatorsCount = 4
+		r.logger.Warn("⚠️ 配置中未设置ValidatorsCount，使用默认值4")
 	}
 
-	// 使用2/3多数原则，向上取整，但至少需要1个签名
-	minRequired := (activeValidators*2 + 2) / 3 // 向上取整
+	r.logger.Info("🧮 计算法定人数", 
+		"configuredValidatorsCount", validatorsCount,
+		"totalDelegates", len(r.delegates))
+
+	// 使用2/3多数原则，基于配置的验证者数量计算门槛
+	minRequired := (int(validatorsCount)*2 + 2) / 3 // 向上取整
 	if minRequired < 1 {
 		minRequired = 1
 	}
 
-	// 现在包括提议者自己，所以不需要减1
+	r.logger.Info("✅ 门槛计算完成", 
+		"validatorsCount", validatorsCount,
+		"minRequiredSignatures", minRequired)
+
 	return minRequired
 }
 

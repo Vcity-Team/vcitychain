@@ -9,7 +9,6 @@ import (
 	"net/http"
 
 	"github.com/spf13/cobra"
-	"github.com/umbracle/ethgo/jsonrpc"
 
 	"github.com/Vcity-Team/vcitychain/command"
 	"github.com/Vcity-Team/vcitychain/command/helper"
@@ -285,29 +284,7 @@ func runCommand(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-// callVotingStakingInfoRPCMethod calls the dpos_getVotingStakingInfo RPC method
-func callVotingStakingInfoRPCMethod(client *jsonrpc.Client) (*VotingStakingInfoResult, error) {
-	var result interface{}
 
-	// Try to call the method using the client's Call method
-	err := client.Call("dpos_getVotingStakingInfo", []interface{}{}, &result)
-	if err != nil {
-		// If the client.Call fails, try direct HTTP request as fallback
-		fallbackResult, fallbackErr := callVotingStakingInfoRPCMethodHTTP("dpos_getVotingStakingInfo", []interface{}{})
-		if fallbackErr != nil {
-			return nil, fmt.Errorf("RPC method dpos_getVotingStakingInfo failed: %w (fallback also failed: %v)", err, fallbackErr)
-		}
-		return fallbackResult, nil
-	}
-
-	// Parse the result
-	return parseVotingStakingInfoResult(result)
-}
-
-// callVotingStakingInfoRPCMethodHTTP makes a direct HTTP request to bypass potential umbracle library issues
-func callVotingStakingInfoRPCMethodHTTP(method string, methodParams []interface{}) (*VotingStakingInfoResult, error) {
-	return callVotingStakingInfoRPCMethodHTTPWithAddress(method, methodParams, "http://localhost:8545")
-}
 
 // callVotingStakingInfoRPCMethodHTTPWithAddress makes a direct HTTP request with specified JSON-RPC address
 func callVotingStakingInfoRPCMethodHTTPWithAddress(method string, methodParams []interface{}, jsonRPC string) (*VotingStakingInfoResult, error) {
