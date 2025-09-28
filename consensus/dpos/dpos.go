@@ -1871,16 +1871,24 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				r.logger.Debug("当前区块状态", "blockNumber", currentHeader.Number, "stateRoot", currentHeader.StateRoot.String())
 			}
 
-			for i, tx := range promotedTxs {
+		for i, tx := range promotedTxs {
+			if tx != nil {
 				r.logger.Debug("已提升交易", "index", i, "hash", tx.Hash.String(), "nonce", tx.Nonce)
+			} else {
+				r.logger.Warn("发现空交易", "index", i, "address", addr.String())
 			}
+		}
 		}
 
 		for addr, enqueuedTxs := range allEnqueued {
 			r.logger.Debug("账户待提升交易", "address", addr.String(), "count", len(enqueuedTxs))
-			for i, tx := range enqueuedTxs {
+		for i, tx := range enqueuedTxs {
+			if tx != nil {
 				r.logger.Debug("待提升交易", "index", i, "hash", tx.Hash.String(), "nonce", tx.Nonce)
+			} else {
+				r.logger.Warn("发现空交易", "index", i, "address", addr.String())
 			}
+		}
 		}
 	}
 
@@ -1893,7 +1901,11 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		txs := blockBuilder.GetTransactions()
 		if len(txs) > 0 {
 			for i, tx := range txs {
-				r.logger.Info("区块中的交易", "index", i, "hash", tx.Hash.String(), "nonce", tx.Nonce)
+				if tx != nil {
+					r.logger.Info("区块中的交易", "index", i, "hash", tx.Hash.String(), "nonce", tx.Nonce)
+				} else {
+					r.logger.Warn("发现空交易", "index", i)
+				}
 			}
 		} else {
 			r.logOnce("no_transactions", "debug", "区块中没有包含任何交易！")
