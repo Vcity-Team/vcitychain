@@ -806,11 +806,14 @@ func (r *dposRuntime) getValidatorBalance(address types.Address) (*big.Int, erro
 			
 			account, err := snapshot.GetAccount(address)
 			if err != nil {
-				r.logger.Warn("⚠️ 无法获取账户信息，使用默认余额", "address", address.String(), "error", err)
-				// 回退到默认值
-				balance := big.NewInt(0)
-				balance.SetString("1000002100000000000000", 10) // 1000002.1 VCITY
-				return balance, nil
+				r.logger.Warn("⚠️ 无法获取账户信息，返回0余额", "address", address.String(), "error", err)
+				return big.NewInt(0), nil
+			}
+			
+			// 🆕 检查账户余额是否为空，避免空指针解引用
+			if account == nil || account.Balance == nil {
+				r.logger.Warn("⚠️ 账户或余额为空，返回0余额", "address", address.String())
+				return big.NewInt(0), nil
 			}
 			
 			r.logger.Debug("✅ 成功查询到验证者余额", "address", address.String(), "balance", account.Balance.String())
@@ -818,11 +821,9 @@ func (r *dposRuntime) getValidatorBalance(address types.Address) (*big.Int, erro
 		}
 	}
 	
-	// 如果无法通过backend查询，回退到默认值
-	r.logger.Warn("⚠️ 无法通过backend查询余额，使用默认余额", "address", address.String())
-	balance := big.NewInt(0)
-	balance.SetString("1000002100000000000000", 10) // 1000002.1 VCITY
-	return balance, nil
+	// 如果无法通过backend查询，返回0余额
+	r.logger.Warn("⚠️ 无法通过backend查询余额，返回0余额", "address", address.String())
+	return big.NewInt(0), nil
 }
 
 // setupNetworkEventListeners 设置网络事件监听器
@@ -3914,7 +3915,14 @@ func (d *DPoS) getValidatorBalance(address types.Address) (*big.Int, error) {
 		
 		account, err := snapshot.GetAccount(address)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get account for address %s: %w", address.String(), err)
+			d.logger.Warn("⚠️ 无法获取账户信息，返回0余额", "address", address.String(), "error", err)
+			return big.NewInt(0), nil
+		}
+		
+		// 🆕 检查账户余额是否为空，避免空指针解引用
+		if account == nil || account.Balance == nil {
+			d.logger.Warn("⚠️ 账户或余额为空，返回0余额", "address", address.String())
+			return big.NewInt(0), nil
 		}
 		
 		// 返回账户余额

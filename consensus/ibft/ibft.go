@@ -636,6 +636,16 @@ func (i *backendIBFT) ProcessHeaders(headers []*types.Header) error {
 
 // GetBlockCreator retrieves the block signer from the extra data field
 func (i *backendIBFT) GetBlockCreator(header *types.Header) (types.Address, error) {
+	// 🆕 检查是否已切换到DPoS，如果是则直接返回Miner字段
+	if i.forkManager != nil {
+		validators, err := i.forkManager.GetValidators(header.Number)
+		if err == nil && validators.Len() == 0 {
+			// 验证者集合为空，说明已切换到DPoS，直接返回Miner字段
+			i.logger.Debug("🔍 检测到DPoS切换，直接返回Miner字段", "blockNumber", header.Number, "miner", header.Miner)
+			return types.BytesToAddress(header.Miner), nil
+		}
+	}
+
 	signer, err := i.forkManager.GetSigner(header.Number)
 	if err != nil {
 		return types.ZeroAddress, err
@@ -646,6 +656,16 @@ func (i *backendIBFT) GetBlockCreator(header *types.Header) (types.Address, erro
 
 // PreCommitState a hook to be called before finalizing state transition on inserting block
 func (i *backendIBFT) PreCommitState(block *types.Block, txn *state.Transition) error {
+	// 🆕 检查是否已切换到DPoS，如果是则跳过状态处理
+	if i.forkManager != nil {
+		validators, err := i.forkManager.GetValidators(block.Number())
+		if err == nil && validators.Len() == 0 {
+			// 验证者集合为空，说明已切换到DPoS，跳过状态处理
+			i.logger.Debug("🔍 检测到DPoS切换，跳过PreCommitState处理", "blockNumber", block.Number())
+			return nil
+		}
+	}
+
 	hooks := i.forkManager.GetHooks(block.Number())
 
 	return hooks.PreCommitState(block.Header, txn)
