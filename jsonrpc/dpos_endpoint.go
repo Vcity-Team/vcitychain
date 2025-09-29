@@ -60,17 +60,19 @@ type dposStore interface {
 
 // DPOS is the dpos jsonrpc endpoint
 type DPOS struct {
-	logger hclog.Logger
-	store  dposStore
+	logger  hclog.Logger
+	store   dposStore
+	chainID uint64
 }
 
 // NewDPOS creates a new DPOS endpoint
-func NewDPOS(logger hclog.Logger, store dposStore) *DPOS {
-	logger.Info("Initializing DPoS endpoint")
+func NewDPOS(logger hclog.Logger, store dposStore, chainID uint64) *DPOS {
+	logger.Info("Initializing DPoS endpoint", "chainID", chainID)
 	
 	return &DPOS{
-		logger: logger.Named("dpos"),
-		store:  store,
+		logger:  logger.Named("dpos"),
+		store:   store,
+		chainID: chainID,
 	}
 }
 
@@ -126,8 +128,8 @@ func (d *DPOS) signTransaction(tx *types.Transaction, expectedAddr types.Address
 	d.logger.Info("User-provided private key created successfully", "privateKeyD", privateKey.D.String())
 
 	// Calculate transaction hash for signing using EIP-155 scheme to match txpool signer
-	chainID := uint64(888)
-	eip155Signer := crypto.NewEIP155Signer(chainID, false)
+	// Use the chainID from the DPOS endpoint configuration instead of hardcoded value
+	eip155Signer := crypto.NewEIP155Signer(d.chainID, false)
 
 	d.logger.Info("=== 标记2: 开始签名交易 ===")
 	// For EIP-155 signing, we need to use the signer's SignTx method
@@ -163,7 +165,7 @@ func (d *DPOS) signTransaction(tx *types.Transaction, expectedAddr types.Address
 
 	// We need to reconstruct the signature from R, S, V for recovery
 	// Extract recovery ID from V value: V = 2*chainID + 35 + recoveryID
-	recoveryID := int(tx.V.Int64() - int64(2*chainID) - 35)
+	recoveryID := int(tx.V.Int64() - int64(2*d.chainID) - 35)
 	if recoveryID < 0 || recoveryID > 1 {
 		return fmt.Errorf("invalid recovery ID: %d", recoveryID)
 	}
@@ -640,6 +642,14 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		gasPrice = new(big.Int).SetUint64(baseFee)
 	} else {
 		gasPrice = big.NewInt(1000000000) // 1 gwei default
+	}
+	
+	// Ensure gas price meets minimum price limit (1 gwei = 1000000000 wei)
+	// This prevents "transaction underpriced" errors
+	minGasPrice := big.NewInt(1000000000) // 1 gwei
+	if gasPrice.Cmp(minGasPrice) < 0 {
+		gasPrice = minGasPrice
+		d.logger.Info("Gas price adjusted to meet minimum requirement", "gasPrice", gasPrice.String())
 	}
 
 	// Create vote transaction

@@ -3114,23 +3114,29 @@ func (d *DPoS) processBlockVotesFromHeader(header *types.Header) error {
 		return nil
 	}
 
-	// 🆕 修复：简化投票处理，直接使用header数据，避免数据库锁竞争
-	// 创建一个简化的区块对象用于投票处理
-	block := &types.Block{
-		Header: header,
-		// 对于投票处理，我们不需要完整的交易数据
-		Transactions: []*types.Transaction{},
+	// 🆕 修复：获取完整的区块数据，包括交易信息
+	// 通过区块哈希获取完整的区块数据
+	block, exists := d.blockchain.GetBlockByHash(header.Hash, true)
+	if !exists {
+		d.logger.Warn("⚠️ 无法获取区块数据，跳过投票事件处理", "blockHash", header.Hash)
+		return nil
 	}
+
+	if block == nil {
+		d.logger.Warn("⚠️ 区块数据为空，跳过投票事件处理", "blockHash", header.Hash)
+		return nil
+	}
+
+	d.logger.Debug("🔍 获取到完整区块数据，开始处理投票交易",
+		"blockNumber", block.Number(),
+		"blockHash", block.Hash(),
+		"txCount", len(block.Transactions))
 
 	// 转换为FullBlock格式
 	fullBlock := &types.FullBlock{
 		Block:    block,
-		Receipts: []*types.Receipt{}, // 空的receipts
+		Receipts: []*types.Receipt{}, // 空的receipts，投票处理不需要
 	}
-
-	d.logger.Debug("🔍 使用简化的区块数据进行投票处理",
-		"blockNumber", header.Number,
-		"blockHash", header.Hash)
 
 	// 调用现有的投票处理逻辑
 	return d.processBlockVotes(fullBlock)

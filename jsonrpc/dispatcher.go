@@ -121,7 +121,7 @@ func (d *Dispatcher) registerEndpoints(store JSONRPCStore) error {
 	d.endpoints.Debug = NewDebug(store, d.params.concurrentRequestsDebug)
 
 	// Add DPOS endpoint with store adapter
-	d.endpoints.DPOS = NewDPOS(d.logger, &dposStoreAdapter{store: store})
+	d.endpoints.DPOS = NewDPOS(d.logger, &dposStoreAdapter{store: store}, d.params.chainID)
 
 	var err error
 
