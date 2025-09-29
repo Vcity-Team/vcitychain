@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"runtime"
 	"sort"
 
 	"github.com/Vcity-Team/vcitychain/bls"
@@ -640,30 +639,6 @@ func (s *StakeStore) cleanupEpochRewards(currentBlock uint64, dbTx *bolt.Tx) err
 
 // setDelegateInfo 保存受托人信息到数据库
 func (s *StakeStore) setDelegateInfo(delegate types.Address, info *DelegateInfo, dbTx *bolt.Tx) error {
-	// 🚨 检查VotingPower是否为0，如果是则打印显著警告
-	if info.VotingPower.Cmp(big.NewInt(0)) == 0 {
-		fmt.Printf("🚨🚨🚨 警告：正在写入VotingPower为0的验证者信息到数据库！🚨🚨🚨\n")
-		fmt.Printf("🚨 地址: %s\n", delegate.String())
-		fmt.Printf("🚨 VotingPower: %s (0x%x)\n", info.VotingPower.String(), info.VotingPower.Bytes())
-		fmt.Printf("🚨 TotalVotes: %s (0x%x)\n", info.TotalVotes.String(), info.TotalVotes.Bytes())
-		fmt.Printf("🚨 IsActive: %v\n", info.IsActive)
-		fmt.Printf("🚨 BlsPublicKey长度: %d\n", len(info.BlsPublicKey))
-		fmt.Printf("🚨 调用栈信息:\n")
-		// 打印调用栈
-		for i := 1; i < 10; i++ {
-			if pc, file, line, ok := runtime.Caller(i); ok {
-				fmt.Printf("🚨   %d: %s:%d (0x%x)\n", i, file, line, pc)
-			}
-		}
-		fmt.Printf("🚨🚨🚨 警告结束 🚨🚨🚨\n")
-	}
-	
-	// 使用debug级别记录调用信息
-	// fmt.Printf("🔍 setDelegateInfo called: delegate=%s, dbTx=%v\n", delegate.String(), dbTx != nil)
-	// fmt.Printf("  - 调用时的VotingPower: %s (0x%x)\n", info.VotingPower.String(), info.VotingPower.Bytes())
-	// fmt.Printf("  - 调用时的TotalVotes: %s (0x%x)\n", info.TotalVotes.String(), info.TotalVotes.Bytes())
-	// fmt.Printf("  - 调用时的IsActive: %v\n", info.IsActive)
-
 	// 如果 dbTx 为 nil，使用自己的数据库连接
 	if dbTx == nil {
 		return s.db.Update(func(tx *bolt.Tx) error {
