@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/blockchain/storage"
@@ -96,6 +97,15 @@ type Server struct {
 // StartDPoSEngine 实现DPoSEngineStarter接口，启动DPoS引擎
 func (s *Server) StartDPoSEngine(height uint64) error {
 	s.logger.Info("🚀 开始启动DPoS引擎", "height", height)
+	
+	// 打印调用堆栈
+	s.logger.Debug("🔍 StartDPoSEngine 调用堆栈开始")
+	for i := 1; i < 10; i++ {
+		if pc, file, line, ok := goruntime.Caller(i); ok {
+			s.logger.Debug("🔍 调用堆栈", "level", i, "file", file, "line", line, "pc", fmt.Sprintf("0x%x", pc))
+		}
+	}
+	s.logger.Debug("🔍 StartDPoSEngine 调用堆栈结束")
 	
 	// 如果DPoS引擎已经存在，先停止它
 	if s.dposEngine != nil {

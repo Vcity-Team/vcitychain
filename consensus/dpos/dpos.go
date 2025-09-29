@@ -2834,6 +2834,12 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 	blockNumber := header.Number
 	d.logger.Debug("🔍 DPoS VerifyHeader 开始验证", "blockNumber", blockNumber, "blockHash", header.Hash.String()[:16])
 	
+	// 🆕 添加：检查是否是共识切换高度
+	if d.config.ConsensusSwitchHeight > 0 && blockNumber == d.config.ConsensusSwitchHeight {
+		d.logger.Info("🔄 共识切换高度区块，跳过DPoS验证", "blockNumber", blockNumber, "consensusSwitchHeight", d.config.ConsensusSwitchHeight)
+		return nil
+	}
+	
 	// 🆕 关键：在验证前等待BLS公钥加载完成
 	if err := d.waitForBLSKeysLoaded(); err != nil {
 		d.logger.Error("❌ 等待BLS公钥加载失败", "blockNumber", blockNumber, "error", err)
