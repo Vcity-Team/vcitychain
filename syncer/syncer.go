@@ -414,6 +414,7 @@ func (s *syncer) isDPoSTransitionHeight(blockNumber uint64) bool {
 	return false
 }
 
+
 // GetSyncPeerClient returns the sync peer client for controlling status broadcasting
 func (s *syncer) GetSyncPeerClient() SyncPeerClient {
 	return s.syncPeerClient

@@ -214,7 +214,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 			params.Network,
 			params.Blockchain,
 			time.Duration(params.BlockTime)*3*time.Second,
-			0, // IBFT不需要共识切换高度
+			forkManager.GetConsensusSwitchHeight(), // 🆕 传入正确的共识切换高度
 		),
 		secretsManager: params.SecretsManager,
 		Grpc:           params.Grpc,
@@ -274,6 +274,28 @@ func (i *backendIBFT) Initialize() error {
 // sync runs the syncer in the background to receive blocks from advanced peers
 func (i *backendIBFT) startSyncing() {
 	callInsertBlockHook := func(fullBlock *types.FullBlock) bool {
+		// 🆕 检查是否是DPoS切换高度，如果是则停止同步
+		if i.forkManager != nil {
+			if shouldStop := i.checkShouldStopIBFT(fullBlock.Block.Number()); shouldStop {
+				i.logger.Info("🛑 syncer检测到DPoS切换，停止IBFT同步", "height", fullBlock.Block.Number())
+				
+				// 启动DPoS引擎（不在这里关闭syncer，避免重复关闭）
+				if i.dposEngineStarter != nil {
+					i.logger.Info("🚀 syncer启动DPoS引擎...")
+					if err := i.dposEngineStarter.StartDPoSEngine(fullBlock.Block.Number()); err != nil {
+						i.logger.Error("❌ 启动DPoS引擎失败", "error", err)
+					} else {
+						i.logger.Info("✅ DPoS引擎启动成功，DPoS同步器已接管")
+					}
+				} else {
+					i.logger.Warn("⚠️ DPoS引擎启动器未设置，无法启动DPoS引擎")
+				}
+				
+				// 返回true表示停止同步
+				return true
+			}
+		}
+		
 		if err := i.currentHooks.PostInsertBlock(fullBlock.Block); err != nil {
 			i.logger.Error("failed to call PostInsertBlock", "height", fullBlock.Block.Header.Number, "error", err)
 		}
@@ -379,16 +401,24 @@ func (i *backendIBFT) startConsensus() {
 			if shouldStop := i.checkShouldStopIBFT(pending); shouldStop {
 				i.logger.Info("🛑 验证者集合为空，DPoS已接管，IBFT应该停止", "height", pending)
 				
-				// 🆕 通知启动DPoS引擎
+				// 🆕 停止IBFT的syncer，避免与DPoS的syncer冲突
+				if i.syncer != nil {
+					i.logger.Info("🛑 停止IBFT的syncer，让DPoS的syncer接管...")
+					if err := i.syncer.Close(); err != nil {
+						i.logger.Error("❌ 停止IBFT的syncer失败", "error", err)
+					} else {
+						i.logger.Info("✅ IBFT的syncer已停止")
+					}
+				}
+				
+				// 🆕 同步启动DPoS引擎，DPoS引擎会启动自己的syncer接管区块同步
 				if i.dposEngineStarter != nil {
-					i.logger.Info("🚀 通知启动DPoS引擎...")
-					go func() {
-						if err := i.dposEngineStarter.StartDPoSEngine(pending); err != nil {
-							i.logger.Error("❌ 启动DPoS引擎失败", "error", err)
-						} else {
-							i.logger.Info("✅ DPoS引擎启动成功")
-						}
-					}()
+					i.logger.Info("🚀 同步启动DPoS引擎（包括同步节点）...")
+					if err := i.dposEngineStarter.StartDPoSEngine(pending); err != nil {
+						i.logger.Error("❌ 启动DPoS引擎失败", "error", err)
+					} else {
+						i.logger.Info("✅ DPoS引擎启动成功，DPoS同步器已接管区块同步")
+					}
 				} else {
 					i.logger.Warn("⚠️ DPoS引擎启动器未设置，无法启动DPoS引擎")
 				}
@@ -636,16 +666,6 @@ func (i *backendIBFT) ProcessHeaders(headers []*types.Header) error {
 
 // GetBlockCreator retrieves the block signer from the extra data field
 func (i *backendIBFT) GetBlockCreator(header *types.Header) (types.Address, error) {
-	// 🆕 检查是否已切换到DPoS，如果是则直接返回Miner字段
-	if i.forkManager != nil {
-		validators, err := i.forkManager.GetValidators(header.Number)
-		if err == nil && validators.Len() == 0 {
-			// 验证者集合为空，说明已切换到DPoS，直接返回Miner字段
-			i.logger.Debug("🔍 检测到DPoS切换，直接返回Miner字段", "blockNumber", header.Number, "miner", header.Miner)
-			return types.BytesToAddress(header.Miner), nil
-		}
-	}
-
 	signer, err := i.forkManager.GetSigner(header.Number)
 	if err != nil {
 		return types.ZeroAddress, err
@@ -656,16 +676,6 @@ func (i *backendIBFT) GetBlockCreator(header *types.Header) (types.Address, erro
 
 // PreCommitState a hook to be called before finalizing state transition on inserting block
 func (i *backendIBFT) PreCommitState(block *types.Block, txn *state.Transition) error {
-	// 🆕 检查是否已切换到DPoS，如果是则跳过状态处理
-	if i.forkManager != nil {
-		validators, err := i.forkManager.GetValidators(block.Number())
-		if err == nil && validators.Len() == 0 {
-			// 验证者集合为空，说明已切换到DPoS，跳过状态处理
-			i.logger.Debug("🔍 检测到DPoS切换，跳过PreCommitState处理", "blockNumber", block.Number())
-			return nil
-		}
-	}
-
 	hooks := i.forkManager.GetHooks(block.Number())
 
 	return hooks.PreCommitState(block.Header, txn)
