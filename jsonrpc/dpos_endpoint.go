@@ -823,8 +823,13 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		} else {
 			d.logger.Info("Consensus engine type", "type", fmt.Sprintf("%T", consensusEngine))
 
-			// 🆕 现在DPoS引擎获取成功，启用状态更新逻辑
-			// 尝试调用DPoS引擎的AddVote方法
+			// 🆕 修复：本地投票不直接更新状态，避免重复计算
+			// 所有投票都通过区块同步统一处理，确保一致性
+			d.logger.Info("ℹ️ 本地投票已创建交易，状态将在区块同步时更新")
+			d.logger.Info("ℹ️ 这避免了重复计算问题，确保所有节点状态一致")
+			
+			// 注释掉本地状态更新，避免重复计算
+			/*
 			if dposEngine, ok := consensusEngine.(interface {
 				AddVote(voter types.Address, candidate types.Address, amount *big.Int) error
 			}); ok {
@@ -839,6 +844,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 			} else {
 				d.logger.Warn("⚠️ DPoS引擎没有AddVote方法")
 			}
+			*/
 		}
 	} else {
 		d.logger.Warn("Store does NOT have GetConsensus method")

@@ -1295,10 +1295,13 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		if s.Bitmap.IsSet(i) && int(i) < len(blsPublicKeys) && blsPublicKeys[i] != nil {
 			validator := validators[int(i)]
 			addressToBLSKey[validator.Address] = blsPublicKeys[i]
-			logger.Debug("✅ 将BLS公钥添加到地址映射", 
+			// 🆕 修复：同时设置validator.BlsKey字段，确保数据同步
+			validator.BlsKey = blsPublicKeys[i]
+			logger.Debug("✅ 将BLS公钥添加到地址映射并同步到validator对象", 
 				"blockNumber", blockNumber,
 				"address", validator.Address.String(),
-				"bitmapIndex", i)
+				"bitmapIndex", i,
+				"hasBlsKey", validator.BlsKey != nil)
 		}
 	}
 
@@ -1384,7 +1387,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 					addressStr = "unknown_index"
 				}
 
-				logger.Info("⚠️ Signature.Verify - BLS公钥为nil，尝试从创世文件恢复",
+				logger.Info("⚠️ Signature.Verify - BLS公钥为nil，尝试从从缓存和创世文件恢复",
 					"index", i,
 					"address", addressStr)
 
