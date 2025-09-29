@@ -2351,17 +2351,39 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 
 
-		// 详细记录生产时保存的验证者地址
-		r.logger.Debug("🏭 生产时保存的验证者地址详细信息:")
+		// 🆕 显著日志：生产时保存到ExtraData的验证者集合和索引
+		r.logger.Info("🏭 ===== 生产时保存到ExtraData的验证者集合 =====",
+			"blockNumber", block.Block.Number(),
+			"totalValidators", len(validatorAddresses),
+			"bitmapHex", fmt.Sprintf("%x", signatureBitmap),
+			"note", "这些验证者将被保存到区块ExtraData中")
+		
 		for i, validator := range validatorAddresses {
-			r.logger.Debug("🏭 生产时保存验证者地址",
+			r.logger.Info("🏭 生产时ExtraData验证者",
 				"blockNumber", block.Block.Number(),
 				"index", i,
 				"address", validator.Address.String(),
 				"votingPower", validator.VotingPower.String(),
 				"isActive", validator.IsActive,
 				"hasBlsKey", validator.BlsKey != nil,
-				"isParticipating", true) // 只保存实际签名者
+				"bitmapSet", signatureBitmap.IsSet(uint64(i)),
+				"note", "验证者索引与位图索引对应")
+		}
+		
+		// 🆕 显著日志：位图索引详情
+		r.logger.Info("🏭 ===== 生产时位图索引详情 =====",
+			"blockNumber", block.Block.Number(),
+			"bitmapHex", fmt.Sprintf("%x", signatureBitmap),
+			"bitmapLength", len(signatureBitmap),
+			"totalValidators", len(validatorAddresses))
+		
+		for i := uint64(0); i < uint64(len(validatorAddresses)); i++ {
+			r.logger.Info("🏭 位图索引状态",
+				"blockNumber", block.Block.Number(),
+				"bitmapIndex", i,
+				"isSet", signatureBitmap.IsSet(i),
+				"validatorAddress", validatorAddresses[i].Address.String(),
+				"note", "位图索引与验证者集合一一对应")
 		}
 
 		// 静默处理，不打印日志
@@ -9907,47 +9929,9 @@ func (d *DPoS) GetBLSKeyBytesFromGenesis(address types.Address) ([]byte, error) 
 // getValidatorsFromExtraDataForProduction 生产时从ExtraData获取验证者集合
 // 使用与验证时完全相同的逻辑
 func (r *dposRuntime) getValidatorsFromExtraDataForProduction(header *types.Header, parents []*types.Header) (validator.AccountSet, error) {
-	blockNumber := header.Number
-	
-	// 获取父区块
-	var parent *types.Header
-	if blockNumber > 0 {
-		if parentHeader, exists := r.config.blockchain.GetHeaderByNumber(blockNumber - 1); exists {
-			parent = parentHeader
-		}
-	}
-	
-	// 获取父区块的父区块
-	var parentParent *types.Header
-	if parent != nil && parent.Number > 0 {
-		if parentParentHeader, exists := r.config.blockchain.GetHeaderByNumber(parent.Number - 1); exists {
-			parentParent = parentParentHeader
-		}
-	}
-	
-	// 🆕 使用与验证时完全相同的逻辑：从父区块ExtraData获取验证者集合
-	if parent != nil {
-		// 解析父区块的ExtraData
-		parentExtra, err := GetIbftExtra(parent.ExtraData)
-		if err != nil {
-			r.logger.Error("❌ 生产时解析父区块ExtraData失败", "parentBlockNumber", parent.Number, "error", err)
-			return nil, fmt.Errorf("failed to parse parent ExtraData: %w", err)
-		}
-		
-		// 从父区块ExtraData获取验证者集合
-		parentValidators, err := parentExtra.getValidatorsFromExtraData(parent, parentParent, parents, r.config.dposBackend, r.logger)
-		if err == nil {
-			r.logger.Debug("✅ 生产时从父区块ExtraData获取验证者集合成功",
-				"parentBlockNumber", parent.Number,
-				"parentValidatorsCount", len(parentValidators))
-			return parentValidators, nil
-		}
-		r.logger.Warn("⚠️ 生产时从父区块ExtraData获取验证者集合失败", "error", err)
-	}
-	
-	// 备用方案：使用runtime.delegates
+	// 🆕 直接使用当前完整的验证者集合，确保包含最新的投票结果
 	if r.delegates != nil && len(r.delegates) > 0 {
-		r.logger.Debug("🔍 生产时使用runtime.delegates作为备用方案", "delegatesCount", len(r.delegates))
+		r.logger.Debug("🔍 生产时使用当前完整验证者集合", "delegatesCount", len(r.delegates))
 		return r.delegates.Copy(), nil
 	}
 	
