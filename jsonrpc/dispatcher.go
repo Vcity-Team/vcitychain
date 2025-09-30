@@ -494,6 +494,29 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 				inArgs[i+1] = val.Elem()
 			}
 
+			// Special handling for eth_estimateGas with optional second parameter
+			if req.Method == "eth_estimateGas" && fd.numParams() == 2 {
+				// Parse the raw params to check actual parameter count
+				var rawParams []interface{}
+				if err := json.Unmarshal(req.Params, &rawParams); err != nil {
+					return nil, NewInvalidParamsError("Invalid Params")
+				}
+
+				// If only one parameter provided, add default BlockNumber (latest)
+				if len(rawParams) == 1 {
+					// Create a default BlockNumber (latest) for the second parameter
+					latestBlockNumber := "latest"
+					rawParams = append(rawParams, latestBlockNumber)
+					
+					// Re-marshal the modified params
+					modifiedParams, err := json.Marshal(rawParams)
+					if err != nil {
+						return nil, NewInvalidParamsError("Invalid Params")
+					}
+					req.Params = modifiedParams
+				}
+			}
+
 			// Unmarshal parameters
 			if err := json.Unmarshal(req.Params, &inputs); err != nil {
 				return nil, NewInvalidParamsError("Invalid Params")
