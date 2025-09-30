@@ -463,6 +463,11 @@ func (ni *NetworkIntegration) createTopics() error {
 		}
 	} else {
 		criticalTopicsCreated++
+		// 记录实际使用的protoID
+		if ni.signatureRequestTopic != nil {
+			actualProtoID := ni.signatureRequestTopic.GetActualProtoID()
+			ni.logger.Info("🔍 网络集成层签名请求Topic名称对比", "原始名称", "dpos-signature-request", "实际名称", actualProtoID)
+		}
 	}
 
 	// 创建签名响应主题 - 使用有效的默认值避免网络层发送零值消息
@@ -493,6 +498,11 @@ func (ni *NetworkIntegration) createTopics() error {
 		}
 	} else {
 		criticalTopicsCreated++
+		// 记录实际使用的protoID
+		if ni.signatureResponseTopic != nil {
+			actualProtoID := ni.signatureResponseTopic.GetActualProtoID()
+			ni.logger.Info("🔍 网络集成层签名响应Topic名称对比", "原始名称", "dpos-signature-response", "实际名称", actualProtoID)
+		}
 		//ni.logger.Info("成功创建签名响应主题")
 	}
 
@@ -617,6 +627,8 @@ func (ni *NetworkIntegration) tryGetExistingTopics() error {
 func (ni *NetworkIntegration) subscribeToTopics() error {
 	// 订阅签名请求主题
 	if ni.signatureRequestTopic != nil {
+		actualTopicName := ni.signatureRequestTopic.GetActualProtoID()
+		ni.logger.Info("📡 订阅签名请求主题", "原始名称", "dpos-signature-request", "实际名称", actualTopicName)
 		if err := ni.signatureRequestTopic.Subscribe(func(obj interface{}, from peer.ID) {
 			ni.handleSignatureRequest(obj, from)
 		}); err != nil {
@@ -628,6 +640,8 @@ func (ni *NetworkIntegration) subscribeToTopics() error {
 
 	// 订阅签名响应主题
 	if ni.signatureResponseTopic != nil {
+		actualTopicName := ni.signatureResponseTopic.GetActualProtoID()
+		ni.logger.Info("📡 订阅签名响应主题", "原始名称", "dpos-signature-response", "实际名称", actualTopicName)
 		if err := ni.signatureResponseTopic.Subscribe(func(obj interface{}, from peer.ID) {
 			ni.handleSignatureResponse(obj, from)
 		}); err != nil {
@@ -1284,9 +1298,8 @@ func (ni *NetworkIntegration) BroadcastSignatureRequest(request *SignatureReques
 	}
 
 	// 添加调试信息
-	ni.logger.Debug("broadcasting signature request",
-		"dataLength", len(requestData),
-		"dataPreview", fmt.Sprintf("%x", requestData[:min(len(requestData), 20)]))
+	actualTopicName := ni.signatureRequestTopic.GetActualProtoID()
+	ni.logger.Info("🚀 网络集成层广播签名请求", "原始名称", "dpos-signature-request", "实际名称", actualTopicName, "dataLength", len(requestData))
 
 	if err := ni.signatureRequestTopic.Publish(dposMsg); err != nil {
 		return fmt.Errorf("failed to publish signature request: %w", err)
@@ -1323,6 +1336,9 @@ func (ni *NetworkIntegration) BroadcastSignatureResponse(response *SignatureResp
 	dposMsg := &DPOSMessage{
 		Data: responseData,
 	}
+
+	actualTopicName := ni.signatureResponseTopic.GetActualProtoID()
+	ni.logger.Info("🚀 网络集成层广播签名响应", "原始名称", "dpos-signature-response", "实际名称", actualTopicName)
 
 	if err := ni.signatureResponseTopic.Publish(dposMsg); err != nil {
 		return fmt.Errorf("failed to publish signature response: %w", err)

@@ -969,6 +969,23 @@ func (r *dposRuntime) cleanupRuntime() {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
+	// 🆕 先停止所有定时器，确保没有goroutine在运行
+	if r.blockTimer != nil {
+		r.blockTimer.Stop()
+		r.blockTimer = nil
+	}
+	if r.voteTimer != nil {
+		r.voteTimer.Stop()
+		r.voteTimer = nil
+	}
+	if r.networkHealthTimer != nil {
+		r.networkHealthTimer.Stop()
+		r.networkHealthTimer = nil
+	}
+
+	// 🆕 等待一小段时间，确保正在运行的goroutine能够完成
+	time.Sleep(100 * time.Millisecond)
+
 	// 清理投票者映射
 	r.voters = nil
 	r.delegates = nil
@@ -1149,9 +1166,32 @@ func (r *dposRuntime) produceBlock() error {
 
 	// 检查当前节点是否有足够的stake参与出块
 	var currentDelegateInfo *validator.ValidatorMetadata
+	
+	// 🆕 如果delegates为空，尝试重新加载
+	if r.delegates == nil || len(r.delegates) == 0 {
+		r.logger.Warn("⚠️ delegates为空，尝试重新加载验证者信息")
+		if r.config != nil && r.config.dposBackend != nil {
+			currentBlockNumber := uint64(0)
+			if r.config.blockchain != nil {
+				if currentHeader := r.config.blockchain.CurrentHeader(); currentHeader != nil {
+					currentBlockNumber = currentHeader.Number
+				}
+			}
+			
+			if delegates, err := r.config.dposBackend.GetDelegates(currentBlockNumber, nil); err == nil && len(delegates) > 0 {
+				r.delegates = delegates
+				r.logger.Info("✅ 成功重新加载验证者信息", "count", len(r.delegates))
+			} else {
+				r.logger.Error("❌ 无法重新加载验证者信息", "error", err)
+			}
+		}
+	}
+	
 	for _, delegate := range r.delegates {
 		if delegate.Address == keyAddr {
 			currentDelegateInfo = delegate
+			// 🆕 修复：确保IsActive为true（验证者应该都是活跃的）
+			currentDelegateInfo.IsActive = true
 			break
 		}
 	}
@@ -3233,24 +3273,20 @@ func (d *DPoS) Start() error {
 			if isDelegate {
 				d.txPool.SetSealing(true)
 				d.logger.Info("transaction pool sealing state set to true (node is delegate)")
-				
-				// 🆕 只有受托人节点才启用状态广播
-				// 注意：需要直接访问syncPeerClient，但当前syncer接口没有暴露此方法
-				// 暂时注释掉，需要修改syncer接口或使用其他方式
-				// d.syncer.GetSyncPeerClient().EnablePublishingPeerStatus()
-				d.logger.Info("enabled status broadcasting (node is delegate)")
 			} else {
 				d.txPool.SetSealing(false)
 				d.logger.Info("transaction pool sealing state set to false (node is not delegate)")
-				
-				// 🆕 非受托人节点禁用状态广播
-				// 注意：需要直接访问syncPeerClient，但当前syncer接口没有暴露此方法
-				// 暂时注释掉，需要修改syncer接口或使用其他方式
-				// d.syncer.GetSyncPeerClient().DisablePublishingPeerStatus()
-				d.logger.Info("disabled status broadcasting (node is not delegate)")
 			}
 		} else {
 			d.logger.Warn("key not available, cannot determine if node is delegate")
+		}
+		
+		// 🆕 所有DPoS节点都启用状态广播，无条件启用
+		if d.syncer != nil {
+			d.syncer.EnablePublishingPeerStatus()
+			d.logger.Info("✅ 启用状态广播 (所有DPoS节点)")
+		} else {
+			d.logger.Warn("⚠️ syncer为空，无法启用状态广播")
 		}
 	} else {
 		d.logger.Warn("transaction pool not available, cannot set sealing state")
@@ -4345,10 +4381,10 @@ func (d *DPoS) asyncLoadBLSKeys() {
 // 🆕 新增：获取所有验证者
 func (d *DPoS) getAllValidators() validator.AccountSet {
 	if d.runtime != nil && len(d.runtime.delegates) > 0 {
-		d.logger.Info("🔍 getAllValidators: 使用runtime.delegates", "count", len(d.runtime.delegates))
+		d.logger.Debug("🔍 getAllValidators: 使用runtime.delegates", "count", len(d.runtime.delegates))
 		// 🆕 添加详细日志：打印每个验证者的VotingPower
 		for i, validator := range d.runtime.delegates {
-			d.logger.Info("🔍 runtime.delegates验证者信息",
+			d.logger.Debug("🔍 runtime.delegates验证者信息",
 				"index", i,
 				"address", validator.Address.String(),
 				"votingPower", validator.VotingPower.String(),
@@ -4358,7 +4394,7 @@ func (d *DPoS) getAllValidators() validator.AccountSet {
 		}
 		return d.runtime.delegates
 	}
-	d.logger.Info("🔍 getAllValidators: 使用d.delegates", "count", len(d.delegates))
+	d.logger.Debug("🔍 getAllValidators: 使用d.delegates", "count", len(d.delegates))
 	// 🆕 添加详细日志：打印每个验证者的VotingPower
 	for i, validator := range d.delegates {
 		d.logger.Info("🔍 d.delegates验证者信息",
@@ -4428,7 +4464,7 @@ func (d *DPoS) syncLoadBLSKeys() error {
 	
 	// 2. 获取所有验证者
 	validators := d.getAllValidators()
-	d.logger.Info("🔍 获取到验证者数量", "count", len(validators))
+	d.logger.Debug("🔍 获取到验证者数量", "count", len(validators))
 	if len(validators) == 0 {
 		d.logger.Warn("⚠️ 当前没有验证者，无需获取BLS公钥")
 		return nil
@@ -4477,7 +4513,7 @@ func (d *DPoS) syncLoadBLSKeys() error {
 			d.saveBLSKeyToCache(validator.Address, blsKey)
 			d.saveBLSKeyToDatabase(validator.Address, blsKey)
 			
-			d.logger.Info("✅ BLS公钥获取成功", "address", validator.Address.String())
+			d.logger.Debug("✅ BLS公钥获取成功", "address", validator.Address.String())
 		} else {
 			d.logger.Debug("✅ BLS公钥已存在", "address", validator.Address.String())
 		}
@@ -4597,7 +4633,7 @@ func (d *DPoS) saveValidatorsWithBLSKeysToDatabase() error {
 		}
 		
 		// 🆕 添加详细日志：打印DelegateInfo信息
-		d.logger.Info("🔍 DelegateInfo详细信息",
+		d.logger.Debug("🔍 DelegateInfo详细信息",
 			"address", delegateInfo.Address.String(),
 			"votingPower", delegateInfo.VotingPower.String(),
 			"votingPowerHex", fmt.Sprintf("0x%x", delegateInfo.VotingPower.Bytes()),
@@ -4681,14 +4717,14 @@ func (d *DPoS) saveBLSKeyToDatabase(address types.Address, blsKey *bls.PublicKey
 					"error", err)
 				balance = validator.VotingPower
 			} else {
-				d.logger.Info("🔍 重新查询到账户余额", 
+				d.logger.Debug("🔍 重新查询到账户余额", 
 					"address", address.String(),
 					"balance", balance.String(),
 					"balanceHex", fmt.Sprintf("0x%x", balance.Bytes()))
 			}
 			
 			// 🆕 添加详细日志：打印保存前的信息
-			d.logger.Info("🔍 准备保存BLS公钥到数据库",
+			d.logger.Debug("🔍 准备保存BLS公钥到数据库",
 				"address", address.String(),
 				"originalVotingPower", validator.VotingPower.String(),
 				"newVotingPower", balance.String(),
@@ -4716,7 +4752,7 @@ func (d *DPoS) saveBLSKeyToDatabase(address types.Address, blsKey *bls.PublicKey
 			if blsKey != nil {
 				blsKeyBytes := blsKey.Marshal()
 				delegateInfo.BlsPublicKey = blsKeyBytes
-				d.logger.Info("🔍 DelegateInfo详细信息",
+				d.logger.Debug("🔍 DelegateInfo详细信息",
 					"address", delegateInfo.Address.String(),
 					"votingPower", delegateInfo.VotingPower.String(),
 					"votingPowerHex", fmt.Sprintf("0x%x", delegateInfo.VotingPower.Bytes()),
@@ -6947,10 +6983,10 @@ func (r *dposRuntime) calculateMinRequiredSignatures() int {
 	if validatorsCount == 0 {
 		// 如果配置中没有设置，使用默认值4
 		validatorsCount = 4
-		r.logger.Warn("⚠️ 配置中未设置ValidatorsCount，使用默认值4")
+		r.logger.Debug("⚠️ 配置中未设置ValidatorsCount，使用默认值4")
 	}
 
-	r.logger.Info("🧮 计算法定人数", 
+	r.logger.Debug("🧮 计算法定人数", 
 		"configuredValidatorsCount", validatorsCount,
 		"totalDelegates", len(r.delegates))
 
@@ -6960,7 +6996,7 @@ func (r *dposRuntime) calculateMinRequiredSignatures() int {
 		minRequired = 1
 	}
 
-	r.logger.Info("✅ 门槛计算完成", 
+	r.logger.Debug("✅ 门槛计算完成", 
 		"validatorsCount", validatorsCount,
 		"minRequiredSignatures", minRequired)
 
@@ -7211,7 +7247,8 @@ func (r *dposRuntime) broadcastSignatureRequest(protoRequest *dposProto.Signatur
 	}
 
 	// 发布签名请求
-	r.logger.Info("开始广播签名请求", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String())
+	actualTopicName := topic.GetActualProtoID()
+	r.logger.Info("🚀 开始广播签名请求", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String(), "原始名称", "dpos-signature-request", "实际名称", actualTopicName)
 	if err := topic.Publish(dposMsg); err != nil {
 		r.logger.Warn("failed to publish signature request, using fallback", "error", err)
 		// 回退到日志记录
@@ -7286,34 +7323,50 @@ func (r *dposRuntime) getSignatureRequestTopic() (*network.Topic, error) {
 		Data: defaultRequestData,
 	}
 
-	// 尝试创建新主题，如果失败则智能处理
+	// 首先检查网络集成层是否已经有现有主题
+	if r.networkIntegration != nil {
+		if existingTopic := r.networkIntegration.GetSignatureRequestTopic(); existingTopic != nil {
+			r.logger.Info("🔗 复用网络集成层的签名请求主题", "topic", "dpos-signature-request")
+			r.signatureRequestTopic = existingTopic
+			return existingTopic, nil
+		}
+	}
+
+	// 如果网络集成层没有，尝试创建新主题
+	r.logger.Info("🔍 DPoS尝试创建签名请求主题", "topic", "dpos-signature-request", "网络集成层状态", r.networkIntegration != nil)
 	topic, err := r.network.NewTopic("dpos-signature-request", defaultDPOSMessage)
 	if err != nil {
-		// 如果主题已存在，我们需要获取现有主题的引用
+		r.logger.Error("🔍 DPoS创建主题失败", "topic", "dpos-signature-request", "错误类型", fmt.Sprintf("%T", err), "错误信息", err.Error())
+		
+		// 如果主题已存在，再次检查网络集成层
 		if strings.Contains(err.Error(), "topic already exists") {
-			r.logger.Debug("主题已存在，尝试获取现有主题引用", "topic", "dpos-signature-request")
+			r.logger.Info("🔍 主题已存在，再次检查网络集成层", "topic", "dpos-signature-request")
 
-			// 检查网络集成层是否有现有主题
+			// 再次检查网络集成层是否有现有主题
 			if r.networkIntegration != nil {
-				// 尝试从网络集成层获取现有主题
 				if existingTopic := r.networkIntegration.GetSignatureRequestTopic(); existingTopic != nil {
-					r.logger.Debug("从网络集成层获取到现有主题", "topic", "dpos-signature-request")
+					r.logger.Info("🔗 从网络集成层获取到现有主题", "topic", "dpos-signature-request")
 					r.signatureRequestTopic = existingTopic
 					return existingTopic, nil
 				}
 			}
 
-			// 如果网络集成层也没有，我们需要等待一下再重试
-			// 这通常是因为并发创建导致的，等待一下应该就能成功
+			// 如果网络集成层也没有，等待一下再重试
 			r.logger.Info("等待网络层同步后重试", "topic", "dpos-signature-request")
 			time.Sleep(200 * time.Millisecond)
 
-			// 重试创建主题
-			topic, err = r.network.NewTopic("dpos-signature-request", defaultDPOSMessage)
-			if err != nil {
-				r.logger.Warn("重试创建主题仍然失败", "error", err)
-				return nil, fmt.Errorf("failed to create topic after retry: %w", err)
+			// 最后一次检查网络集成层
+			if r.networkIntegration != nil {
+				if existingTopic := r.networkIntegration.GetSignatureRequestTopic(); existingTopic != nil {
+					r.logger.Info("🔗 延迟获取到网络集成层主题", "topic", "dpos-signature-request")
+					r.signatureRequestTopic = existingTopic
+					return existingTopic, nil
+				}
 			}
+
+			// 如果仍然没有，返回错误而不是创建新主题
+			r.logger.Error("无法获取签名请求主题，网络集成层也未提供", "topic", "dpos-signature-request")
+			return nil, fmt.Errorf("signature request topic already exists but not available from network integration")
 		} else {
 			r.logger.Warn("创建签名请求主题失败", "error", err)
 			return nil, fmt.Errorf("failed to create signature request topic: %w", err)
@@ -7321,6 +7374,11 @@ func (r *dposRuntime) getSignatureRequestTopic() (*network.Topic, error) {
 	}
 
 	r.signatureRequestTopic = topic
+	
+	// 存储实际使用的protoID
+	actualProtoID := topic.GetActualProtoID()
+	r.logger.Info("🔍 签名请求Topic名称对比", "原始名称", "dpos-signature-request", "实际名称", actualProtoID)
+	
 	r.logger.Debug("成功创建签名请求主题")
 	return topic, nil
 }
@@ -7374,34 +7432,47 @@ func (r *dposRuntime) getSignatureResponseTopic() (*network.Topic, error) {
 		Data: defaultResponseData,
 	}
 
-	// 尝试创建新主题，如果失败则智能处理
+	// 首先检查网络集成层是否已经有现有主题
+	if r.networkIntegration != nil {
+		if existingTopic := r.networkIntegration.GetSignatureResponseTopic(); existingTopic != nil {
+			r.logger.Info("🔗 复用网络集成层的签名响应主题", "topic", "dpos-signature-response")
+			r.signatureResponseTopic = existingTopic
+			return existingTopic, nil
+		}
+	}
+
+	// 如果网络集成层没有，尝试创建新主题
 	topic, err := r.network.NewTopic("dpos-signature-response", defaultDPOSMessage)
 	if err != nil {
-		// 如果主题已存在，我们需要获取现有主题的引用
+		// 如果主题已存在，再次检查网络集成层
 		if strings.Contains(err.Error(), "topic already exists") {
-			r.logger.Debug("主题已存在，尝试获取现有主题引用", "topic", "dpos-signature-response")
+			r.logger.Debug("主题已存在，再次检查网络集成层", "topic", "dpos-signature-response")
 
-			// 检查网络集成层是否有现有主题
+			// 再次检查网络集成层是否有现有主题
 			if r.networkIntegration != nil {
-				// 尝试从网络集成层获取现有主题
 				if existingTopic := r.networkIntegration.GetSignatureResponseTopic(); existingTopic != nil {
-					r.logger.Debug("从网络集成层获取到现有主题", "topic", "dpos-signature-response")
+					r.logger.Info("🔗 从网络集成层获取到现有主题", "topic", "dpos-signature-response")
 					r.signatureResponseTopic = existingTopic
 					return existingTopic, nil
 				}
 			}
 
-			// 如果网络集成层也没有，我们需要等待一下再重试
-			// 这通常是因为并发创建导致的，等待一下应该就能成功
+			// 如果网络集成层也没有，等待一下再重试
 			r.logger.Info("等待网络层同步后重试", "topic", "dpos-signature-response")
 			time.Sleep(200 * time.Millisecond)
 
-			// 重试创建主题
-			topic, err = r.network.NewTopic("dpos-signature-response", defaultDPOSMessage)
-			if err != nil {
-				r.logger.Warn("重试创建主题仍然失败", "error", err)
-				return nil, fmt.Errorf("failed to create topic after retry: %w", err)
+			// 最后一次检查网络集成层
+			if r.networkIntegration != nil {
+				if existingTopic := r.networkIntegration.GetSignatureResponseTopic(); existingTopic != nil {
+					r.logger.Info("🔗 延迟获取到网络集成层主题", "topic", "dpos-signature-response")
+					r.signatureResponseTopic = existingTopic
+					return existingTopic, nil
+				}
 			}
+
+			// 如果仍然没有，返回错误而不是创建新主题
+			r.logger.Error("无法获取签名响应主题，网络集成层也未提供", "topic", "dpos-signature-response")
+			return nil, fmt.Errorf("signature response topic already exists but not available from network integration")
 		} else {
 			r.logger.Warn("创建签名响应主题失败", "error", err)
 			return nil, fmt.Errorf("failed to create signature response topic: %w", err)
@@ -7409,6 +7480,11 @@ func (r *dposRuntime) getSignatureResponseTopic() (*network.Topic, error) {
 	}
 
 	r.signatureResponseTopic = topic
+	
+	// 存储实际使用的protoID
+	actualProtoID := topic.GetActualProtoID()
+	r.logger.Info("🔍 签名响应Topic名称对比", "原始名称", "dpos-signature-response", "实际名称", actualProtoID)
+	
 	r.logger.Info("成功创建签名响应主题")
 	return topic, nil
 }
@@ -7798,6 +7874,8 @@ func (r *dposRuntime) broadcastSignatureRequestToPeer(request *SignatureRequest,
 	}
 
 	// 发布签名请求
+	actualTopicName := topic.GetActualProtoID()
+	r.logger.Info("🚀 向节点广播签名请求", "peer", peerID.String(), "原始名称", "dpos-signature-request", "实际名称", actualTopicName)
 	if err := topic.Publish(dposMsg); err != nil {
 		r.logger.Warn("failed to publish signature request to peer", "error", err, "peer", peerID.String())
 		return
@@ -10287,7 +10365,13 @@ func (d *DPoS) handleBLSResponse(requestID string, blsKey *bls.PublicKey) error 
 		return fmt.Errorf("BLS response handler not found for requestID: %s", requestID)
 	}
 	
-	// 发送响应
+	// 发送响应，使用recover防止panic
+	defer func() {
+		if r := recover(); r != nil {
+			d.logger.Debug("handleBLSResponse recovered from panic", "requestID", requestID, "error", r)
+		}
+	}()
+	
 	select {
 	case responseCh <- blsKey:
 		d.logger.Debug("✅ 发送真实BLS响应", "requestID", requestID)
@@ -10316,7 +10400,13 @@ func (d *DPoS) simulateBLSResponse(requestID string) {
 		return
 	}
 	
-	// 发送响应
+	// 发送响应，使用recover防止panic
+	defer func() {
+		if r := recover(); r != nil {
+			d.logger.Debug("simulateBLSResponse recovered from panic", "requestID", requestID, "error", r)
+		}
+	}()
+	
 	select {
 	case responseCh <- blsKey.PublicKey():
 		d.logger.Info("✅ 发送模拟BLS响应", "requestID", requestID)

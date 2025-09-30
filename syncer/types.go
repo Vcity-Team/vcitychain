@@ -74,6 +74,10 @@ type Syncer interface {
 	HasSyncPeer() bool
 	// Sync starts routine to sync blocks
 	Sync(func(*types.FullBlock) bool) error
+	// EnablePublishingPeerStatus enables publishing own status via gossip
+	EnablePublishingPeerStatus()
+	// DisablePublishingPeerStatus disables publishing own status via gossip
+	DisablePublishingPeerStatus()
 }
 
 type Progression interface {

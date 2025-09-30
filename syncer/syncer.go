@@ -216,6 +216,26 @@ func (s *syncer) getPeerMapSize() int {
 	return count
 }
 
+// EnablePublishingPeerStatus enables publishing own status via gossip
+func (s *syncer) EnablePublishingPeerStatus() {
+	if s.syncPeerClient != nil {
+		s.syncPeerClient.EnablePublishingPeerStatus()
+		s.logger.Info("✅ 启用状态广播")
+	} else {
+		s.logger.Warn("⚠️ syncPeerClient为空，无法启用状态广播")
+	}
+}
+
+// DisablePublishingPeerStatus disables publishing own status via gossip
+func (s *syncer) DisablePublishingPeerStatus() {
+	if s.syncPeerClient != nil {
+		s.syncPeerClient.DisablePublishingPeerStatus()
+		s.logger.Info("✅ 禁用状态广播")
+	} else {
+		s.logger.Warn("⚠️ syncPeerClient为空，无法禁用状态广播")
+	}
+}
+
 // HasSyncPeer returns whether syncer has the peer to syncs blocks
 // return false if syncer has no peer whose latest block height doesn't exceed local height
 func (s *syncer) HasSyncPeer() bool {

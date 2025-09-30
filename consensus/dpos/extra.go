@@ -1243,10 +1243,10 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 					} else {
 						// 缓存中没有找到，添加到缺失列表
 						missingBLSKeys = append(missingBLSKeys, validator.Address)
-						logger.Error("❌ 网络集成层缓存中未找到BLS公钥",
+						logger.Debug("⚠️ 网络集成层缓存中未找到BLS公钥，将尝试主动获取",
 							"blockNumber", blockNumber,
 							"address", validator.Address.String(),
-							"note", "BLS公钥应在节点启动时预加载到缓存")
+							"note", "BLS公钥未在缓存中找到，将尝试网络获取")
 					}
 				} else {
 					// 网络集成层不可用
@@ -1265,16 +1265,129 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		}
 	}
 
-	// 🆕 方案2：如果还有缺失的BLS公钥，说明启动时预加载失败，这是严重错误
+	// 🆕 方案2：如果还有缺失的BLS公钥，尝试主动获取
 	if len(missingBLSKeys) > 0 {
-		logger.Error("❌ 发现缺失的BLS公钥，启动时预加载应该已确保所有公钥可用",
+		logger.Info("🔄 发现缺失的BLS公钥，尝试主动获取",
 			"blockNumber", blockNumber,
 			"missingCount", len(missingBLSKeys),
 			"missingAddresses", missingBLSKeys,
-			"note", "BLS公钥应在节点启动时预加载到缓存，缺失说明启动流程有问题")
+			"note", "BLS公钥未在缓存中找到，将尝试网络获取")
 		
-		// 返回错误，因为BLS公钥缺失会导致签名验证失败
-		return fmt.Errorf("missing BLS keys for %d validators: %v", len(missingBLSKeys), missingBLSKeys)
+		// 🆕 尝试主动获取缺失的BLS公钥
+		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+			if dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
+				myAddress := types.Address(dposInstance.key.Address())
+				for _, missingAddress := range missingBLSKeys {
+					if err := dposInstance.runtime.networkIntegration.RequestBLSKey(missingAddress, myAddress); err != nil {
+						logger.Warn("⚠️ 主动获取BLS公钥失败，但继续验证流程",
+							"blockNumber", blockNumber,
+							"address", missingAddress.String(),
+							"error", err,
+							"note", "将使用现有公钥继续验证")
+					} else {
+						logger.Debug("📨 已发送BLS公钥请求",
+							"blockNumber", blockNumber,
+							"address", missingAddress.String(),
+							"note", "等待网络响应")
+					}
+				}
+				
+				// 🆕 同步等待BLS公钥获取完成
+				logger.Info("⏳ 等待BLS公钥网络响应",
+					"blockNumber", blockNumber,
+					"missingCount", len(missingBLSKeys),
+					"waitTime", "15秒")
+				
+				maxWaitTime := 15 * time.Second
+				retryInterval := 1 * time.Second
+				maxRetries := int(maxWaitTime / retryInterval)
+				
+				for retry := 0; retry < maxRetries; retry++ {
+					// 检查是否所有BLS公钥都已获取
+					stillMissing := make([]types.Address, 0)
+					for _, address := range missingBLSKeys {
+						if _, exists := dposInstance.runtime.networkIntegration.GetBLSKey(address); !exists {
+							stillMissing = append(stillMissing, address)
+						}
+					}
+					
+					if len(stillMissing) == 0 {
+						logger.Info("✅ 所有BLS公钥已成功获取",
+							"blockNumber", blockNumber,
+							"waitTime", fmt.Sprintf("%.1f秒", float64(retry+1)*retryInterval.Seconds()))
+						break
+					}
+					
+					if retry < maxRetries-1 {
+						logger.Debug("⏳ 继续等待BLS公钥响应",
+							"blockNumber", blockNumber,
+							"stillMissingCount", len(stillMissing),
+							"retry", retry+1,
+							"maxRetries", maxRetries)
+						time.Sleep(retryInterval)
+					}
+				}
+				
+				// 最终检查
+				finalMissing := make([]types.Address, 0)
+				for _, address := range missingBLSKeys {
+					if _, exists := dposInstance.runtime.networkIntegration.GetBLSKey(address); !exists {
+						finalMissing = append(finalMissing, address)
+					}
+				}
+				
+				if len(finalMissing) > 0 {
+					logger.Warn("⚠️ 部分BLS公钥仍无法获取，继续验证流程",
+						"blockNumber", blockNumber,
+						"stillMissingCount", len(finalMissing),
+						"stillMissingAddresses", finalMissing,
+						"note", "将使用现有公钥继续验证，可能影响签名验证")
+				} else {
+					logger.Info("✅ 所有缺失的BLS公钥已成功获取",
+						"blockNumber", blockNumber,
+						"note", "可以继续BLS签名验证")
+					
+					// 🆕 重新从缓存获取BLS公钥并更新blsPublicKeys数组
+					logger.Info("🔄 重新从缓存获取BLS公钥并更新数组",
+						"blockNumber", blockNumber,
+						"missingCount", len(missingBLSKeys))
+					
+					for _, address := range missingBLSKeys {
+						if cachedBLSKey, exists := dposInstance.runtime.networkIntegration.GetBLSKey(address); exists {
+							if blsKey, err := bls.UnmarshalPublicKey(cachedBLSKey); err == nil {
+								// 找到对应的位图索引
+								for i := uint64(0); i < uint64(len(validators)); i++ {
+									if s.Bitmap.IsSet(i) && validators[int(i)].Address == address {
+										blsPublicKeys[i] = blsKey
+										// 同时更新validator对象
+										validators[int(i)].BlsKey = blsKey
+										logger.Info("✅ 成功更新BLS公钥到数组和validator对象",
+											"blockNumber", blockNumber,
+											"address", address.String(),
+											"bitmapIndex", i,
+											"blsKeyLength", len(cachedBLSKey))
+										break
+									}
+								}
+							} else {
+								logger.Warn("⚠️ 解析从缓存获取的BLS公钥失败",
+									"blockNumber", blockNumber,
+									"address", address.String(),
+									"error", err)
+							}
+						}
+					}
+				}
+			} else {
+				logger.Warn("⚠️ 网络集成层不可用，无法主动获取BLS公钥",
+					"blockNumber", blockNumber,
+					"note", "将使用现有公钥继续验证")
+			}
+		} else {
+			logger.Warn("⚠️ DPoS实例不可用，无法主动获取BLS公钥",
+				"blockNumber", blockNumber,
+				"note", "将使用现有公钥继续验证")
+		}
 	}
 
 	// 🆕 方案2：BLS公钥获取逻辑已简化，所有公钥应在启动时预加载完成

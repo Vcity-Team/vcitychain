@@ -44,6 +44,9 @@ type Topic struct {
 	handlerTimeout time.Duration    // 消息处理超时时间
 	messageStats   map[string]int64 // 消息统计
 	statsMutex     sync.RWMutex     // 统计锁
+	
+	// 实际使用的protoID（可能被重命名）
+	actualProtoID  string
 }
 
 func (t *Topic) createObj() proto.Message {
@@ -229,6 +232,11 @@ func (t *Topic) isValidMessage(obj proto.Message) bool {
 		return false
 	}
 
+	// 检查topic是否为nil，防止panic
+	if t.topic == nil {
+		return false
+	}
+
 	// 针对DPoS签名请求消息的特殊验证
 	if strings.Contains(t.topic.String(), "dpos-signature-request") {
 		return t.isValidSignatureRequest(obj)
@@ -320,10 +328,14 @@ func (t *Topic) isValidSignatureResponse(obj proto.Message) bool {
 }
 
 func (s *Server) NewTopic(protoID string, obj proto.Message) (*Topic, error) {
+	s.logger.Info("🔍 开始创建topic", "protoID", protoID)
+	
 	topic, err := s.ps.Join(protoID)
 	if err != nil {
+		s.logger.Error("🔍 Join topic失败", "protoID", protoID, "错误类型", fmt.Sprintf("%T", err), "错误信息", err.Error())
 		return nil, err
 	}
+	s.logger.Info("🔍 Join topic成功", "protoID", protoID)
 
 	tt := &Topic{
 		logger:         s.logger.Named(protoID),
@@ -333,10 +345,17 @@ func (s *Server) NewTopic(protoID string, obj proto.Message) (*Topic, error) {
 		maxHandlers:    maxMessageHandlers,
 		handlerTimeout: messageHandlerTimeout,
 		messageStats:   make(map[string]int64),
+		actualProtoID:  protoID, // 存储实际使用的protoID
 	}
 	tt.closed.Store(false)
 
+	s.logger.Info("🔍 Topic对象创建成功", "protoID", protoID, "topic对象", fmt.Sprintf("%p", tt))
 	return tt, nil
+}
+
+// GetActualProtoID 获取实际使用的protoID（可能被重命名）
+func (t *Topic) GetActualProtoID() string {
+	return t.actualProtoID
 }
 
 // GetMessageStats 获取消息处理统计信息
