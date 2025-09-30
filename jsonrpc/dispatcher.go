@@ -433,6 +433,7 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 		"fd.reqt", fd.reqt)
 
 	// Handle parameters based on method signature
+	d.logger.Info("entering parameter handling", "fd.numParams()", fd.numParams())
 	if fd.numParams() > 0 {
 		// Check if the last parameter is interface{} type
 		if fd.reqt[fd.inNum-1] == reflect.TypeOf((*interface{})(nil)).Elem() {
@@ -495,15 +496,25 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 			}
 
 			// Special handling for eth_estimateGas with optional second parameter
+			d.logger.Info("checking eth_estimateGas special handling", 
+				"method", req.Method, 
+				"fd.numParams()", fd.numParams())
+			
 			if req.Method == "eth_estimateGas" && fd.numParams() == 2 {
+				d.logger.Info("entering eth_estimateGas special handling")
+				
 				// Parse the raw params to check actual parameter count
 				var rawParams []interface{}
 				if err := json.Unmarshal(req.Params, &rawParams); err != nil {
+					d.logger.Error("failed to unmarshal raw params", "error", err)
 					return nil, NewInvalidParamsError("Invalid Params")
 				}
 
+				d.logger.Info("raw params parsed", "count", len(rawParams), "params", rawParams)
+
 				// If only one parameter provided, add default BlockNumber (latest)
 				if len(rawParams) == 1 {
+					d.logger.Info("adding default latest parameter")
 					// Create a default BlockNumber (latest) for the second parameter
 					latestBlockNumber := "latest"
 					rawParams = append(rawParams, latestBlockNumber)
@@ -511,9 +522,11 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 					// Re-marshal the modified params
 					modifiedParams, err := json.Marshal(rawParams)
 					if err != nil {
+						d.logger.Error("failed to marshal modified params", "error", err)
 						return nil, NewInvalidParamsError("Invalid Params")
 					}
 					req.Params = modifiedParams
+					d.logger.Info("modified params", "new_params", string(modifiedParams))
 				}
 			}
 
