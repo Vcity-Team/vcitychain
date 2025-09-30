@@ -241,10 +241,9 @@ func DecodeTxn(arg *txnArgs, blockNumber uint64, store nonceGetter, forceSetNonc
 	txn.R = big.NewInt(0)
 	txn.S = big.NewInt(0)
 	
-	// Set ChainID for EIP-1559 transactions (DynamicFeeTx)
-	if txn.Type == types.DynamicFeeTx {
-		txn.ChainID = big.NewInt(20230825) // Use correct chain ID from genesis.json
-	}
+	// Set ChainID for all transaction types during gas estimation
+	// This ensures proper RLP marshaling regardless of transaction type
+	txn.ChainID = big.NewInt(20230825) // Use correct chain ID from genesis.json
 
 	txn.ComputeHash(blockNumber)
 
