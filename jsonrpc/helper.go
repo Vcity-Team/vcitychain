@@ -235,6 +235,12 @@ func DecodeTxn(arg *txnArgs, blockNumber uint64, store nonceGetter, forceSetNonc
 		txn.To = arg.To
 	}
 
+	// For gas estimation, set default signature values to allow proper RLP marshaling
+	// These are dummy values and not used for actual transaction validation
+	txn.V = big.NewInt(0)
+	txn.R = big.NewInt(0)
+	txn.S = big.NewInt(0)
+
 	txn.ComputeHash(blockNumber)
 
 	return txn, nil
