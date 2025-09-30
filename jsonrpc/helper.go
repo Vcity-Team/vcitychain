@@ -211,7 +211,9 @@ func DecodeTxn(arg *txnArgs, blockNumber uint64, store nonceGetter, forceSetNonc
 	}
 
 	if arg.Gas == nil {
-		arg.Gas = argUintPtr(0)
+		// For gas estimation, use a reasonable default gas limit
+		// This allows the transaction to be properly processed for estimation
+		arg.Gas = argUintPtr(3000000) // 3M gas limit for contract deployment
 	}
 
 	txType := types.LegacyTx
