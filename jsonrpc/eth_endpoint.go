@@ -521,6 +521,18 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 		return nil, err
 	}
 
+	// Log the transaction details for gas estimation (including dummy signature values)
+	e.logger.Info("gas estimation transaction created",
+		"txType", transaction.Type,
+		"chainID", transaction.ChainID,
+		"v", transaction.V,
+		"r", transaction.R,
+		"s", transaction.S,
+		"from", transaction.From,
+		"to", transaction.To,
+		"value", transaction.Value,
+		"gas", transaction.Gas)
+
 	forksInTime := e.store.GetForksInTime(header.Number)
 
 	if transaction.IsValueTransfer() {
