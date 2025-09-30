@@ -96,6 +96,21 @@ func (s *syncer) Close() error {
 // initializePeerMap fetches peer statuses and initializes map
 func (s *syncer) initializePeerMap() {
 	peerStatuses := s.syncPeerClient.GetConnectedPeerStatuses()
+	s.logger.Info("🔍 初始化对等节点映射", "获取到的对等节点数量", len(peerStatuses))
+	
+	if len(peerStatuses) == 0 {
+		s.logger.Warn("⚠️ 没有找到任何对等节点，同步器将等待对等节点连接")
+	} else {
+		s.logger.Info("✅ 成功获取对等节点状态", "数量", len(peerStatuses))
+		for i, peer := range peerStatuses {
+			s.logger.Debug("对等节点信息", 
+				"索引", i, 
+				"ID", peer.ID.String()[:16], 
+				"区块高度", peer.Number,
+				"距离", peer.Distance.String())
+		}
+	}
+	
 	s.peerMap.Put(peerStatuses...)
 }
 
@@ -149,6 +164,15 @@ func (s *syncer) initNewPeerStatus(peerID peer.ID) {
 
 // putToPeerMap puts given status to peer map
 func (s *syncer) putToPeerMap(status *NoForkPeer) {
+	// 检查是否是重复的状态更新
+	if existingPeer, exists := s.peerMap.Load(status.ID.String()); exists {
+		if existingPeer.(*NoForkPeer).Number == status.Number {
+			// 相同区块高度，跳过通知
+			s.peerMap.Put(status) // 仍然更新距离等信息
+			return
+		}
+	}
+	
 	s.peerMap.Put(status)
 	s.notifyNewStatusEvent()
 }
@@ -160,15 +184,36 @@ func (s *syncer) removeFromPeerMap(peerID peer.ID) {
 
 // notifyNewStatusEvent emits signal to newStatusCh
 func (s *syncer) notifyNewStatusEvent() {
+	// 使用 recover 捕获 panic，避免向已关闭的 channel 发送数据
+	defer func() {
+		if r := recover(); r != nil {
+			// 如果发生 panic（通常是向已关闭的 channel 发送数据），忽略
+			s.logger.Debug("notifyNewStatusEvent recovered from panic", "error", r)
+		}
+	}()
+	
+	// 使用非阻塞发送，避免频繁触发
 	select {
 	case s.newStatusCh <- struct{}{}:
+		// 成功发送
 	default:
+		// channel 已满或已关闭，忽略
 	}
 }
 
 // GetSyncProgression returns progression
 func (s *syncer) GetSyncProgression() *progress.Progression {
 	return s.syncProgression.GetProgression()
+}
+
+// getPeerMapSize returns the current size of peerMap
+func (s *syncer) getPeerMapSize() int {
+	count := 0
+	s.peerMap.Range(func(key, value interface{}) bool {
+		count++
+		return true
+	})
+	return count
 }
 
 // HasSyncPeer returns whether syncer has the peer to syncs blocks
@@ -184,6 +229,10 @@ func (s *syncer) HasSyncPeer() bool {
 func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 	localLatest := s.blockchain.Header().Number
 	skipList := make(map[peer.ID]bool)
+	
+	// 添加日志控制变量
+	lastNoPeerLogTime := time.Time{}
+	noPeerLogInterval := 30 * time.Second // 30秒打印一次
 
 	for {
 		// Wait for a new event to arrive
@@ -192,34 +241,49 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 		// fetch local latest block
 		if header := s.blockchain.Header(); header != nil {
 			localLatest = header.Number
-			s.logger.Debug("同步器状态更新", "localLatest", localLatest)
+			// 减少"同步器状态更新"日志的打印频率
+			now := time.Now()
+			if now.Sub(lastNoPeerLogTime) > 10*time.Second {
+				s.logger.Debug("同步器状态更新", "localLatest", localLatest)
+				lastNoPeerLogTime = now
+			}
 		}
 
 		// pick one best peer
 		bestPeer := s.peerMap.BestPeer(skipList)
 		if bestPeer == nil {
-			s.logger.Debug("没有可用的对等节点", "skipListSize", len(skipList))
+			// 控制日志频率，避免刷屏
+			now := time.Now()
+			if now.Sub(lastNoPeerLogTime) > noPeerLogInterval {
+				// 显示 peerMap 的当前状态
+				peerCount := s.getPeerMapSize()
+				s.logger.Debug("没有可用的对等节点", 
+					"skipListSize", len(skipList),
+					"peerMapSize", peerCount)
+				lastNoPeerLogTime = now
+			}
 			// Empty skipList map if there are no best peers
 			skipList = make(map[peer.ID]bool)
 
 			continue
 		}
-		
-		s.logger.Debug("找到最佳对等节点", 
-			"peer", bestPeer.ID.String(), 
-			"peerNumber", bestPeer.Number, 
-			"localLatest", localLatest)
 
 		// if the bestPeer does not have a new block continue
 		if bestPeer.Number <= localLatest {
-			s.logger.Debug("跳过同步：对等节点没有新区块", 
-				"peer", bestPeer.ID.String(), 
-				"peerNumber", bestPeer.Number, 
-				"localLatest", localLatest)
+			// 控制"跳过同步"日志的频率
+			now := time.Now()
+			if now.Sub(lastNoPeerLogTime) > noPeerLogInterval {
+				s.logger.Debug("跳过同步：对等节点没有新区块", 
+					"peer", bestPeer.ID.String(), 
+					"peerNumber", bestPeer.Number, 
+					"localLatest", localLatest)
+				lastNoPeerLogTime = now
+			}
 			continue
 		}
 		
-		s.logger.Debug("选择最佳对等节点进行同步", 
+		// 只有在真正开始同步时才打印日志
+		s.logger.Debug("开始同步区块", 
 			"peer", bestPeer.ID.String(), 
 			"peerNumber", bestPeer.Number, 
 			"localLatest", localLatest)

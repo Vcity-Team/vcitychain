@@ -399,16 +399,30 @@ func (i *backendIBFT) startConsensus() {
 		// 🆕 简化：检查是否需要停止IBFT（通过验证者集合判断）
 		if i.forkManager != nil {
 			if shouldStop := i.checkShouldStopIBFT(pending); shouldStop {
-				i.logger.Info("🛑 验证者集合为空，DPoS已接管，IBFT应该停止", "height", pending)
 				
 				// 🆕 停止IBFT的syncer，避免与DPoS的syncer冲突
 				if i.syncer != nil {
 					i.logger.Info("🛑 停止IBFT的syncer，让DPoS的syncer接管...")
-					if err := i.syncer.Close(); err != nil {
-						i.logger.Error("❌ 停止IBFT的syncer失败", "error", err)
-					} else {
-						i.logger.Info("✅ IBFT的syncer已停止")
+					
+					// 添加超时机制，避免无限等待
+					done := make(chan error, 1)
+					go func() {
+						done <- i.syncer.Close()
+					}()
+					
+					select {
+					case err := <-done:
+						if err != nil {
+							i.logger.Error("❌ 停止IBFT的syncer失败", "error", err)
+						} else {
+							i.logger.Info("✅ IBFT的syncer已停止")
+						}
+					case <-time.After(5 * time.Second):
+						i.logger.Warn("⚠️ 停止IBFT的syncer超时，强制继续")
 					}
+					
+					// 清空 syncer 引用，避免重复关闭
+					i.syncer = nil
 				}
 				
 				// 🆕 同步启动DPoS引擎，DPoS引擎会启动自己的syncer接管区块同步

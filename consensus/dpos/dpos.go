@@ -457,10 +457,6 @@ func (r *dposRuntime) initializeRuntime() error {
 	r.currentRound = r.calculateInitialRound()
 	r.currentDelegateIndex = r.calculateCurrentDelegateIndex()
 
-	r.logger.Debug("=== dposRuntime.initializeRuntime ===",
-		"initialRound", r.currentRound,
-		"r.currentDelegateIndex", r.currentDelegateIndex,
-		"note", "根据当前区块号计算，与创世文件保持一致")
 
 	// 初始化受托人集合
 	if err := r.initializeDelegates(); err != nil {
@@ -1499,10 +1495,7 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 
 // initializeDelegates 初始化受托人集合
 func (r *dposRuntime) initializeDelegates() error {
-	r.logger.Debug("🚀 dposRuntime.initializeDelegates 开始")
-	r.logger.Debug("backend是否为nil", "isNil", r.backend == nil)
-
-	// 🆕 修复：使用当前区块号获取受托人集合，而不是已废弃的区块0
+	// 🆕 修复：使用当前区块号获取受托人集合
 	fromExtraData := false
 	if r.backend != nil {
 		// 获取当前区块号

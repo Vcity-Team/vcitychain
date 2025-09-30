@@ -272,11 +272,6 @@ func (m *ForkManager) GetValidatorStore(height uint64) (ValidatorStore, error) {
 
 // GetValidators returns validators at specified height
 func (m *ForkManager) GetValidators(height uint64) (validators.Validators, error) {
-	// 添加调试日志
-	m.logger.Debug("🔍 GetValidators调用", 
-		"height", height,
-		"isDPoSRunning", m.isDPoSRunning,
-		"dposEngine", m.dposEngine != nil)
 	
 	
 		// 🆕 检查是否需要切换到DPoS（0表示不进行切换）
