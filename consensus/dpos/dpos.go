@@ -182,6 +182,8 @@ type dposRuntime struct {
 	rndmux               sync.RWMutex
 	currentRound         uint64
 	currentDelegateIndex uint64
+	latest               time.Time
+	timeout              uint64
 
 	delegates    validator.AccountSet
 	voters       map[types.Address]*VoterInfo
@@ -849,18 +851,9 @@ func (r *dposRuntime) produceBlock() error {
 
 	r.logger.Debug("✅ Key检查通过", "keyAddr", r.config.Key.Address().String())
 
-	// 检查当前节点是否为出块者
-	currentDelegate := r.getCurrentDelegate()
 	keyAddr := types.Address(r.config.Key.Address())
 
 	round, index := r.getRound()
-	// 🆕 添加详细的委托者检查日志
-	r.logger.Debug("🔍 produceBlock 委托者检查",
-		"currentDelegate", currentDelegate.String(),
-		"keyAddr", keyAddr.String(),
-		"isCurrentDelegate", currentDelegate == keyAddr,
-		"currentDelegateIndex", index,
-		"delegatesCount", len(r.delegates))
 
 	// 检查当前节点是否有足够的stake参与出块
 	var currentDelegateInfo *validator.ValidatorMetadata
@@ -908,50 +901,41 @@ func (r *dposRuntime) produceBlock() error {
 		"isActive", currentDelegateInfo.IsActive,
 		"votingPower", currentDelegateInfo.VotingPower.String())
 
-	// 添加调试日志 - 只有当本节点是当前受托人时才打印
-	if currentDelegate == keyAddr {
-		r.logger.Debug("🏭 检查区块生产资格",
-			"currentDelegate", currentDelegate,
-			"keyAddr", keyAddr,
-			"currentRound", round,
-			"currentDelegateIndex", index,
-			"delegatesCount", len(r.delegates),
-			"votingPower", currentDelegateInfo.VotingPower.String())
+	r.rndmux.RLock()
+	latest := r.latest
+	r.rndmux.RUnlock()
+
+	// 检查当前节点是否为出块者
+	currentBlock := r.config.blockchain.CurrentHeader()
+
+	var permitted bool
+	if latest != (time.Time{}) {
+		for cur, now := currentBlock.Number, time.Now(); now.After(latest); cur, now = cur+1, now.Add(-10*time.Second) {
+			if r.getDelegate(cur) == keyAddr {
+				permitted = true
+				break
+			}
+		}
+	} else {
+		permitted = r.getDelegate(currentBlock.Number) == keyAddr
 	}
 
-	// 添加详细的受托人集合调试信息
-	// r.logger.Info("=== 当前受托人集合 ===")
-	// for i, delegate := range r.delegates {
-	// 	r.logger.Info("受托人",
-	// 		"index", i,
-	// 		"address", delegate.Address.String(),
-	// 		"isCurrentDelegate", delegate.Address == currentDelegate,
-	// 		"isKeyAddr", delegate.Address == keyAddr)
-	// }
-	// r.logger.Info("=== 受托人集合结束 ===")
-
-	if currentDelegate != keyAddr {
-		r.logOnce("not_current_delegate", "info", "⏭️ 不是当前委托者，跳过区块生产",
-			"currentDelegate", currentDelegate.String(),
-			"keyAddr", keyAddr.String(),
-			"currentDelegateIndex", index)
-		return nil // 不是当前出块者
-	}
-
-	// 🆕 基于严格顺序的出块检查，替换原有的等待逻辑
-	if !r.shouldProduceBlock() {
-		expectedIndex := r.calculateExpectedDelegateIndex()
-		currentBlock := r.config.blockchain.CurrentHeader()
-		r.logger.Debug("不是当前轮次的委托者，跳过出块",
-			"currentBlock", currentBlock.Number,
-			"currentDelegateIndex", index,
-			"expectedDelegateIndex", expectedIndex,
-			"delegateCount", r.config.DelegateCount)
+	if !permitted {
+		r.logger.Debug("not suitable for mining block", "block", currentBlock.Number, "latest", latest)
 		return nil
 	}
 
-	// 检查是否已经有更新的区块
-	currentBlock := r.config.blockchain.CurrentHeader()
+	// // 🆕 基于严格顺序的出块检查，替换原有的等待逻辑
+	// if !r.shouldProduceBlock() {
+	// 	expectedIndex := r.calculateExpectedDelegateIndex()
+	// 	currentBlock := r.config.blockchain.CurrentHeader()
+	// 	r.logger.Debug("不是当前轮次的委托者，跳过出块",
+	// 		"currentBlock", currentBlock.Number,
+	// 		"currentDelegateIndex", index,
+	// 		"expectedDelegateIndex", expectedIndex,
+	// 		"delegateCount", r.config.DelegateCount)
+	// 	return nil
+	// }
 
 	// 计算下一个要生产的区块号
 	nextBlockNumber := currentBlock.Number + 1
@@ -1506,25 +1490,18 @@ func (r *dposRuntime) calculateCurrentDelegateIndex() uint64 {
 }
 
 // getCurrentDelegate 获取当前受托人
-func (r *dposRuntime) getCurrentDelegate() types.Address {
+func (r *dposRuntime) getDelegate(height uint64) types.Address {
 	if len(r.delegates) == 0 {
 		r.logger.Warn("🔍 getCurrentDelegate: 验证者集合为空")
 		return types.ZeroAddress
 	}
 
-	// 🆕 修复：直接根据当前区块号计算出块者，确保与验证者集合排序一致
-	currentBlock := r.config.blockchain.CurrentHeader()
-	if currentBlock == nil {
-		r.logger.Warn("🔍 getCurrentDelegate: 无法获取当前区块头")
-		return types.ZeroAddress
-	}
-
 	// 计算当前应该出块的委托者索引
 	var expectedIndex uint64
-	if currentBlock.Number == 0 {
+	if height == 0 {
 		expectedIndex = 0
 	} else {
-		expectedIndex = currentBlock.Number % uint64(r.config.DelegateCount)
+		expectedIndex = height % uint64(r.config.DelegateCount)
 	}
 
 	// 确保索引在有效范围内
@@ -1534,7 +1511,7 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 
 	// 🆕 添加详细的查找日志
 	r.logger.Debug("🔍 ===== getCurrentDelegate 开始查找 =====",
-		"currentBlock", currentBlock.Number,
+		"currentBlock", height,
 		"expectedIndex", expectedIndex,
 		"delegateCount", r.config.DelegateCount,
 		"delegatesCount", len(r.delegates))
@@ -1559,7 +1536,7 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 				"actualIndex", index,
 				"address", delegate.Address.String(),
 				"votingPower", delegate.VotingPower.String(),
-				"blockNumber", currentBlock.Number)
+				"blockNumber", height)
 			return delegate.Address
 		}
 	}
@@ -2670,7 +2647,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 	d.logger.Debug("processing headers", "count", len(headers))
 
 	// Update round state for each new block
-	for _, header := range headers {
+	for i, header := range headers {
 		d.logger.Debug("processing header", "blockNumber", header.Number, "blockHash", header.Hash)
 
 		// 检查是否已经处理过这个区块
@@ -2744,6 +2721,11 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 				"blockNumber", header.Number,
 				"currentRound", round,
 				"currentDelegateIndex", index)
+		}
+		if i == len(headers)-1 {
+			d.runtime.rndmux.Lock()
+			d.runtime.latest = time.Now()
+			d.runtime.rndmux.Unlock()
 		}
 	}
 
