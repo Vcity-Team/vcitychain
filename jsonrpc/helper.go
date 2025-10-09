@@ -184,7 +184,8 @@ func DecodeTxn(arg *txnArgs, blockNumber uint64, store nonceGetter, forceSetNonc
 	}
 
 	if arg.GasPrice == nil {
-		arg.GasPrice = argBytesPtr([]byte{})
+		// Set a reasonable default gas price for gas estimation
+		arg.GasPrice = argBytesPtr(big.NewInt(1000000000).Bytes()) // 1 Gwei
 	}
 
 	if arg.GasTipCap == nil {
