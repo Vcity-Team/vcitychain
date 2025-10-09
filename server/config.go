@@ -47,15 +47,22 @@ type Config struct {
 
 	NumBlockConfirmations uint64
 	MetricsInterval       time.Duration
-	
+
 	// 🆕 新增：共识切换高度
 	ConsensusSwitchHeight uint64
-	
+
 	// 🆕 新增：DPoS验证者数量
-	DPoSValidatorsCount   uint64
-	
+	DPoSValidatorsCount uint64
+
 	// 🆕 新增：DPoS最小质押门槛
 	DPoSDelegateThreshold *big.Int
+
+	// 🆕 新增：DPoS经济系统配置
+	DPoSEpochDuration        string `yaml:"dpos_epoch_duration"`
+	DPoSRewardDistribution   string `yaml:"dpos_reward_distribution"`    // 奖励分发地址
+	DPoSRewardAmount         string `yaml:"dpos_reward_amount"`          // 每个epoch奖励金额
+	DPoSValidatorRewardRatio uint64 `yaml:"dpos_validator_reward_ratio"` // 验证者奖励比例
+	DPoSVoterRewardRatio     uint64 `yaml:"dpos_voter_reward_ratio"`     // 投票者奖励比例
 }
 
 // Telemetry holds the config details for metric services

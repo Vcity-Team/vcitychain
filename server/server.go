@@ -59,7 +59,7 @@ type Server struct {
 	state        state.State
 	stateStorage itrie.Storage
 
-	consensus consensus.Consensus
+	consensus  consensus.Consensus
 	dposEngine consensus.Consensus // DPoS引擎
 
 	// blockchain stack
@@ -96,14 +96,13 @@ type Server struct {
 // StartDPoSEngine 实现DPoSEngineStarter接口，启动DPoS引擎
 func (s *Server) StartDPoSEngine(height uint64) error {
 	s.logger.Info("🚀 开始启动DPoS引擎", "height", height)
-	
-	
+
 	// 如果DPoS引擎已经存在，先停止它
 	if s.dposEngine != nil {
 		s.logger.Info("🛑 目前已有DPoS引擎")
 		return nil
 	}
-	
+
 	// 创建DPoS引擎配置
 	engineConfig := map[string]interface{}{
 		"consensusSwitchHeight": float64(s.config.ConsensusSwitchHeight),
@@ -111,13 +110,13 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		"delegateThreshold":     s.config.DPoSDelegateThreshold,
 		"blockTime":             "2s", // 设置默认区块时间为2秒
 	}
-	
+
 	// 获取区块时间
 	blockTime, err := extractBlockTime(engineConfig)
 	if err != nil {
 		return fmt.Errorf("failed to extract block time: %w", err)
 	}
-	
+
 	config := &consensus.Config{
 		Params:      s.config.Chain.Params,
 		Config:      engineConfig,
@@ -126,7 +125,7 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		IsRelayer:   s.config.Relayer,
 		RPCEndpoint: s.config.JSONRPC.JSONRPCAddr.String(),
 	}
-	
+
 	// 创建DPoS引擎
 	dposEngine, err := consensusDPoS.Factory(
 		&consensus.Params{
@@ -144,25 +143,25 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 			MetricsInterval:       s.config.MetricsInterval,
 		},
 	)
-	
+
 	if err != nil {
 		return fmt.Errorf("failed to create DPoS engine: %w", err)
 	}
-	
+
 	// 初始化DPoS引擎
 	if err := dposEngine.Initialize(); err != nil {
 		return fmt.Errorf("failed to initialize DPoS engine: %w", err)
 	}
-	
+
 	// 启动DPoS引擎
 	if err := dposEngine.Start(); err != nil {
 		return fmt.Errorf("failed to start DPoS engine: %w", err)
 	}
-	
+
 	// 更新区块链的共识引擎
 	s.blockchain.SetConsensus(dposEngine)
 	s.dposEngine = dposEngine
-	
+
 	s.logger.Info("✅ DPoS引擎启动成功", "height", height)
 	return nil
 }
@@ -621,12 +620,64 @@ func (s *Server) setupConsensus() error {
 	if !ok {
 		engineConfig = map[string]interface{}{}
 	}
-	
+
 	// 🆕 新增：将共识切换高度添加到engineConfig中
 	engineConfig["consensusSwitchHeight"] = float64(s.config.ConsensusSwitchHeight)
-	
+
 	// 🆕 新增：将DPoS验证者数量添加到engineConfig中
 	engineConfig["dposValidatorsCount"] = float64(s.config.DPoSValidatorsCount)
+
+	// 🆕 新增：添加DPoS经济系统配置
+	// 从YAML配置中获取epoch duration
+	if epochDurationStr := s.config.DPoSEpochDuration; epochDurationStr != "" {
+		if epochDuration, err := time.ParseDuration(epochDurationStr); err == nil {
+			engineConfig["epochDuration"] = epochDuration
+		}
+	}
+
+	// 从YAML配置中获取奖励分发地址
+	if rewardAccountStr := s.config.DPoSRewardDistribution; rewardAccountStr != "" {
+		if err := types.IsValidAddress(rewardAccountStr); err == nil {
+			rewardAccount := types.StringToAddress(rewardAccountStr)
+			engineConfig["rewardAccount"] = rewardAccount
+		} else {
+			s.logger.Error("❌ 无效的奖励分发地址", "address", rewardAccountStr, "error", err)
+			return fmt.Errorf("invalid reward distribution address: %s", rewardAccountStr)
+		}
+	} else {
+		return fmt.Errorf("dpos_reward_distribution is required in config file")
+	}
+
+	// 从YAML配置中获取奖励金额
+	if rewardAmountStr := s.config.DPoSRewardAmount; rewardAmountStr != "" {
+		if rewardAmount, ok := new(big.Int).SetString(rewardAmountStr, 10); ok {
+			engineConfig["rewardAmount"] = rewardAmount
+		} else {
+			s.logger.Error("❌ 无效的奖励金额", "amount", rewardAmountStr)
+			return fmt.Errorf("invalid reward amount: %s", rewardAmountStr)
+		}
+	} else {
+		return fmt.Errorf("dpos_reward_amount is required in config file")
+	}
+
+	// 从YAML配置中获取奖励比例
+	if validatorRatio := s.config.DPoSValidatorRewardRatio; validatorRatio > 0 {
+		engineConfig["validatorRewardRatio"] = validatorRatio
+	} else {
+		engineConfig["validatorRewardRatio"] = uint64(70) // 默认值
+	}
+
+	if voterRatio := s.config.DPoSVoterRewardRatio; voterRatio > 0 {
+		engineConfig["voterRewardRatio"] = voterRatio
+	} else {
+		engineConfig["voterRewardRatio"] = uint64(30) // 默认值
+	}
+
+	s.logger.Info("✅ DPoS经济系统配置解析完成",
+		"rewardAccount", engineConfig["rewardAccount"],
+		"rewardAmount", engineConfig["rewardAmount"],
+		"validatorRatio", engineConfig["validatorRewardRatio"],
+		"voterRatio", engineConfig["voterRewardRatio"])
 
 	var (
 		blockTime = common.Duration{Duration: 0}
@@ -671,10 +722,12 @@ func (s *Server) setupConsensus() error {
 	}
 
 	s.consensus = consensus
-	
+
 	// 🆕 如果是IBFT共识，设置DPoS引擎启动器
 	if engineName == string(IBFTConsensus) {
-		if ibftConsensus, ok := consensus.(interface{ SetDPoSEngineStarter(starter consensusIBFT.DPoSEngineStarter) }); ok {
+		if ibftConsensus, ok := consensus.(interface {
+			SetDPoSEngineStarter(starter consensusIBFT.DPoSEngineStarter)
+		}); ok {
 			ibftConsensus.SetDPoSEngineStarter(s)
 			s.logger.Info("✅ 已设置DPoS引擎启动器到IBFT共识")
 		} else {
@@ -722,7 +775,7 @@ type jsonRPCHub struct {
 	consensus.Consensus
 	consensus.BridgeDataProvider
 	gasprice.GasStore
-	
+
 	// 🆕 新增：Server引用，用于访问DPoS引擎
 	server *Server
 }
@@ -1051,7 +1104,6 @@ func (s *Server) setupGRPC() error {
 		}
 	}()
 
-
 	return nil
 }
 
@@ -1131,7 +1183,6 @@ func (s *Server) startPrometheusServer(listenAddr *net.TCPAddr) *http.Server {
 	return srv
 }
 
-
 // createDPoSEngine 创建DPoS引擎
 func (s *Server) createDPoSEngine() (consensus.Consensus, error) {
 	// 获取DPoS引擎工厂
@@ -1139,13 +1190,13 @@ func (s *Server) createDPoSEngine() (consensus.Consensus, error) {
 	if !ok {
 		return nil, fmt.Errorf("DPoS consensus engine not found")
 	}
-	
+
 	// 创建DPoS引擎配置
 	engineConfig := map[string]interface{}{
 		"consensusSwitchHeight": float64(s.config.ConsensusSwitchHeight),
 		"dposValidatorsCount":   float64(s.config.DPoSValidatorsCount),
 	}
-	
+
 	config := &consensus.Config{
 		Params:      s.config.Chain.Params,
 		Config:      engineConfig,
@@ -1154,7 +1205,7 @@ func (s *Server) createDPoSEngine() (consensus.Consensus, error) {
 		IsRelayer:   s.config.Relayer,
 		RPCEndpoint: s.config.JSONRPC.JSONRPCAddr.String(),
 	}
-	
+
 	// 创建DPoS引擎实例
 	dposEngine, err := engine(&consensus.Params{
 		Context:               context.Background(),
@@ -1170,11 +1221,11 @@ func (s *Server) createDPoSEngine() (consensus.Consensus, error) {
 		NumBlockConfirmations: s.config.NumBlockConfirmations,
 		MetricsInterval:       s.config.MetricsInterval,
 	})
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to create DPoS engine: %w", err)
 	}
-	
+
 	return dposEngine, nil
 }
 
