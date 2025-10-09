@@ -5149,6 +5149,24 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 
 	// 3. 智能等待签名收集完成
 	collectedSignatures := make(map[types.Address][]byte)
+	validatorAddr := types.Address(r.config.Key.Address())
+
+	blsKey, err := r.getBLSPrivateKey()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	signature, err := blsKey.Sign(checkpointHash[:], signer.DomainValidatorSet)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	signatureBytes, err := signature.Marshal()
+	if err != nil {
+		return nil, nil, err
+	}
+	collectedSignatures[validatorAddr] = signatureBytes
+
 	minRequiredSignatures := r.calculateMinRequiredSignatures()
 
 	// 使用合理的超时时间
