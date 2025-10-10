@@ -106,10 +106,73 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 	// 创建DPoS引擎配置
 	engineConfig := map[string]interface{}{
 		"consensusSwitchHeight": float64(s.config.ConsensusSwitchHeight),
-		"delegateCount":         float64(s.config.DPoSValidatorsCount), // 使用正确的字段名
-		"delegateThreshold":     s.config.DPoSDelegateThreshold,
+		"dposValidatorsCount":   float64(s.config.DPoSValidatorsCount), // 使用正确的字段名
+		"dposDelegateThreshold": s.config.DPoSDelegateThreshold,
 		"blockTime":             "2s", // 设置默认区块时间为2秒
 	}
+
+	// 🆕 新增：添加DPoS经济系统配置
+	// 从YAML配置中获取epoch duration
+	if epochDurationStr := s.config.DPoSEpochDuration; epochDurationStr != "" {
+		if epochDuration, err := time.ParseDuration(epochDurationStr); err == nil {
+			engineConfig["epochDuration"] = epochDuration
+			s.logger.Info("⏰ 设置epoch duration", "duration", epochDuration.String())
+		} else {
+			s.logger.Error("❌ 无效的epoch duration", "duration", epochDurationStr, "error", err)
+		}
+	}
+
+	// 从YAML配置中获取奖励分发地址
+	if rewardAccountStr := s.config.DPoSRewardDistribution; rewardAccountStr != "" {
+		if err := types.IsValidAddress(rewardAccountStr); err == nil {
+			rewardAccount := types.StringToAddress(rewardAccountStr)
+			engineConfig["rewardAccount"] = rewardAccount
+			s.logger.Info("💰 设置奖励分发地址", "account", rewardAccount.String())
+		} else {
+			s.logger.Error("❌ 无效的奖励分发地址", "address", rewardAccountStr, "error", err)
+			return fmt.Errorf("invalid reward distribution address: %s", rewardAccountStr)
+		}
+	} else {
+		s.logger.Error("❌ 缺少奖励分发地址配置")
+		return fmt.Errorf("dpos_reward_distribution is required in config file")
+	}
+
+	// 从YAML配置中获取奖励金额
+	if rewardAmountStr := s.config.DPoSRewardAmount; rewardAmountStr != "" {
+		if rewardAmount, ok := new(big.Int).SetString(rewardAmountStr, 10); ok {
+			engineConfig["rewardAmount"] = rewardAmount
+			s.logger.Info("💰 设置奖励金额", "amount", rewardAmount.String())
+		} else {
+			s.logger.Error("❌ 无效的奖励金额", "amount", rewardAmountStr)
+			return fmt.Errorf("invalid reward amount: %s", rewardAmountStr)
+		}
+	} else {
+		s.logger.Error("❌ 缺少奖励金额配置")
+		return fmt.Errorf("dpos_reward_amount is required in config file")
+	}
+
+	// 从YAML配置中获取奖励比例
+	if validatorRatio := s.config.DPoSValidatorRewardRatio; validatorRatio > 0 {
+		engineConfig["validatorRewardRatio"] = validatorRatio
+		s.logger.Info("📊 设置验证者奖励比例", "ratio", validatorRatio)
+	} else {
+		engineConfig["validatorRewardRatio"] = uint64(70) // 默认值
+		s.logger.Info("📊 使用默认验证者奖励比例", "ratio", 70)
+	}
+
+	if voterRatio := s.config.DPoSVoterRewardRatio; voterRatio > 0 {
+		engineConfig["voterRewardRatio"] = voterRatio
+		s.logger.Info("📊 设置投票者奖励比例", "ratio", voterRatio)
+	} else {
+		engineConfig["voterRewardRatio"] = uint64(30) // 默认值
+		s.logger.Info("📊 使用默认投票者奖励比例", "ratio", 30)
+	}
+
+	s.logger.Info("✅ DPoS经济系统配置解析完成",
+		"rewardAccount", engineConfig["rewardAccount"],
+		"rewardAmount", engineConfig["rewardAmount"],
+		"validatorRatio", engineConfig["validatorRewardRatio"],
+		"voterRatio", engineConfig["voterRewardRatio"])
 
 	// 获取区块时间
 	blockTime, err := extractBlockTime(engineConfig)

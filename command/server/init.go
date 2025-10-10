@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"net"
 
 	"github.com/Vcity-Team/vcitychain/command/server/config"
@@ -57,6 +58,7 @@ func (p *serverParams) initRawParams() error {
 	p.initLogFileLocation()
 	p.initConsensusSwitchHeight()
 	p.initDPoSValidatorsCount()
+	p.initDPoSDelegateThreshold()
 
 	p.relayer = p.rawConfig.Relayer
 
@@ -90,6 +92,22 @@ func (p *serverParams) initDPoSValidatorsCount() {
 	p.dposValidatorsCount = p.rawConfig.DPoSValidatorsCount
 	if p.dposValidatorsCount == 0 {
 		p.dposValidatorsCount = 4 // 默认值
+	}
+}
+
+// 🆕 新增：初始化DPoS最小质押门槛
+func (p *serverParams) initDPoSDelegateThreshold() {
+	// 从配置文件读取DPoS最小质押门槛
+	if p.rawConfig.DPoSDelegateThreshold != "" {
+		if threshold, ok := new(big.Int).SetString(p.rawConfig.DPoSDelegateThreshold, 10); ok {
+			p.dposDelegateThreshold = threshold
+		} else {
+			// 如果解析失败，使用默认值
+			p.dposDelegateThreshold, _ = new(big.Int).SetString("1000000000000000000000", 10) // 1000 VCITY
+		}
+	} else {
+		// 如果配置为空，使用默认值
+		p.dposDelegateThreshold, _ = new(big.Int).SetString("1000000000000000000000", 10) // 1000 VCITY
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"strings"
 
 	"github.com/0xPolygon/go-ibft/messages"
 	protoIBFT "github.com/0xPolygon/go-ibft/messages/proto"
@@ -168,9 +169,14 @@ func (i *backendIBFT) IsProposer(id []byte, height, round uint64) bool {
 
 	previousProposer, err := i.extractProposer(previousHeader)
 	if err != nil {
-		i.logger.Error("failed to extract the last proposer", "height", height-1, "err", err)
-
-		return false
+		// 检查是否是DPoS区块导致的错误
+		if strings.Contains(err.Error(), "DPoS block") {
+			i.logger.Debug("previous block is DPoS block, using zero address as proposer", "height", height-1)
+			previousProposer = types.ZeroAddress
+		} else {
+			i.logger.Error("failed to extract the last proposer", "height", height-1, "err", err)
+			return false
+		}
 	}
 
 	nextProposer := CalcProposer(

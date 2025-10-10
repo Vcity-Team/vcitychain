@@ -27,13 +27,13 @@ func (vs *ValidatorSet) Hash() (types.Hash, error) {
 	if len(vs.Validators) == 0 {
 		return types.Hash{}, nil
 	}
-	
+
 	// 使用简单的地址排序和哈希
 	var addresses []types.Address
 	for _, v := range vs.Validators {
 		addresses = append(addresses, v.Address)
 	}
-	
+
 	// 对地址进行排序以确保一致性
 	for i := 0; i < len(addresses); i++ {
 		for j := i + 1; j < len(addresses); j++ {
@@ -42,13 +42,13 @@ func (vs *ValidatorSet) Hash() (types.Hash, error) {
 			}
 		}
 	}
-	
+
 	// 计算哈希
 	var data []byte
 	for _, addr := range addresses {
 		data = append(data, addr.Bytes()...)
 	}
-	
+
 	return types.BytesToHash(crypto.Keccak256(data)), nil
 }
 
@@ -148,8 +148,7 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		if err != nil {
 			return err
 		}
-		
-		
+
 		if len(validatorElems) == 3 {
 			// 标准ValidatorSetDelta格式：Added, Updated, Removed
 			i.Validators = &validator.ValidatorSetDelta{}
@@ -177,8 +176,7 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		if err != nil {
 			return err
 		}
-		
-		
+
 		if len(committedElems) == 2 {
 			// 标准Signature格式：AggregatedSignature, Bitmap
 			i.Committed = &Signature{}
@@ -188,7 +186,7 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 			}
 		} else {
 			// 非标准格式，可能是其他签名相关数据
-			fmt.Printf("⚠️ DEBUG Non-standard Committed Signature format: %d elements, skipping\n", len(committedElems))
+			// fmt.Printf("⚠️ DEBUG Non-standard Committed Signature format: %d elements, skipping\n", len(committedElems))
 			i.Committed = nil
 		}
 	}
@@ -199,9 +197,9 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		if err != nil {
 			return err
 		}
-		
+
 		// 解析checkpoint元素
-		
+
 		if len(checkpointElems) == 5 {
 			// 标准CheckpointData格式：5个元素
 			i.Checkpoint = &CheckpointData{}
@@ -211,7 +209,7 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 			}
 		} else {
 			// 非标准格式，跳过解析
-			fmt.Printf("⚠️ DEBUG Non-standard Checkpoint format: %d elements, skipping CheckpointData parsing\n", len(checkpointElems))
+			// fmt.Printf("⚠️ DEBUG Non-standard Checkpoint format: %d elements, skipping CheckpointData parsing\n", len(checkpointElems))
 			i.Checkpoint = nil
 		}
 	}
@@ -219,7 +217,6 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 	// Element[4] - 额外字段（只在5个元素时处理）
 	if expectedElements == 5 && len(elems) > 4 && elems[4].Elems() > 0 {
 		fmt.Printf("🔍 DEBUG Element[4] detected: elems=%d, skipping for now\n", elems[4].Elems())
-		// TODO: 根据实际需求处理element[4]
 	}
 
 	return nil
@@ -256,26 +253,26 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		logger.Error("❌ ValidateFinalizedData 签名数据缺失", "blockNumber", blockNumber)
 		return fmt.Errorf("failed to verify signatures for block %d, because signatures are not present", blockNumber)
 	}
-	logger.Info("✅ ValidateFinalizedData 签名数据存在", "blockNumber", blockNumber)
+	logger.Debug("✅ ValidateFinalizedData 签名数据存在", "blockNumber", blockNumber)
 
 	if i.Checkpoint == nil {
 		logger.Error("❌ ValidateFinalizedData 检查点数据缺失", "blockNumber", blockNumber)
 		return fmt.Errorf("failed to verify signatures for block %d, because checkpoint data are not present", blockNumber)
 	}
-	logger.Info("✅ ValidateFinalizedData 检查点数据存在", "blockNumber", blockNumber)
+	logger.Debug("✅ ValidateFinalizedData 检查点数据存在", "blockNumber", blockNumber)
 
 	// validate current block signatures
 	// 🆕 修复：使用与生产时完全相同的哈希计算方式
 	// 生产时使用：checkpoint.Hash(blockchain.GetChainID(), block.Block.Number(), fixedBlockHash)
 	// 验证时使用：i.Checkpoint.Hash(chainID, blockNumber, fixedBlockHash)
 	// 需要确保两者使用相同的参数和计算方式
-	
+
 	// 🆕 使用与生产时相同的固定哈希值
 	fixedBlockHash := types.BytesToHash([]byte(fmt.Sprintf("block_%d", blockNumber)))
-	
+
 	// 🆕 修复：使用传入的chainID参数，确保与生产时一致
 	productionChainID := chainID
-	
+
 	// 🆕 从 ExtraData 中获取验证者集合
 	logger.Debug("🔍 ValidateFinalizedData 开始获取验证者集合", "blockNumber", blockNumber)
 	validators, err := i.getValidatorsFromExtraData(header, parent, parents, consensusBackend, logger)
@@ -288,11 +285,11 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 	// 🆕 关键修复：重新计算CheckpointData的哈希值，确保与生产时一致
 	// 生产时使用r.delegates.Hash()计算CurrentValidatorsHash和NextValidatorsHash
 	// 验证时需要重新计算这些哈希值，确保与生产时完全一致
-	
+
 	// 从验证者集合重新计算哈希值，确保与生产时一致
 	var currentValidatorsHash types.Hash
 	var nextValidatorsHash types.Hash
-	
+
 	// 如果有验证者集合，重新计算哈希值
 	logger.Debug("🔍 ValidateFinalizedData 开始计算验证者哈希", "blockNumber", blockNumber, "validatorsCount", len(validators))
 	if len(validators) > 0 {
@@ -314,11 +311,11 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		currentValidatorsHash = types.Hash{}
 		nextValidatorsHash = types.Hash{}
 	}
-	
+
 	// 🆕 方案2：直接使用ExtraData中的轮次值，确保与生产时完全一致
 	// 生产时使用的轮次值已经保存在ExtraData.Checkpoint.BlockRound中
 	// 验证时直接使用这个值，而不是重新计算
-	
+
 	// 检查是否为共识切换高度，添加特殊日志
 	isConsensusSwitch := false
 	if consensusBackend != nil {
@@ -328,7 +325,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 			}
 		}
 	}
-	
+
 	if isConsensusSwitch {
 		logger.Debug("🔍 方案2：切换高度使用ExtraData中的轮次值",
 			"blockNumber", blockNumber,
@@ -342,21 +339,21 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 			"验证者数量", len(validators),
 			"说明", "直接使用生产时保存的轮次值，确保checkpointHash一致")
 	}
-	
+
 	recalculatedCheckpoint := &CheckpointData{
-		BlockRound:            i.Checkpoint.BlockRound,  // 直接使用生产时的轮次
+		BlockRound:            i.Checkpoint.BlockRound, // 直接使用生产时的轮次
 		EpochNumber:           i.Checkpoint.EpochNumber,
 		CurrentValidatorsHash: currentValidatorsHash, // 使用重新计算的哈希
 		NextValidatorsHash:    nextValidatorsHash,    // 使用重新计算的哈希
 		EventRoot:             i.Checkpoint.EventRoot,
 	}
-	
+
 	// 添加方案2对比日志
 	logger.Debug("🔍 方案2：轮次使用对比",
 		"blockNumber", blockNumber,
 		"使用轮次", i.Checkpoint.BlockRound,
 		"说明", "直接使用ExtraData中的轮次值，与生产时完全一致")
-	
+
 	// 🆕 添加验证时区块头详细信息（从header参数获取）
 	logger.Debug("🔍 ===== 验证时区块头详细信息（CheckpointHash计算前） =====",
 		"blockNumber", blockNumber,
@@ -375,7 +372,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"说明", "验证时用于CheckpointHash计算的区块头字段")
 
 	// 🆕 添加验证时关键参数显著日志
-	logger.Debug("🔍 ===== 验证时CheckpointHash计算参数 =====", 
+	logger.Debug("🔍 ===== 验证时CheckpointHash计算参数 =====",
 		"blockNumber", blockNumber,
 		"chainID", productionChainID,
 		"fixedBlockHash", fixedBlockHash.String(),
@@ -385,7 +382,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"epochNumber", recalculatedCheckpoint.EpochNumber,
 		"eventRoot", recalculatedCheckpoint.EventRoot.String(),
 		"说明", "验证时用于计算checkpointHash的所有参数")
-	
+
 	// 🆕 添加验证时轮次计算详细日志
 	logger.Debug("🔍 ===== 验证时轮次计算详情 =====",
 		"blockNumber", blockNumber,
@@ -393,8 +390,8 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"recalculatedBlockRound", recalculatedCheckpoint.BlockRound,
 		"isConsensusSwitch", isConsensusSwitch,
 		"说明", "验证时轮次计算过程")
-	
-	logger.Debug("🔍 验证时开始计算checkpoint哈希", 
+
+	logger.Debug("🔍 验证时开始计算checkpoint哈希",
 		"blockNumber", blockNumber,
 		"chainID", productionChainID,
 		"fixedBlockHash", fixedBlockHash.String(),
@@ -402,7 +399,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"nextValidatorsHash", recalculatedCheckpoint.NextValidatorsHash.String(),
 		"blockRound", recalculatedCheckpoint.BlockRound,
 		"epochNumber", recalculatedCheckpoint.EpochNumber)
-	
+
 	// 🆕 添加详细的CheckpointData内容对比日志
 	logger.Debug("🔍 验证时CheckpointData详细信息",
 		"blockNumber", blockNumber,
@@ -414,7 +411,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"currentValidatorsHash", recalculatedCheckpoint.CurrentValidatorsHash.String(),
 		"nextValidatorsHash", recalculatedCheckpoint.NextValidatorsHash.String(),
 		"validatorsCount", len(validators))
-	
+
 	// 🆕 打印验证时验证者集合的详细信息
 	logger.Debug("🔍 验证时验证者集合详细信息")
 	for i, validator := range validators {
@@ -426,7 +423,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 	}
 
 	// 🆕 添加CheckpointData.Hash()调用前的详细参数日志
-	logger.Debug("🔍 DEBUG CheckpointData.Hash() 参数详情", 
+	logger.Debug("🔍 DEBUG CheckpointData.Hash() 参数详情",
 		"blockNumber", blockNumber,
 		"chainId", productionChainID,
 		"blockNumber", blockNumber,
@@ -444,18 +441,18 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		return fmt.Errorf("failed to calculate proposal hash: %w", err)
 	}
 	logger.Debug("✅ ValidateFinalizedData checkpoint哈希计算成功", "blockNumber", blockNumber, "checkpointHash", checkpointHash.String()[:16])
-	
+
 	// 🆕 添加CheckpointData.Hash()调用后的结果日志
-	logger.Debug("🔍 DEBUG CheckpointData.Hash() 结果", 
-		"blockNumber", blockNumber, 
+	logger.Debug("🔍 DEBUG CheckpointData.Hash() 结果",
+		"blockNumber", blockNumber,
 		"checkpointHash", checkpointHash.String())
-	
+
 	// 🆕 添加验证时checkpointHash结果显著日志
-	logger.Debug("🔍 ===== 验证时CheckpointHash计算结果 =====", 
+	logger.Debug("🔍 ===== 验证时CheckpointHash计算结果 =====",
 		"blockNumber", blockNumber,
 		"checkpointHash", checkpointHash.String(),
 		"说明", "验证时最终计算出的checkpointHash")
-	
+
 	// 🆕 添加生产和验证时参数对比日志
 	logger.Debug("🔍 ===== 生产vs验证CheckpointData参数对比 =====",
 		"blockNumber", blockNumber,
@@ -474,7 +471,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"blockNumber", blockNumber,
 		"生产时blockHash", "需要从生产日志获取",
 		"验证时blockHash", header.Hash.String(),
-		"生产时parentHash", "需要从生产日志获取", 
+		"生产时parentHash", "需要从生产日志获取",
 		"验证时parentHash", header.ParentHash.String(),
 		"生产时timestamp", "需要从生产日志获取",
 		"验证时timestamp", header.Timestamp,
@@ -493,23 +490,23 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"生产时nonce", "需要从生产日志获取",
 		"验证时nonce", header.Nonce.String(),
 		"说明", "对比生产和验证时的区块头字段，找出差异")
-	
+
 	logger.Debug("🔍 验证时checkpoint哈希计算结果", "checkpointHash", checkpointHash.String())
-	
+
 	// 🆕 添加checkpointHash修复效果日志（方案2）
-	logger.Debug("🔍 checkpointHash修复效果（方案2）", 
+	logger.Debug("🔍 checkpointHash修复效果（方案2）",
 		"blockNumber", blockNumber,
 		"修复后checkpointHash", checkpointHash.String(),
 		"使用轮次", i.Checkpoint.BlockRound,
 		"说明", "验证时直接使用ExtraData中的轮次值，确保checkpointHash与生产时一致")
-	
+
 	// 🆕 添加参数对比总结日志（方案2）
 	summaryTitle := "📊 ===== 生产vs验证参数对比总结（方案2） ====="
 	if isConsensusSwitch {
 		summaryTitle = "📊 ===== 切换高度生产vs验证参数对比总结（方案2） ====="
 	}
-	
-	logger.Debug(summaryTitle, 
+
+	logger.Debug(summaryTitle,
 		"blockNumber", blockNumber,
 		"chainID", fmt.Sprintf("生产时=%d, 验证时=%d", productionChainID, productionChainID),
 		"fixedBlockHash", "生产时=block_"+fmt.Sprintf("%d", blockNumber)+", 验证时=block_"+fmt.Sprintf("%d", blockNumber),
@@ -541,7 +538,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"blockNumber", blockNumber,
 		"totalValidators", len(validators),
 		"note", "这些验证者将用于BLS签名验证")
-	
+
 	for i, validator := range validators {
 		logger.Info("🔍 验证时最终验证者",
 			"blockNumber", blockNumber,
@@ -628,7 +625,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		return err
 	}
 	logger.Debug("✅ ValidateFinalizedData Checkpoint基本验证成功", "blockNumber", blockNumber)
-	
+
 	logger.Debug("✅ ValidateFinalizedData 验证完成", "blockNumber", blockNumber)
 	return nil
 }
@@ -1157,7 +1154,6 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 	// 直接使用所有验证者作为签名者
 	signers := validators
 
-
 	validatorSet := validator.NewValidatorSet(validators, logger)
 	if !validatorSet.HasQuorum(blockNumber, signers.GetAddressesAsSet()) {
 		// 🆕 计算基于人数的法定人数要求（1/2多数原则）
@@ -1184,7 +1180,6 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		return fmt.Errorf("quorum not reached: current signatures %d, required %d", len(signers), requiredQuorumCount)
 	}
 
-
 	// 🆕 修复：先计算位图中设置的位数，然后创建正确长度的数组
 	bitmapSetCount := 0
 	for i := uint64(0); i < uint64(len(validators)); i++ {
@@ -1198,31 +1193,31 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 	missingBLSKeys := make([]types.Address, 0)
 
 	// 🆕 方案2：统一从网络集成层缓存获取BLS公钥，不依赖validator.BlsKey字段
-	logger.Debug("🔍 开始从网络集成层缓存获取BLS公钥", 
+	logger.Debug("🔍 开始从网络集成层缓存获取BLS公钥",
 		"blockNumber", blockNumber,
 		"validatorsCount", len(validators),
 		"bitmapSetCount", bitmapSetCount)
-	
+
 	for i := uint64(0); i < uint64(len(validators)); i++ {
 		if s.Bitmap.IsSet(i) {
 			validator := validators[int(i)]
-			logger.Debug("🔍 处理位图索引验证者", 
+			logger.Debug("🔍 处理位图索引验证者",
 				"blockNumber", blockNumber,
 				"bitmapIndex", i,
 				"address", validator.Address.String())
-			
+
 			// 优先从网络集成层缓存获取BLS公钥
 			if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-				logger.Debug("🔍 DPoS实例存在，检查网络集成层", 
+				logger.Debug("🔍 DPoS实例存在，检查网络集成层",
 					"blockNumber", blockNumber,
 					"address", validator.Address.String(),
 					"runtimeIsNil", dposInstance.runtime == nil)
 				if dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
-					logger.Debug("🔍 网络集成层存在，尝试获取BLS公钥", 
+					logger.Debug("🔍 网络集成层存在，尝试获取BLS公钥",
 						"blockNumber", blockNumber,
 						"address", validator.Address.String())
 					if cachedBLSKey, exists := dposInstance.runtime.networkIntegration.GetBLSKey(validator.Address); exists {
-						logger.Debug("🔍 从缓存中找到BLS公钥，开始解析", 
+						logger.Debug("🔍 从缓存中找到BLS公钥，开始解析",
 							"blockNumber", blockNumber,
 							"address", validator.Address.String(),
 							"cachedBLSKeyLength", len(cachedBLSKey))
@@ -1272,7 +1267,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 			"missingCount", len(missingBLSKeys),
 			"missingAddresses", missingBLSKeys,
 			"note", "BLS公钥未在缓存中找到，将尝试网络获取")
-		
+
 		// 🆕 尝试主动获取缺失的BLS公钥
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			if dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
@@ -1291,17 +1286,17 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 							"note", "等待网络响应")
 					}
 				}
-				
+
 				// 🆕 同步等待BLS公钥获取完成
 				logger.Info("⏳ 等待BLS公钥网络响应",
 					"blockNumber", blockNumber,
 					"missingCount", len(missingBLSKeys),
 					"waitTime", "15秒")
-				
+
 				maxWaitTime := 15 * time.Second
 				retryInterval := 1 * time.Second
 				maxRetries := int(maxWaitTime / retryInterval)
-				
+
 				for retry := 0; retry < maxRetries; retry++ {
 					// 检查是否所有BLS公钥都已获取
 					stillMissing := make([]types.Address, 0)
@@ -1310,14 +1305,14 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 							stillMissing = append(stillMissing, address)
 						}
 					}
-					
+
 					if len(stillMissing) == 0 {
 						logger.Info("✅ 所有BLS公钥已成功获取",
 							"blockNumber", blockNumber,
 							"waitTime", fmt.Sprintf("%.1f秒", float64(retry+1)*retryInterval.Seconds()))
 						break
 					}
-					
+
 					if retry < maxRetries-1 {
 						logger.Debug("⏳ 继续等待BLS公钥响应",
 							"blockNumber", blockNumber,
@@ -1327,7 +1322,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 						time.Sleep(retryInterval)
 					}
 				}
-				
+
 				// 最终检查
 				finalMissing := make([]types.Address, 0)
 				for _, address := range missingBLSKeys {
@@ -1335,7 +1330,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 						finalMissing = append(finalMissing, address)
 					}
 				}
-				
+
 				if len(finalMissing) > 0 {
 					logger.Warn("⚠️ 部分BLS公钥仍无法获取，继续验证流程",
 						"blockNumber", blockNumber,
@@ -1346,12 +1341,12 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 					logger.Info("✅ 所有缺失的BLS公钥已成功获取",
 						"blockNumber", blockNumber,
 						"note", "可以继续BLS签名验证")
-					
+
 					// 🆕 重新从缓存获取BLS公钥并更新blsPublicKeys数组
 					logger.Info("🔄 重新从缓存获取BLS公钥并更新数组",
 						"blockNumber", blockNumber,
 						"missingCount", len(missingBLSKeys))
-					
+
 					for _, address := range missingBLSKeys {
 						if cachedBLSKey, exists := dposInstance.runtime.networkIntegration.GetBLSKey(address); exists {
 							if blsKey, err := bls.UnmarshalPublicKey(cachedBLSKey); err == nil {
@@ -1392,13 +1387,11 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 
 	// 🆕 方案2：BLS公钥获取逻辑已简化，所有公钥应在启动时预加载完成
 
-
 	aggs, err := bls.UnmarshalSignature(s.AggregatedSignature)
 	if err != nil {
 		logger.Error("Signature.Verify - 解析聚合签名失败", "error", err)
 		return err
 	}
-
 
 	// 🆕 方案2：BLS公钥获取逻辑已统一到前面的循环中，这里不再需要额外处理
 
@@ -1415,7 +1408,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 			addressToBLSKey[validator.Address] = blsPublicKeys[i]
 			// 🆕 修复：同时设置validator.BlsKey字段，确保数据同步
 			validator.BlsKey = blsPublicKeys[i]
-			logger.Debug("✅ 将BLS公钥添加到地址映射并同步到validator对象", 
+			logger.Debug("✅ 将BLS公钥添加到地址映射并同步到validator对象",
 				"blockNumber", blockNumber,
 				"address", validator.Address.String(),
 				"bitmapIndex", i,
@@ -1424,14 +1417,14 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 	}
 
 	// 🆕 显著日志：位图索引与验证者集合对应关系
-	logger.Info("🔍 ===== 位图索引与验证者集合对应关系 =====",
+	logger.Debug("🔍 ===== 位图索引与验证者集合对应关系 =====",
 		"blockNumber", blockNumber,
 		"validatorsCount", len(validators),
 		"bitmapHex", fmt.Sprintf("%x", s.Bitmap),
 		"note", "检查位图索引是否在验证者集合范围内")
-	
+
 	for i := uint64(0); i < uint64(len(validators)); i++ {
-		logger.Info("🔍 位图索引检查",
+		logger.Debug("🔍 位图索引检查",
 			"blockNumber", blockNumber,
 			"bitmapIndex", i,
 			"isSet", s.Bitmap.IsSet(i),
@@ -1457,9 +1450,6 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 			}
 		}
 	}
-
-
-
 
 	// 执行BLS签名验证（只使用有效的公钥）
 	isValid := aggs.VerifyAggregated(validBLSKeys, hash[:], domain)
@@ -1630,9 +1620,9 @@ type CheckpointData struct {
 // MarshalRLPWith defines the marshal function implementation for CheckpointData
 func (c *CheckpointData) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 	vv := ar.NewArray()
-	
+
 	// Marshal CheckpointData
-	
+
 	// BlockRound
 	vv.Set(ar.NewUint(c.BlockRound))
 	// EpochNumber
@@ -1721,14 +1711,13 @@ func (c *CheckpointData) Hash(chainID uint64, blockNumber uint64, blockHash type
 		"nextValidatorsHash":    c.NextValidatorsHash,
 	}
 
-
 	abiEncoded, err := checkpointDataABIType.Encode(checkpointMap)
 	if err != nil {
 		return types.ZeroHash, err
 	}
 
 	result := types.BytesToHash(crypto.Keccak256(abiEncoded))
-	
+
 	return result, nil
 }
 
@@ -1824,10 +1813,10 @@ func GetIbftExtra(extraRaw []byte) (*Extra, error) {
 	}
 
 	// 解析extraData
-	
+
 	// 尝试解析RLP数据
 	extra := &Extra{}
-	
+
 	if err := extra.UnmarshalRLP(extraRaw); err != nil {
 		fmt.Printf("❌ DEBUG UnmarshalRLP failed: %v\n", err)
 		return nil, err
@@ -1887,7 +1876,7 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 				// 从创世文件获取BLS公钥
 				blsKey, err := i.getBLSKeyFromGenesis(validatorAddr.Address, logger)
 				if err != nil {
-				// BLS公钥获取失败
+					// BLS公钥获取失败
 				}
 
 				// 构建完整的验证者信息
@@ -1898,7 +1887,6 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 					IsActive:    validatorAddr.IsActive,
 				})
 			}
-
 
 			return productionValidators, nil
 		}
@@ -1977,7 +1965,7 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 			"blockNumber", blockNumber,
 			"totalValidators", len(validatorAddresses),
 			"note", "这些验证者从区块ExtraData中解析得到")
-		
+
 		for idx, validatorAddr := range validatorAddresses {
 			logger.Info("🔍 验证时ExtraData验证者",
 				"blockNumber", blockNumber,
@@ -1995,7 +1983,7 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 		// 🆕 从创世文件获取BLS公钥，构建完整的验证者集合
 		productionValidators := make(validator.AccountSet, 0, len(validatorAddresses))
 		// 从创世文件获取BLS公钥
-		
+
 		for idx, validatorAddr := range validatorAddresses {
 			// 从创世文件获取BLS公钥
 			blsKey, err := i.getBLSKeyFromGenesis(validatorAddr.Address, logger)
@@ -2019,7 +2007,6 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 				IsActive:    validatorAddr.IsActive,
 			})
 		}
-
 
 		return productionValidators, nil
 	}

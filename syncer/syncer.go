@@ -13,7 +13,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-
 const (
 	syncerName  = "syncer"
 	syncerProto = "/syncer/0.2"
@@ -97,20 +96,20 @@ func (s *syncer) Close() error {
 func (s *syncer) initializePeerMap() {
 	peerStatuses := s.syncPeerClient.GetConnectedPeerStatuses()
 	s.logger.Info("🔍 初始化对等节点映射", "获取到的对等节点数量", len(peerStatuses))
-	
+
 	if len(peerStatuses) == 0 {
 		s.logger.Warn("⚠️ 没有找到任何对等节点，同步器将等待对等节点连接")
 	} else {
 		s.logger.Info("✅ 成功获取对等节点状态", "数量", len(peerStatuses))
 		for i, peer := range peerStatuses {
-			s.logger.Debug("对等节点信息", 
-				"索引", i, 
-				"ID", peer.ID.String()[:16], 
+			s.logger.Debug("对等节点信息",
+				"索引", i,
+				"ID", peer.ID.String()[:16],
 				"区块高度", peer.Number,
 				"距离", peer.Distance.String())
 		}
 	}
-	
+
 	s.peerMap.Put(peerStatuses...)
 }
 
@@ -172,7 +171,7 @@ func (s *syncer) putToPeerMap(status *NoForkPeer) {
 			return
 		}
 	}
-	
+
 	s.peerMap.Put(status)
 	s.notifyNewStatusEvent()
 }
@@ -191,7 +190,7 @@ func (s *syncer) notifyNewStatusEvent() {
 			s.logger.Debug("notifyNewStatusEvent recovered from panic", "error", r)
 		}
 	}()
-	
+
 	// 使用非阻塞发送，避免频繁触发
 	select {
 	case s.newStatusCh <- struct{}{}:
@@ -249,7 +248,7 @@ func (s *syncer) HasSyncPeer() bool {
 func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 	localLatest := s.blockchain.Header().Number
 	skipList := make(map[peer.ID]bool)
-	
+
 	// 添加日志控制变量
 	lastNoPeerLogTime := time.Time{}
 	noPeerLogInterval := 30 * time.Second // 30秒打印一次
@@ -277,7 +276,7 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			if now.Sub(lastNoPeerLogTime) > noPeerLogInterval {
 				// 显示 peerMap 的当前状态
 				peerCount := s.getPeerMapSize()
-				s.logger.Debug("没有可用的对等节点", 
+				s.logger.Debug("没有可用的对等节点",
 					"skipListSize", len(skipList),
 					"peerMapSize", peerCount)
 				lastNoPeerLogTime = now
@@ -293,19 +292,19 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			// 控制"跳过同步"日志的频率
 			now := time.Now()
 			if now.Sub(lastNoPeerLogTime) > noPeerLogInterval {
-				s.logger.Debug("跳过同步：对等节点没有新区块", 
-					"peer", bestPeer.ID.String(), 
-					"peerNumber", bestPeer.Number, 
+				s.logger.Debug("跳过同步：对等节点没有新区块",
+					"peer", bestPeer.ID.String(),
+					"peerNumber", bestPeer.Number,
 					"localLatest", localLatest)
 				lastNoPeerLogTime = now
 			}
 			continue
 		}
-		
+
 		// 只有在真正开始同步时才打印日志
-		s.logger.Debug("开始同步区块", 
-			"peer", bestPeer.ID.String(), 
-			"peerNumber", bestPeer.Number, 
+		s.logger.Debug("开始同步区块",
+			"peer", bestPeer.ID.String(),
+			"peerNumber", bestPeer.Number,
 			"localLatest", localLatest)
 
 		// 检查是否在DPoS切换高度，如果是则跳过同步
@@ -338,24 +337,24 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 // bulkSyncWithPeer syncs block with a given peer
 func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 	newBlockCallback func(*types.FullBlock) bool) (uint64, bool, error) {
-	s.logger.Info("开始区块同步", "peer", peerID.String(), "目标高度", peerLatestBlock)
+	s.logger.Debug("开始区块同步", "peer", peerID.String(), "目标高度", peerLatestBlock)
 
 	localLatest := s.blockchain.Header().Number
 	shouldTerminate := false
-	
-	s.logger.Debug("同步参数", 
-		"peer", peerID.String(), 
-		"peerLatestBlock", peerLatestBlock, 
-		"localLatest", localLatest, 
+
+	s.logger.Debug("同步参数",
+		"peer", peerID.String(),
+		"peerLatestBlock", peerLatestBlock,
+		"localLatest", localLatest,
 		"startFrom", localLatest+1)
 
-	s.logger.Info("🔍 准备获取区块流", "peer", peerID.String(), "从高度", localLatest+1, "到高度", peerLatestBlock)
+	s.logger.Debug("🔍 准备获取区块流", "peer", peerID.String(), "从高度", localLatest+1, "到高度", peerLatestBlock)
 	blockCh, err := s.syncPeerClient.GetBlocks(peerID, localLatest+1, s.blockTimeout)
 	if err != nil {
 		s.logger.Error("获取区块流失败", "peer", peerID.String(), "error", err)
 		return 0, false, err
 	}
-	s.logger.Info("✅ 区块流获取成功", "peer", peerID.String(), "从高度", localLatest+1)
+	s.logger.Debug("✅ 区块流获取成功", "peer", peerID.String(), "从高度", localLatest+1)
 
 	// Create a blockchain subscription for the sync progression and start tracking
 	subscription := s.blockchain.SubscribeEvents()
@@ -376,21 +375,21 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 	var lastReceivedNumber uint64
 	var blockCount int
 
-		for {
+	for {
 		select {
 		case block, ok := <-blockCh:
 			if !ok {
 				s.logger.Info("区块同步完成", "peer", peerID.String(), "同步区块数", blockCount)
 				return lastReceivedNumber, shouldTerminate, nil
 			}
-			
-			s.logger.Info("🔍 从区块流接收到区块", "peer", peerID.String()[:8], "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
+
+			s.logger.Debug("🔍 从区块流接收到区块", "peer", peerID.String()[:8], "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
 
 			// 打印详细的区块接收日志
-			s.logger.Info("🔄 同步接收到区块", 
-				"peer", peerID.String()[:8], 
-				"区块号", block.Number(), 
-				"难度", block.Header.Difficulty, 
+			s.logger.Debug("🔄 同步接收到区块",
+				"peer", peerID.String()[:8],
+				"区块号", block.Number(),
+				"难度", block.Header.Difficulty,
 				"哈希", block.Hash().String()[:16],
 				"时间戳", block.Header.Timestamp,
 				"交易数", len(block.Transactions),
@@ -411,7 +410,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 			// 检查是否是共识切换高度，如果是则使用WriteBlockWithoutConsensus
 			if s.isConsensusSwitchHeight(block) {
 				s.logger.Info("🚀 共识切换高度区块，使用WriteBlockWithoutConsensus", "peer", peerID.String(), "区块号", block.Number(), "难度", block.Header.Difficulty)
-				
+
 				// 对于共识切换高度区块，使用WriteBlockWithoutConsensus完全绕过共识验证
 				// 这样可以避免所有IBFT相关的验证和交易执行
 				s.logger.Info("🔒 同步器调用WriteBlockWithoutConsensus", "blockNumber", block.Number(), "peer", peerID.String())
@@ -420,13 +419,13 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 					s.logger.Error("共识切换高度区块写入失败", "peer", peerID.String(), "区块号", block.Number(), "error", err)
 					return lastReceivedNumber, false, fmt.Errorf("failed to write consensus switch height block: %w", err)
 				}
-				
+
 				// 创建一个简化的FullBlock用于回调
 				fullBlock := &types.FullBlock{
 					Block:    block,
 					Receipts: []*types.Receipt{}, // 空的receipts
 				}
-				
+
 				updateMetrics(fullBlock)
 				s.logger.Info("✅ DPoS区块同步成功", "peer", peerID.String(), "区块号", block.Number(), "哈希", block.Hash().String()[:16])
 				shouldTerminate = newBlockCallback(fullBlock)
@@ -434,8 +433,8 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				continue
 			}
 
-			s.logger.Info("🔍 开始验证区块", "peer", peerID.String()[:8], "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
-			
+			s.logger.Debug("🔍 开始验证区块", "peer", peerID.String()[:8], "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
+
 			fullBlock, err := s.blockchain.VerifyFinalizedBlock(block)
 			if err != nil {
 				metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
@@ -472,21 +471,21 @@ func updateMetrics(fullBlock *types.FullBlock) {
 func (s *syncer) isConsensusSwitchHeight(block *types.Block) bool {
 	// 只在指定的共识切换高度使用WriteBlockWithoutConsensus
 	// 其他DPoS区块正常进行验证
-	
+
 	header := block.Header
 	if header == nil {
 		return false
 	}
-	
+
 	// 检查是否是共识切换高度
 	if s.consensusSwitchHeight > 0 && header.Number == s.consensusSwitchHeight {
-		s.logger.Info("🔄 检测到共识切换高度，使用WriteBlockWithoutConsensus", 
-			"区块号", header.Number, 
+		s.logger.Info("🔄 检测到共识切换高度，使用WriteBlockWithoutConsensus",
+			"区块号", header.Number,
 			"难度", header.Difficulty,
 			"切换高度", s.consensusSwitchHeight)
 		return true
 	}
-	
+
 	return false
 }
 
@@ -498,11 +497,7 @@ func (s *syncer) isDPoSTransitionHeight(blockNumber uint64) bool {
 	return false
 }
 
-
 // GetSyncPeerClient returns the sync peer client for controlling status broadcasting
 func (s *syncer) GetSyncPeerClient() SyncPeerClient {
 	return s.syncPeerClient
 }
-
-
-

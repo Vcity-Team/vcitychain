@@ -71,9 +71,8 @@ func (s *syncPeerService) GetBlocks(
 		}
 	}
 
-
 	var blockCount int
-	s.logger.Info("🔍 开始发送区块", "peer", peerInfo, "从高度", req.From, "到高度", s.blockchain.Header().Number)
+	s.logger.Debug("🔍 开始发送区块", "peer", peerInfo, "从高度", req.From, "到高度", s.blockchain.Header().Number)
 	// from to latest
 	for i := req.From; i <= s.blockchain.Header().Number; i++ {
 		s.logger.Debug("🔍 准备发送区块", "peer", peerInfo, "区块号", i, "时间戳", time.Now().Format("15:04:05.000"))

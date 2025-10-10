@@ -2,6 +2,7 @@ package signer
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/types"
@@ -75,8 +76,8 @@ type Signer interface {
 
 // SignerImpl is an implementation that meets Signer
 type SignerImpl struct {
-	keyManager           KeyManager
-	parentKeyManager     KeyManager
+	keyManager            KeyManager
+	parentKeyManager      KeyManager
 	consensusSwitchHeight uint64 // 添加共识切换高度字段
 }
 
@@ -87,8 +88,8 @@ func NewSigner(
 	consensusSwitchHeight uint64,
 ) *SignerImpl {
 	return &SignerImpl{
-		keyManager:           keyManager,
-		parentKeyManager:     parentKeyManager,
+		keyManager:            keyManager,
+		parentKeyManager:      parentKeyManager,
 		consensusSwitchHeight: consensusSwitchHeight,
 	}
 }
@@ -160,19 +161,19 @@ func (s *SignerImpl) parseDPoSCompatibleExtra(data []byte, extra *IstanbulExtra)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	elems, err := val.GetElems()
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// 对于DPoS区块，我们创建一个简化的IstanbulExtra
 	// 只设置必要的字段，其他字段保持默认值
 	extra.ProposerSeal = []byte{} // DPoS不使用ProposerSeal
 	extra.CommittedSeals = s.keyManager.NewEmptyCommittedSeals()
 	extra.ParentCommittedSeals = s.parentKeyManager.NewEmptyCommittedSeals()
 	extra.RoundNumber = nil
-	
+
 	// 尝试从DPoS Extra中提取验证者信息
 	if len(elems) > 0 {
 		// 第一个元素可能是验证者信息
@@ -181,7 +182,7 @@ func (s *SignerImpl) parseDPoSCompatibleExtra(data []byte, extra *IstanbulExtra)
 			_ = validatorElems
 		}
 	}
-	
+
 	return extra, nil
 }
 
@@ -212,6 +213,13 @@ func (s *SignerImpl) EcrecoverFromHeader(header *types.Header) (types.Address, e
 	extra, err := s.GetIBFTExtra(header)
 	if err != nil {
 		return types.Address{}, err
+	}
+
+	// 检查是否是DPoS区块（ProposerSeal为空）
+	if len(extra.ProposerSeal) == 0 {
+		// 对于DPoS区块，我们无法从ProposerSeal恢复地址
+		// 返回零地址，让调用者知道这是DPoS区块
+		return types.ZeroAddress, fmt.Errorf("DPoS block: no proposer seal available")
 	}
 
 	return s.keyManager.Ecrecover(extra.ProposerSeal, crypto.Keccak256(header.Hash.Bytes()))

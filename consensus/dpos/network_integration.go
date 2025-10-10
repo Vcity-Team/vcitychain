@@ -14,9 +14,9 @@ import (
 
 	"github.com/Vcity-Team/vcitychain/bls"
 	dposProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/network"
 	"github.com/Vcity-Team/vcitychain/types"
-	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/hashicorp/go-hclog"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/protobuf/proto"
@@ -203,7 +203,6 @@ func (sc *SignatureCollector) AddSignature(response *SignatureResponse) bool {
 
 	sc.mutex.Unlock()
 
-
 	if completed {
 	}
 
@@ -388,7 +387,6 @@ func (ni *NetworkIntegration) Start() error {
 	if err := ni.subscribeToTopics(); err != nil {
 		return fmt.Errorf("failed to subscribe to topics: %w", err)
 	}
-
 
 	// 🆕 从数据库恢复BLS公钥到缓存
 	if err := ni.restoreBLSKeysFromDatabase(); err != nil {
@@ -628,7 +626,7 @@ func (ni *NetworkIntegration) subscribeToTopics() error {
 	// 订阅签名请求主题
 	if ni.signatureRequestTopic != nil {
 		actualTopicName := ni.signatureRequestTopic.GetActualProtoID()
-		ni.logger.Info("📡 订阅签名请求主题", "原始名称", "dpos-signature-request", "实际名称", actualTopicName)
+		ni.logger.Debug("📡 订阅签名请求主题", "原始名称", "dpos-signature-request", "实际名称", actualTopicName)
 		if err := ni.signatureRequestTopic.Subscribe(func(obj interface{}, from peer.ID) {
 			ni.handleSignatureRequest(obj, from)
 		}); err != nil {
@@ -822,7 +820,6 @@ func (ni *NetworkIntegration) handleSignatureRequest(obj interface{}, from peer.
 		Timestamp:      request.Timestamp,
 	}
 
-
 	// 验证签名请求的有效性
 	// 首先检查是否是查询请求（BlockNumber=0 且包含查询标识符）
 	if internalRequest.BlockNumber == 0 {
@@ -954,7 +951,6 @@ func (ni *NetworkIntegration) handleSignatureResponse(obj interface{}, from peer
 		CheckpointHash: types.BytesToHash(response.CheckpointHash),
 		Timestamp:      response.Timestamp,
 	}
-
 
 	// 转发给对应的签名收集器
 	ni.forwardSignatureResponse(internalResponse)
@@ -1088,7 +1084,6 @@ func (ni *NetworkIntegration) forwardSignatureResponse(response *SignatureRespon
 		return
 	}
 
-
 	// 使用AddSignature方法处理签名，它会自动更新内部状态
 	if collector.AddSignature(response) {
 	} else {
@@ -1113,7 +1108,6 @@ func (ni *NetworkIntegration) RegisterSignatureCollector(checkpointHash types.Ha
 	collector.logger = ni.logger.Named("signature-collector")
 
 	ni.signatureCollectors[checkpointHash] = collector
-
 
 	// 启动清理工作器
 	ni.goroutineManager.StartGoroutine("collector-cleanup", func() {
@@ -1759,7 +1753,7 @@ func (ni *NetworkIntegration) RestoreBLSKeysForDelegates(delegates []*validator.
 	}
 
 	ni.logger.Debug("🔄 开始批量恢复BLS公钥", "delegatesCount", len(delegates))
-	
+
 	restoredCount := 0
 	for _, delegate := range delegates {
 		if delegate.BlsKey == nil {
@@ -1770,17 +1764,17 @@ func (ni *NetworkIntegration) RestoreBLSKeysForDelegates(delegates []*validator.
 				if err == nil {
 					delegate.BlsKey = blsKey
 					restoredCount++
-					ni.logger.Debug("✅ 从缓存恢复BLS公钥", 
+					ni.logger.Debug("✅ 从缓存恢复BLS公钥",
 						"address", delegate.Address.String())
 				}
 			}
 		}
 	}
-	
-	ni.logger.Debug("🔄 批量恢复BLS公钥完成", 
+
+	ni.logger.Debug("🔄 批量恢复BLS公钥完成",
 		"totalDelegates", len(delegates),
 		"restoredCount", restoredCount)
-	
+
 	return nil
 }
 
@@ -1802,16 +1796,15 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 			return
 		}
 
-
 		// 检查是否是本地节点地址的请求
 		isLocalRequest := ni.isLocalNode(requestMsg.RequestedAddress)
-		
+
 		// 获取本地节点地址用于日志
 		var localNodeAddress string
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance.key != nil {
 			localNodeAddress = types.Address(dposInstance.key.Address()).String()
 		}
-		
+
 		// 只对本地节点地址的请求进行详细跟踪
 		if isLocalRequest {
 			// 静默处理，不打印日志
@@ -1822,10 +1815,10 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 				RequestedAddress: requestMsg.RequestedAddress,
 				Requester:        requestMsg.Requester,
 				BLSPublicKey:     nil,
-				Found:           false,
-				Timestamp:       uint64(time.Now().Unix()),
+				Found:            false,
+				Timestamp:        uint64(time.Now().Unix()),
 			}
-			
+
 			// 发送响应
 			if err := ni.sendBLSKeyResponse(responseMsg); err != nil {
 				ni.logger.Error("❌ 发送BLS公钥响应失败", "error", err)
@@ -1846,7 +1839,7 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 			// 如果缓存中没有，检查是否是本地节点的地址
 			// 只有本地节点才能提供自己的BLS公钥
 			if isLocalRequest {
-				
+
 				// 先获取文件路径用于日志
 				dataDir := ni.getDataDir()
 				var keyFilePath string
@@ -1858,12 +1851,11 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 						keyFilePath = filepath.Join(parentDir, "consensus", "validator-bls.key")
 					}
 				}
-				
-				
+
 				if keyBytes, err := ni.findBLSKeyFromGenesisFile(requestMsg.RequestedAddress); err == nil && len(keyBytes) > 0 {
 					found = true
 					blsPublicKey = keyBytes
-				// 成功从文件加载本地BLS公钥，静默处理
+					// 成功从文件加载本地BLS公钥，静默处理
 				} else {
 					ni.logger.Warn("❌ 从文件加载本地BLS公钥失败",
 						"requestedAddress", requestMsg.RequestedAddress.String(),
@@ -1906,7 +1898,6 @@ func (ni *NetworkIntegration) handleBLSKeyResponse(obj interface{}, from peer.ID
 			ni.logger.Error("反序列化BLS公钥响应消息失败", "error", err)
 			return
 		}
-
 
 		if responseMsg.Found && len(responseMsg.BLSPublicKey) > 0 {
 			// 保存BLS公钥到缓存和数据库
@@ -1952,17 +1943,17 @@ func (ni *NetworkIntegration) sendBLSKeyResponse(responseMsg *BLSKeyResponseMess
 // findBLSKeyFromGenesisFile 从validator-bls.key文件中查找BLS公钥
 func (ni *NetworkIntegration) findBLSKeyFromGenesisFile(address types.Address) ([]byte, error) {
 	// 🆕 修改：不再从创世文件查找，而是从validator-bls.key文件查找
-	
+
 	// 1. 获取数据目录路径
 	dataDir := ni.getDataDir()
 	if dataDir == "" {
 		return nil, fmt.Errorf("data directory not available")
 	}
-	
+
 	// 2. 构建BLS私钥文件路径
 	// 需要确保路径是 nodeX\consensus\validator-bls.key
 	var keyFilePath string
-	
+
 	// 检查dataDir的结构
 	if strings.Contains(dataDir, "consensus") {
 		// dataDir包含consensus，需要检查是否还有dpos子目录
@@ -1980,65 +1971,65 @@ func (ni *NetworkIntegration) findBLSKeyFromGenesisFile(address types.Address) (
 		parentDir := filepath.Dir(dataDir) // 获取 "node1"
 		keyFilePath = filepath.Join(parentDir, "consensus", "validator-bls.key")
 	}
-	
+
 	// 3. 检查文件是否存在
 	// 检查是否是本地节点地址，只对本地节点打印详细日志
 	isLocalNode := ni.isLocalNode(address)
-	
+
 	if isLocalNode {
 	}
-		
+
 	if _, err := os.Stat(keyFilePath); os.IsNotExist(err) {
 		if isLocalNode {
-			ni.logger.Warn("❌ BLS private key file not found", 
+			ni.logger.Warn("❌ BLS private key file not found",
 				"address", address.String(),
 				"filePath", keyFilePath)
 		}
 		return nil, fmt.Errorf("BLS private key file not found: %s", keyFilePath)
 	}
-	
+
 	if isLocalNode {
 		// 静默处理，不打印日志
 	}
-	
+
 	// 4. 读取私钥文件
 	privateKeyData, err := os.ReadFile(keyFilePath)
 	if err != nil {
-		ni.logger.Error("❌ Failed to read BLS private key file", 
+		ni.logger.Error("❌ Failed to read BLS private key file",
 			"address", address.String(),
 			"filePath", keyFilePath,
 			"error", err)
 		return nil, fmt.Errorf("failed to read BLS private key file: %w", err)
 	}
-	
+
 	// 5. 获取十六进制字符串（去除可能的换行符）
 	privateKeyHex := strings.TrimSpace(string(privateKeyData))
-	
+
 	// 6. 检查并修正私钥长度
 	if len(privateKeyHex)%2 != 0 {
 		privateKeyHex = "0" + privateKeyHex
 	}
-	
+
 	// 7. 解析BLS私钥
 	privateKey, err := bls.UnmarshalPrivateKey([]byte(privateKeyHex))
 	if err != nil {
-		ni.logger.Error("❌ Failed to unmarshal BLS private key", 
+		ni.logger.Error("❌ Failed to unmarshal BLS private key",
 			"address", address.String(),
 			"error", err)
 		return nil, fmt.Errorf("failed to unmarshal BLS private key: %w", err)
 	}
-	
+
 	// 8. 从私钥生成公钥
 	publicKey := privateKey.PublicKey()
 	publicKeyBytes := publicKey.Marshal()
-	
+
 	// 9. 验证公钥长度（应该是128字节）
 	if len(publicKeyBytes) != 128 {
 		return nil, fmt.Errorf("invalid BLS public key length: expected 128 bytes, got %d", len(publicKeyBytes))
 	}
-	
+
 	// 静默处理，不打印日志
-	
+
 	return publicKeyBytes, nil
 }
 
@@ -2050,12 +2041,12 @@ func (ni *NetworkIntegration) getDataDir() string {
 		// 可以通过配置或其他方式获取
 		return dposInstance.getDataDir()
 	}
-	
+
 	// 备用方案：从环境变量或默认路径获取
 	if dataDir := os.Getenv("VCITY_DATA_DIR"); dataDir != "" {
 		return dataDir
 	}
-	
+
 	return "" // 返回空字符串表示未找到
 }
 
@@ -2145,8 +2136,8 @@ func (ni *NetworkIntegration) forwardBLSResponseToDPoS(responseMsg *BLSKeyRespon
 		}
 
 		// 构造请求ID（与发送请求时保持一致）
-		requestID := fmt.Sprintf("bls_request_%s_%d", 
-			responseMsg.RequestedAddress.String(), 
+		requestID := fmt.Sprintf("bls_request_%s_%d",
+			responseMsg.RequestedAddress.String(),
 			responseMsg.Timestamp)
 
 		// 将响应发送给等待的请求处理器
@@ -2154,7 +2145,7 @@ func (ni *NetworkIntegration) forwardBLSResponseToDPoS(responseMsg *BLSKeyRespon
 			return fmt.Errorf("failed to handle BLS response: %w", err)
 		}
 
-		ni.logger.Debug("✅ BLS响应已转发给DPoS", 
+		ni.logger.Debug("✅ BLS响应已转发给DPoS",
 			"requestedAddress", responseMsg.RequestedAddress.String(),
 			"requestID", requestID)
 	} else {

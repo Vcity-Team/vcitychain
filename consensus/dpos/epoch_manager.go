@@ -58,7 +58,7 @@ func (tem *TimeBasedEpochManager) StartNewEpoch(blockTime time.Time) uint64 {
 	tem.currentEpoch++
 	tem.lastEpochTime = blockTime
 
-	tem.logger.Info("🕐 开始新Epoch",
+	tem.logger.Info("⏰ ========== 开始新Epoch ==========",
 		"epoch", tem.currentEpoch,
 		"time", blockTime.Format("2006-01-02 15:04:05"),
 		"duration", tem.epochDuration.String())

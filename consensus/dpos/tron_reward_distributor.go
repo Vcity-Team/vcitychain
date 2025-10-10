@@ -3,6 +3,7 @@ package dpos
 import (
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/state"
@@ -48,10 +49,11 @@ func (trd *TronRewardDistributor) DistributeEpochRewards(
 	validators validator.AccountSet,
 	voters map[types.Address]*VoterInfo,
 ) error {
-	trd.logger.Info("💰 开始分发Epoch奖励（TRON模式）",
+	trd.logger.Info("🚀 ========== 开始分发Epoch奖励（TRON模式）==========",
 		"epoch", epochNumber,
 		"rewardAccount", trd.rewardAccount.String(),
-		"totalReward", trd.rewardAmount.String())
+		"totalReward", trd.rewardAmount.String(),
+		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
 
 	// 1. 检查奖励账户余额
 	rewardBalance := trd.state.GetBalance(trd.rewardAccount)

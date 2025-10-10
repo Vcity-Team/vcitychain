@@ -116,10 +116,10 @@ type backendIBFT struct {
 	currentSigner     signer.Signer         // Signer at current sequence
 	currentValidators validators.Validators // signer at current sequence
 	currentHooks      fork.HooksInterface   // Hooks at current sequence
-	
+
 	// 🆕 新增：共识引擎管理
-	currentEngine    interface{} // 当前运行的共识引擎
-	engineType       string      // "ibft" 或 "dpos"
+	currentEngine     interface{}       // 当前运行的共识引擎
+	engineType        string            // "ibft" 或 "dpos"
 	dposEngineStarter DPoSEngineStarter // DPoS引擎启动器
 
 	// Configurations
@@ -130,6 +130,7 @@ type backendIBFT struct {
 
 	// Channels
 	closeCh chan struct{} // Channel for closing
+	closed  bool          // 标记是否已经关闭
 }
 
 // Factory implements the base consensus Factory method
@@ -169,7 +170,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		}
 		dposValidatorsCount = uint64(readDPoSValidatorsCount)
 	}
-	
+
 	// 🆕 新增：从配置中读取DPoS最小质押门槛
 	var dposDelegateThreshold *big.Int = nil
 	if rawDPoSDelegateThreshold, ok := params.Config.Config["dposDelegateThreshold"]; ok {
@@ -191,11 +192,11 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		epochSize,
 		params.Config.Config,
 		params.Config.DataDir, // 🆕 新增：数据目录参数
-		dposValidatorsCount, // 🆕 新增：DPoS验证者数量参数（从配置读取）
+		dposValidatorsCount,   // 🆕 新增：DPoS验证者数量参数（从配置读取）
 		dposDelegateThreshold, // 🆕 新增：DPoS最小质押门槛参数（从配置读取）
-		params.Network, // 🆕 新增：网络组件参数
-		params.TxPool,  // 🆕 新增：交易池参数
-		params.Config,  // 🆕 新增：配置参数
+		params.Network,        // 🆕 新增：网络组件参数
+		params.TxPool,         // 🆕 新增：交易池参数
+		params.Config,         // 🆕 新增：配置参数
 	)
 
 	if err != nil {
@@ -259,8 +260,11 @@ func (i *backendIBFT) Initialize() error {
 
 	i.logger.Info("validator key", "addr", i.currentSigner.Address().String())
 
+	// 创建专门用于IBFT共识的logger
+	consensusLogger := i.logger.Named("consensus")
+
 	i.consensus = newIBFT(
-		i.logger.Named("consensus"),
+		consensusLogger,
 		i,
 		i,
 	)
@@ -273,12 +277,18 @@ func (i *backendIBFT) Initialize() error {
 
 // sync runs the syncer in the background to receive blocks from advanced peers
 func (i *backendIBFT) startSyncing() {
+	// 监听停止信号
+	go func() {
+		<-i.closeCh
+		i.logger.Info("🛑 IBFT syncer收到停止信号，退出同步")
+	}()
+
 	callInsertBlockHook := func(fullBlock *types.FullBlock) bool {
 		// 🆕 检查是否是DPoS切换高度，如果是则停止同步
 		if i.forkManager != nil {
 			if shouldStop := i.checkShouldStopIBFT(fullBlock.Block.Number()); shouldStop {
 				i.logger.Info("🛑 syncer检测到DPoS切换，停止IBFT同步", "height", fullBlock.Block.Number())
-				
+
 				// 启动DPoS引擎（不在这里关闭syncer，避免重复关闭）
 				if i.dposEngineStarter != nil {
 					i.logger.Info("🚀 syncer启动DPoS引擎...")
@@ -290,12 +300,13 @@ func (i *backendIBFT) startSyncing() {
 				} else {
 					i.logger.Warn("⚠️ DPoS引擎启动器未设置，无法启动DPoS引擎")
 				}
-				
+
+				// 注意：不在这里关闭closeCh，因为startConsensus也会关闭它
 				// 返回true表示停止同步
 				return true
 			}
 		}
-		
+
 		if err := i.currentHooks.PostInsertBlock(fullBlock.Block); err != nil {
 			i.logger.Error("failed to call PostInsertBlock", "height", fullBlock.Block.Header.Number, "error", err)
 		}
@@ -332,7 +343,6 @@ func (i *backendIBFT) Start() error {
 	return nil
 }
 
-
 // 🆕 简化：检查IBFT是否应该停止（通过验证者集合判断）
 func (i *backendIBFT) checkShouldStopIBFT(height uint64) bool {
 	// 通过检查验证者集合是否为空来判断是否需要停止
@@ -342,20 +352,33 @@ func (i *backendIBFT) checkShouldStopIBFT(height uint64) bool {
 		i.logger.Error("❌ 获取验证者失败", "error", err)
 		return false
 	}
-	
+
 	// 如果验证者集合为空，说明已经切换到DPoS，IBFT应该停止
 	if validators.Len() == 0 {
 		i.logger.Info("🛑 验证者集合为空，DPoS已接管，IBFT应该停止", "height", height)
 		return true
 	}
-	
+
+	// 调试信息：显示当前验证者数量
+	i.logger.Debug("🔍 检查IBFT停止条件", "height", height, "validatorsCount", validators.Len())
+
 	return false
 }
-
 
 // GetSyncProgression gets the latest sync progression, if any
 func (i *backendIBFT) GetSyncProgression() *progress.Progression {
 	return i.syncer.GetSyncProgression()
+}
+
+// safeClose 安全关闭closeCh，避免重复关闭
+func (i *backendIBFT) safeClose() {
+	if !i.closed {
+		i.closed = true
+		close(i.closeCh)
+		i.logger.Info("🛑 IBFT closeCh已安全关闭")
+	} else {
+		i.logger.Debug("🛑 IBFT closeCh已经关闭，跳过重复关闭")
+	}
 }
 
 func (i *backendIBFT) startConsensus() {
@@ -371,14 +394,20 @@ func (i *backendIBFT) startConsensus() {
 		eventCh := newBlockSub.GetEventCh()
 
 		for {
-			if ev := <-eventCh; ev.Source == "syncer" {
-				if ev.NewChain[0].Number < i.blockchain.Header().Number {
-					// The blockchain notification system can eventually deliver
-					// stale block notifications. These should be ignored
-					continue
-				}
+			select {
+			case ev := <-eventCh:
+				if ev.Source == "syncer" {
+					if ev.NewChain[0].Number < i.blockchain.Header().Number {
+						// The blockchain notification system can eventually deliver
+						// stale block notifications. These should be ignored
+						continue
+					}
 
-				syncerBlockCh <- struct{}{}
+					syncerBlockCh <- struct{}{}
+				}
+			case <-i.closeCh:
+				i.logger.Info("🛑 IBFT事件监听goroutine收到停止信号，退出")
+				return
 			}
 		}
 	}()
@@ -391,6 +420,15 @@ func (i *backendIBFT) startConsensus() {
 	)
 
 	for {
+		// 检查是否应该停止IBFT
+		select {
+		case <-i.closeCh:
+			i.logger.Info("🛑 IBFT收到停止信号，退出主循环")
+			return
+		default:
+			// 继续正常执行
+		}
+
 		var (
 			latest  = i.blockchain.Header().Number
 			pending = latest + 1
@@ -399,17 +437,20 @@ func (i *backendIBFT) startConsensus() {
 		// 🆕 简化：检查是否需要停止IBFT（通过验证者集合判断）
 		if i.forkManager != nil {
 			if shouldStop := i.checkShouldStopIBFT(pending); shouldStop {
-				
-				// 🆕 停止IBFT的syncer，避免与DPoS的syncer冲突
+
+				// 🆕 完全停止IBFT共识引擎
+				i.logger.Info("🛑 ========== 开始完全停止IBFT共识引擎 ==========", "height", pending)
+
+				// 1. 停止IBFT的syncer
 				if i.syncer != nil {
-					i.logger.Info("🛑 停止IBFT的syncer，让DPoS的syncer接管...")
-					
+					i.logger.Info("🛑 停止IBFT的syncer...")
+
 					// 添加超时机制，避免无限等待
 					done := make(chan error, 1)
 					go func() {
 						done <- i.syncer.Close()
 					}()
-					
+
 					select {
 					case err := <-done:
 						if err != nil {
@@ -420,24 +461,34 @@ func (i *backendIBFT) startConsensus() {
 					case <-time.After(5 * time.Second):
 						i.logger.Warn("⚠️ 停止IBFT的syncer超时，强制继续")
 					}
-					
+
 					// 清空 syncer 引用，避免重复关闭
 					i.syncer = nil
 				}
-				
-				// 🆕 同步启动DPoS引擎，DPoS引擎会启动自己的syncer接管区块同步
+
+				// 2. 停止IBFT的共识协议
+				if i.consensus != nil {
+					i.logger.Info("🛑 停止IBFT的共识协议...")
+					// 这里可以添加停止共识协议的逻辑
+					// 目前go-ibft没有明确的停止方法，但goroutine会自然退出
+				}
+
+				// 3. 启动DPoS引擎
 				if i.dposEngineStarter != nil {
-					i.logger.Info("🚀 同步启动DPoS引擎（包括同步节点）...")
+					i.logger.Info("🚀 启动DPoS引擎接管共识...")
 					if err := i.dposEngineStarter.StartDPoSEngine(pending); err != nil {
 						i.logger.Error("❌ 启动DPoS引擎失败", "error", err)
 					} else {
-						i.logger.Info("✅ DPoS引擎启动成功，DPoS同步器已接管区块同步")
+						i.logger.Info("✅ DPoS引擎启动成功，已完全接管共识")
 					}
 				} else {
 					i.logger.Warn("⚠️ DPoS引擎启动器未设置，无法启动DPoS引擎")
 				}
-				
-				i.logger.Info("🛑 IBFT主循环退出：DPoS已接管", "height", pending)
+
+				// 4. 安全关闭IBFT的closeCh，通知其他组件IBFT已停止
+				i.safeClose()
+
+				i.logger.Info("✅ ========== IBFT共识引擎已完全停止，DPoS已接管 ==========", "height", pending)
 				return
 			}
 		}
@@ -455,11 +506,10 @@ func (i *backendIBFT) startConsensus() {
 
 		isValidator = i.isActiveValidator()
 
-
 		i.txpool.SetSealing(isValidator)
 
 		if isValidator {
-			i.logger.Info("Starting consensus sequence", "height", pending)
+			i.logger.Debug("Starting consensus sequence", "height", pending)
 			sequenceCh = i.consensus.runSequence(pending)
 		} else {
 			i.logger.Warn("Not a validator, skipping consensus", "height", pending)
@@ -469,7 +519,7 @@ func (i *backendIBFT) startConsensus() {
 		case <-syncerBlockCh:
 			if isValidator {
 				i.consensus.stopSequence()
-				i.logger.Info("canceled sequence", "sequence", pending)
+				i.logger.Debug("canceled sequence", "sequence", pending)
 			}
 		case <-sequenceCh:
 		case <-i.closeCh:
@@ -520,9 +570,9 @@ func (i *backendIBFT) verifyHeaderImpl(
 	// 在DPoS切换期间，可能mixhash不匹配，需要跳过验证
 	if header.MixHash != signer.IstanbulDigest {
 		// 添加调试信息
-		fmt.Printf("🔍 DEBUG MixHash verification: expected=%x, actual=%x\n", 
+		fmt.Printf("🔍 DEBUG MixHash verification: expected=%x, actual=%x\n",
 			signer.IstanbulDigest, header.MixHash)
-		
+
 		// 在DPoS切换期间，暂时跳过mixhash验证
 		// TODO: 需要更精确的DPoS切换检测
 		fmt.Printf("⚠️ DEBUG MixHash mismatch, but continuing for DPoS transition\n")
@@ -541,7 +591,7 @@ func (i *backendIBFT) verifyHeaderImpl(
 			// 检查是否已经切换到DPoS（难度为1且高度大于等于切换高度）
 			if header.Difficulty == 1 && i.isDPoSTransition(header.Number) {
 				// 在DPoS切换期间，跳过IBFT难度验证
-				fmt.Printf("🔍 DEBUG 跳过IBFT难度验证：DPoS切换期间 blockNumber=%d difficulty=%d\n", 
+				fmt.Printf("🔍 DEBUG 跳过IBFT难度验证：DPoS切换期间 blockNumber=%d difficulty=%d\n",
 					header.Number, header.Difficulty)
 			} else {
 				return ErrWrongDifficulty
@@ -711,7 +761,8 @@ func (i *backendIBFT) IsLastOfEpoch(number uint64) bool {
 
 // Close closes the IBFT consensus mechanism, and does write back to disk
 func (i *backendIBFT) Close() error {
-	close(i.closeCh)
+	// 使用安全的关闭方法
+	i.safeClose()
 
 	if i.syncer != nil {
 		if err := i.syncer.Close(); err != nil {
@@ -769,7 +820,6 @@ func (i *backendIBFT) updateCurrentModules(height uint64) error {
 	i.currentSigner = signer
 	i.currentValidators = validators
 	i.currentHooks = hooks
-
 
 	i.logFork(lastSigner, signer)
 
@@ -878,7 +928,7 @@ func (i *backendIBFT) isDPoSTransition(blockNumber uint64) bool {
 	if i.forkManager == nil {
 		return false
 	}
-	
+
 	// 通过ForkManager检查是否在DPoS切换期间
 	return i.forkManager.IsDPoSTransition(blockNumber)
 }

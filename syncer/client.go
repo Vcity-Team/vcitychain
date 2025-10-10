@@ -66,7 +66,7 @@ func NewSyncPeerClient(
 		network:                network,
 		blockchain:             blockchain,
 		id:                     nodeID,
-		statusTopicName:        "syncer/status/0.1", // 所有节点使用相同的topic名称进行状态广播
+		statusTopicName:        "syncer/status/0.1",             // 所有节点使用相同的topic名称进行状态广播
 		peerStatusUpdateCh:     make(chan *NoForkPeer, 100),     // 增加缓冲区大小避免阻塞
 		peerConnectionUpdateCh: make(chan *event.PeerEvent, 50), // 增加缓冲区大小避免阻塞
 		shouldEmitBlocks:       true,
@@ -92,7 +92,7 @@ func (m *syncPeerClient) Start() error {
 		// 检查是否是topic冲突错误，如果是则尝试复用现有topic
 		if strings.Contains(err.Error(), "topic already exists") {
 			m.logger.Warn("⚠️ topic冲突，尝试复用现有topic", "节点ID", m.id, "error", err)
-			
+
 			// 尝试复用现有topic - 使用不同的策略
 			if m.tryReuseExistingTopic() {
 				m.logger.Info("✅ 成功复用现有topic", "节点ID", m.id, "topic", m.statusTopicName)
@@ -258,7 +258,7 @@ func (m *syncPeerClient) GetPeerConnectionUpdateEventCh() <-chan *event.PeerEven
 func (m *syncPeerClient) tryReuseExistingTopic() bool {
 	// 策略1：尝试直接复用原始topic名称（即使已存在）
 	m.logger.Info("🔄 尝试直接复用原始topic", "节点ID", m.id, "topic名称", m.statusTopicName)
-	
+
 	// 直接尝试创建原始topic，如果已存在，libp2p应该能处理
 	if topic, err := m.network.NewTopic(m.statusTopicName, &proto.SyncPeerStatus{}); err == nil {
 		// 成功获取topic（可能是新创建的，也可能是复用的）
@@ -266,26 +266,26 @@ func (m *syncPeerClient) tryReuseExistingTopic() bool {
 			m.logger.Error("❌ 订阅原始topic失败", "节点ID", m.id, "error", err)
 			return false
 		}
-		
+
 		m.topic = topic
 		m.logger.Info("✅ 成功复用原始topic", "节点ID", m.id, "topic名称", m.statusTopicName)
 		return true
 	} else {
 		m.logger.Warn("❌ 无法复用原始topic", "节点ID", m.id, "error", err)
 	}
-	
+
 	// 策略2：尝试使用带后缀的公共topic名称
 	for i := 1; i <= 5; i++ {
 		alternativeTopicName := fmt.Sprintf("syncer/status/0.1_%d", i)
 		m.logger.Info("🔄 尝试替代topic名称", "节点ID", m.id, "尝试次数", i, "topic名称", alternativeTopicName)
-		
+
 		if topic, err := m.network.NewTopic(alternativeTopicName, &proto.SyncPeerStatus{}); err == nil {
 			// 成功创建替代topic
 			if err := topic.Subscribe(m.handleStatusUpdate); err != nil {
 				m.logger.Error("❌ 订阅替代topic失败", "节点ID", m.id, "error", err)
 				continue
 			}
-			
+
 			m.topic = topic
 			m.statusTopicName = alternativeTopicName // 更新topic名称
 			m.logger.Info("✅ 成功创建替代topic", "节点ID", m.id, "topic名称", alternativeTopicName)
@@ -294,18 +294,18 @@ func (m *syncPeerClient) tryReuseExistingTopic() bool {
 			m.logger.Debug("❌ 替代topic创建失败", "节点ID", m.id, "尝试次数", i, "error", err)
 		}
 	}
-	
+
 	// 策略3：尝试使用通用topic名称（不包含节点ID）
 	genericTopicName := "syncer/status/0.1"
 	m.logger.Info("🔄 尝试通用topic名称", "节点ID", m.id, "topic名称", genericTopicName)
-	
+
 	if topic, err := m.network.NewTopic(genericTopicName, &proto.SyncPeerStatus{}); err == nil {
 		// 成功创建通用topic
 		if err := topic.Subscribe(m.handleStatusUpdate); err != nil {
 			m.logger.Error("❌ 订阅通用topic失败", "节点ID", m.id, "error", err)
 			return false
 		}
-		
+
 		m.topic = topic
 		m.statusTopicName = genericTopicName // 更新topic名称
 		m.logger.Info("✅ 成功创建通用topic", "节点ID", m.id, "topic名称", genericTopicName)
@@ -313,7 +313,7 @@ func (m *syncPeerClient) tryReuseExistingTopic() bool {
 	} else {
 		m.logger.Error("❌ 通用topic创建失败", "节点ID", m.id, "error", err)
 	}
-	
+
 	return false
 }
 
@@ -338,7 +338,7 @@ func (m *syncPeerClient) startGossip() error {
 			return fmt.Errorf("unable to subscribe to gossip topic, %w", err)
 		}
 		m.topic = topic
-		m.logger.Info("🚨🚨🚨 m.topic成功设置为真实topic 🚨🚨🚨", 
+		m.logger.Info("🚨🚨🚨 m.topic成功设置为真实topic 🚨🚨🚨",
 			"节点ID", m.id,
 			"topic", m.statusTopicName,
 			"m.topic", m.topic)
@@ -361,8 +361,8 @@ func (m *syncPeerClient) handleStatusUpdate(obj interface{}, from peer.ID) {
 	}
 
 	// 🆕 添加状态接收日志
-	m.logger.Info("📨 收到状态广播", 
-		"来源节点", from.String(), 
+	m.logger.Debug("📨 收到状态广播",
+		"来源节点", from.String(),
 		"区块高度", status.Number,
 		"本地节点", m.id,
 		"topic名称", m.statusTopicName)
@@ -455,8 +455,8 @@ func (m *syncPeerClient) startNewBlockProcess() {
 			}
 
 			// 🆕 添加详细的状态广播日志
-			m.logger.Info("🔔 检测到新区块事件，准备状态广播", 
-				"区块高度", latest.Number, 
+			m.logger.Info("🔔 检测到新区块事件，准备状态广播",
+				"区块高度", latest.Number,
 				"区块哈希", latest.Hash.String()[:16],
 				"节点ID", m.id,
 				"NewChain长度", l)
@@ -469,7 +469,7 @@ func (m *syncPeerClient) startNewBlockProcess() {
 			}
 
 			// 🆕 添加网络连接状态日志
-			m.logger.Info("🌐 网络连接状态检查", 
+			m.logger.Debug("🌐 网络连接状态检查",
 				"区块高度", latest.Number,
 				"连接节点数", len(peers),
 				"节点ID", m.id)
@@ -477,12 +477,12 @@ func (m *syncPeerClient) startNewBlockProcess() {
 			// Publish status with retry mechanism
 			var publishErr error
 			maxRetries := 3
-			m.logger.Info("📡 开始状态广播", 
+			m.logger.Info("📡 开始状态广播",
 				"区块高度", latest.Number,
 				"最大重试次数", maxRetries,
 				"节点ID", m.id,
 				"topic名称", m.statusTopicName)
-			
+
 			for retry := 0; retry < maxRetries; retry++ {
 				if err := m.topic.Publish(&proto.SyncPeerStatus{
 					Number: latest.Number,
@@ -499,7 +499,7 @@ func (m *syncPeerClient) startNewBlockProcess() {
 					time.Sleep(100 * time.Millisecond)
 				} else {
 					publishErr = nil
-					m.logger.Info("✅ 状态广播成功", 
+					m.logger.Debug("✅ 状态广播成功",
 						"区块高度", latest.Number,
 						"重试次数", retry+1,
 						"节点ID", m.id,
@@ -511,7 +511,7 @@ func (m *syncPeerClient) startNewBlockProcess() {
 			if publishErr != nil {
 				m.logger.Error("❌ 状态广播最终失败", "区块高度", latest.Number, "节点ID", m.id, "topic名称", m.statusTopicName, "错误", publishErr)
 			} else {
-				m.logger.Info("🎉 状态广播完成", "区块高度", latest.Number, "节点ID", m.id, "topic名称", m.statusTopicName)
+				m.logger.Debug("🎉 状态广播完成", "区块高度", latest.Number, "节点ID", m.id, "topic名称", m.statusTopicName)
 			}
 		}
 	}

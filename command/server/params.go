@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"math/big"
 	"net"
 
 	"github.com/Vcity-Team/vcitychain/chain"
@@ -103,6 +104,9 @@ type serverParams struct {
 	
 	// 🆕 新增：DPoS验证者数量
 	dposValidatorsCount uint64
+	
+	// 🆕 新增：DPoS最小质押门槛
+	dposDelegateThreshold *big.Int
 }
 
 func (p *serverParams) isMaxPeersSet() bool {
@@ -198,6 +202,14 @@ func (p *serverParams) generateConfig() *server.Config {
 		ConsensusSwitchHeight: p.consensusSwitchHeight,
 		// 🆕 新增：DPoS验证者数量
 		DPoSValidatorsCount:   p.dposValidatorsCount,
+		// 🆕 新增：DPoS最小质押门槛
+		DPoSDelegateThreshold: p.dposDelegateThreshold,
+		// 🆕 新增：DPoS经济系统配置
+		DPoSEpochDuration:        p.rawConfig.DPoSEpochDuration,
+		DPoSRewardDistribution:   p.rawConfig.DPoSRewardDistribution,
+		DPoSRewardAmount:         p.rawConfig.DPoSRewardAmount,
+		DPoSValidatorRewardRatio: p.rawConfig.DPoSValidatorRewardRatio,
+		DPoSVoterRewardRatio:     p.rawConfig.DPoSVoterRewardRatio,
 		JSONLogFormat:      p.rawConfig.JSONLogFormat,
 		LogFilePath:        p.logFileLocation,
 

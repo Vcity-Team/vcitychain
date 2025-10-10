@@ -49,7 +49,7 @@ type Config struct {
 	MetricsInterval       time.Duration
 
 	// 🆕 新增：共识切换高度
-	ConsensusSwitchHeight uint64
+	ConsensusSwitchHeight uint64 `yaml:"consensus_switch_height"`
 
 	// 🆕 新增：DPoS验证者数量
 	DPoSValidatorsCount uint64

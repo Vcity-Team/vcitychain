@@ -5,6 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Vcity-Team/vcitychain/command"
 	"github.com/Vcity-Team/vcitychain/command/helper"
 )
 
@@ -24,7 +25,7 @@ func GetCommand() *cobra.Command {
 }
 
 func runCommand(cmd *cobra.Command, args []string) {
-	outputter := helper.InitializeOutputter(cmd)
+	outputter := command.InitializeOutputter(cmd)
 	defer outputter.WriteOutput()
 
 	// 构建JSON-RPC请求
@@ -48,7 +49,11 @@ func runCommand(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	outputter.SetResult(result)
+	// 创建CommandResult
+	commandResult := &EpochResult{
+		Data: result.(map[string]interface{}),
+	}
+	outputter.SetCommandResult(commandResult)
 }
 
 func callJSONRPC(method string, params []interface{}) (interface{}, error) {
@@ -60,3 +65,4 @@ func callJSONRPC(method string, params []interface{}) (interface{}, error) {
 		"note":   "JSON-RPC call implementation needed",
 	}, nil
 }
+

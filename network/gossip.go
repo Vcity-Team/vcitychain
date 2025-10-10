@@ -44,9 +44,9 @@ type Topic struct {
 	handlerTimeout time.Duration    // 消息处理超时时间
 	messageStats   map[string]int64 // 消息统计
 	statsMutex     sync.RWMutex     // 统计锁
-	
+
 	// 实际使用的protoID（可能被重命名）
-	actualProtoID  string
+	actualProtoID string
 }
 
 func (t *Topic) createObj() proto.Message {
@@ -97,18 +97,25 @@ func (t *Topic) Publish(obj proto.Message) error {
 	metrics.SetGauge([]string{networkMetrics, "egress_bytes"}, float32(len(data)))
 
 	// 只对状态广播和签名相关的topic使用INFO级别日志
-	if t.topic.String() == "syncer/status/0.1" ||
-		strings.Contains(t.topic.String(), "dpos-signature") {
-		//t.logger.Info("gossip发布消息", "topic", t.topic.String(), "消息大小", len(data))
-	} else {
-		//t.logger.Debug("gossip发布消息", "topic", t.topic.String(), "消息大小", len(data))
+	if t.topic != nil {
+		topicString := t.topic.String()
+		if topicString == "syncer/status/0.1" ||
+			strings.Contains(topicString, "dpos-signature") {
+			//t.logger.Info("gossip发布消息", "topic", topicString, "消息大小", len(data))
+		} else {
+			//t.logger.Debug("gossip发布消息", "topic", topicString, "消息大小", len(data))
+		}
 	}
 
 	// 添加网络状态监控
 	if err := t.topic.Publish(context.Background(), data); err != nil {
 		// 记录详细的网络错误信息
+		topicString := "unknown"
+		if t.topic != nil {
+			topicString = t.topic.String()
+		}
 		t.logger.Error("网络发布失败",
-			"topic", t.topic.String(),
+			"topic", topicString,
 			"消息大小", len(data),
 			"错误", err)
 
@@ -117,7 +124,7 @@ func (t *Topic) Publish(obj proto.Message) error {
 			strings.Contains(err.Error(), "queue") ||
 			strings.Contains(err.Error(), "full") {
 			t.logger.Error("网络缓冲区已满，消息丢失",
-				"topic", t.topic.String(),
+				"topic", topicString,
 				"建议增加缓冲区大小或检查网络负载")
 		}
 
@@ -197,8 +204,12 @@ func (t *Topic) readLoop(sub *pubsub.Subscription, handler func(obj interface{},
 
 				// 验证消息的有效性，防止零值消息被传递给处理器
 				if !t.isValidMessage(obj) {
+					topicString := "unknown"
+					if t.topic != nil {
+						topicString = t.topic.String()
+					}
 					t.logger.Debug("收到无效消息，跳过处理",
-						"topic", t.topic.String(),
+						"topic", topicString,
 						"from", msg.GetFrom().String())
 					metrics.IncrCounter([]string{networkMetrics, "invalid_messages"}, float32(1))
 					return
@@ -216,10 +227,14 @@ func (t *Topic) readLoop(sub *pubsub.Subscription, handler func(obj interface{},
 			case <-done:
 				// 正常完成
 			case <-time.After(t.handlerTimeout):
+				topicString := "unknown"
+				if t.topic != nil {
+					topicString = t.topic.String()
+				}
 				t.logger.Warn("消息处理超时",
 					"timeout", t.handlerTimeout,
 					"from", msg.GetFrom().String(),
-					"topic", t.topic.String())
+					"topic", topicString)
 				metrics.IncrCounter([]string{networkMetrics, "timeout_messages"}, float32(1))
 			}
 		}()
@@ -238,12 +253,13 @@ func (t *Topic) isValidMessage(obj proto.Message) bool {
 	}
 
 	// 针对DPoS签名请求消息的特殊验证
-	if strings.Contains(t.topic.String(), "dpos-signature-request") {
+	topicString := t.topic.String()
+	if strings.Contains(topicString, "dpos-signature-request") {
 		return t.isValidSignatureRequest(obj)
 	}
 
 	// 针对DPoS签名响应消息的特殊验证
-	if strings.Contains(t.topic.String(), "dpos-signature-response") {
+	if strings.Contains(topicString, "dpos-signature-response") {
 		return t.isValidSignatureResponse(obj)
 	}
 
@@ -328,14 +344,14 @@ func (t *Topic) isValidSignatureResponse(obj proto.Message) bool {
 }
 
 func (s *Server) NewTopic(protoID string, obj proto.Message) (*Topic, error) {
-	s.logger.Info("🔍 开始创建topic", "protoID", protoID)
-	
+	s.logger.Debug("🔍 开始创建topic", "protoID", protoID)
+
 	topic, err := s.ps.Join(protoID)
 	if err != nil {
 		s.logger.Error("🔍 Join topic失败", "protoID", protoID, "错误类型", fmt.Sprintf("%T", err), "错误信息", err.Error())
 		return nil, err
 	}
-	s.logger.Info("🔍 Join topic成功", "protoID", protoID)
+	s.logger.Debug("🔍 Join topic成功", "protoID", protoID)
 
 	tt := &Topic{
 		logger:         s.logger.Named(protoID),
