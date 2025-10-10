@@ -68,7 +68,7 @@ type DPOS struct {
 // NewDPOS creates a new DPOS endpoint
 func NewDPOS(logger hclog.Logger, store dposStore, chainID uint64) *DPOS {
 	logger.Info("Initializing DPoS endpoint", "chainID", chainID)
-	
+
 	return &DPOS{
 		logger:  logger.Named("dpos"),
 		store:   store,
@@ -643,7 +643,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	} else {
 		gasPrice = big.NewInt(1000000000) // 1 gwei default
 	}
-	
+
 	// Ensure gas price meets minimum price limit (1 gwei = 1000000000 wei)
 	// This prevents "transaction underpriced" errors
 	minGasPrice := big.NewInt(1000000000) // 1 gwei
@@ -814,7 +814,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		GetConsensus() interface{}
 	}); ok {
 		d.logger.Info("Store has GetConsensus method, attempting to get consensus engine...")
-		
+
 		// 🆕 新增：直接获取DPoS引擎
 		consensusEngine := d.getDPoSEngineDirectly(consensusStore)
 
@@ -827,23 +827,23 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 			// 所有投票都通过区块同步统一处理，确保一致性
 			d.logger.Info("ℹ️ 本地投票已创建交易，状态将在区块同步时更新")
 			d.logger.Info("ℹ️ 这避免了重复计算问题，确保所有节点状态一致")
-			
+
 			// 注释掉本地状态更新，避免重复计算
 			/*
-			if dposEngine, ok := consensusEngine.(interface {
-				AddVote(voter types.Address, candidate types.Address, amount *big.Int) error
-			}); ok {
-				d.logger.Info("✅ DPoS引擎有AddVote方法，尝试更新DPoS状态...")
-				if err := dposEngine.AddVote(voterAddr, candidateAddr, amountInt); err != nil {
-					d.logger.Error("❌ 更新DPoS状态失败", "error", err)
-					// 继续执行，交易已在池中
+				if dposEngine, ok := consensusEngine.(interface {
+					AddVote(voter types.Address, candidate types.Address, amount *big.Int) error
+				}); ok {
+					d.logger.Info("✅ DPoS引擎有AddVote方法，尝试更新DPoS状态...")
+					if err := dposEngine.AddVote(voterAddr, candidateAddr, amountInt); err != nil {
+						d.logger.Error("❌ 更新DPoS状态失败", "error", err)
+						// 继续执行，交易已在池中
+					} else {
+						d.logger.Info("✅ DPoS状态更新成功")
+						dposStateUpdated = true
+					}
 				} else {
-					d.logger.Info("✅ DPoS状态更新成功")
-					dposStateUpdated = true
+					d.logger.Warn("⚠️ DPoS引擎没有AddVote方法")
 				}
-			} else {
-				d.logger.Warn("⚠️ DPoS引擎没有AddVote方法")
-			}
 			*/
 		}
 	} else {
@@ -2140,7 +2140,7 @@ func (d *DPOS) getDynamicVotingInfoFromDPoSEngine() []*dpos.StakeInfo {
 		dposEngine := d.getDPoSEngineDirectly(consensusStore)
 		if dposEngine != nil {
 			d.logger.Info("✅ Successfully got DPoS engine using getDPoSEngineDirectly", "type", fmt.Sprintf("%T", dposEngine))
-			
+
 			// Try to get delegates information directly from DPoS engine
 			if delegateEngine, ok := dposEngine.(interface {
 				GetDelegates() validator.AccountSet
@@ -2154,14 +2154,14 @@ func (d *DPOS) getDynamicVotingInfoFromDPoSEngine() []*dpos.StakeInfo {
 				for _, delegate := range delegates {
 					if delegate.VotingPower != nil && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
 						stake := &dpos.StakeInfo{
-							Staker:    delegate.Address,        // 受托人地址（自己给自己投票）
-							Amount:    delegate.VotingPower,     // 投票权重
+							Staker:    delegate.Address,          // 受托人地址（自己给自己投票）
+							Amount:    delegate.VotingPower,      // 投票权重
 							StartTime: uint64(time.Now().Unix()), // 当前时间
-							EndTime:   0,                        // 无锁定时间
-							IsLocked:  false,                    // 未锁定
-							IsActive:  delegate.IsActive,        // 是否活跃
-							Delegate:  delegate.Address,         // 受托人地址
-							Rewards:   big.NewInt(0),            // 奖励为0
+							EndTime:   0,                         // 无锁定时间
+							IsLocked:  false,                     // 未锁定
+							IsActive:  delegate.IsActive,         // 是否活跃
+							Delegate:  delegate.Address,          // 受托人地址
+							Rewards:   big.NewInt(0),             // 奖励为0
 						}
 						dynamicStakes = append(dynamicStakes, stake)
 
@@ -2171,7 +2171,7 @@ func (d *DPOS) getDynamicVotingInfoFromDPoSEngine() []*dpos.StakeInfo {
 							"isActive", delegate.IsActive)
 					}
 				}
-				
+
 				d.logger.Info("Dynamic voting info extracted from DPoS engine", "count", len(dynamicStakes))
 				return dynamicStakes
 			} else {
@@ -2211,7 +2211,7 @@ func (d *DPOS) getDynamicVotingInfoFromDPoSEngine() []*dpos.StakeInfo {
 						}
 					}
 				}
-				
+
 				d.logger.Info("Dynamic voting info extracted from DPoS engine", "count", len(dynamicStakes))
 				return dynamicStakes
 			} else {
@@ -2226,7 +2226,7 @@ func (d *DPOS) getDynamicVotingInfoFromDPoSEngine() []*dpos.StakeInfo {
 
 	// 🆕 备用方案：从数据库中查询所有受托人信息
 	d.logger.Info("🔄 从数据库中查询所有受托人信息...")
-	
+
 	// 尝试从store中获取所有受托人
 	if store, ok := d.store.(interface {
 		GetDelegates() validator.AccountSet
@@ -2234,20 +2234,20 @@ func (d *DPOS) getDynamicVotingInfoFromDPoSEngine() []*dpos.StakeInfo {
 		delegates := store.GetDelegates()
 		if delegates != nil && len(delegates) > 0 {
 			d.logger.Info("✅ 从数据库获取到受托人信息", "delegateCount", len(delegates))
-			
+
 			// 为每个受托人创建stake info
 			var dynamicStakes []*dpos.StakeInfo
 			for _, delegate := range delegates {
 				if delegate.VotingPower != nil && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
 					stake := &dpos.StakeInfo{
-						Staker:    delegate.Address,        // 受托人地址（自己给自己投票）
-						Amount:    delegate.VotingPower,     // 投票权重
+						Staker:    delegate.Address,          // 受托人地址（自己给自己投票）
+						Amount:    delegate.VotingPower,      // 投票权重
 						StartTime: uint64(time.Now().Unix()), // 当前时间
-						EndTime:   0,                        // 无锁定时间
-						IsLocked:  false,                    // 未锁定
-						IsActive:  delegate.IsActive,        // 是否活跃
-						Delegate:  delegate.Address,         // 受托人地址
-						Rewards:   big.NewInt(0),            // 奖励为0
+						EndTime:   0,                         // 无锁定时间
+						IsLocked:  false,                     // 未锁定
+						IsActive:  delegate.IsActive,         // 是否活跃
+						Delegate:  delegate.Address,          // 受托人地址
+						Rewards:   big.NewInt(0),             // 奖励为0
 					}
 					dynamicStakes = append(dynamicStakes, stake)
 
@@ -2257,12 +2257,12 @@ func (d *DPOS) getDynamicVotingInfoFromDPoSEngine() []*dpos.StakeInfo {
 						"isActive", delegate.IsActive)
 				}
 			}
-			
+
 			d.logger.Info("✅ 从数据库获取的动态投票信息", "count", len(dynamicStakes))
 			return dynamicStakes
 		}
 	}
-	
+
 	// 最终备用方案：返回空结果
 	d.logger.Info("No dynamic voting info available, returning empty result")
 	return []*dpos.StakeInfo{}
@@ -2271,11 +2271,11 @@ func (d *DPOS) getDynamicVotingInfoFromDPoSEngine() []*dpos.StakeInfo {
 // getDelegatesFromDatabase 从数据库查询所有受托人信息
 func (d *DPOS) getDelegatesFromDatabase() []*dpos.StakeInfo {
 	d.logger.Info("🔄 从数据库中查询所有受托人信息...")
-	
+
 	// 直接获取DPoS引擎
 	// 需要将dposStore转换为有GetConsensus方法的接口
-	var consensusStore interface{GetConsensus() interface{}}
-	if store, ok := d.store.(interface{GetConsensus() interface{}}); ok {
+	var consensusStore interface{ GetConsensus() interface{} }
+	if store, ok := d.store.(interface{ GetConsensus() interface{} }); ok {
 		consensusStore = store
 	} else {
 		// 如果dposStore没有GetConsensus方法，尝试通过反射获取
@@ -2284,12 +2284,12 @@ func (d *DPOS) getDelegatesFromDatabase() []*dpos.StakeInfo {
 		if storeValue.Kind() == reflect.Ptr {
 			storeValue = storeValue.Elem()
 		}
-		
+
 		// 查找Consensus字段
 		if consensusField := storeValue.FieldByName("Consensus"); consensusField.IsValid() {
 			consensusEngine := consensusField.Interface()
 			d.logger.Info("通过反射找到Consensus字段", "type", reflect.TypeOf(consensusEngine))
-			
+
 			// 尝试调用GetDelegates或GetValidators
 			if getDelegatesMethod := reflect.ValueOf(consensusEngine).MethodByName("GetDelegates"); getDelegatesMethod.IsValid() {
 				d.logger.Info("✅ 通过反射找到GetDelegates方法，正在调用...")
@@ -2302,7 +2302,7 @@ func (d *DPOS) getDelegatesFromDatabase() []*dpos.StakeInfo {
 					}
 				}
 			}
-			
+
 			if getValidatorsMethod := reflect.ValueOf(consensusEngine).MethodByName("GetValidators"); getValidatorsMethod.IsValid() {
 				d.logger.Info("✅ 通过反射找到GetValidators方法，正在调用...")
 				results := getValidatorsMethod.Call([]reflect.Value{})
@@ -2315,17 +2315,17 @@ func (d *DPOS) getDelegatesFromDatabase() []*dpos.StakeInfo {
 				}
 			}
 		}
-		
+
 		d.logger.Error("无法通过反射获取DPoS引擎")
 		return []*dpos.StakeInfo{}
 	}
-	
+
 	dposEngine := d.getDPoSEngineDirectly(consensusStore)
 	if dposEngine == nil {
 		d.logger.Error("Failed to get DPoS engine directly")
 		return []*dpos.StakeInfo{}
 	}
-	
+
 	// 优先尝试GetValidators方法（不需要参数，更简单）
 	if getValidatorsMethod := reflect.ValueOf(dposEngine).MethodByName("GetValidators"); getValidatorsMethod.IsValid() {
 		d.logger.Info("✅ 找到GetValidators方法，正在调用...")
@@ -2336,14 +2336,14 @@ func (d *DPOS) getDelegatesFromDatabase() []*dpos.StakeInfo {
 			}
 		}
 	}
-	
+
 	// 如果GetValidators失败，尝试GetDelegates方法
 	if getDelegatesMethod := reflect.ValueOf(dposEngine).MethodByName("GetDelegates"); getDelegatesMethod.IsValid() {
 		d.logger.Info("✅ 找到GetDelegates方法，正在调用...")
-		
+
 		// 获取当前区块号
 		currentBlockNumber := uint64(0)
-		
+
 		// 尝试通过DPoS引擎获取当前区块号
 		if getCurrentHeaderMethod := reflect.ValueOf(dposEngine).MethodByName("GetCurrentHeader"); getCurrentHeaderMethod.IsValid() {
 			d.logger.Info("✅ 通过GetCurrentHeader获取当前区块号...")
@@ -2355,7 +2355,7 @@ func (d *DPOS) getDelegatesFromDatabase() []*dpos.StakeInfo {
 				}
 			}
 		}
-		
+
 		// 如果无法获取当前区块号，尝试通过store获取
 		if currentBlockNumber == 0 {
 			d.logger.Info("⚠️ 无法通过DPoS引擎获取当前区块号，尝试通过store获取...")
@@ -2364,11 +2364,11 @@ func (d *DPOS) getDelegatesFromDatabase() []*dpos.StakeInfo {
 			currentBlockNumber = uint64(10000)
 			d.logger.Info("⚠️ 使用备用区块号", "blockNumber", currentBlockNumber)
 		}
-		
+
 		// GetDelegates需要两个参数：blockNumber uint64 和 parents []*types.Header
 		blockNumberValue := reflect.ValueOf(currentBlockNumber)
 		parentsValue := reflect.ValueOf([]*types.Header(nil))
-		
+
 		results := getDelegatesMethod.Call([]reflect.Value{blockNumberValue, parentsValue})
 		if len(results) >= 2 {
 			if err, ok := results[1].Interface().(error); ok && err != nil {
@@ -2378,8 +2378,7 @@ func (d *DPOS) getDelegatesFromDatabase() []*dpos.StakeInfo {
 			}
 		}
 	}
-	
-	
+
 	// 如果无法获取，返回空结果
 	d.logger.Info("No database delegates info available, returning empty result")
 	return []*dpos.StakeInfo{}
@@ -2388,20 +2387,20 @@ func (d *DPOS) getDelegatesFromDatabase() []*dpos.StakeInfo {
 // convertDelegatesToStakeInfo 将受托人信息转换为StakeInfo
 func (d *DPOS) convertDelegatesToStakeInfo(delegates validator.AccountSet, source string) []*dpos.StakeInfo {
 	d.logger.Info("✅ 从"+source+"获取到受托人信息", "delegateCount", len(delegates))
-	
+
 	// 为每个受托人创建stake info
 	var dynamicStakes []*dpos.StakeInfo
 	for _, delegate := range delegates {
 		if delegate.VotingPower != nil && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
 			stake := &dpos.StakeInfo{
-				Staker:    delegate.Address,        // 受托人地址（自己给自己投票）
-				Amount:    delegate.VotingPower,     // 投票权重
+				Staker:    delegate.Address,          // 受托人地址（自己给自己投票）
+				Amount:    delegate.VotingPower,      // 投票权重
 				StartTime: uint64(time.Now().Unix()), // 当前时间
-				EndTime:   0,                        // 无锁定时间
-				IsLocked:  false,                    // 未锁定
-				IsActive:  delegate.IsActive,        // 是否活跃
-				Delegate:  delegate.Address,         // 受托人地址
-				Rewards:   big.NewInt(0),            // 奖励为0
+				EndTime:   0,                         // 无锁定时间
+				IsLocked:  false,                     // 未锁定
+				IsActive:  delegate.IsActive,         // 是否活跃
+				Delegate:  delegate.Address,          // 受托人地址
+				Rewards:   big.NewInt(0),             // 奖励为0
 			}
 			dynamicStakes = append(dynamicStakes, stake)
 
@@ -2411,7 +2410,7 @@ func (d *DPOS) convertDelegatesToStakeInfo(delegates validator.AccountSet, sourc
 				"isActive", delegate.IsActive)
 		}
 	}
-	
+
 	d.logger.Info("✅ 从"+source+"获取的动态投票信息", "count", len(dynamicStakes))
 	return dynamicStakes
 }
@@ -2860,26 +2859,26 @@ func (d *DPOS) getConsensusEngineByHeight(consensusStore interface {
 	GetConsensus() interface{}
 }, currentHeight uint64) interface{} {
 	d.logger.Debug("Current block height", "height", currentHeight)
-	
+
 	// 获取共识切换高度配置
 	consensusSwitchHeight := d.getConsensusSwitchHeight()
 	d.logger.Debug("Consensus switch height", "switchHeight", consensusSwitchHeight)
-	
+
 	// 如果当前高度 >= 切换高度，尝试获取DPoS引擎
 	if consensusSwitchHeight > 0 && currentHeight >= consensusSwitchHeight {
-		d.logger.Info("🔄 当前高度已达到DPoS切换高度，尝试获取DPoS引擎", 
-			"currentHeight", currentHeight, 
+		d.logger.Info("🔄 当前高度已达到DPoS切换高度，尝试获取DPoS引擎",
+			"currentHeight", currentHeight,
 			"switchHeight", consensusSwitchHeight)
-		
+
 		// 尝试获取DPoS引擎
 		if dposEngine := d.getDPoSEngine(); dposEngine != nil {
 			d.logger.Info("✅ 成功获取DPoS引擎")
 			return dposEngine
 		}
-		
+
 		d.logger.Warn("⚠️ 无法获取DPoS引擎，使用默认共识引擎")
 	}
-	
+
 	// 否则使用默认共识引擎
 	d.logger.Debug("使用默认共识引擎", "height", currentHeight)
 	return consensusStore.GetConsensus()
@@ -2893,7 +2892,7 @@ func (d *DPOS) getConsensusSwitchHeight() uint64 {
 	}); ok {
 		consensusEngine := consensusStore.GetConsensus()
 		d.logger.Debug("获取到共识引擎", "type", fmt.Sprintf("%T", consensusEngine))
-		
+
 		// 尝试从IBFT引擎中获取配置
 		if ibftEngine, ok := consensusEngine.(interface {
 			GetConsensusSwitchHeight() uint64
@@ -2902,7 +2901,7 @@ func (d *DPOS) getConsensusSwitchHeight() uint64 {
 			d.logger.Debug("从IBFT引擎获取共识切换高度", "height", height)
 			return height
 		}
-		
+
 		// 尝试从DPoS引擎中获取配置
 		if dposEngine, ok := consensusEngine.(interface {
 			GetConsensusSwitchHeight() uint64
@@ -2911,7 +2910,7 @@ func (d *DPOS) getConsensusSwitchHeight() uint64 {
 			d.logger.Debug("从DPoS引擎获取共识切换高度", "height", height)
 			return height
 		}
-		
+
 		// 尝试通过反射获取配置
 		d.logger.Debug("尝试通过反射获取共识切换高度配置")
 		if height := d.getConsensusSwitchHeightByReflection(consensusEngine); height > 0 {
@@ -2919,7 +2918,7 @@ func (d *DPOS) getConsensusSwitchHeight() uint64 {
 			return height
 		}
 	}
-	
+
 	// 如果无法获取，返回0（表示不进行切换）
 	d.logger.Warn("无法获取共识切换高度配置，使用默认值0")
 	return 0
@@ -2932,7 +2931,7 @@ func (d *DPOS) getConsensusSwitchHeightByReflection(consensusEngine interface{})
 	if consensusValue.Kind() == reflect.Ptr {
 		consensusValue = consensusValue.Elem()
 	}
-	
+
 	consensusType := consensusValue.Type()
 	for i := 0; i < consensusType.NumMethod(); i++ {
 		method := consensusType.Method(i)
@@ -2947,7 +2946,7 @@ func (d *DPOS) getConsensusSwitchHeightByReflection(consensusEngine interface{})
 			}
 		}
 	}
-	
+
 	d.logger.Debug("未找到GetConsensusSwitchHeight方法")
 	return 0
 }
@@ -2964,13 +2963,13 @@ func (d *DPOS) getDPoSEngine() interface{} {
 			return dposEngine
 		}
 	}
-	
+
 	// 尝试从共识引擎中获取DPoS引擎
 	if consensusStore, ok := d.store.(interface {
 		GetConsensus() interface{}
 	}); ok {
 		consensusEngine := consensusStore.GetConsensus()
-		
+
 		// 尝试从IBFT引擎中获取DPoS引擎
 		if ibftEngine, ok := consensusEngine.(interface {
 			GetDPoSEngine() interface{}
@@ -2982,7 +2981,7 @@ func (d *DPOS) getDPoSEngine() interface{} {
 			}
 		}
 	}
-	
+
 	d.logger.Warn("无法获取DPoS引擎")
 	return nil
 }
@@ -2999,7 +2998,7 @@ func (d *DPOS) getCurrentBlockHeight() uint64 {
 			return header.Number
 		}
 	}
-	
+
 	// 尝试从GetLatestHeader方法获取
 	if headerStore, ok := d.store.(interface {
 		GetLatestHeader() *types.Header
@@ -3010,7 +3009,7 @@ func (d *DPOS) getCurrentBlockHeight() uint64 {
 			return header.Number
 		}
 	}
-	
+
 	// 尝试从GetLatestBlock方法获取
 	if blockStore, ok := d.store.(interface {
 		GetLatestBlock() *types.Block
@@ -3021,7 +3020,7 @@ func (d *DPOS) getCurrentBlockHeight() uint64 {
 			return block.Header.Number
 		}
 	}
-	
+
 	// 如果无法获取，返回0
 	d.logger.Warn("无法获取当前区块高度，返回0")
 	return 0
@@ -3034,7 +3033,7 @@ func (d *DPOS) getCurrentBlockHeightFromExternal() uint64 {
 		GetConsensus() interface{}
 	}); ok {
 		consensusEngine := consensusStore.GetConsensus()
-		
+
 		// 尝试从IBFT引擎中获取当前高度
 		if ibftEngine, ok := consensusEngine.(interface {
 			GetCurrentHeight() uint64
@@ -3043,7 +3042,7 @@ func (d *DPOS) getCurrentBlockHeightFromExternal() uint64 {
 			d.logger.Debug("从IBFT引擎获取当前高度", "height", height)
 			return height
 		}
-		
+
 		// 尝试从DPoS引擎中获取当前高度
 		if dposEngine, ok := consensusEngine.(interface {
 			GetCurrentHeight() uint64
@@ -3052,19 +3051,19 @@ func (d *DPOS) getCurrentBlockHeightFromExternal() uint64 {
 			d.logger.Debug("从DPoS引擎获取当前高度", "height", height)
 			return height
 		}
-		
+
 		// 尝试通过反射获取当前高度
 		if height := d.getCurrentHeightByReflection(consensusEngine); height > 0 {
 			d.logger.Debug("通过反射获取当前高度", "height", height)
 			return height
 		}
 	}
-	
+
 	// 方法2: 尝试从区块链中获取
 	if height := d.getCurrentBlockHeight(); height > 0 {
 		return height
 	}
-	
+
 	// 方法3: 如果无法获取，返回0（表示无法确定高度）
 	d.logger.Warn("无法获取当前区块高度，返回0")
 	return 0
@@ -3077,7 +3076,7 @@ func (d *DPOS) getCurrentHeightByReflection(consensusEngine interface{}) uint64 
 	if consensusValue.Kind() == reflect.Ptr {
 		consensusValue = consensusValue.Elem()
 	}
-	
+
 	consensusType := consensusValue.Type()
 	for i := 0; i < consensusType.NumMethod(); i++ {
 		method := consensusType.Method(i)
@@ -3092,7 +3091,7 @@ func (d *DPOS) getCurrentHeightByReflection(consensusEngine interface{}) uint64 
 			}
 		}
 	}
-	
+
 	d.logger.Debug("未找到GetCurrentHeight方法")
 	return 0
 }
@@ -3102,7 +3101,7 @@ func (d *DPOS) getDPoSEngineDirectly(consensusStore interface {
 	GetConsensus() interface{}
 }) interface{} {
 	d.logger.Info("🔄 直接尝试获取DPoS引擎")
-	
+
 	// 方法1: 尝试从store中获取DPoS引擎
 	if dposStore, ok := d.store.(interface {
 		GetDPoSEngine() interface{}
@@ -3113,16 +3112,16 @@ func (d *DPOS) getDPoSEngineDirectly(consensusStore interface {
 			return dposEngine
 		}
 	}
-	
+
 	// 方法2: 尝试从共识引擎中获取DPoS引擎
 	consensusEngine := consensusStore.GetConsensus()
 	if consensusEngine == nil {
 		d.logger.Warn("共识引擎为nil")
 		return nil
 	}
-	
+
 	d.logger.Debug("获取到共识引擎", "type", fmt.Sprintf("%T", consensusEngine))
-	
+
 	// 尝试从IBFT引擎中获取DPoS引擎
 	if ibftEngine, ok := consensusEngine.(interface {
 		GetDPoSEngine() interface{}
@@ -3133,13 +3132,13 @@ func (d *DPOS) getDPoSEngineDirectly(consensusStore interface {
 			return dposEngine
 		}
 	}
-	
+
 	// 方法3: 尝试通过反射获取DPoS引擎
 	if dposEngine := d.getDPoSEngineByReflection(consensusEngine); dposEngine != nil {
 		d.logger.Info("✅ 通过反射获取DPoS引擎成功")
 		return dposEngine
 	}
-	
+
 	// 方法4: 如果无法获取DPoS引擎，返回默认共识引擎
 	d.logger.Warn("⚠️ 无法获取DPoS引擎，使用默认共识引擎")
 	return consensusEngine
@@ -3152,7 +3151,7 @@ func (d *DPOS) getDPoSEngineByReflection(consensusEngine interface{}) interface{
 	if consensusValue.Kind() == reflect.Ptr {
 		consensusValue = consensusValue.Elem()
 	}
-	
+
 	consensusType := consensusValue.Type()
 	for i := 0; i < consensusType.NumMethod(); i++ {
 		method := consensusType.Method(i)
@@ -3167,7 +3166,111 @@ func (d *DPOS) getDPoSEngineByReflection(consensusEngine interface{}) interface{
 			}
 		}
 	}
-	
+
 	d.logger.Debug("未找到GetDPoSEngine方法")
 	return nil
+}
+
+// ==================== 新增：DPoS经济系统JSON-RPC方法 ====================
+
+// GetCurrentEpochInfo 获取当前Epoch信息
+func (d *DPOS) GetCurrentEpochInfo() (map[string]interface{}, error) {
+	d.logger.Info("DPoS GetCurrentEpochInfo called")
+
+	// 获取DPoS引擎
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return map[string]interface{}{
+			"error": "DPoS engine not available",
+		}, nil
+	}
+
+	// 调用DPoS引擎的方法
+	if engine, ok := dposEngine.(interface {
+		GetCurrentEpochInfo() map[string]interface{}
+	}); ok {
+		return engine.GetCurrentEpochInfo(), nil
+	}
+
+	return map[string]interface{}{
+		"error": "GetCurrentEpochInfo method not available on DPoS engine",
+	}, nil
+}
+
+// GetEpochInfoByNumber 获取指定Epoch信息
+func (d *DPOS) GetEpochInfoByNumber(epochNumber uint64) (map[string]interface{}, error) {
+	d.logger.Info("DPoS GetEpochInfoByNumber called", "epochNumber", epochNumber)
+
+	// 获取DPoS引擎
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return map[string]interface{}{
+			"error": "DPoS engine not available",
+		}, nil
+	}
+
+	// 调用DPoS引擎的方法
+	if engine, ok := dposEngine.(interface {
+		GetEpochInfoByNumber(epochNumber uint64) map[string]interface{}
+	}); ok {
+		return engine.GetEpochInfoByNumber(epochNumber), nil
+	}
+
+	return map[string]interface{}{
+		"error": "GetEpochInfoByNumber method not available on DPoS engine",
+	}, nil
+}
+
+// GetValidatorBlockStats 获取验证者出块统计
+func (d *DPOS) GetValidatorBlockStats(validatorAddress string, epochNumber uint64) (map[string]interface{}, error) {
+	d.logger.Info("DPoS GetValidatorBlockStats called", "validatorAddress", validatorAddress, "epochNumber", epochNumber)
+
+	// 解析地址
+	addr := types.StringToAddress(validatorAddress)
+
+	// 获取DPoS引擎
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return map[string]interface{}{
+			"error": "DPoS engine not available",
+		}, nil
+	}
+
+	// 调用DPoS引擎的方法
+	if engine, ok := dposEngine.(interface {
+		GetValidatorBlockStats(validatorAddress types.Address, epochNumber uint64) map[string]interface{}
+	}); ok {
+		return engine.GetValidatorBlockStats(addr, epochNumber), nil
+	}
+
+	return map[string]interface{}{
+		"error": "GetValidatorBlockStats method not available on DPoS engine",
+	}, nil
+}
+
+// GetValidatorRewardsInfo 获取验证者奖励信息
+func (d *DPOS) GetValidatorRewardsInfo(validatorAddress string, epochNumber uint64) (map[string]interface{}, error) {
+	d.logger.Info("DPoS GetValidatorRewardsInfo called", "validatorAddress", validatorAddress, "epochNumber", epochNumber)
+
+	// 解析地址
+	addr := types.StringToAddress(validatorAddress)
+
+	// 获取DPoS引擎
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return map[string]interface{}{
+			"error": "DPoS engine not available",
+		}, nil
+	}
+
+	// 调用DPoS引擎的方法
+	if engine, ok := dposEngine.(interface {
+		GetValidatorRewardsInfo(validatorAddress types.Address, epochNumber uint64) map[string]interface{}
+	}); ok {
+		return engine.GetValidatorRewardsInfo(addr, epochNumber), nil
+	}
+
+	return map[string]interface{}{
+		"error": "GetValidatorRewardsInfo method not available on DPoS engine",
+	}, nil
 }

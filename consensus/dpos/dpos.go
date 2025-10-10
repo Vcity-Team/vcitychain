@@ -10540,3 +10540,237 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64) error {
 	d.logger.Info("✅ Epoch奖励分发完成", "epoch", epochNumber)
 	return nil
 }
+
+// ==================== 新增：DPoS经济系统JSON-RPC实现方法 ====================
+
+// GetCurrentEpochInfo 获取当前Epoch信息
+func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
+	if d.epochManager == nil {
+		return map[string]interface{}{
+			"error": "epoch manager not initialized",
+		}
+	}
+
+	epochNumber, lastEpochTime, epochDuration := d.epochManager.GetEpochInfo()
+
+	// 计算剩余时间
+	timeRemaining := time.Duration(0)
+	nextEpochTime := lastEpochTime.Add(epochDuration)
+	if time.Now().Before(nextEpochTime) {
+		timeRemaining = nextEpochTime.Sub(time.Now())
+	}
+
+	return map[string]interface{}{
+		"currentEpoch":   epochNumber,
+		"epochStartTime": lastEpochTime.Format(time.RFC3339),
+		"epochDuration":  epochDuration.String(),
+		"timeRemaining":  timeRemaining.String(),
+		"nextEpochTime":  nextEpochTime.Format(time.RFC3339),
+	}
+}
+
+// GetEpochInfoByNumber 获取指定Epoch信息
+func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
+	if d.epochManager == nil {
+		return map[string]interface{}{
+			"error": "epoch manager not initialized",
+		}
+	}
+
+	currentEpoch, _, epochDuration := d.epochManager.GetEpochInfo()
+
+	// 如果请求的是当前Epoch，返回当前信息
+	if epochNumber == currentEpoch {
+		return d.GetCurrentEpochInfo()
+	}
+
+	// 对于历史Epoch，我们只能提供基本信息
+	return map[string]interface{}{
+		"epochNumber":   epochNumber,
+		"epochDuration": epochDuration.String(),
+		"note":          "Historical epoch data not available",
+	}
+}
+
+// GetValidatorBlockStats 获取验证者出块统计
+func (d *DPoS) GetValidatorBlockStats(validatorAddress types.Address, epochNumber uint64) map[string]interface{} {
+	if d.blockTracker == nil {
+		return map[string]interface{}{
+			"error": "block tracker not initialized",
+		}
+	}
+
+	// 获取出块统计
+	blockCounts := d.blockTracker.GetEpochBlockCounts(epochNumber)
+	totalBlocks := d.blockTracker.GetTotalEpochBlocks(epochNumber)
+
+	blocksProduced := blockCounts[validatorAddress]
+	blockPercentage := 0.0
+	if totalBlocks > 0 {
+		blockPercentage = float64(blocksProduced) / float64(totalBlocks) * 100
+	}
+
+	// 获取验证者信息
+	validators := d.getAllValidators()
+	var votingPower string = "0"
+	var isActive bool = false
+
+	for _, validator := range validators {
+		if validator.Address == validatorAddress {
+			votingPower = validator.VotingPower.String()
+			isActive = validator.IsActive
+			break
+		}
+	}
+
+	return map[string]interface{}{
+		"validatorAddress": validatorAddress.String(),
+		"epochNumber":      epochNumber,
+		"blocksProduced":   blocksProduced,
+		"totalEpochBlocks": totalBlocks,
+		"blockPercentage":  blockPercentage,
+		"isActive":         isActive,
+		"votingPower":      votingPower,
+	}
+}
+
+// GetValidatorRewardsInfo 获取验证者奖励信息
+func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumber uint64) map[string]interface{} {
+	if d.rewardDistributor == nil {
+		return map[string]interface{}{
+			"error": "reward distributor not initialized",
+		}
+	}
+
+	// 从真实状态获取奖励账户余额
+	rewardAccountBalance := d.getAccountBalance(d.config.RewardAccount)
+
+	// 从真实状态获取验证者余额
+	validatorBalance := d.getAccountBalance(validatorAddress)
+
+	// 获取出块统计
+	blockCounts := d.blockTracker.GetEpochBlockCounts(epochNumber)
+	blocksProduced := blockCounts[validatorAddress]
+	totalBlocks := d.blockTracker.GetTotalEpochBlocks(epochNumber)
+
+	// 计算奖励（使用真实状态数据）
+	validatorReward := "0"
+	voterReward := "0"
+	totalReward := "0"
+	rewardPerBlock := "0"
+	actualReward := "0" // 实际可获得的奖励
+
+	if d.config.RewardAmount != nil && blocksProduced > 0 {
+		// 验证者奖励 = 总奖励 * 验证者比例 * 出块占比
+		validatorRewardBig := new(big.Int).Mul(d.config.RewardAmount, big.NewInt(int64(d.config.ValidatorRewardRatio)))
+		validatorRewardBig.Div(validatorRewardBig, big.NewInt(100))
+
+		if totalBlocks > 0 {
+			validatorRewardBig.Mul(validatorRewardBig, big.NewInt(int64(blocksProduced)))
+			validatorRewardBig.Div(validatorRewardBig, big.NewInt(int64(totalBlocks)))
+		}
+		validatorReward = validatorRewardBig.String()
+
+		// 投票者奖励 = 总奖励 * 投票者比例
+		voterRewardBig := new(big.Int).Mul(d.config.RewardAmount, big.NewInt(int64(d.config.VoterRewardRatio)))
+		voterRewardBig.Div(voterRewardBig, big.NewInt(100))
+		voterReward = voterRewardBig.String()
+
+		// 总奖励
+		totalRewardBig := new(big.Int).Add(validatorRewardBig, voterRewardBig)
+		totalReward = totalRewardBig.String()
+
+		// 每块奖励
+		if blocksProduced > 0 {
+			rewardPerBlockBig := new(big.Int).Div(validatorRewardBig, big.NewInt(int64(blocksProduced)))
+			rewardPerBlock = rewardPerBlockBig.String()
+		}
+
+		// 计算实际可获得的奖励（考虑奖励账户余额限制）
+		actualRewardBig := new(big.Int).Set(validatorRewardBig)
+		if actualRewardBig.Cmp(rewardAccountBalance) > 0 {
+			actualRewardBig.Set(rewardAccountBalance)
+		}
+		actualReward = actualRewardBig.String()
+	}
+
+	// 获取验证者详细信息
+	validators := d.getAllValidators()
+	var votingPower string = "0"
+	var isActive bool = false
+	var validatorIndex int = -1
+
+	for i, validator := range validators {
+		if validator.Address == validatorAddress {
+			votingPower = validator.VotingPower.String()
+			isActive = validator.IsActive
+			validatorIndex = i
+			break
+		}
+	}
+
+	// 计算奖励占比
+	rewardPercentage := 0.0
+	if totalBlocks > 0 {
+		rewardPercentage = float64(blocksProduced) / float64(totalBlocks) * 100
+	}
+
+	// 检查奖励是否足够
+	insufficientFunds := false
+	if d.config.RewardAmount != nil {
+		requiredAmount := new(big.Int).Set(d.config.RewardAmount)
+		insufficientFunds = rewardAccountBalance.Cmp(requiredAmount) < 0
+	}
+
+	return map[string]interface{}{
+		"validatorAddress":     validatorAddress.String(),
+		"validatorIndex":       validatorIndex,
+		"epochNumber":          epochNumber,
+		"validatorReward":      validatorReward,
+		"voterReward":          voterReward,
+		"totalReward":          totalReward,
+		"actualReward":         actualReward, // 实际可获得的奖励
+		"blocksProduced":       blocksProduced,
+		"totalEpochBlocks":     totalBlocks,
+		"rewardPercentage":     rewardPercentage,
+		"rewardPerBlock":       rewardPerBlock,
+		"rewardAccount":        d.config.RewardAccount.String(),
+		"rewardAccountBalance": rewardAccountBalance.String(),
+		"validatorBalance":     validatorBalance.String(),
+		"votingPower":          votingPower,
+		"isActive":             isActive,
+		"insufficientFunds":    insufficientFunds,              // 奖励账户资金是否充足
+		"canDistribute":        !insufficientFunds && isActive, // 是否可以分发奖励
+	}
+}
+
+// getAccountBalance 获取账户余额（辅助方法）
+func (d *DPoS) getAccountBalance(address types.Address) *big.Int {
+	if d.blockchain == nil {
+		return big.NewInt(0)
+	}
+
+	// 获取当前区块头
+	currentHeader := d.blockchain.CurrentHeader()
+	if currentHeader == nil {
+		return big.NewInt(0)
+	}
+
+	// 通过状态提供者获取状态快照
+	stateProvider, err := d.blockchain.GetStateProviderForBlock(currentHeader)
+	if err != nil {
+		return big.NewInt(0)
+	}
+
+	// 尝试通过状态快照获取账户信息
+	if snapshot, ok := stateProvider.(interface {
+		GetAccount(address types.Address) (*state.Account, error)
+	}); ok {
+		if account, err := snapshot.GetAccount(address); err == nil {
+			return account.Balance
+		}
+	}
+
+	// 如果获取失败，返回0
+	return big.NewInt(0)
+}
