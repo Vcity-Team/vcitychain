@@ -52,6 +52,11 @@ func NewExecutor(config *chain.Params, s State, logger hclog.Logger) *Executor {
 	}
 }
 
+// GetMainState 获取主状态管理器（用于直接状态操作）
+func (e *Executor) GetMainState() State {
+	return e.state
+}
+
 func (e *Executor) WriteGenesis(
 	alloc map[types.Address]*chain.GenesisAccount,
 	initialStateRoot types.Hash) (types.Hash, error) {

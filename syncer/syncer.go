@@ -441,9 +441,9 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				s.logger.Error("区块验证失败", "peer", peerID.String(), "区块号", block.Number(), "error", err)
 				return lastReceivedNumber, false, fmt.Errorf("unable to verify block, %w", err)
 			}
-			s.logger.Info("✅ 区块验证完成", "peer", peerID.String()[:8], "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
+			s.logger.Debug("✅ 区块验证完成", "peer", peerID.String()[:8], "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
 
-			s.logger.Info("🔒 同步器调用WriteFullBlock", "blockNumber", block.Number(), "peer", peerID.String())
+			s.logger.Debug("🔒 同步器调用WriteFullBlock", "blockNumber", block.Number(), "peer", peerID.String())
 			if err := s.blockchain.WriteFullBlock(fullBlock, syncerName); err != nil {
 				metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
 				s.logger.Error("区块写入失败", "peer", peerID.String(), "区块号", block.Number(), "error", err)

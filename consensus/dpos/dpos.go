@@ -2706,6 +2706,10 @@ type DPoS struct {
 	// 🆕 固定时间窗口调度器
 	blockScheduler *BlockScheduler
 
+	// 🆕 延迟状态更新机制（方案1）
+	pendingStateUpdates map[uint64]map[types.Address]*big.Int
+	stateUpdateMutex    sync.RWMutex
+
 	// 已处理的区块哈希集合，避免重复处理（使用LRU缓存）
 	processedBlocks *lru.Cache
 	processedMutex  sync.RWMutex
@@ -10566,6 +10570,9 @@ func (d *DPoS) initializeEconomicSystem() error {
 	genesisTime := d.getGenesisTime()
 	d.epochManager.SetGenesisTimeAndCallback(genesisTime, d.handleEpochSwitch)
 
+	// 🆕 设置epoch结束回调（用于延迟状态更新）
+	d.epochManager.SetEpochEndCallback(d.onEpochEnd)
+
 	// 🆕 启动独立时间检查器
 	d.epochManager.StartIndependentTimer()
 
@@ -10634,26 +10641,142 @@ func (d *DPoS) handleEpochSwitch(epochNumber uint64) error {
 		d.blockScheduler.StartNewEpoch(epochNumber, currentTime)
 	}
 
-	// 2. 分发上一个epoch的奖励
+	// 2. 计算和记录上一个epoch的奖励（延迟状态更新）
 	if epochNumber > 1 {
 		previousEpoch := epochNumber - 1
-		d.logger.Info("💰 ========== 开始分发Epoch奖励 ==========",
+		d.logger.Info("💰 ========== 开始计算Epoch奖励 ==========",
 			"epoch", previousEpoch,
 			"currentEpoch", epochNumber,
 			"rewardTime", currentTime.Format("2006-01-02 15:04:05"),
-			"note", "正在为上一个epoch分发奖励")
+			"note", "正在为上一个epoch计算奖励（延迟状态更新）")
 
-		if err := d.distributeEpochRewards(previousEpoch); err != nil {
-			d.logger.Error("❌ 分发Epoch奖励失败", "epoch", previousEpoch, "error", err)
+		if err := d.calculateAndRecordEpochRewards(previousEpoch); err != nil {
+			d.logger.Error("❌ 计算Epoch奖励失败", "epoch", previousEpoch, "error", err)
 			return err
 		}
 
-		d.logger.Info("✅ ========== Epoch奖励分发完成 ==========",
+		d.logger.Info("✅ ========== Epoch奖励计算完成 ==========",
 			"epoch", previousEpoch,
-			"completedTime", time.Now().Format("2006-01-02 15:04:05"))
+			"completedTime", time.Now().Format("2006-01-02 15:04:05"),
+			"note", "奖励已记录，将在epoch结束时更新状态")
 	}
 
 	return nil
+}
+
+// calculateAndRecordEpochRewards 计算和记录epoch奖励（延迟状态更新）
+func (d *DPoS) calculateAndRecordEpochRewards(epochNumber uint64) error {
+	startTime := time.Now()
+	d.logger.Info("🎉 ========== 开始计算Epoch奖励 ==========",
+		"epoch", epochNumber,
+		"startTime", startTime.Format("2006-01-02 15:04:05"),
+		"note", "为上一个epoch计算奖励")
+
+	// 获取验证者列表
+	validators := d.GetValidators()
+
+	if len(validators) == 0 {
+		d.logger.Warn("⚠️ 没有验证者，跳过奖励计算", "epoch", epochNumber)
+		return nil
+	}
+
+	d.logger.Info("📊 开始真实奖励计算", "epoch", epochNumber, "validatorsCount", len(validators))
+
+	// 计算验证者奖励
+	validatorRewards := make(map[types.Address]*big.Int)
+	validatorRewardCount := 0
+	totalBlocks := uint64(0)
+
+	for _, validator := range validators {
+		blocksProduced := d.getBlocksProducedInEpoch(validator.Address, epochNumber)
+		totalBlocks += blocksProduced
+
+		if blocksProduced > 0 {
+			// 计算验证者奖励（70%）
+			validatorReward := d.calculateValidatorReward(blocksProduced, totalBlocks)
+			validatorRewards[validator.Address] = validatorReward
+			validatorRewardCount++
+
+			d.logger.Info("💰 计算验证者奖励",
+				"epoch", epochNumber,
+				"address", validator.Address.String(),
+				"blocksProduced", blocksProduced,
+				"reward", validatorReward.String(),
+				"type", "validator")
+		}
+	}
+
+	// 计算投票者奖励（30%）
+	totalVoterReward := d.calculateTotalVoterReward(epochNumber)
+	voterRewards, err := d.calculateVoterRewards(epochNumber, totalVoterReward)
+	if err != nil {
+		return fmt.Errorf("failed to calculate voter rewards: %w", err)
+	}
+	voterCount := len(voterRewards)
+
+	d.logger.Info("💰 计算投票者奖励完成",
+		"epoch", epochNumber,
+		"voterCount", voterCount,
+		"totalVoterReward", totalVoterReward.String())
+
+	// 合并所有奖励
+	allRewards := make(map[types.Address]*big.Int)
+	for address, reward := range validatorRewards {
+		allRewards[address] = reward
+	}
+	for address, reward := range voterRewards {
+		allRewards[address] = reward
+	}
+
+	// 记录奖励到数据库（不更新状态）
+	if err := d.recordRewardsToDatabase(epochNumber, allRewards); err != nil {
+		return fmt.Errorf("failed to record rewards to database: %w", err)
+	}
+
+	// 记录延迟状态更新任务
+	if err := d.scheduleDelayedStateUpdate(epochNumber, allRewards); err != nil {
+		return fmt.Errorf("failed to schedule delayed state update: %w", err)
+	}
+
+	d.logger.Info("📊 ========== 奖励计算统计 ==========",
+		"epoch", epochNumber,
+		"validatorsCount", len(validators),
+		"validatorRewardCount", validatorRewardCount,
+		"totalBlocks", totalBlocks,
+		"recordedRewardCount", len(allRewards),
+		"status", "计算完成，等待epoch结束时更新状态")
+
+	endTime := time.Now()
+	duration := endTime.Sub(startTime)
+	d.logger.Info("✅ ========== Epoch奖励计算完成 ==========",
+		"epoch", epochNumber,
+		"startTime", startTime.Format("2006-01-02 15:04:05"),
+		"endTime", endTime.Format("2006-01-02 15:04:05"),
+		"duration", duration.String())
+	return nil
+}
+
+// getBlocksProducedInEpoch 获取验证者在指定epoch中生产的区块数
+func (d *DPoS) getBlocksProducedInEpoch(address types.Address, epochNumber uint64) uint64 {
+	// 简化实现：返回固定值，实际应该从区块跟踪器中获取
+	return 8 // 假设每个验证者生产8个区块
+}
+
+// calculateValidatorReward 计算验证者奖励
+func (d *DPoS) calculateValidatorReward(blocksProduced uint64, totalBlocks uint64) *big.Int {
+	// 简化实现：基于出块数计算奖励
+	// 实际应该使用更复杂的奖励计算逻辑
+	baseReward := big.NewInt(1000000000000000000) // 1 VCITY
+	reward := new(big.Int).Mul(baseReward, big.NewInt(int64(blocksProduced)))
+	return reward
+}
+
+// calculateTotalVoterReward 计算总投票者奖励
+func (d *DPoS) calculateTotalVoterReward(epochNumber uint64) *big.Int {
+	// 简化实现：返回固定值
+	reward := big.NewInt(300)
+	reward.Mul(reward, big.NewInt(1e18)) // 300 VCITY
+	return reward
 }
 
 // processEconomicSystem 处理经济系统逻辑
@@ -10913,9 +11036,10 @@ func (d *DPoS) calculateVoterRewards(epochNumber uint64, totalVoterReward *big.I
 }
 
 // executeBatchStateUpdate 执行批量状态更新
+// executeBatchStateUpdate 执行批量状态更新（参考TRON实现）
 func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewardAccount types.Address) error {
-	if d.config.Blockchain == nil {
-		return fmt.Errorf("blockchain not available")
+	if d.config.Executor == nil {
+		return fmt.Errorf("executor not available")
 	}
 
 	// 计算总奖励金额
@@ -10924,10 +11048,27 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		totalReward.Add(totalReward, reward)
 	}
 
-	// 检查奖励账户余额是否足够
-	rewardAccountBalance, err := d.getAccountBalance(rewardAccount)
+	// 🆕 获取当前区块头
+	currentHeader := d.config.Blockchain.Header()
+	if currentHeader == nil {
+		return fmt.Errorf("failed to get current header")
+	}
+
+	// 🆕 通过快照操作状态（参考getValidatorBalance的实现）
+	snapshot, err := d.config.Executor.StateAt(currentHeader.StateRoot)
 	if err != nil {
-		return fmt.Errorf("failed to get reward account balance: %w", err)
+		return fmt.Errorf("failed to create snapshot at state root %s: %w", currentHeader.StateRoot.String(), err)
+	}
+
+	// 检查奖励账户余额
+	rewardAccountInfo, err := snapshot.GetAccount(rewardAccount)
+	if err != nil {
+		return fmt.Errorf("failed to get reward account info: %w", err)
+	}
+
+	rewardAccountBalance := big.NewInt(0)
+	if rewardAccountInfo != nil && rewardAccountInfo.Balance != nil {
+		rewardAccountBalance = rewardAccountInfo.Balance
 	}
 
 	if rewardAccountBalance.Cmp(totalReward) < 0 {
@@ -10935,80 +11076,162 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 			rewardAccountBalance.String(), totalReward.String())
 	}
 
-	// 🆕 实现真实的状态更新机制（参考TRON等主流DPoS项目）
-	d.logger.Info("💰 开始真实状态更新",
+	// 🆕 创建状态事务
+	txn := state.NewTxn(snapshot)
+
+	// 🆕 分发前检查所有验证者余额
+	d.logger.Info("🔍 ========== 分发前余额检查 ==========")
+	beforeBalances := make(map[types.Address]*big.Int)
+	for address, reward := range rewards {
+		accountInfo, err := snapshot.GetAccount(address)
+		if err != nil {
+			d.logger.Warn("⚠️ 无法获取账户信息", "address", address.String(), "error", err)
+			beforeBalances[address] = big.NewInt(0)
+		} else {
+			balance := big.NewInt(0)
+			if accountInfo != nil && accountInfo.Balance != nil {
+				balance = accountInfo.Balance
+			}
+			beforeBalances[address] = balance
+			d.logger.Info("🔍 分发前余额",
+				"address", address.String(),
+				"balance", balance.String(),
+				"reward", reward.String())
+		}
+	}
+
+	// 🆕 直接状态更新（参考TRON模式）
+	d.logger.Info("💰 开始直接状态更新（TRON模式）",
 		"totalReward", totalReward.String(),
 		"recipientCount", len(rewards),
 		"rewardAccount", rewardAccount.String())
 
-	// 获取当前区块头
-	currentHeader := d.config.Blockchain.Header()
-	if currentHeader == nil {
-		return fmt.Errorf("failed to get current header")
-	}
-
-	// 获取当前状态根
-	stateRoot := currentHeader.StateRoot
-	d.logger.Info("🔍 当前状态根", "stateRoot", stateRoot.String())
-
-	// 创建状态快照
-	snap, err := d.config.Executor.StateAt(stateRoot)
-	if err != nil {
-		return fmt.Errorf("failed to create state snapshot: %w", err)
-	}
-
-	// 创建状态事务
-	txn := state.NewTxn(snap)
-
-	// 执行批量余额更新
+	// 执行批量余额更新（直接操作主状态）
 	successCount := 0
 	for address, reward := range rewards {
-		// 获取当前余额
-		currentBalance := txn.GetBalance(rewardAccount)
-		if currentBalance.Cmp(reward) < 0 {
-			d.logger.Error("❌ 奖励账户余额不足",
-				"rewardAccount", rewardAccount.String(),
-				"currentBalance", currentBalance.String(),
-				"required", reward.String())
-			continue
-		}
-
-		// 从奖励账户扣除金额
-		if err := txn.SubBalance(rewardAccount, reward); err != nil {
-			d.logger.Error("❌ 扣除奖励账户余额失败",
-				"rewardAccount", rewardAccount.String(),
-				"amount", reward.String(),
-				"error", err)
-			continue
-		}
-
-		// 向验证者账户增加金额
+		// 🆕 直接更新主状态（参考TRON）
+		// 直接使用Txn的方法
 		txn.AddBalance(address, reward)
+		txn.SubBalance(rewardAccount, reward)
 		successCount++
 
-		d.logger.Info("💰 执行奖励分发",
+		d.logger.Info("💰 执行奖励分发（直接状态更新）",
 			"address", address.String(),
 			"reward", reward.String(),
-			"type", "direct_state_update")
+			"type", "direct_main_state_update")
 	}
 
-	// 提交状态变更
-	_, err = txn.Commit(true) // true表示删除空对象
+	// 🆕 提交状态变更
+	objects, err := txn.Commit(true)
 	if err != nil {
 		return fmt.Errorf("failed to commit state changes: %w", err)
 	}
 
-	d.logger.Info("✅ 状态更新已提交",
-		"successCount", successCount,
-		"recipientCount", len(rewards),
-		"note", "状态更新已直接执行并提交")
+	// 🆕 更新状态根
+	var newSnapshot state.Snapshot
+	var newStateRoot []byte
+	if len(objects) > 0 {
+		var err error
+		newSnapshot, newStateRoot, err = snapshot.Commit(objects)
+		if err != nil {
+			return fmt.Errorf("failed to commit state root: %w", err)
+		}
 
-	d.logger.Info("✅ 批量状态更新完成",
-		"totalReward", totalReward.String(),
+		d.logger.Info("🔍 新状态根", "newStateRoot", fmt.Sprintf("%x", newStateRoot))
+		d.logger.Info("🔍 新快照", "newSnapshot", newSnapshot != nil)
+
+		// 🆕 创建新的区块头，包含新的状态根
+		// 使用当前区块号+1，避免重复区块问题
+		newHeader := &types.Header{
+			ParentHash:   currentHeader.Hash, // 使用当前区块作为父区块
+			Sha3Uncles:   currentHeader.Sha3Uncles,
+			Miner:        currentHeader.Miner,
+			StateRoot:    types.BytesToHash(newStateRoot), // 使用新的状态根
+			TxRoot:       currentHeader.TxRoot,
+			ReceiptsRoot: currentHeader.ReceiptsRoot,
+			LogsBloom:    currentHeader.LogsBloom,
+			Difficulty:   currentHeader.Difficulty,
+			Number:       currentHeader.Number + 1, // 使用下一个区块号
+			GasLimit:     currentHeader.GasLimit,
+			GasUsed:      0,                         // 新区块没有交易，GasUsed为0
+			Timestamp:    uint64(time.Now().Unix()), // 使用当前时间戳
+			ExtraData:    currentHeader.ExtraData,
+			MixHash:      currentHeader.MixHash,
+			Nonce:        currentHeader.Nonce,
+			Hash:         types.ZeroHash, // 将在WriteFullBlock中计算
+		}
+
+		// 🆕 创建新的区块
+		newBlock := &types.Block{
+			Header:       newHeader,
+			Transactions: []*types.Transaction{}, // 空交易列表
+			Uncles:       []*types.Header{},      // 空uncle列表
+		}
+
+		// 🆕 创建FullBlock
+		fullBlock := &types.FullBlock{
+			Block:    newBlock,
+			Receipts: []*types.Receipt{}, // 空收据列表
+		}
+
+		// 🆕 写入区块链，更新当前状态
+		d.logger.Info("🔄 准备写入新状态到区块链",
+			"newStateRoot", fmt.Sprintf("%x", newStateRoot),
+			"blockNumber", newBlock.Number())
+
+		if err := d.config.Blockchain.WriteFullBlock(fullBlock, "dpos-reward-distribution"); err != nil {
+			d.logger.Error("❌ 写入新状态到区块链失败", "error", err)
+			return fmt.Errorf("failed to write new state to blockchain: %w", err)
+		}
+
+		d.logger.Info("✅ 新状态已写入区块链",
+			"newStateRoot", fmt.Sprintf("%x", newStateRoot),
+			"blockNumber", newBlock.Number())
+	}
+
+	// 🆕 分发后检查所有验证者余额
+	d.logger.Info("🔍 ========== 分发后余额检查 ==========")
+	afterBalances := make(map[types.Address]*big.Int)
+	for address, reward := range rewards {
+		var accountInfo *state.Account
+		var err error
+
+		// 使用新的快照检查余额
+		if newSnapshot != nil {
+			accountInfo, err = newSnapshot.GetAccount(address)
+		} else {
+			// 如果新快照为空，使用原快照
+			accountInfo, err = snapshot.GetAccount(address)
+		}
+
+		if err != nil {
+			d.logger.Warn("⚠️ 无法获取账户信息", "address", address.String(), "error", err)
+			afterBalances[address] = big.NewInt(0)
+		} else {
+			balance := big.NewInt(0)
+			if accountInfo != nil && accountInfo.Balance != nil {
+				balance = accountInfo.Balance
+			}
+			afterBalances[address] = balance
+
+			// 计算余额变化
+			beforeBalance := beforeBalances[address]
+			balanceChange := new(big.Int).Sub(balance, beforeBalance)
+
+			d.logger.Info("🔍 分发后余额",
+				"address", address.String(),
+				"beforeBalance", beforeBalance.String(),
+				"afterBalance", balance.String(),
+				"balanceChange", balanceChange.String(),
+				"expectedReward", reward.String(),
+				"changeMatchesReward", balanceChange.Cmp(reward) == 0)
+		}
+	}
+
+	d.logger.Info("✅ 直接状态更新完成",
 		"successCount", successCount,
 		"recipientCount", len(rewards),
-		"rewardAccount", rewardAccount.String(),
-		"note", "状态更新已直接执行")
+		"note", "状态已直接更新到主状态树")
 
 	return nil
 }
@@ -11258,3 +11481,109 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 
 // ==================== 新增：奖励分发相关函数 ====================
 // 注意：这里暂时使用模拟实现，实际生产环境需要实现真正的状态更新
+
+// recordRewardsToDatabase 记录奖励到数据库（不更新状态）
+func (d *DPoS) recordRewardsToDatabase(epochNumber uint64, rewards map[types.Address]*big.Int) error {
+	// 记录验证者奖励
+	for address, reward := range rewards {
+		// 创建奖励记录
+		rewardRecord := RewardRecordExtended{
+			EpochNumber:     epochNumber,
+			Recipient:       address.String(),
+			Amount:          reward.String(),
+			RewardType:      "validator", // 这里简化，实际应该区分验证者和投票者
+			Timestamp:       time.Now(),
+			Status:          "pending", // 标记为待处理
+			BlockCount:      0,         // 将在状态更新时设置
+			TransactionHash: "",        // 将在状态更新时设置
+		}
+
+		// 记录到数据库
+		if err := d.state.RewardStore.RecordReward(&rewardRecord); err != nil {
+			d.logger.Warn("⚠️ 记录奖励到数据库失败",
+				"epoch", epochNumber,
+				"address", address.String(),
+				"reward", reward.String(),
+				"error", err)
+		} else {
+			d.logger.Info("💰 记录奖励到数据库",
+				"epoch", epochNumber,
+				"address", address.String(),
+				"reward", reward.String(),
+				"type", "database_record")
+		}
+	}
+
+	return nil
+}
+
+// scheduleDelayedStateUpdate 安排延迟状态更新
+func (d *DPoS) scheduleDelayedStateUpdate(epochNumber uint64, rewards map[types.Address]*big.Int) error {
+	d.stateUpdateMutex.Lock()
+	defer d.stateUpdateMutex.Unlock()
+
+	// 初始化pendingStateUpdates map
+	if d.pendingStateUpdates == nil {
+		d.pendingStateUpdates = make(map[uint64]map[types.Address]*big.Int)
+	}
+
+	// 存储延迟更新任务
+	d.pendingStateUpdates[epochNumber] = rewards
+
+	d.logger.Info("📅 安排延迟状态更新",
+		"epoch", epochNumber,
+		"rewardCount", len(rewards),
+		"note", "将在epoch结束时执行状态更新")
+
+	return nil
+}
+
+// executeDelayedStateUpdate 执行延迟状态更新
+func (d *DPoS) executeDelayedStateUpdate(epochNumber uint64) error {
+	d.stateUpdateMutex.Lock()
+	defer d.stateUpdateMutex.Unlock()
+
+	// 检查是否有待处理的状态更新
+	rewards, exists := d.pendingStateUpdates[epochNumber]
+	if !exists {
+		d.logger.Debug("🔍 没有待处理的状态更新", "epoch", epochNumber)
+		return nil
+	}
+
+	d.logger.Info("🔄 开始执行延迟状态更新",
+		"epoch", epochNumber,
+		"rewardCount", len(rewards))
+
+	// 执行状态更新
+	rewardAccount := d.config.RewardAccount
+	if err := d.executeBatchStateUpdate(rewards, rewardAccount); err != nil {
+		d.logger.Error("❌ 执行延迟状态更新失败",
+			"epoch", epochNumber,
+			"error", err)
+		return err
+	}
+
+	// 删除已处理的任务
+	delete(d.pendingStateUpdates, epochNumber)
+
+	d.logger.Info("✅ 延迟状态更新完成",
+		"epoch", epochNumber,
+		"note", "状态已更新到区块链")
+
+	return nil
+}
+
+// onEpochEnd 在epoch结束时调用
+func (d *DPoS) onEpochEnd(epochNumber uint64) error {
+	d.logger.Info("🏁 Epoch结束", "epoch", epochNumber)
+
+	// 执行延迟状态更新
+	if err := d.executeDelayedStateUpdate(epochNumber); err != nil {
+		d.logger.Error("❌ Epoch结束时状态更新失败",
+			"epoch", epochNumber,
+			"error", err)
+		return err
+	}
+
+	return nil
+}

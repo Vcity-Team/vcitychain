@@ -533,14 +533,14 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"validatorSource", "ExtraData.Validators",
 		"note", "用于BLS签名验证的验证者集合")
 
-	// 🆕 显著日志：验证时最终用于BLS签名验证的验证者集合
-	logger.Info("🔍 ===== 验证时最终验证者集合（用于BLS签名验证） =====",
+	// 🆕 调试日志：验证时最终用于BLS签名验证的验证者集合
+	logger.Debug("🔍 ===== 验证时最终验证者集合（用于BLS签名验证） =====",
 		"blockNumber", blockNumber,
 		"totalValidators", len(validators),
 		"note", "这些验证者将用于BLS签名验证")
 
 	for i, validator := range validators {
-		logger.Info("🔍 验证时最终验证者",
+		logger.Debug("🔍 验证时最终验证者",
 			"blockNumber", blockNumber,
 			"index", i,
 			"address", validator.Address.String(),
@@ -1960,14 +1960,14 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 		// 从ExtraData获取验证者地址，然后从创世文件获取BLS公钥
 		validatorAddresses := i.Validators.Added
 
-		// 🆕 显著日志：验证时从ExtraData获取的验证者集合
-		logger.Info("🔍 ===== 验证时从ExtraData获取的验证者集合 =====",
+		// 🆕 调试日志：验证时从ExtraData获取的验证者集合
+		logger.Debug("🔍 ===== 验证时从ExtraData获取的验证者集合 =====",
 			"blockNumber", blockNumber,
 			"totalValidators", len(validatorAddresses),
 			"note", "这些验证者从区块ExtraData中解析得到")
 
 		for idx, validatorAddr := range validatorAddresses {
-			logger.Info("🔍 验证时ExtraData验证者",
+			logger.Debug("🔍 验证时ExtraData验证者",
 				"blockNumber", blockNumber,
 				"index", idx,
 				"address", validatorAddr.Address.String(),

@@ -20,10 +20,11 @@ type TimeBasedEpochManager struct {
 	logger        hclog.Logger
 
 	// 🆕 新增：独立时间管理
-	genesisTime time.Time          // 创世时间
-	timer       *time.Timer        // 定时器
-	stopCh      chan struct{}      // 停止信号
-	callback    func(uint64) error // epoch切换回调
+	genesisTime        time.Time          // 创世时间
+	timer              *time.Timer        // 定时器
+	stopCh             chan struct{}      // 停止信号
+	callback           func(uint64) error // epoch切换回调
+	onEpochEndCallback func(uint64) error // epoch结束回调
 }
 
 // NewTimeBasedEpochManager 创建时间基础Epoch管理器
@@ -98,6 +99,13 @@ func (tem *TimeBasedEpochManager) SetGenesisTimeAndCallback(genesisTime time.Tim
 	tem.logger.Info("🔧 设置创世时间和回调",
 		"genesisTime", genesisTime.Format("2006-01-02 15:04:05"),
 		"epochDuration", tem.epochDuration.String())
+}
+
+// SetEpochEndCallback 设置epoch结束回调函数
+func (tem *TimeBasedEpochManager) SetEpochEndCallback(callback func(uint64) error) {
+	tem.mutex.Lock()
+	defer tem.mutex.Unlock()
+	tem.onEpochEndCallback = callback
 }
 
 // 🆕 新增：启动独立时间检查器
@@ -187,6 +195,15 @@ func (tem *TimeBasedEpochManager) triggerEpochSwitch() {
 	// 调用回调函数
 	if tem.callback != nil {
 		go func() {
+			// 先调用epoch结束回调（如果有的话）
+			if tem.onEpochEndCallback != nil && tem.currentEpoch > 1 {
+				previousEpoch := tem.currentEpoch - 1
+				if err := tem.onEpochEndCallback(previousEpoch); err != nil {
+					tem.logger.Error("❌ epoch结束回调失败", "epoch", previousEpoch, "error", err)
+				}
+			}
+
+			// 然后调用epoch切换回调
 			if err := tem.callback(tem.currentEpoch); err != nil {
 				tem.logger.Error("❌ epoch切换回调失败", "epoch", tem.currentEpoch, "error", err)
 			}
