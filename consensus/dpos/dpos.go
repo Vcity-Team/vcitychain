@@ -10769,6 +10769,23 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64) error {
 			if reward.Sign() > 0 {
 				stateUpdates[types.Address(validator.Address)] = reward
 				validatorRewardCount++
+
+				// 记录验证者奖励到数据库
+				rewardRecord := &RewardRecordExtended{
+					EpochNumber:     epochNumber,
+					Recipient:       validator.Address.String(),
+					RewardType:      "validator",
+					Amount:          reward.String(),
+					BlockCount:      blocksProduced,
+					VoteWeight:      "0", // 验证者奖励不涉及投票权重
+					Timestamp:       time.Now(),
+					TransactionHash: "", // 可以记录相关交易哈希
+					Status:          "completed",
+				}
+				if err := d.state.RewardStore.RecordReward(rewardRecord); err != nil {
+					d.logger.Error("❌ 记录验证者奖励失败", "validator", validator.Address.String(), "error", err)
+				}
+
 				d.logger.Info("💰 计算验证者奖励",
 					"epoch", epochNumber,
 					"address", validator.Address.String(),
@@ -10790,6 +10807,22 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64) error {
 	} else {
 		// 将投票者奖励添加到状态更新中
 		for address, reward := range voterRewards {
+			// 记录投票者奖励到数据库
+			rewardRecord := &RewardRecordExtended{
+				EpochNumber:     epochNumber,
+				Recipient:       address.String(),
+				RewardType:      "voter",
+				Amount:          reward.String(),
+				BlockCount:      0,   // 投票者不出块
+				VoteWeight:      "1", // 可以记录实际投票权重
+				Timestamp:       time.Now(),
+				TransactionHash: "", // 可以记录相关交易哈希
+				Status:          "completed",
+			}
+			if err := d.state.RewardStore.RecordReward(rewardRecord); err != nil {
+				d.logger.Error("❌ 记录投票者奖励失败", "voter", address.String(), "error", err)
+			}
+
 			if existingReward, exists := stateUpdates[address]; exists {
 				// 如果该地址既是验证者又是投票者，累加奖励
 				stateUpdates[address] = new(big.Int).Add(existingReward, reward)
@@ -10902,32 +10935,80 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 			rewardAccountBalance.String(), totalReward.String())
 	}
 
-	// 注意：真实的状态更新需要通过共识机制来执行
-	// 这里我们只是记录奖励分发信息，实际的状态更新应该在区块生产时进行
-
-	d.logger.Info("💰 准备批量状态更新",
+	// 🆕 实现真实的状态更新机制（参考TRON等主流DPoS项目）
+	d.logger.Info("💰 开始真实状态更新",
 		"totalReward", totalReward.String(),
 		"recipientCount", len(rewards),
 		"rewardAccount", rewardAccount.String())
 
-	// 记录每个奖励分发的详细信息
-	for address, reward := range rewards {
-		d.logger.Info("💰 记录奖励分发",
-			"address", address.String(),
-			"reward", reward.String(),
-			"type", "pending_state_update")
+	// 获取当前区块头
+	currentHeader := d.config.Blockchain.Header()
+	if currentHeader == nil {
+		return fmt.Errorf("failed to get current header")
 	}
 
-	// TODO: 实现真实的状态更新机制
-	// 1. 创建状态更新交易
-	// 2. 通过共识机制提交交易
-	// 3. 在区块生产时执行状态更新
+	// 获取当前状态根
+	stateRoot := currentHeader.StateRoot
+	d.logger.Info("🔍 当前状态根", "stateRoot", stateRoot.String())
 
-	d.logger.Info("✅ 批量状态更新记录完成",
+	// 创建状态快照
+	snap, err := d.config.Executor.StateAt(stateRoot)
+	if err != nil {
+		return fmt.Errorf("failed to create state snapshot: %w", err)
+	}
+
+	// 创建状态事务
+	txn := state.NewTxn(snap)
+
+	// 执行批量余额更新
+	successCount := 0
+	for address, reward := range rewards {
+		// 获取当前余额
+		currentBalance := txn.GetBalance(rewardAccount)
+		if currentBalance.Cmp(reward) < 0 {
+			d.logger.Error("❌ 奖励账户余额不足",
+				"rewardAccount", rewardAccount.String(),
+				"currentBalance", currentBalance.String(),
+				"required", reward.String())
+			continue
+		}
+
+		// 从奖励账户扣除金额
+		if err := txn.SubBalance(rewardAccount, reward); err != nil {
+			d.logger.Error("❌ 扣除奖励账户余额失败",
+				"rewardAccount", rewardAccount.String(),
+				"amount", reward.String(),
+				"error", err)
+			continue
+		}
+
+		// 向验证者账户增加金额
+		txn.AddBalance(address, reward)
+		successCount++
+
+		d.logger.Info("💰 执行奖励分发",
+			"address", address.String(),
+			"reward", reward.String(),
+			"type", "direct_state_update")
+	}
+
+	// 提交状态变更
+	_, err = txn.Commit(true) // true表示删除空对象
+	if err != nil {
+		return fmt.Errorf("failed to commit state changes: %w", err)
+	}
+
+	d.logger.Info("✅ 状态更新已提交",
+		"successCount", successCount,
+		"recipientCount", len(rewards),
+		"note", "状态更新已直接执行并提交")
+
+	d.logger.Info("✅ 批量状态更新完成",
 		"totalReward", totalReward.String(),
+		"successCount", successCount,
 		"recipientCount", len(rewards),
 		"rewardAccount", rewardAccount.String(),
-		"note", "状态更新将通过共识机制执行")
+		"note", "状态更新已直接执行")
 
 	return nil
 }

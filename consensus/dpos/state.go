@@ -1,7 +1,11 @@
 package dpos
 
 import (
+	"encoding/json"
 	"fmt"
+	"math/big"
+	"sort"
+	"time"
 
 	"github.com/Vcity-Team/vcitychain/helper/common"
 	"github.com/hashicorp/go-hclog"
@@ -44,6 +48,26 @@ type State struct {
 	ProposerSnapshotStore *ProposerSnapshotStore
 	StakeStore            *StakeStore
 	ValidatorStore        *ValidatorStore
+	RewardStore           *RewardStore // 🆕 新增奖励记录存储
+}
+
+// RewardRecordExtended 扩展的奖励记录结构，用于数据库存储
+type RewardRecordExtended struct {
+	ID              uint64    `json:"id"`
+	EpochNumber     uint64    `json:"epoch_number"`
+	Recipient       string    `json:"recipient"`
+	RewardType      string    `json:"reward_type"`      // "validator" 或 "voter"
+	Amount          string    `json:"amount"`           // 奖励金额(Wei)
+	BlockCount      uint64    `json:"block_count"`      // 出块数量
+	VoteWeight      string    `json:"vote_weight"`      // 投票权重
+	Timestamp       time.Time `json:"timestamp"`        // 发放时间
+	TransactionHash string    `json:"transaction_hash"` // 相关交易哈希
+	Status          string    `json:"status"`           // "completed"
+}
+
+// RewardStore 奖励记录存储
+type RewardStore struct {
+	db *bolt.DB
 }
 
 // newState creates new instance of State
@@ -62,6 +86,7 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 		ProposerSnapshotStore: &ProposerSnapshotStore{db: db},
 		StakeStore:            &StakeStore{db: db},
 		ValidatorStore:        &ValidatorStore{db: db},
+		RewardStore:           &RewardStore{db: db}, // 🆕 新增
 	}
 
 	if err = s.initStorages(); err != nil {
@@ -91,6 +116,9 @@ func (s *State) initStorages() error {
 			return err
 		}
 		if err := s.ValidatorStore.initialize(tx); err != nil {
+			return err
+		}
+		if err := s.RewardStore.initialize(tx); err != nil { // 🆕 新增
 			return err
 		}
 
@@ -186,4 +214,146 @@ func bucketStats(bucketName []byte, db *bolt.DB) (*bolt.BucketStats, error) {
 	}
 
 	return stats, nil
+}
+
+// ==================== RewardStore 方法实现 ====================
+
+// initialize 初始化RewardStore
+func (rs *RewardStore) initialize(tx *bolt.Tx) error {
+	_, err := tx.CreateBucketIfNotExists([]byte("rewards"))
+	return err
+}
+
+// RecordReward 记录奖励
+func (rs *RewardStore) RecordReward(record *RewardRecordExtended) error {
+	return rs.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("rewards"))
+		if bucket == nil {
+			return fmt.Errorf("rewards bucket not found")
+		}
+
+		// 生成唯一ID
+		id, _ := bucket.NextSequence()
+		record.ID = id
+
+		// 生成键：epochNumber_recipient_rewardType
+		key := fmt.Sprintf("%d_%s_%s", record.EpochNumber, record.Recipient, record.RewardType)
+
+		// 序列化记录
+		data, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+
+		return bucket.Put([]byte(key), data)
+	})
+}
+
+// GetValidatorRewardHistory 查询验证者奖励历史
+func (rs *RewardStore) GetValidatorRewardHistory(validatorAddress string, fromEpoch, toEpoch uint64) ([]RewardRecordExtended, error) {
+	var records []RewardRecordExtended
+
+	err := rs.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("rewards"))
+		if bucket == nil {
+			return fmt.Errorf("rewards bucket not found")
+		}
+
+		cursor := bucket.Cursor()
+		for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
+			var record RewardRecordExtended
+			if err := json.Unmarshal(v, &record); err != nil {
+				continue
+			}
+
+			// 过滤条件
+			if record.Recipient == validatorAddress &&
+				record.RewardType == "validator" &&
+				record.EpochNumber >= fromEpoch &&
+				record.EpochNumber <= toEpoch {
+				records = append(records, record)
+			}
+		}
+
+		return nil
+	})
+
+	// 按epoch倒序排列
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].EpochNumber > records[j].EpochNumber
+	})
+
+	return records, err
+}
+
+// GetVoterRewardHistory 查询投票者奖励历史
+func (rs *RewardStore) GetVoterRewardHistory(voterAddress string, fromEpoch, toEpoch uint64) ([]RewardRecordExtended, error) {
+	var records []RewardRecordExtended
+
+	err := rs.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("rewards"))
+		if bucket == nil {
+			return fmt.Errorf("rewards bucket not found")
+		}
+
+		cursor := bucket.Cursor()
+		for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
+			var record RewardRecordExtended
+			if err := json.Unmarshal(v, &record); err != nil {
+				continue
+			}
+
+			// 过滤条件
+			if record.Recipient == voterAddress &&
+				record.RewardType == "voter" &&
+				record.EpochNumber >= fromEpoch &&
+				record.EpochNumber <= toEpoch {
+				records = append(records, record)
+			}
+		}
+
+		return nil
+	})
+
+	// 按epoch倒序排列
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].EpochNumber > records[j].EpochNumber
+	})
+
+	return records, err
+}
+
+// GetEpochRewardDetails 查询指定epoch的奖励详情
+func (rs *RewardStore) GetEpochRewardDetails(epochNumber uint64) ([]RewardRecordExtended, error) {
+	var records []RewardRecordExtended
+
+	err := rs.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("rewards"))
+		if bucket == nil {
+			return fmt.Errorf("rewards bucket not found")
+		}
+
+		cursor := bucket.Cursor()
+		for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
+			var record RewardRecordExtended
+			if err := json.Unmarshal(v, &record); err != nil {
+				continue
+			}
+
+			if record.EpochNumber == epochNumber {
+				records = append(records, record)
+			}
+		}
+
+		return nil
+	})
+
+	// 按金额降序排列
+	sort.Slice(records, func(i, j int) bool {
+		amountI, _ := new(big.Int).SetString(records[i].Amount, 10)
+		amountJ, _ := new(big.Int).SetString(records[j].Amount, 10)
+		return amountI.Cmp(amountJ) > 0
+	})
+
+	return records, err
 }

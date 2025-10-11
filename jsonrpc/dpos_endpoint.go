@@ -3221,6 +3221,56 @@ func (d *DPOS) GetEpochInfoByNumber(epochNumber uint64) (map[string]interface{},
 	}, nil
 }
 
+// ==================== 新增：奖励查询JSON-RPC方法 ====================
+
+// GetValidatorRewardHistory 查询验证者奖励历史
+func (d *DPOS) GetValidatorRewardHistory(ctx context.Context, validatorAddress string, fromEpoch, toEpoch uint64) ([]dpos.RewardRecordExtended, error) {
+	d.logger.Info("DPoS GetValidatorRewardHistory called",
+		"validatorAddress", validatorAddress,
+		"fromEpoch", fromEpoch,
+		"toEpoch", toEpoch)
+
+	// 获取DPoS状态
+	dposState, err := d.store.GetDPoSState()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get DPoS state: %w", err)
+	}
+
+	// 调用RewardStore的方法
+	return dposState.RewardStore.GetValidatorRewardHistory(validatorAddress, fromEpoch, toEpoch)
+}
+
+// GetVoterRewardHistory 查询投票者奖励历史
+func (d *DPOS) GetVoterRewardHistory(ctx context.Context, voterAddress string, fromEpoch, toEpoch uint64) ([]dpos.RewardRecordExtended, error) {
+	d.logger.Info("DPoS GetVoterRewardHistory called",
+		"voterAddress", voterAddress,
+		"fromEpoch", fromEpoch,
+		"toEpoch", toEpoch)
+
+	// 获取DPoS状态
+	dposState, err := d.store.GetDPoSState()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get DPoS state: %w", err)
+	}
+
+	// 调用RewardStore的方法
+	return dposState.RewardStore.GetVoterRewardHistory(voterAddress, fromEpoch, toEpoch)
+}
+
+// GetEpochRewardDetails 查询指定epoch的奖励详情
+func (d *DPOS) GetEpochRewardDetails(ctx context.Context, epochNumber uint64) ([]dpos.RewardRecordExtended, error) {
+	d.logger.Info("DPoS GetEpochRewardDetails called", "epochNumber", epochNumber)
+
+	// 获取DPoS状态
+	dposState, err := d.store.GetDPoSState()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get DPoS state: %w", err)
+	}
+
+	// 调用RewardStore的方法
+	return dposState.RewardStore.GetEpochRewardDetails(epochNumber)
+}
+
 // GetValidatorBlockStats 获取验证者出块统计
 func (d *DPOS) GetValidatorBlockStats(validatorAddress string, epochNumber uint64) (map[string]interface{}, error) {
 	d.logger.Info("DPoS GetValidatorBlockStats called", "validatorAddress", validatorAddress, "epochNumber", epochNumber)
