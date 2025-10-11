@@ -3086,12 +3086,9 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 
 		// 🆕 修复：简化区块投票处理，避免数据库锁竞争
 		// 直接使用header数据，不进行异步处理
-		d.logger.Info("🔄 处理区块投票", "blockNumber", header.Number, "blockHash", header.Hash.String()[:16])
 		if err := d.processBlockVotesFromHeader(header); err != nil {
 			d.logger.Error("failed to process block votes from header", "blockNumber", header.Number, "blockHash", header.Hash, "error", err)
 			// 不返回错误，继续处理其他逻辑
-		} else {
-			d.logger.Info("✅ 投票处理完成", "blockNumber", header.Number, "blockHash", header.Hash.String()[:16])
 		}
 
 		// 同步更新轮次状态（这部分必须同步执行，不能异步）
@@ -3170,8 +3167,6 @@ func (d *DPoS) updateRoundState(header *types.Header) {
 
 // 🆕 新增：从区块头部处理投票事件（供ProcessHeaders调用）
 func (d *DPoS) processBlockVotesFromHeader(header *types.Header) error {
-	d.logger.Info("🔄 开始处理区块头部的投票事件", "blockNumber", header.Number, "blockHash", header.Hash)
-
 	if header == nil {
 		d.logger.Warn("⚠️ 区块头部为空，跳过投票事件处理")
 		return nil
@@ -3190,18 +3185,12 @@ func (d *DPoS) processBlockVotesFromHeader(header *types.Header) error {
 		return nil
 	}
 
-	d.logger.Info("🔍 获取到完整区块数据，开始处理投票交易",
-		"blockNumber", block.Number(),
-		"blockHash", block.Hash(),
-		"txCount", len(block.Transactions))
-
 	// 转换为FullBlock格式
 	fullBlock := &types.FullBlock{
 		Block:    block,
 		Receipts: []*types.Receipt{}, // 空的receipts，投票处理不需要
 	}
 
-	d.logger.Info("🔄 准备调用processBlockVotes", "blockNumber", block.Number())
 	// 调用现有的投票处理逻辑
 	return d.processBlockVotes(fullBlock)
 }
@@ -5193,8 +5182,6 @@ func (d *DPoS) GetCurrentDelegates() validator.AccountSet {
 
 // 区块处理相关方法
 func (d *DPoS) processBlockVotes(block *types.FullBlock) error {
-	d.logger.Info("🔄 开始处理区块中的投票事件", "blockNumber", block.Block.Number())
-
 	if block == nil || block.Block == nil {
 		d.logger.Warn("⚠️ 区块为空，跳过投票事件处理")
 		return nil
@@ -5214,16 +5201,11 @@ func (d *DPoS) processBlockVotes(block *types.FullBlock) error {
 	transactions := block.Block.Transactions
 	d.logger.Info("📋 区块交易数量", "blockNumber", block.Block.Number(), "txCount", len(transactions))
 
-	// 即使没有交易，也要处理经济系统逻辑
-	if len(transactions) == 0 {
-		d.logger.Info("📋 区块无交易，跳过投票处理，但继续处理经济系统", "blockNumber", block.Block.Number())
-	} else {
-
+	// 处理投票交易
+	voteCount := 0
+	if len(transactions) > 0 {
 		// 遍历所有交易，查找投票交易
-		voteCount := 0
 		for i, tx := range transactions {
-			d.logger.Debug("🔍 检查交易", "blockNumber", block.Block.Number(), "txIndex", i, "txHash", tx.Hash.String())
-
 			// 检查是否是投票交易
 			if d.isVoteTransaction(tx) {
 				d.logger.Info("✅ 发现投票交易", "blockNumber", block.Block.Number(), "txIndex", i, "txHash", tx.Hash.String())
@@ -5239,16 +5221,16 @@ func (d *DPoS) processBlockVotes(block *types.FullBlock) error {
 			}
 		}
 
-		d.logger.Info("🎯 区块投票事件处理完成", "blockNumber", block.Block.Number(), "totalTx", len(transactions), "voteTx", voteCount)
+		// 只在有投票交易时打印处理完成日志
+		if voteCount > 0 {
+			d.logger.Info("🎯 区块投票事件处理完成", "blockNumber", block.Block.Number(), "totalTx", len(transactions), "voteTx", voteCount)
+		}
 	}
 
-	// 🆕 新增：处理经济系统逻辑
-	d.logger.Info("💰 准备调用processEconomicSystem", "blockNumber", block.Block.Number())
+	// 🆕 新增：处理经济系统逻辑（静默执行）
 	if err := d.processEconomicSystem(block); err != nil {
 		d.logger.Error("❌ 处理经济系统失败", "blockNumber", block.Block.Number(), "error", err)
 		// 不返回错误，继续处理
-	} else {
-		d.logger.Info("✅ processEconomicSystem调用完成", "blockNumber", block.Block.Number())
 	}
 
 	return nil
@@ -10580,6 +10562,13 @@ func (d *DPoS) initializeEconomicSystem() error {
 		d.logger.Named("epoch_manager"),
 	)
 
+	// 🆕 设置创世时间和回调
+	genesisTime := d.getGenesisTime()
+	d.epochManager.SetGenesisTimeAndCallback(genesisTime, d.handleEpochSwitch)
+
+	// 🆕 启动独立时间检查器
+	d.epochManager.StartIndependentTimer()
+
 	// 2. 初始化出块统计管理器
 	d.blockTracker = NewBlockProductionTracker(
 		d.logger.Named("block_tracker"),
@@ -10614,13 +10603,62 @@ func (d *DPoS) initializeEconomicSystem() error {
 	return nil
 }
 
+// 🆕 新增：获取创世时间
+func (d *DPoS) getGenesisTime() time.Time {
+	if d.config.Blockchain == nil {
+		d.logger.Warn("⚠️ 区块链接口不可用，使用当前时间作为创世时间")
+		return time.Now()
+	}
+
+	// 获取创世区块（区块号0）
+	genesisHeader, exists := d.config.Blockchain.GetHeaderByNumber(0)
+	if !exists {
+		d.logger.Warn("⚠️ 无法获取创世区块，使用当前时间作为创世时间")
+		return time.Now()
+	}
+
+	genesisTime := time.Unix(int64(genesisHeader.Timestamp), 0)
+	d.logger.Info("🔧 获取创世时间", "genesisTime", genesisTime.Format("2006-01-02 15:04:05"))
+	return genesisTime
+}
+
+// 🆕 新增：处理epoch切换回调
+func (d *DPoS) handleEpochSwitch(epochNumber uint64) error {
+	currentTime := time.Now()
+	d.logger.Info("🔄 处理epoch切换",
+		"epoch", epochNumber,
+		"currentTime", currentTime.Format("2006-01-02 15:04:05"))
+
+	// 1. 启动新epoch的时间调度
+	if d.blockScheduler != nil {
+		d.blockScheduler.StartNewEpoch(epochNumber, currentTime)
+	}
+
+	// 2. 分发上一个epoch的奖励
+	if epochNumber > 1 {
+		previousEpoch := epochNumber - 1
+		d.logger.Info("💰 ========== 开始分发Epoch奖励 ==========",
+			"epoch", previousEpoch,
+			"currentEpoch", epochNumber,
+			"rewardTime", currentTime.Format("2006-01-02 15:04:05"),
+			"note", "正在为上一个epoch分发奖励")
+
+		if err := d.distributeEpochRewards(previousEpoch); err != nil {
+			d.logger.Error("❌ 分发Epoch奖励失败", "epoch", previousEpoch, "error", err)
+			return err
+		}
+
+		d.logger.Info("✅ ========== Epoch奖励分发完成 ==========",
+			"epoch", previousEpoch,
+			"completedTime", time.Now().Format("2006-01-02 15:04:05"))
+	}
+
+	return nil
+}
+
 // processEconomicSystem 处理经济系统逻辑
 func (d *DPoS) processEconomicSystem(block *types.FullBlock) error {
-	d.logger.Info("🔍 检查经济系统组件状态",
-		"epochManagerIsNil", d.epochManager == nil,
-		"blockTrackerIsNil", d.blockTracker == nil,
-		"rewardDistributorIsNil", d.rewardDistributor == nil)
-
+	// 检查组件是否初始化
 	if d.epochManager == nil || d.blockTracker == nil || d.rewardDistributor == nil {
 		d.logger.Warn("⚠️ 经济系统组件未初始化，跳过处理",
 			"epochManagerIsNil", d.epochManager == nil,
@@ -10633,7 +10671,7 @@ func (d *DPoS) processEconomicSystem(block *types.FullBlock) error {
 	blockTime := time.Unix(int64(block.Block.Header.Timestamp), 0)
 	blockProducer := types.BytesToAddress(block.Block.Header.Miner)
 
-	// 1. 记录出块统计
+	// 1. 记录出块统计（静默执行，不打印日志）
 	d.blockTracker.RecordBlockProduction(
 		blockNumber,
 		blockTime,
@@ -10641,43 +10679,31 @@ func (d *DPoS) processEconomicSystem(block *types.FullBlock) error {
 		d.epochManager.GetCurrentEpoch(),
 	)
 
-	// 2. 检查是否需要开始新epoch
-	d.logger.Info("🔍 检查是否需要开始新epoch",
+	// 2. 静默处理：epoch切换现在由独立定时器处理
+	// 只在调试模式下记录详细信息
+	d.logger.Debug("📊 记录出块到当前epoch",
 		"blockNumber", blockNumber,
 		"blockTime", blockTime.Format("2006-01-02 15:04:05"),
 		"currentEpoch", d.epochManager.GetCurrentEpoch())
 
-	if d.epochManager.ShouldStartNewEpoch(blockTime) {
-		d.logger.Info("⏰ 检测到需要开始新epoch", "blockTime", blockTime.Format("2006-01-02 15:04:05"))
-		epochNumber := d.epochManager.StartNewEpoch(blockTime)
-
-		// 🆕 启动新epoch的时间调度
-		if d.blockScheduler != nil {
-			d.blockScheduler.StartNewEpoch(epochNumber, blockTime)
-		}
-
-		// 3. 分发上一个epoch的奖励
-		if epochNumber > 1 {
-			d.logger.Info("💰 开始分发上一个epoch的奖励", "epoch", epochNumber-1)
-			if err := d.distributeEpochRewards(epochNumber - 1); err != nil {
-				d.logger.Error("❌ 分发Epoch奖励失败", "epoch", epochNumber-1, "error", err)
-				return err
-			}
-		}
-	} else {
-		d.logger.Debug("⏳ 当前时间还不需要开始新epoch",
-			"blockTime", blockTime.Format("2006-01-02 15:04:05"),
-			"currentEpoch", d.epochManager.GetCurrentEpoch())
-	}
-
 	return nil
+}
+
+// 🆕 新增：清理epoch管理器
+func (d *DPoS) cleanupEpochManager() {
+	if d.epochManager != nil {
+		d.epochManager.StopIndependentTimer()
+		d.logger.Info("🧹 清理epoch管理器完成")
+	}
 }
 
 // distributeEpochRewards 分发Epoch奖励
 func (d *DPoS) distributeEpochRewards(epochNumber uint64) error {
+	startTime := time.Now()
 	d.logger.Info("🎉 ========== 开始分发Epoch奖励 ==========",
 		"epoch", epochNumber,
-		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
+		"startTime", startTime.Format("2006-01-02 15:04:05"),
+		"note", "为上一个epoch分发奖励")
 
 	// 1. 获取验证者集合
 	validators := d.getAllValidators()
@@ -10796,9 +10822,13 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64) error {
 		"stateUpdateCount", len(stateUpdates),
 		"status", "真实分发完成")
 
+	endTime := time.Now()
+	duration := endTime.Sub(startTime)
 	d.logger.Info("✅ ========== Epoch奖励分发完成 ==========",
 		"epoch", epochNumber,
-		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
+		"startTime", startTime.Format("2006-01-02 15:04:05"),
+		"endTime", endTime.Format("2006-01-02 15:04:05"),
+		"duration", duration.String())
 	return nil
 }
 
@@ -10808,16 +10838,16 @@ func (d *DPoS) getAccountBalance(address types.Address) (*big.Int, error) {
 		return nil, fmt.Errorf("blockchain wrapper not available")
 	}
 
-	// 获取当前区块头
-	chainTD, exists := d.config.Blockchain.GetChainTD()
-	if !exists {
-		return nil, fmt.Errorf("chain total difficulty not found")
-	}
-
-	currentHeader, exists := d.config.Blockchain.GetHeaderByNumber(chainTD.Uint64())
-	if !exists {
+	// 获取当前区块头 - 修复：直接使用Header()而不是通过总难度
+	currentHeader := d.config.Blockchain.Header()
+	if currentHeader == nil {
 		return nil, fmt.Errorf("current header not found")
 	}
+
+	d.logger.Debug("🔍 获取账户余额",
+		"address", address.String(),
+		"blockNumber", currentHeader.Number,
+		"stateRoot", currentHeader.StateRoot.String())
 
 	// 创建状态转换
 	transition, err := d.config.Executor.BeginTxn(currentHeader.StateRoot, currentHeader, types.ZeroAddress)
@@ -10827,6 +10857,11 @@ func (d *DPoS) getAccountBalance(address types.Address) (*big.Int, error) {
 
 	// 获取账户余额
 	balance := transition.GetBalance(address)
+
+	d.logger.Debug("✅ 成功获取账户余额",
+		"address", address.String(),
+		"balance", balance.String())
+
 	return balance, nil
 }
 
