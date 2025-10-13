@@ -556,6 +556,19 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 		return fmt.Errorf("failed to parse validators from extraData: %w", err)
 	}
 
+	// 🆕 打印从创世文件解析出的验证者地址
+	r.logger.Info("🔍 从创世文件ExtraData解析出的验证者地址",
+		"totalCount", ibftValidators.Len(),
+		"extraDataLength", len(genesisHeader.ExtraData))
+
+	for i, validator := range ibftValidators {
+		r.logger.Info("📝 创世验证者地址",
+			"index", i,
+			"address", validator.Address.String(),
+			"votingPower", validator.VotingPower.String(),
+			"isActive", validator.IsActive)
+	}
+
 	// 3. 设置最小质押门槛
 	minStakeAmount := big.NewInt(0)
 	minStakeAmount.SetString("1000000000000000000000", 10) // 1000 VCITY
@@ -628,6 +641,42 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 	}
 
 	r.logger.Info("✅ DPoS验证者解析完成", "count", validValidatorCount)
+
+	// 🆕 打印最终解析出的创世验证者列表
+	r.logger.Info("🎯 最终解析出的创世验证者列表",
+		"totalCount", len(r.delegates))
+
+	for i, delegate := range r.delegates {
+		r.logger.Info("📋 创世验证者详情",
+			"index", i,
+			"address", delegate.Address.String(),
+			"votingPower", delegate.VotingPower.String(),
+			"isActive", delegate.IsActive,
+			"hasBlsKey", delegate.BlsKey != nil)
+	}
+
+	// 🆕 构建创世验证者映射
+	if r.config != nil && r.config.dposBackend != nil {
+		if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
+			// 初始化创世验证者映射
+			dposInstance.genesisValidators = make(map[types.Address]bool)
+
+			// 将解析出的验证者添加到映射中
+			for _, delegate := range r.delegates {
+				dposInstance.genesisValidators[delegate.Address] = true
+			}
+
+			r.logger.Info("✅ 创世验证者映射已构建",
+				"count", len(dposInstance.genesisValidators),
+				"addresses", func() []string {
+					addresses := make([]string, 0, len(dposInstance.genesisValidators))
+					for addr := range dposInstance.genesisValidators {
+						addresses = append(addresses, addr.String())
+					}
+					return addresses
+				}())
+		}
+	}
 
 	return nil
 }
@@ -2718,8 +2767,9 @@ type DPoS struct {
 	balanceQuerier NativeTokenBalanceQuerier
 
 	// 🆕 新增：DPoS验证者相关字段
-	minStakeAmount   *big.Int // 最小质押门槛
-	genesisExtraData []byte   // 创世块extraData
+	minStakeAmount    *big.Int               // 最小质押门槛
+	genesisExtraData  []byte                 // 创世块extraData
+	genesisValidators map[types.Address]bool // 创世验证者地址映射
 
 	// 🆕 新增：BLS网络通信相关字段
 	blsRequestTopic  *network.Topic // BLS公钥请求Topic
@@ -5182,6 +5232,15 @@ func (d *DPoS) GetCurrentDelegates() validator.AccountSet {
 
 	// 返回当前内存中的受托人集合的副本
 	return d.delegates.Copy()
+}
+
+// isGenesisValidator 检查地址是否为创世验证者
+func (d *DPoS) isGenesisValidator(address types.Address) bool {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	// 检查地址是否在创世验证者映射中
+	return d.genesisValidators[address]
 }
 
 // 区块处理相关方法
@@ -11051,7 +11110,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 	totalReward := big.NewInt(0)
 	for address, reward := range rewards {
 		totalReward.Add(totalReward, reward)
-		d.logger.Info("💰 奖励详情",
+		d.logger.Debug("💰 奖励详情",
 			"address", address.String(),
 			"reward", reward.String())
 	}
@@ -11115,7 +11174,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 	d.logger.Info("✅ 状态事务创建成功", "txn", txn != nil)
 
 	// 🆕 分发前检查所有验证者余额
-	d.logger.Info("🔍 ========== 分发前余额检查 ==========")
+	d.logger.Debug("🔍 ========== 分发前余额检查 ==========")
 	beforeBalances := make(map[types.Address]*big.Int)
 	for address, reward := range rewards {
 		accountInfo, err := snapshot.GetAccount(address)
@@ -11128,7 +11187,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 				balance = accountInfo.Balance
 			}
 			beforeBalances[address] = balance
-			d.logger.Info("🔍 分发前余额",
+			d.logger.Debug("🔍 分发前余额",
 				"address", address.String(),
 				"balance", balance.String(),
 				"reward", reward.String())
@@ -11161,19 +11220,19 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 			"type", "direct_main_state_update")
 	}
 
-	d.logger.Info("💰 批量余额更新完成", "successCount", successCount)
+	d.logger.Debug("💰 批量余额更新完成", "successCount", successCount)
 
 	// 🆕 提交状态变更
-	d.logger.Info("🔄 准备提交状态变更")
+	d.logger.Debug("🔄 准备提交状态变更")
 	objects, err := txn.Commit(true)
 	if err != nil {
 		d.logger.Error("❌ 提交状态变更失败", "error", err)
 		return fmt.Errorf("failed to commit state changes: %w", err)
 	}
-	d.logger.Info("✅ 状态变更提交成功", "objectsCount", len(objects))
+	d.logger.Debug("✅ 状态变更提交成功", "objectsCount", len(objects))
 
 	// 🆕 更新状态根
-	d.logger.Info("🔄 准备更新状态根")
+	d.logger.Debug("🔄 准备更新状态根")
 	var newSnapshot state.Snapshot
 	var newStateRoot []byte
 	if len(objects) > 0 {
@@ -11184,7 +11243,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 			return fmt.Errorf("failed to commit state root: %w", err)
 		}
 
-		d.logger.Info("✅ 状态根更新成功",
+		d.logger.Debug("✅ 状态根更新成功",
 			"newStateRoot", fmt.Sprintf("%x", newStateRoot),
 			"newSnapshot", newSnapshot != nil)
 	} else {
@@ -11225,6 +11284,15 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		Uncles:       []*types.Header{},      // 空uncle列表
 	}
 
+	// 🆕 手动计算区块哈希（修复全零哈希问题）
+	newBlock.Header.ComputeHash()
+	blockHash := newBlock.Hash()
+
+	d.logger.Info("✅ 区块哈希计算完成",
+		"blockNumber", newBlock.Number(),
+		"blockHash", blockHash.String(),
+		"note", "修复全零哈希问题")
+
 	// 🆕 创建FullBlock
 	fullBlock := &types.FullBlock{
 		Block:    newBlock,
@@ -11250,7 +11318,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		"blockNumber", newBlock.Number())
 
 	// 🆕 分发后检查所有验证者余额
-	d.logger.Info("🔍 ========== 分发后余额检查 ==========")
+	d.logger.Debug("🔍 ========== 分发后余额检查 ==========")
 	afterBalances := make(map[types.Address]*big.Int)
 	for address, reward := range rewards {
 		var accountInfo *state.Account
@@ -11278,7 +11346,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 			beforeBalance := beforeBalances[address]
 			balanceChange := new(big.Int).Sub(balance, beforeBalance)
 
-			d.logger.Info("🔍 分发后余额",
+			d.logger.Debug("🔍 分发后余额",
 				"address", address.String(),
 				"beforeBalance", beforeBalance.String(),
 				"afterBalance", balance.String(),
@@ -11293,6 +11361,95 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		"recipientCount", len(rewards),
 		"totalReward", totalReward.String(),
 		"note", "状态已直接更新到主状态树")
+
+	// 🆕 权重同步：创世验证者权重保持不变，非创世验证者正常更新
+	d.logger.Info("🔄 ========== 开始权重同步 ==========")
+
+	// 1. 更新 runtime.delegates 权重
+	if d.runtime != nil && d.runtime.delegates != nil {
+		d.logger.Info("🔄 更新runtime.delegates中的权重")
+		updatedCount := 0
+		genesisCount := 0
+		for _, delegate := range d.runtime.delegates {
+			// 检查是否为创世验证者
+			if d.isGenesisValidator(delegate.Address) {
+				// 创世验证者：权重保持不变
+				d.logger.Info("🔒 创世验证者权重保持不变",
+					"address", delegate.Address.String(),
+					"votingPower", delegate.VotingPower.String())
+				genesisCount++
+				continue
+			}
+
+			// 非创世验证者：正常更新权重
+			newBalance, err := d.getValidatorBalance(delegate.Address)
+			if err != nil {
+				d.logger.Warn("⚠️ 获取验证者余额失败，使用旧权重",
+					"address", delegate.Address.String(),
+					"error", err)
+				continue
+			}
+
+			oldVotingPower := delegate.VotingPower
+			delegate.VotingPower = newBalance
+			updatedCount++
+
+			d.logger.Info("💰 更新验证者权重",
+				"address", delegate.Address.String(),
+				"oldVotingPower", oldVotingPower.String(),
+				"newVotingPower", newBalance.String(),
+				"weightChange", new(big.Int).Sub(newBalance, oldVotingPower).String())
+		}
+		d.logger.Info("✅ runtime.delegates权重更新完成",
+			"updatedCount", updatedCount,
+			"genesisCount", genesisCount)
+	} else {
+		d.logger.Warn("⚠️ runtime或delegates为空，无法更新权重")
+	}
+
+	// 2. 更新主delegates集合中的权重
+	if d.delegates != nil {
+		d.logger.Info("🔄 更新主delegates集合中的权重")
+		updatedCount := 0
+		genesisCount := 0
+		for _, delegate := range d.delegates {
+			// 检查是否为创世验证者
+			if d.isGenesisValidator(delegate.Address) {
+				// 创世验证者：权重保持不变
+				d.logger.Info("🔒 创世验证者权重保持不变",
+					"address", delegate.Address.String(),
+					"votingPower", delegate.VotingPower.String())
+				genesisCount++
+				continue
+			}
+
+			// 非创世验证者：正常更新权重
+			newBalance, err := d.getValidatorBalance(delegate.Address)
+			if err != nil {
+				d.logger.Warn("⚠️ 获取验证者余额失败，使用旧权重",
+					"address", delegate.Address.String(),
+					"error", err)
+				continue
+			}
+
+			oldVotingPower := delegate.VotingPower
+			delegate.VotingPower = newBalance
+			updatedCount++
+
+			d.logger.Info("💰 更新主delegates权重",
+				"address", delegate.Address.String(),
+				"oldVotingPower", oldVotingPower.String(),
+				"newVotingPower", newBalance.String(),
+				"weightChange", new(big.Int).Sub(newBalance, oldVotingPower).String())
+		}
+		d.logger.Info("✅ 主delegates权重更新完成",
+			"updatedCount", updatedCount,
+			"genesisCount", genesisCount)
+	} else {
+		d.logger.Warn("⚠️ 主delegates为空，无法更新权重")
+	}
+
+	d.logger.Info("✅ ========== 权重同步完成 ==========")
 
 	return nil
 }
@@ -11644,7 +11801,7 @@ func (d *DPoS) executeDelayedStateUpdate(epochNumber uint64) error {
 
 	// 执行状态更新
 	rewardAccount := d.config.RewardAccount
-	d.logger.Info("💰 准备执行批量状态更新",
+	d.logger.Debug("💰 准备执行批量状态更新",
 		"epoch", epochNumber,
 		"rewardAccount", rewardAccount.String(),
 		"recipientCount", len(rewards))

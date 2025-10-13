@@ -46,7 +46,7 @@ const (
 	webSocketReadLimitFlag      = "websocket-read-limit"
 
 	metricsIntervalFlag = "metrics-interval"
-	
+
 	// 🆕 新增：共识切换高度参数
 	consensusSwitchHeightFlag = "consensus-switch-height"
 )
@@ -98,13 +98,13 @@ type serverParams struct {
 	logFileLocation string
 
 	relayer bool
-	
+
 	// 🆕 新增：共识切换高度
 	consensusSwitchHeight uint64
-	
+
 	// 🆕 新增：DPoS验证者数量
 	dposValidatorsCount uint64
-	
+
 	// 🆕 新增：DPoS最小质押门槛
 	dposDelegateThreshold *big.Int
 }
@@ -197,11 +197,11 @@ func (p *serverParams) generateConfig() *server.Config {
 		SecretsManager:     p.secretsConfig,
 		RestoreFile:        p.getRestoreFilePath(),
 		LogLevel:           hclog.LevelFromString(p.rawConfig.LogLevel),
-		
+
 		// 🆕 新增：共识切换高度
 		ConsensusSwitchHeight: p.consensusSwitchHeight,
 		// 🆕 新增：DPoS验证者数量
-		DPoSValidatorsCount:   p.dposValidatorsCount,
+		DPoSValidatorsCount: p.dposValidatorsCount,
 		// 🆕 新增：DPoS最小质押门槛
 		DPoSDelegateThreshold: p.dposDelegateThreshold,
 		// 🆕 新增：DPoS经济系统配置
@@ -210,8 +210,8 @@ func (p *serverParams) generateConfig() *server.Config {
 		DPoSRewardAmount:         p.rawConfig.DPoSRewardAmount,
 		DPoSValidatorRewardRatio: p.rawConfig.DPoSValidatorRewardRatio,
 		DPoSVoterRewardRatio:     p.rawConfig.DPoSVoterRewardRatio,
-		JSONLogFormat:      p.rawConfig.JSONLogFormat,
-		LogFilePath:        p.logFileLocation,
+		JSONLogFormat:            p.rawConfig.JSONLogFormat,
+		LogFilePath:              p.logFileLocation,
 
 		Relayer:               p.relayer,
 		NumBlockConfirmations: p.rawConfig.NumBlockConfirmations,
