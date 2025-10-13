@@ -11038,31 +11038,55 @@ func (d *DPoS) calculateVoterRewards(epochNumber uint64, totalVoterReward *big.I
 // executeBatchStateUpdate 执行批量状态更新
 // executeBatchStateUpdate 执行批量状态更新（参考TRON实现）
 func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewardAccount types.Address) error {
+	d.logger.Info("🔧 ========== 开始执行批量状态更新 ==========",
+		"rewardAccount", rewardAccount.String(),
+		"recipientCount", len(rewards))
+
 	if d.config.Executor == nil {
+		d.logger.Error("❌ Executor不可用", "executor", d.config.Executor == nil)
 		return fmt.Errorf("executor not available")
 	}
 
 	// 计算总奖励金额
 	totalReward := big.NewInt(0)
-	for _, reward := range rewards {
+	for address, reward := range rewards {
 		totalReward.Add(totalReward, reward)
+		d.logger.Info("💰 奖励详情",
+			"address", address.String(),
+			"reward", reward.String())
 	}
+
+	d.logger.Info("💰 总奖励金额", "totalReward", totalReward.String())
 
 	// 🆕 获取当前区块头
 	currentHeader := d.config.Blockchain.Header()
 	if currentHeader == nil {
+		d.logger.Error("❌ 无法获取当前区块头")
 		return fmt.Errorf("failed to get current header")
 	}
+
+	d.logger.Info("🔍 当前区块头信息",
+		"blockNumber", currentHeader.Number,
+		"stateRoot", currentHeader.StateRoot.String(),
+		"blockHash", currentHeader.Hash.String())
 
 	// 🆕 通过快照操作状态（参考getValidatorBalance的实现）
 	snapshot, err := d.config.Executor.StateAt(currentHeader.StateRoot)
 	if err != nil {
+		d.logger.Error("❌ 创建状态快照失败",
+			"stateRoot", currentHeader.StateRoot.String(),
+			"error", err)
 		return fmt.Errorf("failed to create snapshot at state root %s: %w", currentHeader.StateRoot.String(), err)
 	}
+
+	d.logger.Info("✅ 状态快照创建成功", "snapshot", snapshot != nil)
 
 	// 检查奖励账户余额
 	rewardAccountInfo, err := snapshot.GetAccount(rewardAccount)
 	if err != nil {
+		d.logger.Error("❌ 获取奖励账户信息失败",
+			"rewardAccount", rewardAccount.String(),
+			"error", err)
 		return fmt.Errorf("failed to get reward account info: %w", err)
 	}
 
@@ -11071,13 +11095,24 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		rewardAccountBalance = rewardAccountInfo.Balance
 	}
 
+	d.logger.Info("💰 奖励账户余额检查",
+		"rewardAccount", rewardAccount.String(),
+		"balance", rewardAccountBalance.String(),
+		"required", totalReward.String(),
+		"sufficient", rewardAccountBalance.Cmp(totalReward) >= 0)
+
 	if rewardAccountBalance.Cmp(totalReward) < 0 {
+		d.logger.Error("❌ 奖励账户余额不足",
+			"rewardAccount", rewardAccount.String(),
+			"balance", rewardAccountBalance.String(),
+			"required", totalReward.String())
 		return fmt.Errorf("insufficient reward account balance: have %s, need %s",
 			rewardAccountBalance.String(), totalReward.String())
 	}
 
 	// 🆕 创建状态事务
 	txn := state.NewTxn(snapshot)
+	d.logger.Info("✅ 状态事务创建成功", "txn", txn != nil)
 
 	// 🆕 分发前检查所有验证者余额
 	d.logger.Info("🔍 ========== 分发前余额检查 ==========")
@@ -11101,7 +11136,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 	}
 
 	// 🆕 直接状态更新（参考TRON模式）
-	d.logger.Info("💰 开始直接状态更新（TRON模式）",
+	d.logger.Info("💰 ========== 开始直接状态更新（TRON模式） ==========",
 		"totalReward", totalReward.String(),
 		"recipientCount", len(rewards),
 		"rewardAccount", rewardAccount.String())
@@ -11111,83 +11146,108 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 	for address, reward := range rewards {
 		// 🆕 直接更新主状态（参考TRON）
 		// 直接使用Txn的方法
+		d.logger.Info("💰 准备更新余额",
+			"address", address.String(),
+			"reward", reward.String(),
+			"beforeBalance", beforeBalances[address].String())
+
 		txn.AddBalance(address, reward)
 		txn.SubBalance(rewardAccount, reward)
 		successCount++
 
-		d.logger.Info("💰 执行奖励分发（直接状态更新）",
+		d.logger.Info("✅ 奖励分发执行完成",
 			"address", address.String(),
 			"reward", reward.String(),
 			"type", "direct_main_state_update")
 	}
 
+	d.logger.Info("💰 批量余额更新完成", "successCount", successCount)
+
 	// 🆕 提交状态变更
+	d.logger.Info("🔄 准备提交状态变更")
 	objects, err := txn.Commit(true)
 	if err != nil {
+		d.logger.Error("❌ 提交状态变更失败", "error", err)
 		return fmt.Errorf("failed to commit state changes: %w", err)
 	}
+	d.logger.Info("✅ 状态变更提交成功", "objectsCount", len(objects))
 
 	// 🆕 更新状态根
+	d.logger.Info("🔄 准备更新状态根")
 	var newSnapshot state.Snapshot
 	var newStateRoot []byte
 	if len(objects) > 0 {
 		var err error
 		newSnapshot, newStateRoot, err = snapshot.Commit(objects)
 		if err != nil {
+			d.logger.Error("❌ 提交状态根失败", "error", err)
 			return fmt.Errorf("failed to commit state root: %w", err)
 		}
 
-		d.logger.Info("🔍 新状态根", "newStateRoot", fmt.Sprintf("%x", newStateRoot))
-		d.logger.Info("🔍 新快照", "newSnapshot", newSnapshot != nil)
-
-		// 🆕 创建新的区块头，包含新的状态根
-		// 使用当前区块号+1，避免重复区块问题
-		newHeader := &types.Header{
-			ParentHash:   currentHeader.Hash, // 使用当前区块作为父区块
-			Sha3Uncles:   currentHeader.Sha3Uncles,
-			Miner:        currentHeader.Miner,
-			StateRoot:    types.BytesToHash(newStateRoot), // 使用新的状态根
-			TxRoot:       currentHeader.TxRoot,
-			ReceiptsRoot: currentHeader.ReceiptsRoot,
-			LogsBloom:    currentHeader.LogsBloom,
-			Difficulty:   currentHeader.Difficulty,
-			Number:       currentHeader.Number + 1, // 使用下一个区块号
-			GasLimit:     currentHeader.GasLimit,
-			GasUsed:      0,                         // 新区块没有交易，GasUsed为0
-			Timestamp:    uint64(time.Now().Unix()), // 使用当前时间戳
-			ExtraData:    currentHeader.ExtraData,
-			MixHash:      currentHeader.MixHash,
-			Nonce:        currentHeader.Nonce,
-			Hash:         types.ZeroHash, // 将在WriteFullBlock中计算
-		}
-
-		// 🆕 创建新的区块
-		newBlock := &types.Block{
-			Header:       newHeader,
-			Transactions: []*types.Transaction{}, // 空交易列表
-			Uncles:       []*types.Header{},      // 空uncle列表
-		}
-
-		// 🆕 创建FullBlock
-		fullBlock := &types.FullBlock{
-			Block:    newBlock,
-			Receipts: []*types.Receipt{}, // 空收据列表
-		}
-
-		// 🆕 写入区块链，更新当前状态
-		d.logger.Info("🔄 准备写入新状态到区块链",
+		d.logger.Info("✅ 状态根更新成功",
 			"newStateRoot", fmt.Sprintf("%x", newStateRoot),
-			"blockNumber", newBlock.Number())
-
-		if err := d.config.Blockchain.WriteFullBlock(fullBlock, "dpos-reward-distribution"); err != nil {
-			d.logger.Error("❌ 写入新状态到区块链失败", "error", err)
-			return fmt.Errorf("failed to write new state to blockchain: %w", err)
-		}
-
-		d.logger.Info("✅ 新状态已写入区块链",
-			"newStateRoot", fmt.Sprintf("%x", newStateRoot),
-			"blockNumber", newBlock.Number())
+			"newSnapshot", newSnapshot != nil)
+	} else {
+		d.logger.Warn("⚠️ 没有状态对象需要提交", "objectsCount", len(objects))
 	}
+
+	// 🆕 创建新的区块头，包含新的状态根
+	d.logger.Info("🔄 准备创建新区块头")
+	// 使用当前区块号+1，避免重复区块问题
+	newHeader := &types.Header{
+		ParentHash:   currentHeader.Hash, // 使用当前区块作为父区块
+		Sha3Uncles:   currentHeader.Sha3Uncles,
+		Miner:        currentHeader.Miner,
+		StateRoot:    types.BytesToHash(newStateRoot), // 使用新的状态根
+		TxRoot:       currentHeader.TxRoot,
+		ReceiptsRoot: currentHeader.ReceiptsRoot,
+		LogsBloom:    currentHeader.LogsBloom,
+		Difficulty:   currentHeader.Difficulty,
+		Number:       currentHeader.Number + 1, // 使用下一个区块号
+		GasLimit:     currentHeader.GasLimit,
+		GasUsed:      0,                         // 新区块没有交易，GasUsed为0
+		Timestamp:    uint64(time.Now().Unix()), // 使用当前时间戳
+		ExtraData:    currentHeader.ExtraData,
+		MixHash:      currentHeader.MixHash,
+		Nonce:        currentHeader.Nonce,
+		Hash:         types.ZeroHash, // 将在WriteFullBlock中计算
+	}
+
+	d.logger.Info("✅ 新区块头创建成功",
+		"blockNumber", newHeader.Number,
+		"stateRoot", newHeader.StateRoot.String(),
+		"parentHash", newHeader.ParentHash.String())
+
+	// 🆕 创建新的区块
+	newBlock := &types.Block{
+		Header:       newHeader,
+		Transactions: []*types.Transaction{}, // 空交易列表
+		Uncles:       []*types.Header{},      // 空uncle列表
+	}
+
+	// 🆕 创建FullBlock
+	fullBlock := &types.FullBlock{
+		Block:    newBlock,
+		Receipts: []*types.Receipt{}, // 空收据列表
+	}
+
+	// 🆕 写入区块链，更新当前状态
+	d.logger.Info("🔄 ========== 准备写入新状态到区块链 ==========",
+		"newStateRoot", fmt.Sprintf("%x", newStateRoot),
+		"blockNumber", newBlock.Number(),
+		"blockHash", newBlock.Hash().String())
+
+	if err := d.config.Blockchain.WriteFullBlock(fullBlock, "dpos-reward-distribution"); err != nil {
+		d.logger.Error("❌ 写入新状态到区块链失败",
+			"error", err,
+			"blockNumber", newBlock.Number(),
+			"blockHash", newBlock.Hash().String())
+		return fmt.Errorf("failed to write new state to blockchain: %w", err)
+	}
+
+	d.logger.Info("✅ ========== 新状态已写入区块链 ==========",
+		"newStateRoot", fmt.Sprintf("%x", newStateRoot),
+		"blockNumber", newBlock.Number())
 
 	// 🆕 分发后检查所有验证者余额
 	d.logger.Info("🔍 ========== 分发后余额检查 ==========")
@@ -11228,9 +11288,10 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		}
 	}
 
-	d.logger.Info("✅ 直接状态更新完成",
+	d.logger.Info("✅ ========== 直接状态更新完成 ==========",
 		"successCount", successCount,
 		"recipientCount", len(rewards),
+		"totalReward", totalReward.String(),
 		"note", "状态已直接更新到主状态树")
 
 	return nil
@@ -11543,19 +11604,51 @@ func (d *DPoS) executeDelayedStateUpdate(epochNumber uint64) error {
 	d.stateUpdateMutex.Lock()
 	defer d.stateUpdateMutex.Unlock()
 
+	// 🆕 添加详细的调试信息
+	d.logger.Info("🔍 ========== 开始检查延迟状态更新 ==========",
+		"epoch", epochNumber,
+		"pendingStateUpdatesCount", len(d.pendingStateUpdates),
+		"pendingEpochs", func() []uint64 {
+			epochs := make([]uint64, 0, len(d.pendingStateUpdates))
+			for epoch := range d.pendingStateUpdates {
+				epochs = append(epochs, epoch)
+			}
+			return epochs
+		}())
+
 	// 检查是否有待处理的状态更新
 	rewards, exists := d.pendingStateUpdates[epochNumber]
 	if !exists {
-		d.logger.Debug("🔍 没有待处理的状态更新", "epoch", epochNumber)
+		d.logger.Info("⚠️ 没有待处理的状态更新",
+			"epoch", epochNumber,
+			"availableEpochs", func() []uint64 {
+				epochs := make([]uint64, 0, len(d.pendingStateUpdates))
+				for epoch := range d.pendingStateUpdates {
+					epochs = append(epochs, epoch)
+				}
+				return epochs
+			}())
 		return nil
 	}
 
-	d.logger.Info("🔄 开始执行延迟状态更新",
+	d.logger.Info("🔄 ========== 开始执行延迟状态更新 ==========",
 		"epoch", epochNumber,
-		"rewardCount", len(rewards))
+		"rewardCount", len(rewards),
+		"totalRewardAmount", func() string {
+			total := big.NewInt(0)
+			for _, reward := range rewards {
+				total.Add(total, reward)
+			}
+			return total.String()
+		}())
 
 	// 执行状态更新
 	rewardAccount := d.config.RewardAccount
+	d.logger.Info("💰 准备执行批量状态更新",
+		"epoch", epochNumber,
+		"rewardAccount", rewardAccount.String(),
+		"recipientCount", len(rewards))
+
 	if err := d.executeBatchStateUpdate(rewards, rewardAccount); err != nil {
 		d.logger.Error("❌ 执行延迟状态更新失败",
 			"epoch", epochNumber,
@@ -11566,8 +11659,9 @@ func (d *DPoS) executeDelayedStateUpdate(epochNumber uint64) error {
 	// 删除已处理的任务
 	delete(d.pendingStateUpdates, epochNumber)
 
-	d.logger.Info("✅ 延迟状态更新完成",
+	d.logger.Info("✅ ========== 延迟状态更新完成 ==========",
 		"epoch", epochNumber,
+		"remainingPendingUpdates", len(d.pendingStateUpdates),
 		"note", "状态已更新到区块链")
 
 	return nil
@@ -11575,15 +11669,29 @@ func (d *DPoS) executeDelayedStateUpdate(epochNumber uint64) error {
 
 // onEpochEnd 在epoch结束时调用
 func (d *DPoS) onEpochEnd(epochNumber uint64) error {
-	d.logger.Info("🏁 Epoch结束", "epoch", epochNumber)
+	d.logger.Info("🏁 ========== Epoch结束回调触发 ==========",
+		"epoch", epochNumber,
+		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
 
-	// 执行延迟状态更新
-	if err := d.executeDelayedStateUpdate(epochNumber); err != nil {
+	// 🆕 修复：处理刚结束的epoch的延迟状态更新
+	previousEpoch := epochNumber - 1
+	d.logger.Info("🔄 开始执行延迟状态更新",
+		"currentEpoch", epochNumber,
+		"previousEpoch", previousEpoch,
+		"note", "处理刚结束的epoch的延迟状态更新")
+
+	if err := d.executeDelayedStateUpdate(previousEpoch); err != nil {
 		d.logger.Error("❌ Epoch结束时状态更新失败",
-			"epoch", epochNumber,
+			"currentEpoch", epochNumber,
+			"previousEpoch", previousEpoch,
 			"error", err)
 		return err
 	}
+
+	d.logger.Info("✅ ========== Epoch结束回调完成 ==========",
+		"currentEpoch", epochNumber,
+		"previousEpoch", previousEpoch,
+		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
 
 	return nil
 }
