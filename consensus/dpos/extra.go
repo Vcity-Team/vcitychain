@@ -448,7 +448,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"checkpointHash", checkpointHash.String())
 
 	// 🆕 添加验证时checkpointHash结果显著日志
-	logger.Debug("🔍 ===== 验证时CheckpointHash计算结果 =====",
+	logger.Info("🔍 ===== 验证时CheckpointHash计算结果 =====",
 		"blockNumber", blockNumber,
 		"checkpointHash", checkpointHash.String(),
 		"说明", "验证时最终计算出的checkpointHash")
@@ -1451,6 +1451,21 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		}
 	}
 
+	// 🆕 打印验证时使用的验证者权重信息
+	logger.Error("🔍 ===== BLS验证时使用的验证者权重信息 =====",
+		"blockNumber", blockNumber,
+		"validatorsCount", len(validators),
+		"note", "这些是BLS验证时实际使用的验证者权重")
+
+	for i, validator := range validators {
+		logger.Error("📝 BLS验证时验证者权重",
+			"index", i,
+			"address", validator.Address.String(),
+			"votingPower", validator.VotingPower.String(),
+			"isActive", validator.IsActive,
+			"hasBlsKey", validator.BlsKey != nil)
+	}
+
 	// 执行BLS签名验证（只使用有效的公钥）
 	isValid := aggs.VerifyAggregated(validBLSKeys, hash[:], domain)
 
@@ -1472,6 +1487,8 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 					"index", i,
 					"address", validator.Address.String(),
 					"hasBlsKey", validator.BlsKey != nil,
+					"votingPower", validator.VotingPower.String(),
+					"isActive", validator.IsActive,
 					"signerAddress", signer.String())
 			}
 		}
@@ -1700,6 +1717,16 @@ func (c *CheckpointData) Copy() *CheckpointData {
 // Hash calculates keccak256 hash of the CheckpointData.
 // CheckpointData is ABI encoded and then hashed.
 func (c *CheckpointData) Hash(chainID uint64, blockNumber uint64, blockHash types.Hash) (types.Hash, error) {
+	// 🆕 添加CheckpointHash计算的详细调试日志
+	fmt.Printf("🔍 ===== CheckpointData.Hash 开始计算 =====\n")
+	fmt.Printf("🔍 输入参数: chainID=%d blockNumber=%d blockHash=%s\n", chainID, blockNumber, blockHash.String())
+	fmt.Printf("🔍 CheckpointData字段:\n")
+	fmt.Printf("  - BlockRound: %d\n", c.BlockRound)
+	fmt.Printf("  - EpochNumber: %d\n", c.EpochNumber)
+	fmt.Printf("  - EventRoot: %s\n", c.EventRoot.String())
+	fmt.Printf("  - CurrentValidatorsHash: %s\n", c.CurrentValidatorsHash.String())
+	fmt.Printf("  - NextValidatorsHash: %s\n", c.NextValidatorsHash.String())
+
 	checkpointMap := map[string]interface{}{
 		"chainId":               new(big.Int).SetUint64(chainID),
 		"blockNumber":           new(big.Int).SetUint64(blockNumber),
@@ -1711,12 +1738,29 @@ func (c *CheckpointData) Hash(chainID uint64, blockNumber uint64, blockHash type
 		"nextValidatorsHash":    c.NextValidatorsHash,
 	}
 
+	fmt.Printf("🔍 构建的checkpointMap:\n")
+	for key, value := range checkpointMap {
+		if bigInt, ok := value.(*big.Int); ok {
+			fmt.Printf("  - %s: %s (0x%x)\n", key, bigInt.String(), bigInt.Bytes())
+		} else if hash, ok := value.(types.Hash); ok {
+			fmt.Printf("  - %s: %s\n", key, hash.String())
+		} else {
+			fmt.Printf("  - %s: %v\n", key, value)
+		}
+	}
+
 	abiEncoded, err := checkpointDataABIType.Encode(checkpointMap)
 	if err != nil {
+		fmt.Printf("❌ ABI编码失败: %v\n", err)
 		return types.ZeroHash, err
 	}
 
+	fmt.Printf("🔍 ABI编码结果: length=%d data=0x%x\n", len(abiEncoded), abiEncoded)
+
 	result := types.BytesToHash(crypto.Keccak256(abiEncoded))
+
+	fmt.Printf("🔍 Keccak256哈希结果: %s\n", result.String())
+	fmt.Printf("✅ ===== CheckpointData.Hash 计算完成 =====\n")
 
 	return result, nil
 }

@@ -2067,6 +2067,65 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"timestamp", h.Timestamp,
 			"extraDataLength", len(h.ExtraData),
 			"delegate", keyAddr.String()[:16])
+
+		// 🆕 存储验证者集合到历史数据库
+		if r.config != nil && r.config.dposBackend != nil {
+			if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
+				if dposInstance.state != nil && dposInstance.state.StakeStore != nil {
+					r.logger.Info("🔍 开始存储验证者集合到历史数据库",
+						"blockNumber", h.Number,
+						"validatorsCount", len(productionValidators))
+
+					// 打印验证者详细信息
+					for i, validator := range productionValidators {
+						r.logger.Info("🔍 准备存储的验证者",
+							"blockNumber", h.Number,
+							"index", i,
+							"address", validator.Address.String(),
+							"votingPower", validator.VotingPower.String(),
+							"isActive", validator.IsActive)
+					}
+
+					// 开始数据库事务
+					dbTx, err := dposInstance.state.beginDBTransaction(true) // 写事务
+					if err != nil {
+						r.logger.Error("❌ 无法开始数据库事务", "blockNumber", h.Number, "error", err)
+					} else {
+						defer dbTx.Rollback()
+
+						// 存储验证者集合
+						r.logger.Info("🔍 调用setDelegatesAtBlock存储验证者集合",
+							"blockNumber", h.Number,
+							"validatorsCount", len(productionValidators))
+
+						if err := dposInstance.state.StakeStore.setDelegatesAtBlock(h.Number, productionValidators, dbTx); err != nil {
+							r.logger.Error("❌ 存储验证者集合失败", "blockNumber", h.Number, "error", err)
+						} else {
+							r.logger.Info("✅ setDelegatesAtBlock调用成功，准备提交事务",
+								"blockNumber", h.Number)
+
+							// 提交事务
+							if err := dbTx.Commit(); err != nil {
+								r.logger.Error("❌ 提交事务失败", "blockNumber", h.Number, "error", err)
+							} else {
+								r.logger.Info("✅ 验证者集合已存储到历史数据库",
+									"blockNumber", h.Number,
+									"count", len(productionValidators))
+							}
+						}
+					}
+				} else {
+					r.logger.Warn("⚠️ DPoS实例状态不可用",
+						"blockNumber", h.Number,
+						"stateIsNil", dposInstance.state == nil,
+						"stakeStoreIsNil", dposInstance.state != nil && dposInstance.state.StakeStore == nil)
+				}
+			} else {
+				r.logger.Warn("⚠️ 无法获取DPoS实例", "blockNumber", h.Number)
+			}
+		} else {
+			r.logger.Warn("⚠️ 配置不可用", "blockNumber", h.Number, "configIsNil", r.config == nil, "dposBackendIsNil", r.config != nil && r.config.dposBackend == nil)
+		}
 	})
 
 	if err != nil {
@@ -2120,6 +2179,12 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		r.logger.Error("failed to calculate checkpoint hash", "error", err)
 		return nil, fmt.Errorf("failed to calculate checkpoint hash: %w", err)
 	}
+
+	// 🆕 添加生产时checkpointHash结果显著日志
+	r.logger.Info("🔍 ===== 生产时CheckpointHash计算结果 =====",
+		"blockNumber", block.Block.Number(),
+		"checkpointHash", checkpointHash.String(),
+		"说明", "生产时最终计算出的checkpointHash")
 
 	// 确保checkpointHash不为全零
 	if checkpointHash == (types.Hash{}) {
@@ -3147,6 +3212,43 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 
 		// 同步更新轮次状态（这部分必须同步执行，不能异步）
 		d.updateRoundState(header)
+
+		// 🆕 在区块同步时存储验证者集合到历史数据库
+		if d.state != nil && d.state.StakeStore != nil {
+			d.logger.Info("🔍 区块同步时存储验证者集合到历史数据库",
+				"blockNumber", header.Number,
+				"blockHash", header.Hash.String()[:16])
+
+			// 从区块ExtraData解析验证者集合
+			validators, err := d.GetDelegates(header.Number, []*types.Header{header})
+			if err != nil {
+				d.logger.Warn("⚠️ 从ExtraData解析验证者失败", "blockNumber", header.Number, "error", err)
+			} else if len(validators) > 0 {
+				// 开始数据库事务
+				dbTx, err := d.state.beginDBTransaction(true) // 写事务
+				if err != nil {
+					d.logger.Warn("⚠️ 无法开始数据库事务", "blockNumber", header.Number, "error", err)
+				} else {
+					defer dbTx.Rollback()
+
+					// 存储验证者集合
+					if err := d.state.StakeStore.setDelegatesAtBlock(header.Number, validators, dbTx); err != nil {
+						d.logger.Warn("⚠️ 存储验证者集合失败", "blockNumber", header.Number, "error", err)
+					} else {
+						// 提交事务
+						if err := dbTx.Commit(); err != nil {
+							d.logger.Warn("⚠️ 提交事务失败", "blockNumber", header.Number, "error", err)
+						} else {
+							d.logger.Info("✅ 区块同步时验证者集合已存储到历史数据库",
+								"blockNumber", header.Number,
+								"count", len(validators))
+						}
+					}
+				}
+			} else {
+				d.logger.Warn("⚠️ 从ExtraData解析的验证者集合为空", "blockNumber", header.Number)
+			}
+		}
 	}
 
 	return nil
@@ -5835,22 +5937,55 @@ func (d *DPoS) getPrimaryDelegate(votedDelegates []types.Address) types.Address 
 }
 
 func (d *DPoS) getDelegatesFromState(blockNumber uint64) (validator.AccountSet, error) {
+	d.logger.Info("🔍 ===== 开始获取历史验证者集合 =====",
+		"blockNumber", blockNumber,
+		"stateIsNil", d.state == nil,
+		"stakeStoreIsNil", d.state != nil && d.state.StakeStore == nil)
+
 	// 🆕 关键修复：首先尝试从历史数据获取验证者集合
 	if d.state != nil && d.state.StakeStore != nil {
+		d.logger.Info("🔍 开始数据库事务", "blockNumber", blockNumber)
+
 		// 开始数据库事务
 		dbTx, err := d.state.beginDBTransaction(false) // 只读事务
 		if err != nil {
-			d.logger.Debug("⚠️ 无法开始数据库事务", "blockNumber", blockNumber, "error", err)
+			d.logger.Error("❌ 无法开始数据库事务",
+				"blockNumber", blockNumber,
+				"error", err,
+				"errorType", fmt.Sprintf("%T", err))
 		} else {
+			d.logger.Info("✅ 数据库事务开始成功", "blockNumber", blockNumber)
 			defer dbTx.Rollback()
 
+			d.logger.Info("🔍 调用getDelegatesAtBlock",
+				"blockNumber", blockNumber,
+				"stakeStoreType", fmt.Sprintf("%T", d.state.StakeStore))
+
 			if historicalDelegates, err := d.state.StakeStore.getDelegatesAtBlock(blockNumber, dbTx); err == nil {
-				d.logger.Info("✅ 从历史数据获取验证者集合", "blockNumber", blockNumber, "count", len(historicalDelegates))
+				d.logger.Info("✅ 从历史数据获取验证者集合成功",
+					"blockNumber", blockNumber,
+					"count", len(historicalDelegates),
+					"validators", func() []string {
+						addresses := make([]string, len(historicalDelegates))
+						for i, v := range historicalDelegates {
+							addresses[i] = v.Address.String()
+						}
+						return addresses
+					}())
 				return historicalDelegates, nil
 			} else {
-				d.logger.Debug("⚠️ 历史验证者集合不存在", "blockNumber", blockNumber, "error", err)
+				d.logger.Error("❌ 历史验证者集合不存在",
+					"blockNumber", blockNumber,
+					"error", err,
+					"errorType", fmt.Sprintf("%T", err),
+					"errorDetails", err.Error())
 			}
 		}
+	} else {
+		d.logger.Error("❌ 状态或StakeStore不可用",
+			"blockNumber", blockNumber,
+			"stateIsNil", d.state == nil,
+			"stakeStoreIsNil", d.state != nil && d.state.StakeStore == nil)
 	}
 
 	// 🆕 关键修复：一旦获取不到历史验证者集合，直接退出程序
@@ -11252,6 +11387,50 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 
 	// 🆕 创建新的区块头，包含新的状态根
 	d.logger.Info("🔄 准备创建新区块头")
+
+	// 🆕 为奖励分发区块创建正确的ExtraData和CheckpointData
+	// 获取当前验证者集合
+	currentValidators, err := d.getDelegatesFromState(currentHeader.Number)
+	if err != nil {
+		d.logger.Error("❌ 获取当前验证者集合失败", "error", err)
+		return fmt.Errorf("failed to get current validators: %w", err)
+	}
+
+	// 计算验证者哈希
+	currentValidatorsHash, err := currentValidators.HashAddressOnly()
+	if err != nil {
+		d.logger.Error("❌ 计算验证者哈希失败", "error", err)
+		return fmt.Errorf("failed to calculate validators hash: %w", err)
+	}
+
+	// 创建CheckpointData
+	checkpoint := &CheckpointData{
+		BlockRound:            1, // 奖励分发区块使用固定轮次
+		EpochNumber:           1, // 奖励分发区块使用固定epoch
+		CurrentValidatorsHash: currentValidatorsHash,
+		NextValidatorsHash:    currentValidatorsHash,
+		EventRoot:             types.Hash{}, // 暂时为空
+	}
+
+	// 创建Extra对象
+	extra := &Extra{
+		Committed:  &Signature{}, // 添加空的Committed签名
+		Checkpoint: checkpoint,
+	}
+
+	// 计算checkpointHash用于BLS签名
+	checkpointHash, err := checkpoint.Hash(d.blockchain.GetChainID(), currentHeader.Number+1, currentHeader.Hash)
+	if err != nil {
+		d.logger.Error("❌ 计算checkpointHash失败", "error", err)
+		return fmt.Errorf("failed to calculate checkpoint hash: %w", err)
+	}
+
+	// 🆕 添加奖励分发区块的checkpointHash打印
+	d.logger.Info("🔍 ===== 奖励分发区块CheckpointHash计算结果 =====",
+		"blockNumber", currentHeader.Number+1,
+		"checkpointHash", checkpointHash.String(),
+		"说明", "奖励分发区块最终计算出的checkpointHash")
+
 	// 使用当前区块号+1，避免重复区块问题
 	newHeader := &types.Header{
 		ParentHash:   currentHeader.Hash, // 使用当前区块作为父区块
@@ -11266,7 +11445,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		GasLimit:     currentHeader.GasLimit,
 		GasUsed:      0,                         // 新区块没有交易，GasUsed为0
 		Timestamp:    uint64(time.Now().Unix()), // 使用当前时间戳
-		ExtraData:    currentHeader.ExtraData,
+		ExtraData:    extra.MarshalRLPTo(nil),   // 使用新创建的ExtraData
 		MixHash:      currentHeader.MixHash,
 		Nonce:        currentHeader.Nonce,
 		Hash:         types.ZeroHash, // 将在WriteFullBlock中计算
@@ -11292,6 +11471,35 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		"blockNumber", newBlock.Number(),
 		"blockHash", blockHash.String(),
 		"note", "修复全零哈希问题")
+
+	// 🆕 存储奖励分发区块的验证者集合到历史数据库
+	if d.state != nil && d.state.StakeStore != nil {
+		d.logger.Info("🔍 开始存储奖励分发区块验证者集合到历史数据库",
+			"blockNumber", newBlock.Number(),
+			"validatorsCount", len(currentValidators))
+
+		// 开始数据库事务
+		dbTx, err := d.state.beginDBTransaction(true) // 写事务
+		if err != nil {
+			d.logger.Warn("⚠️ 无法开始数据库事务", "error", err)
+		} else {
+			defer dbTx.Rollback()
+
+			// 存储验证者集合
+			if err := d.state.StakeStore.setDelegatesAtBlock(newBlock.Number(), currentValidators, dbTx); err != nil {
+				d.logger.Warn("⚠️ 存储奖励分发区块验证者集合失败", "error", err)
+			} else {
+				// 提交事务
+				if err := dbTx.Commit(); err != nil {
+					d.logger.Warn("⚠️ 提交事务失败", "error", err)
+				} else {
+					d.logger.Info("✅ 奖励分发区块验证者集合已存储到历史数据库",
+						"blockNumber", newBlock.Number(),
+						"count", len(currentValidators))
+				}
+			}
+		}
+	}
 
 	// 🆕 创建FullBlock
 	fullBlock := &types.FullBlock{
