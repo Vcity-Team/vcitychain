@@ -362,26 +362,26 @@ func (s *StakeStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx) (val
 
 // setDelegatesAtBlock 保存指定区块的受托人集合到数据库
 func (s *StakeStore) setDelegatesAtBlock(blockNumber uint64, delegates validator.AccountSet, dbTx *bolt.Tx) error {
-	fmt.Printf("🔍 ===== StakeStore.setDelegatesAtBlock 开始 ===== blockNumber=%d delegatesCount=%d dbTxIsNil=%t\n", 
+	fmt.Printf("🔍 ===== StakeStore.setDelegatesAtBlock 开始 ===== blockNumber=%d delegatesCount=%d dbTxIsNil=%t\n",
 		blockNumber, len(delegates), dbTx == nil)
-	
+
 	// 检查参数
 	if dbTx == nil {
 		fmt.Printf("❌ 数据库事务为空 blockNumber=%d\n", blockNumber)
 		return fmt.Errorf("database transaction is nil")
 	}
-	
+
 	if len(delegates) == 0 {
 		fmt.Printf("⚠️ 验证者集合为空 blockNumber=%d\n", blockNumber)
 		return fmt.Errorf("delegates set is empty")
 	}
-	
+
 	// 打印验证者详细信息
 	for i, delegate := range delegates {
 		fmt.Printf("🔍 准备存储的验证者详情 blockNumber=%d index=%d address=%s votingPower=%s isActive=%t\n",
 			blockNumber, i, delegate.Address.String(), delegate.VotingPower.String(), delegate.IsActive)
 	}
-	
+
 	// 创建或获取桶
 	fmt.Printf("🔍 创建或获取DelegatesAtBlock桶 blockNumber=%d\n", blockNumber)
 	bucket, err := dbTx.CreateBucketIfNotExists([]byte("DelegatesAtBlock"))
@@ -427,7 +427,7 @@ func (s *StakeStore) setDelegatesAtBlock(blockNumber uint64, delegates validator
 
 	fmt.Printf("✅ ===== StakeStore.setDelegatesAtBlock 完成 ===== blockNumber=%d delegatesCount=%d\n",
 		blockNumber, len(delegates))
-	
+
 	return nil
 }
 
