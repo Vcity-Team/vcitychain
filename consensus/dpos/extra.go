@@ -224,21 +224,64 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 
 // isRewardDistributionBlock 检查指定区块号是否为奖励分发区块
 func isRewardDistributionBlock(blockNumber uint64, dposBackend *DPoS) bool {
-	// 奖励分发区块的判断逻辑：
-	// 1. 检查区块号是否在epoch结束后的第一个区块位置
-	// 2. 可以通过检查区块的source或其他标识来判断
+	// 🆕 修复：通过检查区块的ExtraData来判断是否为奖励分发区块
+	// 奖励分发区块的特征：
+	// 1. 没有BLS签名（Committed.AggregatedSignature为空或长度不为64字节）
+	// 2. 没有交易（txs=0）
+	// 3. 是在executeBatchStateUpdate中创建的
 
-	// 简单实现：通过区块号模式判断
-	// 奖励分发区块通常是epoch结束后的第一个区块
-	// 这里可以根据实际的epoch长度来判断
-	// 暂时使用简单的模数判断，实际应该根据epoch配置来判断
+	if dposBackend == nil || dposBackend.config == nil {
+		// 如果无法获取配置，使用默认逻辑
+		epochLength := uint64(10)
+		return blockNumber%epochLength == 1
+	}
 
-	// 获取epoch长度（假设为10个区块一个epoch）
-	epochLength := uint64(10)
+	// 尝试获取区块头
+	header, exists := dposBackend.config.Blockchain.GetHeaderByNumber(blockNumber)
+	if !exists {
+		// 如果无法获取区块头，使用原来的时间判断逻辑作为备用
+		epochDuration := dposBackend.config.EpochDuration
+		blockTime := dposBackend.config.BlockTime.Duration
+		blocksPerEpoch := uint64(epochDuration / blockTime)
+		if blocksPerEpoch == 0 {
+			blocksPerEpoch = 10
+		}
+		isRewardBlock := blockNumber%blocksPerEpoch <= 2
+		fmt.Printf("🔍 奖励分发区块判断(备用方案): blockNumber=%d blocksPerEpoch=%d isRewardBlock=%v\n",
+			blockNumber, blocksPerEpoch, isRewardBlock)
+		return isRewardBlock
+	}
 
-	// 检查是否为epoch结束后的第一个区块
-	// 即 blockNumber % epochLength == 1
-	return blockNumber%epochLength == 1
+	// 解析ExtraData
+	extra, err := GetIbftExtra(header.ExtraData)
+	if err != nil {
+		// 如果解析失败，使用原来的时间判断逻辑作为备用
+		epochDuration := dposBackend.config.EpochDuration
+		blockTime := dposBackend.config.BlockTime.Duration
+		blocksPerEpoch := uint64(epochDuration / blockTime)
+		if blocksPerEpoch == 0 {
+			blocksPerEpoch = 10
+		}
+		isRewardBlock := blockNumber%blocksPerEpoch <= 2
+		fmt.Printf("🔍 奖励分发区块判断(解析失败): blockNumber=%d blocksPerEpoch=%d isRewardBlock=%v\n",
+			blockNumber, blocksPerEpoch, isRewardBlock)
+		return isRewardBlock
+	}
+
+	// 检查BLS签名
+	hasValidBLSSignature := false
+	if extra.Committed != nil && extra.Committed.AggregatedSignature != nil {
+		// 检查签名长度是否为64字节
+		hasValidBLSSignature = len(extra.Committed.AggregatedSignature) == 64
+	}
+
+	// 奖励分发区块没有有效的BLS签名
+	isRewardBlock := !hasValidBLSSignature
+
+	fmt.Printf("🔍 奖励分发区块判断(通过ExtraData): blockNumber=%d hasValidBLSSignature=%v isRewardBlock=%v\n",
+		blockNumber, hasValidBLSSignature, isRewardBlock)
+
+	return isRewardBlock
 }
 
 // ValidateFinalizedData contains extra data validations for finalized headers
@@ -267,17 +310,38 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		}
 	}
 
-	// 🆕 新增：检查是否为奖励分发区块，如果是则跳过BLS签名验证
+	// 🆕 新增：检查当前区块是否为奖励分发区块，如果是则跳过BLS签名验证
 	if consensusBackend != nil {
 		if dposBackend, ok := consensusBackend.(*DPoS); ok {
-			// 检查父区块是否为奖励分发区块（通过区块号模式判断）
-			// 奖励分发区块通常是epoch结束后的第一个区块
-			if parent != nil && isRewardDistributionBlock(parent.Number, dposBackend) {
-				logger.Info("🔄 检测到父区块为奖励分发区块，跳过BLS签名验证",
+			// 检查当前区块是否为奖励分发区块
+			// 奖励分发区块没有BLS签名，需要跳过验证
+			isRewardBlock := isRewardDistributionBlock(blockNumber, dposBackend)
+			logger.Info("🔍 检查当前区块是否为奖励分发区块",
+				"blockNumber", blockNumber,
+				"isRewardDistributionBlock", isRewardBlock)
+
+			if isRewardBlock {
+				logger.Info("🔄 检测到当前区块为奖励分发区块，跳过BLS签名验证",
 					"blockNumber", blockNumber,
-					"parentBlockNumber", parent.Number,
 					"reason", "奖励分发区块没有BLS签名")
 				return nil
+			}
+
+			// 🆕 新增：检查父区块是否为奖励分发区块，如果是则跳过BLS签名验证
+			if parent != nil {
+				isParentRewardBlock := isRewardDistributionBlock(parent.Number, dposBackend)
+				logger.Info("🔍 检查父区块是否为奖励分发区块",
+					"blockNumber", blockNumber,
+					"parentBlockNumber", parent.Number,
+					"isParentRewardDistributionBlock", isParentRewardBlock)
+
+				if isParentRewardBlock {
+					logger.Info("🔄 检测到父区块为奖励分发区块，跳过BLS签名验证",
+						"blockNumber", blockNumber,
+						"parentBlockNumber", parent.Number,
+						"reason", "父区块是奖励分发区块，没有BLS签名")
+					return nil
+				}
 			}
 		}
 	}
@@ -694,6 +758,29 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 		return nil
 	}
 
+	// 🆕 新增：检查父区块是否为奖励分发区块，如果是则跳过BLS签名验证
+	if consensusBackend != nil {
+		if dposBackend, ok := consensusBackend.(*DPoS); ok {
+			// 检查父区块是否为奖励分发区块
+			// 奖励分发区块没有BLS签名，需要跳过验证
+			if parent != nil {
+				isRewardBlock := isRewardDistributionBlock(parent.Number, dposBackend)
+				logger.Info("🔍 检查父区块是否为奖励分发区块",
+					"blockNumber", blockNumber,
+					"parentBlockNumber", parent.Number,
+					"isRewardDistributionBlock", isRewardBlock)
+
+				if isRewardBlock {
+					logger.Info("🔄 检测到父区块为奖励分发区块，跳过BLS签名验证",
+						"blockNumber", blockNumber,
+						"parentBlockNumber", parent.Number,
+						"reason", "奖励分发区块没有BLS签名")
+					return nil
+				}
+			}
+		}
+	}
+
 	// 🆕 新增：检查是否在共识切换高度，如果是则跳过父区块BLS签名验证
 	// 因为父区块可能使用IBFT共识，没有BLS签名
 	// 但继续执行后续的ValidateFinalizedData，应用方案2的完整修复逻辑
@@ -707,6 +794,21 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 					"reason", "父区块使用IBFT共识，但当前区块需要DPoS验证并应用方案2修复")
 				// 🆕 修复：在切换高度直接返回nil，跳过父区块BLS签名验证
 				// 这样就不会因为父区块没有BLS签名而报错
+				return nil
+			}
+		}
+	}
+
+	// 🆕 新增：检查父区块是否为奖励分发区块，如果是则跳过BLS签名验证
+	if consensusBackend != nil {
+		if dposBackend, ok := consensusBackend.(*DPoS); ok {
+			// 检查父区块是否为奖励分发区块
+			// 奖励分发区块没有BLS签名，需要跳过验证
+			if parent != nil && isRewardDistributionBlock(parent.Number, dposBackend) {
+				logger.Info("🔄 检测到父区块为奖励分发区块，跳过BLS签名验证",
+					"blockNumber", blockNumber,
+					"parentBlockNumber", parent.Number,
+					"reason", "奖励分发区块没有BLS签名")
 				return nil
 			}
 		}

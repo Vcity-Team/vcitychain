@@ -7,6 +7,7 @@ import (
 	"math/big"
 	mrand "math/rand"
 	"testing"
+	"time"
 
 	"github.com/Vcity-Team/vcitychain/bls"
 	"github.com/Vcity-Team/vcitychain/chain"
@@ -15,6 +16,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/wallet"
 	"github.com/Vcity-Team/vcitychain/crypto"
+	"github.com/Vcity-Team/vcitychain/helper/common"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
 	"github.com/stretchr/testify/assert"
@@ -792,4 +794,89 @@ func TestCheckpointData_Copy(t *testing.T) {
 	// alter arbitrary field on copied instance
 	copied.BlockRound = 10
 	require.NotEqual(t, original.BlockRound, copied.BlockRound)
+}
+
+func TestIsRewardDistributionBlock(t *testing.T) {
+	t.Parallel()
+
+	// Create a mock DPoS backend with configuration
+	dposBackend := &DPoS{
+		config: &DPoSConfig{
+			EpochDuration: 20 * time.Second, // 20 seconds per epoch
+			BlockTime:     common.Duration{Duration: 2 * time.Second}, // 2 seconds per block
+		},
+	}
+
+	// Test cases: blockNumber -> expected result
+	testCases := []struct {
+		blockNumber uint64
+		expected    bool
+		description string
+	}{
+		{1, true, "block 1 should be reward distribution (first block after epoch 0)"},
+		{2, false, "block 2 should not be reward distribution"},
+		{3, false, "block 3 should not be reward distribution"},
+		{10, false, "block 10 should not be reward distribution"},
+		{11, true, "block 11 should be reward distribution (first block after epoch 1)"},
+		{12, false, "block 12 should not be reward distribution"},
+		{21, true, "block 21 should be reward distribution (first block after epoch 2)"},
+		{22, false, "block 22 should not be reward distribution"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			result := isRewardDistributionBlock(tc.blockNumber, dposBackend)
+			assert.Equal(t, tc.expected, result, 
+				"isRewardDistributionBlock(%d) should return %v", tc.blockNumber, tc.expected)
+		})
+	}
+
+	// Test with nil backend (should use default logic)
+	result := isRewardDistributionBlock(1, nil)
+	assert.True(t, result, "should use default logic when backend is nil")
+
+	// Test with nil config (should use default logic)
+	dposBackend.config = nil
+	result = isRewardDistributionBlock(1, dposBackend)
+	assert.True(t, result, "should use default logic when config is nil")
+}
+
+func TestValidateFinalizedData_RewardDistributionBlock(t *testing.T) {
+	t.Parallel()
+
+	const (
+		chainID = uint64(20)
+	)
+
+	// Create a mock DPoS backend
+	dposBackend := &DPoS{
+		config: &DPoSConfig{
+			EpochDuration: 20 * time.Second, // 20 seconds per epoch
+			BlockTime:     common.Duration{Duration: 2 * time.Second}, // 2 seconds per block
+		},
+	}
+
+	// Test reward distribution block (block 1) - should skip BLS signature verification
+	header := &types.Header{
+		Number: 1,
+		Hash:   types.BytesToHash(generateRandomBytes(t)),
+	}
+	parent := &types.Header{
+		Number: 0,
+		Hash:   types.BytesToHash(generateRandomBytes(t)),
+	}
+
+	// Even with missing signatures and checkpoint data, reward distribution block should pass validation
+	extra := &Extra{}
+	err := extra.ValidateFinalizedData(
+		header, parent, nil, chainID, dposBackend, signer.DomainCheckpointManager, hclog.NewNullLogger())
+	require.NoError(t, err, "reward distribution block should skip BLS signature verification")
+
+	// Test non-reward distribution block (block 2) - should fail without signatures
+	header.Number = 2
+	parent.Number = 1
+	err = extra.ValidateFinalizedData(
+		header, parent, nil, chainID, dposBackend, signer.DomainCheckpointManager, hclog.NewNullLogger())
+	require.Error(t, err, "non-reward distribution block should require signatures")
+	require.Contains(t, err.Error(), "signatures are not present")
 }
