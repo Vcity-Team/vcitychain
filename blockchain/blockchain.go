@@ -635,7 +635,7 @@ func (b *Blockchain) verifyBlock(block *types.Block) ([]*types.Receipt, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return receipts, nil
 }
 
@@ -804,14 +804,9 @@ func (b *Blockchain) executeBlockTransactions(block *types.Block) (*BlockResult,
 func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) error {
 	blockNumber := fblock.Block.Number()
 	defer func() {
-		b.logger.Debug("🔓 WriteFullBlock 准备释放写锁", "blockNumber", blockNumber, "source", source)
 		b.writeLock.Unlock()
-		b.logger.Debug("✅ WriteFullBlock 成功释放写锁", "blockNumber", blockNumber, "source", source)
 	}()
-	b.logger.Debug("🔒 WriteFullBlock 开始获取写锁", "blockNumber", blockNumber, "source", source)
 	b.writeLock.Lock()
-	b.logger.Debug("✅ WriteFullBlock 成功获取写锁", "blockNumber", blockNumber, "source", source)
-
 
 	block := fblock.Block
 
@@ -883,8 +878,7 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 	}
 
 	b.logger.Info("新区块写入", logArgs...)
-	
-	b.logger.Debug("🎉 WriteFullBlock 函数即将完成", "blockNumber", blockNumber, "source", source)
+
 	return nil
 }
 

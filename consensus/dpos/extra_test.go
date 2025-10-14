@@ -796,51 +796,6 @@ func TestCheckpointData_Copy(t *testing.T) {
 	require.NotEqual(t, original.BlockRound, copied.BlockRound)
 }
 
-func TestIsRewardDistributionBlock(t *testing.T) {
-	t.Parallel()
-
-	// Create a mock DPoS backend with configuration
-	dposBackend := &DPoS{
-		config: &DPoSConfig{
-			EpochDuration: 20 * time.Second, // 20 seconds per epoch
-			BlockTime:     common.Duration{Duration: 2 * time.Second}, // 2 seconds per block
-		},
-	}
-
-	// Test cases: blockNumber -> expected result
-	testCases := []struct {
-		blockNumber uint64
-		expected    bool
-		description string
-	}{
-		{1, true, "block 1 should be reward distribution (first block after epoch 0)"},
-		{2, false, "block 2 should not be reward distribution"},
-		{3, false, "block 3 should not be reward distribution"},
-		{10, false, "block 10 should not be reward distribution"},
-		{11, true, "block 11 should be reward distribution (first block after epoch 1)"},
-		{12, false, "block 12 should not be reward distribution"},
-		{21, true, "block 21 should be reward distribution (first block after epoch 2)"},
-		{22, false, "block 22 should not be reward distribution"},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.description, func(t *testing.T) {
-			result := isRewardDistributionBlock(tc.blockNumber, dposBackend)
-			assert.Equal(t, tc.expected, result, 
-				"isRewardDistributionBlock(%d) should return %v", tc.blockNumber, tc.expected)
-		})
-	}
-
-	// Test with nil backend (should use default logic)
-	result := isRewardDistributionBlock(1, nil)
-	assert.True(t, result, "should use default logic when backend is nil")
-
-	// Test with nil config (should use default logic)
-	dposBackend.config = nil
-	result = isRewardDistributionBlock(1, dposBackend)
-	assert.True(t, result, "should use default logic when config is nil")
-}
-
 func TestValidateFinalizedData_RewardDistributionBlock(t *testing.T) {
 	t.Parallel()
 
@@ -851,7 +806,7 @@ func TestValidateFinalizedData_RewardDistributionBlock(t *testing.T) {
 	// Create a mock DPoS backend
 	dposBackend := &DPoS{
 		config: &DPoSConfig{
-			EpochDuration: 20 * time.Second, // 20 seconds per epoch
+			EpochDuration: 20 * time.Second,                           // 20 seconds per epoch
 			BlockTime:     common.Duration{Duration: 2 * time.Second}, // 2 seconds per block
 		},
 	}

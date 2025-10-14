@@ -11623,6 +11623,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		CurrentValidatorsHash: currentValidatorsHash,
 		NextValidatorsHash:    currentValidatorsHash,
 		EventRoot:             types.Hash{}, // 暂时为空
+		IsRewardBlock:         true,         // 🆕 标记为奖励分发区块
 	}
 
 	// 创建Extra对象

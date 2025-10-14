@@ -222,68 +222,6 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 	return nil
 }
 
-// isRewardDistributionBlock 检查指定区块号是否为奖励分发区块
-func isRewardDistributionBlock(blockNumber uint64, dposBackend *DPoS) bool {
-	// 🆕 修复：通过检查区块的ExtraData来判断是否为奖励分发区块
-	// 奖励分发区块的特征：
-	// 1. 没有BLS签名（Committed.AggregatedSignature为空或长度不为64字节）
-	// 2. 没有交易（txs=0）
-	// 3. 是在executeBatchStateUpdate中创建的
-
-	if dposBackend == nil || dposBackend.config == nil {
-		// 如果无法获取配置，使用默认逻辑
-		epochLength := uint64(10)
-		return blockNumber%epochLength == 1
-	}
-
-	// 尝试获取区块头
-	header, exists := dposBackend.config.Blockchain.GetHeaderByNumber(blockNumber)
-	if !exists {
-		// 如果无法获取区块头，使用原来的时间判断逻辑作为备用
-		epochDuration := dposBackend.config.EpochDuration
-		blockTime := dposBackend.config.BlockTime.Duration
-		blocksPerEpoch := uint64(epochDuration / blockTime)
-		if blocksPerEpoch == 0 {
-			blocksPerEpoch = 10
-		}
-		isRewardBlock := blockNumber%blocksPerEpoch <= 2
-		fmt.Printf("🔍 奖励分发区块判断(备用方案): blockNumber=%d blocksPerEpoch=%d isRewardBlock=%v\n",
-			blockNumber, blocksPerEpoch, isRewardBlock)
-		return isRewardBlock
-	}
-
-	// 解析ExtraData
-	extra, err := GetIbftExtra(header.ExtraData)
-	if err != nil {
-		// 如果解析失败，使用原来的时间判断逻辑作为备用
-		epochDuration := dposBackend.config.EpochDuration
-		blockTime := dposBackend.config.BlockTime.Duration
-		blocksPerEpoch := uint64(epochDuration / blockTime)
-		if blocksPerEpoch == 0 {
-			blocksPerEpoch = 10
-		}
-		isRewardBlock := blockNumber%blocksPerEpoch <= 2
-		fmt.Printf("🔍 奖励分发区块判断(解析失败): blockNumber=%d blocksPerEpoch=%d isRewardBlock=%v\n",
-			blockNumber, blocksPerEpoch, isRewardBlock)
-		return isRewardBlock
-	}
-
-	// 检查BLS签名
-	hasValidBLSSignature := false
-	if extra.Committed != nil && extra.Committed.AggregatedSignature != nil {
-		// 检查签名长度是否为64字节
-		hasValidBLSSignature = len(extra.Committed.AggregatedSignature) == 64
-	}
-
-	// 奖励分发区块没有有效的BLS签名
-	isRewardBlock := !hasValidBLSSignature
-
-	fmt.Printf("🔍 奖励分发区块判断(通过ExtraData): blockNumber=%d hasValidBLSSignature=%v isRewardBlock=%v\n",
-		blockNumber, hasValidBLSSignature, isRewardBlock)
-
-	return isRewardBlock
-}
-
 // ValidateFinalizedData contains extra data validations for finalized headers
 func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header, parents []*types.Header,
 	chainID uint64, consensusBackend dposBackend, domain []byte, logger hclog.Logger) error {
@@ -312,36 +250,41 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 
 	// 🆕 新增：检查当前区块是否为奖励分发区块，如果是则跳过BLS签名验证
 	if consensusBackend != nil {
-		if dposBackend, ok := consensusBackend.(*DPoS); ok {
-			// 检查当前区块是否为奖励分发区块
-			// 奖励分发区块没有BLS签名，需要跳过验证
-			isRewardBlock := isRewardDistributionBlock(blockNumber, dposBackend)
-			logger.Info("🔍 检查当前区块是否为奖励分发区块",
+		// 检查当前区块是否为奖励分发区块
+		// 奖励分发区块没有BLS签名，需要跳过验证
+		isRewardBlock := false
+		if extra, err := GetIbftExtra(header.ExtraData); err == nil && extra.Checkpoint != nil {
+			isRewardBlock = extra.Checkpoint.IsRewardBlock
+		}
+		logger.Info("🔍 检查当前区块是否为奖励分发区块",
+			"blockNumber", blockNumber,
+			"isRewardDistributionBlock", isRewardBlock)
+
+		if isRewardBlock {
+			logger.Info("🔄 检测到当前区块为奖励分发区块，跳过BLS签名验证",
 				"blockNumber", blockNumber,
-				"isRewardDistributionBlock", isRewardBlock)
+				"reason", "奖励分发区块没有BLS签名")
+			return nil
+		}
 
-			if isRewardBlock {
-				logger.Info("🔄 检测到当前区块为奖励分发区块，跳过BLS签名验证",
-					"blockNumber", blockNumber,
-					"reason", "奖励分发区块没有BLS签名")
-				return nil
+		// 🆕 新增：检查父区块是否为奖励分发区块，如果是则跳过BLS签名验证
+		if parent != nil {
+			isParentRewardBlock := false
+			// 解析父区块的ExtraData来检查是否为奖励分发区块
+			if parentExtra, err := GetIbftExtra(parent.ExtraData); err == nil && parentExtra.Checkpoint != nil {
+				isParentRewardBlock = parentExtra.Checkpoint.IsRewardBlock
 			}
+			logger.Info("🔍 检查父区块是否为奖励分发区块",
+				"blockNumber", blockNumber,
+				"parentBlockNumber", parent.Number,
+				"isParentRewardDistributionBlock", isParentRewardBlock)
 
-			// 🆕 新增：检查父区块是否为奖励分发区块，如果是则跳过BLS签名验证
-			if parent != nil {
-				isParentRewardBlock := isRewardDistributionBlock(parent.Number, dposBackend)
-				logger.Info("🔍 检查父区块是否为奖励分发区块",
+			if isParentRewardBlock {
+				logger.Info("🔄 检测到父区块为奖励分发区块，跳过BLS签名验证",
 					"blockNumber", blockNumber,
 					"parentBlockNumber", parent.Number,
-					"isParentRewardDistributionBlock", isParentRewardBlock)
-
-				if isParentRewardBlock {
-					logger.Info("🔄 检测到父区块为奖励分发区块，跳过BLS签名验证",
-						"blockNumber", blockNumber,
-						"parentBlockNumber", parent.Number,
-						"reason", "父区块是奖励分发区块，没有BLS签名")
-					return nil
-				}
+					"reason", "父区块是奖励分发区块，没有BLS签名")
+				return nil
 			}
 		}
 	}
@@ -760,23 +703,25 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 
 	// 🆕 新增：检查父区块是否为奖励分发区块，如果是则跳过BLS签名验证
 	if consensusBackend != nil {
-		if dposBackend, ok := consensusBackend.(*DPoS); ok {
-			// 检查父区块是否为奖励分发区块
-			// 奖励分发区块没有BLS签名，需要跳过验证
-			if parent != nil {
-				isRewardBlock := isRewardDistributionBlock(parent.Number, dposBackend)
-				logger.Info("🔍 检查父区块是否为奖励分发区块",
+		// 检查父区块是否为奖励分发区块
+		// 奖励分发区块没有BLS签名，需要跳过验证
+		if parent != nil {
+			isRewardBlock := false
+			// 解析父区块的ExtraData来检查是否为奖励分发区块
+			if parentExtra, err := GetIbftExtra(parent.ExtraData); err == nil && parentExtra.Checkpoint != nil {
+				isRewardBlock = parentExtra.Checkpoint.IsRewardBlock
+			}
+			logger.Info("🔍 检查父区块是否为奖励分发区块",
+				"blockNumber", blockNumber,
+				"parentBlockNumber", parent.Number,
+				"isRewardDistributionBlock", isRewardBlock)
+
+			if isRewardBlock {
+				logger.Info("🔄 检测到父区块为奖励分发区块，跳过BLS签名验证",
 					"blockNumber", blockNumber,
 					"parentBlockNumber", parent.Number,
-					"isRewardDistributionBlock", isRewardBlock)
-
-				if isRewardBlock {
-					logger.Info("🔄 检测到父区块为奖励分发区块，跳过BLS签名验证",
-						"blockNumber", blockNumber,
-						"parentBlockNumber", parent.Number,
-						"reason", "奖励分发区块没有BLS签名")
-					return nil
-				}
+					"reason", "奖励分发区块没有BLS签名")
+				return nil
 			}
 		}
 	}
@@ -801,16 +746,21 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 
 	// 🆕 新增：检查父区块是否为奖励分发区块，如果是则跳过BLS签名验证
 	if consensusBackend != nil {
-		if dposBackend, ok := consensusBackend.(*DPoS); ok {
-			// 检查父区块是否为奖励分发区块
-			// 奖励分发区块没有BLS签名，需要跳过验证
-			if parent != nil && isRewardDistributionBlock(parent.Number, dposBackend) {
-				logger.Info("🔄 检测到父区块为奖励分发区块，跳过BLS签名验证",
-					"blockNumber", blockNumber,
-					"parentBlockNumber", parent.Number,
-					"reason", "奖励分发区块没有BLS签名")
-				return nil
+		// 检查父区块是否为奖励分发区块
+		// 奖励分发区块没有BLS签名，需要跳过验证
+		isParentRewardBlock := false
+		if parent != nil {
+			// 解析父区块的ExtraData来检查是否为奖励分发区块
+			if parentExtra, err := GetIbftExtra(parent.ExtraData); err == nil && parentExtra.Checkpoint != nil {
+				isParentRewardBlock = parentExtra.Checkpoint.IsRewardBlock
 			}
+		}
+		if parent != nil && isParentRewardBlock {
+			logger.Info("🔄 检测到父区块为奖励分发区块，跳过BLS签名验证",
+				"blockNumber", blockNumber,
+				"parentBlockNumber", parent.Number,
+				"reason", "奖励分发区块没有BLS签名")
+			return nil
 		}
 	}
 
@@ -1777,6 +1727,7 @@ type CheckpointData struct {
 	CurrentValidatorsHash types.Hash
 	NextValidatorsHash    types.Hash
 	EventRoot             types.Hash
+	IsRewardBlock         bool // 🆕 新增：标识是否为奖励分发区块
 }
 
 // MarshalRLPWith defines the marshal function implementation for CheckpointData
@@ -1795,6 +1746,8 @@ func (c *CheckpointData) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 	vv.Set(ar.NewBytes(c.NextValidatorsHash.Bytes()))
 	// EventRoot
 	vv.Set(ar.NewBytes(c.EventRoot.Bytes()))
+	// IsRewardBlock
+	vv.Set(ar.NewBool(c.IsRewardBlock))
 
 	return vv
 }
@@ -1806,10 +1759,10 @@ func (c *CheckpointData) UnmarshalRLPWith(v *fastrlp.Value) error {
 		return fmt.Errorf("array type expected for CheckpointData struct")
 	}
 
-	// there should be exactly 5 elements:
-	// BlockRound, EpochNumber, CurrentValidatorsHash, NextValidatorsHash, EventRoot
-	if num := len(vals); num != 5 {
-		return fmt.Errorf("incorrect elements count to decode CheckpointData, expected 5 but found %d", num)
+	// there should be exactly 6 elements:
+	// BlockRound, EpochNumber, CurrentValidatorsHash, NextValidatorsHash, EventRoot, IsRewardBlock
+	if num := len(vals); num != 6 {
+		return fmt.Errorf("incorrect elements count to decode CheckpointData, expected 6 but found %d", num)
 	}
 
 	// BlockRound
@@ -1847,6 +1800,12 @@ func (c *CheckpointData) UnmarshalRLPWith(v *fastrlp.Value) error {
 	}
 
 	c.EventRoot = types.BytesToHash(eventRootRaw)
+
+	// IsRewardBlock
+	c.IsRewardBlock, err = vals[5].GetBool()
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
