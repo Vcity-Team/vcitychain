@@ -3219,7 +3219,7 @@ func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift tim
 
 func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 	// For DPoS, we need to update round state when receiving new blocks
-	d.logger.Info("🔄 DPoS ProcessHeaders被调用", "count", len(headers), "runtimeIsNil", d.runtime == nil)
+	d.logger.Debug("🔄 DPoS ProcessHeaders被调用", "count", len(headers), "runtimeIsNil", d.runtime == nil)
 
 	// Update round state for each new block
 	for _, header := range headers {
@@ -3268,7 +3268,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 
 		// 🆕 在区块同步时存储验证者集合到历史数据库
 		if d.state != nil && d.state.StakeStore != nil {
-			d.logger.Info("🔍 区块同步时存储验证者集合到历史数据库",
+			d.logger.Debug("🔍 区块同步时存储验证者集合到历史数据库",
 				"blockNumber", header.Number,
 				"blockHash", header.Hash.String()[:16])
 
@@ -3292,7 +3292,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 						if err := dbTx.Commit(); err != nil {
 							d.logger.Warn("⚠️ 提交事务失败", "blockNumber", header.Number, "error", err)
 						} else {
-							d.logger.Info("✅ 区块同步时验证者集合已存储到历史数据库",
+							d.logger.Debug("✅ 区块同步时验证者集合已存储到历史数据库",
 								"blockNumber", header.Number,
 								"count", len(validators))
 						}
@@ -3315,7 +3315,7 @@ func (d *DPoS) updateRoundState(header *types.Header) {
 
 	// 更新轮次状态 - 只有接收其他节点的区块时才更新轮次
 	// 如果是自己生产的区块，轮次已经在produceBlock中更新过了
-	d.logger.Info("🔍 检查区块生产者",
+	d.logger.Debug("🔍 检查区块生产者",
 		"blockNumber", header.Number,
 		"blockMiner", blockMiner.String(),
 		"keyAddr", keyAddr.String(),
@@ -3357,7 +3357,7 @@ func (d *DPoS) updateRoundState(header *types.Header) {
 		}
 	} else {
 		// 自己生产的区块，轮次已经在produceBlock中更新过了
-		d.logger.Info("ℹ️ 处理自己生产的区块，轮次已在produceBlock中更新",
+		d.logger.Debug("ℹ️ 处理自己生产的区块，轮次已在produceBlock中更新",
 			"blockNumber", header.Number,
 			"currentRound", func() uint64 {
 				if d.runtime != nil {
@@ -5469,7 +5469,7 @@ func (d *DPoS) processBlockVotes(block *types.FullBlock) error {
 
 	// 获取区块中的所有交易
 	transactions := block.Block.Transactions
-	d.logger.Info("📋 区块交易数量", "blockNumber", block.Block.Number(), "txCount", len(transactions))
+	d.logger.Debug("📋 区块交易数量", "blockNumber", block.Block.Number(), "txCount", len(transactions))
 
 	// 处理投票交易
 	voteCount := 0
@@ -11387,8 +11387,8 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		d.logger.Warn("⚠️ 重新计算后哈希仍为零，尝试从区块链获取最新区块头")
 		if latestHeader, exists := d.config.Blockchain.GetHeaderByNumber(currentHeader.Number); exists {
 			if latestHeader.Hash != types.ZeroHash {
-				d.logger.Info("🔧 从区块链获取到有效区块头", 
-					"blockNumber", latestHeader.Number, 
+				d.logger.Info("🔧 从区块链获取到有效区块头",
+					"blockNumber", latestHeader.Number,
 					"blockHash", latestHeader.Hash.String())
 				currentHeader = latestHeader
 			}
@@ -11396,16 +11396,16 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 	}
 
 	// 🆕 强制获取最新区块头：确保使用最新的区块头作为父区块
-	d.logger.Info("🔍 强制获取最新区块头作为父区块", 
+	d.logger.Info("🔍 强制获取最新区块头作为父区块",
 		"currentBlockNumber", currentHeader.Number,
 		"currentBlockHash", currentHeader.Hash.String())
-	
+
 	// 尝试获取比当前区块号更高的区块头，确保使用最新的
 	for i := currentHeader.Number; i <= currentHeader.Number+2; i++ {
 		if latestHeader, exists := d.config.Blockchain.GetHeaderByNumber(i); exists {
 			if latestHeader.Hash != types.ZeroHash {
-				d.logger.Info("🔧 找到更新的区块头", 
-					"blockNumber", latestHeader.Number, 
+				d.logger.Info("🔧 找到更新的区块头",
+					"blockNumber", latestHeader.Number,
 					"blockHash", latestHeader.Hash.String())
 				currentHeader = latestHeader
 				break
@@ -11577,12 +11577,12 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 	d.logger.Info("🔍 强制刷新区块链状态，获取最新区块头")
 	finalCurrentHeader := d.config.Blockchain.Header()
 	if finalCurrentHeader != nil && finalCurrentHeader.Hash != types.ZeroHash {
-		d.logger.Info("🔧 使用最新的区块头作为父区块", 
+		d.logger.Info("🔧 使用最新的区块头作为父区块",
 			"blockNumber", finalCurrentHeader.Number,
 			"blockHash", finalCurrentHeader.Hash.String())
 		currentHeader = finalCurrentHeader
 	} else {
-		d.logger.Warn("⚠️ 无法获取最新区块头，使用当前区块头", 
+		d.logger.Warn("⚠️ 无法获取最新区块头，使用当前区块头",
 			"blockNumber", currentHeader.Number,
 			"blockHash", currentHeader.Hash.String())
 	}
