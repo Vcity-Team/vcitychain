@@ -2169,14 +2169,15 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	// 使用与区块头相同的CheckpointData对象
 	checkpoint := extra.Checkpoint
 
-	// 计算checkpoint哈希，使用固定的哈希值避免循环依赖
-	// 使用区块号作为哈希的基础，确保所有节点计算相同的checkpointHash
-	fixedBlockHash := types.BytesToHash([]byte(fmt.Sprintf("block_%d", block.Block.Number())))
+	// 计算checkpoint哈希，使用真实的区块哈希
+	// 确保区块哈希已经计算完成
+	block.Block.Header.ComputeHash()
+	realBlockHash := block.Block.Hash()
 
 	r.logger.Debug("🔍 生产时开始计算checkpoint哈希",
 		"blockNumber", block.Block.Number(),
 		"chainID", r.config.blockchain.GetChainID(),
-		"fixedBlockHash", fixedBlockHash.String(),
+		"realBlockHash", realBlockHash.String(),
 		"currentValidatorsHash", checkpoint.CurrentValidatorsHash.String(),
 		"nextValidatorsHash", checkpoint.NextValidatorsHash.String(),
 		"blockRound", checkpoint.BlockRound,
@@ -2186,7 +2187,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	r.logger.Debug("🔍 生产时CheckpointData详细信息",
 		"blockNumber", block.Block.Number(),
 		"chainID", r.config.blockchain.GetChainID(),
-		"blockHash", fixedBlockHash.String(),
+		"blockHash", realBlockHash.String(),
 		"blockRound", checkpoint.BlockRound,
 		"epochNumber", checkpoint.EpochNumber,
 		"eventRoot", checkpoint.EventRoot.String(),
@@ -2204,7 +2205,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"isActive", validator.IsActive)
 	}
 
-	checkpointHash, err := checkpoint.Hash(r.config.blockchain.GetChainID(), block.Block.Number(), fixedBlockHash)
+	checkpointHash, err := checkpoint.Hash(r.config.blockchain.GetChainID(), block.Block.Number(), realBlockHash)
 	if err != nil {
 		r.logger.Error("failed to calculate checkpoint hash", "error", err)
 		return nil, fmt.Errorf("failed to calculate checkpoint hash: %w", err)
@@ -2235,7 +2236,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		"blockNumber", block.Block.Number(),
 		"currentRound", r.currentRound,
 		"checkpointHash", checkpointHash.String(),
-		"fixedBlockHash", fixedBlockHash.String())
+		"realBlockHash", realBlockHash.String())
 
 	// 实现真实的签名收集机制，支持重试
 	var signatures [][]byte
@@ -2448,6 +2449,15 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		if err != nil {
 			r.logger.Error("❌ 签名聚合失败", "error", err)
 			return nil, fmt.Errorf("failed to aggregate signatures: %w", err)
+		}
+
+		// 检查聚合签名长度
+		if len(aggregatedSignature) != 64 {
+			r.logger.Error("❌ 聚合签名长度不正确",
+				"expectedLength", 64,
+				"actualLength", len(aggregatedSignature),
+				"aggregatedSignatureBytes", fmt.Sprintf("%x", aggregatedSignature))
+			return nil, fmt.Errorf("aggregated signature length is %d, expected 64", len(aggregatedSignature))
 		}
 
 		r.logger.Debug("✅ 签名聚合成功",
@@ -11448,9 +11458,23 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 	}
 
 	// 创建CheckpointData
+	// 使用runtime的currentRound，确保与普通区块一致
+	var blockRound uint64 = 0
+	if d.runtime != nil {
+		d.runtime.lock.RLock()
+		blockRound = d.runtime.currentRound
+		d.runtime.lock.RUnlock()
+	}
+
+	d.logger.Info("🔍 奖励分发区块使用轮次信息",
+		"blockNumber", currentHeader.Number+1,
+		"d.currentRound", d.currentRound,
+		"runtime.currentRound", blockRound,
+		"说明", "使用runtime的currentRound确保与普通区块一致")
+
 	checkpoint := &CheckpointData{
-		BlockRound:            1, // 奖励分发区块使用固定轮次
-		EpochNumber:           1, // 奖励分发区块使用固定epoch
+		BlockRound:            blockRound, // 使用runtime的当前轮次，确保一致性
+		EpochNumber:           1,          // 奖励分发区块使用固定epoch
 		CurrentValidatorsHash: currentValidatorsHash,
 		NextValidatorsHash:    currentValidatorsHash,
 		EventRoot:             types.Hash{}, // 暂时为空
@@ -11461,19 +11485,6 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		Committed:  &Signature{}, // 添加空的Committed签名
 		Checkpoint: checkpoint,
 	}
-
-	// 计算checkpointHash用于BLS签名
-	checkpointHash, err := checkpoint.Hash(d.blockchain.GetChainID(), currentHeader.Number+1, currentHeader.Hash)
-	if err != nil {
-		d.logger.Error("❌ 计算checkpointHash失败", "error", err)
-		return fmt.Errorf("failed to calculate checkpoint hash: %w", err)
-	}
-
-	// 🆕 添加奖励分发区块的checkpointHash打印
-	d.logger.Info("🔍 ===== 奖励分发区块CheckpointHash计算结果 =====",
-		"blockNumber", currentHeader.Number+1,
-		"checkpointHash", checkpointHash.String(),
-		"说明", "奖励分发区块最终计算出的checkpointHash")
 
 	// 使用当前区块号+1，避免重复区块问题
 	newHeader := &types.Header{
@@ -11495,6 +11506,29 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		Hash:         types.ZeroHash, // 将在WriteFullBlock中计算
 	}
 
+	// 先计算区块哈希
+	newHeader.ComputeHash()
+	realBlockHash := newHeader.Hash
+
+	// 使用真实的区块哈希计算checkpointHash用于BLS签名
+	checkpointHash, err := checkpoint.Hash(d.blockchain.GetChainID(), newHeader.Number, realBlockHash)
+	if err != nil {
+		d.logger.Error("❌ 计算checkpointHash失败", "error", err)
+		return fmt.Errorf("failed to calculate checkpoint hash: %w", err)
+	}
+
+	// 🆕 添加奖励分发区块的checkpointHash打印
+	d.logger.Info("🔍 ===== 奖励分发区块CheckpointHash计算结果 =====",
+		"blockNumber", newHeader.Number,
+		"checkpointHash", checkpointHash.String(),
+		"说明", "奖励分发区块最终计算出的checkpointHash")
+
+	// 🆕 添加生产时CheckpointHash对比日志
+	d.logger.Info("🔍 ===== 生产时CheckpointHash计算结果 =====",
+		"blockNumber", newHeader.Number,
+		"checkpointHash", checkpointHash.String(),
+		"说明", "生产时最终计算出的checkpointHash")
+
 	d.logger.Info("✅ 新区块头创建成功",
 		"blockNumber", newHeader.Number,
 		"stateRoot", newHeader.StateRoot.String(),
@@ -11507,9 +11541,17 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		Uncles:       []*types.Header{},      // 空uncle列表
 	}
 
-	// 🆕 手动计算区块哈希（修复全零哈希问题）
+	// 确保区块哈希与之前计算的一致
 	newBlock.Header.ComputeHash()
 	blockHash := newBlock.Hash()
+
+	// 验证区块哈希是否与之前计算的一致
+	if blockHash != realBlockHash {
+		d.logger.Warn("⚠️ 区块哈希不一致",
+			"blockNumber", newBlock.Number(),
+			"expectedHash", realBlockHash.String(),
+			"actualHash", blockHash.String())
+	}
 
 	d.logger.Info("✅ 区块哈希计算完成",
 		"blockNumber", newBlock.Number(),
@@ -11557,10 +11599,6 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		return fmt.Errorf("failed to write new state to blockchain: %w", err)
 	}
 
-	d.logger.Info("✅ ========== 新状态已写入区块链 ==========",
-		"newStateRoot", fmt.Sprintf("%x", newStateRoot),
-		"blockNumber", newBlock.Number())
-
 	// 🆕 分发后检查所有验证者余额
 	d.logger.Debug("🔍 ========== 分发后余额检查 ==========")
 	afterBalances := make(map[types.Address]*big.Int)
@@ -11599,12 +11637,6 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 				"changeMatchesReward", balanceChange.Cmp(reward) == 0)
 		}
 	}
-
-	d.logger.Info("✅ ========== 直接状态更新完成 ==========",
-		"successCount", successCount,
-		"recipientCount", len(rewards),
-		"totalReward", totalReward.String(),
-		"note", "状态已直接更新到主状态树")
 
 	// 🆕 权重同步：奖励分发不应该改变权重，只有真实vote交易才改变权重
 	d.logger.Debug("🔄 跳过权重同步：奖励分发不影响验证者权重")
@@ -11991,11 +12023,6 @@ func (d *DPoS) onEpochEnd(epochNumber uint64) error {
 			"error", err)
 		return err
 	}
-
-	d.logger.Info("✅ ========== Epoch结束回调完成 ==========",
-		"currentEpoch", epochNumber,
-		"previousEpoch", previousEpoch,
-		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
 
 	return nil
 }
