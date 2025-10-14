@@ -362,71 +362,44 @@ func (s *StakeStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx) (val
 
 // setDelegatesAtBlock 保存指定区块的受托人集合到数据库
 func (s *StakeStore) setDelegatesAtBlock(blockNumber uint64, delegates validator.AccountSet, dbTx *bolt.Tx) error {
-	fmt.Printf("🔍 ===== StakeStore.setDelegatesAtBlock 开始 ===== blockNumber=%d delegatesCount=%d dbTxIsNil=%t\n",
-		blockNumber, len(delegates), dbTx == nil)
-
 	// 检查参数
 	if dbTx == nil {
-		fmt.Printf("❌ 数据库事务为空 blockNumber=%d\n", blockNumber)
 		return fmt.Errorf("database transaction is nil")
 	}
 
 	if len(delegates) == 0 {
-		fmt.Printf("⚠️ 验证者集合为空 blockNumber=%d\n", blockNumber)
 		return fmt.Errorf("delegates set is empty")
 	}
 
-	// 打印验证者详细信息
-	for i, delegate := range delegates {
-		fmt.Printf("🔍 准备存储的验证者详情 blockNumber=%d index=%d address=%s votingPower=%s isActive=%t\n",
-			blockNumber, i, delegate.Address.String(), delegate.VotingPower.String(), delegate.IsActive)
-	}
-
 	// 创建或获取桶
-	fmt.Printf("🔍 创建或获取DelegatesAtBlock桶 blockNumber=%d\n", blockNumber)
 	bucket, err := dbTx.CreateBucketIfNotExists([]byte("DelegatesAtBlock"))
 	if err != nil {
-		fmt.Printf("❌ 创建桶失败 blockNumber=%d error=%v\n", blockNumber, err)
 		return fmt.Errorf("failed to create delegates at block bucket: %w", err)
 	}
-	fmt.Printf("✅ 桶创建成功 blockNumber=%d\n", blockNumber)
 
 	// 序列化验证者集合
-	fmt.Printf("🔍 开始序列化验证者集合 blockNumber=%d count=%d\n", blockNumber, len(delegates))
 	data, err := json.Marshal(delegates)
 	if err != nil {
-		fmt.Printf("❌ 序列化失败 blockNumber=%d error=%v\n", blockNumber, err)
 		return fmt.Errorf("failed to marshal delegates: %w", err)
 	}
-	fmt.Printf("✅ 序列化成功 blockNumber=%d dataSize=%d\n", blockNumber, len(data))
 
 	// 创建键
 	key := make([]byte, 8)
 	binary.BigEndian.PutUint64(key, blockNumber)
-	fmt.Printf("🔍 准备存储数据 blockNumber=%d key=%x dataSize=%d\n", blockNumber, key, len(data))
 
 	// 存储数据
 	if err := bucket.Put(key, data); err != nil {
-		fmt.Printf("❌ 存储数据失败 blockNumber=%d error=%v\n", blockNumber, err)
 		return fmt.Errorf("failed to save delegates: %w", err)
 	}
-	fmt.Printf("✅ 数据存储成功 blockNumber=%d\n", blockNumber)
 
 	// 验证存储是否成功
 	storedData := bucket.Get(key)
 	if storedData == nil {
-		fmt.Printf("❌ 存储验证失败：数据不存在 blockNumber=%d\n", blockNumber)
 		return fmt.Errorf("stored data not found after save")
 	}
 	if len(storedData) != len(data) {
-		fmt.Printf("❌ 存储验证失败：数据大小不匹配 blockNumber=%d expectedSize=%d actualSize=%d\n",
-			blockNumber, len(data), len(storedData))
 		return fmt.Errorf("stored data size mismatch")
 	}
-	fmt.Printf("✅ 存储验证成功 blockNumber=%d storedSize=%d\n", blockNumber, len(storedData))
-
-	fmt.Printf("✅ ===== StakeStore.setDelegatesAtBlock 完成 ===== blockNumber=%d delegatesCount=%d\n",
-		blockNumber, len(delegates))
 
 	return nil
 }

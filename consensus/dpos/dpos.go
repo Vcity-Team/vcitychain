@@ -513,8 +513,8 @@ func (r *dposRuntime) logOnce(key string, level string, message string, args ...
 
 	now := time.Now()
 	if lastTime, exists := r.lastLogTime[key]; exists {
-		// 如果5秒内已经记录过相同key的日志，则跳过
-		if now.Sub(lastTime) < 5*time.Second {
+		// 如果10秒内已经记录过相同key的日志，则跳过
+		if now.Sub(lastTime) < 10*time.Second {
 			return
 		}
 	}
@@ -605,10 +605,14 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 		}
 
 		// 创建DPoS验证者（BLS公钥延迟获取）
+		// 🆕 创世验证者使用固定权重1000 VCITY，不受余额影响
+		fixedVotingPower := new(big.Int)
+		fixedVotingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
+
 		delegate := &validator.ValidatorMetadata{
 			Address:     address,
-			VotingPower: balance,
-			BlsKey:      nil, // BLS公钥将在需要时获取
+			VotingPower: fixedVotingPower, // 使用固定权重，不依赖余额
+			BlsKey:      nil,              // BLS公钥将在需要时获取
 			IsActive:    true,
 		}
 
@@ -618,8 +622,9 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 
 		r.logger.Info("✅ DPoS验证者创建成功（BLS公钥延迟获取）",
 			"address", address.String(),
-			"balance", balance.String(),
-			"validatorIndex", validValidatorCount)
+			"votingPower", fixedVotingPower.String(),
+			"validatorIndex", validValidatorCount,
+			"note", "创世验证者使用固定权重")
 	}
 
 	// 关键日志：DPoS验证者筛选结果汇总
@@ -675,6 +680,31 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 					}
 					return addresses
 				}())
+
+			// 🆕 立即将创世验证者的固定权重保存到数据库
+			for _, delegate := range r.delegates {
+				// 创建DelegateInfo并保存到数据库
+				delegateInfo := &DelegateInfo{
+					Address:        delegate.Address,
+					VotingPower:    new(big.Int).Set(delegate.VotingPower), // 使用固定权重1000 VCITY
+					TotalVotes:     new(big.Int).Set(delegate.VotingPower), // 使用固定权重1000 VCITY
+					ProducedBlocks: 0,
+					MissedBlocks:   0,
+					LastBlockTime:  0,
+					IsActive:       delegate.IsActive,
+				}
+
+				// 保存到数据库
+				if err := dposInstance.state.StakeStore.setDelegateInfo(delegate.Address, delegateInfo, nil); err != nil {
+					r.logger.Error("❌ 保存创世验证者权重到数据库失败",
+						"address", delegate.Address.String(),
+						"error", err)
+				} else {
+					r.logger.Info("✅ 创世验证者权重已保存到数据库",
+						"address", delegate.Address.String(),
+						"votingPower", delegate.VotingPower.String())
+				}
+			}
 		}
 	}
 
@@ -985,7 +1015,7 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 					}
 				} else {
 					// 不是当前委托者，静默跳过（避免刷屏）
-					r.logger.Debug("⏭️ 不是当前委托者，跳过区块生产",
+					r.logOnce("not_current_delegate_debug", "debug", "⏭️ 不是当前委托者，跳过区块生产",
 						"currentDelegate", currentDelegate.String(),
 						"keyAddr", keyAddr.String(),
 						"currentDelegateIndex", r.currentDelegateIndex)
@@ -4008,10 +4038,14 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 		}
 
 		// 创建DPoS验证者（BLS公钥延迟获取）
+		// 🆕 创世验证者使用固定权重1000 VCITY，不受余额影响
+		fixedVotingPower := new(big.Int)
+		fixedVotingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
+
 		delegate := &validator.ValidatorMetadata{
 			Address:     address,
-			VotingPower: balance,
-			BlsKey:      nil, // BLS公钥将在需要时获取
+			VotingPower: fixedVotingPower, // 使用固定权重，不依赖余额
+			BlsKey:      nil,              // BLS公钥将在需要时获取
 			IsActive:    true,
 		}
 
@@ -4021,8 +4055,9 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 
 		d.logger.Info("✅ DPoS验证者创建成功（BLS公钥延迟获取）",
 			"address", address.String(),
-			"balance", balance.String(),
-			"validatorIndex", validValidatorCount)
+			"votingPower", fixedVotingPower.String(),
+			"validatorIndex", validValidatorCount,
+			"note", "创世验证者使用固定权重")
 	}
 
 	// 关键日志：DPoS验证者筛选结果汇总
@@ -5024,38 +5059,43 @@ func (d *DPoS) saveBLSKeyToDatabase(address types.Address, blsKey *bls.PublicKey
 				return
 			}
 
-			// 🆕 重新查询账户余额作为VotingPower
-			balance, err := d.getValidatorBalance(address)
-			if err != nil {
-				d.logger.Warn("⚠️ 查询账户余额失败，使用数据库中的VotingPower",
+			// 🆕 检查是否为创世验证者，如果是则使用固定权重，否则保持现有权重
+			var finalVotingPower *big.Int
+			if d.isGenesisValidator(address) {
+				// 创世验证者使用固定权重1000 VCITY
+				finalVotingPower = new(big.Int)
+				finalVotingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
+				d.logger.Debug("🔒 创世验证者使用固定权重",
 					"address", address.String(),
-					"error", err)
-				balance = validator.VotingPower
+					"fixedVotingPower", finalVotingPower.String())
 			} else {
-				d.logger.Debug("🔍 重新查询到账户余额",
+				// 非创世验证者保持现有权重，不查询余额
+				// 权重更新只在vote交易时进行
+				finalVotingPower = new(big.Int).Set(validator.VotingPower)
+				d.logger.Debug("🔒 非创世验证者保持现有权重",
 					"address", address.String(),
-					"balance", balance.String(),
-					"balanceHex", fmt.Sprintf("0x%x", balance.Bytes()))
+					"existingVotingPower", finalVotingPower.String(),
+					"note", "权重只在vote交易时更新")
 			}
 
 			// 🆕 添加详细日志：打印保存前的信息
 			d.logger.Debug("🔍 准备保存BLS公钥到数据库",
 				"address", address.String(),
 				"originalVotingPower", validator.VotingPower.String(),
-				"newVotingPower", balance.String(),
-				"votingPowerHex", fmt.Sprintf("0x%x", balance.Bytes()),
+				"newVotingPower", finalVotingPower.String(),
+				"votingPowerHex", fmt.Sprintf("0x%x", finalVotingPower.Bytes()),
 				"isActive", validator.IsActive,
 				"hasBlsKey", validator.BlsKey != nil)
 
 			// 更新BLS公钥和VotingPower
 			validator.BlsKey = blsKey
-			validator.VotingPower = balance
+			validator.VotingPower = finalVotingPower
 
 			// 🆕 创建DelegateInfo并保存到数据库
 			delegateInfo := &DelegateInfo{
 				Address:        validator.Address,
-				VotingPower:    new(big.Int).Set(balance), // 使用重新查询的余额
-				TotalVotes:     new(big.Int).Set(balance), // 使用重新查询的余额
+				VotingPower:    new(big.Int).Set(finalVotingPower), // 使用最终确定的权重
+				TotalVotes:     new(big.Int).Set(finalVotingPower), // 使用最终确定的权重
 				ProducedBlocks: 0,
 				MissedBlocks:   0,
 				LastBlockTime:  0,
@@ -5085,8 +5125,8 @@ func (d *DPoS) saveBLSKeyToDatabase(address types.Address, blsKey *bls.PublicKey
 			} else {
 				d.logger.Info("✅ BLS公钥已保存到数据库",
 					"address", address.String(),
-					"votingPower", balance.String(),
-					"votingPowerHex", fmt.Sprintf("0x%x", balance.Bytes()),
+					"votingPower", finalVotingPower.String(),
+					"votingPowerHex", fmt.Sprintf("0x%x", finalVotingPower.Bytes()),
 					"isActive", validator.IsActive,
 					"blsKeyLength", len(blsKey.Marshal()))
 			}
@@ -6007,16 +6047,6 @@ func (d *DPoS) getDelegatesFromState(blockNumber uint64) (validator.AccountSet, 
 				"stakeStoreType", fmt.Sprintf("%T", d.state.StakeStore))
 
 			if historicalDelegates, err := d.state.StakeStore.getDelegatesAtBlock(blockNumber, dbTx); err == nil {
-				d.logger.Info("✅ 从历史数据获取验证者集合成功",
-					"blockNumber", blockNumber,
-					"count", len(historicalDelegates),
-					"validators", func() []string {
-						addresses := make([]string, len(historicalDelegates))
-						for i, v := range historicalDelegates {
-							addresses[i] = v.Address.String()
-						}
-						return addresses
-					}())
 				return historicalDelegates, nil
 			} else {
 				d.logger.Error("❌ 历史验证者集合不存在",
@@ -9490,9 +9520,17 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 	// 🆕 修复：直接使用内存中受托人的当前VotingPower，不进行累加
 	// 因为VotingPower已经在updateDelegateVotingPower中正确更新了
 	if existingDelegate != nil {
-		// 直接使用内存中受托人的当前VotingPower
-		delegateInfo.VotingPower = new(big.Int).Set(existingDelegate.VotingPower)
-		fmt.Printf("  - ✅ 使用内存中受托人的当前VotingPower: %s\n", delegateInfo.VotingPower.String())
+		// 🆕 检查是否为创世验证者，如果是则使用固定权重1000 VCITY
+		if d.isGenesisValidator(delegate) {
+			fixedVotingPower := new(big.Int)
+			fixedVotingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
+			delegateInfo.VotingPower = fixedVotingPower
+			fmt.Printf("  - 🔒 创世验证者使用固定权重: %s\n", delegateInfo.VotingPower.String())
+		} else {
+			// 直接使用内存中受托人的当前VotingPower
+			delegateInfo.VotingPower = new(big.Int).Set(existingDelegate.VotingPower)
+			fmt.Printf("  - ✅ 使用内存中受托人的当前VotingPower: %s\n", delegateInfo.VotingPower.String())
+		}
 	} else {
 		// 这种情况不应该发生，因为validateVote阶段已经创建了受托人
 		d.logger.Warn("⚠️ 受托人不存在，这是异常情况")
@@ -10892,21 +10930,10 @@ func (d *DPoS) handleEpochSwitch(epochNumber uint64) error {
 	// 2. 计算和记录上一个epoch的奖励（延迟状态更新）
 	if epochNumber > 1 {
 		previousEpoch := epochNumber - 1
-		d.logger.Debug("💰 ========== 开始计算Epoch奖励 ==========",
-			"epoch", previousEpoch,
-			"currentEpoch", epochNumber,
-			"rewardTime", currentTime.Format("2006-01-02 15:04:05"),
-			"note", "正在为上一个epoch计算奖励（延迟状态更新）")
-
 		if err := d.calculateAndRecordEpochRewards(previousEpoch); err != nil {
 			d.logger.Error("❌ 计算Epoch奖励失败", "epoch", previousEpoch, "error", err)
 			return err
 		}
-
-		d.logger.Debug("✅ ========== Epoch奖励计算完成 ==========",
-			"epoch", previousEpoch,
-			"completedTime", time.Now().Format("2006-01-02 15:04:05"),
-			"note", "奖励已记录，将在epoch结束时更新状态")
 	}
 
 	return nil
@@ -10914,12 +10941,6 @@ func (d *DPoS) handleEpochSwitch(epochNumber uint64) error {
 
 // calculateAndRecordEpochRewards 计算和记录epoch奖励（延迟状态更新）
 func (d *DPoS) calculateAndRecordEpochRewards(epochNumber uint64) error {
-	startTime := time.Now()
-	d.logger.Debug("🎉 ========== 开始计算Epoch奖励 ==========",
-		"epoch", epochNumber,
-		"startTime", startTime.Format("2006-01-02 15:04:05"),
-		"note", "为上一个epoch计算奖励")
-
 	// 获取验证者列表
 	validators := d.GetValidators()
 
@@ -10927,8 +10948,6 @@ func (d *DPoS) calculateAndRecordEpochRewards(epochNumber uint64) error {
 		d.logger.Warn("⚠️ 没有验证者，跳过奖励计算", "epoch", epochNumber)
 		return nil
 	}
-
-	d.logger.Debug("📊 开始真实奖励计算", "epoch", epochNumber, "validatorsCount", len(validators))
 
 	// 计算验证者奖励
 	validatorRewards := make(map[types.Address]*big.Int)
@@ -10944,13 +10963,6 @@ func (d *DPoS) calculateAndRecordEpochRewards(epochNumber uint64) error {
 			validatorReward := d.calculateValidatorReward(blocksProduced, totalBlocks)
 			validatorRewards[validator.Address] = validatorReward
 			validatorRewardCount++
-
-			d.logger.Debug("💰 计算验证者奖励",
-				"epoch", epochNumber,
-				"address", validator.Address.String(),
-				"blocksProduced", blocksProduced,
-				"reward", validatorReward.String(),
-				"type", "validator")
 		}
 	}
 
@@ -10960,12 +10972,6 @@ func (d *DPoS) calculateAndRecordEpochRewards(epochNumber uint64) error {
 	if err != nil {
 		return fmt.Errorf("failed to calculate voter rewards: %w", err)
 	}
-	voterCount := len(voterRewards)
-
-	d.logger.Debug("💰 计算投票者奖励完成",
-		"epoch", epochNumber,
-		"voterCount", voterCount,
-		"totalVoterReward", totalVoterReward.String())
 
 	// 合并所有奖励
 	allRewards := make(map[types.Address]*big.Int)
@@ -10986,21 +10992,6 @@ func (d *DPoS) calculateAndRecordEpochRewards(epochNumber uint64) error {
 		return fmt.Errorf("failed to schedule delayed state update: %w", err)
 	}
 
-	d.logger.Debug("📊 ========== 奖励计算统计 ==========",
-		"epoch", epochNumber,
-		"validatorsCount", len(validators),
-		"validatorRewardCount", validatorRewardCount,
-		"totalBlocks", totalBlocks,
-		"recordedRewardCount", len(allRewards),
-		"status", "计算完成，等待epoch结束时更新状态")
-
-	endTime := time.Now()
-	duration := endTime.Sub(startTime)
-	d.logger.Debug("✅ ========== Epoch奖励计算完成 ==========",
-		"epoch", epochNumber,
-		"startTime", startTime.Format("2006-01-02 15:04:05"),
-		"endTime", endTime.Format("2006-01-02 15:04:05"),
-		"duration", duration.String())
 	return nil
 }
 
@@ -11273,7 +11264,6 @@ func (d *DPoS) getAccountBalance(address types.Address) (*big.Int, error) {
 func (d *DPoS) calculateVoterRewards(epochNumber uint64, totalVoterReward *big.Int) (map[types.Address]*big.Int, error) {
 	// 这里需要实现投票者奖励计算逻辑
 	// 暂时返回空映射，后续可以根据实际投票数据实现
-	d.logger.Debug("计算投票者奖励", "epoch", epochNumber, "totalReward", totalVoterReward.String())
 
 	// TODO: 实现真实的投票者奖励计算
 	// 1. 获取该epoch的所有投票记录
@@ -11546,10 +11536,6 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 				// 提交事务
 				if err := dbTx.Commit(); err != nil {
 					d.logger.Warn("⚠️ 提交事务失败", "error", err)
-				} else {
-					d.logger.Info("✅ 奖励分发区块验证者集合已存储到历史数据库",
-						"blockNumber", newBlock.Number(),
-						"count", len(currentValidators))
 				}
 			}
 		}
@@ -11562,10 +11548,6 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 	}
 
 	// 🆕 写入区块链，更新当前状态
-	d.logger.Info("🔄 ========== 准备写入新状态到区块链 ==========",
-		"newStateRoot", fmt.Sprintf("%x", newStateRoot),
-		"blockNumber", newBlock.Number(),
-		"blockHash", newBlock.Hash().String())
 
 	if err := d.config.Blockchain.WriteFullBlock(fullBlock, "dpos-reward-distribution"); err != nil {
 		d.logger.Error("❌ 写入新状态到区块链失败",
@@ -11899,12 +11881,6 @@ func (d *DPoS) recordRewardsToDatabase(epochNumber uint64, rewards map[types.Add
 				"address", address.String(),
 				"reward", reward.String(),
 				"error", err)
-		} else {
-			d.logger.Debug("💰 记录奖励到数据库",
-				"epoch", epochNumber,
-				"address", address.String(),
-				"reward", reward.String(),
-				"type", "database_record")
 		}
 	}
 
@@ -11923,11 +11899,6 @@ func (d *DPoS) scheduleDelayedStateUpdate(epochNumber uint64, rewards map[types.
 
 	// 存储延迟更新任务
 	d.pendingStateUpdates[epochNumber] = rewards
-
-	d.logger.Debug("📅 安排延迟状态更新",
-		"epoch", epochNumber,
-		"rewardCount", len(rewards),
-		"note", "将在epoch结束时执行状态更新")
 
 	return nil
 }

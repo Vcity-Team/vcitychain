@@ -85,11 +85,16 @@ func (bs *BlockScheduler) ShouldProduceBlock(validatorIndex int, currentBlockNum
 		"formula", fmt.Sprintf("%d%%%d=%d", currentBlockNumber, bs.validatorCount, expectedIndex))
 
 	if validatorIndex != expectedIndex {
-		bs.logger.Debug("⏭️ 不是当前轮次的验证者",
-			"validatorIndex", validatorIndex,
-			"expectedIndex", expectedIndex,
-			"blockNumber", currentBlockNumber,
-			"action", "跳过出块")
+		// 🆕 防刷屏：每10秒打印一次日志
+		now := time.Now()
+		if now.Sub(bs.lastLogTime) >= 10*time.Second {
+			bs.logger.Debug("⏭️ 不是当前轮次的验证者",
+				"validatorIndex", validatorIndex,
+				"expectedIndex", expectedIndex,
+				"blockNumber", currentBlockNumber,
+				"action", "跳过出块")
+			bs.lastLogTime = now
+		}
 		return false
 	}
 
@@ -251,11 +256,16 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(validatorIndex int, currentBlock
 
 	// 4. 检查是否轮到自己
 	if validatorIndex != expectedValidatorIndex {
-		bs.logger.Debug("⏭️ 不是当前轮次的验证者",
-			"validatorIndex", validatorIndex,
-			"expectedValidatorIndex", expectedValidatorIndex,
-			"currentSlot", currentSlot,
-			"action", "跳过出块")
+		// 🆕 防刷屏：每10秒打印一次日志
+		now := time.Now()
+		if now.Sub(bs.lastLogTime) >= 10*time.Second {
+			bs.logger.Debug("⏭️ 不是当前轮次的验证者",
+				"validatorIndex", validatorIndex,
+				"expectedValidatorIndex", expectedValidatorIndex,
+				"currentSlot", currentSlot,
+				"action", "跳过出块")
+			bs.lastLogTime = now
+		}
 		return false
 	}
 
