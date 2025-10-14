@@ -6037,6 +6037,17 @@ func (d *DPoS) getDelegatesFromState(blockNumber uint64) (validator.AccountSet, 
 		"stateIsNil", d.state == nil,
 		"stakeStoreIsNil", d.state != nil && d.state.StakeStore == nil)
 
+	// 🆕 新增：检查是否在共识切换高度之前，如果是则跳过历史验证者集合获取
+	if d.config.ConsensusSwitchHeight > 0 && blockNumber < d.config.ConsensusSwitchHeight {
+		d.logger.Debug("🔄 区块在共识切换高度之前，跳过历史验证者集合获取",
+			"blockNumber", blockNumber,
+			"consensusSwitchHeight", d.config.ConsensusSwitchHeight,
+			"reason", "切换高度之前不需要BLS验证，因此不需要历史验证者集合")
+
+		// 返回创世验证者集合作为默认值
+		return d.getGenesisValidators(), nil
+	}
+
 	// 🆕 关键修复：首先尝试从历史数据获取验证者集合
 	if d.state != nil && d.state.StakeStore != nil {
 		d.logger.Debug("🔍 开始数据库事务", "blockNumber", blockNumber)
@@ -6080,6 +6091,28 @@ func (d *DPoS) getDelegatesFromState(blockNumber uint64) (validator.AccountSet, 
 
 	// 这行代码永远不会执行，但为了编译通过
 	return nil, fmt.Errorf("historical validator set not found for block %d", blockNumber)
+}
+
+// getGenesisValidators 获取创世验证者集合
+func (d *DPoS) getGenesisValidators() validator.AccountSet {
+	d.logger.Debug("🔍 获取创世验证者集合", "genesisValidatorsCount", len(d.genesisValidators))
+
+	// 从内存中的创世验证者映射创建AccountSet
+	var validators validator.AccountSet
+	for address := range d.genesisValidators {
+		votingPower := new(big.Int)
+		votingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
+
+		validatorMetadata := &validator.ValidatorMetadata{
+			Address:     address,
+			VotingPower: votingPower,
+			IsActive:    true,
+		}
+		validators = append(validators, validatorMetadata)
+	}
+
+	d.logger.Debug("✅ 创世验证者集合创建完成", "count", len(validators))
+	return validators
 }
 
 func (d *DPoS) getDelegatesFromStateWithTx(blockNumber uint64, dbTx *bolt.Tx) (validator.AccountSet, error) {
