@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/Vcity-Team/vcitychain/blockchain/storage"
 	"github.com/Vcity-Team/vcitychain/chain"
@@ -803,10 +804,38 @@ func (b *Blockchain) executeBlockTransactions(block *types.Block) (*BlockResult,
 // require to compute again the Receipts.
 func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) error {
 	blockNumber := fblock.Block.Number()
-	defer func() {
-		b.writeLock.Unlock()
+
+	b.logger.Debug("🔒 WriteFullBlock 开始获取写锁", "blockNumber", blockNumber, "source", source)
+
+	// 添加超时机制检测锁获取
+	lockAcquired := make(chan bool, 1)
+	go func() {
+		b.writeLock.Lock()
+		lockAcquired <- true
 	}()
-	b.writeLock.Lock()
+
+	select {
+	case <-lockAcquired:
+		b.logger.Debug("✅ WriteFullBlock 成功获取写锁", "blockNumber", blockNumber, "source", source)
+	case <-time.After(10 * time.Second):
+		b.logger.Error("❌ WriteFullBlock 获取写锁超时", "blockNumber", blockNumber, "source", source)
+		// 检查是否有其他goroutine持有锁
+		b.logger.Error("🔍 检查可能的锁持有者", "blockNumber", blockNumber, "source", source)
+		// 尝试获取锁状态信息
+		if b.writeLock.TryLock() {
+			b.logger.Error("🔍 锁状态检查：锁实际上可用，可能是goroutine调度问题", "blockNumber", blockNumber, "source", source)
+			b.writeLock.Unlock()
+		} else {
+			b.logger.Error("🔍 锁状态检查：锁被其他goroutine持有", "blockNumber", blockNumber, "source", source)
+		}
+		return fmt.Errorf("failed to acquire write lock within 10 seconds")
+	}
+
+	defer func() {
+		b.logger.Debug("🔓 WriteFullBlock 准备释放写锁", "blockNumber", blockNumber, "source", source)
+		b.writeLock.Unlock()
+		b.logger.Debug("✅ WriteFullBlock 成功释放写锁", "blockNumber", blockNumber, "source", source)
+	}()
 
 	block := fblock.Block
 
