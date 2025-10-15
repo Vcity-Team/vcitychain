@@ -25,7 +25,6 @@ import (
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/signer"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/wallet"
-	ibftSigner "github.com/Vcity-Team/vcitychain/consensus/ibft/signer"
 	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/helper/common"
 	"github.com/Vcity-Team/vcitychain/helper/progress"
@@ -35,7 +34,6 @@ import (
 	"github.com/Vcity-Team/vcitychain/syncer"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
-	lru "github.com/hashicorp/golang-lru"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/umbracle/fastrlp"
 	bolt "go.etcd.io/bbolt"
@@ -164,13 +162,10 @@ type DPoSConfig struct {
 	// 委托奖励比例
 	RewardRatio uint64 `json:"rewardRatio"`
 
-	// 🆕 新增：共识切换高度
 	ConsensusSwitchHeight uint64 `json:"consensusSwitchHeight"`
 
-	// 🆕 新增：DPoS验证者数量配置
 	ValidatorsCount uint64 `json:"validatorsCount" yaml:"validatorsCount"`
 
-	// 🆕 新增：经济系统配置
 	EpochDuration        time.Duration `json:"epochDuration" yaml:"epochDuration"`
 	RewardAccount        types.Address `json:"rewardAccount" yaml:"rewardAccount"`
 	RewardAmount         *big.Int      `json:"rewardAmount" yaml:"rewardAmount"`
@@ -419,12 +414,6 @@ func (rm *ResourceMonitor) cleanupResources() {
 		rm.dposRuntime.cleanupExpiredCaches()
 	}
 
-	// 🆕 添加processedBlocks清理
-	if rm.dposRuntime != nil {
-		if dpos, ok := rm.dposRuntime.backend.(*DPoS); ok {
-			dpos.cleanupProcessedBlocks()
-		}
-	}
 }
 
 // monitorMemoryUsage 监控内存使用情况
@@ -584,26 +573,6 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 		ibftValidator := ibftValidators[i]
 		address := ibftValidator.Address
 
-		// 查询验证者余额
-		balance, err := r.getValidatorBalance(address)
-		if err != nil {
-			r.logger.Error("❌ 余额查询失败",
-				"address", address.String(),
-				"error", err)
-			continue
-		}
-
-		// 检查是否满足最小质押要求
-		if balance.Cmp(minStakeAmount) < 0 {
-			insufficientBalanceCount++
-			r.logger.Warn("⚠️ 验证者余额不足",
-				"address", address.String(),
-				"balance", balance.String(),
-				"required", minStakeAmount.String(),
-				"deficit", new(big.Int).Sub(minStakeAmount, balance).String())
-			continue
-		}
-
 		// 创建DPoS验证者（BLS公钥延迟获取）
 		// 🆕 创世验证者使用固定权重1000 VCITY，不受余额影响
 		fixedVotingPower := new(big.Int)
@@ -627,7 +596,7 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 			"note", "创世验证者使用固定权重")
 	}
 
-	// 关键日志：DPoS验证者筛选结果汇总
+	// DPoS验证者筛选结果汇总
 	r.logger.Info("🚨 DPoS验证者筛选完成",
 		"totalCandidates", ibftValidators.Len(),
 		"validValidators", validValidatorCount,
@@ -726,61 +695,6 @@ func (r *dposRuntime) parseValidatorsFromExtraData(extraData []byte) (validator.
 	return ibftValidators, nil
 }
 
-// parseIBFTValidatorsFromExtraData 从extraData解析IBFT验证者
-func (r *dposRuntime) parseIBFTValidatorsFromExtraData(extraData []byte) (validator.AccountSet, error) {
-	r.logger.Debug("🔍 开始解析extraData", "length", len(extraData))
-
-	// 检查 extraData 长度
-	if len(extraData) < 32 {
-		return nil, fmt.Errorf("extraData too short: %d bytes", len(extraData))
-	}
-
-	// 打印 extraData 的十六进制内容用于调试
-	r.logger.Debug("🔍 extraData内容", "hex", fmt.Sprintf("%x", extraData))
-
-	// 尝试解析 IstanbulExtra 结构
-	parser := fastrlp.Parser{}
-	val, err := parser.Parse(extraData)
-	if err != nil {
-		r.logger.Error("❌ fastrlp解析失败", "error", err)
-		return nil, fmt.Errorf("failed to parse extraData: %w", err)
-	}
-
-	// 检查解析出的值的类型
-	r.logger.Debug("🔍 解析出的值类型", "type", val.Type())
-
-	// 尝试解析 IstanbulExtra 结构
-	var istanbulExtra ibftSigner.IstanbulExtra
-	if err := istanbulExtra.UnmarshalRLPFrom(&parser, val); err != nil {
-		r.logger.Error("❌ IstanbulExtra解析失败", "error", err)
-
-		// 尝试直接解析验证者地址，不使用模拟数据
-		return r.parseValidatorsFromExtraDataDirectly(extraData)
-	}
-
-	r.logger.Debug("✅ IstanbulExtra解析成功", "validatorsCount", istanbulExtra.Validators.Len())
-
-	// 将 IBFT 验证者转换为 DPoS 验证者格式
-	accountSet := make(validator.AccountSet, 0, istanbulExtra.Validators.Len())
-
-	for i := 0; i < istanbulExtra.Validators.Len(); i++ {
-		ibftValidator := istanbulExtra.Validators.At(uint64(i))
-
-		// 创建 DPoS 验证者元数据
-		delegate := &validator.ValidatorMetadata{
-			Address:     ibftValidator.Addr(),
-			VotingPower: big.NewInt(0), // 将在后续步骤中设置
-			BlsKey:      nil,           // BLS公钥将在需要时获取
-			IsActive:    true,
-		}
-
-		accountSet = append(accountSet, delegate)
-		r.logger.Debug("🔍 解析出验证者", "index", i, "address", ibftValidator.Addr().String())
-	}
-
-	return accountSet, nil
-}
-
 // parseValidatorsFromExtraDataDirectly 直接解析extraData中的验证者地址
 func (r *dposRuntime) parseValidatorsFromExtraDataDirectly(extraData []byte) (validator.AccountSet, error) {
 
@@ -853,55 +767,6 @@ func (r *dposRuntime) parseValidatorsFromExtraDataDirectly(extraData []byte) (va
 	return validatorList, nil
 }
 
-// getValidatorBalance 获取验证者余额
-func (r *dposRuntime) getValidatorBalance(address types.Address) (*big.Int, error) {
-	if r.config == nil || r.config.blockchain == nil {
-		return big.NewInt(0), fmt.Errorf("blockchain not available")
-	}
-
-	// 获取当前区块头
-	currentHeader := r.config.blockchain.CurrentHeader()
-	if currentHeader == nil {
-		return big.NewInt(0), fmt.Errorf("current header not available")
-	}
-
-	r.logger.Debug("🔍 开始查询验证者余额", "address", address.String())
-
-	// 通过backend获取DPoS实例，然后查询真实余额
-	if r.backend != nil {
-		if dposInstance, ok := r.backend.(*DPoS); ok && dposInstance.config != nil && dposInstance.config.Executor != nil {
-			// 通过executor查询余额
-			snapshot, err := dposInstance.config.Executor.StateAt(currentHeader.StateRoot)
-			if err != nil {
-				r.logger.Warn("⚠️ 无法创建状态快照，使用默认余额", "error", err)
-				// 回退到默认值
-				balance := big.NewInt(0)
-				balance.SetString("1000002100000000000000", 10) // 1000002.1 VCITY
-				return balance, nil
-			}
-
-			account, err := snapshot.GetAccount(address)
-			if err != nil {
-				r.logger.Warn("⚠️ 无法获取账户信息，返回0余额", "address", address.String(), "error", err)
-				return big.NewInt(0), nil
-			}
-
-			// 🆕 检查账户余额是否为空，避免空指针解引用
-			if account == nil || account.Balance == nil {
-				r.logger.Warn("⚠️ 账户或余额为空，返回0余额", "address", address.String())
-				return big.NewInt(0), nil
-			}
-
-			r.logger.Debug("✅ 成功查询到验证者余额", "address", address.String(), "balance", account.Balance.String())
-			return account.Balance, nil
-		}
-	}
-
-	// 如果无法通过backend查询，返回0余额
-	r.logger.Warn("⚠️ 无法通过backend查询余额，返回0余额", "address", address.String())
-	return big.NewInt(0), nil
-}
-
 // setupNetworkEventListeners 设置网络事件监听器
 func (r *dposRuntime) setupNetworkEventListeners() {
 	// 监听新节点加入事件
@@ -971,8 +836,7 @@ func (r *dposRuntime) startBlockProduction() error {
 			return false
 		}())
 
-	// 🆕 TRON式持续监测：移除定时器，改为持续监测
-	r.logger.Info("✅ 启动TRON式持续区块监测", "blockTime", blockTime.String())
+	r.logger.Info("✅ 启动持续区块监测", "blockTime", blockTime.String())
 
 	if r.resourceMonitor != nil && r.resourceMonitor.goroutineManager != nil {
 		r.resourceMonitor.goroutineManager.StartGoroutine("block-production", func() {
@@ -995,8 +859,6 @@ func (r *dposRuntime) startBlockProduction() error {
 
 // continuousBlockMonitoring TRON式持续区块监测
 func (r *dposRuntime) continuousBlockMonitoring() {
-	r.logger.Info("🔄 启动TRON式持续区块监测")
-
 	for {
 		select {
 		case <-r.closeCh:
@@ -1178,19 +1040,6 @@ func (r *dposRuntime) cleanupExpiredCaches() {
 
 // cleanupProcessedBlocks 清理已处理的区块记录（LRU自动管理）
 func (d *DPoS) cleanupProcessedBlocks() {
-	// LRU缓存会自动管理大小，无需手动清理
-	// 这里可以添加一些统计信息
-	d.processedMutex.RLock()
-	if d.processedBlocks == nil {
-		d.processedMutex.RUnlock()
-		return // 缓存未初始化，无需清理
-	}
-	size := d.processedBlocks.Len()
-	d.processedMutex.RUnlock()
-
-	if size > 800 { // 当接近上限时记录日志
-		d.logger.Debug("已处理区块缓存接近上限", "size", size, "max", 1000)
-	}
 }
 
 // startSignatureCleanup 启动签名去重清理协程
@@ -1271,8 +1120,6 @@ func (r *dposRuntime) produceBlock() error {
 			}())
 		return fmt.Errorf("key not available, cannot produce block")
 	}
-
-	// 静默处理，不打印日志
 
 	// 检查当前节点是否为出块者
 	currentDelegate := r.getCurrentDelegate()
@@ -1959,7 +1806,7 @@ func (r *dposRuntime) getEpochForBlock(blockNumber uint64) *epochMetadata {
 }
 
 // executeRewardDistributionForEpochEnd 在epoch最后一个区块时执行奖励分发
-func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64) error {
+func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64, currentRound uint64) error {
 	r.logger.Info("🎉 ========== 开始执行epoch结束奖励分发 ==========",
 		"blockNumber", blockNumber,
 		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
@@ -1990,7 +1837,7 @@ func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64) e
 		"epochType", "unified-block-based")
 
 	// 🆕 直接计算和分发奖励，而不是依赖pendingStateUpdates
-	return dposInstance.distributeEpochRewards(rewardEpoch)
+	return dposInstance.distributeEpochRewards(rewardEpoch, currentRound)
 }
 
 // getCurrentDelegate 获取当前受托人
@@ -2192,8 +2039,8 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"delegate", keyAddr.String()[:16],
 			"action", "REWARD_DISTRIBUTION_START")
 
-		// 执行奖励分发
-		if err := r.executeRewardDistributionForEpochEnd(nextBlockNumber); err != nil {
+		// 执行奖励分发，传递当前轮次
+		if err := r.executeRewardDistributionForEpochEnd(nextBlockNumber, r.currentRound); err != nil {
 			r.logger.Error("❌❌❌ ========== 奖励分发失败 ========== ❌❌❌",
 				"blockNumber", nextBlockNumber,
 				"delegate", keyAddr.String()[:16],
@@ -2273,13 +2120,27 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 							r.logger.Info("✅ setDelegatesAtBlock调用成功，准备提交事务",
 								"blockNumber", h.Number)
 
-							// 提交事务
-							if err := dbTx.Commit(); err != nil {
-								r.logger.Error("❌ 提交事务失败", "blockNumber", h.Number, "error", err)
-							} else {
-								r.logger.Info("✅ 验证者集合已存储到历史数据库",
-									"blockNumber", h.Number,
-									"count", len(productionValidators))
+							// 提交事务 - 添加超时机制
+							r.logger.Debug("🔍 开始提交数据库事务", "blockNumber", h.Number)
+
+							// 使用超时机制防止卡死
+							commitDone := make(chan error, 1)
+							go func() {
+								commitDone <- dbTx.Commit()
+							}()
+
+							select {
+							case err := <-commitDone:
+								if err != nil {
+									r.logger.Error("❌ 提交事务失败", "blockNumber", h.Number, "error", err)
+								} else {
+									r.logger.Info("✅ 验证者集合已存储到历史数据库",
+										"blockNumber", h.Number,
+										"count", len(productionValidators))
+								}
+							case <-time.After(3 * time.Second):
+								r.logger.Error("❌ 数据库事务提交超时，强制回滚", "blockNumber", h.Number)
+								dbTx.Rollback()
 							}
 						}
 					}
@@ -2739,15 +2600,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	r.cachedProductionValidators = nil
 	r.logger.Debug("🧹 已清理验证者缓存，为下一个区块做准备")
 
-	// 🆕 添加：处理经济系统逻辑（记录出块统计）
-	if r.config != nil && r.config.dposBackend != nil {
-		if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
-			if err := dposInstance.processEconomicSystem(block); err != nil {
-				r.logger.Error("❌ 处理经济系统逻辑失败", "error", err)
-				// 不返回错误，继续构建区块
-			}
-		}
-	}
+	// 🆕 移除：经济系统逻辑处理移到ProcessHeaders中，避免重复记录
 
 	return block, nil
 }
@@ -3025,10 +2878,6 @@ type DPoS struct {
 	// 🆕 延迟状态更新机制（方案1）
 	pendingStateUpdates map[uint64]map[types.Address]*big.Int
 	stateUpdateMutex    sync.RWMutex
-
-	// 已处理的区块哈希集合，避免重复处理（使用LRU缓存）
-	processedBlocks *lru.Cache
-	processedMutex  sync.RWMutex
 
 	// 🆕 新增：余额查询器
 	balanceQuerier NativeTokenBalanceQuerier
@@ -3374,42 +3223,9 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 	for _, header := range headers {
 		d.logger.Debug("🔄 DPoS处理区块头部", "blockNumber", header.Number, "blockHash", header.Hash.String()[:16])
 
-		// 检查是否已经处理过这个区块
-		d.processedMutex.RLock()
-		if d.processedBlocks == nil {
-			d.processedMutex.RUnlock()
-			// 初始化LRU缓存
-			d.processedMutex.Lock()
-			if d.processedBlocks == nil {
-				var err error
-				d.processedBlocks, err = lru.New(1000) // 最多1000个条目
-				if err != nil {
-					d.processedMutex.Unlock()
-					return fmt.Errorf("failed to create LRU cache: %w", err)
-				}
-			}
-			d.processedMutex.Unlock()
-			d.processedMutex.RLock()
-		}
-
-		_, exists := d.processedBlocks.Get(header.Hash)
-		d.processedMutex.RUnlock()
-
-		if exists {
-			d.logger.Debug("block already processed, skipping", "blockNumber", header.Number, "blockHash", header.Hash)
-			continue
-		}
-
-		// 标记区块已处理
-		d.processedMutex.Lock()
-		d.processedBlocks.Add(header.Hash, true)
-		d.processedMutex.Unlock()
-
-		// 🆕 修复：简化区块投票处理，避免数据库锁竞争
-		// 直接使用header数据，不进行异步处理
+		// 直接使用header数据
 		if err := d.processBlockVotesFromHeader(header); err != nil {
 			d.logger.Error("failed to process block votes from header", "blockNumber", header.Number, "blockHash", header.Hash, "error", err)
-			// 不返回错误，继续处理其他逻辑
 		}
 
 		// 同步更新轮次状态（这部分必须同步执行，不能异步）
@@ -3417,19 +3233,50 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 
 		// 🆕 添加：处理经济系统逻辑（记录出块统计）
 		// 需要构造FullBlock来调用processEconomicSystem
+		d.logger.Info("🔍 ========== 开始检查经济系统处理 ==========",
+			"blockNumber", header.Number,
+			"blockHash", header.Hash.String()[:16],
+			"blockchainIsNil", d.config.Blockchain == nil)
+
 		if d.config.Blockchain != nil {
+			d.logger.Info("🔍 尝试获取完整区块信息",
+				"blockNumber", header.Number,
+				"blockHash", header.Hash.String()[:16])
+
 			if block, exists := d.config.Blockchain.GetBlockByHash(header.Hash, true); exists && block != nil {
+				d.logger.Info("✅ 成功获取完整区块信息，准备调用processEconomicSystem",
+					"blockNumber", header.Number,
+					"blockHash", header.Hash.String()[:16],
+					"blockExists", exists)
+
 				// 构造FullBlock
 				fullBlock := &types.FullBlock{
 					Block: block,
 				}
+
+				d.logger.Info("🚀 开始调用processEconomicSystem",
+					"blockNumber", header.Number,
+					"blockHash", header.Hash.String()[:16])
+
 				if err := d.processEconomicSystem(fullBlock); err != nil {
 					d.logger.Error("❌ 同步时处理经济系统失败", "blockNumber", header.Number, "error", err)
 					// 不返回错误，继续处理其他逻辑
+				} else {
+					d.logger.Info("✅ processEconomicSystem调用成功",
+						"blockNumber", header.Number,
+						"blockHash", header.Hash.String()[:16])
 				}
 			} else {
-				d.logger.Warn("⚠️ 无法获取完整区块信息，跳过经济系统处理", "blockNumber", header.Number)
+				d.logger.Warn("⚠️ 无法获取完整区块信息，跳过经济系统处理",
+					"blockNumber", header.Number,
+					"blockHash", header.Hash.String()[:16],
+					"blockExists", exists,
+					"blockIsNil", block == nil)
 			}
+		} else {
+			d.logger.Warn("⚠️ Blockchain配置为nil，跳过经济系统处理",
+				"blockNumber", header.Number,
+				"blockHash", header.Hash.String()[:16])
 		}
 
 		// 🆕 检查是否是epoch的最后一个区块，如果是则执行奖励分发
@@ -3443,7 +3290,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 				"blockHash", header.Hash.String()[:16])
 
 			// 执行奖励分发
-			if err := d.executeDelayedStateUpdateForEpochEnd(header.Number); err != nil {
+			if err := d.executeDelayedStateUpdateForEpochEnd(header.Number, d.currentRound); err != nil {
 				d.logger.Error("❌ 同步时epoch结束奖励分发失败", "blockNumber", header.Number, "error", err)
 				// 不返回错误，继续处理其他逻辑
 			}
@@ -3474,13 +3321,27 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 					if err := d.state.StakeStore.setDelegatesAtBlock(header.Number, validators, dbTx); err != nil {
 						d.logger.Warn("⚠️ 存储验证者集合失败", "blockNumber", header.Number, "error", err)
 					} else {
-						// 提交事务
-						if err := dbTx.Commit(); err != nil {
-							d.logger.Warn("⚠️ 提交事务失败", "blockNumber", header.Number, "error", err)
-						} else {
-							d.logger.Debug("✅ 区块同步时验证者集合已存储到历史数据库",
-								"blockNumber", header.Number,
-								"count", len(validators))
+						// 提交事务 - 添加超时机制
+						d.logger.Debug("🔍 区块同步时开始提交数据库事务", "blockNumber", header.Number)
+
+						// 使用超时机制防止卡死
+						commitDone := make(chan error, 1)
+						go func() {
+							commitDone <- dbTx.Commit()
+						}()
+
+						select {
+						case err := <-commitDone:
+							if err != nil {
+								d.logger.Warn("⚠️ 区块同步时提交事务失败", "blockNumber", header.Number, "error", err)
+							} else {
+								d.logger.Debug("✅ 区块同步时验证者集合已存储到历史数据库",
+									"blockNumber", header.Number,
+									"count", len(validators))
+							}
+						case <-time.After(3 * time.Second):
+							d.logger.Error("❌ 区块同步时数据库事务提交超时，强制回滚", "blockNumber", header.Number)
+							dbTx.Rollback()
 						}
 					}
 				}
@@ -3495,17 +3356,13 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 
 // isEpochEndBlock 检查是否是epoch的最后一个区块
 func (d *DPoS) isEpochEndBlock(blockNumber uint64) bool {
-	// 🆕 修改：基于指定区块号获取epoch信息
 	currentEpoch := d.getEpochForBlock(blockNumber)
 	if currentEpoch == nil {
 		d.logger.Warn("⚠️ 无法获取当前epoch信息", "blockNumber", blockNumber)
 		return false
 	}
 
-	// 检查是否是epoch的最后一个区块
-	// 使用与consensus_runtime.go中相同的逻辑
 	epochSize := uint64(10) // 默认epoch大小，可以从配置中获取
-	// 注意：DPoSConfig中没有PolyBFTConfig字段，使用默认值
 
 	isEpochEnd := currentEpoch.FirstBlockInEpoch+epochSize-1 == blockNumber
 
@@ -3555,7 +3412,7 @@ func (d *DPoS) getEpochForBlock(blockNumber uint64) *epochMetadata {
 }
 
 // executeDelayedStateUpdateForEpochEnd 在同步到epoch最后一个区块时执行奖励分发
-func (d *DPoS) executeDelayedStateUpdateForEpochEnd(blockNumber uint64) error {
+func (d *DPoS) executeDelayedStateUpdateForEpochEnd(blockNumber uint64, currentRound uint64) error {
 	d.logger.Info("🎉 ========== 开始执行同步时epoch结束奖励分发 ==========",
 		"blockNumber", blockNumber,
 		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
@@ -3577,7 +3434,7 @@ func (d *DPoS) executeDelayedStateUpdateForEpochEnd(blockNumber uint64) error {
 		"epochType", "unified-block-based")
 
 	// 🆕 直接计算和分发奖励，而不是依赖pendingStateUpdates
-	return d.distributeEpochRewards(rewardEpoch)
+	return d.distributeEpochRewards(rewardEpoch, currentRound)
 }
 
 // 🆕 新增：更新轮次状态（从ProcessHeaders中提取出来）
@@ -3647,7 +3504,6 @@ func (d *DPoS) updateRoundState(header *types.Header) {
 	}
 }
 
-// 🆕 新增：从区块头部处理投票事件（供ProcessHeaders调用）
 func (d *DPoS) processBlockVotesFromHeader(header *types.Header) error {
 	if header == nil {
 		d.logger.Warn("⚠️ 区块头部为空，跳过投票事件处理")
@@ -3810,17 +3666,6 @@ func (d *DPoS) Start() error {
 		blockHandler := func(b *types.FullBlock) bool {
 			// 实现DPoS的区块处理逻辑
 			d.logger.Debug("processing block", "number", b.Block.Number())
-
-			// 🆕 修复：移除投票处理逻辑，避免重复处理
-			// 投票处理现在统一在ProcessHeaders中进行
-			// if err := d.processBlockVotes(b); err != nil {
-			// 	d.logger.Error("failed to process block votes", "error", err, "block", b.Block.Number())
-			// }
-
-			// // 更新受托人集合
-			// if err := d.updateDelegates(b); err != nil {
-			// 	d.logger.Error("failed to update delegates", "error", err, "block", b.Block.Number())
-			// }
 
 			// 处理奖励分配
 			if err := d.processRewards(b); err != nil {
@@ -4300,27 +4145,6 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 		ibftValidator := ibftValidators[i]
 		address := ibftValidator.Address
 
-		// 查询验证者余额
-		balance, err := d.getValidatorBalance(address)
-		if err != nil {
-			d.logger.Error("❌ 余额查询失败",
-				"address", address.String(),
-				"error", err)
-			continue
-		}
-
-		// 检查是否满足最小质押要求
-		if balance.Cmp(d.minStakeAmount) < 0 {
-			insufficientBalanceCount++
-			d.logger.Warn("⚠️ 验证者余额不足",
-				"address", address.String(),
-				"balance", balance.String(),
-				"required", d.minStakeAmount.String(),
-				"deficit", new(big.Int).Sub(d.minStakeAmount, balance).String())
-			continue
-		}
-
-		// 创建DPoS验证者（BLS公钥延迟获取）
 		// 🆕 创世验证者使用固定权重1000 VCITY，不受余额影响
 		fixedVotingPower := new(big.Int)
 		fixedVotingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
@@ -4450,10 +4274,7 @@ func (d *DPoS) parseValidatorsFromExtraData(extraData []byte) (validator.Account
 	return validator.AccountSet(validatorList), nil
 }
 
-// 🆕 新增：通过网络请求BLS公钥
 func (d *DPoS) requestBLSPublicKeyFromNetwork(address types.Address) (*bls.PublicKey, error) {
-	// 静默处理，不打印日志
-
 	// 1. 检查网络是否可用
 	if d.config.Network == nil {
 		return nil, fmt.Errorf("network not available")
@@ -4473,8 +4294,6 @@ func (d *DPoS) requestBLSPublicKeyFromNetwork(address types.Address) (*bls.Publi
 	}
 
 	// 4. 发送网络广播请求
-	// 静默处理，不打印日志
-
 	// 创建响应通道
 	responseCh := make(chan *bls.PublicKey, 1)
 	errorCh := make(chan error, 1)
@@ -6336,7 +6155,7 @@ func (d *DPoS) getDelegatesFromState(blockNumber uint64) (validator.AccountSet, 
 		d.logger.Debug("🔍 开始数据库事务", "blockNumber", blockNumber)
 
 		// 开始数据库事务
-		dbTx, err := d.state.beginDBTransaction(false) // 只读事务
+		dbTx, err := d.state.beginDBTransaction(false) // 只读事务，因为只是读取数据
 		if err != nil {
 			d.logger.Error("❌ 无法开始数据库事务",
 				"blockNumber", blockNumber,
@@ -6344,20 +6163,60 @@ func (d *DPoS) getDelegatesFromState(blockNumber uint64) (validator.AccountSet, 
 				"errorType", fmt.Sprintf("%T", err))
 		} else {
 			d.logger.Debug("✅ 数据库事务开始成功", "blockNumber", blockNumber)
-			defer dbTx.Rollback()
 
-			d.logger.Debug("🔍 调用getDelegatesAtBlock",
+			d.logger.Info("🔍 ========== 开始调用getDelegatesAtBlock ==========",
 				"blockNumber", blockNumber,
-				"stakeStoreType", fmt.Sprintf("%T", d.state.StakeStore))
+				"stakeStoreType", fmt.Sprintf("%T", d.state.StakeStore),
+				"timestamp", time.Now().Format("2006-01-02 15:04:05.000"))
+
+			// 记录调用前的锁状态
+			d.logger.Info("🔒 调用前锁状态检查",
+				"blockNumber", blockNumber,
+				"stateUpdateMutexLocked", !d.stateUpdateMutex.TryRLock())
+
+			if !d.stateUpdateMutex.TryRLock() {
+				d.logger.Warn("⚠️ stateUpdateMutex被占用", "blockNumber", blockNumber)
+			} else {
+				d.stateUpdateMutex.RUnlock()
+			}
+
+			startTime := time.Now()
+			d.logger.Info("🚀 开始执行getDelegatesAtBlock",
+				"blockNumber", blockNumber,
+				"startTime", startTime.Format("2006-01-02 15:04:05.000"))
 
 			if historicalDelegates, err := d.state.StakeStore.getDelegatesAtBlock(blockNumber, dbTx); err == nil {
+				endTime := time.Now()
+				duration := endTime.Sub(startTime)
+				d.logger.Info("✅ getDelegatesAtBlock执行成功",
+					"blockNumber", blockNumber,
+					"duration", duration.String(),
+					"endTime", endTime.Format("2006-01-02 15:04:05.000"),
+					"validatorsCount", len(historicalDelegates))
+
+				// 🆕 修复：只读事务成功时直接返回，不需要提交
+				d.logger.Info("✅ 只读事务执行成功，准备返回结果", "blockNumber", blockNumber)
+
+				// 只读事务不需要提交，直接返回结果
+				d.logger.Info("🎉 getDelegatesFromState即将返回",
+					"blockNumber", blockNumber,
+					"validatorsCount", len(historicalDelegates),
+					"timestamp", time.Now().Format("2006-01-02 15:04:05.000"))
+
 				return historicalDelegates, nil
 			} else {
-				d.logger.Error("❌ 历史验证者集合不存在",
+				endTime := time.Now()
+				duration := endTime.Sub(startTime)
+				d.logger.Error("❌ getDelegatesAtBlock执行失败",
 					"blockNumber", blockNumber,
+					"duration", duration.String(),
+					"endTime", endTime.Format("2006-01-02 15:04:05.000"),
 					"error", err,
 					"errorType", fmt.Sprintf("%T", err),
 					"errorDetails", err.Error())
+
+				// 🆕 修复：只读事务失败时直接记录错误，不需要回滚
+				d.logger.Error("❌ 只读事务执行失败", "blockNumber", blockNumber, "error", err)
 			}
 		}
 	} else {
@@ -7041,7 +6900,6 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 		r.logger.Debug("🏭 出块受托人", "index", i, "address", delegate.Address.String(), "votingPower", delegate.VotingPower.String(), "isActive", delegate.IsActive)
 	}
 
-	// 🆕 关键修复：在签名收集前主动获取所有受托人的BLS公钥
 	r.logger.Debug("🔑 开始主动获取所有受托人的BLS公钥")
 	myAddress := types.Address(r.config.Key.Address())
 
@@ -7191,6 +7049,11 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 
 	// 启动签名收集协程 - 修复：确保使用正确的通道
 	r.logger.Debug("启动签名收集协程", "checkpointHash", checkpointHash.String())
+	r.logger.Info("🔍 签名收集调试信息",
+		"checkpointHash", checkpointHash.String(),
+		"activeValidators", r.getActiveValidatorsCount(),
+		"requiredSignatures", r.calculateMinRequiredSignatures(),
+		"networkIntegrationAvailable", r.networkIntegration != nil)
 	go r.collectSignaturesAsync(checkpointHash, signatureCh)
 
 	// 等待一小段时间让协程启动
@@ -10231,9 +10094,24 @@ func (d *DPoS) persistDelegateSetToDatabase(delegates validator.AccountSet) erro
 		d.logger.Debug("✅ Saved delegate info", "address", del.Address.String(), "votingPower", del.VotingPower.String())
 	}
 
-	// 提交事务
-	if err := dbTx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit db transaction: %w", err)
+	// 提交事务 - 添加超时机制
+	d.logger.Debug("🔍 开始提交数据库事务")
+
+	// 使用超时机制防止卡死
+	commitDone := make(chan error, 1)
+	go func() {
+		commitDone <- dbTx.Commit()
+	}()
+
+	select {
+	case err := <-commitDone:
+		if err != nil {
+			return fmt.Errorf("failed to commit db transaction: %w", err)
+		}
+	case <-time.After(3 * time.Second):
+		d.logger.Error("❌ 数据库事务提交超时，强制回滚")
+		dbTx.Rollback()
+		return fmt.Errorf("database transaction commit timeout")
 	}
 
 	d.logger.Debug("✅ Delegate set persistence completed successfully")
@@ -11377,7 +11255,7 @@ func (d *DPoS) processEconomicSystem(block *types.FullBlock) error {
 }
 
 // distributeEpochRewards 分发Epoch奖励
-func (d *DPoS) distributeEpochRewards(epochNumber uint64) error {
+func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) error {
 	startTime := time.Now()
 	d.logger.Info("🎉 ========== 开始分发Epoch奖励 ==========",
 		"epoch", epochNumber,
@@ -11562,6 +11440,11 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64) error {
 		"startTime", startTime.Format("2006-01-02 15:04:05"),
 		"endTime", endTime.Format("2006-01-02 15:04:05"),
 		"duration", duration.String())
+
+	d.logger.Info("🎉🎉🎉 ========== executeRewardDistribution函数即将返回 ========== 🎉🎉🎉",
+		"epoch", epochNumber,
+		"timestamp", time.Now().Format("2006-01-02 15:04:05.000"))
+
 	return nil
 }
 
@@ -11612,7 +11495,6 @@ func (d *DPoS) calculateVoterRewards(epochNumber uint64, totalVoterReward *big.I
 }
 
 // executeBatchStateUpdate 执行批量状态更新
-// executeBatchStateUpdate 执行批量状态更新（参考TRON实现）
 func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewardAccount types.Address) error {
 	d.logger.Info("🔧 ========== 开始执行批量状态更新 ==========",
 		"rewardAccount", rewardAccount.String(),
@@ -11805,6 +11687,16 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		"recipientCount", len(rewards),
 		"rewardAccount", rewardAccount.String())
 
+	// 记录奖励分发前的锁状态
+	d.logger.Info("🔒 奖励分发前锁状态检查",
+		"stateUpdateMutexLocked", !d.stateUpdateMutex.TryRLock())
+
+	if !d.stateUpdateMutex.TryRLock() {
+		d.logger.Warn("⚠️ 奖励分发前stateUpdateMutex被占用")
+	} else {
+		d.stateUpdateMutex.RUnlock()
+	}
+
 	// 执行批量余额更新（直接操作主状态）
 	successCount := 0
 	for address, reward := range rewards {
@@ -11835,6 +11727,16 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		return fmt.Errorf("failed to commit state changes: %w", err)
 	}
 	d.logger.Debug("✅ 状态变更提交成功", "objectsCount", len(objects))
+
+	// 记录奖励分发后的锁状态
+	d.logger.Info("🔒 奖励分发后锁状态检查",
+		"stateUpdateMutexLocked", !d.stateUpdateMutex.TryRLock())
+
+	if !d.stateUpdateMutex.TryRLock() {
+		d.logger.Warn("⚠️ 奖励分发后stateUpdateMutex被占用")
+	} else {
+		d.stateUpdateMutex.RUnlock()
+	}
 
 	// 🆕 更新状态根
 	d.logger.Debug("🔄 准备更新状态根")
@@ -11874,27 +11776,31 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 
 	// 🆕 为奖励分发区块创建正确的ExtraData和CheckpointData
 	// 获取当前验证者集合
+	d.logger.Info("🔍 ========== 开始获取当前验证者集合 ==========", "blockNumber", currentHeader.Number)
 	currentValidators, err := d.getDelegatesFromState(currentHeader.Number)
 	if err != nil {
 		d.logger.Error("❌ 获取当前验证者集合失败", "error", err)
 		return fmt.Errorf("failed to get current validators: %w", err)
 	}
+	d.logger.Info("✅ 获取当前验证者集合成功", "blockNumber", currentHeader.Number, "validatorsCount", len(currentValidators))
 
 	// 计算验证者哈希
+	d.logger.Info("🔍 ========== 开始计算验证者哈希 ==========", "blockNumber", currentHeader.Number)
 	currentValidatorsHash, err := currentValidators.HashAddressOnly()
 	if err != nil {
 		d.logger.Error("❌ 计算验证者哈希失败", "error", err)
 		return fmt.Errorf("failed to calculate validators hash: %w", err)
 	}
+	d.logger.Info("✅ 计算验证者哈希成功", "blockNumber", currentHeader.Number, "validatorsHash", currentValidatorsHash.String()[:16])
 
 	// 创建CheckpointData
-	// 使用runtime的currentRound，确保与普通区块一致
-	var blockRound uint64 = 0
-	if d.runtime != nil {
-		d.runtime.lock.RLock()
-		blockRound = d.runtime.currentRound
-		d.runtime.lock.RUnlock()
-	}
+	d.logger.Info("🔍 ========== 开始创建CheckpointData ==========", "blockNumber", currentHeader.Number)
+	// 🆕 直接使用传递的轮次参数，与普通区块保持一致
+	blockRound := d.currentRound
+	d.logger.Info("🔍 奖励分发区块使用传递的轮次",
+		"blockNumber", currentHeader.Number,
+		"blockRound", blockRound,
+		"说明", "直接使用buildBlock中传递的currentRound，确保与普通区块一致")
 
 	d.logger.Info("🔍 奖励分发区块使用轮次信息",
 		"blockNumber", currentHeader.Number+1,
@@ -11902,6 +11808,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		"runtime.currentRound", blockRound,
 		"说明", "使用runtime的currentRound确保与普通区块一致")
 
+	d.logger.Info("🔍 开始创建CheckpointData对象", "blockNumber", currentHeader.Number)
 	checkpoint := &CheckpointData{
 		BlockRound:            blockRound, // 使用runtime的当前轮次，确保一致性
 		EpochNumber:           1,          // 奖励分发区块使用固定epoch
@@ -11909,14 +11816,18 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		NextValidatorsHash:    currentValidatorsHash,
 		EventRoot:             types.Hash{}, // 暂时为空
 	}
+	d.logger.Info("✅ CheckpointData对象创建成功", "blockNumber", currentHeader.Number, "blockRound", blockRound)
 
 	// 创建Extra对象
+	d.logger.Info("🔍 ========== 开始创建Extra对象 ==========", "blockNumber", currentHeader.Number)
 	extra := &Extra{
 		Committed:  &Signature{}, // 添加空的Committed签名
 		Checkpoint: checkpoint,
 	}
+	d.logger.Info("✅ Extra对象创建成功", "blockNumber", currentHeader.Number)
 
 	// 使用当前区块号+1，避免重复区块问题
+	d.logger.Info("🔍 ========== 开始创建新区块头 ==========", "blockNumber", currentHeader.Number)
 	newHeader := &types.Header{
 		ParentHash:   currentHeader.Hash, // 使用当前区块作为父区块
 		Sha3Uncles:   currentHeader.Sha3Uncles,
@@ -11935,17 +11846,22 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		Nonce:        currentHeader.Nonce,
 		Hash:         types.ZeroHash, // 将在WriteFullBlock中计算
 	}
+	d.logger.Info("✅ 新区块头对象创建成功", "blockNumber", currentHeader.Number, "newBlockNumber", newHeader.Number)
 
 	// 先计算区块哈希
+	d.logger.Info("🔍 ========== 开始计算区块哈希 ==========", "blockNumber", currentHeader.Number)
 	newHeader.ComputeHash()
 	realBlockHash := newHeader.Hash
+	d.logger.Info("✅ 区块哈希计算成功", "blockNumber", currentHeader.Number, "blockHash", realBlockHash.String()[:16])
 
 	// 使用真实的区块哈希计算checkpointHash用于BLS签名
+	d.logger.Info("🔍 ========== 开始计算checkpointHash ==========", "blockNumber", currentHeader.Number)
 	checkpointHash, err := checkpoint.Hash(d.blockchain.GetChainID(), newHeader.Number, realBlockHash)
 	if err != nil {
 		d.logger.Error("❌ 计算checkpointHash失败", "error", err)
 		return fmt.Errorf("failed to calculate checkpoint hash: %w", err)
 	}
+	d.logger.Info("✅ checkpointHash计算成功", "blockNumber", currentHeader.Number, "checkpointHash", checkpointHash.String()[:16])
 
 	// 🆕 添加奖励分发区块的checkpointHash打印
 	d.logger.Info("🔍 ===== 奖励分发区块CheckpointHash计算结果 =====",
@@ -11995,22 +11911,62 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 			"validatorsCount", len(currentValidators))
 
 		// 开始数据库事务
+		d.logger.Debug("🔍 步骤1: 开始数据库写事务", "blockNumber", newBlock.Number())
 		dbTx, err := d.state.beginDBTransaction(true) // 写事务
 		if err != nil {
 			d.logger.Warn("⚠️ 无法开始数据库事务", "error", err)
 		} else {
-			defer dbTx.Rollback()
+			d.logger.Debug("✅ 步骤1: 数据库写事务开始成功", "blockNumber", newBlock.Number())
+			commitSuccess := false
+			defer func() {
+				if !commitSuccess {
+					d.logger.Debug("🔍 步骤4: 开始回滚数据库事务", "blockNumber", newBlock.Number())
+					dbTx.Rollback()
+					d.logger.Debug("✅ 步骤4: 数据库事务回滚完成", "blockNumber", newBlock.Number())
+				}
+			}()
 
 			// 存储验证者集合
+			d.logger.Debug("🔍 步骤2: 开始存储验证者集合到数据库",
+				"blockNumber", newBlock.Number(),
+				"validatorsCount", len(currentValidators))
+
 			if err := d.state.StakeStore.setDelegatesAtBlock(newBlock.Number(), currentValidators, dbTx); err != nil {
 				d.logger.Warn("⚠️ 存储奖励分发区块验证者集合失败", "error", err)
 			} else {
-				// 提交事务
-				if err := dbTx.Commit(); err != nil {
-					d.logger.Warn("⚠️ 提交事务失败", "error", err)
+				d.logger.Debug("✅ 步骤2: 验证者集合存储成功", "blockNumber", newBlock.Number())
+
+				// 提交事务 - 添加超时机制
+				d.logger.Debug("🔍 步骤3: 开始提交数据库事务", "blockNumber", newBlock.Number())
+
+				// 使用超时机制防止卡死
+				commitDone := make(chan error, 1)
+				go func() {
+					commitDone <- dbTx.Commit()
+				}()
+
+				select {
+				case err := <-commitDone:
+					if err != nil {
+						d.logger.Warn("⚠️ 提交事务失败", "error", err)
+						commitSuccess = false
+					} else {
+						d.logger.Debug("✅ 步骤3: 数据库事务提交成功", "blockNumber", newBlock.Number())
+						commitSuccess = true
+					}
+				case <-time.After(3 * time.Second):
+					d.logger.Error("❌ 数据库事务提交超时，强制回滚", "blockNumber", newBlock.Number())
+					// 强制回滚
+					dbTx.Rollback()
+					d.logger.Debug("✅ 步骤4: 数据库事务回滚完成", "blockNumber", newBlock.Number())
+					commitSuccess = false
 				}
 			}
 		}
+	} else {
+		d.logger.Debug("⚠️ 跳过存储验证者集合",
+			"stateIsNil", d.state == nil,
+			"stakeStoreIsNil", d.state != nil && d.state.StakeStore == nil)
 	}
 
 	// 🆕 创建FullBlock
@@ -12020,6 +11976,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 	}
 
 	// 🆕 写入区块链，更新当前状态
+	d.logger.Info("🔍 ========== 开始写入区块链 ==========", "blockNumber", currentHeader.Number)
 	if err := d.config.Blockchain.WriteFullBlock(fullBlock, "dpos-reward-distribution"); err != nil {
 		d.logger.Error("❌ 写入新状态到区块链失败",
 			"error", err,
@@ -12027,6 +11984,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 			"blockHash", newBlock.Hash().String())
 		return fmt.Errorf("failed to write new state to blockchain: %w", err)
 	}
+	d.logger.Info("✅ 写入区块链成功", "blockNumber", currentHeader.Number, "newBlockNumber", newBlock.Number())
 
 	// 🆕 强制刷新区块链状态，确保下一个区块能获取到正确的父区块哈希
 	d.logger.Info("🔄 奖励分发区块写入完成，强制刷新区块链状态",
