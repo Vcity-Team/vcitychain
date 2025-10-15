@@ -28,6 +28,34 @@ type StakeStore struct {
 	db *bolt.DB
 }
 
+// isGenesisValidator 检查给定的地址是否为创世验证者
+func (s *StakeStore) isGenesisValidator(address types.Address) bool {
+	// 从 DPoS 实例获取创世验证者映射
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+		if dposInstance.genesisValidators != nil {
+			return dposInstance.genesisValidators[address]
+		}
+
+		// 如果映射为空，尝试从创世文件解析
+		if dposInstance.config != nil && dposInstance.config.Blockchain != nil {
+			genesisHeader, exists := dposInstance.config.Blockchain.GetHeaderByNumber(0)
+			if exists && len(genesisHeader.ExtraData) >= 32 {
+				// 使用现有的解析函数从 ExtraData 解析创世验证者
+				genesisValidators, err := dposInstance.parseValidatorsFromExtraData(genesisHeader.ExtraData)
+				if err == nil && len(genesisValidators) > 0 {
+					// 检查地址是否在解析出的创世验证者中
+					for _, validator := range genesisValidators {
+						if validator.Address == address {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
 // initialize creates necessary buckets in DB if they don't already exist
 func (s *StakeStore) initialize(dbTx *bolt.Tx) error {
 	// 创建必要的bucket
@@ -189,6 +217,17 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 				// fmt.Printf("  - 使用创世配置VotingPower: %s\n", finalVotingPower.String())
 			} else {
 				// fmt.Printf("  - 使用用户投票总数: %s\n", finalVotingPower.String())
+			}
+
+			// 🆕 临时修复：对于创世验证者，如果权重为0，设置为1000 VCITY
+			if finalVotingPower.Cmp(big.NewInt(0)) == 0 {
+				// 检查是否为创世验证者
+				isGenesisValidator := s.isGenesisValidator(delegateInfo.Address)
+				if isGenesisValidator {
+					finalVotingPower = new(big.Int)
+					finalVotingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
+					// fmt.Printf("  - 创世验证者权重为0，临时设置为1000 VCITY: %s\n", finalVotingPower.String())
+				}
 			}
 
 			// fmt.Printf("  - 最终投票权重: %s (0x%x)\n", finalVotingPower.String(), finalVotingPower.Bytes())

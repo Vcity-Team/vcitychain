@@ -1,4 +1,4 @@
-package dpos
+﻿package dpos
 
 import (
 	"bytes"
@@ -458,7 +458,7 @@ func (r *dposRuntime) initializeRuntime() error {
 
 	// 🆕 修复：根据当前区块号计算初始轮次和委托者索引
 	r.currentRound = r.calculateInitialRound()
-	r.currentDelegateIndex = r.calculateCurrentDelegateIndex()
+	r.currentDelegateIndex = r.calculateExpectedDelegateIndex()
 
 	// 初始化受托人集合
 	if err := r.initializeDelegates(); err != nil {
@@ -1877,32 +1877,120 @@ func (r *dposRuntime) calculateExpectedDelegateIndex() uint64 {
 	return currentBlock.Number % uint64(r.config.DelegateCount)
 }
 
-// calculateCurrentDelegateIndex 根据当前区块号计算委托者索引，与创世文件保持一致
-func (r *dposRuntime) calculateCurrentDelegateIndex() uint64 {
-	if r.config == nil || r.config.DelegateCount == 0 {
-		return 0
+// isEpochEndBlock 检查是否是epoch的最后一个区块
+func (r *dposRuntime) isEpochEndBlock(blockNumber uint64) bool {
+	// 🆕 修改：基于指定区块号获取epoch信息
+	currentEpoch := r.getEpochForBlock(blockNumber)
+	if currentEpoch == nil {
+		r.logger.Warn("⚠️ 无法获取当前epoch信息", "blockNumber", blockNumber)
+		return false
 	}
 
-	// 获取当前区块号
-	var currentBlockNumber uint64 = 0
-	if r.config.blockchain != nil {
-		if currentHeader := r.config.blockchain.CurrentHeader(); currentHeader != nil {
-			currentBlockNumber = currentHeader.Number
+	// 检查是否是epoch的最后一个区块
+	// 使用与consensus_runtime.go中相同的逻辑
+	epochSize := uint64(10) // 默认epoch大小，可以从配置中获取
+	if r.config != nil && r.config.PolyBFTConfig != nil {
+		epochSize = r.config.PolyBFTConfig.EpochSize
+	}
+
+	isEpochEnd := currentEpoch.FirstBlockInEpoch+epochSize-1 == blockNumber
+
+	r.logger.Debug("🔍 检查是否是epoch最后一个区块",
+		"blockNumber", blockNumber,
+		"epochNumber", currentEpoch.Number,
+		"firstBlockInEpoch", currentEpoch.FirstBlockInEpoch,
+		"epochSize", epochSize,
+		"isEpochEnd", isEpochEnd)
+
+	return isEpochEnd
+}
+
+// getCurrentEpoch 获取当前epoch信息
+func (r *dposRuntime) getCurrentEpoch() *epochMetadata {
+	return r.getEpochForBlock(0) // 0表示使用当前区块号
+}
+
+// getEpochForBlock 获取指定区块号的epoch信息
+func (r *dposRuntime) getEpochForBlock(blockNumber uint64) *epochMetadata {
+	// 获取DPoS实例
+	if r.config == nil || r.config.dposBackend == nil {
+		r.logger.Warn("⚠️ 无法获取DPoS实例，使用默认epoch信息")
+		return &epochMetadata{
+			Number:            1,
+			FirstBlockInEpoch: 0,
 		}
 	}
 
-	// 修复：使用 blockNumber % delegateCount，计算当前区块的委托者索引
-	if currentBlockNumber > 0 {
-		delegateIndex := currentBlockNumber % uint64(r.config.DelegateCount)
-		r.logger.Debug("🔍 根据区块号计算委托者索引",
-			"currentBlockNumber", currentBlockNumber,
-			"delegateCount", r.config.DelegateCount,
-			"calculatedIndex", delegateIndex,
-			"formula", "blockNumber % delegateCount")
-		return delegateIndex
+	dposInstance, ok := r.config.dposBackend.(*DPoS)
+	if !ok {
+		r.logger.Warn("⚠️ 无法转换为DPoS实例，使用默认epoch信息")
+		return &epochMetadata{
+			Number:            1,
+			FirstBlockInEpoch: 0,
+		}
 	}
 
-	return 0
+	// 🆕 修改：基于指定区块号计算epoch
+	targetBlockNumber := blockNumber
+	if blockNumber == 0 {
+		// 如果传入0，则使用当前区块号
+		if dposInstance.config.Blockchain != nil {
+			if header := dposInstance.config.Blockchain.Header(); header != nil {
+				targetBlockNumber = header.Number
+			}
+		}
+	}
+
+	// 计算epoch信息
+	epochSize := uint64(10) // 每个epoch有10个区块
+	currentEpochNumber := (targetBlockNumber / epochSize) + 1
+	firstBlockInEpoch := (currentEpochNumber - 1) * epochSize
+
+	r.logger.Debug("🔍 基于区块号计算epoch信息",
+		"targetBlockNumber", targetBlockNumber,
+		"epochSize", epochSize,
+		"currentEpochNumber", currentEpochNumber,
+		"firstBlockInEpoch", firstBlockInEpoch)
+
+	return &epochMetadata{
+		Number:            currentEpochNumber,
+		FirstBlockInEpoch: firstBlockInEpoch,
+	}
+}
+
+// executeRewardDistributionForEpochEnd 在epoch最后一个区块时执行奖励分发
+func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64) error {
+	r.logger.Info("🎉 ========== 开始执行epoch结束奖励分发 ==========",
+		"blockNumber", blockNumber,
+		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
+
+	// 获取DPoS实例
+	if r.config == nil || r.config.dposBackend == nil {
+		return fmt.Errorf("DPoS配置不可用")
+	}
+
+	dposInstance, ok := r.config.dposBackend.(*DPoS)
+	if !ok {
+		return fmt.Errorf("无法获取DPoS实例")
+	}
+	currentEpochNumber := dposInstance.epochManager.GetCurrentEpoch(blockNumber)
+	rewardEpoch := currentEpochNumber
+
+	if rewardEpoch == 0 {
+		r.logger.Info("ℹ️ 第一个epoch，无需分发奖励",
+			"currentEpoch", currentEpochNumber,
+			"blockNumber", blockNumber)
+		return nil
+	}
+
+	r.logger.Info("🔍 准备分发奖励（统一Epoch管理器）",
+		"blockNumber", blockNumber,
+		"currentEpochNumber", currentEpochNumber,
+		"rewardEpoch", rewardEpoch,
+		"epochType", "unified-block-based")
+
+	// 🆕 直接计算和分发奖励，而不是依赖pendingStateUpdates
+	return dposInstance.distributeEpochRewards(rewardEpoch)
 }
 
 // getCurrentDelegate 获取当前受托人
@@ -2082,6 +2170,56 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		},
 	}
 
+	// 🆕 检查是否是epoch的最后一个区块，如果是则执行奖励分发
+	nextBlockNumber := parent.Number + 1
+	r.logger.Info("🔍 检查是否需要执行奖励分发",
+		"nextBlockNumber", nextBlockNumber,
+		"parentNumber", parent.Number,
+		"delegate", keyAddr.String()[:16])
+
+	isEpochEndBlock := r.isEpochEndBlock(nextBlockNumber)
+	if isEpochEndBlock {
+		// 🆕 添加显著日志：epoch最后一个区块且当前是出块者
+		r.logger.Info("🎯🎯🎯 ========== EPOCH最后一个区块 + 当前出块者 ========== 🎯🎯🎯",
+			"blockNumber", nextBlockNumber,
+			"delegate", keyAddr.String()[:16],
+			"isEpochEndBlock", isEpochEndBlock,
+			"isCurrentProducer", true,
+			"timestamp", time.Now().Format("2006-01-02 15:04:05"))
+
+		r.logger.Info("🚀🚀🚀 ========== 开始执行奖励分发 ========== 🚀🚀🚀",
+			"blockNumber", nextBlockNumber,
+			"delegate", keyAddr.String()[:16],
+			"action", "REWARD_DISTRIBUTION_START")
+
+		// 执行奖励分发
+		if err := r.executeRewardDistributionForEpochEnd(nextBlockNumber); err != nil {
+			r.logger.Error("❌❌❌ ========== 奖励分发失败 ========== ❌❌❌",
+				"blockNumber", nextBlockNumber,
+				"delegate", keyAddr.String()[:16],
+				"error", err)
+			// 不返回错误，继续构建区块，但记录错误
+		} else {
+			r.logger.Info("✅✅✅ ========== 奖励分发成功 ========== ✅✅✅",
+				"blockNumber", nextBlockNumber,
+				"delegate", keyAddr.String()[:16],
+				"action", "REWARD_DISTRIBUTION_SUCCESS")
+		}
+
+		// 🆕 触发epoch切换
+		if r.config != nil && r.config.dposBackend != nil {
+			if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
+				if dposInstance.epochManager != nil {
+					dposInstance.epochManager.TriggerEpochSwitch(nextBlockNumber)
+				}
+			}
+		}
+	} else {
+		r.logger.Info("ℹ️ 不是epoch最后一个区块，跳过奖励分发",
+			"blockNumber", nextBlockNumber,
+			"isEpochEndBlock", isEpochEndBlock)
+	}
+
 	// 构建区块
 	block, err := builder.Build(func(h *types.Header) {
 		// 设置DPoS相关的区块头信息
@@ -2096,7 +2234,8 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"gasLimit", h.GasLimit,
 			"timestamp", h.Timestamp,
 			"extraDataLength", len(h.ExtraData),
-			"delegate", keyAddr.String()[:16])
+			"delegate", keyAddr.String()[:16],
+			"isEpochEndBlock", isEpochEndBlock)
 
 		// 🆕 存储验证者集合到历史数据库
 		if r.config != nil && r.config.dposBackend != nil {
@@ -2599,6 +2738,16 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	// 🆕 清理缓存，为下一个区块做准备
 	r.cachedProductionValidators = nil
 	r.logger.Debug("🧹 已清理验证者缓存，为下一个区块做准备")
+
+	// 🆕 添加：处理经济系统逻辑（记录出块统计）
+	if r.config != nil && r.config.dposBackend != nil {
+		if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
+			if err := dposInstance.processEconomicSystem(block); err != nil {
+				r.logger.Error("❌ 处理经济系统逻辑失败", "error", err)
+				// 不返回错误，继续构建区块
+			}
+		}
+	}
 
 	return block, nil
 }
@@ -3266,6 +3415,43 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		// 同步更新轮次状态（这部分必须同步执行，不能异步）
 		d.updateRoundState(header)
 
+		// 🆕 添加：处理经济系统逻辑（记录出块统计）
+		// 需要构造FullBlock来调用processEconomicSystem
+		if d.config.Blockchain != nil {
+			if block, exists := d.config.Blockchain.GetBlockByHash(header.Hash, true); exists && block != nil {
+				// 构造FullBlock
+				fullBlock := &types.FullBlock{
+					Block: block,
+				}
+				if err := d.processEconomicSystem(fullBlock); err != nil {
+					d.logger.Error("❌ 同步时处理经济系统失败", "blockNumber", header.Number, "error", err)
+					// 不返回错误，继续处理其他逻辑
+				}
+			} else {
+				d.logger.Warn("⚠️ 无法获取完整区块信息，跳过经济系统处理", "blockNumber", header.Number)
+			}
+		}
+
+		// 🆕 检查是否是epoch的最后一个区块，如果是则执行奖励分发
+		d.logger.Info("🔍 同步时检查是否需要执行奖励分发",
+			"blockNumber", header.Number,
+			"blockHash", header.Hash.String()[:16])
+
+		if d.isEpochEndBlock(header.Number) {
+			d.logger.Info("🎯 同步到epoch最后一个区块，准备执行奖励分发",
+				"blockNumber", header.Number,
+				"blockHash", header.Hash.String()[:16])
+
+			// 执行奖励分发
+			if err := d.executeDelayedStateUpdateForEpochEnd(header.Number); err != nil {
+				d.logger.Error("❌ 同步时epoch结束奖励分发失败", "blockNumber", header.Number, "error", err)
+				// 不返回错误，继续处理其他逻辑
+			}
+		} else {
+			d.logger.Info("ℹ️ 同步时不是epoch最后一个区块，跳过奖励分发",
+				"blockNumber", header.Number)
+		}
+
 		// 🆕 在区块同步时存储验证者集合到历史数据库
 		if d.state != nil && d.state.StakeStore != nil {
 			d.logger.Debug("🔍 区块同步时存储验证者集合到历史数据库",
@@ -3305,6 +3491,93 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 	}
 
 	return nil
+}
+
+// isEpochEndBlock 检查是否是epoch的最后一个区块
+func (d *DPoS) isEpochEndBlock(blockNumber uint64) bool {
+	// 🆕 修改：基于指定区块号获取epoch信息
+	currentEpoch := d.getEpochForBlock(blockNumber)
+	if currentEpoch == nil {
+		d.logger.Warn("⚠️ 无法获取当前epoch信息", "blockNumber", blockNumber)
+		return false
+	}
+
+	// 检查是否是epoch的最后一个区块
+	// 使用与consensus_runtime.go中相同的逻辑
+	epochSize := uint64(10) // 默认epoch大小，可以从配置中获取
+	// 注意：DPoSConfig中没有PolyBFTConfig字段，使用默认值
+
+	isEpochEnd := currentEpoch.FirstBlockInEpoch+epochSize-1 == blockNumber
+
+	d.logger.Debug("🔍 检查是否是epoch最后一个区块",
+		"blockNumber", blockNumber,
+		"epochNumber", currentEpoch.Number,
+		"firstBlockInEpoch", currentEpoch.FirstBlockInEpoch,
+		"epochSize", epochSize,
+		"isEpochEnd", isEpochEnd)
+
+	return isEpochEnd
+}
+
+// getCurrentEpoch 获取当前epoch信息
+func (d *DPoS) getCurrentEpoch() *epochMetadata {
+	return d.getEpochForBlock(0) // 0表示使用当前区块号
+}
+
+// getEpochForBlock 获取指定区块号的epoch信息
+func (d *DPoS) getEpochForBlock(blockNumber uint64) *epochMetadata {
+	// 🆕 修改：基于指定区块号计算epoch
+	targetBlockNumber := blockNumber
+	if blockNumber == 0 {
+		// 如果传入0，则使用当前区块号
+		if d.config.Blockchain != nil {
+			if header := d.config.Blockchain.Header(); header != nil {
+				targetBlockNumber = header.Number
+			}
+		}
+	}
+
+	// 计算epoch信息
+	epochSize := uint64(10) // 每个epoch有10个区块
+	currentEpochNumber := (targetBlockNumber / epochSize) + 1
+	firstBlockInEpoch := (currentEpochNumber - 1) * epochSize
+
+	d.logger.Debug("🔍 基于区块号计算epoch信息",
+		"targetBlockNumber", targetBlockNumber,
+		"epochSize", epochSize,
+		"currentEpochNumber", currentEpochNumber,
+		"firstBlockInEpoch", firstBlockInEpoch)
+
+	return &epochMetadata{
+		Number:            currentEpochNumber,
+		FirstBlockInEpoch: firstBlockInEpoch,
+	}
+}
+
+// executeDelayedStateUpdateForEpochEnd 在同步到epoch最后一个区块时执行奖励分发
+func (d *DPoS) executeDelayedStateUpdateForEpochEnd(blockNumber uint64) error {
+	d.logger.Info("🎉 ========== 开始执行同步时epoch结束奖励分发 ==========",
+		"blockNumber", blockNumber,
+		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
+
+	currentEpochNumber := d.epochManager.GetCurrentEpoch(blockNumber)
+	rewardEpoch := currentEpochNumber
+
+	if rewardEpoch == 0 {
+		d.logger.Info("ℹ️ 第一个epoch，无需分发奖励",
+			"currentEpoch", currentEpochNumber,
+			"blockNumber", blockNumber)
+		return nil
+	}
+
+	d.logger.Info("🔍 准备分发奖励（同步时，统一Epoch管理器）",
+		"blockNumber", blockNumber,
+		"currentEpochNumber", currentEpochNumber,
+		"rewardEpoch", rewardEpoch,
+		"epochType", "unified-block-based")
+
+	// 🆕 直接计算和分发奖励，而不是依赖pendingStateUpdates
+	return d.distributeEpochRewards(rewardEpoch)
 }
 
 // 🆕 新增：更新轮次状态（从ProcessHeaders中提取出来）
@@ -6029,7 +6302,7 @@ func (d *DPoS) compareDelegateSets(oldSet, newSet validator.AccountSet) (added, 
 func (d *DPoS) processRewards(block *types.FullBlock) error {
 	// 处理奖励分配
 	// TODO: 实现奖励分配逻辑
-	d.logger.Debug("processing rewards", "block", block.Block.Number())
+	d.logger.Info("processing rewards", "block", block.Block.Number())
 	return nil
 }
 
@@ -10905,15 +11178,11 @@ func (d *DPoS) initializeEconomicSystem() error {
 		d.logger.Named("epoch_manager"),
 	)
 
-	// 🆕 设置创世时间和回调
-	genesisTime := d.getGenesisTime()
-	d.epochManager.SetGenesisTimeAndCallback(genesisTime, d.handleEpochSwitch)
+	// 🆕 设置区块链引用，用于基于区块高度计算Epoch
+	d.epochManager.SetBlockchain(d.config.Blockchain)
 
-	// 🆕 设置epoch结束回调（用于延迟状态更新）
-	d.epochManager.SetEpochEndCallback(d.onEpochEnd)
-
-	// 🆕 启动独立时间检查器
-	d.epochManager.StartIndependentTimer()
+	// 🆕 设置回调函数
+	d.epochManager.SetCallback(d.handleEpochSwitch)
 
 	// 2. 初始化出块统计管理器
 	d.blockTracker = NewBlockProductionTracker(
@@ -11086,30 +11355,25 @@ func (d *DPoS) processEconomicSystem(block *types.FullBlock) error {
 	blockTime := time.Unix(int64(block.Block.Header.Timestamp), 0)
 	blockProducer := types.BytesToAddress(block.Block.Header.Miner)
 
-	// 1. 记录出块统计（静默执行，不打印日志）
+	// 🆕 修改：使用统一的Epoch管理器（现在基于区块高度计算）
+	currentEpoch := d.epochManager.GetCurrentEpoch(blockNumber)
+
+	// 1. 记录出块统计（使用统一的Epoch）
 	d.blockTracker.RecordBlockProduction(
 		blockNumber,
 		blockTime,
 		blockProducer,
-		d.epochManager.GetCurrentEpoch(),
+		currentEpoch, // 🆕 使用统一的Epoch管理器
 	)
 
-	// 2. 静默处理：epoch切换现在由独立定时器处理
-	// 只在调试模式下记录详细信息
-	d.logger.Debug("📊 记录出块到当前epoch",
+	// 2. 添加详细日志
+	d.logger.Info("📊 记录出块到统一Epoch",
 		"blockNumber", blockNumber,
 		"blockTime", blockTime.Format("2006-01-02 15:04:05"),
-		"currentEpoch", d.epochManager.GetCurrentEpoch())
+		"currentEpoch", currentEpoch,
+		"blockProducer", blockProducer.String()[:16])
 
 	return nil
-}
-
-// 🆕 新增：清理epoch管理器
-func (d *DPoS) cleanupEpochManager() {
-	if d.epochManager != nil {
-		d.epochManager.StopIndependentTimer()
-		d.logger.Info("🧹 清理epoch管理器完成")
-	}
 }
 
 // distributeEpochRewards 分发Epoch奖励
@@ -11130,9 +11394,30 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64) error {
 	// 2. 真实奖励分发（状态更新）
 	d.logger.Info("📊 开始真实奖励分发", "epoch", epochNumber, "validatorsCount", len(validators))
 
-	// 获取出块统计
+	// 获取出块统计（使用区块基础Epoch）
 	blockCounts := d.blockTracker.GetEpochBlockCounts(epochNumber)
 	totalBlocks := d.blockTracker.GetTotalEpochBlocks(epochNumber)
+
+	// 🆕 添加详细的出块统计日志
+	d.logger.Info("🔍 检查出块统计",
+		"epoch", epochNumber,
+		"blockCounts", blockCounts,
+		"totalBlocks", totalBlocks,
+		"validatorsCount", len(validators))
+
+	// 🆕 详细打印每个验证者的出块记录
+	d.logger.Info("📋 ========== 详细出块记录 ==========",
+		"epoch", epochNumber,
+		"totalBlocks", totalBlocks)
+
+	for _, validator := range validators {
+		blocksProduced := blockCounts[validator.Address]
+		d.logger.Info("📋 验证者出块记录",
+			"epoch", epochNumber,
+			"validator", validator.Address.String()[:16],
+			"blocksProduced", blocksProduced,
+			"votingPower", validator.VotingPower.String())
+	}
 
 	if totalBlocks == 0 {
 		d.logger.Warn("⚠️ 该epoch没有出块记录，跳过奖励分发", "epoch", epochNumber)
@@ -11342,7 +11627,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 	totalReward := big.NewInt(0)
 	for address, reward := range rewards {
 		totalReward.Add(totalReward, reward)
-		d.logger.Debug("💰 奖励详情",
+		d.logger.Info("💰 奖励详情",
 			"address", address.String(),
 			"reward", reward.String())
 	}
@@ -11494,7 +11779,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 	d.logger.Info("✅ 状态事务创建成功", "txn", txn != nil)
 
 	// 🆕 分发前检查所有验证者余额
-	d.logger.Debug("🔍 ========== 分发前余额检查 ==========")
+	d.logger.Info("🔍 ========== 分发前余额检查 ==========")
 	beforeBalances := make(map[types.Address]*big.Int)
 	for address, reward := range rewards {
 		accountInfo, err := snapshot.GetAccount(address)
@@ -11507,7 +11792,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 				balance = accountInfo.Balance
 			}
 			beforeBalances[address] = balance
-			d.logger.Debug("🔍 分发前余额",
+			d.logger.Info("🔍 分发前余额",
 				"address", address.String(),
 				"balance", balance.String(),
 				"reward", reward.String())
@@ -11623,7 +11908,6 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		CurrentValidatorsHash: currentValidatorsHash,
 		NextValidatorsHash:    currentValidatorsHash,
 		EventRoot:             types.Hash{}, // 暂时为空
-		IsRewardBlock:         true,         // 🆕 标记为奖励分发区块
 	}
 
 	// 创建Extra对象
@@ -11761,7 +12045,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 	d.logger.Info("✅ 奖励分发区块写入验证成功", "blockNumber", newBlock.Number(), "blockHash", newBlock.Hash().String())
 
 	// 🆕 分发后检查所有验证者余额
-	d.logger.Debug("🔍 ========== 分发后余额检查 ==========")
+	d.logger.Info("🔍 ========== 分发后余额检查 ==========")
 	afterBalances := make(map[types.Address]*big.Int)
 	for address, reward := range rewards {
 		var accountInfo *state.Account
@@ -11789,7 +12073,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 			beforeBalance := beforeBalances[address]
 			balanceChange := new(big.Int).Sub(balance, beforeBalance)
 
-			d.logger.Debug("🔍 分发后余额",
+			d.logger.Info("🔍 分发后余额",
 				"address", address.String(),
 				"beforeBalance", beforeBalance.String(),
 				"afterBalance", balance.String(),
@@ -11800,7 +12084,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 	}
 
 	// 🆕 权重同步：奖励分发不应该改变权重，只有真实vote交易才改变权重
-	d.logger.Debug("🔄 跳过权重同步：奖励分发不影响验证者权重")
+	d.logger.Info("🔄 跳过权重同步：奖励分发不影响验证者权重")
 
 	return nil
 }
@@ -11815,7 +12099,15 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 		}
 	}
 
-	epochNumber, lastEpochTime, epochDuration := d.epochManager.GetEpochInfo()
+	// 获取当前区块高度
+	currentBlockNumber := uint64(0)
+	if d.config.Blockchain != nil {
+		if header := d.config.Blockchain.Header(); header != nil {
+			currentBlockNumber = header.Number
+		}
+	}
+
+	epochNumber, lastEpochTime, epochDuration := d.epochManager.GetEpochInfo(currentBlockNumber)
 
 	// 计算剩余时间
 	timeRemaining := time.Duration(0)
@@ -11841,7 +12133,15 @@ func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
 		}
 	}
 
-	currentEpoch, _, epochDuration := d.epochManager.GetEpochInfo()
+	// 获取当前区块高度
+	currentBlockNumber := uint64(0)
+	if d.config.Blockchain != nil {
+		if header := d.config.Blockchain.Header(); header != nil {
+			currentBlockNumber = header.Number
+		}
+	}
+
+	currentEpoch, _, epochDuration := d.epochManager.GetEpochInfo(currentBlockNumber)
 
 	// 如果请求的是当前Epoch，返回当前信息
 	if epochNumber == currentEpoch {

@@ -9,25 +9,19 @@ import (
 	hclog "github.com/hashicorp/go-hclog"
 )
 
-// TimeBasedEpochManager 基于时间的Epoch管理器
+// TimeBasedEpochManager 基于区块高度的Epoch管理器
 type TimeBasedEpochManager struct {
-	epochDuration time.Duration
-	lastEpochTime time.Time
-	currentEpoch  uint64
 	rewardAccount types.Address
 	rewardAmount  *big.Int
 	mutex         sync.RWMutex
 	logger        hclog.Logger
+	callback      func(uint64) error
 
-	// 🆕 新增：独立时间管理
-	genesisTime        time.Time          // 创世时间
-	timer              *time.Timer        // 定时器
-	stopCh             chan struct{}      // 停止信号
-	callback           func(uint64) error // epoch切换回调
-	onEpochEndCallback func(uint64) error // epoch结束回调
+	// 🆕 新增：区块链引用，用于基于区块高度计算Epoch
+	blockchain interface{} // 区块链接口，用于获取当前区块号
 }
 
-// NewTimeBasedEpochManager 创建时间基础Epoch管理器
+// NewTimeBasedEpochManager 创建基于区块高度的Epoch管理器
 func NewTimeBasedEpochManager(
 	epochDuration time.Duration,
 	rewardAccount types.Address,
@@ -35,178 +29,96 @@ func NewTimeBasedEpochManager(
 	logger hclog.Logger,
 ) *TimeBasedEpochManager {
 	return &TimeBasedEpochManager{
-		epochDuration: epochDuration,
 		rewardAccount: rewardAccount,
-		currentEpoch:  0,
 		rewardAmount:  rewardAmount,
 		logger:        logger,
-		stopCh:        make(chan struct{}),
 	}
-}
-
-// ShouldStartNewEpoch 检查是否应该开始新epoch
-func (tem *TimeBasedEpochManager) ShouldStartNewEpoch(blockTime time.Time) bool {
-	tem.mutex.RLock()
-	defer tem.mutex.RUnlock()
-
-	if tem.lastEpochTime.IsZero() {
-		// 第一次，记录时间但不开始epoch
-		tem.lastEpochTime = blockTime
-		return false
-	}
-
-	return blockTime.Sub(tem.lastEpochTime) >= tem.epochDuration
-}
-
-// StartNewEpoch 开始新epoch
-func (tem *TimeBasedEpochManager) StartNewEpoch(blockTime time.Time) uint64 {
-	tem.mutex.Lock()
-	defer tem.mutex.Unlock()
-
-	tem.currentEpoch++
-	tem.lastEpochTime = blockTime
-
-	tem.logger.Info("⏰ ========== 开始新Epoch ==========",
-		"epoch", tem.currentEpoch,
-		"time", blockTime.Format("2006-01-02 15:04:05"),
-		"duration", tem.epochDuration.String())
-
-	return tem.currentEpoch
 }
 
 // GetCurrentEpoch 获取当前epoch
-func (tem *TimeBasedEpochManager) GetCurrentEpoch() uint64 {
+func (tem *TimeBasedEpochManager) GetCurrentEpoch(blockNumber uint64) uint64 {
 	tem.mutex.RLock()
 	defer tem.mutex.RUnlock()
-	return tem.currentEpoch
+
+	// 🆕 修改：基于传入的区块高度计算Epoch
+	epochSize := uint64(10) // 每个epoch有10个区块
+	blockBasedEpoch := (blockNumber / epochSize) + 1
+
+	tem.logger.Debug("🔍 基于区块高度计算Epoch",
+		"blockNumber", blockNumber,
+		"epochSize", epochSize,
+		"blockBasedEpoch", blockBasedEpoch)
+
+	return blockBasedEpoch
 }
 
-// GetEpochInfo 获取epoch信息
-func (tem *TimeBasedEpochManager) GetEpochInfo() (uint64, time.Time, time.Duration) {
-	tem.mutex.RLock()
-	defer tem.mutex.RUnlock()
-	return tem.currentEpoch, tem.lastEpochTime, tem.epochDuration
-}
-
-// 🆕 新增：设置创世时间和回调
-func (tem *TimeBasedEpochManager) SetGenesisTimeAndCallback(genesisTime time.Time, callback func(uint64) error) {
+// 🆕 新增：设置区块链引用
+func (tem *TimeBasedEpochManager) SetBlockchain(blockchain interface{}) {
 	tem.mutex.Lock()
 	defer tem.mutex.Unlock()
+	tem.blockchain = blockchain
+	tem.logger.Info("🔧 设置区块链引用，用于基于区块高度计算Epoch")
+}
 
-	tem.genesisTime = genesisTime
+// 🆕 新增：设置回调函数
+func (tem *TimeBasedEpochManager) SetCallback(callback func(uint64) error) {
+	tem.mutex.Lock()
+	defer tem.mutex.Unlock()
 	tem.callback = callback
-
-	tem.logger.Info("🔧 设置创世时间和回调",
-		"genesisTime", genesisTime.Format("2006-01-02 15:04:05"),
-		"epochDuration", tem.epochDuration.String())
+	tem.logger.Info("🔧 设置Epoch切换回调函数")
 }
 
-// SetEpochEndCallback 设置epoch结束回调函数
-func (tem *TimeBasedEpochManager) SetEpochEndCallback(callback func(uint64) error) {
-	tem.mutex.Lock()
-	defer tem.mutex.Unlock()
-	tem.onEpochEndCallback = callback
-}
-
-// 🆕 新增：启动独立时间检查器
-func (tem *TimeBasedEpochManager) StartIndependentTimer() {
+// 🆕 新增：基于区块高度触发epoch切换
+func (tem *TimeBasedEpochManager) TriggerEpochSwitch(blockNumber uint64) {
 	tem.mutex.Lock()
 	defer tem.mutex.Unlock()
 
-	if tem.timer != nil {
-		tem.timer.Stop()
-	}
+	// 基于区块高度计算Epoch
+	epochSize := uint64(10)
+	currentEpoch := (blockNumber / epochSize) + 1
 
-	// 计算到下一个epoch的时间
-	now := time.Now()
-	nextEpochTime := tem.calculateNextEpochTime(now)
-	timeUntilNext := nextEpochTime.Sub(now)
+	tem.logger.Info("⏰ ========== 基于区块高度触发新Epoch ==========",
+		"epoch", currentEpoch,
+		"blockNumber", blockNumber)
 
-	if timeUntilNext <= 0 {
-		// 如果已经过了时间，立即触发
-		go tem.triggerEpochSwitch()
-		timeUntilNext = tem.epochDuration
-	}
-
-	tem.timer = time.AfterFunc(timeUntilNext, func() {
-		tem.triggerEpochSwitch()
-		// 重新设置下一个定时器
-		tem.StartIndependentTimer()
-	})
-
-	tem.logger.Info("⏰ 启动独立epoch定时器",
-		"nextEpochTime", nextEpochTime.Format("2006-01-02 15:04:05"),
-		"timeUntilNext", timeUntilNext.String())
-}
-
-// 🆕 新增：停止独立时间检查器
-func (tem *TimeBasedEpochManager) StopIndependentTimer() {
-	tem.mutex.Lock()
-	defer tem.mutex.Unlock()
-
-	if tem.timer != nil {
-		tem.timer.Stop()
-		tem.timer = nil
-	}
-
-	close(tem.stopCh)
-	tem.logger.Info("🛑 停止独立epoch定时器")
-}
-
-// 🆕 新增：计算下一个epoch时间
-func (tem *TimeBasedEpochManager) calculateNextEpochTime(now time.Time) time.Time {
-	if tem.genesisTime.IsZero() {
-		// 如果没有创世时间，使用当前时间作为基准
-		return now.Add(tem.epochDuration)
-	}
-
-	// 基于创世时间计算下一个epoch时间
-	timeSinceGenesis := now.Sub(tem.genesisTime)
-	epochsPassed := timeSinceGenesis / tem.epochDuration
-	nextEpochNumber := epochsPassed + 1
-	nextEpochTime := tem.genesisTime.Add(time.Duration(nextEpochNumber) * tem.epochDuration)
-
-	return nextEpochTime
-}
-
-// 🆕 新增：触发epoch切换
-func (tem *TimeBasedEpochManager) triggerEpochSwitch() {
-	tem.mutex.Lock()
-	defer tem.mutex.Unlock()
-
-	now := time.Now()
-	previousEpochTime := tem.lastEpochTime
-	tem.currentEpoch++
-	tem.lastEpochTime = now
-
-	// 计算时间间隔
-	var timeInterval time.Duration
-	if !previousEpochTime.IsZero() {
-		timeInterval = now.Sub(previousEpochTime)
-	}
-
-	tem.logger.Info("⏰ ========== 独立定时器触发新Epoch ==========",
-		"epoch", tem.currentEpoch,
-		"time", now.Format("2006-01-02 15:04:05"),
-		"duration", tem.epochDuration.String(),
-		"previousEpochTime", previousEpochTime.Format("2006-01-02 15:04:05"),
-		"actualInterval", timeInterval.String())
-
-	// 调用回调函数
+	// 调用epoch切换回调
 	if tem.callback != nil {
 		go func() {
-			// 先调用epoch结束回调（如果有的话）
-			if tem.onEpochEndCallback != nil && tem.currentEpoch > 1 {
-				previousEpoch := tem.currentEpoch - 1
-				if err := tem.onEpochEndCallback(previousEpoch); err != nil {
-					tem.logger.Error("❌ epoch结束回调失败", "epoch", previousEpoch, "error", err)
-				}
-			}
-
-			// 然后调用epoch切换回调
-			if err := tem.callback(tem.currentEpoch); err != nil {
-				tem.logger.Error("❌ epoch切换回调失败", "epoch", tem.currentEpoch, "error", err)
+			if err := tem.callback(currentEpoch); err != nil {
+				tem.logger.Error("❌ epoch切换回调失败", "epoch", currentEpoch, "error", err)
 			}
 		}()
 	}
+}
+
+// GetEpochInfo 获取epoch信息
+func (tem *TimeBasedEpochManager) GetEpochInfo(blockNumber uint64) (uint64, time.Time, time.Duration) {
+	tem.mutex.RLock()
+	defer tem.mutex.RUnlock()
+
+	// 🆕 修改：基于传入的区块高度获取Epoch信息
+	epochSize := uint64(10)
+	currentEpoch := (blockNumber / epochSize) + 1
+	firstBlockInEpoch := (currentEpoch - 1) * epochSize
+
+	// 计算epoch开始时间（基于第一个区块的时间）
+	// 如果无法获取区块信息，使用当前时间
+	epochStartTime := time.Now()
+	if tem.blockchain != nil {
+		if blockchain, ok := tem.blockchain.(interface {
+			GetHeaderByNumber(uint64) (*types.Header, bool)
+		}); ok {
+			if header, exists := blockchain.GetHeaderByNumber(firstBlockInEpoch); exists {
+				epochStartTime = time.Unix(int64(header.Timestamp), 0)
+			}
+		}
+	}
+
+	tem.logger.Debug("🔍 获取Epoch信息（区块基础）",
+		"blockNumber", blockNumber,
+		"currentEpoch", currentEpoch,
+		"firstBlockInEpoch", firstBlockInEpoch,
+		"epochStartTime", epochStartTime.Format("2006-01-02 15:04:05"))
+
+	return currentEpoch, epochStartTime, time.Duration(10) * time.Second
 }
