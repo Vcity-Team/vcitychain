@@ -11892,52 +11892,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 
 	// 🆕 奖励分发完成，只更新状态，不创建新区块
 	d.logger.Info("✅ 奖励分发状态更新完成",
-		"epoch", epochNumber,
-		"totalReward", totalReward.String(),
-		"recipientCount", len(rewards),
 		"note", "奖励分发在7379区块内完成，不创建额外区块")
-
-	// 🆕 分发后检查所有验证者余额
-	d.logger.Info("🔍 ========== 分发后余额检查 ==========")
-	afterBalances := make(map[types.Address]*big.Int)
-	for address, reward := range rewards {
-		var accountInfo *state.Account
-		var err error
-
-		// 使用新的快照检查余额
-		if newSnapshot != nil {
-			accountInfo, err = newSnapshot.GetAccount(address)
-		} else {
-			// 如果新快照为空，使用原快照
-			accountInfo, err = snapshot.GetAccount(address)
-		}
-
-		if err != nil {
-			d.logger.Warn("⚠️ 无法获取账户信息", "address", address.String(), "error", err)
-			afterBalances[address] = big.NewInt(0)
-		} else {
-			balance := big.NewInt(0)
-			if accountInfo != nil && accountInfo.Balance != nil {
-				balance = accountInfo.Balance
-			}
-			afterBalances[address] = balance
-
-			// 计算余额变化
-			beforeBalance := beforeBalances[address]
-			balanceChange := new(big.Int).Sub(balance, beforeBalance)
-
-			d.logger.Info("🔍 分发后余额",
-				"address", address.String(),
-				"beforeBalance", beforeBalance.String(),
-				"afterBalance", balance.String(),
-				"balanceChange", balanceChange.String(),
-				"expectedReward", reward.String(),
-				"changeMatchesReward", balanceChange.Cmp(reward) == 0)
-		}
-	}
-
-	// 🆕 权重同步：奖励分发不应该改变权重，只有真实vote交易才改变权重
-	d.logger.Info("🔄 跳过权重同步：奖励分发不影响验证者权重")
 
 	return nil
 }
