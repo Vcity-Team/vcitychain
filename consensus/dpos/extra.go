@@ -69,7 +69,102 @@ type Extra struct {
 	Parent     *Signature
 	Committed  *Signature
 	Checkpoint *CheckpointData
-	// 延迟状态更新机制已移除
+	// 🆕 奖励分配信息
+	RewardDistribution *RewardDistributionInfo
+}
+
+// RewardDistributionInfo 奖励分配信息
+type RewardDistributionInfo struct {
+	EpochNumber uint64              `json:"epochNumber"`
+	Rewards     map[string]*big.Int `json:"rewards"` // 地址 -> 奖励金额
+	TotalReward *big.Int            `json:"totalReward"`
+	Timestamp   uint64              `json:"timestamp"`
+}
+
+// MarshalRLPWith 实现RLP编码
+func (r *RewardDistributionInfo) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
+	vv := ar.NewArray()
+
+	// EpochNumber
+	vv.Set(ar.NewUint(r.EpochNumber))
+
+	// Rewards map
+	rewardsArray := ar.NewArray()
+	for addr, amount := range r.Rewards {
+		rewardItem := ar.NewArray()
+		rewardItem.Set(ar.NewCopyBytes([]byte(addr)))
+		rewardItem.Set(ar.NewBigInt(amount))
+		rewardsArray.Set(rewardItem)
+	}
+	vv.Set(rewardsArray)
+
+	// TotalReward
+	vv.Set(ar.NewBigInt(r.TotalReward))
+
+	// Timestamp
+	vv.Set(ar.NewUint(r.Timestamp))
+
+	return vv
+}
+
+// UnmarshalRLPWith 实现RLP解码
+func (r *RewardDistributionInfo) UnmarshalRLPWith(v *fastrlp.Value) error {
+	elems, err := v.GetElems()
+	if err != nil {
+		return err
+	}
+
+	if len(elems) < 4 {
+		return fmt.Errorf("invalid RewardDistributionInfo RLP: expected 4 elements, got %d", len(elems))
+	}
+
+	// EpochNumber
+	epochNumber, err := elems[0].GetUint64()
+	if err != nil {
+		return err
+	}
+	r.EpochNumber = epochNumber
+
+	// Rewards map
+	rewardsElems, err := elems[1].GetElems()
+	if err != nil {
+		return err
+	}
+	r.Rewards = make(map[string]*big.Int)
+	for _, rewardElem := range rewardsElems {
+		rewardItemElems, err := rewardElem.GetElems()
+		if err != nil || len(rewardItemElems) != 2 {
+			continue
+		}
+
+		addrBytes, err := rewardItemElems[0].GetBytes(nil)
+		if err != nil {
+			continue
+		}
+
+		amount := new(big.Int)
+		if err := rewardItemElems[1].GetBigInt(amount); err != nil {
+			continue
+		}
+
+		r.Rewards[string(addrBytes)] = amount
+	}
+
+	// TotalReward
+	totalReward := new(big.Int)
+	if err := elems[2].GetBigInt(totalReward); err != nil {
+		return err
+	}
+	r.TotalReward = totalReward
+
+	// Timestamp
+	timestamp, err := elems[3].GetUint64()
+	if err != nil {
+		return err
+	}
+	r.Timestamp = timestamp
+
+	return nil
 }
 
 // DelayedStateUpdateInfo 结构体已移除，延迟状态更新机制不再需要
@@ -113,7 +208,12 @@ func (i *Extra) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 		vv.Set(i.Checkpoint.MarshalRLPWith(ar))
 	}
 
-	// 延迟状态更新机制已移除
+	// 🆕 奖励分配信息
+	if i.RewardDistribution == nil {
+		vv.Set(ar.NewNullArray())
+	} else {
+		vv.Set(i.RewardDistribution.MarshalRLPWith(ar))
+	}
 
 	return vv
 }
@@ -220,12 +320,15 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		}
 	}
 
-	// Element[4] - 额外字段（只在5个元素时处理）
+	// Element[4] - 奖励分配信息（只在5个元素时处理）
 	if expectedElements == 5 && len(elems) > 4 && elems[4].Elems() > 0 {
-		fmt.Printf("🔍 DEBUG Element[4] detected: elems=%d, skipping for now\n", elems[4].Elems())
+		i.RewardDistribution = &RewardDistributionInfo{}
+		if err := i.RewardDistribution.UnmarshalRLPWith(elems[4]); err != nil {
+			fmt.Printf("❌ DEBUG RewardDistribution UnmarshalRLP failed: %v\n", err)
+			// 不返回错误，只是跳过奖励分配信息
+			i.RewardDistribution = nil
+		}
 	}
-
-	// 延迟状态更新机制已移除
 
 	return nil
 }

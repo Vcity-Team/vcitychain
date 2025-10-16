@@ -861,6 +861,13 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 
 	b.logger.Info("新区块写入", logArgs...)
 
+	// 🆕 检查写入的区块状态根
+	b.logger.Info("🔍 区块写入完成状态根检查",
+		"blockNumber", header.Number,
+		"stateRoot", header.StateRoot.String(),
+		"blockHash", header.Hash.String(),
+		"source", source)
+
 	return nil
 }
 
