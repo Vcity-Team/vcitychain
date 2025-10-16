@@ -69,106 +69,10 @@ type Extra struct {
 	Parent     *Signature
 	Committed  *Signature
 	Checkpoint *CheckpointData
-	// 🆕 延迟状态更新信息
-	DelayedStateUpdate *DelayedStateUpdateInfo
+	// 延迟状态更新机制已移除
 }
 
-// DelayedStateUpdateInfo 延迟状态更新信息
-type DelayedStateUpdateInfo struct {
-	Epoch     uint64                     `json:"epoch"`
-	Updates   map[types.Address]*big.Int `json:"updates"`
-	Hash      []byte                     `json:"hash"`
-	Timestamp int64                      `json:"timestamp"`
-}
-
-// MarshalRLPWith 序列化DelayedStateUpdateInfo
-func (d *DelayedStateUpdateInfo) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
-	vv := ar.NewArray()
-
-	// Epoch
-	vv.Set(ar.NewUint(d.Epoch))
-
-	// Updates - 序列化为地址和金额的数组
-	updatesArray := ar.NewArray()
-	for addr, amount := range d.Updates {
-		updateItem := ar.NewArray()
-		updateItem.Set(ar.NewCopyBytes(addr.Bytes()))
-		updateItem.Set(ar.NewBigInt(amount))
-		updatesArray.Set(updateItem)
-	}
-	vv.Set(updatesArray)
-
-	// Hash
-	vv.Set(ar.NewCopyBytes(d.Hash))
-
-	// Timestamp
-	vv.Set(ar.NewBigInt(big.NewInt(d.Timestamp)))
-
-	return vv
-}
-
-// UnmarshalRLPWith 反序列化DelayedStateUpdateInfo
-func (d *DelayedStateUpdateInfo) UnmarshalRLPWith(v *fastrlp.Value) error {
-	elems, err := v.GetElems()
-	if err != nil {
-		return err
-	}
-
-	if len(elems) != 4 {
-		return fmt.Errorf("expected 4 elements for DelayedStateUpdateInfo, got %d", len(elems))
-	}
-
-	// Epoch
-	epoch, err := elems[0].GetUint64()
-	if err != nil {
-		return err
-	}
-	d.Epoch = epoch
-
-	// Updates
-	updatesElems, err := elems[1].GetElems()
-	if err != nil {
-		return err
-	}
-	d.Updates = make(map[types.Address]*big.Int)
-	for _, updateElem := range updatesElems {
-		updateItemElems, err := updateElem.GetElems()
-		if err != nil {
-			return err
-		}
-		if len(updateItemElems) != 2 {
-			continue
-		}
-
-		addrBytes, err := updateItemElems[0].GetBytes(nil)
-		if err != nil {
-			return err
-		}
-		amountBig := new(big.Int)
-		if err := updateItemElems[1].GetBigInt(amountBig); err != nil {
-			return err
-		}
-
-		addr := types.BytesToAddress(addrBytes)
-		d.Updates[addr] = amountBig
-	}
-
-	// Hash
-	hash, err := elems[2].GetBytes(nil)
-	if err != nil {
-		return err
-	}
-	d.Hash = hash
-
-	// Timestamp
-	timestampBig := new(big.Int)
-	if err := elems[3].GetBigInt(timestampBig); err != nil {
-		return err
-	}
-	d.Timestamp = timestampBig.Int64()
-
-	return nil
-}
+// DelayedStateUpdateInfo 结构体已移除，延迟状态更新机制不再需要
 
 // MarshalRLPTo defines the marshal function wrapper for Extra
 func (i *Extra) MarshalRLPTo(dst []byte) []byte {
@@ -209,12 +113,7 @@ func (i *Extra) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 		vv.Set(i.Checkpoint.MarshalRLPWith(ar))
 	}
 
-	// 🆕 DelayedStateUpdate
-	if i.DelayedStateUpdate == nil {
-		vv.Set(ar.NewNullArray())
-	} else {
-		vv.Set(i.DelayedStateUpdate.MarshalRLPWith(ar))
-	}
+	// 延迟状态更新机制已移除
 
 	return vv
 }
@@ -235,9 +134,8 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 	expectedElements := 4 // 默认创世区块格式
 	if len(elems) == 5 {
 		expectedElements = 5 // 普通区块格式
-	} else if len(elems) == 6 {
-		expectedElements = 6 // 包含延迟状态更新的格式
 	}
+	// 延迟状态更新机制已移除，不再需要6个元素的格式
 
 	// 解析RLP元素
 
@@ -327,14 +225,7 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		fmt.Printf("🔍 DEBUG Element[4] detected: elems=%d, skipping for now\n", elems[4].Elems())
 	}
 
-	// 🆕 Element[5] - 延迟状态更新字段（只在6个元素时处理）
-	if expectedElements == 6 && len(elems) > 5 && elems[5].Elems() > 0 {
-		i.DelayedStateUpdate = &DelayedStateUpdateInfo{}
-		if err := i.DelayedStateUpdate.UnmarshalRLPWith(elems[5]); err != nil {
-			fmt.Printf("❌ DEBUG DelayedStateUpdate UnmarshalRLP failed: %v\n", err)
-			return err
-		}
-	}
+	// 延迟状态更新机制已移除
 
 	return nil
 }

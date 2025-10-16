@@ -857,7 +857,6 @@ func (r *dposRuntime) startBlockProduction() error {
 	return nil
 }
 
-// continuousBlockMonitoring TRON式持续区块监测
 func (r *dposRuntime) continuousBlockMonitoring() {
 	for {
 		select {
@@ -890,7 +889,6 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 	}
 }
 
-// shouldProduceBlockNow TRON式即时出块检查
 func (r *dposRuntime) shouldProduceBlockNow() bool {
 	currentBlock := r.config.blockchain.CurrentHeader()
 	if currentBlock == nil {
@@ -1836,7 +1834,7 @@ func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64, c
 		"rewardEpoch", rewardEpoch,
 		"epochType", "unified-block-based")
 
-	// 🆕 直接计算和分发奖励，而不是依赖pendingStateUpdates
+	// 直接计算和分发奖励
 	return dposInstance.distributeEpochRewards(rewardEpoch, currentRound)
 }
 
@@ -1887,33 +1885,24 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	nextBlockNumber := parent.Number + 1
 	isEpochEndBlock := r.isEpochEndBlock(nextBlockNumber)
 
-	if !isEpochEndBlock {
-		// 只在非epoch结束区块时应用延迟状态更新
+	if isEpochEndBlock {
+		// 🆕 在epoch结束区块直接进行奖励分发
 		if dpos, ok := r.backend.(*DPoS); ok {
-			// 添加调试日志
-			dpos.stateUpdateMutex.RLock()
-			hasPendingUpdate := dpos.pendingStateUpdate != nil
-			dpos.stateUpdateMutex.RUnlock()
-
-			r.logger.Info("🔍 检查延迟状态更新",
-				"hasPendingUpdate", hasPendingUpdate,
+			r.logger.Info("🎯 在epoch结束区块进行奖励分发",
 				"blockNumber", nextBlockNumber,
 				"isEpochEndBlock", isEpochEndBlock)
 
-			// 1. 首先检查本地是否有延迟状态更新
-			if err := dpos.applyPendingStateUpdates(); err != nil {
-				r.logger.Error("❌ 应用本地延迟状态更新失败", "error", err)
-				return nil, fmt.Errorf("failed to apply pending state updates: %w", err)
-			}
-
-			// 2. 检查父区块的ExtraData中是否有延迟状态更新
-			if err := dpos.applyDelayedStateUpdateFromBlock(parent); err != nil {
-				r.logger.Error("❌ 从区块ExtraData应用延迟状态更新失败", "error", err)
-				return nil, fmt.Errorf("failed to apply delayed state update from block: %w", err)
+			// 直接分发奖励
+			// 计算正确的epoch号
+			epochNumber := dpos.epochManager.GetCurrentEpoch(nextBlockNumber)
+			if err := dpos.distributeEpochRewards(epochNumber, 0); err != nil {
+				r.logger.Error("❌ epoch结束区块奖励分发失败", "error", err)
+				return nil, fmt.Errorf("failed to distribute epoch rewards: %w", err)
 			}
 		}
 	} else {
-		r.logger.Info("ℹ️ 跳过延迟状态更新检查（epoch结束区块）",
+		// 非epoch结束区块，无需处理延迟状态更新
+		r.logger.Debug("非epoch结束区块，跳过奖励分发处理",
 			"blockNumber", nextBlockNumber,
 			"isEpochEndBlock", isEpochEndBlock)
 	}
@@ -2054,24 +2043,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 	// 🆕 检查是否是epoch的最后一个区块，如果是则执行奖励分发
 
-	// 🆕 检查是否有延迟状态更新需要包含在ExtraData中
-	if dpos, ok := r.backend.(*DPoS); ok {
-		dpos.stateUpdateMutex.RLock()
-		if dpos.pendingStateUpdate != nil {
-			// 将延迟状态更新信息包含在ExtraData中
-			extra.DelayedStateUpdate = &DelayedStateUpdateInfo{
-				Epoch:     dpos.pendingStateUpdate.Epoch,
-				Updates:   dpos.pendingStateUpdate.Updates,
-				Hash:      dpos.pendingStateUpdate.Hash,
-				Timestamp: dpos.pendingStateUpdate.Timestamp,
-			}
-			r.logger.Info("📦 将延迟状态更新包含在ExtraData中",
-				"blockNumber", nextBlockNumber,
-				"epoch", dpos.pendingStateUpdate.Epoch,
-				"updateCount", len(dpos.pendingStateUpdate.Updates))
-		}
-		dpos.stateUpdateMutex.RUnlock()
-	}
+	// 延迟状态更新机制已移除，奖励分发在epoch结束区块直接执行
 	r.logger.Info("🔍 检查是否需要执行奖励分发",
 		"nextBlockNumber", nextBlockNumber,
 		"parentNumber", parent.Number,
@@ -2137,79 +2109,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"delegate", keyAddr.String()[:16],
 			"isEpochEndBlock", isEpochEndBlock)
 
-		// 🆕 存储验证者集合到历史数据库
-		if r.config != nil && r.config.dposBackend != nil {
-			if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
-				if dposInstance.state != nil && dposInstance.state.StakeStore != nil {
-					r.logger.Info("🔍 开始存储验证者集合到历史数据库",
-						"blockNumber", h.Number,
-						"validatorsCount", len(productionValidators))
-
-					// 打印验证者详细信息
-					for i, validator := range productionValidators {
-						r.logger.Info("🔍 准备存储的验证者",
-							"blockNumber", h.Number,
-							"index", i,
-							"address", validator.Address.String(),
-							"votingPower", validator.VotingPower.String(),
-							"isActive", validator.IsActive)
-					}
-
-					// 开始数据库事务
-					dbTx, err := dposInstance.state.beginDBTransaction(true) // 写事务
-					if err != nil {
-						r.logger.Error("❌ 无法开始数据库事务", "blockNumber", h.Number, "error", err)
-					} else {
-						defer dbTx.Rollback()
-
-						// 存储验证者集合
-						r.logger.Info("🔍 调用setDelegatesAtBlock存储验证者集合",
-							"blockNumber", h.Number,
-							"validatorsCount", len(productionValidators))
-
-						// 临时注释掉setDelegatesAtBlock调用进行测试
-						// if err := dposInstance.state.StakeStore.setDelegatesAtBlock(h.Number, productionValidators, dbTx); err != nil {
-						// 	r.logger.Error("❌ 存储验证者集合失败", "blockNumber", h.Number, "error", err)
-						// } else {
-						// 临时注释掉setDelegatesAtBlock调用进行测试
-						// r.logger.Info("✅ setDelegatesAtBlock调用成功，准备提交事务",
-						// 	"blockNumber", h.Number)
-
-						// 提交事务 - 添加超时机制
-						// r.logger.Debug("🔍 开始提交数据库事务", "blockNumber", h.Number)
-
-						// 使用超时机制防止卡死
-						// commitDone := make(chan error, 1)
-						// go func() {
-						// 	commitDone <- dbTx.Commit()
-						// }()
-
-						// select {
-						// case err := <-commitDone:
-						// 	if err != nil {
-						// 		r.logger.Error("❌ 提交事务失败", "blockNumber", h.Number, "error", err)
-						// 	} else {
-						// 		r.logger.Info("✅ 验证者集合已存储到历史数据库",
-						// 			"blockNumber", h.Number,
-						// 			"count", len(productionValidators))
-						// 	}
-						// case <-time.After(3 * time.Second):
-						// 	r.logger.Error("❌ 数据库事务提交超时，强制回滚", "blockNumber", h.Number)
-						// 	dbTx.Rollback()
-						// }
-					}
-				} else {
-					r.logger.Warn("⚠️ DPoS实例状态不可用",
-						"blockNumber", h.Number,
-						"stateIsNil", dposInstance.state == nil,
-						"stakeStoreIsNil", dposInstance.state != nil && dposInstance.state.StakeStore == nil)
-				}
-			} else {
-				r.logger.Warn("⚠️ 无法获取DPoS实例", "blockNumber", h.Number)
-			}
-		} else {
-			r.logger.Warn("⚠️ 配置不可用", "blockNumber", h.Number, "configIsNil", r.config == nil, "dposBackendIsNil", r.config != nil && r.config.dposBackend == nil)
-		}
 	})
 
 	if err != nil {
@@ -2654,7 +2553,21 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	r.cachedProductionValidators = nil
 	r.logger.Debug("🧹 已清理验证者缓存，为下一个区块做准备")
 
-	// 🆕 移除：经济系统逻辑处理移到ProcessHeaders中，避免重复记录
+	// 🆕 如果是epoch结束区块，在区块构建过程中执行奖励分发
+	if isEpochEndBlock {
+		if dpos, ok := r.backend.(*DPoS); ok {
+			r.logger.Info("🎯 在epoch结束区块构建过程中进行奖励分发",
+				"blockNumber", block.Block.Number(),
+				"isEpochEndBlock", isEpochEndBlock)
+
+			// 计算正确的epoch号
+			epochNumber := dpos.epochManager.GetCurrentEpoch(block.Block.Number())
+			if err := dpos.distributeEpochRewards(epochNumber, 0); err != nil {
+				r.logger.Error("❌ epoch结束区块奖励分发失败", "error", err)
+				return nil, fmt.Errorf("failed to distribute epoch rewards: %w", err)
+			}
+		}
+	}
 
 	return block, nil
 }
@@ -2929,8 +2842,7 @@ type DPoS struct {
 	// 🆕 固定时间窗口调度器
 	blockScheduler *BlockScheduler
 
-	// 🆕 延迟状态更新机制（方案1）
-	pendingStateUpdates map[uint64]map[types.Address]*big.Int
+	// 延迟状态更新机制已移除
 
 	// 🆕 新增：余额查询器
 	balanceQuerier NativeTokenBalanceQuerier
@@ -2949,18 +2861,10 @@ type DPoS struct {
 	blsLoadingMutex    sync.RWMutex
 	blsLoadingWaitCh   chan struct{}
 
-	// 🆕 延迟状态更新机制
-	pendingStateUpdate *PendingStateUpdate
-	stateUpdateMutex   sync.RWMutex
+	// 延迟状态更新机制已移除
 }
 
-// PendingStateUpdate 延迟状态更新结构体
-type PendingStateUpdate struct {
-	Epoch     uint64                     `json:"epoch"`
-	Updates   map[types.Address]*big.Int `json:"updates"`
-	Hash      []byte                     `json:"hash"`
-	Timestamp int64                      `json:"timestamp"`
-}
+// PendingStateUpdate 结构体已移除，延迟状态更新机制不再需要
 
 // VoterInfo 投票者信息
 type VoterInfo struct {
@@ -3136,6 +3040,16 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 	if d.config.ConsensusSwitchHeight > 0 && blockNumber == d.config.ConsensusSwitchHeight {
 		d.logger.Info("🔄 共识切换高度区块，跳过DPoS验证", "blockNumber", blockNumber, "consensusSwitchHeight", d.config.ConsensusSwitchHeight)
 		return nil
+	}
+
+	// 🆕 检查是否是epoch结束区块，如果是则从ExtraData读取奖励信息并更新状态
+	if d.isEpochEndBlock(blockNumber) {
+		d.logger.Info("🎯 同步节点检测到epoch结束区块，从ExtraData读取奖励信息",
+			"blockNumber", blockNumber)
+
+		// 延迟状态更新机制已移除，状态更新在epoch结束区块直接执行
+		d.logger.Debug("延迟状态更新机制已移除，无需从ExtraData应用状态更新",
+			"blockNumber", blockNumber)
 	}
 
 	// 🆕 关键：在验证前等待BLS公钥加载完成
@@ -3354,11 +3268,9 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 				"blockNumber", header.Number,
 				"blockHash", header.Hash.String()[:16])
 
-			// 执行奖励分发
-			if err := d.executeDelayedStateUpdateForEpochEnd(header.Number, d.currentRound); err != nil {
-				d.logger.Error("❌ 同步时epoch结束奖励分发失败", "blockNumber", header.Number, "error", err)
-				// 不返回错误，继续处理其他逻辑
-			}
+			// 延迟状态更新机制已移除，奖励分发在epoch结束区块直接执行
+			d.logger.Debug("延迟状态更新机制已移除，无需在同步时执行奖励分发",
+				"blockNumber", header.Number)
 		} else {
 			d.logger.Info("ℹ️ 同步时不是epoch最后一个区块，跳过奖励分发",
 				"blockNumber", header.Number)
@@ -3476,31 +3388,7 @@ func (d *DPoS) getEpochForBlock(blockNumber uint64) *epochMetadata {
 	}
 }
 
-// executeDelayedStateUpdateForEpochEnd 在同步到epoch最后一个区块时执行奖励分发
-func (d *DPoS) executeDelayedStateUpdateForEpochEnd(blockNumber uint64, currentRound uint64) error {
-	d.logger.Info("🎉 ========== 开始执行同步时epoch结束奖励分发 ==========",
-		"blockNumber", blockNumber,
-		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
-
-	currentEpochNumber := d.epochManager.GetCurrentEpoch(blockNumber)
-	rewardEpoch := currentEpochNumber
-
-	if rewardEpoch == 0 {
-		d.logger.Info("ℹ️ 第一个epoch，无需分发奖励",
-			"currentEpoch", currentEpochNumber,
-			"blockNumber", blockNumber)
-		return nil
-	}
-
-	d.logger.Info("🔍 准备分发奖励（同步时，统一Epoch管理器）",
-		"blockNumber", blockNumber,
-		"currentEpochNumber", currentEpochNumber,
-		"rewardEpoch", rewardEpoch,
-		"epochType", "unified-block-based")
-
-	// 🆕 直接计算和分发奖励，而不是依赖pendingStateUpdates
-	return d.distributeEpochRewards(rewardEpoch, currentRound)
-}
+// executeDelayedStateUpdateForEpochEnd 函数已移除，延迟状态更新机制不再需要
 
 // 🆕 新增：更新轮次状态（从ProcessHeaders中提取出来）
 func (d *DPoS) updateRoundState(header *types.Header) {
@@ -6231,16 +6119,7 @@ func (d *DPoS) getDelegatesFromState(blockNumber uint64) (validator.AccountSet, 
 				"stakeStoreType", fmt.Sprintf("%T", d.state.StakeStore),
 				"timestamp", time.Now().Format("2006-01-02 15:04:05.000"))
 
-			// 记录调用前的锁状态
-			d.logger.Info("🔒 调用前锁状态检查",
-				"blockNumber", blockNumber,
-				"stateUpdateMutexLocked", !d.stateUpdateMutex.TryRLock())
-
-			if !d.stateUpdateMutex.TryRLock() {
-				d.logger.Warn("⚠️ stateUpdateMutex被占用", "blockNumber", blockNumber)
-			} else {
-				d.stateUpdateMutex.RUnlock()
-			}
+			// 延迟状态更新机制已移除，无需检查锁状态
 
 			startTime := time.Now()
 			d.logger.Info("🚀 开始执行getDelegatesAtBlock",
@@ -11356,10 +11235,7 @@ func (d *DPoS) calculateAndRecordEpochRewards(epochNumber uint64) error {
 		return fmt.Errorf("failed to record rewards to database: %w", err)
 	}
 
-	// 记录延迟状态更新任务
-	if err := d.scheduleDelayedStateUpdate(epochNumber, allRewards); err != nil {
-		return fmt.Errorf("failed to schedule delayed state update: %w", err)
-	}
+	// 延迟状态更新机制已移除，奖励分发在epoch结束区块直接执行
 
 	return nil
 }
@@ -11611,34 +11487,28 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 			"totalVoterReward", voterRewardAmount.String())
 	}
 
-	// 🆕 延迟状态更新：不立即执行状态更新，而是存储为待更新状态
+	d.logger.Info("🔍 准备开始状态更新阶段", "epoch", epochNumber, "stateUpdatesCount", len(stateUpdates))
+
+	// 🆕 在epoch结束区块直接执行奖励分发和状态更新
 	if len(stateUpdates) > 0 {
-		// 计算状态更新哈希
-		stateUpdateHash := d.calculateStateUpdateHash(stateUpdates)
-
-		// 存储延迟状态更新
-		d.stateUpdateMutex.Lock()
-		d.pendingStateUpdate = &PendingStateUpdate{
-			Epoch:     epochNumber,
-			Updates:   stateUpdates,
-			Hash:      stateUpdateHash,
-			Timestamp: time.Now().Unix(),
-		}
-		d.stateUpdateMutex.Unlock()
-
-		d.logger.Info("📦 延迟状态更新已存储，将在下个区块应用",
+		d.logger.Info("🎯 在epoch结束区块执行奖励分发",
 			"epoch", epochNumber,
-			"updateCount", len(stateUpdates),
-			"hash", fmt.Sprintf("%x", stateUpdateHash),
-			"updates", func() map[string]string {
-				result := make(map[string]string)
-				for addr, amount := range stateUpdates {
-					result[addr.String()] = amount.String()
-				}
-				return result
-			}())
+			"updateCount", len(stateUpdates))
+
+		// 直接执行状态更新
+		d.logger.Info("🔍 开始执行executeBatchStateUpdate", "epoch", epochNumber, "updateCount", len(stateUpdates))
+		err := d.executeBatchStateUpdate(stateUpdates, d.config.RewardAccount)
+		if err != nil {
+			d.logger.Error("❌ epoch结束区块状态更新失败", "error", err)
+			return fmt.Errorf("failed to execute state update in epoch end block: %w", err)
+		}
+		d.logger.Info("✅ executeBatchStateUpdate执行完成", "epoch", epochNumber)
+
+		d.logger.Info("✅ epoch结束区块奖励分发完成",
+			"epoch", epochNumber,
+			"updateCount", len(stateUpdates))
 	} else {
-		d.logger.Warn("⚠️ 没有状态更新需要存储", "epoch", epochNumber)
+		d.logger.Warn("⚠️ 没有奖励分发信息", "epoch", epochNumber)
 	}
 
 	// 3. 记录分发统计
@@ -11688,89 +11558,7 @@ func (d *DPoS) calculateStateUpdateHash(stateUpdates map[types.Address]*big.Int)
 	return hasher.Sum(nil)
 }
 
-// applyPendingStateUpdates 应用延迟状态更新
-func (d *DPoS) applyPendingStateUpdates() error {
-	d.stateUpdateMutex.Lock()
-	defer d.stateUpdateMutex.Unlock()
-
-	d.logger.Info("🔍 applyPendingStateUpdates 被调用",
-		"pendingStateUpdateIsNil", d.pendingStateUpdate == nil)
-
-	if d.pendingStateUpdate == nil {
-		d.logger.Info("ℹ️ 没有待更新的状态，跳过")
-		return nil // 没有待更新的状态
-	}
-
-	d.logger.Info("🔄 开始应用延迟状态更新",
-		"epoch", d.pendingStateUpdate.Epoch,
-		"updateCount", len(d.pendingStateUpdate.Updates),
-		"hash", fmt.Sprintf("%x", d.pendingStateUpdate.Hash))
-
-	// 执行状态更新
-	err := d.executeBatchStateUpdate(d.pendingStateUpdate.Updates, d.config.RewardAccount)
-	if err != nil {
-		d.logger.Error("❌ 应用延迟状态更新失败", "error", err)
-		return fmt.Errorf("failed to apply pending state updates: %w", err)
-	}
-
-	// 🆕 关键修复：将状态根同步到区块链
-	// 获取当前区块头
-	currentHeader := d.config.Blockchain.Header()
-	if currentHeader == nil {
-		d.logger.Error("❌ 无法获取当前区块头")
-		return fmt.Errorf("failed to get current header")
-	}
-
-	// 重新计算状态根（基于状态更新）
-	// 这里需要重新执行状态更新来获取正确的状态根
-	// 由于executeBatchStateUpdate已经执行了状态更新，我们需要获取新的状态根
-	snapshot, err := d.config.Executor.StateAt(currentHeader.StateRoot)
-	if err != nil {
-		d.logger.Error("❌ 无法获取状态快照", "error", err)
-		return fmt.Errorf("failed to get state snapshot: %w", err)
-	}
-
-	// 创建状态事务来重新计算状态根
-	txn := state.NewTxn(snapshot)
-	for address, reward := range d.pendingStateUpdate.Updates {
-		txn.AddBalance(address, reward)
-		txn.SubBalance(d.config.RewardAccount, reward)
-	}
-
-	// 提交状态变更并获取新的状态根
-	objects, err := txn.Commit(true)
-	if err != nil {
-		d.logger.Error("❌ 重新计算状态根失败", "error", err)
-		return fmt.Errorf("failed to recalculate state root: %w", err)
-	}
-
-	var newStateRoot []byte
-	if len(objects) > 0 {
-		_, newStateRoot, err = snapshot.Commit(objects)
-		if err != nil {
-			d.logger.Error("❌ 提交状态根失败", "error", err)
-			return fmt.Errorf("failed to commit state root: %w", err)
-		}
-	}
-
-	// 更新状态根到区块链
-	currentHeader.StateRoot = types.BytesToHash(newStateRoot)
-	currentHeader.ComputeHash()
-
-	d.logger.Info("✅ 状态根已更新到区块链",
-		"blockNumber", currentHeader.Number,
-		"newStateRoot", fmt.Sprintf("%x", newStateRoot),
-		"newBlockHash", currentHeader.Hash.String())
-
-	d.logger.Info("✅ 延迟状态更新应用成功",
-		"epoch", d.pendingStateUpdate.Epoch,
-		"updateCount", len(d.pendingStateUpdate.Updates))
-
-	// 清除已应用的状态更新
-	d.pendingStateUpdate = nil
-
-	return nil
-}
+// applyPendingStateUpdates 函数已移除，延迟状态更新机制不再需要
 
 // syncStateRootToBlockchain 将状态根同步到区块链
 func (d *DPoS) syncStateRootToBlockchain() error {
@@ -11796,42 +11584,7 @@ func (d *DPoS) syncStateRootToBlockchain() error {
 	return nil
 }
 
-// applyDelayedStateUpdateFromBlock 从区块ExtraData中应用延迟状态更新
-func (d *DPoS) applyDelayedStateUpdateFromBlock(header *types.Header) error {
-	// 解析区块的ExtraData
-	extra, err := GetIbftExtra(header.ExtraData)
-	if err != nil {
-		d.logger.Debug("无法解析区块ExtraData", "blockNumber", header.Number, "error", err)
-		return nil // 不是错误，可能没有ExtraData
-	}
-
-	// 检查是否有延迟状态更新信息
-	if extra.DelayedStateUpdate == nil {
-		d.logger.Debug("区块中没有延迟状态更新信息", "blockNumber", header.Number)
-		return nil
-	}
-
-	d.logger.Info("🔍 从区块ExtraData中发现延迟状态更新",
-		"blockNumber", header.Number,
-		"epoch", extra.DelayedStateUpdate.Epoch,
-		"updateCount", len(extra.DelayedStateUpdate.Updates))
-
-	// 应用延迟状态更新
-	err = d.executeBatchStateUpdate(extra.DelayedStateUpdate.Updates, d.config.RewardAccount)
-	if err != nil {
-		d.logger.Error("❌ 从区块ExtraData应用延迟状态更新失败", "error", err)
-		return fmt.Errorf("failed to apply delayed state update from block: %w", err)
-	}
-
-	// 状态根已经在executeBatchStateUpdate中更新，无需额外同步
-
-	d.logger.Info("✅ 从区块ExtraData应用延迟状态更新成功",
-		"blockNumber", header.Number,
-		"epoch", extra.DelayedStateUpdate.Epoch,
-		"updateCount", len(extra.DelayedStateUpdate.Updates))
-
-	return nil
-}
+// applyDelayedStateUpdateFromBlock 函数已移除，延迟状态更新机制不再需要
 
 // getAccountBalance 获取账户余额
 func (d *DPoS) getAccountBalance(address types.Address) (*big.Int, error) {
@@ -11901,30 +11654,11 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 
 	d.logger.Info("💰 总奖励金额", "totalReward", totalReward.String())
 
-	// 🆕 获取当前区块头，添加重试机制确保获取到最新状态
-	var currentHeader *types.Header
-	maxRetries := 5
-	for i := 0; i < maxRetries; i++ {
-		currentHeader = d.config.Blockchain.Header()
-		if currentHeader == nil {
-			d.logger.Warn("⚠️ 无法获取当前区块头，重试中", "attempt", i+1, "maxRetries", maxRetries)
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-
-		// 🆕 验证获取到的区块头是否有效
-		if currentHeader.Number == 0 && currentHeader.Hash == types.ZeroHash {
-			d.logger.Warn("⚠️ 获取到无效的区块头，重试中", "attempt", i+1, "maxRetries", maxRetries)
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-
-		break
-	}
-
+	// 获取当前区块头
+	currentHeader := d.config.Blockchain.Header()
 	if currentHeader == nil {
-		d.logger.Error("❌ 无法获取当前区块头，重试次数用尽")
-		return fmt.Errorf("failed to get current header after %d retries", maxRetries)
+		d.logger.Error("❌ 无法获取当前区块头")
+		return fmt.Errorf("failed to get current header")
 	}
 
 	// 🆕 确保当前区块头的哈希是正确的
@@ -12002,6 +11736,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		"blockHash", currentHeader.Hash.String())
 
 	// 🆕 通过快照操作状态（参考getValidatorBalance的实现）
+	d.logger.Info("🔍 开始创建状态快照", "stateRoot", currentHeader.StateRoot.String())
 	snapshot, err := d.config.Executor.StateAt(currentHeader.StateRoot)
 	if err != nil {
 		d.logger.Error("❌ 创建状态快照失败",
@@ -12042,6 +11777,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 	}
 
 	// 🆕 创建状态事务
+	d.logger.Info("🔍 开始创建状态事务")
 	txn := state.NewTxn(snapshot)
 	d.logger.Info("✅ 状态事务创建成功", "txn", txn != nil)
 
@@ -12072,15 +11808,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		"recipientCount", len(rewards),
 		"rewardAccount", rewardAccount.String())
 
-	// 记录奖励分发前的锁状态
-	d.logger.Info("🔒 奖励分发前锁状态检查",
-		"stateUpdateMutexLocked", !d.stateUpdateMutex.TryRLock())
-
-	if !d.stateUpdateMutex.TryRLock() {
-		d.logger.Warn("⚠️ 奖励分发前stateUpdateMutex被占用")
-	} else {
-		d.stateUpdateMutex.RUnlock()
-	}
+	// 延迟状态更新机制已移除，无需检查锁状态
 
 	// 执行批量余额更新（直接操作主状态）
 	successCount := 0
@@ -12121,15 +11849,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 	}
 	d.logger.Debug("✅ 状态变更提交成功", "objectsCount", len(objects))
 
-	// 记录奖励分发后的锁状态
-	d.logger.Info("🔒 奖励分发后锁状态检查",
-		"stateUpdateMutexLocked", !d.stateUpdateMutex.TryRLock())
-
-	if !d.stateUpdateMutex.TryRLock() {
-		d.logger.Warn("⚠️ 奖励分发后stateUpdateMutex被占用")
-	} else {
-		d.stateUpdateMutex.RUnlock()
-	}
+	// 延迟状态更新机制已移除，无需检查锁状态
 
 	// 🆕 更新状态根
 	d.logger.Debug("🔄 准备更新状态根")
@@ -12147,11 +11867,16 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 			"newStateRoot", fmt.Sprintf("%x", newStateRoot),
 			"newSnapshot", newSnapshot != nil)
 
-		// 🆕 延迟状态更新：不立即更新状态根，而是存储为待更新状态
-		d.logger.Info("📦 状态根更新已延迟到下个区块",
+		// 🆕 直接更新状态根和区块哈希
+		oldStateRoot := currentHeader.StateRoot
+		currentHeader.StateRoot = types.BytesToHash(newStateRoot)
+		currentHeader.ComputeHash()
+
+		d.logger.Info("✅ 状态根和区块哈希更新成功",
 			"blockNumber", currentHeader.Number,
+			"oldStateRoot", fmt.Sprintf("%x", oldStateRoot),
 			"newStateRoot", fmt.Sprintf("%x", newStateRoot),
-			"note", "状态更新将在下个区块构建时应用")
+			"newBlockHash", currentHeader.Hash.String())
 	} else {
 		d.logger.Warn("⚠️ 没有状态对象需要提交", "objectsCount", len(objects))
 	}
@@ -12458,89 +12183,9 @@ func (d *DPoS) recordRewardsToDatabase(epochNumber uint64, rewards map[types.Add
 	return nil
 }
 
-// scheduleDelayedStateUpdate 安排延迟状态更新
-func (d *DPoS) scheduleDelayedStateUpdate(epochNumber uint64, rewards map[types.Address]*big.Int) error {
-	d.stateUpdateMutex.Lock()
-	defer d.stateUpdateMutex.Unlock()
+// scheduleDelayedStateUpdate 函数已移除，延迟状态更新机制不再需要
 
-	// 初始化pendingStateUpdates map
-	if d.pendingStateUpdates == nil {
-		d.pendingStateUpdates = make(map[uint64]map[types.Address]*big.Int)
-	}
-
-	// 存储延迟更新任务
-	d.pendingStateUpdates[epochNumber] = rewards
-
-	return nil
-}
-
-// executeDelayedStateUpdate 执行延迟状态更新
-func (d *DPoS) executeDelayedStateUpdate(epochNumber uint64) error {
-	d.stateUpdateMutex.Lock()
-	defer d.stateUpdateMutex.Unlock()
-
-	// 🆕 添加详细的调试信息
-	d.logger.Info("🔍 ========== 开始检查延迟状态更新 ==========",
-		"epoch", epochNumber,
-		"pendingStateUpdatesCount", len(d.pendingStateUpdates),
-		"pendingEpochs", func() []uint64 {
-			epochs := make([]uint64, 0, len(d.pendingStateUpdates))
-			for epoch := range d.pendingStateUpdates {
-				epochs = append(epochs, epoch)
-			}
-			return epochs
-		}())
-
-	// 检查是否有待处理的状态更新
-	rewards, exists := d.pendingStateUpdates[epochNumber]
-	if !exists {
-		d.logger.Info("⚠️ 没有待处理的状态更新",
-			"epoch", epochNumber,
-			"availableEpochs", func() []uint64 {
-				epochs := make([]uint64, 0, len(d.pendingStateUpdates))
-				for epoch := range d.pendingStateUpdates {
-					epochs = append(epochs, epoch)
-				}
-				return epochs
-			}())
-		return nil
-	}
-
-	d.logger.Info("🔄 ========== 开始执行延迟状态更新 ==========",
-		"epoch", epochNumber,
-		"rewardCount", len(rewards),
-		"totalRewardAmount", func() string {
-			total := big.NewInt(0)
-			for _, reward := range rewards {
-				total.Add(total, reward)
-			}
-			return total.String()
-		}())
-
-	// 执行状态更新
-	rewardAccount := d.config.RewardAccount
-	d.logger.Debug("💰 准备执行批量状态更新",
-		"epoch", epochNumber,
-		"rewardAccount", rewardAccount.String(),
-		"recipientCount", len(rewards))
-
-	if err := d.executeBatchStateUpdate(rewards, rewardAccount); err != nil {
-		d.logger.Error("❌ 执行延迟状态更新失败",
-			"epoch", epochNumber,
-			"error", err)
-		return err
-	}
-
-	// 删除已处理的任务
-	delete(d.pendingStateUpdates, epochNumber)
-
-	d.logger.Debug("✅ ========== 延迟状态更新完成 ==========",
-		"epoch", epochNumber,
-		"remainingPendingUpdates", len(d.pendingStateUpdates),
-		"note", "状态已更新到区块链")
-
-	return nil
-}
+// executeDelayedStateUpdate 函数已移除，延迟状态更新机制不再需要
 
 // onEpochEnd 在epoch结束时调用
 func (d *DPoS) onEpochEnd(epochNumber uint64) error {
@@ -12548,20 +12193,9 @@ func (d *DPoS) onEpochEnd(epochNumber uint64) error {
 		"epoch", epochNumber,
 		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
 
-	// 🆕 修复：处理刚结束的epoch的延迟状态更新
-	previousEpoch := epochNumber - 1
-	d.logger.Info("🔄 开始执行延迟状态更新",
-		"currentEpoch", epochNumber,
-		"previousEpoch", previousEpoch,
-		"note", "处理刚结束的epoch的延迟状态更新")
-
-	if err := d.executeDelayedStateUpdate(previousEpoch); err != nil {
-		d.logger.Error("❌ Epoch结束时状态更新失败",
-			"currentEpoch", epochNumber,
-			"previousEpoch", previousEpoch,
-			"error", err)
-		return err
-	}
+	// 延迟状态更新机制已移除，奖励分发在epoch结束区块直接执行
+	d.logger.Debug("延迟状态更新机制已移除，无需在epoch结束时处理状态更新",
+		"currentEpoch", epochNumber)
 
 	return nil
 }

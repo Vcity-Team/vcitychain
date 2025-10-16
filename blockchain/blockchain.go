@@ -6,7 +6,6 @@ import (
 	"math/big"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/Vcity-Team/vcitychain/blockchain/storage"
 	"github.com/Vcity-Team/vcitychain/chain"
@@ -803,39 +802,8 @@ func (b *Blockchain) executeBlockTransactions(block *types.Block) (*BlockResult,
 // This function is a copy of WriteBlock but with a full block which does not
 // require to compute again the Receipts.
 func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) error {
-	blockNumber := fblock.Block.Number()
-
-	b.logger.Debug("🔒 WriteFullBlock 开始获取写锁", "blockNumber", blockNumber, "source", source)
-
-	// 添加超时机制检测锁获取
-	lockAcquired := make(chan bool, 1)
-	go func() {
-		b.writeLock.Lock()
-		lockAcquired <- true
-	}()
-
-	select {
-	case <-lockAcquired:
-		b.logger.Debug("✅ WriteFullBlock 成功获取写锁", "blockNumber", blockNumber, "source", source)
-	case <-time.After(10 * time.Second):
-		b.logger.Error("❌ WriteFullBlock 获取写锁超时", "blockNumber", blockNumber, "source", source)
-		// 检查是否有其他goroutine持有锁
-		b.logger.Error("🔍 检查可能的锁持有者", "blockNumber", blockNumber, "source", source)
-		// 尝试获取锁状态信息
-		if b.writeLock.TryLock() {
-			b.logger.Error("🔍 锁状态检查：锁实际上可用，可能是goroutine调度问题", "blockNumber", blockNumber, "source", source)
-			b.writeLock.Unlock()
-		} else {
-			b.logger.Error("🔍 锁状态检查：锁被其他goroutine持有", "blockNumber", blockNumber, "source", source)
-		}
-		return fmt.Errorf("failed to acquire write lock within 10 seconds")
-	}
-
-	defer func() {
-		b.logger.Debug("🔓 WriteFullBlock 准备释放写锁", "blockNumber", blockNumber, "source", source)
-		b.writeLock.Unlock()
-		b.logger.Debug("✅ WriteFullBlock 成功释放写锁", "blockNumber", blockNumber, "source", source)
-	}()
+	b.writeLock.Lock()
+	defer b.writeLock.Unlock()
 
 	block := fblock.Block
 
@@ -847,51 +815,36 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 	header := block.Header
 	batchWriter := storage.NewBatchWriter(b.db)
 
-	b.logger.Debug("🔍 WriteFullBlock 准备写入区块体", "blockNumber", blockNumber, "source", source)
 	if err := b.writeBody(batchWriter, block); err != nil {
 		return err
 	}
-	b.logger.Debug("✅ WriteFullBlock 区块体写入完成", "blockNumber", blockNumber, "source", source)
 
 	// Write the header to the chain
 	evnt := &Event{Source: source}
 
-	b.logger.Debug("🔍 WriteFullBlock 准备写入区块头", "blockNumber", blockNumber, "source", source)
 	isCanonical, newTD, err := b.writeHeaderImpl(batchWriter, evnt, header)
 	if err != nil {
 		return err
 	}
-	b.logger.Debug("✅ WriteFullBlock 区块头写入完成", "blockNumber", blockNumber, "source", source)
 
 	// write the receipts, do it only after the header has been written.
 	// Otherwise, a client might ask for a header once the receipt is valid,
 	// but before it is written into the storage
-	b.logger.Debug("🔍 WriteFullBlock 准备写入收据", "blockNumber", blockNumber, "source", source)
 	batchWriter.PutReceipts(block.Hash(), fblock.Receipts)
-	b.logger.Debug("✅ WriteFullBlock 收据写入完成", "blockNumber", blockNumber, "source", source)
 
 	// Update the average gas price
-	b.logger.Debug("🔍 WriteFullBlock 准备更新Gas价格", "blockNumber", blockNumber, "source", source)
 	b.updateGasPriceAvgWithBlock(block)
-	b.logger.Debug("✅ WriteFullBlock Gas价格更新完成", "blockNumber", blockNumber, "source", source)
 
-	b.logger.Debug("🔍 WriteFullBlock 准备批量写入和更新", "blockNumber", blockNumber, "source", source)
 	if err := b.writeBatchAndUpdate(batchWriter, header, newTD, isCanonical); err != nil {
 		return err
 	}
-	b.logger.Debug("✅ WriteFullBlock 批量写入和更新完成", "blockNumber", blockNumber, "source", source)
 
 	// update snapshot
-	b.logger.Debug("🔍 WriteFullBlock 准备调用ProcessHeaders", "blockNumber", blockNumber, "source", source)
 	if err := b.consensus.ProcessHeaders([]*types.Header{header}); err != nil {
-		b.logger.Info("❌ WriteFullBlock ProcessHeaders失败", "blockNumber", blockNumber, "source", source, "error", err)
 		return err
 	}
-	b.logger.Debug("✅ WriteFullBlock ProcessHeaders完成", "blockNumber", blockNumber, "source", source)
 
-	b.logger.Debug("🔍 WriteFullBlock 准备调用dispatchEvent", "blockNumber", blockNumber, "source", source)
 	b.dispatchEvent(evnt)
-	b.logger.Debug("✅ WriteFullBlock dispatchEvent完成", "blockNumber", blockNumber, "source", source)
 
 	logArgs := []interface{}{
 		"number", header.Number,
@@ -914,15 +867,8 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 // WriteBlock writes a single block to the local blockchain.
 // It doesn't do any kind of verification, only commits the block to the DB
 func (b *Blockchain) WriteBlock(block *types.Block, source string) error {
-	blockNumber := block.Number()
-	b.logger.Debug("🔒 WriteBlock 开始获取写锁", "blockNumber", blockNumber, "source", source)
 	b.writeLock.Lock()
-	b.logger.Debug("✅ WriteBlock 成功获取写锁", "blockNumber", blockNumber, "source", source)
-	defer func() {
-		b.logger.Debug("🔓 WriteBlock 准备释放写锁", "blockNumber", blockNumber, "source", source)
-		b.writeLock.Unlock()
-		b.logger.Debug("✅ WriteBlock 成功释放写锁", "blockNumber", blockNumber, "source", source)
-	}()
+	defer b.writeLock.Unlock()
 
 	if block.Number() <= b.Header().Number {
 		b.logger.Info("block already inserted", "block", block.Number(), "source", source)
@@ -1007,15 +953,8 @@ func (b *Blockchain) GetCachedReceipts(headerHash types.Hash) ([]*types.Receipt,
 // WriteBlockWithoutConsensus writes a block without consensus verification
 // This is used for DPoS blocks that need to bypass IBFT validation
 func (b *Blockchain) WriteBlockWithoutConsensus(block *types.Block, source string) error {
-	blockNumber := block.Number()
-	b.logger.Info("🔒 WriteBlockWithoutConsensus 开始获取写锁", "blockNumber", blockNumber, "source", source)
 	b.writeLock.Lock()
-	b.logger.Info("✅ WriteBlockWithoutConsensus 成功获取写锁", "blockNumber", blockNumber, "source", source)
-	defer func() {
-		b.logger.Info("🔓 WriteBlockWithoutConsensus 准备释放写锁", "blockNumber", blockNumber, "source", source)
-		b.writeLock.Unlock()
-		b.logger.Info("✅ WriteBlockWithoutConsensus 成功释放写锁", "blockNumber", blockNumber, "source", source)
-	}()
+	defer b.writeLock.Unlock()
 
 	if block.Number() <= b.Header().Number {
 		b.logger.Info("block already inserted", "block", block.Number(), "source", source)
