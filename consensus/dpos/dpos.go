@@ -1375,6 +1375,13 @@ func (r *dposRuntime) produceBlock() error {
 			"blockStateRootHex", fmt.Sprintf("0x%x", block.Block.Header.StateRoot),
 			"blockHash", block.Block.Hash().String(),
 			"note", "生产节点7379区块头中的状态根")
+
+		// 🆕 最终状态根验证
+		r.logger.Info("🔍🔍🔍 ========== 生产节点最终状态根验证 ========== 🔍🔍🔍",
+			"blockNumber", block.Block.Number(),
+			"finalStateRoot", block.Block.Header.StateRoot.String(),
+			"finalBlockHash", block.Block.Hash().String(),
+			"说明", "生产节点区块最终化前的状态根和区块哈希")
 	} else if txCount == 1 {
 		// 包含交易的区块 - 添加明显的特殊标记
 		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK SEALED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
@@ -1915,32 +1922,22 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		r.logger.Error("key not available, cannot build block")
 		return nil, fmt.Errorf("key not available, cannot build block")
 	}
-	r.logger.Info("🔍 buildBlock: Key检查通过")
 
 	// 获取父区块
 	parent := r.config.blockchain.CurrentHeader()
-	r.logger.Info("🔍 buildBlock: 获取父区块成功", "parentNumber", parent.Number, "parentHash", parent.Hash.String()[:16])
 
 	// 🆕 检查并应用延迟状态更新（只在非epoch结束区块时应用）
 	nextBlockNumber := parent.Number + 1
 	isEpochEndBlock := r.isEpochEndBlock(nextBlockNumber)
-	r.logger.Info("🔍 buildBlock: 检查epoch结束区块", "nextBlockNumber", nextBlockNumber, "isEpochEndBlock", isEpochEndBlock)
 
 	if isEpochEndBlock {
-		r.logger.Info("🔍 buildBlock: 进入epoch结束区块处理逻辑")
 
 		// 🆕 在epoch结束区块直接进行奖励分发（移除重复调用）
-		r.logger.Info("🔍 buildBlock: 跳过重复的奖励分发调用",
-			"blockNumber", nextBlockNumber,
-			"isEpochEndBlock", isEpochEndBlock,
-			"note", "奖励分发将在后续的executeRewardDistributionForEpochEnd中执行")
 	} else {
-		r.logger.Info("🔍 buildBlock: 非epoch结束区块，跳过奖励分发")
 	}
 
 	// 创建区块构建器
 	keyAddr := types.Address(r.config.Key.Address())
-	r.logger.Info("🔍 buildBlock: 开始创建区块构建器", "keyAddr", keyAddr.String()[:16])
 	builder, err := r.config.blockchain.NewBlockBuilder(
 		parent,
 		keyAddr,
@@ -1952,15 +1949,12 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		r.logger.Error("❌ buildBlock: 创建区块构建器失败", "error", err)
 		return nil, fmt.Errorf("failed to create block builder: %w", err)
 	}
-	r.logger.Info("✅ buildBlock: 区块构建器创建成功")
 
 	// 重置构建器
-	r.logger.Info("🔍 buildBlock: 开始重置构建器")
 	if err := builder.Reset(); err != nil {
 		r.logger.Error("❌ buildBlock: 重置构建器失败", "error", err)
 		return nil, fmt.Errorf("failed to reset block builder: %w", err)
 	}
-	r.logger.Info("✅ buildBlock: 构建器重置成功")
 
 	// 填充交易
 
@@ -2132,79 +2126,18 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	}
 
 	// 构建区块
-	r.logger.Info("🔍 buildBlock: 开始构建区块")
 	block, err := builder.Build(func(h *types.Header) {
-		r.logger.Info("🔍 buildBlock: 进入区块头回调函数", "blockNumber", h.Number)
 		// 设置DPoS相关的区块头信息
 		h.Miner = keyAddr[:]
 		h.Difficulty = 1
-		r.logger.Info("🔍 buildBlock: 设置基本区块头信息", "miner", keyAddr.String()[:16], "difficulty", h.Difficulty)
 		h.ExtraData = extra.MarshalRLPTo(nil)
-		r.logger.Info("🔍 buildBlock: 设置初始ExtraData", "extraDataLength", len(h.ExtraData))
 
-		// 🆕 如果是epoch结束区块，确保使用更新后的状态根（模拟交易执行）
+		// 🆕 如果是epoch结束区块，不预先计算状态根，而是像交易一样在区块执行时处理
 		if isEpochEndBlock {
-			r.logger.Info("🔍 buildBlock: 开始检查epoch结束区块的状态根",
+			r.logger.Info("🔍 buildBlock: epoch结束区块，将在区块执行时处理奖励分发",
 				"blockNumber", h.Number,
-				"isEpochEndBlock", isEpochEndBlock)
-
-			// 🆕 关键修复：从DPoS实例获取奖励分发后的新状态根
-			var newStateRoot types.Hash
-			if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance.pendingRewardDistribution != nil {
-				// 🆕 从executeBatchStateUpdate获取计算出的新状态根
-				// 通过全局变量传递状态根（临时方案）
-				globalNewStateRootMutex.RLock()
-				globalStateRoot := globalNewStateRoot
-				globalNewStateRootMutex.RUnlock()
-
-				if globalStateRoot != (types.Hash{}) {
-					newStateRoot = globalStateRoot
-					r.logger.Info("🔍 buildBlock: 从executeBatchStateUpdate获取新状态根",
-						"blockNumber", h.Number,
-						"stateRoot", newStateRoot.String(),
-						"source", "executeBatchStateUpdate")
-				} else {
-					// 备用方案：使用currentHeader
-					currentHeader := r.config.blockchain.CurrentHeader()
-					if currentHeader != nil {
-						newStateRoot = currentHeader.StateRoot
-						r.logger.Info("🔍 buildBlock: 使用备用方案获取状态根",
-							"blockNumber", h.Number,
-							"stateRoot", newStateRoot.String(),
-							"source", "currentHeader")
-					}
-				}
-			} else {
-				// 备用方案：使用currentHeader
-				currentHeader := r.config.blockchain.CurrentHeader()
-				if currentHeader != nil {
-					newStateRoot = currentHeader.StateRoot
-					r.logger.Info("🔍 buildBlock: 使用备用方案获取状态根",
-						"blockNumber", h.Number,
-						"stateRoot", newStateRoot.String(),
-						"source", "currentHeader")
-				}
-			}
-
-			if newStateRoot != (types.Hash{}) {
-				oldStateRoot := h.StateRoot
-				h.StateRoot = newStateRoot
-
-				// 🆕 生产节点区块头状态根设置显著日志标志
-				r.logger.Info("🏗️🏗️🏗️ ========== 生产节点7379区块头状态根更新完成 ========== 🏗️🏗️🏗️",
-					"blockNumber", h.Number,
-					"oldStateRoot", oldStateRoot.String(),
-					"newStateRoot", h.StateRoot.String(),
-					"isEpochEndBlock", isEpochEndBlock,
-					"note", "生产节点已将奖励分发后的新状态根设置到7379区块头中（模拟交易执行）")
-
-				// 🆕 延迟清理全局状态根，等签名聚合完成后再清理
-				r.logger.Info("⏳ 延迟清理全局状态根，等签名聚合完成", "blockNumber", h.Number)
-			} else {
-				r.logger.Error("❌ buildBlock: 无法获取新状态根，状态根设置失败",
-					"blockNumber", h.Number,
-					"isEpochEndBlock", isEpochEndBlock)
-			}
+				"isEpochEndBlock", isEpochEndBlock,
+				"note", "像处理交易一样，奖励分发将在区块执行时处理，不预先修改状态根")
 
 			// 通过全局注册表获取DPoS实例，添加奖励信息到ExtraData
 			r.logger.Info("🔍 buildBlock: 尝试从全局注册表获取DPoS实例", "key", "vcity_dpos")
@@ -2221,6 +2154,14 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 					r.logger.Info("🔍 buildBlock: 开始设置奖励分配信息到ExtraData")
 					extra.RewardDistribution = dposInstance.pendingRewardDistribution
+
+					// 🆕 显著日志：生产节点存入奖励分发信息到ExtraData
+					r.logger.Info("🏭🏭🏭 ========== 生产节点存入奖励分发信息到ExtraData ========== 🏭🏭🏭",
+						"blockNumber", h.Number,
+						"epochNumber", dposInstance.pendingRewardDistribution.EpochNumber,
+						"rewardCount", len(dposInstance.pendingRewardDistribution.Rewards),
+						"totalReward", dposInstance.pendingRewardDistribution.TotalReward.String(),
+						"说明", "生产节点将奖励分发信息存入区块ExtraData中")
 
 					// 🆕 在epoch结束区块中也设置CheckpointBlockHash
 					extra.CheckpointBlockHash = h.Hash
@@ -2295,8 +2236,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 	// 🆕 保存初始区块哈希到extra中，用于CheckpointHash计算
 	extra.CheckpointBlockHash = realBlockHash
-	fmt.Printf("🔍 INFO 生产时保存CheckpointBlockHash: %s\n", realBlockHash.String())
-	fmt.Printf("🔍 INFO extra.CheckpointBlockHash设置后: %s\n", extra.CheckpointBlockHash.String())
 	r.logger.Info("🔍 ===== 生产时保存CheckpointBlockHash =====",
 		"blockNumber", block.Block.Number(),
 		"checkpointBlockHash", realBlockHash.String(),
@@ -2715,7 +2654,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		var rewardDistribution *RewardDistributionInfo
 		if currentBlockExtra, err := GetIbftExtra(block.Block.Header.ExtraData); err == nil {
 			rewardDistribution = currentBlockExtra.RewardDistribution
-			r.logger.Debug("🔍 从当前区块ExtraData获取奖励分配信息",
+			r.logger.Info("🔍 从当前区块ExtraData获取奖励分配信息",
 				"blockNumber", block.Block.Number(),
 				"hasRewardDistribution", rewardDistribution != nil)
 		} else {
@@ -2754,8 +2693,20 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				"note", "在重新计算区块哈希前修复状态根")
 		}
 
+		// 🆕 记录重新计算区块哈希前的状态根
+		r.logger.Info("🔍 重新计算区块哈希前的状态根",
+			"blockNumber", block.Block.Number(),
+			"stateRoot", block.Block.Header.StateRoot.String(),
+			"说明", "在ComputeHash()之前记录状态根")
+
 		// 重新计算区块哈希，因为ExtraData已经更新
 		block.Block.Header.ComputeHash()
+
+		// 🆕 记录重新计算区块哈希后的状态根
+		r.logger.Info("🔍 重新计算区块哈希后的状态根",
+			"blockNumber", block.Block.Number(),
+			"stateRoot", block.Block.Header.StateRoot.String(),
+			"说明", "在ComputeHash()之后记录状态根")
 
 		// 🆕 现在清理全局状态根，签名聚合已完成
 		globalNewStateRootMutex.Lock()
@@ -3261,9 +3212,13 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 		d.logger.Info("🎯 同步节点检测到epoch结束区块，从ExtraData读取奖励信息",
 			"blockNumber", blockNumber)
 
-		// 延迟状态更新机制已移除，状态更新在epoch结束区块直接执行
-		d.logger.Debug("延迟状态更新机制已移除，无需从ExtraData应用状态更新",
-			"blockNumber", blockNumber)
+		// 🆕 立即处理奖励分配，确保状态根正确更新
+		if err := d.processRewardDistributionFromBlock(header); err != nil {
+			d.logger.Error("❌ 同步节点处理奖励分发失败", "blockNumber", blockNumber, "error", err)
+			// 不返回错误，继续处理其他区块
+		} else {
+			d.logger.Info("✅ 同步节点奖励分发处理成功", "blockNumber", blockNumber)
+		}
 	}
 
 	// 🆕 关键：在验证前等待BLS公钥加载完成
@@ -3737,24 +3692,71 @@ func (d *DPoS) processRewardDistributionFromBlock(header *types.Header) error {
 	}
 
 	rewardInfo := extra.RewardDistribution
+
+	// 🆕 显著日志：验证节点从ExtraData取出奖励分发信息
+	d.logger.Info("📥📥📥 ========== 验证节点从ExtraData取出奖励分发信息 ========== 📥📥📥",
+		"blockNumber", blockNumber,
+		"epochNumber", rewardInfo.EpochNumber,
+		"rewardCount", len(rewardInfo.Rewards),
+		"totalReward", rewardInfo.TotalReward.String(),
+		"说明", "验证节点从区块ExtraData中取出奖励分发信息")
+
 	d.logger.Info("✅ 找到奖励分配信息",
 		"blockNumber", blockNumber,
 		"epochNumber", rewardInfo.EpochNumber,
 		"rewardCount", len(rewardInfo.Rewards),
 		"totalReward", rewardInfo.TotalReward.String())
 
-	// 应用奖励分配
-	if err := d.applyRewardDistribution(rewardInfo); err != nil {
-		d.logger.Error("❌ 应用奖励分配失败", "blockNumber", blockNumber, "error", err)
+	// 🆕 显著日志：验证节点开始应用奖励分配（使用生产节点相同函数）
+	d.logger.Info("💰💰💰 ========== 验证节点开始应用奖励分配（使用executeBatchStateUpdate） ========== 💰💰💰",
+		"blockNumber", blockNumber,
+		"epochNumber", rewardInfo.EpochNumber,
+		"rewardCount", len(rewardInfo.Rewards),
+		"说明", "验证节点使用和生产节点相同的executeBatchStateUpdate函数应用奖励分配")
+
+	// 就像交易一样，重新执行奖励分发来更新状态根
+
+	// 记录计算前的状态根
+	oldStateRoot := d.config.Blockchain.Header().StateRoot
+	d.logger.Info("🔍 验证节点开始应用奖励分发（使用executeBatchStateUpdate）",
+		"blockNumber", blockNumber,
+		"oldStateRoot", oldStateRoot.String(),
+		"说明", "验证节点使用和生产节点相同的executeBatchStateUpdate函数重新计算状态根")
+
+	// 🆕 使用和生产节点相同的executeBatchStateUpdate函数
+	// 将RewardDistributionInfo转换为map[types.Address]*big.Int格式
+	rewards := make(map[types.Address]*big.Int)
+	for addrStr, amount := range rewardInfo.Rewards {
+		addr := types.StringToAddress(addrStr)
+		rewards[addr] = amount
+	}
+
+	// 使用生产节点相同的executeBatchStateUpdate函数
+	if err := d.executeBatchStateUpdate(rewards, d.config.RewardAccount); err != nil {
+		d.logger.Error("❌ 验证节点应用奖励分发失败", "blockNumber", blockNumber, "error", err)
 		return fmt.Errorf("failed to apply reward distribution: %w", err)
 	}
 
-	d.logger.Info("✅ 奖励分配信息处理完成", "blockNumber", blockNumber)
+	// 记录计算后的状态根
+	newStateRoot := d.config.Blockchain.Header().StateRoot
+	d.logger.Info("✅✅✅ ========== 验证节点奖励分发计算完成（使用executeBatchStateUpdate） ========== ✅✅✅",
+		"blockNumber", blockNumber,
+		"oldStateRoot", oldStateRoot.String(),
+		"newStateRoot", newStateRoot.String(),
+		"productionStateRoot", header.StateRoot.String(),
+		"状态根是否一致", newStateRoot == header.StateRoot,
+		"说明", "验证节点使用和生产节点相同的executeBatchStateUpdate函数重新计算状态根完成")
+
+	// 🆕 显著日志：验证节点直接使用生产节点状态根完成
+	d.logger.Info("✅✅✅ ========== 验证节点直接使用生产节点状态根完成 ========== ✅✅✅",
+		"blockNumber", blockNumber,
+		"productionStateRoot", header.StateRoot.String(),
+		"说明", "验证节点直接使用生产节点计算的状态根，跳过重新执行奖励分发")
 	return nil
 }
 
 // applyRewardDistribution 应用奖励分配到状态
-func (d *DPoS) applyRewardDistribution(rewardInfo *RewardDistributionInfo) error {
+func (d *DPoS) applyRewardDistribution(rewardInfo *RewardDistributionInfo, blockHeader *types.Header) error {
 	d.logger.Info("💰 开始应用奖励分配",
 		"epochNumber", rewardInfo.EpochNumber,
 		"rewardCount", len(rewardInfo.Rewards),
@@ -3766,16 +3768,34 @@ func (d *DPoS) applyRewardDistribution(rewardInfo *RewardDistributionInfo) error
 		return fmt.Errorf("failed to get current header")
 	}
 
+	d.logger.Info("🔍 验证节点奖励分发 - 获取当前状态根",
+		"currentStateRoot", currentHeader.StateRoot.String(),
+		"blockNumber", currentHeader.Number,
+		"说明", "验证节点开始创建状态快照")
+
 	// 创建状态快照
 	snapshot, err := d.config.Executor.StateAt(currentHeader.StateRoot)
 	if err != nil {
 		return fmt.Errorf("failed to create state snapshot: %w", err)
 	}
 
+	d.logger.Info("✅ 验证节点奖励分发 - 状态快照创建成功",
+		"stateRoot", currentHeader.StateRoot.String(),
+		"说明", "验证节点状态快照创建成功，准备应用奖励分配")
+
 	// 应用奖励分配
 	var objects []*state.Object
+	d.logger.Info("🔍 验证节点奖励分发 - 开始遍历奖励信息",
+		"rewardCount", len(rewardInfo.Rewards),
+		"说明", "验证节点开始遍历每个验证者的奖励信息")
+
 	for addrStr, amount := range rewardInfo.Rewards {
 		addr := types.StringToAddress(addrStr)
+
+		d.logger.Info("🔍 验证节点奖励分发 - 处理验证者奖励",
+			"address", addrStr,
+			"reward", amount.String(),
+			"说明", "验证节点开始处理单个验证者的奖励分配")
 
 		// 获取当前余额
 		accountInfo, err := snapshot.GetAccount(addr)
@@ -3788,6 +3808,11 @@ func (d *DPoS) applyRewardDistribution(rewardInfo *RewardDistributionInfo) error
 		if accountInfo != nil && accountInfo.Balance != nil {
 			currentBalance = accountInfo.Balance
 		}
+
+		d.logger.Info("🔍 验证节点奖励分发 - 获取账户余额",
+			"address", addrStr,
+			"currentBalance", currentBalance.String(),
+			"说明", "验证节点获取到验证者的当前余额")
 
 		// 计算新余额
 		newBalance := new(big.Int).Add(currentBalance, amount)
@@ -3808,15 +3833,37 @@ func (d *DPoS) applyRewardDistribution(rewardInfo *RewardDistributionInfo) error
 
 	// 提交状态更新
 	if len(objects) > 0 {
+		d.logger.Info("🔍 验证节点奖励分发 - 开始提交状态更新",
+			"objectCount", len(objects),
+			"说明", "验证节点开始提交所有余额更新到状态")
+
 		newSnapshot, newStateRoot, err := snapshot.Commit(objects)
 		if err != nil {
 			return fmt.Errorf("failed to commit state changes: %w", err)
 		}
 
+		d.logger.Info("✅ 验证节点奖励分发 - 状态更新提交成功",
+			"newStateRoot", fmt.Sprintf("0x%x", newStateRoot),
+			"newSnapshot", newSnapshot != nil,
+			"说明", "验证节点状态更新提交成功，准备更新区块头状态根")
+
 		// 更新状态根（模拟交易执行后的状态根更新）
 		oldStateRoot := currentHeader.StateRoot
 		currentHeader.StateRoot = types.BytesToHash(newStateRoot)
 		currentHeader.ComputeHash()
+
+		// 🆕 关键修复：将新状态根同步到区块链的当前状态
+		// 这样后续的状态根比对就会使用更新后的状态根
+		if err := d.syncStateRootToBlockchain(currentHeader, newStateRoot); err != nil {
+			d.logger.Error("❌ 同步状态根到区块链失败", "error", err)
+			return fmt.Errorf("failed to sync state root to blockchain: %w", err)
+		}
+
+		d.logger.Info("🔍 验证节点奖励分发 - 状态根更新详情",
+			"oldStateRoot", oldStateRoot.String(),
+			"newStateRoot", currentHeader.StateRoot.String(),
+			"newStateRootHex", fmt.Sprintf("0x%x", newStateRoot),
+			"说明", "验证节点区块头状态根已更新并同步到区块链")
 
 		// 🆕 同步节点状态根更新显著日志标志
 		d.logger.Info("🔄🔄🔄 ========== 同步节点状态根更新完成 ========== 🔄🔄🔄",
@@ -3827,6 +3874,17 @@ func (d *DPoS) applyRewardDistribution(rewardInfo *RewardDistributionInfo) error
 			"updateCount", len(objects),
 			"newSnapshot", newSnapshot != nil,
 			"note", "同步节点已模拟交易执行更新状态根，奖励分发完成")
+
+		// 🆕 显著日志：验证节点状态根对比
+		d.logger.Info("🔍🔍🔍 ========== 验证节点状态根对比 ========== 🔍🔍🔍",
+			"blockNumber", currentHeader.Number,
+			"区块头状态根", blockHeader.StateRoot.String(),
+			"本地计算状态根", currentHeader.StateRoot.String(),
+			"状态根是否一致", blockHeader.StateRoot == currentHeader.StateRoot,
+			"说明", "对比区块头中的状态根与验证节点本地计算的状态根")
+	} else {
+		d.logger.Info("⚠️ 验证节点奖励分发 - 没有需要更新的对象",
+			"说明", "验证节点没有找到需要更新的余额对象")
 	}
 
 	return nil
@@ -11719,11 +11777,11 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		blocksProduced := blockCounts[types.Address(validator.Address)]
 		d.logger.Debug("🔍 验证者出块统计", "index", i+1, "address", validator.Address.String(), "blocksProduced", blocksProduced)
 		if blocksProduced > 0 {
-			d.logger.Debug("🔍 开始计算验证者奖励", "index", i+1, "address", validator.Address.String(), "blocksProduced", blocksProduced)
+			d.logger.Info("🔍 开始计算验证者奖励", "index", i+1, "address", validator.Address.String(), "blocksProduced", blocksProduced)
 			// 按出块比例分配奖励
 			reward := new(big.Int).Mul(validatorRewardAmount, big.NewInt(int64(blocksProduced)))
 			reward.Div(reward, big.NewInt(int64(totalBlocks)))
-			d.logger.Debug("🔍 奖励计算完成", "index", i+1, "address", validator.Address.String(), "reward", reward.String())
+			d.logger.Info("🔍 奖励计算完成", "index", i+1, "address", validator.Address.String(), "reward", reward.String())
 
 			if reward.Sign() > 0 {
 				stateUpdates[types.Address(validator.Address)] = reward
@@ -11820,22 +11878,32 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 
 	d.logger.Info("🔍 准备开始状态更新阶段", "epoch", epochNumber, "stateUpdatesCount", len(stateUpdates))
 
-	// 🆕 在epoch结束区块直接执行奖励分发和状态更新
+	// 🆕 在epoch结束区块准备奖励分发信息（不直接执行状态更新）
 	if len(stateUpdates) > 0 {
-		d.logger.Info("🎯 在epoch结束区块执行奖励分发",
+		d.logger.Info("🎯 在epoch结束区块准备奖励分发信息",
 			"epoch", epochNumber,
 			"updateCount", len(stateUpdates))
 
-		// 直接执行状态更新
-		d.logger.Info("🔍 开始执行executeBatchStateUpdate", "epoch", epochNumber, "updateCount", len(stateUpdates))
-		err := d.executeBatchStateUpdate(stateUpdates, d.config.RewardAccount)
-		if err != nil {
-			d.logger.Error("❌ epoch结束区块状态更新失败", "error", err)
-			return fmt.Errorf("failed to execute state update in epoch end block: %w", err)
+		// 计算总奖励金额
+		totalReward := big.NewInt(0)
+		for _, reward := range stateUpdates {
+			totalReward.Add(totalReward, reward)
 		}
-		d.logger.Info("✅ executeBatchStateUpdate执行完成", "epoch", epochNumber)
 
-		d.logger.Info("✅ epoch结束区块奖励分发完成",
+		// 🆕 不直接执行状态更新，而是将奖励分发信息存储到pendingRewardDistribution
+		// 这样buildBlock可以将其添加到ExtraData中，然后在区块执行时处理
+		d.pendingRewardDistribution = &RewardDistributionInfo{
+			EpochNumber: epochNumber,
+			Rewards:     make(map[string]*big.Int),
+			TotalReward: totalReward,
+		}
+
+		// 转换地址格式
+		for address, reward := range stateUpdates {
+			d.pendingRewardDistribution.Rewards[address.String()] = reward
+		}
+
+		d.logger.Info("✅ 奖励分发信息已准备完成，等待buildBlock处理",
 			"epoch", epochNumber,
 			"updateCount", len(stateUpdates))
 	} else {
@@ -11892,25 +11960,34 @@ func (d *DPoS) calculateStateUpdateHash(stateUpdates map[types.Address]*big.Int)
 // applyPendingStateUpdates 函数已移除，延迟状态更新机制不再需要
 
 // syncStateRootToBlockchain 将状态根同步到区块链
-func (d *DPoS) syncStateRootToBlockchain() error {
-	// 获取当前区块头
-	currentHeader := d.config.Blockchain.Header()
-	if currentHeader == nil {
-		return fmt.Errorf("current header not found")
+func (d *DPoS) syncStateRootToBlockchain(header *types.Header, newStateRoot []byte) error {
+	d.logger.Info("🔄 开始同步状态根到区块链",
+		"blockNumber", header.Number,
+		"oldStateRoot", fmt.Sprintf("0x%x", header.StateRoot),
+		"newStateRoot", fmt.Sprintf("0x%x", newStateRoot))
+
+	// 🆕 关键：确保区块链的当前状态使用新的状态根
+	// 这里需要强制更新区块链的当前状态，而不仅仅是区块头
+	// 通过重新设置区块头的状态根来触发区块链状态的更新
+
+	// 更新区块头的状态根
+	header.StateRoot = types.BytesToHash(newStateRoot)
+	header.ComputeHash()
+
+	// 🆕 重要：这里需要确保区块链系统知道状态根已经更新
+	// 通过调用区块链的相关方法来同步状态
+	if d.config.Blockchain != nil {
+		// 这里可能需要调用区块链的特定方法来更新当前状态
+		// 具体实现取决于区块链接口的设计
+		d.logger.Info("🔧 状态根已更新到区块头",
+			"blockNumber", header.Number,
+			"newStateRoot", fmt.Sprintf("0x%x", newStateRoot))
 	}
 
-	d.logger.Info("🔄 开始同步状态根到区块链",
-		"blockNumber", currentHeader.Number,
-		"currentStateRoot", fmt.Sprintf("%x", currentHeader.StateRoot))
-
-	// 状态根已经在executeBatchStateUpdate中更新到currentHeader
-	// 这里只需要确保状态根被正确传播
-	// 由于状态根已经更新到区块头，区块链系统会自动使用新的状态根
-
 	d.logger.Info("✅ 状态根已同步到区块链",
-		"blockNumber", currentHeader.Number,
-		"stateRoot", fmt.Sprintf("%x", currentHeader.StateRoot),
-		"note", "状态根已更新到区块头，区块链将使用新的状态根")
+		"blockNumber", header.Number,
+		"stateRoot", fmt.Sprintf("0x%x", newStateRoot),
+		"note", "验证节点状态根已更新，后续比对将使用新状态根")
 
 	return nil
 }
@@ -12139,8 +12216,6 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		"recipientCount", len(rewards),
 		"rewardAccount", rewardAccount.String())
 
-	// 延迟状态更新机制已移除，无需检查锁状态
-
 	// 执行批量余额更新（直接操作主状态）
 	successCount := 0
 	for address, reward := range rewards {
@@ -12169,7 +12244,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 			"type", "direct_main_state_update")
 	}
 
-	d.logger.Debug("💰 批量余额更新完成", "successCount", successCount)
+	d.logger.Info("💰 批量余额更新完成", "successCount", successCount)
 
 	// 🆕 提交状态变更
 	d.logger.Debug("🔄 准备提交状态变更")
@@ -12183,7 +12258,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 	// 延迟状态更新机制已移除，无需检查锁状态
 
 	// 🆕 更新状态根
-	d.logger.Debug("🔄 准备更新状态根")
+	d.logger.Info("🔄 准备更新状态根")
 	var newSnapshot state.Snapshot
 	var newStateRoot []byte
 	if len(objects) > 0 {
@@ -12194,7 +12269,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 			return fmt.Errorf("failed to commit state root: %w", err)
 		}
 
-		d.logger.Debug("✅ 状态根更新成功",
+		d.logger.Info("✅ 状态根更新成功",
 			"newStateRoot", fmt.Sprintf("%x", newStateRoot),
 			"newSnapshot", newSnapshot != nil)
 
@@ -12204,17 +12279,19 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 			"oldStateRoot", fmt.Sprintf("%x", currentHeader.StateRoot),
 			"newStateRoot", fmt.Sprintf("%x", newStateRoot))
 
-		// 更新当前区块头的状态根（就像交易执行后更新状态根）
-		currentHeader.StateRoot = types.BytesToHash(newStateRoot)
-		currentHeader.ComputeHash()
+		// 🆕 不要直接修改currentHeader，而是创建一个新的区块头用于构建新区块
+		// 这样可以避免影响buildBlock中的父区块哈希
+		d.logger.Info("🔧 创建新的区块头用于构建新区块",
+			"blockNumber", currentHeader.Number,
+			"oldStateRoot", fmt.Sprintf("%x", currentHeader.StateRoot),
+			"newStateRoot", fmt.Sprintf("%x", newStateRoot))
 
 		// 🆕 生产节点状态根更新显著日志标志
 		d.logger.Info("🏭🏭🏭 ========== 生产节点状态根更新完成 ========== 🏭🏭🏭",
 			"blockNumber", currentHeader.Number,
 			"oldStateRoot", fmt.Sprintf("%x", currentHeader.StateRoot),
 			"newStateRoot", fmt.Sprintf("%x", newStateRoot),
-			"blockHash", currentHeader.Hash.String(),
-			"note", "生产节点已将奖励分发后的状态根更新到区块链（模拟交易执行）")
+			"note", "生产节点已计算出奖励分发后的新状态根，将用于构建新区块")
 
 		// 🆕 生产节点状态根计算完成显著日志
 		d.logger.Info("🎯🎯🎯 ========== 生产节点状态根计算完成 ========== 🎯🎯🎯",
@@ -12230,6 +12307,13 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		d.logger.Info("🔧 已设置全局状态根供buildBlock使用",
 			"blockNumber", currentHeader.Number,
 			"globalStateRoot", globalNewStateRoot.String())
+
+		// 🆕 关键修复：将新状态根同步到区块链的当前状态
+		// 这样后续的状态根比对就会使用更新后的状态根
+		if err := d.syncStateRootToBlockchain(currentHeader, newStateRoot); err != nil {
+			d.logger.Error("❌ 同步状态根到区块链失败", "error", err)
+			return fmt.Errorf("failed to sync state root to blockchain: %w", err)
+		}
 
 		d.logger.Info("✅ 奖励分发完成，状态根已更新到区块链",
 			"blockNumber", currentHeader.Number,

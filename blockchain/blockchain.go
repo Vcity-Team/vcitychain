@@ -741,6 +741,15 @@ func (br *BlockResult) verifyBlockResult(referenceBlock *types.Block) error {
 
 	// Make sure the world state root matches up
 	if br.Root != referenceBlock.Header.StateRoot {
+		// 🆕 详细的状态根对比日志
+		fmt.Printf("🚨🚨🚨 ========== 状态根验证失败 ========== 🚨🚨🚨\n")
+		fmt.Printf("🚨 区块号: %d\n", referenceBlock.Number())
+		fmt.Printf("🚨 区块哈希: %s\n", referenceBlock.Hash().String())
+		fmt.Printf("🚨 本地计算状态根: %s\n", br.Root.String())
+		fmt.Printf("🚨 区块头状态根: %s\n", referenceBlock.Header.StateRoot.String())
+		fmt.Printf("🚨 状态根是否一致: %t\n", br.Root == referenceBlock.Header.StateRoot)
+		fmt.Printf("🚨 说明: 验证节点本地计算的状态根与区块头中的状态根不一致\n")
+		fmt.Printf("🚨🚨🚨 ========================================== 🚨🚨🚨\n")
 		return ErrInvalidStateRoot
 	}
 

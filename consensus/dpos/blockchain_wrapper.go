@@ -109,6 +109,13 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 		}
 	}
 
+	// 🆕 如果是epoch结束区块，处理奖励分发（像处理交易一样）
+	if p.isEpochEndBlock(block.Number()) {
+		if err := p.processRewardDistributionInBlock(block, transition); err != nil {
+			return nil, fmt.Errorf("failed to process reward distribution: %w", err)
+		}
+	}
+
 	_, root, err := transition.Commit()
 	if err != nil {
 		return nil, fmt.Errorf("failed to commit the state changes: %w", err)
@@ -136,6 +143,41 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 		Block:    builtBlock,
 		Receipts: transition.Receipts(),
 	}, nil
+}
+
+// isEpochEndBlock 检查是否是epoch结束区块
+func (p *blockchainWrapper) isEpochEndBlock(blockNumber uint64) bool {
+	// 假设epoch大小为100，可以根据实际配置调整
+	epochSize := uint64(100)
+	return blockNumber > 0 && blockNumber%epochSize == 0
+}
+
+// processRewardDistributionInBlock 在区块执行时处理奖励分发
+func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block, transition *state.Transition) error {
+	// 解析ExtraData获取奖励分发信息
+	extra := &Extra{}
+	if err := extra.UnmarshalRLP(block.Header.ExtraData); err != nil {
+		return fmt.Errorf("failed to unmarshal extra data: %w", err)
+	}
+
+	if extra.RewardDistribution == nil {
+		// 没有奖励分发信息，跳过
+		return nil
+	}
+
+	rewardInfo := extra.RewardDistribution
+
+	// 处理奖励分发（像处理交易一样）
+	for addrStr, amount := range rewardInfo.Rewards {
+		addr := types.StringToAddress(addrStr)
+		// 使用Transfer方法进行转账（从奖励账户到验证者）
+		rewardAccount := types.StringToAddress("0x0000000000000000000000000000000000000001")
+		if err := transition.Transfer(rewardAccount, addr, amount); err != nil {
+			return fmt.Errorf("failed to transfer reward to %s: %w", addrStr, err)
+		}
+	}
+
+	return nil
 }
 
 // GetStateProviderForBlock is an implementation of blockchainBackend interface
