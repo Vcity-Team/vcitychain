@@ -71,6 +71,8 @@ type Extra struct {
 	Checkpoint *CheckpointData
 	// 🆕 奖励分配信息
 	RewardDistribution *RewardDistributionInfo
+	// 🆕 用于CheckpointHash计算的区块哈希
+	CheckpointBlockHash types.Hash
 }
 
 // RewardDistributionInfo 奖励分配信息
@@ -215,6 +217,17 @@ func (i *Extra) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 		vv.Set(i.RewardDistribution.MarshalRLPWith(ar))
 	}
 
+	// 🆕 CheckpointBlockHash
+	fmt.Printf("🔍 INFO MarshalRLPWith: 序列化CheckpointBlockHash: %s\n", i.CheckpointBlockHash.String())
+	if i.CheckpointBlockHash == (types.Hash{}) {
+		fmt.Printf("🔍 INFO CheckpointBlockHash为空，设置空字节数组\n")
+		// 修复：使用空字节数组而不是NullArray，确保类型一致
+		vv.Set(ar.NewBytes([]byte{}))
+	} else {
+		fmt.Printf("🔍 INFO CheckpointBlockHash不为空，设置Bytes: %x\n", i.CheckpointBlockHash.Bytes())
+		vv.Set(ar.NewBytes(i.CheckpointBlockHash.Bytes()))
+	}
+
 	return vv
 }
 
@@ -234,8 +247,16 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 	expectedElements := 4 // 默认创世区块格式
 	if len(elems) == 5 {
 		expectedElements = 5 // 普通区块格式
+	} else if len(elems) == 6 {
+		expectedElements = 6 // 包含CheckpointBlockHash的格式
 	}
-	// 延迟状态更新机制已移除，不再需要6个元素的格式
+
+	// 🆕 调试日志：RLP元素解析开始
+	fmt.Printf("🔍 INFO UnmarshalRLPWith: 开始解析ExtraData RLP元素\n")
+	fmt.Printf("🔍 INFO 元素数量: %d, 期望元素数量: %d\n", len(elems), expectedElements)
+	for i, elem := range elems {
+		fmt.Printf("🔍 INFO 元素[%d]: 类型=%v, 长度=%d\n", i, elem.Type(), elem.Elems())
+	}
 
 	// 解析RLP元素
 
@@ -320,14 +341,38 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		}
 	}
 
-	// Element[4] - 奖励分配信息（只在5个元素时处理）
-	if expectedElements == 5 && len(elems) > 4 && elems[4].Elems() > 0 {
+	// Element[4] - 奖励分配信息（只在5个或6个元素时处理）
+	if expectedElements >= 5 && len(elems) > 4 && elems[4].Elems() > 0 {
 		i.RewardDistribution = &RewardDistributionInfo{}
 		if err := i.RewardDistribution.UnmarshalRLPWith(elems[4]); err != nil {
 			fmt.Printf("❌ DEBUG RewardDistribution UnmarshalRLP failed: %v\n", err)
 			// 不返回错误，只是跳过奖励分配信息
 			i.RewardDistribution = nil
 		}
+	}
+
+	// Element[5] - CheckpointBlockHash（只在6个元素时处理）
+	if expectedElements == 6 && len(elems) > 5 {
+		fmt.Printf("🔍 INFO 开始解析CheckpointBlockHash: expectedElements=%d, elems长度=%d\n", expectedElements, len(elems))
+		fmt.Printf("🔍 INFO 元素[5]类型: %v\n", elems[5].Type())
+		if elems[5].Type() == fastrlp.TypeBytes {
+			hashBytes, err := elems[5].GetBytes(nil)
+			fmt.Printf("🔍 INFO CheckpointBlockHash字节: 长度=%d, 错误=%v\n", len(hashBytes), err)
+			if err == nil && len(hashBytes) == 32 {
+				i.CheckpointBlockHash = types.BytesToHash(hashBytes)
+				fmt.Printf("🔍 INFO CheckpointBlockHash解析成功: %s\n", i.CheckpointBlockHash.String())
+			} else if err == nil && len(hashBytes) == 0 {
+				// 修复：处理空字节数组的情况
+				i.CheckpointBlockHash = types.Hash{}
+				fmt.Printf("🔍 INFO CheckpointBlockHash为空字节数组，设置为空哈希\n")
+			} else {
+				fmt.Printf("🔍 INFO CheckpointBlockHash解析失败: 长度=%d, 错误=%v\n", len(hashBytes), err)
+			}
+		} else {
+			fmt.Printf("🔍 INFO CheckpointBlockHash类型错误: 期望TypeBytes，实际=%v\n", elems[5].Type())
+		}
+	} else {
+		fmt.Printf("🔍 INFO 跳过CheckpointBlockHash解析: expectedElements=%d, elems长度=%d\n", expectedElements, len(elems))
 	}
 
 	return nil
@@ -378,9 +423,32 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 	// 验证时使用：i.Checkpoint.Hash(chainID, blockNumber, fixedBlockHash)
 	// 需要确保两者使用相同的参数和计算方式
 
-	// 🆕 使用真实的区块哈希
+	// 🆕 使用ExtraData中保存的CheckpointBlockHash（生产时用于计算CheckpointHash的区块哈希）
 	// 确保区块哈希已经计算完成
 	realBlockHash := header.Hash
+
+	// 🆕 调试日志：检查CheckpointBlockHash状态
+	fmt.Printf("🔍 INFO ValidateFinalizedData: 检查CheckpointBlockHash状态\n")
+	fmt.Printf("🔍 INFO CheckpointBlockHash值: %s\n", i.CheckpointBlockHash.String())
+	fmt.Printf("🔍 INFO CheckpointBlockHash是否为空: %t\n", i.CheckpointBlockHash == (types.Hash{}))
+	fmt.Printf("🔍 INFO 区块头哈希: %s\n", header.Hash.String())
+
+	// 🆕 如果ExtraData中有CheckpointBlockHash，优先使用它
+	if i.CheckpointBlockHash != (types.Hash{}) {
+		realBlockHash = i.CheckpointBlockHash
+		fmt.Printf("🔍 INFO 使用ExtraData中的CheckpointBlockHash: %s\n", realBlockHash.String())
+		logger.Info("🔍 ===== 验证时使用ExtraData中的CheckpointBlockHash =====",
+			"blockNumber", blockNumber,
+			"checkpointBlockHash", realBlockHash.String(),
+			"headerHash", header.Hash.String(),
+			"说明", "验证时使用生产时保存的CheckpointBlockHash进行计算")
+	} else {
+		fmt.Printf("🔍 INFO 使用区块头哈希: %s\n", realBlockHash.String())
+		logger.Info("🔍 ===== 验证时使用区块头哈希 =====",
+			"blockNumber", blockNumber,
+			"headerHash", realBlockHash.String(),
+			"说明", "ExtraData中没有CheckpointBlockHash，验证时使用区块头哈希")
+	}
 
 	// 🆕 修复：使用传入的chainID参数，确保与生产时一致
 	productionChainID := chainID
@@ -545,6 +613,13 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"eventRoot", recalculatedCheckpoint.EventRoot.String(),
 		"currentValidatorsHash", recalculatedCheckpoint.CurrentValidatorsHash.String(),
 		"nextValidatorsHash", recalculatedCheckpoint.NextValidatorsHash.String())
+
+	// 🆕 显著日志：验证时从extra中取出CheckpointBlockHash
+	logger.Debug("🔍 ===== 验证时CheckpointBlockHash使用情况 =====",
+		"blockNumber", blockNumber,
+		"checkpointBlockHash", realBlockHash.String(),
+		"headerHash", header.Hash.String(),
+		"说明", "验证时使用从ExtraData中取出的CheckpointBlockHash进行计算")
 
 	logger.Debug("🔍 ValidateFinalizedData 开始计算checkpoint哈希", "blockNumber", blockNumber)
 	checkpointHash, err := recalculatedCheckpoint.Hash(productionChainID, blockNumber, realBlockHash)

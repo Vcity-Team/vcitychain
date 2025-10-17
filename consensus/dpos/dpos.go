@@ -1936,10 +1936,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"note", "奖励分发将在后续的executeRewardDistributionForEpochEnd中执行")
 	} else {
 		r.logger.Info("🔍 buildBlock: 非epoch结束区块，跳过奖励分发")
-		// 非epoch结束区块，无需处理延迟状态更新
-		r.logger.Debug("非epoch结束区块，跳过奖励分发处理",
-			"blockNumber", nextBlockNumber,
-			"isEpochEndBlock", isEpochEndBlock)
 	}
 
 	// 创建区块构建器
@@ -2080,6 +2076,8 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			NextValidatorsHash:    currentValidatorsHash, // 暂时使用相同的哈希
 			EventRoot:             types.Hash{},          // 暂时为空
 		},
+		// 🆕 初始化CheckpointBlockHash为空，稍后会设置
+		CheckpointBlockHash: types.Hash{},
 	}
 
 	// 🆕 检查是否是epoch的最后一个区块，如果是则执行奖励分发
@@ -2223,8 +2221,19 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 					r.logger.Info("🔍 buildBlock: 开始设置奖励分配信息到ExtraData")
 					extra.RewardDistribution = dposInstance.pendingRewardDistribution
+
+					// 🆕 在epoch结束区块中也设置CheckpointBlockHash
+					extra.CheckpointBlockHash = h.Hash
+					r.logger.Info("🔍 ===== epoch结束区块保存CheckpointBlockHash =====",
+						"blockNumber", h.Number,
+						"checkpointBlockHash", h.Hash.String(),
+						"说明", "epoch结束区块保存用于CheckpointHash计算的初始区块哈希")
+
+					// 重新设置ExtraData
 					h.ExtraData = extra.MarshalRLPTo(nil)
-					r.logger.Info("🔍 buildBlock: ExtraData已更新", "newExtraDataLength", len(h.ExtraData))
+
+					// 重新计算区块哈希（用于后续处理）
+					h.ComputeHash()
 
 					r.logger.Info("🔧 buildBlock: epoch结束区块，奖励分配信息已添加到ExtraData",
 						"blockNumber", h.Number,
@@ -2283,6 +2292,23 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	// 确保区块哈希已经计算完成
 	block.Block.Header.ComputeHash()
 	realBlockHash := block.Block.Hash()
+
+	// 🆕 保存初始区块哈希到extra中，用于CheckpointHash计算
+	extra.CheckpointBlockHash = realBlockHash
+	fmt.Printf("🔍 INFO 生产时保存CheckpointBlockHash: %s\n", realBlockHash.String())
+	fmt.Printf("🔍 INFO extra.CheckpointBlockHash设置后: %s\n", extra.CheckpointBlockHash.String())
+	r.logger.Info("🔍 ===== 生产时保存CheckpointBlockHash =====",
+		"blockNumber", block.Block.Number(),
+		"checkpointBlockHash", realBlockHash.String(),
+		"说明", "生产时保存用于CheckpointHash计算的初始区块哈希到ExtraData")
+
+	// 🆕 重新设置ExtraData，确保CheckpointBlockHash被包含
+	block.Block.Header.ExtraData = extra.MarshalRLPTo(nil)
+	r.logger.Info("🔍 ===== 重新设置ExtraData包含CheckpointBlockHash =====",
+		"blockNumber", block.Block.Number(),
+		"extraDataLength", len(block.Block.Header.ExtraData),
+		"checkpointBlockHash", realBlockHash.String(),
+		"说明", "重新设置ExtraData确保CheckpointBlockHash被包含")
 
 	r.logger.Debug("🔍 生产时开始计算checkpoint哈希",
 		"blockNumber", block.Block.Number(),
@@ -2706,8 +2732,9 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				AggregatedSignature: aggregatedSignature,
 				Bitmap:              signatureBitmap,
 			},
-			Checkpoint:         checkpoint,
-			RewardDistribution: rewardDistribution, // 🆕 从当前区块ExtraData获取的奖励分配信息
+			Checkpoint:          checkpoint,
+			RewardDistribution:  rewardDistribution,        // 🆕 从当前区块ExtraData获取的奖励分配信息
+			CheckpointBlockHash: extra.CheckpointBlockHash, // 🆕 保持CheckpointBlockHash
 		}
 		block.Block.Header.ExtraData = finalExtra.MarshalRLPTo(nil)
 
