@@ -296,6 +296,11 @@ func (b *Blockchain) SetConsensus(c Verifier) {
 	b.consensus = c
 }
 
+// SetExecutor sets the executor
+func (b *Blockchain) SetExecutor(e Executor) {
+	b.executor = e
+}
+
 // setCurrentHeader sets the current header
 func (b *Blockchain) setCurrentHeader(h *types.Header, diff *big.Int) {
 	// Update the header (atomic)
@@ -723,6 +728,11 @@ func (b *Blockchain) verifyBlockBody(block *types.Block) ([]*types.Receipt, erro
 		return nil, fmt.Errorf("unable to execute block transactions, %w", executeErr)
 	}
 
+	// 🆕 奖励分配已在 executor.ProcessBlock 中处理，无需重复执行
+	b.logger.Info("ℹ️ 奖励分配已在 executor.ProcessBlock 中处理",
+		"blockNumber", block.Number(),
+		"说明", "奖励分配逻辑在 consensus/dpos/blockchain_wrapper.go 的 ProcessBlock 方法中执行")
+
 	// Verify the local execution result with the proposed block data
 	if err := blockResult.verifyBlockResult(block); err != nil {
 		return nil, fmt.Errorf("unable to verify block execution result, %w", err)
@@ -782,10 +792,24 @@ func (b *Blockchain) executeBlockTransactions(block *types.Block) (*BlockResult,
 		return nil, err
 	}
 
+	// 🆕 添加ProcessBlock调用跟踪日志
+	b.logger.Info("🔍🔍🔍 ========== 开始调用executor.ProcessBlock ========== 🔍🔍🔍",
+		"blockNumber", block.Number(),
+		"blockHash", block.Hash().String()[:16],
+		"parentStateRoot", parent.StateRoot.String(),
+		"blockCreator", blockCreator.String(),
+		"说明", "blockchain.go中调用executor.ProcessBlock")
+
 	txn, err := b.executor.ProcessBlock(parent.StateRoot, block, blockCreator)
 	if err != nil {
+		b.logger.Error("❌ executor.ProcessBlock调用失败", "blockNumber", block.Number(), "error", err)
 		return nil, err
 	}
+
+	b.logger.Info("✅ executor.ProcessBlock调用成功",
+		"blockNumber", block.Number(),
+		"blockHash", block.Hash().String()[:16],
+		"说明", "executor.ProcessBlock执行完成")
 
 	if err := b.consensus.PreCommitState(block, txn); err != nil {
 		return nil, err

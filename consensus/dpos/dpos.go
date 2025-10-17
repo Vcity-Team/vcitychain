@@ -1273,6 +1273,13 @@ func (r *dposRuntime) produceBlock() error {
 		return fmt.Errorf("failed to build block: %w", err)
 	}
 
+	// 🆕 生产节点不在此处执行奖励分配，避免重复执行
+	// 奖励分配将在生产节点本地接收自己广播的区块时通过验证流程执行
+	r.logger.Info("🔍 生产节点跳过本地奖励分配执行",
+		"blockNumber", block.Block.Number(),
+		"blockHash", block.Block.Hash().String()[:16],
+		"说明", "奖励分配将在本地接收广播区块时通过验证流程执行，避免重复")
+
 	// 提交区块到区块链
 	r.logger.Info("📝 开始提交区块到区块链", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
 
@@ -1848,7 +1855,7 @@ func (r *dposRuntime) getEpochForBlock(blockNumber uint64) *epochMetadata {
 
 // executeRewardDistributionForEpochEnd 在epoch最后一个区块时执行奖励分发
 func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64, currentRound uint64) error {
-	r.logger.Info("🎉 ========== 开始执行epoch结束奖励分发 ==========",
+	r.logger.Info("🎉 ========== 开始预先计算epoch结束时的奖励分发 ==========",
 		"blockNumber", blockNumber,
 		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
 
@@ -1870,13 +1877,6 @@ func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64, c
 			"blockNumber", blockNumber)
 		return nil
 	}
-
-	r.logger.Info("🔍 准备分发奖励（统一Epoch管理器）",
-		"blockNumber", blockNumber,
-		"currentEpochNumber", currentEpochNumber,
-		"rewardEpoch", rewardEpoch,
-		"epochType", "unified-block-based")
-
 	// 直接计算和分发奖励
 	return dposInstance.distributeEpochRewards(rewardEpoch, currentRound)
 }
@@ -2077,7 +2077,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	// 🆕 检查是否是epoch的最后一个区块，如果是则执行奖励分发
 
 	// 延迟状态更新机制已移除，奖励分发在epoch结束区块直接执行
-	r.logger.Info("🔍 检查是否需要执行奖励分发",
+	r.logger.Info("🔍 检查是否需要计算奖励分发",
 		"nextBlockNumber", nextBlockNumber,
 		"parentNumber", parent.Number,
 		"delegate", keyAddr.String()[:16])
@@ -2092,20 +2092,20 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"isCurrentProducer", true,
 			"timestamp", time.Now().Format("2006-01-02 15:04:05"))
 
-		r.logger.Info("🚀🚀🚀 ========== 开始执行奖励分发 ========== 🚀🚀🚀",
+		r.logger.Info("🚀🚀🚀 ========== 开始计算奖励信息 ========== 🚀🚀🚀",
 			"blockNumber", nextBlockNumber,
 			"delegate", keyAddr.String()[:16],
 			"action", "REWARD_DISTRIBUTION_START")
 
 		// 执行奖励分发，传递当前轮次
 		if err := r.executeRewardDistributionForEpochEnd(nextBlockNumber, r.currentRound); err != nil {
-			r.logger.Error("❌❌❌ ========== 奖励分发失败 ========== ❌❌❌",
+			r.logger.Error("❌❌❌ ========== 计算奖励信息失败 ========== ❌❌❌",
 				"blockNumber", nextBlockNumber,
 				"delegate", keyAddr.String()[:16],
 				"error", err)
 			// 不返回错误，继续构建区块，但记录错误
 		} else {
-			r.logger.Info("✅✅✅ ========== 奖励分发成功 ========== ✅✅✅",
+			r.logger.Info("✅✅✅ ========== 计算奖励信息成功 ========== ✅✅✅",
 				"blockNumber", nextBlockNumber,
 				"delegate", keyAddr.String()[:16],
 				"action", "REWARD_DISTRIBUTION_SUCCESS")
@@ -2123,6 +2123,35 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		r.logger.Info("ℹ️ 不是epoch最后一个区块，跳过奖励分发",
 			"blockNumber", nextBlockNumber,
 			"isEpochEndBlock", isEpochEndBlock)
+	}
+
+	// 🆕 如果是epoch结束区块，不预先计算状态根，而是像交易一样在区块执行时处理
+	if isEpochEndBlock {
+		r.logger.Info("🔍 buildBlock: epoch结束区块，将在区块执行时处理奖励分发",
+			"blockNumber", nextBlockNumber,
+			"isEpochEndBlock", isEpochEndBlock,
+			"note", "像处理交易一样，奖励分发将在区块执行时处理，不预先修改状态根")
+	}
+
+	// 🆕 如果是epoch结束区块，在生产节点也执行奖励分配
+	if isEpochEndBlock {
+		r.logger.Info("🏭 生产节点开始执行奖励分配",
+			"blockNumber", nextBlockNumber,
+			"isEpochEndBlock", isEpochEndBlock,
+			"说明", "生产节点在buildBlock时执行奖励分配，确保状态根一致")
+
+		// 获取当前状态
+		state := builder.GetState()
+		if state != nil {
+			// 执行奖励分配
+			if err := r.processRewardDistributionInBlockForBuilder(builder, nextBlockNumber); err != nil {
+				r.logger.Error("❌ 生产节点奖励分配失败", "blockNumber", nextBlockNumber, "error", err)
+				return nil, fmt.Errorf("failed to process reward distribution in buildBlock: %w", err)
+			}
+			r.logger.Info("✅ 生产节点奖励分配完成", "blockNumber", nextBlockNumber)
+		} else {
+			r.logger.Error("❌ 生产节点无法获取状态", "blockNumber", nextBlockNumber)
+		}
 	}
 
 	// 构建区块
@@ -3207,20 +3236,6 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 		return nil
 	}
 
-	// 🆕 检查是否是epoch结束区块，如果是则从ExtraData读取奖励信息并更新状态
-	if d.isEpochEndBlock(blockNumber) {
-		d.logger.Info("🎯 同步节点检测到epoch结束区块，从ExtraData读取奖励信息",
-			"blockNumber", blockNumber)
-
-		// 🆕 立即处理奖励分配，确保状态根正确更新
-		if err := d.processRewardDistributionFromBlock(header); err != nil {
-			d.logger.Error("❌ 同步节点处理奖励分发失败", "blockNumber", blockNumber, "error", err)
-			// 不返回错误，继续处理其他区块
-		} else {
-			d.logger.Info("✅ 同步节点奖励分发处理成功", "blockNumber", blockNumber)
-		}
-	}
-
 	// 🆕 关键：在验证前等待BLS公钥加载完成
 	if err := d.waitForBLSKeysLoaded(); err != nil {
 		d.logger.Error("❌ 等待BLS公钥加载失败", "blockNumber", blockNumber, "error", err)
@@ -3395,14 +3410,6 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 				"blockHash", header.Hash.String()[:16],
 				"note", "同步节点已接收到生产节点7379区块头中的状态根")
 
-			// 🆕 模拟交易执行：同步节点重新执行奖励分发（就像重新执行交易一样）
-			if err := d.processRewardDistributionFromBlock(header); err != nil {
-				d.logger.Error("❌ 同步节点处理奖励分发失败", "blockNumber", header.Number, "error", err)
-				// 不返回错误，继续处理其他区块
-			} else {
-				d.logger.Info("✅ 同步节点奖励分发处理成功", "blockNumber", header.Number)
-			}
-
 			// 🆕 同步节点状态根应用完成显著日志标志
 			d.logger.Info("✅✅✅ ========== 同步节点状态根应用完成 ========== ✅✅✅",
 				"blockNumber", header.Number,
@@ -3418,12 +3425,37 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		// 同步更新轮次状态（这部分必须同步执行，不能异步）
 		d.updateRoundState(header)
 
-		// 🆕 添加：处理经济系统逻辑（记录出块统计）
-		// 需要构造FullBlock来调用processEconomicSystem
-		d.logger.Info("🔍 ========== 开始检查经济系统处理 ==========",
-			"blockNumber", header.Number,
-			"blockHash", header.Hash.String()[:16],
-			"blockchainIsNil", d.config.Blockchain == nil)
+		// 🆕 验证节点执行blockchain_wrapper.ProcessBlock来处理奖励分配
+		if d.config.Blockchain != nil {
+			// 获取完整区块信息
+			if block, exists := d.config.Blockchain.GetBlockByHash(header.Hash, true); exists && block != nil {
+				d.logger.Info("🔍 验证节点获取完整区块信息，准备调用blockchain_wrapper.ProcessBlock",
+					"blockNumber", header.Number,
+					"blockHash", header.Hash.String()[:16],
+					"blockExists", exists)
+
+				// 获取父区块
+				parent, exists := d.config.Blockchain.GetHeader(header.ParentHash, header.Number-1)
+				if !exists {
+					d.logger.Error("❌ 验证节点无法获取父区块", "blockNumber", header.Number, "parentHash", header.ParentHash.String()[:16])
+				} else {
+					// 调用blockchain_wrapper.ProcessBlock执行奖励分配
+					d.logger.Info("🚀 验证节点开始调用blockchain_wrapper.ProcessBlock执行奖励分配",
+						"blockNumber", header.Number,
+						"blockHash", header.Hash.String()[:16])
+
+					if fullBlock, err := d.blockchain.ProcessBlock(parent, block); err != nil {
+						d.logger.Error("❌ 验证节点blockchain_wrapper.ProcessBlock调用失败", "blockNumber", header.Number, "error", err)
+						// 不返回错误，继续处理其他逻辑
+					} else {
+						d.logger.Info("✅ 验证节点blockchain_wrapper.ProcessBlock调用成功",
+							"blockNumber", header.Number,
+							"blockHash", header.Hash.String()[:16],
+							"receiptsCount", len(fullBlock.Receipts))
+					}
+				}
+			}
+		}
 
 		if d.config.Blockchain != nil {
 			d.logger.Info("🔍 尝试获取完整区块信息",
@@ -3671,88 +3703,6 @@ func (d *DPoS) processBlockVotesFromHeader(header *types.Header) error {
 
 	// 调用现有的投票处理逻辑
 	return d.processBlockVotes(fullBlock)
-}
-
-// processRewardDistributionFromBlock 同步节点处理区块中的奖励分配信息
-func (d *DPoS) processRewardDistributionFromBlock(header *types.Header) error {
-	blockNumber := header.Number
-	d.logger.Info("🎯 开始处理区块中的奖励分配信息", "blockNumber", blockNumber)
-
-	// 解析ExtraData
-	extra := &Extra{}
-	if err := extra.UnmarshalRLP(header.ExtraData); err != nil {
-		d.logger.Error("❌ 解析ExtraData失败", "blockNumber", blockNumber, "error", err)
-		return fmt.Errorf("failed to unmarshal extra data: %w", err)
-	}
-
-	// 检查是否有奖励分配信息
-	if extra.RewardDistribution == nil {
-		d.logger.Info("ℹ️ 区块中没有奖励分配信息", "blockNumber", blockNumber)
-		return nil
-	}
-
-	rewardInfo := extra.RewardDistribution
-
-	// 🆕 显著日志：验证节点从ExtraData取出奖励分发信息
-	d.logger.Info("📥📥📥 ========== 验证节点从ExtraData取出奖励分发信息 ========== 📥📥📥",
-		"blockNumber", blockNumber,
-		"epochNumber", rewardInfo.EpochNumber,
-		"rewardCount", len(rewardInfo.Rewards),
-		"totalReward", rewardInfo.TotalReward.String(),
-		"说明", "验证节点从区块ExtraData中取出奖励分发信息")
-
-	d.logger.Info("✅ 找到奖励分配信息",
-		"blockNumber", blockNumber,
-		"epochNumber", rewardInfo.EpochNumber,
-		"rewardCount", len(rewardInfo.Rewards),
-		"totalReward", rewardInfo.TotalReward.String())
-
-	// 🆕 显著日志：验证节点开始应用奖励分配（使用生产节点相同函数）
-	d.logger.Info("💰💰💰 ========== 验证节点开始应用奖励分配（使用executeBatchStateUpdate） ========== 💰💰💰",
-		"blockNumber", blockNumber,
-		"epochNumber", rewardInfo.EpochNumber,
-		"rewardCount", len(rewardInfo.Rewards),
-		"说明", "验证节点使用和生产节点相同的executeBatchStateUpdate函数应用奖励分配")
-
-	// 就像交易一样，重新执行奖励分发来更新状态根
-
-	// 记录计算前的状态根
-	oldStateRoot := d.config.Blockchain.Header().StateRoot
-	d.logger.Info("🔍 验证节点开始应用奖励分发（使用executeBatchStateUpdate）",
-		"blockNumber", blockNumber,
-		"oldStateRoot", oldStateRoot.String(),
-		"说明", "验证节点使用和生产节点相同的executeBatchStateUpdate函数重新计算状态根")
-
-	// 🆕 使用和生产节点相同的executeBatchStateUpdate函数
-	// 将RewardDistributionInfo转换为map[types.Address]*big.Int格式
-	rewards := make(map[types.Address]*big.Int)
-	for addrStr, amount := range rewardInfo.Rewards {
-		addr := types.StringToAddress(addrStr)
-		rewards[addr] = amount
-	}
-
-	// 使用生产节点相同的executeBatchStateUpdate函数
-	if err := d.executeBatchStateUpdate(rewards, d.config.RewardAccount); err != nil {
-		d.logger.Error("❌ 验证节点应用奖励分发失败", "blockNumber", blockNumber, "error", err)
-		return fmt.Errorf("failed to apply reward distribution: %w", err)
-	}
-
-	// 记录计算后的状态根
-	newStateRoot := d.config.Blockchain.Header().StateRoot
-	d.logger.Info("✅✅✅ ========== 验证节点奖励分发计算完成（使用executeBatchStateUpdate） ========== ✅✅✅",
-		"blockNumber", blockNumber,
-		"oldStateRoot", oldStateRoot.String(),
-		"newStateRoot", newStateRoot.String(),
-		"productionStateRoot", header.StateRoot.String(),
-		"状态根是否一致", newStateRoot == header.StateRoot,
-		"说明", "验证节点使用和生产节点相同的executeBatchStateUpdate函数重新计算状态根完成")
-
-	// 🆕 显著日志：验证节点直接使用生产节点状态根完成
-	d.logger.Info("✅✅✅ ========== 验证节点直接使用生产节点状态根完成 ========== ✅✅✅",
-		"blockNumber", blockNumber,
-		"productionStateRoot", header.StateRoot.String(),
-		"说明", "验证节点直接使用生产节点计算的状态根，跳过重新执行奖励分发")
-	return nil
 }
 
 // applyRewardDistribution 应用奖励分配到状态
@@ -4353,7 +4303,14 @@ func (d *DPoS) Initialize() error {
 	d.blockchain = &blockchainWrapper{
 		blockchain: d.config.Blockchain,
 		executor:   d.config.Executor,
+		keyAddr:    types.Address(d.key.Address()), // 设置当前节点的地址
 	}
+
+	// 🆕 将blockchain_wrapper设置为blockchain的executor，以启用奖励分配功能
+	// 创建一个适配器，将blockchain_wrapper包装为blockchain.Executor
+	executorAdapter := &executorAdapter{wrapper: d.blockchain.(*blockchainWrapper)}
+	d.config.Blockchain.SetExecutor(executorAdapter)
+	d.logger.Info("✅ 已将blockchain_wrapper设置为blockchain的executor，启用奖励分配功能")
 
 	// 🆕 新增：设置余额查询器（使用真实实现）
 	// 注意：这里需要传入blockchain实例，暂时使用nil
@@ -11691,20 +11648,17 @@ func (d *DPoS) processEconomicSystem(block *types.FullBlock) error {
 // distributeEpochRewards 分发Epoch奖励
 func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) error {
 	startTime := time.Now()
-	d.logger.Info("🎉 ========== 开始分发Epoch奖励 ==========",
+	d.logger.Info("🎉 ========== 开始计算Epoch奖励 ==========",
 		"epoch", epochNumber,
 		"startTime", startTime.Format("2006-01-02 15:04:05"),
-		"note", "为上一个epoch分发奖励")
+		"note", "为上一个epoch计算奖励")
 
 	// 1. 获取验证者集合
 	validators := d.getAllValidators()
 	if len(validators) == 0 {
-		d.logger.Warn("⚠️ 没有验证者，跳过奖励分发", "epoch", epochNumber)
+		d.logger.Warn("⚠️ 没有验证者，跳过奖励计算", "epoch", epochNumber)
 		return nil
 	}
-
-	// 2. 真实奖励分发（状态更新）
-	d.logger.Info("📊 开始真实奖励分发", "epoch", epochNumber, "validatorsCount", len(validators))
 
 	// 获取出块统计（使用区块基础Epoch）
 	blockCounts := d.blockTracker.GetEpochBlockCounts(epochNumber)
@@ -11732,18 +11686,18 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 	}
 
 	if totalBlocks == 0 {
-		d.logger.Warn("⚠️ 该epoch没有出块记录，跳过奖励分发", "epoch", epochNumber)
+		d.logger.Warn("⚠️ 该epoch没有出块记录，跳过奖励计算", "epoch", epochNumber)
 		return nil
 	}
 
 	// 检查配置是否有效
 	if d.config.RewardAmount == nil {
-		d.logger.Error("❌ 奖励金额配置为空，跳过奖励分发", "epoch", epochNumber)
+		d.logger.Error("❌ 奖励金额配置为空，跳过奖励计算", "epoch", epochNumber)
 		return fmt.Errorf("reward amount is nil")
 	}
 
 	if d.config.ValidatorRewardRatio == 0 {
-		d.logger.Error("❌ 验证者奖励比例为0，跳过奖励分发", "epoch", epochNumber)
+		d.logger.Error("❌ 验证者奖励比例为0，跳过奖励计算", "epoch", epochNumber)
 		return fmt.Errorf("validator reward ratio is 0")
 	}
 
@@ -11771,9 +11725,9 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 	validatorRewardCount := 0
 
 	// 计算每个验证者的奖励
-	d.logger.Info("🔍 开始处理验证者奖励循环", "totalValidators", len(validators))
+	d.logger.Info("🔍 开始统计验证者奖励循环", "totalValidators", len(validators))
 	for i, validator := range validators {
-		d.logger.Debug("🔍 处理验证者", "index", i+1, "total", len(validators), "address", validator.Address.String())
+		d.logger.Debug("🔍 统计验证者", "index", i+1, "total", len(validators), "address", validator.Address.String())
 		blocksProduced := blockCounts[types.Address(validator.Address)]
 		d.logger.Debug("🔍 验证者出块统计", "index", i+1, "address", validator.Address.String(), "blocksProduced", blocksProduced)
 		if blocksProduced > 0 {
@@ -11821,7 +11775,7 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 					"type", "validator")
 			}
 		}
-		d.logger.Debug("🔍 验证者处理完成", "index", i+1, "address", validator.Address.String())
+		d.logger.Debug("🔍 验证者统计完成", "index", i+1, "address", validator.Address.String())
 	}
 
 	d.logger.Info("✅ 验证者奖励循环处理完成", "totalValidators", len(validators), "processedCount", validatorRewardCount)
@@ -11876,8 +11830,6 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 			"totalVoterReward", voterRewardAmount.String())
 	}
 
-	d.logger.Info("🔍 准备开始状态更新阶段", "epoch", epochNumber, "stateUpdatesCount", len(stateUpdates))
-
 	// 🆕 在epoch结束区块准备奖励分发信息（不直接执行状态更新）
 	if len(stateUpdates) > 0 {
 		d.logger.Info("🎯 在epoch结束区块准备奖励分发信息",
@@ -11911,17 +11863,17 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 	}
 
 	// 3. 记录分发统计
-	d.logger.Info("📊 ========== 奖励分发统计 ==========",
+	d.logger.Info("📊 ========== 奖励计算信息统计 ==========",
 		"epoch", epochNumber,
 		"validatorsCount", len(validators),
 		"validatorRewardCount", validatorRewardCount,
 		"totalBlocks", totalBlocks,
 		"stateUpdateCount", len(stateUpdates),
-		"status", "真实分发完成")
+		"status", "奖励计算完成")
 
 	endTime := time.Now()
 	duration := endTime.Sub(startTime)
-	d.logger.Info("✅ ========== Epoch奖励分发完成 ==========",
+	d.logger.Info("✅ ========== Epoch奖励计算完成 ==========",
 		"epoch", epochNumber,
 		"startTime", startTime.Format("2006-01-02 15:04:05"),
 		"endTime", endTime.Format("2006-01-02 15:04:05"),
@@ -12667,6 +12619,82 @@ func (d *DPoS) onEpochEnd(epochNumber uint64) error {
 	// 延迟状态更新机制已移除，奖励分发在epoch结束区块直接执行
 	d.logger.Debug("延迟状态更新机制已移除，无需在epoch结束时处理状态更新",
 		"currentEpoch", epochNumber)
+
+	return nil
+}
+
+// processRewardDistributionInBlockForBuilder 在生产节点buildBlock时执行奖励分配
+func (r *dposRuntime) processRewardDistributionInBlockForBuilder(builder blockBuilder, blockNumber uint64) error {
+	r.logger.Info("🎯 生产节点开始执行奖励分配",
+		"blockNumber", blockNumber,
+		"说明", "生产节点在buildBlock时执行奖励分配")
+
+	// 获取DPoS实例
+	if r.config == nil || r.config.dposBackend == nil {
+		return fmt.Errorf("DPoS backend not available")
+	}
+
+	dposInstance, ok := r.config.dposBackend.(*DPoS)
+	if !ok {
+		return fmt.Errorf("failed to cast dposBackend to DPoS")
+	}
+
+	// 检查是否有待处理的奖励分配信息
+	if dposInstance.pendingRewardDistribution == nil {
+		r.logger.Info("ℹ️ 没有待处理的奖励分配信息", "blockNumber", blockNumber)
+		return nil
+	}
+
+	rewardInfo := dposInstance.pendingRewardDistribution
+	r.logger.Info("💰 开始执行奖励分配",
+		"blockNumber", blockNumber,
+		"epochNumber", rewardInfo.EpochNumber,
+		"rewardCount", len(rewardInfo.Rewards))
+
+	// 获取状态
+	state := builder.GetState()
+	if state == nil {
+		return fmt.Errorf("failed to get state from builder")
+	}
+
+	// 使用TotalReward字段
+	totalReward := rewardInfo.TotalReward
+	if totalReward == nil {
+		totalReward = big.NewInt(0)
+	}
+
+	// 检查奖励账户余额
+	rewardAccount := dposInstance.config.RewardAccount
+	currentBalance := state.GetBalance(rewardAccount)
+
+	r.logger.Info("💰 奖励账户余额检查",
+		"address", rewardAccount.String(),
+		"currentBalance", currentBalance.String(),
+		"totalReward", totalReward.String())
+
+	if currentBalance.Cmp(totalReward) < 0 {
+		return fmt.Errorf("insufficient balance for reward distribution: have %s, need %s",
+			currentBalance.String(), totalReward.String())
+	}
+
+	// 从奖励账户扣除总奖励
+	state.Txn().SubBalance(rewardAccount, totalReward)
+	r.logger.Info("✅ 从奖励账户扣除总奖励",
+		"address", rewardAccount.String(),
+		"amount", totalReward.String())
+
+	// 分配奖励给验证者
+	for addrStr, amount := range rewardInfo.Rewards {
+		addr := types.StringToAddress(addrStr)
+		state.Txn().AddBalance(addr, amount)
+		r.logger.Info("✅ 验证者余额增加",
+			"to", addr.String(),
+			"amount", amount.String())
+	}
+
+	r.logger.Info("🎉 生产节点奖励分配完成",
+		"blockNumber", blockNumber,
+		"rewardCount", len(rewardInfo.Rewards))
 
 	return nil
 }

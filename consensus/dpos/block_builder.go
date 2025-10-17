@@ -113,6 +113,11 @@ func (b *BlockBuilder) Block() *types.Block {
 	return b.block
 }
 
+// GetState returns the state transition object
+func (b *BlockBuilder) GetState() *state.Transition {
+	return b.state
+}
+
 // Build creates the state and the final block
 func (b *BlockBuilder) Build(handler func(h *types.Header)) (*types.FullBlock, error) {
 	if handler != nil {
@@ -219,11 +224,6 @@ func (b *BlockBuilder) writeTxPoolTransaction(tx *types.Transaction) (bool, erro
 	b.params.TxPool.Pop(tx)
 
 	return false, nil
-}
-
-// GetState returns Transition reference
-func (b *BlockBuilder) GetState() *state.Transition {
-	return b.state
 }
 
 // GetTransactions returns the transactions that have been added to the block
