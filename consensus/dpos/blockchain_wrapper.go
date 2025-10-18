@@ -137,19 +137,24 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 	fmt.Printf("🔍 检查区块生产者: blockMiner=%s, keyAddr=%s, isOurBlock=%t\n",
 		blockMiner.String(), keyAddr.String(), isOurBlock)
 
-	// 🆕 添加ProcessBlock奖励分发检测日志
-	fmt.Printf("🔍🔍🔍 ========== ProcessBlockExecutor开始检测奖励分发 ========== 🔍🔍🔍\n")
+	// 🆕 添加ProcessBlock奖励分发检测日志（TRON方式：跟随生产节点决定）
+	fmt.Printf("🔍🔍🔍 ========== ProcessBlockExecutor开始检测奖励分发（TRON方式） ========== 🔍🔍🔍\n")
 	fmt.Printf("🔍 区块号: %d\n", block.Number())
-	fmt.Printf("🔍 开始调用isEpochEndBlock检查\n")
+	fmt.Printf("🔍 说明: 不依赖时间检测，直接检查ExtraData中是否有奖励分发信息\n")
 
-	isEpochEnd := p.isEpochEndBlock(block.Number())
-	fmt.Printf("🔍 isEpochEndBlock结果: %t\n", isEpochEnd)
-
-	// 🆕 如果是epoch结束区块且不是生产节点自己生产的区块，处理奖励分发
-	if isEpochEnd && !isOurBlock {
-		fmt.Printf("🏭🏭🏭 ========== ProcessBlockExecutor检测到epoch结束区块 ========== 🏭🏭🏭\n")
+	// 🆕 TRON方式：解析ExtraData检查是否有奖励分发信息
+	extra := &Extra{}
+	if err := extra.UnmarshalRLP(block.Header.ExtraData); err != nil {
+		fmt.Printf("⚠️ ProcessBlockExecutor: 解析ExtraData失败, error=%v, 跳过奖励分发检查\n", err)
+	} else if extra.RewardDistribution != nil {
+		// 🆕 生产节点已经决定执行奖励分发，验证节点跟随执行
+		fmt.Printf("🏭🏭🏭 ========== ProcessBlockExecutor检测到生产节点已执行奖励分发 ========== 🏭🏭🏭\n")
 		fmt.Printf("🏭 区块号: %d\n", block.Number())
-		fmt.Printf("🏭 说明: 开始处理奖励分发（像处理交易一样）\n")
+		fmt.Printf("🏭 说明: 生产节点已决定执行奖励分发，验证节点跟随执行（TRON方式）\n")
+		fmt.Printf("🏭 奖励信息: epochNumber=%d, rewardCount=%d, totalReward=%s\n",
+			extra.RewardDistribution.EpochNumber,
+			len(extra.RewardDistribution.Rewards),
+			extra.RewardDistribution.TotalReward.String())
 
 		if err := p.processRewardDistributionInBlock(block, transition); err != nil {
 			fmt.Printf("❌ ProcessBlockExecutor: 奖励分发处理失败, error=%v\n", err)
@@ -157,10 +162,8 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 		}
 
 		fmt.Printf("✅ ProcessBlockExecutor: 奖励分发处理完成, blockNumber=%d\n", block.Number())
-	} else if isEpochEnd && isOurBlock {
-		fmt.Printf("ℹ️ ProcessBlockExecutor: 是epoch结束区块但为生产节点自己生产的区块，跳过奖励分发避免重复执行, blockNumber=%d\n", block.Number())
 	} else {
-		fmt.Printf("ℹ️ ProcessBlockExecutor: 不是epoch结束区块，跳过奖励分发, blockNumber=%d\n", block.Number())
+		fmt.Printf("ℹ️ ProcessBlockExecutor: ExtraData中没有奖励分发信息，跳过奖励分发, blockNumber=%d\n", block.Number())
 	}
 
 	updateBlockExecutionMetric(start)
@@ -200,19 +203,24 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 	fmt.Printf("🔍 检查区块生产者: blockMiner=%s, keyAddr=%s, isOurBlock=%t\n",
 		blockMiner.String(), keyAddr.String(), isOurBlock)
 
-	// 🆕 添加ProcessBlock奖励分发检测日志
-	fmt.Printf("🔍🔍🔍 ========== ProcessBlock开始检测奖励分发 ========== 🔍🔍🔍\n")
+	// 🆕 添加ProcessBlock奖励分发检测日志（TRON方式：跟随生产节点决定）
+	fmt.Printf("🔍🔍🔍 ========== ProcessBlock开始检测奖励分发（TRON方式） ========== 🔍🔍🔍\n")
 	fmt.Printf("🔍 区块号: %d\n", block.Number())
-	fmt.Printf("🔍 开始调用isEpochEndBlock检查\n")
+	fmt.Printf("🔍 说明: 不依赖时间检测，直接检查ExtraData中是否有奖励分发信息\n")
 
-	isEpochEnd := p.isEpochEndBlock(block.Number())
-	fmt.Printf("🔍 isEpochEndBlock结果: %t\n", isEpochEnd)
-
-	// 🆕 如果是epoch结束区块且不是生产节点自己生产的区块，处理奖励分发
-	if isEpochEnd && !isOurBlock {
-		fmt.Printf("🏭🏭🏭 ========== ProcessBlock检测到epoch结束区块 ========== 🏭🏭🏭\n")
+	// 🆕 TRON方式：解析ExtraData检查是否有奖励分发信息
+	extra := &Extra{}
+	if err := extra.UnmarshalRLP(block.Header.ExtraData); err != nil {
+		fmt.Printf("⚠️ ProcessBlock: 解析ExtraData失败, error=%v, 跳过奖励分发检查\n", err)
+	} else if extra.RewardDistribution != nil {
+		// 🆕 生产节点已经决定执行奖励分发，验证节点跟随执行
+		fmt.Printf("🏭🏭🏭 ========== ProcessBlock检测到生产节点已执行奖励分发 ========== 🏭🏭🏭\n")
 		fmt.Printf("🏭 区块号: %d\n", block.Number())
-		fmt.Printf("🏭 说明: 开始处理奖励分发（像处理交易一样）\n")
+		fmt.Printf("🏭 说明: 生产节点已决定执行奖励分发，验证节点跟随执行（TRON方式）\n")
+		fmt.Printf("🏭 奖励信息: epochNumber=%d, rewardCount=%d, totalReward=%s\n",
+			extra.RewardDistribution.EpochNumber,
+			len(extra.RewardDistribution.Rewards),
+			extra.RewardDistribution.TotalReward.String())
 
 		if err := p.processRewardDistributionInBlock(block, transition); err != nil {
 			fmt.Printf("❌ ProcessBlock: 奖励分发处理失败, error=%v\n", err)
@@ -220,10 +228,8 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 		}
 
 		fmt.Printf("✅ ProcessBlock: 奖励分发处理完成, blockNumber=%d\n", block.Number())
-	} else if isEpochEnd && isOurBlock {
-		fmt.Printf("ℹ️ ProcessBlock: 是epoch结束区块但为生产节点自己生产的区块，跳过奖励分发避免重复执行, blockNumber=%d\n", block.Number())
 	} else {
-		fmt.Printf("ℹ️ ProcessBlock: 不是epoch结束区块，跳过奖励分发, blockNumber=%d\n", block.Number())
+		fmt.Printf("ℹ️ ProcessBlock: ExtraData中没有奖励分发信息，跳过奖励分发, blockNumber=%d\n", block.Number())
 	}
 
 	_, root, err := transition.Commit()
