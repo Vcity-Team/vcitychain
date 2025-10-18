@@ -58,4 +58,3 @@ func callJSONRPC(method string, params []interface{}) (interface{}, error) {
 		"note":   "JSON-RPC call implementation needed",
 	}, nil
 }
-

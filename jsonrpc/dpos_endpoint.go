@@ -3224,8 +3224,44 @@ func (d *DPOS) GetEpochInfoByNumber(epochNumber uint64) (map[string]interface{},
 // ==================== 新增：奖励查询JSON-RPC方法 ====================
 
 // GetValidatorRewardHistory 查询验证者奖励历史
-func (d *DPOS) GetValidatorRewardHistory(ctx context.Context, validatorAddress string, fromEpoch, toEpoch uint64) ([]dpos.RewardRecordExtended, error) {
-	d.logger.Info("DPoS GetValidatorRewardHistory called",
+func (d *DPOS) GetValidatorRewardHistory(ctx context.Context, params interface{}) ([]dpos.RewardRecordExtended, error) {
+	d.logger.Info("DPoS GetValidatorRewardHistory called", "params", params)
+
+	// 解析参数
+	var validatorAddress string
+	var fromEpoch, toEpoch uint64
+
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) != 3 {
+			return nil, fmt.Errorf("expected 3 parameters, got %d", len(p))
+		}
+
+		// 第一个参数：验证者地址
+		if addr, ok := p[0].(string); ok {
+			validatorAddress = addr
+		} else {
+			return nil, fmt.Errorf("first parameter must be a string address")
+		}
+
+		// 第二个参数：起始epoch
+		if epoch, ok := p[1].(float64); ok {
+			fromEpoch = uint64(epoch)
+		} else {
+			return nil, fmt.Errorf("second parameter must be a number")
+		}
+
+		// 第三个参数：结束epoch
+		if epoch, ok := p[2].(float64); ok {
+			toEpoch = uint64(epoch)
+		} else {
+			return nil, fmt.Errorf("third parameter must be a number")
+		}
+	default:
+		return nil, fmt.Errorf("invalid parameter type: %T", params)
+	}
+
+	d.logger.Info("DPoS GetValidatorRewardHistory parameters parsed",
 		"validatorAddress", validatorAddress,
 		"fromEpoch", fromEpoch,
 		"toEpoch", toEpoch)
@@ -3299,8 +3335,47 @@ func (d *DPOS) GetValidatorBlockStats(validatorAddress string, epochNumber uint6
 }
 
 // GetValidatorRewardsInfo 获取验证者奖励信息
-func (d *DPOS) GetValidatorRewardsInfo(validatorAddress string, epochNumber uint64) (map[string]interface{}, error) {
-	d.logger.Info("DPoS GetValidatorRewardsInfo called", "validatorAddress", validatorAddress, "epochNumber", epochNumber)
+func (d *DPOS) GetValidatorRewardsInfo(ctx context.Context, params interface{}) (map[string]interface{}, error) {
+	d.logger.Info("DPoS GetValidatorRewardsInfo called", "params", params)
+
+	// 解析参数
+	var validatorAddress string
+	var epochNumber uint64
+
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) != 2 {
+			return map[string]interface{}{
+				"error": fmt.Sprintf("expected 2 parameters, got %d", len(p)),
+			}, nil
+		}
+
+		// 第一个参数：验证者地址
+		if addr, ok := p[0].(string); ok {
+			validatorAddress = addr
+		} else {
+			return map[string]interface{}{
+				"error": "first parameter must be a string address",
+			}, nil
+		}
+
+		// 第二个参数：epoch编号
+		if epoch, ok := p[1].(float64); ok {
+			epochNumber = uint64(epoch)
+		} else {
+			return map[string]interface{}{
+				"error": "second parameter must be a number",
+			}, nil
+		}
+	default:
+		return map[string]interface{}{
+			"error": fmt.Sprintf("invalid parameter type: %T", params),
+		}, nil
+	}
+
+	d.logger.Info("DPoS GetValidatorRewardsInfo parameters parsed",
+		"validatorAddress", validatorAddress,
+		"epochNumber", epochNumber)
 
 	// 解析地址
 	addr := types.StringToAddress(validatorAddress)
