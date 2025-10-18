@@ -1371,26 +1371,10 @@ func (r *dposRuntime) produceBlock() error {
 	// 根据交易数量添加特殊标记
 	txCount := len(block.Block.Transactions)
 	if txCount == 0 {
-		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-
-		// 🆕 生产节点区块状态根显著日志
-		r.logger.Info("🏗️🏗️🏗️ ========== 生产节点区块状态根 ========== 🏗️🏗️🏗️",
-			"blockNumber", block.Block.Number(),
-			"blockStateRoot", block.Block.Header.StateRoot.String(),
-			"blockStateRootHex", fmt.Sprintf("0x%x", block.Block.Header.StateRoot),
-			"blockHash", block.Block.Hash().String(),
-			"note", "生产节点7379区块头中的状态根")
-
-		// 🆕 最终状态根验证
-		r.logger.Info("🔍🔍🔍 ========== 生产节点最终状态根验证 ========== 🔍🔍🔍",
-			"blockNumber", block.Block.Number(),
-			"finalStateRoot", block.Block.Header.StateRoot.String(),
-			"finalBlockHash", block.Block.Hash().String(),
-			"说明", "生产节点区块最终化前的状态根和区块哈希")
+		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String())
+		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String())
 	} else if txCount == 1 {
 		// 包含交易的区块 - 添加明显的特殊标记
-		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK SEALED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
 		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK SEALED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
 		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK SEALED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
 	} else {
@@ -1401,8 +1385,6 @@ func (r *dposRuntime) produceBlock() error {
 	// 更新轮次 - 使用区块号更新，避免时序问题
 	r.updateRound(block.Block.Number())
 
-	// 🆕 增强调试日志：添加详细的计算过程
-	// blockNumber 已在上面声明
 	delegateCount := uint64(0)
 	if r.config != nil {
 		delegateCount = r.config.DelegateCount

@@ -157,13 +157,6 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 
 // ProcessBlock builds a final block from given 'block' on top of 'parent'
 func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Block) (*types.FullBlock, error) {
-	// 🆕 添加ProcessBlock函数入口跟踪日志
-	fmt.Printf("🚀🚀🚀 ========== blockchain_wrapper.ProcessBlock被调用 ========== 🚀🚀🚀\n")
-	fmt.Printf("🚀 区块号: %d\n", block.Number())
-	fmt.Printf("🚀 区块哈希: %s\n", block.Hash().String()[:16])
-	fmt.Printf("🚀 父区块号: %d\n", parent.Number)
-	fmt.Printf("🚀 说明: blockchain_wrapper.ProcessBlock开始执行\n")
-
 	header := block.Header.Copy()
 	start := time.Now().UTC()
 
