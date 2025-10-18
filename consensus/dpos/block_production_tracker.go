@@ -173,3 +173,34 @@ func (bpt *BlockProductionTracker) GetEpochExpectedBlockTime(epochNumber uint64)
 	// 这里应该从配置中获取，暂时返回2秒
 	return 2 * time.Second
 }
+
+// 🆕 新增：主动保存当前Epoch的历史数据
+func (bpt *BlockProductionTracker) SaveCurrentEpochToHistory(epochNumber uint64) {
+	bpt.mutex.Lock()
+	defer bpt.mutex.Unlock()
+
+	if bpt.currentEpoch > 0 {
+		// 保存出块数量历史
+		bpt.epochBlocksHistory[bpt.currentEpoch] = make(map[types.Address]uint64)
+		for addr, count := range bpt.currentEpochBlocks {
+			bpt.epochBlocksHistory[bpt.currentEpoch][addr] = count
+		}
+
+		// 保存区块时间历史
+		bpt.epochBlockTimesHistory[bpt.currentEpoch] = make(map[types.Address][]time.Time)
+		for addr, times := range bpt.currentEpochBlockTimes {
+			bpt.epochBlockTimesHistory[bpt.currentEpoch][addr] = times
+		}
+
+		bpt.logger.Info("💾 主动保存Epoch历史数据",
+			"epoch", bpt.currentEpoch,
+			"blockCounts", bpt.currentEpochBlocks,
+			"totalBlocks", func() uint64 {
+				total := uint64(0)
+				for _, count := range bpt.currentEpochBlocks {
+					total += count
+				}
+				return total
+			}())
+	}
+}

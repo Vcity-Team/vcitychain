@@ -11516,12 +11516,18 @@ func (d *DPoS) handleEpochSwitch(epochNumber uint64) error {
 		"epoch", epochNumber,
 		"currentTime", currentTime.Format("2006-01-02 15:04:05"))
 
-	// 1. 启动新epoch的时间调度
+	// 🆕 1. 主动保存当前Epoch的历史数据
+	if d.blockTracker != nil {
+		d.blockTracker.SaveCurrentEpochToHistory(epochNumber)
+		d.logger.Info("💾 Epoch切换时主动保存历史数据完成", "epoch", epochNumber)
+	}
+
+	// 2. 启动新epoch的时间调度
 	if d.blockScheduler != nil {
 		d.blockScheduler.StartNewEpoch(epochNumber, currentTime)
 	}
 
-	// 2. 计算和记录上一个epoch的奖励（延迟状态更新）
+	// 3. 计算和记录上一个epoch的奖励（延迟状态更新）
 	if epochNumber > 1 {
 		previousEpoch := epochNumber - 1
 		if err := d.calculateAndRecordEpochRewards(previousEpoch); err != nil {
@@ -11588,8 +11594,21 @@ func (d *DPoS) calculateAndRecordEpochRewards(epochNumber uint64) error {
 
 // getBlocksProducedInEpoch 获取验证者在指定epoch中生产的区块数
 func (d *DPoS) getBlocksProducedInEpoch(address types.Address, epochNumber uint64) uint64 {
-	// 简化实现：返回固定值，实际应该从区块跟踪器中获取
-	return 8 // 假设每个验证者生产8个区块
+	// 🆕 修复：从blockTracker获取真实数据
+	if d.blockTracker == nil {
+		d.logger.Warn("⚠️ blockTracker未初始化，返回0", "address", address.String(), "epoch", epochNumber)
+		return 0
+	}
+
+	blockCounts := d.blockTracker.GetEpochBlockCounts(epochNumber)
+	blocksProduced := blockCounts[address]
+
+	d.logger.Debug("🔍 获取验证者出块数",
+		"address", address.String(),
+		"epoch", epochNumber,
+		"blocksProduced", blocksProduced)
+
+	return blocksProduced
 }
 
 // calculateValidatorReward 计算验证者奖励
