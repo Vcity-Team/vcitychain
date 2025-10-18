@@ -129,19 +129,13 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			return nil, fmt.Errorf("process block tx error, tx = %v, err = %w", tx.Hash, err)
 		}
 	}
-
-	// 🆕 检查是否是生产节点自己生产的区块
-	blockMiner := types.BytesToAddress(header.Miner)
-	keyAddr := p.keyAddr
-	isOurBlock := blockMiner == keyAddr
-
 	// 🆕 TRON方式：解析ExtraData检查是否有奖励分发信息
 	extra := &Extra{}
 	if err := extra.UnmarshalRLP(block.Header.ExtraData); err != nil {
 		// 解析失败，静默跳过
-	} else if extra.RewardDistribution != nil && !isOurBlock {
+	} else if extra.RewardDistribution != nil {
 		// 🆕 生产节点已经决定执行奖励分发，验证节点跟随执行（但生产节点自己不再执行）
-		p.logger.Info("🏭🏭🏭 ========== ProcessBlockExecutor检测到生产节点已执行奖励分发 ========== 🏭🏭🏭",
+		p.logger.Info("🏭🏭🏭 ========== ProcessBlockExecutor检测到生产节点已存储奖励分发信息 ========== 🏭🏭🏭",
 			"blockNumber", block.Number(),
 			"说明", "生产节点已决定执行奖励分发，验证节点跟随执行（TRON方式）",
 			"epochNumber", extra.RewardDistribution.EpochNumber,
@@ -185,16 +179,11 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 		}
 	}
 
-	// 🆕 检查是否是生产节点自己生产的区块
-	blockMiner := types.BytesToAddress(header.Miner)
-	keyAddr := p.keyAddr
-	isOurBlock := blockMiner == keyAddr
-
 	// 🆕 TRON方式：解析ExtraData检查是否有奖励分发信息
 	extra := &Extra{}
 	if err := extra.UnmarshalRLP(block.Header.ExtraData); err != nil {
 		// 解析失败，静默跳过
-	} else if extra.RewardDistribution != nil && !isOurBlock {
+	} else if extra.RewardDistribution != nil {
 		// 🆕 生产节点已经决定执行奖励分发，验证节点跟随执行（但生产节点自己不再执行）
 		p.logger.Info("🏭🏭🏭 ========== ProcessBlock检测到生产节点已执行奖励分发 ========== 🏭🏭🏭",
 			"blockNumber", block.Number(),
