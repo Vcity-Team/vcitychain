@@ -1273,7 +1273,6 @@ func (r *dposRuntime) produceBlock() error {
 		return fmt.Errorf("failed to build block: %w", err)
 	}
 
-
 	// 提交区块到区块链
 	r.logger.Info("📝 开始提交区块到区块链", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
 
@@ -3407,21 +3406,6 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 
 		// 🆕 检查是否是epoch结束区块，模拟交易执行处理奖励分配
 		if d.isEpochEndBlock(header.Number) {
-			// 🆕 同步节点状态根应用显著日志标志
-			d.logger.Info("🔄🔄🔄 ========== 同步节点7379区块头状态根检查开始 ========== 🔄🔄🔄",
-				"blockNumber", header.Number,
-				"stateRoot", header.StateRoot.String(),
-				"stateRootHex", fmt.Sprintf("0x%x", header.StateRoot),
-				"blockHash", header.Hash.String()[:16],
-				"note", "同步节点检测到epoch结束区块，将检查区块头中的状态根")
-
-			// 🆕 同步节点接收区块头状态根显著日志标志
-			d.logger.Info("📥📥📥 ========== 同步节点接收7379区块头状态根 ========== 📥📥📥",
-				"blockNumber", header.Number,
-				"receivedStateRoot", header.StateRoot.String(),
-				"receivedStateRootHex", fmt.Sprintf("0x%x", header.StateRoot),
-				"blockHash", header.Hash.String()[:16],
-				"note", "同步节点已接收到生产节点7379区块头中的状态根")
 
 			// 🆕 同步节点状态根应用完成显著日志标志
 			d.logger.Info("✅✅✅ ========== 同步节点状态根应用完成 ========== ✅✅✅",
@@ -8262,7 +8246,7 @@ func (r *dposRuntime) broadcastSignatureRequest(protoRequest *dposProto.Signatur
 		return nil
 	}
 
-	r.logger.Info("成功广播签名请求", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String())
+	r.logger.Debug("成功广播签名请求", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String())
 
 	// 启动基于时间的简单备用传播监控
 	go r.simpleFallbackMonitoring(protoRequest, checkpointHash)

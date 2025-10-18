@@ -1299,7 +1299,7 @@ func (ni *NetworkIntegration) BroadcastSignatureRequest(request *SignatureReques
 		return fmt.Errorf("failed to publish signature request: %w", err)
 	}
 
-	ni.logger.Info("成功广播签名请求",
+	ni.logger.Debug("成功广播签名请求",
 		"blockNumber", request.BlockNumber,
 		"checkpointHash", request.CheckpointHash.String())
 
