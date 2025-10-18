@@ -134,20 +134,12 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 	keyAddr := p.keyAddr
 	isOurBlock := blockMiner == keyAddr
 
-	fmt.Printf("🔍 检查区块生产者: blockMiner=%s, keyAddr=%s, isOurBlock=%t\n",
-		blockMiner.String(), keyAddr.String(), isOurBlock)
-
-	// 🆕 添加ProcessBlock奖励分发检测日志（TRON方式：跟随生产节点决定）
-	fmt.Printf("🔍🔍🔍 ========== ProcessBlockExecutor开始检测奖励分发（TRON方式） ========== 🔍🔍🔍\n")
-	fmt.Printf("🔍 区块号: %d\n", block.Number())
-	fmt.Printf("🔍 说明: 不依赖时间检测，直接检查ExtraData中是否有奖励分发信息\n")
-
 	// 🆕 TRON方式：解析ExtraData检查是否有奖励分发信息
 	extra := &Extra{}
 	if err := extra.UnmarshalRLP(block.Header.ExtraData); err != nil {
-		fmt.Printf("⚠️ ProcessBlockExecutor: 解析ExtraData失败, error=%v, 跳过奖励分发检查\n", err)
-	} else if extra.RewardDistribution != nil {
-		// 🆕 生产节点已经决定执行奖励分发，验证节点跟随执行
+		// 解析失败，静默跳过
+	} else if extra.RewardDistribution != nil && !isOurBlock {
+		// 🆕 生产节点已经决定执行奖励分发，验证节点跟随执行（但生产节点自己不再执行）
 		fmt.Printf("🏭🏭🏭 ========== ProcessBlockExecutor检测到生产节点已执行奖励分发 ========== 🏭🏭🏭\n")
 		fmt.Printf("🏭 区块号: %d\n", block.Number())
 		fmt.Printf("🏭 说明: 生产节点已决定执行奖励分发，验证节点跟随执行（TRON方式）\n")
@@ -162,8 +154,6 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 		}
 
 		fmt.Printf("✅ ProcessBlockExecutor: 奖励分发处理完成, blockNumber=%d\n", block.Number())
-	} else {
-		fmt.Printf("ℹ️ ProcessBlockExecutor: ExtraData中没有奖励分发信息，跳过奖励分发, blockNumber=%d\n", block.Number())
 	}
 
 	updateBlockExecutionMetric(start)
@@ -200,20 +190,12 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 	keyAddr := p.keyAddr
 	isOurBlock := blockMiner == keyAddr
 
-	fmt.Printf("🔍 检查区块生产者: blockMiner=%s, keyAddr=%s, isOurBlock=%t\n",
-		blockMiner.String(), keyAddr.String(), isOurBlock)
-
-	// 🆕 添加ProcessBlock奖励分发检测日志（TRON方式：跟随生产节点决定）
-	fmt.Printf("🔍🔍🔍 ========== ProcessBlock开始检测奖励分发（TRON方式） ========== 🔍🔍🔍\n")
-	fmt.Printf("🔍 区块号: %d\n", block.Number())
-	fmt.Printf("🔍 说明: 不依赖时间检测，直接检查ExtraData中是否有奖励分发信息\n")
-
 	// 🆕 TRON方式：解析ExtraData检查是否有奖励分发信息
 	extra := &Extra{}
 	if err := extra.UnmarshalRLP(block.Header.ExtraData); err != nil {
-		fmt.Printf("⚠️ ProcessBlock: 解析ExtraData失败, error=%v, 跳过奖励分发检查\n", err)
-	} else if extra.RewardDistribution != nil {
-		// 🆕 生产节点已经决定执行奖励分发，验证节点跟随执行
+		// 解析失败，静默跳过
+	} else if extra.RewardDistribution != nil && !isOurBlock {
+		// 🆕 生产节点已经决定执行奖励分发，验证节点跟随执行（但生产节点自己不再执行）
 		fmt.Printf("🏭🏭🏭 ========== ProcessBlock检测到生产节点已执行奖励分发 ========== 🏭🏭🏭\n")
 		fmt.Printf("🏭 区块号: %d\n", block.Number())
 		fmt.Printf("🏭 说明: 生产节点已决定执行奖励分发，验证节点跟随执行（TRON方式）\n")
@@ -228,8 +210,6 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 		}
 
 		fmt.Printf("✅ ProcessBlock: 奖励分发处理完成, blockNumber=%d\n", block.Number())
-	} else {
-		fmt.Printf("ℹ️ ProcessBlock: ExtraData中没有奖励分发信息，跳过奖励分发, blockNumber=%d\n", block.Number())
 	}
 
 	_, root, err := transition.Commit()
