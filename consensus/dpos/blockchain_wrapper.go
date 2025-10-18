@@ -200,20 +200,13 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 
 	updateBlockExecutionMetric(start)
 
-	// 🆕 添加状态根比对调试日志
-	fmt.Printf("🔍 ProcessBlock: 状态根比对开始\n")
-	fmt.Printf("🔍 ProcessBlock: 计算出的状态根 = %s\n", root.String())
-	fmt.Printf("🔍 ProcessBlock: 区块头状态根 = %s\n", block.Header.StateRoot.String())
-	fmt.Printf("🔍 ProcessBlock: 状态根是否一致 = %t\n", root == block.Header.StateRoot)
-
+	// 🆕 状态根验证（只有失败时才打印日志）
 	if root != block.Header.StateRoot {
 		fmt.Printf("❌ ProcessBlock: 状态根不匹配！\n")
 		fmt.Printf("❌ 计算出的状态根: %s\n", root.String())
 		fmt.Printf("❌ 区块头状态根: %s\n", block.Header.StateRoot.String())
 		return nil, fmt.Errorf("incorrect state root: (%s, %s)", root, block.Header.StateRoot)
 	}
-
-	fmt.Printf("✅ ProcessBlock: 状态根匹配，验证成功\n")
 
 	// build the block
 	builtBlock := consensus.BuildBlock(consensus.BuildBlockParams{

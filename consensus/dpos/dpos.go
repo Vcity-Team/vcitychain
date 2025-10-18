@@ -1273,12 +1273,6 @@ func (r *dposRuntime) produceBlock() error {
 		return fmt.Errorf("failed to build block: %w", err)
 	}
 
-	// 🆕 生产节点不在此处执行奖励分配，避免重复执行
-	// 奖励分配将在生产节点本地接收自己广播的区块时通过验证流程执行
-	r.logger.Info("🔍 生产节点跳过本地奖励分配执行",
-		"blockNumber", block.Block.Number(),
-		"blockHash", block.Block.Hash().String()[:16],
-		"说明", "奖励分配将在本地接收广播区块时通过验证流程执行，避免重复")
 
 	// 提交区块到区块链
 	r.logger.Info("📝 开始提交区块到区块链", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
@@ -2403,7 +2397,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		time.Sleep(1 * time.Second)
 	}
 
-	r.logger.Info("签名收集完成",
+	r.logger.Debug("签名收集完成",
 		"totalSignatures", len(signatures),
 		"bitmapLength", len(signatureBitmap),
 		"bitmapBytes", fmt.Sprintf("%x", signatureBitmap))
@@ -2419,7 +2413,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 	// 更新区块的签名
 	if len(signatures) > 0 {
-		r.logger.Info("开始聚合签名",
+		r.logger.Debug("开始聚合签名",
 			"signatureCount", len(signatures))
 
 		// 🆕 修复：按位图索引顺序聚合签名，确保与验证时公钥顺序一致
@@ -8257,7 +8251,7 @@ func (r *dposRuntime) broadcastSignatureRequest(protoRequest *dposProto.Signatur
 
 	// 发布签名请求
 	actualTopicName := topic.GetActualProtoID()
-	r.logger.Info("🚀 开始广播签名请求", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String(), "原始名称", "dpos-signature-request", "实际名称", actualTopicName)
+	r.logger.Debug("🚀 开始广播签名请求", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String(), "原始名称", "dpos-signature-request", "实际名称", actualTopicName)
 	if err := topic.Publish(dposMsg); err != nil {
 		r.logger.Warn("failed to publish signature request, using fallback", "error", err)
 		// 回退到日志记录
