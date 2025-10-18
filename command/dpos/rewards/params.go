@@ -3,7 +3,7 @@ package rewards
 import "encoding/json"
 
 type ValidatorRewardsResult struct {
-	Data map[string]interface{} `json:"data"`
+	Data interface{} `json:"data"`
 }
 
 func (r *ValidatorRewardsResult) GetOutput() string {

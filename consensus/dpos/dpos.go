@@ -1772,30 +1772,71 @@ func (r *dposRuntime) calculateExpectedDelegateIndex() uint64 {
 	return currentBlock.Number % uint64(r.config.DelegateCount)
 }
 
-// isEpochEndBlock 检查是否是epoch的最后一个区块
+// isEpochEndBlock 检查是否是epoch的最后一个区块（基于时间，方案1）
 func (r *dposRuntime) isEpochEndBlock(blockNumber uint64) bool {
-	// 🆕 修改：基于指定区块号获取epoch信息
-	currentEpoch := r.getEpochForBlock(blockNumber)
-	if currentEpoch == nil {
-		r.logger.Warn("⚠️ 无法获取当前epoch信息", "blockNumber", blockNumber)
+	// 获取DPoS实例
+	if r.config == nil || r.config.dposBackend == nil {
+		r.logger.Warn("⚠️ 无法获取DPoS实例，使用默认epoch信息")
 		return false
 	}
 
-	// 检查是否是epoch的最后一个区块
-	// 使用与consensus_runtime.go中相同的逻辑
-	epochSize := uint64(10) // 默认epoch大小，可以从配置中获取
-	if r.config != nil && r.config.PolyBFTConfig != nil {
-		epochSize = r.config.PolyBFTConfig.EpochSize
+	dposInstance, ok := r.config.dposBackend.(*DPoS)
+	if !ok {
+		r.logger.Warn("⚠️ 无法转换为DPoS实例，使用默认epoch信息")
+		return false
 	}
 
-	isEpochEnd := currentEpoch.FirstBlockInEpoch+epochSize-1 == blockNumber
+	// 如果区块号小于共识切换高度，不是Epoch结束区块
+	if blockNumber < dposInstance.config.ConsensusSwitchHeight {
+		return false
+	}
 
-	r.logger.Debug("🔍 检查是否是epoch最后一个区块",
-		"blockNumber", blockNumber,
-		"epochNumber", currentEpoch.Number,
-		"firstBlockInEpoch", currentEpoch.FirstBlockInEpoch,
-		"epochSize", epochSize,
-		"isEpochEnd", isEpochEnd)
+	// 获取当前Epoch信息
+	currentEpoch, epochStartTime, epochDuration := dposInstance.epochManager.GetEpochInfo(blockNumber)
+
+	// 如果Epoch为0，说明还没有切换到DPoS共识，不是Epoch结束区块
+	if currentEpoch == 0 {
+		r.logger.Debug("🔍 Epoch为0，DPoS共识尚未激活",
+			"blockNumber", blockNumber,
+			"consensusSwitchHeight", dposInstance.config.ConsensusSwitchHeight,
+			"说明", "此时使用其他共识机制，不是DPoS，无Epoch概念")
+		return false
+	}
+
+	// 计算当前Epoch的结束时间
+	epochEndTime := epochStartTime.Add(epochDuration)
+
+	// 获取当前时间
+	currentTime := time.Now()
+
+	// 检查是否接近Epoch结束时间（允许1秒误差）
+	timeToEpochEnd := epochEndTime.Sub(currentTime)
+	isEpochEnd := timeToEpochEnd <= time.Second
+
+	// 🆕 显著日志：基于时间的Epoch结束检测
+	if isEpochEnd {
+		r.logger.Info("🎯🎯🎯 ========== 基于时间的EPOCH结束检测 ========== 🎯🎯🎯",
+			"blockNumber", blockNumber,
+			"consensusSwitchHeight", dposInstance.config.ConsensusSwitchHeight,
+			"currentEpoch", currentEpoch,
+			"epochStartTime", epochStartTime.Format("2006-01-02 15:04:05"),
+			"epochEndTime", epochEndTime.Format("2006-01-02 15:04:05"),
+			"currentTime", currentTime.Format("2006-01-02 15:04:05"),
+			"timeToEpochEnd", timeToEpochEnd.String(),
+			"epochDuration", dposInstance.config.EpochDuration.String(),
+			"isEpochEnd", isEpochEnd,
+			"说明", "检测到基于时间的Epoch即将结束，准备触发奖励分配")
+	} else {
+		r.logger.Debug("🔍 检查是否是epoch最后一个区块（基于时间，方案1）",
+			"blockNumber", blockNumber,
+			"consensusSwitchHeight", dposInstance.config.ConsensusSwitchHeight,
+			"currentEpoch", currentEpoch,
+			"epochStartTime", epochStartTime.Format("2006-01-02 15:04:05"),
+			"epochEndTime", epochEndTime.Format("2006-01-02 15:04:05"),
+			"currentTime", currentTime.Format("2006-01-02 15:04:05"),
+			"timeToEpochEnd", timeToEpochEnd.String(),
+			"isEpochEnd", isEpochEnd)
+	}
 
 	return isEpochEnd
 }
@@ -1836,28 +1877,17 @@ func (r *dposRuntime) getEpochForBlock(blockNumber uint64) *epochMetadata {
 		}
 	}
 
-	// 计算epoch信息
-	epochSize := uint64(10) // 每个epoch有10个区块
-	currentEpochNumber := (targetBlockNumber / epochSize) + 1
-	firstBlockInEpoch := (currentEpochNumber - 1) * epochSize
-
-	r.logger.Debug("🔍 基于区块号计算epoch信息",
-		"targetBlockNumber", targetBlockNumber,
-		"epochSize", epochSize,
-		"currentEpochNumber", currentEpochNumber,
-		"firstBlockInEpoch", firstBlockInEpoch)
-
-	return &epochMetadata{
-		Number:            currentEpochNumber,
-		FirstBlockInEpoch: firstBlockInEpoch,
-	}
+	// 调用DPoS实例的方法
+	return dposInstance.getEpochForBlock(targetBlockNumber)
 }
 
 // executeRewardDistributionForEpochEnd 在epoch最后一个区块时执行奖励分发
 func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64, currentRound uint64) error {
-	r.logger.Info("🎉 ========== 开始预先计算epoch结束时的奖励分发 ==========",
+	r.logger.Info("🚀🚀🚀 ========== 基于时间的EPOCH奖励分配开始 ========== 🚀🚀🚀",
 		"blockNumber", blockNumber,
-		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
+		"currentRound", currentRound,
+		"timestamp", time.Now().Format("2006-01-02 15:04:05"),
+		"说明", "检测到基于时间的Epoch结束，开始计算和分发奖励")
 
 	// 获取DPoS实例
 	if r.config == nil || r.config.dposBackend == nil {
@@ -1872,11 +1902,19 @@ func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64, c
 	rewardEpoch := currentEpochNumber
 
 	if rewardEpoch == 0 {
-		r.logger.Info("ℹ️ 第一个epoch，无需分发奖励",
+		r.logger.Info("ℹ️ DPoS共识尚未激活，无需分发奖励",
 			"currentEpoch", currentEpochNumber,
-			"blockNumber", blockNumber)
+			"blockNumber", blockNumber,
+			"consensusSwitchHeight", dposInstance.config.ConsensusSwitchHeight,
+			"说明", "当前区块高度未达到共识切换高度，使用其他共识机制，不是DPoS，无奖励分发")
 		return nil
 	}
+
+	r.logger.Info("💰💰💰 ========== 开始基于时间的奖励计算 ========== 💰💰💰",
+		"rewardEpoch", rewardEpoch,
+		"blockNumber", blockNumber,
+		"说明", "基于时间的Epoch系统：开始计算和分发奖励")
+
 	// 直接计算和分发奖励
 	return dposInstance.distributeEpochRewards(rewardEpoch, currentRound)
 }
@@ -3555,21 +3593,40 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 
 // isEpochEndBlock 检查是否是epoch的最后一个区块
 func (d *DPoS) isEpochEndBlock(blockNumber uint64) bool {
-	currentEpoch := d.getEpochForBlock(blockNumber)
-	if currentEpoch == nil {
-		d.logger.Warn("⚠️ 无法获取当前epoch信息", "blockNumber", blockNumber)
+	// 如果区块号小于共识切换高度，不是Epoch结束区块
+	if blockNumber < d.config.ConsensusSwitchHeight {
 		return false
 	}
 
-	epochSize := uint64(10) // 默认epoch大小，可以从配置中获取
+	// 获取当前Epoch信息
+	currentEpoch, epochStartTime, epochDuration := d.epochManager.GetEpochInfo(blockNumber)
 
-	isEpochEnd := currentEpoch.FirstBlockInEpoch+epochSize-1 == blockNumber
+	// 如果Epoch为0，说明还没有切换到DPoS共识，不是Epoch结束区块
+	if currentEpoch == 0 {
+		d.logger.Debug("🔍 Epoch为0，DPoS共识尚未激活",
+			"blockNumber", blockNumber,
+			"consensusSwitchHeight", d.config.ConsensusSwitchHeight,
+			"说明", "此时使用其他共识机制，不是DPoS，无Epoch概念")
+		return false
+	}
 
-	d.logger.Debug("🔍 检查是否是epoch最后一个区块",
+	// 计算当前Epoch的结束时间
+	epochEndTime := epochStartTime.Add(epochDuration)
+
+	// 获取当前时间
+	currentTime := time.Now()
+
+	// 检查是否接近Epoch结束时间（允许1秒误差）
+	timeToEpochEnd := epochEndTime.Sub(currentTime)
+	isEpochEnd := timeToEpochEnd <= time.Second
+
+	d.logger.Debug("🔍 基于时间的Epoch结束检测",
 		"blockNumber", blockNumber,
-		"epochNumber", currentEpoch.Number,
-		"firstBlockInEpoch", currentEpoch.FirstBlockInEpoch,
-		"epochSize", epochSize,
+		"currentEpoch", currentEpoch,
+		"epochStartTime", epochStartTime.Format("2006-01-02 15:04:05"),
+		"epochEndTime", epochEndTime.Format("2006-01-02 15:04:05"),
+		"currentTime", currentTime.Format("2006-01-02 15:04:05"),
+		"timeToEpochEnd", timeToEpochEnd.String(),
 		"isEpochEnd", isEpochEnd)
 
 	return isEpochEnd
@@ -3578,36 +3635,6 @@ func (d *DPoS) isEpochEndBlock(blockNumber uint64) bool {
 // getCurrentEpoch 获取当前epoch信息
 func (d *DPoS) getCurrentEpoch() *epochMetadata {
 	return d.getEpochForBlock(0) // 0表示使用当前区块号
-}
-
-// getEpochForBlock 获取指定区块号的epoch信息
-func (d *DPoS) getEpochForBlock(blockNumber uint64) *epochMetadata {
-	// 🆕 修改：基于指定区块号计算epoch
-	targetBlockNumber := blockNumber
-	if blockNumber == 0 {
-		// 如果传入0，则使用当前区块号
-		if d.config.Blockchain != nil {
-			if header := d.config.Blockchain.Header(); header != nil {
-				targetBlockNumber = header.Number
-			}
-		}
-	}
-
-	// 计算epoch信息
-	epochSize := uint64(10) // 每个epoch有10个区块
-	currentEpochNumber := (targetBlockNumber / epochSize) + 1
-	firstBlockInEpoch := (currentEpochNumber - 1) * epochSize
-
-	d.logger.Debug("🔍 基于区块号计算epoch信息",
-		"targetBlockNumber", targetBlockNumber,
-		"epochSize", epochSize,
-		"currentEpochNumber", currentEpochNumber,
-		"firstBlockInEpoch", firstBlockInEpoch)
-
-	return &epochMetadata{
-		Number:            currentEpochNumber,
-		FirstBlockInEpoch: firstBlockInEpoch,
-	}
 }
 
 // executeDelayedStateUpdateForEpochEnd 函数已移除，延迟状态更新机制不再需要
@@ -4301,9 +4328,10 @@ func (d *DPoS) Initialize() error {
 
 	// set blockchain backend
 	d.blockchain = &blockchainWrapper{
-		blockchain: d.config.Blockchain,
-		executor:   d.config.Executor,
-		keyAddr:    types.Address(d.key.Address()), // 设置当前节点的地址
+		blockchain:  d.config.Blockchain,
+		executor:    d.config.Executor,
+		keyAddr:     types.Address(d.key.Address()), // 设置当前节点的地址
+		dposBackend: d,                              // 传递DPoS实例引用
 	}
 
 	// 🆕 将blockchain_wrapper设置为blockchain的executor，以启用奖励分配功能
@@ -11442,11 +11470,15 @@ type BLSPublicKeyResponse struct {
 func (d *DPoS) initializeEconomicSystem() error {
 	d.logger.Info("💰 开始初始化DPoS经济系统组件")
 
-	// 1. 初始化时间基础Epoch管理器
+	// 🆕 检查共识切换高度区块是否存在（延迟检查，在需要时才检查）
+	d.logger.Info("🔍 共识切换高度配置", "consensusSwitchHeight", d.config.ConsensusSwitchHeight)
+
+	// 1. 初始化基于时间的Epoch管理器
 	d.epochManager = NewTimeBasedEpochManager(
 		d.config.EpochDuration,
 		d.config.RewardAccount,
 		d.config.RewardAmount,
+		d.config.ConsensusSwitchHeight, // 🆕 传入共识切换高度
 		d.logger.Named("epoch_manager"),
 	)
 
@@ -11481,6 +11513,7 @@ func (d *DPoS) initializeEconomicSystem() error {
 	)
 
 	d.logger.Info("✅ DPoS经济系统组件初始化完成",
+		"consensusSwitchHeight", d.config.ConsensusSwitchHeight,
 		"epochDuration", d.config.EpochDuration.String(),
 		"rewardAccount", d.config.RewardAccount.String(),
 		"rewardAmount", d.config.RewardAmount.String(),
@@ -11667,10 +11700,13 @@ func (d *DPoS) processEconomicSystem(block *types.FullBlock) error {
 // distributeEpochRewards 分发Epoch奖励
 func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) error {
 	startTime := time.Now()
-	d.logger.Info("🎉 ========== 开始计算Epoch奖励 ==========",
+	d.logger.Info("🎉🎉🎉 ========== 基于时间的EPOCH奖励计算开始 ========== 🎉🎉🎉",
 		"epoch", epochNumber,
+		"currentRound", currentRound,
 		"startTime", startTime.Format("2006-01-02 15:04:05"),
-		"note", "为上一个epoch计算奖励")
+		"epochDuration", d.config.EpochDuration.String(),
+		"consensusSwitchHeight", d.config.ConsensusSwitchHeight,
+		"说明", "基于时间的Epoch系统：开始计算和分发奖励")
 
 	// 1. 获取验证者集合
 	validators := d.getAllValidators()
@@ -11684,16 +11720,19 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 	totalBlocks := d.blockTracker.GetTotalEpochBlocks(epochNumber)
 
 	// 🆕 添加详细的出块统计日志
-	d.logger.Info("🔍 检查出块统计",
+	d.logger.Info("📊📊📊 ========== 基于时间的EPOCH出块统计 ========== 📊📊📊",
 		"epoch", epochNumber,
 		"blockCounts", blockCounts,
 		"totalBlocks", totalBlocks,
-		"validatorsCount", len(validators))
+		"validatorsCount", len(validators),
+		"epochDuration", d.config.EpochDuration.String(),
+		"说明", "基于时间的Epoch系统：统计验证者出块情况")
 
 	// 🆕 详细打印每个验证者的出块记录
-	d.logger.Info("📋 ========== 详细出块记录 ==========",
+	d.logger.Info("📋📋📋 ========== 基于时间的EPOCH详细出块记录 ========== 📋📋📋",
 		"epoch", epochNumber,
-		"totalBlocks", totalBlocks)
+		"totalBlocks", totalBlocks,
+		"说明", "基于时间的Epoch系统：每个验证者的详细出块记录")
 
 	for _, validator := range validators {
 		blocksProduced := blockCounts[validator.Address]
@@ -11739,22 +11778,47 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 	validatorRewardAmount := new(big.Int).Mul(d.config.RewardAmount, big.NewInt(int64(d.config.ValidatorRewardRatio)))
 	validatorRewardAmount.Div(validatorRewardAmount, big.NewInt(100))
 
+	d.logger.Info("💰💰💰 ========== 基于时间的EPOCH奖励计算详情 ========== 💰💰💰",
+		"epoch", epochNumber,
+		"totalRewardAmount", d.config.RewardAmount.String(),
+		"validatorRewardRatio", d.config.ValidatorRewardRatio,
+		"voterRewardRatio", d.config.VoterRewardRatio,
+		"validatorRewardAmount", validatorRewardAmount.String(),
+		"epochDuration", d.config.EpochDuration.String(),
+		"说明", "基于时间的Epoch系统：计算验证者和投票者奖励分配")
+
 	// 准备批量状态更新
 	stateUpdates := make(map[types.Address]*big.Int)
 	validatorRewardCount := 0
 
 	// 计算每个验证者的奖励
-	d.logger.Info("🔍 开始统计验证者奖励循环", "totalValidators", len(validators))
+	d.logger.Info("🔄🔄🔄 ========== 基于时间的EPOCH验证者奖励循环开始 ========== 🔄🔄🔄",
+		"epoch", epochNumber,
+		"totalValidators", len(validators),
+		"说明", "基于时间的Epoch系统：开始循环计算每个验证者的奖励")
 	for i, validator := range validators {
 		d.logger.Debug("🔍 统计验证者", "index", i+1, "total", len(validators), "address", validator.Address.String())
 		blocksProduced := blockCounts[types.Address(validator.Address)]
 		d.logger.Debug("🔍 验证者出块统计", "index", i+1, "address", validator.Address.String(), "blocksProduced", blocksProduced)
 		if blocksProduced > 0 {
-			d.logger.Info("🔍 开始计算验证者奖励", "index", i+1, "address", validator.Address.String(), "blocksProduced", blocksProduced)
+			d.logger.Info("💰 基于时间的EPOCH验证者奖励计算",
+				"epoch", epochNumber,
+				"index", i+1,
+				"address", validator.Address.String(),
+				"blocksProduced", blocksProduced,
+				"totalBlocks", totalBlocks,
+				"validatorRewardAmount", validatorRewardAmount.String(),
+				"说明", "基于时间的Epoch系统：计算单个验证者奖励")
 			// 按出块比例分配奖励
 			reward := new(big.Int).Mul(validatorRewardAmount, big.NewInt(int64(blocksProduced)))
 			reward.Div(reward, big.NewInt(int64(totalBlocks)))
-			d.logger.Info("🔍 奖励计算完成", "index", i+1, "address", validator.Address.String(), "reward", reward.String())
+			d.logger.Info("✅ 基于时间的EPOCH验证者奖励计算完成",
+				"epoch", epochNumber,
+				"index", i+1,
+				"address", validator.Address.String(),
+				"blocksProduced", blocksProduced,
+				"reward", reward.String(),
+				"说明", "基于时间的Epoch系统：单个验证者奖励计算完成")
 
 			if reward.Sign() > 0 {
 				stateUpdates[types.Address(validator.Address)] = reward
@@ -11797,11 +11861,20 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		d.logger.Debug("🔍 验证者统计完成", "index", i+1, "address", validator.Address.String())
 	}
 
-	d.logger.Info("✅ 验证者奖励循环处理完成", "totalValidators", len(validators), "processedCount", validatorRewardCount)
+	d.logger.Info("✅✅✅ ========== 基于时间的EPOCH验证者奖励循环完成 ========== ✅✅✅",
+		"epoch", epochNumber,
+		"totalValidators", len(validators),
+		"processedCount", validatorRewardCount,
+		"说明", "基于时间的Epoch系统：所有验证者奖励计算完成")
 
 	// 计算投票者奖励（按投票权重）
 	voterRewardAmount := new(big.Int).Mul(d.config.RewardAmount, big.NewInt(int64(d.config.VoterRewardRatio)))
 	voterRewardAmount.Div(voterRewardAmount, big.NewInt(100))
+
+	d.logger.Info("🗳️🗳️🗳️ ========== 基于时间的EPOCH投票者奖励计算开始 ========== 🗳️🗳️🗳️",
+		"epoch", epochNumber,
+		"voterRewardAmount", voterRewardAmount.String(),
+		"说明", "基于时间的Epoch系统：开始计算投票者奖励")
 
 	// 获取投票者信息并计算奖励
 	voterRewards, err := d.calculateVoterRewards(epochNumber, voterRewardAmount)
@@ -11843,17 +11916,19 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 				stateUpdates[address] = reward
 			}
 		}
-		d.logger.Info("💰 计算投票者奖励完成",
+		d.logger.Info("✅✅✅ ========== 基于时间的EPOCH投票者奖励计算完成 ========== ✅✅✅",
 			"epoch", epochNumber,
 			"voterCount", len(voterRewards),
-			"totalVoterReward", voterRewardAmount.String())
+			"totalVoterReward", voterRewardAmount.String(),
+			"说明", "基于时间的Epoch系统：所有投票者奖励计算完成")
 	}
 
 	// 🆕 在epoch结束区块准备奖励分发信息（不直接执行状态更新）
 	if len(stateUpdates) > 0 {
-		d.logger.Info("🎯 在epoch结束区块准备奖励分发信息",
+		d.logger.Info("🎯🎯🎯 ========== 基于时间的EPOCH奖励分发信息准备 ========== 🎯🎯🎯",
 			"epoch", epochNumber,
-			"updateCount", len(stateUpdates))
+			"updateCount", len(stateUpdates),
+			"说明", "基于时间的Epoch系统：准备奖励分发信息，等待区块执行时处理")
 
 		// 计算总奖励金额
 		totalReward := big.NewInt(0)
@@ -11874,29 +11949,35 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 			d.pendingRewardDistribution.Rewards[address.String()] = reward
 		}
 
-		d.logger.Info("✅ 奖励分发信息已准备完成，等待buildBlock处理",
+		d.logger.Info("✅✅✅ ========== 基于时间的EPOCH奖励分发信息准备完成 ========== ✅✅✅",
 			"epoch", epochNumber,
-			"updateCount", len(stateUpdates))
+			"updateCount", len(stateUpdates),
+			"totalReward", totalReward.String(),
+			"说明", "基于时间的Epoch系统：奖励分发信息已准备完成，等待buildBlock处理")
 	} else {
 		d.logger.Warn("⚠️ 没有奖励分发信息", "epoch", epochNumber)
 	}
 
 	// 3. 记录分发统计
-	d.logger.Info("📊 ========== 奖励计算信息统计 ==========",
+	d.logger.Info("📊📊📊 ========== 基于时间的EPOCH奖励计算统计 ========== 📊📊📊",
 		"epoch", epochNumber,
 		"validatorsCount", len(validators),
 		"validatorRewardCount", validatorRewardCount,
 		"totalBlocks", totalBlocks,
 		"stateUpdateCount", len(stateUpdates),
-		"status", "奖励计算完成")
+		"epochDuration", d.config.EpochDuration.String(),
+		"consensusSwitchHeight", d.config.ConsensusSwitchHeight,
+		"status", "基于时间的Epoch系统：奖励计算完成")
 
 	endTime := time.Now()
 	duration := endTime.Sub(startTime)
-	d.logger.Info("✅ ========== Epoch奖励计算完成 ==========",
+	d.logger.Info("🎉🎉🎉 ========== 基于时间的EPOCH奖励计算完成 ========== 🎉🎉🎉",
 		"epoch", epochNumber,
 		"startTime", startTime.Format("2006-01-02 15:04:05"),
 		"endTime", endTime.Format("2006-01-02 15:04:05"),
-		"duration", duration.String())
+		"duration", duration.String(),
+		"epochDuration", d.config.EpochDuration.String(),
+		"说明", "基于时间的Epoch系统：奖励计算和分发信息准备完成")
 
 	d.logger.Info("🎉🎉🎉 ========== executeRewardDistribution函数即将返回 ========== 🎉🎉🎉",
 		"epoch", epochNumber,
@@ -12716,4 +12797,36 @@ func (r *dposRuntime) processRewardDistributionInBlockForBuilder(builder blockBu
 		"rewardCount", len(rewardInfo.Rewards))
 
 	return nil
+}
+
+// getEpochForBlock 获取指定区块号的epoch信息（基于时间）
+func (d *DPoS) getEpochForBlock(blockNumber uint64) *epochMetadata {
+	// 如果区块号小于共识切换高度，返回0
+	if blockNumber < d.config.ConsensusSwitchHeight {
+		return &epochMetadata{
+			Number:            0,
+			FirstBlockInEpoch: 0,
+		}
+	}
+
+	// 使用Epoch管理器获取Epoch信息
+	currentEpoch, epochStartTime, _ := d.epochManager.GetEpochInfo(blockNumber)
+
+	// 计算Epoch的第一个区块号（基于时间估算）
+	// 这里需要根据区块时间间隔来估算
+	blockTime := d.config.BlockTime.Duration
+	blocksSinceStart := uint64(epochStartTime.Sub(time.Unix(0, 0)) / blockTime)
+	firstBlockInEpoch := d.config.ConsensusSwitchHeight + blocksSinceStart
+
+	d.logger.Debug("🔍 基于时间计算epoch信息",
+		"blockNumber", blockNumber,
+		"consensusSwitchHeight", d.config.ConsensusSwitchHeight,
+		"currentEpoch", currentEpoch,
+		"epochStartTime", epochStartTime.Format("2006-01-02 15:04:05"),
+		"firstBlockInEpoch", firstBlockInEpoch)
+
+	return &epochMetadata{
+		Number:            currentEpoch,
+		FirstBlockInEpoch: firstBlockInEpoch,
+	}
 }

@@ -87,9 +87,10 @@ type blockchainBackend interface {
 var _ blockchainBackend = &blockchainWrapper{}
 
 type blockchainWrapper struct {
-	executor   *state.Executor
-	blockchain *blockchain.Blockchain
-	keyAddr    types.Address // 当前节点的地址
+	executor    *state.Executor
+	blockchain  *blockchain.Blockchain
+	keyAddr     types.Address       // 当前节点的地址
+	dposBackend consensus.Consensus // DPoS实例引用
 }
 
 // CurrentHeader returns the header of blockchain block head
@@ -267,20 +268,46 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 
 // isEpochEndBlock 检查是否是epoch结束区块
 func (p *blockchainWrapper) isEpochEndBlock(blockNumber uint64) bool {
-	// 使用与其他地方一致的epoch大小
-	epochSize := uint64(10)
+	// 获取DPoS实例
+	if p.dposBackend == nil {
+		fmt.Printf("⚠️ 无法获取DPoS实例，使用默认epoch信息\n")
+		return false
+	}
 
-	// 计算当前epoch的第一个区块号
-	// 例如：区块7379属于epoch 738，第一个区块是7370
-	currentEpoch := (blockNumber / epochSize) + 1
-	firstBlockInEpoch := (currentEpoch - 1) * epochSize
+	dposInstance, ok := p.dposBackend.(*DPoS)
+	if !ok {
+		fmt.Printf("⚠️ 无法转换为DPoS实例，使用默认epoch信息\n")
+		return false
+	}
 
-	// 检查是否是epoch的最后一个区块
-	isEpochEnd := firstBlockInEpoch+epochSize-1 == blockNumber
+	// 如果区块号小于共识切换高度，不是Epoch结束区块
+	if blockNumber < dposInstance.config.ConsensusSwitchHeight {
+		return false
+	}
+
+	// 获取当前Epoch信息
+	currentEpoch, epochStartTime, epochDuration := dposInstance.epochManager.GetEpochInfo(blockNumber)
+
+	// 如果Epoch为0，说明还没有切换到DPoS共识，不是Epoch结束区块
+	if currentEpoch == 0 {
+		fmt.Printf("🔍 Epoch为0，DPoS共识尚未激活, blockNumber=%d, consensusSwitchHeight=%d\n",
+			blockNumber, dposInstance.config.ConsensusSwitchHeight)
+		return false
+	}
+
+	// 计算当前Epoch的结束时间
+	epochEndTime := epochStartTime.Add(epochDuration)
+
+	// 获取当前时间
+	currentTime := time.Now()
+
+	// 检查是否接近Epoch结束时间（允许1秒误差）
+	timeToEpochEnd := epochEndTime.Sub(currentTime)
+	isEpochEnd := timeToEpochEnd <= time.Second
 
 	// 调试日志
-	fmt.Printf("🔍 isEpochEndBlock检查: blockNumber=%d, epochSize=%d, currentEpoch=%d, firstBlockInEpoch=%d, isEpochEnd=%t\n",
-		blockNumber, epochSize, currentEpoch, firstBlockInEpoch, isEpochEnd)
+	fmt.Printf("🔍 基于时间的isEpochEndBlock检查: blockNumber=%d, currentEpoch=%d, epochStartTime=%s, epochEndTime=%s, currentTime=%s, timeToEpochEnd=%s, isEpochEnd=%t\n",
+		blockNumber, currentEpoch, epochStartTime.Format("2006-01-02 15:04:05"), epochEndTime.Format("2006-01-02 15:04:05"), currentTime.Format("2006-01-02 15:04:05"), timeToEpochEnd.String(), isEpochEnd)
 
 	return isEpochEnd
 }
