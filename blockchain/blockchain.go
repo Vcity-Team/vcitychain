@@ -728,11 +728,6 @@ func (b *Blockchain) verifyBlockBody(block *types.Block) ([]*types.Receipt, erro
 		return nil, fmt.Errorf("unable to execute block transactions, %w", executeErr)
 	}
 
-	// 🆕 奖励分配已在 executor.ProcessBlock 中处理，无需重复执行
-	b.logger.Info("ℹ️ 奖励分配已在 executor.ProcessBlock 中处理",
-		"blockNumber", block.Number(),
-		"说明", "奖励分配逻辑在 consensus/dpos/blockchain_wrapper.go 的 ProcessBlock 方法中执行")
-
 	// Verify the local execution result with the proposed block data
 	if err := blockResult.verifyBlockResult(block); err != nil {
 		return nil, fmt.Errorf("unable to verify block execution result, %w", err)
@@ -793,7 +788,7 @@ func (b *Blockchain) executeBlockTransactions(block *types.Block) (*BlockResult,
 	}
 
 	// 🆕 添加ProcessBlock调用跟踪日志
-	b.logger.Info("🔍🔍🔍 ========== 开始调用executor.ProcessBlock ========== 🔍🔍🔍",
+	b.logger.Debug("🔍🔍🔍 ========== 开始调用executor.ProcessBlock处理奖励分配 ========== 🔍🔍🔍",
 		"blockNumber", block.Number(),
 		"blockHash", block.Hash().String()[:16],
 		"parentStateRoot", parent.StateRoot.String(),
@@ -806,7 +801,7 @@ func (b *Blockchain) executeBlockTransactions(block *types.Block) (*BlockResult,
 		return nil, err
 	}
 
-	b.logger.Info("✅ executor.ProcessBlock调用成功",
+	b.logger.Debug("✅ ==========executor.ProcessBlock处理奖励分配成功==========",
 		"blockNumber", block.Number(),
 		"blockHash", block.Hash().String()[:16],
 		"说明", "executor.ProcessBlock执行完成")

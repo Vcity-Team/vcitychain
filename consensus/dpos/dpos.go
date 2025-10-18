@@ -1373,10 +1373,9 @@ func (r *dposRuntime) produceBlock() error {
 	if txCount == 0 {
 		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
 		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
 
 		// 🆕 生产节点区块状态根显著日志
-		r.logger.Info("🏗️🏗️🏗️ ========== 生产节点7379区块状态根 ========== 🏗️🏗️🏗️",
+		r.logger.Info("🏗️🏗️🏗️ ========== 生产节点区块状态根 ========== 🏗️🏗️🏗️",
 			"blockNumber", block.Block.Number(),
 			"blockStateRoot", block.Block.Header.StateRoot.String(),
 			"blockStateRootHex", fmt.Sprintf("0x%x", block.Block.Header.StateRoot),
@@ -2303,14 +2302,14 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 	// 🆕 保存初始区块哈希到extra中，用于CheckpointHash计算
 	extra.CheckpointBlockHash = realBlockHash
-	r.logger.Info("🔍 ===== 生产时保存CheckpointBlockHash =====",
+	r.logger.Debug("🔍 ===== 生产时保存CheckpointBlockHash =====",
 		"blockNumber", block.Block.Number(),
 		"checkpointBlockHash", realBlockHash.String(),
 		"说明", "生产时保存用于CheckpointHash计算的初始区块哈希到ExtraData")
 
 	// 🆕 重新设置ExtraData，确保CheckpointBlockHash被包含
 	block.Block.Header.ExtraData = extra.MarshalRLPTo(nil)
-	r.logger.Info("🔍 ===== 重新设置ExtraData包含CheckpointBlockHash =====",
+	r.logger.Debug("🔍 ===== 重新设置ExtraData包含CheckpointBlockHash =====",
 		"blockNumber", block.Block.Number(),
 		"extraDataLength", len(block.Block.Header.ExtraData),
 		"checkpointBlockHash", realBlockHash.String(),
@@ -2354,7 +2353,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	}
 
 	// 🆕 添加生产时checkpointHash结果显著日志
-	r.logger.Info("🔍 ===== 生产时CheckpointHash计算结果 =====",
+	r.logger.Debug("🔍 ===== 生产时CheckpointHash计算结果 =====",
 		"blockNumber", block.Block.Number(),
 		"checkpointHash", checkpointHash.String(),
 		"说明", "生产时最终计算出的checkpointHash")
@@ -3496,12 +3495,12 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		}
 
 		if d.config.Blockchain != nil {
-			d.logger.Info("🔍 尝试获取完整区块信息",
+			d.logger.Debug("🔍 尝试获取完整区块信息",
 				"blockNumber", header.Number,
 				"blockHash", header.Hash.String()[:16])
 
 			if block, exists := d.config.Blockchain.GetBlockByHash(header.Hash, true); exists && block != nil {
-				d.logger.Info("✅ 成功获取完整区块信息，准备调用processEconomicSystem",
+				d.logger.Debug("✅ 成功获取完整区块信息，准备调用processEconomicSystem",
 					"blockNumber", header.Number,
 					"blockHash", header.Hash.String()[:16],
 					"blockExists", exists)
@@ -3511,7 +3510,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 					Block: block,
 				}
 
-				d.logger.Info("🚀 开始调用processEconomicSystem",
+				d.logger.Debug("🚀 开始调用processEconomicSystem",
 					"blockNumber", header.Number,
 					"blockHash", header.Hash.String()[:16])
 
@@ -3519,7 +3518,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 					d.logger.Error("❌ 同步时处理经济系统失败", "blockNumber", header.Number, "error", err)
 					// 不返回错误，继续处理其他逻辑
 				} else {
-					d.logger.Info("✅ processEconomicSystem调用成功",
+					d.logger.Debug("✅ processEconomicSystem调用成功",
 						"blockNumber", header.Number,
 						"blockHash", header.Hash.String()[:16])
 				}
@@ -4332,6 +4331,7 @@ func (d *DPoS) Initialize() error {
 		executor:    d.config.Executor,
 		keyAddr:     types.Address(d.key.Address()), // 设置当前节点的地址
 		dposBackend: d,                              // 传递DPoS实例引用
+		logger:      d.logger,                       // 传递日志记录器
 	}
 
 	// 🆕 将blockchain_wrapper设置为blockchain的executor，以启用奖励分配功能
@@ -8244,7 +8244,7 @@ func (r *dposRuntime) broadcastSignatureRequest(protoRequest *dposProto.Signatur
 	}
 
 	// 发布签名请求
-	r.logger.Info("attempting to publish signature request",
+	r.logger.Debug("attempting to publish signature request",
 		"blockNumber", protoRequest.BlockNumber,
 		"round", protoRequest.Round)
 
@@ -11688,7 +11688,7 @@ func (d *DPoS) processEconomicSystem(block *types.FullBlock) error {
 	)
 
 	// 2. 添加详细日志
-	d.logger.Info("📊 记录出块到统一Epoch",
+	d.logger.Debug("📊 记录出块到统一Epoch",
 		"blockNumber", blockNumber,
 		"blockTime", blockTime.Format("2006-01-02 15:04:05"),
 		"currentEpoch", currentEpoch,

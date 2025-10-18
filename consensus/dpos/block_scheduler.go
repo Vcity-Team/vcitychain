@@ -77,7 +77,7 @@ func (bs *BlockScheduler) ShouldProduceBlock(validatorIndex int, currentBlockNum
 
 	// 2. 检查是否是该验证者的轮次
 	expectedIndex := int(currentBlockNumber) % bs.validatorCount
-	bs.logger.Info("🔍 检查验证者轮次",
+	bs.logger.Debug("🔍 检查验证者轮次",
 		"validatorIndex", validatorIndex,
 		"expectedIndex", expectedIndex,
 		"blockNumber", currentBlockNumber,
@@ -98,7 +98,7 @@ func (bs *BlockScheduler) ShouldProduceBlock(validatorIndex int, currentBlockNum
 		return false
 	}
 
-	bs.logger.Info("✅ 验证者轮次检查通过",
+	bs.logger.Debug("✅ 验证者轮次检查通过",
 		"validatorIndex", validatorIndex,
 		"expectedIndex", expectedIndex,
 		"action", "继续时间窗口检查")
@@ -110,7 +110,7 @@ func (bs *BlockScheduler) ShouldProduceBlock(validatorIndex int, currentBlockNum
 	// 4. 获取当前时间
 	now := time.Now()
 
-	bs.logger.Info("🕐 TRON模式时间计算",
+	bs.logger.Debug("🕐 TRON模式时间计算",
 		"validatorIndex", validatorIndex,
 		"currentBlockNumber", currentBlockNumber,
 		"nextBlockNumber", nextBlockNumber,
@@ -133,7 +133,7 @@ func (bs *BlockScheduler) ShouldProduceBlock(validatorIndex int, currentBlockNum
 		slotStart := nextExpectedTime
 		slotEnd := nextExpectedTime.Add(bs.blockWindow)
 
-		bs.logger.Info("🔄 基于创世时间重新计算时间窗口",
+		bs.logger.Debug("🔄 基于创世时间重新计算时间窗口",
 			"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
 			"now", now.Format("2006-01-02 15:04:05.000"),
 			"timeSinceGenesis", timeSinceGenesis.String(),
