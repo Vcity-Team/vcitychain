@@ -1787,9 +1787,8 @@ func (r *dposRuntime) isEpochEndBlock(blockNumber uint64) bool {
 	timeToEpochEnd := epochEndTime.Sub(currentTime)
 	isEpochEnd := timeToEpochEnd <= time.Second
 
-	// 🆕 显著日志：基于时间的Epoch结束检测
 	if isEpochEnd {
-		r.logger.Info("🎯🎯🎯 ========== 基于时间的EPOCH结束检测 ========== 🎯🎯🎯",
+		r.logger.Info("🎯🎯🎯 ========== 检测到epoch最后一个区块 ========== 🎯🎯🎯",
 			"blockNumber", blockNumber,
 			"consensusSwitchHeight", dposInstance.config.ConsensusSwitchHeight,
 			"currentEpoch", currentEpoch,
@@ -1883,11 +1882,6 @@ func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64, c
 			"说明", "当前区块高度未达到共识切换高度，使用其他共识机制，不是DPoS，无奖励分发")
 		return nil
 	}
-
-	r.logger.Info("💰💰💰 ========== 开始基于时间的奖励计算 ========== 💰💰💰",
-		"rewardEpoch", rewardEpoch,
-		"blockNumber", blockNumber,
-		"说明", "基于时间的Epoch系统：开始计算和分发奖励")
 
 	// 直接计算和分发奖励
 	return dposInstance.distributeEpochRewards(rewardEpoch, currentRound)
@@ -3399,7 +3393,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		d.logger.Debug("🔄 DPoS处理区块头部", "blockNumber", header.Number, "blockHash", header.Hash.String()[:16])
 
 		// 🆕 检查同步节点接收到的区块状态根
-		d.logger.Info("🔍 同步节点接收区块状态根检查",
+		d.logger.Debug("🔍 同步节点接收区块状态根检查",
 			"blockNumber", header.Number,
 			"stateRoot", header.StateRoot.String(),
 			"blockHash", header.Hash.String()[:16])
@@ -3426,7 +3420,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		if d.config.Blockchain != nil {
 			// 获取完整区块信息
 			if block, exists := d.config.Blockchain.GetBlockByHash(header.Hash, true); exists && block != nil {
-				d.logger.Info("🔍 验证节点获取完整区块信息，准备调用blockchain_wrapper.ProcessBlock",
+				d.logger.Debug("🔍 验证节点获取完整区块信息，准备调用blockchain_wrapper.ProcessBlock",
 					"blockNumber", header.Number,
 					"blockHash", header.Hash.String()[:16],
 					"blockExists", exists)
@@ -3437,7 +3431,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 					d.logger.Error("❌ 验证节点无法获取父区块", "blockNumber", header.Number, "parentHash", header.ParentHash.String()[:16])
 				} else {
 					// 调用blockchain_wrapper.ProcessBlock执行奖励分配
-					d.logger.Info("🚀 验证节点开始调用blockchain_wrapper.ProcessBlock执行奖励分配",
+					d.logger.Debug("🚀 验证节点开始调用blockchain_wrapper.ProcessBlock执行奖励分配",
 						"blockNumber", header.Number,
 						"blockHash", header.Hash.String()[:16])
 
@@ -3445,7 +3439,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 						d.logger.Error("❌ 验证节点blockchain_wrapper.ProcessBlock调用失败", "blockNumber", header.Number, "error", err)
 						// 不返回错误，继续处理其他逻辑
 					} else {
-						d.logger.Info("✅ 验证节点blockchain_wrapper.ProcessBlock调用成功",
+						d.logger.Debug("✅ 验证节点blockchain_wrapper.ProcessBlock调用成功",
 							"blockNumber", header.Number,
 							"blockHash", header.Hash.String()[:16],
 							"receiptsCount", len(fullBlock.Receipts))
@@ -3579,15 +3573,6 @@ func (d *DPoS) isEpochEndBlock(blockNumber uint64) bool {
 	timeToEpochEnd := epochEndTime.Sub(currentTime)
 	isEpochEnd := timeToEpochEnd <= time.Second
 
-	d.logger.Debug("🔍 基于时间的Epoch结束检测",
-		"blockNumber", blockNumber,
-		"currentEpoch", currentEpoch,
-		"epochStartTime", epochStartTime.Format("2006-01-02 15:04:05"),
-		"epochEndTime", epochEndTime.Format("2006-01-02 15:04:05"),
-		"currentTime", currentTime.Format("2006-01-02 15:04:05"),
-		"timeToEpochEnd", timeToEpochEnd.String(),
-		"isEpochEnd", isEpochEnd)
-
 	return isEpochEnd
 }
 
@@ -3614,7 +3599,7 @@ func (d *DPoS) updateRoundState(header *types.Header) {
 
 	if blockMiner != keyAddr {
 		// 接收其他节点的区块，需要更新轮次
-		d.logger.Info("🔄 接收其他节点区块，准备更新轮次",
+		d.logger.Debug("🔄 接收其他节点区块，准备更新轮次",
 			"blockNumber", header.Number,
 			"blockMiner", blockMiner.String(),
 			"keyAddr", keyAddr.String())
@@ -3623,7 +3608,7 @@ func (d *DPoS) updateRoundState(header *types.Header) {
 			oldIndex := d.runtime.currentDelegateIndex
 			oldRound := d.runtime.currentRound
 
-			d.logger.Info("🔍 更新前轮次状态",
+			d.logger.Debug("🔍 更新前轮次状态",
 				"blockNumber", header.Number,
 				"oldRound", oldRound,
 				"oldDelegateIndex", oldIndex)
@@ -3631,7 +3616,7 @@ func (d *DPoS) updateRoundState(header *types.Header) {
 			// 🆕 使用区块头部的区块号，确保一致性
 			d.runtime.updateRound(header.Number)
 
-			d.logger.Info("✅ 轮次状态更新完成",
+			d.logger.Debug("✅ 轮次状态更新完成",
 				"blockNumber", header.Number,
 				"blockMiner", blockMiner.String(),
 				"keyAddr", keyAddr.String(),
@@ -11752,10 +11737,6 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 	validatorRewardCount := 0
 
 	// 计算每个验证者的奖励
-	d.logger.Info("🔄🔄🔄 ========== 基于时间的EPOCH验证者奖励循环开始 ========== 🔄🔄🔄",
-		"epoch", epochNumber,
-		"totalValidators", len(validators),
-		"说明", "基于时间的Epoch系统：开始循环计算每个验证者的奖励")
 	for i, validator := range validators {
 		d.logger.Debug("🔍 统计验证者", "index", i+1, "total", len(validators), "address", validator.Address.String())
 		blocksProduced := blockCounts[types.Address(validator.Address)]
@@ -11820,12 +11801,6 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		}
 		d.logger.Debug("🔍 验证者统计完成", "index", i+1, "address", validator.Address.String())
 	}
-
-	d.logger.Info("✅✅✅ ========== 基于时间的EPOCH验证者奖励循环完成 ========== ✅✅✅",
-		"epoch", epochNumber,
-		"totalValidators", len(validators),
-		"processedCount", validatorRewardCount,
-		"说明", "基于时间的Epoch系统：所有验证者奖励计算完成")
 
 	// 计算投票者奖励（按投票权重）
 	voterRewardAmount := new(big.Int).Mul(d.config.RewardAmount, big.NewInt(int64(d.config.VoterRewardRatio)))
@@ -11938,10 +11913,6 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		"duration", duration.String(),
 		"epochDuration", d.config.EpochDuration.String(),
 		"说明", "基于时间的Epoch系统：奖励计算和分发信息准备完成")
-
-	d.logger.Info("🎉🎉🎉 ========== executeRewardDistribution函数即将返回 ========== 🎉🎉🎉",
-		"epoch", epochNumber,
-		"timestamp", time.Now().Format("2006-01-02 15:04:05.000"))
 
 	return nil
 }

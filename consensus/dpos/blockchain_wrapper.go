@@ -107,14 +107,6 @@ func (p *blockchainWrapper) CommitBlock(block *types.FullBlock) error {
 
 // ProcessBlockExecutor 实现 blockchain.Executor 接口
 func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *types.Block, blockCreator types.Address) (*state.Transition, error) {
-	// 🆕 添加ProcessBlockExecutor函数入口跟踪日志
-	fmt.Printf("🚀🚀🚀 ========== blockchain_wrapper.ProcessBlockExecutor被调用 ========== 🚀🚀🚀\n")
-	fmt.Printf("🚀 区块号: %d\n", block.Number())
-	fmt.Printf("🚀 区块哈希: %s\n", block.Hash().String()[:16])
-	fmt.Printf("🚀 父状态根: %s\n", parentRoot.String()[:16])
-	fmt.Printf("🚀 区块创建者: %s\n", blockCreator.String())
-	fmt.Printf("🚀 说明: blockchain_wrapper.ProcessBlockExecutor开始执行\n")
-
 	header := block.Header.Copy()
 	start := time.Now().UTC()
 

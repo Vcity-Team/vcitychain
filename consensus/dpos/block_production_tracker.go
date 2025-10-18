@@ -73,7 +73,7 @@ func (bpt *BlockProductionTracker) RecordBlockProduction(
 		// 🆕 重置区块时间记录
 		bpt.currentEpochBlockTimes = make(map[types.Address][]time.Time)
 
-		bpt.logger.Info("🔄 开始新Epoch出块统计",
+		bpt.logger.Debug("🔄 开始新Epoch出块统计",
 			"epoch", epochNumber,
 			"startTime", blockTime.Format("2006-01-02 15:04:05"),
 			"startBlock", blockNumber)
