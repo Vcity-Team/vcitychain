@@ -131,24 +131,32 @@ func (bs *BlockScheduler) ShouldProduceBlock(validatorIndex int, currentBlockNum
 	// 3. 计算下一个区块的期望时间（TRON模式）
 	nextBlockNumber := currentBlockNumber + 1
 
+	// 计算相对于DPoS创世区块的偏移量
+	// 如果共识切换高度是7370，那么DPoS创世时间对应的是区块7369
+	// 所以区块7370的偏移量是1，区块7371的偏移量是2
+	dposBlockOffset := nextBlockNumber - (bs.consensusSwitchHeight - 1)
+
 	// 添加调试日志（控制频率，避免刷屏）
 	if now.Sub(bs.lastLogTime) >= 2*time.Second {
 		bs.logger.Info("🔍 时间计算调试",
 			"currentBlockNumber", currentBlockNumber,
 			"nextBlockNumber", nextBlockNumber,
+			"consensusSwitchHeight", bs.consensusSwitchHeight,
+			"dposBlockOffset", dposBlockOffset,
 			"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
 			"blockWindow", bs.blockWindow.String())
 		bs.lastLogTime = now
 	}
 
-	expectedTime := bs.genesisTime.Add(time.Duration(nextBlockNumber) * bs.blockWindow)
+	expectedTime := bs.genesisTime.Add(time.Duration(dposBlockOffset) * bs.blockWindow)
 
 	// 添加调试日志（控制频率，避免刷屏）
 	if now.Sub(bs.lastLogTime) >= 2*time.Second {
 		bs.logger.Info("🔍 期望时间计算",
 			"nextBlockNumber", nextBlockNumber,
+			"dposBlockOffset", dposBlockOffset,
 			"expectedTime", expectedTime.Format("2006-01-02 15:04:05.000"),
-			"formula", fmt.Sprintf("genesisTime + %d * %s", nextBlockNumber, bs.blockWindow.String()))
+			"formula", fmt.Sprintf("genesisTime + %d * %s", dposBlockOffset, bs.blockWindow.String()))
 		bs.lastLogTime = now
 	}
 
@@ -471,8 +479,10 @@ func (bs *BlockScheduler) getGenesisTime() (time.Time, error) {
 		if exists && preSwitchHeader != nil {
 			preSwitchTime := time.Unix(int64(preSwitchHeader.Timestamp), 0)
 
-			// 从preSwitchTime开始，按照DPoS的区块间隔计算
-			dposGenesisTime := preSwitchTime.Add(bs.blockWindow)
+			// DPoS的创世时间就是共识切换前区块的时间
+			// 这样区块7370的时间就是 preSwitchTime + blockWindow
+			// 区块7371的时间就是 preSwitchTime + 2 * blockWindow
+			dposGenesisTime := preSwitchTime
 
 			bs.logger.Info("🔧 使用共识切换前区块作为DPoS创世时间",
 				"consensusSwitchHeight", bs.consensusSwitchHeight,
