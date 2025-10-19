@@ -266,11 +266,6 @@ func (p *blockchainWrapper) isEpochEndBlock(blockNumber uint64) bool {
 
 // processRewardDistributionInBlock 在区块执行时处理奖励分发
 func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block, transition *state.Transition) error {
-	p.logger.Info("🎯🎯🎯 ========== processRewardDistributionInBlock被调用 ========== 🎯🎯🎯",
-		"blockNumber", block.Number(),
-		"blockHash", block.Hash().String()[:16],
-		"说明", "开始处理奖励分发（实际执行）")
-
 	p.logger.Info("🔍 ProcessBlock: 开始处理奖励分发",
 		"blockNumber", block.Number(),
 		"isEpochEndBlock", p.isEpochEndBlock(block.Number()))
@@ -294,10 +289,6 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 		"epochNumber", rewardInfo.EpochNumber,
 		"rewardCount", len(rewardInfo.Rewards),
 		"totalReward", rewardInfo.TotalReward.String())
-
-	// 处理奖励分发（直接修改状态，符合TRON主流做法）
-	p.logger.Info("💰💰💰 ========== ProcessBlock开始执行奖励分发（直接状态修改） ========== 💰💰💰",
-		"rewardCount", len(rewardInfo.Rewards))
 
 	// 获取奖励账户地址（从配置中获取）
 	rewardAccount := types.StringToAddress("0x4BCBB0e87ff0Bd8c6bD4968617b17b2e2DC12EBe")

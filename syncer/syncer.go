@@ -379,7 +379,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 		select {
 		case block, ok := <-blockCh:
 			if !ok {
-				s.logger.Info("区块同步完成", "peer", peerID.String(), "同步区块数", blockCount)
+				s.logger.Debug("区块同步完成", "peer", peerID.String(), "同步区块数", blockCount)
 				return lastReceivedNumber, shouldTerminate, nil
 			}
 
@@ -427,7 +427,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				}
 
 				updateMetrics(fullBlock)
-				s.logger.Info("✅ DPoS区块同步成功", "peer", peerID.String(), "区块号", block.Number(), "哈希", block.Hash().String()[:16])
+				s.logger.Debug("✅ DPoS区块同步成功", "peer", peerID.String(), "区块号", block.Number(), "哈希", block.Hash().String()[:16])
 				shouldTerminate = newBlockCallback(fullBlock)
 				lastReceivedNumber = block.Number()
 				continue
@@ -450,7 +450,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 			}
 
 			updateMetrics(fullBlock)
-			s.logger.Info("✅ 区块同步成功", "peer", peerID.String(), "区块号", block.Number(), "哈希", block.Hash().String()[:16], "交易数", len(block.Transactions))
+			s.logger.Debug("✅ 区块同步成功", "peer", peerID.String(), "区块号", block.Number(), "哈希", block.Hash().String()[:16], "交易数", len(block.Transactions))
 			shouldTerminate = newBlockCallback(fullBlock)
 
 			lastReceivedNumber = block.Number()

@@ -1332,7 +1332,7 @@ func (ni *NetworkIntegration) BroadcastSignatureResponse(response *SignatureResp
 	}
 
 	actualTopicName := ni.signatureResponseTopic.GetActualProtoID()
-	ni.logger.Info("🚀 网络集成层广播签名响应", "原始名称", "dpos-signature-response", "实际名称", actualTopicName)
+	ni.logger.Debug("🚀 网络集成层广播签名响应", "原始名称", "dpos-signature-response", "实际名称", actualTopicName)
 
 	if err := ni.signatureResponseTopic.Publish(dposMsg); err != nil {
 		return fmt.Errorf("failed to publish signature response: %w", err)

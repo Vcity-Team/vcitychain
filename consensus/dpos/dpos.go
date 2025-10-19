@@ -1921,7 +1921,7 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 
 // buildBlock 构建区块
 func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
-	r.logger.Info("🏗️ buildBlock函数被调用", "timestamp", time.Now().Format("15:04:05.000"))
+	r.logger.Debug("🏗️ buildBlock函数被调用", "timestamp", time.Now().Format("15:04:05.000"))
 
 	// 检查Key是否可用
 	if r.config == nil || r.config.Key == nil {
@@ -2083,7 +2083,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	// 🆕 检查是否是epoch的最后一个区块，如果是则执行奖励分发
 
 	// 延迟状态更新机制已移除，奖励分发在epoch结束区块直接执行
-	r.logger.Info("🔍 检查是否需要计算奖励分发",
+	r.logger.Debug("🔍 检查是否需要计算奖励分发",
 		"nextBlockNumber", nextBlockNumber,
 		"parentNumber", parent.Number,
 		"delegate", keyAddr.String()[:16])
@@ -2126,7 +2126,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			}
 		}
 	} else {
-		r.logger.Info("ℹ️ 不是epoch最后一个区块，跳过奖励分发",
+		r.logger.Debug("ℹ️ 不是epoch最后一个区块，跳过奖励分发",
 			"blockNumber", nextBlockNumber,
 			"isEpochEndBlock", isEpochEndBlock)
 	}
@@ -2747,7 +2747,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		globalNewStateRootMutex.Lock()
 		globalNewStateRoot = types.Hash{}
 		globalNewStateRootMutex.Unlock()
-		r.logger.Info("🧹 签名聚合完成后清理全局状态根", "blockNumber", block.Block.Number())
+		r.logger.Debug("🧹 签名聚合完成后清理全局状态根", "blockNumber", block.Block.Number())
 
 		r.logger.Debug("区块签名更新完成",
 			"blockNumber", block.Block.Number(),
@@ -6408,7 +6408,7 @@ func (d *DPoS) compareDelegateSets(oldSet, newSet validator.AccountSet) (added, 
 func (d *DPoS) processRewards(block *types.FullBlock) error {
 	// 处理奖励分配
 	// TODO: 实现奖励分配逻辑
-	d.logger.Info("processing rewards", "block", block.Block.Number())
+	d.logger.Debug("processing rewards", "block", block.Block.Number())
 	return nil
 }
 

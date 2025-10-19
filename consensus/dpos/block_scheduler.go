@@ -295,7 +295,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(validatorIndex int, currentBlock
 		// 在时间窗口内，可以出块
 		// 防刷屏：5秒内只打印一次日志
 		if now.Sub(bs.lastLogTime) >= 5*time.Second {
-			bs.logger.Info("✅ TRON式出块时机到达",
+			bs.logger.Debug("✅ TRON式出块时机到达",
 				"validatorIndex", validatorIndex,
 				"currentSlot", currentSlot,
 				"slotStart", slotStart.Format("2006-01-02 15:04:05.000"),

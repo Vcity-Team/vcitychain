@@ -436,7 +436,7 @@ func (m *syncPeerClient) startNewBlockProcess() {
 
 		// 添加事件接收日志
 		if event != nil {
-			m.logger.Info("📨 收到区块链事件", "节点ID", m.id, "NewChain长度", len(event.NewChain), "shouldEmitBlocks", m.shouldEmitBlocks)
+			m.logger.Debug("📨 收到区块链事件", "节点ID", m.id, "NewChain长度", len(event.NewChain), "shouldEmitBlocks", m.shouldEmitBlocks)
 		}
 
 		if !m.shouldEmitBlocks {
@@ -455,7 +455,7 @@ func (m *syncPeerClient) startNewBlockProcess() {
 			}
 
 			// 🆕 添加详细的状态广播日志
-			m.logger.Info("🔔 检测到新区块事件，准备状态广播",
+			m.logger.Debug("🔔 检测到新区块事件，准备状态广播",
 				"区块高度", latest.Number,
 				"区块哈希", latest.Hash.String()[:16],
 				"节点ID", m.id,
@@ -477,7 +477,7 @@ func (m *syncPeerClient) startNewBlockProcess() {
 			// Publish status with retry mechanism
 			var publishErr error
 			maxRetries := 3
-			m.logger.Info("📡 开始状态广播",
+			m.logger.Debug("📡 开始状态广播",
 				"区块高度", latest.Number,
 				"最大重试次数", maxRetries,
 				"节点ID", m.id,
