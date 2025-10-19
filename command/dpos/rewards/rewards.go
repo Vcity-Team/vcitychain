@@ -65,11 +65,67 @@ func runCommand(cmd *cobra.Command, args []string) {
 
 // getValidatorRewards 获取验证者奖励信息
 func getValidatorRewards(validatorAddress string, epochNumber uint64) (map[string]interface{}, error) {
-	// 由于这是一个本地命令，我们需要通过JSON-RPC调用本地的DPoS实例
-	// 或者直接访问本地区块链数据库
+	// 通过JSON-RPC调用本地节点获取真实奖励数据
+	jsonrpcURL := "http://localhost:8545"
+	
+	// 构建JSON-RPC请求
+	request := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"method":  "dpos_getValidatorRewardsInfo",
+		"params":  []interface{}{validatorAddress, epochNumber},
+		"id":      1,
+	}
 
-	// 目前返回模拟数据，但结构更接近真实数据
-	rewardsInfo := map[string]interface{}{
+	// 序列化请求
+	requestData, err := json.Marshal(request)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal JSON-RPC request: %w", err)
+	}
+
+	// 创建HTTP客户端
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	// 发送请求
+	resp, err := client.Post(jsonrpcURL, "application/json", strings.NewReader(string(requestData)))
+	if err != nil {
+		// 如果JSON-RPC调用失败，返回模拟数据
+		return getMockRewardsData(validatorAddress, epochNumber), nil
+	}
+	defer resp.Body.Close()
+
+	// 解析响应
+	var jsonrpcResp map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&jsonrpcResp); err != nil {
+		// 如果解析失败，返回模拟数据
+		return getMockRewardsData(validatorAddress, epochNumber), nil
+	}
+
+	// 检查是否有错误
+	if err, exists := jsonrpcResp["error"]; exists {
+		return map[string]interface{}{
+			"validatorAddress": validatorAddress,
+			"epochNumber":      epochNumber,
+			"error":            err,
+			"status":           "jsonrpc_error",
+		}, nil
+	}
+
+	// 返回结果
+	if result, exists := jsonrpcResp["result"]; exists {
+		if resultMap, ok := result.(map[string]interface{}); ok {
+			return resultMap, nil
+		}
+	}
+
+	// 如果结果格式不对，返回模拟数据
+	return getMockRewardsData(validatorAddress, epochNumber), nil
+}
+
+// getMockRewardsData 返回模拟奖励数据
+func getMockRewardsData(validatorAddress string, epochNumber uint64) map[string]interface{} {
+	return map[string]interface{}{
 		"validatorAddress": validatorAddress,
 		"epochNumber":      epochNumber,
 		"blockRewards": map[string]interface{}{
@@ -88,17 +144,10 @@ func getValidatorRewards(validatorAddress string, epochNumber uint64) (map[strin
 			"totalStakeReward": "0",
 		},
 		"totalRewards": "0",
-		"status":       "framework_ready",
-		"message":      "Command framework ready, need to connect to local blockchain instance",
-		"note":         "Use JSON-RPC call to dpos_getValidatorRewardsInfo for real data",
+		"status":       "mock_data",
+		"message":      "Using mock data - local node not available or method not implemented",
+		"note":         "Start local node with --jsonrpc-addr 0.0.0.0:8545 to get real data",
 	}
-
-	// 建议使用JSON-RPC调用获取真实数据：
-	// curl -X POST http://localhost:8545 \
-	//   -H "Content-Type: application/json" \
-	//   -d '{"jsonrpc":"2.0","method":"dpos_getValidatorRewardsInfo","params":["' + validatorAddress + '",' + strconv.FormatUint(epochNumber, 10) + '],"id":1}'
-
-	return rewardsInfo, nil
 }
 
 // isValidAddress 简单的地址格式验证

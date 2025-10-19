@@ -1618,13 +1618,13 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 	}
 
 	// 🆕 打印验证时使用的验证者权重信息
-	logger.Error("🔍 ===== BLS验证时使用的验证者权重信息 =====",
+	logger.Debug("🔍 ===== BLS验证时使用的验证者权重信息 =====",
 		"blockNumber", blockNumber,
 		"validatorsCount", len(validators),
 		"note", "这些是BLS验证时实际使用的验证者权重")
 
 	for i, validator := range validators {
-		logger.Error("📝 BLS验证时验证者权重",
+		logger.Debug("📝 BLS验证时验证者权重",
 			"index", i,
 			"address", validator.Address.String(),
 			"votingPower", validator.VotingPower.String(),

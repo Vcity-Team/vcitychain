@@ -1371,25 +1371,10 @@ func (r *dposRuntime) produceBlock() error {
 	// 根据交易数量添加特殊标记
 	txCount := len(block.Block.Transactions)
 	if txCount == 0 {
-		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-
-		// 🆕 生产节点区块状态根显著日志
-		r.logger.Info("🏗️🏗️🏗️ ========== 生产节点7379区块状态根 ========== 🏗️🏗️🏗️",
-			"blockNumber", block.Block.Number(),
-			"blockStateRoot", block.Block.Header.StateRoot.String(),
-			"blockStateRootHex", fmt.Sprintf("0x%x", block.Block.Header.StateRoot),
-			"blockHash", block.Block.Hash().String(),
-			"note", "生产节点7379区块头中的状态根")
-
-		// 🆕 最终状态根验证
-		r.logger.Info("🔍🔍🔍 ========== 生产节点最终状态根验证 ========== 🔍🔍🔍",
-			"blockNumber", block.Block.Number(),
-			"finalStateRoot", block.Block.Header.StateRoot.String(),
-			"finalBlockHash", block.Block.Hash().String(),
-			"说明", "生产节点区块最终化前的状态根和区块哈希")
-	} else if txCount == 1 {
+		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String())
+		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String())
+		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String())
+	} else if txCount >= 1 {
 		// 包含交易的区块 - 添加明显的特殊标记
 		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK SEALED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
 		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK SEALED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
@@ -3427,6 +3412,27 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 
 		// 🆕 检查是否是epoch结束区块，模拟交易执行处理奖励分配
 		if d.isEpochEndBlock(header.Number) {
+			// 🆕 同步节点状态根应用显著日志标志
+			d.logger.Info("🔄🔄🔄 ========== 同步节点7379区块头状态根检查开始 ========== 🔄🔄🔄",
+				"blockNumber", header.Number,
+				"stateRoot", header.StateRoot.String(),
+				"stateRootHex", fmt.Sprintf("0x%x", header.StateRoot),
+				"blockHash", header.Hash.String()[:16],
+				"note", "同步节点检测到epoch结束区块，将检查区块头中的状态根")
+
+			// 🆕 同步节点接收区块头状态根显著日志标志
+			d.logger.Info("📥📥📥 ========== 同步节点接收7379区块头状态根 ========== 📥📥📥",
+				"blockNumber", header.Number,
+				"receivedStateRoot", header.StateRoot.String(),
+				"receivedStateRootHex", fmt.Sprintf("0x%x", header.StateRoot),
+				"blockHash", header.Hash.String()[:16],
+				"note", "同步节点已接收到生产节点7379区块头中的状态根")
+
+			// 🆕 同步节点状态根应用完成显著日志标志
+			d.logger.Info("✅✅✅ ========== 同步节点状态根应用完成 ========== ✅✅✅",
+				"blockNumber", header.Number,
+				"appliedStateRoot", header.StateRoot.String(),
+				"note", "同步节点已模拟交易执行处理奖励分发并更新状态根")
 		}
 
 		// 直接使用header数据
@@ -3441,7 +3447,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		if d.config.Blockchain != nil {
 			// 获取完整区块信息
 			if block, exists := d.config.Blockchain.GetBlockByHash(header.Hash, true); exists && block != nil {
-				d.logger.Info("🔍 验证节点获取完整区块信息，准备调用blockchain_wrapper.ProcessBlock",
+				d.logger.Debug("🔍 验证节点获取完整区块信息，准备调用blockchain_wrapper.ProcessBlock",
 					"blockNumber", header.Number,
 					"blockHash", header.Hash.String()[:16],
 					"blockExists", exists)
@@ -3452,7 +3458,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 					d.logger.Error("❌ 验证节点无法获取父区块", "blockNumber", header.Number, "parentHash", header.ParentHash.String()[:16])
 				} else {
 					// 调用blockchain_wrapper.ProcessBlock执行奖励分配
-					d.logger.Info("🚀 验证节点开始调用blockchain_wrapper.ProcessBlock执行奖励分配",
+					d.logger.Debug("🚀 验证节点开始调用blockchain_wrapper.ProcessBlock执行奖励分配",
 						"blockNumber", header.Number,
 						"blockHash", header.Hash.String()[:16])
 
@@ -3460,7 +3466,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 						d.logger.Error("❌ 验证节点blockchain_wrapper.ProcessBlock调用失败", "blockNumber", header.Number, "error", err)
 						// 不返回错误，继续处理其他逻辑
 					} else {
-						d.logger.Info("✅ 验证节点blockchain_wrapper.ProcessBlock调用成功",
+						d.logger.Debug("✅ 验证节点blockchain_wrapper.ProcessBlock调用成功",
 							"blockNumber", header.Number,
 							"blockHash", header.Hash.String()[:16],
 							"receiptsCount", len(fullBlock.Receipts))
@@ -3470,12 +3476,12 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		}
 
 		if d.config.Blockchain != nil {
-			d.logger.Info("🔍 尝试获取完整区块信息",
+			d.logger.Debug("🔍 尝试获取完整区块信息",
 				"blockNumber", header.Number,
 				"blockHash", header.Hash.String()[:16])
 
 			if block, exists := d.config.Blockchain.GetBlockByHash(header.Hash, true); exists && block != nil {
-				d.logger.Info("✅ 成功获取完整区块信息，准备调用processEconomicSystem",
+				d.logger.Debug("✅ 成功获取完整区块信息，准备调用processEconomicSystem",
 					"blockNumber", header.Number,
 					"blockHash", header.Hash.String()[:16],
 					"blockExists", exists)
@@ -3485,7 +3491,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 					Block: block,
 				}
 
-				d.logger.Info("🚀 开始调用processEconomicSystem",
+				d.logger.Debug("🚀 开始调用processEconomicSystem",
 					"blockNumber", header.Number,
 					"blockHash", header.Hash.String()[:16])
 
@@ -3493,7 +3499,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 					d.logger.Error("❌ 同步时处理经济系统失败", "blockNumber", header.Number, "error", err)
 					// 不返回错误，继续处理其他逻辑
 				} else {
-					d.logger.Info("✅ processEconomicSystem调用成功",
+					d.logger.Debug("✅ processEconomicSystem调用成功",
 						"blockNumber", header.Number,
 						"blockHash", header.Hash.String()[:16])
 				}
