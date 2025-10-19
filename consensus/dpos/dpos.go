@@ -3405,7 +3405,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		d.logger.Debug("🔄 DPoS处理区块头部", "blockNumber", header.Number, "blockHash", header.Hash.String()[:16])
 
 		// 🆕 检查同步节点接收到的区块状态根
-		d.logger.Info("🔍 同步节点接收区块状态根检查",
+		d.logger.Debug("🔍 同步节点接收区块状态根检查",
 			"blockNumber", header.Number,
 			"stateRoot", header.StateRoot.String(),
 			"blockHash", header.Hash.String()[:16])

@@ -409,7 +409,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 	// 🆕 如果ExtraData中有CheckpointBlockHash，优先使用它
 	if i.CheckpointBlockHash != (types.Hash{}) {
 		realBlockHash = i.CheckpointBlockHash
-		logger.Info("🔍 ===== 验证时使用ExtraData中的CheckpointBlockHash =====",
+		logger.Debug("🔍 ===== 验证时使用ExtraData中的CheckpointBlockHash =====",
 			"blockNumber", blockNumber,
 			"checkpointBlockHash", realBlockHash.String(),
 			"headerHash", header.Hash.String(),
@@ -606,13 +606,13 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"checkpointHash", checkpointHash.String())
 
 	// 🆕 添加验证时checkpointHash结果显著日志
-	logger.Info("🔍 ===== 验证时CheckpointHash计算结果 =====",
+	logger.Debug("🔍 ===== 验证时CheckpointHash计算结果 =====",
 		"blockNumber", blockNumber,
 		"checkpointHash", checkpointHash.String(),
 		"说明", "验证时最终计算出的checkpointHash")
 
 	// 🆕 添加生产和验证CheckpointHash对比日志
-	logger.Info("🔍 ===== 生产vs验证CheckpointHash对比 =====",
+	logger.Debug("🔍 ===== 生产vs验证CheckpointHash对比 =====",
 		"blockNumber", blockNumber,
 		"生产时CheckpointHash", "请查看生产日志中的'奖励分发区块CheckpointHash计算结果'或'生产时CheckpointHash计算结果'",
 		"验证时CheckpointHash", checkpointHash.String(),
