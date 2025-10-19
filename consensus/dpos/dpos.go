@@ -880,7 +880,7 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 					}
 				} else {
 					// 不是当前委托者，静默跳过（避免刷屏）
-					r.logOnce("not_current_delegate_debug", "debug", "⏭️ 不是当前委托者，跳过区块生产",
+					r.logOnce("not_current_delegate_debug", "info", "⏭️ 不是当前委托者，跳过区块生产",
 						"currentDelegate", currentDelegate.String(),
 						"keyAddr", keyAddr.String(),
 						"currentDelegateIndex", r.currentDelegateIndex)
@@ -1486,7 +1486,7 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 			currentSlot := int(timeSinceGenesis / blockWindow)
 			r.currentDelegateIndex = uint64(currentSlot % int(r.config.DelegateCount))
 
-			r.logger.Debug("🔄 统一计算委托者索引（使用slot计算）",
+			r.logger.Info("🔄 统一计算委托者索引（使用slot计算）",
 				"blockNumber", currentBlockNumber,
 				"currentSlot", currentSlot,
 				"delegateCount", r.config.DelegateCount,
@@ -1496,7 +1496,7 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 		} else {
 			// 回退到区块号计算
 			r.currentDelegateIndex = currentBlockNumber % uint64(r.config.DelegateCount)
-			r.logger.Debug("🔄 统一计算委托者索引（回退到区块号）",
+			r.logger.Info("🔄 统一计算委托者索引（回退到区块号）",
 				"blockNumber", currentBlockNumber,
 				"delegateCount", r.config.DelegateCount,
 				"formula", fmt.Sprintf("%d%%%d=%d", currentBlockNumber, r.config.DelegateCount, r.currentDelegateIndex),
@@ -2179,6 +2179,9 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	}
 
 	// 构建区块
+	r.logger.Info("🔍 开始调用builder.Build", "timestamp", time.Now().Format("15:04:05.000"))
+	buildStart := time.Now()
+
 	block, err := builder.Build(func(h *types.Header) {
 		// 设置DPoS相关的区块头信息
 		h.Miner = keyAddr[:]
@@ -2273,7 +2276,13 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		r.logger.Error("❌ buildBlock: 区块构建失败", "error", err)
 		return nil, fmt.Errorf("failed to build block: %w", err)
 	}
-	r.logger.Info("✅ buildBlock: 区块构建成功", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String()[:16])
+
+	buildDuration := time.Since(buildStart)
+	r.logger.Info("✅ buildBlock: 区块构建成功",
+		"blockNumber", block.Block.Number(),
+		"blockHash", block.Block.Hash().String()[:16],
+		"buildDuration", buildDuration.String(),
+		"timestamp", time.Now().Format("15:04:05.000"))
 
 	// 等待收集其他验证者的签名
 	r.logger.Debug("waiting for validator signatures", "blockNumber", block.Block.Number())
@@ -11505,7 +11514,8 @@ func (d *DPoS) initializeEconomicSystem() error {
 	d.blockScheduler = NewBlockScheduler(
 		d.config.BlockTime.Duration,
 		int(d.config.DelegateCount),
-		d.config.Blockchain, // 传入区块链接口
+		d.config.Blockchain,            // 传入区块链接口（*blockchain.Blockchain实现了BlockchainInterface）
+		d.config.ConsensusSwitchHeight, // 传入共识切换高度
 		d.logger.Named("block_scheduler"),
 	)
 
@@ -11523,25 +11533,6 @@ func (d *DPoS) initializeEconomicSystem() error {
 		"voterRatio", d.config.VoterRewardRatio)
 
 	return nil
-}
-
-// 🆕 新增：获取创世时间
-func (d *DPoS) getGenesisTime() time.Time {
-	if d.config.Blockchain == nil {
-		d.logger.Warn("⚠️ 区块链接口不可用，使用当前时间作为创世时间")
-		return time.Now()
-	}
-
-	// 获取创世区块（区块号0）
-	genesisHeader, exists := d.config.Blockchain.GetHeaderByNumber(0)
-	if !exists {
-		d.logger.Warn("⚠️ 无法获取创世区块，使用当前时间作为创世时间")
-		return time.Now()
-	}
-
-	genesisTime := time.Unix(int64(genesisHeader.Timestamp), 0)
-	d.logger.Info("🔧 获取创世时间", "genesisTime", genesisTime.Format("2006-01-02 15:04:05"))
-	return genesisTime
 }
 
 // 🆕 新增：处理epoch切换回调

@@ -124,10 +124,20 @@ func (b *BlockBuilder) Build(handler func(h *types.Header)) (*types.FullBlock, e
 		handler(b.header)
 	}
 
+	// 添加调试日志：记录状态提交开始时间
+	commitStart := time.Now()
+	b.params.Logger.Info("🔍 开始状态提交", "timestamp", commitStart.Format("15:04:05.000"))
+
 	_, stateRoot, err := b.state.Commit()
 	if err != nil {
 		return nil, fmt.Errorf("failed to commit the state changes: %w", err)
 	}
+
+	// 添加调试日志：记录状态提交耗时
+	commitDuration := time.Since(commitStart)
+	b.params.Logger.Info("✅ 状态提交完成",
+		"duration", commitDuration.String(),
+		"timestamp", time.Now().Format("15:04:05.000"))
 
 	b.header.StateRoot = stateRoot
 	b.header.GasUsed = b.state.TotalGas()
@@ -168,31 +178,31 @@ func (b *BlockBuilder) WriteTx(tx *types.Transaction) error {
 
 // Fill fills the block with transactions from the txpool
 func (b *BlockBuilder) Fill() {
-	blockTimer := time.NewTimer(b.params.BlockTime)
+	// 🚀 优化：移除2秒定时器，立即处理所有可用交易
+	b.params.Logger.Info("🚀 开始快速填充交易（无延迟模式）", "timestamp", time.Now().Format("15:04:05.000"))
 
 	b.params.TxPool.Prepare()
-write:
+
+	// 立即处理所有可用交易，不等待定时器
 	for {
-		select {
-		case <-blockTimer.C:
+		tx := b.params.TxPool.Peek()
+		if tx == nil {
+			// 没有更多交易，立即返回
+			b.params.Logger.Info("✅ 交易填充完成（无更多交易）", "timestamp", time.Now().Format("15:04:05.000"))
 			return
-		default:
-			tx := b.params.TxPool.Peek()
+		}
 
-			// execute transactions one by one
-			finished, err := b.writeTxPoolTransaction(tx)
-			if err != nil {
-				b.params.Logger.Debug("Fill transaction error", "hash", tx.Hash, "err", err)
-			}
+		// execute transactions one by one
+		finished, err := b.writeTxPoolTransaction(tx)
+		if err != nil {
+			b.params.Logger.Debug("Fill transaction error", "hash", tx.Hash, "err", err)
+		}
 
-			if finished {
-				break write
-			}
+		if finished {
+			b.params.Logger.Info("✅ 交易填充完成（处理完毕）", "timestamp", time.Now().Format("15:04:05.000"))
+			return
 		}
 	}
-
-	//	wait for the timer to expire
-	<-blockTimer.C
 }
 
 // Receipts returns the collection of transaction receipts for given block

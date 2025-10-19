@@ -11,13 +11,14 @@ import (
 
 // BlockScheduler 固定时间窗口区块调度器（TRON模式）
 type BlockScheduler struct {
-	blockWindow    time.Duration       // 区块时间窗口（如2秒）
-	validatorCount int                 // 验证者数量
-	epochStartTime time.Time           // Epoch开始时间
-	currentEpoch   uint64              // 当前Epoch
-	blockchain     BlockchainInterface // 区块链接口
-	genesisTime    time.Time           // 创世时间（缓存）
-	lastLogTime    time.Time           // 上次打印日志的时间（防刷屏）
+	blockWindow           time.Duration       // 区块时间窗口（如2秒）
+	validatorCount        int                 // 验证者数量
+	epochStartTime        time.Time           // Epoch开始时间
+	currentEpoch          uint64              // 当前Epoch
+	blockchain            BlockchainInterface // 区块链接口
+	consensusSwitchHeight uint64              // 共识切换高度
+	genesisTime           time.Time           // 创世时间（缓存）
+	lastLogTime           time.Time           // 上次打印日志的时间（防刷屏）
 
 	mutex  sync.RWMutex
 	logger hclog.Logger
@@ -29,13 +30,14 @@ type BlockchainInterface interface {
 }
 
 // NewBlockScheduler 创建区块调度器
-func NewBlockScheduler(blockWindow time.Duration, validatorCount int, blockchain BlockchainInterface, logger hclog.Logger) *BlockScheduler {
+func NewBlockScheduler(blockWindow time.Duration, validatorCount int, blockchain BlockchainInterface, consensusSwitchHeight uint64, logger hclog.Logger) *BlockScheduler {
 	return &BlockScheduler{
-		blockWindow:    blockWindow,
-		validatorCount: validatorCount,
-		blockchain:     blockchain,
-		logger:         logger,
-		lastLogTime:    time.Now(),
+		blockWindow:           blockWindow,
+		validatorCount:        validatorCount,
+		blockchain:            blockchain,
+		consensusSwitchHeight: consensusSwitchHeight,
+		logger:                logger,
+		lastLogTime:           time.Now(),
 	}
 }
 
@@ -79,7 +81,12 @@ func (bs *BlockScheduler) ShouldProduceBlock(validatorIndex int, currentBlockNum
 	if bs.genesisTime.IsZero() {
 		genesisTime, err := bs.getGenesisTime()
 		if err != nil {
-			bs.logger.Error("无法获取创世时间", "error", err)
+			// 防刷屏：每30秒打印一次错误日志
+			now := time.Now()
+			if now.Sub(bs.lastLogTime) >= 30*time.Second {
+				bs.logger.Error("无法获取创世时间", "error", err)
+				bs.lastLogTime = now
+			}
 			return false
 		}
 		bs.genesisTime = genesisTime
@@ -99,7 +106,8 @@ func (bs *BlockScheduler) ShouldProduceBlock(validatorIndex int, currentBlockNum
 		"blockNumber", currentBlockNumber,
 		"currentSlot", currentSlot,
 		"validatorCount", bs.validatorCount,
-		"formula", fmt.Sprintf("slot %d %% %d = %d", currentSlot, bs.validatorCount, expectedIndex))
+		"formula", fmt.Sprintf("slot %d %% %d = %d", currentSlot, bs.validatorCount, expectedIndex),
+		"isMyTurn", validatorIndex == expectedIndex)
 
 	if validatorIndex != expectedIndex {
 		// 🆕 防刷屏：每10秒打印一次日志
@@ -124,7 +132,7 @@ func (bs *BlockScheduler) ShouldProduceBlock(validatorIndex int, currentBlockNum
 	nextBlockNumber := currentBlockNumber + 1
 
 	// 添加调试日志（控制频率，避免刷屏）
-	if now.Sub(bs.lastLogTime) >= 5*time.Second {
+	if now.Sub(bs.lastLogTime) >= 2*time.Second {
 		bs.logger.Info("🔍 时间计算调试",
 			"currentBlockNumber", currentBlockNumber,
 			"nextBlockNumber", nextBlockNumber,
@@ -136,7 +144,7 @@ func (bs *BlockScheduler) ShouldProduceBlock(validatorIndex int, currentBlockNum
 	expectedTime := bs.genesisTime.Add(time.Duration(nextBlockNumber) * bs.blockWindow)
 
 	// 添加调试日志（控制频率，避免刷屏）
-	if now.Sub(bs.lastLogTime) >= 5*time.Second {
+	if now.Sub(bs.lastLogTime) >= 2*time.Second {
 		bs.logger.Info("🔍 期望时间计算",
 			"nextBlockNumber", nextBlockNumber,
 			"expectedTime", expectedTime.Format("2006-01-02 15:04:05.000"),
@@ -147,7 +155,7 @@ func (bs *BlockScheduler) ShouldProduceBlock(validatorIndex int, currentBlockNum
 	// 4. 获取当前时间（now已在上面声明）
 
 	// 控制频率，避免刷屏
-	if now.Sub(bs.lastLogTime) >= 5*time.Second {
+	if now.Sub(bs.lastLogTime) >= 2*time.Second {
 		bs.logger.Info("🕐 TRON模式时间计算",
 			"validatorIndex", validatorIndex,
 			"currentBlockNumber", currentBlockNumber,
@@ -279,7 +287,12 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(validatorIndex int, currentBlock
 	if bs.genesisTime.IsZero() {
 		genesisTime, err := bs.getGenesisTime()
 		if err != nil {
-			bs.logger.Error("无法获取创世时间", "error", err)
+			// 防刷屏：每30秒打印一次错误日志
+			now := time.Now()
+			if now.Sub(bs.lastLogTime) >= 30*time.Second {
+				bs.logger.Error("无法获取创世时间", "error", err)
+				bs.lastLogTime = now
+			}
 			return false
 		}
 		bs.genesisTime = genesisTime
@@ -291,7 +304,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(validatorIndex int, currentBlock
 	timeSinceGenesis := now.Sub(bs.genesisTime)
 
 	// 添加调试日志（控制频率，避免刷屏）
-	if now.Sub(bs.lastLogTime) >= 5*time.Second {
+	if now.Sub(bs.lastLogTime) >= 2*time.Second {
 		bs.logger.Info("🔍 slot计算调试",
 			"now", now.Format("2006-01-02 15:04:05.000"),
 			"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
@@ -303,7 +316,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(validatorIndex int, currentBlock
 	currentSlot := int(timeSinceGenesis / bs.blockWindow)
 
 	// 添加调试日志（控制频率，避免刷屏）
-	if now.Sub(bs.lastLogTime) >= 5*time.Second {
+	if now.Sub(bs.lastLogTime) >= 2*time.Second {
 		bs.logger.Info("🔍 slot计算结果",
 			"currentSlot", currentSlot,
 			"expectedValidatorIndex", currentSlot%bs.validatorCount,
@@ -451,45 +464,32 @@ func (bs *BlockScheduler) getGenesisTime() (time.Time, error) {
 		return time.Time{}, fmt.Errorf("blockchain interface not available")
 	}
 
-	// 获取创世区块头（区块号0）
-	genesisHeader, exists := bs.blockchain.GetHeaderByNumber(0)
-	if !exists {
-		return time.Time{}, fmt.Errorf("genesis header not found")
-	}
+	// 使用共识切换高度-1的区块时间作为DPoS创世时间
+	if bs.consensusSwitchHeight > 0 {
+		preSwitchBlockNumber := bs.consensusSwitchHeight - 1
+		preSwitchHeader, exists := bs.blockchain.GetHeaderByNumber(preSwitchBlockNumber)
+		if exists && preSwitchHeader != nil {
+			preSwitchTime := time.Unix(int64(preSwitchHeader.Timestamp), 0)
 
-	// 从创世区块头中获取时间戳
-	genesisTime := time.Unix(int64(genesisHeader.Timestamp), 0)
+			// 从preSwitchTime开始，按照DPoS的区块间隔计算
+			dposGenesisTime := preSwitchTime.Add(bs.blockWindow)
 
-	// 如果创世时间戳为0（Unix epoch），使用当前时间作为参考点
-	if genesisHeader.Timestamp == 0 {
-		now := time.Now()
-		currentBlockNumber := bs.getCurrentBlockNumber()
+			bs.logger.Info("🔧 使用共识切换前区块作为DPoS创世时间",
+				"consensusSwitchHeight", bs.consensusSwitchHeight,
+				"preSwitchBlock", preSwitchBlockNumber,
+				"preSwitchTime", preSwitchTime.Format("2006-01-02 15:04:05.000"),
+				"dposGenesisTime", dposGenesisTime.Format("2006-01-02 15:04:05.000"),
+				"note", "DPoS时间计算基于共识切换前区块，确保时间连续性")
 
-		if currentBlockNumber > 0 {
-			// 计算虚拟创世时间：当前时间 - 当前区块号 * 区块间隔
-			virtualGenesisTime := now.Add(-time.Duration(currentBlockNumber) * bs.blockWindow)
-
-			// 添加调试日志
-			bs.logger.Info("🔧 虚拟创世时间计算",
-				"now", now.Format("2006-01-02 15:04:05.000"),
-				"currentBlockNumber", currentBlockNumber,
-				"blockWindow", bs.blockWindow.String(),
-				"virtualGenesisTime", virtualGenesisTime.Format("2006-01-02 15:04:05.000"),
-				"formula", fmt.Sprintf("now - %d * %s", currentBlockNumber, bs.blockWindow.String()))
-
-			return virtualGenesisTime, nil
+			return dposGenesisTime, nil
 		} else {
-			// 如果当前区块号也是0，使用当前时间
-			bs.logger.Info("🔧 使用当前时间作为创世时间")
-			return now, nil
+			// 共识切换前区块还未生成，返回错误
+			return time.Time{}, fmt.Errorf("consensus switch pre-block not found: %d", preSwitchBlockNumber)
 		}
 	}
 
-	bs.logger.Info("🔍 获取创世时间",
-		"genesisTime", genesisTime.Format("2006-01-02 15:04:05.000"),
-		"timestamp", genesisHeader.Timestamp)
-
-	return genesisTime, nil
+	// 如果没有设置共识切换高度，返回错误（不使用回退方案）
+	return time.Time{}, fmt.Errorf("consensus switch height not set")
 }
 
 // getCurrentBlockNumber 获取当前区块号
