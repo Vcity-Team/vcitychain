@@ -1473,15 +1473,36 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 	}
 
 	// 统一使用相同的计算公式
-	// 修复：使用 currentBlockNumber % delegateCount，计算当前区块的委托者
+	// 修复：使用slot计算，确保与BlockScheduler一致
 	if r.config != nil && r.config.DelegateCount > 0 {
-		r.currentDelegateIndex = currentBlockNumber % uint64(r.config.DelegateCount)
-		r.logger.Debug("🔄 统一计算委托者索引",
-			"blockNumber", currentBlockNumber,
-			"delegateCount", r.config.DelegateCount,
-			"formula", fmt.Sprintf("%d%%%d=%d", currentBlockNumber, r.config.DelegateCount, r.currentDelegateIndex),
-			"currentRound", r.currentRound,
-			"newDelegateIndex", r.currentDelegateIndex)
+		// 使用slot计算（与BlockScheduler保持一致）
+		if r.config.blockScheduler != nil {
+			// 获取当前时间
+			now := time.Now()
+			// 计算当前slot
+			genesisTime := r.config.blockScheduler.GetGenesisTime()
+			blockWindow := r.config.blockScheduler.GetBlockWindow()
+			timeSinceGenesis := now.Sub(genesisTime)
+			currentSlot := int(timeSinceGenesis / blockWindow)
+			r.currentDelegateIndex = uint64(currentSlot % int(r.config.DelegateCount))
+
+			r.logger.Debug("🔄 统一计算委托者索引（使用slot计算）",
+				"blockNumber", currentBlockNumber,
+				"currentSlot", currentSlot,
+				"delegateCount", r.config.DelegateCount,
+				"formula", fmt.Sprintf("slot %d %% %d = %d", currentSlot, r.config.DelegateCount, r.currentDelegateIndex),
+				"currentRound", r.currentRound,
+				"newDelegateIndex", r.currentDelegateIndex)
+		} else {
+			// 回退到区块号计算
+			r.currentDelegateIndex = currentBlockNumber % uint64(r.config.DelegateCount)
+			r.logger.Debug("🔄 统一计算委托者索引（回退到区块号）",
+				"blockNumber", currentBlockNumber,
+				"delegateCount", r.config.DelegateCount,
+				"formula", fmt.Sprintf("%d%%%d=%d", currentBlockNumber, r.config.DelegateCount, r.currentDelegateIndex),
+				"currentRound", r.currentRound,
+				"newDelegateIndex", r.currentDelegateIndex)
+		}
 	} else {
 		r.logger.Error("❌ 配置无效，无法计算委托者索引",
 			"config", r.config != nil,
@@ -1599,12 +1620,15 @@ func (r *dposRuntime) initializeDelegates() error {
 				"originalCount", len(r.delegates),
 				"configDelegateCount", r.config.DelegateCount)
 
-			// 按votingPower降序排序
+			// 按标准化规则排序，确保所有节点完全一致
 			sort.Slice(r.delegates, func(i, j int) bool {
-				if r.delegates[i].VotingPower.Cmp(r.delegates[j].VotingPower) == 0 {
-					return bytes.Compare(r.delegates[i].Address[:], r.delegates[j].Address[:]) < 0
+				// 1. 首先按票数降序排序
+				votingPowerCmp := r.delegates[i].VotingPower.Cmp(r.delegates[j].VotingPower)
+				if votingPowerCmp != 0 {
+					return votingPowerCmp > 0
 				}
-				return r.delegates[i].VotingPower.Cmp(r.delegates[j].VotingPower) > 0
+				// 2. 票数相同，按地址升序排序（确保完全一致）
+				return bytes.Compare(r.delegates[i].Address[:], r.delegates[j].Address[:]) < 0
 			})
 
 			// 截取前N个验证者
@@ -4232,10 +4256,9 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		vcity_dpos.config.VoterRewardRatio = 30
 	}
 
-	if vcity_dpos.config.BlockTime.Duration == 0 {
-		logger.Warn("⚠️ BlockTime为0，设置默认值2秒")
-		vcity_dpos.config.BlockTime = common.Duration{Duration: 2 * time.Second}
-	}
+	// 强制设置BlockTime为2秒，确保与配置一致
+	vcity_dpos.config.BlockTime = common.Duration{Duration: 2 * time.Second}
+	logger.Info("⏰ 强制设置DPoS区块时间为2秒", "duration", vcity_dpos.config.BlockTime.Duration.String())
 	vcity_dpos.config.Network = params.Network
 	vcity_dpos.config.Executor = params.Executor
 
@@ -4781,14 +4804,16 @@ func (d *DPoS) initializeDelegates() error {
 					"hasBlsKey", validator.BlsKey != nil)
 			}
 
-			// 🆕 修复：按票数降序排序，如果票数相同则按地址排序，确保顺序完全一致
-			d.logger.Debug("🔍 按票数降序排序数据库受托人...")
+			// 🆕 修复：使用标准化的排序规则，确保所有节点完全一致
+			d.logger.Debug("🔍 按标准化规则排序数据库受托人...")
 			sort.Slice(dbValidators, func(i, j int) bool {
-				if dbValidators[i].VotingPower.Cmp(dbValidators[j].VotingPower) == 0 {
-					// 票数相同，按地址排序（字节比较）
-					return bytes.Compare(dbValidators[i].Address[:], dbValidators[j].Address[:]) < 0
+				// 1. 首先按票数降序排序
+				votingPowerCmp := dbValidators[i].VotingPower.Cmp(dbValidators[j].VotingPower)
+				if votingPowerCmp != 0 {
+					return votingPowerCmp > 0
 				}
-				return dbValidators[i].VotingPower.Cmp(dbValidators[j].VotingPower) > 0
+				// 2. 票数相同，按地址升序排序（确保完全一致）
+				return bytes.Compare(dbValidators[i].Address[:], dbValidators[j].Address[:]) < 0
 			})
 
 			// 🆕 使用创世文件中的delegateCount配置，只取前N个票数最高的受托人
@@ -4978,14 +5003,16 @@ func (d *DPoS) loadValidatorsFromDatabaseWithLimit() error {
 			"hasBlsKey", validator.BlsKey != nil)
 	}
 
-	// 按VotingPower降序排序
-	d.logger.Debug("🔍 按voterpower降序排序验证者...")
+	// 按VotingPower降序排序（使用标准化规则）
+	d.logger.Debug("🔍 按标准化规则排序验证者...")
 	sort.Slice(dbValidators, func(i, j int) bool {
-		if dbValidators[i].VotingPower.Cmp(dbValidators[j].VotingPower) == 0 {
-			// 票数相同，按地址排序
-			return bytes.Compare(dbValidators[i].Address[:], dbValidators[j].Address[:]) < 0
+		// 1. 首先按票数降序排序
+		votingPowerCmp := dbValidators[i].VotingPower.Cmp(dbValidators[j].VotingPower)
+		if votingPowerCmp != 0 {
+			return votingPowerCmp > 0
 		}
-		return dbValidators[i].VotingPower.Cmp(dbValidators[j].VotingPower) > 0
+		// 2. 票数相同，按地址升序排序（确保完全一致）
+		return bytes.Compare(dbValidators[i].Address[:], dbValidators[j].Address[:]) < 0
 	})
 
 	// 根据配置文件限制数量
@@ -6319,13 +6346,15 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 	if d.pendingValidatorUpdate {
 		d.logger.Info("🔄 轮次边界：重新排序验证者集合")
 
-		// 按票数降序排序，如果票数相同则按地址排序
+		// 按标准化规则排序，确保所有节点完全一致
 		sort.Slice(d.delegates, func(i, j int) bool {
-			if d.delegates[i].VotingPower.Cmp(d.delegates[j].VotingPower) == 0 {
-				// 票数相同，按地址排序（字节比较）
-				return bytes.Compare(d.delegates[i].Address[:], d.delegates[j].Address[:]) < 0
+			// 1. 首先按票数降序排序
+			votingPowerCmp := d.delegates[i].VotingPower.Cmp(d.delegates[j].VotingPower)
+			if votingPowerCmp != 0 {
+				return votingPowerCmp > 0
 			}
-			return d.delegates[i].VotingPower.Cmp(d.delegates[j].VotingPower) > 0
+			// 2. 票数相同，按地址升序排序（确保完全一致）
+			return bytes.Compare(d.delegates[i].Address[:], d.delegates[j].Address[:]) < 0
 		})
 
 		d.logger.Info("✅ 轮次边界：验证者集合重新排序完成")
@@ -11479,6 +11508,12 @@ func (d *DPoS) initializeEconomicSystem() error {
 		d.config.Blockchain, // 传入区块链接口
 		d.logger.Named("block_scheduler"),
 	)
+
+	// 添加调试日志
+	d.logger.Info("🔧 BlockScheduler初始化",
+		"blockWindow", d.config.BlockTime.Duration.String(),
+		"delegateCount", d.config.DelegateCount,
+		"blockchain", d.config.Blockchain != nil)
 
 	d.logger.Info("✅ DPoS经济系统组件初始化完成",
 		"epochDuration", d.config.EpochDuration.String(),

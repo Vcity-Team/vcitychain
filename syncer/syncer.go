@@ -251,7 +251,9 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 
 	// 添加日志控制变量
 	lastNoPeerLogTime := time.Time{}
-	noPeerLogInterval := 30 * time.Second // 30秒打印一次
+	lastStatusUpdateLogTime := time.Time{}
+	noPeerLogInterval := 30 * time.Second      // 30秒打印一次
+	statusUpdateLogInterval := 5 * time.Second // 5秒打印一次
 
 	for {
 		// Wait for a new event to arrive
@@ -262,9 +264,9 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			localLatest = header.Number
 			// 减少"同步器状态更新"日志的打印频率
 			now := time.Now()
-			if now.Sub(lastNoPeerLogTime) > 10*time.Second {
+			if now.Sub(lastStatusUpdateLogTime) > statusUpdateLogInterval {
 				s.logger.Debug("同步器状态更新", "localLatest", localLatest)
-				lastNoPeerLogTime = now
+				lastStatusUpdateLogTime = now
 			}
 		}
 

@@ -35,7 +35,18 @@ func NewBlockScheduler(blockWindow time.Duration, validatorCount int, blockchain
 		validatorCount: validatorCount,
 		blockchain:     blockchain,
 		logger:         logger,
+		lastLogTime:    time.Now(),
 	}
+}
+
+// GetGenesisTime 获取创世时间
+func (bs *BlockScheduler) GetGenesisTime() time.Time {
+	return bs.genesisTime
+}
+
+// GetBlockWindow 获取区块窗口时间
+func (bs *BlockScheduler) GetBlockWindow() time.Duration {
+	return bs.blockWindow
 }
 
 // StartNewEpoch 开始新的Epoch
@@ -75,14 +86,20 @@ func (bs *BlockScheduler) ShouldProduceBlock(validatorIndex int, currentBlockNum
 		bs.logger.Info("🔧 获取创世时间", "genesisTime", genesisTime.Format("2006-01-02 15:04:05.000"))
 	}
 
-	// 2. 检查是否是该验证者的轮次
-	expectedIndex := int(currentBlockNumber) % bs.validatorCount
-	bs.logger.Info("🔍 检查验证者轮次",
+	// 2. 检查是否是该验证者的轮次（修复：使用slot计算而不是区块号）
+	// 计算当前slot
+	now := time.Now()
+	timeSinceGenesis := now.Sub(bs.genesisTime)
+	currentSlot := int(timeSinceGenesis / bs.blockWindow)
+	expectedIndex := currentSlot % bs.validatorCount
+
+	bs.logger.Info("🔍 检查验证者轮次（修复版）",
 		"validatorIndex", validatorIndex,
 		"expectedIndex", expectedIndex,
 		"blockNumber", currentBlockNumber,
+		"currentSlot", currentSlot,
 		"validatorCount", bs.validatorCount,
-		"formula", fmt.Sprintf("%d%%%d=%d", currentBlockNumber, bs.validatorCount, expectedIndex))
+		"formula", fmt.Sprintf("slot %d %% %d = %d", currentSlot, bs.validatorCount, expectedIndex))
 
 	if validatorIndex != expectedIndex {
 		// 🆕 防刷屏：每10秒打印一次日志
@@ -105,21 +122,44 @@ func (bs *BlockScheduler) ShouldProduceBlock(validatorIndex int, currentBlockNum
 
 	// 3. 计算下一个区块的期望时间（TRON模式）
 	nextBlockNumber := currentBlockNumber + 1
+
+	// 添加调试日志（控制频率，避免刷屏）
+	if now.Sub(bs.lastLogTime) >= 5*time.Second {
+		bs.logger.Info("🔍 时间计算调试",
+			"currentBlockNumber", currentBlockNumber,
+			"nextBlockNumber", nextBlockNumber,
+			"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
+			"blockWindow", bs.blockWindow.String())
+		bs.lastLogTime = now
+	}
+
 	expectedTime := bs.genesisTime.Add(time.Duration(nextBlockNumber) * bs.blockWindow)
 
-	// 4. 获取当前时间
-	now := time.Now()
+	// 添加调试日志（控制频率，避免刷屏）
+	if now.Sub(bs.lastLogTime) >= 5*time.Second {
+		bs.logger.Info("🔍 期望时间计算",
+			"nextBlockNumber", nextBlockNumber,
+			"expectedTime", expectedTime.Format("2006-01-02 15:04:05.000"),
+			"formula", fmt.Sprintf("genesisTime + %d * %s", nextBlockNumber, bs.blockWindow.String()))
+		bs.lastLogTime = now
+	}
 
-	bs.logger.Info("🕐 TRON模式时间计算",
-		"validatorIndex", validatorIndex,
-		"currentBlockNumber", currentBlockNumber,
-		"nextBlockNumber", nextBlockNumber,
-		"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
-		"expectedTime", expectedTime.Format("2006-01-02 15:04:05.000"),
-		"now", now.Format("2006-01-02 15:04:05.000"),
-		"timeDiff", now.Sub(expectedTime).String(),
-		"formula", fmt.Sprintf("genesisTime + nextBlockNumber * blockWindow = %s + %d * %s",
-			bs.genesisTime.Format("15:04:05.000"), nextBlockNumber, bs.blockWindow.String()))
+	// 4. 获取当前时间（now已在上面声明）
+
+	// 控制频率，避免刷屏
+	if now.Sub(bs.lastLogTime) >= 5*time.Second {
+		bs.logger.Info("🕐 TRON模式时间计算",
+			"validatorIndex", validatorIndex,
+			"currentBlockNumber", currentBlockNumber,
+			"nextBlockNumber", nextBlockNumber,
+			"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
+			"expectedTime", expectedTime.Format("2006-01-02 15:04:05.000"),
+			"now", now.Format("2006-01-02 15:04:05.000"),
+			"timeDiff", now.Sub(expectedTime).String(),
+			"formula", fmt.Sprintf("genesisTime + nextBlockNumber * blockWindow = %s + %d * %s",
+				bs.genesisTime.Format("15:04:05.000"), nextBlockNumber, bs.blockWindow.String()))
+		bs.lastLogTime = now
+	}
 
 	// 5. 如果当前时间已经过了期望时间，计算下一个时间窗口
 	if now.After(expectedTime) {
@@ -249,7 +289,27 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(validatorIndex int, currentBlock
 
 	// 2. 计算当前slot（TRON方式）
 	timeSinceGenesis := now.Sub(bs.genesisTime)
+
+	// 添加调试日志（控制频率，避免刷屏）
+	if now.Sub(bs.lastLogTime) >= 5*time.Second {
+		bs.logger.Info("🔍 slot计算调试",
+			"now", now.Format("2006-01-02 15:04:05.000"),
+			"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
+			"timeSinceGenesis", timeSinceGenesis.String(),
+			"blockWindow", bs.blockWindow.String())
+		bs.lastLogTime = now
+	}
+
 	currentSlot := int(timeSinceGenesis / bs.blockWindow)
+
+	// 添加调试日志（控制频率，避免刷屏）
+	if now.Sub(bs.lastLogTime) >= 5*time.Second {
+		bs.logger.Info("🔍 slot计算结果",
+			"currentSlot", currentSlot,
+			"expectedValidatorIndex", currentSlot%bs.validatorCount,
+			"validatorIndex", validatorIndex)
+		bs.lastLogTime = now
+	}
 
 	// 3. 计算当前应该出块的验证者
 	expectedValidatorIndex := currentSlot % bs.validatorCount
@@ -408,11 +468,15 @@ func (bs *BlockScheduler) getGenesisTime() (time.Time, error) {
 		if currentBlockNumber > 0 {
 			// 计算虚拟创世时间：当前时间 - 当前区块号 * 区块间隔
 			virtualGenesisTime := now.Add(-time.Duration(currentBlockNumber) * bs.blockWindow)
-			bs.logger.Info("🔧 使用虚拟创世时间",
-				"virtualGenesisTime", virtualGenesisTime.Format("2006-01-02 15:04:05.000"),
+
+			// 添加调试日志
+			bs.logger.Info("🔧 虚拟创世时间计算",
+				"now", now.Format("2006-01-02 15:04:05.000"),
 				"currentBlockNumber", currentBlockNumber,
 				"blockWindow", bs.blockWindow.String(),
-				"now", now.Format("2006-01-02 15:04:05.000"))
+				"virtualGenesisTime", virtualGenesisTime.Format("2006-01-02 15:04:05.000"),
+				"formula", fmt.Sprintf("now - %d * %s", currentBlockNumber, bs.blockWindow.String()))
+
 			return virtualGenesisTime, nil
 		} else {
 			// 如果当前区块号也是0，使用当前时间
