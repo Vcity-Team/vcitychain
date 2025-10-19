@@ -3427,27 +3427,6 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 
 		// 🆕 检查是否是epoch结束区块，模拟交易执行处理奖励分配
 		if d.isEpochEndBlock(header.Number) {
-			// 🆕 同步节点状态根应用显著日志标志
-			d.logger.Info("🔄🔄🔄 ========== 同步节点7379区块头状态根检查开始 ========== 🔄🔄🔄",
-				"blockNumber", header.Number,
-				"stateRoot", header.StateRoot.String(),
-				"stateRootHex", fmt.Sprintf("0x%x", header.StateRoot),
-				"blockHash", header.Hash.String()[:16],
-				"note", "同步节点检测到epoch结束区块，将检查区块头中的状态根")
-
-			// 🆕 同步节点接收区块头状态根显著日志标志
-			d.logger.Info("📥📥📥 ========== 同步节点接收7379区块头状态根 ========== 📥📥📥",
-				"blockNumber", header.Number,
-				"receivedStateRoot", header.StateRoot.String(),
-				"receivedStateRootHex", fmt.Sprintf("0x%x", header.StateRoot),
-				"blockHash", header.Hash.String()[:16],
-				"note", "同步节点已接收到生产节点7379区块头中的状态根")
-
-			// 🆕 同步节点状态根应用完成显著日志标志
-			d.logger.Info("✅✅✅ ========== 同步节点状态根应用完成 ========== ✅✅✅",
-				"blockNumber", header.Number,
-				"appliedStateRoot", header.StateRoot.String(),
-				"note", "同步节点已模拟交易执行处理奖励分发并更新状态根")
 		}
 
 		// 直接使用header数据
