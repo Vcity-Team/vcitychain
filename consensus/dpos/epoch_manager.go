@@ -11,12 +11,13 @@ import (
 
 // TimeBasedEpochManager 基于区块高度的Epoch管理器
 type TimeBasedEpochManager struct {
-	rewardAccount types.Address
-	rewardAmount  *big.Int
-	epochDuration time.Duration // 添加epochDuration字段
-	mutex         sync.RWMutex
-	logger        hclog.Logger
-	callback      func(uint64) error
+	rewardAccount         types.Address
+	rewardAmount          *big.Int
+	epochDuration         time.Duration // 添加epochDuration字段
+	consensusSwitchHeight uint64        // 添加共识切换高度字段
+	mutex                 sync.RWMutex
+	logger                hclog.Logger
+	callback              func(uint64) error
 
 	// 🆕 新增：区块链引用，用于基于区块高度计算Epoch
 	blockchain interface{} // 区块链接口，用于获取当前区块号
@@ -27,13 +28,15 @@ func NewTimeBasedEpochManager(
 	epochDuration time.Duration,
 	rewardAccount types.Address,
 	rewardAmount *big.Int,
+	consensusSwitchHeight uint64,
 	logger hclog.Logger,
 ) *TimeBasedEpochManager {
 	return &TimeBasedEpochManager{
-		rewardAccount: rewardAccount,
-		rewardAmount:  rewardAmount,
-		epochDuration: epochDuration,
-		logger:        logger,
+		rewardAccount:         rewardAccount,
+		rewardAmount:          rewardAmount,
+		epochDuration:         epochDuration,
+		consensusSwitchHeight: consensusSwitchHeight,
+		logger:                logger,
 	}
 }
 
@@ -42,12 +45,29 @@ func (tem *TimeBasedEpochManager) GetCurrentEpoch(blockNumber uint64) uint64 {
 	tem.mutex.RLock()
 	defer tem.mutex.RUnlock()
 
-	// 🆕 修改：基于传入的区块高度计算Epoch
+	// 🆕 修改：基于传入的区块高度计算Epoch，考虑共识切换高度
 	epochSize := tem.getEpochSize()
-	blockBasedEpoch := (blockNumber / epochSize) + 1
+	consensusSwitchHeight := tem.consensusSwitchHeight
+
+	// 从共识切换高度开始计算epoch
+	if blockNumber < consensusSwitchHeight {
+		// 在共识切换之前，epoch为0
+		tem.logger.Debug("🔍 基于区块高度计算Epoch（共识切换前）",
+			"blockNumber", blockNumber,
+			"consensusSwitchHeight", consensusSwitchHeight,
+			"epochSize", epochSize,
+			"blockBasedEpoch", 0)
+		return 0
+	}
+
+	// 计算DPoS epoch：从共识切换高度开始
+	dposBlockNumber := blockNumber - consensusSwitchHeight
+	blockBasedEpoch := (dposBlockNumber / epochSize) + 1
 
 	tem.logger.Debug("🔍 基于区块高度计算Epoch",
 		"blockNumber", blockNumber,
+		"consensusSwitchHeight", consensusSwitchHeight,
+		"dposBlockNumber", dposBlockNumber,
 		"epochSize", epochSize,
 		"blockBasedEpoch", blockBasedEpoch)
 

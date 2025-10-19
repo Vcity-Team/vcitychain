@@ -11439,6 +11439,7 @@ func (d *DPoS) initializeEconomicSystem() error {
 		d.config.EpochDuration,
 		d.config.RewardAccount,
 		d.config.RewardAmount,
+		d.config.ConsensusSwitchHeight,
 		d.logger.Named("epoch_manager"),
 	)
 
