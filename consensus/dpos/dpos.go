@@ -1845,11 +1845,41 @@ func (r *dposRuntime) getEpochForBlock(blockNumber uint64) *epochMetadata {
 
 	// 计算epoch信息
 	epochSize := r.getEpochSize()
-	currentEpochNumber := (targetBlockNumber / epochSize) + 1
-	firstBlockInEpoch := (currentEpochNumber - 1) * epochSize
+
+	// 获取共识切换高度
+	consensusSwitchHeight := uint64(0)
+	if dposInstance.config != nil {
+		consensusSwitchHeight = dposInstance.config.ConsensusSwitchHeight
+	}
+
+	// 从共识切换高度开始计算epoch
+	if targetBlockNumber < consensusSwitchHeight {
+		// 在共识切换之前，epoch为0
+		currentEpochNumber := uint64(0)
+		firstBlockInEpoch := uint64(0)
+
+		r.logger.Debug("🔍 基于区块号计算epoch信息（共识切换前）",
+			"targetBlockNumber", targetBlockNumber,
+			"consensusSwitchHeight", consensusSwitchHeight,
+			"epochSize", epochSize,
+			"currentEpochNumber", currentEpochNumber,
+			"firstBlockInEpoch", firstBlockInEpoch)
+
+		return &epochMetadata{
+			Number:            currentEpochNumber,
+			FirstBlockInEpoch: firstBlockInEpoch,
+		}
+	}
+
+	// 计算DPoS epoch：从共识切换高度开始
+	dposBlockNumber := targetBlockNumber - consensusSwitchHeight
+	currentEpochNumber := (dposBlockNumber / epochSize) + 1
+	firstBlockInEpoch := consensusSwitchHeight + (currentEpochNumber-1)*epochSize
 
 	r.logger.Debug("🔍 基于区块号计算epoch信息",
 		"targetBlockNumber", targetBlockNumber,
+		"consensusSwitchHeight", consensusSwitchHeight,
+		"dposBlockNumber", dposBlockNumber,
 		"epochSize", epochSize,
 		"currentEpochNumber", currentEpochNumber,
 		"firstBlockInEpoch", firstBlockInEpoch)
@@ -3581,11 +3611,41 @@ func (d *DPoS) getEpochForBlock(blockNumber uint64) *epochMetadata {
 
 	// 计算epoch信息
 	epochSize := d.getEpochSize()
-	currentEpochNumber := (targetBlockNumber / epochSize) + 1
-	firstBlockInEpoch := (currentEpochNumber - 1) * epochSize
+
+	// 获取共识切换高度
+	consensusSwitchHeight := uint64(0)
+	if d.config != nil {
+		consensusSwitchHeight = d.config.ConsensusSwitchHeight
+	}
+
+	// 从共识切换高度开始计算epoch
+	if targetBlockNumber < consensusSwitchHeight {
+		// 在共识切换之前，epoch为0
+		currentEpochNumber := uint64(0)
+		firstBlockInEpoch := uint64(0)
+
+		d.logger.Debug("🔍 基于区块号计算epoch信息（共识切换前）",
+			"targetBlockNumber", targetBlockNumber,
+			"consensusSwitchHeight", consensusSwitchHeight,
+			"epochSize", epochSize,
+			"currentEpochNumber", currentEpochNumber,
+			"firstBlockInEpoch", firstBlockInEpoch)
+
+		return &epochMetadata{
+			Number:            currentEpochNumber,
+			FirstBlockInEpoch: firstBlockInEpoch,
+		}
+	}
+
+	// 计算DPoS epoch：从共识切换高度开始
+	dposBlockNumber := targetBlockNumber - consensusSwitchHeight
+	currentEpochNumber := (dposBlockNumber / epochSize) + 1
+	firstBlockInEpoch := consensusSwitchHeight + (currentEpochNumber-1)*epochSize
 
 	d.logger.Debug("🔍 基于区块号计算epoch信息",
 		"targetBlockNumber", targetBlockNumber,
+		"consensusSwitchHeight", consensusSwitchHeight,
+		"dposBlockNumber", dposBlockNumber,
 		"epochSize", epochSize,
 		"currentEpochNumber", currentEpochNumber,
 		"firstBlockInEpoch", firstBlockInEpoch)
@@ -4294,6 +4354,7 @@ func (d *DPoS) Initialize() error {
 		executor:   d.config.Executor,
 		keyAddr:    types.Address(d.key.Address()), // 设置当前节点的地址
 		config:     d.config,                       // 传递DPoS配置
+		logger:     d.logger,                       // 传递logger
 	}
 
 	// 🆕 将blockchain_wrapper设置为blockchain的executor，以启用奖励分配功能

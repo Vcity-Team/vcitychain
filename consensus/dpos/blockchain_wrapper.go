@@ -91,6 +91,7 @@ type blockchainWrapper struct {
 	blockchain *blockchain.Blockchain
 	keyAddr    types.Address // 当前节点的地址
 	config     *DPoSConfig   // 添加DPoS配置引用
+	logger     hclog.Logger  // 添加logger字段
 }
 
 // CurrentHeader returns the header of blockchain block head
@@ -122,20 +123,37 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 		}
 	}
 
-	// 🆕 检查是否是生产节点自己生产的区块
-	blockMiner := types.BytesToAddress(header.Miner)
-	keyAddr := p.keyAddr
-	isOurBlock := blockMiner == keyAddr
-
 	isEpochEnd := p.isEpochEndBlock(block.Number())
 
-	// 🆕 如果是epoch结束区块且不是生产节点自己生产的区块，处理奖励分发
-	if isEpochEnd && !isOurBlock {
+	// 🆕 添加详细的奖励分配跟踪日志
+	p.logger.Debug("🔍🔍🔍 ========== blockchain_wrapper.ProcessBlockExecutor 奖励分配检查 ========== 🔍🔍🔍",
+		"blockNumber", block.Number(),
+		"blockHash", block.Hash().String()[:16],
+		"blockCreator", blockCreator.String(),
+		"isEpochEnd", isEpochEnd)
+
+	// 🆕 如果是epoch结束区块，处理奖励分发
+	if isEpochEnd {
+		p.logger.Debug("🎯🎯🎯 ========== 开始执行奖励分配 ========== 🎯🎯🎯",
+			"blockNumber", block.Number(),
+			"blockHash", block.Hash().String()[:16],
+			"blockCreator", blockCreator.String())
 
 		if err := p.processRewardDistributionInBlock(block, transition); err != nil {
+			p.logger.Error("❌❌❌ ========== 奖励分配执行失败 ========== ❌❌❌",
+				"blockNumber", block.Number(),
+				"blockHash", block.Hash().String()[:16],
+				"error", err)
 			return nil, fmt.Errorf("failed to process reward distribution: %w", err)
 		}
 
+		p.logger.Debug("✅✅✅ ========== 奖励分配执行成功 ========== ✅✅✅",
+			"blockNumber", block.Number(),
+			"blockHash", block.Hash().String()[:16])
+	} else {
+		p.logger.Debug("ℹ️ 不是epoch结束区块，跳过奖励分配",
+			"blockNumber", block.Number(),
+			"isEpochEnd", isEpochEnd)
 	}
 
 	updateBlockExecutionMetric(start)
@@ -145,7 +163,6 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 
 // ProcessBlock builds a final block from given 'block' on top of 'parent'
 func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Block) (*types.FullBlock, error) {
-
 	header := block.Header.Copy()
 	start := time.Now().UTC()
 
@@ -161,20 +178,41 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 		}
 	}
 
-	// 🆕 检查是否是生产节点自己生产的区块
-	blockMiner := types.BytesToAddress(header.Miner)
-	keyAddr := p.keyAddr
-	isOurBlock := blockMiner == keyAddr
-
 	isEpochEnd := p.isEpochEndBlock(block.Number())
 
+	// 🆕 添加详细的奖励分配跟踪日志
+	p.logger.Debug("🔍🔍🔍 ========== blockchain_wrapper.ProcessBlock 奖励分配检查 ========== 🔍🔍🔍",
+		"blockNumber", block.Number(),
+		"blockHash", block.Hash().String()[:16],
+		"isEpochEnd", isEpochEnd)
+
 	// 🆕 如果是epoch结束区块且不是生产节点自己生产的区块，处理奖励分发
-	if isEpochEnd && !isOurBlock {
+	if isEpochEnd {
+		p.logger.Debug("🎯🎯🎯 ========== 开始执行奖励分配 ========== 🎯🎯🎯",
+			"blockNumber", block.Number(),
+			"blockHash", block.Hash().String()[:16])
 
 		if err := p.processRewardDistributionInBlock(block, transition); err != nil {
+			p.logger.Error("❌❌❌ ========== 奖励分配执行失败 ========== ❌❌❌",
+				"blockNumber", block.Number(),
+				"blockHash", block.Hash().String()[:16],
+				"error", err)
 			return nil, fmt.Errorf("failed to process reward distribution: %w", err)
 		}
 
+		p.logger.Debug("✅✅✅ ========== 奖励分配执行成功 ========== ✅✅✅",
+			"blockNumber", block.Number(),
+			"blockHash", block.Hash().String()[:16])
+	} else {
+		p.logger.Debug("ℹ️ 跳过奖励分配",
+			"blockNumber", block.Number(),
+			"isEpochEnd", isEpochEnd,
+			"reason", func() string {
+				if !isEpochEnd {
+					return "不是epoch结束区块"
+				}
+				return "未知原因"
+			}())
 	}
 
 	_, root, err := transition.Commit()
@@ -255,18 +293,37 @@ func (p *blockchainWrapper) getEpochSize() uint64 {
 // processRewardDistributionInBlock 在区块执行时处理奖励分发
 func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block, transition *state.Transition) error {
 
+	p.logger.Debug("🔍🔍🔍 ========== processRewardDistributionInBlock 开始 ========== 🔍🔍🔍",
+		"blockNumber", block.Number(),
+		"blockHash", block.Hash().String()[:16],
+		"extraDataLength", len(block.Header.ExtraData))
+
 	// 解析ExtraData获取奖励分发信息
 	extra := &Extra{}
 	if err := extra.UnmarshalRLP(block.Header.ExtraData); err != nil {
+		p.logger.Error("❌ 解析ExtraData失败",
+			"blockNumber", block.Number(),
+			"error", err,
+			"extraDataLength", len(block.Header.ExtraData))
 		return fmt.Errorf("failed to unmarshal extra data: %w", err)
 	}
 
+	p.logger.Debug("✅ ExtraData解析成功",
+		"blockNumber", block.Number(),
+		"hasRewardDistribution", extra.RewardDistribution != nil)
+
 	if extra.RewardDistribution == nil {
 		// 没有奖励分发信息，跳过
+		p.logger.Debug("ℹ️ 没有奖励分发信息，跳过",
+			"blockNumber", block.Number())
 		return nil
 	}
 
 	rewardInfo := extra.RewardDistribution
+
+	p.logger.Debug("🎯 开始处理奖励分发",
+		"blockNumber", block.Number(),
+		"rewardCount", len(rewardInfo.Rewards))
 
 	// 处理奖励分发（直接修改状态，符合TRON主流做法）
 
@@ -275,20 +332,41 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 
 	// 计算总奖励金额
 	totalReward := new(big.Int)
-	for _, amount := range rewardInfo.Rewards {
+	for addrStr, amount := range rewardInfo.Rewards {
 		totalReward.Add(totalReward, amount)
+		p.logger.Debug("💰 奖励详情",
+			"blockNumber", block.Number(),
+			"validator", addrStr,
+			"amount", amount.String())
 	}
+
+	p.logger.Debug("💰 总奖励计算完成",
+		"blockNumber", block.Number(),
+		"totalReward", totalReward.String(),
+		"rewardAccount", rewardAccount.String())
 
 	// 检查奖励账户余额是否足够
 	currentBalance := transition.GetBalance(rewardAccount)
 
+	p.logger.Debug("💳 检查奖励账户余额",
+		"blockNumber", block.Number(),
+		"currentBalance", currentBalance.String(),
+		"requiredAmount", totalReward.String())
+
 	if currentBalance.Cmp(totalReward) < 0 {
+		p.logger.Error("❌ 奖励账户余额不足",
+			"blockNumber", block.Number(),
+			"currentBalance", currentBalance.String(),
+			"requiredAmount", totalReward.String())
 		return fmt.Errorf("insufficient balance in reward account: current=%s, required=%s",
 			currentBalance.String(), totalReward.String())
 	}
 
 	// 从奖励账户扣除总奖励
 	transition.Txn().SubBalance(rewardAccount, totalReward)
+	p.logger.Debug("✅ 从奖励账户扣除总奖励",
+		"blockNumber", block.Number(),
+		"amount", totalReward.String())
 
 	// 直接给每个验证者增加余额（不消耗gas，符合TRON做法）
 	for addrStr, amount := range rewardInfo.Rewards {
@@ -296,7 +374,16 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 
 		// 直接修改状态，不通过Transfer
 		transition.Txn().AddBalance(addr, amount)
+		p.logger.Debug("✅ 给验证者增加余额",
+			"blockNumber", block.Number(),
+			"validator", addrStr,
+			"amount", amount.String())
 	}
+
+	p.logger.Debug("✅✅✅ ========== processRewardDistributionInBlock 完成 ========== ✅✅✅",
+		"blockNumber", block.Number(),
+		"totalReward", totalReward.String(),
+		"rewardCount", len(rewardInfo.Rewards))
 
 	return nil
 }
