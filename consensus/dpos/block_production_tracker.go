@@ -22,11 +22,14 @@ type BlockProductionTracker struct {
 	epochStartBlock uint64
 	mutex           sync.RWMutex
 	logger          hclog.Logger
+
+	// 🆕 新增：数据库存储
+	store *BlockTrackerStore
 }
 
 // NewBlockProductionTracker 创建出块统计管理器
-func NewBlockProductionTracker(logger hclog.Logger) *BlockProductionTracker {
-	return &BlockProductionTracker{
+func NewBlockProductionTracker(logger hclog.Logger, store *BlockTrackerStore) *BlockProductionTracker {
+	tracker := &BlockProductionTracker{
 		currentEpochBlocks: make(map[types.Address]uint64),
 		epochBlocksHistory: make(map[uint64]map[types.Address]uint64),
 
@@ -35,6 +38,51 @@ func NewBlockProductionTracker(logger hclog.Logger) *BlockProductionTracker {
 		epochBlockTimesHistory: make(map[uint64]map[types.Address][]time.Time),
 
 		logger: logger,
+		store:  store, // 🆕 新增：设置数据库存储
+	}
+
+	// 🆕 从数据库加载历史数据
+	tracker.loadFromDB()
+
+	return tracker
+}
+
+// loadFromDB 从数据库加载历史数据
+func (bpt *BlockProductionTracker) loadFromDB() {
+	if bpt.store == nil {
+		bpt.logger.Warn("BlockTrackerStore is nil, skipping database load")
+		return
+	}
+
+	allBlocks, err := bpt.store.LoadAllEpochBlocks()
+	if err != nil {
+		bpt.logger.Error("Failed to load block data from database", "error", err)
+		return
+	}
+
+	bpt.mutex.Lock()
+	defer bpt.mutex.Unlock()
+
+	// 加载历史数据
+	for epochNumber, blockCounts := range allBlocks {
+		bpt.epochBlocksHistory[epochNumber] = blockCounts
+	}
+
+	bpt.logger.Info("Loaded block data from database", "epochs", len(allBlocks))
+}
+
+// saveEpochToDB 保存epoch数据到数据库
+func (bpt *BlockProductionTracker) saveEpochToDB(epochNumber uint64, blockCounts map[types.Address]uint64) {
+	if bpt.store == nil {
+		bpt.logger.Warn("BlockTrackerStore is nil, skipping database save")
+		return
+	}
+
+	err := bpt.store.SaveEpochBlocks(epochNumber, blockCounts)
+	if err != nil {
+		bpt.logger.Error("Failed to save block data to database", "epoch", epochNumber, "error", err)
+	} else {
+		bpt.logger.Debug("Saved block data to database", "epoch", epochNumber)
 	}
 }
 
@@ -62,6 +110,9 @@ func (bpt *BlockProductionTracker) RecordBlockProduction(
 			for addr, times := range bpt.currentEpochBlockTimes {
 				bpt.epochBlockTimesHistory[bpt.currentEpoch][addr] = times
 			}
+
+			// 🆕 保存到数据库
+			bpt.saveEpochToDB(bpt.currentEpoch, bpt.epochBlocksHistory[bpt.currentEpoch])
 		}
 
 		// 开始新epoch
@@ -111,6 +162,17 @@ func (bpt *BlockProductionTracker) GetEpochBlockCounts(epochNumber uint64) map[t
 			result[addr] = count
 		}
 		return result
+	}
+
+	// 🆕 如果内存中没有，尝试从数据库加载
+	if bpt.store != nil {
+		dbBlocks, err := bpt.store.LoadEpochBlocks(epochNumber)
+		if err == nil && len(dbBlocks) > 0 {
+			// 将数据库数据加载到内存
+			bpt.epochBlocksHistory[epochNumber] = dbBlocks
+			bpt.logger.Debug("Loaded epoch blocks from database", "epoch", epochNumber)
+			return dbBlocks
+		}
 	}
 
 	return make(map[types.Address]uint64)

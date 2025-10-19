@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/helper/common"
+	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
 	bolt "go.etcd.io/bbolt"
 )
@@ -49,7 +50,8 @@ type State struct {
 	ProposerSnapshotStore *ProposerSnapshotStore
 	StakeStore            *StakeStore
 	ValidatorStore        *ValidatorStore
-	RewardStore           *RewardStore // 🆕 新增奖励记录存储
+	RewardStore           *RewardStore       // 🆕 新增奖励记录存储
+	BlockTrackerStore     *BlockTrackerStore // 🆕 新增出块统计存储
 }
 
 // RewardRecordExtended 扩展的奖励记录结构，用于数据库存储
@@ -69,6 +71,101 @@ type RewardRecordExtended struct {
 // RewardStore 奖励记录存储
 type RewardStore struct {
 	db *bolt.DB
+}
+
+// BlockTrackerStore 出块统计存储
+type BlockTrackerStore struct {
+	db *bolt.DB
+}
+
+// initialize 初始化出块统计存储
+func (bts *BlockTrackerStore) initialize(tx *bolt.Tx) error {
+	_, err := tx.CreateBucketIfNotExists([]byte("blockTracker"))
+	return err
+}
+
+// SaveEpochBlocks 保存epoch出块统计
+func (bts *BlockTrackerStore) SaveEpochBlocks(epochNumber uint64, blockCounts map[types.Address]uint64) error {
+	return bts.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("blockTracker"))
+		if bucket == nil {
+			return fmt.Errorf("blockTracker bucket not found")
+		}
+
+		// 将map序列化为JSON
+		data, err := json.Marshal(blockCounts)
+		if err != nil {
+			return fmt.Errorf("failed to marshal block counts: %w", err)
+		}
+
+		// 使用epochNumber作为key
+		key := fmt.Sprintf("epoch_%d", epochNumber)
+		return bucket.Put([]byte(key), data)
+	})
+}
+
+// LoadEpochBlocks 加载epoch出块统计
+func (bts *BlockTrackerStore) LoadEpochBlocks(epochNumber uint64) (map[types.Address]uint64, error) {
+	var blockCounts map[types.Address]uint64
+
+	err := bts.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("blockTracker"))
+		if bucket == nil {
+			return fmt.Errorf("blockTracker bucket not found")
+		}
+
+		key := fmt.Sprintf("epoch_%d", epochNumber)
+		data := bucket.Get([]byte(key))
+		if data == nil {
+			// 没有找到数据，返回空map
+			blockCounts = make(map[types.Address]uint64)
+			return nil
+		}
+
+		// 反序列化JSON
+		err := json.Unmarshal(data, &blockCounts)
+		if err != nil {
+			return fmt.Errorf("failed to unmarshal block counts: %w", err)
+		}
+
+		return nil
+	})
+
+	return blockCounts, err
+}
+
+// LoadAllEpochBlocks 加载所有epoch的出块统计
+func (bts *BlockTrackerStore) LoadAllEpochBlocks() (map[uint64]map[types.Address]uint64, error) {
+	allBlocks := make(map[uint64]map[types.Address]uint64)
+
+	err := bts.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("blockTracker"))
+		if bucket == nil {
+			return fmt.Errorf("blockTracker bucket not found")
+		}
+
+		return bucket.ForEach(func(k, v []byte) error {
+			key := string(k)
+			if len(key) > 6 && key[:6] == "epoch_" {
+				// 解析epochNumber
+				var epochNumber uint64
+				if _, err := fmt.Sscanf(key, "epoch_%d", &epochNumber); err != nil {
+					return err
+				}
+
+				// 反序列化数据
+				var blockCounts map[types.Address]uint64
+				if err := json.Unmarshal(v, &blockCounts); err != nil {
+					return err
+				}
+
+				allBlocks[epochNumber] = blockCounts
+			}
+			return nil
+		})
+	})
+
+	return allBlocks, err
 }
 
 // newState creates new instance of State
@@ -97,6 +194,7 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 		StakeStore:            &StakeStore{db: db},
 		ValidatorStore:        &ValidatorStore{db: db},
 		RewardStore:           &RewardStore{db: rewardDB}, // 🆕 使用独立数据库
+		BlockTrackerStore:     &BlockTrackerStore{db: db}, // 🆕 使用主数据库
 	}
 
 	if err = s.initStorages(); err != nil {
@@ -133,6 +231,9 @@ func (s *State) initStorages() error {
 			return err
 		}
 		if err := s.ValidatorStore.initialize(tx); err != nil {
+			return err
+		}
+		if err := s.BlockTrackerStore.initialize(tx); err != nil {
 			return err
 		}
 

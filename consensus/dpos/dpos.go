@@ -11545,6 +11545,7 @@ func (d *DPoS) initializeEconomicSystem() error {
 	// 2. 初始化出块统计管理器
 	d.blockTracker = NewBlockProductionTracker(
 		d.logger.Named("block_tracker"),
+		d.state.BlockTrackerStore, // 🆕 传递数据库存储
 	)
 
 	// 3. 初始化TRON模式奖励分发器
@@ -12541,11 +12542,30 @@ func (d *DPoS) GetValidatorBlockStats(validatorAddress types.Address, epochNumbe
 
 // GetValidatorRewardsInfo 获取验证者奖励信息
 func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumber uint64) map[string]interface{} {
+	// 🆕 添加方法开始的调试日志
+	d.logger.Debug("🔍 GetValidatorRewardsInfo开始",
+		"validatorAddress", validatorAddress.String(),
+		"epochNumber", epochNumber)
+
 	if d.rewardDistributor == nil {
+		d.logger.Debug("❌ rewardDistributor为nil")
 		return map[string]interface{}{
 			"error": "reward distributor not initialized",
 		}
 	}
+
+	// 🆕 添加配置值的调试日志
+	d.logger.Debug("🔍 DPoS配置值调试",
+		"RewardAmount", func() string {
+			if d.config.RewardAmount != nil {
+				return d.config.RewardAmount.String()
+			}
+			return "nil"
+		}(),
+		"EpochDuration", d.config.EpochDuration.String(),
+		"BlockTime", d.config.BlockTime.Duration.String(),
+		"ValidatorRewardRatio", d.config.ValidatorRewardRatio,
+		"VoterRewardRatio", d.config.VoterRewardRatio)
 
 	// 从真实状态获取奖励账户余额
 	rewardAccountBalance, err := d.getAccountBalance(d.config.RewardAccount)
@@ -12568,6 +12588,13 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 	blocksProduced := blockCounts[validatorAddress]
 	totalBlocks := d.blockTracker.GetTotalEpochBlocks(epochNumber)
 
+	// 🆕 添加出块统计的调试日志
+	d.logger.Debug("🔍 出块统计调试信息",
+		"epochNumber", epochNumber,
+		"blockCounts", blockCounts,
+		"blocksProduced", blocksProduced,
+		"totalBlocks", totalBlocks)
+
 	// 🆕 使用固定时间窗口计算奖励
 	validatorReward := "0"
 	voterReward := "0"
@@ -12576,6 +12603,12 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 	actualReward := "0"
 	var validatorRewardBig *big.Int
 	var voterRewardBig *big.Int
+
+	// 🆕 添加条件判断的调试日志
+	d.logger.Debug("🔍 奖励计算条件检查",
+		"RewardAmountIsNil", d.config.RewardAmount == nil,
+		"blocksProduced", blocksProduced,
+		"willEnterRewardCalculation", d.config.RewardAmount != nil && blocksProduced > 0)
 
 	if d.config.RewardAmount != nil && blocksProduced > 0 {
 		// 🆕 基于固定时间窗口的奖励计算
@@ -12666,6 +12699,18 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 		requiredAmount := new(big.Int).Set(d.config.RewardAmount)
 		insufficientFunds = rewardAccountBalance.Cmp(requiredAmount) < 0
 	}
+
+	// 🆕 添加最终结果的调试日志
+	d.logger.Debug("🔍 GetValidatorRewardsInfo最终结果",
+		"validatorAddress", validatorAddress.String(),
+		"epochNumber", epochNumber,
+		"validatorReward", validatorReward,
+		"voterReward", voterReward,
+		"totalReward", totalReward,
+		"actualReward", actualReward,
+		"blocksProduced", blocksProduced,
+		"totalEpochBlocks", totalBlocks,
+		"rewardPerBlock", rewardPerBlock)
 
 	return map[string]interface{}{
 		"validatorAddress":     validatorAddress.String(),
