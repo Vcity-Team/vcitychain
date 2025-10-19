@@ -231,6 +231,9 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		closeCh: make(chan struct{}),
 	}
 
+	// 添加调试日志
+	fmt.Printf("🔍 IBFT构造函数: params.BlockTime = %d, blockTime = %v\n", params.BlockTime, p.blockTime)
+
 	// Istanbul requires a different header hash function
 	p.SetHeaderHash()
 

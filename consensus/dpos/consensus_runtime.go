@@ -16,6 +16,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/wallet"
 	"github.com/Vcity-Team/vcitychain/contracts"
+	"github.com/Vcity-Team/vcitychain/helper/common"
 	"github.com/Vcity-Team/vcitychain/txrelayer"
 	"github.com/Vcity-Team/vcitychain/types"
 	bolt "go.etcd.io/bbolt"
@@ -87,7 +88,8 @@ type runtimeConfig struct {
 	// DPoS specific configuration
 	DelegateCount    uint64
 	InitialDelegates []*validator.GenesisValidator
-	ValidatorsCount  uint64 // 🆕 新增：DPoS验证者数量配置
+	ValidatorsCount  uint64          // 🆕 新增：DPoS验证者数量配置
+	BlockTime        common.Duration // 🆕 新增：区块时间配置
 
 	// 🆕 固定时间窗口调度器
 	blockScheduler *BlockScheduler

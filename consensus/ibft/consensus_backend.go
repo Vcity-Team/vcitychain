@@ -266,12 +266,17 @@ func (i *backendIBFT) calcHeaderTimestamp(parentUnix uint64, currentTime time.Ti
 		potentialTimestamp = parentTimestamp.Add(i.blockTime)
 	)
 
+	// 添加调试日志
+	fmt.Printf("🔍 calcHeaderTimestamp: parentUnix=%d, parentTimestamp=%v, blockTime=%v, potentialTimestamp=%v, currentTime=%v\n", 
+		parentUnix, parentTimestamp, i.blockTime, potentialTimestamp, currentTime)
+
 	if potentialTimestamp.Before(currentTime) {
 		// The deadline for creating this next block
 		// has passed, round it to the nearest
 		// multiple of block time
 		// t........t+blockT...x (t+blockT.x; now).....t+blockT (potential)
 		potentialTimestamp = roundUpTime(currentTime, i.blockTime)
+		fmt.Printf("🔍 calcHeaderTimestamp: 使用roundUpTime, new potentialTimestamp=%v\n", potentialTimestamp)
 	}
 
 	return potentialTimestamp

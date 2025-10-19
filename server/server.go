@@ -108,10 +108,20 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		"consensusSwitchHeight": float64(s.config.ConsensusSwitchHeight),
 		"dposValidatorsCount":   float64(s.config.DPoSValidatorsCount), // 使用正确的字段名
 		"dposDelegateThreshold": s.config.DPoSDelegateThreshold,
-		"blockTime":             "2s", // 设置默认区块时间为2秒
 	}
 
-	// 🆕 新增：添加DPoS经济系统配置
+	// 从YAML配置中获取区块时间
+	s.logger.Info("🔍 检查BlockTimeSeconds配置", "value", s.config.BlockTimeSeconds)
+	if blockTimeSeconds := s.config.BlockTimeSeconds; blockTimeSeconds > 0 {
+		blockTimeDuration := time.Duration(blockTimeSeconds) * time.Second
+		engineConfig["blockTime"] = blockTimeDuration.String()
+		s.logger.Info("⏰ 设置区块时间", "seconds", blockTimeSeconds, "duration", blockTimeDuration.String())
+	} else {
+		// 设置默认值
+		engineConfig["blockTime"] = "2s"
+		s.logger.Info("⏰ 使用默认区块时间", "duration", "2s")
+	}
+
 	// 从YAML配置中获取epoch duration
 	if epochDurationStr := s.config.DPoSEpochDuration; epochDurationStr != "" {
 		if epochDuration, err := time.ParseDuration(epochDurationStr); err == nil {
@@ -809,16 +819,23 @@ func extractBlockTime(engineConfig map[string]interface{}) (common.Duration, err
 		return common.Duration{}, errBlockTimeMissing
 	}
 
+	// 添加调试日志
+	fmt.Printf("🔍 extractBlockTime: blockTimeGeneric = %v (type: %T)\n", blockTimeGeneric, blockTimeGeneric)
+
 	blockTimeRaw, err := json.Marshal(blockTimeGeneric)
 	if err != nil {
 		return common.Duration{}, errBlockTimeInvalid
 	}
+
+	fmt.Printf("🔍 extractBlockTime: blockTimeRaw = %s\n", string(blockTimeRaw))
 
 	var blockTime common.Duration
 
 	if err := json.Unmarshal(blockTimeRaw, &blockTime); err != nil {
 		return common.Duration{}, errBlockTimeInvalid
 	}
+
+	fmt.Printf("🔍 extractBlockTime: parsed blockTime = %v (seconds: %f)\n", blockTime.Duration, blockTime.Seconds())
 
 	if blockTime.Seconds() < 1 {
 		return common.Duration{}, errBlockTimeInvalid

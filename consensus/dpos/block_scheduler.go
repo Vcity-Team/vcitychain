@@ -58,7 +58,7 @@ func (bs *BlockScheduler) ShouldProduceBlock(validatorIndex int, currentBlockNum
 	bs.mutex.RLock()
 	defer bs.mutex.RUnlock()
 
-	bs.logger.Info("🚀 开始检查出块资格（TRON模式）",
+	bs.logger.Debug("🚀 开始检查出块资格（TRON模式）",
 		"validatorIndex", validatorIndex,
 		"currentBlockNumber", currentBlockNumber,
 		"validatorCount", bs.validatorCount,

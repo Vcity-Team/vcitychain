@@ -40,19 +40,20 @@ type Config struct {
 	WebSocketReadLimit      uint64 `json:"web_socket_read_limit" yaml:"web_socket_read_limit"`
 
 	MetricsInterval time.Duration `json:"metrics_interval" yaml:"metrics_interval"`
-	
+
 	// 🆕 新增：DPoS验证者数量配置
 	DPoSValidatorsCount uint64 `json:"dpos_validators_count" yaml:"dpos_validators_count"`
-	
+
 	// 🆕 新增：DPoS最小质押门槛配置
 	DPoSDelegateThreshold string `json:"dpos_delegate_threshold" yaml:"dpos_delegate_threshold"`
-	
+
 	// 🆕 新增：DPoS经济系统配置
 	DPoSEpochDuration        string `json:"dpos_epoch_duration" yaml:"dpos_epoch_duration"`
-	DPoSRewardDistribution   string `json:"dpos_reward_distribution" yaml:"dpos_reward_distribution"`    // 奖励分发地址
-	DPoSRewardAmount         string `json:"dpos_reward_amount" yaml:"dpos_reward_amount"`                // 每个epoch奖励金额
+	DPoSRewardDistribution   string `json:"dpos_reward_distribution" yaml:"dpos_reward_distribution"`       // 奖励分发地址
+	DPoSRewardAmount         string `json:"dpos_reward_amount" yaml:"dpos_reward_amount"`                   // 每个epoch奖励金额
 	DPoSValidatorRewardRatio uint64 `json:"dpos_validator_reward_ratio" yaml:"dpos_validator_reward_ratio"` // 验证者奖励比例
-	DPoSVoterRewardRatio     uint64 `json:"dpos_voter_reward_ratio" yaml:"dpos_voter_reward_ratio"`     // 投票者奖励比例
+	DPoSVoterRewardRatio     uint64 `json:"dpos_voter_reward_ratio" yaml:"dpos_voter_reward_ratio"`         // 投票者奖励比例
+	BlockTimeSeconds         uint64 `json:"block_time_s" yaml:"block_time_s"`                               // 区块间隔时间（秒）
 }
 
 // Telemetry holds the config details for metric services.
@@ -150,19 +151,20 @@ func DefaultConfig() *Config {
 		ConcurrentRequestsDebug:  DefaultConcurrentRequestsDebug,
 		WebSocketReadLimit:       DefaultWebSocketReadLimit,
 		MetricsInterval:          DefaultMetricsInterval,
-		
+
 		// 🆕 新增：DPoS验证者数量默认值
 		DPoSValidatorsCount: 4, // 默认4个验证者
-		
+
 		// 🆕 新增：DPoS最小质押门槛默认值
 		DPoSDelegateThreshold: "1000000000000000000000", // 默认1000 VCITY
-		
+
 		// 🆕 新增：DPoS经济系统默认值
-		DPoSEpochDuration:        "24h",                                                      // 默认24小时一个epoch
-		DPoSRewardDistribution:   "",                                                         // 默认空，需要配置
-		DPoSRewardAmount:         "1000000000000000000000",                                   // 默认1000 VCITY
-		DPoSValidatorRewardRatio: 70,                                                         // 默认70%
-		DPoSVoterRewardRatio:     30,                                                         // 默认30%
+		DPoSEpochDuration:        "24h",                    // 默认24小时一个epoch
+		DPoSRewardDistribution:   "",                       // 默认空，需要配置
+		DPoSRewardAmount:         "1000000000000000000000", // 默认1000 VCITY
+		DPoSValidatorRewardRatio: 70,                       // 默认70%
+		DPoSVoterRewardRatio:     30,                       // 默认30%
+		BlockTimeSeconds:         2,                        // 默认2秒一个区块
 	}
 }
 
