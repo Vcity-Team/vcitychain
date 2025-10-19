@@ -1288,7 +1288,7 @@ func (r *dposRuntime) produceBlock() error {
 		return fmt.Errorf("failed to commit block: %w", err)
 	}
 
-	r.logger.Info("✅ DPoS区块提交成功",
+	r.logger.Debug("✅ DPoS区块提交成功",
 		"blockNumber", block.Block.Number(),
 		"blockHash", block.Block.Hash().String()[:16],
 		"txs", len(block.Block.Transactions),
@@ -1298,7 +1298,7 @@ func (r *dposRuntime) produceBlock() error {
 		"delegate", r.config.Key.Address().String()[:16])
 
 	// 添加事件触发日志跟踪
-	r.logger.Info("🔔 区块提交完成，等待区块链事件触发状态广播", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
+	r.logger.Debug("🔔 区块提交完成，等待区块链事件触发状态广播", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
 
 	// 注意：历史验证者集合已在签名聚合完成后保存，无需重复保存
 
@@ -2283,18 +2283,9 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 	// 🆕 保存初始区块哈希到extra中，用于CheckpointHash计算
 	extra.CheckpointBlockHash = realBlockHash
-	r.logger.Info("🔍 ===== 生产时保存CheckpointBlockHash =====",
-		"blockNumber", block.Block.Number(),
-		"checkpointBlockHash", realBlockHash.String(),
-		"说明", "生产时保存用于CheckpointHash计算的初始区块哈希到ExtraData")
 
 	// 🆕 重新设置ExtraData，确保CheckpointBlockHash被包含
 	block.Block.Header.ExtraData = extra.MarshalRLPTo(nil)
-	r.logger.Info("🔍 ===== 重新设置ExtraData包含CheckpointBlockHash =====",
-		"blockNumber", block.Block.Number(),
-		"extraDataLength", len(block.Block.Header.ExtraData),
-		"checkpointBlockHash", realBlockHash.String(),
-		"说明", "重新设置ExtraData确保CheckpointBlockHash被包含")
 
 	r.logger.Debug("🔍 生产时开始计算checkpoint哈希",
 		"blockNumber", block.Block.Number(),
@@ -2332,12 +2323,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		r.logger.Error("failed to calculate checkpoint hash", "error", err)
 		return nil, fmt.Errorf("failed to calculate checkpoint hash: %w", err)
 	}
-
-	// 🆕 添加生产时checkpointHash结果显著日志
-	r.logger.Info("🔍 ===== 生产时CheckpointHash计算结果 =====",
-		"blockNumber", block.Block.Number(),
-		"checkpointHash", checkpointHash.String(),
-		"说明", "生产时最终计算出的checkpointHash")
 
 	// 确保checkpointHash不为全零
 	if checkpointHash == (types.Hash{}) {
@@ -2741,7 +2726,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		}
 
 		// 🆕 记录重新计算区块哈希前的状态根
-		r.logger.Info("🔍 重新计算区块哈希前的状态根",
+		r.logger.Debug("🔍 重新计算区块哈希前的状态根",
 			"blockNumber", block.Block.Number(),
 			"stateRoot", block.Block.Header.StateRoot.String(),
 			"说明", "在ComputeHash()之前记录状态根")
@@ -2750,7 +2735,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		block.Block.Header.ComputeHash()
 
 		// 🆕 记录重新计算区块哈希后的状态根
-		r.logger.Info("🔍 重新计算区块哈希后的状态根",
+		r.logger.Debug("🔍 重新计算区块哈希后的状态根",
 			"blockNumber", block.Block.Number(),
 			"stateRoot", block.Block.Header.StateRoot.String(),
 			"说明", "在ComputeHash()之后记录状态根")
@@ -2759,7 +2744,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		globalNewStateRootMutex.Lock()
 		globalNewStateRoot = types.Hash{}
 		globalNewStateRootMutex.Unlock()
-		r.logger.Info("🧹 签名聚合完成后清理全局状态根", "blockNumber", block.Block.Number())
+		r.logger.Debug("🧹 签名聚合完成后清理全局状态根", "blockNumber", block.Block.Number())
 
 		r.logger.Debug("区块签名更新完成",
 			"blockNumber", block.Block.Number(),
@@ -3412,21 +3397,6 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 
 		// 🆕 检查是否是epoch结束区块，模拟交易执行处理奖励分配
 		if d.isEpochEndBlock(header.Number) {
-			// 🆕 同步节点状态根应用显著日志标志
-			d.logger.Info("🔄🔄🔄 ========== 同步节点7379区块头状态根检查开始 ========== 🔄🔄🔄",
-				"blockNumber", header.Number,
-				"stateRoot", header.StateRoot.String(),
-				"stateRootHex", fmt.Sprintf("0x%x", header.StateRoot),
-				"blockHash", header.Hash.String()[:16],
-				"note", "同步节点检测到epoch结束区块，将检查区块头中的状态根")
-
-			// 🆕 同步节点接收区块头状态根显著日志标志
-			d.logger.Info("📥📥📥 ========== 同步节点接收7379区块头状态根 ========== 📥📥📥",
-				"blockNumber", header.Number,
-				"receivedStateRoot", header.StateRoot.String(),
-				"receivedStateRootHex", fmt.Sprintf("0x%x", header.StateRoot),
-				"blockHash", header.Hash.String()[:16],
-				"note", "同步节点已接收到生产节点7379区块头中的状态根")
 
 			// 🆕 同步节点状态根应用完成显著日志标志
 			d.logger.Info("✅✅✅ ========== 同步节点状态根应用完成 ========== ✅✅✅",
@@ -8269,8 +8239,6 @@ func (r *dposRuntime) broadcastSignatureRequest(protoRequest *dposProto.Signatur
 	}
 
 	// 发布签名请求
-	actualTopicName := topic.GetActualProtoID()
-	r.logger.Info("🚀 开始广播签名请求", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String(), "原始名称", "dpos-signature-request", "实际名称", actualTopicName)
 	if err := topic.Publish(dposMsg); err != nil {
 		r.logger.Warn("failed to publish signature request, using fallback", "error", err)
 		// 回退到日志记录
@@ -8280,8 +8248,6 @@ func (r *dposRuntime) broadcastSignatureRequest(protoRequest *dposProto.Signatur
 		//	"round", protoRequest.Round)
 		return nil
 	}
-
-	r.logger.Info("成功广播签名请求", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String())
 
 	// 启动基于时间的简单备用传播监控
 	go r.simpleFallbackMonitoring(protoRequest, checkpointHash)
