@@ -90,6 +90,7 @@ type blockchainWrapper struct {
 	executor   *state.Executor
 	blockchain *blockchain.Blockchain
 	keyAddr    types.Address // 当前节点的地址
+	config     *DPoSConfig   // 添加DPoS配置引用
 }
 
 // CurrentHeader returns the header of blockchain block head
@@ -207,8 +208,8 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 
 // isEpochEndBlock 检查是否是epoch结束区块
 func (p *blockchainWrapper) isEpochEndBlock(blockNumber uint64) bool {
-	// 使用与其他地方一致的epoch大小
-	epochSize := uint64(10)
+	// 使用配置计算epoch大小
+	epochSize := p.getEpochSize()
 
 	// 计算当前epoch的第一个区块号
 	// 例如：区块7379属于epoch 738，第一个区块是7370
@@ -219,6 +220,36 @@ func (p *blockchainWrapper) isEpochEndBlock(blockNumber uint64) bool {
 	isEpochEnd := firstBlockInEpoch+epochSize-1 == blockNumber
 
 	return isEpochEnd
+}
+
+// getEpochSize 根据配置计算epoch大小（区块数）
+func (p *blockchainWrapper) getEpochSize() uint64 {
+	if p.config == nil {
+		// 如果配置为空，使用默认值：10秒 / 2秒 = 5个区块
+		epochDuration := 10 * time.Second
+		blockTime := 2 * time.Second
+
+		epochSize := uint64(epochDuration / blockTime)
+		if epochSize == 0 {
+			epochSize = 1 // 至少1个区块
+		}
+		return epochSize
+	}
+
+	// 使用配置文件中的值
+	epochDuration := p.config.EpochDuration
+	blockTime := p.config.BlockTime.Duration
+
+	if blockTime == 0 {
+		blockTime = 2 * time.Second // 默认区块时间
+	}
+
+	epochSize := uint64(epochDuration / blockTime)
+	if epochSize == 0 {
+		epochSize = 1 // 至少1个区块
+	}
+
+	return epochSize
 }
 
 // processRewardDistributionInBlock 在区块执行时处理奖励分发

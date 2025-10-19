@@ -13,6 +13,7 @@ import (
 type TimeBasedEpochManager struct {
 	rewardAccount types.Address
 	rewardAmount  *big.Int
+	epochDuration time.Duration // 添加epochDuration字段
 	mutex         sync.RWMutex
 	logger        hclog.Logger
 	callback      func(uint64) error
@@ -31,6 +32,7 @@ func NewTimeBasedEpochManager(
 	return &TimeBasedEpochManager{
 		rewardAccount: rewardAccount,
 		rewardAmount:  rewardAmount,
+		epochDuration: epochDuration,
 		logger:        logger,
 	}
 }
@@ -41,7 +43,7 @@ func (tem *TimeBasedEpochManager) GetCurrentEpoch(blockNumber uint64) uint64 {
 	defer tem.mutex.RUnlock()
 
 	// 🆕 修改：基于传入的区块高度计算Epoch
-	epochSize := uint64(10) // 每个epoch有10个区块
+	epochSize := tem.getEpochSize()
 	blockBasedEpoch := (blockNumber / epochSize) + 1
 
 	tem.logger.Debug("🔍 基于区块高度计算Epoch",
@@ -50,6 +52,20 @@ func (tem *TimeBasedEpochManager) GetCurrentEpoch(blockNumber uint64) uint64 {
 		"blockBasedEpoch", blockBasedEpoch)
 
 	return blockBasedEpoch
+}
+
+// getEpochSize 根据配置计算epoch大小（区块数）
+func (tem *TimeBasedEpochManager) getEpochSize() uint64 {
+	// 使用配置的epochDuration和默认的blockTime
+	epochDuration := tem.epochDuration
+	blockTime := 2 * time.Second // 默认区块时间，应该从配置中获取
+
+	epochSize := uint64(epochDuration / blockTime)
+	if epochSize == 0 {
+		epochSize = 1 // 至少1个区块
+	}
+
+	return epochSize
 }
 
 // 🆕 新增：设置区块链引用
@@ -74,7 +90,7 @@ func (tem *TimeBasedEpochManager) TriggerEpochSwitch(blockNumber uint64) {
 	defer tem.mutex.Unlock()
 
 	// 基于区块高度计算Epoch
-	epochSize := uint64(10)
+	epochSize := tem.getEpochSize()
 	currentEpoch := (blockNumber / epochSize) + 1
 
 	tem.logger.Info("⏰ ========== 基于区块高度触发新Epoch ==========",
@@ -97,7 +113,7 @@ func (tem *TimeBasedEpochManager) GetEpochInfo(blockNumber uint64) (uint64, time
 	defer tem.mutex.RUnlock()
 
 	// 🆕 修改：基于传入的区块高度获取Epoch信息
-	epochSize := uint64(10)
+	epochSize := tem.getEpochSize()
 	currentEpoch := (blockNumber / epochSize) + 1
 	firstBlockInEpoch := (currentEpoch - 1) * epochSize
 

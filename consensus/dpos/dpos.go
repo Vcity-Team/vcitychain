@@ -1347,7 +1347,8 @@ func (r *dposRuntime) produceBlock() error {
 	// 🆕 关键修复：在区块最终化前确保状态根正确（针对epoch结束区块）
 	// 检查是否是epoch结束区块
 	blockNumber := block.Block.Number()
-	epochSize := uint64(10) // 假设epoch大小为10
+	// 使用配置计算epoch大小
+	epochSize := r.getEpochSize()
 	isEpochEndBlock := (blockNumber+1)%epochSize == 0
 
 	if isEpochEndBlock {
@@ -1791,11 +1792,8 @@ func (r *dposRuntime) isEpochEndBlock(blockNumber uint64) bool {
 	}
 
 	// 检查是否是epoch的最后一个区块
-	// 使用与consensus_runtime.go中相同的逻辑
-	epochSize := uint64(10) // 默认epoch大小，可以从配置中获取
-	if r.config != nil && r.config.PolyBFTConfig != nil {
-		epochSize = r.config.PolyBFTConfig.EpochSize
-	}
+	// 使用配置计算epoch大小
+	epochSize := r.getEpochSize()
 
 	isEpochEnd := currentEpoch.FirstBlockInEpoch+epochSize-1 == blockNumber
 
@@ -1846,7 +1844,7 @@ func (r *dposRuntime) getEpochForBlock(blockNumber uint64) *epochMetadata {
 	}
 
 	// 计算epoch信息
-	epochSize := uint64(10) // 每个epoch有10个区块
+	epochSize := r.getEpochSize()
 	currentEpochNumber := (targetBlockNumber / epochSize) + 1
 	firstBlockInEpoch := (currentEpochNumber - 1) * epochSize
 
@@ -3549,7 +3547,7 @@ func (d *DPoS) isEpochEndBlock(blockNumber uint64) bool {
 		return false
 	}
 
-	epochSize := uint64(10) // 默认epoch大小，可以从配置中获取
+	epochSize := d.getEpochSize()
 
 	isEpochEnd := currentEpoch.FirstBlockInEpoch+epochSize-1 == blockNumber
 
@@ -3582,7 +3580,7 @@ func (d *DPoS) getEpochForBlock(blockNumber uint64) *epochMetadata {
 	}
 
 	// 计算epoch信息
-	epochSize := uint64(10) // 每个epoch有10个区块
+	epochSize := d.getEpochSize()
 	currentEpochNumber := (targetBlockNumber / epochSize) + 1
 	firstBlockInEpoch := (currentEpochNumber - 1) * epochSize
 
@@ -4220,9 +4218,13 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		vcity_dpos.config.VoterRewardRatio = 30
 	}
 
-	// 强制设置BlockTime为2秒，确保与配置一致
-	vcity_dpos.config.BlockTime = common.Duration{Duration: 2 * time.Second}
-	logger.Info("⏰ 强制设置DPoS区块时间为2秒", "duration", vcity_dpos.config.BlockTime.Duration.String())
+	// 检查BlockTime是否已正确设置，如果没有则使用默认值
+	if vcity_dpos.config.BlockTime.Duration == 0 {
+		vcity_dpos.config.BlockTime = common.Duration{Duration: 2 * time.Second}
+		logger.Info("⏰ 使用默认DPoS区块时间2秒", "duration", vcity_dpos.config.BlockTime.Duration.String())
+	} else {
+		logger.Info("⏰ 使用配置文件中的DPoS区块时间", "duration", vcity_dpos.config.BlockTime.Duration.String())
+	}
 	vcity_dpos.config.Network = params.Network
 	vcity_dpos.config.Executor = params.Executor
 
@@ -4291,6 +4293,7 @@ func (d *DPoS) Initialize() error {
 		blockchain: d.config.Blockchain,
 		executor:   d.config.Executor,
 		keyAddr:    types.Address(d.key.Address()), // 设置当前节点的地址
+		config:     d.config,                       // 传递DPoS配置
 	}
 
 	// 🆕 将blockchain_wrapper设置为blockchain的executor，以启用奖励分配功能
@@ -11484,6 +11487,51 @@ func (d *DPoS) initializeEconomicSystem() error {
 		"voterRatio", d.config.VoterRewardRatio)
 
 	return nil
+}
+
+// getEpochSize 根据配置计算epoch大小（区块数）
+func (r *dposRuntime) getEpochSize() uint64 {
+	if r.config == nil || r.config.dposBackend == nil {
+		r.logger.Warn("⚠️ dposRuntime配置为空，使用默认epoch大小")
+		return 5 // 默认值：10秒 / 2秒 = 5个区块
+	}
+
+	dposInstance, ok := r.config.dposBackend.(*DPoS)
+	if !ok {
+		r.logger.Warn("⚠️ 无法转换为DPoS实例，使用默认epoch大小")
+		return 5
+	}
+
+	return dposInstance.getEpochSize()
+}
+
+// getEpochSize 根据配置计算epoch大小（区块数）
+func (d *DPoS) getEpochSize() uint64 {
+	if d.config == nil {
+		d.logger.Warn("⚠️ DPoS配置为空，使用默认epoch大小")
+		return 5 // 默认值：10秒 / 2秒 = 5个区块
+	}
+
+	// 根据EpochDuration和BlockTime计算epoch大小
+	epochDuration := d.config.EpochDuration
+	blockTime := d.config.BlockTime.Duration
+
+	if blockTime == 0 {
+		d.logger.Warn("⚠️ BlockTime为0，使用默认值2秒")
+		blockTime = 2 * time.Second
+	}
+
+	epochSize := uint64(epochDuration / blockTime)
+	if epochSize == 0 {
+		epochSize = 1 // 至少1个区块
+	}
+
+	d.logger.Debug("🔍 计算epoch大小",
+		"epochDuration", epochDuration.String(),
+		"blockTime", blockTime.String(),
+		"epochSize", epochSize)
+
+	return epochSize
 }
 
 // 🆕 新增：处理epoch切换回调
