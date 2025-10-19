@@ -178,6 +178,19 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 		}
 	}
 
+	// 🆕 添加详细的epoch检查日志
+	epochSize := p.getEpochSize()
+	consensusSwitchHeight := uint64(0)
+	if p.config != nil {
+		consensusSwitchHeight = p.config.ConsensusSwitchHeight
+	}
+
+	p.logger.Debug("🔍🔍🔍 ========== blockchain_wrapper.ProcessBlock epoch检查 ========== 🔍🔍🔍",
+		"blockNumber", block.Number(),
+		"blockHash", block.Hash().String()[:16],
+		"epochSize", epochSize,
+		"consensusSwitchHeight", consensusSwitchHeight)
+
 	isEpochEnd := p.isEpochEndBlock(block.Number())
 
 	// 🆕 添加详细的奖励分配跟踪日志
@@ -249,13 +262,39 @@ func (p *blockchainWrapper) isEpochEndBlock(blockNumber uint64) bool {
 	// 使用配置计算epoch大小
 	epochSize := p.getEpochSize()
 
-	// 计算当前epoch的第一个区块号
-	// 例如：区块7379属于epoch 738，第一个区块是7370
-	currentEpoch := (blockNumber / epochSize) + 1
-	firstBlockInEpoch := (currentEpoch - 1) * epochSize
+	// 获取共识切换高度
+	consensusSwitchHeight := uint64(0)
+	if p.config != nil {
+		consensusSwitchHeight = p.config.ConsensusSwitchHeight
+	}
+
+	// 从共识切换高度开始计算epoch
+	if blockNumber < consensusSwitchHeight {
+		// 在共识切换之前，不是epoch结束区块
+		p.logger.Debug("🔍 isEpochEndBlock: 共识切换前",
+			"blockNumber", blockNumber,
+			"consensusSwitchHeight", consensusSwitchHeight,
+			"isEpochEnd", false)
+		return false
+	}
+
+	// 计算DPoS epoch：从共识切换高度开始
+	dposBlockNumber := blockNumber - consensusSwitchHeight
+	currentEpoch := (dposBlockNumber / epochSize) + 1
+	firstBlockInEpoch := consensusSwitchHeight + (currentEpoch-1)*epochSize
 
 	// 检查是否是epoch的最后一个区块
 	isEpochEnd := firstBlockInEpoch+epochSize-1 == blockNumber
+
+	p.logger.Debug("🔍 isEpochEndBlock: 详细计算",
+		"blockNumber", blockNumber,
+		"consensusSwitchHeight", consensusSwitchHeight,
+		"dposBlockNumber", dposBlockNumber,
+		"epochSize", epochSize,
+		"currentEpoch", currentEpoch,
+		"firstBlockInEpoch", firstBlockInEpoch,
+		"lastBlockInEpoch", firstBlockInEpoch+epochSize-1,
+		"isEpochEnd", isEpochEnd)
 
 	return isEpochEnd
 }

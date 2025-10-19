@@ -3442,16 +3442,38 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		d.updateRoundState(header)
 
 		// 🆕 验证节点执行blockchain_wrapper.ProcessBlock来处理奖励分配
+		d.logger.Debug("🔍🔍🔍 ========== 验证节点开始检查是否需要调用blockchain_wrapper.ProcessBlock ========== 🔍🔍🔍",
+			"blockNumber", header.Number,
+			"blockHash", header.Hash.String()[:16],
+			"blockchainIsNil", d.config.Blockchain == nil)
+
 		if d.config.Blockchain != nil {
+			d.logger.Debug("✅ 验证节点blockchain不为nil，开始获取完整区块信息",
+				"blockNumber", header.Number,
+				"blockHash", header.Hash.String()[:16])
+
 			// 获取完整区块信息
-			if block, exists := d.config.Blockchain.GetBlockByHash(header.Hash, true); exists && block != nil {
-				d.logger.Debug("🔍 验证节点获取完整区块信息，准备调用blockchain_wrapper.ProcessBlock",
+			block, exists := d.config.Blockchain.GetBlockByHash(header.Hash, true)
+			d.logger.Debug("🔍 验证节点GetBlockByHash结果",
+				"blockNumber", header.Number,
+				"blockHash", header.Hash.String()[:16],
+				"exists", exists,
+				"blockIsNil", block == nil)
+
+			if exists && block != nil {
+				d.logger.Debug("✅ 验证节点成功获取完整区块信息，准备调用blockchain_wrapper.ProcessBlock",
 					"blockNumber", header.Number,
 					"blockHash", header.Hash.String()[:16],
 					"blockExists", exists)
 
 				// 获取父区块
 				parent, exists := d.config.Blockchain.GetHeader(header.ParentHash, header.Number-1)
+				d.logger.Debug("🔍 验证节点获取父区块结果",
+					"blockNumber", header.Number,
+					"parentHash", header.ParentHash.String()[:16],
+					"parentExists", exists,
+					"parentIsNil", parent == nil)
+
 				if !exists {
 					d.logger.Error("❌ 验证节点无法获取父区块", "blockNumber", header.Number, "parentHash", header.ParentHash.String()[:16])
 				} else {
@@ -3470,7 +3492,17 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 							"receiptsCount", len(fullBlock.Receipts))
 					}
 				}
+			} else {
+				d.logger.Debug("❌ 验证节点无法获取完整区块信息",
+					"blockNumber", header.Number,
+					"blockHash", header.Hash.String()[:16],
+					"exists", exists,
+					"blockIsNil", block == nil)
 			}
+		} else {
+			d.logger.Debug("❌ 验证节点blockchain为nil，跳过blockchain_wrapper.ProcessBlock调用",
+				"blockNumber", header.Number,
+				"blockHash", header.Hash.String()[:16])
 		}
 
 		if d.config.Blockchain != nil {
