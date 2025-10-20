@@ -3691,12 +3691,13 @@ func (d *DPOS) GetVotableParameters(ctx context.Context) (interface{}, error) {
 		result := make(map[string]interface{})
 		for key, param := range parameters {
 			result[key] = map[string]interface{}{
-				"name":        param.Name,
-				"type":        param.Type,
-				"minValue":    param.MinValue,
-				"maxValue":    param.MaxValue,
-				"description": param.Description,
-				"category":    param.Category,
+				"name":         param.Name,
+				"type":         param.Type,
+				"minValue":     param.MinValue,
+				"maxValue":     param.MaxValue,
+				"description":  param.Description,
+				"category":     param.Category,
+				"currentValue": param.CurrentValue, // 🆕 添加当前值
 			}
 		}
 

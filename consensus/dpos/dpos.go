@@ -172,8 +172,8 @@ type ParameterInfo struct {
 	MinValue     interface{} `json:"minValue"`
 	MaxValue     interface{} `json:"maxValue"`
 	Description  string      `json:"description"`
-	Category     string      `json:"category"`               // 参数分类：economic, network, consensus等
-	CurrentValue interface{} `json:"currentValue,omitempty"` // 🆕 当前值
+	Category     string      `json:"category"`     // 参数分类：economic, network, consensus等
+	CurrentValue interface{} `json:"currentValue"` // 🆕 当前值（移除omitempty）
 }
 
 // 委托者（Delegator/Voter）：普通持币人，把投票权委托给受托人。
@@ -3387,6 +3387,9 @@ func (d *DPoS) initializeParameterCache() error {
 
 	d.parameterCurrentValues = make(map[string]interface{})
 
+	d.logger.Info("Starting parameter cache initialization",
+		"votableParamsCount", len(d.votableParameters))
+
 	// 强制从数据库加载所有参数值
 	for paramName := range d.votableParameters {
 		// 优先从数据库读取（数据库是权威数据源）
@@ -3394,7 +3397,7 @@ func (d *DPoS) initializeParameterCache() error {
 		if err == nil {
 			// 数据库有值，使用数据库值
 			d.parameterCurrentValues[paramName] = dbValue
-			d.logger.Debug("Loaded parameter from database",
+			d.logger.Info("Loaded parameter from database",
 				"param", paramName,
 				"value", dbValue)
 		} else {
@@ -3402,15 +3405,26 @@ func (d *DPoS) initializeParameterCache() error {
 			if defaultValue, err := d.getConfigParameterValue(paramName); err == nil {
 				d.parameterCurrentValues[paramName] = defaultValue
 				d.state.ParameterStore.SaveParameterValue(paramName, defaultValue, "config")
-				d.logger.Debug("Loaded parameter from config",
+				d.logger.Info("Loaded parameter from config",
 					"param", paramName,
 					"value", defaultValue)
+			} else {
+				d.logger.Error("Failed to get config value for parameter",
+					"param", paramName,
+					"error", err)
 			}
 		}
 	}
 
-	d.logger.Info("Parameter cache initialized from database",
-		"count", len(d.parameterCurrentValues))
+	d.logger.Info("Parameter cache initialized",
+		"count", len(d.parameterCurrentValues),
+		"cacheKeys", func() []string {
+			keys := make([]string, 0, len(d.parameterCurrentValues))
+			for k := range d.parameterCurrentValues {
+				keys = append(keys, k)
+			}
+			return keys
+		}())
 
 	return nil
 }
@@ -3935,8 +3949,21 @@ func (d *DPoS) GetVotableParameters() map[string]*ParameterInfo {
 		d.parameterValuesMutex.RLock()
 		if currentValue, exists := d.parameterCurrentValues[name]; exists {
 			infoCopy.CurrentValue = currentValue
+			d.logger.Debug("Found current value for parameter",
+				"param", name,
+				"value", currentValue)
+		} else {
+			d.logger.Debug("No current value found for parameter",
+				"param", name,
+				"cacheSize", len(d.parameterCurrentValues))
 		}
 		d.parameterValuesMutex.RUnlock()
+
+		// 调试：确认CurrentValue是否被设置
+		d.logger.Debug("Setting result for parameter",
+			"param", name,
+			"currentValue", infoCopy.CurrentValue,
+			"hasCurrentValue", infoCopy.CurrentValue != nil)
 
 		result[name] = &infoCopy
 	}
