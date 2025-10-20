@@ -167,12 +167,13 @@ type ParameterUpdate struct {
 
 // ParameterInfo 参数信息
 type ParameterInfo struct {
-	Name        string      `json:"name"`
-	Type        string      `json:"type"`
-	MinValue    interface{} `json:"minValue"`
-	MaxValue    interface{} `json:"maxValue"`
-	Description string      `json:"description"`
-	Category    string      `json:"category"` // 参数分类：economic, network, consensus等
+	Name         string      `json:"name"`
+	Type         string      `json:"type"`
+	MinValue     interface{} `json:"minValue"`
+	MaxValue     interface{} `json:"maxValue"`
+	Description  string      `json:"description"`
+	Category     string      `json:"category"`               // 参数分类：economic, network, consensus等
+	CurrentValue interface{} `json:"currentValue,omitempty"` // 🆕 当前值
 }
 
 // 委托者（Delegator/Voter）：普通持币人，把投票权委托给受托人。
@@ -3172,6 +3173,10 @@ type DPoS struct {
 	activeProposals    map[string]bool               // 活跃提案
 	proposalCounter    uint64                        // 提案计数器
 	votableParameters  map[string]*ParameterInfo     // 可表决参数配置
+
+	// 🆕 参数值缓存
+	parameterCurrentValues map[string]interface{} // 参数当前值缓存
+	parameterValuesMutex   sync.RWMutex           // 参数值读写锁
 }
 
 // PendingStateUpdate 结构体已移除，延迟状态更新机制不再需要
@@ -3363,11 +3368,77 @@ func (d *DPoS) InitializeGovernance() error {
 		d.votableParameters = d.getDefaultVotableParameters()
 	}
 
+	// 🆕 初始化参数缓存（强制从数据库同步）
+	if err := d.initializeParameterCache(); err != nil {
+		return fmt.Errorf("failed to initialize parameter cache: %w", err)
+	}
+
 	d.logger.Info("✅ 治理系统初始化完成",
 		"votableParameters", len(d.votableParameters),
 		"activeProposals", len(d.activeProposals))
 
 	return nil
+}
+
+// initializeParameterCache 初始化参数缓存 - 数据库优先
+func (d *DPoS) initializeParameterCache() error {
+	d.parameterValuesMutex.Lock()
+	defer d.parameterValuesMutex.Unlock()
+
+	d.parameterCurrentValues = make(map[string]interface{})
+
+	// 强制从数据库加载所有参数值
+	for paramName := range d.votableParameters {
+		// 优先从数据库读取（数据库是权威数据源）
+		dbValue, err := d.state.ParameterStore.GetParameterValue(paramName)
+		if err == nil {
+			// 数据库有值，使用数据库值
+			d.parameterCurrentValues[paramName] = dbValue
+			d.logger.Debug("Loaded parameter from database",
+				"param", paramName,
+				"value", dbValue)
+		} else {
+			// 数据库没有值，使用配置文件默认值并保存到数据库
+			if defaultValue, err := d.getConfigParameterValue(paramName); err == nil {
+				d.parameterCurrentValues[paramName] = defaultValue
+				d.state.ParameterStore.SaveParameterValue(paramName, defaultValue, "config")
+				d.logger.Debug("Loaded parameter from config",
+					"param", paramName,
+					"value", defaultValue)
+			}
+		}
+	}
+
+	d.logger.Info("Parameter cache initialized from database",
+		"count", len(d.parameterCurrentValues))
+
+	return nil
+}
+
+// getConfigParameterValue 从配置文件获取参数值
+func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
+	switch paramName {
+	case "dpos_validator_reward_ratio":
+		return d.config.ValidatorRewardRatio, nil
+	case "dpos_voter_reward_ratio":
+		return d.config.VoterRewardRatio, nil
+	case "dpos_reward_amount":
+		if d.config.RewardAmount != nil {
+			return d.config.RewardAmount.String(), nil
+		}
+		return "0", nil
+	case "dpos_delegate_threshold":
+		if d.config.MinVotingPower != nil {
+			return d.config.MinVotingPower.String(), nil
+		}
+		return "1000000000000000000", nil
+	case "block_time_s":
+		return d.config.BlockTime.Duration.Seconds(), nil
+	case "dpos_epoch_duration":
+		return d.config.EpochDuration.String(), nil
+	default:
+		return nil, fmt.Errorf("unknown parameter: %s", paramName)
+	}
 }
 
 // getDefaultVotableParameters 获取默认可表决参数配置
@@ -3621,14 +3692,44 @@ func (d *DPoS) ExecuteParameterUpdate(proposalID string) error {
 
 	d.parameterUpdates = append(d.parameterUpdates, update)
 
+	// 🆕 同时更新缓存和数据库
+	if err := d.updateParameterValue(proposal.Parameter, proposal.NewValue, fmt.Sprintf("proposal_%s", proposalID)); err != nil {
+		d.logger.Error("Failed to update parameter value",
+			"error", err,
+			"parameter", proposal.Parameter,
+			"value", proposal.NewValue)
+		return fmt.Errorf("failed to update parameter value: %w", err)
+	}
+
 	// 标记提案已执行
 	proposal.Status = ProposalExecuted
 
-	d.logger.Info("Parameter update scheduled",
+	d.logger.Info("Parameter update executed",
 		"proposalID", proposalID,
 		"parameter", proposal.Parameter,
 		"newValue", proposal.NewValue,
 		"effectiveBlock", update.BlockNum)
+
+	return nil
+}
+
+// updateParameterValue 更新参数值（同时更新缓存和数据库）
+func (d *DPoS) updateParameterValue(paramName string, value interface{}, source string) error {
+	// 1. 先更新数据库（事务保证）
+	err := d.state.ParameterStore.SaveParameterValue(paramName, value, source)
+	if err != nil {
+		return fmt.Errorf("failed to save parameter to database: %w", err)
+	}
+
+	// 2. 数据库更新成功后，更新缓存
+	d.parameterValuesMutex.Lock()
+	d.parameterCurrentValues[paramName] = value
+	d.parameterValuesMutex.Unlock()
+
+	d.logger.Info("Parameter updated successfully",
+		"param", paramName,
+		"value", value,
+		"source", source)
 
 	return nil
 }
@@ -3819,15 +3920,25 @@ func (d *DPoS) GetActiveProposals() ([]*ParameterProposal, error) {
 	return activeProposals, nil
 }
 
-// GetVotableParameters 获取可表决参数列表
+// GetVotableParameters 获取可表决参数列表（包含当前值）
 func (d *DPoS) GetVotableParameters() map[string]*ParameterInfo {
 	d.lock.RLock()
 	defer d.lock.RUnlock()
 
 	// 返回副本以避免外部修改
 	result := make(map[string]*ParameterInfo)
-	for key, value := range d.votableParameters {
-		result[key] = value
+	for name, info := range d.votableParameters {
+		// 创建副本
+		infoCopy := *info
+
+		// 🆕 添加当前值
+		d.parameterValuesMutex.RLock()
+		if currentValue, exists := d.parameterCurrentValues[name]; exists {
+			infoCopy.CurrentValue = currentValue
+		}
+		d.parameterValuesMutex.RUnlock()
+
+		result[name] = &infoCopy
 	}
 	return result
 }

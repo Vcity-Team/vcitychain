@@ -52,6 +52,7 @@ type State struct {
 	ValidatorStore        *ValidatorStore
 	RewardStore           *RewardStore       // 🆕 新增奖励记录存储
 	BlockTrackerStore     *BlockTrackerStore // 🆕 新增出块统计存储
+	ParameterStore        *ParameterStore    // 🆕 新增参数存储
 }
 
 // RewardRecordExtended 扩展的奖励记录结构，用于数据库存储
@@ -76,6 +77,74 @@ type RewardStore struct {
 // BlockTrackerStore 出块统计存储
 type BlockTrackerStore struct {
 	db *bolt.DB
+}
+
+// ParameterCurrentValue 参数当前值存储结构
+type ParameterCurrentValue struct {
+	ParameterName string      `json:"parameter_name"`
+	CurrentValue  interface{} `json:"current_value"`
+	UpdatedAt     time.Time   `json:"updated_at"`
+	Source        string      `json:"source"` // "config" 或 "proposal_xxx"
+}
+
+// ParameterStore 参数存储
+type ParameterStore struct {
+	db *bolt.DB
+}
+
+// initialize 初始化参数存储
+func (ps *ParameterStore) initialize(tx *bolt.Tx) error {
+	_, err := tx.CreateBucketIfNotExists([]byte("parameters"))
+	return err
+}
+
+// SaveParameterValue 保存参数值
+func (ps *ParameterStore) SaveParameterValue(paramName string, value interface{}, source string) error {
+	return ps.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("parameters"))
+		if bucket == nil {
+			return fmt.Errorf("parameters bucket not found")
+		}
+
+		paramValue := &ParameterCurrentValue{
+			ParameterName: paramName,
+			CurrentValue:  value,
+			UpdatedAt:     time.Now(),
+			Source:        source,
+		}
+
+		data, err := json.Marshal(paramValue)
+		if err != nil {
+			return err
+		}
+
+		return bucket.Put([]byte(paramName), data)
+	})
+}
+
+// GetParameterValue 获取参数值
+func (ps *ParameterStore) GetParameterValue(paramName string) (interface{}, error) {
+	var paramValue ParameterCurrentValue
+
+	err := ps.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("parameters"))
+		if bucket == nil {
+			return fmt.Errorf("parameters bucket not found")
+		}
+
+		data := bucket.Get([]byte(paramName))
+		if data == nil {
+			return fmt.Errorf("parameter not found")
+		}
+
+		return json.Unmarshal(data, &paramValue)
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return paramValue.CurrentValue, nil
 }
 
 // initialize 初始化出块统计存储
@@ -195,6 +264,7 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 		ValidatorStore:        &ValidatorStore{db: db},
 		RewardStore:           &RewardStore{db: rewardDB}, // 🆕 使用独立数据库
 		BlockTrackerStore:     &BlockTrackerStore{db: db}, // 🆕 使用主数据库
+		ParameterStore:        &ParameterStore{db: db},    // 🆕 使用主数据库
 	}
 
 	if err = s.initStorages(); err != nil {
@@ -234,6 +304,9 @@ func (s *State) initStorages() error {
 			return err
 		}
 		if err := s.BlockTrackerStore.initialize(tx); err != nil {
+			return err
+		}
+		if err := s.ParameterStore.initialize(tx); err != nil {
 			return err
 		}
 
