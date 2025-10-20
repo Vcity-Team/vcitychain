@@ -3,8 +3,10 @@ package dpos
 import (
 	"github.com/spf13/cobra"
 
+	"github.com/Vcity-Team/vcitychain/command/dpos/current_params"
 	"github.com/Vcity-Team/vcitychain/command/dpos/epoch"
 	getVoteByHash "github.com/Vcity-Team/vcitychain/command/dpos/get_vote_by_hash"
+	"github.com/Vcity-Team/vcitychain/command/dpos/parameters"
 	"github.com/Vcity-Team/vcitychain/command/dpos/rewards"
 	"github.com/Vcity-Team/vcitychain/command/dpos/stats"
 	"github.com/Vcity-Team/vcitychain/command/dpos/validator_info"
@@ -36,6 +38,9 @@ func GetCommand() *cobra.Command {
 		epoch.GetCommand(),
 		stats.GetCommand(),
 		rewards.GetCommand(),
+		// Governance commands
+		parameters.GetCommand(),
+		current_params.GetCommand(),
 		// Future DPoS commands can be added here:
 		// - delegate management
 		// - staking operations

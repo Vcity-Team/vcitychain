@@ -3832,6 +3832,29 @@ func (d *DPoS) GetVotableParameters() map[string]*ParameterInfo {
 	return result
 }
 
+// GetCurrentParameterValues 获取当前参数的实际值
+func (d *DPoS) GetCurrentParameterValues() map[string]interface{} {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	result := make(map[string]interface{})
+
+	// 获取所有可表决参数的当前值
+	for paramName := range d.votableParameters {
+		if value, err := d.getCurrentParameterValue(paramName); err == nil {
+			result[paramName] = value
+		} else {
+			d.logger.Warn("Failed to get current value for parameter", "parameter", paramName, "error", err)
+		}
+	}
+
+	// 添加一些额外的系统信息
+	result["lastUpdated"] = time.Now().Format(time.RFC3339)
+	result["totalParameters"] = len(result) - 1 // 减去lastUpdated字段
+
+	return result
+}
+
 func (d *DPoS) VerifyHeader(header *types.Header) error {
 	blockNumber := header.Number
 	d.logger.Debug("🔍 DPoS VerifyHeader 开始验证", "blockNumber", blockNumber, "blockHash", header.Hash.String()[:16])
@@ -13033,12 +13056,46 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 		timeRemaining = nextEpochTime.Sub(time.Now())
 	}
 
+	// 获取epoch的区块范围
+	epochSize := d.getEpochSize()
+	firstBlockInEpoch := (epochNumber - 1) * epochSize
+	lastBlockInEpoch := firstBlockInEpoch + epochSize - 1
+
+	// 获取当前验证者信息
+	validators := make([]map[string]interface{}, 0)
+	if d.delegates != nil {
+		for i, delegate := range d.delegates {
+			validators = append(validators, map[string]interface{}{
+				"index":       i,
+				"address":     delegate.Address.String(),
+				"votingPower": delegate.VotingPower.String(),
+				"isActive":    delegate.IsActive,
+			})
+		}
+	}
+
+	// 获取epoch状态
+	epochStatus := "active"
+	if time.Now().After(nextEpochTime) {
+		epochStatus = "completed"
+	} else if time.Now().Before(lastEpochTime) {
+		epochStatus = "pending"
+	}
+
 	return map[string]interface{}{
-		"currentEpoch":   epochNumber,
-		"epochStartTime": lastEpochTime.Format(time.RFC3339),
-		"epochDuration":  epochDuration.String(),
-		"timeRemaining":  timeRemaining.String(),
-		"nextEpochTime":  nextEpochTime.Format(time.RFC3339),
+		"epochNumber":           epochNumber,
+		"epochStatus":           epochStatus,
+		"epochStartTime":        lastEpochTime.Format(time.RFC3339),
+		"epochDuration":         epochDuration.String(),
+		"timeRemaining":         timeRemaining.String(),
+		"nextEpochTime":         nextEpochTime.Format(time.RFC3339),
+		"firstBlockInEpoch":     firstBlockInEpoch,
+		"lastBlockInEpoch":      lastBlockInEpoch,
+		"currentBlockNumber":    currentBlockNumber,
+		"epochSize":             epochSize,
+		"validators":            validators,
+		"validatorCount":        len(validators),
+		"consensusSwitchHeight": d.config.ConsensusSwitchHeight,
 	}
 }
 
@@ -13065,11 +13122,33 @@ func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
 		return d.GetCurrentEpochInfo()
 	}
 
-	// 对于历史Epoch，我们只能提供基本信息
+	// 计算指定epoch的区块范围
+	epochSize := d.getEpochSize()
+	firstBlockInEpoch := (epochNumber - 1) * epochSize
+	lastBlockInEpoch := firstBlockInEpoch + epochSize - 1
+
+	// 确定epoch状态
+	epochStatus := "unknown"
+	if epochNumber < currentEpoch {
+		epochStatus = "completed"
+	} else if epochNumber == currentEpoch {
+		epochStatus = "active"
+	} else {
+		epochStatus = "future"
+	}
+
+	// 对于历史Epoch，提供基本信息
 	return map[string]interface{}{
-		"epochNumber":   epochNumber,
-		"epochDuration": epochDuration.String(),
-		"note":          "Historical epoch data not available",
+		"epochNumber":           epochNumber,
+		"epochStatus":           epochStatus,
+		"epochDuration":         epochDuration.String(),
+		"firstBlockInEpoch":     firstBlockInEpoch,
+		"lastBlockInEpoch":      lastBlockInEpoch,
+		"epochSize":             epochSize,
+		"currentEpoch":          currentEpoch,
+		"currentBlockNumber":    currentBlockNumber,
+		"consensusSwitchHeight": d.config.ConsensusSwitchHeight,
+		"note":                  "Historical epoch data limited - only basic information available",
 	}
 }
 

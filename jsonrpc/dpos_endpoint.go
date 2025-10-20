@@ -3221,6 +3221,46 @@ func (d *DPOS) GetEpochInfoByNumber(epochNumber uint64) (map[string]interface{},
 	}, nil
 }
 
+// GetLatestEpochInfo 获取最新epoch信息（与GetCurrentEpochInfo相同，但名称更明确）
+func (d *DPOS) GetLatestEpochInfo(ctx context.Context) (interface{}, error) {
+	d.logger.Info("DPoS GetLatestEpochInfo called")
+
+	// 获取DPoS引擎
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return nil, fmt.Errorf("DPoS engine not available")
+	}
+
+	// 调用DPoS引擎的方法
+	if engine, ok := dposEngine.(interface {
+		GetCurrentEpochInfo() map[string]interface{}
+	}); ok {
+		return engine.GetCurrentEpochInfo(), nil
+	}
+
+	return nil, fmt.Errorf("GetCurrentEpochInfo method not available on DPoS engine")
+}
+
+// GetCurrentParameterValues 获取当前参数的实际值
+func (d *DPOS) GetCurrentParameterValues(ctx context.Context) (interface{}, error) {
+	d.logger.Info("DPoS GetCurrentParameterValues called")
+
+	// 获取DPoS引擎
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return nil, fmt.Errorf("DPoS engine not available")
+	}
+
+	// 调用DPoS引擎的方法
+	if engine, ok := dposEngine.(interface {
+		GetCurrentParameterValues() map[string]interface{}
+	}); ok {
+		return engine.GetCurrentParameterValues(), nil
+	}
+
+	return nil, fmt.Errorf("GetCurrentParameterValues method not available on DPoS engine")
+}
+
 // ==================== 新增：奖励查询JSON-RPC方法 ====================
 
 // GetValidatorRewardHistory 查询验证者奖励历史

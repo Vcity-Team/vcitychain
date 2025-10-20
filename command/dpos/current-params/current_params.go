@@ -1,4 +1,4 @@
-package epoch
+package current_params
 
 import (
 	"bytes"
@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -15,53 +14,33 @@ import (
 	"github.com/Vcity-Team/vcitychain/command/helper"
 )
 
-// GetCommand returns the epoch command
+// GetCommand returns the current-params command
 func GetCommand() *cobra.Command {
-	epochCmd := &cobra.Command{
-		Use:   "epoch [epochNumber]",
-		Short: "Get DPoS epoch information",
-		Long:  "Get current epoch information or specific epoch by number",
-		Args:  cobra.MaximumNArgs(1),
+	paramsCmd := &cobra.Command{
+		Use:   "current-params",
+		Short: "Get current DPoS parameter values",
+		Long:  "Get current actual values of all votable parameters",
 		Run:   runCommand,
 	}
 
-	helper.RegisterJSONOutputFlag(epochCmd)
+	helper.RegisterJSONOutputFlag(paramsCmd)
 
-	return epochCmd
+	return paramsCmd
 }
 
 func runCommand(cmd *cobra.Command, args []string) {
 	outputter := command.InitializeOutputter(cmd)
 	defer outputter.WriteOutput()
 
-	// 构建JSON-RPC请求
-	var method string
-	var params []interface{}
-
-	if len(args) == 0 {
-		// 获取当前epoch信息
-		method = "dpos_getCurrentEpochInfo"
-		params = []interface{}{}
-	} else {
-		// 获取指定epoch信息
-		epochNumber, err := strconv.ParseUint(args[0], 10, 64)
-		if err != nil {
-			outputter.SetError(fmt.Errorf("invalid epoch number: %w", err))
-			return
-		}
-		method = "dpos_getEpochInfoByNumber"
-		params = []interface{}{epochNumber}
-	}
-
-	// 调用JSON-RPC
-	result, err := callJSONRPC(method, params)
+	// 调用JSON-RPC获取当前参数值
+	result, err := callJSONRPC("dpos_getCurrentParameterValues", []interface{}{})
 	if err != nil {
 		outputter.SetError(fmt.Errorf("failed to call JSON-RPC: %w", err))
 		return
 	}
 
 	// 创建CommandResult
-	commandResult := &EpochResult{
+	commandResult := &CurrentParamsResult{
 		Data: result.(map[string]interface{}),
 	}
 	outputter.SetCommandResult(commandResult)
