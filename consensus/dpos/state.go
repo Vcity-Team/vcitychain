@@ -53,6 +53,7 @@ type State struct {
 	RewardStore           *RewardStore       // 🆕 新增奖励记录存储
 	BlockTrackerStore     *BlockTrackerStore // 🆕 新增出块统计存储
 	ParameterStore        *ParameterStore    // 🆕 新增参数存储
+	ProposalStore         *ProposalStore     // 🆕 新增提案存储
 }
 
 // RewardRecordExtended 扩展的奖励记录结构，用于数据库存储
@@ -89,6 +90,11 @@ type ParameterCurrentValue struct {
 
 // ParameterStore 参数存储
 type ParameterStore struct {
+	db *bolt.DB
+}
+
+// ProposalStore 提案存储
+type ProposalStore struct {
 	db *bolt.DB
 }
 
@@ -145,6 +151,89 @@ func (ps *ParameterStore) GetParameterValue(paramName string) (interface{}, erro
 	}
 
 	return paramValue.CurrentValue, nil
+}
+
+// initialize 初始化提案存储
+func (ps *ProposalStore) initialize(tx *bolt.Tx) error {
+	_, err := tx.CreateBucketIfNotExists([]byte("proposals"))
+	return err
+}
+
+// SaveProposal 保存提案
+func (ps *ProposalStore) SaveProposal(proposal *ParameterProposal) error {
+	return ps.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("proposals"))
+		if bucket == nil {
+			return fmt.Errorf("proposals bucket not found")
+		}
+
+		data, err := json.Marshal(proposal)
+		if err != nil {
+			return fmt.Errorf("failed to marshal proposal: %w", err)
+		}
+
+		return bucket.Put([]byte(proposal.ID), data)
+	})
+}
+
+// GetProposal 获取提案
+func (ps *ProposalStore) GetProposal(proposalID string) (*ParameterProposal, error) {
+	var proposal ParameterProposal
+
+	err := ps.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("proposals"))
+		if bucket == nil {
+			return fmt.Errorf("proposals bucket not found")
+		}
+
+		data := bucket.Get([]byte(proposalID))
+		if data == nil {
+			return fmt.Errorf("proposal not found")
+		}
+
+		return json.Unmarshal(data, &proposal)
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &proposal, nil
+}
+
+// GetAllProposals 获取所有提案
+func (ps *ProposalStore) GetAllProposals() (map[string]*ParameterProposal, error) {
+	proposals := make(map[string]*ParameterProposal)
+
+	err := ps.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("proposals"))
+		if bucket == nil {
+			return fmt.Errorf("proposals bucket not found")
+		}
+
+		return bucket.ForEach(func(key, value []byte) error {
+			var proposal ParameterProposal
+			if err := json.Unmarshal(value, &proposal); err != nil {
+				return err
+			}
+			proposals[string(key)] = &proposal
+			return nil
+		})
+	})
+
+	return proposals, err
+}
+
+// DeleteProposal 删除提案
+func (ps *ProposalStore) DeleteProposal(proposalID string) error {
+	return ps.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("proposals"))
+		if bucket == nil {
+			return fmt.Errorf("proposals bucket not found")
+		}
+
+		return bucket.Delete([]byte(proposalID))
+	})
 }
 
 // initialize 初始化出块统计存储
@@ -265,6 +354,7 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 		RewardStore:           &RewardStore{db: rewardDB}, // 🆕 使用独立数据库
 		BlockTrackerStore:     &BlockTrackerStore{db: db}, // 🆕 使用主数据库
 		ParameterStore:        &ParameterStore{db: db},    // 🆕 使用主数据库
+		ProposalStore:         &ProposalStore{db: db},     // 🆕 使用主数据库
 	}
 
 	if err = s.initStorages(); err != nil {
@@ -307,6 +397,9 @@ func (s *State) initStorages() error {
 			return err
 		}
 		if err := s.ParameterStore.initialize(tx); err != nil {
+			return err
+		}
+		if err := s.ProposalStore.initialize(tx); err != nil {
 			return err
 		}
 

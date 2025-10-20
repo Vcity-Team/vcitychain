@@ -3627,8 +3627,41 @@ func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) 
 }
 
 // GetParameterProposal 获取提案信息
-func (d *DPOS) GetParameterProposal(ctx context.Context, proposalID string) (interface{}, error) {
-	d.logger.Info("DPoS GetParameterProposal called", "proposalID", proposalID)
+func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (interface{}, error) {
+	d.logger.Info("DPoS GetParameterProposal called", "params", params)
+
+	// 解析参数
+	var proposalID string
+	switch p := params.(type) {
+	case []interface{}:
+		// 数组格式: ["proposalID"]
+		if len(p) < 1 {
+			return nil, fmt.Errorf("invalid parameters: expected 1 parameter [proposalID], got %d", len(p))
+		}
+		var ok bool
+		proposalID, ok = p[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid proposal ID: expected string, got %T", p[0])
+		}
+	case map[string]interface{}:
+		// 对象格式: {"proposalId": "proposalID"}
+		var ok bool
+		proposalID, ok = p["proposalId"].(string)
+		if !ok {
+			return nil, fmt.Errorf("proposalId is required and must be a string")
+		}
+	case string:
+		// 直接字符串格式
+		proposalID = p
+	default:
+		return nil, fmt.Errorf("invalid parameters format: expected array, object, or string, got %T", params)
+	}
+
+	if proposalID == "" {
+		return nil, fmt.Errorf("proposal ID cannot be empty")
+	}
+
+	d.logger.Info("DPoS GetParameterProposal parsed", "proposalID", proposalID)
 
 	// 获取DPoS引擎
 	dposEngine := d.getDPoSEngine()

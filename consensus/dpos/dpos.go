@@ -3374,10 +3374,49 @@ func (d *DPoS) InitializeGovernance() error {
 		return fmt.Errorf("failed to initialize parameter cache: %w", err)
 	}
 
+	// 🆕 从数据库加载所有提案
+	if err := d.loadProposalsFromDatabase(); err != nil {
+		return fmt.Errorf("failed to load proposals from database: %w", err)
+	}
+
 	d.logger.Info("✅ 治理系统初始化完成",
 		"votableParameters", len(d.votableParameters),
-		"activeProposals", len(d.activeProposals))
+		"activeProposals", len(d.activeProposals),
+		"loadedProposals", len(d.parameterProposals))
 
+	return nil
+}
+
+// loadProposalsFromDatabase 从数据库加载所有提案
+func (d *DPoS) loadProposalsFromDatabase() error {
+	if d.state == nil || d.state.ProposalStore == nil {
+		d.logger.Debug("ProposalStore not available, skipping proposal loading")
+		return nil
+	}
+
+	proposals, err := d.state.ProposalStore.GetAllProposals()
+	if err != nil {
+		return fmt.Errorf("failed to load proposals from database: %w", err)
+	}
+
+	d.logger.Debug("从数据库加载提案", "count", len(proposals))
+
+	// 加载到内存中
+	for proposalID, proposal := range proposals {
+		d.parameterProposals[proposalID] = proposal
+
+		// 根据提案状态设置活跃状态
+		if proposal.Status == ProposalPending || proposal.Status == ProposalActive {
+			d.activeProposals[proposalID] = true
+		}
+
+		d.logger.Debug("加载提案",
+			"proposalID", proposalID,
+			"parameter", proposal.Parameter,
+			"status", proposal.Status.String())
+	}
+
+	d.logger.Info("✅ 从数据库加载提案完成", "count", len(proposals))
 	return nil
 }
 
@@ -3650,6 +3689,14 @@ func (d *DPoS) CreateParameterProposal(proposer types.Address, parameter string,
 		CreatedAt:   uint64(time.Now().Unix()),
 	}
 
+	// 保存到数据库
+	if d.state != nil && d.state.ProposalStore != nil {
+		if err := d.state.ProposalStore.SaveProposal(proposal); err != nil {
+			d.logger.Error("Failed to save proposal to database", "error", err)
+			return nil, fmt.Errorf("failed to save proposal to database: %w", err)
+		}
+	}
+
 	d.parameterProposals[proposalID] = proposal
 	d.activeProposals[proposalID] = true
 
@@ -3900,7 +3947,7 @@ func (d *DPoS) validateParameterValue(parameter string, value interface{}) error
 		// 支持多种数值类型的转换
 		var val uint64
 		var err error
-		
+
 		switch v := value.(type) {
 		case uint64:
 			val = v
@@ -3965,7 +4012,7 @@ func (d *DPoS) validateParameterValue(parameter string, value interface{}) error
 			if !ok {
 				return fmt.Errorf("invalid big integer string: %s", val)
 			}
-			
+
 			// 安全的类型断言
 			minValStr, ok := paramInfo.MinValue.(string)
 			if !ok {
@@ -3975,7 +4022,7 @@ func (d *DPoS) validateParameterValue(parameter string, value interface{}) error
 			if !ok {
 				return fmt.Errorf("invalid MaxValue type for parameter %s", parameter)
 			}
-			
+
 			minVal, ok := new(big.Int).SetString(minValStr, 10)
 			if !ok {
 				return fmt.Errorf("invalid MinValue format for parameter %s: %s", parameter, minValStr)
@@ -3984,7 +4031,7 @@ func (d *DPoS) validateParameterValue(parameter string, value interface{}) error
 			if !ok {
 				return fmt.Errorf("invalid MaxValue format for parameter %s: %s", parameter, maxValStr)
 			}
-			
+
 			if bigVal.Cmp(minVal) < 0 || bigVal.Cmp(maxVal) > 0 {
 				return fmt.Errorf("value %s out of range [%s, %s]", val, minValStr, maxValStr)
 			}
@@ -4076,12 +4123,24 @@ func (d *DPoS) GetParameterProposal(proposalID string) (*ParameterProposal, erro
 	d.lock.RLock()
 	defer d.lock.RUnlock()
 
+	// 先从内存中查找
 	proposal, exists := d.parameterProposals[proposalID]
-	if !exists {
-		return nil, fmt.Errorf("proposal not found")
+	if exists {
+		return proposal, nil
 	}
 
-	return proposal, nil
+	// 如果内存中没有，从数据库加载
+	if d.state != nil && d.state.ProposalStore != nil {
+		dbProposal, err := d.state.ProposalStore.GetProposal(proposalID)
+		if err == nil {
+			// 加载到内存中
+			d.parameterProposals[proposalID] = dbProposal
+			return dbProposal, nil
+		}
+		d.logger.Debug("Failed to load proposal from database", "proposalID", proposalID, "error", err)
+	}
+
+	return nil, fmt.Errorf("proposal not found")
 }
 
 // GetActiveProposals 获取活跃提案列表
