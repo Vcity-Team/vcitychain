@@ -176,6 +176,16 @@ type ParameterInfo struct {
 	CurrentValue interface{} `json:"currentValue"` // 🆕 当前值（移除omitempty）
 }
 
+// VoterInfo 投票者信息结构
+type VoterInfo struct {
+	Address        types.Address   `json:"address"`        // 投票者地址
+	VotingPower    *big.Int        `json:"votingPower"`    // 投票权重
+	VotedDelegates []types.Address `json:"votedDelegates"` // 投票的验证者列表
+	LastVoteTime   uint64          `json:"lastVoteTime"`   // 最后投票时间
+	LockedUntil    uint64          `json:"lockedUntil"`    // 锁定到期时间
+	Nonce          map[uint64]bool `json:"nonce"`          // 防重放
+}
+
 // 委托者（Delegator/Voter）：普通持币人，把投票权委托给受托人。
 // 受托人/验证者（Delegate/Validator）：被选出来实际参与出块和共识的节点
 // dposBackend 接口定义了DPoS需要的方法
@@ -3181,16 +3191,6 @@ type DPoS struct {
 
 // PendingStateUpdate 结构体已移除，延迟状态更新机制不再需要
 
-// VoterInfo 投票者信息
-type VoterInfo struct {
-	Address        types.Address
-	VotingPower    *big.Int
-	VotedDelegates []types.Address
-	LastVoteTime   uint64
-	LockedUntil    uint64
-	Nonce          map[uint64]bool // 防重放
-}
-
 // DelegateInfo 受托人信息
 type DelegateInfo struct {
 	Address        types.Address
@@ -3453,6 +3453,62 @@ func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 	default:
 		return nil, fmt.Errorf("unknown parameter: %s", paramName)
 	}
+}
+
+// getVotersForValidator 获取投票给指定验证者的投票者列表
+func (d *DPoS) getVotersForValidator(validatorAddress types.Address) []*VoterInfo {
+	d.logger.Debug("🔍 获取投票者列表", "validatorAddress", validatorAddress.String())
+
+	var voters []*VoterInfo
+
+	// 从StakeStore获取投票信息
+	if d.state != nil && d.state.StakeStore != nil {
+		stakingInfo, err := d.state.StakeStore.GetStakingInfo()
+		if err != nil {
+			d.logger.Warn("获取质押信息失败", "error", err)
+			return voters
+		}
+
+		for _, stake := range stakingInfo {
+			if stake.Delegate == validatorAddress {
+				voters = append(voters, &VoterInfo{
+					Address:     stake.Staker,
+					VotingPower: stake.Amount,
+				})
+				d.logger.Debug("找到投票者",
+					"voterAddress", stake.Staker.String(),
+					"votingPower", stake.Amount.String())
+			}
+		}
+	}
+
+	d.logger.Debug("投票者列表获取完成",
+		"validatorAddress", validatorAddress.String(),
+		"votersCount", len(voters))
+
+	return voters
+}
+
+// getTotalVotesForValidator 获取投票给指定验证者的总投票权重
+func (d *DPoS) getTotalVotesForValidator(validatorAddress types.Address) *big.Int {
+	d.logger.Debug("🔍 计算总投票权重", "validatorAddress", validatorAddress.String())
+
+	voters := d.getVotersForValidator(validatorAddress)
+	totalVotes := big.NewInt(0)
+
+	for _, voter := range voters {
+		totalVotes.Add(totalVotes, voter.VotingPower)
+		d.logger.Debug("累加投票权重",
+			"voterAddress", voter.Address.String(),
+			"votingPower", voter.VotingPower.String(),
+			"totalSoFar", totalVotes.String())
+	}
+
+	d.logger.Debug("总投票权重计算完成",
+		"validatorAddress", validatorAddress.String(),
+		"totalVotes", totalVotes.String())
+
+	return totalVotes
 }
 
 // getDefaultVotableParameters 获取默认可表决参数配置
@@ -13434,6 +13490,9 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 	var validatorRewardBig *big.Int
 	var voterRewardBig *big.Int
 
+	// 投票者详细奖励分配
+	voterRewards := make(map[string]string)
+
 	// 🆕 添加条件判断的调试日志
 	d.logger.Debug("🔍 奖励计算条件检查",
 		"RewardAmountIsNil", d.config.RewardAmount == nil,
@@ -13458,30 +13517,48 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 		validatorRewardBig.Div(validatorRewardBig, big.NewInt(100))
 		validatorReward = validatorRewardBig.String()
 
-		// 5. 投票者奖励 = 每块奖励 * 实际出块数 * 投票者比例 * 投票权重占比
+		// 5. 投票者奖励池计算 = 每块奖励 * 实际出块数 * 投票者比例
 		totalVoterRewardBig := new(big.Int).Mul(blockReward, big.NewInt(int64(blocksProduced)))
 		totalVoterRewardBig.Mul(totalVoterRewardBig, big.NewInt(int64(d.config.VoterRewardRatio)))
 		totalVoterRewardBig.Div(totalVoterRewardBig, big.NewInt(100))
 
-		// 获取该验证者的投票权重
-		validators := d.getAllValidators()
-		var validatorVotingPower *big.Int = big.NewInt(0)
-		var totalVotingPower *big.Int = big.NewInt(0)
+		// 6. 获取该验证者的投票者并分配奖励
+		votersForValidator := d.getVotersForValidator(validatorAddress)
+		totalVotesForValidator := d.getTotalVotesForValidator(validatorAddress)
 
-		for _, validator := range validators {
-			if validator.Address == validatorAddress {
-				validatorVotingPower = validator.VotingPower
-			}
-			totalVotingPower.Add(totalVotingPower, validator.VotingPower)
-		}
-
-		// 按投票权重比例分配投票者奖励
-		if totalVotingPower.Cmp(big.NewInt(0)) > 0 && validatorVotingPower.Cmp(big.NewInt(0)) > 0 {
-			voterRewardBig = new(big.Int).Mul(totalVoterRewardBig, validatorVotingPower)
-			voterRewardBig.Div(voterRewardBig, totalVotingPower)
+		// 计算投票者详细奖励分配
+		if totalVotesForValidator.Cmp(big.NewInt(0)) > 0 {
+			// 该验证者分得的投票者奖励 = 投票者奖励池（因为投票者奖励最终会分配给该验证者）
+			voterRewardBig = new(big.Int).Set(totalVoterRewardBig)
 			voterReward = voterRewardBig.String()
+
+			// 计算每个投票者的详细奖励
+			for _, voter := range votersForValidator {
+				// 计算该投票者的权重占比（使用10000作为精度）
+				voterWeightRatio := new(big.Int).Mul(voter.VotingPower, big.NewInt(10000))
+				voterWeightRatio.Div(voterWeightRatio, totalVotesForValidator)
+
+				// 计算该投票者获得的奖励
+				voterReward := new(big.Int).Mul(totalVoterRewardBig, voterWeightRatio)
+				voterReward.Div(voterReward, big.NewInt(10000))
+
+				voterRewards[voter.Address.String()] = voterReward.String()
+
+				d.logger.Debug("投票者奖励分配",
+					"voterAddress", voter.Address.String(),
+					"votingPower", voter.VotingPower.String(),
+					"weightRatio", voterWeightRatio.String(),
+					"voterReward", voterReward.String())
+			}
+
+			d.logger.Debug("投票者奖励计算",
+				"validatorAddress", validatorAddress.String(),
+				"voterRewardPool", totalVoterRewardBig.String(),
+				"totalVotesForValidator", totalVotesForValidator.String(),
+				"votersCount", len(votersForValidator))
 		} else {
 			voterReward = "0"
+			d.logger.Debug("该验证者没有投票者", "validatorAddress", validatorAddress.String())
 		}
 
 		// 总奖励
@@ -13561,6 +13638,7 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 		"isActive":             isActive,
 		"insufficientFunds":    insufficientFunds,              // 奖励账户资金是否充足
 		"canDistribute":        !insufficientFunds && isActive, // 是否可以分发奖励
+		"voterRewards":         voterRewards,                   // 🆕 投票者详细奖励分配
 	}
 }
 
