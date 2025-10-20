@@ -13047,7 +13047,28 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 		}
 	}
 
-	epochNumber, lastEpochTime, epochDuration := d.epochManager.GetEpochInfo(currentBlockNumber)
+	// 🆕 修复：使用与isEpochEndBlock相同的epoch计算逻辑
+	consensusSwitchHeight := d.config.ConsensusSwitchHeight
+	epochSize := d.getEpochSize()
+
+	var epochNumber uint64
+	var firstBlockInEpoch uint64
+
+	if currentBlockNumber < consensusSwitchHeight {
+		// 在共识切换之前，epoch为0
+		epochNumber = 0
+		firstBlockInEpoch = 0
+	} else {
+		// 计算DPoS epoch：从共识切换高度开始
+		dposBlockNumber := currentBlockNumber - consensusSwitchHeight
+		epochNumber = (dposBlockNumber / epochSize) + 1
+		firstBlockInEpoch = consensusSwitchHeight + (epochNumber-1)*epochSize
+	}
+
+	lastBlockInEpoch := firstBlockInEpoch + epochSize - 1
+
+	// 获取epoch时间信息（保持原有逻辑）
+	_, lastEpochTime, epochDuration := d.epochManager.GetEpochInfo(currentBlockNumber)
 
 	// 计算剩余时间
 	timeRemaining := time.Duration(0)
@@ -13055,11 +13076,6 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 	if time.Now().Before(nextEpochTime) {
 		timeRemaining = nextEpochTime.Sub(time.Now())
 	}
-
-	// 获取epoch的区块范围
-	epochSize := d.getEpochSize()
-	firstBlockInEpoch := (epochNumber - 1) * epochSize
-	lastBlockInEpoch := firstBlockInEpoch + epochSize - 1
 
 	// 获取当前验证者信息
 	validators := make([]map[string]interface{}, 0)
@@ -13115,16 +13131,30 @@ func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
 		}
 	}
 
-	currentEpoch, _, epochDuration := d.epochManager.GetEpochInfo(currentBlockNumber)
+	// 🆕 修复：使用与isEpochEndBlock相同的epoch计算逻辑获取当前epoch
+	consensusSwitchHeight := d.config.ConsensusSwitchHeight
+	epochSize := d.getEpochSize()
+
+	var currentEpoch uint64
+	if currentBlockNumber < consensusSwitchHeight {
+		currentEpoch = 0
+	} else {
+		dposBlockNumber := currentBlockNumber - consensusSwitchHeight
+		currentEpoch = (dposBlockNumber / epochSize) + 1
+	}
 
 	// 如果请求的是当前Epoch，返回当前信息
 	if epochNumber == currentEpoch {
 		return d.GetCurrentEpochInfo()
 	}
 
-	// 计算指定epoch的区块范围
-	epochSize := d.getEpochSize()
-	firstBlockInEpoch := (epochNumber - 1) * epochSize
+	// 计算指定epoch的区块范围（考虑共识切换高度）
+	var firstBlockInEpoch uint64
+	if epochNumber == 0 {
+		firstBlockInEpoch = 0
+	} else {
+		firstBlockInEpoch = consensusSwitchHeight + (epochNumber-1)*epochSize
+	}
 	lastBlockInEpoch := firstBlockInEpoch + epochSize - 1
 
 	// 确定epoch状态
@@ -13136,6 +13166,9 @@ func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
 	} else {
 		epochStatus = "future"
 	}
+
+	// 获取epoch时间信息
+	_, _, epochDuration := d.epochManager.GetEpochInfo(currentBlockNumber)
 
 	// 对于历史Epoch，提供基本信息
 	return map[string]interface{}{
