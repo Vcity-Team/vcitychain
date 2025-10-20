@@ -97,6 +97,84 @@ type StakeInfo struct {
 	Delegate  types.Address `json:"delegate"`
 }
 
+// 🆕 参数表决相关数据结构
+
+// ParameterProposal 参数表决提案结构
+type ParameterProposal struct {
+	ID          string                          `json:"id"`
+	Parameter   string                          `json:"parameter"`   // 参数名
+	OldValue    interface{}                     `json:"oldValue"`    // 当前值
+	NewValue    interface{}                     `json:"newValue"`    // 提议值
+	Proposer    types.Address                   `json:"proposer"`    // 提案者
+	StartBlock  uint64                          `json:"startBlock"`  // 投票开始区块
+	EndBlock    uint64                          `json:"endBlock"`    // 投票结束区块
+	Status      ProposalStatus                  `json:"status"`      // 提案状态
+	Votes       map[types.Address]ParameterVote `json:"votes"`       // 投票记录
+	Threshold   uint64                          `json:"threshold"`   // 通过阈值(百分比)
+	Description string                          `json:"description"` // 提案描述
+	CreatedAt   uint64                          `json:"createdAt"`   // 创建时间
+}
+
+// ProposalStatus 提案状态
+type ProposalStatus int
+
+const (
+	ProposalPending  ProposalStatus = iota // 待投票
+	ProposalActive                         // 投票中
+	ProposalPassed                         // 已通过
+	ProposalRejected                       // 已拒绝
+	ProposalExecuted                       // 已执行
+)
+
+// String 返回提案状态的字符串表示
+func (ps ProposalStatus) String() string {
+	switch ps {
+	case ProposalPending:
+		return "pending"
+	case ProposalActive:
+		return "active"
+	case ProposalPassed:
+		return "passed"
+	case ProposalRejected:
+		return "rejected"
+	case ProposalExecuted:
+		return "executed"
+	default:
+		return "unknown"
+	}
+}
+
+// ParameterVote 参数表决投票
+type ParameterVote struct {
+	Voter      types.Address `json:"voter"`
+	ProposalID string        `json:"proposalId"`
+	Support    bool          `json:"support"` // true=支持, false=反对
+	Weight     *big.Int      `json:"weight"`  // 投票权重
+	Timestamp  uint64        `json:"timestamp"`
+	Signature  []byte        `json:"signature"` // 投票签名
+}
+
+// ParameterUpdate 参数更新记录
+type ParameterUpdate struct {
+	Parameter  string      `json:"parameter"`
+	OldValue   interface{} `json:"oldValue"`
+	NewValue   interface{} `json:"newValue"`
+	BlockNum   uint64      `json:"blockNum"`   // 生效区块号
+	Executed   bool        `json:"executed"`   // 是否已执行
+	ProposalID string      `json:"proposalId"` // 关联提案ID
+	ExecutedAt uint64      `json:"executedAt"` // 执行时间
+}
+
+// ParameterInfo 参数信息
+type ParameterInfo struct {
+	Name        string      `json:"name"`
+	Type        string      `json:"type"`
+	MinValue    interface{} `json:"minValue"`
+	MaxValue    interface{} `json:"maxValue"`
+	Description string      `json:"description"`
+	Category    string      `json:"category"` // 参数分类：economic, network, consensus等
+}
+
 // 委托者（Delegator/Voter）：普通持币人，把投票权委托给受托人。
 // 受托人/验证者（Delegate/Validator）：被选出来实际参与出块和共识的节点
 // dposBackend 接口定义了DPoS需要的方法
@@ -3087,6 +3165,13 @@ type DPoS struct {
 	blsLoadingWaitCh   chan struct{}
 
 	// 延迟状态更新机制已移除
+
+	// 🆕 参数表决机制相关字段
+	parameterProposals map[string]*ParameterProposal // 提案存储
+	parameterUpdates   []*ParameterUpdate            // 参数更新记录
+	activeProposals    map[string]bool               // 活跃提案
+	proposalCounter    uint64                        // 提案计数器
+	votableParameters  map[string]*ParameterInfo     // 可表决参数配置
 }
 
 // PendingStateUpdate 结构体已移除，延迟状态更新机制不再需要
@@ -3255,6 +3340,496 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 		}())
 
 	return nil
+}
+
+// 🆕 参数表决治理功能
+
+// InitializeGovernance 初始化治理系统
+func (d *DPoS) InitializeGovernance() error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	// 初始化治理相关字段
+	if d.parameterProposals == nil {
+		d.parameterProposals = make(map[string]*ParameterProposal)
+	}
+	if d.activeProposals == nil {
+		d.activeProposals = make(map[string]bool)
+	}
+	if d.parameterUpdates == nil {
+		d.parameterUpdates = make([]*ParameterUpdate, 0)
+	}
+	if d.votableParameters == nil {
+		d.votableParameters = d.getDefaultVotableParameters()
+	}
+
+	d.logger.Info("✅ 治理系统初始化完成",
+		"votableParameters", len(d.votableParameters),
+		"activeProposals", len(d.activeProposals))
+
+	return nil
+}
+
+// getDefaultVotableParameters 获取默认可表决参数配置
+func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
+	return map[string]*ParameterInfo{
+		"dpos_validator_reward_ratio": {
+			Name:        "Validator Reward Ratio",
+			Type:        "uint64",
+			MinValue:    uint64(0),
+			MaxValue:    uint64(100),
+			Description: "验证者奖励比例 (0-100%)",
+			Category:    "economic",
+		},
+		"dpos_voter_reward_ratio": {
+			Name:        "Voter Reward Ratio",
+			Type:        "uint64",
+			MinValue:    uint64(0),
+			MaxValue:    uint64(100),
+			Description: "投票者奖励比例 (0-100%)",
+			Category:    "economic",
+		},
+		"dpos_reward_amount": {
+			Name:        "Reward Amount",
+			Type:        "string",
+			MinValue:    "0",
+			MaxValue:    "1000000000000000000000000", // 100万VCITY
+			Description: "每个epoch奖励金额 (wei)",
+			Category:    "economic",
+		},
+		"dpos_delegate_threshold": {
+			Name:        "Delegate Threshold",
+			Type:        "string",
+			MinValue:    "1000000000000000000",       // 1 VCITY
+			MaxValue:    "1000000000000000000000000", // 100万VCITY
+			Description: "最小质押门槛 (wei)",
+			Category:    "economic",
+		},
+		"block_time_s": {
+			Name:        "Block Time",
+			Type:        "uint64",
+			MinValue:    uint64(1),
+			MaxValue:    uint64(60),
+			Description: "区块间隔时间 (秒)",
+			Category:    "consensus",
+		},
+		"dpos_epoch_duration": {
+			Name:        "Epoch Duration",
+			Type:        "string",
+			MinValue:    "10s",
+			MaxValue:    "1h",
+			Description: "Epoch持续时间",
+			Category:    "consensus",
+		},
+	}
+}
+
+// CreateParameterProposal 创建参数表决提案
+func (d *DPoS) CreateParameterProposal(proposer types.Address, parameter string, newValue interface{}, description string) (*ParameterProposal, error) {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	// 验证提案者权限（只有验证者可以创建提案）
+	if !d.isValidator(proposer) {
+		return nil, fmt.Errorf("only validators can create proposals")
+	}
+
+	// 验证参数是否可表决
+	if !d.isParameterVotable(parameter) {
+		return nil, fmt.Errorf("parameter %s is not votable", parameter)
+	}
+
+	// 获取当前参数值
+	oldValue, err := d.getCurrentParameterValue(parameter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current parameter value: %w", err)
+	}
+
+	// 验证新参数值
+	if err := d.validateParameterValue(parameter, newValue); err != nil {
+		return nil, fmt.Errorf("invalid parameter value: %w", err)
+	}
+
+	// 创建提案
+	proposalID := fmt.Sprintf("proposal_%d_%d", d.currentRound, d.proposalCounter)
+	d.proposalCounter++
+
+	proposal := &ParameterProposal{
+		ID:          proposalID,
+		Parameter:   parameter,
+		OldValue:    oldValue,
+		NewValue:    newValue,
+		Proposer:    proposer,
+		StartBlock:  d.getCurrentBlockNumber() + 1,
+		EndBlock:    d.getCurrentBlockNumber() + 100, // 100个区块的投票期
+		Status:      ProposalPending,
+		Votes:       make(map[types.Address]ParameterVote),
+		Threshold:   51, // 51%通过阈值
+		Description: description,
+		CreatedAt:   uint64(time.Now().Unix()),
+	}
+
+	d.parameterProposals[proposalID] = proposal
+	d.activeProposals[proposalID] = true
+
+	d.logger.Info("Parameter proposal created",
+		"proposalID", proposalID,
+		"parameter", parameter,
+		"oldValue", oldValue,
+		"newValue", newValue,
+		"proposer", proposer.String(),
+		"startBlock", proposal.StartBlock,
+		"endBlock", proposal.EndBlock)
+
+	return proposal, nil
+}
+
+// VoteOnParameterProposal 对参数提案进行投票
+func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, support bool) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	// 获取提案
+	proposal, exists := d.parameterProposals[proposalID]
+	if !exists {
+		return fmt.Errorf("proposal not found")
+	}
+
+	// 检查投票时间
+	currentBlock := d.getCurrentBlockNumber()
+	if currentBlock < proposal.StartBlock || currentBlock > proposal.EndBlock {
+		return fmt.Errorf("voting period has ended or not started")
+	}
+
+	// 检查投票者权限（只有验证者可以投票）
+	if !d.isValidator(voter) {
+		return fmt.Errorf("only validators can vote")
+	}
+
+	// 检查是否已经投票
+	if _, exists := proposal.Votes[voter]; exists {
+		return fmt.Errorf("already voted on this proposal")
+	}
+
+	// 计算投票权重（基于验证者的投票权重）
+	weight := d.getValidatorVotingWeight(voter)
+
+	// 创建投票
+	vote := &ParameterVote{
+		Voter:      voter,
+		ProposalID: proposalID,
+		Support:    support,
+		Weight:     weight,
+		Timestamp:  uint64(time.Now().Unix()),
+	}
+
+	// 签名投票
+	if err := d.signParameterVote(vote); err != nil {
+		return fmt.Errorf("failed to sign vote: %w", err)
+	}
+
+	// 记录投票
+	proposal.Votes[voter] = *vote
+
+	d.logger.Info("Parameter vote cast",
+		"proposalID", proposalID,
+		"voter", voter.String(),
+		"support", support,
+		"weight", weight.String())
+
+	return nil
+}
+
+// CheckProposalResult 检查提案投票结果
+func (d *DPoS) CheckProposalResult(proposalID string) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	proposal, exists := d.parameterProposals[proposalID]
+	if !exists {
+		return fmt.Errorf("proposal not found")
+	}
+
+	// 检查是否在投票期内
+	currentBlock := d.getCurrentBlockNumber()
+	if currentBlock <= proposal.EndBlock {
+		return nil // 投票期未结束
+	}
+
+	// 统计投票结果
+	totalWeight := big.NewInt(0)
+	supportWeight := big.NewInt(0)
+
+	for _, vote := range proposal.Votes {
+		totalWeight.Add(totalWeight, vote.Weight)
+		if vote.Support {
+			supportWeight.Add(supportWeight, vote.Weight)
+		}
+	}
+
+	// 计算支持率
+	if totalWeight.Cmp(big.NewInt(0)) == 0 {
+		proposal.Status = ProposalRejected
+		return nil
+	}
+
+	supportRate := new(big.Int).Mul(supportWeight, big.NewInt(100))
+	supportRate.Div(supportRate, totalWeight)
+
+	// 判断是否通过
+	if supportRate.Cmp(big.NewInt(int64(proposal.Threshold))) >= 0 {
+		proposal.Status = ProposalPassed
+		d.logger.Info("Proposal passed",
+			"proposalID", proposalID,
+			"supportRate", supportRate.String(),
+			"threshold", proposal.Threshold)
+	} else {
+		proposal.Status = ProposalRejected
+		d.logger.Info("Proposal rejected",
+			"proposalID", proposalID,
+			"supportRate", supportRate.String(),
+			"threshold", proposal.Threshold)
+	}
+
+	return nil
+}
+
+// ExecuteParameterUpdate 执行参数更新
+func (d *DPoS) ExecuteParameterUpdate(proposalID string) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	proposal, exists := d.parameterProposals[proposalID]
+	if !exists {
+		return fmt.Errorf("proposal not found")
+	}
+
+	if proposal.Status != ProposalPassed {
+		return fmt.Errorf("proposal not passed")
+	}
+
+	// 创建参数更新记录
+	update := &ParameterUpdate{
+		Parameter:  proposal.Parameter,
+		OldValue:   proposal.OldValue,
+		NewValue:   proposal.NewValue,
+		BlockNum:   d.getCurrentBlockNumber() + 1, // 下一个区块生效
+		Executed:   false,
+		ProposalID: proposalID,
+		ExecutedAt: 0,
+	}
+
+	d.parameterUpdates = append(d.parameterUpdates, update)
+
+	// 标记提案已执行
+	proposal.Status = ProposalExecuted
+
+	d.logger.Info("Parameter update scheduled",
+		"proposalID", proposalID,
+		"parameter", proposal.Parameter,
+		"newValue", proposal.NewValue,
+		"effectiveBlock", update.BlockNum)
+
+	return nil
+}
+
+// 辅助方法
+
+// isValidator 检查地址是否为验证者
+func (d *DPoS) isValidator(address types.Address) bool {
+	for _, delegate := range d.delegates {
+		if delegate.Address == address {
+			return true
+		}
+	}
+	return false
+}
+
+// isParameterVotable 检查参数是否可表决
+func (d *DPoS) isParameterVotable(parameter string) bool {
+	_, exists := d.votableParameters[parameter]
+	return exists
+}
+
+// getCurrentParameterValue 获取当前参数值
+func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
+	switch parameter {
+	case "dpos_validator_reward_ratio":
+		return d.config.ValidatorRewardRatio, nil
+	case "dpos_voter_reward_ratio":
+		return d.config.VoterRewardRatio, nil
+	case "dpos_reward_amount":
+		if d.config.RewardAmount != nil {
+			return d.config.RewardAmount.String(), nil
+		}
+		return "0", nil
+	case "dpos_delegate_threshold":
+		if d.config.MinVotingPower != nil {
+			return d.config.MinVotingPower.String(), nil
+		}
+		return "0", nil
+	case "block_time_s":
+		return uint64(d.config.BlockTime.Duration.Seconds()), nil
+	case "dpos_epoch_duration":
+		return d.config.EpochDuration.String(), nil
+	default:
+		return nil, fmt.Errorf("unknown parameter: %s", parameter)
+	}
+}
+
+// validateParameterValue 验证参数值
+func (d *DPoS) validateParameterValue(parameter string, value interface{}) error {
+	paramInfo, exists := d.votableParameters[parameter]
+	if !exists {
+		return fmt.Errorf("parameter not found")
+	}
+
+	switch paramInfo.Type {
+	case "uint64":
+		if val, ok := value.(uint64); ok {
+			if val < paramInfo.MinValue.(uint64) || val > paramInfo.MaxValue.(uint64) {
+				return fmt.Errorf("value %d out of range [%d, %d]", val, paramInfo.MinValue, paramInfo.MaxValue)
+			}
+		} else {
+			return fmt.Errorf("invalid type for uint64 parameter")
+		}
+	case "string":
+		if val, ok := value.(string); ok {
+			// 对于大整数字符串，需要特殊处理
+			if parameter == "dpos_reward_amount" || parameter == "dpos_delegate_threshold" {
+				bigVal, ok := new(big.Int).SetString(val, 10)
+				if !ok {
+					return fmt.Errorf("invalid big integer string")
+				}
+				minVal, _ := new(big.Int).SetString(paramInfo.MinValue.(string), 10)
+				maxVal, _ := new(big.Int).SetString(paramInfo.MaxValue.(string), 10)
+				if bigVal.Cmp(minVal) < 0 || bigVal.Cmp(maxVal) > 0 {
+					return fmt.Errorf("value %s out of range [%s, %s]", val, paramInfo.MinValue, paramInfo.MaxValue)
+				}
+			}
+		} else {
+			return fmt.Errorf("invalid type for string parameter")
+		}
+	default:
+		return fmt.Errorf("unsupported parameter type: %s", paramInfo.Type)
+	}
+
+	return nil
+}
+
+// getValidatorVotingWeight 获取验证者投票权重
+func (d *DPoS) getValidatorVotingWeight(validator types.Address) *big.Int {
+	for _, delegate := range d.delegates {
+		if delegate.Address == validator {
+			return delegate.VotingPower
+		}
+	}
+	return big.NewInt(0)
+}
+
+// signParameterVote 签名参数投票
+func (d *DPoS) signParameterVote(vote *ParameterVote) error {
+	// 这里应该实现投票签名逻辑
+	// 暂时返回nil，实际实现需要根据您的签名机制
+	return nil
+}
+
+// getCurrentBlockNumber 获取当前区块号
+func (d *DPoS) getCurrentBlockNumber() uint64 {
+	// 这里应该从区块链获取当前区块号
+	// 暂时返回0，实际实现需要根据您的区块链接口
+	return 0
+}
+
+// UpdateParameterValue 更新参数值
+func (d *DPoS) UpdateParameterValue(parameter string, newValue interface{}) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	// 根据参数类型更新相应的配置
+	switch parameter {
+	case "dpos_validator_reward_ratio":
+		if ratio, ok := newValue.(uint64); ok {
+			d.config.ValidatorRewardRatio = ratio
+			d.logger.Info("Updated validator reward ratio", "newValue", ratio)
+		}
+	case "dpos_voter_reward_ratio":
+		if ratio, ok := newValue.(uint64); ok {
+			d.config.VoterRewardRatio = ratio
+			d.logger.Info("Updated voter reward ratio", "newValue", ratio)
+		}
+	case "dpos_reward_amount":
+		if amount, ok := newValue.(string); ok {
+			if bigAmount, ok := new(big.Int).SetString(amount, 10); ok {
+				d.config.RewardAmount = bigAmount
+				d.logger.Info("Updated reward amount", "newValue", amount)
+			}
+		}
+	case "dpos_delegate_threshold":
+		if threshold, ok := newValue.(string); ok {
+			if bigThreshold, ok := new(big.Int).SetString(threshold, 10); ok {
+				d.config.MinVotingPower = bigThreshold
+				d.logger.Info("Updated delegate threshold", "newValue", threshold)
+			}
+		}
+	case "block_time_s":
+		if blockTime, ok := newValue.(uint64); ok {
+			d.config.BlockTime = common.Duration{Duration: time.Duration(blockTime) * time.Second}
+			d.logger.Info("Updated block time", "newValue", blockTime)
+		}
+	case "dpos_epoch_duration":
+		if duration, ok := newValue.(string); ok {
+			if parsedDuration, err := time.ParseDuration(duration); err == nil {
+				d.config.EpochDuration = parsedDuration
+				d.logger.Info("Updated epoch duration", "newValue", duration)
+			}
+		}
+	default:
+		return fmt.Errorf("unknown parameter: %s", parameter)
+	}
+
+	return nil
+}
+
+// GetParameterProposal 获取提案信息
+func (d *DPoS) GetParameterProposal(proposalID string) (*ParameterProposal, error) {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	proposal, exists := d.parameterProposals[proposalID]
+	if !exists {
+		return nil, fmt.Errorf("proposal not found")
+	}
+
+	return proposal, nil
+}
+
+// GetActiveProposals 获取活跃提案列表
+func (d *DPoS) GetActiveProposals() ([]*ParameterProposal, error) {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	var activeProposals []*ParameterProposal
+	for proposalID := range d.activeProposals {
+		if proposal, exists := d.parameterProposals[proposalID]; exists {
+			activeProposals = append(activeProposals, proposal)
+		}
+	}
+
+	return activeProposals, nil
+}
+
+// GetVotableParameters 获取可表决参数列表
+func (d *DPoS) GetVotableParameters() map[string]*ParameterInfo {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	// 返回副本以避免外部修改
+	result := make(map[string]*ParameterInfo)
+	for key, value := range d.votableParameters {
+		result[key] = value
+	}
+	return result
 }
 
 func (d *DPoS) VerifyHeader(header *types.Header) error {
