@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	"bytes"
@@ -3446,34 +3447,81 @@ func (d *DPOS) GetValidatorRewardsInfo(ctx context.Context, params interface{}) 
 func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) (interface{}, error) {
 	d.logger.Info("DPoS CreateParameterProposal called", "params", params)
 
-	// 解析参数
-	paramMap, ok := params.(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid parameters format")
+	var proposerStr, parameter, description string
+	var newValue interface{}
+
+	// 支持两种参数格式：数组格式和对象格式
+	switch p := params.(type) {
+	case []interface{}:
+		// 数组格式: [parameter, newValue, description, proposer]
+		if len(p) < 4 {
+			return nil, fmt.Errorf("invalid parameters: expected 4 parameters [parameter, newValue, description, proposer], got %d", len(p))
+		}
+
+		var ok bool
+		parameter, ok = p[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid parameter name: expected string, got %T", p[0])
+		}
+
+		newValue = p[1]
+		if newValue == nil {
+			return nil, fmt.Errorf("invalid new value: value cannot be null")
+		}
+
+		description, ok = p[2].(string)
+		if !ok {
+			description = "" // 可选参数
+		}
+
+		proposerStr, ok = p[3].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid proposer address: expected string, got %T", p[3])
+		}
+
+	case map[string]interface{}:
+		// 对象格式: {parameter, newValue, description, proposer}
+		var ok bool
+		proposerStr, ok = p["proposer"].(string)
+		if !ok {
+			return nil, fmt.Errorf("proposer address is required and must be a string")
+		}
+
+		parameter, ok = p["parameter"].(string)
+		if !ok {
+			return nil, fmt.Errorf("parameter name is required and must be a string")
+		}
+
+		newValue, ok = p["newValue"]
+		if !ok {
+			return nil, fmt.Errorf("new value is required")
+		}
+
+		description, ok = p["description"].(string)
+		if !ok {
+			description = "" // 可选参数
+		}
+
+	default:
+		return nil, fmt.Errorf("invalid parameters format: expected array or object, got %T", params)
 	}
 
-	proposerStr, ok := paramMap["proposer"].(string)
-	if !ok {
-		return nil, fmt.Errorf("proposer address is required")
+	// 验证必需参数
+	if proposerStr == "" {
+		return nil, fmt.Errorf("proposer address cannot be empty")
+	}
+	if parameter == "" {
+		return nil, fmt.Errorf("parameter name cannot be empty")
+	}
+	if newValue == nil {
+		return nil, fmt.Errorf("new value cannot be null")
 	}
 
-	parameter, ok := paramMap["parameter"].(string)
-	if !ok {
-		return nil, fmt.Errorf("parameter name is required")
-	}
-
-	newValue, ok := paramMap["newValue"]
-	if !ok {
-		return nil, fmt.Errorf("new value is required")
-	}
-
-	description, ok := paramMap["description"].(string)
-	if !ok {
-		description = "" // 可选参数
-	}
-
-	// 验证提案者地址
+	// 验证提案者地址格式
 	proposer := types.StringToAddress(proposerStr)
+	if proposer == (types.Address{}) {
+		return nil, fmt.Errorf("invalid proposer address format: %s", proposerStr)
+	}
 
 	// 获取DPoS引擎
 	dposEngine := d.getDPoSEngine()
@@ -3487,10 +3535,25 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 	}); ok {
 		proposal, err := createProposal.CreateParameterProposal(proposer, parameter, newValue, description)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create proposal: %w", err)
+			// 提供更详细的错误信息
+			switch {
+			case strings.Contains(err.Error(), "only validators can create proposals"):
+				return nil, fmt.Errorf("permission denied: address %s is not a validator", proposerStr)
+			case strings.Contains(err.Error(), "parameter") && strings.Contains(err.Error(), "not votable"):
+				return nil, fmt.Errorf("invalid parameter: %s is not a votable parameter", parameter)
+			case strings.Contains(err.Error(), "invalid parameter value"):
+				return nil, fmt.Errorf("invalid parameter value: %v for parameter %s", newValue, parameter)
+			case strings.Contains(err.Error(), "out of range"):
+				return nil, fmt.Errorf("parameter value out of range: %v for parameter %s", newValue, parameter)
+			case strings.Contains(err.Error(), "invalid type"):
+				return nil, fmt.Errorf("invalid parameter type: expected valid type for parameter %s", parameter)
+			default:
+				return nil, fmt.Errorf("failed to create proposal: %w", err)
+			}
 		}
 
 		return map[string]interface{}{
+			"success":     true,
 			"proposalId":  proposal.ID,
 			"parameter":   proposal.Parameter,
 			"oldValue":    proposal.OldValue,
@@ -3502,6 +3565,7 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 			"threshold":   proposal.Threshold,
 			"description": proposal.Description,
 			"createdAt":   proposal.CreatedAt,
+			"message":     "Parameter proposal created successfully",
 		}, nil
 	}
 

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -3469,17 +3470,31 @@ func (d *DPoS) getVotersForValidator(validatorAddress types.Address) []*VoterInf
 			return voters
 		}
 
-		for _, stake := range stakingInfo {
+		d.logger.Debug("🔍 获取到的质押信息总数", "count", len(stakingInfo))
+
+		for i, stake := range stakingInfo {
+			d.logger.Debug("🔍 检查质押信息",
+				"index", i,
+				"staker", stake.Staker.String(),
+				"delegate", stake.Delegate.String(),
+				"amount", stake.Amount.String(),
+				"targetValidator", validatorAddress.String(),
+				"isMatch", stake.Delegate == validatorAddress)
+
 			if stake.Delegate == validatorAddress {
 				voters = append(voters, &VoterInfo{
 					Address:     stake.Staker,
 					VotingPower: stake.Amount,
 				})
-				d.logger.Debug("找到投票者",
+				d.logger.Debug("✅ 找到投票者",
 					"voterAddress", stake.Staker.String(),
 					"votingPower", stake.Amount.String())
 			}
 		}
+	} else {
+		d.logger.Warn("🔍 StakeStore 不可用",
+			"stateIsNil", d.state == nil,
+			"stakeStoreIsNil", d.state != nil && d.state.StakeStore == nil)
 	}
 
 	d.logger.Debug("投票者列表获取完成",
@@ -3487,6 +3502,31 @@ func (d *DPoS) getVotersForValidator(validatorAddress types.Address) []*VoterInf
 		"votersCount", len(voters))
 
 	return voters
+}
+
+// debugDatabaseContents 调试方法：检查数据库内容
+func (d *DPoS) debugDatabaseContents() {
+	if d.state != nil && d.state.StakeStore != nil {
+		d.state.StakeStore.db.View(func(tx *bolt.Tx) error {
+			// 检查VoterInfo bucket
+			voterBucket := tx.Bucket([]byte("VoterInfo"))
+			if voterBucket != nil {
+				d.logger.Debug("🔍 VoterInfo bucket 存在，条目数", "count", voterBucket.Stats().KeyN)
+			} else {
+				d.logger.Debug("🔍 VoterInfo bucket 不存在")
+			}
+
+			// 检查StakingInfo bucket
+			stakingBucket := tx.Bucket([]byte("StakingInfo"))
+			if stakingBucket != nil {
+				d.logger.Debug("🔍 StakingInfo bucket 存在，条目数", "count", stakingBucket.Stats().KeyN)
+			} else {
+				d.logger.Debug("🔍 StakingInfo bucket 不存在")
+			}
+
+			return nil
+		})
+	}
 }
 
 // getTotalVotesForValidator 获取投票给指定验证者的总投票权重
@@ -3857,30 +3897,99 @@ func (d *DPoS) validateParameterValue(parameter string, value interface{}) error
 
 	switch paramInfo.Type {
 	case "uint64":
-		if val, ok := value.(uint64); ok {
-			if val < paramInfo.MinValue.(uint64) || val > paramInfo.MaxValue.(uint64) {
-				return fmt.Errorf("value %d out of range [%d, %d]", val, paramInfo.MinValue, paramInfo.MaxValue)
+		// 支持多种数值类型的转换
+		var val uint64
+		var err error
+		
+		switch v := value.(type) {
+		case uint64:
+			val = v
+		case int:
+			if v < 0 {
+				return fmt.Errorf("negative value not allowed for uint64 parameter")
 			}
-		} else {
-			return fmt.Errorf("invalid type for uint64 parameter")
+			val = uint64(v)
+		case int64:
+			if v < 0 {
+				return fmt.Errorf("negative value not allowed for uint64 parameter")
+			}
+			val = uint64(v)
+		case float64:
+			// JSON数值被解析为float64，需要转换
+			if v < 0 {
+				return fmt.Errorf("negative value not allowed for uint64 parameter")
+			}
+			if v != float64(uint64(v)) {
+				return fmt.Errorf("invalid float value for uint64 parameter: %v", v)
+			}
+			val = uint64(v)
+		case string:
+			// 支持字符串转uint64
+			val, err = strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				return fmt.Errorf("invalid string value for uint64 parameter: %s", v)
+			}
+		default:
+			return fmt.Errorf("invalid type %T for uint64 parameter, expected uint64/int/int64/float64/string", value)
 		}
+
+		// 安全的类型断言和范围检查
+		minVal, ok := paramInfo.MinValue.(uint64)
+		if !ok {
+			return fmt.Errorf("invalid MinValue type for parameter %s", parameter)
+		}
+		maxVal, ok := paramInfo.MaxValue.(uint64)
+		if !ok {
+			return fmt.Errorf("invalid MaxValue type for parameter %s", parameter)
+		}
+
+		if val < minVal || val > maxVal {
+			return fmt.Errorf("value %d out of range [%d, %d]", val, minVal, maxVal)
+		}
+
 	case "string":
-		if val, ok := value.(string); ok {
-			// 对于大整数字符串，需要特殊处理
-			if parameter == "dpos_reward_amount" || parameter == "dpos_delegate_threshold" {
-				bigVal, ok := new(big.Int).SetString(val, 10)
-				if !ok {
-					return fmt.Errorf("invalid big integer string")
-				}
-				minVal, _ := new(big.Int).SetString(paramInfo.MinValue.(string), 10)
-				maxVal, _ := new(big.Int).SetString(paramInfo.MaxValue.(string), 10)
-				if bigVal.Cmp(minVal) < 0 || bigVal.Cmp(maxVal) > 0 {
-					return fmt.Errorf("value %s out of range [%s, %s]", val, paramInfo.MinValue, paramInfo.MaxValue)
-				}
-			}
-		} else {
-			return fmt.Errorf("invalid type for string parameter")
+		var val string
+		switch v := value.(type) {
+		case string:
+			val = v
+		case int, int64, uint64, float64:
+			// 数值类型转换为字符串
+			val = fmt.Sprintf("%v", v)
+		default:
+			return fmt.Errorf("invalid type %T for string parameter", value)
 		}
+
+		// 对于大整数字符串，需要特殊处理
+		if parameter == "dpos_reward_amount" || parameter == "dpos_delegate_threshold" {
+			bigVal, ok := new(big.Int).SetString(val, 10)
+			if !ok {
+				return fmt.Errorf("invalid big integer string: %s", val)
+			}
+			
+			// 安全的类型断言
+			minValStr, ok := paramInfo.MinValue.(string)
+			if !ok {
+				return fmt.Errorf("invalid MinValue type for parameter %s", parameter)
+			}
+			maxValStr, ok := paramInfo.MaxValue.(string)
+			if !ok {
+				return fmt.Errorf("invalid MaxValue type for parameter %s", parameter)
+			}
+			
+			minVal, ok := new(big.Int).SetString(minValStr, 10)
+			if !ok {
+				return fmt.Errorf("invalid MinValue format for parameter %s: %s", parameter, minValStr)
+			}
+			maxVal, ok := new(big.Int).SetString(maxValStr, 10)
+			if !ok {
+				return fmt.Errorf("invalid MaxValue format for parameter %s: %s", parameter, maxValStr)
+			}
+			
+			if bigVal.Cmp(minVal) < 0 || bigVal.Cmp(maxVal) > 0 {
+				return fmt.Errorf("value %s out of range [%s, %s]", val, minValStr, maxValStr)
+			}
+		}
+
 	default:
 		return fmt.Errorf("unsupported parameter type: %s", paramInfo.Type)
 	}
@@ -13523,6 +13632,9 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 		totalVoterRewardBig.Div(totalVoterRewardBig, big.NewInt(100))
 
 		// 6. 获取该验证者的投票者并分配奖励
+		// 先调试数据库内容
+		d.debugDatabaseContents()
+
 		votersForValidator := d.getVotersForValidator(validatorAddress)
 		totalVotesForValidator := d.getTotalVotesForValidator(validatorAddress)
 
@@ -13557,12 +13669,22 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 				"totalVotesForValidator", totalVotesForValidator.String(),
 				"votersCount", len(votersForValidator))
 		} else {
+			voterRewardBig = big.NewInt(0)
 			voterReward = "0"
 			d.logger.Debug("该验证者没有投票者", "validatorAddress", validatorAddress.String())
 		}
 
-		// 总奖励
-		totalRewardBig := new(big.Int).Add(validatorRewardBig, voterRewardBig)
+		// 总奖励 - 修复空指针问题
+		var totalRewardBig *big.Int
+		if validatorRewardBig != nil && voterRewardBig != nil {
+			totalRewardBig = new(big.Int).Add(validatorRewardBig, voterRewardBig)
+		} else if validatorRewardBig != nil {
+			totalRewardBig = new(big.Int).Set(validatorRewardBig)
+		} else if voterRewardBig != nil {
+			totalRewardBig = new(big.Int).Set(voterRewardBig)
+		} else {
+			totalRewardBig = big.NewInt(0)
+		}
 		totalReward = totalRewardBig.String()
 
 		// 每块奖励
