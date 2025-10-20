@@ -3710,45 +3710,6 @@ func (d *DPOS) GetVotableParameters(ctx context.Context) (interface{}, error) {
 	return nil, fmt.Errorf("DPoS engine does not support parameter proposals")
 }
 
-// CheckProposalResult 检查提案投票结果
-func (d *DPOS) CheckProposalResult(ctx context.Context, proposalID string) (interface{}, error) {
-	d.logger.Info("DPoS CheckProposalResult called", "proposalID", proposalID)
-
-	// 获取DPoS引擎
-	dposEngine := d.getDPoSEngine()
-	if dposEngine == nil {
-		return nil, fmt.Errorf("DPoS engine not available")
-	}
-
-	// 调用DPoS引擎检查提案结果
-	if checkResult, ok := dposEngine.(interface {
-		CheckProposalResult(proposalID string) error
-	}); ok {
-		err := checkResult.CheckProposalResult(proposalID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to check proposal result: %w", err)
-		}
-
-		// 获取更新后的提案信息
-		if getProposal, ok := dposEngine.(interface {
-			GetParameterProposal(proposalID string) (*dpos.ParameterProposal, error)
-		}); ok {
-			proposal, err := getProposal.GetParameterProposal(proposalID)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get updated proposal: %w", err)
-			}
-
-			return map[string]interface{}{
-				"success":    true,
-				"proposalId": proposal.ID,
-				"status":     proposal.Status.String(),
-			}, nil
-		}
-	}
-
-	return nil, fmt.Errorf("DPoS engine does not support parameter proposals")
-}
-
 // ExecuteParameterUpdate 执行参数更新
 func (d *DPOS) ExecuteParameterUpdate(ctx context.Context, proposalID string) (interface{}, error) {
 	d.logger.Info("DPoS ExecuteParameterUpdate called", "proposalID", proposalID)

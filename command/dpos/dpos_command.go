@@ -7,6 +7,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/command/dpos/epoch"
 	getVoteByHash "github.com/Vcity-Team/vcitychain/command/dpos/get_vote_by_hash"
 	"github.com/Vcity-Team/vcitychain/command/dpos/parameters"
+	"github.com/Vcity-Team/vcitychain/command/dpos/proposal"
 	"github.com/Vcity-Team/vcitychain/command/dpos/rewards"
 	"github.com/Vcity-Team/vcitychain/command/dpos/stats"
 	"github.com/Vcity-Team/vcitychain/command/dpos/validator_info"
@@ -41,6 +42,7 @@ func GetCommand() *cobra.Command {
 		// Governance commands
 		parameters.GetCommand(),
 		current_params.GetCommand(),
+		proposal.GetCommand(),
 		// Future DPoS commands can be added here:
 		// - delegate management
 		// - staking operations
