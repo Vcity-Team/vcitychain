@@ -5050,6 +5050,11 @@ func (d *DPoS) Initialize() error {
 		return fmt.Errorf("failed to initialize economic system: %w", err)
 	}
 
+	// 🆕 新增：初始化治理系统
+	if err := d.InitializeGovernance(); err != nil {
+		return fmt.Errorf("failed to initialize governance: %w", err)
+	}
+
 	// 创建DPoS runtime
 	runtimeConfig := &runtimeConfig{
 		DataDir:          d.dataDir,
