@@ -3469,6 +3469,55 @@ func (d *DPoS) initializeParameterCache() error {
 	return nil
 }
 
+// getGovernanceParameterValue 获取治理参数的当前值
+func (d *DPoS) getGovernanceParameterValue(paramName string) (interface{}, error) {
+	switch paramName {
+	case "governance_voting_period":
+		// 默认100个区块的投票期
+		return uint64(100), nil
+	case "governance_voting_threshold":
+		// 默认51%的通过门槛
+		return uint64(51), nil
+	case "governance_min_voting_threshold":
+		// 默认最小投票门槛
+		return d.getMinVotingThreshold().String(), nil
+	default:
+		return nil, fmt.Errorf("unknown governance parameter: %s", paramName)
+	}
+}
+
+// getVotingPeriod 获取当前投票期间长度
+func (d *DPoS) getVotingPeriod() uint64 {
+	// 优先从缓存获取
+	d.parameterValuesMutex.RLock()
+	if value, exists := d.parameterCurrentValues["governance_voting_period"]; exists {
+		if period, ok := value.(uint64); ok {
+			d.parameterValuesMutex.RUnlock()
+			return period
+		}
+	}
+	d.parameterValuesMutex.RUnlock()
+
+	// 如果缓存中没有，使用默认值
+	return 100
+}
+
+// getVotingThreshold 获取当前投票通过阈值
+func (d *DPoS) getVotingThreshold() uint64 {
+	// 优先从缓存获取
+	d.parameterValuesMutex.RLock()
+	if value, exists := d.parameterCurrentValues["governance_voting_threshold"]; exists {
+		if threshold, ok := value.(uint64); ok {
+			d.parameterValuesMutex.RUnlock()
+			return threshold
+		}
+	}
+	d.parameterValuesMutex.RUnlock()
+
+	// 如果缓存中没有，使用默认值
+	return 51
+}
+
 // getConfigParameterValue 从配置文件获取参数值
 func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 	switch paramName {
@@ -3641,6 +3690,31 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Description: "Epoch持续时间",
 			Category:    "consensus",
 		},
+		// 🆕 治理参数
+		"governance_voting_period": {
+			Name:        "Voting Period",
+			Type:        "uint64",
+			MinValue:    uint64(10),   // 最少10个区块
+			MaxValue:    uint64(1000), // 最多1000个区块
+			Description: "提案投票期间长度 (区块数)",
+			Category:    "governance",
+		},
+		"governance_voting_threshold": {
+			Name:        "Voting Threshold",
+			Type:        "uint64",
+			MinValue:    uint64(30), // 最少30%
+			MaxValue:    uint64(90), // 最多90%
+			Description: "提案通过所需的最低支持率 (%)",
+			Category:    "governance",
+		},
+		"governance_min_voting_threshold": {
+			Name:        "Min Voting Threshold",
+			Type:        "string",
+			MinValue:    "1000000000000000000",    // 最少1 VIC
+			MaxValue:    "1000000000000000000000", // 最多1000 VIC
+			Description: "参与投票所需的最小质押门槛 (wei)",
+			Category:    "governance",
+		},
 	}
 }
 
@@ -3681,10 +3755,10 @@ func (d *DPoS) CreateParameterProposal(proposer types.Address, parameter string,
 		NewValue:    newValue,
 		Proposer:    proposer,
 		StartBlock:  d.getCurrentBlockNumber() + 1,
-		EndBlock:    d.getCurrentBlockNumber() + 100, // 100个区块的投票期
+		EndBlock:    d.getCurrentBlockNumber() + d.getVotingPeriod(), // 动态投票期
 		Status:      ProposalPending,
 		Votes:       make(map[types.Address]ParameterVote),
-		Threshold:   51, // 51%通过阈值
+		Threshold:   d.getVotingThreshold(), // 动态通过阈值
 		Description: description,
 		CreatedAt:   uint64(time.Now().Unix()),
 	}
@@ -3729,9 +3803,18 @@ func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, s
 		return fmt.Errorf("voting period has ended or not started")
 	}
 
-	// 检查投票者权限（只有验证者可以投票）
-	if !d.isValidator(voter) {
-		return fmt.Errorf("only validators can vote")
+	// 检查投票者是否有足够的质押（允许所有用户投票，但需要质押）
+	// 获取投票者的质押权重
+	votingWeight := d.getVoterVotingWeight(voter)
+	if votingWeight.Cmp(big.NewInt(0)) <= 0 {
+		return fmt.Errorf("voter must have staked tokens to vote")
+	}
+
+	// 检查最小投票门槛（类似TRON的最小投票要求）
+	minVotingThreshold := d.getMinVotingThreshold()
+	if votingWeight.Cmp(minVotingThreshold) < 0 {
+		return fmt.Errorf("voting weight %s is below minimum threshold %s",
+			votingWeight.String(), minVotingThreshold.String())
 	}
 
 	// 检查是否已经投票
@@ -3739,8 +3822,8 @@ func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, s
 		return fmt.Errorf("already voted on this proposal")
 	}
 
-	// 计算投票权重（基于验证者的投票权重）
-	weight := d.getValidatorVotingWeight(voter)
+	// 计算投票权重（基于质押数量）
+	weight := votingWeight
 
 	// 创建投票
 	vote := &ParameterVote{
@@ -3911,6 +3994,15 @@ func (d *DPoS) isParameterVotable(parameter string) bool {
 
 // getCurrentParameterValue 获取当前参数值
 func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
+	// 优先从缓存获取
+	d.parameterValuesMutex.RLock()
+	if value, exists := d.parameterCurrentValues[parameter]; exists {
+		d.parameterValuesMutex.RUnlock()
+		return value, nil
+	}
+	d.parameterValuesMutex.RUnlock()
+
+	// 如果缓存中没有，从不同来源获取
 	switch parameter {
 	case "dpos_validator_reward_ratio":
 		return d.config.ValidatorRewardRatio, nil
@@ -3930,6 +4022,15 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 		return uint64(d.config.BlockTime.Duration.Seconds()), nil
 	case "dpos_epoch_duration":
 		return d.config.EpochDuration.String(), nil
+	case "governance_voting_period":
+		// 治理参数：投票期间长度
+		return uint64(100), nil
+	case "governance_voting_threshold":
+		// 治理参数：投票通过阈值
+		return uint64(51), nil
+	case "governance_min_voting_threshold":
+		// 治理参数：最小投票门槛
+		return d.getMinVotingThreshold().String(), nil
 	default:
 		return nil, fmt.Errorf("unknown parameter: %s", parameter)
 	}
@@ -4044,6 +4145,60 @@ func (d *DPoS) validateParameterValue(parameter string, value interface{}) error
 	return nil
 }
 
+// getVoterVotingWeight 获取投票者的质押权重（所有用户都可以投票）
+func (d *DPoS) getVoterVotingWeight(voter types.Address) *big.Int {
+	// 从质押信息中获取该地址的总质押数量
+	if d.state != nil && d.state.StakeStore != nil {
+		stakingInfo, err := d.state.StakeStore.GetStakingInfo()
+		if err != nil {
+			d.logger.Warn("Failed to get staking info for voter weight", "error", err)
+			return big.NewInt(0)
+		}
+
+		totalStaked := big.NewInt(0)
+		for _, stake := range stakingInfo {
+			if stake.Staker == voter {
+				totalStaked.Add(totalStaked, stake.Amount)
+			}
+		}
+
+		d.logger.Debug("Voter voting weight calculated",
+			"voter", voter.String(),
+			"totalStaked", totalStaked.String())
+
+		return totalStaked
+	}
+
+	return big.NewInt(0)
+}
+
+// getMinVotingThreshold 获取最小投票门槛（类似TRON）
+func (d *DPoS) getMinVotingThreshold() *big.Int {
+	// 优先从缓存获取（可能被提案修改过）
+	d.parameterValuesMutex.RLock()
+	if value, exists := d.parameterCurrentValues["governance_min_voting_threshold"]; exists {
+		if thresholdStr, ok := value.(string); ok {
+			if threshold, ok := new(big.Int).SetString(thresholdStr, 10); ok {
+				d.parameterValuesMutex.RUnlock()
+				return threshold
+			}
+		}
+	}
+	d.parameterValuesMutex.RUnlock()
+
+	// 如果缓存中没有，从配置中获取最小质押门槛，作为最小投票门槛
+	if d.config != nil && d.config.MinVotingPower != nil {
+		return d.config.MinVotingPower
+	}
+	// 默认最小门槛：1 VIC
+	return big.NewInt(1000000000000000000) // 1 VIC in wei
+}
+
+// GetMinVotingThreshold 公开方法：获取最小投票门槛
+func (d *DPoS) GetMinVotingThreshold() *big.Int {
+	return d.getMinVotingThreshold()
+}
+
 // getValidatorVotingWeight 获取验证者投票权重
 func (d *DPoS) getValidatorVotingWeight(validator types.Address) *big.Int {
 	for _, delegate := range d.delegates {
@@ -4063,9 +4218,23 @@ func (d *DPoS) signParameterVote(vote *ParameterVote) error {
 
 // getCurrentBlockNumber 获取当前区块号
 func (d *DPoS) getCurrentBlockNumber() uint64 {
-	// 这里应该从区块链获取当前区块号
-	// 暂时返回0，实际实现需要根据您的区块链接口
-	return 0
+	if d.config == nil {
+		d.logger.Debug("🔍 getCurrentBlockNumber: config is nil")
+		return 0
+	}
+	if d.config.Blockchain == nil {
+		d.logger.Debug("🔍 getCurrentBlockNumber: Blockchain is nil")
+		return 0
+	}
+
+	currentHeader := d.config.Blockchain.Header()
+	if currentHeader == nil {
+		d.logger.Debug("🔍 getCurrentBlockNumber: Header() returned nil")
+		return 0
+	}
+
+	d.logger.Debug("🔍 getCurrentBlockNumber: success", "blockNumber", currentHeader.Number)
+	return currentHeader.Number
 }
 
 // UpdateParameterValue 更新参数值
@@ -4177,9 +4346,29 @@ func (d *DPoS) GetVotableParameters() map[string]*ParameterInfo {
 				"param", name,
 				"value", currentValue)
 		} else {
-			d.logger.Debug("No current value found for parameter",
-				"param", name,
-				"cacheSize", len(d.parameterCurrentValues))
+			// 如果缓存中没有，尝试从不同来源获取默认值
+			var defaultValue interface{}
+			var err error
+
+			// 优先尝试从治理参数获取
+			if defaultValue, err = d.getGovernanceParameterValue(name); err == nil {
+				infoCopy.CurrentValue = defaultValue
+				d.logger.Debug("Found governance value for parameter",
+					"param", name,
+					"value", defaultValue)
+			} else {
+				// 如果治理参数中没有，尝试从配置文件获取
+				if defaultValue, err = d.getConfigParameterValue(name); err == nil {
+					infoCopy.CurrentValue = defaultValue
+					d.logger.Debug("Found config value for parameter",
+						"param", name,
+						"value", defaultValue)
+				} else {
+					d.logger.Debug("No current value found for parameter",
+						"param", name,
+						"cacheSize", len(d.parameterCurrentValues))
+				}
+			}
 		}
 		d.parameterValuesMutex.RUnlock()
 

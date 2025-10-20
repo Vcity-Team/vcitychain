@@ -3572,6 +3572,32 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 	return nil, fmt.Errorf("DPoS engine does not support parameter proposals")
 }
 
+// GetMinVotingThreshold 获取最小投票门槛
+func (d *DPOS) GetMinVotingThreshold(ctx context.Context) (interface{}, error) {
+	d.logger.Info("DPoS GetMinVotingThreshold called")
+
+	// 获取DPoS引擎
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return nil, fmt.Errorf("DPoS engine not available")
+	}
+
+	// 调用DPoS引擎获取最小投票门槛
+	if getMinThreshold, ok := dposEngine.(interface {
+		GetMinVotingThreshold() *big.Int
+	}); ok {
+		threshold := getMinThreshold.GetMinVotingThreshold()
+
+		return map[string]interface{}{
+			"success":   true,
+			"threshold": threshold.String(),
+			"message":   "Minimum voting threshold retrieved successfully",
+		}, nil
+	}
+
+	return nil, fmt.Errorf("DPoS engine does not support min voting threshold")
+}
+
 // VoteOnParameterProposal 对参数提案进行投票
 func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) (interface{}, error) {
 	d.logger.Info("DPoS VoteOnParameterProposal called", "params", params)
@@ -3680,29 +3706,119 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 
 		// 转换投票记录
 		votes := make(map[string]interface{})
+		var supportVoters []map[string]interface{}
+		var opposeVoters []map[string]interface{}
+
 		for addr, vote := range proposal.Votes {
-			votes[addr.String()] = map[string]interface{}{
+			voteInfo := map[string]interface{}{
 				"voter":      vote.Voter.String(),
 				"proposalId": vote.ProposalID,
 				"support":    vote.Support,
 				"weight":     vote.Weight.String(),
 				"timestamp":  vote.Timestamp,
 			}
+			votes[addr.String()] = voteInfo
+
+			// 按支持/反对分组
+			if vote.Support {
+				supportVoters = append(supportVoters, voteInfo)
+			} else {
+				opposeVoters = append(opposeVoters, voteInfo)
+			}
 		}
 
+		// 计算投票统计
+		totalVotes := len(proposal.Votes)
+		supportVotes := 0
+		opposeVotes := 0
+		totalWeight := big.NewInt(0)
+		supportWeight := big.NewInt(0)
+		opposeWeight := big.NewInt(0)
+
+		for _, vote := range proposal.Votes {
+			totalWeight.Add(totalWeight, vote.Weight)
+			if vote.Support {
+				supportVotes++
+				supportWeight.Add(supportWeight, vote.Weight)
+			} else {
+				opposeVotes++
+				opposeWeight.Add(opposeWeight, vote.Weight)
+			}
+		}
+
+		// 计算通过率
+		passRate := float64(0)
+		if totalWeight.Cmp(big.NewInt(0)) > 0 {
+			passRateFloat := new(big.Float).SetInt(supportWeight)
+			totalWeightFloat := new(big.Float).SetInt(totalWeight)
+			passRateFloat.Quo(passRateFloat, totalWeightFloat)
+			passRateFloat.Mul(passRateFloat, big.NewFloat(100))
+			passRate, _ = passRateFloat.Float64()
+		}
+
+		// 计算剩余区块数
+		currentBlock := uint64(0)
+		if dposEngine := d.getDPoSEngine(); dposEngine != nil {
+			if getCurrentBlock, ok := dposEngine.(interface {
+				getCurrentBlockNumber() uint64
+			}); ok {
+				currentBlock = getCurrentBlock.getCurrentBlockNumber()
+			}
+		}
+		remainingBlocks := int64(0)
+		if proposal.EndBlock > currentBlock {
+			remainingBlocks = int64(proposal.EndBlock - currentBlock)
+		}
+
+		// 判断是否通过（TRON风格：需要达到阈值且投票期结束）
+		isPassed := supportWeight.Cmp(big.NewInt(0)) > 0 &&
+			passRate >= float64(proposal.Threshold) &&
+			currentBlock > proposal.EndBlock // 投票期必须结束
+
+		// 格式化创建时间
+		createdAtTime := time.Unix(int64(proposal.CreatedAt), 0)
+		createdAtFormatted := createdAtTime.Format("2006-01-02 15:04:05")
+
 		return map[string]interface{}{
-			"proposalId":  proposal.ID,
-			"parameter":   proposal.Parameter,
-			"oldValue":    proposal.OldValue,
-			"newValue":    proposal.NewValue,
-			"proposer":    proposal.Proposer.String(),
-			"startBlock":  proposal.StartBlock,
-			"endBlock":    proposal.EndBlock,
-			"status":      proposal.Status.String(),
-			"threshold":   proposal.Threshold,
-			"description": proposal.Description,
-			"createdAt":   proposal.CreatedAt,
-			"votes":       votes,
+			"success": true,
+			"proposal": map[string]interface{}{
+				"proposalId":  proposal.ID,
+				"parameter":   proposal.Parameter,
+				"oldValue":    proposal.OldValue,
+				"newValue":    proposal.NewValue,
+				"proposer":    proposal.Proposer.String(),
+				"startBlock":  proposal.StartBlock,
+				"endBlock":    proposal.EndBlock,
+				"status":      proposal.Status.String(),
+				"threshold":   fmt.Sprintf("%d%%", proposal.Threshold), // 显示为百分比
+				"description": proposal.Description,
+				"createdAt":   createdAtFormatted, // 人类可读的时间格式
+				"createdAtTs": proposal.CreatedAt, // 保留时间戳供程序使用
+				"votes":       votes,
+				// 🆕 新增详细投票者信息
+				"voterDetails": map[string]interface{}{
+					"supportVoters": supportVoters,
+					"opposeVoters":  opposeVoters,
+					"totalVoters":   len(proposal.Votes),
+				},
+				// 🆕 新增详细统计信息
+				"voteStats": map[string]interface{}{
+					"totalVotes":    totalVotes,
+					"supportVotes":  supportVotes,
+					"opposeVotes":   opposeVotes,
+					"totalWeight":   totalWeight.String(),
+					"supportWeight": supportWeight.String(),
+					"opposeWeight":  opposeWeight.String(),
+					"passRate":      fmt.Sprintf("%.2f%%", passRate),
+					"isPassed":      isPassed,
+				},
+				"timeInfo": map[string]interface{}{
+					"currentBlock":    currentBlock,
+					"remainingBlocks": remainingBlocks,
+					"isExpired":       remainingBlocks <= 0,
+					"votingPeriod":    fmt.Sprintf("区块 %d - %d", proposal.StartBlock, proposal.EndBlock),
+				},
+			},
 		}, nil
 	}
 
@@ -3761,11 +3877,11 @@ func (d *DPOS) GetActiveProposals(ctx context.Context) (interface{}, error) {
 
 		return map[string]interface{}{
 			"proposals": result,
-			"count":     len(result),
-		}, nil
-	}
+		"count":     len(result),
+	}, nil
+}
 
-	return nil, fmt.Errorf("DPoS engine does not support parameter proposals")
+return nil, fmt.Errorf("DPoS engine does not support parameter proposals")
 }
 
 // GetVotableParameters 获取可表决参数列表

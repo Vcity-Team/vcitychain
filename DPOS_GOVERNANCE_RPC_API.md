@@ -389,6 +389,52 @@ dpos:
 ./main dpos current-params
 ```
 
+### 6. 获取最小投票门槛
+
+#### 6.1 RPC方法
+
+**方法名**: `dpos_getMinVotingThreshold`
+
+**描述**: 获取参与投票所需的最小质押门槛
+
+**参数**: 无
+
+**返回值**:
+```json
+{
+  "success": true,
+  "threshold": "1000000000000000000",
+  "message": "Minimum voting threshold retrieved successfully"
+}
+```
+
+**字段说明**:
+- `success`: 操作是否成功
+- `threshold`: 最小投票门槛（wei）
+- `message`: 操作结果消息
+
+#### 6.2 命令行工具
+
+**命令**: `./main dpos min-threshold [--server <server>]`
+
+**参数**:
+- `--server`: JSON-RPC服务器地址（默认: http://localhost:8545）
+
+**示例**:
+```bash
+# 查询最小投票门槛
+./main dpos min-threshold
+
+# 指定服务器地址
+./main dpos min-threshold --server http://localhost:8546
+```
+
+**输出示例**:
+```
+最小投票门槛: 1000000000000000000 wei
+说明: Minimum voting threshold retrieved successfully
+```
+
 ---
 
 **版本**: 1.0.0  
