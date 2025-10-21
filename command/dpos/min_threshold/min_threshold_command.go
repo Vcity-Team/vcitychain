@@ -1,69 +1,106 @@
 package min_threshold
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
-	"os"
+	"io"
+	"net/http"
+	"time"
 
+	"github.com/spf13/cobra"
+
+	"github.com/Vcity-Team/vcitychain/command"
 	"github.com/Vcity-Team/vcitychain/command/helper"
 )
 
-// MinThresholdCommand 最小投票门槛查询命令
-type MinThresholdCommand struct {
-	*helper.BaseCommand
+// GetCommand returns the min-threshold command
+func GetCommand() *cobra.Command {
+	minThresholdCmd := &cobra.Command{
+		Use:   "min-threshold",
+		Short: "Query the minimum voting threshold",
+		Long:  "Query the minimum voting threshold required to participate in DPoS governance voting",
+		Run:   runCommand,
+	}
+
+	minThresholdCmd.Flags().String("server", "http://localhost:8545", "JSON-RPC server address")
+	helper.RegisterJSONOutputFlag(minThresholdCmd)
+
+	return minThresholdCmd
 }
 
-// GetName 返回命令名称
-func (c *MinThresholdCommand) GetName() string {
-	return "min-threshold"
+func runCommand(cmd *cobra.Command, args []string) {
+	outputter := command.InitializeOutputter(cmd)
+	defer outputter.WriteOutput()
+
+	server, _ := cmd.Flags().GetString("server")
+
+	// 调用JSON-RPC获取最小投票门槛
+	result, err := callJSONRPC(server, "dpos_getMinVotingThreshold", []interface{}{})
+	if err != nil {
+		outputter.SetError(fmt.Errorf("failed to call JSON-RPC: %w", err))
+		return
+	}
+
+	// 创建CommandResult
+	commandResult := &MinThresholdResult{
+		Data: result.(map[string]interface{}),
+	}
+	outputter.SetCommandResult(commandResult)
 }
 
-// GetDescription 返回命令描述
-func (c *MinThresholdCommand) GetDescription() string {
-	return "查询最小投票门槛"
-}
+func callJSONRPC(server, method string, params []interface{}) (interface{}, error) {
+	// 构建JSON-RPC请求
+	request := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"method":  method,
+		"params":  params,
+		"id":      1,
+	}
 
-// GetUsage 返回命令用法
-func (c *MinThresholdCommand) GetUsage() string {
-	return "dpos min-threshold [--server <server>]"
-}
+	// 序列化请求
+	requestBody, err := json.Marshal(request)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
 
-// Execute 执行命令
-func (c *MinThresholdCommand) Execute(args []string) error {
-	// 解析参数
-	server := "http://localhost:8545"
+	// 发送HTTP请求
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
 
-	for i, arg := range args {
-		switch arg {
-		case "--server":
-			if i+1 < len(args) {
-				server = args[i+1]
-			} else {
-				return fmt.Errorf("--server requires a value")
+	resp, err := client.Post(server, "application/json", bytes.NewBuffer(requestBody))
+	if err != nil {
+		return nil, fmt.Errorf("RPC调用失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// 读取响应
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// 解析响应
+	var jsonResp map[string]interface{}
+	if err := json.Unmarshal(responseBody, &jsonResp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	// 检查RPC错误
+	if errorObj, exists := jsonResp["error"]; exists && errorObj != nil {
+		if errorMap, ok := errorObj.(map[string]interface{}); ok {
+			if message, ok := errorMap["message"].(string); ok {
+				return nil, fmt.Errorf("RPC调用失败: RPC错误: %s", message)
 			}
 		}
+		return nil, fmt.Errorf("RPC调用失败: RPC错误")
 	}
 
-	// 获取最小投票门槛
-	result, err := GetMinVotingThreshold(server)
-	if err != nil {
-		return fmt.Errorf("获取最小投票门槛失败: %w", err)
+	// 返回结果
+	if result, exists := jsonResp["result"]; exists {
+		return result, nil
 	}
 
-	// 输出结果
-	if result.Success {
-		fmt.Printf("最小投票门槛: %s wei\n", result.Threshold)
-		fmt.Printf("说明: %s\n", result.Message)
-	} else {
-		fmt.Printf("获取失败: %s\n", result.Message)
-		os.Exit(1)
-	}
-
-	return nil
-}
-
-// NewMinThresholdCommand 创建最小投票门槛查询命令
-func NewMinThresholdCommand() *MinThresholdCommand {
-	return &MinThresholdCommand{
-		BaseCommand: helper.NewBaseCommand(),
-	}
+	return nil, fmt.Errorf("no result in response")
 }
