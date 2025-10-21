@@ -146,12 +146,11 @@ func (s *RegistrationStore) UpdateRegistrationStatus(address types.Address, stat
 		}
 
 		reg.Status = status
-		now := uint64(time.Now().Unix())
 		switch status {
-		case RegStatusApproved:
-			reg.ApprovedAt = now
-		case RegStatusRejected:
-			reg.RejectedAt = now
+		case RegStatusActive:
+			reg.IsActive = true
+		case RegStatusWithdrawn:
+			reg.IsActive = false
 		}
 
 		updatedData, err := json.Marshal(reg)

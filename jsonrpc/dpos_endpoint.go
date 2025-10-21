@@ -611,6 +611,60 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	}
 	d.logger.Info("Balance check passed")
 
+	// 🆕 新增：受托人候选人验证
+	d.logger.Info("🔍 开始验证受托人候选人资格",
+		"voter", voterAddr.String(),
+		"candidate", candidateAddr.String(),
+		"amount", amountInt.String())
+
+	// 获取DPoS引擎进行受托人验证
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		d.logger.Error("❌ DPoS引擎不可用，无法验证受托人资格")
+		return &VoteResponse{
+			Success: false,
+			Error:   "DPoS engine not available for delegate validation",
+		}, nil
+	}
+
+	// 检查受托人是否已注册
+	if isRegistered, ok := dposEngine.(interface {
+		IsDelegateRegistered(address types.Address) bool
+	}); ok {
+		if !isRegistered.IsDelegateRegistered(candidateAddr) {
+			d.logger.Warn("❌ 受托人未注册，投票被拒绝",
+				"candidate", candidateAddr.String(),
+				"voter", voterAddr.String(),
+				"amount", amountInt.String())
+			return &VoteResponse{
+				Success: false,
+				Error:   fmt.Sprintf("delegate %s is not registered", candidateAddr.String()),
+			}, nil
+		}
+		d.logger.Info("✅ 受托人注册状态验证通过", "candidate", candidateAddr.String())
+	} else {
+		d.logger.Warn("⚠️ DPoS引擎不支持受托人注册检查，跳过验证")
+	}
+
+	// 检查受托人是否为候选人状态
+	if isCandidate, ok := dposEngine.(interface {
+		IsDelegateCandidate(address types.Address) bool
+	}); ok {
+		if !isCandidate.IsDelegateCandidate(candidateAddr) {
+			d.logger.Warn("❌ 受托人不是候选人状态，投票被拒绝",
+				"candidate", candidateAddr.String(),
+				"voter", voterAddr.String(),
+				"amount", amountInt.String())
+			return &VoteResponse{
+				Success: false,
+				Error:   fmt.Sprintf("delegate %s is not a candidate", candidateAddr.String()),
+			}, nil
+		}
+		d.logger.Info("✅ 受托人候选人状态验证通过", "candidate", candidateAddr.String())
+	} else {
+		d.logger.Warn("⚠️ DPoS引擎不支持受托人候选人检查，跳过验证")
+	}
+
 	// Implement actual voting logic
 	d.logger.Info("Vote validation completed", "voter", voterAddr, "candidate", candidateAddr, "amount", amountInt)
 
@@ -4008,7 +4062,7 @@ func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interf
 
 	// 解析参数
 	var addressStr string
-	
+
 	if paramMap, ok := params.(map[string]interface{}); ok {
 		addressStr, _ = paramMap["address"].(string)
 	} else if paramArray, ok := params.([]interface{}); ok && len(paramArray) == 1 {
@@ -4022,7 +4076,7 @@ func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interf
 	}
 
 	address := types.StringToAddress(addressStr)
-	
+
 	dposEngine := d.getDPoSEngine()
 	if dposEngine == nil {
 		return nil, fmt.Errorf("DPoS engine not available")

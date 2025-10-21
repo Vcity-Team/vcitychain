@@ -25,10 +25,10 @@ Transaction Hash: %s
 Block Number: %d`, v.Message, v.Voter, v.Candidate, v.Amount, v.TxHash, v.BlockNumber)
 	} else {
 		return fmt.Sprintf(`[VOTE RESULT]
-Status: %s
+Status: Failed
 Voter: %s
 Candidate: %s
 Amount: %s
-Note: %s`, "Failed", v.Voter, v.Candidate, v.Amount, v.Message)
+Note: %s`, v.Voter, v.Candidate, v.Amount, v.Message)
 	}
 }
