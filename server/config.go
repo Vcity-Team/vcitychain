@@ -64,6 +64,7 @@ type Config struct {
 	DPoSValidatorRewardRatio uint64 `yaml:"dpos_validator_reward_ratio"` // 验证者奖励比例
 	DPoSVoterRewardRatio     uint64 `yaml:"dpos_voter_reward_ratio"`     // 投票者奖励比例
 	DPoSProposalPeriod       string `yaml:"dpos_proposal_period"`        // 提案投票周期（时间字符串，如"24h", "1d"）
+	DPoSSRThreshold          string `yaml:"dpos_SR_threshold"`           // SR候选人保证金阈值
 	BlockTimeSeconds         uint64 `yaml:"block_time_s"`                // 区块间隔时间（秒）
 }
 

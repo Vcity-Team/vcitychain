@@ -758,6 +758,21 @@ func (s *Server) setupConsensus() error {
 		engineConfig["proposalPeriod"] = 24 * time.Hour // 默认24小时
 	}
 
+	// 从YAML配置中获取SR候选人保证金阈值
+	if srThresholdStr := s.config.DPoSSRThreshold; srThresholdStr != "" {
+		if srThreshold, ok := new(big.Int).SetString(srThresholdStr, 10); ok {
+			engineConfig["srThreshold"] = srThreshold
+			s.logger.Info("💰 设置SR候选人保证金阈值", "threshold", srThreshold.String())
+		} else {
+			s.logger.Error("❌ 无效的SR候选人保证金阈值", "threshold", srThresholdStr)
+			return fmt.Errorf("invalid SR threshold: %s", srThresholdStr)
+		}
+	} else {
+		// 默认不需要保证金
+		engineConfig["srThreshold"] = big.NewInt(0)
+		s.logger.Info("💰 使用默认SR候选人保证金阈值", "threshold", "0")
+	}
+
 	s.logger.Info("✅ DPoS经济系统配置解析完成",
 		"rewardAccount", engineConfig["rewardAccount"],
 		"rewardAmount", engineConfig["rewardAmount"],

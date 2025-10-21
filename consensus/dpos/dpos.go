@@ -306,6 +306,9 @@ type DPoSConfig struct {
 	ValidatorRewardRatio uint64        `json:"validatorRewardRatio" yaml:"validatorRewardRatio"`
 	VoterRewardRatio     uint64        `json:"voterRewardRatio" yaml:"voterRewardRatio"`
 	ProposalPeriod       time.Duration `json:"proposalPeriod" yaml:"dpos_proposal_period"`
+
+	// SR候选人保证金阈值
+	SRThreshold *big.Int `json:"srThreshold" yaml:"dpos_SR_threshold"`
 }
 
 // dpos_runtime.go
@@ -5573,6 +5576,20 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Warn("⏰ 未找到blockTime配置")
 	}
 
+	// 🆕 解析SR候选人保证金阈值配置
+	if srThreshold, exists := params.Config.Config["srThreshold"]; exists {
+		logger.Info("🔍 找到srThreshold配置", "type", fmt.Sprintf("%T", srThreshold), "value", srThreshold)
+		if threshold, ok := srThreshold.(*big.Int); ok {
+			vcity_dpos.config.SRThreshold = threshold
+			logger.Info("💰 设置SR候选人保证金阈值", "threshold", threshold.String())
+		} else {
+			logger.Warn("💰 srThreshold类型断言失败", "type", fmt.Sprintf("%T", srThreshold))
+		}
+	} else {
+		logger.Warn("💰 未找到srThreshold配置，使用默认值0")
+		vcity_dpos.config.SRThreshold = big.NewInt(0)
+	}
+
 	// 设置必要的配置字段
 	vcity_dpos.config.SecretsManager = params.SecretsManager
 	vcity_dpos.config.Blockchain = params.Blockchain
@@ -7756,11 +7773,20 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 
 // getDelegateDepositAmount 获取受托人保证金金额
 func (d *DPoS) getDelegateDepositAmount() *big.Int {
+	// 优先从配置文件读取
+	if d.config != nil && d.config.SRThreshold != nil {
+		// 如果配置为0，表示不需要保证金
+		if d.config.SRThreshold.Cmp(big.NewInt(0)) == 0 {
+			return big.NewInt(0)
+		}
+		return new(big.Int).Set(d.config.SRThreshold)
+	}
+
 	// 默认保证金：100 VCITY（比TRON的1000 TRX低）
 	depositAmount := new(big.Int)
 	depositAmount.SetString("100000000000000000000", 10) // 100 VCITY
 
-	// 可以从配置参数中读取
+	// 可以从治理参数中读取（动态修改）
 	if d.parameterCurrentValues != nil {
 		d.parameterValuesMutex.RLock()
 		if value, exists := d.parameterCurrentValues["delegate_deposit_amount"]; exists {

@@ -4,6 +4,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Vcity-Team/vcitychain/command/dpos/current_params"
+	"github.com/Vcity-Team/vcitychain/command/dpos/delegate"
 	"github.com/Vcity-Team/vcitychain/command/dpos/epoch"
 	getVoteByHash "github.com/Vcity-Team/vcitychain/command/dpos/get_vote_by_hash"
 	"github.com/Vcity-Team/vcitychain/command/dpos/min_threshold"
@@ -45,8 +46,9 @@ func GetCommand() *cobra.Command {
 		current_params.GetCommand(),
 		proposal.GetCommand(),
 		min_threshold.GetCommand(),
+		// Delegate management commands
+		delegate.GetCommand(),
 		// Future DPoS commands can be added here:
-		// - delegate management
 		// - staking operations
 		// - consensus status
 	)
