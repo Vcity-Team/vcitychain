@@ -155,6 +155,46 @@ type ParameterVote struct {
 	Signature  []byte        `json:"signature"` // 投票签名
 }
 
+// DelegateRegistration 受托人注册信息（改进的TRON风格）
+type DelegateRegistration struct {
+	Address      types.Address `json:"address"`      // 受托人地址
+	Name         string        `json:"name"`         // 受托人名称
+	Website      string        `json:"website"`      // 官方网站
+	Description  string        `json:"description"`  // 描述信息
+	Deposit      *big.Int      `json:"deposit"`      // 保证金（可退还）
+	Status       RegStatus     `json:"status"`       // 注册状态
+	CreatedAt    uint64        `json:"createdAt"`    // 申请时间
+	TotalVotes   *big.Int      `json:"totalVotes"`   // 总投票数
+	IsActive     bool          `json:"isActive"`     // 是否为活跃受托人
+	LastVoteTime uint64        `json:"lastVoteTime"` // 最后投票时间
+}
+
+// RegStatus 注册状态
+type RegStatus int
+
+const (
+	RegStatusCandidate RegStatus = iota // 候选人（可接受投票）
+	RegStatusActive                     // 活跃受托人
+	RegStatusInactive                   // 非活跃状态
+	RegStatusWithdrawn                  // 已退出
+)
+
+// String 返回注册状态的字符串表示
+func (rs RegStatus) String() string {
+	switch rs {
+	case RegStatusCandidate:
+		return "candidate"
+	case RegStatusActive:
+		return "active"
+	case RegStatusInactive:
+		return "inactive"
+	case RegStatusWithdrawn:
+		return "withdrawn"
+	default:
+		return "unknown"
+	}
+}
+
 // ParameterUpdate 参数更新记录
 type ParameterUpdate struct {
 	Parameter  string      `json:"parameter"`
@@ -3195,15 +3235,17 @@ type DPoS struct {
 
 // DelegateInfo 受托人信息
 type DelegateInfo struct {
-	Address        types.Address
-	VotingPower    *big.Int
-	TotalVotes     *big.Int
-	ProducedBlocks uint64
-	MissedBlocks   uint64
-	LastBlockTime  uint64
-	IsActive       bool
+	Address          types.Address         `json:"address"`
+	VotingPower      *big.Int              `json:"votingPower"`
+	TotalVotes       *big.Int              `json:"totalVotes"`
+	ProducedBlocks   uint64                `json:"producedBlocks"`
+	MissedBlocks     uint64                `json:"missedBlocks"`
+	LastBlockTime    uint64                `json:"lastBlockTime"`
+	IsActive         bool                  `json:"isActive"`
+	IsRegistered     bool                  `json:"isRegistered"`     // 是否已注册
+	RegistrationInfo *DelegateRegistration `json:"registrationInfo"` // 注册信息
 	// 🆕 新增：BLS公钥，确保签名验证一致性
-	BlsPublicKey []byte
+	BlsPublicKey []byte `json:"blsPublicKey"`
 }
 
 // VoteInfo 投票信息结构（用于解析交易数据）
@@ -7430,7 +7472,17 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		d.logger.Warn("Balance querier not available, skipping balance check")
 	}
 
-	// 2. 检查受托人是否存在且活跃（允许投票给任何地址）
+	// 🆕 新增：检查受托人是否已注册
+	if !d.isDelegateRegistered(vote.Delegate) {
+		return fmt.Errorf("delegate %s is not registered", vote.Delegate.String())
+	}
+
+	// 🆕 新增：检查受托人是否为候选人状态（可以接受投票）
+	if !d.isDelegateCandidate(vote.Delegate) {
+		return fmt.Errorf("delegate %s is not a candidate", vote.Delegate.String())
+	}
+
+	// 2. 检查受托人是否存在且活跃
 	delegateExists := false
 	for _, del := range d.delegates {
 		if del.Address == vote.Delegate && del.IsActive {
@@ -7439,18 +7491,15 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		}
 	}
 
-	// 如果受托人不在预定义列表中，自动创建并激活
+	// 如果受托人不在预定义列表中，创建受托人记录（但需要先注册）
 	if !delegateExists {
-
-		// 🆕 修复：新受托人的VotingPower应该初始化为0，但不要在这里设置
-		// 因为VotingPower会在后续的投票处理中正确设置
 		newDelegate := &validator.ValidatorMetadata{
 			Address:     vote.Delegate,
 			BlsKey:      nil,           // 暂时设为nil，后续可以更新
 			VotingPower: big.NewInt(0), // 初始化为0，后续会正确更新
 			IsActive:    false,         // 初始化为false，只有获得投票后才设为true
 		}
-		d.logger.Debug("Delegate not in predefined list, auto-creating",
+		d.logger.Debug("Creating delegate record for registered delegate",
 			"delegate", vote.Delegate.String(), "amount", "0")
 		// 添加到受托人列表（使用安全方法去重）
 		d.addDelegateSafely(newDelegate)
@@ -7483,6 +7532,301 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		return errors.New("total voting power exceeds maximum")
 	}
 
+	return nil
+}
+
+// isDelegateRegistered 检查受托人是否已注册
+func (d *DPoS) isDelegateRegistered(address types.Address) bool {
+	if d.state == nil || d.state.RegistrationStore == nil {
+		return false
+	}
+
+	reg, err := d.state.RegistrationStore.GetRegistration(address)
+	if err != nil {
+		return false
+	}
+
+	return reg != nil
+}
+
+// isDelegateCandidate 检查受托人是否为候选人状态（可以接受投票）
+func (d *DPoS) isDelegateCandidate(address types.Address) bool {
+	if d.state == nil || d.state.RegistrationStore == nil {
+		return false
+	}
+	
+	reg, err := d.state.RegistrationStore.GetRegistration(address)
+	if err != nil {
+		return false
+	}
+	
+	return reg != nil && (reg.Status == RegStatusCandidate || reg.Status == RegStatusActive)
+}
+
+// RegisterDelegate 注册受托人（改进的TRON风格）
+func (d *DPoS) RegisterDelegate(registrant types.Address, name, website, description string) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	// 检查是否已经注册
+	if d.isDelegateRegistered(registrant) {
+		return fmt.Errorf("delegate %s already registered", registrant.String())
+	}
+
+	// 获取保证金金额（可配置）
+	depositAmount := d.getDelegateDepositAmount()
+
+	// 检查余额
+	if d.balanceQuerier != nil {
+		balance, err := d.balanceQuerier.GetNativeTokenBalance(registrant)
+		if err != nil {
+			return fmt.Errorf("failed to query balance: %w", err)
+		}
+		if balance.Cmp(depositAmount) < 0 {
+			return fmt.Errorf("insufficient balance for delegate registration: required %s, available %s", 
+				depositAmount.String(), balance.String())
+		}
+	}
+
+	// 创建受托人候选人
+	registration := &DelegateRegistration{
+		Address:      registrant,
+		Name:         name,
+		Website:      website,
+		Description:  description,
+		Deposit:      depositAmount,
+		Status:       RegStatusCandidate, // 候选人状态
+		CreatedAt:    uint64(time.Now().Unix()),
+		TotalVotes:   big.NewInt(0),
+		IsActive:     false,
+		LastVoteTime: 0,
+	}
+
+	// 保存到数据库
+	if d.state != nil && d.state.RegistrationStore != nil {
+		if err := d.state.RegistrationStore.SaveRegistration(registration); err != nil {
+			return fmt.Errorf("failed to save registration: %w", err)
+		}
+	}
+
+	// 创建受托人记录（可以立即接受投票）
+	delegate := &validator.ValidatorMetadata{
+		Address:     registrant,
+		VotingPower: big.NewInt(0),
+		BlsKey:      nil,
+		IsActive:    false, // 初始为非活跃，需要投票激活
+	}
+
+	d.addDelegateSafely(delegate)
+
+	d.logger.Info("Delegate candidate registered successfully",
+		"address", registrant.String(),
+		"name", name,
+		"website", website,
+		"deposit", depositAmount.String(),
+		"status", "candidate")
+
+	return nil
+}
+
+// ApproveDelegate 批准受托人注册
+func (d *DPoS) ApproveDelegate(address types.Address) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	// 更新注册状态
+	if d.state != nil && d.state.RegistrationStore != nil {
+		if err := d.state.RegistrationStore.UpdateRegistrationStatus(address, RegStatusApproved); err != nil {
+			return fmt.Errorf("failed to update registration status: %w", err)
+		}
+	}
+
+	// 创建受托人记录
+	delegate := &validator.ValidatorMetadata{
+		Address:     address,
+		VotingPower: big.NewInt(0),
+		BlsKey:      nil,
+		IsActive:    false,
+	}
+
+	d.addDelegateSafely(delegate)
+
+	d.logger.Info("Delegate registration approved",
+		"address", address.String())
+
+	return nil
+}
+
+// RejectDelegate 拒绝受托人注册
+func (d *DPoS) RejectDelegate(address types.Address, reason string) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	// 更新注册状态
+	if d.state != nil && d.state.RegistrationStore != nil {
+		if err := d.state.RegistrationStore.UpdateRegistrationStatus(address, RegStatusRejected); err != nil {
+			return fmt.Errorf("failed to update registration status: %w", err)
+		}
+	}
+
+	d.logger.Info("Delegate registration rejected",
+		"address", address.String(),
+		"reason", reason)
+
+	return nil
+}
+
+// GetDelegateRegistrations 获取所有受托人注册信息
+func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
+	if d.state == nil || d.state.RegistrationStore == nil {
+		return nil, fmt.Errorf("registration store not available")
+	}
+
+	return d.state.RegistrationStore.GetAllRegistrations()
+}
+
+// getDelegateDepositAmount 获取受托人保证金金额
+func (d *DPoS) getDelegateDepositAmount() *big.Int {
+	// 默认保证金：100 VCITY（比TRON的1000 TRX低）
+	depositAmount := new(big.Int)
+	depositAmount.SetString("100000000000000000000", 10) // 100 VCITY
+	
+	// 可以从配置参数中读取
+	if d.parameterCurrentValues != nil {
+		d.parameterValuesMutex.RLock()
+		if value, exists := d.parameterCurrentValues["delegate_deposit_amount"]; exists {
+			if amount, ok := value.(string); ok {
+				if bigAmount, ok := new(big.Int).SetString(amount, 10); ok {
+					depositAmount = bigAmount
+				}
+			}
+		}
+		d.parameterValuesMutex.RUnlock()
+	}
+	
+	return depositAmount
+}
+
+// getMaxActiveDelegates 获取最大活跃受托人数量
+func (d *DPoS) getMaxActiveDelegates() int {
+	// 默认21个活跃受托人
+	maxActive := 21
+	
+	// 可以从配置参数中读取
+	if d.parameterCurrentValues != nil {
+		d.parameterValuesMutex.RLock()
+		if value, exists := d.parameterCurrentValues["max_active_delegates"]; exists {
+			if count, ok := value.(uint64); ok {
+				maxActive = int(count)
+			}
+		}
+		d.parameterValuesMutex.RUnlock()
+	}
+	
+	return maxActive
+}
+
+// updateActiveDelegates 更新活跃受托人（基于投票排名）
+func (d *DPoS) updateActiveDelegates() {
+	// 获取所有注册的受托人
+	registrations, err := d.GetDelegateRegistrations()
+	if err != nil {
+		d.logger.Error("Failed to get delegate registrations", "error", err)
+		return
+	}
+	
+	// 按投票数排序
+	sort.Slice(registrations, func(i, j int) bool {
+		return registrations[i].TotalVotes.Cmp(registrations[j].TotalVotes) > 0
+	})
+	
+	// 获取最大活跃受托人数量
+	maxActive := d.getMaxActiveDelegates()
+	
+	// 更新活跃状态
+	for i, reg := range registrations {
+		wasActive := reg.IsActive
+		reg.IsActive = i < maxActive
+		
+		// 更新状态
+		if reg.IsActive {
+			reg.Status = RegStatusActive
+		} else {
+			reg.Status = RegStatusCandidate
+		}
+		
+		// 保存更新
+		if d.state != nil && d.state.RegistrationStore != nil {
+			if err := d.state.RegistrationStore.SaveRegistration(reg); err != nil {
+				d.logger.Error("Failed to save registration update", "error", err)
+			}
+		}
+		
+		// 更新受托人记录
+		for _, delegate := range d.delegates {
+			if delegate.Address == reg.Address {
+				delegate.IsActive = reg.IsActive
+				break
+			}
+		}
+		
+		// 记录状态变化
+		if wasActive != reg.IsActive {
+			status := "inactive"
+			if reg.IsActive {
+				status = "active"
+			}
+			d.logger.Info("Delegate status changed",
+				"address", reg.Address.String(),
+				"name", reg.Name,
+				"status", status,
+				"votes", reg.TotalVotes.String(),
+				"rank", i+1)
+		}
+	}
+	
+	d.logger.Info("Active delegates updated",
+		"totalCandidates", len(registrations),
+		"activeDelegates", maxActive)
+}
+
+// WithdrawDelegate 退出受托人（退还保证金）
+func (d *DPoS) WithdrawDelegate(address types.Address) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+	
+	// 获取注册信息
+	reg, err := d.state.RegistrationStore.GetRegistration(address)
+	if err != nil {
+		return fmt.Errorf("failed to get registration: %w", err)
+	}
+	
+	if reg == nil {
+		return fmt.Errorf("delegate not found")
+	}
+	
+	// 检查是否还有投票
+	if reg.TotalVotes.Cmp(big.NewInt(0)) > 0 {
+		return fmt.Errorf("cannot withdraw while having votes")
+	}
+	
+	// 更新状态
+	reg.Status = RegStatusWithdrawn
+	reg.IsActive = false
+	
+	// 保存更新
+	if err := d.state.RegistrationStore.SaveRegistration(reg); err != nil {
+		return fmt.Errorf("failed to save registration: %w", err)
+	}
+	
+	// 从受托人列表中移除
+	d.removeDelegate(address)
+	
+	d.logger.Info("Delegate withdrawn successfully",
+		"address", address.String(),
+		"name", reg.Name,
+		"deposit", reg.Deposit.String())
+	
 	return nil
 }
 

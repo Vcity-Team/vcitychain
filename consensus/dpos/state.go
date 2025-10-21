@@ -54,6 +54,113 @@ type State struct {
 	BlockTrackerStore     *BlockTrackerStore // 🆕 新增出块统计存储
 	ParameterStore        *ParameterStore    // 🆕 新增参数存储
 	ProposalStore         *ProposalStore     // 🆕 新增提案存储
+	RegistrationStore     *RegistrationStore // 🆕 新增受托人注册存储
+}
+
+// RegistrationStore 受托人注册存储
+type RegistrationStore struct {
+	db *bolt.DB
+}
+
+// NewRegistrationStore 创建新的受托人注册存储
+func NewRegistrationStore(db *bolt.DB) *RegistrationStore {
+	return &RegistrationStore{db: db}
+}
+
+// SaveRegistration 保存注册信息
+func (s *RegistrationStore) SaveRegistration(reg *DelegateRegistration) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists([]byte("delegate_registrations"))
+		if err != nil {
+			return err
+		}
+
+		data, err := json.Marshal(reg)
+		if err != nil {
+			return err
+		}
+
+		return bucket.Put(reg.Address.Bytes(), data)
+	})
+}
+
+// GetRegistration 获取注册信息
+func (s *RegistrationStore) GetRegistration(address types.Address) (*DelegateRegistration, error) {
+	var reg *DelegateRegistration
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("delegate_registrations"))
+		if bucket == nil {
+			return nil
+		}
+
+		data := bucket.Get(address.Bytes())
+		if data == nil {
+			return nil
+		}
+
+		reg = &DelegateRegistration{}
+		return json.Unmarshal(data, reg)
+	})
+
+	return reg, err
+}
+
+// GetAllRegistrations 获取所有注册信息
+func (s *RegistrationStore) GetAllRegistrations() ([]*DelegateRegistration, error) {
+	var registrations []*DelegateRegistration
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("delegate_registrations"))
+		if bucket == nil {
+			return nil
+		}
+
+		return bucket.ForEach(func(key, value []byte) error {
+			reg := &DelegateRegistration{}
+			if err := json.Unmarshal(value, reg); err != nil {
+				return err
+			}
+			registrations = append(registrations, reg)
+			return nil
+		})
+	})
+
+	return registrations, err
+}
+
+// UpdateRegistrationStatus 更新注册状态
+func (s *RegistrationStore) UpdateRegistrationStatus(address types.Address, status RegStatus) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("delegate_registrations"))
+		if bucket == nil {
+			return fmt.Errorf("registrations bucket not found")
+		}
+
+		data := bucket.Get(address.Bytes())
+		if data == nil {
+			return fmt.Errorf("registration not found")
+		}
+
+		reg := &DelegateRegistration{}
+		if err := json.Unmarshal(data, reg); err != nil {
+			return err
+		}
+
+		reg.Status = status
+		now := uint64(time.Now().Unix())
+		switch status {
+		case RegStatusApproved:
+			reg.ApprovedAt = now
+		case RegStatusRejected:
+			reg.RejectedAt = now
+		}
+
+		updatedData, err := json.Marshal(reg)
+		if err != nil {
+			return err
+		}
+
+		return bucket.Put(address.Bytes(), updatedData)
+	})
 }
 
 // RewardRecordExtended 扩展的奖励记录结构，用于数据库存储
@@ -355,6 +462,7 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 		BlockTrackerStore:     &BlockTrackerStore{db: db}, // 🆕 使用主数据库
 		ParameterStore:        &ParameterStore{db: db},    // 🆕 使用主数据库
 		ProposalStore:         &ProposalStore{db: db},     // 🆕 使用主数据库
+		RegistrationStore:     &RegistrationStore{db: db}, // 🆕 使用主数据库
 	}
 
 	if err = s.initStorages(); err != nil {

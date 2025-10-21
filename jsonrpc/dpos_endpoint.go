@@ -3848,6 +3848,222 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 	return nil, fmt.Errorf("DPoS engine does not support parameter proposals")
 }
 
+// RegisterDelegate 注册受托人
+func (d *DPOS) RegisterDelegate(ctx context.Context, params interface{}) (interface{}, error) {
+	d.logger.Info("DPoS RegisterDelegate called", "params", params)
+
+	// 解析参数
+	var registrantStr, name, website, description string
+
+	if paramMap, ok := params.(map[string]interface{}); ok {
+		registrantStr, _ = paramMap["registrant"].(string)
+		name, _ = paramMap["name"].(string)
+		website, _ = paramMap["website"].(string)
+		description, _ = paramMap["description"].(string)
+	} else {
+		return nil, fmt.Errorf("invalid parameters format")
+	}
+
+	if registrantStr == "" {
+		return nil, fmt.Errorf("registrant address is required")
+	}
+
+	registrant := types.StringToAddress(registrantStr)
+
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return nil, fmt.Errorf("DPoS engine not available")
+	}
+
+	if registerDelegate, ok := dposEngine.(interface {
+		RegisterDelegate(registrant types.Address, name, website, description string) error
+	}); ok {
+		err := registerDelegate.RegisterDelegate(registrant, name, website, description)
+		if err != nil {
+			return nil, fmt.Errorf("failed to register delegate: %w", err)
+		}
+		return map[string]interface{}{
+			"success": true,
+			"message": "Delegate registration submitted successfully",
+		}, nil
+	}
+
+	return nil, fmt.Errorf("DPoS engine does not support delegate registration")
+}
+
+// GetDelegateRegistrations 获取受托人注册列表
+func (d *DPOS) GetDelegateRegistrations(ctx context.Context) (interface{}, error) {
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return nil, fmt.Errorf("DPoS engine not available")
+	}
+
+	if getRegistrations, ok := dposEngine.(interface {
+		GetDelegateRegistrations() ([]*dpos.DelegateRegistration, error)
+	}); ok {
+		registrations, err := getRegistrations.GetDelegateRegistrations()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get registrations: %w", err)
+		}
+		return map[string]interface{}{
+			"success":       true,
+			"registrations": registrations,
+		}, nil
+	}
+
+	return nil, fmt.Errorf("DPoS engine does not support delegate registrations")
+}
+
+// ApproveDelegate 批准受托人注册
+func (d *DPOS) ApproveDelegate(ctx context.Context, params interface{}) (interface{}, error) {
+	d.logger.Info("DPoS ApproveDelegate called", "params", params)
+
+	// 解析参数
+	var addressStr string
+
+	if paramMap, ok := params.(map[string]interface{}); ok {
+		addressStr, _ = paramMap["address"].(string)
+	} else if paramArray, ok := params.([]interface{}); ok && len(paramArray) == 1 {
+		addressStr, _ = paramArray[0].(string)
+	} else {
+		return nil, fmt.Errorf("invalid parameters format")
+	}
+
+	if addressStr == "" {
+		return nil, fmt.Errorf("address is required")
+	}
+
+	address := types.StringToAddress(addressStr)
+
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return nil, fmt.Errorf("DPoS engine not available")
+	}
+
+	if approveDelegate, ok := dposEngine.(interface {
+		ApproveDelegate(address types.Address) error
+	}); ok {
+		err := approveDelegate.ApproveDelegate(address)
+		if err != nil {
+			return nil, fmt.Errorf("failed to approve delegate: %w", err)
+		}
+		return map[string]interface{}{
+			"success": true,
+			"message": "Delegate registration approved successfully",
+		}, nil
+	}
+
+	return nil, fmt.Errorf("DPoS engine does not support delegate approval")
+}
+
+// RejectDelegate 拒绝受托人注册
+func (d *DPOS) RejectDelegate(ctx context.Context, params interface{}) (interface{}, error) {
+	d.logger.Info("DPoS RejectDelegate called", "params", params)
+
+	// 解析参数
+	var addressStr, reason string
+
+	if paramMap, ok := params.(map[string]interface{}); ok {
+		addressStr, _ = paramMap["address"].(string)
+		reason, _ = paramMap["reason"].(string)
+	} else if paramArray, ok := params.([]interface{}); ok && len(paramArray) >= 1 {
+		addressStr, _ = paramArray[0].(string)
+		if len(paramArray) > 1 {
+			reason, _ = paramArray[1].(string)
+		}
+	} else {
+		return nil, fmt.Errorf("invalid parameters format")
+	}
+
+	if addressStr == "" {
+		return nil, fmt.Errorf("address is required")
+	}
+
+	address := types.StringToAddress(addressStr)
+
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return nil, fmt.Errorf("DPoS engine not available")
+	}
+
+	if rejectDelegate, ok := dposEngine.(interface {
+		RejectDelegate(address types.Address, reason string) error
+	}); ok {
+		err := rejectDelegate.RejectDelegate(address, reason)
+		if err != nil {
+			return nil, fmt.Errorf("failed to reject delegate: %w", err)
+		}
+		return map[string]interface{}{
+			"success": true,
+			"message": "Delegate registration rejected successfully",
+		}, nil
+	}
+
+	return nil, fmt.Errorf("DPoS engine does not support delegate rejection")
+}
+
+// WithdrawDelegate 退出受托人
+func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interface{}, error) {
+	d.logger.Info("DPoS WithdrawDelegate called", "params", params)
+
+	// 解析参数
+	var addressStr string
+	
+	if paramMap, ok := params.(map[string]interface{}); ok {
+		addressStr, _ = paramMap["address"].(string)
+	} else if paramArray, ok := params.([]interface{}); ok && len(paramArray) == 1 {
+		addressStr, _ = paramArray[0].(string)
+	} else {
+		return nil, fmt.Errorf("invalid parameters format")
+	}
+
+	if addressStr == "" {
+		return nil, fmt.Errorf("address is required")
+	}
+
+	address := types.StringToAddress(addressStr)
+	
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return nil, fmt.Errorf("DPoS engine not available")
+	}
+
+	if withdrawDelegate, ok := dposEngine.(interface {
+		WithdrawDelegate(address types.Address) error
+	}); ok {
+		err := withdrawDelegate.WithdrawDelegate(address)
+		if err != nil {
+			return nil, fmt.Errorf("failed to withdraw delegate: %w", err)
+		}
+		return map[string]interface{}{
+			"success": true,
+			"message": "Delegate withdrawn successfully",
+		}, nil
+	}
+
+	return nil, fmt.Errorf("DPoS engine does not support delegate withdrawal")
+}
+
+// UpdateActiveDelegates 更新活跃受托人
+func (d *DPOS) UpdateActiveDelegates(ctx context.Context) (interface{}, error) {
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return nil, fmt.Errorf("DPoS engine not available")
+	}
+
+	if updateActiveDelegates, ok := dposEngine.(interface {
+		UpdateActiveDelegates()
+	}); ok {
+		updateActiveDelegates.UpdateActiveDelegates()
+		return map[string]interface{}{
+			"success": true,
+			"message": "Active delegates updated successfully",
+		}, nil
+	}
+
+	return nil, fmt.Errorf("DPoS engine does not support active delegates update")
+}
+
 // GetActiveProposals 获取活跃提案列表
 func (d *DPOS) GetActiveProposals(ctx context.Context) (interface{}, error) {
 	d.logger.Info("DPoS GetActiveProposals called")
