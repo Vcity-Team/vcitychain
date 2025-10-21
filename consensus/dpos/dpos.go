@@ -3258,6 +3258,35 @@ type VoteInfo struct {
 	Amount    *big.Int      `json:"amount"`
 }
 
+// ValidateVoteOnly 只验证投票，不更新状态（供 RPC 预验证使用）
+func (d *DPoS) ValidateVoteOnly(voter types.Address, candidate types.Address, amount *big.Int) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	d.logger.Debug("Validating vote only (no state update)",
+		"voter", voter.String(),
+		"candidate", candidate.String(),
+		"amount", amount.String())
+
+	// 创建投票消息
+	vote := &VoteMessage{
+		Voter:     voter,
+		Delegate:  candidate,
+		Amount:    amount,
+		Round:     d.currentRound,
+		Timestamp: uint64(time.Now().Unix()),
+	}
+
+	// 只进行验证，不更新状态
+	if err := d.validateVote(vote); err != nil {
+		d.logger.Error("❌ Vote validation failed", "error", err)
+		return fmt.Errorf("vote validation failed: %w", err)
+	}
+
+	d.logger.Debug("✅ Vote validation passed (no state update)")
+	return nil
+}
+
 // AddVote 添加投票到 DPoS 状态（供 JSON-RPC 调用）
 func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big.Int) error {
 	d.lock.Lock()

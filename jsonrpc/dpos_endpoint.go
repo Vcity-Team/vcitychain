@@ -686,11 +686,10 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		Timestamp: uint64(time.Now().Unix()),
 	}
 
-	// 调用DPoS引擎进行预验证
+	// 🆕 修复：只进行验证，不实际更新状态，避免重复处理
 	if dposEngineInstance, ok := dposEngine.(*dpos.DPoS); ok {
-		// 直接调用DPoS实例的AddVote方法进行预验证
-		// AddVote内部会调用validateVote进行完整验证
-		if err := dposEngineInstance.AddVote(voteMessage.Voter, voteMessage.Delegate, voteMessage.Amount); err != nil {
+		// 只调用验证方法，不更新状态
+		if err := dposEngineInstance.ValidateVoteOnly(voteMessage.Voter, voteMessage.Delegate, voteMessage.Amount); err != nil {
 			d.logger.Error("❌ 投票预验证失败", "error", err)
 			return &VoteResponse{
 				Success: false,

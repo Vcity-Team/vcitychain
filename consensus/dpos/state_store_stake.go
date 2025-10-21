@@ -169,13 +169,19 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 
 			voterCount++
 
-			// 统计每个受托人的票数
-			for _, delegate := range voterInfo.VotedDelegates {
-				delegateAddr := delegate.String()
-				if delegateVotes[delegateAddr] == nil {
-					delegateVotes[delegateAddr] = big.NewInt(0)
+			// 🆕 修复：正确统计每个受托人的票数
+			// 将投票者的总权重平均分配给所有投票的受托人
+			if len(voterInfo.VotedDelegates) > 0 {
+				// 计算每个受托人应该分到的票数
+				votesPerDelegate := new(big.Int).Div(voterInfo.VotingPower, big.NewInt(int64(len(voterInfo.VotedDelegates))))
+
+				for _, delegate := range voterInfo.VotedDelegates {
+					delegateAddr := delegate.String()
+					if delegateVotes[delegateAddr] == nil {
+						delegateVotes[delegateAddr] = big.NewInt(0)
+					}
+					delegateVotes[delegateAddr].Add(delegateVotes[delegateAddr], votesPerDelegate)
 				}
-				delegateVotes[delegateAddr].Add(delegateVotes[delegateAddr], voterInfo.VotingPower)
 			}
 		}
 
