@@ -4216,7 +4216,7 @@ func (d *DPoS) signParameterVote(vote *ParameterVote) error {
 	return nil
 }
 
-// getCurrentBlockNumber 获取当前区块号
+// getCurrentBlockNumber 获取当前区块号（内部方法）
 func (d *DPoS) getCurrentBlockNumber() uint64 {
 	if d.config == nil {
 		d.logger.Debug("🔍 getCurrentBlockNumber: config is nil")
@@ -4235,6 +4235,11 @@ func (d *DPoS) getCurrentBlockNumber() uint64 {
 
 	d.logger.Debug("🔍 getCurrentBlockNumber: success", "blockNumber", currentHeader.Number)
 	return currentHeader.Number
+}
+
+// GetCurrentBlockNumber 获取当前区块号（导出方法，供JSON-RPC使用）
+func (d *DPoS) GetCurrentBlockNumber() uint64 {
+	return d.getCurrentBlockNumber()
 }
 
 // UpdateParameterValue 更新参数值

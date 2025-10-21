@@ -3602,25 +3602,35 @@ func (d *DPOS) GetMinVotingThreshold(ctx context.Context) (interface{}, error) {
 func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) (interface{}, error) {
 	d.logger.Info("DPoS VoteOnParameterProposal called", "params", params)
 
-	// 解析参数
-	paramMap, ok := params.(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid parameters format")
-	}
+	var proposalID, voterStr string
+	var support bool
 
-	voterStr, ok := paramMap["voter"].(string)
-	if !ok {
-		return nil, fmt.Errorf("voter address is required")
-	}
+	// 支持数组格式参数 [proposalId, voter, support]
+	if paramArray, ok := params.([]interface{}); ok {
+		if len(paramArray) != 3 {
+			return nil, fmt.Errorf("invalid parameters format: expected 3 parameters [proposalId, voter, support]")
+		}
 
-	proposalID, ok := paramMap["proposalId"].(string)
-	if !ok {
-		return nil, fmt.Errorf("proposal ID is required")
-	}
+		var ok1, ok2, ok3 bool
+		proposalID, ok1 = paramArray[0].(string)
+		voterStr, ok2 = paramArray[1].(string)
+		support, ok3 = paramArray[2].(bool)
 
-	support, ok := paramMap["support"].(bool)
-	if !ok {
-		return nil, fmt.Errorf("support flag is required")
+		if !ok1 || !ok2 || !ok3 {
+			return nil, fmt.Errorf("invalid parameters format: expected [string, string, bool]")
+		}
+	} else if paramMap, ok := params.(map[string]interface{}); ok {
+		// 支持对象格式参数 {proposalId, voter, support}
+		var ok1, ok2, ok3 bool
+		proposalID, ok1 = paramMap["proposalId"].(string)
+		voterStr, ok2 = paramMap["voter"].(string)
+		support, ok3 = paramMap["support"].(bool)
+
+		if !ok1 || !ok2 || !ok3 {
+			return nil, fmt.Errorf("invalid parameters format: expected {proposalId: string, voter: string, support: bool}")
+		}
+	} else {
+		return nil, fmt.Errorf("invalid parameters format: expected array [proposalId, voter, support] or object {proposalId, voter, support}")
 	}
 
 	// 验证投票者地址
@@ -3760,9 +3770,9 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 		currentBlock := uint64(0)
 		if dposEngine := d.getDPoSEngine(); dposEngine != nil {
 			if getCurrentBlock, ok := dposEngine.(interface {
-				getCurrentBlockNumber() uint64
+				GetCurrentBlockNumber() uint64
 			}); ok {
-				currentBlock = getCurrentBlock.getCurrentBlockNumber()
+				currentBlock = getCurrentBlock.GetCurrentBlockNumber()
 			}
 		}
 		remainingBlocks := int64(0)
@@ -3877,11 +3887,11 @@ func (d *DPOS) GetActiveProposals(ctx context.Context) (interface{}, error) {
 
 		return map[string]interface{}{
 			"proposals": result,
-		"count":     len(result),
-	}, nil
-}
+			"count":     len(result),
+		}, nil
+	}
 
-return nil, fmt.Errorf("DPoS engine does not support parameter proposals")
+	return nil, fmt.Errorf("DPoS engine does not support parameter proposals")
 }
 
 // GetVotableParameters 获取可表决参数列表
