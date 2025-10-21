@@ -3826,8 +3826,9 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 					"currentBlock":    currentBlock,
 					"remainingBlocks": remainingBlocks,
 					"isExpired":       remainingBlocks <= 0,
-					"votingPeriod":    fmt.Sprintf("区块 %d - %d", proposal.StartBlock, proposal.EndBlock),
-					"currentPeriod":   d.getCurrentProposalPeriodInfo(),
+					"votingPeriod":    d.getCurrentProposalPeriodInfo(), // 显示当前配置的提案周期
+					"proposalPeriod":  d.getCurrentProposalPeriodInfo(),
+					"proposalBlocks":  fmt.Sprintf("区块 %d - %d", proposal.StartBlock, proposal.EndBlock), // 显示提案的实际区块范围
 				},
 			},
 		}, nil

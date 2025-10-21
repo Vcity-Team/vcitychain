@@ -3518,10 +3518,10 @@ func (d *DPoS) getVotingPeriod() uint64 {
 func (d *DPoS) GetCurrentProposalPeriod() map[string]interface{} {
 	// 获取当前投票期间长度
 	votingPeriod := d.getVotingPeriod()
-	
+
 	// 获取当前区块高度
 	currentBlock := d.GetCurrentBlockNumber()
-	
+
 	// 计算时间信息
 	var timeInfo string
 	if d.config != nil && d.config.ProposalPeriod > 0 {
@@ -3531,10 +3531,10 @@ func (d *DPoS) GetCurrentProposalPeriod() map[string]interface{} {
 		// 只显示区块数
 		timeInfo = fmt.Sprintf("%d个区块", votingPeriod)
 	}
-	
+
 	return map[string]interface{}{
-		"blocks":     votingPeriod,
-		"timeInfo":   timeInfo,
+		"blocks":       votingPeriod,
+		"timeInfo":     timeInfo,
 		"currentBlock": currentBlock,
 	}
 }
@@ -3781,8 +3781,10 @@ func (d *DPoS) CreateParameterProposal(proposer types.Address, parameter string,
 		return nil, fmt.Errorf("invalid parameter value: %w", err)
 	}
 
-	// 创建提案
-	proposalID := fmt.Sprintf("proposal_%d_%d", d.currentRound, d.proposalCounter)
+	// 创建提案 - 使用可读的时间格式确保唯一性
+	now := time.Now()
+	timeStr := now.Format("200601021504") // 格式：202510211029
+	proposalID := fmt.Sprintf("proposal_%s_%d", timeStr, d.proposalCounter)
 	d.proposalCounter++
 
 	proposal := &ParameterProposal{
