@@ -7252,9 +7252,6 @@ func (d *DPoS) GetCurrentDelegates() validator.AccountSet {
 
 // isGenesisValidator 检查地址是否为创世验证者
 func (d *DPoS) isGenesisValidator(address types.Address) bool {
-	d.lock.RLock()
-	defer d.lock.RUnlock()
-
 	// 检查地址是否在创世验证者映射中
 	return d.genesisValidators[address]
 }
