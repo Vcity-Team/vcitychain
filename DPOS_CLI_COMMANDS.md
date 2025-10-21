@@ -139,6 +139,59 @@
 ./main dpos delegate register --address "0x8dd5455146BA56205F0529B0f500d1b5cE76890B" --name "MyDelegate" --website "https://mydelegate.com" --description "专业验证节点"
 ```
 
+### 3.2 列出所有受托人候选人
+
+```bash
+./main dpos delegate list [--jsonrpc <JSON-RPC接口>]
+```
+
+**参数说明：**
+- `--jsonrpc`: JSON-RPC接口地址（默认：http://0.0.0.0:8545）
+
+**功能：**
+- 显示所有已注册的受托人候选人
+- 显示受托人的详细信息，包括：
+  - 地址
+  - 名称
+  - 网站
+  - 描述
+  - 保证金金额
+  - 总投票数
+  - 是否活跃
+  - 注册状态（候选人/活跃/非活跃/已撤回）
+  - 最后投票时间
+  - 创建时间
+
+**示例：**
+```bash
+# 列出所有受托人
+./main dpos delegate list
+
+# 使用自定义JSON-RPC接口
+./main dpos delegate list --jsonrpc http://localhost:8545
+```
+
+**输出示例：**
+```
+Status: Success
+Message: Delegate registrations retrieved successfully
+Count: 1
+
+Delegate Registrations:
+=====================
+
+1. Address: 0x8dd5455146BA56205F0529B0f500d1b5cE76890B
+   Name: MyDelegate1
+   Website: https://mydelegate1.com
+   Description: 专业验证节点1
+   Status: Candidate
+   Deposit: 0
+   Total Votes: 0
+   Is Active: false
+   Last Vote Time: Never
+   Created At: 2025-01-21 15:14:01
+```
+
 ## 4. 经济系统命令
 
 ### 4.1 查询Epoch信息

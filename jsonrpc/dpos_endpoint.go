@@ -20,6 +20,15 @@ import (
 	"github.com/hashicorp/go-hclog"
 )
 
+// VoteMessage represents a vote message for validation
+type VoteMessage struct {
+	Voter     types.Address `json:"voter"`
+	Delegate  types.Address `json:"delegate"`
+	Amount    *big.Int      `json:"amount"`
+	Round     uint64        `json:"round"`
+	Timestamp uint64        `json:"timestamp"`
+}
+
 // dposStore provides access to the methods needed by dpos endpoint
 type dposStore interface {
 	// GetAccount gets account information
@@ -663,6 +672,34 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		d.logger.Info("✅ 受托人候选人状态验证通过", "candidate", candidateAddr.String())
 	} else {
 		d.logger.Warn("⚠️ DPoS引擎不支持受托人候选人检查，跳过验证")
+	}
+
+	// 🆕 新增：在创建交易前进行完整的投票验证
+	d.logger.Info("🔍 开始预验证投票参数", "voter", voterAddr, "candidate", candidateAddr, "amount", amountInt)
+
+	// 创建投票消息进行预验证
+	voteMessage := &VoteMessage{
+		Voter:     voterAddr,
+		Delegate:  candidateAddr,
+		Amount:    amountInt,
+		Round:     0, // 使用当前轮次
+		Timestamp: uint64(time.Now().Unix()),
+	}
+
+	// 调用DPoS引擎进行预验证
+	if dposEngineInstance, ok := dposEngine.(*dpos.DPoS); ok {
+		// 直接调用DPoS实例的AddVote方法进行预验证
+		// AddVote内部会调用validateVote进行完整验证
+		if err := dposEngineInstance.AddVote(voteMessage.Voter, voteMessage.Delegate, voteMessage.Amount); err != nil {
+			d.logger.Error("❌ 投票预验证失败", "error", err)
+			return &VoteResponse{
+				Success: false,
+				Error:   fmt.Sprintf("vote validation failed: %v", err),
+			}, nil
+		}
+		d.logger.Info("✅ 投票预验证通过")
+	} else {
+		d.logger.Warn("⚠️ DPoS引擎类型不匹配，跳过预验证")
 	}
 
 	// Implement actual voting logic
