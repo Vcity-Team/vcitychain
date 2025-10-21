@@ -746,11 +746,16 @@ func (s *Server) setupConsensus() error {
 		engineConfig["voterRewardRatio"] = uint64(30) // 默认值
 	}
 
-	// 从YAML配置中获取提案周期
-	if proposalPeriod := s.config.DPoSProposalPeriod; proposalPeriod > 0 {
-		engineConfig["proposalPeriod"] = proposalPeriod
+	// 从YAML配置中获取提案周期（时间字符串）
+	if proposalPeriodStr := s.config.DPoSProposalPeriod; proposalPeriodStr != "" {
+		if proposalPeriod, err := time.ParseDuration(proposalPeriodStr); err == nil {
+			engineConfig["proposalPeriod"] = proposalPeriod
+		} else {
+			s.logger.Error("❌ 无效的提案周期", "period", proposalPeriodStr, "error", err)
+			return fmt.Errorf("invalid proposal period: %s", proposalPeriodStr)
+		}
 	} else {
-		engineConfig["proposalPeriod"] = uint64(100) // 默认值
+		engineConfig["proposalPeriod"] = 24 * time.Hour // 默认24小时
 	}
 
 	s.logger.Info("✅ DPoS经济系统配置解析完成",
