@@ -3827,6 +3827,7 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 					"remainingBlocks": remainingBlocks,
 					"isExpired":       remainingBlocks <= 0,
 					"votingPeriod":    fmt.Sprintf("区块 %d - %d", proposal.StartBlock, proposal.EndBlock),
+					"currentPeriod":   d.getCurrentProposalPeriodInfo(),
 				},
 			},
 		}, nil
@@ -3959,4 +3960,27 @@ func (d *DPOS) ExecuteParameterUpdate(ctx context.Context, proposalID string) (i
 	}
 
 	return nil, fmt.Errorf("DPoS engine does not support parameter proposals")
+}
+
+// getCurrentProposalPeriodInfo 获取当前提案周期信息
+func (d *DPOS) getCurrentProposalPeriodInfo() string {
+	// 获取DPoS引擎
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return "无法获取提案周期信息"
+	}
+
+	// 通过接口获取当前提案周期
+	if getCurrentPeriod, ok := dposEngine.(interface {
+		GetCurrentProposalPeriod() map[string]interface{}
+	}); ok {
+		periodInfo := getCurrentPeriod.GetCurrentProposalPeriod()
+		if timeInfo, exists := periodInfo["timeInfo"]; exists {
+			if timeStr, ok := timeInfo.(string); ok {
+				return timeStr
+			}
+		}
+	}
+
+	return "无法获取提案周期信息"
 }

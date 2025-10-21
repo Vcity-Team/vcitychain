@@ -3514,6 +3514,31 @@ func (d *DPoS) getVotingPeriod() uint64 {
 	return 43200
 }
 
+// GetCurrentProposalPeriod 获取当前提案周期信息（用于显示）
+func (d *DPoS) GetCurrentProposalPeriod() map[string]interface{} {
+	// 获取当前投票期间长度
+	votingPeriod := d.getVotingPeriod()
+	
+	// 获取当前区块高度
+	currentBlock := d.GetCurrentBlockNumber()
+	
+	// 计算时间信息
+	var timeInfo string
+	if d.config != nil && d.config.ProposalPeriod > 0 {
+		// 显示时间格式
+		timeInfo = fmt.Sprintf("%s (%d个区块)", d.config.ProposalPeriod.String(), votingPeriod)
+	} else {
+		// 只显示区块数
+		timeInfo = fmt.Sprintf("%d个区块", votingPeriod)
+	}
+	
+	return map[string]interface{}{
+		"blocks":     votingPeriod,
+		"timeInfo":   timeInfo,
+		"currentBlock": currentBlock,
+	}
+}
+
 // getVotingThreshold 获取当前投票通过阈值
 func (d *DPoS) getVotingThreshold() uint64 {
 	// 优先从缓存获取
