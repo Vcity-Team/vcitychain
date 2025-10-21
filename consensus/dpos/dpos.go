@@ -3873,6 +3873,14 @@ func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, s
 		Timestamp:  uint64(time.Now().Unix()),
 	}
 
+	// 调试日志：记录投票参数
+	d.logger.Info("🔍 创建投票记录",
+		"proposalID", proposalID,
+		"voter", voter.String(),
+		"support", support,
+		"weight", weight.String(),
+		"timestamp", vote.Timestamp)
+
 	// 签名投票
 	if err := d.signParameterVote(vote); err != nil {
 		return fmt.Errorf("failed to sign vote: %w", err)
@@ -3880,6 +3888,20 @@ func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, s
 
 	// 记录投票
 	proposal.Votes[voter] = *vote
+
+	// 保存更新后的提案到数据库
+	if d.state != nil && d.state.ProposalStore != nil {
+		if err := d.state.ProposalStore.SaveProposal(proposal); err != nil {
+			d.logger.Error("Failed to save updated proposal to database", "error", err)
+			// 注意：这里不返回错误，因为内存更新已经成功
+			// 但记录错误日志以便调试
+		} else {
+			d.logger.Debug("✅ Updated proposal successfully saved to database",
+				"proposalID", proposalID,
+				"voter", voter.String(),
+				"support", support)
+		}
+	}
 
 	d.logger.Info("Parameter vote cast",
 		"proposalID", proposalID,
@@ -4186,8 +4208,27 @@ func (d *DPoS) validateParameterValue(parameter string, value interface{}) error
 
 // getVoterVotingWeight 获取投票者的质押权重（所有用户都可以投票）
 func (d *DPoS) getVoterVotingWeight(voter types.Address) *big.Int {
-	// 从质押信息中获取该地址的总质押数量
+	// 优先从数据库的DelegateInfo中读取，确保数据最全且一致
 	if d.state != nil && d.state.StakeStore != nil {
+		// 从数据库获取所有验证者信息
+		validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+		if err != nil {
+			d.logger.Warn("Failed to get validators from database for voter weight", "error", err)
+			return big.NewInt(0)
+		}
+
+		// 查找指定投票者的权重
+		for _, validator := range validators {
+			if validator.Address == voter {
+				d.logger.Debug("Voter voting weight from database",
+					"voter", voter.String(),
+					"votingPower", validator.VotingPower.String(),
+					"isActive", validator.IsActive)
+				return validator.VotingPower
+			}
+		}
+
+		// 如果没找到，说明不是验证者，尝试从质押信息中获取
 		stakingInfo, err := d.state.StakeStore.GetStakingInfo()
 		if err != nil {
 			d.logger.Warn("Failed to get staking info for voter weight", "error", err)
@@ -4201,7 +4242,7 @@ func (d *DPoS) getVoterVotingWeight(voter types.Address) *big.Int {
 			}
 		}
 
-		d.logger.Debug("Voter voting weight calculated",
+		d.logger.Debug("Voter voting weight from staking info",
 			"voter", voter.String(),
 			"totalStaked", totalStaked.String())
 

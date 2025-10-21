@@ -3642,6 +3642,12 @@ func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) 
 		return nil, fmt.Errorf("DPoS engine not available")
 	}
 
+	// 调试日志：记录接收到的参数
+	d.logger.Info("🔍 JSON-RPC投票参数",
+		"proposalID", proposalID,
+		"voter", voter.String(),
+		"support", support)
+
 	// 调用DPoS引擎进行投票
 	if voteOnProposal, ok := dposEngine.(interface {
 		VoteOnParameterProposal(voter types.Address, proposalID string, support bool) error
@@ -3720,12 +3726,17 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 		var opposeVoters []map[string]interface{}
 
 		for addr, vote := range proposal.Votes {
+			// 转换时间戳为人类可读格式
+			voteTime := time.Unix(int64(vote.Timestamp), 0)
+			voteTimeFormatted := voteTime.Format("2006-01-02 15:04:05")
+
 			voteInfo := map[string]interface{}{
-				"voter":      vote.Voter.String(),
-				"proposalId": vote.ProposalID,
-				"support":    vote.Support,
-				"weight":     vote.Weight.String(),
-				"timestamp":  vote.Timestamp,
+				"voter":       vote.Voter.String(),
+				"proposalId":  vote.ProposalID,
+				"support":     vote.Support,
+				"weight":      vote.Weight.String(),
+				"timestamp":   voteTimeFormatted, // 人类可读的时间格式
+				"timestampTs": vote.Timestamp,    // 保留原始时间戳
 			}
 			votes[addr.String()] = voteInfo
 
@@ -3862,12 +3873,17 @@ func (d *DPOS) GetActiveProposals(ctx context.Context) (interface{}, error) {
 			// 转换投票记录
 			votes := make(map[string]interface{})
 			for addr, vote := range proposal.Votes {
+				// 转换时间戳为人类可读格式
+				voteTime := time.Unix(int64(vote.Timestamp), 0)
+				voteTimeFormatted := voteTime.Format("2006-01-02 15:04:05")
+
 				votes[addr.String()] = map[string]interface{}{
-					"voter":      vote.Voter.String(),
-					"proposalId": vote.ProposalID,
-					"support":    vote.Support,
-					"weight":     vote.Weight.String(),
-					"timestamp":  vote.Timestamp,
+					"voter":       vote.Voter.String(),
+					"proposalId":  vote.ProposalID,
+					"support":     vote.Support,
+					"weight":      vote.Weight.String(),
+					"timestamp":   voteTimeFormatted, // 人类可读的时间格式
+					"timestampTs": vote.Timestamp,    // 保留原始时间戳
 				}
 			}
 
