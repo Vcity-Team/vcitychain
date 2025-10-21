@@ -265,6 +265,7 @@ type DPoSConfig struct {
 	RewardAmount         *big.Int      `json:"rewardAmount" yaml:"rewardAmount"`
 	ValidatorRewardRatio uint64        `json:"validatorRewardRatio" yaml:"validatorRewardRatio"`
 	VoterRewardRatio     uint64        `json:"voterRewardRatio" yaml:"voterRewardRatio"`
+	ProposalPeriod       uint64        `json:"proposalPeriod" yaml:"dpos_proposal_period"`
 }
 
 // dpos_runtime.go
@@ -3488,7 +3489,7 @@ func (d *DPoS) getGovernanceParameterValue(paramName string) (interface{}, error
 
 // getVotingPeriod 获取当前投票期间长度
 func (d *DPoS) getVotingPeriod() uint64 {
-	// 优先从缓存获取
+	// 优先从缓存获取（治理参数修改后的值）
 	d.parameterValuesMutex.RLock()
 	if value, exists := d.parameterCurrentValues["governance_voting_period"]; exists {
 		if period, ok := value.(uint64); ok {
@@ -3498,7 +3499,12 @@ func (d *DPoS) getVotingPeriod() uint64 {
 	}
 	d.parameterValuesMutex.RUnlock()
 
-	// 如果缓存中没有，使用默认值
+	// 其次从配置文件获取
+	if d.config != nil && d.config.ProposalPeriod > 0 {
+		return d.config.ProposalPeriod
+	}
+
+	// 最后使用默认值
 	return 100
 }
 
@@ -5421,6 +5427,19 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Warn("📊 未找到voterRewardRatio配置")
 	}
 
+	// 🆕 解析提案周期配置
+	if proposalPeriod, exists := params.Config.Config["proposalPeriod"]; exists {
+		logger.Info("🔍 找到proposalPeriod配置", "type", fmt.Sprintf("%T", proposalPeriod), "value", proposalPeriod)
+		if period, ok := proposalPeriod.(uint64); ok {
+			vcity_dpos.config.ProposalPeriod = period
+			logger.Info("📋 使用server层解析的提案周期", "period", period)
+		} else {
+			logger.Warn("📋 proposalPeriod类型断言失败", "type", fmt.Sprintf("%T", proposalPeriod))
+		}
+	} else {
+		logger.Warn("📋 未找到proposalPeriod配置")
+	}
+
 	// 🆕 解析区块时间配置
 	if blockTimeStr, exists := params.Config.Config["blockTime"]; exists {
 		logger.Info("🔍 找到blockTime配置", "type", fmt.Sprintf("%T", blockTimeStr), "value", blockTimeStr)
@@ -5462,6 +5481,11 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	if vcity_dpos.config.VoterRewardRatio == 0 {
 		logger.Warn("⚠️ voterRewardRatio为0，设置默认值30%")
 		vcity_dpos.config.VoterRewardRatio = 30
+	}
+
+	if vcity_dpos.config.ProposalPeriod == 0 {
+		logger.Warn("⚠️ proposalPeriod为0，设置默认值100个区块")
+		vcity_dpos.config.ProposalPeriod = 100
 	}
 
 	// 检查BlockTime是否已正确设置，如果没有则使用默认值
@@ -8496,6 +8520,7 @@ func DefaultDPoSConfig() *DPoSConfig {
 		MinVotingPower: big.NewInt(1000000000000000000), // 1 token
 		VoteLockTime:   86400,                           // 24 hours
 		RewardRatio:    100,                             // 1%
+		ProposalPeriod: 100,                             // 默认提案周期 100个区块
 	}
 }
 

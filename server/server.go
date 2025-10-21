@@ -746,11 +746,19 @@ func (s *Server) setupConsensus() error {
 		engineConfig["voterRewardRatio"] = uint64(30) // 默认值
 	}
 
+	// 从YAML配置中获取提案周期
+	if proposalPeriod := s.config.DPoSProposalPeriod; proposalPeriod > 0 {
+		engineConfig["proposalPeriod"] = proposalPeriod
+	} else {
+		engineConfig["proposalPeriod"] = uint64(100) // 默认值
+	}
+
 	s.logger.Info("✅ DPoS经济系统配置解析完成",
 		"rewardAccount", engineConfig["rewardAccount"],
 		"rewardAmount", engineConfig["rewardAmount"],
 		"validatorRatio", engineConfig["validatorRewardRatio"],
-		"voterRatio", engineConfig["voterRewardRatio"])
+		"voterRatio", engineConfig["voterRewardRatio"],
+		"proposalPeriod", engineConfig["proposalPeriod"])
 
 	var (
 		blockTime = common.Duration{Duration: 0}
