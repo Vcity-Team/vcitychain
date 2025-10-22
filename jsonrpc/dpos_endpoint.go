@@ -1727,19 +1727,13 @@ func (d *DPOS) GetVotingStakingInfo(ctx context.Context, params interface{}) (in
 	dbDelegatesInfo := d.getDelegatesFromDatabase()
 	d.logger.Info("Database delegates info retrieved", "count", len(dbDelegatesInfo))
 
-	// 🆕 修复：确保创世配置中的初始验证者质押信息被包含
-	// 从验证者信息中提取质押信息，确保创世配置的质押数量被正确显示
-	genesisStakingInfo := d.extractVotingInfoFromDelegates(validators)
-	d.logger.Info("Genesis staking info extracted", "count", len(genesisStakingInfo))
+	// 🆕 修复：直接使用数据库数据，确保与数据库完全一致
+	// 不再使用 mergeStakingInfo 合并动态数据，避免数据不一致问题
+	d.logger.Info("Using database delegates info directly", "count", len(dbDelegatesInfo))
 
-	// Merge all staking info: genesis + store + dynamic voting + database delegates
-	allStakingInfo := d.mergeStakingInfo(genesisStakingInfo, stakingInfo)
-	allStakingInfo = d.mergeStakingInfo(allStakingInfo, dynamicVotingInfo)
-	allStakingInfo = d.mergeStakingInfo(allStakingInfo, dbDelegatesInfo)
-
-	// 🆕 新增：按质押数量从大到小排序
-	allStakingInfo = d.sortStakingInfoByAmount(allStakingInfo)
-	d.logger.Info("Sorted staking info by amount", "totalCount", len(allStakingInfo))
+	// 直接使用数据库中的受托人信息，按质押数量从大到小排序
+	allStakingInfo := d.sortStakingInfoByAmount(dbDelegatesInfo)
+	d.logger.Info("Database staking info sorted by amount", "totalCount", len(allStakingInfo))
 
 	// Build validator details
 	validatorDetails := make([]map[string]interface{}, 0)

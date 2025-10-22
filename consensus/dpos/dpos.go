@@ -3189,6 +3189,9 @@ type DPoS struct {
 	// 🆕 方案1+方案2：延迟验证者集合更新标志
 	pendingValidatorUpdate bool
 
+	// 🆕 最后投票的验证者地址
+	lastVotedDelegate types.Address
+
 	// 🆕 奖励分配信息
 	pendingRewardDistribution *RewardDistributionInfo
 
@@ -3343,10 +3346,12 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 	// 🆕 方案1+方案2：投票完成后标记需要延迟更新验证者集合
 	d.logger.Debug("🔄 投票完成，标记需要延迟更新验证者集合...")
 	d.pendingValidatorUpdate = true
+	d.lastVotedDelegate = candidate // 记录最后投票的验证者
 	d.logger.Info("✅ 投票完成，验证者集合将在下一轮更新",
 		"voter", voter.String(),
 		"candidate", candidate.String(),
-		"amount", amount.String())
+		"amount", amount.String(),
+		"lastVotedDelegate", d.lastVotedDelegate.String())
 
 	// 🆕 延迟同步机制：只有在轮次边界时才同步新的验证者集合
 	// 当前轮次继续使用旧的验证者集合，确保"每个节点出一个块"的规则
@@ -4673,31 +4678,19 @@ func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift tim
 		"说明", "验证时区块头的所有关键字段")
 
 	// validate header fields
-	d.logger.Debug("🔍 DPoS verifyHeaderImpl 开始验证头部字段", "blockNumber", blockNumber)
 	if err := validateHeaderFields(parent, header, uint64(blockTimeDrift.Seconds())); err != nil {
 		d.logger.Error("区块头部字段验证失败", "error", err)
 		return fmt.Errorf("failed to validate header for block %d. error = %w", header.Number, err)
 	}
-	d.logger.Debug("✅ DPoS verifyHeaderImpl 头部字段验证通过", "blockNumber", blockNumber)
-
-	d.logger.Debug("区块头部字段验证通过")
 
 	// decode the extra data
-	d.logger.Debug("🔍 DPoS verifyHeaderImpl 开始解析extraData", "blockNumber", blockNumber)
 	extra, err := GetIbftExtra(header.ExtraData)
 	if err != nil {
 		d.logger.Error("解析区块extraData失败", "error", err)
 		return fmt.Errorf("failed to verify header for block %d. get extra error = %w", header.Number, err)
 	}
-	d.logger.Debug("✅ DPoS verifyHeaderImpl extraData解析成功", "blockNumber", blockNumber)
-
-	d.logger.Debug("区块extraData解析成功",
-		"committedSignatureLength", len(extra.Committed.AggregatedSignature),
-		"committedBitmapLength", len(extra.Committed.Bitmap),
-		"checkpointExists", extra.Checkpoint != nil)
 
 	// validate extra data
-	d.logger.Debug("🔍 DPoS verifyHeaderImpl 开始验证extraData", "blockNumber", blockNumber)
 	err = extra.ValidateFinalizedData(
 		header, parent, parents, d.blockchain.GetChainID(), d, signer.DomainValidatorSet, d.logger)
 
@@ -7720,7 +7713,7 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		return errors.New("vote amount below minimum")
 	}
 
-	// 🆕 2. 检查投票者VCITY代币余额
+	// 🆕 2. 检查投票者VCITY代币余额和剩余可投票数
 	if d.balanceQuerier != nil {
 		balance, err := d.balanceQuerier.GetNativeTokenBalance(vote.Voter)
 		if err != nil {
@@ -7730,20 +7723,30 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 			return fmt.Errorf("failed to query voter balance: %w", err)
 		}
 
-		// 检查余额是否足够
-		if balance.Cmp(vote.Amount) < 0 {
-			d.logger.Warn("Insufficient balance for vote",
+		// 计算已投票金额（使用 VoterInfo.VotingPower）
+		totalVotedAmount := d.calculateTotalVotedAmount(vote.Voter)
+
+		// 计算剩余可投票数
+		remainingVotableAmount := new(big.Int).Sub(balance, totalVotedAmount)
+
+		// 检查剩余可投票数是否足够
+		if remainingVotableAmount.Cmp(vote.Amount) < 0 {
+			d.logger.Warn("Insufficient remaining votable amount for vote",
 				"voter", vote.Voter.String(),
 				"required", vote.Amount.String(),
-				"available", balance.String())
-			return fmt.Errorf("insufficient balance: required %s, available %s",
-				vote.Amount.String(), balance.String())
+				"remaining", remainingVotableAmount.String(),
+				"balance", balance.String(),
+				"totalVoted", totalVotedAmount.String())
+			return fmt.Errorf("insufficient remaining votable amount: required %s, remaining %s, balance %s, totalVoted %s",
+				vote.Amount.String(), remainingVotableAmount.String(), balance.String(), totalVotedAmount.String())
 		}
 
-		d.logger.Info("Vote balance check passed",
+		d.logger.Info("Vote balance and remaining amount check passed",
 			"voter", vote.Voter.String(),
 			"voteAmount", vote.Amount.String(),
-			"balance", balance.String())
+			"balance", balance.String(),
+			"totalVoted", totalVotedAmount.String(),
+			"remaining", remainingVotableAmount.String())
 	} else {
 		d.logger.Warn("Balance querier not available, skipping balance check")
 	}
@@ -7836,6 +7839,36 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 	}
 
 	return nil
+}
+
+// calculateTotalVotedAmount 计算投票者的总已投票金额
+// 使用 VoterInfo.VotingPower 作为单一可信数据源
+func (d *DPoS) calculateTotalVotedAmount(voter types.Address) *big.Int {
+	d.logger.Debug("🔍 计算投票者总已投票金额", "voter", voter.String())
+
+	if d.state == nil || d.state.StakeStore == nil {
+		d.logger.Warn("StakeStore 不可用", "voter", voter.String())
+		return big.NewInt(0)
+	}
+
+	// 从 VoterInfo 表直接获取投票者的总投票权重
+	voterInfo, err := d.state.StakeStore.getVoterInfo(voter, nil)
+	if err != nil {
+		d.logger.Warn("从数据库获取投票者信息失败",
+			"voter", voter.String(),
+			"error", err)
+		return big.NewInt(0)
+	}
+
+	if voterInfo != nil && voterInfo.VotingPower != nil {
+		d.logger.Info("投票者总已投票金额获取成功",
+			"voter", voter.String(),
+			"totalVotedAmount", voterInfo.VotingPower.String())
+		return new(big.Int).Set(voterInfo.VotingPower)
+	}
+
+	d.logger.Info("投票者无投票记录", "voter", voter.String())
+	return big.NewInt(0)
 }
 
 // IsDelegateRegistered 检查受托人是否已注册
@@ -8739,9 +8772,19 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 	}
 
 	// 直接保存当前的 d.delegates 到数据库，不改变受托人集合
-	if err := d.persistDelegateSetToDatabase(d.delegates); err != nil {
-		d.logger.Error("❌ Failed to persist delegate set to database", "error", err)
-		return err
+	// 如果是在投票处理过程中，只更新投票的验证者
+	if d.pendingValidatorUpdate && d.lastVotedDelegate != (types.Address{}) {
+		d.logger.Info("🎯 投票处理中，只更新投票的验证者", "targetDelegate", d.lastVotedDelegate.String())
+		if err := d.persistDelegateSetToDatabaseWithTarget(d.delegates, d.lastVotedDelegate); err != nil {
+			d.logger.Error("❌ Failed to persist target delegate to database", "error", err)
+			return err
+		}
+	} else {
+		// 正常情况，保存所有验证者
+		if err := d.persistDelegateSetToDatabase(d.delegates); err != nil {
+			d.logger.Error("❌ Failed to persist delegate set to database", "error", err)
+			return err
+		}
 	}
 
 	d.logger.Debug("✅ 受托人集合落盘完成", "count", len(d.delegates))
@@ -12517,6 +12560,130 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 	return nil
 }
 
+// persistSingleDelegateToDatabase 持久化单个验证者到数据库
+func (d *DPoS) persistSingleDelegateToDatabase(del *validator.ValidatorMetadata) error {
+	if d.state == nil || d.state.StakeStore == nil {
+		d.logger.Warn("State store not available, skipping single delegate persistence")
+		return nil
+	}
+
+	d.logger.Debug("💾 Starting single delegate persistence", "address", del.Address.String())
+
+	// 开始数据库事务
+	dbTx, err := d.state.beginDBTransaction(true)
+	if err != nil {
+		return fmt.Errorf("failed to begin db transaction: %w", err)
+	}
+	defer dbTx.Rollback()
+
+	// 处理BLS公钥
+	var blsPublicKey []byte
+	if del.BlsKey != nil {
+		blsPublicKey = del.BlsKey.Marshal()
+		d.logger.Debug("🔑 保存BLS公钥到数据库（已存在）",
+			"address", del.Address.String(),
+			"publicKeyLength", len(blsPublicKey))
+	} else {
+		// BLS公钥为nil是正常的，将在验证时动态获取
+		d.logger.Debug("🔑 BLS公钥为nil，将在验证时动态获取",
+			"address", del.Address.String(),
+			"note", "BLS公钥按需获取机制")
+		d.logger.Debug("ℹ️ 受托人BLS公钥为nil，尝试从创世文件恢复",
+			"address", del.Address.String())
+
+		// 从validator-bls.key文件中查找BLS公钥
+		dataDir := d.getDataDir()
+		if dataDir != "" {
+			// 构建BLS私钥文件路径 - 从dataDir的父目录找consensus
+			// dataDir = "node1\dpos"，需要回到 "node1\consensus"
+			parentDir := filepath.Dir(dataDir) // 获取 "node1"
+			keyFilePath := filepath.Join(parentDir, "consensus", "validator-bls.key")
+
+			// 检查文件是否存在
+			if _, err := os.Stat(keyFilePath); err == nil {
+				// 读取私钥文件
+				privateKeyData, err := os.ReadFile(keyFilePath)
+				if err == nil {
+					// 获取十六进制字符串（去除可能的换行符）
+					privateKeyHex := strings.TrimSpace(string(privateKeyData))
+
+					// 检查并修正私钥长度
+					if len(privateKeyHex)%2 != 0 {
+						privateKeyHex = "0" + privateKeyHex
+					}
+
+					// 解析BLS私钥
+					privateKey, err := bls.UnmarshalPrivateKey([]byte(privateKeyHex))
+					if err == nil {
+						// 从私钥生成公钥
+						publicKey := privateKey.PublicKey()
+						blsPublicKey = publicKey.Marshal()
+						d.logger.Info("✅ 从validator-bls.key文件恢复BLS公钥并保存到数据库",
+							"address", del.Address.String(),
+							"publicKeyLength", len(blsPublicKey),
+							"filePath", keyFilePath)
+					} else {
+						d.logger.Warn("⚠️ 解析validator-bls.key文件失败",
+							"address", del.Address.String(),
+							"filePath", keyFilePath,
+							"error", err)
+					}
+				} else {
+					d.logger.Warn("⚠️ 读取validator-bls.key文件失败",
+						"address", del.Address.String(),
+						"filePath", keyFilePath,
+						"error", err)
+				}
+			} else {
+				d.logger.Debug("ℹ️ validator-bls.key文件不存在，将在验证时按需获取",
+					"address", del.Address.String(),
+					"filePath", keyFilePath)
+			}
+		}
+	}
+
+	// 创建受托人信息
+	delegateInfo := &DelegateInfo{
+		Address:        del.Address,
+		VotingPower:    new(big.Int).Set(del.VotingPower),
+		TotalVotes:     new(big.Int).Set(del.VotingPower), // 使用VotingPower作为TotalVotes
+		ProducedBlocks: 0,
+		MissedBlocks:   0,
+		LastBlockTime:  0,
+		IsActive:       del.IsActive,
+		BlsPublicKey:   blsPublicKey, // 保存BLS公钥（可以为nil）
+	}
+
+	// 记录持久化信息
+	d.logger.Info("💾 持久化单个受托人信息到数据库",
+		"address", del.Address.String(),
+		"votingPower", del.VotingPower.String(),
+		"isActive", del.IsActive,
+		"isActiveType", fmt.Sprintf("%T", del.IsActive),
+		"blsPublicKeyLength", len(blsPublicKey),
+		"blsKeyStatus", func() string {
+			if len(blsPublicKey) > 0 {
+				return "已保存"
+			}
+			return "验证时动态获取"
+		}())
+
+	// 保存到数据库
+	if err := d.state.StakeStore.setDelegateInfo(del.Address, delegateInfo, dbTx); err != nil {
+		d.logger.Error("❌ Failed to save single delegate info", "address", del.Address.String(), "error", err)
+		return fmt.Errorf("failed to save single delegate info for %s: %w", del.Address.String(), err)
+	}
+
+	// 提交事务
+	if err := dbTx.Commit(); err != nil {
+		d.logger.Error("❌ Failed to commit single delegate transaction", "error", err)
+		return fmt.Errorf("failed to commit single delegate transaction: %w", err)
+	}
+
+	d.logger.Debug("✅ Single delegate info saved successfully", "address", del.Address.String(), "votingPower", del.VotingPower.String())
+	return nil
+}
+
 // restoreVotingDataFromDatabase 从数据库恢复投票数据
 func (d *DPoS) restoreVotingDataFromDatabase() error {
 	if d.state == nil || d.state.StakeStore == nil {
@@ -12678,9 +12845,36 @@ func (d *DPoS) shouldParticipateInBLSSigning(delegate *validator.ValidatorMetada
 
 // 持久化验证者集合到数据库
 func (d *DPoS) persistDelegateSetToDatabase(delegates validator.AccountSet) error {
+	return d.persistDelegateSetToDatabaseWithTarget(delegates, types.ZeroAddress)
+}
+
+// 持久化验证者集合到数据库（指定目标验证者）
+func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.AccountSet, targetDelegate types.Address) error {
 	if d.state == nil || d.state.StakeStore == nil {
 		d.logger.Warn("State store not available, skipping database persistence")
 		return nil
+	}
+
+	// 如果指定了目标验证者，只更新该验证者；否则更新所有验证者
+	if targetDelegate != (types.Address{}) {
+		d.logger.Debug("💾 Starting targeted delegate persistence", "targetDelegate", targetDelegate.String())
+
+		// 查找目标验证者
+		var targetDel *validator.ValidatorMetadata
+		for _, del := range delegates {
+			if del.Address == targetDelegate {
+				targetDel = del
+				break
+			}
+		}
+
+		if targetDel == nil {
+			d.logger.Warn("⚠️ Target delegate not found in delegates list", "targetDelegate", targetDelegate.String())
+			return fmt.Errorf("target delegate %s not found in delegates list", targetDelegate.String())
+		}
+
+		// 只更新目标验证者
+		return d.persistSingleDelegateToDatabase(targetDel)
 	}
 
 	d.logger.Debug("💾 Starting delegate set persistence", "count", len(delegates))
@@ -14240,18 +14434,6 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		"totalBlocks", totalBlocks,
 		"stateUpdateCount", len(stateUpdates),
 		"status", "奖励计算完成")
-
-	endTime := time.Now()
-	duration := endTime.Sub(startTime)
-	d.logger.Info("✅ ========== Epoch奖励计算完成 ==========",
-		"epoch", epochNumber,
-		"startTime", startTime.Format("2006-01-02 15:04:05"),
-		"endTime", endTime.Format("2006-01-02 15:04:05"),
-		"duration", duration.String())
-
-	d.logger.Info("🎉🎉🎉 ========== executeRewardDistribution函数即将返回 ========== 🎉🎉🎉",
-		"epoch", epochNumber,
-		"timestamp", time.Now().Format("2006-01-02 15:04:05.000"))
 
 	return nil
 }

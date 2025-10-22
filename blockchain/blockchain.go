@@ -792,24 +792,11 @@ func (b *Blockchain) executeBlockTransactions(block *types.Block) (*BlockResult,
 		return nil, err
 	}
 
-	// 🆕 添加ProcessBlock调用跟踪日志
-	b.logger.Debug("🔍🔍🔍 ========== 开始调用executor.ProcessBlock ========== 🔍🔍🔍",
-		"blockNumber", block.Number(),
-		"blockHash", block.Hash().String()[:16],
-		"parentStateRoot", parent.StateRoot.String(),
-		"blockCreator", blockCreator.String(),
-		"说明", "blockchain.go中调用executor.ProcessBlock")
-
 	txn, err := b.executor.ProcessBlock(parent.StateRoot, block, blockCreator)
 	if err != nil {
 		b.logger.Error("❌ executor.ProcessBlock调用失败", "blockNumber", block.Number(), "error", err)
 		return nil, err
 	}
-
-	b.logger.Debug("✅ executor.ProcessBlock调用成功",
-		"blockNumber", block.Number(),
-		"blockHash", block.Hash().String()[:16],
-		"说明", "executor.ProcessBlock执行完成")
 
 	if err := b.consensus.PreCommitState(block, txn); err != nil {
 		return nil, err

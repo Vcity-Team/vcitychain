@@ -362,7 +362,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 	chainID uint64, consensusBackend dposBackend, domain []byte, logger hclog.Logger) error {
 	// validate committed signatures
 	blockNumber := header.Number
-	logger.Debug("🔍 ValidateFinalizedData 开始验证", "blockNumber", blockNumber, "extraDataLength", len(header.ExtraData))
 
 	// skip block 1 because genesis does not have committed signatures
 	if blockNumber <= 1 {
@@ -383,18 +382,15 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		}
 	}
 
-	logger.Debug("🔍 ValidateFinalizedData 检查签名和检查点数据", "blockNumber", blockNumber)
 	if i.Committed == nil {
 		logger.Error("❌ ValidateFinalizedData 签名数据缺失", "blockNumber", blockNumber)
 		return fmt.Errorf("failed to verify signatures for block %d, because signatures are not present", blockNumber)
 	}
-	logger.Debug("✅ ValidateFinalizedData 签名数据存在", "blockNumber", blockNumber)
 
 	if i.Checkpoint == nil {
 		logger.Error("❌ ValidateFinalizedData 检查点数据缺失", "blockNumber", blockNumber)
 		return fmt.Errorf("failed to verify signatures for block %d, because checkpoint data are not present", blockNumber)
 	}
-	logger.Debug("✅ ValidateFinalizedData 检查点数据存在", "blockNumber", blockNumber)
 
 	// validate current block signatures
 	// 🆕 修复：使用与生产时完全相同的哈希计算方式
@@ -409,11 +405,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 	// 🆕 如果ExtraData中有CheckpointBlockHash，优先使用它
 	if i.CheckpointBlockHash != (types.Hash{}) {
 		realBlockHash = i.CheckpointBlockHash
-		logger.Debug("🔍 ===== 验证时使用ExtraData中的CheckpointBlockHash =====",
-			"blockNumber", blockNumber,
-			"checkpointBlockHash", realBlockHash.String(),
-			"headerHash", header.Hash.String(),
-			"说明", "验证时使用生产时保存的CheckpointBlockHash进行计算")
 	} else {
 		logger.Info("🔍 ===== 验证时使用区块头哈希 =====",
 			"blockNumber", blockNumber,
@@ -425,13 +416,11 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 	productionChainID := chainID
 
 	// 🆕 从 ExtraData 中获取验证者集合
-	logger.Debug("🔍 ValidateFinalizedData 开始获取验证者集合", "blockNumber", blockNumber)
 	validators, err := i.getValidatorsFromExtraData(header, parent, parents, consensusBackend, logger)
 	if err != nil {
 		logger.Error("❌ 从 ExtraData 获取验证者集合失败", "blockNumber", blockNumber, "error", err)
 		return fmt.Errorf("failed to get validators from ExtraData for block %d: %w", blockNumber, err)
 	}
-	logger.Debug("✅ ValidateFinalizedData 验证者集合获取成功", "blockNumber", blockNumber, "validatorsCount", len(validators))
 
 	// 🆕 关键修复：重新计算CheckpointData的哈希值，确保与生产时一致
 	// 生产时使用r.delegates.Hash()计算CurrentValidatorsHash和NextValidatorsHash
@@ -769,7 +758,6 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 
 	parentValidators, err := parentExtra.getValidatorsFromExtraData(parent, parentParent, parents, consensusBackend, logger)
 	if err != nil {
-		logger.Error("❌ 从父区块 ExtraData 获取验证者集合失败", "blockNumber", blockNumber, "error", err)
 		return fmt.Errorf(
 			"failed to get parent validators from ExtraData for block %d: %w",
 			blockNumber,
@@ -1450,11 +1438,6 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 			addressToBLSKey[validator.Address] = blsPublicKeys[i]
 			// 🆕 修复：同时设置validator.BlsKey字段，确保数据同步
 			validator.BlsKey = blsPublicKeys[i]
-			logger.Debug("✅ 将BLS公钥添加到地址映射并同步到validator对象",
-				"blockNumber", blockNumber,
-				"address", validator.Address.String(),
-				"bitmapIndex", i,
-				"hasBlsKey", validator.BlsKey != nil)
 		}
 	}
 
@@ -1960,9 +1943,6 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 	}
 
 	// 获取父区块的验证者集合
-	logger.Debug("🔍 获取父区块验证者集合",
-		"blockNumber", blockNumber,
-		"parentBlockNumber", parent.Number)
 
 	// 🆕 如果父区块是区块1，直接返回创世验证者集合，避免无限递归
 	if parent.Number == 1 {
@@ -1989,25 +1969,7 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 		// 从ExtraData获取验证者地址，然后从创世文件获取BLS公钥
 		validatorAddresses := i.Validators.Added
 
-		// 🆕 调试日志：验证时从ExtraData获取的验证者集合
-		logger.Debug("🔍 ===== 验证时从ExtraData获取的验证者集合 =====",
-			"blockNumber", blockNumber,
-			"totalValidators", len(validatorAddresses),
-			"note", "这些验证者从区块ExtraData中解析得到")
 
-		for idx, validatorAddr := range validatorAddresses {
-			logger.Debug("🔍 验证时ExtraData验证者",
-				"blockNumber", blockNumber,
-				"index", idx,
-				"address", validatorAddr.Address.String(),
-				"votingPower", validatorAddr.VotingPower.String(),
-				"isActive", validatorAddr.IsActive,
-				"note", "验证者索引与位图索引对应")
-		}
-
-		logger.Debug("✅ 从ExtraData获取生产时验证者地址集合成功",
-			"blockNumber", blockNumber,
-			"productionValidatorsCount", len(validatorAddresses))
 
 		// 🆕 从创世文件获取BLS公钥，构建完整的验证者集合
 		productionValidators := make(validator.AccountSet, 0, len(validatorAddresses))
@@ -2045,9 +2007,6 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 		return nil, fmt.Errorf("failed to get parent validators: %w", err)
 	}
 
-	logger.Debug("✅ 获取父区块验证者集合成功",
-		"blockNumber", blockNumber,
-		"parentValidatorsCount", len(parentValidators))
 
 	// 如果没有验证者集合变化，直接返回父区块的验证者集合
 	if i.Validators == nil || i.Validators.IsEmpty() {
@@ -2133,14 +2092,10 @@ func (i *Extra) getGenesisValidators(consensusBackend dposBackend, logger hclog.
 func (i *Extra) getParentValidators(parent *types.Header, parents []*types.Header,
 	consensusBackend dposBackend, logger hclog.Logger) (validator.AccountSet, error) {
 
-	logger.Debug("🔍 开始获取父区块验证者集合",
-		"parentBlockNumber", parent.Number)
 
 	// 首先尝试从父区块的 ExtraData 中获取
 	parentExtra, err := GetIbftExtra(parent.ExtraData)
 	if err == nil && parentExtra != nil {
-		logger.Info("📋 从父区块 ExtraData 获取验证者集合",
-			"parentBlockNumber", parent.Number)
 
 		// 递归获取父区块的验证者集合，需要获取父区块的父区块
 		var parentParent *types.Header
@@ -2156,32 +2111,20 @@ func (i *Extra) getParentValidators(parent *types.Header, parents []*types.Heade
 
 		parentValidators, err := parentExtra.getValidatorsFromExtraData(parent, parentParent, parents, consensusBackend, logger)
 		if err == nil {
-			logger.Info("✅ 从父区块 ExtraData 获取验证者集合成功",
-				"parentBlockNumber", parent.Number,
-				"parentValidatorsCount", len(parentValidators))
 			return parentValidators, nil
 		}
-		logger.Warn("⚠️ 从父区块 ExtraData 获取验证者集合失败", "error", err)
 	}
 
 	// 备用方案：从数据库获取（如果可用）
-	logger.Debug("🔄 尝试从数据库获取父区块验证者集合",
-		"parentBlockNumber", parent.Number)
 
 	parentValidators, err := consensusBackend.GetDelegates(parent.Number, parents)
 	if err == nil && len(parentValidators) > 0 {
-		logger.Debug("✅ 从数据库获取父区块验证者集合成功",
-			"parentBlockNumber", parent.Number,
-			"parentValidatorsCount", len(parentValidators))
 		return parentValidators, nil
 	}
 
-	logger.Warn("⚠️ 从数据库获取父区块验证者集合失败", "error", err)
 
 	// 最后备用方案：递归获取更早的父区块
 	if parent.Number > 1 {
-		logger.Debug("🔄 递归获取更早的父区块验证者集合",
-			"parentBlockNumber", parent.Number)
 
 		// 这里需要获取更早的父区块，但为了简化，我们返回错误
 		// 在实际实现中，可能需要更复杂的递归逻辑

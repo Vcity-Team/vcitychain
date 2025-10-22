@@ -308,40 +308,12 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 	return validators, nil
 }
 
-// 🆕 新增：GetStakingInfo方法，实现与命令一致的数据源
+// 🆕 新增：GetStakingInfo方法，直接从数据库读取，不做修改
 func (s *StakeStore) GetStakingInfo() ([]*StakeInfo, error) {
 	var stakingInfos []*StakeInfo
 
 	err := s.db.View(func(tx *bolt.Tx) error {
-		// 方案1：从VoterInfo bucket读取投票者信息
-		voterBucket := tx.Bucket([]byte("VoterInfo"))
-		if voterBucket != nil {
-			// 遍历所有投票者
-			cursor := voterBucket.Cursor()
-			for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
-				var voterInfo VoterInfo
-				if err := json.Unmarshal(value, &voterInfo); err != nil {
-					continue // 跳过解析失败的数据
-				}
-
-				// 为每个投票的验证者创建StakeInfo
-				for _, delegate := range voterInfo.VotedDelegates {
-					stakeInfo := &StakeInfo{
-						Staker:    voterInfo.Address,     // 投票者地址
-						Amount:    voterInfo.VotingPower, // 投票者的总投票权重
-						Delegate:  delegate,              // 投票者委托的验证者
-						IsActive:  true,                  // 投票者总是活跃的
-						StartTime: uint64(0),             // 暂时使用默认值
-						EndTime:   uint64(0),             // 暂时使用默认值
-						IsLocked:  false,                 // 暂时使用默认值
-						Rewards:   big.NewInt(0),         // 暂时使用默认值
-					}
-					stakingInfos = append(stakingInfos, stakeInfo)
-				}
-			}
-		}
-
-		// 方案2：从StakingInfo bucket读取（备用方案）
+		// 直接从StakingInfo bucket读取数据，不做任何修改
 		stakingBucket := tx.Bucket([]byte("StakingInfo"))
 		if stakingBucket != nil {
 			cursor := stakingBucket.Cursor()
