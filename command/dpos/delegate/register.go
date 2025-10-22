@@ -20,6 +20,7 @@ var (
 
 type registerDelegateParams struct {
 	jsonRPC     string
+	chainID     uint64
 	address     string
 	name        string
 	website     string
@@ -77,6 +78,12 @@ func setFlags(cmd *cobra.Command) {
 		"private-key",
 		"",
 		"private key for signing the registration transaction (required)",
+	)
+	cmd.Flags().Uint64Var(
+		&registerParams.chainID,
+		"chain-id",
+		20230826,
+		"chain ID for transaction signing (default: 20230826)",
 	)
 
 	// Mark required flags
@@ -186,6 +193,7 @@ func registerDelegate(params *registerDelegateParams) (*RegisterDelegateResult, 
 			"website":     params.website,
 			"description": params.description,
 			"privateKey":  params.privateKey, // 添加私钥参数
+			"chainID":     params.chainID,    // 添加chainID参数
 		},
 		"id": 1,
 	}

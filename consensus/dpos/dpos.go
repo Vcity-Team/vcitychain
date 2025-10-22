@@ -7996,8 +7996,22 @@ func (d *DPoS) RegisterDelegate(registrant types.Address, name, website, descrip
 
 // RegisterDelegateWithKey 注册受托人（带私钥，用于创建交易）
 func (d *DPoS) RegisterDelegateWithKey(registrant types.Address, name, website, description, privateKey string) error {
+	// 使用默认chainID调用新方法
+	return d.RegisterDelegateWithKeyAndChainID(registrant, name, website, description, privateKey, 20230826)
+}
+
+// RegisterDelegateWithKeyAndChainID 注册受托人（带私钥和chainID，用于创建交易）
+func (d *DPoS) RegisterDelegateWithKeyAndChainID(registrant types.Address, name, website, description, privateKey string, chainID uint64) error {
 	d.lock.Lock()
 	defer d.lock.Unlock()
+
+	d.logger.Info("🚀 ===== 开始受托人注册（带chainID） =====")
+	d.logger.Info("📝 受托人信息",
+		"registrant", registrant.String(),
+		"name", name,
+		"website", website,
+		"description", description,
+		"chainID", chainID)
 
 	// 检查是否已经注册
 	if d.IsDelegateRegistered(registrant) {
@@ -8022,7 +8036,7 @@ func (d *DPoS) RegisterDelegateWithKey(registrant types.Address, name, website, 
 	// 根据是否有私钥决定是创建交易还是直接更新状态
 	if privateKey != "" {
 		// 🆕 有私钥，创建交易
-		return d.createDelegateRegistrationTransaction(registrant, name, website, description, depositAmount, privateKey)
+		return d.createDelegateRegistrationTransactionWithChainID(registrant, name, website, description, depositAmount, privateKey, chainID)
 	} else {
 		// 🆕 没有私钥，无法创建交易
 		d.logger.Error("❌ 无私钥提供，无法创建受托人注册交易")
@@ -8030,15 +8044,21 @@ func (d *DPoS) RegisterDelegateWithKey(registrant types.Address, name, website, 
 	}
 }
 
-// createDelegateRegistrationTransaction 创建受托人注册交易
+// createDelegateRegistrationTransaction 创建受托人注册交易（使用默认chainID）
 func (d *DPoS) createDelegateRegistrationTransaction(registrant types.Address, name, website, description string, depositAmount *big.Int, privateKey string) error {
-	d.logger.Info("🚀 ===== 开始创建受托人注册交易 =====")
+	return d.createDelegateRegistrationTransactionWithChainID(registrant, name, website, description, depositAmount, privateKey, 20230826)
+}
+
+// createDelegateRegistrationTransactionWithChainID 创建受托人注册交易（带chainID）
+func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types.Address, name, website, description string, depositAmount *big.Int, privateKey string, chainID uint64) error {
+	d.logger.Info("🚀 ===== 开始创建受托人注册交易（带chainID） =====")
 	d.logger.Info("📝 受托人注册信息",
 		"registrant", registrant.String(),
 		"name", name,
 		"website", website,
 		"description", description,
-		"deposit", depositAmount.String())
+		"deposit", depositAmount.String(),
+		"chainID", chainID)
 
 	// 获取账户nonce
 	var nonce uint64
@@ -8093,7 +8113,7 @@ func (d *DPoS) createDelegateRegistrationTransaction(registrant types.Address, n
 
 	// 签名交易
 	d.logger.Info("✍️ 开始签名交易...")
-	if err := d.signTransaction(tx, registrant, privateKey); err != nil {
+	if err := d.signTransactionWithChainID(tx, registrant, privateKey, chainID); err != nil {
 		d.logger.Error("❌ 交易签名失败", "error", err)
 		return fmt.Errorf("failed to sign transaction: %w", err)
 	}
@@ -8150,8 +8170,13 @@ func (d *DPoS) createDelegateRegistrationTransaction(registrant types.Address, n
 	return nil
 }
 
-// signTransaction 签名交易
+// signTransaction 签名交易（使用默认chainID）
 func (d *DPoS) signTransaction(tx *types.Transaction, expectedAddr types.Address, privateKeyHex string) error {
+	return d.signTransactionWithChainID(tx, expectedAddr, privateKeyHex, 20230826)
+}
+
+// signTransactionWithChainID 签名交易（带chainID）
+func (d *DPoS) signTransactionWithChainID(tx *types.Transaction, expectedAddr types.Address, privateKeyHex string, chainID uint64) error {
 	d.logger.Info("Signing DPoS transaction with user-provided private key")
 
 	// Force user to provide private key
@@ -8202,8 +8227,7 @@ func (d *DPoS) signTransaction(tx *types.Transaction, expectedAddr types.Address
 	d.logger.Info("User-provided private key created successfully", "privateKeyD", privateKey.D.String())
 
 	// Calculate transaction hash for signing using EIP-155 scheme to match txpool signer
-	// Use chainID 1 for now (can be made configurable)
-	chainID := uint64(1)
+	// Use provided chainID
 	eip155Signer := crypto.NewEIP155Signer(chainID, false)
 
 	d.logger.Info("=== 标记2: 开始签名交易 ===")

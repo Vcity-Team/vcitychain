@@ -637,6 +637,18 @@ func (p *TxPool) validateTx(tx *types.Transaction) error {
 	if signerErr != nil {
 		metrics.IncrCounter([]string{txPoolMetrics, "invalid_signature_txs"}, 1)
 
+		// 添加调试信息
+		p.logger.Error("🚨 CRITICAL: Failed to extract sender from transaction",
+			"error", signerErr,
+			"txType", tx.Type,
+			"nonce", tx.Nonce,
+			"gasPrice", tx.GasPrice.String(),
+			"value", tx.Value.String(),
+			"v", tx.V.String(),
+			"r", tx.R.String(),
+			"s", tx.S.String(),
+			"chainID", p.chainID.String())
+
 		return ErrExtractSignature
 	}
 
@@ -830,42 +842,44 @@ func (p *TxPool) addTx(origin txOrigin, tx *types.Transaction) error {
 		return fmt.Errorf("nil transaction")
 	}
 
+	// 注释掉零地址检查，让validateTx先处理From字段
 	// 🚨 拦截零地址交易 - 双重保护
-	if tx.From == types.ZeroAddress {
-		p.logger.Error("🚨 CRITICAL: addTx called with zero sender address - BLOCKED",
-			"origin", origin.String(),
-			"txType", tx.Type,
-			"nonce", tx.Nonce,
-			"gasPrice", tx.GasPrice.String(),
-			"value", tx.Value.String(),
-			"to", func() string {
-				if tx.To != nil {
-					return tx.To.String()
-				}
-				return "nil"
-			}(),
-			"inputLength", len(tx.Input),
-			"action", "BLOCKED_IN_ADD_TX")
-		return fmt.Errorf("zero sender address transaction")
-	}
+	// if tx.From == types.ZeroAddress {
+	// 	p.logger.Error("🚨 CRITICAL: addTx called with zero sender address - BLOCKED",
+	// 		"origin", origin.String(),
+	// 		"txType", tx.Type,
+	// 		"nonce", tx.Nonce,
+	// 		"gasPrice", tx.GasPrice.String(),
+	// 		"value", tx.Value.String(),
+	// 		"to", func() string {
+	// 			if tx.To != nil {
+	// 				return tx.To.String()
+	// 			}
+	// 			return "nil"
+	// 		}(),
+	// 		"inputLength", len(tx.Input),
+	// 		"action", "BLOCKED_IN_ADD_TX")
+	// 	return fmt.Errorf("zero sender address transaction")
+	// }
 
-	if tx.Hash == (types.Hash{}) {
-		p.logger.Error("🚨 CRITICAL: addTx called with zero hash transaction",
-			"origin", origin.String(),
-			"txType", tx.Type,
-			"nonce", tx.Nonce,
-			"gasPrice", tx.GasPrice.String(),
-			"value", tx.Value.String(),
-			"from", tx.From.String(),
-			"to", func() string {
-				if tx.To != nil {
-					return tx.To.String()
-				}
-				return "nil"
-			}(),
-			"inputLength", len(tx.Input))
-		return fmt.Errorf("zero hash transaction")
-	}
+	// 注释掉零哈希检查，让哈希计算先执行
+	// if tx.Hash == (types.Hash{}) {
+	// 	p.logger.Error("🚨 CRITICAL: addTx called with zero hash transaction",
+	// 		"origin", origin.String(),
+	// 		"txType", tx.Type,
+	// 		"nonce", tx.Nonce,
+	// 		"gasPrice", tx.GasPrice.String(),
+	// 		"value", tx.Value.String(),
+	// 		"from", tx.From.String(),
+	// 		"to", func() string {
+	// 			if tx.To != nil {
+	// 				return tx.To.String()
+	// 			}
+	// 			return "nil"
+	// 		}(),
+	// 		"inputLength", len(tx.Input))
+	// 	return fmt.Errorf("zero hash transaction")
+	// }
 
 	if p.logger.IsDebug() {
 		p.logger.Debug("add tx", "origin", origin.String(), "hash", tx.Hash.String())
