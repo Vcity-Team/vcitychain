@@ -9698,13 +9698,6 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 	signatureBitmap := bitmap.Bitmap{}
 
 	// 🆕 确保受托人按票数排序，与验证时保持一致
-	r.logger.Debug("🔍 区块生产前：确保受托人按票数排序，与验证时保持一致")
-	r.logger.Debug("📊 出块前受托人统计", "totalDelegates", len(r.delegates))
-
-	// 打印所有受托人信息
-	for i, delegate := range r.delegates {
-		r.logger.Debug("🏭 出块受托人", "index", i, "address", delegate.Address.String(), "votingPower", delegate.VotingPower.String(), "isActive", delegate.IsActive)
-	}
 
 	myAddress := types.Address(r.config.Key.Address())
 
@@ -9723,10 +9716,7 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 				}
 			}
 		} else {
-			r.logger.Debug("🔑 出块时受托人BLS公钥已存在",
-				"index", i,
-				"address", delegate.Address.String(),
-				"publicKeyLength", len(delegate.BlsKey.Marshal()))
+			// BLS公钥已存在
 		}
 	}
 

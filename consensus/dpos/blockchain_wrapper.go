@@ -419,11 +419,6 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 			"amount", amount.String())
 	}
 
-	p.logger.Debug("✅✅✅ ========== processRewardDistributionInBlock 完成 ========== ✅✅✅",
-		"blockNumber", block.Number(),
-		"totalReward", totalReward.String(),
-		"rewardCount", len(rewardInfo.Rewards))
-
 	return nil
 }
 
