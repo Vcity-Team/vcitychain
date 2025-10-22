@@ -3674,39 +3674,39 @@ func (d *DPoS) getVotersForValidator(validatorAddress types.Address) []*VoterInf
 
 	var voters []*VoterInfo
 
-	// 从StakeStore获取投票信息
-	if d.state != nil && d.state.StakeStore != nil {
-		stakingInfo, err := d.state.StakeStore.GetStakingInfo()
-		if err != nil {
-			d.logger.Warn("获取质押信息失败", "error", err)
-			return voters
-		}
+	// 🆕 修复：直接从内存中的d.voters获取数据，而不是从StakingInfo表
+	// 因为StakingInfo表从未被写入数据，投票数据实际存储在VoterInfo表中
+	for voterAddress, voterInfo := range d.voters {
+		d.logger.Debug("🔍 检查投票者",
+			"voterAddress", voterAddress.String(),
+			"votedDelegatesCount", len(voterInfo.VotedDelegates),
+			"targetValidator", validatorAddress.String())
 
-		d.logger.Debug("🔍 获取到的质押信息总数", "count", len(stakingInfo))
-
-		for i, stake := range stakingInfo {
-			d.logger.Debug("🔍 检查质押信息",
-				"index", i,
-				"staker", stake.Staker.String(),
-				"delegate", stake.Delegate.String(),
-				"amount", stake.Amount.String(),
+		// 检查该投票者是否投票给了目标验证者
+		for i, votedDelegate := range voterInfo.VotedDelegates {
+			d.logger.Debug("🔍 比较验证者地址",
+				"voterAddress", voterAddress.String(),
+				"votedDelegateIndex", i,
+				"votedDelegate", votedDelegate.String(),
 				"targetValidator", validatorAddress.String(),
-				"isMatch", stake.Delegate == validatorAddress)
+				"isMatch", votedDelegate == validatorAddress)
 
-			if stake.Delegate == validatorAddress {
+			if votedDelegate == validatorAddress {
 				voters = append(voters, &VoterInfo{
-					Address:     stake.Staker,
-					VotingPower: stake.Amount,
+					Address:        voterInfo.Address,
+					VotingPower:    new(big.Int).Set(voterInfo.VotingPower),
+					VotedDelegates: voterInfo.VotedDelegates,
+					LastVoteTime:   voterInfo.LastVoteTime,
+					LockedUntil:    voterInfo.LockedUntil,
+					Nonce:          voterInfo.Nonce,
 				})
 				d.logger.Debug("✅ 找到投票者",
-					"voterAddress", stake.Staker.String(),
-					"votingPower", stake.Amount.String())
+					"voterAddress", voterAddress.String(),
+					"votingPower", voterInfo.VotingPower.String(),
+					"targetValidator", validatorAddress.String())
+				break // 找到后跳出内层循环
 			}
 		}
-	} else {
-		d.logger.Warn("🔍 StakeStore 不可用",
-			"stateIsNil", d.state == nil,
-			"stakeStoreIsNil", d.state != nil && d.state.StakeStore == nil)
 	}
 
 	d.logger.Debug("投票者列表获取完成",
@@ -7151,6 +7151,73 @@ func (d *DPoS) GetStakingInfo(blockNumber uint64, staker types.Address) (*StakeI
 		Rewards:   big.NewInt(0),
 		Delegate:  types.ZeroAddress,
 	}, nil
+}
+
+// GetAllStakingInfo 获取所有质押信息（从数据库重新聚合）
+func (d *DPoS) GetAllStakingInfo() ([]*StakeInfo, error) {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	if d.state == nil || d.state.StakeStore == nil {
+		d.logger.Warn("StakeStore 不可用")
+		return []*StakeInfo{}, nil
+	}
+
+	// 🆕 修复：像启动时一样，直接从数据库重新聚合数据
+	// 确保获取最新的投票数据，不依赖可能过时的内存数据
+	d.logger.Info("🔍 开始从数据库重新聚合质押信息（像启动时一样）")
+
+	// 使用和启动时相同的方法：GetValidatorsWithFilter(false)
+	dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	if err != nil {
+		d.logger.Error("从数据库获取验证者失败", "error", err)
+		return []*StakeInfo{}, err
+	}
+
+	if len(dbValidators) == 0 {
+		d.logger.Warn("数据库中没有验证者")
+		return []*StakeInfo{}, nil
+	}
+
+	d.logger.Info("✅ 从数据库成功获取验证者", "count", len(dbValidators))
+
+	// 🆕 添加详细日志：打印从数据库读取的验证者信息
+	d.logger.Info("🔍 数据库验证者详细信息:")
+	for i, validator := range dbValidators {
+		d.logger.Info("🔍 数据库验证者",
+			"index", i,
+			"address", validator.Address.String(),
+			"votingPower", validator.VotingPower.String(),
+			"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
+			"isActive", validator.IsActive,
+			"hasBlsKey", validator.BlsKey != nil)
+	}
+
+	// 转换为StakeInfo格式
+	var stakingInfos []*StakeInfo
+	for _, validator := range dbValidators {
+		if validator.VotingPower != nil && validator.VotingPower.Cmp(big.NewInt(0)) > 0 {
+			stakeInfo := &StakeInfo{
+				Staker:    validator.Address,                       // 验证者自己就是质押者
+				Amount:    new(big.Int).Set(validator.VotingPower), // 使用聚合后的投票权重
+				StartTime: uint64(time.Now().Unix()),               // 使用当前时间
+				EndTime:   0,                                       // 验证者没有锁定时间
+				IsLocked:  false,
+				IsActive:  validator.IsActive,
+				Rewards:   big.NewInt(0),
+				Delegate:  validator.Address, // 验证者自己就是委托人
+			}
+			stakingInfos = append(stakingInfos, stakeInfo)
+
+			d.logger.Debug("✅ 创建质押信息",
+				"address", validator.Address.String(),
+				"votingPower", validator.VotingPower.String(),
+				"isActive", validator.IsActive)
+		}
+	}
+
+	d.logger.Info("从数据库重新聚合成功获取质押信息", "count", len(stakingInfos))
+	return stakingInfos, nil
 }
 
 func (d *DPoS) GetStakingInfoWithTx(blockNumber uint64, staker types.Address, dbTx *bolt.Tx) (*StakeInfo, error) {

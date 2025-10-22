@@ -2449,36 +2449,36 @@ func (d *DPOS) getDynamicVotingInfoFromDPoSEngine() []*dpos.StakeInfo {
 func (d *DPOS) getDelegatesFromDatabase() []*dpos.StakeInfo {
 	d.logger.Info("🔄 从数据库中查询所有受托人信息...")
 
-	// 🆕 修复：直接调用 GetStakingInfo 从数据库读取数据
-	// 不再通过DPoS引擎的内存方法，确保数据一致性
-	if consensusStore, ok := d.store.(interface{ GetConsensus() interface{} }); ok {
-		consensusEngine := consensusStore.GetConsensus()
-		if consensusEngine == nil {
-			d.logger.Warn("共识引擎为nil")
-			return []*dpos.StakeInfo{}
-		}
+	// 🆕 修复：通过全局注册表获取DPoS实例，然后调用其方法
+	// 使用DPoS实例的公开方法，避免访问未导出的字段
+	if dposInstance, exists := dpos.GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+		d.logger.Info("✅ 通过全局注册表找到DPoS实例")
 
-		// 尝试从DPoS引擎获取StakeStore
-		if dposEngine, ok := consensusEngine.(interface {
-			GetStakeStore() interface{}
-		}); ok {
-			stakeStore := dposEngine.GetStakeStore()
-			if stakeStore != nil {
-				// 调用StakeStore的GetStakingInfo方法
-				if getStakingInfoMethod := reflect.ValueOf(stakeStore).MethodByName("GetStakingInfo"); getStakingInfoMethod.IsValid() {
-					d.logger.Info("✅ 找到GetStakingInfo方法，正在调用...")
-					results := getStakingInfoMethod.Call([]reflect.Value{})
-					if len(results) >= 2 {
-						if err, ok := results[1].Interface().(error); ok && err != nil {
-							d.logger.Error("GetStakingInfo method returned error", "error", err)
-						} else if stakingInfos, ok := results[0].Interface().([]*dpos.StakeInfo); ok {
-							d.logger.Info("✅ 从数据库成功获取质押信息", "count", len(stakingInfos))
-							return stakingInfos
-						}
-					}
+		// 尝试调用DPoS实例的公开方法获取质押信息
+		// 方法1：尝试调用GetAllStakingInfo方法
+		if getAllStakingInfoMethod := reflect.ValueOf(dposInstance).MethodByName("GetAllStakingInfo"); getAllStakingInfoMethod.IsValid() {
+			d.logger.Info("✅ 找到GetAllStakingInfo方法，正在调用...")
+			results := getAllStakingInfoMethod.Call([]reflect.Value{})
+			if len(results) >= 2 {
+				if err, ok := results[1].Interface().(error); ok && err != nil {
+					d.logger.Error("从数据库获取质押信息失败", "error", err)
+				} else if stakingInfos, ok := results[0].Interface().([]*dpos.StakeInfo); ok {
+					d.logger.Info("✅ 从数据库成功获取质押信息", "count", len(stakingInfos))
+					return stakingInfos
 				}
 			}
 		}
+
+		// 方法2：尝试调用GetStakingInfo方法（单个）
+		if getStakingInfoMethod := reflect.ValueOf(dposInstance).MethodByName("GetStakingInfo"); getStakingInfoMethod.IsValid() {
+			d.logger.Info("✅ 找到GetStakingInfo方法，但需要遍历所有验证者...")
+			// 这里需要遍历所有验证者，暂时跳过
+			d.logger.Warn("GetStakingInfo方法需要遍历所有验证者，暂时跳过")
+		}
+
+		d.logger.Warn("DPoS实例没有GetAllStakingInfo方法")
+	} else {
+		d.logger.Warn("无法通过全局注册表找到DPoS实例")
 	}
 
 	// 如果无法获取，返回空结果
