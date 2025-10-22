@@ -2298,18 +2298,10 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 	// 🆕 如果是epoch结束区块，不预先计算状态根，而是像交易一样在区块执行时处理
 	if isEpochEndBlock {
-		r.logger.Info("🔍 buildBlock: epoch结束区块，将在区块执行时处理奖励分发",
-			"blockNumber", nextBlockNumber,
-			"isEpochEndBlock", isEpochEndBlock,
-			"note", "像处理交易一样，奖励分发将在区块执行时处理，不预先修改状态根")
 	}
 
 	// 🆕 如果是epoch结束区块，在生产节点也执行奖励分配
 	if isEpochEndBlock {
-		r.logger.Info("🏭 生产节点开始执行奖励分配",
-			"blockNumber", nextBlockNumber,
-			"isEpochEndBlock", isEpochEndBlock,
-			"说明", "生产节点在buildBlock时执行奖励分配，确保状态根一致")
 
 		// 获取当前状态
 		state := builder.GetState()
@@ -2319,14 +2311,12 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				r.logger.Error("❌ 生产节点奖励分配失败", "blockNumber", nextBlockNumber, "error", err)
 				return nil, fmt.Errorf("failed to process reward distribution in buildBlock: %w", err)
 			}
-			r.logger.Info("✅ 生产节点奖励分配完成", "blockNumber", nextBlockNumber)
 		} else {
 			r.logger.Error("❌ 生产节点无法获取状态", "blockNumber", nextBlockNumber)
 		}
 	}
 
 	// 构建区块
-	r.logger.Info("🔍 开始调用builder.Build", "timestamp", time.Now().Format("15:04:05.000"))
 	buildStart := time.Now()
 
 	block, err := builder.Build(func(h *types.Header) {
@@ -2337,34 +2327,12 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 		// 🆕 如果是epoch结束区块，不预先计算状态根，而是像交易一样在区块执行时处理
 		if isEpochEndBlock {
-			r.logger.Info("🔍 buildBlock: epoch结束区块，将在区块执行时处理奖励分发",
-				"blockNumber", h.Number,
-				"isEpochEndBlock", isEpochEndBlock,
-				"note", "像处理交易一样，奖励分发将在区块执行时处理，不预先修改状态根")
 
 			// 通过全局注册表获取DPoS实例，添加奖励信息到ExtraData
-			r.logger.Info("🔍 buildBlock: 尝试从全局注册表获取DPoS实例", "key", "vcity_dpos")
 			if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-				r.logger.Info("✅ buildBlock: 成功获取DPoS实例",
-					"exists", exists,
-					"hasPendingReward", dposInstance.pendingRewardDistribution != nil)
 
 				if dposInstance.pendingRewardDistribution != nil {
-					r.logger.Info("✅ buildBlock: 找到待处理的奖励分配信息",
-						"epochNumber", dposInstance.pendingRewardDistribution.EpochNumber,
-						"rewardCount", len(dposInstance.pendingRewardDistribution.Rewards),
-						"totalReward", dposInstance.pendingRewardDistribution.TotalReward.String())
-
-					r.logger.Info("🔍 buildBlock: 开始设置奖励分配信息到ExtraData")
 					extra.RewardDistribution = dposInstance.pendingRewardDistribution
-
-					// 🆕 显著日志：生产节点存入奖励分发信息到ExtraData
-					r.logger.Info("🏭🏭🏭 ========== 生产节点存入奖励分发信息到ExtraData ========== 🏭🏭🏭",
-						"blockNumber", h.Number,
-						"epochNumber", dposInstance.pendingRewardDistribution.EpochNumber,
-						"rewardCount", len(dposInstance.pendingRewardDistribution.Rewards),
-						"totalReward", dposInstance.pendingRewardDistribution.TotalReward.String(),
-						"说明", "生产节点将奖励分发信息存入区块ExtraData中")
 
 					// 🆕 在epoch结束区块中也设置CheckpointBlockHash
 					extra.CheckpointBlockHash = h.Hash
@@ -4660,23 +4628,6 @@ func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift tim
 		"parentHash", parent.Hash.String(),
 		"extraDataLength", len(header.ExtraData))
 
-	// 🆕 添加验证时区块头详细信息
-	d.logger.Debug("🔍 ===== 验证时区块头详细信息 =====",
-		"blockNumber", header.Number,
-		"blockHash", header.Hash.String(),
-		"parentHash", header.ParentHash.String(),
-		"timestamp", header.Timestamp,
-		"gasLimit", header.GasLimit,
-		"gasUsed", header.GasUsed,
-		"difficulty", header.Difficulty,
-		"stateRoot", header.StateRoot.String(),
-		"transactionsRoot", header.TxRoot.String(),
-		"receiptsRoot", header.ReceiptsRoot.String(),
-		"miner", types.BytesToAddress(header.Miner).String(),
-		"nonce", header.Nonce.String(),
-		"extraDataLength", len(header.ExtraData),
-		"说明", "验证时区块头的所有关键字段")
-
 	// validate header fields
 	if err := validateHeaderFields(parent, header, uint64(blockTimeDrift.Seconds())); err != nil {
 		d.logger.Error("区块头部字段验证失败", "error", err)
@@ -4741,23 +4692,11 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		d.updateRoundState(header)
 
 		// 🆕 验证节点执行blockchain_wrapper.ProcessBlock来处理奖励分配
-		d.logger.Debug("🔍🔍🔍 ========== 验证节点开始检查是否需要调用blockchain_wrapper.ProcessBlock ========== 🔍🔍🔍",
-			"blockNumber", header.Number,
-			"blockHash", header.Hash.String()[:16],
-			"blockchainIsNil", d.config.Blockchain == nil)
 
 		if d.config.Blockchain != nil {
-			d.logger.Debug("✅ 验证节点blockchain不为nil，开始获取完整区块信息",
-				"blockNumber", header.Number,
-				"blockHash", header.Hash.String()[:16])
 
 			// 获取完整区块信息
 			block, exists := d.config.Blockchain.GetBlockByHash(header.Hash, true)
-			d.logger.Debug("🔍 验证节点GetBlockByHash结果",
-				"blockNumber", header.Number,
-				"blockHash", header.Hash.String()[:16],
-				"exists", exists,
-				"blockIsNil", block == nil)
 
 			if exists && block != nil {
 				d.logger.Debug("✅ 验证节点成功获取完整区块信息，准备调用blockchain_wrapper.ProcessBlock",

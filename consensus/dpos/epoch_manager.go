@@ -113,9 +113,6 @@ func (tem *TimeBasedEpochManager) TriggerEpochSwitch(blockNumber uint64) {
 	epochSize := tem.getEpochSize()
 	currentEpoch := (blockNumber / epochSize) + 1
 
-	tem.logger.Info("⏰ ========== 基于区块高度触发新Epoch ==========",
-		"epoch", currentEpoch,
-		"blockNumber", blockNumber)
 
 	// 调用epoch切换回调
 	if tem.callback != nil {

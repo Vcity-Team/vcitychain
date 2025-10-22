@@ -473,11 +473,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 			"验证者数量", len(validators),
 			"说明", "切换高度直接使用生产时保存的轮次值，确保checkpointHash一致")
 	} else {
-		logger.Debug("🔍 方案2：使用ExtraData中的轮次值",
-			"blockNumber", blockNumber,
-			"ExtraData轮次", i.Checkpoint.BlockRound,
-			"验证者数量", len(validators),
-			"说明", "直接使用生产时保存的轮次值，确保checkpointHash一致")
 	}
 
 	recalculatedCheckpoint := &CheckpointData{
@@ -523,13 +518,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"eventRoot", recalculatedCheckpoint.EventRoot.String(),
 		"说明", "验证时用于计算checkpointHash的所有参数")
 
-	// 🆕 添加验证时轮次计算详细日志
-	logger.Debug("🔍 ===== 验证时轮次计算详情 =====",
-		"blockNumber", blockNumber,
-		"originalBlockRound", i.Checkpoint.BlockRound,
-		"recalculatedBlockRound", recalculatedCheckpoint.BlockRound,
-		"isConsensusSwitch", isConsensusSwitch,
-		"说明", "验证时轮次计算过程")
 
 	logger.Debug("🔍 验证时开始计算checkpoint哈希",
 		"blockNumber", blockNumber,
@@ -552,15 +540,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"nextValidatorsHash", recalculatedCheckpoint.NextValidatorsHash.String(),
 		"validatorsCount", len(validators))
 
-	// 🆕 打印验证时验证者集合的详细信息
-	logger.Debug("🔍 验证时验证者集合详细信息")
-	for i, validator := range validators {
-		logger.Debug("🔍 验证时验证者",
-			"index", i,
-			"address", validator.Address.String(),
-			"votingPower", validator.VotingPower.String(),
-			"isActive", validator.IsActive)
-	}
 
 	checkpointHash, err := recalculatedCheckpoint.Hash(productionChainID, blockNumber, realBlockHash)
 	if err != nil {
@@ -574,12 +553,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"checkpointHash", checkpointHash.String(),
 		"说明", "验证时最终计算出的checkpointHash")
 
-	// 🆕 添加生产和验证CheckpointHash对比日志
-	logger.Debug("🔍 ===== 生产vs验证CheckpointHash对比 =====",
-		"blockNumber", blockNumber,
-		"生产时CheckpointHash", "请查看生产日志中的'奖励分发区块CheckpointHash计算结果'或'生产时CheckpointHash计算结果'",
-		"验证时CheckpointHash", checkpointHash.String(),
-		"说明", "请比对生产和验证的CheckpointHash是否一致")
 
 	// 🆕 添加生产和验证时参数对比日志
 	logger.Debug("🔍 ===== 生产vs验证CheckpointData参数对比 =====",
@@ -596,31 +569,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 
 	logger.Debug("🔍 验证时checkpoint哈希计算结果", "checkpointHash", checkpointHash.String())
 
-	// 🆕 添加checkpointHash修复效果日志（方案2）
-	logger.Debug("🔍 checkpointHash修复效果（方案2）",
-		"blockNumber", blockNumber,
-		"修复后checkpointHash", checkpointHash.String(),
-		"使用轮次", i.Checkpoint.BlockRound,
-		"说明", "验证时直接使用ExtraData中的轮次值，确保checkpointHash与生产时一致")
 
-	// 🆕 添加参数对比总结日志（方案2）
-	summaryTitle := "📊 ===== 生产vs验证参数对比总结（方案2） ====="
-	if isConsensusSwitch {
-		summaryTitle = "📊 ===== 切换高度生产vs验证参数对比总结（方案2） ====="
-	}
-
-	logger.Debug(summaryTitle,
-		"blockNumber", blockNumber,
-		"chainID", fmt.Sprintf("生产时=%d, 验证时=%d", productionChainID, productionChainID),
-		"realBlockHash", realBlockHash.String(),
-		"blockRound", fmt.Sprintf("生产时=1844, 验证时=%d", i.Checkpoint.BlockRound),
-		"epochNumber", "生产时=1, 验证时=1",
-		"eventRoot", "生产时=0x0000..., 验证时=0x0000...",
-		"currentValidatorsHash", recalculatedCheckpoint.CurrentValidatorsHash.String(),
-		"nextValidatorsHash", recalculatedCheckpoint.NextValidatorsHash.String(),
-		"最终checkpointHash", checkpointHash.String(),
-		"方案2说明", "验证时直接使用ExtraData中的轮次值，确保与生产时完全一致",
-		"切换高度", isConsensusSwitch)
 
 	// 🆕 关键修复：确保验证时使用的验证者集合与生产时完全一致
 	// 生产时使用 r.delegates 设置位图索引，验证时也应该使用相同的验证者集合
