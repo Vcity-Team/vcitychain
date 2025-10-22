@@ -148,162 +148,47 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 	var validators validator.AccountSet
 
 	err := s.db.View(func(tx *bolt.Tx) error {
-		// 🆕 修正：从VoterInfo bucket读取投票信息，计算每个受托人的实际票数
-		voterBucket := tx.Bucket([]byte("VoterInfo"))
-		if voterBucket == nil {
-			return fmt.Errorf("VoterInfo bucket not found")
-		}
-
-		// 统计每个受托人的总票数
-		delegateVotes := make(map[string]*big.Int)
-		cursor := voterBucket.Cursor()
-
-		// fmt.Printf("🔍 GetValidators: 开始读取VoterInfo表数据...\n")
-		voterCount := 0
-
-		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
-			var voterInfo VoterInfo
-			if err := json.Unmarshal(value, &voterInfo); err != nil {
-				continue
-			}
-
-			voterCount++
-
-			// 🆕 修复：正确统计每个受托人的票数
-			// 将投票者的总权重平均分配给所有投票的受托人
-			if len(voterInfo.VotedDelegates) > 0 {
-				// 计算每个受托人应该分到的票数
-				votesPerDelegate := new(big.Int).Div(voterInfo.VotingPower, big.NewInt(int64(len(voterInfo.VotedDelegates))))
-
-				for _, delegate := range voterInfo.VotedDelegates {
-					delegateAddr := delegate.String()
-					if delegateVotes[delegateAddr] == nil {
-						delegateVotes[delegateAddr] = big.NewInt(0)
-					}
-					delegateVotes[delegateAddr].Add(delegateVotes[delegateAddr], votesPerDelegate)
-				}
-			}
-		}
-
-		// fmt.Printf("🔍 GetValidators: VoterInfo表读取完成，共%d个投票者\n", voterCount)
-		// fmt.Printf("🔍 GetValidators: 受托人票数统计结果:\n")
-		for range delegateVotes {
-			// 票数统计完成
-		}
-
-		// 🆕 从DelegateInfo bucket读取受托人信息，并添加票数信息
+		// 🆕 修改：直接从DelegateInfo表读取验证者信息，不做任何处理
 		delegateBucket := tx.Bucket([]byte("DelegateInfo"))
 		if delegateBucket == nil {
 			return fmt.Errorf("DelegateInfo bucket not found")
 		}
 
-		// 遍历所有受托人，创建带票数的验证者信息
-		// fmt.Printf("🔍 GetValidators: 开始读取DelegateInfo表数据...\n")
-		cursor = delegateBucket.Cursor()
-		delegateCount := 0
-
+		cursor := delegateBucket.Cursor()
 		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
 			var delegateInfo DelegateInfo
 			if err := json.Unmarshal(value, &delegateInfo); err != nil {
 				continue
 			}
 
-			delegateCount++
-
-			// 获取该受托人的总票数
-			delegateAddr := delegateInfo.Address.String()
-			totalVotes := delegateVotes[delegateAddr]
-			if totalVotes == nil {
-				totalVotes = big.NewInt(0) // 没有票数时设为0
-			}
-
-			// 🆕 添加详细日志：显示投票权重计算过程
-			// fmt.Printf("🔍 GetValidators: 受托人投票权重计算详情\n")
-			// fmt.Printf("  - 地址: %s\n", delegateInfo.Address.String())
-			// fmt.Printf("  - 创世配置VotingPower: %s\n", delegateInfo.VotingPower.String())
-			// fmt.Printf("  - 用户投票总数: %s\n", totalVotes.String())
-			// fmt.Printf("  - 是否活跃: %v\n", delegateInfo.IsActive)
-
-			// 🆕 修复：优先使用创世配置的stake，而不是实际投票数
-			// 如果实际投票数为0，但受托人信息中有VotingPower，则使用VotingPower
-			finalVotingPower := totalVotes
-			if totalVotes.Cmp(big.NewInt(0)) == 0 && delegateInfo.VotingPower.Cmp(big.NewInt(0)) > 0 {
-				finalVotingPower = delegateInfo.VotingPower
-				// fmt.Printf("  - 使用创世配置VotingPower: %s\n", finalVotingPower.String())
-			} else {
-				// fmt.Printf("  - 使用用户投票总数: %s\n", finalVotingPower.String())
-			}
-
-			// 🆕 临时修复：对于创世验证者，如果权重为0，设置为1000 VCITY
-			if finalVotingPower.Cmp(big.NewInt(0)) == 0 {
-				// 检查是否为创世验证者
-				isGenesisValidator := s.isGenesisValidator(delegateInfo.Address)
-				if isGenesisValidator {
-					finalVotingPower = new(big.Int)
-					finalVotingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
-					// fmt.Printf("  - 创世验证者权重为0，临时设置为1000 VCITY: %s\n", finalVotingPower.String())
-				}
-			}
-
-			// fmt.Printf("  - 最终投票权重: %s (0x%x)\n", finalVotingPower.String(), finalVotingPower.Bytes())
-
-			// 🆕 修复：根据参数决定是否过滤投票权重为0的验证者
-			// 这样可以避免将不活跃或投票权重为0的验证者包含在法定人数计算中
-			// 🆕 修复：不管数据库中的IsActive是什么值，都设置为true
-			// 这样可以确保与出块节点的逻辑保持一致
-			if filterZeroVotingPower && finalVotingPower.Cmp(big.NewInt(0)) <= 0 {
+			// 应用过滤条件
+			if filterZeroVotingPower && (delegateInfo.VotingPower == nil || delegateInfo.VotingPower.Cmp(big.NewInt(0)) == 0) {
 				continue
 			}
 
-			// 🆕 修正：使用最终确定的投票权重，并恢复BLS密钥
-			var blsPublicKey *bls.PublicKey
-			if len(delegateInfo.BlsPublicKey) > 0 {
-				var err error
-				blsPublicKey, err = bls.UnmarshalPublicKey(delegateInfo.BlsPublicKey)
-				if err != nil {
-					// 如果BLS密钥解析失败，记录警告但继续
-					fmt.Printf("⚠️ 解析BLS公钥失败: address=%s, blsKeyLength=%d, error=%v\n",
-						delegateInfo.Address.String(), len(delegateInfo.BlsPublicKey), err)
-				} else {
-					// fmt.Printf("✅ 成功从数据库解析BLS公钥: address=%s, blsKeyLength=%d\n",
-					//	delegateInfo.Address.String(), len(delegateInfo.BlsPublicKey))
-				}
-			} else {
-				// BLS公钥为空是允许的，记录信息但继续处理
-				// fmt.Printf("ℹ️ 受托人BLS公钥为空: %s (这是正常情况，系统容忍BLS公钥缺失)\n",
-				//	delegateInfo.Address.String())
-			}
-
-			validatorMeta := &validator.ValidatorMetadata{
+			// 直接使用DelegateInfo中的VotingPower，不做任何处理
+			validator := &validator.ValidatorMetadata{
 				Address:     delegateInfo.Address,
-				VotingPower: finalVotingPower, // 使用修复后的投票权重
-				IsActive:    true,             // 🆕 修复：不管数据库中的IsActive是什么值，都设置为true
-				BlsKey:      blsPublicKey,     // 🆕 恢复BLS公钥（可以为nil）
+				VotingPower: new(big.Int).Set(delegateInfo.VotingPower),
+				IsActive:    delegateInfo.IsActive,
+				BlsKey:      nil, // 初始为空
 			}
 
-			// 记录验证者信息状态
-			if blsPublicKey == nil {
-				// fmt.Printf("ℹ️ 创建验证者元数据（BLS公钥缺失）: %s, 投票权重: %s\n",
-				//	delegateInfo.Address.String(), finalVotingPower.String())
-			} else {
-				// fmt.Printf("✅ 创建验证者元数据（BLS公钥正常）: %s, 投票权重: %s\n",
-				//	delegateInfo.Address.String(), finalVotingPower.String())
+			// 如果有BLS公钥，解析并设置
+			if len(delegateInfo.BlsPublicKey) > 0 {
+				if blsKey, err := bls.UnmarshalPublicKey(delegateInfo.BlsPublicKey); err == nil {
+					validator.BlsKey = blsKey
+				}
 			}
 
-			validators = append(validators, validatorMeta)
+			validators = append(validators, validator)
 		}
-
 		return nil
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to get validators: %w", err)
+		return nil, fmt.Errorf("failed to get validators from database: %w", err)
 	}
-
-	// 🆕 修复：按票数降序排序，确保票数高的受托人排在前面
-	sort.Slice(validators, func(i, j int) bool {
-		return validators[i].VotingPower.Cmp(validators[j].VotingPower) > 0
-	})
 
 	return validators, nil
 }
