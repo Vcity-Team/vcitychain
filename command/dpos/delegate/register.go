@@ -24,6 +24,7 @@ type registerDelegateParams struct {
 	name        string
 	website     string
 	description string
+	privateKey  string
 }
 
 // GetRegisterCommand returns the register delegate command
@@ -71,10 +72,17 @@ func setFlags(cmd *cobra.Command) {
 		"",
 		"delegate description (optional)",
 	)
+	cmd.Flags().StringVar(
+		&registerParams.privateKey,
+		"private-key",
+		"",
+		"private key for signing the registration transaction (required)",
+	)
 
 	// Mark required flags
 	cmd.MarkFlagRequired("address")
 	cmd.MarkFlagRequired("name")
+	cmd.MarkFlagRequired("private-key")
 }
 
 // runPreRun runs the pre-run validation
@@ -99,9 +107,18 @@ func (p *registerDelegateParams) validateFlags() error {
 		return fmt.Errorf("name is required")
 	}
 
+	if p.privateKey == "" {
+		return fmt.Errorf("private-key is required")
+	}
+
 	// Validate address format
 	if !isValidHexAddress(p.address) {
 		return fmt.Errorf("invalid address format: %s", p.address)
+	}
+
+	// Validate private key format
+	if !isValidPrivateKey(p.privateKey) {
+		return fmt.Errorf("invalid private key format: %s", p.privateKey)
 	}
 
 	return nil
@@ -116,6 +133,23 @@ func isValidHexAddress(addr string) bool {
 	// Check if all characters after 0x are valid hex
 	for i := 2; i < len(addr); i++ {
 		c := addr[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+// isValidPrivateKey checks if a string is a valid private key
+func isValidPrivateKey(key string) bool {
+	// Private key should be 64 hex characters (32 bytes)
+	if len(key) != 64 {
+		return false
+	}
+
+	// Check if all characters are valid hex
+	for i := 0; i < len(key); i++ {
+		c := key[i]
 		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
 			return false
 		}
@@ -151,6 +185,7 @@ func registerDelegate(params *registerDelegateParams) (*RegisterDelegateResult, 
 			"name":        params.name,
 			"website":     params.website,
 			"description": params.description,
+			"privateKey":  params.privateKey, // 添加私钥参数
 		},
 		"id": 1,
 	}

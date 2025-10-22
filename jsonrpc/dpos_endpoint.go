@@ -3985,18 +3985,20 @@ func (d *DPOS) RegisterDelegate(ctx context.Context, params interface{}) (interf
 
 	// 解析参数
 	d.logger.Info("🔍 开始解析RPC参数...")
-	var registrantStr, name, website, description string
+	var registrantStr, name, website, description, privateKey string
 
 	if paramMap, ok := params.(map[string]interface{}); ok {
 		registrantStr, _ = paramMap["registrant"].(string)
 		name, _ = paramMap["name"].(string)
 		website, _ = paramMap["website"].(string)
 		description, _ = paramMap["description"].(string)
+		privateKey, _ = paramMap["privateKey"].(string)
 		d.logger.Info("✅ 参数解析成功",
 			"registrant", registrantStr,
 			"name", name,
 			"website", website,
-			"description", description)
+			"description", description,
+			"hasPrivateKey", privateKey != "")
 	} else {
 		d.logger.Error("❌ 参数格式无效")
 		return nil, fmt.Errorf("invalid parameters format")
@@ -4005,6 +4007,11 @@ func (d *DPOS) RegisterDelegate(ctx context.Context, params interface{}) (interf
 	if registrantStr == "" {
 		d.logger.Error("❌ 缺少注册者地址")
 		return nil, fmt.Errorf("registrant address is required")
+	}
+
+	if privateKey == "" {
+		d.logger.Error("❌ 缺少私钥")
+		return nil, fmt.Errorf("private key is required")
 	}
 
 	registrant := types.StringToAddress(registrantStr)
@@ -4019,9 +4026,9 @@ func (d *DPOS) RegisterDelegate(ctx context.Context, params interface{}) (interf
 
 	d.logger.Info("🔧 开始调用DPoS引擎注册受托人...")
 	if registerDelegate, ok := dposEngine.(interface {
-		RegisterDelegate(registrant types.Address, name, website, description string) error
+		RegisterDelegateWithKey(registrant types.Address, name, website, description, privateKey string) error
 	}); ok {
-		err := registerDelegate.RegisterDelegate(registrant, name, website, description)
+		err := registerDelegate.RegisterDelegateWithKey(registrant, name, website, description, privateKey)
 		if err != nil {
 			d.logger.Error("❌ 注册受托人失败", "error", err)
 			return nil, fmt.Errorf("failed to register delegate: %w", err)

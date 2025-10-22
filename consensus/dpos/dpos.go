@@ -7981,7 +7981,17 @@ func (d *DPoS) createDelegateRegistrationTransactionData(registrant types.Addres
 
 // RegisterDelegate 注册受托人（改进的TRON风格）
 func (d *DPoS) RegisterDelegate(registrant types.Address, name, website, description string) error {
-	return d.RegisterDelegateWithKey(registrant, name, website, description, "")
+	d.logger.Info("🚀 ===== 开始受托人注册（无私钥） =====")
+	d.logger.Info("📝 受托人信息",
+		"registrant", registrant.String(),
+		"name", name,
+		"website", website,
+		"description", description)
+
+	d.logger.Error("❌ 无私钥提供，无法创建交易")
+	d.logger.Error("💡 请使用带私钥的命令：./main dpos delegate register --address <address> --name <name> --website <website> --description <description> --private-key <private_key>")
+
+	return fmt.Errorf("private key is required for delegate registration. Please provide --private-key parameter")
 }
 
 // RegisterDelegateWithKey 注册受托人（带私钥，用于创建交易）
@@ -8014,8 +8024,9 @@ func (d *DPoS) RegisterDelegateWithKey(registrant types.Address, name, website, 
 		// 🆕 有私钥，创建交易
 		return d.createDelegateRegistrationTransaction(registrant, name, website, description, depositAmount, privateKey)
 	} else {
-		// 🆕 没有私钥，直接更新状态（用于测试或内部调用）
-		return d.registerDelegateDirectly(registrant, name, website, description, depositAmount)
+		// 🆕 没有私钥，无法创建交易
+		d.logger.Error("❌ 无私钥提供，无法创建受托人注册交易")
+		return fmt.Errorf("private key is required for delegate registration")
 	}
 }
 
@@ -8120,10 +8131,10 @@ func (d *DPoS) createDelegateRegistrationTransaction(registrant types.Address, n
 		d.logger.Warn("⚠️ 交易池为空")
 	}
 
-	// 如果交易池添加失败，作为fallback直接更新状态
+	// 如果交易池添加失败，返回错误
 	if !txAdded {
-		d.logger.Warn("⚠️ 交易池添加失败，作为fallback直接更新状态")
-		return d.registerDelegateDirectly(registrant, name, website, description, depositAmount)
+		d.logger.Error("❌ 交易池添加失败，无法完成受托人注册")
+		return fmt.Errorf("failed to add delegate registration transaction to pool")
 	}
 
 	d.logger.Info("🎊 ===== 受托人注册交易提交成功 =====")
@@ -8135,59 +8146,6 @@ func (d *DPoS) createDelegateRegistrationTransaction(registrant types.Address, n
 		"status", "pending",
 		"txAdded", txAdded)
 	d.logger.Info("🌐 交易将被广播到网络并等待打包进区块")
-
-	return nil
-}
-
-// registerDelegateDirectly 直接注册受托人（不通过交易）
-func (d *DPoS) registerDelegateDirectly(registrant types.Address, name, website, description string, depositAmount *big.Int) error {
-	d.logger.Info("🔍 开始直接注册受托人（不通过交易）",
-		"registrant", registrant.String(),
-		"name", name,
-		"website", website,
-		"description", description)
-
-	// 创建受托人候选人
-	registration := &DelegateRegistration{
-		Address:      registrant,
-		Name:         name,
-		Website:      website,
-		Description:  description,
-		Deposit:      depositAmount,
-		Status:       RegStatusCandidate, // 候选人状态
-		CreatedAt:    uint64(time.Now().Unix()),
-		TotalVotes:   big.NewInt(0),
-		IsActive:     false,
-		LastVoteTime: 0,
-	}
-
-	// 保存到数据库
-	if d.state != nil && d.state.RegistrationStore != nil {
-		if err := d.state.RegistrationStore.SaveRegistration(registration); err != nil {
-			d.logger.Error("Failed to save delegate registration", "error", err)
-			return fmt.Errorf("failed to save registration: %w", err)
-		}
-	}
-
-	// 创建受托人记录（可以立即接受投票）
-	delegate := &validator.ValidatorMetadata{
-		Address:     registrant,
-		VotingPower: big.NewInt(0),
-		BlsKey:      nil,
-		IsActive:    false, // 初始为非活跃，需要投票激活
-	}
-
-	d.addDelegateSafely(delegate)
-
-	d.logger.Info("Delegate candidate registered successfully",
-		"address", registrant.String(),
-		"name", name,
-		"website", website,
-		"deposit", depositAmount.String(),
-		"status", "candidate")
-
-	// 🚨 重要提示：直接更新状态，其他节点需要重启才能同步
-	d.logger.Warn("⚠️ 注意：受托人注册是直接更新状态，其他节点需要重启才能同步")
 
 	return nil
 }
