@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1468,8 +1469,59 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) ([]*dpos
 }
 
 // GetVotingPower handles dpos_getVotingPower RPC method
-func (d *DPOS) GetVotingPower(ctx context.Context, delegate string, blockNumber *uint64) (map[string]interface{}, error) {
-	d.logger.Info("DPoS GetVotingPower called", "delegate", delegate, "blockNumber", blockNumber)
+func (d *DPOS) GetVotingPower(ctx context.Context, params interface{}) (map[string]interface{}, error) {
+	d.logger.Info("DPoS GetVotingPower called", "params", params)
+
+	// Parse parameters
+	var delegate string
+	var blockNumber *uint64
+
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) >= 1 {
+			if addr, ok := p[0].(string); ok {
+				delegate = addr
+			} else {
+				return nil, fmt.Errorf("first parameter must be a string address")
+			}
+		} else {
+			return nil, fmt.Errorf("at least one parameter (delegate address) is required")
+		}
+
+		// Parse block number if provided
+		if len(p) >= 2 {
+			if blockStr, ok := p[1].(string); ok {
+				if blockStr == "latest" {
+					blockNumber = nil // Use latest block
+				} else {
+					// Try to parse as number
+					if blockNum, err := strconv.ParseUint(blockStr, 10, 64); err == nil {
+						blockNumber = &blockNum
+					}
+				}
+			}
+		}
+	case map[string]interface{}:
+		if addr, ok := p["delegate"].(string); ok {
+			delegate = addr
+		} else {
+			return nil, fmt.Errorf("delegate parameter is required")
+		}
+
+		if blockStr, ok := p["blockNumber"].(string); ok {
+			if blockStr == "latest" {
+				blockNumber = nil
+			} else {
+				if blockNum, err := strconv.ParseUint(blockStr, 10, 64); err == nil {
+					blockNumber = &blockNum
+				}
+			}
+		}
+	default:
+		return nil, fmt.Errorf("invalid parameter type: %T", params)
+	}
+
+	d.logger.Info("DPoS GetVotingPower parsed", "delegate", delegate, "blockNumber", blockNumber)
 
 	// Parse delegate address
 	delegateAddr := types.StringToAddress(delegate)

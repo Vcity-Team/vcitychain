@@ -14,6 +14,7 @@ import (
 // listDelegateParams holds parameters for listing delegates
 type listDelegateParams struct {
 	jsonRPC string
+	address string // Optional address to filter delegates
 }
 
 // ListDelegateResult represents the result of listing delegates
@@ -40,32 +41,31 @@ type DelegateRegistration struct {
 
 // GetCommand returns the list command
 func GetListCommand() *cobra.Command {
-	var params listDelegateParams
+	var jsonRPC string
+	var address string
 
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List all DPoS delegate candidates",
-		Long:  "List all registered DPoS delegate candidates with their status and information",
+		Use:   "list [--address ADDRESS]",
+		Short: "List DPoS delegate candidates",
+		Long:  "List all registered DPoS delegate candidates with their status and information. Optionally filter by specific address.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runListCommand(cmd, &params)
+			params := &listDelegateParams{
+				jsonRPC: jsonRPC,
+				address: address,
+			}
+			return runListCommand(cmd, params)
 		},
 	}
 
 	// Add flags
-	cmd.Flags().StringVar(&params.jsonRPC, "jsonrpc", "http://0.0.0.0:8545", "the JSON-RPC interface")
+	cmd.Flags().StringVar(&jsonRPC, "jsonrpc", "http://0.0.0.0:8545", "the JSON-RPC interface")
+	cmd.Flags().StringVar(&address, "address", "", "filter delegates by specific address (optional)")
 
 	return cmd
 }
 
 // runListCommand executes the list command
 func runListCommand(cmd *cobra.Command, params *listDelegateParams) error {
-	// Get JSON-RPC URL from flag
-	jsonRPC, err := cmd.Flags().GetString("jsonrpc")
-	if err != nil {
-		return fmt.Errorf("failed to get json-rpc flag: %w", err)
-	}
-	params.jsonRPC = jsonRPC
-
 	// Call the RPC method
 	result, err := listDelegates(params)
 	if err != nil {
@@ -153,6 +153,18 @@ func listDelegates(params *listDelegateParams) (*ListDelegateResult, error) {
 				return nil, fmt.Errorf("failed to parse result: %w", err)
 			}
 		}
+	}
+
+	// Filter by address if specified
+	if params.address != "" {
+		filteredRegistrations := []*DelegateRegistration{}
+		for _, reg := range result.Registrations {
+			if reg.Address == params.address {
+				filteredRegistrations = append(filteredRegistrations, reg)
+			}
+		}
+		result.Registrations = filteredRegistrations
+		result.Count = len(filteredRegistrations)
 	}
 
 	return &result, nil
