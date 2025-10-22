@@ -2449,115 +2449,40 @@ func (d *DPOS) getDynamicVotingInfoFromDPoSEngine() []*dpos.StakeInfo {
 func (d *DPOS) getDelegatesFromDatabase() []*dpos.StakeInfo {
 	d.logger.Info("🔄 从数据库中查询所有受托人信息...")
 
-	// 直接获取DPoS引擎
-	// 需要将dposStore转换为有GetConsensus方法的接口
-	var consensusStore interface{ GetConsensus() interface{} }
-	if store, ok := d.store.(interface{ GetConsensus() interface{} }); ok {
-		consensusStore = store
-	} else {
-		// 如果dposStore没有GetConsensus方法，尝试通过反射获取
-		d.logger.Info("dposStore没有GetConsensus方法，尝试通过反射获取DPoS引擎...")
-		storeValue := reflect.ValueOf(d.store)
-		if storeValue.Kind() == reflect.Ptr {
-			storeValue = storeValue.Elem()
+	// 🆕 修复：直接调用 GetStakingInfo 从数据库读取数据
+	// 不再通过DPoS引擎的内存方法，确保数据一致性
+	if consensusStore, ok := d.store.(interface{ GetConsensus() interface{} }); ok {
+		consensusEngine := consensusStore.GetConsensus()
+		if consensusEngine == nil {
+			d.logger.Warn("共识引擎为nil")
+			return []*dpos.StakeInfo{}
 		}
 
-		// 查找Consensus字段
-		if consensusField := storeValue.FieldByName("Consensus"); consensusField.IsValid() {
-			consensusEngine := consensusField.Interface()
-			d.logger.Info("通过反射找到Consensus字段", "type", reflect.TypeOf(consensusEngine))
-
-			// 尝试调用GetDelegates或GetValidators
-			if getDelegatesMethod := reflect.ValueOf(consensusEngine).MethodByName("GetDelegates"); getDelegatesMethod.IsValid() {
-				d.logger.Info("✅ 通过反射找到GetDelegates方法，正在调用...")
-				results := getDelegatesMethod.Call([]reflect.Value{})
-				if len(results) >= 2 {
-					if err, ok := results[1].Interface().(error); ok && err != nil {
-						d.logger.Error("GetDelegates method returned error", "error", err)
-					} else if delegates, ok := results[0].Interface().(validator.AccountSet); ok {
-						return d.convertDelegatesToStakeInfo(delegates, "反射GetDelegates")
+		// 尝试从DPoS引擎获取StakeStore
+		if dposEngine, ok := consensusEngine.(interface {
+			GetStakeStore() interface{}
+		}); ok {
+			stakeStore := dposEngine.GetStakeStore()
+			if stakeStore != nil {
+				// 调用StakeStore的GetStakingInfo方法
+				if getStakingInfoMethod := reflect.ValueOf(stakeStore).MethodByName("GetStakingInfo"); getStakingInfoMethod.IsValid() {
+					d.logger.Info("✅ 找到GetStakingInfo方法，正在调用...")
+					results := getStakingInfoMethod.Call([]reflect.Value{})
+					if len(results) >= 2 {
+						if err, ok := results[1].Interface().(error); ok && err != nil {
+							d.logger.Error("GetStakingInfo method returned error", "error", err)
+						} else if stakingInfos, ok := results[0].Interface().([]*dpos.StakeInfo); ok {
+							d.logger.Info("✅ 从数据库成功获取质押信息", "count", len(stakingInfos))
+							return stakingInfos
+						}
 					}
 				}
-			}
-
-			if getValidatorsMethod := reflect.ValueOf(consensusEngine).MethodByName("GetValidators"); getValidatorsMethod.IsValid() {
-				d.logger.Info("✅ 通过反射找到GetValidators方法，正在调用...")
-				results := getValidatorsMethod.Call([]reflect.Value{})
-				if len(results) >= 2 {
-					if err, ok := results[1].Interface().(error); ok && err != nil {
-						d.logger.Error("GetValidators method returned error", "error", err)
-					} else if delegates, ok := results[0].Interface().(validator.AccountSet); ok {
-						return d.convertDelegatesToStakeInfo(delegates, "反射GetValidators")
-					}
-				}
-			}
-		}
-
-		d.logger.Error("无法通过反射获取DPoS引擎")
-		return []*dpos.StakeInfo{}
-	}
-
-	dposEngine := d.getDPoSEngineDirectly(consensusStore)
-	if dposEngine == nil {
-		d.logger.Error("Failed to get DPoS engine directly")
-		return []*dpos.StakeInfo{}
-	}
-
-	// 优先尝试GetValidators方法（不需要参数，更简单）
-	if getValidatorsMethod := reflect.ValueOf(dposEngine).MethodByName("GetValidators"); getValidatorsMethod.IsValid() {
-		d.logger.Info("✅ 找到GetValidators方法，正在调用...")
-		results := getValidatorsMethod.Call([]reflect.Value{})
-		if len(results) >= 1 {
-			if delegates, ok := results[0].Interface().(validator.AccountSet); ok {
-				return d.convertDelegatesToStakeInfo(delegates, "DPoS引擎GetValidators")
-			}
-		}
-	}
-
-	// 如果GetValidators失败，尝试GetDelegates方法
-	if getDelegatesMethod := reflect.ValueOf(dposEngine).MethodByName("GetDelegates"); getDelegatesMethod.IsValid() {
-		d.logger.Info("✅ 找到GetDelegates方法，正在调用...")
-
-		// 获取当前区块号
-		currentBlockNumber := uint64(0)
-
-		// 尝试通过DPoS引擎获取当前区块号
-		if getCurrentHeaderMethod := reflect.ValueOf(dposEngine).MethodByName("GetCurrentHeader"); getCurrentHeaderMethod.IsValid() {
-			d.logger.Info("✅ 通过GetCurrentHeader获取当前区块号...")
-			headerResults := getCurrentHeaderMethod.Call([]reflect.Value{})
-			if len(headerResults) > 0 && !headerResults[0].IsNil() {
-				if header, ok := headerResults[0].Interface().(*types.Header); ok {
-					currentBlockNumber = header.Number
-					d.logger.Info("✅ 获取到当前区块号", "blockNumber", currentBlockNumber)
-				}
-			}
-		}
-
-		// 如果无法获取当前区块号，尝试通过store获取
-		if currentBlockNumber == 0 {
-			d.logger.Info("⚠️ 无法通过DPoS引擎获取当前区块号，尝试通过store获取...")
-			// 这里可以添加通过store获取当前区块号的逻辑
-			// 暂时使用一个较大的区块号作为备用
-			currentBlockNumber = uint64(10000)
-			d.logger.Info("⚠️ 使用备用区块号", "blockNumber", currentBlockNumber)
-		}
-
-		// GetDelegates需要两个参数：blockNumber uint64 和 parents []*types.Header
-		blockNumberValue := reflect.ValueOf(currentBlockNumber)
-		parentsValue := reflect.ValueOf([]*types.Header(nil))
-
-		results := getDelegatesMethod.Call([]reflect.Value{blockNumberValue, parentsValue})
-		if len(results) >= 2 {
-			if err, ok := results[1].Interface().(error); ok && err != nil {
-				d.logger.Error("GetDelegates method returned error", "error", err)
-			} else if delegates, ok := results[0].Interface().(validator.AccountSet); ok {
-				return d.convertDelegatesToStakeInfo(delegates, "DPoS引擎GetDelegates")
 			}
 		}
 	}
 
 	// 如果无法获取，返回空结果
-	d.logger.Info("No database delegates info available, returning empty result")
+	d.logger.Warn("无法从数据库获取受托人信息，返回空结果")
 	return []*dpos.StakeInfo{}
 }
 
