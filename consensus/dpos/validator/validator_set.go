@@ -65,13 +65,6 @@ func NewValidatorSet(valz AccountSet, logger hclog.Logger) *validatorSet {
 func (vs validatorSet) HasQuorum(blockNumber uint64, signers map[types.Address]struct{}) bool {
 	aggregateVotingPower := big.NewInt(0)
 
-	// 详细记录每个签名者的投票权重
-	vs.logger.Debug("HasQuorum - 开始验证法定人数",
-		"blockNumber", blockNumber,
-		"totalValidators", vs.Len(),
-		"totalVotingPower", vs.totalVotingPower,
-		"signerCount", len(signers))
-
 	// 记录所有验证者的投票权重
 	allValidatorsInfo := make([]string, 0)
 	for _, validator := range vs.validators {

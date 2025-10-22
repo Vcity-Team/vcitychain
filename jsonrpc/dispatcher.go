@@ -436,7 +436,7 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 	d.logger.Info("entering parameter handling", "fd.numParams()", fd.numParams())
 	if fd.numParams() > 0 {
 		// Check if the last parameter is interface{} type
-		if fd.reqt[fd.inNum-1] == reflect.TypeOf((interface{})(nil)) {
+		if fd.reqt[fd.inNum-1].Kind() == reflect.Interface {
 			// For interface{} parameters, pass the raw params directly
 			d.logger.Info("entering interface{} parameter handling",
 				"method", req.Method,
@@ -478,13 +478,16 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 			// Set context.Context as the second parameter
 			inArgs[1] = reflect.ValueOf(context.Background())
 
-			// Set params as the third parameter
-			inArgs[2] = reflect.ValueOf(paramValue)
+			// For methods with only 2 parameters (receiver + context), params go in context
+			// For methods with 3 parameters (receiver + context + params), params go in index 2
+			if fd.inNum == 3 {
+				inArgs[2] = reflect.ValueOf(paramValue)
+			}
 
 			d.logger.Info("interface{} parameter handling completed",
 				"method", req.Method,
 				"inArgs[1] (context)", inArgs[1].Interface(),
-				"inArgs[2] (params)", inArgs[2].Interface())
+				"fd.inNum", fd.inNum)
 		} else {
 			// For multiple parameters, use the original logic
 			inputs := make([]interface{}, fd.numParams())

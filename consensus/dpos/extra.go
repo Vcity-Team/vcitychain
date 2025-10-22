@@ -573,37 +573,11 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 			"isActive", validator.IsActive)
 	}
 
-	// 🆕 添加CheckpointData.Hash()调用前的详细参数日志
-	logger.Debug("🔍 DEBUG CheckpointData.Hash() 参数详情",
-		"blockNumber", blockNumber,
-		"chainId", productionChainID,
-		"blockNumber", blockNumber,
-		"blockHash", realBlockHash.String(),
-		"blockRound", recalculatedCheckpoint.BlockRound,
-		"epochNumber", recalculatedCheckpoint.EpochNumber,
-		"eventRoot", recalculatedCheckpoint.EventRoot.String(),
-		"currentValidatorsHash", recalculatedCheckpoint.CurrentValidatorsHash.String(),
-		"nextValidatorsHash", recalculatedCheckpoint.NextValidatorsHash.String())
-
-	// 🆕 显著日志：验证时从extra中取出CheckpointBlockHash
-	logger.Debug("🔍 ===== 验证时CheckpointBlockHash使用情况 =====",
-		"blockNumber", blockNumber,
-		"checkpointBlockHash", realBlockHash.String(),
-		"headerHash", header.Hash.String(),
-		"说明", "验证时使用从ExtraData中取出的CheckpointBlockHash进行计算")
-
-	logger.Debug("🔍 ValidateFinalizedData 开始计算checkpoint哈希", "blockNumber", blockNumber)
 	checkpointHash, err := recalculatedCheckpoint.Hash(productionChainID, blockNumber, realBlockHash)
 	if err != nil {
 		logger.Error("❌ ValidateFinalizedData checkpoint哈希计算失败", "blockNumber", blockNumber, "error", err)
 		return fmt.Errorf("failed to calculate proposal hash: %w", err)
 	}
-	logger.Debug("✅ ValidateFinalizedData checkpoint哈希计算成功", "blockNumber", blockNumber, "checkpointHash", checkpointHash.String()[:16])
-
-	// 🆕 添加CheckpointData.Hash()调用后的结果日志
-	logger.Debug("🔍 DEBUG CheckpointData.Hash() 结果",
-		"blockNumber", blockNumber,
-		"checkpointHash", checkpointHash.String())
 
 	// 🆕 添加验证时checkpointHash结果显著日志
 	logger.Debug("🔍 ===== 验证时CheckpointHash计算结果 =====",
@@ -630,31 +604,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"生产时eventRoot", i.Checkpoint.EventRoot.String(),
 		"验证时eventRoot", recalculatedCheckpoint.EventRoot.String(),
 		"说明", "对比生产和验证时的CheckpointData参数")
-
-	// 🆕 添加生产和验证时区块头字段对比日志
-	logger.Debug("🔍 ===== 生产vs验证区块头字段对比 =====",
-		"blockNumber", blockNumber,
-		"生产时blockHash", "需要从生产日志获取",
-		"验证时blockHash", header.Hash.String(),
-		"生产时parentHash", "需要从生产日志获取",
-		"验证时parentHash", header.ParentHash.String(),
-		"生产时timestamp", "需要从生产日志获取",
-		"验证时timestamp", header.Timestamp,
-		"生产时gasLimit", "需要从生产日志获取",
-		"验证时gasLimit", header.GasLimit,
-		"生产时gasUsed", "需要从生产日志获取",
-		"验证时gasUsed", header.GasUsed,
-		"生产时stateRoot", "需要从生产日志获取",
-		"验证时stateRoot", header.StateRoot.String(),
-		"生产时transactionsRoot", "需要从生产日志获取",
-		"验证时transactionsRoot", header.TxRoot.String(),
-		"生产时receiptsRoot", "需要从生产日志获取",
-		"验证时receiptsRoot", header.ReceiptsRoot.String(),
-		"生产时miner", "需要从生产日志获取",
-		"验证时miner", types.BytesToAddress(header.Miner).String(),
-		"生产时nonce", "需要从生产日志获取",
-		"验证时nonce", header.Nonce.String(),
-		"说明", "对比生产和验证时的区块头字段，找出差异")
 
 	logger.Debug("🔍 验证时checkpoint哈希计算结果", "checkpointHash", checkpointHash.String())
 
@@ -698,23 +647,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"validatorSource", "ExtraData.Validators",
 		"note", "用于BLS签名验证的验证者集合")
 
-	// 🆕 调试日志：验证时最终用于BLS签名验证的验证者集合
-	logger.Debug("🔍 ===== 验证时最终验证者集合（用于BLS签名验证） =====",
-		"blockNumber", blockNumber,
-		"totalValidators", len(validators),
-		"note", "这些验证者将用于BLS签名验证")
-
-	for i, validator := range validators {
-		logger.Debug("🔍 验证时最终验证者",
-			"blockNumber", blockNumber,
-			"index", i,
-			"address", validator.Address.String(),
-			"hasBlsKey", validator.BlsKey != nil,
-			"votingPower", validator.VotingPower.String(),
-			"isActive", validator.IsActive,
-			"note", "验证者索引与位图索引对应")
-	}
-
 	// 🆕 如果BLS公钥为nil，尝试从创世文件恢复
 	for i, validator := range validators {
 		if validator.BlsKey == nil {
@@ -742,7 +674,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		}
 	}
 
-	logger.Debug("🔍 ValidateFinalizedData 开始验证BLS签名", "blockNumber", blockNumber)
 	if err := i.Committed.Verify(blockNumber, validators, checkpointHash, domain, logger); err != nil {
 		logger.Error("🚨 区块签名验证失败，程序将退出",
 			"blockNumber", blockNumber,
@@ -753,21 +684,11 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		logger.Error("💀 区块验证失败，程序退出")
 		os.Exit(1)
 	}
-	logger.Debug("✅ ValidateFinalizedData BLS签名验证成功", "blockNumber", blockNumber)
-
-	// 🆕 已移除数据库保存机制，改为从 ExtraData 直接读取验证者集合
-	logger.Debug("📝 验证者集合获取方式已更新",
-		"blockNumber", blockNumber,
-		"method", "从ExtraData直接解析",
-		"note", "不再需要保存到数据库，直接从区块数据获取")
-
-	logger.Debug("🔍 ValidateFinalizedData 开始验证父区块签名", "blockNumber", blockNumber)
 	parentExtra, err := GetIbftExtra(parent.ExtraData)
 	if err != nil {
 		logger.Error("❌ ValidateFinalizedData 解析父区块ExtraData失败", "blockNumber", blockNumber, "error", err)
 		return fmt.Errorf("failed to verify signatures for block %d: %w", blockNumber, err)
 	}
-	logger.Debug("✅ ValidateFinalizedData 父区块ExtraData解析成功", "blockNumber", blockNumber)
 
 	// validate parent signatures
 	if err := i.ValidateParentSignatures(blockNumber, consensusBackend, parents,
@@ -775,23 +696,17 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		logger.Error("❌ ValidateFinalizedData 父区块签名验证失败", "blockNumber", blockNumber, "error", err)
 		return err
 	}
-	logger.Debug("✅ ValidateFinalizedData 父区块签名验证成功", "blockNumber", blockNumber)
-
 	// 🆕 新增：检查parentExtra.Checkpoint是否为nil，避免空指针异常
 	if parentExtra == nil || parentExtra.Checkpoint == nil {
 		logger.Info("🔄 ValidateFinalizedData 父区块Checkpoint为nil，跳过Checkpoint验证", "blockNumber", blockNumber, "parentBlockNumber", parent.Number)
 		return nil
 	}
 
-	logger.Debug("🔍 ValidateFinalizedData 开始验证Checkpoint基本数据", "blockNumber", blockNumber)
 	err = i.Checkpoint.ValidateBasic(parentExtra.Checkpoint)
 	if err != nil {
 		logger.Error("❌ ValidateFinalizedData Checkpoint基本验证失败", "blockNumber", blockNumber, "error", err)
 		return err
 	}
-	logger.Debug("✅ ValidateFinalizedData Checkpoint基本验证成功", "blockNumber", blockNumber)
-
-	logger.Debug("✅ ValidateFinalizedData 验证完成", "blockNumber", blockNumber)
 	return nil
 }
 
@@ -840,13 +755,6 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 			blockNumber)
 	}
 
-	// 🆕 从父区块 ExtraData 中获取验证者集合
-	logger.Debug("🔄 开始从父区块 ExtraData 获取验证者集合",
-		"blockNumber", blockNumber,
-		"parentBlockNumber", parent.Number,
-		"method", "从父区块ExtraData解析",
-		"note", "不再依赖数据库，直接从父区块数据获取")
-
 	// 递归获取父区块的验证者集合，需要获取父区块的父区块
 	var parentParent *types.Header
 	if len(parents) > 0 {
@@ -868,14 +776,6 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 			err,
 		)
 	}
-
-	// 🔍 从父区块 ExtraData 获取的验证者集合信息
-	logger.Debug("✅ 从父区块 ExtraData 成功获取验证者集合",
-		"blockNumber", blockNumber,
-		"parentBlockNumber", parent.Number,
-		"totalValidators", len(parentValidators),
-		"validatorSource", "父区块ExtraData.Validators",
-		"note", "用于父区块BLS签名验证的验证者集合")
 
 	// 🔍 打印验证时父区块验证者集合的详细信息
 
@@ -1359,41 +1259,17 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 	missingBLSKeys := make([]types.Address, 0)
 
 	// 🆕 方案2：统一从网络集成层缓存获取BLS公钥，不依赖validator.BlsKey字段
-	logger.Debug("🔍 开始从网络集成层缓存获取BLS公钥",
-		"blockNumber", blockNumber,
-		"validatorsCount", len(validators),
-		"bitmapSetCount", bitmapSetCount)
-
 	for i := uint64(0); i < uint64(len(validators)); i++ {
 		if s.Bitmap.IsSet(i) {
 			validator := validators[int(i)]
-			logger.Debug("🔍 处理位图索引验证者",
-				"blockNumber", blockNumber,
-				"bitmapIndex", i,
-				"address", validator.Address.String())
 
 			// 优先从网络集成层缓存获取BLS公钥
 			if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-				logger.Debug("🔍 DPoS实例存在，检查网络集成层",
-					"blockNumber", blockNumber,
-					"address", validator.Address.String(),
-					"runtimeIsNil", dposInstance.runtime == nil)
 				if dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
-					logger.Debug("🔍 网络集成层存在，尝试获取BLS公钥",
-						"blockNumber", blockNumber,
-						"address", validator.Address.String())
 					if cachedBLSKey, exists := dposInstance.runtime.networkIntegration.GetBLSKey(validator.Address); exists {
-						logger.Debug("🔍 从缓存中找到BLS公钥，开始解析",
-							"blockNumber", blockNumber,
-							"address", validator.Address.String(),
-							"cachedBLSKeyLength", len(cachedBLSKey))
 						// 解析BLS公钥
 						if blsKey, err := bls.UnmarshalPublicKey(cachedBLSKey); err == nil {
 							blsPublicKeys[i] = blsKey
-							logger.Debug("✅ 从网络集成层缓存获取BLS公钥成功",
-								"blockNumber", blockNumber,
-								"address", validator.Address.String(),
-								"blsKeyLength", len(cachedBLSKey))
 						} else {
 							logger.Warn("⚠️ 解析BLS公钥失败",
 								"blockNumber", blockNumber,
@@ -1615,21 +1491,6 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 					"note", "使用地址映射查找BLS公钥")
 			}
 		}
-	}
-
-	// 🆕 打印验证时使用的验证者权重信息
-	logger.Debug("🔍 ===== BLS验证时使用的验证者权重信息 =====",
-		"blockNumber", blockNumber,
-		"validatorsCount", len(validators),
-		"note", "这些是BLS验证时实际使用的验证者权重")
-
-	for i, validator := range validators {
-		logger.Debug("📝 BLS验证时验证者权重",
-			"index", i,
-			"address", validator.Address.String(),
-			"votingPower", validator.VotingPower.String(),
-			"isActive", validator.IsActive,
-			"hasBlsKey", validator.BlsKey != nil)
 	}
 
 	// 执行BLS签名验证（只使用有效的公钥）
@@ -2040,18 +1901,8 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 	if parent == nil {
 		// 🔍 优先从当前区块ExtraData获取生产时的验证者地址集合（实际签名者）
 		if i.Validators != nil && !i.Validators.IsEmpty() && len(i.Validators.Added) > 0 {
-			logger.Debug("🔍 ===== 验证时从当前区块ExtraData获取实际签名者 =====",
-				"blockNumber", blockNumber,
-				"actualSignersCount", len(i.Validators.Added),
-				"method", "从区块ExtraData直接获取",
-				"note", "从ExtraData获取实际签名者地址，BLS公钥从创世文件获取")
-
 			// 从ExtraData获取实际签名者地址，然后从创世文件获取BLS公钥
 			validatorAddresses := i.Validators.Added
-
-			logger.Debug("✅ 从ExtraData获取生产时验证者地址集合成功",
-				"blockNumber", blockNumber,
-				"productionValidatorsCount", len(validatorAddresses))
 
 			// 🆕 从创世文件获取BLS公钥，构建完整的验证者集合
 			productionValidators := make(validator.AccountSet, 0, len(validatorAddresses))
@@ -2134,11 +1985,6 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 	// 🆕 关键修复：如果当前区块的ExtraData中有验证者地址集合信息，直接使用
 	// 这确保验证时使用与生产时完全相同的验证者集合
 	if i.Validators != nil && !i.Validators.IsEmpty() && len(i.Validators.Added) > 0 {
-		logger.Debug("🔍 ===== 验证时从当前区块ExtraData获取验证者地址集合 =====",
-			"blockNumber", blockNumber,
-			"productionValidatorsCount", len(i.Validators.Added),
-			"method", "从区块ExtraData直接获取",
-			"note", "从ExtraData获取地址，BLS公钥从创世文件获取")
 
 		// 从ExtraData获取验证者地址，然后从创世文件获取BLS公钥
 		validatorAddresses := i.Validators.Added
