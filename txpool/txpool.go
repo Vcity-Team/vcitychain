@@ -824,6 +824,49 @@ func (p *TxPool) pruneAccountsWithNonceHoles() {
 // successful, an account is created for this address
 // (only once) and an enqueueRequest is signaled.
 func (p *TxPool) addTx(origin txOrigin, tx *types.Transaction) error {
+	// 🚨 全零哈希检测 - 显著日志标志
+	if tx == nil {
+		p.logger.Error("🚨 CRITICAL: addTx called with nil transaction", "origin", origin.String())
+		return fmt.Errorf("nil transaction")
+	}
+
+	// 🚨 拦截零地址交易 - 双重保护
+	if tx.From == types.ZeroAddress {
+		p.logger.Error("🚨 CRITICAL: addTx called with zero sender address - BLOCKED",
+			"origin", origin.String(),
+			"txType", tx.Type,
+			"nonce", tx.Nonce,
+			"gasPrice", tx.GasPrice.String(),
+			"value", tx.Value.String(),
+			"to", func() string {
+				if tx.To != nil {
+					return tx.To.String()
+				}
+				return "nil"
+			}(),
+			"inputLength", len(tx.Input),
+			"action", "BLOCKED_IN_ADD_TX")
+		return fmt.Errorf("zero sender address transaction")
+	}
+
+	if tx.Hash == (types.Hash{}) {
+		p.logger.Error("🚨 CRITICAL: addTx called with zero hash transaction",
+			"origin", origin.String(),
+			"txType", tx.Type,
+			"nonce", tx.Nonce,
+			"gasPrice", tx.GasPrice.String(),
+			"value", tx.Value.String(),
+			"from", tx.From.String(),
+			"to", func() string {
+				if tx.To != nil {
+					return tx.To.String()
+				}
+				return "nil"
+			}(),
+			"inputLength", len(tx.Input))
+		return fmt.Errorf("zero hash transaction")
+	}
+
 	if p.logger.IsDebug() {
 		p.logger.Debug("add tx", "origin", origin.String(), "hash", tx.Hash.String())
 	}
@@ -840,6 +883,26 @@ func (p *TxPool) addTx(origin txOrigin, tx *types.Transaction) error {
 
 	// calculate tx hash
 	tx.ComputeHash(p.store.Header().Number)
+
+	// 🚨 检测哈希计算后的结果
+	if tx.Hash == (types.Hash{}) {
+		p.logger.Error("🚨 CRITICAL: transaction hash is zero after ComputeHash",
+			"origin", origin.String(),
+			"txType", tx.Type,
+			"nonce", tx.Nonce,
+			"gasPrice", tx.GasPrice.String(),
+			"value", tx.Value.String(),
+			"from", tx.From.String(),
+			"to", func() string {
+				if tx.To != nil {
+					return tx.To.String()
+				}
+				return "nil"
+			}(),
+			"inputLength", len(tx.Input),
+			"blockNumber", p.store.Header().Number)
+		return fmt.Errorf("zero hash after ComputeHash")
+	}
 
 	// initialize account for this address once or retrieve existing one
 	account := p.getOrCreateAccount(tx.From)
@@ -992,8 +1055,14 @@ func (p *TxPool) addGossipTx(obj interface{}, _ peer.ID) {
 
 	// Verify that the gossiped transaction message is not empty
 	if raw == nil || raw.Raw == nil {
-		p.logger.Error("malformed gossip transaction message received")
+		p.logger.Error("🚨 CRITICAL: malformed gossip transaction message received - raw is nil")
 
+		return
+	}
+
+	// 🚨 检测gossip消息中的原始数据
+	if len(raw.Raw.Value) == 0 {
+		p.logger.Error("🚨 CRITICAL: empty gossip transaction raw data received")
 		return
 	}
 
@@ -1001,8 +1070,46 @@ func (p *TxPool) addGossipTx(obj interface{}, _ peer.ID) {
 
 	// decode tx
 	if err := tx.UnmarshalRLP(raw.Raw.Value); err != nil {
-		p.logger.Error("failed to decode broadcast tx", "err", err)
+		p.logger.Error("🚨 CRITICAL: failed to decode broadcast tx",
+			"err", err,
+			"rawDataLength", len(raw.Raw.Value),
+			"rawDataHex", func() string {
+				if len(raw.Raw.Value) > 32 {
+					return fmt.Sprintf("%x", raw.Raw.Value[:32])
+				}
+				return fmt.Sprintf("%x", raw.Raw.Value)
+			}())
 
+		return
+	}
+
+	// 🚨 拦截零地址交易 - 在交易池前挡住（优先检测）
+	if tx.From == types.ZeroAddress {
+		p.logger.Error("🚨 CRITICAL: gossip tx has zero sender address - BLOCKED",
+			"txType", tx.Type,
+			"nonce", tx.Nonce,
+			"gasPrice", tx.GasPrice.String(),
+			"value", tx.Value.String(),
+			"to", func() string {
+				if tx.To != nil {
+					return tx.To.String()
+				}
+				return "nil"
+			}(),
+			"rawDataLength", len(raw.Raw.Value),
+			"action", "BLOCKED_BEFORE_TXPOOL")
+		return
+	}
+
+	// 🚨 检测解码后的交易
+	if tx.Hash == (types.Hash{}) {
+		p.logger.Error("🚨 CRITICAL: decoded gossip tx has zero hash",
+			"txType", tx.Type,
+			"nonce", tx.Nonce,
+			"gasPrice", tx.GasPrice.String(),
+			"value", tx.Value.String(),
+			"from", tx.From.String(),
+			"rawDataLength", len(raw.Raw.Value))
 		return
 	}
 

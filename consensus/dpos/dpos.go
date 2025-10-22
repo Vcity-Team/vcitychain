@@ -3258,6 +3258,15 @@ type VoteInfo struct {
 	Amount    *big.Int      `json:"amount"`
 }
 
+// DelegateRegistrationInfo 受托人注册信息结构（用于解析交易数据）
+type DelegateRegistrationInfo struct {
+	Registrant  types.Address `json:"registrant"`
+	Name        string        `json:"name"`
+	Website     string        `json:"website"`
+	Description string        `json:"description"`
+	Deposit     *big.Int      `json:"deposit"`
+}
+
 // ValidateVoteOnly 只验证投票，不更新状态（供 RPC 预验证使用）
 func (d *DPoS) ValidateVoteOnly(voter types.Address, candidate types.Address, amount *big.Int) error {
 	d.lock.Lock()
@@ -7311,9 +7320,24 @@ func (d *DPoS) processBlockVotes(block *types.FullBlock) error {
 	if len(transactions) > 0 {
 		// 遍历所有交易，查找投票交易
 		for i, tx := range transactions {
+			// 检查是否是受托人注册交易
+			if d.isDelegateRegistrationTransaction(tx) {
+				d.logger.Info("🎯 ===== 发现受托人注册交易 =====")
+				d.logger.Info("📍 交易位置", "blockNumber", block.Block.Number(), "txIndex", i, "txHash", tx.Hash.String())
+
+				// 处理受托人注册交易
+				if err := d.processDelegateRegistrationTransaction(tx, block.Block.Number()); err != nil {
+					d.logger.Error("❌ 处理受托人注册交易失败", "blockNumber", block.Block.Number(), "txIndex", i, "txHash", tx.Hash.String(), "error", err)
+					// 不返回错误，继续处理其他交易
+				} else {
+					d.logger.Info("🎉 受托人注册交易处理成功！", "blockNumber", block.Block.Number(), "txIndex", i, "txHash", tx.Hash.String())
+				}
+			}
+
 			// 检查是否是投票交易
 			if d.isVoteTransaction(tx) {
-				d.logger.Info("✅ 发现投票交易", "blockNumber", block.Block.Number(), "txIndex", i, "txHash", tx.Hash.String())
+				d.logger.Info("🗳️ ===== 发现投票交易 =====")
+				d.logger.Info("📍 投票交易位置", "blockNumber", block.Block.Number(), "txIndex", i, "txHash", tx.Hash.String())
 
 				// 处理投票交易
 				if err := d.processVoteTransaction(tx, block.Block.Number()); err != nil {
@@ -7321,14 +7345,14 @@ func (d *DPoS) processBlockVotes(block *types.FullBlock) error {
 					// 不返回错误，继续处理其他交易
 				} else {
 					voteCount++
-					d.logger.Info("✅ 投票交易处理成功", "blockNumber", block.Block.Number(), "txIndex", i, "txHash", tx.Hash.String())
+					d.logger.Info("🎉 投票交易处理成功！", "blockNumber", block.Block.Number(), "txIndex", i, "txHash", tx.Hash.String())
 				}
 			}
 		}
 
 		// 只在有投票交易时打印处理完成日志
 		if voteCount > 0 {
-			d.logger.Info("🎯 区块投票事件处理完成", "blockNumber", block.Block.Number(), "totalTx", len(transactions), "voteTx", voteCount)
+			d.logger.Info("🎊 ===== 区块投票事件处理完成 =====", "blockNumber", block.Block.Number(), "totalTx", len(transactions), "voteTx", voteCount)
 		}
 	}
 
@@ -7339,6 +7363,21 @@ func (d *DPoS) processBlockVotes(block *types.FullBlock) error {
 	}
 
 	return nil
+}
+
+// 🆕 新增：检查交易是否是受托人注册交易
+func (d *DPoS) isDelegateRegistrationTransaction(tx *types.Transaction) bool {
+	// 检查交易是否有输入数据（受托人注册交易应该有输入数据）
+	if len(tx.Input) == 0 {
+		return false
+	}
+
+	// 检查是否是DPoS受托人注册交易
+	if len(tx.Input) < 8 || string(tx.Input[:4]) != "DPOS" || string(tx.Input[4:7]) != "REG" {
+		return false
+	}
+
+	return true
 }
 
 // 🆕 新增：检查交易是否是投票交易
@@ -7373,8 +7412,143 @@ func (d *DPoS) isVoteTransaction(tx *types.Transaction) bool {
 	return true
 }
 
+// 🆕 新增：处理受托人注册交易
+func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blockNumber uint64) error {
+	d.logger.Info("🔧 ===== 开始处理受托人注册交易 =====")
+
+	// 🚨 检测受托人注册交易的全零哈希问题
+	if tx == nil {
+		d.logger.Error("🚨 CRITICAL: processDelegateRegistrationTransaction called with nil transaction", "blockNumber", blockNumber)
+		return fmt.Errorf("nil transaction")
+	}
+
+	if tx.Hash == (types.Hash{}) {
+		d.logger.Error("🚨 CRITICAL: processDelegateRegistrationTransaction called with zero hash transaction",
+			"blockNumber", blockNumber,
+			"txType", tx.Type,
+			"nonce", tx.Nonce,
+			"gasPrice", tx.GasPrice.String(),
+			"value", tx.Value.String(),
+			"from", tx.From.String(),
+			"to", func() string {
+				if tx.To != nil {
+					return tx.To.String()
+				}
+				return "nil"
+			}(),
+			"inputLength", len(tx.Input))
+		return fmt.Errorf("zero hash transaction")
+	}
+
+	d.logger.Info("📋 受托人注册交易信息",
+		"txHash", tx.Hash.String(),
+		"blockNumber", blockNumber,
+		"value", tx.Value.String(),
+		"inputLength", len(tx.Input))
+
+	// 解析受托人注册交易数据
+	d.logger.Info("🔍 开始解析受托人注册交易数据...")
+	regInfo, err := d.parseDelegateRegistrationTransactionData(tx)
+	if err != nil {
+		d.logger.Error("❌ 解析受托人注册交易数据失败", "error", err)
+		return fmt.Errorf("failed to parse delegate registration data: %w", err)
+	}
+
+	d.logger.Info("✅ 受托人注册数据解析成功",
+		"registrant", regInfo.Registrant.String(),
+		"name", regInfo.Name,
+		"website", regInfo.Website,
+		"description", regInfo.Description,
+		"deposit", regInfo.Deposit.String())
+
+	// 检查是否已经注册
+	d.logger.Info("🔍 检查受托人是否已注册...")
+	if d.IsDelegateRegistered(regInfo.Registrant) {
+		d.logger.Warn("⚠️ 受托人已注册，跳过处理",
+			"registrant", regInfo.Registrant.String())
+		return nil
+	}
+	d.logger.Info("✅ 受托人未注册，可以继续处理")
+
+	// 创建受托人候选人
+	d.logger.Info("👤 开始创建受托人候选人...")
+	registration := &DelegateRegistration{
+		Address:      regInfo.Registrant,
+		Name:         regInfo.Name,
+		Website:      regInfo.Website,
+		Description:  regInfo.Description,
+		Deposit:      regInfo.Deposit,
+		Status:       RegStatusCandidate, // 候选人状态
+		CreatedAt:    uint64(time.Now().Unix()),
+		TotalVotes:   big.NewInt(0),
+		IsActive:     false,
+		LastVoteTime: 0,
+	}
+	d.logger.Info("✅ 受托人候选人对象创建完成")
+
+	// 保存到数据库
+	d.logger.Info("💾 开始保存受托人注册信息到数据库...")
+	if d.state != nil && d.state.RegistrationStore != nil {
+		if err := d.state.RegistrationStore.SaveRegistration(registration); err != nil {
+			d.logger.Error("❌ 保存受托人注册信息失败", "error", err)
+			return fmt.Errorf("failed to save registration: %w", err)
+		}
+		d.logger.Info("✅ 受托人注册信息已保存到数据库")
+	} else {
+		d.logger.Warn("⚠️ 数据库不可用，跳过保存")
+	}
+
+	// 创建受托人记录（可以立即接受投票）
+	d.logger.Info("🔧 开始创建受托人验证者记录...")
+	delegate := &validator.ValidatorMetadata{
+		Address:     regInfo.Registrant,
+		VotingPower: big.NewInt(0),
+		BlsKey:      nil,
+		IsActive:    false, // 初始为非活跃，需要投票激活
+	}
+
+	d.addDelegateSafely(delegate)
+	d.logger.Info("✅ 受托人验证者记录创建完成")
+
+	d.logger.Info("🎉 ===== 受托人注册处理完成 =====")
+	d.logger.Info("📊 最终结果",
+		"address", regInfo.Registrant.String(),
+		"name", regInfo.Name,
+		"website", regInfo.Website,
+		"deposit", regInfo.Deposit.String(),
+		"status", "candidate",
+		"txHash", tx.Hash.String())
+	d.logger.Info("🎯 受托人现在可以接受投票了！")
+
+	return nil
+}
+
 // 🆕 新增：处理投票交易
 func (d *DPoS) processVoteTransaction(tx *types.Transaction, blockNumber uint64) error {
+	// 🚨 检测投票交易的全零哈希问题
+	if tx == nil {
+		d.logger.Error("🚨 CRITICAL: processVoteTransaction called with nil transaction", "blockNumber", blockNumber)
+		return fmt.Errorf("nil transaction")
+	}
+
+	if tx.Hash == (types.Hash{}) {
+		d.logger.Error("🚨 CRITICAL: processVoteTransaction called with zero hash transaction",
+			"blockNumber", blockNumber,
+			"txType", tx.Type,
+			"nonce", tx.Nonce,
+			"gasPrice", tx.GasPrice.String(),
+			"value", tx.Value.String(),
+			"from", tx.From.String(),
+			"to", func() string {
+				if tx.To != nil {
+					return tx.To.String()
+				}
+				return "nil"
+			}(),
+			"inputLength", len(tx.Input))
+		return fmt.Errorf("zero hash transaction")
+	}
+
 	d.logger.Info("🔄 开始处理投票交易", "txHash", tx.Hash.String(), "blockNumber", blockNumber)
 
 	// 1. 解析交易输入数据，提取投票信息
@@ -7411,6 +7585,85 @@ func (d *DPoS) processVoteTransaction(tx *types.Transaction, blockNumber uint64)
 		"candidate", voteInfo.Candidate.String(),
 		"amount", voteInfo.Amount.String())
 	return nil
+}
+
+// parseDelegateRegistrationTransactionData 解析DPoS受托人注册交易数据
+func (d *DPoS) parseDelegateRegistrationTransactionData(tx *types.Transaction) (*DelegateRegistrationInfo, error) {
+	if tx == nil {
+		return nil, fmt.Errorf("transaction is nil")
+	}
+
+	input := tx.Input
+	if input == nil || len(input) < 4 {
+		return nil, fmt.Errorf("input data too short or nil: length=%d", len(input))
+	}
+
+	// 检查是否是DPoS受托人注册交易
+	if len(input) < 8 || string(input[:4]) != "DPOS" || string(input[4:7]) != "REG" {
+		return nil, fmt.Errorf("not a DPoS delegate registration transaction")
+	}
+
+	// 跳过标识符 (8 bytes: "DPOS" + "REG" + 0x00)
+	offset := 8
+
+	// 解析注册者地址 (20 bytes)
+	if offset+20 > len(input) {
+		return nil, fmt.Errorf("input data too short for registrant address")
+	}
+	registrant := types.BytesToAddress(input[offset : offset+20])
+	offset += 20
+
+	// 解析名称长度 (4 bytes)
+	if offset+4 > len(input) {
+		return nil, fmt.Errorf("input data too short for name length")
+	}
+	nameLen := uint32(input[offset])<<24 | uint32(input[offset+1])<<16 | uint32(input[offset+2])<<8 | uint32(input[offset+3])
+	offset += 4
+
+	// 解析名称
+	if offset+int(nameLen) > len(input) {
+		return nil, fmt.Errorf("input data too short for name")
+	}
+	name := string(input[offset : offset+int(nameLen)])
+	offset += int(nameLen)
+
+	// 解析网站长度 (4 bytes)
+	if offset+4 > len(input) {
+		return nil, fmt.Errorf("input data too short for website length")
+	}
+	websiteLen := uint32(input[offset])<<24 | uint32(input[offset+1])<<16 | uint32(input[offset+2])<<8 | uint32(input[offset+3])
+	offset += 4
+
+	// 解析网站
+	if offset+int(websiteLen) > len(input) {
+		return nil, fmt.Errorf("input data too short for website")
+	}
+	website := string(input[offset : offset+int(websiteLen)])
+	offset += int(websiteLen)
+
+	// 解析描述长度 (4 bytes)
+	if offset+4 > len(input) {
+		return nil, fmt.Errorf("input data too short for description length")
+	}
+	descLen := uint32(input[offset])<<24 | uint32(input[offset+1])<<16 | uint32(input[offset+2])<<8 | uint32(input[offset+3])
+	offset += 4
+
+	// 解析描述
+	if offset+int(descLen) > len(input) {
+		return nil, fmt.Errorf("input data too short for description")
+	}
+	description := string(input[offset : offset+int(descLen)])
+
+	// 保证金从交易的value字段获取
+	deposit := tx.Value
+
+	return &DelegateRegistrationInfo{
+		Registrant:  registrant,
+		Name:        name,
+		Website:     website,
+		Description: description,
+		Deposit:     deposit,
+	}, nil
 }
 
 // parseVoteTransactionData 解析DPoS投票交易数据
@@ -7675,8 +7928,64 @@ func (d *DPoS) IsDelegateCandidate(address types.Address) bool {
 	return isCandidate
 }
 
+// createDelegateRegistrationTransactionData 创建受托人注册交易数据
+func (d *DPoS) createDelegateRegistrationTransactionData(registrant types.Address, name, website, description string) []byte {
+	// 创建DPoS受托人注册交易的标识数据
+	data := make([]byte, 0, 128) // 预分配足够空间
+
+	// 添加DPoS受托人注册标识符 (4 bytes)
+	data = append(data, []byte("DPOS")...)
+
+	// 添加操作类型标识 (4 bytes) - "REG" + 0x00
+	data = append(data, []byte("REG")...)
+	data = append(data, 0x00)
+
+	// 添加注册者地址 (20 bytes)
+	data = append(data, registrant.Bytes()...)
+
+	// 添加名称长度和名称 (4 bytes + name)
+	nameBytes := []byte(name)
+	nameLen := uint32(len(nameBytes))
+	data = append(data, []byte{
+		byte(nameLen >> 24),
+		byte(nameLen >> 16),
+		byte(nameLen >> 8),
+		byte(nameLen),
+	}...)
+	data = append(data, nameBytes...)
+
+	// 添加网站长度和网站 (4 bytes + website)
+	websiteBytes := []byte(website)
+	websiteLen := uint32(len(websiteBytes))
+	data = append(data, []byte{
+		byte(websiteLen >> 24),
+		byte(websiteLen >> 16),
+		byte(websiteLen >> 8),
+		byte(websiteLen),
+	}...)
+	data = append(data, websiteBytes...)
+
+	// 添加描述长度和描述 (4 bytes + description)
+	descBytes := []byte(description)
+	descLen := uint32(len(descBytes))
+	data = append(data, []byte{
+		byte(descLen >> 24),
+		byte(descLen >> 16),
+		byte(descLen >> 8),
+		byte(descLen),
+	}...)
+	data = append(data, descBytes...)
+
+	return data
+}
+
 // RegisterDelegate 注册受托人（改进的TRON风格）
 func (d *DPoS) RegisterDelegate(registrant types.Address, name, website, description string) error {
+	return d.RegisterDelegateWithKey(registrant, name, website, description, "")
+}
+
+// RegisterDelegateWithKey 注册受托人（带私钥，用于创建交易）
+func (d *DPoS) RegisterDelegateWithKey(registrant types.Address, name, website, description, privateKey string) error {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
@@ -7700,6 +8009,144 @@ func (d *DPoS) RegisterDelegate(registrant types.Address, name, website, descrip
 		}
 	}
 
+	// 根据是否有私钥决定是创建交易还是直接更新状态
+	if privateKey != "" {
+		// 🆕 有私钥，创建交易
+		return d.createDelegateRegistrationTransaction(registrant, name, website, description, depositAmount, privateKey)
+	} else {
+		// 🆕 没有私钥，直接更新状态（用于测试或内部调用）
+		return d.registerDelegateDirectly(registrant, name, website, description, depositAmount)
+	}
+}
+
+// createDelegateRegistrationTransaction 创建受托人注册交易
+func (d *DPoS) createDelegateRegistrationTransaction(registrant types.Address, name, website, description string, depositAmount *big.Int, privateKey string) error {
+	d.logger.Info("🚀 ===== 开始创建受托人注册交易 =====")
+	d.logger.Info("📝 受托人注册信息",
+		"registrant", registrant.String(),
+		"name", name,
+		"website", website,
+		"description", description,
+		"deposit", depositAmount.String())
+
+	// 获取账户nonce
+	var nonce uint64
+	// 暂时使用0作为初始nonce，后续可以通过其他方式获取
+	nonce = 0
+	d.logger.Info("🔢 交易参数设置", "nonce", nonce, "note", "使用nonce 0")
+
+	// 获取gas价格
+	gasPrice := big.NewInt(1000000000) // 1 Gwei
+	d.logger.Info("⛽ Gas设置", "gasPrice", gasPrice.String(), "gasLimit", 100000)
+
+	// 创建受托人注册交易
+	d.logger.Info("🔨 开始构建交易对象...")
+	tx := &types.Transaction{
+		Nonce:    nonce,
+		GasPrice: gasPrice,
+		Gas:      100000,        // 固定gas限制
+		To:       nil,           // 合约调用，To为nil
+		Value:    depositAmount, // 保证金作为value
+		Input:    d.createDelegateRegistrationTransactionData(registrant, name, website, description),
+		V:        big.NewInt(0), // 将在签名后设置
+		R:        big.NewInt(0), // 将在签名后设置
+		S:        big.NewInt(0), // 将在签名后设置
+		Hash:     types.Hash{},
+	}
+
+	// 设置交易类型
+	tx.Type = types.LegacyTx
+	d.logger.Info("📋 交易对象创建完成", "type", "LegacyTx", "value", depositAmount.String(), "inputLength", len(tx.Input))
+
+	// 计算交易哈希
+	d.logger.Info("🔍 计算交易哈希...")
+	tx.ComputeHash(0)
+
+	// 检查交易哈希
+	if tx.Hash == (types.Hash{}) {
+		d.logger.Error("🚨 CRITICAL: delegate registration transaction has zero hash after creation",
+			"nonce", nonce,
+			"gasPrice", gasPrice.String(),
+			"registrant", registrant.String(),
+			"name", name)
+		return fmt.Errorf("transaction hash is zero after creation")
+	}
+
+	d.logger.Info("✅ 交易哈希计算成功", "txHash", tx.Hash.String())
+	d.logger.Info("📊 交易详情",
+		"txHash", tx.Hash.String(),
+		"nonce", nonce,
+		"gasPrice", gasPrice.String(),
+		"deposit", depositAmount.String(),
+		"from", registrant.String())
+
+	// 签名交易
+	d.logger.Info("✍️ 开始签名交易...")
+	if err := d.signTransaction(tx, registrant, privateKey); err != nil {
+		d.logger.Error("❌ 交易签名失败", "error", err)
+		return fmt.Errorf("failed to sign transaction: %w", err)
+	}
+	d.logger.Info("✅ 交易签名成功")
+
+	// 重新计算哈希
+	d.logger.Info("🔄 重新计算交易哈希...")
+	tx.ComputeHash(0)
+	d.logger.Info("✅ 交易哈希重新计算完成", "txHash", tx.Hash.String())
+
+	// 尝试添加交易到交易池
+	d.logger.Info("🏊 ===== 开始添加交易到交易池 =====")
+
+	var txAdded bool
+	if d.txPool != nil {
+		d.logger.Info("🔍 检查交易池支持...")
+		// 尝试将 txPoolInterface 转换为 *TxPool 来访问 AddTx 方法
+		if realTxPool, ok := d.txPool.(interface {
+			AddTx(tx *types.Transaction) error
+		}); ok {
+			d.logger.Info("✅ 交易池支持AddTx方法，开始添加交易...")
+			if err := realTxPool.AddTx(tx); err != nil {
+				d.logger.Error("❌ 添加交易到交易池失败", "error", err)
+				// 继续执行，作为fallback直接更新状态
+			} else {
+				d.logger.Info("🎉 受托人注册交易已成功添加到交易池！",
+					"txHash", tx.Hash.String(),
+					"registrant", registrant.String())
+				txAdded = true
+			}
+		} else {
+			d.logger.Warn("⚠️ 交易池不支持AddTx方法")
+		}
+	} else {
+		d.logger.Warn("⚠️ 交易池为空")
+	}
+
+	// 如果交易池添加失败，作为fallback直接更新状态
+	if !txAdded {
+		d.logger.Warn("⚠️ 交易池添加失败，作为fallback直接更新状态")
+		return d.registerDelegateDirectly(registrant, name, website, description, depositAmount)
+	}
+
+	d.logger.Info("🎊 ===== 受托人注册交易提交成功 =====")
+	d.logger.Info("📋 最终状态",
+		"address", registrant.String(),
+		"name", name,
+		"website", website,
+		"txHash", tx.Hash.String(),
+		"status", "pending",
+		"txAdded", txAdded)
+	d.logger.Info("🌐 交易将被广播到网络并等待打包进区块")
+
+	return nil
+}
+
+// registerDelegateDirectly 直接注册受托人（不通过交易）
+func (d *DPoS) registerDelegateDirectly(registrant types.Address, name, website, description string, depositAmount *big.Int) error {
+	d.logger.Info("🔍 开始直接注册受托人（不通过交易）",
+		"registrant", registrant.String(),
+		"name", name,
+		"website", website,
+		"description", description)
+
 	// 创建受托人候选人
 	registration := &DelegateRegistration{
 		Address:      registrant,
@@ -7717,6 +8164,7 @@ func (d *DPoS) RegisterDelegate(registrant types.Address, name, website, descrip
 	// 保存到数据库
 	if d.state != nil && d.state.RegistrationStore != nil {
 		if err := d.state.RegistrationStore.SaveRegistration(registration); err != nil {
+			d.logger.Error("Failed to save delegate registration", "error", err)
 			return fmt.Errorf("failed to save registration: %w", err)
 		}
 	}
@@ -7737,6 +8185,109 @@ func (d *DPoS) RegisterDelegate(registrant types.Address, name, website, descrip
 		"website", website,
 		"deposit", depositAmount.String(),
 		"status", "candidate")
+
+	// 🚨 重要提示：直接更新状态，其他节点需要重启才能同步
+	d.logger.Warn("⚠️ 注意：受托人注册是直接更新状态，其他节点需要重启才能同步")
+
+	return nil
+}
+
+// signTransaction 签名交易
+func (d *DPoS) signTransaction(tx *types.Transaction, expectedAddr types.Address, privateKeyHex string) error {
+	d.logger.Info("Signing DPoS transaction with user-provided private key")
+
+	// Force user to provide private key
+	if privateKeyHex == "" {
+		return fmt.Errorf("private key is required for signing DPoS transactions")
+	}
+
+	d.logger.Info("Decoding user-provided private key", "privateKeyHex", privateKeyHex, "length", len(privateKeyHex))
+
+	// Validate hex string first
+	if len(privateKeyHex) != 64 {
+		return fmt.Errorf("invalid private key length: expected 64, got %d", len(privateKeyHex))
+	}
+
+	// Check if string contains only valid hex characters
+	for i, char := range privateKeyHex {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
+			return fmt.Errorf("invalid hex character at position %d: %c (U+%04X)", i, char, char)
+		}
+	}
+
+	d.logger.Info("Private key hex string validation passed")
+
+	privateKeyBytes, err := hex.DecodeString(privateKeyHex)
+	if err != nil {
+		d.logger.Error("Failed to decode user-provided private key", "error", err)
+		return fmt.Errorf("failed to decode user-provided private key: %w", err)
+	}
+
+	d.logger.Info("User-provided private key decoded", "length", len(privateKeyBytes))
+
+	// Use direct ECDSA private key creation instead of crypto.BytesToECDSAPrivateKey
+	if len(privateKeyBytes) != 32 {
+		return fmt.Errorf("invalid private key bytes length: expected 32, got %d", len(privateKeyBytes))
+	}
+
+	// Create ECDSA private key directly using secp256k1 curve
+	privateKey := &ecdsa.PrivateKey{
+		PublicKey: ecdsa.PublicKey{
+			Curve: crypto.S256,
+		},
+		D: new(big.Int).SetBytes(privateKeyBytes),
+	}
+
+	// Calculate the public key from the private key
+	privateKey.PublicKey.X, privateKey.PublicKey.Y = privateKey.Curve.ScalarBaseMult(privateKeyBytes)
+
+	d.logger.Info("User-provided private key created successfully", "privateKeyD", privateKey.D.String())
+
+	// Calculate transaction hash for signing using EIP-155 scheme to match txpool signer
+	// Use chainID 1 for now (can be made configurable)
+	chainID := uint64(1)
+	eip155Signer := crypto.NewEIP155Signer(chainID, false)
+
+	d.logger.Info("=== 标记2: 开始签名交易 ===")
+	// For EIP-155 signing, we need to use the signer's SignTx method
+	// This ensures the hash calculation and V value are correct
+	signedTx, err := eip155Signer.SignTx(tx, privateKey)
+	if err != nil {
+		d.logger.Error("Failed to sign transaction with EIP-155 signer", "error", err)
+		return fmt.Errorf("failed to sign transaction with EIP-155 signer: %w", err)
+	}
+
+	// Copy the signature components from the signed transaction
+	tx.R = signedTx.R
+	tx.S = signedTx.S
+	tx.V = signedTx.V
+
+	d.logger.Info("=== 标记3: 签名完成，R=", tx.R.String(), "S=", tx.S.String(), "V=", tx.V.String(), "===")
+	d.logger.Info("Transaction signed successfully with EIP-155 signer", "r", tx.R.String(), "s", tx.S.String(), "v", tx.V.String())
+
+	// Recover sender with the same signer and set tx.From for logging / consistency
+	senderAddr, err := eip155Signer.Sender(tx)
+	if err == nil {
+		tx.From = senderAddr
+		d.logger.Info("=== 标记4: 恢复发送者地址=", tx.From.String(), "===")
+		d.logger.Info("Sender recovered and set on tx", "from", tx.From.String())
+	} else {
+		d.logger.Warn("Failed to recover sender after signing", "error", err)
+	}
+
+	return nil
+}
+
+// broadcastTransaction 广播交易到网络
+func (d *DPoS) broadcastTransaction(tx *types.Transaction) error {
+	d.logger.Info("=== 开始尝试广播交易 ===")
+	d.logger.Info("Attempting to broadcast transaction", "txHash", tx.Hash.String())
+
+	// 暂时跳过广播，因为交易池接口不支持AddTx
+	d.logger.Warn("⚠️ 暂时跳过交易广播，因为交易池接口不支持AddTx")
+	d.logger.Info("Transaction created but not broadcasted",
+		"txHash", tx.Hash.String(),
+		"reason", "txPool interface does not support AddTx")
 
 	return nil
 }

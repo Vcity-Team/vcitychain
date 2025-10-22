@@ -707,6 +707,31 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	// Step 1: Create a vote transaction
 	d.logger.Info("Creating vote transaction...")
 
+	// 🚨 检测投票参数
+	if voterAddr == (types.Address{}) {
+		d.logger.Error("🚨 CRITICAL: voter address is zero address")
+		return &VoteResponse{
+			Success: false,
+			Error:   "voter address is zero address",
+		}, nil
+	}
+
+	if candidateAddr == (types.Address{}) {
+		d.logger.Error("🚨 CRITICAL: candidate address is zero address")
+		return &VoteResponse{
+			Success: false,
+			Error:   "candidate address is zero address",
+		}, nil
+	}
+
+	if amountInt == nil || amountInt.Sign() <= 0 {
+		d.logger.Error("🚨 CRITICAL: invalid vote amount", "amount", amountInt)
+		return &VoteResponse{
+			Success: false,
+			Error:   "invalid vote amount",
+		}, nil
+	}
+
 	// Get account nonce for the voter
 	var nonce uint64
 	if nonceStore, ok := d.store.(interface {
@@ -768,7 +793,22 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	d.logger.Info("Address verification", "voterAddr", voterAddr.String(), "privateKeyHex", "ed7ba26f0568b6b9cd3296ff7dcfe56fc6041fea8963246334bdaa276783add6")
 	d.logger.Info("Transaction pool will automatically recover sender from signature")
 
-	d.logger.Info("Vote transaction created", "txHash", tx.ComputeHash(0).Hash.String(), "nonce", nonce, "gasPrice", gasPrice.String())
+	// 🚨 检测交易创建后的哈希
+	tx.ComputeHash(0)
+	if tx.Hash == (types.Hash{}) {
+		d.logger.Error("🚨 CRITICAL: vote transaction has zero hash after creation",
+			"nonce", nonce,
+			"gasPrice", gasPrice.String(),
+			"voter", voterAddr.String(),
+			"candidate", candidateAddr.String(),
+			"amount", amountInt.String())
+		return &VoteResponse{
+			Success: false,
+			Error:   "transaction hash is zero after creation",
+		}, nil
+	}
+
+	d.logger.Info("Vote transaction created", "txHash", tx.Hash.String(), "nonce", nonce, "gasPrice", gasPrice.String())
 
 	// Step 2: Sign the transaction with private key
 	d.logger.Info("Signing transaction with private key...")
@@ -3940,9 +3980,11 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 
 // RegisterDelegate 注册受托人
 func (d *DPOS) RegisterDelegate(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS RegisterDelegate called", "params", params)
+	d.logger.Info("🚀 ===== DPoS受托人注册RPC调用开始 =====")
+	d.logger.Info("📋 接收到的参数", "params", params)
 
 	// 解析参数
+	d.logger.Info("🔍 开始解析RPC参数...")
 	var registrantStr, name, website, description string
 
 	if paramMap, ok := params.(map[string]interface{}); ok {
@@ -3950,28 +3992,41 @@ func (d *DPOS) RegisterDelegate(ctx context.Context, params interface{}) (interf
 		name, _ = paramMap["name"].(string)
 		website, _ = paramMap["website"].(string)
 		description, _ = paramMap["description"].(string)
+		d.logger.Info("✅ 参数解析成功",
+			"registrant", registrantStr,
+			"name", name,
+			"website", website,
+			"description", description)
 	} else {
+		d.logger.Error("❌ 参数格式无效")
 		return nil, fmt.Errorf("invalid parameters format")
 	}
 
 	if registrantStr == "" {
+		d.logger.Error("❌ 缺少注册者地址")
 		return nil, fmt.Errorf("registrant address is required")
 	}
 
 	registrant := types.StringToAddress(registrantStr)
+	d.logger.Info("📍 注册者地址转换完成", "address", registrant.String())
 
 	dposEngine := d.getDPoSEngine()
 	if dposEngine == nil {
+		d.logger.Error("❌ DPoS引擎不可用")
 		return nil, fmt.Errorf("DPoS engine not available")
 	}
+	d.logger.Info("✅ DPoS引擎获取成功")
 
+	d.logger.Info("🔧 开始调用DPoS引擎注册受托人...")
 	if registerDelegate, ok := dposEngine.(interface {
 		RegisterDelegate(registrant types.Address, name, website, description string) error
 	}); ok {
 		err := registerDelegate.RegisterDelegate(registrant, name, website, description)
 		if err != nil {
+			d.logger.Error("❌ 注册受托人失败", "error", err)
 			return nil, fmt.Errorf("failed to register delegate: %w", err)
 		}
+		d.logger.Info("🎉 ===== 受托人注册RPC调用成功 =====")
 		return map[string]interface{}{
 			"success": true,
 			"message": "Delegate registration submitted successfully",
