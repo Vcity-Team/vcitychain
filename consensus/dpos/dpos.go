@@ -1611,22 +1611,35 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 			blockWindow := r.config.blockScheduler.GetBlockWindow()
 			timeSinceGenesis := now.Sub(genesisTime)
 			currentSlot := int(timeSinceGenesis / blockWindow)
-			r.currentDelegateIndex = uint64(currentSlot % int(r.config.DelegateCount))
+			// 使用实际验证者数量计算索引
+			actualDelegateCount := len(r.delegates)
+			if actualDelegateCount == 0 {
+				r.currentDelegateIndex = 0
+			} else {
+				r.currentDelegateIndex = uint64(currentSlot % actualDelegateCount)
+			}
 
 			r.logger.Debug("🔄 统一计算委托者索引（使用slot计算）",
 				"blockNumber", currentBlockNumber,
 				"currentSlot", currentSlot,
-				"delegateCount", r.config.DelegateCount,
-				"formula", fmt.Sprintf("slot %d %% %d = %d", currentSlot, r.config.DelegateCount, r.currentDelegateIndex),
+				"configDelegateCount", r.config.DelegateCount,
+				"actualDelegateCount", actualDelegateCount,
+				"formula", fmt.Sprintf("slot %d %% %d = %d", currentSlot, actualDelegateCount, r.currentDelegateIndex),
 				"currentRound", r.currentRound,
 				"newDelegateIndex", r.currentDelegateIndex)
 		} else {
-			// 回退到区块号计算
-			r.currentDelegateIndex = currentBlockNumber % uint64(r.config.DelegateCount)
+			// 回退到区块号计算 - 使用实际验证者数量
+			actualDelegateCount := len(r.delegates)
+			if actualDelegateCount == 0 {
+				r.currentDelegateIndex = 0
+			} else {
+				r.currentDelegateIndex = currentBlockNumber % uint64(actualDelegateCount)
+			}
 			r.logger.Debug("🔄 统一计算委托者索引（回退到区块号）",
 				"blockNumber", currentBlockNumber,
-				"delegateCount", r.config.DelegateCount,
-				"formula", fmt.Sprintf("%d%%%d=%d", currentBlockNumber, r.config.DelegateCount, r.currentDelegateIndex),
+				"configDelegateCount", r.config.DelegateCount,
+				"actualDelegateCount", actualDelegateCount,
+				"formula", fmt.Sprintf("%d%%%d=%d", currentBlockNumber, actualDelegateCount, r.currentDelegateIndex),
 				"currentRound", r.currentRound,
 				"newDelegateIndex", r.currentDelegateIndex)
 		}
@@ -1895,14 +1908,23 @@ func (r *dposRuntime) shouldProduceBlock() bool {
 		return shouldProduce
 	}
 
-	// 其他区块：按顺序出块
-	expectedDelegateIndex := currentBlock.Number % uint64(r.config.DelegateCount)
-	shouldProduce := r.currentDelegateIndex == expectedDelegateIndex
+	// 其他区块：按顺序出块 - 使用实际验证者数量
+	actualDelegateCount := len(r.delegates)
+	var shouldProduce bool
+	var expectedDelegateIndex uint64
 
+	if actualDelegateCount == 0 {
+		shouldProduce = false
+		expectedDelegateIndex = 0
+	} else {
+		expectedDelegateIndex = currentBlock.Number % uint64(actualDelegateCount)
+		shouldProduce = r.currentDelegateIndex == expectedDelegateIndex
+	}
 	r.logger.Info("🔍 检查出块资格（回退模式）",
 		"currentBlock", currentBlock.Number,
 		"currentDelegateIndex", r.currentDelegateIndex,
 		"expectedDelegateIndex", expectedDelegateIndex,
+		"actualDelegateCount", actualDelegateCount,
 		"shouldProduce", shouldProduce)
 
 	return shouldProduce
@@ -1919,8 +1941,13 @@ func (r *dposRuntime) calculateExpectedDelegateIndex() uint64 {
 		return 0
 	}
 
-	// 修复：使用 currentBlock.Number % delegateCount，与shouldProduceBlock保持一致
-	return currentBlock.Number % uint64(r.config.DelegateCount)
+	// 修复：使用实际验证者数量，而不是配置的 DelegateCount
+	actualDelegateCount := len(r.delegates)
+	if actualDelegateCount == 0 {
+		return 0
+	}
+
+	return currentBlock.Number % uint64(actualDelegateCount)
 }
 
 // isEpochEndBlock 检查是否是epoch的最后一个区块
@@ -8817,7 +8844,13 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 					if currentBlock.Number == 0 {
 						newIndex = 0
 					} else {
-						newIndex = currentBlock.Number % uint64(d.runtime.config.DelegateCount)
+						// 使用实际验证者数量计算索引
+						actualDelegateCount := len(d.runtime.delegates)
+						if actualDelegateCount == 0 {
+							newIndex = 0
+						} else {
+							newIndex = currentBlock.Number % uint64(actualDelegateCount)
+						}
 					}
 					oldIndex := d.runtime.currentDelegateIndex
 					d.runtime.currentDelegateIndex = newIndex
