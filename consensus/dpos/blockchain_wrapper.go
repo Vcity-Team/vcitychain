@@ -95,6 +95,7 @@ type blockchainWrapper struct {
 	keyAddr    types.Address // 当前节点的地址
 	config     *DPoSConfig   // 添加DPoS配置引用
 	logger     hclog.Logger  // 添加logger字段
+	state      *State        // 添加State字段
 }
 
 // CurrentHeader returns the header of blockchain block head
@@ -485,7 +486,7 @@ func (p *blockchainWrapper) getParentValidators(blockNumber uint64) (validator.A
 	}
 
 	// 获取父区块
-	parentBlock, exists := p.config.blockchain.GetHeaderByNumber(blockNumber - 1)
+	parentBlock, exists := p.config.Blockchain.GetHeaderByNumber(blockNumber - 1)
 	if !exists {
 		return nil, fmt.Errorf("parent block not found: %d", blockNumber-1)
 	}

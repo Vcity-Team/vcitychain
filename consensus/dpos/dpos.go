@@ -9794,7 +9794,7 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 
 	myAddress := types.Address(r.config.Key.Address())
 
-	for i, delegate := range r.delegates {
+	for _, delegate := range r.delegates {
 		if delegate.BlsKey == nil {
 
 			// 主动请求BLS公钥
@@ -15513,7 +15513,7 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 	var faultFlags []FaultFlagInfo
 
 	// 计算当前epoch
-	currentEpoch := d.getCurrentEpoch(blockNumber)
+	currentEpoch := d.getCurrentEpochByBlock(blockNumber)
 
 	// 如果epoch没有变化，不需要检测
 	if currentEpoch == d.currentEpoch {
@@ -15610,8 +15610,8 @@ func (d *DPoS) calculateMissedBlocks(validatorAddr types.Address, startEpoch, en
 	return missedBlocks
 }
 
-// 🆕 新增：获取当前epoch
-func (d *DPoS) getCurrentEpoch(blockNumber uint64) uint64 {
+// 🆕 新增：获取当前epoch（基于区块号）
+func (d *DPoS) getCurrentEpochByBlock(blockNumber uint64) uint64 {
 	blocksPerEpoch := d.config.DPoSValidatorsCount
 	if blocksPerEpoch == 0 {
 		blocksPerEpoch = d.config.DelegateCount
@@ -15727,7 +15727,7 @@ func (d *DPoS) onEpochSwitch(blockNumber uint64) error {
 
 // 🆕 新增：检查epoch切换
 func (d *DPoS) checkEpochSwitch(blockNumber uint64) error {
-	currentEpoch := d.getCurrentEpoch(blockNumber)
+	currentEpoch := d.getCurrentEpochByBlock(blockNumber)
 
 	if currentEpoch != d.currentEpoch {
 		d.logger.Info("🔄 检测到epoch切换",

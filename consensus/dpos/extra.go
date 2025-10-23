@@ -2178,7 +2178,7 @@ func (i *Extra) applyValidatorSetDelta(parentValidators validator.AccountSet, de
 
 // updateValidatorFaultStatus 更新验证者故障状态
 func (i *Extra) updateValidatorFaultStatus(validators validator.AccountSet, faultFlag FaultFlagInfo, logger hclog.Logger) {
-	for j, validator := range validators {
+	for _, validator := range validators {
 		if validator.Address == faultFlag.NodeAddress {
 			oldStatus := validator.IsActive
 			validator.IsActive = !faultFlag.IsFaulty
