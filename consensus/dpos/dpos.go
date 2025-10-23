@@ -1420,21 +1420,11 @@ func (r *dposRuntime) produceBlock() error {
 	}
 
 	// 构建新区块
-	r.logger.Info("🏗️ DPoS开始构建新区块", "blockNumber", nextBlockNumber)
+	r.logger.Debug("🏗️ DPoS开始构建新区块", "blockNumber", nextBlockNumber)
 	block, err := r.buildBlock()
 	if err != nil {
 		return fmt.Errorf("failed to build block: %w", err)
 	}
-
-	// 🆕 生产节点不在此处执行奖励分配，避免重复执行
-	// 奖励分配将在生产节点本地接收自己广播的区块时通过验证流程执行
-	r.logger.Info("🔍 生产节点跳过本地奖励分配执行",
-		"blockNumber", block.Block.Number(),
-		"blockHash", block.Block.Hash().String()[:16],
-		"说明", "奖励分配将在本地接收广播区块时通过验证流程执行，避免重复")
-
-	// 提交区块到区块链
-	r.logger.Info("📝 开始提交区块到区块链", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
 
 	if err := r.config.blockchain.CommitBlock(block); err != nil {
 		r.logger.Error("区块提交失败", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String(), "error", err)
@@ -1452,8 +1442,6 @@ func (r *dposRuntime) produceBlock() error {
 
 	// 添加事件触发日志跟踪
 	r.logger.Debug("🔔 区块提交完成，等待区块链事件触发状态广播", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
-
-	// 注意：历史验证者集合已在签名聚合完成后保存，无需重复保存
 
 	// 验证区块是否真正写入区块链
 	if writtenBlock, exists := r.config.blockchain.GetHeaderByNumber(block.Block.Number()); exists {
@@ -1625,7 +1613,7 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 			currentSlot := int(timeSinceGenesis / blockWindow)
 			r.currentDelegateIndex = uint64(currentSlot % int(r.config.DelegateCount))
 
-			r.logger.Info("🔄 统一计算委托者索引（使用slot计算）",
+			r.logger.Debug("🔄 统一计算委托者索引（使用slot计算）",
 				"blockNumber", currentBlockNumber,
 				"currentSlot", currentSlot,
 				"delegateCount", r.config.DelegateCount,
@@ -1635,7 +1623,7 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 		} else {
 			// 回退到区块号计算
 			r.currentDelegateIndex = currentBlockNumber % uint64(r.config.DelegateCount)
-			r.logger.Info("🔄 统一计算委托者索引（回退到区块号）",
+			r.logger.Debug("🔄 统一计算委托者索引（回退到区块号）",
 				"blockNumber", currentBlockNumber,
 				"delegateCount", r.config.DelegateCount,
 				"formula", fmt.Sprintf("%d%%%d=%d", currentBlockNumber, r.config.DelegateCount, r.currentDelegateIndex),
@@ -4958,7 +4946,7 @@ func (d *DPoS) updateRoundState(header *types.Header) {
 
 	if blockMiner != keyAddr {
 		// 接收其他节点的区块，需要更新轮次
-		d.logger.Info("🔄 接收其他节点区块，准备更新轮次",
+		d.logger.Debug("🔄 接收其他节点区块，准备更新轮次",
 			"blockNumber", header.Number,
 			"blockMiner", blockMiner.String(),
 			"keyAddr", keyAddr.String())
@@ -4975,7 +4963,7 @@ func (d *DPoS) updateRoundState(header *types.Header) {
 			// 🆕 使用区块头部的区块号，确保一致性
 			d.runtime.updateRound(header.Number)
 
-			d.logger.Info("✅ 轮次状态更新完成",
+			d.logger.Debug("✅ 轮次状态更新完成",
 				"blockNumber", header.Number,
 				"blockMiner", blockMiner.String(),
 				"keyAddr", keyAddr.String(),
@@ -5664,31 +5652,7 @@ func (d *DPoS) Initialize() error {
 		d.config.ConsensusSwitchHeight,
 	)
 
-	// set blockchain backend
-	d.blockchain = &blockchainWrapper{
-		blockchain: d.config.Blockchain,
-		executor:   d.config.Executor,
-		keyAddr:    types.Address(d.key.Address()), // 设置当前节点的地址
-		config:     d.config,                       // 传递DPoS配置
-		logger:     d.logger,                       // 传递logger
-	}
-
-	// 🆕 将blockchain_wrapper设置为blockchain的executor，以启用奖励分配功能
-	// 创建一个适配器，将blockchain_wrapper包装为blockchain.Executor
-	executorAdapter := &executorAdapter{wrapper: d.blockchain.(*blockchainWrapper)}
-	d.config.Blockchain.SetExecutor(executorAdapter)
-	d.logger.Info("✅ 已将blockchain_wrapper设置为blockchain的executor，启用奖励分配功能")
-
-	// 🆕 新增：设置余额查询器（使用真实实现）
-	// 注意：这里需要传入blockchain实例，暂时使用nil
-	// TODO: 传入真实的blockchain实例
-	d.balanceQuerier = nil // 暂时禁用，等待blockchain实例传入
-	d.logger.Debug("Balance querier initialized (disabled for now)")
-
-	// set block time
-	d.blockTime = d.config.BlockTime.Duration
-
-	// 🆕 新增：初始化状态存储
+	// 🆕 新增：先初始化状态存储
 	d.logger.Debug("Attempting to initialize state store",
 		"dataDir", d.dataDir,
 		"dataDirEmpty", d.dataDir == "",
@@ -5716,6 +5680,35 @@ func (d *DPoS) Initialize() error {
 	} else {
 		d.logger.Warn("Data directory not set, state store will not be initialized")
 	}
+
+	// set blockchain backend
+	d.blockchain = &blockchainWrapper{
+		blockchain: d.config.Blockchain,
+		executor:   d.config.Executor,
+		keyAddr:    types.Address(d.key.Address()), // 设置当前节点的地址
+		config:     d.config,                       // 传递DPoS配置
+		logger:     d.logger,                       // 传递logger
+		state:      d.state,                        // 🆕 传递State对象
+	}
+
+	// 🆕 将blockchain_wrapper设置为blockchain的executor，以启用奖励分配功能
+	// 创建一个适配器，将blockchain_wrapper包装为blockchain.Executor
+	executorAdapter := &executorAdapter{wrapper: d.blockchain.(*blockchainWrapper)}
+	d.config.Blockchain.SetExecutor(executorAdapter)
+	d.logger.Info("✅ 已将blockchain_wrapper设置为blockchain的executor，启用奖励分配功能")
+
+	// 🆕 新增：设置余额查询器（使用真实实现）
+	// 使用 runtime 的 getValidatorBalance 方法实现余额查询
+	if d.runtime != nil {
+		d.balanceQuerier = &runtimeBalanceQuerier{runtime: d.runtime}
+		d.logger.Info("✅ Balance querier initialized with runtime implementation")
+	} else {
+		d.balanceQuerier = nil
+		d.logger.Warn("⚠️ Runtime not available, balance querier disabled")
+	}
+
+	// set block time
+	d.blockTime = d.config.BlockTime.Duration
 
 	// 🆕 新增：初始化BLS网络通信
 	if err := d.initializeBLSNetworking(); err != nil {
@@ -14289,7 +14282,7 @@ func (d *DPoS) processEconomicSystem(block *types.FullBlock) error {
 	)
 
 	// 2. 添加详细日志
-	d.logger.Info("📊 记录出块到统一Epoch",
+	d.logger.Debug("📊 记录出块到统一Epoch",
 		"blockNumber", blockNumber,
 		"blockTime", blockTime.Format("2006-01-02 15:04:05"),
 		"currentEpoch", currentEpoch,
@@ -14378,7 +14371,6 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 	validatorRewardCount := 0
 
 	// 计算每个验证者的奖励
-	d.logger.Info("🔍 开始统计验证者奖励循环", "totalValidators", len(validators))
 	for i, validator := range validators {
 		d.logger.Debug("🔍 统计验证者", "index", i+1, "total", len(validators), "address", validator.Address.String())
 		blocksProduced := blockCounts[types.Address(validator.Address)]
@@ -14428,7 +14420,6 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 					"type", "validator")
 			}
 		}
-		d.logger.Debug("🔍 验证者统计完成", "index", i+1, "address", validator.Address.String())
 	}
 
 	d.logger.Info("✅ 验证者奖励循环处理完成", "totalValidators", len(validators), "processedCount", validatorRewardCount)
@@ -15788,4 +15779,60 @@ func (d *DPoS) getAccountNonce(address types.Address) (uint64, error) {
 	// 如果无法通过state获取，返回默认值0
 	d.logger.Warn("⚠️ 无法获取账户nonce，使用默认nonce 0")
 	return 0, nil // 返回0而不是错误，让交易继续
+}
+
+// 🆕 新增：runtimeBalanceQuerier 实现 NativeTokenBalanceQuerier 接口
+type runtimeBalanceQuerier struct {
+	runtime *dposRuntime
+}
+
+// GetNativeTokenBalance 通过 runtime 查询账户余额
+func (r *runtimeBalanceQuerier) GetNativeTokenBalance(address types.Address) (*big.Int, error) {
+	return r.runtime.getAccountBalance(address)
+}
+
+// getAccountBalance 查询账户余额
+func (r *dposRuntime) getAccountBalance(address types.Address) (*big.Int, error) {
+	if r.config == nil || r.config.blockchain == nil {
+		return big.NewInt(0), fmt.Errorf("blockchain not available")
+	}
+
+	// 获取当前区块头
+	currentHeader := r.config.blockchain.CurrentHeader()
+	if currentHeader == nil {
+		return big.NewInt(0), fmt.Errorf("current header not available")
+	}
+
+	r.logger.Debug("🔍 开始查询验证者余额", "address", address.String())
+
+	// 通过backend获取DPoS实例，然后查询真实余额
+	if r.backend != nil {
+		if dposInstance, ok := r.backend.(*DPoS); ok && dposInstance.config != nil && dposInstance.config.Executor != nil {
+			// 通过executor查询余额
+			snapshot, err := dposInstance.config.Executor.StateAt(currentHeader.StateRoot)
+			if err != nil {
+				r.logger.Error("❌ 无法创建状态快照", "error", err)
+				return big.NewInt(0), fmt.Errorf("failed to create state snapshot: %w", err)
+			}
+
+			account, err := snapshot.GetAccount(address)
+			if err != nil {
+				r.logger.Warn("⚠️ 无法获取账户信息，返回0余额", "address", address.String(), "error", err)
+				return big.NewInt(0), nil
+			}
+
+			// 🆕 检查账户余额是否为空，避免空指针解引用
+			if account == nil || account.Balance == nil {
+				r.logger.Warn("⚠️ 账户或余额为空，返回0余额", "address", address.String())
+				return big.NewInt(0), nil
+			}
+
+			r.logger.Debug("✅ 成功查询到验证者余额", "address", address.String(), "balance", account.Balance.String())
+			return account.Balance, nil
+		}
+	}
+
+	// 如果无法通过backend查询，返回0余额
+	r.logger.Warn("⚠️ 无法通过backend查询余额，返回0余额", "address", address.String())
+	return big.NewInt(0), nil
 }
