@@ -6135,8 +6135,8 @@ func (d *DPoS) initializeDelegates() error {
 	d.currentEpoch = 0
 
 	// 🆕 显著日志：显示当前配置
-	d.logger.Info("🚀 ===== DPoS验证者初始化开始 =====")
-	d.logger.Info("📋 当前配置信息",
+	d.logger.Debug("🚀 ===== DPoS验证者初始化开始 =====")
+	d.logger.Debug("📋 当前配置信息",
 		"configDelegateCount", d.config.DelegateCount,
 		"initialDelegatesCount", len(d.config.InitialDelegates),
 		"dposValidatorsCount", d.config.DPoSValidatorsCount,
@@ -15517,18 +15517,27 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 
 	// 如果epoch没有变化，不需要检测
 	if currentEpoch == d.currentEpoch {
+		d.logger.Info("ℹ️ Epoch未变化，跳过故障检测", "currentEpoch", currentEpoch, "previousEpoch", d.currentEpoch)
 		return faultFlags, nil
 	}
 
-	d.logger.Info("🔍 开始检测验证者故障",
+	d.logger.Info("🔍 ===== 开始检测验证者故障 =====",
 		"blockNumber", blockNumber,
 		"currentEpoch", currentEpoch,
-		"previousEpoch", d.currentEpoch)
+		"previousEpoch", d.currentEpoch,
+		"maxMissedBlocks", d.config.MaxMissedBlocks)
 
 	// 计算每个验证者的漏块数
+	d.logger.Info("🔍 开始计算每个验证者的漏块数...")
 	for _, validator := range d.epochValidators {
 		missedBlocks := d.calculateMissedBlocks(validator.Address, d.currentEpoch, currentEpoch)
 		d.missedBlocksCount[validator.Address] = missedBlocks
+
+		d.logger.Info("📊 验证者漏块统计",
+			"address", validator.Address.String(),
+			"missedBlocks", missedBlocks,
+			"threshold", d.config.MaxMissedBlocks,
+			"isFaulty", missedBlocks > d.config.MaxMissedBlocks)
 
 		// 检查是否超过阈值
 		if missedBlocks > d.config.MaxMissedBlocks {
@@ -15541,15 +15550,29 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 			}
 			faultFlags = append(faultFlags, faultFlag)
 
-			d.logger.Info("🚨 检测到故障验证者",
+			d.logger.Info("🚨 ===== 检测到故障验证者 =====",
 				"address", validator.Address.String(),
 				"missedBlocks", missedBlocks,
-				"threshold", d.config.MaxMissedBlocks)
+				"threshold", d.config.MaxMissedBlocks,
+				"reason", faultFlag.Reason)
 		}
 	}
 
 	// 更新当前epoch
 	d.currentEpoch = currentEpoch
+
+	d.logger.Info("🏁 ===== 故障检测完成 =====",
+		"faultyValidatorsCount", len(faultFlags),
+		"currentEpoch", currentEpoch)
+
+	if len(faultFlags) > 0 {
+		d.logger.Info("📋 故障验证者列表:")
+		for i, faultFlag := range faultFlags {
+			d.logger.Info("🚨 故障验证者", "index", i+1, "address", faultFlag.NodeAddress.String(), "missedBlocks", faultFlag.MissedBlocks, "reason", faultFlag.Reason)
+		}
+	} else {
+		d.logger.Info("✅ 没有检测到故障验证者")
+	}
 
 	return faultFlags, nil
 }
