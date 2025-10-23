@@ -96,6 +96,9 @@ type blockchainWrapper struct {
 	config     *DPoSConfig   // 添加DPoS配置引用
 	logger     hclog.Logger  // 添加logger字段
 	state      *State        // 添加State字段
+
+	// 🆕 添加验证者更新回调函数
+	onValidatorsUpdated func(validators validator.AccountSet) error
 }
 
 // CurrentHeader returns the header of blockchain block head
@@ -376,8 +379,22 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 
 	// 🆕 动态计算下一个Epoch的出块者序列
 	p.logger.Info("🔍 开始动态计算下一个Epoch验证者集合", "blockNumber", block.Number())
-	if err := p.calculateNextEpochValidators(block.Number(), extra, p.state); err != nil {
+	newValidators, err := p.calculateNextEpochValidators(block.Number(), extra, p.state)
+	if err != nil {
 		p.logger.Error("❌ 计算下一个Epoch验证者失败", "error", err)
+	} else if newValidators != nil {
+		p.logger.Info("✅ 动态计算验证者集合完成", "newValidatorsCount", len(newValidators))
+
+		// 🆕 通过回调函数更新验证者集合
+		if p.onValidatorsUpdated != nil {
+			if err := p.onValidatorsUpdated(newValidators); err != nil {
+				p.logger.Error("❌ 更新验证者集合失败", "error", err)
+			} else {
+				p.logger.Info("✅ 验证者集合更新成功", "newCount", len(newValidators))
+			}
+		} else {
+			p.logger.Warn("⚠️ 验证者更新回调函数未设置")
+		}
 	}
 
 	if extra.RewardDistribution == nil {
@@ -533,13 +550,13 @@ func (p *blockchainWrapper) updateValidatorsInDatabase(validators validator.Acco
 }
 
 // 🆕 新增：计算下一个Epoch的验证者集合
-func (p *blockchainWrapper) calculateNextEpochValidators(blockNumber uint64, extra *Extra, state *State) error {
+func (p *blockchainWrapper) calculateNextEpochValidators(blockNumber uint64, extra *Extra, state *State) (validator.AccountSet, error) {
 	p.logger.Info("🔄 ===== 开始计算下一个Epoch的验证者集合 =====", "blockNumber", blockNumber)
 
 	// 检查stake store是否可用
 	if state == nil || state.StakeStore == nil {
 		p.logger.Error("❌ StakeStore不可用", "state", state != nil, "stakeStore", state != nil && state.StakeStore != nil)
-		return fmt.Errorf("stake store not available")
+		return nil, fmt.Errorf("stake store not available")
 	}
 
 	// 从数据库获取所有验证者
@@ -547,7 +564,7 @@ func (p *blockchainWrapper) calculateNextEpochValidators(blockNumber uint64, ext
 	allValidators, err := state.StakeStore.GetValidatorsWithFilter(false)
 	if err != nil {
 		p.logger.Error("❌ 获取验证者失败", "error", err)
-		return err
+		return nil, err
 	}
 	p.logger.Info("✅ 成功获取所有验证者", "count", len(allValidators))
 
@@ -609,7 +626,7 @@ func (p *blockchainWrapper) calculateNextEpochValidators(blockNumber uint64, ext
 	err = state.StakeStore.SaveEpochValidators(activeValidators)
 	if err != nil {
 		p.logger.Error("❌ 保存下一个Epoch验证者失败", "error", err)
-		return err
+		return nil, err
 	}
 
 	// 显示最终结果
@@ -620,7 +637,7 @@ func (p *blockchainWrapper) calculateNextEpochValidators(blockNumber uint64, ext
 	}
 	p.logger.Info("✅ 计算完成统计", "totalValidators", len(allValidators), "finalValidators", len(activeValidators), "maxValidators", maxValidators)
 
-	return nil
+	return activeValidators, nil
 }
 
 // GetStateProviderForBlock is an implementation of blockchainBackend interface

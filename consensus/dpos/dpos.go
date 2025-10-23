@@ -642,15 +642,20 @@ func (r *dposRuntime) initializeRuntime() error {
 	return nil
 }
 
-// 🆕 防重复日志函数
+// 🆕 防重复日志函数（支持自定义间隔）
 func (r *dposRuntime) logOnce(key string, level string, message string, args ...interface{}) {
+	r.logOnceWithInterval(key, 10*time.Second, level, message, args...)
+}
+
+// 🆕 防重复日志函数（自定义间隔）
+func (r *dposRuntime) logOnceWithInterval(key string, interval time.Duration, level string, message string, args ...interface{}) {
 	r.logMutex.Lock()
 	defer r.logMutex.Unlock()
 
 	now := time.Now()
 	if lastTime, exists := r.lastLogTime[key]; exists {
-		// 如果10秒内已经记录过相同key的日志，则跳过
-		if now.Sub(lastTime) < 10*time.Second {
+		// 如果指定间隔内已经记录过相同key的日志，则跳过
+		if now.Sub(lastTime) < interval {
 			return
 		}
 	}
@@ -2105,15 +2110,15 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 
 	// 检查受托人是否活跃且有足够的stake
 	if !delegate.IsActive || delegate.VotingPower.Cmp(big.NewInt(0)) <= 0 {
-		r.logger.Warn("❌ 当前委托者不活跃或票数不足",
+		// 🆕 使用统一的日志间隔控制，避免日志刷屏
+		r.logOnceWithInterval("inactive_delegate", 10*time.Second, "warn",
+			"❌ 当前委托者不活跃或票数不足",
 			"currentDelegateIndex", r.currentDelegateIndex,
 			"address", delegate.Address.String(),
 			"isActive", delegate.IsActive,
 			"votingPower", delegate.VotingPower.String())
 		return types.ZeroAddress
 	}
-
-	// 静默处理，不打印日志
 
 	return delegate.Address
 }
@@ -5716,6 +5721,17 @@ func (d *DPoS) Initialize() error {
 		config:     d.config,                       // 传递DPoS配置
 		logger:     d.logger,                       // 传递logger
 		state:      d.state,                        // 🆕 传递State对象
+
+		// 🆕 设置验证者更新回调函数
+		onValidatorsUpdated: func(validators validator.AccountSet) error {
+			// 更新 runtime 的验证者集合
+			if d.runtime != nil {
+				d.runtime.delegates = validators.Copy()
+				d.delegates = validators.Copy()
+				d.logger.Info("✅ 验证者集合已更新", "count", len(validators))
+			}
+			return nil
+		},
 	}
 
 	// 🆕 将blockchain_wrapper设置为blockchain的executor，以启用奖励分配功能
@@ -8841,11 +8857,12 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 				currentBlock := d.runtime.config.blockchain.CurrentHeader()
 				if currentBlock != nil {
 					var newIndex uint64
+					actualDelegateCount := len(d.runtime.delegates)
+
 					if currentBlock.Number == 0 {
 						newIndex = 0
 					} else {
 						// 使用实际验证者数量计算索引
-						actualDelegateCount := len(d.runtime.delegates)
 						if actualDelegateCount == 0 {
 							newIndex = 0
 						} else {
@@ -8858,7 +8875,8 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 						"oldIndex", oldIndex,
 						"newIndex", newIndex,
 						"blockNumber", currentBlock.Number,
-						"delegateCount", d.runtime.config.DelegateCount)
+						"actualDelegateCount", actualDelegateCount,
+						"configDelegateCount", d.runtime.config.DelegateCount)
 
 					// 🆕 关键修复：同步重新排序后的验证者集合到runtime
 					d.logger.Info("🔄 同步重新排序后的验证者集合到runtime")
