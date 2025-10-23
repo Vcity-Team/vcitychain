@@ -6104,32 +6104,33 @@ func (d *DPoS) readBLSPrivateKeyAndGeneratePublicKey(validatorAddress types.Addr
 func (d *DPoS) initializeDelegates() error {
 	d.delegates = make(validator.AccountSet, 0, d.config.DelegateCount)
 
-	// 🆕 修正：优先从数据库读取受托人，而不是从创世文件
-	d.logger.Info("initializing delegates", "configDelegateCount", d.config.DelegateCount, "initialDelegatesCount", len(d.config.InitialDelegates))
+	// 🆕 显著日志：显示当前配置
+	d.logger.Info("🚀 ===== DPoS验证者初始化开始 =====")
+	d.logger.Info("📋 当前配置信息",
+		"configDelegateCount", d.config.DelegateCount,
+		"initialDelegatesCount", len(d.config.InitialDelegates))
 
 	// 🆕 首先尝试从数据库读取受托人（真正用于出块）
 	if d.state != nil && d.state.StakeStore != nil {
-		d.logger.Debug("🔍 尝试从数据库读取受托人信息（真正用于出块）...")
+		d.logger.Info("🔍 开始从数据库读取验证者信息...")
 		dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
 		if err != nil {
 			d.logger.Warn("⚠️ 从数据库读取受托人失败，将使用创世文件", "error", err)
 		} else if len(dbValidators) > 0 {
-			d.logger.Info("✅ 从数据库成功读取受托人（真正用于出块）", "count", len(dbValidators))
+			d.logger.Info("✅ 从数据库成功读取验证者", "count", len(dbValidators))
 
-			// 🆕 添加详细日志：打印从数据库读取的验证者信息
-			d.logger.Info("🔍 数据库验证者详细信息:")
+			// 🆕 显著日志：显示数据库验证者详细信息
+			d.logger.Info("📊 数据库验证者详细信息:")
 			for i, validator := range dbValidators {
-				d.logger.Info("🔍 数据库验证者",
-					"index", i,
+				d.logger.Info("👤 验证者信息",
+					"index", i+1,
 					"address", validator.Address.String(),
 					"votingPower", validator.VotingPower.String(),
-					"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
-					"isActive", validator.IsActive,
-					"hasBlsKey", validator.BlsKey != nil)
+					"isActive", validator.IsActive)
 			}
 
-			// 🆕 修复：使用标准化的排序规则，确保所有节点完全一致
-			d.logger.Debug("🔍 按标准化规则排序数据库受托人...")
+			// 🆕 按权重倒序排序
+			d.logger.Info("🔄 开始按权重倒序排序验证者...")
 			sort.Slice(dbValidators, func(i, j int) bool {
 				// 1. 首先按票数降序排序
 				votingPowerCmp := dbValidators[i].VotingPower.Cmp(dbValidators[j].VotingPower)
@@ -6140,12 +6141,57 @@ func (d *DPoS) initializeDelegates() error {
 				return bytes.Compare(dbValidators[i].Address[:], dbValidators[j].Address[:]) < 0
 			})
 
-			// 🆕 使用创世文件中的delegateCount配置，只取前N个票数最高的受托人
+			// 🆕 显著日志：显示排序后的验证者
+			d.logger.Info("📈 排序后的验证者列表:")
+			for i, validator := range dbValidators {
+				d.logger.Info("🏆 排序后验证者",
+					"rank", i+1,
+					"address", validator.Address.String(),
+					"votingPower", validator.VotingPower.String())
+			}
+
+			// 🆕 显著日志：显示截取逻辑
 			maxDelegates := int(d.config.DelegateCount)
+			originalCount := len(dbValidators)
+
+			d.logger.Info("🎯 ===== 验证者截取逻辑 =====")
+			d.logger.Info("📊 截取前统计",
+				"配置的最大验证者数量", maxDelegates,
+				"数据库中的验证者数量", originalCount)
+
+			if originalCount <= maxDelegates {
+				d.logger.Info("✅ 数据库验证者数量 <= 配置数量，取全部验证者",
+					"取用数量", originalCount,
+					"配置数量", maxDelegates)
+			} else {
+				d.logger.Info("✂️ 数据库验证者数量 > 配置数量，截取前N个",
+					"截取前", maxDelegates,
+					"原始数量", originalCount,
+					"截取后", maxDelegates)
+			}
+
+			// 执行截取
 			if len(dbValidators) > maxDelegates {
 				dbValidators = dbValidators[:maxDelegates]
-				d.logger.Info("🎯 限制受托人数量为前N个", "originalCount", len(dbValidators), "limitedCount", maxDelegates, "configDelegateCount", d.config.DelegateCount)
+				d.logger.Info("🎯 限制受托人数量为前N个",
+					"originalCount", originalCount,
+					"limitedCount", maxDelegates,
+					"configDelegateCount", d.config.DelegateCount)
 			}
+
+			// 🆕 显著日志：显示最终结果
+			d.logger.Info("🏁 ===== 最终验证者集合 =====")
+			d.logger.Info("📋 最终验证者列表:")
+			for i, validator := range dbValidators {
+				d.logger.Info("🎖️ 最终验证者",
+					"index", i+1,
+					"address", validator.Address.String(),
+					"votingPower", validator.VotingPower.String(),
+					"isActive", validator.IsActive)
+			}
+			d.logger.Info("✅ 验证者初始化完成",
+				"最终数量", len(dbValidators),
+				"配置数量", maxDelegates)
 
 			// 🆕 将排序后的前N个受托人信息真正添加到d.delegates中用于出块
 			for i, validator := range dbValidators {
@@ -6167,6 +6213,7 @@ func (d *DPoS) initializeDelegates() error {
 			// 🆕 如果从数据库成功读取到受托人，直接返回，不再使用创世文件
 			if len(d.delegates) > 0 {
 				d.logger.Info("🎯 使用数据库中的受托人进行出块，跳过创世文件")
+				d.logger.Info("🚀 ===== DPoS验证者初始化结束 =====")
 
 				// 🆕 注意：dbValidators已经在前面按票数排序，这里不需要再次排序
 
