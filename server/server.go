@@ -108,6 +108,8 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		"consensusSwitchHeight": float64(s.config.ConsensusSwitchHeight),
 		"dposValidatorsCount":   float64(s.config.DPoSValidatorsCount), // 使用正确的字段名
 		"dposDelegateThreshold": s.config.DPoSDelegateThreshold,
+		"backupValidatorsCount": float64(s.config.BackupValidatorsCount),
+		"maxMissedBlocks":       float64(s.config.MaxMissedBlocks),
 	}
 
 	// 从YAML配置中获取区块时间
@@ -699,6 +701,10 @@ func (s *Server) setupConsensus() error {
 
 	// 🆕 新增：将DPoS验证者数量添加到engineConfig中
 	engineConfig["dposValidatorsCount"] = float64(s.config.DPoSValidatorsCount)
+
+	// 🆕 新增：将备用验证者数量和最大漏块数添加到engineConfig中
+	engineConfig["backupValidatorsCount"] = float64(s.config.BackupValidatorsCount)
+	engineConfig["maxMissedBlocks"] = float64(s.config.MaxMissedBlocks)
 
 	// 🆕 新增：添加DPoS经济系统配置
 	// 从YAML配置中获取epoch duration
@@ -1303,6 +1309,8 @@ func (s *Server) createDPoSEngine() (consensus.Consensus, error) {
 	engineConfig := map[string]interface{}{
 		"consensusSwitchHeight": float64(s.config.ConsensusSwitchHeight),
 		"dposValidatorsCount":   float64(s.config.DPoSValidatorsCount),
+		"backupValidatorsCount": float64(s.config.BackupValidatorsCount),
+		"maxMissedBlocks":       float64(s.config.MaxMissedBlocks),
 	}
 
 	config := &consensus.Config{

@@ -63,6 +63,15 @@ const (
 // PolyBFTMixDigest represents a hash of "PolyBFT Mix" to identify whether the block is from PolyBFT consensus engine
 var PolyBFTMixDigest = types.StringToHash("adce6e5230abe012342a44e4e9b6d05997d6f015387ae0e59be924afc7ec70c1")
 
+// FaultFlagInfo 故障标志信息结构
+type FaultFlagInfo struct {
+	NodeAddress    types.Address `json:"node_address"`
+	IsFaulty       bool          `json:"is_faulty"`
+	MissedBlocks   uint64        `json:"missed_blocks"`
+	LastUpdateTime uint64        `json:"last_update_time"`
+	Reason         string        `json:"reason"`
+}
+
 // Extra defines the structure of the extra field for Istanbul
 type Extra struct {
 	Validators *validator.ValidatorSetDelta
@@ -73,6 +82,8 @@ type Extra struct {
 	RewardDistribution *RewardDistributionInfo
 	// 🆕 用于CheckpointHash计算的区块哈希
 	CheckpointBlockHash types.Hash
+	// 🆕 故障标志信息
+	FaultFlags []FaultFlagInfo `json:"fault_flags,omitempty"`
 }
 
 // RewardDistributionInfo 奖励分配信息
@@ -518,7 +529,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"eventRoot", recalculatedCheckpoint.EventRoot.String(),
 		"说明", "验证时用于计算checkpointHash的所有参数")
 
-
 	logger.Debug("🔍 验证时开始计算checkpoint哈希",
 		"blockNumber", blockNumber,
 		"chainID", productionChainID,
@@ -540,7 +550,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"nextValidatorsHash", recalculatedCheckpoint.NextValidatorsHash.String(),
 		"validatorsCount", len(validators))
 
-
 	checkpointHash, err := recalculatedCheckpoint.Hash(productionChainID, blockNumber, realBlockHash)
 	if err != nil {
 		logger.Error("❌ ValidateFinalizedData checkpoint哈希计算失败", "blockNumber", blockNumber, "error", err)
@@ -552,7 +561,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"blockNumber", blockNumber,
 		"checkpointHash", checkpointHash.String(),
 		"说明", "验证时最终计算出的checkpointHash")
-
 
 	// 🆕 添加生产和验证时参数对比日志
 	logger.Debug("🔍 ===== 生产vs验证CheckpointData参数对比 =====",
@@ -568,8 +576,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"说明", "对比生产和验证时的CheckpointData参数")
 
 	logger.Debug("🔍 验证时checkpoint哈希计算结果", "checkpointHash", checkpointHash.String())
-
-
 
 	// 🆕 关键修复：确保验证时使用的验证者集合与生产时完全一致
 	// 生产时使用 r.delegates 设置位图索引，验证时也应该使用相同的验证者集合
@@ -1918,8 +1924,6 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 		// 从ExtraData获取验证者地址，然后从创世文件获取BLS公钥
 		validatorAddresses := i.Validators.Added
 
-
-
 		// 🆕 从创世文件获取BLS公钥，构建完整的验证者集合
 		productionValidators := make(validator.AccountSet, 0, len(validatorAddresses))
 		// 从创世文件获取BLS公钥
@@ -1955,7 +1959,6 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 	if err != nil {
 		return nil, fmt.Errorf("failed to get parent validators: %w", err)
 	}
-
 
 	// 如果没有验证者集合变化，直接返回父区块的验证者集合
 	if i.Validators == nil || i.Validators.IsEmpty() {
@@ -2041,7 +2044,6 @@ func (i *Extra) getGenesisValidators(consensusBackend dposBackend, logger hclog.
 func (i *Extra) getParentValidators(parent *types.Header, parents []*types.Header,
 	consensusBackend dposBackend, logger hclog.Logger) (validator.AccountSet, error) {
 
-
 	// 首先尝试从父区块的 ExtraData 中获取
 	parentExtra, err := GetIbftExtra(parent.ExtraData)
 	if err == nil && parentExtra != nil {
@@ -2070,7 +2072,6 @@ func (i *Extra) getParentValidators(parent *types.Header, parents []*types.Heade
 	if err == nil && len(parentValidators) > 0 {
 		return parentValidators, nil
 	}
-
 
 	// 最后备用方案：递归获取更早的父区块
 	if parent.Number > 1 {
@@ -2153,10 +2154,44 @@ func (i *Extra) applyValidatorSetDelta(parentValidators validator.AccountSet, de
 		}
 	}
 
+	// 🆕 4. 处理故障标志
+	if len(i.FaultFlags) > 0 {
+		logger.Info("🔍 开始处理故障标志", "faultCount", len(i.FaultFlags))
+
+		for _, faultFlag := range i.FaultFlags {
+			logger.Info("📝 处理故障标志",
+				"address", faultFlag.NodeAddress.String(),
+				"isFaulty", faultFlag.IsFaulty,
+				"missedBlocks", faultFlag.MissedBlocks,
+				"reason", faultFlag.Reason)
+
+			// 更新验证者故障状态
+			i.updateValidatorFaultStatus(currentValidators, faultFlag, logger)
+		}
+	}
+
 	logger.Info("✅ 验证者集合变化应用完成",
 		"finalValidatorsCount", len(currentValidators))
 
 	return currentValidators
+}
+
+// updateValidatorFaultStatus 更新验证者故障状态
+func (i *Extra) updateValidatorFaultStatus(validators validator.AccountSet, faultFlag FaultFlagInfo, logger hclog.Logger) {
+	for j, validator := range validators {
+		if validator.Address == faultFlag.NodeAddress {
+			oldStatus := validator.IsActive
+			validator.IsActive = !faultFlag.IsFaulty
+
+			logger.Info("🔄 更新验证者故障状态",
+				"address", faultFlag.NodeAddress.String(),
+				"oldStatus", oldStatus,
+				"newStatus", validator.IsActive,
+				"isFaulty", faultFlag.IsFaulty,
+				"missedBlocks", faultFlag.MissedBlocks)
+			break
+		}
+	}
 }
 
 // getBLSKeyFromGenesis 从validator-bls.key文件获取BLS公钥

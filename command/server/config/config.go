@@ -44,6 +44,12 @@ type Config struct {
 	// 🆕 新增：DPoS验证者数量配置
 	DPoSValidatorsCount uint64 `json:"dpos_validators_count" yaml:"dpos_validators_count"`
 
+	// 🆕 新增：DPoS备用验证者数量配置
+	BackupValidatorsCount uint64 `json:"backup_validators_count" yaml:"backup_validators_count"`
+
+	// 🆕 新增：DPoS最大漏块数配置
+	MaxMissedBlocks uint64 `json:"max_missed_blocks" yaml:"max_missed_blocks"`
+
 	// 🆕 新增：DPoS最小质押门槛配置
 	DPoSDelegateThreshold string `json:"dpos_delegate_threshold" yaml:"dpos_delegate_threshold"`
 

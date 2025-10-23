@@ -59,6 +59,7 @@ func (p *serverParams) initRawParams() error {
 	p.initConsensusSwitchHeight()
 	p.initDPoSValidatorsCount()
 	p.initDPoSDelegateThreshold()
+	p.initDPoSConfig()
 
 	p.relayer = p.rawConfig.Relayer
 
@@ -108,6 +109,27 @@ func (p *serverParams) initDPoSDelegateThreshold() {
 	} else {
 		// 如果配置为空，使用默认值
 		p.dposDelegateThreshold, _ = new(big.Int).SetString("1000000000000000000000", 10) // 1000 VCITY
+	}
+}
+
+// 🆕 新增：初始化DPoS配置
+func (p *serverParams) initDPoSConfig() {
+	// 初始化DPoS验证者数量
+	p.config.DPoSValidatorsCount = p.rawConfig.DPoSValidatorsCount
+	if p.config.DPoSValidatorsCount == 0 {
+		p.config.DPoSValidatorsCount = 5 // 默认值
+	}
+
+	// 初始化备用验证者数量
+	p.config.BackupValidatorsCount = p.rawConfig.BackupValidatorsCount
+	if p.config.BackupValidatorsCount == 0 {
+		p.config.BackupValidatorsCount = 10 // 默认值
+	}
+
+	// 初始化最大漏块数
+	p.config.MaxMissedBlocks = p.rawConfig.MaxMissedBlocks
+	if p.config.MaxMissedBlocks == 0 {
+		p.config.MaxMissedBlocks = 3 // 默认值
 	}
 }
 

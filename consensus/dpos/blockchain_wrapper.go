@@ -1,15 +1,18 @@
 package dpos
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math/big"
+	"sort"
 	"time"
 
 	"github.com/hashicorp/go-hclog"
 
 	"github.com/Vcity-Team/vcitychain/blockchain"
 	"github.com/Vcity-Team/vcitychain/consensus"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/contracts"
 	"github.com/Vcity-Team/vcitychain/state"
 	"github.com/Vcity-Team/vcitychain/types"
@@ -349,7 +352,31 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 
 	p.logger.Debug("✅ ExtraData解析成功",
 		"blockNumber", block.Number(),
-		"hasRewardDistribution", extra.RewardDistribution != nil)
+		"hasRewardDistribution", extra.RewardDistribution != nil,
+		"hasFaultFlags", len(extra.FaultFlags) > 0)
+
+	// 🆕 处理故障标志
+	if len(extra.FaultFlags) > 0 {
+		p.logger.Info("🔍 开始处理故障标志", "count", len(extra.FaultFlags))
+
+		for _, faultFlag := range extra.FaultFlags {
+			p.logger.Info("📝 处理故障标志",
+				"address", faultFlag.NodeAddress.String(),
+				"isFaulty", faultFlag.IsFaulty,
+				"missedBlocks", faultFlag.MissedBlocks,
+				"reason", faultFlag.Reason)
+
+			// 更新验证者故障状态
+			if err := p.updateValidatorFaultStatus(faultFlag); err != nil {
+				p.logger.Error("❌ 更新验证者故障状态失败", "error", err)
+			}
+		}
+	}
+
+	// 🆕 动态计算下一个Epoch的出块者序列
+	if err := p.calculateNextEpochValidators(block.Number(), extra); err != nil {
+		p.logger.Error("❌ 计算下一个Epoch验证者失败", "error", err)
+	}
 
 	if extra.RewardDistribution == nil {
 		// 没有奖励分发信息，跳过
@@ -418,6 +445,155 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 			"validator", addrStr,
 			"amount", amount.String())
 	}
+
+	return nil
+}
+
+// 🆕 新增：更新验证者故障状态函数
+func (p *blockchainWrapper) updateValidatorFaultStatus(faultFlag FaultFlagInfo) error {
+	p.logger.Info("🔄 更新验证者故障状态",
+		"address", faultFlag.NodeAddress.String(),
+		"isFaulty", faultFlag.IsFaulty,
+		"missedBlocks", faultFlag.MissedBlocks)
+
+	// 检查stake store是否可用
+	if p.state == nil || p.state.StakeStore == nil {
+		return fmt.Errorf("stake store not available")
+	}
+
+	// 更新验证者故障状态到数据库
+	err := p.state.StakeStore.UpdateValidatorFaultStatus(
+		faultFlag.NodeAddress,
+		faultFlag.IsFaulty,
+		faultFlag.MissedBlocks,
+		faultFlag.LastUpdateTime,
+		faultFlag.Reason,
+	)
+	if err != nil {
+		p.logger.Error("❌ 更新验证者故障状态失败", "error", err)
+		return err
+	}
+
+	p.logger.Info("✅ 验证者故障状态更新成功")
+	return nil
+}
+
+// 🆕 新增：获取父区块验证者集合函数
+func (p *blockchainWrapper) getParentValidators(blockNumber uint64) (validator.AccountSet, error) {
+	if blockNumber == 0 {
+		return nil, fmt.Errorf("genesis block has no parent")
+	}
+
+	// 获取父区块
+	parentBlock, exists := p.config.blockchain.GetHeaderByNumber(blockNumber - 1)
+	if !exists {
+		return nil, fmt.Errorf("parent block not found: %d", blockNumber-1)
+	}
+
+	// 解析父区块的Extra字段
+	var extra Extra
+	if err := extra.UnmarshalRLP(parentBlock.ExtraData); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal parent block extra: %v", err)
+	}
+
+	// 获取父区块的验证者集合
+	if extra.Validators == nil {
+		return nil, fmt.Errorf("parent block has no validators")
+	}
+
+	// 应用验证者集合变化
+	parentValidators := validator.AccountSet{}
+	for _, v := range extra.Validators.Added {
+		parentValidators = append(parentValidators, v)
+	}
+
+	return parentValidators, nil
+}
+
+// 🆕 新增：更新数据库中的验证者集合函数
+func (p *blockchainWrapper) updateValidatorsInDatabase(validators validator.AccountSet) error {
+	p.logger.Info("💾 更新数据库中的验证者集合", "count", len(validators))
+
+	// 检查stake store是否可用
+	if p.state == nil || p.state.StakeStore == nil {
+		return fmt.Errorf("stake store not available")
+	}
+
+	// 保存验证者集合到数据库
+	err := p.state.StakeStore.SaveEpochValidators(validators)
+	if err != nil {
+		p.logger.Error("❌ 保存验证者集合失败", "error", err)
+		return err
+	}
+
+	p.logger.Info("✅ 验证者集合更新成功")
+	return nil
+}
+
+// 🆕 新增：计算下一个Epoch的验证者集合
+func (p *blockchainWrapper) calculateNextEpochValidators(blockNumber uint64, extra *Extra) error {
+	p.logger.Info("🔄 计算下一个Epoch的验证者集合", "blockNumber", blockNumber)
+
+	// 检查stake store是否可用
+	if p.state == nil || p.state.StakeStore == nil {
+		return fmt.Errorf("stake store not available")
+	}
+
+	// 从数据库获取所有验证者
+	allValidators, err := p.state.StakeStore.GetValidatorsWithFilter(false)
+	if err != nil {
+		p.logger.Error("❌ 获取验证者失败", "error", err)
+		return err
+	}
+
+	// 过滤掉故障验证者
+	activeValidators := make(validator.AccountSet, 0, len(allValidators))
+	for _, validator := range allValidators {
+		// 检查是否在故障标志中
+		isFaulty := false
+		for _, faultFlag := range extra.FaultFlags {
+			if faultFlag.NodeAddress == validator.Address && faultFlag.IsFaulty {
+				isFaulty = true
+				break
+			}
+		}
+
+		if !isFaulty {
+			activeValidators = append(activeValidators, validator)
+		} else {
+			p.logger.Info("🚫 跳过故障验证者", "address", validator.Address.String())
+		}
+	}
+
+	// 按权重排序
+	sort.Slice(activeValidators, func(i, j int) bool {
+		votingPowerCmp := activeValidators[i].VotingPower.Cmp(activeValidators[j].VotingPower)
+		if votingPowerCmp != 0 {
+			return votingPowerCmp > 0
+		}
+		return bytes.Compare(activeValidators[i].Address[:], activeValidators[j].Address[:]) < 0
+	})
+
+	// 截取前N个（从配置读取）
+	maxValidators := 5 // 默认值
+	if p.config != nil && p.config.DPoSValidatorsCount > 0 {
+		maxValidators = int(p.config.DPoSValidatorsCount)
+	}
+	if len(activeValidators) > maxValidators {
+		activeValidators = activeValidators[:maxValidators]
+	}
+
+	// 保存到数据库
+	err = p.state.StakeStore.SaveEpochValidators(activeValidators)
+	if err != nil {
+		p.logger.Error("❌ 保存下一个Epoch验证者失败", "error", err)
+		return err
+	}
+
+	p.logger.Info("✅ 下一个Epoch验证者集合计算完成",
+		"totalValidators", len(allValidators),
+		"activeValidators", len(activeValidators),
+		"maxValidators", maxValidators)
 
 	return nil
 }

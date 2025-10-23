@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"time"
 
 	"github.com/Vcity-Team/vcitychain/bls"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
@@ -896,4 +897,79 @@ func (s *ValidatorStore) getVotingPowerAtBlock(blockNumber uint64, delegate type
 
 	// 返回投票权重
 	return new(big.Int).Set(delegateInfo.VotingPower), nil
+}
+
+// 🆕 新增：更新验证者故障状态
+func (s *StakeStore) UpdateValidatorFaultStatus(address types.Address, isFaulty bool, missedBlocks uint64, lastUpdateTime uint64, reason string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		// 获取或创建故障状态bucket
+		bucket, err := tx.CreateBucketIfNotExists([]byte("validatorFaultStatus"))
+		if err != nil {
+			return fmt.Errorf("failed to create fault status bucket: %w", err)
+		}
+
+		// 创建故障状态信息
+		faultInfo := map[string]interface{}{
+			"address":        address.String(),
+			"isFaulty":       isFaulty,
+			"missedBlocks":   missedBlocks,
+			"lastUpdateTime": lastUpdateTime,
+			"reason":         reason,
+		}
+
+		// 序列化并存储
+		data, err := json.Marshal(faultInfo)
+		if err != nil {
+			return fmt.Errorf("failed to marshal fault info: %w", err)
+		}
+
+		return bucket.Put(address.Bytes(), data)
+	})
+}
+
+// 🆕 新增：保存Epoch验证者集合
+func (s *StakeStore) SaveEpochValidators(validators validator.AccountSet) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		// 获取或创建epoch验证者bucket
+		bucket, err := tx.CreateBucketIfNotExists([]byte("epochValidators"))
+		if err != nil {
+			return fmt.Errorf("failed to create epoch validators bucket: %w", err)
+		}
+
+		// 序列化验证者集合
+		data, err := json.Marshal(validators)
+		if err != nil {
+			return fmt.Errorf("failed to marshal validators: %w", err)
+		}
+
+		// 使用当前时间戳作为key
+		key := make([]byte, 8)
+		binary.BigEndian.PutUint64(key, uint64(time.Now().Unix()))
+
+		return bucket.Put(key, data)
+	})
+}
+
+// 🆕 新增：获取Epoch验证者集合
+func (s *StakeStore) GetEpochValidators() (validator.AccountSet, error) {
+	var validators validator.AccountSet
+
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("epochValidators"))
+		if bucket == nil {
+			return fmt.Errorf("epoch validators bucket not found")
+		}
+
+		// 获取最新的验证者集合（按时间戳倒序）
+		cursor := bucket.Cursor()
+		_, data := cursor.Last()
+		if data == nil {
+			return fmt.Errorf("no epoch validators found")
+		}
+
+		// 反序列化
+		return json.Unmarshal(data, &validators)
+	})
+
+	return validators, err
 }
