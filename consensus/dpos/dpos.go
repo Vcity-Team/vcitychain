@@ -1038,19 +1038,36 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 				keyAddr := types.Address(r.config.Key.Address())
 
 				// 🆕 添加详细的委托者检查计算过程日志
+				// 🆕 从数据库读取验证者并应用配置限制，确保与getCurrentDelegate使用相同的数据源
+				var dbValidators validator.AccountSet
+				var actualDelegateCount int
+				if dposBackend, ok := r.backend.(*DPoS); ok {
+					if validators, err := dposBackend.state.StakeStore.GetValidatorsWithFilter(false); err == nil {
+						// 应用配置限制
+						if r.config != nil && r.config.DelegateCount > 0 {
+							maxValidators := int(r.config.DelegateCount)
+							if len(validators) > maxValidators {
+								validators = validators[:maxValidators]
+							}
+						}
+						dbValidators = validators
+						actualDelegateCount = len(validators)
+					}
+				}
+
 				r.logOnceWithInterval("delegate_check_calculation_process", 10*time.Second, "info", "🔍 委托者检查计算过程",
 					"step1_getCurrentDelegate_result", currentDelegate.String(),
 					"step2_keyAddr", keyAddr.String(),
 					"step3_currentDelegateIndex", r.currentDelegateIndex,
-					"step4_delegatesCount", len(r.delegates),
+					"step4_delegatesCount", actualDelegateCount,
 					"step5_isCurrentDelegate", currentDelegate == keyAddr,
 					"step5_debug_address_comparison", fmt.Sprintf("currentDelegate=%s keyAddr=%s equal=%v", currentDelegate.String(), keyAddr.String(), currentDelegate == keyAddr),
 					"step6_delegates_array", func() string {
-						if len(r.delegates) == 0 {
+						if len(dbValidators) == 0 {
 							return "delegates数组为空"
 						}
 						result := "delegates数组内容: "
-						for i, delegate := range r.delegates {
+						for i, delegate := range dbValidators {
 							if i < 5 { // 只显示前5个，避免日志过长
 								result += fmt.Sprintf("[%d]=%s(vp=%s,active=%v) ", i, delegate.Address.String()[:10], delegate.VotingPower.String(), delegate.IsActive)
 							}
@@ -2143,13 +2160,43 @@ func (r *dposRuntime) calculateExpectedDelegateIndex() uint64 {
 		return 0
 	}
 
-	// 修复：使用实际验证者数量，而不是配置的 DelegateCount
-	actualDelegateCount := len(r.delegates)
-	if actualDelegateCount == 0 {
+	// 🆕 从数据库读取验证者并应用配置限制，确保与getCurrentDelegate使用相同的数据源
+	dposBackend, ok := r.backend.(*DPoS)
+	if !ok {
+		r.logger.Error("❌ 无法访问数据库，backend类型错误")
+		return 0
+	}
+	validators, err := dposBackend.state.StakeStore.GetValidatorsWithFilter(false)
+	if err != nil {
+		r.logger.Error("❌ 从数据库读取验证者失败", "error", err)
 		return 0
 	}
 
-	return currentBlock.Number % uint64(actualDelegateCount)
+	// 🆕 应用配置限制
+	if r.config != nil && r.config.DelegateCount > 0 {
+		maxValidators := int(r.config.DelegateCount)
+		if len(validators) > maxValidators {
+			validators = validators[:maxValidators]
+		}
+	}
+
+	// 🆕 基于截取后的数量计算
+	actualDelegateCount := len(validators)
+	if actualDelegateCount == 0 {
+		r.logger.Warn("🔍 calculateExpectedDelegateIndex: 数据库中没有验证者")
+		return 0
+	}
+
+	expectedIndex := currentBlock.Number % uint64(actualDelegateCount)
+
+	r.logger.Info("🔍 calculateExpectedDelegateIndex 计算完成",
+		"blockNumber", currentBlock.Number,
+		"actualDelegateCount", actualDelegateCount,
+		"expectedIndex", expectedIndex,
+		"formula", fmt.Sprintf("%d %% %d = %d", currentBlock.Number, actualDelegateCount, expectedIndex),
+		"timestamp", time.Now().Format("15:04:05.000"))
+
+	return expectedIndex
 }
 
 // isEpochEndBlock 检查是否是epoch的最后一个区块
