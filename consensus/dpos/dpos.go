@@ -2606,11 +2606,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"isCurrentProducer", true,
 			"timestamp", time.Now().Format("2006-01-02 15:04:05"))
 
-		r.logger.Info("🚀🚀🚀 ========== 开始计算奖励信息 ========== 🚀🚀🚀",
-			"blockNumber", nextBlockNumber,
-			"delegate", keyAddr.String()[:16],
-			"action", "REWARD_DISTRIBUTION_START")
-
 		// 执行奖励分发，传递当前轮次
 		if err := r.executeRewardDistributionForEpochEnd(nextBlockNumber, r.currentRound); err != nil {
 			r.logger.Error("❌❌❌ ========== 计算奖励信息失败 ========== ❌❌❌",
@@ -5044,16 +5039,6 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 			"blockNumber", header.Number,
 			"stateRoot", header.StateRoot.String(),
 			"blockHash", header.Hash.String()[:16])
-
-		// 🆕 检查是否是epoch结束区块，模拟交易执行处理奖励分配
-		if d.isEpochEndBlock(header.Number) {
-
-			// 🆕 同步节点状态根应用完成显著日志标志
-			d.logger.Info("✅✅✅ ========== 同步节点状态根应用完成 ========== ✅✅✅",
-				"blockNumber", header.Number,
-				"appliedStateRoot", header.StateRoot.String(),
-				"note", "同步节点已模拟交易执行处理奖励分发并更新状态根")
-		}
 
 		// 直接使用header数据
 		if err := d.processBlockVotesFromHeader(header); err != nil {
