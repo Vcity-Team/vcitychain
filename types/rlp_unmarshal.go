@@ -404,11 +404,11 @@ func (t *Transaction) unmarshalRLPFrom(p *fastrlp.Parser, v *fastrlp.Value) erro
 
 	switch t.Type {
 	case LegacyTx:
-		num = 10 // 增加1个字段：From
+		num = 9
 	case StateTx:
-		num = 11 // 增加1个字段：From
+		num = 10
 	case DynamicFeeTx:
-		num = 13 // 增加1个字段：From
+		num = 12
 	default:
 		return fmt.Errorf("transaction type %d not found", t.Type)
 	}
@@ -501,15 +501,7 @@ func (t *Transaction) unmarshalRLPFrom(p *fastrlp.Parser, v *fastrlp.Value) erro
 		return err
 	}
 
-	// 反序列化From字段 - 所有交易类型都包含From字段
-	// 这确保网络传播后From字段能正确恢复
-	if vv, err := getElem().Bytes(); err == nil && len(vv) == AddressLength {
-		// 有效的地址字节数组
-		t.From = BytesToAddress(vv)
-	} else {
-		// 如果反序列化失败，保持ZeroAddress
-		t.From = ZeroAddress
-	}
+	// From字段通过签名恢复，不需要从RLP中反序列化
 
 	return nil
 }

@@ -243,9 +243,7 @@ func (t *Transaction) MarshalRLPWith(arena *fastrlp.Arena) *fastrlp.Value {
 	vv.Set(arena.NewBigInt(t.R))
 	vv.Set(arena.NewBigInt(t.S))
 
-	// 序列化From字段 - 所有交易类型都包含From字段
-	// 这确保网络传播后From字段不会丢失
-	vv.Set(arena.NewCopyBytes(t.From.Bytes()))
+	// From字段不序列化到RLP中，通过签名恢复
 
 	return vv
 }
