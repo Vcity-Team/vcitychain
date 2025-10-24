@@ -1775,6 +1775,30 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 	// 统一使用相同的计算公式
 	// 修复：使用slot计算，确保与BlockScheduler一致
 	if r.config != nil && r.config.DelegateCount > 0 {
+		// 🆕 从数据库读取验证者并应用配置限制
+		// 通过类型断言访问DPoS的state字段
+		dposBackend, ok := r.backend.(*DPoS)
+		if !ok {
+			r.logger.Error("❌ 无法访问数据库，backend类型错误")
+			return
+		}
+		validators, err := dposBackend.state.StakeStore.GetValidatorsWithFilter(false)
+		if err != nil {
+			r.logger.Error("❌ 从数据库读取验证者失败", "error", err)
+			return
+		}
+
+		// 🆕 应用配置限制
+		if r.config != nil && r.config.DelegateCount > 0 {
+			maxValidators := int(r.config.DelegateCount)
+			if len(validators) > maxValidators {
+				validators = validators[:maxValidators]
+			}
+		}
+
+		// 🆕 基于截取后的数量计算
+		actualDelegateCount := len(validators)
+
 		// 使用slot计算（与BlockScheduler保持一致）
 		if r.config.blockScheduler != nil {
 			// 获取当前时间
@@ -1784,8 +1808,7 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 			blockWindow := r.config.blockScheduler.GetBlockWindow()
 			timeSinceGenesis := now.Sub(genesisTime)
 			currentSlot := int(timeSinceGenesis / blockWindow)
-			// 使用实际验证者数量计算索引
-			actualDelegateCount := len(r.delegates)
+			// 使用数据库验证者数量计算索引
 			if actualDelegateCount == 0 {
 				r.currentDelegateIndex = 0
 			} else {
@@ -1802,8 +1825,7 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 				"newDelegateIndex", r.currentDelegateIndex,
 				"timestamp", time.Now().Format("15:04:05.000"))
 		} else {
-			// 回退到区块号计算 - 使用实际验证者数量
-			actualDelegateCount := len(r.delegates)
+			// 回退到区块号计算 - 使用数据库验证者数量
 			if actualDelegateCount == 0 {
 				r.currentDelegateIndex = 0
 			} else {
@@ -2268,16 +2290,44 @@ func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64, c
 
 // getCurrentDelegate 获取当前受托人
 func (r *dposRuntime) getCurrentDelegate() types.Address {
+	// 🆕 直接从数据库读取验证者并应用配置限制
+	// 通过类型断言访问DPoS的state字段
+	dposBackend, ok := r.backend.(*DPoS)
+	if !ok {
+		r.logger.Error("❌ 无法访问数据库，backend类型错误")
+		return types.ZeroAddress
+	}
+	validators, err := dposBackend.state.StakeStore.GetValidatorsWithFilter(false)
+	if err != nil {
+		r.logger.Error("❌ 从数据库读取验证者失败", "error", err)
+		return types.ZeroAddress
+	}
+
+	// 🆕 应用配置限制
+	if r.config != nil && r.config.DelegateCount > 0 {
+		maxValidators := int(r.config.DelegateCount)
+		if len(validators) > maxValidators {
+			validators = validators[:maxValidators]
+		}
+	}
+
+	// 🆕 基于截取后的数量计算
+	actualDelegateCount := len(validators)
+	if actualDelegateCount == 0 {
+		r.logger.Warn("🔍 getCurrentDelegate: 数据库中没有验证者")
+		return types.ZeroAddress
+	}
+
 	// 🆕 添加详细的调试日志
 	r.logOnceWithInterval("get_current_delegate_start_check", 10*time.Second, "info", "🔍 getCurrentDelegate 开始检查",
-		"delegatesCount", len(r.delegates),
+		"delegatesCount", actualDelegateCount,
 		"currentDelegateIndex", r.currentDelegateIndex,
 		"delegates_array_detail", func() string {
-			if len(r.delegates) == 0 {
+			if len(validators) == 0 {
 				return "delegates数组为空"
 			}
 			result := "delegates数组: "
-			for i, delegate := range r.delegates {
+			for i, delegate := range validators {
 				if i < 5 { // 只显示前5个
 					result += fmt.Sprintf("[%d]=%s(vp=%s,active=%v) ", i, delegate.Address.String()[:10], delegate.VotingPower.String(), delegate.IsActive)
 				}
@@ -2286,24 +2336,16 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 		}(),
 		"timestamp", time.Now().Format("15:04:05.000"))
 
-	if len(r.delegates) == 0 {
-		r.logger.Warn("🔍 getCurrentDelegate: 验证者集合为空",
-			"delegatesCount", len(r.delegates),
-			"currentDelegateIndex", r.currentDelegateIndex,
-			"timestamp", time.Now().Format("15:04:05.000"))
-		return types.ZeroAddress
-	}
-
-	// 🆕 修复：直接使用r.currentDelegateIndex，确保与排序后的delegates数组一致
-	if r.currentDelegateIndex >= uint64(len(r.delegates)) {
+	// 🆕 使用截取后的验证者数组
+	if r.currentDelegateIndex >= uint64(actualDelegateCount) {
 		r.logger.Warn("🔍 getCurrentDelegate: currentDelegateIndex超出范围",
 			"currentDelegateIndex", r.currentDelegateIndex,
-			"delegatesCount", len(r.delegates),
+			"actualDelegateCount", actualDelegateCount,
 			"timestamp", time.Now().Format("15:04:05.000"))
 		return types.ZeroAddress
 	}
 
-	delegate := r.delegates[r.currentDelegateIndex]
+	delegate := validators[r.currentDelegateIndex]
 
 	// 🆕 添加委托者详细信息日志
 	r.logOnceWithInterval("current_delegate_details", 10*time.Second, "info", "🔍 当前委托者详细信息",
