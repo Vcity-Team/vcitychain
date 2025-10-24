@@ -298,12 +298,23 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(validatorIndex int, currentBlock
 			// 防刷屏：每30秒打印一次错误日志
 			now := time.Now()
 			if now.Sub(bs.lastLogTime) >= 30*time.Second {
-				bs.logger.Error("无法获取创世时间", "error", err)
+				bs.logger.Error("❌ 无法获取创世时间",
+					"error", err,
+					"validatorIndex", validatorIndex,
+					"currentBlockNumber", currentBlockNumber,
+					"timestamp", now.Format("15:04:05.000"))
 				bs.lastLogTime = now
 			}
 			return false
 		}
 		bs.genesisTime = genesisTime
+
+		// 🆕 添加创世时间获取成功的日志
+		bs.logger.Info("✅ 成功获取创世时间",
+			"genesisTime", genesisTime.Format("2006-01-02 15:04:05.000"),
+			"validatorIndex", validatorIndex,
+			"currentBlockNumber", currentBlockNumber,
+			"timestamp", time.Now().Format("15:04:05.000"))
 	}
 
 	now := time.Now()
@@ -340,11 +351,14 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(validatorIndex int, currentBlock
 		// 🆕 防刷屏：每10秒打印一次日志
 		now := time.Now()
 		if now.Sub(bs.lastLogTime) >= 10*time.Second {
-			bs.logger.Debug("⏭️ 不是当前轮次的验证者",
+			bs.logger.Info("⏭️ 不是当前轮次的验证者",
 				"validatorIndex", validatorIndex,
 				"expectedValidatorIndex", expectedValidatorIndex,
 				"currentSlot", currentSlot,
-				"action", "跳过出块")
+				"currentBlockNumber", currentBlockNumber,
+				"validatorCount", bs.validatorCount,
+				"action", "跳过出块",
+				"timestamp", now.Format("15:04:05.000"))
 			bs.lastLogTime = now
 		}
 		return false

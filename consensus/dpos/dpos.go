@@ -1017,12 +1017,32 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 			return
 		default:
 			// 持续监测出块时机
-			if r.shouldProduceBlockNow() {
+			shouldProduce := r.shouldProduceBlockNow()
+
+			// 🆕 添加详细的调试日志
+			r.logOnceWithInterval("block_monitoring_debug", 5*time.Second, "debug",
+				"🔍 区块监测状态",
+				"shouldProduceBlockNow", shouldProduce,
+				"currentDelegateIndex", r.currentDelegateIndex,
+				"delegatesCount", len(r.delegates),
+				"timestamp", time.Now().Format("15:04:05.000"))
+
+			if shouldProduce {
 				// 🆕 添加地址验证，确保是当前委托者
 				currentDelegate := r.getCurrentDelegate()
 				keyAddr := types.Address(r.config.Key.Address())
 
+				// 🆕 添加详细的委托者检查日志
+				r.logOnceWithInterval("delegate_check_details", 10*time.Second, "info", "🔍 委托者检查详情",
+					"currentDelegate", currentDelegate.String(),
+					"keyAddr", keyAddr.String(),
+					"currentDelegateIndex", r.currentDelegateIndex,
+					"delegatesCount", len(r.delegates),
+					"isCurrentDelegate", currentDelegate == keyAddr,
+					"timestamp", time.Now().Format("15:04:05.000"))
+
 				if currentDelegate == keyAddr {
+					r.logger.Info("✅ 是当前委托者，开始出块")
 					if err := r.produceBlock(); err != nil {
 						r.logger.Error("出块失败", "error", err)
 					}
@@ -1033,6 +1053,14 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 						"keyAddr", keyAddr.String(),
 						"currentDelegateIndex", r.currentDelegateIndex)
 				}
+			} else {
+				// 🆕 添加为什么不应该出块的详细日志
+				r.logOnceWithInterval("should_not_produce_debug", 10*time.Second, "debug",
+					"⏭️ 不应该出块的原因分析",
+					"shouldProduceBlockNow", shouldProduce,
+					"currentDelegateIndex", r.currentDelegateIndex,
+					"delegatesCount", len(r.delegates),
+					"timestamp", time.Now().Format("15:04:05.000"))
 			}
 
 			// 短暂休眠，避免CPU占用过高
@@ -1044,16 +1072,48 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 func (r *dposRuntime) shouldProduceBlockNow() bool {
 	currentBlock := r.config.blockchain.CurrentHeader()
 	if currentBlock == nil {
+		// 🆕 添加调试日志
+		r.logOnceWithInterval("should_produce_block_now_no_header", 10*time.Second, "warn",
+			"❌ shouldProduceBlockNow: 无法获取当前区块头",
+			"timestamp", time.Now().Format("15:04:05.000"))
 		return false
 	}
 
+	// 🆕 添加详细的调试日志
+	r.logOnceWithInterval("should_produce_block_now_debug", 5*time.Second, "debug",
+		"🔍 shouldProduceBlockNow 开始检查",
+		"currentBlockNumber", currentBlock.Number,
+		"currentDelegateIndex", r.currentDelegateIndex,
+		"hasBlockScheduler", r.config.blockScheduler != nil,
+		"timestamp", time.Now().Format("15:04:05.000"))
+
 	// 使用TRON式调度器
 	if r.config.blockScheduler != nil {
-		return r.config.blockScheduler.ShouldProduceBlockNow(int(r.currentDelegateIndex), currentBlock.Number)
+		result := r.config.blockScheduler.ShouldProduceBlockNow(int(r.currentDelegateIndex), currentBlock.Number)
+
+		// 🆕 添加调度器结果日志
+		r.logOnceWithInterval("block_scheduler_result", 5*time.Second, "debug",
+			"🔍 区块调度器结果",
+			"shouldProduce", result,
+			"currentDelegateIndex", r.currentDelegateIndex,
+			"currentBlockNumber", currentBlock.Number,
+			"timestamp", time.Now().Format("15:04:05.000"))
+
+		return result
 	}
 
 	// 回退到原有逻辑
-	return r.shouldProduceBlock()
+	result := r.shouldProduceBlock()
+
+	// 🆕 添加回退逻辑结果日志
+	r.logOnceWithInterval("fallback_should_produce_result", 5*time.Second, "debug",
+		"🔍 回退逻辑结果",
+		"shouldProduce", result,
+		"currentDelegateIndex", r.currentDelegateIndex,
+		"currentBlockNumber", currentBlock.Number,
+		"timestamp", time.Now().Format("15:04:05.000"))
+
+	return result
 }
 
 // startVoteCollection 启动投票收集
@@ -2093,8 +2153,18 @@ func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64, c
 
 // getCurrentDelegate 获取当前受托人
 func (r *dposRuntime) getCurrentDelegate() types.Address {
+	// 🆕 添加详细的调试日志
+	r.logOnceWithInterval("get_current_delegate_debug", 5*time.Second, "debug",
+		"🔍 getCurrentDelegate 开始检查",
+		"delegatesCount", len(r.delegates),
+		"currentDelegateIndex", r.currentDelegateIndex,
+		"timestamp", time.Now().Format("15:04:05.000"))
+
 	if len(r.delegates) == 0 {
-		r.logger.Warn("🔍 getCurrentDelegate: 验证者集合为空")
+		r.logger.Warn("🔍 getCurrentDelegate: 验证者集合为空",
+			"delegatesCount", len(r.delegates),
+			"currentDelegateIndex", r.currentDelegateIndex,
+			"timestamp", time.Now().Format("15:04:05.000"))
 		return types.ZeroAddress
 	}
 
@@ -2102,11 +2172,22 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 	if r.currentDelegateIndex >= uint64(len(r.delegates)) {
 		r.logger.Warn("🔍 getCurrentDelegate: currentDelegateIndex超出范围",
 			"currentDelegateIndex", r.currentDelegateIndex,
-			"delegatesCount", len(r.delegates))
+			"delegatesCount", len(r.delegates),
+			"timestamp", time.Now().Format("15:04:05.000"))
 		return types.ZeroAddress
 	}
 
 	delegate := r.delegates[r.currentDelegateIndex]
+
+	// 🆕 添加委托者详细信息日志
+	r.logOnceWithInterval("delegate_info_debug", 5*time.Second, "debug",
+		"🔍 当前委托者详细信息",
+		"currentDelegateIndex", r.currentDelegateIndex,
+		"delegateAddress", delegate.Address.String(),
+		"isActive", delegate.IsActive,
+		"votingPower", delegate.VotingPower.String(),
+		"hasBlsKey", delegate.BlsKey != nil,
+		"timestamp", time.Now().Format("15:04:05.000"))
 
 	// 检查受托人是否活跃且有足够的stake
 	if !delegate.IsActive || delegate.VotingPower.Cmp(big.NewInt(0)) <= 0 {
@@ -2116,9 +2197,17 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 			"currentDelegateIndex", r.currentDelegateIndex,
 			"address", delegate.Address.String(),
 			"isActive", delegate.IsActive,
-			"votingPower", delegate.VotingPower.String())
+			"votingPower", delegate.VotingPower.String(),
+			"timestamp", time.Now().Format("15:04:05.000"))
 		return types.ZeroAddress
 	}
+
+	// 🆕 添加成功返回的日志
+	r.logOnceWithInterval("get_current_delegate_success", 5*time.Second, "debug",
+		"✅ getCurrentDelegate 成功返回",
+		"currentDelegateIndex", r.currentDelegateIndex,
+		"delegateAddress", delegate.Address.String(),
+		"timestamp", time.Now().Format("15:04:05.000"))
 
 	return delegate.Address
 }

@@ -608,9 +608,20 @@ func (p *blockchainWrapper) calculateNextEpochValidators(blockNumber uint64, ext
 	}
 
 	// 截取前N个（从配置读取）
-	maxValidators := 5 // 默认值
+	var maxValidators int
 	if p.config != nil && p.config.DPoSValidatorsCount > 0 {
 		maxValidators = int(p.config.DPoSValidatorsCount)
+		p.logger.Info("✅ 使用配置文件中的DPoSValidatorsCount", "DPoSValidatorsCount", p.config.DPoSValidatorsCount, "maxValidators", maxValidators)
+	} else {
+		p.logger.Error("❌ 配置读取失败，无法获取验证者数量限制",
+			"configIsNil", p.config == nil,
+			"DPoSValidatorsCount", func() uint64 {
+				if p.config != nil {
+					return p.config.DPoSValidatorsCount
+				}
+				return 0
+			}())
+		return nil, fmt.Errorf("failed to get validator count limit from config: DPoSValidatorsCount is 0 or config is nil")
 	}
 	p.logger.Info("🎯 验证者截取逻辑", "maxValidators", maxValidators, "activeValidators", len(activeValidators))
 
