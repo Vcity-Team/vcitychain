@@ -404,11 +404,11 @@ func (t *Transaction) unmarshalRLPFrom(p *fastrlp.Parser, v *fastrlp.Value) erro
 
 	switch t.Type {
 	case LegacyTx:
-		num = 9
+		num = 10 // 增加1个字段：From
 	case StateTx:
-		num = 10
+		num = 11 // 增加1个字段：From
 	case DynamicFeeTx:
-		num = 12
+		num = 13 // 增加1个字段：From
 	default:
 		return fmt.Errorf("transaction type %d not found", t.Type)
 	}
@@ -501,15 +501,14 @@ func (t *Transaction) unmarshalRLPFrom(p *fastrlp.Parser, v *fastrlp.Value) erro
 		return err
 	}
 
-	if t.Type == StateTx {
+	// 反序列化From字段 - 所有交易类型都包含From字段
+	// 这确保网络传播后From字段能正确恢复
+	if vv, err := getElem().Bytes(); err == nil && len(vv) == AddressLength {
+		// 有效的地址字节数组
+		t.From = BytesToAddress(vv)
+	} else {
+		// 如果反序列化失败，保持ZeroAddress
 		t.From = ZeroAddress
-
-		// We need to set From field for state transaction,
-		// because we are using unique, predefined address, for sending such transactions
-		if vv, err := getElem().Bytes(); err == nil && len(vv) == AddressLength {
-			// address
-			t.From = BytesToAddress(vv)
-		}
 	}
 
 	return nil

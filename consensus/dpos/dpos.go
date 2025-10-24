@@ -495,6 +495,10 @@ type ResourceMonitor struct {
 
 	// DPoS运行时引用，用于缓存清理
 	dposRuntime *dposRuntime
+
+	// 🆕 日志间隔管理
+	lastLogTime map[string]time.Time
+	logMutex    sync.RWMutex
 }
 
 // NewResourceMonitor 创建资源监控器
@@ -502,6 +506,7 @@ func NewResourceMonitor(logger hclog.Logger, dposRuntime *dposRuntime) *Resource
 	return &ResourceMonitor{
 		logger:           logger.Named("resource-monitor"),
 		goroutineManager: NewGoroutineManager(logger, 2000, 200), // 最大2000个协程，200个重试工作器
+		lastLogTime:      make(map[string]time.Time),
 		cleanupInterval:  30 * time.Second,
 		dposRuntime:      dposRuntime,
 	}
@@ -552,7 +557,7 @@ func (rm *ResourceMonitor) cleanupResources() {
 		// 如果协程管理器可用，获取其统计信息
 		if rm.goroutineManager != nil {
 			stats := rm.goroutineManager.GetStats()
-			rm.logger.Warn("协程管理器统计", "stats", stats)
+			rm.logOnceWithInterval("goroutine_manager_stats", 10*time.Second, "warn", "协程管理器统计", "stats", stats)
 		}
 	}
 
@@ -1032,6 +1037,101 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 				currentDelegate := r.getCurrentDelegate()
 				keyAddr := types.Address(r.config.Key.Address())
 
+				// 🆕 添加详细的委托者检查计算过程日志
+				r.logOnceWithInterval("delegate_check_calculation_process", 10*time.Second, "info", "🔍 委托者检查计算过程",
+					"step1_getCurrentDelegate_result", currentDelegate.String(),
+					"step2_keyAddr", keyAddr.String(),
+					"step3_currentDelegateIndex", r.currentDelegateIndex,
+					"step4_delegatesCount", len(r.delegates),
+					"step5_isCurrentDelegate", currentDelegate == keyAddr,
+					"step5_debug_address_comparison", fmt.Sprintf("currentDelegate=%s keyAddr=%s equal=%v", currentDelegate.String(), keyAddr.String(), currentDelegate == keyAddr),
+					"step6_delegates_array", func() string {
+						if len(r.delegates) == 0 {
+							return "delegates数组为空"
+						}
+						result := "delegates数组内容: "
+						for i, delegate := range r.delegates {
+							if i < 5 { // 只显示前5个，避免日志过长
+								result += fmt.Sprintf("[%d]=%s(vp=%s,active=%v) ", i, delegate.Address.String()[:10], delegate.VotingPower.String(), delegate.IsActive)
+							}
+						}
+						return result
+					}(),
+					"step7_currentBlockNumber", func() uint64 {
+						if r.config != nil && r.config.blockchain != nil {
+							if header := r.config.blockchain.CurrentHeader(); header != nil {
+								return header.Number
+							}
+						}
+						return 0
+					}(),
+					"step8_currentRound", r.currentRound,
+					"step9_configDelegateCount", func() uint64 {
+						if r.config != nil {
+							return r.config.DelegateCount
+						}
+						return 0
+					}(),
+					"step10_configDPoSValidatorsCount", func() uint64 {
+						if r.config != nil {
+							return r.config.ValidatorsCount
+						}
+						return 0
+					}(),
+					"step11_currentTime", time.Now().Format("2006-01-02 15:04:05.000"),
+					"step12_genesisTime", func() string {
+						if r.config != nil && r.config.blockScheduler != nil {
+							// 尝试获取创世时间
+							if !r.config.blockScheduler.genesisTime.IsZero() {
+								return r.config.blockScheduler.genesisTime.Format("2006-01-02 15:04:05.000")
+							}
+						}
+						return "未获取到创世时间"
+					}(),
+					"step13_timeSinceGenesis", func() string {
+						if r.config != nil && r.config.blockScheduler != nil {
+							if !r.config.blockScheduler.genesisTime.IsZero() {
+								timeSinceGenesis := time.Now().Sub(r.config.blockScheduler.genesisTime)
+								return timeSinceGenesis.String()
+							}
+						}
+						return "无法计算"
+					}(),
+					"step14_currentSlot", func() int {
+						if r.config != nil && r.config.blockScheduler != nil {
+							if !r.config.blockScheduler.genesisTime.IsZero() {
+								timeSinceGenesis := time.Now().Sub(r.config.blockScheduler.genesisTime)
+								currentSlot := int(timeSinceGenesis / r.config.blockScheduler.blockWindow)
+								return currentSlot
+							}
+						}
+						return -1
+					}(),
+					"step15_expectedDelegateIndex", func() int {
+						if r.config != nil && r.config.blockScheduler != nil {
+							if !r.config.blockScheduler.genesisTime.IsZero() {
+								timeSinceGenesis := time.Now().Sub(r.config.blockScheduler.genesisTime)
+								currentSlot := int(timeSinceGenesis / r.config.blockScheduler.blockWindow)
+								expectedIndex := currentSlot % r.config.blockScheduler.validatorCount
+								return expectedIndex
+							}
+						}
+						return -1
+					}(),
+					"step16_blockWindow", func() string {
+						if r.config != nil && r.config.blockScheduler != nil {
+							return r.config.blockScheduler.blockWindow.String()
+						}
+						return "未获取到"
+					}(),
+					"step17_validatorCount", func() int {
+						if r.config != nil && r.config.blockScheduler != nil {
+							return r.config.blockScheduler.validatorCount
+						}
+						return -1
+					}(),
+					"timestamp", time.Now().Format("15:04:05.000"))
+
 				// 🆕 添加详细的委托者检查日志
 				r.logOnceWithInterval("delegate_check_details", 10*time.Second, "info", "🔍 委托者检查详情",
 					"currentDelegate", currentDelegate.String(),
@@ -1059,7 +1159,13 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 					"⏭️ 不应该出块的原因分析",
 					"shouldProduceBlockNow", shouldProduce,
 					"currentDelegateIndex", r.currentDelegateIndex,
-					"delegatesCount", len(r.delegates),
+					"actualDelegatesCount", len(r.delegates),
+					"configDelegateCount", func() uint64 {
+						if r.config != nil {
+							return r.config.DelegateCount
+						}
+						return 0
+					}(),
 					"timestamp", time.Now().Format("15:04:05.000"))
 			}
 
@@ -1643,17 +1749,19 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 	if len(blockNumber) > 0 {
 		// 优先使用传入的区块号
 		currentBlockNumber = blockNumber[0]
-		r.logger.Debug("🔄 使用传入区块号更新委托者索引",
+		r.logger.Info("🔄 使用传入区块号更新委托者索引",
 			"blockNumber", currentBlockNumber,
-			"currentRound", r.currentRound)
+			"currentRound", r.currentRound,
+			"timestamp", time.Now().Format("15:04:05.000"))
 	} else {
 		// 如果没有传入区块号，从CurrentHeader获取
 		if r.config != nil && r.config.blockchain != nil {
 			if currentHeader := r.config.blockchain.CurrentHeader(); currentHeader != nil {
 				currentBlockNumber = currentHeader.Number
-				r.logger.Debug("🔄 使用CurrentHeader区块号更新委托者索引",
+				r.logger.Info("🔄 使用CurrentHeader区块号更新委托者索引",
 					"blockNumber", currentBlockNumber,
-					"currentRound", r.currentRound)
+					"currentRound", r.currentRound,
+					"timestamp", time.Now().Format("15:04:05.000"))
 			} else {
 				r.logger.Warn("⚠️ 无法获取当前区块头，使用默认值0")
 				currentBlockNumber = 0
@@ -1684,14 +1792,15 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 				r.currentDelegateIndex = uint64(currentSlot % actualDelegateCount)
 			}
 
-			r.logger.Debug("🔄 统一计算委托者索引（使用slot计算）",
+			r.logger.Info("🔄 统一计算委托者索引（使用slot计算）",
 				"blockNumber", currentBlockNumber,
 				"currentSlot", currentSlot,
 				"configDelegateCount", r.config.DelegateCount,
 				"actualDelegateCount", actualDelegateCount,
 				"formula", fmt.Sprintf("slot %d %% %d = %d", currentSlot, actualDelegateCount, r.currentDelegateIndex),
 				"currentRound", r.currentRound,
-				"newDelegateIndex", r.currentDelegateIndex)
+				"newDelegateIndex", r.currentDelegateIndex,
+				"timestamp", time.Now().Format("15:04:05.000"))
 		} else {
 			// 回退到区块号计算 - 使用实际验证者数量
 			actualDelegateCount := len(r.delegates)
@@ -1700,13 +1809,14 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 			} else {
 				r.currentDelegateIndex = currentBlockNumber % uint64(actualDelegateCount)
 			}
-			r.logger.Debug("🔄 统一计算委托者索引（回退到区块号）",
+			r.logger.Info("🔄 统一计算委托者索引（回退到区块号）",
 				"blockNumber", currentBlockNumber,
 				"configDelegateCount", r.config.DelegateCount,
 				"actualDelegateCount", actualDelegateCount,
 				"formula", fmt.Sprintf("%d%%%d=%d", currentBlockNumber, actualDelegateCount, r.currentDelegateIndex),
 				"currentRound", r.currentRound,
-				"newDelegateIndex", r.currentDelegateIndex)
+				"newDelegateIndex", r.currentDelegateIndex,
+				"timestamp", time.Now().Format("15:04:05.000"))
 		}
 	} else {
 		r.logger.Error("❌ 配置无效，无法计算委托者索引",
@@ -1791,11 +1901,16 @@ func (r *dposRuntime) initializeDelegates() error {
 		// 🆕 应用 DelegateCount 限制，只取前N个受托人
 		if r.config != nil && r.config.DelegateCount > 0 {
 			maxDelegates := int(r.config.DelegateCount)
+			originalCount := len(delegates)
 			if len(delegates) > maxDelegates {
 				delegates = delegates[:maxDelegates]
-				r.logger.Debug("🎯 runtime初始化：限制受托人数量为前N个",
-					"originalCount", len(delegates)+len(delegates[maxDelegates:]),
+				r.logger.Info("🎯 runtime初始化：限制受托人数量为前N个",
+					"originalCount", originalCount,
 					"limitedCount", maxDelegates,
+					"configDelegateCount", r.config.DelegateCount)
+			} else {
+				r.logger.Debug("🎯 runtime初始化：受托人数量未超过限制",
+					"actualCount", originalCount,
 					"configDelegateCount", r.config.DelegateCount)
 			}
 		}
@@ -2154,10 +2269,21 @@ func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64, c
 // getCurrentDelegate 获取当前受托人
 func (r *dposRuntime) getCurrentDelegate() types.Address {
 	// 🆕 添加详细的调试日志
-	r.logOnceWithInterval("get_current_delegate_debug", 5*time.Second, "debug",
-		"🔍 getCurrentDelegate 开始检查",
+	r.logOnceWithInterval("get_current_delegate_start_check", 10*time.Second, "info", "🔍 getCurrentDelegate 开始检查",
 		"delegatesCount", len(r.delegates),
 		"currentDelegateIndex", r.currentDelegateIndex,
+		"delegates_array_detail", func() string {
+			if len(r.delegates) == 0 {
+				return "delegates数组为空"
+			}
+			result := "delegates数组: "
+			for i, delegate := range r.delegates {
+				if i < 5 { // 只显示前5个
+					result += fmt.Sprintf("[%d]=%s(vp=%s,active=%v) ", i, delegate.Address.String()[:10], delegate.VotingPower.String(), delegate.IsActive)
+				}
+			}
+			return result
+		}(),
 		"timestamp", time.Now().Format("15:04:05.000"))
 
 	if len(r.delegates) == 0 {
@@ -2180,13 +2306,13 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 	delegate := r.delegates[r.currentDelegateIndex]
 
 	// 🆕 添加委托者详细信息日志
-	r.logOnceWithInterval("delegate_info_debug", 5*time.Second, "debug",
-		"🔍 当前委托者详细信息",
+	r.logOnceWithInterval("current_delegate_details", 10*time.Second, "info", "🔍 当前委托者详细信息",
 		"currentDelegateIndex", r.currentDelegateIndex,
 		"delegateAddress", delegate.Address.String(),
 		"isActive", delegate.IsActive,
 		"votingPower", delegate.VotingPower.String(),
 		"hasBlsKey", delegate.BlsKey != nil,
+		"votingPower_cmp_zero", delegate.VotingPower.Cmp(big.NewInt(0)),
 		"timestamp", time.Now().Format("15:04:05.000"))
 
 	// 检查受托人是否活跃且有足够的stake
@@ -3196,6 +3322,13 @@ func (r *dposRuntime) updateDelegateVotingPower(delegate types.Address, amount *
 	fmt.Printf("  - 受托人地址: %s\n", delegate.String())
 	fmt.Printf("  - 新增投票权重: %s (0x%x)\n", amount.String(), amount.Bytes())
 
+	// 🆕 详细打印内存中的 r.delegates 数组状态
+	fmt.Printf("🔍 内存中 r.delegates 数组状态 (共%d个):\n", len(r.delegates))
+	for i, d := range r.delegates {
+		fmt.Printf("  - delegates[%d]: 地址=%s, VotingPower=%s (0x%x), IsActive=%v\n",
+			i, d.Address.String(), d.VotingPower.String(), d.VotingPower.Bytes(), d.IsActive)
+	}
+
 	// 🆕 检查是否为创世验证者
 	if r.config != nil && r.config.dposBackend != nil {
 		if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
@@ -3209,17 +3342,33 @@ func (r *dposRuntime) updateDelegateVotingPower(delegate types.Address, amount *
 		}
 	}
 
-	for _, d := range r.delegates {
+	// 🆕 查找目标受托人并更新
+	found := false
+	for i, d := range r.delegates {
 		if d.Address == delegate {
 			oldPower := new(big.Int).Set(d.VotingPower)
 			d.VotingPower = new(big.Int).Add(d.VotingPower, amount)
 
-			fmt.Printf("  - 找到受托人: %s\n", d.Address.String())
-			fmt.Printf("  - 旧投票权重: %s\n", oldPower.String())
-			fmt.Printf("  - 新投票权重: %s\n", d.VotingPower.String())
+			fmt.Printf("  - ✅ 找到目标受托人: %s (索引%d)\n", d.Address.String(), i)
+			fmt.Printf("  - 旧投票权重: %s (0x%x)\n", oldPower.String(), oldPower.Bytes())
+			fmt.Printf("  - 新投票权重: %s (0x%x)\n", d.VotingPower.String(), d.VotingPower.Bytes())
 			fmt.Printf("  - 计算过程: %s + %s = %s\n", oldPower.String(), amount.String(), d.VotingPower.String())
+			fmt.Printf("  - 更新后IsActive: %v\n", d.IsActive)
+			found = true
 			break
 		}
+	}
+
+	if !found {
+		fmt.Printf("  - ❌ 未找到目标受托人: %s\n", delegate.String())
+		fmt.Printf("  - 当前内存中的delegates数组可能不完整或为空\n")
+	}
+
+	// 🆕 更新后再次打印内存状态
+	fmt.Printf("🔍 更新后内存中 r.delegates 数组状态:\n")
+	for i, d := range r.delegates {
+		fmt.Printf("  - delegates[%d]: 地址=%s, VotingPower=%s (0x%x), IsActive=%v\n",
+			i, d.Address.String(), d.VotingPower.String(), d.VotingPower.Bytes(), d.IsActive)
 	}
 }
 
@@ -8012,11 +8161,29 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		"delegate", vote.Delegate.String(),
 		"voter", vote.Voter.String())
 
-	// 2. 检查受托人是否存在且活跃
+	// 2. 检查受托人是否存在且活跃（从数据库查询，不依赖内存）
 	delegateExists := false
-	for _, del := range d.delegates {
-		if del.Address == vote.Delegate && del.IsActive {
+	if d.state == nil || d.state.StakeStore == nil {
+		d.logger.Error("❌ 数据库不可用，无法验证受托人",
+			"stateIsNil", d.state == nil,
+			"stakeStoreIsNil", d.state != nil && d.state.StakeStore == nil)
+		return fmt.Errorf("database not available, cannot verify delegate")
+	}
+
+	// 从数据库查询受托人信息
+	validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	if err != nil {
+		d.logger.Error("❌ 从数据库查询受托人失败", "error", err)
+		return fmt.Errorf("failed to query delegates from database: %w", err)
+	}
+
+	for _, validator := range validators {
+		if validator.Address == vote.Delegate && validator.IsActive {
 			delegateExists = true
+			d.logger.Debug("🔍 从数据库找到活跃受托人",
+				"delegate", vote.Delegate.String(),
+				"votingPower", validator.VotingPower.String(),
+				"isActive", validator.IsActive)
 			break
 		}
 	}
@@ -8820,31 +8987,55 @@ func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 		"amount", vote.Amount.String(),
 		"amountHex", fmt.Sprintf("0x%x", vote.Amount.Bytes()))
 
-	// 🆕 添加详细日志：记录更新前的状态
-	d.logger.Info("🔍 Before updateDelegateVotingPower - current delegates state:")
-	for i, del := range d.delegates {
-		if del.Address == vote.Delegate {
-			d.logger.Info("🔍 Target delegate before update",
-				"index", i,
-				"address", del.Address.String(),
-				"votingPower", del.VotingPower.String(),
-				"isActive", del.IsActive)
-		}
+	// 🆕 从数据库读取原始权重，而不是从内存
+	originalVotingPower, err := d.getVotingPowerFromDatabase(vote.Delegate)
+	if err != nil {
+		d.logger.Error("❌ 从数据库读取验证者权重失败",
+			"delegate", vote.Delegate.String(),
+			"error", err)
+		return fmt.Errorf("failed to get voting power from database: %w", err)
 	}
 
-	d.updateDelegateVotingPower(vote.Delegate, vote.Amount)
+	// 🆕 显著日志：显示投票权重更新详情
+	d.logger.Info("🎯 ===== 投票权重更新详情 =====",
+		"delegate", vote.Delegate.String(),
+		"originalVotingPower", originalVotingPower.String(),
+		"originalVotingPowerHex", fmt.Sprintf("0x%x", originalVotingPower.Bytes()),
+		"addedAmount", vote.Amount.String(),
+		"addedAmountHex", fmt.Sprintf("0x%x", vote.Amount.Bytes()),
+		"expectedNewPower", new(big.Int).Add(originalVotingPower, vote.Amount).String(),
+		"dataSource", "database")
 
-	// 🆕 添加详细日志：记录更新后的状态
-	d.logger.Info("🔍 After updateDelegateVotingPower - current delegates state:")
-	for i, del := range d.delegates {
-		if del.Address == vote.Delegate {
-			d.logger.Info("🔍 Target delegate after update",
-				"index", i,
-				"address", del.Address.String(),
-				"votingPower", del.VotingPower.String(),
-				"isActive", del.IsActive)
-		}
+	// 🆕 直接更新数据库，然后同步到内存
+	newVotingPower := new(big.Int).Add(originalVotingPower, vote.Amount)
+	err = d.updateVotingPowerInDatabase(vote.Delegate, newVotingPower)
+	if err != nil {
+		d.logger.Error("❌ 更新数据库验证者权重失败",
+			"delegate", vote.Delegate.String(),
+			"newPower", newVotingPower.String(),
+			"error", err)
+		return fmt.Errorf("failed to update voting power in database: %w", err)
 	}
+
+	// 🆕 数据库更新成功后，同步到内存
+	err = d.syncDelegateFromDatabase(vote.Delegate)
+	if err != nil {
+		d.logger.Warn("⚠️ 同步验证者信息到内存失败",
+			"delegate", vote.Delegate.String(),
+			"error", err)
+		// 不返回错误，因为数据库更新已经成功
+	}
+
+	// 🆕 显著日志：记录更新完成
+	d.logger.Info("🎯 ===== 投票权重更新完成 =====",
+		"delegate", vote.Delegate.String(),
+		"originalVotingPower", originalVotingPower.String(),
+		"finalVotingPower", newVotingPower.String(),
+		"finalVotingPowerHex", fmt.Sprintf("0x%x", newVotingPower.Bytes()),
+		"addedAmount", vote.Amount.String(),
+		"calculation", fmt.Sprintf("%s + %s = %s", originalVotingPower.String(), vote.Amount.String(), newVotingPower.String()),
+		"updateSuccess", true,
+		"dataSource", "database")
 
 	// 8. 记录nonce防止重放
 	voter.Nonce[vote.Round] = true
@@ -9744,13 +9935,13 @@ func (d *DPoS) GetMetrics() *DPoSMetrics {
 	}
 }
 
-// 更新受托人投票权重
+// 更新受托人投票权重（已废弃，现在直接通过数据库操作）
+// 保留此函数以保持向后兼容性，但实际逻辑已移至数据库直接操作
 func (d *DPoS) updateDelegateVotingPower(delegate types.Address, amount *big.Int) {
-	d.logger.Debug("🔄 Updating delegate voting power",
+	d.logger.Warn("⚠️ updateDelegateVotingPower已废弃，请使用数据库直接操作",
 		"delegate", delegate.String(),
 		"amount", amount.String(),
-		"amountHex", fmt.Sprintf("0x%x", amount.Bytes()),
-		"currentDelegatesCount", len(d.delegates))
+		"note", "此函数保留仅用于向后兼容性")
 
 	// 🆕 检查是否为创世验证者
 	if d.isGenesisValidator(delegate) {
@@ -9761,80 +9952,44 @@ func (d *DPoS) updateDelegateVotingPower(delegate types.Address, amount *big.Int
 		return
 	}
 
-	// 🆕 添加详细日志：打印所有受托人的当前状态
-	d.logger.Info("🔍 Current delegates state before update:")
-	for i, del := range d.delegates {
-		d.logger.Info("🔍 Delegate",
-			"index", i,
-			"address", del.Address.String(),
-			"votingPower", del.VotingPower.String(),
-			"isActive", del.IsActive,
-			"isTarget", del.Address == delegate)
-	}
-
-	// 查找现有受托人
-	found := false
-	for i, del := range d.delegates {
-		if del.Address == delegate {
-			oldPower := new(big.Int).Set(del.VotingPower)
-			oldActive := del.IsActive
-			del.VotingPower = new(big.Int).Add(del.VotingPower, amount)
-
-			// 🆕 修复：根据新的投票权重更新活跃状态
-			if del.VotingPower.Cmp(big.NewInt(0)) > 0 {
-				del.IsActive = true
-			} else {
-				del.IsActive = false
-			}
-
-			d.logger.Debug("✅ Updated existing delegate voting power",
-				"delegate", delegate.String(),
-				"delegateIndex", i,
-				"oldPower", oldPower.String(),
-				"newPower", del.VotingPower.String(),
-				"addedAmount", amount.String(),
-				"oldActive", oldActive,
-				"newActive", del.IsActive,
-				"totalDelegates", len(d.delegates),
-				"calculation", fmt.Sprintf("%s + %s = %s", oldPower.String(), amount.String(), del.VotingPower.String()))
-			found = true
-			break
-		}
-	}
-
-	// 如果受托人不存在，创建一个新的
-	if !found {
-		d.logger.Info("🆕 Creating new delegate for voting power update",
+	// 🆕 新的实现：直接操作数据库
+	// 1. 从数据库读取当前权重
+	currentPower, err := d.getVotingPowerFromDatabase(delegate)
+	if err != nil {
+		d.logger.Error("❌ 从数据库读取验证者权重失败",
 			"delegate", delegate.String(),
-			"amount", amount.String())
-
-		newDelegate := &validator.ValidatorMetadata{
-			Address:     delegate,
-			VotingPower: new(big.Int).Set(amount),
-			IsActive:    true, // 🆕 新增：自动设置为活跃状态
-			// 其他字段使用默认值
-		}
-
-		// 🆕 新增：重点记录创建新受托人时的isActive状态
-		d.logger.Info("🆕 创建新受托人",
-			"address", delegate.String(),
-			"votingPower", amount.String(),
-			"isActive", newDelegate.IsActive,
-			"isActiveType", fmt.Sprintf("%T", newDelegate.IsActive))
-
-		d.addDelegateSafely(newDelegate)
+			"error", err)
+		return
 	}
 
-	// 🆕 添加详细日志：打印更新后的所有受托人状态
-	d.logger.Info("🔍 Current delegates state after update:")
-	for i, del := range d.delegates {
-		d.logger.Info("🔍 Delegate",
-			"index", i,
-			"address", del.Address.String(),
-			"votingPower", del.VotingPower.String(),
-			"isActive", del.IsActive,
-			"isTarget", del.Address == delegate)
+	// 2. 计算新权重
+	newPower := new(big.Int).Add(currentPower, amount)
+
+	// 3. 直接更新数据库
+	err = d.updateVotingPowerInDatabase(delegate, newPower)
+	if err != nil {
+		d.logger.Error("❌ 更新数据库验证者权重失败",
+			"delegate", delegate.String(),
+			"newPower", newPower.String(),
+			"error", err)
+		return
 	}
+
+	// 4. 数据库更新成功后，同步到内存
+	err = d.syncDelegateFromDatabase(delegate)
+	if err != nil {
+		d.logger.Warn("⚠️ 同步验证者信息到内存失败",
+			"delegate", delegate.String(),
+			"error", err)
+		// 不返回错误，因为数据库更新已经成功
+	}
+
+	d.logger.Info("✅ 验证者投票权重更新完成（数据库直接操作）",
+		"delegate", delegate.String(),
+		"originalPower", currentPower.String(),
+		"addedAmount", amount.String(),
+		"newPower", newPower.String(),
+		"dataSource", "database")
 }
 
 // calculateReward 计算奖励
@@ -12655,129 +12810,66 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 		return fmt.Errorf("state store not available")
 	}
 
-	// 🚨 修复：调用者已经持有写锁，直接访问delegates
-	// 不需要再获取读锁，避免死锁
-	d.logger.Debug("🔍 Accessing d.delegates (caller already holds write lock)...")
+	d.logger.Info("🔄 persistDelegateVotingPower: 开始持久化验证者投票权重",
+		"delegate", delegate.String(),
+		"amount", amount.String(),
+		"dataSource", "database")
 
-	var existingDelegate *validator.ValidatorMetadata
-	fmt.Printf("🔍 检查d.delegates中的所有受托人:\n")
-	for i, del := range d.delegates {
-		fmt.Printf("  - 受托人[%d]: 地址=%s, VotingPower=%s (0x%x), IsActive=%v\n",
-			i+1, del.Address.String(), del.VotingPower.String(), del.VotingPower.Bytes(), del.IsActive)
-		if del.Address == delegate {
-			existingDelegate = del
-			fmt.Printf("    -> 找到目标受托人！\n")
-		}
+	// 🆕 新的实现：直接从数据库读取当前权重，不依赖内存数据
+	currentPower, err := d.getVotingPowerFromDatabase(delegate)
+	if err != nil {
+		d.logger.Error("❌ 从数据库读取验证者权重失败",
+			"delegate", delegate.String(),
+			"error", err)
+		return fmt.Errorf("failed to get voting power from database: %w", err)
 	}
 
-	if existingDelegate != nil {
-		fmt.Printf("🔍 existingDelegate详细信息:\n")
-		fmt.Printf("  - 地址: %s\n", existingDelegate.Address.String())
-		fmt.Printf("  - VotingPower: %s (0x%x)\n", existingDelegate.VotingPower.String(), existingDelegate.VotingPower.Bytes())
-		fmt.Printf("  - IsActive: %v\n", existingDelegate.IsActive)
-	} else {
-		fmt.Printf("🔍 未找到existingDelegate，这是新受托人\n")
+	// 🆕 计算新的投票权重
+	newPower := new(big.Int).Add(currentPower, amount)
+
+	// 🆕 检查是否为创世验证者
+	if d.isGenesisValidator(delegate) {
+		fixedVotingPower := new(big.Int)
+		fixedVotingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
+		newPower = fixedVotingPower
+		d.logger.Info("🔒 创世验证者使用固定权重",
+			"delegate", delegate.String(),
+			"fixedPower", newPower.String())
 	}
 
-	// 创建或更新受托人信息
-	fmt.Printf("🔍 创建delegateInfo前的状态检查:\n")
-	fmt.Printf("  - 受托人地址: %s\n", delegate.String())
-	fmt.Printf("  - amount参数: %s (0x%x)\n", amount.String(), amount.Bytes())
-	fmt.Printf("  - existingDelegate是否存在: %v\n", existingDelegate != nil)
-	if existingDelegate != nil {
-		fmt.Printf("  - existingDelegate.VotingPower: %s (0x%x)\n", existingDelegate.VotingPower.String(), existingDelegate.VotingPower.Bytes())
-	}
-
+	// 🆕 创建或更新受托人信息，直接使用计算出的新权重
 	delegateInfo := &DelegateInfo{
 		Address:        delegate,
-		VotingPower:    big.NewInt(0),
-		TotalVotes:     big.NewInt(0),
+		VotingPower:    new(big.Int).Set(newPower),
+		TotalVotes:     new(big.Int).Set(newPower), // TotalVotes等于VotingPower
 		ProducedBlocks: 0,
 		MissedBlocks:   0,
 		LastBlockTime:  0,
-		IsActive:       true,
+		IsActive:       newPower.Cmp(big.NewInt(0)) > 0,
 	}
 
-	fmt.Printf("  - 初始化后delegateInfo.VotingPower: %s (0x%x)\n", delegateInfo.VotingPower.String(), delegateInfo.VotingPower.Bytes())
-
-	// 🆕 修复：直接使用内存中受托人的当前VotingPower，不进行累加
-	// 因为VotingPower已经在updateDelegateVotingPower中正确更新了
-	if existingDelegate != nil {
-		// 🆕 检查是否为创世验证者，如果是则使用固定权重1000 VCITY
-		if d.isGenesisValidator(delegate) {
-			fixedVotingPower := new(big.Int)
-			fixedVotingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
-			delegateInfo.VotingPower = fixedVotingPower
-			fmt.Printf("  - 🔒 创世验证者使用固定权重: %s\n", delegateInfo.VotingPower.String())
-		} else {
-			// 直接使用内存中受托人的当前VotingPower
-			delegateInfo.VotingPower = new(big.Int).Set(existingDelegate.VotingPower)
-			fmt.Printf("  - ✅ 使用内存中受托人的当前VotingPower: %s\n", delegateInfo.VotingPower.String())
-		}
-	} else {
-		// 这种情况不应该发生，因为validateVote阶段已经创建了受托人
-		d.logger.Warn("⚠️ 受托人不存在，这是异常情况")
-		delegateInfo.VotingPower = new(big.Int).Set(amount)
-		fmt.Printf("  - ⚠️ 异常情况，设置VotingPower: %s\n", delegateInfo.VotingPower.String())
-	}
-
-	// 🆕 修复：TotalVotes应该等于VotingPower
-	delegateInfo.TotalVotes = new(big.Int).Set(delegateInfo.VotingPower)
-	fmt.Printf("  - ✅ TotalVotes设置为VotingPower: %s\n", delegateInfo.TotalVotes.String())
-
-	// 🆕 修复：根据投票权重设置Active状态
-	if delegateInfo.VotingPower.Cmp(big.NewInt(0)) > 0 {
-		delegateInfo.IsActive = true
-		fmt.Printf("  - ✅ 受托人有投票权重，设置为Active: true\n")
-	} else {
-		delegateInfo.IsActive = false
-		fmt.Printf("  - ⚠️ 受托人无投票权重，设置为Active: false\n")
-	}
-
-	// 保存到数据库
-	d.logger.Info("💾 About to save delegate info to database",
+	d.logger.Info("🔍 准备保存验证者信息到数据库",
 		"delegate", delegate.String(),
-		"votingPower", delegateInfo.VotingPower.String(),
-		"totalVotes", delegateInfo.TotalVotes.String())
-
-	// 🆕 添加详细日志：检查调用setDelegateInfo前的数据
-	d.logger.Debug("🔍 调用setDelegateInfo前的详细检查",
-		"delegate", delegate.String(),
-		"votingPower", delegateInfo.VotingPower.String(),
-		"totalVotes", delegateInfo.TotalVotes.String(),
+		"originalPower", currentPower.String(),
+		"addedAmount", amount.String(),
+		"newPower", newPower.String(),
 		"isActive", delegateInfo.IsActive,
-		"blsPublicKeyLength", len(delegateInfo.BlsPublicKey))
+		"dataSource", "database")
 
-	// 🆕 检查内存中对应受托人的状态
-	for _, del := range d.delegates {
-		if del.Address == delegate {
-			d.logger.Debug("🔍 内存中受托人状态",
-				"address", del.Address.String(),
-				"votingPower", del.VotingPower.String(),
-				"isActive", del.IsActive)
-			break
-		}
-	}
-
+	// 🆕 直接保存到数据库
 	if err := d.state.StakeStore.setDelegateInfo(delegate, delegateInfo, nil); err != nil {
-		d.logger.Error("❌ Failed to save delegate info to database", "error", err)
+		d.logger.Error("❌ 保存验证者信息到数据库失败",
+			"delegate", delegate.String(),
+			"newPower", newPower.String(),
+			"error", err)
 		return fmt.Errorf("failed to save delegate info to database: %w", err)
 	}
 
-	// 🆕 添加详细日志：记录数据库更新后的内存状态
-	d.logger.Info("🔍 After database persistence - memory delegates state:")
-	for i, del := range d.delegates {
-		if del.Address == delegate {
-			d.logger.Info("🔍 Target delegate after database persistence",
-				"index", i,
-				"address", del.Address.String(),
-				"votingPower", del.VotingPower.String(),
-				"isActive", del.IsActive)
-		}
-	}
-
-	d.logger.Info("✅ Delegate info saved to database successfully",
-		"delegate", delegate.String())
+	d.logger.Info("✅ 验证者信息已成功保存到数据库",
+		"delegate", delegate.String(),
+		"newPower", newPower.String(),
+		"isActive", delegateInfo.IsActive,
+		"dataSource", "database")
 
 	return nil
 }
@@ -13990,6 +14082,128 @@ func (d *DPoS) GetValidators() validator.AccountSet {
 
 	// 如果 runtime 不可用，返回空集合
 	return validator.AccountSet{}
+}
+
+// getVotingPowerFromDatabase 从数据库直接读取指定验证者的投票权重
+func (d *DPoS) getVotingPowerFromDatabase(delegate types.Address) (*big.Int, error) {
+	if d.state == nil || d.state.StakeStore == nil {
+		return nil, fmt.Errorf("state store not available")
+	}
+
+	// 从数据库获取所有验证者信息
+	validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get validators from database: %w", err)
+	}
+
+	// 查找指定验证者的权重
+	for _, validator := range validators {
+		if validator.Address == delegate {
+			d.logger.Debug("🔍 从数据库读取验证者权重",
+				"delegate", delegate.String(),
+				"votingPower", validator.VotingPower.String(),
+				"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
+				"isActive", validator.IsActive)
+			return validator.VotingPower, nil
+		}
+	}
+
+	// 如果没找到，返回0（新验证者）
+	d.logger.Debug("🔍 验证者在数据库中不存在，返回0权重",
+		"delegate", delegate.String())
+	return big.NewInt(0), nil
+}
+
+// updateVotingPowerInDatabase 直接更新数据库中的验证者投票权重
+func (d *DPoS) updateVotingPowerInDatabase(delegate types.Address, newPower *big.Int) error {
+	if d.state == nil || d.state.StakeStore == nil {
+		return fmt.Errorf("state store not available")
+	}
+
+	// 创建或更新验证者信息
+	delegateInfo := &DelegateInfo{
+		Address:        delegate,
+		VotingPower:    new(big.Int).Set(newPower),
+		TotalVotes:     new(big.Int).Set(newPower), // 🆕 修复：初始化TotalVotes字段
+		ProducedBlocks: 0,
+		MissedBlocks:   0,
+		LastBlockTime:  0,
+		IsActive:       newPower.Cmp(big.NewInt(0)) > 0,
+		IsRegistered:   true, // 假设已注册
+		BlsPublicKey:   nil,  // BLS密钥由其他逻辑处理
+	}
+
+	err := d.state.StakeStore.setDelegateInfo(delegate, delegateInfo, nil)
+	if err != nil {
+		d.logger.Error("❌ 更新数据库验证者权重失败",
+			"delegate", delegate.String(),
+			"newPower", newPower.String(),
+			"error", err)
+		return fmt.Errorf("failed to update delegate voting power in database: %w", err)
+	}
+
+	d.logger.Info("✅ 数据库验证者权重更新成功",
+		"delegate", delegate.String(),
+		"newPower", newPower.String(),
+		"newPowerHex", fmt.Sprintf("0x%x", newPower.Bytes()),
+		"isActive", delegateInfo.IsActive)
+	return nil
+}
+
+// syncDelegateFromDatabase 从数据库同步指定验证者到内存
+func (d *DPoS) syncDelegateFromDatabase(delegate types.Address) error {
+	if d.state == nil || d.state.StakeStore == nil {
+		return fmt.Errorf("state store not available")
+	}
+
+	// 从数据库获取验证者信息
+	validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	if err != nil {
+		return fmt.Errorf("failed to get validators from database: %w", err)
+	}
+
+	// 查找指定验证者
+	for _, validator := range validators {
+		if validator.Address == delegate {
+			// 更新内存中的验证者信息
+			found := false
+			for i, del := range d.delegates {
+				if del.Address == delegate {
+					d.delegates[i] = validator
+					found = true
+					break
+				}
+			}
+
+			// 如果内存中不存在，添加到内存
+			if !found {
+				d.delegates = append(d.delegates, validator)
+			}
+
+			// 同步到runtime
+			if d.runtime != nil {
+				found = false
+				for i, del := range d.runtime.delegates {
+					if del.Address == delegate {
+						d.runtime.delegates[i] = validator
+						found = true
+						break
+					}
+				}
+				if !found {
+					d.runtime.delegates = append(d.runtime.delegates, validator)
+				}
+			}
+
+			d.logger.Debug("✅ 验证者信息已从数据库同步到内存",
+				"delegate", delegate.String(),
+				"votingPower", validator.VotingPower.String(),
+				"isActive", validator.IsActive)
+			return nil
+		}
+	}
+
+	return fmt.Errorf("delegate not found in database: %s", delegate.String())
 }
 
 // GetBLSKeyForValidator 获取指定验证者的BLS公钥（延迟获取）
@@ -15975,4 +16189,35 @@ func (r *dposRuntime) getAccountBalance(address types.Address) (*big.Int, error)
 	// 如果无法通过backend查询，返回0余额
 	r.logger.Warn("⚠️ 无法通过backend查询余额，返回0余额", "address", address.String())
 	return big.NewInt(0), nil
+}
+
+// 🆕 防重复日志函数（自定义间隔）
+func (rm *ResourceMonitor) logOnceWithInterval(key string, interval time.Duration, level string, message string, args ...interface{}) {
+	rm.logMutex.Lock()
+	defer rm.logMutex.Unlock()
+
+	now := time.Now()
+	if lastTime, exists := rm.lastLogTime[key]; exists {
+		// 如果指定间隔内已经记录过相同key的日志，则跳过
+		if now.Sub(lastTime) < interval {
+			return
+		}
+	}
+
+	// 记录日志
+	switch level {
+	case "debug":
+		rm.logger.Debug(message, args...)
+	case "info":
+		rm.logger.Info(message, args...)
+	case "warn":
+		rm.logger.Warn(message, args...)
+	case "error":
+		rm.logger.Error(message, args...)
+	default:
+		rm.logger.Info(message, args...)
+	}
+
+	// 更新最后记录时间
+	rm.lastLogTime[key] = now
 }

@@ -35,6 +35,10 @@ type GoroutineManager struct {
 		totalGoroutinesExited  int64
 		peakGoroutines         int64
 	}
+
+	// 🆕 日志间隔管理
+	lastLogTime map[string]time.Time
+	logMutex    sync.RWMutex
 }
 
 // NewGoroutineManager 创建协程管理器
@@ -48,6 +52,7 @@ func NewGoroutineManager(logger hclog.Logger, maxGoroutines int64, maxRetryWorke
 		ctx:             ctx,
 		cancel:          cancel,
 		retryWorkerPool: make(chan struct{}, maxRetryWorkers),
+		lastLogTime:     make(map[string]time.Time),
 	}
 
 	// 启动监控协程
@@ -221,7 +226,7 @@ func (gm *GoroutineManager) monitorLoop() {
 			stats := gm.GetStats()
 
 			// 记录统计信息
-			gm.logger.Debug("协程管理器统计",
+			gm.logOnceWithInterval("goroutine_manager_debug_stats", 10*time.Second, "debug", "协程管理器统计",
 				"active", stats["activeGoroutines"],
 				"peak", stats["peakGoroutines"],
 				"utilization", stats["goroutineUtilization"])
@@ -339,4 +344,35 @@ func (gm *GoroutineManager) detectGoroutineLeaks() {
 		// 可以在这里添加更多的泄漏检测逻辑
 		// 比如检查goroutine的运行时间、堆栈信息等
 	}
+}
+
+// 🆕 防重复日志函数（自定义间隔）
+func (gm *GoroutineManager) logOnceWithInterval(key string, interval time.Duration, level string, message string, args ...interface{}) {
+	gm.logMutex.Lock()
+	defer gm.logMutex.Unlock()
+
+	now := time.Now()
+	if lastTime, exists := gm.lastLogTime[key]; exists {
+		// 如果指定间隔内已经记录过相同key的日志，则跳过
+		if now.Sub(lastTime) < interval {
+			return
+		}
+	}
+
+	// 记录日志
+	switch level {
+	case "debug":
+		gm.logger.Debug(message, args...)
+	case "info":
+		gm.logger.Info(message, args...)
+	case "warn":
+		gm.logger.Warn(message, args...)
+	case "error":
+		gm.logger.Error(message, args...)
+	default:
+		gm.logger.Info(message, args...)
+	}
+
+	// 更新最后记录时间
+	gm.lastLogTime[key] = now
 }

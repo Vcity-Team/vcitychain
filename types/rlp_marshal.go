@@ -186,6 +186,16 @@ func (t *Transaction) MarshalRLPTo(dst []byte) []byte {
 	return MarshalRLPTo(t.MarshalRLPWith, dst)
 }
 
+// MarshalRLPToForHash marshals the transaction to RLP for hash calculation
+// This function excludes the From field to maintain compatibility with existing hash calculations
+func (t *Transaction) MarshalRLPToForHash(dst []byte) []byte {
+	if t.Type != LegacyTx {
+		dst = append(dst, byte(t.Type))
+	}
+
+	return MarshalRLPTo(t.MarshalRLPWithForHash, dst)
+}
+
 // MarshalRLPWith marshals the transaction to RLP with a specific fastrlp.Arena
 // Be careful! This function does not serialize tx type as a first byte.
 // Use MarshalRLP/MarshalRLPTo in most cases
@@ -233,9 +243,60 @@ func (t *Transaction) MarshalRLPWith(arena *fastrlp.Arena) *fastrlp.Value {
 	vv.Set(arena.NewBigInt(t.R))
 	vv.Set(arena.NewBigInt(t.S))
 
-	if t.Type == StateTx {
-		vv.Set(arena.NewCopyBytes(t.From.Bytes()))
+	// 序列化From字段 - 所有交易类型都包含From字段
+	// 这确保网络传播后From字段不会丢失
+	vv.Set(arena.NewCopyBytes(t.From.Bytes()))
+
+	return vv
+}
+
+// MarshalRLPWithForHash marshals the transaction to RLP for hash calculation
+// This function excludes the From field to maintain compatibility with existing hash calculations
+func (t *Transaction) MarshalRLPWithForHash(arena *fastrlp.Arena) *fastrlp.Value {
+	vv := arena.NewArray()
+
+	// Check Transaction1559Payload there https://eips.ethereum.org/EIPS/eip-1559#specification
+	if t.Type == DynamicFeeTx {
+		vv.Set(arena.NewBigInt(t.ChainID))
 	}
+
+	vv.Set(arena.NewUint(t.Nonce))
+
+	if t.Type == DynamicFeeTx {
+		// Add EIP-1559 related fields.
+		// For non-dynamic-fee-tx gas price is used.
+		vv.Set(arena.NewBigInt(t.GasTipCap))
+		vv.Set(arena.NewBigInt(t.GasFeeCap))
+	} else {
+		vv.Set(arena.NewBigInt(t.GasPrice))
+	}
+
+	vv.Set(arena.NewUint(t.Gas))
+
+	// Address may be empty
+	if t.To != nil {
+		vv.Set(arena.NewCopyBytes(t.To.Bytes()))
+	} else {
+		vv.Set(arena.NewNull())
+	}
+
+	vv.Set(arena.NewBigInt(t.Value))
+	vv.Set(arena.NewCopyBytes(t.Input))
+
+	// Specify access list as per spec.
+	// This is needed to have the same format as other EVM chains do.
+	// There is no access list feature here, so it is always empty just to be compatible.
+	// Check Transaction1559Payload there https://eips.ethereum.org/EIPS/eip-1559#specification
+	if t.Type == DynamicFeeTx {
+		vv.Set(arena.NewArray())
+	}
+
+	// signature values
+	vv.Set(arena.NewBigInt(t.V))
+	vv.Set(arena.NewBigInt(t.R))
+	vv.Set(arena.NewBigInt(t.S))
+
+	// 注意：哈希计算时不包含From字段，以保持与现有哈希计算的兼容性
 
 	return vv
 }

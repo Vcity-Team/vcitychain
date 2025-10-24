@@ -89,41 +89,49 @@ func NewDPOS(logger hclog.Logger, store dposStore, chainID uint64) *DPOS {
 
 // signTransaction signs a DPoS transaction using the private key
 func (d *DPOS) signTransaction(tx *types.Transaction, expectedAddr types.Address, privateKeyHex string) error {
-	d.logger.Info("Signing DPoS transaction with user-provided private key")
+	d.logger.Info("🔍 开始签名交易 - 私钥和地址验证")
+	d.logger.Info("🔍 期望的发送者地址", "expectedAddr", expectedAddr.String())
+	d.logger.Info("🔍 传入的私钥", "privateKeyHex", privateKeyHex, "length", len(privateKeyHex))
 
 	// Force user to provide private key
 	if privateKeyHex == "" {
+		d.logger.Error("❌ 私钥为空")
 		return fmt.Errorf("private key is required for signing DPoS transactions")
 	}
 
-	d.logger.Info("Decoding user-provided private key", "privateKeyHex", privateKeyHex, "length", len(privateKeyHex))
+	d.logger.Info("🔍 私钥格式验证开始", "privateKeyHex", privateKeyHex, "length", len(privateKeyHex))
 
 	// Validate hex string first
 	if len(privateKeyHex) != 64 {
+		d.logger.Error("❌ 私钥长度错误", "expected", 64, "actual", len(privateKeyHex))
 		return fmt.Errorf("invalid private key length: expected 64, got %d", len(privateKeyHex))
 	}
 
 	// Check if string contains only valid hex characters
 	for i, char := range privateKeyHex {
 		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
+			d.logger.Error("❌ 私钥包含无效字符", "position", i, "char", string(char), "unicode", fmt.Sprintf("U+%04X", char))
 			return fmt.Errorf("invalid hex character at position %d: %c (U+%04X)", i, char, char)
 		}
 	}
 
-	d.logger.Info("Private key hex string validation passed")
+	d.logger.Info("✅ 私钥格式验证通过")
 
 	privateKeyBytes, err := hex.DecodeString(privateKeyHex)
 	if err != nil {
-		d.logger.Error("Failed to decode user-provided private key", "error", err)
+		d.logger.Error("❌ 私钥解码失败", "error", err)
 		return fmt.Errorf("failed to decode user-provided private key: %w", err)
 	}
 
-	d.logger.Info("User-provided private key decoded", "length", len(privateKeyBytes))
+	d.logger.Info("✅ 私钥解码成功", "length", len(privateKeyBytes))
 
 	// Use direct ECDSA private key creation instead of crypto.BytesToECDSAPrivateKey
 	if len(privateKeyBytes) != 32 {
+		d.logger.Error("❌ 私钥字节长度错误", "expected", 32, "actual", len(privateKeyBytes))
 		return fmt.Errorf("invalid private key bytes length: expected 32, got %d", len(privateKeyBytes))
 	}
+
+	d.logger.Info("🔍 开始创建ECDSA私钥对象")
 
 	// Create ECDSA private key directly using secp256k1 curve
 	privateKey := &ecdsa.PrivateKey{
@@ -136,7 +144,24 @@ func (d *DPOS) signTransaction(tx *types.Transaction, expectedAddr types.Address
 	// Calculate the public key from the private key
 	privateKey.PublicKey.X, privateKey.PublicKey.Y = privateKey.Curve.ScalarBaseMult(privateKeyBytes)
 
-	d.logger.Info("User-provided private key created successfully", "privateKeyD", privateKey.D.String())
+	d.logger.Info("✅ ECDSA私钥对象创建成功", "privateKeyD", privateKey.D.String())
+
+	// 🆕 从私钥计算对应的地址并验证
+	d.logger.Info("🔍 从私钥计算对应的地址")
+	calculatedAddr := crypto.PubKeyToAddress(&privateKey.PublicKey)
+	d.logger.Info("🔍 私钥对应的地址", "calculatedAddr", calculatedAddr.String())
+	d.logger.Info("🔍 期望的地址", "expectedAddr", expectedAddr.String())
+
+	if calculatedAddr != expectedAddr {
+		d.logger.Error("❌ 私钥与投票者地址不匹配",
+			"calculatedAddr", calculatedAddr.String(),
+			"expectedAddr", expectedAddr.String(),
+			"match", false)
+		return fmt.Errorf("private key does not match voter address: calculated=%s, expected=%s",
+			calculatedAddr.String(), expectedAddr.String())
+	}
+
+	d.logger.Info("✅ 私钥与投票者地址匹配验证通过")
 
 	// Calculate transaction hash for signing using EIP-155 scheme to match txpool signer
 	// Use the chainID from the DPOS endpoint configuration instead of hardcoded value
@@ -160,13 +185,25 @@ func (d *DPOS) signTransaction(tx *types.Transaction, expectedAddr types.Address
 	d.logger.Info("Transaction signed successfully with EIP-155 signer", "r", tx.R.String(), "s", tx.S.String(), "v", tx.V.String())
 
 	// Recover sender with the same signer and set tx.From for logging / consistency
+	d.logger.Info("🔍 开始从签名恢复发送者地址")
 	senderAddr, err := eip155Signer.Sender(tx)
 	if err == nil {
 		tx.From = senderAddr
-		d.logger.Info("=== 标记4: 恢复发送者地址=", tx.From.String(), "===")
-		d.logger.Info("Sender recovered and set on tx", "from", tx.From.String())
+		d.logger.Info("✅ 发送者地址恢复成功", "recoveredAddr", tx.From.String())
+		d.logger.Info("🔍 地址匹配验证",
+			"recoveredAddr", tx.From.String(),
+			"expectedAddr", expectedAddr.String(),
+			"calculatedAddr", calculatedAddr.String())
+
+		if tx.From != expectedAddr {
+			d.logger.Error("❌ 恢复的地址与期望地址不匹配",
+				"recoveredAddr", tx.From.String(),
+				"expectedAddr", expectedAddr.String())
+		} else {
+			d.logger.Info("✅ 恢复的地址与期望地址匹配")
+		}
 	} else {
-		d.logger.Warn("Failed to recover sender after signing", "error", err)
+		d.logger.Error("❌ 从签名恢复发送者地址失败", "error", err)
 	}
 
 	// Test signature recovery to ensure it works

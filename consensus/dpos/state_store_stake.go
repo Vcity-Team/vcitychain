@@ -708,12 +708,12 @@ func (s *StakeStore) setDelegateInfo(delegate types.Address, info *DelegateInfo,
 func (s *StakeStore) setDelegateInfoInternal(delegate types.Address, info *DelegateInfo, dbTx *bolt.Tx) error {
 	// 添加调试日志
 	// 使用debug级别记录调用信息
-	// fmt.Printf("🔍 setDelegateInfoInternal called: delegate=%s, dbTx=%v\n", delegate.String(), dbTx != nil)
-	// fmt.Printf("  - 受托人地址: %s\n", delegate.String())
-	// fmt.Printf("  - 传入的VotingPower: %s (0x%x)\n", info.VotingPower.String(), info.VotingPower.Bytes())
-	// fmt.Printf("  - 传入的TotalVotes: %s (0x%x)\n", info.TotalVotes.String(), info.TotalVotes.Bytes())
-	// fmt.Printf("  - 传入的IsActive: %v\n", info.IsActive)
-	// fmt.Printf("  - 传入的BlsPublicKey长度: %d\n", len(info.BlsPublicKey))
+	fmt.Printf("🔍 setDelegateInfoInternal called: delegate=%s, dbTx=%v\n", delegate.String(), dbTx != nil)
+	fmt.Printf("  - 受托人地址: %s\n", delegate.String())
+	fmt.Printf("  - 传入的VotingPower: %s (0x%x)\n", info.VotingPower.String(), info.VotingPower.Bytes())
+	fmt.Printf("  - 传入的TotalVotes: %s (0x%x)\n", info.TotalVotes.String(), info.TotalVotes.Bytes())
+	fmt.Printf("  - 传入的IsActive: %v\n", info.IsActive)
+	fmt.Printf("  - 传入的BlsPublicKey长度: %d\n", len(info.BlsPublicKey))
 
 	bucket, err := dbTx.CreateBucketIfNotExists([]byte("DelegateInfo"))
 	if err != nil {
@@ -732,9 +732,9 @@ func (s *StakeStore) setDelegateInfoInternal(delegate types.Address, info *Deleg
 		return fmt.Errorf("failed to save delegate info: %w", err)
 	}
 
-	// fmt.Printf("✅ setDelegateInfoInternal completed successfully\n")
-	// fmt.Printf("  - 保存到数据库的VotingPower: %s (0x%x)\n", info.VotingPower.String(), info.VotingPower.Bytes())
-	// fmt.Printf("  - 保存到数据库的TotalVotes: %s (0x%x)\n", info.TotalVotes.String(), info.TotalVotes.Bytes())
+	fmt.Printf("✅ setDelegateInfoInternal completed successfully\n")
+	fmt.Printf("  - 保存到数据库的VotingPower: %s (0x%x)\n", info.VotingPower.String(), info.VotingPower.Bytes())
+	fmt.Printf("  - 保存到数据库的TotalVotes: %s (0x%x)\n", info.TotalVotes.String(), info.TotalVotes.Bytes())
 	// fmt.Printf("  - 保存到数据库的IsActive: %v\n", info.IsActive)
 	// fmt.Printf("  - 保存到数据库的BlsPublicKey长度: %d\n", len(info.BlsPublicKey))
 	return nil

@@ -895,6 +895,35 @@ func (p *TxPool) addTx(origin txOrigin, tx *types.Transaction) error {
 		tx.ChainID = p.chainID
 	}
 
+	// 🔍 检查交易签名信息
+	p.logger.Info("🔍 交易签名信息检查",
+		"origin", origin.String(),
+		"txType", tx.Type,
+		"nonce", tx.Nonce,
+		"gasPrice", tx.GasPrice.String(),
+		"value", tx.Value.String(),
+		"from", tx.From.String(),
+		"v", func() string {
+			if tx.V != nil {
+				return tx.V.String()
+			}
+			return "nil"
+		}(),
+		"r", func() string {
+			if tx.R != nil {
+				return tx.R.String()
+			}
+			return "nil"
+		}(),
+		"s", func() string {
+			if tx.S != nil {
+				return tx.S.String()
+			}
+			return "nil"
+		}(),
+		"inputLength", len(tx.Input),
+		"blockNumber", p.store.Header().Number)
+
 	// calculate tx hash
 	tx.ComputeHash(p.store.Header().Number)
 
@@ -1097,23 +1126,7 @@ func (p *TxPool) addGossipTx(obj interface{}, _ peer.ID) {
 		return
 	}
 
-	// 🚨 拦截零地址交易 - 在交易池前挡住（优先检测）
-	if tx.From == types.ZeroAddress {
-		p.logger.Error("🚨 CRITICAL: gossip tx has zero sender address - BLOCKED",
-			"txType", tx.Type,
-			"nonce", tx.Nonce,
-			"gasPrice", tx.GasPrice.String(),
-			"value", tx.Value.String(),
-			"to", func() string {
-				if tx.To != nil {
-					return tx.To.String()
-				}
-				return "nil"
-			}(),
-			"rawDataLength", len(raw.Raw.Value),
-			"action", "BLOCKED_BEFORE_TXPOOL")
-		return
-	}
+	// From字段现在通过RLP序列化/反序列化正确传递，无需额外处理
 
 	// 🚨 检测解码后的交易
 	if tx.Hash == (types.Hash{}) {
