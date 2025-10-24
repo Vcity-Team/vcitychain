@@ -57,7 +57,6 @@ func (p *serverParams) initRawParams() error {
 	p.initPeerLimits()
 	p.initLogFileLocation()
 	p.initConsensusSwitchHeight()
-	p.initDPoSValidatorsCount()
 	p.initDPoSDelegateThreshold()
 	p.initDPoSConfig()
 
@@ -85,15 +84,6 @@ func (p *serverParams) initConsensusSwitchHeight() {
 	// 如果命令行参数设置了共识切换高度，则使用该值
 	// 如果为0，表示不进行共识切换
 	// 不设置默认值，保持用户的选择
-}
-
-// 🆕 新增：初始化DPoS验证者数量
-func (p *serverParams) initDPoSValidatorsCount() {
-	// 从配置文件读取DPoS验证者数量
-	p.dposValidatorsCount = p.rawConfig.DPoSValidatorsCount
-	if p.dposValidatorsCount == 0 {
-		p.dposValidatorsCount = 4 // 默认值
-	}
 }
 
 // 🆕 新增：初始化DPoS最小质押门槛

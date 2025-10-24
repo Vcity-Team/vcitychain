@@ -5798,12 +5798,39 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Info("🔍 找到dposValidatorsCount配置", "type", fmt.Sprintf("%T", dposValidatorsCount), "value", dposValidatorsCount)
 		if count, ok := dposValidatorsCount.(float64); ok {
 			vcity_dpos.config.DelegateCount = uint64(count)
-			// logger.Info("👥 使用server层解析的验证者数量", "count", vcity_dpos.config.DelegateCount)
+			vcity_dpos.config.DPoSValidatorsCount = uint64(count) // 🆕 同时设置DPoSValidatorsCount字段
+			logger.Info("👥 使用server层解析的验证者数量", "count", vcity_dpos.config.DPoSValidatorsCount)
 		} else {
 			logger.Warn("👥 dposValidatorsCount类型断言失败", "type", fmt.Sprintf("%T", dposValidatorsCount))
 		}
 	} else {
 		logger.Warn("👥 未找到dposValidatorsCount配置")
+	}
+
+	// 🆕 解析备用验证者数量
+	if backupValidatorsCount, exists := params.Config.Config["backupValidatorsCount"]; exists {
+		logger.Info("🔍 找到backupValidatorsCount配置", "type", fmt.Sprintf("%T", backupValidatorsCount), "value", backupValidatorsCount)
+		if count, ok := backupValidatorsCount.(float64); ok {
+			vcity_dpos.config.BackupValidatorsCount = uint64(count)
+			logger.Info("🔄 使用server层解析的备用验证者数量", "count", vcity_dpos.config.BackupValidatorsCount)
+		} else {
+			logger.Warn("🔄 backupValidatorsCount类型断言失败", "type", fmt.Sprintf("%T", backupValidatorsCount))
+		}
+	} else {
+		logger.Warn("🔄 未找到backupValidatorsCount配置")
+	}
+
+	// 🆕 解析最大漏块数
+	if maxMissedBlocks, exists := params.Config.Config["maxMissedBlocks"]; exists {
+		logger.Info("🔍 找到maxMissedBlocks配置", "type", fmt.Sprintf("%T", maxMissedBlocks), "value", maxMissedBlocks)
+		if count, ok := maxMissedBlocks.(float64); ok {
+			vcity_dpos.config.MaxMissedBlocks = uint64(count)
+			logger.Info("⚠️ 使用server层解析的最大漏块数", "count", vcity_dpos.config.MaxMissedBlocks)
+		} else {
+			logger.Warn("⚠️ maxMissedBlocks类型断言失败", "type", fmt.Sprintf("%T", maxMissedBlocks))
+		}
+	} else {
+		logger.Warn("⚠️ 未找到maxMissedBlocks配置")
 	}
 
 	if epochDuration, exists := params.Config.Config["epochDuration"]; exists {
@@ -7236,137 +7263,81 @@ func (d *DPoS) saveValidatorsWithBLSKeysToDatabase() error {
 }
 
 // 🆕 新增：保存BLS公钥到数据库
+// 🆕 辅助函数：获取当前的DelegateInfo（只更新BLS公钥时使用）
+func (d *DPoS) getCurrentDelegateInfo(address types.Address) (*DelegateInfo, error) {
+	if d.state == nil || d.state.StakeStore == nil {
+		return nil, fmt.Errorf("state store not available")
+	}
+
+	// 从数据库读取当前的DelegateInfo
+	var currentInfo *DelegateInfo
+	err := d.state.StakeStore.db.View(func(tx *bolt.Tx) error {
+		delegateBucket := tx.Bucket([]byte("DelegateInfo"))
+		if delegateBucket == nil {
+			return fmt.Errorf("DelegateInfo bucket not found")
+		}
+
+		data := delegateBucket.Get(address[:])
+		if data == nil {
+			return fmt.Errorf("delegate info not found for address %s", address.String())
+		}
+
+		currentInfo = &DelegateInfo{}
+		return json.Unmarshal(data, currentInfo)
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current delegate info: %w", err)
+	}
+
+	return currentInfo, nil
+}
+
 func (d *DPoS) saveBLSKeyToDatabase(address types.Address, blsKey *bls.PublicKey) {
 	if d.state == nil || d.state.StakeStore == nil {
 		d.logger.Warn("⚠️ 状态存储不可用，无法保存BLS公钥到数据库")
 		return
 	}
 
-	// 获取验证者信息
-	validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	// 🆕 方案3：只更新BLS公钥，保持其他字段不变
+	// 从数据库读取当前的DelegateInfo
+	currentInfo, err := d.getCurrentDelegateInfo(address)
 	if err != nil {
-		d.logger.Warn("⚠️ 获取验证者信息失败", "error", err)
+		d.logger.Error("❌ 无法获取当前验证者信息", "address", address.String(), "error", err)
 		return
 	}
 
-	// 查找并更新对应验证者的BLS公钥
-	for _, validator := range validators {
-		if validator.Address == address {
-			// 🆕 检查是否为创世验证者
-			if d.isGenesisValidator(address) {
-				d.logger.Info("🔒 创世验证者权重保持不变，只更新BLS公钥",
-					"address", address.String(),
-					"note", "创世验证者权重永远不变")
+	// 记录更新前的信息
+	d.logger.Info("🔍 准备更新BLS公钥（保持其他字段不变）",
+		"address", address.String(),
+		"currentVotingPower", currentInfo.VotingPower.String(),
+		"currentTotalVotes", currentInfo.TotalVotes.String(),
+		"currentIsActive", currentInfo.IsActive,
+		"currentBlsKeyLength", len(currentInfo.BlsPublicKey))
 
-				// 🆕 临时修复：如果创世验证者权重为0，则设置为1000 VCITY
-				finalVotingPower := new(big.Int).Set(validator.VotingPower)
-				if finalVotingPower.Cmp(big.NewInt(0)) == 0 {
-					finalVotingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
-					d.logger.Info("🔧 临时修复：创世验证者权重为0，设置为1000 VCITY",
-						"address", address.String(),
-						"originalVotingPower", validator.VotingPower.String(),
-						"fixedVotingPower", finalVotingPower.String())
-				}
+	// 只更新BLS公钥字段，保持其他字段不变
+	if blsKey != nil {
+		blsKeyBytes := blsKey.Marshal()
+		currentInfo.BlsPublicKey = blsKeyBytes
 
-				// 只更新BLS公钥，不更新VotingPower
-				validator.BlsKey = blsKey
+		d.logger.Info("🔍 更新后的DelegateInfo信息",
+			"address", currentInfo.Address.String(),
+			"votingPower", currentInfo.VotingPower.String(), // 保持不变
+			"totalVotes", currentInfo.TotalVotes.String(), // 保持不变
+			"isActive", currentInfo.IsActive, // 保持不变
+			"newBlsKeyLength", len(currentInfo.BlsPublicKey)) // 只更新这个
+	}
 
-				// 创建DelegateInfo并保存到数据库（使用修复后的权重）
-				delegateInfo := &DelegateInfo{
-					Address:        validator.Address,
-					VotingPower:    new(big.Int).Set(finalVotingPower), // 使用修复后的权重
-					TotalVotes:     new(big.Int).Set(finalVotingPower), // 使用修复后的权重
-					ProducedBlocks: 0,
-					MissedBlocks:   0,
-					LastBlockTime:  0,
-					IsActive:       validator.IsActive,
-				}
-
-				// 保存到数据库
-				if err := d.state.StakeStore.setDelegateInfo(validator.Address, delegateInfo, nil); err != nil {
-					d.logger.Error("❌ 保存创世验证者BLS公钥失败", "error", err)
-				} else {
-					d.logger.Info("✅ 创世验证者BLS公钥已保存到数据库",
-						"address", address.String(),
-						"votingPower", finalVotingPower.String(),
-						"note", "权重保持不变")
-				}
-				return
-			}
-
-			// 🆕 检查是否为创世验证者，如果是则使用固定权重，否则保持现有权重
-			var finalVotingPower *big.Int
-			if d.isGenesisValidator(address) {
-				// 创世验证者使用固定权重1000 VCITY
-				finalVotingPower = new(big.Int)
-				finalVotingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
-				d.logger.Debug("🔒 创世验证者使用固定权重",
-					"address", address.String(),
-					"fixedVotingPower", finalVotingPower.String())
-			} else {
-				// 非创世验证者保持现有权重，不查询余额
-				// 权重更新只在vote交易时进行
-				finalVotingPower = new(big.Int).Set(validator.VotingPower)
-				d.logger.Debug("🔒 非创世验证者保持现有权重",
-					"address", address.String(),
-					"existingVotingPower", finalVotingPower.String(),
-					"note", "权重只在vote交易时更新")
-			}
-
-			// 🆕 添加详细日志：打印保存前的信息
-			d.logger.Debug("🔍 准备保存BLS公钥到数据库",
-				"address", address.String(),
-				"originalVotingPower", validator.VotingPower.String(),
-				"newVotingPower", finalVotingPower.String(),
-				"votingPowerHex", fmt.Sprintf("0x%x", finalVotingPower.Bytes()),
-				"isActive", validator.IsActive,
-				"hasBlsKey", validator.BlsKey != nil)
-
-			// 更新BLS公钥和VotingPower
-			validator.BlsKey = blsKey
-			validator.VotingPower = finalVotingPower
-
-			// 🆕 创建DelegateInfo并保存到数据库
-			delegateInfo := &DelegateInfo{
-				Address:        validator.Address,
-				VotingPower:    new(big.Int).Set(finalVotingPower), // 使用最终确定的权重
-				TotalVotes:     new(big.Int).Set(finalVotingPower), // 使用最终确定的权重
-				ProducedBlocks: 0,
-				MissedBlocks:   0,
-				LastBlockTime:  0,
-				IsActive:       validator.IsActive,
-				BlsPublicKey:   []byte{}, // 初始为空
-			}
-
-			// 保存BLS公钥到DelegateInfo
-			if blsKey != nil {
-				blsKeyBytes := blsKey.Marshal()
-				delegateInfo.BlsPublicKey = blsKeyBytes
-				d.logger.Debug("🔍 DelegateInfo详细信息",
-					"address", delegateInfo.Address.String(),
-					"votingPower", delegateInfo.VotingPower.String(),
-					"votingPowerHex", fmt.Sprintf("0x%x", delegateInfo.VotingPower.Bytes()),
-					"totalVotes", delegateInfo.TotalVotes.String(),
-					"totalVotesHex", fmt.Sprintf("0x%x", delegateInfo.TotalVotes.Bytes()),
-					"isActive", delegateInfo.IsActive,
-					"blsPublicKeyLength", len(delegateInfo.BlsPublicKey))
-			}
-
-			// 保存到数据库
-			if err := d.state.StakeStore.setDelegateInfo(address, delegateInfo, nil); err != nil {
-				d.logger.Warn("⚠️ 保存BLS公钥到数据库失败",
-					"address", address.String(),
-					"error", err)
-			} else {
-				d.logger.Info("✅ BLS公钥已保存到数据库",
-					"address", address.String(),
-					"votingPower", finalVotingPower.String(),
-					"votingPowerHex", fmt.Sprintf("0x%x", finalVotingPower.Bytes()),
-					"isActive", validator.IsActive,
-					"blsKeyLength", len(blsKey.Marshal()))
-			}
-			break
-		}
+	// 保存到数据库（只更新BLS公钥，其他字段保持不变）
+	if err := d.state.StakeStore.setDelegateInfo(address, currentInfo, nil); err != nil {
+		d.logger.Error("❌ 保存BLS公钥失败", "address", address.String(), "error", err)
+	} else {
+		d.logger.Info("✅ BLS公钥已保存到数据库（其他字段保持不变）",
+			"address", address.String(),
+			"votingPower", currentInfo.VotingPower.String(),
+			"totalVotes", currentInfo.TotalVotes.String(),
+			"blsKeyLength", len(currentInfo.BlsPublicKey),
+			"note", "只更新BLS公钥，权重和票数保持不变")
 	}
 }
 
@@ -14101,22 +14072,42 @@ func (d *DPoS) persistBLSKeyToStakeStore(address types.Address, blsKeyBytes []by
 		return fmt.Errorf("StakeStore not available")
 	}
 
-	// 创建DelegateInfo结构
-	delegateInfo := &DelegateInfo{
-		Address:        address,
-		VotingPower:    big.NewInt(0), // 初始投票权重为0
-		TotalVotes:     big.NewInt(0), // 初始总票数为0
-		ProducedBlocks: 0,
-		MissedBlocks:   0,
-		LastBlockTime:  0,
-		IsActive:       true, // 默认活跃
-		BlsPublicKey:   blsKeyBytes,
+	// 🆕 修复：从数据库读取当前的DelegateInfo，保持VotingPower和TotalVotes不变
+	currentInfo, err := d.getCurrentDelegateInfo(address)
+	if err != nil {
+		// 如果读取失败，使用默认值
+		d.logger.Warn("⚠️ 无法读取当前验证者信息，使用默认值", "address", address.String(), "error", err)
+		currentInfo = &DelegateInfo{
+			Address:        address,
+			VotingPower:    big.NewInt(0),
+			TotalVotes:     big.NewInt(0),
+			ProducedBlocks: 0,
+			MissedBlocks:   0,
+			LastBlockTime:  0,
+			IsActive:       true,
+		}
 	}
 
+	// 只更新BLS公钥，保持其他字段不变
+	currentInfo.BlsPublicKey = blsKeyBytes
+
+	d.logger.Info("🔍 persistBLSKeyToStakeStore: 准备保存BLS公钥（保持其他字段不变）",
+		"address", address.String(),
+		"votingPower", currentInfo.VotingPower.String(),
+		"totalVotes", currentInfo.TotalVotes.String(),
+		"isActive", currentInfo.IsActive,
+		"blsKeyLength", len(blsKeyBytes))
+
 	// 保存到StakeStore
-	if err := d.state.StakeStore.setDelegateInfo(address, delegateInfo, nil); err != nil {
+	if err := d.state.StakeStore.setDelegateInfo(address, currentInfo, nil); err != nil {
 		return fmt.Errorf("failed to save BLS key to StakeStore: %w", err)
 	}
+
+	d.logger.Info("✅ persistBLSKeyToStakeStore: BLS公钥已保存（其他字段保持不变）",
+		"address", address.String(),
+		"votingPower", currentInfo.VotingPower.String(),
+		"totalVotes", currentInfo.TotalVotes.String(),
+		"note", "只更新BLS公钥，权重和票数保持不变")
 
 	return nil
 }

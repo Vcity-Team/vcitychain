@@ -289,14 +289,6 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			continue
 		}
 
-		// 🆕 添加bestPeer详细信息日志
-		s.logger.Info("🔍 选择bestPeer进行同步检查",
-			"bestPeerID", bestPeer.ID.String(),
-			"bestPeerNumber", bestPeer.Number,
-			"localLatest", localLatest,
-			"skipListSize", len(skipList),
-			"timestamp", time.Now().Format("15:04:05.000"))
-
 		// if the bestPeer does not have a new block continue
 		if bestPeer.Number <= localLatest {
 			// 控制"跳过同步"日志的频率
@@ -325,13 +317,6 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			s.logger.Info("跳过DPoS切换高度区块同步", "peer", bestPeer.ID.String(), "目标高度", bestPeer.Number)
 			continue
 		}
-
-		// 🆕 添加bulkSyncWithPeer调用前的日志
-		s.logger.Info("📞 调用bulkSyncWithPeer",
-			"peerID", bestPeer.ID.String(),
-			"peerLatestBlock", bestPeer.Number,
-			"localLatest", localLatest,
-			"timestamp", time.Now().Format("15:04:05.000"))
 
 		// fetch block from the peer
 		lastNumber, shouldTerminate, err := s.bulkSyncWithPeer(bestPeer.ID, bestPeer.Number, callback)
@@ -364,12 +349,6 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 // bulkSyncWithPeer syncs block with a given peer
 func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 	newBlockCallback func(*types.FullBlock) bool) (uint64, bool, error) {
-	// 🆕 添加bulkSyncWithPeer函数入口的详细日志
-	s.logger.Info("🔍 bulkSyncWithPeer函数入口",
-		"peerID", peerID.String(),
-		"peerLatestBlock", peerLatestBlock,
-		"timestamp", time.Now().Format("15:04:05.000"))
-
 	localLatest := s.blockchain.Header().Number
 	shouldTerminate := false
 
