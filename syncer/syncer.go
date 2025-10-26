@@ -3,6 +3,7 @@ package syncer
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/helper/progress"
@@ -41,6 +42,10 @@ type syncer struct {
 
 	// 🆕 新增：共识切换高度
 	consensusSwitchHeight uint64
+
+	// 🆕 交易去重机制
+	processedTxs map[types.Hash]bool // 已处理的交易哈希
+	txMutex      sync.RWMutex        // 保护交易哈希映射的锁
 }
 
 func NewSyncer(
@@ -60,6 +65,9 @@ func NewSyncer(
 		newStatusCh:           make(chan struct{}),
 		peerMap:               new(PeerMap),
 		consensusSwitchHeight: consensusSwitchHeight,
+
+		// 🆕 初始化交易去重机制
+		processedTxs: make(map[types.Hash]bool),
 	}
 }
 
@@ -446,6 +454,27 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				continue
 			}
 
+			// 🆕 对区块中的交易进行去重检查
+			if len(block.Transactions) > 0 {
+				filteredTransactions := s.filterProcessedTransactions(block.Transactions)
+
+				// 如果过滤后有交易，创建新的区块
+				if len(filteredTransactions) < len(block.Transactions) {
+					s.logger.Info("🔍 过滤重复交易",
+						"peer", peerID.String()[:8],
+						"blockNumber", block.Number(),
+						"originalCount", len(block.Transactions),
+						"filteredCount", len(filteredTransactions))
+
+					// 创建新的区块，只包含未处理的交易
+					newBlock := &types.Block{
+						Header:       block.Header,
+						Transactions: filteredTransactions,
+					}
+					block = newBlock
+				}
+			}
+
 			s.logger.Debug("🔍 开始验证区块", "peer", peerID.String()[:8], "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
 
 			fullBlock, err := s.blockchain.VerifyFinalizedBlock(block)
@@ -507,6 +536,71 @@ func (s *syncer) isDPoSTransitionHeight(blockNumber uint64) bool {
 	// 因为实际上在切换时，那些区块还没有生成，所以不应该跳过同步
 	// 如果将来需要跳过同步，可以在这里添加切换高度检查
 	return false
+}
+
+// 🆕 检查交易是否已处理
+func (s *syncer) isTransactionProcessed(txHash types.Hash) bool {
+	s.txMutex.RLock()
+	defer s.txMutex.RUnlock()
+	return s.processedTxs[txHash]
+}
+
+// 🆕 标记交易为已处理
+func (s *syncer) markTransactionProcessed(txHash types.Hash) {
+	s.txMutex.Lock()
+	defer s.txMutex.Unlock()
+	s.processedTxs[txHash] = true
+	s.logger.Debug("🔍 标记交易为已处理", "txHash", txHash.String())
+}
+
+// 🆕 清理过期的交易哈希（防止内存泄漏）
+func (s *syncer) cleanupProcessedTxs() {
+	s.txMutex.Lock()
+	defer s.txMutex.Unlock()
+
+	// 清理超过1000个的交易哈希
+	if len(s.processedTxs) > 1000 {
+		s.processedTxs = make(map[types.Hash]bool)
+		s.logger.Debug("🔍 清理交易哈希缓存")
+	}
+}
+
+// 🆕 过滤已处理的交易
+func (s *syncer) filterProcessedTransactions(transactions []*types.Transaction) []*types.Transaction {
+	var filtered []*types.Transaction
+	duplicateCount := 0
+
+	for _, tx := range transactions {
+		// 检查交易是否已处理
+		if s.isTransactionProcessed(tx.Hash) {
+			s.logger.Debug("🔍 跳过已处理的交易",
+				"txHash", tx.Hash.String(),
+				"nonce", tx.Nonce)
+			duplicateCount++
+			continue
+		}
+
+		// 标记交易为已处理
+		s.markTransactionProcessed(tx.Hash)
+
+		// 添加到过滤后的列表
+		filtered = append(filtered, tx)
+	}
+
+	// 记录过滤结果
+	if duplicateCount > 0 {
+		s.logger.Info("🔍 交易去重过滤结果",
+			"originalCount", len(transactions),
+			"filteredCount", len(filtered),
+			"duplicateCount", duplicateCount)
+	}
+
+	// 定期清理缓存
+	if len(s.processedTxs) > 500 {
+		s.cleanupProcessedTxs()
+	}
+
+	return filtered
 }
 
 // GetSyncPeerClient returns the sync peer client for controlling status broadcasting
