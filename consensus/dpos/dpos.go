@@ -1038,18 +1038,12 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 				keyAddr := types.Address(r.config.Key.Address())
 
 				// 🆕 添加详细的委托者检查计算过程日志
-				// 🆕 从数据库读取验证者并应用配置限制，确保与getCurrentDelegate使用相同的数据源
+				// 🆕 使用公共函数获取排序和限制后的验证者
 				var dbValidators validator.AccountSet
 				var actualDelegateCount int
 				if dposBackend, ok := r.backend.(*DPoS); ok {
-					if validators, err := dposBackend.state.StakeStore.GetValidatorsWithFilter(false); err == nil {
-						// 应用配置限制
-						if r.config != nil && r.config.DelegateCount > 0 {
-							maxValidators := int(r.config.DelegateCount)
-							if len(validators) > maxValidators {
-								validators = validators[:maxValidators]
-							}
-						}
+					validators, err := dposBackend.GetSortedValidatorsWithLimit()
+					if err == nil {
 						dbValidators = validators
 						actualDelegateCount = len(validators)
 					}
@@ -1792,25 +1786,16 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 	// 统一使用相同的计算公式
 	// 修复：使用slot计算，确保与BlockScheduler一致
 	if r.config != nil && r.config.DelegateCount > 0 {
-		// 🆕 从数据库读取验证者并应用配置限制
-		// 通过类型断言访问DPoS的state字段
+		// 🆕 使用公共函数获取排序和限制后的验证者
 		dposBackend, ok := r.backend.(*DPoS)
 		if !ok {
 			r.logger.Error("❌ 无法访问数据库，backend类型错误")
 			return
 		}
-		validators, err := dposBackend.state.StakeStore.GetValidatorsWithFilter(false)
+		validators, err := dposBackend.GetSortedValidatorsWithLimit()
 		if err != nil {
 			r.logger.Error("❌ 从数据库读取验证者失败", "error", err)
 			return
-		}
-
-		// 🆕 应用配置限制
-		if r.config != nil && r.config.DelegateCount > 0 {
-			maxValidators := int(r.config.DelegateCount)
-			if len(validators) > maxValidators {
-				validators = validators[:maxValidators]
-			}
 		}
 
 		// 🆕 基于截取后的数量计算
@@ -2160,24 +2145,16 @@ func (r *dposRuntime) calculateExpectedDelegateIndex() uint64 {
 		return 0
 	}
 
-	// 🆕 从数据库读取验证者并应用配置限制，确保与getCurrentDelegate使用相同的数据源
+	// 🆕 使用公共函数获取排序和限制后的验证者
 	dposBackend, ok := r.backend.(*DPoS)
 	if !ok {
 		r.logger.Error("❌ 无法访问数据库，backend类型错误")
 		return 0
 	}
-	validators, err := dposBackend.state.StakeStore.GetValidatorsWithFilter(false)
+	validators, err := dposBackend.GetSortedValidatorsWithLimit()
 	if err != nil {
 		r.logger.Error("❌ 从数据库读取验证者失败", "error", err)
 		return 0
-	}
-
-	// 🆕 应用配置限制
-	if r.config != nil && r.config.DelegateCount > 0 {
-		maxValidators := int(r.config.DelegateCount)
-		if len(validators) > maxValidators {
-			validators = validators[:maxValidators]
-		}
 	}
 
 	// 🆕 基于截取后的数量计算
@@ -2337,25 +2314,16 @@ func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64, c
 
 // getCurrentDelegate 获取当前受托人
 func (r *dposRuntime) getCurrentDelegate() types.Address {
-	// 🆕 直接从数据库读取验证者并应用配置限制
-	// 通过类型断言访问DPoS的state字段
+	// 🆕 使用公共函数获取排序和限制后的验证者
 	dposBackend, ok := r.backend.(*DPoS)
 	if !ok {
 		r.logger.Error("❌ 无法访问数据库，backend类型错误")
 		return types.ZeroAddress
 	}
-	validators, err := dposBackend.state.StakeStore.GetValidatorsWithFilter(false)
+	validators, err := dposBackend.GetSortedValidatorsWithLimit()
 	if err != nil {
 		r.logger.Error("❌ 从数据库读取验证者失败", "error", err)
 		return types.ZeroAddress
-	}
-
-	// 🆕 应用配置限制
-	if r.config != nil && r.config.DelegateCount > 0 {
-		maxValidators := int(r.config.DelegateCount)
-		if len(validators) > maxValidators {
-			validators = validators[:maxValidators]
-		}
 	}
 
 	// 🆕 基于截取后的数量计算
@@ -3602,6 +3570,47 @@ type DelegateRegistrationInfo struct {
 	Website     string        `json:"website"`
 	Description string        `json:"description"`
 	Deposit     *big.Int      `json:"deposit"`
+}
+
+// 🆕 公共函数：从数据库读取验证者，按权重倒序排序，应用配置限制
+// GetSortedValidatorsWithLimit 返回排序和限制后的验证者列表
+// 这个函数统一了验证者读取的逻辑，确保所有地方都使用相同的数据源和排序方式
+func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
+	if d.state == nil || d.state.StakeStore == nil {
+		return nil, fmt.Errorf("stake store not available")
+	}
+
+	// 从数据库读取所有验证者
+	validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get validators from database: %w", err)
+	}
+
+	if len(validators) == 0 {
+		return validator.AccountSet{}, nil
+	}
+
+	// 按权重倒序排序
+	sort.Slice(validators, func(i, j int) bool {
+		votingPowerCmp := validators[i].VotingPower.Cmp(validators[j].VotingPower)
+		if votingPowerCmp != 0 {
+			return votingPowerCmp > 0
+		}
+		// 权重相同时，按地址升序排序（确保排序稳定）
+		return bytes.Compare(validators[i].Address[:], validators[j].Address[:]) < 0
+	})
+
+	// 应用配置限制（DPoSValidatorsCount）
+	maxValidators := int(d.config.DPoSValidatorsCount)
+	if maxValidators == 0 {
+		maxValidators = int(d.config.DelegateCount) // 回退到旧配置
+	}
+
+	if maxValidators > 0 && len(validators) > maxValidators {
+		validators = validators[:maxValidators]
+	}
+
+	return validators, nil
 }
 
 // ValidateVoteOnly 只验证投票，不更新状态（供 RPC 预验证使用）
@@ -6769,14 +6778,10 @@ func (d *DPoS) addDelegateSafely(newDelegate *validator.ValidatorMetadata) {
 func (d *DPoS) loadValidatorsFromDatabaseWithLimit() error {
 	d.logger.Info("🔍 开始从数据库加载验证者并按voterpower排序截取前N个")
 
-	if d.state == nil || d.state.StakeStore == nil {
-		return fmt.Errorf("state store not available")
-	}
-
-	// 从数据库获取所有验证者
-	dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	// 🆕 使用公共函数获取排序和限制后的验证者
+	dbValidators, err := d.GetSortedValidatorsWithLimit()
 	if err != nil {
-		return fmt.Errorf("failed to get validators from database: %w", err)
+		return fmt.Errorf("failed to get sorted validators with limit: %w", err)
 	}
 
 	if len(dbValidators) == 0 {
@@ -6797,29 +6802,6 @@ func (d *DPoS) loadValidatorsFromDatabaseWithLimit() error {
 			"hasBlsKey", validator.BlsKey != nil)
 	}
 
-	// 按VotingPower降序排序（使用标准化规则）
-	d.logger.Debug("🔍 按标准化规则排序验证者...")
-	sort.Slice(dbValidators, func(i, j int) bool {
-		// 1. 首先按票数降序排序
-		votingPowerCmp := dbValidators[i].VotingPower.Cmp(dbValidators[j].VotingPower)
-		if votingPowerCmp != 0 {
-			return votingPowerCmp > 0
-		}
-		// 2. 票数相同，按地址升序排序（确保完全一致）
-		return bytes.Compare(dbValidators[i].Address[:], dbValidators[j].Address[:]) < 0
-	})
-
-	// 根据配置文件限制数量
-	maxDelegates := int(d.config.DelegateCount)
-	originalCount := len(dbValidators)
-	if len(dbValidators) > maxDelegates {
-		dbValidators = dbValidators[:maxDelegates]
-		d.logger.Info("🎯 限制验证者数量为前N个",
-			"originalCount", originalCount,
-			"limitedCount", maxDelegates,
-			"configDelegateCount", d.config.DelegateCount)
-	}
-
 	// 设置验证者到runtime
 	if d.runtime != nil {
 		d.runtime.delegates = dbValidators
@@ -6827,8 +6809,7 @@ func (d *DPoS) loadValidatorsFromDatabaseWithLimit() error {
 	d.delegates = dbValidators
 
 	d.logger.Info("✅ 从数据库加载验证者完成",
-		"count", len(dbValidators),
-		"maxDelegates", maxDelegates)
+		"count", len(dbValidators))
 
 	// 详细记录验证者信息
 	for i, validator := range dbValidators {
@@ -7502,73 +7483,6 @@ func (d *DPoS) GetStakingInfo(blockNumber uint64, staker types.Address) (*StakeI
 		Rewards:   big.NewInt(0),
 		Delegate:  types.ZeroAddress,
 	}, nil
-}
-
-// GetAllStakingInfo 获取所有质押信息（从数据库重新聚合）
-func (d *DPoS) GetAllStakingInfo() ([]*StakeInfo, error) {
-	d.lock.RLock()
-	defer d.lock.RUnlock()
-
-	if d.state == nil || d.state.StakeStore == nil {
-		d.logger.Warn("StakeStore 不可用")
-		return []*StakeInfo{}, nil
-	}
-
-	// 🆕 修复：像启动时一样，直接从数据库重新聚合数据
-	// 确保获取最新的投票数据，不依赖可能过时的内存数据
-	d.logger.Info("🔍 开始从数据库重新聚合质押信息（像启动时一样）")
-
-	// 使用和启动时相同的方法：GetValidatorsWithFilter(false)
-	dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
-	if err != nil {
-		d.logger.Error("从数据库获取验证者失败", "error", err)
-		return []*StakeInfo{}, err
-	}
-
-	if len(dbValidators) == 0 {
-		d.logger.Warn("数据库中没有验证者")
-		return []*StakeInfo{}, nil
-	}
-
-	d.logger.Info("✅ 从数据库成功获取验证者", "count", len(dbValidators))
-
-	// 🆕 添加详细日志：打印从数据库读取的验证者信息
-	d.logger.Info("🔍 数据库验证者详细信息:")
-	for i, validator := range dbValidators {
-		d.logger.Info("🔍 数据库验证者",
-			"index", i,
-			"address", validator.Address.String(),
-			"votingPower", validator.VotingPower.String(),
-			"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
-			"isActive", validator.IsActive,
-			"hasBlsKey", validator.BlsKey != nil)
-	}
-
-	// 转换为StakeInfo格式
-	var stakingInfos []*StakeInfo
-	for _, validator := range dbValidators {
-		if validator.VotingPower != nil && validator.VotingPower.Cmp(big.NewInt(0)) > 0 {
-			stakeInfo := &StakeInfo{
-				Staker:    validator.Address,                       // 验证者自己就是质押者
-				Amount:    new(big.Int).Set(validator.VotingPower), // 使用聚合后的投票权重
-				StartTime: uint64(time.Now().Unix()),               // 使用当前时间
-				EndTime:   0,                                       // 验证者没有锁定时间
-				IsLocked:  false,
-				IsActive:  validator.IsActive,
-				Rewards:   big.NewInt(0),
-				Delegate:  validator.Address, // 验证者自己就是委托人
-			}
-			stakingInfos = append(stakingInfos, stakeInfo)
-
-			d.logger.Debug("✅ 创建质押信息",
-				"address", validator.Address.String(),
-				"votingPower", validator.VotingPower.String(),
-				"isActive", validator.IsActive)
-		}
-	}
-
-	d.logger.Info("从数据库重新聚合成功获取质押信息", "count", len(stakingInfos))
-	return stakingInfos, nil
 }
 
 func (d *DPoS) GetStakingInfoWithTx(blockNumber uint64, staker types.Address, dbTx *bolt.Tx) (*StakeInfo, error) {
@@ -11698,33 +11612,11 @@ func (r *dposRuntime) isValidator() bool {
 		if !ok {
 			r.logger.Warn("⚠️ 无法访问数据库，backend类型错误，回退到内存检查")
 		} else if dposBackend.state != nil && dposBackend.state.StakeStore != nil {
-			// 🆕 直接从数据库读取所有验证者
-			dbValidators, err := dposBackend.state.StakeStore.GetValidatorsWithFilter(false)
+			// 🆕 使用公共函数获取排序和限制后的验证者
+			dbValidators, err := dposBackend.GetSortedValidatorsWithLimit()
 			if err != nil {
 				r.logger.Warn("⚠️ 从数据库读取验证者失败，回退到内存检查", "error", err)
 			} else if len(dbValidators) > 0 {
-				// 🆕 按权重倒序排序（与初始化时一致）
-				sort.Slice(dbValidators, func(i, j int) bool {
-					// 1. 首先按票数降序排序
-					votingPowerCmp := dbValidators[i].VotingPower.Cmp(dbValidators[j].VotingPower)
-					if votingPowerCmp != 0 {
-						return votingPowerCmp > 0
-					}
-					// 2. 票数相同，按地址升序排序（确保完全一致）
-					return bytes.Compare(dbValidators[i].Address[:], dbValidators[j].Address[:]) < 0
-				})
-
-				// 🆕 应用配置限制，截取前N个
-				maxValidators := int(r.config.DelegateCount)
-				if dposBackend.config != nil && dposBackend.config.DPoSValidatorsCount > 0 {
-					maxValidators = int(dposBackend.config.DPoSValidatorsCount)
-				}
-				if len(dbValidators) > maxValidators {
-					dbValidators = dbValidators[:maxValidators]
-					r.logger.Debug("🔍 数据库验证者排序截取后",
-						"count", len(dbValidators),
-						"maxValidators", maxValidators)
-				}
 
 				// 🆕 在排序截取后的验证者集合中查找当前节点
 				for idx, delegate := range dbValidators {
@@ -11750,6 +11642,10 @@ func (r *dposRuntime) isValidator() bool {
 				}
 
 				// 当前节点不在截取后的验证者集合中
+				maxValidators := int(r.config.DelegateCount)
+				if dposBackend.config != nil && dposBackend.config.DPoSValidatorsCount > 0 {
+					maxValidators = int(dposBackend.config.DPoSValidatorsCount)
+				}
 				r.logger.Info("❌ 当前节点不在数据库验证者集合中（可能权重不足被截取）",
 					"address", currentAddr.String(),
 					"maxValidators", maxValidators,
@@ -15449,16 +15345,35 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 		timeRemaining = nextEpochTime.Sub(time.Now())
 	}
 
-	// 获取当前验证者信息
+	// 🆕 从数据库读取验证者信息（按权重倒序排序，应用配置限制）
 	validators := make([]map[string]interface{}, 0)
-	if d.delegates != nil {
-		for i, delegate := range d.delegates {
-			validators = append(validators, map[string]interface{}{
-				"index":       i,
-				"address":     delegate.Address.String(),
-				"votingPower": delegate.VotingPower.String(),
-				"isActive":    delegate.IsActive,
+	if d.state != nil && d.state.StakeStore != nil {
+		dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+		if err == nil && len(dbValidators) > 0 {
+			// 按权重倒序排序
+			sort.Slice(dbValidators, func(i, j int) bool {
+				votingPowerCmp := dbValidators[i].VotingPower.Cmp(dbValidators[j].VotingPower)
+				if votingPowerCmp != 0 {
+					return votingPowerCmp > 0
+				}
+				return bytes.Compare(dbValidators[i].Address[:], dbValidators[j].Address[:]) < 0
 			})
+
+			// 应用配置限制（DPoSValidatorsCount）
+			maxValidators := int(d.config.DPoSValidatorsCount)
+			if maxValidators > 0 && len(dbValidators) > maxValidators {
+				dbValidators = dbValidators[:maxValidators]
+			}
+
+			// 转换为输出格式
+			for i, validator := range dbValidators {
+				validators = append(validators, map[string]interface{}{
+					"index":       i,
+					"address":     validator.Address.String(),
+					"votingPower": validator.VotingPower.String(),
+					"isActive":    validator.IsActive,
+				})
+			}
 		}
 	}
 

@@ -12,7 +12,6 @@ import (
 	"github.com/Vcity-Team/vcitychain/command/dpos/proposal"
 	"github.com/Vcity-Team/vcitychain/command/dpos/rewards"
 	"github.com/Vcity-Team/vcitychain/command/dpos/stats"
-	"github.com/Vcity-Team/vcitychain/command/dpos/validator_info"
 	"github.com/Vcity-Team/vcitychain/command/dpos/validator_voting_details"
 	"github.com/Vcity-Team/vcitychain/command/dpos/vote"
 	"github.com/Vcity-Team/vcitychain/command/dpos/voting_staking_info"
@@ -32,7 +31,6 @@ func GetCommand() *cobra.Command {
 
 	// Add subcommands
 	dposCmd.AddCommand(
-		validator_info.GetCommand(),
 		vote.GetCommand(),
 		voting_staking_info.GetCommand(),
 		validator_voting_details.GetCommand(),
