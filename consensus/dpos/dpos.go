@@ -2594,6 +2594,29 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				if dposInstance.epochManager != nil {
 					dposInstance.epochManager.TriggerEpochSwitch(nextBlockNumber)
 				}
+				
+				// 🆕 在epoch结束区块执行故障检测
+				r.logger.Info("🔍 ===== 开始执行故障检测 =====", "blockNumber", nextBlockNumber)
+				if faultFlags, err := dposInstance.detectValidatorFaults(nextBlockNumber); err != nil {
+					r.logger.Error("❌ 故障检测失败", "blockNumber", nextBlockNumber, "error", err)
+				} else if len(faultFlags) > 0 {
+					r.logger.Info("🚨 检测到故障验证者，开始保存到数据库", "faultCount", len(faultFlags))
+					// 保存故障状态到数据库
+					for _, faultFlag := range faultFlags {
+						if err := dposInstance.saveFaultStatusToDatabase(faultFlag); err != nil {
+							r.logger.Error("❌ 保存故障状态到数据库失败", 
+								"address", faultFlag.NodeAddress.String(),
+								"error", err)
+						} else {
+							r.logger.Info("✅ 故障状态已保存到数据库", 
+								"address", faultFlag.NodeAddress.String(),
+								"missedBlocks", faultFlag.MissedBlocks,
+								"reason", faultFlag.Reason)
+						}
+					}
+				} else {
+					r.logger.Info("✅ 没有检测到故障验证者")
+				}
 			}
 		}
 	} else {
@@ -15367,11 +15390,15 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 
 			// 转换为输出格式
 			for i, validator := range dbValidators {
+				// 🆕 获取验证者的故障标志信息
+				faultInfo := d.getValidatorFaultInfo(validator.Address)
+				
 				validators = append(validators, map[string]interface{}{
 					"index":       i,
 					"address":     validator.Address.String(),
 					"votingPower": validator.VotingPower.String(),
 					"isActive":    validator.IsActive,
+					"faultFlag":   faultInfo, // 🆕 添加故障标志信息
 				})
 			}
 		}
@@ -15400,6 +15427,28 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 		"validatorCount":        len(validators),
 		"consensusSwitchHeight": d.config.ConsensusSwitchHeight,
 	}
+}
+
+// 🆕 新增：获取验证者故障标志信息
+func (d *DPoS) getValidatorFaultInfo(validatorAddr types.Address) map[string]interface{} {
+	faultInfo := map[string]interface{}{
+		"isFaulty":       false,
+		"missedBlocks":   uint64(0),
+		"lastUpdateTime": uint64(0),
+		"reason":         "",
+	}
+
+	// 从数据库读取故障状态
+	if d.state != nil && d.state.StakeStore != nil {
+		if dbFaultInfo, err := d.state.StakeStore.GetValidatorFaultStatus(validatorAddr); err == nil && dbFaultInfo != nil {
+			faultInfo["isFaulty"] = dbFaultInfo["isFaulty"]
+			faultInfo["missedBlocks"] = dbFaultInfo["missedBlocks"]
+			faultInfo["lastUpdateTime"] = dbFaultInfo["lastUpdateTime"]
+			faultInfo["reason"] = dbFaultInfo["reason"]
+		}
+	}
+
+	return faultInfo
 }
 
 // GetEpochInfoByNumber 获取指定Epoch信息
@@ -15939,6 +15988,21 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 	}
 
 	return faultFlags, nil
+}
+
+// 🆕 新增：保存故障状态到数据库的辅助方法
+func (d *DPoS) saveFaultStatusToDatabase(faultFlag FaultFlagInfo) error {
+	if d.state == nil || d.state.StakeStore == nil {
+		return fmt.Errorf("state store not available")
+	}
+	
+	return d.state.StakeStore.UpdateValidatorFaultStatus(
+		faultFlag.NodeAddress,
+		faultFlag.IsFaulty,
+		faultFlag.MissedBlocks,
+		faultFlag.LastUpdateTime,
+		faultFlag.Reason,
+	)
 }
 
 // 🆕 新增：计算验证者漏块数

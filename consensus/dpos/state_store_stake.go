@@ -938,6 +938,26 @@ func (s *StakeStore) UpdateValidatorFaultStatus(address types.Address, isFaulty 
 	})
 }
 
+// 🆕 新增：获取验证者故障状态
+func (s *StakeStore) GetValidatorFaultStatus(address types.Address) (map[string]interface{}, error) {
+	var faultInfo map[string]interface{}
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("validatorFaultStatus"))
+		if bucket == nil {
+			return nil // 没有故障记录
+		}
+		
+		data := bucket.Get(address.Bytes())
+		if data == nil {
+			return nil // 该验证者没有故障记录
+		}
+		
+		return json.Unmarshal(data, &faultInfo)
+	})
+	
+	return faultInfo, err
+}
+
 // 🆕 新增：保存Epoch验证者集合
 func (s *StakeStore) SaveEpochValidators(validators validator.AccountSet) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
