@@ -11691,36 +11691,75 @@ func (r *dposRuntime) isValidator() bool {
 
 	currentAddr := types.Address(r.config.Key.Address())
 
-	// 🆕 优先从数据库获取验证者信息，确保数据一致性
+	// 🆕 直接从数据库读取验证者信息，确保数据一致性
 	if r.backend != nil {
-		// 通过backend获取当前验证者集合
-		currentDelegates := r.backend.GetCurrentDelegates()
-		if len(currentDelegates) > 0 {
-			r.logger.Debug("🔍 从backend检查验证者状态", "address", currentAddr.String(), "delegatesCount", len(currentDelegates))
+		// 通过类型断言访问DPoS的state字段
+		dposBackend, ok := r.backend.(*DPoS)
+		if !ok {
+			r.logger.Warn("⚠️ 无法访问数据库，backend类型错误，回退到内存检查")
+		} else if dposBackend.state != nil && dposBackend.state.StakeStore != nil {
+			// 🆕 直接从数据库读取所有验证者
+			dbValidators, err := dposBackend.state.StakeStore.GetValidatorsWithFilter(false)
+			if err != nil {
+				r.logger.Warn("⚠️ 从数据库读取验证者失败，回退到内存检查", "error", err)
+			} else if len(dbValidators) > 0 {
+				// 🆕 按权重倒序排序（与初始化时一致）
+				sort.Slice(dbValidators, func(i, j int) bool {
+					// 1. 首先按票数降序排序
+					votingPowerCmp := dbValidators[i].VotingPower.Cmp(dbValidators[j].VotingPower)
+					if votingPowerCmp != 0 {
+						return votingPowerCmp > 0
+					}
+					// 2. 票数相同，按地址升序排序（确保完全一致）
+					return bytes.Compare(dbValidators[i].Address[:], dbValidators[j].Address[:]) < 0
+				})
 
-			for _, delegate := range currentDelegates {
-				if delegate.Address == currentAddr {
-					// 关键：检查stake是否足够且是否活跃
-					if delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
-						r.logOnce("active_validator", "debug", "✅ 当前节点是活跃验证者（从backend）",
-							"address", currentAddr.String(),
-							"votingPower", delegate.VotingPower.String(),
-							"isActive", delegate.IsActive)
-						return true
-					} else {
-						r.logger.Info("❌ 当前节点不是活跃验证者（stake不足或不活跃，从backend）",
-							"address", currentAddr.String(),
-							"votingPower", delegate.VotingPower.String(),
-							"isActive", delegate.IsActive)
-						return false
+				// 🆕 应用配置限制，截取前N个
+				maxValidators := int(r.config.DelegateCount)
+				if dposBackend.config != nil && dposBackend.config.DPoSValidatorsCount > 0 {
+					maxValidators = int(dposBackend.config.DPoSValidatorsCount)
+				}
+				if len(dbValidators) > maxValidators {
+					dbValidators = dbValidators[:maxValidators]
+					r.logger.Debug("🔍 数据库验证者排序截取后",
+						"count", len(dbValidators),
+						"maxValidators", maxValidators)
+				}
+
+				// 🆕 在排序截取后的验证者集合中查找当前节点
+				for idx, delegate := range dbValidators {
+					if delegate.Address == currentAddr {
+						// 关键：检查stake是否足够且是否活跃
+						if delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
+							// 🆕 使用Info级别日志输出最终出块者信息
+							r.logger.Info("🎯 当前节点是活跃验证者（从数据库）",
+								"address", currentAddr.String(),
+								"votingPower", delegate.VotingPower.String(),
+								"isActive", delegate.IsActive,
+								"rank", idx+1,
+								"totalValidators", len(dbValidators))
+							return true
+						} else {
+							r.logger.Info("❌ 当前节点不是活跃验证者（stake不足或不活跃，从数据库）",
+								"address", currentAddr.String(),
+								"votingPower", delegate.VotingPower.String(),
+								"isActive", delegate.IsActive)
+							return false
+						}
 					}
 				}
-			}
 
-			r.logger.Info("❌ 当前节点不在backend受托人集合中", "address", currentAddr.String())
-			return false
+				// 当前节点不在截取后的验证者集合中
+				r.logger.Info("❌ 当前节点不在数据库验证者集合中（可能权重不足被截取）",
+					"address", currentAddr.String(),
+					"maxValidators", maxValidators,
+					"dbValidatorsCount", len(dbValidators))
+				return false
+			} else {
+				r.logger.Debug("⚠️ 数据库中没有验证者，回退到内存检查")
+			}
 		} else {
-			r.logger.Debug("⚠️ backend返回空验证者集合，回退到内存检查")
+			r.logger.Debug("⚠️ state或StakeStore不可用，回退到内存检查")
 		}
 	}
 
