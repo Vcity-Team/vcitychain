@@ -2594,28 +2594,33 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				if dposInstance.epochManager != nil {
 					dposInstance.epochManager.TriggerEpochSwitch(nextBlockNumber)
 				}
-				
+
 				// 🆕 在epoch结束区块执行故障检测
 				r.logger.Info("🔍 ===== 开始执行故障检测 =====", "blockNumber", nextBlockNumber)
 				if faultFlags, err := dposInstance.detectValidatorFaults(nextBlockNumber); err != nil {
 					r.logger.Error("❌ 故障检测失败", "blockNumber", nextBlockNumber, "error", err)
-				} else if len(faultFlags) > 0 {
-					r.logger.Info("🚨 检测到故障验证者，开始保存到数据库", "faultCount", len(faultFlags))
-					// 保存故障状态到数据库
+				} else {
+					r.logger.Info("💾 开始保存所有验证者的漏块统计到数据库", "validatorCount", len(faultFlags))
+					// 🆕 保存所有验证者的漏块统计到数据库（不管是否故障）
 					for _, faultFlag := range faultFlags {
 						if err := dposInstance.saveFaultStatusToDatabase(faultFlag); err != nil {
-							r.logger.Error("❌ 保存故障状态到数据库失败", 
+							r.logger.Error("❌ 保存验证者状态到数据库失败", 
 								"address", faultFlag.NodeAddress.String(),
 								"error", err)
 						} else {
-							r.logger.Info("✅ 故障状态已保存到数据库", 
-								"address", faultFlag.NodeAddress.String(),
-								"missedBlocks", faultFlag.MissedBlocks,
-								"reason", faultFlag.Reason)
+							if faultFlag.IsFaulty {
+								r.logger.Info("🚨 故障验证者状态已保存到数据库", 
+									"address", faultFlag.NodeAddress.String(),
+									"missedBlocks", faultFlag.MissedBlocks,
+									"reason", faultFlag.Reason)
+							} else {
+								r.logger.Info("✅ 正常验证者状态已保存到数据库", 
+									"address", faultFlag.NodeAddress.String(),
+									"missedBlocks", faultFlag.MissedBlocks,
+									"reason", faultFlag.Reason)
+							}
 						}
 					}
-				} else {
-					r.logger.Info("✅ 没有检测到故障验证者")
 				}
 			}
 		}
@@ -3610,6 +3615,31 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 	}
 
 	if len(validators) == 0 {
+		return validator.AccountSet{}, nil
+	}
+
+	// 🆕 过滤掉故障验证者
+	activeValidators := make(validator.AccountSet, 0, len(validators))
+	for _, validator := range validators {
+		faultInfo := d.getValidatorFaultInfo(validator.Address)
+		isFaulty := false
+		if faultInfo["isFaulty"] != nil {
+			isFaulty = faultInfo["isFaulty"].(bool)
+		}
+		
+		if !isFaulty {
+			activeValidators = append(activeValidators, validator)
+		} else {
+			d.logger.Info("🚫 过滤掉故障验证者", 
+				"address", validator.Address.String(),
+				"missedBlocks", faultInfo["missedBlocks"],
+				"reason", faultInfo["reason"])
+		}
+	}
+	
+	validators = activeValidators
+	if len(validators) == 0 {
+		d.logger.Warn("⚠️ 所有验证者都被标记为故障，返回空列表")
 		return validator.AccountSet{}, nil
 	}
 
@@ -6553,20 +6583,11 @@ func (d *DPoS) initializeDelegates() error {
 	// 🆕 首先尝试从数据库读取受托人（真正用于出块）
 	if d.state != nil && d.state.StakeStore != nil {
 		d.logger.Info("🔍 开始从数据库读取验证者信息...")
-		dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+		// 🆕 使用公共函数获取排序和限制后的验证者（包含故障过滤）
+		dbValidators, err := d.GetSortedValidatorsWithLimit()
 		if err != nil {
 			d.logger.Warn("⚠️ 从数据库读取受托人失败，将使用创世文件", "error", err)
 		} else if len(dbValidators) > 0 {
-			// 🆕 过滤掉故障验证者
-			activeValidators := make(validator.AccountSet, 0, len(dbValidators))
-			for _, validator := range dbValidators {
-				if !d.faultyValidators[validator.Address] {
-					activeValidators = append(activeValidators, validator)
-				} else {
-					d.logger.Info("🚫 跳过故障验证者", "address", validator.Address.String())
-				}
-			}
-			dbValidators = activeValidators
 			d.logger.Info("✅ 从数据库成功读取验证者", "count", len(dbValidators))
 
 			// 🆕 显著日志：显示数据库验证者详细信息
@@ -6816,13 +6837,17 @@ func (d *DPoS) loadValidatorsFromDatabaseWithLimit() error {
 	// 🆕 添加详细日志：打印从数据库读取的验证者信息
 	d.logger.Info("🔍 数据库验证者详细信息:")
 	for i, validator := range dbValidators {
+		// 🆕 获取验证者的故障标志信息
+		faultInfo := d.getValidatorFaultInfo(validator.Address)
+		
 		d.logger.Info("🔍 数据库验证者",
 			"index", i,
 			"address", validator.Address.String(),
 			"votingPower", validator.VotingPower.String(),
 			"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
 			"isActive", validator.IsActive,
-			"hasBlsKey", validator.BlsKey != nil)
+			"hasBlsKey", validator.BlsKey != nil,
+			"faultFlag", faultInfo) // 🆕 添加故障标志信息
 	}
 
 	// 设置验证者到runtime
@@ -7402,13 +7427,17 @@ func (d *DPoS) GetDelegates(blockNumber uint64, parents []*types.Header) (valida
 				// 🆕 添加详细日志：打印从数据库读取的验证者信息
 				d.logger.Info("🔍 数据库验证者详细信息:")
 				for i, validator := range dbValidators {
+					// 🆕 获取验证者的故障标志信息
+					faultInfo := d.getValidatorFaultInfo(validator.Address)
+					
 					d.logger.Info("🔍 数据库验证者",
 						"index", i,
 						"address", validator.Address.String(),
 						"votingPower", validator.VotingPower.String(),
 						"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
 						"isActive", validator.IsActive,
-						"hasBlsKey", validator.BlsKey != nil)
+						"hasBlsKey", validator.BlsKey != nil,
+						"faultFlag", faultInfo) // 🆕 添加故障标志信息
 				}
 
 				return dbValidators, nil
@@ -15371,28 +15400,14 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 	// 🆕 从数据库读取验证者信息（按权重倒序排序，应用配置限制）
 	validators := make([]map[string]interface{}, 0)
 	if d.state != nil && d.state.StakeStore != nil {
-		dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+		// 🆕 使用公共函数获取排序和限制后的验证者（包含故障过滤）
+		dbValidators, err := d.GetSortedValidatorsWithLimit()
 		if err == nil && len(dbValidators) > 0 {
-			// 按权重倒序排序
-			sort.Slice(dbValidators, func(i, j int) bool {
-				votingPowerCmp := dbValidators[i].VotingPower.Cmp(dbValidators[j].VotingPower)
-				if votingPowerCmp != 0 {
-					return votingPowerCmp > 0
-				}
-				return bytes.Compare(dbValidators[i].Address[:], dbValidators[j].Address[:]) < 0
-			})
-
-			// 应用配置限制（DPoSValidatorsCount）
-			maxValidators := int(d.config.DPoSValidatorsCount)
-			if maxValidators > 0 && len(dbValidators) > maxValidators {
-				dbValidators = dbValidators[:maxValidators]
-			}
-
 			// 转换为输出格式
 			for i, validator := range dbValidators {
 				// 🆕 获取验证者的故障标志信息
 				faultInfo := d.getValidatorFaultInfo(validator.Address)
-				
+
 				validators = append(validators, map[string]interface{}{
 					"index":       i,
 					"address":     validator.Address.String(),
@@ -15946,28 +15961,40 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 		missedBlocks := d.calculateMissedBlocks(validator.Address, d.currentEpoch, currentEpoch)
 		d.missedBlocksCount[validator.Address] = missedBlocks
 
+		isFaulty := missedBlocks > d.config.MaxMissedBlocks
+		
 		d.logger.Info("📊 验证者漏块统计",
 			"address", validator.Address.String(),
 			"missedBlocks", missedBlocks,
 			"threshold", d.config.MaxMissedBlocks,
-			"isFaulty", missedBlocks > d.config.MaxMissedBlocks)
+			"isFaulty", isFaulty)
 
-		// 检查是否超过阈值
-		if missedBlocks > d.config.MaxMissedBlocks {
-			faultFlag := FaultFlagInfo{
-				NodeAddress:    validator.Address,
-				IsFaulty:       true,
-				MissedBlocks:   missedBlocks,
-				LastUpdateTime: uint64(time.Now().Unix()),
-				Reason:         fmt.Sprintf("漏块数超过阈值: %d > %d", missedBlocks, d.config.MaxMissedBlocks),
-			}
-			faultFlags = append(faultFlags, faultFlag)
+		// 🆕 不管漏块数为多少，都保存到数据库
+		faultFlag := FaultFlagInfo{
+			NodeAddress:    validator.Address,
+			IsFaulty:       isFaulty,
+			MissedBlocks:   missedBlocks,
+			LastUpdateTime: uint64(time.Now().Unix()),
+			Reason:         func() string {
+				if isFaulty {
+					return fmt.Sprintf("漏块数超过阈值: %d > %d", missedBlocks, d.config.MaxMissedBlocks)
+				}
+				return fmt.Sprintf("漏块数正常: %d <= %d", missedBlocks, d.config.MaxMissedBlocks)
+			}(),
+		}
+		faultFlags = append(faultFlags, faultFlag)
 
+		if isFaulty {
 			d.logger.Info("🚨 ===== 检测到故障验证者 =====",
 				"address", validator.Address.String(),
 				"missedBlocks", missedBlocks,
 				"threshold", d.config.MaxMissedBlocks,
 				"reason", faultFlag.Reason)
+		} else {
+			d.logger.Info("✅ 验证者状态正常",
+				"address", validator.Address.String(),
+				"missedBlocks", missedBlocks,
+				"threshold", d.config.MaxMissedBlocks)
 		}
 	}
 
@@ -15995,7 +16022,7 @@ func (d *DPoS) saveFaultStatusToDatabase(faultFlag FaultFlagInfo) error {
 	if d.state == nil || d.state.StakeStore == nil {
 		return fmt.Errorf("state store not available")
 	}
-	
+
 	return d.state.StakeStore.UpdateValidatorFaultStatus(
 		faultFlag.NodeAddress,
 		faultFlag.IsFaulty,
@@ -16008,6 +16035,9 @@ func (d *DPoS) saveFaultStatusToDatabase(faultFlag FaultFlagInfo) error {
 // 🆕 新增：计算验证者漏块数
 func (d *DPoS) calculateMissedBlocks(validatorAddr types.Address, startEpoch, endEpoch uint64) uint64 {
 	missedBlocks := uint64(0)
+	var epochToCheck uint64
+	var expectedBlocks uint64
+	var actualBlocks uint64
 
 	// 计算每个epoch中该验证者应该出块的次数
 	blocksPerEpoch := d.config.DPoSValidatorsCount
@@ -16015,47 +16045,51 @@ func (d *DPoS) calculateMissedBlocks(validatorAddr types.Address, startEpoch, en
 		blocksPerEpoch = d.config.DelegateCount
 	}
 
-	// 计算该验证者应该出块的总次数
-	expectedBlocks := (endEpoch - startEpoch) * blocksPerEpoch / d.config.DPoSValidatorsCount
+	// 🆕 修复：只检测刚结束的epoch，不是跨多个epoch
+	if endEpoch > startEpoch {
+		// 只检测最后一个epoch（刚结束的epoch）
+		epochToCheck = endEpoch - 1
 
-	// 查询区块历史，计算实际出块数
-	if d.blockchain != nil {
-		actualBlocks := uint64(0)
-		for epoch := startEpoch; epoch < endEpoch; epoch++ {
-			epochStartBlock := epoch * blocksPerEpoch
-			epochEndBlock := (epoch + 1) * blocksPerEpoch
+		// 计算该验证者在这个epoch中应该出块的次数
+		expectedBlocks = blocksPerEpoch / d.config.DPoSValidatorsCount
+		if expectedBlocks == 0 {
+			expectedBlocks = 1 // 至少应该出1个块
+		}
+
+		// 查询区块历史，计算实际出块数
+		if d.blockchain != nil {
+			actualBlocks = 0
+			consensusSwitchHeight := d.config.ConsensusSwitchHeight
+
+			// 🆕 修复：正确计算epoch对应的区块范围
+			epochStartBlock := consensusSwitchHeight + epochToCheck*blocksPerEpoch
+			epochEndBlock := consensusSwitchHeight + (epochToCheck+1)*blocksPerEpoch
 
 			// 查询这个epoch中该验证者实际出块的次数
 			for blockNum := epochStartBlock; blockNum < epochEndBlock; blockNum++ {
 				if header, exists := d.blockchain.GetHeaderByNumber(blockNum); exists {
-					// 解析区块的Extra字段，检查出块者
-					var extra Extra
-					if err := extra.UnmarshalRLP(header.ExtraData); err == nil {
-						// 检查是否是该验证者出块
-						if extra.Validators != nil {
-							for _, validator := range extra.Validators.Added {
-								if validator.Address == validatorAddr {
-									actualBlocks++
-									break
-								}
-							}
+					// 🆕 修复：通过Miner字段检查出块者
+					if len(header.Miner) == 20 {
+						minerAddr := types.Address(header.Miner)
+						if minerAddr == validatorAddr {
+							actualBlocks++
 						}
 					}
 				}
 			}
-		}
 
-		// 计算漏块数
-		if expectedBlocks > actualBlocks {
-			missedBlocks = expectedBlocks - actualBlocks
+			// 计算漏块数
+			if expectedBlocks > actualBlocks {
+				missedBlocks = expectedBlocks - actualBlocks
+			}
 		}
 	}
 
 	d.logger.Info("📊 计算验证者漏块数",
 		"validator", validatorAddr.String(),
-		"startEpoch", startEpoch,
-		"endEpoch", endEpoch,
+		"epochToCheck", epochToCheck,
 		"expectedBlocks", expectedBlocks,
+		"actualBlocks", actualBlocks,
 		"missedBlocks", missedBlocks)
 
 	return missedBlocks
@@ -16063,58 +16097,32 @@ func (d *DPoS) calculateMissedBlocks(validatorAddr types.Address, startEpoch, en
 
 // 🆕 新增：获取当前epoch（基于区块号）
 func (d *DPoS) getCurrentEpochByBlock(blockNumber uint64) uint64 {
+	consensusSwitchHeight := d.config.ConsensusSwitchHeight
 	blocksPerEpoch := d.config.DPoSValidatorsCount
 	if blocksPerEpoch == 0 {
 		blocksPerEpoch = d.config.DelegateCount
 	}
-	return blockNumber / blocksPerEpoch
+
+	if blockNumber < consensusSwitchHeight {
+		return 0
+	}
+
+	dposBlockNumber := blockNumber - consensusSwitchHeight
+	return dposBlockNumber / blocksPerEpoch
 }
 
 // 🆕 新增：计算下一个epoch的验证者集合
 func (d *DPoS) calculateNextEpochValidators(blockNumber uint64) (validator.AccountSet, error) {
 	d.logger.Info("🔄 计算下一个epoch的验证者集合", "blockNumber", blockNumber)
 
-	// 从数据库获取所有验证者
-	if d.state == nil || d.state.StakeStore == nil {
-		return nil, fmt.Errorf("stake store not available")
-	}
-
-	allValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	// 🆕 使用公共函数获取排序和限制后的验证者（包含故障过滤）
+	activeValidators, err := d.GetSortedValidatorsWithLimit()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get validators: %v", err)
-	}
-
-	// 过滤掉故障验证者
-	activeValidators := make(validator.AccountSet, 0, len(allValidators))
-	for _, validator := range allValidators {
-		if !d.faultyValidators[validator.Address] {
-			activeValidators = append(activeValidators, validator)
-		}
-	}
-
-	// 按权重排序
-	sort.Slice(activeValidators, func(i, j int) bool {
-		votingPowerCmp := activeValidators[i].VotingPower.Cmp(activeValidators[j].VotingPower)
-		if votingPowerCmp != 0 {
-			return votingPowerCmp > 0
-		}
-		return bytes.Compare(activeValidators[i].Address[:], activeValidators[j].Address[:]) < 0
-	})
-
-	// 截取前N个
-	maxValidators := int(d.config.DPoSValidatorsCount)
-	if maxValidators == 0 {
-		maxValidators = int(d.config.DelegateCount)
-	}
-
-	if len(activeValidators) > maxValidators {
-		activeValidators = activeValidators[:maxValidators]
+		return nil, fmt.Errorf("failed to get sorted validators: %v", err)
 	}
 
 	d.logger.Info("✅ 下一个epoch验证者集合计算完成",
-		"totalValidators", len(allValidators),
-		"activeValidators", len(activeValidators),
-		"maxValidators", maxValidators)
+		"activeValidators", len(activeValidators))
 
 	return activeValidators, nil
 }
