@@ -2604,17 +2604,17 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 					// 🆕 保存所有验证者的漏块统计到数据库（不管是否故障）
 					for _, faultFlag := range faultFlags {
 						if err := dposInstance.saveFaultStatusToDatabase(faultFlag); err != nil {
-							r.logger.Error("❌ 保存验证者状态到数据库失败", 
+							r.logger.Error("❌ 保存验证者状态到数据库失败",
 								"address", faultFlag.NodeAddress.String(),
 								"error", err)
 						} else {
 							if faultFlag.IsFaulty {
-								r.logger.Info("🚨 故障验证者状态已保存到数据库", 
+								r.logger.Info("🚨 故障验证者状态已保存到数据库",
 									"address", faultFlag.NodeAddress.String(),
 									"missedBlocks", faultFlag.MissedBlocks,
 									"reason", faultFlag.Reason)
 							} else {
-								r.logger.Info("✅ 正常验证者状态已保存到数据库", 
+								r.logger.Info("✅ 正常验证者状态已保存到数据库",
 									"address", faultFlag.NodeAddress.String(),
 									"missedBlocks", faultFlag.MissedBlocks,
 									"reason", faultFlag.Reason)
@@ -3626,17 +3626,17 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 		if faultInfo["isFaulty"] != nil {
 			isFaulty = faultInfo["isFaulty"].(bool)
 		}
-		
+
 		if !isFaulty {
 			activeValidators = append(activeValidators, validator)
 		} else {
-			d.logger.Info("🚫 过滤掉故障验证者", 
+			d.logger.Info("🚫 过滤掉故障验证者",
 				"address", validator.Address.String(),
 				"missedBlocks", faultInfo["missedBlocks"],
 				"reason", faultInfo["reason"])
 		}
 	}
-	
+
 	validators = activeValidators
 	if len(validators) == 0 {
 		d.logger.Warn("⚠️ 所有验证者都被标记为故障，返回空列表")
@@ -6839,7 +6839,7 @@ func (d *DPoS) loadValidatorsFromDatabaseWithLimit() error {
 	for i, validator := range dbValidators {
 		// 🆕 获取验证者的故障标志信息
 		faultInfo := d.getValidatorFaultInfo(validator.Address)
-		
+
 		d.logger.Info("🔍 数据库验证者",
 			"index", i,
 			"address", validator.Address.String(),
@@ -7429,7 +7429,7 @@ func (d *DPoS) GetDelegates(blockNumber uint64, parents []*types.Header) (valida
 				for i, validator := range dbValidators {
 					// 🆕 获取验证者的故障标志信息
 					faultInfo := d.getValidatorFaultInfo(validator.Address)
-					
+
 					d.logger.Info("🔍 数据库验证者",
 						"index", i,
 						"address", validator.Address.String(),
@@ -15962,7 +15962,7 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 		d.missedBlocksCount[validator.Address] = missedBlocks
 
 		isFaulty := missedBlocks > d.config.MaxMissedBlocks
-		
+
 		d.logger.Info("📊 验证者漏块统计",
 			"address", validator.Address.String(),
 			"missedBlocks", missedBlocks,
@@ -15975,7 +15975,7 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 			IsFaulty:       isFaulty,
 			MissedBlocks:   missedBlocks,
 			LastUpdateTime: uint64(time.Now().Unix()),
-			Reason:         func() string {
+			Reason: func() string {
 				if isFaulty {
 					return fmt.Sprintf("漏块数超过阈值: %d > %d", missedBlocks, d.config.MaxMissedBlocks)
 				}
