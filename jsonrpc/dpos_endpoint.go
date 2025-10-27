@@ -67,6 +67,9 @@ type dposStore interface {
 
 	// GetBlockByHash gets a block using the provided hash
 	GetBlockByHash(hash types.Hash, full bool) (*types.Block, bool)
+
+	// GetHeaderByNumber gets a header using the provided number
+	GetHeaderByNumber(uint64) (*types.Header, bool)
 }
 
 // DPOS is the dpos jsonrpc endpoint
@@ -4148,4 +4151,174 @@ func (d *DPOS) getCurrentProposalPeriodInfo() string {
 	}
 
 	return "无法获取提案周期信息"
+}
+
+// GetBlockProducers 获取区块范围内的出块者信息
+// 支持两种模式：
+// 1. 按区块范围：[startBlock, endBlock]
+// 2. 按Epoch：[{"epoch": epochNumber}]
+func (d *DPOS) GetBlockProducers(ctx context.Context, params interface{}) (map[string]interface{}, error) {
+	d.logger.Info("DPoS GetBlockProducers called", "params", params)
+
+	var startBlock, endBlock uint64
+	var mode string
+	var epochNumber uint64
+
+	// 解析参数
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) == 0 {
+			return nil, fmt.Errorf("parameters required")
+		}
+
+		// 判断是区块范围还是Epoch
+		if len(p) == 1 {
+			// 可能是Epoch对象或单个数字
+			if epochMap, ok := p[0].(map[string]interface{}); ok {
+				// 按Epoch查询
+				epochVal, ok := epochMap["epoch"]
+				if !ok {
+					return nil, fmt.Errorf("epoch parameter required in object mode")
+				}
+				epochNumber = uint64(epochVal.(float64))
+				mode = "epoch"
+			} else if epochNum, ok := p[0].(float64); ok {
+				// 简化版：直接传epoch数字
+				epochNumber = uint64(epochNum)
+				mode = "epoch"
+			} else {
+				return nil, fmt.Errorf("invalid parameter format")
+			}
+		} else if len(p) == 2 {
+			// 区块范围模式
+			start := p[0]
+			end := p[1]
+			startBlock = uint64(start.(float64))
+			endBlock = uint64(end.(float64))
+			mode = "blockRange"
+		} else {
+			return nil, fmt.Errorf("invalid parameter count")
+		}
+	default:
+		return nil, fmt.Errorf("invalid parameter type")
+	}
+
+	// 如果是Epoch模式，转换为区块范围
+	if mode == "epoch" {
+		// 获取DPoS引擎
+		dposEngine := d.getDPoSEngine()
+		if dposEngine == nil {
+			return nil, fmt.Errorf("DPoS engine not available")
+		}
+
+		// 获取共识切换高度和epoch大小
+		var consensusSwitchHeight, epochSize uint64
+		if engine, ok := dposEngine.(interface {
+			GetConfig() interface{}
+		}); ok {
+			config := engine.GetConfig()
+			if cfg, ok := config.(*dpos.DPoSConfig); ok {
+				consensusSwitchHeight = cfg.ConsensusSwitchHeight
+				epochSize = cfg.DPoSValidatorsCount
+
+				// 如果DPoSValidatorsCount为0，尝试从DelegateCount获取
+				if epochSize == 0 {
+					epochSize = cfg.DelegateCount
+				}
+			}
+		}
+
+		// 计算Epoch对应的区块范围
+		if epochNumber == 0 {
+			// Epoch 0 是IBFT区块
+			startBlock = 0
+			endBlock = consensusSwitchHeight - 1
+		} else {
+			// DPoS Epoch
+			dposEpoch := epochNumber - 1
+			startBlock = consensusSwitchHeight + dposEpoch*epochSize
+			endBlock = startBlock + epochSize - 1
+		}
+
+		d.logger.Info("🔄 Epoch转换为区块范围",
+			"epoch", epochNumber,
+			"startBlock", startBlock,
+			"endBlock", endBlock)
+	}
+
+	// 验证区块范围
+	if endBlock < startBlock {
+		return nil, fmt.Errorf("invalid block range: endBlock < startBlock")
+	}
+
+	// 限制范围（最多查询1000个区块）
+	if endBlock-startBlock > 1000 {
+		return nil, fmt.Errorf("block range too large, max 1000 blocks")
+	}
+
+	// 从区块链获取区块出块者信息
+	producerBlocks := make(map[types.Address][]uint64)
+
+	for blockNum := startBlock; blockNum <= endBlock; blockNum++ {
+		// 获取区块头
+		header, exists := d.store.GetHeaderByNumber(blockNum)
+		if !exists {
+			continue
+		}
+
+		// 从区块头获取出块者
+		miner := types.BytesToAddress(header.Miner)
+
+		// 添加到结果
+		producerBlocks[miner] = append(producerBlocks[miner], blockNum)
+	}
+
+	// 构建返回结果
+	result := make(map[string]interface{})
+	producers := make([]map[string]interface{}, 0)
+
+	for address, blocks := range producerBlocks {
+		producers = append(producers, map[string]interface{}{
+			"address": address.String(),
+			"blocks":  blocks,
+			"count":   len(blocks),
+		})
+	}
+
+	// 按出块数量排序
+	sort.Slice(producers, func(i, j int) bool {
+		countI := producers[i]["count"].(int)
+		countJ := producers[j]["count"].(int)
+		if countI == countJ {
+			// 如果数量相同，按地址排序
+			addrI := producers[i]["address"].(string)
+			addrJ := producers[j]["address"].(string)
+			return addrI < addrJ
+		}
+		return countI > countJ
+	})
+
+	result["mode"] = mode
+	if mode == "epoch" {
+		result["epoch"] = epochNumber
+	}
+	result["startBlock"] = startBlock
+	result["endBlock"] = endBlock
+	result["producers"] = producers
+	result["totalBlocks"] = endBlock - startBlock + 1
+	result["actualBlocksFound"] = func() int {
+		total := 0
+		for _, p := range producers {
+			total += p["count"].(int)
+		}
+		return total
+	}()
+
+	d.logger.Info("✅ GetBlockProducers 完成",
+		"mode", mode,
+		"startBlock", startBlock,
+		"endBlock", endBlock,
+		"producerCount", len(producers))
+
+	return result, nil
 }

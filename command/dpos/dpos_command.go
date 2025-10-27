@@ -3,6 +3,7 @@ package dpos
 import (
 	"github.com/spf13/cobra"
 
+	"github.com/Vcity-Team/vcitychain/command/dpos/block_producers"
 	"github.com/Vcity-Team/vcitychain/command/dpos/current_params"
 	"github.com/Vcity-Team/vcitychain/command/dpos/delegate"
 	"github.com/Vcity-Team/vcitychain/command/dpos/epoch"
@@ -35,6 +36,7 @@ func GetCommand() *cobra.Command {
 		voting_staking_info.GetCommand(),
 		validator_voting_details.GetCommand(),
 		getVoteByHash.GetCommand(),
+		block_producers.GetCommand(),
 		// Economic system commands
 		epoch.GetCommand(),
 		stats.GetCommand(),
