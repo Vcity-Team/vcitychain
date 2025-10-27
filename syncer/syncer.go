@@ -254,6 +254,15 @@ func (s *syncer) HasSyncPeer() bool {
 	return bestPeer != nil && bestPeer.Number > header.Number
 }
 
+// GetBestPeerNumber returns the latest block number from the best peer
+func (s *syncer) GetBestPeerNumber() uint64 {
+	bestPeer := s.peerMap.BestPeer(nil)
+	if bestPeer != nil {
+		return bestPeer.Number
+	}
+	return 0
+}
+
 // Sync syncs block with the best peer until callback returns true
 func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 	localLatest := s.blockchain.Header().Number

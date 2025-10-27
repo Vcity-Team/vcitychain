@@ -78,6 +78,8 @@ type Syncer interface {
 	EnablePublishingPeerStatus()
 	// DisablePublishingPeerStatus disables publishing own status via gossip
 	DisablePublishingPeerStatus()
+	// GetBestPeerNumber returns the latest block number from the best peer
+	GetBestPeerNumber() uint64
 }
 
 type Progression interface {
