@@ -1049,7 +1049,8 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 			if shouldProduce {
 				// 🆕 TRON方式：shouldProduceBlockNow() 已经基于时间实时计算并判断
 				// 不需要再检查 currentDelegate，直接出块
-				r.logger.Info("✅ shouldProduceBlockNow返回true，开始出块",
+				r.logOnceWithInterval("should_produce_start", 2*time.Second, "info",
+					"✅ shouldProduceBlockNow返回true，开始出块",
 					"timestamp", time.Now().Format("15:04:05.000"))
 				if err := r.produceBlock(); err != nil {
 					r.logger.Error("出块失败", "error", err)
