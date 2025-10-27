@@ -4891,7 +4891,7 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 		stackInfo = stackTrace
 	}
 
-	d.logger.Info("🔍 VerifyHeader被调用 - 追踪调用来源",
+	d.logger.Debug("🔍 VerifyHeader被调用 - 追踪调用来源",
 		"blockNumber", blockNumber,
 		"blockHash", header.Hash.String()[:16],
 		"timestamp", time.Now().Format("15:04:05.000"),

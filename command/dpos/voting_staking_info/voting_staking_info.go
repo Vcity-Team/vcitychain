@@ -86,61 +86,57 @@ func (r *VotingStakingInfoResult) GetOutput() string {
 	}
 
 	// 🆕 显示验证者质押信息（权重倒序，包含故障标志）
-	if stakingInfo, ok := r.StakingInfo.([]interface{}); ok && len(stakingInfo) > 0 {
-		output += fmt.Sprintf("Validator Staking Information (Sorted by Weight, %d total):\n", len(stakingInfo))
-		output += fmt.Sprintf("====================================================\n")
-		for i, staking := range stakingInfo {
-			if stakingMap, ok := staking.(map[string]interface{}); ok {
-				output += fmt.Sprintf("\n%d. Validator: %v\n", i+1, stakingMap["staker"])
+	var stakingInfo []map[string]interface{}
+	if stakingInfoRaw, ok := r.StakingInfo.([]map[string]interface{}); ok && len(stakingInfoRaw) > 0 {
+		stakingInfo = stakingInfoRaw
+	} else if stakingInfoRaw2, ok := r.StakingInfo.([]interface{}); ok && len(stakingInfoRaw2) > 0 {
+		// 兼容旧格式：[]interface{}
+		stakingInfo = make([]map[string]interface{}, 0)
+		for _, item := range stakingInfoRaw2 {
+			if stakingMap, ok := item.(map[string]interface{}); ok {
+				stakingInfo = append(stakingInfo, stakingMap)
+			}
+		}
+	}
 
-				// 格式化 Amount 显示
-				if amount, ok := stakingMap["amount"]; ok {
-					if amountStr, ok := amount.(string); ok {
-						if amountBigInt, ok := new(big.Int).SetString(amountStr, 10); ok {
-							ethAmount := new(big.Float).Quo(new(big.Float).SetInt(amountBigInt), new(big.Float).SetFloat64(1e18))
-							output += fmt.Sprintf("   Amount: %s ETH (%s Wei)\n", ethAmount.Text('f', 2), amountStr)
-						} else {
-							output += fmt.Sprintf("   Amount: %v\n", amount)
-						}
+	if len(stakingInfo) > 0 {
+		output += fmt.Sprintf("\nValidator Staking Information (Sorted by Weight, %d total):\n", len(stakingInfo))
+		output += fmt.Sprintf("====================================================\n")
+		for i, stakingMap := range stakingInfo {
+			output += fmt.Sprintf("\n%d. Validator: %v\n", i+1, stakingMap["staker"])
+
+			// 格式化 Amount 显示
+			if amount, ok := stakingMap["amount"]; ok {
+				if amountStr, ok := amount.(string); ok {
+					if amountBigInt, ok := new(big.Int).SetString(amountStr, 10); ok {
+						ethAmount := new(big.Float).Quo(new(big.Float).SetInt(amountBigInt), new(big.Float).SetFloat64(1e18))
+						output += fmt.Sprintf("   Amount: %s ETH (%s Wei)\n", ethAmount.Text('f', 2), amountStr)
 					} else {
 						output += fmt.Sprintf("   Amount: %v\n", amount)
 					}
+				} else {
+					output += fmt.Sprintf("   Amount: %v\n", amount)
 				}
-
-				output += fmt.Sprintf("   Delegate: %v\n", stakingMap["delegate"])
-				output += fmt.Sprintf("   Active: %v\n", stakingMap["isActive"])
-				output += fmt.Sprintf("   Locked: %v\n", stakingMap["isLocked"])
-
-				// 🆕 显示故障标志信息
-				if faultFlag, ok := stakingMap["faultFlag"].(map[string]interface{}); ok {
-					if isFaulty, ok := faultFlag["isFaulty"].(bool); ok {
-						output += fmt.Sprintf("   Faulty: %v\n", isFaulty)
-						if isFaulty {
-							if missedBlocks, ok := faultFlag["missedBlocks"].(float64); ok {
-								output += fmt.Sprintf("   Missed Blocks: %.0f\n", missedBlocks)
-							}
-							if reason, ok := faultFlag["reason"].(string); ok {
-								output += fmt.Sprintf("   Reason: %s\n", reason)
-							}
-						}
-					}
-				}
-
-				// 格式化 Rewards 显示
-				if rewards, ok := stakingMap["rewards"]; ok {
-					if rewardsStr, ok := rewards.(string); ok {
-						if rewardsBigInt, ok := new(big.Int).SetString(rewardsStr, 10); ok {
-							ethAmount := new(big.Float).Quo(new(big.Float).SetInt(rewardsBigInt), new(big.Float).SetFloat64(1e18))
-							output += fmt.Sprintf("   Rewards: %s ETH (%s Wei)\n", ethAmount.Text('f', 2), rewardsStr)
-						} else {
-							output += fmt.Sprintf("   Rewards: %v\n", rewards)
-						}
-					} else {
-						output += fmt.Sprintf("   Rewards: %v\n", rewards)
-					}
-				}
-				output += fmt.Sprintf("\n")
 			}
+
+			output += fmt.Sprintf("   Active: %v\n", stakingMap["isActive"])
+
+			// 🆕 显示故障标志信息
+			if faultFlag, ok := stakingMap["faultFlag"].(map[string]interface{}); ok {
+				if isFaulty, ok := faultFlag["isFaulty"].(bool); ok {
+					output += fmt.Sprintf("   Faulty: %v\n", isFaulty)
+					if isFaulty {
+						if missedBlocks, ok := faultFlag["missedBlocks"].(float64); ok {
+							output += fmt.Sprintf("   Missed Blocks: %.0f\n", missedBlocks)
+						}
+						if reason, ok := faultFlag["reason"].(string); ok {
+							output += fmt.Sprintf("   Reason: %s\n", reason)
+						}
+					}
+				}
+			}
+
+			output += fmt.Sprintf("\n")
 		}
 	} else {
 		// 调试信息：显示 StakingInfo 的类型和内容
@@ -362,6 +358,29 @@ func callVotingStakingInfoRPCMethodHTTPWithAddress(method string, methodParams [
 func parseVotingStakingInfoResult(result interface{}) (*VotingStakingInfoResult, error) {
 	// Debug: log the raw result
 	// fmt.Printf("DEBUG: Raw result type: %T, value: %+v\n", result, result)
+
+	// 🆕 新逻辑：处理 dpos_getStakingInfo 返回的数组格式
+	if stakingInfoList, ok := result.([]interface{}); ok {
+		// 这是 dpos_getStakingInfo 返回的验证者列表，需要转换为 []map[string]interface{}
+		stakingInfo := make([]map[string]interface{}, 0)
+		for _, item := range stakingInfoList {
+			if itemMap, ok := item.(map[string]interface{}); ok {
+				stakingInfo = append(stakingInfo, itemMap)
+			}
+		}
+
+		return &VotingStakingInfoResult{
+			Success: true,
+			NetworkStats: map[string]interface{}{
+				"totalValidators": len(stakingInfo),
+			},
+			Validators:  []map[string]interface{}{},
+			StakingInfo: stakingInfo,
+			DPoSState:   nil,
+			LastUpdated: "now",
+			BlockHeight: 0,
+		}, nil
+	}
 
 	// Try to parse as map first
 	if resultMap, ok := result.(map[string]interface{}); ok {
