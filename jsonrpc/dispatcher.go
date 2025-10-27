@@ -1593,3 +1593,41 @@ func (a *dposStoreAdapter) getRealStakeAmount(validatorAddr types.Address) *big.
 	fmt.Printf("DEBUG: getRealStakeAmount - No real stake amount found, using default: %s\n", defaultAmount.String())
 	return defaultAmount
 }
+
+func (a *dposStoreAdapter) GetHeaderByNumber(number uint64) (*types.Header, bool) {
+	// Try to get header from blockchain store
+	if blockchainStore, ok := a.store.(interface {
+		GetHeaderByNumber(uint64) (*types.Header, bool)
+	}); ok {
+		return blockchainStore.GetHeaderByNumber(number)
+	}
+
+	// Fallback: try to use ethBlockchainStore and iterate
+	if ethBC, ok := a.store.(ethBlockchainStore); ok {
+		// Try to get header by number using HeaderByNumber method if available
+		if headerStore, ok := ethBC.(interface {
+			HeaderByNumber(uint64) (*types.Header, bool)
+		}); ok {
+			return headerStore.HeaderByNumber(number)
+		}
+
+		// Last resort: iterate from latest header
+		latestHeader := ethBC.Header()
+		if latestHeader != nil && number <= latestHeader.Number {
+			currentHeader := latestHeader
+			for currentHeader != nil && currentHeader.Number > number {
+				parentHash := currentHeader.ParentHash
+				parentBlock, ok := a.store.(ethBlockchainStore).GetBlockByHash(parentHash, false)
+				if !ok || parentBlock == nil {
+					break
+				}
+				currentHeader = parentBlock.Header
+			}
+			if currentHeader != nil && currentHeader.Number == number {
+				return currentHeader, true
+			}
+		}
+	}
+
+	return nil, false
+}
