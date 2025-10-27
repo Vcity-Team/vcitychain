@@ -12,6 +12,8 @@ import (
 	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-hclog"
 	"github.com/libp2p/go-libp2p/core/peer"
+
+	"os" // 🆕 用于 os.Exit(1)
 )
 
 const (
@@ -370,6 +372,15 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 		"timestamp", time.Now().Format("15:04:05.000"))
 
 	s.logger.Debug("🔍 准备获取区块流", "peer", peerID.String(), "从高度", localLatest+1, "到高度", peerLatestBlock)
+
+	// 🆕 关键日志：记录GetBlocks的参数
+	s.logger.Info("🚀 调用GetBlocks开始同步",
+		"peer", peerID.String()[:8],
+		"startFrom", localLatest+1,
+		"peerLatestBlock", peerLatestBlock,
+		"expectedCount", peerLatestBlock-localLatest,
+		"timestamp", time.Now().Format("15:04:05.000"))
+
 	blockCh, err := s.syncPeerClient.GetBlocks(peerID, localLatest+1, s.blockTimeout)
 	if err != nil {
 		s.logger.Error("获取区块流失败", "peer", peerID.String(), "error", err)
@@ -400,11 +411,22 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 		select {
 		case block, ok := <-blockCh:
 			if !ok {
-				s.logger.Info("区块同步完成", "peer", peerID.String(), "同步区块数", blockCount)
+				s.logger.Info("区块同步完成",
+					"peer", peerID.String(),
+					"同步区块数", blockCount,
+					"lastReceivedNumber", lastReceivedNumber,
+					"timestamp", time.Now().Format("15:04:05.000"))
 				return lastReceivedNumber, shouldTerminate, nil
 			}
 
-			s.logger.Debug("🔍 从区块流接收到区块", "peer", peerID.String()[:8], "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
+			// 🆕 关键日志：从blockCh收到区块
+			s.logger.Info("🔍 从区块流接收到区块",
+				"peer", peerID.String()[:8],
+				"区块号", block.Number(),
+				"期望区块号", localLatest+1,
+				"本地最新", localLatest,
+				"blockNumber==localLatest+1", block.Number() == localLatest+1,
+				"时间戳", time.Now().Format("15:04:05.000"))
 
 			// 打印详细的区块接收日志
 			s.logger.Debug("🔄 同步接收到区块",
@@ -448,7 +470,11 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				}
 
 				updateMetrics(fullBlock)
-				s.logger.Info("✅ DPoS区块同步成功", "peer", peerID.String(), "区块号", block.Number(), "哈希", block.Hash().String()[:16])
+				s.logger.Info("✅ DPoS区块同步成功",
+					"peer", peerID.String(),
+					"区块号", block.Number(),
+					"哈希", block.Hash().String()[:16],
+					"timestamp", time.Now().Format("15:04:05.000"))
 				shouldTerminate = newBlockCallback(fullBlock)
 				lastReceivedNumber = block.Number()
 				continue
@@ -481,7 +507,10 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 			if err != nil {
 				metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
 				s.logger.Error("区块验证失败", "peer", peerID.String(), "区块号", block.Number(), "error", err)
-				return lastReceivedNumber, false, fmt.Errorf("unable to verify block, %w", err)
+
+				// 🆕 区块验证失败时立即退出程序
+				s.logger.Error("💀 区块验证失败，程序将立即退出")
+				os.Exit(1)
 			}
 			s.logger.Debug("✅ 区块验证完成", "peer", peerID.String()[:8], "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
 
@@ -495,7 +524,9 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 			s.logger.Info("✅ 区块同步成功", "peer", peerID.String(), "区块号", block.Number(), "哈希", block.Hash().String()[:16], "交易数", len(block.Transactions))
 			shouldTerminate = newBlockCallback(fullBlock)
 
+			// 🆕 关键：更新localLatest！
 			lastReceivedNumber = block.Number()
+			localLatest = block.Number() // 更新本地最新，确保期望值正确
 		case <-time.After(s.blockTimeout):
 			return lastReceivedNumber, shouldTerminate, errTimeout
 		}

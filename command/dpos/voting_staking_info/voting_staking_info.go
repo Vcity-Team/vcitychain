@@ -85,13 +85,13 @@ func (r *VotingStakingInfoResult) GetOutput() string {
 		output += fmt.Sprintf("\n")
 	}
 
-	// 新增：显示质押信息
+	// 🆕 显示验证者质押信息（权重倒序，包含故障标志）
 	if stakingInfo, ok := r.StakingInfo.([]interface{}); ok && len(stakingInfo) > 0 {
-		output += fmt.Sprintf("Staking Information (%d):\n", len(stakingInfo))
-		output += fmt.Sprintf("=====================\n")
+		output += fmt.Sprintf("Validator Staking Information (Sorted by Weight, %d total):\n", len(stakingInfo))
+		output += fmt.Sprintf("====================================================\n")
 		for i, staking := range stakingInfo {
 			if stakingMap, ok := staking.(map[string]interface{}); ok {
-				output += fmt.Sprintf("%d. Staker: %v\n", i+1, stakingMap["staker"])
+				output += fmt.Sprintf("\n%d. Validator: %v\n", i+1, stakingMap["staker"])
 
 				// 格式化 Amount 显示
 				if amount, ok := stakingMap["amount"]; ok {
@@ -110,6 +110,21 @@ func (r *VotingStakingInfoResult) GetOutput() string {
 				output += fmt.Sprintf("   Delegate: %v\n", stakingMap["delegate"])
 				output += fmt.Sprintf("   Active: %v\n", stakingMap["isActive"])
 				output += fmt.Sprintf("   Locked: %v\n", stakingMap["isLocked"])
+
+				// 🆕 显示故障标志信息
+				if faultFlag, ok := stakingMap["faultFlag"].(map[string]interface{}); ok {
+					if isFaulty, ok := faultFlag["isFaulty"].(bool); ok {
+						output += fmt.Sprintf("   Faulty: %v\n", isFaulty)
+						if isFaulty {
+							if missedBlocks, ok := faultFlag["missedBlocks"].(float64); ok {
+								output += fmt.Sprintf("   Missed Blocks: %.0f\n", missedBlocks)
+							}
+							if reason, ok := faultFlag["reason"].(string); ok {
+								output += fmt.Sprintf("   Reason: %s\n", reason)
+							}
+						}
+					}
+				}
 
 				// 格式化 Rewards 显示
 				if rewards, ok := stakingMap["rewards"]; ok {
@@ -273,18 +288,16 @@ func runCommand(cmd *cobra.Command, _ []string) error {
 		jsonRPC = jsonRPCFlag.Value.String()
 	}
 
-	// 直接使用HTTP请求，跳过有问题的第三方库
-	result, err := callVotingStakingInfoRPCMethodHTTPWithAddress("dpos_getVotingStakingInfo", []interface{}{}, jsonRPC)
+	// 🆕 使用已存在的 dpos_getStakingInfo 方法
+	result, err := callVotingStakingInfoRPCMethodHTTPWithAddress("dpos_getStakingInfo", []interface{}{}, jsonRPC)
 	if err != nil {
-		return fmt.Errorf("failed to get voting staking info: %w", err)
+		return fmt.Errorf("failed to get staking info: %w", err)
 	}
 
 	// Set the result and output it
 	outputter.SetCommandResult(result)
 	return nil
 }
-
-
 
 // callVotingStakingInfoRPCMethodHTTPWithAddress makes a direct HTTP request with specified JSON-RPC address
 func callVotingStakingInfoRPCMethodHTTPWithAddress(method string, methodParams []interface{}, jsonRPC string) (*VotingStakingInfoResult, error) {

@@ -286,8 +286,8 @@ func (bs *BlockScheduler) ShouldProduceBlock(validatorIndex int, currentBlockNum
 	}
 }
 
-// ShouldProduceBlockNow TRON式即时出块检查
-func (bs *BlockScheduler) ShouldProduceBlockNow(validatorIndex int, currentBlockNumber uint64) bool {
+// ShouldProduceBlockNow TRON式即时出块检查（完全基于时间，不依赖索引）
+func (bs *BlockScheduler) ShouldProduceBlockNow(validatorAddress types.Address, validators []types.Address, currentBlockNumber uint64) bool {
 	bs.mutex.RLock()
 	defer bs.mutex.RUnlock()
 
@@ -300,7 +300,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(validatorIndex int, currentBlock
 			if now.Sub(bs.lastLogTime) >= 30*time.Second {
 				bs.logger.Error("❌ 无法获取创世时间",
 					"error", err,
-					"validatorIndex", validatorIndex,
+					"validatorAddress", validatorAddress.String(),
 					"currentBlockNumber", currentBlockNumber,
 					"timestamp", now.Format("15:04:05.000"))
 				bs.lastLogTime = now
@@ -312,7 +312,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(validatorIndex int, currentBlock
 		// 🆕 添加创世时间获取成功的日志
 		bs.logger.Info("✅ 成功获取创世时间",
 			"genesisTime", genesisTime.Format("2006-01-02 15:04:05.000"),
-			"validatorIndex", validatorIndex,
+			"validatorAddress", validatorAddress.String(),
 			"currentBlockNumber", currentBlockNumber,
 			"timestamp", time.Now().Format("15:04:05.000"))
 	}
@@ -334,29 +334,36 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(validatorIndex int, currentBlock
 
 	currentSlot := int(timeSinceGenesis / bs.blockWindow)
 
+	// 3. 计算当前应该出块的验证者（TRON方式：直接计算验证者地址）
+	if len(validators) == 0 {
+		bs.logger.Warn("⚠️ 验证者列表为空")
+		return false
+	}
+
+	expectedValidatorIndex := currentSlot % len(validators)
+	expectedValidator := validators[expectedValidatorIndex]
+
 	// 添加调试日志（控制频率，避免刷屏）
 	if now.Sub(bs.lastLogTime) >= 2*time.Second {
 		bs.logger.Info("🔍 slot计算结果",
 			"currentSlot", currentSlot,
-			"expectedValidatorIndex", currentSlot%bs.validatorCount,
-			"validatorIndex", validatorIndex)
+			"expectedValidatorIndex", expectedValidatorIndex,
+			"expectedValidator", expectedValidator.String(),
+			"myAddress", validatorAddress.String())
 		bs.lastLogTime = now
 	}
 
-	// 3. 计算当前应该出块的验证者
-	expectedValidatorIndex := currentSlot % bs.validatorCount
-
-	// 4. 检查是否轮到自己
-	if validatorIndex != expectedValidatorIndex {
+	// 4. 检查是否轮到自己（TRON方式：直接比较地址）
+	if validatorAddress != expectedValidator {
 		// 🆕 防刷屏：每10秒打印一次日志
 		now := time.Now()
 		if now.Sub(bs.lastLogTime) >= 10*time.Second {
 			bs.logger.Info("⏭️ 不是当前轮次的验证者",
-				"validatorIndex", validatorIndex,
-				"expectedValidatorIndex", expectedValidatorIndex,
+				"myAddress", validatorAddress.String(),
+				"expectedValidator", expectedValidator.String(),
 				"currentSlot", currentSlot,
 				"currentBlockNumber", currentBlockNumber,
-				"validatorCount", bs.validatorCount,
+				"validatorCount", len(validators),
 				"action", "跳过出块",
 				"timestamp", now.Format("15:04:05.000"))
 			bs.lastLogTime = now
@@ -372,7 +379,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(validatorIndex int, currentBlock
 	if now.Before(slotStart) {
 		// 还没到时间
 		bs.logger.Debug("⏳ 还没到出块时间",
-			"validatorIndex", validatorIndex,
+			"validatorAddress", validatorAddress.String(),
 			"slotStart", slotStart.Format("2006-01-02 15:04:05.000"),
 			"now", now.Format("2006-01-02 15:04:05.000"),
 			"waitTime", slotStart.Sub(now).String())
@@ -380,33 +387,36 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(validatorIndex int, currentBlock
 	} else if now.After(slotEnd) {
 		// 🆕 TRON模式：当前slot时间窗口已过，检查下一个slot是否轮到我
 		nextSlot := currentSlot + 1
-		nextExpectedIndex := nextSlot % bs.validatorCount
+		nextExpectedIndex := nextSlot % len(validators)
 
 		// 如果下一个slot轮到我，可以出块（跳过故障的节点）
-		if validatorIndex == nextExpectedIndex {
-			nextSlotStart := bs.genesisTime.Add(time.Duration(nextSlot) * bs.blockWindow)
-			nextSlotEnd := nextSlotStart.Add(bs.blockWindow)
+		if nextExpectedIndex < len(validators) {
+			nextExpectedValidator := validators[nextExpectedIndex]
+			if validatorAddress == nextExpectedValidator {
+				nextSlotStart := bs.genesisTime.Add(time.Duration(nextSlot) * bs.blockWindow)
+				nextSlotEnd := nextSlotStart.Add(bs.blockWindow)
 
-			// 检查是否在下一个slot的时间窗口内
-			if now.After(nextSlotStart) && now.Before(nextSlotEnd) {
-				bs.logger.Info("✅ 前一个slot已过期，当前是我的下一个slot",
-					"validatorIndex", validatorIndex,
-					"currentSlot", currentSlot,
-					"nextSlot", nextSlot,
-					"nextExpectedIndex", nextExpectedIndex,
-					"nextSlotStart", nextSlotStart.Format("2006-01-02 15:04:05.000"),
-					"nextSlotEnd", nextSlotEnd.Format("2006-01-02 15:04:05.000"),
-					"now", now.Format("2006-01-02 15:04:05.000"),
-					"action", "在下一个slot出块")
-				return true
+				// 检查是否在下一个slot的时间窗口内
+				if now.After(nextSlotStart) && now.Before(nextSlotEnd) {
+					bs.logger.Info("✅ 前一个slot已过期，当前是我的下一个slot",
+						"validatorAddress", validatorAddress.String(),
+						"currentSlot", currentSlot,
+						"nextSlot", nextSlot,
+						"nextExpectedValidator", nextExpectedValidator.String(),
+						"nextSlotStart", nextSlotStart.Format("2006-01-02 15:04:05.000"),
+						"nextSlotEnd", nextSlotEnd.Format("2006-01-02 15:04:05.000"),
+						"now", now.Format("2006-01-02 15:04:05.000"),
+						"action", "在下一个slot出块")
+					return true
+				}
 			}
 		}
 
 		// 时间窗口已过且不是我的下一个slot
 		bs.logger.Debug("⏰ 时间窗口已过，且不是下一个出块者",
-			"validatorIndex", validatorIndex,
+			"validatorAddress", validatorAddress.String(),
 			"currentSlot", currentSlot,
-			"nextExpectedIndex", nextExpectedIndex,
+			"nextSlot", nextSlot,
 			"slotStart", slotStart.Format("2006-01-02 15:04:05.000"),
 			"slotEnd", slotEnd.Format("2006-01-02 15:04:05.000"),
 			"now", now.Format("2006-01-02 15:04:05.000"),
@@ -417,7 +427,8 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(validatorIndex int, currentBlock
 		// 防刷屏：5秒内只打印一次日志
 		if now.Sub(bs.lastLogTime) >= 5*time.Second {
 			bs.logger.Info("✅ TRON式出块时机到达",
-				"validatorIndex", validatorIndex,
+				"validatorAddress", validatorAddress.String(),
+				"expectedValidator", expectedValidator.String(),
 				"currentSlot", currentSlot,
 				"slotStart", slotStart.Format("2006-01-02 15:04:05.000"),
 				"slotEnd", slotEnd.Format("2006-01-02 15:04:05.000"),

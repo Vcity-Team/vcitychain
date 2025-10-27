@@ -1497,12 +1497,40 @@ func (d *DPOS) GetValidatorSet(ctx context.Context, blockNumber *uint64) (valida
 func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) ([]*dpos.StakeInfo, error) {
 	d.logger.Info("DPoS GetStakingInfo called", "blockNumber", blockNumber)
 
-	stakingInfo, err := d.store.GetStakingInfo()
+	// 🆕 修改：从数据库读取所有验证者信息（权重倒序排序，不过滤，包含故障标志）
+	validators, err := d.store.GetValidatorsWithFilter(false) // 不过滤，返回全部
 	if err != nil {
-		return nil, fmt.Errorf("failed to get staking info: %w", err)
+		return nil, fmt.Errorf("failed to get validators: %w", err)
 	}
 
-	return stakingInfo, nil
+	// 转换为StakeInfo格式，包含故障标志
+	result := make([]*dpos.StakeInfo, 0, len(validators))
+	for _, validator := range validators {
+		// 获取故障标志（需要访问DPoS引擎）
+		faultInfo := map[string]interface{}{}
+
+		// 通过store访问DPoS引擎获取故障信息
+		if dposStore, ok := d.store.(interface {
+			GetDPoSEngine() interface{}
+		}); ok {
+			if dposEngine := dposStore.GetDPoSEngine(); dposEngine != nil {
+				if dpos, ok := dposEngine.(*dpos.DPoS); ok {
+					faultInfo = dpos.GetValidatorFaultInfo(validator.Address)
+				}
+			}
+		}
+
+		stakingInfo := &dpos.StakeInfo{
+			Staker:    validator.Address,
+			Amount:    new(big.Int).Set(validator.VotingPower),
+			IsActive:  validator.IsActive,
+			FaultFlag: faultInfo, // 🆕 添加故障标志
+		}
+
+		result = append(result, stakingInfo)
+	}
+
+	return result, nil
 }
 
 // GetVotingPower handles dpos_getVotingPower RPC method
@@ -1706,8 +1734,6 @@ func (d *DPOS) validateDelegateRequest(req *DelegateRequest) error {
 	}
 	return nil
 }
-
-
 
 // GetValidatorVotingDetails handles dpos_getValidatorVotingDetails RPC method
 // This method returns detailed voting information for a specific validator
@@ -2184,8 +2210,6 @@ func (d *DPOS) broadcastTransaction(tx *types.Transaction) error {
 	d.logger.Warn("No network broadcast method found, transaction may not reach other nodes")
 	return fmt.Errorf("no network broadcast method available")
 }
-
-
 
 // getDelegatesFromDatabase 从数据库查询所有受托人信息
 func (d *DPOS) getDelegatesFromDatabase() []*dpos.StakeInfo {

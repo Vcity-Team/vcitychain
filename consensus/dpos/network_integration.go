@@ -101,6 +101,10 @@ type NetworkIntegration struct {
 
 	// 🆕 DPOS实例引用，用于持久化操作
 	dposInstance interface{}
+
+	// 🆕 日志频率控制
+	lastBroadcastLogTime      *time.Time
+	lastBroadcastLogTimeMutex sync.Mutex
 }
 
 // MessageHandler 消息处理器接口
@@ -1332,7 +1336,21 @@ func (ni *NetworkIntegration) BroadcastSignatureResponse(response *SignatureResp
 	}
 
 	actualTopicName := ni.signatureResponseTopic.GetActualProtoID()
-	ni.logger.Info("🚀 网络集成层广播签名响应", "原始名称", "dpos-signature-response", "实际名称", actualTopicName)
+
+	// 🆕 统一日志间隔控制（10秒）
+	ni.lastBroadcastLogTimeMutex.Lock()
+	now := time.Now()
+	shouldLog := true
+	if ni.lastBroadcastLogTime != nil {
+		if now.Sub(*ni.lastBroadcastLogTime) < 10*time.Second {
+			shouldLog = false
+		}
+	}
+	if shouldLog {
+		ni.lastBroadcastLogTime = &now
+		ni.logger.Info("🚀 网络集成层广播签名响应", "原始名称", "dpos-signature-response", "实际名称", actualTopicName)
+	}
+	ni.lastBroadcastLogTimeMutex.Unlock()
 
 	if err := ni.signatureResponseTopic.Publish(dposMsg); err != nil {
 		return fmt.Errorf("failed to publish signature response: %w", err)

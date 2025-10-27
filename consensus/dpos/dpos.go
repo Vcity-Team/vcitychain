@@ -88,14 +88,20 @@ func UnregisterDPoSInstance(key string) {
 
 // StakeInfo 质押信息结构体
 type StakeInfo struct {
-	Staker    types.Address `json:"staker"`
-	Amount    *big.Int      `json:"amount"`
-	StartTime uint64        `json:"startTime"`
-	EndTime   uint64        `json:"endTime"`
-	IsLocked  bool          `json:"isLocked"`
-	IsActive  bool          `json:"isActive"`
-	Rewards   *big.Int      `json:"rewards"`
-	Delegate  types.Address `json:"delegate"`
+	Staker    types.Address          `json:"staker"`
+	Amount    *big.Int               `json:"amount"`
+	StartTime uint64                 `json:"startTime"`
+	EndTime   uint64                 `json:"endTime"`
+	IsLocked  bool                   `json:"isLocked"`
+	IsActive  bool                   `json:"isActive"`
+	Rewards   *big.Int               `json:"rewards"`
+	Delegate  types.Address          `json:"delegate"`
+	FaultFlag map[string]interface{} `json:"faultFlag,omitempty"` // 🆕 故障标志信息：isFaulty, missedBlocks, reason
+}
+
+// GetValidatorFaultInfo 获取验证者故障信息（用于RPC调用）
+func (d *DPoS) GetValidatorFaultInfo(validatorAddr types.Address) map[string]interface{} {
+	return d.getValidatorFaultInfo(validatorAddr)
 }
 
 // 🆕 参数表决相关数据结构
@@ -1016,11 +1022,20 @@ func (r *dposRuntime) startBlockProduction() error {
 }
 
 func (r *dposRuntime) continuousBlockMonitoring() {
+	// 🆕 关键修复：在主循环中周期性更新currentSlot
+	// 每隔500ms检查一次，确保时间驱动的slot切换正常工作
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-r.closeCh:
 			r.logger.Info("🛑 停止区块监测")
 			return
+		case <-ticker.C:
+			// 🆕 关键：定期更新currentDelegateIndex，确保轮流出块
+			// 使用静默模式，不打印日志（出块时会调用并打印日志）
+			r.updateRoundSilent()
 		default:
 			// 持续监测出块时机
 			shouldProduce := r.shouldProduceBlockNow()
@@ -1081,22 +1096,32 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		"hasBlockScheduler", r.config.blockScheduler != nil,
 		"timestamp", time.Now().Format("15:04:05.000"))
 
-	// 使用TRON式调度器
+	// 使用TRON式调度器（完全基于时间，比较地址）
 	if r.config.blockScheduler != nil {
-		result := r.config.blockScheduler.ShouldProduceBlockNow(int(r.currentDelegateIndex), currentBlock.Number)
+		// 获取本节点地址
+		myAddress := types.Address(r.config.Key.Address())
+
+		// 获取验证者列表
+		validators := make([]types.Address, len(r.delegates))
+		for i, d := range r.delegates {
+			validators[i] = d.Address
+		}
+
+		// 🆕 调用改进后的方法（直接比较地址）
+		result := r.config.blockScheduler.ShouldProduceBlockNow(myAddress, validators, currentBlock.Number)
 
 		// 🆕 添加调度器结果日志
 		r.logOnceWithInterval("block_scheduler_result", 5*time.Second, "debug",
 			"🔍 区块调度器结果",
 			"shouldProduce", result,
-			"currentDelegateIndex", r.currentDelegateIndex,
+			"myAddress", myAddress.String(),
 			"currentBlockNumber", currentBlock.Number,
 			"timestamp", time.Now().Format("15:04:05.000"))
 
 		return result
 	}
 
-	// 回退到原有逻辑
+	// 回退到原有逻辑（不使用blockScheduler时）
 	result := r.shouldProduceBlock()
 
 	// 🆕 添加回退逻辑结果日志
@@ -1476,9 +1501,16 @@ func (r *dposRuntime) produceBlock() error {
 	if r.config.blockScheduler != nil {
 		currentBlock := r.config.blockchain.CurrentHeader()
 
-		// 检查时间窗口是否仍有效
+		// 检查时间窗口是否仍有效（TRON模式：直接比较地址）
+		myAddress := types.Address(r.config.Key.Address())
+		validators := make([]types.Address, len(r.delegates))
+		for i, d := range r.delegates {
+			validators[i] = d.Address
+		}
+
 		if !r.config.blockScheduler.ShouldProduceBlockNow(
-			int(r.currentDelegateIndex),
+			myAddress,
+			validators,
 			currentBlock.Number,
 		) {
 			r.logger.Warn("⏰ 区块构建完成时时间窗口已过期，丢弃区块（防止分叉）",
@@ -1636,6 +1668,42 @@ func (r *dposRuntime) collectVotes() error {
 	return nil
 }
 
+// updateRoundSilent 静默更新轮次（不打印日志）
+func (r *dposRuntime) updateRoundSilent() {
+	if r.config == nil || r.config.blockScheduler == nil || r.config.DelegateCount == 0 {
+		return
+	}
+
+	// 🆕 使用公共函数获取排序和限制后的验证者
+	dposBackend, ok := r.backend.(*DPoS)
+	if !ok {
+		return
+	}
+	validators, err := dposBackend.GetSortedValidatorsWithLimit()
+	if err != nil {
+		return
+	}
+
+	// 🆕 基于截取后的数量计算
+	actualDelegateCount := len(validators)
+	if actualDelegateCount == 0 {
+		r.currentDelegateIndex = 0
+		return
+	}
+
+	// 使用slot计算（与BlockScheduler保持一致）
+	// 获取当前时间
+	now := time.Now()
+	// 计算当前slot
+	genesisTime := r.config.blockScheduler.GetGenesisTime()
+	blockWindow := r.config.blockScheduler.GetBlockWindow()
+	timeSinceGenesis := now.Sub(genesisTime)
+	currentSlot := int(timeSinceGenesis / blockWindow)
+
+	// 使用数据库验证者数量计算索引
+	r.currentDelegateIndex = uint64(currentSlot % actualDelegateCount)
+}
+
 // updateRound 更新轮次
 func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 	// 🆕 修复：统一使用区块号计算委托者索引，避免不一致
@@ -1689,35 +1757,36 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 		if r.config.blockScheduler != nil {
 			// 获取当前时间
 			now := time.Now()
-		// 计算当前slot
-		genesisTime := r.config.blockScheduler.GetGenesisTime()
-		blockWindow := r.config.blockScheduler.GetBlockWindow()
-		timeSinceGenesis := now.Sub(genesisTime)
-		currentSlot := int(timeSinceGenesis / blockWindow)
-		
-		// 使用数据库验证者数量计算索引
-		if actualDelegateCount == 0 {
-			r.currentDelegateIndex = 0
-		} else {
-			r.currentDelegateIndex = uint64(currentSlot % actualDelegateCount)
-		}
+			// 计算当前slot
+			genesisTime := r.config.blockScheduler.GetGenesisTime()
+			blockWindow := r.config.blockScheduler.GetBlockWindow()
+			timeSinceGenesis := now.Sub(genesisTime)
+			currentSlot := int(timeSinceGenesis / blockWindow)
 
-		// 简化日志：现在完全基于时间slot计算
-		r.logger.Info("🔄 轮次更新完成",
-			"blockNumber", currentBlockNumber,
-			"currentSlot", currentSlot,
-			"currentRound", r.currentRound,
-			"newDelegateIndex", r.currentDelegateIndex)
-	} else {
-		r.logger.Error("❌ 配置无效，无法计算委托者索引",
-			"config", r.config != nil,
-			"delegateCount", func() uint64 {
-				if r.config != nil {
-					return r.config.DelegateCount
-				}
-				return 0
-			}())
-		r.currentDelegateIndex = 0
+			// 使用数据库验证者数量计算索引
+			if actualDelegateCount == 0 {
+				r.currentDelegateIndex = 0
+			} else {
+				r.currentDelegateIndex = uint64(currentSlot % actualDelegateCount)
+			}
+
+			// 简化日志：现在完全基于时间slot计算
+			r.logger.Info("🔄 轮次更新完成",
+				"blockNumber", currentBlockNumber,
+				"currentSlot", currentSlot,
+				"currentRound", r.currentRound,
+				"newDelegateIndex", r.currentDelegateIndex)
+		} else {
+			r.logger.Error("❌ 配置无效，无法计算委托者索引",
+				"config", r.config != nil,
+				"delegateCount", func() uint64 {
+					if r.config != nil {
+						return r.config.DelegateCount
+					}
+					return 0
+				}())
+			r.currentDelegateIndex = 0
+		}
 	}
 
 	// 检查是否需要更新轮次
@@ -1957,9 +2026,15 @@ func (r *dposRuntime) shouldProduceBlock() bool {
 		return false
 	}
 
-	// 🆕 使用固定时间窗口调度器
+	// 🆕 使用固定时间窗口调度器（TRON模式：改用新方法）
 	if r.config.blockScheduler != nil {
-		return r.config.blockScheduler.ShouldProduceBlock(int(r.currentDelegateIndex), currentBlock.Number)
+		myAddress := types.Address(r.config.Key.Address())
+		validators := make([]types.Address, len(r.delegates))
+		for i, d := range r.delegates {
+			validators[i] = d.Address
+		}
+		// 使用新的 ShouldProduceBlockNow 方法
+		return r.config.blockScheduler.ShouldProduceBlockNow(myAddress, validators, currentBlock.Number)
 	}
 
 	// 回退到原有的顺序检查（兼容性）
@@ -4804,6 +4879,24 @@ func (d *DPoS) GetCurrentParameterValues() map[string]interface{} {
 func (d *DPoS) VerifyHeader(header *types.Header) error {
 	blockNumber := header.Number
 
+	// 🆕 关键日志：追踪调用来源
+	buf := make([]byte, 4096)
+	n := runtime.Stack(buf, false)
+	stackTrace := string(buf[:n])
+	lines := strings.Split(stackTrace, "\n")
+	stackInfo := ""
+	if len(lines) > 6 {
+		stackInfo = strings.Join(lines[2:8], "\n")
+	} else {
+		stackInfo = stackTrace
+	}
+
+	d.logger.Info("🔍 VerifyHeader被调用 - 追踪调用来源",
+		"blockNumber", blockNumber,
+		"blockHash", header.Hash.String()[:16],
+		"timestamp", time.Now().Format("15:04:05.000"),
+		"stackTrace", stackInfo)
+
 	// 🆕 添加：检查是否是共识切换高度
 	if d.config.ConsensusSwitchHeight > 0 && blockNumber == d.config.ConsensusSwitchHeight {
 		d.logger.Info("🔄 共识切换高度区块，跳过DPoS验证", "blockNumber", blockNumber, "consensusSwitchHeight", d.config.ConsensusSwitchHeight)
@@ -4856,6 +4949,10 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 			"parentHash", header.ParentHash.String(),
 			"parentHashHex", fmt.Sprintf("0x%x", header.ParentHash))
 
+		// 🆕 父区块获取失败时立即退出程序
+		d.logger.Error("💀 无法获取父区块，程序将立即退出")
+		os.Exit(1)
+
 		return fmt.Errorf(
 			"unable to get parent header by hash for block number %d",
 			header.Number,
@@ -4864,7 +4961,12 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 
 	err := d.verifyHeaderImpl(parent, header, d.config.BlockTime.Duration, nil)
 	if err != nil {
-		d.logger.Info("❌ DPoS VerifyHeader verifyHeaderImpl失败", "blockNumber", blockNumber, "error", err)
+		d.logger.Error("❌ DPoS VerifyHeader verifyHeaderImpl失败", "blockNumber", blockNumber, "error", err)
+
+		// 🆕 区块头验证失败时立即退出程序
+		d.logger.Error("💀 区块头验证失败，程序将立即退出")
+		os.Exit(1)
+
 		return err
 	}
 	d.logger.Debug("✅ DPoS VerifyHeader 验证完成", "blockNumber", blockNumber)
@@ -4885,6 +4987,15 @@ func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift tim
 
 	// validate header fields
 	if err := validateHeaderFields(parent, header, uint64(blockTimeDrift.Seconds())); err != nil {
+		// 🆕 打印parent区块信息（Info级别）
+		d.logger.Info("❌ 区块头部字段验证失败 - parent信息",
+			"blockNumber", header.Number,
+			"blockHash", header.Hash.String(),
+			"blockTimestamp", time.Unix(int64(header.Timestamp), 0).Format("15:04:05"),
+			"parentNumber", parent.Number,
+			"parentHash", parent.Hash.String(),
+			"parentTimestamp", time.Unix(int64(parent.Timestamp), 0).Format("15:04:05"),
+			"error", err)
 		d.logger.Error("区块头部字段验证失败", "error", err)
 		return fmt.Errorf("failed to validate header for block %d. error = %w", header.Number, err)
 	}
@@ -11501,8 +11612,8 @@ func (r *dposRuntime) isValidator() bool {
 					if delegate.Address == currentAddr {
 						// 关键：检查stake是否足够且是否活跃
 						if delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
-							// 🆕 使用Info级别日志输出最终出块者信息
-							r.logger.Info("🎯 当前节点是活跃验证者（从数据库）",
+							// 🆕 使用统一日志间隔（10秒）
+							r.logOnceWithInterval("active_validator_from_db", 10*time.Second, "info", "🎯 当前节点是活跃验证者（从数据库）",
 								"address", currentAddr.String(),
 								"votingPower", delegate.VotingPower.String(),
 								"isActive", delegate.IsActive,
