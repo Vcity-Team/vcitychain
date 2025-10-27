@@ -378,9 +378,35 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(validatorIndex int, currentBlock
 			"waitTime", slotStart.Sub(now).String())
 		return false
 	} else if now.After(slotEnd) {
-		// 时间窗口已过，跳过
-		bs.logger.Debug("⏰ 时间窗口已过，跳过出块",
+		// 🆕 TRON模式：当前slot时间窗口已过，检查下一个slot是否轮到我
+		nextSlot := currentSlot + 1
+		nextExpectedIndex := nextSlot % bs.validatorCount
+
+		// 如果下一个slot轮到我，可以出块（跳过故障的节点）
+		if validatorIndex == nextExpectedIndex {
+			nextSlotStart := bs.genesisTime.Add(time.Duration(nextSlot) * bs.blockWindow)
+			nextSlotEnd := nextSlotStart.Add(bs.blockWindow)
+
+			// 检查是否在下一个slot的时间窗口内
+			if now.After(nextSlotStart) && now.Before(nextSlotEnd) {
+				bs.logger.Info("✅ 前一个slot已过期，当前是我的下一个slot",
+					"validatorIndex", validatorIndex,
+					"currentSlot", currentSlot,
+					"nextSlot", nextSlot,
+					"nextExpectedIndex", nextExpectedIndex,
+					"nextSlotStart", nextSlotStart.Format("2006-01-02 15:04:05.000"),
+					"nextSlotEnd", nextSlotEnd.Format("2006-01-02 15:04:05.000"),
+					"now", now.Format("2006-01-02 15:04:05.000"),
+					"action", "在下一个slot出块")
+				return true
+			}
+		}
+
+		// 时间窗口已过且不是我的下一个slot
+		bs.logger.Debug("⏰ 时间窗口已过，且不是下一个出块者",
 			"validatorIndex", validatorIndex,
+			"currentSlot", currentSlot,
+			"nextExpectedIndex", nextExpectedIndex,
 			"slotStart", slotStart.Format("2006-01-02 15:04:05.000"),
 			"slotEnd", slotEnd.Format("2006-01-02 15:04:05.000"),
 			"now", now.Format("2006-01-02 15:04:05.000"),

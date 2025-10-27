@@ -1033,136 +1033,12 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 				"timestamp", time.Now().Format("15:04:05.000"))
 
 			if shouldProduce {
-				// 🆕 添加地址验证，确保是当前委托者
-				currentDelegate := r.getCurrentDelegate()
-				keyAddr := types.Address(r.config.Key.Address())
-
-				// 🆕 添加详细的委托者检查计算过程日志
-				// 🆕 使用公共函数获取排序和限制后的验证者
-				var dbValidators validator.AccountSet
-				var actualDelegateCount int
-				if dposBackend, ok := r.backend.(*DPoS); ok {
-					validators, err := dposBackend.GetSortedValidatorsWithLimit()
-					if err == nil {
-						dbValidators = validators
-						actualDelegateCount = len(validators)
-					}
-				}
-
-				r.logOnceWithInterval("delegate_check_calculation_process", 10*time.Second, "info", "🔍 委托者检查计算过程",
-					"step1_getCurrentDelegate_result", currentDelegate.String(),
-					"step2_keyAddr", keyAddr.String(),
-					"step3_currentDelegateIndex", r.currentDelegateIndex,
-					"step4_delegatesCount", actualDelegateCount,
-					"step5_isCurrentDelegate", currentDelegate == keyAddr,
-					"step5_debug_address_comparison", fmt.Sprintf("currentDelegate=%s keyAddr=%s equal=%v", currentDelegate.String(), keyAddr.String(), currentDelegate == keyAddr),
-					"step6_delegates_array", func() string {
-						if len(dbValidators) == 0 {
-							return "delegates数组为空"
-						}
-						result := "delegates数组内容: "
-						for i, delegate := range dbValidators {
-							if i < 5 { // 只显示前5个，避免日志过长
-								result += fmt.Sprintf("[%d]=%s(vp=%s,active=%v) ", i, delegate.Address.String()[:10], delegate.VotingPower.String(), delegate.IsActive)
-							}
-						}
-						return result
-					}(),
-					"step7_currentBlockNumber", func() uint64 {
-						if r.config != nil && r.config.blockchain != nil {
-							if header := r.config.blockchain.CurrentHeader(); header != nil {
-								return header.Number
-							}
-						}
-						return 0
-					}(),
-					"step8_currentRound", r.currentRound,
-					"step9_configDelegateCount", func() uint64 {
-						if r.config != nil {
-							return r.config.DelegateCount
-						}
-						return 0
-					}(),
-					"step10_configDPoSValidatorsCount", func() uint64 {
-						if r.config != nil {
-							return r.config.ValidatorsCount
-						}
-						return 0
-					}(),
-					"step11_currentTime", time.Now().Format("2006-01-02 15:04:05.000"),
-					"step12_genesisTime", func() string {
-						if r.config != nil && r.config.blockScheduler != nil {
-							// 尝试获取创世时间
-							if !r.config.blockScheduler.genesisTime.IsZero() {
-								return r.config.blockScheduler.genesisTime.Format("2006-01-02 15:04:05.000")
-							}
-						}
-						return "未获取到创世时间"
-					}(),
-					"step13_timeSinceGenesis", func() string {
-						if r.config != nil && r.config.blockScheduler != nil {
-							if !r.config.blockScheduler.genesisTime.IsZero() {
-								timeSinceGenesis := time.Now().Sub(r.config.blockScheduler.genesisTime)
-								return timeSinceGenesis.String()
-							}
-						}
-						return "无法计算"
-					}(),
-					"step14_currentSlot", func() int {
-						if r.config != nil && r.config.blockScheduler != nil {
-							if !r.config.blockScheduler.genesisTime.IsZero() {
-								timeSinceGenesis := time.Now().Sub(r.config.blockScheduler.genesisTime)
-								currentSlot := int(timeSinceGenesis / r.config.blockScheduler.blockWindow)
-								return currentSlot
-							}
-						}
-						return -1
-					}(),
-					"step15_expectedDelegateIndex", func() int {
-						if r.config != nil && r.config.blockScheduler != nil {
-							if !r.config.blockScheduler.genesisTime.IsZero() {
-								timeSinceGenesis := time.Now().Sub(r.config.blockScheduler.genesisTime)
-								currentSlot := int(timeSinceGenesis / r.config.blockScheduler.blockWindow)
-								expectedIndex := currentSlot % r.config.blockScheduler.validatorCount
-								return expectedIndex
-							}
-						}
-						return -1
-					}(),
-					"step16_blockWindow", func() string {
-						if r.config != nil && r.config.blockScheduler != nil {
-							return r.config.blockScheduler.blockWindow.String()
-						}
-						return "未获取到"
-					}(),
-					"step17_validatorCount", func() int {
-						if r.config != nil && r.config.blockScheduler != nil {
-							return r.config.blockScheduler.validatorCount
-						}
-						return -1
-					}(),
+				// 🆕 TRON方式：shouldProduceBlockNow() 已经基于时间实时计算并判断
+				// 不需要再检查 currentDelegate，直接出块
+				r.logger.Info("✅ shouldProduceBlockNow返回true，开始出块",
 					"timestamp", time.Now().Format("15:04:05.000"))
-
-				// 🆕 添加详细的委托者检查日志
-				r.logOnceWithInterval("delegate_check_details", 10*time.Second, "info", "🔍 委托者检查详情",
-					"currentDelegate", currentDelegate.String(),
-					"keyAddr", keyAddr.String(),
-					"currentDelegateIndex", r.currentDelegateIndex,
-					"delegatesCount", len(r.delegates),
-					"isCurrentDelegate", currentDelegate == keyAddr,
-					"timestamp", time.Now().Format("15:04:05.000"))
-
-				if currentDelegate == keyAddr {
-					r.logger.Info("✅ 是当前委托者，开始出块")
-					if err := r.produceBlock(); err != nil {
-						r.logger.Error("出块失败", "error", err)
-					}
-				} else {
-					// 不是当前委托者，静默跳过（避免刷屏）
-					r.logOnce("not_current_delegate_debug", "info", "⏭️ 不是当前委托者，跳过区块生产",
-						"currentDelegate", currentDelegate.String(),
-						"keyAddr", keyAddr.String(),
-						"currentDelegateIndex", r.currentDelegateIndex)
+				if err := r.produceBlock(); err != nil {
+					r.logger.Error("出块失败", "error", err)
 				}
 			} else {
 				// 🆕 添加为什么不应该出块的详细日志
@@ -1552,16 +1428,10 @@ func (r *dposRuntime) produceBlock() error {
 	// }
 	// r.logger.Info("=== 受托人集合结束 ===")
 
-	if currentDelegate != keyAddr {
-		r.logOnce("not_current_delegate", "info", "⏭️ 不是当前委托者，跳过区块生产",
-			"currentDelegate", currentDelegate.String(),
-			"keyAddr", keyAddr.String(),
-			"currentDelegateIndex", r.currentDelegateIndex)
-		return nil // 不是当前出块者
-	}
-
-	// 🆕 基于严格顺序的出块检查，替换原有的等待逻辑
-	if !r.shouldProduceBlock() {
+	// 🎯 只依赖 shouldProduceBlockNow() 的实时判断，移除冗余检查
+	// shouldProduceBlockNow() 内部会调用 blockScheduler.ShouldProduceBlockNow()
+	// 基于实时时间计算，自动处理超时和被跳过的节点
+	if !r.shouldProduceBlockNow() {
 		expectedIndex := r.calculateExpectedDelegateIndex()
 		currentBlock := r.config.blockchain.CurrentHeader()
 		r.logger.Debug("不是当前轮次的委托者，跳过出块",
@@ -1606,6 +1476,32 @@ func (r *dposRuntime) produceBlock() error {
 	block, err := r.buildBlock()
 	if err != nil {
 		return fmt.Errorf("failed to build block: %w", err)
+	}
+
+	// 🆕 TRON方式：构建完成后再次检查时间窗口和父区块，防止超时提交产生分叉
+	if r.config.blockScheduler != nil {
+		currentBlock := r.config.blockchain.CurrentHeader()
+
+		// 检查时间窗口是否仍有效
+		if !r.config.blockScheduler.ShouldProduceBlockNow(
+			int(r.currentDelegateIndex),
+			currentBlock.Number,
+		) {
+			r.logger.Warn("⏰ 区块构建完成时时间窗口已过期，丢弃区块（防止分叉）",
+				"blockNumber", block.Block.Number(),
+				"currentDelegateIndex", r.currentDelegateIndex,
+				"timestamp", time.Now().Format("15:04:05.000"))
+			return nil // 不提交，静默丢弃
+		}
+
+		// 额外检查：父区块是否已变化（防止其他节点已出块导致分叉）
+		if currentBlock.Hash != block.Block.Header.ParentHash {
+			r.logger.Warn("⏰ 父区块已变化，其他节点已出块，丢弃当前区块（防止分叉）",
+				"blockNumber", block.Block.Number(),
+				"expectedParent", block.Block.Header.ParentHash.String(),
+				"actualParent", currentBlock.Hash.String())
+			return nil // 不提交，避免分叉
+		}
 	}
 
 	if err := r.config.blockchain.CommitBlock(block); err != nil {

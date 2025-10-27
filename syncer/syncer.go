@@ -313,7 +313,7 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 		}
 
 		// 🆕 添加真正开始同步的详细日志
-		s.logger.Info("🚀 开始同步区块",
+		s.logger.Debug("🚀 开始同步区块",
 			"peer", bestPeer.ID.String(),
 			"peerNumber", bestPeer.Number,
 			"localLatest", localLatest,
@@ -361,7 +361,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 	shouldTerminate := false
 
 	// 🆕 添加同步参数的详细日志
-	s.logger.Info("📊 同步参数详情",
+	s.logger.Debug("📊 同步参数详情",
 		"peer", peerID.String(),
 		"peerLatestBlock", peerLatestBlock,
 		"localLatest", localLatest,
