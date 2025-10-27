@@ -597,9 +597,10 @@ func (r *dposRuntime) initializeRuntime() error {
 		return fmt.Errorf("runtime config is nil")
 	}
 
-	// 🆕 修复：根据当前区块号计算初始轮次和委托者索引
+	// 🆕 修复：根据当前区块号计算初始轮次
 	r.currentRound = r.calculateInitialRound()
-	r.currentDelegateIndex = r.calculateExpectedDelegateIndex()
+	// 已废弃 calculateExpectedDelegateIndex()：现在完全基于时间slot计算
+	r.currentDelegateIndex = 0 // 初始化为0，由时间slot自动计算
 
 	// 初始化受托人集合
 	if err := r.initializeDelegates(); err != nil {
@@ -1428,17 +1429,10 @@ func (r *dposRuntime) produceBlock() error {
 	// }
 	// r.logger.Info("=== 受托人集合结束 ===")
 
-	// 🎯 只依赖 shouldProduceBlockNow() 的实时判断，移除冗余检查
-	// shouldProduceBlockNow() 内部会调用 blockScheduler.ShouldProduceBlockNow()
-	// 基于实时时间计算，自动处理超时和被跳过的节点
+	// 🎯 只依赖 shouldProduceBlockNow() 的实时判断
+	// 完全基于时间slot计算，不依赖区块号的索引计算
 	if !r.shouldProduceBlockNow() {
-		expectedIndex := r.calculateExpectedDelegateIndex()
-		currentBlock := r.config.blockchain.CurrentHeader()
-		r.logger.Debug("不是当前轮次的委托者，跳过出块",
-			"currentBlock", currentBlock.Number,
-			"currentDelegateIndex", r.currentDelegateIndex,
-			"expectedDelegateIndex", expectedIndex,
-			"delegateCount", r.config.DelegateCount)
+		r.logger.Debug("不是当前轮次的委托者，跳过出块（基于时间slot判断）")
 		return nil
 	}
 
@@ -1614,18 +1608,12 @@ func (r *dposRuntime) produceBlock() error {
 		delegateCount = r.config.DelegateCount
 	}
 
-	// 计算期望的委托者索引用于验证
-	expectedDelegateIndex := blockNumber % delegateCount
-
+	// 🎯 轮次更新完成（完全基于时间slot，不依赖区块号索引计算）
 	r.logger.Info("🔄 轮次更新完成",
 		"newRound", r.currentRound,
 		"newDelegateIndex", r.currentDelegateIndex,
 		"blockNumber", blockNumber,
-		"delegateCount", delegateCount,
-		"expectedDelegateIndex", expectedDelegateIndex,
-		"calculation", fmt.Sprintf("%d%%%d=%d", blockNumber, delegateCount, expectedDelegateIndex),
-		"isCorrect", r.currentDelegateIndex == expectedDelegateIndex,
-		"roundCalculation", fmt.Sprintf("1+(%d-1)/%d=%d", blockNumber, delegateCount, 1+(blockNumber-1)/delegateCount))
+		"delegateCount", delegateCount)
 
 	return nil
 }
@@ -1701,43 +1689,25 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 		if r.config.blockScheduler != nil {
 			// 获取当前时间
 			now := time.Now()
-			// 计算当前slot
-			genesisTime := r.config.blockScheduler.GetGenesisTime()
-			blockWindow := r.config.blockScheduler.GetBlockWindow()
-			timeSinceGenesis := now.Sub(genesisTime)
-			currentSlot := int(timeSinceGenesis / blockWindow)
-			// 使用数据库验证者数量计算索引
-			if actualDelegateCount == 0 {
-				r.currentDelegateIndex = 0
-			} else {
-				r.currentDelegateIndex = uint64(currentSlot % actualDelegateCount)
-			}
-
-			r.logger.Info("🔄 统一计算委托者索引（使用slot计算）",
-				"blockNumber", currentBlockNumber,
-				"currentSlot", currentSlot,
-				"configDelegateCount", r.config.DelegateCount,
-				"actualDelegateCount", actualDelegateCount,
-				"formula", fmt.Sprintf("slot %d %% %d = %d", currentSlot, actualDelegateCount, r.currentDelegateIndex),
-				"currentRound", r.currentRound,
-				"newDelegateIndex", r.currentDelegateIndex,
-				"timestamp", time.Now().Format("15:04:05.000"))
+		// 计算当前slot
+		genesisTime := r.config.blockScheduler.GetGenesisTime()
+		blockWindow := r.config.blockScheduler.GetBlockWindow()
+		timeSinceGenesis := now.Sub(genesisTime)
+		currentSlot := int(timeSinceGenesis / blockWindow)
+		
+		// 使用数据库验证者数量计算索引
+		if actualDelegateCount == 0 {
+			r.currentDelegateIndex = 0
 		} else {
-			// 回退到区块号计算 - 使用数据库验证者数量
-			if actualDelegateCount == 0 {
-				r.currentDelegateIndex = 0
-			} else {
-				r.currentDelegateIndex = currentBlockNumber % uint64(actualDelegateCount)
-			}
-			r.logger.Info("🔄 统一计算委托者索引（回退到区块号）",
-				"blockNumber", currentBlockNumber,
-				"configDelegateCount", r.config.DelegateCount,
-				"actualDelegateCount", actualDelegateCount,
-				"formula", fmt.Sprintf("%d%%%d=%d", currentBlockNumber, actualDelegateCount, r.currentDelegateIndex),
-				"currentRound", r.currentRound,
-				"newDelegateIndex", r.currentDelegateIndex,
-				"timestamp", time.Now().Format("15:04:05.000"))
+			r.currentDelegateIndex = uint64(currentSlot % actualDelegateCount)
 		}
+
+		// 简化日志：现在完全基于时间slot计算
+		r.logger.Info("🔄 轮次更新完成",
+			"blockNumber", currentBlockNumber,
+			"currentSlot", currentSlot,
+			"currentRound", r.currentRound,
+			"newDelegateIndex", r.currentDelegateIndex)
 	} else {
 		r.logger.Error("❌ 配置无效，无法计算委托者索引",
 			"config", r.config != nil,
@@ -2030,47 +2000,7 @@ func (r *dposRuntime) shouldProduceBlock() bool {
 	return shouldProduce
 }
 
-// calculateExpectedDelegateIndex 计算期望的委托者索引
-func (r *dposRuntime) calculateExpectedDelegateIndex() uint64 {
-	currentBlock := r.config.blockchain.CurrentHeader()
-	if currentBlock == nil {
-		return 0
-	}
-
-	if currentBlock.Number == 0 {
-		return 0
-	}
-
-	// 🆕 使用公共函数获取排序和限制后的验证者
-	dposBackend, ok := r.backend.(*DPoS)
-	if !ok {
-		r.logger.Error("❌ 无法访问数据库，backend类型错误")
-		return 0
-	}
-	validators, err := dposBackend.GetSortedValidatorsWithLimit()
-	if err != nil {
-		r.logger.Error("❌ 从数据库读取验证者失败", "error", err)
-		return 0
-	}
-
-	// 🆕 基于截取后的数量计算
-	actualDelegateCount := len(validators)
-	if actualDelegateCount == 0 {
-		r.logger.Warn("🔍 calculateExpectedDelegateIndex: 数据库中没有验证者")
-		return 0
-	}
-
-	expectedIndex := currentBlock.Number % uint64(actualDelegateCount)
-
-	r.logger.Info("🔍 calculateExpectedDelegateIndex 计算完成",
-		"blockNumber", currentBlock.Number,
-		"actualDelegateCount", actualDelegateCount,
-		"expectedIndex", expectedIndex,
-		"formula", fmt.Sprintf("%d %% %d = %d", currentBlock.Number, actualDelegateCount, expectedIndex),
-		"timestamp", time.Now().Format("15:04:05.000"))
-
-	return expectedIndex
-}
+// calculateExpectedDelegateIndex 已废弃：现在完全基于时间slot计算，不依赖区块号
 
 // isEpochEndBlock 检查是否是epoch的最后一个区块
 func (r *dposRuntime) isEpochEndBlock(blockNumber uint64) bool {
