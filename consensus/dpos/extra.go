@@ -68,6 +68,7 @@ type FaultFlagInfo struct {
 	NodeAddress    types.Address `json:"node_address"`
 	IsFaulty       bool          `json:"is_faulty"`
 	MissedBlocks   uint64        `json:"missed_blocks"`
+	ActualBlocks   uint64        `json:"actual_blocks"`   // 🆕 实际出块数
 	LastUpdateTime uint64        `json:"last_update_time"`
 	Reason         string        `json:"reason"`
 }

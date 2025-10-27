@@ -879,7 +879,7 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 		logArgs = append(logArgs, "generation_time_in_seconds", diff)
 	}
 
-	b.logger.Info("新区块写入", logArgs...)
+	b.logger.Info("💎 新区块写入", logArgs...)
 
 	// 🆕 检查写入的区块状态根
 	b.logger.Debug("🔍 区块写入完成状态根检查",
@@ -957,7 +957,7 @@ func (b *Blockchain) WriteBlock(block *types.Block, source string) error {
 		logArgs = append(logArgs, "generation_time_in_seconds", diff)
 	}
 
-	b.logger.Info("新区块写入", logArgs...)
+	b.logger.Info("💎 新区块写入", logArgs...)
 
 	return nil
 }
@@ -1032,7 +1032,7 @@ func (b *Blockchain) WriteBlockWithoutConsensus(block *types.Block, source strin
 		logArgs = append(logArgs, "generation_time_in_seconds", diff)
 	}
 
-	b.logger.Info("新区块写入(跳过共识验证)", logArgs...)
+	b.logger.Info("💎 新区块写入(跳过共识验证)", logArgs...)
 
 	return nil
 }

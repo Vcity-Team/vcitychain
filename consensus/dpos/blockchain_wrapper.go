@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/go-hclog"
@@ -99,6 +100,10 @@ type blockchainWrapper struct {
 
 	// 🆕 添加验证者更新回调函数
 	onValidatorsUpdated func(validators validator.AccountSet) error
+
+	// 🆕 添加epoch处理去重机制
+	processedEpochBlocks map[uint64]bool
+	processMutex         sync.RWMutex
 }
 
 // CurrentHeader returns the header of blockchain block head
@@ -338,6 +343,17 @@ func (p *blockchainWrapper) getEpochSize() uint64 {
 
 // processRewardDistributionInBlock 在区块执行时处理奖励分发
 func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block, transition *state.Transition) error {
+	// 🆕 去重检查：避免同一区块被多次处理
+	p.processMutex.Lock()
+	if p.processedEpochBlocks[block.Number()] {
+		p.processMutex.Unlock()
+		p.logger.Debug("✅ 该epoch区块已验证者计算，跳过重复计算", 
+			"blockNumber", block.Number(),
+			"reason", "去重机制生效")
+		return nil
+	}
+	p.processedEpochBlocks[block.Number()] = true
+	p.processMutex.Unlock()
 
 	p.logger.Debug("🔍🔍🔍 ========== processRewardDistributionInBlock 开始 ========== 🔍🔍🔍",
 		"blockNumber", block.Number(),

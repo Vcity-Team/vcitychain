@@ -334,7 +334,7 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			s.logger.Warn("failed to complete bulk sync with peer, try to next one", "peer ID", "error", bestPeer.ID, err)
 		} else {
 			// 🆕 添加bulkSyncWithPeer成功完成的日志
-			s.logger.Info("✅ bulkSyncWithPeer完成",
+			s.logger.Debug("✅ bulkSyncWithPeer完成",
 				"peerID", bestPeer.ID.String(),
 				"lastNumber", lastNumber,
 				"shouldTerminate", shouldTerminate,

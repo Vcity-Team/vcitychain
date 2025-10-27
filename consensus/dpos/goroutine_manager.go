@@ -324,7 +324,7 @@ func (gm *GoroutineManager) monitorMemoryUsage() {
 
 	// 如果内存使用过高，记录警告
 	if m.Alloc > 100*1024*1024 { // 100MB
-		gm.logger.Warn("内存使用较高",
+		gm.logger.Debug("内存使用较高",
 			"allocMB", m.Alloc/1024/1024,
 			"sysMB", m.Sys/1024/1024)
 	}
