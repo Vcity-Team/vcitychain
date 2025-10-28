@@ -68,7 +68,7 @@ type FaultFlagInfo struct {
 	NodeAddress    types.Address `json:"node_address"`
 	IsFaulty       bool          `json:"is_faulty"`
 	MissedBlocks   uint64        `json:"missed_blocks"`
-	ActualBlocks   uint64        `json:"actual_blocks"`   // 🆕 实际出块数
+	ActualBlocks   uint64        `json:"actual_blocks"` // 🆕 实际出块数
 	LastUpdateTime uint64        `json:"last_update_time"`
 	Reason         string        `json:"reason"`
 }
@@ -1164,14 +1164,17 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 	// 直接使用所有验证者作为签名者
 	signers := validators
 
-	validatorSet := validator.NewValidatorSet(validators, logger)
-	if !validatorSet.HasQuorum(blockNumber, signers.GetAddressesAsSet()) {
-		// 🆕 计算基于人数的法定人数要求（1/2多数原则）
-		requiredQuorumCount := validator.GetQuorumSizeByValidatorCount(len(validators))
+	// 统一门槛：使用运行时 calculateMinRequiredSignatures()
+	requiredQuorumCount := 0
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance.runtime != nil {
+		requiredQuorumCount = dposInstance.runtime.calculateMinRequiredSignatures()
+	} else {
+		// 兜底（不期望走到这里）：按当前验证者数一半+1
+		requiredQuorumCount = len(validators)/2 + 1
+	}
 
-		// 🆕 详细计算和显示法定人数要求
-		quorumCalculation := fmt.Sprintf("总验证者数: %d, 1/2多数原则: %d/2 = %d, 最小要求: %d",
-			len(validators), len(validators), len(validators)/2, requiredQuorumCount)
+	if len(signers) < requiredQuorumCount {
+		quorumCalculation := fmt.Sprintf("统一门槛：active/validators 一半+1 = %d", requiredQuorumCount)
 
 		logger.Error("Signature.Verify - 法定人数不足",
 			"blockNumber", blockNumber,

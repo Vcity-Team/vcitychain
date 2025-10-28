@@ -708,8 +708,15 @@ func verifyBridgeCommitmentTx(blockNumber uint64, txHash types.Hash,
 		return fmt.Errorf("failed to retrieve signers for state tx (%s): %w", txHash, err)
 	}
 
-	if !validators.HasQuorum(blockNumber, signers.GetAddressesAsSet()) {
-		return fmt.Errorf("quorum size not reached for state tx (%s)", txHash)
+	// 统一门槛：使用运行时 calculateMinRequiredSignatures()
+	requiredQuorumCount := 0
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance.runtime != nil {
+		requiredQuorumCount = dposInstance.runtime.calculateMinRequiredSignatures()
+	} else {
+		requiredQuorumCount = signers.Len()/2 + 1
+	}
+	if signers.Len() < requiredQuorumCount {
+		return fmt.Errorf("quorum size not reached for state tx (%s): got %d need %d", txHash, signers.Len(), requiredQuorumCount)
 	}
 
 	// 🆕 添加BLS公钥等待机制
