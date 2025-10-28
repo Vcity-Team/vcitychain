@@ -1695,9 +1695,9 @@ func (r *dposRuntime) produceBlock() error {
 	// 根据交易数量添加特殊标记
 	txCount := len(block.Block.Transactions)
 	if txCount == 0 {
-		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String())
-		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String())
-		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String())
+		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String(), "localValidatorIndex", r.currentDelegateIndex)
+		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String(), "localValidatorIndex", r.currentDelegateIndex)
+		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String(), "localValidatorIndex", r.currentDelegateIndex)
 	} else if txCount >= 1 {
 		// 包含交易的区块 - 添加明显的特殊标记
 		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK SEALED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)

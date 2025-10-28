@@ -360,7 +360,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(validatorIndex int, currentBlock
 					expectedLastValidatorIndex := (expectedValidatorIndex - 1 + bs.validatorCount) % bs.validatorCount
 
 					bs.logger.Error("🚨 ===== 检测到超时 等待下一步动作 =====",
-						"validatorIndex", validatorIndex,
+						"localValidatorIndex", validatorIndex,
 						"expectedValidatorIndex", expectedValidatorIndex,
 						"expectedLastValidatorIndex", expectedLastValidatorIndex,
 						"currentSlot", currentSlot,
