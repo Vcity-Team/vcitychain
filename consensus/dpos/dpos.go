@@ -10601,8 +10601,8 @@ func (r *dposRuntime) calculateMinRequiredSignatures() int {
 		return 1
 	}
 
-	// 计算：实际验证者数量的一半+1（半数以上）
-	minRequired := activeValidatorsCount/2 + 1
+	// 计算：实际验证者数量的一半（半数）
+	minRequired := activeValidatorsCount / 2
 	if minRequired < 1 {
 		minRequired = 1
 	}

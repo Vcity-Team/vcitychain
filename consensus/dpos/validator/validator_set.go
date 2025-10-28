@@ -87,14 +87,14 @@ func (vs validatorSet) HasQuorum(blockNumber uint64, signers map[types.Address]s
 		}
 	}
 
-	// 统一门槛：使用 "一半+1" 公式
-	requiredQuorumCount := vs.Len()/2 + 1
+	// 统一门槛：使用 "一半" 公式
+	requiredQuorumCount := vs.Len() / 2
 	if requiredQuorumCount < 1 {
 		requiredQuorumCount = 1
 	}
 	hasQuorum := len(signers) >= requiredQuorumCount
 
-	vs.logger.Debug("HasQuorum - 法定人数验证结果（一半+1门槛）",
+	vs.logger.Debug("HasQuorum - 法定人数验证结果（一半门槛）",
 		"blockNumber", blockNumber,
 		"signers", signerDetails,
 		"signerCount", len(signers),
