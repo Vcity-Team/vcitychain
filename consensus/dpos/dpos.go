@@ -15804,7 +15804,7 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 		missedBlocks, actualBlocks := d.calculateMissedBlocksWithActual(validator.Address, d.currentEpoch, currentEpoch)
 		d.missedBlocksCount[validator.Address] = missedBlocks
 
-		isFaulty := missedBlocks > d.config.MaxMissedBlocks
+		isFaulty := missedBlocks >= d.config.MaxMissedBlocks
 
 		d.logger.Info("📊 验证者漏块统计",
 			"address", validator.Address.String(),
@@ -15821,9 +15821,9 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 			LastUpdateTime: uint64(time.Now().Unix()),
 			Reason: func() string {
 				if isFaulty {
-					return fmt.Sprintf("漏块数超过阈值: %d > %d", missedBlocks, d.config.MaxMissedBlocks)
+					return fmt.Sprintf("漏块数达到阈值: %d >= %d", missedBlocks, d.config.MaxMissedBlocks)
 				}
-				return fmt.Sprintf("漏块数正常: %d <= %d", missedBlocks, d.config.MaxMissedBlocks)
+				return fmt.Sprintf("漏块数正常: %d < %d", missedBlocks, d.config.MaxMissedBlocks)
 			}(),
 		}
 		faultFlags = append(faultFlags, faultFlag)
