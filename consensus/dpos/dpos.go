@@ -1361,9 +1361,6 @@ func (r *dposRuntime) produceBlock() error {
 
 		// 如果当前 slot 已经出过块，跳过
 		if r.lastProducedSlot >= 0 && r.lastProducedSlot == currentSlot {
-			r.logger.Debug("当前 slot 已出块，跳过（TRON限制：一个 slot 一个区块）",
-				"currentSlot", currentSlot,
-				"lastProducedSlot", r.lastProducedSlot)
 			return nil
 		}
 	}
