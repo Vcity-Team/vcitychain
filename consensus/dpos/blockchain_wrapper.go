@@ -338,7 +338,7 @@ func (p *blockchainWrapper) getEpochSize() uint64 {
 
 // processRewardDistributionInBlock 在区块执行时处理奖励分发
 func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block, transition *state.Transition) error {
-	p.logger.Info("🔍🔍🔍 ========== processRewardDistributionInBlock 开始 ========== 🔍🔍🔍",
+	p.logger.Info("🔍🔍🔍 ==========验证中processRewardDistributionInBlock 开始 ========== 🔍🔍🔍",
 		"blockNumber", block.Number(),
 		"blockHash", block.Hash().String()[:16],
 		"extraDataLength", len(block.Header.ExtraData))
@@ -357,6 +357,86 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 		"blockNumber", block.Number(),
 		"hasRewardDistribution", extra.RewardDistribution != nil,
 		"hasFaultFlags", len(extra.FaultFlags) > 0)
+
+	// 🔍 添加详细的奖励信息日志
+	if extra.RewardDistribution != nil {
+		p.logger.Info("💰 ExtraData包含奖励信息",
+			"blockNumber", block.Number(),
+			"epoch", extra.RewardDistribution.EpochNumber,
+			"rewardCount", len(extra.RewardDistribution.Rewards),
+			"totalReward", extra.RewardDistribution.TotalReward.String())
+
+		rewardInfo := extra.RewardDistribution
+
+		p.logger.Info("🎯🎯🎯🎯🎯🎯🎯🎯验证节点开始处理奖励分发",
+			"blockNumber", block.Number(),
+			"rewardCount", len(rewardInfo.Rewards),
+			"epoch", rewardInfo.EpochNumber,
+			"totalReward", rewardInfo.TotalReward.String())
+
+		// 获取奖励账户地址（从配置中获取）
+		rewardAccount := types.StringToAddress("0x4BCBB0e87ff0Bd8c6bD4968617b17b2e2DC12EBe")
+
+		// 计算总奖励金额
+		totalReward := new(big.Int)
+		for addrStr, amount := range rewardInfo.Rewards {
+			totalReward.Add(totalReward, amount)
+			p.logger.Info("💰 奖励详情",
+				"blockNumber", block.Number(),
+				"validator", addrStr,
+				"amount", amount.String())
+		}
+
+		p.logger.Info("💰 总奖励计算完成",
+			"blockNumber", block.Number(),
+			"totalReward", totalReward.String(),
+			"rewardAccount", rewardAccount.String())
+
+		// 检查奖励账户余额是否足够
+		currentBalance := transition.GetBalance(rewardAccount)
+
+		p.logger.Info("💳 检查奖励账户余额",
+			"blockNumber", block.Number(),
+			"currentBalance", currentBalance.String(),
+			"requiredAmount", totalReward.String())
+
+		if currentBalance.Cmp(totalReward) < 0 {
+			p.logger.Info("❌ 奖励账户余额不足",
+				"blockNumber", block.Number(),
+				"currentBalance", currentBalance.String(),
+				"requiredAmount", totalReward.String())
+			return fmt.Errorf("insufficient balance in reward account: current=%s, required=%s",
+				currentBalance.String(), totalReward.String())
+		}
+
+		// 从奖励账户扣除总奖励
+		transition.Txn().SubBalance(rewardAccount, totalReward)
+		p.logger.Info("✅ 从奖励账户扣除总奖励",
+			"blockNumber", block.Number(),
+			"amount", totalReward.String())
+
+		cnt := 0
+		// 直接给每个验证者增加余额（不消耗gas，符合TRON做法）
+		for addrStr, amount := range rewardInfo.Rewards {
+			addr := types.StringToAddress(addrStr)
+
+			// 直接修改状态，不通过Transfer
+			transition.Txn().AddBalance(addr, amount)
+			p.logger.Info("✅ 给验证者增加余额",
+				"blockNumber", block.Number(),
+				"validator", addrStr,
+				"amount", amount.String())
+			cnt++
+		}
+		if cnt == len(rewardInfo.Rewards) {
+			p.logger.Info("✅ 所有验证者处理完毕",
+				"cnt", cnt)
+		}
+	} else {
+		p.logger.Warn("⚠️ ExtraData解析后RewardDistribution为nil",
+			"blockNumber", block.Number(),
+			"extraDataLength", len(block.Header.ExtraData))
+	}
 
 	// 🆕 处理故障标志
 	if len(extra.FaultFlags) > 0 {
@@ -386,6 +466,8 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 				p.logger.Error("❌ 更新出块者列表失败", "error", err)
 			}
 		}
+	} else {
+		p.logger.Info("🔍🔍🔍没有故障标志，跳过处理", "blockNumber", block.Number())
 	}
 
 	// 🆕 动态计算下一个Epoch的出块者序列
@@ -408,72 +490,19 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 		}
 	}
 
+	// 🔍 添加详细的判断前检查日志
+	p.logger.Info("🔍 准备检查RewardDistribution",
+		"blockNumber", block.Number(),
+		"RewardDistribution==nil", extra.RewardDistribution == nil,
+		"transition==nil", transition == nil,
+		"extraDataLength", len(block.Header.ExtraData))
+
 	if extra.RewardDistribution == nil {
 		// 没有奖励分发信息，跳过
-		p.logger.Debug("ℹ️ 没有奖励分发信息，跳过",
-			"blockNumber", block.Number())
+		p.logger.Info("ℹ️ 没有奖励分发信息，跳过",
+			"blockNumber", block.Number(),
+			"extraDataLength", len(block.Header.ExtraData))
 		return nil
-	}
-
-	rewardInfo := extra.RewardDistribution
-
-	p.logger.Debug("🎯 开始处理奖励分发",
-		"blockNumber", block.Number(),
-		"rewardCount", len(rewardInfo.Rewards))
-
-	// 处理奖励分发（直接修改状态，符合TRON主流做法）
-
-	// 获取奖励账户地址（从配置中获取）
-	rewardAccount := types.StringToAddress("0x4BCBB0e87ff0Bd8c6bD4968617b17b2e2DC12EBe")
-
-	// 计算总奖励金额
-	totalReward := new(big.Int)
-	for addrStr, amount := range rewardInfo.Rewards {
-		totalReward.Add(totalReward, amount)
-		p.logger.Debug("💰 奖励详情",
-			"blockNumber", block.Number(),
-			"validator", addrStr,
-			"amount", amount.String())
-	}
-
-	p.logger.Debug("💰 总奖励计算完成",
-		"blockNumber", block.Number(),
-		"totalReward", totalReward.String(),
-		"rewardAccount", rewardAccount.String())
-
-	// 检查奖励账户余额是否足够
-	currentBalance := transition.GetBalance(rewardAccount)
-
-	p.logger.Debug("💳 检查奖励账户余额",
-		"blockNumber", block.Number(),
-		"currentBalance", currentBalance.String(),
-		"requiredAmount", totalReward.String())
-
-	if currentBalance.Cmp(totalReward) < 0 {
-		p.logger.Error("❌ 奖励账户余额不足",
-			"blockNumber", block.Number(),
-			"currentBalance", currentBalance.String(),
-			"requiredAmount", totalReward.String())
-		return fmt.Errorf("insufficient balance in reward account: current=%s, required=%s",
-			currentBalance.String(), totalReward.String())
-	}
-
-	// 从奖励账户扣除总奖励
-	transition.Txn().SubBalance(rewardAccount, totalReward)
-	p.logger.Debug("✅ 从奖励账户扣除总奖励",
-		"blockNumber", block.Number(),
-		"amount", totalReward.String())
-
-	// 直接给每个验证者增加余额（不消耗gas，符合TRON做法）
-	for addrStr, amount := range rewardInfo.Rewards {
-		addr := types.StringToAddress(addrStr)
-
-		// 直接修改状态，不通过Transfer
-		transition.Txn().AddBalance(addr, amount)
-		p.logger.Debug("✅ 给验证者增加余额",
-			"blockNumber", block.Number(),
-			"validator", addrStr,
-			"amount", amount.String())
 	}
 
 	return nil

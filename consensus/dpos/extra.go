@@ -123,23 +123,19 @@ func (r *RewardDistributionInfo) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Valu
 
 // UnmarshalRLPWith 实现RLP解码
 func (r *RewardDistributionInfo) UnmarshalRLPWith(v *fastrlp.Value) error {
-	fmt.Printf("📝 INFO RewardDistribution.UnmarshalRLPWith: 开始解析奖励信息\n")
 	elems, err := v.GetElems()
 	if err != nil {
-		fmt.Printf("❌ INFO RewardDistribution.UnmarshalRLPWith: 获取元素失败: err=%v\n", err)
 		return err
 	}
 
 	if len(elems) < 4 {
 		err := fmt.Errorf("invalid RewardDistributionInfo RLP: expected 4 elements, got %d", len(elems))
-		fmt.Printf("❌ INFO RewardDistribution.UnmarshalRLPWith: 元素数量不足: %v\n", err)
 		return err
 	}
 
 	// EpochNumber
 	epochNumber, err := elems[0].GetUint64()
 	if err != nil {
-		fmt.Printf("❌ INFO RewardDistribution.UnmarshalRLPWith: 解析EpochNumber失败: err=%v\n", err)
 		return err
 	}
 	r.EpochNumber = epochNumber
@@ -147,40 +143,31 @@ func (r *RewardDistributionInfo) UnmarshalRLPWith(v *fastrlp.Value) error {
 	// Rewards map
 	rewardsElems, err := elems[1].GetElems()
 	if err != nil {
-		fmt.Printf("❌ INFO RewardDistribution.UnmarshalRLPWith: 获取Rewards元素失败: err=%v\n", err)
 		return err
 	}
-	fmt.Printf("📝 INFO RewardDistribution.UnmarshalRLPWith: Rewards元素数量: %d\n", len(rewardsElems))
 	r.Rewards = make(map[string]*big.Int)
-	idx := 0
 	for _, rewardElem := range rewardsElems {
 		rewardItemElems, err := rewardElem.GetElems()
 		if err != nil || len(rewardItemElems) != 2 {
-			fmt.Printf("❌ INFO RewardDistribution.UnmarshalRLPWith: 跳过无效奖励项[%d]\n", idx)
 			continue
 		}
 
 		addrBytes, err := rewardItemElems[0].GetBytes(nil)
 		if err != nil {
-			fmt.Printf("❌ INFO RewardDistribution.UnmarshalRLPWith: 获取地址失败[%d]: err=%v\n", idx, err)
 			continue
 		}
 
 		amount := new(big.Int)
 		if err := rewardItemElems[1].GetBigInt(amount); err != nil {
-			fmt.Printf("❌ INFO RewardDistribution.UnmarshalRLPWith: 获取金额失败[%d]: err=%v\n", idx, err)
 			continue
 		}
 
 		r.Rewards[string(addrBytes)] = amount
-		fmt.Printf("✅ INFO RewardDistribution.UnmarshalRLPWith: 解析奖励[%d]: address=%s amount=%s\n", idx, string(addrBytes), amount.String())
-		idx++
 	}
 
 	// TotalReward
 	totalReward := new(big.Int)
 	if err := elems[2].GetBigInt(totalReward); err != nil {
-		fmt.Printf("❌ INFO RewardDistribution.UnmarshalRLPWith: 解析TotalReward失败: err=%v\n", err)
 		return err
 	}
 	r.TotalReward = totalReward
@@ -188,12 +175,10 @@ func (r *RewardDistributionInfo) UnmarshalRLPWith(v *fastrlp.Value) error {
 	// Timestamp
 	timestamp, err := elems[3].GetUint64()
 	if err != nil {
-		fmt.Printf("❌ INFO RewardDistribution.UnmarshalRLPWith: 解析Timestamp失败: err=%v\n", err)
 		return err
 	}
 	r.Timestamp = timestamp
 
-	fmt.Printf("✅ INFO RewardDistribution.UnmarshalRLPWith: 解析完成, epoch=%d rewardsCount=%d totalReward=%s\n", r.EpochNumber, len(r.Rewards), r.TotalReward.String())
 	return nil
 }
 
@@ -405,20 +390,12 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 	}
 
 	// Element[4] - 奖励分配信息（只在5个或6个元素时处理）
-	fmt.Printf("📊 INFO UnmarshalRLPWith: 检查RewardDistribution: expectedElements>=5=%t len(elems)>4=%t elems[4].Elems()>0=%t\n",
-		expectedElements >= 5, len(elems) > 4, len(elems) > 4 && elems[4].Elems() > 0)
 	if expectedElements >= 5 && len(elems) > 4 && elems[4].Elems() > 0 {
-		fmt.Printf("✅ INFO UnmarshalRLPWith: 开始解析RewardDistribution\n")
 		i.RewardDistribution = &RewardDistributionInfo{}
 		if err := i.RewardDistribution.UnmarshalRLPWith(elems[4]); err != nil {
-			fmt.Printf("❌ INFO UnmarshalRLPWith: RewardDistribution解析失败: %v\n", err)
 			// 不返回错误，只是跳过奖励分配信息
 			i.RewardDistribution = nil
-		} else {
-			fmt.Printf("✅ INFO UnmarshalRLPWith: RewardDistribution解析成功\n")
 		}
-	} else {
-		fmt.Printf("❌ INFO UnmarshalRLPWith: 跳过RewardDistribution: 条件不满足\n")
 	}
 
 	// Element[5] - CheckpointBlockHash（只在6个或7个元素时处理）
@@ -435,19 +412,11 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 	}
 
 	// 🆕 Element[6] - FaultFlags（只在7个元素时处理）
-	elemsCount := len(elems)
-	elems6Count := 0
-	if len(elems) > 6 {
-		elems6Count = elems[6].Elems()
-	}
-	fmt.Printf("📊 INFO UnmarshalRLPWith: FaultFlags解析检查: len(elems)=%d elems[6].Elems()=%d\n", elemsCount, elems6Count)
 	if len(elems) >= 7 && elems[6].Elems() > 0 {
-		fmt.Printf("✅ INFO UnmarshalRLPWith: 开始解析FaultFlags\n")
 		faultFlagsElems, err := elems[6].GetElems()
 		if err == nil {
-			fmt.Printf("✅ INFO UnmarshalRLPWith: FaultFlags元素数量: %d\n", len(faultFlagsElems))
 			i.FaultFlags = make([]FaultFlagInfo, 0, len(faultFlagsElems))
-			for idx, flagElem := range faultFlagsElems {
+			for _, flagElem := range faultFlagsElems {
 				flagItemElems, err := flagElem.GetElems()
 				if err == nil && len(flagItemElems) >= 6 {
 					flag := FaultFlagInfo{}
@@ -474,18 +443,10 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 					reasonBytes, _ := flagItemElems[5].GetBytes(nil)
 					flag.Reason = string(reasonBytes)
 
-					fmt.Printf("✅ INFO UnmarshalRLPWith: 解析FaultFlag[%d]: address=%s isFaulty=%t missedBlocks=%d\n",
-						idx, flag.NodeAddress.String(), flag.IsFaulty, flag.MissedBlocks)
-
 					i.FaultFlags = append(i.FaultFlags, flag)
 				}
 			}
-			fmt.Printf("✅ INFO UnmarshalRLPWith: FaultFlags解析完成，共%d个元素\n", len(i.FaultFlags))
-		} else {
-			fmt.Printf("❌ INFO UnmarshalRLPWith: 获取FaultFlags元素失败: err=%v\n", err)
 		}
-	} else {
-		fmt.Printf("❌ INFO UnmarshalRLPWith: 跳过FaultFlags解析: elems不足7个或elems[6]为空 (len(elems)=%d, elems[6].Elems()=%d)\n", elemsCount, elems6Count)
 	}
 
 	return nil

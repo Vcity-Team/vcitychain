@@ -2603,6 +2603,50 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	// 🆕 重新设置ExtraData，确保CheckpointBlockHash被包含
 	block.Block.Header.ExtraData = extra.MarshalRLPTo(nil)
 
+	// 🆕 广播前解析并打印ExtraData内容（用于调试）
+	if isEpochEndBlock {
+		r.logger.Info("🔍🔍🔍 ========== 广播前ExtraData内容检查 ========== 🔍🔍🔍",
+			"blockNumber", block.Block.Number(),
+			"extraDataLength", len(block.Block.Header.ExtraData))
+
+		// 解析ExtraData
+		broadcastExtra := &Extra{}
+		if err := broadcastExtra.UnmarshalRLP(block.Block.Header.ExtraData); err != nil {
+			r.logger.Error("❌ 广播前ExtraData解析失败", "error", err)
+		} else {
+			// 打印奖励信息
+			if broadcastExtra.RewardDistribution != nil {
+				r.logger.Info("💰 广播前ExtraData奖励信息",
+					"epoch", broadcastExtra.RewardDistribution.EpochNumber,
+					"rewardCount", len(broadcastExtra.RewardDistribution.Rewards),
+					"totalReward", broadcastExtra.RewardDistribution.TotalReward.String())
+				for addr, amount := range broadcastExtra.RewardDistribution.Rewards {
+					r.logger.Info("💰 广播前奖励明细",
+						"address", addr,
+						"amount", amount.String())
+				}
+			} else {
+				r.logger.Info("ℹ️ 广播前ExtraData无奖励信息")
+			}
+
+			// 打印故障信息
+			if len(broadcastExtra.FaultFlags) > 0 {
+				r.logger.Info("🚨 广播前ExtraData故障信息",
+					"faultFlagsCount", len(broadcastExtra.FaultFlags))
+				for _, flag := range broadcastExtra.FaultFlags {
+					r.logger.Info("🚨 广播前故障标志",
+						"address", flag.NodeAddress.String(),
+						"isFaulty", flag.IsFaulty,
+						"missedBlocks", flag.MissedBlocks,
+						"reason", flag.Reason)
+				}
+			} else {
+				r.logger.Info("ℹ️ 广播前ExtraData无故障信息")
+			}
+		}
+		r.logger.Info("✅✅✅ ========== 广播前ExtraData内容检查完成 ========== ✅✅✅")
+	}
+
 	r.logger.Debug("🔍 生产时开始计算checkpoint哈希",
 		"blockNumber", block.Block.Number(),
 		"chainID", r.config.blockchain.GetChainID(),
@@ -3002,9 +3046,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		var rewardDistribution *RewardDistributionInfo
 		if currentBlockExtra, err := GetIbftExtra(block.Block.Header.ExtraData); err == nil {
 			rewardDistribution = currentBlockExtra.RewardDistribution
-			r.logger.Info("🔍 从当前区块ExtraData获取奖励分配信息",
-				"blockNumber", block.Block.Number(),
-				"hasRewardDistribution", rewardDistribution != nil)
 		} else {
 			r.logger.Warn("⚠️ 无法解析当前区块ExtraData，奖励分配信息可能丢失",
 				"blockNumber", block.Block.Number(),
@@ -3070,13 +3111,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 	// 🆕 清理缓存，为下一个区块做准备
 	r.cachedProductionValidators = nil
-
-	// 🆕 移除重复的奖励分发调用，奖励分发已在前面执行过
-	if isEpochEndBlock {
-		r.logger.Info("ℹ️ epoch结束区块，奖励分发已在前面执行，跳过重复调用",
-			"blockNumber", block.Block.Number(),
-			"isEpochEndBlock", isEpochEndBlock)
-	}
 
 	return block, nil
 }
