@@ -1507,3 +1507,47 @@ func (b *Blockchain) writeBatchAndUpdate(
 
 	return nil
 }
+
+// GetValidators 获取验证者列表（实现BlockchainInterface）
+func (b *Blockchain) GetValidators() ([]ValidatorInfo, error) {
+	// 🆕 从共识模块获取验证者信息
+	if b.consensus == nil {
+		return []ValidatorInfo{}, fmt.Errorf("consensus module not available")
+	}
+
+	// 🆕 尝试从DPoS共识模块获取验证者
+	if dposConsensus, ok := b.consensus.(interface {
+		GetValidatorsForBlockchain() ([]ValidatorInfo, error)
+	}); ok {
+		return dposConsensus.GetValidatorsForBlockchain()
+	}
+
+	// 🆕 如果共识模块不是DPoS，返回空列表
+	return []ValidatorInfo{}, fmt.Errorf("consensus module does not support GetValidators")
+}
+
+// GetLocalValidatorAddress 获取本地验证者地址（实现BlockchainInterface）
+func (b *Blockchain) GetLocalValidatorAddress() types.Address {
+	// 🆕 从共识模块获取本地节点地址
+	if b.consensus == nil {
+		return types.ZeroAddress
+	}
+
+	// 🆕 尝试从DPoS共识模块获取本地验证者地址
+	if dposConsensus, ok := b.consensus.(interface {
+		GetLocalValidatorAddress() types.Address
+	}); ok {
+		return dposConsensus.GetLocalValidatorAddress()
+	}
+
+	// 🆕 如果共识模块不是DPoS，返回零地址
+	return types.ZeroAddress
+}
+
+// ValidatorInfo 验证者信息结构
+type ValidatorInfo struct {
+	Address     types.Address `json:"address"`
+	VotingPower *big.Int      `json:"votingPower"`
+	IsActive    bool          `json:"isActive"`
+	BlsKey      []byte        `json:"blsKey,omitempty"`
+}

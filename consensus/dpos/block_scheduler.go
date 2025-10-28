@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Vcity-Team/vcitychain/blockchain"
 	"github.com/Vcity-Team/vcitychain/types"
 	hclog "github.com/hashicorp/go-hclog"
 )
@@ -19,6 +20,7 @@ type BlockScheduler struct {
 	consensusSwitchHeight uint64              // 共识切换高度
 	genesisTime           time.Time           // 创世时间（缓存）
 	lastLogTime           time.Time           // 上次打印日志的时间（防刷屏）
+	timeoutLogTimes       map[int]time.Time   // 🆕 每个验证者索引的超时日志时间（防刷屏）
 
 	mutex  sync.RWMutex
 	logger hclog.Logger
@@ -27,6 +29,8 @@ type BlockScheduler struct {
 // BlockchainInterface 区块链接口，用于获取区块信息
 type BlockchainInterface interface {
 	GetHeaderByNumber(blockNumber uint64) (*types.Header, bool)
+	GetValidators() ([]blockchain.ValidatorInfo, error) // 🆕 获取验证者列表
+	GetLocalValidatorAddress() types.Address            // 🆕 获取本地节点的验证者地址
 }
 
 // NewBlockScheduler 创建区块调度器
@@ -38,6 +42,7 @@ func NewBlockScheduler(blockWindow time.Duration, validatorCount int, blockchain
 		consensusSwitchHeight: consensusSwitchHeight,
 		logger:                logger,
 		lastLogTime:           time.Now(),
+		timeoutLogTimes:       make(map[int]time.Time), // 🆕 初始化超时日志时间映射
 	}
 }
 
@@ -346,32 +351,65 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(validatorIndex int, currentBlock
 	// 3. 计算当前应该出块的验证者
 	expectedValidatorIndex := currentSlot % bs.validatorCount
 
-	// 4. 检查是否轮到自己
-	if validatorIndex != expectedValidatorIndex {
-		// 🆕 超时检测：检查上一个节点是否超时30秒
-		if bs.blockchain != nil {
-			lastBlock, exists := bs.blockchain.GetHeaderByNumber(currentBlockNumber)
-			if exists && lastBlock != nil {
-				lastBlockTime := time.Unix(int64(lastBlock.Timestamp), 0)
-				timeSinceLastBlock := now.Sub(lastBlockTime)
+	// 4. 🆕 超时检测：检查上一个节点是否超时30秒
+	if bs.blockchain != nil {
+		lastBlock, exists := bs.blockchain.GetHeaderByNumber(currentBlockNumber)
+		if exists && lastBlock != nil {
+			lastBlockTime := time.Unix(int64(lastBlock.Timestamp), 0)
+			timeSinceLastBlock := now.Sub(lastBlockTime)
 
-				// 🚨 检测到超时30秒
-				if timeSinceLastBlock >= 30*time.Second {
-					expectedLastValidatorIndex := (expectedValidatorIndex - 1 + bs.validatorCount) % bs.validatorCount
+			// 🚨 检测到超时30秒
+			if timeSinceLastBlock >= 30*time.Second {
+				// 🆕 获取验证者列表和本地地址
+				validators, err := bs.blockchain.GetValidators()
+				if err == nil && len(validators) > 0 {
+					// 🆕 计算下一个节点索引
+					nextValidatorIndex := (expectedValidatorIndex + 1) % len(validators)
+					nextValidator := validators[nextValidatorIndex]
+					nextValidator2 := validators[nextValidatorIndex+1]
+					localAddress := bs.blockchain.GetLocalValidatorAddress()
 
-					bs.logger.Error("🚨 ===== 检测到超时 等待下一步动作 =====",
-						"localValidatorIndex", validatorIndex,
-						"expectedValidatorIndex", expectedValidatorIndex,
-						"expectedLastValidatorIndex", expectedLastValidatorIndex,
-						"currentSlot", currentSlot,
-						"currentBlockNumber", currentBlockNumber,
-						"lastBlockTime", lastBlockTime.Format("2006-01-02 15:04:05.000"),
-						"timeSinceLastBlock", timeSinceLastBlock.String(),
-						"timeoutThreshold", "30s",
-						"action", "等待下一步动作")
+					// 🆕 检查是否是下一个节点（使用地址比较）
+					if types.Address(nextValidator.Address) == localAddress {
+						// 🆕 防刷屏：每个节点每10秒打印一次超时出块日志
+						lastLogTime, exists := bs.timeoutLogTimes[nextValidatorIndex]
+						if !exists || now.Sub(lastLogTime) >= 10*time.Second {
+							bs.logger.Error("🚀 ===== 检测到超时 下一个节点开始出块 =====",
+								"localAddress", localAddress.String(),
+								"expectedValidatorIndex", expectedValidatorIndex,
+								"nextValidatorIndex", nextValidatorIndex,
+								"nextValidatorAddress", nextValidator.Address.String(),
+								"currentSlot", currentSlot,
+								"currentBlockNumber", currentBlockNumber,
+								"lastBlockTime", lastBlockTime.Format("2006-01-02 15:04:05.000"),
+								"timeSinceLastBlock", timeSinceLastBlock.String(),
+								"timeoutThreshold", "30s",
+								"action", "跳过故障节点出块")
+							bs.timeoutLogTimes[nextValidatorIndex] = now
+						}
+
+						// 🆕 允许下一个节点出块
+						return true
+					} else {
+						bs.logger.Error("🚀 ===== 检测到超时 但地址不匹配 =====",
+							"localAddress", localAddress.String(),
+							"target", types.Address(nextValidator.Address),
+							"target2", types.Address(nextValidator2.Address))
+						return false
+					}
+				} else {
+					bs.logger.Error("🚀 ===== 检测到超时 err =====",
+						"err", err)
 				}
+
+				// 🆕 超时情况，除了下一个节点，其他都返回false
+				return false
 			}
 		}
+	}
+
+	// 5. 检查是否轮到自己
+	if validatorIndex != expectedValidatorIndex {
 
 		// 🆕 防刷屏：每10秒打印一次日志
 		now := time.Now()

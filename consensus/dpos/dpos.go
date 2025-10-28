@@ -1216,6 +1216,25 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			"currentBlockNumber", currentBlock.Number,
 			"timestamp", time.Now().Format("15:04:05.000"))
 
+		// 🆕 如果调度器允许出块，检查是否是超时情况
+		if result {
+			// 检查是否是超时跳过的情况
+			// 如果当前节点不是预期的出块者，但调度器允许出块，说明是超时跳过
+			expectedIndex := int(currentBlock.Number) % len(r.delegates)
+			if len(r.delegates) > 0 && int(r.currentDelegateIndex) != expectedIndex {
+				// 🆕 超时跳过：调整 currentDelegateIndex 为当前节点
+				oldIndex := r.currentDelegateIndex
+				r.currentDelegateIndex = uint64(expectedIndex)
+
+				r.logger.Info("🔄 超时跳过：调整委托者索引",
+					"oldIndex", oldIndex,
+					"newIndex", r.currentDelegateIndex,
+					"expectedIndex", expectedIndex,
+					"currentBlockNumber", currentBlock.Number,
+					"action", "超时跳过调整")
+			}
+		}
+
 		return result
 	}
 
@@ -3664,6 +3683,40 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 	}
 
 	return validators, nil
+}
+
+// 🆕 新增：GetValidatorsForBlockchain 获取验证者列表（用于BlockchainInterface）
+func (d *DPoS) GetValidatorsForBlockchain() ([]blockchain.ValidatorInfo, error) {
+	// 🆕 使用GetSortedValidatorsWithLimit获取验证者
+	validators, err := d.GetSortedValidatorsWithLimit()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get validators: %w", err)
+	}
+
+	// 🆕 转换为blockchain.ValidatorInfo格式
+	result := make([]blockchain.ValidatorInfo, 0, len(validators))
+	for _, v := range validators {
+		var blsKeyBytes []byte
+		if v.BlsKey != nil {
+			blsKeyBytes = v.BlsKey.Marshal()
+		}
+		result = append(result, blockchain.ValidatorInfo{
+			Address:     v.Address,
+			VotingPower: v.VotingPower,
+			IsActive:    v.IsActive,
+			BlsKey:      blsKeyBytes,
+		})
+	}
+
+	return result, nil
+}
+
+// 🆕 新增：GetLocalValidatorAddress 获取本地验证者地址（用于BlockchainInterface）
+func (d *DPoS) GetLocalValidatorAddress() types.Address {
+	if d.key != nil {
+		return types.Address(d.key.Address())
+	}
+	return types.ZeroAddress
 }
 
 // ValidateVoteOnly 只验证投票，不更新状态（供 RPC 预验证使用）
@@ -14597,7 +14650,11 @@ func (d *DPoS) handleEpochSwitch(epochNumber uint64) error {
 // calculateAndRecordEpochRewards 计算和记录epoch奖励（延迟状态更新）
 func (d *DPoS) calculateAndRecordEpochRewards(epochNumber uint64) error {
 	// 获取验证者列表
-	validators := d.GetValidators()
+	validators, err := d.GetSortedValidatorsWithLimit()
+	if err != nil {
+		d.logger.Error("❌ 获取验证者列表失败", "error", err)
+		return fmt.Errorf("failed to get validators: %w", err)
+	}
 
 	if len(validators) == 0 {
 		d.logger.Warn("⚠️ 没有验证者，跳过奖励计算", "epoch", epochNumber)
