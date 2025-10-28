@@ -10757,8 +10757,8 @@ func (r *dposRuntime) performNetworkHealthCheck() {
 // calculateMinRequiredSignatures 计算最少需要的签名数量
 func (r *dposRuntime) calculateMinRequiredSignatures() int {
 	// 使用配置的验证者数量
-	validatorsCount := r.config.ValidatorsCount
-	minRequired := (int(validatorsCount)*2 + 2) / 3
+	validatorsCount := int(r.config.ValidatorsCount)
+	minRequired := validatorsCount/2 + 1 // 修改：全网验证节点/2+1
 
 	// ✅ 至少需要1个签名
 	if minRequired < 1 {
@@ -10769,14 +10769,14 @@ func (r *dposRuntime) calculateMinRequiredSignatures() int {
 		r.logger.Warn("⚠️ ValidatorsCount为0，使用最小签名数minRequired",
 			"validatorsCount", 0,
 			"minRequired", 1)
-		return minRequired
+		return 1
 	}
 
-	r.logger.Info("📊 计算签名门槛（2/3多数原则）",
+	r.logger.Info("📊 计算签名门槛（全网验证节点/2+1）",
 		"validatorsCount", validatorsCount,
 		"minRequired", minRequired,
-		"formula", fmt.Sprintf("ceil(%d*2/3) = %d", validatorsCount, minRequired),
-		"tolerance", fmt.Sprintf("可容忍%d个节点故障", int(validatorsCount)-minRequired))
+		"formula", fmt.Sprintf("(%d/2)+1 = %d", validatorsCount, minRequired),
+		"tolerance", fmt.Sprintf("可容忍%d个节点故障", validatorsCount-minRequired))
 
 	return minRequired
 }
@@ -16060,7 +16060,12 @@ func (d *DPoS) calculateMissedBlocks(validatorAddr types.Address, startEpoch, en
 		epochToCheck = endEpoch - 1
 
 		// 计算该验证者在这个epoch中应该出块的次数
-		expectedBlocks = blocksPerEpoch / d.config.DPoSValidatorsCount
+		// ✅ 修复：正确计算每个验证者应该出块的次数
+		// 如果是4个验证者，每个epoch有4个块，每个验证者应该出1个块
+		validatorCount := len(d.delegates)
+		if validatorCount > 0 {
+			expectedBlocks = blocksPerEpoch / uint64(validatorCount)
+		}
 		if expectedBlocks == 0 {
 			expectedBlocks = 1 // 至少应该出1个块
 		}
