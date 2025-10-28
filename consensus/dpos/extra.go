@@ -237,6 +237,26 @@ func (i *Extra) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 		vv.Set(ar.NewBytes(i.CheckpointBlockHash.Bytes()))
 	}
 
+	// 🆕 Element[6] - FaultFlags
+	if len(i.FaultFlags) == 0 {
+		vv.Set(ar.NewNullArray())
+	} else {
+		// 实现 FaultFlags 的 MarshalRLPWith
+		// 每个 FaultFlagInfo 包含：NodeAddress, IsFaulty, MissedBlocks, ActualBlocks, LastUpdateTime, Reason
+		faultFlagsArray := ar.NewArray()
+		for _, flag := range i.FaultFlags {
+			flagItem := ar.NewArray()
+			flagItem.Set(ar.NewBytes(flag.NodeAddress.Bytes()))
+			flagItem.Set(ar.NewBool(flag.IsFaulty))
+			flagItem.Set(ar.NewUint(flag.MissedBlocks))
+			flagItem.Set(ar.NewUint(flag.ActualBlocks))
+			flagItem.Set(ar.NewUint(flag.LastUpdateTime))
+			flagItem.Set(ar.NewCopyBytes([]byte(flag.Reason)))
+			faultFlagsArray.Set(flagItem)
+		}
+		vv.Set(faultFlagsArray)
+	}
+
 	return vv
 }
 
@@ -258,6 +278,8 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		expectedElements = 5 // 普通区块格式
 	} else if len(elems) == 6 {
 		expectedElements = 6 // 包含CheckpointBlockHash的格式
+	} else if len(elems) == 7 {
+		expectedElements = 7 // 包含FaultFlags的格式
 	}
 
 	// 解析RLP元素
@@ -353,8 +375,8 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		}
 	}
 
-	// Element[5] - CheckpointBlockHash（只在6个元素时处理）
-	if expectedElements == 6 && len(elems) > 5 {
+	// Element[5] - CheckpointBlockHash（只在6个或7个元素时处理）
+	if expectedElements >= 6 && len(elems) > 5 {
 		if elems[5].Type() == fastrlp.TypeBytes {
 			hashBytes, err := elems[5].GetBytes(nil)
 			if err == nil && len(hashBytes) == 32 {
@@ -362,6 +384,44 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 			} else if err == nil && len(hashBytes) == 0 {
 				// 修复：处理空字节数组的情况
 				i.CheckpointBlockHash = types.Hash{}
+			}
+		}
+	}
+
+	// 🆕 Element[6] - FaultFlags（只在7个元素时处理）
+	if len(elems) >= 7 && elems[6].Elems() > 0 {
+		faultFlagsElems, err := elems[6].GetElems()
+		if err == nil {
+			i.FaultFlags = make([]FaultFlagInfo, 0, len(faultFlagsElems))
+			for _, flagElem := range faultFlagsElems {
+				flagItemElems, err := flagElem.GetElems()
+				if err == nil && len(flagItemElems) >= 6 {
+					flag := FaultFlagInfo{}
+
+					// NodeAddress
+					addrBytes, _ := flagItemElems[0].GetBytes(nil)
+					if len(addrBytes) == 20 {
+						flag.NodeAddress = types.BytesToAddress(addrBytes)
+					}
+
+					// IsFaulty
+					flag.IsFaulty, _ = flagItemElems[1].GetBool()
+
+					// MissedBlocks
+					flag.MissedBlocks, _ = flagItemElems[2].GetUint64()
+
+					// ActualBlocks
+					flag.ActualBlocks, _ = flagItemElems[3].GetUint64()
+
+					// LastUpdateTime
+					flag.LastUpdateTime, _ = flagItemElems[4].GetUint64()
+
+					// Reason
+					reasonBytes, _ := flagItemElems[5].GetBytes(nil)
+					flag.Reason = string(reasonBytes)
+
+					i.FaultFlags = append(i.FaultFlags, flag)
+				}
 			}
 		}
 	}

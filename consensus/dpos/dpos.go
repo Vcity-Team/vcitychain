@@ -2121,7 +2121,7 @@ func (r *dposRuntime) getEpochForBlock(blockNumber uint64) *epochMetadata {
 
 // executeRewardDistributionForEpochEnd 在epoch最后一个区块时执行奖励分发
 func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64, currentRound uint64) error {
-	r.logger.Debug("🎉 ========== 开始预先计算epoch结束时的奖励分发 ==========",
+	r.logger.Debug("🎉 ========== 生成节点中开始预先计算epoch结束时的奖励分发 ==========",
 		"blockNumber", blockNumber,
 		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
 
@@ -2423,8 +2423,14 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				if faultFlags, err := dposInstance.detectValidatorFaults(nextBlockNumber); err != nil {
 					r.logger.Error("❌ 故障检测失败", "blockNumber", nextBlockNumber, "error", err)
 				} else {
-					r.logger.Info("💾 开始保存所有验证者的漏块统计到数据库", "validatorCount", len(faultFlags))
-					// 🆕 保存所有验证者的漏块统计到数据库（不管是否故障）
+					// 🆕 将故障检测结果存储到 pendingFaultFlags（类似 pendingRewardDistribution）
+					dposInstance.pendingFaultFlags = faultFlags
+
+					r.logger.Info("💾 故障检测结果已准备",
+						"blockNumber", nextBlockNumber,
+						"validatorCount", len(faultFlags))
+
+					// 🆕 保存到数据库（本地记录）
 					for _, faultFlag := range faultFlags {
 						if err := dposInstance.saveFaultStatusToDatabase(faultFlag); err != nil {
 							r.logger.Error("❌ 保存验证者状态到数据库失败",
@@ -2491,22 +2497,8 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				if dposInstance.pendingRewardDistribution != nil {
 					extra.RewardDistribution = dposInstance.pendingRewardDistribution
 
-					// 🆕 在epoch结束区块中也设置CheckpointBlockHash
-					extra.CheckpointBlockHash = h.Hash
-					r.logger.Info("🔍 ===== epoch结束区块保存CheckpointBlockHash =====",
-						"blockNumber", h.Number,
-						"checkpointBlockHash", h.Hash.String(),
-						"说明", "epoch结束区块保存用于CheckpointHash计算的初始区块哈希")
-
-					// 重新设置ExtraData
-					h.ExtraData = extra.MarshalRLPTo(nil)
-
-					// 重新计算区块哈希（用于后续处理）
-					h.ComputeHash()
-
 					r.logger.Info("🔧 buildBlock: epoch结束区块，奖励分配信息已添加到ExtraData",
 						"blockNumber", h.Number,
-						"isEpochEndBlock", isEpochEndBlock,
 						"rewardCount", len(dposInstance.pendingRewardDistribution.Rewards),
 						"totalReward", dposInstance.pendingRewardDistribution.TotalReward.String())
 
@@ -2518,6 +2510,36 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 						"blockNumber", h.Number,
 						"isEpochEndBlock", isEpochEndBlock)
 				}
+
+				// 🆕 添加故障检测信息
+				if len(dposInstance.pendingFaultFlags) > 0 {
+					extra.FaultFlags = dposInstance.pendingFaultFlags
+
+					r.logger.Info("🔧 buildBlock: epoch结束区块，故障检测结果已添加到ExtraData",
+						"blockNumber", h.Number,
+						"faultFlagsCount", len(extra.FaultFlags))
+
+					// 清空pending故障标志
+					dposInstance.pendingFaultFlags = nil
+					r.logger.Info("✅ buildBlock: 已清空pending故障标志")
+				} else {
+					r.logger.Info("ℹ️ buildBlock: DPoS实例存在但无待处理的故障检测信息",
+						"blockNumber", h.Number,
+						"isEpochEndBlock", isEpochEndBlock)
+				}
+
+				// 🆕 在epoch结束区块中也设置CheckpointBlockHash
+				extra.CheckpointBlockHash = h.Hash
+				r.logger.Info("🔍 ===== epoch结束区块保存CheckpointBlockHash =====",
+					"blockNumber", h.Number,
+					"checkpointBlockHash", h.Hash.String(),
+					"说明", "epoch结束区块保存用于CheckpointHash计算的初始区块哈希")
+
+				// 重新设置ExtraData
+				h.ExtraData = extra.MarshalRLPTo(nil)
+
+				// 重新计算区块哈希（用于后续处理）
+				h.ComputeHash()
 			} else {
 				r.logger.Info("❌ buildBlock: 无法从全局注册表获取DPoS实例",
 					"blockNumber", h.Number,
@@ -3348,6 +3370,9 @@ type DPoS struct {
 
 	// 🆕 奖励分配信息
 	pendingRewardDistribution *RewardDistributionInfo
+
+	// 🆕 故障检测信息
+	pendingFaultFlags []FaultFlagInfo
 
 	// 🆕 经济系统组件
 	epochManager      *TimeBasedEpochManager
@@ -14543,7 +14568,7 @@ func (d *DPoS) processEconomicSystem(block *types.FullBlock) error {
 // distributeEpochRewards 分发Epoch奖励
 func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) error {
 	startTime := time.Now()
-	d.logger.Info("🎉 ========== 开始计算Epoch奖励 ==========",
+	d.logger.Info("🎉 ========== 生成节点中开始计算Epoch奖励 ==========",
 		"epoch", epochNumber,
 		"startTime", startTime.Format("2006-01-02 15:04:05"),
 		"note", "为上一个epoch计算奖励")
@@ -14756,7 +14781,7 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 	}
 
 	// 3. 记录分发统计
-	d.logger.Info("📊 ========== 奖励计算信息统计 ==========",
+	d.logger.Info("📊 ========== 生产节点中奖励计算信息统计 ==========",
 		"epoch", epochNumber,
 		"validatorsCount", len(validators),
 		"validatorRewardCount", validatorRewardCount,
@@ -15726,7 +15751,7 @@ func (r *dposRuntime) processRewardDistributionInBlockForBuilder(builder blockBu
 	}
 
 	rewardInfo := dposInstance.pendingRewardDistribution
-	r.logger.Info("💰 开始执行奖励分配",
+	r.logger.Info("💰 验证节点中开始执行奖励分配",
 		"blockNumber", blockNumber,
 		"epochNumber", rewardInfo.EpochNumber,
 		"rewardCount", len(rewardInfo.Rewards))
@@ -15874,6 +15899,122 @@ func (d *DPoS) saveFaultStatusToDatabase(faultFlag FaultFlagInfo) error {
 		faultFlag.LastUpdateTime,
 		faultFlag.Reason,
 	)
+}
+
+// 🆕 更新内存中的故障状态
+func (d *DPoS) updateMemoryFaultStatus(faultFlag FaultFlagInfo) {
+	// 更新故障验证者映射
+	if faultFlag.IsFaulty {
+		d.faultyValidators[faultFlag.NodeAddress] = true
+		d.logger.Info("🚨 更新内存故障状态",
+			"address", faultFlag.NodeAddress.String(),
+			"isFaulty", faultFlag.IsFaulty,
+			"missedBlocks", faultFlag.MissedBlocks,
+			"reason", faultFlag.Reason)
+	} else {
+		delete(d.faultyValidators, faultFlag.NodeAddress)
+		d.logger.Info("✅ 清除内存故障状态",
+			"address", faultFlag.NodeAddress.String(),
+			"missedBlocks", faultFlag.MissedBlocks,
+			"reason", faultFlag.Reason)
+	}
+}
+
+// 🆕 根据故障标志重新计算出块者列表
+func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) error {
+	d.logger.Info("🔄 开始根据故障标志重新计算出块者列表", "faultFlagsCount", len(faultFlags))
+
+	// 1. 获取所有验证者
+	if d.state == nil || d.state.StakeStore == nil {
+		return fmt.Errorf("state store not available")
+	}
+
+	allValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	if err != nil {
+		return fmt.Errorf("failed to get all validators: %w", err)
+	}
+
+	d.logger.Info("📊 获取到所有验证者", "totalCount", len(allValidators))
+
+	// 2. 创建故障映射
+	faultMap := make(map[types.Address]bool)
+	for _, faultFlag := range faultFlags {
+		faultMap[faultFlag.NodeAddress] = faultFlag.IsFaulty
+	}
+
+	// 3. 过滤掉故障验证者，按权重倒序排序
+	activeValidators := make(validator.AccountSet, 0, len(allValidators))
+	faultyCount := 0
+
+	for _, validator := range allValidators {
+		if isFaulty, exists := faultMap[validator.Address]; exists && isFaulty {
+			faultyCount++
+			d.logger.Info("🚫 过滤掉故障验证者",
+				"address", validator.Address.String(),
+				"votingPower", validator.VotingPower.String())
+		} else {
+			activeValidators = append(activeValidators, validator)
+		}
+	}
+
+	d.logger.Info("✅ 故障验证者过滤完成",
+		"totalValidators", len(allValidators),
+		"faultyValidators", faultyCount,
+		"activeValidators", len(activeValidators))
+
+	// 4. 按权重倒序排序
+	sort.Slice(activeValidators, func(i, j int) bool {
+		return activeValidators[i].VotingPower.Cmp(activeValidators[j].VotingPower) > 0
+	})
+
+	d.logger.Info("📊 排序后的验证者列表:")
+	for i, validator := range activeValidators {
+		d.logger.Info("🏆 排序后验证者",
+			"rank", i+1,
+			"address", validator.Address.String(),
+			"votingPower", validator.VotingPower.String())
+	}
+
+	// 5. 应用配置限制
+	maxValidators := d.config.DPoSValidatorsCount
+	if maxValidators == 0 {
+		maxValidators = d.config.DelegateCount
+	}
+
+	d.logger.Info("🎯 验证者截取逻辑",
+		"maxValidators", maxValidators,
+		"activeValidators", len(activeValidators))
+
+	var finalValidators validator.AccountSet
+	if len(activeValidators) <= int(maxValidators) {
+		finalValidators = activeValidators
+		d.logger.Info("✅ 验证者数量 <= 配置数量，取全部验证者",
+			"取用数量", len(activeValidators),
+			"配置数量", maxValidators)
+	} else {
+		finalValidators = activeValidators[:maxValidators]
+		d.logger.Info("✂️ 验证者数量 > 配置数量，截取前N个",
+			"取用数量", len(finalValidators),
+			"配置数量", maxValidators)
+	}
+
+	// 6. 更新内存中的出块者列表
+	d.delegates = finalValidators
+
+	d.logger.Info("🎉 出块者列表更新完成",
+		"finalCount", len(finalValidators),
+		"maxValidators", maxValidators)
+
+	// 7. 记录最终出块者列表
+	d.logger.Info("📋 最终出块者列表:")
+	for i, validator := range finalValidators {
+		d.logger.Info("🎖️ 最终出块者",
+			"index", i+1,
+			"address", validator.Address.String(),
+			"votingPower", validator.VotingPower.String())
+	}
+
+	return nil
 }
 
 // 🆕 新增：计算验证者漏块数

@@ -362,16 +362,28 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 	if len(extra.FaultFlags) > 0 {
 		p.logger.Info("🔍 开始处理故障标志", "count", len(extra.FaultFlags))
 
-		for _, faultFlag := range extra.FaultFlags {
-			p.logger.Info("📝 处理故障标志",
-				"address", faultFlag.NodeAddress.String(),
-				"isFaulty", faultFlag.IsFaulty,
-				"missedBlocks", faultFlag.MissedBlocks,
-				"reason", faultFlag.Reason)
+		// 🆕 更新内存中的故障状态并重新计算出块者列表（只调用一次）
+		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+			// 先更新所有故障状态
+			for _, faultFlag := range extra.FaultFlags {
+				p.logger.Info("📝 处理故障标志",
+					"address", faultFlag.NodeAddress.String(),
+					"isFaulty", faultFlag.IsFaulty,
+					"missedBlocks", faultFlag.MissedBlocks,
+					"reason", faultFlag.Reason)
 
-			// 更新验证者故障状态
-			if err := p.updateValidatorFaultStatus(faultFlag); err != nil {
-				p.logger.Error("❌ 更新验证者故障状态失败", "error", err)
+				// 更新验证者故障状态到数据库
+				if err := p.updateValidatorFaultStatus(faultFlag); err != nil {
+					p.logger.Error("❌ 更新验证者故障状态失败", "error", err)
+				}
+
+				// 更新内存故障状态
+				dposInstance.updateMemoryFaultStatus(faultFlag)
+			}
+
+			// 重新计算并更新出块者列表（只调用一次）
+			if err := dposInstance.updateBlockProducersFromFaultFlags(extra.FaultFlags); err != nil {
+				p.logger.Error("❌ 更新出块者列表失败", "error", err)
 			}
 		}
 	}
