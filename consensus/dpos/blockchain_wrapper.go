@@ -338,7 +338,7 @@ func (p *blockchainWrapper) getEpochSize() uint64 {
 
 // processRewardDistributionInBlock 在区块执行时处理奖励分发
 func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block, transition *state.Transition) error {
-	p.logger.Debug("🔍🔍🔍 ========== processRewardDistributionInBlock 开始 ========== 🔍🔍🔍",
+	p.logger.Info("🔍🔍🔍 ========== processRewardDistributionInBlock 开始 ========== 🔍🔍🔍",
 		"blockNumber", block.Number(),
 		"blockHash", block.Hash().String()[:16],
 		"extraDataLength", len(block.Header.ExtraData))
@@ -353,7 +353,7 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 		return fmt.Errorf("failed to unmarshal extra data: %w", err)
 	}
 
-	p.logger.Debug("✅ ExtraData解析成功",
+	p.logger.Info("✅ ExtraData解析成功",
 		"blockNumber", block.Number(),
 		"hasRewardDistribution", extra.RewardDistribution != nil,
 		"hasFaultFlags", len(extra.FaultFlags) > 0)

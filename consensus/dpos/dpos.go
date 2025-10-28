@@ -2426,28 +2426,23 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 					// 🆕 将故障检测结果存储到 pendingFaultFlags（类似 pendingRewardDistribution）
 					dposInstance.pendingFaultFlags = faultFlags
 
-					r.logger.Info("💾 故障检测结果已准备",
+					r.logger.Info("💾 故障检测结果已准备，将写入ExtraData",
 						"blockNumber", nextBlockNumber,
 						"validatorCount", len(faultFlags))
 
-					// 🆕 保存到数据库（本地记录）
+					// 🆕 不在这里保存到数据库，而是通过ExtraData传播，由验证节点统一处理
 					for _, faultFlag := range faultFlags {
-						if err := dposInstance.saveFaultStatusToDatabase(faultFlag); err != nil {
-							r.logger.Error("❌ 保存验证者状态到数据库失败",
+						if faultFlag.IsFaulty {
+							r.logger.Info("🚨 故障检测结果已标记",
 								"address", faultFlag.NodeAddress.String(),
-								"error", err)
+								"missedBlocks", faultFlag.MissedBlocks,
+								"reason", faultFlag.Reason,
+								"note", "将通过ExtraData传播给所有节点")
 						} else {
-							if faultFlag.IsFaulty {
-								r.logger.Info("🚨 故障验证者状态已保存到数据库",
-									"address", faultFlag.NodeAddress.String(),
-									"missedBlocks", faultFlag.MissedBlocks,
-									"reason", faultFlag.Reason)
-							} else {
-								r.logger.Info("✅ 正常验证者状态已保存到数据库",
-									"address", faultFlag.NodeAddress.String(),
-									"missedBlocks", faultFlag.MissedBlocks,
-									"reason", faultFlag.Reason)
-							}
+							r.logger.Info("✅ 正常验证者状态已标记",
+								"address", faultFlag.NodeAddress.String(),
+								"missedBlocks", faultFlag.MissedBlocks,
+								"note", "将通过ExtraData传播给所有节点")
 						}
 					}
 				}
@@ -2495,12 +2490,22 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 
 				if dposInstance.pendingRewardDistribution != nil {
-					extra.RewardDistribution = dposInstance.pendingRewardDistribution
+					// 复制RewardDistribution，避免引用被清空
+					extra.RewardDistribution = &RewardDistributionInfo{
+						EpochNumber: dposInstance.pendingRewardDistribution.EpochNumber,
+						Rewards:     make(map[string]*big.Int),
+						TotalReward: new(big.Int).Set(dposInstance.pendingRewardDistribution.TotalReward),
+						Timestamp:   dposInstance.pendingRewardDistribution.Timestamp,
+					}
+					// 复制Rewards map
+					for k, v := range dposInstance.pendingRewardDistribution.Rewards {
+						extra.RewardDistribution.Rewards[k] = new(big.Int).Set(v)
+					}
 
 					r.logger.Info("🔧 buildBlock: epoch结束区块，奖励分配信息已添加到ExtraData",
 						"blockNumber", h.Number,
-						"rewardCount", len(dposInstance.pendingRewardDistribution.Rewards),
-						"totalReward", dposInstance.pendingRewardDistribution.TotalReward.String())
+						"rewardCount", len(extra.RewardDistribution.Rewards),
+						"totalReward", extra.RewardDistribution.TotalReward.String())
 
 					// 清空pending奖励分配信息
 					dposInstance.pendingRewardDistribution = nil
@@ -2513,7 +2518,9 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 				// 🆕 添加故障检测信息
 				if len(dposInstance.pendingFaultFlags) > 0 {
-					extra.FaultFlags = dposInstance.pendingFaultFlags
+					// 复制FaultFlags，避免引用被清空
+					extra.FaultFlags = make([]FaultFlagInfo, len(dposInstance.pendingFaultFlags))
+					copy(extra.FaultFlags, dposInstance.pendingFaultFlags)
 
 					r.logger.Info("🔧 buildBlock: epoch结束区块，故障检测结果已添加到ExtraData",
 						"blockNumber", h.Number,
