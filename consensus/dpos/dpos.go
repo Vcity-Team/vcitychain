@@ -10756,18 +10756,27 @@ func (r *dposRuntime) performNetworkHealthCheck() {
 
 // calculateMinRequiredSignatures 计算最少需要的签名数量
 func (r *dposRuntime) calculateMinRequiredSignatures() int {
-	// 🆕 使用配置的验证者数量而不是实际活跃验证者数量
+	// 使用配置的验证者数量
 	validatorsCount := r.config.ValidatorsCount
-	if validatorsCount == 0 {
-		// 如果配置中没有设置，使用默认值4
-		validatorsCount = 4
-	}
+	minRequired := (int(validatorsCount)*2 + 2) / 3
 
-	// 使用2/3多数原则，基于配置的验证者数量计算门槛
-	minRequired := (int(validatorsCount)*2 + 2) / 3 // 向上取整
+	// ✅ 至少需要1个签名
 	if minRequired < 1 {
 		minRequired = 1
 	}
+	// ✅ 如果配置为0，直接返回最小签名数
+	if validatorsCount == 0 {
+		r.logger.Warn("⚠️ ValidatorsCount为0，使用最小签名数minRequired",
+			"validatorsCount", 0,
+			"minRequired", 1)
+		return minRequired
+	}
+
+	r.logger.Info("📊 计算签名门槛（2/3多数原则）",
+		"validatorsCount", validatorsCount,
+		"minRequired", minRequired,
+		"formula", fmt.Sprintf("ceil(%d*2/3) = %d", validatorsCount, minRequired),
+		"tolerance", fmt.Sprintf("可容忍%d个节点故障", int(validatorsCount)-minRequired))
 
 	return minRequired
 }

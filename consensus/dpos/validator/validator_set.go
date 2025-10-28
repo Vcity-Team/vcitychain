@@ -128,13 +128,17 @@ func (vs validatorSet) TotalVotingPower() big.Int {
 	return *vs.totalVotingPower
 }
 
-// GetQuorumSizeByValidatorCount calculates quorum size as 1/2 majority based on validator count
-// Note: This function is modified to work with validator count instead of voting power
+// GetQuorumSizeByValidatorCount calculates quorum size as 2/3 majority based on validator count
+// ✅ 修改：与收集签名时的门槛保持一致，使用2/3多数原则
 func GetQuorumSizeByValidatorCount(validatorCount int) int {
-	// 使用1/2多数原则，但至少需要1个签名
-	minRequired := validatorCount / 2
+	// ✅ 使用2/3多数原则，向上取整
+	minRequired := (validatorCount*2 + 2) / 3
 	if minRequired < 1 {
 		minRequired = 1
+	}
+	// ✅ 为了确保有法定人数，至少需要2个（避免单节点出块）
+	if minRequired < 2 && validatorCount >= 3 {
+		minRequired = 2
 	}
 	return minRequired
 }
