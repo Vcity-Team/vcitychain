@@ -3042,10 +3042,15 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 		// 静默处理，不打印日志
 
-		// 🆕 关键修复：从当前区块的ExtraData中获取奖励分配信息
+		// 🆕 关键修复：从当前区块的ExtraData中获取奖励分配信息和故障标志
 		var rewardDistribution *RewardDistributionInfo
+		var faultFlags []FaultFlagInfo
 		if currentBlockExtra, err := GetIbftExtra(block.Block.Header.ExtraData); err == nil {
 			rewardDistribution = currentBlockExtra.RewardDistribution
+			faultFlags = currentBlockExtra.FaultFlags
+			r.logger.Info("🔍 从currentBlockExtra获取信息",
+				"hasRewardDistribution", rewardDistribution != nil,
+				"faultFlagsCount", len(faultFlags))
 		} else {
 			r.logger.Warn("⚠️ 无法解析当前区块ExtraData，奖励分配信息可能丢失",
 				"blockNumber", block.Block.Number(),
@@ -3063,6 +3068,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			Checkpoint:          checkpoint,
 			RewardDistribution:  rewardDistribution,        // 🆕 从当前区块ExtraData获取的奖励分配信息
 			CheckpointBlockHash: extra.CheckpointBlockHash, // 🆕 保持CheckpointBlockHash
+			FaultFlags:          faultFlags,                // 🆕 保持FaultFlags
 		}
 		block.Block.Header.ExtraData = finalExtra.MarshalRLPTo(nil)
 
@@ -3519,7 +3525,7 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 		if !isFaulty {
 			activeValidators = append(activeValidators, validator)
 		} else {
-			d.logger.Info("🚫 过滤掉故障验证者",
+			d.logger.Info("🚫 读取数据库后过滤掉故障验证者",
 				"address", validator.Address.String(),
 				"missedBlocks", faultInfo["missedBlocks"],
 				"reason", faultInfo["reason"])

@@ -186,12 +186,8 @@ func (r *RewardDistributionInfo) UnmarshalRLPWith(v *fastrlp.Value) error {
 
 // MarshalRLPTo defines the marshal function wrapper for Extra
 func (i *Extra) MarshalRLPTo(dst []byte) []byte {
-	fmt.Printf("📝 INFO MarshalRLPTo: 开始编码ExtraData, FaultFlags数量=%d\n", len(i.FaultFlags))
 	ar := &fastrlp.Arena{}
-
 	result := append(make([]byte, ExtraVanity), i.MarshalRLPWith(ar).MarshalTo(dst)...)
-	fmt.Printf("📝 INFO MarshalRLPTo: ExtraData编码完成, 总长度=%d bytes (含ExtraVanity=%d)\n", len(result), ExtraVanity)
-
 	return result
 }
 
@@ -229,12 +225,9 @@ func (i *Extra) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 
 	// 🆕 奖励分配信息
 	if i.RewardDistribution == nil {
-		fmt.Printf("📝 INFO Extra.MarshalRLPWith: RewardDistribution为nil，使用NewNullArray\n")
 		vv.Set(ar.NewNullArray())
 	} else {
-		fmt.Printf("📝 INFO Extra.MarshalRLPWith: 开始编码RewardDistribution\n")
 		vv.Set(i.RewardDistribution.MarshalRLPWith(ar))
-		fmt.Printf("📝 INFO Extra.MarshalRLPWith: RewardDistribution编码完成\n")
 	}
 
 	// 🆕 CheckpointBlockHash
@@ -246,18 +239,13 @@ func (i *Extra) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 	}
 
 	// 🆕 Element[6] - FaultFlags
-	fmt.Printf("📝 INFO MarshalRLPWith: FaultFlags数量=%d\n", len(i.FaultFlags))
 	if len(i.FaultFlags) == 0 {
-		fmt.Printf("📝 INFO MarshalRLPWith: 设置FaultFlags为NewNullArray\n")
 		vv.Set(ar.NewNullArray())
 	} else {
-		fmt.Printf("📝 INFO MarshalRLPWith: 开始编码FaultFlags数组，元素数量=%d\n", len(i.FaultFlags))
 		// 实现 FaultFlags 的 MarshalRLPWith
 		// 每个 FaultFlagInfo 包含：NodeAddress, IsFaulty, MissedBlocks, ActualBlocks, LastUpdateTime, Reason
 		faultFlagsArray := ar.NewArray()
-		for idx, flag := range i.FaultFlags {
-			fmt.Printf("📝 INFO MarshalRLPWith: 编码FaultFlag[%d]: address=%s isFaulty=%t missedBlocks=%d\n",
-				idx, flag.NodeAddress.String(), flag.IsFaulty, flag.MissedBlocks)
+		for _, flag := range i.FaultFlags {
 			flagItem := ar.NewArray()
 			flagItem.Set(ar.NewBytes(flag.NodeAddress.Bytes()))
 			flagItem.Set(ar.NewBool(flag.IsFaulty))
@@ -268,7 +256,6 @@ func (i *Extra) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 			faultFlagsArray.Set(flagItem)
 		}
 		vv.Set(faultFlagsArray)
-		fmt.Printf("📝 INFO MarshalRLPWith: FaultFlags编码完成\n")
 	}
 
 	return vv
@@ -276,14 +263,7 @@ func (i *Extra) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 
 // UnmarshalRLP defines the unmarshal function wrapper for Extra
 func (i *Extra) UnmarshalRLP(input []byte) error {
-	fmt.Printf("📝 INFO UnmarshalRLP: 开始解析ExtraData, 输入长度=%d bytes (跳过ExtraVanity=%d)\n", len(input), ExtraVanity)
-	err := fastrlp.UnmarshalRLP(input[ExtraVanity:], i)
-	if err != nil {
-		fmt.Printf("❌ INFO UnmarshalRLP: ExtraData解析失败: err=%v\n", err)
-	} else {
-		fmt.Printf("✅ INFO UnmarshalRLP: ExtraData解析成功, FaultFlags数量=%d\n", len(i.FaultFlags))
-	}
-	return err
+	return fastrlp.UnmarshalRLP(input[ExtraVanity:], i)
 }
 
 // UnmarshalRLPWith defines the unmarshal implementation for Extra
@@ -302,9 +282,6 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 	} else if len(elems) == 7 {
 		expectedElements = 7 // 包含FaultFlags的格式
 	}
-
-	// 🆕 添加调试日志，记录ExtraData元素数量
-	fmt.Printf("📊 DEBUG ExtraData解析: elemsCount=%d expectedElements=%d\n", len(elems), expectedElements)
 
 	// 解析RLP元素
 
