@@ -4531,6 +4531,13 @@ func (d *DPoS) ExecuteProposal(proposalID string) error {
 		return fmt.Errorf("proposal not found")
 	}
 
+	// 🆕 先检查提案是否过期
+	currentBlock := d.getCurrentBlockNumber()
+	if currentBlock > proposal.EndBlock {
+		return fmt.Errorf("proposal has expired (current block: %d, end block: %d)", currentBlock, proposal.EndBlock)
+	}
+
+	// 提案未过期，检查状态
 	if proposal.Status != ProposalPassed {
 		return fmt.Errorf("proposal not passed")
 	}
