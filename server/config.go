@@ -69,7 +69,8 @@ type Config struct {
 	DPoSRewardAmount         string `yaml:"dpos_reward_amount"`          // 每个epoch奖励金额
 	DPoSValidatorRewardRatio uint64 `yaml:"dpos_validator_reward_ratio"` // 验证者奖励比例
 	DPoSVoterRewardRatio     uint64 `yaml:"dpos_voter_reward_ratio"`     // 投票者奖励比例
-	DPoSProposalPeriod       string `yaml:"dpos_proposal_period"`        // 提案投票周期（时间字符串，如"24h", "1d"）
+	DPoSProposalVotePeriod   string `yaml:"dpos_proposal_vote_period"`   // 提案表决周期（时间字符串，如"2m", "24h"）
+	DPoSProposalValidPeriod  string `yaml:"dpos_proposal_valid_period"`  // 提案有效期（时间字符串，如"1d", "7d"）
 	DPoSSRThreshold          string `yaml:"dpos_SR_threshold"`           // SR候选人保证金阈值
 	BlockTimeSeconds         uint64 `yaml:"block_time_s"`                // 区块间隔时间（秒）
 }

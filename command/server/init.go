@@ -122,13 +122,22 @@ func (p *serverParams) initDPoSConfig() {
 		p.maxMissedBlocks = 3 // 默认值
 	}
 
-	// 初始化提案周期
-	p.dposProposalPeriod = p.rawConfig.DPoSProposalPeriod
-	if p.dposProposalPeriod == "" {
-		p.dposProposalPeriod = "24h" // 默认24小时
-		fmt.Printf("⚠️ DPoSProposalPeriod配置为空，使用默认值: %s\n", p.dposProposalPeriod)
+	// 初始化提案表决周期
+	p.dposProposalVotePeriod = p.rawConfig.DPoSProposalVotePeriod
+	if p.dposProposalVotePeriod == "" {
+		p.dposProposalVotePeriod = "24h" // 默认24小时
+		fmt.Printf("⚠️ DPoSProposalVotePeriod配置为空，使用默认值: %s\n", p.dposProposalVotePeriod)
 	} else {
-		fmt.Printf("✅ 读取到DPoSProposalPeriod配置: %s\n", p.dposProposalPeriod)
+		fmt.Printf("✅ 读取到DPoSProposalVotePeriod配置: %s\n", p.dposProposalVotePeriod)
+	}
+
+	// 初始化提案有效期
+	p.dposProposalValidPeriod = p.rawConfig.DPoSProposalValidPeriod
+	if p.dposProposalValidPeriod == "" {
+		p.dposProposalValidPeriod = "7d" // 默认7天
+		fmt.Printf("⚠️ DPoSProposalValidPeriod配置为空，使用默认值: %s\n", p.dposProposalValidPeriod)
+	} else {
+		fmt.Printf("✅ 读取到DPoSProposalValidPeriod配置: %s\n", p.dposProposalValidPeriod)
 	}
 }
 

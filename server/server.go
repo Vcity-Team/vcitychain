@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/blockchain/storage"
@@ -46,6 +47,42 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 )
+
+// parseDurationWithDays 解析时间字符串，支持 "d" (天) 单位
+// 将 "d" 转换为小时数，例如 "1d" -> "24h", "7d" -> "168h"
+func parseDurationWithDays(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	// 如果包含 "d"，需要转换
+	if strings.Contains(s, "d") {
+		// 使用正则匹配更准确，但简单处理：提取数字并乘以24
+		var days float64
+		var suffix string
+		_, err := fmt.Sscanf(s, "%f%s", &days, &suffix)
+		if err == nil && strings.HasPrefix(suffix, "d") {
+			// 提取 "d" 后面的部分（如果有）
+			remaining := strings.TrimPrefix(suffix, "d")
+			hours := days * 24
+			if remaining != "" {
+				s = fmt.Sprintf("%.0fh%s", hours, remaining)
+			} else {
+				s = fmt.Sprintf("%.0fh", hours)
+			}
+		} else {
+			// 简单处理：将最后一个 "d" 替换为 "h" 并乘以24
+			lastD := strings.LastIndex(s, "d")
+			if lastD > 0 {
+				var days float64
+				if _, err := fmt.Sscanf(s[:lastD+1], "%fd", &days); err == nil {
+					hours := days * 24
+					s = fmt.Sprintf("%.0fh%s", hours, s[lastD+1:])
+				} else {
+					return 0, fmt.Errorf("invalid duration format with days: %s", s)
+				}
+			}
+		}
+	}
+	return time.ParseDuration(s)
+}
 
 var (
 	errBlockTimeMissing = errors.New("block time configuration is missing")
@@ -180,26 +217,48 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		s.logger.Info("📊 使用默认投票者奖励比例", "ratio", 30)
 	}
 
-	// 从YAML配置中获取提案周期（时间字符串）
-	s.logger.Info("🔍 检查DPoSProposalPeriod配置（第二次启动）",
-		"DPoSProposalPeriod", s.config.DPoSProposalPeriod,
-		"isEmpty", s.config.DPoSProposalPeriod == "")
+	// 从YAML配置中获取提案表决周期（时间字符串）
+	s.logger.Info("🔍 检查DPoSProposalVotePeriod配置（第二次启动）",
+		"DPoSProposalVotePeriod", s.config.DPoSProposalVotePeriod,
+		"isEmpty", s.config.DPoSProposalVotePeriod == "")
 
-	if proposalPeriodStr := s.config.DPoSProposalPeriod; proposalPeriodStr != "" {
-		if proposalPeriod, err := time.ParseDuration(proposalPeriodStr); err == nil {
-			engineConfig["proposalPeriod"] = proposalPeriod
-			s.logger.Info("✅ 成功解析提案周期（第二次启动）",
-				"periodStr", proposalPeriodStr,
-				"periodDuration", proposalPeriod.String(),
-				"seconds", proposalPeriod.Seconds())
+	if proposalVotePeriodStr := s.config.DPoSProposalVotePeriod; proposalVotePeriodStr != "" {
+		if proposalVotePeriod, err := parseDurationWithDays(proposalVotePeriodStr); err == nil {
+			engineConfig["proposalVotePeriod"] = proposalVotePeriod
+			s.logger.Info("✅ 成功解析提案表决周期（第二次启动）",
+				"periodStr", proposalVotePeriodStr,
+				"periodDuration", proposalVotePeriod.String(),
+				"seconds", proposalVotePeriod.Seconds())
 		} else {
-			s.logger.Error("❌ 无效的提案周期（第二次启动）", "period", proposalPeriodStr, "error", err)
+			s.logger.Error("❌ 无效的提案表决周期（第二次启动）", "period", proposalVotePeriodStr, "error", err)
 			// 不返回错误，使用默认值
-			engineConfig["proposalPeriod"] = 24 * time.Hour // 默认24小时
+			engineConfig["proposalVotePeriod"] = 24 * time.Hour // 默认24小时
 		}
 	} else {
-		s.logger.Warn("⚠️ DPoSProposalPeriod配置为空（第二次启动），使用默认值24小时")
-		engineConfig["proposalPeriod"] = 24 * time.Hour // 默认24小时
+		s.logger.Warn("⚠️ DPoSProposalVotePeriod配置为空（第二次启动），使用默认值24小时")
+		engineConfig["proposalVotePeriod"] = 24 * time.Hour // 默认24小时
+	}
+
+	// 从YAML配置中获取提案有效期（时间字符串）
+	s.logger.Info("🔍 检查DPoSProposalValidPeriod配置（第二次启动）",
+		"DPoSProposalValidPeriod", s.config.DPoSProposalValidPeriod,
+		"isEmpty", s.config.DPoSProposalValidPeriod == "")
+
+	if proposalValidPeriodStr := s.config.DPoSProposalValidPeriod; proposalValidPeriodStr != "" {
+		if proposalValidPeriod, err := parseDurationWithDays(proposalValidPeriodStr); err == nil {
+			engineConfig["proposalValidPeriod"] = proposalValidPeriod
+			s.logger.Info("✅ 成功解析提案有效期（第二次启动）",
+				"periodStr", proposalValidPeriodStr,
+				"periodDuration", proposalValidPeriod.String(),
+				"seconds", proposalValidPeriod.Seconds())
+		} else {
+			s.logger.Error("❌ 无效的提案有效期（第二次启动）", "period", proposalValidPeriodStr, "error", err)
+			// 不返回错误，使用默认值
+			engineConfig["proposalValidPeriod"] = 7 * 24 * time.Hour // 默认7天
+		}
+	} else {
+		s.logger.Warn("⚠️ DPoSProposalValidPeriod配置为空（第二次启动），使用默认值7天")
+		engineConfig["proposalValidPeriod"] = 7 * 24 * time.Hour // 默认7天
 	}
 
 	s.logger.Info("✅ DPoS经济系统配置解析完成",
@@ -775,25 +834,46 @@ func (s *Server) setupConsensus() error {
 		engineConfig["voterRewardRatio"] = uint64(30) // 默认值
 	}
 
-	// 从YAML配置中获取提案周期（时间字符串）
-	s.logger.Info("🔍 检查DPoSProposalPeriod配置",
-		"DPoSProposalPeriod", s.config.DPoSProposalPeriod,
-		"isEmpty", s.config.DPoSProposalPeriod == "")
+	// 从YAML配置中获取提案表决周期（时间字符串）
+	s.logger.Info("🔍 检查DPoSProposalVotePeriod配置",
+		"DPoSProposalVotePeriod", s.config.DPoSProposalVotePeriod,
+		"isEmpty", s.config.DPoSProposalVotePeriod == "")
 
-	if proposalPeriodStr := s.config.DPoSProposalPeriod; proposalPeriodStr != "" {
-		if proposalPeriod, err := time.ParseDuration(proposalPeriodStr); err == nil {
-			engineConfig["proposalPeriod"] = proposalPeriod
-			s.logger.Info("✅ 成功解析提案周期",
-				"periodStr", proposalPeriodStr,
-				"periodDuration", proposalPeriod.String(),
-				"seconds", proposalPeriod.Seconds())
+	if proposalVotePeriodStr := s.config.DPoSProposalVotePeriod; proposalVotePeriodStr != "" {
+		if proposalVotePeriod, err := parseDurationWithDays(proposalVotePeriodStr); err == nil {
+			engineConfig["proposalVotePeriod"] = proposalVotePeriod
+			s.logger.Info("✅ 成功解析提案表决周期",
+				"periodStr", proposalVotePeriodStr,
+				"periodDuration", proposalVotePeriod.String(),
+				"seconds", proposalVotePeriod.Seconds())
 		} else {
-			s.logger.Error("❌ 无效的提案周期", "period", proposalPeriodStr, "error", err)
-			return fmt.Errorf("invalid proposal period: %s", proposalPeriodStr)
+			s.logger.Error("❌ 无效的提案表决周期", "period", proposalVotePeriodStr, "error", err)
+			return fmt.Errorf("invalid proposal vote period: %s", proposalVotePeriodStr)
 		}
 	} else {
-		s.logger.Warn("⚠️ DPoSProposalPeriod配置为空，使用默认值24小时")
-		engineConfig["proposalPeriod"] = 24 * time.Hour // 默认24小时
+		s.logger.Warn("⚠️ DPoSProposalVotePeriod配置为空，使用默认值24小时")
+		engineConfig["proposalVotePeriod"] = 24 * time.Hour // 默认24小时
+	}
+
+	// 从YAML配置中获取提案有效期（时间字符串）
+	s.logger.Info("🔍 检查DPoSProposalValidPeriod配置",
+		"DPoSProposalValidPeriod", s.config.DPoSProposalValidPeriod,
+		"isEmpty", s.config.DPoSProposalValidPeriod == "")
+
+	if proposalValidPeriodStr := s.config.DPoSProposalValidPeriod; proposalValidPeriodStr != "" {
+		if proposalValidPeriod, err := parseDurationWithDays(proposalValidPeriodStr); err == nil {
+			engineConfig["proposalValidPeriod"] = proposalValidPeriod
+			s.logger.Info("✅ 成功解析提案有效期",
+				"periodStr", proposalValidPeriodStr,
+				"periodDuration", proposalValidPeriod.String(),
+				"seconds", proposalValidPeriod.Seconds())
+		} else {
+			s.logger.Error("❌ 无效的提案有效期", "period", proposalValidPeriodStr, "error", err)
+			return fmt.Errorf("invalid proposal valid period: %s", proposalValidPeriodStr)
+		}
+	} else {
+		s.logger.Warn("⚠️ DPoSProposalValidPeriod配置为空，使用默认值7天")
+		engineConfig["proposalValidPeriod"] = 7 * 24 * time.Hour // 默认7天
 	}
 
 	// 从YAML配置中获取SR候选人保证金阈值

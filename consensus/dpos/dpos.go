@@ -109,19 +109,20 @@ func (d *DPoS) GetValidatorFaultInfo(validatorAddr types.Address) map[string]int
 
 // ParameterProposal 参数表决提案结构
 type ParameterProposal struct {
-	ID           string                          `json:"id"`
-	ProposalType string                          `json:"proposalType"` // 🆕 提案类型："parameter" 或 "validator_recovery"
-	Parameter    string                          `json:"parameter"`    // 参数名（parameter类型）或验证者地址（recovery类型）
-	OldValue     interface{}                     `json:"oldValue"`     // 当前值
-	NewValue     interface{}                     `json:"newValue"`     // 提议值
-	Proposer     types.Address                   `json:"proposer"`     // 提案者
-	StartBlock   uint64                          `json:"startBlock"`   // 投票开始区块
-	EndBlock     uint64                          `json:"endBlock"`     // 投票结束区块
-	Status       ProposalStatus                  `json:"status"`       // 提案状态
-	Votes        map[types.Address]ParameterVote `json:"votes"`        // 投票记录
-	Threshold    uint64                          `json:"threshold"`    // 通过阈值(百分比)
-	Description  string                          `json:"description"`  // 提案描述
-	CreatedAt    uint64                          `json:"createdAt"`    // 创建时间
+	ID            string                          `json:"id"`
+	ProposalType  string                          `json:"proposalType"`  // 🆕 提案类型："parameter" 或 "validator_recovery"
+	Parameter     string                          `json:"parameter"`     // 参数名（parameter类型）或验证者地址（recovery类型）
+	OldValue      interface{}                     `json:"oldValue"`      // 当前值
+	NewValue      interface{}                     `json:"newValue"`      // 提议值
+	Proposer      types.Address                   `json:"proposer"`      // 提案者
+	StartBlock    uint64                          `json:"startBlock"`    // 投票开始区块
+	EndBlock      uint64                          `json:"endBlock"`      // 投票结束区块（表决期结束）
+	ValidEndBlock uint64                          `json:"validEndBlock"` // 🆕 有效期结束区块
+	Status        ProposalStatus                  `json:"status"`        // 提案状态
+	Votes         map[types.Address]ParameterVote `json:"votes"`         // 投票记录
+	Threshold     uint64                          `json:"threshold"`     // 通过阈值(百分比)
+	Description   string                          `json:"description"`   // 提案描述
+	CreatedAt     uint64                          `json:"createdAt"`     // 创建时间
 	// 🆕 Recovery专用字段
 	ValidatorAddress  types.Address `json:"validatorAddress,omitempty"`  // 要恢复的验证者地址
 	RecoveryReason    string        `json:"recoveryReason,omitempty"`    // 恢复理由
@@ -328,7 +329,8 @@ type DPoSConfig struct {
 	RewardAmount         *big.Int      `json:"rewardAmount" yaml:"rewardAmount"`
 	ValidatorRewardRatio uint64        `json:"validatorRewardRatio" yaml:"validatorRewardRatio"`
 	VoterRewardRatio     uint64        `json:"voterRewardRatio" yaml:"voterRewardRatio"`
-	ProposalPeriod       time.Duration `json:"proposalPeriod" yaml:"dpos_proposal_period"`
+	ProposalVotePeriod   time.Duration `json:"proposalVotePeriod" yaml:"dpos_proposal_vote_period"`   // 提案表决周期
+	ProposalValidPeriod  time.Duration `json:"proposalValidPeriod" yaml:"dpos_proposal_valid_period"` // 提案有效期
 
 	// SR候选人保证金阈值
 	SRThreshold *big.Int `json:"srThreshold" yaml:"dpos_SR_threshold"`
@@ -3943,15 +3945,15 @@ func (d *DPoS) getGovernanceParameterValue(paramName string) (interface{}, error
 	}
 }
 
-// getVotingPeriod 获取当前投票期间长度
-func (d *DPoS) getVotingPeriod() uint64 {
-	// 🆕 直接从配置文件获取（YAML配置优先）
-	if d.config != nil && d.config.ProposalPeriod > 0 {
+// getVotePeriod 获取当前投票期间长度（区块数）
+func (d *DPoS) getVotePeriod() uint64 {
+	// 🆕 从配置文件获取表决周期（YAML配置优先）
+	if d.config != nil && d.config.ProposalVotePeriod > 0 {
 		// 根据区块时间计算区块数
 		blockTime := d.config.BlockTime.Duration
 		if blockTime > 0 {
-			blocks := uint64(d.config.ProposalPeriod / blockTime)
-			d.logger.Debug("📋 计算提案周期区块数", "proposalPeriod", d.config.ProposalPeriod, "blockTime", blockTime, "blocks", blocks)
+			blocks := uint64(d.config.ProposalVotePeriod / blockTime)
+			d.logger.Debug("📋 计算提案表决周期区块数", "proposalVotePeriod", d.config.ProposalVotePeriod, "blockTime", blockTime, "blocks", blocks)
 			return blocks
 		}
 	}
@@ -3960,26 +3962,43 @@ func (d *DPoS) getVotingPeriod() uint64 {
 	return 43200
 }
 
+// getValidPeriod 获取提案有效期（区块数）
+func (d *DPoS) getValidPeriod() uint64 {
+	// 🆕 从配置文件获取有效期（YAML配置优先）
+	if d.config != nil && d.config.ProposalValidPeriod > 0 {
+		// 根据区块时间计算区块数
+		blockTime := d.config.BlockTime.Duration
+		if blockTime > 0 {
+			blocks := uint64(d.config.ProposalValidPeriod / blockTime)
+			d.logger.Debug("📋 计算提案有效期区块数", "proposalValidPeriod", d.config.ProposalValidPeriod, "blockTime", blockTime, "blocks", blocks)
+			return blocks
+		}
+	}
+
+	// 使用默认值（7天 = 302400个区块，按2秒/区块计算）
+	return 302400
+}
+
 // GetCurrentProposalPeriod 获取当前提案周期信息（用于显示）
 func (d *DPoS) GetCurrentProposalPeriod() map[string]interface{} {
 	// 获取当前投票期间长度
-	votingPeriod := d.getVotingPeriod()
+	votePeriod := d.getVotePeriod()
 
 	// 获取当前区块高度
 	currentBlock := d.GetCurrentBlockNumber()
 
 	// 计算时间信息
 	var timeInfo string
-	if d.config != nil && d.config.ProposalPeriod > 0 {
+	if d.config != nil && d.config.ProposalVotePeriod > 0 {
 		// 显示时间格式
-		timeInfo = fmt.Sprintf("%s (%d个区块)", d.config.ProposalPeriod.String(), votingPeriod)
+		timeInfo = fmt.Sprintf("%s (%d个区块)", d.config.ProposalVotePeriod.String(), votePeriod)
 	} else {
 		// 只显示区块数
-		timeInfo = fmt.Sprintf("%d个区块", votingPeriod)
+		timeInfo = fmt.Sprintf("%d个区块", votePeriod)
 	}
 
 	return map[string]interface{}{
-		"blocks":       votingPeriod,
+		"blocks":       votePeriod,
 		"timeInfo":     timeInfo,
 		"currentBlock": currentBlock,
 	}
@@ -4023,11 +4042,11 @@ func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 	case "dpos_epoch_duration":
 		return d.config.EpochDuration.String(), nil
 	case "governance_voting_period":
-		// 🆕 从YAML配置计算提案周期（区块数）
-		if d.config != nil && d.config.ProposalPeriod > 0 {
+		// 🆕 从YAML配置计算提案表决周期（区块数）
+		if d.config != nil && d.config.ProposalVotePeriod > 0 {
 			blockTime := d.config.BlockTime.Duration
 			if blockTime > 0 {
-				blocks := uint64(d.config.ProposalPeriod / blockTime)
+				blocks := uint64(d.config.ProposalVotePeriod / blockTime)
 				return blocks, nil
 			}
 		}
@@ -4236,20 +4255,22 @@ func (d *DPoS) CreateParameterProposal(proposer types.Address, parameter string,
 	proposalID := fmt.Sprintf("proposal_%s_%d", timeStr, d.proposalCounter)
 	d.proposalCounter++
 
+	currentBlock := d.getCurrentBlockNumber()
 	proposal := &ParameterProposal{
-		ID:           proposalID,
-		ProposalType: "parameter", // 🆕 标记为参数修改提案
-		Parameter:    parameter,
-		OldValue:     oldValue,
-		NewValue:     newValue,
-		Proposer:     proposer,
-		StartBlock:   d.getCurrentBlockNumber() + 1,
-		EndBlock:     d.getCurrentBlockNumber() + d.getVotingPeriod(), // 动态投票期
-		Status:       ProposalPending,
-		Votes:        make(map[types.Address]ParameterVote),
-		Threshold:    d.getVotingThreshold(), // 动态通过阈值
-		Description:  description,
-		CreatedAt:    uint64(time.Now().Unix()),
+		ID:            proposalID,
+		ProposalType:  "parameter", // 🆕 标记为参数修改提案
+		Parameter:     parameter,
+		OldValue:      oldValue,
+		NewValue:      newValue,
+		Proposer:      proposer,
+		StartBlock:    currentBlock + 1,
+		EndBlock:      currentBlock + d.getVotePeriod(),  // 表决期结束区块
+		ValidEndBlock: currentBlock + d.getValidPeriod(), // 🆕 有效期结束区块
+		Status:        ProposalPending,
+		Votes:         make(map[types.Address]ParameterVote),
+		Threshold:     d.getVotingThreshold(), // 动态通过阈值
+		Description:   description,
+		CreatedAt:     uint64(time.Now().Unix()),
 	}
 
 	// 🆕 签名提案
@@ -4324,6 +4345,7 @@ func (d *DPoS) CreateRecoveryProposal(proposer types.Address, validatorAddr type
 		"reason":          fmt.Sprintf("故障已解除（提案ID: %s）", proposalID),
 	}
 
+	currentBlock := d.getCurrentBlockNumber()
 	proposal := &ParameterProposal{
 		ID:               proposalID,
 		ProposalType:     "validator_recovery",   // 🆕 标记为验证者恢复提案
@@ -4332,8 +4354,9 @@ func (d *DPoS) CreateRecoveryProposal(proposer types.Address, validatorAddr type
 		OldValue:         oldValue,
 		NewValue:         newValue,
 		Proposer:         proposer,
-		StartBlock:       d.getCurrentBlockNumber() + 1,
-		EndBlock:         d.getCurrentBlockNumber() + d.getVotingPeriod(),
+		StartBlock:       currentBlock + 1,
+		EndBlock:         currentBlock + d.getVotePeriod(),  // 表决期结束区块
+		ValidEndBlock:    currentBlock + d.getValidPeriod(), // 🆕 有效期结束区块
 		Status:           ProposalPending,
 		Votes:            make(map[types.Address]ParameterVote),
 		Threshold:        d.getVotingThreshold(),
@@ -4531,13 +4554,48 @@ func (d *DPoS) ExecuteProposal(proposalID string) error {
 		return fmt.Errorf("proposal not found")
 	}
 
-	// 🆕 先检查提案是否过期
+	// 🆕 执行提案的检查顺序：1.检查有效期 2.检查表决期 3.检查状态
 	currentBlock := d.getCurrentBlockNumber()
-	if currentBlock > proposal.EndBlock {
-		return fmt.Errorf("proposal has expired (current block: %d, end block: %d)", currentBlock, proposal.EndBlock)
+
+	// 1. 检查提案是否在有效期内（ValidEndBlock）
+	if proposal.ValidEndBlock == 0 {
+		// 兼容旧提案（没有ValidEndBlock字段），使用EndBlock作为有效期
+		if currentBlock > proposal.EndBlock*2 {
+			return fmt.Errorf("proposal has expired (not in valid period), current block: %d, estimated valid end: %d", currentBlock, proposal.EndBlock*2)
+		}
+	} else {
+		if currentBlock > proposal.ValidEndBlock {
+			var validPeriodInfo string
+			if d.config != nil && d.config.ProposalValidPeriod > 0 {
+				validPeriodInfo = fmt.Sprintf(", valid period: %s", d.config.ProposalValidPeriod.String())
+			}
+			return fmt.Errorf("proposal has expired (not in valid period)%s, current block: %d, valid end block: %d", validPeriodInfo, currentBlock, proposal.ValidEndBlock)
+		}
 	}
 
-	// 提案未过期，检查状态
+	// 2. 检查提案是否仍在表决期内（EndBlock）
+	if currentBlock <= proposal.EndBlock {
+		// 还在表决期内
+		var votePeriodInfo string
+		var remainingBlocks uint64
+		if d.config != nil && d.config.ProposalVotePeriod > 0 {
+			votePeriodInfo = fmt.Sprintf(", vote period: %s", d.config.ProposalVotePeriod.String())
+		}
+		if proposal.EndBlock > currentBlock {
+			remainingBlocks = proposal.EndBlock - currentBlock
+			var remainingTime string
+			if d.config != nil && d.config.BlockTime.Duration > 0 {
+				remainingDuration := time.Duration(remainingBlocks) * d.config.BlockTime.Duration
+				remainingTime = fmt.Sprintf(", remaining: %d blocks (~%s)", remainingBlocks, remainingDuration.String())
+			} else {
+				remainingTime = fmt.Sprintf(", remaining: %d blocks", remainingBlocks)
+			}
+			return fmt.Errorf("proposal is still in vote period (please wait)%s%s, current block: %d, vote end block: %d", votePeriodInfo, remainingTime, currentBlock, proposal.EndBlock)
+		}
+		return fmt.Errorf("proposal is still in vote period (please wait)%s, current block: %d, vote end block: %d", votePeriodInfo, currentBlock, proposal.EndBlock)
+	}
+
+	// 3. 表决期已过，检查状态
 	if proposal.Status != ProposalPassed {
 		return fmt.Errorf("proposal not passed")
 	}
@@ -4742,11 +4800,11 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 	case "dpos_epoch_duration":
 		return d.config.EpochDuration.String(), nil
 	case "governance_voting_period":
-		// 🆕 从YAML配置计算提案周期（区块数）
-		if d.config != nil && d.config.ProposalPeriod > 0 {
+		// 🆕 从YAML配置计算提案表决周期（区块数）
+		if d.config != nil && d.config.ProposalVotePeriod > 0 {
 			blockTime := d.config.BlockTime.Duration
 			if blockTime > 0 {
-				blocks := uint64(d.config.ProposalPeriod / blockTime)
+				blocks := uint64(d.config.ProposalVotePeriod / blockTime)
 				return blocks, nil
 			}
 		}
@@ -5446,39 +5504,24 @@ func (d *DPoS) GetCurrentParameterValues() map[string]interface{} {
 		}
 	}
 
-	// 添加 dpos_proposal_period（以区块数表示，来自YAML配置）
-	// 始终计算并返回，即使配置为0也使用默认值
-	var proposalPeriod time.Duration
+	// 添加 dpos_proposal_vote_period（以区块数表示，来自YAML配置）
+	var proposalVotePeriod time.Duration
 	if d.config != nil {
-		proposalPeriod = d.config.ProposalPeriod
-		d.logger.Info("📋 GetCurrentParameterValues: 检查ProposalPeriod配置",
-			"proposalPeriod", proposalPeriod.String(),
-			"proposalPeriodSeconds", proposalPeriod.Seconds(),
-			"isZero", proposalPeriod == 0)
+		proposalVotePeriod = d.config.ProposalVotePeriod
 	}
 
-	if proposalPeriod == 0 {
-		// 如果配置未设置或为0，使用默认值24小时
-		proposalPeriod = 24 * time.Hour
-		d.logger.Warn("📋 ProposalPeriod为0或未设置，使用默认值24小时")
-	} else {
-		d.logger.Info("📋 使用配置的ProposalPeriod", "period", proposalPeriod.String())
+	if proposalVotePeriod == 0 {
+		proposalVotePeriod = 24 * time.Hour
+		d.logger.Warn("📋 ProposalVotePeriod为0或未设置，使用默认值24小时")
 	}
 
-	// 计算区块数
-	blockTime := 2 * time.Second // 默认区块时间
+	blockTime := 2 * time.Second
 	if d.config != nil && d.config.BlockTime.Duration > 0 {
 		blockTime = d.config.BlockTime.Duration
 	}
 	if blockTime > 0 {
-		blocks := uint64(proposalPeriod / blockTime)
-		result["dpos_proposal_period"] = blocks
-		d.logger.Info("📋 计算dpos_proposal_period完成",
-			"proposalPeriod", proposalPeriod.String(),
-			"blockTime", blockTime.String(),
-			"blocks", blocks)
-	} else {
-		d.logger.Warn("📋 BlockTime为0，无法计算dpos_proposal_period")
+		blocks := uint64(proposalVotePeriod / blockTime)
+		result["dpos_proposal_vote_period"] = blocks
 	}
 
 	// 添加一些额外的系统信息
@@ -6480,8 +6523,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Warn("📊 未找到voterRewardRatio配置")
 	}
 
-	// 🆕 解析提案周期配置
-	// 🔍 先打印所有配置键，便于调试
+	// 🆕 解析提案表决周期配置
 	logger.Info("📋 检查Config中的所有键", "keys", func() []string {
 		keys := make([]string, 0, len(params.Config.Config))
 		for k := range params.Config.Config {
@@ -6490,28 +6532,99 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		return keys
 	}())
 
-	if proposalPeriod, exists := params.Config.Config["proposalPeriod"]; exists {
-		logger.Info("🔍 找到proposalPeriod配置", "type", fmt.Sprintf("%T", proposalPeriod), "value", proposalPeriod)
-		if period, ok := proposalPeriod.(time.Duration); ok {
-			vcity_dpos.config.ProposalPeriod = period
-			logger.Info("📋 ✅ 使用server层解析的提案周期", "period", period.String(), "seconds", period.Seconds())
+	if proposalVotePeriod, exists := params.Config.Config["proposalVotePeriod"]; exists {
+		logger.Info("🔍 找到proposalVotePeriod配置", "type", fmt.Sprintf("%T", proposalVotePeriod), "value", proposalVotePeriod)
+		if period, ok := proposalVotePeriod.(time.Duration); ok {
+			vcity_dpos.config.ProposalVotePeriod = period
+			logger.Info("📋 ✅ 使用server层解析的提案表决周期", "period", period.String(), "seconds", period.Seconds())
 		} else {
-			logger.Warn("📋 ❌ proposalPeriod类型断言失败",
-				"type", fmt.Sprintf("%T", proposalPeriod),
-				"value", proposalPeriod,
+			logger.Warn("📋 ❌ proposalVotePeriod类型断言失败",
+				"type", fmt.Sprintf("%T", proposalVotePeriod),
+				"value", proposalVotePeriod,
 				"尝试转换为time.Duration")
-			// 🆕 尝试从其他类型转换
-			if periodStr, ok := proposalPeriod.(string); ok {
-				if duration, err := time.ParseDuration(periodStr); err == nil {
-					vcity_dpos.config.ProposalPeriod = duration
-					logger.Info("📋 ✅ 从字符串成功解析提案周期", "period", duration.String())
+			if periodStr, ok := proposalVotePeriod.(string); ok {
+				// 支持 "d" 单位：转换为小时
+				durationStr := periodStr
+				if strings.Contains(durationStr, "d") {
+					durationStr = strings.TrimSpace(durationStr)
+					var days float64
+					var suffix string
+					if _, err := fmt.Sscanf(durationStr, "%f%s", &days, &suffix); err == nil && strings.HasPrefix(suffix, "d") {
+						remaining := strings.TrimPrefix(suffix, "d")
+						hours := days * 24
+						if remaining != "" {
+							durationStr = fmt.Sprintf("%.0fh%s", hours, remaining)
+						} else {
+							durationStr = fmt.Sprintf("%.0fh", hours)
+						}
+					} else {
+						lastD := strings.LastIndex(durationStr, "d")
+						if lastD > 0 {
+							if _, err := fmt.Sscanf(durationStr[:lastD+1], "%fd", &days); err == nil {
+								hours := days * 24
+								durationStr = fmt.Sprintf("%.0fh%s", hours, durationStr[lastD+1:])
+							}
+						}
+					}
+				}
+				if duration, err := time.ParseDuration(durationStr); err == nil {
+					vcity_dpos.config.ProposalVotePeriod = duration
+					logger.Info("📋 ✅ 从字符串成功解析提案表决周期", "period", duration.String())
 				} else {
 					logger.Warn("📋 ❌ 字符串解析失败", "error", err)
 				}
 			}
 		}
 	} else {
-		logger.Warn("📋 ❌ 未找到proposalPeriod配置，将使用默认值")
+		logger.Warn("📋 ❌ 未找到proposalVotePeriod配置，将使用默认值")
+	}
+
+	// 🆕 解析提案有效期配置
+	if proposalValidPeriod, exists := params.Config.Config["proposalValidPeriod"]; exists {
+		logger.Info("🔍 找到proposalValidPeriod配置", "type", fmt.Sprintf("%T", proposalValidPeriod), "value", proposalValidPeriod)
+		if period, ok := proposalValidPeriod.(time.Duration); ok {
+			vcity_dpos.config.ProposalValidPeriod = period
+			logger.Info("📋 ✅ 使用server层解析的提案有效期", "period", period.String(), "seconds", period.Seconds())
+		} else {
+			logger.Warn("📋 ❌ proposalValidPeriod类型断言失败",
+				"type", fmt.Sprintf("%T", proposalValidPeriod),
+				"value", proposalValidPeriod,
+				"尝试转换为time.Duration")
+			if periodStr, ok := proposalValidPeriod.(string); ok {
+				// 支持 "d" 单位：转换为小时
+				durationStr := periodStr
+				if strings.Contains(durationStr, "d") {
+					durationStr = strings.TrimSpace(durationStr)
+					var days float64
+					var suffix string
+					if _, err := fmt.Sscanf(durationStr, "%f%s", &days, &suffix); err == nil && strings.HasPrefix(suffix, "d") {
+						remaining := strings.TrimPrefix(suffix, "d")
+						hours := days * 24
+						if remaining != "" {
+							durationStr = fmt.Sprintf("%.0fh%s", hours, remaining)
+						} else {
+							durationStr = fmt.Sprintf("%.0fh", hours)
+						}
+					} else {
+						lastD := strings.LastIndex(durationStr, "d")
+						if lastD > 0 {
+							if _, err := fmt.Sscanf(durationStr[:lastD+1], "%fd", &days); err == nil {
+								hours := days * 24
+								durationStr = fmt.Sprintf("%.0fh%s", hours, durationStr[lastD+1:])
+							}
+						}
+					}
+				}
+				if duration, err := time.ParseDuration(durationStr); err == nil {
+					vcity_dpos.config.ProposalValidPeriod = duration
+					logger.Info("📋 ✅ 从字符串成功解析提案有效期", "period", duration.String())
+				} else {
+					logger.Warn("📋 ❌ 字符串解析失败", "error", err)
+				}
+			}
+		}
+	} else {
+		logger.Warn("📋 ❌ 未找到proposalValidPeriod配置，将使用默认值")
 	}
 
 	// 🆕 解析区块时间配置
@@ -6571,9 +6684,13 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		vcity_dpos.config.VoterRewardRatio = 30
 	}
 
-	if vcity_dpos.config.ProposalPeriod == 0 {
-		logger.Warn("⚠️ proposalPeriod为0，设置默认值24小时")
-		vcity_dpos.config.ProposalPeriod = 24 * time.Hour
+	if vcity_dpos.config.ProposalVotePeriod == 0 {
+		logger.Warn("⚠️ proposalVotePeriod为0，设置默认值24小时")
+		vcity_dpos.config.ProposalVotePeriod = 24 * time.Hour
+	}
+	if vcity_dpos.config.ProposalValidPeriod == 0 {
+		logger.Warn("⚠️ proposalValidPeriod为0，设置默认值7天")
+		vcity_dpos.config.ProposalValidPeriod = 7 * 24 * time.Hour
 	}
 
 	// 检查BlockTime是否已正确设置，如果没有则使用默认值
@@ -10578,13 +10695,14 @@ func (d *DPoS) calculateReward(staker types.Address) *big.Int {
 // DefaultDPoSConfig 返回默认配置
 func DefaultDPoSConfig() *DPoSConfig {
 	return &DPoSConfig{
-		DelegateCount:  21,
-		BlockTime:      common.Duration{Duration: 15 * time.Second},
-		RoundTime:      common.Duration{Duration: 30 * time.Second},
-		MinVotingPower: big.NewInt(1000000000000000000), // 1 token
-		VoteLockTime:   86400,                           // 24 hours
-		RewardRatio:    100,                             // 1%
-		ProposalPeriod: 24 * time.Hour,                  // 默认提案周期 24小时
+		DelegateCount:       21,
+		BlockTime:           common.Duration{Duration: 15 * time.Second},
+		RoundTime:           common.Duration{Duration: 30 * time.Second},
+		MinVotingPower:      big.NewInt(1000000000000000000), // 1 token
+		VoteLockTime:        86400,                           // 24 hours
+		RewardRatio:         100,                             // 1%
+		ProposalVotePeriod:  24 * time.Hour,                  // 默认提案表决周期 24小时
+		ProposalValidPeriod: 7 * 24 * time.Hour,              // 默认提案有效期 7天
 	}
 }
 

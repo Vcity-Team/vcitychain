@@ -114,8 +114,9 @@ type serverParams struct {
 	// 🆕 新增：DPoS最小质押门槛
 	dposDelegateThreshold *big.Int
 
-	// 🆕 新增：DPoS提案周期
-	dposProposalPeriod string
+	// 🆕 DPoS提案周期
+	dposProposalVotePeriod  string // 提案表决周期
+	dposProposalValidPeriod string // 提案有效期
 }
 
 func (p *serverParams) isMaxPeersSet() bool {
@@ -223,7 +224,8 @@ func (p *serverParams) generateConfig() *server.Config {
 		DPoSRewardAmount:         p.rawConfig.DPoSRewardAmount,
 		DPoSValidatorRewardRatio: p.rawConfig.DPoSValidatorRewardRatio,
 		DPoSVoterRewardRatio:     p.rawConfig.DPoSVoterRewardRatio,
-		DPoSProposalPeriod:       p.dposProposalPeriod,
+		DPoSProposalVotePeriod:   p.dposProposalVotePeriod,
+		DPoSProposalValidPeriod:  p.dposProposalValidPeriod,
 		JSONLogFormat:            p.rawConfig.JSONLogFormat,
 		LogFilePath:              p.logFileLocation,
 
