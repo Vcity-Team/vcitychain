@@ -3317,15 +3317,15 @@ func (d *DPOS) GetValidatorRewardsInfo(ctx context.Context, params interface{}) 
 func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) (interface{}, error) {
 	d.logger.Info("DPoS CreateParameterProposal called", "params", params)
 
-	var proposerStr, parameter, description string
+	var proposerStr, parameter, description, proposerPrivateKeyHex string
 	var newValue interface{}
 
 	// 支持两种参数格式：数组格式和对象格式
 	switch p := params.(type) {
 	case []interface{}:
-		// 数组格式: [parameter, newValue, description, proposer]
-		if len(p) < 4 {
-			return nil, fmt.Errorf("invalid parameters: expected 4 parameters [parameter, newValue, description, proposer], got %d", len(p))
+		// 数组格式: [parameter, newValue, description, proposer, proposerPrivateKey]
+		if len(p) < 5 {
+			return nil, fmt.Errorf("invalid parameters: expected 5 parameters [parameter, newValue, description, proposer, proposerPrivateKey], got %d", len(p))
 		}
 
 		var ok bool
@@ -3349,8 +3349,13 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 			return nil, fmt.Errorf("invalid proposer address: expected string, got %T", p[3])
 		}
 
+		proposerPrivateKeyHex, ok = p[4].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid proposer private key: expected string, got %T", p[4])
+		}
+
 	case map[string]interface{}:
-		// 对象格式: {parameter, newValue, description, proposer}
+		// 对象格式: {parameter, newValue, description, proposer, proposerPrivateKey}
 		var ok bool
 		proposerStr, ok = p["proposer"].(string)
 		if !ok {
@@ -3372,6 +3377,11 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 			description = "" // 可选参数
 		}
 
+		proposerPrivateKeyHex, ok = p["proposerPrivateKey"].(string)
+		if !ok {
+			return nil, fmt.Errorf("proposerPrivateKey is required and must be a string")
+		}
+
 	default:
 		return nil, fmt.Errorf("invalid parameters format: expected array or object, got %T", params)
 	}
@@ -3379,6 +3389,11 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 	// 验证必需参数
 	if proposerStr == "" {
 		return nil, fmt.Errorf("proposer address cannot be empty")
+	}
+
+	// 验证私钥格式
+	if len(proposerPrivateKeyHex) != 64 {
+		return nil, fmt.Errorf("invalid proposer private key length: expected 64, got %d", len(proposerPrivateKeyHex))
 	}
 	if parameter == "" {
 		return nil, fmt.Errorf("parameter name cannot be empty")
@@ -3399,15 +3414,21 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 		return nil, fmt.Errorf("DPoS engine not available")
 	}
 
-	// 调用DPoS引擎创建提案
+	// 调用DPoS引擎创建提案（传递私钥）
 	if createProposal, ok := dposEngine.(interface {
-		CreateParameterProposal(proposer types.Address, parameter string, newValue interface{}, description string) (*dpos.ParameterProposal, error)
+		CreateParameterProposal(proposer types.Address, parameter string, newValue interface{}, description string, proposerPrivateKeyHex string) (*dpos.ParameterProposal, error)
 	}); ok {
-		proposal, err := createProposal.CreateParameterProposal(proposer, parameter, newValue, description)
+		proposal, err := createProposal.CreateParameterProposal(proposer, parameter, newValue, description, proposerPrivateKeyHex)
 		if err != nil {
 			// 提供更详细的错误信息
 			switch {
-			case strings.Contains(err.Error(), "only validators can create proposals"):
+			case strings.Contains(err.Error(), "private key does not match"):
+				return nil, fmt.Errorf("proposer private key does not match proposer address")
+			case strings.Contains(err.Error(), "private key is required"):
+				return nil, fmt.Errorf("proposer private key is required")
+			case strings.Contains(err.Error(), "signature"):
+				return nil, fmt.Errorf("proposal signature verification failed: %w", err)
+			case strings.Contains(err.Error(), "only validators can create proposals") || strings.Contains(err.Error(), "is not a validator"):
 				return nil, fmt.Errorf("permission denied: address %s is not a validator", proposerStr)
 			case strings.Contains(err.Error(), "parameter") && strings.Contains(err.Error(), "not votable"):
 				return nil, fmt.Errorf("invalid parameter: %s is not a votable parameter", parameter)
@@ -3446,14 +3467,14 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (interface{}, error) {
 	d.logger.Info("DPoS CreateRecoveryProposal called", "params", params)
 
-	var proposerStr, validatorAddrStr, recoveryReason, description string
+	var proposerStr, validatorAddrStr, recoveryReason, description, proposerPrivateKeyHex string
 
 	// 支持两种参数格式：数组格式和对象格式
 	switch p := params.(type) {
 	case []interface{}:
-		// 数组格式: [validatorAddress, recoveryReason, description, proposer]
-		if len(p) < 2 {
-			return nil, fmt.Errorf("invalid parameters: expected at least 2 parameters [validatorAddress, recoveryReason, description?, proposer?], got %d", len(p))
+		// 数组格式: [validatorAddress, recoveryReason, description, proposer, proposerPrivateKey]
+		if len(p) < 5 {
+			return nil, fmt.Errorf("invalid parameters: expected 5 parameters [validatorAddress, recoveryReason, description, proposer, proposerPrivateKey], got %d", len(p))
 		}
 
 		var ok bool
@@ -3467,15 +3488,19 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 			return nil, fmt.Errorf("invalid recovery reason: expected string, got %T", p[1])
 		}
 
-		if len(p) > 2 {
-			description, _ = p[2].(string)
+		description, _ = p[2].(string)
+		proposerStr, ok = p[3].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid proposer address: expected string, got %T", p[3])
 		}
-		if len(p) > 3 {
-			proposerStr, _ = p[3].(string)
+
+		proposerPrivateKeyHex, ok = p[4].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid proposer private key: expected string, got %T", p[4])
 		}
 
 	case map[string]interface{}:
-		// 对象格式: {validatorAddress, recoveryReason, description?, proposer?}
+		// 对象格式: {validatorAddress, recoveryReason, description?, proposer, proposerPrivateKey}
 		var ok bool
 		validatorAddrStr, ok = p["validatorAddress"].(string)
 		if !ok {
@@ -3488,10 +3513,23 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 		}
 
 		description, _ = p["description"].(string)
-		proposerStr, _ = p["proposer"].(string)
+		proposerStr, ok = p["proposer"].(string)
+		if !ok {
+			return nil, fmt.Errorf("proposer is required and must be a string")
+		}
+
+		proposerPrivateKeyHex, ok = p["proposerPrivateKey"].(string)
+		if !ok {
+			return nil, fmt.Errorf("proposerPrivateKey is required and must be a string")
+		}
 
 	default:
 		return nil, fmt.Errorf("invalid parameters format: expected array or object, got %T", params)
+	}
+
+	// 验证私钥格式
+	if len(proposerPrivateKeyHex) != 64 {
+		return nil, fmt.Errorf("invalid proposer private key length: expected 64, got %d", len(proposerPrivateKeyHex))
 	}
 
 	// 验证必需参数
@@ -3522,15 +3560,21 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 		return nil, fmt.Errorf("DPoS engine not available")
 	}
 
-	// 调用DPoS引擎创建恢复提案
+	// 调用DPoS引擎创建恢复提案（传递私钥）
 	if createRecoveryProposal, ok := dposEngine.(interface {
-		CreateRecoveryProposal(proposer types.Address, validatorAddr types.Address, recoveryReason string, description string) (*dpos.ParameterProposal, error)
+		CreateRecoveryProposal(proposer types.Address, validatorAddr types.Address, recoveryReason string, description string, proposerPrivateKeyHex string) (*dpos.ParameterProposal, error)
 	}); ok {
-		proposal, err := createRecoveryProposal.CreateRecoveryProposal(proposer, validatorAddr, recoveryReason, description)
+		proposal, err := createRecoveryProposal.CreateRecoveryProposal(proposer, validatorAddr, recoveryReason, description, proposerPrivateKeyHex)
 		if err != nil {
 			// 提供更详细的错误信息
 			switch {
-			case strings.Contains(err.Error(), "only validators can create proposals"):
+			case strings.Contains(err.Error(), "private key does not match"):
+				return nil, fmt.Errorf("proposer private key does not match proposer address")
+			case strings.Contains(err.Error(), "private key is required"):
+				return nil, fmt.Errorf("proposer private key is required")
+			case strings.Contains(err.Error(), "signature"):
+				return nil, fmt.Errorf("proposal signature verification failed: %w", err)
+			case strings.Contains(err.Error(), "only validators can create proposals") || strings.Contains(err.Error(), "is not a validator"):
 				return nil, fmt.Errorf("permission denied: address %s is not a validator", proposerStr)
 			case strings.Contains(err.Error(), "not in faulty status"):
 				return nil, fmt.Errorf("validator %s is not in faulty status, cannot create recovery proposal", validatorAddrStr)
@@ -3588,35 +3632,44 @@ func (d *DPOS) GetMinVotingThreshold(ctx context.Context) (interface{}, error) {
 func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) (interface{}, error) {
 	d.logger.Info("DPoS VoteOnParameterProposal called", "params", params)
 
-	var proposalID, voterStr string
+	var proposalID, voterStr, privateKeyHex string
 	var support bool
 
-	// 支持数组格式参数 [proposalId, voter, support]
+	// 支持数组格式参数 [proposalId, voter, support, privateKey]
 	if paramArray, ok := params.([]interface{}); ok {
-		if len(paramArray) != 3 {
-			return nil, fmt.Errorf("invalid parameters format: expected 3 parameters [proposalId, voter, support]")
+		if len(paramArray) != 4 {
+			return nil, fmt.Errorf("invalid parameters format: expected 4 parameters [proposalId, voter, support, privateKey]")
 		}
 
-		var ok1, ok2, ok3 bool
+		var ok1, ok2, ok3, ok4 bool
 		proposalID, ok1 = paramArray[0].(string)
 		voterStr, ok2 = paramArray[1].(string)
 		support, ok3 = paramArray[2].(bool)
+		privateKeyHex, ok4 = paramArray[3].(string)
 
-		if !ok1 || !ok2 || !ok3 {
-			return nil, fmt.Errorf("invalid parameters format: expected [string, string, bool]")
+		if !ok1 || !ok2 || !ok3 || !ok4 {
+			return nil, fmt.Errorf("invalid parameters format: expected [string, string, bool, string]")
 		}
 	} else if paramMap, ok := params.(map[string]interface{}); ok {
-		// 支持对象格式参数 {proposalId, voter, support}
-		var ok1, ok2, ok3 bool
+		// 支持对象格式参数 {proposalId, voter, support, privateKey}
+		var ok1, ok2, ok3, ok4 bool
 		proposalID, ok1 = paramMap["proposalId"].(string)
 		voterStr, ok2 = paramMap["voter"].(string)
 		support, ok3 = paramMap["support"].(bool)
+		if pkVal, exists := paramMap["privateKey"]; exists {
+			privateKeyHex, ok4 = pkVal.(string)
+		}
 
-		if !ok1 || !ok2 || !ok3 {
-			return nil, fmt.Errorf("invalid parameters format: expected {proposalId: string, voter: string, support: bool}")
+		if !ok1 || !ok2 || !ok3 || !ok4 {
+			return nil, fmt.Errorf("invalid parameters format: expected {proposalId: string, voter: string, support: bool, privateKey: string}")
 		}
 	} else {
-		return nil, fmt.Errorf("invalid parameters format: expected array [proposalId, voter, support] or object {proposalId, voter, support}")
+		return nil, fmt.Errorf("invalid parameters format: expected array [proposalId, voter, support, privateKey] or object {proposalId, voter, support, privateKey}")
+	}
+
+	// 验证私钥格式
+	if len(privateKeyHex) != 64 {
+		return nil, fmt.Errorf("invalid private key length: expected 64, got %d", len(privateKeyHex))
 	}
 
 	// 验证投票者地址
@@ -3628,17 +3681,18 @@ func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) 
 		return nil, fmt.Errorf("DPoS engine not available")
 	}
 
-	// 调试日志：记录接收到的参数
+	// 调试日志：记录接收到的参数（隐藏私钥）
 	d.logger.Info("🔍 JSON-RPC投票参数",
 		"proposalID", proposalID,
 		"voter", voter.String(),
-		"support", support)
+		"support", support,
+		"privateKey", privateKeyHex[:8]+"... (已隐藏)")
 
-	// 调用DPoS引擎进行投票
+	// 调用DPoS引擎进行投票（传递私钥）
 	if voteOnProposal, ok := dposEngine.(interface {
-		VoteOnParameterProposal(voter types.Address, proposalID string, support bool) error
+		VoteOnParameterProposal(voter types.Address, proposalID string, support bool, privateKeyHex string) error
 	}); ok {
-		err := voteOnProposal.VoteOnParameterProposal(voter, proposalID, support)
+		err := voteOnProposal.VoteOnParameterProposal(voter, proposalID, support, privateKeyHex)
 		if err != nil {
 			return nil, fmt.Errorf("failed to vote on proposal: %w", err)
 		}

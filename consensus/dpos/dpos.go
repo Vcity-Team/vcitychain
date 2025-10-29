@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -122,10 +123,11 @@ type ParameterProposal struct {
 	Description  string                          `json:"description"`  // 提案描述
 	CreatedAt    uint64                          `json:"createdAt"`    // 创建时间
 	// 🆕 Recovery专用字段
-	ValidatorAddress types.Address `json:"validatorAddress,omitempty"` // 要恢复的验证者地址
-	RecoveryReason   string        `json:"recoveryReason,omitempty"`   // 恢复理由
-	ExecutedAt       uint64        `json:"executedAt,omitempty"`       // 执行时间
-	ExecutedBy       string        `json:"executedBy,omitempty"`       // 执行者（提案ID）
+	ValidatorAddress  types.Address `json:"validatorAddress,omitempty"`  // 要恢复的验证者地址
+	RecoveryReason    string        `json:"recoveryReason,omitempty"`    // 恢复理由
+	ExecutedAt        uint64        `json:"executedAt,omitempty"`        // 执行时间
+	ExecutedBy        string        `json:"executedBy,omitempty"`        // 执行者（提案ID）
+	ProposalSignature []byte        `json:"proposalSignature,omitempty"` // 🆕 提案创建签名
 }
 
 // ProposalStatus 提案状态
@@ -4203,13 +4205,13 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 }
 
 // CreateParameterProposal 创建参数表决提案
-func (d *DPoS) CreateParameterProposal(proposer types.Address, parameter string, newValue interface{}, description string) (*ParameterProposal, error) {
+func (d *DPoS) CreateParameterProposal(proposer types.Address, parameter string, newValue interface{}, description string, proposerPrivateKeyHex string) (*ParameterProposal, error) {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
-	// 验证提案者权限（只有验证者可以创建提案）
-	if !d.isValidator(proposer) {
-		return nil, fmt.Errorf("only validators can create proposals")
+	// 🆕 验证私钥是否提供
+	if proposerPrivateKeyHex == "" {
+		return nil, fmt.Errorf("proposer private key is required for signing the proposal")
 	}
 
 	// 验证参数是否可表决
@@ -4250,6 +4252,16 @@ func (d *DPoS) CreateParameterProposal(proposer types.Address, parameter string,
 		CreatedAt:    uint64(time.Now().Unix()),
 	}
 
+	// 🆕 签名提案
+	if err := d.signProposal(proposal, proposerPrivateKeyHex); err != nil {
+		return nil, fmt.Errorf("failed to sign proposal: %w", err)
+	}
+
+	// 🆕 验证签名
+	if err := d.verifyProposalSignature(proposal); err != nil {
+		return nil, fmt.Errorf("failed to verify proposal signature: %w", err)
+	}
+
 	// 保存到数据库
 	if d.state != nil && d.state.ProposalStore != nil {
 		if err := d.state.ProposalStore.SaveProposal(proposal); err != nil {
@@ -4274,13 +4286,13 @@ func (d *DPoS) CreateParameterProposal(proposer types.Address, parameter string,
 }
 
 // CreateRecoveryProposal 创建验证者恢复提案
-func (d *DPoS) CreateRecoveryProposal(proposer types.Address, validatorAddr types.Address, recoveryReason string, description string) (*ParameterProposal, error) {
+func (d *DPoS) CreateRecoveryProposal(proposer types.Address, validatorAddr types.Address, recoveryReason string, description string, proposerPrivateKeyHex string) (*ParameterProposal, error) {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
-	// 验证提案者权限（只有验证者可以创建提案）
-	if !d.isValidator(proposer) {
-		return nil, fmt.Errorf("only validators can create proposals")
+	// 🆕 验证私钥是否提供
+	if proposerPrivateKeyHex == "" {
+		return nil, fmt.Errorf("proposer private key is required for signing the proposal")
 	}
 
 	// 验证要恢复的验证者是否存在故障
@@ -4330,6 +4342,16 @@ func (d *DPoS) CreateRecoveryProposal(proposer types.Address, validatorAddr type
 		CreatedAt:        uint64(time.Now().Unix()),
 	}
 
+	// 🆕 签名提案
+	if err := d.signProposal(proposal, proposerPrivateKeyHex); err != nil {
+		return nil, fmt.Errorf("failed to sign proposal: %w", err)
+	}
+
+	// 🆕 验证签名
+	if err := d.verifyProposalSignature(proposal); err != nil {
+		return nil, fmt.Errorf("failed to verify proposal signature: %w", err)
+	}
+
 	// 保存到数据库
 	if d.state != nil && d.state.ProposalStore != nil {
 		if err := d.state.ProposalStore.SaveProposal(proposal); err != nil {
@@ -4353,7 +4375,7 @@ func (d *DPoS) CreateRecoveryProposal(proposer types.Address, validatorAddr type
 }
 
 // VoteOnParameterProposal 对参数提案进行投票
-func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, support bool) error {
+func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, support bool, privateKeyHex string) error {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
@@ -4406,11 +4428,17 @@ func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, s
 		"voter", voter.String(),
 		"support", support,
 		"weight", weight.String(),
-		"timestamp", vote.Timestamp)
+		"timestamp", vote.Timestamp,
+		"privateKey", privateKeyHex[:8]+"... (已隐藏)")
 
-	// 签名投票
-	if err := d.signParameterVote(vote); err != nil {
+	// 签名投票（传递私钥）
+	if err := d.signParameterVote(vote, privateKeyHex); err != nil {
 		return fmt.Errorf("failed to sign vote: %w", err)
+	}
+
+	// 验证签名
+	if err := d.verifyParameterVote(vote); err != nil {
+		return fmt.Errorf("failed to verify vote signature: %w", err)
 	}
 
 	// 记录投票
@@ -4910,10 +4938,306 @@ func (d *DPoS) getValidatorVotingWeight(validator types.Address) *big.Int {
 	return big.NewInt(0)
 }
 
+// buildVoteMessage 构造投票签名消息
+func (d *DPoS) buildVoteMessage(vote *ParameterVote) []byte {
+	// 构造签名消息：投票者地址 + 提案ID + 支持/反对 + 时间戳 + 链ID
+	data := make([]byte, 0)
+
+	// 1. 投票者地址 (20字节)
+	data = append(data, vote.Voter.Bytes()...)
+
+	// 2. 提案ID (变长，添加长度前缀以避免冲突)
+	proposalIDBytes := []byte(vote.ProposalID)
+	proposalIDLen := make([]byte, 4)
+	binary.BigEndian.PutUint32(proposalIDLen, uint32(len(proposalIDBytes)))
+	data = append(data, proposalIDLen...)
+	data = append(data, proposalIDBytes...)
+
+	// 3. 支持/反对 (1字节: 0x01=true, 0x00=false)
+	if vote.Support {
+		data = append(data, byte(0x01))
+	} else {
+		data = append(data, byte(0x00))
+	}
+
+	// 4. 时间戳 (8字节)
+	timestampBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(timestampBytes, vote.Timestamp)
+	data = append(data, timestampBytes...)
+
+	// 5. 链ID (8字节，如果config中有chainID)
+	var chainID uint64
+	if d.config != nil && d.config.Blockchain != nil && d.config.Blockchain.Config() != nil {
+		chainID = uint64(d.config.Blockchain.Config().ChainID)
+	}
+	chainIDBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(chainIDBytes, chainID)
+	data = append(data, chainIDBytes...)
+
+	// 计算Keccak256哈希
+	message := crypto.Keccak256(data)
+
+	d.logger.Debug("🔍 构造投票签名消息",
+		"voter", vote.Voter.String(),
+		"proposalID", vote.ProposalID,
+		"support", vote.Support,
+		"timestamp", vote.Timestamp,
+		"chainID", chainID,
+		"messageHash", hex.EncodeToString(message))
+
+	return message
+}
+
 // signParameterVote 签名参数投票
-func (d *DPoS) signParameterVote(vote *ParameterVote) error {
-	// 这里应该实现投票签名逻辑
-	// 暂时返回nil，实际实现需要根据您的签名机制
+func (d *DPoS) signParameterVote(vote *ParameterVote, privateKeyHex string) error {
+	d.logger.Info("🔍 开始签名投票", "voter", vote.Voter.String(), "proposalID", vote.ProposalID)
+
+	// 1. 验证私钥格式
+	if len(privateKeyHex) != 64 {
+		return fmt.Errorf("invalid private key length: expected 64, got %d", len(privateKeyHex))
+	}
+
+	// 2. 验证私钥hex字符
+	for i, char := range privateKeyHex {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
+			return fmt.Errorf("invalid hex character at position %d: %c", i, char)
+		}
+	}
+
+	// 3. 解码私钥
+	privateKeyBytes, err := hex.DecodeString(privateKeyHex)
+	if err != nil {
+		return fmt.Errorf("failed to decode private key: %w", err)
+	}
+
+	if len(privateKeyBytes) != 32 {
+		return fmt.Errorf("invalid private key bytes length: expected 32, got %d", len(privateKeyBytes))
+	}
+
+	// 4. 创建ECDSA私钥对象
+	privateKey := &ecdsa.PrivateKey{
+		PublicKey: ecdsa.PublicKey{
+			Curve: crypto.S256,
+		},
+		D: new(big.Int).SetBytes(privateKeyBytes),
+	}
+	privateKey.PublicKey.X, privateKey.PublicKey.Y = privateKey.Curve.ScalarBaseMult(privateKeyBytes)
+
+	// 5. 验证私钥地址匹配
+	calculatedAddr := crypto.PubKeyToAddress(&privateKey.PublicKey)
+	if calculatedAddr != vote.Voter {
+		return fmt.Errorf("private key does not match voter address: calculated=%s, expected=%s",
+			calculatedAddr.String(), vote.Voter.String())
+	}
+
+	d.logger.Info("✅ 私钥验证通过", "address", calculatedAddr.String())
+
+	// 6. 构造签名消息
+	message := d.buildVoteMessage(vote)
+
+	// 7. 签名
+	signature, err := crypto.Sign(privateKey, message)
+	if err != nil {
+		return fmt.Errorf("failed to sign vote: %w", err)
+	}
+
+	// 8. 保存签名
+	vote.Signature = signature
+
+	d.logger.Info("✅ 投票签名成功",
+		"voter", vote.Voter.String(),
+		"proposalID", vote.ProposalID,
+		"signatureLength", len(signature))
+
+	return nil
+}
+
+// verifyParameterVote 验证参数投票签名
+func (d *DPoS) verifyParameterVote(vote *ParameterVote) error {
+	if len(vote.Signature) == 0 {
+		return fmt.Errorf("vote signature is empty")
+	}
+
+	// 1. 构造消息（与签名时相同）
+	message := d.buildVoteMessage(vote)
+
+	// 2. 恢复公钥
+	pubKey, err := crypto.RecoverPubkey(vote.Signature, message)
+	if err != nil {
+		return fmt.Errorf("failed to recover public key: %w", err)
+	}
+
+	// 3. 计算地址
+	recoveredAddr := crypto.PubKeyToAddress(pubKey)
+
+	// 4. 验证地址匹配
+	if recoveredAddr != vote.Voter {
+		return fmt.Errorf("signature does not match voter address: recovered=%s, expected=%s",
+			recoveredAddr.String(), vote.Voter.String())
+	}
+
+	d.logger.Debug("✅ 投票签名验证成功", "voter", vote.Voter.String())
+
+	return nil
+}
+
+// buildProposalMessage 构造提案签名消息
+func (d *DPoS) buildProposalMessage(proposal *ParameterProposal) []byte {
+	// 构造签名消息：提案者地址 + 提案ID + 提案类型 + 参数/验证者地址 + 时间戳 + 链ID
+	data := make([]byte, 0)
+
+	// 1. 提案者地址 (20字节)
+	data = append(data, proposal.Proposer.Bytes()...)
+
+	// 2. 提案ID (变长，添加长度前缀)
+	proposalIDBytes := []byte(proposal.ID)
+	proposalIDLen := make([]byte, 4)
+	binary.BigEndian.PutUint32(proposalIDLen, uint32(len(proposalIDBytes)))
+	data = append(data, proposalIDLen...)
+	data = append(data, proposalIDBytes...)
+
+	// 3. 提案类型 (变长，添加长度前缀)
+	proposalTypeBytes := []byte(proposal.ProposalType)
+	proposalTypeLen := make([]byte, 4)
+	binary.BigEndian.PutUint32(proposalTypeLen, uint32(len(proposalTypeBytes)))
+	data = append(data, proposalTypeLen...)
+	data = append(data, proposalTypeBytes...)
+
+	// 4. 参数或验证者地址（根据类型）
+	if proposal.ProposalType == "validator_recovery" && proposal.ValidatorAddress != (types.Address{}) {
+		// 恢复提案：使用验证者地址
+		data = append(data, proposal.ValidatorAddress.Bytes()...)
+	} else {
+		// 参数提案：使用参数名
+		parameterBytes := []byte(proposal.Parameter)
+		parameterLen := make([]byte, 4)
+		binary.BigEndian.PutUint32(parameterLen, uint32(len(parameterBytes)))
+		data = append(data, parameterLen...)
+		data = append(data, parameterBytes...)
+	}
+
+	// 5. 时间戳 (8字节)
+	createdAtBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(createdAtBytes, proposal.CreatedAt)
+	data = append(data, createdAtBytes...)
+
+	// 6. 链ID (8字节)
+	var chainID uint64
+	if d.config != nil && d.config.Blockchain != nil && d.config.Blockchain.Config() != nil {
+		chainID = uint64(d.config.Blockchain.Config().ChainID)
+	}
+	chainIDBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(chainIDBytes, chainID)
+	data = append(data, chainIDBytes...)
+
+	// 计算Keccak256哈希
+	message := crypto.Keccak256(data)
+
+	d.logger.Debug("🔍 构造提案签名消息",
+		"proposer", proposal.Proposer.String(),
+		"proposalID", proposal.ID,
+		"proposalType", proposal.ProposalType,
+		"chainID", chainID,
+		"messageHash", hex.EncodeToString(message))
+
+	return message
+}
+
+// signProposal 签名提案
+func (d *DPoS) signProposal(proposal *ParameterProposal, proposerPrivateKeyHex string) error {
+	d.logger.Info("🔍 开始签名提案", "proposer", proposal.Proposer.String(), "proposalID", proposal.ID)
+
+	// 1. 验证私钥格式
+	if len(proposerPrivateKeyHex) != 64 {
+		return fmt.Errorf("invalid private key length: expected 64, got %d", len(proposerPrivateKeyHex))
+	}
+
+	// 2. 验证私钥hex字符
+	for i, char := range proposerPrivateKeyHex {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
+			return fmt.Errorf("invalid hex character at position %d: %c", i, char)
+		}
+	}
+
+	// 3. 解码私钥
+	privateKeyBytes, err := hex.DecodeString(proposerPrivateKeyHex)
+	if err != nil {
+		return fmt.Errorf("failed to decode private key: %w", err)
+	}
+
+	if len(privateKeyBytes) != 32 {
+		return fmt.Errorf("invalid private key bytes length: expected 32, got %d", len(privateKeyBytes))
+	}
+
+	// 4. 创建ECDSA私钥对象
+	privateKey := &ecdsa.PrivateKey{
+		PublicKey: ecdsa.PublicKey{
+			Curve: crypto.S256,
+		},
+		D: new(big.Int).SetBytes(privateKeyBytes),
+	}
+	privateKey.PublicKey.X, privateKey.PublicKey.Y = privateKey.Curve.ScalarBaseMult(privateKeyBytes)
+
+	// 5. 验证私钥地址匹配
+	calculatedAddr := crypto.PubKeyToAddress(&privateKey.PublicKey)
+	if calculatedAddr != proposal.Proposer {
+		return fmt.Errorf("private key does not match proposer address: calculated=%s, expected=%s",
+			calculatedAddr.String(), proposal.Proposer.String())
+	}
+
+	d.logger.Info("✅ 私钥验证通过", "address", calculatedAddr.String())
+
+	// 6. 构造签名消息
+	message := d.buildProposalMessage(proposal)
+
+	// 7. 签名
+	signature, err := crypto.Sign(privateKey, message)
+	if err != nil {
+		return fmt.Errorf("failed to sign proposal: %w", err)
+	}
+
+	// 8. 保存签名
+	proposal.ProposalSignature = signature
+
+	d.logger.Info("✅ 提案签名成功",
+		"proposer", proposal.Proposer.String(),
+		"proposalID", proposal.ID,
+		"signatureLength", len(signature))
+
+	return nil
+}
+
+// verifyProposalSignature 验证提案签名
+func (d *DPoS) verifyProposalSignature(proposal *ParameterProposal) error {
+	if len(proposal.ProposalSignature) == 0 {
+		return fmt.Errorf("proposal signature is empty")
+	}
+
+	// 1. 构造消息（与签名时相同）
+	message := d.buildProposalMessage(proposal)
+
+	// 2. 恢复公钥
+	pubKey, err := crypto.RecoverPubkey(proposal.ProposalSignature, message)
+	if err != nil {
+		return fmt.Errorf("failed to recover public key: %w", err)
+	}
+
+	// 3. 计算地址
+	recoveredAddr := crypto.PubKeyToAddress(pubKey)
+
+	// 4. 验证地址匹配
+	if recoveredAddr != proposal.Proposer {
+		return fmt.Errorf("signature does not match proposer address: recovered=%s, expected=%s",
+			recoveredAddr.String(), proposal.Proposer.String())
+	}
+
+	// 5. 验证提案者是验证者
+	if !d.isValidator(proposal.Proposer) {
+		return fmt.Errorf("proposer %s is not a validator", proposal.Proposer.String())
+	}
+
+	d.logger.Debug("✅ 提案签名验证成功", "proposer", proposal.Proposer.String())
+
 	return nil
 }
 
@@ -5131,8 +5455,7 @@ func (d *DPoS) GetCurrentParameterValues() map[string]interface{} {
 	}
 	if blockTime > 0 {
 		blocks := uint64(proposalPeriod / blockTime)
-		// 返回带单位的字符串，如 "60个区块"
-		result["dpos_proposal_period"] = fmt.Sprintf("%d个区块", blocks)
+		result["dpos_proposal_period"] = blocks
 		d.logger.Info("📋 计算dpos_proposal_period完成",
 			"proposalPeriod", proposalPeriod.String(),
 			"blockTime", blockTime.String(),

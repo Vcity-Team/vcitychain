@@ -12,10 +12,11 @@ import (
 
 // CreateProposalRequest 创建提案请求
 type CreateProposalRequest struct {
-	Parameter   string      `json:"parameter"`
-	NewValue    interface{} `json:"newValue"`
-	Description string      `json:"description"`
-	Proposer    string      `json:"proposer"`
+	Parameter          string      `json:"parameter"`
+	NewValue           interface{} `json:"newValue"`
+	Description        string      `json:"description"`
+	Proposer           string      `json:"proposer"`
+	ProposerPrivateKey string      `json:"proposerPrivateKey"` // 🆕 提案者私钥
 }
 
 // CreateProposalResponse 创建提案响应
@@ -38,11 +39,14 @@ func GetCreateCommand() *cobra.Command {
 	cmd.Flags().String("parameter", "", "要修改的参数名称 (必需)")
 	cmd.Flags().String("new-value", "", "新的参数值 (必需)")
 	cmd.Flags().String("description", "", "提案描述 (必需)")
-	cmd.Flags().String("proposer", "", "提案者地址 (可选)")
+	cmd.Flags().String("proposer", "", "提案者地址 (必需)")
+	cmd.Flags().String("proposer-private-key", "", "提案者私钥 (hex格式, 64字符, 必需)")
 
 	cmd.MarkFlagRequired("parameter")
 	cmd.MarkFlagRequired("new-value")
 	cmd.MarkFlagRequired("description")
+	cmd.MarkFlagRequired("proposer")
+	cmd.MarkFlagRequired("proposer-private-key")
 
 	return cmd
 }
@@ -53,6 +57,12 @@ func runCreateProposal(cmd *cobra.Command, args []string) error {
 	newValueStr, _ := cmd.Flags().GetString("new-value")
 	description, _ := cmd.Flags().GetString("description")
 	proposer, _ := cmd.Flags().GetString("proposer")
+	proposerPrivateKey, _ := cmd.Flags().GetString("proposer-private-key")
+
+	// 验证私钥格式
+	if len(proposerPrivateKey) != 64 {
+		return fmt.Errorf("私钥长度错误: 期望64字符，实际%d字符", len(proposerPrivateKey))
+	}
 
 	// 解析新值
 	var newValue interface{}
@@ -63,10 +73,11 @@ func runCreateProposal(cmd *cobra.Command, args []string) error {
 
 	// 构建请求
 	request := CreateProposalRequest{
-		Parameter:   parameter,
-		NewValue:    newValue,
-		Description: description,
-		Proposer:    proposer,
+		Parameter:          parameter,
+		NewValue:           newValue,
+		Description:        description,
+		Proposer:           proposer,
+		ProposerPrivateKey: proposerPrivateKey,
 	}
 
 	// 调用RPC
@@ -83,11 +94,11 @@ func runCreateProposal(cmd *cobra.Command, args []string) error {
 }
 
 func callCreateProposalRPC(request CreateProposalRequest) (*CreateProposalResponse, error) {
-	// 构建JSON-RPC请求
+	// 构建JSON-RPC请求 - 添加私钥作为第5个参数
 	rpcRequest := map[string]interface{}{
 		"jsonrpc": "2.0",
 		"method":  "dpos_createParameterProposal",
-		"params":  []interface{}{request.Parameter, request.NewValue, request.Description, request.Proposer},
+		"params":  []interface{}{request.Parameter, request.NewValue, request.Description, request.Proposer, request.ProposerPrivateKey},
 		"id":      1,
 	}
 

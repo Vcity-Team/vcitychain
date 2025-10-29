@@ -12,10 +12,11 @@ import (
 
 // CreateRecoveryRequest 创建恢复提案请求
 type CreateRecoveryRequest struct {
-	ValidatorAddress string `json:"validatorAddress"`
-	RecoveryReason   string `json:"recoveryReason"`
-	Description      string `json:"description"`
-	Proposer         string `json:"proposer"`
+	ValidatorAddress   string `json:"validatorAddress"`
+	RecoveryReason     string `json:"recoveryReason"`
+	Description        string `json:"description"`
+	Proposer           string `json:"proposer"`
+	ProposerPrivateKey string `json:"proposerPrivateKey"` // 🆕 提案者私钥
 }
 
 // CreateRecoveryResponse 创建恢复提案响应
@@ -38,10 +39,13 @@ func GetCreateRecoveryCommand() *cobra.Command {
 	cmd.Flags().String("validator", "", "要恢复的验证者地址 (必需)")
 	cmd.Flags().String("reason", "", "恢复理由 (必需)")
 	cmd.Flags().String("description", "", "提案描述 (可选)")
-	cmd.Flags().String("proposer", "", "提案者地址 (可选)")
+	cmd.Flags().String("proposer", "", "提案者地址 (必需)")
+	cmd.Flags().String("proposer-private-key", "", "提案者私钥 (hex格式, 64字符, 必需)")
 
 	cmd.MarkFlagRequired("validator")
 	cmd.MarkFlagRequired("reason")
+	cmd.MarkFlagRequired("proposer")
+	cmd.MarkFlagRequired("proposer-private-key")
 
 	return cmd
 }
@@ -52,6 +56,12 @@ func runCreateRecovery(cmd *cobra.Command, args []string) error {
 	reason, _ := cmd.Flags().GetString("reason")
 	description, _ := cmd.Flags().GetString("description")
 	proposer, _ := cmd.Flags().GetString("proposer")
+	proposerPrivateKey, _ := cmd.Flags().GetString("proposer-private-key")
+
+	// 验证私钥格式
+	if len(proposerPrivateKey) != 64 {
+		return fmt.Errorf("私钥长度错误: 期望64字符，实际%d字符", len(proposerPrivateKey))
+	}
 
 	// 如果description为空，使用默认值
 	if description == "" {
@@ -60,10 +70,11 @@ func runCreateRecovery(cmd *cobra.Command, args []string) error {
 
 	// 构建请求
 	request := CreateRecoveryRequest{
-		ValidatorAddress: validatorAddr,
-		RecoveryReason:   reason,
-		Description:      description,
-		Proposer:         proposer,
+		ValidatorAddress:   validatorAddr,
+		RecoveryReason:     reason,
+		Description:        description,
+		Proposer:           proposer,
+		ProposerPrivateKey: proposerPrivateKey,
 	}
 
 	// 调用RPC
@@ -80,11 +91,11 @@ func runCreateRecovery(cmd *cobra.Command, args []string) error {
 }
 
 func callCreateRecoveryRPC(request CreateRecoveryRequest) (*CreateRecoveryResponse, error) {
-	// 构建JSON-RPC请求
+	// 构建JSON-RPC请求 - 添加私钥作为第5个参数
 	rpcRequest := map[string]interface{}{
 		"jsonrpc": "2.0",
 		"method":  "dpos_createRecoveryProposal",
-		"params":  []interface{}{request.ValidatorAddress, request.RecoveryReason, request.Description, request.Proposer},
+		"params":  []interface{}{request.ValidatorAddress, request.RecoveryReason, request.Description, request.Proposer, request.ProposerPrivateKey},
 		"id":      1,
 	}
 
