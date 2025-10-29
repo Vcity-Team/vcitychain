@@ -4,12 +4,12 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"reflect"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"bytes"
@@ -3408,59 +3408,104 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 		return nil, fmt.Errorf("invalid proposer address format: %s", proposerStr)
 	}
 
-	// 获取DPoS引擎
+	// 🆕 改为通过交易创建提案，而不是直接调用DPoS引擎
+
+	// 1. 获取DPoS引擎用于验证参数
 	dposEngine := d.getDPoSEngine()
 	if dposEngine == nil {
 		return nil, fmt.Errorf("DPoS engine not available")
 	}
 
-	// 调用DPoS引擎创建提案（传递私钥）
-	if createProposal, ok := dposEngine.(interface {
-		CreateParameterProposal(proposer types.Address, parameter string, newValue interface{}, description string, proposerPrivateKeyHex string) (*dpos.ParameterProposal, error)
+	// 2. 验证参数是否可表决
+	if checkVotable, ok := dposEngine.(interface {
+		IsParameterVotable(parameter string) bool
 	}); ok {
-		proposal, err := createProposal.CreateParameterProposal(proposer, parameter, newValue, description, proposerPrivateKeyHex)
-		if err != nil {
-			// 提供更详细的错误信息
-			switch {
-			case strings.Contains(err.Error(), "private key does not match"):
-				return nil, fmt.Errorf("proposer private key does not match proposer address")
-			case strings.Contains(err.Error(), "private key is required"):
-				return nil, fmt.Errorf("proposer private key is required")
-			case strings.Contains(err.Error(), "signature"):
-				return nil, fmt.Errorf("proposal signature verification failed: %w", err)
-			case strings.Contains(err.Error(), "only validators can create proposals") || strings.Contains(err.Error(), "is not a validator"):
-				return nil, fmt.Errorf("permission denied: address %s is not a validator", proposerStr)
-			case strings.Contains(err.Error(), "parameter") && strings.Contains(err.Error(), "not votable"):
-				return nil, fmt.Errorf("invalid parameter: %s is not a votable parameter", parameter)
-			case strings.Contains(err.Error(), "invalid parameter value"):
-				return nil, fmt.Errorf("invalid parameter value: %v for parameter %s", newValue, parameter)
-			case strings.Contains(err.Error(), "out of range"):
-				return nil, fmt.Errorf("parameter value out of range: %v for parameter %s", newValue, parameter)
-			case strings.Contains(err.Error(), "invalid type"):
-				return nil, fmt.Errorf("invalid parameter type: expected valid type for parameter %s", parameter)
-			default:
-				return nil, fmt.Errorf("failed to create proposal: %w", err)
-			}
+		if !checkVotable.IsParameterVotable(parameter) {
+			return nil, fmt.Errorf("invalid parameter: %s is not a votable parameter", parameter)
 		}
-
-		return map[string]interface{}{
-			"success":     true,
-			"proposalId":  proposal.ID,
-			"parameter":   proposal.Parameter,
-			"oldValue":    proposal.OldValue,
-			"newValue":    proposal.NewValue,
-			"proposer":    proposal.Proposer.String(),
-			"startBlock":  proposal.StartBlock,
-			"endBlock":    proposal.EndBlock,
-			"status":      proposal.Status.String(),
-			"threshold":   proposal.Threshold,
-			"description": proposal.Description,
-			"createdAt":   proposal.CreatedAt,
-			"message":     "Parameter proposal created successfully",
-		}, nil
 	}
 
-	return nil, fmt.Errorf("DPoS engine does not support parameter proposals")
+	// 3. 获取当前区块号（用于后续计算，但暂不需要）
+	// var currentBlock uint64
+	// if getBlockNum, ok := dposEngine.(interface {
+	// 	GetCurrentBlockNumber() uint64
+	// }); ok {
+	// 	currentBlock = getBlockNum.GetCurrentBlockNumber()
+	// }
+
+	// 4. 创建临时提案对象（用于签名，proposalID会在交易处理时从交易哈希生成）
+	// 使用确定性ID：proposer+nonce+参数+时间戳
+	var nonce uint64
+	if nonceStore, ok := d.store.(interface {
+		GetNonce(addr types.Address) uint64
+	}); ok {
+		nonce = nonceStore.GetNonce(proposer)
+	}
+
+	// 创建临时proposalID用于签名（最终ID会在ProcessProposalCreateTransaction中用交易哈希生成）
+	tempProposalID := fmt.Sprintf("proposal_temp_%s_%d_%s", proposer.String()[:8], nonce, parameter)
+	tempProposal := &dpos.ParameterProposal{
+		ID:           tempProposalID,
+		ProposalType: "parameter",
+		Parameter:    parameter,
+		Proposer:     proposer,
+		NewValue:     newValue,
+		Description:  description,
+		CreatedAt:    uint64(time.Now().Unix()),
+	}
+
+	// 5. 签名提案（使用DPoS引擎的方法）
+	var proposerSignature []byte
+	if signProposal, ok := dposEngine.(interface {
+		SignProposalForTx(proposal *dpos.ParameterProposal, proposerPrivateKeyHex string) ([]byte, error)
+	}); ok {
+		sig, err := signProposal.SignProposalForTx(tempProposal, proposerPrivateKeyHex)
+		if err != nil {
+			return nil, fmt.Errorf("failed to sign proposal: %w", err)
+		}
+		proposerSignature = sig
+	} else {
+		// 如果DPoS引擎不支持SignProposalForTx，直接创建交易，让ProcessProposalCreateTransaction处理签名
+		// 但这样需要修改ProcessProposalCreateTransaction的逻辑
+		// 暂时返回错误，提示需要实现
+		return nil, fmt.Errorf("DPoS engine does not support proposal signing for transactions")
+	}
+
+	// 6. 创建交易数据
+	txData := dpos.ProposalCreateTxData{
+		ProposalType:      "parameter",
+		Parameter:         parameter,
+		NewValue:          newValue,
+		Description:       description,
+		ProposerSignature: proposerSignature,
+	}
+
+	// 7. 创建并签名交易
+	tx, err := d.createProposalCreateTransaction(proposer, proposerPrivateKeyHex, txData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create proposal transaction: %w", err)
+	}
+
+	// 8. 添加到交易池并广播
+	if err := d.addProposalTransactionToPool(tx); err != nil {
+		return nil, fmt.Errorf("failed to broadcast proposal transaction: %w", err)
+	}
+
+	// 9. 生成最终的proposalID（用交易哈希，所有节点会一致）
+	finalProposalID := fmt.Sprintf("proposal_%s", tx.Hash.String()[:16])
+
+	d.logger.Info("✅ 参数提案交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", finalProposalID)
+
+	return map[string]interface{}{
+		"success":    true,
+		"txHash":     tx.Hash.String(),
+		"proposalId": finalProposalID,
+		"parameter":  parameter,
+		"newValue":   newValue,
+		"proposer":   proposer.String(),
+		"message":    "Parameter proposal transaction created and broadcasted successfully",
+		"note":       "Proposal will be created when transaction is included in a block",
+	}, nil
 }
 
 // CreateRecoveryProposal 创建验证者恢复提案
@@ -3554,52 +3599,84 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 		}
 	}
 
-	// 获取DPoS引擎
+	// 🆕 改为通过交易创建恢复提案
+	// 1. 获取DPoS引擎用于验证
 	dposEngine := d.getDPoSEngine()
 	if dposEngine == nil {
 		return nil, fmt.Errorf("DPoS engine not available")
 	}
 
-	// 调用DPoS引擎创建恢复提案（传递私钥）
-	if createRecoveryProposal, ok := dposEngine.(interface {
-		CreateRecoveryProposal(proposer types.Address, validatorAddr types.Address, recoveryReason string, description string, proposerPrivateKeyHex string) (*dpos.ParameterProposal, error)
+	// 2. 获取nonce用于创建临时proposalID
+	var nonce uint64
+	if nonceStore, ok := d.store.(interface {
+		GetNonce(addr types.Address) uint64
 	}); ok {
-		proposal, err := createRecoveryProposal.CreateRecoveryProposal(proposer, validatorAddr, recoveryReason, description, proposerPrivateKeyHex)
-		if err != nil {
-			// 提供更详细的错误信息
-			switch {
-			case strings.Contains(err.Error(), "private key does not match"):
-				return nil, fmt.Errorf("proposer private key does not match proposer address")
-			case strings.Contains(err.Error(), "private key is required"):
-				return nil, fmt.Errorf("proposer private key is required")
-			case strings.Contains(err.Error(), "signature"):
-				return nil, fmt.Errorf("proposal signature verification failed: %w", err)
-			case strings.Contains(err.Error(), "only validators can create proposals") || strings.Contains(err.Error(), "is not a validator"):
-				return nil, fmt.Errorf("permission denied: address %s is not a validator", proposerStr)
-			case strings.Contains(err.Error(), "not in faulty status"):
-				return nil, fmt.Errorf("validator %s is not in faulty status, cannot create recovery proposal", validatorAddrStr)
-			default:
-				return nil, fmt.Errorf("failed to create recovery proposal: %w", err)
-			}
-		}
-
-		return map[string]interface{}{
-			"success":          true,
-			"proposalId":       proposal.ID,
-			"validatorAddress": proposal.ValidatorAddress.String(),
-			"proposer":         proposal.Proposer.String(),
-			"recoveryReason":   proposal.RecoveryReason,
-			"description":      proposal.Description,
-			"startBlock":       proposal.StartBlock,
-			"endBlock":         proposal.EndBlock,
-			"status":           proposal.Status.String(),
-			"threshold":        proposal.Threshold,
-			"createdAt":        proposal.CreatedAt,
-			"message":          "Recovery proposal created successfully",
-		}, nil
+		nonce = nonceStore.GetNonce(proposer)
 	}
 
-	return nil, fmt.Errorf("DPoS engine does not support recovery proposals")
+	// 3. 创建临时提案对象用于签名
+	tempProposalID := fmt.Sprintf("recovery_temp_%s_%d_%s", proposer.String()[:8], nonce, validatorAddr.String()[:8])
+	tempProposal := &dpos.ParameterProposal{
+		ID:               tempProposalID,
+		ProposalType:     "validator_recovery",
+		Parameter:        validatorAddr.String(),
+		ValidatorAddress: validatorAddr,
+		Proposer:         proposer,
+		RecoveryReason:   recoveryReason,
+		Description:      description,
+		CreatedAt:        uint64(time.Now().Unix()),
+	}
+
+	// 4. 签名提案
+	var proposerSignature []byte
+	if signProposal, ok := dposEngine.(interface {
+		SignProposalForTx(proposal *dpos.ParameterProposal, proposerPrivateKeyHex string) ([]byte, error)
+	}); ok {
+		sig, err := signProposal.SignProposalForTx(tempProposal, proposerPrivateKeyHex)
+		if err != nil {
+			return nil, fmt.Errorf("failed to sign proposal: %w", err)
+		}
+		proposerSignature = sig
+	} else {
+		return nil, fmt.Errorf("DPoS engine does not support proposal signing for transactions")
+	}
+
+	// 5. 创建交易数据
+	txData := dpos.ProposalCreateTxData{
+		ProposalType:      "validator_recovery",
+		Parameter:         validatorAddr.String(),
+		Description:       description,
+		RecoveryReason:    recoveryReason,
+		ProposerSignature: proposerSignature,
+	}
+
+	// 6. 创建并签名交易
+	tx, err := d.createProposalCreateTransaction(proposer, proposerPrivateKeyHex, txData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create recovery proposal transaction: %w", err)
+	}
+
+	// 7. 添加到交易池并广播
+	if err := d.addProposalTransactionToPool(tx); err != nil {
+		return nil, fmt.Errorf("failed to broadcast recovery proposal transaction: %w", err)
+	}
+
+	// 8. 生成最终的proposalID
+	finalProposalID := fmt.Sprintf("recovery_%s", tx.Hash.String()[:16])
+
+	d.logger.Info("✅ 恢复提案交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", finalProposalID)
+
+	return map[string]interface{}{
+		"success":          true,
+		"txHash":           tx.Hash.String(),
+		"proposalId":       finalProposalID,
+		"validatorAddress": validatorAddr.String(),
+		"proposer":         proposer.String(),
+		"recoveryReason":   recoveryReason,
+		"description":      description,
+		"message":          "Recovery proposal transaction created and broadcasted successfully",
+		"note":             "Proposal will be created when transaction is included in a block",
+	}, nil
 }
 
 // GetMinVotingThreshold 获取最小投票门槛
@@ -3681,31 +3758,58 @@ func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) 
 		return nil, fmt.Errorf("DPoS engine not available")
 	}
 
-	// 调试日志：记录接收到的参数（隐藏私钥）
-	d.logger.Info("🔍 JSON-RPC投票参数",
-		"proposalID", proposalID,
-		"voter", voter.String(),
-		"support", support,
-		"privateKey", privateKeyHex[:8]+"... (已隐藏)")
-
-	// 调用DPoS引擎进行投票（传递私钥）
-	if voteOnProposal, ok := dposEngine.(interface {
-		VoteOnParameterProposal(voter types.Address, proposalID string, support bool, privateKeyHex string) error
-	}); ok {
-		err := voteOnProposal.VoteOnParameterProposal(voter, proposalID, support, privateKeyHex)
-		if err != nil {
-			return nil, fmt.Errorf("failed to vote on proposal: %w", err)
-		}
-
-		return map[string]interface{}{
-			"success":    true,
-			"proposalId": proposalID,
-			"voter":      voter.String(),
-			"support":    support,
-		}, nil
+	// 🆕 改为通过交易进行投票
+	// 1. 创建临时投票对象用于签名
+	tempVote := &dpos.ParameterVote{
+		Voter:      voter,
+		ProposalID: proposalID,
+		Support:    support,
+		Timestamp:  uint64(time.Now().Unix()),
 	}
 
-	return nil, fmt.Errorf("DPoS engine does not support parameter voting")
+	// 2. 签名投票
+	var voteSignature []byte
+	if signVote, ok := dposEngine.(interface {
+		SignVoteForTx(vote *dpos.ParameterVote, privateKeyHex string) ([]byte, error)
+	}); ok {
+		sig, err := signVote.SignVoteForTx(tempVote, privateKeyHex)
+		if err != nil {
+			return nil, fmt.Errorf("failed to sign vote: %w", err)
+		}
+		voteSignature = sig
+	} else {
+		return nil, fmt.Errorf("DPoS engine does not support vote signing for transactions")
+	}
+
+	// 3. 创建交易数据
+	txData := dpos.ProposalVoteTxData{
+		ProposalID:    proposalID,
+		Support:       support,
+		VoteSignature: voteSignature,
+	}
+
+	// 4. 创建并签名交易
+	tx, err := d.createProposalVoteTransaction(voter, privateKeyHex, txData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create vote transaction: %w", err)
+	}
+
+	// 5. 添加到交易池并广播
+	if err := d.addProposalTransactionToPool(tx); err != nil {
+		return nil, fmt.Errorf("failed to broadcast vote transaction: %w", err)
+	}
+
+	d.logger.Info("✅ 投票交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", proposalID, "voter", voter.String())
+
+	return map[string]interface{}{
+		"success":    true,
+		"txHash":     tx.Hash.String(),
+		"proposalId": proposalID,
+		"voter":      voter.String(),
+		"support":    support,
+		"message":    "Vote transaction created and broadcasted successfully",
+		"note":       "Vote will be recorded when transaction is included in a block",
+	}, nil
 }
 
 // GetParameterProposal 获取提案信息
@@ -4244,60 +4348,92 @@ func (d *DPOS) ExecuteParameterUpdate(ctx context.Context, params interface{}) (
 	d.logger.Info("DPoS ExecuteParameterUpdate called", "params", params)
 
 	// 解析参数
-	var proposalID string
+	var proposalID, executorStr, executorPrivateKeyHex string
 	switch p := params.(type) {
 	case []interface{}:
-		// 数组格式: ["proposalID"]
-		if len(p) < 1 {
-			return nil, fmt.Errorf("invalid parameters: expected 1 parameter [proposalID], got %d", len(p))
+		// 数组格式: ["proposalID", "executor", "executorPrivateKey"]
+		if len(p) < 3 {
+			return nil, fmt.Errorf("invalid parameters: expected 3 parameters [proposalID, executor, executorPrivateKey], got %d", len(p))
 		}
 		var ok bool
 		proposalID, ok = p[0].(string)
 		if !ok {
 			return nil, fmt.Errorf("invalid proposal ID: expected string, got %T", p[0])
 		}
+		executorStr, ok = p[1].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid executor: expected string, got %T", p[1])
+		}
+		executorPrivateKeyHex, ok = p[2].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid executor private key: expected string, got %T", p[2])
+		}
 	case map[string]interface{}:
-		// 对象格式: {"proposalId": "proposalID"}
+		// 对象格式: {"proposalId": "proposalID", "executor": "...", "executorPrivateKey": "..."}
 		var ok bool
 		proposalID, ok = p["proposalId"].(string)
 		if !ok {
 			return nil, fmt.Errorf("proposalId is required and must be a string")
 		}
+		executorStr, ok = p["executor"].(string)
+		if !ok {
+			return nil, fmt.Errorf("executor is required and must be a string")
+		}
+		executorPrivateKeyHex, ok = p["executorPrivateKey"].(string)
+		if !ok {
+			return nil, fmt.Errorf("executorPrivateKey is required and must be a string")
+		}
 	case string:
-		// 直接字符串格式
-		proposalID = p
+		// 直接字符串格式（不支持，需要executor和私钥）
+		return nil, fmt.Errorf("executor and executorPrivateKey are required. Use array or object format")
 	default:
-		return nil, fmt.Errorf("invalid parameters format: expected array, object, or string, got %T", params)
+		return nil, fmt.Errorf("invalid parameters format: expected array or object, got %T", params)
 	}
 
 	if proposalID == "" {
 		return nil, fmt.Errorf("proposal ID cannot be empty")
 	}
 
-	d.logger.Info("DPoS ExecuteParameterUpdate parsed", "proposalID", proposalID)
+	d.logger.Info("DPoS ExecuteParameterUpdate parsed", "proposalID", proposalID, "executor", executorStr)
 
-	// 获取DPoS引擎
-	dposEngine := d.getDPoSEngine()
-	if dposEngine == nil {
-		return nil, fmt.Errorf("DPoS engine not available")
+	// 🆕 改为通过交易执行提案
+	// 1. 解析执行者地址和私钥（已在上面解析）
+	executor := types.StringToAddress(executorStr)
+	if executor == (types.Address{}) {
+		return nil, fmt.Errorf("invalid executor address format: %s", executorStr)
 	}
 
-	// 调用DPoS引擎执行参数更新
-	if executeUpdate, ok := dposEngine.(interface {
-		ExecuteParameterUpdate(proposalID string) error
-	}); ok {
-		err := executeUpdate.ExecuteParameterUpdate(proposalID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to execute parameter update: %w", err)
-		}
-
-		return map[string]interface{}{
-			"success":    true,
-			"proposalId": proposalID,
-		}, nil
+	// 验证私钥格式
+	if len(executorPrivateKeyHex) != 64 {
+		return nil, fmt.Errorf("invalid executor private key length: expected 64, got %d", len(executorPrivateKeyHex))
 	}
 
-	return nil, fmt.Errorf("DPoS engine does not support parameter proposals")
+	// 2. 创建交易数据
+	txData := dpos.ProposalExecuteTxData{
+		ProposalID: proposalID,
+	}
+
+	// 3. 创建并签名交易
+	tx, err := d.createProposalExecuteTransaction(executor, executorPrivateKeyHex, txData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create execute transaction: %w", err)
+	}
+
+	// 4. 添加到交易池并广播
+	if err := d.addProposalTransactionToPool(tx); err != nil {
+		return nil, fmt.Errorf("failed to broadcast execute transaction: %w", err)
+	}
+
+	d.logger.Info("✅ 执行提案交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", proposalID)
+
+	return map[string]interface{}{
+		"success":    true,
+		"txHash":     tx.Hash.String(),
+		"proposalId": proposalID,
+		"executor":   executor.String(),
+		"message":    "Execute proposal transaction created and broadcasted successfully",
+		"note":       "Proposal will be executed when transaction is included in a block",
+	}, nil
 }
 
 // getCurrentProposalPeriodInfo 获取当前提案周期信息
@@ -4491,4 +4627,193 @@ func (d *DPOS) GetBlockProducers(ctx context.Context, params interface{}) (map[s
 		"producerCount", len(producers))
 
 	return result, nil
+}
+
+// 🆕 提案交易创建辅助函数
+
+// createProposalCreateTransaction 创建创建提案交易
+func (d *DPOS) createProposalCreateTransaction(proposer types.Address, proposerPrivateKeyHex string, txData dpos.ProposalCreateTxData) (*types.Transaction, error) {
+	// 获取nonce
+	var nonce uint64
+	if nonceStore, ok := d.store.(interface {
+		GetNonce(addr types.Address) uint64
+	}); ok {
+		nonce = nonceStore.GetNonce(proposer)
+	}
+
+	// 获取gas price
+	var gasPrice *big.Int
+	if gasStore, ok := d.store.(interface {
+		GetBaseFee() uint64
+	}); ok {
+		baseFee := gasStore.GetBaseFee()
+		gasPrice = new(big.Int).SetUint64(baseFee)
+	} else {
+		gasPrice = big.NewInt(1000000000) // 1 gwei default
+	}
+
+	// 序列化交易数据
+	txDataBytes, err := json.Marshal(txData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal proposal create tx data: %w", err)
+	}
+
+	// 创建交易（不签名，先计算哈希）
+	tx := &types.Transaction{
+		Nonce:    nonce,
+		GasPrice: gasPrice,
+		Gas:      200000, // 提案交易gas limit
+		To:       nil,
+		Value:    big.NewInt(0),
+		Input:    txDataBytes,
+		Type:     types.ProposalCreateTx,
+		V:        big.NewInt(0),
+		R:        big.NewInt(0),
+		S:        big.NewInt(0),
+		Hash:     types.Hash{},
+	}
+
+	// 先计算交易哈希（用于生成proposalID）
+	tx.ComputeHash(0)
+
+	// 签名交易（用私钥签名交易本身）
+	if err := d.signTransaction(tx, proposer, proposerPrivateKeyHex); err != nil {
+		return nil, fmt.Errorf("failed to sign proposal create transaction: %w", err)
+	}
+
+	// 重新计算交易哈希（签名后）
+	tx.ComputeHash(0)
+
+	return tx, nil
+}
+
+// createProposalVoteTransaction 创建投票交易
+func (d *DPOS) createProposalVoteTransaction(voter types.Address, privateKeyHex string, txData dpos.ProposalVoteTxData) (*types.Transaction, error) {
+	// 获取nonce
+	var nonce uint64
+	if nonceStore, ok := d.store.(interface {
+		GetNonce(addr types.Address) uint64
+	}); ok {
+		nonce = nonceStore.GetNonce(voter)
+	}
+
+	// 获取gas price
+	var gasPrice *big.Int
+	if gasStore, ok := d.store.(interface {
+		GetBaseFee() uint64
+	}); ok {
+		baseFee := gasStore.GetBaseFee()
+		gasPrice = new(big.Int).SetUint64(baseFee)
+	} else {
+		gasPrice = big.NewInt(1000000000)
+	}
+
+	// 序列化交易数据
+	txDataBytes, err := json.Marshal(txData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal proposal vote tx data: %w", err)
+	}
+
+	// 创建交易
+	tx := &types.Transaction{
+		Nonce:    nonce,
+		GasPrice: gasPrice,
+		Gas:      150000,
+		To:       nil,
+		Value:    big.NewInt(0),
+		Input:    txDataBytes,
+		Type:     types.ProposalVoteTx,
+		V:        big.NewInt(0),
+		R:        big.NewInt(0),
+		S:        big.NewInt(0),
+		Hash:     types.Hash{},
+	}
+
+	// 签名交易
+	if err := d.signTransaction(tx, voter, privateKeyHex); err != nil {
+		return nil, fmt.Errorf("failed to sign proposal vote transaction: %w", err)
+	}
+
+	// 计算交易哈希
+	tx.ComputeHash(0)
+
+	return tx, nil
+}
+
+// createProposalExecuteTransaction 创建执行提案交易
+func (d *DPOS) createProposalExecuteTransaction(executor types.Address, privateKeyHex string, txData dpos.ProposalExecuteTxData) (*types.Transaction, error) {
+	// 获取nonce
+	var nonce uint64
+	if nonceStore, ok := d.store.(interface {
+		GetNonce(addr types.Address) uint64
+	}); ok {
+		nonce = nonceStore.GetNonce(executor)
+	}
+
+	// 获取gas price
+	var gasPrice *big.Int
+	if gasStore, ok := d.store.(interface {
+		GetBaseFee() uint64
+	}); ok {
+		baseFee := gasStore.GetBaseFee()
+		gasPrice = new(big.Int).SetUint64(baseFee)
+	} else {
+		gasPrice = big.NewInt(1000000000)
+	}
+
+	// 序列化交易数据
+	txDataBytes, err := json.Marshal(txData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal proposal execute tx data: %w", err)
+	}
+
+	// 创建交易
+	tx := &types.Transaction{
+		Nonce:    nonce,
+		GasPrice: gasPrice,
+		Gas:      200000,
+		To:       nil,
+		Value:    big.NewInt(0),
+		Input:    txDataBytes,
+		Type:     types.ProposalExecuteTx,
+		V:        big.NewInt(0),
+		R:        big.NewInt(0),
+		S:        big.NewInt(0),
+		Hash:     types.Hash{},
+	}
+
+	// 签名交易
+	if err := d.signTransaction(tx, executor, privateKeyHex); err != nil {
+		return nil, fmt.Errorf("failed to sign proposal execute transaction: %w", err)
+	}
+
+	// 计算交易哈希
+	tx.ComputeHash(0)
+
+	return tx, nil
+}
+
+// addProposalTransactionToPool 将提案交易添加到交易池并广播
+func (d *DPOS) addProposalTransactionToPool(tx *types.Transaction) error {
+	// 添加到交易池
+	if ethStore, ok := d.store.(interface {
+		AddTx(tx *types.Transaction) error
+	}); ok {
+		if err := ethStore.AddTx(tx); err != nil {
+			d.logger.Warn("Failed to add proposal transaction to pool", "error", err, "txHash", tx.Hash.String())
+			// 不返回错误，继续尝试广播
+		} else {
+			d.logger.Info("✅ 提案交易已添加到交易池", "txHash", tx.Hash.String())
+		}
+	}
+
+	// 广播交易
+	if err := d.broadcastTransaction(tx); err != nil {
+		d.logger.Warn("Failed to broadcast proposal transaction", "error", err, "txHash", tx.Hash.String())
+		return err
+	}
+
+	d.logger.Info("✅ 提案交易已广播", "txHash", tx.Hash.String(), "txType", tx.Type.String())
+
+	return nil
 }

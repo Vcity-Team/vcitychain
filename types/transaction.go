@@ -18,16 +18,19 @@ type TxType byte
 
 // List of supported transaction types
 const (
-	LegacyTx     TxType = 0x0
-	StateTx      TxType = 0x7f
-	DynamicFeeTx TxType = 0x02
+	LegacyTx          TxType = 0x0
+	StateTx           TxType = 0x7f
+	DynamicFeeTx      TxType = 0x02
+	ProposalCreateTx  TxType = 0xf0 // 🆕 创建提案交易
+	ProposalVoteTx    TxType = 0xf1 // 🆕 投票交易
+	ProposalExecuteTx TxType = 0xf2 // 🆕 执行提案交易
 )
 
 func txTypeFromByte(b byte) (TxType, error) {
 	tt := TxType(b)
 
 	switch tt {
-	case LegacyTx, StateTx, DynamicFeeTx:
+	case LegacyTx, StateTx, DynamicFeeTx, ProposalCreateTx, ProposalVoteTx, ProposalExecuteTx:
 		return tt, nil
 	default:
 		return tt, fmt.Errorf("unknown transaction type: %d", b)
@@ -43,6 +46,12 @@ func (t TxType) String() (s string) {
 		return "StateTx"
 	case DynamicFeeTx:
 		return "DynamicFeeTx"
+	case ProposalCreateTx:
+		return "ProposalCreateTx"
+	case ProposalVoteTx:
+		return "ProposalVoteTx"
+	case ProposalExecuteTx:
+		return "ProposalExecuteTx"
 	}
 
 	return

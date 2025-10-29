@@ -170,6 +170,29 @@ type ParameterVote struct {
 	Signature  []byte        `json:"signature"` // 投票签名
 }
 
+// 🆕 提案交易数据结构
+// ProposalCreateTxData 创建提案交易数据
+type ProposalCreateTxData struct {
+	ProposalType      string      `json:"proposalType"`             // "parameter" 或 "validator_recovery"
+	Parameter         string      `json:"parameter"`                // 参数名或验证者地址
+	NewValue          interface{} `json:"newValue"`                 // 新值
+	Description       string      `json:"description"`              // 提案描述
+	RecoveryReason    string      `json:"recoveryReason,omitempty"` // 恢复理由（仅用于恢复提案）
+	ProposerSignature []byte      `json:"proposerSignature"`        // 提案签名
+}
+
+// ProposalVoteTxData 投票交易数据
+type ProposalVoteTxData struct {
+	ProposalID    string `json:"proposalId"`
+	Support       bool   `json:"support"`
+	VoteSignature []byte `json:"voteSignature"` // 投票签名
+}
+
+// ProposalExecuteTxData 执行提案交易数据
+type ProposalExecuteTxData struct {
+	ProposalID string `json:"proposalId"`
+}
+
 // DelegateRegistration 受托人注册信息（改进的TRON风格）
 type DelegateRegistration struct {
 	Address      types.Address `json:"address"`      // 受托人地址
@@ -4544,6 +4567,51 @@ func (d *DPoS) CheckProposalResult(proposalID string) error {
 	return nil
 }
 
+// checkProposalResultInternal 内部方法：检查提案投票结果并更新状态（无需加锁，调用者需持有锁）
+func (d *DPoS) checkProposalResultInternal(proposalID string, proposal *ParameterProposal) {
+	// 检查是否在投票期内
+	currentBlock := d.getCurrentBlockNumber()
+	if currentBlock <= proposal.EndBlock {
+		return // 投票期未结束
+	}
+
+	// 统计投票结果
+	totalWeight := big.NewInt(0)
+	supportWeight := big.NewInt(0)
+
+	for _, vote := range proposal.Votes {
+		totalWeight.Add(totalWeight, vote.Weight)
+		if vote.Support {
+			supportWeight.Add(supportWeight, vote.Weight)
+		}
+	}
+
+	// 计算支持率
+	if totalWeight.Cmp(big.NewInt(0)) == 0 {
+		proposal.Status = ProposalRejected
+		d.logger.Info("Proposal rejected (no votes)", "proposalID", proposalID)
+		return
+	}
+
+	supportRate := new(big.Int).Mul(supportWeight, big.NewInt(100))
+	supportRate.Div(supportRate, totalWeight)
+
+	// 判断是否通过
+	if supportRate.Cmp(big.NewInt(int64(proposal.Threshold))) >= 0 {
+		proposal.Status = ProposalPassed
+		d.logger.Info("Proposal passed",
+			"proposalID", proposalID,
+			"supportRate", supportRate.String(),
+			"threshold", proposal.Threshold)
+	} else {
+		proposal.Status = ProposalRejected
+		d.logger.Info("Proposal rejected",
+			"proposalID", proposalID,
+			"supportRate", supportRate.String(),
+			"threshold", proposal.Threshold)
+	}
+}
+
 // ExecuteProposal 执行提案（统一入口，根据类型分支）
 func (d *DPoS) ExecuteProposal(proposalID string) error {
 	d.lock.Lock()
@@ -4595,9 +4663,16 @@ func (d *DPoS) ExecuteProposal(proposalID string) error {
 		return fmt.Errorf("proposal is still in vote period (please wait)%s, current block: %d, vote end block: %d", votePeriodInfo, currentBlock, proposal.EndBlock)
 	}
 
-	// 3. 表决期已过，检查状态
+	// 3. 表决期已过，如果状态未更新，先更新状态
+	if (proposal.Status == ProposalPending || proposal.Status == ProposalActive) && currentBlock > proposal.EndBlock {
+		// 表决期已结束但状态还是pending或active，先更新状态
+		d.logger.Info("🔍 提案表决期已结束，正在更新状态", "proposalID", proposalID, "currentBlock", currentBlock, "endBlock", proposal.EndBlock, "currentStatus", proposal.Status.String())
+		d.checkProposalResultInternal(proposalID, proposal)
+	}
+
+	// 4. 检查状态
 	if proposal.Status != ProposalPassed {
-		return fmt.Errorf("proposal not passed")
+		return fmt.Errorf("proposal not passed (status: %s)", proposal.Status.String())
 	}
 
 	// 🆕 根据提案类型分支执行
@@ -4720,6 +4795,333 @@ func (d *DPoS) executeRecoveryProposal(proposalID string, proposal *ParameterPro
 	return nil
 }
 
+// 🆕 提案交易处理函数
+
+// ProcessProposalCreateTransaction 处理创建提案交易（所有节点都会执行）
+func (d *DPoS) ProcessProposalCreateTransaction(tx *types.Transaction, blockNumber uint64) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	// 1. 解析交易数据
+	var txData ProposalCreateTxData
+	if err := json.Unmarshal(tx.Input, &txData); err != nil {
+		return fmt.Errorf("failed to unmarshal proposal create tx data: %w", err)
+	}
+
+	d.logger.Info("🔄 处理创建提案交易", "from", tx.From.String(), "blockNumber", blockNumber, "proposalType", txData.ProposalType)
+
+	// 2. 根据提案类型创建提案
+	// 🆕 使用交易哈希生成确定性的proposalID（所有节点相同）
+	proposalID := fmt.Sprintf("proposal_%s", tx.Hash.String()[:16]) // 使用交易哈希前16个字符
+
+	var proposal *ParameterProposal
+
+	if txData.ProposalType == "validator_recovery" {
+		// 恢复提案
+		validatorAddr := types.StringToAddress(txData.Parameter)
+		if validatorAddr == (types.Address{}) {
+			return fmt.Errorf("invalid validator address: %s", txData.Parameter)
+		}
+
+		// 获取当前故障状态
+		faultInfo := d.getValidatorFaultInfo(validatorAddr)
+		isFaulty, ok := faultInfo["isFaulty"].(bool)
+		if !ok || !isFaulty {
+			return fmt.Errorf("validator %s is not in faulty status", validatorAddr.String())
+		}
+
+		oldValue := map[string]interface{}{
+			"isFaulty":        faultInfo["isFaulty"],
+			"missedBlocks":    faultInfo["missedBlocks"],
+			"lastFaultyEpoch": faultInfo["lastFaultyEpoch"],
+			"reason":          faultInfo["reason"],
+		}
+
+		newValue := map[string]interface{}{
+			"isFaulty":        false,
+			"missedBlocks":    0,
+			"lastFaultyEpoch": 0,
+			"reason":          fmt.Sprintf("故障已解除（交易哈希: %s）", tx.Hash.String()),
+		}
+
+		// 更新proposalID为recovery前缀
+		proposalID = fmt.Sprintf("recovery_%s", tx.Hash.String()[:16])
+
+		proposal = &ParameterProposal{
+			ID:                proposalID,
+			ProposalType:      "validator_recovery",
+			Parameter:         validatorAddr.String(),
+			ValidatorAddress:  validatorAddr,
+			OldValue:          oldValue,
+			NewValue:          newValue,
+			Proposer:          tx.From,
+			StartBlock:        blockNumber + 1,
+			EndBlock:          blockNumber + d.getVotePeriod(),
+			ValidEndBlock:     blockNumber + d.getValidPeriod(),
+			Status:            ProposalPending,
+			Votes:             make(map[types.Address]ParameterVote),
+			Threshold:         d.getVotingThreshold(),
+			Description:       txData.Description,
+			RecoveryReason:    txData.RecoveryReason,
+			CreatedAt:         uint64(time.Now().Unix()),
+			ProposalSignature: txData.ProposerSignature,
+		}
+	} else {
+		// 参数提案
+		// 获取当前参数值
+		oldValue, err := d.getCurrentParameterValue(txData.Parameter)
+		if err != nil {
+			return fmt.Errorf("failed to get current parameter value: %w", err)
+		}
+
+		if !d.isParameterVotable(txData.Parameter) {
+			return fmt.Errorf("parameter %s is not votable", txData.Parameter)
+		}
+
+		// proposalID已在上面用交易哈希生成
+
+		proposal = &ParameterProposal{
+			ID:                proposalID,
+			ProposalType:      "parameter",
+			Parameter:         txData.Parameter,
+			OldValue:          oldValue,
+			NewValue:          txData.NewValue,
+			Proposer:          tx.From,
+			StartBlock:        blockNumber + 1,
+			EndBlock:          blockNumber + d.getVotePeriod(),
+			ValidEndBlock:     blockNumber + d.getValidPeriod(),
+			Status:            ProposalPending,
+			Votes:             make(map[types.Address]ParameterVote),
+			Threshold:         d.getVotingThreshold(),
+			Description:       txData.Description,
+			CreatedAt:         uint64(time.Now().Unix()),
+			ProposalSignature: txData.ProposerSignature,
+		}
+	}
+
+	// 3. 验证提案签名（现在签名消息不包含proposalID，所以可以直接验证）
+	if err := d.verifyProposalSignature(proposal); err != nil {
+		return fmt.Errorf("failed to verify proposal signature: %w", err)
+	}
+
+	// 4. 保存到数据库（所有节点都执行）
+	if d.state != nil && d.state.ProposalStore != nil {
+		if err := d.state.ProposalStore.SaveProposal(proposal); err != nil {
+			d.logger.Error("Failed to save proposal to database", "error", err)
+			return fmt.Errorf("failed to save proposal to database: %w", err)
+		}
+	}
+
+	// 5. 更新内存（所有节点都执行）
+	d.parameterProposals[proposal.ID] = proposal
+	d.activeProposals[proposal.ID] = true
+
+	d.logger.Info("✅ 提案创建交易处理成功", "proposalID", proposal.ID, "proposalType", proposal.ProposalType)
+
+	return nil
+}
+
+// ProcessProposalVoteTransaction 处理投票交易（所有节点都会执行）
+func (d *DPoS) ProcessProposalVoteTransaction(tx *types.Transaction, blockNumber uint64) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	// 1. 解析交易数据
+	var txData ProposalVoteTxData
+	if err := json.Unmarshal(tx.Input, &txData); err != nil {
+		return fmt.Errorf("failed to unmarshal proposal vote tx data: %w", err)
+	}
+
+	d.logger.Info("🔄 处理投票交易", "from", tx.From.String(), "proposalID", txData.ProposalID, "support", txData.Support, "blockNumber", blockNumber)
+
+	// 2. 获取提案
+	proposal, exists := d.parameterProposals[txData.ProposalID]
+	if !exists {
+		// 从数据库加载
+		if d.state != nil && d.state.ProposalStore != nil {
+			var err error
+			proposal, err = d.state.ProposalStore.GetProposal(txData.ProposalID)
+			if err != nil {
+				return fmt.Errorf("proposal not found: %s", txData.ProposalID)
+			}
+			// 加载到内存
+			d.parameterProposals[txData.ProposalID] = proposal
+		} else {
+			return fmt.Errorf("proposal not found: %s", txData.ProposalID)
+		}
+	}
+
+	// 3. 检查投票是否已存在
+	if _, exists := proposal.Votes[tx.From]; exists {
+		return fmt.Errorf("voter %s has already voted on proposal %s", tx.From.String(), txData.ProposalID)
+	}
+
+	// 4. 获取投票者权重（使用真实质押权重，与VoteOnParameterProposal保持一致）
+	voterWeight := d.getVoterVotingWeight(tx.From)
+	if voterWeight.Cmp(big.NewInt(0)) == 0 {
+		return fmt.Errorf("voter %s has no voting power (must have staked tokens to vote)", tx.From.String())
+	}
+
+	// 检查最小投票门槛（类似TRON的最小投票要求）
+	minVotingThreshold := d.getMinVotingThreshold()
+	if voterWeight.Cmp(minVotingThreshold) < 0 {
+		return fmt.Errorf("voting weight %s is below minimum threshold %s",
+			voterWeight.String(), minVotingThreshold.String())
+	}
+
+	// 5. 验证投票签名
+	vote := ParameterVote{
+		Voter:      tx.From,
+		ProposalID: txData.ProposalID,
+		Support:    txData.Support,
+		Weight:     voterWeight,
+		Timestamp:  blockNumber,
+		Signature:  txData.VoteSignature,
+	}
+
+	if err := d.verifyParameterVote(&vote); err != nil {
+		return fmt.Errorf("failed to verify vote signature: %w", err)
+	}
+
+	// 6. 添加投票（所有节点都执行）
+	proposal.Votes[tx.From] = vote
+
+	// 7. 保存到数据库（所有节点都执行）
+	if d.state != nil && d.state.ProposalStore != nil {
+		if err := d.state.ProposalStore.SaveProposal(proposal); err != nil {
+			d.logger.Error("Failed to save proposal after vote", "error", err)
+			return fmt.Errorf("failed to save proposal: %w", err)
+		}
+	}
+
+	d.logger.Info("✅ 投票交易处理成功", "proposalID", txData.ProposalID, "voter", tx.From.String(), "support", txData.Support)
+
+	return nil
+}
+
+// ProcessProposalExecuteTransaction 处理执行提案交易（所有节点都会执行）
+func (d *DPoS) ProcessProposalExecuteTransaction(tx *types.Transaction, blockNumber uint64) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	// 1. 解析交易数据
+	var txData ProposalExecuteTxData
+	if err := json.Unmarshal(tx.Input, &txData); err != nil {
+		return fmt.Errorf("failed to unmarshal proposal execute tx data: %w", err)
+	}
+
+	d.logger.Info("🔄 处理执行提案交易", "from", tx.From.String(), "proposalID", txData.ProposalID, "blockNumber", blockNumber)
+
+	// 2. 获取提案
+	proposal, exists := d.parameterProposals[txData.ProposalID]
+	if !exists {
+		// 从数据库加载
+		if d.state != nil && d.state.ProposalStore != nil {
+			var err error
+			proposal, err = d.state.ProposalStore.GetProposal(txData.ProposalID)
+			if err != nil {
+				return fmt.Errorf("proposal not found: %s", txData.ProposalID)
+			}
+			d.parameterProposals[txData.ProposalID] = proposal
+		} else {
+			return fmt.Errorf("proposal not found: %s", txData.ProposalID)
+		}
+	}
+
+	// 3. 执行提案（所有节点都执行）
+	if proposal.ProposalType == "" {
+		proposal.ProposalType = "parameter"
+	}
+
+	switch proposal.ProposalType {
+	case "parameter":
+		if err := d.executeParameterProposalInTx(txData.ProposalID, proposal); err != nil {
+			return fmt.Errorf("failed to execute parameter proposal: %w", err)
+		}
+	case "validator_recovery":
+		if err := d.executeRecoveryProposalInTx(txData.ProposalID, proposal); err != nil {
+			return fmt.Errorf("failed to execute recovery proposal: %w", err)
+		}
+	default:
+		return fmt.Errorf("unknown proposal type: %s", proposal.ProposalType)
+	}
+
+	d.logger.Info("✅ 执行提案交易处理成功", "proposalID", txData.ProposalID)
+
+	return nil
+}
+
+// executeParameterProposalInTx 在交易中执行参数提案（所有节点都执行）
+func (d *DPoS) executeParameterProposalInTx(proposalID string, proposal *ParameterProposal) error {
+	d.logger.Info("开始执行参数提案（交易中）", "proposalID", proposalID, "parameter", proposal.Parameter)
+
+	// 更新参数值（所有节点都执行）
+	if err := d.updateParameterValue(proposal.Parameter, proposal.NewValue, fmt.Sprintf("proposal_%s", proposalID)); err != nil {
+		return fmt.Errorf("failed to update parameter value: %w", err)
+	}
+
+	// 更新提案状态
+	proposal.Status = ProposalExecuted
+	proposal.ExecutedAt = uint64(time.Now().Unix())
+	proposal.ExecutedBy = proposalID
+
+	// 保存到数据库
+	if d.state != nil && d.state.ProposalStore != nil {
+		if err := d.state.ProposalStore.SaveProposal(proposal); err != nil {
+			d.logger.Error("Failed to save proposal status", "error", err)
+		}
+	}
+
+	d.logger.Info("✅ 参数提案执行成功（交易中）", "proposalID", proposalID)
+
+	return nil
+}
+
+// executeRecoveryProposalInTx 在交易中执行恢复提案（所有节点都执行）
+func (d *DPoS) executeRecoveryProposalInTx(proposalID string, proposal *ParameterProposal) error {
+	validatorAddr := proposal.ValidatorAddress
+	if validatorAddr == (types.Address{}) {
+		validatorAddr = types.StringToAddress(proposal.Parameter)
+	}
+
+	d.logger.Info("开始执行验证者恢复提案（交易中）", "proposalID", proposalID, "validator", validatorAddr.String())
+
+	// 清除数据库中的故障标志（所有节点都执行）
+	if d.state != nil && d.state.StakeStore != nil {
+		if err := d.state.StakeStore.ClearValidatorFaultStatus(validatorAddr, proposalID); err != nil {
+			d.logger.Error("清除验证者故障标志失败", "error", err)
+			return fmt.Errorf("清除验证者故障标志失败: %w", err)
+		}
+		d.logger.Info("✅ 数据库故障标志已清除（所有节点）", "validator", validatorAddr.String())
+	} else {
+		return fmt.Errorf("stake store not available")
+	}
+
+	// 清除内存中的故障标志（所有节点都执行）
+	if d.faultyValidators != nil {
+		delete(d.faultyValidators, validatorAddr)
+		d.logger.Info("✅ 内存故障标志已清除（所有节点）", "validator", validatorAddr.String())
+	}
+
+	// 更新提案状态
+	proposal.ExecutedAt = uint64(time.Now().Unix())
+	proposal.ExecutedBy = proposalID
+	proposal.Status = ProposalExecuted
+
+	// 保存到数据库（所有节点都执行）
+	if d.state != nil && d.state.ProposalStore != nil {
+		if err := d.state.ProposalStore.SaveProposal(proposal); err != nil {
+			d.logger.Error("保存提案状态失败", "error", err)
+		}
+	}
+
+	d.logger.Info("✅ 验证者恢复提案执行成功（交易中，所有节点同步）",
+		"proposalID", proposalID,
+		"validator", validatorAddr.String())
+
+	return nil
+}
+
 // updateParameterValue 更新参数值（同时更新缓存和数据库）
 func (d *DPoS) updateParameterValue(paramName string, value interface{}, source string) error {
 	// 1. 先更新数据库（事务保证）
@@ -4767,6 +5169,11 @@ func (d *DPoS) isValidator(address types.Address) bool {
 func (d *DPoS) isParameterVotable(parameter string) bool {
 	_, exists := d.votableParameters[parameter]
 	return exists
+}
+
+// IsParameterVotable 检查参数是否可表决（公共方法，供RPC层使用）
+func (d *DPoS) IsParameterVotable(parameter string) bool {
+	return d.isParameterVotable(parameter)
 }
 
 // getCurrentParameterValue 获取当前参数值
@@ -5158,18 +5565,20 @@ func (d *DPoS) verifyParameterVote(vote *ParameterVote) error {
 
 // buildProposalMessage 构造提案签名消息
 func (d *DPoS) buildProposalMessage(proposal *ParameterProposal) []byte {
-	// 构造签名消息：提案者地址 + 提案ID + 提案类型 + 参数/验证者地址 + 时间戳 + 链ID
+	// 🆕 修改签名消息格式：不包含proposalID（因为proposalID在交易处理时才确定）
+	// 构造签名消息：提案者地址 + 提案类型 + 参数/验证者地址 + 时间戳 + 链ID
+	// 这样签名可以在proposalID确定前后都有效
 	data := make([]byte, 0)
 
 	// 1. 提案者地址 (20字节)
 	data = append(data, proposal.Proposer.Bytes()...)
 
-	// 2. 提案ID (变长，添加长度前缀)
-	proposalIDBytes := []byte(proposal.ID)
-	proposalIDLen := make([]byte, 4)
-	binary.BigEndian.PutUint32(proposalIDLen, uint32(len(proposalIDBytes)))
-	data = append(data, proposalIDLen...)
-	data = append(data, proposalIDBytes...)
+	// 2. 提案ID (移除，改为不包含，让签名与proposalID无关)
+	// proposalIDBytes := []byte(proposal.ID)
+	// proposalIDLen := make([]byte, 4)
+	// binary.BigEndian.PutUint32(proposalIDLen, uint32(len(proposalIDBytes)))
+	// data = append(data, proposalIDLen...)
+	// data = append(data, proposalIDBytes...)
 
 	// 3. 提案类型 (变长，添加长度前缀)
 	proposalTypeBytes := []byte(proposal.ProposalType)
@@ -5210,10 +5619,10 @@ func (d *DPoS) buildProposalMessage(proposal *ParameterProposal) []byte {
 
 	d.logger.Debug("🔍 构造提案签名消息",
 		"proposer", proposal.Proposer.String(),
-		"proposalID", proposal.ID,
 		"proposalType", proposal.ProposalType,
 		"chainID", chainID,
-		"messageHash", hex.EncodeToString(message))
+		"messageHash", hex.EncodeToString(message),
+		"note", "签名消息不包含proposalID，以便在交易处理时使用交易哈希生成proposalID")
 
 	return message
 }
@@ -5314,6 +5723,24 @@ func (d *DPoS) verifyProposalSignature(proposal *ParameterProposal) error {
 	d.logger.Debug("✅ 提案签名验证成功", "proposer", proposal.Proposer.String())
 
 	return nil
+}
+
+// 🆕 SignProposalForTx 为交易签名提案（用于RPC层，使用临时proposalID）
+func (d *DPoS) SignProposalForTx(proposal *ParameterProposal, proposerPrivateKeyHex string) ([]byte, error) {
+	// 直接调用signProposal
+	if err := d.signProposal(proposal, proposerPrivateKeyHex); err != nil {
+		return nil, err
+	}
+	return proposal.ProposalSignature, nil
+}
+
+// 🆕 SignVoteForTx 为交易签名投票（用于RPC层）
+func (d *DPoS) SignVoteForTx(vote *ParameterVote, privateKeyHex string) ([]byte, error) {
+	// 直接调用signParameterVote
+	if err := d.signParameterVote(vote, privateKeyHex); err != nil {
+		return nil, err
+	}
+	return vote.Signature, nil
 }
 
 // getCurrentBlockNumber 获取当前区块号（内部方法）

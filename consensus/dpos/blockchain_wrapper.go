@@ -123,8 +123,41 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 
 	// apply transactions from block
 	for _, tx := range block.Transactions {
-		if err = transition.Write(tx); err != nil {
-			return nil, fmt.Errorf("process block tx error, tx = %v, err = %w", tx.Hash, err)
+		// 🆕 处理提案相关交易（在所有节点同步执行）
+		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+			switch tx.Type {
+			case types.ProposalCreateTx:
+				if err := dposInstance.ProcessProposalCreateTransaction(tx, block.Number()); err != nil {
+					p.logger.Error("❌ 处理创建提案交易失败", "error", err, "txHash", tx.Hash.String())
+					return nil, fmt.Errorf("failed to process proposal create tx: %w", err)
+				}
+				// 提案交易不需要写入transition（已经在ProcessProposalCreateTransaction中处理）
+				continue
+			case types.ProposalVoteTx:
+				if err := dposInstance.ProcessProposalVoteTransaction(tx, block.Number()); err != nil {
+					p.logger.Error("❌ 处理投票交易失败", "error", err, "txHash", tx.Hash.String())
+					return nil, fmt.Errorf("failed to process proposal vote tx: %w", err)
+				}
+				// 提案交易不需要写入transition（已经在ProcessProposalVoteTransaction中处理）
+				continue
+			case types.ProposalExecuteTx:
+				if err := dposInstance.ProcessProposalExecuteTransaction(tx, block.Number()); err != nil {
+					p.logger.Error("❌ 处理执行提案交易失败", "error", err, "txHash", tx.Hash.String())
+					return nil, fmt.Errorf("failed to process proposal execute tx: %w", err)
+				}
+				// 提案交易不需要写入transition（已经在ProcessProposalExecuteTransaction中处理）
+				continue
+			default:
+				// 普通交易正常处理
+				if err = transition.Write(tx); err != nil {
+					return nil, fmt.Errorf("process block tx error, tx = %v, err = %w", tx.Hash, err)
+				}
+			}
+		} else {
+			// DPoS实例不存在，按普通交易处理
+			if err = transition.Write(tx); err != nil {
+				return nil, fmt.Errorf("process block tx error, tx = %v, err = %w", tx.Hash, err)
+			}
 		}
 	}
 
