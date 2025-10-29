@@ -13,12 +13,13 @@ func GetCommand() *cobra.Command {
 	}
 
 	// 添加子命令
-	cmd.AddCommand(GetCreateCommand())        // create-proposal
-	cmd.AddCommand(GetVoteCommand())          // vote
-	cmd.AddCommand(GetProposalCommand())      // get
-	cmd.AddCommand(GetCheckResultCommand())   // check-result
-	cmd.AddCommand(GetExecuteUpdateCommand()) // execute
-	cmd.AddCommand(GetCurrentParamsCommand()) // current-params 🆕
+	cmd.AddCommand(GetCreateCommand())         // create-proposal
+	cmd.AddCommand(GetCreateRecoveryCommand()) // create-recovery 🆕
+	cmd.AddCommand(GetVoteCommand())           // vote
+	cmd.AddCommand(GetProposalCommand())       // get
+	cmd.AddCommand(GetCheckResultCommand())    // check-result
+	cmd.AddCommand(GetExecuteUpdateCommand())  // execute
+	cmd.AddCommand(GetCurrentParamsCommand())  // current-params 🆕
 
 	return cmd
 }

@@ -108,18 +108,24 @@ func (d *DPoS) GetValidatorFaultInfo(validatorAddr types.Address) map[string]int
 
 // ParameterProposal 参数表决提案结构
 type ParameterProposal struct {
-	ID          string                          `json:"id"`
-	Parameter   string                          `json:"parameter"`   // 参数名
-	OldValue    interface{}                     `json:"oldValue"`    // 当前值
-	NewValue    interface{}                     `json:"newValue"`    // 提议值
-	Proposer    types.Address                   `json:"proposer"`    // 提案者
-	StartBlock  uint64                          `json:"startBlock"`  // 投票开始区块
-	EndBlock    uint64                          `json:"endBlock"`    // 投票结束区块
-	Status      ProposalStatus                  `json:"status"`      // 提案状态
-	Votes       map[types.Address]ParameterVote `json:"votes"`       // 投票记录
-	Threshold   uint64                          `json:"threshold"`   // 通过阈值(百分比)
-	Description string                          `json:"description"` // 提案描述
-	CreatedAt   uint64                          `json:"createdAt"`   // 创建时间
+	ID           string                          `json:"id"`
+	ProposalType string                          `json:"proposalType"` // 🆕 提案类型："parameter" 或 "validator_recovery"
+	Parameter    string                          `json:"parameter"`    // 参数名（parameter类型）或验证者地址（recovery类型）
+	OldValue     interface{}                     `json:"oldValue"`     // 当前值
+	NewValue     interface{}                     `json:"newValue"`     // 提议值
+	Proposer     types.Address                   `json:"proposer"`     // 提案者
+	StartBlock   uint64                          `json:"startBlock"`   // 投票开始区块
+	EndBlock     uint64                          `json:"endBlock"`     // 投票结束区块
+	Status       ProposalStatus                  `json:"status"`       // 提案状态
+	Votes        map[types.Address]ParameterVote `json:"votes"`        // 投票记录
+	Threshold    uint64                          `json:"threshold"`    // 通过阈值(百分比)
+	Description  string                          `json:"description"`  // 提案描述
+	CreatedAt    uint64                          `json:"createdAt"`    // 创建时间
+	// 🆕 Recovery专用字段
+	ValidatorAddress types.Address `json:"validatorAddress,omitempty"` // 要恢复的验证者地址
+	RecoveryReason   string        `json:"recoveryReason,omitempty"`   // 恢复理由
+	ExecutedAt       uint64        `json:"executedAt,omitempty"`       // 执行时间
+	ExecutedBy       string        `json:"executedBy,omitempty"`       // 执行者（提案ID）
 }
 
 // ProposalStatus 提案状态
@@ -4229,18 +4235,19 @@ func (d *DPoS) CreateParameterProposal(proposer types.Address, parameter string,
 	d.proposalCounter++
 
 	proposal := &ParameterProposal{
-		ID:          proposalID,
-		Parameter:   parameter,
-		OldValue:    oldValue,
-		NewValue:    newValue,
-		Proposer:    proposer,
-		StartBlock:  d.getCurrentBlockNumber() + 1,
-		EndBlock:    d.getCurrentBlockNumber() + d.getVotingPeriod(), // 动态投票期
-		Status:      ProposalPending,
-		Votes:       make(map[types.Address]ParameterVote),
-		Threshold:   d.getVotingThreshold(), // 动态通过阈值
-		Description: description,
-		CreatedAt:   uint64(time.Now().Unix()),
+		ID:           proposalID,
+		ProposalType: "parameter", // 🆕 标记为参数修改提案
+		Parameter:    parameter,
+		OldValue:     oldValue,
+		NewValue:     newValue,
+		Proposer:     proposer,
+		StartBlock:   d.getCurrentBlockNumber() + 1,
+		EndBlock:     d.getCurrentBlockNumber() + d.getVotingPeriod(), // 动态投票期
+		Status:       ProposalPending,
+		Votes:        make(map[types.Address]ParameterVote),
+		Threshold:    d.getVotingThreshold(), // 动态通过阈值
+		Description:  description,
+		CreatedAt:    uint64(time.Now().Unix()),
 	}
 
 	// 保存到数据库
@@ -4260,6 +4267,85 @@ func (d *DPoS) CreateParameterProposal(proposer types.Address, parameter string,
 		"oldValue", oldValue,
 		"newValue", newValue,
 		"proposer", proposer.String(),
+		"startBlock", proposal.StartBlock,
+		"endBlock", proposal.EndBlock)
+
+	return proposal, nil
+}
+
+// CreateRecoveryProposal 创建验证者恢复提案
+func (d *DPoS) CreateRecoveryProposal(proposer types.Address, validatorAddr types.Address, recoveryReason string, description string) (*ParameterProposal, error) {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	// 验证提案者权限（只有验证者可以创建提案）
+	if !d.isValidator(proposer) {
+		return nil, fmt.Errorf("only validators can create proposals")
+	}
+
+	// 验证要恢复的验证者是否存在故障
+	faultInfo := d.getValidatorFaultInfo(validatorAddr)
+	isFaulty, ok := faultInfo["isFaulty"].(bool)
+	if !ok || !isFaulty {
+		return nil, fmt.Errorf("validator %s is not in faulty status, cannot create recovery proposal", validatorAddr.String())
+	}
+
+	// 创建提案ID
+	now := time.Now()
+	timeStr := now.Format("200601021504")
+	proposalID := fmt.Sprintf("recovery_%s_%d", timeStr, d.proposalCounter)
+	d.proposalCounter++
+
+	// 获取当前故障状态作为OldValue
+	oldValue := map[string]interface{}{
+		"isFaulty":        faultInfo["isFaulty"],
+		"missedBlocks":    faultInfo["missedBlocks"],
+		"lastFaultyEpoch": faultInfo["lastFaultyEpoch"],
+		"reason":          faultInfo["reason"],
+	}
+
+	// 恢复后的状态作为NewValue
+	newValue := map[string]interface{}{
+		"isFaulty":        false,
+		"missedBlocks":    0,
+		"lastFaultyEpoch": 0,
+		"reason":          fmt.Sprintf("故障已解除（提案ID: %s）", proposalID),
+	}
+
+	proposal := &ParameterProposal{
+		ID:               proposalID,
+		ProposalType:     "validator_recovery",   // 🆕 标记为验证者恢复提案
+		Parameter:        validatorAddr.String(), // 存储验证者地址
+		ValidatorAddress: validatorAddr,          // 🆕 验证者地址
+		OldValue:         oldValue,
+		NewValue:         newValue,
+		Proposer:         proposer,
+		StartBlock:       d.getCurrentBlockNumber() + 1,
+		EndBlock:         d.getCurrentBlockNumber() + d.getVotingPeriod(),
+		Status:           ProposalPending,
+		Votes:            make(map[types.Address]ParameterVote),
+		Threshold:        d.getVotingThreshold(),
+		Description:      description,
+		RecoveryReason:   recoveryReason, // 🆕 恢复理由
+		CreatedAt:        uint64(time.Now().Unix()),
+	}
+
+	// 保存到数据库
+	if d.state != nil && d.state.ProposalStore != nil {
+		if err := d.state.ProposalStore.SaveProposal(proposal); err != nil {
+			d.logger.Error("Failed to save recovery proposal to database", "error", err)
+			return nil, fmt.Errorf("failed to save recovery proposal to database: %w", err)
+		}
+	}
+
+	d.parameterProposals[proposalID] = proposal
+	d.activeProposals[proposalID] = true
+
+	d.logger.Info("Recovery proposal created",
+		"proposalID", proposalID,
+		"validator", validatorAddr.String(),
+		"proposer", proposer.String(),
+		"reason", recoveryReason,
 		"startBlock", proposal.StartBlock,
 		"endBlock", proposal.EndBlock)
 
@@ -4407,8 +4493,8 @@ func (d *DPoS) CheckProposalResult(proposalID string) error {
 	return nil
 }
 
-// ExecuteParameterUpdate 执行参数更新
-func (d *DPoS) ExecuteParameterUpdate(proposalID string) error {
+// ExecuteProposal 执行提案（统一入口，根据类型分支）
+func (d *DPoS) ExecuteProposal(proposalID string) error {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
@@ -4421,6 +4507,29 @@ func (d *DPoS) ExecuteParameterUpdate(proposalID string) error {
 		return fmt.Errorf("proposal not passed")
 	}
 
+	// 🆕 根据提案类型分支执行
+	if proposal.ProposalType == "" {
+		// 兼容旧提案（没有ProposalType字段）
+		proposal.ProposalType = "parameter"
+	}
+
+	switch proposal.ProposalType {
+	case "parameter":
+		return d.executeParameterProposal(proposalID, proposal)
+	case "validator_recovery":
+		return d.executeRecoveryProposal(proposalID, proposal)
+	default:
+		return fmt.Errorf("unknown proposal type: %s", proposal.ProposalType)
+	}
+}
+
+// ExecuteParameterUpdate 执行参数更新（保持向后兼容）
+func (d *DPoS) ExecuteParameterUpdate(proposalID string) error {
+	return d.ExecuteProposal(proposalID)
+}
+
+// executeParameterProposal 执行参数修改提案
+func (d *DPoS) executeParameterProposal(proposalID string, proposal *ParameterProposal) error {
 	// 创建参数更新记录
 	update := &ParameterUpdate{
 		Parameter:  proposal.Parameter,
@@ -4434,7 +4543,7 @@ func (d *DPoS) ExecuteParameterUpdate(proposalID string) error {
 
 	d.parameterUpdates = append(d.parameterUpdates, update)
 
-	// 🆕 同时更新缓存和数据库
+	// 同时更新缓存和数据库
 	if err := d.updateParameterValue(proposal.Parameter, proposal.NewValue, fmt.Sprintf("proposal_%s", proposalID)); err != nil {
 		d.logger.Error("Failed to update parameter value",
 			"error", err,
@@ -4443,14 +4552,77 @@ func (d *DPoS) ExecuteParameterUpdate(proposalID string) error {
 		return fmt.Errorf("failed to update parameter value: %w", err)
 	}
 
-	// 标记提案已执行
+	// 标记提案已执行，记录执行时间
 	proposal.Status = ProposalExecuted
+	proposal.ExecutedAt = uint64(time.Now().Unix())
+	proposal.ExecutedBy = proposalID
+
+	// 保存更新后的提案状态到数据库
+	if d.state != nil && d.state.ProposalStore != nil {
+		d.state.ProposalStore.SaveProposal(proposal)
+	}
 
 	d.logger.Info("Parameter update executed",
 		"proposalID", proposalID,
 		"parameter", proposal.Parameter,
 		"newValue", proposal.NewValue,
-		"effectiveBlock", update.BlockNum)
+		"effectiveBlock", update.BlockNum,
+		"executedAt", time.Now().Format(time.RFC3339))
+
+	return nil
+}
+
+// executeRecoveryProposal 执行验证者恢复提案
+func (d *DPoS) executeRecoveryProposal(proposalID string, proposal *ParameterProposal) error {
+	// 获取要恢复的验证者地址
+	validatorAddr := proposal.ValidatorAddress
+	if validatorAddr == (types.Address{}) {
+		// 如果 ValidatorAddress 为空，尝试从 Parameter 字段解析
+		validatorAddr = types.StringToAddress(proposal.Parameter)
+	}
+
+	d.logger.Info("开始执行验证者恢复提案",
+		"proposalID", proposalID,
+		"validator", validatorAddr.String(),
+		"reason", proposal.RecoveryReason)
+
+	// 1. 清除数据库中的故障标志
+	if d.state != nil && d.state.StakeStore != nil {
+		err := d.state.StakeStore.ClearValidatorFaultStatus(validatorAddr, proposalID)
+		if err != nil {
+			d.logger.Error("清除验证者故障标志失败", "error", err)
+			return fmt.Errorf("清除验证者故障标志失败: %w", err)
+		}
+		d.logger.Info("✅ 数据库故障标志已清除", "validator", validatorAddr.String())
+	} else {
+		return fmt.Errorf("stake store not available")
+	}
+
+	// 2. 清除内存中的故障标志（如果存在）
+	if d.faultyValidators != nil {
+		delete(d.faultyValidators, validatorAddr)
+		d.logger.Info("✅ 内存故障标志已清除", "validator", validatorAddr.String())
+	}
+
+	// 3. 记录执行时间和提案ID
+	executedAt := uint64(time.Now().Unix())
+	proposal.ExecutedAt = executedAt
+	proposal.ExecutedBy = proposalID
+	proposal.Status = ProposalExecuted
+
+	// 4. 保存更新后的提案状态到数据库
+	if d.state != nil && d.state.ProposalStore != nil {
+		if err := d.state.ProposalStore.SaveProposal(proposal); err != nil {
+			d.logger.Error("保存提案状态失败", "error", err)
+			// 不返回错误，因为核心操作已完成
+		}
+	}
+
+	d.logger.Info("验证者恢复提案执行成功",
+		"proposalID", proposalID,
+		"validator", validatorAddr.String(),
+		"executedAt", time.Now().Format(time.RFC3339),
+		"recoveryReason", proposal.RecoveryReason)
 
 	return nil
 }
@@ -4933,9 +5105,46 @@ func (d *DPoS) GetCurrentParameterValues() map[string]interface{} {
 		}
 	}
 
+	// 添加 dpos_proposal_period（以区块数表示，来自YAML配置）
+	// 始终计算并返回，即使配置为0也使用默认值
+	var proposalPeriod time.Duration
+	if d.config != nil {
+		proposalPeriod = d.config.ProposalPeriod
+		d.logger.Info("📋 GetCurrentParameterValues: 检查ProposalPeriod配置",
+			"proposalPeriod", proposalPeriod.String(),
+			"proposalPeriodSeconds", proposalPeriod.Seconds(),
+			"isZero", proposalPeriod == 0)
+	}
+
+	if proposalPeriod == 0 {
+		// 如果配置未设置或为0，使用默认值24小时
+		proposalPeriod = 24 * time.Hour
+		d.logger.Warn("📋 ProposalPeriod为0或未设置，使用默认值24小时")
+	} else {
+		d.logger.Info("📋 使用配置的ProposalPeriod", "period", proposalPeriod.String())
+	}
+
+	// 计算区块数
+	blockTime := 2 * time.Second // 默认区块时间
+	if d.config != nil && d.config.BlockTime.Duration > 0 {
+		blockTime = d.config.BlockTime.Duration
+	}
+	if blockTime > 0 {
+		blocks := uint64(proposalPeriod / blockTime)
+		// 返回带单位的字符串，如 "60个区块"
+		result["dpos_proposal_period"] = fmt.Sprintf("%d个区块", blocks)
+		d.logger.Info("📋 计算dpos_proposal_period完成",
+			"proposalPeriod", proposalPeriod.String(),
+			"blockTime", blockTime.String(),
+			"blocks", blocks)
+	} else {
+		d.logger.Warn("📋 BlockTime为0，无法计算dpos_proposal_period")
+	}
+
 	// 添加一些额外的系统信息
 	result["lastUpdated"] = time.Now().Format(time.RFC3339)
-	result["totalParameters"] = len(result) - 1 // 减去lastUpdated字段
+	// 仅排除 lastUpdated，不排除其它键
+	result["totalParameters"] = len(result) - 1
 
 	return result
 }
@@ -5932,16 +6141,37 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	}
 
 	// 🆕 解析提案周期配置
+	// 🔍 先打印所有配置键，便于调试
+	logger.Info("📋 检查Config中的所有键", "keys", func() []string {
+		keys := make([]string, 0, len(params.Config.Config))
+		for k := range params.Config.Config {
+			keys = append(keys, k)
+		}
+		return keys
+	}())
+
 	if proposalPeriod, exists := params.Config.Config["proposalPeriod"]; exists {
 		logger.Info("🔍 找到proposalPeriod配置", "type", fmt.Sprintf("%T", proposalPeriod), "value", proposalPeriod)
 		if period, ok := proposalPeriod.(time.Duration); ok {
 			vcity_dpos.config.ProposalPeriod = period
-			logger.Info("📋 使用server层解析的提案周期", "period", period.String())
+			logger.Info("📋 ✅ 使用server层解析的提案周期", "period", period.String(), "seconds", period.Seconds())
 		} else {
-			logger.Warn("📋 proposalPeriod类型断言失败", "type", fmt.Sprintf("%T", proposalPeriod))
+			logger.Warn("📋 ❌ proposalPeriod类型断言失败",
+				"type", fmt.Sprintf("%T", proposalPeriod),
+				"value", proposalPeriod,
+				"尝试转换为time.Duration")
+			// 🆕 尝试从其他类型转换
+			if periodStr, ok := proposalPeriod.(string); ok {
+				if duration, err := time.ParseDuration(periodStr); err == nil {
+					vcity_dpos.config.ProposalPeriod = duration
+					logger.Info("📋 ✅ 从字符串成功解析提案周期", "period", duration.String())
+				} else {
+					logger.Warn("📋 ❌ 字符串解析失败", "error", err)
+				}
+			}
 		}
 	} else {
-		logger.Warn("📋 未找到proposalPeriod配置")
+		logger.Warn("📋 ❌ 未找到proposalPeriod配置，将使用默认值")
 	}
 
 	// 🆕 解析区块时间配置

@@ -180,11 +180,34 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		s.logger.Info("📊 使用默认投票者奖励比例", "ratio", 30)
 	}
 
+	// 从YAML配置中获取提案周期（时间字符串）
+	s.logger.Info("🔍 检查DPoSProposalPeriod配置（第二次启动）",
+		"DPoSProposalPeriod", s.config.DPoSProposalPeriod,
+		"isEmpty", s.config.DPoSProposalPeriod == "")
+
+	if proposalPeriodStr := s.config.DPoSProposalPeriod; proposalPeriodStr != "" {
+		if proposalPeriod, err := time.ParseDuration(proposalPeriodStr); err == nil {
+			engineConfig["proposalPeriod"] = proposalPeriod
+			s.logger.Info("✅ 成功解析提案周期（第二次启动）",
+				"periodStr", proposalPeriodStr,
+				"periodDuration", proposalPeriod.String(),
+				"seconds", proposalPeriod.Seconds())
+		} else {
+			s.logger.Error("❌ 无效的提案周期（第二次启动）", "period", proposalPeriodStr, "error", err)
+			// 不返回错误，使用默认值
+			engineConfig["proposalPeriod"] = 24 * time.Hour // 默认24小时
+		}
+	} else {
+		s.logger.Warn("⚠️ DPoSProposalPeriod配置为空（第二次启动），使用默认值24小时")
+		engineConfig["proposalPeriod"] = 24 * time.Hour // 默认24小时
+	}
+
 	s.logger.Info("✅ DPoS经济系统配置解析完成",
 		"rewardAccount", engineConfig["rewardAccount"],
 		"rewardAmount", engineConfig["rewardAmount"],
 		"validatorRatio", engineConfig["validatorRewardRatio"],
-		"voterRatio", engineConfig["voterRewardRatio"])
+		"voterRatio", engineConfig["voterRewardRatio"],
+		"proposalPeriod", engineConfig["proposalPeriod"])
 
 	// 获取区块时间
 	blockTime, err := extractBlockTime(engineConfig)
@@ -753,14 +776,23 @@ func (s *Server) setupConsensus() error {
 	}
 
 	// 从YAML配置中获取提案周期（时间字符串）
+	s.logger.Info("🔍 检查DPoSProposalPeriod配置",
+		"DPoSProposalPeriod", s.config.DPoSProposalPeriod,
+		"isEmpty", s.config.DPoSProposalPeriod == "")
+
 	if proposalPeriodStr := s.config.DPoSProposalPeriod; proposalPeriodStr != "" {
 		if proposalPeriod, err := time.ParseDuration(proposalPeriodStr); err == nil {
 			engineConfig["proposalPeriod"] = proposalPeriod
+			s.logger.Info("✅ 成功解析提案周期",
+				"periodStr", proposalPeriodStr,
+				"periodDuration", proposalPeriod.String(),
+				"seconds", proposalPeriod.Seconds())
 		} else {
 			s.logger.Error("❌ 无效的提案周期", "period", proposalPeriodStr, "error", err)
 			return fmt.Errorf("invalid proposal period: %s", proposalPeriodStr)
 		}
 	} else {
+		s.logger.Warn("⚠️ DPoSProposalPeriod配置为空，使用默认值24小时")
 		engineConfig["proposalPeriod"] = 24 * time.Hour // 默认24小时
 	}
 
@@ -798,6 +830,21 @@ func (s *Server) setupConsensus() error {
 		}
 	}
 
+	// 🆕 验证 proposalPeriod 是否在 engineConfig 中
+	if proposalPeriod, exists := engineConfig["proposalPeriod"]; exists {
+		s.logger.Info("✅ server.go: 确认proposalPeriod在engineConfig中",
+			"value", proposalPeriod,
+			"type", fmt.Sprintf("%T", proposalPeriod))
+	} else {
+		s.logger.Warn("❌ server.go: proposalPeriod不在engineConfig中！")
+		// 打印所有键
+		keys := make([]string, 0, len(engineConfig))
+		for k := range engineConfig {
+			keys = append(keys, k)
+		}
+		s.logger.Info("📋 engineConfig中的所有键", "keys", keys)
+	}
+
 	config := &consensus.Config{
 		Params:      s.config.Chain.Params,
 		Config:      engineConfig,
@@ -805,6 +852,15 @@ func (s *Server) setupConsensus() error {
 		DataDir:     s.config.DataDir, // 🆕 新增：数据目录
 		IsRelayer:   s.config.Relayer,
 		RPCEndpoint: s.config.JSONRPC.JSONRPCAddr.String(),
+	}
+
+	// 🆕 验证 config.Config 中是否包含 proposalPeriod
+	if proposalPeriod, exists := config.Config["proposalPeriod"]; exists {
+		s.logger.Info("✅ server.go: 确认proposalPeriod在config.Config中",
+			"value", proposalPeriod,
+			"type", fmt.Sprintf("%T", proposalPeriod))
+	} else {
+		s.logger.Error("❌ server.go: proposalPeriod不在config.Config中！配置传递失败！")
 	}
 
 	consensus, err := engine(

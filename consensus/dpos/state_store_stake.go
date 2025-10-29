@@ -959,6 +959,45 @@ func (s *StakeStore) GetValidatorFaultStatus(address types.Address) (map[string]
 	return faultInfo, err
 }
 
+// 🆕 清除验证者故障标志（用于恢复提案执行）
+func (s *StakeStore) ClearValidatorFaultStatus(address types.Address, proposalID string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("validatorFaultStatus"))
+		if bucket == nil {
+			return nil // 没有故障记录，直接返回成功
+		}
+
+		// 读取现有记录
+		data := bucket.Get(address.Bytes())
+		if data == nil {
+			return nil // 该验证者没有故障记录，直接返回成功
+		}
+
+		var faultInfo map[string]interface{}
+		if err := json.Unmarshal(data, &faultInfo); err != nil {
+			return fmt.Errorf("failed to unmarshal fault info: %w", err)
+		}
+
+		// 🆕 添加恢复信息
+		faultInfo["isFaulty"] = false
+		faultInfo["recoveredByProposal"] = proposalID
+		faultInfo["recoveredAt"] = time.Now().Format(time.RFC3339)
+		faultInfo["missedBlocks"] = 0
+		// 清除lastFaultyEpoch（设为0表示已清除故障）
+		faultInfo["lastFaultyEpoch"] = 0
+		faultInfo["reason"] = fmt.Sprintf("故障已解除（提案ID: %s）", proposalID)
+		faultInfo["lastUpdateTime"] = uint64(time.Now().Unix())
+
+		// 保存更新后的记录
+		updatedData, err := json.Marshal(faultInfo)
+		if err != nil {
+			return fmt.Errorf("failed to marshal updated fault info: %w", err)
+		}
+
+		return bucket.Put(address.Bytes(), updatedData)
+	})
+}
+
 // 🆕 新增：保存Epoch验证者集合
 func (s *StakeStore) SaveEpochValidators(validators validator.AccountSet) error {
 	return s.db.Update(func(tx *bolt.Tx) error {

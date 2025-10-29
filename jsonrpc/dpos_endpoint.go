@@ -3442,6 +3442,122 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 	return nil, fmt.Errorf("DPoS engine does not support parameter proposals")
 }
 
+// CreateRecoveryProposal 创建验证者恢复提案
+func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (interface{}, error) {
+	d.logger.Info("DPoS CreateRecoveryProposal called", "params", params)
+
+	var proposerStr, validatorAddrStr, recoveryReason, description string
+
+	// 支持两种参数格式：数组格式和对象格式
+	switch p := params.(type) {
+	case []interface{}:
+		// 数组格式: [validatorAddress, recoveryReason, description, proposer]
+		if len(p) < 2 {
+			return nil, fmt.Errorf("invalid parameters: expected at least 2 parameters [validatorAddress, recoveryReason, description?, proposer?], got %d", len(p))
+		}
+
+		var ok bool
+		validatorAddrStr, ok = p[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid validator address: expected string, got %T", p[0])
+		}
+
+		recoveryReason, ok = p[1].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid recovery reason: expected string, got %T", p[1])
+		}
+
+		if len(p) > 2 {
+			description, _ = p[2].(string)
+		}
+		if len(p) > 3 {
+			proposerStr, _ = p[3].(string)
+		}
+
+	case map[string]interface{}:
+		// 对象格式: {validatorAddress, recoveryReason, description?, proposer?}
+		var ok bool
+		validatorAddrStr, ok = p["validatorAddress"].(string)
+		if !ok {
+			return nil, fmt.Errorf("validatorAddress is required and must be a string")
+		}
+
+		recoveryReason, ok = p["recoveryReason"].(string)
+		if !ok {
+			return nil, fmt.Errorf("recoveryReason is required and must be a string")
+		}
+
+		description, _ = p["description"].(string)
+		proposerStr, _ = p["proposer"].(string)
+
+	default:
+		return nil, fmt.Errorf("invalid parameters format: expected array or object, got %T", params)
+	}
+
+	// 验证必需参数
+	if validatorAddrStr == "" {
+		return nil, fmt.Errorf("validator address cannot be empty")
+	}
+	if recoveryReason == "" {
+		return nil, fmt.Errorf("recovery reason cannot be empty")
+	}
+
+	// 验证地址格式
+	validatorAddr := types.StringToAddress(validatorAddrStr)
+	if validatorAddr == (types.Address{}) {
+		return nil, fmt.Errorf("invalid validator address format: %s", validatorAddrStr)
+	}
+
+	var proposer types.Address
+	if proposerStr != "" {
+		proposer = types.StringToAddress(proposerStr)
+		if proposer == (types.Address{}) {
+			return nil, fmt.Errorf("invalid proposer address format: %s", proposerStr)
+		}
+	}
+
+	// 获取DPoS引擎
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return nil, fmt.Errorf("DPoS engine not available")
+	}
+
+	// 调用DPoS引擎创建恢复提案
+	if createRecoveryProposal, ok := dposEngine.(interface {
+		CreateRecoveryProposal(proposer types.Address, validatorAddr types.Address, recoveryReason string, description string) (*dpos.ParameterProposal, error)
+	}); ok {
+		proposal, err := createRecoveryProposal.CreateRecoveryProposal(proposer, validatorAddr, recoveryReason, description)
+		if err != nil {
+			// 提供更详细的错误信息
+			switch {
+			case strings.Contains(err.Error(), "only validators can create proposals"):
+				return nil, fmt.Errorf("permission denied: address %s is not a validator", proposerStr)
+			case strings.Contains(err.Error(), "not in faulty status"):
+				return nil, fmt.Errorf("validator %s is not in faulty status, cannot create recovery proposal", validatorAddrStr)
+			default:
+				return nil, fmt.Errorf("failed to create recovery proposal: %w", err)
+			}
+		}
+
+		return map[string]interface{}{
+			"success":          true,
+			"proposalId":       proposal.ID,
+			"validatorAddress": proposal.ValidatorAddress.String(),
+			"proposer":         proposal.Proposer.String(),
+			"recoveryReason":   proposal.RecoveryReason,
+			"description":      proposal.Description,
+			"startBlock":       proposal.StartBlock,
+			"endBlock":         proposal.EndBlock,
+			"status":           proposal.Status.String(),
+			"threshold":        proposal.Threshold,
+			"createdAt":        proposal.CreatedAt,
+			"message":          "Recovery proposal created successfully",
+		}, nil
+	}
+
+	return nil, fmt.Errorf("DPoS engine does not support recovery proposals")
+}
+
 // GetMinVotingThreshold 获取最小投票门槛
 func (d *DPOS) GetMinVotingThreshold(ctx context.Context) (interface{}, error) {
 	d.logger.Info("DPoS GetMinVotingThreshold called")

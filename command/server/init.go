@@ -126,6 +126,9 @@ func (p *serverParams) initDPoSConfig() {
 	p.dposProposalPeriod = p.rawConfig.DPoSProposalPeriod
 	if p.dposProposalPeriod == "" {
 		p.dposProposalPeriod = "24h" // 默认24小时
+		fmt.Printf("⚠️ DPoSProposalPeriod配置为空，使用默认值: %s\n", p.dposProposalPeriod)
+	} else {
+		fmt.Printf("✅ 读取到DPoSProposalPeriod配置: %s\n", p.dposProposalPeriod)
 	}
 }
 
