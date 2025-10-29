@@ -4678,13 +4678,23 @@ func (d *DPoS) updateParameterValue(paramName string, value interface{}, source 
 
 // 辅助方法
 
-// isValidator 检查地址是否为验证者
+// isValidator 检查地址是否为验证者（从数据库读取所有验证者）
 func (d *DPoS) isValidator(address types.Address) bool {
-	for _, delegate := range d.delegates {
-		if delegate.Address == address {
-			return true
+	if d.state != nil && d.state.StakeStore != nil {
+		validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+		if err == nil {
+			for _, validator := range validators {
+				if validator.Address == address {
+					d.logger.Debug("✅ 验证者身份确认（数据库）", "address", address.String())
+					return true
+				}
+			}
+		} else {
+			d.logger.Warn("⚠️ 从数据库读取验证者失败，回退到内存检查", "error", err)
 		}
 	}
+
+	d.logger.Debug("❌ 验证者身份检查失败", "address", address.String())
 	return false
 }
 
