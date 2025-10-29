@@ -1,11 +1,9 @@
 package dpos
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"math/big"
-	"sort"
 	"time"
 
 	"github.com/hashicorp/go-hclog"
@@ -470,26 +468,6 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 		p.logger.Info("🔍🔍🔍没有故障标志，跳过处理", "blockNumber", block.Number())
 	}
 
-	// 🆕 动态计算下一个Epoch的出块者序列
-	p.logger.Info("🔍 开始动态计算下一个Epoch验证者集合", "blockNumber", block.Number())
-	newValidators, err := p.calculateNextEpochValidators(block.Number(), extra, p.state)
-	if err != nil {
-		p.logger.Error("❌ 计算下一个Epoch验证者失败", "error", err)
-	} else if newValidators != nil {
-		p.logger.Info("✅ 动态计算验证者集合完成", "newValidatorsCount", len(newValidators))
-
-		// 🆕 通过回调函数更新验证者集合
-		if p.onValidatorsUpdated != nil {
-			if err := p.onValidatorsUpdated(newValidators); err != nil {
-				p.logger.Error("❌ 更新验证者集合失败", "error", err)
-			} else {
-				p.logger.Info("✅ 验证者集合更新成功", "newCount", len(newValidators))
-			}
-		} else {
-			p.logger.Warn("⚠️ 验证者更新回调函数未设置")
-		}
-	}
-
 	// 🔍 添加详细的判断前检查日志
 	p.logger.Info("🔍 准备检查RewardDistribution",
 		"blockNumber", block.Number(),
@@ -587,108 +565,6 @@ func (p *blockchainWrapper) updateValidatorsInDatabase(validators validator.Acco
 
 	p.logger.Info("✅ 验证者集合更新成功")
 	return nil
-}
-
-// 🆕 新增：计算下一个Epoch的验证者集合
-func (p *blockchainWrapper) calculateNextEpochValidators(blockNumber uint64, extra *Extra, state *State) (validator.AccountSet, error) {
-	p.logger.Info("🔄 ===== 开始计算下一个Epoch的验证者集合 =====", "blockNumber", blockNumber)
-
-	// 检查stake store是否可用
-	if state == nil || state.StakeStore == nil {
-		p.logger.Error("❌ StakeStore不可用", "state", state != nil, "stakeStore", state != nil && state.StakeStore != nil)
-		return nil, fmt.Errorf("stake store not available")
-	}
-
-	// 从数据库获取所有验证者
-	p.logger.Info("🔍 从数据库获取所有验证者...")
-	allValidators, err := state.StakeStore.GetValidatorsWithFilter(false)
-	if err != nil {
-		p.logger.Error("❌ 获取验证者失败", "error", err)
-		return nil, err
-	}
-	p.logger.Info("✅ 成功获取所有验证者", "count", len(allValidators))
-
-	// 过滤掉故障验证者
-	p.logger.Info("🔍 开始过滤故障验证者...")
-	activeValidators := make(validator.AccountSet, 0, len(allValidators))
-	faultyCount := 0
-	for _, validator := range allValidators {
-		// 检查是否在故障标志中
-		isFaulty := false
-		for _, faultFlag := range extra.FaultFlags {
-			if faultFlag.NodeAddress == validator.Address && faultFlag.IsFaulty {
-				isFaulty = true
-				break
-			}
-		}
-
-		if !isFaulty {
-			activeValidators = append(activeValidators, validator)
-		} else {
-			faultyCount++
-			p.logger.Info("🚫 跳过故障验证者", "address", validator.Address.String(), "votingPower", validator.VotingPower.String())
-		}
-	}
-	p.logger.Info("✅ 故障验证者过滤完成", "totalValidators", len(allValidators), "faultyValidators", faultyCount, "activeValidators", len(activeValidators))
-
-	// 按权重排序
-	p.logger.Info("🔍 开始按权重排序验证者...")
-	sort.Slice(activeValidators, func(i, j int) bool {
-		votingPowerCmp := activeValidators[i].VotingPower.Cmp(activeValidators[j].VotingPower)
-		if votingPowerCmp != 0 {
-			return votingPowerCmp > 0
-		}
-		return bytes.Compare(activeValidators[i].Address[:], activeValidators[j].Address[:]) < 0
-	})
-
-	// 显示排序后的验证者
-	p.logger.Info("📊 排序后的验证者列表:")
-	for i, validator := range activeValidators {
-		p.logger.Info("🏆 排序后验证者", "rank", i+1, "address", validator.Address.String(), "votingPower", validator.VotingPower.String())
-	}
-
-	// 截取前N个（从配置读取）
-	var maxValidators int
-	if p.config != nil && p.config.DPoSValidatorsCount > 0 {
-		maxValidators = int(p.config.DPoSValidatorsCount)
-		p.logger.Info("✅ 使用配置文件中的DPoSValidatorsCount", "DPoSValidatorsCount", p.config.DPoSValidatorsCount, "maxValidators", maxValidators)
-	} else {
-		p.logger.Error("❌ 配置读取失败，无法获取验证者数量限制",
-			"configIsNil", p.config == nil,
-			"DPoSValidatorsCount", func() uint64 {
-				if p.config != nil {
-					return p.config.DPoSValidatorsCount
-				}
-				return 0
-			}())
-		return nil, fmt.Errorf("failed to get validator count limit from config: DPoSValidatorsCount is 0 or config is nil")
-	}
-	p.logger.Info("🎯 验证者截取逻辑", "maxValidators", maxValidators, "activeValidators", len(activeValidators))
-
-	if len(activeValidators) > maxValidators {
-		p.logger.Info("✂️ 截取前N个验证者", "截取前", maxValidators, "原始数量", len(activeValidators))
-		activeValidators = activeValidators[:maxValidators]
-	} else {
-		p.logger.Info("✅ 验证者数量 <= 配置数量，取全部验证者", "取用数量", len(activeValidators), "配置数量", maxValidators)
-	}
-
-	// 保存到数据库
-	p.logger.Info("💾 保存下一个Epoch验证者集合到数据库...")
-	err = state.StakeStore.SaveEpochValidators(activeValidators)
-	if err != nil {
-		p.logger.Error("❌ 保存下一个Epoch验证者失败", "error", err)
-		return nil, err
-	}
-
-	// 显示最终结果
-	p.logger.Info("🏁 ===== 下一个Epoch验证者集合计算完成 =====")
-	p.logger.Info("📋 最终验证者集合:")
-	for i, validator := range activeValidators {
-		p.logger.Info("🎖️ 最终验证者", "index", i+1, "address", validator.Address.String(), "votingPower", validator.VotingPower.String())
-	}
-	p.logger.Info("✅ 计算完成统计", "totalValidators", len(allValidators), "finalValidators", len(activeValidators), "maxValidators", maxValidators)
-
-	return activeValidators, nil
 }
 
 // GetStateProviderForBlock is an implementation of blockchainBackend interface

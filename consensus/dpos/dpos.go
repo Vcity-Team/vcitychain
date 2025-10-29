@@ -1039,16 +1039,7 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 			// 持续监测出块时机
 			shouldProduce := r.shouldProduceBlockNow()
 
-			// 🆕 添加详细的调试日志
-			r.logOnceWithInterval("block_monitoring_debug", 5*time.Second, "debug",
-				"🔍 区块监测状态",
-				"shouldProduceBlockNow", shouldProduce,
-				"delegatesCount", len(r.delegates),
-				"timestamp", time.Now().Format("15:04:05.000"))
-
 			if shouldProduce {
-				// 🆕 TRON方式：shouldProduceBlockNow() 已经基于时间实时计算并判断
-				// 不需要再检查 currentDelegate，直接出块
 				r.logOnceWithInterval("should_produce_start", 2*time.Second, "info",
 					"✅ shouldProduceBlockNow返回true，开始出块",
 					"timestamp", time.Now().Format("15:04:05.000"))
@@ -1057,7 +1048,7 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 				}
 			} else {
 				// 🆕 添加为什么不应该出块的详细日志
-				r.logOnceWithInterval("should_not_produce_debug", 10*time.Second, "debug",
+				r.logOnceWithInterval("should_not_produce_debug", 2*time.Second, "info",
 					"⏭️ 不应该出块的原因分析",
 					"shouldProduceBlockNow", shouldProduce,
 					"actualDelegatesCount", len(r.delegates),
@@ -1416,16 +1407,6 @@ func (r *dposRuntime) produceBlock() error {
 	currentBlock := r.config.blockchain.CurrentHeader()
 	// 静默处理，不打印日志
 
-	// 🆕 检查epoch切换和故障检测
-	if r.config.dposBackend != nil {
-		if dpos, ok := r.config.dposBackend.(*DPoS); ok {
-			// 检查epoch切换
-			if err := dpos.checkEpochSwitch(currentBlock.Number); err != nil {
-				r.logger.Error("❌ epoch切换检查失败", "error", err)
-			}
-		}
-	}
-
 	// 检查Key是否可用
 	if r.config == nil || r.config.Key == nil {
 		r.logger.Error("❌ key not available, cannot produce block",
@@ -1593,6 +1574,7 @@ func (r *dposRuntime) produceBlock() error {
 		) {
 			r.logger.Warn("⏰ 区块构建完成时时间窗口已过期，丢弃区块（防止分叉）",
 				"blockNumber", block.Block.Number(),
+				"blockHash", block.Block.Hash().String(),
 				"timestamp", time.Now().Format("15:04:05.000"))
 			return nil // 不提交，静默丢弃
 		}
@@ -3572,7 +3554,7 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 		if !isFaulty {
 			activeValidators = append(activeValidators, validator)
 		} else {
-			d.logger.Info("🚫 读取数据库后过滤掉故障验证者",
+			d.logger.Debug("🚫 读取数据库后过滤掉故障验证者",
 				"address", validator.Address.String(),
 				"missedBlocks", faultInfo["missedBlocks"],
 				"reason", faultInfo["reason"])
@@ -15919,6 +15901,23 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 
 	// 计算每个验证者的漏块数
 	d.logger.Info("🔍 开始计算每个验证者的漏块数...")
+
+	// 🆕 直接使用内存中的验证者集合（当前epoch的出块者）
+	d.logger.Info("🔧 使用内存中的验证者集合...")
+
+	// 优先使用 runtime.delegates（最实时）
+	if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
+		d.epochValidators = d.runtime.delegates.Copy()
+		d.logger.Info("✅ 使用runtime.delegates", "count", len(d.epochValidators))
+	} else if len(d.delegates) > 0 {
+		// 备用方案：使用 d.delegates
+		d.epochValidators = d.delegates.Copy()
+		d.logger.Info("✅ 使用d.delegates", "count", len(d.epochValidators))
+	} else {
+		d.logger.Error("❌ 内存中验证者集合为空")
+		return nil, fmt.Errorf("no validators in memory")
+	}
+
 	for _, validator := range d.epochValidators {
 		missedBlocks, actualBlocks := d.calculateMissedBlocksWithActual(validator.Address, d.currentEpoch, currentEpoch)
 		d.missedBlocksCount[validator.Address] = missedBlocks
@@ -16299,48 +16298,6 @@ func (d *DPoS) getEpochValidatorsFromDatabase() (validator.AccountSet, error) {
 
 	d.logger.Info("✅ 从数据库获取epoch验证者成功", "count", len(validators))
 	return validators, nil
-}
-
-// 🆕 新增：处理epoch切换
-func (d *DPoS) onEpochSwitch(blockNumber uint64) error {
-	d.logger.Info("🔄 处理epoch切换", "blockNumber", blockNumber)
-
-	// 计算下一个epoch的验证者集合
-	nextValidators, err := d.calculateNextEpochValidators(blockNumber)
-	if err != nil {
-		d.logger.Error("❌ 计算下一个epoch验证者失败", "error", err)
-		return err
-	}
-
-	// 保存到数据库
-	err = d.saveNextEpochValidators(nextValidators)
-	if err != nil {
-		d.logger.Error("❌ 保存下一个epoch验证者失败", "error", err)
-		return err
-	}
-
-	// 更新当前验证者集合
-	d.epochValidators = nextValidators
-
-	d.logger.Info("✅ epoch切换处理完成", "newValidatorsCount", len(nextValidators))
-	return nil
-}
-
-// 🆕 新增：检查epoch切换
-func (d *DPoS) checkEpochSwitch(blockNumber uint64) error {
-	currentEpoch := d.getCurrentEpochByBlock(blockNumber)
-
-	if currentEpoch != d.currentEpoch {
-		d.logger.Info("🔄 检测到epoch切换",
-			"blockNumber", blockNumber,
-			"oldEpoch", d.currentEpoch,
-			"newEpoch", currentEpoch)
-
-		// 处理epoch切换
-		return d.onEpochSwitch(blockNumber)
-	}
-
-	return nil
 }
 
 // getAccountNonce 获取账户的nonce
