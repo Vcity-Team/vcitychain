@@ -368,7 +368,7 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 
 		rewardInfo := extra.RewardDistribution
 
-		p.logger.Info("🎯🎯🎯🎯🎯🎯🎯🎯验证节点开始处理奖励分发",
+		p.logger.Info("1.🎯🎯🎯🎯🎯🎯🎯🎯验证节点开始处理奖励分发",
 			"blockNumber", block.Number(),
 			"rewardCount", len(rewardInfo.Rewards),
 			"epoch", rewardInfo.EpochNumber,

@@ -1109,11 +1109,58 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		// 获取本节点地址
 		myAddress := types.Address(r.config.Key.Address())
 
-		// 获取验证者列表
-		validators := make([]types.Address, len(r.delegates))
+		// 🆕 获取验证者列表并过滤故障验证者
+		activeValidators := make([]types.Address, 0, len(r.delegates))
+		r.logOnceWithInterval("memory_validators_before_filter", 10*time.Second, "info",
+			"🔍 内存中的验证者列表（过滤前）:", "count", len(r.delegates))
+
 		for i, d := range r.delegates {
-			validators[i] = d.Address
+			// 获取验证者的故障标志信息
+			var faultInfo map[string]interface{}
+			var isFaulty bool
+
+			// 通过DPoS实例获取故障信息
+			if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+				faultInfo = dposInstance.getValidatorFaultInfo(d.Address)
+				if faultInfo["isFaulty"] != nil {
+					isFaulty = faultInfo["isFaulty"].(bool)
+				}
+			} else {
+				// 如果DPoS实例不存在，使用默认值
+				faultInfo = map[string]interface{}{
+					"isFaulty":     false,
+					"missedBlocks": uint64(0),
+					"reason":       "DPoS instance not available",
+				}
+				isFaulty = false
+			}
+
+			// 打印所有验证者的故障标志信息
+			r.logOnceWithInterval(fmt.Sprintf("memory_validator_%d", i), 10*time.Second, "info",
+				"👤 内存验证者",
+				"index", i+1,
+				"address", d.Address.String(),
+				"votingPower", d.VotingPower.String(),
+				"isFaulty", isFaulty,
+				"missedBlocks", faultInfo["missedBlocks"],
+				"reason", faultInfo["reason"])
+
+			// 只保留非故障验证者
+			if !isFaulty {
+				activeValidators = append(activeValidators, d.Address)
+			} else {
+				r.logOnceWithInterval(fmt.Sprintf("memory_validator_filtered_%s", d.Address.String()), 10*time.Second, "info",
+					"🚫 内存中验证者列表过滤掉故障验证者",
+					"address", d.Address.String(),
+					"missedBlocks", faultInfo["missedBlocks"],
+					"reason", faultInfo["reason"])
+			}
 		}
+
+		// 使用过滤后的验证者列表
+		validators := activeValidators
+		r.logOnceWithInterval("memory_validators_after_filter", 10*time.Second, "info",
+			"✅ 过滤后的内存验证者列表:", "count", len(validators))
 
 		// 🆕 调用改进后的方法（直接比较地址）
 		result := r.config.blockScheduler.ShouldProduceBlockNow(myAddress, validators, currentBlock.Number)
@@ -15976,7 +16023,7 @@ func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) er
 		return fmt.Errorf("state store not available")
 	}
 
-	allValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	allValidators, err := d.GetSortedValidatorsWithLimit()
 	if err != nil {
 		return fmt.Errorf("failed to get all validators: %w", err)
 	}
