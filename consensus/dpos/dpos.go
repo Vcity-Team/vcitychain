@@ -1758,7 +1758,7 @@ func (r *dposRuntime) updateRoundSilent() {
 	_ = validators // 避免unused variable警告
 }
 
-// updateRound 更新轮次
+// updateRound 更新轮次（混合方案：区块号触发边界，slot计算轮次）
 func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 	// 🆕 修复：统一使用区块号计算委托者索引，避免不一致
 	var currentBlockNumber uint64
@@ -1793,15 +1793,12 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 	// 现在完全通过 getCurrentDelegate() 基于时间slot实时计算
 	// 此函数现在只负责更新 currentRound
 
-	// 🆕 简化的轮次计算：基于区块号
+	// 🆕 混合方案：基于区块号触发轮次边界处理，基于slot计算轮次
 	if r.config != nil && r.config.DelegateCount > 0 {
-		// 计算是否应该增加轮次
-		// 简化：只有当区块号是委托者数量的整数倍时才增加轮次
+		// 1. 基于区块号触发轮次边界处理（保持原有逻辑）
 		if currentBlockNumber > 0 && currentBlockNumber%uint64(r.config.DelegateCount) == 0 {
-			r.currentRound++
-			r.logger.Info("🔄 轮次更新完成",
+			r.logger.Info("🔄 轮次边界触发（基于区块号）",
 				"blockNumber", currentBlockNumber,
-				"currentRound", r.currentRound,
 				"delegateCount", r.config.DelegateCount)
 
 			// 🆕 方案1+方案2：轮次边界时处理延迟的验证者集合更新
@@ -1822,6 +1819,18 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 					}
 					dposInstance.pendingValidatorUpdate = false
 				}
+			}
+		}
+
+		// 2. 🆕 基于slot计算当前轮次（确保准确性）
+		if r.config.blockScheduler != nil {
+			newRound := r.calculateRoundBySlot()
+			if newRound != r.currentRound {
+				r.logger.Info("🔄 轮次更新（基于slot）",
+					"oldRound", r.currentRound,
+					"newRound", newRound,
+					"blockNumber", currentBlockNumber)
+				r.currentRound = newRound
 			}
 		}
 	}
@@ -1978,8 +1987,70 @@ func (r *dposRuntime) initializeDelegates() error {
 	return nil
 }
 
-// calculateInitialRound 根据当前区块号计算初始轮次
+// 🆕 区块号到Slot的映射函数
+func (r *dposRuntime) getSlotForBlock(blockNumber uint64) int {
+	if r.config == nil || r.config.blockScheduler == nil {
+		return int(blockNumber) // 回退方案
+	}
+
+	// 计算区块对应的slot
+	consensusSwitchHeight := uint64(0)
+	if r.config.dposBackend != nil {
+		if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
+			consensusSwitchHeight = dposInstance.config.ConsensusSwitchHeight
+		}
+	}
+
+	dposBlockNumber := blockNumber - consensusSwitchHeight
+	return int(dposBlockNumber)
+}
+
+// 🆕 Slot到区块号的映射函数
+func (r *dposRuntime) getBlockForSlot(slot int) uint64 {
+	if r.config == nil || r.config.dposBackend == nil {
+		return uint64(slot) // 回退方案
+	}
+
+	consensusSwitchHeight := uint64(0)
+	if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
+		consensusSwitchHeight = dposInstance.config.ConsensusSwitchHeight
+	}
+
+	return consensusSwitchHeight + uint64(slot)
+}
+
+// 🆕 基于Slot计算轮次
+func (r *dposRuntime) calculateRoundBySlot() uint64 {
+	if r.config == nil || r.config.blockScheduler == nil || len(r.delegates) == 0 {
+		return 1 // 默认从第1轮开始
+	}
+
+	now := time.Now()
+	genesisTime := r.config.blockScheduler.GetGenesisTime()
+	blockWindow := r.config.blockScheduler.GetBlockWindow()
+	timeSinceGenesis := now.Sub(genesisTime)
+	currentSlot := int(timeSinceGenesis / blockWindow)
+
+	// 基于slot计算轮次
+	round := uint64((currentSlot / len(r.delegates)) + 1)
+
+	r.logger.Debug("🔍 基于slot计算轮次",
+		"currentSlot", currentSlot,
+		"delegateCount", len(r.delegates),
+		"calculatedRound", round,
+		"formula", fmt.Sprintf("(%d/%d)+1=%d", currentSlot, len(r.delegates), round))
+
+	return round
+}
+
+// calculateInitialRound 根据当前区块号计算初始轮次（保持兼容性）
 func (r *dposRuntime) calculateInitialRound() uint64 {
+	// 🆕 优先使用slot计算
+	if r.config != nil && r.config.blockScheduler != nil {
+		return r.calculateRoundBySlot()
+	}
+
+	// 回退到基于区块号的计算
 	if r.config == nil || r.config.DelegateCount == 0 {
 		return 1 // 默认从第1轮开始
 	}
@@ -1996,7 +2067,7 @@ func (r *dposRuntime) calculateInitialRound() uint64 {
 	// 轮次从1开始，所以公式是：1 + (blockNumber - 1) / delegateCount
 	if currentBlockNumber > 0 {
 		round := 1 + (currentBlockNumber-1)/uint64(r.config.DelegateCount)
-		r.logger.Debug("🔍 根据区块号计算初始轮次",
+		r.logger.Debug("🔍 根据区块号计算初始轮次（回退）",
 			"currentBlockNumber", currentBlockNumber,
 			"delegateCount", r.config.DelegateCount,
 			"calculatedRound", round,
@@ -2070,9 +2141,8 @@ func (r *dposRuntime) getCurrentEpoch() *epochMetadata {
 	return r.getEpochForBlock(0) // 0表示使用当前区块号
 }
 
-// getEpochForBlock 获取指定区块号的epoch信息
-func (r *dposRuntime) getEpochForBlock(blockNumber uint64) *epochMetadata {
-	// 获取DPoS实例
+// 🆕 基于Slot计算Epoch
+func (r *dposRuntime) getEpochForSlot(slot int) *epochMetadata {
 	if r.config == nil || r.config.dposBackend == nil {
 		r.logger.Warn("⚠️ 无法获取DPoS实例，使用默认epoch信息")
 		return &epochMetadata{
@@ -2090,35 +2160,18 @@ func (r *dposRuntime) getEpochForBlock(blockNumber uint64) *epochMetadata {
 		}
 	}
 
-	// 🆕 修改：基于指定区块号计算epoch
-	targetBlockNumber := blockNumber
-	if blockNumber == 0 {
-		// 如果传入0，则使用当前区块号
-		if dposInstance.config.Blockchain != nil {
-			if header := dposInstance.config.Blockchain.Header(); header != nil {
-				targetBlockNumber = header.Number
-			}
-		}
-	}
-
 	// 计算epoch信息
 	epochSize := r.getEpochSize()
+	consensusSwitchHeight := dposInstance.config.ConsensusSwitchHeight
 
-	// 获取共识切换高度
-	consensusSwitchHeight := uint64(0)
-	if dposInstance.config != nil {
-		consensusSwitchHeight = dposInstance.config.ConsensusSwitchHeight
-	}
-
-	// 从共识切换高度开始计算epoch
-	if targetBlockNumber < consensusSwitchHeight {
+	// 从slot 0开始计算epoch
+	if slot < 0 {
 		// 在共识切换之前，epoch为0
 		currentEpochNumber := uint64(0)
 		firstBlockInEpoch := uint64(0)
 
-		r.logger.Debug("🔍 基于区块号计算epoch信息（共识切换前）",
-			"targetBlockNumber", targetBlockNumber,
-			"consensusSwitchHeight", consensusSwitchHeight,
+		r.logger.Debug("🔍 基于slot计算epoch信息（共识切换前）",
+			"slot", slot,
 			"epochSize", epochSize,
 			"currentEpochNumber", currentEpochNumber,
 			"firstBlockInEpoch", firstBlockInEpoch)
@@ -2129,15 +2182,12 @@ func (r *dposRuntime) getEpochForBlock(blockNumber uint64) *epochMetadata {
 		}
 	}
 
-	// 计算DPoS epoch：从共识切换高度开始
-	dposBlockNumber := targetBlockNumber - consensusSwitchHeight
-	currentEpochNumber := (dposBlockNumber / epochSize) + 1
+	// 计算DPoS epoch：从slot 0开始
+	currentEpochNumber := (uint64(slot) / epochSize) + 1
 	firstBlockInEpoch := consensusSwitchHeight + (currentEpochNumber-1)*epochSize
 
-	r.logger.Debug("🔍 基于区块号计算epoch信息",
-		"targetBlockNumber", targetBlockNumber,
-		"consensusSwitchHeight", consensusSwitchHeight,
-		"dposBlockNumber", dposBlockNumber,
+	r.logger.Debug("🔍 基于slot计算epoch信息",
+		"slot", slot,
 		"epochSize", epochSize,
 		"currentEpochNumber", currentEpochNumber,
 		"firstBlockInEpoch", firstBlockInEpoch)
@@ -2146,6 +2196,33 @@ func (r *dposRuntime) getEpochForBlock(blockNumber uint64) *epochMetadata {
 		Number:            currentEpochNumber,
 		FirstBlockInEpoch: firstBlockInEpoch,
 	}
+}
+
+// getEpochForBlock 获取指定区块号的epoch信息（保持API兼容性）
+func (r *dposRuntime) getEpochForBlock(blockNumber uint64) *epochMetadata {
+	// 🆕 内部转换为slot计算
+	slot := r.getSlotForBlock(blockNumber)
+	epochMetadata := r.getEpochForSlot(slot)
+
+	// 🆕 添加区块号信息以保持兼容性
+	if r.config != nil && r.config.dposBackend != nil {
+		if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
+			consensusSwitchHeight := dposInstance.config.ConsensusSwitchHeight
+			epochSize := r.getEpochSize()
+
+			// 计算第一个区块号
+			firstBlockInEpoch := consensusSwitchHeight + (epochMetadata.Number-1)*epochSize
+			epochMetadata.FirstBlockInEpoch = firstBlockInEpoch
+		}
+	}
+
+	r.logger.Debug("🔍 基于区块号查询epoch（内部转换slot）",
+		"blockNumber", blockNumber,
+		"slot", slot,
+		"epochNumber", epochMetadata.Number,
+		"firstBlockInEpoch", epochMetadata.FirstBlockInEpoch)
+
+	return epochMetadata
 }
 
 // executeRewardDistributionForEpochEnd 在epoch最后一个区块时执行奖励分发
@@ -3542,30 +3619,30 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 		return validator.AccountSet{}, nil
 	}
 
-	// 🆕 过滤掉故障验证者
-	activeValidators := make(validator.AccountSet, 0, len(validators))
-	for _, validator := range validators {
-		faultInfo := d.getValidatorFaultInfo(validator.Address)
-		isFaulty := false
-		if faultInfo["isFaulty"] != nil {
-			isFaulty = faultInfo["isFaulty"].(bool)
-		}
+	// 🆕 临时禁用故障过滤（用于调试）
+	// activeValidators := make(validator.AccountSet, 0, len(validators))
+	// for _, validator := range validators {
+	// 	faultInfo := d.getValidatorFaultInfo(validator.Address)
+	// 	isFaulty := false
+	// 	if faultInfo["isFaulty"] != nil {
+	// 		isFaulty = faultInfo["isFaulty"].(bool)
+	// 	}
 
-		if !isFaulty {
-			activeValidators = append(activeValidators, validator)
-		} else {
-			d.logger.Debug("🚫 读取数据库后过滤掉故障验证者",
-				"address", validator.Address.String(),
-				"missedBlocks", faultInfo["missedBlocks"],
-				"reason", faultInfo["reason"])
-		}
-	}
+	// 	if !isFaulty {
+	// 		activeValidators = append(activeValidators, validator)
+	// 	} else {
+	// 		d.logger.Debug("🚫 读取数据库后过滤掉故障验证者",
+	// 			"address", validator.Address.String(),
+	// 			"missedBlocks", faultInfo["missedBlocks"],
+	// 			"reason", faultInfo["reason"])
+	// 	}
+	// }
 
-	validators = activeValidators
-	if len(validators) == 0 {
-		d.logger.Warn("⚠️ 所有验证者都被标记为故障，返回空列表")
-		return validator.AccountSet{}, nil
-	}
+	// validators = activeValidators
+	// if len(validators) == 0 {
+	// 	d.logger.Warn("⚠️ 所有验证者都被标记为故障，返回空列表")
+	// 	return validator.AccountSet{}, nil
+	// }
 
 	// 按权重倒序排序
 	sort.Slice(validators, func(i, j int) bool {
@@ -3583,8 +3660,22 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 		maxValidators = int(d.config.DelegateCount) // 回退到旧配置
 	}
 
+	// 🆕 详细调试信息
+	d.logger.Debug("🔍 GetSortedValidatorsWithLimit 截取逻辑",
+		"原始验证者数量", len(validators),
+		"配置DPoSValidatorsCount", d.config.DPoSValidatorsCount,
+		"配置DelegateCount", d.config.DelegateCount,
+		"最终maxValidators", maxValidators)
+
 	if maxValidators > 0 && len(validators) > maxValidators {
+		d.logger.Debug("✂️ 执行截取",
+			"截取前", len(validators),
+			"截取后", maxValidators)
 		validators = validators[:maxValidators]
+	} else {
+		d.logger.Debug("✅ 无需截取",
+			"验证者数量", len(validators),
+			"最大限制", maxValidators)
 	}
 
 	return validators, nil
@@ -11642,10 +11733,25 @@ func (r *dposRuntime) isValidator() bool {
 				if dposBackend.config != nil && dposBackend.config.DPoSValidatorsCount > 0 {
 					maxValidators = int(dposBackend.config.DPoSValidatorsCount)
 				}
+
+				// 🆕 详细调试信息
 				r.logger.Info("❌ 当前节点不在数据库验证者集合中（可能权重不足被截取）",
 					"address", currentAddr.String(),
 					"maxValidators", maxValidators,
-					"dbValidatorsCount", len(dbValidators))
+					"dbValidatorsCount", len(dbValidators),
+					"configDelegateCount", r.config.DelegateCount,
+					"configDPoSValidatorsCount", dposBackend.config.DPoSValidatorsCount)
+
+				// 🆕 显示所有验证者的详细信息
+				r.logger.Info("🔍 截取后的验证者详细信息:")
+				for i, validator := range dbValidators {
+					r.logger.Info("👤 截取后验证者",
+						"index", i+1,
+						"address", validator.Address.String(),
+						"votingPower", validator.VotingPower.String(),
+						"isActive", validator.IsActive,
+						"isCurrentNode", validator.Address == currentAddr)
+				}
 				return false
 			} else {
 				r.logger.Debug("⚠️ 数据库中没有验证者，回退到内存检查")
