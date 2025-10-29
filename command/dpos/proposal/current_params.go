@@ -29,8 +29,8 @@ func (r *CurrentParamsResult) GetOutput() string {
 func GetCurrentParamsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "current-params",
-		Short: "Get current DPoS parameter values",
-		Long:  "Get current actual values of all votable parameters",
+		Short: "查看当前DPoS可提案参数值",
+		Long:  "查看当前DPoS可提案参数值",
 		Run:   runCurrentParams,
 	}
 
