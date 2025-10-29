@@ -4,7 +4,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Vcity-Team/vcitychain/command/dpos/block_producers"
-	"github.com/Vcity-Team/vcitychain/command/dpos/current_params"
 	"github.com/Vcity-Team/vcitychain/command/dpos/delegate"
 	"github.com/Vcity-Team/vcitychain/command/dpos/epoch"
 	getVoteByHash "github.com/Vcity-Team/vcitychain/command/dpos/get_vote_by_hash"
@@ -43,7 +42,7 @@ func GetCommand() *cobra.Command {
 		rewards.GetCommand(),
 		// Governance commands
 		parameters.GetCommand(),
-		current_params.GetCommand(),
+		// current-params 已移到 proposal 子命令下 🆕
 		proposal.GetCommand(),
 		min_threshold.GetCommand(),
 		// Delegate management commands

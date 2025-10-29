@@ -121,6 +121,12 @@ func (p *serverParams) initDPoSConfig() {
 	if p.maxMissedBlocks == 0 {
 		p.maxMissedBlocks = 3 // 默认值
 	}
+
+	// 初始化提案周期
+	p.dposProposalPeriod = p.rawConfig.DPoSProposalPeriod
+	if p.dposProposalPeriod == "" {
+		p.dposProposalPeriod = "24h" // 默认24小时
+	}
 }
 
 func (p *serverParams) initBlockGasTarget() error {

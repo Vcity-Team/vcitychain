@@ -65,12 +65,14 @@ var PolyBFTMixDigest = types.StringToHash("adce6e5230abe012342a44e4e9b6d05997d6f
 
 // FaultFlagInfo 故障标志信息结构
 type FaultFlagInfo struct {
-	NodeAddress    types.Address `json:"node_address"`
-	IsFaulty       bool          `json:"is_faulty"`
-	MissedBlocks   uint64        `json:"missed_blocks"`
-	ActualBlocks   uint64        `json:"actual_blocks"` // 🆕 实际出块数
-	LastUpdateTime uint64        `json:"last_update_time"`
-	Reason         string        `json:"reason"`
+	NodeAddress     types.Address `json:"node_address"`
+	IsFaulty        bool          `json:"is_faulty"`
+	MissedBlocks    uint64        `json:"missed_blocks"`
+	ActualBlocks    uint64        `json:"actual_blocks"` // 🆕 实际出块数
+	LastUpdateTime  uint64        `json:"last_update_time"`
+	EpochNumber     uint64        `json:"epoch_number"`
+	LastFaultyEpoch uint64        `json:"last_faulty_epoch"` // 🆕 上次故障的epoch（如果之前有故障则保留，否则为0）
+	Reason          string        `json:"reason"`
 }
 
 // Extra defines the structure of the extra field for Istanbul
@@ -243,7 +245,7 @@ func (i *Extra) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 		vv.Set(ar.NewNullArray())
 	} else {
 		// 实现 FaultFlags 的 MarshalRLPWith
-		// 每个 FaultFlagInfo 包含：NodeAddress, IsFaulty, MissedBlocks, ActualBlocks, LastUpdateTime, Reason
+		// 每个 FaultFlagInfo 包含：NodeAddress, IsFaulty, MissedBlocks, ActualBlocks, LastUpdateTime, EpochNumber, LastFaultyEpoch, Reason
 		faultFlagsArray := ar.NewArray()
 		for _, flag := range i.FaultFlags {
 			flagItem := ar.NewArray()
@@ -252,6 +254,8 @@ func (i *Extra) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 			flagItem.Set(ar.NewUint(flag.MissedBlocks))
 			flagItem.Set(ar.NewUint(flag.ActualBlocks))
 			flagItem.Set(ar.NewUint(flag.LastUpdateTime))
+			flagItem.Set(ar.NewUint(flag.EpochNumber))
+			flagItem.Set(ar.NewUint(flag.LastFaultyEpoch))
 			flagItem.Set(ar.NewCopyBytes([]byte(flag.Reason)))
 			faultFlagsArray.Set(flagItem)
 		}
@@ -416,9 +420,29 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 					// LastUpdateTime
 					flag.LastUpdateTime, _ = flagItemElems[4].GetUint64()
 
-					// Reason
-					reasonBytes, _ := flagItemElems[5].GetBytes(nil)
-					flag.Reason = string(reasonBytes)
+					// 兼容旧格式与新格式
+					// 旧格式：6个元素（index5 为 Reason，无 EpochNumber 和 LastFaultyEpoch）
+					// 中间格式：7个元素（index5 为 EpochNumber，index6 为 Reason，无 LastFaultyEpoch）
+					// 新格式：8个元素（index5 为 EpochNumber，index6 为 LastFaultyEpoch，index7 为 Reason）
+					if len(flagItemElems) >= 8 {
+						// 新格式：包含 LastFaultyEpoch
+						flag.EpochNumber, _ = flagItemElems[5].GetUint64()
+						flag.LastFaultyEpoch, _ = flagItemElems[6].GetUint64()
+						reasonBytes, _ := flagItemElems[7].GetBytes(nil)
+						flag.Reason = string(reasonBytes)
+					} else if len(flagItemElems) >= 7 {
+						// 中间格式：包含 EpochNumber，无 LastFaultyEpoch
+						flag.EpochNumber, _ = flagItemElems[5].GetUint64()
+						flag.LastFaultyEpoch = 0
+						reasonBytes, _ := flagItemElems[6].GetBytes(nil)
+						flag.Reason = string(reasonBytes)
+					} else {
+						// 旧格式：无 EpochNumber 和 LastFaultyEpoch
+						flag.EpochNumber = 0
+						flag.LastFaultyEpoch = 0
+						reasonBytes, _ := flagItemElems[5].GetBytes(nil)
+						flag.Reason = string(reasonBytes)
+					}
 
 					i.FaultFlags = append(i.FaultFlags, flag)
 				}

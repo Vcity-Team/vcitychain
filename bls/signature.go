@@ -22,8 +22,18 @@ type Signature struct {
 
 // Verify checks the BLS signature of the message against the public key of its signer
 func (s *Signature) Verify(pub *PublicKey, message, domain []byte) bool {
+	// nil guards to prevent panics from underlying bn256 operations
+	if s == nil || s.g1 == nil || pub == nil || pub.g2 == nil {
+		return false
+	}
+
 	point, err := hashToPoint(message, domain)
 	if err != nil {
+		return false
+	}
+
+	// point may still be nil in unexpected situations
+	if point == nil {
 		return false
 	}
 
@@ -33,8 +43,21 @@ func (s *Signature) Verify(pub *PublicKey, message, domain []byte) bool {
 
 // VerifyAggregated checks the BLS signature of the message against the aggregated public keys of its signers
 func (s *Signature) VerifyAggregated(publicKeys []*PublicKey, msg, domain []byte) bool {
+	// basic validation to avoid panics
+	if s == nil || s.g1 == nil || len(publicKeys) == 0 {
+		return false
+	}
+	for _, pk := range publicKeys {
+		if pk == nil || pk.g2 == nil {
+			return false
+		}
+	}
+
 	// 聚合公钥
 	aggregatedPubKey := PublicKeys(publicKeys).Aggregate()
+	if aggregatedPubKey == nil || aggregatedPubKey.g2 == nil {
+		return false
+	}
 
 	// 调用单个验证
 	result := s.Verify(aggregatedPubKey, msg, domain)

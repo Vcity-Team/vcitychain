@@ -3924,9 +3924,6 @@ func (d *DPoS) initializeParameterCache() error {
 // getGovernanceParameterValue 获取治理参数的当前值
 func (d *DPoS) getGovernanceParameterValue(paramName string) (interface{}, error) {
 	switch paramName {
-	case "governance_voting_period":
-		// 默认100个区块的投票期
-		return uint64(100), nil
 	case "governance_voting_threshold":
 		// 默认51%的通过门槛
 		return uint64(51), nil
@@ -3940,17 +3937,7 @@ func (d *DPoS) getGovernanceParameterValue(paramName string) (interface{}, error
 
 // getVotingPeriod 获取当前投票期间长度
 func (d *DPoS) getVotingPeriod() uint64 {
-	// 优先从缓存获取（治理参数修改后的值）
-	d.parameterValuesMutex.RLock()
-	if value, exists := d.parameterCurrentValues["governance_voting_period"]; exists {
-		if period, ok := value.(uint64); ok {
-			d.parameterValuesMutex.RUnlock()
-			return period
-		}
-	}
-	d.parameterValuesMutex.RUnlock()
-
-	// 其次从配置文件获取（时间转换为区块数）
+	// 🆕 直接从配置文件获取（YAML配置优先）
 	if d.config != nil && d.config.ProposalPeriod > 0 {
 		// 根据区块时间计算区块数
 		blockTime := d.config.BlockTime.Duration
@@ -3961,7 +3948,7 @@ func (d *DPoS) getVotingPeriod() uint64 {
 		}
 	}
 
-	// 最后使用默认值（1天 = 43200个区块，按2秒/区块计算）
+	// 使用默认值（1天 = 43200个区块，按2秒/区块计算）
 	return 43200
 }
 
@@ -4027,6 +4014,17 @@ func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 		return d.config.BlockTime.Duration.Seconds(), nil
 	case "dpos_epoch_duration":
 		return d.config.EpochDuration.String(), nil
+	case "governance_voting_period":
+		// 🆕 从YAML配置计算提案周期（区块数）
+		if d.config != nil && d.config.ProposalPeriod > 0 {
+			blockTime := d.config.BlockTime.Duration
+			if blockTime > 0 {
+				blocks := uint64(d.config.ProposalPeriod / blockTime)
+				return blocks, nil
+			}
+		}
+		// 默认值：1天 = 43200个区块（按2秒/区块）
+		return uint64(43200), nil
 	default:
 		return nil, fmt.Errorf("unknown parameter: %s", paramName)
 	}
@@ -4179,14 +4177,6 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Category:    "consensus",
 		},
 		// 🆕 治理参数
-		"governance_voting_period": {
-			Name:        "Voting Period",
-			Type:        "uint64",
-			MinValue:    uint64(10),   // 最少10个区块
-			MaxValue:    uint64(1000), // 最多1000个区块
-			Description: "提案投票期间长度 (区块数)",
-			Category:    "governance",
-		},
 		"governance_voting_threshold": {
 			Name:        "Voting Threshold",
 			Type:        "uint64",
@@ -4535,8 +4525,16 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 	case "dpos_epoch_duration":
 		return d.config.EpochDuration.String(), nil
 	case "governance_voting_period":
-		// 治理参数：投票期间长度
-		return uint64(100), nil
+		// 🆕 从YAML配置计算提案周期（区块数）
+		if d.config != nil && d.config.ProposalPeriod > 0 {
+			blockTime := d.config.BlockTime.Duration
+			if blockTime > 0 {
+				blocks := uint64(d.config.ProposalPeriod / blockTime)
+				return blocks, nil
+			}
+		}
+		// 默认值：1天 = 43200个区块（按2秒/区块）
+		return uint64(43200), nil
 	case "governance_voting_threshold":
 		// 治理参数：投票通过阈值
 		return uint64(51), nil
@@ -15449,10 +15447,11 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 // 🆕 新增：获取验证者故障标志信息
 func (d *DPoS) getValidatorFaultInfo(validatorAddr types.Address) map[string]interface{} {
 	faultInfo := map[string]interface{}{
-		"isFaulty":       false,
-		"missedBlocks":   uint64(0),
-		"lastUpdateTime": uint64(0),
-		"reason":         "",
+		"isFaulty":        false,
+		"missedBlocks":    uint64(0),
+		"lastUpdateTime":  uint64(0),
+		"lastFaultyEpoch": uint64(0),
+		"reason":          "",
 	}
 
 	// 从数据库读取故障状态
@@ -15461,6 +15460,9 @@ func (d *DPoS) getValidatorFaultInfo(validatorAddr types.Address) map[string]int
 			faultInfo["isFaulty"] = dbFaultInfo["isFaulty"]
 			faultInfo["missedBlocks"] = dbFaultInfo["missedBlocks"]
 			faultInfo["lastUpdateTime"] = dbFaultInfo["lastUpdateTime"]
+			if lfe, ok := dbFaultInfo["lastFaultyEpoch"].(float64); ok {
+				faultInfo["lastFaultyEpoch"] = uint64(lfe)
+			}
 			faultInfo["reason"] = dbFaultInfo["reason"]
 		}
 	}
@@ -15976,30 +15978,57 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 		return nil, fmt.Errorf("no validators in memory")
 	}
 
+	// 统计归属的epoch = 刚结束的那个epoch
+	var epochToCheck uint64
+	if currentEpoch > 0 {
+		epochToCheck = currentEpoch - 1
+	} else {
+		epochToCheck = 0
+	}
+
 	for _, validator := range d.epochValidators {
 		missedBlocks, actualBlocks := d.calculateMissedBlocksWithActual(validator.Address, d.currentEpoch, currentEpoch)
 		d.missedBlocksCount[validator.Address] = missedBlocks
 
 		isFaulty := missedBlocks >= d.config.MaxMissedBlocks
 
+		// 🆕 获取上次故障的epoch（从数据库或FaultFlags中）
+		lastFaultyEpoch := uint64(0)
+		if d.state != nil && d.state.StakeStore != nil {
+			if dbFaultInfo, err := d.state.StakeStore.GetValidatorFaultStatus(validator.Address); err == nil && dbFaultInfo != nil {
+				// 尝试从数据库获取上次故障的epoch
+				if lfe, ok := dbFaultInfo["lastFaultyEpoch"].(float64); ok {
+					lastFaultyEpoch = uint64(lfe)
+				}
+			}
+		}
+
+		// 🆕 如果当前有故障，更新lastFaultyEpoch为当前epoch；否则保留上次的值
+		if isFaulty {
+			lastFaultyEpoch = epochToCheck
+		}
+
 		d.logger.Info("📊 验证者漏块统计",
 			"address", validator.Address.String(),
 			"missedBlocks", missedBlocks,
 			"threshold", d.config.MaxMissedBlocks,
-			"isFaulty", isFaulty)
+			"isFaulty", isFaulty,
+			"lastFaultyEpoch", lastFaultyEpoch)
 
 		// 🆕 不管漏块数为多少，都保存到数据库
 		faultFlag := FaultFlagInfo{
-			NodeAddress:    validator.Address,
-			IsFaulty:       isFaulty,
-			MissedBlocks:   missedBlocks,
-			ActualBlocks:   actualBlocks, // 🆕 实际出块数
-			LastUpdateTime: uint64(time.Now().Unix()),
+			NodeAddress:     validator.Address,
+			IsFaulty:        isFaulty,
+			MissedBlocks:    missedBlocks,
+			ActualBlocks:    actualBlocks, // 🆕 实际出块数
+			LastUpdateTime:  uint64(time.Now().Unix()),
+			EpochNumber:     epochToCheck,
+			LastFaultyEpoch: lastFaultyEpoch,
 			Reason: func() string {
 				if isFaulty {
-					return fmt.Sprintf("漏块数达到阈值: %d >= %d", missedBlocks, d.config.MaxMissedBlocks)
+					return fmt.Sprintf("Epoch %d: 漏块数达到阈值: %d >= %d", epochToCheck, missedBlocks, d.config.MaxMissedBlocks)
 				}
-				return fmt.Sprintf("漏块数正常: %d < %d", missedBlocks, d.config.MaxMissedBlocks)
+				return fmt.Sprintf("Epoch %d: 漏块数正常: %d < %d", epochToCheck, missedBlocks, d.config.MaxMissedBlocks)
 			}(),
 		}
 		faultFlags = append(faultFlags, faultFlag)
@@ -16048,6 +16077,7 @@ func (d *DPoS) saveFaultStatusToDatabase(faultFlag FaultFlagInfo) error {
 		faultFlag.IsFaulty,
 		faultFlag.MissedBlocks,
 		faultFlag.LastUpdateTime,
+		faultFlag.LastFaultyEpoch,
 		faultFlag.Reason,
 	)
 }

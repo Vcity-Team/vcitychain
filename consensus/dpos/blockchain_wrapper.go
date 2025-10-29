@@ -504,6 +504,7 @@ func (p *blockchainWrapper) updateValidatorFaultStatus(faultFlag FaultFlagInfo) 
 		faultFlag.IsFaulty,
 		faultFlag.MissedBlocks,
 		faultFlag.LastUpdateTime,
+		faultFlag.LastFaultyEpoch,
 		faultFlag.Reason,
 	)
 	if err != nil {

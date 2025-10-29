@@ -59,6 +59,7 @@ type Config struct {
 	DPoSRewardAmount         string `json:"dpos_reward_amount" yaml:"dpos_reward_amount"`                   // 每个epoch奖励金额
 	DPoSValidatorRewardRatio uint64 `json:"dpos_validator_reward_ratio" yaml:"dpos_validator_reward_ratio"` // 验证者奖励比例
 	DPoSVoterRewardRatio     uint64 `json:"dpos_voter_reward_ratio" yaml:"dpos_voter_reward_ratio"`         // 投票者奖励比例
+	DPoSProposalPeriod       string `json:"dpos_proposal_period" yaml:"dpos_proposal_period"`               // 提案投票周期
 	BlockTimeSeconds         uint64 `json:"block_time_s" yaml:"block_time_s"`                               // 区块间隔时间（秒）
 }
 

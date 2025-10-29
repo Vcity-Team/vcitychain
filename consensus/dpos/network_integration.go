@@ -1751,14 +1751,59 @@ func (ni *NetworkIntegration) persistBLSKeyToDatabase(address types.Address, bls
 
 // restoreBLSKeysFromDatabase 从数据库恢复BLS公钥到缓存
 func (ni *NetworkIntegration) restoreBLSKeysFromDatabase() error {
-	// 🆕 简化版本：如果没有回调函数，跳过恢复
-	if ni.blsKeyPersistCallback == nil {
-		ni.logger.Debug("BLS公钥持久化回调函数未设置，跳过数据库恢复")
+	// 从DPoS实例获取StakeStore，预加载数据库中的BLS公钥到内存缓存
+	var dpos *DPoS
+
+	// 优先使用已注入的实例
+	if ni.dposInstance != nil {
+		if inst, ok := ni.dposInstance.(*DPoS); ok {
+			dpos = inst
+		}
+	}
+
+	// 退化到从全局注册表获取
+	if dpos == nil {
+		if inst, exists := GetDPoSInstance("vcity_dpos"); exists && inst != nil {
+			dpos = inst
+		}
+	}
+
+	if dpos == nil || dpos.state == nil || dpos.state.StakeStore == nil {
+		ni.logger.Debug("无法获取StakeStore，跳过从数据库恢复BLS公钥",
+			"hasDpos", dpos != nil,
+			"hasState", dpos != nil && dpos.state != nil)
 		return nil
 	}
 
-	// 这里可以添加从数据库恢复的逻辑
-	// 目前先跳过，因为主要目的是解决持久化失败的问题
+	validators, err := dpos.state.StakeStore.GetValidatorsWithFilter(false)
+	if err != nil {
+		ni.logger.Warn("从数据库获取验证者失败，跳过恢复BLS公钥", "error", err)
+		return nil
+	}
+
+	restored := 0
+	for _, v := range validators {
+		if v == nil || v.BlsKey == nil {
+			continue
+		}
+
+		keyBytes := v.BlsKey.Marshal()
+		if len(keyBytes) == 0 {
+			continue
+		}
+
+		if err := ni.LoadBLSKeyToCache(v.Address, keyBytes); err == nil {
+			restored++
+		} else {
+			ni.logger.Debug("加载BLS公钥到缓存失败",
+				"address", v.Address.String(),
+				"error", err)
+		}
+	}
+
+	ni.logger.Debug("数据库BLS公钥恢复完成",
+		"totalValidators", len(validators),
+		"restored", restored)
 
 	return nil
 }

@@ -911,7 +911,7 @@ func (s *ValidatorStore) getVotingPowerAtBlock(blockNumber uint64, delegate type
 }
 
 // 🆕 新增：更新验证者故障状态
-func (s *StakeStore) UpdateValidatorFaultStatus(address types.Address, isFaulty bool, missedBlocks uint64, lastUpdateTime uint64, reason string) error {
+func (s *StakeStore) UpdateValidatorFaultStatus(address types.Address, isFaulty bool, missedBlocks uint64, lastUpdateTime uint64, lastFaultyEpoch uint64, reason string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		// 获取或创建故障状态bucket
 		bucket, err := tx.CreateBucketIfNotExists([]byte("validatorFaultStatus"))
@@ -921,11 +921,12 @@ func (s *StakeStore) UpdateValidatorFaultStatus(address types.Address, isFaulty 
 
 		// 创建故障状态信息
 		faultInfo := map[string]interface{}{
-			"address":        address.String(),
-			"isFaulty":       isFaulty,
-			"missedBlocks":   missedBlocks,
-			"lastUpdateTime": lastUpdateTime,
-			"reason":         reason,
+			"address":         address.String(),
+			"isFaulty":        isFaulty,
+			"missedBlocks":    missedBlocks,
+			"lastUpdateTime":  lastUpdateTime,
+			"lastFaultyEpoch": lastFaultyEpoch,
+			"reason":          reason,
 		}
 
 		// 序列化并存储
@@ -946,15 +947,15 @@ func (s *StakeStore) GetValidatorFaultStatus(address types.Address) (map[string]
 		if bucket == nil {
 			return nil // 没有故障记录
 		}
-		
+
 		data := bucket.Get(address.Bytes())
 		if data == nil {
 			return nil // 该验证者没有故障记录
 		}
-		
+
 		return json.Unmarshal(data, &faultInfo)
 	})
-	
+
 	return faultInfo, err
 }
 
