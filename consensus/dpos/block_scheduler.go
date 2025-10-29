@@ -375,7 +375,10 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(validatorAddress types.Address, 
 	slotStart := bs.genesisTime.Add(time.Duration(currentSlot) * bs.blockWindow)
 	slotEnd := slotStart.Add(bs.blockWindow)
 
-	// 6. 检查是否在时间窗口内
+	// 6. 检查是否在时间窗口内（带容忍度）
+	tolerance := 500 * time.Millisecond // 500ms容忍度
+	extendedSlotEnd := slotEnd.Add(tolerance)
+
 	if now.Before(slotStart) {
 		// 还没到时间
 		bs.logger.Debug("⏳ 还没到出块时间",
@@ -384,7 +387,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(validatorAddress types.Address, 
 			"now", now.Format("2006-01-02 15:04:05.000"),
 			"waitTime", slotStart.Sub(now).String())
 		return false
-	} else if now.After(slotEnd) {
+	} else if now.After(extendedSlotEnd) {
 		// 🆕 TRON模式：当前slot时间窗口已过，检查下一个slot是否轮到我
 		nextSlot := currentSlot + 1
 		nextExpectedIndex := nextSlot % len(validators)

@@ -342,11 +342,13 @@ type dposRuntime struct {
 	topicMutex             sync.RWMutex
 
 	// 运行时状态
-	currentRound     uint64
-	lastProducedSlot int // 🆕 记录上次出块的 slot，防止一个 slot 内出多个区块
-	delegates        validator.AccountSet
-	voters           map[types.Address]*VoterInfo
-	pendingVotes     []*VoteMessage
+	currentRound            uint64
+	lastProducedSlot        int       // 🆕 记录上次出块的 slot，防止一个 slot 内出多个区块
+	lastBlockProductionTime time.Time // 记录上次本地出块的时间
+	lastBlockNumber         uint64    // 记录上次出块的区块号
+	delegates               validator.AccountSet
+	voters                  map[types.Address]*VoterInfo
+	pendingVotes            []*VoteMessage
 
 	// 签名请求存储 - 用于新节点查询
 	pendingSignatureRequests map[types.Hash]*SignatureRequest
@@ -1556,30 +1558,9 @@ func (r *dposRuntime) produceBlock() error {
 		return fmt.Errorf("failed to build block: %w", err)
 	}
 
-	// 🆕 TRON方式：构建完成后再次检查时间窗口和父区块，防止超时提交产生分叉
+	// 检查父区块是否已变化（防止其他节点已出块导致分叉）
 	if r.config.blockScheduler != nil {
 		currentBlock := r.config.blockchain.CurrentHeader()
-
-		// 检查时间窗口是否仍有效（TRON模式：直接比较地址）
-		myAddress := types.Address(r.config.Key.Address())
-		validators := make([]types.Address, len(r.delegates))
-		for i, d := range r.delegates {
-			validators[i] = d.Address
-		}
-
-		if !r.config.blockScheduler.ShouldProduceBlockNow(
-			myAddress,
-			validators,
-			currentBlock.Number,
-		) {
-			r.logger.Warn("⏰ 区块构建完成时时间窗口已过期，丢弃区块（防止分叉）",
-				"blockNumber", block.Block.Number(),
-				"blockHash", block.Block.Hash().String(),
-				"timestamp", time.Now().Format("15:04:05.000"))
-			return nil // 不提交，静默丢弃
-		}
-
-		// 额外检查：父区块是否已变化（防止其他节点已出块导致分叉）
 		if currentBlock.Hash != block.Block.Header.ParentHash {
 			r.logger.Warn("⏰ 父区块已变化，其他节点已出块，丢弃当前区块（防止分叉）",
 				"blockNumber", block.Block.Number(),
@@ -1685,19 +1666,34 @@ func (r *dposRuntime) produceBlock() error {
 
 	// 根据交易数量添加特殊标记
 	txCount := len(block.Block.Transactions)
+	now := time.Now()
+	var timeSinceLastBlock time.Duration
+	var lastBlockNum uint64
+	if !r.lastBlockProductionTime.IsZero() {
+		timeSinceLastBlock = now.Sub(r.lastBlockProductionTime)
+		lastBlockNum = r.lastBlockNumber
+	} else {
+		timeSinceLastBlock = 0
+		lastBlockNum = 0
+	}
+
 	if txCount == 0 {
-		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String())
-		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String())
-		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String())
+		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String(), "timeSinceLastBlock", timeSinceLastBlock.String(), "lastBlockNumber", lastBlockNum)
+		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String(), "timeSinceLastBlock", timeSinceLastBlock.String(), "lastBlockNumber", lastBlockNum)
+		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String(), "timeSinceLastBlock", timeSinceLastBlock.String(), "lastBlockNumber", lastBlockNum)
 	} else if txCount >= 1 {
 		// 包含交易的区块 - 添加明显的特殊标记
-		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK SEALED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK SEALED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
-		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK SEALED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
+		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK SEALED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "timeSinceLastBlock", timeSinceLastBlock.String(), "lastBlockNumber", lastBlockNum)
+		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK SEALED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "timeSinceLastBlock", timeSinceLastBlock.String(), "lastBlockNumber", lastBlockNum)
+		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK SEALED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "timeSinceLastBlock", timeSinceLastBlock.String(), "lastBlockNumber", lastBlockNum)
 	} else {
 		// 🆕 包含多个交易的区块 - 使用更显著的标记，加上各种符号
-		r.logger.Warn("🎉🎊🎆🎈 *** MULTI-TX BLOCK SEALED *** 🎈🎆🎊🎉", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount)
+		r.logger.Warn("🎉🎊🎆🎈 *** MULTI-TX BLOCK SEALED *** 🎈🎆🎊🎉", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "timeSinceLastBlock", timeSinceLastBlock.String(), "lastBlockNumber", lastBlockNum)
 	}
+
+	// 更新上次出块时间和区块号
+	r.lastBlockProductionTime = now
+	r.lastBlockNumber = block.Block.Number()
 
 	// 更新轮次 - 使用区块号更新，避免时序问题
 	r.updateRound(block.Block.Number())
@@ -2708,50 +2704,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 	// 🆕 重新设置ExtraData，确保CheckpointBlockHash被包含
 	block.Block.Header.ExtraData = extra.MarshalRLPTo(nil)
-
-	// 🆕 广播前解析并打印ExtraData内容（用于调试）
-	if isEpochEndBlock {
-		r.logger.Info("🔍🔍🔍 ========== 广播前ExtraData内容检查 ========== 🔍🔍🔍",
-			"blockNumber", block.Block.Number(),
-			"extraDataLength", len(block.Block.Header.ExtraData))
-
-		// 解析ExtraData
-		broadcastExtra := &Extra{}
-		if err := broadcastExtra.UnmarshalRLP(block.Block.Header.ExtraData); err != nil {
-			r.logger.Error("❌ 广播前ExtraData解析失败", "error", err)
-		} else {
-			// 打印奖励信息
-			if broadcastExtra.RewardDistribution != nil {
-				r.logger.Info("💰 广播前ExtraData奖励信息",
-					"epoch", broadcastExtra.RewardDistribution.EpochNumber,
-					"rewardCount", len(broadcastExtra.RewardDistribution.Rewards),
-					"totalReward", broadcastExtra.RewardDistribution.TotalReward.String())
-				for addr, amount := range broadcastExtra.RewardDistribution.Rewards {
-					r.logger.Info("💰 广播前奖励明细",
-						"address", addr,
-						"amount", amount.String())
-				}
-			} else {
-				r.logger.Info("ℹ️ 广播前ExtraData无奖励信息")
-			}
-
-			// 打印故障信息
-			if len(broadcastExtra.FaultFlags) > 0 {
-				r.logger.Info("🚨 广播前ExtraData故障信息",
-					"faultFlagsCount", len(broadcastExtra.FaultFlags))
-				for _, flag := range broadcastExtra.FaultFlags {
-					r.logger.Info("🚨 广播前故障标志",
-						"address", flag.NodeAddress.String(),
-						"isFaulty", flag.IsFaulty,
-						"missedBlocks", flag.MissedBlocks,
-						"reason", flag.Reason)
-				}
-			} else {
-				r.logger.Info("ℹ️ 广播前ExtraData无故障信息")
-			}
-		}
-		r.logger.Info("✅✅✅ ========== 广播前ExtraData内容检查完成 ========== ✅✅✅")
-	}
 
 	r.logger.Debug("🔍 生产时开始计算checkpoint哈希",
 		"blockNumber", block.Block.Number(),
