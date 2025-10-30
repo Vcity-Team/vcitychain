@@ -169,6 +169,8 @@ type ParameterProposal struct {
 	ExecutedAt        uint64        `json:"executedAt,omitempty"`        // 执行时间
 	ExecutedBy        string        `json:"executedBy,omitempty"`        // 执行者（提案ID）
 	ProposalSignature []byte        `json:"proposalSignature,omitempty"` // 🆕 提案创建签名
+	// 🆕 调度与生效元数据（持久化）
+	Schedule ProposalScheduleMeta `json:"schedule,omitempty"`
 }
 
 // ProposalStatus 提案状态
@@ -220,6 +222,19 @@ type ProposalCreateTxData struct {
 	RecoveryReason    string      `json:"recoveryReason,omitempty"` // 恢复理由（仅用于恢复提案）
 	ProposerSignature []byte      `json:"proposerSignature"`        // 提案签名
 	CreatedAt         uint64      `json:"createdAt"`                // 签名时间戳（用于验签一致性）
+}
+
+// 🆕 提案调度与生效元数据（持久化在 Proposal 中）
+// 当执行提案时，不立即应用影响出块者集合的变化（如清除故障），而是登记在此，等待下个 epoch 边界统一生效
+type ProposalScheduleMeta struct {
+	// 是否已安排在边界生效
+	Scheduled bool `json:"scheduled"`
+	// 生效的目标 epoch
+	EffectiveEpoch uint64 `json:"effectiveEpoch"`
+	// 是否已在边界应用
+	Applied bool `json:"applied"`
+	// 实际应用的区块号
+	AppliedAtBlock uint64 `json:"appliedAtBlock"`
 }
 
 // ProposalVoteTxData 投票交易数据
@@ -5106,26 +5121,29 @@ func (d *DPoS) ProcessProposalExecuteTransaction(tx *types.Transaction, blockNum
 
 // executeParameterProposalInTx 在交易中执行参数提案（所有节点都执行）
 func (d *DPoS) executeParameterProposalInTx(proposalID string, proposal *ParameterProposal) error {
-	d.logger.Info("开始执行参数提案（交易中）", "proposalID", proposalID, "parameter", proposal.Parameter)
+	d.logger.Info("开始执行参数提案（登记待生效）", "proposalID", proposalID, "parameter", proposal.Parameter)
 
-	// 更新参数值（所有节点都执行）
-	if err := d.updateParameterValue(proposal.Parameter, proposal.NewValue, fmt.Sprintf("proposal_%s", proposalID)); err != nil {
-		return fmt.Errorf("failed to update parameter value: %w", err)
+	// 改为登记待生效：下一个 epoch 生效
+	effectiveEpoch := d.getEpochForBlock(d.getCurrentBlockNumber()).Number + 1
+	proposal.Schedule = ProposalScheduleMeta{
+		Scheduled:      true,
+		EffectiveEpoch: effectiveEpoch,
+		Applied:        false,
+		AppliedAtBlock: 0,
 	}
 
-	// 更新提案状态
+	// 状态置为 executed（表示已通过执行流程），但实际参数将在边界应用
 	proposal.Status = ProposalExecuted
 	proposal.ExecutedAt = uint64(time.Now().Unix())
 	proposal.ExecutedBy = proposalID
 
-	// 保存到数据库
 	if d.state != nil && d.state.ProposalStore != nil {
 		if err := d.state.ProposalStore.SaveProposal(proposal); err != nil {
-			d.logger.Error("Failed to save proposal status", "error", err)
+			d.logger.Error("Failed to save scheduled parameter proposal", "error", err)
 		}
 	}
 
-	d.logger.Info("✅ 参数提案执行成功（交易中）", "proposalID", proposalID)
+	d.logger.Info("✅ ================================参数提案已登记，待边界生效", "proposalID", proposalID, "effectiveEpoch", effectiveEpoch)
 
 	return nil
 }
@@ -5137,23 +5155,15 @@ func (d *DPoS) executeRecoveryProposalInTx(proposalID string, proposal *Paramete
 		validatorAddr = types.StringToAddress(proposal.Parameter)
 	}
 
-	d.logger.Info("开始执行验证者恢复提案（交易中）", "proposalID", proposalID, "validator", validatorAddr.String())
+	d.logger.Info("开始执行验证者恢复提案（登记待生效）", "proposalID", proposalID, "validator", validatorAddr.String())
 
-	// 清除数据库中的故障标志（所有节点都执行）
-	if d.state != nil && d.state.StakeStore != nil {
-		if err := d.state.StakeStore.ClearValidatorFaultStatus(validatorAddr, proposalID); err != nil {
-			d.logger.Error("清除验证者故障标志失败", "error", err)
-			return fmt.Errorf("清除验证者故障标志失败: %w", err)
-		}
-		d.logger.Info("✅ 数据库故障标志已清除（所有节点）", "validator", validatorAddr.String())
-	} else {
-		return fmt.Errorf("stake store not available")
-	}
-
-	// 清除内存中的故障标志（所有节点都执行）
-	if d.faultyValidators != nil {
-		delete(d.faultyValidators, validatorAddr)
-		d.logger.Info("✅ 内存故障标志已清除（所有节点）", "validator", validatorAddr.String())
+	// 不立即清除故障标志，登记到提案调度：下一个 epoch 生效
+	effectiveEpoch := d.getEpochForBlock(d.getCurrentBlockNumber()).Number + 1
+	proposal.Schedule = ProposalScheduleMeta{
+		Scheduled:      true,
+		EffectiveEpoch: effectiveEpoch,
+		Applied:        false,
+		AppliedAtBlock: 0,
 	}
 
 	// 更新提案状态
@@ -5161,16 +5171,17 @@ func (d *DPoS) executeRecoveryProposalInTx(proposalID string, proposal *Paramete
 	proposal.ExecutedBy = proposalID
 	proposal.Status = ProposalExecuted
 
-	// 保存到数据库（所有节点都执行）
+	// 保存到数据库（登记待生效）
 	if d.state != nil && d.state.ProposalStore != nil {
 		if err := d.state.ProposalStore.SaveProposal(proposal); err != nil {
 			d.logger.Error("保存提案状态失败", "error", err)
 		}
 	}
 
-	d.logger.Info("✅ 验证者恢复提案执行成功（交易中，所有节点同步）",
+	d.logger.Info("✅ ==============================验证者恢复提案已登记，待边界生效",
 		"proposalID", proposalID,
-		"validator", validatorAddr.String())
+		"validator", validatorAddr.String(),
+		"effectiveEpoch", effectiveEpoch)
 
 	return nil
 }

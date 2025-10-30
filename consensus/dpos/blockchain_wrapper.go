@@ -193,6 +193,89 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 		p.logger.Debug("✅✅✅ ========== 奖励分配执行成功 ========== ✅✅✅",
 			"blockNumber", block.Number(),
 			"blockHash", block.Hash().String()[:16])
+
+		// 奖励分配与故障统计完成后，再在边界应用已登记的待生效提案，避免被同区块统计覆盖
+		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+			// 计算当前 epoch 编号
+			currentEpochMeta := dposInstance.getEpochForBlock(block.Number())
+			var currentEpoch uint64
+			if currentEpochMeta != nil {
+				currentEpoch = currentEpochMeta.Number
+			}
+
+			// 优先：从持久化存储扫描当前epoch待生效提案（若实现了该接口）
+			var scheduledProps []*ParameterProposal
+			if dposInstance.state != nil && dposInstance.state.ProposalStore != nil {
+				type schedLister interface {
+					ListScheduledByEpoch(epoch uint64) ([]*ParameterProposal, error)
+				}
+				if l, ok := interface{}(dposInstance.state.ProposalStore).(schedLister); ok {
+					if ps, err := l.ListScheduledByEpoch(currentEpoch); err == nil && len(ps) > 0 {
+						scheduledProps = append(scheduledProps, ps...)
+					}
+				}
+			}
+			// 兜底：遍历内存中的提案
+			for _, prop := range dposInstance.parameterProposals {
+				if prop.Schedule.Scheduled && !prop.Schedule.Applied && prop.Schedule.EffectiveEpoch == currentEpoch {
+					scheduledProps = append(scheduledProps, prop)
+				}
+			}
+
+			// 去重（按ID）
+			seen := make(map[string]bool)
+			uniq := make([]*ParameterProposal, 0, len(scheduledProps))
+			for _, pprop := range scheduledProps {
+				if pprop == nil || pprop.ID == "" {
+					continue
+				}
+				if seen[pprop.ID] {
+					continue
+				}
+				seen[pprop.ID] = true
+				uniq = append(uniq, pprop)
+			}
+
+			for _, prop := range uniq {
+				if prop.Schedule.Scheduled && !prop.Schedule.Applied && prop.Schedule.EffectiveEpoch == currentEpoch {
+					switch prop.ProposalType {
+					case "validator_recovery":
+						// 应用清除故障标志
+						vaddr := prop.ValidatorAddress
+						if vaddr == (types.Address{}) {
+							vaddr = types.StringToAddress(prop.Parameter)
+						}
+						if dposInstance.state != nil && dposInstance.state.StakeStore != nil {
+							if err := dposInstance.state.StakeStore.ClearValidatorFaultStatus(vaddr, prop.ID); err != nil {
+								p.logger.Error("边界应用恢复失败", "error", err, "proposalID", prop.ID, "validator", vaddr.String())
+							} else {
+								if dposInstance.faultyValidators != nil {
+									delete(dposInstance.faultyValidators, vaddr)
+								}
+								prop.Schedule.Applied = true
+								prop.Schedule.AppliedAtBlock = block.Number()
+								if dposInstance.state.ProposalStore != nil {
+									_ = dposInstance.state.ProposalStore.SaveProposal(prop)
+								}
+								p.logger.Info("✅ ===============================================边界应用恢复提案成功", "proposalID", prop.ID, "validator", vaddr.String())
+							}
+						}
+					case "parameter":
+						// 应用参数更新
+						if err := dposInstance.updateParameterValue(prop.Parameter, prop.NewValue, fmt.Sprintf("proposal_%s", prop.ID)); err != nil {
+							p.logger.Error("边界应用参数更新失败", "error", err, "proposalID", prop.ID)
+						} else {
+							prop.Schedule.Applied = true
+							prop.Schedule.AppliedAtBlock = block.Number()
+							if dposInstance.state != nil && dposInstance.state.ProposalStore != nil {
+								_ = dposInstance.state.ProposalStore.SaveProposal(prop)
+							}
+							p.logger.Info("✅ =========================================边界应用参数更新成功", "proposalID", prop.ID, "parameter", prop.Parameter)
+						}
+					}
+				}
+			}
+		}
 	} else {
 		p.logger.Debug("ℹ️ 不是epoch结束区块，跳过奖励分配",
 			"blockNumber", block.Number(),
