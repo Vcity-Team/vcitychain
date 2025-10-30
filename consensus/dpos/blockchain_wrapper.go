@@ -217,7 +217,7 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			}
 			// 兜底：遍历内存中的提案
 			for _, prop := range dposInstance.parameterProposals {
-				if prop.Schedule.Scheduled && !prop.Schedule.Applied && prop.Schedule.EffectiveEpoch == currentEpoch {
+				if prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == currentEpoch {
 					scheduledProps = append(scheduledProps, prop)
 				}
 			}
@@ -237,29 +237,9 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			}
 
 			for _, prop := range uniq {
-				if prop.Schedule.Scheduled && !prop.Schedule.Applied && prop.Schedule.EffectiveEpoch == currentEpoch {
+				if prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == currentEpoch {
 					switch prop.ProposalType {
 					case "validator_recovery":
-						// 应用清除故障标志
-						vaddr := prop.ValidatorAddress
-						if vaddr == (types.Address{}) {
-							vaddr = types.StringToAddress(prop.Parameter)
-						}
-						if dposInstance.state != nil && dposInstance.state.StakeStore != nil {
-							if err := dposInstance.state.StakeStore.ClearValidatorFaultStatus(vaddr, prop.ID); err != nil {
-								p.logger.Error("边界应用恢复失败", "error", err, "proposalID", prop.ID, "validator", vaddr.String())
-							} else {
-								if dposInstance.faultyValidators != nil {
-									delete(dposInstance.faultyValidators, vaddr)
-								}
-								prop.Schedule.Applied = true
-								prop.Schedule.AppliedAtBlock = block.Number()
-								if dposInstance.state.ProposalStore != nil {
-									_ = dposInstance.state.ProposalStore.SaveProposal(prop)
-								}
-								p.logger.Info("✅ ===============================================边界应用恢复提案成功", "proposalID", prop.ID, "validator", vaddr.String())
-							}
-						}
 					case "parameter":
 						// 应用参数更新
 						if err := dposInstance.updateParameterValue(prop.Parameter, prop.NewValue, fmt.Sprintf("proposal_%s", prop.ID)); err != nil {
@@ -557,27 +537,98 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 			"extraDataLength", len(block.Header.ExtraData))
 	}
 
+	// 预先收集：需要在本epoch边界应用的恢复提案
+	recoveredValidators := make(map[types.Address]*ParameterProposal)
+	// 🆕【临时DEBUG】打印 ProposalStore 里所有提案（含所有类型、状态、epoch）
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+		if dposInstance.state != nil && dposInstance.state.ProposalStore != nil {
+			// 计算当前epoch用于日志与筛选
+			epochForLog := uint64(0)
+			if meta := dposInstance.getEpochForBlock(block.Number()); meta != nil {
+				epochForLog = meta.Number
+			}
+			allProposals, err := dposInstance.state.ProposalStore.GetAllProposals()
+			if err == nil {
+				p.logger.Info("[DEBUG_ProposalStore_FullDump] 当前所有提案总数", "count", len(allProposals), "currentEpoch", epochForLog)
+				for pid, prop := range allProposals {
+					p.logger.Info("[DEBUG_ProposalStore_FullDump]", "id", pid, "Type", prop.ProposalType, "Epoch", prop.Schedule.EffectiveEpoch, "Scheduled", prop.Schedule.Scheduled, "Validator", prop.ValidatorAddress.String(), "Status", prop.Status, "Start", prop.StartBlock, "End", prop.EndBlock, "Description", prop.Description, "currentEpoch", epochForLog)
+					// 直接基于全量数据筛选“本epoch需要生效”的恢复提案
+					if prop != nil && prop.ProposalType == "validator_recovery" && prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == epochForLog {
+						vaddr := prop.ValidatorAddress
+						if vaddr == (types.Address{}) {
+							vaddr = types.StringToAddress(prop.Parameter)
+						}
+						recoveredValidators[vaddr] = prop
+						p.logger.Info("++++++++[Proposal][边界恢复提案调试] 收集需要apply的恢复提案", "ID", prop.ID, "Type", prop.ProposalType, "Scheduled", prop.Schedule.Scheduled, "EffEpoch", prop.Schedule.EffectiveEpoch, "Validator", vaddr.String(), "Parameter", prop.Parameter, "currentEpoch", epochForLog)
+					}
+				}
+			} else {
+				p.logger.Error("[DEBUG_ProposalStore_FullDump] GetAllProposals error", "error", err, "currentEpoch", epochForLog)
+			}
+		}
+	}
+
 	// 🆕 处理故障标志
 	if len(extra.FaultFlags) > 0 {
 		p.logger.Info("🔍 开始处理故障标志", "count", len(extra.FaultFlags))
-
-		// 🆕 更新内存中的故障状态并重新计算出块者列表（只调用一次）
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-			// 先更新所有故障状态
-			for _, faultFlag := range extra.FaultFlags {
-				p.logger.Info("📝 处理故障标志",
-					"address", faultFlag.NodeAddress.String(),
-					"isFaulty", faultFlag.IsFaulty,
-					"missedBlocks", faultFlag.MissedBlocks,
-					"reason", faultFlag.Reason)
+			for i := range extra.FaultFlags {
+				ff := &extra.FaultFlags[i]
+				if pprop, ok := recoveredValidators[ff.NodeAddress]; ok {
+					p.logger.Info("✅【EXTRA修正】本epoch恢复提案清零", "address", ff.NodeAddress.String())
+					ff.MissedBlocks = 0
+					ff.IsFaulty = false
+					ff.Reason = "本epoch恢复提案生效，统计清零"
 
-				// 更新验证者故障状态到数据库
-				if err := p.updateValidatorFaultStatus(faultFlag); err != nil {
-					p.logger.Error("❌ 更新验证者故障状态失败", "error", err)
+					// 立刻持久化到与读取口径一致的数据库，确保后续读取不再视为故障
+					if dposInstance.state != nil && dposInstance.state.StakeStore != nil {
+						if err := dposInstance.state.StakeStore.ClearValidatorFaultStatus(ff.NodeAddress, pprop.ID); err != nil {
+							p.logger.Error("❌ ClearValidatorFaultStatus 持久化失败", "address", ff.NodeAddress.String(), "error", err)
+						} else {
+							p.logger.Info("✅ ClearValidatorFaultStatus 持久化成功", "address", ff.NodeAddress.String())
+						}
+					}
+					// 同步内存：从故障集合中剔除
+					if dposInstance.faultyValidators != nil {
+						delete(dposInstance.faultyValidators, ff.NodeAddress)
+					}
+
+					// 在修正后设置提案applied并保存
+					pprop.Schedule.Applied = true
+					pprop.Schedule.AppliedAtBlock = block.Number()
+					if dposInstance.state != nil && dposInstance.state.ProposalStore != nil {
+						_ = dposInstance.state.ProposalStore.SaveProposal(pprop)
+					}
+					// 计算当前epoch用于日志
+					epochForLog := uint64(0)
+					if meta := dposInstance.getEpochForBlock(block.Number()); meta != nil {
+						epochForLog = meta.Number
+					}
+					p.logger.Info("✅ ===============================================边界应用恢复提案成功", "proposalID", pprop.ID, "validator", ff.NodeAddress.String(), "currentEpoch", epochForLog)
 				}
 
+				p.logger.Info("📝 处理故障标志",
+					"address", ff.NodeAddress.String(),
+					"isFaulty", ff.IsFaulty,
+					"missedBlocks", ff.MissedBlocks,
+					"reason", ff.Reason)
+				// 更新验证者故障状态到数据库
+				if err := p.updateValidatorFaultStatus(*ff); err != nil {
+					p.logger.Error("❌ 更新验证者故障状态失败", "error", err)
+				}
 				// 更新内存故障状态
-				dposInstance.updateMemoryFaultStatus(faultFlag)
+				dposInstance.updateMemoryFaultStatus(*ff)
+			}
+
+			// 🆕 调用前打印最终的 FaultFlags 快照
+			for i := range extra.FaultFlags {
+				ff := &extra.FaultFlags[i]
+				p.logger.Info("📸 FaultFlags 最终快照",
+					"index", i,
+					"address", ff.NodeAddress.String(),
+					"isFaulty", ff.IsFaulty,
+					"missedBlocks", ff.MissedBlocks,
+					"reason", ff.Reason)
 			}
 
 			// 重新计算并更新出块者列表（只调用一次）

@@ -4680,191 +4680,6 @@ func (d *DPoS) checkProposalResultInternal(proposalID string, proposal *Paramete
 	}
 }
 
-// ExecuteProposal 执行提案（统一入口，根据类型分支）
-func (d *DPoS) ExecuteProposal(proposalID string) error {
-	d.lock.Lock()
-	defer d.lock.Unlock()
-
-	proposal, exists := d.parameterProposals[proposalID]
-	if !exists {
-		return fmt.Errorf("proposal not found")
-	}
-
-	// 🆕 执行提案的检查顺序：1.检查有效期 2.检查表决期 3.检查状态
-	currentBlock := d.getCurrentBlockNumber()
-
-	// 1. 检查提案是否在有效期内（ValidEndBlock）
-	if proposal.ValidEndBlock == 0 {
-		// 兼容旧提案（没有ValidEndBlock字段），使用EndBlock作为有效期
-		if currentBlock > proposal.EndBlock*2 {
-			return fmt.Errorf("proposal has expired (not in valid period), current block: %d, estimated valid end: %d", currentBlock, proposal.EndBlock*2)
-		}
-	} else {
-		if currentBlock > proposal.ValidEndBlock {
-			var validPeriodInfo string
-			if d.config != nil && d.config.ProposalValidPeriod > 0 {
-				validPeriodInfo = fmt.Sprintf(", valid period: %s", d.config.ProposalValidPeriod.String())
-			}
-			return fmt.Errorf("proposal has expired (not in valid period)%s, current block: %d, valid end block: %d", validPeriodInfo, currentBlock, proposal.ValidEndBlock)
-		}
-	}
-
-	// 2. 检查提案是否仍在表决期内（EndBlock）
-	if currentBlock <= proposal.EndBlock {
-		// 还在表决期内
-		var votePeriodInfo string
-		var remainingBlocks uint64
-		if d.config != nil && d.config.ProposalVotePeriod > 0 {
-			votePeriodInfo = fmt.Sprintf(", vote period: %s", d.config.ProposalVotePeriod.String())
-		}
-		if proposal.EndBlock > currentBlock {
-			remainingBlocks = proposal.EndBlock - currentBlock
-			var remainingTime string
-			if d.config != nil && d.config.BlockTime.Duration > 0 {
-				remainingDuration := time.Duration(remainingBlocks) * d.config.BlockTime.Duration
-				remainingTime = fmt.Sprintf(", remaining: %d blocks (~%s)", remainingBlocks, remainingDuration.String())
-			} else {
-				remainingTime = fmt.Sprintf(", remaining: %d blocks", remainingBlocks)
-			}
-			return fmt.Errorf("proposal is still in vote period (please wait)%s%s, current block: %d, vote end block: %d", votePeriodInfo, remainingTime, currentBlock, proposal.EndBlock)
-		}
-		return fmt.Errorf("proposal is still in vote period (please wait)%s, current block: %d, vote end block: %d", votePeriodInfo, currentBlock, proposal.EndBlock)
-	}
-
-	// 3. 表决期已过，如果状态未更新，先更新状态
-	if (proposal.Status == ProposalPending || proposal.Status == ProposalActive) && currentBlock > proposal.EndBlock {
-		// 表决期已结束但状态还是pending或active，先更新状态
-		d.logger.Info("🔍 提案表决期已结束，正在更新状态", "proposalID", proposalID, "currentBlock", currentBlock, "endBlock", proposal.EndBlock, "currentStatus", proposal.Status.String())
-		d.checkProposalResultInternal(proposalID, proposal)
-	}
-
-	// 4. 检查状态
-	if proposal.Status != ProposalPassed {
-		return fmt.Errorf("proposal not passed (status: %s)", proposal.Status.String())
-	}
-
-	// 🆕 根据提案类型分支执行
-	if proposal.ProposalType == "" {
-		// 兼容旧提案（没有ProposalType字段）
-		proposal.ProposalType = "parameter"
-	}
-
-	switch proposal.ProposalType {
-	case "parameter":
-		return d.executeParameterProposal(proposalID, proposal)
-	case "validator_recovery":
-		return d.executeRecoveryProposal(proposalID, proposal)
-	default:
-		return fmt.Errorf("unknown proposal type: %s", proposal.ProposalType)
-	}
-}
-
-// ExecuteParameterUpdate 执行参数更新（保持向后兼容）
-func (d *DPoS) ExecuteParameterUpdate(proposalID string) error {
-	return d.ExecuteProposal(proposalID)
-}
-
-// executeParameterProposal 执行参数修改提案
-func (d *DPoS) executeParameterProposal(proposalID string, proposal *ParameterProposal) error {
-	// 创建参数更新记录
-	update := &ParameterUpdate{
-		Parameter:  proposal.Parameter,
-		OldValue:   proposal.OldValue,
-		NewValue:   proposal.NewValue,
-		BlockNum:   d.getCurrentBlockNumber() + 1, // 下一个区块生效
-		Executed:   false,
-		ProposalID: proposalID,
-		ExecutedAt: 0,
-	}
-
-	d.parameterUpdates = append(d.parameterUpdates, update)
-
-	// 同时更新缓存和数据库
-	if err := d.updateParameterValue(proposal.Parameter, proposal.NewValue, fmt.Sprintf("proposal_%s", proposalID)); err != nil {
-		d.logger.Error("Failed to update parameter value",
-			"error", err,
-			"parameter", proposal.Parameter,
-			"value", proposal.NewValue)
-		return fmt.Errorf("failed to update parameter value: %w", err)
-	}
-
-	// 标记提案已执行，记录执行时间
-	proposal.Status = ProposalExecuted
-	proposal.ExecutedAt = uint64(time.Now().Unix())
-	proposal.ExecutedBy = proposalID
-
-	// 保存更新后的提案状态到数据库
-	if d.state != nil && d.state.ProposalStore != nil {
-		d.state.ProposalStore.SaveProposal(proposal)
-	}
-
-	d.logger.Info("Parameter update executed",
-		"proposalID", proposalID,
-		"parameter", proposal.Parameter,
-		"newValue", proposal.NewValue,
-		"effectiveBlock", update.BlockNum,
-		"executedAt", time.Now().Format(time.RFC3339))
-
-	return nil
-}
-
-// executeRecoveryProposal 执行验证者恢复提案
-func (d *DPoS) executeRecoveryProposal(proposalID string, proposal *ParameterProposal) error {
-	// 获取要恢复的验证者地址
-	validatorAddr := proposal.ValidatorAddress
-	if validatorAddr == (types.Address{}) {
-		// 如果 ValidatorAddress 为空，尝试从 Parameter 字段解析
-		validatorAddr = types.StringToAddress(proposal.Parameter)
-	}
-
-	d.logger.Info("开始执行验证者恢复提案",
-		"proposalID", proposalID,
-		"validator", validatorAddr.String(),
-		"reason", proposal.RecoveryReason)
-
-	// 1. 清除数据库中的故障标志
-	if d.state != nil && d.state.StakeStore != nil {
-		err := d.state.StakeStore.ClearValidatorFaultStatus(validatorAddr, proposalID)
-		if err != nil {
-			d.logger.Error("清除验证者故障标志失败", "error", err)
-			return fmt.Errorf("清除验证者故障标志失败: %w", err)
-		}
-		d.logger.Info("✅ 数据库故障标志已清除", "validator", validatorAddr.String())
-	} else {
-		return fmt.Errorf("stake store not available")
-	}
-
-	// 2. 清除内存中的故障标志（如果存在）
-	if d.faultyValidators != nil {
-		delete(d.faultyValidators, validatorAddr)
-		d.logger.Info("✅ 内存故障标志已清除", "validator", validatorAddr.String())
-	}
-
-	// 3. 记录执行时间和提案ID
-	executedAt := uint64(time.Now().Unix())
-	proposal.ExecutedAt = executedAt
-	proposal.ExecutedBy = proposalID
-	proposal.Status = ProposalExecuted
-
-	// 4. 保存更新后的提案状态到数据库
-	if d.state != nil && d.state.ProposalStore != nil {
-		if err := d.state.ProposalStore.SaveProposal(proposal); err != nil {
-			d.logger.Error("保存提案状态失败", "error", err)
-			// 不返回错误，因为核心操作已完成
-		}
-	}
-
-	d.logger.Info("验证者恢复提案执行成功",
-		"proposalID", proposalID,
-		"validator", validatorAddr.String(),
-		"executedAt", time.Now().Format(time.RFC3339),
-		"recoveryReason", proposal.RecoveryReason)
-
-	return nil
-}
-
-// 🆕 提案交易处理函数
-
 // ProcessProposalCreateTransaction 处理创建提案交易（所有节点都会执行）
 func (d *DPoS) ProcessProposalCreateTransaction(tx *types.Transaction, blockNumber uint64) error {
 	d.lock.Lock()
@@ -17289,12 +17104,16 @@ func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) er
 		return fmt.Errorf("state store not available")
 	}
 
-	allValidators, err := d.GetSortedValidatorsWithLimit()
-	if err != nil {
-		return fmt.Errorf("failed to get all validators: %w", err)
+	var allValidators validator.AccountSet
+	if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
+		allValidators = d.runtime.delegates.Copy()
+		d.logger.Info("✅ 使用runtime.delegates", "count", len(allValidators))
+	} else if len(d.delegates) > 0 {
+		allValidators = d.delegates.Copy()
+		d.logger.Info("✅ 使用d.delegates", "count", len(allValidators))
+	} else {
+		return fmt.Errorf("no validators set in memory")
 	}
-
-	d.logger.Info("📊 获取到所有验证者", "totalCount", len(allValidators))
 
 	// 2. 创建故障映射
 	faultMap := make(map[types.Address]bool)
