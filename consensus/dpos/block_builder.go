@@ -171,6 +171,29 @@ func (b *BlockBuilder) WriteTx(tx *types.Transaction) error {
 		return err
 	}
 
+	// 🆕 生产路径也执行与验证路径一致的 EVM 后置处理
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+		if tx != nil && len(tx.Input) > 0 && (tx.To != nil) {
+			if kind, err := ParseProposalInput(tx.Input); err == nil {
+				b.params.Logger.Info("检测到提案交易(EVM后置处理)", "kind", kind, "txHash", tx.Hash.String())
+				switch kind {
+				case "create":
+					if e := dposInstance.ProcessProposalCreateTransaction(tx, b.header.Number); e != nil {
+						b.params.Logger.Warn("提案创建业务处理失败(不影响EVM)", "err", e, "txHash", tx.Hash.String())
+					}
+				case "vote":
+					if e := dposInstance.ProcessProposalVoteTransaction(tx, b.header.Number); e != nil {
+						b.params.Logger.Warn("提案投票业务处理失败(不影响EVM)", "err", e, "txHash", tx.Hash.String())
+					}
+				case "execute":
+					if e := dposInstance.ProcessProposalExecuteTransaction(tx, b.header.Number); e != nil {
+						b.params.Logger.Warn("提案执行业务处理失败(不影响EVM)", "err", e, "txHash", tx.Hash.String())
+					}
+				}
+			}
+		}
+	}
+
 	b.txns = append(b.txns, tx)
 
 	return nil
