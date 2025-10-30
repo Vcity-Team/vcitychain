@@ -17159,6 +17159,12 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 		epochToCheck = 0
 	}
 
+	currentBlock := d.getCurrentBlockNumber()
+	if d.config != nil && currentBlock >= d.config.ConsensusSwitchHeight && currentBlock < d.config.ConsensusSwitchHeight+20 {
+		d.logger.Info("⏭️ 故障统计保护期，跳过所有故障检测", "blockNumber", currentBlock, "protectionWindow", 20, "consensusSwitchHeight", d.config.ConsensusSwitchHeight)
+		return nil, nil
+	}
+
 	for _, validator := range d.epochValidators {
 		missedBlocks, actualBlocks := d.calculateMissedBlocksWithActual(validator.Address, d.currentEpoch, currentEpoch)
 		d.missedBlocksCount[validator.Address] = missedBlocks
