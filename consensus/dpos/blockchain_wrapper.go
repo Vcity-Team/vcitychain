@@ -12,6 +12,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/consensus"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/contracts"
+	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/state"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/umbracle/ethgo"
@@ -123,40 +124,44 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 
 	// apply transactions from block
 	for _, tx := range block.Transactions {
-		// 🆕 处理提案相关交易（在所有节点同步执行）
-		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-			switch tx.Type {
-			case types.ProposalCreateTx:
-				if err := dposInstance.ProcessProposalCreateTransaction(tx, block.Number()); err != nil {
-					p.logger.Error("❌ 处理创建提案交易失败", "error", err, "txHash", tx.Hash.String())
-					return nil, fmt.Errorf("failed to process proposal create tx: %w", err)
-				}
-				// 提案交易不需要写入transition（已经在ProcessProposalCreateTransaction中处理）
-				continue
-			case types.ProposalVoteTx:
-				if err := dposInstance.ProcessProposalVoteTransaction(tx, block.Number()); err != nil {
-					p.logger.Error("❌ 处理投票交易失败", "error", err, "txHash", tx.Hash.String())
-					return nil, fmt.Errorf("failed to process proposal vote tx: %w", err)
-				}
-				// 提案交易不需要写入transition（已经在ProcessProposalVoteTransaction中处理）
-				continue
-			case types.ProposalExecuteTx:
-				if err := dposInstance.ProcessProposalExecuteTransaction(tx, block.Number()); err != nil {
-					p.logger.Error("❌ 处理执行提案交易失败", "error", err, "txHash", tx.Hash.String())
-					return nil, fmt.Errorf("failed to process proposal execute tx: %w", err)
-				}
-				// 提案交易不需要写入transition（已经在ProcessProposalExecuteTransaction中处理）
-				continue
-			default:
-				// 普通交易正常处理
-				if err = transition.Write(tx); err != nil {
-					return nil, fmt.Errorf("process block tx error, tx = %v, err = %w", tx.Hash, err)
-				}
+		// 🆕 确保从区块读取的交易补齐 From（RLP不含From，需要本地恢复）
+		if tx.From == (types.Address{}) {
+			chainID := p.GetChainID()
+			signer := crypto.NewEIP155Signer(chainID, false)
+			if addr, err := signer.Sender(tx); err == nil {
+				tx.From = addr
+				p.logger.Info("🧩 从区块交易恢复发送者地址", "txHash", tx.Hash.String(), "from", tx.From.String())
+			} else {
+				p.logger.Error("🚨 无法从区块交易恢复发送者地址，将拒绝处理该交易", "txHash", tx.Hash.String(), "error", err)
+				return nil, fmt.Errorf("failed to recover sender from block tx: %w", err)
 			}
-		} else {
-			// DPoS实例不存在，按普通交易处理
-			if err = transition.Write(tx); err != nil {
-				return nil, fmt.Errorf("process block tx error, tx = %v, err = %w", tx.Hash, err)
+		}
+
+		// 统一进入 EVM 执行
+		if err = transition.Write(tx); err != nil {
+			return nil, fmt.Errorf("process block tx error, tx = %v, err = %w", tx.Hash, err)
+		}
+
+		// 执行后识别是否为提案交易，并触发 DPoS 业务处理（不影响 EVM 结果）
+		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+			if len(tx.Input) > 0 && (tx.To != nil) {
+				if kind, err := ParseProposalInput(tx.Input); err == nil {
+					p.logger.Info("检测到提案交易(EVM后置处理)", "kind", kind, "txHash", tx.Hash.String())
+					switch kind {
+					case "create":
+						if e := dposInstance.ProcessProposalCreateTransaction(tx, block.Number()); e != nil {
+							p.logger.Warn("提案创建业务处理失败(不影响EVM)", "err", e, "txHash", tx.Hash.String())
+						}
+					case "vote":
+						if e := dposInstance.ProcessProposalVoteTransaction(tx, block.Number()); e != nil {
+							p.logger.Warn("提案投票业务处理失败(不影响EVM)", "err", e, "txHash", tx.Hash.String())
+						}
+					case "execute":
+						if e := dposInstance.ProcessProposalExecuteTransaction(tx, block.Number()); e != nil {
+							p.logger.Warn("提案执行业务处理失败(不影响EVM)", "err", e, "txHash", tx.Hash.String())
+						}
+					}
+				}
 			}
 		}
 	}

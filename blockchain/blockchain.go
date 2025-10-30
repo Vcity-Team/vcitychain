@@ -771,6 +771,22 @@ func (br *BlockResult) verifyBlockResult(referenceBlock *types.Block) error {
 	// Make sure the receipts root matches up
 	receiptsRoot := buildroot.CalculateReceiptsRoot(br.Receipts)
 	if receiptsRoot != referenceBlock.Header.ReceiptsRoot {
+		// 🆕 详细的收据根对比日志
+		fmt.Printf("🚨🚨🚨 ========== 收据根验证失败 ========== 🚨🚨🚨\n")
+		fmt.Printf("🚨 区块号: %d\n", referenceBlock.Number())
+		fmt.Printf("🚨 区块哈希: %s\n", referenceBlock.Hash().String())
+		fmt.Printf("🚨 本地计算收据根: %s\n", receiptsRoot.String())
+		fmt.Printf("🚨 区块头收据根: %s\n", referenceBlock.Header.ReceiptsRoot.String())
+		fmt.Printf("🚨 收据数量: %d, 交易数量: %d\n", len(br.Receipts), len(referenceBlock.Transactions))
+		if len(br.Receipts) > 0 {
+			r0 := br.Receipts[0]
+			statusVal := uint64(0)
+			if r0.Status != nil {
+				statusVal = uint64(*r0.Status)
+			}
+			fmt.Printf("🚨 首条收据简要: status=%d gasUsed=%d cumulative=%d logs=%d\n", statusVal, r0.GasUsed, r0.CumulativeGasUsed, len(r0.Logs))
+		}
+		fmt.Printf("🚨🚨🚨 ========================================== 🚨🚨🚨\n")
 		return ErrInvalidReceiptsRoot
 	}
 

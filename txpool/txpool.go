@@ -1112,25 +1112,72 @@ func (p *TxPool) addGossipTx(obj interface{}, _ peer.ID) {
 	tx := new(types.Transaction)
 
 	// decode tx
-	if err := tx.UnmarshalRLP(raw.Raw.Value); err != nil {
+	rawBytes := raw.Raw.Value
+
+	// INFO: 打印接收到的gossip交易基本信息
+	if p.logger.IsInfo() {
+		p.logger.Info("🔎 接收到Gossip交易原始数据",
+			"rawLen", len(rawBytes),
+			"firstByte", func() string {
+				if len(rawBytes) > 0 {
+					return fmt.Sprintf("0x%02x", rawBytes[0])
+				}
+				return "<nil>"
+			}(),
+			"rawHeadHex", func() string {
+				if len(rawBytes) > 32 {
+					return fmt.Sprintf("%x", rawBytes[:32])
+				}
+				return fmt.Sprintf("%x", rawBytes)
+			}(),
+		)
+	}
+
+	// 按纯RLP处理（标准交易）
+	if err := tx.UnmarshalRLP(rawBytes); err != nil {
 		p.logger.Error("🚨 CRITICAL: failed to decode broadcast tx",
 			"err", err,
-			"rawDataLength", len(raw.Raw.Value),
+			"rawDataLength", len(rawBytes),
 			"rawDataHex", func() string {
-				if len(raw.Raw.Value) > 32 {
-					return fmt.Sprintf("%x", raw.Raw.Value[:32])
+				if len(rawBytes) > 32 {
+					return fmt.Sprintf("%x", rawBytes[:32])
 				}
-				return fmt.Sprintf("%x", raw.Raw.Value)
+				return fmt.Sprintf("%x", rawBytes)
 			}())
 
 		return
 	}
 
-	// From字段现在通过RLP序列化/反序列化正确传递，无需额外处理
+	// 解码后补齐哈希与发送者地址
+	currentNumber := uint64(0)
+	if hdr := p.store.Header(); hdr != nil {
+		currentNumber = hdr.Number
+	}
+	tx.ComputeHash(currentNumber)
+	if tx.From == types.ZeroAddress {
+		if addr, err := p.signer.Sender(tx); err == nil {
+			tx.From = addr
+		} else {
+			p.logger.Error("🚨 CRITICAL: failed to recover sender for gossip tx",
+				"err", err,
+				"txType", tx.Type,
+				"nonce", tx.Nonce)
+			return
+		}
+	}
 
-	// 🚨 检测解码后的交易
+	if p.logger.IsInfo() {
+		p.logger.Info("🧮 Gossip交易补齐完成",
+			"hash", tx.Hash.String(),
+			"from", tx.From.String(),
+			"txType", tx.Type.String(),
+			"nonce", tx.Nonce,
+			"blockNumUsedForHash", currentNumber)
+	}
+
+	// 最终零哈希保护
 	if tx.Hash == (types.Hash{}) {
-		p.logger.Error("🚨 CRITICAL: decoded gossip tx has zero hash",
+		p.logger.Error("🚨 CRITICAL: decoded gossip tx has zero hash after ComputeHash",
 			"txType", tx.Type,
 			"nonce", tx.Nonce,
 			"gasPrice", tx.GasPrice.String(),

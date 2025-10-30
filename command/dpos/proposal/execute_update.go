@@ -29,15 +29,23 @@ func GetExecuteUpdateCommand() *cobra.Command {
 	cmd.Flags().String("proposal-id", "", "提案ID (必需)")
 	cmd.MarkFlagRequired("proposal-id")
 
+	// 新增：执行者与私钥
+	cmd.Flags().String("executor", "", "执行者地址 (必需)")
+	cmd.Flags().String("executor-private-key", "", "执行者私钥 (hex, 64位, 必需)")
+	cmd.MarkFlagRequired("executor")
+	cmd.MarkFlagRequired("executor-private-key")
+
 	return cmd
 }
 
 func runExecuteUpdate(cmd *cobra.Command, args []string) error {
 	// 获取参数
 	proposalID, _ := cmd.Flags().GetString("proposal-id")
+	executor, _ := cmd.Flags().GetString("executor")
+	executorPrivKey, _ := cmd.Flags().GetString("executor-private-key")
 
 	// 调用RPC
-	response, err := callExecuteUpdateRPC(proposalID)
+	response, err := callExecuteUpdateRPC(proposalID, executor, executorPrivKey)
 	if err != nil {
 		return fmt.Errorf("RPC调用失败: %w", err)
 	}
@@ -49,13 +57,14 @@ func runExecuteUpdate(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func callExecuteUpdateRPC(proposalID string) (*ExecuteUpdateResponse, error) {
+func callExecuteUpdateRPC(proposalID, executor, executorPrivKey string) (*ExecuteUpdateResponse, error) {
 	// 构建JSON-RPC请求
 	rpcRequest := map[string]interface{}{
 		"jsonrpc": "2.0",
 		"method":  "dpos_executeParameterUpdate",
-		"params":  []string{proposalID},
-		"id":      1,
+		// 与 RPC 端保持一致，传入 [proposalID, executor, executorPrivateKey]
+		"params": []string{proposalID, executor, executorPrivKey},
+		"id":     1,
 	}
 
 	// 序列化请求

@@ -3421,7 +3421,7 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 		IsParameterVotable(parameter string) bool
 	}); ok {
 		if !checkVotable.IsParameterVotable(parameter) {
-			return nil, fmt.Errorf("invalid parameter: %s is not a votable parameter", parameter)
+				return nil, fmt.Errorf("invalid parameter: %s is not a votable parameter", parameter)
 		}
 	}
 
@@ -3444,6 +3444,7 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 
 	// 创建临时proposalID用于签名（最终ID会在ProcessProposalCreateTransaction中用交易哈希生成）
 	tempProposalID := fmt.Sprintf("proposal_temp_%s_%d_%s", proposer.String()[:8], nonce, parameter)
+	createdAtTs := uint64(time.Now().Unix())
 	tempProposal := &dpos.ParameterProposal{
 		ID:           tempProposalID,
 		ProposalType: "parameter",
@@ -3451,7 +3452,7 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 		Proposer:     proposer,
 		NewValue:     newValue,
 		Description:  description,
-		CreatedAt:    uint64(time.Now().Unix()),
+		CreatedAt:    createdAtTs,
 	}
 
 	// 5. 签名提案（使用DPoS引擎的方法）
@@ -3478,6 +3479,7 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 		NewValue:          newValue,
 		Description:       description,
 		ProposerSignature: proposerSignature,
+		CreatedAt:         createdAtTs,
 	}
 
 	// 7. 创建并签名交易
@@ -3496,7 +3498,7 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 
 	d.logger.Info("✅ 参数提案交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", finalProposalID)
 
-	return map[string]interface{}{
+		return map[string]interface{}{
 		"success":    true,
 		"txHash":     tx.Hash.String(),
 		"proposalId": finalProposalID,
@@ -3505,8 +3507,8 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 		"proposer":   proposer.String(),
 		"message":    "Parameter proposal transaction created and broadcasted successfully",
 		"note":       "Proposal will be created when transaction is included in a block",
-	}, nil
-}
+		}, nil
+	}
 
 // CreateRecoveryProposal 创建验证者恢复提案
 func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (interface{}, error) {
@@ -3606,6 +3608,19 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 		return nil, fmt.Errorf("DPoS engine not available")
 	}
 
+	// 1.1 业务前置校验：目标验证者必须处于故障状态（基于已落盘状态）
+	if checker, ok := dposEngine.(interface {
+		IsValidatorFaulty(addr types.Address) (bool, error)
+	}); ok {
+		isFaulty, err := checker.IsValidatorFaulty(validatorAddr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check validator faulty status: %w", err)
+		}
+		if !isFaulty {
+			return nil, fmt.Errorf("validator %s is not in faulty status", validatorAddr.String())
+		}
+	}
+
 	// 2. 获取nonce用于创建临时proposalID
 	var nonce uint64
 	if nonceStore, ok := d.store.(interface {
@@ -3616,6 +3631,7 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 
 	// 3. 创建临时提案对象用于签名
 	tempProposalID := fmt.Sprintf("recovery_temp_%s_%d_%s", proposer.String()[:8], nonce, validatorAddr.String()[:8])
+	createdAtTs := uint64(time.Now().Unix())
 	tempProposal := &dpos.ParameterProposal{
 		ID:               tempProposalID,
 		ProposalType:     "validator_recovery",
@@ -3624,7 +3640,7 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 		Proposer:         proposer,
 		RecoveryReason:   recoveryReason,
 		Description:      description,
-		CreatedAt:        uint64(time.Now().Unix()),
+		CreatedAt:        createdAtTs,
 	}
 
 	// 4. 签名提案
@@ -3648,6 +3664,7 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 		Description:       description,
 		RecoveryReason:    recoveryReason,
 		ProposerSignature: proposerSignature,
+		CreatedAt:         createdAtTs,
 	}
 
 	// 6. 创建并签名交易
@@ -3801,15 +3818,15 @@ func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) 
 
 	d.logger.Info("✅ 投票交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", proposalID, "voter", voter.String())
 
-	return map[string]interface{}{
-		"success":    true,
+		return map[string]interface{}{
+			"success":    true,
 		"txHash":     tx.Hash.String(),
-		"proposalId": proposalID,
-		"voter":      voter.String(),
-		"support":    support,
+			"proposalId": proposalID,
+			"voter":      voter.String(),
+			"support":    support,
 		"message":    "Vote transaction created and broadcasted successfully",
 		"note":       "Vote will be recorded when transaction is included in a block",
-	}, nil
+		}, nil
 }
 
 // GetParameterProposal 获取提案信息
@@ -4415,7 +4432,7 @@ func (d *DPOS) ExecuteParameterUpdate(ctx context.Context, params interface{}) (
 
 	// 3. 创建并签名交易
 	tx, err := d.createProposalExecuteTransaction(executor, executorPrivateKeyHex, txData)
-	if err != nil {
+		if err != nil {
 		return nil, fmt.Errorf("failed to create execute transaction: %w", err)
 	}
 
@@ -4426,14 +4443,14 @@ func (d *DPOS) ExecuteParameterUpdate(ctx context.Context, params interface{}) (
 
 	d.logger.Info("✅ 执行提案交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", proposalID)
 
-	return map[string]interface{}{
-		"success":    true,
+		return map[string]interface{}{
+			"success":    true,
 		"txHash":     tx.Hash.String(),
-		"proposalId": proposalID,
+			"proposalId": proposalID,
 		"executor":   executor.String(),
 		"message":    "Execute proposal transaction created and broadcasted successfully",
 		"note":       "Proposal will be executed when transaction is included in a block",
-	}, nil
+		}, nil
 }
 
 // getCurrentProposalPeriodInfo 获取当前提案周期信息
@@ -4641,16 +4658,33 @@ func (d *DPOS) createProposalCreateTransaction(proposer types.Address, proposerP
 		nonce = nonceStore.GetNonce(proposer)
 	}
 
-	// 获取gas price
-	var gasPrice *big.Int
-	if gasStore, ok := d.store.(interface {
-		GetBaseFee() uint64
-	}); ok {
-		baseFee := gasStore.GetBaseFee()
-		gasPrice = new(big.Int).SetUint64(baseFee)
-	} else {
-		gasPrice = big.NewInt(1000000000) // 1 gwei default
+	// 计算 gasPrice = max(baseFee, priceLimit) 并预留少量余量，避免 underpriced
+	var baseFee uint64
+	if gasStore, ok := d.store.(interface{ GetBaseFee() uint64 }); ok {
+		baseFee = gasStore.GetBaseFee()
 	}
+	var priceLimit uint64
+	if txpoolStore, ok := d.store.(interface{ GetTxPool() interface{} }); ok {
+		if tp := txpoolStore.GetTxPool(); tp != nil {
+			if dbg, ok := tp.(interface{ DebugInfo() map[string]interface{} }); ok {
+				if info := dbg.DebugInfo(); info != nil {
+					if pl, ok := info["priceLimit"].(uint64); ok {
+						priceLimit = pl
+					}
+				}
+			}
+		}
+	}
+	// 选择更高者，并+10% 作为余量
+	maxBase := baseFee
+	if priceLimit > maxBase {
+		maxBase = priceLimit
+	}
+	if maxBase == 0 {
+		maxBase = 1_000_000_000
+	} // 1 gwei 兜底
+	gasPrice := new(big.Int).SetUint64(maxBase + (maxBase / 10))
+	d.logger.Info("🛠️ 构建标准EVM交易(创建提案)", "baseFee", baseFee, "priceLimit", priceLimit, "chosenGasPrice", gasPrice.String())
 
 	// 序列化交易数据
 	txDataBytes, err := json.Marshal(txData)
@@ -4658,15 +4692,15 @@ func (d *DPOS) createProposalCreateTransaction(proposer types.Address, proposerP
 		return nil, fmt.Errorf("failed to marshal proposal create tx data: %w", err)
 	}
 
-	// 创建交易（不签名，先计算哈希）
+	// 创建标准交易（Legacy），目标为 self-call（无代码则 no-op）
+	to := proposer
 	tx := &types.Transaction{
 		Nonce:    nonce,
 		GasPrice: gasPrice,
 		Gas:      200000, // 提案交易gas limit
-		To:       nil,
+		To:       &to,
 		Value:    big.NewInt(0),
 		Input:    txDataBytes,
-		Type:     types.ProposalCreateTx,
 		V:        big.NewInt(0),
 		R:        big.NewInt(0),
 		S:        big.NewInt(0),
@@ -4697,16 +4731,32 @@ func (d *DPOS) createProposalVoteTransaction(voter types.Address, privateKeyHex 
 		nonce = nonceStore.GetNonce(voter)
 	}
 
-	// 获取gas price
-	var gasPrice *big.Int
-	if gasStore, ok := d.store.(interface {
-		GetBaseFee() uint64
-	}); ok {
-		baseFee := gasStore.GetBaseFee()
-		gasPrice = new(big.Int).SetUint64(baseFee)
-	} else {
-		gasPrice = big.NewInt(1000000000)
+	// 计算 gasPrice = max(baseFee, priceLimit) 并+10%
+	var baseFee uint64
+	if gasStore, ok := d.store.(interface{ GetBaseFee() uint64 }); ok {
+		baseFee = gasStore.GetBaseFee()
 	}
+	var priceLimit uint64
+	if txpoolStore, ok := d.store.(interface{ GetTxPool() interface{} }); ok {
+		if tp := txpoolStore.GetTxPool(); tp != nil {
+			if dbg, ok := tp.(interface{ DebugInfo() map[string]interface{} }); ok {
+				if info := dbg.DebugInfo(); info != nil {
+					if pl, ok := info["priceLimit"].(uint64); ok {
+						priceLimit = pl
+					}
+				}
+			}
+		}
+	}
+	maxBase := baseFee
+	if priceLimit > maxBase {
+		maxBase = priceLimit
+	}
+	if maxBase == 0 {
+		maxBase = 1_000_000_000
+	}
+	gasPrice := new(big.Int).SetUint64(maxBase + (maxBase / 10))
+	d.logger.Info("🛠️ 构建标准EVM交易(投票)", "baseFee", baseFee, "priceLimit", priceLimit, "chosenGasPrice", gasPrice.String())
 
 	// 序列化交易数据
 	txDataBytes, err := json.Marshal(txData)
@@ -4714,15 +4764,15 @@ func (d *DPOS) createProposalVoteTransaction(voter types.Address, privateKeyHex 
 		return nil, fmt.Errorf("failed to marshal proposal vote tx data: %w", err)
 	}
 
-	// 创建交易
+	// 创建标准交易（Legacy），目标 self-call
+	to := voter
 	tx := &types.Transaction{
 		Nonce:    nonce,
 		GasPrice: gasPrice,
 		Gas:      150000,
-		To:       nil,
+		To:       &to,
 		Value:    big.NewInt(0),
 		Input:    txDataBytes,
-		Type:     types.ProposalVoteTx,
 		V:        big.NewInt(0),
 		R:        big.NewInt(0),
 		S:        big.NewInt(0),
@@ -4750,16 +4800,32 @@ func (d *DPOS) createProposalExecuteTransaction(executor types.Address, privateK
 		nonce = nonceStore.GetNonce(executor)
 	}
 
-	// 获取gas price
-	var gasPrice *big.Int
-	if gasStore, ok := d.store.(interface {
-		GetBaseFee() uint64
-	}); ok {
-		baseFee := gasStore.GetBaseFee()
-		gasPrice = new(big.Int).SetUint64(baseFee)
-	} else {
-		gasPrice = big.NewInt(1000000000)
+	// 计算 gasPrice = max(baseFee, priceLimit) 并+10%
+	var baseFee uint64
+	if gasStore, ok := d.store.(interface{ GetBaseFee() uint64 }); ok {
+		baseFee = gasStore.GetBaseFee()
 	}
+	var priceLimit uint64
+	if txpoolStore, ok := d.store.(interface{ GetTxPool() interface{} }); ok {
+		if tp := txpoolStore.GetTxPool(); tp != nil {
+			if dbg, ok := tp.(interface{ DebugInfo() map[string]interface{} }); ok {
+				if info := dbg.DebugInfo(); info != nil {
+					if pl, ok := info["priceLimit"].(uint64); ok {
+						priceLimit = pl
+					}
+				}
+			}
+		}
+	}
+	maxBase := baseFee
+	if priceLimit > maxBase {
+		maxBase = priceLimit
+	}
+	if maxBase == 0 {
+		maxBase = 1_000_000_000
+	}
+	gasPrice := new(big.Int).SetUint64(maxBase + (maxBase / 10))
+	d.logger.Info("🛠️ 构建标准EVM交易(执行提案)", "baseFee", baseFee, "priceLimit", priceLimit, "chosenGasPrice", gasPrice.String())
 
 	// 序列化交易数据
 	txDataBytes, err := json.Marshal(txData)
@@ -4767,15 +4833,15 @@ func (d *DPOS) createProposalExecuteTransaction(executor types.Address, privateK
 		return nil, fmt.Errorf("failed to marshal proposal execute tx data: %w", err)
 	}
 
-	// 创建交易
+	// 创建标准交易（Legacy），目标 self-call
+	to := executor
 	tx := &types.Transaction{
 		Nonce:    nonce,
 		GasPrice: gasPrice,
 		Gas:      200000,
-		To:       nil,
+		To:       &to,
 		Value:    big.NewInt(0),
 		Input:    txDataBytes,
-		Type:     types.ProposalExecuteTx,
 		V:        big.NewInt(0),
 		R:        big.NewInt(0),
 		S:        big.NewInt(0),

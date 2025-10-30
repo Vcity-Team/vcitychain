@@ -50,6 +50,8 @@ var (
 	globalNewStateRoot types.Hash
 	// globalNewStateRootMutex 保护globalNewStateRoot的读写锁
 	globalNewStateRootMutex sync.RWMutex
+	// ErrBusinessInvalid 标识业务前置条件不满足的非共识性错误（用于不中断区块执行）
+	ErrBusinessInvalid = errors.New("business invalid")
 )
 
 // RegisterDPoSInstance 注册DPoS实例
@@ -85,6 +87,44 @@ func UnregisterDPoSInstance(key string) {
 	dposMutex.Lock()
 	defer dposMutex.Unlock()
 	delete(dposInstances, key)
+}
+
+// ParseProposalInput 解析标准交易 input 中的提案载荷，返回类别：create / vote / execute
+func ParseProposalInput(input []byte) (string, error) {
+	if len(input) == 0 {
+		return "", fmt.Errorf("empty input")
+	}
+	var generic map[string]any
+	if err := json.Unmarshal(input, &generic); err != nil {
+		return "", err
+	}
+	// 判断 create：包含 proposalType（parameter / validator_recovery）
+	if v, ok := generic["proposalType"].(string); ok && v != "" {
+		return "create", nil
+	}
+	// 判断 vote：包含 support 且包含 proposalId
+	if _, ok := generic["support"]; ok {
+		if id, ok2 := generic["proposalId"].(string); ok2 && id != "" {
+			return "vote", nil
+		}
+	}
+	// 判断 execute：仅包含 proposalId
+	if id, ok := generic["proposalId"].(string); ok && id != "" {
+		return "execute", nil
+	}
+	return "", fmt.Errorf("not a proposal payload")
+}
+
+// IsValidatorFaulty 返回验证者是否处于故障状态（基于已持久化/确定性的状态信息）
+func (d *DPoS) IsValidatorFaulty(addr types.Address) (bool, error) {
+	// 目前复用内部的故障信息读取逻辑。
+	// 要求该方法仅依据各节点可一致获取的数据源（落盘或确定性内存镜像）。
+	info := d.getValidatorFaultInfo(addr)
+	if info == nil {
+		return false, nil
+	}
+	isFaulty, _ := info["isFaulty"].(bool)
+	return isFaulty, nil
 }
 
 // StakeInfo 质押信息结构体
@@ -179,6 +219,7 @@ type ProposalCreateTxData struct {
 	Description       string      `json:"description"`              // 提案描述
 	RecoveryReason    string      `json:"recoveryReason,omitempty"` // 恢复理由（仅用于恢复提案）
 	ProposerSignature []byte      `json:"proposerSignature"`        // 提案签名
+	CreatedAt         uint64      `json:"createdAt"`                // 签名时间戳（用于验签一致性）
 }
 
 // ProposalVoteTxData 投票交易数据
@@ -1075,9 +1116,33 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 			shouldProduce := r.shouldProduceBlockNow()
 
 			if shouldProduce {
+				// 在同一行追加 genesisTime 与 validatorsOrdered
+				var genesisStr string
+				var validators []string
+				if r.config != nil && r.config.blockScheduler != nil {
+					genesisStr = r.config.blockScheduler.GetGenesisTime().Format("2006-01-02 15:04:05.000")
+					if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+						for _, d := range r.delegates {
+							info := dposInstance.getValidatorFaultInfo(d.Address)
+							isFaulty := false
+							if v, ok := info["isFaulty"].(bool); ok {
+								isFaulty = v
+							}
+							if !isFaulty {
+								validators = append(validators, d.Address.String())
+							}
+						}
+					} else {
+						for _, d := range r.delegates {
+							validators = append(validators, d.Address.String())
+						}
+					}
+				}
 				r.logOnceWithInterval("should_produce_start", 2*time.Second, "info",
 					"✅ shouldProduceBlockNow返回true，开始出块",
-					"timestamp", time.Now().Format("15:04:05.000"))
+					"timestamp", time.Now().Format("15:04:05.000"),
+					"genesisTime", genesisStr,
+					"validatorsOrdered", validators)
 				if err := r.produceBlock(); err != nil {
 					r.logger.Error("出块失败", "error", err)
 				}
@@ -1716,9 +1781,9 @@ func (r *dposRuntime) produceBlock() error {
 		r.logger.Info("⚪💎💫 EMPTY BLOCK SEALED 💫💎⚪", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String(), "timeSinceLastBlock", timeSinceLastBlock.String(), "lastBlockNumber", lastBlockNum)
 	} else if txCount >= 1 {
 		// 包含交易的区块 - 添加明显的特殊标记
-		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK SEALED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "timeSinceLastBlock", timeSinceLastBlock.String(), "lastBlockNumber", lastBlockNum)
-		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK SEALED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "timeSinceLastBlock", timeSinceLastBlock.String(), "lastBlockNumber", lastBlockNum)
-		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK SEALED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "timeSinceLastBlock", timeSinceLastBlock.String(), "lastBlockNumber", lastBlockNum)
+		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK SEALED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String(), "timeSinceLastBlock", timeSinceLastBlock.String(), "lastBlockNumber", lastBlockNum)
+		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK SEALED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String(), "timeSinceLastBlock", timeSinceLastBlock.String(), "lastBlockNumber", lastBlockNum)
+		r.logger.Info("🚀🚀🚀 TRANSACTION BLOCK SEALED 🚀🚀🚀", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "blockStateRoot", block.Block.Header.StateRoot.String(), "timeSinceLastBlock", timeSinceLastBlock.String(), "lastBlockNumber", lastBlockNum)
 	} else {
 		// 🆕 包含多个交易的区块 - 使用更显著的标记，加上各种符号
 		r.logger.Warn("🎉🎊🎆🎈 *** MULTI-TX BLOCK SEALED *** 🎈🎆🎊🎉", "number", block.Block.Number(), "hash", block.Block.Hash(), "txCount", txCount, "timeSinceLastBlock", timeSinceLastBlock.String(), "lastBlockNumber", lastBlockNum)
@@ -3645,22 +3710,10 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 		maxValidators = int(d.config.DelegateCount) // 回退到旧配置
 	}
 
-	// 🆕 详细调试信息
-	d.logger.Debug("🔍 GetSortedValidatorsWithLimit 截取逻辑",
-		"原始验证者数量", len(validators),
-		"配置DPoSValidatorsCount", d.config.DPoSValidatorsCount,
-		"配置DelegateCount", d.config.DelegateCount,
-		"最终maxValidators", maxValidators)
+	// 调试日志精简（移除噪音）
 
 	if maxValidators > 0 && len(validators) > maxValidators {
-		d.logger.Debug("✂️ 执行截取",
-			"截取前", len(validators),
-			"截取后", maxValidators)
 		validators = validators[:maxValidators]
-	} else {
-		d.logger.Debug("✅ 无需截取",
-			"验证者数量", len(validators),
-			"最大限制", maxValidators)
 	}
 
 	return validators, nil
@@ -4827,7 +4880,7 @@ func (d *DPoS) ProcessProposalCreateTransaction(tx *types.Transaction, blockNumb
 		faultInfo := d.getValidatorFaultInfo(validatorAddr)
 		isFaulty, ok := faultInfo["isFaulty"].(bool)
 		if !ok || !isFaulty {
-			return fmt.Errorf("validator %s is not in faulty status", validatorAddr.String())
+			return fmt.Errorf("%w: validator %s is not in faulty status", ErrBusinessInvalid, validatorAddr.String())
 		}
 
 		oldValue := map[string]interface{}{
@@ -4863,7 +4916,7 @@ func (d *DPoS) ProcessProposalCreateTransaction(tx *types.Transaction, blockNumb
 			Threshold:         d.getVotingThreshold(),
 			Description:       txData.Description,
 			RecoveryReason:    txData.RecoveryReason,
-			CreatedAt:         uint64(time.Now().Unix()),
+			CreatedAt:         txData.CreatedAt,
 			ProposalSignature: txData.ProposerSignature,
 		}
 	} else {
@@ -4894,7 +4947,7 @@ func (d *DPoS) ProcessProposalCreateTransaction(tx *types.Transaction, blockNumb
 			Votes:             make(map[types.Address]ParameterVote),
 			Threshold:         d.getVotingThreshold(),
 			Description:       txData.Description,
-			CreatedAt:         uint64(time.Now().Unix()),
+			CreatedAt:         txData.CreatedAt,
 			ProposalSignature: txData.ProposerSignature,
 		}
 	}
@@ -5422,7 +5475,7 @@ func (d *DPoS) getValidatorVotingWeight(validator types.Address) *big.Int {
 
 // buildVoteMessage 构造投票签名消息
 func (d *DPoS) buildVoteMessage(vote *ParameterVote) []byte {
-	// 构造签名消息：投票者地址 + 提案ID + 支持/反对 + 时间戳 + 链ID
+	// 构造签名消息：投票者地址 + 提案ID + 支持/反对 + 链ID（去掉时间戳，避免时序不一致）
 	data := make([]byte, 0)
 
 	// 1. 投票者地址 (20字节)
@@ -5442,12 +5495,7 @@ func (d *DPoS) buildVoteMessage(vote *ParameterVote) []byte {
 		data = append(data, byte(0x00))
 	}
 
-	// 4. 时间戳 (8字节)
-	timestampBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(timestampBytes, vote.Timestamp)
-	data = append(data, timestampBytes...)
-
-	// 5. 链ID (8字节，如果config中有chainID)
+	// 4. 链ID (8字节，如果config中有chainID)
 	var chainID uint64
 	if d.config != nil && d.config.Blockchain != nil && d.config.Blockchain.Config() != nil {
 		chainID = uint64(d.config.Blockchain.Config().ChainID)
@@ -5463,7 +5511,6 @@ func (d *DPoS) buildVoteMessage(vote *ParameterVote) []byte {
 		"voter", vote.Voter.String(),
 		"proposalID", vote.ProposalID,
 		"support", vote.Support,
-		"timestamp", vote.Timestamp,
 		"chainID", chainID,
 		"messageHash", hex.EncodeToString(message))
 

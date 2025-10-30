@@ -335,6 +335,115 @@ func (t *Transition) Receipts() []*types.Receipt {
 	return t.receipts
 }
 
+// AppendSystemReceipt appends a receipt for a transaction that was processed
+// outside of the EVM, without modifying gas accounting. This is useful for
+// consensus/system-level transactions that still require a receipt to keep the
+// receipts count in sync with the number of block transactions.
+func (t *Transition) AppendSystemReceipt(txn *types.Transaction, success bool) {
+	receipt := &types.Receipt{
+		CumulativeGasUsed: t.totalGas,
+		// Use the same transaction type as the original tx to align encoding (typed vs legacy)
+		TransactionType: txn.Type,
+		TxHash:          txn.Hash,
+		GasUsed:         0,
+	}
+
+	if success {
+		receipt.SetStatus(types.ReceiptSuccess)
+	} else {
+		receipt.SetStatus(types.ReceiptFailed)
+	}
+
+	// No logs for system-handled transactions by default
+	receipt.Logs = nil
+	receipt.LogsBloom = types.CreateBloom([]*types.Receipt{receipt})
+
+	t.receipts = append(t.receipts, receipt)
+}
+
+// AppendSystemReceiptWithGas appends a receipt with an explicit GasUsed value.
+func (t *Transition) AppendSystemReceiptWithGas(txn *types.Transaction, gasUsed uint64, success bool) {
+	receipt := &types.Receipt{
+		CumulativeGasUsed: t.totalGas,
+		// Use the same transaction type as the original tx to align encoding (typed vs legacy)
+		TransactionType: txn.Type,
+		TxHash:          txn.Hash,
+		GasUsed:         gasUsed,
+	}
+
+	if success {
+		receipt.SetStatus(types.ReceiptSuccess)
+	} else {
+		receipt.SetStatus(types.ReceiptFailed)
+	}
+
+	receipt.Logs = nil
+	receipt.LogsBloom = types.CreateBloom([]*types.Receipt{receipt})
+	t.receipts = append(t.receipts, receipt)
+}
+
+// SettleSystemTxGas performs EVM-like gas accounting for system-handled transactions
+// without executing EVM code. It settles fees, updates balances, nonce, gas pool,
+// and appends a receipt with the provided gasUsed.
+func (t *Transition) SettleSystemTxGas(txn *types.Transaction, gasUsed uint64, success bool) error {
+	// 1) Consensus checks similar to normal tx path
+	if err := t.nonceCheck(txn); err != nil {
+		return NewTransitionApplicationError(err, true)
+	}
+	if !t.ctx.NonPayable {
+		if err := t.checkDynamicFees(txn); err != nil {
+			return NewTransitionApplicationError(err, true)
+		}
+		if err := t.subGasLimitPrice(txn); err != nil {
+			return NewTransitionApplicationError(err, true)
+		}
+	}
+
+	// 2) Reserve block gas
+	if err := t.subGasPool(txn.Gas); err != nil {
+		return NewGasLimitReachedTransitionApplicationError(err)
+	}
+
+	// 3) Increment sender nonce
+	if err := t.state.IncrNonce(txn.From); err != nil {
+		return err
+	}
+
+	// 4) Use full gas (tx.Gas) as gasUsed to mirror producer behavior for system txs
+	gasUsed = txn.Gas
+	gasLeft := txn.Gas - gasUsed
+
+	gasPrice := txn.GetGasPrice(t.ctx.BaseFee.Uint64())
+
+	// Refund unused gas to sender
+	if gasLeft > 0 {
+		remaining := new(big.Int).Mul(new(big.Int).SetUint64(gasLeft), gasPrice)
+		t.state.AddBalance(txn.From, remaining)
+	}
+
+	// Miner tip
+	effectiveTip := GetLondonFixHandler(uint64(t.ctx.Number)).getEffectiveTip(
+		txn, gasPrice, t.ctx.BaseFee, t.config.London,
+	)
+	coinbaseFee := new(big.Int).Mul(new(big.Int).SetUint64(gasUsed), effectiveTip)
+	t.state.AddBalance(t.ctx.Coinbase, coinbaseFee)
+
+	// Burn base fee if London
+	if t.config.London && txn.Type != types.StateTx {
+		burnAmount := new(big.Int).Mul(new(big.Int).SetUint64(gasUsed), t.ctx.BaseFee)
+		t.state.AddBalance(t.ctx.BurnContract, burnAmount)
+	}
+
+	// 5) Return unused gas to pool
+	t.addGasPool(gasLeft)
+
+	// 6) Update cumulative gas and append receipt
+	t.totalGas += gasUsed
+	t.AppendSystemReceiptWithGas(txn, gasUsed, success)
+
+	return nil
+}
+
 var emptyFrom = types.Address{}
 
 // Write writes another transaction to the executor
