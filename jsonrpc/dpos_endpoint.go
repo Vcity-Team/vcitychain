@@ -3421,7 +3421,7 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 		IsParameterVotable(parameter string) bool
 	}); ok {
 		if !checkVotable.IsParameterVotable(parameter) {
-				return nil, fmt.Errorf("invalid parameter: %s is not a votable parameter", parameter)
+			return nil, fmt.Errorf("invalid parameter: %s is not a votable parameter", parameter)
 		}
 	}
 
@@ -3498,7 +3498,7 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 
 	d.logger.Info("✅ 参数提案交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", finalProposalID)
 
-		return map[string]interface{}{
+	return map[string]interface{}{
 		"success":    true,
 		"txHash":     tx.Hash.String(),
 		"proposalId": finalProposalID,
@@ -3507,8 +3507,8 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 		"proposer":   proposer.String(),
 		"message":    "Parameter proposal transaction created and broadcasted successfully",
 		"note":       "Proposal will be created when transaction is included in a block",
-		}, nil
-	}
+	}, nil
+}
 
 // CreateRecoveryProposal 创建验证者恢复提案
 func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (interface{}, error) {
@@ -3818,15 +3818,15 @@ func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) 
 
 	d.logger.Info("✅ 投票交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", proposalID, "voter", voter.String())
 
-		return map[string]interface{}{
-			"success":    true,
+	return map[string]interface{}{
+		"success":    true,
 		"txHash":     tx.Hash.String(),
-			"proposalId": proposalID,
-			"voter":      voter.String(),
-			"support":    support,
+		"proposalId": proposalID,
+		"voter":      voter.String(),
+		"support":    support,
 		"message":    "Vote transaction created and broadcasted successfully",
 		"note":       "Vote will be recorded when transaction is included in a block",
-		}, nil
+	}, nil
 }
 
 // GetParameterProposal 获取提案信息
@@ -4432,7 +4432,7 @@ func (d *DPOS) ExecuteParameterUpdate(ctx context.Context, params interface{}) (
 
 	// 3. 创建并签名交易
 	tx, err := d.createProposalExecuteTransaction(executor, executorPrivateKeyHex, txData)
-		if err != nil {
+	if err != nil {
 		return nil, fmt.Errorf("failed to create execute transaction: %w", err)
 	}
 
@@ -4443,14 +4443,14 @@ func (d *DPOS) ExecuteParameterUpdate(ctx context.Context, params interface{}) (
 
 	d.logger.Info("✅ 执行提案交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", proposalID)
 
-		return map[string]interface{}{
-			"success":    true,
+	return map[string]interface{}{
+		"success":    true,
 		"txHash":     tx.Hash.String(),
-			"proposalId": proposalID,
+		"proposalId": proposalID,
 		"executor":   executor.String(),
 		"message":    "Execute proposal transaction created and broadcasted successfully",
 		"note":       "Proposal will be executed when transaction is included in a block",
-		}, nil
+	}, nil
 }
 
 // getCurrentProposalPeriodInfo 获取当前提案周期信息
