@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/Vcity-Team/vcitychain/blockchain/storage"
 	"github.com/Vcity-Team/vcitychain/chain"
@@ -70,6 +71,11 @@ type Blockchain struct {
 	currentDifficulty atomic.Pointer[big.Int]      // The current difficulty of the chain (total difficulty)
 
 	stream *eventStream // Event subscriptions
+
+	// 🆕 记录上次本地生产的区块信息（用于统计）
+	lastProducedBlockNumber uint64     // 上次生产的区块号
+	lastProducedBlockTime   time.Time  // 上次生产区块的时间
+	lastProducedBlockMutex  sync.Mutex // 保护上次生产区块信息的互斥锁
 
 	gpAverage *gasPriceAverage // A reference to the average gas price
 
@@ -929,9 +935,40 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 	// 🆕 根据 source 区分本地生产和同步区块的日志消息
 	logMessage := "💎 新区块写入"
 	if source == "consensus" {
-		logMessage = "🏭 ++++++++++++++++++++++++++++++本地生产新区块写入+++++++++++++++++++++++++++++"
+		// 🆕 本地生产区块：计算与上次生产的区块间隔
+		b.lastProducedBlockMutex.Lock()
+		lastBlockNumber := b.lastProducedBlockNumber
+		lastBlockTime := b.lastProducedBlockTime
+		currentBlockTime := time.Unix(int64(header.Timestamp), 0)
+
+		// 计算区块间隔和时间间隔
+		var blockInterval uint64 = 0
+		var timeInterval time.Duration = 0
+		if lastBlockNumber > 0 {
+			if header.Number > lastBlockNumber {
+				blockInterval = header.Number - lastBlockNumber
+			}
+			if !lastBlockTime.IsZero() {
+				timeInterval = currentBlockTime.Sub(lastBlockTime)
+			}
+		}
+
+		// 更新上次生产的区块信息
+		b.lastProducedBlockNumber = header.Number
+		b.lastProducedBlockTime = currentBlockTime
+		b.lastProducedBlockMutex.Unlock()
+
+		// 添加到日志参数
+		logArgs = append(logArgs,
+			"lastProducedBlockNumber", lastBlockNumber, // 🆕 上次生产的区块号
+			"blockInterval", blockInterval, // 🆕 区块间隔（当前区块号 - 上次区块号）
+			"timeInterval", timeInterval.String(), // 🆕 时间间隔
+			"timeIntervalSeconds", timeInterval.Seconds(), // 🆕 时间间隔（秒）
+		)
+
+		logMessage = "🏭🏭 🏭 🏭 🏭 🏭 🏭 🏭 🏭 🏭 🏭 🏭 🏭 🏭 🏭 🏭 🏭 🏭 本地生产新区块写入"
 	} else if source == "syncer" {
-		logMessage = "📥 同步新区块写入"
+		logMessage = "📥📥📥📥📥📥📥📥📥📥 同步新区块写入"
 	}
 
 	b.logger.Info(logMessage, logArgs...)
