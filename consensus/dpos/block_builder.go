@@ -177,8 +177,8 @@ func (b *BlockBuilder) Fill() {
 
 	b.params.TxPool.Prepare()
 
-	hasTransactions := false  // 🆕 跟踪是否有交易
-	startTime := time.Now()   // 🆕 记录开始时间
+	hasSuccessfulTransactions := false // 🆕 跟踪是否有成功处理的交易
+	startTime := time.Now()            // 🆕 记录开始时间
 
 write:
 	for {
@@ -190,19 +190,22 @@ write:
 
 			// 🆕 如果没有交易，立即返回（不等待定时器）
 			if tx == nil {
-				if !hasTransactions {
+				// 🆕 如果没有成功处理的交易，立即返回（即使尝试过交易但都失败）
+				if !hasSuccessfulTransactions {
 					return
 				}
-				// 如果有交易但处理完了，等待剩余时间
+				// 如果有成功处理的交易，等待剩余时间
 				break write
 			}
-
-			hasTransactions = true // 🆕 标记有交易
 
 			// execute transactions one by one
 			finished, err := b.writeTxPoolTransaction(tx)
 			if err != nil {
 				b.params.Logger.Debug("Fill transaction error", "hash", tx.Hash, "err", err)
+				// 🆕 交易失败，不标记为成功处理
+			} else {
+				// 🆕 只有成功处理的交易才标记
+				hasSuccessfulTransactions = true
 			}
 
 			if finished {
@@ -211,9 +214,9 @@ write:
 		}
 	}
 
-	// 🆕 只有在有交易时才等待定时器到期
-	// 如果没有交易，直接返回（不等待）
-	if hasTransactions {
+	// 🆕 只有在有成功处理的交易时才等待定时器到期
+	// 如果所有交易都失败，立即返回（不等待），避免2秒延迟
+	if hasSuccessfulTransactions {
 		elapsed := time.Since(startTime)
 		remaining := b.params.BlockTime - elapsed
 		if remaining > 0 {
@@ -226,7 +229,7 @@ write:
 			}
 		}
 	}
-	// 如果没有交易，直接返回（不等待）
+	// 🆕 如果所有交易都失败，立即返回（不等待），消除约2秒延迟
 }
 
 // Receipts returns the collection of transaction receipts for given block

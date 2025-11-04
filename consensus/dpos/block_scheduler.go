@@ -16,12 +16,12 @@ type BlockchainInterface interface {
 
 // BlockScheduler 是固定时间窗口调度器，用于TRON模式的区块生产调度
 type BlockScheduler struct {
-	blockWindow          time.Duration
-	genesisTime          time.Time
-	delegateCount        int
-	blockchain           BlockchainInterface
+	blockWindow           time.Duration
+	genesisTime           time.Time
+	delegateCount         int
+	blockchain            BlockchainInterface
 	consensusSwitchHeight uint64
-	logger               hclog.Logger
+	logger                hclog.Logger
 	// 🆕 日志间隔管理
 	lastLogTime map[string]time.Time
 	logMutex    sync.RWMutex
@@ -45,13 +45,13 @@ func NewBlockScheduler(
 	}
 
 	return &BlockScheduler{
-		blockWindow:          blockWindow,
-		genesisTime:          genesisTime,
-		delegateCount:        delegateCount,
+		blockWindow:           blockWindow,
+		genesisTime:           genesisTime,
+		delegateCount:         delegateCount,
 		blockchain:            blockchain,
 		consensusSwitchHeight: consensusSwitchHeight,
 		logger:                logger,
-		lastLogTime:          make(map[string]time.Time),
+		lastLogTime:           make(map[string]time.Time),
 	}
 }
 
@@ -60,11 +60,11 @@ func (bs *BlockScheduler) logOnceWithInterval(key string, interval time.Duration
 	bs.logMutex.Lock()
 	lastTime, exists := bs.lastLogTime[key]
 	now := time.Now()
-	
+
 	if !exists || now.Sub(lastTime) >= interval {
 		bs.lastLogTime[key] = now
 		bs.logMutex.Unlock()
-		
+
 		// 根据级别输出日志
 		switch level {
 		case "debug":
@@ -101,8 +101,8 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 
 	if len(validators) == 0 {
 		bs.logger.Debug("❌ ShouldProduceBlockNow: 验证者列表为空")
-			return false
-		}
+		return false
+	}
 
 	// 检查是否在共识切换高度之后
 	if blockNumber < bs.consensusSwitchHeight {
@@ -126,6 +126,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 		return false
 	}
 
+	// 计算当前slot应该出块的验证者索引（TRON方式：完全基于时间slot）
 	currentValidatorIndex := currentSlot % activeValidatorCount
 
 	// 检查当前验证者是否是本节点
@@ -139,21 +140,20 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	expectedValidator := validators[currentValidatorIndex]
 	isMatch := expectedValidator == myAddress
 
-	// 🆕 添加详细的调试日志（10秒间隔，避免刷屏）
-	bs.logOnceWithInterval("should_produce_block_now_detail", 10*time.Second, "debug",
-		"🔍 ShouldProduceBlockNow 详细检查",
-		"myAddress", myAddress.String(),
-		"expectedValidator", expectedValidator.String(),
-		"isMatch", isMatch,
-		"currentSlot", currentSlot,
-		"currentValidatorIndex", currentValidatorIndex,
-		"activeValidatorCount", activeValidatorCount,
+	// ========== 🆕 详细日志：打印ShouldProduceBlockNow中的验证者列表和验证结果（1秒间隔，避免刷屏） ==========
+	bs.logOnceWithInterval("should_produce_block_now_validators_detail", 1*time.Second, "info",
+		"🔍 ShouldProduceBlockNow 中的验证者列表和验证详情",
 		"blockNumber", blockNumber,
+		"currentSlot", currentSlot,
+		"activeValidatorCount", activeValidatorCount,
+		"myAddress", myAddress.String(),
+		"expectedValidator", fmt.Sprintf("[%d]%s", currentValidatorIndex, expectedValidator.String()),
+		"isMatch", isMatch,
+		"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
+		"now", now.Format("2006-01-02 15:04:05.000"),
 		"timeSinceGenesis", timeSinceGenesis.String(),
 		"blockWindow", bs.blockWindow.String(),
-			"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
-			"now", now.Format("2006-01-02 15:04:05.000"),
-		"validators", func() []string {
+		"validatorsList", func() []string {
 			var vs []string
 			for i, v := range validators {
 				vs = append(vs, fmt.Sprintf("[%d]%s", i, v.String()))
@@ -311,17 +311,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		return result
 	}
 
-	// 回退到原有逻辑（不使用blockScheduler时）
-	result := r.shouldProduceBlock()
-
-	// 🆕 添加回退逻辑结果日志（使用Debug级别）
-	r.logOnceWithInterval("fallback_should_produce_result", 5*time.Second, "debug",
-		"🔍 回退逻辑结果",
-		"shouldProduce", result,
-		"currentBlockNumber", currentBlock.Number,
-		"timestamp", time.Now().Format("15:04:05.000"))
-
-	return result
+	return false
 }
 
 // shouldProduceBlock 检查当前节点是否应该出块（IBFT模式：基于区块号和验证者索引）
