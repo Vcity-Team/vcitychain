@@ -107,6 +107,7 @@ func (b *BlockBuilder) Reset() error {
 		GasLimit:     b.params.GasLimit,
 		BaseFee:      b.params.BaseFee,
 		Timestamp:    uint64(headerTime.Unix()),
+		MixHash:      PolyBFTMixDigest, // 🆕 设置 MixHash 以通过验证
 	}
 
 	transition, err := b.params.Executor.BeginTxn(b.params.Parent.StateRoot, b.header, b.params.Coinbase)

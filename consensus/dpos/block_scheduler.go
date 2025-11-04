@@ -2,6 +2,7 @@ package dpos
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/types"
@@ -21,6 +22,9 @@ type BlockScheduler struct {
 	blockchain           BlockchainInterface
 	consensusSwitchHeight uint64
 	logger               hclog.Logger
+	// 🆕 日志间隔管理
+	lastLogTime map[string]time.Time
+	logMutex    sync.RWMutex
 }
 
 // NewBlockScheduler 创建新的区块调度器
@@ -47,6 +51,35 @@ func NewBlockScheduler(
 		blockchain:            blockchain,
 		consensusSwitchHeight: consensusSwitchHeight,
 		logger:                logger,
+		lastLogTime:          make(map[string]time.Time),
+	}
+}
+
+// logOnceWithInterval 防重复日志函数（自定义间隔）
+func (bs *BlockScheduler) logOnceWithInterval(key string, interval time.Duration, level string, message string, args ...interface{}) {
+	bs.logMutex.Lock()
+	lastTime, exists := bs.lastLogTime[key]
+	now := time.Now()
+	
+	if !exists || now.Sub(lastTime) >= interval {
+		bs.lastLogTime[key] = now
+		bs.logMutex.Unlock()
+		
+		// 根据级别输出日志
+		switch level {
+		case "debug":
+			bs.logger.Debug(message, args...)
+		case "info":
+			bs.logger.Info(message, args...)
+		case "warn":
+			bs.logger.Warn(message, args...)
+		case "error":
+			bs.logger.Error(message, args...)
+		default:
+			bs.logger.Debug(message, args...)
+		}
+	} else {
+		bs.logMutex.Unlock()
 	}
 }
 
@@ -56,12 +89,28 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	validators []types.Address,
 	blockNumber uint64,
 ) bool {
+	// 🆕 在函数开始就输出所有关键参数（10秒间隔）
+	bs.logOnceWithInterval("should_produce_block_now_start", 10*time.Second, "debug",
+		"🔍 ShouldProduceBlockNow 函数开始",
+		"myAddress", myAddress.String(),
+		"blockNumber", blockNumber,
+		"consensusSwitchHeight", bs.consensusSwitchHeight,
+		"validatorsCount", len(validators),
+		"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
+		"blockWindow", bs.blockWindow.String())
+
 	if len(validators) == 0 {
+		bs.logger.Debug("❌ ShouldProduceBlockNow: 验证者列表为空")
 		return false
 	}
 
 	// 检查是否在共识切换高度之后
 	if blockNumber < bs.consensusSwitchHeight {
+		bs.logOnceWithInterval("should_produce_block_now_before_switch", 10*time.Second, "debug",
+			"❌ ShouldProduceBlockNow: 区块高度未达到共识切换高度",
+			"blockNumber", blockNumber,
+			"consensusSwitchHeight", bs.consensusSwitchHeight,
+			"difference", bs.consensusSwitchHeight-blockNumber)
 		return false
 	}
 
@@ -73,6 +122,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	// 计算当前slot应该出块的验证者索引
 	activeValidatorCount := len(validators)
 	if activeValidatorCount == 0 {
+		bs.logger.Debug("❌ ShouldProduceBlockNow: 活跃验证者数量为0")
 		return false
 	}
 
@@ -80,11 +130,38 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 
 	// 检查当前验证者是否是本节点
 	if currentValidatorIndex >= len(validators) {
+		bs.logger.Debug("❌ ShouldProduceBlockNow: 验证者索引超出范围",
+			"currentValidatorIndex", currentValidatorIndex,
+			"validatorsCount", len(validators))
 		return false
 	}
 
 	expectedValidator := validators[currentValidatorIndex]
-	return expectedValidator == myAddress
+	isMatch := expectedValidator == myAddress
+
+	// 🆕 添加详细的调试日志（10秒间隔，避免刷屏）
+	bs.logOnceWithInterval("should_produce_block_now_detail", 10*time.Second, "debug",
+		"🔍 ShouldProduceBlockNow 详细检查",
+		"myAddress", myAddress.String(),
+		"expectedValidator", expectedValidator.String(),
+		"isMatch", isMatch,
+		"currentSlot", currentSlot,
+		"currentValidatorIndex", currentValidatorIndex,
+		"activeValidatorCount", activeValidatorCount,
+		"blockNumber", blockNumber,
+		"timeSinceGenesis", timeSinceGenesis.String(),
+		"blockWindow", bs.blockWindow.String(),
+		"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
+		"now", now.Format("2006-01-02 15:04:05.000"),
+		"validators", func() []string {
+			var vs []string
+			for i, v := range validators {
+				vs = append(vs, fmt.Sprintf("[%d]%s", i, v.String()))
+			}
+			return vs
+		}())
+
+	return isMatch
 }
 
 // GetGenesisTime 返回创世时间
@@ -128,12 +205,50 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		}
 	}
 
-	// 🆕 添加详细的调试日志
+	// 🆕 添加详细的调试日志（使用Debug级别）
 	r.logOnceWithInterval("should_produce_block_now_debug", 5*time.Second, "debug",
 		"🔍 shouldProduceBlockNow 开始检查",
 		"currentBlockNumber", currentBlock.Number,
 		"hasBlockScheduler", r.config.blockScheduler != nil,
+		"delegatesCount", len(r.delegates),
 		"timestamp", time.Now().Format("15:04:05.000"))
+
+	// 🆕 关键修复：在共识切换高度之前，使用IBFT逻辑，不使用DPoS调度器
+	// 必须在调用 blockScheduler.ShouldProduceBlockNow 之前检查
+	var consensusSwitchHeight uint64 = 0
+	hasDPoSBackend := r.config.dposBackend != nil
+	if hasDPoSBackend {
+		if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
+			if dposInstance.config != nil {
+				consensusSwitchHeight = dposInstance.config.ConsensusSwitchHeight
+			}
+		}
+	}
+
+	// 🆕 添加调试日志，显示共识切换高度检查的详细信息
+	r.logOnceWithInterval("consensus_switch_height_check", 5*time.Second, "debug",
+		"🔍 共识切换高度检查",
+		"currentBlockNumber", currentBlock.Number,
+		"consensusSwitchHeight", consensusSwitchHeight,
+		"hasDPoSBackend", hasDPoSBackend,
+		"shouldUseIBFT", consensusSwitchHeight > 0 && currentBlock.Number < consensusSwitchHeight)
+
+	// 🆕 关键：在共识切换高度之前（blockNumber < consensusSwitchHeight），使用IBFT逻辑
+	// 注意：consensusSwitchHeight 为 0 时，表示还没有设置共识切换高度，应该使用IBFT
+	if consensusSwitchHeight > 0 && currentBlock.Number < consensusSwitchHeight {
+		r.logOnceWithInterval("ibft_mode_before_switch", 5*time.Second, "debug",
+			"🔍 共识切换高度前，使用IBFT逻辑（不调用DPoS调度器）",
+			"currentBlockNumber", currentBlock.Number,
+			"consensusSwitchHeight", consensusSwitchHeight,
+			"difference", consensusSwitchHeight-currentBlock.Number)
+		result := r.shouldProduceBlock()
+		r.logOnceWithInterval("ibft_should_produce_result", 5*time.Second, "debug",
+			"🔍 IBFT逻辑结果",
+			"shouldProduce", result,
+			"currentBlockNumber", currentBlock.Number,
+			"timestamp", time.Now().Format("15:04:05.000"))
+		return result
+	}
 
 	// 使用TRON式调度器（完全基于时间，比较地址）
 	if r.config.blockScheduler != nil {
@@ -145,19 +260,28 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		r.logOnceWithInterval("memory_validators_before_filter", 10*time.Second, "info",
 			"🔍 内存中的验证者列表（过滤前）:", "count", len(r.delegates))
 
+		// 🆕 检查DPoS实例是否存在
+		dposInstance, dposExists := GetDPoSInstance("vcity_dpos")
+		if !dposExists {
+			r.logOnceWithInterval("dpos_instance_not_found", 10*time.Second, "warn",
+				"⚠️ DPoS实例不存在，跳过故障过滤，使用所有验证者")
+		}
+
 		for i, d := range r.delegates {
 			// 获取验证者的故障标志信息
 			var faultInfo map[string]interface{}
 			var isFaulty bool
 
 			// 通过DPoS实例获取故障信息
-			if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+			if dposExists && dposInstance != nil {
 				faultInfo = dposInstance.getValidatorFaultInfo(d.Address)
-				if faultInfo["isFaulty"] != nil {
-					isFaulty = faultInfo["isFaulty"].(bool)
+				if faultInfo != nil && faultInfo["isFaulty"] != nil {
+					if v, ok := faultInfo["isFaulty"].(bool); ok {
+						isFaulty = v
+					}
 				}
 			} else {
-				// 如果DPoS实例不存在，使用默认值
+				// 如果DPoS实例不存在，使用默认值（不标记为故障）
 				faultInfo = map[string]interface{}{
 					"isFaulty":     false,
 					"missedBlocks": uint64(0),
@@ -188,20 +312,33 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			}
 		}
 
-		// 使用过滤后的验证者列表
+		// 🆕 如果过滤后没有验证者，使用原始列表（避免所有验证者被过滤导致不出块）
 		validators := activeValidators
+		if len(validators) == 0 {
+			r.logOnceWithInterval("all_validators_filtered_fallback", 10*time.Second, "warn",
+				"⚠️ 所有验证者被过滤，回退到原始验证者列表",
+				"originalCount", len(r.delegates))
+			// 回退到原始验证者列表
+			validators = make([]types.Address, len(r.delegates))
+			for i, d := range r.delegates {
+				validators[i] = d.Address
+			}
+		}
+
 		r.logOnceWithInterval("memory_validators_after_filter", 10*time.Second, "info",
-			"✅ 过滤后的内存验证者列表:", "count", len(validators))
+			"✅ 过滤后的内存验证者列表:", "count", len(validators),
+			"originalCount", len(r.delegates))
 
 		// 🆕 调用改进后的方法（直接比较地址）
 		result := r.config.blockScheduler.ShouldProduceBlockNow(myAddress, validators, currentBlock.Number)
 
-		// 🆕 添加调度器结果日志
+		// 🆕 添加调度器结果日志（使用Debug级别）
 		r.logOnceWithInterval("block_scheduler_result", 5*time.Second, "debug",
 			"🔍 区块调度器结果",
 			"shouldProduce", result,
 			"myAddress", myAddress.String(),
 			"currentBlockNumber", currentBlock.Number,
+			"validatorsCount", len(validators),
 			"timestamp", time.Now().Format("15:04:05.000"))
 
 		return result
@@ -210,7 +347,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 	// 回退到原有逻辑（不使用blockScheduler时）
 	result := r.shouldProduceBlock()
 
-	// 🆕 添加回退逻辑结果日志
+	// 🆕 添加回退逻辑结果日志（使用Debug级别）
 	r.logOnceWithInterval("fallback_should_produce_result", 5*time.Second, "debug",
 		"🔍 回退逻辑结果",
 		"shouldProduce", result,
@@ -220,7 +357,8 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 	return result
 }
 
-// shouldProduceBlock 检查当前节点是否应该出块（基于固定时间窗口）
+// shouldProduceBlock 检查当前节点是否应该出块（IBFT模式：基于区块号和验证者索引）
+// 🆕 关键：这个函数专门用于IBFT模式，不应该调用DPoS调度器
 func (r *dposRuntime) shouldProduceBlock() bool {
 	currentBlock := r.config.blockchain.CurrentHeader()
 	if currentBlock == nil {
@@ -228,25 +366,43 @@ func (r *dposRuntime) shouldProduceBlock() bool {
 		return false
 	}
 
-	// 🆕 使用固定时间窗口调度器（TRON模式：改用新方法）
-	if r.config.blockScheduler != nil {
-		myAddress := types.Address(r.config.Key.Address())
-		validators := make([]types.Address, len(r.delegates))
-		for i, d := range r.delegates {
-			validators[i] = d.Address
-		}
-		// 使用新的 ShouldProduceBlockNow 方法
-		return r.config.blockScheduler.ShouldProduceBlockNow(myAddress, validators, currentBlock.Number)
+	// 🆕 关键修复：shouldProduceBlock 是IBFT模式的出块检查，不应该调用DPoS调度器
+	// 这个函数专门用于共识切换高度之前的IBFT逻辑
+	r.logOnceWithInterval("ibft_check_qualification", 10*time.Second, "debug",
+		"🔍 使用IBFT模式检查出块资格",
+		"currentBlock", currentBlock.Number,
+		"delegateCount", r.config.DelegateCount,
+		"delegatesCount", len(r.delegates))
+
+	// IBFT逻辑：基于区块号计算当前应该出块的验证者索引
+	if len(r.delegates) == 0 {
+		r.logger.Warn("⚠️ IBFT模式：验证者列表为空")
+		return false
 	}
 
-	// 回退到原有的顺序检查（兼容性）
-	r.logger.Debug("🔍 使用回退模式检查出块资格",
-		"currentBlock", currentBlock.Number,
-		"delegateCount", r.config.DelegateCount)
+	// 计算当前应该出块的验证者索引（基于区块号）
+	validatorIndex := int(currentBlock.Number) % len(r.delegates)
+	if validatorIndex < 0 || validatorIndex >= len(r.delegates) {
+		r.logger.Warn("⚠️ IBFT模式：验证者索引超出范围",
+			"validatorIndex", validatorIndex,
+			"delegatesCount", len(r.delegates))
+		return false
+	}
 
-	// 🆕 已删除 currentDelegateIndex 相关的判断
-	// 现在完全依赖 shouldProduceBlockNow() 的时间slot计算
-	r.logger.Info("🔍 回退模式：使用时间slot计算",
-		"currentBlock", currentBlock.Number)
-	return false // 回退模式下不依赖索引判断
+	// 获取当前应该出块的验证者地址
+	expectedValidator := r.delegates[validatorIndex].Address
+	myAddress := types.Address(r.config.Key.Address())
+
+	// 检查本节点是否是当前应该出块的验证者
+	isMatch := expectedValidator == myAddress
+
+	r.logOnceWithInterval("ibft_check_result", 10*time.Second, "debug",
+		"🔍 IBFT模式检查结果",
+		"blockNumber", currentBlock.Number,
+		"validatorIndex", validatorIndex,
+		"expectedValidator", expectedValidator.String(),
+		"myAddress", myAddress.String(),
+		"isMatch", isMatch)
+
+	return isMatch
 }

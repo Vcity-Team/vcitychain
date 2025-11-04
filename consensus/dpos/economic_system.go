@@ -84,6 +84,13 @@ func (d *DPoS) handleEpochSwitch(epochNumber uint64) error {
 	// 2. 计算和记录上一个epoch的奖励（延迟状态更新）
 	if epochNumber > 1 {
 		previousEpoch := epochNumber - 1
+		
+		// 🆕 关键修复：调用onEpochEnd处理epoch结束逻辑
+		if err := d.onEpochEnd(previousEpoch); err != nil {
+			d.logger.Error("❌ onEpochEnd回调失败", "epoch", previousEpoch, "error", err)
+			// 不返回错误，继续处理奖励
+		}
+		
 		if err := d.calculateAndRecordEpochRewards(previousEpoch); err != nil {
 			d.logger.Error("❌ 计算Epoch奖励失败", "epoch", previousEpoch, "error", err)
 			return err

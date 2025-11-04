@@ -882,12 +882,43 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 
 	b.dispatchEvent(evnt)
 
+	// 🆕 判断区块类型：空块、交易块、mix块
+	txCount := len(block.Transactions)
+	stateTxCount := 0
+	normalTxCount := 0
+
+	for _, tx := range block.Transactions {
+		// 判断是否为状态交易（系统调用交易）
+		// 状态交易通常 From 是零地址（系统调用），或者 To 是系统合约地址
+		// 简化判断：如果 From 是零地址，认为是状态交易
+		if tx.From == (types.Address{}) {
+			stateTxCount++
+		} else {
+			normalTxCount++
+		}
+	}
+
+	// 确定区块类型
+	blockType := "空块"
+	if txCount > 0 {
+		if stateTxCount > 0 && normalTxCount > 0 {
+			blockType = "mix块"
+		} else if stateTxCount > 0 {
+			blockType = "状态块"
+		} else {
+			blockType = "交易块"
+		}
+	}
+
 	logArgs := []interface{}{
 		"number", header.Number,
-		"txs", len(block.Transactions),
+		"txs", txCount,
 		"hash", header.Hash,
 		"parent", header.ParentHash,
 		"source", source,
+		"blockType", blockType, // 🆕 区块类型：空块、交易块、mix块、状态块
+		"normalTxs", normalTxCount, // 🆕 普通交易数量
+		"stateTxs", stateTxCount, // 🆕 状态交易数量
 	}
 
 	if prevHeader, ok := b.GetHeaderByNumber(header.Number - 1); ok {
@@ -895,7 +926,15 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 		logArgs = append(logArgs, "generation_time_in_seconds", diff)
 	}
 
-	b.logger.Info("💎 新区块写入", logArgs...)
+	// 🆕 根据 source 区分本地生产和同步区块的日志消息
+	logMessage := "💎 新区块写入"
+	if source == "consensus" {
+		logMessage = "🏭 ++++++++++++++++++++++++++++++本地生产新区块写入+++++++++++++++++++++++++++++"
+	} else if source == "syncer" {
+		logMessage = "📥 同步新区块写入"
+	}
+
+	b.logger.Info(logMessage, logArgs...)
 
 	// 🆕 检查写入的区块状态根
 	b.logger.Debug("🔍 区块写入完成状态根检查",
