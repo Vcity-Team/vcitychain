@@ -171,54 +171,29 @@ func (b *BlockBuilder) WriteTx(tx *types.Transaction) error {
 }
 
 // Fill fills the block with transactions from the txpool
-// 🆕 优化：无交易时立即返回，有交易时处理完后可以立即返回（不强制等待完整BlockTime）
-// 原因：TRON的一个slot只出一个块，等待完整时间不会增加出块数，反而增加被抢占的风险
+// 🆕 完全对标 TRON：有交易就打包，没有交易就立即返回，不等待
+// 原因：TRON 的 SR 在时间槽内快速打包可用交易，立即出块，不等待新交易
 func (b *BlockBuilder) Fill() {
-	blockTimer := time.NewTimer(b.params.BlockTime)
-	defer blockTimer.Stop()
-
 	b.params.TxPool.Prepare()
 
-	hasTransactions := false // 🆕 跟踪是否有交易
-
 	for {
-		select {
-		case <-blockTimer.C:
-			// 定时器到期，立即返回
+		tx := b.params.TxPool.Peek()
+
+		// 如果没有交易，立即返回（不等待）
+		if tx == nil {
 			return
-		default:
-			tx := b.params.TxPool.Peek()
+		}
 
-			// 🆕 如果没有交易
-			if tx == nil {
-				if !hasTransactions {
-					// 无交易，立即返回（不等待定时器）
-					return
-				}
-				// 如果有交易但处理完了，等待一小段时间给新交易机会，然后继续检查
-				// 但不要等待太久，避免浪费 slot 时间
-				select {
-				case <-blockTimer.C:
-					// 定时器到期，立即返回
-					return
-				case <-time.After(50 * time.Millisecond):
-					// 等待50ms后继续检查是否有新交易
-					continue
-				}
-			}
+		// execute transactions one by one
+		finished, err := b.writeTxPoolTransaction(tx)
+		if err != nil {
+			b.params.Logger.Debug("Fill transaction error", "hash", tx.Hash, "err", err)
+			// 交易失败，继续处理下一个
+		}
 
-			hasTransactions = true // 🆕 标记有交易
-
-			// execute transactions one by one
-			finished, err := b.writeTxPoolTransaction(tx)
-			if err != nil {
-				b.params.Logger.Debug("Fill transaction error", "hash", tx.Hash, "err", err)
-			}
-
-			if finished {
-				// 区块已满，立即返回（不需要等待，因为已经无法再装更多交易）
-				return
-			}
+		// 区块已满（GasLimit 达到），立即返回
+		if finished {
+			return
 		}
 	}
 }
