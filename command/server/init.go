@@ -11,12 +11,14 @@ import (
 
 	helperCommon "github.com/Vcity-Team/vcitychain/helper/common"
 	"github.com/Vcity-Team/vcitychain/network/common"
+	"strings"
 
 	"github.com/Vcity-Team/vcitychain/chain"
 	"github.com/Vcity-Team/vcitychain/command/helper"
 	"github.com/Vcity-Team/vcitychain/network"
 	"github.com/Vcity-Team/vcitychain/secrets"
 	"github.com/Vcity-Team/vcitychain/server"
+	"github.com/Vcity-Team/vcitychain/types"
 )
 
 var (
@@ -39,6 +41,11 @@ func (p *serverParams) initRawParams() error {
 	}
 
 	if err := p.initSecretsConfig(); err != nil {
+		return err
+	}
+
+	// 🆕 解析 London Fork 配置（必须在 initGenesisConfig 之前）
+	if err := p.initLondonForkConfig(); err != nil {
 		return err
 	}
 
@@ -169,6 +176,110 @@ func (p *serverParams) initSecretsConfig() error {
 	return nil
 }
 
+// 🆕 initLondonForkConfig 解析 London Fork 配置（BaseFee 和 BurnContract）
+func (p *serverParams) initLondonForkConfig() error {
+	// 解析 BaseFee 配置
+	if p.rawConfig.BaseFeeConfig != "" {
+		baseFeeInfo, err := parseBaseFeeConfig(p.rawConfig.BaseFeeConfig)
+		if err != nil {
+			return fmt.Errorf("failed to parse base fee config: %w", err)
+		}
+		p.parsedBaseFee = baseFeeInfo
+	}
+
+	// 解析 BurnContract 配置
+	if p.rawConfig.BurnContract != "" {
+		burnContractInfo, err := parseBurnContractConfig(p.rawConfig.BurnContract)
+		if err != nil {
+			return fmt.Errorf("failed to parse burn contract config: %w", err)
+		}
+		p.parsedBurnContract = burnContractInfo
+	}
+
+	return nil
+}
+
+// parseBaseFeeConfig 解析 BaseFee 配置字符串
+func parseBaseFeeConfig(baseFeeConfigRaw string) (*baseFeeInfo, error) {
+	// 默认值（参考 command/genesis/utils.go）
+	const defaultBaseFee = 1000000000            // 1 Gwei
+	const defaultBaseFeeEM = 2
+	const defaultBaseFeeChangeDenom = 8
+
+	baseFeeInfo := &baseFeeInfo{
+		baseFee:            defaultBaseFee,
+		baseFeeEM:          defaultBaseFeeEM,
+		baseFeeChangeDenom: defaultBaseFeeChangeDenom,
+	}
+
+	baseFeeConfig := strings.Split(baseFeeConfigRaw, ":")
+	if len(baseFeeConfig) > 3 {
+		return nil, fmt.Errorf("invalid number of arguments for base fee configuration")
+	}
+
+	if len(baseFeeConfig) >= 1 && baseFeeConfig[0] != "" {
+		baseFee, err := helperCommon.ParseUint64orHex(&baseFeeConfig[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse baseFee: %w", err)
+		}
+		baseFeeInfo.baseFee = baseFee
+	}
+
+	if len(baseFeeConfig) >= 2 && baseFeeConfig[1] != "" {
+		baseFeeEM, err := helperCommon.ParseUint64orHex(&baseFeeConfig[1])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse baseFeeEM: %w", err)
+		}
+		baseFeeInfo.baseFeeEM = baseFeeEM
+	}
+
+	if len(baseFeeConfig) == 3 && baseFeeConfig[2] != "" {
+		baseFeeChangeDenom, err := helperCommon.ParseUint64orHex(&baseFeeConfig[2])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse baseFeeChangeDenom: %w", err)
+		}
+		baseFeeInfo.baseFeeChangeDenom = baseFeeChangeDenom
+	}
+
+	return baseFeeInfo, nil
+}
+
+// parseBurnContractConfig 解析 BurnContract 配置字符串
+func parseBurnContractConfig(burnContractInfoRaw string) (*burnContractInfo, error) {
+	// 格式: <block>:<address>[:<burn destination address>]
+	burnContractParts := strings.Split(burnContractInfoRaw, ":")
+	if len(burnContractParts) < 2 || len(burnContractParts) > 3 {
+		return nil, fmt.Errorf("expected format: <block>:<address>[:<burn destination>]")
+	}
+
+	blockRaw := burnContractParts[0]
+	blockNum, err := helperCommon.ParseUint64orHex(&blockRaw)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse block number %s: %w", blockRaw, err)
+	}
+
+	contractAddress := burnContractParts[1]
+	if err := types.IsValidAddress(contractAddress); err != nil {
+		return nil, fmt.Errorf("failed to parse contract address %s: %w", contractAddress, err)
+	}
+
+	info := &burnContractInfo{
+		blockNumber:        blockNum,
+		address:            types.StringToAddress(contractAddress),
+		destinationAddress: types.ZeroAddress,
+	}
+
+	if len(burnContractParts) == 3 {
+		destinationAddress := burnContractParts[2]
+		if err := types.IsValidAddress(destinationAddress); err != nil {
+			return nil, fmt.Errorf("failed to parse burn destination address %s: %w", destinationAddress, err)
+		}
+		info.destinationAddress = types.StringToAddress(destinationAddress)
+	}
+
+	return info, nil
+}
+
 func (p *serverParams) initGenesisConfig() error {
 	var parseErr error
 
@@ -181,6 +292,22 @@ func (p *serverParams) initGenesisConfig() error {
 	// if block-gas-target flag is set override genesis.json value
 	if p.blockGasTarget != 0 {
 		p.genesisConfig.Params.BlockGasTarget = p.blockGasTarget
+	}
+
+	// 🆕 如果 yaml 配置了 BaseFee，则覆盖 genesis.json 中的值（不影响 genesis hash）
+	if p.parsedBaseFee != nil {
+		p.genesisConfig.Genesis.BaseFee = p.parsedBaseFee.baseFee
+		p.genesisConfig.Genesis.BaseFeeEM = p.parsedBaseFee.baseFeeEM
+		p.genesisConfig.Genesis.BaseFeeChangeDenom = p.parsedBaseFee.baseFeeChangeDenom
+	}
+
+	// 🆕 如果 yaml 配置了 BurnContract，则覆盖 genesis.json 中的值（不影响 genesis hash）
+	if p.parsedBurnContract != nil {
+		if p.genesisConfig.Params.BurnContract == nil {
+			p.genesisConfig.Params.BurnContract = make(map[uint64]types.Address)
+		}
+		p.genesisConfig.Params.BurnContract[p.parsedBurnContract.blockNumber] = p.parsedBurnContract.address
+		p.genesisConfig.Params.BurnContractDestinationAddress = p.parsedBurnContract.destinationAddress
 	}
 
 	return nil

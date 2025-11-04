@@ -62,6 +62,10 @@ type Config struct {
 	DPoSProposalVotePeriod   string `json:"dpos_proposal_vote_period" yaml:"dpos_proposal_vote_period"`     // 提案表决周期
 	DPoSProposalValidPeriod  string `json:"dpos_proposal_valid_period" yaml:"dpos_proposal_valid_period"`   // 提案有效期
 	BlockTimeSeconds         uint64 `json:"block_time_s" yaml:"block_time_s"`                               // 区块间隔时间（秒）
+
+	// London Fork 配置（从 yaml 读取，不改变 genesis hash）
+	BaseFeeConfig string `json:"base_fee_config" yaml:"base_fee_config"`           // 格式: "baseFee:baseFeeEM:baseFeeChangeDenom"
+	BurnContract  string `json:"burn_contract" yaml:"burn_contract"`              // 格式: "blockNumber:address[:destinationAddress]"
 }
 
 // Telemetry holds the config details for metric services.

@@ -181,6 +181,7 @@ func (i *backendIBFT) buildBlock(parent *types.Header) (*types.Block, error) {
 	}
 
 	// calculate base fee
+	header.BaseFee = i.blockchain.CalculateBaseFee(parent)
 	header.GasLimit = gasLimit
 
 	if err := i.currentHooks.ModifyHeader(header, i.currentSigner.Address()); err != nil {

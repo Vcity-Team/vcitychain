@@ -174,9 +174,20 @@ func (g *GasHelper) MaxPriorityFeePerGas() (*big.Int, error) {
 		}
 
 		if len(blockTxPrices) == 0 {
-			// either block is empty or all transactions in block are sent by the miner.
-			// in this case add the latests calculated price for sampling
-			blockTxPrices = append(blockTxPrices, lastPrice)
+			// 空块时添加衰减后的价格，促进 PriorityFee 下降
+			if lastPrice.Cmp(big.NewInt(0)) > 0 {
+				// 使用 lastPrice 的一部分（例如 50%），促进下降
+				decayedPrice := new(big.Int).Div(lastPrice, big.NewInt(2))
+				// 但不要低于最小值（例如 1 Gwei）
+				minTip := new(big.Int).SetUint64(1e9) // 1 Gwei
+				if decayedPrice.Cmp(minTip) < 0 {
+					decayedPrice = minTip
+				}
+				blockTxPrices = append(blockTxPrices, decayedPrice)
+			} else {
+				// 如果 lastPrice 为 0，使用最小 tip
+				blockTxPrices = append(blockTxPrices, new(big.Int).SetUint64(1e9))
+			}
 		}
 
 		// add the block prices to the slice of all prices

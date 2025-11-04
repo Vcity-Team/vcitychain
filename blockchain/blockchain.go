@@ -1157,8 +1157,16 @@ func (b *Blockchain) extractBlockReceipts(block *types.Block) ([]*types.Receipt,
 // block, and updates the average gas price for the chain accordingly
 func (b *Blockchain) updateGasPriceAvgWithBlock(block *types.Block) {
 	if len(block.Transactions) < 1 {
-		// No transactions in the block,
-		// so no gas price average to update
+		// 空块时，如果启用了 London fork，使用 BaseFee 作为参考价格
+		if b.config.Params.Forks.IsActive(chain.London, block.Number()) {
+			// 使用 BaseFee 作为新的价格样本，促进下降
+			baseFee := block.Header.BaseFee
+			if baseFee > 0 {
+				gasPrices := []*big.Int{new(big.Int).SetUint64(baseFee)}
+				b.updateGasPriceAvg(gasPrices)
+			}
+		}
+		// 如果没有启用 London fork，或者 BaseFee 为 0，则不更新（保持原逻辑）
 		return
 	}
 

@@ -10,6 +10,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/network"
 	"github.com/Vcity-Team/vcitychain/secrets"
 	"github.com/Vcity-Team/vcitychain/server"
+	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
 	"github.com/multiformats/go-multiaddr"
 )
@@ -117,6 +118,24 @@ type serverParams struct {
 	// 🆕 DPoS提案周期
 	dposProposalVotePeriod  string // 提案表决周期
 	dposProposalValidPeriod string // 提案有效期
+
+	// 🆕 London Fork 配置解析
+	parsedBaseFee      *baseFeeInfo      // 解析后的 BaseFee 信息
+	parsedBurnContract *burnContractInfo // 解析后的 BurnContract 信息
+}
+
+// baseFeeInfo 存储解析后的 BaseFee 配置
+type baseFeeInfo struct {
+	baseFee            uint64
+	baseFeeEM          uint64
+	baseFeeChangeDenom uint64
+}
+
+// burnContractInfo 存储解析后的 BurnContract 配置
+type burnContractInfo struct {
+	blockNumber        uint64
+	address            types.Address
+	destinationAddress types.Address
 }
 
 func (p *serverParams) isMaxPeersSet() bool {
