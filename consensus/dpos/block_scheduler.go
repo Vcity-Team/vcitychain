@@ -192,7 +192,9 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 
 	// ========== 🆕 关键验证点：ShouldProduceBlockNow返回true时（用于验证同一时刻只有一个节点出块） ==========
 	if isMatch {
-		bs.logger.Info("🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块",
+		// ⚠️ 使用1秒间隔，避免刷屏
+		bs.logOnceWithInterval("should_produce_block_now_true", 1*time.Second, "info",
+			"🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块",
 			"timestamp", now.Format("15:04:05.000000"),
 			"myAddress", myAddress.String(),
 			"blockNumber", blockNumber,
