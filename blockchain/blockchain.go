@@ -967,7 +967,14 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 			"timeIntervalSeconds", timeInterval.Seconds(), // 🆕 时间间隔（秒）
 		)
 
-		logMessage = "🏭🏭 🏭 🏭 🏭 🏭 🏭 🏭 🏭 🏭 🏭 🏭 🏭 🏭 🏭 🏭 🏭 🏭 本地生产新区块写入"
+		// 🆕 根据是否有交易使用不同的表情符号
+		if txCount > 0 {
+			// 有交易：使用 🏭 表情符号
+			logMessage = "🏭 🏭 🏭 🏭 🏭 🏭 🏭  本地生产新区块写入（有交易）"
+		} else {
+			// 无交易（空块）：使用 ⚪ 表情符号
+			logMessage = "⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪ 本地生产新区块写入（空块）"
+		}
 	} else if source == "syncer" {
 		logMessage = "📥📥📥📥📥📥📥📥📥📥 同步新区块写入"
 	}
