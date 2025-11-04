@@ -12,6 +12,8 @@ import (
 // BlockchainInterface 是区块链接口，用于获取当前区块头
 type BlockchainInterface interface {
 	Header() *types.Header
+	// GetHeaderByNumber 获取指定区块号的区块头（用于获取创世区块）
+	GetHeaderByNumber(number uint64) (*types.Header, bool)
 }
 
 // BlockScheduler 是固定时间窗口调度器，用于TRON模式的区块生产调度
@@ -35,12 +37,39 @@ func NewBlockScheduler(
 	consensusSwitchHeight uint64,
 	logger hclog.Logger,
 ) *BlockScheduler {
-	// 获取创世区块时间
+	// ⚠️ 关键修复：使用共识切换高度对应区块的时间戳作为genesisTime
+	// 确保所有节点的genesisTime一致，避免slot计算不同导致分叉
 	genesisTime := time.Now()
 	if blockchain != nil {
-		genesisHeader := blockchain.Header()
-		if genesisHeader != nil {
-			genesisTime = time.Unix(int64(genesisHeader.Timestamp), 0)
+		// 优先使用共识切换高度的区块时间戳
+		if consensusSwitchHeight > 0 {
+			switchHeader, ok := blockchain.GetHeaderByNumber(consensusSwitchHeight)
+			if ok && switchHeader != nil {
+				genesisTime = time.Unix(int64(switchHeader.Timestamp), 0)
+				logger.Info("✅ 使用共识切换高度区块时间戳作为genesisTime",
+					"consensusSwitchHeight", consensusSwitchHeight,
+					"genesisTime", genesisTime.Format("2006-01-02 15:04:05.000"),
+					"blockTimestamp", switchHeader.Timestamp)
+			} else {
+				// 如果共识切换高度的区块还不存在，使用当前区块头（临时方案）
+				currentHeader := blockchain.Header()
+				if currentHeader != nil {
+					genesisTime = time.Unix(int64(currentHeader.Timestamp), 0)
+					logger.Warn("⚠️ 共识切换高度区块不存在，使用当前区块时间戳作为临时genesisTime",
+						"consensusSwitchHeight", consensusSwitchHeight,
+						"currentBlockNumber", currentHeader.Number,
+						"genesisTime", genesisTime.Format("2006-01-02 15:04:05.000"))
+				}
+			}
+		} else {
+			// 如果共识切换高度为0，使用当前区块头
+			genesisHeader := blockchain.Header()
+			if genesisHeader != nil {
+				genesisTime = time.Unix(int64(genesisHeader.Timestamp), 0)
+				logger.Warn("⚠️ 共识切换高度为0，使用当前区块时间戳作为genesisTime",
+					"currentBlockNumber", genesisHeader.Number,
+					"genesisTime", genesisTime.Format("2006-01-02 15:04:05.000"))
+			}
 		}
 	}
 
@@ -160,6 +189,19 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 			}
 			return vs
 		}())
+
+	// ========== 🆕 关键验证点：ShouldProduceBlockNow返回true时（用于验证同一时刻只有一个节点出块） ==========
+	if isMatch {
+		bs.logger.Info("🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块",
+			"timestamp", now.Format("15:04:05.000000"),
+			"myAddress", myAddress.String(),
+			"blockNumber", blockNumber,
+			"currentSlot", currentSlot,
+			"expectedValidator", fmt.Sprintf("[%d]%s", currentValidatorIndex, expectedValidator.String()),
+			"validatorIndex", currentValidatorIndex,
+			"activeValidatorCount", activeValidatorCount,
+			"note", "用于验证同一时刻只有一个节点出块")
+	}
 
 	return isMatch
 }

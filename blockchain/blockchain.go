@@ -848,13 +848,14 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 	defer b.writeLock.Unlock()
 
 	block := fblock.Block
+	header := block.Header
 
 	if block.Number() <= b.Header().Number {
 		b.logger.Info("block already inserted", "block", block.Number(), "source", source)
 		return nil
 	}
 
-	header := block.Header
+	// header 已在上面获取（第850行）
 	batchWriter := storage.NewBatchWriter(b.db)
 
 	if err := b.writeBody(batchWriter, block); err != nil {

@@ -171,65 +171,43 @@ func (b *BlockBuilder) WriteTx(tx *types.Transaction) error {
 }
 
 // Fill fills the block with transactions from the txpool
+// 🆕 TRON时间槽机制：必须等待完整的BlockTime，即使没有交易也要等待，确保固定的区块间隔
 func (b *BlockBuilder) Fill() {
 	blockTimer := time.NewTimer(b.params.BlockTime)
-	defer blockTimer.Stop() // 🆕 确保定时器被清理
+	defer blockTimer.Stop()
 
 	b.params.TxPool.Prepare()
 
-	hasSuccessfulTransactions := false // 🆕 跟踪是否有成功处理的交易
-	startTime := time.Now()            // 🆕 记录开始时间
-
-write:
 	for {
 		select {
 		case <-blockTimer.C:
+			// ⚠️ 关键：必须等待定时器到期，即使没有交易也要等待完整的BlockTime
+			// 这是TRON时间槽机制的要求，确保固定的区块间隔
 			return
 		default:
 			tx := b.params.TxPool.Peek()
 
-			// 🆕 如果没有交易，立即返回（不等待定时器）
+			// 如果没有交易，继续循环等待，直到定时器到期
 			if tx == nil {
-				// 🆕 如果没有成功处理的交易，立即返回（即使尝试过交易但都失败）
-				if !hasSuccessfulTransactions {
-					return
-				}
-				// 如果有成功处理的交易，等待剩余时间
-				break write
+				// ⚠️ 关键修改：即使没有交易，也不立即返回，继续等待定时器到期
+				// 让出CPU时间片，避免CPU占用过高
+				time.Sleep(10 * time.Millisecond)
+				continue
 			}
 
 			// execute transactions one by one
 			finished, err := b.writeTxPoolTransaction(tx)
 			if err != nil {
 				b.params.Logger.Debug("Fill transaction error", "hash", tx.Hash, "err", err)
-				// 🆕 交易失败，不标记为成功处理
-			} else {
-				// 🆕 只有成功处理的交易才标记
-				hasSuccessfulTransactions = true
 			}
 
 			if finished {
-				break write
+				// 区块已满，但还是要等待定时器到期（TRON时间槽机制）
+				<-blockTimer.C
+				return
 			}
 		}
 	}
-
-	// 🆕 只有在有成功处理的交易时才等待定时器到期
-	// 如果所有交易都失败，立即返回（不等待），避免2秒延迟
-	if hasSuccessfulTransactions {
-		elapsed := time.Since(startTime)
-		remaining := b.params.BlockTime - elapsed
-		if remaining > 0 {
-			// 等待剩余时间，但不超过定时器剩余时间
-			select {
-			case <-blockTimer.C:
-				// 定时器到期，立即返回
-			case <-time.After(remaining):
-				// 等待剩余时间
-			}
-		}
-	}
-	// 🆕 如果所有交易都失败，立即返回（不等待），消除约2秒延迟
 }
 
 // Receipts returns the collection of transaction receipts for given block
@@ -315,7 +293,8 @@ type SignatureResponse struct {
 
 // buildBlock 构建区块并收集验证者签名
 func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
-	r.logger.Info("🏗️ buildBlock函数被调用", "timestamp", time.Now().Format("15:04:05.000"))
+	buildStartTime := time.Now()
+	r.logger.Info("🏗️ buildBlock函数被调用", "timestamp", buildStartTime.Format("15:04:05.000"))
 
 	// 检查Key是否可用
 	if r.config == nil || r.config.Key == nil {

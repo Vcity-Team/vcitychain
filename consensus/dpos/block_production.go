@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"time"
+
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
 )
@@ -133,8 +134,6 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 
 // produceBlock 生产区块
 func (r *dposRuntime) produceBlock() error {
-	// 🆕 在锁之前添加 Printf 日志
-
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -152,9 +151,8 @@ func (r *dposRuntime) produceBlock() error {
 		}
 	}
 
-	// 🆕 添加详细的currentDelegateIndex日志
+	// 获取当前区块
 	currentBlock := r.config.blockchain.CurrentHeader()
-	// 静默处理，不打印日志
 
 	// 检查Key是否可用
 	if r.config == nil || r.config.Key == nil {
@@ -370,4 +368,3 @@ func (r *dposRuntime) produceBlock() error {
 
 	return nil
 }
-
