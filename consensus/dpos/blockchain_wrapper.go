@@ -126,8 +126,11 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 	for _, tx := range block.Transactions {
 		// 🆕 确保从区块读取的交易补齐 From（RLP不含From，需要本地恢复）
 		if tx.From == (types.Address{}) {
+			// 🆕 根据当前区块的 forks 状态创建正确的 signer
+			// 这样可以正确处理 EIP-1559 (DynamicFeeTx) 交易
+			forks := p.blockchain.Config().Forks.At(block.Number())
 			chainID := p.GetChainID()
-			signer := crypto.NewEIP155Signer(chainID, false)
+			signer := crypto.NewSigner(forks, chainID)
 			if addr, err := signer.Sender(tx); err == nil {
 				tx.From = addr
 				p.logger.Info("🧩 从区块交易恢复发送者地址", "txHash", tx.Hash.String(), "from", tx.From.String())
@@ -372,7 +375,6 @@ func (p *blockchainWrapper) isEpochEndBlock(blockNumber uint64) bool {
 
 	// 检查是否是epoch的最后一个区块
 	isEpochEnd := firstBlockInEpoch+epochSize-1 == blockNumber
-
 
 	return isEpochEnd
 }
