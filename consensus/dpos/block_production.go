@@ -98,7 +98,7 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 						}
 					}
 				}
-				r.logOnceWithInterval("should_produce_start", 2*time.Second, "info",
+				r.logOnceWithInterval("should_produce_start", 2*time.Second, "debug",
 					"✅ shouldProduceBlockNow返回true，开始出块",
 					"timestamp", time.Now().Format("15:04:05.000"),
 					"genesisTime", genesisStr,

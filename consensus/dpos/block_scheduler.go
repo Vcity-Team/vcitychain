@@ -101,8 +101,8 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 
 	if len(validators) == 0 {
 		bs.logger.Debug("❌ ShouldProduceBlockNow: 验证者列表为空")
-		return false
-	}
+			return false
+		}
 
 	// 检查是否在共识切换高度之后
 	if blockNumber < bs.consensusSwitchHeight {
@@ -151,8 +151,8 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 		"blockNumber", blockNumber,
 		"timeSinceGenesis", timeSinceGenesis.String(),
 		"blockWindow", bs.blockWindow.String(),
-		"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
-		"now", now.Format("2006-01-02 15:04:05.000"),
+			"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
+			"now", now.Format("2006-01-02 15:04:05.000"),
 		"validators", func() []string {
 			var vs []string
 			for i, v := range validators {
@@ -201,7 +201,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			r.logger.Debug("⏸️ 节点落后，先同步再出块",
 				"localNumber", currentBlock.Number,
 				"networkLatest", networkLatest)
-			return false
+		return false
 		}
 	}
 
@@ -257,7 +257,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 
 		// 🆕 获取验证者列表并过滤故障验证者
 		activeValidators := make([]types.Address, 0, len(r.delegates))
-		r.logOnceWithInterval("memory_validators_before_filter", 10*time.Second, "info",
+		r.logOnceWithInterval("memory_validators_before_filter", 10*time.Second, "debug",
 			"🔍 内存中的验证者列表（过滤前）:", "count", len(r.delegates))
 
 		// 🆕 检查DPoS实例是否存在
@@ -291,7 +291,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			}
 
 			// 打印所有验证者的故障标志信息
-			r.logOnceWithInterval(fmt.Sprintf("memory_validator_%d", i), 10*time.Second, "info",
+			r.logOnceWithInterval(fmt.Sprintf("memory_validator_%d", i), 10*time.Second, "debug",
 				"👤 内存验证者",
 				"index", i+1,
 				"address", d.Address.String(),
@@ -304,7 +304,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			if !isFaulty {
 				activeValidators = append(activeValidators, d.Address)
 			} else {
-				r.logOnceWithInterval(fmt.Sprintf("memory_validator_filtered_%s", d.Address.String()), 10*time.Second, "info",
+				r.logOnceWithInterval(fmt.Sprintf("memory_validator_filtered_%s", d.Address.String()), 10*time.Second, "debug",
 					"🚫 内存中验证者列表过滤掉故障验证者",
 					"address", d.Address.String(),
 					"missedBlocks", faultInfo["missedBlocks"],
@@ -325,7 +325,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			}
 		}
 
-		r.logOnceWithInterval("memory_validators_after_filter", 10*time.Second, "info",
+		r.logOnceWithInterval("memory_validators_after_filter", 10*time.Second, "debug",
 			"✅ 过滤后的内存验证者列表:", "count", len(validators),
 			"originalCount", len(r.delegates))
 
