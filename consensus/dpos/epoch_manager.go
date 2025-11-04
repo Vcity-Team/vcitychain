@@ -52,24 +52,12 @@ func (tem *TimeBasedEpochManager) GetCurrentEpoch(blockNumber uint64) uint64 {
 	// 从共识切换高度开始计算epoch
 	if blockNumber < consensusSwitchHeight {
 		// 在共识切换之前，epoch为0
-		tem.logger.Debug("🔍 基于区块高度计算Epoch（共识切换前）",
-			"blockNumber", blockNumber,
-			"consensusSwitchHeight", consensusSwitchHeight,
-			"epochSize", epochSize,
-			"blockBasedEpoch", 0)
 		return 0
 	}
 
 	// 计算DPoS epoch：从共识切换高度开始
 	dposBlockNumber := blockNumber - consensusSwitchHeight
 	blockBasedEpoch := (dposBlockNumber / epochSize) + 1
-
-	tem.logger.Debug("🔍 基于区块高度计算Epoch",
-		"blockNumber", blockNumber,
-		"consensusSwitchHeight", consensusSwitchHeight,
-		"dposBlockNumber", dposBlockNumber,
-		"epochSize", epochSize,
-		"blockBasedEpoch", blockBasedEpoch)
 
 	return blockBasedEpoch
 }

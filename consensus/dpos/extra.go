@@ -579,88 +579,11 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		EventRoot:             i.Checkpoint.EventRoot,
 	}
 
-	// 添加方案2对比日志
-	logger.Debug("🔍 方案2：轮次使用对比",
-		"blockNumber", blockNumber,
-		"使用轮次", i.Checkpoint.BlockRound,
-		"说明", "直接使用ExtraData中的轮次值，与生产时完全一致")
-
-	// 🆕 添加验证时区块头详细信息（从header参数获取）
-	logger.Debug("🔍 ===== 验证时区块头详细信息（CheckpointHash计算前） =====",
-		"blockNumber", blockNumber,
-		"blockHash", header.Hash.String(),
-		"parentHash", header.ParentHash.String(),
-		"timestamp", header.Timestamp,
-		"gasLimit", header.GasLimit,
-		"gasUsed", header.GasUsed,
-		"difficulty", header.Difficulty,
-		"stateRoot", header.StateRoot.String(),
-		"transactionsRoot", header.TxRoot.String(),
-		"receiptsRoot", header.ReceiptsRoot.String(),
-		"miner", types.BytesToAddress(header.Miner).String(),
-		"nonce", header.Nonce.String(),
-		"extraDataLength", len(header.ExtraData),
-		"说明", "验证时用于CheckpointHash计算的区块头字段")
-
-	// 🆕 添加验证时关键参数显著日志
-	logger.Debug("🔍 ===== 验证时CheckpointHash计算参数 =====",
-		"blockNumber", blockNumber,
-		"chainID", productionChainID,
-		"realBlockHash", realBlockHash.String(),
-		"currentValidatorsHash", recalculatedCheckpoint.CurrentValidatorsHash.String(),
-		"nextValidatorsHash", recalculatedCheckpoint.NextValidatorsHash.String(),
-		"blockRound", recalculatedCheckpoint.BlockRound,
-		"epochNumber", recalculatedCheckpoint.EpochNumber,
-		"eventRoot", recalculatedCheckpoint.EventRoot.String(),
-		"说明", "验证时用于计算checkpointHash的所有参数")
-
-	logger.Debug("🔍 验证时开始计算checkpoint哈希",
-		"blockNumber", blockNumber,
-		"chainID", productionChainID,
-		"realBlockHash", realBlockHash.String(),
-		"currentValidatorsHash", recalculatedCheckpoint.CurrentValidatorsHash.String(),
-		"nextValidatorsHash", recalculatedCheckpoint.NextValidatorsHash.String(),
-		"blockRound", recalculatedCheckpoint.BlockRound,
-		"epochNumber", recalculatedCheckpoint.EpochNumber)
-
-	// 🆕 添加详细的CheckpointData内容对比日志
-	logger.Debug("🔍 验证时CheckpointData详细信息",
-		"blockNumber", blockNumber,
-		"chainID", productionChainID,
-		"blockHash", realBlockHash.String(),
-		"blockRound", recalculatedCheckpoint.BlockRound,
-		"epochNumber", recalculatedCheckpoint.EpochNumber,
-		"eventRoot", recalculatedCheckpoint.EventRoot.String(),
-		"currentValidatorsHash", recalculatedCheckpoint.CurrentValidatorsHash.String(),
-		"nextValidatorsHash", recalculatedCheckpoint.NextValidatorsHash.String(),
-		"validatorsCount", len(validators))
-
 	checkpointHash, err := recalculatedCheckpoint.Hash(productionChainID, blockNumber, realBlockHash)
 	if err != nil {
 		logger.Error("❌ ValidateFinalizedData checkpoint哈希计算失败", "blockNumber", blockNumber, "error", err)
 		return fmt.Errorf("failed to calculate proposal hash: %w", err)
 	}
-
-	// 🆕 添加验证时checkpointHash结果显著日志
-	logger.Debug("🔍 ===== 验证时CheckpointHash计算结果 =====",
-		"blockNumber", blockNumber,
-		"checkpointHash", checkpointHash.String(),
-		"说明", "验证时最终计算出的checkpointHash")
-
-	// 🆕 添加生产和验证时参数对比日志
-	logger.Debug("🔍 ===== 生产vs验证CheckpointData参数对比 =====",
-		"blockNumber", blockNumber,
-		"生产时轮次", i.Checkpoint.BlockRound,
-		"验证时轮次", recalculatedCheckpoint.BlockRound,
-		"生产时currentValidatorsHash", i.Checkpoint.CurrentValidatorsHash.String(),
-		"验证时currentValidatorsHash", recalculatedCheckpoint.CurrentValidatorsHash.String(),
-		"生产时nextValidatorsHash", i.Checkpoint.NextValidatorsHash.String(),
-		"验证时nextValidatorsHash", recalculatedCheckpoint.NextValidatorsHash.String(),
-		"生产时eventRoot", i.Checkpoint.EventRoot.String(),
-		"验证时eventRoot", recalculatedCheckpoint.EventRoot.String(),
-		"说明", "对比生产和验证时的CheckpointData参数")
-
-	logger.Debug("🔍 验证时checkpoint哈希计算结果", "checkpointHash", checkpointHash.String())
 
 	// 🆕 关键修复：确保验证时使用的验证者集合与生产时完全一致
 	// 生产时使用 r.delegates 设置位图索引，验证时也应该使用相同的验证者集合

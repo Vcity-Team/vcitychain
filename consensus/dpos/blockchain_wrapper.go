@@ -291,15 +291,8 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 		consensusSwitchHeight = p.config.ConsensusSwitchHeight
 	}
 
-	p.logger.Debug("🔍🔍🔍 ========== blockchain_wrapper.ProcessBlock epoch检查 ========== 🔍🔍🔍",
-		"blockNumber", block.Number(),
-		"blockHash", block.Hash().String()[:16],
-		"epochSize", epochSize,
-		"consensusSwitchHeight", consensusSwitchHeight)
-
 	isEpochEnd := p.isEpochEndBlock(block.Number())
 
-	// 🆕 添加详细的奖励分配跟踪日志
 	p.logger.Debug("🔍🔍🔍 ========== blockchain_wrapper.ProcessBlock 奖励分配检查 ========== 🔍🔍🔍",
 		"blockNumber", block.Number(),
 		"blockHash", block.Hash().String()[:16],

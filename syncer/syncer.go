@@ -383,7 +383,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 	s.logger.Debug("🔍 准备获取区块流", "peer", peerID.String(), "从高度", localLatest+1, "到高度", peerLatestBlock)
 
 	// 🆕 关键日志：记录GetBlocks的参数
-	s.logger.Info("🚀 调用GetBlocks开始同步",
+	s.logger.Debug("🚀 调用GetBlocks开始同步",
 		"peer", peerID.String()[:8],
 		"startFrom", localLatest+1,
 		"peerLatestBlock", peerLatestBlock,
@@ -429,7 +429,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 			}
 
 			// 🆕 关键日志：从blockCh收到区块
-			s.logger.Info("🔍 从区块流接收到区块",
+			s.logger.Debug("🔍 从区块流接收到区块",
 				"peer", peerID.String()[:8],
 				"区块号", block.Number(),
 				"期望区块号", localLatest+1,

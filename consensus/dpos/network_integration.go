@@ -1348,7 +1348,7 @@ func (ni *NetworkIntegration) BroadcastSignatureResponse(response *SignatureResp
 	}
 	if shouldLog {
 		ni.lastBroadcastLogTime = &now
-		ni.logger.Info("🚀 网络集成层广播签名响应", "原始名称", "dpos-signature-response", "实际名称", actualTopicName)
+		ni.logger.Debug("🚀 网络集成层广播签名响应", "原始名称", "dpos-signature-response", "实际名称", actualTopicName)
 	}
 	ni.lastBroadcastLogTimeMutex.Unlock()
 
