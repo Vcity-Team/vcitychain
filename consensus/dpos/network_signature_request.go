@@ -200,11 +200,6 @@ func (r *dposRuntime) handleSignatureQueryRequest(from peer.ID) {
 
 // HandleSignatureRequest 处理来自网络集成的签名请求
 func (r *dposRuntime) HandleSignatureRequest(request *SignatureRequest) error {
-	r.logger.Debug("收到来自网络集成的签名请求",
-		"blockNumber", request.BlockNumber,
-		"checkpointHash", request.CheckpointHash.String(),
-		"proposer", request.Proposer.String())
-
 	// 检查是否是自己的请求
 	if request.Proposer == types.Address(r.config.Key.Address()) {
 		return nil

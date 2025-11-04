@@ -592,13 +592,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		"validatorsCount", len(validators),
 		"note", "确保验证者集合与生产时位图索引对应关系一致")
 
-	// 🔍 从 ExtraData 获取的验证者集合信息
-	logger.Debug("✅ 从 ExtraData 成功获取验证者集合",
-		"blockNumber", blockNumber,
-		"totalValidators", len(validators),
-		"validatorSource", "ExtraData.Validators",
-		"note", "用于BLS签名验证的验证者集合")
-
 	// 🆕 如果BLS公钥为nil，尝试从创世文件恢复
 	for i, validator := range validators {
 		if validator.BlsKey == nil {
@@ -1407,23 +1400,6 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		}
 	}
 
-	// 🆕 显著日志：位图索引与验证者集合对应关系
-	logger.Debug("🔍 ===== 位图索引与验证者集合对应关系 =====",
-		"blockNumber", blockNumber,
-		"validatorsCount", len(validators),
-		"bitmapHex", fmt.Sprintf("%x", s.Bitmap),
-		"note", "检查位图索引是否在验证者集合范围内")
-
-	for i := uint64(0); i < uint64(len(validators)); i++ {
-		logger.Debug("🔍 位图索引检查",
-			"blockNumber", blockNumber,
-			"bitmapIndex", i,
-			"isSet", s.Bitmap.IsSet(i),
-			"validatorAddress", validators[i].Address.String(),
-			"hasBlsKey", validators[i].BlsKey != nil,
-			"note", "位图索引与验证者集合一一对应")
-	}
-
 	// 🎯 按位图索引顺序收集公钥和地址，只使用实际签名者
 	for i := uint64(0); i < uint64(len(validators)); i++ {
 		if s.Bitmap.IsSet(i) {
@@ -1587,7 +1563,6 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		os.Exit(1)
 	}
 
-	logger.Debug("Signature.Verify - 签名验证成功")
 	return nil
 }
 

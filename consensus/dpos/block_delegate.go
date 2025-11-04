@@ -18,7 +18,6 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 	// 优先使用缓存的 delegates
 	if r.delegates != nil && len(r.delegates) > 0 {
 		validators = r.delegates
-		r.logger.Debug("✅ 使用缓存的验证者集合", "count", len(validators))
 	} else {
 		// 只在缓存为空时才查询数据库
 		r.logger.Warn("⚠️ 缓存为空，从数据库读取验证者")

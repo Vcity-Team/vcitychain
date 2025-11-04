@@ -3,8 +3,6 @@ package dpos
 import (
 	"fmt"
 	"os"
-	"runtime"
-	"strings"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/types"
@@ -14,24 +12,6 @@ import (
 // VerifyHeader 验证区块头部
 func (d *DPoS) VerifyHeader(header *types.Header) error {
 	blockNumber := header.Number
-
-	// 🆕 关键日志：追踪调用来源
-	buf := make([]byte, 4096)
-	n := runtime.Stack(buf, false)
-	stackTrace := string(buf[:n])
-	lines := strings.Split(stackTrace, "\n")
-	stackInfo := ""
-	if len(lines) > 6 {
-		stackInfo = strings.Join(lines[2:8], "\n")
-	} else {
-		stackInfo = stackTrace
-	}
-
-	d.logger.Debug("🔍 VerifyHeader被调用 - 追踪调用来源",
-		"blockNumber", blockNumber,
-		"blockHash", header.Hash.String()[:16],
-		"timestamp", time.Now().Format("15:04:05.000"),
-		"stackTrace", stackInfo)
 
 	// 🆕 添加：检查是否是共识切换高度
 	if d.config.ConsensusSwitchHeight > 0 && blockNumber == d.config.ConsensusSwitchHeight {
@@ -78,7 +58,6 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 
 		return err
 	}
-	d.logger.Debug("✅ DPoS VerifyHeader 验证完成", "blockNumber", blockNumber)
 	return nil
 }
 
@@ -131,7 +110,6 @@ func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift tim
 	}
 	d.logger.Debug("区块extraData验证成功")
 	d.logger.Debug("=== 验证区块头部成功 ===")
-	d.logger.Debug("✅ DPoS verifyHeaderImpl 验证完成", "blockNumber", blockNumber)
 	return nil
 }
 

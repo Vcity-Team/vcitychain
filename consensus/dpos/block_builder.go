@@ -716,16 +716,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		"nextValidatorsHash", checkpoint.NextValidatorsHash.String(),
 		"productionValidatorsCount", len(productionValidators))
 
-	// 🆕 打印生产时验证者集合的详细信息
-	r.logger.Debug("🔍 生产时验证者集合详细信息")
-	for i, validator := range productionValidators {
-		r.logger.Debug("🔍 生产时验证者",
-			"index", i,
-			"address", validator.Address.String(),
-			"votingPower", validator.VotingPower.String(),
-			"isActive", validator.IsActive)
-	}
-
 	checkpointHash, err := checkpoint.Hash(r.config.blockchain.GetChainID(), block.Block.Number(), realBlockHash)
 	if err != nil {
 		r.logger.Error("failed to calculate checkpoint hash", "error", err)
@@ -865,25 +855,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"productionValidatorsCount", len(productionValidators),
 			"note", "确保位图索引与验证者集合完全匹配")
 
-		// 🔍 生产时获取的验证者集合信息
-		r.logger.Debug("🔍 生产时验证者集合信息",
-			"blockNumber", block.Block.Number(),
-			"totalValidators", len(productionValidators),
-			"delegatesCount", len(r.delegates),
-			"validatorSource", "GetDelegates(blockNumber-1, nil)",
-			"note", "使用与验证时相同的验证者获取方法")
-
-		// 🔍 打印生产时验证者集合的详细信息
-		r.logger.Debug("🔍 生产时验证者集合详细信息")
-		for i, validator := range productionValidators {
-			r.logger.Debug("🔍 生产时验证者",
-				"blockNumber", block.Block.Number(),
-				"index", i,
-				"address", validator.Address.String(),
-				"votingPower", validator.VotingPower.String(),
-				"isActive", validator.IsActive)
-		}
-
 		// 🆕 验证：确保验证者集合与 r.delegates 一致
 		if len(productionValidators) != len(r.delegates) {
 			r.logger.Warn("⚠️ 验证者集合数量不一致",
@@ -891,11 +862,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				"delegatesCount", len(r.delegates),
 				"blockNumber", block.Block.Number())
 		}
-
-		r.logger.Debug("🔍 生产时验证者集合信息",
-			"blockNumber", block.Block.Number(),
-			"totalValidators", len(productionValidators),
-			"delegatesCount", len(r.delegates))
 
 		// 创建位图索引到签名的映射
 		bitmapToSignature := make(map[uint64][]byte)
@@ -927,35 +893,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 						continue
 					}
 					blsSignatures = append(blsSignatures, sig)
-					r.logger.Debug("✅ BLS签名按位图顺序排列",
-						"bitmapIndex", i,
-						"signatureIndex", len(blsSignatures)-1,
-						"validatorAddress", productionValidators[i].Address.String())
 				}
-			}
-		}
-
-		r.logger.Debug("签名解析完成",
-			"parsedSignatures", len(blsSignatures),
-			"totalSignatures", len(signatures))
-
-		// 🆕 打印每个签名的详细信息
-		r.logger.Debug("🔍 生产时BLS签名详细信息:")
-		for i, sig := range blsSignatures {
-			if sig != nil {
-				sigBytes, err := sig.Marshal()
-				if err == nil {
-					r.logger.Debug("🔍 生产时BLS签名详情",
-						"index", i,
-						"signatureBytes", fmt.Sprintf("%x", sigBytes),
-						"signatureLength", len(sigBytes))
-				} else {
-					r.logger.Error("❌ 生产时BLS签名序列化失败",
-						"index", i,
-						"error", err)
-				}
-			} else {
-				r.logger.Error("❌ 生产时BLS签名为nil", "index", i)
 			}
 		}
 
@@ -974,10 +912,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				"aggregatedSignatureBytes", fmt.Sprintf("%x", aggregatedSignature))
 			return nil, fmt.Errorf("aggregated signature length is %d, expected 64", len(aggregatedSignature))
 		}
-
-		r.logger.Debug("✅ 签名聚合成功",
-			"aggregatedSignatureLength", len(aggregatedSignature),
-			"aggregatedSignatureBytes", fmt.Sprintf("%x", aggregatedSignature))
 
 		// 🆕 测试：验证聚合签名是否可以正确解析
 		r.logger.Debug("🔍 测试聚合签名解析...")

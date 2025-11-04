@@ -341,13 +341,6 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 		lastNumber, shouldTerminate, err := s.bulkSyncWithPeer(bestPeer.ID, bestPeer.Number, callback)
 		if err != nil {
 			s.logger.Warn("failed to complete bulk sync with peer, try to next one", "peer ID", "error", bestPeer.ID, err)
-		} else {
-			// 🆕 添加bulkSyncWithPeer成功完成的日志
-			s.logger.Debug("✅ bulkSyncWithPeer完成",
-				"peerID", bestPeer.ID.String(),
-				"lastNumber", lastNumber,
-				"shouldTerminate", shouldTerminate,
-				"timestamp", time.Now().Format("15:04:05.000"))
 		}
 
 		if lastNumber < bestPeer.Number {
@@ -371,24 +364,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 	localLatest := s.blockchain.Header().Number
 	shouldTerminate := false
 
-	// 🆕 添加同步参数的详细日志
-	s.logger.Debug("📊 同步参数详情",
-		"peer", peerID.String(),
-		"peerLatestBlock", peerLatestBlock,
-		"localLatest", localLatest,
-		"startFrom", localLatest+1,
-		"willSync", peerLatestBlock > localLatest,
-		"timestamp", time.Now().Format("15:04:05.000"))
-
 	s.logger.Debug("🔍 准备获取区块流", "peer", peerID.String(), "从高度", localLatest+1, "到高度", peerLatestBlock)
-
-	// 🆕 关键日志：记录GetBlocks的参数
-	s.logger.Debug("🚀 调用GetBlocks开始同步",
-		"peer", peerID.String()[:8],
-		"startFrom", localLatest+1,
-		"peerLatestBlock", peerLatestBlock,
-		"expectedCount", peerLatestBlock-localLatest,
-		"timestamp", time.Now().Format("15:04:05.000"))
 
 	blockCh, err := s.syncPeerClient.GetBlocks(peerID, localLatest+1, s.blockTimeout)
 	if err != nil {

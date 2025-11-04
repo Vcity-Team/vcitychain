@@ -225,14 +225,6 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		}
 	}
 
-	// 🆕 添加调试日志，显示共识切换高度检查的详细信息
-	r.logOnceWithInterval("consensus_switch_height_check", 5*time.Second, "debug",
-		"🔍 共识切换高度检查",
-		"currentBlockNumber", currentBlock.Number,
-		"consensusSwitchHeight", consensusSwitchHeight,
-		"hasDPoSBackend", hasDPoSBackend,
-		"shouldUseIBFT", consensusSwitchHeight > 0 && currentBlock.Number < consensusSwitchHeight)
-
 	// 🆕 关键：在共识切换高度之前（blockNumber < consensusSwitchHeight），使用IBFT逻辑
 	// 注意：consensusSwitchHeight 为 0 时，表示还没有设置共识切换高度，应该使用IBFT
 	if consensusSwitchHeight > 0 && currentBlock.Number < consensusSwitchHeight {

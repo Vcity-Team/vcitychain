@@ -335,9 +335,6 @@ func (r *dposRuntime) produceBlock() error {
 	if writtenBlock, exists := r.config.blockchain.GetHeaderByNumber(block.Block.Number()); exists {
 		r.logger.Debug("区块验证成功", "blockNumber", writtenBlock.Number, "blockHash", writtenBlock.Hash.String(), "stateRoot", writtenBlock.StateRoot.String())
 
-		// 进一步验证区块数据完整性
-		r.logger.Debug("区块数据完整性验证", "blockNumber", block.Block.Number(), "txCount", len(block.Block.Transactions))
-
 		// 记录所有交易的详细信息，帮助诊断
 		for i, tx := range block.Block.Transactions {
 			r.logger.Info("区块交易详情",
@@ -349,7 +346,6 @@ func (r *dposRuntime) produceBlock() error {
 		}
 
 		// 验证交易查找表是否正确写入（关键验证）
-		r.logger.Debug("开始验证交易查找表写入状态...")
 		for i, tx := range block.Block.Transactions {
 			// 尝试通过交易哈希查找区块
 			if blockHash, found := r.config.blockchain.ReadTxLookup(tx.Hash); found {
