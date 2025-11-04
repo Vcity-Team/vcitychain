@@ -76,35 +76,39 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 			shouldProduce := r.shouldProduceBlockNow()
 
 			if shouldProduce {
-				// 在同一行追加 genesisTime 与 validatorsOrdered
-				var genesisStr string
-				var validators []string
-				if r.config != nil && r.config.blockScheduler != nil {
-					genesisStr = r.config.blockScheduler.GetGenesisTime().Format("2006-01-02 15:04:05.000")
-					if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-						for _, d := range r.delegates {
-							info := dposInstance.getValidatorFaultInfo(d.Address)
-							isFaulty := false
-							if v, ok := info["isFaulty"].(bool); ok {
-								isFaulty = v
-							}
-							if !isFaulty {
-								validators = append(validators, d.Address.String())
-							}
-						}
-					} else {
-						for _, d := range r.delegates {
-							validators = append(validators, d.Address.String())
-						}
-					}
-				}
-				r.logOnceWithInterval("should_produce_start", 2*time.Second, "debug",
-					"✅ shouldProduceBlockNow返回true，开始出块",
-					"timestamp", time.Now().Format("15:04:05.000"),
-					"genesisTime", genesisStr,
-					"validatorsOrdered", validators)
+				// 🆕 优化：立即调用produceBlock，不阻塞出块流程
 				if err := r.produceBlock(); err != nil {
 					r.logger.Error("出块失败", "error", err)
+				} else {
+					// 🆕 异步收集日志信息（不阻塞出块流程）
+					go func() {
+						var genesisStr string
+						var validators []string
+						if r.config != nil && r.config.blockScheduler != nil {
+							genesisStr = r.config.blockScheduler.GetGenesisTime().Format("2006-01-02 15:04:05.000")
+							if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+								for _, d := range r.delegates {
+									info := dposInstance.getValidatorFaultInfo(d.Address)
+									isFaulty := false
+									if v, ok := info["isFaulty"].(bool); ok {
+										isFaulty = v
+									}
+									if !isFaulty {
+										validators = append(validators, d.Address.String())
+									}
+								}
+							} else {
+								for _, d := range r.delegates {
+									validators = append(validators, d.Address.String())
+								}
+							}
+						}
+						r.logOnceWithInterval("should_produce_start", 2*time.Second, "debug",
+							"✅ shouldProduceBlockNow返回true，开始出块",
+							"timestamp", time.Now().Format("15:04:05.000"),
+							"genesisTime", genesisStr,
+							"validatorsOrdered", validators)
+					}()
 				}
 			} else {
 				// 🆕 添加为什么不应该出块的详细日志
@@ -247,12 +251,10 @@ func (r *dposRuntime) produceBlock() error {
 			"votingPower", currentDelegateInfo.VotingPower.String())
 	}
 
-	// 🎯 只依赖 shouldProduceBlockNow() 的实时判断
-	// 完全基于时间slot计算，不依赖区块号的索引计算
-	if !r.shouldProduceBlockNow() {
-		r.logger.Debug("不是当前轮次的委托者，跳过出块（基于时间slot判断）")
-		return nil
-	}
+	// 🆕 优化：移除重复的shouldProduceBlockNow检查
+	// 原因：shouldProduceBlockNow()已经在continuousBlockMonitoring()中调用（第76行）
+	// produceBlock()只在shouldProduceBlockNow()返回true时才会被调用
+	// 重复检查浪费时间和资源
 
 	// 检查是否已经有更新的区块
 	// currentBlock 已在上面声明过了

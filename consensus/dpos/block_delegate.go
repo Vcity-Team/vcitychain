@@ -5,26 +5,41 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
 )
 
 // getCurrentDelegate 获取当前受托人（基于时间slot实时计算）
 func (r *dposRuntime) getCurrentDelegate() types.Address {
-	// 🆕 使用公共函数获取排序和限制后的验证者
-	dposBackend, ok := r.backend.(*DPoS)
-	if !ok {
-		r.logger.Error("❌ 无法访问数据库，backend类型错误")
-		return types.ZeroAddress
-	}
-	validators, err := dposBackend.GetSortedValidatorsWithLimit()
-	if err != nil {
-		r.logger.Error("❌ 从数据库读取验证者失败", "error", err)
-		return types.ZeroAddress
+	// 🆕 优化：优先使用缓存的验证者集合，避免每次查询数据库
+	var validators validator.AccountSet
+	var err error
+	
+	// 优先使用缓存的 delegates
+	if r.delegates != nil && len(r.delegates) > 0 {
+		validators = r.delegates
+		r.logger.Debug("✅ 使用缓存的验证者集合", "count", len(validators))
+	} else {
+		// 只在缓存为空时才查询数据库
+		r.logger.Warn("⚠️ 缓存为空，从数据库读取验证者")
+		dposBackend, ok := r.backend.(*DPoS)
+		if !ok {
+			r.logger.Error("❌ 无法访问数据库，backend类型错误")
+			return types.ZeroAddress
+		}
+		validators, err = dposBackend.GetSortedValidatorsWithLimit()
+		if err != nil {
+			r.logger.Error("❌ 从数据库读取验证者失败", "error", err)
+			return types.ZeroAddress
+		}
+		// 更新缓存
+		r.delegates = validators
+		r.logger.Info("✅ 从数据库读取验证者并更新缓存", "count", len(validators))
 	}
 
 	actualDelegateCount := len(validators)
 	if actualDelegateCount == 0 {
-		r.logger.Warn("🔍 getCurrentDelegate: 数据库中没有验证者")
+		r.logger.Warn("🔍 getCurrentDelegate: 验证者集合为空")
 		return types.ZeroAddress
 	}
 

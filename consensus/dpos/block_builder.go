@@ -173,8 +173,13 @@ func (b *BlockBuilder) WriteTx(tx *types.Transaction) error {
 // Fill fills the block with transactions from the txpool
 func (b *BlockBuilder) Fill() {
 	blockTimer := time.NewTimer(b.params.BlockTime)
+	defer blockTimer.Stop() // 🆕 确保定时器被清理
 
 	b.params.TxPool.Prepare()
+
+	hasTransactions := false  // 🆕 跟踪是否有交易
+	startTime := time.Now()   // 🆕 记录开始时间
+
 write:
 	for {
 		select {
@@ -182,6 +187,17 @@ write:
 			return
 		default:
 			tx := b.params.TxPool.Peek()
+
+			// 🆕 如果没有交易，立即返回（不等待定时器）
+			if tx == nil {
+				if !hasTransactions {
+					return
+				}
+				// 如果有交易但处理完了，等待剩余时间
+				break write
+			}
+
+			hasTransactions = true // 🆕 标记有交易
 
 			// execute transactions one by one
 			finished, err := b.writeTxPoolTransaction(tx)
@@ -195,8 +211,22 @@ write:
 		}
 	}
 
-	//	wait for the timer to expire
-	<-blockTimer.C
+	// 🆕 只有在有交易时才等待定时器到期
+	// 如果没有交易，直接返回（不等待）
+	if hasTransactions {
+		elapsed := time.Since(startTime)
+		remaining := b.params.BlockTime - elapsed
+		if remaining > 0 {
+			// 等待剩余时间，但不超过定时器剩余时间
+			select {
+			case <-blockTimer.C:
+				// 定时器到期，立即返回
+			case <-time.After(remaining):
+				// 等待剩余时间
+			}
+		}
+	}
+	// 如果没有交易，直接返回（不等待）
 }
 
 // Receipts returns the collection of transaction receipts for given block
