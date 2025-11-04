@@ -198,10 +198,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 	if r.config.dposBackend != nil {
 		networkLatest := r.getNetworkLatestBlockNumber()
 		if networkLatest > currentBlock.Number {
-			r.logger.Debug("⏸️ 节点落后，先同步再出块",
-				"localNumber", currentBlock.Number,
-				"networkLatest", networkLatest)
-		return false
+			return false
 		}
 	}
 
@@ -249,8 +246,6 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 
 		// 🆕 获取验证者列表并过滤故障验证者
 		activeValidators := make([]types.Address, 0, len(r.delegates))
-		r.logOnceWithInterval("memory_validators_before_filter", 10*time.Second, "debug",
-			"🔍 内存中的验证者列表（过滤前）:", "count", len(r.delegates))
 
 		// 🆕 检查DPoS实例是否存在
 		dposInstance, dposExists := GetDPoSInstance("vcity_dpos")
@@ -259,7 +254,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 				"⚠️ DPoS实例不存在，跳过故障过滤，使用所有验证者")
 		}
 
-		for i, d := range r.delegates {
+		for _, d := range r.delegates {
 			// 获取验证者的故障标志信息
 			var faultInfo map[string]interface{}
 			var isFaulty bool
@@ -282,25 +277,9 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 				isFaulty = false
 			}
 
-			// 打印所有验证者的故障标志信息
-			r.logOnceWithInterval(fmt.Sprintf("memory_validator_%d", i), 10*time.Second, "debug",
-				"👤 内存验证者",
-				"index", i+1,
-				"address", d.Address.String(),
-				"votingPower", d.VotingPower.String(),
-				"isFaulty", isFaulty,
-				"missedBlocks", faultInfo["missedBlocks"],
-				"reason", faultInfo["reason"])
-
 			// 只保留非故障验证者
 			if !isFaulty {
 				activeValidators = append(activeValidators, d.Address)
-			} else {
-				r.logOnceWithInterval(fmt.Sprintf("memory_validator_filtered_%s", d.Address.String()), 10*time.Second, "debug",
-					"🚫 内存中验证者列表过滤掉故障验证者",
-					"address", d.Address.String(),
-					"missedBlocks", faultInfo["missedBlocks"],
-					"reason", faultInfo["reason"])
 			}
 		}
 
@@ -316,10 +295,6 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 				validators[i] = d.Address
 			}
 		}
-
-		r.logOnceWithInterval("memory_validators_after_filter", 10*time.Second, "debug",
-			"✅ 过滤后的内存验证者列表:", "count", len(validators),
-			"originalCount", len(r.delegates))
 
 		// 🆕 调用改进后的方法（直接比较地址）
 		result := r.config.blockScheduler.ShouldProduceBlockNow(myAddress, validators, currentBlock.Number)

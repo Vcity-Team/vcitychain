@@ -63,17 +63,6 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 
 // verifyHeaderImpl 验证区块头部的实现
 func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift time.Duration, parents []*types.Header) error {
-	blockNumber := header.Number
-	d.logger.Debug("🔍 DPoS verifyHeaderImpl 开始验证", "blockNumber", blockNumber, "extraDataLength", len(header.ExtraData))
-
-	// 添加详细的日志 - 节点3验证区块2头部
-	d.logger.Debug("=== 验证区块头部开始 ===",
-		"blockNumber", header.Number,
-		"blockHash", header.Hash.String(),
-		"parentNumber", parent.Number,
-		"parentHash", parent.Hash.String(),
-		"extraDataLength", len(header.ExtraData))
-
 	// validate header fields
 	if err := validateHeaderFields(parent, header, uint64(blockTimeDrift.Seconds())); err != nil {
 		// 🆕 打印parent区块信息（Info级别）
@@ -149,20 +138,11 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 
 				// 获取父区块
 				parent, exists := d.config.Blockchain.GetHeader(header.ParentHash, header.Number-1)
-				d.logger.Debug("🔍 验证节点获取父区块结果",
-					"blockNumber", header.Number,
-					"parentHash", header.ParentHash.String()[:16],
-					"parentExists", exists,
-					"parentIsNil", parent == nil)
 
 				if !exists {
 					d.logger.Error("❌ 验证节点无法获取父区块", "blockNumber", header.Number, "parentHash", header.ParentHash.String()[:16])
 				} else {
 					// 调用blockchain_wrapper.ProcessBlock执行奖励分配
-					d.logger.Debug("🚀 验证节点开始调用blockchain_wrapper.ProcessBlock执行奖励分配",
-						"blockNumber", header.Number,
-						"blockHash", header.Hash.String()[:16])
-
 					if fullBlock, err := d.blockchain.ProcessBlock(parent, block); err != nil {
 						d.logger.Error("❌ 验证节点blockchain_wrapper.ProcessBlock调用失败", "blockNumber", header.Number, "error", err)
 						// 不返回错误，继续处理其他逻辑
@@ -196,10 +176,6 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 				if err := d.processEconomicSystem(fullBlock); err != nil {
 					d.logger.Error("❌ 同步时处理经济系统失败", "blockNumber", header.Number, "error", err)
 					// 不返回错误，继续处理其他逻辑
-				} else {
-					d.logger.Debug("✅ processEconomicSystem调用成功",
-						"blockNumber", header.Number,
-						"blockHash", header.Hash.String()[:16])
 				}
 			} else {
 				d.logger.Warn("⚠️ 无法获取完整区块信息，跳过经济系统处理",
@@ -216,9 +192,6 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 
 		// 🆕 在区块同步时存储验证者集合到历史数据库
 		if d.state != nil && d.state.StakeStore != nil {
-			d.logger.Debug("🔍 区块同步时存储验证者集合到历史数据库",
-				"blockNumber", header.Number,
-				"blockHash", header.Hash.String()[:16])
 
 			// 从区块ExtraData解析验证者集合
 			validators, err := d.GetDelegates(header.Number, []*types.Header{header})

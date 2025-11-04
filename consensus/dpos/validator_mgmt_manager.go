@@ -16,19 +16,11 @@ func (d *DPoS) GetDelegates(blockNumber uint64, parents []*types.Header) (valida
 	defer d.lock.RUnlock()
 
 	currentBlockNumber := d.blockchain.CurrentHeader().Number
-	d.logger.Debug("🔍 验证时获取验证者集合",
-		"requestedBlockNumber", blockNumber,
-		"currentBlockNumber", currentBlockNumber,
-		"isCurrentBlock", blockNumber == currentBlockNumber,
-		"note", "验证时获取验证者集合")
 
 	// 如果是当前区块，优先返回从runtime.delegates获取的验证者
 	if blockNumber == currentBlockNumber {
-		d.logger.Debug("🔍 Returning current delegates from memory")
-
 		// 🆕 优先使用 runtime.delegates，如果为空则从数据库读取
 		if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
-			d.logger.Debug("🔍 使用从runtime.delegates获取的验证者")
 			result := d.runtime.delegates.Copy()
 			return result, nil
 		}

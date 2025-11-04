@@ -286,11 +286,6 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 
 	isEpochEnd := p.isEpochEndBlock(block.Number())
 
-	p.logger.Debug("🔍🔍🔍 ========== blockchain_wrapper.ProcessBlock 奖励分配检查 ========== 🔍🔍🔍",
-		"blockNumber", block.Number(),
-		"blockHash", block.Hash().String()[:16],
-		"isEpochEnd", isEpochEnd)
-
 	// 🆕 如果是epoch结束区块且不是生产节点自己生产的区块，处理奖励分发
 	if isEpochEnd {
 		p.logger.Debug("🎯🎯🎯 ========== 开始执行奖励分配 ========== 🎯🎯🎯",
@@ -378,15 +373,6 @@ func (p *blockchainWrapper) isEpochEndBlock(blockNumber uint64) bool {
 	// 检查是否是epoch的最后一个区块
 	isEpochEnd := firstBlockInEpoch+epochSize-1 == blockNumber
 
-	p.logger.Debug("🔍 isEpochEndBlock: 详细计算",
-		"blockNumber", blockNumber,
-		"consensusSwitchHeight", consensusSwitchHeight,
-		"dposBlockNumber", dposBlockNumber,
-		"epochSize", epochSize,
-		"currentEpoch", currentEpoch,
-		"firstBlockInEpoch", firstBlockInEpoch,
-		"lastBlockInEpoch", firstBlockInEpoch+epochSize-1,
-		"isEpochEnd", isEpochEnd)
 
 	return isEpochEnd
 }

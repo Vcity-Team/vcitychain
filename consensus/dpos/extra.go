@@ -527,14 +527,11 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 	var nextValidatorsHash types.Hash
 
 	// 如果有验证者集合，重新计算哈希值
-	logger.Debug("🔍 ValidateFinalizedData 开始计算验证者哈希", "blockNumber", blockNumber, "validatorsCount", len(validators))
 	if len(validators) > 0 {
-		logger.Debug("🔍 验证时开始计算验证者哈希", "validatorsCount", len(validators))
 		// 使用与生产时相同的validator.AccountSet.HashAddressOnly()方法
 		if hash, err := validators.HashAddressOnly(); err == nil {
 			currentValidatorsHash = hash
 			nextValidatorsHash = hash // 暂时使用相同的哈希
-			logger.Debug("✅ ValidateFinalizedData 验证者哈希计算成功", "blockNumber", blockNumber, "currentValidatorsHash", currentValidatorsHash.String()[:16])
 		} else {
 			// 如果计算失败，使用空哈希
 			logger.Error("❌ 验证时验证者哈希计算失败", "error", err)

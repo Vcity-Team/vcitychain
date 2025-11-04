@@ -520,7 +520,6 @@ func (d *DPoS) Start() error {
 
 		blockHandler := func(b *types.FullBlock) bool {
 			// 实现DPoS的区块处理逻辑
-			d.logger.Debug("processing block", "number", b.Block.Number())
 
 			// 处理奖励分配
 			if err := d.processRewards(b); err != nil {
@@ -1467,7 +1466,6 @@ func (d *DPoS) GetDelegateIndex(delegate types.Address) uint64 {
 func (d *DPoS) processRewards(block *types.FullBlock) error {
 	// 处理奖励分配
 	// TODO: 实现奖励分配逻辑
-	d.logger.Info("processing rewards", "block", block.Block.Number())
 	return nil
 }
 
