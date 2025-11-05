@@ -133,20 +133,24 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 }
 
 // produceBlock 生产区块
+// 🆕 方案1+2：缩小锁的粒度，使用读写锁
 func (r *dposRuntime) produceBlock() error {
-	r.lock.Lock()
-	defer r.lock.Unlock()
-
-	// 🆕 新增：检查当前 slot 是否已经出过块
+	// 🆕 方案1：将slot检查移到锁外，使用读锁快速检查
+	var currentSlot int = -1
 	if r.config.blockScheduler != nil {
 		now := time.Now()
 		genesisTime := r.config.blockScheduler.GetGenesisTime()
 		blockWindow := r.config.blockScheduler.GetBlockWindow()
 		timeSinceGenesis := now.Sub(genesisTime)
-		currentSlot := int(timeSinceGenesis / blockWindow)
+		currentSlot = int(timeSinceGenesis / blockWindow)
+
+		// 🆕 使用读锁快速检查
+		r.lock.RLock()
+		lastSlot := r.lastProducedSlot
+		r.lock.RUnlock()
 
 		// 如果当前 slot 已经出过块，跳过
-		if r.lastProducedSlot >= 0 && r.lastProducedSlot == currentSlot {
+		if lastSlot >= 0 && lastSlot == currentSlot {
 			return nil
 		}
 	}
@@ -176,8 +180,12 @@ func (r *dposRuntime) produceBlock() error {
 	// 检查当前节点是否有足够的stake参与出块
 	var currentDelegateInfo *validator.ValidatorMetadata
 
-	// 🆕 如果delegates为空，尝试重新加载
-	if r.delegates == nil || len(r.delegates) == 0 {
+	// 🆕 如果delegates为空，尝试重新加载（使用读锁检查，写锁更新）
+	r.lock.RLock()
+	delegatesEmpty := r.delegates == nil || len(r.delegates) == 0
+	r.lock.RUnlock()
+
+	if delegatesEmpty {
 		r.logger.Warn("⚠️ delegates为空，尝试重新加载验证者信息")
 		if r.config != nil && r.config.dposBackend != nil {
 			currentBlockNumber := uint64(0)
@@ -188,15 +196,23 @@ func (r *dposRuntime) produceBlock() error {
 			}
 
 			if delegates, err := r.config.dposBackend.GetDelegates(currentBlockNumber, nil); err == nil && len(delegates) > 0 {
+				// 🆕 使用写锁更新delegates（快速操作）
+				r.lock.Lock()
 				r.delegates = delegates
-				r.logger.Info("✅ 成功重新加载验证者信息", "count", len(r.delegates))
+				r.lock.Unlock()
+				r.logger.Info("✅ 成功重新加载验证者信息", "count", len(delegates))
 			} else {
 				r.logger.Error("❌ 无法重新加载验证者信息", "error", err)
 			}
 		}
 	}
 
-	for _, delegate := range r.delegates {
+	// 🆕 使用读锁读取delegates（避免在构建区块时被阻塞）
+	r.lock.RLock()
+	delegates := r.delegates
+	r.lock.RUnlock()
+
+	for _, delegate := range delegates {
 		if delegate.Address == keyAddr {
 			currentDelegateInfo = delegate
 			// 🆕 修复：确保IsActive为true（验证者应该都是活跃的）
@@ -245,7 +261,7 @@ func (r *dposRuntime) produceBlock() error {
 			"currentDelegate", currentDelegate,
 			"keyAddr", keyAddr,
 			"currentRound", r.currentRound,
-			"delegatesCount", len(r.delegates),
+			"delegatesCount", len(delegates),
 			"votingPower", currentDelegateInfo.VotingPower.String())
 	}
 
@@ -283,7 +299,8 @@ func (r *dposRuntime) produceBlock() error {
 		return nil
 	}
 
-	// 构建新区块
+	// 🆕 方案1：构建区块和签名收集不在锁内（避免阻塞）
+	// 构建新区块（无锁，不阻塞）
 	r.logger.Debug("🏗️ DPoS开始构建新区块", "blockNumber", nextBlockNumber)
 	block, err := r.buildBlock()
 	if err != nil {
@@ -302,6 +319,7 @@ func (r *dposRuntime) produceBlock() error {
 		}
 	}
 
+	// 提交区块（可能需要锁，取决于blockchain的实现）
 	if err := r.config.blockchain.CommitBlock(block); err != nil {
 		r.logger.Error("区块提交失败", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String(), "error", err)
 		return fmt.Errorf("failed to commit block: %w", err)
@@ -316,14 +334,21 @@ func (r *dposRuntime) produceBlock() error {
 		"timestamp", block.Block.Header.Timestamp,
 		"delegate", r.config.Key.Address().String()[:16])
 
-	// 🆕 标记当前 slot 已出块
-	if r.config.blockScheduler != nil {
+	// 🆕 方案1：只在更新状态时使用写锁（时间很短）
+	if r.config.blockScheduler != nil && currentSlot >= 0 {
+		r.lock.Lock()
+		// 🆕 再次检查（防止并发问题）
 		now := time.Now()
 		genesisTime := r.config.blockScheduler.GetGenesisTime()
 		blockWindow := r.config.blockScheduler.GetBlockWindow()
 		timeSinceGenesis := now.Sub(genesisTime)
-		currentSlot := int(timeSinceGenesis / blockWindow)
-		r.lastProducedSlot = currentSlot
+		actualSlot := int(timeSinceGenesis / blockWindow)
+		
+		// 如果slot已经变化，不更新（避免覆盖新的slot）
+		if actualSlot == currentSlot {
+			r.lastProducedSlot = currentSlot
+		}
+		r.lock.Unlock()
 	}
 
 	// 添加事件触发日志跟踪

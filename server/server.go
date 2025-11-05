@@ -149,16 +149,17 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		"maxMissedBlocks":       float64(s.config.MaxMissedBlocks),
 	}
 
-	// 从YAML配置中获取区块时间
+	// 从YAML配置中获取区块时间（必须配置，不允许使用默认值）
 	s.logger.Info("🔍 检查BlockTimeSeconds配置", "value", s.config.BlockTimeSeconds)
 	if blockTimeSeconds := s.config.BlockTimeSeconds; blockTimeSeconds > 0 {
 		blockTimeDuration := time.Duration(blockTimeSeconds) * time.Second
 		engineConfig["blockTime"] = blockTimeDuration.String()
 		s.logger.Info("⏰ 设置区块时间", "seconds", blockTimeSeconds, "duration", blockTimeDuration.String())
 	} else {
-		// 设置默认值
-		engineConfig["blockTime"] = "2s"
-		s.logger.Info("⏰ 使用默认区块时间", "duration", "2s")
+		// ❌ 读取不到blockTime配置，返回错误（不允许使用默认值）
+		err := fmt.Errorf("block_time_s configuration is required but not found or invalid (value: %d). Please set block_time_s in your YAML configuration file", s.config.BlockTimeSeconds)
+		s.logger.Error("❌ 区块时间配置缺失", "error", err)
+		return err
 	}
 
 	// 从YAML配置中获取epoch duration

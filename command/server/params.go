@@ -245,6 +245,7 @@ func (p *serverParams) generateConfig() *server.Config {
 		DPoSVoterRewardRatio:     p.rawConfig.DPoSVoterRewardRatio,
 		DPoSProposalVotePeriod:   p.dposProposalVotePeriod,
 		DPoSProposalValidPeriod:  p.dposProposalValidPeriod,
+		BlockTimeSeconds:         p.rawConfig.BlockTimeSeconds, // 🆕 传递BlockTimeSeconds配置
 		JSONLogFormat:            p.rawConfig.JSONLogFormat,
 		LogFilePath:              p.logFileLocation,
 

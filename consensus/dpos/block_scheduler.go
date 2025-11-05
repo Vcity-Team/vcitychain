@@ -228,6 +228,7 @@ func (bs *BlockScheduler) StartNewEpoch(epochNumber uint64, currentTime time.Tim
 }
 
 // shouldProduceBlockNow 检查当前节点是否应该现在出块
+// 🆕 方案2：使用读锁，不阻塞其他检查
 func (r *dposRuntime) shouldProduceBlockNow() bool {
 	currentBlock := r.config.blockchain.CurrentHeader()
 	if currentBlock == nil {
@@ -242,6 +243,25 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 	if r.config.dposBackend != nil {
 		networkLatest := r.getNetworkLatestBlockNumber()
 		if networkLatest > currentBlock.Number {
+			return false
+		}
+	}
+
+	// 🆕 方案2：使用读锁快速检查lastProducedSlot（如果使用blockScheduler）
+	if r.config.blockScheduler != nil {
+		now := time.Now()
+		genesisTime := r.config.blockScheduler.GetGenesisTime()
+		blockWindow := r.config.blockScheduler.GetBlockWindow()
+		timeSinceGenesis := now.Sub(genesisTime)
+		currentSlot := int(timeSinceGenesis / blockWindow)
+
+		// 🆕 使用读锁快速检查
+		r.lock.RLock()
+		lastSlot := r.lastProducedSlot
+		r.lock.RUnlock()
+
+		// 如果当前 slot 已经出过块，跳过
+		if lastSlot >= 0 && lastSlot == currentSlot {
 			return false
 		}
 	}
@@ -288,8 +308,13 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		// 获取本节点地址
 		myAddress := types.Address(r.config.Key.Address())
 
+		// 🆕 方案2：使用读锁读取delegates（避免阻塞）
+		r.lock.RLock()
+		delegates := r.delegates
+		r.lock.RUnlock()
+
 		// 🆕 获取验证者列表并过滤故障验证者
-		activeValidators := make([]types.Address, 0, len(r.delegates))
+		activeValidators := make([]types.Address, 0, len(delegates))
 
 		// 🆕 检查DPoS实例是否存在
 		dposInstance, dposExists := GetDPoSInstance("vcity_dpos")
@@ -298,7 +323,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 				"⚠️ DPoS实例不存在，跳过故障过滤，使用所有验证者")
 		}
 
-		for _, d := range r.delegates {
+		for _, d := range delegates {
 			// 获取验证者的故障标志信息
 			var faultInfo map[string]interface{}
 			var isFaulty bool
@@ -332,10 +357,10 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		if len(validators) == 0 {
 			r.logOnceWithInterval("all_validators_filtered_fallback", 10*time.Second, "warn",
 				"⚠️ 所有验证者被过滤，回退到原始验证者列表",
-				"originalCount", len(r.delegates))
+				"originalCount", len(delegates))
 			// 回退到原始验证者列表
-			validators = make([]types.Address, len(r.delegates))
-			for i, d := range r.delegates {
+			validators = make([]types.Address, len(delegates))
+			for i, d := range delegates {
 				validators[i] = d.Address
 			}
 		}
