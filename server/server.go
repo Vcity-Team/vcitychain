@@ -576,6 +576,13 @@ func NewServer(config *Config) (*Server, error) {
 			Blockchain: m.blockchain,
 		}
 
+		// 🆕 添加日志：输出交易池配置值，用于验证配置是否正确加载
+		logger.Info("🔧 初始化交易池配置",
+			"MaxSlots", m.config.MaxSlots,
+			"MaxAccountEnqueued", m.config.MaxAccountEnqueued,
+			"PriceLimit", m.config.PriceLimit,
+		)
+
 		// start transaction pool
 		m.txpool, err = txpool.NewTxPool(
 			logger,
@@ -1277,6 +1284,11 @@ func (j *jsonRPCHub) GetNonce(addr types.Address) uint64 {
 // GetBaseFee returns the current base fee of TxPool
 func (j *jsonRPCHub) GetBaseFee() uint64 {
 	return j.TxPool.GetBaseFee()
+}
+
+// GetMaxAccountEnqueued returns the maximum number of enqueued transactions per account
+func (j *jsonRPCHub) GetMaxAccountEnqueued() uint64 {
+	return j.TxPool.GetMaxAccountEnqueued()
 }
 
 // GetConsensus returns the consensus engine

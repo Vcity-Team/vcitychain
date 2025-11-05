@@ -54,6 +54,11 @@ func (p *TxPool) GetBaseFee() uint64 {
 	return atomic.LoadUint64(&p.baseFee)
 }
 
+// GetMaxAccountEnqueued returns the maximum number of enqueued transactions per account
+func (p *TxPool) GetMaxAccountEnqueued() uint64 {
+	return p.maxAccountEnqueued
+}
+
 // SetBaseFee calculates base fee from the (current) header and sets value into baseFee field
 func (p *TxPool) SetBaseFee(header *types.Header) {
 	atomic.StoreUint64(&p.baseFee, p.store.CalculateBaseFee(header))

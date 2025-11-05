@@ -17,6 +17,9 @@ type txPoolStore interface {
 
 	// GetBaseFee returns current base fee
 	GetBaseFee() uint64
+
+	// GetMaxAccountEnqueued returns the maximum number of enqueued transactions per account
+	GetMaxAccountEnqueued() uint64
 }
 
 // TxPool is the txpool jsonrpc endpoint
@@ -30,10 +33,11 @@ type ContentResponse struct {
 }
 
 type InspectResponse struct {
-	Pending         map[string]map[string]string `json:"pending"`
-	Queued          map[string]map[string]string `json:"queued"`
-	CurrentCapacity uint64                       `json:"currentCapacity"`
-	MaxCapacity     uint64                       `json:"maxCapacity"`
+	Pending            map[string]map[string]string `json:"pending"`
+	Queued             map[string]map[string]string `json:"queued"`
+	CurrentCapacity    uint64                       `json:"currentCapacity"`
+	MaxCapacity        uint64                       `json:"maxCapacity"`
+	MaxAccountEnqueued uint64                       `json:"maxAccountEnqueued"` // 🆕 每个账户最大enqueued交易数
 }
 
 type StatusResponse struct {
@@ -90,12 +94,14 @@ func (t *TxPool) Inspect() (interface{}, error) {
 
 	// get capacity of the TxPool
 	current, max := t.store.GetCapacity()
+	maxAccountEnqueued := t.store.GetMaxAccountEnqueued()
 	pendingTxs, queuedTxs := t.store.GetTxs(true)
 	resp := InspectResponse{
-		Pending:         convertTxMap(pendingTxs),
-		Queued:          convertTxMap(queuedTxs),
-		CurrentCapacity: current,
-		MaxCapacity:     max,
+		Pending:            convertTxMap(pendingTxs),
+		Queued:             convertTxMap(queuedTxs),
+		CurrentCapacity:    current,
+		MaxCapacity:        max,
+		MaxAccountEnqueued: maxAccountEnqueued, // 🆕 添加MaxAccountEnqueued字段
 	}
 
 	return resp, nil

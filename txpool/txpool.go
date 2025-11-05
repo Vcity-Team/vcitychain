@@ -196,6 +196,9 @@ type TxPool struct {
 
 	// chain id
 	chainID *big.Int
+
+	// maxAccountEnqueued is the maximum number of enqueued transactions per account
+	maxAccountEnqueued uint64
 }
 
 // NewTxPool returns a new pool for processing incoming transactions.
@@ -212,15 +215,16 @@ func NewTxPool(
 		forks:       forks,
 		store:       store,
 		executables: newPricesQueue(0, nil),
-		accounts: accountsMap{
-			maxEnqueuedLimit:  config.MaxAccountEnqueued,
-			accountLastAccess: make(map[types.Address]time.Time),
-			maxAccountCount:   10000, // 最大10000个账户
-		},
-		index:      lookupMap{all: make(map[types.Hash]*types.Transaction)},
-		gauge:      slotGauge{height: 0, max: config.MaxSlots},
-		priceLimit: config.PriceLimit,
-		chainID:    config.ChainID,
+	accounts: accountsMap{
+		maxEnqueuedLimit:  config.MaxAccountEnqueued,
+		accountLastAccess: make(map[types.Address]time.Time),
+		maxAccountCount:   10000, // 最大10000个账户
+	},
+	index:             lookupMap{all: make(map[types.Hash]*types.Transaction)},
+	gauge:             slotGauge{height: 0, max: config.MaxSlots},
+	priceLimit:        config.PriceLimit,
+	chainID:           config.ChainID,
+	maxAccountEnqueued: config.MaxAccountEnqueued, // 🆕 保存配置值，用于RPC查询
 
 		//	main loop channels
 		promoteReqCh: make(chan promoteRequest),
