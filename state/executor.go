@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"os"
 
 	"github.com/hashicorp/go-hclog"
 
@@ -546,8 +547,21 @@ func (t *Transition) Apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 	result, err := t.apply(msg)
 	if err != nil {
 		if revertErr := t.state.RevertToSnapshot(s); revertErr != nil {
+			t.logger.Error("💀 交易执行失败且无法回滚状态，程序将立即退出",
+				"txHash", msg.Hash.String(),
+				"nonce", msg.Nonce,
+				"from", msg.From.String(),
+				"error", err,
+				"revertError", revertErr)
+			os.Exit(1)
 			return nil, revertErr
 		}
+		t.logger.Error("💀 交易执行失败，程序将立即退出",
+			"txHash", msg.Hash.String(),
+			"nonce", msg.Nonce,
+			"from", msg.From.String(),
+			"error", err)
+		os.Exit(1)
 	}
 
 	if t.PostHook != nil {
@@ -581,6 +595,12 @@ func (t *Transition) nonceCheck(msg *types.Transaction) error {
 	nonce := t.state.GetNonce(msg.From)
 
 	if nonce != msg.Nonce {
+		t.logger.Error("💀 交易nonce错误，程序将立即退出",
+			"txHash", msg.Hash.String(),
+			"expectedNonce", nonce,
+			"actualNonce", msg.Nonce,
+			"from", msg.From.String())
+		os.Exit(1)
 		return ErrNonceIncorrect
 	}
 

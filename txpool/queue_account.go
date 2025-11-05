@@ -100,6 +100,31 @@ func (q *accountQueue) length() uint64 {
 	return uint64(q.queue.Len())
 }
 
+// remove removes a specific transaction from the queue by hash.
+// Since the queue is a heap, we need to rebuild it after removal.
+func (q *accountQueue) remove(txHash types.Hash) bool {
+	// Find the transaction in the queue
+	var foundIndex int = -1
+	for i, tx := range q.queue {
+		if tx.Hash == txHash {
+			foundIndex = i
+			break
+		}
+	}
+
+	if foundIndex == -1 {
+		return false
+	}
+
+	// Remove the transaction from the slice
+	q.queue = append(q.queue[:foundIndex], q.queue[foundIndex+1:]...)
+
+	// Rebuild the heap
+	heap.Init(&q.queue)
+
+	return true
+}
+
 // transactions sorted by nonce (ascending)
 type minNonceQueue []*types.Transaction
 

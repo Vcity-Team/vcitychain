@@ -357,13 +357,6 @@ func (d *Dispatcher) Handle(reqBody []byte) ([]byte, error) {
 			return NewRPCResponse(req.ID, "2.0", nil, NewInvalidRequestError("Invalid json request")).Bytes()
 		}
 
-		// Debug logging for JSON-RPC request
-		d.logger.Info("JSON-RPC request parsed",
-			"method", req.Method,
-			"id", req.ID,
-			"params_raw", string(req.Params),
-			"params_length", len(req.Params),
-			"reqBody", string(reqBody))
 
 		resp, err := d.handleReq(req)
 
@@ -415,8 +408,6 @@ func (d *Dispatcher) Handle(reqBody []byte) ([]byte, error) {
 }
 
 func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
-	d.logger.Info("request received", "method", req.Method, "id", req.ID, "params_raw", string(req.Params), "params_length", len(req.Params))
-
 	service, fd, ferr := d.getFnHandler(req)
 	if ferr != nil {
 		return nil, ferr
@@ -425,34 +416,16 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 	inArgs := make([]reflect.Value, fd.inNum)
 	inArgs[0] = service.sv
 
-	// Info logging to understand the method signature
-	d.logger.Info("method signature analysis",
-		"method", req.Method,
-		"fd.inNum", fd.inNum,
-		"fd.numParams()", fd.numParams(),
-		"fd.reqt", fd.reqt)
-
 	// Handle parameters based on method signature
-	d.logger.Info("entering parameter handling", "fd.numParams()", fd.numParams())
 	if fd.numParams() > 0 {
 		// Check if the last parameter is interface{} type
 		if fd.reqt[fd.inNum-1].Kind() == reflect.Interface {
 			// For interface{} parameters, pass the raw params directly
-			d.logger.Info("entering interface{} parameter handling",
-				"method", req.Method,
-				"req.Params", string(req.Params),
-				"req.Params length", len(req.Params))
-
 			var paramValue interface{}
 			if err := json.Unmarshal(req.Params, &paramValue); err != nil {
 				d.logger.Error("failed to unmarshal params", "error", err, "params", string(req.Params))
 				return nil, NewInvalidParamsError("Invalid Params")
 			}
-
-			d.logger.Info("successfully unmarshaled params",
-				"method", req.Method,
-				"paramValue", paramValue,
-				"paramValue type", fmt.Sprintf("%T", paramValue))
 
 			// Check if paramValue is nil or contains nil values and return error if so
 			if paramValue == nil {
@@ -483,11 +456,6 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 			if fd.inNum == 3 {
 				inArgs[2] = reflect.ValueOf(paramValue)
 			}
-
-			d.logger.Info("interface{} parameter handling completed",
-				"method", req.Method,
-				"inArgs[1] (context)", inArgs[1].Interface(),
-				"fd.inNum", fd.inNum)
 		} else {
 			// For multiple parameters, use the original logic
 			inputs := make([]interface{}, fd.numParams())
@@ -499,13 +467,7 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 			}
 
 			// Special handling for eth_estimateGas with optional second parameter
-			d.logger.Info("checking eth_estimateGas special handling",
-				"method", req.Method,
-				"fd.numParams()", fd.numParams())
-
 			if req.Method == "eth_estimateGas" && fd.numParams() == 2 {
-				d.logger.Info("entering eth_estimateGas special handling")
-
 				// Parse the raw params to check actual parameter count
 				var rawParams []interface{}
 				if err := json.Unmarshal(req.Params, &rawParams); err != nil {
@@ -513,11 +475,8 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 					return nil, NewInvalidParamsError("Invalid Params")
 				}
 
-				d.logger.Info("raw params parsed", "count", len(rawParams), "params", rawParams)
-
 				// If only one parameter provided, add default BlockNumber (latest)
 				if len(rawParams) == 1 {
-					d.logger.Info("adding default latest parameter")
 					// Create a default BlockNumber (latest) for the second parameter
 					latestBlockNumber := "latest"
 					rawParams = append(rawParams, latestBlockNumber)
@@ -529,7 +488,6 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 						return nil, NewInvalidParamsError("Invalid Params")
 					}
 					req.Params = modifiedParams
-					d.logger.Info("modified params", "new_params", string(modifiedParams))
 				}
 			}
 

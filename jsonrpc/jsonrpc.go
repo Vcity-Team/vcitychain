@@ -309,17 +309,12 @@ func (j *JSONRPC) handleJSONRPCRequest(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	// log request
-	j.logger.Debug("handle", "request", string(data))
-
 	resp, err := j.dispatcher.Handle(data)
 	if err != nil {
 		_, _ = w.Write([]byte(err.Error()))
 	} else {
 		_, _ = w.Write(resp)
 	}
-
-	j.logger.Debug("handle", "response", string(resp))
 }
 
 type GetResponse struct {

@@ -162,6 +162,12 @@ func (b *BlockBuilder) WriteTx(tx *types.Transaction) error {
 	}
 
 	if err := b.state.Write(tx); err != nil {
+		b.params.Logger.Error("💀 交易应用到状态失败，程序将立即退出",
+			"txHash", tx.Hash.String(),
+			"nonce", tx.Nonce,
+			"from", tx.From.String(),
+			"error", err)
+		os.Exit(1)
 		return err
 	}
 
@@ -176,20 +182,76 @@ func (b *BlockBuilder) WriteTx(tx *types.Transaction) error {
 func (b *BlockBuilder) Fill() {
 	b.params.TxPool.Prepare()
 
+	txCount := 0
+	skippedCount := 0
+	prepareCount := 1 // 🆕 记录Prepare()调用次数
 	for {
 		tx := b.params.TxPool.Peek()
 
-		// 如果没有交易，立即返回（不等待）
+		// 如果没有交易，尝试重新Prepare()（因为链上nonce可能已更新）
 		if tx == nil {
-			return
+			// 🆕 如果executables为空，重新Prepare()（最多重试3次）
+			if prepareCount < 3 {
+				prepareCount++
+				if b.params.Logger.IsDebug() {
+					b.params.Logger.Debug("⚠️ executables队列为空，重新Prepare()",
+						"blockNumber", b.params.Parent.Number+1,
+						"prepareCount", prepareCount,
+						"note", "链上nonce可能已更新，重新检查交易")
+				}
+				b.params.TxPool.Prepare()
+				tx = b.params.TxPool.Peek()
+			}
+
+			// 如果还是没有交易，返回
+			if tx == nil {
+				if txCount == 0 {
+					// 🆕 使用Debug级别，在debug模式下输出
+					if b.params.Logger.IsDebug() {
+						b.params.Logger.Debug("⚠️ Fill()时没有可用交易，区块将为空",
+							"blockNumber", b.params.Parent.Number+1,
+							"prepareCount", prepareCount,
+							"note", "executables队列为空，可能所有交易都被Prepare()过滤了")
+					}
+				}
+				return
+			}
+		}
+
+		txCount++
+
+		// 🆕 方案4：在执行前使用链上nonce检查（关键）
+		// 使用链上nonce而不是account.nextNonce，因为链上nonce在区块构建过程中会实时更新
+		accountNonce := b.state.GetNonce(tx.From)
+		if tx.Nonce != accountNonce {
+			// nonce不匹配，跳过这个交易（而不是退出程序）
+			skippedCount++
+			if b.params.Logger.IsDebug() {
+				b.params.Logger.Debug("跳过nonce不匹配的交易",
+					"txHash", tx.Hash.String(),
+					"accountNonce", accountNonce,
+					"txNonce", tx.Nonce,
+					"from", tx.From.String(),
+					"skippedCount", skippedCount,
+					"note", "链上nonce已更新，但交易池中的交易可能已过期")
+			}
+			b.params.TxPool.Pop(tx) // 移除这个交易
+			continue                // 继续处理下一个交易
 		}
 
 		// execute transactions one by one
 		finished, err := b.writeTxPoolTransaction(tx)
 		if err != nil {
-			b.params.Logger.Debug("Fill transaction error", "hash", tx.Hash, "err", err)
-			// 交易失败，继续处理下一个
+			b.params.Logger.Error("💀 交易填充失败，程序将立即退出",
+				"txHash", tx.Hash.String(),
+				"nonce", tx.Nonce,
+				"from", tx.From.String(),
+				"error", err)
+			os.Exit(1)
 		}
+
+		// 执行成功后移除交易
+		b.params.TxPool.Pop(tx)
 
 		// 区块已满（GasLimit 达到），立即返回
 		if finished {
@@ -213,10 +275,18 @@ func (b *BlockBuilder) writeTxPoolTransaction(tx *types.Transaction) (bool, erro
 			// stop processing
 			return true, err
 		} else if appErr, ok := err.(*state.TransitionApplicationError); ok && appErr.IsRecoverable { //nolint:errorlint
+			// 可恢复错误，记录日志但不退出
 			b.params.TxPool.Demote(tx)
 
 			return false, err
 		} else {
+			// 不可恢复错误，退出程序
+			b.params.Logger.Error("💀 交易写入失败，程序将立即退出",
+				"txHash", tx.Hash.String(),
+				"nonce", tx.Nonce,
+				"from", tx.From.String(),
+				"error", err)
+			os.Exit(1)
 			b.params.TxPool.Drop(tx)
 
 			return false, err

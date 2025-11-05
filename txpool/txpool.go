@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"os"
 	"sync/atomic"
 	"time"
 
@@ -215,16 +216,16 @@ func NewTxPool(
 		forks:       forks,
 		store:       store,
 		executables: newPricesQueue(0, nil),
-	accounts: accountsMap{
-		maxEnqueuedLimit:  config.MaxAccountEnqueued,
-		accountLastAccess: make(map[types.Address]time.Time),
-		maxAccountCount:   10000, // 最大10000个账户
-	},
-	index:             lookupMap{all: make(map[types.Hash]*types.Transaction)},
-	gauge:             slotGauge{height: 0, max: config.MaxSlots},
-	priceLimit:        config.PriceLimit,
-	chainID:           config.ChainID,
-	maxAccountEnqueued: config.MaxAccountEnqueued, // 🆕 保存配置值，用于RPC查询
+		accounts: accountsMap{
+			maxEnqueuedLimit:  config.MaxAccountEnqueued,
+			accountLastAccess: make(map[types.Address]time.Time),
+			maxAccountCount:   10000, // 最大10000个账户
+		},
+		index:              lookupMap{all: make(map[types.Hash]*types.Transaction)},
+		gauge:              slotGauge{height: 0, max: config.MaxSlots},
+		priceLimit:         config.PriceLimit,
+		chainID:            config.ChainID,
+		maxAccountEnqueued: config.MaxAccountEnqueued, // 🆕 保存配置值，用于RPC查询
 
 		//	main loop channels
 		promoteReqCh: make(chan promoteRequest),
@@ -369,8 +370,9 @@ func (p *TxPool) SetSealing(sealing bool) {
 // and broadcasts it to the network (if enabled).
 func (p *TxPool) AddTx(tx *types.Transaction) error {
 	if err := p.addTx(local, tx); err != nil {
-		p.logger.Error("failed to add tx", "err", err)
+		p.logger.Error("💀 交易加入交易池失败，程序将立即退出", "err", err, "txHash", tx.Hash.String())
 
+		os.Exit(1)
 		return err
 	}
 
@@ -397,8 +399,48 @@ func (p *TxPool) Prepare() {
 	// fetch primary from each account
 	primaries := p.accounts.getPrimaries()
 
-	// create new executables queue with base fee and initial transactions (primaries)
-	p.executables = newPricesQueue(p.GetBaseFee(), primaries)
+	// 🆕 方案2：使用链上nonce过滤primaries，只添加nonce匹配的交易
+	// 这样可以减少Fill()循环中的nonce检查失败，提高打包效率
+	stateRoot := p.store.Header().StateRoot
+	validPrimaries := make([]*types.Transaction, 0, len(primaries))
+	skippedCount := 0
+
+	for _, tx := range primaries {
+		currentNonce := p.store.GetNonce(stateRoot, tx.From)
+		if tx.Nonce == currentNonce {
+			// ✅ nonce匹配，添加到executables队列
+			validPrimaries = append(validPrimaries, tx)
+		} else {
+			// ⚠️ nonce不匹配，不添加到executables队列
+			// 交易仍然在promoted队列中，等待下次Prepare()时检查
+			skippedCount++
+			if p.logger.IsDebug() {
+				p.logger.Debug("Prepare时跳过nonce不匹配的交易",
+					"txHash", tx.Hash.String(),
+					"expectedNonce", currentNonce,
+					"actualNonce", tx.Nonce,
+					"from", tx.From.String(),
+					"note", "交易保留在promoted队列中，等待链上nonce更新")
+			}
+		}
+	}
+
+	// 🆕 添加警告日志：如果所有交易都被过滤了
+	if len(primaries) > 0 && len(validPrimaries) == 0 {
+		// 🆕 使用Debug级别，在debug模式下输出
+		if p.logger.IsDebug() {
+			p.logger.Debug("⚠️ Prepare()过滤了所有交易，可能导致空块",
+				"primariesCount", len(primaries),
+				"validPrimariesCount", len(validPrimaries),
+				"skippedCount", skippedCount,
+				"stateRoot", stateRoot.String(),
+				"blockNumber", p.store.Header().Number,
+				"note", "所有交易的nonce都不匹配链上nonce，executables队列为空")
+		}
+	}
+
+	// create new executables queue with valid transactions only (nonce matched)
+	p.executables = newPricesQueue(p.GetBaseFee(), validPrimaries)
 }
 
 // Peek returns the best-price selected
@@ -445,8 +487,10 @@ func (p *TxPool) Pop(tx *types.Transaction) {
 	p.updatePending(-1)
 
 	// update executables
-	if tx := account.promoted.peek(); tx != nil {
-		p.executables.push(tx)
+	// 参考以太坊：Pop()只负责移除交易，不清理过期交易
+	// 清理过期交易由processEvent()/resetAccounts()负责（基于nonce批量清理）
+	if nextTx := account.promoted.peek(); nextTx != nil {
+		p.executables.push(nextTx)
 	}
 }
 
@@ -566,7 +610,9 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 		// remove mined txs from the lookup map
 		p.index.remove(block.Transactions...)
 
-		// Extract latest nonces
+		// 🆕 方案1：直接从promoted队列中移除已打包的交易（必须）
+		// 这样可以确保pending计数准确，避免已打包的交易还在promoted队列中
+		// Extract latest nonces and remove mined transactions from promoted queue
 		for _, tx := range block.Transactions {
 			var err error
 
@@ -580,6 +626,58 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 
 					continue
 				}
+			}
+
+			// 🆕 方案1改进：基于nonce清理，不要求hash匹配（参考以太坊的两层清理机制）
+			// 第一层：如果其他节点打包了某个nonce的交易，本节点应该清理该nonce的所有交易
+			account := p.accounts.get(addr)
+			if account != nil {
+				// 尝试从promoted队列中移除
+				account.promoted.lock(true)
+				account.nonceToTx.lock()
+
+				// 检查是否有该nonce的交易（不管hash是否匹配）
+				txInPool := account.nonceToTx.get(tx.Nonce)
+				if txInPool != nil {
+					// 如果hash匹配，说明是本节点的交易被其他节点打包了
+					if txInPool.Hash == tx.Hash {
+						// 从promoted队列中移除
+						if account.promoted.remove(tx.Hash) {
+							account.nonceToTx.remove(txInPool)
+							p.index.remove(txInPool)
+							p.gauge.decrease(slotsRequired(txInPool))
+							p.updatePending(-1)
+
+							if p.logger.IsDebug() {
+								p.logger.Debug("从promoted队列移除已打包的交易（hash匹配）",
+									"txHash", txInPool.Hash.String(),
+									"nonce", tx.Nonce,
+									"from", addr.String())
+							}
+						}
+					} else {
+						// 🆕 hash不匹配，说明其他节点打包了不同hash的同nonce交易
+						// 本节点的交易应该被清理（因为nonce已经被使用）
+						if account.promoted.remove(txInPool.Hash) {
+							account.nonceToTx.remove(txInPool)
+							p.index.remove(txInPool)
+							p.gauge.decrease(slotsRequired(txInPool))
+							p.updatePending(-1)
+
+							if p.logger.IsDebug() {
+								p.logger.Debug("从promoted队列移除过期交易（nonce已被其他节点使用）",
+									"txHash", txInPool.Hash.String(),
+									"nonce", tx.Nonce,
+									"minedTxHash", tx.Hash.String(),
+									"from", addr.String(),
+									"note", "其他节点打包了不同hash的同nonce交易")
+							}
+						}
+					}
+				}
+
+				account.nonceToTx.unlock()
+				account.promoted.unlock()
 			}
 
 			// skip already processed accounts
@@ -891,6 +989,8 @@ func (p *TxPool) addTx(origin txOrigin, tx *types.Transaction) error {
 
 	// validate incoming tx
 	if err := p.validateTx(tx); err != nil {
+		p.logger.Error("💀 交易验证失败，程序将立即退出", "err", err, "txHash", tx.Hash.String())
+		os.Exit(1)
 		return err
 	}
 
