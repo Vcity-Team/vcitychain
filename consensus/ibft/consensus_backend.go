@@ -248,8 +248,8 @@ func (i *backendIBFT) buildBlock(parent *types.Header) (*types.Block, error) {
 	// is sealed after all the committed seals
 	block.Header.ComputeHash()
 
-	i.logger.Info("🏗️ IBFT区块构建完成", 
-		"number", header.Number, 
+	i.logger.Info("🏗️ IBFT区块构建完成",
+		"number", header.Number,
 		"txs", len(txs),
 		"difficulty", header.Difficulty,
 		"gasLimit", header.GasLimit,
@@ -268,7 +268,7 @@ func (i *backendIBFT) calcHeaderTimestamp(parentUnix uint64, currentTime time.Ti
 	)
 
 	// 添加调试日志
-	fmt.Printf("🔍 calcHeaderTimestamp: parentUnix=%d, parentTimestamp=%v, blockTime=%v, potentialTimestamp=%v, currentTime=%v\n", 
+	fmt.Printf("🔍 calcHeaderTimestamp: parentUnix=%d, parentTimestamp=%v, blockTime=%v, potentialTimestamp=%v, currentTime=%v\n",
 		parentUnix, parentTimestamp, i.blockTime, potentialTimestamp, currentTime)
 
 	if potentialTimestamp.Before(currentTime) {

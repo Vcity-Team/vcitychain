@@ -169,8 +169,8 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	expectedValidator := validators[currentValidatorIndex]
 	isMatch := expectedValidator == myAddress
 
-	// ========== 🆕 详细日志：打印ShouldProduceBlockNow中的验证者列表和验证结果（1秒间隔，避免刷屏） ==========
-	bs.logOnceWithInterval("should_produce_block_now_validators_detail", 1*time.Second, "info",
+	// ========== 🆕 详细日志：打印ShouldProduceBlockNow中的验证者列表和验证结果（200ms间隔，便于追踪分叉问题） ==========
+	bs.logOnceWithInterval("should_produce_block_now_validators_detail", 1000*time.Millisecond, "info",
 		"🔍 ShouldProduceBlockNow 中的验证者列表和验证详情",
 		"blockNumber", blockNumber,
 		"currentSlot", currentSlot,
@@ -192,8 +192,8 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 
 	// ========== 🆕 关键验证点：ShouldProduceBlockNow返回true时（用于验证同一时刻只有一个节点出块） ==========
 	if isMatch {
-		// ⚠️ 使用1秒间隔，避免刷屏
-		bs.logOnceWithInterval("should_produce_block_now_true", 1*time.Second, "info",
+		// 🆕 使用200ms间隔，便于追踪分叉问题
+		bs.logOnceWithInterval("should_produce_block_now_true", 200*time.Millisecond, "info",
 			"🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块",
 			"timestamp", now.Format("15:04:05.000000"),
 			"myAddress", myAddress.String(),

@@ -77,6 +77,10 @@ type Blockchain struct {
 	lastProducedBlockTime   time.Time  // 上次生产区块的时间
 	lastProducedBlockMutex  sync.Mutex // 保护上次生产区块信息的互斥锁
 
+	// 🆕 记录区块生产开始时间（用于统计生产耗时）
+	lastBlockProductionStartTime  time.Time  // 上次区块生产开始的时间
+	lastBlockProductionStartMutex sync.Mutex // 保护生产开始时间的互斥锁
+
 	gpAverage *gasPriceAverage // A reference to the average gas price
 
 	writeLock sync.Mutex
@@ -305,6 +309,13 @@ func (b *Blockchain) SetConsensus(c Verifier) {
 // SetExecutor sets the executor
 func (b *Blockchain) SetExecutor(e Executor) {
 	b.executor = e
+}
+
+// SetBlockProductionStartTime 设置区块生产开始时间（用于统计生产耗时）
+func (b *Blockchain) SetBlockProductionStartTime() {
+	b.lastBlockProductionStartMutex.Lock()
+	defer b.lastBlockProductionStartMutex.Unlock()
+	b.lastBlockProductionStartTime = time.Now()
 }
 
 // setCurrentHeader sets the current header
@@ -889,6 +900,52 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 
 	b.dispatchEvent(evnt)
 
+	// 🆕 调用共识的 OnBlockInserted 来清理交易池
+	// 注意：
+	// 1. 同步区块时（source="syncer"）：必须调用 OnBlockInserted 来清理交易池
+	// 2. 本地生产区块时（source="consensus"）：虽然 consensusRuntime.OnBlockInserted 已经清理了交易池，
+	//    但为了保持一致性，也调用 DPoS.OnBlockInserted（它内部会调用 txPool.ResetWithHeaders）
+	//    DPoS.OnBlockInserted 内部会调用 consensusRuntime.OnBlockInserted，后者有重复处理保护机制
+	//    （lastBuiltBlock.Number >= fullBlock.Block.Number()），所以不会重复处理
+	b.logger.Info("🔵 [blockchain.WriteFullBlock] 检查是否需要调用 OnBlockInserted",
+		"blockNumber", header.Number,
+		"source", source,
+		"consensusType", fmt.Sprintf("%T", b.consensus),
+		"consensusIsNil", b.consensus == nil)
+
+	// 使用接口类型断言来避免循环依赖
+	// 定义本地接口来避免导入 dpos 包
+	type onBlockInsertedInterface interface {
+		OnBlockInserted(fullBlock *types.FullBlock)
+	}
+
+	b.logger.Info("🔵 [blockchain.WriteFullBlock] 开始类型断言，检查共识是否支持 OnBlockInserted",
+		"blockNumber", header.Number,
+		"source", source,
+		"consensusType", fmt.Sprintf("%T", b.consensus))
+
+	if blockInsertedHandler, ok := b.consensus.(onBlockInsertedInterface); ok && blockInsertedHandler != nil {
+		b.logger.Info("🔵 [blockchain.WriteFullBlock] 类型断言成功，调用共识 OnBlockInserted",
+			"blockNumber", header.Number,
+			"blockHash", header.Hash.String()[:16],
+			"source", source,
+			"consensusType", fmt.Sprintf("%T", b.consensus))
+		blockInsertedHandler.OnBlockInserted(fblock)
+		b.logger.Info("🔵 [blockchain.WriteFullBlock] OnBlockInserted 调用完成",
+			"blockNumber", header.Number,
+			"source", source)
+	} else {
+		// 如果共识不支持 OnBlockInserted 接口，可能是其他共识类型
+		// 这些共识类型有自己的处理方式，这里不处理
+		b.logger.Info("⚠️ [blockchain.WriteFullBlock] 共识不支持 OnBlockInserted 接口，跳过调用",
+			"blockNumber", header.Number,
+			"source", source,
+			"consensusType", fmt.Sprintf("%T", b.consensus),
+			"typeAssertOk", ok,
+			"handlerIsNil", blockInsertedHandler == nil,
+			"note", "这可能导致交易池nonce未更新")
+	}
+
 	// 🆕 判断区块类型：空块、交易块、mix块
 	txCount := len(block.Transactions)
 	stateTxCount := 0
@@ -959,13 +1016,71 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 		b.lastProducedBlockTime = currentBlockTime
 		b.lastProducedBlockMutex.Unlock()
 
+		// 🆕 计算生产耗时（从开始构建到写入完成）
+		var productionDuration time.Duration = 0
+		b.lastBlockProductionStartMutex.Lock()
+		startTime := b.lastBlockProductionStartTime
+		if !startTime.IsZero() {
+			productionDuration = time.Since(startTime)
+			// 清空开始时间，避免下次误用
+			b.lastBlockProductionStartTime = time.Time{}
+		}
+		b.lastBlockProductionStartMutex.Unlock()
+
 		// 添加到日志参数
 		logArgs = append(logArgs,
 			"lastProducedBlockNumber", lastBlockNumber, // 🆕 上次生产的区块号
 			"blockInterval", blockInterval, // 🆕 区块间隔（当前区块号 - 上次区块号）
 			"timeInterval", timeInterval.String(), // 🆕 时间间隔
 			"timeIntervalSeconds", timeInterval.Seconds(), // 🆕 时间间隔（秒）
+			"productionDuration", productionDuration.String(), // 🆕 生产耗时（从开始构建到写入完成）
+			"productionDurationMs", productionDuration.Milliseconds(), // 🆕 生产耗时（毫秒）
 		)
+
+		// 🆕 尝试获取验证者详情并添加到日志中
+		// 定义接口来避免循环依赖
+		type validatorDetailGetter interface {
+			GetValidatorDetail(blockNumber uint64) map[string]interface{}
+		}
+
+		if detailGetter, ok := b.consensus.(validatorDetailGetter); ok {
+			// ShouldProduceBlockNow 保存的是下一个区块号的详情（blockNumber + 1）
+			// 所以直接查找当前区块号的详情即可
+			detail := detailGetter.GetValidatorDetail(header.Number)
+			if detail != nil {
+				// 将验证者详情添加到日志参数中
+				if currentSlot, ok := detail["currentSlot"].(int); ok {
+					logArgs = append(logArgs, "currentSlot", currentSlot)
+				}
+				if activeValidatorCount, ok := detail["activeValidatorCount"].(int); ok {
+					logArgs = append(logArgs, "activeValidatorCount", activeValidatorCount)
+				}
+				if myAddress, ok := detail["myAddress"].(string); ok {
+					logArgs = append(logArgs, "myAddress", myAddress)
+				}
+				if expectedValidator, ok := detail["expectedValidator"].(string); ok {
+					logArgs = append(logArgs, "expectedValidator", expectedValidator)
+				}
+				if isMatch, ok := detail["isMatch"].(bool); ok {
+					logArgs = append(logArgs, "isMatch", isMatch)
+				}
+				if genesisTime, ok := detail["genesisTime"].(string); ok {
+					logArgs = append(logArgs, "genesisTime", genesisTime)
+				}
+				if now, ok := detail["now"].(string); ok {
+					logArgs = append(logArgs, "now", now)
+				}
+				if timeSinceGenesis, ok := detail["timeSinceGenesis"].(string); ok {
+					logArgs = append(logArgs, "timeSinceGenesis", timeSinceGenesis)
+				}
+				if blockWindow, ok := detail["blockWindow"].(string); ok {
+					logArgs = append(logArgs, "blockWindow", blockWindow)
+				}
+				if validatorsList, ok := detail["validatorsList"].([]string); ok {
+					logArgs = append(logArgs, "validatorsList", validatorsList)
+				}
+			}
+		}
 
 		// 🆕 根据是否有交易使用不同的表情符号
 		if txCount > 0 {

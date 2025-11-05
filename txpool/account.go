@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/types"
+	"github.com/hashicorp/go-hclog"
 )
 
 // Thread safe map of all accounts registered by the pool.
@@ -240,10 +241,18 @@ func (a *account) incrementDemotions() {
 // by pruning all transactions with nonce lesser than new.
 // After pruning, a promotion may be signaled if the first
 // enqueued transaction matches the new nonce.
-func (a *account) reset(nonce uint64, promoteCh chan<- promoteRequest) (
+func (a *account) reset(nonce uint64, promoteCh chan<- promoteRequest, addr types.Address, logger hclog.Logger) (
 	prunedPromoted,
 	prunedEnqueued []*types.Transaction,
 ) {
+	oldNonce := a.getNonce()
+	if logger != nil {
+		logger.Info("🔵 [account.reset] 开始重置账户",
+			"addr", addr.String()[:16],
+			"oldNonce", oldNonce,
+			"newNonce", nonce)
+	}
+
 	a.promoted.lock(true)
 	a.enqueued.lock(true)
 	a.nonceToTx.lock()
@@ -255,27 +264,90 @@ func (a *account) reset(nonce uint64, promoteCh chan<- promoteRequest) (
 	}()
 
 	// prune the promoted txs
-	prunedPromoted = a.promoted.prune(nonce)
+	prunedPromoted = a.promoted.prune(nonce, addr, logger, "promoted")
 	a.nonceToTx.remove(prunedPromoted...)
 
-	if nonce <= a.getNonce() {
-		// only the promoted queue needed pruning
+	if logger != nil && len(prunedPromoted) > 0 {
+		logger.Info("🔵 [account.reset] promoted队列清理完成",
+			"addr", addr.String()[:16],
+			"prunedCount", len(prunedPromoted),
+			"prunedNonces", func() []uint64 {
+				var nonces []uint64
+				for _, tx := range prunedPromoted {
+					nonces = append(nonces, tx.Nonce)
+				}
+				return nonces
+			}())
+	}
+
+	// 当 newNonce <= oldNonce 时（例如：reorg 导致链上 nonce 回退，或初始化时状态不一致）
+	// 只需要清理 promoted 队列，但必须更新 nextNonce 以与链上状态同步
+	// 注意：enqueued 队列中的交易（nonce >= oldNonce）仍然有效，会在链上 nonce 增长时被 promote
+	if nonce <= oldNonce {
+		if logger != nil {
+			logger.Info("🔵 [account.reset] 只清理promoted队列（newNonce <= oldNonce），但需要更新nextNonce",
+				"addr", addr.String()[:16],
+				"oldNonce", oldNonce,
+				"newNonce", nonce)
+		}
+
+		// 更新 nextNonce 以与链上状态同步（链上状态是权威的）
+		a.setNonce(nonce)
+
 		return
 	}
 
 	// prune the enqueued txs
-	prunedEnqueued = a.enqueued.prune(nonce)
+	prunedEnqueued = a.enqueued.prune(nonce, addr, logger, "enqueued")
 	a.nonceToTx.remove(prunedEnqueued...)
 
+	if logger != nil && len(prunedEnqueued) > 0 {
+		logger.Info("🔵 [account.reset] enqueued队列清理完成",
+			"addr", addr.String()[:16],
+			"prunedCount", len(prunedEnqueued),
+			"prunedNonces", func() []uint64 {
+				var nonces []uint64
+				for _, tx := range prunedEnqueued {
+					nonces = append(nonces, tx.Nonce)
+				}
+				return nonces
+			}())
+	}
+
 	// update nonce expected for this account
+	oldNonceBeforeSet := a.getNonce()
 	a.setNonce(nonce)
+	newNonceAfterSet := a.getNonce()
+
+	if logger != nil {
+		logger.Info("🔵 [account.reset] 更新账户nonce",
+			"addr", addr.String()[:16],
+			"oldNonce", oldNonceBeforeSet,
+			"newNonce", nonce,
+			"actualNonceAfterSet", newNonceAfterSet)
+	}
 
 	// it is important to signal promotion while
 	// the locks are held to ensure no other
 	// handler will mutate the account
 	if first := a.enqueued.peek(); first != nil && first.Nonce == nonce {
 		// first enqueued tx is expected -> signal promotion
+		if logger != nil {
+			logger.Info("🔵 [account.reset] 触发promotion信号",
+				"addr", addr.String()[:16],
+				"firstTxNonce", first.Nonce,
+				"newNonce", nonce)
+		}
 		promoteCh <- promoteRequest{account: first.From}
+	}
+
+	if logger != nil {
+		logger.Info("🔵 [account.reset] 重置完成",
+			"addr", addr.String()[:16],
+			"oldNonce", oldNonce,
+			"newNonce", nonce,
+			"prunedPromoted", len(prunedPromoted),
+			"prunedEnqueued", len(prunedEnqueued))
 	}
 
 	return
@@ -349,7 +421,10 @@ func (a *account) promote() (promoted []*types.Transaction, pruned []*types.Tran
 		nextNonce = tx.Nonce + 1
 
 		// prune the transactions with lower nonce
-		pruned = append(pruned, a.enqueued.prune(nextNonce)...)
+		// Note: This is called from promote() which doesn't have logger access
+		// We use a nil logger here since this is an internal cleanup during promotion
+		var dummyLogger hclog.Logger
+		pruned = append(pruned, a.enqueued.prune(nextNonce, tx.From, dummyLogger, "enqueued")...)
 
 		// update return result
 		promoted = append(promoted, tx)

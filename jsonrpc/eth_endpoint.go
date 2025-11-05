@@ -522,7 +522,7 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 	}
 
 	// Log the transaction details for gas estimation (including dummy signature values)
-	e.logger.Info("gas estimation transaction created",
+	e.logger.Debug("gas estimation transaction created",
 		"txType", transaction.Type,
 		"chainID", transaction.ChainID,
 		"v", transaction.V,

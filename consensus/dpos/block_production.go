@@ -104,7 +104,7 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 								}
 							}
 						}
-						r.logOnceWithInterval("should_produce_start", 2*time.Second, "debug",
+						r.logOnceWithInterval("should_produce_start", 200*time.Millisecond, "info",
 							"✅ shouldProduceBlockNow返回true，开始出块",
 							"timestamp", time.Now().Format("15:04:05.000"),
 							"genesisTime", genesisStr,
@@ -301,6 +301,8 @@ func (r *dposRuntime) produceBlock() error {
 
 	// 🆕 方案1：构建区块和签名收集不在锁内（避免阻塞）
 	// 构建新区块（无锁，不阻塞）
+	// 🆕 记录区块生产开始时间（用于统计生产耗时）
+	r.config.blockchain.SetBlockProductionStartTime()
 	r.logger.Debug("🏗️ DPoS开始构建新区块", "blockNumber", nextBlockNumber)
 	block, err := r.buildBlock()
 	if err != nil {

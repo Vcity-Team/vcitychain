@@ -370,7 +370,40 @@ func (p *TxPool) SetSealing(sealing bool) {
 // and broadcasts it to the network (if enabled).
 func (p *TxPool) AddTx(tx *types.Transaction) error {
 	if err := p.addTx(local, tx); err != nil {
-		p.logger.Error("💀 交易加入交易池失败，程序将立即退出", "err", err, "txHash", tx.Hash.String())
+		logFields := []interface{}{
+			"err", err,
+			"txHash", tx.Hash.String(),
+			"from", tx.From.String(),
+		}
+
+		// 如果是 enqueued 限制错误，检查是否已达到最大限制
+		if errors.Is(err, ErrMaxEnqueuedLimitReached) {
+			if account := p.accounts.get(tx.From); account != nil {
+				account.enqueued.lock(false)
+				enqueuedCount := account.enqueued.length()
+				maxEnqueued := account.maxEnqueued
+				accountNonce := account.getNonce()
+				account.enqueued.unlock()
+
+				// 添加账户信息到日志字段
+				logFields = append(logFields,
+					"enqueuedCount", enqueuedCount,
+					"maxEnqueued", maxEnqueued,
+					"accountNonce", accountNonce,
+					"txNonce", tx.Nonce,
+				)
+
+				// 如果 enqueuedCount 等于 maxEnqueued，只打印日志不退出
+				if enqueuedCount == maxEnqueued {
+					logFields = append(logFields, "status", "REJECTED_NO_EXIT")
+					p.logger.Error("⚠️⚠️⚠️ 账户 enqueued 队列已满，交易被拒绝（程序继续运行）", logFields...)
+					return err
+				}
+			}
+		}
+
+		// 其他错误情况，保持原有退出逻辑
+		p.logger.Error("💀 交易加入交易池失败，程序将立即退出", logFields...)
 
 		os.Exit(1)
 		return err
@@ -405,39 +438,52 @@ func (p *TxPool) Prepare() {
 	validPrimaries := make([]*types.Transaction, 0, len(primaries))
 	skippedCount := 0
 
+	p.logger.Info("🔵 [txpool.Prepare] 开始准备交易",
+		"blockNumber", p.store.Header().Number,
+		"primariesCount", len(primaries),
+		"stateRoot", stateRoot.String()[:16])
+
 	for _, tx := range primaries {
 		currentNonce := p.store.GetNonce(stateRoot, tx.From)
 		if tx.Nonce == currentNonce {
 			// ✅ nonce匹配，添加到executables队列
 			validPrimaries = append(validPrimaries, tx)
+			p.logger.Info("✅ [txpool.Prepare] nonce匹配，添加到executables",
+				"txHash", tx.Hash.String()[:16],
+				"from", tx.From.String()[:16],
+				"nonce", tx.Nonce,
+				"chainNonce", currentNonce)
 		} else {
 			// ⚠️ nonce不匹配，不添加到executables队列
 			// 交易仍然在promoted队列中，等待下次Prepare()时检查
 			skippedCount++
-			if p.logger.IsDebug() {
-				p.logger.Debug("Prepare时跳过nonce不匹配的交易",
-					"txHash", tx.Hash.String(),
-					"expectedNonce", currentNonce,
-					"actualNonce", tx.Nonce,
-					"from", tx.From.String(),
-					"note", "交易保留在promoted队列中，等待链上nonce更新")
-			}
+			p.logger.Info("⚠️ [txpool.Prepare] nonce不匹配，跳过交易",
+				"txHash", tx.Hash.String()[:16],
+				"from", tx.From.String()[:16],
+				"txNonce", tx.Nonce,
+				"chainNonce", currentNonce,
+				"diff", int64(tx.Nonce)-int64(currentNonce),
+				"note", "交易保留在promoted队列中，等待链上nonce更新")
 		}
 	}
 
 	// 🆕 添加警告日志：如果所有交易都被过滤了
 	if len(primaries) > 0 && len(validPrimaries) == 0 {
-		// 🆕 使用Debug级别，在debug模式下输出
-		if p.logger.IsDebug() {
-			p.logger.Debug("⚠️ Prepare()过滤了所有交易，可能导致空块",
-				"primariesCount", len(primaries),
-				"validPrimariesCount", len(validPrimaries),
-				"skippedCount", skippedCount,
-				"stateRoot", stateRoot.String(),
-				"blockNumber", p.store.Header().Number,
-				"note", "所有交易的nonce都不匹配链上nonce，executables队列为空")
-		}
+		p.logger.Warn("⚠️ [txpool.Prepare] 过滤了所有交易，可能导致空块",
+			"blockNumber", p.store.Header().Number,
+			"primariesCount", len(primaries),
+			"validPrimariesCount", len(validPrimaries),
+			"skippedCount", skippedCount,
+			"stateRoot", stateRoot.String()[:16],
+			"note", "所有交易的nonce都不匹配链上nonce，executables队列为空")
 	}
+
+	p.logger.Info("🔵 [txpool.Prepare] 准备完成",
+		"blockNumber", p.store.Header().Number,
+		"primariesCount", len(primaries),
+		"validPrimariesCount", len(validPrimaries),
+		"skippedCount", skippedCount,
+		"executablesSize", len(validPrimaries))
 
 	// create new executables queue with valid transactions only (nonce matched)
 	p.executables = newPricesQueue(p.GetBaseFee(), validPrimaries)
@@ -584,6 +630,21 @@ func (p *TxPool) Demote(tx *types.Transaction) {
 // ResetWithHeaders processes the transactions from the new
 // headers to sync the pool with the new state.
 func (p *TxPool) ResetWithHeaders(headers ...*types.Header) {
+	p.logger.Info("🔵 [ResetWithHeaders] 开始处理新区块头",
+		"headerCount", len(headers),
+		"firstBlock", func() uint64 {
+			if len(headers) > 0 {
+				return headers[0].Number
+			}
+			return 0
+		}(),
+		"lastBlock", func() uint64 {
+			if len(headers) > 0 {
+				return headers[len(headers)-1].Number
+			}
+			return 0
+		}())
+
 	// process the txs in the event
 	// to make sure the pool is up-to-date
 	p.processEvent(&blockchain.Event{
@@ -594,12 +655,19 @@ func (p *TxPool) ResetWithHeaders(headers ...*types.Header) {
 // processEvent collects the latest nonces for each account contained
 // in the received event. Resets all known accounts with the new nonce.
 func (p *TxPool) processEvent(event *blockchain.Event) {
+	p.logger.Info("🔵 [processEvent] 开始处理区块链事件",
+		"newChainCount", len(event.NewChain),
+		"source", event.Source)
+
 	// Grab the latest state root now that the block has been inserted
 	stateRoot := p.store.Header().StateRoot
 	stateNonces := make(map[types.Address]uint64)
 
 	// discover latest (next) nonces for all accounts
 	for _, header := range event.NewChain {
+		p.logger.Info("🔵 [processEvent] 处理区块",
+			"blockNumber", header.Number,
+			"blockHash", header.Hash.String()[:16])
 		block, ok := p.store.GetBlockByHash(header.Hash, true)
 		if !ok {
 			p.logger.Error("could not find block in store", "hash", header.Hash.String())
@@ -632,6 +700,12 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 			// 第一层：如果其他节点打包了某个nonce的交易，本节点应该清理该nonce的所有交易
 			account := p.accounts.get(addr)
 			if account != nil {
+				p.logger.Info("🔵 [processEvent-第一层清理] 检查账户交易",
+					"from", addr.String(),
+					"minedTxNonce", tx.Nonce,
+					"minedTxHash", tx.Hash.String()[:16],
+					"blockNumber", header.Number)
+
 				// 尝试从promoted队列中移除
 				account.promoted.lock(true)
 				account.nonceToTx.lock()
@@ -639,6 +713,13 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 				// 检查是否有该nonce的交易（不管hash是否匹配）
 				txInPool := account.nonceToTx.get(tx.Nonce)
 				if txInPool != nil {
+					p.logger.Info("🔵 [processEvent-第一层清理] 找到相同nonce的交易",
+						"from", addr.String(),
+						"nonce", tx.Nonce,
+						"poolTxHash", txInPool.Hash.String()[:16],
+						"minedTxHash", tx.Hash.String()[:16],
+						"hashMatch", txInPool.Hash == tx.Hash)
+
 					// 如果hash匹配，说明是本节点的交易被其他节点打包了
 					if txInPool.Hash == tx.Hash {
 						// 从promoted队列中移除
@@ -648,12 +729,11 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 							p.gauge.decrease(slotsRequired(txInPool))
 							p.updatePending(-1)
 
-							if p.logger.IsDebug() {
-								p.logger.Debug("从promoted队列移除已打包的交易（hash匹配）",
-									"txHash", txInPool.Hash.String(),
-									"nonce", tx.Nonce,
-									"from", addr.String())
-							}
+							p.logger.Info("✅ [processEvent-第一层清理] 从promoted队列移除已打包的交易（hash匹配）",
+								"txHash", txInPool.Hash.String()[:16],
+								"nonce", tx.Nonce,
+								"from", addr.String(),
+								"blockNumber", header.Number)
 						}
 					} else {
 						// 🆕 hash不匹配，说明其他节点打包了不同hash的同nonce交易
@@ -664,20 +744,28 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 							p.gauge.decrease(slotsRequired(txInPool))
 							p.updatePending(-1)
 
-							if p.logger.IsDebug() {
-								p.logger.Debug("从promoted队列移除过期交易（nonce已被其他节点使用）",
-									"txHash", txInPool.Hash.String(),
-									"nonce", tx.Nonce,
-									"minedTxHash", tx.Hash.String(),
-									"from", addr.String(),
-									"note", "其他节点打包了不同hash的同nonce交易")
-							}
+							p.logger.Info("✅ [processEvent-第一层清理] 从promoted队列移除过期交易（nonce已被其他节点使用）",
+								"txHash", txInPool.Hash.String()[:16],
+								"nonce", tx.Nonce,
+								"minedTxHash", tx.Hash.String()[:16],
+								"from", addr.String(),
+								"blockNumber", header.Number,
+								"note", "其他节点打包了不同hash的同nonce交易")
 						}
 					}
+				} else {
+					p.logger.Info("🔵 [processEvent-第一层清理] 交易池中未找到相同nonce的交易",
+						"from", addr.String(),
+						"nonce", tx.Nonce,
+						"minedTxHash", tx.Hash.String()[:16])
 				}
 
 				account.nonceToTx.unlock()
 				account.promoted.unlock()
+			} else {
+				p.logger.Info("🔵 [processEvent-第一层清理] 账户不存在于交易池",
+					"from", addr.String(),
+					"nonce", tx.Nonce)
 			}
 
 			// skip already processed accounts
@@ -687,6 +775,12 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 
 			// fetch latest nonce from the state
 			latestNonce := p.store.GetNonce(stateRoot, addr)
+
+			p.logger.Info("🔵 [processEvent] 从state获取账户nonce",
+				"addr", addr.String()[:16],
+				"latestNonce", latestNonce,
+				"blockNumber", header.Number,
+				"txNonce", tx.Nonce)
 
 			// update the result map
 			stateNonces[addr] = latestNonce
@@ -698,6 +792,80 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 		p.SetBaseFee(event.NewChain[ln-1])
 	}
 
+	// 🆕 修复：确保交易池中所有账户的 nonce 都从 state 中更新
+	// 因为某些账户可能在链上的 nonce 已经增加（之前的交易被打包），
+	// 但在当前区块中没有新交易，所以不会被添加到 stateNonces 中
+	// 这会导致交易池中的 account nonce 与链上的 nonce 不一致
+	p.accounts.Range(func(key, value interface{}) bool {
+		addr, _ := key.(types.Address)
+		account, _ := value.(*account)
+
+		// 如果已经在 stateNonces 中，跳过（已经在区块中处理过）
+		if _, processed := stateNonces[addr]; processed {
+			return true
+		}
+
+		// 如果账户在交易池中有交易，需要从 state 获取最新 nonce 并更新
+		account.promoted.lock(false)
+		account.enqueued.lock(false)
+		hasTxs := account.promoted.length() > 0 || account.enqueued.length() > 0
+		account.enqueued.unlock()
+		account.promoted.unlock()
+
+		if hasTxs {
+			// 从 state 获取最新的 nonce
+			latestNonce := p.store.GetNonce(stateRoot, addr)
+			currentNonce := account.getNonce()
+
+			p.logger.Info("🔵 [processEvent] 检查交易池账户nonce",
+				"addr", addr.String()[:16],
+				"currentNonce", currentNonce,
+				"latestNonce", latestNonce,
+				"needsUpdate", latestNonce != currentNonce)
+
+			// 🆕 修复：即使 latestNonce == currentNonce，也要更新以确保状态一致
+			// 因为链上的状态是权威的，即使值相同，也要通过resetAccounts确保清理过期交易
+			if latestNonce != currentNonce {
+				if latestNonce > currentNonce {
+					p.logger.Info("🔵 [processEvent] 发现交易池账户nonce需要更新（state > txpool）",
+						"addr", addr.String()[:16],
+						"currentNonce", currentNonce,
+						"latestNonce", latestNonce)
+				} else {
+					// 🆕 如果state的nonce小于交易池的nonce，说明state的nonce可能过时了
+					// 但这种情况不应该发生，因为state是权威的
+					p.logger.Warn("⚠️ [processEvent] state的nonce小于交易池的nonce（异常情况）",
+						"addr", addr.String()[:16],
+						"currentNonce", currentNonce,
+						"latestNonce", latestNonce)
+				}
+				stateNonces[addr] = latestNonce
+			} else {
+				// 🆕 即使值相同，也要添加到stateNonces中，确保通过resetAccounts清理过期交易
+				// 这样可以确保promoted队列中的过期交易（nonce < latestNonce）被清理
+				p.logger.Info("🔵 [processEvent] 交易池账户nonce与state一致，但需要清理过期交易",
+					"addr", addr.String()[:16],
+					"nonce", currentNonce)
+				stateNonces[addr] = latestNonce
+			}
+		}
+
+		return true
+	})
+
+	p.logger.Info("🔵 [processEvent] 准备调用resetAccounts进行第二层清理",
+		"accountCount", len(stateNonces),
+		"accountList", func() []string {
+			var addrs []string
+			for addr := range stateNonces {
+				addrs = append(addrs, addr.String()[:16])
+				if len(addrs) >= 10 { // 只显示前10个
+					break
+				}
+			}
+			return addrs
+		}())
+
 	// reset accounts with the new state
 	p.resetAccounts(stateNonces)
 
@@ -705,6 +873,8 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 		// only non-validator cleanup inactive accounts
 		p.updateAccountSkipsCounts(stateNonces)
 	}
+
+	p.logger.Info("🔵 [processEvent] 处理完成")
 }
 
 // validateTx ensures the transaction conforms to specific
@@ -1000,7 +1170,7 @@ func (p *TxPool) addTx(origin txOrigin, tx *types.Transaction) error {
 	}
 
 	// 🔍 检查交易签名信息
-	p.logger.Info("🔍 交易签名信息检查",
+	p.logger.Debug("🔍 交易签名信息检查",
 		"origin", origin.String(),
 		"txType", tx.Type,
 		"nonce", tx.Nonce,
@@ -1218,9 +1388,9 @@ func (p *TxPool) addGossipTx(obj interface{}, _ peer.ID) {
 	// decode tx
 	rawBytes := raw.Raw.Value
 
-	// INFO: 打印接收到的gossip交易基本信息
-	if p.logger.IsInfo() {
-		p.logger.Info("🔎 接收到Gossip交易原始数据",
+	// DEBUG: 打印接收到的gossip交易基本信息
+	if p.logger.IsDebug() {
+		p.logger.Debug("🔎 接收到Gossip交易原始数据",
 			"rawLen", len(rawBytes),
 			"firstByte", func() string {
 				if len(rawBytes) > 0 {
@@ -1270,8 +1440,8 @@ func (p *TxPool) addGossipTx(obj interface{}, _ peer.ID) {
 		}
 	}
 
-	if p.logger.IsInfo() {
-		p.logger.Info("🧮 Gossip交易补齐完成",
+	if p.logger.IsDebug() {
+		p.logger.Debug("🧮 Gossip交易补齐完成",
 			"hash", tx.Hash.String(),
 			"from", tx.From.String(),
 			"txType", tx.Type.String(),
@@ -1308,8 +1478,12 @@ func (p *TxPool) addGossipTx(obj interface{}, _ peer.ID) {
 // resetAccounts updates existing accounts with the new nonce and prunes stale transactions.
 func (p *TxPool) resetAccounts(stateNonces map[types.Address]uint64) {
 	if len(stateNonces) == 0 {
+		p.logger.Info("🔵 [resetAccounts] 没有需要重置的账户")
 		return
 	}
+
+	p.logger.Info("🔵 [resetAccounts] 开始第二层清理（批量清理过期交易）",
+		"accountCount", len(stateNonces))
 
 	var (
 		allPrunedPromoted []*types.Transaction
@@ -1321,11 +1495,28 @@ func (p *TxPool) resetAccounts(stateNonces map[types.Address]uint64) {
 		account := p.accounts.get(addr)
 
 		if account == nil {
+			p.logger.Info("🔵 [resetAccounts] 账户不存在，跳过",
+				"addr", addr.String()[:16])
 			// no updates for this account
 			continue
 		}
 
-		prunedPromoted, prunedEnqueued := account.reset(newNonce, p.promoteReqCh)
+		oldNonce := account.getNonce()
+		p.logger.Info("🔵 [resetAccounts] 重置账户nonce",
+			"addr", addr.String()[:16],
+			"oldNonce", oldNonce,
+			"newNonce", newNonce)
+
+		prunedPromoted, prunedEnqueued := account.reset(newNonce, p.promoteReqCh, addr, p.logger)
+
+		if len(prunedPromoted) > 0 || len(prunedEnqueued) > 0 {
+			p.logger.Info("🔵 [resetAccounts] 账户清理结果",
+				"addr", addr.String()[:16],
+				"prunedPromotedCount", len(prunedPromoted),
+				"prunedEnqueuedCount", len(prunedEnqueued),
+				"oldNonce", oldNonce,
+				"newNonce", newNonce)
+		}
 
 		// append pruned
 		allPrunedPromoted = append(allPrunedPromoted, prunedPromoted...)
@@ -1335,6 +1526,10 @@ func (p *TxPool) resetAccounts(stateNonces map[types.Address]uint64) {
 		account.resetDemotions()
 	}
 
+	p.logger.Info("🔵 [resetAccounts] 第二层清理汇总",
+		"totalPrunedPromoted", len(allPrunedPromoted),
+		"totalPrunedEnqueued", len(allPrunedEnqueued))
+
 	// pool cleanup callback
 	cleanup := func(stale []*types.Transaction) {
 		p.index.remove(stale...)
@@ -1343,6 +1538,18 @@ func (p *TxPool) resetAccounts(stateNonces map[types.Address]uint64) {
 
 	// prune pool state
 	if len(allPrunedPromoted) > 0 {
+		p.logger.Info("✅ [resetAccounts] 清理promoted交易",
+			"count", len(allPrunedPromoted),
+			"txHashes", func() []string {
+				var hashes []string
+				for i, tx := range allPrunedPromoted {
+					if i < 5 { // 只显示前5个
+						hashes = append(hashes, tx.Hash.String()[:16])
+					}
+				}
+				return hashes
+			}())
+
 		cleanup(allPrunedPromoted)
 
 		p.eventManager.signalEvent(
@@ -1354,6 +1561,18 @@ func (p *TxPool) resetAccounts(stateNonces map[types.Address]uint64) {
 	}
 
 	if len(allPrunedEnqueued) > 0 {
+		p.logger.Info("✅ [resetAccounts] 清理enqueued交易",
+			"count", len(allPrunedEnqueued),
+			"txHashes", func() []string {
+				var hashes []string
+				for i, tx := range allPrunedEnqueued {
+					if i < 5 { // 只显示前5个
+						hashes = append(hashes, tx.Hash.String()[:16])
+					}
+				}
+				return hashes
+			}())
+
 		cleanup(allPrunedEnqueued)
 
 		p.eventManager.signalEvent(
@@ -1361,6 +1580,8 @@ func (p *TxPool) resetAccounts(stateNonces map[types.Address]uint64) {
 			toHash(allPrunedEnqueued...)...,
 		)
 	}
+
+	p.logger.Info("🔵 [resetAccounts] 第二层清理完成")
 }
 
 // updateAccountSkipsCounts update the accounts' skips,

@@ -45,6 +45,9 @@ type blockchainBackend interface {
 	// CommitBlock commits a block to the chain.
 	CommitBlock(block *types.FullBlock) error
 
+	// SetBlockProductionStartTime sets the block production start time (for tracking production duration)
+	SetBlockProductionStartTime()
+
 	// NewBlockBuilder is a factory method that returns a block builder on top of 'parent'.
 	NewBlockBuilder(parent *types.Header, coinbase types.Address,
 		txPool txPoolInterface, blockTime time.Duration, logger hclog.Logger) (blockBuilder, error)
@@ -111,6 +114,11 @@ func (p *blockchainWrapper) CommitBlock(block *types.FullBlock) error {
 	return p.blockchain.WriteFullBlock(block, consensusSource)
 }
 
+// SetBlockProductionStartTime 设置区块生产开始时间（用于统计生产耗时）
+func (p *blockchainWrapper) SetBlockProductionStartTime() {
+	p.blockchain.SetBlockProductionStartTime()
+}
+
 // ProcessBlockExecutor 实现 blockchain.Executor 接口
 func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *types.Block, blockCreator types.Address) (*state.Transition, error) {
 
@@ -133,7 +141,7 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			signer := crypto.NewSigner(forks, chainID)
 			if addr, err := signer.Sender(tx); err == nil {
 				tx.From = addr
-				p.logger.Info("🧩 从区块交易恢复发送者地址", "txHash", tx.Hash.String(), "from", tx.From.String())
+				p.logger.Debug("🧩 从区块交易恢复发送者地址", "txHash", tx.Hash.String(), "from", tx.From.String())
 			} else {
 				p.logger.Error("🚨 无法从区块交易恢复发送者地址，将拒绝处理该交易", "txHash", tx.Hash.String(), "error", err)
 				return nil, fmt.Errorf("failed to recover sender from block tx: %w", err)

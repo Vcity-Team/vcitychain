@@ -177,69 +177,85 @@ func (b *BlockBuilder) WriteTx(tx *types.Transaction) error {
 }
 
 // Fill fills the block with transactions from the txpool
-// 🆕 完全对标 TRON：有交易就打包，没有交易就立即返回，不等待
-// 原因：TRON 的 SR 在时间槽内快速打包可用交易，立即出块，不等待新交易
+// 🆕 完全对标以太坊：批量打包多笔交易，使用当前区块状态检查nonce
+// 修复：不要每次都调用Prepare()，而是使用当前构建区块的状态来检查nonce
+// 这样可以在一个区块中打包多笔交易，类似以太坊
 func (b *BlockBuilder) Fill() {
+	// 只在开始时调用一次Prepare()，初始化executables队列
 	b.params.TxPool.Prepare()
 
 	txCount := 0
 	skippedCount := 0
-	prepareCount := 1 // 🆕 记录Prepare()调用次数
+	blockNumber := b.params.Parent.Number + 1
+	maxConsecutiveSkips := 10 // 最多连续跳过10笔交易后重新Prepare()
+
+	b.params.Logger.Info("🔵 [BlockBuilder.Fill] 开始填充区块",
+		"blockNumber", blockNumber)
+
+	consecutiveSkips := 0
 	for {
 		tx := b.params.TxPool.Peek()
 
-		// 如果没有交易，尝试重新Prepare()（因为链上nonce可能已更新）
+		// 如果没有交易，尝试重新Prepare()（因为可能有新交易进入交易池）
 		if tx == nil {
-			// 🆕 如果executables为空，重新Prepare()（最多重试3次）
-			if prepareCount < 3 {
-				prepareCount++
-				if b.params.Logger.IsDebug() {
-					b.params.Logger.Debug("⚠️ executables队列为空，重新Prepare()",
-						"blockNumber", b.params.Parent.Number+1,
-						"prepareCount", prepareCount,
-						"note", "链上nonce可能已更新，重新检查交易")
-				}
+			// 如果连续跳过太多交易，重新Prepare()（最多重试3次）
+			if consecutiveSkips < maxConsecutiveSkips {
+				b.params.Logger.Info("⚠️ [BlockBuilder.Fill] executables队列为空，重新Prepare()",
+					"blockNumber", blockNumber,
+					"txCount", txCount,
+					"skippedCount", skippedCount,
+					"consecutiveSkips", consecutiveSkips,
+					"note", "尝试重新准备交易")
 				b.params.TxPool.Prepare()
 				tx = b.params.TxPool.Peek()
+				consecutiveSkips = 0 // 重置连续跳过计数
 			}
 
 			// 如果还是没有交易，返回
 			if tx == nil {
-				if txCount == 0 {
-					// 🆕 使用Debug级别，在debug模式下输出
-					if b.params.Logger.IsDebug() {
-						b.params.Logger.Debug("⚠️ Fill()时没有可用交易，区块将为空",
-							"blockNumber", b.params.Parent.Number+1,
-							"prepareCount", prepareCount,
-							"note", "executables队列为空，可能所有交易都被Prepare()过滤了")
-					}
-				}
+				b.params.Logger.Info("🔵 [BlockBuilder.Fill] 填充完成，没有更多交易",
+					"blockNumber", blockNumber,
+					"txCount", txCount,
+					"skippedCount", skippedCount)
 				return
 			}
 		}
 
 		txCount++
 
-		// 🆕 方案4：在执行前使用链上nonce检查（关键）
-		// 使用链上nonce而不是account.nextNonce，因为链上nonce在区块构建过程中会实时更新
+		// 🆕 关键修复：使用当前构建区块的状态来检查nonce（不是父区块状态）
+		// 这样可以看到当前区块已打包交易对nonce的影响
 		accountNonce := b.state.GetNonce(tx.From)
 		if tx.Nonce != accountNonce {
-			// nonce不匹配，跳过这个交易（而不是退出程序）
+			// nonce不匹配，跳过这个交易
 			skippedCount++
-			if b.params.Logger.IsDebug() {
-				b.params.Logger.Debug("跳过nonce不匹配的交易",
-					"txHash", tx.Hash.String(),
-					"accountNonce", accountNonce,
-					"txNonce", tx.Nonce,
-					"from", tx.From.String(),
-					"skippedCount", skippedCount,
-					"note", "链上nonce已更新，但交易池中的交易可能已过期")
-			}
-			b.params.TxPool.Pop(tx) // 移除这个交易
+			consecutiveSkips++
+			b.params.Logger.Info("⚠️ [BlockBuilder.Fill] nonce不匹配，跳过交易",
+				"blockNumber", blockNumber,
+				"txHash", tx.Hash.String()[:16],
+				"from", tx.From.String()[:16],
+				"txNonce", tx.Nonce,
+				"accountNonce", accountNonce,
+				"skippedCount", skippedCount,
+				"txCount", txCount,
+				"consecutiveSkips", consecutiveSkips,
+				"note", "当前区块状态nonce已更新，交易nonce不匹配")
+			b.params.TxPool.Pop(tx) // 移除这个交易，Pop()会自动将下一笔交易添加到executables队列
 			continue                // 继续处理下一个交易
 		}
 
+		// nonce匹配，重置连续跳过计数
+		consecutiveSkips = 0
+
+		b.params.Logger.Info("✅ [BlockBuilder.Fill] 执行交易",
+			"blockNumber", blockNumber,
+			"txHash", tx.Hash.String()[:16],
+			"from", tx.From.String()[:16],
+			"nonce", tx.Nonce,
+			"txCount", txCount)
+
 		// execute transactions one by one
+		// 🆕 writeTxPoolTransaction内部会调用Pop()，所以这里不需要再次调用
 		finished, err := b.writeTxPoolTransaction(tx)
 		if err != nil {
 			b.params.Logger.Error("💀 交易填充失败，程序将立即退出",
@@ -250,13 +266,23 @@ func (b *BlockBuilder) Fill() {
 			os.Exit(1)
 		}
 
-		// 执行成功后移除交易
-		b.params.TxPool.Pop(tx)
+		// 🆕 writeTxPoolTransaction内部已经调用了Pop()，会自动将同一账户的下一笔交易添加到executables队列（如果存在）
+		// 这样就不需要每次都调用Prepare()了
 
 		// 区块已满（GasLimit 达到），立即返回
 		if finished {
+			b.params.Logger.Info("🔵 [BlockBuilder.Fill] 区块已满（GasLimit），停止填充",
+				"blockNumber", blockNumber,
+				"txCount", txCount,
+				"skippedCount", skippedCount)
 			return
 		}
+
+		// 🆕 修复：不再每次都调用Prepare()
+		// 因为：
+		// 1. Pop()会自动将同一账户的下一笔交易添加到executables队列
+		// 2. 我们使用b.state.GetNonce()来检查nonce，这是当前构建区块的状态
+		// 3. 这样可以批量打包多笔交易，类似以太坊
 	}
 }
 
@@ -410,7 +436,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 		// 检查每个账户的状态
 		for addr, promotedTxs := range allPromoted {
-			r.logger.Debug("账户已提升交易", "address", addr.String(), "count", len(promotedTxs))
+			r.logger.Info("账户已提升交易", "address", addr.String(), "count", len(promotedTxs))
 
 			// 获取账户在区块链中的当前 nonce
 			if currentHeader := r.config.blockchain.CurrentHeader(); currentHeader != nil {
@@ -420,7 +446,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 			for i, tx := range promotedTxs {
 				if tx != nil {
-					r.logger.Debug("已提升交易", "index", i, "hash", tx.Hash.String(), "nonce", tx.Nonce)
+					r.logger.Info("已提升交易", "index", i, "hash", tx.Hash.String(), "nonce", tx.Nonce)
 				} else {
 					r.logger.Warn("发现空交易", "index", i, "address", addr.String())
 				}
@@ -428,10 +454,10 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		}
 
 		for addr, enqueuedTxs := range allEnqueued {
-			r.logger.Debug("账户待提升交易", "address", addr.String(), "count", len(enqueuedTxs))
+			r.logger.Info("账户待提升交易", "address", addr.String(), "count", len(enqueuedTxs))
 			for i, tx := range enqueuedTxs {
 				if tx != nil {
-					r.logger.Debug("待提升交易", "index", i, "hash", tx.Hash.String(), "nonce", tx.Nonce)
+					r.logger.Info("待提升交易", "index", i, "hash", tx.Hash.String(), "nonce", tx.Nonce)
 				} else {
 					r.logger.Warn("发现空交易", "index", i, "address", addr.String())
 				}

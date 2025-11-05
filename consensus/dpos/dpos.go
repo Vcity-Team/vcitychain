@@ -1344,6 +1344,27 @@ func (d *DPoS) parseValidatorsFromExtraData(extraData []byte) (validator.Account
 
 // GetVotingPower 和 GetVotingPowerWithTx 已迁移到 voting_weight.go
 
+// OnBlockInserted 在区块写入后调用，用于清理交易池和处理区块事件
+// 这个方法在同步区块和本地生产区块时都会被调用，确保交易池状态与链上状态一致
+// 注意：本地生产区块时，consensusRuntime.OnBlockInserted 也会调用 ResetWithHeaders，
+// 这里再次调用是安全的（幂等操作），确保两种路径的行为一致
+func (d *DPoS) OnBlockInserted(fullBlock *types.FullBlock) {
+	if d.txPool == nil {
+		d.logger.Warn("⚠️ [DPoS.OnBlockInserted] txPool 为 nil，跳过交易池清理",
+			"blockNumber", fullBlock.Block.Number(),
+			"note", "这会导致交易池nonce未更新")
+		return
+	}
+
+	d.logger.Info("🔵 [DPoS.OnBlockInserted] 清理交易池",
+		"blockNumber", fullBlock.Block.Number(),
+		"blockHash", fullBlock.Block.Hash().String()[:16],
+		"txCount", len(fullBlock.Block.Transactions))
+
+	// 调用交易池的 ResetWithHeaders 来清理已打包的交易
+	d.txPool.ResetWithHeaders(fullBlock.Block.Header)
+}
+
 func (d *DPoS) GetCurrentRound() uint64 {
 	d.lock.RLock()
 	defer d.lock.RUnlock()
