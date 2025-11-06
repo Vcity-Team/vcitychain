@@ -919,19 +919,19 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 		OnBlockInserted(fullBlock *types.FullBlock)
 	}
 
-	b.logger.Info("🔵 [blockchain.WriteFullBlock] 开始类型断言，检查共识是否支持 OnBlockInserted",
+	b.logger.Debug("🔵 [blockchain.WriteFullBlock] 开始类型断言，检查共识是否支持 OnBlockInserted",
 		"blockNumber", header.Number,
 		"source", source,
 		"consensusType", fmt.Sprintf("%T", b.consensus))
 
 	if blockInsertedHandler, ok := b.consensus.(onBlockInsertedInterface); ok && blockInsertedHandler != nil {
-		b.logger.Info("🔵 [blockchain.WriteFullBlock] 类型断言成功，调用共识 OnBlockInserted",
+		b.logger.Debug("🔵 [blockchain.WriteFullBlock] 类型断言成功，调用共识 OnBlockInserted",
 			"blockNumber", header.Number,
 			"blockHash", header.Hash.String()[:16],
 			"source", source,
 			"consensusType", fmt.Sprintf("%T", b.consensus))
 		blockInsertedHandler.OnBlockInserted(fblock)
-		b.logger.Info("🔵 [blockchain.WriteFullBlock] OnBlockInserted 调用完成",
+		b.logger.Debug("🔵 [blockchain.WriteFullBlock] OnBlockInserted 调用完成",
 			"blockNumber", header.Number,
 			"source", source)
 	} else {
@@ -1079,7 +1079,18 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 				if validatorsList, ok := detail["validatorsList"].([]string); ok {
 					logArgs = append(logArgs, "validatorsList", validatorsList)
 				}
+			} else {
+				// 接口断言成功，但未找到验证者详情
+				b.logger.Info("⚠️ 接口断言成功但未找到验证者详情",
+					"blockNumber", header.Number,
+					"source", source)
 			}
+		} else {
+			// 接口类型断言失败
+			b.logger.Info("⚠️ consensus不支持GetValidatorDetail接口，无法添加验证者详情字段",
+				"blockNumber", header.Number,
+				"consensusType", fmt.Sprintf("%T", b.consensus),
+				"source", source)
 		}
 
 		// 🆕 根据是否有交易使用不同的表情符号

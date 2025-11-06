@@ -436,7 +436,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 		// 检查每个账户的状态
 		for addr, promotedTxs := range allPromoted {
-			r.logger.Info("账户已提升交易", "address", addr.String(), "count", len(promotedTxs))
+			r.logger.Debug("账户已提升交易", "address", addr.String(), "count", len(promotedTxs))
 
 			// 获取账户在区块链中的当前 nonce
 			if currentHeader := r.config.blockchain.CurrentHeader(); currentHeader != nil {
@@ -446,7 +446,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 			for i, tx := range promotedTxs {
 				if tx != nil {
-					r.logger.Info("已提升交易", "index", i, "hash", tx.Hash.String(), "nonce", tx.Nonce)
+					r.logger.Debug("已提升交易", "index", i, "hash", tx.Hash.String(), "nonce", tx.Nonce)
 				} else {
 					r.logger.Warn("发现空交易", "index", i, "address", addr.String())
 				}
@@ -454,10 +454,10 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		}
 
 		for addr, enqueuedTxs := range allEnqueued {
-			r.logger.Info("账户待提升交易", "address", addr.String(), "count", len(enqueuedTxs))
+			r.logger.Debug("账户待提升交易", "address", addr.String(), "count", len(enqueuedTxs))
 			for i, tx := range enqueuedTxs {
 				if tx != nil {
-					r.logger.Info("待提升交易", "index", i, "hash", tx.Hash.String(), "nonce", tx.Nonce)
+					r.logger.Debug("待提升交易", "index", i, "hash", tx.Hash.String(), "nonce", tx.Nonce)
 				} else {
 					r.logger.Warn("发现空交易", "index", i, "address", addr.String())
 				}

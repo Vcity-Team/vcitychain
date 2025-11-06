@@ -276,6 +276,18 @@ func (r *dposRuntime) produceBlock() error {
 	// 计算下一个要生产的区块号
 	nextBlockNumber := currentBlock.Number + 1
 
+	// 🆕 保存构建开始时的slot和时间（用于超时检查，TRON机制）
+	var buildStartSlot int = -1
+	var buildStartTime time.Time
+	if r.config.blockScheduler != nil {
+		now := time.Now()
+		genesisTime := r.config.blockScheduler.GetGenesisTime()
+		blockWindow := r.config.blockScheduler.GetBlockWindow()
+		timeSinceGenesis := now.Sub(genesisTime)
+		buildStartSlot = int(timeSinceGenesis / blockWindow)
+		buildStartTime = now
+	}
+
 	// 只对区块1进行特殊检查，防止分叉
 	if nextBlockNumber == 1 {
 		// 如果我们要生产区块1，检查是否已经有区块1了
@@ -307,6 +319,36 @@ func (r *dposRuntime) produceBlock() error {
 	block, err := r.buildBlock()
 	if err != nil {
 		return fmt.Errorf("failed to build block: %w", err)
+	}
+
+	// 🆕 检查是否超过slot时间（TRON机制：如果构建耗时超过slot时间或slot已变化，丢弃该区块）
+	if r.config.blockScheduler != nil && buildStartSlot >= 0 {
+		now := time.Now()
+		genesisTime := r.config.blockScheduler.GetGenesisTime()
+		blockWindow := r.config.blockScheduler.GetBlockWindow()
+		timeSinceGenesis := now.Sub(genesisTime)
+		currentSlotAfterBuild := int(timeSinceGenesis / blockWindow)
+		buildDuration := now.Sub(buildStartTime)
+
+		// 检查构建耗时是否超过slot时间
+		if buildDuration > blockWindow {
+			r.logger.Warn("⏰ 区块构建耗时超过slot时间，丢弃该区块（TRON机制）",
+				"blockNumber", nextBlockNumber,
+				"buildDuration", buildDuration,
+				"blockWindow", blockWindow,
+				"buildStartSlot", buildStartSlot,
+				"currentSlotAfterBuild", currentSlotAfterBuild)
+			return nil
+		}
+
+		// 检查slot是否已变化
+		if currentSlotAfterBuild != buildStartSlot {
+			r.logger.Warn("⏰ slot已变化，丢弃该区块（TRON机制）",
+				"blockNumber", nextBlockNumber,
+				"buildStartSlot", buildStartSlot,
+				"currentSlotAfterBuild", currentSlotAfterBuild)
+			return nil
+		}
 	}
 
 	// 检查父区块是否已变化（防止其他节点已出块导致分叉）
@@ -345,7 +387,7 @@ func (r *dposRuntime) produceBlock() error {
 		blockWindow := r.config.blockScheduler.GetBlockWindow()
 		timeSinceGenesis := now.Sub(genesisTime)
 		actualSlot := int(timeSinceGenesis / blockWindow)
-		
+
 		// 如果slot已经变化，不更新（避免覆盖新的slot）
 		if actualSlot == currentSlot {
 			r.lastProducedSlot = currentSlot
@@ -362,7 +404,7 @@ func (r *dposRuntime) produceBlock() error {
 
 		// 记录所有交易的详细信息，帮助诊断
 		for i, tx := range block.Block.Transactions {
-			r.logger.Info("区块交易详情",
+			r.logger.Debug("区块交易详情",
 				"index", i,
 				"txHash", tx.Hash.String(),
 				"nonce", tx.Nonce,

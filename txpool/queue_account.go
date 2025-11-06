@@ -69,7 +69,7 @@ func (q *accountQueue) prune(nonce uint64, addr types.Address, logger hclog.Logg
 		pruned = append(pruned, prunedTx)
 
 		if logger != nil {
-			logger.Info("✅ [accountQueue.prune] 移除过期交易",
+			logger.Debug("✅ [accountQueue.prune] 移除过期交易",
 				"addr", addr.String()[:16],
 				"queueType", queueType,
 				"txHash", prunedTx.Hash.String()[:16],
@@ -80,7 +80,7 @@ func (q *accountQueue) prune(nonce uint64, addr types.Address, logger hclog.Logg
 	}
 
 	if logger != nil && len(pruned) > 0 {
-		logger.Info("🔵 [accountQueue.prune] 队列清理完成",
+		logger.Debug("🔵 [accountQueue.prune] 队列清理完成",
 			"addr", addr.String()[:16],
 			"queueType", queueType,
 			"targetNonce", nonce,

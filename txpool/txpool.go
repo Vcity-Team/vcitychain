@@ -700,7 +700,7 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 			// 第一层：如果其他节点打包了某个nonce的交易，本节点应该清理该nonce的所有交易
 			account := p.accounts.get(addr)
 			if account != nil {
-				p.logger.Info("🔵 [processEvent-第一层清理] 检查账户交易",
+				p.logger.Debug("🔵 [processEvent-第一层清理] 检查账户交易",
 					"from", addr.String(),
 					"minedTxNonce", tx.Nonce,
 					"minedTxHash", tx.Hash.String()[:16],
@@ -713,7 +713,7 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 				// 检查是否有该nonce的交易（不管hash是否匹配）
 				txInPool := account.nonceToTx.get(tx.Nonce)
 				if txInPool != nil {
-					p.logger.Info("🔵 [processEvent-第一层清理] 找到相同nonce的交易",
+					p.logger.Debug("🔵 [processEvent-第一层清理] 找到相同nonce的交易",
 						"from", addr.String(),
 						"nonce", tx.Nonce,
 						"poolTxHash", txInPool.Hash.String()[:16],
@@ -729,7 +729,7 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 							p.gauge.decrease(slotsRequired(txInPool))
 							p.updatePending(-1)
 
-							p.logger.Info("✅ [processEvent-第一层清理] 从promoted队列移除已打包的交易（hash匹配）",
+							p.logger.Debug("✅ [processEvent-第一层清理] 从promoted队列移除已打包的交易（hash匹配）",
 								"txHash", txInPool.Hash.String()[:16],
 								"nonce", tx.Nonce,
 								"from", addr.String(),
@@ -744,7 +744,7 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 							p.gauge.decrease(slotsRequired(txInPool))
 							p.updatePending(-1)
 
-							p.logger.Info("✅ [processEvent-第一层清理] 从promoted队列移除过期交易（nonce已被其他节点使用）",
+							p.logger.Debug("✅ [processEvent-第一层清理] 从promoted队列移除过期交易（nonce已被其他节点使用）",
 								"txHash", txInPool.Hash.String()[:16],
 								"nonce", tx.Nonce,
 								"minedTxHash", tx.Hash.String()[:16],
@@ -754,7 +754,7 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 						}
 					}
 				} else {
-					p.logger.Info("🔵 [processEvent-第一层清理] 交易池中未找到相同nonce的交易",
+					p.logger.Debug("🔵 [processEvent-第一层清理] 交易池中未找到相同nonce的交易",
 						"from", addr.String(),
 						"nonce", tx.Nonce,
 						"minedTxHash", tx.Hash.String()[:16])
@@ -763,7 +763,7 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 				account.nonceToTx.unlock()
 				account.promoted.unlock()
 			} else {
-				p.logger.Info("🔵 [processEvent-第一层清理] 账户不存在于交易池",
+				p.logger.Debug("🔵 [processEvent-第一层清理] 账户不存在于交易池",
 					"from", addr.String(),
 					"nonce", tx.Nonce)
 			}
