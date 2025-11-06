@@ -733,6 +733,21 @@ func (i *backendIBFT) ProcessHeaders(headers []*types.Header) error {
 
 // GetBlockCreator retrieves the block signer from the extra data field
 func (i *backendIBFT) GetBlockCreator(header *types.Header) (types.Address, error) {
+	// 🆕 检查是否已经切换到 DPoS
+	// 如果区块高度 >= 共识切换高度，说明已经是 DPoS 区块，应该从 Miner 字段读取
+	if i.forkManager != nil {
+		consensusSwitchHeight := i.forkManager.GetConsensusSwitchHeight()
+		if consensusSwitchHeight > 0 && header.Number >= consensusSwitchHeight {
+			// 这是 DPoS 区块，从 Miner 字段读取
+			if len(header.Miner) > 0 {
+				return types.BytesToAddress(header.Miner), nil
+			}
+			// 如果 Miner 字段为空，返回错误
+			return types.ZeroAddress, fmt.Errorf("DPoS block at height %d has empty Miner field", header.Number)
+		}
+	}
+
+	// IBFT 区块：从 ProposerSeal 恢复
 	signer, err := i.forkManager.GetSigner(header.Number)
 	if err != nil {
 		return types.ZeroAddress, err
