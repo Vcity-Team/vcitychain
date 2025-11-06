@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Vcity-Team/vcitychain/chain"
 	"github.com/Vcity-Team/vcitychain/command"
 	"github.com/Vcity-Team/vcitychain/command/helper"
 )
@@ -21,6 +22,7 @@ var (
 type registerDelegateParams struct {
 	jsonRPC     string
 	chainID     uint64
+	genesisPath string
 	address     string
 	name        string
 	website     string
@@ -82,8 +84,14 @@ func setFlags(cmd *cobra.Command) {
 	cmd.Flags().Uint64Var(
 		&registerParams.chainID,
 		"chain-id",
-		20230826,
-		"chain ID for transaction signing (default: 20230826)",
+		0,
+		"chain ID for transaction signing (if not specified, will be read from genesis file)",
+	)
+	cmd.Flags().StringVar(
+		&registerParams.genesisPath,
+		"genesis",
+		"./genesis.json",
+		"path to the genesis file (default: ./genesis.json)",
 	)
 
 	// Mark required flags
@@ -100,6 +108,31 @@ func runPreRun(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("failed to get json-rpc flag: %w", err)
 	}
 	registerParams.jsonRPC = jsonRPC
+
+	// Get genesis path from flag
+	genesisPath, err := cmd.Flags().GetString("genesis")
+	if err != nil {
+		return fmt.Errorf("failed to get genesis flag: %w", err)
+	}
+	registerParams.genesisPath = genesisPath
+
+	// Get chain-id from flag
+	chainID, err := cmd.Flags().GetUint64("chain-id")
+	if err != nil {
+		return fmt.Errorf("failed to get chain-id flag: %w", err)
+	}
+
+	// If chain-id is not specified, try to read from genesis file
+	if chainID == 0 {
+		chainConfig, err := chain.ImportFromFile(registerParams.genesisPath)
+		if err != nil {
+			return fmt.Errorf("failed to read genesis file at %s: %w. Please specify chain-id manually or provide a valid genesis file", registerParams.genesisPath, err)
+		}
+		registerParams.chainID = uint64(chainConfig.Params.ChainID)
+	} else {
+		// User manually specified chain-id, use the specified value
+		registerParams.chainID = chainID
+	}
 
 	return registerParams.validateFlags()
 }
