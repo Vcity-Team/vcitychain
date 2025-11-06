@@ -247,13 +247,6 @@ func (b *BlockBuilder) Fill() {
 		// nonce匹配，重置连续跳过计数
 		consecutiveSkips = 0
 
-		b.params.Logger.Info("✅ [BlockBuilder.Fill] 执行交易",
-			"blockNumber", blockNumber,
-			"txHash", tx.Hash.String()[:16],
-			"from", tx.From.String()[:16],
-			"nonce", tx.Nonce,
-			"txCount", txCount)
-
 		// execute transactions one by one
 		// 🆕 writeTxPoolTransaction内部会调用Pop()，所以这里不需要再次调用
 		finished, err := b.writeTxPoolTransaction(tx)
