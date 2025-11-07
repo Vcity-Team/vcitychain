@@ -34,7 +34,7 @@ type ResourceMonitor struct {
 	// DPoS运行时引用，用于缓存清理
 	dposRuntime *dposRuntime
 
-	// 🆕 日志间隔管理
+	// 日志间隔管理
 	lastLogTime map[string]time.Time
 	logMutex    sync.RWMutex
 }
@@ -157,7 +157,3 @@ func (rm *ResourceMonitor) logOnceWithInterval(key string, interval time.Duratio
 		rm.logger.Info(message, args...)
 	}
 }
-
-
-
-

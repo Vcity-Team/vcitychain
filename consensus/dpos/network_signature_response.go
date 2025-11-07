@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Vcity-Team/vcitychain/types"
 	dposProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
+	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -28,7 +28,6 @@ func (r *dposRuntime) handleSignatureResponseMessage(obj interface{}, from peer.
 		return
 	}
 
-	// 转换为内部格式
 	response := &SignatureResponse{
 		ValidatorAddr:  types.BytesToAddress(protoResponse.ValidatorAddr),
 		Signature:      protoResponse.Signature,
@@ -139,9 +138,3 @@ func (r *dposRuntime) HandleSignatureResponse(response *SignatureResponse) error
 	// 例如：验证签名、更新状态等
 	return nil
 }
-
-// handleSignatureQueryResponse 处理签名查询响应
-func (r *dposRuntime) handleSignatureQueryResponse(obj interface{}, from peer.ID) {
-	// 简化的实现，暂时只记录日志
-}
-

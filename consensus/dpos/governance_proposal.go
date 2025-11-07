@@ -12,7 +12,6 @@ func (d *DPoS) CreateParameterProposal(proposer types.Address, parameter string,
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
-	// 🆕 验证私钥是否提供
 	if proposerPrivateKeyHex == "" {
 		return nil, fmt.Errorf("proposer private key is required for signing the proposal")
 	}
@@ -42,14 +41,14 @@ func (d *DPoS) CreateParameterProposal(proposer types.Address, parameter string,
 	currentBlock := d.getCurrentBlockNumber()
 	proposal := &ParameterProposal{
 		ID:            proposalID,
-		ProposalType:  "parameter", // 🆕 标记为参数修改提案
+		ProposalType:  "parameter", // 标记为参数修改提案
 		Parameter:     parameter,
 		OldValue:      oldValue,
 		NewValue:      newValue,
 		Proposer:      proposer,
 		StartBlock:    currentBlock + 1,
 		EndBlock:      currentBlock + d.getVotePeriod(),  // 表决期结束区块
-		ValidEndBlock: currentBlock + d.getValidPeriod(), // 🆕 有效期结束区块
+		ValidEndBlock: currentBlock + d.getValidPeriod(), // 有效期结束区块
 		Status:        ProposalPending,
 		Votes:         make(map[types.Address]ParameterVote),
 		Threshold:     d.getVotingThreshold(), // 动态通过阈值
@@ -57,12 +56,12 @@ func (d *DPoS) CreateParameterProposal(proposer types.Address, parameter string,
 		CreatedAt:     uint64(time.Now().Unix()),
 	}
 
-	// 🆕 签名提案
+	// 签名提案
 	if err := d.signProposal(proposal, proposerPrivateKeyHex); err != nil {
 		return nil, fmt.Errorf("failed to sign proposal: %w", err)
 	}
 
-	// 🆕 验证签名
+	// 验证签名
 	if err := d.verifyProposalSignature(proposal); err != nil {
 		return nil, fmt.Errorf("failed to verify proposal signature: %w", err)
 	}
@@ -95,7 +94,7 @@ func (d *DPoS) CreateRecoveryProposal(proposer types.Address, validatorAddr type
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
-	// 🆕 验证私钥是否提供
+	// 验证私钥是否提供
 	if proposerPrivateKeyHex == "" {
 		return nil, fmt.Errorf("proposer private key is required for signing the proposal")
 	}
@@ -132,29 +131,29 @@ func (d *DPoS) CreateRecoveryProposal(proposer types.Address, validatorAddr type
 	currentBlock := d.getCurrentBlockNumber()
 	proposal := &ParameterProposal{
 		ID:               proposalID,
-		ProposalType:     "validator_recovery",   // 🆕 标记为验证者恢复提案
+		ProposalType:     "validator_recovery",   // 标记为验证者恢复提案
 		Parameter:        validatorAddr.String(), // 存储验证者地址
-		ValidatorAddress: validatorAddr,          // 🆕 验证者地址
+		ValidatorAddress: validatorAddr,          // 验证者地址
 		OldValue:         oldValue,
 		NewValue:         newValue,
 		Proposer:         proposer,
 		StartBlock:       currentBlock + 1,
 		EndBlock:         currentBlock + d.getVotePeriod(),  // 表决期结束区块
-		ValidEndBlock:    currentBlock + d.getValidPeriod(), // 🆕 有效期结束区块
+		ValidEndBlock:    currentBlock + d.getValidPeriod(), // 有效期结束区块
 		Status:           ProposalPending,
 		Votes:            make(map[types.Address]ParameterVote),
 		Threshold:        d.getVotingThreshold(),
 		Description:      description,
-		RecoveryReason:   recoveryReason, // 🆕 恢复理由
+		RecoveryReason:   recoveryReason,
 		CreatedAt:        uint64(time.Now().Unix()),
 	}
 
-	// 🆕 签名提案
+	// 签名提案
 	if err := d.signProposal(proposal, proposerPrivateKeyHex); err != nil {
 		return nil, fmt.Errorf("failed to sign proposal: %w", err)
 	}
 
-	// 🆕 验证签名
+	// 验证签名
 	if err := d.verifyProposalSignature(proposal); err != nil {
 		return nil, fmt.Errorf("failed to verify proposal signature: %w", err)
 	}
@@ -180,4 +179,3 @@ func (d *DPoS) CreateRecoveryProposal(proposer types.Address, validatorAddr type
 
 	return proposal, nil
 }
-

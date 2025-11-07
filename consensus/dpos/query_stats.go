@@ -8,8 +8,6 @@ import (
 	"github.com/Vcity-Team/vcitychain/types"
 )
 
-// ==================== DPoS经济系统JSON-RPC查询方法 ====================
-
 // GetCurrentEpochInfo 获取当前Epoch信息
 func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 	if d.epochManager == nil {
@@ -26,7 +24,7 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 		}
 	}
 
-	// 🆕 修复：使用与isEpochEndBlock相同的epoch计算逻辑
+	// 使用与isEpochEndBlock相同的epoch计算逻辑
 	consensusSwitchHeight := d.config.ConsensusSwitchHeight
 	epochSize := d.getEpochSize()
 
@@ -52,19 +50,18 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 	// 计算剩余时间
 	timeRemaining := time.Duration(0)
 	nextEpochTime := lastEpochTime.Add(epochDuration)
-	if time.Now().Before(nextEpochTime) {
-		timeRemaining = nextEpochTime.Sub(time.Now())
+	if now := time.Now(); now.Before(nextEpochTime) {
+		timeRemaining = time.Until(nextEpochTime)
 	}
 
-	// 🆕 从数据库读取验证者信息（按权重倒序排序，应用配置限制）
+	// 从数据库读取验证者信息（按权重倒序排序，应用配置限制）
 	validators := make([]map[string]interface{}, 0)
 	if d.state != nil && d.state.StakeStore != nil {
-		// 🆕 使用公共函数获取排序和限制后的验证者（包含故障过滤）
+		// 使用公共函数获取排序和限制后的验证者（包含故障过滤）
 		dbValidators, err := d.GetSortedValidatorsWithLimit()
 		if err == nil && len(dbValidators) > 0 {
-			// 转换为输出格式
 			for i, validator := range dbValidators {
-				// 🆕 获取验证者的故障标志信息
+				// 获取验证者的故障标志信息
 				faultInfo := d.getValidatorFaultInfo(validator.Address)
 
 				validators = append(validators, map[string]interface{}{
@@ -72,7 +69,7 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 					"address":     validator.Address.String(),
 					"votingPower": validator.VotingPower.String(),
 					"isActive":    validator.IsActive,
-					"faultFlag":   faultInfo, // 🆕 添加故障标志信息
+					"faultFlag":   faultInfo, // 添加故障标志信息
 				})
 			}
 		}
@@ -119,7 +116,7 @@ func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
 		}
 	}
 
-	// 🆕 修复：使用与isEpochEndBlock相同的epoch计算逻辑获取当前epoch
+	// 使用与isEpochEndBlock相同的epoch计算逻辑获取当前epoch
 	consensusSwitchHeight := d.config.ConsensusSwitchHeight
 	epochSize := d.getEpochSize()
 
@@ -217,7 +214,6 @@ func (d *DPoS) GetValidatorBlockStats(validatorAddress types.Address, epochNumbe
 
 // GetValidatorRewardsInfo 获取验证者奖励信息
 func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumber uint64) map[string]interface{} {
-	// 🆕 添加方法开始的调试日志
 	d.logger.Debug("🔍 GetValidatorRewardsInfo开始",
 		"validatorAddress", validatorAddress.String(),
 		"epochNumber", epochNumber)
@@ -230,7 +226,7 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 	}
 
 	// 🆕 添加配置值的调试日志
-	d.logger.Debug("🔍 DPoS配置值调试",
+	d.logger.Debug("DPoS配置值调试",
 		"RewardAmount", func() string {
 			if d.config.RewardAmount != nil {
 				return d.config.RewardAmount.String()
@@ -263,14 +259,14 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 	blocksProduced := blockCounts[validatorAddress]
 	totalBlocks := d.blockTracker.GetTotalEpochBlocks(epochNumber)
 
-	// 🆕 添加出块统计的调试日志
-	d.logger.Debug("🔍 出块统计调试信息",
+	// 添加出块统计的调试日志
+	d.logger.Debug("出块统计调试信息",
 		"epochNumber", epochNumber,
 		"blockCounts", blockCounts,
 		"blocksProduced", blocksProduced,
 		"totalBlocks", totalBlocks)
 
-	// 🆕 使用固定时间窗口计算奖励
+	// 使用固定时间窗口计算奖励
 	validatorReward := "0"
 	voterReward := "0"
 	totalReward := "0"
@@ -282,14 +278,14 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 	// 投票者详细奖励分配
 	voterRewards := make(map[string]string)
 
-	// 🆕 添加条件判断的调试日志
-	d.logger.Debug("🔍 奖励计算条件检查",
+	// 添加条件判断的调试日志
+	d.logger.Debug("奖励计算条件检查",
 		"RewardAmountIsNil", d.config.RewardAmount == nil,
 		"blocksProduced", blocksProduced,
 		"willEnterRewardCalculation", d.config.RewardAmount != nil && blocksProduced > 0)
 
 	if d.config.RewardAmount != nil && blocksProduced > 0 {
-		// 🆕 基于固定时间窗口的奖励计算
+		// 基于固定时间窗口的奖励计算
 		// 1. 获取配置的区块时间（固定时间窗口）
 		expectedBlockTime := d.config.BlockTime.Duration
 
@@ -409,7 +405,7 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 		insufficientFunds = rewardAccountBalance.Cmp(requiredAmount) < 0
 	}
 
-	// 🆕 添加最终结果的调试日志
+	// 添加最终结果的调试日志
 	d.logger.Debug("🔍 GetValidatorRewardsInfo最终结果",
 		"validatorAddress", validatorAddress.String(),
 		"epochNumber", epochNumber,
@@ -440,7 +436,7 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 		"isActive":             isActive,
 		"insufficientFunds":    insufficientFunds,              // 奖励账户资金是否充足
 		"canDistribute":        !insufficientFunds && isActive, // 是否可以分发奖励
-		"voterRewards":         voterRewards,                   // 🆕 投票者详细奖励分配
+		"voterRewards":         voterRewards,                   // 投票者详细奖励分配
 	}
 }
 
@@ -476,17 +472,3 @@ func (d *DPoS) recordRewardsToDatabase(epochNumber uint64, rewards map[types.Add
 
 	return nil
 }
-
-// onEpochEnd 在epoch结束时调用
-func (d *DPoS) onEpochEnd(epochNumber uint64) error {
-	d.logger.Info("🏁 ========== Epoch结束回调触发 ==========",
-		"epoch", epochNumber,
-		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
-
-	// 延迟状态更新机制已移除，奖励分发在epoch结束区块直接执行
-	d.logger.Debug("延迟状态更新机制已移除，无需在epoch结束时处理状态更新",
-		"currentEpoch", epochNumber)
-
-	return nil
-}
-

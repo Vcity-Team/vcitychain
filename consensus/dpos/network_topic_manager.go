@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
+	dposProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
 	"github.com/Vcity-Team/vcitychain/network"
 	"github.com/Vcity-Team/vcitychain/types"
-	dposProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
 	"github.com/golang/protobuf/proto"
 )
 
@@ -72,19 +72,19 @@ func (r *dposRuntime) getSignatureRequestTopic() (*network.Topic, error) {
 	}
 
 	// 如果网络集成层没有，尝试创建新主题
-	r.logger.Info("🔍 DPoS尝试创建签名请求主题", "topic", "dpos-signature-request", "网络集成层状态", r.networkIntegration != nil)
+	r.logger.Info("DPoS尝试创建签名请求主题", "topic", "dpos-signature-request", "网络集成层状态", r.networkIntegration != nil)
 	topic, err := r.network.NewTopic("dpos-signature-request", defaultDPOSMessage)
 	if err != nil {
-		r.logger.Error("🔍 DPoS创建主题失败", "topic", "dpos-signature-request", "错误类型", fmt.Sprintf("%T", err), "错误信息", err.Error())
+		r.logger.Error("DPoS创建主题失败", "topic", "dpos-signature-request", "错误类型", fmt.Sprintf("%T", err), "错误信息", err.Error())
 
 		// 如果主题已存在，再次检查网络集成层
 		if strings.Contains(err.Error(), "topic already exists") {
-			r.logger.Info("🔍 主题已存在，再次检查网络集成层", "topic", "dpos-signature-request")
+			r.logger.Info("主题已存在，再次检查网络集成层", "topic", "dpos-signature-request")
 
 			// 再次检查网络集成层是否有现有主题
 			if r.networkIntegration != nil {
 				if existingTopic := r.networkIntegration.GetSignatureRequestTopic(); existingTopic != nil {
-					r.logger.Info("🔗 从网络集成层获取到现有主题", "topic", "dpos-signature-request")
+					r.logger.Info("从网络集成层获取到现有主题", "topic", "dpos-signature-request")
 					r.signatureRequestTopic = existingTopic
 					return existingTopic, nil
 				}
@@ -116,7 +116,7 @@ func (r *dposRuntime) getSignatureRequestTopic() (*network.Topic, error) {
 
 	// 存储实际使用的protoID
 	actualProtoID := topic.GetActualProtoID()
-	r.logger.Info("🔍 签名请求Topic名称对比", "原始名称", "dpos-signature-request", "实际名称", actualProtoID)
+	r.logger.Info("签名请求Topic名称对比", "原始名称", "dpos-signature-request", "实际名称", actualProtoID)
 
 	r.logger.Debug("成功创建签名请求主题")
 	return topic, nil
@@ -174,7 +174,7 @@ func (r *dposRuntime) getSignatureResponseTopic() (*network.Topic, error) {
 	// 首先检查网络集成层是否已经有现有主题
 	if r.networkIntegration != nil {
 		if existingTopic := r.networkIntegration.GetSignatureResponseTopic(); existingTopic != nil {
-			r.logger.Info("🔗 复用网络集成层的签名响应主题", "topic", "dpos-signature-response")
+			r.logger.Info(" 复用网络集成层的签名响应主题", "topic", "dpos-signature-response")
 			r.signatureResponseTopic = existingTopic
 			return existingTopic, nil
 		}
@@ -203,7 +203,7 @@ func (r *dposRuntime) getSignatureResponseTopic() (*network.Topic, error) {
 			// 最后一次检查网络集成层
 			if r.networkIntegration != nil {
 				if existingTopic := r.networkIntegration.GetSignatureResponseTopic(); existingTopic != nil {
-					r.logger.Info("🔗 延迟获取到网络集成层主题", "topic", "dpos-signature-response")
+					r.logger.Info("延迟获取到网络集成层主题", "topic", "dpos-signature-response")
 					r.signatureResponseTopic = existingTopic
 					return existingTopic, nil
 				}
@@ -222,7 +222,7 @@ func (r *dposRuntime) getSignatureResponseTopic() (*network.Topic, error) {
 
 	// 存储实际使用的protoID
 	actualProtoID := topic.GetActualProtoID()
-	r.logger.Info("🔍 签名响应Topic名称对比", "原始名称", "dpos-signature-response", "实际名称", actualProtoID)
+	r.logger.Info("签名响应Topic名称对比", "原始名称", "dpos-signature-response", "实际名称", actualProtoID)
 
 	r.logger.Info("成功创建签名响应主题")
 	return topic, nil
@@ -233,4 +233,3 @@ func (r *dposRuntime) getSignatureQueryTopic() (*network.Topic, error) {
 	// 简化的实现，返回nil表示暂时不实现
 	return nil, fmt.Errorf("signature query topic not implemented")
 }
-

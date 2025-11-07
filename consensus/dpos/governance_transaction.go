@@ -19,10 +19,10 @@ func (d *DPoS) ProcessProposalCreateTransaction(tx *types.Transaction, blockNumb
 		return fmt.Errorf("failed to unmarshal proposal create tx data: %w", err)
 	}
 
-	d.logger.Info("🔄 处理创建提案交易", "from", tx.From.String(), "blockNumber", blockNumber, "proposalType", txData.ProposalType)
+	d.logger.Info("处理创建提案交易", "from", tx.From.String(), "blockNumber", blockNumber, "proposalType", txData.ProposalType)
 
 	// 2. 根据提案类型创建提案
-	// 🆕 使用交易哈希生成确定性的proposalID（所有节点相同）
+	// 使用交易哈希生成确定性的proposalID（所有节点相同）
 	proposalID := fmt.Sprintf("proposal_%s", tx.Hash.String()[:16]) // 使用交易哈希前16个字符
 
 	var proposal *ParameterProposal
@@ -127,7 +127,7 @@ func (d *DPoS) ProcessProposalCreateTransaction(tx *types.Transaction, blockNumb
 	d.parameterProposals[proposal.ID] = proposal
 	d.activeProposals[proposal.ID] = true
 
-	d.logger.Info("✅ 提案创建交易处理成功", "proposalID", proposal.ID, "proposalType", proposal.ProposalType)
+	d.logger.Info("提案创建交易处理成功", "proposalID", proposal.ID, "proposalType", proposal.ProposalType)
 
 	return nil
 }
@@ -143,7 +143,7 @@ func (d *DPoS) ProcessProposalVoteTransaction(tx *types.Transaction, blockNumber
 		return fmt.Errorf("failed to unmarshal proposal vote tx data: %w", err)
 	}
 
-	d.logger.Info("🔄 处理投票交易", "from", tx.From.String(), "proposalID", txData.ProposalID, "support", txData.Support, "blockNumber", blockNumber)
+	d.logger.Info("处理投票交易", "from", tx.From.String(), "proposalID", txData.ProposalID, "support", txData.Support, "blockNumber", blockNumber)
 
 	// 2. 获取提案
 	proposal, exists := d.parameterProposals[txData.ProposalID]
@@ -205,7 +205,7 @@ func (d *DPoS) ProcessProposalVoteTransaction(tx *types.Transaction, blockNumber
 		}
 	}
 
-	d.logger.Info("✅ 投票交易处理成功", "proposalID", txData.ProposalID, "voter", tx.From.String(), "support", txData.Support)
+	d.logger.Info("投票交易处理成功", "proposalID", txData.ProposalID, "voter", tx.From.String(), "support", txData.Support)
 
 	return nil
 }
@@ -221,7 +221,7 @@ func (d *DPoS) ProcessProposalExecuteTransaction(tx *types.Transaction, blockNum
 		return fmt.Errorf("failed to unmarshal proposal execute tx data: %w", err)
 	}
 
-	d.logger.Info("🔄 处理执行提案交易", "from", tx.From.String(), "proposalID", txData.ProposalID, "blockNumber", blockNumber)
+	d.logger.Info("处理执行提案交易", "from", tx.From.String(), "proposalID", txData.ProposalID, "blockNumber", blockNumber)
 
 	// 2. 获取提案
 	proposal, exists := d.parameterProposals[txData.ProposalID]
@@ -257,8 +257,7 @@ func (d *DPoS) ProcessProposalExecuteTransaction(tx *types.Transaction, blockNum
 		return fmt.Errorf("unknown proposal type: %s", proposal.ProposalType)
 	}
 
-	d.logger.Info("✅ 执行提案交易处理成功", "proposalID", txData.ProposalID)
+	d.logger.Info("执行提案交易处理成功", "proposalID", txData.ProposalID)
 
 	return nil
 }
-

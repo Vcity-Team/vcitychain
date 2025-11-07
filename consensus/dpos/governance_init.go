@@ -23,17 +23,17 @@ func (d *DPoS) InitializeGovernance() error {
 		d.votableParameters = d.getDefaultVotableParameters()
 	}
 
-	// 🆕 初始化参数缓存（强制从数据库同步）
+	// 初始化参数缓存（强制从数据库同步）
 	if err := d.initializeParameterCache(); err != nil {
 		return fmt.Errorf("failed to initialize parameter cache: %w", err)
 	}
 
-	// 🆕 从数据库加载所有提案
+	// 从数据库加载所有提案
 	if err := d.loadProposalsFromDatabase(); err != nil {
 		return fmt.Errorf("failed to load proposals from database: %w", err)
 	}
 
-	d.logger.Info("✅ 治理系统初始化完成",
+	d.logger.Info("治理系统初始化完成",
 		"votableParameters", len(d.votableParameters),
 		"activeProposals", len(d.activeProposals),
 		"loadedProposals", len(d.parameterProposals))
@@ -70,7 +70,7 @@ func (d *DPoS) loadProposalsFromDatabase() error {
 			"status", proposal.Status.String())
 	}
 
-	d.logger.Info("✅ 从数据库加载提案完成", "count", len(proposals))
+	d.logger.Info("从数据库加载提案完成", "count", len(proposals))
 	return nil
 }
 
@@ -174,7 +174,7 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Description: "Epoch持续时间",
 			Category:    "consensus",
 		},
-		// 🆕 治理参数
+		// 治理参数
 		"governance_voting_threshold": {
 			Name:        "Voting Threshold",
 			Type:        "uint64",
@@ -210,7 +210,7 @@ func (d *DPoS) getGovernanceParameterValue(paramName string) (interface{}, error
 
 // getVotePeriod 获取当前投票期间长度（区块数）
 func (d *DPoS) getVotePeriod() uint64 {
-	// 🆕 从配置文件获取表决周期（YAML配置优先）
+	// 从配置文件获取表决周期（YAML配置优先）
 	if d.config != nil && d.config.ProposalVotePeriod > 0 {
 		// 根据区块时间计算区块数
 		blockTime := d.config.BlockTime.Duration
@@ -221,25 +221,25 @@ func (d *DPoS) getVotePeriod() uint64 {
 		}
 	}
 
-	// 使用默认值（1天 = 43200个区块，按2秒/区块计算）
-	return 43200
+	// 使用默认值（1天 = 28800/区块计算）
+	return 28800
 }
 
 // getValidPeriod 获取提案有效期（区块数）
 func (d *DPoS) getValidPeriod() uint64 {
-	// 🆕 从配置文件获取有效期（YAML配置优先）
+	// 从配置文件获取有效期（YAML配置优先）
 	if d.config != nil && d.config.ProposalValidPeriod > 0 {
 		// 根据区块时间计算区块数
 		blockTime := d.config.BlockTime.Duration
 		if blockTime > 0 {
 			blocks := uint64(d.config.ProposalValidPeriod / blockTime)
-			d.logger.Debug("📋 计算提案有效期区块数", "proposalValidPeriod", d.config.ProposalValidPeriod, "blockTime", blockTime, "blocks", blocks)
+			d.logger.Debug("计算提案有效期区块数", "proposalValidPeriod", d.config.ProposalValidPeriod, "blockTime", blockTime, "blocks", blocks)
 			return blocks
 		}
 	}
 
-	// 使用默认值（7天 = 302400个区块，按2秒/区块计算）
-	return 302400
+	// 使用默认值（7天 = 201600个区块，按3秒/区块计算）
+	return 201600
 }
 
 // GetCurrentProposalPeriod 获取当前提案周期信息（用于显示）
@@ -313,10 +313,9 @@ func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 				return blocks, nil
 			}
 		}
-		// 默认值：1天 = 43200个区块（按2秒/区块）
-		return uint64(43200), nil
+		// 默认值：1天 = 28800个区块（按3秒/区块）
+		return uint64(28800), nil
 	default:
 		return nil, fmt.Errorf("unknown parameter: %s", paramName)
 	}
 }
-

@@ -61,7 +61,7 @@ func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, s
 	}
 
 	// 调试日志：记录投票参数
-	d.logger.Info("🔍 创建投票记录",
+	d.logger.Info("创建投票记录",
 		"proposalID", proposalID,
 		"voter", voter.String(),
 		"support", support,
@@ -349,7 +349,3 @@ func (d *DPoS) SignVoteForTx(vote *ParameterVote, privateKeyHex string) ([]byte,
 	}
 	return vote.Signature, nil
 }
-
-
-
-

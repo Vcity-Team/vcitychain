@@ -54,7 +54,6 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 	case "dpos_epoch_duration":
 		return d.config.EpochDuration.String(), nil
 	case "governance_voting_period":
-		// 🆕 从YAML配置计算提案表决周期（区块数）
 		if d.config != nil && d.config.ProposalVotePeriod > 0 {
 			blockTime := d.config.BlockTime.Duration
 			if blockTime > 0 {
@@ -62,8 +61,8 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 				return blocks, nil
 			}
 		}
-		// 默认值：1天 = 43200个区块（按2秒/区块）
-		return uint64(43200), nil
+		// 默认值：1天 = 28800个区块（按3秒/区块）
+		return uint64(28800), nil
 	case "governance_voting_threshold":
 		// 治理参数：投票通过阈值
 		return uint64(51), nil
@@ -274,7 +273,7 @@ func (d *DPoS) buildProposalMessage(proposal *ParameterProposal) []byte {
 
 // signProposal 签名提案
 func (d *DPoS) signProposal(proposal *ParameterProposal, proposerPrivateKeyHex string) error {
-	d.logger.Info("🔍 开始签名提案", "proposer", proposal.Proposer.String(), "proposalID", proposal.ID)
+	d.logger.Info("开始签名提案", "proposer", proposal.Proposer.String(), "proposalID", proposal.ID)
 
 	// 1. 验证私钥格式
 	if len(proposerPrivateKeyHex) != 64 {
@@ -314,7 +313,7 @@ func (d *DPoS) signProposal(proposal *ParameterProposal, proposerPrivateKeyHex s
 			calculatedAddr.String(), proposal.Proposer.String())
 	}
 
-	d.logger.Info("✅ 私钥验证通过", "address", calculatedAddr.String())
+	d.logger.Info("私钥验证通过", "address", calculatedAddr.String())
 
 	// 6. 构造签名消息
 	message := d.buildProposalMessage(proposal)
@@ -328,7 +327,7 @@ func (d *DPoS) signProposal(proposal *ParameterProposal, proposerPrivateKeyHex s
 	// 8. 保存签名
 	proposal.ProposalSignature = signature
 
-	d.logger.Info("✅ 提案签名成功",
+	d.logger.Info("提案签名成功",
 		"proposer", proposal.Proposer.String(),
 		"proposalID", proposal.ID,
 		"signatureLength", len(signature))
@@ -365,7 +364,7 @@ func (d *DPoS) verifyProposalSignature(proposal *ParameterProposal) error {
 		return fmt.Errorf("proposer %s is not a validator", proposal.Proposer.String())
 	}
 
-	d.logger.Debug("✅ 提案签名验证成功", "proposer", proposal.Proposer.String())
+	d.logger.Debug("提案签名验证成功", "proposer", proposal.Proposer.String())
 
 	return nil
 }
@@ -378,4 +377,3 @@ func (d *DPoS) SignProposalForTx(proposal *ParameterProposal, proposerPrivateKey
 	}
 	return proposal.ProposalSignature, nil
 }
-

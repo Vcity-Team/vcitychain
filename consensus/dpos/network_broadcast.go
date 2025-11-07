@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Vcity-Team/vcitychain/types"
 	dposProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
+	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/golang/protobuf/proto"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
@@ -245,4 +245,3 @@ func (r *dposRuntime) sendDirectSignatureRequestWithRetry(peerID peer.ID, protoR
 
 	return fmt.Errorf("所有重试尝试都失败了，最后的错误: %w", lastErr)
 }
-

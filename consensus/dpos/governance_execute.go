@@ -30,7 +30,7 @@ func (d *DPoS) executeParameterProposalInTx(proposalID string, proposal *Paramet
 		}
 	}
 
-	d.logger.Info("✅ ================================参数提案已登记，待边界生效", "proposalID", proposalID, "effectiveEpoch", effectiveEpoch)
+	d.logger.Info("================================参数提案已登记，待边界生效", "proposalID", proposalID, "effectiveEpoch", effectiveEpoch)
 
 	return nil
 }
@@ -65,11 +65,10 @@ func (d *DPoS) executeRecoveryProposalInTx(proposalID string, proposal *Paramete
 		}
 	}
 
-	d.logger.Info("✅ ==============================验证者恢复提案已登记，待边界生效",
+	d.logger.Info("==============================验证者恢复提案已登记，待边界生效",
 		"proposalID", proposalID,
 		"validator", validatorAddr.String(),
 		"effectiveEpoch", effectiveEpoch)
 
 	return nil
 }
-

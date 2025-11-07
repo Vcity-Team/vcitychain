@@ -71,7 +71,4 @@ func (r *dposRuntime) cleanupSignatureCollectionResources(checkpointHash types.H
 	r.signatureRequestMutex.Lock()
 	delete(r.pendingSignatureRequests, checkpointHash)
 	r.signatureRequestMutex.Unlock()
-
-	// 签名收集资源已清理
 }
-
