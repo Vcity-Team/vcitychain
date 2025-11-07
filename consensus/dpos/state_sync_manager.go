@@ -185,20 +185,6 @@ func (s *stateSyncManager) initTransport() error {
 			return
 		}
 
-		msg, ok := obj.(*TransportMessage)
-		if !ok {
-			s.logger.Warn("failed to deliver vote, invalid msg", "obj", obj)
-			return
-		}
-
-		// TODO: 暂时注释掉 proto 相关代码，等 proto 问题解决后再启用
-		// 暂时使用 msg 变量避免编译错误
-		_ = msg
-		/*
-			if err := s.saveVote(msg); err != nil {
-				s.logger.Warn("failed to deliver vote", "error", err)
-			}
-		*/
 	})
 }
 

@@ -68,13 +68,12 @@ func (s *StakeStore) isGenesisValidator(address types.Address) bool {
 
 // initialize creates necessary buckets in DB if they don't already exist
 func (s *StakeStore) initialize(dbTx *bolt.Tx) error {
-	// 创建必要的bucket
 	buckets := []string{
 		"StakingInfo",
 		"DelegatesAtBlock",
 		"VotingPowerAtBlock",
 		"VoterInfo",
-		"DelegateInfo", // 🆕 新增：受托人信息存储
+		"DelegateInfo",
 		"RewardHistory",
 		"EpochRewards",
 	}
@@ -139,17 +138,15 @@ func (s *StakeStore) getFullValidatorSet(dbTx *bolt.Tx) (validatorSetState, erro
 	return fullValidatorSet, err
 }
 
-// 🆕 新增：GetValidators方法，实现与命令一致的数据源
 func (s *StakeStore) GetValidators() (validator.AccountSet, error) {
 	return s.GetValidatorsWithFilter(true)
 }
 
-// 🆕 新增：GetValidatorsWithFilter方法，支持控制是否过滤
 func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (validator.AccountSet, error) {
 	var validators validator.AccountSet
 
 	err := s.db.View(func(tx *bolt.Tx) error {
-		// 🆕 修改：直接从DelegateInfo表读取验证者信息，不做任何处理
+		// 直接从DelegateInfo表读取验证者信息，不做任何处理
 		delegateBucket := tx.Bucket([]byte("DelegateInfo"))
 		if delegateBucket == nil {
 			return fmt.Errorf("DelegateInfo bucket not found")
@@ -172,7 +169,7 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 				Address:     delegateInfo.Address,
 				VotingPower: new(big.Int).Set(delegateInfo.VotingPower),
 				IsActive:    delegateInfo.IsActive,
-				BlsKey:      nil, // 初始为空
+				BlsKey:      nil,
 			}
 
 			// 如果有BLS公钥，解析并设置
@@ -191,7 +188,7 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 		return nil, fmt.Errorf("failed to get validators from database: %w", err)
 	}
 
-	// 🆕 按权重倒序排序，确保权重高的验证者排在前面
+	// 按权重倒序排序，确保权重高的验证者排在前面
 	sort.Slice(validators, func(i, j int) bool {
 		// 先按权重倒序排序
 		weightCmp := validators[i].VotingPower.Cmp(validators[j].VotingPower)
@@ -205,7 +202,6 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 	return validators, nil
 }
 
-// 🆕 新增：GetStakingInfo方法，直接从数据库读取，不做修改
 func (s *StakeStore) GetStakingInfo() ([]*StakeInfo, error) {
 	var stakingInfos []*StakeInfo
 

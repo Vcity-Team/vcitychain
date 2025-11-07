@@ -23,17 +23,17 @@ func (d *DPoS) debugDatabaseContents() {
 			// 检查VoterInfo bucket
 			voterBucket := tx.Bucket([]byte("VoterInfo"))
 			if voterBucket != nil {
-				d.logger.Debug("🔍 VoterInfo bucket 存在，条目数", "count", voterBucket.Stats().KeyN)
+				d.logger.Debug("VoterInfo bucket 存在，条目数", "count", voterBucket.Stats().KeyN)
 			} else {
-				d.logger.Debug("🔍 VoterInfo bucket 不存在")
+				d.logger.Debug("VoterInfo bucket 不存在")
 			}
 
 			// 检查StakingInfo bucket
 			stakingBucket := tx.Bucket([]byte("StakingInfo"))
 			if stakingBucket != nil {
-				d.logger.Debug("🔍 StakingInfo bucket 存在，条目数", "count", stakingBucket.Stats().KeyN)
+				d.logger.Debug("StakingInfo bucket 存在，条目数", "count", stakingBucket.Stats().KeyN)
 			} else {
-				d.logger.Debug("🔍 StakingInfo bucket 不存在")
+				d.logger.Debug("StakingInfo bucket 不存在")
 			}
 
 			return nil
@@ -44,7 +44,7 @@ func (d *DPoS) debugDatabaseContents() {
 // persistVoteToDatabase 将投票信息持久化到数据库
 func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Address, amount *big.Int) error {
 	// 检查状态存储是否可用
-	d.logger.Debug("🔍 Checking state store availability",
+	d.logger.Debug("Checking state store availability",
 		"d.state", d.state != nil,
 		"d.state.StakeStore", func() interface{} {
 			if d.state != nil {
@@ -66,7 +66,7 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 	}
 
 	// 获取当前投票者信息
-	d.logger.Debug("🔍 Getting voter info from memory...")
+	d.logger.Debug("Getting voter info from memory...")
 
 	// 添加 defer 确保能看到是否进入了锁
 	defer func() {
@@ -76,12 +76,11 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 	}()
 
 	// 🚨 注意：调用者已经持有写锁，所以这里不需要再获取锁
-	d.logger.Debug("🔍 Accessing d.voters map (caller already holds write lock)...")
+	d.logger.Debug("Accessing d.voters map (caller already holds write lock)...")
 
 	voterInfo, exists := d.voters[voter]
-	d.logger.Debug("🔍 Voter lookup completed", "exists", exists)
 
-	d.logger.Debug("🔍 Voter info retrieved",
+	d.logger.Debug("Voter info retrieved",
 		"exists", exists,
 		"voter", voter.String())
 
@@ -90,22 +89,16 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 		return fmt.Errorf("voter info not found in memory for address %s", voter.String())
 	}
 
-	d.logger.Info("✅ Voter info found",
-		"votingPower", voterInfo.VotingPower.String(),
-		"votedDelegatesCount", len(voterInfo.VotedDelegates))
-
-	d.logger.Debug("💾 Persisting vote to database",
+	d.logger.Debug("Persisting vote to database",
 		"voter", voter.String(),
 		"candidate", candidate.String(),
 		"amount", amount.String(),
 		"votingPower", voterInfo.VotingPower.String(),
 		"votedDelegatesCount", len(voterInfo.VotedDelegates))
 
-	// 🆕 添加详细日志：记录数据库更新前的内存状态
-	d.logger.Info("🔍 Before database persistence - memory delegates state:")
 	for i, del := range d.delegates {
 		if del.Address == candidate {
-			d.logger.Info("🔍 Target delegate before database persistence",
+			d.logger.Info("Target delegate before database persistence",
 				"index", i,
 				"address", del.Address.String(),
 				"votingPower", del.VotingPower.String(),
@@ -114,20 +107,20 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 	}
 
 	// 保存投票者信息到数据库
-	d.logger.Info("💾 Saving voter info to database...")
+	d.logger.Info("Saving voter info to database...")
 	if err := d.state.StakeStore.setVoterInfo(voter, voterInfo, nil); err != nil {
 		d.logger.Error("❌ Failed to save voter info to database", "error", err)
 		return fmt.Errorf("failed to save voter info to database: %w", err)
 	}
-	d.logger.Info("✅ Voter info saved to database successfully")
+	d.logger.Info("Voter info saved to database successfully")
 
 	// 同时保存受托人的投票权重信息
-	d.logger.Info("💾 Saving delegate voting power...")
+	d.logger.Info("Saving delegate voting power...")
 	if err := d.persistDelegateVotingPower(candidate, amount); err != nil {
 		d.logger.Warn("❌ Failed to persist delegate voting power", "error", err)
 		// 不返回错误，因为投票者信息已经保存成功
 	} else {
-		d.logger.Info("✅ Delegate voting power saved successfully")
+		d.logger.Info("Delegate voting power saved successfully")
 	}
 
 	return nil
@@ -188,7 +181,7 @@ func (d *DPoS) saveValidatorSetForBlockWithValidators(blockNumber uint64, valida
 
 // loadValidatorsFromDatabaseWithLimit 从数据库加载验证者并按voterpower排序截取前N个
 func (d *DPoS) loadValidatorsFromDatabaseWithLimit() error {
-	d.logger.Info("🔍 开始从数据库加载验证者并按voterpower排序截取前N个")
+	d.logger.Info("开始从数据库加载验证者并按voterpower排序截取前N个")
 
 	// 🆕 使用公共函数获取排序和限制后的验证者
 	dbValidators, err := d.GetSortedValidatorsWithLimit()
@@ -200,12 +193,12 @@ func (d *DPoS) loadValidatorsFromDatabaseWithLimit() error {
 		return fmt.Errorf("no validators in database")
 	}
 
-	d.logger.Info("✅ 从数据库成功读取验证者", "count", len(dbValidators))
+	d.logger.Info("从数据库成功读取验证者", "count", len(dbValidators))
 
 	// 🆕 添加详细日志：打印从数据库读取的验证者信息
-	d.logger.Info("🔍 数据库验证者详细信息:")
+	d.logger.Info("数据库验证者详细信息:")
 	for i, validator := range dbValidators {
-		d.logger.Info("🔍 数据库验证者",
+		d.logger.Info("数据库验证者",
 			"index", i,
 			"address", validator.Address.String(),
 			"votingPower", validator.VotingPower.String(),
@@ -223,7 +216,7 @@ func (d *DPoS) persistSingleDelegateToDatabase(del *validator.ValidatorMetadata)
 		return nil
 	}
 
-	d.logger.Debug("💾 Starting single delegate persistence", "address", del.Address.String())
+	d.logger.Debug("Starting single delegate persistence", "address", del.Address.String())
 
 	// 开始数据库事务
 	dbTx, err := d.state.beginDBTransaction(true)
@@ -236,15 +229,15 @@ func (d *DPoS) persistSingleDelegateToDatabase(del *validator.ValidatorMetadata)
 	var blsPublicKey []byte
 	if del.BlsKey != nil {
 		blsPublicKey = del.BlsKey.Marshal()
-		d.logger.Debug("🔑 保存BLS公钥到数据库（已存在）",
+		d.logger.Debug("保存BLS公钥到数据库（已存在）",
 			"address", del.Address.String(),
 			"publicKeyLength", len(blsPublicKey))
 	} else {
 		// BLS公钥为nil是正常的，将在验证时动态获取
-		d.logger.Debug("🔑 BLS公钥为nil，将在验证时动态获取",
+		d.logger.Debug("BLS公钥为nil，将在验证时动态获取",
 			"address", del.Address.String(),
 			"note", "BLS公钥按需获取机制")
-		d.logger.Debug("ℹ️ 受托人BLS公钥为nil，尝试从创世文件恢复",
+		d.logger.Debug("受托人BLS公钥为nil，尝试从创世文件恢复",
 			"address", del.Address.String())
 
 		// 从validator-bls.key文件中查找BLS公钥
@@ -274,7 +267,7 @@ func (d *DPoS) persistSingleDelegateToDatabase(del *validator.ValidatorMetadata)
 						// 从私钥生成公钥
 						publicKey := privateKey.PublicKey()
 						blsPublicKey = publicKey.Marshal()
-						d.logger.Info("✅ 从validator-bls.key文件恢复BLS公钥并保存到数据库",
+						d.logger.Info("从validator-bls.key文件恢复BLS公钥并保存到数据库",
 							"address", del.Address.String(),
 							"publicKeyLength", len(blsPublicKey),
 							"filePath", keyFilePath)
@@ -311,7 +304,7 @@ func (d *DPoS) persistSingleDelegateToDatabase(del *validator.ValidatorMetadata)
 	}
 
 	// 记录持久化信息
-	d.logger.Info("💾 持久化单个受托人信息到数据库",
+	d.logger.Info("持久化单个受托人信息到数据库",
 		"address", del.Address.String(),
 		"votingPower", del.VotingPower.String(),
 		"isActive", del.IsActive,
@@ -354,7 +347,7 @@ func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.Accoun
 
 	// 如果指定了目标验证者，只更新该验证者；否则更新所有验证者
 	if targetDelegate != (types.Address{}) {
-		d.logger.Debug("💾 Starting targeted delegate persistence", "targetDelegate", targetDelegate.String())
+		d.logger.Debug("Starting targeted delegate persistence", "targetDelegate", targetDelegate.String())
 
 		// 查找目标验证者
 		var targetDel *validator.ValidatorMetadata
@@ -374,7 +367,7 @@ func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.Accoun
 		return d.persistSingleDelegateToDatabase(targetDel)
 	}
 
-	d.logger.Debug("💾 Starting delegate set persistence", "count", len(delegates))
+	d.logger.Debug("Starting delegate set persistence", "count", len(delegates))
 
 	// 开始数据库事务
 	dbTx, err := d.state.beginDBTransaction(true)
@@ -385,19 +378,18 @@ func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.Accoun
 
 	// 保存每个验证者信息
 	for _, del := range delegates {
-		// 🆕 修改：BLS公钥按需获取，不在验证者集合中强制要求
 		var blsPublicKey []byte
 		if del.BlsKey != nil {
 			blsPublicKey = del.BlsKey.Marshal()
-			d.logger.Debug("🔑 保存BLS公钥到数据库（已存在）",
+			d.logger.Debug("保存BLS公钥到数据库（已存在）",
 				"address", del.Address.String(),
 				"publicKeyLength", len(blsPublicKey))
 		} else {
 			// 🆕 BLS公钥为nil是正常的，将在验证时动态获取
-			d.logger.Debug("🔑 BLS公钥为nil，将在验证时动态获取",
+			d.logger.Debug("BLS公钥为nil，将在验证时动态获取",
 				"address", del.Address.String(),
 				"note", "BLS公钥按需获取机制")
-			d.logger.Debug("ℹ️ 受托人BLS公钥为nil，尝试从创世文件恢复",
+			d.logger.Debug("受托人BLS公钥为nil，尝试从创世文件恢复",
 				"address", del.Address.String())
 
 			// 从validator-bls.key文件中查找BLS公钥
@@ -444,7 +436,7 @@ func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.Accoun
 							"error", err)
 					}
 				} else {
-					d.logger.Debug("ℹ️ validator-bls.key文件不存在，将在验证时按需获取",
+					d.logger.Debug("validator-bls.key文件不存在，将在验证时按需获取",
 						"address", del.Address.String(),
 						"filePath", keyFilePath)
 				}
@@ -460,11 +452,10 @@ func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.Accoun
 			MissedBlocks:   0,
 			LastBlockTime:  0,
 			IsActive:       del.IsActive,
-			BlsPublicKey:   blsPublicKey, // 🆕 保存BLS公钥（可以为nil）
+			BlsPublicKey:   blsPublicKey, // 保存BLS公钥（可以为nil）
 		}
 
-		// 🆕 新增：重点记录持久化时的isActive状态
-		d.logger.Info("💾 持久化受托人信息到数据库",
+		d.logger.Info("持久化受托人信息到数据库",
 			"address", del.Address.String(),
 			"votingPower", del.VotingPower.String(),
 			"isActive", del.IsActive,
@@ -479,26 +470,25 @@ func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.Accoun
 
 		// 记录BLS公钥状态
 		if blsPublicKey == nil {
-			d.logger.Debug("ℹ️ 受托人BLS公钥为空，将在验证时按需获取",
+			d.logger.Debug("受托人BLS公钥为空，将在验证时按需获取",
 				"address", del.Address.String())
 		} else {
-			d.logger.Debug("✅ 受托人BLS公钥正常，准备保存到数据库",
+			d.logger.Debug("受托人BLS公钥正常，准备保存到数据库",
 				"address", del.Address.String(),
 				"blsKeyLength", len(blsPublicKey))
 		}
 
-		// 🆕 添加详细日志：检查调用setDelegateInfo前的数据
-		d.logger.Debug("🔍 调用setDelegateInfo前的详细检查 (第二个位置)",
+		d.logger.Debug("调用setDelegateInfo前的详细检查 (第二个位置)",
 			"delegate", del.Address.String(),
 			"votingPower", delegateInfo.VotingPower.String(),
 			"totalVotes", delegateInfo.TotalVotes.String(),
 			"isActive", delegateInfo.IsActive,
 			"blsPublicKeyLength", len(delegateInfo.BlsPublicKey))
 
-		// 🆕 检查内存中对应受托人的状态
+		// 检查内存中对应受托人的状态
 		for _, memDel := range d.delegates {
 			if memDel.Address == del.Address {
-				d.logger.Debug("🔍 内存中受托人状态",
+				d.logger.Debug("内存中受托人状态",
 					"address", memDel.Address.String(),
 					"votingPower", memDel.VotingPower.String(),
 					"isActive", memDel.IsActive)
@@ -511,11 +501,11 @@ func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.Accoun
 			return fmt.Errorf("failed to save delegate info for %s: %w", del.Address.String(), err)
 		}
 
-		d.logger.Debug("✅ Saved delegate info", "address", del.Address.String(), "votingPower", del.VotingPower.String())
+		d.logger.Debug("Saved delegate info", "address", del.Address.String(), "votingPower", del.VotingPower.String())
 	}
 
 	// 提交事务 - 添加超时机制
-	d.logger.Debug("🔍 开始提交数据库事务")
+	d.logger.Debug("开始提交数据库事务")
 
 	// 使用超时机制防止卡死
 	commitDone := make(chan error, 1)
@@ -534,7 +524,7 @@ func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.Accoun
 		return fmt.Errorf("database transaction commit timeout")
 	}
 
-	d.logger.Debug("✅ Delegate set persistence completed successfully")
+	d.logger.Debug("Delegate set persistence completed successfully")
 	return nil
 }
 
@@ -651,6 +641,3 @@ func (d *DPoS) restoreDelegatesFromDatabase() error {
 
 	return nil
 }
-
-
-

@@ -4,10 +4,10 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-hclog"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/Vcity-Team/vcitychain/types"
 )
 
 // startStatsReleasing starts the process that releases BoltDB stats into prometheus periodically.
@@ -160,8 +160,6 @@ func (s *State) startStatsReleasing() {
 
 // publishRootchainMetrics publishes rootchain related metrics
 func (p *DPoS) publishRootchainMetrics(logger hclog.Logger) {
-	// 实现 DPoS 的根链指标发布
-	
 	// 发布受托人相关指标
 	if p.delegates != nil {
 		metrics.SetGauge(
@@ -212,7 +210,7 @@ func (p *DPoS) publishRootchainMetrics(logger hclog.Logger) {
 			totalVotingPower.Add(totalVotingPower, votingPower)
 		}
 	}
-	
+
 	// 转换为float64（注意：这里可能会丢失精度）
 	totalVotingPowerFloat, _ := new(big.Float).SetInt(totalVotingPower).Float64()
 	metrics.SetGauge(

@@ -41,7 +41,7 @@ type TransportMessage struct {
 // State represents a persistence layer which persists consensus data off-chain
 type State struct {
 	db       *bolt.DB
-	rewardDB *bolt.DB // 🆕 新增：奖励数据库
+	rewardDB *bolt.DB // 奖励数据库
 	close    chan struct{}
 
 	StateSyncStore        *StateSyncStore
@@ -50,11 +50,11 @@ type State struct {
 	ProposerSnapshotStore *ProposerSnapshotStore
 	StakeStore            *StakeStore
 	ValidatorStore        *ValidatorStore
-	RewardStore           *RewardStore       // 🆕 新增奖励记录存储
-	BlockTrackerStore     *BlockTrackerStore // 🆕 新增出块统计存储
-	ParameterStore        *ParameterStore    // 🆕 新增参数存储
-	ProposalStore         *ProposalStore     // 🆕 新增提案存储
-	RegistrationStore     *RegistrationStore // 🆕 新增受托人注册存储
+	RewardStore           *RewardStore       // 新增奖励记录存储
+	BlockTrackerStore     *BlockTrackerStore // 新增出块统计存储
+	ParameterStore        *ParameterStore    // 新增参数存储
+	ProposalStore         *ProposalStore     // 新增提案存储
+	RegistrationStore     *RegistrationStore // 新增受托人注册存储
 }
 
 // RegistrationStore 受托人注册存储
@@ -449,7 +449,7 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 
 	s := &State{
 		db:                    db,
-		rewardDB:              rewardDB, // 🆕 新增
+		rewardDB:              rewardDB,
 		close:                 closeCh,
 		StateSyncStore:        &StateSyncStore{db: db},
 		CheckpointStore:       &CheckpointStore{db: db},
@@ -457,11 +457,11 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 		ProposerSnapshotStore: &ProposerSnapshotStore{db: db},
 		StakeStore:            &StakeStore{db: db},
 		ValidatorStore:        &ValidatorStore{db: db},
-		RewardStore:           &RewardStore{db: rewardDB}, // 🆕 使用独立数据库
-		BlockTrackerStore:     &BlockTrackerStore{db: db}, // 🆕 使用主数据库
-		ParameterStore:        &ParameterStore{db: db},    // 🆕 使用主数据库
-		ProposalStore:         &ProposalStore{db: db},     // 🆕 使用主数据库
-		RegistrationStore:     &RegistrationStore{db: db}, // 🆕 使用主数据库
+		RewardStore:           &RewardStore{db: rewardDB}, // 使用独立数据库
+		BlockTrackerStore:     &BlockTrackerStore{db: db}, // 使用主数据库
+		ParameterStore:        &ParameterStore{db: db},    // 使用主数据库
+		ProposalStore:         &ProposalStore{db: db},     // 使用主数据库
+		RegistrationStore:     &RegistrationStore{db: db}, // 使用主数据库
 	}
 
 	if err = s.initStorages(); err != nil {
@@ -540,7 +540,7 @@ func (s *State) initStorages() error {
 // initRewardDatabase 初始化奖励数据库
 func (s *State) initRewardDatabase() error {
 	return s.rewardDB.Update(func(tx *bolt.Tx) error {
-		// 🆕 初始化奖励存储
+		// 初始化奖励存储
 		if err := s.RewardStore.initialize(tx); err != nil {
 			return err
 		}
