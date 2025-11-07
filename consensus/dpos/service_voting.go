@@ -76,3 +76,4 @@ func (vs *votingService) GetVoters() map[types.Address]*VoterInfo {
 }
 
 
+
