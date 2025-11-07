@@ -1059,8 +1059,7 @@ func (d *DPoS) Initialize() error {
 	d.config.Blockchain.SetExecutor(executorAdapter)
 	d.logger.Info("✅ 已将blockchain_wrapper设置为blockchain的executor，启用奖励分配功能")
 
-	// 🆕 新增：设置余额查询器（使用真实实现）
-	// 使用 runtime 的 getValidatorBalance 方法实现余额查询
+	// 使用 runtime 的 getAccountBalance 方法实现余额查询
 	if d.runtime != nil {
 		d.balanceQuerier = &runtimeBalanceQuerier{runtime: d.runtime}
 		d.logger.Info("✅ Balance querier initialized with runtime implementation")
@@ -1315,37 +1314,6 @@ func (d *DPoS) parseValidatorsFromExtraData(extraData []byte) (validator.Account
 	return validator.AccountSet(validatorList), nil
 }
 
-// requestBLSPublicKeyFromNetwork 已迁移到 bls_network.go
-
-// BLSPublicKeyRequest 类型已迁移到 bls_types.go
-
-// 🆕 新增：查询验证者余额
-// getValidatorBalance 已迁移到 account_query.go
-
-// readBLSPrivateKeyAndGeneratePublicKey 已迁移到 bls_public_key.go
-
-// initializeDelegates 已迁移到 validator_mgmt_delegate.go
-
-// saveValidatorSetForBlock, saveValidatorSetForBlockWithValidators, loadValidatorsFromDatabaseWithLimit 已迁移到 storage.go
-
-// addDelegateSafely 已迁移到 validator_mgmt_delegate.go
-
-// initializeBLSLoadingState, waitForBLSKeysLoaded, asyncLoadBLSKeys, getAllValidators,
-// getBLSKeyForValidator, saveBLSKeyToCache, syncLoadBLSKeys 已迁移到 bls_loading.go 和 bls_public_key.go
-
-// saveValidatorsWithBLSKeysToDatabase, getCurrentDelegateInfo, saveBLSKeyToDatabase, loadBLSKeysFromDatabase 已迁移到 bls_storage.go
-
-// dpos.go - 添加后端接口实现
-// GetDelegates 已迁移到 validator_mgmt_manager.go
-// GetValidatorsWithFilter 已迁移到 validator_mgmt_manager.go
-// GetDelegatesWithTx 已迁移到 validator_mgmt_manager.go
-
-// GetStakingInfo 和 GetStakingInfoWithTx 已迁移到 validator_mgmt_stake.go
-
-// GetVotingPower 和 GetVotingPowerWithTx 已迁移到 voting_weight.go
-
-// OnBlockInserted 在区块写入后调用，用于清理交易池和处理区块事件
-// 这个方法在同步区块和本地生产区块时都会被调用，确保交易池状态与链上状态一致
 // 注意：本地生产区块时，consensusRuntime.OnBlockInserted 也会调用 ResetWithHeaders，
 // 这里再次调用是安全的（幂等操作），确保两种路径的行为一致
 func (d *DPoS) OnBlockInserted(fullBlock *types.FullBlock) {
@@ -2549,7 +2517,6 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 		"stateRoot", currentHeader.StateRoot.String(),
 		"blockHash", currentHeader.Hash.String())
 
-	// 🆕 通过快照操作状态（参考getValidatorBalance的实现）
 	d.logger.Info("🔍 开始创建状态快照", "stateRoot", currentHeader.StateRoot.String())
 	snapshot, err := d.config.Executor.StateAt(currentHeader.StateRoot)
 	if err != nil {

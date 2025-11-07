@@ -176,10 +176,6 @@ func (b *BlockBuilder) WriteTx(tx *types.Transaction) error {
 	return nil
 }
 
-// Fill fills the block with transactions from the txpool
-// 🆕 完全对标以太坊：批量打包多笔交易，使用当前区块状态检查nonce
-// 修复：不要每次都调用Prepare()，而是使用当前构建区块的状态来检查nonce
-// 这样可以在一个区块中打包多笔交易，类似以太坊
 func (b *BlockBuilder) Fill() {
 	// 只在开始时调用一次Prepare()，初始化executables队列
 	b.params.TxPool.Prepare()
@@ -223,8 +219,6 @@ func (b *BlockBuilder) Fill() {
 
 		txCount++
 
-		// 🆕 关键修复：使用当前构建区块的状态来检查nonce（不是父区块状态）
-		// 这样可以看到当前区块已打包交易对nonce的影响
 		accountNonce := b.state.GetNonce(tx.From)
 		if tx.Nonce != accountNonce {
 			// nonce不匹配，跳过这个交易
@@ -241,14 +235,14 @@ func (b *BlockBuilder) Fill() {
 				"consecutiveSkips", consecutiveSkips,
 				"note", "当前区块状态nonce已更新，交易nonce不匹配")
 			b.params.TxPool.Pop(tx) // 移除这个交易，Pop()会自动将下一笔交易添加到executables队列
-			continue                // 继续处理下一个交易
+			continue
 		}
 
 		// nonce匹配，重置连续跳过计数
 		consecutiveSkips = 0
 
 		// execute transactions one by one
-		// 🆕 writeTxPoolTransaction内部会调用Pop()，所以这里不需要再次调用
+		// writeTxPoolTransaction内部会调用Pop()，所以这里不需要再次调用
 		finished, err := b.writeTxPoolTransaction(tx)
 		if err != nil {
 			b.params.Logger.Error("💀 交易填充失败，程序将立即退出",
@@ -270,12 +264,6 @@ func (b *BlockBuilder) Fill() {
 				"skippedCount", skippedCount)
 			return
 		}
-
-		// 🆕 修复：不再每次都调用Prepare()
-		// 因为：
-		// 1. Pop()会自动将同一账户的下一笔交易添加到executables队列
-		// 2. 我们使用b.state.GetNonce()来检查nonce，这是当前构建区块的状态
-		// 3. 这样可以批量打包多笔交易，类似以太坊
 	}
 }
 
@@ -382,15 +370,8 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	// 获取父区块
 	parent := r.config.blockchain.CurrentHeader()
 
-	// 🆕 检查并应用延迟状态更新（只在非epoch结束区块时应用）
 	nextBlockNumber := parent.Number + 1
 	isEpochEndBlock := r.isEpochEndBlock(nextBlockNumber)
-
-	if isEpochEndBlock {
-
-		// 🆕 在epoch结束区块直接进行奖励分发（移除重复调用）
-	} else {
-	}
 
 	// 创建区块构建器
 	keyAddr := types.Address(r.config.Key.Address())
@@ -410,15 +391,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	if err := builder.Reset(); err != nil {
 		r.logger.Error("❌ buildBlock: 重置构建器失败", "error", err)
 		return nil, fmt.Errorf("failed to reset block builder: %w", err)
-	}
-
-	// 填充交易
-
-	// 检查交易池状态
-	if _, ok := r.config.txPool.(interface {
-		DebugInfo() map[string]interface{}
-	}); ok {
-		// 交易池状态检查
 	}
 
 	// 尝试获取更详细的交易池信息
@@ -478,11 +450,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		}
 	}
 
-	// 先计算验证者哈希，用于CheckpointData
-	// 🆕 关键修复：使用与验证时相同的验证者集合获取方法
-	// 验证时使用：getValidatorsFromExtraData
-	// 生产时也应该使用相同的逻辑：从ExtraData解析验证者集合
-
 	// 获取当前区块信息
 	currentBlock := r.config.blockchain.CurrentHeader()
 
@@ -495,9 +462,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		}
 	}
 
-	// 🆕 使用与验证时完全相同的验证者集合获取方法
-	// 验证时：getValidatorsFromExtraData(header, parent, parents, consensusBackend, logger)
-	// 生产时：从当前区块的ExtraData解析验证者集合
 	productionValidators, err := r.getValidatorsFromExtraDataForProduction(currentBlock, parents)
 	if err != nil {
 		r.logger.Error("❌ 生产时无法获取验证者集合", "blockNumber", currentBlock.Number, "error", err)
@@ -518,19 +482,16 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 	// 创建正确的Extra对象，包含必要的字段
 	extra := &Extra{
-		Committed: &Signature{}, // 添加空的Committed签名
+		Committed: &Signature{},
 		Checkpoint: &CheckpointData{
 			BlockRound:            r.currentRound,
 			EpochNumber:           1,
 			CurrentValidatorsHash: currentValidatorsHash,
-			NextValidatorsHash:    currentValidatorsHash, // 暂时使用相同的哈希
-			EventRoot:             types.Hash{},          // 暂时为空
+			NextValidatorsHash:    currentValidatorsHash,
+			EventRoot:             types.Hash{},
 		},
-		// 🆕 初始化CheckpointBlockHash为空，稍后会设置
 		CheckpointBlockHash: types.Hash{},
 	}
-
-	// 🆕 检查是否是epoch的最后一个区块，如果是则执行奖励分发
 
 	// 延迟状态更新机制已移除，奖励分发在epoch结束区块直接执行
 	r.logger.Info("🔍 检查是否需要计算奖励分发",
@@ -605,14 +566,8 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"isEpochEndBlock", isEpochEndBlock)
 	}
 
-	// 🆕 如果是epoch结束区块，不预先计算状态根，而是像交易一样在区块执行时处理
+	// 如果是epoch结束区块，在生产节点也执行奖励分配-为了状态根一致性
 	if isEpochEndBlock {
-	}
-
-	// 🆕 如果是epoch结束区块，在生产节点也执行奖励分配
-	if isEpochEndBlock {
-
-		// 获取当前状态
 		state := builder.GetState()
 		if state != nil {
 			// 执行奖励分配

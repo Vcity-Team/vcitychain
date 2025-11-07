@@ -42,7 +42,6 @@ func (r *dposRuntime) processRewardDistributionInBlockForBuilder(builder blockBu
 		"blockNumber", blockNumber,
 		"说明", "生产节点在buildBlock时执行奖励分配")
 
-	// 获取DPoS实例
 	if r.config == nil || r.config.dposBackend == nil {
 		return fmt.Errorf("DPoS backend not available")
 	}
@@ -111,7 +110,3 @@ func (r *dposRuntime) processRewardDistributionInBlockForBuilder(builder blockBu
 
 	return nil
 }
-
-
-
-
