@@ -31,12 +31,12 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 	}
 
 	// 🆕 打印从创世文件解析出的验证者地址
-	r.logger.Info("🔍 从创世文件ExtraData解析出的验证者地址",
+	r.logger.Info(" 从创世文件ExtraData解析出的验证者地址",
 		"totalCount", ibftValidators.Len(),
 		"extraDataLength", len(genesisHeader.ExtraData))
 
 	for i, validator := range ibftValidators {
-		r.logger.Info("📝 创世验证者地址",
+		r.logger.Info(" 创世验证者地址",
 			"index", i,
 			"address", validator.Address.String(),
 			"votingPower", validator.VotingPower.String(),
@@ -59,7 +59,7 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 		address := ibftValidator.Address
 
 		// 创建DPoS验证者（BLS公钥延迟获取）
-		// 🆕 创世验证者使用固定权重1000 VCITY，不受余额影响
+		// 创世验证者使用固定权重1000 VCITY，不受余额影响
 		fixedVotingPower := new(big.Int)
 		fixedVotingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
 
@@ -74,7 +74,7 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 		r.delegates = append(r.delegates, delegate)
 		validValidatorCount++
 
-		r.logger.Info("✅ DPoS验证者创建成功（BLS公钥延迟获取）",
+		r.logger.Info(" DPoS验证者创建成功（BLS公钥延迟获取）",
 			"address", address.String(),
 			"votingPower", fixedVotingPower.String(),
 			"validatorIndex", validValidatorCount,
@@ -82,7 +82,7 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 	}
 
 	// DPoS验证者筛选结果汇总
-	r.logger.Info("🚨 DPoS验证者筛选完成",
+	r.logger.Info(" DPoS验证者筛选完成",
 		"totalCandidates", ibftValidators.Len(),
 		"validValidators", validValidatorCount,
 		"insufficientBalance", insufficientBalanceCount,
@@ -99,14 +99,13 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 			"建议至少需要2个验证者")
 	}
 
-	r.logger.Info("✅ DPoS验证者解析完成", "count", validValidatorCount)
+	r.logger.Info(" DPoS验证者解析完成", "count", validValidatorCount)
 
-	// 🆕 打印最终解析出的创世验证者列表
-	r.logger.Info("🎯 最终解析出的创世验证者列表",
+	r.logger.Info(" 最终解析出的创世验证者列表",
 		"totalCount", len(r.delegates))
 
 	for i, delegate := range r.delegates {
-		r.logger.Info("📋 创世验证者详情",
+		r.logger.Info(" 创世验证者详情",
 			"index", i,
 			"address", delegate.Address.String(),
 			"votingPower", delegate.VotingPower.String(),
@@ -114,7 +113,7 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 			"hasBlsKey", delegate.BlsKey != nil)
 	}
 
-	// 🆕 构建创世验证者映射
+	// 构建创世验证者映射
 	if r.config != nil && r.config.dposBackend != nil {
 		if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
 			// 初始化创世验证者映射
@@ -125,7 +124,7 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 				dposInstance.genesisValidators[delegate.Address] = true
 			}
 
-			r.logger.Info("✅ 创世验证者映射已构建",
+			r.logger.Info(" 创世验证者映射已构建",
 				"count", len(dposInstance.genesisValidators),
 				"addresses", func() []string {
 					addresses := make([]string, 0, len(dposInstance.genesisValidators))
@@ -135,7 +134,7 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 					return addresses
 				}())
 
-			// 🆕 立即将创世验证者的固定权重保存到数据库
+			// 立即将创世验证者的固定权重保存到数据库
 			for _, delegate := range r.delegates {
 				// 创建DelegateInfo并保存到数据库
 				delegateInfo := &DelegateInfo{
@@ -271,18 +270,18 @@ func (r *dposRuntime) initializeDelegates() error {
 			return fmt.Errorf("failed to get current delegates from backend: %w", err)
 		}
 
-		// 🆕 应用 DelegateCount 限制，只取前N个受托人
+		// 应用 DelegateCount 限制，只取前N个受托人
 		if r.config != nil && r.config.DelegateCount > 0 {
 			maxDelegates := int(r.config.DelegateCount)
 			originalCount := len(delegates)
 			if len(delegates) > maxDelegates {
 				delegates = delegates[:maxDelegates]
-				r.logger.Info("🎯 runtime初始化：限制受托人数量为前N个",
+				r.logger.Info(" runtime初始化：限制受托人数量为前N个",
 					"originalCount", originalCount,
 					"limitedCount", maxDelegates,
 					"configDelegateCount", r.config.DelegateCount)
 			} else {
-				r.logger.Debug("🎯 runtime初始化：受托人数量未超过限制",
+				r.logger.Debug(" runtime初始化：受托人数量未超过限制",
 					"actualCount", originalCount,
 					"configDelegateCount", r.config.DelegateCount)
 			}
@@ -291,7 +290,7 @@ func (r *dposRuntime) initializeDelegates() error {
 		r.delegates = delegates
 		r.logger.Debug("initialized delegates from backend", "count", len(r.delegates))
 
-		// 🆕 如果从backend获取的delegates为空，尝试从extraData解析
+		// 如果从backend获取的delegates为空，尝试从extraData解析
 		if len(r.delegates) == 0 {
 			r.logger.Info("🎯 从backend获取的delegates为空，尝试从extraData解析验证者")
 
@@ -309,7 +308,7 @@ func (r *dposRuntime) initializeDelegates() error {
 
 		// 🆕 按voterpower排序并截取前N个验证者
 		if len(r.delegates) > 0 {
-			r.logger.Info("🔍 开始按voterpower排序并截取前N个验证者",
+			r.logger.Info(" 开始按voterpower排序并截取前N个验证者",
 				"originalCount", len(r.delegates),
 				"configDelegateCount", r.config.DelegateCount)
 
@@ -329,13 +328,13 @@ func (r *dposRuntime) initializeDelegates() error {
 			originalCount := len(r.delegates)
 			if len(r.delegates) > maxDelegates {
 				r.delegates = r.delegates[:maxDelegates]
-				r.logger.Info("🎯 限制验证者数量为前N个",
+				r.logger.Info(" 限制验证者数量为前N个",
 					"originalCount", originalCount,
 					"limitedCount", maxDelegates,
 					"configDelegateCount", r.config.DelegateCount)
 			}
 
-			r.logger.Info("✅ 验证者排序和截取完成",
+			r.logger.Info(" 验证者排序和截取完成",
 				"finalCount", len(r.delegates),
 				"maxDelegates", maxDelegates)
 		}
@@ -373,24 +372,24 @@ func (r *dposRuntime) initializeDelegates() error {
 		r.logger.Warn("no backend available, using empty delegate set")
 	}
 
-	// 🆕 同步数据到 d.runtime.delegates 和 d.delegates
+	// 同步数据到 d.runtime.delegates 和 d.delegates
 	// r.backend 是 DPoS 实例，r.backend.runtime 就是 d.runtime
 	if r.backend != nil {
 		// 通过 backend 访问 DPoS 实例的 runtime
 		if dposInstance, ok := r.backend.(*DPoS); ok && dposInstance.runtime != nil {
 			dposInstance.runtime.delegates = r.delegates.Copy()
 			dposInstance.delegates = r.delegates.Copy()
-			r.logger.Info("✅ 已同步验证者数据到 d.runtime.delegates 和 d.delegates", "count", len(dposInstance.runtime.delegates))
+			r.logger.Info(" 已同步验证者数据到 d.runtime.delegates 和 d.delegates", "count", len(dposInstance.runtime.delegates))
 
 			// 🆕 只有在从extraData解析验证者时才同步到数据库
 			if fromExtraData {
 				if err := dposInstance.syncDelegatesToDatabase(r.delegates); err != nil {
 					r.logger.Warn("⚠️ 同步验证者数据到数据库失败", "error", err)
 				} else {
-					r.logger.Info("✅ 验证者数据已准备，将在BLS公钥获取完成后保存到数据库", "count", len(r.delegates))
+					r.logger.Info(" 验证者数据已准备，将在BLS公钥获取完成后保存到数据库", "count", len(r.delegates))
 				}
 			} else {
-				r.logger.Info("✅ 验证者数据来自数据库，无需同步", "count", len(r.delegates))
+				r.logger.Info(" 验证者数据来自数据库，无需同步", "count", len(r.delegates))
 			}
 		} else {
 			r.logger.Warn("⚠️ 无法访问 d.runtime，验证者数据同步失败")
@@ -399,10 +398,6 @@ func (r *dposRuntime) initializeDelegates() error {
 		r.logger.Warn("⚠️ backend为nil，无法同步验证者数据")
 	}
 
-	r.logger.Info("✅ dposRuntime.initializeDelegates 结束")
+	r.logger.Info("dposRuntime.initializeDelegates 结束")
 	return nil
 }
-
-
-
-

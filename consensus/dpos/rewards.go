@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
-	"github.com/Vcity-Team/vcitychain/state"
 	"github.com/Vcity-Team/vcitychain/types"
 	hcf "github.com/hashicorp/go-hclog"
 )
@@ -144,8 +143,8 @@ func (rc *RewardCalculator) calculateDecayFactor(blockNumber uint64) float64 {
 	decayPeriod := uint64(10000)
 	decayCount := blockNumber / decayPeriod
 
-	// 计算衰减因子 - 使用默认衰减率0.95
-	decayRate := 0.95
+	// 计算衰减因子 - 使用默认衰减率1.0
+	decayRate := 1.0
 	decayFactor := 1.0
 	for i := uint64(0); i < decayCount; i++ {
 		decayFactor *= decayRate
@@ -180,10 +179,23 @@ func (rd *RewardDistributor) DistributeBlockReward(block *types.FullBlock, propo
 	// 计算区块奖励
 	reward := rd.calculator.CalculateBlockReward(block.Block.Number(), proposer, totalVotingPower)
 
+	// 获取实际的 epoch 编号
+	epochNumber := uint64(0)
+	if extra, err := GetIbftExtra(block.Block.Header.ExtraData); err != nil {
+		rd.logger.Warn("failed to decode extra data when calculating epoch for reward",
+			"block", block.Block.Number(),
+			"error", err)
+	} else if extra != nil && extra.Checkpoint != nil {
+		epochNumber = extra.Checkpoint.EpochNumber
+	} else {
+		rd.logger.Debug("extra data missing checkpoint information, using default epoch number",
+			"block", block.Block.Number())
+	}
+
 	// 创建奖励记录
 	record := &RewardRecord{
 		BlockNumber: block.Block.Number(),
-		EpochNumber: block.Block.Number() / 100, // 假设每100个区块为一个周期
+		EpochNumber: epochNumber,
 		Amount:      reward,
 		Type:        "block",
 		Timestamp:   time.Now(),
@@ -232,11 +244,27 @@ func (rd *RewardDistributor) DistributeEpochReward(epochNumber uint64, validator
 	// 按投票权重分配奖励
 	for staker, voter := range voters {
 		if voter.VotingPower.Cmp(big.NewInt(0)) > 0 {
+			// 尝试获取该epoch的结束区块号
+			epochEndBlock := uint64(0)
+			if rd.state != nil && rd.state.EpochStore != nil {
+				if snapshot, err := rd.state.EpochStore.getValidatorSnapshot(epochNumber); err == nil && snapshot != nil {
+					epochEndBlock = snapshot.EpochEndingBlock
+				} else if err != nil {
+					rd.logger.Debug("failed to get epoch snapshot when recording rewards",
+						"epoch", epochNumber,
+						"error", err)
+				}
+			}
+			if epochEndBlock == 0 {
+				rd.logger.Debug("epoch end block not available, defaulting to epoch start",
+					"epoch", epochNumber)
+				epochEndBlock = epochNumber
+			}
 			stakeReward := rd.calculator.CalculateStakeReward(staker, voter.VotingPower, totalVotingPower, epochReward)
 
 			// 创建奖励记录
 			record := &RewardRecord{
-				BlockNumber: epochNumber * 100, // 周期结束区块
+				BlockNumber: epochEndBlock,
 				EpochNumber: epochNumber,
 				Amount:      stakeReward,
 				Type:        "stake",
@@ -275,11 +303,42 @@ func (rd *RewardDistributor) DistributeEpochReward(epochNumber uint64, validator
 
 // saveRewardRecord 保存奖励记录
 func (rd *RewardDistributor) saveRewardRecord(record *RewardRecord) error {
-	// 这里应该调用数据库存储方法
-	// 暂时使用日志记录
-	rd.logger.Debug("saving reward record",
+	if rd.state == nil || rd.state.RewardStore == nil {
+		rd.logger.Warn("reward store not initialized, skipping persistence",
+			"staker", record.Staker.String(),
+			"epoch", record.EpochNumber)
+		return fmt.Errorf("reward store not initialized")
+	}
+
+	amountStr := "0"
+	if record.Amount != nil {
+		amountStr = record.Amount.String()
+	}
+
+	extended := &RewardRecordExtended{
+		EpochNumber:     record.EpochNumber,
+		Recipient:       record.Staker.String(),
+		RewardType:      record.Type,
+		Amount:          amountStr,
+		BlockCount:      0,
+		VoteWeight:      "0",
+		Timestamp:       record.Timestamp,
+		TransactionHash: "",
+		Status:          "completed",
+	}
+
+	if err := rd.state.RewardStore.RecordReward(extended); err != nil {
+		rd.logger.Error("failed to persist reward record",
+			"staker", record.Staker.String(),
+			"epoch", record.EpochNumber,
+			"error", err)
+		return fmt.Errorf("record reward: %w", err)
+	}
+
+	rd.logger.Debug("reward record persisted",
 		"staker", record.Staker.String(),
-		"amount", record.Amount.String(),
+		"epoch", record.EpochNumber,
+		"amount", amountStr,
 		"type", record.Type)
 
 	return nil
@@ -341,7 +400,7 @@ func (rd *RewardDistributor) GetTotalRewards(staker types.Address) (*big.Int, er
 // distributeEpochRewards 分发Epoch奖励
 func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) error {
 	startTime := time.Now()
-	d.logger.Info("🎉 ========== 生成节点中开始计算Epoch奖励 ==========",
+	d.logger.Info("========== 生成节点中开始计算Epoch奖励 ==========",
 		"epoch", epochNumber,
 		"startTime", startTime.Format("2006-01-02 15:04:05"),
 		"note", "为上一个epoch计算奖励")
@@ -365,13 +424,13 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		"validatorsCount", len(validators))
 
 	// 🆕 详细打印每个验证者的出块记录
-	d.logger.Info("📋 ========== 详细出块记录 ==========",
+	d.logger.Info("========== 详细出块记录 ==========",
 		"epoch", epochNumber,
 		"totalBlocks", totalBlocks)
 
 	for _, validator := range validators {
 		blocksProduced := blockCounts[validator.Address]
-		d.logger.Info("📋 验证者出块记录",
+		d.logger.Info("验证者出块记录",
 			"epoch", epochNumber,
 			"validator", validator.Address.String()[:16],
 			"blocksProduced", blocksProduced,
@@ -419,15 +478,15 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 
 	// 计算每个验证者的奖励
 	for i, validator := range validators {
-		d.logger.Debug("🔍 统计验证者", "index", i+1, "total", len(validators), "address", validator.Address.String())
+		d.logger.Debug(" 统计验证者", "index", i+1, "total", len(validators), "address", validator.Address.String())
 		blocksProduced := blockCounts[types.Address(validator.Address)]
-		d.logger.Debug("🔍 验证者出块统计", "index", i+1, "address", validator.Address.String(), "blocksProduced", blocksProduced)
+		d.logger.Debug(" 验证者出块统计", "index", i+1, "address", validator.Address.String(), "blocksProduced", blocksProduced)
 		if blocksProduced > 0 {
-			d.logger.Info("🔍 开始计算验证者奖励", "index", i+1, "address", validator.Address.String(), "blocksProduced", blocksProduced)
+			d.logger.Info(" 开始计算验证者奖励", "index", i+1, "address", validator.Address.String(), "blocksProduced", blocksProduced)
 			// 按出块比例分配奖励
 			reward := new(big.Int).Mul(validatorRewardAmount, big.NewInt(int64(blocksProduced)))
 			reward.Div(reward, big.NewInt(int64(totalBlocks)))
-			d.logger.Info("🔍 奖励计算完成", "index", i+1, "address", validator.Address.String(), "reward", reward.String())
+			d.logger.Info(" 奖励计算完成", "index", i+1, "address", validator.Address.String(), "reward", reward.String())
 
 			if reward.Sign() > 0 {
 				stateUpdates[types.Address(validator.Address)] = reward
@@ -523,7 +582,7 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 
 	// 🆕 在epoch结束区块准备奖励分发信息（不直接执行状态更新）
 	if len(stateUpdates) > 0 {
-		d.logger.Info("🎯 在epoch结束区块准备奖励分发信息",
+		d.logger.Info(" 在epoch结束区块准备奖励分发信息",
 			"epoch", epochNumber,
 			"updateCount", len(stateUpdates))
 
@@ -533,7 +592,7 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 			totalReward.Add(totalReward, reward)
 		}
 
-		// 🆕 不直接执行状态更新，而是将奖励分发信息存储到pendingRewardDistribution
+		// 不直接执行状态更新，而是将奖励分发信息存储到pendingRewardDistribution
 		// 这样buildBlock可以将其添加到ExtraData中，然后在区块执行时处理
 		d.pendingRewardDistribution = &RewardDistributionInfo{
 			EpochNumber: epochNumber,
@@ -643,148 +702,41 @@ func (d *DPoS) calculateTotalVoterReward(epochNumber uint64) *big.Int {
 
 // calculateVoterRewards 计算投票者奖励
 func (d *DPoS) calculateVoterRewards(epochNumber uint64, totalVoterReward *big.Int) (map[types.Address]*big.Int, error) {
-	// 这里需要实现投票者奖励计算逻辑
-	// 暂时返回空映射，后续可以根据实际投票数据实现
-
-	// TODO: 实现真实的投票者奖励计算
-	// 1. 获取该epoch的所有投票记录
-	// 2. 计算每个投票者的投票权重
-	// 3. 按权重分配奖励
-
-	return make(map[types.Address]*big.Int), nil
-}
-
-// applyRewardDistribution 应用奖励分配到状态
-func (d *DPoS) applyRewardDistribution(rewardInfo *RewardDistributionInfo, blockHeader *types.Header) error {
-	d.logger.Info("💰 开始应用奖励分配",
-		"epochNumber", rewardInfo.EpochNumber,
-		"rewardCount", len(rewardInfo.Rewards),
-		"totalReward", rewardInfo.TotalReward.String())
-
-	// 获取当前状态根
-	currentHeader := d.config.Blockchain.Header()
-	if currentHeader == nil {
-		return fmt.Errorf("failed to get current header")
+	if totalVoterReward == nil || totalVoterReward.Cmp(big.NewInt(0)) == 0 {
+		return map[types.Address]*big.Int{}, nil
 	}
 
-	d.logger.Info("🔍 验证节点奖励分发 - 获取当前状态根",
-		"currentStateRoot", currentHeader.StateRoot.String(),
-		"blockNumber", currentHeader.Number,
-		"说明", "验证节点开始创建状态快照")
+	rewards := make(map[types.Address]*big.Int)
 
-	// 创建状态快照
-	snapshot, err := d.config.Executor.StateAt(currentHeader.StateRoot)
-	if err != nil {
-		return fmt.Errorf("failed to create state snapshot: %w", err)
-	}
-
-	d.logger.Info("✅ 验证节点奖励分发 - 状态快照创建成功",
-		"stateRoot", currentHeader.StateRoot.String(),
-		"说明", "验证节点状态快照创建成功，准备应用奖励分配")
-
-	// 应用奖励分配
-	var objects []*state.Object
-	d.logger.Info("🔍 验证节点奖励分发 - 开始遍历奖励信息",
-		"rewardCount", len(rewardInfo.Rewards),
-		"说明", "验证节点开始遍历每个验证者的奖励信息")
-
-	for addrStr, amount := range rewardInfo.Rewards {
-		addr := types.StringToAddress(addrStr)
-
-		d.logger.Info("🔍 验证节点奖励分发 - 处理验证者奖励",
-			"address", addrStr,
-			"reward", amount.String(),
-			"说明", "验证节点开始处理单个验证者的奖励分配")
-
-		// 获取当前余额
-		accountInfo, err := snapshot.GetAccount(addr)
-		if err != nil {
-			d.logger.Error("❌ 获取账户信息失败", "address", addrStr, "error", err)
+	// 使用当前投票者信息统计权重
+	d.lock.RLock()
+	voterSnapshot := make(map[types.Address]*big.Int, len(d.voters))
+	for addr, info := range d.voters {
+		if info == nil || info.VotingPower == nil || info.VotingPower.Cmp(big.NewInt(0)) <= 0 {
 			continue
 		}
+		voterSnapshot[addr] = new(big.Int).Set(info.VotingPower)
+	}
+	d.lock.RUnlock()
 
-		currentBalance := big.NewInt(0)
-		if accountInfo != nil && accountInfo.Balance != nil {
-			currentBalance = accountInfo.Balance
-		}
-
-		d.logger.Info("🔍 验证节点奖励分发 - 获取账户余额",
-			"address", addrStr,
-			"currentBalance", currentBalance.String(),
-			"说明", "验证节点获取到验证者的当前余额")
-
-		// 计算新余额
-		newBalance := new(big.Int).Add(currentBalance, amount)
-
-		// 创建余额更新对象
-		obj := &state.Object{
-			Address: addr,
-			Balance: newBalance,
-		}
-		objects = append(objects, obj)
-
-		d.logger.Info("💰 准备更新余额",
-			"address", addrStr,
-			"reward", amount.String(),
-			"beforeBalance", currentBalance.String(),
-			"afterBalance", newBalance.String())
+	if len(voterSnapshot) == 0 {
+		return rewards, nil
 	}
 
-	// 提交状态更新
-	if len(objects) > 0 {
-		d.logger.Info("🔍 验证节点奖励分发 - 开始提交状态更新",
-			"objectCount", len(objects),
-			"说明", "验证节点开始提交所有余额更新到状态")
-
-		newSnapshot, newStateRoot, err := snapshot.Commit(objects)
-		if err != nil {
-			return fmt.Errorf("failed to commit state changes: %w", err)
-		}
-
-		d.logger.Info("✅ 验证节点奖励分发 - 状态更新提交成功",
-			"newStateRoot", fmt.Sprintf("0x%x", newStateRoot),
-			"newSnapshot", newSnapshot != nil,
-			"说明", "验证节点状态更新提交成功，准备更新区块头状态根")
-
-		// 更新状态根（模拟交易执行后的状态根更新）
-		oldStateRoot := currentHeader.StateRoot
-		currentHeader.StateRoot = types.BytesToHash(newStateRoot)
-		currentHeader.ComputeHash()
-
-		// 🆕 关键修复：将新状态根同步到区块链的当前状态
-		// 这样后续的状态根比对就会使用更新后的状态根
-		if err := d.syncStateRootToBlockchain(currentHeader, newStateRoot); err != nil {
-			d.logger.Error("❌ 同步状态根到区块链失败", "error", err)
-			return fmt.Errorf("failed to sync state root to blockchain: %w", err)
-		}
-
-		d.logger.Info("🔍 验证节点奖励分发 - 状态根更新详情",
-			"oldStateRoot", oldStateRoot.String(),
-			"newStateRoot", currentHeader.StateRoot.String(),
-			"newStateRootHex", fmt.Sprintf("0x%x", newStateRoot),
-			"说明", "验证节点区块头状态根已更新并同步到区块链")
-
-		// 🆕 同步节点状态根更新显著日志标志
-		d.logger.Info("🔄🔄🔄 ========== 同步节点状态根更新完成 ========== 🔄🔄🔄",
-			"blockNumber", currentHeader.Number,
-			"oldStateRoot", oldStateRoot.String(),
-			"newStateRoot", currentHeader.StateRoot.String(),
-			"newStateRootHex", fmt.Sprintf("0x%x", newStateRoot),
-			"updateCount", len(objects),
-			"newSnapshot", newSnapshot != nil,
-			"note", "同步节点已模拟交易执行更新状态根，奖励分发完成")
-
-		// 🆕 显著日志：验证节点状态根对比
-		d.logger.Info("🔍🔍🔍 ========== 验证节点状态根对比 ========== 🔍🔍🔍",
-			"blockNumber", currentHeader.Number,
-			"区块头状态根", blockHeader.StateRoot.String(),
-			"本地计算状态根", currentHeader.StateRoot.String(),
-			"状态根是否一致", blockHeader.StateRoot == currentHeader.StateRoot,
-			"说明", "对比区块头中的状态根与验证节点本地计算的状态根")
-	} else {
-		d.logger.Info("⚠️ 验证节点奖励分发 - 没有需要更新的对象",
-			"说明", "验证节点没有找到需要更新的余额对象")
+	totalWeight := big.NewInt(0)
+	for _, weight := range voterSnapshot {
+		totalWeight.Add(totalWeight, weight)
 	}
 
-	return nil
+	if totalWeight.Cmp(big.NewInt(0)) == 0 {
+		return rewards, nil
+	}
+
+	for voter, weight := range voterSnapshot {
+		share := new(big.Int).Mul(totalVoterReward, weight)
+		share.Div(share, totalWeight)
+		rewards[voter] = share
+	}
+
+	return rewards, nil
 }

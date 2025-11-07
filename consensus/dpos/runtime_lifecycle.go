@@ -8,15 +8,14 @@ import (
 
 // start 启动DPoS runtime
 func (r *dposRuntime) start() error {
-	r.logger.Info("🚀 开始启动DPoS runtime")
+	r.logger.Info("开始启动DPoS runtime")
 
 	// 初始化运行时状态
-	r.logger.Debug("🔧 开始初始化DPoS runtime状态...")
 	if err := r.initializeRuntime(); err != nil {
 		r.logger.Error("❌ 初始化DPoS runtime失败", "error", err)
 		return fmt.Errorf("failed to initialize runtime: %w", err)
 	}
-	r.logger.Debug("✅ DPoS runtime状态初始化成功")
+	r.logger.Debug("DPoS runtime状态初始化成功")
 
 	// 启动区块生产定时器
 	if err := r.startBlockProduction(); err != nil {
@@ -36,7 +35,7 @@ func (r *dposRuntime) start() error {
 	// 🆕 启动网络健康监控
 	r.startNetworkHealthMonitoring()
 
-	r.logger.Debug("🎉 DPoS runtime启动成功")
+	r.logger.Debug("DPoS runtime启动成功")
 	return nil
 }
 
@@ -86,7 +85,7 @@ func (r *dposRuntime) cleanupRuntime() {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
-	// 🆕 先停止所有定时器，确保没有goroutine在运行
+	// 先停止所有定时器，确保没有goroutine在运行
 	if r.voteTimer != nil {
 		r.voteTimer.Stop()
 		r.voteTimer = nil
@@ -96,7 +95,7 @@ func (r *dposRuntime) cleanupRuntime() {
 		r.networkHealthTimer = nil
 	}
 
-	// 🆕 等待一小段时间，确保正在运行的goroutine能够完成
+	// 等待一小段时间，确保正在运行的goroutine能够完成
 	time.Sleep(100 * time.Millisecond)
 
 	// 清理投票者映射
@@ -158,4 +157,3 @@ func (r *dposRuntime) cleanupSignatureMaps() {
 	}
 	r.signatureGenerationDedupMutex.Unlock()
 }
-

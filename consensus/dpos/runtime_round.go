@@ -20,7 +20,7 @@ func (r *dposRuntime) calculateRoundBySlot() uint64 {
 	// 基于slot计算轮次
 	round := uint64((currentSlot / len(r.delegates)) + 1)
 
-	r.logger.Debug("🔍 基于slot计算轮次",
+	r.logger.Debug("基于slot计算轮次",
 		"currentSlot", currentSlot,
 		"delegateCount", len(r.delegates),
 		"calculatedRound", round,
@@ -94,24 +94,19 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 			currentBlockNumber = 0
 		}
 	}
-
-	// 🆕 已删除 currentDelegateIndex 的计算和设置
-	// 现在完全通过 getCurrentDelegate() 基于时间slot实时计算
-	// 此函数现在只负责更新 currentRound
-
-	// 🆕 混合方案：基于区块号触发轮次边界处理，基于slot计算轮次
+	// 基于区块号触发轮次边界处理，基于slot计算轮次
 	if r.config != nil && r.config.DelegateCount > 0 {
 		// 1. 基于区块号触发轮次边界处理（保持原有逻辑）
 		if currentBlockNumber > 0 && currentBlockNumber%uint64(r.config.DelegateCount) == 0 {
-			r.logger.Info("🔄 轮次边界触发（基于区块号）",
+			r.logger.Info("轮次边界触发（基于区块号）",
 				"blockNumber", currentBlockNumber,
 				"delegateCount", r.config.DelegateCount)
 
-			// 🆕 方案1+方案2：轮次边界时处理延迟的验证者集合更新
+			// 轮次边界时处理延迟的验证者集合更新
 			if r.backend != nil {
 				// 通过类型断言访问DPoS实例
 				if dposInstance, ok := r.backend.(*DPoS); ok && dposInstance.pendingValidatorUpdate {
-					r.logger.Info("🔄 轮次边界：处理延迟的验证者集合更新")
+					r.logger.Info("轮次边界：处理延迟的验证者集合更新")
 					if err := dposInstance.updateDelegatesInternal(nil); err != nil {
 						r.logger.Error("❌ 轮次边界更新验证者集合失败", "error", err)
 					} else {
@@ -132,7 +127,7 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 		if r.config.blockScheduler != nil {
 			newRound := r.calculateRoundBySlot()
 			if newRound != r.currentRound {
-				r.logger.Info("🔄 轮次更新（基于slot）",
+				r.logger.Info("轮次更新（基于slot）",
 					"oldRound", r.currentRound,
 					"newRound", newRound,
 					"blockNumber", currentBlockNumber)

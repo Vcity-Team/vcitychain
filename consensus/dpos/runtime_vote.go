@@ -3,7 +3,6 @@ package dpos
 import (
 	"fmt"
 	"math/big"
-	"sync"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/crypto"
@@ -201,72 +200,3 @@ func (r *dposRuntime) cleanupExpiredVotes() {
 		}
 	}
 }
-
-// updateDelegateVotingPower 更新受托人投票权重
-func (r *dposRuntime) updateDelegateVotingPower(delegate types.Address, amount *big.Int) {
-	// 使用静态变量跟踪调用次数
-	static := struct {
-		count int
-		mu    sync.Mutex
-	}{}
-
-	static.mu.Lock()
-	static.count++
-	currentCount := static.count
-	static.mu.Unlock()
-
-	fmt.Printf("🔍 updateDelegateVotingPower: 开始更新受托人投票权重 (第%d次调用)\n", currentCount)
-	fmt.Printf("  - 调用时间: %s\n", time.Now().Format("15:04:05.000"))
-	fmt.Printf("  - 受托人地址: %s\n", delegate.String())
-	fmt.Printf("  - 新增投票权重: %s (0x%x)\n", amount.String(), amount.Bytes())
-
-	// 🆕 详细打印内存中的 r.delegates 数组状态
-	fmt.Printf("🔍 内存中 r.delegates 数组状态 (共%d个):\n", len(r.delegates))
-	for i, d := range r.delegates {
-		fmt.Printf("  - delegates[%d]: 地址=%s, VotingPower=%s (0x%x), IsActive=%v\n",
-			i, d.Address.String(), d.VotingPower.String(), d.VotingPower.Bytes(), d.IsActive)
-	}
-
-	// 🆕 检查是否为创世验证者
-	if r.config != nil && r.config.dposBackend != nil {
-		if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
-			if dposInstance.isGenesisValidator(delegate) {
-				fmt.Printf("  - 🔒 创世验证者权重保持不变，跳过更新\n")
-				fmt.Printf("  - 地址: %s\n", delegate.String())
-				fmt.Printf("  - 权重: %s\n", amount.String())
-				fmt.Printf("  - 说明: 创世验证者权重永远不变\n")
-				return
-			}
-		}
-	}
-
-	// 🆕 查找目标受托人并更新
-	found := false
-	for i, d := range r.delegates {
-		if d.Address == delegate {
-			oldPower := new(big.Int).Set(d.VotingPower)
-			d.VotingPower = new(big.Int).Add(d.VotingPower, amount)
-
-			fmt.Printf("  - ✅ 找到目标受托人: %s (索引%d)\n", d.Address.String(), i)
-			fmt.Printf("  - 旧投票权重: %s (0x%x)\n", oldPower.String(), oldPower.Bytes())
-			fmt.Printf("  - 新投票权重: %s (0x%x)\n", d.VotingPower.String(), d.VotingPower.Bytes())
-			fmt.Printf("  - 计算过程: %s + %s = %s\n", oldPower.String(), amount.String(), d.VotingPower.String())
-			fmt.Printf("  - 更新后IsActive: %v\n", d.IsActive)
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		fmt.Printf("  - ❌ 未找到目标受托人: %s\n", delegate.String())
-		fmt.Printf("  - 当前内存中的delegates数组可能不完整或为空\n")
-	}
-
-	// 🆕 更新后再次打印内存状态
-	fmt.Printf("🔍 更新后内存中 r.delegates 数组状态:\n")
-	for i, d := range r.delegates {
-		fmt.Printf("  - delegates[%d]: 地址=%s, VotingPower=%s (0x%x), IsActive=%v\n",
-			i, d.Address.String(), d.VotingPower.String(), d.VotingPower.Bytes(), d.IsActive)
-	}
-}
-
