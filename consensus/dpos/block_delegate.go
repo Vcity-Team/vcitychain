@@ -1,7 +1,6 @@
 package dpos
 
 import (
-	"fmt"
 	"math/big"
 	"time"
 
@@ -9,14 +8,12 @@ import (
 	"github.com/Vcity-Team/vcitychain/types"
 )
 
-// getCurrentDelegate 获取当前受托人（基于时间slot实时计算）
 func (r *dposRuntime) getCurrentDelegate() types.Address {
-	// 🆕 优化：优先使用缓存的验证者集合，避免每次查询数据库
 	var validators validator.AccountSet
 	var err error
-	
-	// 优先使用缓存的 delegates
-	if r.delegates != nil && len(r.delegates) > 0 {
+
+	// 优先使用缓存的 delegates，len() on a nil slice returns 0,so no need to check if r.delegates is nil
+	if len(r.delegates) > 0 {
 		validators = r.delegates
 	} else {
 		// 只在缓存为空时才查询数据库
@@ -31,9 +28,7 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 			r.logger.Error("❌ 从数据库读取验证者失败", "error", err)
 			return types.ZeroAddress
 		}
-		// 更新缓存
 		r.delegates = validators
-		r.logger.Info("✅ 从数据库读取验证者并更新缓存", "count", len(validators))
 	}
 
 	actualDelegateCount := len(validators)
@@ -42,7 +37,6 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 		return types.ZeroAddress
 	}
 
-	// 🆕 基于时间slot实时计算当前委托者
 	if r.config.blockScheduler != nil {
 		// 获取当前时间
 		now := time.Now()
@@ -55,28 +49,9 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 		currentValidatorIndex := currentSlot % actualDelegateCount
 		delegate := validators[currentValidatorIndex]
 
-		// 🆕 添加详细的调试日志
-		r.logOnceWithInterval("get_current_delegate_start_check", 10*time.Second, "info", "🔍 getCurrentDelegate 开始检查",
-			"delegatesCount", actualDelegateCount,
-			"currentSlot", currentSlot,
-			"validatorIndex", currentValidatorIndex,
-			"delegates_array_detail", func() string {
-				if len(validators) == 0 {
-					return "delegates数组为空"
-				}
-				result := "delegates数组: "
-				for i, delegate := range validators {
-					if i < 5 { // 只显示前5个
-						result += fmt.Sprintf("[%d]=%s(vp=%s,active=%v) ", i, delegate.Address.String()[:10], delegate.VotingPower.String(), delegate.IsActive)
-					}
-				}
-				return result
-			}(),
-			"timestamp", time.Now().Format("15:04:05.000"))
-
 		// 检查受托人是否活跃且有足够的stake
 		if !delegate.IsActive || delegate.VotingPower.Cmp(big.NewInt(0)) <= 0 {
-			r.logOnceWithInterval("inactive_delegate", 10*time.Second, "warn",
+			r.logOnceWithInterval("inactive_delegate", 1*time.Second, "warn",
 				"❌ 当前委托者不活跃或票数不足",
 				"validatorIndex", currentValidatorIndex,
 				"address", delegate.Address.String(),
@@ -103,4 +78,3 @@ func (r *dposRuntime) getNetworkLatestBlockNumber() uint64 {
 	}
 	return 0
 }
-

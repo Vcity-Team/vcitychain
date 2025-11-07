@@ -3,6 +3,7 @@ package dpos
 import (
 	"fmt"
 	"math/big"
+	"os"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
@@ -20,9 +21,13 @@ func (r *dposRuntime) startBlockProduction() error {
 		return fmt.Errorf("key not available, cannot start block production")
 	}
 
-	blockTime := 2 * time.Second // 默认2秒
-	if r.config.PolyBFTConfig != nil {
-		blockTime = r.config.PolyBFTConfig.BlockTime.Duration
+	blockTime := r.config.BlockTime.Duration
+	if blockTime == 0 {
+		r.logger.Error("❌ 无法读取blockTime配置，程序退出",
+			"config", r.config != nil,
+			"blockTimeDuration", blockTime,
+			"blockTimeString", blockTime.String())
+		os.Exit(1)
 	}
 
 	r.logger.Debug("🏭 区块生产配置检查",
@@ -58,7 +63,7 @@ func (r *dposRuntime) startBlockProduction() error {
 
 // continuousBlockMonitoring 持续区块监测
 func (r *dposRuntime) continuousBlockMonitoring() {
-	// 🆕 关键修复：在主循环中周期性更新currentSlot
+	// 在主循环中周期性更新currentSlot
 	// 每隔500ms检查一次，确保时间驱动的slot切换正常工作
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -68,20 +73,15 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 		case <-r.closeCh:
 			r.logger.Info("🛑 停止区块监测")
 			return
-		case <-ticker.C:
-			// 🆕 关键：定期更新currentDelegateIndex，确保轮流出块
-			// 使用静默模式，不打印日志（出块时会调用并打印日志）
-			r.updateRoundSilent()
 		default:
 			// 持续监测出块时机
 			shouldProduce := r.shouldProduceBlockNow()
 
 			if shouldProduce {
-				// 🆕 优化：立即调用produceBlock，不阻塞出块流程
 				if err := r.produceBlock(); err != nil {
 					r.logger.Error("出块失败", "error", err)
 				} else {
-					// 🆕 异步收集日志信息（不阻塞出块流程）
+					// 异步收集日志信息（不阻塞出块流程）
 					go func() {
 						var genesisStr string
 						var validators []string
@@ -104,7 +104,7 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 								}
 							}
 						}
-						r.logOnceWithInterval("should_produce_start", 200*time.Millisecond, "info",
+						r.logOnceWithInterval("should_produce_start", 1*time.Second, "info",
 							"✅ shouldProduceBlockNow返回true，开始出块",
 							"timestamp", time.Now().Format("15:04:05.000"),
 							"genesisTime", genesisStr,
@@ -113,7 +113,7 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 				}
 			} else {
 				// 🆕 添加为什么不应该出块的详细日志
-				r.logOnceWithInterval("should_not_produce_debug", 2*time.Second, "info",
+				r.logOnceWithInterval("should_not_produce_debug", 1*time.Second, "info",
 					"⏭️ 不应该出块的原因分析",
 					"shouldProduceBlockNow", shouldProduce,
 					"actualDelegatesCount", len(r.delegates),
@@ -127,15 +127,13 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 			}
 
 			// 短暂休眠，避免CPU占用过高
-			time.Sleep(10 * time.Millisecond) // 10毫秒监测一次
+			time.Sleep(10 * time.Millisecond)
 		}
 	}
 }
 
 // produceBlock 生产区块
-// 🆕 方案1+2：缩小锁的粒度，使用读写锁
 func (r *dposRuntime) produceBlock() error {
-	// 🆕 方案1：将slot检查移到锁外，使用读锁快速检查
 	var currentSlot int = -1
 	if r.config.blockScheduler != nil {
 		now := time.Now()
@@ -144,7 +142,7 @@ func (r *dposRuntime) produceBlock() error {
 		timeSinceGenesis := now.Sub(genesisTime)
 		currentSlot = int(timeSinceGenesis / blockWindow)
 
-		// 🆕 使用读锁快速检查
+		// 使用读锁快速检查
 		r.lock.RLock()
 		lastSlot := r.lastProducedSlot
 		r.lock.RUnlock()
@@ -175,14 +173,12 @@ func (r *dposRuntime) produceBlock() error {
 	currentDelegate := r.getCurrentDelegate()
 	keyAddr := types.Address(r.config.Key.Address())
 
-	// 检查当前节点是否为出块者
-
 	// 检查当前节点是否有足够的stake参与出块
 	var currentDelegateInfo *validator.ValidatorMetadata
 
-	// 🆕 如果delegates为空，尝试重新加载（使用读锁检查，写锁更新）
+	// 如果delegates为空，尝试重新加载（使用读锁检查，写锁更新）
 	r.lock.RLock()
-	delegatesEmpty := r.delegates == nil || len(r.delegates) == 0
+	delegatesEmpty := len(r.delegates) == 0
 	r.lock.RUnlock()
 
 	if delegatesEmpty {
@@ -207,7 +203,7 @@ func (r *dposRuntime) produceBlock() error {
 		}
 	}
 
-	// 🆕 使用读锁读取delegates（避免在构建区块时被阻塞）
+	// 使用读锁读取delegates（避免在构建区块时被阻塞）
 	r.lock.RLock()
 	delegates := r.delegates
 	r.lock.RUnlock()
@@ -215,7 +211,7 @@ func (r *dposRuntime) produceBlock() error {
 	for _, delegate := range delegates {
 		if delegate.Address == keyAddr {
 			currentDelegateInfo = delegate
-			// 🆕 修复：确保IsActive为true（验证者应该都是活跃的）
+			// 确保IsActive为true（验证者应该都是活跃的）
 			currentDelegateInfo.IsActive = true
 			break
 		}
@@ -252,9 +248,6 @@ func (r *dposRuntime) produceBlock() error {
 			}())
 		return nil
 	}
-
-	// 当前节点stake检查通过
-
 	// 添加调试日志 - 只有当本节点是当前受托人时才打印
 	if currentDelegate == keyAddr {
 		r.logger.Debug("🏭 检查区块生产资格",
@@ -264,19 +257,9 @@ func (r *dposRuntime) produceBlock() error {
 			"delegatesCount", len(delegates),
 			"votingPower", currentDelegateInfo.VotingPower.String())
 	}
-
-	// 🆕 优化：移除重复的shouldProduceBlockNow检查
-	// 原因：shouldProduceBlockNow()已经在continuousBlockMonitoring()中调用（第76行）
-	// produceBlock()只在shouldProduceBlockNow()返回true时才会被调用
-	// 重复检查浪费时间和资源
-
-	// 检查是否已经有更新的区块
-	// currentBlock 已在上面声明过了
-
-	// 计算下一个要生产的区块号
 	nextBlockNumber := currentBlock.Number + 1
 
-	// 🆕 保存构建开始时的slot和时间（用于超时检查，TRON机制）
+	// 保存构建开始时的slot和时间（用于超时检查）
 	var buildStartSlot int = -1
 	var buildStartTime time.Time
 	if r.config.blockScheduler != nil {
@@ -288,32 +271,14 @@ func (r *dposRuntime) produceBlock() error {
 		buildStartTime = now
 	}
 
-	// 只对区块1进行特殊检查，防止分叉
-	if nextBlockNumber == 1 {
-		// 如果我们要生产区块1，检查是否已经有区块1了
-		if currentBlock.Number >= 1 {
-			// 检查当前区块的矿工地址是否是我们自己
-			blockMiner := types.BytesToAddress(currentBlock.Miner)
-			keyAddr := types.Address(r.config.Key.Address())
-
-			if blockMiner != keyAddr {
-				r.logger.Debug("block 1 was produced by another node, skipping block production",
-					"blockMiner", blockMiner, "keyAddr", keyAddr)
-				return nil
-			} else {
-				r.logger.Debug("block 1 was produced by us, continuing with next block")
-			}
-		}
-	} else if currentBlock.Number >= nextBlockNumber {
+	if currentBlock.Number >= nextBlockNumber {
 		// 如果当前区块号大于等于我们要生产的区块号，说明已经有更新的区块了
 		r.logger.Debug("block already exists, skipping block production",
 			"currentBlockNumber", currentBlock.Number, "nextBlockNumber", nextBlockNumber)
 		return nil
 	}
 
-	// 🆕 方案1：构建区块和签名收集不在锁内（避免阻塞）
 	// 构建新区块（无锁，不阻塞）
-	// 🆕 记录区块生产开始时间（用于统计生产耗时）
 	r.config.blockchain.SetBlockProductionStartTime()
 	r.logger.Debug("🏗️ DPoS开始构建新区块", "blockNumber", nextBlockNumber)
 	block, err := r.buildBlock()
@@ -321,7 +286,7 @@ func (r *dposRuntime) produceBlock() error {
 		return fmt.Errorf("failed to build block: %w", err)
 	}
 
-	// 🆕 检查是否超过slot时间（TRON机制：如果构建耗时超过slot时间或slot已变化，丢弃该区块）
+	// 检查是否超过slot时间:如果构建耗时超过slot时间或slot已变化，丢弃该区块
 	if r.config.blockScheduler != nil && buildStartSlot >= 0 {
 		now := time.Now()
 		genesisTime := r.config.blockScheduler.GetGenesisTime()
@@ -378,10 +343,10 @@ func (r *dposRuntime) produceBlock() error {
 		"timestamp", block.Block.Header.Timestamp,
 		"delegate", r.config.Key.Address().String()[:16])
 
-	// 🆕 方案1：只在更新状态时使用写锁（时间很短）
+	// 只在更新状态时使用写锁（时间很短）
 	if r.config.blockScheduler != nil && currentSlot >= 0 {
 		r.lock.Lock()
-		// 🆕 再次检查（防止并发问题）
+		// 再次检查（防止并发问题）
 		now := time.Now()
 		genesisTime := r.config.blockScheduler.GetGenesisTime()
 		blockWindow := r.config.blockScheduler.GetBlockWindow()

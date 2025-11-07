@@ -5,21 +5,21 @@ import (
 	"os"
 	"time"
 
-	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/signer"
+	"github.com/Vcity-Team/vcitychain/types"
 )
 
 // VerifyHeader 验证区块头部
 func (d *DPoS) VerifyHeader(header *types.Header) error {
 	blockNumber := header.Number
 
-	// 🆕 添加：检查是否是共识切换高度
+	// 检查是否是共识切换高度
 	if d.config.ConsensusSwitchHeight > 0 && blockNumber == d.config.ConsensusSwitchHeight {
 		d.logger.Info("🔄 共识切换高度区块，跳过DPoS验证", "blockNumber", blockNumber, "consensusSwitchHeight", d.config.ConsensusSwitchHeight)
 		return nil
 	}
 
-	// 🆕 关键：在验证前等待BLS公钥加载完成
+	// 在验证前等待BLS公钥加载完成
 	if err := d.waitForBLSKeysLoaded(); err != nil {
 		d.logger.Error("❌ 等待BLS公钥加载失败", "blockNumber", blockNumber, "error", err)
 		return fmt.Errorf("BLS keys not loaded: %w", err)
@@ -65,7 +65,7 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift time.Duration, parents []*types.Header) error {
 	// validate header fields
 	if err := validateHeaderFields(parent, header, uint64(blockTimeDrift.Seconds())); err != nil {
-		// 🆕 打印parent区块信息（Info级别）
+		// 🆕 打印parent区块信息
 		d.logger.Info("❌ 区块头部字段验证失败 - parent信息",
 			"blockNumber", header.Number,
 			"blockHash", header.Hash.String(),
@@ -122,10 +122,10 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 			d.logger.Error("failed to process block votes from header", "blockNumber", header.Number, "blockHash", header.Hash, "error", err)
 		}
 
-		// 同步更新轮次状态（这部分必须同步执行，不能异步）
+		// 同步更新轮次状态
 		d.updateRoundState(header)
 
-		// 🆕 验证节点执行blockchain_wrapper.ProcessBlock来处理奖励分配
+		// 验证节点执行blockchain_wrapper.ProcessBlock来处理奖励分配
 		if d.config.Blockchain != nil {
 			// 获取完整区块信息
 			block, exists := d.config.Blockchain.GetBlockByHash(header.Hash, true)
@@ -204,34 +204,6 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 					d.logger.Warn("⚠️ 无法开始数据库事务", "blockNumber", header.Number, "error", err)
 				} else {
 					defer dbTx.Rollback()
-
-					// 临时注释掉setDelegatesAtBlock调用进行测试
-					// 存储验证者集合
-					// if err := d.state.StakeStore.setDelegatesAtBlock(header.Number, validators, dbTx); err != nil {
-					// 	d.logger.Warn("⚠️ 存储验证者集合失败", "blockNumber", header.Number, "error", err)
-					// } else {
-					// 提交事务 - 添加超时机制
-					// d.logger.Debug("🔍 区块同步时开始提交数据库事务", "blockNumber", header.Number)
-
-					// 使用超时机制防止卡死
-					// commitDone := make(chan error, 1)
-					// go func() {
-					// 	commitDone <- dbTx.Commit()
-					// }()
-
-					// select {
-					// case err := <-commitDone:
-					// 	if err != nil {
-					// 		d.logger.Warn("⚠️ 区块同步时提交事务失败", "blockNumber", header.Number, "error", err)
-					// 	} else {
-					// 		d.logger.Debug("✅ 区块同步时验证者集合已存储到历史数据库",
-					// 			"blockNumber", header.Number,
-					// 			"count", len(validators))
-					// 	}
-					// case <-time.After(3 * time.Second):
-					// 	d.logger.Error("❌ 区块同步时数据库事务提交超时，强制回滚", "blockNumber", header.Number)
-					// 	dbTx.Rollback()
-					// }
 				}
 			} else {
 				d.logger.Warn("⚠️ 从ExtraData解析的验证者集合为空", "blockNumber", header.Number)
@@ -241,4 +213,3 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 
 	return nil
 }
-

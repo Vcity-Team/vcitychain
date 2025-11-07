@@ -14,7 +14,6 @@ func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64, c
 		"blockNumber", blockNumber,
 		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
 
-	// 获取DPoS实例
 	if r.config == nil || r.config.dposBackend == nil {
 		return fmt.Errorf("DPoS配置不可用")
 	}
@@ -63,19 +62,16 @@ func (r *dposRuntime) processRewardDistributionInBlockForBuilder(builder blockBu
 		"epochNumber", rewardInfo.EpochNumber,
 		"rewardCount", len(rewardInfo.Rewards))
 
-	// 获取状态
 	state := builder.GetState()
 	if state == nil {
 		return fmt.Errorf("failed to get state from builder")
 	}
 
-	// 使用TotalReward字段
 	totalReward := rewardInfo.TotalReward
 	if totalReward == nil {
 		totalReward = big.NewInt(0)
 	}
 
-	// 检查奖励账户余额
 	rewardAccount := dposInstance.config.RewardAccount
 	currentBalance := state.GetBalance(rewardAccount)
 

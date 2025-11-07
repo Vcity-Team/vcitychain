@@ -12,11 +12,10 @@ import (
 // BlockchainInterface 是区块链接口，用于获取当前区块头
 type BlockchainInterface interface {
 	Header() *types.Header
-	// GetHeaderByNumber 获取指定区块号的区块头（用于获取创世区块）
 	GetHeaderByNumber(number uint64) (*types.Header, bool)
 }
 
-// BlockScheduler 是固定时间窗口调度器，用于TRON模式的区块生产调度
+// BlockScheduler 是固定时间窗口调度器，用于区块生产调度
 type BlockScheduler struct {
 	blockWindow           time.Duration
 	genesisTime           time.Time
@@ -24,7 +23,7 @@ type BlockScheduler struct {
 	blockchain            BlockchainInterface
 	consensusSwitchHeight uint64
 	logger                hclog.Logger
-	// 🆕 日志间隔管理
+
 	lastLogTime map[string]time.Time
 	logMutex    sync.RWMutex
 }
@@ -37,11 +36,9 @@ func NewBlockScheduler(
 	consensusSwitchHeight uint64,
 	logger hclog.Logger,
 ) *BlockScheduler {
-	// ⚠️ 关键修复：使用共识切换高度对应区块的时间戳作为genesisTime
-	// 确保所有节点的genesisTime一致，避免slot计算不同导致分叉
+	// 使用共识切换高度对应区块的时间戳作为genesisTime
 	genesisTime := time.Now()
 	if blockchain != nil {
-		// 优先使用共识切换高度的区块时间戳
 		if consensusSwitchHeight > 0 {
 			switchHeader, ok := blockchain.GetHeaderByNumber(consensusSwitchHeight)
 			if ok && switchHeader != nil {
@@ -62,12 +59,17 @@ func NewBlockScheduler(
 				}
 			}
 		} else {
-			// 如果共识切换高度为0，使用当前区块头
-			genesisHeader := blockchain.Header()
-			if genesisHeader != nil {
+			// 如果共识切换高度为0，使用区块0（创世区块）的时间戳作为genesisTime
+			genesisHeader, ok := blockchain.GetHeaderByNumber(0)
+			if ok && genesisHeader != nil {
 				genesisTime = time.Unix(int64(genesisHeader.Timestamp), 0)
-				logger.Warn("⚠️ 共识切换高度为0，使用当前区块时间戳作为genesisTime",
-					"currentBlockNumber", genesisHeader.Number,
+				logger.Info("✅ 共识切换高度为0，使用创世区块时间戳作为genesisTime",
+					"genesisBlockNumber", 0,
+					"genesisTime", genesisTime.Format("2006-01-02 15:04:05.000"),
+					"genesisBlockTimestamp", genesisHeader.Timestamp)
+			} else {
+				// 如果创世区块不存在，使用当前时间（这种情况不应该发生）
+				logger.Warn("⚠️ 创世区块不存在，使用当前时间作为genesisTime（这不应该发生）",
 					"genesisTime", genesisTime.Format("2006-01-02 15:04:05.000"))
 			}
 		}
@@ -118,16 +120,6 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	validators []types.Address,
 	blockNumber uint64,
 ) bool {
-	// 🆕 在函数开始就输出所有关键参数（10秒间隔）
-	bs.logOnceWithInterval("should_produce_block_now_start", 10*time.Second, "debug",
-		"🔍 ShouldProduceBlockNow 函数开始",
-		"myAddress", myAddress.String(),
-		"blockNumber", blockNumber,
-		"consensusSwitchHeight", bs.consensusSwitchHeight,
-		"validatorsCount", len(validators),
-		"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
-		"blockWindow", bs.blockWindow.String())
-
 	if len(validators) == 0 {
 		bs.logger.Debug("❌ ShouldProduceBlockNow: 验证者列表为空")
 		return false
@@ -169,8 +161,8 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	expectedValidator := validators[currentValidatorIndex]
 	isMatch := expectedValidator == myAddress
 
-	// ========== 🆕 详细日志：打印ShouldProduceBlockNow中的验证者列表和验证结果（200ms间隔，便于追踪分叉问题） ==========
-	bs.logOnceWithInterval("should_produce_block_now_validators_detail", 1000*time.Millisecond, "info",
+	// ========== 打印ShouldProduceBlockNow中的验证者列表和验证结果 ==========
+	bs.logOnceWithInterval("should_produce_block_now_validators_detail", 1*time.Second, "info",
 		"🔍 ShouldProduceBlockNow 中的验证者列表和验证详情",
 		"blockNumber", blockNumber,
 		"currentSlot", currentSlot,
@@ -190,10 +182,9 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 			return vs
 		}())
 
-	// ========== 🆕 关键验证点：ShouldProduceBlockNow返回true时（用于验证同一时刻只有一个节点出块） ==========
+	// ========== 关键验证点：ShouldProduceBlockNow返回true时（用于验证同一时刻只有一个节点出块） ==========
 	if isMatch {
-		// 🆕 使用200ms间隔，便于追踪分叉问题
-		bs.logOnceWithInterval("should_produce_block_now_true", 200*time.Millisecond, "info",
+		bs.logOnceWithInterval("should_produce_block_now_true", 1*time.Millisecond, "info",
 			"🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块",
 			"timestamp", now.Format("15:04:05.000000"),
 			"myAddress", myAddress.String(),
@@ -218,17 +209,14 @@ func (bs *BlockScheduler) GetBlockWindow() time.Duration {
 	return bs.blockWindow
 }
 
-// StartNewEpoch 启动新的epoch，更新调度器的状态（如果需要）
+// StartNewEpoch 启动新的epoch，目前只打出日志
 func (bs *BlockScheduler) StartNewEpoch(epochNumber uint64, currentTime time.Time) {
-	// 目前不需要特殊处理，因为调度器完全基于时间slot计算
-	// 如果将来需要epoch特定的调度逻辑，可以在这里添加
 	bs.logger.Debug("启动新epoch",
 		"epochNumber", epochNumber,
 		"currentTime", currentTime.Format("2006-01-02 15:04:05"))
 }
 
 // shouldProduceBlockNow 检查当前节点是否应该现在出块
-// 🆕 方案2：使用读锁，不阻塞其他检查
 func (r *dposRuntime) shouldProduceBlockNow() bool {
 	currentBlock := r.config.blockchain.CurrentHeader()
 	if currentBlock == nil {
@@ -247,7 +235,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		}
 	}
 
-	// 🆕 方案2：使用读锁快速检查lastProducedSlot（如果使用blockScheduler）
+	// 使用读锁快速检查lastProducedSlot
 	if r.config.blockScheduler != nil {
 		now := time.Now()
 		genesisTime := r.config.blockScheduler.GetGenesisTime()
@@ -255,7 +243,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		timeSinceGenesis := now.Sub(genesisTime)
 		currentSlot := int(timeSinceGenesis / blockWindow)
 
-		// 🆕 使用读锁快速检查
+		// 使用读锁快速检查
 		r.lock.RLock()
 		lastSlot := r.lastProducedSlot
 		r.lock.RUnlock()
@@ -266,15 +254,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		}
 	}
 
-	// 🆕 添加详细的调试日志（使用Debug级别）
-	r.logOnceWithInterval("should_produce_block_now_debug", 5*time.Second, "debug",
-		"🔍 shouldProduceBlockNow 开始检查",
-		"currentBlockNumber", currentBlock.Number,
-		"hasBlockScheduler", r.config.blockScheduler != nil,
-		"delegatesCount", len(r.delegates),
-		"timestamp", time.Now().Format("15:04:05.000"))
-
-	// 🆕 关键修复：在共识切换高度之前，使用IBFT逻辑，不使用DPoS调度器
+	// 在共识切换高度之前，使用IBFT逻辑，不使用DPoS调度器
 	// 必须在调用 blockScheduler.ShouldProduceBlockNow 之前检查
 	var consensusSwitchHeight uint64 = 0
 	hasDPoSBackend := r.config.dposBackend != nil
@@ -303,12 +283,11 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		return result
 	}
 
-	// 使用TRON式调度器（完全基于时间，比较地址）
+	// 完全基于时间，比较地址
 	if r.config.blockScheduler != nil {
-		// 获取本节点地址
 		myAddress := types.Address(r.config.Key.Address())
 
-		// 🆕 方案2：使用读锁读取delegates（避免阻塞）
+		// 使用读锁读取delegates
 		r.lock.RLock()
 		delegates := r.delegates
 		r.lock.RUnlock()
@@ -352,7 +331,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			}
 		}
 
-		// 🆕 如果过滤后没有验证者，使用原始列表（避免所有验证者被过滤导致不出块）
+		// 如果过滤后没有验证者，使用原始列表（避免所有验证者被过滤导致不出块）
 		validators := activeValidators
 		if len(validators) == 0 {
 			r.logOnceWithInterval("all_validators_filtered_fallback", 10*time.Second, "warn",
@@ -365,10 +344,8 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			}
 		}
 
-		// 🆕 调用改进后的方法（直接比较地址）
 		result := r.config.blockScheduler.ShouldProduceBlockNow(myAddress, validators, currentBlock.Number)
 
-		// 🆕 添加调度器结果日志（使用Debug级别）
 		r.logOnceWithInterval("block_scheduler_result", 5*time.Second, "debug",
 			"🔍 区块调度器结果",
 			"shouldProduce", result,
@@ -391,14 +368,6 @@ func (r *dposRuntime) shouldProduceBlock() bool {
 		r.logger.Warn("无法获取当前区块头，跳过出块")
 		return false
 	}
-
-	// 🆕 关键修复：shouldProduceBlock 是IBFT模式的出块检查，不应该调用DPoS调度器
-	// 这个函数专门用于共识切换高度之前的IBFT逻辑
-	r.logOnceWithInterval("ibft_check_qualification", 10*time.Second, "debug",
-		"🔍 使用IBFT模式检查出块资格",
-		"currentBlock", currentBlock.Number,
-		"delegateCount", r.config.DelegateCount,
-		"delegatesCount", len(r.delegates))
 
 	// IBFT逻辑：基于区块号计算当前应该出块的验证者索引
 	if len(r.delegates) == 0 {

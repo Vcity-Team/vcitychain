@@ -64,28 +64,6 @@ func (r *dposRuntime) calculateInitialRound() uint64 {
 	return 1 // 默认从第1轮开始
 }
 
-// updateRoundSilent 静默更新轮次（不打印日志）
-func (r *dposRuntime) updateRoundSilent() {
-	if r.config == nil || r.config.blockScheduler == nil || r.config.DelegateCount == 0 {
-		return
-	}
-
-	// 🆕 使用公共函数获取排序和限制后的验证者
-	dposBackend, ok := r.backend.(*DPoS)
-	if !ok {
-		return
-	}
-	validators, err := dposBackend.GetSortedValidatorsWithLimit()
-	if err != nil {
-		return
-	}
-
-	// 🆕 已删除 currentDelegateIndex 的计算和设置
-	// 现在完全通过 getCurrentDelegate() 基于时间slot实时计算
-	// 此函数保留用于保持代码结构完整性
-	_ = validators // 避免unused variable警告
-}
-
 // updateRound 更新轮次（混合方案：区块号触发边界，slot计算轮次）
 func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 	// 🆕 修复：统一使用区块号计算委托者索引，避免不一致
@@ -163,7 +141,3 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 		}
 	}
 }
-
-
-
-

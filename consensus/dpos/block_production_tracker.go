@@ -13,7 +13,6 @@ type BlockProductionTracker struct {
 	currentEpochBlocks map[types.Address]uint64
 	epochBlocksHistory map[uint64]map[types.Address]uint64
 
-	// 🆕 新增：记录区块时间信息
 	currentEpochBlockTimes map[types.Address][]time.Time
 	epochBlockTimesHistory map[uint64]map[types.Address][]time.Time
 
@@ -23,31 +22,26 @@ type BlockProductionTracker struct {
 	mutex           sync.RWMutex
 	logger          hclog.Logger
 
-	// 🆕 新增：数据库存储
 	store *BlockTrackerStore
 }
 
-// NewBlockProductionTracker 创建出块统计管理器
 func NewBlockProductionTracker(logger hclog.Logger, store *BlockTrackerStore) *BlockProductionTracker {
 	tracker := &BlockProductionTracker{
 		currentEpochBlocks: make(map[types.Address]uint64),
 		epochBlocksHistory: make(map[uint64]map[types.Address]uint64),
 
-		// 🆕 新增：初始化区块时间记录
 		currentEpochBlockTimes: make(map[types.Address][]time.Time),
 		epochBlockTimesHistory: make(map[uint64]map[types.Address][]time.Time),
 
 		logger: logger,
-		store:  store, // 🆕 新增：设置数据库存储
+		store:  store,
 	}
 
-	// 🆕 从数据库加载历史数据
 	tracker.loadFromDB()
 
 	return tracker
 }
 
-// loadFromDB 从数据库加载历史数据
 func (bpt *BlockProductionTracker) loadFromDB() {
 	if bpt.store == nil {
 		bpt.logger.Warn("BlockTrackerStore is nil, skipping database load")
@@ -63,7 +57,6 @@ func (bpt *BlockProductionTracker) loadFromDB() {
 	bpt.mutex.Lock()
 	defer bpt.mutex.Unlock()
 
-	// 加载历史数据
 	for epochNumber, blockCounts := range allBlocks {
 		bpt.epochBlocksHistory[epochNumber] = blockCounts
 	}
@@ -71,7 +64,6 @@ func (bpt *BlockProductionTracker) loadFromDB() {
 	bpt.logger.Info("Loaded block data from database", "epochs", len(allBlocks))
 }
 
-// saveEpochToDB 保存epoch数据到数据库
 func (bpt *BlockProductionTracker) saveEpochToDB(epochNumber uint64, blockCounts map[types.Address]uint64) {
 	if bpt.store == nil {
 		bpt.logger.Warn("BlockTrackerStore is nil, skipping database save")
@@ -86,7 +78,6 @@ func (bpt *BlockProductionTracker) saveEpochToDB(epochNumber uint64, blockCounts
 	}
 }
 
-// RecordBlockProduction 记录出块
 func (bpt *BlockProductionTracker) RecordBlockProduction(
 	blockNumber uint64,
 	blockTime time.Time,
@@ -105,13 +96,13 @@ func (bpt *BlockProductionTracker) RecordBlockProduction(
 				bpt.epochBlocksHistory[bpt.currentEpoch][addr] = count
 			}
 
-			// 🆕 保存区块时间历史
+			// 保存区块时间历史
 			bpt.epochBlockTimesHistory[bpt.currentEpoch] = make(map[types.Address][]time.Time)
 			for addr, times := range bpt.currentEpochBlockTimes {
 				bpt.epochBlockTimesHistory[bpt.currentEpoch][addr] = times
 			}
 
-			// 🆕 保存到数据库
+			// 保存到数据库
 			bpt.saveEpochToDB(bpt.currentEpoch, bpt.epochBlocksHistory[bpt.currentEpoch])
 		}
 
@@ -121,7 +112,7 @@ func (bpt *BlockProductionTracker) RecordBlockProduction(
 		bpt.epochStartBlock = blockNumber
 		bpt.currentEpochBlocks = make(map[types.Address]uint64)
 
-		// 🆕 重置区块时间记录
+		// 重置区块时间记录
 		bpt.currentEpochBlockTimes = make(map[types.Address][]time.Time)
 
 		bpt.logger.Debug("🔄 开始新Epoch出块统计",
@@ -133,7 +124,7 @@ func (bpt *BlockProductionTracker) RecordBlockProduction(
 	// 记录出块
 	bpt.currentEpochBlocks[producer]++
 
-	// 🆕 记录区块时间
+	// 记录区块时间
 	bpt.currentEpochBlockTimes[producer] = append(bpt.currentEpochBlockTimes[producer], blockTime)
 
 	bpt.logger.Debug("📊 记录出块",
@@ -164,11 +155,10 @@ func (bpt *BlockProductionTracker) GetEpochBlockCounts(epochNumber uint64) map[t
 		return result
 	}
 
-	// 🆕 如果内存中没有，尝试从数据库加载
+	// 如果内存中没有，尝试从数据库加载
 	if bpt.store != nil {
 		dbBlocks, err := bpt.store.LoadEpochBlocks(epochNumber)
 		if err == nil && len(dbBlocks) > 0 {
-			// 将数据库数据加载到内存
 			bpt.epochBlocksHistory[epochNumber] = dbBlocks
 			bpt.logger.Debug("Loaded epoch blocks from database", "epoch", epochNumber)
 			return dbBlocks
@@ -188,7 +178,7 @@ func (bpt *BlockProductionTracker) GetTotalEpochBlocks(epochNumber uint64) uint6
 	return total
 }
 
-// 🆕 新增：获取指定epoch的平均出块时间
+// 获取指定epoch的平均出块时间
 func (bpt *BlockProductionTracker) GetEpochAverageBlockTime(epochNumber uint64) time.Duration {
 	bpt.mutex.RLock()
 	defer bpt.mutex.RUnlock()
@@ -228,10 +218,4 @@ func (bpt *BlockProductionTracker) GetEpochAverageBlockTime(epochNumber uint64) 
 	}
 
 	return totalInterval / time.Duration(len(allBlockTimes)-1)
-}
-
-// 🆕 新增：获取指定epoch的配置区块时间
-func (bpt *BlockProductionTracker) GetEpochExpectedBlockTime(epochNumber uint64) time.Duration {
-	// 这里应该从配置中获取，暂时返回2秒
-	return 2 * time.Second
 }
