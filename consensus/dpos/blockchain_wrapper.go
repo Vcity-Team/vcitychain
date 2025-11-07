@@ -99,7 +99,7 @@ type blockchainWrapper struct {
 	logger     hclog.Logger  // 添加logger字段
 	state      *State        // 添加State字段
 
-	// 🆕 添加验证者更新回调函数
+	// 添加验证者更新回调函数
 	onValidatorsUpdated func(validators validator.AccountSet) error
 }
 
@@ -110,7 +110,6 @@ func (p *blockchainWrapper) CurrentHeader() *types.Header {
 
 // CommitBlock commits a block to the chain
 func (p *blockchainWrapper) CommitBlock(block *types.FullBlock) error {
-	// 注意：WriteFullBlock 内部已经有写锁跟踪日志
 	return p.blockchain.WriteFullBlock(block, consensusSource)
 }
 

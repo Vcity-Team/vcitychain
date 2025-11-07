@@ -11,59 +11,100 @@ import (
 )
 
 // GetDelegates 获取指定区块的受托人集合
+// 统一从区块的 ExtraData 中解析验证者集合
 func (d *DPoS) GetDelegates(blockNumber uint64, parents []*types.Header) (validator.AccountSet, error) {
 	d.lock.RLock()
 	defer d.lock.RUnlock()
 
-	currentBlockNumber := d.blockchain.CurrentHeader().Number
+	return d.getDelegatesInternal(blockNumber, parents)
+}
 
-	// 如果是当前区块，优先返回从runtime.delegates获取的验证者
-	if blockNumber == currentBlockNumber {
-		// 🆕 优先使用 runtime.delegates，如果为空则从数据库读取
-		if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
-			result := d.runtime.delegates.Copy()
-			return result, nil
-		}
+// getDelegatesInternal 内部实现，不加锁（避免递归调用时死锁）
+func (d *DPoS) getDelegatesInternal(blockNumber uint64, parents []*types.Header) (validator.AccountSet, error) {
+	// 获取指定区块的 header
+	var header *types.Header
+	var exists bool
 
-		// 🆕 如果runtime.delegates为空，尝试从数据库读取
-		if d.state != nil && d.state.StakeStore != nil {
-			d.logger.Info("🔍 runtime.delegates为空，尝试从数据库读取验证者")
-			if dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false); err == nil && len(dbValidators) > 0 {
-				d.logger.Info("🔍 从数据库成功读取验证者", "count", len(dbValidators))
-
-				// 🆕 添加详细日志：打印从数据库读取的验证者信息
-				d.logger.Info("🔍 数据库验证者详细信息:")
-				for i, validator := range dbValidators {
-					// 🆕 获取验证者的故障标志信息
-					faultInfo := d.getValidatorFaultInfo(validator.Address)
-
-					d.logger.Info("🔍 数据库验证者",
-						"index", i,
-						"address", validator.Address.String(),
-						"votingPower", validator.VotingPower.String(),
-						"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
-						"isActive", validator.IsActive,
-						"hasBlsKey", validator.BlsKey != nil,
-						"faultFlag", faultInfo) // 🆕 添加故障标志信息
-				}
-
-				return dbValidators, nil
+	// 先从 parents 中查找
+	if len(parents) > 0 {
+		for _, p := range parents {
+			if p.Number == blockNumber {
+				header = p
+				exists = true
+				break
 			}
 		}
-
-		return validator.AccountSet{}, nil
 	}
 
-	// 🆕 已移除数据库读取机制，改为从区块 ExtraData 直接解析
-	d.logger.Info("📝 GetDelegates 获取方式已更新",
-		"requestedBlockNumber", blockNumber,
-		"currentBlockNumber", currentBlockNumber,
-		"method", "从区块ExtraData直接解析",
-		"note", "不再从数据库读取，验证者集合应从区块数据直接获取")
+	// 如果 parents 中没有，从区块链获取
+	if !exists {
+		header, exists = d.blockchain.GetHeaderByNumber(blockNumber)
+		if !exists {
+			return nil, fmt.Errorf("block %d not found", blockNumber)
+		}
+	}
 
-	// 对于历史区块，应该通过区块的 ExtraData 来获取验证者集合
-	// 这里返回错误，提示调用者应该使用 ExtraData 解析方式
-	return nil, fmt.Errorf("GetDelegates for historical block %d is deprecated, use ExtraData parsing instead", blockNumber)
+	// 解析 ExtraData
+	extra, err := GetIbftExtra(header.ExtraData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse ExtraData for block %d: %w", blockNumber, err)
+	}
+
+	// 如果 ExtraData 中有验证者信息，直接使用
+	if extra.Validators != nil && !extra.Validators.IsEmpty() && len(extra.Validators.Added) > 0 {
+		validatorAddresses := extra.Validators.Added
+		productionValidators := make(validator.AccountSet, 0, len(validatorAddresses))
+
+		for _, validatorAddr := range validatorAddresses {
+			// 从创世文件获取BLS公钥
+			blsKey, err := extra.getBLSKeyFromGenesis(validatorAddr.Address, d.logger)
+			if err != nil {
+				// BLS公钥获取失败，继续处理
+			}
+
+			// 构建完整的验证者信息
+			productionValidators = append(productionValidators, &validator.ValidatorMetadata{
+				Address:     validatorAddr.Address,
+				BlsKey:      blsKey,
+				VotingPower: validatorAddr.VotingPower,
+				IsActive:    validatorAddr.IsActive,
+			})
+		}
+
+		return productionValidators, nil
+	}
+
+	// 如果没有验证者信息，需要获取父区块的验证者集合
+	var parentValidators validator.AccountSet
+	if blockNumber > 0 {
+		// 递归获取父区块的验证者集合（通过 parents 参数避免重复获取 header）
+		var err error
+		parentValidators, err = d.getDelegatesInternal(blockNumber-1, parents)
+		if err != nil {
+			// 如果获取父区块验证者失败，尝试从创世获取
+			genesisValidators, err2 := extra.getGenesisValidators(d, d.logger)
+			if err2 != nil {
+				return nil, fmt.Errorf("failed to get parent validators and genesis validators: %w, %w", err, err2)
+			}
+			parentValidators = genesisValidators
+		}
+	} else {
+		// 创世区块，从创世文件获取
+		genesisValidators, err := extra.getGenesisValidators(d, d.logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get genesis validators: %w", err)
+		}
+		return genesisValidators, nil
+	}
+
+	// 如果没有验证者集合变化，直接返回父区块的验证者集合
+	if extra.Validators == nil || extra.Validators.IsEmpty() {
+		return parentValidators, nil
+	}
+
+	// 应用验证者集合变化
+	currentValidators := extra.applyValidatorSetDelta(parentValidators, extra.Validators, d.logger)
+	return currentValidators, nil
 }
 
 // GetDelegatesWithTx 在数据库事务中获取受托人集合
@@ -163,4 +204,3 @@ func (d *DPoS) isValidator(address types.Address) bool {
 	d.logger.Debug("❌ 不是验证者", "address", address.String())
 	return false
 }
-

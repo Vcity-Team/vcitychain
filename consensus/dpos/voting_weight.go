@@ -10,21 +10,21 @@ import (
 
 // getVotersForValidator 获取投票给指定验证者的投票者列表
 func (d *DPoS) getVotersForValidator(validatorAddress types.Address) []*VoterInfo {
-	d.logger.Debug("🔍 获取投票者列表", "validatorAddress", validatorAddress.String())
+	d.logger.Debug("获取投票者列表", "validatorAddress", validatorAddress.String())
 
 	var voters []*VoterInfo
 
-	// 🆕 修复：直接从内存中的d.voters获取数据，而不是从StakingInfo表
+	// 直接从内存中的d.voters获取数据，而不是从StakingInfo表
 	// 因为StakingInfo表从未被写入数据，投票数据实际存储在VoterInfo表中
 	for voterAddress, voterInfo := range d.voters {
-		d.logger.Debug("🔍 检查投票者",
+		d.logger.Debug("检查投票者",
 			"voterAddress", voterAddress.String(),
 			"votedDelegatesCount", len(voterInfo.VotedDelegates),
 			"targetValidator", validatorAddress.String())
 
 		// 检查该投票者是否投票给了目标验证者
 		for i, votedDelegate := range voterInfo.VotedDelegates {
-			d.logger.Debug("🔍 比较验证者地址",
+			d.logger.Debug("比较验证者地址",
 				"voterAddress", voterAddress.String(),
 				"votedDelegateIndex", i,
 				"votedDelegate", votedDelegate.String(),
@@ -40,7 +40,7 @@ func (d *DPoS) getVotersForValidator(validatorAddress types.Address) []*VoterInf
 					LockedUntil:    voterInfo.LockedUntil,
 					Nonce:          voterInfo.Nonce,
 				})
-				d.logger.Debug("✅ 找到投票者",
+				d.logger.Debug("找到投票者",
 					"voterAddress", voterAddress.String(),
 					"votingPower", voterInfo.VotingPower.String(),
 					"targetValidator", validatorAddress.String())
@@ -58,7 +58,7 @@ func (d *DPoS) getVotersForValidator(validatorAddress types.Address) []*VoterInf
 
 // getTotalVotesForValidator 获取投票给指定验证者的总投票权重
 func (d *DPoS) getTotalVotesForValidator(validatorAddress types.Address) *big.Int {
-	d.logger.Debug("🔍 计算总投票权重", "validatorAddress", validatorAddress.String())
+	d.logger.Debug("计算总投票权重", "validatorAddress", validatorAddress.String())
 
 	voters := d.getVotersForValidator(validatorAddress)
 	totalVotes := big.NewInt(0)
@@ -78,9 +78,9 @@ func (d *DPoS) getTotalVotesForValidator(validatorAddress types.Address) *big.In
 	return totalVotes
 }
 
-// getMinVotingThreshold 获取最小投票门槛（类似TRON）
+// getMinVotingThreshold 获取最小投票门槛-可能被提案修改过
 func (d *DPoS) getMinVotingThreshold() *big.Int {
-	// 优先从缓存获取（可能被提案修改过）
+	// 优先从缓存获取
 	d.parameterValuesMutex.RLock()
 	if value, exists := d.parameterCurrentValues["governance_min_voting_threshold"]; exists {
 		if thresholdStr, ok := value.(string); ok {
@@ -172,10 +172,8 @@ func (d *DPoS) GetVotingPowerWithTx(blockNumber uint64, delegate types.Address, 
 	return d.getVotingPowerFromStateWithTx(blockNumber, delegate, dbTx)
 }
 
-// getVotingPowerFromStateWithTx 从状态获取投票权重（带事务）
+// getVotingPowerFromStateWithTx 从状态获取投票权重
 func (d *DPoS) getVotingPowerFromStateWithTx(blockNumber uint64, delegate types.Address, dbTx *bbolt.Tx) (*big.Int, error) {
-	// 🆕 修复：简化实现，避免数据库事务死锁
-	// 直接调用内存版本，避免复杂的数据库操作
 	return d.GetVotingPower(blockNumber, delegate)
 }
 
@@ -194,7 +192,7 @@ func (d *DPoS) getVotingPowerFromDatabase(delegate types.Address) (*big.Int, err
 	// 查找指定验证者的权重
 	for _, validator := range validators {
 		if validator.Address == delegate {
-			d.logger.Debug("🔍 从数据库读取验证者权重",
+			d.logger.Debug("从数据库读取验证者权重",
 				"delegate", delegate.String(),
 				"votingPower", validator.VotingPower.String(),
 				"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
@@ -219,7 +217,7 @@ func (d *DPoS) updateVotingPowerInDatabase(delegate types.Address, newPower *big
 	delegateInfo := &DelegateInfo{
 		Address:        delegate,
 		VotingPower:    new(big.Int).Set(newPower),
-		TotalVotes:     new(big.Int).Set(newPower), // 🆕 修复：初始化TotalVotes字段
+		TotalVotes:     new(big.Int).Set(newPower),
 		ProducedBlocks: 0,
 		MissedBlocks:   0,
 		LastBlockTime:  0,
@@ -237,68 +235,12 @@ func (d *DPoS) updateVotingPowerInDatabase(delegate types.Address, newPower *big
 		return fmt.Errorf("failed to update delegate voting power in database: %w", err)
 	}
 
-	d.logger.Debug("✅ 数据库验证者投票权重更新成功",
+	d.logger.Debug("数据库验证者投票权重更新成功",
 		"delegate", delegate.String(),
 		"newPower", newPower.String(),
 		"newPowerHex", fmt.Sprintf("0x%x", newPower.Bytes()))
 
 	return nil
-}
-
-// updateDelegateVotingPower 更新委托者投票权重（已废弃但保留用于向后兼容）
-func (d *DPoS) updateDelegateVotingPower(delegate types.Address, amount *big.Int) {
-	d.logger.Warn("⚠️ updateDelegateVotingPower已废弃，请使用数据库直接操作",
-		"delegate", delegate.String(),
-		"amount", amount.String(),
-		"note", "此函数保留仅用于向后兼容性")
-
-	// 🆕 检查是否为创世验证者
-	if d.isGenesisValidator(delegate) {
-		d.logger.Info("🔒 创世验证者权重保持不变，跳过更新",
-			"address", delegate.String(),
-			"amount", amount.String(),
-			"note", "创世验证者权重永远不变")
-		return
-	}
-
-	// 🆕 新的实现：直接操作数据库
-	// 1. 从数据库读取当前权重
-	currentPower, err := d.getVotingPowerFromDatabase(delegate)
-	if err != nil {
-		d.logger.Error("❌ 从数据库读取验证者权重失败",
-			"delegate", delegate.String(),
-			"error", err)
-		return
-	}
-
-	// 2. 计算新权重
-	newPower := new(big.Int).Add(currentPower, amount)
-
-	// 3. 直接更新数据库
-	err = d.updateVotingPowerInDatabase(delegate, newPower)
-	if err != nil {
-		d.logger.Error("❌ 更新数据库验证者权重失败",
-			"delegate", delegate.String(),
-			"newPower", newPower.String(),
-			"error", err)
-		return
-	}
-
-	// 4. 数据库更新成功后，同步到内存
-	err = d.syncDelegateFromDatabase(delegate)
-	if err != nil {
-		d.logger.Warn("⚠️ 同步验证者信息到内存失败",
-			"delegate", delegate.String(),
-			"error", err)
-		// 不返回错误，因为数据库更新已经成功
-	}
-
-	d.logger.Info("✅ 验证者投票权重更新完成（数据库直接操作）",
-		"delegate", delegate.String(),
-		"originalPower", currentPower.String(),
-		"addedAmount", amount.String(),
-		"newPower", newPower.String(),
-		"dataSource", "database")
 }
 
 // persistDelegateVotingPower 持久化委托者的投票权重
@@ -307,12 +249,11 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 		return fmt.Errorf("state store not available")
 	}
 
-	d.logger.Info("🔄 persistDelegateVotingPower: 开始持久化验证者投票权重",
+	d.logger.Info("persistDelegateVotingPower: 开始持久化验证者投票权重",
 		"delegate", delegate.String(),
 		"amount", amount.String(),
 		"dataSource", "database")
 
-	// 🆕 新的实现：直接从数据库读取当前权重，不依赖内存数据
 	currentPower, err := d.getVotingPowerFromDatabase(delegate)
 	if err != nil {
 		d.logger.Error("❌ 从数据库读取验证者权重失败",
@@ -321,10 +262,9 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 		return fmt.Errorf("failed to get voting power from database: %w", err)
 	}
 
-	// 🆕 计算新的投票权重
 	newPower := new(big.Int).Add(currentPower, amount)
 
-	// 🆕 检查是否为创世验证者
+	// 检查是否为创世验证者
 	if d.isGenesisValidator(delegate) {
 		fixedVotingPower := new(big.Int)
 		fixedVotingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
@@ -334,7 +274,7 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 			"fixedPower", newPower.String())
 	}
 
-	// 🆕 创建或更新受托人信息，直接使用计算出的新权重
+	// 创建或更新受托人信息，直接使用计算出的新权重
 	delegateInfo := &DelegateInfo{
 		Address:        delegate,
 		VotingPower:    new(big.Int).Set(newPower),
@@ -345,7 +285,7 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 		IsActive:       newPower.Cmp(big.NewInt(0)) > 0,
 	}
 
-	d.logger.Info("🔍 准备保存验证者信息到数据库",
+	d.logger.Info("准备保存验证者信息到数据库",
 		"delegate", delegate.String(),
 		"originalPower", currentPower.String(),
 		"addedAmount", amount.String(),
@@ -353,7 +293,7 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 		"isActive", delegateInfo.IsActive,
 		"dataSource", "database")
 
-	// 🆕 直接保存到数据库
+	// 直接保存到数据库
 	if err := d.state.StakeStore.setDelegateInfo(delegate, delegateInfo, nil); err != nil {
 		d.logger.Error("❌ 保存验证者信息到数据库失败",
 			"delegate", delegate.String(),
@@ -362,7 +302,7 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 		return fmt.Errorf("failed to save delegate info to database: %w", err)
 	}
 
-	d.logger.Info("✅ 验证者信息已成功保存到数据库",
+	d.logger.Info("验证者信息已成功保存到数据库",
 		"delegate", delegate.String(),
 		"newPower", newPower.String(),
 		"isActive", delegateInfo.IsActive,
@@ -370,6 +310,3 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 
 	return nil
 }
-
-
-

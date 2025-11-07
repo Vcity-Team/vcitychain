@@ -66,7 +66,7 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		return errors.New("vote amount below minimum")
 	}
 
-	// 🆕 2. 检查投票者VCITY代币余额和剩余可投票数
+	// 2. 检查投票者VCITY代币余额和剩余可投票数
 	if d.balanceQuerier != nil {
 		balance, err := d.balanceQuerier.GetNativeTokenBalance(vote.Voter)
 		if err != nil {
@@ -104,7 +104,7 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		d.logger.Warn("Balance querier not available, skipping balance check")
 	}
 
-	// 🆕 新增：检查受托人是否已注册
+	// 新增：检查受托人是否已注册
 	d.logger.Info("🔍 开始验证受托人注册状态",
 		"delegate", vote.Delegate.String(),
 		"voter", vote.Voter.String(),
@@ -123,7 +123,7 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		"delegate", vote.Delegate.String(),
 		"voter", vote.Voter.String())
 
-	// 🆕 新增：检查受托人是否为候选人状态（可以接受投票）
+	// 检查受托人是否为候选人状态（可以接受投票）
 	d.logger.Info("🔍 开始验证受托人候选人状态",
 		"delegate", vote.Delegate.String(),
 		"voter", vote.Voter.String())
@@ -137,7 +137,7 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		return fmt.Errorf("delegate %s is not a candidate", vote.Delegate.String())
 	}
 
-	d.logger.Info("✅ 受托人候选人状态验证通过",
+	d.logger.Info(" 受托人候选人状态验证通过",
 		"delegate", vote.Delegate.String(),
 		"voter", vote.Voter.String())
 
@@ -160,7 +160,7 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 	for _, validator := range validators {
 		if validator.Address == vote.Delegate && validator.IsActive {
 			delegateExists = true
-			d.logger.Debug("🔍 从数据库找到活跃受托人",
+			d.logger.Debug(" 从数据库找到活跃受托人",
 				"delegate", vote.Delegate.String(),
 				"votingPower", validator.VotingPower.String(),
 				"isActive", validator.IsActive)
@@ -172,9 +172,9 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 	if !delegateExists {
 		newDelegate := &validator.ValidatorMetadata{
 			Address:     vote.Delegate,
-			BlsKey:      nil,           // 暂时设为nil，后续可以更新
-			VotingPower: big.NewInt(0), // 初始化为0，后续会正确更新
-			IsActive:    false,         // 初始化为false，只有获得投票后才设为true
+			BlsKey:      nil,
+			VotingPower: big.NewInt(0),
+			IsActive:    false, // 初始化为false，只有获得投票后才设为true
 		}
 		d.logger.Debug("Creating delegate record for registered delegate",
 			"delegate", vote.Delegate.String(), "amount", "0")
@@ -182,19 +182,16 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		d.addDelegateSafely(newDelegate)
 	}
 
-	// 3. 检查投票锁定时间（临时跳过用于测试）
+	// 3. 检查投票锁定时间
 	if voter, exists := d.voters[vote.Voter]; exists {
 		d.logger.Debug("🔍 Checking lock status",
 			"currentTime", uint64(time.Now().Unix()),
 			"lockedUntil", voter.LockedUntil,
 			"isLocked", uint64(time.Now().Unix()) < voter.LockedUntil)
 
-		// 临时注释掉锁定检查用于测试
-		/*
-			if uint64(time.Now().Unix()) < voter.LockedUntil {
-				return errors.New("voter is still locked")
-			}
-		*/
+		if uint64(time.Now().Unix()) < voter.LockedUntil {
+			return errors.New("voter is still locked")
+		}
 	}
 
 	// 4. 检查投票权重上限
@@ -246,7 +243,3 @@ func (d *DPoS) checkVoteNonce(vote *VoteMessage) error {
 	}
 	return nil
 }
-
-
-
-

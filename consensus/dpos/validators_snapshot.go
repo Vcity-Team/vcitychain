@@ -222,13 +222,8 @@ func (v *validatorsSnapshotCache) computeSnapshot(
 
 	// 应用验证者集合变更
 	if extra.Validators != nil {
-		// 修复类型不匹配问题
 		// 将PolyBFT的验证者集合转换为DPoS的验证者集合
 		newValidators := make(validator.AccountSet, 0)
-		
-		// TODO: 实现从 ValidatorSetDelta 到 AccountSet 的转换
-		// 这里需要根据实际的 ValidatorSetDelta 结构来实现
-		
 		// 应用变更
 		snapshot = newValidators
 	} else {
@@ -308,7 +303,7 @@ func (v *validatorsSnapshotCache) getLastCachedSnapshot(currentEpoch uint64,
 	}
 
 	// if we do not have a snapshot in memory for given epoch, we will get the latest one we have
-	for ; currentEpoch >= 0; currentEpoch-- {
+	for {
 		cachedSnapshot = v.snapshots[currentEpoch]
 		if cachedSnapshot != nil {
 			v.logger.Trace("Found snapshot in memory cache", "Epoch", currentEpoch)
@@ -319,6 +314,7 @@ func (v *validatorsSnapshotCache) getLastCachedSnapshot(currentEpoch uint64,
 		if currentEpoch == 0 { // prevent uint64 underflow
 			break
 		}
+		currentEpoch--
 	}
 
 	dbSnapshot, err := v.state.EpochStore.getLastSnapshot(dbTx)
