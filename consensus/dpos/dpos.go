@@ -31,43 +31,49 @@ import (
 )
 
 // 🆕 全局DPoS实例注册表，用于BLS公钥持久化
+// 注意：这个全局变量将在重构后通过InstanceManager管理
 var (
 	dposInstances = make(map[string]*DPoS)
 	dposMutex     sync.RWMutex
 	// ErrBusinessInvalid 标识业务前置条件不满足的非共识性错误（用于不中断区块执行）
 	ErrBusinessInvalid = errors.New("business invalid")
+
+	// 🆕 全局实例管理器（替代全局变量）
+	// 注意：这里需要延迟初始化，因为NewInstanceManager在core/instance_manager.go中定义
+	globalInstanceManager InstanceManager
 )
 
-// RegisterDPoSInstance 注册DPoS实例
+// init 初始化全局实例管理器
+func init() {
+	globalInstanceManager = NewInstanceManager()
+}
+
+// RegisterDPoSInstance 注册DPoS实例（向后兼容）
 func RegisterDPoSInstance(key string, dpos *DPoS) {
+	if globalInstanceManager == nil {
+		globalInstanceManager = NewInstanceManager()
+	}
+	globalInstanceManager.Register(key, dpos)
+	// 同时注册到旧全局变量（向后兼容）
 	dposMutex.Lock()
 	defer dposMutex.Unlock()
 	dposInstances[key] = dpos
 }
 
-// GetDPoSInstance 获取DPoS实例
+// GetDPoSInstance 获取DPoS实例（向后兼容）
 func GetDPoSInstance(key string) (*DPoS, bool) {
-	dposMutex.RLock()
-	defer dposMutex.RUnlock()
-	dpos, exists := dposInstances[key]
-	return dpos, exists
+	return globalInstanceManager.Get(key)
 }
 
-// GetAllDPoSInstances 获取所有DPoS实例
+// GetAllDPoSInstances 获取所有DPoS实例（向后兼容）
 func GetAllDPoSInstances() map[string]*DPoS {
-	dposMutex.RLock()
-	defer dposMutex.RUnlock()
-
-	// 创建副本以避免外部修改
-	result := make(map[string]*DPoS)
-	for key, instance := range dposInstances {
-		result[key] = instance
-	}
-	return result
+	return globalInstanceManager.GetAll()
 }
 
-// UnregisterDPoSInstance 注销DPoS实例
+// UnregisterDPoSInstance 注销DPoS实例（向后兼容）
 func UnregisterDPoSInstance(key string) {
+	globalInstanceManager.Unregister(key)
+	// 同时从旧全局变量删除（向后兼容）
 	dposMutex.Lock()
 	defer dposMutex.Unlock()
 	delete(dposInstances, key)
@@ -224,6 +230,19 @@ type DPoS struct {
 
 	// 网络组件
 	consensusTopic *network.Topic
+
+	// 🆕 服务层 - 业务逻辑通过服务层管理
+	blockService      BlockService
+	validatorService  ValidatorService
+	votingService     VotingService
+	governanceService GovernanceService
+	rewardService     RewardService
+
+	// 🆕 状态管理器
+	stateManager StateManager
+
+	// 🆕 实例管理器（替代全局变量）
+	instanceManager InstanceManager
 
 	// 状态管理
 	delegates    validator.AccountSet
@@ -1134,7 +1153,62 @@ func (d *DPoS) Initialize() error {
 		return fmt.Errorf("failed to setup network integration: %w", err)
 	}
 
+	// 🆕 初始化服务层
+	if err := d.initializeServices(); err != nil {
+		return fmt.Errorf("failed to initialize services: %w", err)
+	}
+
 	return nil
+}
+
+// initializeServices 初始化服务层
+func (d *DPoS) initializeServices() error {
+	d.logger.Info("🔧 开始初始化服务层...")
+
+	// 初始化状态管理器
+	if d.state != nil {
+		// 使用infrastructure/state包中的NewStateManager
+		// 由于包结构问题，暂时直接创建
+		d.stateManager = NewStateManagerFromState(d.state)
+		d.logger.Info("✅ 状态管理器初始化完成")
+	}
+
+	// 初始化实例管理器
+	d.instanceManager = globalInstanceManager
+
+	// 初始化验证者服务
+	if d.stateManager != nil {
+		d.validatorService = NewValidatorService(d, d.stateManager)
+		d.logger.Info("✅ 验证者服务初始化完成")
+	}
+
+	// 初始化投票服务
+	if d.stateManager != nil {
+		d.votingService = NewVotingService(d, d.stateManager)
+		d.logger.Info("✅ 投票服务初始化完成")
+	}
+
+	// 初始化治理服务
+	d.governanceService = NewGovernanceService(d)
+	d.logger.Info("✅ 治理服务初始化完成")
+
+	// 初始化奖励服务
+	d.rewardService = NewRewardService(d)
+	d.logger.Info("✅ 奖励服务初始化完成")
+
+	// 初始化区块服务（需要runtime，在runtime初始化后）
+	if d.runtime != nil {
+		d.blockService = NewBlockService(d)
+		d.logger.Info("✅ 区块服务初始化完成")
+	}
+
+	d.logger.Info("✅ 服务层初始化完成")
+	return nil
+}
+
+// NewStateManagerFromState 从State创建StateManager
+func NewStateManagerFromState(state *State) StateManager {
+	return NewStateManager(state)
 }
 
 // 🆕 新增：从创世块解析DPoS验证者
@@ -1397,6 +1471,31 @@ func (d *DPoS) GetCurrentDelegate() types.Address {
 	}
 
 	return types.ZeroAddress
+}
+
+// GetValidatorDetail 获取指定区块号的验证者详情（用于WriteBlock日志）
+// 返回一个 map，包含所有验证者详情字段，避免循环依赖
+func (d *DPoS) GetValidatorDetail(blockNumber uint64) map[string]interface{} {
+	if d.blockScheduler != nil {
+		// detail := d.blockScheduler.GetLastValidatorDetail(blockNumber) // 方法不存在，暂时注释
+		// TODO: 实现GetLastValidatorDetail方法或使用其他方式获取验证者详情
+		// 暂时返回空map
+		return map[string]interface{}{
+			"blockNumber": blockNumber,
+			// TODO: 实现GetLastValidatorDetail方法后恢复这些字段
+			// "currentSlot":          detail.CurrentSlot,
+			// "activeValidatorCount": detail.ActiveValidatorCount,
+			// "myAddress":            detail.MyAddress,
+			// "expectedValidator":    detail.ExpectedValidator,
+			// "isMatch":              detail.IsMatch,
+			// "genesisTime":          detail.GenesisTime,
+			// "now":                  detail.Now,
+			// "timeSinceGenesis":     detail.TimeSinceGenesis,
+			// "blockWindow":          detail.BlockWindow,
+			// "validatorsList":       detail.ValidatorsList,
+		}
+	}
+	return nil
 }
 
 // GetVoters returns the current voters map for external access
