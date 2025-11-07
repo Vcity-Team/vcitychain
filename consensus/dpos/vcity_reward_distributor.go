@@ -11,8 +11,8 @@ import (
 	hclog "github.com/hashicorp/go-hclog"
 )
 
-// TronRewardDistributor TRON模式奖励分发器
-type TronRewardDistributor struct {
+// VcityRewardDistributor 奖励分发器
+type VcityRewardDistributor struct {
 	state          *state.Txn
 	rewardAccount  types.Address
 	rewardAmount   *big.Int
@@ -22,8 +22,8 @@ type TronRewardDistributor struct {
 	logger         hclog.Logger
 }
 
-// NewTronRewardDistributor 创建TRON模式奖励分发器
-func NewTronRewardDistributor(
+// NewVcityRewardDistributor 创建 VCITY 模式奖励分发器
+func NewVcityRewardDistributor(
 	state *state.Txn,
 	rewardAccount types.Address,
 	rewardAmount *big.Int,
@@ -31,8 +31,8 @@ func NewTronRewardDistributor(
 	voterRatio uint64,
 	blockTracker *BlockProductionTracker,
 	logger hclog.Logger,
-) *TronRewardDistributor {
-	return &TronRewardDistributor{
+) *VcityRewardDistributor {
+	return &VcityRewardDistributor{
 		state:          state,
 		rewardAccount:  rewardAccount,
 		rewardAmount:   rewardAmount,
@@ -43,13 +43,13 @@ func NewTronRewardDistributor(
 	}
 }
 
-// DistributeEpochRewards 分发Epoch奖励（TRON模式）
-func (trd *TronRewardDistributor) DistributeEpochRewards(
+// DistributeEpochRewards 分发Epoch奖励
+func (trd *VcityRewardDistributor) DistributeEpochRewards(
 	epochNumber uint64,
 	validators validator.AccountSet,
 	voters map[types.Address]*VoterInfo,
 ) error {
-	trd.logger.Info("🚀 ========== 开始分发Epoch奖励（TRON模式）==========",
+	trd.logger.Info("========== 开始分发Epoch奖励==========",
 		"epoch", epochNumber,
 		"rewardAccount", trd.rewardAccount.String(),
 		"totalReward", trd.rewardAmount.String(),
@@ -75,14 +75,14 @@ func (trd *TronRewardDistributor) DistributeEpochRewards(
 	totalVotingPower := trd.calculateTotalVotingPower(voters)
 
 	// 4. 计算奖励分配
-	rewards := trd.calculateTronRewards(validators, voters, blockCounts, totalBlocks, totalVotingPower)
+	rewards := trd.calculateVcityRewards(validators, voters, blockCounts, totalBlocks, totalVotingPower)
 
 	// 5. 批量状态更新
 	return trd.batchUpdateBalances(rewards, epochNumber)
 }
 
 // calculateTotalVotingPower 计算总投票权重
-func (trd *TronRewardDistributor) calculateTotalVotingPower(voters map[types.Address]*VoterInfo) *big.Int {
+func (trd *VcityRewardDistributor) calculateTotalVotingPower(voters map[types.Address]*VoterInfo) *big.Int {
 	totalPower := big.NewInt(0)
 	for _, voter := range voters {
 		totalPower.Add(totalPower, voter.VotingPower)
@@ -90,8 +90,8 @@ func (trd *TronRewardDistributor) calculateTotalVotingPower(voters map[types.Add
 	return totalPower
 }
 
-// calculateTronRewards 计算TRON模式奖励
-func (trd *TronRewardDistributor) calculateTronRewards(
+// calculateVcityRewards 计算VCITY模式奖励
+func (trd *VcityRewardDistributor) calculateVcityRewards(
 	validators validator.AccountSet,
 	voters map[types.Address]*VoterInfo,
 	blockCounts map[types.Address]uint64,
@@ -104,7 +104,7 @@ func (trd *TronRewardDistributor) calculateTronRewards(
 	validatorReward := new(big.Int).Mul(trd.rewardAmount, big.NewInt(int64(trd.validatorRatio)))
 	validatorReward.Div(validatorReward, big.NewInt(100))
 
-	trd.logger.Info("🏭 计算验证者奖励",
+	trd.logger.Info("计算验证者奖励",
 		"validatorRatio", trd.validatorRatio,
 		"validatorReward", validatorReward.String())
 
@@ -116,7 +116,7 @@ func (trd *TronRewardDistributor) calculateTronRewards(
 				reward.Div(reward, big.NewInt(int64(totalBlocks)))
 				rewards[validator.Address] = reward
 
-				trd.logger.Debug("🏭 验证者奖励",
+				trd.logger.Debug("验证者奖励",
 					"validator", validator.Address.String(),
 					"blocksProduced", blocksProduced,
 					"totalBlocks", totalBlocks,
@@ -129,7 +129,7 @@ func (trd *TronRewardDistributor) calculateTronRewards(
 	voterReward := new(big.Int).Mul(trd.rewardAmount, big.NewInt(int64(trd.voterRatio)))
 	voterReward.Div(voterReward, big.NewInt(100))
 
-	trd.logger.Info("🗳️ 计算投票者奖励",
+	trd.logger.Info("计算投票者奖励",
 		"voterRatio", trd.voterRatio,
 		"voterReward", voterReward.String())
 
@@ -140,7 +140,7 @@ func (trd *TronRewardDistributor) calculateTronRewards(
 				reward.Div(reward, totalVotingPower)
 				rewards[staker] = reward
 
-				trd.logger.Debug("🗳️ 投票者奖励",
+				trd.logger.Debug("投票者奖励",
 					"staker", staker.String(),
 					"votingPower", voter.VotingPower.String(),
 					"totalVotingPower", totalVotingPower.String(),
@@ -153,7 +153,7 @@ func (trd *TronRewardDistributor) calculateTronRewards(
 }
 
 // batchUpdateBalances 批量更新余额
-func (trd *TronRewardDistributor) batchUpdateBalances(
+func (trd *VcityRewardDistributor) batchUpdateBalances(
 	rewards map[types.Address]*big.Int,
 	epochNumber uint64,
 ) error {
@@ -170,7 +170,7 @@ func (trd *TronRewardDistributor) batchUpdateBalances(
 			totalDistributed.Add(totalDistributed, amount)
 			distributionCount++
 
-			trd.logger.Debug("💸 分发奖励",
+			trd.logger.Debug("分发奖励",
 				"recipient", recipient.String(),
 				"amount", amount.String())
 		}
@@ -181,7 +181,7 @@ func (trd *TronRewardDistributor) batchUpdateBalances(
 		return fmt.Errorf("failed to deduct from reward account: %w", err)
 	}
 
-	trd.logger.Info("✅ Epoch奖励分发完成（TRON模式）",
+	trd.logger.Info("Epoch奖励分发完成",
 		"epoch", epochNumber,
 		"recipients", distributionCount,
 		"totalDistributed", totalDistributed.String(),
@@ -189,3 +189,4 @@ func (trd *TronRewardDistributor) batchUpdateBalances(
 
 	return nil
 }
+

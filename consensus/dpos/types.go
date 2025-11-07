@@ -33,7 +33,6 @@ type BatchProcessor struct {
 	batchTimeout  time.Duration
 	workerCount   int
 	stopCh        chan struct{}
-	workers       []chan struct{}
 	wg            sync.WaitGroup
 }
 
@@ -128,7 +127,7 @@ type StakeInfo struct {
 	IsActive  bool                   `json:"isActive"`
 	Rewards   *big.Int               `json:"rewards"`
 	Delegate  types.Address          `json:"delegate"`
-	FaultFlag map[string]interface{} `json:"faultFlag,omitempty"` // 🆕 故障标志信息：isFaulty, missedBlocks, reason
+	FaultFlag map[string]interface{} `json:"faultFlag,omitempty"` // 故障标志信息：isFaulty, missedBlocks, reason
 }
 
 // 🆕 参数表决相关数据结构
@@ -136,26 +135,26 @@ type StakeInfo struct {
 // ParameterProposal 参数表决提案结构
 type ParameterProposal struct {
 	ID            string                          `json:"id"`
-	ProposalType  string                          `json:"proposalType"`  // 🆕 提案类型："parameter" 或 "validator_recovery"
+	ProposalType  string                          `json:"proposalType"`  // 提案类型："parameter" 或 "validator_recovery"
 	Parameter     string                          `json:"parameter"`     // 参数名（parameter类型）或验证者地址（recovery类型）
 	OldValue      interface{}                     `json:"oldValue"`      // 当前值
-	NewValue      interface{}                     `json:"newValue"`     // 提议值
+	NewValue      interface{}                     `json:"newValue"`      // 提议值
 	Proposer      types.Address                   `json:"proposer"`      // 提案者
 	StartBlock    uint64                          `json:"startBlock"`    // 投票开始区块
 	EndBlock      uint64                          `json:"endBlock"`      // 投票结束区块（表决期结束）
-	ValidEndBlock uint64                          `json:"validEndBlock"` // 🆕 有效期结束区块
+	ValidEndBlock uint64                          `json:"validEndBlock"` // 有效期结束区块
 	Status        ProposalStatus                  `json:"status"`        // 提案状态
 	Votes         map[types.Address]ParameterVote `json:"votes"`         // 投票记录
 	Threshold     uint64                          `json:"threshold"`     // 通过阈值(百分比)
 	Description   string                          `json:"description"`   // 提案描述
 	CreatedAt     uint64                          `json:"createdAt"`     // 创建时间
-	// 🆕 Recovery专用字段
+	// Recovery专用字段
 	ValidatorAddress  types.Address `json:"validatorAddress,omitempty"`  // 要恢复的验证者地址
 	RecoveryReason    string        `json:"recoveryReason,omitempty"`    // 恢复理由
 	ExecutedAt        uint64        `json:"executedAt,omitempty"`        // 执行时间
 	ExecutedBy        string        `json:"executedBy,omitempty"`        // 执行者（提案ID）
-	ProposalSignature []byte        `json:"proposalSignature,omitempty"` // 🆕 提案创建签名
-	// 🆕 调度与生效元数据（持久化）
+	ProposalSignature []byte        `json:"proposalSignature,omitempty"` // 提案创建签名
+	// 调度与生效元数据（持久化）
 	Schedule ProposalScheduleMeta `json:"schedule,omitempty"`
 }
 
@@ -198,8 +197,7 @@ type ParameterVote struct {
 	Signature  []byte        `json:"signature"` // 投票签名
 }
 
-// 🆕 提案交易数据结构
-// ProposalCreateTxData 创建提案交易数据
+// 提案交易数据结构
 type ProposalCreateTxData struct {
 	ProposalType      string      `json:"proposalType"`             // "parameter" 或 "validator_recovery"
 	Parameter         string      `json:"parameter"`                // 参数名或验证者地址
@@ -210,10 +208,9 @@ type ProposalCreateTxData struct {
 	CreatedAt         uint64      `json:"createdAt"`                // 签名时间戳（用于验签一致性）
 }
 
-// 🆕 提案调度与生效元数据（持久化在 Proposal 中）
-// 当执行提案时，不立即应用影响出块者集合的变化（如清除故障），而是登记在此，等待下个 epoch 边界统一生效
+// 提案调度与生效元数据（持久化在 Proposal 中）
 type ProposalScheduleMeta struct {
-	// 是否已安排在边界生效
+	// 是否已安排在边界生效-当执行提案时，不立即应用影响出块者集合的变化（如清除故障），而是登记在此，等待下个 epoch 边界统一生效
 	Scheduled bool `json:"scheduled"`
 	// 生效的目标 epoch
 	EffectiveEpoch uint64 `json:"effectiveEpoch"`
@@ -238,13 +235,13 @@ type ProposalExecuteTxData struct {
 // DelegateRegistration 受托人注册信息（改进的TRON风格）
 type DelegateRegistration struct {
 	Address      types.Address `json:"address"`      // 受托人地址
-	Name         string        `json:"name"`       // 受托人名称
-	Website      string        `json:"website"`     // 官方网站
+	Name         string        `json:"name"`         // 受托人名称
+	Website      string        `json:"website"`      // 官方网站
 	Description  string        `json:"description"`  // 描述信息
-	Deposit      *big.Int      `json:"deposit"`     // 保证金（可退还）
-	Status       RegStatus     `json:"status"`      // 注册状态
-	CreatedAt    uint64        `json:"createdAt"`   // 申请时间
-	TotalVotes   *big.Int      `json:"totalVotes"`  // 总投票数
+	Deposit      *big.Int      `json:"deposit"`      // 保证金（可退还）
+	Status       RegStatus     `json:"status"`       // 注册状态
+	CreatedAt    uint64        `json:"createdAt"`    // 申请时间
+	TotalVotes   *big.Int      `json:"totalVotes"`   // 总投票数
 	IsActive     bool          `json:"isActive"`     // 是否为活跃受托人
 	LastVoteTime uint64        `json:"lastVoteTime"` // 最后投票时间
 }
@@ -294,7 +291,7 @@ type ParameterInfo struct {
 	MaxValue     interface{} `json:"maxValue"`
 	Description  string      `json:"description"`
 	Category     string      `json:"category"`     // 参数分类：economic, network, consensus等
-	CurrentValue interface{} `json:"currentValue"` // 🆕 当前值（移除omitempty）
+	CurrentValue interface{} `json:"currentValue"` // 当前值（移除omitempty）
 }
 
 // VoterInfo 投票者信息结构
@@ -318,7 +315,7 @@ type DelegateInfo struct {
 	IsActive         bool                  `json:"isActive"`
 	IsRegistered     bool                  `json:"isRegistered"`     // 是否已注册
 	RegistrationInfo *DelegateRegistration `json:"registrationInfo"` // 注册信息
-	// 🆕 新增：BLS公钥，确保签名验证一致性
+
 	BlsPublicKey []byte `json:"blsPublicKey"`
 }
 

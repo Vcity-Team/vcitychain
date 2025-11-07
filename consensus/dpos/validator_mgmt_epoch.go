@@ -1,39 +1,12 @@
 package dpos
 
 import (
-	"time"
+	"os"
 )
-
-// isEpochEndBlock 检查是否是epoch最后一个区块
-func (d *DPoS) isEpochEndBlock(blockNumber uint64) bool {
-	currentEpoch := d.getEpochForBlock(blockNumber)
-	if currentEpoch == nil {
-		d.logger.Warn("⚠️ 无法获取当前epoch信息", "blockNumber", blockNumber)
-		return false
-	}
-
-	epochSize := d.getEpochSize()
-
-	isEpochEnd := currentEpoch.FirstBlockInEpoch+epochSize-1 == blockNumber
-
-	d.logger.Debug("🔍 检查是否是epoch最后一个区块",
-		"blockNumber", blockNumber,
-		"epochNumber", currentEpoch.Number,
-		"firstBlockInEpoch", currentEpoch.FirstBlockInEpoch,
-		"epochSize", epochSize,
-		"isEpochEnd", isEpochEnd)
-
-	return isEpochEnd
-}
-
-// getCurrentEpoch 获取当前epoch信息
-func (d *DPoS) getCurrentEpoch() *epochMetadata {
-	return d.getEpochForBlock(0) // 0表示使用当前区块号
-}
 
 // getEpochForBlock 获取指定区块号的epoch信息
 func (d *DPoS) getEpochForBlock(blockNumber uint64) *epochMetadata {
-	// 🆕 修改：基于指定区块号计算epoch
+	// 基于指定区块号计算epoch
 	targetBlockNumber := blockNumber
 	if blockNumber == 0 {
 		// 如果传入0，则使用当前区块号
@@ -57,7 +30,7 @@ func (d *DPoS) getEpochForBlock(blockNumber uint64) *epochMetadata {
 	if targetBlockNumber < consensusSwitchHeight {
 		// 在共识切换高度之前，epoch为0
 		return &epochMetadata{
-			Number:           0,
+			Number:            0,
 			FirstBlockInEpoch: 0,
 		}
 	}
@@ -71,7 +44,7 @@ func (d *DPoS) getEpochForBlock(blockNumber uint64) *epochMetadata {
 	// 计算该epoch的第一个区块号
 	firstBlockInEpoch := consensusSwitchHeight + (epochNumber-1)*epochSize
 
-	d.logger.Debug("🔍 计算epoch信息",
+	d.logger.Debug(" 计算epoch信息",
 		"targetBlockNumber", targetBlockNumber,
 		"consensusSwitchHeight", consensusSwitchHeight,
 		"dposBlockNumber", dposBlockNumber,
@@ -80,7 +53,7 @@ func (d *DPoS) getEpochForBlock(blockNumber uint64) *epochMetadata {
 		"firstBlockInEpoch", firstBlockInEpoch)
 
 	return &epochMetadata{
-		Number:           epochNumber,
+		Number:            epochNumber,
 		FirstBlockInEpoch: firstBlockInEpoch,
 	}
 }
@@ -97,22 +70,25 @@ func (d *DPoS) getEpochSize() uint64 {
 	blockTime := d.config.BlockTime.Duration
 
 	if blockTime == 0 {
-		d.logger.Warn("⚠️ BlockTime为0，使用默认值2秒")
-		blockTime = 2 * time.Second
+		d.logger.Error("💀 blockTime大小为0，这是严重配置错误，程序将立即退出",
+			"blockTime", blockTime)
+		os.Exit(1)
 	}
 
 	if epochDuration == 0 {
-		d.logger.Warn("⚠️ EpochDuration为0，使用默认值10秒")
-		epochDuration = 10 * time.Second
+		d.logger.Error("💀 epochDuration大小为0，这是严重配置错误，程序将立即退出",
+			"epochDuration", epochDuration)
+		os.Exit(1)
 	}
 
 	epochSize := uint64(epochDuration / blockTime)
 
 	if epochSize == 0 {
-		d.logger.Warn("⚠️ 计算出的epoch大小为0，使用默认值5")
-		epochSize = 5
+		d.logger.Error("💀 计算出的epoch大小为0，这是严重配置错误，程序将立即退出",
+			"epochDuration", epochDuration,
+			"blockTime", blockTime)
+		os.Exit(1)
 	}
 
 	return epochSize
 }
-

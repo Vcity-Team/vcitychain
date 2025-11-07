@@ -6,11 +6,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"os"
 	"sort"
 	"time"
 
-	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
+	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/types"
 	"go.etcd.io/bbolt"
 )
@@ -19,42 +20,38 @@ import (
 func (d *DPoS) initializeDelegates() error {
 	d.delegates = make(validator.AccountSet, 0, d.config.DelegateCount)
 
-	// 🆕 初始化故障检测相关字段
+	// 初始化故障检测相关字段
 	d.faultyValidators = make(map[types.Address]bool)
 	d.missedBlocksCount = make(map[types.Address]uint64)
 	d.currentEpoch = 0
 
-	// 🆕 显著日志：显示当前配置
-	d.logger.Debug("🚀 ===== DPoS验证者初始化开始 =====")
-	d.logger.Debug("📋 当前配置信息",
+	d.logger.Debug(" DPoS验证者初始化开始，当前配置信息",
 		"configDelegateCount", d.config.DelegateCount,
 		"initialDelegatesCount", len(d.config.InitialDelegates),
 		"dposValidatorsCount", d.config.DPoSValidatorsCount,
 		"backupValidatorsCount", d.config.BackupValidatorsCount,
 		"maxMissedBlocks", d.config.MaxMissedBlocks)
 
-	// 🆕 首先尝试从数据库读取受托人（真正用于出块）
+	// 首先尝试从数据库读取受托人（真正用于出块）
 	if d.state != nil && d.state.StakeStore != nil {
-		d.logger.Info("🔍 开始从数据库读取验证者信息...")
-		// 🆕 使用公共函数获取排序和限制后的验证者（包含故障过滤）
+		d.logger.Info(" 开始从数据库读取验证者信息...")
+		// 使用公共函数获取排序和限制后的验证者（包含故障过滤）
 		dbValidators, err := d.GetSortedValidatorsWithLimit()
 		if err != nil {
 			d.logger.Warn("⚠️ 从数据库读取受托人失败，将使用创世文件", "error", err)
 		} else if len(dbValidators) > 0 {
-			d.logger.Info("✅ 从数据库成功读取验证者", "count", len(dbValidators))
+			d.logger.Info(" 从数据库成功读取验证者", "count", len(dbValidators))
 
-			// 🆕 显著日志：显示数据库验证者详细信息
-			d.logger.Info("📊 数据库验证者详细信息:")
 			for i, validator := range dbValidators {
-				d.logger.Info("👤 验证者信息",
+				d.logger.Info(" 数据库读取的验证者信息",
 					"index", i+1,
 					"address", validator.Address.String(),
 					"votingPower", validator.VotingPower.String(),
 					"isActive", validator.IsActive)
 			}
 
-			// 🆕 按权重倒序排序
-			d.logger.Info("🔄 开始按权重倒序排序验证者...")
+			// 按权重倒序排序
+			d.logger.Info(" 开始按权重倒序排序验证者...")
 			sort.Slice(dbValidators, func(i, j int) bool {
 				// 1. 首先按票数降序排序
 				votingPowerCmp := dbValidators[i].VotingPower.Cmp(dbValidators[j].VotingPower)
@@ -65,7 +62,6 @@ func (d *DPoS) initializeDelegates() error {
 				return bytes.Compare(dbValidators[i].Address[:], dbValidators[j].Address[:]) < 0
 			})
 
-			// 🆕 显著日志：显示排序后的验证者
 			d.logger.Info("📈 排序后的验证者列表:")
 			for i, validator := range dbValidators {
 				d.logger.Info("🏆 排序后验证者",
@@ -74,24 +70,23 @@ func (d *DPoS) initializeDelegates() error {
 					"votingPower", validator.VotingPower.String())
 			}
 
-			// 🆕 显著日志：显示截取逻辑
 			maxDelegates := int(d.config.DPoSValidatorsCount)
 			if maxDelegates == 0 {
 				maxDelegates = int(d.config.DelegateCount) // 回退到旧配置
 			}
 			originalCount := len(dbValidators)
 
-			d.logger.Info("🎯 ===== 验证者截取逻辑 =====")
-			d.logger.Info("📊 截取前统计",
+			d.logger.Info("===== 验证者截取逻辑 =====")
+			d.logger.Info("截取前统计",
 				"配置的最大验证者数量", maxDelegates,
 				"数据库中的验证者数量", originalCount)
 
 			if originalCount <= maxDelegates {
-				d.logger.Info("✅ 数据库验证者数量 <= 配置数量，取全部验证者",
+				d.logger.Info("数据库验证者数量 <= 配置数量，取全部验证者",
 					"取用数量", originalCount,
 					"配置数量", maxDelegates)
 			} else {
-				d.logger.Info("✂️ 数据库验证者数量 > 配置数量，截取前N个",
+				d.logger.Info("数据库验证者数量 > 配置数量，截取前N个",
 					"截取前", maxDelegates,
 					"原始数量", originalCount,
 					"截取后", maxDelegates)
@@ -112,7 +107,7 @@ func (d *DPoS) initializeDelegates() error {
 	}
 
 	// 如果数据库没有，尝试从创世块解析
-	d.logger.Info("🔍 开始从创世块解析验证者...")
+	d.logger.Info(" 开始从创世块解析验证者...")
 	if err := d.parseValidatorsFromGenesis(); err != nil {
 		d.logger.Warn("⚠️ 从创世块解析验证者失败", "error", err)
 		// 如果创世块也失败，使用配置中的初始验证者
@@ -131,19 +126,19 @@ func (d *DPoS) initializeDelegates() error {
 		}
 	}
 
-	d.logger.Info("✅ 验证者初始化完成", "count", len(d.delegates))
+	d.logger.Info(" 验证者初始化完成", "count", len(d.delegates))
 	return nil
 }
 
-// addDelegateSafely 安全地添加受托人（检查重复）
+// addDelegateSafely 安全地添加受托人
 func (d *DPoS) addDelegateSafely(newDelegate *validator.ValidatorMetadata) {
 	// 检查是否已存在相同地址的验证者
 	for i, existingDelegate := range d.delegates {
 		if existingDelegate.Address == newDelegate.Address {
-			// 累计权重 - 修复：使用正确的加法方式
+			// 累计权重
 			oldPower := new(big.Int).Set(existingDelegate.VotingPower)
 			existingDelegate.VotingPower = new(big.Int).Add(existingDelegate.VotingPower, newDelegate.VotingPower)
-			d.logger.Warn("🔄 发现重复验证者地址，累计权重",
+			d.logger.Warn("发现重复验证者地址，累计权重",
 				"address", newDelegate.Address.String(),
 				"originalVotingPower", newDelegate.VotingPower.String(),
 				"oldPower", oldPower.String(),
@@ -155,7 +150,7 @@ func (d *DPoS) addDelegateSafely(newDelegate *validator.ValidatorMetadata) {
 
 	// 如果没有重复，直接添加
 	d.delegates = append(d.delegates, newDelegate)
-	d.logger.Debug("✅ 添加新验证者",
+	d.logger.Debug(" 添加新验证者",
 		"address", newDelegate.Address.String(),
 		"votingPower", newDelegate.VotingPower.String(),
 		"isActive", newDelegate.IsActive,
@@ -187,18 +182,18 @@ func (d *DPoS) getGenesisValidators() validator.AccountSet {
 		validators = append(validators, validatorMetadata)
 	}
 
-	d.logger.Debug("✅ 创世验证者集合创建完成", "count", len(validators))
+	d.logger.Debug(" 创世验证者集合创建完成", "count", len(validators))
 	return validators
 }
 
 // getDelegatesFromState 从状态获取历史验证者集合
 func (d *DPoS) getDelegatesFromState(blockNumber uint64) (validator.AccountSet, error) {
-	d.logger.Debug("🔍 ===== 开始获取历史验证者集合 =====",
+	d.logger.Debug("===== 开始获取历史验证者集合 =====",
 		"blockNumber", blockNumber,
 		"stateIsNil", d.state == nil,
 		"stakeStoreIsNil", d.state != nil && d.state.StakeStore == nil)
 
-	// 🆕 新增：检查是否在共识切换高度之前，如果是则跳过历史验证者集合获取
+	// 检查是否在共识切换高度之前，如果是则跳过历史验证者集合获取
 	if d.config.ConsensusSwitchHeight > 0 && blockNumber < d.config.ConsensusSwitchHeight {
 		d.logger.Debug("🔄 区块在共识切换高度之前，跳过历史验证者集合获取",
 			"blockNumber", blockNumber,
@@ -209,7 +204,7 @@ func (d *DPoS) getDelegatesFromState(blockNumber uint64) (validator.AccountSet, 
 		return d.getGenesisValidators(), nil
 	}
 
-	// 🆕 关键修复：首先尝试从历史数据获取验证者集合
+	// 首先尝试从历史数据获取验证者集合
 	if d.state != nil && d.state.StakeStore != nil {
 		d.logger.Debug("🔍 开始数据库事务", "blockNumber", blockNumber)
 
@@ -266,56 +261,14 @@ func (d *DPoS) getDelegatesFromState(blockNumber uint64) (validator.AccountSet, 
 	}
 
 	// 如果数据库没有，返回创世验证者集合
-	d.logger.Debug("🔄 数据库中没有历史验证者集合，返回创世验证者",
+	d.logger.Debug("数据库中没有历史验证者集合，返回创世验证者",
 		"blockNumber", blockNumber)
 	return d.getGenesisValidators(), nil
 }
 
-// getDelegatesFromStateWithTx 从状态获取历史验证者集合（带事务）
+// getDelegatesFromStateWithTx 从状态获取历史验证者集合
 func (d *DPoS) getDelegatesFromStateWithTx(blockNumber uint64, dbTx *bbolt.Tx) (validator.AccountSet, error) {
-	// 🆕 修复：简化实现，避免数据库事务死锁
-	// 直接调用内存版本，避免复杂的数据库操作
 	return d.getDelegatesFromState(blockNumber)
-}
-
-// updateValidatorStatus 更新验证者状态
-func (d *DPoS) updateValidatorStatus(address types.Address, newStake *big.Int) error {
-	d.lock.Lock()
-	defer d.lock.Unlock()
-
-	for _, delegate := range d.delegates {
-		if delegate.Address == address {
-			oldActive := delegate.IsActive
-			oldStake := delegate.VotingPower
-			delegate.VotingPower = new(big.Int).Set(newStake)
-
-			// 关键：根据新stake更新活跃状态
-			if newStake.Cmp(big.NewInt(0)) > 0 {
-				delegate.IsActive = true // 有stake了，变为活跃
-			} else {
-				delegate.IsActive = false // stake为0，变为不活跃
-			}
-
-			// 记录状态变化
-			if oldActive != delegate.IsActive {
-				d.logger.Info("validator status changed",
-					"address", address,
-					"oldStake", oldStake.String(),
-					"newStake", newStake.String(),
-					"oldActive", oldActive,
-					"newActive", delegate.IsActive)
-			}
-
-			return nil
-		}
-	}
-
-	return fmt.Errorf("validator not found: %s", address)
-}
-
-// canParticipateInConsensus 检查验证者是否可以参与共识
-func (d *DPoS) canParticipateInConsensus(delegate *validator.ValidatorMetadata) bool {
-	return delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0
 }
 
 // ==================== 委托者注册相关函数 ====================
@@ -415,7 +368,7 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 		return fmt.Errorf("failed to parse delegate registration data: %w", err)
 	}
 
-	d.logger.Info("✅ 受托人注册数据解析成功",
+	d.logger.Info(" 受托人注册数据解析成功",
 		"registrant", regInfo.Registrant.String(),
 		"name", regInfo.Name,
 		"website", regInfo.Website,
@@ -423,16 +376,16 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 		"deposit", regInfo.Deposit.String())
 
 	// 检查是否已经注册
-	d.logger.Info("🔍 检查受托人是否已注册...")
+	d.logger.Info(" 检查受托人是否已注册...")
 	if d.IsDelegateRegistered(regInfo.Registrant) {
 		d.logger.Warn("⚠️ 受托人已注册，跳过处理",
 			"registrant", regInfo.Registrant.String())
 		return nil
 	}
-	d.logger.Info("✅ 受托人未注册，可以继续处理")
+	d.logger.Info(" 受托人未注册，可以继续处理")
 
 	// 创建受托人候选人
-	d.logger.Info("👤 开始创建受托人候选人...")
+	d.logger.Info(" 开始创建受托人候选人...")
 	registration := &DelegateRegistration{
 		Address:      regInfo.Registrant,
 		Name:         regInfo.Name,
@@ -445,10 +398,9 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 		IsActive:     false,
 		LastVoteTime: 0,
 	}
-	d.logger.Info("✅ 受托人候选人对象创建完成")
 
 	// 保存到数据库
-	d.logger.Info("💾 开始保存受托人注册信息到数据库...")
+	d.logger.Info(" 开始保存受托人注册信息到数据库...")
 	if d.state != nil && d.state.RegistrationStore != nil {
 		if err := d.state.RegistrationStore.SaveRegistration(registration); err != nil {
 			d.logger.Error("❌ 保存受托人注册信息失败", "error", err)
@@ -460,7 +412,7 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 	}
 
 	// 创建受托人记录（可以立即接受投票）
-	d.logger.Info("🔧 开始创建受托人验证者记录...")
+	d.logger.Info(" 开始创建受托人验证者记录...")
 	delegate := &validator.ValidatorMetadata{
 		Address:     regInfo.Registrant,
 		VotingPower: big.NewInt(0),
@@ -469,17 +421,14 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 	}
 
 	d.addDelegateSafely(delegate)
-	d.logger.Info("✅ 受托人验证者记录创建完成")
 
-	d.logger.Info("🎉 ===== 受托人注册处理完成 =====")
-	d.logger.Info("📊 最终结果",
+	d.logger.Info("受托人注册处理完成，最终结果",
 		"address", regInfo.Registrant.String(),
 		"name", regInfo.Name,
 		"website", regInfo.Website,
 		"deposit", regInfo.Deposit.String(),
 		"status", "candidate",
 		"txHash", tx.Hash.String())
-	d.logger.Info("🎯 受托人现在可以接受投票了！")
 
 	return nil
 }
@@ -491,7 +440,7 @@ func (d *DPoS) parseDelegateRegistrationTransactionData(tx *types.Transaction) (
 	}
 
 	input := tx.Input
-	if input == nil || len(input) < 4 {
+	if len(input) < 4 {
 		return nil, fmt.Errorf("input data too short or nil: length=%d", len(input))
 	}
 
@@ -565,7 +514,7 @@ func (d *DPoS) parseDelegateRegistrationTransactionData(tx *types.Transaction) (
 
 // calculateTotalVotedAmount 计算投票者的总已投票金额
 func (d *DPoS) calculateTotalVotedAmount(voter types.Address) *big.Int {
-	d.logger.Debug("🔍 计算投票者总已投票金额", "voter", voter.String())
+	d.logger.Debug(" 计算投票者总已投票金额", "voter", voter.String())
 
 	if d.state == nil || d.state.StakeStore == nil {
 		d.logger.Warn("StakeStore 不可用", "voter", voter.String())
@@ -594,7 +543,7 @@ func (d *DPoS) calculateTotalVotedAmount(voter types.Address) *big.Int {
 
 // IsDelegateRegistered 检查受托人是否已注册
 func (d *DPoS) IsDelegateRegistered(address types.Address) bool {
-	d.logger.Info("🔍 检查受托人注册状态", "address", address.String())
+	d.logger.Info(" 检查受托人注册状态", "address", address.String())
 
 	if d.state == nil || d.state.RegistrationStore == nil {
 		d.logger.Warn("❌ 注册存储不可用", "address", address.String())
@@ -611,7 +560,7 @@ func (d *DPoS) IsDelegateRegistered(address types.Address) bool {
 
 	isRegistered := reg != nil
 	if isRegistered {
-		d.logger.Info("✅ 受托人已注册",
+		d.logger.Info(" 受托人已注册",
 			"address", address.String(),
 			"name", reg.Name,
 			"status", reg.Status.String())
@@ -624,7 +573,7 @@ func (d *DPoS) IsDelegateRegistered(address types.Address) bool {
 
 // IsDelegateCandidate 检查受托人是否为候选人状态（可以接受投票）
 func (d *DPoS) IsDelegateCandidate(address types.Address) bool {
-	d.logger.Info("🔍 检查受托人候选人状态", "address", address.String())
+	d.logger.Info(" 检查受托人候选人状态", "address", address.String())
 
 	if d.state == nil || d.state.RegistrationStore == nil {
 		d.logger.Warn("❌ 注册存储不可用", "address", address.String())
@@ -713,21 +662,6 @@ func (d *DPoS) createDelegateRegistrationTransactionData(registrant types.Addres
 	return data
 }
 
-// RegisterDelegate 注册受托人（改进的TRON风格）
-func (d *DPoS) RegisterDelegate(registrant types.Address, name, website, description string) error {
-	d.logger.Info("🚀 ===== 开始受托人注册（无私钥） =====")
-	d.logger.Info("📝 受托人信息",
-		"registrant", registrant.String(),
-		"name", name,
-		"website", website,
-		"description", description)
-
-	d.logger.Error("❌ 无私钥提供，无法创建交易")
-	d.logger.Error("💡 请使用带私钥的命令：./main dpos delegate register --address <address> --name <name> --website <website> --description <description> --private-key <private_key>")
-
-	return fmt.Errorf("private key is required for delegate registration. Please provide --private-key parameter")
-}
-
 // RegisterDelegateWithKey 注册受托人（带私钥，用于创建交易）
 func (d *DPoS) RegisterDelegateWithKey(registrant types.Address, name, website, description, privateKey string) error {
 	// 使用默认chainID调用新方法
@@ -739,8 +673,7 @@ func (d *DPoS) RegisterDelegateWithKeyAndChainID(registrant types.Address, name,
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
-	d.logger.Info("🚀 ===== 开始受托人注册（带chainID） =====")
-	d.logger.Info("📝 受托人信息",
+	d.logger.Info(" 开始受托人注册（带chainID），受托人信息",
 		"registrant", registrant.String(),
 		"name", name,
 		"website", website,
@@ -767,26 +700,18 @@ func (d *DPoS) RegisterDelegateWithKeyAndChainID(registrant types.Address, name,
 		}
 	}
 
-	// 根据是否有私钥决定是创建交易还是直接更新状态
+	// 根据是否有私钥决定是创建交易还是返回错误
 	if privateKey != "" {
-		// 🆕 有私钥，创建交易
 		return d.createDelegateRegistrationTransactionWithChainID(registrant, name, website, description, depositAmount, privateKey, chainID)
 	} else {
-		// 🆕 没有私钥，无法创建交易
 		d.logger.Error("❌ 无私钥提供，无法创建受托人注册交易")
 		return fmt.Errorf("private key is required for delegate registration")
 	}
 }
 
-// createDelegateRegistrationTransaction 创建受托人注册交易（使用默认chainID）
-func (d *DPoS) createDelegateRegistrationTransaction(registrant types.Address, name, website, description string, depositAmount *big.Int, privateKey string) error {
-	return d.createDelegateRegistrationTransactionWithChainID(registrant, name, website, description, depositAmount, privateKey, 20230826)
-}
-
 // createDelegateRegistrationTransactionWithChainID 创建受托人注册交易（带chainID）
 func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types.Address, name, website, description string, depositAmount *big.Int, privateKey string, chainID uint64) error {
-	d.logger.Info("🚀 ===== 开始创建受托人注册交易（带chainID） =====")
-	d.logger.Info("📝 受托人注册信息",
+	d.logger.Info(" 开始创建受托人注册交易（带chainID），受托人注册信息",
 		"registrant", registrant.String(),
 		"name", name,
 		"website", website,
@@ -802,20 +727,18 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 	d.logger.Info("🔍 使用传入的registrant作为发送者地址", "senderAddress", senderAddress.String())
 
 	// 尝试从区块链获取nonce
-	// 通过JSON-RPC调用获取nonce
 	nonce, err := d.getAccountNonce(senderAddress)
 	if err != nil {
-		d.logger.Warn("⚠️ 无法获取账户nonce，使用默认nonce 0", "error", err)
-		nonce = 0
-	} else {
-		d.logger.Info("✅ 成功获取账户nonce", "nonce", nonce, "senderAddress", senderAddress.String())
+		d.logger.Error("💀 无法获取账户nonce，这是严重错误，程序将立即退出",
+			"error", err,
+			"senderAddress", senderAddress.String())
+		os.Exit(1)
 	}
-
-	d.logger.Info("🔢 交易参数设置", "nonce", nonce, "senderAddress", senderAddress.String(), "note", "使用获取到的nonce")
+	d.logger.Info(" 交易参数设置", "nonce", nonce, "senderAddress", senderAddress.String(), "note", "使用获取到的nonce")
 
 	// 获取gas价格
 	gasPrice := big.NewInt(1000000000) // 1 Gwei
-	d.logger.Info("⛽ Gas设置", "gasPrice", gasPrice.String(), "gasLimit", 100000)
+	d.logger.Info(" Gas设置", "gasPrice", gasPrice.String(), "gasLimit", 100000)
 
 	// 创建受托人注册交易
 	d.logger.Info("🔨 开始构建交易对象...")
@@ -836,10 +759,10 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 
 	// 设置交易类型
 	tx.Type = types.LegacyTx
-	d.logger.Info("📋 交易对象创建完成", "type", "LegacyTx", "value", depositAmount.String(), "inputLength", len(tx.Input))
+	d.logger.Info(" 交易对象创建完成", "type", "LegacyTx", "value", depositAmount.String(), "inputLength", len(tx.Input))
 
 	// 计算交易哈希
-	d.logger.Info("🔍 计算交易哈希...")
+	d.logger.Info(" 计算交易哈希...")
 	tx.ComputeHash(0)
 
 	// 检查交易哈希
@@ -852,8 +775,8 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 		return fmt.Errorf("transaction hash is zero after creation")
 	}
 
-	d.logger.Info("✅ 交易哈希计算成功", "txHash", tx.Hash.String())
-	d.logger.Info("📊 交易详情",
+	d.logger.Info(" 交易哈希计算成功", "txHash", tx.Hash.String())
+	d.logger.Info(" 交易详情",
 		"txHash", tx.Hash.String(),
 		"nonce", nonce,
 		"gasPrice", gasPrice.String(),
@@ -869,26 +792,26 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 	d.logger.Info("✅ 交易签名成功")
 
 	// 重新计算哈希
-	d.logger.Info("🔄 重新计算交易哈希...")
+	d.logger.Info(" 重新计算交易哈希...")
 	tx.ComputeHash(0)
-	d.logger.Info("✅ 交易哈希重新计算完成", "txHash", tx.Hash.String())
+	d.logger.Info(" 交易哈希重新计算完成", "txHash", tx.Hash.String())
 
 	// 尝试添加交易到交易池
-	d.logger.Info("🏊 ===== 开始添加交易到交易池 =====")
+	d.logger.Info(" ===== 开始添加交易到交易池 =====")
 
 	var txAdded bool
 	if d.txPool != nil {
-		d.logger.Info("🔍 检查交易池支持...")
+		d.logger.Info(" 检查交易池支持...")
 		// 尝试将 txPoolInterface 转换为 *TxPool 来访问 AddTx 方法
 		if realTxPool, ok := d.txPool.(interface {
 			AddTx(tx *types.Transaction) error
 		}); ok {
-			d.logger.Info("✅ 交易池支持AddTx方法，开始添加交易...")
+			d.logger.Info(" 交易池支持AddTx方法，开始添加交易...")
 			if err := realTxPool.AddTx(tx); err != nil {
 				d.logger.Error("❌ 添加交易到交易池失败", "error", err)
 				// 继续执行，作为fallback直接更新状态
 			} else {
-				d.logger.Info("🎉 受托人注册交易已成功添加到交易池！",
+				d.logger.Info(" 受托人注册交易已成功添加到交易池！",
 					"txHash", tx.Hash.String(),
 					"registrant", registrant.String())
 				txAdded = true
@@ -906,8 +829,7 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 		return fmt.Errorf("failed to add delegate registration transaction to pool")
 	}
 
-	d.logger.Info("🎊 ===== 受托人注册交易提交成功 =====")
-	d.logger.Info("📋 最终状态",
+	d.logger.Info(" 受托人注册交易提交成功，最终状态",
 		"address", registrant.String(),
 		"name", name,
 		"website", website,
@@ -917,11 +839,6 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 	d.logger.Info("🌐 交易将被广播到网络并等待打包进区块")
 
 	return nil
-}
-
-// signTransaction 签名交易（使用默认chainID）
-func (d *DPoS) signTransaction(tx *types.Transaction, expectedAddr types.Address, privateKeyHex string) error {
-	return d.signTransactionWithChainID(tx, expectedAddr, privateKeyHex, 20230826)
 }
 
 // signTransactionWithChainID 签名交易（带chainID）
@@ -1076,7 +993,7 @@ func (d *DPoS) getDelegateDepositAmount() *big.Int {
 		return new(big.Int).Set(d.config.SRThreshold)
 	}
 
-	// 默认保证金：100 VCITY（比TRON的1000 TRX低）
+	// 默认保证金：100 VCITY
 	depositAmount := new(big.Int)
 	depositAmount.SetString("100000000000000000000", 10) // 100 VCITY
 
@@ -1113,70 +1030,6 @@ func (d *DPoS) getMaxActiveDelegates() int {
 	}
 
 	return maxActive
-}
-
-// updateActiveDelegates 更新活跃受托人（基于投票排名）
-func (d *DPoS) updateActiveDelegates() {
-	// 获取所有注册的受托人
-	registrations, err := d.GetDelegateRegistrations()
-	if err != nil {
-		d.logger.Error("Failed to get delegate registrations", "error", err)
-		return
-	}
-
-	// 按投票数排序
-	sort.Slice(registrations, func(i, j int) bool {
-		return registrations[i].TotalVotes.Cmp(registrations[j].TotalVotes) > 0
-	})
-
-	// 获取最大活跃受托人数量
-	maxActive := d.getMaxActiveDelegates()
-
-	// 更新活跃状态
-	for i, reg := range registrations {
-		wasActive := reg.IsActive
-		reg.IsActive = i < maxActive
-
-		// 更新状态
-		if reg.IsActive {
-			reg.Status = RegStatusActive
-		} else {
-			reg.Status = RegStatusCandidate
-		}
-
-		// 保存更新
-		if d.state != nil && d.state.RegistrationStore != nil {
-			if err := d.state.RegistrationStore.SaveRegistration(reg); err != nil {
-				d.logger.Error("Failed to save registration update", "error", err)
-			}
-		}
-
-		// 更新受托人记录
-		for _, delegate := range d.delegates {
-			if delegate.Address == reg.Address {
-				delegate.IsActive = reg.IsActive
-				break
-			}
-		}
-
-		// 记录状态变化
-		if wasActive != reg.IsActive {
-			status := "inactive"
-			if reg.IsActive {
-				status = "active"
-			}
-			d.logger.Info("Delegate status changed",
-				"address", reg.Address.String(),
-				"name", reg.Name,
-				"status", status,
-				"votes", reg.TotalVotes.String(),
-				"rank", i+1)
-		}
-	}
-
-	d.logger.Info("Active delegates updated",
-		"totalCandidates", len(registrations),
-		"activeDelegates", maxActive)
 }
 
 // WithdrawDelegate 退出受托人（退还保证金）
@@ -1224,33 +1077,6 @@ func (d *DPoS) WithdrawDelegate(address types.Address) error {
 	return nil
 }
 
-// compareDelegateSets 比较受托人集合变化
-func (d *DPoS) compareDelegateSets(oldSet, newSet validator.AccountSet) (added, removed []types.Address) {
-	oldMap := make(map[types.Address]bool)
-	newMap := make(map[types.Address]bool)
-
-	for _, del := range oldSet {
-		oldMap[del.Address] = true
-	}
-	for _, del := range newSet {
-		newMap[del.Address] = true
-	}
-
-	for _, del := range newSet {
-		if !oldMap[del.Address] {
-			added = append(added, del.Address)
-		}
-	}
-
-	for _, del := range oldSet {
-		if !newMap[del.Address] {
-			removed = append(removed, del.Address)
-		}
-	}
-
-	return added, removed
-}
-
 // updateDelegates 增强的受托人更新（公共接口，需要获取锁）
 func (d *DPoS) updateDelegates(block *types.FullBlock) error {
 	d.lock.Lock()
@@ -1261,11 +1087,10 @@ func (d *DPoS) updateDelegates(block *types.FullBlock) error {
 
 // updateDelegatesInternal 内部方法，不需要获取锁（由调用者负责锁管理）
 func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
-	d.logger.Info("🔄 updateDelegatesInternal called", "block", block, "currentDelegatesCount", len(d.delegates))
+	d.logger.Info(" updateDelegatesInternal called", "block", block, "currentDelegatesCount", len(d.delegates))
 
-	// 🆕 方案1+方案2：检查是否需要重新排序验证者集合
 	if d.pendingValidatorUpdate {
-		d.logger.Info("🔄 轮次边界：重新排序验证者集合")
+		d.logger.Info(" 轮次边界：重新排序验证者集合")
 
 		// 按标准化规则排序，确保所有节点完全一致
 		sort.Slice(d.delegates, func(i, j int) bool {
@@ -1278,25 +1103,22 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 			return bytes.Compare(d.delegates[i].Address[:], d.delegates[j].Address[:]) < 0
 		})
 
-		d.logger.Info("✅ 轮次边界：验证者集合重新排序完成")
+		d.logger.Info(" 轮次边界：验证者集合重新排序完成")
 		for i, delegate := range d.delegates {
-			d.logger.Info("🔍 重新排序后的验证者",
+			d.logger.Info(" 重新排序后的验证者",
 				"index", i,
 				"address", delegate.Address.String(),
 				"votingPower", delegate.VotingPower.String(),
 				"isActive", delegate.IsActive)
 		}
 
-		// 🆕 已删除 currentDelegateIndex 的重新计算
-		// 现在完全通过 getCurrentDelegate() 基于时间slot实时计算
-		// 只同步验证者集合
 		if d.runtime != nil {
 			if d.runtime.lock.TryLock() {
-				// 🆕 关键修复：同步重新排序后的验证者集合到runtime
-				d.logger.Info("🔄 同步重新排序后的验证者集合到runtime")
+				// 同步重新排序后的验证者集合到runtime
+				d.logger.Info(" 同步重新排序后的验证者集合到runtime")
 				d.runtime.delegates = make(validator.AccountSet, len(d.delegates))
 				copy(d.runtime.delegates, d.delegates)
-				d.logger.Info("✅ 验证者集合同步完成",
+				d.logger.Info(" 验证者集合同步完成",
 					"runtimeDelegatesCount", len(d.runtime.delegates),
 					"sourceDelegatesCount", len(d.delegates))
 				d.runtime.lock.Unlock()
@@ -1306,13 +1128,12 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 		}
 	}
 
-	// 🆕 落盘时：直接保存当前受托人集合，不进行排名和截取
 	d.logger.Debug("💾 落盘时：直接保存当前受托人集合，不进行排名和截取")
 
 	// 🆕 详细记录要落盘的见证人信息
-	d.logger.Info("📋 准备落盘的见证人详情:")
+	d.logger.Info("准备落盘的见证人详情:")
 	for i, delegate := range d.delegates {
-		d.logger.Info("👤 见证人详情",
+		d.logger.Info(" 见证人详情",
 			"序号", i+1,
 			"地址", delegate.Address.String(),
 			"投票权重", delegate.VotingPower.String(),
@@ -1330,7 +1151,7 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 	// 直接保存当前的 d.delegates 到数据库，不改变受托人集合
 	// 如果是在投票处理过程中，只更新投票的验证者
 	if d.pendingValidatorUpdate && d.lastVotedDelegate != (types.Address{}) {
-		d.logger.Info("🎯 投票处理中，只更新投票的验证者", "targetDelegate", d.lastVotedDelegate.String())
+		d.logger.Info(" 投票处理中，只更新投票的验证者", "targetDelegate", d.lastVotedDelegate.String())
 		if err := d.persistDelegateSetToDatabaseWithTarget(d.delegates, d.lastVotedDelegate); err != nil {
 			d.logger.Error("❌ Failed to persist target delegate to database", "error", err)
 			return err
@@ -1343,7 +1164,6 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 		}
 	}
 
-	d.logger.Debug("✅ 受托人集合落盘完成", "count", len(d.delegates))
+	d.logger.Debug(" 受托人集合落盘完成", "count", len(d.delegates))
 	return nil
 }
-
