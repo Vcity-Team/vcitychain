@@ -101,7 +101,6 @@ func (tem *TimeBasedEpochManager) TriggerEpochSwitch(blockNumber uint64) {
 	epochSize := tem.getEpochSize()
 	currentEpoch := (blockNumber / epochSize) + 1
 
-
 	// 调用epoch切换回调
 	if tem.callback != nil {
 		go func() {
@@ -139,7 +138,8 @@ func (tem *TimeBasedEpochManager) GetEpochInfo(blockNumber uint64) (uint64, time
 		"blockNumber", blockNumber,
 		"currentEpoch", currentEpoch,
 		"firstBlockInEpoch", firstBlockInEpoch,
-		"epochStartTime", epochStartTime.Format("2006-01-02 15:04:05"))
+		"epochStartTime", epochStartTime.Format("2006-01-02 15:04:05"),
+		"epochDuration", tem.epochDuration.String())
 
-	return currentEpoch, epochStartTime, time.Duration(10) * time.Second
+	return currentEpoch, epochStartTime, tem.epochDuration
 }
