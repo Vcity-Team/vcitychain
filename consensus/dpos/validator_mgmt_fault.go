@@ -146,7 +146,7 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 				if isFaulty {
 					return fmt.Sprintf("Epoch %d: missed blocks reached threshold: %d >= %d", epochToCheck, missedBlocks, d.config.MaxMissedBlocks)
 				}
-				return fmt.Sprintf("Epoch %d: missed blocks normal: %d < %d", epochToCheck, missedBlocks, d.config.MaxMissedBlocks)
+				return fmt.Sprintf("Epoch %d: missed blocks normal: %d less than %d", epochToCheck, missedBlocks, d.config.MaxMissedBlocks)
 			}(),
 		}
 		faultFlags = append(faultFlags, faultFlag)
