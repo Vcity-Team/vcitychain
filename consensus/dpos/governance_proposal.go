@@ -126,7 +126,7 @@ func (d *DPoS) CreateRecoveryProposal(proposer types.Address, validatorAddr type
 		"isFaulty":        false,
 		"missedBlocks":    0,
 		"lastFaultyEpoch": 0,
-		"reason":          fmt.Sprintf("故障已解除（提案ID: %s）", proposalID),
+		"reason":          fmt.Sprintf("Fault cleared (Proposal ID: %s)", proposalID),
 	}
 
 	currentBlock := d.getCurrentBlockNumber()
@@ -180,4 +180,3 @@ func (d *DPoS) CreateRecoveryProposal(proposer types.Address, validatorAddr type
 
 	return proposal, nil
 }
-

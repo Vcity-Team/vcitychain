@@ -985,7 +985,7 @@ func (s *StakeStore) ClearValidatorFaultStatus(address types.Address, proposalID
 		faultInfo["missedBlocks"] = 0
 		// 清除lastFaultyEpoch（设为0表示已清除故障）
 		faultInfo["lastFaultyEpoch"] = 0
-		faultInfo["reason"] = fmt.Sprintf("故障已解除（提案ID: %s）", proposalID)
+		faultInfo["reason"] = fmt.Sprintf("Fault cleared (Proposal ID: %s)", proposalID)
 		faultInfo["lastUpdateTime"] = uint64(time.Now().Unix())
 
 		// 保存更新后的记录

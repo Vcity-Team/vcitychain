@@ -52,7 +52,7 @@ func (d *DPoS) ProcessProposalCreateTransaction(tx *types.Transaction, blockNumb
 			"isFaulty":        false,
 			"missedBlocks":    0,
 			"lastFaultyEpoch": 0,
-			"reason":          fmt.Sprintf("故障已解除（交易哈希: %s）", tx.Hash.String()),
+			"reason":          fmt.Sprintf("Fault cleared (Transaction Hash: %s)", tx.Hash.String()),
 		}
 
 		// 更新proposalID为recovery前缀
@@ -261,4 +261,3 @@ func (d *DPoS) ProcessProposalExecuteTransaction(tx *types.Transaction, blockNum
 
 	return nil
 }
-
