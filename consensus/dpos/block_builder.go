@@ -394,11 +394,19 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 	// 创建区块构建器
 	keyAddr := types.Address(r.config.Key.Address())
+
+	// 从配置读取blockTime，如果没有配置则使用默认值3秒
+	blockTime := r.config.BlockTime.Duration
+	if blockTime == 0 {
+		r.logger.Warn("⚠️ blockTime为0，使用默认值3秒")
+		blockTime = 3 * time.Second
+	}
+
 	builder, err := r.config.blockchain.NewBlockBuilder(
 		parent,
 		keyAddr,
 		r.config.txPool,
-		2*time.Second, // 区块时间
+		blockTime, // 从配置读取的区块时间
 		r.logger,
 	)
 	if err != nil {

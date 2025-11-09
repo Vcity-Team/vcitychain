@@ -14,6 +14,7 @@ type TimeBasedEpochManager struct {
 	rewardAccount         types.Address
 	rewardAmount          *big.Int
 	epochDuration         time.Duration // 添加epochDuration字段
+	blockTime             time.Duration // 添加blockTime字段，从配置中获取
 	consensusSwitchHeight uint64        // 添加共识切换高度字段
 	mutex                 sync.RWMutex
 	logger                hclog.Logger
@@ -26,6 +27,7 @@ type TimeBasedEpochManager struct {
 // NewTimeBasedEpochManager 创建基于区块高度的Epoch管理器
 func NewTimeBasedEpochManager(
 	epochDuration time.Duration,
+	blockTime time.Duration, // 🆕 添加blockTime参数
 	rewardAccount types.Address,
 	rewardAmount *big.Int,
 	consensusSwitchHeight uint64,
@@ -35,6 +37,7 @@ func NewTimeBasedEpochManager(
 		rewardAccount:         rewardAccount,
 		rewardAmount:          rewardAmount,
 		epochDuration:         epochDuration,
+		blockTime:             blockTime, // 🆕 设置blockTime
 		consensusSwitchHeight: consensusSwitchHeight,
 		logger:                logger,
 	}
@@ -64,9 +67,15 @@ func (tem *TimeBasedEpochManager) GetCurrentEpoch(blockNumber uint64) uint64 {
 
 // getEpochSize 根据配置计算epoch大小（区块数）
 func (tem *TimeBasedEpochManager) getEpochSize() uint64 {
-	// 使用配置的epochDuration和默认的blockTime
+	// 使用配置的epochDuration和blockTime
 	epochDuration := tem.epochDuration
-	blockTime := 2 * time.Second // 默认区块时间，应该从配置中获取
+	blockTime := tem.blockTime
+
+	// 如果blockTime为0，使用默认值3秒（兜底保护）
+	if blockTime == 0 {
+		tem.logger.Warn("⚠️ blockTime为0，使用默认值3秒")
+		blockTime = 3 * time.Second
+	}
 
 	epochSize := uint64(epochDuration / blockTime)
 	if epochSize == 0 {

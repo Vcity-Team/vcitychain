@@ -25,10 +25,13 @@ type BlockProductionTracker struct {
 
 	// 🆕 新增：数据库存储
 	store *BlockTrackerStore
+
+	// 🆕 新增：区块时间配置
+	blockTime time.Duration
 }
 
 // NewBlockProductionTracker 创建出块统计管理器
-func NewBlockProductionTracker(logger hclog.Logger, store *BlockTrackerStore) *BlockProductionTracker {
+func NewBlockProductionTracker(logger hclog.Logger, store *BlockTrackerStore, blockTime time.Duration) *BlockProductionTracker {
 	tracker := &BlockProductionTracker{
 		currentEpochBlocks: make(map[types.Address]uint64),
 		epochBlocksHistory: make(map[uint64]map[types.Address]uint64),
@@ -37,8 +40,9 @@ func NewBlockProductionTracker(logger hclog.Logger, store *BlockTrackerStore) *B
 		currentEpochBlockTimes: make(map[types.Address][]time.Time),
 		epochBlockTimesHistory: make(map[uint64]map[types.Address][]time.Time),
 
-		logger: logger,
-		store:  store, // 🆕 新增：设置数据库存储
+		logger:    logger,
+		store:     store,     // 🆕 新增：设置数据库存储
+		blockTime: blockTime, // 🆕 新增：设置区块时间配置
 	}
 
 	// 🆕 从数据库加载历史数据
@@ -230,8 +234,16 @@ func (bpt *BlockProductionTracker) GetEpochAverageBlockTime(epochNumber uint64) 
 	return totalInterval / time.Duration(len(allBlockTimes)-1)
 }
 
-// 🆕 新增：获取指定epoch的配置区块时间
+// 获取指定epoch的配置区块时间
 func (bpt *BlockProductionTracker) GetEpochExpectedBlockTime(epochNumber uint64) time.Duration {
-	// 这里应该从配置中获取，暂时返回2秒
-	return 2 * time.Second
+	// 从配置中获取blockTime
+	blockTime := bpt.blockTime
+
+	// 如果blockTime为0，使用默认值3秒（兜底保护）
+	if blockTime == 0 {
+		bpt.logger.Warn("⚠️ blockTime为0，使用默认值3秒")
+		blockTime = 3 * time.Second
+	}
+
+	return blockTime
 }

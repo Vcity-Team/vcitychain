@@ -57,7 +57,7 @@ func (d *DPoS) getEpochForBlock(blockNumber uint64) *epochMetadata {
 	if targetBlockNumber < consensusSwitchHeight {
 		// 在共识切换高度之前，epoch为0
 		return &epochMetadata{
-			Number:           0,
+			Number:            0,
 			FirstBlockInEpoch: 0,
 		}
 	}
@@ -80,7 +80,7 @@ func (d *DPoS) getEpochForBlock(blockNumber uint64) *epochMetadata {
 		"firstBlockInEpoch", firstBlockInEpoch)
 
 	return &epochMetadata{
-		Number:           epochNumber,
+		Number:            epochNumber,
 		FirstBlockInEpoch: firstBlockInEpoch,
 	}
 }
@@ -89,7 +89,7 @@ func (d *DPoS) getEpochForBlock(blockNumber uint64) *epochMetadata {
 func (d *DPoS) getEpochSize() uint64 {
 	if d.config == nil {
 		d.logger.Warn("⚠️ DPoS配置为空，使用默认epoch大小")
-		return 5 // 默认值：10秒 / 2秒 = 5个区块
+		return 28800 // 默认值：86400秒 / 3秒 = 28800个区块
 	}
 
 	// 根据EpochDuration和BlockTime计算epoch大小
@@ -97,22 +97,21 @@ func (d *DPoS) getEpochSize() uint64 {
 	blockTime := d.config.BlockTime.Duration
 
 	if blockTime == 0 {
-		d.logger.Warn("⚠️ BlockTime为0，使用默认值2秒")
-		blockTime = 2 * time.Second
+		d.logger.Warn("⚠️ BlockTime为0，使用默认值3秒")
+		blockTime = 3 * time.Second
 	}
 
 	if epochDuration == 0 {
-		d.logger.Warn("⚠️ EpochDuration为0，使用默认值10秒")
-		epochDuration = 10 * time.Second
+		d.logger.Warn("⚠️ EpochDuration为0，使用默认值86400秒")
+		epochDuration = 86400 * time.Second
 	}
 
 	epochSize := uint64(epochDuration / blockTime)
 
 	if epochSize == 0 {
-		d.logger.Warn("⚠️ 计算出的epoch大小为0，使用默认值5")
-		epochSize = 5
+		d.logger.Warn("⚠️ 计算出的epoch大小为0，使用默认值28800")
+		epochSize = 28800
 	}
 
 	return epochSize
 }
-

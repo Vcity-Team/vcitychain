@@ -20,7 +20,7 @@ func (r *dposRuntime) startBlockProduction() error {
 		return fmt.Errorf("key not available, cannot start block production")
 	}
 
-	blockTime := 2 * time.Second // 默认2秒
+	blockTime := 3 * time.Second // 默认3秒
 	if r.config.PolyBFTConfig != nil {
 		blockTime = r.config.PolyBFTConfig.BlockTime.Duration
 	}

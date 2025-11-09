@@ -54,7 +54,7 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 	case "dpos_epoch_duration":
 		return d.config.EpochDuration.String(), nil
 	case "governance_voting_period":
-		// 🆕 从YAML配置计算提案表决周期（区块数）
+		// 从YAML配置计算提案表决周期（区块数）
 		if d.config != nil && d.config.ProposalVotePeriod > 0 {
 			blockTime := d.config.BlockTime.Duration
 			if blockTime > 0 {
@@ -62,8 +62,8 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 				return blocks, nil
 			}
 		}
-		// 默认值：1天 = 43200个区块（按2秒/区块）
-		return uint64(43200), nil
+		// 默认值：1天 = 28800个区块（按3秒/区块）
+		return uint64(28800), nil
 	case "governance_voting_threshold":
 		// 治理参数：投票通过阈值
 		return uint64(51), nil
@@ -378,4 +378,3 @@ func (d *DPoS) SignProposalForTx(proposal *ParameterProposal, proposerPrivateKey
 	}
 	return proposal.ProposalSignature, nil
 }
-

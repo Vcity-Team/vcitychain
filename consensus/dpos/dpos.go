@@ -1,4 +1,4 @@
-﻿package dpos
+package dpos
 
 import (
 	"context"
@@ -905,8 +905,8 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 
 	// 🆕 临时修复：如果配置没有正确传递，设置默认值
 	if vcity_dpos.config.EpochDuration == 0 {
-		logger.Warn("⚠️ epochDuration为0，设置默认值10秒")
-		vcity_dpos.config.EpochDuration = 10 * time.Second
+		logger.Warn("⚠️ epochDuration为0，设置默认值86400秒")
+		vcity_dpos.config.EpochDuration = 86400 * time.Second
 	}
 
 	if vcity_dpos.config.RewardAmount == nil {
@@ -935,15 +935,15 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 
 	// 检查BlockTime是否已正确设置，如果没有则使用默认值
 	if vcity_dpos.config.BlockTime.Duration == 0 {
-		vcity_dpos.config.BlockTime = common.Duration{Duration: 2 * time.Second}
-		logger.Info("⏰ 使用默认DPoS区块时间2秒", "duration", vcity_dpos.config.BlockTime.Duration.String())
+		vcity_dpos.config.BlockTime = common.Duration{Duration: 3 * time.Second}
+		logger.Info("⏰ 使用默认DPoS区块时间3秒", "duration", vcity_dpos.config.BlockTime.Duration.String())
 	} else {
 		logger.Info("⏰ 使用配置文件中的DPoS区块时间", "duration", vcity_dpos.config.BlockTime.Duration.String())
 	}
 	vcity_dpos.config.Network = params.Network
 	vcity_dpos.config.Executor = params.Executor
 
-	// 🆕 新增：设置数据目录
+	// 设置数据目录
 	vcity_dpos.logger.Debug("Config details",
 		"ConfigPath", params.Config.Path,
 		"ConfigType", fmt.Sprintf("%T", params.Config),
@@ -995,11 +995,17 @@ func (d *DPoS) Initialize() error {
 	d.logger.Debug("DPoS实例已注册到全局注册表", "fixedKey", fixedKey, "nodeKey", nodeKey)
 
 	// create and set syncer
+	// blockTimeout 使用3倍的blockTime作为同步超时（参考IBFT和PolyBFT的实现）
+	blockTimeout := d.config.BlockTime.Duration * 3
+	if blockTimeout == 0 {
+		d.logger.Warn("⚠️ blockTimeout为0，使用默认值9秒（3倍默认blockTime）")
+		blockTimeout = 9 * time.Second
+	}
 	d.syncer = syncer.NewSyncer(
 		d.config.Logger.Named("syncer"),
 		d.config.Network,
 		d.config.Blockchain,
-		d.config.BlockTime.Duration*3*time.Second,
+		blockTimeout,
 		d.config.ConsensusSwitchHeight,
 	)
 

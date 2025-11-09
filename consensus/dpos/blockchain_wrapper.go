@@ -390,9 +390,9 @@ func (p *blockchainWrapper) isEpochEndBlock(blockNumber uint64) bool {
 // getEpochSize 根据配置计算epoch大小（区块数）
 func (p *blockchainWrapper) getEpochSize() uint64 {
 	if p.config == nil {
-		// 如果配置为空，使用默认值：10秒 / 2秒 = 5个区块
-		epochDuration := 10 * time.Second
-		blockTime := 2 * time.Second
+		// 如果配置为空，使用默认值：86400秒 / 3秒 = 28800个区块
+		epochDuration := 86400 * time.Second
+		blockTime := 3 * time.Second
 
 		epochSize := uint64(epochDuration / blockTime)
 		if epochSize == 0 {
@@ -406,7 +406,7 @@ func (p *blockchainWrapper) getEpochSize() uint64 {
 	blockTime := p.config.BlockTime.Duration
 
 	if blockTime == 0 {
-		blockTime = 2 * time.Second // 默认区块时间
+		blockTime = 3 * time.Second // 默认区块时间
 	}
 
 	epochSize := uint64(epochDuration / blockTime)

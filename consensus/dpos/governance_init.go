@@ -221,8 +221,8 @@ func (d *DPoS) getVotePeriod() uint64 {
 		}
 	}
 
-	// 使用默认值（1天 = 43200个区块，按2秒/区块计算）
-	return 43200
+	// 使用默认值（1天 = 28800个区块，按3秒/区块计算）
+	return 28800
 }
 
 // getValidPeriod 获取提案有效期（区块数）
@@ -238,8 +238,8 @@ func (d *DPoS) getValidPeriod() uint64 {
 		}
 	}
 
-	// 使用默认值（7天 = 302400个区块，按2秒/区块计算）
-	return 302400
+	// 使用默认值（7天 = 201600个区块，按3秒/区块计算）
+	return 201600
 }
 
 // GetCurrentProposalPeriod 获取当前提案周期信息（用于显示）
@@ -313,10 +313,9 @@ func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 				return blocks, nil
 			}
 		}
-		// 默认值：1天 = 43200个区块（按2秒/区块）
-		return uint64(43200), nil
+		// 默认值：1天 = 28800个区块（按3秒/区块）
+		return uint64(28800), nil
 	default:
 		return nil, fmt.Errorf("unknown parameter: %s", paramName)
 	}
 }
-

@@ -131,7 +131,7 @@ func (d *DPoS) GetCurrentParameterValues() map[string]interface{} {
 		d.logger.Warn("📋 ProposalVotePeriod为0或未设置，使用默认值24小时")
 	}
 
-	blockTime := 2 * time.Second
+	blockTime := 3 * time.Second
 	if d.config != nil && d.config.BlockTime.Duration > 0 {
 		blockTime = d.config.BlockTime.Duration
 	}
@@ -197,4 +197,3 @@ func (d *DPoS) UpdateParameterValue(parameter string, newValue interface{}) erro
 
 	return nil
 }
-
