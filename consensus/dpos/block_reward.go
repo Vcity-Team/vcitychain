@@ -9,9 +9,10 @@ import (
 )
 
 // executeRewardDistributionForEpochEnd 在epoch最后一个区块时执行奖励分发
-func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64, currentRound uint64) error {
+func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64, currentRound uint64, blockProducer types.Address) error {
 	r.logger.Debug("🎉 ========== 生成节点中开始预先计算epoch结束时的奖励分发 ==========",
 		"blockNumber", blockNumber,
+		"blockProducer", blockProducer.String(),
 		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
 
 	// 获取DPoS实例
@@ -32,6 +33,23 @@ func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64, c
 			"blockNumber", blockNumber)
 		return nil
 	}
+
+	// 🆕 关键修复：在计算奖励之前，先记录epoch结束区块本身的出块
+	// 因为该区块还没有被处理，所以出块记录还没有被记录到blockTracker中
+	if dposInstance.blockTracker != nil {
+		blockTime := time.Now()
+		dposInstance.blockTracker.RecordBlockProduction(
+			blockNumber,
+			blockTime,
+			blockProducer,
+			rewardEpoch,
+		)
+		r.logger.Info("📊 已记录epoch结束区块的出块",
+			"blockNumber", blockNumber,
+			"blockProducer", blockProducer.String(),
+			"epoch", rewardEpoch)
+	}
+
 	// 直接计算和分发奖励
 	return dposInstance.distributeEpochRewards(rewardEpoch, currentRound)
 }

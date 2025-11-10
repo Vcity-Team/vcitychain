@@ -556,8 +556,8 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"isCurrentProducer", true,
 			"timestamp", time.Now().Format("2006-01-02 15:04:05"))
 
-		// 执行奖励分发，传递当前轮次
-		if err := r.executeRewardDistributionForEpochEnd(nextBlockNumber, r.currentRound); err != nil {
+		// 执行奖励分发，传递当前轮次和出块者地址
+		if err := r.executeRewardDistributionForEpochEnd(nextBlockNumber, r.currentRound, keyAddr); err != nil {
 			r.logger.Error("❌❌❌ ========== 计算奖励信息失败 ========== ❌❌❌",
 				"blockNumber", nextBlockNumber,
 				"delegate", keyAddr.String()[:16],

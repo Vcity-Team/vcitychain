@@ -100,27 +100,46 @@ func (rd *RewardDistributor) calculateRewards(
 ) map[types.Address]*big.Int {
 	rewards := make(map[types.Address]*big.Int)
 
+	// 🆕 添加详细的计算过程日志
+	rd.logger.Info("📊 ========== 开始计算奖励 ==========",
+		"rewardAmount", rd.rewardAmount.String(),
+		"validatorRatio", rd.validatorRatio,
+		"voterRatio", rd.voterRatio,
+		"totalBlocks", totalBlocks)
+
 	// 1. 验证者奖励：按出块次数分配
+	// 步骤1：计算总验证者奖励池 = rewardAmount * validatorRatio / 100
 	validatorReward := new(big.Int).Mul(rd.rewardAmount, big.NewInt(int64(rd.validatorRatio)))
 	validatorReward.Div(validatorReward, big.NewInt(100))
 
-	rd.logger.Info("🏭 计算验证者奖励",
-		"validatorRatio", rd.validatorRatio,
-		"validatorReward", validatorReward.String())
+	rd.logger.Info("🏭 计算验证者奖励池",
+		"步骤1_rewardAmount", rd.rewardAmount.String(),
+		"步骤1_validatorRatio", rd.validatorRatio,
+		"步骤1_计算", fmt.Sprintf("%s * %d / 100", rd.rewardAmount.String(), rd.validatorRatio),
+		"步骤1_结果_validatorRewardPool", validatorReward.String())
 
 	for _, validator := range validators {
 		if validator.IsActive {
 			blocksProduced := blockCounts[validator.Address]
 			if blocksProduced > 0 {
+				// 步骤2：计算该验证者的奖励 = validatorReward * blocksProduced / totalBlocks
 				reward := new(big.Int).Mul(validatorReward, big.NewInt(int64(blocksProduced)))
 				reward.Div(reward, big.NewInt(int64(totalBlocks)))
 				rewards[validator.Address] = reward
 
-				rd.logger.Debug("🏭 验证者奖励",
+				// 计算 VCITY 格式（用于显示）
+				rewardFloat := new(big.Float).SetInt(reward)
+				vcityFloat := new(big.Float).Quo(rewardFloat, big.NewFloat(1e18))
+				vcityStr, _ := vcityFloat.Float64()
+
+				rd.logger.Info("🏭 验证者奖励计算详情",
 					"validator", validator.Address.String(),
-					"blocksProduced", blocksProduced,
-					"totalBlocks", totalBlocks,
-					"reward", reward.String())
+					"步骤2_validatorRewardPool", validatorReward.String(),
+					"步骤2_blocksProduced", blocksProduced,
+					"步骤2_totalBlocks", totalBlocks,
+					"步骤2_计算", fmt.Sprintf("%s * %d / %d", validatorReward.String(), blocksProduced, totalBlocks),
+					"步骤2_结果_reward_wei", reward.String(),
+					"最终奖励_VCITY", fmt.Sprintf("%.18f", vcityStr))
 			}
 		}
 	}
