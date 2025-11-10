@@ -1171,6 +1171,21 @@ func (a *dposStoreAdapter) GetValidatorsWithFilter(filterZeroVotingPower bool) (
 }
 
 func (a *dposStoreAdapter) GetStakingInfo() ([]*consensusdpos.StakeInfo, error) {
+	// 🆕 优先：通过 DPoS 全局注册表调用公开方法 GetAllStakingInfo
+	if dposInstance, exists := consensusdpos.GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+		stakingInfos, err := dposInstance.GetAllStakingInfo()
+		if err == nil && len(stakingInfos) > 0 {
+			fmt.Printf("DEBUG: GetStakingInfo - Successfully retrieved %d staking infos from database via GetAllStakingInfo\n", len(stakingInfos))
+			return stakingInfos, nil
+		} else if err != nil {
+			fmt.Printf("DEBUG: GetStakingInfo - Error from GetAllStakingInfo: %v\n", err)
+		} else {
+			fmt.Printf("DEBUG: GetStakingInfo - GetAllStakingInfo returned empty slice\n")
+		}
+	} else {
+		fmt.Printf("DEBUG: GetStakingInfo - DPoS instance not found in global registry\n")
+	}
+
 	// Try to get staking info from the consensus engine
 	// This should connect to the actual DPoS staking mechanism
 

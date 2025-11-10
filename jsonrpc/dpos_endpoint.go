@@ -1500,7 +1500,15 @@ func (d *DPOS) GetValidatorSet(ctx context.Context, blockNumber *uint64) (valida
 func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) ([]*dpos.StakeInfo, error) {
 	d.logger.Info("DPoS GetStakingInfo called", "blockNumber", blockNumber)
 
-	// 🆕 修改：从数据库读取所有验证者信息（权重倒序排序，不过滤，包含故障标志）
+	// 🆕 修改：直接从数据库读取质押信息
+	// 优先使用 store 的 GetStakingInfo 方法，直接从数据库读取
+	if stakingInfo, err := d.store.GetStakingInfo(); err == nil && len(stakingInfo) > 0 {
+		d.logger.Info("Successfully retrieved staking info from database", "count", len(stakingInfo))
+		return stakingInfo, nil
+	}
+
+	// 如果数据库方法不可用或返回空，回退到从验证者列表构建
+	d.logger.Info("Falling back to building staking info from validators")
 	validators, err := d.store.GetValidatorsWithFilter(false) // 不过滤，返回全部
 	if err != nil {
 		return nil, fmt.Errorf("failed to get validators: %w", err)

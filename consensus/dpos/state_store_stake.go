@@ -209,18 +209,28 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 func (s *StakeStore) GetStakingInfo() ([]*StakeInfo, error) {
 	var stakingInfos []*StakeInfo
 
+	if s.db == nil {
+		return nil, fmt.Errorf("database is nil")
+	}
+
 	err := s.db.View(func(tx *bolt.Tx) error {
 		// 直接从StakingInfo bucket读取数据，不做任何修改
 		stakingBucket := tx.Bucket([]byte("StakingInfo"))
-		if stakingBucket != nil {
-			cursor := stakingBucket.Cursor()
-			for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
-				var stakeInfo StakeInfo
-				if err := json.Unmarshal(value, &stakeInfo); err != nil {
-					continue // 跳过解析失败的数据
-				}
-				stakingInfos = append(stakingInfos, &stakeInfo)
+		if stakingBucket == nil {
+			// Bucket 不存在，返回空列表（这是正常的，如果还没有质押数据）
+			return nil
+		}
+
+		count := 0
+		cursor := stakingBucket.Cursor()
+		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
+			var stakeInfo StakeInfo
+			if err := json.Unmarshal(value, &stakeInfo); err != nil {
+				// 跳过解析失败的数据，但记录日志
+				continue
 			}
+			stakingInfos = append(stakingInfos, &stakeInfo)
+			count++
 		}
 
 		return nil

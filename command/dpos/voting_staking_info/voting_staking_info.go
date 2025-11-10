@@ -290,9 +290,64 @@ func runCommand(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("failed to get staking info: %w", err)
 	}
 
+	// 🆕 获取当前区块高度
+	blockHeight, err := getCurrentBlockHeight(jsonRPC)
+	if err == nil {
+		// 更新结果中的 BlockHeight 字段
+		result.BlockHeight = blockHeight
+	}
+
 	// Set the result and output it
 	outputter.SetCommandResult(result)
 	return nil
+}
+
+// getCurrentBlockHeight 获取当前区块高度
+func getCurrentBlockHeight(jsonRPC string) (uint64, error) {
+	// 调用 eth_blockNumber 获取当前区块高度
+	request := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "eth_blockNumber",
+		"params":  []interface{}{},
+	}
+
+	requestJSON, err := json.Marshal(request)
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := http.Post(jsonRPC, "application/json", bytes.NewBuffer(requestJSON))
+	if err != nil {
+		return 0, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	var response map[string]interface{}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return 0, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	if errorObj, exists := response["error"]; exists && errorObj != nil {
+		return 0, fmt.Errorf("RPC error: %v", errorObj)
+	}
+
+	if result, exists := response["result"]; exists {
+		if resultStr, ok := result.(string); ok {
+			// 解析十六进制字符串
+			var blockHeight uint64
+			if _, err := fmt.Sscanf(resultStr, "0x%x", &blockHeight); err == nil {
+				return blockHeight, nil
+			}
+		}
+	}
+
+	return 0, fmt.Errorf("no result in response")
 }
 
 // callVotingStakingInfoRPCMethodHTTPWithAddress makes a direct HTTP request with specified JSON-RPC address
@@ -369,6 +424,10 @@ func parseVotingStakingInfoResult(result interface{}) (*VotingStakingInfoResult,
 			}
 		}
 
+		// 🆕 尝试从 JSON-RPC 获取当前区块高度（如果可用）
+		blockHeight := uint64(0)
+		// 注意：这里不直接调用，因为需要 jsonRPC 地址，会在 runCommand 中处理
+
 		return &VotingStakingInfoResult{
 			Success: true,
 			NetworkStats: map[string]interface{}{
@@ -378,7 +437,7 @@ func parseVotingStakingInfoResult(result interface{}) (*VotingStakingInfoResult,
 			StakingInfo: stakingInfo,
 			DPoSState:   nil,
 			LastUpdated: "now",
-			BlockHeight: 0,
+			BlockHeight: blockHeight, // 会在 runCommand 中更新
 		}, nil
 	}
 

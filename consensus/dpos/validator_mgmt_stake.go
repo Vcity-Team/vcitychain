@@ -69,6 +69,40 @@ func (d *DPoS) GetStakingInfoWithTx(blockNumber uint64, staker types.Address, db
 	return d.GetStakingInfo(blockNumber, staker)
 }
 
+// GetAllStakingInfo 从内存获取所有质押信息（简单直接）
+func (d *DPoS) GetAllStakingInfo() ([]*StakeInfo, error) {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	// 优先从 d.delegates 读取，如果为空则从 d.runtime.delegates 读取
+	delegates := d.delegates
+	if len(delegates) == 0 && d.runtime != nil && len(d.runtime.delegates) > 0 {
+		delegates = d.runtime.delegates
+	}
+
+	// 转换为 StakeInfo，包含故障标志
+	result := make([]*StakeInfo, 0, len(delegates))
+	for _, delegate := range delegates {
+		// 获取故障标志信息
+		faultInfo := d.getValidatorFaultInfo(delegate.Address)
+
+		stakingInfo := &StakeInfo{
+			Staker:    delegate.Address,
+			Amount:    new(big.Int).Set(delegate.VotingPower),
+			IsActive:  delegate.IsActive,
+			StartTime: uint64(time.Now().Unix()),
+			EndTime:   0,
+			IsLocked:  false,
+			Rewards:   big.NewInt(0),
+			Delegate:  delegate.Address, // 验证者自己就是委托人
+			FaultFlag: faultInfo,        // 🆕 添加故障标志
+		}
+		result = append(result, stakingInfo)
+	}
+
+	return result, nil
+}
+
 // getPrimaryDelegate 获取主要受托人地址（辅助方法）
 func (d *DPoS) getPrimaryDelegate(votedDelegates []types.Address) types.Address {
 	if len(votedDelegates) == 0 {
@@ -76,4 +110,3 @@ func (d *DPoS) getPrimaryDelegate(votedDelegates []types.Address) types.Address 
 	}
 	return votedDelegates[0]
 }
-
