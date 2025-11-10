@@ -17,6 +17,9 @@ type BlockProductionTracker struct {
 	currentEpochBlockTimes map[types.Address][]time.Time
 	epochBlockTimesHistory map[uint64]map[types.Address][]time.Time
 
+	// 🆕 新增：记录已处理的区块号（用于去重）
+	processedBlocks map[uint64]bool
+
 	currentEpoch    uint64
 	epochStartTime  time.Time
 	epochStartBlock uint64
@@ -39,6 +42,9 @@ func NewBlockProductionTracker(logger hclog.Logger, store *BlockTrackerStore, bl
 		// 🆕 新增：初始化区块时间记录
 		currentEpochBlockTimes: make(map[types.Address][]time.Time),
 		epochBlockTimesHistory: make(map[uint64]map[types.Address][]time.Time),
+
+		// 🆕 新增：初始化已处理区块记录（用于去重）
+		processedBlocks: make(map[uint64]bool),
 
 		logger:    logger,
 		store:     store,     // 🆕 新增：设置数据库存储
@@ -100,6 +106,15 @@ func (bpt *BlockProductionTracker) RecordBlockProduction(
 	bpt.mutex.Lock()
 	defer bpt.mutex.Unlock()
 
+	// 🆕 去重检查：如果该区块已经处理过，跳过
+	if bpt.processedBlocks[blockNumber] {
+		bpt.logger.Debug("⚠️ 区块已记录，跳过重复记录",
+			"blockNumber", blockNumber,
+			"producer", producer.String(),
+			"epoch", epochNumber)
+		return
+	}
+
 	// 如果epoch变化，保存历史数据
 	if epochNumber != bpt.currentEpoch {
 		if bpt.currentEpoch > 0 {
@@ -128,6 +143,10 @@ func (bpt *BlockProductionTracker) RecordBlockProduction(
 		// 🆕 重置区块时间记录
 		bpt.currentEpochBlockTimes = make(map[types.Address][]time.Time)
 
+		// 🆕 清理已处理区块记录（只保留当前epoch的区块，避免内存泄漏）
+		// 清理策略：只保留最近2个epoch的区块记录
+		bpt.cleanupProcessedBlocks(epochNumber)
+
 		bpt.logger.Debug("🔄 开始新Epoch出块统计",
 			"epoch", epochNumber,
 			"startTime", blockTime.Format("2006-01-02 15:04:05"),
@@ -136,6 +155,9 @@ func (bpt *BlockProductionTracker) RecordBlockProduction(
 
 	// 记录出块
 	bpt.currentEpochBlocks[producer]++
+
+	// 🆕 标记该区块已处理
+	bpt.processedBlocks[blockNumber] = true
 
 	// 🆕 记录区块时间
 	bpt.currentEpochBlockTimes[producer] = append(bpt.currentEpochBlockTimes[producer], blockTime)
@@ -246,4 +268,29 @@ func (bpt *BlockProductionTracker) GetEpochExpectedBlockTime(epochNumber uint64)
 	}
 
 	return blockTime
+}
+
+// cleanupProcessedBlocks 清理已处理区块记录（避免内存泄漏）
+// 只保留最近2个epoch的区块记录
+func (bpt *BlockProductionTracker) cleanupProcessedBlocks(currentEpoch uint64) {
+	// 计算要保留的最小区块号（假设每个epoch最多200个区块，保留2个epoch）
+	// 这是一个保守的估计，实际应该根据epochSize来计算
+	epochSize := uint64(100) // 默认值，实际应该从配置获取
+	minBlockNumber := uint64(0)
+	if currentEpoch > 2 {
+		// 只保留最近2个epoch的区块记录
+		minBlockNumber = (currentEpoch - 2) * epochSize
+	}
+
+	// 清理过期的区块记录
+	for blockNum := range bpt.processedBlocks {
+		if blockNum < minBlockNumber {
+			delete(bpt.processedBlocks, blockNum)
+		}
+	}
+
+	bpt.logger.Debug("🧹 清理已处理区块记录",
+		"currentEpoch", currentEpoch,
+		"minBlockNumber", minBlockNumber,
+		"remainingRecords", len(bpt.processedBlocks))
 }

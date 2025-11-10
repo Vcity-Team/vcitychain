@@ -53,11 +53,20 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 	timeRemaining := time.Duration(0)
 	nextEpochTime := lastEpochTime.Add(epochDuration)
 	if time.Now().Before(nextEpochTime) {
-		timeRemaining = nextEpochTime.Sub(time.Now())
+		timeRemaining = time.Until(nextEpochTime)
 	}
 
 	// 🆕 从数据库读取验证者信息（按权重倒序排序，应用配置限制）
 	validators := make([]map[string]interface{}, 0)
+	
+	// 🆕 获取该epoch的出块统计
+	var blockCounts map[types.Address]uint64
+	if d.blockTracker != nil {
+		blockCounts = d.blockTracker.GetEpochBlockCounts(epochNumber)
+	} else {
+		blockCounts = make(map[types.Address]uint64)
+	}
+	
 	if d.state != nil && d.state.StakeStore != nil {
 		// 🆕 使用公共函数获取排序和限制后的验证者（包含故障过滤）
 		dbValidators, err := d.GetSortedValidatorsWithLimit()
@@ -66,13 +75,17 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 			for i, validator := range dbValidators {
 				// 🆕 获取验证者的故障标志信息
 				faultInfo := d.getValidatorFaultInfo(validator.Address)
+				
+				// 🆕 获取该验证者在该epoch的出块数
+				blocksProduced := blockCounts[validator.Address]
 
 				validators = append(validators, map[string]interface{}{
-					"index":       i,
-					"address":     validator.Address.String(),
-					"votingPower": validator.VotingPower.String(),
-					"isActive":    validator.IsActive,
-					"faultFlag":   faultInfo, // 🆕 添加故障标志信息
+					"index":          i,
+					"address":        validator.Address.String(),
+					"votingPower":    validator.VotingPower.String(),
+					"isActive":       validator.IsActive,
+					"faultFlag":      faultInfo, // 🆕 添加故障标志信息
+					"blocksProduced": blocksProduced, // 🆕 添加该epoch的出块数
 				})
 			}
 		}
@@ -158,7 +171,41 @@ func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
 	// 获取epoch时间信息
 	_, _, epochDuration := d.epochManager.GetEpochInfo(currentBlockNumber)
 
-	// 对于历史Epoch，提供基本信息
+	// 🆕 获取该epoch的出块统计
+	var blockCounts map[types.Address]uint64
+	if d.blockTracker != nil {
+		blockCounts = d.blockTracker.GetEpochBlockCounts(epochNumber)
+	} else {
+		blockCounts = make(map[types.Address]uint64)
+	}
+
+	// 🆕 从数据库读取验证者信息（按权重倒序排序，应用配置限制）
+	validators := make([]map[string]interface{}, 0)
+	if d.state != nil && d.state.StakeStore != nil {
+		// 🆕 使用公共函数获取排序和限制后的验证者（包含故障过滤）
+		dbValidators, err := d.GetSortedValidatorsWithLimit()
+		if err == nil && len(dbValidators) > 0 {
+			// 转换为输出格式
+			for i, validator := range dbValidators {
+				// 🆕 获取验证者的故障标志信息
+				faultInfo := d.getValidatorFaultInfo(validator.Address)
+				
+				// 🆕 获取该验证者在该epoch的出块数
+				blocksProduced := blockCounts[validator.Address]
+
+				validators = append(validators, map[string]interface{}{
+					"index":          i,
+					"address":        validator.Address.String(),
+					"votingPower":    validator.VotingPower.String(),
+					"isActive":       validator.IsActive,
+					"faultFlag":      faultInfo, // 🆕 添加故障标志信息
+					"blocksProduced": blocksProduced, // 🆕 添加该epoch的出块数
+				})
+			}
+		}
+	}
+
+	// 对于历史Epoch，提供基本信息（包含验证者信息和出块数）
 	return map[string]interface{}{
 		"epochNumber":           epochNumber,
 		"epochStatus":           epochStatus,
@@ -169,7 +216,8 @@ func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
 		"currentEpoch":          currentEpoch,
 		"currentBlockNumber":    currentBlockNumber,
 		"consensusSwitchHeight": d.config.ConsensusSwitchHeight,
-		"note":                  "Historical epoch data limited - only basic information available",
+		"validators":            validators, // 🆕 添加验证者信息（包含出块数）
+		"validatorCount":        len(validators), // 🆕 添加验证者数量
 	}
 }
 
