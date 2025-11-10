@@ -254,10 +254,10 @@ func (d *DPoS) GetCurrentProposalPeriod() map[string]interface{} {
 	var timeInfo string
 	if d.config != nil && d.config.ProposalVotePeriod > 0 {
 		// 显示时间格式
-		timeInfo = fmt.Sprintf("%s (%d个区块)", d.config.ProposalVotePeriod.String(), votePeriod)
+		timeInfo = fmt.Sprintf("%s (%d blocks)", d.config.ProposalVotePeriod.String(), votePeriod)
 	} else {
 		// 只显示区块数
-		timeInfo = fmt.Sprintf("%d个区块", votePeriod)
+		timeInfo = fmt.Sprintf("%d blocks", votePeriod)
 	}
 
 	return map[string]interface{}{

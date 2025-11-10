@@ -4000,7 +4000,7 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 					"isExpired":       remainingBlocks <= 0,
 					"votingPeriod":    d.getCurrentProposalPeriodInfo(), // 显示当前配置的提案周期
 					"proposalPeriod":  d.getCurrentProposalPeriodInfo(),
-					"proposalBlocks":  fmt.Sprintf("区块 %d - %d", proposal.StartBlock, proposal.EndBlock), // 显示提案的实际区块范围
+					"proposalBlocks":  fmt.Sprintf("Blocks %d - %d", proposal.StartBlock, proposal.EndBlock), // Display the actual block range of the proposal
 				},
 			},
 		}, nil
@@ -4458,7 +4458,7 @@ func (d *DPOS) getCurrentProposalPeriodInfo() string {
 	// 获取DPoS引擎
 	dposEngine := d.getDPoSEngine()
 	if dposEngine == nil {
-		return "无法获取提案周期信息"
+		return "Unable to get proposal period information"
 	}
 
 	// 通过接口获取当前提案周期
@@ -4473,7 +4473,7 @@ func (d *DPOS) getCurrentProposalPeriodInfo() string {
 		}
 	}
 
-	return "无法获取提案周期信息"
+	return "Unable to get proposal period information"
 }
 
 // GetBlockProducers 获取区块范围内的出块者信息
