@@ -655,7 +655,7 @@ func (p *TxPool) ResetWithHeaders(headers ...*types.Header) {
 // processEvent collects the latest nonces for each account contained
 // in the received event. Resets all known accounts with the new nonce.
 func (p *TxPool) processEvent(event *blockchain.Event) {
-	p.logger.Info("🔵 [processEvent] 开始处理区块链事件",
+	p.logger.Debug("🔵 [processEvent] 开始处理区块链事件",
 		"newChainCount", len(event.NewChain),
 		"source", event.Source)
 
@@ -665,7 +665,7 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 
 	// discover latest (next) nonces for all accounts
 	for _, header := range event.NewChain {
-		p.logger.Info("🔵 [processEvent] 处理区块",
+		p.logger.Debug("🔵 [processEvent] 处理区块",
 			"blockNumber", header.Number,
 			"blockHash", header.Hash.String()[:16])
 		block, ok := p.store.GetBlockByHash(header.Hash, true)
@@ -853,7 +853,7 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 		return true
 	})
 
-	p.logger.Info("🔵 [processEvent] 准备调用resetAccounts进行第二层清理",
+	p.logger.Debug("🔵 [processEvent] 准备调用resetAccounts进行第二层清理",
 		"accountCount", len(stateNonces),
 		"accountList", func() []string {
 			var addrs []string
@@ -874,7 +874,7 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 		p.updateAccountSkipsCounts(stateNonces)
 	}
 
-	p.logger.Info("🔵 [processEvent] 处理完成")
+	p.logger.Debug("🔵 [processEvent] 处理完成")
 }
 
 // validateTx ensures the transaction conforms to specific

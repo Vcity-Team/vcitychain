@@ -1470,31 +1470,8 @@ func (d *DPOS) Delegate(ctx context.Context, params interface{}) (interface{}, e
 	}, nil
 }
 
-// GetDelegates handles dpos_getDelegates RPC method
-func (d *DPOS) GetDelegates(ctx context.Context, blockNumber *uint64) (validator.AccountSet, error) {
-	d.logger.Info("DPoS GetDelegates called", "blockNumber", blockNumber)
-
-	// 使用不过滤的版本，返回所有验证者（包括投票权重为0的）
-	validators, err := d.store.GetValidatorsWithFilter(false)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get validators: %w", err)
-	}
-
-	return validators, nil
-}
-
-// GetValidatorSet handles dpos_getValidatorSet RPC method
-func (d *DPOS) GetValidatorSet(ctx context.Context, blockNumber *uint64) (validator.AccountSet, error) {
-	d.logger.Info("DPoS GetValidatorSet called", "blockNumber", blockNumber)
-
-	// 使用不过滤的版本，返回所有验证者（包括投票权重为0的）
-	validators, err := d.store.GetValidatorsWithFilter(false)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get validators: %w", err)
-	}
-
-	return validators, nil
-}
+// GetDelegates, GetValidatorSet, GetAllValidators 已删除
+// 这些接口与 dpos_getStakingInfo 功能重复，请使用 dpos_getStakingInfo 替代
 
 // GetStakingInfo handles dpos_getStakingInfo RPC method
 func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) ([]*dpos.StakeInfo, error) {
@@ -1690,21 +1667,8 @@ func (d *DPOS) GetConsensusState(ctx context.Context) (map[string]interface{}, e
 	}, nil
 }
 
-// GetAllValidators handles dpos_getAllValidators RPC method
-// This method returns all validators from database, including those with zero voting power
-func (d *DPOS) GetAllValidators(ctx context.Context, blockNumber *uint64) (validator.AccountSet, error) {
-	d.logger.Info("DPoS GetAllValidators called", "blockNumber", blockNumber)
-
-	// 使用不过滤的版本，返回所有验证者（包括投票权重为0的）
-	// 直接使用 d.store.GetValidatorsWithFilter(false) 而不是通过 GetDPoSState()
-	validators, err := d.store.GetValidatorsWithFilter(false)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get all validators: %w", err)
-	}
-
-	d.logger.Info("All validators retrieved successfully", "count", len(validators))
-	return validators, nil
-}
+// GetAllValidators 已删除
+// 请使用 dpos_getStakingInfo 替代，它返回更详细的质押信息（包括故障标志等）
 
 // Helper validation functions
 func (d *DPOS) validateVoteRequest(req *VoteRequest) error {
