@@ -1370,7 +1370,7 @@ func (d *DPoS) OnBlockInserted(fullBlock *types.FullBlock) {
 		return
 	}
 
-	d.logger.Info("🔵 [DPoS.OnBlockInserted] 清理交易池",
+	d.logger.Debug("🔵 [DPoS.OnBlockInserted] 清理交易池",
 		"blockNumber", fullBlock.Block.Number(),
 		"blockHash", fullBlock.Block.Hash().String()[:16],
 		"txCount", len(fullBlock.Block.Transactions))

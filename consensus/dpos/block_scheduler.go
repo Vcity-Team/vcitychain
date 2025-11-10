@@ -169,8 +169,8 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	expectedValidator := validators[currentValidatorIndex]
 	isMatch := expectedValidator == myAddress
 
-	// ========== 🆕 详细日志：打印ShouldProduceBlockNow中的验证者列表和验证结果（200ms间隔，便于追踪分叉问题） ==========
-	bs.logOnceWithInterval("should_produce_block_now_validators_detail", 1000*time.Millisecond, "info",
+	// ========== 🆕 详细日志：打印ShouldProduceBlockNow中的验证者列表和验证结果（2000ms间隔，便于追踪分叉问题） ==========
+	bs.logOnceWithInterval("should_produce_block_now_validators_detail", 2000*time.Millisecond, "info",
 		"🔍 ShouldProduceBlockNow 中的验证者列表和验证详情",
 		"blockNumber", blockNumber,
 		"currentSlot", currentSlot,

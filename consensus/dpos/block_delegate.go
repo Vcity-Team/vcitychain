@@ -1,7 +1,6 @@
 package dpos
 
 import (
-	"fmt"
 	"math/big"
 	"time"
 
@@ -14,7 +13,7 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 	// 🆕 优化：优先使用缓存的验证者集合，避免每次查询数据库
 	var validators validator.AccountSet
 	var err error
-	
+
 	// 优先使用缓存的 delegates
 	if r.delegates != nil && len(r.delegates) > 0 {
 		validators = r.delegates
@@ -56,23 +55,23 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 		delegate := validators[currentValidatorIndex]
 
 		// 🆕 添加详细的调试日志
-		r.logOnceWithInterval("get_current_delegate_start_check", 10*time.Second, "info", "🔍 getCurrentDelegate 开始检查",
-			"delegatesCount", actualDelegateCount,
-			"currentSlot", currentSlot,
-			"validatorIndex", currentValidatorIndex,
-			"delegates_array_detail", func() string {
-				if len(validators) == 0 {
-					return "delegates数组为空"
-				}
-				result := "delegates数组: "
-				for i, delegate := range validators {
-					if i < 5 { // 只显示前5个
-						result += fmt.Sprintf("[%d]=%s(vp=%s,active=%v) ", i, delegate.Address.String()[:10], delegate.VotingPower.String(), delegate.IsActive)
-					}
-				}
-				return result
-			}(),
-			"timestamp", time.Now().Format("15:04:05.000"))
+		// r.logOnceWithInterval("get_current_delegate_start_check", 10*time.Second, "info", "🔍 getCurrentDelegate 开始检查",
+		// 	"delegatesCount", actualDelegateCount,
+		// 	"currentSlot", currentSlot,
+		// 	"validatorIndex", currentValidatorIndex,
+		// 	"delegates_array_detail", func() string {
+		// 		if len(validators) == 0 {
+		// 			return "delegates数组为空"
+		// 		}
+		// 		result := "delegates数组: "
+		// 		for i, delegate := range validators {
+		// 			if i < 5 { // 只显示前5个
+		// 				result += fmt.Sprintf("[%d]=%s(vp=%s,active=%v) ", i, delegate.Address.String()[:10], delegate.VotingPower.String(), delegate.IsActive)
+		// 			}
+		// 		}
+		// 		return result
+		// 	}(),
+		// 	"timestamp", time.Now().Format("15:04:05.000"))
 
 		// 检查受托人是否活跃且有足够的stake
 		if !delegate.IsActive || delegate.VotingPower.Cmp(big.NewInt(0)) <= 0 {
@@ -103,4 +102,3 @@ func (r *dposRuntime) getNetworkLatestBlockNumber() uint64 {
 	}
 	return 0
 }
-

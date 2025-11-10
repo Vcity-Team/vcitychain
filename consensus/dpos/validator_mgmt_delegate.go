@@ -9,8 +9,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
+	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/types"
 	"go.etcd.io/bbolt"
 )
@@ -1062,7 +1062,116 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 		return nil, fmt.Errorf("registration store not available")
 	}
 
-	return d.state.RegistrationStore.GetAllRegistrations()
+	// 1. 从数据库获取已注册的受托人信息
+	dbRegistrations, err := d.state.RegistrationStore.GetAllRegistrations()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get registrations from database: %w", err)
+	}
+
+	// 2. 创建已注册地址的映射，用于去重
+	registeredAddresses := make(map[types.Address]bool)
+	for _, reg := range dbRegistrations {
+		registeredAddresses[reg.Address] = true
+	}
+
+	// 3. 获取创世验证者并转换为 DelegateRegistration
+	genesisRegistrations := d.getGenesisValidatorsAsRegistrations()
+
+	// 4. 合并：只添加未在数据库中注册的创世验证者
+	result := make([]*DelegateRegistration, 0, len(dbRegistrations)+len(genesisRegistrations))
+	result = append(result, dbRegistrations...)
+
+	for _, genesisReg := range genesisRegistrations {
+		if !registeredAddresses[genesisReg.Address] {
+			result = append(result, genesisReg)
+		}
+	}
+
+	return result, nil
+}
+
+// getGenesisValidatorsAsRegistrations 将创世验证者转换为 DelegateRegistration 格式
+func (d *DPoS) getGenesisValidatorsAsRegistrations() []*DelegateRegistration {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	// 获取创世验证者（优先从内存中的delegates获取，如果为空则从genesisValidators映射获取）
+	var genesisValidators validator.AccountSet
+
+	// 方法1: 从 d.delegates 中筛选创世验证者
+	if len(d.delegates) > 0 {
+		for _, delegate := range d.delegates {
+			if d.isGenesisValidator(delegate.Address) {
+				genesisValidators = append(genesisValidators, delegate)
+			}
+		}
+	}
+
+	// 方法2: 如果方法1没有找到，从 d.runtime.delegates 中筛选
+	if len(genesisValidators) == 0 && d.runtime != nil && len(d.runtime.delegates) > 0 {
+		for _, delegate := range d.runtime.delegates {
+			if d.isGenesisValidator(delegate.Address) {
+				genesisValidators = append(genesisValidators, delegate)
+			}
+		}
+	}
+
+	// 方法3: 如果前两种方法都没有找到，直接从 genesisValidators 映射创建
+	if len(genesisValidators) == 0 && len(d.genesisValidators) > 0 {
+		genesisValidators = d.getGenesisValidators()
+	}
+
+	// 方法4: 如果仍然为空，尝试从数据库中读取验证者信息
+	if len(genesisValidators) == 0 && d.state != nil && d.state.StakeStore != nil {
+		if dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false); err == nil && len(dbValidators) > 0 {
+			genesisValidators = dbValidators
+		}
+	}
+
+	// 方法5: 仍未获取到时，回退到配置中的初始验证者
+	if len(genesisValidators) == 0 && d.config != nil && len(d.config.InitialDelegates) > 0 {
+		for _, genesisValidator := range d.config.InitialDelegates {
+			votingPower, ok := new(big.Int).SetString("1000000000000000000000", 10) // 1000 VCITY
+			if !ok {
+				votingPower = big.NewInt(0)
+			}
+
+			genesisValidators = append(genesisValidators, &validator.ValidatorMetadata{
+				Address:     genesisValidator.Address,
+				VotingPower: votingPower,
+				IsActive:    true,
+			})
+		}
+	}
+
+	// 转换为 DelegateRegistration
+	result := make([]*DelegateRegistration, 0, len(genesisValidators))
+	fixedVotingPower, _ := new(big.Int).SetString("1000000000000000000000", 10) // 1000 VCITY
+	zeroDeposit := big.NewInt(0)
+
+	for _, validator := range genesisValidators {
+		reg := &DelegateRegistration{
+			Address:      validator.Address,
+			Name:         fmt.Sprintf("Genesis Validator %s", validator.Address.String()[:10]),
+			Website:      "",
+			Description:  "Genesis validator with default weight 1000 VCITY",
+			Deposit:      new(big.Int).Set(zeroDeposit), // 创世验证者没有保证金
+			Status:       RegStatusActive,               // 创世验证者默认为活跃状态
+			CreatedAt:    0,                             // 创世时间
+			TotalVotes:   new(big.Int).Set(validator.VotingPower),
+			IsActive:     validator.IsActive,
+			LastVoteTime: 0,
+		}
+
+		// 如果验证者的投票权重不是1000 VCITY，使用实际权重
+		if validator.VotingPower != nil && validator.VotingPower.Cmp(fixedVotingPower) != 0 {
+			reg.TotalVotes = new(big.Int).Set(validator.VotingPower)
+		}
+
+		result = append(result, reg)
+	}
+
+	return result
 }
 
 // getDelegateDepositAmount 获取受托人保证金金额
@@ -1346,4 +1455,3 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 	d.logger.Debug("✅ 受托人集合落盘完成", "count", len(d.delegates))
 	return nil
 }
-
