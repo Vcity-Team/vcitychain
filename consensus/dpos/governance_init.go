@@ -131,7 +131,7 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Type:        "uint64",
 			MinValue:    uint64(0),
 			MaxValue:    uint64(100),
-			Description: "验证者奖励比例 (0-100%)",
+			Description: "Validator reward ratio (0-100%)",
 			Category:    "economic",
 		},
 		"dpos_voter_reward_ratio": {
@@ -139,7 +139,7 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Type:        "uint64",
 			MinValue:    uint64(0),
 			MaxValue:    uint64(100),
-			Description: "投票者奖励比例 (0-100%)",
+			Description: "Voter reward ratio (0-100%)",
 			Category:    "economic",
 		},
 		"dpos_reward_amount": {
@@ -147,7 +147,7 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Type:        "string",
 			MinValue:    "0",
 			MaxValue:    "1000000000000000000000000", // 100万VCITY
-			Description: "每个epoch奖励金额 (wei)",
+			Description: "Reward amount per epoch (wei)",
 			Category:    "economic",
 		},
 		"dpos_delegate_threshold": {
@@ -155,7 +155,7 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Type:        "string",
 			MinValue:    "1000000000000000000",       // 1 VCITY
 			MaxValue:    "1000000000000000000000000", // 100万VCITY
-			Description: "最小质押门槛 (wei)",
+			Description: "Minimum staking threshold (wei)",
 			Category:    "economic",
 		},
 		"block_time_s": {
@@ -163,7 +163,7 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Type:        "uint64",
 			MinValue:    uint64(1),
 			MaxValue:    uint64(60),
-			Description: "区块间隔时间 (秒)",
+			Description: "Block time interval (seconds)",
 			Category:    "consensus",
 		},
 		"dpos_epoch_duration": {
@@ -171,7 +171,7 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Type:        "string",
 			MinValue:    "10s",
 			MaxValue:    "1h",
-			Description: "Epoch持续时间",
+			Description: "Epoch duration",
 			Category:    "consensus",
 		},
 		// 🆕 治理参数
@@ -180,7 +180,7 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Type:        "uint64",
 			MinValue:    uint64(30), // 最少30%
 			MaxValue:    uint64(90), // 最多90%
-			Description: "提案通过所需的最低支持率 (%)",
+			Description: "Minimum support rate required for proposal approval (%)",
 			Category:    "governance",
 		},
 		"governance_min_voting_threshold": {
@@ -188,7 +188,7 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Type:        "string",
 			MinValue:    "1000000000000000000",    // 最少1 VIC
 			MaxValue:    "1000000000000000000000", // 最多1000 VIC
-			Description: "参与投票所需的最小质押门槛 (wei)",
+			Description: "Minimum staking threshold required for voting (wei)",
 			Category:    "governance",
 		},
 	}
