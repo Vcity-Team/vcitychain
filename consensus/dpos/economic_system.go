@@ -35,8 +35,8 @@ func (d *DPoS) initializeEconomicSystem() error {
 		d.config.BlockTime.Duration, // 🆕 传递blockTime配置
 	)
 
-	// 3. 初始化TRON模式奖励分发器
-	d.rewardDistributor = NewTronRewardDistributor(
+	// 3. 初始化奖励分发器
+	d.rewardDistributor = NewRewardDistributor(
 		nil, // 状态将在运行时设置
 		d.config.RewardAccount,
 		d.config.RewardAmount,

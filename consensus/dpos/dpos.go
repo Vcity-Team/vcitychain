@@ -277,7 +277,7 @@ type DPoS struct {
 	// 🆕 经济系统组件
 	epochManager      *TimeBasedEpochManager
 	blockTracker      *BlockProductionTracker
-	rewardDistributor *TronRewardDistributor
+	rewardDistributor *RewardDistributor
 
 	// 🆕 固定时间窗口调度器
 	blockScheduler *BlockScheduler
