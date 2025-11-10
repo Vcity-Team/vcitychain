@@ -376,6 +376,14 @@ func (d *DPoS) GetCurrentBlockNumber() uint64 {
 	return d.getCurrentBlockNumber()
 }
 
+// GetConsensusSwitchHeight 获取共识切换高度（导出方法，供JSON-RPC使用）
+func (d *DPoS) GetConsensusSwitchHeight() uint64 {
+	if d.config == nil {
+		return 0
+	}
+	return d.config.ConsensusSwitchHeight
+}
+
 // UpdateParameterValue, GetParameterProposal, GetActiveProposals, GetVotableParameters, GetCurrentParameterValues 已迁移到 governance_query.go
 
 // VerifyHeader, verifyHeaderImpl, ProcessHeaders 已迁移到 block_validation.go

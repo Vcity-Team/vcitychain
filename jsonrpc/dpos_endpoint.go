@@ -1603,15 +1603,105 @@ func (d *DPOS) GetVotingPower(ctx context.Context, params interface{}) (map[stri
 func (d *DPOS) GetCurrentRound(ctx context.Context) (uint64, error) {
 	d.logger.Info("DPoS GetCurrentRound called")
 
-	// Get current DPoS state
-	_, err := d.store.GetDPoSState()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get DPoS state: %w", err)
+	// 优先尝试从 DPoS 引擎获取当前 round
+	dposEngine := d.getDPoSEngine()
+	if dposEngine != nil {
+		if engine, ok := dposEngine.(interface {
+			GetCurrentRound() uint64
+		}); ok {
+			currentRound := engine.GetCurrentRound()
+			if currentRound > 0 {
+				d.logger.Debug("从DPoS引擎获取当前round", "round", currentRound)
+				return currentRound, nil
+			}
+		}
+
+		// 🆕 如果引擎返回0，尝试从DPoS引擎直接获取所需信息进行计算
+		if dpos, ok := dposEngine.(*dpos.DPoS); ok {
+			// 从DPoS引擎获取当前区块号
+			currentBlockHeight := dpos.GetCurrentBlockNumber()
+			if currentBlockHeight == 0 {
+				d.logger.Warn("无法从DPoS引擎获取当前区块高度，尝试其他方法")
+				// 继续尝试其他方法
+			} else {
+				// 从DPoS引擎获取共识切换高度
+				consensusSwitchHeight := dpos.GetConsensusSwitchHeight()
+				if currentBlockHeight < consensusSwitchHeight {
+					d.logger.Debug("当前区块高度小于共识切换高度，返回0", "height", currentBlockHeight, "switchHeight", consensusSwitchHeight)
+					return 0, nil
+				}
+
+				// 从DPoS引擎获取验证者数量（使用GetDelegates方法）
+				var validatorCount uint64
+				if delegates, err := dpos.GetDelegates(currentBlockHeight, nil); err == nil && len(delegates) > 0 {
+					validatorCount = uint64(len(delegates))
+				} else {
+					// 如果GetDelegates失败，尝试从GetAllStakingInfo获取
+					if stakingInfo, err := dpos.GetAllStakingInfo(); err == nil && len(stakingInfo) > 0 {
+						validatorCount = uint64(len(stakingInfo))
+					}
+				}
+
+				if validatorCount == 0 {
+					d.logger.Warn("无法从DPoS引擎获取验证者数量，返回默认值1")
+					return 1, nil
+				}
+
+				// 计算 round: (当前区块高度 - 共识切换高度) / 验证者数量 + 1
+				dposBlockNumber := currentBlockHeight - consensusSwitchHeight
+				currentRound := (dposBlockNumber / validatorCount) + 1
+
+				d.logger.Debug("从DPoS引擎计算当前round",
+					"currentBlockHeight", currentBlockHeight,
+					"consensusSwitchHeight", consensusSwitchHeight,
+					"dposBlockNumber", dposBlockNumber,
+					"validatorCount", validatorCount,
+					"currentRound", currentRound)
+
+				return currentRound, nil
+			}
+		}
 	}
 
-	// TODO: Calculate current round based on block height and delegate count
-	// For now, return a default value
-	return 1, nil
+	// 如果无法从DPoS引擎获取，回退到通过store获取
+	currentBlockHeight := d.getCurrentBlockHeight()
+	if currentBlockHeight == 0 {
+		d.logger.Warn("无法获取当前区块高度，返回默认值1")
+		return 1, nil
+	}
+
+	// 获取共识切换高度
+	consensusSwitchHeight := d.getConsensusSwitchHeight()
+	if currentBlockHeight < consensusSwitchHeight {
+		d.logger.Debug("当前区块高度小于共识切换高度，返回0", "height", currentBlockHeight, "switchHeight", consensusSwitchHeight)
+		return 0, nil
+	}
+
+	// 获取验证者数量
+	validators, err := d.store.GetValidatorsWithFilter(false)
+	if err != nil {
+		d.logger.Warn("无法获取验证者列表，返回默认值1", "error", err)
+		return 1, nil
+	}
+
+	validatorCount := uint64(len(validators))
+	if validatorCount == 0 {
+		d.logger.Warn("验证者数量为0，返回默认值1")
+		return 1, nil
+	}
+
+	// 计算 round: (当前区块高度 - 共识切换高度) / 验证者数量 + 1
+	dposBlockNumber := currentBlockHeight - consensusSwitchHeight
+	currentRound := (dposBlockNumber / validatorCount) + 1
+
+	d.logger.Debug("通过store计算当前round",
+		"currentBlockHeight", currentBlockHeight,
+		"consensusSwitchHeight", consensusSwitchHeight,
+		"dposBlockNumber", dposBlockNumber,
+		"validatorCount", validatorCount,
+		"currentRound", currentRound)
+
+	return currentRound, nil
 }
 
 // GetCurrentDelegate handles dpos_getCurrentDelegate RPC method
@@ -2831,7 +2921,21 @@ func (d *DPOS) getDPoSEngine() interface{} {
 
 // getCurrentBlockHeight 获取当前区块高度
 func (d *DPOS) getCurrentBlockHeight() uint64 {
-	// 尝试从ethBlockchainStore获取区块高度
+	// 方法1: 尝试从 DPoS 引擎获取当前区块号
+	dposEngine := d.getDPoSEngine()
+	if dposEngine != nil {
+		if engine, ok := dposEngine.(interface {
+			GetCurrentBlockNumber() uint64
+		}); ok {
+			blockNumber := engine.GetCurrentBlockNumber()
+			if blockNumber > 0 {
+				d.logger.Debug("从DPoS引擎获取当前区块高度", "height", blockNumber)
+				return blockNumber
+			}
+		}
+	}
+
+	// 方法2: 尝试从ethBlockchainStore获取区块高度
 	if blockchainStore, ok := d.store.(interface {
 		Header() *types.Header
 	}); ok {
@@ -2842,7 +2946,7 @@ func (d *DPOS) getCurrentBlockHeight() uint64 {
 		}
 	}
 
-	// 尝试从GetLatestHeader方法获取
+	// 方法3: 尝试从GetLatestHeader方法获取
 	if headerStore, ok := d.store.(interface {
 		GetLatestHeader() *types.Header
 	}); ok {
@@ -2853,7 +2957,7 @@ func (d *DPOS) getCurrentBlockHeight() uint64 {
 		}
 	}
 
-	// 尝试从GetLatestBlock方法获取
+	// 方法4: 尝试从GetLatestBlock方法获取
 	if blockStore, ok := d.store.(interface {
 		GetLatestBlock() *types.Block
 	}); ok {
@@ -2861,6 +2965,22 @@ func (d *DPOS) getCurrentBlockHeight() uint64 {
 		if block != nil {
 			d.logger.Debug("从GetLatestBlock()方法获取区块高度", "height", block.Header.Number)
 			return block.Header.Number
+		}
+	}
+
+	// 方法5: 尝试从共识引擎获取当前高度
+	if consensusStore, ok := d.store.(interface {
+		GetConsensus() interface{}
+	}); ok {
+		consensusEngine := consensusStore.GetConsensus()
+		if ibftEngine, ok := consensusEngine.(interface {
+			GetCurrentHeight() uint64
+		}); ok {
+			height := ibftEngine.GetCurrentHeight()
+			if height > 0 {
+				d.logger.Debug("从IBFT引擎获取当前高度", "height", height)
+				return height
+			}
 		}
 	}
 
