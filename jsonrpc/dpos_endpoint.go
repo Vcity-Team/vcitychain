@@ -1056,18 +1056,26 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 				} else {
 					blockStatus = "block_found_but_no_details"
 					d.logger.Info("Block found but could not retrieve block details")
+					// If block found but can't get details, try to get current block height
+					blockNumber = d.getCurrentBlockHeight()
 				}
 			} else {
+				// Transaction is pending, return current block height instead of 0
+				blockNumber = d.getCurrentBlockHeight()
 				blockStatus = "pending"
-				d.logger.Info("Transaction not yet mined, blockNumber will be 0 (this is normal for newly added transactions)")
+				d.logger.Info("Transaction not yet mined, returning current block height", "blockNumber", blockNumber)
 			}
 		} else {
+			// Store doesn't support ReadTxLookup, get current block height
+			blockNumber = d.getCurrentBlockHeight()
 			blockStatus = "store_not_supported"
-			d.logger.Info("Store does not support ReadTxLookup/GetBlockByHash, cannot determine block number")
+			d.logger.Info("Store does not support ReadTxLookup/GetBlockByHash, using current block height", "blockNumber", blockNumber)
 		}
 	} else {
+		// Transaction was not added, still return current block height
+		blockNumber = d.getCurrentBlockHeight()
 		blockStatus = "tx_not_added"
-		d.logger.Info("Transaction was not added to pool, blockNumber will be 0")
+		d.logger.Info("Transaction was not added to pool, returning current block height", "blockNumber", blockNumber)
 	}
 
 	// Log the final status
@@ -1082,7 +1090,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		Success:     true,
 		Message:     successMessage,
 		TxHash:      txHash.String(),
-		BlockNumber: blockNumber, // Real block number if mined, 0 if pending
+		BlockNumber: blockNumber, // Real block number if mined, current block height if pending
 	}, nil
 }
 

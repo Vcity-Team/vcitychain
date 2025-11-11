@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"os"
 	"sync/atomic"
 	"time"
 
@@ -403,9 +402,7 @@ func (p *TxPool) AddTx(tx *types.Transaction) error {
 		}
 
 		// 其他错误情况，保持原有退出逻辑
-		p.logger.Error("💀 交易加入交易池失败，程序将立即退出", logFields...)
-
-		os.Exit(1)
+		p.logger.Error(" 交易加入交易池失败", logFields...)
 		return err
 	}
 
@@ -1159,7 +1156,7 @@ func (p *TxPool) addTx(origin txOrigin, tx *types.Transaction) error {
 
 	// validate incoming tx
 	if err := p.validateTx(tx); err != nil {
-		p.logger.Error("💀 交易验证失败", "err", err, "txHash", tx.Hash.String())
+		p.logger.Error("交易验证失败", "err", err, "txHash", tx.Hash.String())
 		return err
 	}
 

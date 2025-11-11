@@ -522,7 +522,8 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 			}
 		}
 
-		return data, NewInvalidRequestError(err.Error())
+		// Use InternalError for application errors to preserve full error message
+		return data, NewInternalError(err.Error())
 	}
 
 	if res := output[0].Interface(); res != nil {

@@ -33,11 +33,12 @@ type registerDelegateParams struct {
 // GetRegisterCommand returns the register delegate command
 func GetRegisterCommand() *cobra.Command {
 	registerCmd := &cobra.Command{
-		Use:     "register",
-		Short:   "Register as a DPoS delegate candidate",
-		Long:    "Register as a DPoS delegate candidate to be eligible for voting",
-		PreRunE: runPreRun,
-		RunE:    runCommand,
+		Use:          "register",
+		Short:        "Register as a DPoS delegate candidate",
+		Long:         "Register as a DPoS delegate candidate to be eligible for voting",
+		PreRunE:      runPreRun,
+		RunE:         runCommand,
+		SilenceUsage: true, // Hide usage information on error
 	}
 
 	// Register JSON-RPC flag

@@ -877,6 +877,7 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 	d.logger.Info("🏊 ===== 开始添加交易到交易池 =====")
 
 	var txAdded bool
+	var addTxErr error
 	if d.txPool != nil {
 		d.logger.Info("🔍 检查交易池支持...")
 		// 尝试将 txPoolInterface 转换为 *TxPool 来访问 AddTx 方法
@@ -886,6 +887,7 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 			d.logger.Info("✅ 交易池支持AddTx方法，开始添加交易...")
 			if err := realTxPool.AddTx(tx); err != nil {
 				d.logger.Error("❌ 添加交易到交易池失败", "error", err)
+				addTxErr = err
 				// 继续执行，作为fallback直接更新状态
 			} else {
 				d.logger.Info("🎉 受托人注册交易已成功添加到交易池！",
@@ -895,14 +897,19 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 			}
 		} else {
 			d.logger.Warn("⚠️ 交易池不支持AddTx方法")
+			addTxErr = fmt.Errorf("txpool does not support AddTx method")
 		}
 	} else {
 		d.logger.Warn("⚠️ 交易池为空")
+		addTxErr = fmt.Errorf("txpool is nil")
 	}
 
-	// 如果交易池添加失败，返回错误
+	// 如果交易池添加失败，返回错误（包含原始错误信息）
 	if !txAdded {
-		d.logger.Error("❌ 交易池添加失败，无法完成受托人注册")
+		d.logger.Error("❌ 交易池添加失败，无法完成受托人注册", "error", addTxErr)
+		if addTxErr != nil {
+			return fmt.Errorf("failed to add delegate registration transaction to pool: %w", addTxErr)
+		}
 		return fmt.Errorf("failed to add delegate registration transaction to pool")
 	}
 
