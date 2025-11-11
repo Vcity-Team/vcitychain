@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/helper/common"
@@ -179,6 +180,26 @@ type RewardRecordExtended struct {
 // RewardStore 奖励记录存储
 type RewardStore struct {
 	db *bolt.DB
+}
+
+// RewardSummary 汇总奖励信息
+type RewardSummary struct {
+	Address              string                 `json:"address"`
+	FromEpoch            uint64                 `json:"fromEpoch"`
+	ToEpoch              uint64                 `json:"toEpoch"`
+	TotalRewardWei       string                 `json:"totalRewardWei"`
+	ValidatorRewardWei   string                 `json:"validatorRewardWei"`
+	VoterRewardWei       string                 `json:"voterRewardWei"`
+	ValidatorRecords     []RewardRecordExtended `json:"validatorRecords"`
+	VoterRecords         []RewardRecordExtended `json:"voterRecords"`
+	OtherRewardRecords   []RewardRecordExtended `json:"otherRewardRecords"`
+	TotalRewardEther     string                 `json:"totalRewardEther,omitempty"`
+	ValidatorRewardEther string                 `json:"validatorRewardEther,omitempty"`
+	VoterRewardEther     string                 `json:"voterRewardEther,omitempty"`
+	RecordCount          int                    `json:"recordCount"`
+	ValidatorRecordCount int                    `json:"validatorRecordCount"`
+	VoterRecordCount     int                    `json:"voterRecordCount"`
+	OtherRecordCount     int                    `json:"otherRecordCount"`
 }
 
 // BlockTrackerStore 出块统计存储
@@ -478,6 +499,56 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 	return s, nil
 }
 
+// EnsureRewardStore ensures that the reward store is initialized and ready for use
+func (s *State) EnsureRewardStore(logger hclog.Logger) error {
+	if s == nil {
+		return fmt.Errorf("state is nil")
+	}
+
+	if s.rewardDB != nil && s.RewardStore != nil {
+		return nil
+	}
+
+	if s.db == nil {
+		return fmt.Errorf("state database not initialized")
+	}
+
+	dbPath := s.db.Path()
+	if dbPath == "" {
+		return fmt.Errorf("state database path unavailable")
+	}
+
+	// Open reward DB if needed
+	if s.rewardDB == nil {
+		rewardDBPath := dbPath + ".rewards"
+		rewardDB, err := bolt.Open(rewardDBPath, 0666, nil)
+		if err != nil {
+			return fmt.Errorf("failed to open reward database: %w", err)
+		}
+		s.rewardDB = rewardDB
+	}
+
+	if s.RewardStore == nil {
+		s.RewardStore = &RewardStore{db: s.rewardDB}
+	}
+
+	if err := s.initRewardDatabase(); err != nil {
+		// Roll back reward database initialization on failure
+		if s.rewardDB != nil {
+			_ = s.rewardDB.Close()
+		}
+		s.rewardDB = nil
+		s.RewardStore = nil
+		return fmt.Errorf("failed to initialize reward database: %w", err)
+	}
+
+	if logger != nil {
+		logger.Info("Reward store initialized", "path", s.rewardDB.Path())
+	}
+
+	return nil
+}
+
 // initStorages initializes data storages
 func (s *State) initStorages() error {
 	// init the buckets
@@ -713,76 +784,32 @@ func (rs *RewardStore) RecordReward(record *RewardRecordExtended) error {
 
 // GetValidatorRewardHistory 查询验证者奖励历史
 func (rs *RewardStore) GetValidatorRewardHistory(validatorAddress string, fromEpoch, toEpoch uint64) ([]RewardRecordExtended, error) {
-	var records []RewardRecordExtended
+	summary, err := rs.GetRewardSummary(validatorAddress, fromEpoch, toEpoch)
+	if err != nil {
+		return nil, err
+	}
 
-	err := rs.db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("rewards"))
-		if bucket == nil {
-			return fmt.Errorf("rewards bucket not found")
-		}
-
-		cursor := bucket.Cursor()
-		for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
-			var record RewardRecordExtended
-			if err := json.Unmarshal(v, &record); err != nil {
-				continue
-			}
-
-			// 过滤条件
-			if record.Recipient == validatorAddress &&
-				record.RewardType == "validator" &&
-				record.EpochNumber >= fromEpoch &&
-				record.EpochNumber <= toEpoch {
-				records = append(records, record)
-			}
-		}
-
-		return nil
-	})
-
-	// 按epoch倒序排列
+	records := summary.ValidatorRecords
 	sort.Slice(records, func(i, j int) bool {
 		return records[i].EpochNumber > records[j].EpochNumber
 	})
 
-	return records, err
+	return records, nil
 }
 
 // GetVoterRewardHistory 查询投票者奖励历史
 func (rs *RewardStore) GetVoterRewardHistory(voterAddress string, fromEpoch, toEpoch uint64) ([]RewardRecordExtended, error) {
-	var records []RewardRecordExtended
+	summary, err := rs.GetRewardSummary(voterAddress, fromEpoch, toEpoch)
+	if err != nil {
+		return nil, err
+	}
 
-	err := rs.db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("rewards"))
-		if bucket == nil {
-			return fmt.Errorf("rewards bucket not found")
-		}
-
-		cursor := bucket.Cursor()
-		for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
-			var record RewardRecordExtended
-			if err := json.Unmarshal(v, &record); err != nil {
-				continue
-			}
-
-			// 过滤条件
-			if record.Recipient == voterAddress &&
-				record.RewardType == "voter" &&
-				record.EpochNumber >= fromEpoch &&
-				record.EpochNumber <= toEpoch {
-				records = append(records, record)
-			}
-		}
-
-		return nil
-	})
-
-	// 按epoch倒序排列
+	records := summary.VoterRecords
 	sort.Slice(records, func(i, j int) bool {
 		return records[i].EpochNumber > records[j].EpochNumber
 	})
 
-	return records, err
+	return records, nil
 }
 
 // Close 关闭数据库连接
@@ -832,4 +859,109 @@ func (rs *RewardStore) GetEpochRewardDetails(epochNumber uint64) ([]RewardRecord
 	})
 
 	return records, err
+}
+
+// GetRewardSummary 汇总指定地址在一定epoch范围内的奖励详情
+func (rs *RewardStore) GetRewardSummary(address string, fromEpoch, toEpoch uint64) (*RewardSummary, error) {
+	sum := &RewardSummary{
+		Address:            address,
+		FromEpoch:          fromEpoch,
+		ToEpoch:            toEpoch,
+		ValidatorRecords:   []RewardRecordExtended{},
+		VoterRecords:       []RewardRecordExtended{},
+		OtherRewardRecords: []RewardRecordExtended{},
+	}
+
+	total := big.NewInt(0)
+	validatorTotal := big.NewInt(0)
+	voterTotal := big.NewInt(0)
+
+	err := rs.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("rewards"))
+		if bucket == nil {
+			return fmt.Errorf("rewards bucket not found")
+		}
+
+		cursor := bucket.Cursor()
+		for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
+			var record RewardRecordExtended
+			if err := json.Unmarshal(v, &record); err != nil {
+				continue
+			}
+
+			if record.Recipient != address {
+				continue
+			}
+			if record.EpochNumber < fromEpoch || record.EpochNumber > toEpoch {
+				continue
+			}
+
+			amount, ok := new(big.Int).SetString(record.Amount, 10)
+			if !ok {
+				continue
+			}
+
+			total.Add(total, amount)
+			sum.RecordCount++
+
+			rewardType := strings.ToLower(record.RewardType)
+			isValidator := strings.Contains(rewardType, "validator")
+			isVoter := strings.Contains(rewardType, "voter")
+
+			if isValidator {
+				sum.ValidatorRecords = append(sum.ValidatorRecords, record)
+				validatorTotal.Add(validatorTotal, amount)
+				sum.ValidatorRecordCount++
+			}
+
+			if isVoter {
+				sum.VoterRecords = append(sum.VoterRecords, record)
+				voterTotal.Add(voterTotal, amount)
+				sum.VoterRecordCount++
+			}
+
+			if !isValidator && !isVoter {
+				sum.OtherRewardRecords = append(sum.OtherRewardRecords, record)
+				sum.OtherRecordCount++
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// 排序，按epoch倒序
+	sort.Slice(sum.ValidatorRecords, func(i, j int) bool {
+		return sum.ValidatorRecords[i].EpochNumber > sum.ValidatorRecords[j].EpochNumber
+	})
+	sort.Slice(sum.VoterRecords, func(i, j int) bool {
+		return sum.VoterRecords[i].EpochNumber > sum.VoterRecords[j].EpochNumber
+	})
+	sort.Slice(sum.OtherRewardRecords, func(i, j int) bool {
+		return sum.OtherRewardRecords[i].EpochNumber > sum.OtherRewardRecords[j].EpochNumber
+	})
+
+	sum.TotalRewardWei = total.String()
+	sum.ValidatorRewardWei = validatorTotal.String()
+	sum.VoterRewardWei = voterTotal.String()
+
+	sum.TotalRewardEther = formatWeiToEther(total)
+	sum.ValidatorRewardEther = formatWeiToEther(validatorTotal)
+	sum.VoterRewardEther = formatWeiToEther(voterTotal)
+
+	return sum, nil
+}
+
+func formatWeiToEther(amount *big.Int) string {
+	if amount == nil || amount.Sign() == 0 {
+		return "0"
+	}
+
+	weiPerEther := new(big.Float).SetFloat64(1e18)
+	value := new(big.Float).SetInt(amount)
+	value.Quo(value, weiPerEther)
+	return value.Text('f', 6)
 }

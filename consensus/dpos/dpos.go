@@ -1495,6 +1495,13 @@ func (d *DPoS) GetDelegateIndex(delegate types.Address) uint64 {
 	return 0
 }
 
+// GetState exposes the internal state pointer for read-only operations
+func (d *DPoS) GetState() *State {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+	return d.state
+}
+
 // GetCurrentDelegates 获取当前内存中的受托人集合
 // GetCurrentDelegates 已迁移到 validator_mgmt_manager.go
 

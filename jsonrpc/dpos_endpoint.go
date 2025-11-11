@@ -3411,6 +3411,11 @@ func (d *DPOS) GetValidatorRewardHistory(ctx context.Context, params interface{}
 		return nil, fmt.Errorf("failed to get DPoS state: %w", err)
 	}
 
+	dposState, err = d.ensureRewardStore(dposState)
+	if err != nil {
+		return nil, err
+	}
+
 	// 调用RewardStore的方法
 	return dposState.RewardStore.GetValidatorRewardHistory(validatorAddress, fromEpoch, toEpoch)
 }
@@ -3428,13 +3433,51 @@ func (d *DPOS) GetVoterRewardHistory(ctx context.Context, voterAddress string, f
 		return nil, fmt.Errorf("failed to get DPoS state: %w", err)
 	}
 
+	dposState, err = d.ensureRewardStore(dposState)
+	if err != nil {
+		return nil, err
+	}
+
 	// 调用RewardStore的方法
 	return dposState.RewardStore.GetVoterRewardHistory(voterAddress, fromEpoch, toEpoch)
 }
 
 // GetEpochRewardDetails 查询指定epoch的奖励详情
-func (d *DPOS) GetEpochRewardDetails(ctx context.Context, epochNumber uint64) ([]dpos.RewardRecordExtended, error) {
-	d.logger.Info("DPoS GetEpochRewardDetails called", "epochNumber", epochNumber)
+func (d *DPOS) GetEpochRewardDetails(ctx context.Context, params interface{}) ([]dpos.RewardRecordExtended, error) {
+	d.logger.Info("DPoS GetEpochRewardDetails called", "params", params)
+
+	var epochNumber uint64
+
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) != 1 {
+			return nil, fmt.Errorf("expected 1 parameter, got %d", len(p))
+		}
+
+		if epoch, ok := toUint64(p[0]); ok {
+			epochNumber = epoch
+		} else {
+			return nil, fmt.Errorf("parameter must be a number")
+		}
+	case map[string]interface{}:
+		if epoch, ok := toUint64(p["epoch"]); ok {
+			epochNumber = epoch
+		} else {
+			return nil, fmt.Errorf("epoch is required and must be a number")
+		}
+	case float64:
+		epochNumber = uint64(p)
+	case int:
+		epochNumber = uint64(p)
+	case uint64:
+		epochNumber = p
+	case nil:
+		return nil, fmt.Errorf("epoch is required")
+	default:
+		return nil, fmt.Errorf("invalid parameter type: %T", params)
+	}
+
+	d.logger.Info("DPoS GetEpochRewardDetails parsed parameters", "epochNumber", epochNumber)
 
 	// 获取DPoS状态
 	dposState, err := d.store.GetDPoSState()
@@ -3442,8 +3485,188 @@ func (d *DPOS) GetEpochRewardDetails(ctx context.Context, epochNumber uint64) ([
 		return nil, fmt.Errorf("failed to get DPoS state: %w", err)
 	}
 
+	dposState, err = d.ensureRewardStore(dposState)
+	if err != nil {
+		return nil, err
+	}
+
 	// 调用RewardStore的方法
 	return dposState.RewardStore.GetEpochRewardDetails(epochNumber)
+}
+
+// GetRewardHistory 获取指定地址在指定epoch区间的奖励汇总
+func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[string]interface{}, error) {
+	d.logger.Info("DPoS GetRewardHistory called", "params", params)
+
+	var address string
+	var fromEpoch, toEpoch uint64
+
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) != 3 {
+			return map[string]interface{}{
+				"error": fmt.Sprintf("expected 3 parameters, got %d", len(p)),
+			}, nil
+		}
+
+		addr, ok := p[0].(string)
+		if !ok {
+			return map[string]interface{}{
+				"error": "first parameter must be a string address",
+			}, nil
+		}
+		address = addr
+
+		from, ok := toUint64(p[1])
+		if !ok {
+			return map[string]interface{}{
+				"error": "second parameter must be a number",
+			}, nil
+		}
+		fromEpoch = from
+
+		to, ok := toUint64(p[2])
+		if !ok {
+			return map[string]interface{}{
+				"error": "third parameter must be a number",
+			}, nil
+		}
+		toEpoch = to
+	case map[string]interface{}:
+		if addr, ok := p["address"].(string); ok {
+			address = addr
+		} else {
+			return map[string]interface{}{
+				"error": "address is required",
+			}, nil
+		}
+
+		if from, ok := toUint64(p["fromEpoch"]); ok {
+			fromEpoch = from
+		} else {
+			return map[string]interface{}{
+				"error": "fromEpoch is required and must be a number",
+			}, nil
+		}
+
+		if to, ok := toUint64(p["toEpoch"]); ok {
+			toEpoch = to
+		} else {
+			return map[string]interface{}{
+				"error": "toEpoch is required and must be a number",
+			}, nil
+		}
+	default:
+		return map[string]interface{}{
+			"error": fmt.Sprintf("invalid parameter type: %T", params),
+		}, nil
+	}
+
+	if address == "" {
+		return map[string]interface{}{
+			"error": "address is required",
+		}, nil
+	}
+
+	if toEpoch < fromEpoch {
+		return map[string]interface{}{
+			"error": "toEpoch must be greater than or equal to fromEpoch",
+		}, nil
+	}
+
+	// 获取DPoS状态
+	dposState, err := d.store.GetDPoSState()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get DPoS state: %w", err)
+	}
+
+	dposState, err = d.ensureRewardStore(dposState)
+	if err != nil {
+		return map[string]interface{}{
+			"error": err.Error(),
+		}, nil
+	}
+
+	summary, err := dposState.RewardStore.GetRewardSummary(address, fromEpoch, toEpoch)
+	if err != nil {
+		return map[string]interface{}{
+			"error": fmt.Sprintf("failed to get reward summary: %v", err),
+		}, nil
+	}
+
+	return map[string]interface{}{
+		"success": true,
+		"summary": summary,
+	}, nil
+}
+
+// ensureRewardStore 保证奖励存储可用，并返回可用的状态实例
+func (d *DPOS) ensureRewardStore(state *dpos.State) (*dpos.State, error) {
+	if state == nil {
+		// 尝试从当前共识引擎获取
+		if engine := d.getDPoSEngine(); engine != nil {
+			if provider, ok := engine.(interface {
+				GetState() *dpos.State
+			}); ok {
+				state = provider.GetState()
+			}
+		}
+
+		// 如果仍然为空，遍历全局注册的 DPoS 实例
+		if state == nil {
+			for instanceKey, instance := range dpos.GetAllDPoSInstances() {
+				if instance == nil {
+					continue
+				}
+				if candidate := instance.GetState(); candidate != nil {
+					d.logger.Info("Using state from registered DPoS instance",
+						"instanceKey", instanceKey)
+					state = candidate
+					break
+				}
+			}
+		}
+
+		if state == nil {
+			return nil, fmt.Errorf("dpos state not available")
+		}
+	}
+
+	if err := state.EnsureRewardStore(d.logger); err != nil {
+		d.logger.Error("Failed to initialize RewardStore", "error", err)
+		return nil, fmt.Errorf("reward store not available: %w", err)
+	}
+
+	return state, nil
+}
+
+func toUint64(value interface{}) (uint64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return uint64(v), true
+	case float32:
+		return uint64(v), true
+	case int:
+		return uint64(v), true
+	case int32:
+		return uint64(v), true
+	case int64:
+		return uint64(v), true
+	case uint:
+		return uint64(v), true
+	case uint32:
+		return uint64(v), true
+	case uint64:
+		return v, true
+	case string:
+		if v == "" {
+			return 0, false
+		}
+		if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
+			return parsed, true
+		}
+	}
+	return 0, false
 }
 
 // GetValidatorBlockStats 获取验证者出块统计
