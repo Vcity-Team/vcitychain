@@ -1159,8 +1159,7 @@ func (p *TxPool) addTx(origin txOrigin, tx *types.Transaction) error {
 
 	// validate incoming tx
 	if err := p.validateTx(tx); err != nil {
-		p.logger.Error("💀 交易验证失败，程序将立即退出", "err", err, "txHash", tx.Hash.String())
-		os.Exit(1)
+		p.logger.Error("💀 交易验证失败", "err", err, "txHash", tx.Hash.String())
 		return err
 	}
 
