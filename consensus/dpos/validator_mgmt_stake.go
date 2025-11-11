@@ -1,11 +1,12 @@
 package dpos
 
 import (
+	"encoding/json"
 	"math/big"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/types"
-	"go.etcd.io/bbolt"
+	bolt "go.etcd.io/bbolt"
 )
 
 // GetStakingInfo 获取指定区块的质押信息
@@ -60,7 +61,7 @@ func (d *DPoS) GetStakingInfo(blockNumber uint64, staker types.Address) (*StakeI
 }
 
 // GetStakingInfoWithTx 在数据库事务中获取指定区块的质押信息
-func (d *DPoS) GetStakingInfoWithTx(blockNumber uint64, staker types.Address, dbTx *bbolt.Tx) (*StakeInfo, error) {
+func (d *DPoS) GetStakingInfoWithTx(blockNumber uint64, staker types.Address, dbTx *bolt.Tx) (*StakeInfo, error) {
 	d.lock.RLock()
 	defer d.lock.RUnlock()
 
@@ -69,37 +70,111 @@ func (d *DPoS) GetStakingInfoWithTx(blockNumber uint64, staker types.Address, db
 	return d.GetStakingInfo(blockNumber, staker)
 }
 
-// GetAllStakingInfo 从内存获取所有质押信息（简单直接）
+// GetAllStakingInfo 从数据库获取所有质押信息（直接从DelegateInfo bucket读取）
 func (d *DPoS) GetAllStakingInfo() ([]*StakeInfo, error) {
 	d.lock.RLock()
 	defer d.lock.RUnlock()
 
-	// 优先从 d.delegates 读取，如果为空则从 d.runtime.delegates 读取
-	delegates := d.delegates
-	if len(delegates) == 0 && d.runtime != nil && len(d.runtime.delegates) > 0 {
-		delegates = d.runtime.delegates
-	}
-
-	// 转换为 StakeInfo，包含故障标志
-	result := make([]*StakeInfo, 0, len(delegates))
-	for _, delegate := range delegates {
-		// 获取故障标志信息
-		faultInfo := d.getValidatorFaultInfo(delegate.Address)
-
-		stakingInfo := &StakeInfo{
-			Staker:    delegate.Address,
-			Amount:    new(big.Int).Set(delegate.VotingPower),
-			IsActive:  delegate.IsActive,
-			StartTime: uint64(time.Now().Unix()),
-			EndTime:   0,
-			IsLocked:  false,
-			Rewards:   big.NewInt(0),
-			Delegate:  delegate.Address, // 验证者自己就是委托人
-			FaultFlag: faultInfo,        // 🆕 添加故障标志
+	// 检查 state 和 StakeStore 是否可用
+	if d.state == nil || d.state.StakeStore == nil {
+		d.logger.Warn("State store not available, falling back to memory")
+		// 回退到内存读取（保持向后兼容）
+		delegates := d.delegates
+		if len(delegates) == 0 && d.runtime != nil && len(d.runtime.delegates) > 0 {
+			delegates = d.runtime.delegates
 		}
-		result = append(result, stakingInfo)
+
+		result := make([]*StakeInfo, 0, len(delegates))
+		for _, delegate := range delegates {
+			faultInfo := d.getValidatorFaultInfo(delegate.Address)
+			stakingInfo := &StakeInfo{
+				Staker:    delegate.Address,
+				Amount:    new(big.Int).Set(delegate.VotingPower),
+				IsActive:  delegate.IsActive,
+				StartTime: uint64(time.Now().Unix()),
+				EndTime:   0,
+				IsLocked:  false,
+				Rewards:   big.NewInt(0),
+				Delegate:  delegate.Address,
+				FaultFlag: faultInfo,
+			}
+			result = append(result, stakingInfo)
+		}
+		return result, nil
 	}
 
+	// 从数据库读取
+	var result []*StakeInfo
+	err := d.state.StakeStore.db.View(func(tx *bolt.Tx) error {
+		// 从 DelegateInfo bucket 读取所有受托人信息
+		delegateBucket := tx.Bucket([]byte("DelegateInfo"))
+		if delegateBucket == nil {
+			d.logger.Warn("DelegateInfo bucket not found in database")
+			return nil // 返回空列表，不返回错误
+		}
+
+		cursor := delegateBucket.Cursor()
+		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
+			var delegateInfo DelegateInfo
+			if err := json.Unmarshal(value, &delegateInfo); err != nil {
+				d.logger.Warn("Failed to unmarshal delegate info", "key", key, "error", err)
+				continue
+			}
+
+			// 跳过投票权重为0的受托人
+			if delegateInfo.VotingPower == nil || delegateInfo.VotingPower.Cmp(big.NewInt(0)) <= 0 {
+				continue
+			}
+
+			// 获取故障标志信息
+			faultInfo := d.getValidatorFaultInfo(delegateInfo.Address)
+
+			// 转换为 StakeInfo
+			stakingInfo := &StakeInfo{
+				Staker:    delegateInfo.Address,
+				Amount:    new(big.Int).Set(delegateInfo.VotingPower),
+				IsActive:  delegateInfo.IsActive,
+				StartTime: uint64(time.Now().Unix()),
+				EndTime:   0,
+				IsLocked:  false,
+				Rewards:   big.NewInt(0),
+				Delegate:  delegateInfo.Address, // 验证者自己就是委托人
+				FaultFlag: faultInfo,            // 添加故障标志
+			}
+			result = append(result, stakingInfo)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		d.logger.Error("Failed to read staking info from database", "error", err)
+		// 如果数据库读取失败，回退到内存读取
+		delegates := d.delegates
+		if len(delegates) == 0 && d.runtime != nil && len(d.runtime.delegates) > 0 {
+			delegates = d.runtime.delegates
+		}
+
+		result = make([]*StakeInfo, 0, len(delegates))
+		for _, delegate := range delegates {
+			faultInfo := d.getValidatorFaultInfo(delegate.Address)
+			stakingInfo := &StakeInfo{
+				Staker:    delegate.Address,
+				Amount:    new(big.Int).Set(delegate.VotingPower),
+				IsActive:  delegate.IsActive,
+				StartTime: uint64(time.Now().Unix()),
+				EndTime:   0,
+				IsLocked:  false,
+				Rewards:   big.NewInt(0),
+				Delegate:  delegate.Address,
+				FaultFlag: faultInfo,
+			}
+			result = append(result, stakingInfo)
+		}
+		return result, nil
+	}
+
+	d.logger.Debug("Successfully retrieved staking info from database", "count", len(result))
 	return result, nil
 }
 

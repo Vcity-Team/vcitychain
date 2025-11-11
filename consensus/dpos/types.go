@@ -139,7 +139,7 @@ type ParameterProposal struct {
 	ProposalType  string                          `json:"proposalType"`  // 🆕 提案类型："parameter" 或 "validator_recovery"
 	Parameter     string                          `json:"parameter"`     // 参数名（parameter类型）或验证者地址（recovery类型）
 	OldValue      interface{}                     `json:"oldValue"`      // 当前值
-	NewValue      interface{}                     `json:"newValue"`     // 提议值
+	NewValue      interface{}                     `json:"newValue"`      // 提议值
 	Proposer      types.Address                   `json:"proposer"`      // 提案者
 	StartBlock    uint64                          `json:"startBlock"`    // 投票开始区块
 	EndBlock      uint64                          `json:"endBlock"`      // 投票结束区块（表决期结束）
@@ -238,13 +238,13 @@ type ProposalExecuteTxData struct {
 // DelegateRegistration 受托人注册信息（改进的TRON风格）
 type DelegateRegistration struct {
 	Address      types.Address `json:"address"`      // 受托人地址
-	Name         string        `json:"name"`       // 受托人名称
-	Website      string        `json:"website"`     // 官方网站
+	Name         string        `json:"name"`         // 受托人名称
+	Website      string        `json:"website"`      // 官方网站
 	Description  string        `json:"description"`  // 描述信息
-	Deposit      *big.Int      `json:"deposit"`     // 保证金（可退还）
-	Status       RegStatus     `json:"status"`      // 注册状态
-	CreatedAt    uint64        `json:"createdAt"`   // 申请时间
-	TotalVotes   *big.Int      `json:"totalVotes"`  // 总投票数
+	Deposit      *big.Int      `json:"deposit"`      // 保证金（可退还）
+	Status       RegStatus     `json:"status"`       // 注册状态
+	CreatedAt    uint64        `json:"createdAt"`    // 申请时间
+	TotalVotes   *big.Int      `json:"totalVotes"`   // 总投票数
 	IsActive     bool          `json:"isActive"`     // 是否为活跃受托人
 	LastVoteTime uint64        `json:"lastVoteTime"` // 最后投票时间
 }
