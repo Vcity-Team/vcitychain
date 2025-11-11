@@ -1016,53 +1016,6 @@ func (d *DPoS) signTransactionWithChainID(tx *types.Transaction, expectedAddr ty
 	return nil
 }
 
-// ApproveDelegate 批准受托人注册
-func (d *DPoS) ApproveDelegate(address types.Address) error {
-	d.lock.Lock()
-	defer d.lock.Unlock()
-
-	// 更新注册状态
-	if d.state != nil && d.state.RegistrationStore != nil {
-		if err := d.state.RegistrationStore.UpdateRegistrationStatus(address, RegStatusActive); err != nil {
-			return fmt.Errorf("failed to update registration status: %w", err)
-		}
-	}
-
-	// 创建受托人记录
-	delegate := &validator.ValidatorMetadata{
-		Address:     address,
-		VotingPower: big.NewInt(0),
-		BlsKey:      nil,
-		IsActive:    false,
-	}
-
-	d.addDelegateSafely(delegate)
-
-	d.logger.Info("Delegate registration approved",
-		"address", address.String())
-
-	return nil
-}
-
-// RejectDelegate 拒绝受托人注册
-func (d *DPoS) RejectDelegate(address types.Address, reason string) error {
-	d.lock.Lock()
-	defer d.lock.Unlock()
-
-	// 更新注册状态
-	if d.state != nil && d.state.RegistrationStore != nil {
-		if err := d.state.RegistrationStore.UpdateRegistrationStatus(address, RegStatusWithdrawn); err != nil {
-			return fmt.Errorf("failed to update registration status: %w", err)
-		}
-	}
-
-	d.logger.Info("Delegate registration rejected",
-		"address", address.String(),
-		"reason", reason)
-
-	return nil
-}
-
 // GetDelegateRegistrations 获取所有受托人注册信息
 func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 	if d.state == nil || d.state.RegistrationStore == nil {
@@ -1229,70 +1182,6 @@ func (d *DPoS) getMaxActiveDelegates() int {
 	}
 
 	return maxActive
-}
-
-// updateActiveDelegates 更新活跃受托人（基于投票排名）
-func (d *DPoS) updateActiveDelegates() {
-	// 获取所有注册的受托人
-	registrations, err := d.GetDelegateRegistrations()
-	if err != nil {
-		d.logger.Error("Failed to get delegate registrations", "error", err)
-		return
-	}
-
-	// 按投票数排序
-	sort.Slice(registrations, func(i, j int) bool {
-		return registrations[i].TotalVotes.Cmp(registrations[j].TotalVotes) > 0
-	})
-
-	// 获取最大活跃受托人数量
-	maxActive := d.getMaxActiveDelegates()
-
-	// 更新活跃状态
-	for i, reg := range registrations {
-		wasActive := reg.IsActive
-		reg.IsActive = i < maxActive
-
-		// 更新状态
-		if reg.IsActive {
-			reg.Status = RegStatusActive
-		} else {
-			reg.Status = RegStatusCandidate
-		}
-
-		// 保存更新
-		if d.state != nil && d.state.RegistrationStore != nil {
-			if err := d.state.RegistrationStore.SaveRegistration(reg); err != nil {
-				d.logger.Error("Failed to save registration update", "error", err)
-			}
-		}
-
-		// 更新受托人记录
-		for _, delegate := range d.delegates {
-			if delegate.Address == reg.Address {
-				delegate.IsActive = reg.IsActive
-				break
-			}
-		}
-
-		// 记录状态变化
-		if wasActive != reg.IsActive {
-			status := "inactive"
-			if reg.IsActive {
-				status = "active"
-			}
-			d.logger.Info("Delegate status changed",
-				"address", reg.Address.String(),
-				"name", reg.Name,
-				"status", status,
-				"votes", reg.TotalVotes.String(),
-				"rank", i+1)
-		}
-	}
-
-	d.logger.Info("Active delegates updated",
-		"totalCandidates", len(registrations),
-		"activeDelegates", maxActive)
 }
 
 // WithdrawDelegate 退出受托人（退还保证金）

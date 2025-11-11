@@ -302,7 +302,7 @@ type StakeResponse struct {
 	Success     bool   `json:"success"`
 	Message     string `json:"message"`
 	TxHash      string `json:"txHash,omitempty"`
-	BlockNumber uint64 `json:"txHash,omitempty"`
+	BlockNumber uint64 `json:"blockNumber,omitempty"`
 	Error       string `json:"error,omitempty"`
 }
 
@@ -318,7 +318,7 @@ type DelegateResponse struct {
 	Success     bool   `json:"success"`
 	Message     string `json:"message"`
 	TxHash      string `json:"txHash,omitempty"`
-	BlockNumber uint64 `json:"txHash,omitempty"`
+	BlockNumber uint64 `json:"blockNumber,omitempty"`
 	Error       string `json:"error,omitempty"`
 }
 
@@ -1530,6 +1530,9 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) ([]*dpos
 }
 
 // GetVotingPower handles dpos_getVotingPower RPC method
+// NOTE: This endpoint is currently intended for internal use only.
+//
+//	Keep it undocumented until we finalize external exposure.
 func (d *DPOS) GetVotingPower(ctx context.Context, params interface{}) (map[string]interface{}, error) {
 	d.logger.Info("DPoS GetVotingPower called", "params", params)
 
@@ -1722,11 +1725,52 @@ func (d *DPOS) GetCurrentDelegate(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("failed to get DPoS state: %w", err)
 	}
 
-	// TODO: Calculate current delegate based on block height and delegate count
-	// For now, return the first validator
+	// First try to get the current delegate from active DPoS instances (real-time slot calculation)
+	for instanceKey, instance := range dpos.GetAllDPoSInstances() {
+		if instance == nil {
+			continue
+		}
+
+		currentDelegate := instance.GetCurrentDelegate()
+		if currentDelegate != types.ZeroAddress {
+			d.logger.Info("Returning current delegate from active DPoS instance",
+				"instanceKey", instanceKey,
+				"delegate", currentDelegate.String())
+			return currentDelegate.String(), nil
+		}
+	}
+
+	// Fallback path: use validator list (will simply return the first validator)
+	// TODO: replace with block-height-based calculation once block scheduler is exposed here
 	validators, err := d.store.GetValidators()
 	if err != nil {
 		return "", fmt.Errorf("failed to get validators: %w", err)
+	}
+
+	if len(validators) == 0 {
+		d.logger.Warn("No validators returned from store, trying unfiltered fetch")
+		if extendedValidators, err := d.store.GetValidatorsWithFilter(false); err == nil && len(extendedValidators) > 0 {
+			d.logger.Info("Found validators via GetValidatorsWithFilter fallback", "count", len(extendedValidators))
+			validators = extendedValidators
+		}
+	}
+
+	if len(validators) == 0 {
+		d.logger.Warn("Store fallback failed, trying global DPoS instances registry")
+		for instanceKey, instance := range dpos.GetAllDPoSInstances() {
+			if instance == nil {
+				continue
+			}
+
+			instanceValidators := instance.GetValidators()
+			if len(instanceValidators) > 0 {
+				d.logger.Info("Using validators from global DPoS instance",
+					"instanceKey", instanceKey,
+					"count", len(instanceValidators))
+				validators = instanceValidators
+				break
+			}
+		}
 	}
 
 	if len(validators) == 0 {
@@ -1880,11 +1924,27 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		}
 	}
 
+	// If not found, try the filtered variant (may include zero-power validators)
 	if targetValidator == nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "validator not found",
-		}, nil
+		if validatorsWithFilter, err := d.store.GetValidatorsWithFilter(false); err == nil {
+			for _, v := range validatorsWithFilter {
+				if v.Address == validatorAddr {
+					targetValidator = v
+					break
+				}
+			}
+		}
+	}
+
+	// If still not found, create a placeholder so we can continue using staking info
+	if targetValidator == nil {
+		d.logger.Info("Validator not found in active validator set, constructing details from staking info",
+			"validator", validatorAddress)
+		targetValidator = &validator.ValidatorMetadata{
+			Address:     validatorAddr,
+			VotingPower: big.NewInt(0),
+			IsActive:    false,
+		}
 	}
 
 	// Get staking info for this validator
@@ -1896,24 +1956,92 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		}, nil
 	}
 
+	// Helpers for formatting amounts
+	weiPerEtherInt := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+	weiPerEtherFloat := new(big.Float).SetInt(weiPerEtherInt)
+	formatEther := func(amount *big.Int) string {
+		if amount == nil || amount.Sign() == 0 {
+			return "0"
+		}
+		amountFloat := new(big.Float).SetInt(amount)
+		amountFloat.Quo(amountFloat, weiPerEtherFloat)
+		return amountFloat.Text('f', 6)
+	}
+
 	// Filter staking info for this validator
 	validatorStakes := make([]map[string]interface{}, 0)
+	outboundVotes := make([]map[string]interface{}, 0)
 	totalStakedToValidator := big.NewInt(0)
+	totalVotedByValidator := big.NewInt(0)
+	stakeFound := false
 
-	// TODO: Add logic to match stake to validator
-	// For now, we'll return basic validator info
-	_ = stakingInfo // Suppress unused variable warning
+	for _, stake := range stakingInfo {
+		if stake == nil {
+			continue
+		}
+
+		amount := big.NewInt(0)
+		if stake.Amount != nil {
+			amount = new(big.Int).Set(stake.Amount)
+		}
+
+		if stake.Delegate == validatorAddr {
+			stakeEntry := map[string]interface{}{
+				"staker":      stake.Staker.String(),
+				"amountWei":   amount.String(),
+				"amountEther": formatEther(amount),
+				"startTime":   stake.StartTime,
+				"endTime":     stake.EndTime,
+				"isLocked":    stake.IsLocked,
+			}
+			if stake.Rewards != nil {
+				stakeEntry["rewardsWei"] = stake.Rewards.String()
+				stakeEntry["rewardsEther"] = formatEther(new(big.Int).Set(stake.Rewards))
+			}
+			validatorStakes = append(validatorStakes, stakeEntry)
+			totalStakedToValidator.Add(totalStakedToValidator, amount)
+			stakeFound = true
+		}
+
+		if stake.Staker == validatorAddr {
+			voteEntry := map[string]interface{}{
+				"delegate":    stake.Delegate.String(),
+				"amountWei":   amount.String(),
+				"amountEther": formatEther(amount),
+				"startTime":   stake.StartTime,
+				"endTime":     stake.EndTime,
+				"isLocked":    stake.IsLocked,
+			}
+			if stake.Rewards != nil {
+				voteEntry["rewardsWei"] = stake.Rewards.String()
+				voteEntry["rewardsEther"] = formatEther(new(big.Int).Set(stake.Rewards))
+			}
+			outboundVotes = append(outboundVotes, voteEntry)
+			totalVotedByValidator.Add(totalVotedByValidator, amount)
+		}
+	}
+
+	// If the validator metadata had no voting power info, fill it with what we calculated
+	if (targetValidator.VotingPower == nil || targetValidator.VotingPower.Sign() == 0) && totalStakedToValidator.Sign() > 0 {
+		targetValidator.VotingPower = new(big.Int).Set(totalStakedToValidator)
+	}
 
 	// Build validator details
 	validatorDetail := map[string]interface{}{
-		"address":           targetValidator.Address.String(),
-		"votingPower":       targetValidator.VotingPower.String(),
-		"isActive":          true, // TODO: Get actual active status
-		"totalStakedToMe":   totalStakedToValidator.String(),
-		"stakeCount":        len(validatorStakes),
-		"stakes":            validatorStakes,
-		"consensusRound":    0,     // TODO: Get current consensus round
-		"lastBlockProduced": "0x0", // TODO: Get last block hash
+		"address":              targetValidator.Address.String(),
+		"votingPower":          targetValidator.VotingPower.String(),
+		"isActive":             targetValidator.IsActive,
+		"totalStakedToMe":      totalStakedToValidator.String(),
+		"totalStakedToMeEther": formatEther(totalStakedToValidator),
+		"stakeCount":           len(validatorStakes),
+		"stakes":               validatorStakes,
+		"totalVotedByMe":       totalVotedByValidator.String(),
+		"totalVotedByMeEther":  formatEther(totalVotedByValidator),
+		"myVoteCount":          len(outboundVotes),
+		"myVotes":              outboundVotes,
+		"consensusRound":       0,     // TODO: Get current consensus round
+		"lastBlockProduced":    "0x0", // TODO: Get last block hash
+		"hasInboundVotes":      stakeFound,
 	}
 
 	response := map[string]interface{}{
@@ -4207,94 +4335,6 @@ func (d *DPOS) GetDelegateRegistrations(ctx context.Context) (interface{}, error
 	return nil, fmt.Errorf("DPoS engine does not support delegate registrations")
 }
 
-// ApproveDelegate 批准受托人注册
-func (d *DPOS) ApproveDelegate(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS ApproveDelegate called", "params", params)
-
-	// 解析参数
-	var addressStr string
-
-	if paramMap, ok := params.(map[string]interface{}); ok {
-		addressStr, _ = paramMap["address"].(string)
-	} else if paramArray, ok := params.([]interface{}); ok && len(paramArray) == 1 {
-		addressStr, _ = paramArray[0].(string)
-	} else {
-		return nil, fmt.Errorf("invalid parameters format")
-	}
-
-	if addressStr == "" {
-		return nil, fmt.Errorf("address is required")
-	}
-
-	address := types.StringToAddress(addressStr)
-
-	dposEngine := d.getDPoSEngine()
-	if dposEngine == nil {
-		return nil, fmt.Errorf("DPoS engine not available")
-	}
-
-	if approveDelegate, ok := dposEngine.(interface {
-		ApproveDelegate(address types.Address) error
-	}); ok {
-		err := approveDelegate.ApproveDelegate(address)
-		if err != nil {
-			return nil, fmt.Errorf("failed to approve delegate: %w", err)
-		}
-		return map[string]interface{}{
-			"success": true,
-			"message": "Delegate registration approved successfully",
-		}, nil
-	}
-
-	return nil, fmt.Errorf("DPoS engine does not support delegate approval")
-}
-
-// RejectDelegate 拒绝受托人注册
-func (d *DPOS) RejectDelegate(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS RejectDelegate called", "params", params)
-
-	// 解析参数
-	var addressStr, reason string
-
-	if paramMap, ok := params.(map[string]interface{}); ok {
-		addressStr, _ = paramMap["address"].(string)
-		reason, _ = paramMap["reason"].(string)
-	} else if paramArray, ok := params.([]interface{}); ok && len(paramArray) >= 1 {
-		addressStr, _ = paramArray[0].(string)
-		if len(paramArray) > 1 {
-			reason, _ = paramArray[1].(string)
-		}
-	} else {
-		return nil, fmt.Errorf("invalid parameters format")
-	}
-
-	if addressStr == "" {
-		return nil, fmt.Errorf("address is required")
-	}
-
-	address := types.StringToAddress(addressStr)
-
-	dposEngine := d.getDPoSEngine()
-	if dposEngine == nil {
-		return nil, fmt.Errorf("DPoS engine not available")
-	}
-
-	if rejectDelegate, ok := dposEngine.(interface {
-		RejectDelegate(address types.Address, reason string) error
-	}); ok {
-		err := rejectDelegate.RejectDelegate(address, reason)
-		if err != nil {
-			return nil, fmt.Errorf("failed to reject delegate: %w", err)
-		}
-		return map[string]interface{}{
-			"success": true,
-			"message": "Delegate registration rejected successfully",
-		}, nil
-	}
-
-	return nil, fmt.Errorf("DPoS engine does not support delegate rejection")
-}
-
 // WithdrawDelegate 退出受托人
 func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interface{}, error) {
 	d.logger.Info("DPoS WithdrawDelegate called", "params", params)
@@ -4335,26 +4375,6 @@ func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interf
 	}
 
 	return nil, fmt.Errorf("DPoS engine does not support delegate withdrawal")
-}
-
-// UpdateActiveDelegates 更新活跃受托人
-func (d *DPOS) UpdateActiveDelegates(ctx context.Context) (interface{}, error) {
-	dposEngine := d.getDPoSEngine()
-	if dposEngine == nil {
-		return nil, fmt.Errorf("DPoS engine not available")
-	}
-
-	if updateActiveDelegates, ok := dposEngine.(interface {
-		UpdateActiveDelegates()
-	}); ok {
-		updateActiveDelegates.UpdateActiveDelegates()
-		return map[string]interface{}{
-			"success": true,
-			"message": "Active delegates updated successfully",
-		}, nil
-	}
-
-	return nil, fmt.Errorf("DPoS engine does not support active delegates update")
 }
 
 // GetActiveProposals 获取活跃提案列表
@@ -4672,11 +4692,6 @@ func (d *DPOS) GetBlockProducers(ctx context.Context, params interface{}) (map[s
 	// 验证区块范围
 	if endBlock < startBlock {
 		return nil, fmt.Errorf("invalid block range: endBlock < startBlock")
-	}
-
-	// 限制范围（最多查询1000个区块）
-	if endBlock-startBlock > 1000 {
-		return nil, fmt.Errorf("block range too large, max 1000 blocks")
 	}
 
 	// 从区块链获取区块出块者信息

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -672,17 +673,43 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	}
 
 	// 🆕 解析DPoS验证者数量
-	if dposValidatorsCount, exists := params.Config.Config["dposValidatorsCount"]; exists {
-		logger.Info("🔍 找到dposValidatorsCount配置", "type", fmt.Sprintf("%T", dposValidatorsCount), "value", dposValidatorsCount)
-		if count, ok := dposValidatorsCount.(float64); ok {
-			vcity_dpos.config.DelegateCount = uint64(count)
-			vcity_dpos.config.DPoSValidatorsCount = uint64(count) // 🆕 同时设置DPoSValidatorsCount字段
-			logger.Info("👥 使用server层解析的验证者数量", "count", vcity_dpos.config.DPoSValidatorsCount)
-		} else {
-			logger.Warn("👥 dposValidatorsCount类型断言失败", "type", fmt.Sprintf("%T", dposValidatorsCount))
+	// 支持驼峰和下划线两种键名
+	var validatorsCountValue interface{}
+	if val, exists := params.Config.Config["dposValidatorsCount"]; exists {
+		validatorsCountValue = val
+	} else if val, exists := params.Config.Config["dpos_validators_count"]; exists {
+		validatorsCountValue = val
+		logger.Info("👥 使用下划线形式的 dpos_validators_count 配置")
+	}
+
+	if validatorsCountValue != nil {
+		logger.Info("🔍 找到 dposValidatorsCount 配置", "type", fmt.Sprintf("%T", validatorsCountValue), "value", validatorsCountValue)
+		switch countVal := validatorsCountValue.(type) {
+		case float64:
+			vcity_dpos.config.DelegateCount = uint64(countVal)
+			vcity_dpos.config.DPoSValidatorsCount = uint64(countVal)
+			logger.Info("👥 设置验证者数量", "count", vcity_dpos.config.DPoSValidatorsCount)
+		case int:
+			vcity_dpos.config.DelegateCount = uint64(countVal)
+			vcity_dpos.config.DPoSValidatorsCount = uint64(countVal)
+			logger.Info("👥 设置验证者数量 (int)", "count", vcity_dpos.config.DPoSValidatorsCount)
+		case uint64:
+			vcity_dpos.config.DelegateCount = countVal
+			vcity_dpos.config.DPoSValidatorsCount = countVal
+			logger.Info("👥 设置验证者数量 (uint64)", "count", vcity_dpos.config.DPoSValidatorsCount)
+		case string:
+			if parsed, err := strconv.ParseUint(countVal, 10, 64); err == nil {
+				vcity_dpos.config.DelegateCount = parsed
+				vcity_dpos.config.DPoSValidatorsCount = parsed
+				logger.Info("👥 设置验证者数量 (string)", "count", vcity_dpos.config.DPoSValidatorsCount)
+			} else {
+				logger.Warn("👥 dposValidatorsCount 解析失败", "value", countVal, "error", err)
+			}
+		default:
+			logger.Warn("👥 dposValidatorsCount 类型不支持", "type", fmt.Sprintf("%T", validatorsCountValue))
 		}
 	} else {
-		logger.Warn("👥 未找到dposValidatorsCount配置")
+		logger.Warn("👥 未找到 dposValidatorsCount 配置")
 	}
 
 	// 🆕 解析备用验证者数量
