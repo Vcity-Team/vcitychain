@@ -135,6 +135,7 @@ func (d *DPoS) CheckProposalResult(proposalID string) error {
 	// 计算支持率
 	if totalWeight.Cmp(big.NewInt(0)) == 0 {
 		proposal.Status = ProposalRejected
+		d.finalizeProposalLifecycle(proposalID, proposal)
 		return nil
 	}
 
@@ -156,51 +157,19 @@ func (d *DPoS) CheckProposalResult(proposalID string) error {
 			"threshold", proposal.Threshold)
 	}
 
+	d.finalizeProposalLifecycle(proposalID, proposal)
+
 	return nil
 }
 
-// checkProposalResultInternal 内部方法：检查提案投票结果并更新状态（无需加锁，调用者需持有锁）
-func (d *DPoS) checkProposalResultInternal(proposalID string, proposal *ParameterProposal) {
-	// 检查是否在投票期内
-	currentBlock := d.getCurrentBlockNumber()
-	if currentBlock <= proposal.EndBlock {
-		return // 投票期未结束
-	}
+// finalizeProposalLifecycle 移除活跃状态并持久化提案
+func (d *DPoS) finalizeProposalLifecycle(proposalID string, proposal *ParameterProposal) {
+	delete(d.activeProposals, proposalID)
 
-	// 统计投票结果
-	totalWeight := big.NewInt(0)
-	supportWeight := big.NewInt(0)
-
-	for _, vote := range proposal.Votes {
-		totalWeight.Add(totalWeight, vote.Weight)
-		if vote.Support {
-			supportWeight.Add(supportWeight, vote.Weight)
+	if d.state != nil && d.state.ProposalStore != nil {
+		if err := d.state.ProposalStore.SaveProposal(proposal); err != nil {
+			d.logger.Error("Failed to persist proposal status", "proposalID", proposalID, "error", err)
 		}
-	}
-
-	// 计算支持率
-	if totalWeight.Cmp(big.NewInt(0)) == 0 {
-		proposal.Status = ProposalRejected
-		d.logger.Info("Proposal rejected (no votes)", "proposalID", proposalID)
-		return
-	}
-
-	supportRate := new(big.Int).Mul(supportWeight, big.NewInt(100))
-	supportRate.Div(supportRate, totalWeight)
-
-	// 判断是否通过
-	if supportRate.Cmp(big.NewInt(int64(proposal.Threshold))) >= 0 {
-		proposal.Status = ProposalPassed
-		d.logger.Info("Proposal passed",
-			"proposalID", proposalID,
-			"supportRate", supportRate.String(),
-			"threshold", proposal.Threshold)
-	} else {
-		proposal.Status = ProposalRejected
-		d.logger.Info("Proposal rejected",
-			"proposalID", proposalID,
-			"supportRate", supportRate.String(),
-			"threshold", proposal.Threshold)
 	}
 }
 
@@ -349,7 +318,3 @@ func (d *DPoS) SignVoteForTx(vote *ParameterVote, privateKeyHex string) ([]byte,
 	}
 	return vote.Signature, nil
 }
-
-
-
-

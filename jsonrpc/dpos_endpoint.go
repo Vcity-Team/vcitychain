@@ -4147,32 +4147,6 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 	}, nil
 }
 
-// GetMinVotingThreshold 获取最小投票门槛
-func (d *DPOS) GetMinVotingThreshold(ctx context.Context) (interface{}, error) {
-	d.logger.Info("DPoS GetMinVotingThreshold called")
-
-	// 获取DPoS引擎
-	dposEngine := d.getDPoSEngine()
-	if dposEngine == nil {
-		return nil, fmt.Errorf("DPoS engine not available")
-	}
-
-	// 调用DPoS引擎获取最小投票门槛
-	if getMinThreshold, ok := dposEngine.(interface {
-		GetMinVotingThreshold() *big.Int
-	}); ok {
-		threshold := getMinThreshold.GetMinVotingThreshold()
-
-		return map[string]interface{}{
-			"success":   true,
-			"threshold": threshold.String(),
-			"message":   "Minimum voting threshold retrieved successfully",
-		}, nil
-	}
-
-	return nil, fmt.Errorf("DPoS engine does not support min voting threshold")
-}
-
 // VoteOnParameterProposal 对参数提案进行投票
 func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) (interface{}, error) {
 	d.logger.Info("DPoS VoteOnParameterProposal called", "params", params)
