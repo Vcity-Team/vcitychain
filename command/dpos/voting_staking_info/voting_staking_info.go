@@ -7,6 +7,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"sort"
 
 	"github.com/spf13/cobra"
 
@@ -100,6 +101,46 @@ func (r *VotingStakingInfoResult) GetOutput() string {
 	}
 
 	if len(stakingInfo) > 0 {
+		getVotingPower := func(m map[string]interface{}) *big.Int {
+			if amount, ok := m["amount"]; ok {
+				switch v := amount.(type) {
+				case string:
+					if bi, ok := new(big.Int).SetString(v, 10); ok {
+						return bi
+					}
+				case float64:
+					amountStr := fmt.Sprintf("%.0f", v)
+					if bi, ok := new(big.Int).SetString(amountStr, 10); ok {
+						return bi
+					}
+					return big.NewInt(int64(v))
+				case int64:
+					return big.NewInt(v)
+				case int:
+					return big.NewInt(int64(v))
+				default:
+					amountStr := fmt.Sprintf("%v", v)
+					if bi, ok := new(big.Int).SetString(amountStr, 10); ok {
+						return bi
+					}
+				}
+			}
+			return big.NewInt(0)
+		}
+
+		sort.Slice(stakingInfo, func(i, j int) bool {
+			vi := getVotingPower(stakingInfo[i])
+			vj := getVotingPower(stakingInfo[j])
+
+			if cmp := vi.Cmp(vj); cmp != 0 {
+				return cmp > 0
+			}
+
+			si := fmt.Sprintf("%v", stakingInfo[i]["staker"])
+			sj := fmt.Sprintf("%v", stakingInfo[j]["staker"])
+			return si < sj
+		})
+
 		output += fmt.Sprintf("\nValidator Staking Information (Sorted by Weight, %d total):\n", len(stakingInfo))
 		output += fmt.Sprintf("====================================================\n")
 		for i, stakingMap := range stakingInfo {
