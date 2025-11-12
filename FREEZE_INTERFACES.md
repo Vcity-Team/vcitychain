@@ -717,20 +717,22 @@ const withdrawResult = await rpc.call('dpos_withdrawDelegate', {
 在服务器配置文件中添加以下配置：
 
 ```yaml
-# config.yaml
-dpos:
-  # 冻结相关配置
-  freeze:
-    min_freeze_period: 604800      # 最小冻结期（秒，7天）
-    unfreeze_lock_period: 1209600  # 解冻锁定期（秒，14天）
+# config.yaml (顶层配置，与其他dpos配置同级)
+dpos_min_freeze_period: 604800      # 最小冻结期（秒，7天）
+dpos_unfreeze_lock_period: 1209600  # 解冻锁定期（秒，14天）
+
+# 其他配置...
+dpos_validators_count: 4
+dpos_proposal_vote_period: "2m"
+# ...
 ```
 
-或者在现有的 DPoS 配置段中添加：
-
-```yaml
-dpos:
-  # 现有配置...
-  min_freeze_period: 604800      # 最小冻结期（秒，7天）
-  unfreeze_lock_period: 1209600  # 解冻锁定期（秒，14天）
-```
+**配置说明**:
+- **字段名**: `dpos_min_freeze_period` 和 `dpos_unfreeze_lock_period`
+- **类型**: `uint64`（秒）
+- **默认值**: 
+  - `dpos_min_freeze_period`: 604800（7天）
+  - `dpos_unfreeze_lock_period`: 1209600（14天）
+- **配置位置**: 在配置文件顶层，与其他 `dpos_*` 配置项同级
+- **所有接口**: 冻结相关接口（`dpos_registerDelegate`, `dpos_withdrawDelegate`, `dpos_getFreezeInfo`, `dpos_canWithdrawDelegate` 等）都从这些配置读取参数
 

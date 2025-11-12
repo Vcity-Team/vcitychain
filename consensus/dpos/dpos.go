@@ -168,8 +168,8 @@ type DPoSConfig struct {
 	ProposalValidPeriod  time.Duration `json:"proposalValidPeriod" yaml:"dpos_proposal_valid_period"` // 提案有效期
 
 	// 🆕 冻结相关配置
-	MinFreezePeriod    uint64 `json:"min_freeze_period" yaml:"min_freeze_period"`       // 最小冻结期（秒）
-	UnfreezeLockPeriod uint64 `json:"unfreeze_lock_period" yaml:"unfreeze_lock_period"` // 解冻锁定期（秒）
+	MinFreezePeriod    uint64 `json:"min_freeze_period" yaml:"dpos_min_freeze_period"`       // 最小冻结期（秒）
+	UnfreezeLockPeriod uint64 `json:"unfreeze_lock_period" yaml:"dpos_unfreeze_lock_period"` // 解冻锁定期（秒）
 
 	// SR候选人保证金阈值
 	SRThreshold *big.Int `json:"srThreshold" yaml:"dpos_SR_threshold"`
@@ -935,6 +935,39 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	} else {
 		logger.Warn("💰 未找到srThreshold配置，使用默认值0")
 		vcity_dpos.config.SRThreshold = big.NewInt(0)
+	}
+
+	// 🆕 解析冻结相关配置
+	if minFreezePeriod, exists := params.Config.Config["dpos_min_freeze_period"]; exists {
+		logger.Info("🔍 找到dpos_min_freeze_period配置", "type", fmt.Sprintf("%T", minFreezePeriod), "value", minFreezePeriod)
+		if period, ok := minFreezePeriod.(uint64); ok {
+			vcity_dpos.config.MinFreezePeriod = period
+			logger.Info("❄️ 使用server层解析的最小冻结期", "period", period, "seconds", period)
+		} else if periodFloat, ok := minFreezePeriod.(float64); ok {
+			vcity_dpos.config.MinFreezePeriod = uint64(periodFloat)
+			logger.Info("❄️ 使用server层解析的最小冻结期（从float64转换）", "period", vcity_dpos.config.MinFreezePeriod, "seconds", vcity_dpos.config.MinFreezePeriod)
+		} else {
+			logger.Warn("❄️ dpos_min_freeze_period类型断言失败", "type", fmt.Sprintf("%T", minFreezePeriod))
+		}
+	} else {
+		logger.Warn("❄️ 未找到dpos_min_freeze_period配置，使用默认值604800秒（7天）")
+		vcity_dpos.config.MinFreezePeriod = 604800
+	}
+
+	if unfreezeLockPeriod, exists := params.Config.Config["dpos_unfreeze_lock_period"]; exists {
+		logger.Info("🔍 找到dpos_unfreeze_lock_period配置", "type", fmt.Sprintf("%T", unfreezeLockPeriod), "value", unfreezeLockPeriod)
+		if period, ok := unfreezeLockPeriod.(uint64); ok {
+			vcity_dpos.config.UnfreezeLockPeriod = period
+			logger.Info("🔓 使用server层解析的解冻锁定期", "period", period, "seconds", period)
+		} else if periodFloat, ok := unfreezeLockPeriod.(float64); ok {
+			vcity_dpos.config.UnfreezeLockPeriod = uint64(periodFloat)
+			logger.Info("🔓 使用server层解析的解冻锁定期（从float64转换）", "period", vcity_dpos.config.UnfreezeLockPeriod, "seconds", vcity_dpos.config.UnfreezeLockPeriod)
+		} else {
+			logger.Warn("🔓 dpos_unfreeze_lock_period类型断言失败", "type", fmt.Sprintf("%T", unfreezeLockPeriod))
+		}
+	} else {
+		logger.Warn("🔓 未找到dpos_unfreeze_lock_period配置，使用默认值1209600秒（14天）")
+		vcity_dpos.config.UnfreezeLockPeriod = 1209600
 	}
 
 	// 设置必要的配置字段
