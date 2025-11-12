@@ -4555,11 +4555,18 @@ func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interf
 
 	// 解析参数
 	var addressStr string
+	var privateKey string
 
 	if paramMap, ok := params.(map[string]interface{}); ok {
 		addressStr, _ = paramMap["address"].(string)
+		privateKey, _ = paramMap["privateKey"].(string)
 	} else if paramArray, ok := params.([]interface{}); ok && len(paramArray) == 1 {
 		addressStr, _ = paramArray[0].(string)
+	} else if paramArray, ok := params.([]interface{}); ok && len(paramArray) >= 2 {
+		addressStr, _ = paramArray[0].(string)
+		if pk, ok := paramArray[1].(string); ok {
+			privateKey = pk
+		}
 	} else {
 		return nil, fmt.Errorf("invalid parameters format")
 	}
@@ -4568,7 +4575,44 @@ func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interf
 		return nil, fmt.Errorf("address is required")
 	}
 
+	if strings.TrimSpace(privateKey) == "" {
+		return nil, fmt.Errorf("privateKey is required")
+	}
+
 	address := types.StringToAddress(addressStr)
+
+	// 校验私钥与地址匹配
+	privateKey = strings.TrimSpace(privateKey)
+	privateKey = strings.TrimPrefix(privateKey, "0x")
+	privateKey = strings.TrimPrefix(privateKey, "0X")
+
+	if len(privateKey) != 64 {
+		return nil, fmt.Errorf("invalid private key length: expected 64 hex characters, got %d", len(privateKey))
+	}
+
+	for i, char := range privateKey {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
+			return nil, fmt.Errorf("invalid hex character in private key at position %d: %c (U+%04X)", i, char, char)
+		}
+	}
+
+	privateKeyBytes, err := hex.DecodeString(privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode private key: %w", err)
+	}
+	if len(privateKeyBytes) != 32 {
+		return nil, fmt.Errorf("invalid private key length: expected 32 bytes, got %d", len(privateKeyBytes))
+	}
+
+	privKey, err := crypto.ParseECDSAPrivateKey(privateKeyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create ECDSA private key: %w", err)
+	}
+
+	derivedAddress := crypto.PubKeyToAddress(&privKey.PublicKey)
+	if derivedAddress != address {
+		return nil, fmt.Errorf("private key does not match delegate address: derived %s, expected %s", derivedAddress.String(), address.String())
+	}
 
 	dposEngine := d.getDPoSEngine()
 	if dposEngine == nil {
