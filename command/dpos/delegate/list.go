@@ -32,8 +32,8 @@ type DelegateRegistration struct {
 	Website      string `json:"website"`
 	Description  string `json:"description"`
 	Status       int    `json:"status"`     // RPC returns number, not string
-	Deposit      int64  `json:"deposit"`    // RPC returns number, not string
-	TotalVotes   int64  `json:"totalVotes"` // RPC returns number, not string
+	Deposit      json.Number `json:"deposit"`    // 可能返回科学计数法，使用 json.Number
+	TotalVotes   json.Number `json:"totalVotes"` // 同上
 	IsActive     bool   `json:"isActive"`
 	LastVoteTime int64  `json:"lastVoteTime"` // RPC returns number, not string
 	CreatedAt    int64  `json:"createdAt"`    // RPC returns number, not string
@@ -216,8 +216,8 @@ func (r *ListDelegateResult) GetOutput() string {
 		output += fmt.Sprintf("   Website: %s\n", reg.Website)
 		output += fmt.Sprintf("   Description: %s\n", reg.Description)
 		output += fmt.Sprintf("   Status: %s\n", statusStr)
-		output += fmt.Sprintf("   Deposit: %d\n", reg.Deposit)
-		output += fmt.Sprintf("   Total Votes: %d\n", reg.TotalVotes)
+		output += fmt.Sprintf("   Deposit: %s\n", reg.Deposit.String())
+		output += fmt.Sprintf("   Total Votes: %s\n", reg.TotalVotes.String())
 		output += fmt.Sprintf("   Is Active: %t\n", reg.IsActive)
 		output += fmt.Sprintf("   Last Vote Time: %s\n", lastVoteTimeStr)
 		output += fmt.Sprintf("   Created At: %s\n", createdAtStr)

@@ -1014,7 +1014,8 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 	}
 
 	// 从私钥推导公钥和地址
-	privKey, err := crypto.BytesToECDSAPrivateKey(privateKeyBytes)
+	// 注意：privateKeyBytes 已经是解码后的32字节，直接使用 ParseECDSAPrivateKey
+	privKey, err := crypto.ParseECDSAPrivateKey(privateKeyBytes)
 	if err != nil {
 		return fmt.Errorf("failed to create ECDSA private key: %w", err)
 	}
