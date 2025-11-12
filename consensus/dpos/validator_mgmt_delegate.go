@@ -109,6 +109,9 @@ func (d *DPoS) initializeDelegates() error {
 			d.logger.Info("✅ 验证者集合已从数据库加载并设置到内存",
 				"最终数量", len(d.delegates))
 
+			// 🆕 初始化创世验证者映射（从创世块或配置）
+			d.initializeGenesisValidatorsMap()
+
 			return nil
 		}
 	}
@@ -131,6 +134,8 @@ func (d *DPoS) initializeDelegates() error {
 			}
 			d.delegates = append(d.delegates, delegate)
 		}
+		// 🆕 初始化创世验证者映射（从配置）
+		d.initializeGenesisValidatorsMap()
 	}
 
 	d.logger.Info("✅ 验证者初始化完成", "count", len(d.delegates))
@@ -322,10 +327,113 @@ func (d *DPoS) canParticipateInConsensus(delegate *validator.ValidatorMetadata) 
 
 // ==================== 委托者注册相关函数 ====================
 
-// isGenesisValidator 检查地址是否为创世验证者
+// initializeGenesisValidatorsMap 初始化创世验证者映射
+// 从创世块或配置中获取创世验证者列表，并填充到映射中
+func (d *DPoS) initializeGenesisValidatorsMap() {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	// 如果已经初始化过，直接返回
+	if d.genesisValidators != nil && len(d.genesisValidators) > 0 {
+		d.logger.Debug("🔍 创世验证者映射已存在，跳过初始化", "count", len(d.genesisValidators))
+		return
+	}
+
+	// 初始化映射
+	if d.genesisValidators == nil {
+		d.genesisValidators = make(map[types.Address]bool)
+	}
+
+	// 方法1: 尝试从创世块解析
+	if d.config != nil && d.config.Blockchain != nil {
+		genesisHeader, exists := d.config.Blockchain.GetHeaderByNumber(0)
+		if exists && len(genesisHeader.ExtraData) >= 32 {
+			ibftValidators, err := d.parseValidatorsFromExtraData(genesisHeader.ExtraData)
+			if err == nil && len(ibftValidators) > 0 {
+				for _, validator := range ibftValidators {
+					d.genesisValidators[validator.Address] = true
+				}
+				d.logger.Info("✅ 从创世块初始化创世验证者映射", "count", len(d.genesisValidators))
+				return
+			}
+		}
+	}
+
+	// 方法2: 从配置中的初始验证者
+	if d.config != nil && len(d.config.InitialDelegates) > 0 {
+		for _, genesisValidator := range d.config.InitialDelegates {
+			d.genesisValidators[genesisValidator.Address] = true
+		}
+		d.logger.Info("✅ 从配置初始化创世验证者映射", "count", len(d.genesisValidators))
+		return
+	}
+
+	d.logger.Warn("⚠️ 无法初始化创世验证者映射：创世块和配置都不可用")
+}
+
+// isGenesisValidator 检查地址是否为创世验证者（内部方法）
+// 注意：调用此方法前必须已经持有写锁（Lock）或读锁（RLock）
 func (d *DPoS) isGenesisValidator(address types.Address) bool {
+	// 如果映射为空，需要初始化（但此时可能持有读锁，需要特殊处理）
+	if d.genesisValidators == nil || len(d.genesisValidators) == 0 {
+		// 如果映射为空，返回 false，让调用者知道需要初始化
+		// 初始化应该在外部完成（在持有写锁的情况下）
+		return false
+	}
 	// 检查地址是否在创世验证者映射中
 	return d.genesisValidators[address]
+}
+
+// IsGenesisValidator 检查地址是否为创世验证者（公共方法，供RPC调用）
+func (d *DPoS) IsGenesisValidator(address types.Address) bool {
+	// 先尝试读锁检查
+	d.lock.RLock()
+	isGenesis := false
+	needsInit := false
+	if d.genesisValidators == nil || len(d.genesisValidators) == 0 {
+		needsInit = true
+	} else {
+		isGenesis = d.genesisValidators[address]
+	}
+	d.lock.RUnlock()
+
+	// 如果需要初始化，获取写锁并初始化
+	if needsInit {
+		d.initializeGenesisValidatorsMap()
+		// 重新检查
+		d.lock.RLock()
+		if d.genesisValidators != nil {
+			isGenesis = d.genesisValidators[address]
+		}
+		d.lock.RUnlock()
+	}
+
+	// 🆕 添加调试日志
+	d.logger.Info("🔍 IsGenesisValidator检查",
+		"address", address.String(),
+		"isGenesis", isGenesis,
+		"genesisValidatorsCount", func() int {
+			d.lock.RLock()
+			defer d.lock.RUnlock()
+			if d.genesisValidators == nil {
+				return 0
+			}
+			return len(d.genesisValidators)
+		}(),
+		"genesisValidators", func() []string {
+			d.lock.RLock()
+			defer d.lock.RUnlock()
+			if d.genesisValidators == nil {
+				return []string{}
+			}
+			addresses := make([]string, 0, len(d.genesisValidators))
+			for addr := range d.genesisValidators {
+				addresses = append(addresses, addr.String())
+			}
+			return addresses
+		}())
+
+	return isGenesis
 }
 
 // isDelegateRegistrationTransaction 检查交易是否是受托人注册交易
@@ -450,20 +558,20 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 			if err == nil && snapshot != nil {
 				// 创建状态事务
 				txn := state.NewTxn(snapshot)
-				
+
 				// 从账户余额中扣除冻结金额
 				if err := txn.SubBalance(regInfo.Registrant, regInfo.Deposit); err != nil {
 					d.logger.Error("❌ 扣除冻结金额失败", "error", err)
 					return fmt.Errorf("failed to deduct frozen amount: %w", err)
 				}
-				
+
 				// 提交状态变更
 				objects, err := txn.Commit(true)
 				if err != nil {
 					d.logger.Error("❌ 提交冻结状态变更失败", "error", err)
 					return fmt.Errorf("failed to commit freeze state changes: %w", err)
 				}
-				
+
 				// 更新状态根（如果需要）
 				if len(objects) > 0 {
 					var newSnapshot state.Snapshot
@@ -717,8 +825,16 @@ func (d *DPoS) IsDelegateRegistered(address types.Address) bool {
 }
 
 // IsDelegateCandidate 检查受托人是否为候选人状态（可以接受投票）
+// 🆕 创世验证者可以直接被投票，无需注册
 func (d *DPoS) IsDelegateCandidate(address types.Address) bool {
 	d.logger.Info("🔍 检查受托人候选人状态", "address", address.String())
+
+	// 🆕 创世验证者可以直接被投票，无需检查注册状态
+	if d.isGenesisValidator(address) {
+		d.logger.Info("✅ 受托人是创世验证者，可以直接接受投票",
+			"address", address.String())
+		return true
+	}
 
 	if d.state == nil || d.state.RegistrationStore == nil {
 		d.logger.Warn("❌ 注册存储不可用", "address", address.String())

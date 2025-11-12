@@ -104,13 +104,23 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		d.logger.Warn("Balance querier not available, skipping balance check")
 	}
 
-	// 🆕 新增：检查受托人是否已注册
+	// 🆕 新增：检查受托人是否已注册（创世验证者例外）
 	d.logger.Info("🔍 开始验证受托人注册状态",
 		"delegate", vote.Delegate.String(),
 		"voter", vote.Voter.String(),
 		"amount", vote.Amount.String())
 
-	if !d.IsDelegateRegistered(vote.Delegate) {
+	// 🆕 确保创世验证者映射已初始化
+	if d.genesisValidators == nil || len(d.genesisValidators) == 0 {
+		d.initializeGenesisValidatorsMap()
+	}
+
+	// 🆕 创世验证者可以直接被投票，无需注册
+	if d.isGenesisValidator(vote.Delegate) {
+		d.logger.Info("✅ 受托人是创世验证者，跳过注册检查",
+			"delegate", vote.Delegate.String(),
+			"voter", vote.Voter.String())
+	} else if !d.IsDelegateRegistered(vote.Delegate) {
 		d.logger.Warn("❌ 受托人未注册，投票被拒绝",
 			"delegate", vote.Delegate.String(),
 			"voter", vote.Voter.String(),
@@ -123,12 +133,22 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		"delegate", vote.Delegate.String(),
 		"voter", vote.Voter.String())
 
-	// 🆕 新增：检查受托人是否为候选人状态（可以接受投票）
+	// 🆕 新增：检查受托人是否为候选人状态（可以接受投票，创世验证者例外）
 	d.logger.Info("🔍 开始验证受托人候选人状态",
 		"delegate", vote.Delegate.String(),
 		"voter", vote.Voter.String())
 
-	if !d.IsDelegateCandidate(vote.Delegate) {
+	// 🆕 确保创世验证者映射已初始化（如果之前没有初始化）
+	if d.genesisValidators == nil || len(d.genesisValidators) == 0 {
+		d.initializeGenesisValidatorsMap()
+	}
+
+	// 🆕 创世验证者可以直接被投票，无需检查候选人状态
+	if d.isGenesisValidator(vote.Delegate) {
+		d.logger.Info("✅ 受托人是创世验证者，跳过候选人状态检查",
+			"delegate", vote.Delegate.String(),
+			"voter", vote.Voter.String())
+	} else if !d.IsDelegateCandidate(vote.Delegate) {
 		d.logger.Warn("❌ 受托人不是候选人状态，投票被拒绝",
 			"delegate", vote.Delegate.String(),
 			"voter", vote.Voter.String(),
@@ -246,7 +266,3 @@ func (d *DPoS) checkVoteNonce(vote *VoteMessage) error {
 	}
 	return nil
 }
-
-
-
-

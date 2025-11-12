@@ -678,11 +678,19 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		}, nil
 	}
 
-	// 检查受托人是否已注册
+	// 检查受托人是否已注册（创世验证者例外）
 	if isRegistered, ok := dposEngine.(interface {
 		IsDelegateRegistered(address types.Address) bool
 	}); ok {
-		if !isRegistered.IsDelegateRegistered(candidateAddr) {
+		// 🆕 检查是否为创世验证者
+		isGenesis, okGenesis := dposEngine.(interface {
+			IsGenesisValidator(address types.Address) bool
+		})
+		
+		// 🆕 创世验证者可以直接被投票，无需注册
+		if okGenesis && isGenesis.IsGenesisValidator(candidateAddr) {
+			d.logger.Info("✅ 受托人是创世验证者，跳过注册检查", "candidate", candidateAddr.String())
+		} else if !isRegistered.IsDelegateRegistered(candidateAddr) {
 			d.logger.Warn("❌ 受托人未注册，投票被拒绝",
 				"candidate", candidateAddr.String(),
 				"voter", voterAddr.String(),
@@ -691,8 +699,9 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 				Success: false,
 				Error:   fmt.Sprintf("delegate %s is not registered", candidateAddr.String()),
 			}, nil
+		} else {
+			d.logger.Info("✅ 受托人注册状态验证通过", "candidate", candidateAddr.String())
 		}
-		d.logger.Info("✅ 受托人注册状态验证通过", "candidate", candidateAddr.String())
 	} else {
 		d.logger.Warn("⚠️ DPoS引擎不支持受托人注册检查，跳过验证")
 	}

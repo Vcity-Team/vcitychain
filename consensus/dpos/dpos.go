@@ -1246,6 +1246,14 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 	// 清空现有的delegates
 	d.runtime.delegates = make(validator.AccountSet, 0)
 
+	// 🆕 初始化创世验证者映射（如果尚未初始化）
+	d.lock.Lock()
+	if d.genesisValidators == nil {
+		d.genesisValidators = make(map[types.Address]bool)
+		d.logger.Info("🔧 初始化创世验证者映射")
+	}
+	d.lock.Unlock()
+
 	d.logger.Info("🚨 DPoS验证者筛选开始",
 		"totalCandidates", ibftValidators.Len(),
 		"minStakeAmount", d.minStakeAmount.String())
@@ -1271,6 +1279,12 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 
 		// 直接添加到 runtime.delegates
 		d.runtime.delegates = append(d.runtime.delegates, delegate)
+
+		// 🆕 添加到创世验证者映射
+		d.lock.Lock()
+		d.genesisValidators[address] = true
+		d.lock.Unlock()
+
 		validValidatorCount++
 
 		d.logger.Info("✅ DPoS验证者创建成功（BLS公钥延迟获取）",
