@@ -213,7 +213,7 @@ func (b *BlockBuilder) Fill() {
 
 			// 如果还是没有交易，返回
 			if tx == nil {
-				b.params.Logger.Info("🔵 [BlockBuilder.Fill] 填充完成，没有更多交易",
+				b.params.Logger.Debug("🔵 [BlockBuilder.Fill] 填充完成，没有更多交易",
 					"blockNumber", blockNumber,
 					"txCount", txCount,
 					"skippedCount", skippedCount)
@@ -541,7 +541,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	// 🆕 检查是否是epoch的最后一个区块，如果是则执行奖励分发
 
 	// 延迟状态更新机制已移除，奖励分发在epoch结束区块直接执行
-	r.logger.Info("🔍 检查是否需要计算奖励分发",
+	r.logger.Debug("🔍 检查是否需要计算奖励分发",
 		"nextBlockNumber", nextBlockNumber,
 		"parentNumber", parent.Number,
 		"delegate", keyAddr.String()[:16])
@@ -608,7 +608,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			}
 		}
 	} else {
-		r.logger.Info("ℹ️ 不是epoch最后一个区块，跳过奖励分发",
+		r.logger.Debug("ℹ️ 不是epoch最后一个区块，跳过奖励分发",
 			"blockNumber", nextBlockNumber,
 			"isEpochEndBlock", isEpochEndBlock)
 	}

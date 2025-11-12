@@ -147,6 +147,8 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		"dposDelegateThreshold": s.config.DPoSDelegateThreshold,
 		"backupValidatorsCount": float64(s.config.BackupValidatorsCount),
 		"maxMissedBlocks":       float64(s.config.MaxMissedBlocks),
+		"dpos_min_freeze_period":    s.config.DPoSMinFreezePeriod,    // 🆕 最小冻结期（秒）
+		"dpos_unfreeze_lock_period": s.config.DPoSUnfreezeLockPeriod, // 🆕 解冻锁定期（秒）
 	}
 
 	// 从YAML配置中获取区块时间（必须配置，不允许使用默认值）

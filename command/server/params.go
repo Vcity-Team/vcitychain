@@ -246,6 +246,8 @@ func (p *serverParams) generateConfig() *server.Config {
 		DPoSProposalVotePeriod:   p.dposProposalVotePeriod,
 		DPoSProposalValidPeriod:  p.dposProposalValidPeriod,
 		BlockTimeSeconds:         p.rawConfig.BlockTimeSeconds, // 🆕 传递BlockTimeSeconds配置
+		DPoSMinFreezePeriod:      p.rawConfig.DPoSMinFreezePeriod, // 🆕 传递最小冻结期配置
+		DPoSUnfreezeLockPeriod:   p.rawConfig.DPoSUnfreezeLockPeriod, // 🆕 传递解冻锁定期配置
 		JSONLogFormat:            p.rawConfig.JSONLogFormat,
 		LogFilePath:              p.logFileLocation,
 

@@ -627,7 +627,7 @@ func (p *TxPool) Demote(tx *types.Transaction) {
 // ResetWithHeaders processes the transactions from the new
 // headers to sync the pool with the new state.
 func (p *TxPool) ResetWithHeaders(headers ...*types.Header) {
-	p.logger.Info("🔵 [ResetWithHeaders] 开始处理新区块头",
+	p.logger.Debug("🔵 [ResetWithHeaders] 开始处理新区块头",
 		"headerCount", len(headers),
 		"firstBlock", func() uint64 {
 			if len(headers) > 0 {
@@ -1474,7 +1474,7 @@ func (p *TxPool) addGossipTx(obj interface{}, _ peer.ID) {
 // resetAccounts updates existing accounts with the new nonce and prunes stale transactions.
 func (p *TxPool) resetAccounts(stateNonces map[types.Address]uint64) {
 	if len(stateNonces) == 0 {
-		p.logger.Info("🔵 [resetAccounts] 没有需要重置的账户")
+		p.logger.Debug("🔵 [resetAccounts] 没有需要重置的账户")
 		return
 	}
 

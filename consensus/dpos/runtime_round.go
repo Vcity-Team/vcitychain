@@ -125,7 +125,7 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 	if r.config != nil && r.config.DelegateCount > 0 {
 		// 1. 基于区块号触发轮次边界处理（保持原有逻辑）
 		if currentBlockNumber > 0 && currentBlockNumber%uint64(r.config.DelegateCount) == 0 {
-			r.logger.Info("🔄 轮次边界触发（基于区块号）",
+			r.logger.Debug("🔄 轮次边界触发（基于区块号）",
 				"blockNumber", currentBlockNumber,
 				"delegateCount", r.config.DelegateCount)
 
@@ -154,7 +154,7 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 		if r.config.blockScheduler != nil {
 			newRound := r.calculateRoundBySlot()
 			if newRound != r.currentRound {
-				r.logger.Info("🔄 轮次更新（基于slot）",
+				r.logger.Debug("🔄 轮次更新（基于slot）",
 					"oldRound", r.currentRound,
 					"newRound", newRound,
 					"blockNumber", currentBlockNumber)

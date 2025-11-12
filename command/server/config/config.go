@@ -63,6 +63,10 @@ type Config struct {
 	DPoSProposalValidPeriod  string `json:"dpos_proposal_valid_period" yaml:"dpos_proposal_valid_period"`   // 提案有效期
 	BlockTimeSeconds         uint64 `json:"block_time_s" yaml:"block_time_s"`                               // 区块间隔时间（秒）
 
+	// 🆕 冻结相关配置
+	DPoSMinFreezePeriod    uint64 `json:"dpos_min_freeze_period" yaml:"dpos_min_freeze_period"`       // 最小冻结期（秒）
+	DPoSUnfreezeLockPeriod uint64 `json:"dpos_unfreeze_lock_period" yaml:"dpos_unfreeze_lock_period"` // 解冻锁定期（秒）
+
 	// London Fork 配置（从 yaml 读取，不改变 genesis hash）
 	BaseFeeConfig string `json:"base_fee_config" yaml:"base_fee_config"`           // 格式: "baseFee:baseFeeEM:baseFeeChangeDenom"
 	BurnContract  string `json:"burn_contract" yaml:"burn_contract"`              // 格式: "blockNumber:address[:destinationAddress]"

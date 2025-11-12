@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/crypto"
+	"github.com/Vcity-Team/vcitychain/state"
 	"github.com/Vcity-Team/vcitychain/types"
 	"go.etcd.io/bbolt"
 )
@@ -438,6 +440,55 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 		"amount", regInfo.Deposit.String(),
 		"frozenAt", frozenAt)
 
+	// 🆕 从账户余额中扣除冻结金额（如果 Executor 可用）
+	if d.config != nil && d.config.Executor != nil && d.config.Blockchain != nil {
+		// 获取当前区块头
+		currentHeader := d.config.Blockchain.Header()
+		if currentHeader != nil {
+			// 获取当前状态快照
+			snapshot, err := d.config.Executor.StateAt(currentHeader.StateRoot)
+			if err == nil && snapshot != nil {
+				// 创建状态事务
+				txn := state.NewTxn(snapshot)
+				
+				// 从账户余额中扣除冻结金额
+				if err := txn.SubBalance(regInfo.Registrant, regInfo.Deposit); err != nil {
+					d.logger.Error("❌ 扣除冻结金额失败", "error", err)
+					return fmt.Errorf("failed to deduct frozen amount: %w", err)
+				}
+				
+				// 提交状态变更
+				objects, err := txn.Commit(true)
+				if err != nil {
+					d.logger.Error("❌ 提交冻结状态变更失败", "error", err)
+					return fmt.Errorf("failed to commit freeze state changes: %w", err)
+				}
+				
+				// 更新状态根（如果需要）
+				if len(objects) > 0 {
+					var newSnapshot state.Snapshot
+					var newStateRoot []byte
+					newSnapshot, newStateRoot, err = snapshot.Commit(objects)
+					if err != nil {
+						d.logger.Error("❌ 更新状态根失败", "error", err)
+						return fmt.Errorf("failed to update state root: %w", err)
+					}
+					d.logger.Info("✅ 冻结金额已从账户余额中扣除",
+						"address", regInfo.Registrant.String(),
+						"amount", regInfo.Deposit.String(),
+						"newStateRoot", fmt.Sprintf("%x", newStateRoot[:8]),
+						"newSnapshot", newSnapshot != nil)
+				}
+			} else {
+				d.logger.Warn("⚠️ 无法获取状态快照，跳过余额扣除", "error", err)
+			}
+		} else {
+			d.logger.Warn("⚠️ 无法获取当前区块头，跳过余额扣除")
+		}
+	} else {
+		d.logger.Warn("⚠️ Executor或Blockchain不可用，跳过余额扣除")
+	}
+
 	// 创建冻结信息
 	freezeInfo := &FreezeInfo{
 		Address:             regInfo.Registrant,
@@ -837,15 +888,37 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 		"deposit", depositAmount.String(),
 		"chainID", chainID)
 
-	// 获取账户nonce
-	var nonce uint64
-	// 直接使用传入的registrant作为发送者地址
-	senderAddress := registrant
+	// 🆕 从私钥推导地址，确保地址和私钥匹配
+	privateKeyBytes, err := hex.DecodeString(strings.TrimPrefix(privateKey, "0x"))
+	if err != nil {
+		return fmt.Errorf("failed to decode private key: %w", err)
+	}
+	if len(privateKeyBytes) != 32 {
+		return fmt.Errorf("invalid private key length: expected 32 bytes, got %d", len(privateKeyBytes))
+	}
 
-	d.logger.Info("🔍 使用传入的registrant作为发送者地址", "senderAddress", senderAddress.String())
+	// 从私钥推导公钥和地址
+	privKey, err := crypto.BytesToECDSAPrivateKey(privateKeyBytes)
+	if err != nil {
+		return fmt.Errorf("failed to create ECDSA private key: %w", err)
+	}
+	derivedAddress := crypto.PubKeyToAddress(&privKey.PublicKey)
+
+	// 验证私钥地址和 registrant 是否匹配
+	if derivedAddress != registrant {
+		d.logger.Warn("⚠️ 私钥地址与注册地址不匹配",
+			"registrant", registrant.String(),
+			"derivedAddress", derivedAddress.String(),
+			"note", "将使用私钥推导的地址作为发送者")
+		// 使用私钥推导的地址作为发送者（这是实际签名的地址）
+		registrant = derivedAddress
+	}
+
+	// 使用正确的地址获取nonce
+	senderAddress := registrant
+	d.logger.Info("🔍 使用发送者地址", "senderAddress", senderAddress.String())
 
 	// 尝试从区块链获取nonce
-	// 通过JSON-RPC调用获取nonce
 	nonce, err := d.getAccountNonce(senderAddress)
 	if err != nil {
 		d.logger.Warn("⚠️ 无法获取账户nonce，使用默认nonce 0", "error", err)

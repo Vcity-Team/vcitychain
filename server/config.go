@@ -73,6 +73,10 @@ type Config struct {
 	DPoSProposalValidPeriod  string `yaml:"dpos_proposal_valid_period"`  // 提案有效期（时间字符串，如"1d", "7d"）
 	DPoSSRThreshold          string `yaml:"dpos_SR_threshold"`           // SR候选人保证金阈值
 	BlockTimeSeconds         uint64 `yaml:"block_time_s"`                // 区块间隔时间（秒）
+
+	// 🆕 冻结相关配置
+	DPoSMinFreezePeriod    uint64 `yaml:"dpos_min_freeze_period"`       // 最小冻结期（秒）
+	DPoSUnfreezeLockPeriod uint64 `yaml:"dpos_unfreeze_lock_period"` // 解冻锁定期（秒）
 }
 
 // Telemetry holds the config details for metric services

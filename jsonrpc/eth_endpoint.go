@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/go-hclog"
 
 	"github.com/Vcity-Team/vcitychain/chain"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos"
 	"github.com/Vcity-Team/vcitychain/gasprice"
 	"github.com/Vcity-Team/vcitychain/helper/common"
 	"github.com/Vcity-Team/vcitychain/helper/progress"
@@ -737,6 +738,7 @@ func (e *Eth) GetLogs(query *LogQuery) (interface{}, error) {
 }
 
 // GetBalance returns the account's balance at the referenced block.
+// 🆕 修改：扣除冻结金额，返回可用余额
 func (e *Eth) GetBalance(address types.Address, filter BlockNumberOrHash) (interface{}, error) {
 	header, err := GetHeaderFromBlockNumberOrHash(filter, e.store)
 	if err != nil {
@@ -752,7 +754,19 @@ func (e *Eth) GetBalance(address types.Address, filter BlockNumberOrHash) (inter
 		return nil, err
 	}
 
-	return argBigPtr(acc.Balance), nil
+	// 🆕 查询冻结信息并扣除冻结金额
+	availableBalance := new(big.Int).Set(acc.Balance)
+
+	// 直接通过全局函数获取DPoS实例并查询冻结信息
+	if dposInstance, exists := dpos.GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+		freezeInfo, err := dposInstance.GetFreezeInfo(address)
+		if err == nil && freezeInfo != nil && freezeInfo.FrozenAmount != nil {
+			// 扣除冻结金额
+			availableBalance.Sub(availableBalance, freezeInfo.FrozenAmount)
+		}
+	}
+
+	return argBigPtr(availableBalance), nil
 }
 
 // GetTransactionCount returns account nonce

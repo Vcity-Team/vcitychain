@@ -907,7 +907,7 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 	//    但为了保持一致性，也调用 DPoS.OnBlockInserted（它内部会调用 txPool.ResetWithHeaders）
 	//    DPoS.OnBlockInserted 内部会调用 consensusRuntime.OnBlockInserted，后者有重复处理保护机制
 	//    （lastBuiltBlock.Number >= fullBlock.Block.Number()），所以不会重复处理
-	b.logger.Info("🔵 [blockchain.WriteFullBlock] 检查是否需要调用 OnBlockInserted",
+	b.logger.Debug("🔵 [blockchain.WriteFullBlock] 检查是否需要调用 OnBlockInserted",
 		"blockNumber", header.Number,
 		"source", source,
 		"consensusType", fmt.Sprintf("%T", b.consensus),

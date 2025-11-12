@@ -929,11 +929,15 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		if period, ok := minFreezePeriod.(uint64); ok {
 			vcity_dpos.config.MinFreezePeriod = period
 			logger.Info("❄️ 使用server层解析的最小冻结期", "period", period, "seconds", period)
-		} else if periodFloat, ok := minFreezePeriod.(float64); ok {
-			vcity_dpos.config.MinFreezePeriod = uint64(periodFloat)
+		} else if period, ok := minFreezePeriod.(int); ok {
+			vcity_dpos.config.MinFreezePeriod = uint64(period)
+			logger.Info("❄️ 使用server层解析的最小冻结期（从int转换）", "period", vcity_dpos.config.MinFreezePeriod, "seconds", vcity_dpos.config.MinFreezePeriod)
+		} else if period, ok := minFreezePeriod.(float64); ok {
+			vcity_dpos.config.MinFreezePeriod = uint64(period)
 			logger.Info("❄️ 使用server层解析的最小冻结期（从float64转换）", "period", vcity_dpos.config.MinFreezePeriod, "seconds", vcity_dpos.config.MinFreezePeriod)
 		} else {
-			logger.Warn("❄️ dpos_min_freeze_period类型断言失败", "type", fmt.Sprintf("%T", minFreezePeriod))
+			logger.Warn("❄️ dpos_min_freeze_period类型不支持", "type", fmt.Sprintf("%T", minFreezePeriod), "使用默认值604800")
+			vcity_dpos.config.MinFreezePeriod = 604800
 		}
 	} else {
 		logger.Warn("❄️ 未找到dpos_min_freeze_period配置，使用默认值604800秒（7天）")
@@ -945,11 +949,15 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		if period, ok := unfreezeLockPeriod.(uint64); ok {
 			vcity_dpos.config.UnfreezeLockPeriod = period
 			logger.Info("🔓 使用server层解析的解冻锁定期", "period", period, "seconds", period)
-		} else if periodFloat, ok := unfreezeLockPeriod.(float64); ok {
-			vcity_dpos.config.UnfreezeLockPeriod = uint64(periodFloat)
+		} else if period, ok := unfreezeLockPeriod.(int); ok {
+			vcity_dpos.config.UnfreezeLockPeriod = uint64(period)
+			logger.Info("🔓 使用server层解析的解冻锁定期（从int转换）", "period", vcity_dpos.config.UnfreezeLockPeriod, "seconds", vcity_dpos.config.UnfreezeLockPeriod)
+		} else if period, ok := unfreezeLockPeriod.(float64); ok {
+			vcity_dpos.config.UnfreezeLockPeriod = uint64(period)
 			logger.Info("🔓 使用server层解析的解冻锁定期（从float64转换）", "period", vcity_dpos.config.UnfreezeLockPeriod, "seconds", vcity_dpos.config.UnfreezeLockPeriod)
 		} else {
-			logger.Warn("🔓 dpos_unfreeze_lock_period类型断言失败", "type", fmt.Sprintf("%T", unfreezeLockPeriod))
+			logger.Warn("🔓 dpos_unfreeze_lock_period类型不支持", "type", fmt.Sprintf("%T", unfreezeLockPeriod), "使用默认值1209600")
+			vcity_dpos.config.UnfreezeLockPeriod = 1209600
 		}
 	} else {
 		logger.Warn("🔓 未找到dpos_unfreeze_lock_period配置，使用默认值1209600秒（14天）")
