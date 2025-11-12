@@ -3340,25 +3340,6 @@ func (d *DPOS) GetLatestEpochInfo(ctx context.Context) (interface{}, error) {
 	return nil, fmt.Errorf("GetCurrentEpochInfo method not available on DPoS engine")
 }
 
-// GetCurrentParameterValues 获取当前参数的实际值
-func (d *DPOS) GetCurrentParameterValues(ctx context.Context) (interface{}, error) {
-	d.logger.Info("DPoS GetCurrentParameterValues called")
-
-	// 获取DPoS引擎
-	dposEngine := d.getDPoSEngine()
-	if dposEngine == nil {
-		return nil, fmt.Errorf("DPoS engine not available")
-	}
-
-	// 调用DPoS引擎的方法
-	if engine, ok := dposEngine.(interface {
-		GetCurrentParameterValues() map[string]interface{}
-	}); ok {
-		return engine.GetCurrentParameterValues(), nil
-	}
-
-	return nil, fmt.Errorf("GetCurrentParameterValues method not available on DPoS engine")
-}
 
 // ==================== 新增：奖励查询JSON-RPC方法 ====================
 
@@ -4638,9 +4619,9 @@ func (d *DPOS) GetActiveProposals(ctx context.Context) (interface{}, error) {
 	return nil, fmt.Errorf("DPoS engine does not support parameter proposals")
 }
 
-// GetVotableParameters 获取可表决参数列表
-func (d *DPOS) GetVotableParameters(ctx context.Context) (interface{}, error) {
-	d.logger.Info("DPoS GetVotableParameters called")
+// GetVotableCurrentParameters 获取可表决参数列表（包含当前值）
+func (d *DPOS) GetVotableCurrentParameters(ctx context.Context) (interface{}, error) {
+	d.logger.Info("DPoS GetVotableCurrentParameters called")
 
 	// 获取DPoS引擎
 	dposEngine := d.getDPoSEngine()
@@ -4649,10 +4630,10 @@ func (d *DPOS) GetVotableParameters(ctx context.Context) (interface{}, error) {
 	}
 
 	// 调用DPoS引擎获取可表决参数
-	if getVotableParameters, ok := dposEngine.(interface {
-		GetVotableParameters() map[string]*dpos.ParameterInfo
+	if getVotableCurrentParameters, ok := dposEngine.(interface {
+		GetVotableCurrentParameters() map[string]*dpos.ParameterInfo
 	}); ok {
-		parameters := getVotableParameters.GetVotableParameters()
+		parameters := getVotableCurrentParameters.GetVotableCurrentParameters()
 
 		// 转换参数列表
 		result := make(map[string]interface{})

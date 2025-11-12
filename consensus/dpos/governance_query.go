@@ -48,8 +48,8 @@ func (d *DPoS) GetActiveProposals() ([]*ParameterProposal, error) {
 	return activeProposals, nil
 }
 
-// GetVotableParameters 获取可表决参数列表（包含当前值）
-func (d *DPoS) GetVotableParameters() map[string]*ParameterInfo {
+// GetVotableCurrentParameters 获取可表决参数列表（包含当前值）
+func (d *DPoS) GetVotableCurrentParameters() map[string]*ParameterInfo {
 	d.lock.RLock()
 	defer d.lock.RUnlock()
 
@@ -85,9 +85,17 @@ func (d *DPoS) GetVotableParameters() map[string]*ParameterInfo {
 						"param", name,
 						"value", defaultValue)
 				} else {
-					d.logger.Debug("No current value found for parameter",
-						"param", name,
-						"cacheSize", len(d.parameterCurrentValues))
+					// 对于 dpos_proposal_vote_period，使用 getCurrentParameterValue
+					if defaultValue, err = d.getCurrentParameterValue(name); err == nil {
+						infoCopy.CurrentValue = defaultValue
+						d.logger.Debug("Found current value for parameter via getCurrentParameterValue",
+							"param", name,
+							"value", defaultValue)
+					} else {
+						d.logger.Debug("No current value found for parameter",
+							"param", name,
+							"cacheSize", len(d.parameterCurrentValues))
+					}
 				}
 			}
 		}
@@ -104,49 +112,6 @@ func (d *DPoS) GetVotableParameters() map[string]*ParameterInfo {
 	return result
 }
 
-// GetCurrentParameterValues 获取当前参数的实际值
-func (d *DPoS) GetCurrentParameterValues() map[string]interface{} {
-	d.lock.RLock()
-	defer d.lock.RUnlock()
-
-	result := make(map[string]interface{})
-
-	// 获取所有可表决参数的当前值
-	for paramName := range d.votableParameters {
-		if value, err := d.getCurrentParameterValue(paramName); err == nil {
-			result[paramName] = value
-		} else {
-			d.logger.Warn("Failed to get current value for parameter", "parameter", paramName, "error", err)
-		}
-	}
-
-	// 添加 dpos_proposal_vote_period（以区块数表示，来自YAML配置）
-	var proposalVotePeriod time.Duration
-	if d.config != nil {
-		proposalVotePeriod = d.config.ProposalVotePeriod
-	}
-
-	if proposalVotePeriod == 0 {
-		proposalVotePeriod = 24 * time.Hour
-		d.logger.Warn("📋 ProposalVotePeriod为0或未设置，使用默认值24小时")
-	}
-
-	blockTime := 3 * time.Second
-	if d.config != nil && d.config.BlockTime.Duration > 0 {
-		blockTime = d.config.BlockTime.Duration
-	}
-	if blockTime > 0 {
-		blocks := uint64(proposalVotePeriod / blockTime)
-		result["dpos_proposal_vote_period"] = blocks
-	}
-
-	// 添加一些额外的系统信息
-	result["lastUpdated"] = time.Now().Format(time.RFC3339)
-	// 仅排除 lastUpdated，不排除其它键
-	result["totalParameters"] = len(result) - 1
-
-	return result
-}
 
 // UpdateParameterValue 更新参数值（公共方法）
 func (d *DPoS) UpdateParameterValue(parameter string, newValue interface{}) error {

@@ -33,7 +33,7 @@ func runCommand(cmd *cobra.Command, args []string) {
 	defer outputter.WriteOutput()
 
 	// 调用JSON-RPC获取当前参数值
-	result, err := callJSONRPC("dpos_getCurrentParameterValues", []interface{}{})
+	result, err := callJSONRPC("dpos_getVotableCurrentParameters", []interface{}{})
 	if err != nil {
 		outputter.SetError(fmt.Errorf("failed to call JSON-RPC: %w", err))
 		return

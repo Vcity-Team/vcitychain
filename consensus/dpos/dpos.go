@@ -167,6 +167,10 @@ type DPoSConfig struct {
 	ProposalVotePeriod   time.Duration `json:"proposalVotePeriod" yaml:"dpos_proposal_vote_period"`   // 提案表决周期
 	ProposalValidPeriod  time.Duration `json:"proposalValidPeriod" yaml:"dpos_proposal_valid_period"` // 提案有效期
 
+	// 🆕 冻结相关配置
+	MinFreezePeriod    uint64 `json:"min_freeze_period" yaml:"min_freeze_period"`       // 最小冻结期（秒）
+	UnfreezeLockPeriod uint64 `json:"unfreeze_lock_period" yaml:"unfreeze_lock_period"` // 解冻锁定期（秒）
+
 	// SR候选人保证金阈值
 	SRThreshold *big.Int `json:"srThreshold" yaml:"dpos_SR_threshold"`
 }
@@ -343,7 +347,7 @@ type DPoS struct {
 
 // buildVoteMessage, signParameterVote, verifyParameterVote, SignVoteForTx 已迁移到 governance_vote.go
 
-// GetParameterProposal, GetActiveProposals, GetVotableParameters, GetCurrentParameterValues, UpdateParameterValue 已迁移到 governance_query.go
+// GetParameterProposal, GetActiveProposals, GetVotableCurrentParameters, UpdateParameterValue 已迁移到 governance_query.go
 
 // getVoterVotingWeight 已迁移到 voting_weight.go
 
@@ -385,7 +389,7 @@ func (d *DPoS) GetConsensusSwitchHeight() uint64 {
 	return d.config.ConsensusSwitchHeight
 }
 
-// UpdateParameterValue, GetParameterProposal, GetActiveProposals, GetVotableParameters, GetCurrentParameterValues 已迁移到 governance_query.go
+// UpdateParameterValue, GetParameterProposal, GetActiveProposals, GetVotableCurrentParameters 已迁移到 governance_query.go
 
 // VerifyHeader, verifyHeaderImpl, ProcessHeaders 已迁移到 block_validation.go
 
@@ -1951,6 +1955,8 @@ func DefaultDPoSConfig() *DPoSConfig {
 		RewardRatio:         100,                             // 1%
 		ProposalVotePeriod:  24 * time.Hour,                  // 默认提案表决周期 24小时
 		ProposalValidPeriod: 7 * 24 * time.Hour,              // 默认提案有效期 7天
+		MinFreezePeriod:     604800,                          // 默认最小冻结期 7天（秒）
+		UnfreezeLockPeriod:  1209600,                         // 默认解冻锁定期 14天（秒）
 	}
 }
 

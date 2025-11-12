@@ -191,6 +191,31 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Description: "Minimum staking threshold required for voting (wei)",
 			Category:    "governance",
 		},
+		"dpos_proposal_vote_period": {
+			Name:        "Proposal Vote Period",
+			Type:        "uint64",
+			MinValue:    uint64(100),              // 最少100个区块
+			MaxValue:    uint64(1000000),           // 最多100万个区块
+			Description: "Proposal voting period (in blocks)",
+			Category:    "governance",
+		},
+		// 🆕 冻结相关参数
+		"min_freeze_period": {
+			Name:        "Min Freeze Period",
+			Type:        "uint64",
+			MinValue:    uint64(86400),             // 最少1天（秒）
+			MaxValue:    uint64(31536000),          // 最多1年（秒）
+			Description: "Minimum freeze period (seconds, 7 days default)",
+			Category:    "governance",
+		},
+		"unfreeze_lock_period": {
+			Name:        "Unfreeze Lock Period",
+			Type:        "uint64",
+			MinValue:    uint64(86400),             // 最少1天（秒）
+			MaxValue:    uint64(31536000),          // 最多1年（秒）
+			Description: "Unfreeze lock period (seconds, 14 days default)",
+			Category:    "governance",
+		},
 	}
 }
 
@@ -304,7 +329,7 @@ func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 		return d.config.BlockTime.Duration.Seconds(), nil
 	case "dpos_epoch_duration":
 		return d.config.EpochDuration.String(), nil
-	case "governance_voting_period":
+	case "dpos_proposal_vote_period":
 		// 🆕 从YAML配置计算提案表决周期（区块数）
 		if d.config != nil && d.config.ProposalVotePeriod > 0 {
 			blockTime := d.config.BlockTime.Duration
@@ -315,6 +340,23 @@ func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 		}
 		// 默认值：1天 = 28800个区块（按3秒/区块）
 		return uint64(28800), nil
+	case "governance_voting_period":
+		// 兼容旧参数名，重定向到 dpos_proposal_vote_period
+		return d.getConfigParameterValue("dpos_proposal_vote_period")
+	case "min_freeze_period":
+		// 🆕 冻结参数：最小冻结期（从配置读取）
+		if d.config != nil && d.config.MinFreezePeriod > 0 {
+			return d.config.MinFreezePeriod, nil
+		}
+		// 默认值：7天 = 604800秒
+		return uint64(604800), nil
+	case "unfreeze_lock_period":
+		// 🆕 冻结参数：解冻锁定期（从配置读取）
+		if d.config != nil && d.config.UnfreezeLockPeriod > 0 {
+			return d.config.UnfreezeLockPeriod, nil
+		}
+		// 默认值：14天 = 1209600秒
+		return uint64(1209600), nil
 	default:
 		return nil, fmt.Errorf("unknown parameter: %s", paramName)
 	}

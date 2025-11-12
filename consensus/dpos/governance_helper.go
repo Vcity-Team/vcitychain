@@ -53,7 +53,7 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 		return uint64(d.config.BlockTime.Duration.Seconds()), nil
 	case "dpos_epoch_duration":
 		return d.config.EpochDuration.String(), nil
-	case "governance_voting_period":
+	case "dpos_proposal_vote_period":
 		// 从YAML配置计算提案表决周期（区块数）
 		if d.config != nil && d.config.ProposalVotePeriod > 0 {
 			blockTime := d.config.BlockTime.Duration
@@ -64,12 +64,29 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 		}
 		// 默认值：1天 = 28800个区块（按3秒/区块）
 		return uint64(28800), nil
+	case "governance_voting_period":
+		// 兼容旧参数名，重定向到 dpos_proposal_vote_period
+		return d.getCurrentParameterValue("dpos_proposal_vote_period")
 	case "governance_voting_threshold":
 		// 治理参数：投票通过阈值
 		return uint64(51), nil
 	case "governance_min_voting_threshold":
 		// 治理参数：最小投票门槛
 		return d.getMinVotingThreshold().String(), nil
+	case "min_freeze_period":
+		// 冻结参数：最小冻结期（从配置读取）
+		if d.config != nil && d.config.MinFreezePeriod > 0 {
+			return d.config.MinFreezePeriod, nil
+		}
+		// 默认值：7天 = 604800秒
+		return uint64(604800), nil
+	case "unfreeze_lock_period":
+		// 冻结参数：解冻锁定期（从配置读取）
+		if d.config != nil && d.config.UnfreezeLockPeriod > 0 {
+			return d.config.UnfreezeLockPeriod, nil
+		}
+		// 默认值：14天 = 1209600秒
+		return uint64(1209600), nil
 	default:
 		return nil, fmt.Errorf("unknown parameter: %s", parameter)
 	}
@@ -132,6 +149,29 @@ func (d *DPoS) validateParameterValue(parameter string, value interface{}) error
 
 		if val < minVal || val > maxVal {
 			return fmt.Errorf("value %d out of range [%d, %d]", val, minVal, maxVal)
+		}
+
+		// 🆕 冻结期参数交叉验证
+		if parameter == "unfreeze_lock_period" {
+			// 如果修改解冻锁定期，必须 >= 最小冻结期
+			minFreezePeriod, err := d.getCurrentParameterValue("min_freeze_period")
+			if err == nil {
+				if minFreezePeriodUint, ok := minFreezePeriod.(uint64); ok {
+					if val < minFreezePeriodUint {
+						return fmt.Errorf("unfreeze_lock_period (%d) must be >= min_freeze_period (%d)", val, minFreezePeriodUint)
+					}
+				}
+			}
+		} else if parameter == "min_freeze_period" {
+			// 如果修改最小冻结期，必须 <= 解冻锁定期
+			unfreezeLockPeriod, err := d.getCurrentParameterValue("unfreeze_lock_period")
+			if err == nil {
+				if unfreezeLockPeriodUint, ok := unfreezeLockPeriod.(uint64); ok {
+					if val > unfreezeLockPeriodUint {
+						return fmt.Errorf("min_freeze_period (%d) must be <= unfreeze_lock_period (%d)", val, unfreezeLockPeriodUint)
+					}
+				}
+			}
 		}
 
 	case "string":
