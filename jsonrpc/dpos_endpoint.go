@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"bytes"
@@ -4481,10 +4482,36 @@ func (d *DPOS) RegisterDelegate(ctx context.Context, params interface{}) (interf
 			return nil, fmt.Errorf("failed to register delegate: %w", err)
 		}
 		d.logger.Info("🎉 ===== 受托人注册RPC调用成功 =====")
-		return map[string]interface{}{
+		
+		// 🆕 获取冻结信息
+		frozenAt := uint64(time.Now().Unix())
+		result := map[string]interface{}{
 			"success": true,
 			"message": "Delegate registration submitted successfully",
-		}, nil
+			"frozenAmount": "0", // 将在交易处理时设置
+			"frozenAt": frozenAt,
+		}
+		
+		// 如果已注册，尝试获取冻结信息
+		if dposEngine != nil {
+			if isRegistered, ok := dposEngine.(interface {
+				IsDelegateRegistered(address types.Address) bool
+			}); ok {
+				reg := isRegistered.IsDelegateRegistered(registrant)
+				if reg {
+					if getFreezeInfo, ok := dposEngine.(interface {
+						GetFreezeInfo(address types.Address) (*dpos.FreezeInfo, error)
+					}); ok {
+						if freezeInfo, err := getFreezeInfo.GetFreezeInfo(registrant); err == nil && freezeInfo != nil {
+							result["frozenAmount"] = freezeInfo.FrozenAmount.String()
+							result["frozenAt"] = freezeInfo.FrozenAt
+						}
+					}
+				}
+			}
+		}
+		
+		return result, nil
 	}
 
 	return nil, fmt.Errorf("DPoS engine does not support delegate registration")
@@ -4544,15 +4571,263 @@ func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interf
 	}); ok {
 		err := withdrawDelegate.WithdrawDelegate(address)
 		if err != nil {
+			// 🆕 检查错误类型，返回详细错误信息
+			errStr := err.Error()
+			if strings.Contains(errStr, "cannot withdraw while having votes") {
+				// 有投票，需要先撤回
+				return map[string]interface{}{
+					"success": false,
+					"error":   errStr,
+					"code":    "HAS_ACTIVE_VOTES",
+					"withdrawVoteInterface": "dpos_vote",
+					"note":    "Use dpos_vote with amount=0 or negative amount to withdraw votes manually",
+				}, nil
+			} else if strings.Contains(errStr, "cannot withdraw before minimum freeze period") {
+				// 不满足最小冻结期
+				return map[string]interface{}{
+					"success": false,
+					"error":   errStr,
+					"code":    "MIN_FREEZE_PERIOD_NOT_MET",
+				}, nil
+			}
 			return nil, fmt.Errorf("failed to withdraw delegate: %w", err)
 		}
-		return map[string]interface{}{
+		
+		// 🆕 获取解冻信息
+		result := map[string]interface{}{
 			"success": true,
-			"message": "Delegate withdrawn successfully",
-		}, nil
+			"message": "Delegate withdrawn and unfrozen successfully",
+		}
+		
+		// 尝试获取冻结信息
+		if getFreezeInfo, ok := dposEngine.(interface {
+			GetFreezeInfo(address types.Address) (*dpos.FreezeInfo, error)
+		}); ok {
+			if freezeInfo, err := getFreezeInfo.GetFreezeInfo(address); err == nil && freezeInfo != nil {
+				result["unfrozenAmount"] = freezeInfo.FrozenAmount.String()
+				result["unfrozenAt"] = freezeInfo.UnfreezeAt
+				result["lockPeriod"] = freezeInfo.UnfreezeAvailableAt - freezeInfo.UnfreezeAt
+				result["unfreezeAvailableAt"] = freezeInfo.UnfreezeAvailableAt
+			}
+		}
+		
+		return result, nil
 	}
 
 	return nil, fmt.Errorf("DPoS engine does not support delegate withdrawal")
+}
+
+// GetFreezeInfo 查询冻结信息（支持单个和批量）
+func (d *DPOS) GetFreezeInfo(ctx context.Context, params interface{}) (interface{}, error) {
+	d.logger.Info("DPoS GetFreezeInfo called", "params", params)
+
+	// 解析参数
+	var addressStr string
+	var addresses []string
+	var isBatch bool
+
+	if paramMap, ok := params.(map[string]interface{}); ok {
+		if addr, ok := paramMap["address"].(string); ok {
+			addressStr = addr
+			isBatch = false
+		} else if addrs, ok := paramMap["addresses"].([]interface{}); ok {
+			addresses = make([]string, 0, len(addrs))
+			for _, addr := range addrs {
+				if addrStr, ok := addr.(string); ok {
+					addresses = append(addresses, addrStr)
+				}
+			}
+			if len(addresses) > 100 {
+				return nil, fmt.Errorf("too many addresses, maximum 100 allowed")
+			}
+			isBatch = true
+		} else {
+			return nil, fmt.Errorf("address or addresses parameter is required")
+		}
+	} else if paramArray, ok := params.([]interface{}); ok && len(paramArray) >= 1 {
+		if addr, ok := paramArray[0].(string); ok {
+			addressStr = addr
+			isBatch = false
+		} else {
+			return nil, fmt.Errorf("invalid address format")
+		}
+	} else {
+		return nil, fmt.Errorf("invalid parameters format")
+	}
+
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return nil, fmt.Errorf("DPoS engine not available")
+	}
+
+	// 批量查询
+	if isBatch {
+		results := make([]map[string]interface{}, 0, len(addresses))
+		for _, addrStr := range addresses {
+			addr := types.StringToAddress(addrStr)
+			result := d.buildFreezeInfoResponse(dposEngine, addr)
+			results = append(results, result)
+		}
+		return map[string]interface{}{
+			"success":    true,
+			"freezeInfos": results,
+		}, nil
+	}
+
+	// 单个查询
+	if addressStr == "" {
+		return nil, fmt.Errorf("address is required")
+	}
+	address := types.StringToAddress(addressStr)
+	result := d.buildFreezeInfoResponse(dposEngine, address)
+	return result, nil
+}
+
+// buildFreezeInfoResponse 构建冻结信息响应
+func (d *DPOS) buildFreezeInfoResponse(dposEngine interface{}, address types.Address) map[string]interface{} {
+	result := map[string]interface{}{
+		"success": true,
+		"address": address.String(),
+	}
+
+	// 获取冻结信息
+	if getFreezeInfo, ok := dposEngine.(interface {
+		GetFreezeInfo(address types.Address) (*dpos.FreezeInfo, error)
+	}); ok {
+		freezeInfo, err := getFreezeInfo.GetFreezeInfo(address)
+		if err == nil && freezeInfo != nil {
+			result["isDelegate"] = false
+			result["frozenAmount"] = freezeInfo.FrozenAmount.String()
+			result["frozenAt"] = freezeInfo.FrozenAt
+			result["unfreezeAt"] = freezeInfo.UnfreezeAt
+			result["unfreezeAvailableAt"] = freezeInfo.UnfreezeAvailableAt
+			result["status"] = freezeInfo.Status
+
+			// 计算锁定期和剩余时间
+			unfreezeLockPeriod := uint64(1209600) // 默认14天
+			// 尝试从冻结信息中获取锁定期（如果已解冻）
+			if freezeInfo.UnfreezeAt > 0 && freezeInfo.UnfreezeAvailableAt > freezeInfo.UnfreezeAt {
+				unfreezeLockPeriod = freezeInfo.UnfreezeAvailableAt - freezeInfo.UnfreezeAt
+			}
+			result["lockPeriod"] = unfreezeLockPeriod
+
+			currentTime := uint64(time.Now().Unix())
+			remainingLockTime := uint64(0)
+			if freezeInfo.UnfreezeAvailableAt > 0 && currentTime < freezeInfo.UnfreezeAvailableAt {
+				remainingLockTime = freezeInfo.UnfreezeAvailableAt - currentTime
+			}
+			result["remainingLockTime"] = remainingLockTime
+			result["canWithdraw"] = remainingLockTime == 0 && freezeInfo.UnfreezeAvailableAt > 0
+
+			// 检查是否为受托人
+			if isRegistered, ok := dposEngine.(interface {
+				IsDelegateRegistered(address types.Address) bool
+			}); ok {
+				isDelegate := isRegistered.IsDelegateRegistered(address)
+				result["isDelegate"] = isDelegate
+
+				if isDelegate {
+					// 获取注册信息
+					if getReg, ok := dposEngine.(interface {
+						GetDelegateRegistration(address types.Address) (*dpos.DelegateRegistration, error)
+					}); ok {
+						if reg, err := getReg.GetDelegateRegistration(address); err == nil && reg != nil {
+							result["registrationInfo"] = map[string]interface{}{
+								"name":      reg.Name,
+								"status":    reg.Status,
+								"deposit":   reg.Deposit.String(),
+								"createdAt": reg.CreatedAt,
+							}
+							result["voteInfo"] = map[string]interface{}{
+								"totalVotes": reg.TotalVotes.String(),
+								"hasVotes":   reg.TotalVotes.Cmp(big.NewInt(0)) > 0,
+							}
+						}
+					}
+				}
+			}
+		} else {
+			// 无冻结信息
+			result["isDelegate"] = false
+			result["frozenAmount"] = "0"
+			result["status"] = "none"
+		}
+	}
+
+	return result
+}
+
+// GetAccountBalance 查询账户余额（包含冻结）
+func (d *DPOS) GetAccountBalance(ctx context.Context, params interface{}) (interface{}, error) {
+	d.logger.Info("DPoS GetAccountBalance called", "params", params)
+
+	// 解析参数
+	var addressStr string
+	if paramMap, ok := params.(map[string]interface{}); ok {
+		addressStr, _ = paramMap["address"].(string)
+	} else if paramArray, ok := params.([]interface{}); ok && len(paramArray) >= 1 {
+		addressStr, _ = paramArray[0].(string)
+	} else {
+		return nil, fmt.Errorf("invalid parameters format")
+	}
+
+	if addressStr == "" {
+		return nil, fmt.Errorf("address is required")
+	}
+
+	address := types.StringToAddress(addressStr)
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return nil, fmt.Errorf("DPoS engine not available")
+	}
+
+	// 调用DPoS引擎的方法
+	if getBalance, ok := dposEngine.(interface {
+		GetAccountBalance(address types.Address) (map[string]interface{}, error)
+	}); ok {
+		return getBalance.GetAccountBalance(address)
+	}
+
+	return nil, fmt.Errorf("DPoS engine does not support GetAccountBalance")
+}
+
+// CanWithdrawDelegate 检查是否可以退出注册
+func (d *DPOS) CanWithdrawDelegate(ctx context.Context, params interface{}) (interface{}, error) {
+	d.logger.Info("DPoS CanWithdrawDelegate called", "params", params)
+
+	// 解析参数
+	var addressStr string
+	if paramMap, ok := params.(map[string]interface{}); ok {
+		addressStr, _ = paramMap["address"].(string)
+	} else if paramArray, ok := params.([]interface{}); ok && len(paramArray) >= 1 {
+		addressStr, _ = paramArray[0].(string)
+	} else {
+		return nil, fmt.Errorf("invalid parameters format")
+	}
+
+	if addressStr == "" {
+		return nil, fmt.Errorf("address is required")
+	}
+
+	address := types.StringToAddress(addressStr)
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return nil, fmt.Errorf("DPoS engine not available")
+	}
+
+	// 调用DPoS引擎的方法
+	if canWithdraw, ok := dposEngine.(interface {
+		CanWithdrawDelegate(address types.Address) (map[string]interface{}, error)
+	}); ok {
+		result, err := canWithdraw.CanWithdrawDelegate(address)
+		if err != nil {
+			return nil, err
+		}
+		result["success"] = true
+		return result, nil
+	}
+
+	return nil, fmt.Errorf("DPoS engine does not support CanWithdrawDelegate")
 }
 
 // GetActiveProposals 获取活跃提案列表

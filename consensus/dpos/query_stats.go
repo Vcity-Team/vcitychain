@@ -8,6 +8,146 @@ import (
 	"github.com/Vcity-Team/vcitychain/types"
 )
 
+// GetFreezeInfo 获取冻结信息（智能接口，支持单个和批量）
+func (d *DPoS) GetFreezeInfo(address types.Address) (*FreezeInfo, error) {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	// 获取冻结信息
+	var freezeInfo *FreezeInfo
+	var err error
+	if d.state != nil && d.state.FreezeStore != nil {
+		freezeInfo, err = d.state.FreezeStore.GetFreezeInfo(address)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get freeze info: %w", err)
+		}
+	}
+
+	// 如果没有冻结信息，返回空信息
+	if freezeInfo == nil {
+		return &FreezeInfo{
+			Address:             address,
+			FrozenAmount:         big.NewInt(0),
+			FrozenAt:             0,
+			UnfreezeAt:           0,
+			UnfreezeAvailableAt:  0,
+			Status:               "none",
+		}, nil
+	}
+
+	// 更新状态（根据当前时间）
+	currentTime := uint64(time.Now().Unix())
+	if freezeInfo.UnfreezeAvailableAt > 0 && currentTime >= freezeInfo.UnfreezeAvailableAt {
+		freezeInfo.Status = "withdrawn"
+	} else if freezeInfo.UnfreezeAt > 0 {
+		freezeInfo.Status = "unfreezing"
+	} else {
+		freezeInfo.Status = "frozen"
+	}
+
+	return freezeInfo, nil
+}
+
+// GetAccountBalance 获取账户余额（包含冻结）
+func (d *DPoS) GetAccountBalance(address types.Address) (map[string]interface{}, error) {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	// 获取可用余额（通过余额查询器）
+	availableBalance := big.NewInt(0)
+	if d.balanceQuerier != nil {
+		balance, err := d.balanceQuerier.GetNativeTokenBalance(address)
+		if err == nil {
+			availableBalance = balance
+		}
+	}
+
+	// 获取冻结余额
+	frozenBalance := big.NewInt(0)
+	if d.state != nil && d.state.FreezeStore != nil {
+		freezeInfo, err := d.state.FreezeStore.GetFreezeInfo(address)
+		if err == nil && freezeInfo != nil {
+			frozenBalance = freezeInfo.FrozenAmount
+		}
+	}
+
+	// 计算总余额
+	totalBalance := new(big.Int).Add(availableBalance, frozenBalance)
+
+	return map[string]interface{}{
+		"address":          address.String(),
+		"availableBalance": availableBalance.String(),
+		"frozenBalance":    frozenBalance.String(),
+		"totalBalance":     totalBalance.String(),
+	}, nil
+}
+
+// CanWithdrawDelegate 检查是否可以退出注册
+func (d *DPoS) CanWithdrawDelegate(address types.Address) (map[string]interface{}, error) {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	result := map[string]interface{}{
+		"address":     address.String(),
+		"canWithdraw": false,
+		"reason":      "",
+		"details":    make(map[string]interface{}),
+	}
+
+	// 获取注册信息
+	reg, err := d.state.RegistrationStore.GetRegistration(address)
+	if err != nil || reg == nil {
+		result["canWithdraw"] = false
+		result["reason"] = "delegate_not_found"
+		return result, nil
+	}
+
+	details := make(map[string]interface{})
+	details["hasFrozenAmount"] = reg.Deposit.Cmp(big.NewInt(0)) > 0
+	details["frozenAmount"] = reg.Deposit.String()
+
+	// 检查投票
+	hasVotes := reg.TotalVotes.Cmp(big.NewInt(0)) > 0
+	details["hasVotes"] = hasVotes
+	details["totalVotes"] = reg.TotalVotes.String()
+
+	if hasVotes {
+		result["canWithdraw"] = false
+		result["reason"] = "has_active_votes"
+		result["details"] = details
+		return result, nil
+	}
+
+	// 检查最小冻结期
+	currentTime := uint64(time.Now().Unix())
+	minFreezePeriod := d.config.MinFreezePeriod
+	if minFreezePeriod == 0 {
+		minFreezePeriod = 604800 // 默认7天
+	}
+
+	if reg.FrozenAt > 0 {
+		elapsedTime := currentTime - reg.FrozenAt
+		details["frozenAt"] = reg.FrozenAt
+		details["elapsedTime"] = elapsedTime
+		details["minFreezePeriod"] = minFreezePeriod
+		details["remainingTime"] = uint64(0)
+		if elapsedTime < minFreezePeriod {
+			remainingTime := minFreezePeriod - elapsedTime
+			details["remainingTime"] = remainingTime
+			result["canWithdraw"] = false
+			result["reason"] = "min_freeze_period_not_met"
+			result["details"] = details
+			return result, nil
+		}
+	}
+
+	// 可以退出
+	result["canWithdraw"] = true
+	result["reason"] = ""
+	result["details"] = details
+	return result, nil
+}
+
 // ==================== DPoS经济系统JSON-RPC查询方法 ====================
 
 // GetCurrentEpochInfo 获取当前Epoch信息

@@ -431,19 +431,48 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 	}
 	d.logger.Info("✅ 受托人未注册，可以继续处理")
 
+	// 🆕 冻结资金（从账户余额中扣除，但不转账，而是冻结）
+	frozenAt := uint64(time.Now().Unix())
+	d.logger.Info("❄️ 开始冻结资金",
+		"address", regInfo.Registrant.String(),
+		"amount", regInfo.Deposit.String(),
+		"frozenAt", frozenAt)
+
+	// 创建冻结信息
+	freezeInfo := &FreezeInfo{
+		Address:             regInfo.Registrant,
+		FrozenAmount:        regInfo.Deposit,
+		FrozenAt:            frozenAt,
+		UnfreezeAt:          0,        // 未解冻
+		UnfreezeAvailableAt: 0,        // 未解冻
+		Status:              "frozen", // 冻结中
+	}
+
+	// 保存冻结信息
+	if d.state != nil && d.state.FreezeStore != nil {
+		if err := d.state.FreezeStore.SaveFreezeInfo(freezeInfo); err != nil {
+			d.logger.Error("❌ 保存冻结信息失败", "error", err)
+			return fmt.Errorf("failed to save freeze info: %w", err)
+		}
+		d.logger.Info("✅ 冻结信息已保存")
+	}
+
 	// 创建受托人候选人
 	d.logger.Info("👤 开始创建受托人候选人...")
 	registration := &DelegateRegistration{
-		Address:      regInfo.Registrant,
-		Name:         regInfo.Name,
-		Website:      regInfo.Website,
-		Description:  regInfo.Description,
-		Deposit:      regInfo.Deposit,
-		Status:       RegStatusCandidate, // 候选人状态
-		CreatedAt:    uint64(time.Now().Unix()),
-		TotalVotes:   big.NewInt(0),
-		IsActive:     false,
-		LastVoteTime: 0,
+		Address:             regInfo.Registrant,
+		Name:                regInfo.Name,
+		Website:             regInfo.Website,
+		Description:         regInfo.Description,
+		Deposit:             regInfo.Deposit,
+		Status:              RegStatusCandidate, // 候选人状态
+		CreatedAt:           frozenAt,
+		TotalVotes:          big.NewInt(0),
+		IsActive:            false,
+		LastVoteTime:        0,
+		FrozenAt:            frozenAt, // 🆕 冻结时间
+		UnfreezeAt:          0,        // 🆕 未解冻
+		UnfreezeAvailableAt: 0,        // 🆕 未解冻
 	}
 	d.logger.Info("✅ 受托人候选人对象创建完成")
 
@@ -590,6 +619,20 @@ func (d *DPoS) calculateTotalVotedAmount(voter types.Address) *big.Int {
 
 	d.logger.Info("投票者无投票记录", "voter", voter.String())
 	return big.NewInt(0)
+}
+
+// GetDelegateRegistration 获取受托人注册信息
+func (d *DPoS) GetDelegateRegistration(address types.Address) (*DelegateRegistration, error) {
+	if d.state == nil || d.state.RegistrationStore == nil {
+		return nil, fmt.Errorf("registration store not available")
+	}
+
+	reg, err := d.state.RegistrationStore.GetRegistration(address)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get registration: %w", err)
+	}
+
+	return reg, nil
 }
 
 // IsDelegateRegistered 检查受托人是否已注册
@@ -1184,7 +1227,7 @@ func (d *DPoS) getMaxActiveDelegates() int {
 	return maxActive
 }
 
-// WithdrawDelegate 退出受托人（退还保证金）
+// WithdrawDelegate 退出受托人（直接解冻，参考 Tron）
 func (d *DPoS) WithdrawDelegate(address types.Address) error {
 	d.lock.Lock()
 	defer d.lock.Unlock()
@@ -1199,18 +1242,57 @@ func (d *DPoS) WithdrawDelegate(address types.Address) error {
 		return fmt.Errorf("delegate not found")
 	}
 
-	// 检查是否还有投票
+	// 1. 检查是否还有投票（参考 Tron：要求先手动撤回投票）
 	if reg.TotalVotes.Cmp(big.NewInt(0)) > 0 {
-		return fmt.Errorf("cannot withdraw while having votes")
+		return fmt.Errorf("cannot withdraw while having votes. Please use dpos_vote to withdraw votes first")
 	}
 
-	// 更新状态
+	// 2. 检查是否满足最小冻结期要求
+	currentTime := uint64(time.Now().Unix())
+	minFreezePeriod := d.config.MinFreezePeriod
+	if minFreezePeriod == 0 {
+		minFreezePeriod = 604800 // 默认7天
+	}
+
+	if reg.FrozenAt > 0 {
+		elapsedTime := currentTime - reg.FrozenAt
+		if elapsedTime < minFreezePeriod {
+			remainingTime := minFreezePeriod - elapsedTime
+			return fmt.Errorf("cannot withdraw before minimum freeze period. Registered at: %d, minimum period: %d seconds, remaining: %d seconds",
+				reg.FrozenAt, minFreezePeriod, remainingTime)
+		}
+	}
+
+	// 3. 执行解冻（直接解冻，进入锁定期）
+	unfreezeAt := currentTime
+	unfreezeLockPeriod := d.config.UnfreezeLockPeriod
+	if unfreezeLockPeriod == 0 {
+		unfreezeLockPeriod = 1209600 // 默认14天
+	}
+	unfreezeAvailableAt := unfreezeAt + unfreezeLockPeriod
+
+	// 更新注册信息
 	reg.Status = RegStatusWithdrawn
 	reg.IsActive = false
+	reg.UnfreezeAt = unfreezeAt
+	reg.UnfreezeAvailableAt = unfreezeAvailableAt
 
 	// 保存更新
 	if err := d.state.RegistrationStore.SaveRegistration(reg); err != nil {
 		return fmt.Errorf("failed to save registration: %w", err)
+	}
+
+	// 更新冻结信息
+	if d.state != nil && d.state.FreezeStore != nil {
+		freezeInfo, err := d.state.FreezeStore.GetFreezeInfo(address)
+		if err == nil && freezeInfo != nil {
+			freezeInfo.UnfreezeAt = unfreezeAt
+			freezeInfo.UnfreezeAvailableAt = unfreezeAvailableAt
+			freezeInfo.Status = "unfreezing" // 解冻中（锁定期内）
+			if err := d.state.FreezeStore.SaveFreezeInfo(freezeInfo); err != nil {
+				d.logger.Warn("⚠️ 更新冻结信息失败", "error", err)
+			}
+		}
 	}
 
 	// 从受托人列表中移除
@@ -1221,10 +1303,12 @@ func (d *DPoS) WithdrawDelegate(address types.Address) error {
 		}
 	}
 
-	d.logger.Info("Delegate withdrawn successfully",
+	d.logger.Info("Delegate withdrawn and unfrozen successfully",
 		"address", address.String(),
 		"name", reg.Name,
-		"deposit", reg.Deposit.String())
+		"deposit", reg.Deposit.String(),
+		"unfreezeAt", unfreezeAt,
+		"unfreezeAvailableAt", unfreezeAvailableAt)
 
 	return nil
 }

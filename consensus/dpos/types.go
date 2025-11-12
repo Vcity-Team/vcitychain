@@ -247,6 +247,10 @@ type DelegateRegistration struct {
 	TotalVotes   *big.Int      `json:"totalVotes"`   // 总投票数
 	IsActive     bool          `json:"isActive"`     // 是否为活跃受托人
 	LastVoteTime uint64        `json:"lastVoteTime"` // 最后投票时间
+	// 🆕 冻结相关字段
+	FrozenAt            uint64 `json:"frozenAt"`            // 冻结时间（注册时设置）
+	UnfreezeAt          uint64 `json:"unfreezeAt"`          // 解冻时间（退出时设置，0表示未解冻）
+	UnfreezeAvailableAt uint64 `json:"unfreezeAvailableAt"` // 资金可用时间（解冻时间 + 锁定期，0表示未解冻）
 }
 
 // RegStatus 注册状态

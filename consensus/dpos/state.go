@@ -56,6 +56,7 @@ type State struct {
 	ParameterStore        *ParameterStore    // 🆕 新增参数存储
 	ProposalStore         *ProposalStore     // 🆕 新增提案存储
 	RegistrationStore     *RegistrationStore // 🆕 新增受托人注册存储
+	FreezeStore           *FreezeStore       // 🆕 新增冻结信息存储
 }
 
 // RegistrationStore 受托人注册存储
@@ -223,6 +224,98 @@ type ParameterStore struct {
 // ProposalStore 提案存储
 type ProposalStore struct {
 	db *bolt.DB
+}
+
+// FreezeInfo 冻结信息
+type FreezeInfo struct {
+	Address              types.Address `json:"address"`              // 账户地址
+	FrozenAmount         *big.Int      `json:"frozenAmount"`          // 冻结金额
+	FrozenAt             uint64        `json:"frozenAt"`              // 冻结时间
+	UnfreezeAt           uint64        `json:"unfreezeAt"`            // 解冻时间（0表示未解冻）
+	UnfreezeAvailableAt  uint64        `json:"unfreezeAvailableAt"`   // 资金可用时间（0表示未解冻）
+	Status               string        `json:"status"`                 // 状态：frozen, unfreezing, withdrawn
+}
+
+// FreezeStore 冻结信息存储
+type FreezeStore struct {
+	db *bolt.DB
+}
+
+// NewFreezeStore 创建新的冻结信息存储
+func NewFreezeStore(db *bolt.DB) *FreezeStore {
+	return &FreezeStore{db: db}
+}
+
+// SaveFreezeInfo 保存冻结信息
+func (s *FreezeStore) SaveFreezeInfo(info *FreezeInfo) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists([]byte("freeze_info"))
+		if err != nil {
+			return err
+		}
+
+		data, err := json.Marshal(info)
+		if err != nil {
+			return err
+		}
+
+		return bucket.Put(info.Address.Bytes(), data)
+	})
+}
+
+// GetFreezeInfo 获取冻结信息
+func (s *FreezeStore) GetFreezeInfo(address types.Address) (*FreezeInfo, error) {
+	var info *FreezeInfo
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("freeze_info"))
+		if bucket == nil {
+			return nil
+		}
+
+		data := bucket.Get(address.Bytes())
+		if data == nil {
+			return nil
+		}
+
+		info = &FreezeInfo{}
+		return json.Unmarshal(data, info)
+	})
+
+	return info, err
+}
+
+// GetAllFreezeInfo 获取所有冻结信息
+func (s *FreezeStore) GetAllFreezeInfo() ([]*FreezeInfo, error) {
+	var infos []*FreezeInfo
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("freeze_info"))
+		if bucket == nil {
+			return nil
+		}
+
+		return bucket.ForEach(func(key, value []byte) error {
+			info := &FreezeInfo{}
+			if err := json.Unmarshal(value, info); err != nil {
+				return err
+			}
+			infos = append(infos, info)
+			return nil
+		})
+	})
+
+	return infos, err
+}
+
+// DeleteFreezeInfo 删除冻结信息
+func (s *FreezeStore) DeleteFreezeInfo(address types.Address) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("freeze_info"))
+		if bucket == nil {
+			return nil
+		}
+
+		return bucket.Delete(address.Bytes())
+	})
 }
 
 // initialize 初始化参数存储
@@ -483,6 +576,7 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 		ParameterStore:        &ParameterStore{db: db},    // 🆕 使用主数据库
 		ProposalStore:         &ProposalStore{db: db},     // 🆕 使用主数据库
 		RegistrationStore:     &RegistrationStore{db: db}, // 🆕 使用主数据库
+		FreezeStore:           NewFreezeStore(db),         // 🆕 使用主数据库
 	}
 
 	if err = s.initStorages(); err != nil {
@@ -578,6 +672,10 @@ func (s *State) initStorages() error {
 			return err
 		}
 		if err := s.ProposalStore.initialize(tx); err != nil {
+			return err
+		}
+		// 🆕 初始化冻结信息存储
+		if _, err := tx.CreateBucketIfNotExists([]byte("freeze_info")); err != nil {
 			return err
 		}
 
