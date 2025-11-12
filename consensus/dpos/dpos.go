@@ -171,8 +171,7 @@ type DPoSConfig struct {
 	MinFreezePeriod    uint64 `json:"min_freeze_period" yaml:"dpos_min_freeze_period"`       // 最小冻结期（秒）
 	UnfreezeLockPeriod uint64 `json:"unfreeze_lock_period" yaml:"dpos_unfreeze_lock_period"` // 解冻锁定期（秒）
 
-	// SR候选人保证金阈值
-	SRThreshold *big.Int `json:"srThreshold" yaml:"dpos_SR_threshold"`
+	// 注意：保证金阈值统一使用 MinVotingPower（dpos_delegate_threshold），不再使用 SRThreshold
 }
 
 // dposRuntime 结构体定义已迁移到 runtime_struct.go
@@ -923,21 +922,8 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Warn("⏰ 未找到blockTime配置")
 	}
 
-	// 🆕 解析SR候选人保证金阈值配置
-	if srThreshold, exists := params.Config.Config["srThreshold"]; exists {
-		logger.Info("🔍 找到srThreshold配置", "type", fmt.Sprintf("%T", srThreshold), "value", srThreshold)
-		if threshold, ok := srThreshold.(*big.Int); ok {
-			vcity_dpos.config.SRThreshold = threshold
-			logger.Info("💰 设置SR候选人保证金阈值", "threshold", threshold.String())
-		} else {
-			logger.Warn("💰 srThreshold类型断言失败", "type", fmt.Sprintf("%T", srThreshold))
-		}
-	} else {
-		logger.Warn("💰 未找到srThreshold配置，使用默认值0")
-		vcity_dpos.config.SRThreshold = big.NewInt(0)
-	}
-
 	// 🆕 解析冻结相关配置
+	// 注意：保证金阈值统一使用 MinVotingPower（dpos_delegate_threshold），不再解析 srThreshold
 	if minFreezePeriod, exists := params.Config.Config["dpos_min_freeze_period"]; exists {
 		logger.Info("🔍 找到dpos_min_freeze_period配置", "type", fmt.Sprintf("%T", minFreezePeriod), "value", minFreezePeriod)
 		if period, ok := minFreezePeriod.(uint64); ok {

@@ -1178,19 +1178,16 @@ func (d *DPoS) getGenesisValidatorsAsRegistrations() []*DelegateRegistration {
 }
 
 // getDelegateDepositAmount 获取受托人保证金金额
+// 注意：保证金金额统一使用 dpos_delegate_threshold（MinVotingPower），Tron 只有一个门槛值
 func (d *DPoS) getDelegateDepositAmount() *big.Int {
-	// 优先从配置文件读取
-	if d.config != nil && d.config.SRThreshold != nil {
-		// 如果配置为0，表示不需要保证金
-		if d.config.SRThreshold.Cmp(big.NewInt(0)) == 0 {
-			return big.NewInt(0)
-		}
-		return new(big.Int).Set(d.config.SRThreshold)
+	// 使用 dpos_delegate_threshold（MinVotingPower）作为保证金金额
+	if d.config != nil && d.config.MinVotingPower != nil && d.config.MinVotingPower.Cmp(big.NewInt(0)) > 0 {
+		return new(big.Int).Set(d.config.MinVotingPower)
 	}
 
-	// 默认保证金：100 VCITY（比TRON的1000 TRX低）
+	// 默认保证金：1000 VCITY（与 Tron 的 1000 TRX 一致）
 	depositAmount := new(big.Int)
-	depositAmount.SetString("100000000000000000000", 10) // 100 VCITY
+	depositAmount.SetString("1000000000000000000000", 10) // 1000 VCITY
 
 	// 可以从治理参数中读取（动态修改）
 	if d.parameterCurrentValues != nil {
