@@ -455,7 +455,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				}
 
 				updateMetrics(fullBlock)
-				s.logger.Info("✅ DPoS区块同步成功",
+				s.logger.Debug("✅ DPoS区块同步成功",
 					"peer", peerID.String(),
 					"区块号", block.Number(),
 					"哈希", block.Hash().String()[:16],
@@ -506,7 +506,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 			}
 
 			updateMetrics(fullBlock)
-			s.logger.Info("✅ 区块同步成功", "peer", peerID.String(), "区块号", block.Number(), "哈希", block.Hash().String()[:16], "交易数", len(block.Transactions))
+			s.logger.Debug("✅ 区块同步成功", "peer", peerID.String(), "区块号", block.Number(), "哈希", block.Hash().String()[:16], "交易数", len(block.Transactions))
 			shouldTerminate = newBlockCallback(fullBlock)
 
 			// 🆕 关键：更新localLatest！

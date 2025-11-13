@@ -1087,7 +1087,7 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 			}
 		} else {
 			// 接口类型断言失败
-			b.logger.Info("⚠️ consensus不支持GetValidatorDetail接口，无法添加验证者详情字段",
+			b.logger.Debug("⚠️ consensus不支持GetValidatorDetail接口，无法添加验证者详情字段",
 				"blockNumber", header.Number,
 				"consensusType", fmt.Sprintf("%T", b.consensus),
 				"source", source)

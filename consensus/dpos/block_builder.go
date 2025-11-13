@@ -189,7 +189,7 @@ func (b *BlockBuilder) Fill() {
 	blockNumber := b.params.Parent.Number + 1
 	maxConsecutiveSkips := 10 // 最多连续跳过10笔交易后重新Prepare()
 
-	b.params.Logger.Info("🔵 [BlockBuilder.Fill] 开始填充区块",
+	b.params.Logger.Debug("🔵 [BlockBuilder.Fill] 开始填充区块",
 		"blockNumber", blockNumber)
 
 	consecutiveSkips := 0
@@ -200,7 +200,7 @@ func (b *BlockBuilder) Fill() {
 		if tx == nil {
 			// 如果连续跳过太多交易，重新Prepare()（最多重试3次）
 			if consecutiveSkips < maxConsecutiveSkips {
-				b.params.Logger.Info("⚠️ [BlockBuilder.Fill] executables队列为空，重新Prepare()",
+				b.params.Logger.Debug("⚠️ [BlockBuilder.Fill] executables队列为空，重新Prepare()",
 					"blockNumber", blockNumber,
 					"txCount", txCount,
 					"skippedCount", skippedCount,
@@ -852,7 +852,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		time.Sleep(1 * time.Second)
 	}
 
-	r.logger.Info("签名收集完成",
+	r.logger.Debug("签名收集完成",
 		"totalSignatures", len(signatures),
 		"bitmapLength", len(signatureBitmap),
 		"bitmapBytes", fmt.Sprintf("%x", signatureBitmap))
@@ -868,7 +868,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 	// 更新区块的签名
 	if len(signatures) > 0 {
-		r.logger.Info("开始聚合签名",
+		r.logger.Debug("开始聚合签名",
 			"signatureCount", len(signatures))
 
 		// 🆕 修复：按位图索引顺序聚合签名，确保与验证时公钥顺序一致
@@ -1097,7 +1097,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		if currentBlockExtra, err := GetIbftExtra(block.Block.Header.ExtraData); err == nil {
 			rewardDistribution = currentBlockExtra.RewardDistribution
 			faultFlags = currentBlockExtra.FaultFlags
-			r.logger.Info("🔍 从currentBlockExtra获取信息",
+			r.logger.Debug("🔍 从currentBlockExtra获取信息",
 				"hasRewardDistribution", rewardDistribution != nil,
 				"faultFlagsCount", len(faultFlags))
 		} else {

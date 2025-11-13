@@ -94,7 +94,7 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 	if len(blockNumber) > 0 {
 		// 优先使用传入的区块号
 		currentBlockNumber = blockNumber[0]
-		r.logger.Info("🔄 使用传入区块号更新委托者索引",
+		r.logger.Debug("🔄 使用传入区块号更新委托者索引",
 			"blockNumber", currentBlockNumber,
 			"currentRound", r.currentRound,
 			"timestamp", time.Now().Format("15:04:05.000"))
@@ -103,7 +103,7 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 		if r.config != nil && r.config.blockchain != nil {
 			if currentHeader := r.config.blockchain.CurrentHeader(); currentHeader != nil {
 				currentBlockNumber = currentHeader.Number
-				r.logger.Info("🔄 使用CurrentHeader区块号更新委托者索引",
+				r.logger.Debug("🔄 使用CurrentHeader区块号更新委托者索引",
 					"blockNumber", currentBlockNumber,
 					"currentRound", r.currentRound,
 					"timestamp", time.Now().Format("15:04:05.000"))

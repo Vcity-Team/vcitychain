@@ -113,7 +113,7 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 				}
 			} else {
 				// 🆕 添加为什么不应该出块的详细日志
-				r.logOnceWithInterval("should_not_produce_debug", 2*time.Second, "info",
+				r.logOnceWithInterval("should_not_produce_debug", 2*time.Second, "debug",
 					"⏭️ 不应该出块的原因分析",
 					"shouldProduceBlockNow", shouldProduce,
 					"actualDelegatesCount", len(r.delegates),
