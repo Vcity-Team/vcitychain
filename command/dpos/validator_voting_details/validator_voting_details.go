@@ -134,7 +134,10 @@ func runCommand(cmd *cobra.Command, _ []string) error {
 	// Get JSON-RPC address from flag
 	jsonRPC := "http://localhost:8545" // Default value
 	if cmd.Flags().Changed("jsonrpc") {
-		jsonRPC = params.jsonRPC
+		jsonRPC, _ = cmd.Flags().GetString("jsonrpc")
+	} else {
+		// Try to get from helper function
+		jsonRPC = helper.GetJSONRPCAddress(cmd)
 	}
 
 	// 直接使用HTTP请求，跳过有问题的第三方库
