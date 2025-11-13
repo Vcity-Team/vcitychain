@@ -36,13 +36,26 @@ func (d *DPoS) initializeEconomicSystem() error {
 	)
 
 	// 3. 初始化奖励分发器
+	var stakeStore *StakeStore
+	if d.state != nil {
+		stakeStore = d.state.StakeStore
+	}
+
+	if d.config.CommissionRateDefault == 0 {
+		d.config.CommissionRateDefault = 1000
+	}
+	if d.config.CommissionEffectivePeriod == 0 {
+		d.config.CommissionEffectivePeriod = 21 * 24 * time.Hour
+	}
+
 	d.rewardDistributor = NewRewardDistributor(
 		nil, // 状态将在运行时设置
 		d.config.RewardAccount,
 		d.config.RewardAmount,
-		d.config.ValidatorRewardRatio,
-		d.config.VoterRewardRatio,
 		d.blockTracker,
+		stakeStore,
+		d.config.CommissionRateDefault,
+		d.config.CommissionEffectivePeriod,
 		d.logger.Named("reward_distributor"),
 	)
 
@@ -65,8 +78,8 @@ func (d *DPoS) initializeEconomicSystem() error {
 		"epochDuration", d.config.EpochDuration.String(),
 		"rewardAccount", d.config.RewardAccount.String(),
 		"rewardAmount", d.config.RewardAmount.String(),
-		"validatorRatio", d.config.ValidatorRewardRatio,
-		"voterRatio", d.config.VoterRewardRatio)
+		"commissionDefault", d.config.CommissionRateDefault,
+		"commissionEffectivePeriod", d.config.CommissionEffectivePeriod.String())
 
 	return nil
 }

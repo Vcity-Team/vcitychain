@@ -148,6 +148,8 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 					IsActive:       delegate.IsActive,
 				}
 
+				dposInstance.populateCommissionFields(delegate.Address, delegateInfo)
+
 				// 保存到数据库
 				if err := dposInstance.state.StakeStore.setDelegateInfo(delegate.Address, delegateInfo, nil); err != nil {
 					r.logger.Error("❌ 保存创世验证者权重到数据库失败",
@@ -402,7 +404,3 @@ func (r *dposRuntime) initializeDelegates() error {
 	r.logger.Info("✅ dposRuntime.initializeDelegates 结束")
 	return nil
 }
-
-
-
-

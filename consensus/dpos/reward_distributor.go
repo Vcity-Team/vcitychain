@@ -13,13 +13,15 @@ import (
 
 // RewardDistributor 奖励分发器
 type RewardDistributor struct {
-	state          *state.Txn
-	rewardAccount  types.Address
-	rewardAmount   *big.Int
-	validatorRatio uint64
-	voterRatio     uint64
-	blockTracker   *BlockProductionTracker
-	logger         hclog.Logger
+	state                 *state.Txn
+	rewardAccount         types.Address
+	rewardAmount          *big.Int
+	blockTracker          *BlockProductionTracker
+	stakeStore            *StakeStore
+	commissionDefault     uint64
+	commissionEffective   time.Duration
+	commissionDenominator *big.Int
+	logger                hclog.Logger
 }
 
 // NewRewardDistributor 创建奖励分发器
@@ -27,20 +29,222 @@ func NewRewardDistributor(
 	state *state.Txn,
 	rewardAccount types.Address,
 	rewardAmount *big.Int,
-	validatorRatio uint64,
-	voterRatio uint64,
 	blockTracker *BlockProductionTracker,
+	stakeStore *StakeStore,
+	commissionDefault uint64,
+	commissionEffective time.Duration,
 	logger hclog.Logger,
 ) *RewardDistributor {
 	return &RewardDistributor{
-		state:          state,
-		rewardAccount:  rewardAccount,
-		rewardAmount:   rewardAmount,
-		validatorRatio: validatorRatio,
-		voterRatio:     voterRatio,
-		blockTracker:   blockTracker,
-		logger:         logger,
+		state:                 state,
+		rewardAccount:         rewardAccount,
+		rewardAmount:          rewardAmount,
+		blockTracker:          blockTracker,
+		stakeStore:            stakeStore,
+		commissionDefault:     commissionDefault,
+		commissionEffective:   commissionEffective,
+		commissionDenominator: big.NewInt(10000),
+		logger:                logger,
 	}
+}
+
+func (rd *RewardDistributor) getCommissionRate(address types.Address) uint64 {
+	if rd.stakeStore == nil {
+		return rd.commissionDefault
+	}
+
+	info, err := rd.stakeStore.GetDelegateInfo(address)
+	if err != nil {
+		rd.logger.Debug("⚠️ 获取受托人佣金信息失败，使用默认值",
+			"delegate", address.String(),
+			"error", err)
+		return rd.commissionDefault
+	}
+
+	if info == nil {
+		return rd.commissionDefault
+	}
+
+	effectivePeriod := rd.commissionEffective
+	if effectivePeriod <= 0 {
+		effectivePeriod = 21 * 24 * time.Hour
+	}
+
+	commissionRate := info.CommissionRate
+	if commissionRate == 0 {
+		commissionRate = rd.commissionDefault
+	}
+
+	if info.PendingCommissionRate != 0 {
+		now := uint64(time.Now().Unix())
+		effectiveSeconds := uint64(effectivePeriod.Seconds())
+		canApply := info.CommissionUpdateTime == 0 || effectiveSeconds == 0 || now >= info.CommissionUpdateTime+effectiveSeconds
+
+		if canApply {
+			commissionRate = info.PendingCommissionRate
+			info.CommissionRate = commissionRate
+			info.PendingCommissionRate = 0
+			info.CommissionUpdateTime = now
+
+			if err := rd.stakeStore.setDelegateInfo(address, info, nil); err != nil {
+				rd.logger.Error("❌ 转正佣金率失败",
+					"delegate", address.String(),
+					"error", err)
+			} else {
+				rd.logger.Info("⏳ 佣金率已自动转正",
+					"delegate", address.String(),
+					"commissionRate", commissionRate)
+			}
+		}
+	}
+
+	if commissionRate > 10000 {
+		return 10000
+	}
+
+	return commissionRate
+}
+
+func (rd *RewardDistributor) addReward(rewards map[types.Address]*big.Int, address types.Address, amount *big.Int) {
+	if amount == nil || amount.Sign() == 0 {
+		return
+	}
+
+	if existing, ok := rewards[address]; ok {
+		rewards[address] = new(big.Int).Add(existing, amount)
+	} else {
+		rewards[address] = new(big.Int).Set(amount)
+	}
+}
+
+func containsDelegate(delegates []types.Address, target types.Address) bool {
+	for _, addr := range delegates {
+		if addr == target {
+			return true
+		}
+	}
+	return false
+}
+
+func (rd *RewardDistributor) computeVoterWeights(
+	validator types.Address,
+	voters map[types.Address]*VoterInfo,
+) (map[types.Address]*big.Int, *big.Int) {
+	weights := make(map[types.Address]*big.Int)
+	total := big.NewInt(0)
+
+	for voterAddress, voter := range voters {
+		if voter == nil || voter.VotingPower == nil || voter.VotingPower.Sign() == 0 {
+			continue
+		}
+
+		if !containsDelegate(voter.VotedDelegates, validator) {
+			continue
+		}
+
+		delegateCount := len(voter.VotedDelegates)
+		if delegateCount == 0 {
+			continue
+		}
+
+		weight := new(big.Int).Set(voter.VotingPower)
+		if delegateCount > 1 {
+			weight.Div(weight, big.NewInt(int64(delegateCount)))
+		}
+
+		if weight.Sign() == 0 {
+			continue
+		}
+
+		weights[voterAddress] = weight
+		total.Add(total, weight)
+	}
+
+	return weights, total
+}
+
+func (rd *RewardDistributor) computeRewardsForValidator(
+	validator *validator.ValidatorMetadata,
+	voters map[types.Address]*VoterInfo,
+	blockCounts map[types.Address]uint64,
+	totalBlocks uint64,
+) (*big.Int, map[types.Address]*big.Int) {
+	validatorAmount := big.NewInt(0)
+	voterRewards := make(map[types.Address]*big.Int)
+
+	if validator == nil || !validator.IsActive || totalBlocks == 0 {
+		return validatorAmount, voterRewards
+	}
+
+	blocksProduced := blockCounts[validator.Address]
+	if blocksProduced == 0 {
+		return validatorAmount, voterRewards
+	}
+
+	validatorBlocks := new(big.Int).SetUint64(blocksProduced)
+	totalBlocksBig := new(big.Int).SetUint64(totalBlocks)
+
+	validatorReward := new(big.Int).Mul(validatorBlocks, rd.rewardAmount)
+	validatorReward.Div(validatorReward, totalBlocksBig)
+
+	if validatorReward.Sign() == 0 {
+		return validatorAmount, voterRewards
+	}
+
+	commissionRate := rd.getCommissionRate(validator.Address)
+	if commissionRate > 10000 {
+		commissionRate = 10000
+	}
+
+	commissionAmount := new(big.Int).Mul(validatorReward, big.NewInt(int64(commissionRate)))
+	commissionAmount.Div(commissionAmount, rd.commissionDenominator)
+	if commissionAmount.Sign() > 0 {
+		validatorAmount.Add(validatorAmount, commissionAmount)
+	}
+
+	distributable := new(big.Int).Sub(validatorReward, commissionAmount)
+	if distributable.Sign() <= 0 {
+		return validatorAmount, voterRewards
+	}
+
+	voterWeights, totalWeight := rd.computeVoterWeights(validator.Address, voters)
+	if totalWeight.Sign() == 0 {
+		validatorAmount.Add(validatorAmount, distributable)
+		return validatorAmount, voterRewards
+	}
+
+	allocated := big.NewInt(0)
+	for voterAddr, weight := range voterWeights {
+		if weight == nil || weight.Sign() == 0 {
+			continue
+		}
+
+		share := new(big.Int).Mul(distributable, weight)
+		share.Div(share, totalWeight)
+
+		if share.Sign() == 0 {
+			continue
+		}
+
+		voterRewards[voterAddr] = share
+		allocated.Add(allocated, share)
+	}
+
+	remainder := new(big.Int).Sub(distributable, allocated)
+	if remainder.Sign() > 0 {
+		validatorAmount.Add(validatorAmount, remainder)
+	}
+
+	rd.logger.Info("🏭 验证者奖励计算详情",
+		"validator", validator.Address.String(),
+		"blocksProduced", blocksProduced,
+		"totalReward", validatorReward.String(),
+		"commissionRate", commissionRate,
+		"commissionAmount", commissionAmount.String(),
+		"distributedToVoters", distributable.String(),
+		"voterCount", len(voterRewards))
+
+	return validatorAmount, voterRewards
 }
 
 // DistributeEpochRewards 分发Epoch奖励
@@ -71,23 +275,11 @@ func (rd *RewardDistributor) DistributeEpochRewards(
 		return nil
 	}
 
-	// 3. 计算总投票权重
-	totalVotingPower := rd.calculateTotalVotingPower(voters)
-
 	// 4. 计算奖励分配
-	rewards := rd.calculateRewards(validators, voters, blockCounts, totalBlocks, totalVotingPower)
+	rewards := rd.calculateRewards(validators, voters, blockCounts, totalBlocks)
 
 	// 5. 批量状态更新
 	return rd.batchUpdateBalances(rewards, epochNumber)
-}
-
-// calculateTotalVotingPower 计算总投票权重
-func (rd *RewardDistributor) calculateTotalVotingPower(voters map[types.Address]*VoterInfo) *big.Int {
-	totalPower := big.NewInt(0)
-	for _, voter := range voters {
-		totalPower.Add(totalPower, voter.VotingPower)
-	}
-	return totalPower
 }
 
 // calculateRewards 计算奖励
@@ -96,87 +288,24 @@ func (rd *RewardDistributor) calculateRewards(
 	voters map[types.Address]*VoterInfo,
 	blockCounts map[types.Address]uint64,
 	totalBlocks uint64,
-	totalVotingPower *big.Int,
 ) map[types.Address]*big.Int {
 	rewards := make(map[types.Address]*big.Int)
 
-	// 🆕 添加详细的计算过程日志
-	rd.logger.Info("📊 ========== 开始计算奖励 ==========",
-		"rewardAmount", rd.rewardAmount.String(),
-		"validatorRatio", rd.validatorRatio,
-		"voterRatio", rd.voterRatio,
-		"totalBlocks", totalBlocks)
-
-	// 1. 验证者奖励：按出块次数分配
-	// 步骤1：计算总验证者奖励池 = rewardAmount * validatorRatio / 100
-	validatorReward := new(big.Int).Mul(rd.rewardAmount, big.NewInt(int64(rd.validatorRatio)))
-	validatorReward.Div(validatorReward, big.NewInt(100))
-
-	rd.logger.Info("🏭 计算验证者奖励池",
-		"步骤1_rewardAmount", rd.rewardAmount.String(),
-		"步骤1_validatorRatio", rd.validatorRatio,
-		"步骤1_计算", fmt.Sprintf("%s * %d / 100", rd.rewardAmount.String(), rd.validatorRatio),
-		"步骤1_结果_validatorRewardPool", validatorReward.String())
-
-	for _, validator := range validators {
-		if validator.IsActive {
-			blocksProduced := blockCounts[validator.Address]
-			if blocksProduced > 0 {
-				// 步骤2：计算该验证者的奖励 = validatorReward * blocksProduced / totalBlocks
-				reward := new(big.Int).Mul(validatorReward, big.NewInt(int64(blocksProduced)))
-				reward.Div(reward, big.NewInt(int64(totalBlocks)))
-				rewards[validator.Address] = reward
-
-				// 计算 VCITY 格式（用于显示）
-				rewardFloat := new(big.Float).SetInt(reward)
-				vcityFloat := new(big.Float).Quo(rewardFloat, big.NewFloat(1e18))
-				vcityStr, _ := vcityFloat.Float64()
-
-				rd.logger.Info("🏭 验证者奖励计算详情",
-					"validator", validator.Address.String(),
-					"步骤2_validatorRewardPool", validatorReward.String(),
-					"步骤2_blocksProduced", blocksProduced,
-					"步骤2_totalBlocks", totalBlocks,
-					"步骤2_计算", fmt.Sprintf("%s * %d / %d", validatorReward.String(), blocksProduced, totalBlocks),
-					"步骤2_结果_reward_wei", reward.String(),
-					"最终奖励_VCITY", fmt.Sprintf("%.18f", vcityStr))
-			}
-		}
+	if totalBlocks == 0 {
+		return rewards
 	}
 
-	// 2. 投票者奖励：按投票权重分配
-	voterReward := new(big.Int).Mul(rd.rewardAmount, big.NewInt(int64(rd.voterRatio)))
-	voterReward.Div(voterReward, big.NewInt(100))
+	rd.logger.Info("📊 ========== 开始计算奖励（按验证者奖励池）==========",
+		"rewardAmount", rd.rewardAmount.String(),
+		"totalBlocks", totalBlocks)
 
-	rd.logger.Info("🗳️ 计算投票者奖励",
-		"voterRatio", rd.voterRatio,
-		"voterReward", voterReward.String())
+	for _, validator := range validators {
+		validatorAmount, voterRewards := rd.computeRewardsForValidator(validator, voters, blockCounts, totalBlocks)
 
-	if totalVotingPower.Cmp(big.NewInt(0)) > 0 {
-		for staker, voter := range voters {
-			if voter.VotingPower.Cmp(big.NewInt(0)) > 0 {
-				reward := new(big.Int).Mul(voterReward, voter.VotingPower)
-				reward.Div(reward, totalVotingPower)
+		rd.addReward(rewards, validator.Address, validatorAmount)
 
-				// 🆕 如果地址已存在（是验证者），累加奖励而不是覆盖
-				if existingReward, exists := rewards[staker]; exists {
-					// 该地址既是验证者又是投票者，累加奖励
-					rewards[staker] = new(big.Int).Add(existingReward, reward)
-					rd.logger.Debug("🗳️ 投票者奖励（累加验证者奖励）",
-						"staker", staker.String(),
-						"validatorReward", existingReward.String(),
-						"voterReward", reward.String(),
-						"totalReward", rewards[staker].String())
-				} else {
-					// 该地址只是投票者，直接设置
-					rewards[staker] = reward
-					rd.logger.Debug("🗳️ 投票者奖励",
-						"staker", staker.String(),
-						"votingPower", voter.VotingPower.String(),
-						"totalVotingPower", totalVotingPower.String(),
-						"reward", reward.String())
-				}
-			}
+		for voterAddr, share := range voterRewards {
+			rd.addReward(rewards, voterAddr, share)
 		}
 	}
 
@@ -191,11 +320,7 @@ func (rd *RewardDistributor) CalculateRewards(
 	blockCounts map[types.Address]uint64,
 	totalBlocks uint64,
 ) map[types.Address]*big.Int {
-	// 计算总投票权重
-	totalVotingPower := rd.calculateTotalVotingPower(voters)
-
-	// 调用内部方法计算奖励（验证者 + 投票者，已支持累加）
-	return rd.calculateRewards(validators, voters, blockCounts, totalBlocks, totalVotingPower)
+	return rd.calculateRewards(validators, voters, blockCounts, totalBlocks)
 }
 
 // batchUpdateBalances 批量更新余额

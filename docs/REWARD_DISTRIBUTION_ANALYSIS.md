@@ -6,10 +6,10 @@
 
 ## 配置信息
 
-根据配置文件：
+根据最新配置文件（旧的 `dpos_validator_reward_ratio` / `dpos_voter_reward_ratio` 已废弃）：
 - `dpos_reward_amount`: 150 VCITY = 150000000000000000000 Wei
-- `dpos_validator_reward_ratio`: 70%
-- `dpos_voter_reward_ratio`: 30%
+- `dpos_commission_ratio`: 10%（默认佣金比例，可配置）
+- `dpos_commission_effective`: 21d（佣金修改生效延迟）
 - `dpos_epoch_duration`: 300秒
 - `block_time_s`: 3秒
 
@@ -18,13 +18,11 @@
 ### 总奖励池
 - 每个 Epoch 总奖励：150 VCITY
 
-### 验证者奖励池
-- 验证者奖励池 = 150 * 70% = **105 VCITY**
-- 按出块数分配给验证者
-
-### 投票者奖励池
-- 投票者奖励池 = 150 * 30% = **45 VCITY**
-- 按投票权重分配给投票者
+### 验证者奖励池（统一池）
+- 验证者奖励池 = 150 * 100% = **150 VCITY**
+- 先按出块数计算每个验证者的基础奖励
+- 对于每个验证者：提取佣金 = 验证者奖励 * `dpos_commission_ratio`
+- 剩余部分按投票权重分配给该验证者的委托人
 
 ## 实际观察到的奖励
 

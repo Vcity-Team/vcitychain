@@ -3,6 +3,7 @@ package dpos
 import (
 	"bytes"
 	"crypto/ecdsa"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"math/big"
@@ -483,6 +484,23 @@ func (d *DPoS) isVoteTransaction(tx *types.Transaction) bool {
 	return true
 }
 
+// isCommissionUpdateTransaction 检查交易是否是佣金率修改交易
+func (d *DPoS) isCommissionUpdateTransaction(tx *types.Transaction) bool {
+	if len(tx.Input) < 9 {
+		return false
+	}
+
+	if string(tx.Input[:4]) != "DPOS" {
+		return false
+	}
+
+	if string(tx.Input[4:7]) != "COM" {
+		return false
+	}
+
+	return true
+}
+
 // processDelegateRegistrationTransaction 处理受托人注册交易
 func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blockNumber uint64) error {
 	d.logger.Info("🔧 ===== 开始处理受托人注册交易 =====")
@@ -668,6 +686,130 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 		"status", "candidate",
 		"txHash", tx.Hash.String())
 	d.logger.Info("🎯 受托人现在可以接受投票了！")
+
+	return nil
+}
+
+// processCommissionUpdateTransaction 处理佣金率修改交易
+func (d *DPoS) processCommissionUpdateTransaction(tx *types.Transaction, blockNumber uint64) error {
+	d.logger.Info("🔧 ===== 开始处理佣金率修改交易 =====")
+
+	if tx == nil {
+		return fmt.Errorf("nil transaction")
+	}
+
+	if len(tx.Input) < 9 {
+		return fmt.Errorf("invalid commission transaction payload length: %d", len(tx.Input))
+	}
+
+	newRate := binary.BigEndian.Uint16(tx.Input[7:9])
+	if newRate < 500 || newRate > 8000 {
+		return fmt.Errorf("commission rate out of range [500, 8000], got %d", newRate)
+	}
+
+	if tx.From == (types.Address{}) {
+		return fmt.Errorf("commission update transaction missing sender")
+	}
+
+	validatorAddr := tx.From
+	d.logger.Info("🔍 佣金率修改交易详情",
+		"blockNumber", blockNumber,
+		"txHash", tx.Hash.String(),
+		"validator", validatorAddr.String(),
+		"newRate", newRate)
+
+	// 验证者必须已注册或是创世验证者
+	if !d.IsDelegateRegistered(validatorAddr) && !d.isGenesisValidator(validatorAddr) {
+		return fmt.Errorf("validator %s is not registered", validatorAddr.String())
+	}
+
+	if d.state == nil || d.state.StakeStore == nil {
+		return fmt.Errorf("stake store not available")
+	}
+
+	delegateInfo, err := d.state.StakeStore.GetDelegateInfo(validatorAddr)
+	if err != nil {
+		d.logger.Warn("⚠️ 获取受托人信息失败，使用默认值",
+			"validator", validatorAddr.String(),
+			"error", err)
+	}
+
+	if delegateInfo == nil {
+		delegateInfo = &DelegateInfo{
+			Address:        validatorAddr,
+			VotingPower:    big.NewInt(0),
+			TotalVotes:     big.NewInt(0),
+			ProducedBlocks: 0,
+			MissedBlocks:   0,
+			LastBlockTime:  0,
+			IsActive:       true,
+		}
+		d.applyCommissionDefaults(delegateInfo)
+	} else {
+		if delegateInfo.VotingPower == nil {
+			delegateInfo.VotingPower = big.NewInt(0)
+		}
+		if delegateInfo.TotalVotes == nil {
+			delegateInfo.TotalVotes = big.NewInt(0)
+		}
+		d.applyCommissionDefaults(delegateInfo)
+	}
+
+	now := uint64(time.Now().Unix())
+	effectivePeriod := d.config.CommissionEffectivePeriod
+	if effectivePeriod <= 0 {
+		effectivePeriod = 21 * 24 * time.Hour
+	}
+	cooldownSeconds := uint64(effectivePeriod.Seconds())
+
+	if delegateInfo.PendingCommissionRate != 0 {
+		canApply := delegateInfo.CommissionUpdateTime == 0 || cooldownSeconds == 0 ||
+			now >= delegateInfo.CommissionUpdateTime+cooldownSeconds
+
+		if canApply {
+			d.logger.Info("⏳ 待生效佣金率已到期，自动转正",
+				"validator", validatorAddr.String(),
+				"pendingRate", delegateInfo.PendingCommissionRate)
+			delegateInfo.CommissionRate = delegateInfo.PendingCommissionRate
+			delegateInfo.PendingCommissionRate = 0
+			delegateInfo.CommissionUpdateTime = now
+		} else {
+			remaining := delegateInfo.CommissionUpdateTime + cooldownSeconds - now
+			return fmt.Errorf("commission rate update cooling down, remaining %d seconds", remaining)
+		}
+	}
+
+	if delegateInfo.CommissionRate == uint64(newRate) && delegateInfo.PendingCommissionRate == 0 {
+		d.logger.Info("ℹ️ 佣金率未变化，忽略本次交易",
+			"validator", validatorAddr.String(),
+			"currentRate", delegateInfo.CommissionRate)
+		return nil
+	}
+
+	if delegateInfo.CommissionRate == 0 {
+		d.logger.Info("💼 首次设置佣金率，立即生效",
+			"validator", validatorAddr.String(),
+			"rate", newRate)
+		delegateInfo.CommissionRate = uint64(newRate)
+		delegateInfo.PendingCommissionRate = 0
+		delegateInfo.CommissionUpdateTime = now
+	} else {
+		d.logger.Info("💼 设置新的待生效佣金率",
+			"validator", validatorAddr.String(),
+			"rate", newRate)
+		delegateInfo.PendingCommissionRate = uint64(newRate)
+		delegateInfo.CommissionUpdateTime = now
+	}
+
+	if err := d.state.StakeStore.setDelegateInfo(validatorAddr, delegateInfo, nil); err != nil {
+		return fmt.Errorf("failed to persist commission rate: %w", err)
+	}
+
+	d.logger.Info("✅ 佣金率修改交易处理完成",
+		"validator", validatorAddr.String(),
+		"currentRate", delegateInfo.CommissionRate,
+		"pendingRate", delegateInfo.PendingCommissionRate,
+		"updateTime", delegateInfo.CommissionUpdateTime)
 
 	return nil
 }

@@ -21,15 +21,16 @@
 
 **代码位置**: `consensus/dpos/governance_init.go:127-194`
 
-**定义的参数**（共 **8个**）:
-1. `dpos_validator_reward_ratio`
-2. `dpos_voter_reward_ratio`
-3. `dpos_reward_amount`
-4. `dpos_delegate_threshold`
-5. `block_time_s`
-6. `dpos_epoch_duration`
-7. `governance_voting_threshold`
-8. `governance_min_voting_threshold`
+**定义的参数**（共 **9个**）:
+1. `dpos_reward_amount`
+2. `dpos_delegate_threshold`
+3. `block_time_s`
+4. `dpos_epoch_duration`
+5. `governance_voting_threshold`
+6. `governance_min_voting_threshold`
+7. `dpos_proposal_vote_period`
+8. `min_freeze_period`
+9. `unfreeze_lock_period`
 
 ---
 

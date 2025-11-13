@@ -324,6 +324,10 @@ type DelegateInfo struct {
 	RegistrationInfo *DelegateRegistration `json:"registrationInfo"` // 注册信息
 	// 🆕 新增：BLS公钥，确保签名验证一致性
 	BlsPublicKey []byte `json:"blsPublicKey"`
+	// 🆕 新增：佣金相关字段（基点表示，500 = 5%）
+	CommissionRate        uint64 `json:"commissionRate"`        // 当前生效的佣金率
+	PendingCommissionRate uint64 `json:"pendingCommissionRate"` // 待生效的佣金率
+	CommissionUpdateTime  uint64 `json:"commissionUpdateTime"`  // 最近一次修改时间（Unix时间戳）
 }
 
 // VoteInfo 投票信息结构（用于解析交易数据）

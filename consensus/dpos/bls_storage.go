@@ -48,6 +48,8 @@ func (d *DPoS) saveValidatorsWithBLSKeysToDatabase() error {
 			BlsPublicKey:   []byte{}, // 初始为空
 		}
 
+		d.populateCommissionFields(validator.Address, delegateInfo)
+
 		// 🆕 添加详细日志：打印DelegateInfo信息
 		d.logger.Debug("🔍 DelegateInfo详细信息",
 			"address", delegateInfo.Address.String(),
@@ -272,7 +274,3 @@ func (d *DPoS) persistBLSKeyToStakeStore(address types.Address, blsKeyBytes []by
 
 	return nil
 }
-
-
-
-

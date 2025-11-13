@@ -126,22 +126,6 @@ func (d *DPoS) initializeParameterCache() error {
 // getDefaultVotableParameters 获取默认可表决参数配置
 func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 	return map[string]*ParameterInfo{
-		"dpos_validator_reward_ratio": {
-			Name:        "Validator Reward Ratio",
-			Type:        "uint64",
-			MinValue:    uint64(0),
-			MaxValue:    uint64(100),
-			Description: "Validator reward ratio (0-100%)",
-			Category:    "economic",
-		},
-		"dpos_voter_reward_ratio": {
-			Name:        "Voter Reward Ratio",
-			Type:        "uint64",
-			MinValue:    uint64(0),
-			MaxValue:    uint64(100),
-			Description: "Voter reward ratio (0-100%)",
-			Category:    "economic",
-		},
 		"dpos_reward_amount": {
 			Name:        "Reward Amount",
 			Type:        "string",
@@ -194,8 +178,8 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 		"dpos_proposal_vote_period": {
 			Name:        "Proposal Vote Period",
 			Type:        "uint64",
-			MinValue:    uint64(100),              // 最少100个区块
-			MaxValue:    uint64(1000000),           // 最多100万个区块
+			MinValue:    uint64(100),     // 最少100个区块
+			MaxValue:    uint64(1000000), // 最多100万个区块
 			Description: "Proposal voting period (in blocks)",
 			Category:    "governance",
 		},
@@ -203,16 +187,16 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 		"min_freeze_period": {
 			Name:        "Min Freeze Period",
 			Type:        "uint64",
-			MinValue:    uint64(86400),             // 最少1天（秒）
-			MaxValue:    uint64(31536000),          // 最多1年（秒）
+			MinValue:    uint64(86400),    // 最少1天（秒）
+			MaxValue:    uint64(31536000), // 最多1年（秒）
 			Description: "Minimum freeze period (seconds, 7 days default)",
 			Category:    "governance",
 		},
 		"unfreeze_lock_period": {
 			Name:        "Unfreeze Lock Period",
 			Type:        "uint64",
-			MinValue:    uint64(86400),             // 最少1天（秒）
-			MaxValue:    uint64(31536000),          // 最多1年（秒）
+			MinValue:    uint64(86400),    // 最少1天（秒）
+			MaxValue:    uint64(31536000), // 最多1年（秒）
 			Description: "Unfreeze lock period (seconds, 14 days default)",
 			Category:    "governance",
 		},
@@ -311,10 +295,6 @@ func (d *DPoS) getVotingThreshold() uint64 {
 // getConfigParameterValue 从配置文件获取参数值
 func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 	switch paramName {
-	case "dpos_validator_reward_ratio":
-		return d.config.ValidatorRewardRatio, nil
-	case "dpos_voter_reward_ratio":
-		return d.config.VoterRewardRatio, nil
 	case "dpos_reward_amount":
 		if d.config.RewardAmount != nil {
 			return d.config.RewardAmount.String(), nil

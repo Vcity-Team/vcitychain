@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
 )
 
@@ -27,11 +28,11 @@ func (d *DPoS) GetFreezeInfo(address types.Address) (*FreezeInfo, error) {
 	if freezeInfo == nil {
 		return &FreezeInfo{
 			Address:             address,
-			FrozenAmount:         big.NewInt(0),
-			FrozenAt:             0,
-			UnfreezeAt:           0,
-			UnfreezeAvailableAt:  0,
-			Status:               "none",
+			FrozenAmount:        big.NewInt(0),
+			FrozenAt:            0,
+			UnfreezeAt:          0,
+			UnfreezeAvailableAt: 0,
+			Status:              "none",
 		}, nil
 	}
 
@@ -91,7 +92,7 @@ func (d *DPoS) CanWithdrawDelegate(address types.Address) (map[string]interface{
 		"address":     address.String(),
 		"canWithdraw": false,
 		"reason":      "",
-		"details":    make(map[string]interface{}),
+		"details":     make(map[string]interface{}),
 	}
 
 	// 获取注册信息
@@ -198,7 +199,7 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 
 	// 🆕 从数据库读取验证者信息（按权重倒序排序，应用配置限制）
 	validators := make([]map[string]interface{}, 0)
-	
+
 	// 🆕 获取该epoch的出块统计
 	var blockCounts map[types.Address]uint64
 	if d.blockTracker != nil {
@@ -206,7 +207,7 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 	} else {
 		blockCounts = make(map[types.Address]uint64)
 	}
-	
+
 	if d.state != nil && d.state.StakeStore != nil {
 		// 🆕 使用公共函数获取排序和限制后的验证者（包含故障过滤）
 		dbValidators, err := d.GetSortedValidatorsWithLimit()
@@ -215,7 +216,7 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 			for i, validator := range dbValidators {
 				// 🆕 获取验证者的故障标志信息
 				faultInfo := d.getValidatorFaultInfo(validator.Address)
-				
+
 				// 🆕 获取该验证者在该epoch的出块数
 				blocksProduced := blockCounts[validator.Address]
 
@@ -224,7 +225,7 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 					"address":        validator.Address.String(),
 					"votingPower":    validator.VotingPower.String(),
 					"isActive":       validator.IsActive,
-					"faultFlag":      faultInfo, // 🆕 添加故障标志信息
+					"faultFlag":      faultInfo,      // 🆕 添加故障标志信息
 					"blocksProduced": blocksProduced, // 🆕 添加该epoch的出块数
 				})
 			}
@@ -329,7 +330,7 @@ func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
 			for i, validator := range dbValidators {
 				// 🆕 获取验证者的故障标志信息
 				faultInfo := d.getValidatorFaultInfo(validator.Address)
-				
+
 				// 🆕 获取该验证者在该epoch的出块数
 				blocksProduced := blockCounts[validator.Address]
 
@@ -338,7 +339,7 @@ func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
 					"address":        validator.Address.String(),
 					"votingPower":    validator.VotingPower.String(),
 					"isActive":       validator.IsActive,
-					"faultFlag":      faultInfo, // 🆕 添加故障标志信息
+					"faultFlag":      faultInfo,      // 🆕 添加故障标志信息
 					"blocksProduced": blocksProduced, // 🆕 添加该epoch的出块数
 				})
 			}
@@ -356,7 +357,7 @@ func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
 		"currentEpoch":          currentEpoch,
 		"currentBlockNumber":    currentBlockNumber,
 		"consensusSwitchHeight": d.config.ConsensusSwitchHeight,
-		"validators":            validators, // 🆕 添加验证者信息（包含出块数）
+		"validators":            validators,      // 🆕 添加验证者信息（包含出块数）
 		"validatorCount":        len(validators), // 🆕 添加验证者数量
 	}
 }
@@ -427,8 +428,8 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 		}(),
 		"EpochDuration", d.config.EpochDuration.String(),
 		"BlockTime", d.config.BlockTime.Duration.String(),
-		"ValidatorRewardRatio", d.config.ValidatorRewardRatio,
-		"VoterRewardRatio", d.config.VoterRewardRatio)
+		"CommissionRateDefault", d.config.CommissionRateDefault,
+		"CommissionEffectivePeriod", d.config.CommissionEffectivePeriod.String())
 
 	// 从真实状态获取奖励账户余额
 	rewardAccountBalance, err := d.getAccountBalance(d.config.RewardAccount)
@@ -458,112 +459,67 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 		"blocksProduced", blocksProduced,
 		"totalBlocks", totalBlocks)
 
-	// 🆕 使用固定时间窗口计算奖励
+	// 使用统一的奖励分配逻辑计算本验证者及其委托人的奖励
 	validatorReward := "0"
 	voterReward := "0"
 	totalReward := "0"
 	rewardPerBlock := "0"
 	actualReward := "0"
-	var validatorRewardBig *big.Int
-	var voterRewardBig *big.Int
-
-	// 投票者详细奖励分配
 	voterRewards := make(map[string]string)
 
-	// 🆕 添加条件判断的调试日志
-	d.logger.Debug("🔍 奖励计算条件检查",
-		"RewardAmountIsNil", d.config.RewardAmount == nil,
-		"blocksProduced", blocksProduced,
-		"willEnterRewardCalculation", d.config.RewardAmount != nil && blocksProduced > 0)
+	validatorRewardBig := big.NewInt(0)
+	voterRewardBig := big.NewInt(0)
 
 	if d.config.RewardAmount != nil && blocksProduced > 0 {
-		// 🆕 基于固定时间窗口的奖励计算
-		// 1. 获取配置的区块时间（固定时间窗口）
-		expectedBlockTime := d.config.BlockTime.Duration
-
-		// 2. 计算该epoch的预期出块数
-		epochDuration := d.config.EpochDuration
-		expectedBlocks := int64(epochDuration / expectedBlockTime)
-
-		// 3. 计算每块奖励（基于预期出块数）
-		blockReward := new(big.Int).Div(d.config.RewardAmount, big.NewInt(expectedBlocks))
-
-		// 4. 验证者奖励 = 每块奖励 * 实际出块数 * 验证者比例
-		validatorRewardBig = new(big.Int).Mul(blockReward, big.NewInt(int64(blocksProduced)))
-		validatorRewardBig.Mul(validatorRewardBig, big.NewInt(int64(d.config.ValidatorRewardRatio)))
-		validatorRewardBig.Div(validatorRewardBig, big.NewInt(100))
-		validatorReward = validatorRewardBig.String()
-
-		// 5. 投票者奖励池计算 = 每块奖励 * 实际出块数 * 投票者比例
-		totalVoterRewardBig := new(big.Int).Mul(blockReward, big.NewInt(int64(blocksProduced)))
-		totalVoterRewardBig.Mul(totalVoterRewardBig, big.NewInt(int64(d.config.VoterRewardRatio)))
-		totalVoterRewardBig.Div(totalVoterRewardBig, big.NewInt(100))
-
-		// 6. 获取该验证者的投票者并分配奖励
-		// 先调试数据库内容
-		d.debugDatabaseContents()
-
-		votersForValidator := d.getVotersForValidator(validatorAddress)
-		totalVotesForValidator := d.getTotalVotesForValidator(validatorAddress)
-
-		// 计算投票者详细奖励分配
-		if totalVotesForValidator.Cmp(big.NewInt(0)) > 0 {
-			// 该验证者分得的投票者奖励 = 投票者奖励池（因为投票者奖励最终会分配给该验证者）
-			voterRewardBig = new(big.Int).Set(totalVoterRewardBig)
-			voterReward = voterRewardBig.String()
-
-			// 计算每个投票者的详细奖励
-			for _, voter := range votersForValidator {
-				// 计算该投票者的权重占比（使用10000作为精度）
-				voterWeightRatio := new(big.Int).Mul(voter.VotingPower, big.NewInt(10000))
-				voterWeightRatio.Div(voterWeightRatio, totalVotesForValidator)
-
-				// 计算该投票者获得的奖励
-				voterReward := new(big.Int).Mul(totalVoterRewardBig, voterWeightRatio)
-				voterReward.Div(voterReward, big.NewInt(10000))
-
-				voterRewards[voter.Address.String()] = voterReward.String()
-
-				d.logger.Debug("投票者奖励分配",
-					"voterAddress", voter.Address.String(),
-					"votingPower", voter.VotingPower.String(),
-					"weightRatio", voterWeightRatio.String(),
-					"voterReward", voterReward.String())
+		validators := d.GetValidators()
+		var targetValidator *validator.ValidatorMetadata
+		for _, val := range validators {
+			if val.Address == validatorAddress {
+				targetValidator = val
+				break
 			}
-
-			d.logger.Debug("投票者奖励计算",
-				"validatorAddress", validatorAddress.String(),
-				"voterRewardPool", totalVoterRewardBig.String(),
-				"totalVotesForValidator", totalVotesForValidator.String(),
-				"votersCount", len(votersForValidator))
-		} else {
-			voterRewardBig = big.NewInt(0)
-			voterReward = "0"
-			d.logger.Debug("该验证者没有投票者", "validatorAddress", validatorAddress.String())
 		}
 
-		// 总奖励 - 修复空指针问题
-		var totalRewardBig *big.Int
-		if validatorRewardBig != nil && voterRewardBig != nil {
-			totalRewardBig = new(big.Int).Add(validatorRewardBig, voterRewardBig)
-		} else if validatorRewardBig != nil {
-			totalRewardBig = new(big.Int).Set(validatorRewardBig)
-		} else if voterRewardBig != nil {
-			totalRewardBig = new(big.Int).Set(voterRewardBig)
-		} else {
-			totalRewardBig = big.NewInt(0)
+		if targetValidator == nil {
+			targetValidator = &validator.ValidatorMetadata{
+				Address:     validatorAddress,
+				VotingPower: big.NewInt(0),
+				IsActive:    true,
+			}
 		}
+
+		voters := d.GetVoters()
+		if voters == nil {
+			voters = make(map[types.Address]*VoterInfo)
+		}
+
+		validatorAmount, voterAmounts := d.rewardDistributor.computeRewardsForValidator(targetValidator, voters, blockCounts, totalBlocks)
+
+		validatorRewardBig = new(big.Int).Set(validatorAmount)
+		voterRewardBig = big.NewInt(0)
+		for voterAddr, amount := range voterAmounts {
+			if amount == nil {
+				continue
+			}
+			voterRewardBig.Add(voterRewardBig, amount)
+			voterRewards[voterAddr.String()] = amount.String()
+		}
+
+		totalRewardBig := new(big.Int).Add(validatorRewardBig, voterRewardBig)
+
+		validatorReward = validatorRewardBig.String()
+		voterReward = voterRewardBig.String()
 		totalReward = totalRewardBig.String()
 
-		// 每块奖励
-		if blocksProduced > 0 {
-			rewardPerBlockBig := new(big.Int).Div(validatorRewardBig, big.NewInt(int64(blocksProduced)))
+		if blocksProduced > 0 && validatorRewardBig.Sign() > 0 {
+			rewardPerBlockBig := new(big.Int).Div(new(big.Int).Set(validatorRewardBig), big.NewInt(int64(blocksProduced)))
 			rewardPerBlock = rewardPerBlockBig.String()
 		}
+	}
 
-		// 实际可获得的奖励
+	if validatorRewardBig.Sign() > 0 {
 		actualRewardBig := new(big.Int).Set(validatorRewardBig)
-		if actualRewardBig.Cmp(rewardAccountBalance) > 0 {
+		if rewardAccountBalance != nil && actualRewardBig.Cmp(rewardAccountBalance) > 0 {
 			actualRewardBig.Set(rewardAccountBalance)
 		}
 		actualReward = actualRewardBig.String()
@@ -677,4 +633,3 @@ func (d *DPoS) onEpochEnd(epochNumber uint64) error {
 
 	return nil
 }
-

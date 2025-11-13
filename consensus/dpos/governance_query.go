@@ -112,7 +112,6 @@ func (d *DPoS) GetVotableCurrentParameters() map[string]*ParameterInfo {
 	return result
 }
 
-
 // UpdateParameterValue 更新参数值（公共方法）
 func (d *DPoS) UpdateParameterValue(parameter string, newValue interface{}) error {
 	d.lock.Lock()
@@ -120,16 +119,6 @@ func (d *DPoS) UpdateParameterValue(parameter string, newValue interface{}) erro
 
 	// 根据参数类型更新相应的配置
 	switch parameter {
-	case "dpos_validator_reward_ratio":
-		if ratio, ok := newValue.(uint64); ok {
-			d.config.ValidatorRewardRatio = ratio
-			d.logger.Info("Updated validator reward ratio", "newValue", ratio)
-		}
-	case "dpos_voter_reward_ratio":
-		if ratio, ok := newValue.(uint64); ok {
-			d.config.VoterRewardRatio = ratio
-			d.logger.Info("Updated voter reward ratio", "newValue", ratio)
-		}
 	case "dpos_reward_amount":
 		if amount, ok := newValue.(string); ok {
 			if bigAmount, ok := new(big.Int).SetString(amount, 10); ok {

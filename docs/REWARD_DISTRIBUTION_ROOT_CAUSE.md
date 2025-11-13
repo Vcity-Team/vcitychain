@@ -6,8 +6,8 @@
 dpos_epoch_duration: "1h"          # 1小时 = 3600秒
 block_time_s: 3                    # 3秒一个区块（假设）
 dpos_reward_amount: 100 VCITY      # 每个epoch 100 VCITY
-dpos_validator_reward_ratio: 70%  # 验证者奖励比例 70%
-dpos_voter_reward_ratio: 30%       # 投票者奖励比例 30%
+dpos_commission_ratio: 10%         # 默认验证者佣金（可配置）
+dpos_commission_effective: 21d     # 佣金修改生效延迟
 dpos_validators_count: 21          # 21个验证者
 ```
 

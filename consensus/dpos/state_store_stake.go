@@ -761,6 +761,40 @@ func (s *StakeStore) setDelegateInfoInternal(delegate types.Address, info *Deleg
 	return nil
 }
 
+// GetDelegateInfo 对外提供获取受托人信息的便捷方法（自动管理事务）
+func (s *StakeStore) GetDelegateInfo(delegate types.Address) (*DelegateInfo, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("stake store not initialized")
+	}
+
+	var result *DelegateInfo
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("DelegateInfo"))
+		if bucket == nil {
+			return nil
+		}
+
+		data := bucket.Get(delegate[:])
+		if data == nil {
+			return nil
+		}
+
+		var info DelegateInfo
+		if err := json.Unmarshal(data, &info); err != nil {
+			return fmt.Errorf("failed to unmarshal delegate info: %w", err)
+		}
+
+		result = &info
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
 // getDelegateInfo 从数据库获取受托人信息
 func (s *StakeStore) getDelegateInfo(delegate types.Address, dbTx *bolt.Tx) (*DelegateInfo, error) {
 	bucket := dbTx.Bucket([]byte("DelegateInfo"))

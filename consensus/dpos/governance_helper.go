@@ -35,10 +35,6 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 
 	// 如果缓存中没有，从不同来源获取
 	switch parameter {
-	case "dpos_validator_reward_ratio":
-		return d.config.ValidatorRewardRatio, nil
-	case "dpos_voter_reward_ratio":
-		return d.config.VoterRewardRatio, nil
 	case "dpos_reward_amount":
 		if d.config.RewardAmount != nil {
 			return d.config.RewardAmount.String(), nil

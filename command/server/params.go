@@ -238,18 +238,18 @@ func (p *serverParams) generateConfig() *server.Config {
 		// 🆕 新增：DPoS最小质押门槛
 		DPoSDelegateThreshold: p.dposDelegateThreshold,
 		// 🆕 新增：DPoS经济系统配置
-		DPoSEpochDuration:        p.rawConfig.DPoSEpochDuration,
-		DPoSRewardDistribution:   p.rawConfig.DPoSRewardDistribution,
-		DPoSRewardAmount:         p.rawConfig.DPoSRewardAmount,
-		DPoSValidatorRewardRatio: p.rawConfig.DPoSValidatorRewardRatio,
-		DPoSVoterRewardRatio:     p.rawConfig.DPoSVoterRewardRatio,
-		DPoSProposalVotePeriod:   p.dposProposalVotePeriod,
-		DPoSProposalValidPeriod:  p.dposProposalValidPeriod,
-		BlockTimeSeconds:         p.rawConfig.BlockTimeSeconds, // 🆕 传递BlockTimeSeconds配置
-		DPoSMinFreezePeriod:      p.rawConfig.DPoSMinFreezePeriod, // 🆕 传递最小冻结期配置
-		DPoSUnfreezeLockPeriod:   p.rawConfig.DPoSUnfreezeLockPeriod, // 🆕 传递解冻锁定期配置
-		JSONLogFormat:            p.rawConfig.JSONLogFormat,
-		LogFilePath:              p.logFileLocation,
+		DPoSEpochDuration:       p.rawConfig.DPoSEpochDuration,
+		DPoSRewardDistribution:  p.rawConfig.DPoSRewardDistribution,
+		DPoSRewardAmount:        p.rawConfig.DPoSRewardAmount,
+		DPoSProposalVotePeriod:  p.dposProposalVotePeriod,
+		DPoSProposalValidPeriod: p.dposProposalValidPeriod,
+		DPoSCommissionRatio:     p.rawConfig.DPoSCommissionRatio,
+		DPoSCommissionEffective: p.rawConfig.DPoSCommissionEffective,
+		BlockTimeSeconds:        p.rawConfig.BlockTimeSeconds,       // 🆕 传递BlockTimeSeconds配置
+		DPoSMinFreezePeriod:     p.rawConfig.DPoSMinFreezePeriod,    // 🆕 传递最小冻结期配置
+		DPoSUnfreezeLockPeriod:  p.rawConfig.DPoSUnfreezeLockPeriod, // 🆕 传递解冻锁定期配置
+		JSONLogFormat:           p.rawConfig.JSONLogFormat,
+		LogFilePath:             p.logFileLocation,
 
 		Relayer:               p.relayer,
 		NumBlockConfirmations: p.rawConfig.NumBlockConfirmations,

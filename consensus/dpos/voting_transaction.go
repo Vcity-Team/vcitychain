@@ -160,6 +160,27 @@ func (d *DPoS) processBlockVotes(block *types.FullBlock) error {
 				}
 			}
 
+			// 检查是否是佣金率修改交易
+			if d.isCommissionUpdateTransaction(tx) {
+				d.logger.Info("💼 ===== 发现佣金率修改交易 =====",
+					"blockNumber", block.Block.Number(),
+					"txIndex", i,
+					"txHash", tx.Hash.String())
+
+				if err := d.processCommissionUpdateTransaction(tx, block.Block.Number()); err != nil {
+					d.logger.Error("❌ 处理佣金率修改交易失败",
+						"blockNumber", block.Block.Number(),
+						"txIndex", i,
+						"txHash", tx.Hash.String(),
+						"error", err)
+				} else {
+					d.logger.Info("🎉 佣金率修改交易处理成功！",
+						"blockNumber", block.Block.Number(),
+						"txIndex", i,
+						"txHash", tx.Hash.String())
+				}
+			}
+
 			// 检查是否是投票交易
 			if d.isVoteTransaction(tx) {
 				d.logger.Info("🗳️ ===== 发现投票交易 =====")
@@ -220,7 +241,3 @@ func (d *DPoS) processBlockVotesFromHeader(header *types.Header) error {
 	// 调用现有的投票处理逻辑
 	return d.processBlockVotes(fullBlock)
 }
-
-
-
-

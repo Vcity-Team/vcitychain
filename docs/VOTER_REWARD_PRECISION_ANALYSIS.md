@@ -138,3 +138,67 @@ reward = voterReward * voter.VotingPower / totalVotingPower
 
 **结论**：该投票者实际上占约 98.83%，而不是 100%，所以奖励是 29.65 VCITY 而不是 30 VCITY。
 
+## 查询指定 Epoch 信息的 PowerShell 命令
+
+### 基本用法
+
+```powershell
+# 查询指定 epoch 的信息（例如 epoch 368）
+$rpcUrl = "http://209.53.43.252:9545"
+$epochNumber = 368
+$r = Invoke-RestMethod -Uri $rpcUrl -Method Post -Body (@{jsonrpc="2.0";method="dpos_getEpochInfoByNumber";params=@($epochNumber);id=1}|ConvertTo-Json) -ContentType "application/json"
+
+# 显示结果
+$r.result | ConvertTo-Json -Depth 10
+```
+
+### 格式化显示
+
+```powershell
+# 查询指定 epoch 的信息并格式化显示
+$rpcUrl = "http://209.53.43.252:9545"
+$epochNumber = 368
+
+$r = Invoke-RestMethod -Uri $rpcUrl -Method Post -Body (@{jsonrpc="2.0";method="dpos_getEpochInfoByNumber";params=@($epochNumber);id=1}|ConvertTo-Json) -ContentType "application/json"
+
+Write-Host "`n========== Epoch $epochNumber 信息 ==========" -ForegroundColor Green
+Write-Host "Epoch 编号: $($r.result.epochNumber)" -ForegroundColor Yellow
+Write-Host "Epoch 状态: $($r.result.epochStatus)" -ForegroundColor Yellow
+Write-Host "Epoch 大小: $($r.result.epochSize) 个区块" -ForegroundColor Yellow
+Write-Host "第一个区块: $($r.result.firstBlockInEpoch)" -ForegroundColor Cyan
+Write-Host "最后一个区块: $($r.result.lastBlockInEpoch)" -ForegroundColor Cyan
+Write-Host "验证者数量: $($r.result.validators.Count)" -ForegroundColor Cyan
+```
+
+### 查询多个 Epoch
+
+```powershell
+# 查询多个 epoch 的信息
+$rpcUrl = "http://209.53.43.252:9545"
+$epochNumbers = @(365, 366, 367, 368)
+
+foreach ($epochNumber in $epochNumbers) {
+    Write-Host "`n========== 查询 Epoch $epochNumber ==========" -ForegroundColor Green
+    $r = Invoke-RestMethod -Uri $rpcUrl -Method Post -Body (@{jsonrpc="2.0";method="dpos_getEpochInfoByNumber";params=@($epochNumber);id=1}|ConvertTo-Json) -ContentType "application/json"
+    
+    if ($r.result) {
+        Write-Host "Epoch $epochNumber: 状态=$($r.result.epochStatus), 区块范围=$($r.result.firstBlockInEpoch)-$($r.result.lastBlockInEpoch), 验证者数=$($r.result.validators.Count)" -ForegroundColor Cyan
+    } else {
+        Write-Host "Epoch $epochNumber: 查询失败" -ForegroundColor Red
+    }
+}
+```
+
+### 查询当前 Epoch（使用 dpos_getCurrentEpochInfo）
+
+```powershell
+# 查询当前 epoch 信息（不需要参数）
+$rpcUrl = "http://209.53.43.252:9545"
+$r = Invoke-RestMethod -Uri $rpcUrl -Method Post -Body (@{jsonrpc="2.0";method="dpos_getCurrentEpochInfo";params=@();id=1}|ConvertTo-Json) -ContentType "application/json"
+
+Write-Host "`n========== 当前 Epoch 信息 ==========" -ForegroundColor Green
+Write-Host "当前 Epoch: $($r.result.epochNumber)" -ForegroundColor Yellow
+Write-Host "Epoch 大小: $($r.result.epochSize) 个区块" -ForegroundColor Yellow
+Write-Host "验证者数量: $($r.result.validators.Count)" -ForegroundColor Cyan
+```
+

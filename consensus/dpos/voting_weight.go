@@ -228,6 +228,8 @@ func (d *DPoS) updateVotingPowerInDatabase(delegate types.Address, newPower *big
 		BlsPublicKey:   nil,  // BLS密钥由其他逻辑处理
 	}
 
+	d.populateCommissionFields(delegate, delegateInfo)
+
 	err := d.state.StakeStore.setDelegateInfo(delegate, delegateInfo, nil)
 	if err != nil {
 		d.logger.Error("❌ 更新数据库验证者投票权重失败",
@@ -345,6 +347,8 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 		IsActive:       newPower.Cmp(big.NewInt(0)) > 0,
 	}
 
+	d.populateCommissionFields(delegate, delegateInfo)
+
 	d.logger.Info("🔍 准备保存验证者信息到数据库",
 		"delegate", delegate.String(),
 		"originalPower", currentPower.String(),
@@ -370,6 +374,3 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 
 	return nil
 }
-
-
-

@@ -2,6 +2,7 @@ package dpos
 
 import (
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -39,39 +40,29 @@ func NewBlockScheduler(
 ) *BlockScheduler {
 	// ⚠️ 关键修复：使用共识切换高度对应区块的时间戳作为genesisTime
 	// 确保所有节点的genesisTime一致，避免slot计算不同导致分叉
-	genesisTime := time.Now()
-	if blockchain != nil {
-		// 优先使用共识切换高度的区块时间戳
-		if consensusSwitchHeight > 0 {
-			switchHeader, ok := blockchain.GetHeaderByNumber(consensusSwitchHeight)
-			if ok && switchHeader != nil {
-				genesisTime = time.Unix(int64(switchHeader.Timestamp), 0)
-				logger.Info("✅ 使用共识切换高度区块时间戳作为genesisTime",
-					"consensusSwitchHeight", consensusSwitchHeight,
-					"genesisTime", genesisTime.Format("2006-01-02 15:04:05.000"),
-					"blockTimestamp", switchHeader.Timestamp)
-			} else {
-				// 如果共识切换高度的区块还不存在，使用当前区块头（临时方案）
-				currentHeader := blockchain.Header()
-				if currentHeader != nil {
-					genesisTime = time.Unix(int64(currentHeader.Timestamp), 0)
-					logger.Warn("⚠️ 共识切换高度区块不存在，使用当前区块时间戳作为临时genesisTime",
-						"consensusSwitchHeight", consensusSwitchHeight,
-						"currentBlockNumber", currentHeader.Number,
-						"genesisTime", genesisTime.Format("2006-01-02 15:04:05.000"))
-				}
-			}
-		} else {
-			// 如果共识切换高度为0，使用当前区块头
-			genesisHeader := blockchain.Header()
-			if genesisHeader != nil {
-				genesisTime = time.Unix(int64(genesisHeader.Timestamp), 0)
-				logger.Warn("⚠️ 共识切换高度为0，使用当前区块时间戳作为genesisTime",
-					"currentBlockNumber", genesisHeader.Number,
-					"genesisTime", genesisTime.Format("2006-01-02 15:04:05.000"))
-			}
-		}
+	var genesisTime time.Time
+	if blockchain == nil {
+		logger.Error("❌ 区块链实例不可用，无法初始化BlockScheduler")
+		os.Exit(1)
 	}
+
+	// 优先使用共识切换高度的区块时间戳
+	if consensusSwitchHeight <= 0 {
+		logger.Error("❌ 共识切换高度未配置或为0，无法初始化BlockScheduler", "consensusSwitchHeight", consensusSwitchHeight)
+		os.Exit(1)
+	}
+
+	switchHeader, ok := blockchain.GetHeaderByNumber(consensusSwitchHeight)
+	if !ok || switchHeader == nil {
+		logger.Error("❌ 无法获取共识切换高度对应的区块头", "consensusSwitchHeight", consensusSwitchHeight)
+		os.Exit(1)
+	}
+
+	genesisTime = time.Unix(int64(switchHeader.Timestamp), 0)
+	logger.Info("✅ 使用共识切换高度区块时间戳作为genesisTime",
+		"consensusSwitchHeight", consensusSwitchHeight,
+		"genesisTime", genesisTime.Format("2006-01-02 15:04:05.000"),
+		"blockTimestamp", switchHeader.Timestamp)
 
 	return &BlockScheduler{
 		blockWindow:           blockWindow,

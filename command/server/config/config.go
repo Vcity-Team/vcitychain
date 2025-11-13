@@ -54,22 +54,24 @@ type Config struct {
 	DPoSDelegateThreshold string `json:"dpos_delegate_threshold" yaml:"dpos_delegate_threshold"`
 
 	// 🆕 新增：DPoS经济系统配置
-	DPoSEpochDuration        string `json:"dpos_epoch_duration" yaml:"dpos_epoch_duration"`
-	DPoSRewardDistribution   string `json:"dpos_reward_distribution" yaml:"dpos_reward_distribution"`       // 奖励分发地址
-	DPoSRewardAmount         string `json:"dpos_reward_amount" yaml:"dpos_reward_amount"`                   // 每个epoch奖励金额
-	DPoSValidatorRewardRatio uint64 `json:"dpos_validator_reward_ratio" yaml:"dpos_validator_reward_ratio"` // 验证者奖励比例
-	DPoSVoterRewardRatio     uint64 `json:"dpos_voter_reward_ratio" yaml:"dpos_voter_reward_ratio"`         // 投票者奖励比例
-	DPoSProposalVotePeriod   string `json:"dpos_proposal_vote_period" yaml:"dpos_proposal_vote_period"`     // 提案表决周期
-	DPoSProposalValidPeriod  string `json:"dpos_proposal_valid_period" yaml:"dpos_proposal_valid_period"`   // 提案有效期
-	BlockTimeSeconds         uint64 `json:"block_time_s" yaml:"block_time_s"`                               // 区块间隔时间（秒）
+	DPoSEpochDuration       string `json:"dpos_epoch_duration" yaml:"dpos_epoch_duration"`
+	DPoSRewardDistribution  string `json:"dpos_reward_distribution" yaml:"dpos_reward_distribution"`     // 奖励分发地址
+	DPoSRewardAmount        string `json:"dpos_reward_amount" yaml:"dpos_reward_amount"`                 // 每个epoch奖励金额
+	DPoSProposalVotePeriod  string `json:"dpos_proposal_vote_period" yaml:"dpos_proposal_vote_period"`   // 提案表决周期
+	DPoSProposalValidPeriod string `json:"dpos_proposal_valid_period" yaml:"dpos_proposal_valid_period"` // 提案有效期
+	BlockTimeSeconds        uint64 `json:"block_time_s" yaml:"block_time_s"`                             // 区块间隔时间（秒）
+
+	// 🆕 新增：DPoS佣金配置
+	DPoSCommissionRatio     uint64 `json:"dpos_commission_ratio" yaml:"dpos_commission_ratio"`         // 默认佣金率（基点）
+	DPoSCommissionEffective string `json:"dpos_commission_effective" yaml:"dpos_commission_effective"` // 佣金生效周期（如"21d"）
 
 	// 🆕 冻结相关配置
 	DPoSMinFreezePeriod    uint64 `json:"dpos_min_freeze_period" yaml:"dpos_min_freeze_period"`       // 最小冻结期（秒）
 	DPoSUnfreezeLockPeriod uint64 `json:"dpos_unfreeze_lock_period" yaml:"dpos_unfreeze_lock_period"` // 解冻锁定期（秒）
 
 	// London Fork 配置（从 yaml 读取，不改变 genesis hash）
-	BaseFeeConfig string `json:"base_fee_config" yaml:"base_fee_config"`           // 格式: "baseFee:baseFeeEM:baseFeeChangeDenom"
-	BurnContract  string `json:"burn_contract" yaml:"burn_contract"`              // 格式: "blockNumber:address[:destinationAddress]"
+	BaseFeeConfig string `json:"base_fee_config" yaml:"base_fee_config"` // 格式: "baseFee:baseFeeEM:baseFeeChangeDenom"
+	BurnContract  string `json:"burn_contract" yaml:"burn_contract"`     // 格式: "blockNumber:address[:destinationAddress]"
 }
 
 // Telemetry holds the config details for metric services.
@@ -168,19 +170,19 @@ func DefaultConfig() *Config {
 		WebSocketReadLimit:       DefaultWebSocketReadLimit,
 		MetricsInterval:          DefaultMetricsInterval,
 
-		// 🆕 新增：DPoS验证者数量默认值
-		DPoSValidatorsCount: 4, // 默认4个验证者
+		// DPoS验证者数量默认值
+		DPoSValidatorsCount: 4, // 默认4个创世验证者
 
-		// 🆕 新增：DPoS最小质押门槛默认值
+		// DPoS最小质押门槛默认值
 		DPoSDelegateThreshold: "1000000000000000000000", // 默认1000 VCITY
 
-		// 🆕 新增：DPoS经济系统默认值
-		DPoSEpochDuration:        "24h",                    // 默认24小时一个epoch
-		DPoSRewardDistribution:   "",                       // 默认空，需要配置
-		DPoSRewardAmount:         "1000000000000000000000", // 默认1000 VCITY
-		DPoSValidatorRewardRatio: 70,                       // 默认70%
-		DPoSVoterRewardRatio:     30,                       // 默认30%
-		BlockTimeSeconds:         2,                        // 默认2秒一个区块
+		// DPoS经济系统默认值
+		DPoSEpochDuration:       "24h",                    // 默认24小时一个epoch
+		DPoSRewardDistribution:  "",                       // 奖励分发地址，默认空，需要配置
+		DPoSRewardAmount:        "1000000000000000000000", // 默认1000 VCITY
+		BlockTimeSeconds:        3,                        // 默认3秒一个区块
+		DPoSCommissionRatio:     1000,                     // 默认佣金 10%
+		DPoSCommissionEffective: "21d",                    // 默认21天生效
 	}
 }
 

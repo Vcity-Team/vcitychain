@@ -141,14 +141,32 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 	}
 
 	// 创建DPoS引擎配置
+	commissionRatio := s.config.DPoSCommissionRatio
+	if commissionRatio == 0 {
+		commissionRatio = 1000
+	}
+
 	engineConfig := map[string]interface{}{
-		"consensusSwitchHeight": float64(s.config.ConsensusSwitchHeight),
-		"dposValidatorsCount":   float64(s.config.DPoSValidatorsCount), // 使用正确的字段名
-		"dposDelegateThreshold": s.config.DPoSDelegateThreshold,
-		"backupValidatorsCount": float64(s.config.BackupValidatorsCount),
-		"maxMissedBlocks":       float64(s.config.MaxMissedBlocks),
+		"consensusSwitchHeight":     float64(s.config.ConsensusSwitchHeight),
+		"dposValidatorsCount":       float64(s.config.DPoSValidatorsCount), // 使用正确的字段名
+		"dposDelegateThreshold":     s.config.DPoSDelegateThreshold,
+		"backupValidatorsCount":     float64(s.config.BackupValidatorsCount),
+		"maxMissedBlocks":           float64(s.config.MaxMissedBlocks),
 		"dpos_min_freeze_period":    s.config.DPoSMinFreezePeriod,    // 🆕 最小冻结期（秒）
 		"dpos_unfreeze_lock_period": s.config.DPoSUnfreezeLockPeriod, // 🆕 解冻锁定期（秒）
+		"dposCommissionRatio":       float64(commissionRatio),
+		"dpos_commission_ratio":     float64(commissionRatio),
+	}
+	commissionEffectiveStr := s.config.DPoSCommissionEffective
+	if strings.TrimSpace(commissionEffectiveStr) == "" {
+		commissionEffectiveStr = "21d"
+	}
+	engineConfig["dpos_commission_effective"] = commissionEffectiveStr
+	if commissionEffectiveDuration, err := parseDurationWithDays(commissionEffectiveStr); err == nil {
+		engineConfig["commissionEffectivePeriod"] = commissionEffectiveDuration
+	} else {
+		s.logger.Error("❌ 无效的佣金生效周期", "value", commissionEffectiveStr, "error", err)
+		return fmt.Errorf("invalid dpos_commission_effective: %s", commissionEffectiveStr)
 	}
 
 	// 从YAML配置中获取区块时间（必须配置，不允许使用默认值）
@@ -203,23 +221,6 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		return fmt.Errorf("dpos_reward_amount is required in config file")
 	}
 
-	// 从YAML配置中获取奖励比例
-	if validatorRatio := s.config.DPoSValidatorRewardRatio; validatorRatio > 0 {
-		engineConfig["validatorRewardRatio"] = validatorRatio
-		s.logger.Info("📊 设置验证者奖励比例", "ratio", validatorRatio)
-	} else {
-		engineConfig["validatorRewardRatio"] = uint64(70) // 默认值
-		s.logger.Info("📊 使用默认验证者奖励比例", "ratio", 70)
-	}
-
-	if voterRatio := s.config.DPoSVoterRewardRatio; voterRatio > 0 {
-		engineConfig["voterRewardRatio"] = voterRatio
-		s.logger.Info("📊 设置投票者奖励比例", "ratio", voterRatio)
-	} else {
-		engineConfig["voterRewardRatio"] = uint64(30) // 默认值
-		s.logger.Info("📊 使用默认投票者奖励比例", "ratio", 30)
-	}
-
 	// 从YAML配置中获取提案表决周期（时间字符串）
 	s.logger.Info("🔍 检查DPoSProposalVotePeriod配置（第二次启动）",
 		"DPoSProposalVotePeriod", s.config.DPoSProposalVotePeriod,
@@ -267,8 +268,6 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 	s.logger.Info("✅ DPoS经济系统配置解析完成",
 		"rewardAccount", engineConfig["rewardAccount"],
 		"rewardAmount", engineConfig["rewardAmount"],
-		"validatorRatio", engineConfig["validatorRewardRatio"],
-		"voterRatio", engineConfig["voterRewardRatio"],
 		"proposalPeriod", engineConfig["proposalPeriod"])
 
 	// 获取区块时间
@@ -408,7 +407,7 @@ func NewServer(config *Config) (*Server, error) {
 	}
 
 	// Set up datadog profiler
-	if ddErr := m.enableDataDogProfiler(); err != nil {
+	if ddErr := m.enableDataDogProfiler(); ddErr != nil {
 		m.logger.Error("DataDog profiler setup failed", "err", ddErr.Error())
 	}
 
@@ -831,19 +830,6 @@ func (s *Server) setupConsensus() error {
 		return fmt.Errorf("dpos_reward_amount is required in config file")
 	}
 
-	// 从YAML配置中获取奖励比例
-	if validatorRatio := s.config.DPoSValidatorRewardRatio; validatorRatio > 0 {
-		engineConfig["validatorRewardRatio"] = validatorRatio
-	} else {
-		engineConfig["validatorRewardRatio"] = uint64(70) // 默认值
-	}
-
-	if voterRatio := s.config.DPoSVoterRewardRatio; voterRatio > 0 {
-		engineConfig["voterRewardRatio"] = voterRatio
-	} else {
-		engineConfig["voterRewardRatio"] = uint64(30) // 默认值
-	}
-
 	// 从YAML配置中获取提案表决周期（时间字符串）
 	s.logger.Info("🔍 检查DPoSProposalVotePeriod配置",
 		"DPoSProposalVotePeriod", s.config.DPoSProposalVotePeriod,
@@ -904,8 +890,6 @@ func (s *Server) setupConsensus() error {
 	s.logger.Info("✅ DPoS经济系统配置解析完成",
 		"rewardAccount", engineConfig["rewardAccount"],
 		"rewardAmount", engineConfig["rewardAmount"],
-		"validatorRatio", engineConfig["validatorRewardRatio"],
-		"voterRatio", engineConfig["voterRewardRatio"],
 		"proposalPeriod", engineConfig["proposalPeriod"])
 
 	var (

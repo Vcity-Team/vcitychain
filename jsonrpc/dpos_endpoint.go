@@ -686,7 +686,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		isGenesis, okGenesis := dposEngine.(interface {
 			IsGenesisValidator(address types.Address) bool
 		})
-		
+
 		// 🆕 创世验证者可以直接被投票，无需注册
 		if okGenesis && isGenesis.IsGenesisValidator(candidateAddr) {
 			d.logger.Info("✅ 受托人是创世验证者，跳过注册检查", "candidate", candidateAddr.String())
@@ -3350,7 +3350,6 @@ func (d *DPOS) GetLatestEpochInfo(ctx context.Context) (interface{}, error) {
 	return nil, fmt.Errorf("GetCurrentEpochInfo method not available on DPoS engine")
 }
 
-
 // ==================== 新增：奖励查询JSON-RPC方法 ====================
 
 // GetValidatorRewardHistory 查询验证者奖励历史
@@ -3634,14 +3633,29 @@ func (d *DPOS) ensureRewardStore(state *dpos.State) (*dpos.State, error) {
 func toUint64(value interface{}) (uint64, bool) {
 	switch v := value.(type) {
 	case float64:
+		if v < 0 {
+			return 0, false
+		}
 		return uint64(v), true
 	case float32:
+		if v < 0 {
+			return 0, false
+		}
 		return uint64(v), true
 	case int:
+		if v < 0 {
+			return 0, false
+		}
 		return uint64(v), true
 	case int32:
+		if v < 0 {
+			return 0, false
+		}
 		return uint64(v), true
 	case int64:
+		if v < 0 {
+			return 0, false
+		}
 		return uint64(v), true
 	case uint:
 		return uint64(v), true
@@ -3656,8 +3670,102 @@ func toUint64(value interface{}) (uint64, bool) {
 		if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
 			return parsed, true
 		}
+	case json.Number:
+		if parsed, err := v.Int64(); err == nil && parsed >= 0 {
+			return uint64(parsed), true
+		}
 	}
 	return 0, false
+}
+
+func parseDurationSeconds(value interface{}) (uint64, bool) {
+	switch v := value.(type) {
+	case uint64:
+		return v, true
+	case uint32:
+		return uint64(v), true
+	case int:
+		if v < 0 {
+			return 0, false
+		}
+		return uint64(v), true
+	case int64:
+		if v < 0 {
+			return 0, false
+		}
+		return uint64(v), true
+	case float64:
+		if v < 0 {
+			return 0, false
+		}
+		return uint64(v), true
+	case string:
+		if v == "" {
+			return 0, false
+		}
+		if seconds, ok := parseDurationStringSeconds(v); ok {
+			return seconds, true
+		}
+	case json.Number:
+		if parsed, err := v.Int64(); err == nil && parsed >= 0 {
+			return uint64(parsed), true
+		}
+	}
+	return 0, false
+}
+
+func parseDurationStringSeconds(input string) (uint64, bool) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return 0, false
+	}
+
+	if duration, err := time.ParseDuration(input); err == nil {
+		if duration < 0 {
+			return 0, false
+		}
+		return uint64(duration.Seconds()), true
+	}
+
+	if strings.ContainsAny(input, "dD") {
+		lower := strings.ToLower(input)
+		var value float64
+		var suffix string
+		if _, err := fmt.Sscanf(lower, "%f%s", &value, &suffix); err == nil && strings.HasPrefix(suffix, "d") {
+			remaining := strings.TrimPrefix(suffix, "d")
+			hours := value * 24
+			normalized := fmt.Sprintf("%.0fh%s", hours, remaining)
+			if duration, err := time.ParseDuration(normalized); err == nil {
+				if duration < 0 {
+					return 0, false
+				}
+				return uint64(duration.Seconds()), true
+			}
+		}
+
+		if strings.HasSuffix(lower, "d") {
+			numberPart := strings.TrimSuffix(lower, "d")
+			if numberPart == "" {
+				return 0, false
+			}
+			if v, err := strconv.ParseFloat(numberPart, 64); err == nil {
+				hours := v * 24
+				if duration, err := time.ParseDuration(fmt.Sprintf("%.0fh", hours)); err == nil {
+					if duration < 0 {
+						return 0, false
+					}
+					return uint64(duration.Seconds()), true
+				}
+			}
+		}
+	}
+
+	return 0, false
+}
+
+func formatBasisPoints(rate uint64) string {
+	percent := float64(rate) / 100.0
+	return fmt.Sprintf("%.2f%%", percent)
 }
 
 // GetValidatorBlockStats 获取验证者出块统计
@@ -4491,16 +4599,16 @@ func (d *DPOS) RegisterDelegate(ctx context.Context, params interface{}) (interf
 			return nil, fmt.Errorf("failed to register delegate: %w", err)
 		}
 		d.logger.Info("🎉 ===== 受托人注册RPC调用成功 =====")
-		
+
 		// 🆕 获取冻结信息
 		frozenAt := uint64(time.Now().Unix())
 		result := map[string]interface{}{
-			"success": true,
-			"message": "Delegate registration submitted successfully",
+			"success":      true,
+			"message":      "Delegate registration submitted successfully",
 			"frozenAmount": "0", // 将在交易处理时设置
-			"frozenAt": frozenAt,
+			"frozenAt":     frozenAt,
 		}
-		
+
 		// 如果已注册，尝试获取冻结信息
 		if dposEngine != nil {
 			if isRegistered, ok := dposEngine.(interface {
@@ -4519,7 +4627,7 @@ func (d *DPOS) RegisterDelegate(ctx context.Context, params interface{}) (interf
 				}
 			}
 		}
-		
+
 		return result, nil
 	}
 
@@ -4629,11 +4737,11 @@ func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interf
 			if strings.Contains(errStr, "cannot withdraw while having votes") {
 				// 有投票，需要先撤回
 				return map[string]interface{}{
-					"success": false,
-					"error":   errStr,
-					"code":    "HAS_ACTIVE_VOTES",
+					"success":               false,
+					"error":                 errStr,
+					"code":                  "HAS_ACTIVE_VOTES",
 					"withdrawVoteInterface": "dpos_vote",
-					"note":    "Use dpos_vote with amount=0 or negative amount to withdraw votes manually",
+					"note":                  "Use dpos_vote with amount=0 or negative amount to withdraw votes manually",
 				}, nil
 			} else if strings.Contains(errStr, "cannot withdraw before minimum freeze period") {
 				// 不满足最小冻结期
@@ -4645,13 +4753,13 @@ func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interf
 			}
 			return nil, fmt.Errorf("failed to withdraw delegate: %w", err)
 		}
-		
+
 		// 🆕 获取解冻信息
 		result := map[string]interface{}{
 			"success": true,
 			"message": "Delegate withdrawn and unfrozen successfully",
 		}
-		
+
 		// 尝试获取冻结信息
 		if getFreezeInfo, ok := dposEngine.(interface {
 			GetFreezeInfo(address types.Address) (*dpos.FreezeInfo, error)
@@ -4663,7 +4771,7 @@ func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interf
 				result["unfreezeAvailableAt"] = freezeInfo.UnfreezeAvailableAt
 			}
 		}
-		
+
 		return result, nil
 	}
 
@@ -4722,7 +4830,7 @@ func (d *DPOS) GetFreezeInfo(ctx context.Context, params interface{}) (interface
 			results = append(results, result)
 		}
 		return map[string]interface{}{
-			"success":    true,
+			"success":     true,
 			"freezeInfos": results,
 		}, nil
 	}
@@ -4734,6 +4842,153 @@ func (d *DPOS) GetFreezeInfo(ctx context.Context, params interface{}) (interface
 	address := types.StringToAddress(addressStr)
 	result := d.buildFreezeInfoResponse(dposEngine, address)
 	return result, nil
+}
+
+// GetValidatorCommission 获取验证者佣金率信息
+func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (map[string]interface{}, error) {
+	d.logger.Info("DPoS GetValidatorCommission called", "params", params)
+
+	var validatorAddress string
+
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) == 0 {
+			return map[string]interface{}{
+				"error": "validator address parameter is required",
+			}, nil
+		}
+		if addr, ok := p[0].(string); ok {
+			validatorAddress = addr
+		} else {
+			return map[string]interface{}{
+				"error": "validator address must be a string",
+			}, nil
+		}
+	case string:
+		validatorAddress = p
+	default:
+		return map[string]interface{}{
+			"error": fmt.Sprintf("invalid parameter type: %T", params),
+		}, nil
+	}
+
+	if validatorAddress == "" {
+		return map[string]interface{}{
+			"error": "validator address cannot be empty",
+		}, nil
+	}
+
+	addr := types.StringToAddress(validatorAddress)
+
+	dposState, err := d.store.GetDPoSState()
+	if err != nil {
+		return map[string]interface{}{
+			"validator": validatorAddress,
+			"error":     fmt.Sprintf("failed to get dpos state: %v", err),
+		}, nil
+	}
+
+	if dposState == nil || dposState.StakeStore == nil {
+		return map[string]interface{}{
+			"validator": validatorAddress,
+			"error":     "stake store not available",
+		}, nil
+	}
+
+	delegateInfo, err := dposState.StakeStore.GetDelegateInfo(addr)
+	if err != nil {
+		return map[string]interface{}{
+			"validator": validatorAddress,
+			"error":     fmt.Sprintf("failed to load delegate info: %v", err),
+		}, nil
+	}
+
+	if delegateInfo == nil {
+		return map[string]interface{}{
+			"validator": validatorAddress,
+			"error":     "validator not found",
+			"status":    "not_registered",
+		}, nil
+	}
+
+	defaultCommission := uint64(1000)
+	if dposState.ParameterStore != nil {
+		if value, err := dposState.ParameterStore.GetParameterValue("dpos_commission_ratio"); err == nil {
+			if parsed, ok := toUint64(value); ok && parsed > 0 {
+				defaultCommission = parsed
+			}
+		} else if value, err := dposState.ParameterStore.GetParameterValue("dpos_commission_radio"); err == nil {
+			if parsed, ok := toUint64(value); ok && parsed > 0 {
+				defaultCommission = parsed
+			}
+		}
+	}
+
+	effectivePeriod := 21 * 24 * time.Hour
+	if dposState.ParameterStore != nil {
+		if value, err := dposState.ParameterStore.GetParameterValue("dpos_commission_effective"); err == nil {
+			if seconds, ok := parseDurationSeconds(value); ok {
+				effectivePeriod = time.Duration(seconds) * time.Second
+			}
+		}
+	}
+
+	now := uint64(time.Now().Unix())
+	effectiveSeconds := uint64(effectivePeriod.Seconds())
+
+	commissionRate := delegateInfo.CommissionRate
+	if commissionRate == 0 {
+		commissionRate = defaultCommission
+	}
+
+	pendingRate := delegateInfo.PendingCommissionRate
+	updateTime := delegateInfo.CommissionUpdateTime
+
+	var pendingEffectiveAt uint64
+	var secondsUntilEffective uint64
+	status := "active"
+
+	if pendingRate != 0 {
+		if effectiveSeconds == 0 {
+			pendingEffectiveAt = updateTime
+		} else {
+			pendingEffectiveAt = updateTime + effectiveSeconds
+		}
+
+		if pendingEffectiveAt <= now {
+			status = "pending_ready"
+			secondsUntilEffective = 0
+		} else {
+			status = "pending"
+			secondsUntilEffective = pendingEffectiveAt - now
+		}
+	} else if delegateInfo.CommissionRate == 0 {
+		status = "default"
+	}
+
+	response := map[string]interface{}{
+		"validator":                        validatorAddress,
+		"commissionRate":                   commissionRate,
+		"commissionRatePercent":            formatBasisPoints(commissionRate),
+		"pendingCommissionRate":            pendingRate,
+		"pendingCommissionRatePercent":     formatBasisPoints(pendingRate),
+		"defaultCommissionRate":            defaultCommission,
+		"defaultCommissionRatePercent":     formatBasisPoints(defaultCommission),
+		"commissionUpdateTime":             updateTime,
+		"pendingEffectiveAt":               pendingEffectiveAt,
+		"secondsUntilEffective":            secondsUntilEffective,
+		"effectivePeriodSeconds":           effectiveSeconds,
+		"effectivePeriodHumanReadable":     effectivePeriod.String(),
+		"currentTimestamp":                 now,
+		"status":                           status,
+		"hasPendingCommissionRate":         pendingRate != 0,
+		"pendingReadyForActivation":        pendingRate != 0 && pendingEffectiveAt <= now,
+		"commissionRateBasisPoints":        commissionRate,
+		"pendingCommissionRateBasisPoints": pendingRate,
+		"defaultCommissionRateBasisPoints": defaultCommission,
+	}
+
+	return response, nil
 }
 
 // buildFreezeInfoResponse 构建冻结信息响应

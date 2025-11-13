@@ -389,11 +389,6 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		return fmt.Errorf("reward amount is nil")
 	}
 
-	if d.config.ValidatorRewardRatio == 0 {
-		d.logger.Error("❌ 验证者奖励比例为0，跳过奖励计算", "epoch", epochNumber)
-		return fmt.Errorf("validator reward ratio is 0")
-	}
-
 	// 检查奖励账户余额
 	rewardAccountBalance, err := d.getAccountBalance(d.config.RewardAccount)
 	if err != nil {
@@ -556,41 +551,34 @@ func (d *DPoS) calculateAndRecordEpochRewards(epochNumber uint64) error {
 		return nil
 	}
 
-	// 计算验证者奖励
-	validatorRewards := make(map[types.Address]*big.Int)
-	validatorRewardCount := 0
+	blockCounts := make(map[types.Address]uint64)
 	totalBlocks := uint64(0)
-
 	for _, validator := range validators {
 		blocksProduced := d.getBlocksProducedInEpoch(validator.Address, epochNumber)
-		totalBlocks += blocksProduced
-
 		if blocksProduced > 0 {
-			// 计算验证者奖励（70%）
-			validatorReward := d.calculateValidatorReward(blocksProduced, totalBlocks)
-			validatorRewards[validator.Address] = validatorReward
-			validatorRewardCount++
+			blockCounts[validator.Address] = blocksProduced
+			totalBlocks += blocksProduced
 		}
 	}
 
-	// 计算投票者奖励（30%）
-	totalVoterReward := d.calculateTotalVoterReward(epochNumber)
-	voterRewards, err := d.calculateVoterRewards(epochNumber, totalVoterReward)
-	if err != nil {
-		return fmt.Errorf("failed to calculate voter rewards: %w", err)
+	if totalBlocks == 0 {
+		d.logger.Warn("⚠️ 该epoch没有出块记录，跳过奖励记录", "epoch", epochNumber)
+		return nil
 	}
 
-	// 合并所有奖励
-	allRewards := make(map[types.Address]*big.Int)
-	for address, reward := range validatorRewards {
-		allRewards[address] = reward
+	voters := d.GetVoters()
+	if voters == nil {
+		voters = make(map[types.Address]*VoterInfo)
 	}
-	for address, reward := range voterRewards {
-		allRewards[address] = reward
+
+	rewards := d.rewardDistributor.CalculateRewards(validators, voters, blockCounts, totalBlocks)
+	if len(rewards) == 0 {
+		d.logger.Warn("⚠️ 计算结果为空，跳过奖励记录", "epoch", epochNumber)
+		return nil
 	}
 
 	// 记录奖励到数据库（不更新状态）
-	if err := d.recordRewardsToDatabase(epochNumber, allRewards); err != nil {
+	if err := d.recordRewardsToDatabase(epochNumber, rewards); err != nil {
 		return fmt.Errorf("failed to record rewards to database: %w", err)
 	}
 
@@ -603,38 +591,6 @@ func (d *DPoS) calculateAndRecordEpochRewards(epochNumber uint64) error {
 func (d *DPoS) getBlocksProducedInEpoch(address types.Address, epochNumber uint64) uint64 {
 	// 简化实现：返回固定值，实际应该从区块跟踪器中获取
 	return 8 // 假设每个验证者生产8个区块
-}
-
-// calculateValidatorReward 计算验证者奖励
-func (d *DPoS) calculateValidatorReward(blocksProduced uint64, totalBlocks uint64) *big.Int {
-	// 简化实现：基于出块数计算奖励
-	// 实际应该使用更复杂的奖励计算逻辑
-	baseReward := big.NewInt(1000000000000000000) // 1 VCITY
-	reward := new(big.Int).Mul(baseReward, big.NewInt(int64(blocksProduced)))
-	return reward
-}
-
-// calculateTotalVoterReward 计算总投票者奖励
-func (d *DPoS) calculateTotalVoterReward(epochNumber uint64) *big.Int {
-	// 简化实现：返回固定值
-	reward := big.NewInt(300)
-	reward.Mul(reward, big.NewInt(1e18)) // 300 VCITY
-	return reward
-}
-
-// calculateVoterRewards 计算投票者奖励
-// ⚠️ 已废弃：统一使用 RewardDistributor.CalculateRewards() 计算奖励
-// 保留此函数以保持向后兼容性，但不应再被调用
-func (d *DPoS) calculateVoterRewards(epochNumber uint64, totalVoterReward *big.Int) (map[types.Address]*big.Int, error) {
-	// 这里需要实现投票者奖励计算逻辑
-	// 暂时返回空映射，后续可以根据实际投票数据实现
-
-	// TODO: 实现真实的投票者奖励计算
-	// 1. 获取该epoch的所有投票记录
-	// 2. 计算每个投票者的投票权重
-	// 3. 按权重分配奖励
-
-	return make(map[types.Address]*big.Int), nil
 }
 
 // applyRewardDistribution 应用奖励分配到状态

@@ -310,6 +310,8 @@ func (d *DPoS) persistSingleDelegateToDatabase(del *validator.ValidatorMetadata)
 		BlsPublicKey:   blsPublicKey, // 保存BLS公钥（可以为nil）
 	}
 
+	d.populateCommissionFields(del.Address, delegateInfo)
+
 	// 记录持久化信息
 	d.logger.Info("💾 持久化单个受托人信息到数据库",
 		"address", del.Address.String(),
@@ -462,6 +464,8 @@ func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.Accoun
 			IsActive:       del.IsActive,
 			BlsPublicKey:   blsPublicKey, // 🆕 保存BLS公钥（可以为nil）
 		}
+
+		d.populateCommissionFields(del.Address, delegateInfo)
 
 		// 🆕 新增：重点记录持久化时的isActive状态
 		d.logger.Info("💾 持久化受托人信息到数据库",
@@ -651,6 +655,3 @@ func (d *DPoS) restoreDelegatesFromDatabase() error {
 
 	return nil
 }
-
-
-

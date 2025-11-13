@@ -64,18 +64,20 @@ type Config struct {
 	DPoSDelegateThreshold *big.Int
 
 	// 🆕 新增：DPoS经济系统配置
-	DPoSEpochDuration        string `yaml:"dpos_epoch_duration"`
-	DPoSRewardDistribution   string `yaml:"dpos_reward_distribution"`    // 奖励分发地址
-	DPoSRewardAmount         string `yaml:"dpos_reward_amount"`          // 每个epoch奖励金额
-	DPoSValidatorRewardRatio uint64 `yaml:"dpos_validator_reward_ratio"` // 验证者奖励比例
-	DPoSVoterRewardRatio     uint64 `yaml:"dpos_voter_reward_ratio"`     // 投票者奖励比例
-	DPoSProposalVotePeriod   string `yaml:"dpos_proposal_vote_period"`   // 提案表决周期（时间字符串，如"2m", "24h"）
-	DPoSProposalValidPeriod  string `yaml:"dpos_proposal_valid_period"`  // 提案有效期（时间字符串，如"1d", "7d"）
-	DPoSSRThreshold          string `yaml:"dpos_SR_threshold"`           // SR候选人保证金阈值
-	BlockTimeSeconds         uint64 `yaml:"block_time_s"`                // 区块间隔时间（秒）
+	DPoSEpochDuration       string `yaml:"dpos_epoch_duration"`
+	DPoSRewardDistribution  string `yaml:"dpos_reward_distribution"`   // 奖励分发地址
+	DPoSRewardAmount        string `yaml:"dpos_reward_amount"`         // 每个epoch奖励金额
+	DPoSProposalVotePeriod  string `yaml:"dpos_proposal_vote_period"`  // 提案表决周期（时间字符串，如"2m", "24h"）
+	DPoSProposalValidPeriod string `yaml:"dpos_proposal_valid_period"` // 提案有效期（时间字符串，如"1d", "7d"）
+	DPoSSRThreshold         string `yaml:"dpos_SR_threshold"`          // SR候选人保证金阈值
+	BlockTimeSeconds        uint64 `yaml:"block_time_s"`               // 区块间隔时间（秒）
+
+	// 🆕 新增：DPoS佣金配置
+	DPoSCommissionRatio     uint64 `yaml:"dpos_commission_ratio"`
+	DPoSCommissionEffective string `yaml:"dpos_commission_effective"`
 
 	// 🆕 冻结相关配置
-	DPoSMinFreezePeriod    uint64 `yaml:"dpos_min_freeze_period"`       // 最小冻结期（秒）
+	DPoSMinFreezePeriod    uint64 `yaml:"dpos_min_freeze_period"`    // 最小冻结期（秒）
 	DPoSUnfreezeLockPeriod uint64 `yaml:"dpos_unfreeze_lock_period"` // 解冻锁定期（秒）
 }
 

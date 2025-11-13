@@ -39,6 +39,110 @@ var (
 	ErrBusinessInvalid = errors.New("business invalid")
 )
 
+func parseDurationAllowDays(input string) (time.Duration, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return 0, fmt.Errorf("empty duration string")
+	}
+
+	if duration, err := time.ParseDuration(input); err == nil {
+		return duration, nil
+	}
+
+	// 支持形如 "21d" 的天单位（可带小数）
+	if strings.ContainsAny(input, "dD") {
+		lower := strings.ToLower(input)
+		var value float64
+		var suffix string
+		if _, err := fmt.Sscanf(lower, "%f%s", &value, &suffix); err == nil && strings.HasPrefix(suffix, "d") {
+			remaining := strings.TrimPrefix(suffix, "d")
+			hours := value * 24
+			normalized := fmt.Sprintf("%.0fh%s", hours, remaining)
+			return time.ParseDuration(normalized)
+		}
+		// 简单处理：去掉最后的 d
+		if strings.HasSuffix(lower, "d") {
+			numberPart := strings.TrimSuffix(lower, "d")
+			if numberPart == "" {
+				return 0, fmt.Errorf("invalid duration: %s", input)
+			}
+			if v, err := strconv.ParseFloat(numberPart, 64); err == nil {
+				hours := v * 24
+				return time.ParseDuration(fmt.Sprintf("%.0fh", hours))
+			}
+			return 0, fmt.Errorf("invalid duration: %s", input)
+		}
+	}
+
+	return 0, fmt.Errorf("unsupported duration format: %s", input)
+}
+
+func toUint64(value interface{}) (uint64, bool) {
+	switch v := value.(type) {
+	case uint64:
+		return v, true
+	case int:
+		if v < 0 {
+			return 0, false
+		}
+		return uint64(v), true
+	case int64:
+		if v < 0 {
+			return 0, false
+		}
+		return uint64(v), true
+	case float64:
+		if v < 0 {
+			return 0, false
+		}
+		return uint64(v), true
+	case string:
+		parsed, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
+}
+
+func (d *DPoS) applyCommissionDefaults(info *DelegateInfo) {
+	if info == nil || d == nil || d.config == nil {
+		return
+	}
+	if info.CommissionRate == 0 {
+		info.CommissionRate = d.config.CommissionRateDefault
+	}
+}
+
+func (d *DPoS) populateCommissionFields(delegate types.Address, info *DelegateInfo) {
+	if info == nil || d == nil || d.state == nil || d.state.StakeStore == nil {
+		return
+	}
+
+	existing, err := d.state.StakeStore.GetDelegateInfo(delegate)
+	if err != nil {
+		d.logger.Debug("⚠️ 获取受托人佣金信息失败，使用默认值",
+			"delegate", delegate.String(),
+			"error", err)
+		d.applyCommissionDefaults(info)
+		return
+	}
+
+	if existing != nil {
+		if existing.CommissionRate != 0 {
+			info.CommissionRate = existing.CommissionRate
+		} else {
+			d.applyCommissionDefaults(info)
+		}
+		info.PendingCommissionRate = existing.PendingCommissionRate
+		info.CommissionUpdateTime = existing.CommissionUpdateTime
+	} else {
+		d.applyCommissionDefaults(info)
+	}
+}
+
 // RegisterDPoSInstance 注册DPoS实例
 func RegisterDPoSInstance(key string, dpos *DPoS) {
 	dposMutex.Lock()
@@ -159,17 +263,19 @@ type DPoSConfig struct {
 
 	ValidatorsCount uint64 `json:"validatorsCount" yaml:"validatorsCount"`
 
-	EpochDuration        time.Duration `json:"epochDuration" yaml:"epochDuration"`
-	RewardAccount        types.Address `json:"rewardAccount" yaml:"rewardAccount"`
-	RewardAmount         *big.Int      `json:"rewardAmount" yaml:"rewardAmount"`
-	ValidatorRewardRatio uint64        `json:"validatorRewardRatio" yaml:"validatorRewardRatio"`
-	VoterRewardRatio     uint64        `json:"voterRewardRatio" yaml:"voterRewardRatio"`
-	ProposalVotePeriod   time.Duration `json:"proposalVotePeriod" yaml:"dpos_proposal_vote_period"`   // 提案表决周期
-	ProposalValidPeriod  time.Duration `json:"proposalValidPeriod" yaml:"dpos_proposal_valid_period"` // 提案有效期
+	EpochDuration       time.Duration `json:"epochDuration" yaml:"epochDuration"`
+	RewardAccount       types.Address `json:"rewardAccount" yaml:"rewardAccount"`
+	RewardAmount        *big.Int      `json:"rewardAmount" yaml:"rewardAmount"`
+	ProposalVotePeriod  time.Duration `json:"proposalVotePeriod" yaml:"dpos_proposal_vote_period"`   // 提案表决周期
+	ProposalValidPeriod time.Duration `json:"proposalValidPeriod" yaml:"dpos_proposal_valid_period"` // 提案有效期
 
 	// 🆕 冻结相关配置
 	MinFreezePeriod    uint64 `json:"min_freeze_period" yaml:"dpos_min_freeze_period"`       // 最小冻结期（秒）
 	UnfreezeLockPeriod uint64 `json:"unfreeze_lock_period" yaml:"dpos_unfreeze_lock_period"` // 解冻锁定期（秒）
+
+	// 🆕 新增：佣金默认配置
+	CommissionRateDefault     uint64        // 默认佣金率（基点）
+	CommissionEffectivePeriod time.Duration // 佣金率修改的延迟生效周期
 
 	// 注意：保证金阈值统一使用 MinVotingPower（dpos_delegate_threshold），不再使用 SRThreshold
 }
@@ -659,6 +765,15 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		config:  &DPoSConfig{}, // 🆕 初始化config结构体
 	}
 
+	getConfigValue := func(keys ...string) (interface{}, bool) {
+		for _, key := range keys {
+			if val, ok := params.Config.Config[key]; ok {
+				return val, true
+			}
+		}
+		return nil, false
+	}
+
 	// 🆕 新增：直接使用server层已解析的配置（避免重复解析）
 	logger.Info("🔍 开始解析DPoS经济系统配置", "configKeys", len(params.Config.Config))
 
@@ -713,6 +828,41 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		}
 	} else {
 		logger.Warn("👥 未找到 dposValidatorsCount 配置")
+	}
+
+	// 🆕 解析默认佣金率
+	if commissionValue, exists := getConfigValue("dposCommissionRatio", "dpos_commission_ratio"); exists {
+		if ratio, ok := toUint64(commissionValue); ok && ratio > 0 {
+			vcity_dpos.config.CommissionRateDefault = ratio
+			logger.Info("💼 设置默认佣金率", "ratio", ratio)
+		} else {
+			logger.Warn("💼 dposCommissionRatio 类型或数值无效", "value", commissionValue)
+		}
+	}
+
+	// 🆕 解析佣金生效周期
+	if effectiveValue, exists := getConfigValue("commissionEffectivePeriod", "dpos_commission_effective"); exists {
+		switch val := effectiveValue.(type) {
+		case time.Duration:
+			if val > 0 {
+				vcity_dpos.config.CommissionEffectivePeriod = val
+				logger.Info("⏳ 设置佣金生效周期（Duration）", "duration", val.String())
+			}
+		case string:
+			if duration, err := parseDurationAllowDays(val); err == nil {
+				vcity_dpos.config.CommissionEffectivePeriod = duration
+				logger.Info("⏳ 设置佣金生效周期（String）", "raw", val, "duration", duration.String())
+			} else {
+				logger.Warn("⏳ 佣金生效周期字符串解析失败", "value", val, "error", err)
+			}
+		case float64:
+			if val > 0 {
+				vcity_dpos.config.CommissionEffectivePeriod = time.Duration(val) * time.Second
+				logger.Info("⏳ 设置佣金生效周期（float秒）", "seconds", val)
+			}
+		default:
+			logger.Warn("⏳ 佣金生效周期类型不支持", "type", fmt.Sprintf("%T", effectiveValue))
+		}
 	}
 
 	// 🆕 解析备用验证者数量
@@ -775,30 +925,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		}
 	} else {
 		logger.Warn("💰 未找到rewardAmount配置")
-	}
-
-	if validatorRatio, exists := params.Config.Config["validatorRewardRatio"]; exists {
-		logger.Info("🔍 找到validatorRewardRatio配置", "type", fmt.Sprintf("%T", validatorRatio), "value", validatorRatio)
-		if ratio, ok := validatorRatio.(uint64); ok {
-			vcity_dpos.config.ValidatorRewardRatio = ratio
-			// logger.Info("📊 使用server层解析的验证者奖励比例", "ratio", ratio)
-		} else {
-			logger.Warn("📊 validatorRewardRatio类型断言失败", "type", fmt.Sprintf("%T", validatorRatio))
-		}
-	} else {
-		logger.Warn("📊 未找到validatorRewardRatio配置")
-	}
-
-	if voterRatio, exists := params.Config.Config["voterRewardRatio"]; exists {
-		logger.Info("🔍 找到voterRewardRatio配置", "type", fmt.Sprintf("%T", voterRatio), "value", voterRatio)
-		if ratio, ok := voterRatio.(uint64); ok {
-			vcity_dpos.config.VoterRewardRatio = ratio
-			// logger.Info("📊 使用server层解析的投票者奖励比例", "ratio", ratio)
-		} else {
-			logger.Warn("📊 voterRewardRatio类型断言失败", "type", fmt.Sprintf("%T", voterRatio))
-		}
-	} else {
-		logger.Warn("📊 未找到voterRewardRatio配置")
 	}
 
 	// 🆕 解析提案表决周期配置
@@ -980,14 +1106,15 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		vcity_dpos.config.RewardAmount, _ = new(big.Int).SetString("1000000000000000000000", 10) // 1000 VCITY
 	}
 
-	if vcity_dpos.config.ValidatorRewardRatio == 0 {
-		logger.Warn("⚠️ validatorRewardRatio为0，设置默认值70%")
-		vcity_dpos.config.ValidatorRewardRatio = 70
+	if vcity_dpos.config.CommissionRateDefault == 0 {
+		logger.Warn("💼 commissionRateDefault为0，设置默认值10% (1000 基点)")
+		vcity_dpos.config.CommissionRateDefault = 1000
 	}
 
-	if vcity_dpos.config.VoterRewardRatio == 0 {
-		logger.Warn("⚠️ voterRewardRatio为0，设置默认值30%")
-		vcity_dpos.config.VoterRewardRatio = 30
+	if vcity_dpos.config.CommissionEffectivePeriod == 0 {
+		defaultCommissionEffective := 21 * 24 * time.Hour
+		logger.Warn("⏳ commissionEffectivePeriod为0，设置默认值21天", "duration", defaultCommissionEffective.String())
+		vcity_dpos.config.CommissionEffectivePeriod = defaultCommissionEffective
 	}
 
 	if vcity_dpos.config.ProposalVotePeriod == 0 {
@@ -1099,6 +1226,10 @@ func (d *DPoS) Initialize() error {
 		} else {
 			d.state = state
 			d.logger.Info("✅ State store initialized successfully", "path", statePath)
+
+			if d.rewardDistributor != nil {
+				d.rewardDistributor.stakeStore = d.state.StakeStore
+			}
 		}
 	} else {
 		d.logger.Warn("Data directory not set, state store will not be initialized")
@@ -1988,16 +2119,18 @@ func (d *DPoS) calculateReward(staker types.Address) *big.Int {
 // DefaultDPoSConfig 返回默认配置
 func DefaultDPoSConfig() *DPoSConfig {
 	return &DPoSConfig{
-		DelegateCount:       21,
-		BlockTime:           common.Duration{Duration: 15 * time.Second},
-		RoundTime:           common.Duration{Duration: 30 * time.Second},
-		MinVotingPower:      big.NewInt(1000000000000000000), // 1 token
-		VoteLockTime:        86400,                           // 24 hours
-		RewardRatio:         100,                             // 1%
-		ProposalVotePeriod:  24 * time.Hour,                  // 默认提案表决周期 24小时
-		ProposalValidPeriod: 7 * 24 * time.Hour,              // 默认提案有效期 7天
-		MinFreezePeriod:     604800,                          // 默认最小冻结期 7天（秒）
-		UnfreezeLockPeriod:  1209600,                         // 默认解冻锁定期 14天（秒）
+		DelegateCount:             21,
+		BlockTime:                 common.Duration{Duration: 15 * time.Second},
+		RoundTime:                 common.Duration{Duration: 30 * time.Second},
+		MinVotingPower:            big.NewInt(1000000000000000000), // 1 token
+		VoteLockTime:              86400,                           // 24 hours
+		RewardRatio:               100,                             // 1%
+		ProposalVotePeriod:        24 * time.Hour,                  // 默认提案表决周期 24小时
+		ProposalValidPeriod:       7 * 24 * time.Hour,              // 默认提案有效期 7天
+		MinFreezePeriod:           604800,                          // 默认最小冻结期 7天（秒）
+		UnfreezeLockPeriod:        1209600,                         // 默认解冻锁定期 14天（秒）
+		CommissionRateDefault:     1000,                            // 默认佣金率 10%
+		CommissionEffectivePeriod: 21 * 24 * time.Hour,             // 默认佣金生效周期 21天
 	}
 }
 
@@ -2023,28 +2156,21 @@ func (c *DPoSConfig) Validate() error {
 	if c.RewardAmount == nil || c.RewardAmount.Cmp(big.NewInt(0)) <= 0 {
 		return fmt.Errorf("reward_amount must be positive")
 	}
-	if c.ValidatorRewardRatio+c.VoterRewardRatio != 100 {
-		return fmt.Errorf("validator_reward_ratio + voter_reward_ratio must equal 100, got %d + %d",
-			c.ValidatorRewardRatio, c.VoterRewardRatio)
-	}
-
 	return nil
 }
 
 // GetConfigSummary 获取配置摘要
 func (c *DPoSConfig) GetConfigSummary() map[string]interface{} {
 	return map[string]interface{}{
-		"delegate_count":         c.DelegateCount,
-		"block_time":             c.BlockTime.String(),
-		"round_time":             c.RoundTime.String(),
-		"min_voting_power":       c.MinVotingPower.String(),
-		"vote_lock_time":         c.VoteLockTime,
-		"reward_ratio":           c.RewardRatio,
-		"epoch_duration":         c.EpochDuration.String(),
-		"reward_account":         c.RewardAccount.String(),
-		"reward_amount":          c.RewardAmount.String(),
-		"validator_reward_ratio": c.ValidatorRewardRatio,
-		"voter_reward_ratio":     c.VoterRewardRatio,
+		"delegate_count":   c.DelegateCount,
+		"block_time":       c.BlockTime.String(),
+		"round_time":       c.RoundTime.String(),
+		"min_voting_power": c.MinVotingPower.String(),
+		"vote_lock_time":   c.VoteLockTime,
+		"reward_ratio":     c.RewardRatio,
+		"epoch_duration":   c.EpochDuration.String(),
+		"reward_account":   c.RewardAccount.String(),
+		"reward_amount":    c.RewardAmount.String(),
 	}
 }
 
