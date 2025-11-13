@@ -151,29 +151,6 @@ func (d *DPoS) validateParameterValue(parameter string, value interface{}) error
 			return fmt.Errorf("value %d out of range [%d, %d]", val, minVal, maxVal)
 		}
 
-		// 🆕 冻结期参数交叉验证
-		if parameter == "unfreeze_lock_period" {
-			// 如果修改解冻锁定期，必须 >= 最小冻结期
-			minFreezePeriod, err := d.getCurrentParameterValue("min_freeze_period")
-			if err == nil {
-				if minFreezePeriodUint, ok := minFreezePeriod.(uint64); ok {
-					if val < minFreezePeriodUint {
-						return fmt.Errorf("unfreeze_lock_period (%d) must be >= min_freeze_period (%d)", val, minFreezePeriodUint)
-					}
-				}
-			}
-		} else if parameter == "min_freeze_period" {
-			// 如果修改最小冻结期，必须 <= 解冻锁定期
-			unfreezeLockPeriod, err := d.getCurrentParameterValue("unfreeze_lock_period")
-			if err == nil {
-				if unfreezeLockPeriodUint, ok := unfreezeLockPeriod.(uint64); ok {
-					if val > unfreezeLockPeriodUint {
-						return fmt.Errorf("min_freeze_period (%d) must be <= unfreeze_lock_period (%d)", val, unfreezeLockPeriodUint)
-					}
-				}
-			}
-		}
-
 	case "string":
 		var val string
 		switch v := value.(type) {
