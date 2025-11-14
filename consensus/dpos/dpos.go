@@ -830,7 +830,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Warn("👥 未找到 dposValidatorsCount 配置")
 	}
 
-	// 🆕 解析默认佣金率
+	// 🆕 解析默认佣金率（从配置文件读取）
 	if commissionValue, exists := getConfigValue("dposCommissionRatio", "dpos_commission_ratio"); exists {
 		if ratio, ok := toUint64(commissionValue); ok && ratio > 0 {
 			vcity_dpos.config.CommissionRateDefault = ratio

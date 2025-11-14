@@ -73,8 +73,8 @@ type Config struct {
 	BlockTimeSeconds        uint64 `yaml:"block_time_s"`               // 区块间隔时间（秒）
 
 	// 🆕 新增：DPoS佣金配置
-	DPoSCommissionRatio     uint64 `yaml:"dpos_commission_ratio"`
-	DPoSCommissionEffective string `yaml:"dpos_commission_effective"`
+	DPoSCommissionRatio     uint64 `yaml:"dpos_commission_ratio"`     // 默认佣金率（基点），验证者未设置时使用
+	DPoSCommissionEffective string `yaml:"dpos_commission_effective"` // 佣金生效周期（如"21d"）
 
 	// 🆕 冻结相关配置
 	DPoSMinFreezePeriod    uint64 `yaml:"dpos_min_freeze_period"`    // 最小冻结期（秒）

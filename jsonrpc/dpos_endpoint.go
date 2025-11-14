@@ -4888,6 +4888,33 @@ func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (
 		}, nil
 	}
 
+	// 🆕 备用方案：如果 store 返回 nil，尝试从 DPoS engine 或全局注册实例获取
+	if dposState == nil {
+		// 尝试从当前共识引擎获取
+		if engine := d.getDPoSEngine(); engine != nil {
+			if provider, ok := engine.(interface {
+				GetState() *dpos.State
+			}); ok {
+				dposState = provider.GetState()
+			}
+		}
+
+		// 如果仍然为空，遍历全局注册的 DPoS 实例
+		if dposState == nil {
+			for instanceKey, instance := range dpos.GetAllDPoSInstances() {
+				if instance == nil {
+					continue
+				}
+				if candidate := instance.GetState(); candidate != nil {
+					d.logger.Debug("Using state from registered DPoS instance for commission query",
+						"instanceKey", instanceKey)
+					dposState = candidate
+					break
+				}
+			}
+		}
+	}
+
 	if dposState == nil || dposState.StakeStore == nil {
 		return map[string]interface{}{
 			"validator": validatorAddress,
@@ -4911,6 +4938,7 @@ func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (
 		}, nil
 	}
 
+	// 🆕 从 ParameterStore 读取默认佣金率，如果不存在则使用硬编码默认值 1000 (10%)
 	defaultCommission := uint64(1000)
 	if dposState.ParameterStore != nil {
 		if value, err := dposState.ParameterStore.GetParameterValue("dpos_commission_ratio"); err == nil {
@@ -4918,6 +4946,7 @@ func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (
 				defaultCommission = parsed
 			}
 		} else if value, err := dposState.ParameterStore.GetParameterValue("dpos_commission_radio"); err == nil {
+			// 兼容拼写错误
 			if parsed, ok := toUint64(value); ok && parsed > 0 {
 				defaultCommission = parsed
 			}

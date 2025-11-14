@@ -143,7 +143,7 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 	// 创建DPoS引擎配置
 	commissionRatio := s.config.DPoSCommissionRatio
 	if commissionRatio == 0 {
-		commissionRatio = 1000
+		commissionRatio = 1000 // 如果配置为0，使用默认值 10%
 	}
 
 	engineConfig := map[string]interface{}{

@@ -62,7 +62,7 @@ type Config struct {
 	BlockTimeSeconds        uint64 `json:"block_time_s" yaml:"block_time_s"`                             // 区块间隔时间（秒）
 
 	// 🆕 新增：DPoS佣金配置
-	DPoSCommissionRatio     uint64 `json:"dpos_commission_ratio" yaml:"dpos_commission_ratio"`         // 默认佣金率（基点）
+	DPoSCommissionRatio     uint64 `json:"dpos_commission_ratio" yaml:"dpos_commission_ratio"`         // 默认佣金率（基点），验证者未设置时使用
 	DPoSCommissionEffective string `json:"dpos_commission_effective" yaml:"dpos_commission_effective"` // 佣金生效周期（如"21d"）
 
 	// 🆕 冻结相关配置
@@ -181,7 +181,7 @@ func DefaultConfig() *Config {
 		DPoSRewardDistribution:  "",                       // 奖励分发地址，默认空，需要配置
 		DPoSRewardAmount:        "1000000000000000000000", // 默认1000 VCITY
 		BlockTimeSeconds:        3,                        // 默认3秒一个区块
-		DPoSCommissionRatio:     1000,                     // 默认佣金 10%
+		DPoSCommissionRatio:     1000,                     // 默认佣金 10%（验证者未设置时使用）
 		DPoSCommissionEffective: "21d",                    // 默认21天生效
 	}
 }
