@@ -39,8 +39,6 @@ func NewBlockScheduler(
 	consensusSwitchHeight uint64,
 	logger hclog.Logger,
 ) *BlockScheduler {
-	// ⚠️ 关键修复：使用共识切换高度对应区块的时间戳作为genesisTime
-	// 确保所有节点的genesisTime一致，避免slot计算不同导致分叉
 	var genesisTime time.Time
 	if blockchain == nil {
 		logger.Error("❌ 区块链实例不可用，无法初始化BlockScheduler")
@@ -53,17 +51,23 @@ func NewBlockScheduler(
 		os.Exit(1)
 	}
 
-	switchHeader, ok := blockchain.GetHeaderByNumber(consensusSwitchHeight)
-	if !ok || switchHeader == nil {
-		logger.Error("❌ 无法获取共识切换高度对应的区块头", "consensusSwitchHeight", consensusSwitchHeight)
+	// 使用父区块（consensusSwitchHeight - 1）的时间戳作为genesisTime
+	parentHeight := consensusSwitchHeight - 1
+	parentHeader, ok := blockchain.GetHeaderByNumber(parentHeight)
+	if !ok || parentHeader == nil {
+		logger.Error("❌ 无法获取创世时间-共识切换高度父区块的区块头的时间戳作为genesisTime",
+			"consensusSwitchHeight", consensusSwitchHeight,
+			"parentHeight", parentHeight)
 		os.Exit(1)
+	} else {
+		// 使用父区块的时间戳作为genesisTime
+		genesisTime = time.Unix(int64(parentHeader.Timestamp), 0)
+		logger.Info("✅ 成功获取创世时间-使用共识切换高度父区块时间戳作为genesisTime",
+			"consensusSwitchHeight", consensusSwitchHeight,
+			"parentHeight", parentHeight,
+			"genesisTime", genesisTime.Format("2006-01-02 15:04:05.000"),
+			"parentBlockTimestamp", parentHeader.Timestamp)
 	}
-
-	genesisTime = time.Unix(int64(switchHeader.Timestamp), 0)
-	logger.Info("✅ 使用共识切换高度区块时间戳作为genesisTime",
-		"consensusSwitchHeight", consensusSwitchHeight,
-		"genesisTime", genesisTime.Format("2006-01-02 15:04:05.000"),
-		"blockTimestamp", switchHeader.Timestamp)
 
 	return &BlockScheduler{
 		blockWindow:           blockWindow,
@@ -244,9 +248,9 @@ func (r *dposRuntime) getValidatorsFromCurrentBlockExtraData(currentBlock *types
 	// 从当前区块的ExtraData获取验证者列表
 	// 这会应用当前区块中的验证者变化（包括投票交易）
 	validators, err := currentExtra.getValidatorsFromExtraData(
-		currentBlock,  // 当前区块（区块N）
-		parent,        // 父区块（区块N-1）
-		nil,           // parents array
+		currentBlock, // 当前区块（区块N）
+		parent,       // 父区块（区块N-1）
+		nil,          // parents array
 		r.config.dposBackend,
 		r.logger,
 	)
