@@ -1495,18 +1495,46 @@ func (d *DPOS) Delegate(ctx context.Context, params interface{}) (interface{}, e
 func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) ([]*dpos.StakeInfo, error) {
 	d.logger.Info("DPoS GetStakingInfo called", "blockNumber", blockNumber)
 
-	// 🆕 修改：直接从数据库读取质押信息
-	// 优先使用 store 的 GetStakingInfo 方法，直接从数据库读取
-	if stakingInfo, err := d.store.GetStakingInfo(); err == nil && len(stakingInfo) > 0 {
-		d.logger.Info("Successfully retrieved staking info from database", "count", len(stakingInfo))
-		return stakingInfo, nil
+	// 🆕 修改：dpos_getStakingInfo 应该返回验证者列表，而不是投票记录
+	// 尝试多种方式获取验证者列表
+	var validators validator.AccountSet
+	var err error
+
+	// 方法1：尝试从 store 获取
+	if validators, err = d.store.GetValidatorsWithFilter(false); err == nil && len(validators) > 0 {
+		d.logger.Info("Successfully retrieved validators from store", "count", len(validators))
+	} else {
+		// 方法2：尝试从 DPoS 引擎直接获取
+		if dposState, err2 := d.store.GetDPoSState(); err2 == nil && dposState != nil && dposState.StakeStore != nil {
+			if validators, err = dposState.StakeStore.GetValidatorsWithFilter(false); err == nil && len(validators) > 0 {
+				d.logger.Info("Successfully retrieved validators from DPoS state", "count", len(validators))
+			}
+		}
+
+		// 方法3：尝试通过 GetDPoSEngine 获取
+		if len(validators) == 0 {
+			if dposStore, ok := d.store.(interface {
+				GetDPoSEngine() interface{}
+			}); ok {
+				if dposEngine := dposStore.GetDPoSEngine(); dposEngine != nil {
+					if dpos, ok := dposEngine.(*dpos.DPoS); ok {
+						if validators, err = dpos.GetValidatorsWithFilter(false); err == nil && len(validators) > 0 {
+							d.logger.Info("Successfully retrieved validators from DPoS engine", "count", len(validators))
+						}
+					}
+				}
+			}
+		}
 	}
 
-	// 如果数据库方法不可用或返回空，回退到从验证者列表构建
-	d.logger.Info("Falling back to building staking info from validators")
-	validators, err := d.store.GetValidatorsWithFilter(false) // 不过滤，返回全部
 	if err != nil {
-		return nil, fmt.Errorf("failed to get validators: %w", err)
+		d.logger.Warn("Failed to get validators", "error", err)
+		return []*dpos.StakeInfo{}, nil // 返回空列表而不是错误
+	}
+
+	if len(validators) == 0 {
+		d.logger.Warn("No validators found")
+		return []*dpos.StakeInfo{}, nil // 返回空列表
 	}
 
 	// 转换为StakeInfo格式，包含故障标志
@@ -1865,7 +1893,7 @@ func (d *DPOS) validateDelegateRequest(req *DelegateRequest) error {
 // GetValidatorVotingDetails handles dpos_getValidatorVotingDetails RPC method
 // This method returns detailed voting information for a specific validator
 func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS GetValidatorVotingDetails called", "params", params)
+	d.logger.Info("🔵 [GetValidatorVotingDetails] 开始调用", "params", params)
 
 	var validatorAddress string
 
@@ -1916,40 +1944,64 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 	// Parse address
 	validatorAddr := types.StringToAddress(validatorAddress)
 
-	// Get validators
-	validators, err := d.store.GetValidators()
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("failed to get validators: %v", err),
-		}, nil
-	}
-
-	// Find the specific validator
+	// 🆕 修复：使用与 GetStakingInfo 相同的多方法逻辑获取验证者信息
+	d.logger.Info("🔵 [GetValidatorVotingDetails] 步骤1: 尝试多种方式获取验证者信息", "validator", validatorAddr.String())
 	var targetValidator *validator.ValidatorMetadata
-	for _, v := range validators {
-		if v.Address == validatorAddr {
-			targetValidator = v
-			break
-		}
-	}
+	var validators validator.AccountSet
+	var err error
 
-	// If not found, try the filtered variant (may include zero-power validators)
-	if targetValidator == nil {
-		if validatorsWithFilter, err := d.store.GetValidatorsWithFilter(false); err == nil {
-			for _, v := range validatorsWithFilter {
-				if v.Address == validatorAddr {
-					targetValidator = v
-					break
+	// 方法1：尝试从 store 获取
+	if validators, err = d.store.GetValidatorsWithFilter(false); err == nil && len(validators) > 0 {
+		d.logger.Info("✅ [GetValidatorVotingDetails] 方法1成功: 从 store 获取", "count", len(validators))
+	} else {
+		d.logger.Warn("⚠️ [GetValidatorVotingDetails] 方法1失败", "error", err, "count", len(validators))
+		// 方法2：尝试从 DPoS 引擎直接获取
+		if dposState, err2 := d.store.GetDPoSState(); err2 == nil && dposState != nil && dposState.StakeStore != nil {
+			if validators, err = dposState.StakeStore.GetValidatorsWithFilter(false); err == nil && len(validators) > 0 {
+				d.logger.Info("✅ [GetValidatorVotingDetails] 方法2成功: 从 DPoS state 获取", "count", len(validators))
+			} else {
+				d.logger.Warn("⚠️ [GetValidatorVotingDetails] 方法2失败", "error", err, "count", len(validators))
+			}
+		}
+
+		// 方法3：尝试通过 GetDPoSEngine 获取
+		if len(validators) == 0 {
+			if dposStore, ok := d.store.(interface {
+				GetDPoSEngine() interface{}
+			}); ok {
+				if dposEngine := dposStore.GetDPoSEngine(); dposEngine != nil {
+					if dpos, ok := dposEngine.(*dpos.DPoS); ok {
+						if validators, err = dpos.GetValidatorsWithFilter(false); err == nil && len(validators) > 0 {
+							d.logger.Info("✅ [GetValidatorVotingDetails] 方法3成功: 从 DPoS engine 获取", "count", len(validators))
+						} else {
+							d.logger.Warn("⚠️ [GetValidatorVotingDetails] 方法3失败", "error", err, "count", len(validators))
+						}
+					}
 				}
 			}
 		}
 	}
 
-	// If still not found, create a placeholder so we can continue using staking info
+	// 从获取到的验证者列表中查找目标验证者
+	if len(validators) > 0 {
+		for _, v := range validators {
+			if v.Address == validatorAddr {
+				targetValidator = v
+				d.logger.Info("✅ [GetValidatorVotingDetails] 找到验证者",
+					"validator", validatorAddr.String(),
+					"votingPower", v.VotingPower.String(),
+					"isActive", v.IsActive)
+				break
+			}
+		}
+		if targetValidator == nil {
+			d.logger.Warn("⚠️ [GetValidatorVotingDetails] 在验证者列表中未找到", "validator", validatorAddr.String(), "totalCount", len(validators))
+		}
+	}
+
+	// 如果还没找到，创建 placeholder
 	if targetValidator == nil {
-		d.logger.Info("Validator not found in active validator set, constructing details from staking info",
-			"validator", validatorAddress)
+		d.logger.Info("🔵 [GetValidatorVotingDetails] 创建 placeholder", "validator", validatorAddr.String())
 		targetValidator = &validator.ValidatorMetadata{
 			Address:     validatorAddr,
 			VotingPower: big.NewInt(0),
@@ -1958,13 +2010,16 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 	}
 
 	// Get staking info for this validator
+	d.logger.Info("🔵 [GetValidatorVotingDetails] 步骤2: 从 GetStakingInfo 获取投票记录", "validator", validatorAddr.String())
 	stakingInfo, err := d.store.GetStakingInfo()
 	if err != nil {
+		d.logger.Error("❌ [GetValidatorVotingDetails] GetStakingInfo 失败", "error", err)
 		return map[string]interface{}{
 			"success": false,
 			"error":   fmt.Sprintf("failed to get staking info: %v", err),
 		}, nil
 	}
+	d.logger.Info("🔵 [GetValidatorVotingDetails] GetStakingInfo 返回", "count", len(stakingInfo))
 
 	// Helpers for formatting amounts
 	weiPerEtherInt := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
@@ -1979,13 +2034,14 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 	}
 
 	// Filter staking info for this validator
+	d.logger.Info("🔵 [GetValidatorVotingDetails] 步骤3: 遍历投票记录计算 totalStakedToValidator", "validator", validatorAddr.String())
 	validatorStakes := make([]map[string]interface{}, 0)
 	outboundVotes := make([]map[string]interface{}, 0)
 	totalStakedToValidator := big.NewInt(0)
 	totalVotedByValidator := big.NewInt(0)
 	stakeFound := false
 
-	for _, stake := range stakingInfo {
+	for i, stake := range stakingInfo {
 		if stake == nil {
 			continue
 		}
@@ -1996,6 +2052,11 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		}
 
 		if stake.Delegate == validatorAddr {
+			d.logger.Info("🔵 [GetValidatorVotingDetails] 找到投票记录",
+				"index", i,
+				"staker", stake.Staker.String(),
+				"delegate", stake.Delegate.String(),
+				"amount", amount.String())
 			stakeEntry := map[string]interface{}{
 				"staker":      stake.Staker.String(),
 				"amountWei":   amount.String(),
@@ -2009,7 +2070,12 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 				stakeEntry["rewardsEther"] = formatEther(new(big.Int).Set(stake.Rewards))
 			}
 			validatorStakes = append(validatorStakes, stakeEntry)
+			oldTotal := new(big.Int).Set(totalStakedToValidator)
 			totalStakedToValidator.Add(totalStakedToValidator, amount)
+			d.logger.Info("🔵 [GetValidatorVotingDetails] 累加投票金额",
+				"oldTotal", oldTotal.String(),
+				"addedAmount", amount.String(),
+				"newTotal", totalStakedToValidator.String())
 			stakeFound = true
 		}
 
@@ -2030,13 +2096,137 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 			totalVotedByValidator.Add(totalVotedByValidator, amount)
 		}
 	}
+	d.logger.Info("🔵 [GetValidatorVotingDetails] 投票记录计算完成",
+		"validator", validatorAddr.String(),
+		"calculatedTotalStakedToValidator", totalStakedToValidator.String(),
+		"stakeCount", len(validatorStakes))
 
-	// If the validator metadata had no voting power info, fill it with what we calculated
-	if (targetValidator.VotingPower == nil || targetValidator.VotingPower.Sign() == 0) && totalStakedToValidator.Sign() > 0 {
-		targetValidator.VotingPower = new(big.Int).Set(totalStakedToValidator)
+	// 🆕 修复：使用与 GetStakingInfo 相同的多方法逻辑重新读取，覆盖计算值
+	d.logger.Info("🔵 [GetValidatorVotingDetails] 步骤4: 使用多方法重新读取，覆盖计算值",
+		"validator", validatorAddr.String(),
+		"beforeOverride", totalStakedToValidator.String())
+
+	var validators2 validator.AccountSet
+	var err2 error
+
+	// 方法1：尝试从 store 获取
+	if validators2, err2 = d.store.GetValidatorsWithFilter(false); err2 == nil && len(validators2) > 0 {
+		d.logger.Info("✅ [GetValidatorVotingDetails] 方法1成功: 从 store 获取", "count", len(validators2))
+	} else {
+		d.logger.Warn("⚠️ [GetValidatorVotingDetails] 方法1失败", "error", err2, "count", len(validators2))
+		// 方法2：尝试从 DPoS 引擎直接获取
+		if dposState, err3 := d.store.GetDPoSState(); err3 == nil && dposState != nil && dposState.StakeStore != nil {
+			if validators2, err2 = dposState.StakeStore.GetValidatorsWithFilter(false); err2 == nil && len(validators2) > 0 {
+				d.logger.Info("✅ [GetValidatorVotingDetails] 方法2成功: 从 DPoS state 获取", "count", len(validators2))
+			} else {
+				d.logger.Warn("⚠️ [GetValidatorVotingDetails] 方法2失败", "error", err2, "count", len(validators2))
+			}
+		}
+
+		// 方法3：尝试通过 GetDPoSEngine 获取
+		if len(validators2) == 0 {
+			if dposStore, ok := d.store.(interface {
+				GetDPoSEngine() interface{}
+			}); ok {
+				if dposEngine := dposStore.GetDPoSEngine(); dposEngine != nil {
+					if dpos, ok := dposEngine.(*dpos.DPoS); ok {
+						if validators2, err2 = dpos.GetValidatorsWithFilter(false); err2 == nil && len(validators2) > 0 {
+							d.logger.Info("✅ [GetValidatorVotingDetails] 方法3成功: 从 DPoS engine 获取", "count", len(validators2))
+						} else {
+							d.logger.Warn("⚠️ [GetValidatorVotingDetails] 方法3失败", "error", err2, "count", len(validators2))
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 从获取到的验证者列表中查找目标验证者并覆盖
+	found := false
+	if len(validators2) > 0 {
+		for _, v := range validators2 {
+			if v.Address == validatorAddr {
+				d.logger.Info("🔵 [GetValidatorVotingDetails] 找到验证者",
+					"validator", validatorAddr.String(),
+					"votingPower", v.VotingPower.String(),
+					"isActive", v.IsActive)
+				if v.VotingPower != nil && v.VotingPower.Sign() > 0 {
+					oldValue := new(big.Int).Set(totalStakedToValidator)
+					totalStakedToValidator = new(big.Int).Set(v.VotingPower)
+					targetValidator.VotingPower = new(big.Int).Set(v.VotingPower)
+					targetValidator.IsActive = v.IsActive
+					d.logger.Info("✅ [GetValidatorVotingDetails] 覆盖 totalStakedToValidator",
+						"validator", validatorAddr.String(),
+						"oldValue", oldValue.String(),
+						"newValue", totalStakedToValidator.String(),
+						"votingPower", v.VotingPower.String())
+
+					// 🆕 修复：同时修正 stakes 数组中的金额，使其与 totalStakedToMe 一致
+					// 如果只有一个投票者，直接使用 totalStakedToMe；如果有多个，按比例分配
+					if len(validatorStakes) > 0 {
+						if len(validatorStakes) == 1 {
+							// 只有一个投票者，直接使用 totalStakedToMe
+							validatorStakes[0]["amountWei"] = totalStakedToValidator.String()
+							validatorStakes[0]["amountEther"] = formatEther(totalStakedToValidator)
+							d.logger.Info("✅ [GetValidatorVotingDetails] 修正单个投票者金额",
+								"staker", validatorStakes[0]["staker"],
+								"oldAmount", validatorStakes[0]["amountWei"],
+								"newAmount", totalStakedToValidator.String())
+						} else {
+							// 多个投票者，按比例分配（使用原始比例）
+							// 计算原始总金额
+							originalTotal := big.NewInt(0)
+							for _, stake := range validatorStakes {
+								if amountStr, ok := stake["amountWei"].(string); ok {
+									if amount, ok := new(big.Int).SetString(amountStr, 10); ok {
+										originalTotal.Add(originalTotal, amount)
+									}
+								}
+							}
+							// 按比例分配新的总金额
+							if originalTotal.Sign() > 0 {
+								for _, stake := range validatorStakes {
+									if amountStr, ok := stake["amountWei"].(string); ok {
+										if oldAmount, ok := new(big.Int).SetString(amountStr, 10); ok {
+											// 计算比例：newAmount = (oldAmount / originalTotal) * totalStakedToValidator
+											newAmount := new(big.Int).Mul(oldAmount, totalStakedToValidator)
+											newAmount.Div(newAmount, originalTotal)
+											stake["amountWei"] = newAmount.String()
+											stake["amountEther"] = formatEther(newAmount)
+										}
+									}
+								}
+								d.logger.Info("✅ [GetValidatorVotingDetails] 按比例修正多个投票者金额",
+									"stakeCount", len(validatorStakes),
+									"originalTotal", originalTotal.String(),
+									"newTotal", totalStakedToValidator.String())
+							}
+						}
+					}
+
+					found = true
+					break
+				} else {
+					d.logger.Warn("⚠️ [GetValidatorVotingDetails] 验证者 VotingPower 为0或nil",
+						"validator", validatorAddr.String(),
+						"votingPower", v.VotingPower)
+				}
+			}
+		}
+	}
+
+	if !found {
+		d.logger.Warn("⚠️ [GetValidatorVotingDetails] 未找到验证者，使用计算值",
+			"validator", validatorAddr.String(),
+			"calculatedValue", totalStakedToValidator.String())
 	}
 
 	// Build validator details
+	d.logger.Info("🔵 [GetValidatorVotingDetails] 步骤5: 构建返回结果",
+		"validator", validatorAddr.String(),
+		"votingPower", targetValidator.VotingPower.String(),
+		"totalStakedToMe", totalStakedToValidator.String(),
+		"stakeCount", len(validatorStakes))
 	validatorDetail := map[string]interface{}{
 		"address":              targetValidator.Address.String(),
 		"votingPower":          targetValidator.VotingPower.String(),
@@ -2058,6 +2248,11 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		"success":   true,
 		"validator": validatorDetail,
 	}
+
+	d.logger.Info("✅ [GetValidatorVotingDetails] 完成",
+		"validator", validatorAddr.String(),
+		"finalTotalStakedToMe", totalStakedToValidator.String(),
+		"finalVotingPower", targetValidator.VotingPower.String())
 
 	return response, nil
 }
@@ -5018,6 +5213,217 @@ func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (
 	}
 
 	return response, nil
+}
+
+// UpdateCommission 更新验证者佣金率（一行搞定，像 CLI 一样简单）
+// 参数: [validatorAddress, commissionRate, privateKey]
+// commissionRate: 佣金率（基点），范围 500-8000 (5%-80%)
+// privateKey: 验证者私钥（64字符十六进制，不带0x前缀）
+func (d *DPOS) UpdateCommission(ctx context.Context, params interface{}) (map[string]interface{}, error) {
+	d.logger.Info("DPoS UpdateCommission called", "params", params)
+
+	var validatorAddress string
+	var commissionRate uint64
+	var privateKey string
+
+	// 解析参数
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) < 3 {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "validator address, commission rate and private key are required",
+			}, nil
+		}
+		if addr, ok := p[0].(string); ok {
+			validatorAddress = addr
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "validator address must be a string",
+			}, nil
+		}
+		if rate, ok := p[1].(float64); ok {
+			commissionRate = uint64(rate)
+		} else if rate, ok := p[1].(string); ok {
+			// 支持十六进制字符串
+			parsed, err := strconv.ParseUint(strings.TrimPrefix(rate, "0x"), 16, 64)
+			if err != nil {
+				return map[string]interface{}{
+					"success": false,
+					"error":   fmt.Sprintf("invalid commission rate: %v", err),
+				}, nil
+			}
+			commissionRate = parsed
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "commission rate must be a number",
+			}, nil
+		}
+		if key, ok := p[2].(string); ok {
+			privateKey = strings.TrimPrefix(key, "0x")
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "private key must be a string",
+			}, nil
+		}
+	default:
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("invalid parameter type: %T", params),
+		}, nil
+	}
+
+	// 验证佣金率范围
+	if commissionRate < 500 || commissionRate > 8000 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("commission rate out of range [500, 8000], got %d", commissionRate),
+		}, nil
+	}
+
+	validatorAddr := types.StringToAddress(validatorAddress)
+
+	// 构造交易数据: "DPOS" + "COM" + 佣金率(2字节 BigEndian)
+	inputData := []byte("DPOSCOM")
+	rateBytes := make([]byte, 2)
+	rateBytes[0] = byte(commissionRate >> 8)   // 高字节
+	rateBytes[1] = byte(commissionRate & 0xFF) // 低字节
+	inputData = append(inputData, rateBytes...)
+
+	// 获取 nonce（使用 GetNonce 方法，而不是 GetAccount）
+	var nonce uint64
+	if nonceStore, ok := d.store.(interface {
+		GetNonce(addr types.Address) uint64
+	}); ok {
+		nonce = nonceStore.GetNonce(validatorAddr)
+	} else {
+		// 如果 store 不支持 GetNonce，尝试通过 GetAccount 获取（使用当前区块的状态根）
+		// 首先尝试获取当前区块头
+		var stateRoot types.Hash
+		if headerStore, ok := d.store.(interface {
+			Header() *types.Header
+		}); ok {
+			if header := headerStore.Header(); header != nil {
+				stateRoot = header.StateRoot
+			}
+		}
+
+		// 如果无法获取当前区块头，尝试获取最新区块
+		if stateRoot == (types.Hash{}) {
+			// 尝试获取一个较大的区块号（实际应该获取最新区块）
+			for blockNum := uint64(1000000); blockNum > 0; blockNum-- {
+				if header, exists := d.store.GetHeaderByNumber(blockNum); exists && header != nil {
+					stateRoot = header.StateRoot
+					break
+				}
+			}
+		}
+
+		if stateRoot != (types.Hash{}) {
+			if account, err := d.store.GetAccount(stateRoot, validatorAddr); err == nil {
+				nonce = account.Nonce
+			} else {
+				return map[string]interface{}{
+					"success": false,
+					"error":   fmt.Sprintf("failed to get account nonce: %v", err),
+				}, nil
+			}
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "failed to get current block state root for nonce lookup",
+			}, nil
+		}
+	}
+
+	// 获取 gas price
+	gasPrice := big.NewInt(1000000000) // 1 Gwei
+
+	// 计算 gas limit：基础 gas (21000) + 数据 gas (每字节 68 gas for non-zero, 4 gas for zero)
+	// Input 数据: "DPOSCOM" (7字节) + 佣金率(2字节) = 9字节
+	// 假设都是非零字节，需要 9 * 68 = 612 gas
+	// 基础交易需要 21000 gas
+	// 总共至少需要 21000 + 612 = 21612，我们设置 100000 以确保足够
+	gasLimit := uint64(100000)
+
+	// 创建交易
+	tx := &types.Transaction{
+		Nonce:    nonce,
+		GasPrice: gasPrice,
+		Gas:      gasLimit,
+		To:       nil,
+		Value:    big.NewInt(0),
+		Input:    inputData,
+		Type:     types.LegacyTx,
+	}
+
+	// 计算交易哈希
+	tx.ComputeHash(0)
+	if tx.Hash == (types.Hash{}) {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "transaction hash is zero after creation",
+		}, nil
+	}
+
+	// 签名交易
+	if err := d.signTransaction(tx, validatorAddr, privateKey); err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("failed to sign transaction: %v", err),
+		}, nil
+	}
+
+	// 重新计算哈希（签名后）
+	tx.ComputeHash(0)
+
+	// 发送交易到交易池
+	// 尝试通过 store 的 AddTx 方法发送
+	if addTxStore, ok := d.store.(interface {
+		AddTx(tx *types.Transaction) error
+	}); ok {
+		if err := addTxStore.AddTx(tx); err != nil {
+			return map[string]interface{}{
+				"success": false,
+				"error":   fmt.Sprintf("failed to send transaction: %v", err),
+			}, nil
+		}
+	} else {
+		// 如果 store 不支持 AddTx，尝试通过 GetTxPool 获取交易池
+		if txPool := d.store.GetTxPool(); txPool != nil {
+			if txPoolAddTx, ok := txPool.(interface {
+				AddTx(tx *types.Transaction) error
+			}); ok {
+				if err := txPoolAddTx.AddTx(tx); err != nil {
+					return map[string]interface{}{
+						"success": false,
+						"error":   fmt.Sprintf("failed to send transaction: %v", err),
+					}, nil
+				}
+			} else {
+				return map[string]interface{}{
+					"success": false,
+					"error":   "transaction pool does not support AddTx method",
+				}, nil
+			}
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "transaction pool not available",
+			}, nil
+		}
+	}
+
+	return map[string]interface{}{
+		"success":        true,
+		"txHash":         tx.Hash.String(),
+		"validator":      validatorAddress,
+		"commissionRate": commissionRate,
+		"message":        "Commission update transaction sent successfully",
+	}, nil
 }
 
 // buildFreezeInfoResponse 构建冻结信息响应

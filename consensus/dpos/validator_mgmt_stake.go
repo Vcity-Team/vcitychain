@@ -103,45 +103,60 @@ func (d *DPoS) GetAllStakingInfo() ([]*StakeInfo, error) {
 		return result, nil
 	}
 
-	// 从数据库读取
+	// 从数据库读取投票记录（从 VoterInfo bucket 读取）
 	var result []*StakeInfo
 	err := d.state.StakeStore.db.View(func(tx *bolt.Tx) error {
-		// 从 DelegateInfo bucket 读取所有受托人信息
-		delegateBucket := tx.Bucket([]byte("DelegateInfo"))
-		if delegateBucket == nil {
-			d.logger.Warn("DelegateInfo bucket not found in database")
+		// 从 VoterInfo bucket 读取所有投票者信息
+		voterBucket := tx.Bucket([]byte("VoterInfo"))
+		if voterBucket == nil {
+			d.logger.Warn("VoterInfo bucket not found in database")
 			return nil // 返回空列表，不返回错误
 		}
 
-		cursor := delegateBucket.Cursor()
+		cursor := voterBucket.Cursor()
 		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
-			var delegateInfo DelegateInfo
-			if err := json.Unmarshal(value, &delegateInfo); err != nil {
-				d.logger.Warn("Failed to unmarshal delegate info", "key", key, "error", err)
+			var voterInfo VoterInfo
+			if err := json.Unmarshal(value, &voterInfo); err != nil {
+				d.logger.Warn("Failed to unmarshal voter info", "key", key, "error", err)
 				continue
 			}
 
-			// 跳过投票权重为0的受托人
-			if delegateInfo.VotingPower == nil || delegateInfo.VotingPower.Cmp(big.NewInt(0)) <= 0 {
+			// 跳过投票权重为0的投票者
+			if voterInfo.VotingPower == nil || voterInfo.VotingPower.Cmp(big.NewInt(0)) <= 0 {
 				continue
 			}
 
-			// 获取故障标志信息
-			faultInfo := d.getValidatorFaultInfo(delegateInfo.Address)
-
-			// 转换为 StakeInfo
-			stakingInfo := &StakeInfo{
-				Staker:    delegateInfo.Address,
-				Amount:    new(big.Int).Set(delegateInfo.VotingPower),
-				IsActive:  delegateInfo.IsActive,
-				StartTime: uint64(time.Now().Unix()),
-				EndTime:   0,
-				IsLocked:  false,
-				Rewards:   big.NewInt(0),
-				Delegate:  delegateInfo.Address, // 验证者自己就是委托人
-				FaultFlag: faultInfo,            // 添加故障标志
+			// 为每个投票者-验证者对创建一个 StakeInfo
+			// 如果投票者投票给多个验证者，平均分配投票权重
+			voteCount := len(voterInfo.VotedDelegates)
+			if voteCount == 0 {
+				continue
 			}
-			result = append(result, stakingInfo)
+
+			// 计算每个验证者分到的投票权重（平均分配）
+			amountPerDelegate := new(big.Int).Div(voterInfo.VotingPower, big.NewInt(int64(voteCount)))
+			remainder := new(big.Int).Mod(voterInfo.VotingPower, big.NewInt(int64(voteCount)))
+
+			for i, delegate := range voterInfo.VotedDelegates {
+				// 分配投票权重
+				amount := new(big.Int).Set(amountPerDelegate)
+				// 余数分配给第一个验证者
+				if i == 0 {
+					amount.Add(amount, remainder)
+				}
+
+				stakingInfo := &StakeInfo{
+					Staker:    voterInfo.Address,
+					Amount:    amount,
+					IsActive:  true,
+					StartTime: voterInfo.LastVoteTime,
+					EndTime:   voterInfo.LockedUntil,
+					IsLocked:  voterInfo.LockedUntil > uint64(time.Now().Unix()),
+					Rewards:   big.NewInt(0),
+					Delegate:  delegate, // 投票给这个验证者
+				}
+				result = append(result, stakingInfo)
+			}
 		}
 
 		return nil
