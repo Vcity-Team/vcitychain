@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
 )
@@ -218,6 +219,91 @@ func (bs *BlockScheduler) StartNewEpoch(epochNumber uint64, currentTime time.Tim
 		"currentTime", currentTime.Format("2006-01-02 15:04:05"))
 }
 
+// getValidatorsFromCurrentBlockExtraData 从当前区块（父区块）的ExtraData获取验证者列表
+// 用于 shouldProduceBlockNow，确保所有节点基于同一区块的验证者列表计算
+func (r *dposRuntime) getValidatorsFromCurrentBlockExtraData(currentBlock *types.Header) (validator.AccountSet, error) {
+	// 获取当前区块的ExtraData
+	currentExtra, err := GetIbftExtra(currentBlock.ExtraData)
+	if err != nil {
+		r.logger.Warn("⚠️ 无法解析当前区块ExtraData，尝试从数据库读取",
+			"blockNumber", currentBlock.Number,
+			"error", err)
+		// 备用方案：从数据库读取
+		return r.getValidatorsFromDatabase()
+	}
+
+	// 获取父区块（当前区块的父区块）
+	var parent *types.Header
+	if currentBlock.Number > 0 {
+		parentHeader, exists := r.config.blockchain.GetHeaderByNumber(currentBlock.Number - 1)
+		if exists {
+			parent = parentHeader
+		}
+	}
+
+	// 从当前区块的ExtraData获取验证者列表
+	// 这会应用当前区块中的验证者变化（包括投票交易）
+	validators, err := currentExtra.getValidatorsFromExtraData(
+		currentBlock,  // 当前区块（区块N）
+		parent,        // 父区块（区块N-1）
+		nil,           // parents array
+		r.config.dposBackend,
+		r.logger,
+	)
+
+	if err != nil {
+		r.logger.Warn("⚠️ 从ExtraData获取验证者列表失败，尝试从数据库读取",
+			"blockNumber", currentBlock.Number,
+			"error", err)
+		// 备用方案：从数据库读取
+		return r.getValidatorsFromDatabase()
+	}
+
+	if len(validators) == 0 {
+		r.logger.Warn("⚠️ ExtraData中的验证者列表为空，尝试从数据库读取",
+			"blockNumber", currentBlock.Number)
+		// 备用方案：从数据库读取
+		return r.getValidatorsFromDatabase()
+	}
+
+	return validators, nil
+}
+
+// getValidatorsFromDatabase 从数据库读取验证者列表（备用方案）
+func (r *dposRuntime) getValidatorsFromDatabase() (validator.AccountSet, error) {
+	if r.config.dposBackend == nil {
+		return nil, fmt.Errorf("dpos backend not available")
+	}
+
+	dposInstance, ok := r.config.dposBackend.(*DPoS)
+	if !ok {
+		return nil, fmt.Errorf("invalid dpos backend type")
+	}
+
+	// 使用 GetSortedValidatorsWithLimit 获取排序和限制后的验证者列表
+	validators, err := dposInstance.GetSortedValidatorsWithLimit()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get validators from database: %w", err)
+	}
+
+	return validators, nil
+}
+
+// applyValidatorLimitAndSort 应用配置限制和排序（从 validator.AccountSet 转换为 []types.Address）
+func (r *dposRuntime) applyValidatorLimitAndSort(validators validator.AccountSet) []types.Address {
+	if len(validators) == 0 {
+		return []types.Address{}
+	}
+
+	// 转换为地址列表
+	addresses := make([]types.Address, 0, len(validators))
+	for _, v := range validators {
+		addresses = append(addresses, v.Address)
+	}
+
+	return addresses
+}
+
 // shouldProduceBlockNow 检查当前节点是否应该现在出块
 // 🆕 方案2：使用读锁，不阻塞其他检查
 func (r *dposRuntime) shouldProduceBlockNow() bool {
@@ -299,13 +385,23 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		// 获取本节点地址
 		myAddress := types.Address(r.config.Key.Address())
 
-		// 🆕 方案2：使用读锁读取delegates（避免阻塞）
-		r.lock.RLock()
-		delegates := r.delegates
-		r.lock.RUnlock()
+		// 🆕 关键修复：从当前区块的ExtraData获取验证者列表，而不是从内存读取
+		// 当前区块是区块N，我们要生产区块N+1
+		// 区块N的ExtraData应该包含执行投票交易后的验证者列表
+		validatorsFromExtra, err := r.getValidatorsFromCurrentBlockExtraData(currentBlock)
+		if err != nil {
+			r.logger.Warn("⚠️ 从ExtraData获取验证者列表失败，回退到内存读取",
+				"blockNumber", currentBlock.Number,
+				"error", err)
+			// 备用方案：从内存读取（保持向后兼容）
+			r.lock.RLock()
+			delegates := r.delegates
+			r.lock.RUnlock()
+			validatorsFromExtra = delegates
+		}
 
 		// 🆕 获取验证者列表并过滤故障验证者
-		activeValidators := make([]types.Address, 0, len(delegates))
+		activeValidators := make([]types.Address, 0, len(validatorsFromExtra))
 
 		// 🆕 检查DPoS实例是否存在
 		dposInstance, dposExists := GetDPoSInstance("vcity_dpos")
@@ -314,17 +410,17 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 				"⚠️ DPoS实例不存在，跳过故障过滤，使用所有验证者")
 		}
 
-		for _, d := range delegates {
+		for _, validator := range validatorsFromExtra {
 			// 获取验证者的故障标志信息
 			var faultInfo map[string]interface{}
 			var isFaulty bool
 
 			// 通过DPoS实例获取故障信息
 			if dposExists && dposInstance != nil {
-				faultInfo = dposInstance.getValidatorFaultInfo(d.Address)
+				faultInfo = dposInstance.getValidatorFaultInfo(validator.Address)
 				if faultInfo != nil && faultInfo["isFaulty"] != nil {
-					if v, ok := faultInfo["isFaulty"].(bool); ok {
-						isFaulty = v
+					if faultValue, ok := faultInfo["isFaulty"].(bool); ok {
+						isFaulty = faultValue
 					}
 				}
 			} else {
@@ -339,7 +435,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 
 			// 只保留非故障验证者
 			if !isFaulty {
-				activeValidators = append(activeValidators, d.Address)
+				activeValidators = append(activeValidators, validator.Address)
 			}
 		}
 
@@ -348,12 +444,9 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		if len(validators) == 0 {
 			r.logOnceWithInterval("all_validators_filtered_fallback", 10*time.Second, "warn",
 				"⚠️ 所有验证者被过滤，回退到原始验证者列表",
-				"originalCount", len(delegates))
+				"originalCount", len(validatorsFromExtra))
 			// 回退到原始验证者列表
-			validators = make([]types.Address, len(delegates))
-			for i, d := range delegates {
-				validators[i] = d.Address
-			}
+			validators = r.applyValidatorLimitAndSort(validatorsFromExtra)
 		}
 
 		// 🆕 调用改进后的方法（直接比较地址）
@@ -366,6 +459,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			"myAddress", myAddress.String(),
 			"currentBlockNumber", currentBlock.Number,
 			"validatorsCount", len(validators),
+			"validatorsSource", "ExtraData", // 🆕 标记数据来源
 			"timestamp", time.Now().Format("15:04:05.000"))
 
 		return result
