@@ -387,9 +387,35 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	isEpochEndBlock := r.isEpochEndBlock(nextBlockNumber)
 
 	if isEpochEndBlock {
+		// 🆕 在epoch边界计算下一个epoch的验证者集合，保存到ExtraData中
+		// 这样新投票的节点不会立即生效，而是等到下一个epoch开始
+		// 所有节点（包括出块节点自己）收到这个区块后，会从ExtraData读取并保存到本地数据库
+		if r.config != nil && r.config.dposBackend != nil {
+			if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
+				r.logger.Info("🔄 ===== 开始计算下一个epoch的验证者集合 =====", "blockNumber", nextBlockNumber)
+				if nextEpochValidators, err := dposInstance.calculateNextEpochValidators(nextBlockNumber); err != nil {
+					r.logger.Error("❌ 计算下一个epoch验证者集合失败", "blockNumber", nextBlockNumber, "error", err)
+				} else {
+					r.logger.Info("✅✅✅ ========== 下一个epoch验证者集合已计算，将写入ExtraData ========== ✅✅✅",
+						"blockNumber", nextBlockNumber,
+						"nextEpochValidatorsCount", len(nextEpochValidators),
+						"note", "新投票的节点将在下一个epoch开始生效，验证者集合将保存到ExtraData中")
+					// 打印下一个epoch的验证者列表
+					for i, validator := range nextEpochValidators {
+						r.logger.Info("📋 下一个epoch验证者",
+							"index", i,
+							"address", validator.Address.String(),
+							"votingPower", validator.VotingPower.String())
+					}
+					// 🆕 将下一个epoch的验证者集合保存到全局变量，后续在构建ExtraData时使用
+					r.nextEpochValidators = nextEpochValidators
+				}
+			}
+		}
 
 		// 🆕 在epoch结束区块直接进行奖励分发（移除重复调用）
 	} else {
+		r.nextEpochValidators = nil // 非epoch边界区块，清空
 	}
 
 	// 创建区块构建器
@@ -1118,6 +1144,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			RewardDistribution:  rewardDistribution,        // 🆕 从当前区块ExtraData获取的奖励分配信息
 			CheckpointBlockHash: extra.CheckpointBlockHash, // 🆕 保持CheckpointBlockHash
 			FaultFlags:          faultFlags,                // 🆕 保持FaultFlags
+			NextEpochValidators: r.nextEpochValidators,     // 🆕 下一个epoch的验证者集合（只在epoch边界区块时设置）
 		}
 		block.Block.Header.ExtraData = finalExtra.MarshalRLPTo(nil)
 

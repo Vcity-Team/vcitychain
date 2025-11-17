@@ -87,6 +87,8 @@ type Extra struct {
 	CheckpointBlockHash types.Hash
 	// 🆕 故障标志信息
 	FaultFlags []FaultFlagInfo `json:"fault_flags,omitempty"`
+	// 🆕 下一个epoch的验证者集合（只在epoch边界区块时设置）
+	NextEpochValidators validator.AccountSet `json:"next_epoch_validators,omitempty"`
 }
 
 // RewardDistributionInfo 奖励分配信息
@@ -262,6 +264,17 @@ func (i *Extra) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 		vv.Set(faultFlagsArray)
 	}
 
+	// 🆕 Element[7] - NextEpochValidators（只在epoch边界区块时设置）
+	if len(i.NextEpochValidators) == 0 {
+		vv.Set(ar.NewNullArray())
+	} else {
+		nextEpochValidatorsArray := ar.NewArray()
+		for _, validatorAccount := range i.NextEpochValidators {
+			nextEpochValidatorsArray.Set(validatorAccount.MarshalRLPWith(ar))
+		}
+		vv.Set(nextEpochValidatorsArray)
+	}
+
 	return vv
 }
 
@@ -285,6 +298,8 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		expectedElements = 6 // 包含CheckpointBlockHash的格式
 	} else if len(elems) == 7 {
 		expectedElements = 7 // 包含FaultFlags的格式
+	} else if len(elems) == 8 {
+		expectedElements = 8 // 包含NextEpochValidators的格式
 	}
 
 	// 解析RLP元素
@@ -445,6 +460,24 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 					}
 
 					i.FaultFlags = append(i.FaultFlags, flag)
+				}
+			}
+		}
+	}
+
+	// 🆕 Element[7] - NextEpochValidators（只在8个元素时处理）
+	if len(elems) >= 8 && elems[7].Elems() > 0 {
+		nextEpochValidatorsElems, err := elems[7].GetElems()
+		if err == nil {
+			i.NextEpochValidators = make(validator.AccountSet, 0, len(nextEpochValidatorsElems))
+			for _, validatorRaw := range nextEpochValidatorsElems {
+				// Skip null values
+				if validatorRaw.Type() == fastrlp.TypeNull {
+					continue
+				}
+				acc := &validator.ValidatorMetadata{}
+				if err := acc.UnmarshalRLPWith(validatorRaw); err == nil {
+					i.NextEpochValidators = append(i.NextEpochValidators, acc)
 				}
 			}
 		}

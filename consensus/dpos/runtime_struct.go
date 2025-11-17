@@ -89,5 +89,8 @@ type dposRuntime struct {
 	// 🆕 防重复日志机制
 	lastLogTime map[string]time.Time
 	logMutex    sync.RWMutex
+
+	// 🆕 下一个epoch的验证者集合（只在epoch边界区块时设置，用于写入ExtraData）
+	nextEpochValidators validator.AccountSet
 }
 

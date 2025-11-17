@@ -398,7 +398,11 @@ type DPoS struct {
 	balanceQuerier NativeTokenBalanceQuerier
 
 	// 🆕 新增：DPoS验证者相关字段
-	minStakeAmount    *big.Int               // 最小质押门槛
+	minStakeAmount *big.Int // 最小质押门槛
+
+	// 🆕 日志频率限制
+	lastLogTime       map[string]time.Time   // 最后日志时间
+	logMutex          sync.RWMutex           // 日志锁
 	genesisExtraData  []byte                 // 创世块extraData
 	genesisValidators map[types.Address]bool // 创世验证者地址映射
 
@@ -759,10 +763,11 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	setupHeaderHashFunc()
 
 	vcity_dpos := &DPoS{
-		closeCh: make(chan struct{}),
-		logger:  logger,
-		txPool:  params.TxPool,
-		config:  &DPoSConfig{}, // 🆕 初始化config结构体
+		closeCh:     make(chan struct{}),
+		logger:      logger,
+		txPool:      params.TxPool,
+		config:      &DPoSConfig{},              // 🆕 初始化config结构体
+		lastLogTime: make(map[string]time.Time), // 🆕 初始化日志频率限制
 	}
 
 	getConfigValue := func(keys ...string) (interface{}, bool) {

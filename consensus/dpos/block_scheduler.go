@@ -389,19 +389,43 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		// 获取本节点地址
 		myAddress := types.Address(r.config.Key.Address())
 
-		// 🆕 关键修复：从当前区块的ExtraData获取验证者列表，而不是从内存读取
-		// 当前区块是区块N，我们要生产区块N+1
-		// 区块N的ExtraData应该包含执行投票交易后的验证者列表
-		validatorsFromExtra, err := r.getValidatorsFromCurrentBlockExtraData(currentBlock)
-		if err != nil {
-			r.logger.Warn("⚠️ 从ExtraData获取验证者列表失败，回退到内存读取",
+		// 🆕 方案1：优先使用预先计算的epoch验证者集合，而不是实时查询
+		// 这样新投票的节点不会立即生效，而是等到下一个epoch开始
+		if r.config.dposBackend == nil {
+			r.logger.Error("❌ dposBackend为nil，无法获取验证者集合",
+				"blockNumber", currentBlock.Number)
+			return false
+		}
+
+		dposInstance, ok := r.config.dposBackend.(*DPoS)
+		if !ok {
+			r.logger.Error("❌ dposBackend类型转换失败，无法获取验证者集合",
+				"blockNumber", currentBlock.Number)
+			return false
+		}
+
+		// 优先从数据库获取预先计算的epoch验证者集合
+		validatorsFromExtra, err := dposInstance.getEpochValidatorsFromDatabase()
+		if err != nil || len(validatorsFromExtra) == 0 {
+			// 如果数据库中没有预先计算的验证者集合，回退到实时查询（兼容性）
+			// 这种情况可能发生在：1. 第一次启动 2. 数据库被清空 3. 之前的epoch没有保存
+			// 🆕 使用日志频率限制，10秒一次
+			r.logOnceWithInterval("fallback_to_realtime_query", 10*time.Second, "warn",
+				"⚠️ 数据库中没有预先计算的epoch验证者集合，回退到实时查询",
 				"blockNumber", currentBlock.Number,
 				"error", err)
-			// 备用方案：从内存读取（保持向后兼容）
-			r.lock.RLock()
-			delegates := r.delegates
-			r.lock.RUnlock()
-			validatorsFromExtra = delegates
+			validatorsFromExtra, err = dposInstance.GetSortedValidatorsWithLimit()
+			if err != nil {
+				r.logger.Error("❌ 实时查询验证者集合失败",
+					"blockNumber", currentBlock.Number,
+					"error", err)
+				return false
+			}
+			if len(validatorsFromExtra) == 0 {
+				r.logger.Error("❌ 实时查询的验证者集合为空",
+					"blockNumber", currentBlock.Number)
+				return false
+			}
 		}
 
 		// 🆕 获取验证者列表并过滤故障验证者
@@ -463,7 +487,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			"myAddress", myAddress.String(),
 			"currentBlockNumber", currentBlock.Number,
 			"validatorsCount", len(validators),
-			"validatorsSource", "ExtraData", // 🆕 标记数据来源
+			"validatorsSource", "PrecomputedEpoch", // 🆕 标记数据来源：预先计算的epoch验证者集合
 			"timestamp", time.Now().Format("15:04:05.000"))
 
 		return result

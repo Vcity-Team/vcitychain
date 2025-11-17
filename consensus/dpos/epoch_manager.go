@@ -125,10 +125,23 @@ func (tem *TimeBasedEpochManager) GetEpochInfo(blockNumber uint64) (uint64, time
 	tem.mutex.RLock()
 	defer tem.mutex.RUnlock()
 
-	// 🆕 修改：基于传入的区块高度获取Epoch信息
+	// 🆕 修复：使用与isEpochEndBlock和GetCurrentEpochInfo相同的epoch计算逻辑，考虑共识切换高度
 	epochSize := tem.getEpochSize()
-	currentEpoch := (blockNumber / epochSize) + 1
-	firstBlockInEpoch := (currentEpoch - 1) * epochSize
+	consensusSwitchHeight := tem.consensusSwitchHeight
+
+	var currentEpoch uint64
+	var firstBlockInEpoch uint64
+
+	if blockNumber < consensusSwitchHeight {
+		// 在共识切换之前，epoch为0
+		currentEpoch = 0
+		firstBlockInEpoch = 0
+	} else {
+		// 计算DPoS epoch：从共识切换高度开始
+		dposBlockNumber := blockNumber - consensusSwitchHeight
+		currentEpoch = (dposBlockNumber / epochSize) + 1
+		firstBlockInEpoch = consensusSwitchHeight + (currentEpoch-1)*epochSize
+	}
 
 	// 计算epoch开始时间（基于第一个区块的时间）
 	// 如果无法获取区块信息，使用当前时间
@@ -145,6 +158,7 @@ func (tem *TimeBasedEpochManager) GetEpochInfo(blockNumber uint64) (uint64, time
 
 	tem.logger.Debug("🔍 获取Epoch信息（区块基础）",
 		"blockNumber", blockNumber,
+		"consensusSwitchHeight", consensusSwitchHeight,
 		"currentEpoch", currentEpoch,
 		"firstBlockInEpoch", firstBlockInEpoch,
 		"epochStartTime", epochStartTime.Format("2006-01-02 15:04:05"),

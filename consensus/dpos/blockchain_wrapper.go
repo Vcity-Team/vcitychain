@@ -297,7 +297,7 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 
 	isEpochEnd := p.isEpochEndBlock(block.Number())
 
-	// 🆕 如果是epoch结束区块且不是生产节点自己生产的区块，处理奖励分发
+	// 🆕 如果是epoch结束区块且不是生产节点自己生产的区块，处理奖励分发和下一个epoch验证者集合
 	if isEpochEnd {
 		p.logger.Debug("🎯🎯🎯 ========== 开始执行奖励分配 ========== 🎯🎯🎯",
 			"blockNumber", block.Number(),
@@ -314,6 +314,15 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 		p.logger.Debug("✅✅✅ ========== 奖励分配执行成功 ========== ✅✅✅",
 			"blockNumber", block.Number(),
 			"blockHash", block.Hash().String()[:16])
+
+		// 🆕 从ExtraData读取下一个epoch的验证者集合并保存到数据库
+		if err := p.processNextEpochValidatorsFromExtraData(block); err != nil {
+			p.logger.Error("❌ 处理下一个epoch验证者集合失败",
+				"blockNumber", block.Number(),
+				"blockHash", block.Hash().String()[:16],
+				"error", err)
+			// 不返回错误，继续处理其他逻辑
+		}
 	} else {
 		p.logger.Debug("ℹ️ 跳过奖励分配",
 			"blockNumber", block.Number(),
@@ -636,6 +645,66 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 			"extraDataLength", len(block.Header.ExtraData))
 		return nil
 	}
+
+	return nil
+}
+
+// processNextEpochValidatorsFromExtraData 从ExtraData读取下一个epoch的验证者集合并保存到数据库
+func (p *blockchainWrapper) processNextEpochValidatorsFromExtraData(block *types.Block) error {
+	p.logger.Info("🔄 ===== 开始处理下一个epoch验证者集合 =====",
+		"blockNumber", block.Number(),
+		"blockHash", block.Hash().String()[:16],
+		"extraDataLength", len(block.Header.ExtraData))
+
+	// 解析ExtraData获取下一个epoch的验证者集合
+	extra := &Extra{}
+	if err := extra.UnmarshalRLP(block.Header.ExtraData); err != nil {
+		p.logger.Error("❌ 解析ExtraData失败",
+			"blockNumber", block.Number(),
+			"error", err,
+			"extraDataLength", len(block.Header.ExtraData))
+		return fmt.Errorf("failed to unmarshal extra data: %w", err)
+	}
+
+	// 检查是否有下一个epoch的验证者集合
+	if len(extra.NextEpochValidators) == 0 {
+		p.logger.Warn("⚠️ ExtraData中没有下一个epoch的验证者集合",
+			"blockNumber", block.Number())
+		return nil // 不是错误，可能不是epoch边界区块或出块节点没有设置
+	}
+
+	p.logger.Info("✅ 从ExtraData获取到下一个epoch的验证者集合",
+		"blockNumber", block.Number(),
+		"nextEpochValidatorsCount", len(extra.NextEpochValidators))
+
+	// 打印下一个epoch的验证者列表
+	for i, validator := range extra.NextEpochValidators {
+		p.logger.Info("📋 下一个epoch验证者",
+			"blockNumber", block.Number(),
+			"index", i,
+			"address", validator.Address.String(),
+			"votingPower", validator.VotingPower.String())
+	}
+
+	// 获取DPoS实例并保存到数据库
+	if p.state == nil || p.state.StakeStore == nil {
+		p.logger.Error("❌ StakeStore不可用",
+			"blockNumber", block.Number())
+		return fmt.Errorf("stake store not available")
+	}
+
+	// 保存下一个epoch的验证者集合到数据库
+	if err := p.state.StakeStore.SaveEpochValidators(extra.NextEpochValidators); err != nil {
+		p.logger.Error("❌ 保存下一个epoch验证者集合失败",
+			"blockNumber", block.Number(),
+			"error", err)
+		return fmt.Errorf("failed to save next epoch validators: %w", err)
+	}
+
+	p.logger.Info("✅✅✅ ========== 下一个epoch验证者集合已保存到数据库 ========== ✅✅✅",
+		"blockNumber", block.Number(),
+		"nextEpochValidatorsCount", len(extra.NextEpochValidators),
+		"note", "所有节点（包括出块节点自己）都会从ExtraData读取并保存到本地数据库")
 
 	return nil
 }

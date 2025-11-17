@@ -502,10 +502,40 @@ func (d *DPoS) getEpochValidatorsFromDatabase() (validator.AccountSet, error) {
 
 	validators, err := d.state.StakeStore.GetEpochValidators()
 	if err != nil {
-		d.logger.Warn("⚠️ 从数据库获取epoch验证者失败", "error", err)
+		// 🆕 使用日志频率限制，10秒一次
+		d.logOnceWithInterval("get_epoch_validators_failed", 10*time.Second, "warn",
+			"⚠️ 从数据库获取epoch验证者失败", "error", err)
 		return nil, err
 	}
 
-	d.logger.Info("✅ 从数据库获取epoch验证者成功", "count", len(validators))
+	// 🆕 使用日志频率限制，10秒一次
+	d.logOnceWithInterval("get_epoch_validators_success", 10*time.Second, "info",
+		"✅ 从数据库获取epoch验证者成功", "count", len(validators))
 	return validators, nil
+}
+
+// logOnceWithInterval 防重复日志函数（自定义间隔）
+func (d *DPoS) logOnceWithInterval(key string, interval time.Duration, level string, message string, args ...interface{}) {
+	d.logMutex.Lock()
+	defer d.logMutex.Unlock()
+
+	now := time.Now()
+	if lastTime, exists := d.lastLogTime[key]; exists {
+		if now.Sub(lastTime) < interval {
+			return
+		}
+	}
+	d.lastLogTime[key] = now
+	switch level {
+	case "debug":
+		d.logger.Debug(message, args...)
+	case "info":
+		d.logger.Info(message, args...)
+	case "warn":
+		d.logger.Warn(message, args...)
+	case "error":
+		d.logger.Error(message, args...)
+	default:
+		d.logger.Info(message, args...)
+	}
 }
