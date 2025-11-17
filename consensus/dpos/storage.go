@@ -121,14 +121,52 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 	}
 	d.logger.Info("✅ Voter info saved to database successfully")
 
-	// 同时保存受托人的投票权重信息
-	d.logger.Info("💾 Saving delegate voting power...")
-	if err := d.persistDelegateVotingPower(candidate, amount); err != nil {
-		d.logger.Warn("❌ Failed to persist delegate voting power", "error", err)
-		// 不返回错误，因为投票者信息已经保存成功
-	} else {
-		d.logger.Info("✅ Delegate voting power saved successfully")
+	// 🆕 移除：不再在这里更新 VotingPower，因为 processVoteInternal 已经更新了
+	// VotingPower 的更新已经在 processVoteInternal 中通过 updateVotingPowerInDatabase 完成
+	// 这里再次调用会导致重复累加
+	d.logger.Debug("💾 VotingPower 已在 processVoteInternal 中更新，跳过重复更新")
+
+	// 🆕 保存 StakingInfo 到数据库（投票记录）
+	// 注意：这里使用 voter 作为 staker，因为投票者就是质押者
+	d.logger.Info("💾 Saving staking info to database...")
+
+	// 开始数据库事务
+	dbTx, err := d.state.beginDBTransaction(true)
+	if err != nil {
+		d.logger.Error("❌ Failed to begin db transaction for staking info", "error", err)
+		return fmt.Errorf("failed to begin db transaction: %w", err)
 	}
+	defer dbTx.Rollback()
+
+	// 创建 StakeInfo
+	stakeInfo := &StakeInfo{
+		Staker:    voter,
+		Amount:    new(big.Int).Set(amount),
+		StartTime: voterInfo.LastVoteTime,
+		EndTime:   voterInfo.LockedUntil,
+		IsLocked:  voterInfo.LockedUntil > uint64(time.Now().Unix()),
+		IsActive:  len(voterInfo.VotedDelegates) > 0,
+		Rewards:   big.NewInt(0), // TODO: 实现奖励计算
+		Delegate:  candidate,     // 投票给哪个 delegate
+	}
+
+	// 保存到数据库
+	// 🆕 传入 voterInfo.LastVoteTime 作为 timestamp，确保每次投票都有唯一 key
+	if err := d.state.StakeStore.setStakingInfo(voter, stakeInfo, voterInfo.LastVoteTime, dbTx); err != nil {
+		d.logger.Error("❌ Failed to save staking info to database", "error", err)
+		return fmt.Errorf("failed to save staking info to database: %w", err)
+	}
+
+	// 提交事务
+	if err := dbTx.Commit(); err != nil {
+		d.logger.Error("❌ Failed to commit staking info transaction", "error", err)
+		return fmt.Errorf("failed to commit staking info transaction: %w", err)
+	}
+
+	d.logger.Info("✅ Staking info saved to database successfully",
+		"staker", voter.String(),
+		"delegate", candidate.String(),
+		"amount", amount.String())
 
 	return nil
 }
@@ -298,11 +336,25 @@ func (d *DPoS) persistSingleDelegateToDatabase(del *validator.ValidatorMetadata)
 		}
 	}
 
+	// 🆕 从数据库读取当前的 VotingPower，避免用内存中的错误值覆盖数据库
+	dbVotingPower, err := d.getVotingPowerFromDatabase(del.Address)
+	if err != nil {
+		d.logger.Warn("⚠️ 从数据库读取 VotingPower 失败，使用内存中的值",
+			"address", del.Address.String(),
+			"error", err)
+		dbVotingPower = new(big.Int).Set(del.VotingPower)
+	} else {
+		d.logger.Debug("✅ 从数据库读取 VotingPower",
+			"address", del.Address.String(),
+			"dbVotingPower", dbVotingPower.String(),
+			"memoryVotingPower", del.VotingPower.String())
+	}
+
 	// 创建受托人信息
 	delegateInfo := &DelegateInfo{
 		Address:        del.Address,
-		VotingPower:    new(big.Int).Set(del.VotingPower),
-		TotalVotes:     new(big.Int).Set(del.VotingPower), // 使用VotingPower作为TotalVotes
+		VotingPower:    new(big.Int).Set(dbVotingPower), // 🆕 使用数据库中的值，而不是内存中的值
+		TotalVotes:     new(big.Int).Set(dbVotingPower), // 使用VotingPower作为TotalVotes
 		ProducedBlocks: 0,
 		MissedBlocks:   0,
 		LastBlockTime:  0,
@@ -453,11 +505,25 @@ func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.Accoun
 			}
 		}
 
+		// 🆕 从数据库读取当前的 VotingPower，避免用内存中的错误值覆盖数据库
+		dbVotingPower, err := d.getVotingPowerFromDatabase(del.Address)
+		if err != nil {
+			d.logger.Warn("⚠️ 从数据库读取 VotingPower 失败，使用内存中的值",
+				"address", del.Address.String(),
+				"error", err)
+			dbVotingPower = new(big.Int).Set(del.VotingPower)
+		} else {
+			d.logger.Debug("✅ 从数据库读取 VotingPower",
+				"address", del.Address.String(),
+				"dbVotingPower", dbVotingPower.String(),
+				"memoryVotingPower", del.VotingPower.String())
+		}
+
 		// 即使BLS公钥为nil，也允许保存受托人信息
 		delegateInfo := &DelegateInfo{
 			Address:        del.Address,
-			VotingPower:    new(big.Int).Set(del.VotingPower),
-			TotalVotes:     new(big.Int).Set(del.VotingPower), // 使用VotingPower作为TotalVotes
+			VotingPower:    new(big.Int).Set(dbVotingPower), // 🆕 使用数据库中的值，而不是内存中的值
+			TotalVotes:     new(big.Int).Set(dbVotingPower), // 使用VotingPower作为TotalVotes
 			ProducedBlocks: 0,
 			MissedBlocks:   0,
 			LastBlockTime:  0,

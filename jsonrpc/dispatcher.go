@@ -357,7 +357,6 @@ func (d *Dispatcher) Handle(reqBody []byte) ([]byte, error) {
 			return NewRPCResponse(req.ID, "2.0", nil, NewInvalidRequestError("Invalid json request")).Bytes()
 		}
 
-
 		resp, err := d.handleReq(req)
 
 		return NewRPCResponse(req.ID, "2.0", resp, err).Bytes()
@@ -824,6 +823,8 @@ func (a *dposStoreAdapter) GetDPoSEngine() interface{} {
 }
 
 func (a *dposStoreAdapter) GetDPoSState() (*consensusdpos.State, error) {
+	fmt.Printf("DEBUG: GetDPoSState - 开始调用\n")
+
 	// Try to get DPoS state from the consensus engine
 	// This should connect to the actual DPoS consensus mechanism
 
@@ -831,18 +832,55 @@ func (a *dposStoreAdapter) GetDPoSState() (*consensusdpos.State, error) {
 	if blockchainStore, ok := a.store.(interface {
 		GetDPoSState() (*consensusdpos.State, error)
 	}); ok {
-		return blockchainStore.GetDPoSState()
+		fmt.Printf("DEBUG: GetDPoSState - store 实现了 GetDPoSState 接口\n")
+		state, err := blockchainStore.GetDPoSState()
+		if err != nil {
+			fmt.Printf("DEBUG: GetDPoSState - GetDPoSState 返回错误: %v\n", err)
+		} else if state != nil {
+			fmt.Printf("DEBUG: GetDPoSState - 成功从 blockchainStore 获取 State\n")
+		} else {
+			fmt.Printf("DEBUG: GetDPoSState - blockchainStore.GetDPoSState 返回 nil\n")
+		}
+		return state, err
 	}
 
 	// If blockchain store doesn't have DPoS state, try to get from consensus store
 	if consensusStore, ok := a.store.(interface {
 		GetConsensusDPoSState() (*consensusdpos.State, error)
 	}); ok {
-		return consensusStore.GetConsensusDPoSState()
+		fmt.Printf("DEBUG: GetDPoSState - store 实现了 GetConsensusDPoSState 接口\n")
+		state, err := consensusStore.GetConsensusDPoSState()
+		if err != nil {
+			fmt.Printf("DEBUG: GetDPoSState - GetConsensusDPoSState 返回错误: %v\n", err)
+		} else if state != nil {
+			fmt.Printf("DEBUG: GetDPoSState - 成功从 consensusStore 获取 State\n")
+		} else {
+			fmt.Printf("DEBUG: GetDPoSState - consensusStore.GetConsensusDPoSState 返回 nil\n")
+		}
+		return state, err
+	}
+
+	// 🆕 方法3：通过 GetDPoSEngine 获取 DPoS 引擎，然后从引擎获取 State
+	fmt.Printf("DEBUG: GetDPoSState - 尝试通过 GetDPoSEngine 获取 State\n")
+	if dposEngine := a.GetDPoSEngine(); dposEngine != nil {
+		fmt.Printf("DEBUG: GetDPoSState - 成功获取 DPoS 引擎: %T\n", dposEngine)
+		if dpos, ok := dposEngine.(*consensusdpos.DPoS); ok {
+			if state := dpos.GetState(); state != nil {
+				fmt.Printf("DEBUG: GetDPoSState - 成功从 DPoS 引擎获取 State\n")
+				return state, nil
+			} else {
+				fmt.Printf("DEBUG: GetDPoSState - DPoS 引擎的 GetState() 返回 nil\n")
+			}
+		} else {
+			fmt.Printf("DEBUG: GetDPoSState - DPoS 引擎类型断言失败: %T\n", dposEngine)
+		}
+	} else {
+		fmt.Printf("DEBUG: GetDPoSState - GetDPoSEngine 返回 nil\n")
 	}
 
 	// If no DPoS state store is available, return nil
 	// This allows the endpoint to work even when the consensus engine is not fully configured
+	fmt.Printf("DEBUG: GetDPoSState - 所有方法都失败，返回 nil\n")
 	return nil, nil
 }
 
@@ -1172,19 +1210,54 @@ func (a *dposStoreAdapter) GetValidatorsWithFilter(filterZeroVotingPower bool) (
 }
 
 func (a *dposStoreAdapter) GetStakingInfo() ([]*consensusdpos.StakeInfo, error) {
-	// 🆕 优先：通过 DPoS 全局注册表调用公开方法 GetAllStakingInfo
-	if dposInstance, exists := consensusdpos.GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
-		stakingInfos, err := dposInstance.GetAllStakingInfo()
-		if err == nil && len(stakingInfos) > 0 {
-			fmt.Printf("DEBUG: GetStakingInfo - Successfully retrieved %d staking infos from database via GetAllStakingInfo\n", len(stakingInfos))
-			return stakingInfos, nil
-		} else if err != nil {
-			fmt.Printf("DEBUG: GetStakingInfo - Error from GetAllStakingInfo: %v\n", err)
+	fmt.Printf("DEBUG: GetStakingInfo - 开始调用\n")
+
+	// 🆕 优先：通过 GetDPoSState 获取 StakeStore，然后调用 GetStakingInfo
+	// 这样可以确保使用正确的数据源（从 StakingInfo bucket 直接读取，而不是平均分配）
+	// 直接调用 a.GetDPoSState()，因为 dposStoreAdapter 本身实现了这个方法
+	fmt.Printf("DEBUG: GetStakingInfo - 调用 a.GetDPoSState()\n")
+	dposState, err := a.GetDPoSState()
+	if err != nil {
+		fmt.Printf("DEBUG: GetStakingInfo - GetDPoSState 返回错误: %v\n", err)
+	} else if dposState == nil {
+		fmt.Printf("DEBUG: GetStakingInfo - GetDPoSState 返回 nil，尝试直接通过 GetDPoSEngine 获取\n")
+		// 🆕 如果 GetDPoSState 返回 nil，直接通过 GetDPoSEngine 获取 DPoS 引擎
+		if dposEngine := a.GetDPoSEngine(); dposEngine != nil {
+			fmt.Printf("DEBUG: GetStakingInfo - 成功获取 DPoS 引擎: %T\n", dposEngine)
+			if dpos, ok := dposEngine.(*consensusdpos.DPoS); ok {
+				if state := dpos.GetState(); state != nil && state.StakeStore != nil {
+					fmt.Printf("DEBUG: GetStakingInfo - 从 DPoS 引擎获取 State 成功，调用 StakeStore.GetStakingInfo()\n")
+					stakingInfos, err := state.StakeStore.GetStakingInfo()
+					if err != nil {
+						fmt.Printf("DEBUG: GetStakingInfo - Error from StakeStore.GetStakingInfo: %v\n", err)
+					} else if len(stakingInfos) > 0 {
+						fmt.Printf("DEBUG: GetStakingInfo - Successfully retrieved %d staking infos from StakeStore.GetStakingInfo\n", len(stakingInfos))
+						return stakingInfos, nil
+					} else {
+						fmt.Printf("DEBUG: GetStakingInfo - StakeStore.GetStakingInfo returned empty slice\n")
+					}
+				} else {
+					fmt.Printf("DEBUG: GetStakingInfo - DPoS 引擎的 GetState() 返回 nil 或 StakeStore 为 nil\n")
+				}
+			} else {
+				fmt.Printf("DEBUG: GetStakingInfo - DPoS 引擎类型断言失败: %T\n", dposEngine)
+			}
 		} else {
-			fmt.Printf("DEBUG: GetStakingInfo - GetAllStakingInfo returned empty slice\n")
+			fmt.Printf("DEBUG: GetStakingInfo - GetDPoSEngine 返回 nil\n")
 		}
+	} else if dposState.StakeStore == nil {
+		fmt.Printf("DEBUG: GetStakingInfo - dposState.StakeStore 为 nil\n")
 	} else {
-		fmt.Printf("DEBUG: GetStakingInfo - DPoS instance not found in global registry\n")
+		fmt.Printf("DEBUG: GetStakingInfo - 调用 StakeStore.GetStakingInfo()\n")
+		stakingInfos, err := dposState.StakeStore.GetStakingInfo()
+		if err != nil {
+			fmt.Printf("DEBUG: GetStakingInfo - Error from StakeStore.GetStakingInfo: %v\n", err)
+		} else if len(stakingInfos) > 0 {
+			fmt.Printf("DEBUG: GetStakingInfo - Successfully retrieved %d staking infos from StakeStore.GetStakingInfo\n", len(stakingInfos))
+			return stakingInfos, nil
+		} else {
+			fmt.Printf("DEBUG: GetStakingInfo - StakeStore.GetStakingInfo returned empty slice\n")
+		}
 	}
 
 	// Try to get staking info from the consensus engine

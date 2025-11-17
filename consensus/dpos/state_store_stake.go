@@ -207,9 +207,17 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 
 // 🆕 新增：GetStakingInfo方法，直接从数据库读取，不做修改
 func (s *StakeStore) GetStakingInfo() ([]*StakeInfo, error) {
+	logger := getGlobalLogger()
+	if logger != nil {
+		logger.Info("🔵 [StakeStore.GetStakingInfo] 开始读取投票记录")
+	}
+
 	var stakingInfos []*StakeInfo
 
 	if s.db == nil {
+		if logger != nil {
+			logger.Error("❌ [StakeStore.GetStakingInfo] 数据库为 nil")
+		}
 		return nil, fmt.Errorf("database is nil")
 	}
 
@@ -218,26 +226,52 @@ func (s *StakeStore) GetStakingInfo() ([]*StakeInfo, error) {
 		stakingBucket := tx.Bucket([]byte("StakingInfo"))
 		if stakingBucket == nil {
 			// Bucket 不存在，返回空列表（这是正常的，如果还没有质押数据）
+			if logger != nil {
+				logger.Info("⚠️ [StakeStore.GetStakingInfo] StakingInfo bucket 不存在")
+			}
 			return nil
 		}
 
+		if logger != nil {
+			logger.Info("✅ [StakeStore.GetStakingInfo] StakingInfo bucket 存在，开始遍历记录")
+		}
+
 		count := 0
+		parseErrorCount := 0
 		cursor := stakingBucket.Cursor()
 		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
 			var stakeInfo StakeInfo
 			if err := json.Unmarshal(value, &stakeInfo); err != nil {
 				// 跳过解析失败的数据，但记录日志
+				parseErrorCount++
+				if logger != nil {
+					logger.Warn("⚠️ [StakeStore.GetStakingInfo] 解析投票记录失败", "key", fmt.Sprintf("%x", key), "error", err)
+				}
 				continue
 			}
 			stakingInfos = append(stakingInfos, &stakeInfo)
 			count++
 		}
 
+		if logger != nil {
+			logger.Info("✅ [StakeStore.GetStakingInfo] 遍历完成",
+				"totalRecords", count,
+				"validRecords", len(stakingInfos),
+				"parseErrors", parseErrorCount)
+		}
+
 		return nil
 	})
 
 	if err != nil {
+		if logger != nil {
+			logger.Error("❌ [StakeStore.GetStakingInfo] 数据库事务失败", "error", err)
+		}
 		return nil, fmt.Errorf("failed to get staking info: %w", err)
+	}
+
+	if logger != nil {
+		logger.Info("✅ [StakeStore.GetStakingInfo] 成功返回", "count", len(stakingInfos))
 	}
 
 	return stakingInfos, nil
@@ -264,7 +298,9 @@ func (s *StakeStore) getStakingInfo(staker types.Address, dbTx *bolt.Tx) (*Stake
 }
 
 // setStakingInfo 保存质押信息到数据库
-func (s *StakeStore) setStakingInfo(staker types.Address, info *StakeInfo, dbTx *bolt.Tx) error {
+// 🆕 使用复合 key (staker + delegate + timestamp) 来支持历史记录模式
+// 每次投票都会创建独立记录，不会覆盖历史记录
+func (s *StakeStore) setStakingInfo(staker types.Address, info *StakeInfo, timestamp uint64, dbTx *bolt.Tx) error {
 	bucket, err := dbTx.CreateBucketIfNotExists([]byte("StakingInfo"))
 	if err != nil {
 		return fmt.Errorf("failed to create staking info bucket: %w", err)
@@ -275,7 +311,14 @@ func (s *StakeStore) setStakingInfo(staker types.Address, info *StakeInfo, dbTx 
 		return fmt.Errorf("failed to marshal staking info: %w", err)
 	}
 
-	if err := bucket.Put(staker[:], data); err != nil {
+	// 🆕 使用复合 key: staker (20 bytes) + delegate (20 bytes) + timestamp (8 bytes) = 48 bytes
+	// 这样每次投票都有唯一 key，不会覆盖历史记录
+	key := make([]byte, 48)
+	copy(key[0:20], staker[:])
+	copy(key[20:40], info.Delegate[:])
+	binary.BigEndian.PutUint64(key[40:48], timestamp)
+
+	if err := bucket.Put(key, data); err != nil {
 		return fmt.Errorf("failed to save staking info: %w", err)
 	}
 
