@@ -90,7 +90,6 @@ func (tem *TimeBasedEpochManager) SetBlockchain(blockchain interface{}) {
 	tem.mutex.Lock()
 	defer tem.mutex.Unlock()
 	tem.blockchain = blockchain
-	tem.logger.Info("🔧 设置区块链引用，用于基于区块高度计算Epoch")
 }
 
 // 🆕 新增：设置回调函数
@@ -98,7 +97,6 @@ func (tem *TimeBasedEpochManager) SetCallback(callback func(uint64) error) {
 	tem.mutex.Lock()
 	defer tem.mutex.Unlock()
 	tem.callback = callback
-	tem.logger.Info("🔧 设置Epoch切换回调函数")
 }
 
 // 🆕 新增：基于区块高度触发epoch切换

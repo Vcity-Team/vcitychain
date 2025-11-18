@@ -36,13 +36,6 @@ func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, s
 		return fmt.Errorf("voter must have staked tokens to vote")
 	}
 
-	// 检查最小投票门槛（类似TRON的最小投票要求）
-	minVotingThreshold := d.getMinVotingThreshold()
-	if votingWeight.Cmp(minVotingThreshold) < 0 {
-		return fmt.Errorf("voting weight %s is below minimum threshold %s",
-			votingWeight.String(), minVotingThreshold.String())
-	}
-
 	// 检查是否已经投票
 	if _, exists := proposal.Votes[voter]; exists {
 		return fmt.Errorf("already voted on this proposal")

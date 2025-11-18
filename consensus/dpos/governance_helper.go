@@ -63,12 +63,9 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 	case "governance_voting_period":
 		// 兼容旧参数名，重定向到 dpos_proposal_vote_period
 		return d.getCurrentParameterValue("dpos_proposal_vote_period")
-	case "governance_voting_threshold":
+	case "governance_pass_threshold":
 		// 治理参数：投票通过阈值
 		return uint64(51), nil
-	case "governance_min_voting_threshold":
-		// 治理参数：最小投票门槛
-		return d.getMinVotingThreshold().String(), nil
 	case "min_freeze_period":
 		// 冻结参数：最小冻结期（从配置读取）
 		if d.config != nil && d.config.MinFreezePeriod > 0 {

@@ -155,7 +155,6 @@ func NewForkManager(
 	// 🆕 读取创世块extraData
 	if genesisHeader, exists := fm.blockchain.GetHeaderByNumber(0); exists {
 		fm.genesisExtraData = genesisHeader.ExtraData
-		fm.logger.Info("Genesis extraData loaded", "length", len(fm.genesisExtraData))
 	}
 
 	// 🆕 设置共识切换高度（从配置中读取，如果没有则使用0表示不切换）
@@ -168,7 +167,7 @@ func NewForkManager(
 	} else {
 		fm.consensusSwitchHeight = 0 // 默认值0表示不切换
 	}
-	fm.logger.Info("Consensus switch height set", "height", fm.consensusSwitchHeight)
+	// 共识切换高度记录在配置中，此处不再重复打印日志
 
 	// Need initialization of signers in the constructor
 	// because hash calculation is called from blockchain initialization

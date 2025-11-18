@@ -78,33 +78,6 @@ func (d *DPoS) getTotalVotesForValidator(validatorAddress types.Address) *big.In
 	return totalVotes
 }
 
-// getMinVotingThreshold 获取最小投票门槛（类似TRON）
-func (d *DPoS) getMinVotingThreshold() *big.Int {
-	// 优先从缓存获取（可能被提案修改过）
-	d.parameterValuesMutex.RLock()
-	if value, exists := d.parameterCurrentValues["governance_min_voting_threshold"]; exists {
-		if thresholdStr, ok := value.(string); ok {
-			if threshold, ok := new(big.Int).SetString(thresholdStr, 10); ok {
-				d.parameterValuesMutex.RUnlock()
-				return threshold
-			}
-		}
-	}
-	d.parameterValuesMutex.RUnlock()
-
-	// 如果缓存中没有，从配置中获取最小质押门槛，作为最小投票门槛
-	if d.config != nil && d.config.MinVotingPower != nil {
-		return d.config.MinVotingPower
-	}
-	// 默认最小门槛：1 VIC
-	return big.NewInt(1000000000000000000) // 1 VIC in wei
-}
-
-// GetMinVotingThreshold 公开方法：获取最小投票门槛
-func (d *DPoS) GetMinVotingThreshold() *big.Int {
-	return d.getMinVotingThreshold()
-}
-
 // getVoterVotingWeight 获取投票者的质押权重（所有用户都可以投票）
 func (d *DPoS) getVoterVotingWeight(voter types.Address) *big.Int {
 	// 优先从数据库的DelegateInfo中读取，确保数据最全且一致

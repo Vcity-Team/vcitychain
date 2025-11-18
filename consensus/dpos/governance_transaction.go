@@ -173,13 +173,6 @@ func (d *DPoS) ProcessProposalVoteTransaction(tx *types.Transaction, blockNumber
 		return fmt.Errorf("voter %s has no voting power (must have staked tokens to vote)", tx.From.String())
 	}
 
-	// 检查最小投票门槛（类似TRON的最小投票要求）
-	minVotingThreshold := d.getMinVotingThreshold()
-	if voterWeight.Cmp(minVotingThreshold) < 0 {
-		return fmt.Errorf("voting weight %s is below minimum threshold %s",
-			voterWeight.String(), minVotingThreshold.String())
-	}
-
 	// 5. 验证投票签名
 	vote := ParameterVote{
 		Voter:      tx.From,

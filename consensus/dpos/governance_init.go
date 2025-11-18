@@ -159,20 +159,12 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Category:    "consensus",
 		},
 		// 🆕 治理参数
-		"governance_voting_threshold": {
-			Name:        "Voting Threshold",
+		"governance_pass_threshold": {
+			Name:        "Pass Threshold",
 			Type:        "uint64",
 			MinValue:    uint64(30), // 最少30%
 			MaxValue:    uint64(90), // 最多90%
 			Description: "Minimum support rate required for proposal approval (%)",
-			Category:    "governance",
-		},
-		"governance_min_voting_threshold": {
-			Name:        "Min Voting Threshold",
-			Type:        "string",
-			MinValue:    "1000000000000000000",    // 最少1 VIC
-			MaxValue:    "1000000000000000000000", // 最多1000 VIC
-			Description: "Minimum staking threshold required for voting (wei)",
 			Category:    "governance",
 		},
 		"dpos_proposal_vote_period": {
@@ -206,12 +198,9 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 // getGovernanceParameterValue 获取治理参数的当前值
 func (d *DPoS) getGovernanceParameterValue(paramName string) (interface{}, error) {
 	switch paramName {
-	case "governance_voting_threshold":
+	case "governance_pass_threshold":
 		// 默认51%的通过门槛
 		return uint64(51), nil
-	case "governance_min_voting_threshold":
-		// 默认最小投票门槛
-		return d.getMinVotingThreshold().String(), nil
 	default:
 		return nil, fmt.Errorf("unknown governance parameter: %s", paramName)
 	}
@@ -280,7 +269,7 @@ func (d *DPoS) GetCurrentProposalPeriod() map[string]interface{} {
 func (d *DPoS) getVotingThreshold() uint64 {
 	// 优先从缓存获取
 	d.parameterValuesMutex.RLock()
-	if value, exists := d.parameterCurrentValues["governance_voting_threshold"]; exists {
+	if value, exists := d.parameterCurrentValues["governance_pass_threshold"]; exists {
 		if threshold, ok := value.(uint64); ok {
 			d.parameterValuesMutex.RUnlock()
 			return threshold

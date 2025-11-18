@@ -436,7 +436,7 @@ type DPoS struct {
 
 // getDefaultVotableParameters 已迁移到 governance_init.go
 
-// getVotersForValidator, getTotalVotesForValidator, getMinVotingThreshold, GetMinVotingThreshold 已迁移到 voting_weight.go
+// getVotersForValidator 与 getTotalVotesForValidator 已迁移到 voting_weight.go
 
 // debugDatabaseContents 已迁移到 storage.go
 
