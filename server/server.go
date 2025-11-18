@@ -169,15 +169,16 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		return fmt.Errorf("invalid dpos_commission_effective: %s", commissionEffectiveStr)
 	}
 
+	blockTimeSeconds := s.config.BlockTimeSeconds
+	var blockTimeDuration time.Duration
+
 	// 从YAML配置中获取区块时间（必须配置，不允许使用默认值）
-	s.logger.Info("🔍 检查BlockTimeSeconds配置", "value", s.config.BlockTimeSeconds)
-	if blockTimeSeconds := s.config.BlockTimeSeconds; blockTimeSeconds > 0 {
-		blockTimeDuration := time.Duration(blockTimeSeconds) * time.Second
+	if blockTimeSeconds > 0 {
+		blockTimeDuration = time.Duration(blockTimeSeconds) * time.Second
 		engineConfig["blockTime"] = blockTimeDuration.String()
-		s.logger.Info("⏰ 设置区块时间", "seconds", blockTimeSeconds, "duration", blockTimeDuration.String())
 	} else {
 		// ❌ 读取不到blockTime配置，返回错误（不允许使用默认值）
-		err := fmt.Errorf("block_time_s configuration is required but not found or invalid (value: %d). Please set block_time_s in your YAML configuration file", s.config.BlockTimeSeconds)
+		err := fmt.Errorf("block_time_s configuration is required but not found or invalid (value: %d). Please set block_time_s in your YAML configuration file", blockTimeSeconds)
 		s.logger.Error("❌ 区块时间配置缺失", "error", err)
 		return err
 	}
@@ -186,7 +187,6 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 	if epochDurationStr := s.config.DPoSEpochDuration; epochDurationStr != "" {
 		if epochDuration, err := time.ParseDuration(epochDurationStr); err == nil {
 			engineConfig["epochDuration"] = epochDuration
-			s.logger.Info("⏰ 设置epoch duration", "duration", epochDuration.String())
 		} else {
 			s.logger.Error("❌ 无效的epoch duration", "duration", epochDurationStr, "error", err)
 		}
@@ -197,7 +197,6 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		if err := types.IsValidAddress(rewardAccountStr); err == nil {
 			rewardAccount := types.StringToAddress(rewardAccountStr)
 			engineConfig["rewardAccount"] = rewardAccount
-			s.logger.Info("💰 设置奖励分发地址", "account", rewardAccount.String())
 		} else {
 			s.logger.Error("❌ 无效的奖励分发地址", "address", rewardAccountStr, "error", err)
 			return fmt.Errorf("invalid reward distribution address: %s", rewardAccountStr)
@@ -211,7 +210,6 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 	if rewardAmountStr := s.config.DPoSRewardAmount; rewardAmountStr != "" {
 		if rewardAmount, ok := new(big.Int).SetString(rewardAmountStr, 10); ok {
 			engineConfig["rewardAmount"] = rewardAmount
-			s.logger.Info("💰 设置奖励金额", "amount", rewardAmount.String())
 		} else {
 			s.logger.Error("❌ 无效的奖励金额", "amount", rewardAmountStr)
 			return fmt.Errorf("invalid reward amount: %s", rewardAmountStr)
@@ -222,46 +220,30 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 	}
 
 	// 从YAML配置中获取提案表决周期（时间字符串）
-	s.logger.Info("🔍 检查DPoSProposalVotePeriod配置（第二次启动）",
-		"DPoSProposalVotePeriod", s.config.DPoSProposalVotePeriod,
-		"isEmpty", s.config.DPoSProposalVotePeriod == "")
-
 	if proposalVotePeriodStr := s.config.DPoSProposalVotePeriod; proposalVotePeriodStr != "" {
 		if proposalVotePeriod, err := parseDurationWithDays(proposalVotePeriodStr); err == nil {
 			engineConfig["proposalVotePeriod"] = proposalVotePeriod
-			s.logger.Info("✅ 成功解析提案表决周期（第二次启动）",
-				"periodStr", proposalVotePeriodStr,
-				"periodDuration", proposalVotePeriod.String(),
-				"seconds", proposalVotePeriod.Seconds())
 		} else {
-			s.logger.Error("❌ 无效的提案表决周期（第二次启动）", "period", proposalVotePeriodStr, "error", err)
+			s.logger.Error("❌ 无效的提案表决周期", "period", proposalVotePeriodStr, "error", err)
 			// 不返回错误，使用默认值
 			engineConfig["proposalVotePeriod"] = 24 * time.Hour // 默认24小时
 		}
 	} else {
-		s.logger.Warn("⚠️ DPoSProposalVotePeriod配置为空（第二次启动），使用默认值24小时")
+		s.logger.Warn("⚠️ DPoSProposalVotePeriod配置为空，使用默认值24小时")
 		engineConfig["proposalVotePeriod"] = 24 * time.Hour // 默认24小时
 	}
 
 	// 从YAML配置中获取提案有效期（时间字符串）
-	s.logger.Info("🔍 检查DPoSProposalValidPeriod配置（第二次启动）",
-		"DPoSProposalValidPeriod", s.config.DPoSProposalValidPeriod,
-		"isEmpty", s.config.DPoSProposalValidPeriod == "")
-
 	if proposalValidPeriodStr := s.config.DPoSProposalValidPeriod; proposalValidPeriodStr != "" {
 		if proposalValidPeriod, err := parseDurationWithDays(proposalValidPeriodStr); err == nil {
 			engineConfig["proposalValidPeriod"] = proposalValidPeriod
-			s.logger.Info("✅ 成功解析提案有效期（第二次启动）",
-				"periodStr", proposalValidPeriodStr,
-				"periodDuration", proposalValidPeriod.String(),
-				"seconds", proposalValidPeriod.Seconds())
 		} else {
-			s.logger.Error("❌ 无效的提案有效期（第二次启动）", "period", proposalValidPeriodStr, "error", err)
+			s.logger.Error("❌ 无效的提案有效期", "period", proposalValidPeriodStr, "error", err)
 			// 不返回错误，使用默认值
 			engineConfig["proposalValidPeriod"] = 7 * 24 * time.Hour // 默认7天
 		}
 	} else {
-		s.logger.Warn("⚠️ DPoSProposalValidPeriod配置为空（第二次启动），使用默认值7天")
+		s.logger.Warn("⚠️ DPoSProposalValidPeriod配置为空，使用默认值7天")
 		engineConfig["proposalValidPeriod"] = 7 * 24 * time.Hour // 默认7天
 	}
 
@@ -787,6 +769,10 @@ func (s *Server) setupConsensus() error {
 		engineConfig = map[string]interface{}{}
 	}
 
+	blockTimeSeconds := s.config.BlockTimeSeconds
+	blockTimeDuration := time.Duration(blockTimeSeconds) * time.Second
+	var epochDurationVal time.Duration
+
 	// 🆕 新增：将共识切换高度添加到engineConfig中
 	engineConfig["consensusSwitchHeight"] = float64(s.config.ConsensusSwitchHeight)
 
@@ -802,6 +788,7 @@ func (s *Server) setupConsensus() error {
 	if epochDurationStr := s.config.DPoSEpochDuration; epochDurationStr != "" {
 		if epochDuration, err := time.ParseDuration(epochDurationStr); err == nil {
 			engineConfig["epochDuration"] = epochDuration
+			epochDurationVal = epochDuration
 		}
 	}
 
@@ -830,67 +817,76 @@ func (s *Server) setupConsensus() error {
 		return fmt.Errorf("dpos_reward_amount is required in config file")
 	}
 
-	// 从YAML配置中获取提案表决周期（时间字符串）
-	s.logger.Info("🔍 检查DPoSProposalVotePeriod配置",
-		"DPoSProposalVotePeriod", s.config.DPoSProposalVotePeriod,
-		"isEmpty", s.config.DPoSProposalVotePeriod == "")
+	// 记录提案周期和阈值解析结果，供最后汇总日志使用
+	var (
+		proposalVotePeriodDuration  = 24 * time.Hour
+		proposalVotePeriodSeconds   = proposalVotePeriodDuration.Seconds()
+		proposalVotePeriodStrUsed   = "24h"
+		proposalValidPeriodDuration = 7 * 24 * time.Hour
+		proposalValidPeriodSeconds  = proposalValidPeriodDuration.Seconds()
+		proposalValidPeriodStrUsed  = "7d"
+		srThresholdValue            = big.NewInt(0)
+	)
 
+	// 从YAML配置中获取提案表决周期（时间字符串）
 	if proposalVotePeriodStr := s.config.DPoSProposalVotePeriod; proposalVotePeriodStr != "" {
 		if proposalVotePeriod, err := parseDurationWithDays(proposalVotePeriodStr); err == nil {
 			engineConfig["proposalVotePeriod"] = proposalVotePeriod
-			s.logger.Info("✅ 成功解析提案表决周期",
-				"periodStr", proposalVotePeriodStr,
-				"periodDuration", proposalVotePeriod.String(),
-				"seconds", proposalVotePeriod.Seconds())
+			proposalVotePeriodDuration = proposalVotePeriod
+			proposalVotePeriodSeconds = proposalVotePeriod.Seconds()
+			proposalVotePeriodStrUsed = proposalVotePeriodStr
 		} else {
 			s.logger.Error("❌ 无效的提案表决周期", "period", proposalVotePeriodStr, "error", err)
 			return fmt.Errorf("invalid proposal vote period: %s", proposalVotePeriodStr)
 		}
 	} else {
 		s.logger.Warn("⚠️ DPoSProposalVotePeriod配置为空，使用默认值24小时")
-		engineConfig["proposalVotePeriod"] = 24 * time.Hour // 默认24小时
+		engineConfig["proposalVotePeriod"] = proposalVotePeriodDuration
 	}
 
 	// 从YAML配置中获取提案有效期（时间字符串）
-	s.logger.Info("🔍 检查DPoSProposalValidPeriod配置",
-		"DPoSProposalValidPeriod", s.config.DPoSProposalValidPeriod,
-		"isEmpty", s.config.DPoSProposalValidPeriod == "")
-
 	if proposalValidPeriodStr := s.config.DPoSProposalValidPeriod; proposalValidPeriodStr != "" {
 		if proposalValidPeriod, err := parseDurationWithDays(proposalValidPeriodStr); err == nil {
 			engineConfig["proposalValidPeriod"] = proposalValidPeriod
-			s.logger.Info("✅ 成功解析提案有效期",
-				"periodStr", proposalValidPeriodStr,
-				"periodDuration", proposalValidPeriod.String(),
-				"seconds", proposalValidPeriod.Seconds())
+			proposalValidPeriodDuration = proposalValidPeriod
+			proposalValidPeriodSeconds = proposalValidPeriod.Seconds()
+			proposalValidPeriodStrUsed = proposalValidPeriodStr
 		} else {
 			s.logger.Error("❌ 无效的提案有效期", "period", proposalValidPeriodStr, "error", err)
 			return fmt.Errorf("invalid proposal valid period: %s", proposalValidPeriodStr)
 		}
 	} else {
 		s.logger.Warn("⚠️ DPoSProposalValidPeriod配置为空，使用默认值7天")
-		engineConfig["proposalValidPeriod"] = 7 * 24 * time.Hour // 默认7天
+		engineConfig["proposalValidPeriod"] = proposalValidPeriodDuration
 	}
 
 	// 从YAML配置中获取SR候选人保证金阈值
 	if srThresholdStr := s.config.DPoSSRThreshold; srThresholdStr != "" {
 		if srThreshold, ok := new(big.Int).SetString(srThresholdStr, 10); ok {
 			engineConfig["srThreshold"] = srThreshold
-			s.logger.Info("💰 设置SR候选人保证金阈值", "threshold", srThreshold.String())
+			srThresholdValue = srThreshold
 		} else {
 			s.logger.Error("❌ 无效的SR候选人保证金阈值", "threshold", srThresholdStr)
 			return fmt.Errorf("invalid SR threshold: %s", srThresholdStr)
 		}
 	} else {
 		// 默认不需要保证金
-		engineConfig["srThreshold"] = big.NewInt(0)
-		s.logger.Info("💰 使用默认SR候选人保证金阈值", "threshold", "0")
+		engineConfig["srThreshold"] = srThresholdValue
 	}
 
 	s.logger.Info("✅ DPoS经济系统配置解析完成",
+		"blockTimeSeconds", blockTimeSeconds,
+		"blockTimeDuration", blockTimeDuration.String(),
+		"epochDuration", epochDurationVal.String(),
 		"rewardAccount", engineConfig["rewardAccount"],
 		"rewardAmount", engineConfig["rewardAmount"],
-		"proposalPeriod", engineConfig["proposalPeriod"])
+		"dposProposalVotePeriod", proposalVotePeriodStrUsed,
+		"proposalVoteDuration", proposalVotePeriodDuration.String(),
+		"proposalVoteSeconds", proposalVotePeriodSeconds,
+		"dposProposalValidPeriod", proposalValidPeriodStrUsed,
+		"proposalValidDuration", proposalValidPeriodDuration.String(),
+		"proposalValidSeconds", proposalValidPeriodSeconds,
+		"srThreshold", srThresholdValue.String())
 
 	var (
 		blockTime = common.Duration{Duration: 0}
@@ -904,20 +900,7 @@ func (s *Server) setupConsensus() error {
 		}
 	}
 
-	// 🆕 验证 proposalPeriod 是否在 engineConfig 中
-	if proposalPeriod, exists := engineConfig["proposalPeriod"]; exists {
-		s.logger.Info("✅ server.go: 确认proposalPeriod在engineConfig中",
-			"value", proposalPeriod,
-			"type", fmt.Sprintf("%T", proposalPeriod))
-	} else {
-		s.logger.Warn("❌ server.go: proposalPeriod不在engineConfig中！")
-		// 打印所有键
-		keys := make([]string, 0, len(engineConfig))
-		for k := range engineConfig {
-			keys = append(keys, k)
-		}
-		s.logger.Info("📋 engineConfig中的所有键", "keys", keys)
-	}
+	// 不再检查 proposalPeriod 旧字段
 
 	config := &consensus.Config{
 		Params:      s.config.Chain.Params,
@@ -928,14 +911,7 @@ func (s *Server) setupConsensus() error {
 		RPCEndpoint: s.config.JSONRPC.JSONRPCAddr.String(),
 	}
 
-	// 🆕 验证 config.Config 中是否包含 proposalPeriod
-	if proposalPeriod, exists := config.Config["proposalPeriod"]; exists {
-		s.logger.Info("✅ server.go: 确认proposalPeriod在config.Config中",
-			"value", proposalPeriod,
-			"type", fmt.Sprintf("%T", proposalPeriod))
-	} else {
-		s.logger.Error("❌ server.go: proposalPeriod不在config.Config中！配置传递失败！")
-	}
+	// 旧 proposalPeriod 字段已废弃，不再检查
 
 	consensus, err := engine(
 		&consensus.Params{

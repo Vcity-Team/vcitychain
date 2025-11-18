@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/bls"
-	"github.com/Vcity-Team/vcitychain/state"
 	"github.com/Vcity-Team/vcitychain/consensus/ibft/hook"
 	"github.com/Vcity-Team/vcitychain/consensus/ibft/signer"
 	"github.com/Vcity-Team/vcitychain/secrets"
+	"github.com/Vcity-Team/vcitychain/state"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/Vcity-Team/vcitychain/validators"
 	"github.com/Vcity-Team/vcitychain/validators/store"
@@ -26,7 +26,7 @@ const (
 	loggerName                = "fork_manager"
 	snapshotMetadataFilename  = "metadata"
 	snapshotSnapshotsFilename = "snapshots"
-	
+
 	// DPoS最小质押门槛：从配置文件读取 dpos_delegate_threshold
 	// 默认值：1000 VCITY = 1000 * 1e18 wei
 	DefaultMinStakeAmount = "1000000000000000000000"
@@ -88,23 +88,23 @@ type ForkManager struct {
 	epochSize uint64
 
 	// 🆕 新增：数据目录和共识切换配置
-	dataDir               string // 数据目录
-	consensusSwitchHeight uint64 // 共识切换高度
-	dposValidatorsCount   uint64 // DPoS验证者数量
-	dposDelegateThreshold *big.Int // DPoS最小质押门槛（从配置文件读取）
-	genesisExtraData      []byte // 创世块extraData
-	hasSwitchedToDPoS     bool   // 是否已经切换到DPoS（避免重复日志）
+	dataDir               string    // 数据目录
+	consensusSwitchHeight uint64    // 共识切换高度
+	dposValidatorsCount   uint64    // DPoS验证者数量
+	dposDelegateThreshold *big.Int  // DPoS最小质押门槛（从配置文件读取）
+	genesisExtraData      []byte    // 创世块extraData
+	hasSwitchedToDPoS     bool      // 是否已经切换到DPoS（避免重复日志）
 	lastConsensusFailure  time.Time // 上次共识失败时间（用于延迟重试）
-	
+
 	// 🆕 新增：DPoS引擎相关
-	dposEngine        DPoSEngine // DPoS共识引擎
-	isDPoSRunning     bool       // DPoS引擎是否正在运行
-	consensusEngine   interface{} // 当前运行的共识引擎
-	
+	dposEngine      DPoSEngine  // DPoS共识引擎
+	isDPoSRunning   bool        // DPoS引擎是否正在运行
+	consensusEngine interface{} // 当前运行的共识引擎
+
 	// 🆕 新增：DPoS插件所需字段
-	config   interface{} // 配置对象
-	network  interface{} // 网络对象
-	txPool   interface{} // 交易池对象
+	config  interface{} // 配置对象
+	network interface{} // 网络对象
+	txPool  interface{} // 交易池对象
 
 	// submodule lookup
 	keyManagers     map[validators.ValidatorType]signer.KeyManager
@@ -141,12 +141,12 @@ func NewForkManager(
 		filePath:              filePath,
 		epochSize:             epochSize,
 		forks:                 forks,
-		dataDir:               dataDir, // 🆕 设置数据目录
-		dposValidatorsCount:   dposValidatorsCount, // 🆕 设置DPoS验证者数量
+		dataDir:               dataDir,               // 🆕 设置数据目录
+		dposValidatorsCount:   dposValidatorsCount,   // 🆕 设置DPoS验证者数量
 		dposDelegateThreshold: dposDelegateThreshold, // 🆕 设置DPoS最小质押门槛
-		network:               network, // 🆕 设置网络组件
-		txPool:                txPool, // 🆕 设置交易池
-		config:                config, // 🆕 设置配置
+		network:               network,               // 🆕 设置网络组件
+		txPool:                txPool,                // 🆕 设置交易池
+		config:                config,                // 🆕 设置配置
 		keyManagers:           make(map[validators.ValidatorType]signer.KeyManager),
 		validatorStores:       make(map[store.SourceType]ValidatorStore),
 		hooksRegisters:        make(map[IBFTType]HooksRegister),
@@ -182,7 +182,7 @@ func NewForkManager(
 // Initialize initializes ForkManager on initialization phase
 func (m *ForkManager) Initialize() error {
 	m.logger.Info("ForkManager.Initialize called")
-	
+
 	if err := m.initializeValidatorStores(); err != nil {
 		m.logger.Error("Failed to initialize validator stores", "error", err)
 		return err
@@ -190,24 +190,19 @@ func (m *ForkManager) Initialize() error {
 
 	m.initializeHooksRegisters()
 
-	// 🆕 检查启动时是否需要立即切换到DPoS
 	if m.consensusSwitchHeight > 0 {
 		currentHeight := m.blockchain.Header().Number
-		m.logger.Info("🔍 启动时检查切换状态", 
-			"currentHeight", currentHeight, 
+		m.logger.Info("🔍 启动时检查切换状态",
+			"currentHeight", currentHeight,
 			"switchHeight", m.consensusSwitchHeight)
-		
+
 		// 修复：检查是否已经达到或超过切换高度（包括重启后的情况）
 		if currentHeight >= m.consensusSwitchHeight {
-			m.logger.Info("🚨 启动时发现已达到或超过切换高度，立即切换到DPoS", 
-				"currentHeight", currentHeight, 
+			m.logger.Info("🚨 启动时发现已达到或超过切换高度，立即切换到DPoS",
+				"currentHeight", currentHeight,
 				"switchHeight", m.consensusSwitchHeight)
-			
-			// DPoS应该在服务器层面独立启动，这里只标记状态
-			m.logger.Info("✅ 已达到DPoS切换高度，DPoS应该在服务器层面独立启动")
 		}
 	}
-
 	m.logger.Info("ForkManager.Initialize completed successfully")
 	return nil
 }
@@ -272,15 +267,14 @@ func (m *ForkManager) GetValidatorStore(height uint64) (ValidatorStore, error) {
 
 // GetValidators returns validators at specified height
 func (m *ForkManager) GetValidators(height uint64) (validators.Validators, error) {
-	
-	
-		// 🆕 检查是否需要切换到DPoS（0表示不进行切换）
-		if m.consensusSwitchHeight > 0 && height >= m.consensusSwitchHeight {
-			// 如果达到切换高度，返回空验证者集合，让IBFT停止
-			m.logger.Info("🛑 已达到DPoS切换高度，返回空验证者集合让IBFT停止", "height", height)
-			return validators.NewECDSAValidatorSet(), nil
-		}
-	
+
+	// 🆕 检查是否需要切换到DPoS（0表示不进行切换）
+	if m.consensusSwitchHeight > 0 && height >= m.consensusSwitchHeight {
+		// 如果达到切换高度，返回空验证者集合，让IBFT停止
+		m.logger.Info("🛑 已达到DPoS切换高度，返回空验证者集合让IBFT停止", "height", height)
+		return validators.NewECDSAValidatorSet(), nil
+	}
+
 	fork := m.forks.getFork(height)
 	if fork == nil {
 		m.logger.Error("Fork not found for height", "height", height)
@@ -289,7 +283,7 @@ func (m *ForkManager) GetValidators(height uint64) (validators.Validators, error
 
 	set := m.getValidatorStoreByIBFTFork(fork)
 	if set == nil {
-		m.logger.Error("Validator store not found", 
+		m.logger.Error("Validator store not found",
 			"height", height,
 			"fork_type", fork.Type,
 			"source_type", ibftTypesToSourceType[fork.Type])
@@ -301,9 +295,9 @@ func (m *ForkManager) GetValidators(height uint64) (validators.Validators, error
 		m.epochSize,
 		fork.From.Value,
 	)
-	
+
 	if err != nil {
-		m.logger.Error("Failed to get validators at height", 
+		m.logger.Error("Failed to get validators at height",
 			"height", height,
 			"error", err)
 		return nil, err
@@ -376,15 +370,15 @@ func (m *ForkManager) initializeKeyManager(valType validators.ValidatorType) err
 // initializeValidatorStores initializes all validator sets based on Fork configuration
 func (m *ForkManager) initializeValidatorStores() error {
 	m.logger.Info("initializeValidatorStores called", "forks_count", len(m.forks))
-	
+
 	for _, fork := range m.forks {
 		sourceType := ibftTypesToSourceType[fork.Type]
-		m.logger.Info("Initializing validator store for fork", 
+		m.logger.Info("Initializing validator store for fork",
 			"fork_type", fork.Type,
 			"source_type", sourceType)
-		
+
 		if err := m.initializeValidatorStore(sourceType); err != nil {
-			m.logger.Error("Failed to initialize validator store", 
+			m.logger.Error("Failed to initialize validator store",
 				"fork_type", fork.Type,
 				"source_type", sourceType,
 				"error", err)
@@ -399,7 +393,7 @@ func (m *ForkManager) initializeValidatorStores() error {
 // initializeValidatorStore initializes the specified validator set
 func (m *ForkManager) initializeValidatorStore(setType store.SourceType) error {
 	m.logger.Info("initializeValidatorStore called", "setType", setType)
-	
+
 	if _, ok := m.validatorStores[setType]; ok {
 		m.logger.Info("Validator store already exists", "setType", setType)
 		return nil
@@ -415,40 +409,40 @@ func (m *ForkManager) initializeValidatorStore(setType store.SourceType) error {
 		// Get validators from the first PoA fork
 		var initialValidators validators.Validators
 		for _, fork := range m.forks {
-			m.logger.Info("Checking fork", 
+			m.logger.Info("Checking fork",
 				"fork_type", fork.Type,
 				"has_validators", fork.Validators != nil,
-				"validator_count", func() int { 
-					if fork.Validators != nil { 
-						return fork.Validators.Len() 
-					} 
-					return 0 
+				"validator_count", func() int {
+					if fork.Validators != nil {
+						return fork.Validators.Len()
+					}
+					return 0
 				}())
-			
+
 			if fork.Type == PoA && fork.Validators != nil {
 				initialValidators = fork.Validators
-				m.logger.Info("Found PoA fork with validators", 
+				m.logger.Info("Found PoA fork with validators",
 					"validator_count", initialValidators.Len(),
 					"validator_type", initialValidators.Type())
 				break
 			}
 		}
-		
+
 		// If no validators found in fork config, try to parse from genesis block extraData
 		if initialValidators == nil {
 			m.logger.Info("No PoA fork with validators found, trying to parse from genesis block extraData")
 			if genesisHeader, exists := m.blockchain.GetHeaderByNumber(0); exists {
-				m.logger.Info("Genesis block found", 
+				m.logger.Info("Genesis block found",
 					"extraData_length", len(genesisHeader.ExtraData),
 					"extraData_hex", fmt.Sprintf("0x%x", genesisHeader.ExtraData))
-				
+
 				// Parse validators from genesis extraData
 				parsedValidators, err := m.parseValidatorsFromExtraData(genesisHeader.ExtraData)
 				if err != nil {
 					m.logger.Error("Failed to parse validators from genesis extraData", "error", err)
 				} else {
 					initialValidators = parsedValidators
-					m.logger.Info("Parsed validators from genesis extraData", 
+					m.logger.Info("Parsed validators from genesis extraData",
 						"validator_count", initialValidators.Len(),
 						"validator_type", initialValidators.Type())
 				}
@@ -456,8 +450,8 @@ func (m *ForkManager) initializeValidatorStore(setType store.SourceType) error {
 				m.logger.Warn("Genesis block not found, using nil initialValidators")
 			}
 		}
-		
-		m.logger.Info("Creating SnapshotValidatorStoreWrapper", 
+
+		m.logger.Info("Creating SnapshotValidatorStoreWrapper",
 			"initialValidators", initialValidators != nil,
 			"initialValidatorsLen", func() int {
 				if initialValidators != nil {
@@ -465,7 +459,7 @@ func (m *ForkManager) initializeValidatorStore(setType store.SourceType) error {
 				}
 				return 0
 			}())
-		
+
 		valStore, err = NewSnapshotValidatorStoreWrapper(
 			m.logger,
 			m.blockchain,
@@ -495,22 +489,22 @@ func (m *ForkManager) initializeValidatorStore(setType store.SourceType) error {
 // parseValidatorsFromExtraData parses validators from genesis block extraData
 func (m *ForkManager) parseValidatorsFromExtraData(extraData []byte) (validators.Validators, error) {
 	// 开始解析extraData
-	
+
 	// Remove only the vanity bytes (32 bytes) from extraData
 	// The rest is RLP data containing validators and seals
 	if len(extraData) < 32 {
 		return nil, fmt.Errorf("extraData too short: %d bytes", len(extraData))
 	}
-	
+
 	// Extract the RLP-encoded data
 	// extraData format: [vanity(32)] + [RLP(IstanbulExtra)]
 	rlpData := extraData[32:]
-	
+
 	// 提取RLP数据
-	
+
 	// Create ECDSA validators
 	validatorList := make([]*validators.ECDSAValidator, 0)
-	
+
 	// Parse RLP data using the same method as the test
 	err := types.UnmarshalRlp(func(p *fastrlp.Parser, v *fastrlp.Value) error {
 		// Get the top-level list
@@ -518,9 +512,9 @@ func (m *ForkManager) parseValidatorsFromExtraData(extraData []byte) (validators
 		if err != nil {
 			return fmt.Errorf("expected array: %w", err)
 		}
-		
+
 		// 找到验证者列表
-		
+
 		// Process each element
 		for _, elem := range elems {
 			// Try to get bytes
@@ -530,14 +524,14 @@ func (m *ForkManager) parseValidatorsFromExtraData(extraData []byte) (validators
 					addr := types.BytesToAddress(bytes)
 					validator := validators.NewECDSAValidator(addr)
 					validatorList = append(validatorList, validator)
-					
+
 					// 解析验证者地址
 				}
 			} else {
 				// Try to get sub-elements
 				if subElems, err := elem.GetElems(); err == nil {
 					// 找到子列表
-					
+
 					for _, subElem := range subElems {
 						if subBytes, err := subElem.GetBytes(nil); err == nil {
 							// If it's 20 bytes, it might be an address
@@ -545,7 +539,7 @@ func (m *ForkManager) parseValidatorsFromExtraData(extraData []byte) (validators
 								addr := types.BytesToAddress(subBytes)
 								validator := validators.NewECDSAValidator(addr)
 								validatorList = append(validatorList, validator)
-								
+
 								// 解析子列表中的验证者地址
 							}
 						}
@@ -553,16 +547,16 @@ func (m *ForkManager) parseValidatorsFromExtraData(extraData []byte) (validators
 				}
 			}
 		}
-		
+
 		return nil
 	}, rlpData)
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse RLP data: %w", err)
 	}
-	
+
 	// 成功解析验证者
-	
+
 	return validators.NewECDSAValidatorSet(validatorList...), nil
 }
 
@@ -597,51 +591,51 @@ func (m *ForkManager) initializeHooksRegister(ibftType IBFTType) {
 func (m *ForkManager) readBLSPrivateKeyAndGeneratePublicKey(validatorAddress types.Address) ([]byte, error) {
 	// 1. 构建私钥文件路径
 	keyFilePath := filepath.Join(m.dataDir, "consensus", "validator-bls.key")
-	
+
 	// 读取BLS私钥文件
-	
+
 	// 2. 检查文件是否存在
 	if _, err := os.Stat(keyFilePath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("BLS private key file not found: %s", keyFilePath)
 	}
-	
+
 	// 3. 读取私钥文件
 	privateKeyData, err := os.ReadFile(keyFilePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read BLS private key file: %w", err)
 	}
-	
+
 	// 4. 获取十六进制字符串（去除可能的换行符）
 	privateKeyHex := strings.TrimSpace(string(privateKeyData))
-	
+
 	// 5. 检查并修正私钥长度（与测试文件逻辑完全一致）
 	if len(privateKeyHex)%2 != 0 {
-		m.logger.Info("Private key length is odd, adding leading zero", 
+		m.logger.Info("Private key length is odd, adding leading zero",
 			"originalLength", len(privateKeyHex),
 			"originalKey", privateKeyHex)
 		privateKeyHex = "0" + privateKeyHex
-		m.logger.Info("Private key corrected", 
+		m.logger.Info("Private key corrected",
 			"correctedLength", len(privateKeyHex),
 			"correctedKey", privateKeyHex)
 	}
-	
+
 	// 6. 解析BLS私钥（与测试文件逻辑完全一致）
 	privateKey, err := bls.UnmarshalPrivateKey([]byte(privateKeyHex))
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal BLS private key: %w", err)
 	}
-	
+
 	// 7. 从私钥生成公钥（与测试文件逻辑完全一致）
 	publicKey := privateKey.PublicKey()
 	publicKeyBytes := publicKey.Marshal()
-	
+
 	// 8. 验证公钥长度（应该是128字节）
 	if len(publicKeyBytes) != 128 {
 		return nil, fmt.Errorf("invalid BLS public key length: expected 128 bytes, got %d", len(publicKeyBytes))
 	}
-	
+
 	// BLS密钥处理完成（简化日志）
-	
+
 	return publicKeyBytes, nil
 }
 
@@ -652,8 +646,7 @@ func (m *ForkManager) getValidatorBalance(address types.Address) (*big.Int, erro
 	if currentHeader == nil {
 		return nil, fmt.Errorf("failed to get current header")
 	}
-	
-	
+
 	// 通过GetExecutor()方法获取state.Executor
 	if adapter, ok := m.executor.(interface {
 		GetExecutor() *state.Executor
@@ -665,32 +658,26 @@ func (m *ForkManager) getValidatorBalance(address types.Address) (*big.Int, erro
 			if err != nil {
 				return nil, fmt.Errorf("failed to create snapshot at state root %s: %w", currentHeader.StateRoot.String(), err)
 			}
-			
+
 			account, err := snapshot.GetAccount(address)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get account for address %s: %w", address.String(), err)
 			}
-			
+
 			// 返回账户余额
 			return account.Balance, nil
 		}
 	}
-	
+
 	// 如果无法获取executor，返回0余额
 	m.logger.Warn("无法获取executor，返回0余额", "address", address.String())
 	return big.NewInt(0), nil
 }
 
-
-
-
-
-
 // 🆕 新增：获取切换高度
 func (m *ForkManager) GetSwitchHeight() uint64 {
 	return m.consensusSwitchHeight
 }
-
 
 // 🆕 新增：获取DPoS验证者（返回IBFT兼容格式，包含抵押检查）
 func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, error) {
@@ -699,10 +686,10 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse validators from extraData: %w", err)
 	}
-	
+
 	// 2. 创建IBFT兼容的验证者集合
 	validatorSet := validators.NewValidatorSet(validators.ECDSAValidatorType)
-	
+
 	// 3. 获取最小质押门槛（从配置文件读取）
 	var minStakeAmount *big.Int
 	if m.dposDelegateThreshold != nil {
@@ -716,95 +703,93 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 		}
 		m.dposDelegateThreshold = minStakeAmount
 	}
-	
+
 	// 🚨 关键日志：开始DPoS验证者筛选
-	m.logger.Info("🚨 DPoS验证者筛选开始", 
+	m.logger.Info("🚨 DPoS验证者筛选开始",
 		"height", height,
 		"totalCandidates", ibftValidators.Len(),
 		"minStakeAmount", minStakeAmount.String())
-	
+
 	validValidatorCount := 0
 	insufficientBalanceCount := 0
-	
+
 	// 4. 为每个验证者地址检查余额并生成BLS公钥
 	for i := 0; i < ibftValidators.Len(); i++ {
 		ibftValidator := ibftValidators.At(uint64(i))
 		address := ibftValidator.Addr()
-		
+
 		// 🆕 查询验证者余额
 		balance, err := m.getValidatorBalance(address)
 		if err != nil {
-			m.logger.Error("❌ 余额查询失败", 
-				"address", address.String(), 
+			m.logger.Error("❌ 余额查询失败",
+				"address", address.String(),
 				"error", err)
 			continue
 		}
-		
+
 		// 🆕 检查是否满足最小质押要求
 		if balance.Cmp(minStakeAmount) < 0 {
 			insufficientBalanceCount++
-			m.logger.Warn("⚠️ 验证者余额不足", 
+			m.logger.Warn("⚠️ 验证者余额不足",
 				"address", address.String(),
 				"balance", balance.String(),
 				"required", minStakeAmount.String(),
 				"deficit", new(big.Int).Sub(minStakeAmount, balance).String())
 			continue
 		}
-		
+
 		// 🆕 从私钥文件生成BLS公钥
 		blsPublicKey, err := m.readBLSPrivateKeyAndGeneratePublicKey(address)
 		if err != nil {
-			m.logger.Error("❌ BLS公钥生成失败", 
-				"address", address.String(), 
+			m.logger.Error("❌ BLS公钥生成失败",
+				"address", address.String(),
 				"error", err)
 			continue
 		}
-		
+
 		// 🆕 创建IBFT兼容的验证者，但包含BLS公钥
 		ecdsaValidator := validators.NewECDSAValidatorWithBLS(address, blsPublicKey)
 		validatorSet.Add(ecdsaValidator)
 		validValidatorCount++
-		
+
 		// 🚨 关键日志：成功创建DPoS验证者
-		m.logger.Info("✅ DPoS验证者创建成功", 
+		m.logger.Info("✅ DPoS验证者创建成功",
 			"address", address.String(),
 			"balance", balance.String(),
 			"blsKeyLength", len(blsPublicKey),
 			"validatorIndex", validValidatorCount)
 	}
-	
+
 	// 🚨 关键日志：DPoS验证者筛选结果汇总
-	m.logger.Info("🚨 DPoS验证者筛选完成", 
+	m.logger.Info("🚨 DPoS验证者筛选完成",
 		"height", height,
 		"totalCandidates", ibftValidators.Len(),
 		"validValidators", validValidatorCount,
 		"insufficientBalance", insufficientBalanceCount,
 		"successRate", fmt.Sprintf("%.1f%%", float64(validValidatorCount)/float64(ibftValidators.Len())*100))
-	
+
 	// 检查是否有足够的验证者，如果没有则返回空验证者集合（避免阻塞RPC）
 	// 如果第一次检查没有找到验证者，记录警告但不阻塞
-	
+
 	if validValidatorCount == 0 {
-		m.logger.Error("❌ 没有验证者满足DPoS质押要求，程序退出", 
+		m.logger.Error("❌ 没有验证者满足DPoS质押要求，程序退出",
 			"height", height,
 			"totalCandidates", ibftValidators.Len(),
 			"minStakeAmount", minStakeAmount.String())
-		
+
 		// 记录共识失败时间
 		m.lastConsensusFailure = time.Now()
-		
+
 		// 程序直接退出
 		os.Exit(1)
 	}
-	
+
 	if validValidatorCount < 2 {
-		m.logger.Warn("⚠️ 警告：DPoS验证者数量过少", 
+		m.logger.Warn("⚠️ 警告：DPoS验证者数量过少",
 			"validValidators", validValidatorCount,
 			"建议至少需要2个验证者")
 	}
-	
+
 	// 返回IBFT兼容的验证者集合
 	return validatorSet, nil
 }
-
-

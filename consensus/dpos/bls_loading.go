@@ -163,7 +163,8 @@ func (d *DPoS) syncLoadBLSKeys() error {
 	}
 
 	// 3. 同步获取缺失的BLS公钥（带重试机制）
-	maxRetries := 3
+	maxRetries := 1
+	missingValidators := make([]types.Address, 0)
 
 	for _, validator := range validators {
 		if validator.BlsKey == nil {
@@ -194,7 +195,12 @@ func (d *DPoS) syncLoadBLSKeys() error {
 			}
 
 			if err != nil {
-				return fmt.Errorf("failed to get BLS key for %s after %d retries: %w", validator.Address.String(), maxRetries, err)
+				d.logger.Warn("⚠️ 启动阶段无法获取BLS公钥，将在后续按需加载",
+					"address", validator.Address.String(),
+					"maxRetries", maxRetries,
+					"error", err)
+				missingValidators = append(missingValidators, validator.Address)
+				continue
 			}
 
 			// 保存BLS公钥
@@ -215,6 +221,11 @@ func (d *DPoS) syncLoadBLSKeys() error {
 			allBLSLoaded = false
 			d.logger.Warn("⚠️ 验证者BLS公钥未加载", "address", validator.Address.String())
 		}
+	}
+
+	if len(missingValidators) > 0 {
+		d.logger.Warn("⚠️ 部分验证者BLS公钥启动时缺失，将在后续按需获取",
+			"missingCount", len(missingValidators))
 	}
 
 	if !allBLSLoaded {
