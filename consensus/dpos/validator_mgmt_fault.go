@@ -509,7 +509,7 @@ func (d *DPoS) getEpochValidatorsFromDatabase() (validator.AccountSet, error) {
 	}
 
 	// 🆕 使用日志频率限制，10秒一次
-	d.logOnceWithInterval("get_epoch_validators_success", 10*time.Second, "info",
+	d.logOnceWithInterval("get_epoch_validators_success", 10*time.Second, "debug",
 		"✅ 从数据库获取epoch验证者成功", "count", len(validators))
 	return validators, nil
 }
