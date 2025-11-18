@@ -191,18 +191,6 @@ func (p *polybftBackendMock) GetStakingInfo(blockNumber uint64, staker types.Add
 	return nil, errors.New("not implemented")
 }
 
-func (p *polybftBackendMock) GetStakingInfoWithTx(blockNumber uint64, staker types.Address, dbTx *bolt.Tx) (*StakeInfo, error) {
-	args := p.Called(blockNumber, staker, dbTx)
-	if len(args) == 1 {
-		stakeInfo, _ := args.Get(0).(*StakeInfo)
-		return stakeInfo, nil
-	} else if len(args) == 2 {
-		stakeInfo, _ := args.Get(0).(*StakeInfo)
-		return stakeInfo, args.Error(1)
-	}
-	return nil, errors.New("not implemented")
-}
-
 func (p *polybftBackendMock) GetVotingPower(blockNumber uint64, delegate types.Address) (*big.Int, error) {
 	args := p.Called(blockNumber, delegate)
 	if len(args) == 1 {

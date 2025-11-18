@@ -194,12 +194,6 @@ type dposBackend interface {
 	// GetCurrentDelegates 获取当前内存中的受托人集合
 	GetCurrentDelegates() validator.AccountSet
 
-	// GetStakingInfo 获取指定区块的质押信息
-	GetStakingInfo(blockNumber uint64, staker types.Address) (*StakeInfo, error)
-
-	// GetStakingInfoWithTx 在数据库事务中获取质押信息
-	GetStakingInfoWithTx(blockNumber uint64, staker types.Address, dbTx *bolt.Tx) (*StakeInfo, error)
-
 	// GetVotingPower 获取指定区块的投票权重
 	GetVotingPower(blockNumber uint64, delegate types.Address) (*big.Int, error)
 
@@ -1532,39 +1526,8 @@ func (d *DPoS) parseValidatorsFromExtraData(extraData []byte) (validator.Account
 		return nil, fmt.Errorf("failed to parse RLP data: %w", err)
 	}
 
-	// 成功解析验证者
-
 	return validator.AccountSet(validatorList), nil
 }
-
-// requestBLSPublicKeyFromNetwork 已迁移到 bls_network.go
-
-// BLSPublicKeyRequest 类型已迁移到 bls_types.go
-
-// 🆕 新增：查询验证者余额
-// getValidatorBalance 已迁移到 account_query.go
-
-// readBLSPrivateKeyAndGeneratePublicKey 已迁移到 bls_public_key.go
-
-// initializeDelegates 已迁移到 validator_mgmt_delegate.go
-
-// saveValidatorSetForBlock, saveValidatorSetForBlockWithValidators, loadValidatorsFromDatabaseWithLimit 已迁移到 storage.go
-
-// addDelegateSafely 已迁移到 validator_mgmt_delegate.go
-
-// initializeBLSLoadingState, waitForBLSKeysLoaded, asyncLoadBLSKeys, getAllValidators,
-// getBLSKeyForValidator, saveBLSKeyToCache, syncLoadBLSKeys 已迁移到 bls_loading.go 和 bls_public_key.go
-
-// saveValidatorsWithBLSKeysToDatabase, getCurrentDelegateInfo, saveBLSKeyToDatabase, loadBLSKeysFromDatabase 已迁移到 bls_storage.go
-
-// dpos.go - 添加后端接口实现
-// GetDelegates 已迁移到 validator_mgmt_manager.go
-// GetValidatorsWithFilter 已迁移到 validator_mgmt_manager.go
-// GetDelegatesWithTx 已迁移到 validator_mgmt_manager.go
-
-// GetStakingInfo 和 GetStakingInfoWithTx 已迁移到 validator_mgmt_stake.go
-
-// GetVotingPower 和 GetVotingPowerWithTx 已迁移到 voting_weight.go
 
 // OnBlockInserted 在区块写入后调用，用于清理交易池和处理区块事件
 // 这个方法在同步区块和本地生产区块时都会被调用，确保交易池状态与链上状态一致
@@ -1718,15 +1681,6 @@ func (d *DPoS) processRewards(block *types.FullBlock) error {
 	// TODO: 实现奖励分配逻辑
 	return nil
 }
-
-// getPrimaryDelegate 已迁移到 validator_mgmt_stake.go
-// getDelegatesFromState 已迁移到 validator_mgmt_delegate.go
-
-// getDelegatesFromState 和 getGenesisValidators 已迁移到 validator_mgmt_delegate.go
-
-// getDelegatesFromStateWithTx 已迁移到 validator_mgmt_delegate.go
-
-// getVotingPowerFromStateWithTx 已迁移到 voting_weight.go
 
 // 初始化性能优化组件
 func (d *DPoS) initPerformanceOptimizations() {
