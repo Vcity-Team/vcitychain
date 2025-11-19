@@ -2266,11 +2266,13 @@ func (i *Extra) applyValidatorSetDelta(parentValidators validator.AccountSet, de
 		logger.Info("🔍 开始处理故障标志", "faultCount", len(i.FaultFlags))
 
 		for _, faultFlag := range i.FaultFlags {
-			logger.Info("📝 处理故障标志",
-				"address", faultFlag.NodeAddress.String(),
-				"isFaulty", faultFlag.IsFaulty,
-				"missedBlocks", faultFlag.MissedBlocks,
-				"reason", faultFlag.Reason)
+			if faultFlag.IsFaulty {
+				logger.Info("📝 处理故障标志",
+					"address", faultFlag.NodeAddress.String(),
+					"isFaulty", faultFlag.IsFaulty,
+					"missedBlocks", faultFlag.MissedBlocks,
+					"reason", faultFlag.Reason)
+			}
 
 			// 更新验证者故障状态
 			i.updateValidatorFaultStatus(currentValidators, faultFlag, logger)
@@ -2290,12 +2292,14 @@ func (i *Extra) updateValidatorFaultStatus(validators validator.AccountSet, faul
 			oldStatus := validator.IsActive
 			validator.IsActive = !faultFlag.IsFaulty
 
-			logger.Info("🔄 更新验证者故障状态",
-				"address", faultFlag.NodeAddress.String(),
-				"oldStatus", oldStatus,
-				"newStatus", validator.IsActive,
-				"isFaulty", faultFlag.IsFaulty,
-				"missedBlocks", faultFlag.MissedBlocks)
+			if faultFlag.IsFaulty {
+				logger.Info("🔄 更新验证者故障状态",
+					"address", faultFlag.NodeAddress.String(),
+					"oldStatus", oldStatus,
+					"newStatus", validator.IsActive,
+					"isFaulty", faultFlag.IsFaulty,
+					"missedBlocks", faultFlag.MissedBlocks)
+			}
 			break
 		}
 	}

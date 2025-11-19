@@ -363,10 +363,6 @@ func (d *DPoS) updateMemoryFaultStatus(faultFlag FaultFlagInfo) {
 			"reason", faultFlag.Reason)
 	} else {
 		delete(d.faultyValidators, faultFlag.NodeAddress)
-		d.logger.Info("✅ 清除内存故障状态",
-			"address", faultFlag.NodeAddress.String(),
-			"missedBlocks", faultFlag.MissedBlocks,
-			"reason", faultFlag.Reason)
 	}
 }
 
@@ -603,7 +599,18 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 
 			// 查询这个epoch中该验证者实际出块的次数
 			for blockNum := epochStartBlock; blockNum < epochEndBlock; blockNum++ {
-				if header, exists := d.blockchain.GetHeaderByNumber(blockNum); exists {
+				header, exists := d.blockchain.GetHeaderByNumber(blockNum)
+				if (!exists || header == nil) && blockNum == epochEndBlock-1 {
+					if pendingHeader := d.getPendingEpochEndHeader(blockNum); pendingHeader != nil {
+						header = pendingHeader
+						exists = true
+						d.logger.Info("✅ [calculateMissedBlocksWithActual] 使用待写入的epoch结束区块头",
+							"validator", validatorAddr.String(),
+							"blockNumber", blockNum)
+					}
+				}
+
+				if exists && header != nil {
 					// 🆕 修复：通过Miner字段检查出块者
 					if len(header.Miner) == 20 {
 						minerAddr := types.Address(header.Miner)

@@ -604,10 +604,20 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				}
 
 				// 🆕 在epoch结束区块执行故障检测
+				headerPreview := &types.Header{
+					ParentHash: parent.Hash,
+					Number:     nextBlockNumber,
+					Miner:      keyAddr[:],
+					Timestamp:  uint64(time.Now().Unix()),
+				}
+				dposInstance.SetPendingEpochEndHeader(headerPreview)
+
 				r.logger.Info("🔍 ===== 开始执行故障检测 =====", "blockNumber", nextBlockNumber)
 				if faultFlags, err := dposInstance.detectValidatorFaults(nextBlockNumber); err != nil {
+					dposInstance.ClearPendingEpochEndHeader(nextBlockNumber)
 					r.logger.Error("❌ 故障检测失败", "blockNumber", nextBlockNumber, "error", err)
 				} else {
+					dposInstance.ClearPendingEpochEndHeader(nextBlockNumber)
 					// 🆕 将故障检测结果存储到 pendingFaultFlags（类似 pendingRewardDistribution）
 					dposInstance.pendingFaultFlags = faultFlags
 

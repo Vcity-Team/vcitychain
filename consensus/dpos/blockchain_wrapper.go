@@ -598,11 +598,13 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 					p.logger.Info("✅ ===============================================边界应用恢复提案成功", "proposalID", pprop.ID, "validator", ff.NodeAddress.String(), "currentEpoch", epochForLog)
 				}
 
-				p.logger.Info("📝 处理故障标志",
-					"address", ff.NodeAddress.String(),
-					"isFaulty", ff.IsFaulty,
-					"missedBlocks", ff.MissedBlocks,
-					"reason", ff.Reason)
+				if ff.IsFaulty {
+					p.logger.Info("📝 处理故障标志",
+						"address", ff.NodeAddress.String(),
+						"isFaulty", ff.IsFaulty,
+						"missedBlocks", ff.MissedBlocks,
+						"reason", ff.Reason)
+				}
 				// 更新验证者故障状态到数据库
 				if err := p.updateValidatorFaultStatus(*ff); err != nil {
 					p.logger.Error("❌ 更新验证者故障状态失败", "error", err)
@@ -614,6 +616,9 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 			// 🆕 调用前打印最终的 FaultFlags 快照
 			for i := range extra.FaultFlags {
 				ff := &extra.FaultFlags[i]
+				if !ff.IsFaulty {
+					continue
+				}
 				p.logger.Info("📸 FaultFlags 最终快照",
 					"index", i,
 					"address", ff.NodeAddress.String(),

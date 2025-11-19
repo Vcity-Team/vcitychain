@@ -320,9 +320,9 @@ type DPoS struct {
 	logger hclog.Logger
 
 	// DPoS特有组件
-	config      *DPoSConfig
-	runtime     *dposRuntime
-	rawConfig   map[string]interface{} // 🆕 存储原始配置，用于读取削减相关参数
+	config    *DPoSConfig
+	runtime   *dposRuntime
+	rawConfig map[string]interface{} // 🆕 存储原始配置，用于读取削减相关参数
 
 	// reference to the syncer
 	syncer syncer.Syncer
@@ -377,7 +377,8 @@ type DPoS struct {
 	pendingRewardDistribution *RewardDistributionInfo
 
 	// 🆕 故障检测信息
-	pendingFaultFlags []FaultFlagInfo
+	pendingFaultFlags     []FaultFlagInfo
+	pendingEpochEndHeader *types.Header
 
 	// 🆕 经济系统组件
 	epochManager      *TimeBasedEpochManager
@@ -425,6 +426,60 @@ type DPoS struct {
 	// 🆕 参数值缓存
 	parameterCurrentValues map[string]interface{} // 参数当前值缓存
 	parameterValuesMutex   sync.RWMutex           // 参数值读写锁
+}
+
+// SetPendingEpochEndHeader 缓存当前正在构建的epoch结束区块头
+func (d *DPoS) SetPendingEpochEndHeader(header *types.Header) {
+	if header == nil {
+		return
+	}
+
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	headerCopy := *header
+	d.pendingEpochEndHeader = &headerCopy
+
+	if d.logger != nil {
+		d.logger.Info("📝 缓存epoch结束区块头",
+			"blockNumber", header.Number,
+			"miner", types.BytesToAddress(header.Miner).String())
+	}
+}
+
+// ClearPendingEpochEndHeader 清理缓存，避免跨epoch误用
+func (d *DPoS) ClearPendingEpochEndHeader(blockNumber uint64) {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	if d.pendingEpochEndHeader == nil {
+		return
+	}
+
+	if blockNumber == 0 || d.pendingEpochEndHeader.Number == blockNumber {
+		if d.logger != nil {
+			d.logger.Info("🧹 清空epoch结束区块头缓存",
+				"blockNumber", d.pendingEpochEndHeader.Number)
+		}
+		d.pendingEpochEndHeader = nil
+	}
+}
+
+// getPendingEpochEndHeader 返回缓存的epoch结束区块头副本
+func (d *DPoS) getPendingEpochEndHeader(blockNumber uint64) *types.Header {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	if d.pendingEpochEndHeader == nil {
+		return nil
+	}
+
+	if blockNumber != 0 && d.pendingEpochEndHeader.Number != blockNumber {
+		return nil
+	}
+
+	headerCopy := *d.pendingEpochEndHeader
+	return &headerCopy
 }
 
 // PendingStateUpdate 结构体已移除，延迟状态更新机制不再需要
