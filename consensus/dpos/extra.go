@@ -68,8 +68,8 @@ type FaultFlagInfo struct {
 	NodeAddress            types.Address `json:"node_address"`
 	IsFaulty               bool          `json:"is_faulty"`
 	MissedBlocks           uint64        `json:"missed_blocks"`
-	ActualBlocks           uint64        `json:"actual_blocks"` // 🆕 实际出块数
-	ExpectedBlocks         uint64        `json:"expected_blocks"`           // 🆕 预期出块数
+	ActualBlocks           uint64        `json:"actual_blocks"`            // 🆕 实际出块数
+	ExpectedBlocks         uint64        `json:"expected_blocks"`          // 🆕 预期出块数
 	MissedBlocksPercentage uint64        `json:"missed_blocks_percentage"` // 🆕 漏块率（基点）
 	LastUpdateTime         uint64        `json:"last_update_time"`
 	EpochNumber            uint64        `json:"epoch_number"`
@@ -719,11 +719,11 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 
 					// 创建故障标志
 					faultInfo := FaultFlagInfo{
-						NodeAddress:        validatorAddr,
+						NodeAddress:         validatorAddr,
 						IsFaulty:            true,
 						LastUpdateTime:      uint64(time.Now().Unix()),
 						EpochNumber:         epochNumber,
-						LastFaultyEpoch:      epochNumber,
+						LastFaultyEpoch:     epochNumber,
 						Reason:              fmt.Sprintf("Severe Offense: Double Signing at height %d", blockHeight),
 						DoubleSigningHeight: blockHeight,
 					}
@@ -735,9 +735,9 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 						blockHeight,
 						epochNumber,
 						faultInfo.Reason,
-						0,              // missedBlocks
-						0,              // missedBlocksPercentage
-						blockHeight,    // doubleSigningHeight
+						0,           // missedBlocks
+						0,           // missedBlocksPercentage
+						blockHeight, // doubleSigningHeight
 					)
 					if err != nil {
 						logger.Error("❌ 双重签名削减执行失败",

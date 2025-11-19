@@ -530,7 +530,7 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 
 	// 预先收集：需要在本epoch边界应用的恢复提案
 	recoveredValidators := make(map[types.Address]*ParameterProposal)
-	// 🆕【临时DEBUG】打印 ProposalStore 里所有提案（含所有类型、状态、epoch）
+
 	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 		if dposInstance.state != nil && dposInstance.state.ProposalStore != nil {
 			// 计算当前epoch用于日志与筛选
