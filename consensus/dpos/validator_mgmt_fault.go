@@ -164,10 +164,7 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 
 		// 🆕 计算预期出块数和漏块率
 		// 获取epoch大小和验证者数量
-		blocksPerEpoch := d.config.DPoSValidatorsCount
-		if blocksPerEpoch == 0 {
-			blocksPerEpoch = d.config.DelegateCount
-		}
+		blocksPerEpoch := d.getEpochSize()
 		validatorsCount := uint64(len(d.epochValidators))
 		if validatorsCount == 0 {
 			validatorsCount = 1 // 避免除零
@@ -442,6 +439,70 @@ func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) er
 	return nil
 }
 
+// getValidatorsForEpoch 获取指定epoch的验证者集合（从该epoch开始区块的ExtraData或数据库获取）
+func (d *DPoS) getValidatorsForEpoch(epochNumber uint64) (validator.AccountSet, error) {
+	if d.blockchain == nil {
+		return nil, fmt.Errorf("blockchain not available")
+	}
+
+	blocksPerEpoch := d.getEpochSize()
+	consensusSwitchHeight := d.config.ConsensusSwitchHeight
+
+	// 计算该epoch的开始区块号
+	// epoch 1 从 consensusSwitchHeight 开始
+	// epoch 2 从 consensusSwitchHeight + blocksPerEpoch 开始
+	// epoch N 从 consensusSwitchHeight + (N-1) * blocksPerEpoch 开始
+	epochStartBlock := consensusSwitchHeight
+	if epochNumber > 1 {
+		epochStartBlock = consensusSwitchHeight + (epochNumber-1)*blocksPerEpoch
+	}
+
+	// 方式1：从该epoch开始区块的ExtraData获取验证者集合
+	if header, exists := d.blockchain.GetHeaderByNumber(epochStartBlock); exists {
+		extra := &Extra{}
+		if err := extra.UnmarshalRLP(header.ExtraData); err == nil {
+			// 从ExtraData获取验证者集合
+			if extra.Validators != nil && !extra.Validators.IsEmpty() && len(extra.Validators.Added) > 0 {
+				validators := make(validator.AccountSet, 0, len(extra.Validators.Added))
+				for _, v := range extra.Validators.Added {
+					validators = append(validators, &validator.ValidatorMetadata{
+						Address:     v.Address,
+						VotingPower: v.VotingPower,
+						IsActive:    v.IsActive,
+					})
+				}
+				d.logger.Info("✅ 从ExtraData获取epoch验证者集合",
+					"epochNumber", epochNumber,
+					"epochStartBlock", epochStartBlock,
+					"validatorsCount", len(validators))
+				return validators, nil
+			}
+		}
+	}
+
+	// 方式2：从数据库获取（如果ExtraData中没有）
+	if d.state != nil && d.state.StakeStore != nil {
+		if validators, err := d.state.StakeStore.GetEpochValidators(); err == nil && len(validators) > 0 {
+			d.logger.Info("✅ 从数据库获取epoch验证者集合",
+				"epochNumber", epochNumber,
+				"validatorsCount", len(validators))
+			return validators, nil
+		}
+	}
+
+	// 方式3：备用方案 - 使用当前内存中的验证者集合
+	d.logger.Warn("⚠️ 无法从ExtraData或数据库获取epoch验证者集合，使用当前内存中的验证者集合",
+		"epochNumber", epochNumber,
+		"epochStartBlock", epochStartBlock)
+	if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
+		return d.runtime.delegates.Copy(), nil
+	} else if len(d.delegates) > 0 {
+		return d.delegates.Copy(), nil
+	}
+
+	return nil, fmt.Errorf("cannot get validators for epoch %d", epochNumber)
+}
+
 // calculateMissedBlocks 计算验证者漏块数
 func (d *DPoS) calculateMissedBlocks(validatorAddr types.Address, startEpoch, endEpoch uint64) uint64 {
 	missedBlocks := uint64(0)
@@ -450,18 +511,37 @@ func (d *DPoS) calculateMissedBlocks(validatorAddr types.Address, startEpoch, en
 	var actualBlocks uint64
 
 	// 计算每个epoch中该验证者应该出块的次数
-	blocksPerEpoch := d.config.DPoSValidatorsCount
-	if blocksPerEpoch == 0 {
-		blocksPerEpoch = d.config.DelegateCount
-	}
+	blocksPerEpoch := d.getEpochSize()
 
 	// 🆕 修复：只检测刚结束的epoch，不是跨多个epoch
 	if endEpoch > startEpoch {
 		// 只检测最后一个epoch（刚结束的epoch）
 		epochToCheck = endEpoch - 1
 
+		// ✅ 修复：从该epoch开始区块的ExtraData或数据库获取该epoch的验证者集合
+		validatorsCount := uint64(0)
+		if epochValidators, err := d.getValidatorsForEpoch(epochToCheck); err == nil && len(epochValidators) > 0 {
+			validatorsCount = uint64(len(epochValidators))
+			d.logger.Info("📊 获取epoch验证者集合",
+				"epochToCheck", epochToCheck,
+				"validatorsCount", validatorsCount)
+		} else {
+			// 备用方案：使用当前内存中的验证者集合
+			d.logger.Warn("⚠️ 无法获取epoch验证者集合，使用当前内存中的验证者集合",
+				"epochToCheck", epochToCheck,
+				"error", err)
+			if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
+				validatorsCount = uint64(len(d.runtime.delegates))
+			} else if len(d.delegates) > 0 {
+				validatorsCount = uint64(len(d.delegates))
+			}
+		}
+		if validatorsCount == 0 {
+			validatorsCount = 1 // 避免除零
+		}
+
 		// 计算该验证者在这个epoch中应该出块的次数
-		expectedBlocks = blocksPerEpoch / d.config.DPoSValidatorsCount
+		expectedBlocks = blocksPerEpoch / validatorsCount
 		if expectedBlocks == 0 {
 			expectedBlocks = 1 // 至少应该出1个块
 		}
@@ -513,18 +593,37 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 	var actualBlocks uint64
 
 	// 计算每个epoch中该验证者应该出块的次数
-	blocksPerEpoch := d.config.DPoSValidatorsCount
-	if blocksPerEpoch == 0 {
-		blocksPerEpoch = d.config.DelegateCount
-	}
+	blocksPerEpoch := d.getEpochSize()
 
 	// 🆕 修复：只检测刚结束的epoch，不是跨多个epoch
 	if endEpoch > startEpoch {
 		// 只检测最后一个epoch（刚结束的epoch）
 		epochToCheck = endEpoch - 1
 
+		// ✅ 修复：从该epoch开始区块的ExtraData或数据库获取该epoch的验证者集合
+		validatorsCount := uint64(0)
+		if epochValidators, err := d.getValidatorsForEpoch(epochToCheck); err == nil && len(epochValidators) > 0 {
+			validatorsCount = uint64(len(epochValidators))
+			d.logger.Info("📊 获取epoch验证者集合",
+				"epochToCheck", epochToCheck,
+				"validatorsCount", validatorsCount)
+		} else {
+			// 备用方案：使用当前内存中的验证者集合
+			d.logger.Warn("⚠️ 无法获取epoch验证者集合，使用当前内存中的验证者集合",
+				"epochToCheck", epochToCheck,
+				"error", err)
+			if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
+				validatorsCount = uint64(len(d.runtime.delegates))
+			} else if len(d.delegates) > 0 {
+				validatorsCount = uint64(len(d.delegates))
+			}
+		}
+		if validatorsCount == 0 {
+			validatorsCount = 1 // 避免除零
+		}
+
 		// 计算该验证者在这个epoch中应该出块的次数
-		expectedBlocks = blocksPerEpoch / d.config.DPoSValidatorsCount
+		expectedBlocks = blocksPerEpoch / validatorsCount
 		if expectedBlocks == 0 {
 			expectedBlocks = 1 // 至少应该出1个块
 		}
@@ -571,10 +670,7 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 // getCurrentEpochByBlock 获取当前epoch（基于区块号）
 func (d *DPoS) getCurrentEpochByBlock(blockNumber uint64) uint64 {
 	consensusSwitchHeight := d.config.ConsensusSwitchHeight
-	blocksPerEpoch := d.config.DPoSValidatorsCount
-	if blocksPerEpoch == 0 {
-		blocksPerEpoch = d.config.DelegateCount
-	}
+	blocksPerEpoch := d.getEpochSize()
 
 	if blockNumber < consensusSwitchHeight {
 		return 0
