@@ -678,12 +678,27 @@ func (p *blockchainWrapper) processNextEpochValidatorsFromExtraData(block *types
 		return nil // 不是错误，可能不是epoch边界区块或出块节点没有设置
 	}
 
-	p.logger.Info("✅ 从ExtraData获取到下一个epoch的验证者集合",
+	nextEpochValidators := extra.NextEpochValidators
+	source := "extra_data"
+
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+		if localValidators, err := dposInstance.calculateNextEpochValidators(block.Number()); err != nil {
+			p.logger.Error("❌ 本地计算下一个epoch验证者失败，回退到ExtraData",
+				"blockNumber", block.Number(),
+				"error", err)
+		} else if len(localValidators) > 0 {
+			nextEpochValidators = localValidators
+			source = "local_calculation"
+		}
+	}
+
+	p.logger.Info("✅ 确定下一个epoch的验证者集合",
 		"blockNumber", block.Number(),
-		"nextEpochValidatorsCount", len(extra.NextEpochValidators))
+		"source", source,
+		"nextEpochValidatorsCount", len(nextEpochValidators))
 
 	// 打印下一个epoch的验证者列表
-	for i, validator := range extra.NextEpochValidators {
+	for i, validator := range nextEpochValidators {
 		p.logger.Info("📋 下一个epoch验证者",
 			"blockNumber", block.Number(),
 			"index", i,
@@ -699,7 +714,7 @@ func (p *blockchainWrapper) processNextEpochValidatorsFromExtraData(block *types
 	}
 
 	// 保存下一个epoch的验证者集合到数据库
-	if err := p.state.StakeStore.SaveEpochValidators(extra.NextEpochValidators); err != nil {
+	if err := p.state.StakeStore.SaveEpochValidators(nextEpochValidators); err != nil {
 		p.logger.Error("❌ 保存下一个epoch验证者集合失败",
 			"blockNumber", block.Number(),
 			"error", err)
@@ -708,7 +723,7 @@ func (p *blockchainWrapper) processNextEpochValidatorsFromExtraData(block *types
 
 	p.logger.Info("✅✅✅ ========== 下一个epoch验证者集合已保存到数据库 ========== ✅✅✅",
 		"blockNumber", block.Number(),
-		"nextEpochValidatorsCount", len(extra.NextEpochValidators),
+		"nextEpochValidatorsCount", len(nextEpochValidators),
 		"note", "所有节点（包括出块节点自己）都会从ExtraData读取并保存到本地数据库")
 
 	return nil
@@ -716,10 +731,12 @@ func (p *blockchainWrapper) processNextEpochValidatorsFromExtraData(block *types
 
 // 🆕 新增：更新验证者故障状态函数
 func (p *blockchainWrapper) updateValidatorFaultStatus(faultFlag FaultFlagInfo) error {
-	p.logger.Info("🔄 更新验证者故障状态",
-		"address", faultFlag.NodeAddress.String(),
-		"isFaulty", faultFlag.IsFaulty,
-		"missedBlocks", faultFlag.MissedBlocks)
+	if faultFlag.IsFaulty {
+		p.logger.Info("🔄 更新验证者故障状态",
+			"address", faultFlag.NodeAddress.String(),
+			"isFaulty", faultFlag.IsFaulty,
+			"missedBlocks", faultFlag.MissedBlocks)
+	}
 
 	// 检查stake store是否可用
 	if p.state == nil || p.state.StakeStore == nil {
@@ -739,8 +756,6 @@ func (p *blockchainWrapper) updateValidatorFaultStatus(faultFlag FaultFlagInfo) 
 		p.logger.Error("❌ 更新验证者故障状态失败", "error", err)
 		return err
 	}
-
-	p.logger.Info("✅ 验证者故障状态更新成功")
 	return nil
 }
 
