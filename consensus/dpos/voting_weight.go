@@ -5,7 +5,7 @@ import (
 	"math/big"
 
 	"github.com/Vcity-Team/vcitychain/types"
-	"go.etcd.io/bbolt"
+	bolt "go.etcd.io/bbolt"
 )
 
 // getVotersForValidator 获取投票给指定验证者的投票者列表
@@ -140,13 +140,13 @@ func (d *DPoS) GetVotingPower(blockNumber uint64, delegate types.Address) (*big.
 }
 
 // GetVotingPowerWithTx 在事务中获取投票权重
-func (d *DPoS) GetVotingPowerWithTx(blockNumber uint64, delegate types.Address, dbTx *bbolt.Tx) (*big.Int, error) {
+func (d *DPoS) GetVotingPowerWithTx(blockNumber uint64, delegate types.Address, dbTx *bolt.Tx) (*big.Int, error) {
 	// 在事务中获取投票权重
 	return d.getVotingPowerFromStateWithTx(blockNumber, delegate, dbTx)
 }
 
 // getVotingPowerFromStateWithTx 从状态获取投票权重（带事务）
-func (d *DPoS) getVotingPowerFromStateWithTx(blockNumber uint64, delegate types.Address, dbTx *bbolt.Tx) (*big.Int, error) {
+func (d *DPoS) getVotingPowerFromStateWithTx(blockNumber uint64, delegate types.Address, dbTx *bolt.Tx) (*big.Int, error) {
 	// 🆕 修复：简化实现，避免数据库事务死锁
 	// 直接调用内存版本，避免复杂的数据库操作
 	return d.GetVotingPower(blockNumber, delegate)
@@ -184,6 +184,11 @@ func (d *DPoS) getVotingPowerFromDatabase(delegate types.Address) (*big.Int, err
 
 // updateVotingPowerInDatabase 直接更新数据库中的验证者投票权重
 func (d *DPoS) updateVotingPowerInDatabase(delegate types.Address, newPower *big.Int) error {
+	return d.updateVotingPowerInDatabaseWithTx(delegate, newPower, nil)
+}
+
+// updateVotingPowerInDatabaseWithTx 使用外部事务更新数据库中的验证者投票权重
+func (d *DPoS) updateVotingPowerInDatabaseWithTx(delegate types.Address, newPower *big.Int, dbTx *bolt.Tx) error {
 	if d.state == nil || d.state.StakeStore == nil {
 		return fmt.Errorf("state store not available")
 	}
@@ -203,7 +208,8 @@ func (d *DPoS) updateVotingPowerInDatabase(delegate types.Address, newPower *big
 
 	d.populateCommissionFields(delegate, delegateInfo)
 
-	err := d.state.StakeStore.setDelegateInfo(delegate, delegateInfo, nil)
+	// 🆕 使用外部事务，避免嵌套事务
+	err := d.state.StakeStore.setDelegateInfo(delegate, delegateInfo, dbTx)
 	if err != nil {
 		d.logger.Error("❌ 更新数据库验证者投票权重失败",
 			"delegate", delegate.String(),

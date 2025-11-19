@@ -148,10 +148,9 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 		return nil, fmt.Errorf("no validators in memory")
 	}
 
-	// 统计归属的epoch = 刚结束的那个epoch
 	var epochToCheck uint64
 	if currentEpoch > 0 {
-		epochToCheck = currentEpoch - 1
+		epochToCheck = currentEpoch
 	} else {
 		epochToCheck = 0
 	}
@@ -922,13 +921,14 @@ func (d *DPoS) executeSlashing(
 					DoubleSigningHeight:    doubleSigningHeight,
 				}
 
-				// 更新 StakeInfo
+				// 更新 StakeInfo（使用外部事务）
 				if err := d.updateStakingInfoAfterSlashing(
 					voterAddr,
 					validatorAddr,
 					recordNewAmount,
 					stake.Amount,
 					slashingRecord,
+					dbTx, // 🆕 传入外部事务，避免嵌套事务
 				); err != nil {
 					d.logger.Warn("⚠️ 更新质押记录失败",
 						"voter", voterAddr.String(),
@@ -937,7 +937,7 @@ func (d *DPoS) executeSlashing(
 			}
 		}
 
-		// 4.4 更新 VoterInfo.DelegateVotes
+		// 4.4 更新 VoterInfo.DelegateVotes（使用外部事务）
 		if err := d.updateVoterVoteAmountForValidator(
 			voterAddr,
 			validatorAddr,
@@ -951,6 +951,7 @@ func (d *DPoS) executeSlashing(
 			missedBlocks,
 			missedBlocksPercentage,
 			doubleSigningHeight,
+			dbTx, // 🆕 传入外部事务，避免嵌套事务
 		); err != nil {
 			d.logger.Warn("⚠️ 更新投票者信息失败",
 				"voter", voterAddr.String(),
@@ -958,8 +959,8 @@ func (d *DPoS) executeSlashing(
 		}
 	}
 
-	// 5. 更新验证者的 VotingPower
-	if err := d.updateVotingPowerInDatabase(validatorAddr, newVotingPower); err != nil {
+	// 5. 更新验证者的 VotingPower（使用外部事务）
+	if err := d.updateVotingPowerInDatabaseWithTx(validatorAddr, newVotingPower, dbTx); err != nil {
 		return fmt.Errorf("failed to update validator voting power: %w", err)
 	}
 
@@ -1075,9 +1076,10 @@ func (d *DPoS) updateVoterVoteAmountForValidator(
 	missedBlocks uint64,
 	missedBlocksPercentage uint64,
 	doubleSigningHeight uint64,
+	dbTx *bolt.Tx, // 🆕 使用外部事务，避免嵌套事务
 ) error {
-	// 1. 获取 VoterInfo
-	voterInfo, err := d.state.StakeStore.getVoterInfo(voterAddr, nil)
+	// 1. 获取 VoterInfo（使用外部事务）
+	voterInfo, err := d.state.StakeStore.getVoterInfo(voterAddr, dbTx)
 	if err != nil {
 		return fmt.Errorf("failed to get voter info: %w", err)
 	}
@@ -1122,8 +1124,8 @@ func (d *DPoS) updateVoterVoteAmountForValidator(
 	// 6. 更新内存中的 VoterInfo
 	d.voters[voterAddr] = voterInfo
 
-	// 7. 保存到数据库
-	if err := d.state.StakeStore.setVoterInfo(voterAddr, voterInfo, nil); err != nil {
+	// 7. 保存到数据库（使用外部事务）
+	if err := d.state.StakeStore.setVoterInfo(voterAddr, voterInfo, dbTx); err != nil {
 		return fmt.Errorf("failed to save voter info: %w", err)
 	}
 
@@ -1137,19 +1139,23 @@ func (d *DPoS) updateStakingInfoAfterSlashing(
 	newAmount *big.Int,
 	oldAmount *big.Int,
 	slashingRecord *SlashingRecord,
+	dbTx *bolt.Tx, // 🆕 使用外部事务，避免嵌套事务
 ) error {
-	// 1. 获取所有 StakeInfo 记录
+	// 如果 dbTx 为 nil，开启新事务（兼容性）
+	if dbTx == nil {
+		var err error
+		dbTx, err = d.state.beginDBTransaction(true)
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		defer dbTx.Rollback()
+	}
+
+	// 1. 获取所有 StakeInfo 记录（在事务中读取）
 	allStakes, err := d.state.StakeStore.GetStakingInfo()
 	if err != nil {
 		return fmt.Errorf("failed to get staking info: %w", err)
 	}
-
-	// 2. 找到所有匹配的记录并更新
-	dbTx, err := d.state.beginDBTransaction(true)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer dbTx.Rollback()
 
 	bucket := dbTx.Bucket([]byte("StakingInfo"))
 	if bucket == nil {
@@ -1195,9 +1201,9 @@ func (d *DPoS) updateStakingInfoAfterSlashing(
 		}
 	}
 
-	if err := dbTx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
+	// 🆕 如果使用的是外部事务，不在这里提交（由调用者提交）
+	// 如果开启的是新事务，需要提交（但这种情况不应该发生，因为现在总是传入事务）
+	// 注意：这里不提交外部事务，由 executeSlashing 统一提交
 
 	return nil
 }

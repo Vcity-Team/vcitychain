@@ -6304,27 +6304,16 @@ func (d *DPOS) GetVoterSlashingHistory(ctx context.Context, params interface{}) 
 		validatorAddr = types.StringToAddress(validatorAddrStr)
 	}
 
-	// 1. 获取 DPoS 引擎
-	dposEngine := d.getDPoSEngine()
-	if dposEngine == nil {
-		return nil, fmt.Errorf("DPoS engine not available")
+	// 1. 获取 DPoS State（直接通过 store，与其他方法保持一致）
+	state, err := d.store.GetDPoSState()
+	if err != nil || state == nil || state.StakeStore == nil {
+		return nil, fmt.Errorf("failed to get DPoS state: %w", err)
 	}
 
-	// 2. 获取 VoterInfo（通过 State）
-	var voterInfo *dpos.VoterInfo
-	if getState, ok := dposEngine.(interface {
-		GetDPoSState() (*dpos.State, error)
-	}); ok {
-		state, err := getState.GetDPoSState()
-		if err != nil || state == nil || state.StakeStore == nil {
-			return nil, fmt.Errorf("failed to get DPoS state: %w", err)
-		}
-		voterInfo, err = state.StakeStore.GetVoterInfo(voterAddr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get voter info from store: %w", err)
-		}
-	} else {
-		return nil, fmt.Errorf("DPoS engine does not support getting state")
+	// 2. 获取 VoterInfo
+	voterInfo, err := state.StakeStore.GetVoterInfo(voterAddr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get voter info from store: %w", err)
 	}
 
 	if voterInfo == nil {

@@ -68,8 +68,7 @@ func (d *DoubleSigningDetector) DetectDoubleSigning(validatorAddr types.Address,
 			continue
 		}
 
-		heightDistance := distance(blockHeight, prev.BlockHeight)
-		if heightDistance == 0 || heightDistance <= d.heightWindow {
+		if blockHeight == prev.BlockHeight {
 			if prev.BlockHash != blockHash {
 				d.logger.Warn("🚨 检测到双重签名",
 					"validator", validatorAddr.String(),
@@ -81,6 +80,18 @@ func (d *DoubleSigningDetector) DetectDoubleSigning(validatorAddr types.Address,
 				d.signatures[addressKey] = d.pruneRecords(existing, blockHeight)
 				return true, prev
 			}
+			continue
+		}
+
+		heightDistance := distance(blockHeight, prev.BlockHeight)
+		if heightDistance <= d.heightWindow &&
+			prev.BlockHash != blockHash {
+			d.logger.Debug("ℹ️ 忽略相邻高度的不同区块（非双签）",
+				"validator", validatorAddr.String(),
+				"currentHeight", blockHeight,
+				"previousHeight", prev.BlockHeight,
+				"currentHash", blockHash.String(),
+				"previousHash", prev.BlockHash.String())
 		}
 	}
 

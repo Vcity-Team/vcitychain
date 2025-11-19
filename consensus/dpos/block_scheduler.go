@@ -113,6 +113,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	myAddress types.Address,
 	validators []types.Address,
 	blockNumber uint64,
+	validatorsSource string, // 🆕 验证者列表来源（用于日志）
 ) bool {
 	// 🆕 在函数开始就输出所有关键参数（10秒间隔）
 	bs.logOnceWithInterval("should_produce_block_now_start", 10*time.Second, "debug",
@@ -166,16 +167,25 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	isMatch := expectedValidator == myAddress
 
 	// ========== 🆕 详细日志：打印ShouldProduceBlockNow中的验证者列表和验证结果（2000ms间隔，便于追踪分叉问题） ==========
+	// 合并为一行：包含所有信息，如果isMatch=true则标记为出块验证
+	logMessage := "🔍 ShouldProduceBlockNow 中的验证者列表和验证详情"
+	if isMatch {
+		logMessage = "🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块"
+	}
+
 	bs.logOnceWithInterval("should_produce_block_now_validators_detail", 2000*time.Millisecond, "info",
-		"🔍 ShouldProduceBlockNow 中的验证者列表和验证详情",
+		logMessage,
 		"blockNumber", blockNumber,
 		"currentSlot", currentSlot,
 		"activeValidatorCount", activeValidatorCount,
+		"activeValidatorCountSource", validatorsSource, // 🆕 验证者列表来源
 		"myAddress", myAddress.String(),
 		"expectedValidator", fmt.Sprintf("[%d]%s", currentValidatorIndex, expectedValidator.String()),
+		"validatorIndex", currentValidatorIndex,
 		"isMatch", isMatch,
 		"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
 		"now", now.Format("2006-01-02 15:04:05.000"),
+		"timestamp", now.Format("15:04:05.000000"),
 		"timeSinceGenesis", timeSinceGenesis.String(),
 		"blockWindow", bs.blockWindow.String(),
 		"validatorsList", func() []string {
@@ -184,22 +194,13 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 				vs = append(vs, fmt.Sprintf("[%d]%s", i, v.String()))
 			}
 			return vs
+		}(),
+		"note", func() string {
+			if isMatch {
+				return "用于验证同一时刻只有一个节点出块"
+			}
+			return ""
 		}())
-
-	// ========== 🆕 关键验证点：ShouldProduceBlockNow返回true时（用于验证同一时刻只有一个节点出块） ==========
-	if isMatch {
-		// 🆕 使用200ms间隔，便于追踪分叉问题
-		bs.logOnceWithInterval("should_produce_block_now_true", 200*time.Millisecond, "info",
-			"🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块",
-			"timestamp", now.Format("15:04:05.000000"),
-			"myAddress", myAddress.String(),
-			"blockNumber", blockNumber,
-			"currentSlot", currentSlot,
-			"expectedValidator", fmt.Sprintf("[%d]%s", currentValidatorIndex, expectedValidator.String()),
-			"validatorIndex", currentValidatorIndex,
-			"activeValidatorCount", activeValidatorCount,
-			"note", "用于验证同一时刻只有一个节点出块")
-	}
 
 	return isMatch
 }
@@ -406,15 +407,17 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 
 		// 优先从数据库获取预先计算的epoch验证者集合
 		validatorsFromExtra, err := dposInstance.getEpochValidatorsFromDatabase()
+		validatorsSource := "database" // 🆕 记录验证者列表来源
 		if err != nil || len(validatorsFromExtra) == 0 {
 			// 如果数据库中没有预先计算的验证者集合，回退到实时查询（兼容性）
 			// 这种情况可能发生在：1. 第一次启动 2. 数据库被清空 3. 之前的epoch没有保存
 			// 🆕 使用日志频率限制，10秒一次
-			r.logOnceWithInterval("fallback_to_realtime_query", 10*time.Second, "warn",
-				"⚠️ 数据库中没有预先计算的epoch验证者集合，回退到实时查询",
+			r.logOnceWithInterval("fallback_to_realtime_query", 1*time.Second, "INFO",
+				"数据库中没有预先计算的epoch验证者集合，回退到实时查询",
 				"blockNumber", currentBlock.Number,
 				"error", err)
 			validatorsFromExtra, err = dposInstance.GetSortedValidatorsWithLimit()
+			validatorsSource = "realtime_query" // 🆕 更新来源为实时查询
 			if err != nil {
 				r.logger.Error("❌ 实时查询验证者集合失败",
 					"blockNumber", currentBlock.Number,
@@ -430,6 +433,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 
 		// 🆕 获取验证者列表并过滤故障验证者
 		activeValidators := make([]types.Address, 0, len(validatorsFromExtra))
+		filteredCount := 0 // 🆕 记录被过滤的验证者数量
 
 		// 🆕 检查DPoS实例是否存在
 		dposInstance, dposExists := GetDPoSInstance("vcity_dpos")
@@ -464,21 +468,20 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			// 只保留非故障验证者
 			if !isFaulty {
 				activeValidators = append(activeValidators, validator.Address)
+			} else {
+				filteredCount++ // 🆕 记录被过滤的验证者
 			}
 		}
 
 		// 🆕 如果过滤后没有验证者，使用原始列表（避免所有验证者被过滤导致不出块）
 		validators := activeValidators
-		if len(validators) == 0 {
-			r.logOnceWithInterval("all_validators_filtered_fallback", 10*time.Second, "warn",
-				"⚠️ 所有验证者被过滤，回退到原始验证者列表",
-				"originalCount", len(validatorsFromExtra))
-			// 回退到原始验证者列表
-			validators = r.applyValidatorLimitAndSort(validatorsFromExtra)
+
+		if filteredCount > 0 {
+			validatorsSource = fmt.Sprintf("%s+filtered(%d)", validatorsSource, filteredCount) // 🆕 标记为过滤后
 		}
 
 		// 🆕 调用改进后的方法（直接比较地址）
-		result := r.config.blockScheduler.ShouldProduceBlockNow(myAddress, validators, currentBlock.Number)
+		result := r.config.blockScheduler.ShouldProduceBlockNow(myAddress, validators, currentBlock.Number, validatorsSource)
 
 		// 🆕 添加调度器结果日志（使用Debug级别）
 		r.logOnceWithInterval("block_scheduler_result", 5*time.Second, "debug",
