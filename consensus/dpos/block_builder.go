@@ -640,6 +640,25 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 								"note", "将通过ExtraData传播给所有节点")
 						}
 					}
+
+					// 🆕 立即在本地同步故障过滤结果，确保本轮出块使用最新出块者列表
+					if err := dposInstance.updateBlockProducersFromFaultFlags(faultFlags); err != nil {
+						r.logger.Error("❌ 本地更新出块者列表失败",
+							"blockNumber", nextBlockNumber,
+							"error", err)
+					} else {
+						r.logger.Info("🔄 本地出块者列表已根据故障标志更新完毕",
+							"blockNumber", nextBlockNumber,
+							"faultFlagsCount", len(faultFlags))
+
+						// 🆕 故障过滤后的结果直接用于覆盖下一epoch缓存集合
+						if filtered := r.getFaultFilteredNextEpochValidators(); len(filtered) > 0 {
+							r.nextEpochValidators = filtered.Copy()
+							r.logger.Info("📝 已用故障过滤结果覆盖下一epoch缓存集合",
+								"blockNumber", nextBlockNumber,
+								"nextEpochValidatorsCount", len(filtered))
+						}
+					}
 				}
 			}
 		}
@@ -1142,6 +1161,10 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				"error", err)
 		}
 
+		// 计算写入ExtraData的下一个epoch验证者集合：
+		// 直接使用最新的 r.nextEpochValidators 写入 ExtraData（已被故障过滤覆盖）
+		nextEpochValidatorsForExtra := r.nextEpochValidators
+
 		// 更新区块的ExtraData，包含聚合签名、父区块签名和验证者集合
 		finalExtra := &Extra{
 			Validators: signingValidatorDelta, // 🆕 保存全部验证者集合，确保位图索引匹配
@@ -1151,11 +1174,28 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				Bitmap:              signatureBitmap,
 			},
 			Checkpoint:          checkpoint,
-			RewardDistribution:  rewardDistribution,        // 🆕 从当前区块ExtraData获取的奖励分配信息
-			CheckpointBlockHash: extra.CheckpointBlockHash, // 🆕 保持CheckpointBlockHash
-			FaultFlags:          faultFlags,                // 🆕 保持FaultFlags
-			NextEpochValidators: r.nextEpochValidators,     // 🆕 下一个epoch的验证者集合（只在epoch边界区块时设置）
+			RewardDistribution:  rewardDistribution,          // 🆕 从当前区块ExtraData获取的奖励分配信息
+			CheckpointBlockHash: extra.CheckpointBlockHash,   // 🆕 保持CheckpointBlockHash
+			FaultFlags:          faultFlags,                  // 🆕 保持FaultFlags
+			NextEpochValidators: nextEpochValidatorsForExtra, // 🆕 下一个epoch的验证者集合（只在epoch边界区块时设置）
 		}
+
+		if len(nextEpochValidatorsForExtra) > 0 {
+			r.logger.Info("🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕🆕 NextEpochValidators写入ExtraData",
+				"blockNumber", block.Block.Number(),
+				"nextEpochValidatorsCount", len(nextEpochValidatorsForExtra))
+			for idx, acc := range nextEpochValidatorsForExtra {
+				r.logger.Info("📝 NextEpochValidator写入详情",
+					"blockNumber", block.Block.Number(),
+					"index", idx,
+					"address", acc.Address.String(),
+					"votingPower", acc.VotingPower.String())
+			}
+		} else {
+			r.logger.Debug("🆕 NextEpochValidators写入ExtraData: 当前为空",
+				"blockNumber", block.Block.Number())
+		}
+
 		block.Block.Header.ExtraData = finalExtra.MarshalRLPTo(nil)
 
 		// 🆕 关键修复：在重新计算区块哈希前，确保状态根正确
@@ -1744,6 +1784,28 @@ func (r *dposRuntime) getValidatorsFromExtraDataForProduction(header *types.Head
 	}
 
 	return nil, fmt.Errorf("no validators available for production")
+}
+
+// getFaultFilteredNextEpochValidators 返回故障检测后过滤的出块者集合副本，用于写入NextEpochValidators
+func (r *dposRuntime) getFaultFilteredNextEpochValidators() validator.AccountSet {
+	if r.config == nil || r.config.dposBackend == nil {
+		return nil
+	}
+
+	dposInstance, ok := r.config.dposBackend.(*DPoS)
+	if !ok || dposInstance == nil {
+		return nil
+	}
+
+	if dposInstance.runtime != nil && dposInstance.runtime.delegates != nil && len(dposInstance.runtime.delegates) > 0 {
+		return dposInstance.runtime.delegates.Copy()
+	}
+
+	if len(dposInstance.delegates) > 0 {
+		return dposInstance.delegates.Copy()
+	}
+
+	return nil
 }
 
 // waitForNetworkGrowth 等待网络增长到足够的验证者

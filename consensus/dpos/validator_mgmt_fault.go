@@ -451,6 +451,18 @@ func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) er
 	// 6. 更新内存中的出块者列表
 	d.delegates = finalValidators
 
+	// 6.1 同步到runtime，以便出块节点后续流程（如NextEpochValidators写入）使用最新集合
+	if d.runtime != nil {
+		d.runtime.lock.Lock()
+		d.runtime.delegates = finalValidators.Copy()
+		d.runtime.lock.Unlock()
+
+		d.logger.Info("🔁 runtime.delegates已同步最新出块者列表",
+			"delegatesCount", len(d.runtime.delegates))
+	} else {
+		d.logger.Debug("ℹ️ runtime为空，无法同步delegates")
+	}
+
 	d.logger.Info("🎉 出块者列表更新完成",
 		"finalCount", len(finalValidators),
 		"maxValidators", maxValidators)
