@@ -9,6 +9,58 @@ import (
 	"github.com/Vcity-Team/vcitychain/types"
 )
 
+// getConfigUint64 从 rawConfig 读取 uint64 配置值
+func (d *DPoS) getConfigUint64(keys ...string) uint64 {
+	if d.rawConfig == nil {
+		return 0
+	}
+	for _, key := range keys {
+		if val, ok := d.rawConfig[key]; ok {
+			switch v := val.(type) {
+			case uint64:
+				return v
+			case int:
+				if v >= 0 {
+					return uint64(v)
+				}
+			case int64:
+				if v >= 0 {
+					return uint64(v)
+				}
+			case float64:
+				if v >= 0 {
+					return uint64(v)
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// getMissedBlocksPercentage 获取漏块率阈值（基点）
+func (d *DPoS) getMissedBlocksPercentage() uint64 {
+	if val := d.getConfigUint64("dpos_missed_blocks_percentage", "missed_blocks_percentage"); val > 0 {
+		return val
+	}
+	return 1000 // 默认值 10%
+}
+
+// getMinorOffenseSlashRate 获取轻度违规削减率（基点）
+func (d *DPoS) getMinorOffenseSlashRate() uint64 {
+	if val := d.getConfigUint64("dpos_minor_offense_slash_rate", "minor_offense_slash_rate"); val > 0 {
+		return val
+	}
+	return 50 // 默认值 0.5%
+}
+
+// getSevereOffenseSlashRate 获取严重违规削减率（基点）
+func (d *DPoS) getSevereOffenseSlashRate() uint64 {
+	if val := d.getConfigUint64("dpos_severe_offense_slash_rate", "severe_offense_slash_rate"); val > 0 {
+		return val
+	}
+	return 1000 // 默认值 10%
+}
+
 // IsValidatorFaulty 检查验证者是否有故障（公共接口）
 func (d *DPoS) IsValidatorFaulty(addr types.Address) (bool, error) {
 	// 目前复用内部的故障信息读取逻辑。
@@ -65,11 +117,13 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 		return faultFlags, nil
 	}
 
+	missedBlocksPercentageThreshold := d.getMissedBlocksPercentage()
 	d.logger.Info("🔍 ===== 开始检测验证者故障 =====",
 		"blockNumber", blockNumber,
 		"currentEpoch", currentEpoch,
 		"previousEpoch", d.currentEpoch,
-		"maxMissedBlocks", d.config.MaxMissedBlocks)
+		"maxMissedBlocks", d.config.MaxMissedBlocks,
+		"missedBlocksPercentage", missedBlocksPercentageThreshold)
 
 	// 计算每个验证者的漏块数
 	d.logger.Info("🔍 开始计算每个验证者的漏块数...")
@@ -108,7 +162,43 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 		missedBlocks, actualBlocks := d.calculateMissedBlocksWithActual(validator.Address, d.currentEpoch, currentEpoch)
 		d.missedBlocksCount[validator.Address] = missedBlocks
 
-		isFaulty := missedBlocks >= d.config.MaxMissedBlocks
+		// 🆕 计算预期出块数和漏块率
+		// 获取epoch大小和验证者数量
+		blocksPerEpoch := d.config.DPoSValidatorsCount
+		if blocksPerEpoch == 0 {
+			blocksPerEpoch = d.config.DelegateCount
+		}
+		validatorsCount := uint64(len(d.epochValidators))
+		if validatorsCount == 0 {
+			validatorsCount = 1 // 避免除零
+		}
+
+		// 计算该验证者在这个epoch中应该出块的次数
+		expectedBlocks := blocksPerEpoch / validatorsCount
+		if expectedBlocks == 0 {
+			expectedBlocks = 1 // 至少应该出1个块
+		}
+
+		// 计算漏块率（基点，10000 = 100%）
+		missedBlocksPercentage := uint64(0)
+		if expectedBlocks > 0 {
+			missedBlocksPercentage = (missedBlocks * 10000) / expectedBlocks
+		}
+
+		missedBlocksPercentageThreshold := d.getMissedBlocksPercentage()
+		d.logger.Info("📊 验证者漏块率计算",
+			"address", validator.Address.String(),
+			"epochToCheck", epochToCheck,
+			"blocksPerEpoch", blocksPerEpoch,
+			"validatorsCount", validatorsCount,
+			"expectedBlocks", expectedBlocks,
+			"actualBlocks", actualBlocks,
+			"missedBlocks", missedBlocks,
+			"missedBlocksPercentage", missedBlocksPercentage,
+			"thresholdPercentage", missedBlocksPercentageThreshold)
+
+		// 🆕 使用漏块率判断故障（而不是绝对漏块数）
+		isFaulty := expectedBlocks > 0 && missedBlocksPercentage >= missedBlocksPercentageThreshold
 
 		// 🆕 获取上次故障的epoch（从数据库或FaultFlags中）
 		lastFaultyEpoch := uint64(0)
@@ -128,40 +218,56 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 
 		d.logger.Info("📊 验证者漏块统计",
 			"address", validator.Address.String(),
+			"expectedBlocks", expectedBlocks,
+			"actualBlocks", actualBlocks,
 			"missedBlocks", missedBlocks,
-			"threshold", d.config.MaxMissedBlocks,
+			"missedBlocksPercentage", missedBlocksPercentage,
+			"thresholdPercentage", missedBlocksPercentageThreshold,
 			"isFaulty", isFaulty,
 			"lastFaultyEpoch", lastFaultyEpoch)
 
+		// 🆕 构建故障原因
+		var reason string
+		if isFaulty {
+			reason = fmt.Sprintf("Epoch %d: missed blocks percentage reached threshold: %d bp >= %d bp (missed %d/%d blocks)",
+				epochToCheck, missedBlocksPercentage, missedBlocksPercentageThreshold, missedBlocks, expectedBlocks)
+		} else {
+			reason = fmt.Sprintf("Epoch %d: missed blocks percentage normal: %d bp < %d bp (missed %d/%d blocks)",
+				epochToCheck, missedBlocksPercentage, missedBlocksPercentageThreshold, missedBlocks, expectedBlocks)
+		}
+
 		// 🆕 不管漏块数为多少，都保存到数据库
 		faultFlag := FaultFlagInfo{
-			NodeAddress:     validator.Address,
-			IsFaulty:        isFaulty,
-			MissedBlocks:    missedBlocks,
-			ActualBlocks:    actualBlocks, // 🆕 实际出块数
-			LastUpdateTime:  uint64(time.Now().Unix()),
-			EpochNumber:     epochToCheck,
-			LastFaultyEpoch: lastFaultyEpoch,
-			Reason: func() string {
-				if isFaulty {
-					return fmt.Sprintf("Epoch %d: missed blocks reached threshold: %d >= %d", epochToCheck, missedBlocks, d.config.MaxMissedBlocks)
-				}
-				return fmt.Sprintf("Epoch %d: missed blocks normal: %d less than %d", epochToCheck, missedBlocks, d.config.MaxMissedBlocks)
-			}(),
+			NodeAddress:            validator.Address,
+			IsFaulty:               isFaulty,
+			MissedBlocks:           missedBlocks,
+			ActualBlocks:           actualBlocks,
+			ExpectedBlocks:         expectedBlocks,         // 🆕 预期出块数
+			MissedBlocksPercentage: missedBlocksPercentage, // 🆕 漏块率（基点）
+			LastUpdateTime:         uint64(time.Now().Unix()),
+			EpochNumber:            epochToCheck,
+			LastFaultyEpoch:        lastFaultyEpoch,
+			Reason:                 reason,
 		}
 		faultFlags = append(faultFlags, faultFlag)
 
 		if isFaulty {
 			d.logger.Info("🚨 ===== 检测到故障验证者 =====",
 				"address", validator.Address.String(),
+				"expectedBlocks", expectedBlocks,
+				"actualBlocks", actualBlocks,
 				"missedBlocks", missedBlocks,
-				"threshold", d.config.MaxMissedBlocks,
+				"missedBlocksPercentage", missedBlocksPercentage,
+				"thresholdPercentage", missedBlocksPercentageThreshold,
 				"reason", faultFlag.Reason)
 		} else {
 			d.logger.Info("✅ 验证者状态正常",
 				"address", validator.Address.String(),
+				"expectedBlocks", expectedBlocks,
+				"actualBlocks", actualBlocks,
 				"missedBlocks", missedBlocks,
-				"threshold", d.config.MaxMissedBlocks)
+				"missedBlocksPercentage", missedBlocksPercentage,
+				"thresholdPercentage", missedBlocksPercentageThreshold)
 		}
 	}
 
@@ -173,10 +279,26 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 		"currentEpoch", currentEpoch)
 
 	if len(faultFlags) > 0 {
-		d.logger.Info("📋 验证者列表:")
+		d.logger.Info("📋 验证者故障检测结果汇总:")
+		faultyCount := 0
 		for i, faultFlag := range faultFlags {
-			d.logger.Info("👤 验证者", "index", i+1, "address", faultFlag.NodeAddress.String(), "actualBlocks", faultFlag.ActualBlocks, "missedBlocks", faultFlag.MissedBlocks, "isFaulty", faultFlag.IsFaulty, "reason", faultFlag.Reason)
+			if faultFlag.IsFaulty {
+				faultyCount++
+			}
+			d.logger.Info("👤 验证者故障详情",
+				"index", i+1,
+				"address", faultFlag.NodeAddress.String(),
+				"expectedBlocks", faultFlag.ExpectedBlocks,
+				"actualBlocks", faultFlag.ActualBlocks,
+				"missedBlocks", faultFlag.MissedBlocks,
+				"missedBlocksPercentage", faultFlag.MissedBlocksPercentage,
+				"isFaulty", faultFlag.IsFaulty,
+				"reason", faultFlag.Reason)
 		}
+		d.logger.Info("📊 故障统计",
+			"totalValidators", len(faultFlags),
+			"faultyValidators", faultyCount,
+			"normalValidators", len(faultFlags)-faultyCount)
 	} else {
 		d.logger.Info("✅ 没有检测到验证者")
 	}

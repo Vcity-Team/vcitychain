@@ -65,14 +65,16 @@ var PolyBFTMixDigest = types.StringToHash("adce6e5230abe012342a44e4e9b6d05997d6f
 
 // FaultFlagInfo 故障标志信息结构
 type FaultFlagInfo struct {
-	NodeAddress     types.Address `json:"node_address"`
-	IsFaulty        bool          `json:"is_faulty"`
-	MissedBlocks    uint64        `json:"missed_blocks"`
-	ActualBlocks    uint64        `json:"actual_blocks"` // 🆕 实际出块数
-	LastUpdateTime  uint64        `json:"last_update_time"`
-	EpochNumber     uint64        `json:"epoch_number"`
-	LastFaultyEpoch uint64        `json:"last_faulty_epoch"` // 🆕 上次故障的epoch（如果之前有故障则保留，否则为0）
-	Reason          string        `json:"reason"`
+	NodeAddress            types.Address `json:"node_address"`
+	IsFaulty               bool          `json:"is_faulty"`
+	MissedBlocks           uint64        `json:"missed_blocks"`
+	ActualBlocks           uint64        `json:"actual_blocks"` // 🆕 实际出块数
+	ExpectedBlocks         uint64        `json:"expected_blocks"`           // 🆕 预期出块数
+	MissedBlocksPercentage uint64        `json:"missed_blocks_percentage"` // 🆕 漏块率（基点）
+	LastUpdateTime         uint64        `json:"last_update_time"`
+	EpochNumber            uint64        `json:"epoch_number"`
+	LastFaultyEpoch        uint64        `json:"last_faulty_epoch"` // 🆕 上次故障的epoch（如果之前有故障则保留，否则为0）
+	Reason                 string        `json:"reason"`
 }
 
 // Extra defines the structure of the extra field for Istanbul

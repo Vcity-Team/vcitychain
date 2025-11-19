@@ -320,8 +320,9 @@ type DPoS struct {
 	logger hclog.Logger
 
 	// DPoS特有组件
-	config  *DPoSConfig
-	runtime *dposRuntime
+	config      *DPoSConfig
+	runtime     *dposRuntime
+	rawConfig   map[string]interface{} // 🆕 存储原始配置，用于读取削减相关参数
 
 	// reference to the syncer
 	syncer syncer.Syncer
@@ -761,6 +762,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger:      logger,
 		txPool:      params.TxPool,
 		config:      &DPoSConfig{},              // 🆕 初始化config结构体
+		rawConfig:   params.Config.Config,       // 🆕 存储原始配置
 		lastLogTime: make(map[string]time.Time), // 🆕 初始化日志频率限制
 	}
 
@@ -888,6 +890,38 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		}
 	} else {
 		logger.Warn("⚠️ 未找到maxMissedBlocks配置")
+	}
+
+	// 🆕 削减相关参数从配置文件读取，不存储在 DPoSConfig 中
+	// 这些参数会在使用时直接从 rawConfig 读取
+	if missedBlocksPercentage, exists := getConfigValue("dpos_missed_blocks_percentage", "missed_blocks_percentage"); exists {
+		if percentage, ok := toUint64(missedBlocksPercentage); ok {
+			logger.Info("🔨 从配置文件读取漏块率阈值", "percentage", percentage, "基点")
+		} else {
+			logger.Warn("🔨 dpos_missed_blocks_percentage 类型或数值无效", "value", missedBlocksPercentage)
+		}
+	} else {
+		logger.Warn("🔨 未找到dpos_missed_blocks_percentage配置，将使用默认值1000 (10%)")
+	}
+
+	if minorOffenseSlashRate, exists := getConfigValue("dpos_minor_offense_slash_rate", "minor_offense_slash_rate"); exists {
+		if rate, ok := toUint64(minorOffenseSlashRate); ok {
+			logger.Info("🔨 从配置文件读取轻度违规削减率", "rate", rate, "基点")
+		} else {
+			logger.Warn("🔨 dpos_minor_offense_slash_rate 类型或数值无效", "value", minorOffenseSlashRate)
+		}
+	} else {
+		logger.Warn("🔨 未找到dpos_minor_offense_slash_rate配置，将使用默认值50 (0.5%)")
+	}
+
+	if severeOffenseSlashRate, exists := getConfigValue("dpos_severe_offense_slash_rate", "severe_offense_slash_rate"); exists {
+		if rate, ok := toUint64(severeOffenseSlashRate); ok {
+			logger.Info("🔨 从配置文件读取严重违规削减率", "rate", rate, "基点")
+		} else {
+			logger.Warn("🔨 dpos_severe_offense_slash_rate 类型或数值无效", "value", severeOffenseSlashRate)
+		}
+	} else {
+		logger.Warn("🔨 未找到dpos_severe_offense_slash_rate配置，将使用默认值1000 (10%)")
 	}
 
 	if epochDuration, exists := params.Config.Config["epochDuration"]; exists {
