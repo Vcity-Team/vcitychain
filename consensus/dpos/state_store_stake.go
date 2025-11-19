@@ -77,6 +77,7 @@ func (s *StakeStore) initialize(dbTx *bolt.Tx) error {
 		"DelegateInfo", // 🆕 新增：受托人信息存储
 		"RewardHistory",
 		"EpochRewards",
+		"SlashingHistory", // 🆕 新增：削减历史记录
 	}
 
 	for _, bucketName := range buckets {
@@ -203,6 +204,62 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 	})
 
 	return validators, nil
+}
+
+// SaveSlashingHistory 保存削减历史记录
+func (s *StakeStore) SaveSlashingHistory(history *SlashingHistory) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("stake store not initialized")
+	}
+
+	return s.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists([]byte("SlashingHistory"))
+		if err != nil {
+			return fmt.Errorf("failed to create slashing history bucket: %w", err)
+		}
+
+		// 使用复合 key: validatorAddr (20 bytes) + blockNumber (8 bytes) = 28 bytes
+		key := make([]byte, 28)
+		copy(key[0:20], history.ValidatorAddr[:])
+		binary.BigEndian.PutUint64(key[20:28], history.BlockNumber)
+
+		data, err := json.Marshal(history)
+		if err != nil {
+			return fmt.Errorf("failed to marshal slashing history: %w", err)
+		}
+
+		return bucket.Put(key, data)
+	})
+}
+
+// GetSlashingHistory 获取验证者的削减历史记录
+func (s *StakeStore) GetSlashingHistory(validatorAddr types.Address) ([]*SlashingHistory, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("stake store not initialized")
+	}
+
+	var histories []*SlashingHistory
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("SlashingHistory"))
+		if bucket == nil {
+			return nil // 没有历史记录
+		}
+
+		cursor := bucket.Cursor()
+		prefix := validatorAddr[:]
+
+		for k, v := cursor.Seek(prefix); k != nil && len(k) >= 20 && bytes.Equal(k[0:20], prefix); k, v = cursor.Next() {
+			var history SlashingHistory
+			if err := json.Unmarshal(v, &history); err != nil {
+				continue // 跳过无效记录
+			}
+			histories = append(histories, &history)
+		}
+
+		return nil
+	})
+
+	return histories, err
 }
 
 // 🆕 新增：GetStakingInfo方法，直接从数据库读取，不做修改
@@ -592,6 +649,43 @@ func (s *StakeStore) setVoterInfo(voter types.Address, info *VoterInfo, dbTx *bo
 	}
 
 	return nil
+}
+
+// GetVoterInfo 公开方法：从数据库获取投票者信息（自动管理事务）
+func (s *StakeStore) GetVoterInfo(voter types.Address) (*VoterInfo, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("stake store not initialized")
+	}
+
+	var voterInfo *VoterInfo
+	err := s.db.View(func(tx *bolt.Tx) error {
+		info, err := s.getVoterInfo(voter, tx)
+		if err != nil {
+			return err
+		}
+		voterInfo = info
+		return nil
+	})
+
+	if err != nil {
+		// 如果未找到，返回 nil 而不是错误
+		if err.Error() == "voter info not found" {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	// 初始化 DelegateVotes 和 SlashingRecords（如果不存在）
+	if voterInfo != nil {
+		if voterInfo.DelegateVotes == nil {
+			voterInfo.DelegateVotes = make(map[types.Address]*big.Int)
+		}
+		if voterInfo.SlashingRecords == nil {
+			voterInfo.SlashingRecords = make(map[types.Address][]*SlashingRecord)
+		}
+	}
+
+	return voterInfo, nil
 }
 
 // getRewardHistory 从数据库获取奖励历史

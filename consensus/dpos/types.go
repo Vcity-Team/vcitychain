@@ -120,15 +120,17 @@ const (
 
 // StakeInfo 质押信息结构体
 type StakeInfo struct {
-	Staker    types.Address          `json:"staker"`
-	Amount    *big.Int               `json:"amount"`
-	StartTime uint64                 `json:"startTime"`
-	EndTime   uint64                 `json:"endTime"`
-	IsLocked  bool                   `json:"isLocked"`
-	IsActive  bool                   `json:"isActive"`
-	Rewards   *big.Int               `json:"rewards"`
-	Delegate  types.Address          `json:"delegate"`
-	FaultFlag map[string]interface{} `json:"faultFlag,omitempty"` // 🆕 故障标志信息：isFaulty, missedBlocks, reason
+	Staker          types.Address          `json:"staker"`
+	Amount          *big.Int               `json:"amount"`                  // 当前金额（削减后）
+	OriginalAmount  *big.Int               `json:"originalAmount,omitempty"` // 🆕 原始投票金额（第一次投票时的金额，削减前）
+	StartTime       uint64                 `json:"startTime"`
+	EndTime         uint64                 `json:"endTime"`
+	IsLocked        bool                   `json:"isLocked"`
+	IsActive        bool                   `json:"isActive"`
+	Rewards         *big.Int               `json:"rewards"`
+	Delegate        types.Address          `json:"delegate"`
+	FaultFlag       map[string]interface{} `json:"faultFlag,omitempty"` // 🆕 故障标志信息：isFaulty, missedBlocks, reason
+	SlashingRecords []*SlashingRecord     `json:"slashingRecords,omitempty"` // 🆕 削减历史（按时间顺序）
 }
 
 // 🆕 参数表决相关数据结构
@@ -303,12 +305,14 @@ type ParameterInfo struct {
 
 // VoterInfo 投票者信息结构
 type VoterInfo struct {
-	Address        types.Address   `json:"address"`        // 投票者地址
-	VotingPower    *big.Int        `json:"votingPower"`    // 投票权重
-	VotedDelegates []types.Address `json:"votedDelegates"` // 投票的验证者列表
-	LastVoteTime   uint64          `json:"lastVoteTime"`   // 最后投票时间
-	LockedUntil    uint64          `json:"lockedUntil"`    // 锁定到期时间
-	Nonce          map[uint64]bool `json:"nonce"`          // 防重放
+	Address         types.Address                    `json:"address"`        // 投票者地址
+	VotingPower     *big.Int                         `json:"votingPower"`    // 投票权重（保留用于兼容）
+	VotedDelegates  []types.Address                   `json:"votedDelegates"` // 投票的验证者列表（保留用于兼容）
+	DelegateVotes   map[types.Address]*big.Int        `json:"delegateVotes"`   // 🆕 delegate -> 投票金额（削减后）
+	SlashingRecords map[types.Address][]*SlashingRecord `json:"slashingRecords"` // 🆕 削减历史记录
+	LastVoteTime    uint64                           `json:"lastVoteTime"`   // 最后投票时间
+	LockedUntil     uint64                           `json:"lockedUntil"`    // 锁定到期时间
+	Nonce           map[uint64]bool                   `json:"nonce"`          // 防重放
 }
 
 // DelegateInfo 受托人信息
@@ -344,4 +348,36 @@ type DelegateRegistrationInfo struct {
 	Website     string        `json:"website"`
 	Description string        `json:"description"`
 	Deposit     *big.Int      `json:"deposit"`
+}
+
+// SlashingRecord 削减记录（存储在VoterInfo和StakeInfo中）
+type SlashingRecord struct {
+	ValidatorAddr          types.Address `json:"validator_addr"`
+	BlockNumber            uint64        `json:"block_number"`
+	EpochNumber            uint64        `json:"epoch_number"`
+	Timestamp              uint64        `json:"timestamp"`
+	SlashAmount            *big.Int      `json:"slash_amount"`            // 本次削减的金额
+	OldVoteAmount          *big.Int      `json:"old_vote_amount"`        // 削减前的投票金额
+	NewVoteAmount          *big.Int      `json:"new_vote_amount"`        // 削减后的投票金额
+	SlashRate              uint64        `json:"slash_rate"`              // 削减率（基点）
+	Reason                 string        `json:"reason"`                  // 削减原因
+	MissedBlocks           uint64        `json:"missed_blocks,omitempty"`  // 漏块数（轻度违规）
+	MissedBlocksPercentage uint64        `json:"missed_blocks_percentage,omitempty"` // 漏块率（轻度违规）
+	DoubleSigningHeight    uint64        `json:"double_signing_height,omitempty"`     // 双重签名高度（严重违规）
+}
+
+// SlashingHistory 处罚历史记录（存储在数据库中，用于验证者）
+type SlashingHistory struct {
+	ValidatorAddr          types.Address `json:"validator_addr"`
+	BlockNumber            uint64        `json:"block_number"`
+	EpochNumber            uint64        `json:"epoch_number"`
+	Timestamp              uint64        `json:"timestamp"`
+	SlashAmount            *big.Int      `json:"slash_amount"`            // 本次削减的总金额
+	OldVotingPower         *big.Int      `json:"old_voting_power"`        // 削减前的总投票权重
+	NewVotingPower         *big.Int      `json:"new_voting_power"`        // 削减后的总投票权重
+	SlashRate              uint64        `json:"slash_rate"`               // 削减率（基点）
+	Reason                 string        `json:"reason"`                   // 削减原因
+	MissedBlocks           uint64        `json:"missed_blocks,omitempty"`  // 漏块数（轻度违规）
+	MissedBlocksPercentage uint64        `json:"missed_blocks_percentage,omitempty"` // 漏块率（轻度违规）
+	DoubleSigningHeight    uint64        `json:"double_signing_height,omitempty"`     // 双重签名高度（严重违规）
 }

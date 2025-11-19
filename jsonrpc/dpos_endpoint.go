@@ -291,6 +291,20 @@ type VoteResponse struct {
 	Error       string `json:"error,omitempty"`
 }
 
+// UnvoteResponse 解质押响应
+type UnvoteResponse struct {
+	Success          bool                  `json:"success"`
+	Voter            types.Address         `json:"voter"`
+	Validator        types.Address         `json:"validator"`
+	WithdrawAmount   *big.Int              `json:"withdrawAmount"`   // 可提取金额（削减后）
+	OriginalAmount   *big.Int              `json:"originalAmount"`   // 原始投票金额
+	TotalSlashAmount *big.Int              `json:"totalSlashAmount"` // 总削减金额
+	SlashCount       int                   `json:"slashCount"`       // 削减次数
+	SlashingHistory  []*dpos.SlashingRecord `json:"slashingHistory"`  // 削减历史
+	Message          string                `json:"message,omitempty"` // 提示信息
+	Error            string                `json:"error,omitempty"`
+}
+
 // StakeRequest represents a stake request
 type StakeRequest struct {
 	Staker   string `json:"staker"`
@@ -775,12 +789,20 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		}, nil
 	}
 
+	// 🆕 如果 amount <= 0，表示解质押，返回削减信息
 	if amountInt == nil || amountInt.Sign() <= 0 {
-		d.logger.Error("🚨 CRITICAL: invalid vote amount", "amount", amountInt)
-		return &VoteResponse{
-			Success: false,
-			Error:   "invalid vote amount",
-		}, nil
+		d.logger.Info("🔍 检测到解质押请求", "voter", voterAddr.String(), "validator", candidateAddr.String())
+		unvoteResp, err := d.buildUnvoteResponse(voterAddr, candidateAddr)
+		if err != nil {
+			d.logger.Error("❌ 构建解质押响应失败", "error", err)
+			return &UnvoteResponse{
+				Success:   false,
+				Voter:     voterAddr,
+				Validator: candidateAddr,
+				Error:     fmt.Sprintf("failed to build unvote response: %v", err),
+			}, nil
+		}
+		return unvoteResp, nil
 	}
 
 	// Get account nonce for the voter
@@ -6124,6 +6146,299 @@ func (d *DPOS) createProposalExecuteTransaction(executor types.Address, privateK
 	tx.ComputeHash(0)
 
 	return tx, nil
+}
+
+// buildUnvoteResponse 构建解质押响应（包含削减信息）
+func (d *DPOS) buildUnvoteResponse(voterAddr, validatorAddr types.Address) (*UnvoteResponse, error) {
+	d.logger.Info("🔍 构建解质押响应", "voter", voterAddr.String(), "validator", validatorAddr.String())
+
+	// 1. 获取 DPoS 引擎
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return nil, fmt.Errorf("DPoS engine not available")
+	}
+
+	// 2. 获取 VoterInfo（通过 State）
+	var voterInfo *dpos.VoterInfo
+	if getState, ok := dposEngine.(interface {
+		GetDPoSState() (*dpos.State, error)
+	}); ok {
+		state, err := getState.GetDPoSState()
+		if err != nil || state == nil || state.StakeStore == nil {
+			return nil, fmt.Errorf("failed to get DPoS state: %w", err)
+		}
+		voterInfo, err = state.StakeStore.GetVoterInfo(voterAddr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get voter info from store: %w", err)
+		}
+	} else {
+		return nil, fmt.Errorf("DPoS engine does not support getting state")
+	}
+
+	if voterInfo == nil {
+		return &UnvoteResponse{
+			Success:   false,
+			Voter:     voterAddr,
+			Validator: validatorAddr,
+			Error:     "voter info not found",
+		}, nil
+	}
+
+	// 3. 初始化 DelegateVotes 和 SlashingRecords（如果不存在）
+	if voterInfo.DelegateVotes == nil {
+		voterInfo.DelegateVotes = make(map[types.Address]*big.Int)
+	}
+	if voterInfo.SlashingRecords == nil {
+		voterInfo.SlashingRecords = make(map[types.Address][]*dpos.SlashingRecord)
+	}
+
+	// 4. 获取当前投票金额（从 DelegateVotes）
+	var currentAmount *big.Int
+	if voterInfo.DelegateVotes != nil {
+		currentAmount = voterInfo.DelegateVotes[validatorAddr]
+	}
+	if currentAmount == nil {
+		currentAmount = big.NewInt(0)
+	}
+
+	// 5. 获取削减历史
+	var slashingRecords []*dpos.SlashingRecord
+	if voterInfo.SlashingRecords != nil {
+		slashingRecords = voterInfo.SlashingRecords[validatorAddr]
+	}
+	if slashingRecords == nil {
+		slashingRecords = []*dpos.SlashingRecord{}
+	}
+
+	// 6. 获取 StakeInfo 计算原始金额和总削减金额
+	totalOriginalAmount := big.NewInt(0)
+	totalSlashAmount := big.NewInt(0)
+
+	allStakes, err := d.store.GetStakingInfo()
+	if err == nil {
+		for _, stake := range allStakes {
+			if stake != nil && stake.Staker == voterAddr && stake.Delegate == validatorAddr {
+				if stake.OriginalAmount != nil {
+					totalOriginalAmount.Add(totalOriginalAmount, stake.OriginalAmount)
+				} else if stake.Amount != nil {
+					// 如果没有原始金额，使用当前金额（可能已经被削减）
+					totalOriginalAmount.Add(totalOriginalAmount, stake.Amount)
+				}
+				if stake.SlashingRecords != nil {
+					for _, record := range stake.SlashingRecords {
+						if record.SlashAmount != nil {
+							totalSlashAmount.Add(totalSlashAmount, record.SlashAmount)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 如果总原始金额为0，使用当前金额
+	if totalOriginalAmount.Sign() == 0 {
+		totalOriginalAmount = new(big.Int).Set(currentAmount)
+	}
+
+	// 7. 构建响应消息
+	response := &UnvoteResponse{
+		Success:          true,
+		Voter:            voterAddr,
+		Validator:        validatorAddr,
+		WithdrawAmount:   currentAmount,
+		OriginalAmount:   totalOriginalAmount,
+		TotalSlashAmount: totalSlashAmount,
+		SlashCount:       len(slashingRecords),
+		SlashingHistory:  slashingRecords,
+	}
+
+	// 如果金额减少，添加提示信息
+	if totalOriginalAmount.Cmp(currentAmount) > 0 {
+		difference := new(big.Int).Sub(totalOriginalAmount, currentAmount)
+		response.Message = fmt.Sprintf(
+			"您的投票金额因验证者违规被削减。原始金额: %s, 当前金额: %s, 削减金额: %s, 削减次数: %d",
+			totalOriginalAmount.String(),
+			currentAmount.String(),
+			difference.String(),
+			len(slashingRecords),
+		)
+	} else {
+		response.Message = fmt.Sprintf("可提取金额: %s", currentAmount.String())
+	}
+
+	return response, nil
+}
+
+// GetVoterSlashingHistory 获取投票者的削减历史
+// RPC: dpos_getVoterSlashingHistory
+func (d *DPOS) GetVoterSlashingHistory(ctx context.Context, params interface{}) (interface{}, error) {
+	d.logger.Info("GetVoterSlashingHistory called", "params", params)
+
+	// 解析参数
+	paramsMap, ok := params.(map[string]interface{})
+	if !ok {
+		// 尝试数组格式
+		if paramsArray, ok := params.([]interface{}); ok && len(paramsArray) > 0 {
+			paramsMap = make(map[string]interface{})
+			if len(paramsArray) >= 1 {
+				paramsMap["voter"] = paramsArray[0]
+			}
+			if len(paramsArray) >= 2 {
+				paramsMap["validator"] = paramsArray[1]
+			}
+		} else {
+			return nil, fmt.Errorf("invalid params format, expected map or array")
+		}
+	}
+
+	voterAddrStr, ok := paramsMap["voter"].(string)
+	if !ok {
+		return nil, fmt.Errorf("voter address required")
+	}
+
+	validatorAddrStr, _ := paramsMap["validator"].(string) // 可选，如果提供则只查询该验证者
+
+	voterAddr := types.StringToAddress(voterAddrStr)
+	var validatorAddr types.Address
+	if validatorAddrStr != "" {
+		validatorAddr = types.StringToAddress(validatorAddrStr)
+	}
+
+	// 1. 获取 DPoS 引擎
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return nil, fmt.Errorf("DPoS engine not available")
+	}
+
+	// 2. 获取 VoterInfo（通过 State）
+	var voterInfo *dpos.VoterInfo
+	if getState, ok := dposEngine.(interface {
+		GetDPoSState() (*dpos.State, error)
+	}); ok {
+		state, err := getState.GetDPoSState()
+		if err != nil || state == nil || state.StakeStore == nil {
+			return nil, fmt.Errorf("failed to get DPoS state: %w", err)
+		}
+		voterInfo, err = state.StakeStore.GetVoterInfo(voterAddr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get voter info from store: %w", err)
+		}
+	} else {
+		return nil, fmt.Errorf("DPoS engine does not support getting state")
+	}
+
+	if voterInfo == nil {
+		return map[string]interface{}{
+			"voter":           voterAddr.String(),
+			"validator":       validatorAddr.String(),
+			"slashingHistory": []interface{}{},
+		}, nil
+	}
+
+	// 3. 初始化 SlashingRecords（如果不存在）
+	if voterInfo.SlashingRecords == nil {
+		voterInfo.SlashingRecords = make(map[types.Address][]*dpos.SlashingRecord)
+	}
+
+	// 4. 获取削减历史
+	var slashingHistory []interface{}
+
+	if validatorAddr != types.ZeroAddress {
+		// 只查询指定验证者的削减历史
+		records := voterInfo.SlashingRecords[validatorAddr]
+		for _, record := range records {
+			slashingHistory = append(slashingHistory, map[string]interface{}{
+				"validatorAddr":          record.ValidatorAddr.String(),
+				"blockNumber":            record.BlockNumber,
+				"epochNumber":            record.EpochNumber,
+				"timestamp":              record.Timestamp,
+				"slashAmount":            record.SlashAmount.String(),
+				"oldVoteAmount":          record.OldVoteAmount.String(),
+				"newVoteAmount":          record.NewVoteAmount.String(),
+				"slashRate":              record.SlashRate,
+				"reason":                 record.Reason,
+				"missedBlocks":           record.MissedBlocks,
+				"missedBlocksPercentage": record.MissedBlocksPercentage,
+				"doubleSigningHeight":    record.DoubleSigningHeight,
+			})
+		}
+	} else {
+		// 查询所有验证者的削减历史
+		for _, records := range voterInfo.SlashingRecords {
+			for _, record := range records {
+				slashingHistory = append(slashingHistory, map[string]interface{}{
+					"validatorAddr":          record.ValidatorAddr.String(),
+					"blockNumber":            record.BlockNumber,
+					"epochNumber":            record.EpochNumber,
+					"timestamp":              record.Timestamp,
+					"slashAmount":            record.SlashAmount.String(),
+					"oldVoteAmount":          record.OldVoteAmount.String(),
+					"newVoteAmount":          record.NewVoteAmount.String(),
+					"slashRate":              record.SlashRate,
+					"reason":                 record.Reason,
+					"missedBlocks":           record.MissedBlocks,
+					"missedBlocksPercentage": record.MissedBlocksPercentage,
+					"doubleSigningHeight":    record.DoubleSigningHeight,
+				})
+			}
+		}
+	}
+
+	// 5. 计算总削减金额和原始金额
+	totalSlashAmount := big.NewInt(0)
+	totalOriginalAmount := big.NewInt(0)
+	currentAmount := big.NewInt(0)
+
+	// 从 StakeInfo 获取原始金额
+	allStakes, err := d.store.GetStakingInfo()
+	if err == nil {
+		for _, stake := range allStakes {
+			if stake != nil && stake.Staker == voterAddr {
+				if validatorAddr == types.ZeroAddress || stake.Delegate == validatorAddr {
+					if stake.OriginalAmount != nil {
+						totalOriginalAmount.Add(totalOriginalAmount, stake.OriginalAmount)
+					}
+					if stake.Amount != nil {
+						currentAmount.Add(currentAmount, stake.Amount)
+					}
+					if stake.SlashingRecords != nil {
+						for _, record := range stake.SlashingRecords {
+							if record.SlashAmount != nil {
+								totalSlashAmount.Add(totalSlashAmount, record.SlashAmount)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 从 VoterInfo.DelegateVotes 获取当前金额
+	if voterInfo.DelegateVotes != nil {
+		if validatorAddr != types.ZeroAddress {
+			if voteAmount := voterInfo.DelegateVotes[validatorAddr]; voteAmount != nil {
+				currentAmount = new(big.Int).Set(voteAmount)
+			}
+		} else {
+			// 累加所有验证者的投票金额
+			currentAmount = big.NewInt(0)
+			for _, voteAmount := range voterInfo.DelegateVotes {
+				if voteAmount != nil {
+					currentAmount.Add(currentAmount, voteAmount)
+				}
+			}
+		}
+	}
+
+	return map[string]interface{}{
+		"voter":            voterAddr.String(),
+		"validator":        validatorAddr.String(),
+		"originalAmount":   totalOriginalAmount.String(),
+		"currentAmount":    currentAmount.String(),
+		"totalSlashAmount": totalSlashAmount.String(),
+		"slashCount":       len(slashingHistory),
+		"slashingHistory":  slashingHistory,
+	}, nil
 }
 
 // addProposalTransactionToPool 将提案交易添加到交易池并广播

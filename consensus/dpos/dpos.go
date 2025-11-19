@@ -387,6 +387,9 @@ type DPoS struct {
 	// 🆕 固定时间窗口调度器
 	blockScheduler *BlockScheduler
 
+	// 🆕 双重签名检测器
+	doubleSigningDetector *DoubleSigningDetector
+
 	// 延迟状态更新机制已移除
 
 	// 🆕 新增：余额查询器
@@ -1190,6 +1193,10 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	vcity_dpos.voters = make(map[types.Address]*VoterInfo)
 	vcity_dpos.delegates = make(validator.AccountSet, 0)
 	// vcity_dpos.validatorsCache = newValidatorsSnapshotCache() // TODO: 需要正确的参数
+
+	// 🆕 初始化双重签名检测器
+	vcity_dpos.doubleSigningDetector = NewDoubleSigningDetector(logger)
+	logger.Info("✅ 双重签名检测器已初始化")
 
 	return vcity_dpos, nil
 }

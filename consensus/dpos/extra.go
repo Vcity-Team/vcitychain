@@ -75,6 +75,7 @@ type FaultFlagInfo struct {
 	EpochNumber            uint64        `json:"epoch_number"`
 	LastFaultyEpoch        uint64        `json:"last_faulty_epoch"` // 🆕 上次故障的epoch（如果之前有故障则保留，否则为0）
 	Reason                 string        `json:"reason"`
+	DoubleSigningHeight    uint64        `json:"double_signing_height,omitempty"` // 🆕 双重签名高度（严重违规）
 }
 
 // Extra defines the structure of the extra field for Istanbul
@@ -684,6 +685,94 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		logger.Error("❌ ValidateFinalizedData Checkpoint基本验证失败", "blockNumber", blockNumber, "error", err)
 		return err
 	}
+
+	// 🆕 双重签名检测和削减
+	if consensusBackend != nil {
+		if dposBackend, ok := consensusBackend.(*DPoS); ok {
+			// 检查是否有 doubleSigningDetector（通过检查是否有 DetectDoubleSigning 方法）
+			if dposBackend.epochManager != nil {
+				validatorAddr := types.BytesToAddress(header.Miner)
+				blockHeight := blockNumber
+				blockHash := header.Hash
+
+				// 使用 DoubleSigningDetector 检测双重签名
+				var isDoubleSigning bool
+				var existingSig *BlockSignature
+				if dposBackend.doubleSigningDetector != nil {
+					isDoubleSigning, existingSig = dposBackend.doubleSigningDetector.DetectDoubleSigning(
+						validatorAddr,
+						blockHeight,
+						blockHash,
+					)
+				}
+
+				if isDoubleSigning && existingSig != nil {
+					logger.Warn("🚨 检测到双重签名，执行严重违规削减",
+						"validator", validatorAddr.String(),
+						"height", blockHeight,
+						"currentHash", blockHash.String(),
+						"conflictHash", existingSig.BlockHash.String())
+
+					// 计算 epoch number
+					epochNumber := dposBackend.epochManager.GetCurrentEpoch(blockHeight)
+					slashRate := dposBackend.getSevereOffenseSlashRate()
+
+					// 创建故障标志
+					faultInfo := FaultFlagInfo{
+						NodeAddress:        validatorAddr,
+						IsFaulty:            true,
+						LastUpdateTime:      uint64(time.Now().Unix()),
+						EpochNumber:         epochNumber,
+						LastFaultyEpoch:      epochNumber,
+						Reason:              fmt.Sprintf("Severe Offense: Double Signing at height %d", blockHeight),
+						DoubleSigningHeight: blockHeight,
+					}
+
+					// 执行严重违规削减
+					err := dposBackend.executeSlashing(
+						validatorAddr,
+						slashRate,
+						blockHeight,
+						epochNumber,
+						faultInfo.Reason,
+						0,              // missedBlocks
+						0,              // missedBlocksPercentage
+						blockHeight,    // doubleSigningHeight
+					)
+					if err != nil {
+						logger.Error("❌ 双重签名削减执行失败",
+							"validator", validatorAddr.String(),
+							"error", err)
+					} else {
+						logger.Info("✅ 双重签名削减执行成功",
+							"validator", validatorAddr.String(),
+							"slashRate", slashRate,
+							"基点")
+					}
+
+					// 更新内存中的故障状态
+					dposBackend.updateMemoryFaultStatus(faultInfo)
+
+					// 保存故障状态到数据库
+					if dposBackend.state != nil && dposBackend.state.StakeStore != nil {
+						if err := dposBackend.state.StakeStore.UpdateValidatorFaultStatus(
+							validatorAddr,
+							faultInfo.IsFaulty,
+							faultInfo.MissedBlocks,
+							faultInfo.LastUpdateTime,
+							faultInfo.LastFaultyEpoch,
+							faultInfo.Reason,
+						); err != nil {
+							logger.Warn("⚠️ 保存双重签名故障状态失败",
+								"validator", validatorAddr.String(),
+								"error", err)
+						}
+					}
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
