@@ -387,7 +387,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	isEpochEndBlock := r.isEpochEndBlock(nextBlockNumber)
 
 	if isEpochEndBlock {
-		// 🆕 在epoch边界计算下一个epoch的验证者集合，保存到ExtraData中
+		// 在epoch边界计算下一个epoch的验证者集合，保存到ExtraData中
 		// 这样新投票的节点不会立即生效，而是等到下一个epoch开始
 		// 所有节点（包括出块节点自己）收到这个区块后，会从ExtraData读取并保存到本地数据库
 		if r.config != nil && r.config.dposBackend != nil {
@@ -396,7 +396,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				if nextEpochValidators, err := dposInstance.calculateNextEpochValidators(nextBlockNumber); err != nil {
 					r.logger.Error("❌ 计算下一个epoch验证者集合失败", "blockNumber", nextBlockNumber, "error", err)
 				} else {
-					r.logger.Info("✅✅✅ ========== 下一个epoch验证者集合已计算，将写入ExtraData ========== ✅✅✅",
+					r.logger.Info("========= 下一个epoch验证者集合已计算，将写入ExtraData ========== ✅✅✅",
 						"blockNumber", nextBlockNumber,
 						"nextEpochValidatorsCount", len(nextEpochValidators),
 						"note", "新投票的节点将在下一个epoch开始生效，验证者集合将保存到ExtraData中")
@@ -412,10 +412,8 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				}
 			}
 		}
-
-		// 🆕 在epoch结束区块直接进行奖励分发（移除重复调用）
 	} else {
-		r.nextEpochValidators = nil // 非epoch边界区块，清空
+		r.nextEpochValidators = nil
 	}
 
 	// 创建区块构建器
@@ -444,15 +442,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	if err := builder.Reset(); err != nil {
 		r.logger.Error("❌ buildBlock: 重置构建器失败", "error", err)
 		return nil, fmt.Errorf("failed to reset block builder: %w", err)
-	}
-
-	// 填充交易
-
-	// 检查交易池状态
-	if _, ok := r.config.txPool.(interface {
-		DebugInfo() map[string]interface{}
-	}); ok {
-		// 交易池状态检查
 	}
 
 	// 尝试获取更详细的交易池信息
@@ -513,11 +502,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	}
 
 	// 先计算验证者哈希，用于CheckpointData
-	// 🆕 关键修复：使用与验证时相同的验证者集合获取方法
-	// 验证时使用：getValidatorsFromExtraData
-	// 生产时也应该使用相同的逻辑：从ExtraData解析验证者集合
-
-	// 获取当前区块信息
 	currentBlock := r.config.blockchain.CurrentHeader()
 
 	// 获取父区块信息，与验证时保持一致
@@ -529,7 +513,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		}
 	}
 
-	// 🆕 使用与验证时完全相同的验证者集合获取方法
+	// 用与验证时完全相同的验证者集合获取方法
 	// 验证时：getValidatorsFromExtraData(header, parent, parents, consensusBackend, logger)
 	// 生产时：从当前区块的ExtraData解析验证者集合
 	productionValidators, err := r.getValidatorsFromExtraDataForProduction(currentBlock, parents)
@@ -538,7 +522,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		return nil, fmt.Errorf("failed to get validators for production: %w", err)
 	}
 
-	// 🆕 缓存第一次成功获取的验证者集合，确保整个区块生产过程中使用相同的验证者
+	// 缓存第一次成功获取的验证者集合，确保整个区块生产过程中使用相同的验证者
 	r.cachedProductionValidators = productionValidators.Copy()
 	r.logger.Debug("💾 已缓存生产时验证者集合", "validatorsCount", len(productionValidators))
 
@@ -563,9 +547,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		// 🆕 初始化CheckpointBlockHash为空，稍后会设置
 		CheckpointBlockHash: types.Hash{},
 	}
-
-	// 🆕 检查是否是epoch的最后一个区块，如果是则执行奖励分发
-
 	// 延迟状态更新机制已移除，奖励分发在epoch结束区块直接执行
 	r.logger.Debug("🔍 检查是否需要计算奖励分发",
 		"nextBlockNumber", nextBlockNumber,
@@ -574,8 +555,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 	isEpochEndBlock = r.isEpochEndBlock(nextBlockNumber)
 	if isEpochEndBlock {
-		// 🆕 添加显著日志：epoch最后一个区块且当前是出块者
-		r.logger.Info("🎯🎯🎯 ========== EPOCH最后一个区块 + 当前出块者 ========== 🎯🎯🎯",
+		r.logger.Info("🎯 EPOCH最后一个区块 + 当前出块者",
 			"blockNumber", nextBlockNumber,
 			"delegate", keyAddr.String()[:16],
 			"isEpochEndBlock", isEpochEndBlock,
@@ -584,13 +564,13 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 		// 执行奖励分发，传递当前轮次和出块者地址
 		if err := r.executeRewardDistributionForEpochEnd(nextBlockNumber, r.currentRound, keyAddr); err != nil {
-			r.logger.Error("❌❌❌ ========== 计算奖励信息失败 ========== ❌❌❌",
+			r.logger.Error("❌ ========== 计算奖励信息失败 ========== ❌",
 				"blockNumber", nextBlockNumber,
 				"delegate", keyAddr.String()[:16],
 				"error", err)
 			// 不返回错误，继续构建区块，但记录错误
 		} else {
-			r.logger.Info("✅✅✅ ========== 计算奖励信息成功 ========== ✅✅✅",
+			r.logger.Info("✅ ========== 计算奖励信息成功 ========== ✅",
 				"blockNumber", nextBlockNumber,
 				"delegate", keyAddr.String()[:16],
 				"action", "REWARD_DISTRIBUTION_SUCCESS")
@@ -668,14 +648,8 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"isEpochEndBlock", isEpochEndBlock)
 	}
 
-	// 🆕 如果是epoch结束区块，不预先计算状态根，而是像交易一样在区块执行时处理
+	// 如果是epoch结束区块，在生产节点也执行奖励分配
 	if isEpochEndBlock {
-	}
-
-	// 🆕 如果是epoch结束区块，在生产节点也执行奖励分配
-	if isEpochEndBlock {
-
-		// 获取当前状态
 		state := builder.GetState()
 		if state != nil {
 			// 执行奖励分配

@@ -696,9 +696,8 @@ func (d *DPoS) getCurrentEpochByBlock(blockNumber uint64) uint64 {
 
 // calculateNextEpochValidators 计算下一个epoch的验证者集合
 func (d *DPoS) calculateNextEpochValidators(blockNumber uint64) (validator.AccountSet, error) {
-	d.logger.Info("🔄 计算下一个epoch的验证者集合", "blockNumber", blockNumber)
+	d.logger.Info("计算下一个epoch的验证者集合", "blockNumber", blockNumber)
 
-	// 🆕 使用公共函数获取排序和限制后的验证者（包含故障过滤）
 	activeValidators, err := d.GetSortedValidatorsWithLimit()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get sorted validators: %v", err)
