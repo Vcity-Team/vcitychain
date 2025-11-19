@@ -1488,6 +1488,7 @@ func (d *DPOS) Delegate(ctx context.Context, params interface{}) (interface{}, e
 	}, nil
 }
 
+
 // GetStakingInfo handles dpos_getStakingInfo RPC method
 func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) ([]*dpos.StakeInfo, error) {
 	d.logger.Info("DPoS GetStakingInfo called", "blockNumber", blockNumber)
