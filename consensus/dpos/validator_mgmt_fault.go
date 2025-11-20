@@ -155,7 +155,58 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 		epochToCheck = 0
 	}
 
+	// 🆕 获取上一个epoch的验证者集合，用于判断新加入的验证者
+	var previousEpochValidators validator.AccountSet
+	if d.currentEpoch > 0 {
+		if prevValidators, err := d.getValidatorsForEpoch(d.currentEpoch); err == nil {
+			previousEpochValidators = prevValidators
+			d.logger.Info("✅ 获取到上一个epoch验证者集合",
+				"previousEpoch", d.currentEpoch,
+				"validatorsCount", len(previousEpochValidators))
+		} else {
+			d.logger.Warn("⚠️ 无法获取上一个epoch验证者集合，将无法判断新加入的验证者",
+				"previousEpoch", d.currentEpoch,
+				"error", err)
+		}
+	}
+
+	// 创建上一个epoch验证者地址映射，用于快速查找
+	previousEpochValidatorMap := make(map[types.Address]bool)
+	for _, v := range previousEpochValidators {
+		previousEpochValidatorMap[v.Address] = true
+	}
+
 	for _, validator := range d.epochValidators {
+		// 🆕 判断是否是新加入的验证者（在当前epoch开始时不在验证者集合中）
+		isNewlyAdded := false
+		if len(previousEpochValidators) > 0 {
+			if _, wasInPreviousEpoch := previousEpochValidatorMap[validator.Address]; !wasInPreviousEpoch {
+				isNewlyAdded = true
+				d.logger.Info("🆕 检测到新加入的验证者，跳过故障检测和消减",
+					"address", validator.Address.String(),
+					"currentEpoch", currentEpoch,
+					"previousEpoch", d.currentEpoch,
+					"note", "新加入的验证者在本epoch还没有机会出块，不应被消减")
+			}
+		}
+
+		// 🆕 如果是新加入的验证者，跳过故障检测和消减，但仍记录为正常状态
+		if isNewlyAdded {
+			faultFlag := FaultFlagInfo{
+				NodeAddress:            validator.Address,
+				IsFaulty:               false,
+				MissedBlocks:           0,
+				ActualBlocks:           0,
+				ExpectedBlocks:         0,
+				MissedBlocksPercentage: 0,
+				LastUpdateTime:         uint64(time.Now().Unix()),
+				EpochNumber:            epochToCheck,
+				LastFaultyEpoch:        0,
+				Reason:                 fmt.Sprintf("Epoch %d: 新加入的验证者，跳过故障检测", epochToCheck),
+			}
+			faultFlags = append(faultFlags, faultFlag)
+			continue // 跳过后续的故障检测和消减逻辑
+		}
 		missedBlocks, actualBlocks := d.calculateMissedBlocksWithActual(validator.Address, d.currentEpoch, currentEpoch)
 
 		d.missedBlocksCount[validator.Address] = missedBlocks
