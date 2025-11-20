@@ -613,11 +613,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 								"missedBlocks", faultFlag.MissedBlocks,
 								"reason", faultFlag.Reason,
 								"note", "将通过ExtraData传播给所有节点")
-						} else {
-							r.logger.Info("✅ 正常验证者状态已标记",
-								"address", faultFlag.NodeAddress.String(),
-								"missedBlocks", faultFlag.MissedBlocks,
-								"note", "将通过ExtraData传播给所有节点")
 						}
 					}
 
@@ -744,6 +739,37 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 					r.logger.Info("✅ buildBlock: 已清空pending故障标志")
 				} else {
 					r.logger.Info("ℹ️ buildBlock: DPoS实例存在但无待处理的故障检测信息",
+						"blockNumber", h.Number,
+						"isEpochEndBlock", isEpochEndBlock)
+				}
+
+				// 🆕 添加故障消减信息
+				if dposInstance.pendingSlashingInfo != nil {
+					// 复制SlashingInfo，避免引用被清空
+					extra.SlashingInfo = &SlashingInfo{
+						EpochNumber: dposInstance.pendingSlashingInfo.EpochNumber,
+						Slashings:   make([]*SlashingOperation, len(dposInstance.pendingSlashingInfo.Slashings)),
+						Timestamp:   dposInstance.pendingSlashingInfo.Timestamp,
+					}
+					for i, op := range dposInstance.pendingSlashingInfo.Slashings {
+						extra.SlashingInfo.Slashings[i] = &SlashingOperation{
+							ValidatorAddr:          op.ValidatorAddr,
+							SlashRate:              op.SlashRate,
+							MissedBlocks:           op.MissedBlocks,
+							MissedBlocksPercentage: op.MissedBlocksPercentage,
+							Reason:                 op.Reason,
+						}
+					}
+
+					r.logger.Info("🔧 buildBlock: epoch结束区块，故障消减信息已添加到ExtraData",
+						"blockNumber", h.Number,
+						"slashingsCount", len(extra.SlashingInfo.Slashings))
+
+					// 清空pending消减信息
+					dposInstance.pendingSlashingInfo = nil
+					r.logger.Info("✅ buildBlock: 已清空pending消减信息")
+				} else {
+					r.logger.Info("ℹ️ buildBlock: DPoS实例存在但无待处理的消减信息",
 						"blockNumber", h.Number,
 						"isEpochEndBlock", isEpochEndBlock)
 				}
@@ -1145,15 +1171,18 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 		// 静默处理，不打印日志
 
-		// 🆕 关键修复：从当前区块的ExtraData中获取奖励分配信息和故障标志
+		// 🆕 关键修复：从当前区块的ExtraData中获取奖励分配信息、故障标志和消减信息
 		var rewardDistribution *RewardDistributionInfo
 		var faultFlags []FaultFlagInfo
+		var slashingInfo *SlashingInfo
 		if currentBlockExtra, err := GetIbftExtra(block.Block.Header.ExtraData); err == nil {
 			rewardDistribution = currentBlockExtra.RewardDistribution
 			faultFlags = currentBlockExtra.FaultFlags
+			slashingInfo = currentBlockExtra.SlashingInfo
 			r.logger.Debug("🔍 从currentBlockExtra获取信息",
 				"hasRewardDistribution", rewardDistribution != nil,
-				"faultFlagsCount", len(faultFlags))
+				"faultFlagsCount", len(faultFlags),
+				"hasSlashingInfo", slashingInfo != nil)
 		} else {
 			r.logger.Warn("⚠️ 无法解析当前区块ExtraData，奖励分配信息可能丢失",
 				"blockNumber", block.Block.Number(),
@@ -1177,6 +1206,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			CheckpointBlockHash: extra.CheckpointBlockHash,   // 🆕 保持CheckpointBlockHash
 			FaultFlags:          faultFlags,                  // 🆕 保持FaultFlags
 			NextEpochValidators: nextEpochValidatorsForExtra, // 🆕 下一个epoch的验证者集合（只在epoch边界区块时设置）
+			SlashingInfo:        slashingInfo,                // 🆕 保持SlashingInfo
 		}
 
 		if len(nextEpochValidatorsForExtra) > 0 {

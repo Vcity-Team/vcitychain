@@ -92,6 +92,8 @@ type Extra struct {
 	FaultFlags []FaultFlagInfo `json:"fault_flags,omitempty"`
 	// 🆕 下一个epoch的验证者集合（只在epoch边界区块时设置）
 	NextEpochValidators validator.AccountSet `json:"next_epoch_validators,omitempty"`
+	// 🆕 故障消减信息（只包含 missed blocks 的消减，不包含双重签名）
+	SlashingInfo *SlashingInfo `json:"slashing_info,omitempty"`
 }
 
 // RewardDistributionInfo 奖励分配信息
@@ -100,6 +102,22 @@ type RewardDistributionInfo struct {
 	Rewards     map[string]*big.Int `json:"rewards"` // 地址 -> 奖励金额
 	TotalReward *big.Int            `json:"totalReward"`
 	Timestamp   uint64              `json:"timestamp"`
+}
+
+// 🆕 SlashingInfo 故障消减信息（只包含 missed blocks 的消减，不包含双重签名）
+type SlashingInfo struct {
+	EpochNumber uint64               `json:"epochNumber"`
+	Slashings   []*SlashingOperation `json:"slashings"` // 消减操作列表
+	Timestamp   uint64               `json:"timestamp"`
+}
+
+// 🆕 SlashingOperation 单个消减操作（只用于故障检测）
+type SlashingOperation struct {
+	ValidatorAddr          types.Address `json:"validatorAddr"`          // 被消减的验证者
+	SlashRate              uint64        `json:"slashRate"`              // 消减率（基点）
+	MissedBlocks           uint64        `json:"missedBlocks"`           // 错过的区块数
+	MissedBlocksPercentage uint64        `json:"missedBlocksPercentage"` // 错过区块百分比
+	Reason                 string        `json:"reason"`                 // 消减原因
 }
 
 // MarshalRLPWith 实现RLP编码
@@ -185,6 +203,140 @@ func (r *RewardDistributionInfo) UnmarshalRLPWith(v *fastrlp.Value) error {
 		return err
 	}
 	r.Timestamp = timestamp
+
+	return nil
+}
+
+// MarshalRLPWith 实现RLP编码
+func (s *SlashingInfo) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
+	vv := ar.NewArray()
+
+	// EpochNumber
+	vv.Set(ar.NewUint(s.EpochNumber))
+
+	// Slashings array
+	slashingsArray := ar.NewArray()
+	for _, op := range s.Slashings {
+		slashingsArray.Set(op.MarshalRLPWith(ar))
+	}
+	vv.Set(slashingsArray)
+
+	// Timestamp
+	vv.Set(ar.NewUint(s.Timestamp))
+
+	return vv
+}
+
+// UnmarshalRLPWith 实现RLP解码
+func (s *SlashingInfo) UnmarshalRLPWith(v *fastrlp.Value) error {
+	elems, err := v.GetElems()
+	if err != nil {
+		return err
+	}
+
+	if len(elems) < 3 {
+		return fmt.Errorf("invalid SlashingInfo RLP: expected 3 elements, got %d", len(elems))
+	}
+
+	// EpochNumber
+	epochNumber, err := elems[0].GetUint64()
+	if err != nil {
+		return err
+	}
+	s.EpochNumber = epochNumber
+
+	// Slashings array
+	slashingsElems, err := elems[1].GetElems()
+	if err != nil {
+		return err
+	}
+	s.Slashings = make([]*SlashingOperation, 0, len(slashingsElems))
+	for _, opElem := range slashingsElems {
+		op := &SlashingOperation{}
+		if err := op.UnmarshalRLPWith(opElem); err == nil {
+			s.Slashings = append(s.Slashings, op)
+		}
+	}
+
+	// Timestamp
+	timestamp, err := elems[2].GetUint64()
+	if err != nil {
+		return err
+	}
+	s.Timestamp = timestamp
+
+	return nil
+}
+
+// MarshalRLPWith 实现RLP编码
+func (s *SlashingOperation) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
+	vv := ar.NewArray()
+
+	// ValidatorAddr
+	vv.Set(ar.NewBytes(s.ValidatorAddr.Bytes()))
+
+	// SlashRate
+	vv.Set(ar.NewUint(s.SlashRate))
+
+	// MissedBlocks
+	vv.Set(ar.NewUint(s.MissedBlocks))
+
+	// MissedBlocksPercentage
+	vv.Set(ar.NewUint(s.MissedBlocksPercentage))
+
+	// Reason
+	vv.Set(ar.NewCopyBytes([]byte(s.Reason)))
+
+	return vv
+}
+
+// UnmarshalRLPWith 实现RLP解码
+func (s *SlashingOperation) UnmarshalRLPWith(v *fastrlp.Value) error {
+	elems, err := v.GetElems()
+	if err != nil {
+		return err
+	}
+
+	if len(elems) < 5 {
+		return fmt.Errorf("invalid SlashingOperation RLP: expected 5 elements, got %d", len(elems))
+	}
+
+	// ValidatorAddr
+	addrBytes, err := elems[0].GetBytes(nil)
+	if err != nil {
+		return err
+	}
+	if len(addrBytes) == 20 {
+		s.ValidatorAddr = types.BytesToAddress(addrBytes)
+	}
+
+	// SlashRate
+	slashRate, err := elems[1].GetUint64()
+	if err != nil {
+		return err
+	}
+	s.SlashRate = slashRate
+
+	// MissedBlocks
+	missedBlocks, err := elems[2].GetUint64()
+	if err != nil {
+		return err
+	}
+	s.MissedBlocks = missedBlocks
+
+	// MissedBlocksPercentage
+	missedBlocksPercentage, err := elems[3].GetUint64()
+	if err != nil {
+		return err
+	}
+	s.MissedBlocksPercentage = missedBlocksPercentage
+
+	// Reason
+	reasonBytes, err := elems[4].GetBytes(nil)
+	if err != nil {
+		return err
+	}
+	s.Reason = string(reasonBytes)
 
 	return nil
 }
@@ -278,6 +430,13 @@ func (i *Extra) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 		vv.Set(nextEpochValidatorsArray)
 	}
 
+	// 🆕 Element[8] - SlashingInfo（故障消减信息）
+	if i.SlashingInfo == nil {
+		vv.Set(ar.NewNullArray())
+	} else {
+		vv.Set(i.SlashingInfo.MarshalRLPWith(ar))
+	}
+
 	return vv
 }
 
@@ -303,6 +462,8 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		expectedElements = 7 // 包含FaultFlags的格式
 	} else if len(elems) == 8 {
 		expectedElements = 8 // 包含NextEpochValidators的格式
+	} else if len(elems) == 9 {
+		expectedElements = 9 // 包含SlashingInfo的格式
 	}
 
 	// 解析RLP元素
@@ -468,7 +629,7 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		}
 	}
 
-	// 🆕 Element[7] - NextEpochValidators（只在8个元素时处理）
+	// 🆕 Element[7] - NextEpochValidators（只在8个或9个元素时处理）
 	if len(elems) >= 8 && elems[7].Elems() > 0 {
 		nextEpochValidatorsElems, err := elems[7].GetElems()
 		if err == nil {
@@ -483,6 +644,15 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 					i.NextEpochValidators = append(i.NextEpochValidators, acc)
 				}
 			}
+		}
+	}
+
+	// 🆕 Element[8] - SlashingInfo（只在9个元素时处理）
+	if len(elems) >= 9 && elems[8].Elems() > 0 {
+		i.SlashingInfo = &SlashingInfo{}
+		if err := i.SlashingInfo.UnmarshalRLPWith(elems[8]); err != nil {
+			// 不返回错误，只是跳过消减信息
+			i.SlashingInfo = nil
 		}
 	}
 

@@ -376,6 +376,9 @@ type DPoS struct {
 	// 🆕 奖励分配信息
 	pendingRewardDistribution *RewardDistributionInfo
 
+	// 🆕 故障消减信息（只包含 missed blocks 的消减，不包含双重签名）
+	pendingSlashingInfo *SlashingInfo
+
 	// 🆕 故障检测信息
 	pendingFaultFlags     []FaultFlagInfo
 	pendingEpochEndHeader *types.Header

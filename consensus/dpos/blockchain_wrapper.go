@@ -315,6 +315,19 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 			"blockNumber", block.Number(),
 			"blockHash", block.Hash().String()[:16])
 
+		// 🆕 处理故障消减（从ExtraData执行）
+		if err := p.processSlashingInBlock(block, transition); err != nil {
+			p.logger.Error("❌❌❌ ========== 故障消减执行失败 ========== ❌❌❌",
+				"blockNumber", block.Number(),
+				"blockHash", block.Hash().String()[:16],
+				"error", err)
+			return nil, fmt.Errorf("failed to process slashing: %w", err)
+		}
+
+		p.logger.Debug("✅✅✅ ========== 故障消减执行成功 ========== ✅✅✅",
+			"blockNumber", block.Number(),
+			"blockHash", block.Hash().String()[:16])
+
 		if err := p.updateNextEpochValidatorsFromLocal(block); err != nil {
 			p.logger.Error("❌ 处理下一个epoch验证者集合失败",
 				"blockNumber", block.Number(),
@@ -500,7 +513,7 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 
 		// 从奖励账户扣除总奖励
 		transition.Txn().SubBalance(rewardAccount, totalReward)
-		p.logger.Info("✅ 从奖励账户扣除总奖励",
+		p.logger.Info("从奖励账户扣除总奖励",
 			"blockNumber", block.Number(),
 			"amount", totalReward.String())
 
@@ -509,12 +522,7 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 		for addrStr, amount := range rewardInfo.Rewards {
 			addr := types.StringToAddress(addrStr)
 
-			// 直接修改状态，不通过Transfer
 			transition.Txn().AddBalance(addr, amount)
-			p.logger.Info("✅ 给验证者增加余额",
-				"blockNumber", block.Number(),
-				"validator", addrStr,
-				"amount", amount.String())
 			cnt++
 		}
 		if cnt == len(rewardInfo.Rewards) {
@@ -529,7 +537,6 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 
 	// 预先收集：需要在本epoch边界应用的恢复提案
 	recoveredValidators := make(map[types.Address]*ParameterProposal)
-
 	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 		if dposInstance.state != nil && dposInstance.state.ProposalStore != nil {
 			// 计算当前epoch用于日志与筛选
@@ -542,7 +549,7 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 				p.logger.Info("[DEBUG_ProposalStore_FullDump] 当前所有提案总数", "count", len(allProposals), "currentEpoch", epochForLog)
 				for pid, prop := range allProposals {
 					p.logger.Info("[DEBUG_ProposalStore_FullDump]", "id", pid, "Type", prop.ProposalType, "Epoch", prop.Schedule.EffectiveEpoch, "Scheduled", prop.Schedule.Scheduled, "Validator", prop.ValidatorAddress.String(), "Status", prop.Status, "Start", prop.StartBlock, "End", prop.EndBlock, "Description", prop.Description, "currentEpoch", epochForLog)
-					// 直接基于全量数据筛选“本epoch需要生效”的恢复提案
+					// 直接基于全量数据筛选"本epoch需要生效"的恢复提案
 					if prop != nil && prop.ProposalType == "validator_recovery" && prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == epochForLog {
 						vaddr := prop.ValidatorAddress
 						if vaddr == (types.Address{}) {
@@ -558,97 +565,86 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 		}
 	}
 
-	// 🆕 处理故障标志
-	if len(extra.FaultFlags) > 0 {
-		p.logger.Info("🔍 开始处理故障标志", "count", len(extra.FaultFlags))
-		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-			for i := range extra.FaultFlags {
-				ff := &extra.FaultFlags[i]
-				if pprop, ok := recoveredValidators[ff.NodeAddress]; ok {
-					p.logger.Info("✅【EXTRA修正】本epoch恢复提案清零", "address", ff.NodeAddress.String())
-					ff.MissedBlocks = 0
-					ff.IsFaulty = false
-					ff.Reason = "本epoch恢复提案生效，统计清零"
+	return nil
+}
 
-					// 立刻持久化到与读取口径一致的数据库，确保后续读取不再视为故障
-					if dposInstance.state != nil && dposInstance.state.StakeStore != nil {
-						if err := dposInstance.state.StakeStore.ClearValidatorFaultStatus(ff.NodeAddress, pprop.ID); err != nil {
-							p.logger.Error("❌ ClearValidatorFaultStatus 持久化失败", "address", ff.NodeAddress.String(), "error", err)
-						} else {
-							p.logger.Info("✅ ClearValidatorFaultStatus 持久化成功", "address", ff.NodeAddress.String())
-						}
-					}
-					// 同步内存：从故障集合中剔除
-					if dposInstance.faultyValidators != nil {
-						delete(dposInstance.faultyValidators, ff.NodeAddress)
-					}
-
-					// 在修正后设置提案applied并保存
-					pprop.Schedule.Applied = true
-					pprop.Schedule.AppliedAtBlock = block.Number()
-					if dposInstance.state != nil && dposInstance.state.ProposalStore != nil {
-						_ = dposInstance.state.ProposalStore.SaveProposal(pprop)
-					}
-					// 计算当前epoch用于日志
-					epochForLog := uint64(0)
-					if meta := dposInstance.getEpochForBlock(block.Number()); meta != nil {
-						epochForLog = meta.Number
-					}
-					p.logger.Info("✅ ===============================================边界应用恢复提案成功", "proposalID", pprop.ID, "validator", ff.NodeAddress.String(), "currentEpoch", epochForLog)
-				}
-
-				if ff.IsFaulty {
-					p.logger.Info("📝 处理故障标志",
-						"address", ff.NodeAddress.String(),
-						"isFaulty", ff.IsFaulty,
-						"missedBlocks", ff.MissedBlocks,
-						"reason", ff.Reason)
-				}
-				// 更新验证者故障状态到数据库
-				if err := p.updateValidatorFaultStatus(*ff); err != nil {
-					p.logger.Error("❌ 更新验证者故障状态失败", "error", err)
-				}
-				// 更新内存故障状态
-				dposInstance.updateMemoryFaultStatus(*ff)
-			}
-
-			// 🆕 调用前打印最终的 FaultFlags 快照
-			for i := range extra.FaultFlags {
-				ff := &extra.FaultFlags[i]
-				if !ff.IsFaulty {
-					continue
-				}
-				p.logger.Info("📸 FaultFlags 最终快照",
-					"index", i,
-					"address", ff.NodeAddress.String(),
-					"isFaulty", ff.IsFaulty,
-					"missedBlocks", ff.MissedBlocks,
-					"reason", ff.Reason)
-			}
-
-			// 重新计算并更新出块者列表（只调用一次）
-			if err := dposInstance.updateBlockProducersFromFaultFlags(extra.FaultFlags); err != nil {
-				p.logger.Error("❌ 更新出块者列表失败", "error", err)
-			}
-		}
-	} else {
-		p.logger.Info("🔍🔍🔍没有故障标志，跳过处理", "blockNumber", block.Number())
-	}
-
-	// 🔍 添加详细的判断前检查日志
-	p.logger.Info("🔍 准备检查RewardDistribution",
+// processSlashingInBlock 从ExtraData读取消减信息并执行消减
+func (p *blockchainWrapper) processSlashingInBlock(block *types.Block, transition *state.Transition) error {
+	p.logger.Info("🔍🔍🔍 ==========验证中processSlashingInBlock 开始 ========== 🔍🔍🔍",
 		"blockNumber", block.Number(),
-		"RewardDistribution==nil", extra.RewardDistribution == nil,
-		"transition==nil", transition == nil,
+		"blockHash", block.Hash().String()[:16],
 		"extraDataLength", len(block.Header.ExtraData))
 
-	if extra.RewardDistribution == nil {
-		// 没有奖励分发信息，跳过
-		p.logger.Info("ℹ️ 没有奖励分发信息，跳过",
+	// 解析ExtraData获取消减信息
+	extra := &Extra{}
+	if err := extra.UnmarshalRLP(block.Header.ExtraData); err != nil {
+		p.logger.Error("❌ 解析ExtraData失败",
 			"blockNumber", block.Number(),
+			"error", err,
 			"extraDataLength", len(block.Header.ExtraData))
+		return fmt.Errorf("failed to unmarshal extra data: %w", err)
+	}
+
+	p.logger.Info("✅ ExtraData解析成功",
+		"blockNumber", block.Number(),
+		"hasSlashingInfo", extra.SlashingInfo != nil)
+
+	if extra.SlashingInfo == nil {
+		p.logger.Info("ℹ️ ExtraData中没有消减信息，跳过处理",
+			"blockNumber", block.Number())
 		return nil
 	}
+
+	// 获取DPoS实例
+	dposInstance, exists := GetDPoSInstance("vcity_dpos")
+	if !exists {
+		return fmt.Errorf("DPoS instance not found")
+	}
+
+	slashingInfo := extra.SlashingInfo
+	p.logger.Info("🔨 开始执行故障消减",
+		"blockNumber", block.Number(),
+		"epochNumber", slashingInfo.EpochNumber,
+		"slashingsCount", len(slashingInfo.Slashings))
+
+	// 对每个消减操作执行消减
+	for i, slashingOp := range slashingInfo.Slashings {
+		p.logger.Info("🔨 执行消减操作",
+			"blockNumber", block.Number(),
+			"index", i,
+			"validator", slashingOp.ValidatorAddr.String(),
+			"slashRate", slashingOp.SlashRate,
+			"missedBlocks", slashingOp.MissedBlocks,
+			"missedBlocksPercentage", slashingOp.MissedBlocksPercentage,
+			"reason", slashingOp.Reason)
+
+		if err := dposInstance.executeSlashing(
+			slashingOp.ValidatorAddr,
+			slashingOp.SlashRate,
+			block.Number(),
+			slashingInfo.EpochNumber,
+			slashingOp.Reason,
+			slashingOp.MissedBlocks,
+			slashingOp.MissedBlocksPercentage,
+			0, // doubleSigningHeight = 0（故障消减不是双重签名）
+		); err != nil {
+			p.logger.Error("❌ 执行故障消减失败",
+				"blockNumber", block.Number(),
+				"validator", slashingOp.ValidatorAddr.String(),
+				"error", err)
+			return fmt.Errorf("failed to execute slashing for validator %s: %w", slashingOp.ValidatorAddr.String(), err)
+		}
+
+		p.logger.Info("✅ 故障消减执行成功",
+			"blockNumber", block.Number(),
+			"validator", slashingOp.ValidatorAddr.String(),
+			"slashRate", slashingOp.SlashRate,
+			"基点")
+	}
+
+	p.logger.Info("✅✅✅ ========== 所有故障消减执行完成 ========== ✅✅✅",
+		"blockNumber", block.Number(),
+		"slashingsCount", len(slashingInfo.Slashings))
 
 	return nil
 }
@@ -701,11 +697,6 @@ func (p *blockchainWrapper) updateNextEpochValidatorsFromLocal(block *types.Bloc
 			"error", err)
 		return fmt.Errorf("failed to save next epoch validators: %w", err)
 	}
-
-	p.logger.Info("✅✅✅ ========== 下一个epoch验证者集合已保存到数据库 ========== ✅✅✅",
-		"blockNumber", block.Number(),
-		"nextEpochValidatorsCount", len(nextEpochValidators),
-		"note", "所有节点（包括出块节点自己）都会使用出块者写入的集合")
 
 	return nil
 }

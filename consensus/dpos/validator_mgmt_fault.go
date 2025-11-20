@@ -156,19 +156,7 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 	}
 
 	for _, validator := range d.epochValidators {
-		d.logger.Info("🔥 [FaultDetection] 调用 calculateMissedBlocksWithActual",
-			"validator", validator.Address.String(),
-			"startEpoch", d.currentEpoch,
-			"targetEpoch", currentEpoch,
-			"blockNumber", blockNumber)
-
 		missedBlocks, actualBlocks := d.calculateMissedBlocksWithActual(validator.Address, d.currentEpoch, currentEpoch)
-
-		d.logger.Info("🔥 [FaultDetection] 计算完成",
-			"validator", validator.Address.String(),
-			"missedBlocks", missedBlocks,
-			"actualBlocks", actualBlocks,
-			"currentEpoch", currentEpoch)
 
 		d.missedBlocksCount[validator.Address] = missedBlocks
 
@@ -193,7 +181,7 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 		}
 
 		missedBlocksPercentageThreshold := d.getMissedBlocksPercentage()
-		d.logger.Info("📊 验证者漏块率计算",
+		d.logger.Debug("📊 验证者漏块率计算",
 			"address", validator.Address.String(),
 			"epochToCheck", epochToCheck,
 			"blocksPerEpoch", blocksPerEpoch,
@@ -268,35 +256,35 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 				"thresholdPercentage", missedBlocksPercentageThreshold,
 				"reason", faultFlag.Reason)
 
-			// 🆕 执行削减惩罚
+			// 🆕 收集消减信息到 pendingSlashingInfo（不直接执行）
 			slashRate := d.getMinorOffenseSlashRate()
-			if err := d.executeSlashing(
-				validator.Address,
-				slashRate,
-				blockNumber,
-				epochToCheck,
-				faultFlag.Reason,
-				missedBlocks,
-				missedBlocksPercentage,
-				0, // doubleSigningHeight (轻度违规为0)
-			); err != nil {
-				d.logger.Error("❌ 执行削减失败",
-					"validator", validator.Address.String(),
-					"error", err)
-			} else {
-				d.logger.Info("✅ 削减执行成功",
-					"validator", validator.Address.String(),
-					"slashRate", slashRate,
-					"基点")
+
+			// 初始化 pendingSlashingInfo（如果还没有）
+			if d.pendingSlashingInfo == nil {
+				d.pendingSlashingInfo = &SlashingInfo{
+					EpochNumber: epochToCheck,
+					Slashings:   []*SlashingOperation{},
+					Timestamp:   uint64(time.Now().Unix()),
+				}
 			}
+
+			// 添加消减操作
+			slashingOp := &SlashingOperation{
+				ValidatorAddr:          validator.Address,
+				SlashRate:              slashRate,
+				MissedBlocks:           missedBlocks,
+				MissedBlocksPercentage: missedBlocksPercentage,
+				Reason:                 faultFlag.Reason,
+			}
+			d.pendingSlashingInfo.Slashings = append(d.pendingSlashingInfo.Slashings, slashingOp)
+
+			d.logger.Info("✅ 消减信息已收集到pendingSlashingInfo",
+				"validator", validator.Address.String(),
+				"slashRate", slashRate,
+				"基点",
+				"note", "将通过ExtraData传播给所有节点执行")
 		} else {
-			d.logger.Info("✅ 验证者状态正常",
-				"address", validator.Address.String(),
-				"expectedBlocks", expectedBlocks,
-				"actualBlocks", actualBlocks,
-				"missedBlocks", missedBlocks,
-				"missedBlocksPercentage", missedBlocksPercentage,
-				"thresholdPercentage", missedBlocksPercentageThreshold)
+
 		}
 	}
 
@@ -549,16 +537,8 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 	var expectedBlocks uint64
 	var actualBlocks uint64
 
-	d.logger.Info("📊 [calculateMissedBlocksWithActual] 开始统计",
-		"validator", validatorAddr.String(),
-		"startEpoch", startEpoch,
-		"endEpoch", endEpoch)
-
 	// 计算每个epoch中该验证者应该出块的次数
 	blocksPerEpoch := d.getEpochSize()
-	d.logger.Info("📊 [calculateMissedBlocksWithActual] epoch基础信息",
-		"validator", validatorAddr.String(),
-		"blocksPerEpoch", blocksPerEpoch)
 
 	if endEpoch > startEpoch {
 		epochToCheck = endEpoch
@@ -567,14 +547,8 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 		validatorsCount := uint64(0)
 		if epochValidators, err := d.getValidatorsForEpoch(epochToCheck); err == nil && len(epochValidators) > 0 {
 			validatorsCount = uint64(len(epochValidators))
-			d.logger.Info("📊 [calculateMissedBlocksWithActual] 获取epoch验证者集合",
-				"epochToCheck", epochToCheck,
-				"validatorsCount", validatorsCount)
 		} else {
 			// 备用方案：使用当前内存中的验证者集合
-			d.logger.Warn("⚠️ [calculateMissedBlocksWithActual] 无法获取epoch验证者集合，使用当前内存中的验证者集合",
-				"epochToCheck", epochToCheck,
-				"error", err)
 			if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
 				validatorsCount = uint64(len(d.runtime.delegates))
 			} else if len(d.delegates) > 0 {
@@ -590,10 +564,6 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 		if expectedBlocks == 0 {
 			expectedBlocks = 1 // 至少应该出1个块
 		}
-		d.logger.Info("📊 [calculateMissedBlocksWithActual] 预期出块统计",
-			"validator", validatorAddr.String(),
-			"epochToCheck", epochToCheck,
-			"expectedBlocks", expectedBlocks)
 
 		// 查询区块历史，计算实际出块数
 		if d.blockchain != nil {
@@ -603,11 +573,6 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 			// 🆕 修复：正确计算epoch对应的区块范围
 			epochStartBlock := consensusSwitchHeight + epochToCheck*blocksPerEpoch
 			epochEndBlock := consensusSwitchHeight + (epochToCheck+1)*blocksPerEpoch
-			d.logger.Info("📊 [calculateMissedBlocksWithActual] 区块范围",
-				"validator", validatorAddr.String(),
-				"epochToCheck", epochToCheck,
-				"startBlock", epochStartBlock,
-				"endBlock", epochEndBlock)
 
 			// 查询这个epoch中该验证者实际出块的次数
 			for blockNum := epochStartBlock; blockNum < epochEndBlock; blockNum++ {
@@ -616,9 +581,6 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 					if pendingHeader := d.getPendingEpochEndHeader(blockNum); pendingHeader != nil {
 						header = pendingHeader
 						exists = true
-						d.logger.Info("✅ [calculateMissedBlocksWithActual] 使用待写入的epoch结束区块头",
-							"validator", validatorAddr.String(),
-							"blockNumber", blockNum)
 					}
 				}
 
@@ -628,25 +590,8 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 						minerAddr := types.Address(header.Miner)
 						if minerAddr == validatorAddr {
 							actualBlocks++
-							d.logger.Info("✅ [calculateMissedBlocksWithActual] 匹配到验证者出块",
-								"validator", validatorAddr.String(),
-								"blockNumber", blockNum,
-								"blockHash", header.Hash.String())
-						} else {
-							d.logger.Debug("ℹ️ [calculateMissedBlocksWithActual] 非目标验证者出块",
-								"validator", validatorAddr.String(),
-								"blockNumber", blockNum,
-								"miner", minerAddr.String())
 						}
-					} else {
-						d.logger.Debug("ℹ️ [calculateMissedBlocksWithActual] Miner长度异常",
-							"blockNumber", blockNum,
-							"minerLength", len(header.Miner))
 					}
-				} else {
-					d.logger.Debug("ℹ️ [calculateMissedBlocksWithActual] 未找到区块",
-						"validator", validatorAddr.String(),
-						"blockNumber", blockNum)
 				}
 			}
 
@@ -654,21 +599,7 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 			if expectedBlocks > actualBlocks {
 				missedBlocks = expectedBlocks - actualBlocks
 			}
-			d.logger.Info("📊 [calculateMissedBlocksWithActual] 实际出块统计完成",
-				"validator", validatorAddr.String(),
-				"epochToCheck", epochToCheck,
-				"expectedBlocks", expectedBlocks,
-				"actualBlocks", actualBlocks,
-				"missedBlocks", missedBlocks)
-		} else {
-			d.logger.Warn("⚠️ [calculateMissedBlocksWithActual] 区块链实例为空，无法统计实际出块",
-				"validator", validatorAddr.String())
 		}
-	} else {
-		d.logger.Info("ℹ️ [calculateMissedBlocksWithActual] endEpoch <= startEpoch，跳过统计",
-			"validator", validatorAddr.String(),
-			"startEpoch", startEpoch,
-			"endEpoch", endEpoch)
 	}
 
 	d.logger.Info("📊 计算验证者漏块数",
