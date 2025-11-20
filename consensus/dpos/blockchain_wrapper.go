@@ -526,7 +526,7 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 			cnt++
 		}
 		if cnt == len(rewardInfo.Rewards) {
-			p.logger.Info("✅ 所有验证者处理完毕",
+			p.logger.Info("所有验证者奖励处理完毕",
 				"cnt", cnt)
 		}
 	} else {
@@ -546,9 +546,9 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 			}
 			allProposals, err := dposInstance.state.ProposalStore.GetAllProposals()
 			if err == nil {
-				p.logger.Info("[DEBUG_ProposalStore_FullDump] 当前所有提案总数", "count", len(allProposals), "currentEpoch", epochForLog)
+				p.logger.Info("当前所有提案总数", "count", len(allProposals), "currentEpoch", epochForLog)
 				for pid, prop := range allProposals {
-					p.logger.Info("[DEBUG_ProposalStore_FullDump]", "id", pid, "Type", prop.ProposalType, "Epoch", prop.Schedule.EffectiveEpoch, "Scheduled", prop.Schedule.Scheduled, "Validator", prop.ValidatorAddress.String(), "Status", prop.Status, "Start", prop.StartBlock, "End", prop.EndBlock, "Description", prop.Description, "currentEpoch", epochForLog)
+					p.logger.Info("提案详情", "id", pid, "Type", prop.ProposalType, "Epoch", prop.Schedule.EffectiveEpoch, "Scheduled", prop.Schedule.Scheduled, "Validator", prop.ValidatorAddress.String(), "Status", prop.Status, "Start", prop.StartBlock, "End", prop.EndBlock, "Description", prop.Description, "currentEpoch", epochForLog)
 					// 直接基于全量数据筛选"本epoch需要生效"的恢复提案
 					if prop != nil && prop.ProposalType == "validator_recovery" && prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == epochForLog {
 						vaddr := prop.ValidatorAddress
@@ -556,11 +556,11 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 							vaddr = types.StringToAddress(prop.Parameter)
 						}
 						recoveredValidators[vaddr] = prop
-						p.logger.Info("++++++++[Proposal][边界恢复提案调试] 收集需要apply的恢复提案", "ID", prop.ID, "Type", prop.ProposalType, "Scheduled", prop.Schedule.Scheduled, "EffEpoch", prop.Schedule.EffectiveEpoch, "Validator", vaddr.String(), "Parameter", prop.Parameter, "currentEpoch", epochForLog)
+						p.logger.Info("[边界恢复提案调试] 收集需要apply的恢复提案", "ID", prop.ID, "Type", prop.ProposalType, "Scheduled", prop.Schedule.Scheduled, "EffEpoch", prop.Schedule.EffectiveEpoch, "Validator", vaddr.String(), "Parameter", prop.Parameter, "currentEpoch", epochForLog)
 					}
 				}
 			} else {
-				p.logger.Error("[DEBUG_ProposalStore_FullDump] GetAllProposals error", "error", err, "currentEpoch", epochForLog)
+				p.logger.Error("GetAllProposals error", "error", err, "currentEpoch", epochForLog)
 			}
 		}
 	}

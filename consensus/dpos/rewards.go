@@ -484,15 +484,6 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 
 			// totalReward 已经是累加后的总奖励（验证者+投票者），直接使用
 			stateUpdates[address] = totalReward
-
-			d.logger.Info("💰 计算奖励",
-				"epoch", epochNumber,
-				"address", address.String(),
-				"type", rewardType,
-				"totalReward", totalReward.String(),
-				"blocksProduced", blocksProduced,
-				"isValidator", isValidator,
-				"isVoter", isVoter)
 		}
 	}
 

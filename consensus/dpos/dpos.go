@@ -1688,12 +1688,6 @@ func (d *DPoS) GetVoters() map[types.Address]*VoterInfo {
 	d.lock.RLock()
 	defer d.lock.RUnlock()
 
-	// Debug: Log the current state of d.voters
-	d.logger.Info("GetVoters called - current d.voters state",
-		"votersMapAddress", fmt.Sprintf("%p", d.voters),
-		"votersMapLength", len(d.voters),
-		"votersMapNil", d.voters == nil)
-
 	// Create a copy of the voters map to avoid race conditions
 	votersCopy := make(map[types.Address]*VoterInfo)
 	for addr, voter := range d.voters {
@@ -1717,10 +1711,6 @@ func (d *DPoS) GetVoters() map[types.Address]*VoterInfo {
 
 		votersCopy[addr] = voterCopy
 	}
-
-	d.logger.Info("GetVoters returning copy",
-		"copyMapAddress", fmt.Sprintf("%p", votersCopy),
-		"copyMapLength", len(votersCopy))
 
 	return votersCopy
 }

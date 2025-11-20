@@ -104,9 +104,17 @@ func (tem *TimeBasedEpochManager) TriggerEpochSwitch(blockNumber uint64) {
 	tem.mutex.Lock()
 	defer tem.mutex.Unlock()
 
-	// 基于区块高度计算Epoch
+	// 基于区块高度计算Epoch，需考虑共识切换高度
 	epochSize := tem.getEpochSize()
-	currentEpoch := (blockNumber / epochSize) + 1
+	consensusSwitchHeight := tem.consensusSwitchHeight
+
+	var currentEpoch uint64
+	if blockNumber < consensusSwitchHeight {
+		currentEpoch = 0
+	} else {
+		dposBlockNumber := blockNumber - consensusSwitchHeight
+		currentEpoch = (dposBlockNumber / epochSize) + 1
+	}
 
 	// 调用epoch切换回调
 	if tem.callback != nil {
