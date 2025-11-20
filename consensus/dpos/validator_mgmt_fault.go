@@ -108,298 +108,21 @@ func (d *DPoS) getValidatorFaultInfo(validatorAddr types.Address) map[string]int
 	return faultInfo
 }
 
-// detectValidatorFaults 检测验证者故障
+// detectValidatorFaults 检测验证者故障（重构后）
 func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error) {
-	var faultFlags []FaultFlagInfo
-
-	// 计算当前epoch
-	currentEpoch := d.getCurrentEpochByBlock(blockNumber)
-	currentEpochNumber := currentEpoch + 1
-	previousEpochNumber := uint64(0)
-	if d.currentEpoch > 0 {
-		previousEpochNumber = d.currentEpoch + 1
+	// 获取或创建FaultDetector
+	detector := d.getFaultDetector()
+	if detector == nil {
+		return nil, fmt.Errorf("fault detector not available")
 	}
 
-	// 如果epoch没有变化，不需要检测
-	if currentEpoch == d.currentEpoch {
-		d.logger.Info("ℹ️ Epoch未变化，跳过故障检测",
-			"currentEpochIndex", currentEpoch,
-			"currentEpoch", currentEpochNumber,
-			"previousEpochIndex", d.currentEpoch,
-			"previousEpoch", previousEpochNumber)
-		return faultFlags, nil
-	}
+	// 使用FaultDetector检测故障
+	return detector.DetectFaults(blockNumber)
+}
 
-	missedBlocksPercentageThreshold := d.getMissedBlocksPercentage()
-	d.logger.Info("🔍 ===== 开始检测验证者故障 =====",
-		"blockNumber", blockNumber,
-		"currentEpoch", currentEpochNumber,
-		"previousEpoch", previousEpochNumber,
-		"maxMissedBlocks", d.config.MaxMissedBlocks,
-		"missedBlocksPercentage", missedBlocksPercentageThreshold)
-
-	// 计算每个验证者的漏块数
-	d.logger.Info("🔍 开始计算每个验证者的漏块数...")
-
-	// 🆕 优先从区块ExtraData/数据库获取本epoch验证者集合
-	validatorSource := "unknown"
-	currentEpochNumberForValidators := currentEpoch + 1
-	if epochValidators, err := d.getValidatorsForEpoch(currentEpochNumberForValidators); err == nil && len(epochValidators) > 0 {
-		d.epochValidators = epochValidators
-		validatorSource = "ExtraData/StakeStore"
-		d.logger.Info("✅ 从ExtraData获取当前epoch验证者集合",
-			"epoch", currentEpochNumberForValidators,
-			"count", len(d.epochValidators))
-	} else if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
-		// 备用方案：使用 runtime.delegates（最实时）
-		d.epochValidators = d.runtime.delegates.Copy()
-		validatorSource = "runtime.delegates"
-		d.logger.Info("✅ 使用runtime.delegates作为当前epoch验证者集合",
-			"epoch", currentEpochNumberForValidators,
-			"count", len(d.epochValidators))
-	} else if len(d.delegates) > 0 {
-		// 最后使用 d.delegates
-		d.epochValidators = d.delegates.Copy()
-		validatorSource = "d.delegates"
-		d.logger.Info("✅ 使用d.delegates作为当前epoch验证者集合",
-			"epoch", currentEpochNumberForValidators,
-			"count", len(d.epochValidators))
-	} else {
-		d.logger.Error("❌ 无法获取当前epoch验证者集合",
-			"epoch", currentEpochNumberForValidators)
-		return nil, fmt.Errorf("no validators available for current epoch")
-	}
-	d.logger.Info("ℹ️ 当前epoch验证者集合来源",
-		"epoch", currentEpochNumberForValidators,
-		"source", validatorSource,
-		"count", len(d.epochValidators))
-
-	var epochToCheck uint64
-	if currentEpoch > 0 {
-		epochToCheck = currentEpoch
-	} else {
-		epochToCheck = 0
-	}
-	epochToCheckNumber := epochToCheck + 1
-
-	// 🆕 获取上一个epoch的验证者集合，用于判断新加入的验证者
-	var previousEpochValidators validator.AccountSet
-	if d.currentEpoch > 0 {
-		previousEpochNumberForValidators := d.currentEpoch + 1
-		if prevValidators, err := d.getValidatorsForEpoch(previousEpochNumberForValidators); err == nil {
-			previousEpochValidators = prevValidators
-			d.logger.Info("✅ 获取到上一个epoch验证者集合",
-				"previousEpoch", previousEpochNumberForValidators,
-				"validatorsCount", len(previousEpochValidators))
-		} else {
-			d.logger.Warn("⚠️ 无法获取上一个epoch验证者集合，将无法判断新加入的验证者",
-				"previousEpoch", previousEpochNumberForValidators,
-				"error", err)
-			d.logger.Info("ℹ️ 上一个epoch验证者集合缺失，所有验证者将按既有节点处理",
-				"currentEpoch", currentEpochNumber,
-				"previousEpoch", previousEpochNumberForValidators)
-		}
-	}
-
-	// 创建上一个epoch验证者地址映射，用于快速查找
-	previousEpochValidatorMap := make(map[types.Address]bool)
-	for _, v := range previousEpochValidators {
-		previousEpochValidatorMap[v.Address] = true
-	}
-	d.logger.Info("ℹ️ 上一个epoch验证者映射构建完成",
-		"previousEpoch", previousEpochNumber,
-		"validatorCount", len(previousEpochValidatorMap))
-
-	for _, validator := range d.epochValidators {
-		// 🆕 判断是否是新加入的验证者（在当前epoch开始时不在验证者集合中）
-		isNewlyAdded := false
-		if len(previousEpochValidators) > 0 {
-			if _, wasInPreviousEpoch := previousEpochValidatorMap[validator.Address]; !wasInPreviousEpoch {
-				isNewlyAdded = true
-				d.logger.Info("🆕 检测到新加入的验证者，跳过故障检测和消减",
-					"address", validator.Address.String(),
-					"currentEpoch", currentEpochNumber,
-					"previousEpoch", previousEpochNumber,
-					"note", "新加入的验证者在本epoch还没有机会出块，不应被消减")
-			}
-		}
-
-		// 🆕 如果是新加入的验证者，跳过故障检测和消减，但仍记录为正常状态
-		if isNewlyAdded {
-			faultFlag := FaultFlagInfo{
-				NodeAddress:            validator.Address,
-				IsFaulty:               false,
-				MissedBlocks:           0,
-				ActualBlocks:           0,
-				ExpectedBlocks:         0,
-				MissedBlocksPercentage: 0,
-				LastUpdateTime:         uint64(time.Now().Unix()),
-				EpochNumber:            epochToCheckNumber,
-				LastFaultyEpoch:        0,
-				Reason:                 fmt.Sprintf("Epoch %d: 新加入的验证者，跳过故障检测", epochToCheckNumber),
-			}
-			faultFlags = append(faultFlags, faultFlag)
-			continue // 跳过后续的故障检测和消减逻辑
-		}
-		missedBlocks, actualBlocks, expectedBlocks := d.calculateMissedBlocksWithActual(validator.Address, d.currentEpoch, currentEpoch)
-
-		d.missedBlocksCount[validator.Address] = missedBlocks
-
-		// 🆕 使用 calculateMissedBlocksWithActual 返回的 expectedBlocks（基于该epoch的实际验证者集合）
-		// 不再重新计算，确保与 missedBlocks 的计算基础一致
-		blocksPerEpoch := d.getEpochSize()
-
-		// 计算漏块率（基点，10000 = 100%）
-		missedBlocksPercentage := uint64(0)
-		if expectedBlocks > 0 {
-			missedBlocksPercentage = (missedBlocks * 10000) / expectedBlocks
-		}
-
-		missedBlocksPercentageThreshold := d.getMissedBlocksPercentage()
-		// 🆕 使用漏块率判断故障（而不是绝对漏块数）
-		isFaulty := expectedBlocks > 0 && missedBlocksPercentage >= missedBlocksPercentageThreshold
-
-		if missedBlocks > 0 && isFaulty {
-			d.logger.Info("📊 验证者漏块率计算",
-				"address", validator.Address.String(),
-				"epochToCheck", epochToCheckNumber,
-				"blocksPerEpoch", blocksPerEpoch,
-				"expectedBlocks", expectedBlocks,
-				"actualBlocks", actualBlocks,
-				"missedBlocks", missedBlocks,
-				"missedBlocksPercentage", missedBlocksPercentage,
-				"thresholdPercentage", missedBlocksPercentageThreshold,
-				"✅说明", "expectedBlocks和missedBlocks都来自calculateMissedBlocksWithActual，基于该epoch的实际验证者集合，确保数据一致性")
-		}
-
-		// 🆕 获取上次故障的epoch（从数据库或FaultFlags中）
-		lastFaultyEpoch := uint64(0)
-		if d.state != nil && d.state.StakeStore != nil {
-			if dbFaultInfo, err := d.state.StakeStore.GetValidatorFaultStatus(validator.Address); err == nil && dbFaultInfo != nil {
-				// 尝试从数据库获取上次故障的epoch
-				if lfe, ok := dbFaultInfo["lastFaultyEpoch"].(float64); ok {
-					lastFaultyEpoch = uint64(lfe)
-				}
-			}
-		}
-
-		// 🆕 如果当前有故障，更新lastFaultyEpoch为当前epoch；否则保留上次的值
-		if isFaulty {
-			lastFaultyEpoch = epochToCheckNumber
-		}
-
-		if missedBlocks > 0 {
-			d.logger.Info("📊 验证者漏块统计",
-				"address", validator.Address.String(),
-				"expectedBlocks", expectedBlocks,
-				"actualBlocks", actualBlocks,
-				"missedBlocks", missedBlocks,
-				"missedBlocksPercentage", missedBlocksPercentage,
-				"thresholdPercentage", missedBlocksPercentageThreshold,
-				"isFaulty", isFaulty,
-				"lastFaultyEpoch", lastFaultyEpoch)
-		}
-
-		// 🆕 构建故障原因
-		var reason string
-		if isFaulty {
-			reason = fmt.Sprintf("Epoch %d: missed blocks percentage reached threshold: %d bp >= %d bp (missed %d/%d blocks)",
-				epochToCheckNumber, missedBlocksPercentage, missedBlocksPercentageThreshold, missedBlocks, expectedBlocks)
-		} else {
-			reason = fmt.Sprintf("Epoch %d: missed blocks percentage normal: %d bp < %d bp (missed %d/%d blocks)",
-				epochToCheckNumber, missedBlocksPercentage, missedBlocksPercentageThreshold, missedBlocks, expectedBlocks)
-		}
-
-		// 🆕 不管漏块数为多少，都保存到数据库
-		faultFlag := FaultFlagInfo{
-			NodeAddress:            validator.Address,
-			IsFaulty:               isFaulty,
-			MissedBlocks:           missedBlocks,
-			ActualBlocks:           actualBlocks,
-			ExpectedBlocks:         expectedBlocks,         // 🆕 预期出块数
-			MissedBlocksPercentage: missedBlocksPercentage, // 🆕 漏块率（基点）
-			LastUpdateTime:         uint64(time.Now().Unix()),
-			EpochNumber:            epochToCheckNumber,
-			LastFaultyEpoch:        lastFaultyEpoch,
-			Reason:                 reason,
-		}
-		faultFlags = append(faultFlags, faultFlag)
-
-		if isFaulty {
-			d.logger.Info("🚨 ===== 检测到故障验证者 =====",
-				"address", validator.Address.String(),
-				"expectedBlocks", expectedBlocks,
-				"actualBlocks", actualBlocks,
-				"missedBlocks", missedBlocks,
-				"missedBlocksPercentage", missedBlocksPercentage,
-				"thresholdPercentage", missedBlocksPercentageThreshold,
-				"reason", faultFlag.Reason)
-
-			// 🆕 收集消减信息到 pendingSlashingInfo（不直接执行）
-			slashRate := d.getMinorOffenseSlashRate()
-
-			// 初始化 pendingSlashingInfo（如果还没有）
-			if d.pendingSlashingInfo == nil {
-				d.pendingSlashingInfo = &SlashingInfo{
-					EpochNumber: epochToCheckNumber,
-					Slashings:   []*SlashingOperation{},
-					Timestamp:   uint64(time.Now().Unix()),
-				}
-			}
-
-			// 添加消减操作
-			slashingOp := &SlashingOperation{
-				ValidatorAddr:          validator.Address,
-				SlashRate:              slashRate,
-				MissedBlocks:           missedBlocks,
-				MissedBlocksPercentage: missedBlocksPercentage,
-				Reason:                 faultFlag.Reason,
-			}
-			d.pendingSlashingInfo.Slashings = append(d.pendingSlashingInfo.Slashings, slashingOp)
-
-			d.logger.Info("✅ 消减信息已收集到pendingSlashingInfo",
-				"validator", validator.Address.String(),
-				"slashRate", slashRate,
-				"基点",
-				"note", "将通过ExtraData传播给所有节点执行")
-		} else {
-
-		}
-	}
-
-	// 更新当前epoch
-	d.currentEpoch = currentEpoch
-
-	d.logger.Info("🏁 ===== 故障检测完成 =====",
-		"faultyValidatorsCount", len(faultFlags),
-		"currentEpoch", currentEpochNumber)
-
-	if len(faultFlags) > 0 {
-		d.logger.Info("📋 验证者故障检测结果汇总:")
-		faultyCount := 0
-		for i, faultFlag := range faultFlags {
-			if faultFlag.IsFaulty {
-				faultyCount++
-				d.logger.Info("👤 验证者故障详情",
-					"index", i+1,
-					"address", faultFlag.NodeAddress.String(),
-					"expectedBlocks", faultFlag.ExpectedBlocks,
-					"actualBlocks", faultFlag.ActualBlocks,
-					"missedBlocks", faultFlag.MissedBlocks,
-					"missedBlocksPercentage", faultFlag.MissedBlocksPercentage,
-					"isFaulty", faultFlag.IsFaulty,
-					"reason", faultFlag.Reason)
-			}
-		}
-		d.logger.Info("📊 故障统计",
-			"totalValidators", len(faultFlags),
-			"faultyValidators", faultyCount,
-			"normalValidators", len(faultFlags)-faultyCount)
-	} else {
-		d.logger.Info("✅ 没有检测到验证者")
-	}
-
-	return faultFlags, nil
+// getFaultDetector 获取或创建FaultDetector实例
+func (d *DPoS) getFaultDetector() *FaultDetector {
+	return NewFaultDetector(d, d.logger)
 }
 
 // saveFaultStatusToDatabase 保存故障状态到数据库的辅助方法
@@ -578,7 +301,7 @@ func (d *DPoS) getValidatorsForEpoch(epochNumber uint64) (validator.AccountSet, 
 						IsActive:    v.IsActive,
 					})
 				}
-				d.logger.Info("✅ 从ExtraData获取epoch验证者集合",
+				d.logger.Debug("✅ 从ExtraData获取epoch验证者集合",
 					"epochNumber", epochNumber,
 					"epochStartBlock", epochStartBlock,
 					"validatorsCount", len(validators))
@@ -619,7 +342,8 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 	// 计算每个epoch中该验证者应该出块的次数
 	blocksPerEpoch := d.getEpochSize()
 
-	if endEpoch > startEpoch {
+	// 🔧 修复：当 startEpoch == endEpoch 时也应该计算（单个epoch的统计）
+	if endEpoch >= startEpoch {
 		epochToCheck = endEpoch
 		epochNumberForCheck := epochToCheck + 1
 

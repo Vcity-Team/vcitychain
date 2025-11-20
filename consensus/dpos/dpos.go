@@ -31,7 +31,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-// 🆕 全局DPoS实例注册表，用于BLS公钥持久化
+// 全局DPoS实例注册表，用于BLS公钥持久化
 var (
 	dposInstances = make(map[string]*DPoS)
 	dposMutex     sync.RWMutex
@@ -485,41 +485,6 @@ func (d *DPoS) getPendingEpochEndHeader(blockNumber uint64) *types.Header {
 	return &headerCopy
 }
 
-// PendingStateUpdate 结构体已移除，延迟状态更新机制不再需要
-
-// 🆕 公共函数：从数据库读取验证者，按权重倒序排序，应用配置限制
-// GetSortedValidatorsWithLimit 返回排序和限制后的验证者列表
-// 这个函数统一了验证者读取的逻辑，确保所有地方都使用相同的数据源和排序方式
-// GetSortedValidatorsWithLimit 已迁移到 validator_mgmt_manager.go
-
-// InitializeGovernance, loadProposalsFromDatabase, initializeParameterCache,
-// getGovernanceParameterValue, getVotePeriod, getValidPeriod, GetCurrentProposalPeriod,
-// getVotingThreshold, getConfigParameterValue 已迁移到 governance_init.go
-
-// getDefaultVotableParameters 已迁移到 governance_init.go
-
-// getVotersForValidator 与 getTotalVotesForValidator 已迁移到 voting_weight.go
-
-// debugDatabaseContents 已迁移到 storage.go
-
-// CreateParameterProposal, CreateRecoveryProposal 已迁移到 governance_proposal.go
-
-// VoteOnParameterProposal, CheckProposalResult, checkProposalResultInternal, buildVoteMessage, signParameterVote, verifyParameterVote, SignVoteForTx 已迁移到 governance_vote.go
-
-// ProcessProposalCreateTransaction, ProcessProposalVoteTransaction, ProcessProposalExecuteTransaction 已迁移到 governance_transaction.go
-
-// executeParameterProposalInTx, executeRecoveryProposalInTx 已迁移到 governance_execute.go
-
-// buildVoteMessage, signParameterVote, verifyParameterVote, SignVoteForTx 已迁移到 governance_vote.go
-
-// GetParameterProposal, GetActiveProposals, GetVotableCurrentParameters, UpdateParameterValue 已迁移到 governance_query.go
-
-// getVoterVotingWeight 已迁移到 voting_weight.go
-
-// getValidatorVotingWeight 已迁移到 voting_weight.go
-
-// buildVoteMessage, signParameterVote, verifyParameterVote, SignVoteForTx 已迁移到 governance_vote.go
-
 // getCurrentBlockNumber 获取当前区块号（内部方法）
 func (d *DPoS) getCurrentBlockNumber() uint64 {
 	if d.config == nil {
@@ -553,22 +518,6 @@ func (d *DPoS) GetConsensusSwitchHeight() uint64 {
 	}
 	return d.config.ConsensusSwitchHeight
 }
-
-// UpdateParameterValue, GetParameterProposal, GetActiveProposals, GetVotableCurrentParameters 已迁移到 governance_query.go
-
-// VerifyHeader, verifyHeaderImpl, ProcessHeaders 已迁移到 block_validation.go
-
-// isEpochEndBlock 检查是否是epoch的最后一个区块
-// isEpochEndBlock, getCurrentEpoch, getEpochForBlock, getEpochSize 已迁移到 validator_mgmt_epoch.go
-
-// executeDelayedStateUpdateForEpochEnd 函数已移除，延迟状态更新机制不再需要
-
-// 🆕 新增：更新轮次状态（从ProcessHeaders中提取出来）
-// updateRoundState 已迁移到 validator_mgmt_round.go
-
-// processBlockVotesFromHeader 已迁移到 voting_transaction.go
-
-// applyRewardDistribution 已迁移到 rewards.go
 
 func (d *DPoS) PreCommitState(block *types.Block, _ *state.Transition) error {
 	// For DPoS, we don't need to validate commitment state transactions like PolyBFT
@@ -3034,28 +2983,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 	return nil
 }
 
-// ==================== DPoS经济系统JSON-RPC实现方法 ====================
-// GetCurrentEpochInfo, GetEpochInfoByNumber, GetValidatorBlockStats, GetValidatorRewardsInfo, recordRewardsToDatabase, onEpochEnd 已迁移到 query_stats.go
-
-// initializeEconomicSystem, handleEpochSwitch, processEconomicSystem 已迁移到 economic_system.go
-// detectValidatorFaults, saveFaultStatusToDatabase, updateMemoryFaultStatus, updateBlockProducersFromFaultFlags,
-// calculateMissedBlocks, calculateMissedBlocksWithActual, getCurrentEpochByBlock, calculateNextEpochValidators,
-// saveNextEpochValidators, getEpochValidatorsFromDatabase 已迁移到 validator_mgmt_fault.go
-// isGenesisValidator, isDelegateRegistrationTransaction, isVoteTransaction, processDelegateRegistrationTransaction,
-// parseDelegateRegistrationTransactionData, calculateTotalVotedAmount, IsDelegateRegistered, IsDelegateCandidate,
-// createDelegateRegistrationTransactionData, RegisterDelegate, RegisterDelegateWithKey, RegisterDelegateWithKeyAndChainID,
-// createDelegateRegistrationTransaction, createDelegateRegistrationTransactionWithChainID, signTransaction, signTransactionWithChainID,
-// ApproveDelegate, RejectDelegate, GetDelegateRegistrations, getDelegateDepositAmount, getMaxActiveDelegates,
-// updateActiveDelegates, WithdrawDelegate, compareDelegateSets, updateDelegates, updateDelegatesInternal 已迁移到 validator_mgmt_delegate.go
-
-// detectValidatorFaults, saveFaultStatusToDatabase, updateMemoryFaultStatus, updateBlockProducersFromFaultFlags,
-// calculateMissedBlocks, calculateMissedBlocksWithActual, getCurrentEpochByBlock, calculateNextEpochValidators,
-// saveNextEpochValidators, getEpochValidatorsFromDatabase 已迁移到 validator_mgmt_fault.go
-
-// getAccountNonce 获取账户的nonce
-// getAccountNonce 已迁移到 account_query.go
-
-// 🆕 新增：runtimeBalanceQuerier 实现 NativeTokenBalanceQuerier 接口
+// runtimeBalanceQuerier 实现 NativeTokenBalanceQuerier 接口
 type runtimeBalanceQuerier struct {
 	runtime *dposRuntime
 }
@@ -3110,5 +3038,3 @@ func (r *dposRuntime) getAccountBalance(address types.Address) (*big.Int, error)
 	r.logger.Warn("⚠️ 无法通过backend查询余额，返回0余额", "address", address.String())
 	return big.NewInt(0), nil
 }
-
-// logOnceWithInterval 已迁移到 monitor_resource_monitor.go

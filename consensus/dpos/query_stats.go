@@ -620,16 +620,3 @@ func (d *DPoS) recordRewardsToDatabase(epochNumber uint64, rewards map[types.Add
 
 	return nil
 }
-
-// onEpochEnd 在epoch结束时调用
-func (d *DPoS) onEpochEnd(epochNumber uint64) error {
-	d.logger.Info("🏁 ========== Epoch结束回调触发 ==========",
-		"epoch", epochNumber,
-		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
-
-	// 延迟状态更新机制已移除，奖励分发在epoch结束区块直接执行
-	d.logger.Debug("延迟状态更新机制已移除，无需在epoch结束时处理状态更新",
-		"currentEpoch", epochNumber)
-
-	return nil
-}

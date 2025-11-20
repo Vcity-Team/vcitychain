@@ -1,115 +1,55 @@
 package dpos
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/Vcity-Team/vcitychain/bls"
 	"github.com/Vcity-Team/vcitychain/types"
-	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-// 🆕 新增：BLS响应处理器管理
+// 🆕 保留旧的全局响应处理器（向后兼容，用于旧的handleBLSResponse）
 var (
 	blsResponseHandlers = make(map[string]chan *bls.PublicKey)
 	blsErrorHandlers    = make(map[string]chan error)
 	blsHandlerMutex     sync.RWMutex
 )
 
-// requestBLSPublicKeyFromNetwork 从网络请求BLS公钥
+// requestBLSPublicKeyFromNetwork 从网络请求BLS公钥（重构后）
 func (d *DPoS) requestBLSPublicKeyFromNetwork(address types.Address) (*bls.PublicKey, error) {
-	// 1. 检查网络是否可用
-	if d.config.Network == nil {
-		return nil, fmt.Errorf("network not available")
+	// 获取或创建BLSKeyRequester
+	requester := d.getBLSKeyRequester()
+	if requester == nil {
+		return nil, fmt.Errorf("BLS key requester not available")
 	}
 
-	// 2. 创建BLS公钥请求消息
-	requestMsg := &BLSPublicKeyRequest{
-		RequesterAddress: types.Address(d.key.Address()),
-		TargetAddress:    address,
-		Timestamp:        uint64(time.Now().Unix()),
+	// 使用BLSKeyRequester请求BLS公钥
+	ctx := context.Background()
+	return requester.RequestBLSKey(ctx, address)
+}
+
+// getBLSKeyRequester 获取或创建BLSKeyRequester实例
+func (d *DPoS) getBLSKeyRequester() *BLSKeyRequester {
+	// 如果runtime或networkIntegration不可用，返回nil
+	if d.runtime == nil || d.runtime.networkIntegration == nil {
+		return nil
 	}
 
-	// 为日志提前生成请求ID
-	requestID := fmt.Sprintf("bls_request_%s_%d", address.String(), requestMsg.Timestamp)
+	// 获取BLSKeyManager
+	var blsKeyManager *BLSKeyManager
+	if d.runtime.networkIntegration.blsKeyManager != nil {
+		blsKeyManager = d.runtime.networkIntegration.blsKeyManager
+	}
 
-	// 3. 在注册处理器之前检查目标节点的连接状态
-	var (
-		targetPeerID    peer.ID
-		hasConnectivity bool
-		isPeerConnected bool
+	// 创建BLSKeyRequester
+	return NewBLSKeyRequester(
+		d,
+		d.runtime.networkIntegration,
+		blsKeyManager,
+		d.logger,
 	)
-
-	if d.runtime != nil && d.runtime.networkIntegration != nil {
-		targetPeerID, hasConnectivity, isPeerConnected = d.runtime.networkIntegration.GetValidatorConnectivity(address)
-		if hasConnectivity {
-			if !isPeerConnected {
-				d.logger.Warn("⏭️ 跳过BLS请求：目标节点离线",
-					"requestID", requestID,
-					"target", address.String(),
-					"peerID", targetPeerID.String(),
-					"note", "已知peer但当前未连接，直接返回")
-				return nil, fmt.Errorf("validator %s offline (peer %s not connected)", address.String(), targetPeerID.String())
-			}
-			d.logger.Info("🎯 BLS请求命中在线节点",
-				"requestID", requestID,
-				"target", address.String(),
-				"peerID", targetPeerID.String(),
-				"note", "直接尝试获取BLS公钥")
-		} else {
-			// 🔧 修复：当peer映射未知时，允许使用广播路径请求BLS公钥
-			// 广播请求可以工作，因为：
-			// 1. 广播会发送到所有连接的节点
-			// 2. 如果目标节点在线，它会响应
-			// 3. 响应时会自动注册peer映射（在handleBLSKeyResponse中）
-			d.logger.Info("📡 BLS请求使用广播路径（peer映射未知）",
-				"requestID", requestID,
-				"target", address.String(),
-				"note", "未注册peer映射，使用广播方式请求，响应时将自动注册peer映射")
-		}
-	} else {
-		d.logger.Info("📡 BLS请求使用广播路径",
-			"requestID", requestID,
-			"target", address.String(),
-			"note", "networkIntegration不可用")
-	}
-
-	// 4. 序列化请求消息
-	requestData, err := json.Marshal(requestMsg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal BLS request: %w", err)
-	}
-
-	// 5. 发送网络广播请求
-	// 创建响应通道
-	responseCh := make(chan *bls.PublicKey, 1)
-	errorCh := make(chan error, 1)
-
-	// 注册响应处理器
-	d.registerBLSResponseHandler(requestID, responseCh, errorCh)
-
-	// 发送广播请求
-	if err := d.broadcastBLSRequest(requestData, requestID); err != nil {
-		d.unregisterBLSResponseHandler(requestID)
-		return nil, fmt.Errorf("failed to broadcast BLS request: %w", err)
-	}
-
-	// 等待响应（设置超时，增加到30秒）
-	timeout := time.After(30 * time.Second)
-	select {
-	case blsKey := <-responseCh:
-		d.unregisterBLSResponseHandler(requestID)
-		//d.logger.Info("✅ 收到BLS公钥响应", "address", address.String())
-		return blsKey, nil
-	case err := <-errorCh:
-		d.unregisterBLSResponseHandler(requestID)
-		return nil, fmt.Errorf("BLS request failed: %w", err)
-	case <-timeout:
-		d.unregisterBLSResponseHandler(requestID)
-		return nil, fmt.Errorf("BLS request timeout for address %s", address.String())
-	}
 }
 
 // initializeBLSNetworking 初始化BLS网络通信
@@ -154,8 +94,18 @@ func (d *DPoS) broadcastBLSRequest(requestData []byte, requestID string) error {
 	return nil
 }
 
-// handleBLSResponse 处理BLS响应
+// handleBLSResponse 处理BLS响应（重构后，优先使用BLSKeyRequester）
 func (d *DPoS) handleBLSResponse(requestID string, blsKey *bls.PublicKey) error {
+	// 优先使用BLSKeyRequester处理响应
+	requester := d.getBLSKeyRequester()
+	if requester != nil {
+		if err := requester.HandleBLSResponse(requestID, blsKey); err == nil {
+			return nil
+		}
+		// 如果BLSKeyRequester处理失败，继续使用旧的全局处理器（向后兼容）
+	}
+
+	// 备用方案：使用旧的全局处理器（向后兼容）
 	blsHandlerMutex.RLock()
 	responseCh, exists := blsResponseHandlers[requestID]
 	blsHandlerMutex.RUnlock()

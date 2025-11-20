@@ -440,11 +440,6 @@ func (p *blockchainWrapper) getEpochSize() uint64 {
 
 // processRewardDistributionInBlock 在区块执行时处理奖励分发
 func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block, transition *state.Transition) error {
-	p.logger.Info("🔍🔍🔍 ==========验证中processRewardDistributionInBlock 开始 ========== 🔍🔍🔍",
-		"blockNumber", block.Number(),
-		"blockHash", block.Hash().String()[:16],
-		"extraDataLength", len(block.Header.ExtraData))
-
 	// 解析ExtraData获取奖励分发信息
 	extra := &Extra{}
 	if err := extra.UnmarshalRLP(block.Header.ExtraData); err != nil {

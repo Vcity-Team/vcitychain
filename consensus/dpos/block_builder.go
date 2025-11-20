@@ -592,7 +592,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				}
 				dposInstance.SetPendingEpochEndHeader(headerPreview)
 
-				r.logger.Info("🔍 ===== 开始执行故障检测 =====", "blockNumber", nextBlockNumber)
 				if faultFlags, err := dposInstance.detectValidatorFaults(nextBlockNumber); err != nil {
 					dposInstance.ClearPendingEpochEndHeader(nextBlockNumber)
 					r.logger.Error("❌ 故障检测失败", "blockNumber", nextBlockNumber, "error", err)

@@ -295,10 +295,6 @@ func (rd *RewardDistributor) calculateRewards(
 		return rewards
 	}
 
-	rd.logger.Info("📊 ========== 开始计算奖励（按验证者奖励池）==========",
-		"rewardAmount", rd.rewardAmount.String(),
-		"totalBlocks", totalBlocks)
-
 	for _, validator := range validators {
 		validatorAmount, voterRewards := rd.computeRewardsForValidator(validator, voters, blockCounts, totalBlocks)
 
