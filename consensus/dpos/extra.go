@@ -524,6 +524,24 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		return fmt.Errorf("failed to verify signatures for block %d, because checkpoint data are not present", blockNumber)
 	}
 
+	// 如果区块中包含NextEpochValidators，先更新本地缓存和数据库
+	if len(i.NextEpochValidators) > 0 {
+		if dposBackend, ok := consensusBackend.(*DPoS); ok && dposBackend != nil {
+			if err := dposBackend.applyNextEpochValidatorsFromExtra(i.NextEpochValidators, blockNumber); err != nil {
+				logger.Error("❌ 应用ExtraData中的下一个epoch验证者集合失败",
+					"blockNumber", blockNumber,
+					"error", err)
+			} else {
+				logger.Info("✅ 已根据ExtraData更新下一个epoch验证者集合",
+					"blockNumber", blockNumber,
+					"nextEpochValidatorsCount", len(i.NextEpochValidators))
+			}
+		} else {
+			logger.Warn("⚠️ 无法应用ExtraData中的下一个epoch验证者集合，DPoS backend不可用",
+				"blockNumber", blockNumber)
+		}
+	}
+
 	// validate current block signatures
 	// 🆕 修复：使用与生产时完全相同的哈希计算方式
 	// 生产时使用：checkpoint.Hash(blockchain.GetChainID(), block.Block.Number(), fixedBlockHash)
@@ -1313,6 +1331,22 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 
 		return fmt.Errorf("quorum not reached: current signatures %d, required %d", len(signers), requiredQuorumCount)
 	}
+
+	// 🆕 调试日志：打印当前验证者集合和位图信息
+	logger.Debug("🧾 验证节点收到的验证者集合",
+		"blockNumber", blockNumber,
+		"validatorsCount", len(validators))
+	for idx, validator := range validators {
+		logger.Debug("🧾 验证节点验证者详情",
+			"blockNumber", blockNumber,
+			"index", idx,
+			"address", validator.Address.String(),
+			"isActive", validator.IsActive)
+	}
+	logger.Debug("🧾 验证节点位图信息",
+		"blockNumber", blockNumber,
+		"bitmapHex", fmt.Sprintf("%x", s.Bitmap),
+		"bitmapLength", len(s.Bitmap))
 
 	// 🆕 修复：先计算位图中设置的位数，然后创建正确长度的数组
 	bitmapSetCount := 0

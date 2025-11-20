@@ -725,6 +725,39 @@ func (d *DPoS) saveNextEpochValidators(validators validator.AccountSet) error {
 	return nil
 }
 
+// applyNextEpochValidatorsFromExtra 使用区块ExtraData中的验证者集合更新本地状态
+func (d *DPoS) applyNextEpochValidatorsFromExtra(validators validator.AccountSet, blockNumber uint64) error {
+	if len(validators) == 0 {
+		return nil
+	}
+
+	d.logger.Info("🆕 从ExtraData应用下一个epoch验证者集合",
+		"blockNumber", blockNumber,
+		"nextEpochValidatorsCount", len(validators))
+
+	// 保存到数据库
+	if err := d.saveNextEpochValidators(validators); err != nil {
+		return fmt.Errorf("failed to save next epoch validators from extra: %w", err)
+	}
+
+	// 更新内存缓存
+	d.delegates = validators.Copy()
+	d.logger.Info("🆕 已用ExtraData验证者集合覆盖本地delegates",
+		"blockNumber", blockNumber,
+		"delegatesCount", len(d.delegates))
+
+	if d.runtime != nil {
+		d.runtime.lock.Lock()
+		d.runtime.delegates = validators.Copy()
+		d.runtime.lock.Unlock()
+		d.logger.Info("🆕 已同步runtime.delegates",
+			"blockNumber", blockNumber,
+			"delegatesCount", len(d.runtime.delegates))
+	}
+
+	return nil
+}
+
 // getEpochValidatorsFromDatabase 从数据库获取epoch验证者
 func (d *DPoS) getEpochValidatorsFromDatabase() (validator.AccountSet, error) {
 	if d.state == nil || d.state.StakeStore == nil {

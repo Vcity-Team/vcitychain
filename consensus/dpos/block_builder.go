@@ -637,6 +637,31 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 							r.logger.Info("📝 已用故障过滤结果覆盖下一epoch缓存集合",
 								"blockNumber", nextBlockNumber,
 								"nextEpochValidatorsCount", len(filtered))
+
+							// 🆕 直接用过滤后的集合更新当前生产验证者集合，确保ExtraData与签名集合一致
+							productionValidators = filtered.Copy()
+							r.cachedProductionValidators = filtered.Copy()
+							r.delegates = filtered.Copy()
+							r.logger.Info("🆕 当前生产验证者集合已根据故障过滤结果更新",
+								"blockNumber", nextBlockNumber,
+								"productionValidatorsCount", len(productionValidators))
+
+							// 🆕 重新计算Checkpoint所需的验证者哈希，确保与ExtraData一致
+							if newHash, err := productionValidators.HashAddressOnly(); err == nil {
+								currentValidatorsHash = newHash
+								if extra.Checkpoint != nil {
+									extra.Checkpoint.CurrentValidatorsHash = newHash
+									extra.Checkpoint.NextValidatorsHash = newHash
+								}
+								r.logger.Info("🆕 已根据过滤后的验证者集合更新Checkpoint哈希",
+									"blockNumber", nextBlockNumber,
+									"currentValidatorsHash", newHash.String())
+							} else {
+								r.logger.Error("❌ 重新计算过滤后验证者哈希失败",
+									"blockNumber", nextBlockNumber,
+									"error", err)
+								return nil, fmt.Errorf("failed to recalculate validator hash after filtering: %w", err)
+							}
 						}
 					}
 				}
