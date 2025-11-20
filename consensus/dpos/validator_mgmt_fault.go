@@ -207,23 +207,22 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 			faultFlags = append(faultFlags, faultFlag)
 			continue // 跳过后续的故障检测和消减逻辑
 		}
-		missedBlocks, actualBlocks := d.calculateMissedBlocksWithActual(validator.Address, d.currentEpoch, currentEpoch)
+		missedBlocks, actualBlocks, expectedBlocks := d.calculateMissedBlocksWithActual(validator.Address, d.currentEpoch, currentEpoch)
 
 		d.missedBlocksCount[validator.Address] = missedBlocks
 
-		// 🆕 计算预期出块数和漏块率
-		// 获取epoch大小和验证者数量
+		// 🆕 使用 calculateMissedBlocksWithActual 返回的 expectedBlocks（基于该epoch的实际验证者集合）
+		// 不再重新计算，确保与 missedBlocks 的计算基础一致
 		blocksPerEpoch := d.getEpochSize()
-		validatorsCount := uint64(len(d.epochValidators))
-		if validatorsCount == 0 {
-			validatorsCount = 1 // 避免除零
-		}
 
-		// 计算该验证者在这个epoch中应该出块的次数
-		expectedBlocks := blocksPerEpoch / validatorsCount
-		if expectedBlocks == 0 {
-			expectedBlocks = 1 // 至少应该出1个块
-		}
+		// 🆕 显著日志：记录 detectValidatorFaults 使用的 expectedBlocks 来源
+		d.logger.Info("🔍🔍🔍 detectValidatorFaults - 使用calculateMissedBlocksWithActual返回的expectedBlocks",
+			"address", validator.Address.String(),
+			"epochToCheck", epochToCheck,
+			"expectedBlocks", expectedBlocks,
+			"actualBlocks", actualBlocks,
+			"missedBlocks", missedBlocks,
+			"说明", "expectedBlocks来自calculateMissedBlocksWithActual，基于该epoch的实际验证者集合计算，确保与missedBlocks的计算基础一致")
 
 		// 计算漏块率（基点，10000 = 100%）
 		missedBlocksPercentage := uint64(0)
@@ -232,16 +231,16 @@ func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error
 		}
 
 		missedBlocksPercentageThreshold := d.getMissedBlocksPercentage()
-		d.logger.Debug("📊 验证者漏块率计算",
+		d.logger.Info("📊 验证者漏块率计算",
 			"address", validator.Address.String(),
 			"epochToCheck", epochToCheck,
 			"blocksPerEpoch", blocksPerEpoch,
-			"validatorsCount", validatorsCount,
 			"expectedBlocks", expectedBlocks,
 			"actualBlocks", actualBlocks,
 			"missedBlocks", missedBlocks,
 			"missedBlocksPercentage", missedBlocksPercentage,
-			"thresholdPercentage", missedBlocksPercentageThreshold)
+			"thresholdPercentage", missedBlocksPercentageThreshold,
+			"✅说明", "expectedBlocks和missedBlocks都来自calculateMissedBlocksWithActual，基于该epoch的实际验证者集合，确保数据一致性")
 
 		// 🆕 使用漏块率判断故障（而不是绝对漏块数）
 		isFaulty := expectedBlocks > 0 && missedBlocksPercentage >= missedBlocksPercentageThreshold
@@ -582,7 +581,7 @@ func (d *DPoS) getValidatorsForEpoch(epochNumber uint64) (validator.AccountSet, 
 	return nil, fmt.Errorf("cannot get validators for epoch %d", epochNumber)
 }
 
-func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, startEpoch, endEpoch uint64) (uint64, uint64) {
+func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, startEpoch, endEpoch uint64) (uint64, uint64, uint64) {
 	missedBlocks := uint64(0)
 	var epochToCheck uint64
 	var expectedBlocks uint64
@@ -596,18 +595,23 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 
 		// ✅ 修复：从该epoch开始区块的ExtraData或数据库获取该epoch的验证者集合
 		validatorsCount := uint64(0)
+		validatorsSource := ""
 		if epochValidators, err := d.getValidatorsForEpoch(epochToCheck); err == nil && len(epochValidators) > 0 {
 			validatorsCount = uint64(len(epochValidators))
+			validatorsSource = "getValidatorsForEpoch(从ExtraData或数据库)"
 		} else {
 			// 备用方案：使用当前内存中的验证者集合
 			if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
 				validatorsCount = uint64(len(d.runtime.delegates))
+				validatorsSource = "runtime.delegates(备用方案)"
 			} else if len(d.delegates) > 0 {
 				validatorsCount = uint64(len(d.delegates))
+				validatorsSource = "d.delegates(备用方案)"
 			}
 		}
 		if validatorsCount == 0 {
 			validatorsCount = 1 // 避免除零
+			validatorsSource = "默认值1(避免除零)"
 		}
 
 		// 计算该验证者在这个epoch中应该出块的次数
@@ -615,6 +619,16 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 		if expectedBlocks == 0 {
 			expectedBlocks = 1 // 至少应该出1个块
 		}
+
+		// 🆕 显著日志：记录 calculateMissedBlocksWithActual 使用的验证者集合信息
+		d.logger.Info("🔍🔍🔍 calculateMissedBlocksWithActual - 验证者集合信息",
+			"validator", validatorAddr.String(),
+			"epochToCheck", epochToCheck,
+			"validatorsCount", validatorsCount,
+			"validatorsSource", validatorsSource,
+			"blocksPerEpoch", blocksPerEpoch,
+			"expectedBlocks", expectedBlocks,
+			"说明", "这是calculateMissedBlocksWithActual内部计算的expectedBlocks")
 
 		// 查询区块历史，计算实际出块数
 		if d.blockchain != nil {
@@ -658,9 +672,10 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 		"epochToCheck", epochToCheck,
 		"expectedBlocks", expectedBlocks,
 		"actualBlocks", actualBlocks,
-		"missedBlocks", missedBlocks)
+		"missedBlocks", missedBlocks,
+		"说明", "missedBlocks基于calculateMissedBlocksWithActual内部的expectedBlocks计算")
 
-	return missedBlocks, actualBlocks
+	return missedBlocks, actualBlocks, expectedBlocks
 }
 
 // getCurrentEpochByBlock 获取当前epoch（基于区块号）
