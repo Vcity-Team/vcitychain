@@ -1828,7 +1828,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 							}
 						}
 
-						// 第二步：如果缓存中没有，尝试从创世文件获取
+						// 第二步：如果缓存中没有，尝试从创世文件获取（仅限本地节点）
 						if !found {
 							if keyBytes, err := dposInstance.GetBLSKeyBytesFromGenesis(validatorAddress); err == nil {
 								blsKeyBytes = keyBytes
@@ -1845,7 +1845,44 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 							}
 						}
 
-						// 第三步：如果找到了BLS公钥，解析并更新
+						// 第三步：如果缓存和创世文件都没有，尝试通过网络请求获取（仅限远程验证者）
+						if !found {
+							// 检查是否是本地节点
+							isLocalNode := dposInstance.key != nil && validatorAddress == types.Address(dposInstance.key.Address())
+							if !isLocalNode {
+								logger.Info("🌐 尝试通过网络请求获取BLS公钥",
+									"index", i,
+									"address", addressStr,
+									"note", "缓存和创世文件都没有，尝试网络请求")
+
+								// 尝试通过网络请求获取BLS公钥（设置较短的超时，避免阻塞太久）
+								if blsKey, err := dposInstance.GetBLSKeyForValidator(validatorAddress); err == nil && blsKey != nil {
+									blsKeyBytes = blsKey.Marshal()
+									found = true
+									logger.Info("✅ 通过网络请求获取BLS公钥成功",
+										"index", i,
+										"address", addressStr,
+										"blsKeyLength", len(blsKeyBytes))
+
+									// 保存到缓存，避免下次再次请求
+									if dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
+										if err := dposInstance.runtime.networkIntegration.SaveBLSKey(validatorAddress, blsKeyBytes); err != nil {
+											logger.Debug("⚠️ 保存BLS公钥到缓存失败",
+												"index", i,
+												"address", addressStr,
+												"error", err)
+										}
+									}
+								} else {
+									logger.Warn("❌ 通过网络请求获取BLS公钥失败",
+										"index", i,
+										"address", addressStr,
+										"error", err)
+								}
+							}
+						}
+
+						// 第四步：如果找到了BLS公钥，解析并更新
 						if found && len(blsKeyBytes) > 0 {
 							if blsKey, err := bls.UnmarshalPublicKey(blsKeyBytes); err == nil {
 								// 更新validators数组中的BLS公钥
@@ -1861,7 +1898,12 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 												return "缓存"
 											}
 										}
-										return "创世文件"
+										// 检查是否是本地节点
+										isLocalNode := dposInstance.key != nil && validatorAddress == types.Address(dposInstance.key.Address())
+										if isLocalNode {
+											return "创世文件"
+										}
+										return "网络请求"
 									}())
 							} else {
 								logger.Error("❌ 解析BLS公钥失败",

@@ -1,7 +1,6 @@
 package dpos
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,7 +15,6 @@ import (
 	dposProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/network"
-	networkCommon "github.com/Vcity-Team/vcitychain/network/common"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -64,7 +62,10 @@ type NetworkIntegration struct {
 	// 网络服务
 	network *network.Server
 
-	// 主题管理
+	// 主题管理（使用TopicManager统一管理）
+	topicManager *TopicManager
+
+	// 主题引用（保持向后兼容，从topicManager获取）
 	signatureRequestTopic  *network.Topic
 	signatureResponseTopic *network.Topic
 	voteTopic              *network.Topic
@@ -77,8 +78,8 @@ type NetworkIntegration struct {
 	// 消息处理器
 	handlers map[string]MessageHandler
 
-	// 签名收集器
-	signatureCollectors map[types.Hash]*SignatureCollector
+	// 签名收集器（使用SignatureCollectorManager统一管理）
+	collectorManager *SignatureCollectorManager
 
 	// 协程管理器
 	goroutineManager *GoroutineManager
@@ -89,16 +90,8 @@ type NetworkIntegration struct {
 	// 添加DPoS运行时回调
 	dposRuntime interface{}
 
-	// BLS公钥管理
-	blsKeyCache     map[types.Address][]byte    // 缓存BLS公钥
-	blsKeyCacheTime map[types.Address]time.Time // 缓存时间
-	blsKeyMutex     sync.RWMutex
-
-	// 🆕 BLS公钥持久化回调函数
-	blsKeyPersistCallback func(address types.Address, blsKeyBytes []byte) error
-
-	// 🆕 BLS公钥查找回调函数
-	blsKeyLookupCallback func(address types.Address) ([]byte, error)
+	// BLS公钥管理（使用BLSKeyManager统一管理）
+	blsKeyManager *BLSKeyManager
 
 	// 🆕 DPOS实例引用，用于持久化操作
 	dposInstance interface{}
@@ -107,10 +100,8 @@ type NetworkIntegration struct {
 	lastBroadcastLogTime      *time.Time
 	lastBroadcastLogTimeMutex sync.Mutex
 
-	// 🆕 验证者地址与peer映射
-	validatorPeerMap map[types.Address]peer.ID
-	peerValidatorMap map[peer.ID]types.Address
-	peerMapMutex     sync.RWMutex
+	// 🆕 验证者地址与peer映射（使用PeerRegistry统一管理）
+	peerRegistry *PeerRegistry
 }
 
 // MessageHandler 消息处理器接口
@@ -308,15 +299,11 @@ func (sc *SignatureCollector) Close() {
 // NewNetworkIntegration 创建网络集成管理器
 func NewNetworkIntegration(network *network.Server, logger hclog.Logger) *NetworkIntegration {
 	ni := &NetworkIntegration{
-		logger:              logger.Named("network-integration"),
-		network:             network,
-		handlers:            make(map[string]MessageHandler),
-		signatureCollectors: make(map[types.Hash]*SignatureCollector),
-		goroutineManager:    NewGoroutineManager(logger, 1000, 100), // 最大1000个协程，100个重试工作器
-		blsKeyCache:         make(map[types.Address][]byte),
-		blsKeyCacheTime:     make(map[types.Address]time.Time),
-		validatorPeerMap:    make(map[types.Address]peer.ID),
-		peerValidatorMap:    make(map[peer.ID]types.Address),
+		logger:           logger.Named("network-integration"),
+		network:          network,
+		handlers:         make(map[string]MessageHandler),
+		goroutineManager: NewGoroutineManager(logger, 1000, 100), // 最大1000个协程，100个重试工作器
+		peerRegistry:     NewPeerRegistry(),
 	}
 
 	// 注册消息处理器
@@ -327,12 +314,30 @@ func NewNetworkIntegration(network *network.Server, logger hclog.Logger) *Networ
 
 // SetBLSKeyPersistCallback 设置BLS公钥持久化回调函数
 func (ni *NetworkIntegration) SetBLSKeyPersistCallback(callback func(address types.Address, blsKeyBytes []byte) error) {
-	ni.blsKeyPersistCallback = callback
+	if ni.blsKeyManager == nil {
+		ni.blsKeyManager = NewBLSKeyManager(
+			ni.blsKeyBroadcastTopic,
+			ni.blsKeyRequestTopic,
+			ni.blsKeyResponseTopic,
+			ni.blsKeyAckTopic,
+			ni.logger,
+		)
+	}
+	ni.blsKeyManager.SetPersistCallback(callback)
 }
 
 // SetBLSKeyLookupCallback 设置BLS公钥查找回调函数
 func (ni *NetworkIntegration) SetBLSKeyLookupCallback(callback func(address types.Address) ([]byte, error)) {
-	ni.blsKeyLookupCallback = callback
+	if ni.blsKeyManager == nil {
+		ni.blsKeyManager = NewBLSKeyManager(
+			ni.blsKeyBroadcastTopic,
+			ni.blsKeyRequestTopic,
+			ni.blsKeyResponseTopic,
+			ni.blsKeyAckTopic,
+			ni.logger,
+		)
+	}
+	ni.blsKeyManager.SetLookupCallback(callback)
 }
 
 // SetDPoSInstance 设置DPoS实例引用
@@ -343,15 +348,11 @@ func (ni *NetworkIntegration) SetDPoSInstance(dposInstance interface{}) {
 // NewNetworkIntegrationWithExistingTopics 创建使用现有主题的网络集成管理器
 func NewNetworkIntegrationWithExistingTopics(network *network.Server, logger hclog.Logger, runtime interface{}) *NetworkIntegration {
 	ni := &NetworkIntegration{
-		logger:              logger.Named("network-integration"),
-		network:             network,
-		handlers:            make(map[string]MessageHandler),
-		signatureCollectors: make(map[types.Hash]*SignatureCollector),
-		goroutineManager:    NewGoroutineManager(logger, 1000, 100), // 最大1000个协程，100个重试工作器
-		blsKeyCache:         make(map[types.Address][]byte),
-		blsKeyCacheTime:     make(map[types.Address]time.Time),
-		validatorPeerMap:    make(map[types.Address]peer.ID),
-		peerValidatorMap:    make(map[peer.ID]types.Address),
+		logger:           logger.Named("network-integration"),
+		network:          network,
+		handlers:         make(map[string]MessageHandler),
+		goroutineManager: NewGoroutineManager(logger, 1000, 100), // 最大1000个协程，100个重试工作器
+		peerRegistry:     NewPeerRegistry(),
 	}
 
 	// 注册消息处理器
@@ -376,17 +377,30 @@ func (ni *NetworkIntegration) SetExistingTopics(signatureRequestTopic, signature
 
 // Start 启动网络集成
 func (ni *NetworkIntegration) Start() error {
-
 	// 检查是否已经有主题（使用现有主题的情况）
 	if ni.signatureRequestTopic == nil || ni.signatureResponseTopic == nil {
-		// 创建主题
-		if err := ni.createTopics(); err != nil {
+		// 使用TopicManager创建所有topics
+		if ni.topicManager == nil {
+			ni.topicManager = NewTopicManager(ni.network, ni.logger)
+		}
+
+		if err := ni.topicManager.CreateAllTopics(); err != nil {
 			ni.logger.Warn("主题创建失败，尝试使用现有主题", "error", err)
-			// 尝试从网络服务获取现有主题
+			// 尝试从网络服务获取现有主题（兼容旧逻辑）
 			if err := ni.tryGetExistingTopics(); err != nil {
 				return fmt.Errorf("failed to create or get existing topics: %w", err)
 			}
 		}
+
+		// 从TopicManager获取所有topics并赋值给字段（保持向后兼容）
+		ni.signatureRequestTopic = ni.topicManager.GetTopic("dpos-signature-request")
+		ni.signatureResponseTopic = ni.topicManager.GetTopic("dpos-signature-response")
+		ni.voteTopic = ni.topicManager.GetTopic("dpos-vote")
+		ni.delegateTopic = ni.topicManager.GetTopic("dpos-delegate")
+		ni.blsKeyBroadcastTopic = ni.topicManager.GetTopic("dpos-bls-key-broadcast")
+		ni.blsKeyAckTopic = ni.topicManager.GetTopic("dpos-bls-key-ack")
+		ni.blsKeyRequestTopic = ni.topicManager.GetTopic("dpos-bls-key-request")
+		ni.blsKeyResponseTopic = ni.topicManager.GetTopic("dpos-bls-key-response")
 	} else {
 		ni.logger.Info("using existing topics")
 	}
@@ -395,6 +409,26 @@ func (ni *NetworkIntegration) Start() error {
 	if ni.signatureRequestTopic == nil && ni.signatureResponseTopic == nil {
 		ni.logger.Error("关键主题不可用，无法启动网络集成")
 		return fmt.Errorf("critical topics not available")
+	}
+
+	// 初始化签名收集器管理器
+	if ni.collectorManager == nil {
+		if ni.goroutineManager == nil {
+			ni.goroutineManager = NewGoroutineManager(ni.logger, 1000, 100)
+		}
+		ni.collectorManager = NewSignatureCollectorManager(ni.logger, ni.goroutineManager)
+	}
+
+	// 初始化BLS公钥管理器
+	if ni.blsKeyManager == nil {
+		ni.blsKeyManager = NewBLSKeyManager(
+			ni.blsKeyBroadcastTopic,
+			ni.blsKeyRequestTopic,
+			ni.blsKeyResponseTopic,
+			ni.blsKeyAckTopic,
+			ni.logger,
+		)
+		ni.blsKeyManager.SetDPoSInstance(ni.dposInstance)
 	}
 
 	// 订阅主题
@@ -420,18 +454,35 @@ func (ni *NetworkIntegration) Stop() error {
 		ni.goroutineManager.Close()
 	}
 
-	// 关闭所有主题
-	if ni.signatureRequestTopic != nil {
-		ni.signatureRequestTopic.Close()
-	}
-	if ni.signatureResponseTopic != nil {
-		ni.signatureResponseTopic.Close()
-	}
-	if ni.voteTopic != nil {
-		ni.voteTopic.Close()
-	}
-	if ni.delegateTopic != nil {
-		ni.delegateTopic.Close()
+	// 使用TopicManager统一关闭所有主题
+	if ni.topicManager != nil {
+		ni.topicManager.CloseAll()
+	} else {
+		// 兼容旧逻辑：手动关闭各个topic
+		if ni.signatureRequestTopic != nil {
+			ni.signatureRequestTopic.Close()
+		}
+		if ni.signatureResponseTopic != nil {
+			ni.signatureResponseTopic.Close()
+		}
+		if ni.voteTopic != nil {
+			ni.voteTopic.Close()
+		}
+		if ni.delegateTopic != nil {
+			ni.delegateTopic.Close()
+		}
+		if ni.blsKeyBroadcastTopic != nil {
+			ni.blsKeyBroadcastTopic.Close()
+		}
+		if ni.blsKeyAckTopic != nil {
+			ni.blsKeyAckTopic.Close()
+		}
+		if ni.blsKeyRequestTopic != nil {
+			ni.blsKeyRequestTopic.Close()
+		}
+		if ni.blsKeyResponseTopic != nil {
+			ni.blsKeyResponseTopic.Close()
+		}
 	}
 
 	ni.logger.Info("DPoS network integration stopped")
@@ -1086,52 +1137,24 @@ func (ni *NetworkIntegration) processDelegateMessage(delegate *DelegateMessage) 
 
 // forwardSignatureResponse 转发签名响应到相应的收集器
 func (ni *NetworkIntegration) forwardSignatureResponse(response *SignatureResponse) {
-	// 使用读锁快速查找收集器
-	ni.lock.RLock()
-	collector, exists := ni.signatureCollectors[response.CheckpointHash]
-	ni.lock.RUnlock()
-
-	if !exists {
-		//ni.logger.Warn("未找到签名收集器，忽略响应",
-		//	"checkpointHash", response.CheckpointHash.String(),
-		//	"validator", response.ValidatorAddr.String())
-		return
+	if ni.collectorManager == nil {
+		if ni.goroutineManager == nil {
+			ni.goroutineManager = NewGoroutineManager(ni.logger, 1000, 100)
+		}
+		ni.collectorManager = NewSignatureCollectorManager(ni.logger, ni.goroutineManager)
 	}
-
-	// 使用AddSignature方法处理签名，它会自动更新内部状态
-	if collector.AddSignature(response) {
-	} else {
-		ni.logger.Debug("签名响应处理失败",
-			"validator", response.ValidatorAddr.String(),
-			"checkpointHash", response.CheckpointHash.String())
-	}
+	ni.collectorManager.ForwardSignatureResponse(response)
 }
 
 // RegisterSignatureCollector 注册签名收集器
 func (ni *NetworkIntegration) RegisterSignatureCollector(checkpointHash types.Hash, signatureCh chan *SignatureResponse, timeout time.Duration, requiredCount int) {
-	ni.lock.Lock()
-	defer ni.lock.Unlock()
-
-	// 检查是否已存在相同checkpointHash的收集器
-	if existingCollector, exists := ni.signatureCollectors[checkpointHash]; exists {
-		existingCollector.Close()
+	if ni.collectorManager == nil {
+		if ni.goroutineManager == nil {
+			ni.goroutineManager = NewGoroutineManager(ni.logger, 1000, 100)
+		}
+		ni.collectorManager = NewSignatureCollectorManager(ni.logger, ni.goroutineManager)
 	}
-
-	// 创建新的签名收集器
-	collector := NewSignatureCollector(checkpointHash, signatureCh, timeout, requiredCount, ni.goroutineManager)
-	collector.logger = ni.logger.Named("signature-collector")
-
-	ni.signatureCollectors[checkpointHash] = collector
-
-	// 启动清理工作器
-	ni.goroutineManager.StartGoroutine("collector-cleanup", func() {
-		ni.startCollectorCleanupWorker(context.Background(), checkpointHash)
-	})
-
-	// 启动定期状态检查
-	ni.goroutineManager.StartGoroutine("collector-status-check", func() {
-		ni.monitorCollectorStatus(checkpointHash)
-	})
+	ni.collectorManager.RegisterSignatureCollector(checkpointHash, signatureCh, timeout, requiredCount)
 }
 
 // 为了向后兼容，添加一个重载方法
@@ -1156,9 +1179,10 @@ func (ni *NetworkIntegration) GetSignatureResponseTopic() *network.Topic {
 
 // GetSignatureCollector 获取签名收集器
 func (ni *NetworkIntegration) GetSignatureCollector(checkpointHash types.Hash) *SignatureCollector {
-	ni.lock.RLock()
-	defer ni.lock.RUnlock()
-	return ni.signatureCollectors[checkpointHash]
+	if ni.collectorManager == nil {
+		return nil
+	}
+	return ni.collectorManager.GetSignatureCollector(checkpointHash)
 }
 
 // startCollectorCleanupWorker 启动收集器清理工作器
@@ -1179,11 +1203,11 @@ func (ni *NetworkIntegration) startCollectorCleanupWorker(ctx context.Context, c
 			return
 		case <-ticker.C:
 			// 快速检查收集器是否存在
-			ni.lock.RLock()
-			collector, exists := ni.signatureCollectors[checkpointHash]
-			ni.lock.RUnlock()
-
-			if !exists {
+			if ni.collectorManager == nil {
+				return
+			}
+			collector := ni.collectorManager.GetSignatureCollector(checkpointHash)
+			if collector == nil {
 				return
 			}
 
@@ -1213,41 +1237,18 @@ func (ni *NetworkIntegration) startCollectorCleanupWorker(ctx context.Context, c
 
 // UnregisterSignatureCollector 注销签名收集器
 func (ni *NetworkIntegration) UnregisterSignatureCollector(checkpointHash types.Hash) {
-	ni.lock.Lock()
-	delete(ni.signatureCollectors, checkpointHash)
-	ni.lock.Unlock()
-
-	// 静默注销签名收集器
+	if ni.collectorManager == nil {
+		return
+	}
+	ni.collectorManager.UnregisterSignatureCollector(checkpointHash)
 }
 
 // cleanupExpiredCollectors 清理所有过期的签名收集器
 func (ni *NetworkIntegration) cleanupExpiredCollectors() {
-	ni.lock.RLock()
-	collectors := make(map[types.Hash]*SignatureCollector)
-	for hash, collector := range ni.signatureCollectors {
-		collectors[hash] = collector
+	if ni.collectorManager == nil {
+		return
 	}
-	ni.lock.RUnlock()
-
-	expiredHashes := make([]types.Hash, 0)
-
-	// 检查所有收集器
-	for hash, collector := range collectors {
-		if collector.IsExpired() || collector.IsComplete() {
-			expiredHashes = append(expiredHashes, hash)
-		}
-	}
-
-	// 清理过期的收集器
-	for _, hash := range expiredHashes {
-		ni.UnregisterSignatureCollector(hash)
-	}
-
-	if len(expiredHashes) > 0 {
-		ni.logger.Debug("批量清理过期签名收集器",
-			"清理数量", len(expiredHashes),
-			"剩余数量", len(ni.signatureCollectors))
-	}
+	ni.collectorManager.cleanupExpiredCollectors()
 }
 
 // BroadcastSignatureRequest 广播签名请求
@@ -1447,28 +1448,10 @@ func (ni *NetworkIntegration) StartCleanupWorker(ctx context.Context) {
 
 // cleanupExpiredBLSKeys 清理过期的BLS公钥缓存
 func (ni *NetworkIntegration) cleanupExpiredBLSKeys() {
-	ni.blsKeyMutex.Lock()
-	defer ni.blsKeyMutex.Unlock()
-
-	now := time.Now()
-	expiredKeys := make([]types.Address, 0)
-
-	// 收集过期的缓存项（超过1小时）
-	for address, cacheTime := range ni.blsKeyCacheTime {
-		if now.Sub(cacheTime) > time.Hour {
-			expiredKeys = append(expiredKeys, address)
-		}
+	if ni.blsKeyManager == nil {
+		return
 	}
-
-	// 清理过期的缓存项
-	for _, address := range expiredKeys {
-		delete(ni.blsKeyCache, address)
-		delete(ni.blsKeyCacheTime, address)
-	}
-
-	if len(expiredKeys) > 0 {
-		ni.logger.Debug("cleaned up expired BLS key cache", "count", len(expiredKeys))
-	}
+	ni.blsKeyManager.cleanupExpiredBLSKeys()
 }
 
 // monitorCollectorStatus 监控签名收集器状态
@@ -1487,11 +1470,11 @@ func (ni *NetworkIntegration) monitorCollectorStatus(checkpointHash types.Hash) 
 			return
 		case <-ticker.C:
 			// 快速检查收集器是否存在
-			ni.lock.RLock()
-			collector, exists := ni.signatureCollectors[checkpointHash]
-			ni.lock.RUnlock()
-
-			if !exists {
+			if ni.collectorManager == nil {
+				return
+			}
+			collector := ni.collectorManager.GetSignatureCollector(checkpointHash)
+			if collector == nil {
 				// 签名收集器已不存在，停止监控
 				return
 			}
@@ -1538,7 +1521,7 @@ func (ni *NetworkIntegration) handleBLSKeyBroadcast(obj interface{}, from peer.I
 		"from", from.String())
 
 	// 保存BLS公钥到缓存
-	if err := ni.saveBLSKey(blsKeyMsg.Address, blsKeyMsg.BLSPublicKey); err != nil {
+	if err := ni.SaveBLSKey(blsKeyMsg.Address, blsKeyMsg.BLSPublicKey); err != nil {
 		ni.logger.Error("保存BLS公钥失败", "error", err, "address", blsKeyMsg.Address.String())
 		return
 	}
@@ -1572,105 +1555,60 @@ func (ni *NetworkIntegration) handleBLSKeyAck(obj interface{}, from peer.ID) {
 		"from", from.String())
 }
 
-// saveBLSKey 保存BLS公钥到缓存和数据库
+// saveBLSKey 保存BLS公钥到缓存和数据库（内部方法，委托给BLSKeyManager）
 func (ni *NetworkIntegration) saveBLSKey(address types.Address, blsKeyBytes []byte) error {
-	ni.blsKeyMutex.Lock()
-	defer ni.blsKeyMutex.Unlock()
-
-	// 🆕 检查是否已经存在相同的BLS公钥，避免重复保存
-	if existingKey, exists := ni.blsKeyCache[address]; exists {
-		if bytes.Equal(existingKey, blsKeyBytes) {
-			// BLS公钥已存在且相同，跳过保存
-			return nil
-		}
-	}
-
-	// 保存到内存缓存
-	ni.blsKeyCache[address] = blsKeyBytes
-	ni.blsKeyCacheTime[address] = time.Now()
-
-	// 🆕 尝试持久化到数据库
-	if err := ni.persistBLSKeyToDatabase(address, blsKeyBytes); err != nil {
-		ni.logger.Debug("BLS公钥持久化到数据库失败，但缓存已保存",
-			"address", address.String(),
-			"error", err)
-		// 不返回错误，因为缓存已经保存成功
-	} else {
-	}
-
-	return nil
+	return ni.SaveBLSKey(address, blsKeyBytes)
 }
 
 // GetBLSKey 从缓存获取BLS公钥
 func (ni *NetworkIntegration) GetBLSKey(address types.Address) ([]byte, bool) {
-	ni.blsKeyMutex.RLock()
-	defer ni.blsKeyMutex.RUnlock()
-
-	blsKey, exists := ni.blsKeyCache[address]
-	return blsKey, exists
+	if ni.blsKeyManager == nil {
+		return nil, false
+	}
+	return ni.blsKeyManager.GetBLSKey(address)
 }
 
 // SaveBLSKey 保存BLS公钥到缓存和数据库
 func (ni *NetworkIntegration) SaveBLSKey(address types.Address, blsKeyBytes []byte) error {
-	return ni.saveBLSKey(address, blsKeyBytes)
+	if ni.blsKeyManager == nil {
+		ni.blsKeyManager = NewBLSKeyManager(
+			ni.blsKeyBroadcastTopic,
+			ni.blsKeyRequestTopic,
+			ni.blsKeyResponseTopic,
+			ni.blsKeyAckTopic,
+			ni.logger,
+		)
+		ni.blsKeyManager.SetDPoSInstance(ni.dposInstance)
+	}
+	return ni.blsKeyManager.SaveBLSKey(address, blsKeyBytes)
 }
 
 // LoadBLSKeyToCache 只加载BLS公钥到缓存，不写入数据库（用于从数据库加载场景）
 func (ni *NetworkIntegration) LoadBLSKeyToCache(address types.Address, blsKeyBytes []byte) error {
-	ni.blsKeyMutex.Lock()
-	defer ni.blsKeyMutex.Unlock()
-
-	// 🆕 检查是否已经存在相同的BLS公钥，避免重复保存
-	if existingKey, exists := ni.blsKeyCache[address]; exists {
-		if bytes.Equal(existingKey, blsKeyBytes) {
-			// BLS公钥已存在且相同，跳过保存
-			return nil
-		}
+	if ni.blsKeyManager == nil {
+		ni.blsKeyManager = NewBLSKeyManager(
+			ni.blsKeyBroadcastTopic,
+			ni.blsKeyRequestTopic,
+			ni.blsKeyResponseTopic,
+			ni.blsKeyAckTopic,
+			ni.logger,
+		)
 	}
-
-	// 只保存到内存缓存，不写入数据库
-	ni.blsKeyCache[address] = blsKeyBytes
-	ni.blsKeyCacheTime[address] = time.Now()
-
-	return nil
+	return ni.blsKeyManager.LoadBLSKeyToCache(address, blsKeyBytes)
 }
 
 // BroadcastBLSKey 广播BLS公钥
 func (ni *NetworkIntegration) BroadcastBLSKey(address types.Address, blsKeyBytes []byte, nodeType string) error {
-	if ni.blsKeyBroadcastTopic == nil {
-		return fmt.Errorf("BLS公钥广播主题不可用")
+	if ni.blsKeyManager == nil {
+		ni.blsKeyManager = NewBLSKeyManager(
+			ni.blsKeyBroadcastTopic,
+			ni.blsKeyRequestTopic,
+			ni.blsKeyResponseTopic,
+			ni.blsKeyAckTopic,
+			ni.logger,
+		)
 	}
-
-	// 创建BLS公钥广播消息
-	blsKeyMsg := &BLSKeyBroadcastMessage{
-		Address:      address,
-		BLSPublicKey: blsKeyBytes,
-		Timestamp:    uint64(time.Now().Unix()),
-		NodeType:     nodeType,
-	}
-
-	// 序列化消息
-	data, err := json.Marshal(blsKeyMsg)
-	if err != nil {
-		return fmt.Errorf("序列化BLS公钥广播消息失败: %w", err)
-	}
-
-	// 创建DPoS消息
-	dposMsg := &DPOSMessage{
-		Data: data,
-	}
-
-	// 发布消息
-	if err := ni.blsKeyBroadcastTopic.Publish(dposMsg); err != nil {
-		return fmt.Errorf("发布BLS公钥广播消息失败: %w", err)
-	}
-
-	ni.logger.Info("BLS公钥广播消息已发送",
-		"address", address.String(),
-		"nodeType", nodeType,
-		"blsKeyLength", len(blsKeyBytes))
-
-	return nil
+	return ni.blsKeyManager.BroadcastBLSKey(address, blsKeyBytes, nodeType)
 }
 
 // sendBLSKeyAck 发送BLS公钥确认消息
@@ -1742,12 +1680,11 @@ func (ni *NetworkIntegration) persistBLSKeyToDatabase(address types.Address, bls
 		return nil
 	}
 
-	// 🆕 备用方案：使用回调函数进行持久化
-	if ni.blsKeyPersistCallback != nil {
-		if err := ni.blsKeyPersistCallback(address, blsKeyBytes); err != nil {
+	// 🆕 备用方案：使用BLSKeyManager的回调函数进行持久化
+	if ni.blsKeyManager != nil && ni.blsKeyManager.persistCallback != nil {
+		if err := ni.blsKeyManager.persistCallback(address, blsKeyBytes); err != nil {
 			return fmt.Errorf("BLS公钥持久化回调失败: %w", err)
 		}
-
 		return nil
 	}
 
@@ -1820,8 +1757,8 @@ func (ni *NetworkIntegration) restoreBLSKeysFromDatabase() error {
 
 // 🆕 新增：批量恢复BLS公钥
 func (ni *NetworkIntegration) RestoreBLSKeysForDelegates(delegates []*validator.ValidatorMetadata) error {
-	if ni.blsKeyPersistCallback == nil {
-		ni.logger.Debug("BLS公钥持久化回调函数未设置，跳过批量恢复")
+	if ni.blsKeyManager == nil {
+		ni.logger.Debug("BLS公钥管理器未设置，跳过批量恢复")
 		return nil
 	}
 
@@ -2158,94 +2095,63 @@ func getAvailableFields(v reflect.Value) []string {
 
 // RequestBLSKey 请求BLS公钥
 func (ni *NetworkIntegration) RequestBLSKey(requestedAddress types.Address, requester types.Address) error {
-	if ni.blsKeyRequestTopic == nil {
-		return fmt.Errorf("BLS公钥请求主题不可用")
+	// 🔧 修复：确保BLS相关主题已初始化
+	if ni.blsKeyRequestTopic == nil && ni.topicManager != nil {
+		ni.blsKeyRequestTopic = ni.topicManager.GetTopic("dpos-bls-key-request")
+	}
+	if ni.blsKeyResponseTopic == nil && ni.topicManager != nil {
+		ni.blsKeyResponseTopic = ni.topicManager.GetTopic("dpos-bls-key-response")
+	}
+	if ni.blsKeyBroadcastTopic == nil && ni.topicManager != nil {
+		ni.blsKeyBroadcastTopic = ni.topicManager.GetTopic("dpos-bls-key-broadcast")
+	}
+	if ni.blsKeyAckTopic == nil && ni.topicManager != nil {
+		ni.blsKeyAckTopic = ni.topicManager.GetTopic("dpos-bls-key-ack")
 	}
 
-	// 创建请求消息
-	requestMsg := &BLSKeyRequestMessage{
-		RequestedAddress: requestedAddress,
-		Requester:        requester,
-		Timestamp:        uint64(time.Now().Unix()),
+	if ni.blsKeyManager == nil {
+		ni.blsKeyManager = NewBLSKeyManager(
+			ni.blsKeyBroadcastTopic,
+			ni.blsKeyRequestTopic,
+			ni.blsKeyResponseTopic,
+			ni.blsKeyAckTopic,
+			ni.logger,
+		)
+		ni.blsKeyManager.SetDPoSInstance(ni.dposInstance)
+	} else {
+		// 🔧 修复：如果BLSKeyManager已存在但主题为nil，更新主题
+		ni.blsKeyManager.SetTopics(
+			ni.blsKeyBroadcastTopic,
+			ni.blsKeyRequestTopic,
+			ni.blsKeyResponseTopic,
+			ni.blsKeyAckTopic,
+		)
 	}
-
-	// 序列化消息
-	data, err := json.Marshal(requestMsg)
-	if err != nil {
-		return fmt.Errorf("序列化BLS公钥请求消息失败: %w", err)
-	}
-
-	// 创建DPoS消息
-	dposMsg := &DPOSMessage{
-		Data: data,
-	}
-
-	// 发布消息
-	if err := ni.blsKeyRequestTopic.Publish(dposMsg); err != nil {
-		return fmt.Errorf("发布BLS公钥请求消息失败: %w", err)
-	}
-
-	ni.logger.Debug("📨 已广播BLS公钥请求",
-		"requestedAddress", requestedAddress.String(),
-		"requester", requester.String())
-
-	return nil
+	return ni.blsKeyManager.RequestBLSKey(requestedAddress, requester)
 }
 
 // RegisterValidatorPeerFromMultiAddr 使用MultiAddr注册验证者与peer的映射
 func (ni *NetworkIntegration) RegisterValidatorPeerFromMultiAddr(address types.Address, multiAddr string) error {
-	multiAddr = strings.TrimSpace(multiAddr)
-	if address == (types.Address{}) || multiAddr == "" {
-		return fmt.Errorf("invalid validator address or multiAddr")
+	if ni.peerRegistry == nil {
+		ni.peerRegistry = NewPeerRegistry()
 	}
-
-	addrInfo, err := networkCommon.StringToAddrInfo(multiAddr)
-	if err != nil {
-		return fmt.Errorf("failed to parse multiAddr: %w", err)
-	}
-
-	ni.RegisterValidatorPeer(address, addrInfo.ID)
-	return nil
+	return ni.peerRegistry.RegisterValidatorPeerFromMultiAddr(address, multiAddr)
 }
 
 // RegisterValidatorPeer 注册（或更新）验证者与peer的映射
 func (ni *NetworkIntegration) RegisterValidatorPeer(address types.Address, peerID peer.ID) {
-	if address == (types.Address{}) || peerID == "" {
-		return
+	if ni.peerRegistry == nil {
+		ni.peerRegistry = NewPeerRegistry()
 	}
-
-	ni.peerMapMutex.Lock()
-	defer ni.peerMapMutex.Unlock()
-
-	prevPeerID, exists := ni.validatorPeerMap[address]
-	if exists && prevPeerID == peerID {
-		return
-	}
-
-	if ni.validatorPeerMap == nil {
-		ni.validatorPeerMap = make(map[types.Address]peer.ID)
-	}
-	if ni.peerValidatorMap == nil {
-		ni.peerValidatorMap = make(map[peer.ID]types.Address)
-	}
-
-	ni.validatorPeerMap[address] = peerID
-	ni.peerValidatorMap[peerID] = address
-
+	ni.peerRegistry.RegisterValidatorPeer(address, peerID)
 }
 
 // GetValidatorConnectivity 返回验证者的peer连接状态
 func (ni *NetworkIntegration) GetValidatorConnectivity(address types.Address) (peer.ID, bool, bool) {
-	ni.peerMapMutex.RLock()
-	peerID, exists := ni.validatorPeerMap[address]
-	ni.peerMapMutex.RUnlock()
-
-	if !exists || peerID == "" || ni.network == nil {
-		return "", exists, false
+	if ni.peerRegistry == nil {
+		ni.peerRegistry = NewPeerRegistry()
 	}
-
-	isConnected := ni.network.IsConnected(peerID)
-	return peerID, true, isConnected
+	return ni.peerRegistry.GetValidatorConnectivity(address, ni.network)
 }
 
 // isLocalNode 检查给定的地址是否是本地节点的地址

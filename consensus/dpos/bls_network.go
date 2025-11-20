@@ -59,11 +59,15 @@ func (d *DPoS) requestBLSPublicKeyFromNetwork(address types.Address) (*bls.Publi
 				"peerID", targetPeerID.String(),
 				"note", "直接尝试获取BLS公钥")
 		} else {
-			d.logger.Warn("⏭️ 跳过BLS请求：未知Peer映射",
+			// 🔧 修复：当peer映射未知时，允许使用广播路径请求BLS公钥
+			// 广播请求可以工作，因为：
+			// 1. 广播会发送到所有连接的节点
+			// 2. 如果目标节点在线，它会响应
+			// 3. 响应时会自动注册peer映射（在handleBLSKeyResponse中）
+			d.logger.Info("📡 BLS请求使用广播路径（peer映射未知）",
 				"requestID", requestID,
 				"target", address.String(),
-				"note", "未注册peer映射，等待网络连通后再请求")
-			return nil, fmt.Errorf("validator %s peer mapping unknown", address.String())
+				"note", "未注册peer映射，使用广播方式请求，响应时将自动注册peer映射")
 		}
 	} else {
 		d.logger.Info("📡 BLS请求使用广播路径",
