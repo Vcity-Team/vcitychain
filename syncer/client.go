@@ -89,16 +89,13 @@ func (m *syncPeerClient) Start() error {
 
 	// 🆕 先启动gossip，确保topic初始化完成
 	if err := m.startGossip(); err != nil {
-		// 检查是否是topic冲突错误，如果是则尝试复用现有topic
+		// 检查是否是topic冲突错误，如果是则直接创建新的后缀topic
 		if strings.Contains(err.Error(), "topic already exists") {
-			m.logger.Warn("⚠️ topic冲突，尝试复用现有topic", "节点ID", m.id, "error", err)
+			m.logger.Warn("⚠️ topic冲突，直接创建带后缀的新topic", "节点ID", m.id, "error", err)
 
-			// 尝试复用现有topic - 使用不同的策略
-			if m.tryReuseExistingTopic() {
-				m.logger.Info("✅ 成功复用现有topic", "节点ID", m.id, "topic", m.statusTopicName)
-			} else {
-				m.logger.Error("❌ 无法复用现有topic，状态广播将不可用", "节点ID", m.id)
-				// 即使无法复用，也要继续启动其他功能
+			if !m.createAlternativeTopic() {
+				m.logger.Error("❌ 无法创建可用topic，状态广播将不可用", "节点ID", m.id)
+				// 继续启动其他功能
 			}
 		} else {
 			return err
@@ -254,64 +251,27 @@ func (m *syncPeerClient) GetPeerConnectionUpdateEventCh() <-chan *event.PeerEven
 	return m.peerConnectionUpdateCh
 }
 
-// tryReuseExistingTopic 尝试复用现有的topic
-func (m *syncPeerClient) tryReuseExistingTopic() bool {
-	// 策略1：尝试直接复用原始topic名称（即使已存在）
-	m.logger.Info("🔄 尝试直接复用原始topic", "节点ID", m.id, "topic名称", m.statusTopicName)
-
-	// 直接尝试创建原始topic，如果已存在，libp2p应该能处理
-	if topic, err := m.network.NewTopic(m.statusTopicName, &proto.SyncPeerStatus{}); err == nil {
-		// 成功获取topic（可能是新创建的，也可能是复用的）
-		if err := topic.Subscribe(m.handleStatusUpdate); err != nil {
-			m.logger.Error("❌ 订阅原始topic失败", "节点ID", m.id, "error", err)
-			return false
-		}
-
-		m.topic = topic
-		m.logger.Info("✅ 成功复用原始topic", "节点ID", m.id, "topic名称", m.statusTopicName)
-		return true
-	} else {
-		m.logger.Warn("❌ 无法复用原始topic", "节点ID", m.id, "error", err)
-	}
-
-	// 策略2：尝试使用带后缀的公共topic名称
+// createAlternativeTopic 创建带后缀的独立topic，避免与IBFT冲突
+func (m *syncPeerClient) createAlternativeTopic() bool {
 	for i := 1; i <= 5; i++ {
 		alternativeTopicName := fmt.Sprintf("syncer/status/0.1_%d", i)
 		m.logger.Info("🔄 尝试替代topic名称", "节点ID", m.id, "尝试次数", i, "topic名称", alternativeTopicName)
 
-		if topic, err := m.network.NewTopic(alternativeTopicName, &proto.SyncPeerStatus{}); err == nil {
-			// 成功创建替代topic
-			if err := topic.Subscribe(m.handleStatusUpdate); err != nil {
-				m.logger.Error("❌ 订阅替代topic失败", "节点ID", m.id, "error", err)
-				continue
-			}
-
-			m.topic = topic
-			m.statusTopicName = alternativeTopicName // 更新topic名称
-			m.logger.Info("✅ 成功创建替代topic", "节点ID", m.id, "topic名称", alternativeTopicName)
-			return true
-		} else {
+		topic, err := m.network.NewTopic(alternativeTopicName, &proto.SyncPeerStatus{})
+		if err != nil {
 			m.logger.Debug("❌ 替代topic创建失败", "节点ID", m.id, "尝试次数", i, "error", err)
+			continue
 		}
-	}
 
-	// 策略3：尝试使用通用topic名称（不包含节点ID）
-	genericTopicName := "syncer/status/0.1"
-	m.logger.Info("🔄 尝试通用topic名称", "节点ID", m.id, "topic名称", genericTopicName)
-
-	if topic, err := m.network.NewTopic(genericTopicName, &proto.SyncPeerStatus{}); err == nil {
-		// 成功创建通用topic
 		if err := topic.Subscribe(m.handleStatusUpdate); err != nil {
-			m.logger.Error("❌ 订阅通用topic失败", "节点ID", m.id, "error", err)
-			return false
+			m.logger.Error("❌ 订阅替代topic失败", "节点ID", m.id, "error", err)
+			continue
 		}
 
 		m.topic = topic
-		m.statusTopicName = genericTopicName // 更新topic名称
-		m.logger.Info("✅ 成功创建通用topic", "节点ID", m.id, "topic名称", genericTopicName)
+		m.statusTopicName = alternativeTopicName
+		m.logger.Info("✅ 成功创建替代topic", "节点ID", m.id, "topic名称", alternativeTopicName)
 		return true
-	} else {
-		m.logger.Error("❌ 通用topic创建失败", "节点ID", m.id, "error", err)
 	}
 
 	return false
