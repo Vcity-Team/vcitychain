@@ -170,6 +170,25 @@ func (d *DPoS) syncLoadBLSKeys() error {
 		if validator.BlsKey == nil {
 			d.logger.Debug("🔑 开始获取BLS公钥", "address", validator.Address.String())
 
+			// 非本地验证者时检查网络连通性，避免盲目请求
+			isLocalValidator := d.key != nil && validator.Address == types.Address(d.key.Address())
+			if !isLocalValidator && d.runtime != nil && d.runtime.networkIntegration != nil {
+				if peerID, has, connected := d.runtime.networkIntegration.GetValidatorConnectivity(validator.Address); has {
+					if !connected {
+						d.logger.Info("⏭️ 跳过BLS请求：验证者未连接",
+							"address", validator.Address.String(),
+							"peerID", peerID.String())
+						missingValidators = append(missingValidators, validator.Address)
+						continue
+					}
+				} else {
+					d.logger.Info("⏭️ 跳过BLS请求：未知Peer映射",
+						"address", validator.Address.String())
+					missingValidators = append(missingValidators, validator.Address)
+					continue
+				}
+			}
+
 			var blsKey *bls.PublicKey
 			var err error
 
@@ -234,11 +253,9 @@ func (d *DPoS) syncLoadBLSKeys() error {
 		d.logger.Info("✅ 所有BLS公钥同步加载完成")
 	}
 
-	// 🆕 修复：设置BLS加载完成状态
 	d.blsLoadingMutex.Lock()
 	d.blsLoadingComplete = true
 	d.blsLoadingMutex.Unlock()
-	d.logger.Info("✅ BLS加载状态已设置为完成")
 
 	// 发送完成信号
 	select {

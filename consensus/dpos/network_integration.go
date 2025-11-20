@@ -16,6 +16,7 @@ import (
 	dposProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/network"
+	networkCommon "github.com/Vcity-Team/vcitychain/network/common"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -105,6 +106,11 @@ type NetworkIntegration struct {
 	// 🆕 日志频率控制
 	lastBroadcastLogTime      *time.Time
 	lastBroadcastLogTimeMutex sync.Mutex
+
+	// 🆕 验证者地址与peer映射
+	validatorPeerMap map[types.Address]peer.ID
+	peerValidatorMap map[peer.ID]types.Address
+	peerMapMutex     sync.RWMutex
 }
 
 // MessageHandler 消息处理器接口
@@ -309,6 +315,8 @@ func NewNetworkIntegration(network *network.Server, logger hclog.Logger) *Networ
 		goroutineManager:    NewGoroutineManager(logger, 1000, 100), // 最大1000个协程，100个重试工作器
 		blsKeyCache:         make(map[types.Address][]byte),
 		blsKeyCacheTime:     make(map[types.Address]time.Time),
+		validatorPeerMap:    make(map[types.Address]peer.ID),
+		peerValidatorMap:    make(map[peer.ID]types.Address),
 	}
 
 	// 注册消息处理器
@@ -342,6 +350,8 @@ func NewNetworkIntegrationWithExistingTopics(network *network.Server, logger hcl
 		goroutineManager:    NewGoroutineManager(logger, 1000, 100), // 最大1000个协程，100个重试工作器
 		blsKeyCache:         make(map[types.Address][]byte),
 		blsKeyCacheTime:     make(map[types.Address]time.Time),
+		validatorPeerMap:    make(map[types.Address]peer.ID),
+		peerValidatorMap:    make(map[peer.ID]types.Address),
 	}
 
 	// 注册消息处理器
@@ -1962,6 +1972,11 @@ func (ni *NetworkIntegration) handleBLSKeyResponse(obj interface{}, from peer.ID
 			return
 		}
 
+		// 🆕 根据响应更新验证者的peer映射
+		if from != "" {
+			ni.RegisterValidatorPeer(responseMsg.RequestedAddress, from)
+		}
+
 		if responseMsg.Found && len(responseMsg.BLSPublicKey) > 0 {
 			// 保存BLS公钥到缓存和数据库
 			if err := ni.saveBLSKey(responseMsg.RequestedAddress, responseMsg.BLSPublicKey); err != nil {
@@ -2175,6 +2190,62 @@ func (ni *NetworkIntegration) RequestBLSKey(requestedAddress types.Address, requ
 		"requester", requester.String())
 
 	return nil
+}
+
+// RegisterValidatorPeerFromMultiAddr 使用MultiAddr注册验证者与peer的映射
+func (ni *NetworkIntegration) RegisterValidatorPeerFromMultiAddr(address types.Address, multiAddr string) error {
+	multiAddr = strings.TrimSpace(multiAddr)
+	if address == (types.Address{}) || multiAddr == "" {
+		return fmt.Errorf("invalid validator address or multiAddr")
+	}
+
+	addrInfo, err := networkCommon.StringToAddrInfo(multiAddr)
+	if err != nil {
+		return fmt.Errorf("failed to parse multiAddr: %w", err)
+	}
+
+	ni.RegisterValidatorPeer(address, addrInfo.ID)
+	return nil
+}
+
+// RegisterValidatorPeer 注册（或更新）验证者与peer的映射
+func (ni *NetworkIntegration) RegisterValidatorPeer(address types.Address, peerID peer.ID) {
+	if address == (types.Address{}) || peerID == "" {
+		return
+	}
+
+	ni.peerMapMutex.Lock()
+	defer ni.peerMapMutex.Unlock()
+
+	prevPeerID, exists := ni.validatorPeerMap[address]
+	if exists && prevPeerID == peerID {
+		return
+	}
+
+	if ni.validatorPeerMap == nil {
+		ni.validatorPeerMap = make(map[types.Address]peer.ID)
+	}
+	if ni.peerValidatorMap == nil {
+		ni.peerValidatorMap = make(map[peer.ID]types.Address)
+	}
+
+	ni.validatorPeerMap[address] = peerID
+	ni.peerValidatorMap[peerID] = address
+
+}
+
+// GetValidatorConnectivity 返回验证者的peer连接状态
+func (ni *NetworkIntegration) GetValidatorConnectivity(address types.Address) (peer.ID, bool, bool) {
+	ni.peerMapMutex.RLock()
+	peerID, exists := ni.validatorPeerMap[address]
+	ni.peerMapMutex.RUnlock()
+
+	if !exists || peerID == "" || ni.network == nil {
+		return "", exists, false
+	}
+
+	isConnected := ni.network.IsConnected(peerID)
+	return peerID, true, isConnected
 }
 
 // isLocalNode 检查给定的地址是否是本地节点的地址

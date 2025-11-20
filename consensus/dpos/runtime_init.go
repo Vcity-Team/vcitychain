@@ -142,9 +142,24 @@ func (r *dposRuntime) setupNetworkIntegration() error {
 		return fmt.Errorf("网络集成启动失败: %w", err)
 	}
 
+	// 🆕 预注册创世验证者的Peer映射
+	if r.config != nil && len(r.config.InitialDelegates) > 0 {
+		for _, delegate := range r.config.InitialDelegates {
+			if delegate == nil || delegate.MultiAddr == "" {
+				continue
+			}
+			if err := r.networkIntegration.RegisterValidatorPeerFromMultiAddr(delegate.Address, delegate.MultiAddr); err != nil {
+				r.logger.Warn("⚠️ 注册初始验证者Peer映射失败",
+					"address", delegate.Address.String(),
+					"multiAddr", delegate.MultiAddr,
+					"error", err)
+			} else {
+				r.logger.Info("🛰️ 已加载初始验证者Peer映射",
+					"address", delegate.Address.String(),
+					"multiAddr", delegate.MultiAddr)
+			}
+		}
+	}
+
 	return nil
 }
-
-
-
-

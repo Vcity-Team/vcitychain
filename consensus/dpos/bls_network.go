@@ -8,6 +8,7 @@ import (
 
 	"github.com/Vcity-Team/vcitychain/bls"
 	"github.com/Vcity-Team/vcitychain/types"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 // 🆕 新增：BLS响应处理器管理
@@ -31,19 +32,58 @@ func (d *DPoS) requestBLSPublicKeyFromNetwork(address types.Address) (*bls.Publi
 		Timestamp:        uint64(time.Now().Unix()),
 	}
 
-	// 3. 序列化请求消息
+	// 为日志提前生成请求ID
+	requestID := fmt.Sprintf("bls_request_%s_%d", address.String(), requestMsg.Timestamp)
+
+	// 3. 在注册处理器之前检查目标节点的连接状态
+	var (
+		targetPeerID    peer.ID
+		hasConnectivity bool
+		isPeerConnected bool
+	)
+
+	if d.runtime != nil && d.runtime.networkIntegration != nil {
+		targetPeerID, hasConnectivity, isPeerConnected = d.runtime.networkIntegration.GetValidatorConnectivity(address)
+		if hasConnectivity {
+			if !isPeerConnected {
+				d.logger.Warn("⏭️ 跳过BLS请求：目标节点离线",
+					"requestID", requestID,
+					"target", address.String(),
+					"peerID", targetPeerID.String(),
+					"note", "已知peer但当前未连接，直接返回")
+				return nil, fmt.Errorf("validator %s offline (peer %s not connected)", address.String(), targetPeerID.String())
+			}
+			d.logger.Info("🎯 BLS请求命中在线节点",
+				"requestID", requestID,
+				"target", address.String(),
+				"peerID", targetPeerID.String(),
+				"note", "直接尝试获取BLS公钥")
+		} else {
+			d.logger.Warn("⏭️ 跳过BLS请求：未知Peer映射",
+				"requestID", requestID,
+				"target", address.String(),
+				"note", "未注册peer映射，等待网络连通后再请求")
+			return nil, fmt.Errorf("validator %s peer mapping unknown", address.String())
+		}
+	} else {
+		d.logger.Info("📡 BLS请求使用广播路径",
+			"requestID", requestID,
+			"target", address.String(),
+			"note", "networkIntegration不可用")
+	}
+
+	// 4. 序列化请求消息
 	requestData, err := json.Marshal(requestMsg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal BLS request: %w", err)
 	}
 
-	// 4. 发送网络广播请求
+	// 5. 发送网络广播请求
 	// 创建响应通道
 	responseCh := make(chan *bls.PublicKey, 1)
 	errorCh := make(chan error, 1)
 
 	// 注册响应处理器
-	requestID := fmt.Sprintf("bls_request_%s_%d", address.String(), requestMsg.Timestamp)
 	d.registerBLSResponseHandler(requestID, responseCh, errorCh)
 
 	// 发送广播请求
@@ -198,7 +238,3 @@ func (d *DPoS) unregisterBLSResponseHandler(requestID string) {
 
 	// 静默处理，不打印日志
 }
-
-
-
-
