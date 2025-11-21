@@ -94,14 +94,37 @@ func (d *DPoS) getValidatorFaultInfo(validatorAddr types.Address) map[string]int
 
 	// 从数据库读取故障状态
 	if d.state != nil && d.state.StakeStore != nil {
-		if dbFaultInfo, err := d.state.StakeStore.GetValidatorFaultStatus(validatorAddr); err == nil && dbFaultInfo != nil {
-			faultInfo["isFaulty"] = dbFaultInfo["isFaulty"]
-			faultInfo["missedBlocks"] = dbFaultInfo["missedBlocks"]
-			faultInfo["lastUpdateTime"] = dbFaultInfo["lastUpdateTime"]
+		dbFaultInfo, err := d.state.StakeStore.GetValidatorFaultStatus(validatorAddr)
+		if err != nil {
+			d.logger.Warn("⚠️ 读取验证者故障状态失败",
+				"address", validatorAddr.String(),
+				"error", err)
+		} else if dbFaultInfo != nil {
+			if isFaulty, ok := dbFaultInfo["isFaulty"].(bool); ok {
+				faultInfo["isFaulty"] = isFaulty
+			}
+
+			if missedBlocks, ok := dbFaultInfo["missedBlocks"].(float64); ok {
+				faultInfo["missedBlocks"] = uint64(missedBlocks)
+			} else if missedBlocks, ok := dbFaultInfo["missedBlocks"].(uint64); ok {
+				faultInfo["missedBlocks"] = missedBlocks
+			}
+
+			if lastUpdateTime, ok := dbFaultInfo["lastUpdateTime"].(float64); ok {
+				faultInfo["lastUpdateTime"] = uint64(lastUpdateTime)
+			} else if lastUpdateTime, ok := dbFaultInfo["lastUpdateTime"].(uint64); ok {
+				faultInfo["lastUpdateTime"] = lastUpdateTime
+			}
+
 			if lfe, ok := dbFaultInfo["lastFaultyEpoch"].(float64); ok {
 				faultInfo["lastFaultyEpoch"] = uint64(lfe)
+			} else if lfe, ok := dbFaultInfo["lastFaultyEpoch"].(uint64); ok {
+				faultInfo["lastFaultyEpoch"] = lfe
 			}
-			faultInfo["reason"] = dbFaultInfo["reason"]
+
+			if reason, ok := dbFaultInfo["reason"].(string); ok {
+				faultInfo["reason"] = reason
+			}
 		}
 	}
 

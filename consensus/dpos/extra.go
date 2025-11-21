@@ -659,6 +659,81 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 	return nil
 }
 
+// processFaultFlags 处理故障标志并保存到数据库（独立函数，可在多个地方调用）
+func (i *Extra) processFaultFlags(blockNumber uint64, consensusBackend dposBackend, logger hclog.Logger) {
+	// 🆕 处理故障标志（在获取验证者集合之前，确保故障状态被保存）
+	if len(i.FaultFlags) > 0 {
+		logger.Info("🔍 processFaultFlags 检测到故障标志",
+			"blockNumber", blockNumber,
+			"faultFlagsCount", len(i.FaultFlags))
+
+		for _, faultFlag := range i.FaultFlags {
+			logger.Info("📝 processFaultFlags 处理故障标志",
+				"blockNumber", blockNumber,
+				"address", faultFlag.NodeAddress.String(),
+				"isFaulty", faultFlag.IsFaulty,
+				"missedBlocks", faultFlag.MissedBlocks,
+				"epoch", faultFlag.EpochNumber)
+
+			// 🆕 保存故障状态到数据库（验证节点）
+			// 只有当 isFaulty=true 时才保存，避免覆盖已存在的故障状态
+			if faultFlag.IsFaulty {
+				if dposInstance, ok := consensusBackend.(*DPoS); ok {
+					logger.Info("💾 processFaultFlags 开始保存故障状态到数据库",
+						"blockNumber", blockNumber,
+						"address", faultFlag.NodeAddress.String(),
+						"isFaulty", faultFlag.IsFaulty,
+						"epoch", faultFlag.EpochNumber)
+
+					if err := dposInstance.saveFaultStatusToDatabase(faultFlag); err != nil {
+						logger.Warn("⚠️ processFaultFlags 保存故障状态到数据库失败",
+							"blockNumber", blockNumber,
+							"address", faultFlag.NodeAddress.String(),
+							"error", err)
+					} else {
+						logger.Info("✅ processFaultFlags 故障状态已保存到数据库",
+							"blockNumber", blockNumber,
+							"address", faultFlag.NodeAddress.String(),
+							"isFaulty", faultFlag.IsFaulty,
+							"epoch", faultFlag.EpochNumber,
+							"missedBlocks", faultFlag.MissedBlocks)
+					}
+				} else {
+					logger.Warn("⚠️ processFaultFlags 无法获取DPoS实例，无法保存故障状态到数据库",
+						"blockNumber", blockNumber,
+						"address", faultFlag.NodeAddress.String())
+				}
+			} else {
+				// 🆕 如果 isFaulty=false，检查数据库中是否已有故障记录
+				// 如果有，说明验证者之前故障过，不应该覆盖（故障状态应该持续存在，直到通过提案恢复）
+				if dposInstance, ok := consensusBackend.(*DPoS); ok {
+					if dposInstance.state != nil && dposInstance.state.StakeStore != nil {
+						if dbFaultInfo, err := dposInstance.state.StakeStore.GetValidatorFaultStatus(faultFlag.NodeAddress); err == nil && dbFaultInfo != nil {
+							if dbIsFaulty, ok := dbFaultInfo["isFaulty"].(bool); ok && dbIsFaulty {
+								// 数据库中已有故障记录，不覆盖（保持故障状态）
+								logger.Info("ℹ️ processFaultFlags 验证者当前epoch正常，但数据库中仍有故障记录，保持故障状态",
+									"blockNumber", blockNumber,
+									"address", faultFlag.NodeAddress.String(),
+									"currentEpoch", faultFlag.EpochNumber,
+									"lastFaultyEpoch", dbFaultInfo["lastFaultyEpoch"],
+									"reason", "故障状态应持续存在，直到通过提案恢复")
+								continue
+							}
+						}
+						// 如果数据库中没有故障记录，或者已经是正常状态，可以更新为正常状态
+						logger.Debug("ℹ️ processFaultFlags 验证者当前epoch正常，数据库中无故障记录",
+							"blockNumber", blockNumber,
+							"address", faultFlag.NodeAddress.String())
+					}
+				}
+			}
+		}
+	} else {
+		logger.Debug("ℹ️ processFaultFlags 没有故障标志",
+			"blockNumber", blockNumber)
+	}
+}
+
 // ValidateFinalizedData contains extra data validations for finalized headers
 func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header, parents []*types.Header,
 	chainID uint64, consensusBackend dposBackend, domain []byte, logger hclog.Logger) error {
@@ -734,6 +809,9 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 
 	// 🆕 修复：使用传入的chainID参数，确保与生产时一致
 	productionChainID := chainID
+
+	// 🆕 处理故障标志（调用独立函数）
+	i.processFaultFlags(blockNumber, consensusBackend, logger)
 
 	// 🆕 从 ExtraData 中获取验证者集合
 	validators, err := i.getValidatorsFromExtraData(header, parent, parents, consensusBackend, logger)
@@ -2314,10 +2392,88 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 	}
 
 	// 如果没有验证者集合变化，直接返回父区块的验证者集合
+	// 🆕 但是仍然需要处理故障标志（即使没有验证者集合变化）
+	logger.Info("🔍 getValidatorsFromExtraData 检查故障标志",
+		"blockNumber", blockNumber,
+		"hasValidators", i.Validators != nil && !i.Validators.IsEmpty(),
+		"faultFlagsCount", len(i.FaultFlags))
+
 	if i.Validators == nil || i.Validators.IsEmpty() {
-		logger.Debug("📝 当前区块无验证者集合变化，使用父区块验证者集合",
+		logger.Info("📝 当前区块无验证者集合变化，使用父区块验证者集合",
 			"blockNumber", blockNumber,
-			"parentValidatorsCount", len(parentValidators))
+			"parentValidatorsCount", len(parentValidators),
+			"faultFlagsCount", len(i.FaultFlags))
+
+		// 🆕 即使没有验证者集合变化，也要处理故障标志并保存到数据库
+		if len(i.FaultFlags) > 0 {
+			logger.Info("🔍 无验证者集合变化，但需要处理故障标志",
+				"blockNumber", blockNumber,
+				"faultCount", len(i.FaultFlags))
+
+			for _, faultFlag := range i.FaultFlags {
+				if faultFlag.IsFaulty {
+					logger.Info("📝 处理故障标志（无验证者集合变化）",
+						"blockNumber", blockNumber,
+						"address", faultFlag.NodeAddress.String(),
+						"isFaulty", faultFlag.IsFaulty,
+						"missedBlocks", faultFlag.MissedBlocks,
+						"reason", faultFlag.Reason)
+				}
+
+				// 🆕 保存故障状态到数据库（验证节点）
+				if faultFlag.IsFaulty {
+					if dposInstance, ok := consensusBackend.(*DPoS); ok {
+						logger.Info("💾 验证节点开始保存故障状态到数据库（无验证者集合变化）",
+							"blockNumber", blockNumber,
+							"address", faultFlag.NodeAddress.String(),
+							"isFaulty", faultFlag.IsFaulty,
+							"epoch", faultFlag.EpochNumber)
+
+						if err := dposInstance.saveFaultStatusToDatabase(faultFlag); err != nil {
+							logger.Warn("⚠️ 验证节点保存故障状态到数据库失败（无验证者集合变化）",
+								"blockNumber", blockNumber,
+								"address", faultFlag.NodeAddress.String(),
+								"error", err)
+						} else {
+							logger.Info("✅ 验证节点故障状态已保存到数据库（无验证者集合变化）",
+								"blockNumber", blockNumber,
+								"address", faultFlag.NodeAddress.String(),
+								"isFaulty", faultFlag.IsFaulty,
+								"epoch", faultFlag.EpochNumber,
+								"missedBlocks", faultFlag.MissedBlocks)
+						}
+					} else {
+						logger.Warn("⚠️ 无法获取DPoS实例，无法保存故障状态到数据库（无验证者集合变化）",
+							"blockNumber", blockNumber,
+							"address", faultFlag.NodeAddress.String())
+					}
+				} else {
+					// 🆕 如果 isFaulty=false，检查数据库中是否已有故障记录
+					// 如果有，说明验证者之前故障过，不应该覆盖（故障状态应该持续存在，直到通过提案恢复）
+					if dposInstance, ok := consensusBackend.(*DPoS); ok {
+						if dposInstance.state != nil && dposInstance.state.StakeStore != nil {
+							if dbFaultInfo, err := dposInstance.state.StakeStore.GetValidatorFaultStatus(faultFlag.NodeAddress); err == nil && dbFaultInfo != nil {
+								if dbIsFaulty, ok := dbFaultInfo["isFaulty"].(bool); ok && dbIsFaulty {
+									// 数据库中已有故障记录，不覆盖（保持故障状态）
+									logger.Info("ℹ️ 验证者当前epoch正常，但数据库中仍有故障记录，保持故障状态（无验证者集合变化）",
+										"blockNumber", blockNumber,
+										"address", faultFlag.NodeAddress.String(),
+										"currentEpoch", faultFlag.EpochNumber,
+										"lastFaultyEpoch", dbFaultInfo["lastFaultyEpoch"],
+										"reason", "故障状态应持续存在，直到通过提案恢复")
+									continue
+								}
+							}
+							// 如果数据库中没有故障记录，或者已经是正常状态，可以更新为正常状态
+							logger.Debug("ℹ️ 故障标志isFaulty=false，数据库中无故障记录，跳过数据库保存（无验证者集合变化）",
+								"blockNumber", blockNumber,
+								"address", faultFlag.NodeAddress.String())
+						}
+					}
+				}
+			}
+		}
+
 		return parentValidators, nil
 	}
 
@@ -2328,7 +2484,7 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 		"updatedCount", len(i.Validators.Updated),
 		"removedCount", i.Validators.Removed.Len())
 
-	currentValidators := i.applyValidatorSetDelta(parentValidators, i.Validators, logger)
+	currentValidators := i.applyValidatorSetDelta(parentValidators, i.Validators, consensusBackend, logger)
 
 	logger.Info("✅ 验证者集合变化应用完成",
 		"blockNumber", blockNumber,
@@ -2439,7 +2595,7 @@ func (i *Extra) getParentValidators(parent *types.Header, parents []*types.Heade
 }
 
 // applyValidatorSetDelta 应用验证者集合变化
-func (i *Extra) applyValidatorSetDelta(parentValidators validator.AccountSet, delta *validator.ValidatorSetDelta, logger hclog.Logger) validator.AccountSet {
+func (i *Extra) applyValidatorSetDelta(parentValidators validator.AccountSet, delta *validator.ValidatorSetDelta, consensusBackend dposBackend, logger hclog.Logger) validator.AccountSet {
 	logger.Info("🔄 开始应用验证者集合变化",
 		"parentValidatorsCount", len(parentValidators),
 		"addedCount", len(delta.Added),
@@ -2508,6 +2664,10 @@ func (i *Extra) applyValidatorSetDelta(parentValidators validator.AccountSet, de
 	}
 
 	// 🆕 4. 处理故障标志
+	logger.Info("🔍 applyValidatorSetDelta 检查故障标志",
+		"faultFlagsCount", len(i.FaultFlags),
+		"hasValidators", delta != nil)
+
 	if len(i.FaultFlags) > 0 {
 		logger.Info("🔍 开始处理故障标志", "faultCount", len(i.FaultFlags))
 
@@ -2520,8 +2680,55 @@ func (i *Extra) applyValidatorSetDelta(parentValidators validator.AccountSet, de
 					"reason", faultFlag.Reason)
 			}
 
-			// 更新验证者故障状态
+			// 更新验证者故障状态（内存）
 			i.updateValidatorFaultStatus(currentValidators, faultFlag, logger)
+
+			// 🆕 保存故障状态到数据库（验证节点）
+			// 只有当 isFaulty=true 时才保存，避免覆盖已存在的故障状态
+			if faultFlag.IsFaulty {
+				if dposInstance, ok := consensusBackend.(*DPoS); ok {
+					logger.Info("💾 验证节点开始保存故障状态到数据库",
+						"address", faultFlag.NodeAddress.String(),
+						"isFaulty", faultFlag.IsFaulty,
+						"epoch", faultFlag.EpochNumber)
+
+					if err := dposInstance.saveFaultStatusToDatabase(faultFlag); err != nil {
+						logger.Warn("⚠️ 验证节点保存故障状态到数据库失败",
+							"address", faultFlag.NodeAddress.String(),
+							"error", err)
+					} else {
+						logger.Info("✅ 验证节点故障状态已保存到数据库",
+							"address", faultFlag.NodeAddress.String(),
+							"isFaulty", faultFlag.IsFaulty,
+							"epoch", faultFlag.EpochNumber,
+							"missedBlocks", faultFlag.MissedBlocks)
+					}
+				} else {
+					logger.Warn("⚠️ 无法获取DPoS实例，无法保存故障状态到数据库",
+						"address", faultFlag.NodeAddress.String())
+				}
+			} else {
+				// 🆕 如果 isFaulty=false，检查数据库中是否已有故障记录
+				// 如果有，说明验证者之前故障过，不应该覆盖（故障状态应该持续存在，直到通过提案恢复）
+				if dposInstance, ok := consensusBackend.(*DPoS); ok {
+					if dposInstance.state != nil && dposInstance.state.StakeStore != nil {
+						if dbFaultInfo, err := dposInstance.state.StakeStore.GetValidatorFaultStatus(faultFlag.NodeAddress); err == nil && dbFaultInfo != nil {
+							if dbIsFaulty, ok := dbFaultInfo["isFaulty"].(bool); ok && dbIsFaulty {
+								// 数据库中已有故障记录，不覆盖（保持故障状态）
+								logger.Info("ℹ️ 验证者当前epoch正常，但数据库中仍有故障记录，保持故障状态",
+									"address", faultFlag.NodeAddress.String(),
+									"currentEpoch", faultFlag.EpochNumber,
+									"lastFaultyEpoch", dbFaultInfo["lastFaultyEpoch"],
+									"reason", "故障状态应持续存在，直到通过提案恢复")
+								continue
+							}
+						}
+						// 如果数据库中没有故障记录，或者已经是正常状态，可以更新为正常状态
+						logger.Debug("ℹ️ 故障标志isFaulty=false，数据库中无故障记录，跳过数据库保存",
+							"address", faultFlag.NodeAddress.String())
+					}
+				}
+			}
 		}
 	}
 

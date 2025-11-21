@@ -5,8 +5,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/signer"
+	"github.com/Vcity-Team/vcitychain/types"
 )
 
 // VerifyHeader 验证区块头部
@@ -125,6 +125,15 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		// 同步更新轮次状态（这部分必须同步执行，不能异步）
 		d.updateRoundState(header)
 
+		// 🆕 解析ExtraData并处理故障标志（确保生产节点也能保存故障状态）
+		if extra, err := GetIbftExtra(header.ExtraData); err == nil && extra != nil {
+			extra.processFaultFlags(header.Number, d, d.logger)
+		} else if err != nil {
+			d.logger.Debug("⚠️ ProcessHeaders 解析ExtraData失败，跳过故障标志处理",
+				"blockNumber", header.Number,
+				"error", err)
+		}
+
 		// 🆕 验证节点执行blockchain_wrapper.ProcessBlock来处理奖励分配
 		if d.config.Blockchain != nil {
 			// 获取完整区块信息
@@ -241,4 +250,3 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 
 	return nil
 }
-

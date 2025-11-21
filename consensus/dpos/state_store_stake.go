@@ -1123,14 +1123,25 @@ func (s *StakeStore) UpdateValidatorFaultStatus(address types.Address, isFaulty 
 // 🆕 新增：获取验证者故障状态
 func (s *StakeStore) GetValidatorFaultStatus(address types.Address) (map[string]interface{}, error) {
 	var faultInfo map[string]interface{}
+	key := address.Bytes()
 	err := s.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("validatorFaultStatus"))
 		if bucket == nil {
 			return nil // 没有故障记录
 		}
 
-		data := bucket.Get(address.Bytes())
+		data := bucket.Get(key)
 		if data == nil {
+			// 🆕 调试：检查是否有其他key（遍历所有key）
+			cursor := bucket.Cursor()
+			for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
+				if bytes.Equal(k, key) {
+					// 找到了，但之前Get返回nil，可能是key格式问题
+					if err := json.Unmarshal(v, &faultInfo); err == nil {
+						return nil
+					}
+				}
+			}
 			return nil // 该验证者没有故障记录
 		}
 
