@@ -187,15 +187,26 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 
 	lastBlockInEpoch := firstBlockInEpoch + epochSize - 1
 
-	// 获取epoch时间信息（保持原有逻辑）
+	// 获取epoch时间信息（用于显示）
 	_, lastEpochTime, epochDuration := d.epochManager.GetEpochInfo(currentBlockNumber)
 
-	// 计算剩余时间
-	timeRemaining := time.Duration(0)
-	nextEpochTime := lastEpochTime.Add(epochDuration)
-	if time.Now().Before(nextEpochTime) {
-		timeRemaining = time.Until(nextEpochTime)
+	// 🆕 改进：基于剩余区块数计算剩余时间（以区块为准）
+	remainingBlocks := int64(0)
+	if currentBlockNumber < lastBlockInEpoch {
+		remainingBlocks = int64(lastBlockInEpoch) - int64(currentBlockNumber)
 	}
+
+	// 获取理论出块时间
+	blockTime := d.config.BlockTime.Duration
+	if blockTime == 0 {
+		blockTime = 3 * time.Second // 默认值
+	}
+
+	// 计算剩余时间：剩余区块数 * 理论出块时间
+	timeRemaining := time.Duration(remainingBlocks) * blockTime
+
+	// 计算下一个epoch的估算时间（基于剩余区块数计算的估算值）
+	nextEpochTimeEstimated := time.Now().Add(timeRemaining)
 
 	// 🆕 从数据库读取验证者信息（按权重倒序排序，应用配置限制）
 	validators := make([]map[string]interface{}, 0)
@@ -232,28 +243,39 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 		}
 	}
 
-	// 获取epoch状态
+	// 🆕 改进：基于区块号判断epoch状态（以区块为准）
 	epochStatus := "active"
-	if time.Now().After(nextEpochTime) {
+	if currentBlockNumber >= lastBlockInEpoch {
 		epochStatus = "completed"
-	} else if time.Now().Before(lastEpochTime) {
+	} else if currentBlockNumber < firstBlockInEpoch {
 		epochStatus = "pending"
 	}
 
+	// 计算已出块数
+	blocksProduced := uint64(0)
+	if currentBlockNumber >= firstBlockInEpoch {
+		blocksProduced = currentBlockNumber - firstBlockInEpoch + 1
+		if blocksProduced > epochSize {
+			blocksProduced = epochSize
+		}
+	}
+
 	return map[string]interface{}{
-		"epochNumber":           epochNumber,
-		"epochStatus":           epochStatus,
-		"epochStartTime":        lastEpochTime.Format(time.RFC3339),
-		"epochDuration":         epochDuration.String(),
-		"timeRemaining":         timeRemaining.String(),
-		"nextEpochTime":         nextEpochTime.Format(time.RFC3339),
-		"firstBlockInEpoch":     firstBlockInEpoch,
-		"lastBlockInEpoch":      lastBlockInEpoch,
-		"currentBlockNumber":    currentBlockNumber,
-		"epochSize":             epochSize,
-		"validators":            validators,
-		"validatorCount":        len(validators),
-		"consensusSwitchHeight": d.config.ConsensusSwitchHeight,
+		"epochNumber":            epochNumber,
+		"epochStatus":            epochStatus, // 🆕 基于区块号判断
+		"epochStartTime":         lastEpochTime.Format(time.RFC3339),
+		"epochDuration":          epochDuration.String(),
+		"firstBlockInEpoch":      firstBlockInEpoch,
+		"lastBlockInEpoch":       lastBlockInEpoch,
+		"currentBlockNumber":     currentBlockNumber,
+		"epochSize":              epochSize,
+		"remainingBlocks":        remainingBlocks,   // 🆕 新增：剩余区块数
+		"estimatedTimeRemaining": timeRemaining.String(), // 🆕 基于剩余区块数计算的剩余时间
+		"nextEpochTimeEstimated": nextEpochTimeEstimated.Format(time.RFC3339), // 🆕 基于剩余区块数计算的估算时间
+		"blocksProduced":         blocksProduced,    // 🆕 新增：已出块数
+		"validators":             validators,
+		"validatorCount":         len(validators),
+		"consensusSwitchHeight":  d.config.ConsensusSwitchHeight,
 	}
 }
 
@@ -299,7 +321,7 @@ func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
 	}
 	lastBlockInEpoch := firstBlockInEpoch + epochSize - 1
 
-	// 确定epoch状态
+	// 🆕 改进：基于区块号确定epoch状态
 	epochStatus := "unknown"
 	if epochNumber < currentEpoch {
 		epochStatus = "completed"
@@ -309,8 +331,40 @@ func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
 		epochStatus = "future"
 	}
 
+	// 计算剩余区块数和已出块数
+	remainingBlocks := int64(0)
+	blocksProduced := uint64(0)
+	
+	if epochNumber == currentEpoch {
+		// 当前epoch：基于当前区块号计算
+		if currentBlockNumber < lastBlockInEpoch {
+			remainingBlocks = int64(lastBlockInEpoch) - int64(currentBlockNumber)
+		}
+		if currentBlockNumber >= firstBlockInEpoch {
+			blocksProduced = currentBlockNumber - firstBlockInEpoch + 1
+			if blocksProduced > epochSize {
+				blocksProduced = epochSize
+			}
+		}
+	} else if epochNumber < currentEpoch {
+		// 历史epoch：已完成，剩余区块数为0，已出块数为epochSize
+		remainingBlocks = 0
+		blocksProduced = epochSize
+	} else {
+		// 未来epoch：剩余区块数为epochSize，已出块数为0
+		remainingBlocks = int64(epochSize)
+		blocksProduced = 0
+	}
+
 	// 获取epoch时间信息
 	_, _, epochDuration := d.epochManager.GetEpochInfo(currentBlockNumber)
+	
+	// 计算剩余时间（基于剩余区块数）
+	blockTime := d.config.BlockTime.Duration
+	if blockTime == 0 {
+		blockTime = 3 * time.Second // 默认值
+	}
+	timeRemaining := time.Duration(remainingBlocks) * blockTime
 
 	// 🆕 获取该epoch的出块统计
 	var blockCounts map[types.Address]uint64
@@ -348,17 +402,21 @@ func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
 
 	// 对于历史Epoch，提供基本信息（包含验证者信息和出块数）
 	return map[string]interface{}{
-		"epochNumber":           epochNumber,
-		"epochStatus":           epochStatus,
-		"epochDuration":         epochDuration.String(),
-		"firstBlockInEpoch":     firstBlockInEpoch,
-		"lastBlockInEpoch":      lastBlockInEpoch,
-		"epochSize":             epochSize,
-		"currentEpoch":          currentEpoch,
-		"currentBlockNumber":    currentBlockNumber,
-		"consensusSwitchHeight": d.config.ConsensusSwitchHeight,
-		"validators":            validators,      // 🆕 添加验证者信息（包含出块数）
-		"validatorCount":        len(validators), // 🆕 添加验证者数量
+		"epochNumber":            epochNumber,
+		"epochStatus":            epochStatus, // 🆕 基于区块号判断
+		"epochDuration":          epochDuration.String(),
+		"firstBlockInEpoch":      firstBlockInEpoch,
+		"lastBlockInEpoch":       lastBlockInEpoch,
+		"epochSize":              epochSize,
+		"remainingBlocks":        remainingBlocks,   // 🆕 新增：剩余区块数
+		"estimatedTimeRemaining": timeRemaining.String(), // 🆕 基于剩余区块数计算的剩余时间
+		"nextEpochTimeEstimated": time.Now().Add(timeRemaining).Format(time.RFC3339), // 🆕 基于剩余区块数计算的估算时间
+		"blocksProduced":         blocksProduced,    // 🆕 新增：已出块数
+		"currentEpoch":           currentEpoch,
+		"currentBlockNumber":     currentBlockNumber,
+		"consensusSwitchHeight":  d.config.ConsensusSwitchHeight,
+		"validators":             validators,      // 🆕 添加验证者信息（包含出块数）
+		"validatorCount":         len(validators), // 🆕 添加验证者数量
 	}
 }
 
