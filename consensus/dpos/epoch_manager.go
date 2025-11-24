@@ -92,6 +92,14 @@ func (tem *TimeBasedEpochManager) SetBlockchain(blockchain interface{}) {
 	tem.blockchain = blockchain
 }
 
+// 🆕 新增：更新 epochDuration（用于提案执行后更新参数值）
+func (tem *TimeBasedEpochManager) UpdateEpochDuration(epochDuration time.Duration) {
+	tem.mutex.Lock()
+	defer tem.mutex.Unlock()
+	tem.epochDuration = epochDuration
+	tem.logger.Info("✅ EpochDuration已更新", "newDuration", epochDuration.String())
+}
+
 // 🆕 新增：设置回调函数
 func (tem *TimeBasedEpochManager) SetCallback(callback func(uint64) error) {
 	tem.mutex.Lock()

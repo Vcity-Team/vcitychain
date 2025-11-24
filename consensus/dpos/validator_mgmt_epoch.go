@@ -1,6 +1,8 @@
 package dpos
 
 import (
+	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -92,8 +94,41 @@ func (d *DPoS) getEpochSize() uint64 {
 		return 28800 // 默认值：86400秒 / 3秒 = 28800个区块
 	}
 
-	// 根据EpochDuration和BlockTime计算epoch大小
-	epochDuration := d.config.EpochDuration
+	// 🆕 优先从参数系统读取 dpos_epoch_duration（经过治理流程修改的值是权威数据源）
+	var epochDuration time.Duration
+	if paramValue, err := d.getCurrentParameterValue("dpos_epoch_duration"); err == nil {
+		// 解析参数值（可能是字符串或数字）
+		switch v := paramValue.(type) {
+		case string:
+			// 尝试解析为时间字符串（如 "48s", "2m", "1h"）
+			if parsedDuration, parseErr := time.ParseDuration(v); parseErr == nil {
+				epochDuration = parsedDuration
+				d.logger.Debug("从参数系统读取 epoch duration", "value", v, "parsed", epochDuration.String())
+			} else {
+				// 如果不是时间字符串，尝试解析为秒数（如 "48"）
+				if seconds, parseErr := strconv.ParseUint(v, 10, 64); parseErr == nil {
+					epochDuration = time.Duration(seconds) * time.Second
+					d.logger.Debug("从参数系统读取 epoch duration（秒数）", "value", v, "parsed", epochDuration.String())
+				} else {
+					d.logger.Warn("无法解析参数系统中的 epoch duration，使用配置值", "value", v, "error", parseErr)
+					epochDuration = d.config.EpochDuration
+				}
+			}
+		case uint64:
+			epochDuration = time.Duration(v) * time.Second
+		case int64:
+			epochDuration = time.Duration(v) * time.Second
+		case float64:
+			epochDuration = time.Duration(uint64(v)) * time.Second
+		default:
+			d.logger.Warn("参数系统中的 epoch duration 类型不支持，使用配置值", "type", fmt.Sprintf("%T", paramValue))
+			epochDuration = d.config.EpochDuration
+		}
+	} else {
+		// 参数系统没有值，使用配置值
+		epochDuration = d.config.EpochDuration
+	}
+
 	blockTime := d.config.BlockTime.Duration
 
 	if blockTime == 0 {

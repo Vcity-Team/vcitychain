@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"strconv"
+	"time"
 
 	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/types"
@@ -239,6 +240,48 @@ func (d *DPoS) updateParameterValue(paramName string, value interface{}, source 
 	if d.state != nil && d.state.ParameterStore != nil {
 		if err := d.state.ParameterStore.SaveParameterValue(paramName, value, source); err != nil {
 			return fmt.Errorf("failed to save parameter value to database: %w", err)
+		}
+	}
+
+	// 🆕 如果是 dpos_epoch_duration，同时更新配置和 EpochManager
+	if paramName == "dpos_epoch_duration" {
+		var epochDuration time.Duration
+
+		// 解析参数值（可能是字符串或数字）
+		switch v := value.(type) {
+		case string:
+			// 尝试解析为时间字符串（如 "48s", "2m", "1h"）
+			if parsedDuration, parseErr := time.ParseDuration(v); parseErr == nil {
+				epochDuration = parsedDuration
+			} else {
+				// 如果不是时间字符串，尝试解析为秒数（如 "48"）
+				if seconds, parseErr := strconv.ParseUint(v, 10, 64); parseErr == nil {
+					epochDuration = time.Duration(seconds) * time.Second
+				} else {
+					d.logger.Warn("无法解析 epoch duration 值", "value", v, "error", parseErr)
+					return fmt.Errorf("invalid epoch duration value: %v", v)
+				}
+			}
+		case uint64:
+			epochDuration = time.Duration(v) * time.Second
+		case int64:
+			epochDuration = time.Duration(v) * time.Second
+		case float64:
+			epochDuration = time.Duration(uint64(v)) * time.Second
+		default:
+			d.logger.Warn("不支持的 epoch duration 类型", "type", fmt.Sprintf("%T", value), "value", value)
+			return fmt.Errorf("unsupported epoch duration type: %T", value)
+		}
+
+		// 更新 d.config.EpochDuration
+		if d.config != nil {
+			d.config.EpochDuration = epochDuration
+			d.logger.Info("✅ 已更新 d.config.EpochDuration", "newDuration", epochDuration.String())
+		}
+
+		// 更新 TimeBasedEpochManager.epochDuration
+		if d.epochManager != nil {
+			d.epochManager.UpdateEpochDuration(epochDuration)
 		}
 	}
 
