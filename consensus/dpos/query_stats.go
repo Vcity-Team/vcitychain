@@ -152,17 +152,11 @@ func (d *DPoS) CanWithdrawDelegate(address types.Address) (map[string]interface{
 // ==================== DPoS经济系统JSON-RPC查询方法 ====================
 
 // GetCurrentEpochInfo 获取当前Epoch信息（公共方法，供外部调用）
-// 内部实现通过QueryManager接口调用
+// 注意：不能通过接口调用，因为GetCurrentEpochInfo本身就是接口的实现
+// 直接使用原有逻辑，避免无限递归
 func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
-	// 🆕 重构：通过接口调用
-	if d.query != nil {
-		return d.query.GetCurrentEpochInfo()
-	}
-
-	// 向后兼容：如果接口未初始化，返回错误
-	return map[string]interface{}{
-		"error": "query manager not initialized",
-	}
+	// 直接调用legacy实现，避免通过接口调用造成无限递归
+	return d.getCurrentEpochInfoLegacy()
 }
 
 // getCurrentEpochInfoLegacy 获取当前Epoch信息（旧实现，已废弃，保留用于向后兼容）
@@ -289,17 +283,11 @@ func (d *DPoS) getCurrentEpochInfoLegacy() map[string]interface{} {
 }
 
 // GetEpochInfoByNumber 获取指定Epoch信息（公共方法，供外部调用）
-// 内部实现通过QueryManager接口调用
+// 注意：不能通过接口调用，因为GetEpochInfoByNumber本身就是接口的实现
+// 直接使用原有逻辑，避免无限递归
 func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
-	// 🆕 重构：通过接口调用
-	if d.query != nil {
-		return d.query.GetEpochInfoByNumber(epochNumber)
-	}
-
-	// 向后兼容：如果接口未初始化，返回错误
-	return map[string]interface{}{
-		"error": "query manager not initialized",
-	}
+	// 直接调用legacy实现，避免通过接口调用造成无限递归
+	return d.getEpochInfoByNumberLegacy(epochNumber)
 }
 
 // getEpochInfoByNumberLegacy 获取指定Epoch信息（旧实现，已废弃，保留用于向后兼容）
@@ -327,11 +315,8 @@ func (d *DPoS) getEpochInfoByNumberLegacy(epochNumber uint64) map[string]interfa
 
 	// 如果请求的是当前Epoch，返回当前信息
 	if epochNumber == currentEpoch {
-		// 🆕 重构：通过接口调用
-		if d.query != nil {
-			return d.query.GetCurrentEpochInfo()
-		}
-		return d.GetCurrentEpochInfo() // 向后兼容
+		// 直接调用legacy实现，避免通过接口调用造成无限递归
+		return d.getCurrentEpochInfoLegacy()
 	}
 
 	// 计算指定epoch的区块范围（考虑共识切换高度）

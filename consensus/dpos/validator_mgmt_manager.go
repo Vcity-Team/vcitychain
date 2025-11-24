@@ -165,4 +165,3 @@ func (d *DPoS) isValidator(address types.Address) bool {
 	d.logger.Debug("❌ 不是验证者", "address", address.String())
 	return false
 }
-
