@@ -251,33 +251,51 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			for _, prop := range uniq {
 				// 🆕 再次检查 Applied，确保只执行一次
 				if prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == currentEpoch && !prop.Schedule.Applied {
-				switch prop.ProposalType {
-				case "validator_recovery":
-					// 应用恢复提案：清除验证者故障标志
-					validatorAddr := prop.ValidatorAddress
-					if validatorAddr == (types.Address{}) {
-						validatorAddr = types.StringToAddress(prop.Parameter)
-					}
-					if validatorAddr == (types.Address{}) {
-						p.logger.Error("边界应用恢复提案失败：无法获取验证者地址", "proposalID", prop.ID, "parameter", prop.Parameter)
-					} else {
-						// 清除故障标志
-						if dposInstance.state != nil && dposInstance.state.StakeStore != nil {
-							if err := dposInstance.state.StakeStore.ClearValidatorFaultStatus(validatorAddr, prop.ID); err != nil {
-								p.logger.Error("边界应用恢复提案失败：清除故障标志失败", "error", err, "proposalID", prop.ID, "validator", validatorAddr.String())
-							} else {
-								prop.Schedule.Applied = true
-								prop.Schedule.AppliedAtBlock = block.Number()
-								if dposInstance.state.ProposalStore != nil {
-									_ = dposInstance.state.ProposalStore.SaveProposal(prop)
-								}
-								p.logger.Info("✅ =========================================边界应用恢复提案成功", "proposalID", prop.ID, "validator", validatorAddr.String(), "appliedAtBlock", block.Number())
-							}
-						} else {
-							p.logger.Error("边界应用恢复提案失败：StakeStore不可用", "proposalID", prop.ID, "validator", validatorAddr.String())
+					switch prop.ProposalType {
+					case "validator_recovery":
+						p.logger.Info("开始边界应用恢复提案", "proposalID", prop.ID, "status", prop.Status.String(), "currentEpoch", currentEpoch, "effectiveEpoch", prop.Schedule.EffectiveEpoch)
+
+						// 应用恢复提案：清除验证者故障标志
+						validatorAddr := prop.ValidatorAddress
+						if validatorAddr == (types.Address{}) {
+							validatorAddr = types.StringToAddress(prop.Parameter)
 						}
-					}
-				case "parameter":
+						if validatorAddr == (types.Address{}) {
+							p.logger.Error("边界应用恢复提案失败：无法获取验证者地址", "proposalID", prop.ID, "parameter", prop.Parameter)
+						} else {
+							p.logger.Info("准备清除验证者故障标志", "proposalID", prop.ID, "validator", validatorAddr.String())
+
+							// 清除故障标志（数据库和内存）
+							if dposInstance.state != nil && dposInstance.state.StakeStore != nil {
+								if err := dposInstance.state.StakeStore.ClearValidatorFaultStatus(validatorAddr, prop.ID); err != nil {
+									p.logger.Error("边界应用恢复提案失败：清除故障标志失败", "error", err, "proposalID", prop.ID, "validator", validatorAddr.String())
+								} else {
+									p.logger.Info("验证者故障标志已清除（数据库）", "proposalID", prop.ID, "validator", validatorAddr.String())
+
+									// 🆕 同时清除内存中的故障状态
+									if dposInstance.faultyValidators != nil {
+										delete(dposInstance.faultyValidators, validatorAddr)
+										p.logger.Info("验证者故障标志已清除（内存）", "proposalID", prop.ID, "validator", validatorAddr.String())
+									}
+
+									prop.Schedule.Applied = true
+									prop.Schedule.AppliedAtBlock = block.Number()
+									prop.Status = ProposalExecuted // 🆕 更新提案状态为已执行
+
+									if dposInstance.state.ProposalStore != nil {
+										if err := dposInstance.state.ProposalStore.SaveProposal(prop); err != nil {
+											p.logger.Error("保存提案状态失败", "error", err, "proposalID", prop.ID)
+										} else {
+											p.logger.Info("提案状态已保存", "proposalID", prop.ID, "status", prop.Status.String())
+										}
+									}
+									p.logger.Info("✅ =========================================边界应用恢复提案成功", "proposalID", prop.ID, "validator", validatorAddr.String(), "appliedAtBlock", block.Number(), "status", prop.Status.String())
+								}
+							} else {
+								p.logger.Error("边界应用恢复提案失败：StakeStore不可用", "proposalID", prop.ID, "validator", validatorAddr.String())
+							}
+						}
+					case "parameter":
 						// 应用参数更新
 						if err := dposInstance.updateParameterValue(prop.Parameter, prop.NewValue, fmt.Sprintf("proposal_%s", prop.ID)); err != nil {
 							p.logger.Error("边界应用参数更新失败", "error", err, "proposalID", prop.ID)

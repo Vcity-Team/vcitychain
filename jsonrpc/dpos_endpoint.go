@@ -5771,6 +5771,31 @@ func (d *DPOS) ExecuteParameterUpdate(ctx context.Context, params interface{}) (
 
 	d.logger.Info("DPoS ExecuteParameterUpdate parsed", "proposalID", proposalID, "executor", executorStr)
 
+	// 🆕 在执行前检查提案状态：如果已经是 executed 状态，则不允许重复执行
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return nil, fmt.Errorf("DPoS engine not available")
+	}
+
+	// 获取提案信息
+	if getProposal, ok := dposEngine.(interface {
+		GetParameterProposal(proposalID string) (*dpos.ParameterProposal, error)
+	}); ok {
+		proposal, err := getProposal.GetParameterProposal(proposalID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get proposal: %w", err)
+		}
+
+		// 检查提案状态
+		if proposal.Status == dpos.ProposalExecuted {
+			return nil, fmt.Errorf("proposal %s has already been executed (status: executed), cannot execute again", proposalID)
+		}
+
+		d.logger.Info("提案状态检查通过", "proposalID", proposalID, "status", proposal.Status.String())
+	} else {
+		d.logger.Warn("无法获取提案信息，跳过状态检查", "proposalID", proposalID)
+	}
+
 	// 🆕 改为通过交易执行提案
 	// 1. 解析执行者地址和私钥（已在上面解析）
 	executor := types.StringToAddress(executorStr)
