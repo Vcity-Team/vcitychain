@@ -625,12 +625,39 @@ func (d *DPoS) getCurrentEpochByBlock(blockNumber uint64) uint64 {
 func (d *DPoS) calculateNextEpochValidators(blockNumber uint64) (validator.AccountSet, error) {
 	d.logger.Info("计算下一个epoch的验证者集合", "blockNumber", blockNumber)
 
-	activeValidators, err := d.GetSortedValidatorsWithLimit()
+	// 1. 获取所有验证者（包括故障的）
+	allValidators, err := d.GetSortedValidatorsWithLimit()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get sorted validators: %v", err)
 	}
 
+	// 2. 过滤掉故障验证者
+	activeValidators := make(validator.AccountSet, 0, len(allValidators))
+	faultyCount := 0
+
+	for _, validator := range allValidators {
+		// 检查验证者的故障状态
+		faultInfo := d.getValidatorFaultInfo(validator.Address)
+		isFaulty := false
+		if faultInfo != nil && faultInfo["isFaulty"] != nil {
+			if faultValue, ok := faultInfo["isFaulty"].(bool); ok {
+				isFaulty = faultValue
+			}
+		}
+
+		if isFaulty {
+			faultyCount++
+			d.logger.Info("🚫 过滤掉故障验证者",
+				"address", validator.Address.String(),
+				"votingPower", validator.VotingPower.String())
+		} else {
+			activeValidators = append(activeValidators, validator)
+		}
+	}
+
 	d.logger.Info("✅ 下一个epoch验证者集合计算完成",
+		"totalValidators", len(allValidators),
+		"faultyValidators", faultyCount,
 		"activeValidators", len(activeValidators))
 
 	return activeValidators, nil

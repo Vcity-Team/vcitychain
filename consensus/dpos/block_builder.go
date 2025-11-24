@@ -1816,6 +1816,11 @@ func (r *dposRuntime) getValidatorsFromExtraDataForProduction(header *types.Head
 
 // getFaultFilteredNextEpochValidators 返回故障检测后过滤的出块者集合副本，用于写入NextEpochValidators
 func (r *dposRuntime) getFaultFilteredNextEpochValidators() validator.AccountSet {
+	// 🆕 优先返回 r.nextEpochValidators（如果存在），因为它包含了从数据库读取的最新验证者集合（包括恢复的验证者）
+	if r.nextEpochValidators != nil && len(r.nextEpochValidators) > 0 {
+		return r.nextEpochValidators.Copy()
+	}
+
 	if r.config == nil || r.config.dposBackend == nil {
 		return nil
 	}
