@@ -167,10 +167,39 @@ func (d *DPoS) ProcessProposalVoteTransaction(tx *types.Transaction, blockNumber
 		return fmt.Errorf("voter %s has already voted on proposal %s", tx.From.String(), txData.ProposalID)
 	}
 
-	// 4. 获取投票者权重（使用真实质押权重，与VoteOnParameterProposal保持一致）
-	voterWeight := d.getVoterVotingWeight(tx.From)
-	if voterWeight.Cmp(big.NewInt(0)) == 0 {
-		return fmt.Errorf("voter %s has no voting power (must have staked tokens to vote)", tx.From.String())
+	// 🆕 4. 获取投票者余额（允许所有有余额的用户投票，与VoteOnParameterProposal保持一致）
+	var voterWeight *big.Int
+	var err error
+	if d.balanceQuerier != nil {
+		voterWeight, err = d.balanceQuerier.GetNativeTokenBalance(tx.From)
+		if err != nil {
+			d.logger.Warn("Failed to query voter balance for proposal vote transaction", "voter", tx.From.String(), "error", err)
+			voterWeight = big.NewInt(0)
+		}
+	} else {
+		// 如果没有余额查询器，尝试使用getAccountBalance
+		if d.config != nil && d.config.Executor != nil {
+			currentHeader := d.config.Blockchain.Header()
+			if currentHeader != nil {
+				if snapshot, err2 := d.config.Executor.StateAt(currentHeader.StateRoot); err2 == nil {
+					if account, err2 := snapshot.GetAccount(tx.From); err2 == nil && account != nil {
+						voterWeight = account.Balance
+					}
+				}
+			}
+		}
+		if voterWeight == nil {
+			voterWeight = big.NewInt(0)
+		}
+	}
+
+	if voterWeight == nil || voterWeight.Cmp(big.NewInt(0)) <= 0 {
+		return fmt.Errorf("voter %s has no balance to vote (must have balance to vote, current balance: %s)", tx.From.String(), func() string {
+			if voterWeight == nil {
+				return "0"
+			}
+			return voterWeight.String()
+		}())
 	}
 
 	// 5. 验证投票签名

@@ -251,9 +251,33 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			for _, prop := range uniq {
 				// 🆕 再次检查 Applied，确保只执行一次
 				if prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == currentEpoch && !prop.Schedule.Applied {
-					switch prop.ProposalType {
-					case "validator_recovery":
-					case "parameter":
+				switch prop.ProposalType {
+				case "validator_recovery":
+					// 应用恢复提案：清除验证者故障标志
+					validatorAddr := prop.ValidatorAddress
+					if validatorAddr == (types.Address{}) {
+						validatorAddr = types.StringToAddress(prop.Parameter)
+					}
+					if validatorAddr == (types.Address{}) {
+						p.logger.Error("边界应用恢复提案失败：无法获取验证者地址", "proposalID", prop.ID, "parameter", prop.Parameter)
+					} else {
+						// 清除故障标志
+						if dposInstance.state != nil && dposInstance.state.StakeStore != nil {
+							if err := dposInstance.state.StakeStore.ClearValidatorFaultStatus(validatorAddr, prop.ID); err != nil {
+								p.logger.Error("边界应用恢复提案失败：清除故障标志失败", "error", err, "proposalID", prop.ID, "validator", validatorAddr.String())
+							} else {
+								prop.Schedule.Applied = true
+								prop.Schedule.AppliedAtBlock = block.Number()
+								if dposInstance.state.ProposalStore != nil {
+									_ = dposInstance.state.ProposalStore.SaveProposal(prop)
+								}
+								p.logger.Info("✅ =========================================边界应用恢复提案成功", "proposalID", prop.ID, "validator", validatorAddr.String(), "appliedAtBlock", block.Number())
+							}
+						} else {
+							p.logger.Error("边界应用恢复提案失败：StakeStore不可用", "proposalID", prop.ID, "validator", validatorAddr.String())
+						}
+					}
+				case "parameter":
 						// 应用参数更新
 						if err := dposInstance.updateParameterValue(prop.Parameter, prop.NewValue, fmt.Sprintf("proposal_%s", prop.ID)); err != nil {
 							p.logger.Error("边界应用参数更新失败", "error", err, "proposalID", prop.ID)
@@ -543,9 +567,9 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 			}
 			allProposals, err := dposInstance.state.ProposalStore.GetAllProposals()
 			if err == nil {
-				p.logger.Info("当前所有提案总数", "count", len(allProposals), "currentEpoch", epochForLog)
+				p.logger.Debug("当前所有提案总数", "count", len(allProposals), "currentEpoch", epochForLog)
 				for pid, prop := range allProposals {
-					p.logger.Info("提案详情", "id", pid, "Type", prop.ProposalType, "Epoch", prop.Schedule.EffectiveEpoch, "Scheduled", prop.Schedule.Scheduled, "Validator", prop.ValidatorAddress.String(), "Status", prop.Status, "Start", prop.StartBlock, "End", prop.EndBlock, "Description", prop.Description, "currentEpoch", epochForLog)
+					p.logger.Debug("提案详情", "id", pid, "Type", prop.ProposalType, "Epoch", prop.Schedule.EffectiveEpoch, "Scheduled", prop.Schedule.Scheduled, "Validator", prop.ValidatorAddress.String(), "Status", prop.Status, "Start", prop.StartBlock, "End", prop.EndBlock, "Description", prop.Description, "currentEpoch", epochForLog)
 					// 直接基于全量数据筛选"本epoch需要生效"的恢复提案
 					if prop != nil && prop.ProposalType == "validator_recovery" && prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == epochForLog {
 						vaddr := prop.ValidatorAddress

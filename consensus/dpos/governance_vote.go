@@ -29,11 +29,39 @@ func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, s
 		return fmt.Errorf("voting period has ended or not started")
 	}
 
-	// 检查投票者是否有足够的质押（允许所有用户投票，但需要质押）
-	// 获取投票者的质押权重
-	votingWeight := d.getVoterVotingWeight(voter)
-	if votingWeight.Cmp(big.NewInt(0)) <= 0 {
-		return fmt.Errorf("voter must have staked tokens to vote")
+	// 🆕 检查投票者是否有余额（允许所有有余额的用户投票）
+	var balance *big.Int
+	var err error
+	if d.balanceQuerier != nil {
+		balance, err = d.balanceQuerier.GetNativeTokenBalance(voter)
+		if err != nil {
+			d.logger.Warn("Failed to query voter balance for proposal vote", "voter", voter.String(), "error", err)
+			balance = big.NewInt(0)
+		}
+	} else {
+		// 如果没有余额查询器，尝试使用getAccountBalance
+		if d.config != nil && d.config.Executor != nil {
+			currentHeader := d.config.Blockchain.Header()
+			if currentHeader != nil {
+				if snapshot, err2 := d.config.Executor.StateAt(currentHeader.StateRoot); err2 == nil {
+					if account, err2 := snapshot.GetAccount(voter); err2 == nil && account != nil {
+						balance = account.Balance
+					}
+				}
+			}
+		}
+		if balance == nil {
+			balance = big.NewInt(0)
+		}
+	}
+
+	if balance == nil || balance.Cmp(big.NewInt(0)) <= 0 {
+		return fmt.Errorf("voter must have balance to vote (current balance: %s)", func() string {
+			if balance == nil {
+				return "0"
+			}
+			return balance.String()
+		}())
 	}
 
 	// 检查是否已经投票
@@ -41,8 +69,9 @@ func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, s
 		return fmt.Errorf("already voted on this proposal")
 	}
 
-	// 计算投票权重（基于质押数量）
-	weight := votingWeight
+	// 🆕 计算投票权重（基于余额，而不是质押）
+	// 使用余额作为投票权重，这样余额越多权重越大
+	weight := balance
 
 	// 创建投票
 	vote := &ParameterVote{
