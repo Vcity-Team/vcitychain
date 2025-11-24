@@ -192,6 +192,31 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Description: "Unfreeze lock period (seconds, 14 days default)",
 			Category:    "governance",
 		},
+		// 🆕 削减相关参数
+		"dpos_missed_blocks_percentage": {
+			Name:        "Missed Blocks Percentage",
+			Type:        "uint64",
+			MinValue:    uint64(100),   // 最少1%（100基点）
+			MaxValue:    uint64(10000), // 最多100%（10000基点）
+			Description: "Missed blocks percentage threshold for slashing (basis points, 1000 = 10%)",
+			Category:    "slashing",
+		},
+		"dpos_minor_offense_slash_rate": {
+			Name:        "Minor Offense Slash Rate",
+			Type:        "uint64",
+			MinValue:    uint64(1),    // 最少0.01%（1基点）
+			MaxValue:    uint64(5000), // 最多50%（5000基点）
+			Description: "Slash rate for minor offense (basis points, 50 = 0.5%)",
+			Category:    "slashing",
+		},
+		"dpos_severe_offense_slash_rate": {
+			Name:        "Severe Offense Slash Rate",
+			Type:        "uint64",
+			MinValue:    uint64(100),  // 最少1%（100基点）
+			MaxValue:    uint64(10000), // 最多100%（10000基点）
+			Description: "Slash rate for severe offense (basis points, 1000 = 10%)",
+			Category:    "slashing",
+		},
 	}
 }
 
@@ -326,6 +351,27 @@ func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 		}
 		// 默认值：14天 = 1209600秒
 		return uint64(1209600), nil
+	case "dpos_missed_blocks_percentage":
+		// 🆕 削减参数：漏块率阈值（从配置读取）
+		if val := d.getConfigUint64("dpos_missed_blocks_percentage", "missed_blocks_percentage"); val > 0 {
+			return val, nil
+		}
+		// 默认值：1000基点 = 10%
+		return uint64(1000), nil
+	case "dpos_minor_offense_slash_rate":
+		// 🆕 削减参数：轻度违规削减率（从配置读取）
+		if val := d.getConfigUint64("dpos_minor_offense_slash_rate", "minor_offense_slash_rate"); val > 0 {
+			return val, nil
+		}
+		// 默认值：50基点 = 0.5%
+		return uint64(50), nil
+	case "dpos_severe_offense_slash_rate":
+		// 🆕 削减参数：严重违规削减率（从配置读取）
+		if val := d.getConfigUint64("dpos_severe_offense_slash_rate", "severe_offense_slash_rate"); val > 0 {
+			return val, nil
+		}
+		// 默认值：1000基点 = 10%
+		return uint64(1000), nil
 	default:
 		return nil, fmt.Errorf("unknown parameter: %s", paramName)
 	}
