@@ -1,6 +1,7 @@
 package dpos
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -370,6 +371,99 @@ func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) er
 			"address", validator.Address.String(),
 			"votingPower", validator.VotingPower.String())
 	}
+
+	return nil
+}
+
+// reloadValidatorsAfterRecovery 恢复提案执行后重新加载验证者集合
+// 从数据库读取最新的验证者集合，过滤掉故障验证者，并更新内存缓存
+func (d *DPoS) reloadValidatorsAfterRecovery() error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	d.logger.Info("🔄 恢复提案执行后：开始重新加载验证者集合")
+
+	// 1. 从数据库读取所有验证者
+	allValidators, err := d.GetSortedValidatorsWithLimit()
+	if err != nil {
+		return fmt.Errorf("failed to get validators from database: %w", err)
+	}
+
+	if len(allValidators) == 0 {
+		d.logger.Warn("⚠️ 数据库中没有验证者，跳过重新加载")
+		return nil
+	}
+
+	// 2. 过滤掉故障验证者
+	activeValidators := make(validator.AccountSet, 0, len(allValidators))
+	faultyCount := 0
+
+	for _, validator := range allValidators {
+		// 检查验证者的故障状态
+		faultInfo := d.getValidatorFaultInfo(validator.Address)
+		isFaulty := false
+		if faultInfo != nil && faultInfo["isFaulty"] != nil {
+			if faultValue, ok := faultInfo["isFaulty"].(bool); ok {
+				isFaulty = faultValue
+			}
+		}
+
+		if isFaulty {
+			faultyCount++
+			d.logger.Info("🚫 过滤掉故障验证者",
+				"address", validator.Address.String(),
+				"votingPower", validator.VotingPower.String())
+		} else {
+			activeValidators = append(activeValidators, validator)
+		}
+	}
+
+	d.logger.Info("✅ 故障验证者过滤完成",
+		"totalValidators", len(allValidators),
+		"faultyValidators", faultyCount,
+		"activeValidators", len(activeValidators))
+
+	// 3. 按权重倒序排序（GetSortedValidatorsWithLimit已经排序，但为了确保一致性，再次排序）
+	sort.Slice(activeValidators, func(i, j int) bool {
+		votingPowerCmp := activeValidators[i].VotingPower.Cmp(activeValidators[j].VotingPower)
+		if votingPowerCmp != 0 {
+			return votingPowerCmp > 0
+		}
+		return bytes.Compare(activeValidators[i].Address[:], activeValidators[j].Address[:]) < 0
+	})
+
+	// 4. 应用配置限制
+	maxValidators := int(d.config.DPoSValidatorsCount)
+	if maxValidators == 0 {
+		maxValidators = int(d.config.DelegateCount)
+	}
+
+	var finalValidators validator.AccountSet
+	if len(activeValidators) <= maxValidators {
+		finalValidators = activeValidators
+	} else {
+		finalValidators = activeValidators[:maxValidators]
+	}
+
+	// 5. 更新内存中的验证者集合
+	d.delegates = finalValidators.Copy()
+	d.logger.Info("✅ 已更新 d.delegates",
+		"delegatesCount", len(d.delegates))
+
+	// 6. 同步到runtime
+	if d.runtime != nil {
+		d.runtime.lock.Lock()
+		d.runtime.delegates = finalValidators.Copy()
+		d.runtime.lock.Unlock()
+		d.logger.Info("✅ 已同步 runtime.delegates",
+			"runtimeDelegatesCount", len(d.runtime.delegates))
+	} else {
+		d.logger.Debug("ℹ️ runtime为空，无法同步delegates")
+	}
+
+	d.logger.Info("🎉 验证者集合重新加载完成",
+		"finalCount", len(finalValidators),
+		"maxValidators", maxValidators)
 
 	return nil
 }

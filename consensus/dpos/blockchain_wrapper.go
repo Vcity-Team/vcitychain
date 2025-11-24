@@ -278,6 +278,13 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 										p.logger.Info("验证者故障标志已清除（内存）", "proposalID", prop.ID, "validator", validatorAddr.String())
 									}
 
+									// 🆕 重新加载验证者集合，确保内存缓存与数据库同步
+									if err := dposInstance.reloadValidatorsAfterRecovery(); err != nil {
+										p.logger.Error("重新加载验证者集合失败", "error", err, "proposalID", prop.ID, "validator", validatorAddr.String())
+									} else {
+										p.logger.Info("✅ 验证者集合已重新加载", "proposalID", prop.ID, "validator", validatorAddr.String())
+									}
+
 									prop.Schedule.Applied = true
 									prop.Schedule.AppliedAtBlock = block.Number()
 									prop.Status = ProposalExecuted // 🆕 更新提案状态为已执行
