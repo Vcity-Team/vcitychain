@@ -151,14 +151,23 @@ func (d *DPoS) CanWithdrawDelegate(address types.Address) (map[string]interface{
 
 // ==================== DPoS经济系统JSON-RPC查询方法 ====================
 
-// GetCurrentEpochInfo 获取当前Epoch信息
+// GetCurrentEpochInfo 获取当前Epoch信息（公共方法，供外部调用）
+// 内部实现通过QueryManager接口调用
 func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
-	if d.epochManager == nil {
-		return map[string]interface{}{
-			"error": "epoch manager not initialized",
-		}
+	// 🆕 重构：通过接口调用
+	if d.query != nil {
+		return d.query.GetCurrentEpochInfo()
 	}
 
+	// 向后兼容：如果接口未初始化，返回错误
+	return map[string]interface{}{
+		"error": "query manager not initialized",
+	}
+}
+
+// getCurrentEpochInfoLegacy 获取当前Epoch信息（旧实现，已废弃，保留用于向后兼容）
+// 注意：此方法已不再使用，逻辑已迁移到modules/query/manager.go
+func (d *DPoS) getCurrentEpochInfoLegacy() map[string]interface{} {
 	// 获取当前区块高度
 	currentBlockNumber := uint64(0)
 	if d.config.Blockchain != nil {
@@ -279,14 +288,23 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 	}
 }
 
-// GetEpochInfoByNumber 获取指定Epoch信息
+// GetEpochInfoByNumber 获取指定Epoch信息（公共方法，供外部调用）
+// 内部实现通过QueryManager接口调用
 func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
-	if d.epochManager == nil {
-		return map[string]interface{}{
-			"error": "epoch manager not initialized",
-		}
+	// 🆕 重构：通过接口调用
+	if d.query != nil {
+		return d.query.GetEpochInfoByNumber(epochNumber)
 	}
 
+	// 向后兼容：如果接口未初始化，返回错误
+	return map[string]interface{}{
+		"error": "query manager not initialized",
+	}
+}
+
+// getEpochInfoByNumberLegacy 获取指定Epoch信息（旧实现，已废弃，保留用于向后兼容）
+// 注意：此方法已不再使用，逻辑已迁移到modules/query/manager.go
+func (d *DPoS) getEpochInfoByNumberLegacy(epochNumber uint64) map[string]interface{} {
 	// 获取当前区块高度
 	currentBlockNumber := uint64(0)
 	if d.config.Blockchain != nil {
@@ -309,7 +327,11 @@ func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
 
 	// 如果请求的是当前Epoch，返回当前信息
 	if epochNumber == currentEpoch {
-		return d.GetCurrentEpochInfo()
+		// 🆕 重构：通过接口调用
+		if d.query != nil {
+			return d.query.GetCurrentEpochInfo()
+		}
+		return d.GetCurrentEpochInfo() // 向后兼容
 	}
 
 	// 计算指定epoch的区块范围（考虑共识切换高度）

@@ -179,11 +179,6 @@ func UnregisterDPoSInstance(key string) {
 	delete(dposInstances, key)
 }
 
-// IsValidatorFaulty 返回验证者是否处于故障状态（基于已持久化/确定性的状态信息）
-// IsValidatorFaulty 和 GetValidatorFaultInfo 已迁移到 validator_mgmt_fault.go
-
-// 委托者（Delegator/Voter）：普通持币人，把投票权委托给受托人。
-// 受托人/验证者（Delegate/Validator）：被选出来实际参与出块和共识的节点
 // dposBackend 接口定义了DPoS需要的方法
 type dposBackend interface {
 	// GetDelegates 获取指定区块的受托人集合--实际参与共识的节点
@@ -264,43 +259,20 @@ type DPoSConfig struct {
 	ProposalVotePeriod  time.Duration `json:"proposalVotePeriod" yaml:"dpos_proposal_vote_period"`   // 提案表决周期
 	ProposalValidPeriod time.Duration `json:"proposalValidPeriod" yaml:"dpos_proposal_valid_period"` // 提案有效期
 
-	// 🆕 冻结相关配置
+	// 冻结相关配置
 	MinFreezePeriod    uint64 `json:"min_freeze_period" yaml:"dpos_min_freeze_period"`       // 最小冻结期（秒）
 	UnfreezeLockPeriod uint64 `json:"unfreeze_lock_period" yaml:"dpos_unfreeze_lock_period"` // 解冻锁定期（秒）
 
-	// 🆕 新增：佣金默认配置
+	// 佣金默认配置
 	CommissionRateDefault     uint64        // 默认佣金率（基点）
 	CommissionEffectivePeriod time.Duration // 佣金率修改的延迟生效周期
 
 	// 注意：保证金阈值统一使用 MinVotingPower（dpos_delegate_threshold），不再使用 SRThreshold
 }
 
-// dposRuntime 结构体定义已迁移到 runtime_struct.go
-
-// start, close, initializeRuntime 函数已迁移到 runtime_lifecycle.go 和 runtime_init.go
-// logOnce, logOnceWithInterval 函数已迁移到 runtime_log.go
-// parseValidatorsFromGenesis, parseValidatorsFromExtraData, parseValidatorsFromExtraDataDirectly 函数已迁移到 runtime_validator.go
-// startVoteCollection, collectVotes 函数已迁移到 runtime_vote.go
-// initializeDelegates 函数已迁移到 runtime_validator.go
-
-// cleanupRuntime 函数已迁移到 runtime_lifecycle.go
-
 // cleanupProcessedBlocks 清理已处理的区块记录（LRU自动管理）
 func (d *DPoS) cleanupProcessedBlocks() {
 }
-
-// startSignatureCleanup, cleanupSignatureMaps 函数已迁移到 runtime_lifecycle.go
-
-// updateRoundSilent, updateRound 函数已迁移到 runtime_round.go
-
-// 🆕 基于Slot计算轮次
-// calculateRoundBySlot, calculateInitialRound 函数已迁移到 runtime_round.go
-
-// calculateExpectedDelegateIndex 已废弃：现在完全基于时间slot计算，不依赖区块号
-
-// buildBlock 函数已迁移到 block_builder.go
-
-// processVote, verifyVoteSignature, buildVoteMessage, verifyVoteNonce, cleanupExpiredVotes, updateDelegateVotingPower 函数已迁移到 runtime_vote.go
 
 // GenerateExitProof generates proof of exit for given exit event
 func (r *dposRuntime) GenerateExitProof(exitID uint64) (types.Proof, error) {
@@ -332,9 +304,9 @@ type DPoS struct {
 	reward    core.RewardManager    // 奖励管理器
 	fault     core.FaultManager     // 故障管理器
 	query     core.QueryManager     // 查询管理器
-	// network   core.NetworkManager   // 网络管理器（待实现）
-	// bls       core.BLSManager       // BLS管理器（待实现）
-	// stateMgr  core.StateManager     // 状态管理器（待实现）
+	network   core.NetworkManager   // 网络管理器
+	bls       core.BLSManager       // BLS管理器
+	stateMgr  core.StateManager     // 状态管理器
 
 	// reference to the syncer
 	syncer syncer.Syncer
@@ -346,7 +318,6 @@ type DPoS struct {
 	delegates    validator.AccountSet
 	voters       map[types.Address]*VoterInfo
 	currentRound uint64
-	// 🆕 删除 currentDelegateIndex：完全基于时间slot实时计算
 
 	// 同步控制
 	closeCh chan struct{}
@@ -373,19 +344,19 @@ type DPoS struct {
 	batchProcessor *BatchProcessor
 	metrics        *DPoSMetrics
 
-	// 🆕 方案1+方案2：延迟验证者集合更新标志
+	// 延迟验证者集合更新标志
 	pendingValidatorUpdate bool
 
-	// 🆕 新增：故障检测相关字段
+	// 故障检测相关字段
 	currentEpoch      uint64
 	epochValidators   validator.AccountSet
 	faultyValidators  map[types.Address]bool
 	missedBlocksCount map[types.Address]uint64
 
-	// 🆕 最后投票的验证者地址
+	// 最后投票的验证者地址
 	lastVotedDelegate types.Address
 
-	// 🆕 奖励分配信息
+	// 奖励分配信息
 	pendingRewardDistribution *RewardDistributionInfo
 
 	// 🆕 故障消减信息（只包含 missed blocks 的消减，不包含双重签名）
@@ -400,18 +371,16 @@ type DPoS struct {
 	blockTracker      *BlockProductionTracker
 	rewardDistributor *RewardDistributor
 
-	// 🆕 固定时间窗口调度器
+	// 固定时间窗口调度器
 	blockScheduler *BlockScheduler
 
 	// 🆕 双重签名检测器
 	doubleSigningDetector *DoubleSigningDetector
 
-	// 延迟状态更新机制已移除
-
-	// 🆕 新增：余额查询器
+	// 余额查询器
 	balanceQuerier NativeTokenBalanceQuerier
 
-	// 🆕 新增：DPoS验证者相关字段
+	// DPoS验证者相关字段
 	minStakeAmount *big.Int // 最小质押门槛
 
 	// 🆕 日志频率限制
@@ -559,14 +528,6 @@ func (d *DPoS) FilterExtra(extra []byte) ([]byte, error) {
 func (d *DPoS) Start() error {
 	d.logger.Info("starting dpos consensus", "signer", d.key.String())
 
-	// 🆕 详细检查DPoS实例状态
-	d.logger.Debug("🔍 DPoS Start() 详细状态检查",
-		"runtimeIsNil", d.runtime == nil,
-		"txPoolIsNil", d.txPool == nil,
-		"syncerIsNil", d.syncer == nil,
-		"stateIsNil", d.state == nil,
-		"delegatesCount", len(d.delegates))
-
 	// 🆕 1. 初始化BLS加载状态
 	d.initializeBLSLoadingState()
 
@@ -642,8 +603,6 @@ func (d *DPoS) Start() error {
 	} else {
 		d.logger.Info("✅ syncer启动成功")
 	}
-
-	// 🆕 5. 注意：不在这里设置blsLoadingComplete，让syncLoadBLSKeys自己设置
 
 	// 🆕 添加关键检查点日志
 	d.logger.Info("🔍 准备启动DPoS runtime，检查runtime状态",
@@ -768,6 +727,18 @@ func (d *DPoS) Start() error {
 		d.query = NewQueryManagerAdapter(d)
 		d.logger.Info("✅ QueryManager适配器已初始化")
 	}
+	if d.network == nil {
+		d.network = NewNetworkManagerAdapter(d)
+		d.logger.Info("✅ NetworkManager适配器已初始化")
+	}
+	if d.bls == nil {
+		d.bls = NewBLSManagerAdapter(d)
+		d.logger.Info("✅ BLSManager适配器已初始化")
+	}
+	if d.stateMgr == nil {
+		d.stateMgr = NewStateManagerAdapter(d)
+		d.logger.Info("✅ StateManager适配器已初始化")
+	}
 
 	return nil
 }
@@ -809,9 +780,9 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		closeCh:     make(chan struct{}),
 		logger:      logger,
 		txPool:      params.TxPool,
-		config:      &DPoSConfig{},              // 🆕 初始化config结构体
-		rawConfig:   params.Config.Config,       // 🆕 存储原始配置
-		lastLogTime: make(map[string]time.Time), // 🆕 初始化日志频率限制
+		config:      &DPoSConfig{},              // 初始化config结构体
+		rawConfig:   params.Config.Config,       // 存储原始配置
+		lastLogTime: make(map[string]time.Time), // 初始化日志频率限制
 	}
 
 	getConfigValue := func(keys ...string) (interface{}, bool) {
@@ -823,7 +794,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		return nil, false
 	}
 
-	// 🆕 新增：直接使用server层已解析的配置（避免重复解析）
+	// 直接使用server层已解析的配置（避免重复解析）
 	logger.Info("🔍 开始解析DPoS经济系统配置", "configKeys", len(params.Config.Config))
 
 	// 调试：打印所有配置键
@@ -839,7 +810,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		}
 	}
 
-	// 🆕 解析DPoS验证者数量
 	// 支持驼峰和下划线两种键名
 	var validatorsCountValue interface{}
 	if val, exists := params.Config.Config["dposValidatorsCount"]; exists {
@@ -879,7 +849,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Warn("👥 未找到 dposValidatorsCount 配置")
 	}
 
-	// 🆕 解析默认佣金率（从配置文件读取）
+	// 解析默认佣金率（从配置文件读取）
 	if commissionValue, exists := getConfigValue("dposCommissionRatio", "dpos_commission_ratio"); exists {
 		if ratio, ok := toUint64(commissionValue); ok && ratio > 0 {
 			vcity_dpos.config.CommissionRateDefault = ratio
@@ -889,7 +859,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		}
 	}
 
-	// 🆕 解析佣金生效周期
+	// 解析佣金生效周期
 	if effectiveValue, exists := getConfigValue("commissionEffectivePeriod", "dpos_commission_effective"); exists {
 		switch val := effectiveValue.(type) {
 		case time.Duration:
@@ -914,20 +884,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		}
 	}
 
-	// 🆕 解析备用验证者数量
-	if backupValidatorsCount, exists := params.Config.Config["backupValidatorsCount"]; exists {
-		logger.Info("🔍 找到backupValidatorsCount配置", "type", fmt.Sprintf("%T", backupValidatorsCount), "value", backupValidatorsCount)
-		if count, ok := backupValidatorsCount.(float64); ok {
-			vcity_dpos.config.BackupValidatorsCount = uint64(count)
-			logger.Info("🔄 使用server层解析的备用验证者数量", "count", vcity_dpos.config.BackupValidatorsCount)
-		} else {
-			logger.Warn("🔄 backupValidatorsCount类型断言失败", "type", fmt.Sprintf("%T", backupValidatorsCount))
-		}
-	} else {
-		logger.Warn("🔄 未找到backupValidatorsCount配置")
-	}
-
-	// 🆕 解析最大漏块数
+	// 解析最大漏块数
 	if maxMissedBlocks, exists := params.Config.Config["maxMissedBlocks"]; exists {
 		logger.Info("🔍 找到maxMissedBlocks配置", "type", fmt.Sprintf("%T", maxMissedBlocks), "value", maxMissedBlocks)
 		if count, ok := maxMissedBlocks.(float64); ok {
@@ -940,8 +897,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Warn("⚠️ 未找到maxMissedBlocks配置")
 	}
 
-	// 🆕 削减相关参数从配置文件读取，不存储在 DPoSConfig 中
-	// 这些参数会在使用时直接从 rawConfig 读取
 	if missedBlocksPercentage, exists := getConfigValue("dpos_missed_blocks_percentage", "missed_blocks_percentage"); exists {
 		if percentage, ok := toUint64(missedBlocksPercentage); ok {
 			logger.Info("🔨 从配置文件读取漏块率阈值", "percentage", percentage, "基点")
@@ -1008,7 +963,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Warn("💰 未找到rewardAmount配置")
 	}
 
-	// 🆕 解析提案表决周期配置
+	// 解析提案表决周期配置
 	logger.Info("📋 检查Config中的所有键", "keys", func() []string {
 		keys := make([]string, 0, len(params.Config.Config))
 		for k := range params.Config.Config {
@@ -1064,7 +1019,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Warn("📋 ❌ 未找到proposalVotePeriod配置，将使用默认值")
 	}
 
-	// 🆕 解析提案有效期配置
+	// 解析提案有效期配置
 	if proposalValidPeriod, exists := params.Config.Config["proposalValidPeriod"]; exists {
 		logger.Info("🔍 找到proposalValidPeriod配置", "type", fmt.Sprintf("%T", proposalValidPeriod), "value", proposalValidPeriod)
 		if period, ok := proposalValidPeriod.(time.Duration); ok {
@@ -1112,7 +1067,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Warn("📋 ❌ 未找到proposalValidPeriod配置，将使用默认值")
 	}
 
-	// 🆕 解析区块时间配置
+	// 解析区块时间配置
 	if blockTimeStr, exists := params.Config.Config["blockTime"]; exists {
 		logger.Info("🔍 找到blockTime配置", "type", fmt.Sprintf("%T", blockTimeStr), "value", blockTimeStr)
 		if blockTime, ok := blockTimeStr.(string); ok {
@@ -1129,8 +1084,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Warn("⏰ 未找到blockTime配置")
 	}
 
-	// 🆕 解析冻结相关配置
-	// 注意：保证金阈值统一使用 MinVotingPower（dpos_delegate_threshold），不再解析 srThreshold
+	// 解析冻结相关配置
 	if minFreezePeriod, exists := params.Config.Config["dpos_min_freeze_period"]; exists {
 		logger.Info("🔍 找到dpos_min_freeze_period配置", "type", fmt.Sprintf("%T", minFreezePeriod), "value", minFreezePeriod)
 		if period, ok := minFreezePeriod.(uint64); ok {
@@ -1176,7 +1130,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	vcity_dpos.config.Blockchain = params.Blockchain
 	vcity_dpos.config.Logger = params.Logger
 
-	// 🆕 临时修复：如果配置没有正确传递，设置默认值
+	// 如果配置没有正确传递，设置默认值
 	if vcity_dpos.config.EpochDuration == 0 {
 		logger.Warn("⚠️ epochDuration为0，设置默认值86400秒")
 		vcity_dpos.config.EpochDuration = 86400 * time.Second
@@ -1239,7 +1193,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	vcity_dpos.delegates = make(validator.AccountSet, 0)
 	// vcity_dpos.validatorsCache = newValidatorsSnapshotCache() // TODO: 需要正确的参数
 
-	// 🆕 初始化双重签名检测器
+	// 初始化双重签名检测器
 	vcity_dpos.doubleSigningDetector = NewDoubleSigningDetector(logger)
 	logger.Info("✅ 双重签名检测器已初始化")
 
@@ -2593,9 +2547,15 @@ func (d *DPoS) syncRuntimeDelegatesWithRetry() {
 		"delegatesCount", len(d.delegates))
 }
 
-// GetValidators 获取DPoS验证者集合（公共方法）
+// GetValidators 获取DPoS验证者集合（公共方法，供外部调用）
+// 内部实现通过ValidatorManager接口调用
 func (d *DPoS) GetValidators() validator.AccountSet {
-	// 直接使用 dposRuntime.delegates 作为唯一数据源
+	// 🆕 重构：通过接口调用
+	if d.validator != nil {
+		return d.validator.GetCurrentValidators()
+	}
+
+	// 向后兼容：如果接口未初始化，使用原有逻辑
 	if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
 		return d.runtime.delegates
 	}
@@ -2873,7 +2833,7 @@ func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewar
 	}
 
 	// 🆕 直接状态更新（参考TRON模式）
-	d.logger.Info("💰 ========== 开始直接状态更新（TRON模式） ==========",
+	d.logger.Info("💰 ========== 开始直接状态更新 ==========",
 		"totalReward", totalReward.String(),
 		"recipientCount", len(rewards),
 		"rewardAccount", rewardAccount.String())

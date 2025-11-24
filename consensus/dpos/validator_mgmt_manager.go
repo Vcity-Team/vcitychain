@@ -10,16 +10,22 @@ import (
 	"go.etcd.io/bbolt"
 )
 
-// GetDelegates 获取指定区块的受托人集合
+// GetDelegates 获取指定区块的受托人集合（dposBackend接口方法）
+// 内部实现通过ValidatorManager接口调用
 func (d *DPoS) GetDelegates(blockNumber uint64, parents []*types.Header) (validator.AccountSet, error) {
 	d.lock.RLock()
 	defer d.lock.RUnlock()
 
 	currentBlockNumber := d.blockchain.CurrentHeader().Number
 
-	// 如果是当前区块，优先返回从runtime.delegates获取的验证者
+	// 如果是当前区块，优先通过接口获取
 	if blockNumber == currentBlockNumber {
-		// 🆕 优先使用 runtime.delegates，如果为空则从数据库读取
+		// 🆕 重构：通过接口调用
+		if d.validator != nil {
+			return d.validator.GetValidators(blockNumber, parents)
+		}
+		
+		// 向后兼容：如果接口未初始化，使用原有逻辑
 		if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
 			result := d.runtime.delegates.Copy()
 			return result, nil

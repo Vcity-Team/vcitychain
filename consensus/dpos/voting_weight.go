@@ -125,7 +125,15 @@ func (d *DPoS) getVoterVotingWeight(voter types.Address) *big.Int {
 }
 
 // GetVotingPower 获取指定区块号和委托者的投票权重
+// GetVotingPower 获取指定区块的投票权重（公共方法，供外部调用）
+// 内部实现通过ValidatorManager接口调用
 func (d *DPoS) GetVotingPower(blockNumber uint64, delegate types.Address) (*big.Int, error) {
+	// 🆕 重构：通过接口调用
+	if d.validator != nil {
+		return d.validator.GetVotingPower(blockNumber, delegate)
+	}
+	
+	// 向后兼容：如果接口未初始化，使用原有逻辑
 	d.lock.RLock()
 	defer d.lock.RUnlock()
 
