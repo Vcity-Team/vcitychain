@@ -2,6 +2,7 @@ package dpos
 
 import (
 	"fmt"
+	"strconv"
 )
 
 // InitializeGovernance 初始化治理系统
@@ -142,14 +143,6 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Description: "Minimum staking threshold (wei)",
 			Category:    "economic",
 		},
-		"block_time_s": {
-			Name:        "Block Time",
-			Type:        "uint64",
-			MinValue:    uint64(1),
-			MaxValue:    uint64(60),
-			Description: "Block time interval (seconds)",
-			Category:    "consensus",
-		},
 		"dpos_epoch_duration": {
 			Name:        "Epoch Duration",
 			Type:        "string",
@@ -233,7 +226,33 @@ func (d *DPoS) getGovernanceParameterValue(paramName string) (interface{}, error
 
 // getVotePeriod 获取当前投票期间长度（区块数）
 func (d *DPoS) getVotePeriod() uint64 {
-	// 🆕 从配置文件获取表决周期（YAML配置优先）
+	// 🆕 优先从参数系统读取 dpos_proposal_vote_period（经过治理流程修改的值是权威数据源）
+	if paramValue, err := d.getCurrentParameterValue("dpos_proposal_vote_period"); err == nil {
+		switch v := paramValue.(type) {
+		case uint64:
+			if v > 0 {
+				d.logger.Debug("从参数系统读取 proposal vote period", "blocks", v)
+				return v
+			}
+		case int64:
+			if v > 0 {
+				d.logger.Debug("从参数系统读取 proposal vote period", "blocks", uint64(v))
+				return uint64(v)
+			}
+		case float64:
+			if v > 0 {
+				d.logger.Debug("从参数系统读取 proposal vote period", "blocks", uint64(v))
+				return uint64(v)
+			}
+		case string:
+			if parsed, err := strconv.ParseUint(v, 10, 64); err == nil && parsed > 0 {
+				d.logger.Debug("从参数系统读取 proposal vote period", "blocks", parsed)
+				return parsed
+			}
+		}
+	}
+
+	// 如果参数系统没有值，从配置文件获取表决周期（YAML配置优先）
 	if d.config != nil && d.config.ProposalVotePeriod > 0 {
 		// 根据区块时间计算区块数
 		blockTime := d.config.BlockTime.Duration
@@ -292,17 +311,33 @@ func (d *DPoS) GetCurrentProposalPeriod() map[string]interface{} {
 
 // getVotingThreshold 获取当前投票通过阈值
 func (d *DPoS) getVotingThreshold() uint64 {
-	// 优先从缓存获取
-	d.parameterValuesMutex.RLock()
-	if value, exists := d.parameterCurrentValues["governance_pass_threshold"]; exists {
-		if threshold, ok := value.(uint64); ok {
-			d.parameterValuesMutex.RUnlock()
-			return threshold
+	// 🆕 优先从参数系统读取 governance_pass_threshold（经过治理流程修改的值是权威数据源）
+	if paramValue, err := d.getCurrentParameterValue("governance_pass_threshold"); err == nil {
+		switch v := paramValue.(type) {
+		case uint64:
+			if v > 0 {
+				d.logger.Debug("从参数系统读取 governance pass threshold", "threshold", v)
+				return v
+			}
+		case int64:
+			if v > 0 {
+				d.logger.Debug("从参数系统读取 governance pass threshold", "threshold", uint64(v))
+				return uint64(v)
+			}
+		case float64:
+			if v > 0 {
+				d.logger.Debug("从参数系统读取 governance pass threshold", "threshold", uint64(v))
+				return uint64(v)
+			}
+		case string:
+			if parsed, err := strconv.ParseUint(v, 10, 64); err == nil && parsed > 0 {
+				d.logger.Debug("从参数系统读取 governance pass threshold", "threshold", parsed)
+				return parsed
+			}
 		}
 	}
-	d.parameterValuesMutex.RUnlock()
 
-	// 如果缓存中没有，使用默认值
+	// 如果参数系统没有值，使用默认值
 	return 51
 }
 

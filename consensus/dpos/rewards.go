@@ -383,10 +383,36 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		return nil
 	}
 
-	// 检查配置是否有效
-	if d.config.RewardAmount == nil {
-		d.logger.Error("❌ 奖励金额配置为空，跳过奖励计算", "epoch", epochNumber)
-		return fmt.Errorf("reward amount is nil")
+	// 🆕 优先从参数系统读取 dpos_reward_amount（经过治理流程修改的值是权威数据源）
+	var rewardAmount *big.Int
+	if paramValue, err := d.getCurrentParameterValue("dpos_reward_amount"); err == nil {
+		switch v := paramValue.(type) {
+		case string:
+			if bigAmount, ok := new(big.Int).SetString(v, 10); ok && bigAmount.Cmp(big.NewInt(0)) > 0 {
+				rewardAmount = bigAmount
+				d.logger.Debug("从参数系统读取 reward amount", "amount", v)
+			}
+		case *big.Int:
+			if v != nil && v.Cmp(big.NewInt(0)) > 0 {
+				rewardAmount = new(big.Int).Set(v)
+				d.logger.Debug("从参数系统读取 reward amount", "amount", v.String())
+			}
+		}
+	}
+
+	// 如果参数系统没有值，使用配置值
+	if rewardAmount == nil {
+		if d.config.RewardAmount != nil {
+			rewardAmount = d.config.RewardAmount
+		} else {
+			d.logger.Error("❌ 奖励金额配置为空，跳过奖励计算", "epoch", epochNumber)
+			return fmt.Errorf("reward amount is nil")
+		}
+	}
+
+	// 🆕 更新 RewardDistributor 的奖励金额（确保使用最新值）
+	if d.rewardDistributor != nil {
+		d.rewardDistributor.UpdateRewardAmount(rewardAmount)
 	}
 
 	// 检查奖励账户余额
@@ -396,11 +422,11 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		return fmt.Errorf("failed to get reward account balance: %w", err)
 	}
 
-	if rewardAccountBalance.Cmp(d.config.RewardAmount) < 0 {
+	if rewardAccountBalance.Cmp(rewardAmount) < 0 {
 		d.logger.Error("❌ 奖励账户余额不足",
 			"account", d.config.RewardAccount.String(),
 			"balance", rewardAccountBalance.String(),
-			"required", d.config.RewardAmount.String())
+			"required", rewardAmount.String())
 		return fmt.Errorf("insufficient reward account balance")
 	}
 

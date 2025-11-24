@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1570,7 +1571,23 @@ func (d *DPoS) getGenesisValidatorsAsRegistrations() []*DelegateRegistration {
 // getDelegateDepositAmount 获取受托人保证金金额
 // 注意：保证金金额统一使用 dpos_delegate_threshold（MinVotingPower），Tron 只有一个门槛值
 func (d *DPoS) getDelegateDepositAmount() *big.Int {
-	// 使用 dpos_delegate_threshold（MinVotingPower）作为保证金金额
+	// 🆕 优先从参数系统读取 dpos_delegate_threshold（经过治理流程修改的值是权威数据源）
+	if paramValue, err := d.getCurrentParameterValue("dpos_delegate_threshold"); err == nil {
+		switch v := paramValue.(type) {
+		case string:
+			if bigAmount, ok := new(big.Int).SetString(v, 10); ok && bigAmount.Cmp(big.NewInt(0)) > 0 {
+				d.logger.Debug("从参数系统读取 delegate threshold", "value", v)
+				return bigAmount
+			}
+		case *big.Int:
+			if v != nil && v.Cmp(big.NewInt(0)) > 0 {
+				d.logger.Debug("从参数系统读取 delegate threshold", "value", v.String())
+				return new(big.Int).Set(v)
+			}
+		}
+	}
+
+	// 如果参数系统没有值，使用配置值
 	if d.config != nil && d.config.MinVotingPower != nil && d.config.MinVotingPower.Cmp(big.NewInt(0)) > 0 {
 		return new(big.Int).Set(d.config.MinVotingPower)
 	}
@@ -1578,20 +1595,6 @@ func (d *DPoS) getDelegateDepositAmount() *big.Int {
 	// 默认保证金：1000 VCITY（与 Tron 的 1000 TRX 一致）
 	depositAmount := new(big.Int)
 	depositAmount.SetString("1000000000000000000000", 10) // 1000 VCITY
-
-	// 可以从治理参数中读取（动态修改）
-	if d.parameterCurrentValues != nil {
-		d.parameterValuesMutex.RLock()
-		if value, exists := d.parameterCurrentValues["delegate_deposit_amount"]; exists {
-			if amount, ok := value.(string); ok {
-				if bigAmount, ok := new(big.Int).SetString(amount, 10); ok {
-					depositAmount = bigAmount
-				}
-			}
-		}
-		d.parameterValuesMutex.RUnlock()
-	}
-
 	return depositAmount
 }
 
@@ -1636,9 +1639,32 @@ func (d *DPoS) WithdrawDelegate(address types.Address) error {
 
 	// 2. 检查是否满足最小冻结期要求
 	currentTime := uint64(time.Now().Unix())
-	minFreezePeriod := d.config.MinFreezePeriod
+	// 🆕 优先从参数系统读取 min_freeze_period（经过治理流程修改的值是权威数据源）
+	var minFreezePeriod uint64
+	if paramValue, err := d.getCurrentParameterValue("min_freeze_period"); err == nil {
+		switch v := paramValue.(type) {
+		case uint64:
+			minFreezePeriod = v
+		case int64:
+			if v >= 0 {
+				minFreezePeriod = uint64(v)
+			}
+		case float64:
+			if v >= 0 {
+				minFreezePeriod = uint64(v)
+			}
+		case string:
+			if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
+				minFreezePeriod = parsed
+			}
+		}
+	}
+	// 如果参数系统没有值，使用配置值
 	if minFreezePeriod == 0 {
-		minFreezePeriod = 604800 // 默认7天
+		minFreezePeriod = d.config.MinFreezePeriod
+		if minFreezePeriod == 0 {
+			minFreezePeriod = 604800 // 默认7天
+		}
 	}
 
 	if reg.FrozenAt > 0 {
@@ -1652,9 +1678,32 @@ func (d *DPoS) WithdrawDelegate(address types.Address) error {
 
 	// 3. 执行解冻（直接解冻，进入锁定期）
 	unfreezeAt := currentTime
-	unfreezeLockPeriod := d.config.UnfreezeLockPeriod
+	// 🆕 优先从参数系统读取 unfreeze_lock_period（经过治理流程修改的值是权威数据源）
+	var unfreezeLockPeriod uint64
+	if paramValue, err := d.getCurrentParameterValue("unfreeze_lock_period"); err == nil {
+		switch v := paramValue.(type) {
+		case uint64:
+			unfreezeLockPeriod = v
+		case int64:
+			if v >= 0 {
+				unfreezeLockPeriod = uint64(v)
+			}
+		case float64:
+			if v >= 0 {
+				unfreezeLockPeriod = uint64(v)
+			}
+		case string:
+			if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
+				unfreezeLockPeriod = parsed
+			}
+		}
+	}
+	// 如果参数系统没有值，使用配置值
 	if unfreezeLockPeriod == 0 {
-		unfreezeLockPeriod = 1209600 // 默认14天
+		unfreezeLockPeriod = d.config.UnfreezeLockPeriod
+		if unfreezeLockPeriod == 0 {
+			unfreezeLockPeriod = 1209600 // 默认14天
+		}
 	}
 	unfreezeAvailableAt := unfreezeAt + unfreezeLockPeriod
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
@@ -43,6 +44,33 @@ func (d *DPoS) getConfigUint64(keys ...string) uint64 {
 
 // getMissedBlocksPercentage 获取漏块率阈值（基点）
 func (d *DPoS) getMissedBlocksPercentage() uint64 {
+	// 🆕 优先从参数系统读取 dpos_missed_blocks_percentage（经过治理流程修改的值是权威数据源）
+	if paramValue, err := d.getCurrentParameterValue("dpos_missed_blocks_percentage"); err == nil {
+		switch v := paramValue.(type) {
+		case uint64:
+			if v > 0 {
+				d.logger.Debug("从参数系统读取 missed blocks percentage", "percentage", v)
+				return v
+			}
+		case int64:
+			if v > 0 {
+				d.logger.Debug("从参数系统读取 missed blocks percentage", "percentage", uint64(v))
+				return uint64(v)
+			}
+		case float64:
+			if v > 0 {
+				d.logger.Debug("从参数系统读取 missed blocks percentage", "percentage", uint64(v))
+				return uint64(v)
+			}
+		case string:
+			if parsed, err := strconv.ParseUint(v, 10, 64); err == nil && parsed > 0 {
+				d.logger.Debug("从参数系统读取 missed blocks percentage", "percentage", parsed)
+				return parsed
+			}
+		}
+	}
+
+	// 如果参数系统没有值，从配置文件读取
 	if val := d.getConfigUint64("dpos_missed_blocks_percentage", "missed_blocks_percentage"); val > 0 {
 		return val
 	}
@@ -51,6 +79,33 @@ func (d *DPoS) getMissedBlocksPercentage() uint64 {
 
 // getMinorOffenseSlashRate 获取轻度违规削减率（基点）
 func (d *DPoS) getMinorOffenseSlashRate() uint64 {
+	// 🆕 优先从参数系统读取 dpos_minor_offense_slash_rate（经过治理流程修改的值是权威数据源）
+	if paramValue, err := d.getCurrentParameterValue("dpos_minor_offense_slash_rate"); err == nil {
+		switch v := paramValue.(type) {
+		case uint64:
+			if v > 0 {
+				d.logger.Debug("从参数系统读取 minor offense slash rate", "rate", v)
+				return v
+			}
+		case int64:
+			if v > 0 {
+				d.logger.Debug("从参数系统读取 minor offense slash rate", "rate", uint64(v))
+				return uint64(v)
+			}
+		case float64:
+			if v > 0 {
+				d.logger.Debug("从参数系统读取 minor offense slash rate", "rate", uint64(v))
+				return uint64(v)
+			}
+		case string:
+			if parsed, err := strconv.ParseUint(v, 10, 64); err == nil && parsed > 0 {
+				d.logger.Debug("从参数系统读取 minor offense slash rate", "rate", parsed)
+				return parsed
+			}
+		}
+	}
+
+	// 如果参数系统没有值，从配置文件读取
 	if val := d.getConfigUint64("dpos_minor_offense_slash_rate", "minor_offense_slash_rate"); val > 0 {
 		return val
 	}
@@ -59,6 +114,33 @@ func (d *DPoS) getMinorOffenseSlashRate() uint64 {
 
 // getSevereOffenseSlashRate 获取严重违规削减率（基点）
 func (d *DPoS) getSevereOffenseSlashRate() uint64 {
+	// 🆕 优先从参数系统读取 dpos_severe_offense_slash_rate（经过治理流程修改的值是权威数据源）
+	if paramValue, err := d.getCurrentParameterValue("dpos_severe_offense_slash_rate"); err == nil {
+		switch v := paramValue.(type) {
+		case uint64:
+			if v > 0 {
+				d.logger.Debug("从参数系统读取 severe offense slash rate", "rate", v)
+				return v
+			}
+		case int64:
+			if v > 0 {
+				d.logger.Debug("从参数系统读取 severe offense slash rate", "rate", uint64(v))
+				return uint64(v)
+			}
+		case float64:
+			if v > 0 {
+				d.logger.Debug("从参数系统读取 severe offense slash rate", "rate", uint64(v))
+				return uint64(v)
+			}
+		case string:
+			if parsed, err := strconv.ParseUint(v, 10, 64); err == nil && parsed > 0 {
+				d.logger.Debug("从参数系统读取 severe offense slash rate", "rate", parsed)
+				return parsed
+			}
+		}
+	}
+
+	// 如果参数系统没有值，从配置文件读取
 	if val := d.getConfigUint64("dpos_severe_offense_slash_rate", "severe_offense_slash_rate"); val > 0 {
 		return val
 	}

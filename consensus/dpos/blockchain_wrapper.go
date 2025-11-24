@@ -228,7 +228,8 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			}
 			// 兜底：遍历内存中的提案
 			for _, prop := range dposInstance.parameterProposals {
-				if prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == currentEpoch {
+				// 🆕 添加 Applied 检查，防止重复执行
+				if prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == currentEpoch && !prop.Schedule.Applied {
 					scheduledProps = append(scheduledProps, prop)
 				}
 			}
@@ -248,7 +249,8 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			}
 
 			for _, prop := range uniq {
-				if prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == currentEpoch {
+				// 🆕 再次检查 Applied，确保只执行一次
+				if prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == currentEpoch && !prop.Schedule.Applied {
 					switch prop.ProposalType {
 					case "validator_recovery":
 					case "parameter":
@@ -261,7 +263,7 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 							if dposInstance.state != nil && dposInstance.state.ProposalStore != nil {
 								_ = dposInstance.state.ProposalStore.SaveProposal(prop)
 							}
-							p.logger.Info("✅ =========================================边界应用参数更新成功", "proposalID", prop.ID, "parameter", prop.Parameter)
+							p.logger.Info("✅ =========================================边界应用参数更新成功", "proposalID", prop.ID, "parameter", prop.Parameter, "appliedAtBlock", block.Number())
 						}
 					}
 				}

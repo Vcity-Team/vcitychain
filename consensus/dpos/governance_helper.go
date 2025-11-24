@@ -243,8 +243,9 @@ func (d *DPoS) updateParameterValue(paramName string, value interface{}, source 
 		}
 	}
 
-	// 🆕 如果是 dpos_epoch_duration，同时更新配置和 EpochManager
-	if paramName == "dpos_epoch_duration" {
+	// 🆕 根据参数类型更新对应的配置值
+	switch paramName {
+	case "dpos_epoch_duration":
 		var epochDuration time.Duration
 
 		// 解析参数值（可能是字符串或数字）
@@ -283,6 +284,302 @@ func (d *DPoS) updateParameterValue(paramName string, value interface{}, source 
 		if d.epochManager != nil {
 			d.epochManager.UpdateEpochDuration(epochDuration)
 		}
+
+	case "dpos_reward_amount":
+		// 解析奖励金额（字符串格式的 wei）
+		var rewardAmount *big.Int
+		switch v := value.(type) {
+		case string:
+			var ok bool
+			rewardAmount, ok = new(big.Int).SetString(v, 10)
+			if !ok {
+				d.logger.Warn("无法解析 reward amount 值", "value", v)
+				return fmt.Errorf("invalid reward amount value: %v", v)
+			}
+		case *big.Int:
+			rewardAmount = new(big.Int).Set(v)
+		default:
+			d.logger.Warn("不支持的 reward amount 类型", "type", fmt.Sprintf("%T", value), "value", value)
+			return fmt.Errorf("unsupported reward amount type: %T", value)
+		}
+
+		// 更新 d.config.RewardAmount
+		if d.config != nil {
+			d.config.RewardAmount = rewardAmount
+			d.logger.Info("✅ 已更新 d.config.RewardAmount", "newAmount", rewardAmount.String())
+		}
+
+		// 更新 RewardDistributor.rewardAmount
+		if d.rewardDistributor != nil {
+			d.rewardDistributor.UpdateRewardAmount(rewardAmount)
+		}
+
+	case "dpos_delegate_threshold":
+		// 解析最小质押门槛（字符串格式的 wei）
+		var threshold *big.Int
+		switch v := value.(type) {
+		case string:
+			var ok bool
+			threshold, ok = new(big.Int).SetString(v, 10)
+			if !ok {
+				d.logger.Warn("无法解析 delegate threshold 值", "value", v)
+				return fmt.Errorf("invalid delegate threshold value: %v", v)
+			}
+		case *big.Int:
+			threshold = new(big.Int).Set(v)
+		default:
+			d.logger.Warn("不支持的 delegate threshold 类型", "type", fmt.Sprintf("%T", value), "value", value)
+			return fmt.Errorf("unsupported delegate threshold type: %T", value)
+		}
+
+		// 更新 d.config.MinVotingPower
+		if d.config != nil {
+			d.config.MinVotingPower = threshold
+			d.logger.Info("✅ 已更新 d.config.MinVotingPower", "newThreshold", threshold.String())
+		}
+
+		// 更新 d.minStakeAmount
+		d.minStakeAmount = threshold
+
+	case "dpos_proposal_vote_period":
+		// 解析提案投票周期（区块数）
+		var votePeriod uint64
+		switch v := value.(type) {
+		case string:
+			if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
+				votePeriod = parsed
+			} else {
+				d.logger.Warn("无法解析 proposal vote period 值", "value", v, "error", err)
+				return fmt.Errorf("invalid proposal vote period value: %v", v)
+			}
+		case uint64:
+			votePeriod = v
+		case int64:
+			if v >= 0 {
+				votePeriod = uint64(v)
+			} else {
+				return fmt.Errorf("invalid proposal vote period value: %v", v)
+			}
+		case float64:
+			if v >= 0 {
+				votePeriod = uint64(v)
+			} else {
+				return fmt.Errorf("invalid proposal vote period value: %v", v)
+			}
+		default:
+			d.logger.Warn("不支持的 proposal vote period 类型", "type", fmt.Sprintf("%T", value), "value", value)
+			return fmt.Errorf("unsupported proposal vote period type: %T", value)
+		}
+
+		// 更新 d.config.ProposalVotePeriod（需要转换为 time.Duration）
+		if d.config != nil && d.config.BlockTime.Duration > 0 {
+			d.config.ProposalVotePeriod = time.Duration(votePeriod) * d.config.BlockTime.Duration
+			d.logger.Info("✅ 已更新 d.config.ProposalVotePeriod", "newPeriod", d.config.ProposalVotePeriod.String(), "blocks", votePeriod)
+		}
+
+	case "governance_pass_threshold":
+		// 解析提案通过阈值（百分比）
+		var threshold uint64
+		switch v := value.(type) {
+		case string:
+			if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
+				threshold = parsed
+			} else {
+				d.logger.Warn("无法解析 governance pass threshold 值", "value", v, "error", err)
+				return fmt.Errorf("invalid governance pass threshold value: %v", v)
+			}
+		case uint64:
+			threshold = v
+		case int64:
+			if v >= 0 {
+				threshold = uint64(v)
+			} else {
+				return fmt.Errorf("invalid governance pass threshold value: %v", v)
+			}
+		case float64:
+			if v >= 0 {
+				threshold = uint64(v)
+			} else {
+				return fmt.Errorf("invalid governance pass threshold value: %v", v)
+			}
+		default:
+			d.logger.Warn("不支持的 governance pass threshold 类型", "type", fmt.Sprintf("%T", value), "value", value)
+			return fmt.Errorf("unsupported governance pass threshold type: %T", value)
+		}
+
+		// governance_pass_threshold 不需要更新配置，因为它只从参数系统读取
+		d.logger.Info("✅ 已更新 governance_pass_threshold", "newThreshold", threshold)
+
+	case "min_freeze_period":
+		// 解析最小冻结期（秒）
+		var freezePeriod uint64
+		switch v := value.(type) {
+		case string:
+			if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
+				freezePeriod = parsed
+			} else {
+				d.logger.Warn("无法解析 min freeze period 值", "value", v, "error", err)
+				return fmt.Errorf("invalid min freeze period value: %v", v)
+			}
+		case uint64:
+			freezePeriod = v
+		case int64:
+			if v >= 0 {
+				freezePeriod = uint64(v)
+			} else {
+				return fmt.Errorf("invalid min freeze period value: %v", v)
+			}
+		case float64:
+			if v >= 0 {
+				freezePeriod = uint64(v)
+			} else {
+				return fmt.Errorf("invalid min freeze period value: %v", v)
+			}
+		default:
+			d.logger.Warn("不支持的 min freeze period 类型", "type", fmt.Sprintf("%T", value), "value", value)
+			return fmt.Errorf("unsupported min freeze period type: %T", value)
+		}
+
+		// 更新 d.config.MinFreezePeriod
+		if d.config != nil {
+			d.config.MinFreezePeriod = freezePeriod
+			d.logger.Info("✅ 已更新 d.config.MinFreezePeriod", "newPeriod", freezePeriod, "seconds")
+		}
+
+	case "unfreeze_lock_period":
+		// 解析解冻锁定期（秒）
+		var lockPeriod uint64
+		switch v := value.(type) {
+		case string:
+			if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
+				lockPeriod = parsed
+			} else {
+				d.logger.Warn("无法解析 unfreeze lock period 值", "value", v, "error", err)
+				return fmt.Errorf("invalid unfreeze lock period value: %v", v)
+			}
+		case uint64:
+			lockPeriod = v
+		case int64:
+			if v >= 0 {
+				lockPeriod = uint64(v)
+			} else {
+				return fmt.Errorf("invalid unfreeze lock period value: %v", v)
+			}
+		case float64:
+			if v >= 0 {
+				lockPeriod = uint64(v)
+			} else {
+				return fmt.Errorf("invalid unfreeze lock period value: %v", v)
+			}
+		default:
+			d.logger.Warn("不支持的 unfreeze lock period 类型", "type", fmt.Sprintf("%T", value), "value", value)
+			return fmt.Errorf("unsupported unfreeze lock period type: %T", value)
+		}
+
+		// 更新 d.config.UnfreezeLockPeriod
+		if d.config != nil {
+			d.config.UnfreezeLockPeriod = lockPeriod
+			d.logger.Info("✅ 已更新 d.config.UnfreezeLockPeriod", "newPeriod", lockPeriod, "seconds")
+		}
+
+	case "dpos_missed_blocks_percentage":
+		// 解析漏块率阈值（基点）
+		var percentage uint64
+		switch v := value.(type) {
+		case string:
+			if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
+				percentage = parsed
+			} else {
+				d.logger.Warn("无法解析 missed blocks percentage 值", "value", v, "error", err)
+				return fmt.Errorf("invalid missed blocks percentage value: %v", v)
+			}
+		case uint64:
+			percentage = v
+		case int64:
+			if v >= 0 {
+				percentage = uint64(v)
+			} else {
+				return fmt.Errorf("invalid missed blocks percentage value: %v", v)
+			}
+		case float64:
+			if v >= 0 {
+				percentage = uint64(v)
+			} else {
+				return fmt.Errorf("invalid missed blocks percentage value: %v", v)
+			}
+		default:
+			d.logger.Warn("不支持的 missed blocks percentage 类型", "type", fmt.Sprintf("%T", value), "value", value)
+			return fmt.Errorf("unsupported missed blocks percentage type: %T", value)
+		}
+
+		// dpos_missed_blocks_percentage 不需要更新配置，因为它从参数系统读取
+		d.logger.Info("✅ 已更新 dpos_missed_blocks_percentage", "newPercentage", percentage, "basis points")
+
+	case "dpos_minor_offense_slash_rate":
+		// 解析轻度违规削减率（基点）
+		var slashRate uint64
+		switch v := value.(type) {
+		case string:
+			if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
+				slashRate = parsed
+			} else {
+				d.logger.Warn("无法解析 minor offense slash rate 值", "value", v, "error", err)
+				return fmt.Errorf("invalid minor offense slash rate value: %v", v)
+			}
+		case uint64:
+			slashRate = v
+		case int64:
+			if v >= 0 {
+				slashRate = uint64(v)
+			} else {
+				return fmt.Errorf("invalid minor offense slash rate value: %v", v)
+			}
+		case float64:
+			if v >= 0 {
+				slashRate = uint64(v)
+			} else {
+				return fmt.Errorf("invalid minor offense slash rate value: %v", v)
+			}
+		default:
+			d.logger.Warn("不支持的 minor offense slash rate 类型", "type", fmt.Sprintf("%T", value), "value", value)
+			return fmt.Errorf("unsupported minor offense slash rate type: %T", value)
+		}
+
+		// dpos_minor_offense_slash_rate 不需要更新配置，因为它从参数系统读取
+		d.logger.Info("✅ 已更新 dpos_minor_offense_slash_rate", "newRate", slashRate, "basis points")
+
+	case "dpos_severe_offense_slash_rate":
+		// 解析严重违规削减率（基点）
+		var slashRate uint64
+		switch v := value.(type) {
+		case string:
+			if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
+				slashRate = parsed
+			} else {
+				d.logger.Warn("无法解析 severe offense slash rate 值", "value", v, "error", err)
+				return fmt.Errorf("invalid severe offense slash rate value: %v", v)
+			}
+		case uint64:
+			slashRate = v
+		case int64:
+			if v >= 0 {
+				slashRate = uint64(v)
+			} else {
+				return fmt.Errorf("invalid severe offense slash rate value: %v", v)
+			}
+		case float64:
+			if v >= 0 {
+				slashRate = uint64(v)
+			} else {
+				return fmt.Errorf("invalid severe offense slash rate value: %v", v)
+			}
+		default:
+			d.logger.Warn("不支持的 severe offense slash rate 类型", "type", fmt.Sprintf("%T", value), "value", value)
+			return fmt.Errorf("unsupported severe offense slash rate type: %T", value)
+		}
+
+		// dpos_severe_offense_slash_rate 不需要更新配置，因为它从参数系统读取
+		d.logger.Info("✅ 已更新 dpos_severe_offense_slash_rate", "newRate", slashRate, "basis points")
 	}
 
 	d.logger.Info("Parameter value updated",
