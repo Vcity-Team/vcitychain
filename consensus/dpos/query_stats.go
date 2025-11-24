@@ -269,10 +269,10 @@ func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
 		"lastBlockInEpoch":       lastBlockInEpoch,
 		"currentBlockNumber":     currentBlockNumber,
 		"epochSize":              epochSize,
-		"remainingBlocks":        remainingBlocks,   // 🆕 新增：剩余区块数
-		"estimatedTimeRemaining": timeRemaining.String(), // 🆕 基于剩余区块数计算的剩余时间
+		"remainingBlocks":        remainingBlocks,                             // 🆕 新增：剩余区块数
+		"estimatedTimeRemaining": timeRemaining.String(),                      // 🆕 基于剩余区块数计算的剩余时间
 		"nextEpochTimeEstimated": nextEpochTimeEstimated.Format(time.RFC3339), // 🆕 基于剩余区块数计算的估算时间
-		"blocksProduced":         blocksProduced,    // 🆕 新增：已出块数
+		"blocksProduced":         blocksProduced,                              // 🆕 新增：已出块数
 		"validators":             validators,
 		"validatorCount":         len(validators),
 		"consensusSwitchHeight":  d.config.ConsensusSwitchHeight,
@@ -334,7 +334,7 @@ func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
 	// 计算剩余区块数和已出块数
 	remainingBlocks := int64(0)
 	blocksProduced := uint64(0)
-	
+
 	if epochNumber == currentEpoch {
 		// 当前epoch：基于当前区块号计算
 		if currentBlockNumber < lastBlockInEpoch {
@@ -358,7 +358,7 @@ func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
 
 	// 获取epoch时间信息
 	_, _, epochDuration := d.epochManager.GetEpochInfo(currentBlockNumber)
-	
+
 	// 计算剩余时间（基于剩余区块数）
 	blockTime := d.config.BlockTime.Duration
 	if blockTime == 0 {
@@ -408,10 +408,10 @@ func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
 		"firstBlockInEpoch":      firstBlockInEpoch,
 		"lastBlockInEpoch":       lastBlockInEpoch,
 		"epochSize":              epochSize,
-		"remainingBlocks":        remainingBlocks,   // 🆕 新增：剩余区块数
-		"estimatedTimeRemaining": timeRemaining.String(), // 🆕 基于剩余区块数计算的剩余时间
+		"remainingBlocks":        remainingBlocks,                                    // 🆕 新增：剩余区块数
+		"estimatedTimeRemaining": timeRemaining.String(),                             // 🆕 基于剩余区块数计算的剩余时间
 		"nextEpochTimeEstimated": time.Now().Add(timeRemaining).Format(time.RFC3339), // 🆕 基于剩余区块数计算的估算时间
-		"blocksProduced":         blocksProduced,    // 🆕 新增：已出块数
+		"blocksProduced":         blocksProduced,                                     // 🆕 新增：已出块数
 		"currentEpoch":           currentEpoch,
 		"currentBlockNumber":     currentBlockNumber,
 		"consensusSwitchHeight":  d.config.ConsensusSwitchHeight,
