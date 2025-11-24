@@ -1392,6 +1392,7 @@ func (d *DPoS) signTransactionWithChainID(tx *types.Transaction, expectedAddr ty
 }
 
 // GetDelegateRegistrations 获取所有受托人注册信息
+// 🆕 修改：返回所有验证人（包括非活跃的），而不仅仅是出块的验证人
 func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 	if d.state == nil || d.state.RegistrationStore == nil {
 		return nil, fmt.Errorf("registration store not available")
@@ -1403,23 +1404,80 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 		return nil, fmt.Errorf("failed to get registrations from database: %w", err)
 	}
 
-	// 2. 创建已注册地址的映射，用于去重
+	// 2. 🆕 从数据库获取所有验证者（包括非活跃的），而不仅仅是从内存中获取活跃的验证者
+	// 这样可以确保返回所有验证人，而不仅仅是出块的验证人
+	var allValidators validator.AccountSet
+	if d.state != nil && d.state.StakeStore != nil {
+		// 使用 GetValidatorsWithFilter(false) 获取所有验证者，包括投票权重为0的
+		if dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false); err == nil && len(dbValidators) > 0 {
+			allValidators = dbValidators
+			d.logger.Debug("从数据库读取所有验证者", "count", len(allValidators))
+		}
+	}
+
+	// 3. 创建已注册地址的映射，用于去重
 	registeredAddresses := make(map[types.Address]bool)
 	for _, reg := range dbRegistrations {
 		registeredAddresses[reg.Address] = true
 	}
 
-	// 3. 获取创世验证者并转换为 DelegateRegistration
-	genesisRegistrations := d.getGenesisValidatorsAsRegistrations()
-
-	// 4. 合并：只添加未在数据库中注册的创世验证者
-	result := make([]*DelegateRegistration, 0, len(dbRegistrations)+len(genesisRegistrations))
+	// 4. 将数据库中的所有验证者转换为 DelegateRegistration 格式
+	// 只添加未在注册表中注册的验证者（已注册的验证者信息更完整，优先使用注册表的数据）
+	result := make([]*DelegateRegistration, 0, len(dbRegistrations)+len(allValidators))
 	result = append(result, dbRegistrations...)
 
-	for _, genesisReg := range genesisRegistrations {
-		if !registeredAddresses[genesisReg.Address] {
-			result = append(result, genesisReg)
+	// 将验证者转换为 DelegateRegistration
+	zeroDeposit := big.NewInt(0)
+
+	for _, validator := range allValidators {
+		// 如果该验证者已经在注册表中，跳过（注册表的数据更完整）
+		if registeredAddresses[validator.Address] {
+			continue
 		}
+
+		// 判断是否为创世验证者
+		isGenesis := d.isGenesisValidator(validator.Address)
+		
+		// 确定状态
+		var status RegStatus
+		if validator.IsActive {
+			if isGenesis {
+				status = RegStatusActive
+			} else {
+				status = RegStatusCandidate // 非创世验证者默认为候选人
+			}
+		} else {
+			status = RegStatusInactive
+		}
+
+		reg := &DelegateRegistration{
+			Address:      validator.Address,
+			Name:         fmt.Sprintf("Validator %s", validator.Address.String()[:10]),
+			Website:      "",
+			Description:  func() string {
+				if isGenesis {
+					return "Genesis validator"
+				}
+				return "Validator"
+			}(),
+			Deposit:      new(big.Int).Set(zeroDeposit),
+			Status:       status,
+			CreatedAt:    0,
+			TotalVotes:   new(big.Int).Set(validator.VotingPower),
+			IsActive:     validator.IsActive,
+			LastVoteTime: 0,
+			FrozenAt:     0,
+			UnfreezeAt:   0,
+			UnfreezeAvailableAt: 0,
+		}
+
+		// 如果是创世验证者，使用更友好的名称
+		if isGenesis {
+			reg.Name = fmt.Sprintf("Genesis Validator %s", validator.Address.String()[:10])
+			reg.Description = "Genesis validator with default weight 1000 VCITY"
+		}
+
+		result = append(result, reg)
 	}
 
 	return result, nil

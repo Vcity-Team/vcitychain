@@ -293,16 +293,16 @@ type VoteResponse struct {
 
 // UnvoteResponse 解质押响应
 type UnvoteResponse struct {
-	Success          bool                  `json:"success"`
-	Voter            types.Address         `json:"voter"`
-	Validator        types.Address         `json:"validator"`
-	WithdrawAmount   *big.Int              `json:"withdrawAmount"`   // 可提取金额（削减后）
-	OriginalAmount   *big.Int              `json:"originalAmount"`   // 原始投票金额
-	TotalSlashAmount *big.Int              `json:"totalSlashAmount"` // 总削减金额
-	SlashCount       int                   `json:"slashCount"`       // 削减次数
-	SlashingHistory  []*dpos.SlashingRecord `json:"slashingHistory"`  // 削减历史
-	Message          string                `json:"message,omitempty"` // 提示信息
-	Error            string                `json:"error,omitempty"`
+	Success          bool                   `json:"success"`
+	Voter            types.Address          `json:"voter"`
+	Validator        types.Address          `json:"validator"`
+	WithdrawAmount   *big.Int               `json:"withdrawAmount"`    // 可提取金额（削减后）
+	OriginalAmount   *big.Int               `json:"originalAmount"`    // 原始投票金额
+	TotalSlashAmount *big.Int               `json:"totalSlashAmount"`  // 总削减金额
+	SlashCount       int                    `json:"slashCount"`        // 削减次数
+	SlashingHistory  []*dpos.SlashingRecord `json:"slashingHistory"`   // 削减历史
+	Message          string                 `json:"message,omitempty"` // 提示信息
+	Error            string                 `json:"error,omitempty"`
 }
 
 // StakeRequest represents a stake request
@@ -1509,7 +1509,6 @@ func (d *DPOS) Delegate(ctx context.Context, params interface{}) (interface{}, e
 		BlockNumber: 0,                                  // Will be filled when transaction is mined
 	}, nil
 }
-
 
 // GetStakingInfo handles dpos_getStakingInfo RPC method
 func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) ([]*dpos.StakeInfo, error) {
@@ -3941,6 +3940,48 @@ func formatBasisPoints(rate uint64) string {
 	return fmt.Sprintf("%.2f%%", percent)
 }
 
+// formatTimestamp 格式化时间戳为可读格式
+func formatTimestamp(ts uint64) string {
+	if ts == 0 {
+		return ""
+	}
+	t := time.Unix(int64(ts), 0)
+	return t.Format("2006-01-02 15:04:05 UTC")
+}
+
+// formatRemainTime 格式化剩余时间为可读格式
+func formatRemainTime(seconds uint64) string {
+	if seconds == 0 {
+		return "0秒"
+	}
+
+	var parts []string
+
+	days := seconds / 86400
+	if days > 0 {
+		parts = append(parts, fmt.Sprintf("%d天", days))
+		seconds -= days * 86400
+	}
+
+	hours := seconds / 3600
+	if hours > 0 {
+		parts = append(parts, fmt.Sprintf("%d小时", hours))
+		seconds -= hours * 3600
+	}
+
+	minutes := seconds / 60
+	if minutes > 0 {
+		parts = append(parts, fmt.Sprintf("%d分钟", minutes))
+		seconds -= minutes * 60
+	}
+
+	if seconds > 0 || len(parts) == 0 {
+		parts = append(parts, fmt.Sprintf("%d秒", seconds))
+	}
+
+	return strings.Join(parts, "")
+}
+
 // GetValidatorBlockStats 获取验证者出块统计
 func (d *DPOS) GetValidatorBlockStats(validatorAddress string, epochNumber uint64) (map[string]interface{}, error) {
 	d.logger.Info("DPoS GetValidatorBlockStats called", "validatorAddress", validatorAddress, "epochNumber", epochNumber)
@@ -5126,11 +5167,26 @@ func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (
 		}
 	}
 
-	effectivePeriod := 21 * 24 * time.Hour
+	// 🆕 优先从数据库（ParameterStore）读取佣金生效周期（经过治理流程修改的值是权威数据源）
+	effectivePeriod := 21 * 24 * time.Hour // 默认值，仅在无法获取配置时使用
 	if dposState.ParameterStore != nil {
 		if value, err := dposState.ParameterStore.GetParameterValue("dpos_commission_effective"); err == nil {
 			if seconds, ok := parseDurationSeconds(value); ok {
 				effectivePeriod = time.Duration(seconds) * time.Second
+				d.logger.Debug("从数据库（ParameterStore）读取佣金生效周期", "period", effectivePeriod.String())
+			}
+		}
+	}
+
+	// 🆕 如果数据库中没有，从 DPoS 引擎配置读取（从配置文件读取的初始值）
+	if effectivePeriod == 21*24*time.Hour {
+		if dposEngine := d.getDPoSEngine(); dposEngine != nil {
+			if dpos, ok := dposEngine.(*dpos.DPoS); ok {
+				configPeriod := dpos.GetCommissionEffectivePeriod()
+				if configPeriod > 0 {
+					effectivePeriod = configPeriod
+					d.logger.Debug("从DPoS引擎配置（配置文件）读取佣金生效周期", "period", effectivePeriod.String())
+				}
 			}
 		}
 	}
@@ -5168,26 +5224,34 @@ func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (
 		status = "default"
 	}
 
+	// 🆕 计算剩余时间（从当前时间到生效时间的剩余时间，等同于 secondsUntilEffective）
+	remainTime := secondsUntilEffective
+
 	response := map[string]interface{}{
-		"validator":                        validatorAddress,
-		"commissionRate":                   commissionRate,
-		"commissionRatePercent":            formatBasisPoints(commissionRate),
-		"pendingCommissionRate":            pendingRate,
-		"pendingCommissionRatePercent":     formatBasisPoints(pendingRate),
-		"defaultCommissionRate":            defaultCommission,
-		"defaultCommissionRatePercent":     formatBasisPoints(defaultCommission),
-		"commissionUpdateTime":             updateTime,
-		"pendingEffectiveAt":               pendingEffectiveAt,
-		"secondsUntilEffective":            secondsUntilEffective,
-		"effectivePeriodSeconds":           effectiveSeconds,
-		"effectivePeriodHumanReadable":     effectivePeriod.String(),
-		"currentTimestamp":                 now,
-		"status":                           status,
-		"hasPendingCommissionRate":         pendingRate != 0,
-		"pendingReadyForActivation":        pendingRate != 0 && pendingEffectiveAt <= now,
-		"commissionRateBasisPoints":        commissionRate,
-		"pendingCommissionRateBasisPoints": pendingRate,
-		"defaultCommissionRateBasisPoints": defaultCommission,
+		"validator":                         validatorAddress,
+		"commissionRate":                    commissionRate,
+		"commissionRatePercent":             formatBasisPoints(commissionRate),
+		"pendingCommissionRate":             pendingRate,
+		"pendingCommissionRatePercent":      formatBasisPoints(pendingRate),
+		"defaultCommissionRate":             defaultCommission,
+		"defaultCommissionRatePercent":      formatBasisPoints(defaultCommission),
+		"commissionUpdateTime":              updateTime,
+		"commissionUpdateTimeHumanReadable": formatTimestamp(updateTime),
+		"pendingEffectiveAt":                pendingEffectiveAt,
+		"pendingEffectiveAtHumanReadable":   formatTimestamp(pendingEffectiveAt),
+		"secondsUntilEffective":             secondsUntilEffective,
+		"effectivePeriodSeconds":            effectiveSeconds,
+		"effectivePeriodHumanReadable":      effectivePeriod.String(),
+		"currentTimestamp":                  now,
+		"currentTimestampHumanReadable":     formatTimestamp(now),
+		"remainTime":                        remainTime,
+		"remainTimeHumanReadable":           formatRemainTime(remainTime),
+		"status":                            status,
+		"hasPendingCommissionRate":          pendingRate != 0,
+		"pendingReadyForActivation":         pendingRate != 0 && pendingEffectiveAt <= now,
+		"commissionRateBasisPoints":         commissionRate,
+		"pendingCommissionRateBasisPoints":  pendingRate,
+		"defaultCommissionRateBasisPoints":  defaultCommission,
 	}
 
 	return response, nil

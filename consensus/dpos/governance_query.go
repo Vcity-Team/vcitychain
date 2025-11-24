@@ -71,31 +71,53 @@ func (d *DPoS) GetVotableCurrentParameters() map[string]*ParameterInfo {
 			var defaultValue interface{}
 			var err error
 
-			// 优先尝试从治理参数获取
-			if defaultValue, err = d.getGovernanceParameterValue(name); err == nil {
-				infoCopy.CurrentValue = defaultValue
-				d.logger.Debug("Found governance value for parameter",
-					"param", name,
-					"value", defaultValue)
-			} else {
-				// 如果治理参数中没有，尝试从配置文件获取
-				if defaultValue, err = d.getConfigParameterValue(name); err == nil {
-					infoCopy.CurrentValue = defaultValue
-					d.logger.Debug("Found config value for parameter",
+			// 🆕 优先从数据库（ParameterStore）读取（经过治理流程修改的值是权威数据源）
+			if d.state != nil && d.state.ParameterStore != nil {
+				if dbValue, dbErr := d.state.ParameterStore.GetParameterValue(name); dbErr == nil {
+					infoCopy.CurrentValue = dbValue
+					d.logger.Debug("从数据库读取参数值",
 						"param", name,
-						"value", defaultValue)
+						"value", dbValue)
+					// 更新缓存
+					d.parameterValuesMutex.Lock()
+					d.parameterCurrentValues[name] = dbValue
+					d.parameterValuesMutex.Unlock()
 				} else {
-					// 对于 dpos_proposal_vote_period，使用 getCurrentParameterValue
-					if defaultValue, err = d.getCurrentParameterValue(name); err == nil {
+					// 数据库中没有，尝试从配置文件获取（初始默认值）
+					if defaultValue, err = d.getConfigParameterValue(name); err == nil {
 						infoCopy.CurrentValue = defaultValue
-						d.logger.Debug("Found current value for parameter via getCurrentParameterValue",
+						d.logger.Debug("从配置文件读取参数值",
 							"param", name,
 							"value", defaultValue)
 					} else {
-						d.logger.Debug("No current value found for parameter",
-							"param", name,
-							"cacheSize", len(d.parameterCurrentValues))
+						// 如果配置文件也没有，尝试从治理参数获取
+						if defaultValue, err = d.getGovernanceParameterValue(name); err == nil {
+							infoCopy.CurrentValue = defaultValue
+							d.logger.Debug("从治理参数读取参数值",
+								"param", name,
+								"value", defaultValue)
+						} else {
+							// 最后尝试使用 getCurrentParameterValue（会再次检查数据库和配置）
+							if defaultValue, err = d.getCurrentParameterValue(name); err == nil {
+								infoCopy.CurrentValue = defaultValue
+								d.logger.Debug("通过getCurrentParameterValue读取参数值",
+									"param", name,
+									"value", defaultValue)
+							} else {
+								d.logger.Debug("无法获取参数值",
+									"param", name,
+									"cacheSize", len(d.parameterCurrentValues))
+							}
+						}
 					}
+				}
+			} else {
+				// ParameterStore 不可用，回退到配置文件
+				if defaultValue, err = d.getConfigParameterValue(name); err == nil {
+					infoCopy.CurrentValue = defaultValue
+					d.logger.Debug("从配置文件读取参数值（ParameterStore不可用）",
+						"param", name,
+						"value", defaultValue)
 				}
 			}
 		}

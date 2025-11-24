@@ -500,6 +500,17 @@ func (d *DPoS) GetConsensusSwitchHeight() uint64 {
 	return d.config.ConsensusSwitchHeight
 }
 
+// GetCommissionEffectivePeriod 获取佣金生效周期
+func (d *DPoS) GetCommissionEffectivePeriod() time.Duration {
+	if d.config == nil {
+		return 21 * 24 * time.Hour // 默认值
+	}
+	if d.config.CommissionEffectivePeriod > 0 {
+		return d.config.CommissionEffectivePeriod
+	}
+	return 21 * 24 * time.Hour // 默认值
+}
+
 func (d *DPoS) PreCommitState(block *types.Block, _ *state.Transition) error {
 	// For DPoS, we don't need to validate commitment state transactions like PolyBFT
 	// This is mainly used for state transition validation

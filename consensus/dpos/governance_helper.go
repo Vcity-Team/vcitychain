@@ -33,7 +33,19 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 	}
 	d.parameterValuesMutex.RUnlock()
 
-	// 如果缓存中没有，从不同来源获取
+	// 🆕 如果缓存中没有，优先从数据库（ParameterStore）读取（经过治理流程修改的值是权威数据源）
+	if d.state != nil && d.state.ParameterStore != nil {
+		if dbValue, err := d.state.ParameterStore.GetParameterValue(parameter); err == nil {
+			d.logger.Debug("从数据库读取参数值", "param", parameter, "value", dbValue)
+			// 更新缓存
+			d.parameterValuesMutex.Lock()
+			d.parameterCurrentValues[parameter] = dbValue
+			d.parameterValuesMutex.Unlock()
+			return dbValue, nil
+		}
+	}
+
+	// 如果数据库中没有，从配置文件获取（初始默认值）
 	switch parameter {
 	case "dpos_reward_amount":
 		if d.config.RewardAmount != nil {

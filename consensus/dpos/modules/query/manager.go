@@ -1,7 +1,6 @@
 package query
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/core"
