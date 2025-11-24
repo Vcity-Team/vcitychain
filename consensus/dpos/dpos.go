@@ -17,6 +17,7 @@ import (
 
 	"github.com/Vcity-Team/vcitychain/blockchain"
 	"github.com/Vcity-Team/vcitychain/consensus"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/core"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/wallet"
 	"github.com/Vcity-Team/vcitychain/helper/common"
@@ -323,6 +324,17 @@ type DPoS struct {
 	config    *DPoSConfig
 	runtime   *dposRuntime
 	rawConfig map[string]interface{} // 🆕 存储原始配置，用于读取削减相关参数
+
+	// 🆕 重构：功能模块（组合模式，支持依赖注入）
+	consensus core.ConsensusManager // 共识管理器
+	validator core.ValidatorManager // 验证者管理器
+	epoch     core.EpochManager     // Epoch管理器
+	reward    core.RewardManager    // 奖励管理器
+	fault     core.FaultManager     // 故障管理器
+	query     core.QueryManager     // 查询管理器
+	// network   core.NetworkManager   // 网络管理器（待实现）
+	// bls       core.BLSManager       // BLS管理器（待实现）
+	// stateMgr  core.StateManager     // 状态管理器（待实现）
 
 	// reference to the syncer
 	syncer syncer.Syncer
@@ -730,6 +742,32 @@ func (d *DPoS) Start() error {
 
 	// 初始化性能优化组件
 	d.initPerformanceOptimizations()
+
+	// 🆕 重构：初始化适配器（如果没有注入，使用默认实现）
+	if d.consensus == nil {
+		d.consensus = NewConsensusManagerAdapter(d)
+		d.logger.Info("✅ ConsensusManager适配器已初始化")
+	}
+	if d.validator == nil {
+		d.validator = NewValidatorManagerAdapter(d)
+		d.logger.Info("✅ ValidatorManager适配器已初始化")
+	}
+	if d.epoch == nil && d.epochManager != nil {
+		d.epoch = NewEpochManagerAdapter(d.epochManager)
+		d.logger.Info("✅ EpochManager适配器已初始化")
+	}
+	if d.reward == nil {
+		d.reward = NewRewardManagerAdapter(d)
+		d.logger.Info("✅ RewardManager适配器已初始化")
+	}
+	if d.fault == nil {
+		d.fault = NewFaultManagerAdapter(d)
+		d.logger.Info("✅ FaultManager适配器已初始化")
+	}
+	if d.query == nil {
+		d.query = NewQueryManagerAdapter(d)
+		d.logger.Info("✅ QueryManager适配器已初始化")
+	}
 
 	return nil
 }
