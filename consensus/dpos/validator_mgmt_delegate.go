@@ -47,14 +47,16 @@ func (d *DPoS) initializeDelegates() error {
 		} else if len(dbValidators) > 0 {
 			d.logger.Info("✅ 从数据库成功读取验证者", "count", len(dbValidators))
 
-			// 🆕 显著日志：显示数据库验证者详细信息
 			d.logger.Info("📊 数据库验证者详细信息:")
 			for i, validator := range dbValidators {
+				// 🆕 获取验证者的故障标志信息
+				faultInfo := d.getValidatorFaultInfo(validator.Address)
 				d.logger.Info("👤 验证者信息",
 					"index", i+1,
 					"address", validator.Address.String(),
 					"votingPower", validator.VotingPower.String(),
-					"isActive", validator.IsActive)
+					"isActive", validator.IsActive,
+					"faultFlag", faultInfo) // 🆕 添加故障标志信息
 			}
 
 			// 🆕 按权重倒序排序
@@ -1438,7 +1440,7 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 
 		// 判断是否为创世验证者
 		isGenesis := d.isGenesisValidator(validator.Address)
-		
+
 		// 确定状态
 		var status RegStatus
 		if validator.IsActive {
@@ -1452,23 +1454,23 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 		}
 
 		reg := &DelegateRegistration{
-			Address:      validator.Address,
-			Name:         fmt.Sprintf("Validator %s", validator.Address.String()[:10]),
-			Website:      "",
-			Description:  func() string {
+			Address: validator.Address,
+			Name:    fmt.Sprintf("Validator %s", validator.Address.String()[:10]),
+			Website: "",
+			Description: func() string {
 				if isGenesis {
 					return "Genesis validator"
 				}
 				return "Validator"
 			}(),
-			Deposit:      new(big.Int).Set(zeroDeposit),
-			Status:       status,
-			CreatedAt:    0,
-			TotalVotes:   new(big.Int).Set(validator.VotingPower),
-			IsActive:     validator.IsActive,
-			LastVoteTime: 0,
-			FrozenAt:     0,
-			UnfreezeAt:   0,
+			Deposit:             new(big.Int).Set(zeroDeposit),
+			Status:              status,
+			CreatedAt:           0,
+			TotalVotes:          new(big.Int).Set(validator.VotingPower),
+			IsActive:            validator.IsActive,
+			LastVoteTime:        0,
+			FrozenAt:            0,
+			UnfreezeAt:          0,
 			UnfreezeAvailableAt: 0,
 		}
 

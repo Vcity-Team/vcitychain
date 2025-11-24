@@ -365,7 +365,7 @@ func (s *Server) NewTopic(protoID string, obj proto.Message) (*Topic, error) {
 	}
 	tt.closed.Store(false)
 
-	s.logger.Info("🔍 Topic对象创建成功", "protoID", protoID, "topic对象", fmt.Sprintf("%p", tt))
+	s.logger.Debug("🔍 Topic对象创建成功", "protoID", protoID, "topic对象", fmt.Sprintf("%p", tt))
 	return tt, nil
 }
 

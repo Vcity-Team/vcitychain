@@ -435,32 +435,15 @@ func (p *TxPool) Prepare() {
 	validPrimaries := make([]*types.Transaction, 0, len(primaries))
 	skippedCount := 0
 
-	p.logger.Info("🔵 [txpool.Prepare] 开始准备交易",
-		"blockNumber", p.store.Header().Number,
-		"primariesCount", len(primaries),
-		"stateRoot", stateRoot.String()[:16])
-
 	for _, tx := range primaries {
 		currentNonce := p.store.GetNonce(stateRoot, tx.From)
 		if tx.Nonce == currentNonce {
 			// ✅ nonce匹配，添加到executables队列
 			validPrimaries = append(validPrimaries, tx)
-			p.logger.Info("✅ [txpool.Prepare] nonce匹配，添加到executables",
-				"txHash", tx.Hash.String()[:16],
-				"from", tx.From.String()[:16],
-				"nonce", tx.Nonce,
-				"chainNonce", currentNonce)
 		} else {
 			// ⚠️ nonce不匹配，不添加到executables队列
 			// 交易仍然在promoted队列中，等待下次Prepare()时检查
 			skippedCount++
-			p.logger.Info("⚠️ [txpool.Prepare] nonce不匹配，跳过交易",
-				"txHash", tx.Hash.String()[:16],
-				"from", tx.From.String()[:16],
-				"txNonce", tx.Nonce,
-				"chainNonce", currentNonce,
-				"diff", int64(tx.Nonce)-int64(currentNonce),
-				"note", "交易保留在promoted队列中，等待链上nonce更新")
 		}
 	}
 
@@ -474,13 +457,6 @@ func (p *TxPool) Prepare() {
 			"stateRoot", stateRoot.String()[:16],
 			"note", "所有交易的nonce都不匹配链上nonce，executables队列为空")
 	}
-
-	p.logger.Info("🔵 [txpool.Prepare] 准备完成",
-		"blockNumber", p.store.Header().Number,
-		"primariesCount", len(primaries),
-		"validPrimariesCount", len(validPrimaries),
-		"skippedCount", skippedCount,
-		"executablesSize", len(validPrimaries))
 
 	// create new executables queue with valid transactions only (nonce matched)
 	p.executables = newPricesQueue(p.GetBaseFee(), validPrimaries)

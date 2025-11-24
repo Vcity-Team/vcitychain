@@ -116,7 +116,7 @@ func (r *dposRuntime) getSignatureRequestTopic() (*network.Topic, error) {
 
 	// 存储实际使用的protoID
 	actualProtoID := topic.GetActualProtoID()
-	r.logger.Info("🔍 签名请求Topic名称对比", "原始名称", "dpos-signature-request", "实际名称", actualProtoID)
+	r.logger.Debug("🔍 签名请求Topic名称对比", "原始名称", "dpos-signature-request", "实际名称", actualProtoID)
 
 	r.logger.Debug("成功创建签名请求主题")
 	return topic, nil
@@ -222,7 +222,7 @@ func (r *dposRuntime) getSignatureResponseTopic() (*network.Topic, error) {
 
 	// 存储实际使用的protoID
 	actualProtoID := topic.GetActualProtoID()
-	r.logger.Info("🔍 签名响应Topic名称对比", "原始名称", "dpos-signature-response", "实际名称", actualProtoID)
+	r.logger.Debug("🔍 签名响应Topic名称对比", "原始名称", "dpos-signature-response", "实际名称", actualProtoID)
 
 	r.logger.Info("成功创建签名响应主题")
 	return topic, nil

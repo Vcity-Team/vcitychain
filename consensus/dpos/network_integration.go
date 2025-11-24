@@ -529,7 +529,7 @@ func (ni *NetworkIntegration) createTopics() error {
 		// 记录实际使用的protoID
 		if ni.signatureRequestTopic != nil {
 			actualProtoID := ni.signatureRequestTopic.GetActualProtoID()
-			ni.logger.Info("🔍 网络集成层签名请求Topic名称对比", "原始名称", "dpos-signature-request", "实际名称", actualProtoID)
+			ni.logger.Debug("🔍 网络集成层签名请求Topic名称对比", "原始名称", "dpos-signature-request", "实际名称", actualProtoID)
 		}
 	}
 
@@ -564,7 +564,7 @@ func (ni *NetworkIntegration) createTopics() error {
 		// 记录实际使用的protoID
 		if ni.signatureResponseTopic != nil {
 			actualProtoID := ni.signatureResponseTopic.GetActualProtoID()
-			ni.logger.Info("🔍 网络集成层签名响应Topic名称对比", "原始名称", "dpos-signature-response", "实际名称", actualProtoID)
+			ni.logger.Debug("🔍 网络集成层签名响应Topic名称对比", "原始名称", "dpos-signature-response", "实际名称", actualProtoID)
 		}
 		//ni.logger.Info("成功创建签名响应主题")
 	}

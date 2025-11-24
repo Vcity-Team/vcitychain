@@ -91,7 +91,7 @@ func (m *syncPeerClient) Start() error {
 	if err := m.startGossip(); err != nil {
 		// 检查是否是topic冲突错误，如果是则直接创建新的后缀topic
 		if strings.Contains(err.Error(), "topic already exists") {
-			m.logger.Warn("⚠️ topic冲突，直接创建带后缀的新topic", "节点ID", m.id, "error", err)
+			m.logger.Debug("⚠️ topic冲突，直接创建带后缀的新topic", "节点ID", m.id, "error", err)
 
 			if !m.createAlternativeTopic() {
 				m.logger.Error("❌ 无法创建可用topic，状态广播将不可用", "节点ID", m.id)
@@ -116,7 +116,7 @@ func (m *syncPeerClient) Close() {
 		return
 	}
 
-	m.logger.Info("开始关闭同步客户端", "节点ID", m.id)
+	m.logger.Debug("开始关闭同步客户端", "节点ID", m.id)
 
 	// 关闭所有订阅和topic
 	if m.topic != nil {
@@ -166,7 +166,7 @@ func (m *syncPeerClient) Close() {
 		close(m.peerConnectionUpdateCh)
 	}
 
-	m.logger.Info("同步客户端已关闭", "节点ID", m.id)
+	m.logger.Debug("同步客户端已关闭", "节点ID", m.id)
 }
 
 // DisablePublishingPeerStatus disables publishing own status via gossip
@@ -255,7 +255,7 @@ func (m *syncPeerClient) GetPeerConnectionUpdateEventCh() <-chan *event.PeerEven
 func (m *syncPeerClient) createAlternativeTopic() bool {
 	for i := 1; i <= 5; i++ {
 		alternativeTopicName := fmt.Sprintf("syncer/status/0.1_%d", i)
-		m.logger.Info("🔄 尝试替代topic名称", "节点ID", m.id, "尝试次数", i, "topic名称", alternativeTopicName)
+		m.logger.Debug("🔄 尝试替代topic名称", "节点ID", m.id, "尝试次数", i, "topic名称", alternativeTopicName)
 
 		topic, err := m.network.NewTopic(alternativeTopicName, &proto.SyncPeerStatus{})
 		if err != nil {
@@ -270,7 +270,7 @@ func (m *syncPeerClient) createAlternativeTopic() bool {
 
 		m.topic = topic
 		m.statusTopicName = alternativeTopicName
-		m.logger.Info("✅ 成功创建替代topic", "节点ID", m.id, "topic名称", alternativeTopicName)
+		m.logger.Debug("✅ 成功创建替代topic", "节点ID", m.id, "topic名称", alternativeTopicName)
 		return true
 	}
 
@@ -289,7 +289,7 @@ func (m *syncPeerClient) startGossip() error {
 	topic, err := m.network.NewTopic(m.statusTopicName, &proto.SyncPeerStatus{})
 	if err != nil {
 		// 如果NewTopic失败，记录错误并返回
-		m.logger.Error("创建gossip topic失败", "节点ID", m.id, "error", err)
+		m.logger.Debug("创建gossip topic失败", "节点ID", m.id, "error", err)
 		return err
 	} else {
 		// 成功创建新topic
@@ -389,7 +389,7 @@ func (m *syncPeerClient) startNewBlockProcess() {
 
 		select {
 		case <-m.closeCh:
-			m.logger.Info("区块事件监听停止", "节点ID", m.id)
+			m.logger.Debug("区块事件监听停止", "节点ID", m.id)
 			return
 		case event = <-eventCh:
 		}
@@ -497,7 +497,7 @@ func (m *syncPeerClient) startPeerEventProcess() {
 	for {
 		select {
 		case <-m.closeCh:
-			m.logger.Info("peer事件监听停止", "节点ID", m.id)
+			m.logger.Debug("peer事件监听停止", "节点ID", m.id)
 			return
 		case e := <-peerEventCh:
 			if e != nil && (e.Type == event.PeerConnected || e.Type == event.PeerDisconnected) {

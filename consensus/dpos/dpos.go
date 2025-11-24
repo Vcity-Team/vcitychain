@@ -708,47 +708,36 @@ func (d *DPoS) Start() error {
 		d.logger.Warn("Failed to call command data sources on startup", "error", err)
 	}
 
-	// 🆕 移除：BLS公钥预加载已移到Start方法开头，确保在启动其他组件前完成
-
 	// 初始化性能优化组件
 	d.initPerformanceOptimizations()
 
-	// 🆕 重构：初始化适配器（如果没有注入，使用默认实现）
+	// 初始化适配器（如果没有注入，使用默认实现）
 	if d.consensus == nil {
 		d.consensus = NewConsensusManagerAdapter(d)
-		d.logger.Info("✅ ConsensusManager适配器已初始化")
 	}
 	if d.validator == nil {
 		d.validator = NewValidatorManagerAdapter(d)
-		d.logger.Info("✅ ValidatorManager适配器已初始化")
 	}
 	if d.epoch == nil && d.epochManager != nil {
 		d.epoch = NewEpochManagerAdapter(d.epochManager)
-		d.logger.Info("✅ EpochManager适配器已初始化")
 	}
 	if d.reward == nil {
 		d.reward = NewRewardManagerAdapter(d)
-		d.logger.Info("✅ RewardManager适配器已初始化")
 	}
 	if d.fault == nil {
 		d.fault = NewFaultManagerAdapter(d)
-		d.logger.Info("✅ FaultManager适配器已初始化")
 	}
 	if d.query == nil {
 		d.query = NewQueryManagerAdapter(d)
-		d.logger.Info("✅ QueryManager适配器已初始化")
 	}
 	if d.network == nil {
 		d.network = NewNetworkManagerAdapter(d)
-		d.logger.Info("✅ NetworkManager适配器已初始化")
 	}
 	if d.bls == nil {
 		d.bls = NewBLSManagerAdapter(d)
-		d.logger.Info("✅ BLSManager适配器已初始化")
 	}
 	if d.stateMgr == nil {
 		d.stateMgr = NewStateManagerAdapter(d)
-		d.logger.Info("✅ StateManager适配器已初始化")
 	}
 
 	return nil
@@ -893,19 +882,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		default:
 			logger.Warn("⏳ 佣金生效周期类型不支持", "type", fmt.Sprintf("%T", effectiveValue))
 		}
-	}
-
-	// 解析最大漏块数
-	if maxMissedBlocks, exists := params.Config.Config["maxMissedBlocks"]; exists {
-		logger.Info("🔍 找到maxMissedBlocks配置", "type", fmt.Sprintf("%T", maxMissedBlocks), "value", maxMissedBlocks)
-		if count, ok := maxMissedBlocks.(float64); ok {
-			vcity_dpos.config.MaxMissedBlocks = uint64(count)
-			logger.Info("⚠️ 使用server层解析的最大漏块数", "count", vcity_dpos.config.MaxMissedBlocks)
-		} else {
-			logger.Warn("⚠️ maxMissedBlocks类型断言失败", "type", fmt.Sprintf("%T", maxMissedBlocks))
-		}
-	} else {
-		logger.Warn("⚠️ 未找到maxMissedBlocks配置")
 	}
 
 	if missedBlocksPercentage, exists := getConfigValue("dpos_missed_blocks_percentage", "missed_blocks_percentage"); exists {

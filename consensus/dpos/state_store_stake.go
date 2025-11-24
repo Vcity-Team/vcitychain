@@ -264,17 +264,9 @@ func (s *StakeStore) GetSlashingHistory(validatorAddr types.Address) ([]*Slashin
 
 // 🆕 新增：GetStakingInfo方法，直接从数据库读取，不做修改
 func (s *StakeStore) GetStakingInfo() ([]*StakeInfo, error) {
-	logger := getGlobalLogger()
-	if logger != nil {
-		logger.Info("🔵 [StakeStore.GetStakingInfo] 开始读取投票记录")
-	}
-
 	var stakingInfos []*StakeInfo
 
 	if s.db == nil {
-		if logger != nil {
-			logger.Error("❌ [StakeStore.GetStakingInfo] 数据库为 nil")
-		}
 		return nil, fmt.Errorf("database is nil")
 	}
 
@@ -283,52 +275,24 @@ func (s *StakeStore) GetStakingInfo() ([]*StakeInfo, error) {
 		stakingBucket := tx.Bucket([]byte("StakingInfo"))
 		if stakingBucket == nil {
 			// Bucket 不存在，返回空列表（这是正常的，如果还没有质押数据）
-			if logger != nil {
-				logger.Info("⚠️ [StakeStore.GetStakingInfo] StakingInfo bucket 不存在")
-			}
 			return nil
 		}
 
-		if logger != nil {
-			logger.Info("✅ [StakeStore.GetStakingInfo] StakingInfo bucket 存在，开始遍历记录")
-		}
-
-		count := 0
-		parseErrorCount := 0
 		cursor := stakingBucket.Cursor()
 		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
 			var stakeInfo StakeInfo
 			if err := json.Unmarshal(value, &stakeInfo); err != nil {
-				// 跳过解析失败的数据，但记录日志
-				parseErrorCount++
-				if logger != nil {
-					logger.Warn("⚠️ [StakeStore.GetStakingInfo] 解析投票记录失败", "key", fmt.Sprintf("%x", key), "error", err)
-				}
+				// 跳过解析失败的数据
 				continue
 			}
 			stakingInfos = append(stakingInfos, &stakeInfo)
-			count++
-		}
-
-		if logger != nil {
-			logger.Info("✅ [StakeStore.GetStakingInfo] 遍历完成",
-				"totalRecords", count,
-				"validRecords", len(stakingInfos),
-				"parseErrors", parseErrorCount)
 		}
 
 		return nil
 	})
 
 	if err != nil {
-		if logger != nil {
-			logger.Error("❌ [StakeStore.GetStakingInfo] 数据库事务失败", "error", err)
-		}
 		return nil, fmt.Errorf("failed to get staking info: %w", err)
-	}
-
-	if logger != nil {
-		logger.Info("✅ [StakeStore.GetStakingInfo] 成功返回", "count", len(stakingInfos))
 	}
 
 	return stakingInfos, nil

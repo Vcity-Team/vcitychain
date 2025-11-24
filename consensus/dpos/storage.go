@@ -243,12 +243,15 @@ func (d *DPoS) loadValidatorsFromDatabaseWithLimit() error {
 	// 🆕 添加详细日志：打印从数据库读取的验证者信息
 	d.logger.Info("🔍 数据库验证者详细信息:")
 	for i, validator := range dbValidators {
+		// 🆕 获取验证者的故障标志信息
+		faultInfo := d.getValidatorFaultInfo(validator.Address)
 		d.logger.Info("🔍 数据库验证者",
 			"index", i,
 			"address", validator.Address.String(),
 			"votingPower", validator.VotingPower.String(),
 			"isActive", validator.IsActive,
-			"hasBlsKey", validator.BlsKey != nil)
+			"hasBlsKey", validator.BlsKey != nil,
+			"faultFlag", faultInfo) // 🆕 添加故障标志信息
 	}
 
 	return nil

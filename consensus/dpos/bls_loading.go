@@ -281,12 +281,15 @@ func (d *DPoS) syncLoadBLSKeys() error {
 			// 打印数据库验证者的详细信息
 			d.logger.Info("🔍 数据库验证者详细信息:")
 			for i, validator := range dbValidators {
+				// 🆕 获取验证者的故障标志信息
+				faultInfo := d.getValidatorFaultInfo(validator.Address)
 				d.logger.Info("🔍 数据库验证者",
 					"index", i,
 					"address", validator.Address.String(),
 					"votingPower", validator.VotingPower.String(),
 					"isActive", validator.IsActive,
-					"hasBlsKey", validator.BlsKey != nil)
+					"hasBlsKey", validator.BlsKey != nil,
+					"faultFlag", faultInfo) // 🆕 添加故障标志信息
 			}
 			d.logger.Info("✅ 数据库已有验证者，跳过保存", "count", len(dbValidators))
 		} else {

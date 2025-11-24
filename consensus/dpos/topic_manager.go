@@ -84,7 +84,7 @@ func (tm *TopicManager) CreateTopic(config TopicConfig) (*Topic, error) {
 	// 成功创建，记录日志
 	if config.IsCritical && topic != nil {
 		actualProtoID := topic.GetActualProtoID()
-		tm.logger.Info("🔍 网络集成层Topic名称对比",
+		tm.logger.Debug("🔍 网络集成层Topic名称对比",
 			"原始名称", config.Name,
 			"实际名称", actualProtoID,
 			"logName", config.LogName)
