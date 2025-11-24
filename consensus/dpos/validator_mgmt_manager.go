@@ -18,14 +18,10 @@ func (d *DPoS) GetDelegates(blockNumber uint64, parents []*types.Header) (valida
 
 	currentBlockNumber := d.blockchain.CurrentHeader().Number
 
-	// 如果是当前区块，优先通过接口获取
+	// 如果是当前区块，优先使用runtime.delegates
 	if blockNumber == currentBlockNumber {
-		// 🆕 重构：通过接口调用
-		if d.validator != nil {
-			return d.validator.GetValidators(blockNumber, parents)
-		}
-		
-		// 向后兼容：如果接口未初始化，使用原有逻辑
+		// 注意：不能通过接口调用，因为GetDelegates本身就是接口的实现
+		// 直接使用原有逻辑，避免无限递归
 		if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
 			result := d.runtime.delegates.Copy()
 			return result, nil

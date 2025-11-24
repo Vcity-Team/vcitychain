@@ -2548,14 +2548,10 @@ func (d *DPoS) syncRuntimeDelegatesWithRetry() {
 }
 
 // GetValidators 获取DPoS验证者集合（公共方法，供外部调用）
-// 内部实现通过ValidatorManager接口调用
+// 注意：不能通过接口调用，因为GetValidators本身就是接口的实现
+// 直接使用原有逻辑，避免无限递归
 func (d *DPoS) GetValidators() validator.AccountSet {
-	// 🆕 重构：通过接口调用
-	if d.validator != nil {
-		return d.validator.GetCurrentValidators()
-	}
-
-	// 向后兼容：如果接口未初始化，使用原有逻辑
+	// 直接使用原有逻辑，避免通过接口调用造成无限递归
 	if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
 		return d.runtime.delegates
 	}
