@@ -341,8 +341,57 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 
 	// apply transactions from block
 	for _, tx := range block.Transactions {
+		// 🆕 确保从区块读取的交易补齐 From（RLP不含From，需要本地恢复）
+		if tx.From == (types.Address{}) {
+			// 🆕 根据当前区块的 forks 状态创建正确的 signer
+			// 这样可以正确处理 EIP-1559 (DynamicFeeTx) 交易
+			forks := p.blockchain.Config().Forks.At(block.Number())
+			chainID := p.GetChainID()
+			signer := crypto.NewSigner(forks, chainID)
+			if addr, err := signer.Sender(tx); err == nil {
+				tx.From = addr
+				p.logger.Debug("🧩 [ProcessBlock] 从区块交易恢复发送者地址", "txHash", tx.Hash.String(), "from", tx.From.String())
+			} else {
+				p.logger.Error("🚨 [ProcessBlock] 无法从区块交易恢复发送者地址，将拒绝处理该交易", "txHash", tx.Hash.String(), "error", err)
+				return nil, fmt.Errorf("failed to recover sender from block tx: %w", err)
+			}
+		}
+
+		// 统一进入 EVM 执行
 		if err = transition.Write(tx); err != nil {
 			return nil, fmt.Errorf("process block tx error, tx = %v, err = %w", tx.Hash, err)
+		}
+
+		// 🆕 执行后识别是否为提案交易，并触发 DPoS 业务处理（不影响 EVM 结果）
+		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+			if len(tx.Input) > 0 && (tx.To != nil) {
+				if kind, err := ParseProposalInput(tx.Input); err == nil {
+					p.logger.Info("✅ [ProcessBlock] 检测到提案交易(EVM后置处理)", "kind", kind, "txHash", tx.Hash.String(), "blockNumber", block.Number())
+					switch kind {
+					case "create":
+						p.logger.Info("🔄 [ProcessBlock] 开始处理创建提案交易", "txHash", tx.Hash.String(), "blockNumber", block.Number())
+						if e := dposInstance.ProcessProposalCreateTransaction(tx, block.Number()); e != nil {
+							p.logger.Error("❌ [ProcessBlock] 提案创建业务处理失败(不影响EVM)", "err", e, "txHash", tx.Hash.String(), "blockNumber", block.Number())
+						} else {
+							p.logger.Info("✅ [ProcessBlock] 提案创建业务处理成功", "txHash", tx.Hash.String(), "blockNumber", block.Number())
+						}
+					case "vote":
+						if e := dposInstance.ProcessProposalVoteTransaction(tx, block.Number()); e != nil {
+							p.logger.Warn("❌ [ProcessBlock] 提案投票业务处理失败(不影响EVM)", "err", e, "txHash", tx.Hash.String())
+						}
+					case "execute":
+						if e := dposInstance.ProcessProposalExecuteTransaction(tx, block.Number()); e != nil {
+							p.logger.Warn("❌ [ProcessBlock] 提案执行业务处理失败(不影响EVM)", "err", e, "txHash", tx.Hash.String())
+						}
+					}
+				} else {
+					p.logger.Debug("ℹ️ [ProcessBlock] 交易不是提案交易或解析失败", "txHash", tx.Hash.String(), "error", err)
+				}
+			} else {
+				p.logger.Debug("ℹ️ [ProcessBlock] 跳过提案交易检查", "txHash", tx.Hash.String(), "inputLength", len(tx.Input), "toIsNil", tx.To == nil)
+			}
+		} else {
+			p.logger.Debug("⚠️ [ProcessBlock] DPoS实例不存在，跳过提案交易处理", "txHash", tx.Hash.String())
 		}
 	}
 

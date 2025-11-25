@@ -4513,6 +4513,36 @@ func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) 
 		return nil, fmt.Errorf("DPoS engine not available")
 	}
 
+	// 🆕 1. RPC层校验：检查提案是否过期（在创建交易前检查）
+	if getProposal, ok := dposEngine.(interface {
+		GetParameterProposal(proposalID string) (*dpos.ParameterProposal, error)
+	}); ok {
+		proposal, err := getProposal.GetParameterProposal(proposalID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get proposal: %w", err)
+		}
+		// 获取当前区块号
+		var currentBlock uint64
+		if getCurrentBlock, ok := dposEngine.(interface {
+			GetCurrentBlockNumber() uint64
+		}); ok {
+			currentBlock = getCurrentBlock.GetCurrentBlockNumber()
+		} else {
+			// 回退到其他方法获取区块号
+			currentBlock = d.getCurrentBlockHeight()
+		}
+		// 检查提案是否已过期
+		if currentBlock > proposal.EndBlock {
+			d.logger.Warn("❌ [VoteOnParameterProposal RPC] 提案已过期，拒绝投票",
+				"proposalID", proposalID,
+				"currentBlock", currentBlock,
+				"endBlock", proposal.EndBlock)
+			return nil, fmt.Errorf("proposal %s has expired (current block %d > end block %d)", proposalID, currentBlock, proposal.EndBlock)
+		}
+	} else {
+		d.logger.Warn("⚠️ [VoteOnParameterProposal RPC] DPoS引擎不支持获取提案，跳过过期检查")
+	}
+
 	// 🆕 改为通过交易进行投票
 	// 1. 创建临时投票对象用于签名
 	tempVote := &dpos.ParameterVote{
