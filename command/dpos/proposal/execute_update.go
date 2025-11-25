@@ -12,9 +12,14 @@ import (
 
 // ExecuteUpdateResponse 执行更新响应
 type ExecuteUpdateResponse struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error,omitempty"`
-	Message string `json:"message,omitempty"`
+	Success           bool   `json:"success"`
+	Error             string `json:"error,omitempty"`
+	Message           string `json:"message,omitempty"`
+	TxHash            string `json:"txHash,omitempty"`
+	ProposalId        string `json:"proposalId,omitempty"`
+	Executor          string `json:"executor,omitempty"`
+	CurrentBlockNumber uint64 `json:"currentBlockNumber,omitempty"`
+	Note              string `json:"note,omitempty"`
 }
 
 // GetExecuteUpdateCommand 获取执行更新命令
