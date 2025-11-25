@@ -2,7 +2,6 @@ package dpos
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -373,10 +372,6 @@ type DPoS struct {
 	genesisExtraData  []byte                 // 创世块extraData
 	genesisValidators map[types.Address]bool // 创世验证者地址映射
 
-	// BLS网络通信相关字段
-	blsRequestTopic  *network.Topic // BLS公钥请求Topic
-	blsResponseTopic *network.Topic // BLS公钥响应Topic
-
 	// BLS加载状态管理
 	blsLoadingComplete bool
 	blsLoadingMutex    sync.RWMutex
@@ -673,24 +668,24 @@ func (d *DPoS) Start() error {
 	// 初始化性能优化组件
 	d.initPerformanceOptimizations()
 
-	// 初始化适配器（如果没有注入，使用默认实现）
+	// 初始化模块
 	if d.consensus == nil {
 		d.initConsensusModule()
 	}
 	if d.consensus == nil {
-		d.consensus = NewConsensusManagerAdapter(d)
+		return fmt.Errorf("consensus module not initialized")
 	}
 	if d.validator == nil {
 		d.initValidatorModule()
 	}
 	if d.validator == nil {
-		d.validator = NewValidatorManagerAdapter(d)
+		return fmt.Errorf("validator module not initialized")
 	}
 	if d.epoch == nil {
 		d.initEpochModule()
 	}
-	if d.epoch == nil && d.epochManager != nil {
-		d.epoch = NewEpochManagerAdapter(d.epochManager)
+	if d.epoch == nil {
+		return fmt.Errorf("epoch module not initialized")
 	}
 	if d.reward == nil {
 		d.initRewardModule()
@@ -699,7 +694,7 @@ func (d *DPoS) Start() error {
 		d.initFaultModule()
 	}
 	if d.fault == nil {
-		d.fault = NewFaultManagerAdapter(d)
+		return fmt.Errorf("fault module not initialized")
 	}
 	if d.query == nil {
 		d.initQueryModule()
@@ -714,19 +709,19 @@ func (d *DPoS) Start() error {
 		d.initNetworkModule()
 	}
 	if d.network == nil {
-		d.network = NewNetworkManagerAdapter(d)
+		return fmt.Errorf("network module not initialized")
 	}
 	if d.bls == nil {
 		d.initBLSModule()
 	}
 	if d.bls == nil {
-		d.bls = NewBLSManagerAdapter(d)
+		return fmt.Errorf("bls module not initialized")
 	}
 	if d.stateMgr == nil {
 		d.initStateModule()
 	}
 	if d.stateMgr == nil {
-		d.stateMgr = NewStateManagerAdapter(d)
+		return fmt.Errorf("state module not initialized")
 	}
 
 	return nil
@@ -1966,30 +1961,6 @@ type cacheEntry struct {
 	cacheType string
 }
 
-// 带缓存的投票者信息获取
-func (d *DPoS) getVoterWithCache(addr types.Address) (*VoterInfo, bool) {
-	d.cache.lock.RLock()
-	if voter, exists := d.cache.voterCache[addr]; exists {
-		d.cache.lock.RUnlock()
-		return voter, true
-	}
-	d.cache.lock.RUnlock()
-
-	d.lock.RLock()
-	voter, exists := d.voters[addr]
-	d.lock.RUnlock()
-
-	if exists {
-		// 更新缓存并记录时间戳
-		d.cache.lock.Lock()
-		d.cache.voterCache[addr] = voter
-		d.cache.voterCacheTime[addr] = time.Now()
-		d.cache.lock.Unlock()
-	}
-
-	return voter, exists
-}
-
 // 获取性能指标
 func (d *DPoS) GetMetrics() *DPoSMetrics {
 	d.metrics.lock.RLock()
@@ -2002,27 +1973,6 @@ func (d *DPoS) GetMetrics() *DPoSMetrics {
 		BlockRewards:   new(big.Int).Set(d.metrics.BlockRewards),
 		LastBlockTime:  d.metrics.LastBlockTime,
 	}
-}
-
-// calculateReward 计算奖励
-func (d *DPoS) calculateReward(staker types.Address) *big.Int {
-	// 简化的奖励计算逻辑
-	// 这里可以根据实际的奖励算法来实现
-	voter, exists := d.voters[staker]
-	if !exists {
-		return big.NewInt(0)
-	}
-
-	// 基础奖励：投票权重的1%
-	reward := new(big.Int).Div(voter.VotingPower, big.NewInt(100))
-
-	// 设置最小奖励
-	minReward := big.NewInt(100000000000000000) // 0.1 token
-	if reward.Cmp(minReward) < 0 {
-		reward = minReward
-	}
-
-	return reward
 }
 
 // DefaultDPoSConfig 返回默认配置
@@ -2083,202 +2033,6 @@ func (c *DPoSConfig) GetConfigSummary() map[string]interface{} {
 	}
 }
 
-// verifyDataConsistencyAfterVote 验证投票后数据一致性
-// 🆕 简化版：快速数据一致性验证，避免阻塞
-func (d *DPoS) verifyDataConsistencyAfterVote() error {
-	d.lock.RLock()
-	defer d.lock.RUnlock()
-
-	d.logger.Info("🔍 Starting simplified data consistency verification...")
-
-	// 1. 快速检查内存中的验证者集合
-	memoryDelegates := d.delegates.Copy()
-	d.logger.Info("📊 Memory delegates count", "count", len(memoryDelegates))
-
-	// 2. 简化验证：只检查基本一致性，不读取数据库
-	d.logger.Info("🔍 Performing quick consistency check...")
-
-	// 检查内存中的验证者是否都有BLS公钥
-	blsKeyMissing := 0
-	for _, del := range memoryDelegates {
-		if del.BlsKey == nil {
-			blsKeyMissing++
-			d.logger.Warn("⚠️ Delegate missing BLS key in memory",
-				"address", del.Address.String(),
-				"votingPower", del.VotingPower.String())
-		}
-	}
-
-	if blsKeyMissing > 0 {
-		d.logger.Warn("⚠️ Some delegates missing BLS keys in memory",
-			"missingCount", blsKeyMissing,
-			"totalCount", len(memoryDelegates))
-	} else {
-		d.logger.Info("✅ All delegates have BLS keys in memory",
-			"totalCount", len(memoryDelegates))
-	}
-
-	d.logger.Info("✅ Simplified data consistency verification completed",
-		"memoryCount", len(memoryDelegates),
-		"blsKeysMissing", blsKeyMissing)
-
-	return nil
-}
-
-// 启动时读取并打印受托人数据
-func (d *DPoS) loadAndPrintDelegatesOnStartup() error {
-	d.logger.Debug("🔍 开始读取consensus\\dpos目录下的受托人数据...")
-
-	// 检查数据目录
-	if d.dataDir == "" {
-		d.logger.Warn("数据目录为空，无法读取受托人数据")
-		return nil
-	}
-
-	// 构建consensus\dpos路径
-	// 检查dataDir是否已经包含consensus\dpos
-	var dposDir string
-	if strings.Contains(d.dataDir, "consensus") && strings.Contains(d.dataDir, "dpos") {
-		// 如果dataDir已经包含consensus\dpos，直接使用
-		dposDir = d.dataDir
-		d.logger.Info("📁 受托人数据目录（已包含consensus\\dpos）", "path", dposDir)
-	} else {
-		// 否则拼接路径
-		dposDir = filepath.Join(d.dataDir, "consensus", "dpos")
-		d.logger.Info("📁 受托人数据目录（拼接路径）", "path", dposDir)
-	}
-
-	// 检查目录是否存在
-	if _, err := os.Stat(dposDir); os.IsNotExist(err) {
-		d.logger.Warn("受托人数据目录不存在", "path", dposDir)
-		return nil
-	}
-
-	// 读取目录内容
-	files, err := os.ReadDir(dposDir)
-	if err != nil {
-		d.logger.Error("读取受托人数据目录失败", "error", err)
-		return err
-	}
-
-	d.logger.Info("📋 受托人数据目录内容", "fileCount", len(files))
-
-	// 遍历文件并打印信息
-	for _, file := range files {
-		if !file.IsDir() {
-			filePath := filepath.Join(dposDir, file.Name())
-			fileInfo, err := os.Stat(filePath)
-			if err != nil {
-				d.logger.Warn("获取文件信息失败", "file", file.Name(), "error", err)
-				continue
-			}
-
-			d.logger.Info("📄 受托人数据文件",
-				"name", file.Name(),
-				"size", fileInfo.Size(),
-				"modTime", fileInfo.ModTime())
-		}
-	}
-
-	// 尝试从状态存储读取受托人信息
-	if d.state != nil && d.state.StakeStore != nil {
-		d.logger.Info("💾 尝试从状态存储读取受托人信息...")
-
-		// 🆕 新增：从与命令相同的数据源读取受托人数据
-		if err := d.callCommandDataSourcesOnStartup(); err != nil {
-			d.logger.Error("❌ 调用命令数据源失败", "error", err)
-		} else {
-			d.logger.Info("✅ 命令数据源调用完成（状态存储可用）")
-		}
-	} else {
-		d.logger.Warn("⚠️ 状态存储不可用，无法读取受托人详细信息")
-	}
-
-	d.logger.Info("🎯 受托人数据读取总结", "dataDir", d.dataDir, "dposDir", dposDir)
-	return nil
-}
-
-// 🆕 新增：从状态存储读取并打印受托人数据内容
-func (d *DPoS) readAndPrintDelegatesFromStorage() error {
-	d.logger.Debug("🔍 开始读取受托人数据内容...")
-
-	// 检查状态存储
-	if d.state == nil || d.state.StakeStore == nil {
-		return fmt.Errorf("state store not available")
-	}
-
-	// 尝试从数据库读取受托人信息
-	if d.state.db != nil {
-		d.logger.Info("💾 从BoltDB读取受托人信息...")
-
-		err := d.state.db.View(func(tx *bolt.Tx) error {
-			// 读取DelegateInfo bucket
-			delegateBucket := tx.Bucket([]byte("DelegateInfo"))
-			if delegateBucket == nil {
-				d.logger.Info("📋 DelegateInfo bucket不存在，没有受托人数据")
-				return nil
-			}
-
-			d.logger.Info("📋 找到DelegateInfo bucket，开始读取受托人数据...")
-
-			// 遍历所有受托人
-			cursor := delegateBucket.Cursor()
-			delegateCount := 0
-
-			for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
-				delegateCount++
-
-				// 解析受托人地址
-				address := types.BytesToAddress(key)
-
-				// 尝试解析受托人信息
-				var delegateInfo DelegateInfo
-				if err := json.Unmarshal(value, &delegateInfo); err != nil {
-					d.logger.Warn("⚠️ 解析受托人数据失败", "address", address.String(), "error", err)
-					// 显示原始数据
-					d.logger.Info("📄 受托人原始数据", "address", address.String(), "rawData", string(value))
-					continue
-				}
-
-				// 打印受托人详细信息
-				d.logger.Info("👤 受托人信息",
-					"序号", delegateCount,
-					"地址", delegateInfo.Address.String(),
-					"投票权重", delegateInfo.VotingPower.String(),
-					"总票数", delegateInfo.TotalVotes.String(),
-					"是否活跃", delegateInfo.IsActive,
-					"出块数", delegateInfo.ProducedBlocks,
-					"错过块数", delegateInfo.MissedBlocks)
-			}
-
-			d.logger.Info("📊 受托人数据统计", "总数", delegateCount)
-			return nil
-		})
-
-		if err != nil {
-			d.logger.Error("❌ 读取受托人数据失败", "error", err)
-			return err
-		}
-	}
-
-	// 也显示内存中的受托人信息
-	d.logger.Info("🧠 内存中的受托人信息...")
-	d.lock.RLock()
-	defer d.lock.RUnlock()
-
-	for i, del := range d.delegates {
-		d.logger.Debug("👤 内存受托人",
-			"序号", i+1,
-			"地址", del.Address.String(),
-			"投票权重", del.VotingPower.String(),
-			"是否活跃", del.IsActive,
-			"BLS密钥", del.BlsKey != nil)
-	}
-
-	d.logger.Debug("📊 内存受托人统计", "总数", len(d.delegates))
-	return nil
-}
-
 // 🆕 新增：启动时直接调用和命令一样的数据源方法
 func (d *DPoS) callCommandDataSourcesOnStartup() error {
 	// 🆕 数据源1: 从store获取验证者信息 (与命令中的 GetValidators() 一致)
@@ -2298,15 +2052,13 @@ func (d *DPoS) callCommandDataSourcesOnStartup() error {
 				// 🆕 查找对应的票数信息
 				var totalVotes *big.Int
 				var voterCount int
-				if stakingInfo != nil {
-					for _, stake := range stakingInfo {
-						if stake.Delegate.String() == validator.Address.String() {
-							if totalVotes == nil {
-								totalVotes = big.NewInt(0)
-							}
-							totalVotes.Add(totalVotes, stake.Amount)
-							voterCount++
+				for _, stake := range stakingInfo {
+					if stake.Delegate.String() == validator.Address.String() {
+						if totalVotes == nil {
+							totalVotes = big.NewInt(0)
 						}
+						totalVotes.Add(totalVotes, stake.Amount)
+						voterCount++
 					}
 				}
 				_ = totalVotes
@@ -2502,324 +2254,6 @@ func (r *dposRuntime) getEpochSize() uint64 {
 }
 
 // executeBatchStateUpdate 保留在 dpos.go 中（函数复杂，依赖较多）
-func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewardAccount types.Address) error {
-	d.logger.Info("🔧 ========== 开始执行批量状态更新 ==========",
-		"rewardAccount", rewardAccount.String(),
-		"recipientCount", len(rewards))
-
-	if d.config.Executor == nil {
-		d.logger.Error("❌ Executor不可用", "executor", d.config.Executor == nil)
-		return fmt.Errorf("executor not available")
-	}
-
-	// 计算总奖励金额
-	totalReward := big.NewInt(0)
-	for address, reward := range rewards {
-		totalReward.Add(totalReward, reward)
-		d.logger.Info("💰 奖励详情",
-			"address", address.String(),
-			"reward", reward.String())
-	}
-
-	d.logger.Info("💰 总奖励金额", "totalReward", totalReward.String())
-
-	// 获取当前区块头
-	currentHeader := d.config.Blockchain.Header()
-	if currentHeader == nil {
-		d.logger.Error("❌ 无法获取当前区块头")
-		return fmt.Errorf("failed to get current header")
-	}
-
-	// 🆕 确保当前区块头的哈希是正确的
-	if currentHeader.Hash == types.ZeroHash {
-		d.logger.Warn("⚠️ 当前区块头哈希为零，重新计算", "blockNumber", currentHeader.Number)
-		currentHeader.ComputeHash()
-		d.logger.Info("🔧 重新计算后的区块头哈希", "blockNumber", currentHeader.Number, "blockHash", currentHeader.Hash.String())
-	}
-
-	// 🆕 智能父区块哈希获取：如果当前区块头哈希仍然无效，尝试从区块链获取
-	if currentHeader.Hash == types.ZeroHash {
-		d.logger.Warn("⚠️ 重新计算后哈希仍为零，尝试从区块链获取最新区块头")
-		if latestHeader, exists := d.config.Blockchain.GetHeaderByNumber(currentHeader.Number); exists {
-			if latestHeader.Hash != types.ZeroHash {
-				d.logger.Info("🔧 从区块链获取到有效区块头",
-					"blockNumber", latestHeader.Number,
-					"blockHash", latestHeader.Hash.String())
-				currentHeader = latestHeader
-			}
-		}
-	}
-
-	// 🆕 强制获取最新区块头：确保使用最新的区块头作为父区块
-	d.logger.Info("🔍 强制获取最新区块头作为父区块",
-		"currentBlockNumber", currentHeader.Number,
-		"currentBlockHash", currentHeader.Hash.String())
-
-	// 尝试获取比当前区块号更高的区块头，确保使用最新的
-	for i := currentHeader.Number; i <= currentHeader.Number+2; i++ {
-		if latestHeader, exists := d.config.Blockchain.GetHeaderByNumber(i); exists {
-			if latestHeader.Hash != types.ZeroHash {
-				d.logger.Info("🔧 找到更新的区块头",
-					"blockNumber", latestHeader.Number,
-					"blockHash", latestHeader.Hash.String())
-				currentHeader = latestHeader
-				break
-			}
-		}
-	}
-
-	// 🆕 验证父区块确实存在于区块链中（宽松验证）
-	if _, exists := d.config.Blockchain.GetHeaderByHash(currentHeader.Hash); !exists {
-		d.logger.Warn("⚠️ 父区块不存在于区块链中，可能是时序问题，继续创建区块",
-			"parentBlockNumber", currentHeader.Number,
-			"parentBlockHash", currentHeader.Hash.String())
-		// 不返回错误，继续创建区块
-	} else {
-		d.logger.Info("✅ 父区块存在于区块链中",
-			"parentBlockNumber", currentHeader.Number,
-			"parentBlockHash", currentHeader.Hash.String())
-	}
-
-	// 🆕 额外验证：检查父区块哈希是否与区块链中的实际哈希匹配（宽松验证）
-	if actualHeader, exists := d.config.Blockchain.GetHeaderByNumber(currentHeader.Number); exists {
-		if actualHeader.Hash != currentHeader.Hash {
-			d.logger.Warn("⚠️ 父区块哈希不匹配，可能是时序问题，继续创建区块",
-				"parentBlockNumber", currentHeader.Number,
-				"expectedHash", currentHeader.Hash.String(),
-				"actualHash", actualHeader.Hash.String())
-			// 不返回错误，继续创建区块
-		} else {
-			d.logger.Info("✅ 父区块哈希匹配",
-				"parentBlockNumber", currentHeader.Number,
-				"parentBlockHash", currentHeader.Hash.String())
-		}
-	}
-
-	d.logger.Info("✅ 父区块验证成功",
-		"parentBlockNumber", currentHeader.Number,
-		"parentBlockHash", currentHeader.Hash.String())
-
-	d.logger.Info("🔍 当前区块头信息",
-		"blockNumber", currentHeader.Number,
-		"stateRoot", currentHeader.StateRoot.String(),
-		"blockHash", currentHeader.Hash.String())
-
-	// 🆕 通过快照操作状态（参考getValidatorBalance的实现）
-	d.logger.Info("🔍 开始创建状态快照", "stateRoot", currentHeader.StateRoot.String())
-	snapshot, err := d.config.Executor.StateAt(currentHeader.StateRoot)
-	if err != nil {
-		d.logger.Error("❌ 创建状态快照失败",
-			"stateRoot", currentHeader.StateRoot.String(),
-			"error", err)
-		return fmt.Errorf("failed to create snapshot at state root %s: %w", currentHeader.StateRoot.String(), err)
-	}
-
-	d.logger.Info("✅ 状态快照创建成功", "snapshot", snapshot != nil)
-
-	// 检查奖励账户余额
-	rewardAccountInfo, err := snapshot.GetAccount(rewardAccount)
-	if err != nil {
-		d.logger.Error("❌ 获取奖励账户信息失败",
-			"rewardAccount", rewardAccount.String(),
-			"error", err)
-		return fmt.Errorf("failed to get reward account info: %w", err)
-	}
-
-	rewardAccountBalance := big.NewInt(0)
-	if rewardAccountInfo != nil && rewardAccountInfo.Balance != nil {
-		rewardAccountBalance = rewardAccountInfo.Balance
-	}
-
-	d.logger.Info("💰 奖励账户余额检查",
-		"rewardAccount", rewardAccount.String(),
-		"balance", rewardAccountBalance.String(),
-		"required", totalReward.String(),
-		"sufficient", rewardAccountBalance.Cmp(totalReward) >= 0)
-
-	if rewardAccountBalance.Cmp(totalReward) < 0 {
-		d.logger.Error("❌ 奖励账户余额不足",
-			"rewardAccount", rewardAccount.String(),
-			"balance", rewardAccountBalance.String(),
-			"required", totalReward.String())
-		return fmt.Errorf("insufficient reward account balance: have %s, need %s",
-			rewardAccountBalance.String(), totalReward.String())
-	}
-
-	// 🆕 创建状态事务
-	d.logger.Info("🔍 开始创建状态事务")
-	txn := state.NewTxn(snapshot)
-	d.logger.Info("✅ 状态事务创建成功", "txn", txn != nil)
-
-	// 🆕 分发前检查所有验证者余额
-	d.logger.Info("🔍 ========== 分发前余额检查 ==========")
-	beforeBalances := make(map[types.Address]*big.Int)
-	for address, reward := range rewards {
-		accountInfo, err := snapshot.GetAccount(address)
-		if err != nil {
-			d.logger.Warn("⚠️ 无法获取账户信息", "address", address.String(), "error", err)
-			beforeBalances[address] = big.NewInt(0)
-		} else {
-			balance := big.NewInt(0)
-			if accountInfo != nil && accountInfo.Balance != nil {
-				balance = accountInfo.Balance
-			}
-			beforeBalances[address] = balance
-			d.logger.Info("🔍 分发前余额",
-				"address", address.String(),
-				"balance", balance.String(),
-				"reward", reward.String())
-		}
-	}
-
-	// 🆕 直接状态更新（参考TRON模式）
-	d.logger.Info("💰 ========== 开始直接状态更新 ==========",
-		"totalReward", totalReward.String(),
-		"recipientCount", len(rewards),
-		"rewardAccount", rewardAccount.String())
-
-	// 执行批量余额更新（直接操作主状态）
-	successCount := 0
-	for address, reward := range rewards {
-		// 🆕 直接更新主状态（参考TRON）
-		// 直接使用Txn的方法
-		d.logger.Info("💰 准备更新余额",
-			"address", address.String(),
-			"reward", reward.String(),
-			"beforeBalance", beforeBalances[address].String())
-
-		txn.AddBalance(address, reward)
-		txn.SubBalance(rewardAccount, reward)
-		successCount++
-
-		// 查询奖励分发后的余额
-		afterBalance := big.NewInt(0)
-		if accountInfo, exists := txn.GetAccount(address); exists && accountInfo != nil && accountInfo.Balance != nil {
-			afterBalance = accountInfo.Balance
-		}
-
-		d.logger.Info("✅ 奖励分发执行完成",
-			"address", address.String(),
-			"reward", reward.String(),
-			"beforeBalance", beforeBalances[address].String(),
-			"afterBalance", afterBalance.String(),
-			"type", "direct_main_state_update")
-	}
-
-	d.logger.Info("💰 批量余额更新完成", "successCount", successCount)
-
-	// 🆕 提交状态变更
-	d.logger.Debug("🔄 准备提交状态变更")
-	objects, err := txn.Commit(true)
-	if err != nil {
-		d.logger.Error("❌ 提交状态变更失败", "error", err)
-		return fmt.Errorf("failed to commit state changes: %w", err)
-	}
-	d.logger.Debug("✅ 状态变更提交成功", "objectsCount", len(objects))
-
-	// 延迟状态更新机制已移除，无需检查锁状态
-
-	// 🆕 更新状态根
-	d.logger.Info("🔄 准备更新状态根")
-	var newSnapshot state.Snapshot
-	var newStateRoot []byte
-	if len(objects) > 0 {
-		var err error
-		newSnapshot, newStateRoot, err = snapshot.Commit(objects)
-		if err != nil {
-			d.logger.Error("❌ 提交状态根失败", "error", err)
-			return fmt.Errorf("failed to commit state root: %w", err)
-		}
-
-		d.logger.Info("✅ 状态根更新成功",
-			"newStateRoot", fmt.Sprintf("%x", newStateRoot),
-			"newSnapshot", newSnapshot != nil)
-
-		// 🆕 模拟交易执行：直接更新状态根（就像执行交易一样）
-		d.logger.Info("🔧 开始更新区块链状态根（模拟交易执行）",
-			"blockNumber", currentHeader.Number,
-			"oldStateRoot", fmt.Sprintf("%x", currentHeader.StateRoot),
-			"newStateRoot", fmt.Sprintf("%x", newStateRoot))
-
-		// 🆕 不要直接修改currentHeader，而是创建一个新的区块头用于构建新区块
-		// 这样可以避免影响buildBlock中的父区块哈希
-		d.logger.Info("🔧 创建新的区块头用于构建新区块",
-			"blockNumber", currentHeader.Number,
-			"oldStateRoot", fmt.Sprintf("%x", currentHeader.StateRoot),
-			"newStateRoot", fmt.Sprintf("%x", newStateRoot))
-
-		// 🆕 生产节点状态根更新显著日志标志
-		d.logger.Info("🏭🏭🏭 ========== 生产节点状态根更新完成 ========== 🏭🏭🏭",
-			"blockNumber", currentHeader.Number,
-			"oldStateRoot", fmt.Sprintf("%x", currentHeader.StateRoot),
-			"newStateRoot", fmt.Sprintf("%x", newStateRoot),
-			"note", "生产节点已计算出奖励分发后的新状态根，将用于构建新区块")
-
-		// 🆕 生产节点状态根计算完成显著日志
-		d.logger.Info("🎯🎯🎯 ========== 生产节点状态根计算完成 ========== 🎯🎯🎯",
-			"blockNumber", currentHeader.Number,
-			"calculatedStateRoot", fmt.Sprintf("0x%x", newStateRoot),
-			"stateRootHex", fmt.Sprintf("0x%x", newStateRoot),
-			"note", "生产节点已计算出奖励分发后的新状态根")
-
-		// 🆕 设置全局状态根，供buildBlock使用
-		globalNewStateRootMutex.Lock()
-		globalNewStateRoot = types.BytesToHash(newStateRoot)
-		globalNewStateRootMutex.Unlock()
-		d.logger.Info("🔧 已设置全局状态根供buildBlock使用",
-			"blockNumber", currentHeader.Number,
-			"globalStateRoot", globalNewStateRoot.String())
-
-		// 🆕 关键修复：将新状态根同步到区块链的当前状态
-		// 这样后续的状态根比对就会使用更新后的状态根
-		if err := d.syncStateRootToBlockchain(currentHeader, newStateRoot); err != nil {
-			d.logger.Error("❌ 同步状态根到区块链失败", "error", err)
-			return fmt.Errorf("failed to sync state root to blockchain: %w", err)
-		}
-
-		d.logger.Info("✅ 奖励分发完成，状态根已更新到区块链",
-			"blockNumber", currentHeader.Number,
-			"newStateRoot", fmt.Sprintf("%x", newStateRoot),
-			"updateCount", len(objects))
-	} else {
-		d.logger.Warn("⚠️ 没有状态对象需要提交", "objectsCount", len(objects))
-	}
-
-	// 🆕 存储奖励分配信息到DPoS实例中，供区块构建时使用
-	d.logger.Info("🔧 开始存储奖励分配信息到pendingRewardDistribution",
-		"blockNumber", currentHeader.Number,
-		"note", "奖励分发信息将存储到区块ExtraData中，同步节点将根据此信息更新状态")
-
-	// 计算当前epoch
-	currentEpoch := currentHeader.Number / 10 // 假设每10个区块一个epoch
-
-	// 创建奖励分配信息
-	rewardDistribution := &RewardDistributionInfo{
-		EpochNumber: currentEpoch,
-		Rewards:     make(map[string]*big.Int),
-		TotalReward: big.NewInt(0),
-		Timestamp:   uint64(time.Now().Unix()),
-	}
-
-	// 存储奖励信息
-	for address, reward := range rewards {
-		addr := address.String()
-		rewardDistribution.Rewards[addr] = reward
-		rewardDistribution.TotalReward.Add(rewardDistribution.TotalReward, reward)
-	}
-
-	// 存储到DPoS实例中
-	d.pendingRewardDistribution = rewardDistribution
-
-	d.logger.Info("✅ 奖励分配信息已存储到pendingRewardDistribution",
-		"blockNumber", currentHeader.Number,
-		"epochNumber", currentEpoch,
-		"rewardCount", len(rewardDistribution.Rewards),
-		"totalReward", rewardDistribution.TotalReward.String(),
-		"note", "奖励分发信息将存储到区块ExtraData中，同步节点将根据此信息更新状态")
-
-	return nil
-}
-
 // runtimeBalanceQuerier 实现 NativeTokenBalanceQuerier 接口
 type runtimeBalanceQuerier struct {
 	runtime *dposRuntime
