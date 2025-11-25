@@ -4262,15 +4262,28 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 
 	d.logger.Info("✅ 参数提案交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", finalProposalID)
 
+	// 🆕 获取当前区块高度
+	currentBlockNumber := d.getCurrentBlockHeight()
+	if dposEngine := d.getDPoSEngine(); dposEngine != nil {
+		if getCurrentBlock, ok := dposEngine.(interface {
+			GetCurrentBlockNumber() uint64
+		}); ok {
+			if blockNum := getCurrentBlock.GetCurrentBlockNumber(); blockNum > 0 {
+				currentBlockNumber = blockNum
+			}
+		}
+	}
+
 	return map[string]interface{}{
-		"success":    true,
-		"txHash":     tx.Hash.String(),
-		"proposalId": finalProposalID,
-		"parameter":  parameter,
-		"newValue":   newValue,
-		"proposer":   proposer.String(),
-		"message":    "Parameter proposal transaction created and broadcasted successfully",
-		"note":       "Proposal will be created when transaction is included in a block",
+		"success":          true,
+		"txHash":           tx.Hash.String(),
+		"proposalId":       finalProposalID,
+		"parameter":        parameter,
+		"newValue":          newValue,
+		"proposer":         proposer.String(),
+		"currentBlockNumber": currentBlockNumber,
+		"message":          "Parameter proposal transaction created and broadcasted successfully",
+		"note":             "Proposal will be created when transaction is included in a block",
 	}, nil
 }
 
@@ -4447,16 +4460,29 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 
 	d.logger.Info("✅ 恢复提案交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", finalProposalID)
 
+	// 🆕 获取当前区块高度
+	currentBlockNumber := d.getCurrentBlockHeight()
+	if dposEngine := d.getDPoSEngine(); dposEngine != nil {
+		if getCurrentBlock, ok := dposEngine.(interface {
+			GetCurrentBlockNumber() uint64
+		}); ok {
+			if blockNum := getCurrentBlock.GetCurrentBlockNumber(); blockNum > 0 {
+				currentBlockNumber = blockNum
+			}
+		}
+	}
+
 	return map[string]interface{}{
-		"success":          true,
-		"txHash":           tx.Hash.String(),
-		"proposalId":       finalProposalID,
-		"validatorAddress": validatorAddr.String(),
-		"proposer":         proposer.String(),
-		"recoveryReason":   recoveryReason,
-		"description":      description,
-		"message":          "Recovery proposal transaction created and broadcasted successfully",
-		"note":             "Proposal will be created when transaction is included in a block",
+		"success":           true,
+		"txHash":            tx.Hash.String(),
+		"proposalId":        finalProposalID,
+		"validatorAddress":  validatorAddr.String(),
+		"proposer":          proposer.String(),
+		"recoveryReason":    recoveryReason,
+		"description":       description,
+		"currentBlockNumber": currentBlockNumber,
+		"message":           "Recovery proposal transaction created and broadcasted successfully",
+		"note":              "Proposal will be created when transaction is included in a block",
 	}, nil
 }
 
@@ -4597,14 +4623,27 @@ func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) 
 
 	d.logger.Info("✅ 投票交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", proposalID, "voter", voter.String())
 
+	// 🆕 获取当前区块高度
+	currentBlockNumber := d.getCurrentBlockHeight()
+	if dposEngine := d.getDPoSEngine(); dposEngine != nil {
+		if getCurrentBlock, ok := dposEngine.(interface {
+			GetCurrentBlockNumber() uint64
+		}); ok {
+			if blockNum := getCurrentBlock.GetCurrentBlockNumber(); blockNum > 0 {
+				currentBlockNumber = blockNum
+			}
+		}
+	}
+
 	return map[string]interface{}{
-		"success":    true,
-		"txHash":     tx.Hash.String(),
-		"proposalId": proposalID,
-		"voter":      voter.String(),
-		"support":    support,
-		"message":    "Vote transaction created and broadcasted successfully",
-		"note":       "Vote will be recorded when transaction is included in a block",
+		"success":           true,
+		"txHash":            tx.Hash.String(),
+		"proposalId":         proposalID,
+		"voter":             voter.String(),
+		"support":           support,
+		"currentBlockNumber": currentBlockNumber,
+		"message":           "Vote transaction created and broadcasted successfully",
+		"note":              "Vote will be recorded when transaction is included in a block",
 	}, nil
 }
 
@@ -4741,7 +4780,8 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 		createdAtFormatted := createdAtTime.Format("2006-01-02 15:04:05")
 
 		return map[string]interface{}{
-			"success": true,
+			"success":           true,
+			"currentBlockNumber": currentBlock,
 			"proposal": map[string]interface{}{
 				"proposalId":  proposal.ID,
 				"parameter":   proposal.Parameter,
@@ -5867,13 +5907,26 @@ func (d *DPOS) ExecuteParameterUpdate(ctx context.Context, params interface{}) (
 
 	d.logger.Info("✅ 执行提案交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", proposalID)
 
+	// 🆕 获取当前区块高度
+	currentBlockNumber := d.getCurrentBlockHeight()
+	if dposEngine := d.getDPoSEngine(); dposEngine != nil {
+		if getCurrentBlock, ok := dposEngine.(interface {
+			GetCurrentBlockNumber() uint64
+		}); ok {
+			if blockNum := getCurrentBlock.GetCurrentBlockNumber(); blockNum > 0 {
+				currentBlockNumber = blockNum
+			}
+		}
+	}
+
 	return map[string]interface{}{
-		"success":    true,
-		"txHash":     tx.Hash.String(),
-		"proposalId": proposalID,
-		"executor":   executor.String(),
-		"message":    "Execute proposal transaction created and broadcasted successfully",
-		"note":       "Proposal will be executed when transaction is included in a block",
+		"success":           true,
+		"txHash":            tx.Hash.String(),
+		"proposalId":         proposalID,
+		"executor":          executor.String(),
+		"currentBlockNumber": currentBlockNumber,
+		"message":           "Execute proposal transaction created and broadcasted successfully",
+		"note":              "Proposal will be executed when transaction is included in a block",
 	}, nil
 }
 
