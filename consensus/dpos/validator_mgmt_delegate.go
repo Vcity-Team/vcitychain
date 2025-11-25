@@ -38,7 +38,7 @@ func (d *DPoS) initializeDelegates() error {
 			d.logger.Warn("⚠️ 从数据库加载currentEpoch失败，使用默认值0",
 				"error", err,
 				"note", "首次启动或数据库中没有记录")
-	d.currentEpoch = 0
+			d.currentEpoch = 0
 		}
 	} else {
 		d.currentEpoch = 0
@@ -51,7 +51,6 @@ func (d *DPoS) initializeDelegates() error {
 		"configDelegateCount", d.config.DelegateCount,
 		"initialDelegatesCount", len(d.config.InitialDelegates),
 		"dposValidatorsCount", d.config.DPoSValidatorsCount,
-		"backupValidatorsCount", d.config.BackupValidatorsCount,
 		"maxMissedBlocks", d.config.MaxMissedBlocks,
 		"currentEpoch", d.currentEpoch)
 
@@ -1682,8 +1681,8 @@ func (d *DPoS) WithdrawDelegate(address types.Address) error {
 	// 如果参数系统没有值，使用配置值
 	if minFreezePeriod == 0 {
 		minFreezePeriod = d.config.MinFreezePeriod
-	if minFreezePeriod == 0 {
-		minFreezePeriod = 604800 // 默认7天
+		if minFreezePeriod == 0 {
+			minFreezePeriod = 604800 // 默认7天
 		}
 	}
 
@@ -1721,8 +1720,8 @@ func (d *DPoS) WithdrawDelegate(address types.Address) error {
 	// 如果参数系统没有值，使用配置值
 	if unfreezeLockPeriod == 0 {
 		unfreezeLockPeriod = d.config.UnfreezeLockPeriod
-	if unfreezeLockPeriod == 0 {
-		unfreezeLockPeriod = 1209600 // 默认14天
+		if unfreezeLockPeriod == 0 {
+			unfreezeLockPeriod = 1209600 // 默认14天
 		}
 	}
 	unfreezeAvailableAt := unfreezeAt + unfreezeLockPeriod

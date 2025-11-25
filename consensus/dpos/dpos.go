@@ -34,9 +34,8 @@ import (
 
 // 全局DPoS实例注册表，用于BLS公钥持久化
 var (
-	dposInstances = make(map[string]*DPoS)
-	dposMutex     sync.RWMutex
-	// ErrBusinessInvalid 标识业务前置条件不满足的非共识性错误（用于不中断区块执行）
+	dposInstances      = make(map[string]*DPoS)
+	dposMutex          sync.RWMutex
 	ErrBusinessInvalid = errors.New("business invalid")
 )
 
@@ -164,7 +163,6 @@ func GetAllDPoSInstances() map[string]*DPoS {
 	dposMutex.RLock()
 	defer dposMutex.RUnlock()
 
-	// 创建副本以避免外部修改
 	result := make(map[string]*DPoS)
 	for key, instance := range dposInstances {
 		result[key] = instance
@@ -220,13 +218,10 @@ type DPoSConfig struct {
 	// 轮次时间 (所有受托人完成一轮的时间)
 	RoundTime common.Duration `json:"roundTime"`
 
-	// 🆕 新增：DPoS验证者数量配置
+	// DPoS验证者数量配置
 	DPoSValidatorsCount uint64 `json:"dpos_validators_count"`
 
-	// 🆕 新增：备用验证者数量配置
-	BackupValidatorsCount uint64 `json:"backup_validators_count"`
-
-	// 🆕 新增：最大漏块数配置
+	// 最大漏块数配置
 	MaxMissedBlocks uint64 `json:"max_missed_blocks"`
 
 	Blockchain *blockchain.Blockchain
@@ -266,12 +261,6 @@ type DPoSConfig struct {
 	// 佣金默认配置
 	CommissionRateDefault     uint64        // 默认佣金率（基点）
 	CommissionEffectivePeriod time.Duration // 佣金率修改的延迟生效周期
-
-	// 注意：保证金阈值统一使用 MinVotingPower（dpos_delegate_threshold），不再使用 SRThreshold
-}
-
-// cleanupProcessedBlocks 清理已处理的区块记录（LRU自动管理）
-func (d *DPoS) cleanupProcessedBlocks() {
 }
 
 // GenerateExitProof generates proof of exit for given exit event
@@ -295,9 +284,9 @@ type DPoS struct {
 	// DPoS特有组件
 	config    *DPoSConfig
 	runtime   *dposRuntime
-	rawConfig map[string]interface{} // 🆕 存储原始配置，用于读取削减相关参数
+	rawConfig map[string]interface{} // 存储原始配置，用于读取削减相关参数
 
-	// 🆕 重构：功能模块（组合模式，支持依赖注入）
+	// 组合模式，支持依赖注入
 	consensus      core.ConsensusManager      // 共识管理器
 	validator      core.ValidatorManager      // 验证者管理器
 	epoch          core.EpochManager          // Epoch管理器
@@ -310,7 +299,6 @@ type DPoS struct {
 	bls            core.BLSManager            // BLS管理器
 	stateMgr       core.StateManager          // 状态管理器
 
-	// reference to the syncer
 	syncer syncer.Syncer
 
 	// 网络组件
@@ -355,14 +343,14 @@ type DPoS struct {
 	// 奖励分配信息
 	pendingRewardDistribution *RewardDistributionInfo
 
-	// 🆕 故障消减信息（只包含 missed blocks 的消减，不包含双重签名）
+	// 故障消减信息（只包含 missed blocks 的消减，不包含双重签名）
 	pendingSlashingInfo *SlashingInfo
 
-	// 🆕 故障检测信息
+	// 故障检测信息
 	pendingFaultFlags     []FaultFlagInfo
 	pendingEpochEndHeader *types.Header
 
-	// 🆕 经济系统组件
+	// 经济系统组件
 	epochManager      *TimeBasedEpochManager
 	blockTracker      *BlockProductionTracker
 	rewardDistributor *RewardDistributor
@@ -370,7 +358,7 @@ type DPoS struct {
 	// 固定时间窗口调度器
 	blockScheduler *BlockScheduler
 
-	// 🆕 双重签名检测器
+	// 双重签名检测器
 	doubleSigningDetector *DoubleSigningDetector
 
 	// 余额查询器
@@ -379,31 +367,29 @@ type DPoS struct {
 	// DPoS验证者相关字段
 	minStakeAmount *big.Int // 最小质押门槛
 
-	// 🆕 日志频率限制
+	// 日志频率限制
 	lastLogTime       map[string]time.Time   // 最后日志时间
 	logMutex          sync.RWMutex           // 日志锁
 	genesisExtraData  []byte                 // 创世块extraData
 	genesisValidators map[types.Address]bool // 创世验证者地址映射
 
-	// 🆕 新增：BLS网络通信相关字段
+	// BLS网络通信相关字段
 	blsRequestTopic  *network.Topic // BLS公钥请求Topic
 	blsResponseTopic *network.Topic // BLS公钥响应Topic
 
-	// 🆕 新增：BLS加载状态管理
+	// BLS加载状态管理
 	blsLoadingComplete bool
 	blsLoadingMutex    sync.RWMutex
 	blsLoadingWaitCh   chan struct{}
 
-	// 延迟状态更新机制已移除
-
-	// 🆕 参数表决机制相关字段
+	// 参数表决机制相关字段
 	parameterProposals map[string]*ParameterProposal // 提案存储
 	parameterUpdates   []*ParameterUpdate            // 参数更新记录
 	activeProposals    map[string]bool               // 活跃提案
 	proposalCounter    uint64                        // 提案计数器
 	votableParameters  map[string]*ParameterInfo     // 可表决参数配置
 
-	// 🆕 参数值缓存
+	// 参数值缓存
 	parameterCurrentValues map[string]interface{} // 参数当前值缓存
 	parameterValuesMutex   sync.RWMutex           // 参数值读写锁
 }
@@ -535,10 +521,10 @@ func (d *DPoS) FilterExtra(extra []byte) ([]byte, error) {
 func (d *DPoS) Start() error {
 	d.logger.Info("starting dpos consensus", "signer", d.key.String())
 
-	// 🆕 1. 初始化BLS加载状态
+	// 1. 初始化BLS加载状态
 	d.initializeBLSLoadingState()
 
-	// 🆕 2. 从数据库加载验证者信息（按voterpower排序并截取前N个）
+	// 2. 从数据库加载验证者信息（按voterpower排序并截取前N个）
 	if err := d.loadValidatorsFromDatabaseWithLimit(); err != nil {
 		d.logger.Warn("⚠️ 从数据库加载验证者失败，将使用runtime中的验证者", "error", err)
 		// 如果数据库为空，使用runtime中已经解析和排序的验证者
@@ -551,7 +537,6 @@ func (d *DPoS) Start() error {
 	}
 
 	// 设置交易池为密封状态，允许交易提升和区块构建
-	// 注意：只有当前节点是出块者时才设置 sealing=true
 	if d.txPool != nil {
 		// 检查当前节点是否是受托人（出块者）
 		if d.key != nil {
@@ -578,10 +563,10 @@ func (d *DPoS) Start() error {
 			d.logger.Warn("key not available, cannot determine if node is delegate")
 		}
 
-		// 🆕 所有DPoS节点都启用状态广播，无条件启用
+		// 启用状态广播
 		if d.syncer != nil {
 			d.syncer.EnablePublishingPeerStatus()
-			d.logger.Info("✅ 启用状态广播 (所有DPoS节点)")
+			d.logger.Info("✅ 启用状态广播")
 		} else {
 			d.logger.Warn("⚠️ syncer为空，无法启用状态广播")
 		}
@@ -611,26 +596,14 @@ func (d *DPoS) Start() error {
 		d.logger.Info("✅ syncer启动成功")
 	}
 
-	// 🆕 添加关键检查点日志
-	d.logger.Info("🔍 准备启动DPoS runtime，检查runtime状态",
-		"runtimeIsNil", d.runtime == nil)
-
 	// sync concurrently, retrying indefinitely
 	go common.RetryForever(context.Background(), time.Second, func(context.Context) error {
 		// 🆕 在区块同步前检查BLS公钥是否加载完成
 		if err := d.waitForBLSKeysLoaded(); err != nil {
 			d.logger.Warn("⚠️ 等待BLS公钥加载完成失败，继续尝试同步", "error", err)
-			// 不返回错误，继续尝试同步
 		}
 
 		blockHandler := func(b *types.FullBlock) bool {
-			// 实现DPoS的区块处理逻辑
-
-			// 处理奖励分配
-			if err := d.processRewards(b); err != nil {
-				d.logger.Error("failed to process rewards", "error", err, "block", b.Block.Number())
-			}
-
 			return false
 		}
 		if err := d.syncer.Sync(blockHandler); err != nil {
@@ -671,8 +644,6 @@ func (d *DPoS) Start() error {
 		}
 		d.logger.Info("✅ DPoS runtime启动成功")
 
-		// BLS公钥已在runtime启动前同步加载完成
-
 		// 新节点启动后，主动查询其他节点的待处理签名请求
 		go func() {
 			// 等待一段时间让网络连接稳定
@@ -680,9 +651,6 @@ func (d *DPoS) Start() error {
 			// 新节点启动，开始查询待处理签名请求（静默处理）
 			d.runtime.queryPendingSignatureRequests()
 		}()
-
-		// 🆕 移除：启动时BLS公钥广播（采用按需请求机制）
-		// 新的机制：只有在需要BLS公钥时才通过网络请求获取
 	} else {
 		d.logger.Error("❌ DPoS runtime为nil，无法启动出块循环")
 	}
@@ -692,14 +660,12 @@ func (d *DPoS) Start() error {
 		go d.state.startStatsReleasing()
 	}
 
-	// 🆕 新增：从数据库恢复投票数据
+	// 从数据库恢复投票数据
 	if err := d.restoreVotingDataFromDatabase(); err != nil {
 		d.logger.Error("Failed to restore voting data from database", "error", err)
-		// 不返回错误，因为这是非关键操作
-	} else {
 	}
 
-	// 🆕 新增：启动时直接调用和命令一样的数据源方法
+	// 启动时直接调用和命令一样的数据源方法
 	if err := d.callCommandDataSourcesOnStartup(); err != nil {
 		d.logger.Warn("Failed to call command data sources on startup", "error", err)
 	}
@@ -767,7 +733,7 @@ func (d *DPoS) Close() error {
 		d.runtime.close()
 	}
 
-	// 🆕 从全局注册表中注销DPoS实例
+	//  从全局注册表中注销DPoS实例
 	if d.key != nil {
 		key := d.key.Address().String()
 		UnregisterDPoSInstance(key)
@@ -929,7 +895,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Info("🔍 找到epochDuration配置", "type", fmt.Sprintf("%T", epochDuration), "value", epochDuration)
 		if duration, ok := epochDuration.(time.Duration); ok {
 			vcity_dpos.config.EpochDuration = duration
-			// logger.Info("⏰ 使用server层解析的epoch duration", "duration", duration.String())
 		} else {
 			logger.Warn("⏰ epochDuration类型断言失败", "type", fmt.Sprintf("%T", epochDuration))
 		}
@@ -941,7 +906,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Info("🔍 找到rewardAccount配置", "type", fmt.Sprintf("%T", rewardAccount), "value", rewardAccount)
 		if account, ok := rewardAccount.(types.Address); ok {
 			vcity_dpos.config.RewardAccount = account
-			// logger.Info("💰 使用server层解析的奖励账户", "account", account.String())
 		} else {
 			logger.Warn("💰 rewardAccount类型断言失败", "type", fmt.Sprintf("%T", rewardAccount))
 		}
@@ -953,7 +917,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Info("🔍 找到rewardAmount配置", "type", fmt.Sprintf("%T", rewardAmount), "value", rewardAmount)
 		if amount, ok := rewardAmount.(*big.Int); ok {
 			vcity_dpos.config.RewardAmount = amount
-			// logger.Info("💰 使用server层解析的奖励金额", "amount", amount.String())
 		} else {
 			logger.Warn("💰 rewardAmount类型断言失败", "type", fmt.Sprintf("%T", rewardAmount))
 		}
@@ -1071,7 +1034,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		if blockTime, ok := blockTimeStr.(string); ok {
 			if duration, err := time.ParseDuration(blockTime); err == nil {
 				vcity_dpos.config.BlockTime = common.Duration{Duration: duration}
-				// logger.Info("⏰ 使用server层解析的区块时间", "duration", duration.String())
 			} else {
 				logger.Warn("⏰ blockTime解析失败", "value", blockTime, "error", err)
 			}
@@ -1122,13 +1084,10 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Warn("🔓 未找到dpos_unfreeze_lock_period配置，使用默认值1209600秒（14天）")
 		vcity_dpos.config.UnfreezeLockPeriod = 1209600
 	}
-
-	// 设置必要的配置字段
 	vcity_dpos.config.SecretsManager = params.SecretsManager
 	vcity_dpos.config.Blockchain = params.Blockchain
 	vcity_dpos.config.Logger = params.Logger
 
-	// 如果配置没有正确传递，设置默认值
 	if vcity_dpos.config.EpochDuration == 0 {
 		logger.Warn("⚠️ epochDuration为0，设置默认值86400秒")
 		vcity_dpos.config.EpochDuration = 86400 * time.Second
@@ -1159,7 +1118,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		vcity_dpos.config.ProposalValidPeriod = 7 * 24 * time.Hour
 	}
 
-	// 检查BlockTime是否已正确设置，如果没有则使用默认值
 	if vcity_dpos.config.BlockTime.Duration == 0 {
 		vcity_dpos.config.BlockTime = common.Duration{Duration: 3 * time.Second}
 		logger.Info("⏰ 使用默认DPoS区块时间3秒", "duration", vcity_dpos.config.BlockTime.Duration.String())
@@ -1169,7 +1127,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	vcity_dpos.config.Network = params.Network
 	vcity_dpos.config.Executor = params.Executor
 
-	// 设置数据目录
 	vcity_dpos.logger.Debug("Config details",
 		"ConfigPath", params.Config.Path,
 		"ConfigType", fmt.Sprintf("%T", params.Config),
@@ -1180,16 +1137,14 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		vcity_dpos.logger.Debug("DPoS data directory set", "path", vcity_dpos.dataDir)
 	} else {
 		vcity_dpos.logger.Warn("Config path not set, DPoS data directory will not be available")
-		// 尝试使用默认路径
+
 		defaultPath := "./dpos"
 		vcity_dpos.dataDir = defaultPath
 		vcity_dpos.logger.Info("Using default DPoS data directory", "path", defaultPath)
 	}
 
-	// 初始化其他必要字段
 	vcity_dpos.voters = make(map[types.Address]*VoterInfo)
 	vcity_dpos.delegates = make(validator.AccountSet, 0)
-	// vcity_dpos.validatorsCache = newValidatorsSnapshotCache() // TODO: 需要正确的参数
 
 	// 初始化双重签名检测器
 	vcity_dpos.doubleSigningDetector = NewDoubleSigningDetector(logger)
@@ -1202,16 +1157,13 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 func (d *DPoS) Initialize() error {
 	d.logger.Debug("initializing dpos...")
 
-	// read account
 	account, err := wallet.NewAccountFromSecret(d.config.SecretsManager)
 	if err != nil {
 		return fmt.Errorf("failed to read account data. Error: %w", err)
 	}
 
-	// set key
 	d.key = wallet.NewKey(account)
 
-	// 检查Key是否成功设置
 	if d.key == nil {
 		return fmt.Errorf("failed to create wallet key")
 	}
@@ -1674,42 +1626,6 @@ func (d *DPoS) GetState() *State {
 	return d.state
 }
 
-// GetCurrentDelegates 获取当前内存中的受托人集合
-// GetCurrentDelegates 已迁移到 validator_mgmt_manager.go
-
-// processBlockVotes 已迁移到 voting_transaction.go
-
-// isGenesisValidator, isDelegateRegistrationTransaction, isVoteTransaction, processDelegateRegistrationTransaction,
-// parseDelegateRegistrationTransactionData, calculateTotalVotedAmount, IsDelegateRegistered, IsDelegateCandidate,
-// createDelegateRegistrationTransactionData, RegisterDelegate, RegisterDelegateWithKey, RegisterDelegateWithKeyAndChainID,
-// createDelegateRegistrationTransaction, createDelegateRegistrationTransactionWithChainID, signTransaction, signTransactionWithChainID,
-// ApproveDelegate, RejectDelegate, GetDelegateRegistrations, getDelegateDepositAmount, getMaxActiveDelegates,
-// updateActiveDelegates, WithdrawDelegate, compareDelegateSets, updateDelegates, updateDelegatesInternal 已迁移到 validator_mgmt_delegate.go
-
-// 所有委托者注册相关函数已迁移到 validator_mgmt_delegate.go，函数实现已删除
-// 包括：isGenesisValidator, isDelegateRegistrationTransaction, isVoteTransaction,
-// processDelegateRegistrationTransaction, parseDelegateRegistrationTransactionData,
-// calculateTotalVotedAmount, IsDelegateRegistered, IsDelegateCandidate,
-// createDelegateRegistrationTransactionData, RegisterDelegate, RegisterDelegateWithKey,
-// RegisterDelegateWithKeyAndChainID, createDelegateRegistrationTransaction,
-// createDelegateRegistrationTransactionWithChainID, signTransaction, signTransactionWithChainID,
-// ApproveDelegate, RejectDelegate, GetDelegateRegistrations, getDelegateDepositAmount,
-// getMaxActiveDelegates, updateActiveDelegates, WithdrawDelegate, compareDelegateSets,
-// updateDelegates, updateDelegatesInternal
-
-// processVoteTransaction 已迁移到 voting_transaction.go
-// parseVoteTransactionData 已迁移到 voting_transaction.go
-// validateVote 已迁移到 voting_validator.go
-// processVoteInternal 和 processVote 已迁移到 voting_processor.go
-// checkVoteNonce 和 verifyVoteSignature 已迁移到 voting_validator.go
-
-// 处理奖励分配
-func (d *DPoS) processRewards(block *types.FullBlock) error {
-	// 处理奖励分配
-	// TODO: 实现奖励分配逻辑
-	return nil
-}
-
 // 初始化性能优化组件
 func (d *DPoS) initPerformanceOptimizations() {
 	// 初始化缓存
@@ -1807,8 +1723,6 @@ func (d *DPoS) batchWorker(id int) {
 		}
 	}
 }
-
-// processVoteBatch 已迁移到 voting_processor.go
 
 // 批量处理委托
 func (d *DPoS) processDelegateBatch(delegates []*DelegateMessage) {
@@ -2078,10 +1992,6 @@ func (d *DPoS) GetMetrics() *DPoSMetrics {
 	}
 }
 
-// 更新受托人投票权重（已废弃，现在直接通过数据库操作）
-// 保留此函数以保持向后兼容性，但实际逻辑已移至数据库直接操作
-// updateDelegateVotingPower 已迁移到 voting_weight.go
-
 // calculateReward 计算奖励
 func (d *DPoS) calculateReward(staker types.Address) *big.Int {
 	// 简化的奖励计算逻辑
@@ -2161,8 +2071,6 @@ func (c *DPoSConfig) GetConfigSummary() map[string]interface{} {
 	}
 }
 
-// collectValidatorSignatures, verifyBlockDataConsistency, getActiveValidatorsCount, calculateMinRequiredSignatures 函数已迁移到 block_builder.go
-
 // verifyDataConsistencyAfterVote 验证投票后数据一致性
 // 🆕 简化版：快速数据一致性验证，避免阻塞
 func (d *DPoS) verifyDataConsistencyAfterVote() error {
@@ -2205,45 +2113,7 @@ func (d *DPoS) verifyDataConsistencyAfterVote() error {
 	return nil
 }
 
-// verifyBlockDataConsistency 已迁移到 block_builder.go
-
-// getActiveValidatorsCount 已迁移到 block_builder.go
-
-// calculateMinRequiredSignatures 已迁移到 block_builder.go
-
-// waitForNetworkGrowth, waitForSignaturesWithContext, collectSignaturesAsync, fallbackSignatureCollection, createSignatureListener, isValidator, generateSignatureResponse, verifyValidatorSignatureByAddress 已迁移到 block_builder.go
-
-// mockSignatureCollection 已移除 - 不再支持mock签名收集
-
-// SignatureListener, SignatureRequest, SignatureResponse 已迁移到 block_builder.go
-
-// verifyValidatorSignature, validateSignatureResponse, isSignatureRequestProcessed, markSignatureRequestProcessed, isSignatureResponseBroadcasted, markSignatureResponseBroadcasted, isSignatureResponseGenerated, markSignatureResponseGenerated, getSignatureCollectionProgress, fallbackSignatureRequestPropagation, simpleFallbackMonitoring, debugPendingSignatureRequests 已迁移到 block_builder.go
-// SignatureQueryRequest 已迁移到 block_builder.go
-
-// 以下函数定义已迁移到 block_builder.go，已从 dpos.go 删除
-// verifyValidatorSignature, validateSignatureResponse, isSignatureRequestProcessed, markSignatureRequestProcessed,
-// isSignatureResponseBroadcasted, markSignatureResponseBroadcasted, isSignatureResponseGenerated,
-// markSignatureResponseGenerated, debugPendingSignatureRequests, SignatureQueryRequest 已迁移到 block_builder.go
-
-// simpleFallbackMonitoring, getSignatureCollectionProgress, fallbackSignatureRequestPropagation 函数已迁移到 block_builder.go
-// setupNetworkIntegration 函数已迁移到 runtime_init.go
-
-// persistVoteToDatabase 已迁移到 storage.go
-
-// persistDelegateVotingPower 持久化受托人的投票权重
-// persistDelegateVotingPower 已迁移到 voting_weight.go
-
-// persistSingleDelegateToDatabase, restoreVotingDataFromDatabase, restoreVotersFromDatabase, restoreDelegatesFromDatabase,
-// persistDelegateSetToDatabase, persistDelegateSetToDatabaseWithTarget 已迁移到 storage.go
-
-// updateValidatorStatus 和 canParticipateInConsensus 已迁移到 validator_mgmt_delegate.go
-
-// shouldParticipateInBLSSigning 检查验证者是否应该参与BLS签名
-// shouldParticipateInBLSSigning 已迁移到 bls_public_key.go
-
-// persistDelegateSetToDatabase, persistDelegateSetToDatabaseWithTarget 已迁移到 storage.go
-
-// 🆕 新增：启动时读取并打印受托人数据
+// 启动时读取并打印受托人数据
 func (d *DPoS) loadAndPrintDelegatesOnStartup() error {
 	d.logger.Debug("🔍 开始读取consensus\\dpos目录下的受托人数据...")
 
@@ -2459,9 +2329,6 @@ func (d *DPoS) callCommandDataSourcesOnStartup() error {
 	return nil
 }
 
-// 🆕 新增：启动时预加载BLS公钥到缓存和数据库（严格模式）
-// preloadBLSKeysOnStartup, fetchMissingBLSKeysFromNetwork 已迁移到 bls_loading.go
-
 // 🆕 将验证者数据同步到数据库
 func (d *DPoS) syncDelegatesToDatabase(delegates validator.AccountSet) error {
 	d.logger.Info("💾 开始将验证者数据同步到数据库...")
@@ -2481,11 +2348,7 @@ func (d *DPoS) syncDelegatesToDatabase(delegates validator.AccountSet) error {
 	return nil
 }
 
-// GetBLSKeyBytesFromGenesis 已迁移到 bls_public_key.go
-
-// getValidatorsFromExtraDataForProduction 已迁移到 block_builder.go
-
-// 🆕 新增：获取数据目录路径
+// 获取数据目录路径
 func (d *DPoS) getDataDir() string {
 	// 从DPoS实例的数据目录字段获取
 	if d.dataDir != "" {
@@ -2499,10 +2362,6 @@ func (d *DPoS) getDataDir() string {
 
 	return "" // 返回空字符串表示未找到
 }
-
-// getBLSKeyBytes, generateBLSKey 已迁移到 bls_public_key.go
-
-// persistBLSKeyToStakeStore 已迁移到 bls_storage.go
 
 // syncRuntimeDelegatesWithRetry 异步同步 dposRuntime 的 delegates 状态，使用重试机制
 func (d *DPoS) syncRuntimeDelegatesWithRetry() {
@@ -2557,8 +2416,6 @@ func (d *DPoS) GetValidators() validator.AccountSet {
 	// 如果 runtime 不可用，返回空集合
 	return validator.AccountSet{}
 }
-
-// getVotingPowerFromDatabase, updateVotingPowerInDatabase 已迁移到 voting_weight.go
 
 // syncDelegateFromDatabase 从数据库同步指定验证者到内存
 func (d *DPoS) syncDelegateFromDatabase(delegate types.Address) error {
@@ -2616,14 +2473,6 @@ func (d *DPoS) syncDelegateFromDatabase(delegate types.Address) error {
 	return fmt.Errorf("delegate not found in database: %s", delegate.String())
 }
 
-// GetBLSKeyForValidator, EnsureBLSKeyForValidator 已迁移到 bls_public_key.go
-
-// BLS相关函数已迁移到 bls_network.go, bls_private_key.go, bls_public_key.go, bls_loading.go, bls_storage.go
-
-// BLSPublicKeyResponse 类型已迁移到 bls_types.go
-
-// initializeEconomicSystem 已迁移到 economic_system.go
-
 // getEpochSize 根据配置计算epoch大小（区块数）
 func (r *dposRuntime) getEpochSize() uint64 {
 	if r.config == nil || r.config.dposBackend == nil {
@@ -2640,22 +2489,6 @@ func (r *dposRuntime) getEpochSize() uint64 {
 	return dposInstance.getEpochSize()
 }
 
-// getEpochSize 根据配置计算epoch大小（区块数）
-// getEpochSize 已迁移到 validator_mgmt_epoch.go
-
-// handleEpochSwitch 已迁移到 economic_system.go
-// processEconomicSystem 已迁移到 economic_system.go
-
-// calculateStateUpdateHash 计算状态更新哈希
-// calculateStateUpdateHash 已迁移到 account_query.go
-// syncStateRootToBlockchain 已迁移到 account_query.go
-
-// applyDelayedStateUpdateFromBlock 函数已移除，延迟状态更新机制不再需要
-
-// getAccountBalance 已迁移到 account_query.go
-
-// calculateStateUpdateHash 已迁移到 account_query.go
-// syncStateRootToBlockchain 已迁移到 account_query.go
 // executeBatchStateUpdate 保留在 dpos.go 中（函数复杂，依赖较多）
 func (d *DPoS) executeBatchStateUpdate(rewards map[types.Address]*big.Int, rewardAccount types.Address) error {
 	d.logger.Info("🔧 ========== 开始执行批量状态更新 ==========",
