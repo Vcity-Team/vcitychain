@@ -733,6 +733,9 @@ func (d *DPoS) Start() error {
 		d.initRewardModule()
 	}
 	if d.fault == nil {
+		d.initFaultModule()
+	}
+	if d.fault == nil {
 		d.fault = NewFaultManagerAdapter(d)
 	}
 	if d.query == nil {
