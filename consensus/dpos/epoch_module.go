@@ -10,6 +10,18 @@ import (
 	"github.com/Vcity-Team/vcitychain/types"
 )
 
+func (d *DPoS) initEpochModule() {
+	if d.epoch != nil {
+		return
+	}
+	if d.epochManager == nil {
+		d.logger.Warn("epoch manager backend not initialized")
+		return
+	}
+
+	d.epoch = epochmodule.NewManager(d.epochManager, d.logger.Named("epoch_module"))
+}
+
 func (d *DPoS) initEpochLifecycleModule() {
 	if d.epochLifecycle != nil {
 		return

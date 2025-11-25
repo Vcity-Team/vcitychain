@@ -11,8 +11,8 @@ import (
 type EpochManagerInterface interface {
 	GetCurrentEpoch(blockNumber uint64) uint64
 	GetEpochInfo(blockNumber uint64) (uint64, time.Time, time.Duration)
-	getEpochSize() uint64
-	getConsensusSwitchHeight() uint64
+	GetEpochSize() uint64
+	GetConsensusSwitchHeight() uint64
 }
 
 // Manager Epoch管理器的默认实现
@@ -50,8 +50,8 @@ func (m *Manager) IsEpochEnd(blockNumber uint64) bool {
 	if m.epochManager == nil {
 		return false
 	}
-	epochSize := m.epochManager.getEpochSize()
-	consensusSwitchHeight := m.epochManager.getConsensusSwitchHeight()
+	epochSize := m.epochManager.GetEpochSize()
+	consensusSwitchHeight := m.epochManager.GetConsensusSwitchHeight()
 
 	if blockNumber < consensusSwitchHeight {
 		return false
@@ -69,5 +69,5 @@ func (m *Manager) GetEpochSize() uint64 {
 	if m.epochManager == nil {
 		return 0
 	}
-	return m.epochManager.getEpochSize()
+	return m.epochManager.GetEpochSize()
 }

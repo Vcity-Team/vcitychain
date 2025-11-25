@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	core "github.com/Vcity-Team/vcitychain/consensus/dpos/core"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
 )
@@ -121,7 +122,7 @@ const (
 // StakeInfo 质押信息结构体
 type StakeInfo struct {
 	Staker          types.Address          `json:"staker"`
-	Amount          *big.Int               `json:"amount"`                  // 当前金额（削减后）
+	Amount          *big.Int               `json:"amount"`                   // 当前金额（削减后）
 	OriginalAmount  *big.Int               `json:"originalAmount,omitempty"` // 🆕 原始投票金额（第一次投票时的金额，削减前）
 	StartTime       uint64                 `json:"startTime"`
 	EndTime         uint64                 `json:"endTime"`
@@ -129,113 +130,29 @@ type StakeInfo struct {
 	IsActive        bool                   `json:"isActive"`
 	Rewards         *big.Int               `json:"rewards"`
 	Delegate        types.Address          `json:"delegate"`
-	FaultFlag       map[string]interface{} `json:"faultFlag,omitempty"` // 🆕 故障标志信息：isFaulty, missedBlocks, reason
-	SlashingRecords []*SlashingRecord     `json:"slashingRecords,omitempty"` // 🆕 削减历史（按时间顺序）
+	FaultFlag       map[string]interface{} `json:"faultFlag,omitempty"`       // 🆕 故障标志信息：isFaulty, missedBlocks, reason
+	SlashingRecords []*SlashingRecord      `json:"slashingRecords,omitempty"` // 🆕 削减历史（按时间顺序）
 }
 
 // 🆕 参数表决相关数据结构
 
-// ParameterProposal 参数表决提案结构
-type ParameterProposal struct {
-	ID            string                          `json:"id"`
-	ProposalType  string                          `json:"proposalType"`  // 🆕 提案类型："parameter" 或 "validator_recovery"
-	Parameter     string                          `json:"parameter"`     // 参数名（parameter类型）或验证者地址（recovery类型）
-	OldValue      interface{}                     `json:"oldValue"`      // 当前值
-	NewValue      interface{}                     `json:"newValue"`      // 提议值
-	Proposer      types.Address                   `json:"proposer"`      // 提案者
-	StartBlock    uint64                          `json:"startBlock"`    // 投票开始区块
-	EndBlock      uint64                          `json:"endBlock"`      // 投票结束区块（表决期结束）
-	ValidEndBlock uint64                          `json:"validEndBlock"` // 🆕 有效期结束区块
-	Status        ProposalStatus                  `json:"status"`        // 提案状态
-	Votes         map[types.Address]ParameterVote `json:"votes"`         // 投票记录
-	Threshold     uint64                          `json:"threshold"`     // 通过阈值(百分比)
-	Description   string                          `json:"description"`   // 提案描述
-	CreatedAt     uint64                          `json:"createdAt"`     // 创建时间
-	// 🆕 Recovery专用字段
-	ValidatorAddress  types.Address `json:"validatorAddress,omitempty"`  // 要恢复的验证者地址
-	RecoveryReason    string        `json:"recoveryReason,omitempty"`    // 恢复理由
-	ExecutedAt        uint64        `json:"executedAt,omitempty"`        // 执行时间
-	ExecutedBy        string        `json:"executedBy,omitempty"`        // 执行者（提案ID）
-	ProposalSignature []byte        `json:"proposalSignature,omitempty"` // 🆕 提案创建签名
-	// 🆕 调度与生效元数据（持久化）
-	Schedule ProposalScheduleMeta `json:"schedule,omitempty"`
-}
-
-// ProposalStatus 提案状态
-type ProposalStatus int
+// Governance-related type aliases (re-exported from core for backwards compatibility).
+type ParameterProposal = core.ParameterProposal
+type ProposalStatus = core.ProposalStatus
 
 const (
-	ProposalPending  ProposalStatus = iota // 待投票
-	ProposalActive                         // 投票中
-	ProposalPassed                         // 已通过
-	ProposalRejected                       // 已拒绝
-	ProposalExecuted                       // 已执行
+	ProposalPending  ProposalStatus = core.ProposalPending
+	ProposalActive   ProposalStatus = core.ProposalActive
+	ProposalPassed   ProposalStatus = core.ProposalPassed
+	ProposalRejected ProposalStatus = core.ProposalRejected
+	ProposalExecuted ProposalStatus = core.ProposalExecuted
 )
 
-// String 返回提案状态的字符串表示
-func (ps ProposalStatus) String() string {
-	switch ps {
-	case ProposalPending:
-		return "pending"
-	case ProposalActive:
-		return "active"
-	case ProposalPassed:
-		return "passed"
-	case ProposalRejected:
-		return "rejected"
-	case ProposalExecuted:
-		return "executed"
-	default:
-		return "unknown"
-	}
-}
-
-// ParameterVote 参数表决投票
-type ParameterVote struct {
-	Voter      types.Address `json:"voter"`
-	ProposalID string        `json:"proposalId"`
-	Support    bool          `json:"support"` // true=支持, false=反对
-	Weight     *big.Int      `json:"weight"`  // 投票权重
-	Timestamp  uint64        `json:"timestamp"`
-	Signature  []byte        `json:"signature"` // 投票签名
-}
-
-// 🆕 提案交易数据结构
-// ProposalCreateTxData 创建提案交易数据
-type ProposalCreateTxData struct {
-	ProposalType      string      `json:"proposalType"`             // "parameter" 或 "validator_recovery"
-	Parameter         string      `json:"parameter"`                // 参数名或验证者地址
-	NewValue          interface{} `json:"newValue"`                 // 新值
-	Description       string      `json:"description"`              // 提案描述
-	RecoveryReason    string      `json:"recoveryReason,omitempty"` // 恢复理由（仅用于恢复提案）
-	ProposerSignature []byte      `json:"proposerSignature"`        // 提案签名
-	CreatedAt         uint64      `json:"createdAt"`                // 签名时间戳（用于验签一致性）
-}
-
-// 🆕 提案调度与生效元数据（持久化在 Proposal 中）
-// 当执行提案时，不立即应用影响出块者集合的变化（如清除故障），而是登记在此，等待下个 epoch 边界统一生效
-type ProposalScheduleMeta struct {
-	// 是否已安排在边界生效
-	Scheduled bool `json:"scheduled"`
-	// 生效的目标 epoch
-	EffectiveEpoch uint64 `json:"effectiveEpoch"`
-	// 是否已在边界应用
-	Applied bool `json:"applied"`
-	// 实际应用的区块号
-	AppliedAtBlock uint64 `json:"appliedAtBlock"`
-}
-
-// ProposalVoteTxData 投票交易数据
-type ProposalVoteTxData struct {
-	ProposalID    string `json:"proposalId"`
-	Support       bool   `json:"support"`
-	VoteSignature []byte `json:"voteSignature"` // 投票签名
-}
-
-// ProposalExecuteTxData 执行提案交易数据
-type ProposalExecuteTxData struct {
-	ProposalID string `json:"proposalId"`
-}
+type ParameterVote = core.ParameterVote
+type ProposalScheduleMeta = core.ProposalScheduleMeta
+type ProposalCreateTxData = core.ProposalCreateTxData
+type ProposalVoteTxData = core.ProposalVoteTxData
+type ProposalExecuteTxData = core.ProposalExecuteTxData
 
 // DelegateRegistration 受托人注册信息（改进的TRON风格）
 type DelegateRegistration struct {
@@ -281,16 +198,7 @@ func (rs RegStatus) String() string {
 	}
 }
 
-// ParameterUpdate 参数更新记录
-type ParameterUpdate struct {
-	Parameter  string      `json:"parameter"`
-	OldValue   interface{} `json:"oldValue"`
-	NewValue   interface{} `json:"newValue"`
-	BlockNum   uint64      `json:"blockNum"`   // 生效区块号
-	Executed   bool        `json:"executed"`   // 是否已执行
-	ProposalID string      `json:"proposalId"` // 关联提案ID
-	ExecutedAt uint64      `json:"executedAt"` // 执行时间
-}
+type ParameterUpdate = core.ParameterUpdate
 
 // ParameterInfo 参数信息
 type ParameterInfo struct {
@@ -305,14 +213,14 @@ type ParameterInfo struct {
 
 // VoterInfo 投票者信息结构
 type VoterInfo struct {
-	Address         types.Address                    `json:"address"`        // 投票者地址
-	VotingPower     *big.Int                         `json:"votingPower"`    // 投票权重（保留用于兼容）
-	VotedDelegates  []types.Address                   `json:"votedDelegates"` // 投票的验证者列表（保留用于兼容）
-	DelegateVotes   map[types.Address]*big.Int        `json:"delegateVotes"`   // 🆕 delegate -> 投票金额（削减后）
+	Address         types.Address                       `json:"address"`         // 投票者地址
+	VotingPower     *big.Int                            `json:"votingPower"`     // 投票权重（保留用于兼容）
+	VotedDelegates  []types.Address                     `json:"votedDelegates"`  // 投票的验证者列表（保留用于兼容）
+	DelegateVotes   map[types.Address]*big.Int          `json:"delegateVotes"`   // 🆕 delegate -> 投票金额（削减后）
 	SlashingRecords map[types.Address][]*SlashingRecord `json:"slashingRecords"` // 🆕 削减历史记录
-	LastVoteTime    uint64                           `json:"lastVoteTime"`   // 最后投票时间
-	LockedUntil     uint64                           `json:"lockedUntil"`    // 锁定到期时间
-	Nonce           map[uint64]bool                   `json:"nonce"`          // 防重放
+	LastVoteTime    uint64                              `json:"lastVoteTime"`    // 最后投票时间
+	LockedUntil     uint64                              `json:"lockedUntil"`     // 锁定到期时间
+	Nonce           map[uint64]bool                     `json:"nonce"`           // 防重放
 }
 
 // DelegateInfo 受托人信息
@@ -356,14 +264,14 @@ type SlashingRecord struct {
 	BlockNumber            uint64        `json:"block_number"`
 	EpochNumber            uint64        `json:"epoch_number"`
 	Timestamp              uint64        `json:"timestamp"`
-	SlashAmount            *big.Int      `json:"slash_amount"`            // 本次削减的金额
-	OldVoteAmount          *big.Int      `json:"old_vote_amount"`        // 削减前的投票金额
-	NewVoteAmount          *big.Int      `json:"new_vote_amount"`        // 削减后的投票金额
-	SlashRate              uint64        `json:"slash_rate"`              // 削减率（基点）
-	Reason                 string        `json:"reason"`                  // 削减原因
-	MissedBlocks           uint64        `json:"missed_blocks,omitempty"`  // 漏块数（轻度违规）
+	SlashAmount            *big.Int      `json:"slash_amount"`                       // 本次削减的金额
+	OldVoteAmount          *big.Int      `json:"old_vote_amount"`                    // 削减前的投票金额
+	NewVoteAmount          *big.Int      `json:"new_vote_amount"`                    // 削减后的投票金额
+	SlashRate              uint64        `json:"slash_rate"`                         // 削减率（基点）
+	Reason                 string        `json:"reason"`                             // 削减原因
+	MissedBlocks           uint64        `json:"missed_blocks,omitempty"`            // 漏块数（轻度违规）
 	MissedBlocksPercentage uint64        `json:"missed_blocks_percentage,omitempty"` // 漏块率（轻度违规）
-	DoubleSigningHeight    uint64        `json:"double_signing_height,omitempty"`     // 双重签名高度（严重违规）
+	DoubleSigningHeight    uint64        `json:"double_signing_height,omitempty"`    // 双重签名高度（严重违规）
 }
 
 // SlashingHistory 处罚历史记录（存储在数据库中，用于验证者）
@@ -372,12 +280,12 @@ type SlashingHistory struct {
 	BlockNumber            uint64        `json:"block_number"`
 	EpochNumber            uint64        `json:"epoch_number"`
 	Timestamp              uint64        `json:"timestamp"`
-	SlashAmount            *big.Int      `json:"slash_amount"`            // 本次削减的总金额
-	OldVotingPower         *big.Int      `json:"old_voting_power"`        // 削减前的总投票权重
-	NewVotingPower         *big.Int      `json:"new_voting_power"`        // 削减后的总投票权重
-	SlashRate              uint64        `json:"slash_rate"`               // 削减率（基点）
-	Reason                 string        `json:"reason"`                   // 削减原因
-	MissedBlocks           uint64        `json:"missed_blocks,omitempty"`  // 漏块数（轻度违规）
+	SlashAmount            *big.Int      `json:"slash_amount"`                       // 本次削减的总金额
+	OldVotingPower         *big.Int      `json:"old_voting_power"`                   // 削减前的总投票权重
+	NewVotingPower         *big.Int      `json:"new_voting_power"`                   // 削减后的总投票权重
+	SlashRate              uint64        `json:"slash_rate"`                         // 削减率（基点）
+	Reason                 string        `json:"reason"`                             // 削减原因
+	MissedBlocks           uint64        `json:"missed_blocks,omitempty"`            // 漏块数（轻度违规）
 	MissedBlocksPercentage uint64        `json:"missed_blocks_percentage,omitempty"` // 漏块率（轻度违规）
-	DoubleSigningHeight    uint64        `json:"double_signing_height,omitempty"`     // 双重签名高度（严重违规）
+	DoubleSigningHeight    uint64        `json:"double_signing_height,omitempty"`    // 双重签名高度（严重违规）
 }

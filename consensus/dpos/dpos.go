@@ -294,7 +294,7 @@ type DPoS struct {
 	reward         core.RewardManager         // 奖励管理器
 	fault          core.FaultManager          // 故障管理器
 	query          core.QueryManager          // 查询管理器
-	governance     *governanceModule          // 治理模块
+	governance     core.GovernanceManager     // 治理模块
 	network        core.NetworkManager        // 网络管理器
 	bls            core.BLSManager            // BLS管理器
 	stateMgr       core.StateManager          // 状态管理器
@@ -686,6 +686,9 @@ func (d *DPoS) Start() error {
 	if d.validator == nil {
 		d.validator = NewValidatorManagerAdapter(d)
 	}
+	if d.epoch == nil {
+		d.initEpochModule()
+	}
 	if d.epoch == nil && d.epochManager != nil {
 		d.epoch = NewEpochManagerAdapter(d.epochManager)
 	}
@@ -708,7 +711,13 @@ func (d *DPoS) Start() error {
 		d.initEpochLifecycleModule()
 	}
 	if d.network == nil {
+		d.initNetworkModule()
+	}
+	if d.network == nil {
 		d.network = NewNetworkManagerAdapter(d)
+	}
+	if d.bls == nil {
+		d.initBLSModule()
 	}
 	if d.bls == nil {
 		d.bls = NewBLSManagerAdapter(d)

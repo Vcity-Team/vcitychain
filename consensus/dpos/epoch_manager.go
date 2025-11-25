@@ -85,6 +85,18 @@ func (tem *TimeBasedEpochManager) getEpochSize() uint64 {
 	return epochSize
 }
 
+func (tem *TimeBasedEpochManager) GetConsensusSwitchHeight() uint64 {
+	tem.mutex.RLock()
+	defer tem.mutex.RUnlock()
+	return tem.consensusSwitchHeight
+}
+
+func (tem *TimeBasedEpochManager) GetEpochSize() uint64 {
+	tem.mutex.RLock()
+	defer tem.mutex.RUnlock()
+	return tem.getEpochSize()
+}
+
 // 🆕 新增：设置区块链引用
 func (tem *TimeBasedEpochManager) SetBlockchain(blockchain interface{}) {
 	tem.mutex.Lock()

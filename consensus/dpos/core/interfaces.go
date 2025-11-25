@@ -143,6 +143,30 @@ type QueryManager interface {
 	GetValidatorStats(validatorAddress types.Address, epochNumber uint64) map[string]interface{}
 }
 
+// GovernanceManager 治理模块接口
+type GovernanceManager interface {
+	// SaveProposal 持久化提案
+	SaveProposal(proposal *ParameterProposal) error
+
+	// GetAllProposals 获取全部提案
+	GetAllProposals() (map[string]*ParameterProposal, error)
+
+	// RecordVote 记录投票
+	RecordVote(proposal *ParameterProposal) error
+
+	// LoadAllIntoMemory 将所有提案加载到内存
+	LoadAllIntoMemory() error
+
+	// HydrateProposal 加载单个提案
+	HydrateProposal(proposalID string) (*ParameterProposal, error)
+
+	// LoadScheduled 获取指定epoch的待调度提案
+	LoadScheduled(epochNumber uint64) []*ParameterProposal
+
+	// MarkProposalApplied 标记提案已生效
+	MarkProposalApplied(proposalID string, appliedBlock uint64) error
+}
+
 // ==================== 辅助类型定义 ====================
 
 // FaultFlagInfo 故障标志信息（与共识层结构对齐，便于转换）
