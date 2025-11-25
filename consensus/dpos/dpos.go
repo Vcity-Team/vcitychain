@@ -335,12 +335,6 @@ type DPoS struct {
 	// 数据目录
 	dataDir string
 
-	// 验证者缓存
-	validatorsCache *validatorsSnapshotCache
-
-	// IBFT 共识包装器
-	ibft *IBFTConsensusWrapper
-
 	// 添加性能优化相关结构
 	cache          *DPoSCache
 	batchProcessor *BatchProcessor

@@ -55,3 +55,4 @@ func (d *DPoS) buildFaultModuleDependencies() faultmodule.Dependencies {
 
 	return deps
 }
+
