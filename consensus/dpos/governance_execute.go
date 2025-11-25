@@ -10,8 +10,35 @@ import (
 func (d *DPoS) executeParameterProposalInTx(proposalID string, proposal *ParameterProposal) error {
 	d.logger.Info("开始执行参数提案（登记待生效）", "proposalID", proposalID, "parameter", proposal.Parameter)
 
-	// 改为登记待生效：下一个 epoch 生效
-	effectiveEpoch := d.getEpochForBlock(d.getCurrentBlockNumber()).Number + 1
+	// 🆕 优化：压缩到1个epoch延迟
+	// 如果执行时不是epoch结束区块，在当前epoch结束就生效
+	// 如果执行时已经是epoch结束区块，在下一个epoch结束生效
+	currentBlockNumber := d.getCurrentBlockNumber()
+	currentEpochMeta := d.getEpochForBlock(currentBlockNumber)
+	currentEpoch := currentEpochMeta.Number
+	
+	// 检查当前区块是否是epoch结束区块
+	isEpochEnd := d.isEpochEndBlock(currentBlockNumber)
+	
+	var effectiveEpoch uint64
+	if isEpochEnd {
+		// 已经是epoch结束区块，在下一个epoch结束生效
+		effectiveEpoch = currentEpoch + 1
+		d.logger.Info("🔄 [参数提案] 执行时是epoch结束区块，将在下一个epoch结束生效", 
+			"proposalID", proposalID, 
+			"currentBlock", currentBlockNumber,
+			"currentEpoch", currentEpoch,
+			"effectiveEpoch", effectiveEpoch)
+	} else {
+		// 不是epoch结束区块，在当前epoch结束就生效
+		effectiveEpoch = currentEpoch
+		d.logger.Info("✅ [参数提案] 执行时不是epoch结束区块，将在当前epoch结束生效（压缩延迟）", 
+			"proposalID", proposalID, 
+			"currentBlock", currentBlockNumber,
+			"currentEpoch", currentEpoch,
+			"effectiveEpoch", effectiveEpoch)
+	}
+	
 	proposal.Schedule = ProposalScheduleMeta{
 		Scheduled:      true,
 		EffectiveEpoch: effectiveEpoch,
@@ -44,8 +71,35 @@ func (d *DPoS) executeRecoveryProposalInTx(proposalID string, proposal *Paramete
 
 	d.logger.Info("开始执行验证者恢复提案（登记待生效）", "proposalID", proposalID, "validator", validatorAddr.String())
 
-	// 不立即清除故障标志，登记到提案调度：下一个 epoch 生效
-	effectiveEpoch := d.getEpochForBlock(d.getCurrentBlockNumber()).Number + 1
+	// 🆕 优化：压缩到1个epoch延迟
+	// 如果执行时不是epoch结束区块，在当前epoch结束就生效
+	// 如果执行时已经是epoch结束区块，在下一个epoch结束生效
+	currentBlockNumber := d.getCurrentBlockNumber()
+	currentEpochMeta := d.getEpochForBlock(currentBlockNumber)
+	currentEpoch := currentEpochMeta.Number
+	
+	// 检查当前区块是否是epoch结束区块
+	isEpochEnd := d.isEpochEndBlock(currentBlockNumber)
+	
+	var effectiveEpoch uint64
+	if isEpochEnd {
+		// 已经是epoch结束区块，在下一个epoch结束生效
+		effectiveEpoch = currentEpoch + 1
+		d.logger.Info("🔄 [恢复提案] 执行时是epoch结束区块，将在下一个epoch结束生效", 
+			"proposalID", proposalID, 
+			"currentBlock", currentBlockNumber,
+			"currentEpoch", currentEpoch,
+			"effectiveEpoch", effectiveEpoch)
+	} else {
+		// 不是epoch结束区块，在当前epoch结束就生效
+		effectiveEpoch = currentEpoch
+		d.logger.Info("✅ [恢复提案] 执行时不是epoch结束区块，将在当前epoch结束生效（压缩延迟）", 
+			"proposalID", proposalID, 
+			"currentBlock", currentBlockNumber,
+			"currentEpoch", currentEpoch,
+			"effectiveEpoch", effectiveEpoch)
+	}
+	
 	proposal.Schedule = ProposalScheduleMeta{
 		Scheduled:      true,
 		EffectiveEpoch: effectiveEpoch,
