@@ -44,17 +44,19 @@ func (d *DPoS) InitializeGovernance() error {
 
 // loadProposalsFromDatabase 从数据库加载所有提案
 func (d *DPoS) loadProposalsFromDatabase() error {
+	d.logger.Info("🔍 [loadProposalsFromDatabase] 开始从数据库加载所有提案")
 	if d.state == nil || d.state.ProposalStore == nil {
-		d.logger.Debug("ProposalStore not available, skipping proposal loading")
+		d.logger.Warn("⚠️ [loadProposalsFromDatabase] ProposalStore不可用，跳过加载", "stateIsNil", d.state == nil, "proposalStoreIsNil", d.state != nil && d.state.ProposalStore == nil)
 		return nil
 	}
 
 	proposals, err := d.state.ProposalStore.GetAllProposals()
 	if err != nil {
+		d.logger.Error("❌ [loadProposalsFromDatabase] 从数据库加载提案失败", "error", err)
 		return fmt.Errorf("failed to load proposals from database: %w", err)
 	}
 
-	d.logger.Debug("从数据库加载提案", "count", len(proposals))
+	d.logger.Info("📋 [loadProposalsFromDatabase] 从数据库获取到提案", "count", len(proposals))
 
 	// 加载到内存中
 	for proposalID, proposal := range proposals {
@@ -65,13 +67,14 @@ func (d *DPoS) loadProposalsFromDatabase() error {
 			d.activeProposals[proposalID] = true
 		}
 
-		d.logger.Debug("加载提案",
+		d.logger.Info("📋 [loadProposalsFromDatabase] 加载提案到内存",
 			"proposalID", proposalID,
+			"proposalType", proposal.ProposalType,
 			"parameter", proposal.Parameter,
 			"status", proposal.Status.String())
 	}
 
-	d.logger.Info("✅ 从数据库加载提案完成", "count", len(proposals))
+	d.logger.Info("✅ [loadProposalsFromDatabase] 从数据库加载提案完成", "count", len(proposals), "loadedToMemory", len(d.parameterProposals))
 	return nil
 }
 

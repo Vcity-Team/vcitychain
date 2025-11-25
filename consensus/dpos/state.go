@@ -223,17 +223,18 @@ type ParameterStore struct {
 
 // ProposalStore 提案存储
 type ProposalStore struct {
-	db *bolt.DB
+	db     *bolt.DB
+	logger hclog.Logger
 }
 
 // FreezeInfo 冻结信息
 type FreezeInfo struct {
-	Address              types.Address `json:"address"`              // 账户地址
-	FrozenAmount         *big.Int      `json:"frozenAmount"`          // 冻结金额
-	FrozenAt             uint64        `json:"frozenAt"`              // 冻结时间
-	UnfreezeAt           uint64        `json:"unfreezeAt"`            // 解冻时间（0表示未解冻）
-	UnfreezeAvailableAt  uint64        `json:"unfreezeAvailableAt"`   // 资金可用时间（0表示未解冻）
-	Status               string        `json:"status"`                 // 状态：frozen, unfreezing, withdrawn
+	Address             types.Address `json:"address"`             // 账户地址
+	FrozenAmount        *big.Int      `json:"frozenAmount"`        // 冻结金额
+	FrozenAt            uint64        `json:"frozenAt"`            // 冻结时间
+	UnfreezeAt          uint64        `json:"unfreezeAt"`          // 解冻时间（0表示未解冻）
+	UnfreezeAvailableAt uint64        `json:"unfreezeAvailableAt"` // 资金可用时间（0表示未解冻）
+	Status              string        `json:"status"`              // 状态：frozen, unfreezing, withdrawn
 }
 
 // FreezeStore 冻结信息存储
@@ -381,40 +382,95 @@ func (ps *ProposalStore) initialize(tx *bolt.Tx) error {
 
 // SaveProposal 保存提案
 func (ps *ProposalStore) SaveProposal(proposal *ParameterProposal) error {
-	return ps.db.Update(func(tx *bolt.Tx) error {
+	if ps.logger != nil {
+		ps.logger.Info("💾 [ProposalStore.SaveProposal] 开始保存提案", "proposalID", proposal.ID, "proposalType", proposal.ProposalType)
+	}
+	err := ps.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("proposals"))
 		if bucket == nil {
+			if ps.logger != nil {
+				ps.logger.Error("❌ [ProposalStore.SaveProposal] proposals bucket not found")
+			}
 			return fmt.Errorf("proposals bucket not found")
 		}
 
 		data, err := json.Marshal(proposal)
 		if err != nil {
+			if ps.logger != nil {
+				ps.logger.Error("❌ [ProposalStore.SaveProposal] 序列化提案失败", "error", err, "proposalID", proposal.ID)
+			}
 			return fmt.Errorf("failed to marshal proposal: %w", err)
 		}
 
-		return bucket.Put([]byte(proposal.ID), data)
+		if err := bucket.Put([]byte(proposal.ID), data); err != nil {
+			if ps.logger != nil {
+				ps.logger.Error("❌ [ProposalStore.SaveProposal] 写入数据库失败", "error", err, "proposalID", proposal.ID)
+			}
+			return err
+		}
+
+		if ps.logger != nil {
+			ps.logger.Info("✅ [ProposalStore.SaveProposal] 提案已写入数据库", "proposalID", proposal.ID, "dataSize", len(data))
+		}
+		return nil
 	})
+	if err != nil {
+		if ps.logger != nil {
+			ps.logger.Error("❌ [ProposalStore.SaveProposal] 数据库事务失败", "error", err, "proposalID", proposal.ID)
+		}
+		return err
+	}
+	if ps.logger != nil {
+		ps.logger.Info("✅ [ProposalStore.SaveProposal] 提案保存成功", "proposalID", proposal.ID)
+	}
+	return nil
 }
 
 // GetProposal 获取提案
 func (ps *ProposalStore) GetProposal(proposalID string) (*ParameterProposal, error) {
+	if ps.logger != nil {
+		ps.logger.Info("🔍 [ProposalStore.GetProposal] 开始查询提案", "proposalID", proposalID)
+	}
 	var proposal ParameterProposal
 
 	err := ps.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("proposals"))
 		if bucket == nil {
+			if ps.logger != nil {
+				ps.logger.Error("❌ [ProposalStore.GetProposal] proposals bucket not found")
+			}
 			return fmt.Errorf("proposals bucket not found")
 		}
 
 		data := bucket.Get([]byte(proposalID))
 		if data == nil {
+			if ps.logger != nil {
+				ps.logger.Info("❌ [ProposalStore.GetProposal] 提案不存在", "proposalID", proposalID)
+			}
 			return fmt.Errorf("proposal not found")
 		}
 
-		return json.Unmarshal(data, &proposal)
+		if ps.logger != nil {
+			ps.logger.Info("✅ [ProposalStore.GetProposal] 找到提案数据", "proposalID", proposalID, "dataSize", len(data))
+		}
+
+		if err := json.Unmarshal(data, &proposal); err != nil {
+			if ps.logger != nil {
+				ps.logger.Error("❌ [ProposalStore.GetProposal] 反序列化提案失败", "error", err, "proposalID", proposalID)
+			}
+			return err
+		}
+
+		if ps.logger != nil {
+			ps.logger.Info("✅ [ProposalStore.GetProposal] 提案查询成功", "proposalID", proposalID, "proposalType", proposal.ProposalType)
+		}
+		return nil
 	})
 
 	if err != nil {
+		if ps.logger != nil {
+			ps.logger.Error("❌ [ProposalStore.GetProposal] 查询失败", "error", err, "proposalID", proposalID)
+		}
 		return nil, err
 	}
 
@@ -423,25 +479,54 @@ func (ps *ProposalStore) GetProposal(proposalID string) (*ParameterProposal, err
 
 // GetAllProposals 获取所有提案
 func (ps *ProposalStore) GetAllProposals() (map[string]*ParameterProposal, error) {
+	if ps.logger != nil {
+		ps.logger.Info("🔍 [ProposalStore.GetAllProposals] 开始查询所有提案")
+	}
 	proposals := make(map[string]*ParameterProposal)
 
 	err := ps.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("proposals"))
 		if bucket == nil {
+			if ps.logger != nil {
+				ps.logger.Error("❌ [ProposalStore.GetAllProposals] proposals bucket not found")
+			}
 			return fmt.Errorf("proposals bucket not found")
 		}
 
-		return bucket.ForEach(func(key, value []byte) error {
+		count := 0
+		err := bucket.ForEach(func(key, value []byte) error {
 			var proposal ParameterProposal
 			if err := json.Unmarshal(value, &proposal); err != nil {
+				if ps.logger != nil {
+					ps.logger.Error("❌ [ProposalStore.GetAllProposals] 反序列化提案失败", "proposalID", string(key), "error", err)
+				}
 				return err
 			}
 			proposals[string(key)] = &proposal
+			count++
+			if ps.logger != nil {
+				ps.logger.Info("📋 [ProposalStore.GetAllProposals] 找到提案", "proposalID", string(key), "proposalType", proposal.ProposalType, "index", count)
+			}
 			return nil
 		})
+
+		if ps.logger != nil {
+			ps.logger.Info("✅ [ProposalStore.GetAllProposals] 查询完成", "totalCount", count)
+		}
+		return err
 	})
 
-	return proposals, err
+	if err != nil {
+		if ps.logger != nil {
+			ps.logger.Error("❌ [ProposalStore.GetAllProposals] 查询失败", "error", err)
+		}
+		return nil, err
+	}
+
+	if ps.logger != nil {
+		ps.logger.Info("✅ [ProposalStore.GetAllProposals] 成功返回所有提案", "count", len(proposals))
+	}
+	return proposals, nil
 }
 
 // DeleteProposal 删除提案
@@ -571,12 +656,12 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 		ProposerSnapshotStore: &ProposerSnapshotStore{db: db},
 		StakeStore:            &StakeStore{db: db},
 		ValidatorStore:        &ValidatorStore{db: db},
-		RewardStore:           &RewardStore{db: rewardDB}, // 🆕 使用独立数据库
-		BlockTrackerStore:     &BlockTrackerStore{db: db}, // 🆕 使用主数据库
-		ParameterStore:        &ParameterStore{db: db},    // 🆕 使用主数据库
-		ProposalStore:         &ProposalStore{db: db},     // 🆕 使用主数据库
-		RegistrationStore:     &RegistrationStore{db: db}, // 🆕 使用主数据库
-		FreezeStore:           NewFreezeStore(db),         // 🆕 使用主数据库
+		RewardStore:           &RewardStore{db: rewardDB},             // 🆕 使用独立数据库
+		BlockTrackerStore:     &BlockTrackerStore{db: db},             // 🆕 使用主数据库
+		ParameterStore:        &ParameterStore{db: db},                // 🆕 使用主数据库
+		ProposalStore:         &ProposalStore{db: db, logger: logger}, // 🆕 使用主数据库
+		RegistrationStore:     &RegistrationStore{db: db},             // 🆕 使用主数据库
+		FreezeStore:           NewFreezeStore(db),                     // 🆕 使用主数据库
 	}
 
 	if err = s.initStorages(); err != nil {
