@@ -715,7 +715,13 @@ func (d *DPoS) Start() error {
 
 	// 初始化适配器（如果没有注入，使用默认实现）
 	if d.consensus == nil {
+		d.initConsensusModule()
+	}
+	if d.consensus == nil {
 		d.consensus = NewConsensusManagerAdapter(d)
+	}
+	if d.validator == nil {
+		d.initValidatorModule()
 	}
 	if d.validator == nil {
 		d.validator = NewValidatorManagerAdapter(d)

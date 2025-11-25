@@ -29,59 +29,22 @@ func NewConsensusManagerAdapter(dpos *DPoS) core.ConsensusManager {
 
 // BuildBlock 构建区块
 func (c *ConsensusManagerAdapter) BuildBlock(parent *types.Header) (*types.FullBlock, error) {
-	if c.dpos.runtime == nil {
-		return nil, fmt.Errorf("runtime not initialized")
-	}
-	return c.dpos.runtime.buildBlock()
+	return c.dpos.buildConsensusBlock(parent)
 }
 
 // ValidateBlock 验证区块
 func (c *ConsensusManagerAdapter) ValidateBlock(block *types.Block) error {
-	// 调用现有的验证逻辑
-	if c.dpos.blockchain != nil {
-		if wrapper, ok := c.dpos.blockchain.(*blockchainWrapper); ok {
-			parent := c.dpos.config.Blockchain.Header()
-			if parent == nil {
-				return fmt.Errorf("parent header not found")
-			}
-			_, err := wrapper.ProcessBlock(parent, block)
-			return err
-		}
-	}
-	return fmt.Errorf("blockchain wrapper not available")
+	return c.dpos.validateConsensusBlock(block)
 }
 
 // ShouldProduceBlock 判断是否应该出块
 func (c *ConsensusManagerAdapter) ShouldProduceBlock(blockNumber uint64, myAddress types.Address) bool {
-	if c.dpos.blockScheduler == nil {
-		return false
-	}
-
-	// 获取验证者集合
-	validators := c.dpos.GetValidators()
-	if len(validators) == 0 {
-		return false
-	}
-
-	validatorsList := make([]types.Address, len(validators))
-	for i, v := range validators {
-		validatorsList[i] = v.Address
-	}
-
-	return c.dpos.blockScheduler.ShouldProduceBlockNow(
-		myAddress,
-		validatorsList,
-		blockNumber,
-		"ConsensusManagerAdapter",
-	)
+	return c.dpos.shouldProduceConsensusBlock(blockNumber, myAddress)
 }
 
 // IsEpochEndBlock 判断是否是epoch结束区块
 func (c *ConsensusManagerAdapter) IsEpochEndBlock(blockNumber uint64) bool {
-	if c.dpos.runtime != nil {
-		return c.dpos.runtime.isEpochEndBlock(blockNumber)
-	}
-	return false
+	return c.dpos.isEpochEndConsensusBlock(blockNumber)
 }
 
 // ValidatorManagerAdapter 验证者管理器适配器
