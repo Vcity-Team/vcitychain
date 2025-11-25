@@ -4539,8 +4539,19 @@ func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) 
 				"endBlock", proposal.EndBlock)
 			return nil, fmt.Errorf("proposal %s has expired (current block %d > end block %d)", proposalID, currentBlock, proposal.EndBlock)
 		}
+		
+		// 🆕 2. RPC层校验：检查是否已经投票过（在创建交易前检查）
+		if proposal.Votes != nil {
+			if existingVote, hasVoted := proposal.Votes[voter]; hasVoted {
+				d.logger.Warn("❌ [VoteOnParameterProposal RPC] 投票者已经投票过，拒绝重复投票",
+					"proposalID", proposalID,
+					"voter", voter.String(),
+					"existingSupport", existingVote.Support)
+				return nil, fmt.Errorf("voter %s has already voted on proposal %s", voter.String(), proposalID)
+			}
+		}
 	} else {
-		d.logger.Warn("⚠️ [VoteOnParameterProposal RPC] DPoS引擎不支持获取提案，跳过过期检查")
+		d.logger.Warn("⚠️ [VoteOnParameterProposal RPC] DPoS引擎不支持获取提案，跳过过期检查和重复投票检查")
 	}
 
 	// 🆕 改为通过交易进行投票

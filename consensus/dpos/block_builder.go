@@ -387,6 +387,86 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	isEpochEndBlock := r.isEpochEndBlock(nextBlockNumber)
 
 	if isEpochEndBlock {
+		// 🆕 关键修复：在计算下一个epoch验证者集合之前，先应用恢复提案
+		// 这样恢复的验证者才能被包含在下一个epoch的验证者集合中
+		if r.config != nil && r.config.dposBackend != nil {
+			if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
+				// 获取当前epoch
+				currentEpoch := uint64(0)
+				if epochMeta := dposInstance.getEpochForBlock(nextBlockNumber - 1); epochMeta != nil {
+					currentEpoch = epochMeta.Number
+				}
+
+				// 收集需要应用的恢复提案
+				var scheduledProps []*ParameterProposal
+				if dposInstance.state != nil && dposInstance.state.ProposalStore != nil {
+					type schedLister interface {
+						ListScheduledByEpoch(epoch uint64) ([]*ParameterProposal, error)
+					}
+					if l, ok := interface{}(dposInstance.state.ProposalStore).(schedLister); ok {
+						if ps, err := l.ListScheduledByEpoch(currentEpoch); err == nil && len(ps) > 0 {
+							scheduledProps = append(scheduledProps, ps...)
+						}
+					}
+				}
+				// 兜底：遍历内存中的提案
+				for _, prop := range dposInstance.parameterProposals {
+					if prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == currentEpoch && !prop.Schedule.Applied {
+						scheduledProps = append(scheduledProps, prop)
+					}
+				}
+
+				// 去重并应用恢复提案
+				seen := make(map[string]bool)
+				for _, prop := range scheduledProps {
+					if prop == nil || prop.ID == "" || seen[prop.ID] {
+						continue
+					}
+					seen[prop.ID] = true
+
+					if prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == currentEpoch && !prop.Schedule.Applied {
+						if prop.ProposalType == "validator_recovery" {
+							r.logger.Info("🔄 [buildBlock] 开始应用恢复提案（计算验证者集合前）", "proposalID", prop.ID, "validator", prop.ValidatorAddress.String(), "currentEpoch", currentEpoch)
+
+							validatorAddr := prop.ValidatorAddress
+							if validatorAddr == (types.Address{}) {
+								validatorAddr = types.StringToAddress(prop.Parameter)
+							}
+
+							if validatorAddr != (types.Address{}) {
+								// 清除故障标志（数据库和内存）
+								if dposInstance.state != nil && dposInstance.state.StakeStore != nil {
+									if err := dposInstance.state.StakeStore.ClearValidatorFaultStatus(validatorAddr, prop.ID); err != nil {
+										r.logger.Error("❌ [buildBlock] 清除故障标志失败", "error", err, "proposalID", prop.ID, "validator", validatorAddr.String())
+									} else {
+										r.logger.Info("✅ [buildBlock] 验证者故障标志已清除（数据库）", "proposalID", prop.ID, "validator", validatorAddr.String())
+
+										// 清除内存中的故障状态
+										if dposInstance.faultyValidators != nil {
+											delete(dposInstance.faultyValidators, validatorAddr)
+											r.logger.Info("✅ [buildBlock] 验证者故障标志已清除（内存）", "proposalID", prop.ID, "validator", validatorAddr.String())
+										}
+
+										// 重新加载验证者集合
+										if err := dposInstance.reloadValidatorsAfterRecovery(); err != nil {
+											r.logger.Error("❌ [buildBlock] 重新加载验证者集合失败", "error", err, "proposalID", prop.ID)
+										} else {
+											r.logger.Info("✅ [buildBlock] 验证者集合已重新加载", "proposalID", prop.ID, "validator", validatorAddr.String())
+										}
+
+										// 标记提案为已应用（但不保存，等ProcessBlockExecutor时再保存）
+										prop.Schedule.Applied = true
+										prop.Schedule.AppliedAtBlock = nextBlockNumber
+										r.logger.Info("✅ [buildBlock] 恢复提案已应用（计算验证者集合前）", "proposalID", prop.ID, "validator", validatorAddr.String())
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
 		// 在epoch边界计算下一个epoch的验证者集合，保存到ExtraData中
 		// 这样新投票的节点不会立即生效，而是等到下一个epoch开始
 		// 所有节点（包括出块节点自己）收到这个区块后，会从ExtraData读取并保存到本地数据库
