@@ -24,9 +24,17 @@ type Dependencies struct {
 
 // LocalFaultFlagInfo 故障标志信息（本地定义，映射到core.FaultFlagInfo）
 type LocalFaultFlagInfo struct {
-	NodeAddress types.Address // 映射到ValidatorAddress
-	EpochNumber uint64
-	Reason      string // 映射到FaultType和Reason
+	NodeAddress            types.Address
+	EpochNumber            uint64
+	Reason                 string
+	IsFaulty               bool
+	MissedBlocks           uint64
+	ActualBlocks           uint64
+	ExpectedBlocks         uint64
+	MissedBlocksPercentage uint64
+	LastUpdateTime         uint64
+	LastFaultyEpoch        uint64
+	DoubleSigningHeight    uint64
 }
 
 // Manager 故障管理器实现
@@ -55,18 +63,19 @@ func (m *Manager) DetectFaults(blockNumber uint64) ([]core.FaultFlagInfo, error)
 	// 转换为core.FaultFlagInfo
 	result := make([]core.FaultFlagInfo, len(faults))
 	for i, fault := range faults {
-		// 确定故障类型
-		faultType := "missed_blocks"
-		if fault.Reason != "" {
-			// 可以根据Reason判断故障类型
-			faultType = fault.Reason
-		}
-
 		result[i] = core.FaultFlagInfo{
-			ValidatorAddress: fault.NodeAddress, // 映射NodeAddress到ValidatorAddress
-			EpochNumber:      fault.EpochNumber,
-			FaultType:        faultType,
-			Reason:           fault.Reason,
+			ValidatorAddress:       fault.NodeAddress,
+			EpochNumber:            fault.EpochNumber,
+			FaultType:              fault.Reason,
+			Reason:                 fault.Reason,
+			IsFaulty:               fault.IsFaulty,
+			MissedBlocks:           fault.MissedBlocks,
+			ActualBlocks:           fault.ActualBlocks,
+			ExpectedBlocks:         fault.ExpectedBlocks,
+			MissedBlocksPercentage: fault.MissedBlocksPercentage,
+			LastUpdateTime:         fault.LastUpdateTime,
+			LastFaultyEpoch:        fault.LastFaultyEpoch,
+			DoubleSigningHeight:    fault.DoubleSigningHeight,
 		}
 	}
 

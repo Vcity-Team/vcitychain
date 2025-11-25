@@ -20,6 +20,7 @@ func GetCommand() *cobra.Command {
 	cmd.AddCommand(GetCheckResultCommand())    // check-result
 	cmd.AddCommand(GetExecuteUpdateCommand())  // execute
 	cmd.AddCommand(GetCurrentParamsCommand())  // current-params 🆕
+	cmd.AddCommand(GetActiveListCommand())     // list-active 🆕
 
 	return cmd
 }

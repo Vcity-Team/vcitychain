@@ -761,3 +761,20 @@ func (d *DPoS) SignProposalForTx(proposal *ParameterProposal, proposerPrivateKey
 	}
 	return proposal.ProposalSignature, nil
 }
+
+// SignRecoveryProposalForTx 与参数提案签名保持一致，供RPC层使用
+func (d *DPoS) SignRecoveryProposalForTx(proposal *ParameterProposal, proposerPrivateKeyHex string) ([]byte, error) {
+	return d.SignProposalForTx(proposal, proposerPrivateKeyHex)
+}
+
+// CheckRecoveryPrerequisites RPC前置校验：目标必须处于故障状态
+func (d *DPoS) CheckRecoveryPrerequisites(addr types.Address) error {
+	isFaulty, err := d.IsValidatorFaulty(addr)
+	if err != nil {
+		return err
+	}
+	if !isFaulty {
+		return fmt.Errorf("validator %s is not in faulty status", addr.String())
+	}
+	return nil
+}

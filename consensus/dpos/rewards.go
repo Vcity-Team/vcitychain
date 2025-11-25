@@ -443,13 +443,31 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		return fmt.Errorf("rewardDistributor is nil")
 	}
 
-	// 3. 使用 RewardDistributor 统一计算奖励（已支持累加）
-	rewards := d.rewardDistributor.CalculateRewards(
-		validators,
-		voters,
-		blockCounts,
-		totalBlocks,
-	)
+	// 3. 使用 Reward 管理器计算奖励（优先模块，如不可用回退到本地分发器）
+	var rewards map[types.Address]*big.Int
+	if d.reward != nil {
+		moduleRewards, err := d.reward.CalculateRewards(epochNumber)
+		if err != nil {
+			d.logger.Warn("⚠️ 模块化奖励计算失败，回退到本地奖励分发器",
+				"epoch", epochNumber,
+				"error", err)
+		} else {
+			rewards = moduleRewards
+		}
+	}
+
+	if rewards == nil && d.rewardDistributor != nil {
+		rewards = d.rewardDistributor.CalculateRewards(
+			validators,
+			voters,
+			blockCounts,
+			totalBlocks,
+		)
+	}
+
+	if rewards == nil {
+		rewards = map[types.Address]*big.Int{}
+	}
 
 	// 4. 处理奖励结果：区分验证者和投票者，记录到数据库
 	stateUpdates := make(map[types.Address]*big.Int)
@@ -588,7 +606,25 @@ func (d *DPoS) calculateAndRecordEpochRewards(epochNumber uint64) error {
 		voters = make(map[types.Address]*VoterInfo)
 	}
 
-	rewards := d.rewardDistributor.CalculateRewards(validators, voters, blockCounts, totalBlocks)
+	var rewards map[types.Address]*big.Int
+	if d.reward != nil {
+		moduleRewards, err := d.reward.CalculateRewards(epochNumber)
+		if err != nil {
+			d.logger.Warn("⚠️ 模块化奖励计算失败，回退到本地奖励分发器",
+				"epoch", epochNumber,
+				"error", err)
+		} else {
+			rewards = moduleRewards
+		}
+	}
+
+	if rewards == nil && d.rewardDistributor != nil {
+		rewards = d.rewardDistributor.CalculateRewards(validators, voters, blockCounts, totalBlocks)
+	}
+
+	if rewards == nil {
+		rewards = map[types.Address]*big.Int{}
+	}
 	if len(rewards) == 0 {
 		d.logger.Warn("⚠️ 计算结果为空，跳过奖励记录", "epoch", epochNumber)
 		return nil

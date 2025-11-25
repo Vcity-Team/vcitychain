@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/bls"
-	dposProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/core"
+	dposProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
 )
@@ -56,18 +56,18 @@ func (c *ConsensusManagerAdapter) ShouldProduceBlock(blockNumber uint64, myAddre
 	if c.dpos.blockScheduler == nil {
 		return false
 	}
-	
+
 	// 获取验证者集合
 	validators := c.dpos.GetValidators()
 	if len(validators) == 0 {
 		return false
 	}
-	
+
 	validatorsList := make([]types.Address, len(validators))
 	for i, v := range validators {
 		validatorsList[i] = v.Address
 	}
-	
+
 	return c.dpos.blockScheduler.ShouldProduceBlockNow(
 		myAddress,
 		validatorsList,
@@ -166,11 +166,11 @@ func (e *EpochManagerAdapter) IsEpochEnd(blockNumber uint64) bool {
 	}
 	epochSize := e.epochManager.getEpochSize()
 	consensusSwitchHeight := e.epochManager.consensusSwitchHeight
-	
+
 	if blockNumber < consensusSwitchHeight {
 		return false
 	}
-	
+
 	dposBlockNumber := blockNumber - consensusSwitchHeight
 	currentEpoch := (dposBlockNumber / epochSize) + 1
 	firstBlockInEpoch := consensusSwitchHeight + (currentEpoch-1)*epochSize
@@ -188,14 +188,14 @@ func (e *EpochManagerAdapter) GetEpochSize() uint64 {
 
 // RewardManagerAdapter 奖励管理器适配器
 type RewardManagerAdapter struct {
-	dpos            *DPoS
+	dpos              *DPoS
 	rewardDistributor *RewardDistributor
 }
 
 // NewRewardManagerAdapter 创建奖励管理器适配器
 func NewRewardManagerAdapter(dpos *DPoS) core.RewardManager {
 	return &RewardManagerAdapter{
-		dpos:             dpos,
+		dpos:              dpos,
 		rewardDistributor: dpos.rewardDistributor,
 	}
 }
@@ -205,15 +205,15 @@ func (r *RewardManagerAdapter) CalculateRewards(epochNumber uint64) (map[types.A
 	if r.rewardDistributor == nil {
 		return nil, fmt.Errorf("reward distributor not initialized")
 	}
-	
+
 	// 获取该epoch的验证者和投票者
 	validators := r.dpos.GetValidators()
 	voters := r.dpos.voters
-	
+
 	// 获取出块统计
 	blockCounts := r.dpos.blockTracker.GetEpochBlockCounts(epochNumber)
 	totalBlocks := r.dpos.blockTracker.GetTotalEpochBlocks(epochNumber)
-	
+
 	// 计算奖励
 	rewards := r.rewardDistributor.CalculateRewards(validators, voters, blockCounts, totalBlocks)
 	return rewards, nil
@@ -224,25 +224,25 @@ func (r *RewardManagerAdapter) DistributeRewards(epochNumber uint64, rewards map
 	if r.rewardDistributor == nil {
 		return fmt.Errorf("reward distributor not initialized")
 	}
-	
+
 	validators := r.dpos.GetValidators()
 	voters := r.dpos.voters
-	
+
 	return r.rewardDistributor.DistributeEpochRewards(epochNumber, validators, voters)
 }
 
 // GetRewardInfo 获取奖励信息
 func (r *RewardManagerAdapter) GetRewardInfo(validatorAddress types.Address, epochNumber uint64) map[string]interface{} {
 	info := make(map[string]interface{})
-	
+
 	if r.dpos.blockTracker != nil {
 		blockCounts := r.dpos.blockTracker.GetEpochBlockCounts(epochNumber)
 		totalBlocks := r.dpos.blockTracker.GetTotalEpochBlocks(epochNumber)
-		
+
 		info["blocksProduced"] = blockCounts[validatorAddress]
 		info["totalBlocks"] = totalBlocks
 	}
-	
+
 	return info
 }
 
@@ -271,10 +271,18 @@ func (f *FaultManagerAdapter) DetectFaults(blockNumber uint64) ([]core.FaultFlag
 				faultType = "double_signing"
 			}
 			result[i] = core.FaultFlagInfo{
-				ValidatorAddress: flag.NodeAddress,
-				EpochNumber:      flag.EpochNumber,
-				FaultType:        faultType,
-				Reason:           flag.Reason,
+				ValidatorAddress:       flag.NodeAddress,
+				IsFaulty:               flag.IsFaulty,
+				MissedBlocks:           flag.MissedBlocks,
+				ActualBlocks:           flag.ActualBlocks,
+				ExpectedBlocks:         flag.ExpectedBlocks,
+				MissedBlocksPercentage: flag.MissedBlocksPercentage,
+				LastUpdateTime:         flag.LastUpdateTime,
+				EpochNumber:            flag.EpochNumber,
+				LastFaultyEpoch:        flag.LastFaultyEpoch,
+				FaultType:              faultType,
+				Reason:                 flag.Reason,
+				DoubleSigningHeight:    flag.DoubleSigningHeight,
 			}
 		}
 		return result, nil
@@ -293,15 +301,15 @@ func (f *FaultManagerAdapter) IsValidatorFaulty(validatorAddress types.Address) 
 // GetFaultInfo 获取故障信息
 func (f *FaultManagerAdapter) GetFaultInfo(validatorAddress types.Address) map[string]interface{} {
 	info := make(map[string]interface{})
-	
+
 	if f.dpos.faultyValidators != nil {
 		info["isFaulty"] = f.dpos.faultyValidators[validatorAddress]
 	}
-	
+
 	if f.dpos.missedBlocksCount != nil {
 		info["missedBlocks"] = f.dpos.missedBlocksCount[validatorAddress]
 	}
-	
+
 	return info
 }
 
@@ -330,15 +338,15 @@ func (q *QueryManagerAdapter) GetEpochInfoByNumber(epochNumber uint64) map[strin
 // GetValidatorStats 获取验证者统计
 func (q *QueryManagerAdapter) GetValidatorStats(validatorAddress types.Address, epochNumber uint64) map[string]interface{} {
 	stats := make(map[string]interface{})
-	
+
 	if q.dpos.blockTracker != nil {
 		blockCounts := q.dpos.blockTracker.GetEpochBlockCounts(epochNumber)
 		totalBlocks := q.dpos.blockTracker.GetTotalEpochBlocks(epochNumber)
-		
+
 		stats["blocksProduced"] = blockCounts[validatorAddress]
 		stats["totalBlocks"] = totalBlocks
 	}
-	
+
 	return stats
 }
 
@@ -360,7 +368,7 @@ func (n *NetworkManagerAdapter) BroadcastMessage(topic string, message []byte) e
 	if n.dpos.runtime == nil || n.dpos.runtime.networkIntegration == nil {
 		return fmt.Errorf("network integration not initialized")
 	}
-	
+
 	// 通过NetworkIntegration的topicManager广播消息
 	// Topic.Publish需要protobuf消息，所以需要包装成TransportMessage
 	if n.dpos.runtime.networkIntegration.topicManager != nil {
@@ -381,13 +389,13 @@ func (n *NetworkManagerAdapter) RequestBLSKey(targetAddress types.Address) error
 	if n.dpos.runtime == nil || n.dpos.runtime.networkIntegration == nil {
 		return fmt.Errorf("network integration not initialized")
 	}
-	
+
 	// 获取请求者地址
 	var requester types.Address
 	if n.dpos.key != nil {
 		requester = types.Address(n.dpos.key.Address())
 	}
-	
+
 	return n.dpos.runtime.networkIntegration.RequestBLSKey(targetAddress, requester)
 }
 
@@ -396,7 +404,7 @@ func (n *NetworkManagerAdapter) GetValidatorConnectivity(address types.Address) 
 	if n.dpos.runtime == nil || n.dpos.runtime.networkIntegration == nil {
 		return "", false, false
 	}
-	
+
 	pID, hasMapping, isConnected := n.dpos.runtime.networkIntegration.GetValidatorConnectivity(address)
 	return pID.String(), hasMapping, isConnected
 }
@@ -419,23 +427,23 @@ func (b *BLSManagerAdapter) GetBLSKey(address types.Address) (*bls.PublicKey, er
 	if b.dpos.runtime == nil || b.dpos.runtime.networkIntegration == nil {
 		return nil, fmt.Errorf("network integration not initialized")
 	}
-	
+
 	// 通过BLSKeyManager获取BLS公钥
 	if b.dpos.runtime.networkIntegration.blsKeyManager == nil {
 		return nil, fmt.Errorf("BLS key manager not initialized")
 	}
-	
+
 	blsKeyBytes, exists := b.dpos.runtime.networkIntegration.blsKeyManager.GetBLSKey(address)
 	if !exists {
 		return nil, fmt.Errorf("BLS key not found for address %s", address.String())
 	}
-	
+
 	// 将[]byte转换为*bls.PublicKey
 	blsKey, err := bls.UnmarshalPublicKey(blsKeyBytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal BLS public key: %w", err)
 	}
-	
+
 	return blsKey, nil
 }
 
@@ -444,12 +452,12 @@ func (b *BLSManagerAdapter) SaveBLSKey(address types.Address, key *bls.PublicKey
 	if b.dpos.runtime == nil || b.dpos.runtime.networkIntegration == nil {
 		return fmt.Errorf("network integration not initialized")
 	}
-	
+
 	// 通过BLSKeyManager保存BLS公钥
 	if b.dpos.runtime.networkIntegration.blsKeyManager == nil {
 		return fmt.Errorf("BLS key manager not initialized")
 	}
-	
+
 	// 将*bls.PublicKey转换为[]byte
 	blsKeyBytes := key.Marshal()
 	return b.dpos.runtime.networkIntegration.blsKeyManager.SaveBLSKey(address, blsKeyBytes)
@@ -460,12 +468,12 @@ func (b *BLSManagerAdapter) BroadcastBLSKey(address types.Address, key *bls.Publ
 	if b.dpos.runtime == nil || b.dpos.runtime.networkIntegration == nil {
 		return fmt.Errorf("network integration not initialized")
 	}
-	
+
 	// 通过BLSKeyManager广播BLS公钥
 	if b.dpos.runtime.networkIntegration.blsKeyManager == nil {
 		return fmt.Errorf("BLS key manager not initialized")
 	}
-	
+
 	// 将*bls.PublicKey转换为[]byte
 	blsKeyBytes := key.Marshal()
 	// 使用默认节点类型
@@ -490,25 +498,25 @@ func (s *StateManagerAdapter) GetAccount(address types.Address) (*core.AccountIn
 	if s.dpos.config == nil || s.dpos.config.Executor == nil {
 		return nil, fmt.Errorf("executor not available")
 	}
-	
+
 	// 获取当前区块头
 	currentHeader := s.dpos.config.Blockchain.Header()
 	if currentHeader == nil {
 		return nil, fmt.Errorf("current header not available")
 	}
-	
+
 	// 创建状态快照
 	snapshot, err := s.dpos.config.Executor.StateAt(currentHeader.StateRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create snapshot: %w", err)
 	}
-	
+
 	// 获取账户信息
 	account, err := snapshot.GetAccount(address)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account: %w", err)
 	}
-	
+
 	if account == nil {
 		return &core.AccountInfo{
 			Address:  address,
@@ -517,12 +525,12 @@ func (s *StateManagerAdapter) GetAccount(address types.Address) (*core.AccountIn
 			CodeHash: types.ZeroHash,
 		}, nil
 	}
-	
+
 	codeHash := types.ZeroHash
 	if len(account.CodeHash) > 0 {
 		codeHash = types.BytesToHash(account.CodeHash)
 	}
-	
+
 	return &core.AccountInfo{
 		Address:  address,
 		Balance:  account.Balance,
@@ -545,8 +553,7 @@ func (s *StateManagerAdapter) SaveValidators(blockNumber uint64, validators vali
 	if s.dpos.state == nil || s.dpos.state.StakeStore == nil {
 		return fmt.Errorf("state store not available")
 	}
-	
+
 	// 使用SaveEpochValidators保存验证者集合
 	return s.dpos.state.StakeStore.SaveEpochValidators(validators)
 }
-

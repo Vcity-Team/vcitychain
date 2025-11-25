@@ -681,6 +681,14 @@ func (d *DPoS) saveNextEpochValidators(validators validator.AccountSet) error {
 
 // applyNextEpochValidatorsFromExtra 使用区块ExtraData中的验证者集合更新本地状态
 func (d *DPoS) applyNextEpochValidatorsFromExtra(validators validator.AccountSet, blockNumber uint64) error {
+	if d.epochLifecycle != nil {
+		if err := d.epochLifecycle.ApplyNextValidatorsFromExtra(validators, blockNumber); err != nil {
+			d.logger.Error("❌ 模块化应用下一个epoch验证者集合失败", "blockNumber", blockNumber, "error", err)
+			return err
+		}
+		return nil
+	}
+
 	if len(validators) == 0 {
 		return nil
 	}

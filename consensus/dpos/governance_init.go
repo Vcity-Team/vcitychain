@@ -1,6 +1,7 @@
 package dpos
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 )
@@ -45,36 +46,18 @@ func (d *DPoS) InitializeGovernance() error {
 // loadProposalsFromDatabase 从数据库加载所有提案
 func (d *DPoS) loadProposalsFromDatabase() error {
 	d.logger.Info("🔍 [loadProposalsFromDatabase] 开始从数据库加载所有提案")
-	if d.state == nil || d.state.ProposalStore == nil {
-		d.logger.Warn("⚠️ [loadProposalsFromDatabase] ProposalStore不可用，跳过加载", "stateIsNil", d.state == nil, "proposalStoreIsNil", d.state != nil && d.state.ProposalStore == nil)
-		return nil
-	}
-
-	proposals, err := d.state.ProposalStore.GetAllProposals()
-	if err != nil {
+	if err := d.governanceLoadAllIntoMemory(); err != nil {
+		if errors.Is(err, errProposalStoreUnavailable) {
+			d.logger.Warn("⚠️ [loadProposalsFromDatabase] ProposalStore不可用，跳过加载",
+				"stateIsNil", d.state == nil,
+				"proposalStoreIsNil", d.state != nil && d.state.ProposalStore == nil)
+			return nil
+		}
 		d.logger.Error("❌ [loadProposalsFromDatabase] 从数据库加载提案失败", "error", err)
 		return fmt.Errorf("failed to load proposals from database: %w", err)
 	}
 
-	d.logger.Info("📋 [loadProposalsFromDatabase] 从数据库获取到提案", "count", len(proposals))
-
-	// 加载到内存中
-	for proposalID, proposal := range proposals {
-		d.parameterProposals[proposalID] = proposal
-
-		// 根据提案状态设置活跃状态
-		if proposal.Status == ProposalPending || proposal.Status == ProposalActive {
-			d.activeProposals[proposalID] = true
-		}
-
-		d.logger.Info("📋 [loadProposalsFromDatabase] 加载提案到内存",
-			"proposalID", proposalID,
-			"proposalType", proposal.ProposalType,
-			"parameter", proposal.Parameter,
-			"status", proposal.Status.String())
-	}
-
-	d.logger.Info("✅ [loadProposalsFromDatabase] 从数据库加载提案完成", "count", len(proposals), "loadedToMemory", len(d.parameterProposals))
+	d.logger.Info("✅ [loadProposalsFromDatabase] 从数据库加载提案完成", "loadedToMemory", len(d.parameterProposals))
 	return nil
 }
 
@@ -208,7 +191,7 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 		"dpos_severe_offense_slash_rate": {
 			Name:        "Severe Offense Slash Rate",
 			Type:        "uint64",
-			MinValue:    uint64(100),  // 最少1%（100基点）
+			MinValue:    uint64(100),   // 最少1%（100基点）
 			MaxValue:    uint64(10000), // 最多100%（10000基点）
 			Description: "Slash rate for severe offense (basis points, 1000 = 10%)",
 			Category:    "slashing",

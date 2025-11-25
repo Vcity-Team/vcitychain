@@ -298,15 +298,17 @@ type DPoS struct {
 	rawConfig map[string]interface{} // 🆕 存储原始配置，用于读取削减相关参数
 
 	// 🆕 重构：功能模块（组合模式，支持依赖注入）
-	consensus core.ConsensusManager // 共识管理器
-	validator core.ValidatorManager // 验证者管理器
-	epoch     core.EpochManager     // Epoch管理器
-	reward    core.RewardManager    // 奖励管理器
-	fault     core.FaultManager     // 故障管理器
-	query     core.QueryManager     // 查询管理器
-	network   core.NetworkManager   // 网络管理器
-	bls       core.BLSManager       // BLS管理器
-	stateMgr  core.StateManager     // 状态管理器
+	consensus      core.ConsensusManager      // 共识管理器
+	validator      core.ValidatorManager      // 验证者管理器
+	epoch          core.EpochManager          // Epoch管理器
+	epochLifecycle core.EpochLifecycleManager // Epoch生命周期管理器
+	reward         core.RewardManager         // 奖励管理器
+	fault          core.FaultManager          // 故障管理器
+	query          core.QueryManager          // 查询管理器
+	governance     *governanceModule          // 治理模块
+	network        core.NetworkManager        // 网络管理器
+	bls            core.BLSManager            // BLS管理器
+	stateMgr       core.StateManager          // 状态管理器
 
 	// reference to the syncer
 	syncer syncer.Syncer
@@ -722,13 +724,19 @@ func (d *DPoS) Start() error {
 		d.epoch = NewEpochManagerAdapter(d.epochManager)
 	}
 	if d.reward == nil {
-		d.reward = NewRewardManagerAdapter(d)
+		d.initRewardModule()
 	}
 	if d.fault == nil {
 		d.fault = NewFaultManagerAdapter(d)
 	}
 	if d.query == nil {
-		d.query = NewQueryManagerAdapter(d)
+		d.initQueryModule()
+	}
+	if d.governance == nil {
+		d.initGovernanceModule()
+	}
+	if d.epochLifecycle == nil {
+		d.initEpochLifecycleModule()
 	}
 	if d.network == nil {
 		d.network = NewNetworkManagerAdapter(d)

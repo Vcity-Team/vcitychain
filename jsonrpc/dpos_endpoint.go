@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"reflect"
@@ -89,6 +90,31 @@ func NewDPOS(logger hclog.Logger, store dposStore, chainID uint64) *DPOS {
 		store:   store,
 		chainID: chainID,
 	}
+}
+
+type governanceEngine interface {
+	GetParameterProposal(proposalID string) (*dpos.ParameterProposal, error)
+	GetActiveProposals() ([]*dpos.ParameterProposal, error)
+	GetVotableCurrentParameters() map[string]*dpos.ParameterInfo
+	GetCurrentProposalPeriod() map[string]interface{}
+	IsParameterVotable(parameter string) bool
+	CheckRecoveryPrerequisites(addr types.Address) error
+	SignProposalForTx(proposal *dpos.ParameterProposal, proposerPrivateKeyHex string) ([]byte, error)
+	SignRecoveryProposalForTx(proposal *dpos.ParameterProposal, proposerPrivateKeyHex string) ([]byte, error)
+	SignVoteForTx(vote *dpos.ParameterVote, privateKeyHex string) ([]byte, error)
+	GetCurrentBlockNumber() uint64
+}
+
+func (d *DPOS) getGovernanceEngine() (governanceEngine, error) {
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return nil, fmt.Errorf("DPoS engine not available")
+	}
+	engine, ok := dposEngine.(governanceEngine)
+	if !ok {
+		return nil, errors.New("DPoS engine does not expose governance module")
+	}
+	return engine, nil
 }
 
 // signTransaction signs a DPoS transaction using the private key
@@ -4172,21 +4198,12 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 		return nil, fmt.Errorf("invalid proposer address format: %s", proposerStr)
 	}
 
-	// 🆕 改为通过交易创建提案，而不是直接调用DPoS引擎
-
-	// 1. 获取DPoS引擎用于验证参数
-	dposEngine := d.getDPoSEngine()
-	if dposEngine == nil {
-		return nil, fmt.Errorf("DPoS engine not available")
+	gov, err := d.getGovernanceEngine()
+	if err != nil {
+		return nil, err
 	}
-
-	// 2. 验证参数是否可表决
-	if checkVotable, ok := dposEngine.(interface {
-		IsParameterVotable(parameter string) bool
-	}); ok {
-		if !checkVotable.IsParameterVotable(parameter) {
-			return nil, fmt.Errorf("invalid parameter: %s is not a votable parameter", parameter)
-		}
+	if !gov.IsParameterVotable(parameter) {
+		return nil, fmt.Errorf("invalid parameter: %s is not a votable parameter", parameter)
 	}
 
 	// 3. 获取当前区块号（用于后续计算，但暂不需要）
@@ -4219,21 +4236,10 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 		CreatedAt:    createdAtTs,
 	}
 
-	// 5. 签名提案（使用DPoS引擎的方法）
-	var proposerSignature []byte
-	if signProposal, ok := dposEngine.(interface {
-		SignProposalForTx(proposal *dpos.ParameterProposal, proposerPrivateKeyHex string) ([]byte, error)
-	}); ok {
-		sig, err := signProposal.SignProposalForTx(tempProposal, proposerPrivateKeyHex)
-		if err != nil {
-			return nil, fmt.Errorf("failed to sign proposal: %w", err)
-		}
-		proposerSignature = sig
-	} else {
-		// 如果DPoS引擎不支持SignProposalForTx，直接创建交易，让ProcessProposalCreateTransaction处理签名
-		// 但这样需要修改ProcessProposalCreateTransaction的逻辑
-		// 暂时返回错误，提示需要实现
-		return nil, fmt.Errorf("DPoS engine does not support proposal signing for transactions")
+	// 5. 签名提案（通过治理模块接口）
+	proposerSignature, err := gov.SignProposalForTx(tempProposal, proposerPrivateKeyHex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign proposal: %w", err)
 	}
 
 	// 6. 创建交易数据
@@ -4263,27 +4269,21 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 	d.logger.Info("✅ 参数提案交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", finalProposalID)
 
 	// 🆕 获取当前区块高度
-	currentBlockNumber := d.getCurrentBlockHeight()
-	if dposEngine := d.getDPoSEngine(); dposEngine != nil {
-		if getCurrentBlock, ok := dposEngine.(interface {
-			GetCurrentBlockNumber() uint64
-		}); ok {
-			if blockNum := getCurrentBlock.GetCurrentBlockNumber(); blockNum > 0 {
-				currentBlockNumber = blockNum
-			}
-		}
+	currentBlockNumber := gov.GetCurrentBlockNumber()
+	if currentBlockNumber == 0 {
+		currentBlockNumber = d.getCurrentBlockHeight()
 	}
 
 	return map[string]interface{}{
-		"success":          true,
-		"txHash":           tx.Hash.String(),
-		"proposalId":       finalProposalID,
-		"parameter":        parameter,
-		"newValue":          newValue,
-		"proposer":         proposer.String(),
+		"success":            true,
+		"txHash":             tx.Hash.String(),
+		"proposalId":         finalProposalID,
+		"parameter":          parameter,
+		"newValue":           newValue,
+		"proposer":           proposer.String(),
 		"currentBlockNumber": currentBlockNumber,
-		"message":          "Parameter proposal transaction created and broadcasted successfully",
-		"note":             "Proposal will be created when transaction is included in a block",
+		"message":            "Parameter proposal transaction created and broadcasted successfully",
+		"note":               "Proposal will be created when transaction is included in a block",
 	}, nil
 }
 
@@ -4378,24 +4378,12 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 		}
 	}
 
-	// 🆕 改为通过交易创建恢复提案
-	// 1. 获取DPoS引擎用于验证
-	dposEngine := d.getDPoSEngine()
-	if dposEngine == nil {
-		return nil, fmt.Errorf("DPoS engine not available")
+	gov, err := d.getGovernanceEngine()
+	if err != nil {
+		return nil, err
 	}
-
-	// 1.1 业务前置校验：目标验证者必须处于故障状态（基于已落盘状态）
-	if checker, ok := dposEngine.(interface {
-		IsValidatorFaulty(addr types.Address) (bool, error)
-	}); ok {
-		isFaulty, err := checker.IsValidatorFaulty(validatorAddr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to check validator faulty status: %w", err)
-		}
-		if !isFaulty {
-			return nil, fmt.Errorf("validator %s is not in faulty status", validatorAddr.String())
-		}
+	if err := gov.CheckRecoveryPrerequisites(validatorAddr); err != nil {
+		return nil, err
 	}
 
 	// 2. 获取nonce用于创建临时proposalID
@@ -4421,17 +4409,9 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 	}
 
 	// 4. 签名提案
-	var proposerSignature []byte
-	if signProposal, ok := dposEngine.(interface {
-		SignProposalForTx(proposal *dpos.ParameterProposal, proposerPrivateKeyHex string) ([]byte, error)
-	}); ok {
-		sig, err := signProposal.SignProposalForTx(tempProposal, proposerPrivateKeyHex)
-		if err != nil {
-			return nil, fmt.Errorf("failed to sign proposal: %w", err)
-		}
-		proposerSignature = sig
-	} else {
-		return nil, fmt.Errorf("DPoS engine does not support proposal signing for transactions")
+	proposerSignature, err := gov.SignRecoveryProposalForTx(tempProposal, proposerPrivateKeyHex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign proposal: %w", err)
 	}
 
 	// 5. 创建交易数据
@@ -4461,28 +4441,22 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 	d.logger.Info("✅ 恢复提案交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", finalProposalID)
 
 	// 🆕 获取当前区块高度
-	currentBlockNumber := d.getCurrentBlockHeight()
-	if dposEngine := d.getDPoSEngine(); dposEngine != nil {
-		if getCurrentBlock, ok := dposEngine.(interface {
-			GetCurrentBlockNumber() uint64
-		}); ok {
-			if blockNum := getCurrentBlock.GetCurrentBlockNumber(); blockNum > 0 {
-				currentBlockNumber = blockNum
-			}
-		}
+	currentBlockNumber := gov.GetCurrentBlockNumber()
+	if currentBlockNumber == 0 {
+		currentBlockNumber = d.getCurrentBlockHeight()
 	}
 
 	return map[string]interface{}{
-		"success":           true,
-		"txHash":            tx.Hash.String(),
-		"proposalId":        finalProposalID,
-		"validatorAddress":  validatorAddr.String(),
-		"proposer":          proposer.String(),
-		"recoveryReason":    recoveryReason,
-		"description":       description,
+		"success":            true,
+		"txHash":             tx.Hash.String(),
+		"proposalId":         finalProposalID,
+		"validatorAddress":   validatorAddr.String(),
+		"proposer":           proposer.String(),
+		"recoveryReason":     recoveryReason,
+		"description":        description,
 		"currentBlockNumber": currentBlockNumber,
-		"message":           "Recovery proposal transaction created and broadcasted successfully",
-		"note":              "Proposal will be created when transaction is included in a block",
+		"message":            "Recovery proposal transaction created and broadcasted successfully",
+		"note":               "Proposal will be created when transaction is included in a block",
 	}, nil
 }
 
@@ -4530,54 +4504,37 @@ func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) 
 		return nil, fmt.Errorf("invalid private key length: expected 64, got %d", len(privateKeyHex))
 	}
 
-	// 验证投票者地址
 	voter := types.StringToAddress(voterStr)
 
-	// 获取DPoS引擎
-	dposEngine := d.getDPoSEngine()
-	if dposEngine == nil {
-		return nil, fmt.Errorf("DPoS engine not available")
+	gov, err := d.getGovernanceEngine()
+	if err != nil {
+		return nil, err
 	}
 
-	// 🆕 1. RPC层校验：检查提案是否过期（在创建交易前检查）
-	if getProposal, ok := dposEngine.(interface {
-		GetParameterProposal(proposalID string) (*dpos.ParameterProposal, error)
-	}); ok {
-		proposal, err := getProposal.GetParameterProposal(proposalID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get proposal: %w", err)
-		}
-		// 获取当前区块号
-		var currentBlock uint64
-		if getCurrentBlock, ok := dposEngine.(interface {
-			GetCurrentBlockNumber() uint64
-		}); ok {
-			currentBlock = getCurrentBlock.GetCurrentBlockNumber()
-		} else {
-			// 回退到其他方法获取区块号
-			currentBlock = d.getCurrentBlockHeight()
-		}
-		// 检查提案是否已过期
-		if currentBlock > proposal.EndBlock {
-			d.logger.Warn("❌ [VoteOnParameterProposal RPC] 提案已过期，拒绝投票",
+	proposal, err := gov.GetParameterProposal(proposalID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get proposal: %w", err)
+	}
+
+	currentBlock := gov.GetCurrentBlockNumber()
+	if currentBlock == 0 {
+		currentBlock = d.getCurrentBlockHeight()
+	}
+	if currentBlock > proposal.EndBlock {
+		d.logger.Warn("❌ [VoteOnParameterProposal RPC] 提案已过期，拒绝投票",
+			"proposalID", proposalID,
+			"currentBlock", currentBlock,
+			"endBlock", proposal.EndBlock)
+		return nil, fmt.Errorf("proposal %s has expired (current block %d > end block %d)", proposalID, currentBlock, proposal.EndBlock)
+	}
+	if proposal.Votes != nil {
+		if existingVote, hasVoted := proposal.Votes[voter]; hasVoted {
+			d.logger.Warn("❌ [VoteOnParameterProposal RPC] 投票者已经投票过，拒绝重复投票",
 				"proposalID", proposalID,
-				"currentBlock", currentBlock,
-				"endBlock", proposal.EndBlock)
-			return nil, fmt.Errorf("proposal %s has expired (current block %d > end block %d)", proposalID, currentBlock, proposal.EndBlock)
+				"voter", voter.String(),
+				"existingSupport", existingVote.Support)
+			return nil, fmt.Errorf("voter %s has already voted on proposal %s", voter.String(), proposalID)
 		}
-		
-		// 🆕 2. RPC层校验：检查是否已经投票过（在创建交易前检查）
-		if proposal.Votes != nil {
-			if existingVote, hasVoted := proposal.Votes[voter]; hasVoted {
-				d.logger.Warn("❌ [VoteOnParameterProposal RPC] 投票者已经投票过，拒绝重复投票",
-					"proposalID", proposalID,
-					"voter", voter.String(),
-					"existingSupport", existingVote.Support)
-				return nil, fmt.Errorf("voter %s has already voted on proposal %s", voter.String(), proposalID)
-			}
-		}
-	} else {
-		d.logger.Warn("⚠️ [VoteOnParameterProposal RPC] DPoS引擎不支持获取提案，跳过过期检查和重复投票检查")
 	}
 
 	// 🆕 改为通过交易进行投票
@@ -4591,16 +4548,9 @@ func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) 
 
 	// 2. 签名投票
 	var voteSignature []byte
-	if signVote, ok := dposEngine.(interface {
-		SignVoteForTx(vote *dpos.ParameterVote, privateKeyHex string) ([]byte, error)
-	}); ok {
-		sig, err := signVote.SignVoteForTx(tempVote, privateKeyHex)
-		if err != nil {
-			return nil, fmt.Errorf("failed to sign vote: %w", err)
-		}
-		voteSignature = sig
-	} else {
-		return nil, fmt.Errorf("DPoS engine does not support vote signing for transactions")
+	voteSignature, err = gov.SignVoteForTx(tempVote, privateKeyHex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign vote: %w", err)
 	}
 
 	// 3. 创建交易数据
@@ -4624,26 +4574,20 @@ func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) 
 	d.logger.Info("✅ 投票交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", proposalID, "voter", voter.String())
 
 	// 🆕 获取当前区块高度
-	currentBlockNumber := d.getCurrentBlockHeight()
-	if dposEngine := d.getDPoSEngine(); dposEngine != nil {
-		if getCurrentBlock, ok := dposEngine.(interface {
-			GetCurrentBlockNumber() uint64
-		}); ok {
-			if blockNum := getCurrentBlock.GetCurrentBlockNumber(); blockNum > 0 {
-				currentBlockNumber = blockNum
-			}
-		}
+	currentBlockNumber := gov.GetCurrentBlockNumber()
+	if currentBlockNumber == 0 {
+		currentBlockNumber = d.getCurrentBlockHeight()
 	}
 
 	return map[string]interface{}{
-		"success":           true,
-		"txHash":            tx.Hash.String(),
+		"success":            true,
+		"txHash":             tx.Hash.String(),
 		"proposalId":         proposalID,
-		"voter":             voter.String(),
-		"support":           support,
+		"voter":              voter.String(),
+		"support":            support,
 		"currentBlockNumber": currentBlockNumber,
-		"message":           "Vote transaction created and broadcasted successfully",
-		"note":              "Vote will be recorded when transaction is included in a block",
+		"message":            "Vote transaction created and broadcasted successfully",
+		"note":               "Vote will be recorded when transaction is included in a block",
 	}, nil
 }
 
@@ -4651,11 +4595,9 @@ func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) 
 func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (interface{}, error) {
 	d.logger.Info("DPoS GetParameterProposal called", "params", params)
 
-	// 解析参数
 	var proposalID string
 	switch p := params.(type) {
 	case []interface{}:
-		// 数组格式: ["proposalID"]
 		if len(p) < 1 {
 			return nil, fmt.Errorf("invalid parameters: expected 1 parameter [proposalID], got %d", len(p))
 		}
@@ -4665,14 +4607,12 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 			return nil, fmt.Errorf("invalid proposal ID: expected string, got %T", p[0])
 		}
 	case map[string]interface{}:
-		// 对象格式: {"proposalId": "proposalID"}
 		var ok bool
 		proposalID, ok = p["proposalId"].(string)
 		if !ok {
 			return nil, fmt.Errorf("proposalId is required and must be a string")
 		}
 	case string:
-		// 直接字符串格式
 		proposalID = p
 	default:
 		return nil, fmt.Errorf("invalid parameters format: expected array, object, or string, got %T", params)
@@ -4684,148 +4624,130 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 
 	d.logger.Info("DPoS GetParameterProposal parsed", "proposalID", proposalID)
 
-	// 获取DPoS引擎
-	dposEngine := d.getDPoSEngine()
-	if dposEngine == nil {
-		return nil, fmt.Errorf("DPoS engine not available")
+	gov, err := d.getGovernanceEngine()
+	if err != nil {
+		return nil, err
 	}
 
-	// 调用DPoS引擎获取提案
-	if getProposal, ok := dposEngine.(interface {
-		GetParameterProposal(proposalID string) (*dpos.ParameterProposal, error)
-	}); ok {
-		proposal, err := getProposal.GetParameterProposal(proposalID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get proposal: %w", err)
+	proposal, err := gov.GetParameterProposal(proposalID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get proposal: %w", err)
+	}
+
+	votes := make(map[string]interface{})
+	var supportVoters []map[string]interface{}
+	var opposeVoters []map[string]interface{}
+
+	for addr, vote := range proposal.Votes {
+		voteTime := time.Unix(int64(vote.Timestamp), 0)
+		voteTimeFormatted := voteTime.Format("2006-01-02 15:04:05")
+
+		voteInfo := map[string]interface{}{
+			"voter":       vote.Voter.String(),
+			"proposalId":  vote.ProposalID,
+			"support":     vote.Support,
+			"weight":      vote.Weight.String(),
+			"timestamp":   voteTimeFormatted,
+			"timestampTs": vote.Timestamp,
 		}
+		votes[addr.String()] = voteInfo
 
-		// 转换投票记录
-		votes := make(map[string]interface{})
-		var supportVoters []map[string]interface{}
-		var opposeVoters []map[string]interface{}
+		if vote.Support {
+			supportVoters = append(supportVoters, voteInfo)
+		} else {
+			opposeVoters = append(opposeVoters, voteInfo)
+		}
+	}
 
-		for addr, vote := range proposal.Votes {
-			// 转换时间戳为人类可读格式
-			voteTime := time.Unix(int64(vote.Timestamp), 0)
-			voteTimeFormatted := voteTime.Format("2006-01-02 15:04:05")
+	totalWeight := big.NewInt(0)
+	supportWeight := big.NewInt(0)
+	for _, vote := range proposal.Votes {
+		totalWeight.Add(totalWeight, vote.Weight)
+		if vote.Support {
+			supportWeight.Add(supportWeight, vote.Weight)
+		}
+	}
 
-			voteInfo := map[string]interface{}{
-				"voter":       vote.Voter.String(),
-				"proposalId":  vote.ProposalID,
-				"support":     vote.Support,
-				"weight":      vote.Weight.String(),
-				"timestamp":   voteTimeFormatted, // 人类可读的时间格式
-				"timestampTs": vote.Timestamp,    // 保留原始时间戳
+	voteStats := map[string]interface{}{
+		"totalVotes":    len(proposal.Votes),
+		"supportVotes":  len(supportVoters),
+		"opposeVotes":   len(opposeVoters),
+		"supportWeight": supportWeight.String(),
+		"totalWeight":   totalWeight.String(),
+		"passRate": func() string {
+			if totalWeight.Sign() == 0 {
+				return "0.00%"
 			}
-			votes[addr.String()] = voteInfo
-
-			// 按支持/反对分组
-			if vote.Support {
-				supportVoters = append(supportVoters, voteInfo)
-			} else {
-				opposeVoters = append(opposeVoters, voteInfo)
+			passRate := new(big.Float).Quo(new(big.Float).SetInt(supportWeight), new(big.Float).SetInt(totalWeight))
+			passRate.Mul(passRate, big.NewFloat(100))
+			value, _ := passRate.Float64()
+			return fmt.Sprintf("%.2f%%", value)
+		}(),
+		"isPassed": func() bool {
+			if totalWeight.Sign() == 0 {
+				return false
 			}
+			passRate := new(big.Int).Mul(supportWeight, big.NewInt(100))
+			passRate.Div(passRate, totalWeight)
+			return passRate.Uint64() >= proposal.Threshold
+		}(),
+	}
+
+	timeInfo := map[string]interface{}{
+		"proposalBlocks": fmt.Sprintf("Blocks %d - %d", proposal.StartBlock, proposal.EndBlock),
+		"proposalPeriod": fmt.Sprintf("%ds (%d blocks)", (proposal.EndBlock-proposal.StartBlock)*3, proposal.EndBlock-proposal.StartBlock),
+		"votingPeriod":   fmt.Sprintf("%ds (%d blocks)", (proposal.EndBlock-proposal.StartBlock)*3, proposal.EndBlock-proposal.StartBlock),
+	}
+
+	currentBlockNumber := gov.GetCurrentBlockNumber()
+	if currentBlockNumber == 0 {
+		currentBlockNumber = d.getCurrentBlockHeight()
+	}
+
+	timeInfo["currentBlock"] = currentBlockNumber
+	if currentBlockNumber <= proposal.EndBlock {
+		remainingBlocks := proposal.EndBlock - currentBlockNumber
+		if currentBlockNumber < proposal.StartBlock {
+			remainingBlocks = proposal.EndBlock - proposal.StartBlock
 		}
+		timeInfo["remainingBlocks"] = remainingBlocks
+		timeInfo["isExpired"] = false
+	} else {
+		timeInfo["remainingBlocks"] = 0
+		timeInfo["isExpired"] = true
+	}
 
-		// 计算投票统计
-		totalVotes := len(proposal.Votes)
-		supportVotes := 0
-		opposeVotes := 0
-		totalWeight := big.NewInt(0)
-		supportWeight := big.NewInt(0)
-		opposeWeight := big.NewInt(0)
-
-		for _, vote := range proposal.Votes {
-			totalWeight.Add(totalWeight, vote.Weight)
-			if vote.Support {
-				supportVotes++
-				supportWeight.Add(supportWeight, vote.Weight)
-			} else {
-				opposeVotes++
-				opposeWeight.Add(opposeWeight, vote.Weight)
-			}
-		}
-
-		// 计算通过率
-		passRate := float64(0)
-		if totalWeight.Cmp(big.NewInt(0)) > 0 {
-			passRateFloat := new(big.Float).SetInt(supportWeight)
-			totalWeightFloat := new(big.Float).SetInt(totalWeight)
-			passRateFloat.Quo(passRateFloat, totalWeightFloat)
-			passRateFloat.Mul(passRateFloat, big.NewFloat(100))
-			passRate, _ = passRateFloat.Float64()
-		}
-
-		// 计算剩余区块数
-		currentBlock := uint64(0)
-		if dposEngine := d.getDPoSEngine(); dposEngine != nil {
-			if getCurrentBlock, ok := dposEngine.(interface {
-				GetCurrentBlockNumber() uint64
-			}); ok {
-				currentBlock = getCurrentBlock.GetCurrentBlockNumber()
-			}
-		}
-		remainingBlocks := int64(0)
-		if proposal.EndBlock > currentBlock {
-			remainingBlocks = int64(proposal.EndBlock - currentBlock)
-		}
-
-		// 判断是否通过（TRON风格：需要达到阈值且投票期结束）
-		isPassed := supportWeight.Cmp(big.NewInt(0)) > 0 &&
-			passRate >= float64(proposal.Threshold) &&
-			currentBlock > proposal.EndBlock // 投票期必须结束
-
-		// 格式化创建时间
-		createdAtTime := time.Unix(int64(proposal.CreatedAt), 0)
-		createdAtFormatted := createdAtTime.Format("2006-01-02 15:04:05")
-
-		return map[string]interface{}{
-			"success":           true,
-			"currentBlockNumber": currentBlock,
-			"proposal": map[string]interface{}{
-				"proposalId":  proposal.ID,
-				"parameter":   proposal.Parameter,
-				"oldValue":    proposal.OldValue,
-				"newValue":    proposal.NewValue,
-				"proposer":    proposal.Proposer.String(),
-				"startBlock":  proposal.StartBlock,
-				"endBlock":    proposal.EndBlock,
-				"status":      proposal.Status.String(),
-				"threshold":   fmt.Sprintf("%d%%", proposal.Threshold), // 显示为百分比
-				"description": proposal.Description,
-				"createdAt":   createdAtFormatted, // 人类可读的时间格式
-				"createdAtTs": proposal.CreatedAt, // 保留时间戳供程序使用
-				"votes":       votes,
-				// 🆕 新增详细投票者信息
-				"voterDetails": map[string]interface{}{
-					"supportVoters": supportVoters,
-					"opposeVoters":  opposeVoters,
-					"totalVoters":   len(proposal.Votes),
-				},
-				// 🆕 新增详细统计信息
-				"voteStats": map[string]interface{}{
-					"totalVotes":    totalVotes,
-					"supportVotes":  supportVotes,
-					"opposeVotes":   opposeVotes,
-					"totalWeight":   totalWeight.String(),
-					"supportWeight": supportWeight.String(),
-					"opposeWeight":  opposeWeight.String(),
-					"passRate":      fmt.Sprintf("%.2f%%", passRate),
-					"isPassed":      isPassed,
-				},
-				"timeInfo": map[string]interface{}{
-					"currentBlock":    currentBlock,
-					"remainingBlocks": remainingBlocks,
-					"isExpired":       remainingBlocks <= 0,
-					"votingPeriod":    d.getCurrentProposalPeriodInfo(), // 显示当前配置的提案周期
-					"proposalPeriod":  d.getCurrentProposalPeriodInfo(),
-					"proposalBlocks":  fmt.Sprintf("Blocks %d - %d", proposal.StartBlock, proposal.EndBlock), // Display the actual block range of the proposal
-				},
+	return map[string]interface{}{
+		"success": true,
+		"proposal": map[string]interface{}{
+			"proposalId":   proposalID,
+			"proposalType": proposal.ProposalType,
+			"parameter":    proposal.Parameter,
+			"newValue":     proposal.NewValue,
+			"oldValue":     proposal.OldValue,
+			"description":  proposal.Description,
+			"validator": func() string {
+				if proposal.ValidatorAddress != (types.Address{}) {
+					return proposal.ValidatorAddress.String()
+				}
+				return ""
+			}(),
+			"recoveryReason": proposal.RecoveryReason,
+			"proposer":       proposal.Proposer.String(),
+			"startBlock":     proposal.StartBlock,
+			"endBlock":       proposal.EndBlock,
+			"validEndBlock":  proposal.ValidEndBlock,
+			"status":         proposal.Status.String(),
+			"votes":          votes,
+			"voteStats":      voteStats,
+			"timeInfo":       timeInfo,
+			"voterDetails": map[string]interface{}{
+				"supportVoters": supportVoters,
+				"opposeVoters":  opposeVoters,
+				"totalVoters":   len(proposal.Votes),
 			},
-		}, nil
-	}
-
-	return nil, fmt.Errorf("DPoS engine does not support parameter proposals")
+		},
+	}, nil
 }
 
 // RegisterDelegate 注册受托人
@@ -5697,106 +5619,72 @@ func (d *DPOS) CanWithdrawDelegate(ctx context.Context, params interface{}) (int
 }
 
 // GetActiveProposals 获取活跃提案列表
-func (d *DPOS) GetActiveProposals(ctx context.Context) (interface{}, error) {
+func (d *DPOS) GetActiveProposals(ctx context.Context, params interface{}) (interface{}, error) {
 	d.logger.Info("DPoS GetActiveProposals called")
+	_ = params
 
-	// 获取DPoS引擎
-	dposEngine := d.getDPoSEngine()
-	if dposEngine == nil {
-		return nil, fmt.Errorf("DPoS engine not available")
+	gov, err := d.getGovernanceEngine()
+	if err != nil {
+		return nil, err
 	}
 
-	// 调用DPoS引擎获取活跃提案
-	if getActiveProposals, ok := dposEngine.(interface {
-		GetActiveProposals() ([]*dpos.ParameterProposal, error)
-	}); ok {
-		proposals, err := getActiveProposals.GetActiveProposals()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get active proposals: %w", err)
-		}
-
-		// 转换提案列表
-		result := make([]interface{}, 0, len(proposals))
-		for _, proposal := range proposals {
-			// 转换投票记录
-			votes := make(map[string]interface{})
-			for addr, vote := range proposal.Votes {
-				// 转换时间戳为人类可读格式
-				voteTime := time.Unix(int64(vote.Timestamp), 0)
-				voteTimeFormatted := voteTime.Format("2006-01-02 15:04:05")
-
-				votes[addr.String()] = map[string]interface{}{
-					"voter":       vote.Voter.String(),
-					"proposalId":  vote.ProposalID,
-					"support":     vote.Support,
-					"weight":      vote.Weight.String(),
-					"timestamp":   voteTimeFormatted, // 人类可读的时间格式
-					"timestampTs": vote.Timestamp,    // 保留原始时间戳
-				}
-			}
-
-			result = append(result, map[string]interface{}{
-				"proposalId":  proposal.ID,
-				"parameter":   proposal.Parameter,
-				"oldValue":    proposal.OldValue,
-				"newValue":    proposal.NewValue,
-				"proposer":    proposal.Proposer.String(),
-				"startBlock":  proposal.StartBlock,
-				"endBlock":    proposal.EndBlock,
-				"status":      proposal.Status.String(),
-				"threshold":   proposal.Threshold,
-				"description": proposal.Description,
-				"createdAt":   proposal.CreatedAt,
-				"votes":       votes,
-			})
-		}
-
-		return map[string]interface{}{
-			"proposals": result,
-			"count":     len(result),
-		}, nil
+	proposals, err := gov.GetActiveProposals()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get active proposals: %w", err)
 	}
 
-	return nil, fmt.Errorf("DPoS engine does not support parameter proposals")
+	result := make([]map[string]interface{}, 0, len(proposals))
+	for _, proposal := range proposals {
+		votes := len(proposal.Votes)
+
+		result = append(result, map[string]interface{}{
+			"proposalId":  proposal.ID,
+			"parameter":   proposal.Parameter,
+			"oldValue":    proposal.OldValue,
+			"newValue":    proposal.NewValue,
+			"proposer":    proposal.Proposer.String(),
+			"startBlock":  proposal.StartBlock,
+			"endBlock":    proposal.EndBlock,
+			"status":      proposal.Status.String(),
+			"threshold":   proposal.Threshold,
+			"description": proposal.Description,
+			"createdAt":   proposal.CreatedAt,
+			"votes":       votes,
+		})
+	}
+
+	return map[string]interface{}{
+		"proposals": result,
+		"count":     len(result),
+	}, nil
 }
 
-// GetVotableCurrentParameters 获取可表决参数列表（包含当前值）
 func (d *DPOS) GetVotableCurrentParameters(ctx context.Context) (interface{}, error) {
 	d.logger.Info("DPoS GetVotableCurrentParameters called")
 
-	// 获取DPoS引擎
-	dposEngine := d.getDPoSEngine()
-	if dposEngine == nil {
-		return nil, fmt.Errorf("DPoS engine not available")
+	gov, err := d.getGovernanceEngine()
+	if err != nil {
+		return nil, err
 	}
 
-	// 调用DPoS引擎获取可表决参数
-	if getVotableCurrentParameters, ok := dposEngine.(interface {
-		GetVotableCurrentParameters() map[string]*dpos.ParameterInfo
-	}); ok {
-		parameters := getVotableCurrentParameters.GetVotableCurrentParameters()
-
-		// 转换参数列表
-		result := make(map[string]interface{})
-		for key, param := range parameters {
-			result[key] = map[string]interface{}{
-				"name":         param.Name,
-				"type":         param.Type,
-				"minValue":     param.MinValue,
-				"maxValue":     param.MaxValue,
-				"description":  param.Description,
-				"category":     param.Category,
-				"currentValue": param.CurrentValue, // 🆕 添加当前值
-			}
+	parameters := gov.GetVotableCurrentParameters()
+	result := make(map[string]interface{})
+	for key, param := range parameters {
+		result[key] = map[string]interface{}{
+			"name":         param.Name,
+			"type":         param.Type,
+			"minValue":     param.MinValue,
+			"maxValue":     param.MaxValue,
+			"description":  param.Description,
+			"category":     param.Category,
+			"currentValue": param.CurrentValue,
 		}
-
-		return map[string]interface{}{
-			"parameters": result,
-			"count":      len(result),
-		}, nil
 	}
 
-	return nil, fmt.Errorf("DPoS engine does not support parameter proposals")
+	return map[string]interface{}{
+		"parameters": result,
+		"count":      len(result),
+	}, nil
 }
 
 // ExecuteParameterUpdate 执行参数更新
@@ -5852,30 +5740,19 @@ func (d *DPOS) ExecuteParameterUpdate(ctx context.Context, params interface{}) (
 
 	d.logger.Info("DPoS ExecuteParameterUpdate parsed", "proposalID", proposalID, "executor", executorStr)
 
-	// 🆕 在执行前检查提案状态：如果已经是 executed 状态，则不允许重复执行
-	dposEngine := d.getDPoSEngine()
-	if dposEngine == nil {
-		return nil, fmt.Errorf("DPoS engine not available")
+	gov, err := d.getGovernanceEngine()
+	if err != nil {
+		return nil, err
 	}
 
-	// 获取提案信息
-	if getProposal, ok := dposEngine.(interface {
-		GetParameterProposal(proposalID string) (*dpos.ParameterProposal, error)
-	}); ok {
-		proposal, err := getProposal.GetParameterProposal(proposalID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get proposal: %w", err)
-		}
-
-		// 检查提案状态
-		if proposal.Status == dpos.ProposalExecuted {
-			return nil, fmt.Errorf("proposal %s has already been executed (status: executed), cannot execute again", proposalID)
-		}
-
-		d.logger.Info("提案状态检查通过", "proposalID", proposalID, "status", proposal.Status.String())
-	} else {
-		d.logger.Warn("无法获取提案信息，跳过状态检查", "proposalID", proposalID)
+	proposal, err := gov.GetParameterProposal(proposalID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get proposal: %w", err)
 	}
+	if proposal.Status == dpos.ProposalExecuted {
+		return nil, fmt.Errorf("proposal %s has already been executed (status: executed), cannot execute again", proposalID)
+	}
+	d.logger.Info("提案状态检查通过", "proposalID", proposalID, "status", proposal.Status.String())
 
 	// 🆕 改为通过交易执行提案
 	// 1. 解析执行者地址和私钥（已在上面解析）
@@ -5908,45 +5785,33 @@ func (d *DPOS) ExecuteParameterUpdate(ctx context.Context, params interface{}) (
 	d.logger.Info("✅ 执行提案交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", proposalID)
 
 	// 🆕 获取当前区块高度
-	currentBlockNumber := d.getCurrentBlockHeight()
-	if dposEngine := d.getDPoSEngine(); dposEngine != nil {
-		if getCurrentBlock, ok := dposEngine.(interface {
-			GetCurrentBlockNumber() uint64
-		}); ok {
-			if blockNum := getCurrentBlock.GetCurrentBlockNumber(); blockNum > 0 {
-				currentBlockNumber = blockNum
-			}
-		}
+	currentBlockNumber := gov.GetCurrentBlockNumber()
+	if currentBlockNumber == 0 {
+		currentBlockNumber = d.getCurrentBlockHeight()
 	}
 
 	return map[string]interface{}{
-		"success":           true,
-		"txHash":            tx.Hash.String(),
+		"success":            true,
+		"txHash":             tx.Hash.String(),
 		"proposalId":         proposalID,
-		"executor":          executor.String(),
+		"executor":           executor.String(),
 		"currentBlockNumber": currentBlockNumber,
-		"message":           "Execute proposal transaction created and broadcasted successfully",
-		"note":              "Proposal will be executed when transaction is included in a block",
+		"message":            "Execute proposal transaction created and broadcasted successfully",
+		"note":               "Proposal will be executed when transaction is included in a block",
 	}, nil
 }
 
 // getCurrentProposalPeriodInfo 获取当前提案周期信息
 func (d *DPOS) getCurrentProposalPeriodInfo() string {
-	// 获取DPoS引擎
-	dposEngine := d.getDPoSEngine()
-	if dposEngine == nil {
+	gov, err := d.getGovernanceEngine()
+	if err != nil {
 		return "Unable to get proposal period information"
 	}
 
-	// 通过接口获取当前提案周期
-	if getCurrentPeriod, ok := dposEngine.(interface {
-		GetCurrentProposalPeriod() map[string]interface{}
-	}); ok {
-		periodInfo := getCurrentPeriod.GetCurrentProposalPeriod()
-		if timeInfo, exists := periodInfo["timeInfo"]; exists {
-			if timeStr, ok := timeInfo.(string); ok {
-				return timeStr
-			}
+	periodInfo := gov.GetCurrentProposalPeriod()
+	if timeInfo, exists := periodInfo["timeInfo"]; exists {
+		if timeStr, ok := timeInfo.(string); ok {
+			return timeStr
 		}
 	}
 

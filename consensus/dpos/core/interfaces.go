@@ -142,12 +142,65 @@ type QueryManager interface {
 
 // ==================== 辅助类型定义 ====================
 
-// FaultFlagInfo 故障标志信息
+// FaultFlagInfo 故障标志信息（与共识层结构对齐，便于转换）
 type FaultFlagInfo struct {
+	ValidatorAddress       types.Address
+	IsFaulty               bool
+	MissedBlocks           uint64
+	ActualBlocks           uint64
+	ExpectedBlocks         uint64
+	MissedBlocksPercentage uint64
+	LastUpdateTime         uint64
+	EpochNumber            uint64
+	LastFaultyEpoch        uint64
+	FaultType              string
+	Reason                 string
+	DoubleSigningHeight    uint64
+}
+
+// ProposalScheduleInfo 提案调度元数据
+type ProposalScheduleInfo struct {
+	Scheduled      bool
+	EffectiveEpoch uint64
+	Applied        bool
+	AppliedAtBlock uint64
+}
+
+// RecoveryProposalInfo 模块内部使用的恢复提案信息
+type RecoveryProposalInfo struct {
+	ID               string
+	ProposalType     string
+	Parameter        string
 	ValidatorAddress types.Address
-	EpochNumber      uint64
-	FaultType        string
-	Reason           string
+	Schedule         ProposalScheduleInfo
+}
+
+const (
+	// ProposalTypeParameter 普通参数提案
+	ProposalTypeParameter = "parameter"
+	// ProposalTypeValidatorRecovery 验证者恢复提案
+	ProposalTypeValidatorRecovery = "validator_recovery"
+)
+
+// EpochBoundaryContext Epoch边界处理上下文
+type EpochBoundaryContext struct {
+	ParentHash      types.Hash
+	NextBlockNumber uint64
+}
+
+// EpochBoundaryResult Epoch边界处理结果
+type EpochBoundaryResult struct {
+	NextEpochValidators validator.AccountSet
+	FaultFlags          []FaultFlagInfo
+}
+
+// EpochLifecycleManager Epoch生命周期管理器
+type EpochLifecycleManager interface {
+	// ProcessBoundary 处理epoch边界，并返回下一epoch验证者集合及故障标志
+	ProcessBoundary(ctx EpochBoundaryContext) (EpochBoundaryResult, error)
+
+	// ApplyNextValidatorsFromExtra 使用ExtraData中的验证者集合更新本地状态
+	ApplyNextValidatorsFromExtra(validators validator.AccountSet, blockNumber uint64) error
 }
 
 // AccountInfo 账户信息
@@ -157,4 +210,3 @@ type AccountInfo struct {
 	Nonce    uint64
 	CodeHash types.Hash
 }
-

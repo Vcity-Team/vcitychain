@@ -214,25 +214,7 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 				currentEpoch = currentEpochMeta.Number
 			}
 
-			// 优先：从持久化存储扫描当前epoch待生效提案（若实现了该接口）
-			var scheduledProps []*ParameterProposal
-			if dposInstance.state != nil && dposInstance.state.ProposalStore != nil {
-				type schedLister interface {
-					ListScheduledByEpoch(epoch uint64) ([]*ParameterProposal, error)
-				}
-				if l, ok := interface{}(dposInstance.state.ProposalStore).(schedLister); ok {
-					if ps, err := l.ListScheduledByEpoch(currentEpoch); err == nil && len(ps) > 0 {
-						scheduledProps = append(scheduledProps, ps...)
-					}
-				}
-			}
-			// 兜底：遍历内存中的提案
-			for _, prop := range dposInstance.parameterProposals {
-				// 🆕 添加 Applied 检查，防止重复执行
-				if prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == currentEpoch && !prop.Schedule.Applied {
-					scheduledProps = append(scheduledProps, prop)
-				}
-			}
+			scheduledProps := dposInstance.governanceLoadScheduled(currentEpoch)
 
 			// 去重（按ID）
 			seen := make(map[string]bool)
@@ -289,12 +271,10 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 									prop.Schedule.AppliedAtBlock = block.Number()
 									prop.Status = ProposalExecuted // 🆕 更新提案状态为已执行
 
-									if dposInstance.state.ProposalStore != nil {
-										if err := dposInstance.state.ProposalStore.SaveProposal(prop); err != nil {
-											p.logger.Error("保存提案状态失败", "error", err, "proposalID", prop.ID)
-										} else {
-											p.logger.Info("提案状态已保存", "proposalID", prop.ID, "status", prop.Status.String())
-										}
+									if err := dposInstance.governanceSaveProposal(prop); err != nil {
+										p.logger.Error("保存提案状态失败", "error", err, "proposalID", prop.ID)
+									} else {
+										p.logger.Info("提案状态已保存", "proposalID", prop.ID, "status", prop.Status.String())
 									}
 									p.logger.Info("✅ =========================================边界应用恢复提案成功", "proposalID", prop.ID, "validator", validatorAddr.String(), "appliedAtBlock", block.Number(), "status", prop.Status.String())
 								}
@@ -309,9 +289,7 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 						} else {
 							prop.Schedule.Applied = true
 							prop.Schedule.AppliedAtBlock = block.Number()
-							if dposInstance.state != nil && dposInstance.state.ProposalStore != nil {
-								_ = dposInstance.state.ProposalStore.SaveProposal(prop)
-							}
+							_ = dposInstance.governanceSaveProposal(prop)
 							p.logger.Info("✅ =========================================边界应用参数更新成功", "proposalID", prop.ID, "parameter", prop.Parameter, "appliedAtBlock", block.Number())
 						}
 					}
@@ -633,30 +611,31 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 	// 预先收集：需要在本epoch边界应用的恢复提案
 	recoveredValidators := make(map[types.Address]*ParameterProposal)
 	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-		if dposInstance.state != nil && dposInstance.state.ProposalStore != nil {
-			// 计算当前epoch用于日志与筛选
-			epochForLog := uint64(0)
-			if meta := dposInstance.getEpochForBlock(block.Number()); meta != nil {
-				epochForLog = meta.Number
-			}
-			allProposals, err := dposInstance.state.ProposalStore.GetAllProposals()
-			if err == nil {
-				p.logger.Debug("当前所有提案总数", "count", len(allProposals), "currentEpoch", epochForLog)
-				for pid, prop := range allProposals {
-					p.logger.Debug("提案详情", "id", pid, "Type", prop.ProposalType, "Epoch", prop.Schedule.EffectiveEpoch, "Scheduled", prop.Schedule.Scheduled, "Validator", prop.ValidatorAddress.String(), "Status", prop.Status, "Start", prop.StartBlock, "End", prop.EndBlock, "Description", prop.Description, "currentEpoch", epochForLog)
-					// 直接基于全量数据筛选"本epoch需要生效"的恢复提案
-					if prop != nil && prop.ProposalType == "validator_recovery" && prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == epochForLog {
-						vaddr := prop.ValidatorAddress
-						if vaddr == (types.Address{}) {
-							vaddr = types.StringToAddress(prop.Parameter)
-						}
-						recoveredValidators[vaddr] = prop
-						p.logger.Info("[边界恢复提案调试] 收集需要apply的恢复提案", "ID", prop.ID, "Type", prop.ProposalType, "Scheduled", prop.Schedule.Scheduled, "EffEpoch", prop.Schedule.EffectiveEpoch, "Validator", vaddr.String(), "Parameter", prop.Parameter, "currentEpoch", epochForLog)
-					}
+		epochForLog := uint64(0)
+		if meta := dposInstance.getEpochForBlock(block.Number()); meta != nil {
+			epochForLog = meta.Number
+		}
+
+		if allProposals, err := dposInstance.governanceGetAllProposals(); err == nil {
+			p.logger.Debug("当前所有提案总数", "count", len(allProposals), "currentEpoch", epochForLog)
+			for pid, prop := range allProposals {
+				if prop == nil {
+					p.logger.Warn("提案记录为空，跳过", "proposalID", pid, "currentEpoch", epochForLog)
+					continue
 				}
-			} else {
-				p.logger.Error("GetAllProposals error", "error", err, "currentEpoch", epochForLog)
+
+				p.logger.Debug("提案详情", "id", pid, "Type", prop.ProposalType, "Epoch", prop.Schedule.EffectiveEpoch, "Scheduled", prop.Schedule.Scheduled, "Validator", prop.ValidatorAddress.String(), "Status", prop.Status, "Start", prop.StartBlock, "End", prop.EndBlock, "Description", prop.Description, "currentEpoch", epochForLog)
+				if prop.ProposalType == "validator_recovery" && prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == epochForLog {
+					vaddr := prop.ValidatorAddress
+					if vaddr == (types.Address{}) {
+						vaddr = types.StringToAddress(prop.Parameter)
+					}
+					recoveredValidators[vaddr] = prop
+					p.logger.Info("[边界恢复提案调试] 收集需要apply的恢复提案", "ID", prop.ID, "Type", prop.ProposalType, "Scheduled", prop.Schedule.Scheduled, "EffEpoch", prop.Schedule.EffectiveEpoch, "Validator", vaddr.String(), "Parameter", prop.Parameter, "currentEpoch", epochForLog)
+				}
 			}
+		} else {
+			p.logger.Error("GetAllProposals error", "error", err, "currentEpoch", epochForLog)
 		}
 	}
 

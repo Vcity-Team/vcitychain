@@ -155,7 +155,9 @@ func (d *DPoS) CanWithdrawDelegate(address types.Address) (map[string]interface{
 // 注意：不能通过接口调用，因为GetCurrentEpochInfo本身就是接口的实现
 // 直接使用原有逻辑，避免无限递归
 func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
-	// 直接调用legacy实现，避免通过接口调用造成无限递归
+	if d.query != nil {
+		return d.query.GetCurrentEpochInfo()
+	}
 	return d.getCurrentEpochInfoLegacy()
 }
 
@@ -286,7 +288,9 @@ func (d *DPoS) getCurrentEpochInfoLegacy() map[string]interface{} {
 // 注意：不能通过接口调用，因为GetEpochInfoByNumber本身就是接口的实现
 // 直接使用原有逻辑，避免无限递归
 func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
-	// 直接调用legacy实现，避免通过接口调用造成无限递归
+	if d.query != nil {
+		return d.query.GetEpochInfoByNumber(epochNumber)
+	}
 	return d.getEpochInfoByNumberLegacy(epochNumber)
 }
 

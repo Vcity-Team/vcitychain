@@ -1,6 +1,7 @@
 package dpos
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 	"time"
@@ -13,30 +14,21 @@ func (d *DPoS) GetParameterProposal(proposalID string) (*ParameterProposal, erro
 	d.lock.RLock()
 	defer d.lock.RUnlock()
 
-	// 先从内存中查找
-	proposal, exists := d.parameterProposals[proposalID]
-	if exists {
-		d.logger.Info("✅ [GetParameterProposal] 从内存中找到提案", "proposalID", proposalID, "proposalType", proposal.ProposalType)
-		return proposal, nil
-	}
-	d.logger.Info("🔍 [GetParameterProposal] 内存中未找到提案，准备从数据库查询", "proposalID", proposalID)
-
-	// 如果内存中没有，从数据库加载
-	if d.state != nil && d.state.ProposalStore != nil {
-		d.logger.Info("🔍 [GetProposal] 从数据库查询提案", "proposalID", proposalID)
-		dbProposal, err := d.state.ProposalStore.GetProposal(proposalID)
-		if err == nil {
-			// 加载到内存中
-			d.parameterProposals[proposalID] = dbProposal
-			d.logger.Info("✅ [GetProposal] 从数据库成功加载提案", "proposalID", proposalID, "proposalType", dbProposal.ProposalType)
-			return dbProposal, nil
+	proposal, err := d.governanceHydrateProposal(proposalID)
+	if err != nil || proposal == nil {
+		if errors.Is(err, errProposalStoreUnavailable) {
+			d.logger.Warn("⚠️ [GetProposal] ProposalStore不可用，无法从数据库查询",
+				"proposalID", proposalID,
+				"stateIsNil", d.state == nil,
+				"proposalStoreIsNil", d.state != nil && d.state.ProposalStore == nil)
+		} else if err != nil {
+			d.logger.Info("❌ [GetProposal] 从数据库加载提案失败", "proposalID", proposalID, "error", err)
 		}
-		d.logger.Info("❌ [GetProposal] 从数据库加载提案失败", "proposalID", proposalID, "error", err)
-	} else {
-		d.logger.Warn("⚠️ [GetProposal] ProposalStore不可用，无法从数据库查询", "stateIsNil", d.state == nil, "proposalStoreIsNil", d.state != nil && d.state.ProposalStore == nil)
+		return nil, fmt.Errorf("proposal not found")
 	}
 
-	return nil, fmt.Errorf("proposal not found")
+	d.logger.Info("✅ [GetParameterProposal] 获取提案成功", "proposalID", proposalID, "proposalType", proposal.ProposalType)
+	return proposal, nil
 }
 
 // GetActiveProposals 获取活跃提案列表

@@ -1,6 +1,7 @@
 package dpos
 
 import (
+	"errors"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/types"
@@ -16,29 +17,29 @@ func (d *DPoS) executeParameterProposalInTx(proposalID string, proposal *Paramet
 	currentBlockNumber := d.getCurrentBlockNumber()
 	currentEpochMeta := d.getEpochForBlock(currentBlockNumber)
 	currentEpoch := currentEpochMeta.Number
-	
+
 	// 检查当前区块是否是epoch结束区块
 	isEpochEnd := d.isEpochEndBlock(currentBlockNumber)
-	
+
 	var effectiveEpoch uint64
 	if isEpochEnd {
 		// 已经是epoch结束区块，在下一个epoch结束生效
 		effectiveEpoch = currentEpoch + 1
-		d.logger.Info("🔄 [参数提案] 执行时是epoch结束区块，将在下一个epoch结束生效", 
-			"proposalID", proposalID, 
+		d.logger.Info("🔄 [参数提案] 执行时是epoch结束区块，将在下一个epoch结束生效",
+			"proposalID", proposalID,
 			"currentBlock", currentBlockNumber,
 			"currentEpoch", currentEpoch,
 			"effectiveEpoch", effectiveEpoch)
 	} else {
 		// 不是epoch结束区块，在当前epoch结束就生效
 		effectiveEpoch = currentEpoch
-		d.logger.Info("✅ [参数提案] 执行时不是epoch结束区块，将在当前epoch结束生效（压缩延迟）", 
-			"proposalID", proposalID, 
+		d.logger.Info("✅ [参数提案] 执行时不是epoch结束区块，将在当前epoch结束生效（压缩延迟）",
+			"proposalID", proposalID,
 			"currentBlock", currentBlockNumber,
 			"currentEpoch", currentEpoch,
 			"effectiveEpoch", effectiveEpoch)
 	}
-	
+
 	proposal.Schedule = ProposalScheduleMeta{
 		Scheduled:      true,
 		EffectiveEpoch: effectiveEpoch,
@@ -51,8 +52,13 @@ func (d *DPoS) executeParameterProposalInTx(proposalID string, proposal *Paramet
 	proposal.ExecutedAt = uint64(time.Now().Unix())
 	proposal.ExecutedBy = proposalID
 
-	if d.state != nil && d.state.ProposalStore != nil {
-		if err := d.state.ProposalStore.SaveProposal(proposal); err != nil {
+	if err := d.governanceSaveProposal(proposal); err != nil {
+		if errors.Is(err, errProposalStoreUnavailable) {
+			d.logger.Warn("⚠️ ProposalStore不可用，无法持久化参数提案调度",
+				"proposalID", proposalID,
+				"stateIsNil", d.state == nil,
+				"proposalStoreIsNil", d.state != nil && d.state.ProposalStore == nil)
+		} else {
 			d.logger.Error("Failed to save scheduled parameter proposal", "error", err)
 		}
 	}
@@ -77,29 +83,29 @@ func (d *DPoS) executeRecoveryProposalInTx(proposalID string, proposal *Paramete
 	currentBlockNumber := d.getCurrentBlockNumber()
 	currentEpochMeta := d.getEpochForBlock(currentBlockNumber)
 	currentEpoch := currentEpochMeta.Number
-	
+
 	// 检查当前区块是否是epoch结束区块
 	isEpochEnd := d.isEpochEndBlock(currentBlockNumber)
-	
+
 	var effectiveEpoch uint64
 	if isEpochEnd {
 		// 已经是epoch结束区块，在下一个epoch结束生效
 		effectiveEpoch = currentEpoch + 1
-		d.logger.Info("🔄 [恢复提案] 执行时是epoch结束区块，将在下一个epoch结束生效", 
-			"proposalID", proposalID, 
+		d.logger.Info("🔄 [恢复提案] 执行时是epoch结束区块，将在下一个epoch结束生效",
+			"proposalID", proposalID,
 			"currentBlock", currentBlockNumber,
 			"currentEpoch", currentEpoch,
 			"effectiveEpoch", effectiveEpoch)
 	} else {
 		// 不是epoch结束区块，在当前epoch结束就生效
 		effectiveEpoch = currentEpoch
-		d.logger.Info("✅ [恢复提案] 执行时不是epoch结束区块，将在当前epoch结束生效（压缩延迟）", 
-			"proposalID", proposalID, 
+		d.logger.Info("✅ [恢复提案] 执行时不是epoch结束区块，将在当前epoch结束生效（压缩延迟）",
+			"proposalID", proposalID,
 			"currentBlock", currentBlockNumber,
 			"currentEpoch", currentEpoch,
 			"effectiveEpoch", effectiveEpoch)
 	}
-	
+
 	proposal.Schedule = ProposalScheduleMeta{
 		Scheduled:      true,
 		EffectiveEpoch: effectiveEpoch,
@@ -113,8 +119,13 @@ func (d *DPoS) executeRecoveryProposalInTx(proposalID string, proposal *Paramete
 	proposal.Status = ProposalExecuted
 
 	// 保存到数据库（登记待生效）
-	if d.state != nil && d.state.ProposalStore != nil {
-		if err := d.state.ProposalStore.SaveProposal(proposal); err != nil {
+	if err := d.governanceSaveProposal(proposal); err != nil {
+		if errors.Is(err, errProposalStoreUnavailable) {
+			d.logger.Warn("⚠️ ProposalStore不可用，无法持久化恢复提案调度",
+				"proposalID", proposalID,
+				"stateIsNil", d.state == nil,
+				"proposalStoreIsNil", d.state != nil && d.state.ProposalStore == nil)
+		} else {
 			d.logger.Error("保存提案状态失败", "error", err)
 		}
 	}
@@ -126,4 +137,3 @@ func (d *DPoS) executeRecoveryProposalInTx(proposalID string, proposal *Paramete
 
 	return nil
 }
-

@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"time"
@@ -105,17 +106,20 @@ func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, s
 	proposal.Votes[voter] = *vote
 
 	// 保存更新后的提案到数据库
-	if d.state != nil && d.state.ProposalStore != nil {
-		if err := d.state.ProposalStore.SaveProposal(proposal); err != nil {
-			d.logger.Error("Failed to save updated proposal to database", "error", err)
-			// 注意：这里不返回错误，因为内存更新已经成功
-			// 但记录错误日志以便调试
-		} else {
-			d.logger.Debug("✅ Updated proposal successfully saved to database",
+	if err := d.governanceSaveProposal(proposal); err != nil {
+		if errors.Is(err, errProposalStoreUnavailable) {
+			d.logger.Warn("⚠️ ProposalStore不可用，跳过保存投票记录",
 				"proposalID", proposalID,
-				"voter", voter.String(),
-				"support", support)
+				"stateIsNil", d.state == nil,
+				"proposalStoreIsNil", d.state != nil && d.state.ProposalStore == nil)
+		} else {
+			d.logger.Error("Failed to save updated proposal to database", "error", err)
 		}
+	} else {
+		d.logger.Debug("✅ Updated proposal successfully saved to database",
+			"proposalID", proposalID,
+			"voter", voter.String(),
+			"support", support)
 	}
 
 	d.logger.Info("Parameter vote cast",
@@ -188,8 +192,13 @@ func (d *DPoS) CheckProposalResult(proposalID string) error {
 func (d *DPoS) finalizeProposalLifecycle(proposalID string, proposal *ParameterProposal) {
 	delete(d.activeProposals, proposalID)
 
-	if d.state != nil && d.state.ProposalStore != nil {
-		if err := d.state.ProposalStore.SaveProposal(proposal); err != nil {
+	if err := d.governanceSaveProposal(proposal); err != nil {
+		if errors.Is(err, errProposalStoreUnavailable) {
+			d.logger.Warn("⚠️ ProposalStore不可用，无法持久化提案状态",
+				"proposalID", proposalID,
+				"stateIsNil", d.state == nil,
+				"proposalStoreIsNil", d.state != nil && d.state.ProposalStore == nil)
+		} else {
 			d.logger.Error("Failed to persist proposal status", "proposalID", proposalID, "error", err)
 		}
 	}

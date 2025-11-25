@@ -1,6 +1,7 @@
 package dpos
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -67,9 +68,13 @@ func (d *DPoS) CreateParameterProposal(proposer types.Address, parameter string,
 		return nil, fmt.Errorf("failed to verify proposal signature: %w", err)
 	}
 
-	// 保存到数据库
-	if d.state != nil && d.state.ProposalStore != nil {
-		if err := d.state.ProposalStore.SaveProposal(proposal); err != nil {
+	if err := d.governanceSaveProposal(proposal); err != nil {
+		if errors.Is(err, errProposalStoreUnavailable) {
+			d.logger.Warn("⚠️ ProposalStore不可用，无法持久化参数提案",
+				"proposalID", proposalID,
+				"stateIsNil", d.state == nil,
+				"proposalStoreIsNil", d.state != nil && d.state.ProposalStore == nil)
+		} else {
 			d.logger.Error("Failed to save proposal to database", "error", err)
 			return nil, fmt.Errorf("failed to save proposal to database: %w", err)
 		}
@@ -159,9 +164,13 @@ func (d *DPoS) CreateRecoveryProposal(proposer types.Address, validatorAddr type
 		return nil, fmt.Errorf("failed to verify proposal signature: %w", err)
 	}
 
-	// 保存到数据库
-	if d.state != nil && d.state.ProposalStore != nil {
-		if err := d.state.ProposalStore.SaveProposal(proposal); err != nil {
+	if err := d.governanceSaveProposal(proposal); err != nil {
+		if errors.Is(err, errProposalStoreUnavailable) {
+			d.logger.Warn("⚠️ ProposalStore不可用，无法持久化恢复提案",
+				"proposalID", proposalID,
+				"stateIsNil", d.state == nil,
+				"proposalStoreIsNil", d.state != nil && d.state.ProposalStore == nil)
+		} else {
 			d.logger.Error("Failed to save recovery proposal to database", "error", err)
 			return nil, fmt.Errorf("failed to save recovery proposal to database: %w", err)
 		}
