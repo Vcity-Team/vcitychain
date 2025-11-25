@@ -26,7 +26,24 @@ func (d *DPoS) initializeDelegates() error {
 	// 🆕 初始化故障检测相关字段
 	d.faultyValidators = make(map[types.Address]bool)
 	d.missedBlocksCount = make(map[types.Address]uint64)
-	d.currentEpoch = 0
+
+	// 🆕 第一层保护：从数据库加载 currentEpoch（在重置为0之前）
+	if d.state != nil && d.state.StakeStore != nil {
+		if savedEpoch, err := d.state.StakeStore.LoadCurrentEpoch(); err == nil {
+			d.currentEpoch = savedEpoch
+			d.logger.Info("✅ 从数据库恢复currentEpoch（第一层保护：防止重复检测）",
+				"epoch", savedEpoch,
+				"note", "重启后恢复已检测的epoch，避免重复检测")
+		} else {
+			d.logger.Warn("⚠️ 从数据库加载currentEpoch失败，使用默认值0",
+				"error", err,
+				"note", "首次启动或数据库中没有记录")
+			d.currentEpoch = 0
+		}
+	} else {
+		d.currentEpoch = 0
+		d.logger.Warn("⚠️ StakeStore不可用，currentEpoch使用默认值0")
+	}
 
 	// 🆕 显著日志：显示当前配置
 	d.logger.Debug("🚀 ===== DPoS验证者初始化开始 =====")
@@ -35,7 +52,8 @@ func (d *DPoS) initializeDelegates() error {
 		"initialDelegatesCount", len(d.config.InitialDelegates),
 		"dposValidatorsCount", d.config.DPoSValidatorsCount,
 		"backupValidatorsCount", d.config.BackupValidatorsCount,
-		"maxMissedBlocks", d.config.MaxMissedBlocks)
+		"maxMissedBlocks", d.config.MaxMissedBlocks,
+		"currentEpoch", d.currentEpoch)
 
 	// 🆕 首先尝试从数据库读取受托人（真正用于出块）
 	if d.state != nil && d.state.StakeStore != nil {

@@ -74,7 +74,6 @@ func (fd *FaultDetector) DetectFaults(blockNumber uint64) ([]FaultFlagInfo, erro
 
 // checkEpochChange 检查epoch变化
 func (fd *FaultDetector) checkEpochChange(blockNumber uint64) (EpochInfo, bool) {
-	// epoch编号从1开始：共识切换高度7370是epoch 1的开始
 	blocksPerEpoch := fd.dposInstance.getEpochSize()
 	consensusSwitchHeight := fd.dposInstance.config.ConsensusSwitchHeight
 
@@ -86,12 +85,7 @@ func (fd *FaultDetector) checkEpochChange(blockNumber uint64) (EpochInfo, bool) 
 		dposBlockNumber := blockNumber - consensusSwitchHeight
 		currentEpochNumber = (dposBlockNumber / blocksPerEpoch) + 1 // 编号（从1开始）
 	}
-
-	// 计算上一个epoch编号（用于判断新加入的验证者）
-	// 🔧 修复：应该使用 epochToCheckNumber - 1 来判断新加入的验证者
 	// 因为我们要检测的是 epochToCheckNumber，所以应该与 epochToCheckNumber - 1 比较
-	// 但这里先计算 currentEpochNumber，后面再计算 epochToCheckNumber
-	// 所以先临时计算 previousEpochNumber，后面会重新计算
 	previousEpochNumber := uint64(0)
 	if fd.dposInstance.currentEpoch > 0 {
 		previousEpochNumber = fd.dposInstance.currentEpoch + 1 // 索引转编号
@@ -99,8 +93,7 @@ func (fd *FaultDetector) checkEpochChange(blockNumber uint64) (EpochInfo, bool) 
 		previousEpochNumber = 1 // epoch索引0对应编号1
 	}
 
-	// 如果epoch没有变化，不需要检测（需要将编号转换为索引进行比较）
-	// currentEpochNumber转索引：编号-1，但编号0时索引也是0
+	// 如果epoch没有变化，则跳过。逻辑的有效场景 1.区块重试：防止同一区块重试时重复检测 同一区块多次处理：防止重复检测（虽然当前代码不适用）
 	currentEpochIndexForCompare := uint64(0)
 	if currentEpochNumber > 0 {
 		currentEpochIndexForCompare = currentEpochNumber - 1

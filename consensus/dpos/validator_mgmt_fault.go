@@ -781,6 +781,21 @@ func (d *DPoS) executeSlashing(
 		return fmt.Errorf("state store not available")
 	}
 
+	// 🆕 幂等性检查：检查是否已经执行过该区块的消减
+	if hasHistory, err := d.state.StakeStore.HasSlashingHistory(validatorAddr, blockNumber); err != nil {
+		d.logger.Warn("⚠️ 检查消减历史失败，继续执行（可能重复）",
+			"validator", validatorAddr.String(),
+			"blockNumber", blockNumber,
+			"error", err)
+	} else if hasHistory {
+		d.logger.Info("ℹ️ 消减已执行过，跳过重复执行（幂等性保护）",
+			"validator", validatorAddr.String(),
+			"blockNumber", blockNumber,
+			"epochNumber", epochNumber,
+			"note", "防止重复处理区块导致的重复消减")
+		return nil // 已执行过，直接返回成功
+	}
+
 	// 1. 获取验证者的当前 VotingPower
 	validator, err := d.state.StakeStore.GetDelegateInfo(validatorAddr)
 	if err != nil || validator == nil {

@@ -37,6 +37,28 @@ func (sc *SlashingCollector) CollectSlashingInfo(
 				"thresholdPercentage", sc.dposInstance.getMissedBlocksPercentage(),
 				"reason", faultFlag.Reason)
 
+			// 🆕 去重检查：检查该验证者是否已经在该epoch的pendingSlashingInfo中
+			if sc.dposInstance.pendingSlashingInfo != nil {
+				// 检查是否是同一个epoch
+				if sc.dposInstance.pendingSlashingInfo.EpochNumber == epochInfo.EpochToCheckNumber {
+					// 检查该验证者是否已经存在
+					alreadyExists := false
+					for _, existingOp := range sc.dposInstance.pendingSlashingInfo.Slashings {
+						if existingOp.ValidatorAddr == faultFlag.NodeAddress {
+							alreadyExists = true
+							sc.logger.Info("ℹ️ 消减信息已存在，跳过重复收集",
+								"validator", faultFlag.NodeAddress.String(),
+								"epochNumber", epochInfo.EpochToCheckNumber,
+								"note", "防止重复检测导致的重复收集")
+							break
+						}
+					}
+					if alreadyExists {
+						continue // 跳过，不重复添加
+					}
+				}
+			}
+
 			// 收集消减信息到 pendingSlashingInfo（不直接执行）
 			slashRate := sc.dposInstance.getMinorOffenseSlashRate()
 

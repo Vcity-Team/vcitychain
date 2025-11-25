@@ -78,6 +78,7 @@ func (s *StakeStore) initialize(dbTx *bolt.Tx) error {
 		"RewardHistory",
 		"EpochRewards",
 		"SlashingHistory", // 🆕 新增：削减历史记录
+		"DPoSState",       // 🆕 第一层保护：存储 currentEpoch 等状态
 	}
 
 	for _, bucketName := range buckets {
@@ -260,6 +261,82 @@ func (s *StakeStore) GetSlashingHistory(validatorAddr types.Address) ([]*Slashin
 	})
 
 	return histories, err
+}
+
+// 🆕 检查是否已执行过指定区块的消减（幂等性检查）
+func (s *StakeStore) HasSlashingHistory(validatorAddr types.Address, blockNumber uint64) (bool, error) {
+	if s == nil || s.db == nil {
+		return false, fmt.Errorf("stake store not initialized")
+	}
+
+	var exists bool
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("SlashingHistory"))
+		if bucket == nil {
+			return nil // 没有历史记录，返回 false
+		}
+
+		// 使用复合 key: validatorAddr (20 bytes) + blockNumber (8 bytes) = 28 bytes
+		key := make([]byte, 28)
+		copy(key[0:20], validatorAddr[:])
+		binary.BigEndian.PutUint64(key[20:28], blockNumber)
+
+		data := bucket.Get(key)
+		exists = data != nil
+		return nil
+	})
+
+	return exists, err
+}
+
+// 🆕 第一层保护：保存当前已检测的epoch索引（防止重复检测）
+func (s *StakeStore) SaveCurrentEpoch(epochIndex uint64) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("stake store not initialized")
+	}
+
+	return s.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists([]byte("DPoSState"))
+		if err != nil {
+			return fmt.Errorf("failed to create DPoSState bucket: %w", err)
+		}
+
+		key := []byte("currentEpoch")
+		value := make([]byte, 8)
+		binary.BigEndian.PutUint64(value, epochIndex)
+
+		return bucket.Put(key, value)
+	})
+}
+
+// 🆕 第一层保护：加载当前已检测的epoch索引（防止重复检测）
+func (s *StakeStore) LoadCurrentEpoch() (uint64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("stake store not initialized")
+	}
+
+	var epochIndex uint64
+
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("DPoSState"))
+		if bucket == nil {
+			return fmt.Errorf("DPoSState bucket not found")
+		}
+
+		value := bucket.Get([]byte("currentEpoch"))
+		if value == nil {
+			return fmt.Errorf("currentEpoch not found in database")
+		}
+
+		if len(value) != 8 {
+			return fmt.Errorf("invalid currentEpoch value length: expected 8, got %d", len(value))
+		}
+
+		epochIndex = binary.BigEndian.Uint64(value)
+		return nil
+	})
+
+	return epochIndex, err
 }
 
 // 🆕 新增：GetStakingInfo方法，直接从数据库读取，不做修改

@@ -464,22 +464,109 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 						}
 					}
 				}
+
+				// 🆕 关键修复：在计算下一个epoch验证者集合之前，先执行故障检测并保存到数据库
+				// 这样故障节点才能被排除在下一个epoch的验证者集合中
+				r.logger.Info("🔄 [buildBlock] 开始执行故障检测（计算验证者集合前）", "blockNumber", nextBlockNumber)
+
+				// 触发epoch切换
+				if dposInstance.epochManager != nil {
+					dposInstance.epochManager.TriggerEpochSwitch(nextBlockNumber)
+				}
+
+				// 执行故障检测
+				keyAddr := types.Address(r.config.Key.Address())
+				headerPreview := &types.Header{
+					ParentHash: parent.Hash,
+					Number:     nextBlockNumber,
+					Miner:      keyAddr[:],
+					Timestamp:  uint64(time.Now().Unix()),
+				}
+				dposInstance.SetPendingEpochEndHeader(headerPreview)
+
+				if faultFlags, err := dposInstance.detectValidatorFaults(nextBlockNumber); err != nil {
+					dposInstance.ClearPendingEpochEndHeader(nextBlockNumber)
+					r.logger.Error("❌ [buildBlock] 故障检测失败", "blockNumber", nextBlockNumber, "error", err)
+				} else {
+					dposInstance.ClearPendingEpochEndHeader(nextBlockNumber)
+
+					// 🆕 立即保存故障状态到数据库（生产节点也需要保存，以便后续计算验证者集合时能读取到）
+					for _, faultFlag := range faultFlags {
+						if faultFlag.IsFaulty {
+							if err := dposInstance.saveFaultStatusToDatabase(faultFlag); err != nil {
+								r.logger.Warn("⚠️ [buildBlock] 保存故障状态到数据库失败",
+									"blockNumber", nextBlockNumber,
+									"address", faultFlag.NodeAddress.String(),
+									"error", err)
+							} else {
+								r.logger.Info("✅ [buildBlock] 故障状态已保存到数据库（计算验证者集合前）",
+									"blockNumber", nextBlockNumber,
+									"address", faultFlag.NodeAddress.String(),
+									"isFaulty", faultFlag.IsFaulty,
+									"epoch", faultFlag.EpochNumber,
+									"missedBlocks", faultFlag.MissedBlocks)
+							}
+							// 同时更新内存中的故障状态
+							dposInstance.updateMemoryFaultStatus(faultFlag)
+						}
+					}
+
+					// 🆕 将故障检测结果存储到 pendingFaultFlags（用于写入ExtraData）
+					dposInstance.pendingFaultFlags = faultFlags
+
+					r.logger.Info("💾 [buildBlock] 故障检测结果已准备，将写入ExtraData",
+						"blockNumber", nextBlockNumber,
+						"validatorCount", len(faultFlags))
+
+					// 🆕 第一层保护：保存 currentEpoch 到数据库（与故障状态一起保存，保证原子性）
+					// 在故障检测完成后保存，确保故障状态和 currentEpoch 的一致性
+					if dposInstance.state != nil && dposInstance.state.StakeStore != nil {
+						if err := dposInstance.state.StakeStore.SaveCurrentEpoch(dposInstance.currentEpoch); err != nil {
+							r.logger.Warn("⚠️ [buildBlock] 保存currentEpoch到数据库失败（第一层保护）",
+								"epoch", dposInstance.currentEpoch,
+								"blockNumber", nextBlockNumber,
+								"error", err,
+								"note", "可能导致重启后重复检测，但第二、三层保护仍可防止重复消减")
+						} else {
+							r.logger.Info("✅ [buildBlock] currentEpoch已保存到数据库（第一层保护：防止重复检测）",
+								"epoch", dposInstance.currentEpoch,
+								"blockNumber", nextBlockNumber,
+								"note", "与故障状态一起保存，保证一致性")
+						}
+					} else {
+						r.logger.Warn("⚠️ [buildBlock] StakeStore不可用，无法保存currentEpoch",
+							"epoch", dposInstance.currentEpoch,
+							"blockNumber", nextBlockNumber)
+					}
+
+					// 🆕 立即在本地同步故障过滤结果
+					if err := dposInstance.updateBlockProducersFromFaultFlags(faultFlags); err != nil {
+						r.logger.Error("❌ [buildBlock] 本地更新出块者列表失败",
+							"blockNumber", nextBlockNumber,
+							"error", err)
+					} else {
+						r.logger.Info("🔄 [buildBlock] 本地出块者列表已根据故障标志更新完毕",
+							"blockNumber", nextBlockNumber,
+							"faultFlagsCount", len(faultFlags))
+					}
+				}
 			}
 		}
 
 		// 在epoch边界计算下一个epoch的验证者集合，保存到ExtraData中
 		// 这样新投票的节点不会立即生效，而是等到下一个epoch开始
 		// 所有节点（包括出块节点自己）收到这个区块后，会从ExtraData读取并保存到本地数据库
+		// 🆕 注意：此时故障检测已完成并保存到数据库，计算时会排除故障节点
 		if r.config != nil && r.config.dposBackend != nil {
 			if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
-				r.logger.Info("🔄 ===== 开始计算下一个epoch的验证者集合 =====", "blockNumber", nextBlockNumber)
+				r.logger.Info("🔄 ===== 开始计算下一个epoch的验证者集合 =====", "blockNumber", nextBlockNumber, "note", "故障检测已完成，将排除故障节点")
 				if nextEpochValidators, err := dposInstance.calculateNextEpochValidators(nextBlockNumber); err != nil {
 					r.logger.Error("❌ 计算下一个epoch验证者集合失败", "blockNumber", nextBlockNumber, "error", err)
 				} else {
 					r.logger.Info("========= 下一个epoch验证者集合已计算，将写入ExtraData ========== ✅✅✅",
 						"blockNumber", nextBlockNumber,
 						"nextEpochValidatorsCount", len(nextEpochValidators),
-						"note", "新投票的节点将在下一个epoch开始生效，验证者集合将保存到ExtraData中")
+						"note", "新投票的节点将在下一个epoch开始生效，验证者集合将保存到ExtraData中，故障节点已被排除")
 					// 打印下一个epoch的验证者列表
 					for i, validator := range nextEpochValidators {
 						r.logger.Info("📋 下一个epoch验证者",
@@ -656,91 +743,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				"action", "REWARD_DISTRIBUTION_SUCCESS")
 		}
 
-		// 🆕 触发epoch切换
-		if r.config != nil && r.config.dposBackend != nil {
-			if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
-				if dposInstance.epochManager != nil {
-					dposInstance.epochManager.TriggerEpochSwitch(nextBlockNumber)
-				}
-
-				// 🆕 在epoch结束区块执行故障检测
-				headerPreview := &types.Header{
-					ParentHash: parent.Hash,
-					Number:     nextBlockNumber,
-					Miner:      keyAddr[:],
-					Timestamp:  uint64(time.Now().Unix()),
-				}
-				dposInstance.SetPendingEpochEndHeader(headerPreview)
-
-				if faultFlags, err := dposInstance.detectValidatorFaults(nextBlockNumber); err != nil {
-					dposInstance.ClearPendingEpochEndHeader(nextBlockNumber)
-					r.logger.Error("❌ 故障检测失败", "blockNumber", nextBlockNumber, "error", err)
-				} else {
-					dposInstance.ClearPendingEpochEndHeader(nextBlockNumber)
-					// 🆕 将故障检测结果存储到 pendingFaultFlags（类似 pendingRewardDistribution）
-					dposInstance.pendingFaultFlags = faultFlags
-
-					r.logger.Info("💾 故障检测结果已准备，将写入ExtraData",
-						"blockNumber", nextBlockNumber,
-						"validatorCount", len(faultFlags))
-
-					// 🆕 不在这里保存到数据库，而是通过ExtraData传播，由验证节点统一处理
-					for _, faultFlag := range faultFlags {
-						if faultFlag.IsFaulty {
-							r.logger.Info("🚨 故障检测结果已标记",
-								"address", faultFlag.NodeAddress.String(),
-								"missedBlocks", faultFlag.MissedBlocks,
-								"reason", faultFlag.Reason,
-								"note", "将通过ExtraData传播给所有节点")
-						}
-					}
-
-					// 🆕 立即在本地同步故障过滤结果，确保本轮出块使用最新出块者列表
-					if err := dposInstance.updateBlockProducersFromFaultFlags(faultFlags); err != nil {
-						r.logger.Error("❌ 本地更新出块者列表失败",
-							"blockNumber", nextBlockNumber,
-							"error", err)
-					} else {
-						r.logger.Info("🔄 本地出块者列表已根据故障标志更新完毕",
-							"blockNumber", nextBlockNumber,
-							"faultFlagsCount", len(faultFlags))
-
-						// 🆕 故障过滤后的结果直接用于覆盖下一epoch缓存集合
-						if filtered := r.getFaultFilteredNextEpochValidators(); len(filtered) > 0 {
-							r.nextEpochValidators = filtered.Copy()
-							r.logger.Info("📝 已用故障过滤结果覆盖下一epoch缓存集合",
-								"blockNumber", nextBlockNumber,
-								"nextEpochValidatorsCount", len(filtered))
-
-							// 🆕 直接用过滤后的集合更新当前生产验证者集合，确保ExtraData与签名集合一致
-							productionValidators = filtered.Copy()
-							r.cachedProductionValidators = filtered.Copy()
-							r.delegates = filtered.Copy()
-							r.logger.Info("🆕 当前生产验证者集合已根据故障过滤结果更新",
-								"blockNumber", nextBlockNumber,
-								"productionValidatorsCount", len(productionValidators))
-
-							// 🆕 重新计算Checkpoint所需的验证者哈希，确保与ExtraData一致
-							if newHash, err := productionValidators.HashAddressOnly(); err == nil {
-								currentValidatorsHash = newHash
-								if extra.Checkpoint != nil {
-									extra.Checkpoint.CurrentValidatorsHash = newHash
-									extra.Checkpoint.NextValidatorsHash = newHash
-								}
-								r.logger.Info("🆕 已根据过滤后的验证者集合更新Checkpoint哈希",
-									"blockNumber", nextBlockNumber,
-									"currentValidatorsHash", newHash.String())
-							} else {
-								r.logger.Error("❌ 重新计算过滤后验证者哈希失败",
-									"blockNumber", nextBlockNumber,
-									"error", err)
-								return nil, fmt.Errorf("failed to recalculate validator hash after filtering: %w", err)
-							}
-						}
-					}
-				}
-			}
-		}
+		// 🆕 注意：故障检测已在前面执行（在计算验证者集合之前），这里不再重复执行
 	} else {
 		r.logger.Debug("ℹ️ 不是epoch最后一个区块，跳过奖励分发",
 			"blockNumber", nextBlockNumber,

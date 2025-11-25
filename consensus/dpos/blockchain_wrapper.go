@@ -713,6 +713,8 @@ func (p *blockchainWrapper) processSlashingInBlock(block *types.Block, transitio
 			"missedBlocksPercentage", slashingOp.MissedBlocksPercentage,
 			"reason", slashingOp.Reason)
 
+		// 🆕 executeSlashing 内部已有幂等性检查（基于 blockNumber + validatorAddr）
+		// 如果已执行过，会直接返回 nil，不会重复执行
 		if err := dposInstance.executeSlashing(
 			slashingOp.ValidatorAddr,
 			slashingOp.SlashRate,
@@ -730,7 +732,7 @@ func (p *blockchainWrapper) processSlashingInBlock(block *types.Block, transitio
 			return fmt.Errorf("failed to execute slashing for validator %s: %w", slashingOp.ValidatorAddr.String(), err)
 		}
 
-		p.logger.Info("✅ 故障消减执行成功",
+		p.logger.Info("✅ 故障消减执行成功（或已执行过，跳过）",
 			"blockNumber", block.Number(),
 			"validator", slashingOp.ValidatorAddr.String(),
 			"slashRate", slashingOp.SlashRate,
