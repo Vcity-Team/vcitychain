@@ -761,6 +761,16 @@ func (p *blockchainWrapper) updateNextEpochValidatorsFromLocal(block *types.Bloc
 			"votingPower", validator.VotingPower.String())
 	}
 
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+		if err := dposInstance.saveNextEpochValidators(nextEpochValidators); err != nil {
+			p.logger.Error("❌ 保存下一个epoch验证者集合失败",
+				"blockNumber", block.Number(),
+				"error", err)
+			return fmt.Errorf("failed to save next epoch validators: %w", err)
+		}
+		return nil
+	}
+
 	if p.state == nil || p.state.StakeStore == nil {
 		p.logger.Error("❌ StakeStore不可用",
 			"blockNumber", block.Number())
@@ -843,14 +853,20 @@ func (p *blockchainWrapper) getParentValidators(blockNumber uint64) (validator.A
 func (p *blockchainWrapper) updateValidatorsInDatabase(validators validator.AccountSet) error {
 	p.logger.Info("💾 更新数据库中的验证者集合", "count", len(validators))
 
-	// 检查stake store是否可用
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+		if err := dposInstance.saveNextEpochValidators(validators); err != nil {
+			p.logger.Error("❌ 保存验证者集合失败", "error", err)
+			return err
+		}
+		p.logger.Info("✅ 验证者集合更新成功")
+		return nil
+	}
+
 	if p.state == nil || p.state.StakeStore == nil {
 		return fmt.Errorf("stake store not available")
 	}
 
-	// 保存验证者集合到数据库
-	err := p.state.StakeStore.SaveEpochValidators(validators)
-	if err != nil {
+	if err := p.state.StakeStore.SaveEpochValidators(validators); err != nil {
 		p.logger.Error("❌ 保存验证者集合失败", "error", err)
 		return err
 	}

@@ -665,17 +665,31 @@ func (d *DPoS) calculateNextEpochValidators(blockNumber uint64) (validator.Accou
 
 // saveNextEpochValidators 保存下一个epoch的验证者集合
 func (d *DPoS) saveNextEpochValidators(validators validator.AccountSet) error {
+	blockNumber := d.getCurrentBlockNumber()
+
+	if d.stateMgr != nil {
+		if err := d.stateMgr.SaveValidators(blockNumber, validators); err != nil {
+			d.logger.Warn("state manager 保存验证者集合失败，尝试回退",
+				"error", err,
+				"count", len(validators))
+		} else {
+			d.logger.Info("✅ 下一个epoch验证者集合保存成功（state模块）",
+				"count", len(validators),
+				"blockNumber", blockNumber)
+			return nil
+		}
+	}
+
 	if d.state == nil || d.state.StakeStore == nil {
 		return fmt.Errorf("stake store not available")
 	}
 
-	err := d.state.StakeStore.SaveEpochValidators(validators)
-	if err != nil {
+	if err := d.state.StakeStore.SaveEpochValidators(validators); err != nil {
 		d.logger.Error("❌ 保存下一个epoch验证者集合失败", "error", err)
 		return err
 	}
 
-	d.logger.Info("✅ 下一个epoch验证者集合保存成功", "count", len(validators))
+	d.logger.Info("✅ 下一个epoch验证者集合保存成功（legacy）", "count", len(validators))
 	return nil
 }
 

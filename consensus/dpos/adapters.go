@@ -520,3 +520,11 @@ func (s *StateManagerAdapter) SaveValidators(blockNumber uint64, validators vali
 	// 使用SaveEpochValidators保存验证者集合
 	return s.dpos.state.StakeStore.SaveEpochValidators(validators)
 }
+
+// GetValidators 获取验证者集合
+func (s *StateManagerAdapter) GetValidators(filterZeroVotingPower bool) (validator.AccountSet, error) {
+	if s.dpos.state == nil || s.dpos.state.StakeStore == nil {
+		return nil, fmt.Errorf("state store not available")
+	}
+	return s.dpos.state.StakeStore.GetValidatorsWithFilter(filterZeroVotingPower)
+}

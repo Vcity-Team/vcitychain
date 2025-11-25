@@ -125,6 +125,9 @@ type StateManager interface {
 
 	// SaveValidators 保存验证者集合
 	SaveValidators(blockNumber uint64, validators validator.AccountSet) error
+
+	// GetValidators 获取验证者集合
+	GetValidators(filterZeroVotingPower bool) (validator.AccountSet, error)
 }
 
 // QueryManager 查询管理器接口

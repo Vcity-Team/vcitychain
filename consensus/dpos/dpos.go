@@ -714,6 +714,9 @@ func (d *DPoS) Start() error {
 		d.bls = NewBLSManagerAdapter(d)
 	}
 	if d.stateMgr == nil {
+		d.initStateModule()
+	}
+	if d.stateMgr == nil {
 		d.stateMgr = NewStateManagerAdapter(d)
 	}
 
