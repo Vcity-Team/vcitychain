@@ -262,15 +262,15 @@ type DPoSConfig struct {
 	CommissionEffectivePeriod time.Duration // 佣金率修改的延迟生效周期
 }
 
-// GenerateExitProof generates proof of exit for given exit event
+// GenerateExitProof 生成退出证明（占位符实现，满足 BridgeDataProvider 接口要求）
 func (r *dposRuntime) GenerateExitProof(exitID uint64) (types.Proof, error) {
-	// TODO: 实现退出证明生成逻辑
+	// TODO: 实现退出证明生成逻辑（如果需要）
 	return types.Proof{}, nil
 }
 
-// GetStateSyncProof retrieves the StateSync proof
+// GetStateSyncProof 获取状态同步证明（占位符实现，满足 BridgeDataProvider 接口要求）
 func (r *dposRuntime) GetStateSyncProof(stateSyncID uint64) (types.Proof, error) {
-	// TODO: 实现状态同步证明获取逻辑
+	// TODO: 实现状态同步证明获取逻辑（如果需要）
 	return types.Proof{}, nil
 }
 
@@ -2033,7 +2033,7 @@ func (c *DPoSConfig) GetConfigSummary() map[string]interface{} {
 	}
 }
 
-// 🆕 新增：启动时直接调用和命令一样的数据源方法
+// 启动时直接调用和命令一样的数据源方法
 func (d *DPoS) callCommandDataSourcesOnStartup() error {
 	// 🆕 数据源1: 从store获取验证者信息 (与命令中的 GetValidators() 一致)
 	if d.state != nil && d.state.StakeStore != nil {
@@ -2076,14 +2076,6 @@ func (d *DPoS) callCommandDataSourcesOnStartup() error {
 			d.logger.Warn("⚠️ 获取质押信息失败", "error", err)
 		}
 	}
-
-	// 🆕 数据源3: 从共识引擎获取动态投票信息...
-	// 注意：这里需要找到正确的getDynamicVotingInfo()方法调用方式
-	// 暂时跳过，因为getDynamicVotingInfo()在jsonrpc/dpos_endpoint.go中
-
-	// 🆕 数据源4: 从验证者信息提取质押信息...
-	// 注意：这里需要找到正确的extractVotingInfoFromDelegates()方法调用方式
-	// 暂时跳过，因为extractVotingInfoFromDelegates()在jsonrpc/dpos_endpoint.go中
 
 	// 🆕 对比：显示内存中的受托人信息
 	d.lock.RLock()

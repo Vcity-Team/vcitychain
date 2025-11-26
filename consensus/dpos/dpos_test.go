@@ -20,21 +20,6 @@ func addr(n byte) types.Address {
 	return a
 }
 
-// test-only reward helper to keep legacy tests passing
-func (d *DPoS) calculateReward(staker types.Address) *big.Int {
-	voter, exists := d.voters[staker]
-	if !exists {
-		return big.NewInt(0)
-	}
-
-	reward := new(big.Int).Div(voter.VotingPower, big.NewInt(100))
-	minReward := big.NewInt(100000000000000000) // 0.1 token
-	if reward.Cmp(minReward) < 0 {
-		reward = minReward
-	}
-	return reward
-}
-
 // TestDPoSConfig 测试配置管理
 func TestDPoSConfig(t *testing.T) {
 	// 测试默认配置
