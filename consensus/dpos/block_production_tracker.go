@@ -73,12 +73,37 @@ func (bpt *BlockProductionTracker) loadFromDB() {
 	bpt.mutex.Lock()
 	defer bpt.mutex.Unlock()
 
-	// 加载历史数据
+	if len(allBlocks) == 0 {
+		return
+	}
+
+	var latestEpoch uint64
+	for epochNumber := range allBlocks {
+		if epochNumber > latestEpoch {
+			latestEpoch = epochNumber
+		}
+	}
+
+	// 将最新的epoch视为当前epoch，其余作为历史数据
+	if latestEpoch > 0 {
+		bpt.currentEpoch = latestEpoch
+		bpt.currentEpochBlocks = make(map[types.Address]uint64)
+		for addr, count := range allBlocks[latestEpoch] {
+			bpt.currentEpochBlocks[addr] = count
+		}
+		delete(allBlocks, latestEpoch)
+		bpt.logger.Info("恢复当前Epoch出块统计",
+			"epoch", latestEpoch,
+			"validatorCount", len(bpt.currentEpochBlocks))
+	}
+
 	for epochNumber, blockCounts := range allBlocks {
 		bpt.epochBlocksHistory[epochNumber] = blockCounts
 	}
 
-	bpt.logger.Info("Loaded block data from database", "epochs", len(allBlocks))
+	bpt.logger.Info("从数据库加载出块统计",
+		"historicalEpochs", len(allBlocks),
+		"currentEpochRestored", latestEpoch)
 }
 
 // saveEpochToDB 保存epoch数据到数据库
@@ -104,7 +129,11 @@ func (bpt *BlockProductionTracker) RecordBlockProduction(
 	epochNumber uint64,
 ) {
 	bpt.mutex.Lock()
-	defer bpt.mutex.Unlock()
+
+	var persistSnapshots []struct {
+		epoch  uint64
+		counts map[types.Address]uint64
+	}
 
 	// 🆕 去重检查：如果该区块已经处理过，跳过
 	if bpt.processedBlocks[blockNumber] {
@@ -112,6 +141,7 @@ func (bpt *BlockProductionTracker) RecordBlockProduction(
 			"blockNumber", blockNumber,
 			"producer", producer.String(),
 			"epoch", epochNumber)
+		bpt.mutex.Unlock()
 		return
 	}
 
@@ -119,10 +149,11 @@ func (bpt *BlockProductionTracker) RecordBlockProduction(
 	if epochNumber != bpt.currentEpoch {
 		if bpt.currentEpoch > 0 {
 			// 保存出块数量历史
-			bpt.epochBlocksHistory[bpt.currentEpoch] = make(map[types.Address]uint64)
+			historyCounts := make(map[types.Address]uint64)
 			for addr, count := range bpt.currentEpochBlocks {
-				bpt.epochBlocksHistory[bpt.currentEpoch][addr] = count
+				historyCounts[addr] = count
 			}
+			bpt.epochBlocksHistory[bpt.currentEpoch] = historyCounts
 
 			// 🆕 保存区块时间历史
 			bpt.epochBlockTimesHistory[bpt.currentEpoch] = make(map[types.Address][]time.Time)
@@ -130,8 +161,16 @@ func (bpt *BlockProductionTracker) RecordBlockProduction(
 				bpt.epochBlockTimesHistory[bpt.currentEpoch][addr] = times
 			}
 
-			// 🆕 保存到数据库
-			bpt.saveEpochToDB(bpt.currentEpoch, bpt.epochBlocksHistory[bpt.currentEpoch])
+			// 🆕 保存到数据库（上一epoch）
+			if bpt.store != nil {
+				persistSnapshots = append(persistSnapshots, struct {
+					epoch  uint64
+					counts map[types.Address]uint64
+				}{
+					epoch:  bpt.currentEpoch,
+					counts: historyCounts,
+				})
+			}
 		}
 
 		// 开始新epoch
@@ -167,6 +206,28 @@ func (bpt *BlockProductionTracker) RecordBlockProduction(
 		"block", blockNumber,
 		"producer", producer.String(),
 		"totalBlocks", bpt.currentEpochBlocks[producer])
+
+	// 🆕 持久化当前epoch快照
+	if bpt.store != nil && bpt.currentEpoch > 0 {
+		currentSnapshot := make(map[types.Address]uint64)
+		for addr, count := range bpt.currentEpochBlocks {
+			currentSnapshot[addr] = count
+		}
+		persistSnapshots = append(persistSnapshots, struct {
+			epoch  uint64
+			counts map[types.Address]uint64
+		}{
+			epoch:  bpt.currentEpoch,
+			counts: currentSnapshot,
+		})
+	}
+
+	bpt.mutex.Unlock()
+
+	// 执行持久化（锁外进行，避免阻塞）
+	for _, snapshot := range persistSnapshots {
+		bpt.saveEpochToDB(snapshot.epoch, snapshot.counts)
+	}
 }
 
 // GetEpochBlockCounts 获取指定epoch的出块统计
