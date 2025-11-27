@@ -182,6 +182,35 @@ func (fd *FaultDetector) detectValidatorFaults(
 			}
 		}
 
+		// 如果该验证者已经在上一epoch被标记为故障，跳过重新检测，保留原故障原因
+		if faultInfo := fd.dposInstance.getValidatorFaultInfo(validator.Address); faultInfo != nil {
+			if alreadyFaulty, ok := faultInfo["isFaulty"].(bool); ok && alreadyFaulty {
+				existingReason, _ := faultInfo["reason"].(string)
+				existingMissedBlocks := toUint64Safe(faultInfo["missedBlocks"])
+				existingLastUpdate := toUint64Safe(faultInfo["lastUpdateTime"])
+				existingLastFaultyEpoch := toUint64Safe(faultInfo["lastFaultyEpoch"])
+
+				fd.logger.Info("⏭️ 验证者已处于故障状态，跳过本epoch检测",
+					"address", validator.Address.String(),
+					"existingReason", existingReason,
+					"lastFaultyEpoch", existingLastFaultyEpoch)
+
+				faultFlags = append(faultFlags, FaultFlagInfo{
+					NodeAddress:            validator.Address,
+					IsFaulty:               true,
+					MissedBlocks:           existingMissedBlocks,
+					ActualBlocks:           0,
+					ExpectedBlocks:         0,
+					MissedBlocksPercentage: 0,
+					LastUpdateTime:         existingLastUpdate,
+					EpochNumber:            epochInfo.EpochToCheckNumber,
+					LastFaultyEpoch:        existingLastFaultyEpoch,
+					Reason:                 existingReason,
+				})
+				continue
+			}
+		}
+
 		// 计算出块统计
 		// epochToCheck存储的是索引，直接使用
 		stats := fd.blockCounter.CalculateBlockStats(validator.Address, epochInfo.EpochToCheck, epochInfo.EpochToCheck)
@@ -238,4 +267,24 @@ func (fd *FaultDetector) detectValidatorFaults(
 	}
 
 	return faultFlags
+}
+
+func toUint64Safe(value interface{}) uint64 {
+	switch v := value.(type) {
+	case uint64:
+		return v
+	case int:
+		if v >= 0 {
+			return uint64(v)
+		}
+	case int64:
+		if v >= 0 {
+			return uint64(v)
+		}
+	case float64:
+		if v >= 0 {
+			return uint64(v)
+		}
+	}
+	return 0
 }
