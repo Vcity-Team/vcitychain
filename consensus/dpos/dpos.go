@@ -1306,6 +1306,7 @@ func (d *DPoS) Initialize() error {
 		DelegateCount:    d.config.DelegateCount,
 		InitialDelegates: d.config.InitialDelegates,
 		blockScheduler:   d.blockScheduler, // 🆕 设置固定时间窗口调度器
+		BlockTime:        d.config.BlockTime,
 	}
 
 	// 检查runtime配置是否正确
