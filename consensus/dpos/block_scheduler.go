@@ -387,62 +387,16 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			}
 		}
 
-		// 🆕 获取验证者列表并过滤故障验证者
-		activeValidators := make([]types.Address, 0, len(validatorsFromExtra))
-		filteredCount := 0 // 🆕 记录被过滤的验证者数量
-
-		// 🆕 检查DPoS实例是否存在
-		dposInstance, dposExists := GetDPoSInstance("vcity_dpos")
-		if !dposExists {
-			r.logOnceWithInterval("dpos_instance_not_found", 10*time.Second, "warn",
-				"⚠️ DPoS实例不存在，跳过故障过滤，使用所有验证者")
-		}
-
+		// 🆕 直接使用数据库中的验证者集合（已在epoch边界过滤）
+		validators := make([]types.Address, 0, len(validatorsFromExtra))
 		for _, validator := range validatorsFromExtra {
-			// 获取验证者的故障标志信息
-			var faultInfo map[string]interface{}
-			var isFaulty bool
-
-			// 通过DPoS实例获取故障信息
-			if dposExists && dposInstance != nil {
-				faultInfo = dposInstance.getValidatorFaultInfo(validator.Address)
-				if faultInfo != nil && faultInfo["isFaulty"] != nil {
-					if faultValue, ok := faultInfo["isFaulty"].(bool); ok {
-						isFaulty = faultValue
-					}
-				}
-			} else {
-				// 如果DPoS实例不存在，使用默认值（不标记为故障）
-				faultInfo = map[string]interface{}{
-					"isFaulty":     false,
-					"missedBlocks": uint64(0),
-					"reason":       "DPoS instance not available",
-				}
-				isFaulty = false
-			}
-
-			// 只保留非故障验证者
-			if !isFaulty {
-				activeValidators = append(activeValidators, validator.Address)
-			} else {
-				filteredCount++ // 🆕 记录被过滤的验证者
-			}
+			validators = append(validators, validator.Address)
 		}
-
-		// 🆕 如果过滤后没有验证者，直接返回false（不再使用原始列表）
-		validators := activeValidators
 		if len(validators) == 0 {
-			r.logger.Error("❌ shouldProduceBlockNow: 过滤后验证者集合为空，无法确定出块者",
-				"originalCount", len(validatorsFromExtra),
-				"filteredCount", filteredCount,
+			r.logger.Error("❌ shouldProduceBlockNow: 数据库中的验证者集合为空，无法确定出块者",
 				"dataSource", validatorsSource,
-				"blockNumber", currentBlock.Number,
-				"note", "所有验证者都被标记为故障，无法继续出块")
+				"blockNumber", currentBlock.Number)
 			return false
-		}
-
-		if filteredCount > 0 {
-			validatorsSource = fmt.Sprintf("%s+filtered(%d)", validatorsSource, filteredCount) // 🆕 标记为过滤后
 		}
 
 		// 🆕 调用改进后的方法（直接比较地址）

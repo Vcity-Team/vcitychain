@@ -237,6 +237,14 @@ func (d *DPoS) saveFaultStatusToDatabase(faultFlag FaultFlagInfo) error {
 		return fmt.Errorf("state store not available")
 	}
 
+	d.logger.Info("💾 保存验证者故障状态",
+		"address", faultFlag.NodeAddress.String(),
+		"isFaulty", faultFlag.IsFaulty,
+		"missedBlocks", faultFlag.MissedBlocks,
+		"lastUpdateTime", faultFlag.LastUpdateTime,
+		"epoch", faultFlag.EpochNumber,
+		"reason", faultFlag.Reason)
+
 	return d.state.StakeStore.UpdateValidatorFaultStatus(
 		faultFlag.NodeAddress,
 		faultFlag.IsFaulty,

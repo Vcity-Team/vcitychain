@@ -4,7 +4,6 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
 )
 
@@ -38,60 +37,12 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 		}
 	}
 
-	// 🆕 过滤掉故障验证者（与shouldProduceBlockNow()保持一致）
-	activeValidators := make(validator.AccountSet, 0, len(allValidators))
-	filteredCount := 0
-
-	// 🆕 检查DPoS实例是否存在
-	dposInstance, dposExists := GetDPoSInstance("vcity_dpos")
-	if !dposExists {
-		r.logOnceWithInterval("dpos_instance_not_found_get_current_delegate", 10*time.Second, "warn",
-			"⚠️ DPoS实例不存在，跳过故障过滤，使用所有验证者")
-		activeValidators = allValidators
-	} else {
-		for _, validator := range allValidators {
-			// 获取验证者的故障标志信息
-			var faultInfo map[string]interface{}
-			var isFaulty bool
-
-			// 通过DPoS实例获取故障信息
-			if dposInstance != nil {
-				faultInfo = dposInstance.getValidatorFaultInfo(validator.Address)
-				if faultInfo != nil && faultInfo["isFaulty"] != nil {
-					if faultValue, ok := faultInfo["isFaulty"].(bool); ok {
-						isFaulty = faultValue
-					}
-				}
-			}
-
-			// 只保留非故障验证者
-			if !isFaulty {
-				activeValidators = append(activeValidators, validator)
-			} else {
-				filteredCount++
-			}
-		}
-	}
-
-	// 🆕 如果过滤后没有验证者，直接返回错误（不再使用原始列表）
-	validators := activeValidators
+	// 🆕 直接使用数据库中的验证者集合（已在epoch边界完成过滤）
+	validators := allValidators
 	if len(validators) == 0 {
-		r.logger.Error("❌ getCurrentDelegate: 过滤后验证者集合为空，无法确定当前委托者",
-			"originalCount", len(allValidators),
-			"filteredCount", filteredCount,
-			"dataSource", validatorsSource,
-			"note", "所有验证者都被标记为故障，无法继续出块")
-		return types.ZeroAddress
-	}
-
-	if filteredCount > 0 {
-		// 🆕 记录过滤信息
-		r.logOnceWithInterval("get_current_delegate_filtered", 10*time.Second, "debug",
-			"🔍 getCurrentDelegate: 已过滤故障验证者",
-			"originalCount", len(allValidators),
-			"filteredCount", filteredCount,
-			"activeCount", len(validators),
+		r.logger.Error("❌ getCurrentDelegate: 验证者集合为空，无法确定当前委托者",
 			"dataSource", validatorsSource)
+		return types.ZeroAddress
 	}
 
 	actualDelegateCount := len(validators)
@@ -121,10 +72,8 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 				"address", delegate.Address.String(),
 				"isActive", delegate.IsActive,
 				"votingPower", delegate.VotingPower.String(),
-				"dataSource", validatorsSource, // 🆕 使用实际数据源
-				"filteredCount", filteredCount,
+				"dataSource", validatorsSource,
 				"totalValidators", len(allValidators),
-				"activeValidators", len(activeValidators),
 				"timestamp", time.Now().Format("15:04:05.000"))
 			return types.ZeroAddress
 		}
