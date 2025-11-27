@@ -230,11 +230,10 @@ func (r *dposRuntime) getValidatorsFromCurrentBlockExtraData(currentBlock *types
 	// 获取当前区块的ExtraData
 	currentExtra, err := GetIbftExtra(currentBlock.ExtraData)
 	if err != nil {
-		r.logger.Warn("⚠️ 无法解析当前区块ExtraData，尝试从数据库读取",
+		r.logger.Error("❌ 无法解析当前区块ExtraData",
 			"blockNumber", currentBlock.Number,
 			"error", err)
-		// 备用方案：从数据库读取
-		return r.getValidatorsFromDatabase()
+		return nil, fmt.Errorf("failed to parse ExtraData for block %d: %w", currentBlock.Number, err)
 	}
 
 	// 获取父区块（当前区块的父区块）
@@ -257,18 +256,16 @@ func (r *dposRuntime) getValidatorsFromCurrentBlockExtraData(currentBlock *types
 	)
 
 	if err != nil {
-		r.logger.Warn("⚠️ 从ExtraData获取验证者列表失败，尝试从数据库读取",
+		r.logger.Error("❌ 从ExtraData获取验证者列表失败",
 			"blockNumber", currentBlock.Number,
 			"error", err)
-		// 备用方案：从数据库读取
-		return r.getValidatorsFromDatabase()
+		return nil, fmt.Errorf("failed to get validators from ExtraData for block %d: %w", currentBlock.Number, err)
 	}
 
 	if len(validators) == 0 {
-		r.logger.Warn("⚠️ ExtraData中的验证者列表为空，尝试从数据库读取",
+		r.logger.Error("❌ ExtraData中的验证者列表为空",
 			"blockNumber", currentBlock.Number)
-		// 备用方案：从数据库读取
-		return r.getValidatorsFromDatabase()
+		return nil, fmt.Errorf("validators list is empty in ExtraData for block %d", currentBlock.Number)
 	}
 
 	return validators, nil
@@ -441,8 +438,17 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			}
 		}
 
-		// 🆕 如果过滤后没有验证者，使用原始列表（避免所有验证者被过滤导致不出块）
+		// 🆕 如果过滤后没有验证者，直接返回false（不再使用原始列表）
 		validators := activeValidators
+		if len(validators) == 0 {
+			r.logger.Error("❌ shouldProduceBlockNow: 过滤后验证者集合为空，无法确定出块者",
+				"originalCount", len(validatorsFromExtra),
+				"filteredCount", filteredCount,
+				"dataSource", validatorsSource,
+				"blockNumber", currentBlock.Number,
+				"note", "所有验证者都被标记为故障，无法继续出块")
+			return false
+		}
 
 		if filteredCount > 0 {
 			validatorsSource = fmt.Sprintf("%s+filtered(%d)", validatorsSource, filteredCount) // 🆕 标记为过滤后

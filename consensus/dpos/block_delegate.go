@@ -73,17 +73,19 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 		}
 	}
 
-	// 🆕 如果过滤后没有验证者，使用原始列表（避免所有验证者被过滤导致不出块）
-	// 注意：这个逻辑与shouldProduceBlockNow()保持一致
+	// 🆕 如果过滤后没有验证者，直接返回错误（不再使用原始列表）
 	validators := activeValidators
 	if len(validators) == 0 {
-		r.logger.Warn("⚠️ getCurrentDelegate: 过滤后验证者集合为空，使用原始列表",
+		r.logger.Error("❌ getCurrentDelegate: 过滤后验证者集合为空，无法确定当前委托者",
 			"originalCount", len(allValidators),
 			"filteredCount", filteredCount,
-			"dataSource", validatorsSource)
-		validators = allValidators
-	} else if filteredCount > 0 {
-		// 🆕 记录过滤信息（与shouldProduceBlockNow()保持一致）
+			"dataSource", validatorsSource,
+			"note", "所有验证者都被标记为故障，无法继续出块")
+		return types.ZeroAddress
+	}
+
+	if filteredCount > 0 {
+		// 🆕 记录过滤信息
 		r.logOnceWithInterval("get_current_delegate_filtered", 10*time.Second, "debug",
 			"🔍 getCurrentDelegate: 已过滤故障验证者",
 			"originalCount", len(allValidators),
