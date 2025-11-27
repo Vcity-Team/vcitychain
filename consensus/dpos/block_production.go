@@ -175,50 +175,41 @@ func (r *dposRuntime) produceBlock() error {
 	currentDelegate := r.getCurrentDelegate()
 	keyAddr := types.Address(r.config.Key.Address())
 
-	// 检查当前节点是否为出块者
-
-	// 检查当前节点是否有足够的stake参与出块
 	var currentDelegateInfo *validator.ValidatorMetadata
 
-	// 🆕 如果delegates为空，尝试重新加载（使用读锁检查，写锁更新）
-	r.lock.RLock()
-	delegatesEmpty := r.delegates == nil || len(r.delegates) == 0
-	r.lock.RUnlock()
+	if r.config != nil && r.config.dposBackend != nil {
+		dposInstance, ok := r.config.dposBackend.(*DPoS)
+		if ok && dposInstance != nil {
+			// 从数据库读取验证者信息
+			dbValidators, err := dposInstance.GetSortedValidatorsWithLimit()
+			if err != nil {
+				r.logger.Error("❌ 从数据库读取验证者失败", "error", err)
+				return fmt.Errorf("failed to get validators from database: %w", err)
+			}
 
-	if delegatesEmpty {
-		r.logger.Warn("⚠️ delegates为空，尝试重新加载验证者信息")
-		if r.config != nil && r.config.dposBackend != nil {
-			currentBlockNumber := uint64(0)
-			if r.config.blockchain != nil {
-				if currentHeader := r.config.blockchain.CurrentHeader(); currentHeader != nil {
-					currentBlockNumber = currentHeader.Number
+			// 在数据库验证者集合中查找当前节点
+			for _, delegate := range dbValidators {
+				if delegate.Address == keyAddr {
+					currentDelegateInfo = delegate
+					// 确保IsActive为true（验证者应该都是活跃的）
+					currentDelegateInfo.IsActive = true
+					break
 				}
 			}
 
-			if delegates, err := r.config.dposBackend.GetDelegates(currentBlockNumber, nil); err == nil && len(delegates) > 0 {
-				// 🆕 使用写锁更新delegates（快速操作）
+			// 如果从数据库找到验证者，更新内存缓存（用于其他非关键逻辑）
+			if len(dbValidators) > 0 {
 				r.lock.Lock()
-				r.delegates = delegates
+				r.delegates = dbValidators
 				r.lock.Unlock()
-				r.logger.Info("✅ 成功重新加载验证者信息", "count", len(delegates))
-			} else {
-				r.logger.Error("❌ 无法重新加载验证者信息", "error", err)
 			}
+		} else {
+			r.logger.Error("❌ dposBackend类型转换失败，无法获取验证者信息")
+			return fmt.Errorf("invalid dpos backend type")
 		}
-	}
-
-	// 🆕 使用读锁读取delegates（避免在构建区块时被阻塞）
-	r.lock.RLock()
-	delegates := r.delegates
-	r.lock.RUnlock()
-
-	for _, delegate := range delegates {
-		if delegate.Address == keyAddr {
-			currentDelegateInfo = delegate
-			// 🆕 修复：确保IsActive为true（验证者应该都是活跃的）
-			currentDelegateInfo.IsActive = true
-			break
-		}
+	} else {
+		r.logger.Error("❌ dposBackend为nil，无法获取验证者信息")
+		return fmt.Errorf("dpos backend not available")
 	}
 
 	// 如果当前节点stake为0或不活跃，跳过出块
@@ -253,25 +244,23 @@ func (r *dposRuntime) produceBlock() error {
 		return nil
 	}
 
-	// 当前节点stake检查通过
-
 	// 添加调试日志 - 只有当本节点是当前受托人时才打印
 	if currentDelegate == keyAddr {
+		// 🆕 获取验证者数量（从内存或数据库）
+		delegatesCount := 0
+		r.lock.RLock()
+		if r.delegates != nil {
+			delegatesCount = len(r.delegates)
+		}
+		r.lock.RUnlock()
+
 		r.logger.Debug("🏭 检查区块生产资格",
 			"currentDelegate", currentDelegate,
 			"keyAddr", keyAddr,
 			"currentRound", r.currentRound,
-			"delegatesCount", len(delegates),
+			"delegatesCount", delegatesCount,
 			"votingPower", currentDelegateInfo.VotingPower.String())
 	}
-
-	// 🆕 优化：移除重复的shouldProduceBlockNow检查
-	// 原因：shouldProduceBlockNow()已经在continuousBlockMonitoring()中调用（第76行）
-	// produceBlock()只在shouldProduceBlockNow()返回true时才会被调用
-	// 重复检查浪费时间和资源
-
-	// 检查是否已经有更新的区块
-	// currentBlock 已在上面声明过了
 
 	// 计算下一个要生产的区块号
 	nextBlockNumber := currentBlock.Number + 1

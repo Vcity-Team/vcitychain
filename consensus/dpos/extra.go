@@ -663,21 +663,34 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 func (i *Extra) processFaultFlags(blockNumber uint64, consensusBackend dposBackend, logger hclog.Logger) {
 	// 🆕 处理故障标志（在获取验证者集合之前，确保故障状态被保存）
 	if len(i.FaultFlags) > 0 {
-		logger.Info("🔍 processFaultFlags 检测到故障标志",
-			"blockNumber", blockNumber,
-			"faultFlagsCount", len(i.FaultFlags))
+		// 🆕 统计真正故障的验证者数量（isFaulty=true）
+		faultyCount := 0
+		for _, faultFlag := range i.FaultFlags {
+			if faultFlag.IsFaulty {
+				faultyCount++
+			}
+		}
+
+		// 🆕 只在有真正故障的验证者时才打印日志
+		if faultyCount > 0 {
+			logger.Info("🔍 processFaultFlags 检测到故障标志",
+				"blockNumber", blockNumber,
+				"faultFlagsCount", len(i.FaultFlags),
+				"faultyCount", faultyCount)
+		}
 
 		for _, faultFlag := range i.FaultFlags {
-			logger.Info("📝 processFaultFlags 处理故障标志",
-				"blockNumber", blockNumber,
-				"address", faultFlag.NodeAddress.String(),
-				"isFaulty", faultFlag.IsFaulty,
-				"missedBlocks", faultFlag.MissedBlocks,
-				"epoch", faultFlag.EpochNumber)
-
 			// 🆕 保存故障状态到数据库（验证节点）
 			// 只有当 isFaulty=true 时才保存，避免覆盖已存在的故障状态
 			if faultFlag.IsFaulty {
+				// 🆕 只在真正故障时才打印处理日志
+				logger.Info("📝 processFaultFlags 处理故障标志",
+					"blockNumber", blockNumber,
+					"address", faultFlag.NodeAddress.String(),
+					"isFaulty", faultFlag.IsFaulty,
+					"missedBlocks", faultFlag.MissedBlocks,
+					"epoch", faultFlag.EpochNumber)
+
 				if dposInstance, ok := consensusBackend.(*DPoS); ok {
 					logger.Info("💾 processFaultFlags 开始保存故障状态到数据库",
 						"blockNumber", blockNumber,
@@ -706,24 +719,18 @@ func (i *Extra) processFaultFlags(blockNumber uint64, consensusBackend dposBacke
 			} else {
 				// 🆕 如果 isFaulty=false，检查数据库中是否已有故障记录
 				// 如果有，说明验证者之前故障过，不应该覆盖（故障状态应该持续存在，直到通过提案恢复）
+				// 🆕 不打印日志，静默处理
 				if dposInstance, ok := consensusBackend.(*DPoS); ok {
 					if dposInstance.state != nil && dposInstance.state.StakeStore != nil {
 						if dbFaultInfo, err := dposInstance.state.StakeStore.GetValidatorFaultStatus(faultFlag.NodeAddress); err == nil && dbFaultInfo != nil {
 							if dbIsFaulty, ok := dbFaultInfo["isFaulty"].(bool); ok && dbIsFaulty {
 								// 数据库中已有故障记录，不覆盖（保持故障状态）
-								logger.Info("ℹ️ processFaultFlags 验证者当前epoch正常，但数据库中仍有故障记录，保持故障状态",
-									"blockNumber", blockNumber,
-									"address", faultFlag.NodeAddress.String(),
-									"currentEpoch", faultFlag.EpochNumber,
-									"lastFaultyEpoch", dbFaultInfo["lastFaultyEpoch"],
-									"reason", "故障状态应持续存在，直到通过提案恢复")
+								// 🆕 不打印日志，静默处理
 								continue
 							}
 						}
 						// 如果数据库中没有故障记录，或者已经是正常状态，可以更新为正常状态
-						logger.Debug("ℹ️ processFaultFlags 验证者当前epoch正常，数据库中无故障记录",
-							"blockNumber", blockNumber,
-							"address", faultFlag.NodeAddress.String())
+						// 🆕 不打印日志，静默处理
 					}
 				}
 			}

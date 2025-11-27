@@ -1645,9 +1645,29 @@ func (r *dposRuntime) getActiveValidatorsCount() int {
 		return 0
 	}
 
+	var validators validator.AccountSet
+	if r.config != nil && r.config.dposBackend != nil {
+		dposInstance, ok := r.config.dposBackend.(*DPoS)
+		if ok && dposInstance != nil {
+			dbValidators, err := dposInstance.GetSortedValidatorsWithLimit()
+			if err != nil {
+				r.logger.Error("⚠️ 从数据库读取验证者失败", "error", err)
+				return 0
+			} else {
+				validators = dbValidators
+			}
+		} else {
+			r.logger.Error("⚠️ 获取dpos实例错误")
+			return 0
+		}
+	} else {
+		r.logger.Error("⚠️ 获取dposBackend错误")
+		return 0
+	}
+
 	// 计算真正活跃的验证者数量（有足够stake且IsActive=true）
 	activeValidators := 0
-	for _, delegate := range r.delegates {
+	for _, delegate := range validators {
 		if delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
 			activeValidators++
 		}
@@ -1698,13 +1718,24 @@ func (r *dposRuntime) calculateMinRequiredSignatures() int {
 	return minRequired
 }
 
-// getValidatorsFromExtraDataForProduction 生产时从ExtraData获取验证者集合
-// 使用与验证时完全相同的逻辑
 func (r *dposRuntime) getValidatorsFromExtraDataForProduction(header *types.Header, parents []*types.Header) (validator.AccountSet, error) {
-	// 🆕 直接使用当前完整的验证者集合，确保包含最新的投票结果
-	if r.delegates != nil && len(r.delegates) > 0 {
-		r.logger.Debug("🔍 生产时使用当前完整验证者集合", "delegatesCount", len(r.delegates))
-		return r.delegates.Copy(), nil
+	if r.config != nil && r.config.dposBackend != nil {
+		dposInstance, ok := r.config.dposBackend.(*DPoS)
+		if ok && dposInstance != nil {
+			dbValidators, err := dposInstance.GetSortedValidatorsWithLimit()
+			if err != nil {
+				r.logger.Error("⚠️ 从数据库读取验证者失败", "error", err)
+				return nil, err
+			}
+
+			if len(dbValidators) > 0 {
+				r.logger.Debug("🔍 生产时使用数据库验证者集合", "validatorsCount", len(dbValidators))
+				r.lock.Lock()
+				r.delegates = dbValidators
+				r.lock.Unlock()
+				return dbValidators, nil
+			}
+		}
 	}
 
 	return nil, fmt.Errorf("no validators available for production")
@@ -2102,27 +2133,6 @@ func (r *dposRuntime) isValidator() bool {
 			r.logger.Debug("⚠️ state或StakeStore不可用，回退到内存检查")
 		}
 	}
-
-	// 回退方案：检查内存中的验证者
-	for _, delegate := range r.delegates {
-		if delegate.Address == currentAddr {
-			// 关键：检查stake是否足够且是否活跃
-			if delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
-				r.logOnce("active_validator", "debug", "✅ 当前节点是活跃验证者（从内存）",
-					"address", currentAddr.String(),
-					"votingPower", delegate.VotingPower.String(),
-					"isActive", delegate.IsActive)
-				return true
-			} else {
-				r.logger.Info("❌ 当前节点不是活跃验证者（stake不足或不活跃，从内存）",
-					"address", currentAddr.String(),
-					"votingPower", delegate.VotingPower.String(),
-					"isActive", delegate.IsActive)
-				return false
-			}
-		}
-	}
-
 	r.logger.Info("❌ 当前节点不在受托人集合中", "address", currentAddr.String())
 	return false
 }

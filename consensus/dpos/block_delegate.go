@@ -10,29 +10,86 @@ import (
 
 // getCurrentDelegate 获取当前受托人（基于时间slot实时计算）
 func (r *dposRuntime) getCurrentDelegate() types.Address {
-	// 🆕 优化：优先使用缓存的验证者集合，避免每次查询数据库
-	var validators validator.AccountSet
-	var err error
+	// 🆕 修复：使用与shouldProduceBlockNow()完全相同的数据源策略，确保一致性
+	dposBackend, ok := r.backend.(*DPoS)
+	if !ok {
+		r.logger.Error("❌ 无法访问数据库，backend类型错误")
+		return types.ZeroAddress
+	}
 
-	// 优先使用缓存的 delegates
-	if r.delegates != nil && len(r.delegates) > 0 {
-		validators = r.delegates
-	} else {
-		// 只在缓存为空时才查询数据库
-		r.logger.Warn("⚠️ 缓存为空，从数据库读取验证者")
-		dposBackend, ok := r.backend.(*DPoS)
-		if !ok {
-			r.logger.Error("❌ 无法访问数据库，backend类型错误")
-			return types.ZeroAddress
-		}
-		validators, err = dposBackend.GetSortedValidatorsWithLimit()
+	// 🆕 优先从数据库获取预先计算的epoch验证者集合（与shouldProduceBlockNow()保持一致）
+	allValidators, err := dposBackend.getEpochValidatorsFromDatabase()
+	validatorsSource := "database" // 🆕 记录验证者列表来源
+	if err != nil || len(allValidators) == 0 {
+		// 如果数据库中没有预先计算的验证者集合，回退到实时查询（兼容性）
+		// 这种情况可能发生在：1. 第一次启动 2. 数据库被清空 3. 之前的epoch没有保存
+		r.logOnceWithInterval("get_current_delegate_fallback", 10*time.Second, "debug",
+			"⚠️ getCurrentDelegate: 数据库中没有预先计算的epoch验证者集合，回退到实时查询",
+			"error", err)
+		allValidators, err = dposBackend.GetSortedValidatorsWithLimit()
+		validatorsSource = "realtime_query" // 🆕 更新来源为实时查询
 		if err != nil {
-			r.logger.Error("❌ 从数据库读取验证者失败", "error", err)
+			r.logger.Error("❌ getCurrentDelegate: 实时查询验证者集合失败", "error", err)
 			return types.ZeroAddress
 		}
-		// 更新缓存
-		r.delegates = validators
-		r.logger.Info("✅ 从数据库读取验证者并更新缓存", "count", len(validators))
+		if len(allValidators) == 0 {
+			r.logger.Error("❌ getCurrentDelegate: 实时查询的验证者集合为空")
+			return types.ZeroAddress
+		}
+	}
+
+	// 🆕 过滤掉故障验证者（与shouldProduceBlockNow()保持一致）
+	activeValidators := make(validator.AccountSet, 0, len(allValidators))
+	filteredCount := 0
+
+	// 🆕 检查DPoS实例是否存在
+	dposInstance, dposExists := GetDPoSInstance("vcity_dpos")
+	if !dposExists {
+		r.logOnceWithInterval("dpos_instance_not_found_get_current_delegate", 10*time.Second, "warn",
+			"⚠️ DPoS实例不存在，跳过故障过滤，使用所有验证者")
+		activeValidators = allValidators
+	} else {
+		for _, validator := range allValidators {
+			// 获取验证者的故障标志信息
+			var faultInfo map[string]interface{}
+			var isFaulty bool
+
+			// 通过DPoS实例获取故障信息
+			if dposInstance != nil {
+				faultInfo = dposInstance.getValidatorFaultInfo(validator.Address)
+				if faultInfo != nil && faultInfo["isFaulty"] != nil {
+					if faultValue, ok := faultInfo["isFaulty"].(bool); ok {
+						isFaulty = faultValue
+					}
+				}
+			}
+
+			// 只保留非故障验证者
+			if !isFaulty {
+				activeValidators = append(activeValidators, validator)
+			} else {
+				filteredCount++
+			}
+		}
+	}
+
+	// 🆕 如果过滤后没有验证者，使用原始列表（避免所有验证者被过滤导致不出块）
+	// 注意：这个逻辑与shouldProduceBlockNow()保持一致
+	validators := activeValidators
+	if len(validators) == 0 {
+		r.logger.Warn("⚠️ getCurrentDelegate: 过滤后验证者集合为空，使用原始列表",
+			"originalCount", len(allValidators),
+			"filteredCount", filteredCount,
+			"dataSource", validatorsSource)
+		validators = allValidators
+	} else if filteredCount > 0 {
+		// 🆕 记录过滤信息（与shouldProduceBlockNow()保持一致）
+		r.logOnceWithInterval("get_current_delegate_filtered", 10*time.Second, "debug",
+			"🔍 getCurrentDelegate: 已过滤故障验证者",
+			"originalCount", len(allValidators),
+			"filteredCount", filteredCount,
+			"activeCount", len(validators),
+			"dataSource", validatorsSource)
 	}
 
 	actualDelegateCount := len(validators)
@@ -54,25 +111,6 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 		currentValidatorIndex := currentSlot % actualDelegateCount
 		delegate := validators[currentValidatorIndex]
 
-		// 🆕 添加详细的调试日志
-		// r.logOnceWithInterval("get_current_delegate_start_check", 10*time.Second, "info", "🔍 getCurrentDelegate 开始检查",
-		// 	"delegatesCount", actualDelegateCount,
-		// 	"currentSlot", currentSlot,
-		// 	"validatorIndex", currentValidatorIndex,
-		// 	"delegates_array_detail", func() string {
-		// 		if len(validators) == 0 {
-		// 			return "delegates数组为空"
-		// 		}
-		// 		result := "delegates数组: "
-		// 		for i, delegate := range validators {
-		// 			if i < 5 { // 只显示前5个
-		// 				result += fmt.Sprintf("[%d]=%s(vp=%s,active=%v) ", i, delegate.Address.String()[:10], delegate.VotingPower.String(), delegate.IsActive)
-		// 			}
-		// 		}
-		// 		return result
-		// 	}(),
-		// 	"timestamp", time.Now().Format("15:04:05.000"))
-
 		// 检查受托人是否活跃且有足够的stake
 		if !delegate.IsActive || delegate.VotingPower.Cmp(big.NewInt(0)) <= 0 {
 			r.logOnceWithInterval("inactive_delegate", 10*time.Second, "warn",
@@ -81,6 +119,10 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 				"address", delegate.Address.String(),
 				"isActive", delegate.IsActive,
 				"votingPower", delegate.VotingPower.String(),
+				"dataSource", validatorsSource, // 🆕 使用实际数据源
+				"filteredCount", filteredCount,
+				"totalValidators", len(allValidators),
+				"activeValidators", len(activeValidators),
 				"timestamp", time.Now().Format("15:04:05.000"))
 			return types.ZeroAddress
 		}

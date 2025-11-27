@@ -356,42 +356,10 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		"delegatesCount", len(r.delegates),
 		"timestamp", time.Now().Format("15:04:05.000"))
 
-	// 🆕 关键修复：在共识切换高度之前，使用IBFT逻辑，不使用DPoS调度器
-	// 必须在调用 blockScheduler.ShouldProduceBlockNow 之前检查
-	var consensusSwitchHeight uint64 = 0
-	hasDPoSBackend := r.config.dposBackend != nil
-	if hasDPoSBackend {
-		if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
-			if dposInstance.config != nil {
-				consensusSwitchHeight = dposInstance.config.ConsensusSwitchHeight
-			}
-		}
-	}
-
-	// 🆕 关键：在共识切换高度之前（blockNumber < consensusSwitchHeight），使用IBFT逻辑
-	// 注意：consensusSwitchHeight 为 0 时，表示还没有设置共识切换高度，应该使用IBFT
-	if consensusSwitchHeight > 0 && currentBlock.Number < consensusSwitchHeight {
-		r.logOnceWithInterval("ibft_mode_before_switch", 5*time.Second, "debug",
-			"🔍 共识切换高度前，使用IBFT逻辑（不调用DPoS调度器）",
-			"currentBlockNumber", currentBlock.Number,
-			"consensusSwitchHeight", consensusSwitchHeight,
-			"difference", consensusSwitchHeight-currentBlock.Number)
-		result := r.shouldProduceBlock()
-		r.logOnceWithInterval("ibft_should_produce_result", 5*time.Second, "debug",
-			"🔍 IBFT逻辑结果",
-			"shouldProduce", result,
-			"currentBlockNumber", currentBlock.Number,
-			"timestamp", time.Now().Format("15:04:05.000"))
-		return result
-	}
-
-	// 使用TRON式调度器（完全基于时间，比较地址）
 	if r.config.blockScheduler != nil {
 		// 获取本节点地址
 		myAddress := types.Address(r.config.Key.Address())
 
-		// 🆕 方案1：优先使用预先计算的epoch验证者集合，而不是实时查询
-		// 这样新投票的节点不会立即生效，而是等到下一个epoch开始
 		if r.config.dposBackend == nil {
 			r.logger.Error("❌ dposBackend为nil，无法获取验证者集合",
 				"blockNumber", currentBlock.Number)
@@ -497,54 +465,4 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 	}
 
 	return false
-}
-
-// shouldProduceBlock 检查当前节点是否应该出块（IBFT模式：基于区块号和验证者索引）
-// 🆕 关键：这个函数专门用于IBFT模式，不应该调用DPoS调度器
-func (r *dposRuntime) shouldProduceBlock() bool {
-	currentBlock := r.config.blockchain.CurrentHeader()
-	if currentBlock == nil {
-		r.logger.Warn("无法获取当前区块头，跳过出块")
-		return false
-	}
-
-	// 🆕 关键修复：shouldProduceBlock 是IBFT模式的出块检查，不应该调用DPoS调度器
-	// 这个函数专门用于共识切换高度之前的IBFT逻辑
-	r.logOnceWithInterval("ibft_check_qualification", 10*time.Second, "debug",
-		"🔍 使用IBFT模式检查出块资格",
-		"currentBlock", currentBlock.Number,
-		"delegateCount", r.config.DelegateCount,
-		"delegatesCount", len(r.delegates))
-
-	// IBFT逻辑：基于区块号计算当前应该出块的验证者索引
-	if len(r.delegates) == 0 {
-		r.logger.Warn("⚠️ IBFT模式：验证者列表为空")
-		return false
-	}
-
-	// 计算当前应该出块的验证者索引（基于区块号）
-	validatorIndex := int(currentBlock.Number) % len(r.delegates)
-	if validatorIndex < 0 || validatorIndex >= len(r.delegates) {
-		r.logger.Warn("⚠️ IBFT模式：验证者索引超出范围",
-			"validatorIndex", validatorIndex,
-			"delegatesCount", len(r.delegates))
-		return false
-	}
-
-	// 获取当前应该出块的验证者地址
-	expectedValidator := r.delegates[validatorIndex].Address
-	myAddress := types.Address(r.config.Key.Address())
-
-	// 检查本节点是否是当前应该出块的验证者
-	isMatch := expectedValidator == myAddress
-
-	r.logOnceWithInterval("ibft_check_result", 10*time.Second, "debug",
-		"🔍 IBFT模式检查结果",
-		"blockNumber", currentBlock.Number,
-		"validatorIndex", validatorIndex,
-		"expectedValidator", expectedValidator.String(),
-		"myAddress", myAddress.String(),
-		"isMatch", isMatch)
-
-	return isMatch
 }
