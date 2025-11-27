@@ -166,41 +166,32 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	expectedValidator := validators[currentValidatorIndex]
 	isMatch := expectedValidator == myAddress
 
-	// ========== 🆕 详细日志：打印ShouldProduceBlockNow中的验证者列表和验证结果（2000ms间隔，便于追踪分叉问题） ==========
-	// 合并为一行：包含所有信息，如果isMatch=true则标记为出块验证
-	logMessage := "🔍 ShouldProduceBlockNow 中的验证者列表和验证详情"
+	// 🆕 只有当本地节点应该出块时才打印详细日志（每次出块都打印，因为频率已经很低）
 	if isMatch {
-		logMessage = "🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块"
+		// ========== 🆕 详细日志：打印ShouldProduceBlockNow中的验证者列表和验证结果（每次出块都打印） ==========
+		bs.logger.Info("🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块",
+			"blockNumber", blockNumber,
+			"currentSlot", currentSlot,
+			"activeValidatorCount", activeValidatorCount,
+			"activeValidatorCountSource", validatorsSource, // 🆕 验证者列表来源
+			"myAddress", myAddress.String(),
+			"expectedValidator", fmt.Sprintf("[%d]%s", currentValidatorIndex, expectedValidator.String()),
+			"validatorIndex", currentValidatorIndex,
+			"isMatch", isMatch,
+			"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
+			"now", now.Format("2006-01-02 15:04:05.000"),
+			"timestamp", now.Format("15:04:05.000000"),
+			"timeSinceGenesis", timeSinceGenesis.String(),
+			"blockWindow", bs.blockWindow.String(),
+			"validatorsList", func() []string {
+				var vs []string
+				for i, v := range validators {
+					vs = append(vs, fmt.Sprintf("[%d]%s", i, v.String()))
+				}
+				return vs
+			}(),
+			"note", "用于验证同一时刻只有一个节点出块")
 	}
-
-	bs.logOnceWithInterval("should_produce_block_now_validators_detail", 2000*time.Millisecond, "info",
-		logMessage,
-		"blockNumber", blockNumber,
-		"currentSlot", currentSlot,
-		"activeValidatorCount", activeValidatorCount,
-		"activeValidatorCountSource", validatorsSource, // 🆕 验证者列表来源
-		"myAddress", myAddress.String(),
-		"expectedValidator", fmt.Sprintf("[%d]%s", currentValidatorIndex, expectedValidator.String()),
-		"validatorIndex", currentValidatorIndex,
-		"isMatch", isMatch,
-		"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
-		"now", now.Format("2006-01-02 15:04:05.000"),
-		"timestamp", now.Format("15:04:05.000000"),
-		"timeSinceGenesis", timeSinceGenesis.String(),
-		"blockWindow", bs.blockWindow.String(),
-		"validatorsList", func() []string {
-			var vs []string
-			for i, v := range validators {
-				vs = append(vs, fmt.Sprintf("[%d]%s", i, v.String()))
-			}
-			return vs
-		}(),
-		"note", func() string {
-			if isMatch {
-				return "用于验证同一时刻只有一个节点出块"
-			}
-			return ""
-		}())
 
 	return isMatch
 }
