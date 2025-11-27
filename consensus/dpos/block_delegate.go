@@ -64,21 +64,43 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 		currentValidatorIndex := currentSlot % actualDelegateCount
 		delegate := validators[currentValidatorIndex]
 
+		// 🆕 使用最新的数据库信息校验活跃状态和投票权重
+		latestMeta := delegate
+		if validatorsSource != "realtime_query" {
+			if freshValidators, err := dposBackend.GetSortedValidatorsWithLimit(); err == nil {
+				for _, meta := range freshValidators {
+					if meta.Address == delegate.Address {
+						latestMeta = meta
+						break
+				 }
+				}
+			} else {
+				r.logger.Warn("⚠️ getCurrentDelegate: 获取最新验证者权重失败",
+					"address", delegate.Address.String(),
+					"error", err)
+			}
+		}
+
+		if latestMeta == nil {
+			r.logger.Error("❌ getCurrentDelegate: 无法获取当前委托者元数据",
+				"address", delegate.Address.String())
+			return types.ZeroAddress
+		}
+
 		// 检查受托人是否活跃且有足够的stake
-		if !delegate.IsActive || delegate.VotingPower.Cmp(big.NewInt(0)) <= 0 {
+		if !latestMeta.IsActive || latestMeta.VotingPower.Cmp(big.NewInt(0)) <= 0 {
 			r.logOnceWithInterval("inactive_delegate", 10*time.Second, "warn",
 				"❌ 当前委托者不活跃或票数不足",
 				"validatorIndex", currentValidatorIndex,
-				"address", delegate.Address.String(),
-				"isActive", delegate.IsActive,
-				"votingPower", delegate.VotingPower.String(),
+				"address", latestMeta.Address.String(),
+				"isActive", latestMeta.IsActive,
+				"votingPower", latestMeta.VotingPower.String(),
 				"dataSource", validatorsSource,
-				"totalValidators", len(allValidators),
 				"timestamp", time.Now().Format("15:04:05.000"))
 			return types.ZeroAddress
 		}
 
-		return delegate.Address
+		return latestMeta.Address
 	}
 
 	r.logger.Error("❌ blockScheduler不可用")
