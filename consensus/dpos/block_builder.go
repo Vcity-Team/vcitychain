@@ -2512,7 +2512,7 @@ func (r *dposRuntime) getSignatureCollectionProgress(checkpointHash types.Hash) 
 
 // fallbackSignatureRequestPropagation 备用签名请求传播机制
 func (r *dposRuntime) fallbackSignatureRequestPropagation(protoRequest *dposProto.SignatureRequest, checkpointHash types.Hash) {
-	r.logger.Info("=== 备用转传播启动 ===", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String())
+	r.logger.Debug("=== 备用转传播启动 ===", "区块高度", protoRequest.BlockNumber, "checkpointHash", checkpointHash.String())
 
 	peers := r.network.Peers()
 	successCount := 0
@@ -2545,7 +2545,7 @@ func (r *dposRuntime) fallbackSignatureRequestPropagation(protoRequest *dposProt
 			successRate = 1.0
 		}
 
-		r.logger.Info("=== 备用转传播完成 ===",
+		r.logger.Debug("=== 备用转传播完成 ===",
 			"区块高度", protoRequest.BlockNumber,
 			"checkpointHash", checkpointHash.String(),
 			"成功节点数", successCount,
@@ -2560,7 +2560,7 @@ func (r *dposRuntime) simpleFallbackMonitoring(protoRequest *dposProto.Signature
 	time.Sleep(1 * time.Second)
 	progress := r.getSignatureCollectionProgress(checkpointHash)
 	if progress < 0.2 { // 20%以下
-		r.logger.Info("签名收集进度极低，启动备用传播",
+		r.logger.Debug("签名收集进度极低，启动备用传播",
 			"区块高度", protoRequest.BlockNumber,
 			"checkpointHash", checkpointHash.String(),
 			"progress", fmt.Sprintf("%.2f%%", progress*100))
@@ -2572,7 +2572,7 @@ func (r *dposRuntime) simpleFallbackMonitoring(protoRequest *dposProto.Signature
 	time.Sleep(500 * time.Millisecond) // 总共1.5秒
 	progress = r.getSignatureCollectionProgress(checkpointHash)
 	if progress < 0.5 { // 50%以下
-		r.logger.Info("签名收集进度不足，启动备用传播",
+		r.logger.Debug("签名收集进度不足，启动备用传播",
 			"区块高度", protoRequest.BlockNumber,
 			"checkpointHash", checkpointHash.String(),
 			"progress", fmt.Sprintf("%.2f%%", progress*100))

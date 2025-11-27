@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Vcity-Team/vcitychain/types"
 	dposProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
+	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/golang/protobuf/proto"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
@@ -64,7 +64,7 @@ func (r *dposRuntime) broadcastSignatureRequest(protoRequest *dposProto.Signatur
 	}
 
 	// 发布签名请求
-	r.logger.Info("attempting to publish signature request",
+	r.logger.Debug("attempting to publish signature request",
 		"blockNumber", protoRequest.BlockNumber,
 		"round", protoRequest.Round)
 
@@ -245,4 +245,3 @@ func (r *dposRuntime) sendDirectSignatureRequestWithRetry(peerID peer.ID, protoR
 
 	return fmt.Errorf("所有重试尝试都失败了，最后的错误: %w", lastErr)
 }
-

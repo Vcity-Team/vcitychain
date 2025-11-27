@@ -672,44 +672,22 @@ func (i *Extra) processFaultFlags(blockNumber uint64, consensusBackend dposBacke
 		}
 
 		// 🆕 只在有真正故障的验证者时才打印日志
-		if faultyCount > 0 {
-			logger.Info("🔍 processFaultFlags 检测到故障标志",
-				"blockNumber", blockNumber,
-				"faultFlagsCount", len(i.FaultFlags),
-				"faultyCount", faultyCount)
-		}
+		var faultyFlags []FaultFlagInfo
+		savedCount := 0
 
 		for _, faultFlag := range i.FaultFlags {
 			// 🆕 保存故障状态到数据库（验证节点）
 			// 只有当 isFaulty=true 时才保存，避免覆盖已存在的故障状态
 			if faultFlag.IsFaulty {
-				// 🆕 只在真正故障时才打印处理日志
-				logger.Info("📝 processFaultFlags 处理故障标志",
-					"blockNumber", blockNumber,
-					"address", faultFlag.NodeAddress.String(),
-					"isFaulty", faultFlag.IsFaulty,
-					"missedBlocks", faultFlag.MissedBlocks,
-					"epoch", faultFlag.EpochNumber)
-
+				faultyFlags = append(faultyFlags, faultFlag)
 				if dposInstance, ok := consensusBackend.(*DPoS); ok {
-					logger.Info("💾 processFaultFlags 开始保存故障状态到数据库",
-						"blockNumber", blockNumber,
-						"address", faultFlag.NodeAddress.String(),
-						"isFaulty", faultFlag.IsFaulty,
-						"epoch", faultFlag.EpochNumber)
-
 					if err := dposInstance.saveFaultStatusToDatabase(faultFlag); err != nil {
 						logger.Warn("⚠️ processFaultFlags 保存故障状态到数据库失败",
 							"blockNumber", blockNumber,
 							"address", faultFlag.NodeAddress.String(),
 							"error", err)
 					} else {
-						logger.Info("✅ processFaultFlags 故障状态已保存到数据库",
-							"blockNumber", blockNumber,
-							"address", faultFlag.NodeAddress.String(),
-							"isFaulty", faultFlag.IsFaulty,
-							"epoch", faultFlag.EpochNumber,
-							"missedBlocks", faultFlag.MissedBlocks)
+						savedCount++
 					}
 				} else {
 					logger.Warn("⚠️ processFaultFlags 无法获取DPoS实例，无法保存故障状态到数据库",
@@ -733,6 +711,24 @@ func (i *Extra) processFaultFlags(blockNumber uint64, consensusBackend dposBacke
 						// 🆕 不打印日志，静默处理
 					}
 				}
+			}
+		}
+
+		if len(faultyFlags) > 0 {
+			logger.Info("🔍 processFaultFlags 故障标志统计",
+				"blockNumber", blockNumber,
+				"faultFlagsCount", len(i.FaultFlags),
+				"faultyCount", len(faultyFlags),
+				"savedCount", savedCount)
+
+			for _, flag := range faultyFlags {
+				logger.Info("📝 故障节点详情",
+					"address", flag.NodeAddress.String(),
+					"isFaulty", flag.IsFaulty,
+					"missedBlocks", flag.MissedBlocks,
+					"epoch", flag.EpochNumber,
+					"lastFaultyEpoch", flag.LastFaultyEpoch,
+					"reason", flag.Reason)
 			}
 		}
 	} else {

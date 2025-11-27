@@ -479,9 +479,6 @@ func (ps *ProposalStore) GetProposal(proposalID string) (*ParameterProposal, err
 
 // GetAllProposals 获取所有提案
 func (ps *ProposalStore) GetAllProposals() (map[string]*ParameterProposal, error) {
-	if ps.logger != nil {
-		ps.logger.Info("🔍 [ProposalStore.GetAllProposals] 开始查询所有提案")
-	}
 	proposals := make(map[string]*ParameterProposal)
 
 	err := ps.db.View(func(tx *bolt.Tx) error {
@@ -505,13 +502,13 @@ func (ps *ProposalStore) GetAllProposals() (map[string]*ParameterProposal, error
 			proposals[string(key)] = &proposal
 			count++
 			if ps.logger != nil {
-				ps.logger.Info("📋 [ProposalStore.GetAllProposals] 找到提案", "proposalID", string(key), "proposalType", proposal.ProposalType, "index", count)
+				ps.logger.Debug("📋 [ProposalStore.GetAllProposals] 找到提案", "proposalID", string(key), "proposalType", proposal.ProposalType, "index", count)
 			}
 			return nil
 		})
 
 		if ps.logger != nil {
-			ps.logger.Info("✅ [ProposalStore.GetAllProposals] 查询完成", "totalCount", count)
+			ps.logger.Debug("✅ [ProposalStore.GetAllProposals] 查询完成", "totalCount", count)
 		}
 		return err
 	})
@@ -523,9 +520,6 @@ func (ps *ProposalStore) GetAllProposals() (map[string]*ParameterProposal, error
 		return nil, err
 	}
 
-	if ps.logger != nil {
-		ps.logger.Info("✅ [ProposalStore.GetAllProposals] 成功返回所有提案", "count", len(proposals))
-	}
 	return proposals, nil
 }
 

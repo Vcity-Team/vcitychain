@@ -396,7 +396,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 		select {
 		case block, ok := <-blockCh:
 			if !ok {
-				s.logger.Info("区块同步完成",
+				s.logger.Debug("区块同步完成",
 					"peer", peerID.String(),
 					"同步区块数", blockCount,
 					"lastReceivedNumber", lastReceivedNumber,
@@ -404,7 +404,6 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				return lastReceivedNumber, shouldTerminate, nil
 			}
 
-			// 🆕 关键日志：从blockCh收到区块
 			s.logger.Debug("🔍 从区块流接收到区块",
 				"peer", peerID.String()[:8],
 				"区块号", block.Number(),
