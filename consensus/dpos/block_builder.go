@@ -2073,11 +2073,29 @@ func (r *dposRuntime) isValidator() bool {
 		if delegate.Address == currentAddr {
 			// 关键：检查stake是否足够且是否活跃
 			if delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
+				// 额外查询故障标志状态
+				isFaulty := false
+				if dposBackend != nil {
+					if faultInfo := dposBackend.getValidatorFaultInfo(currentAddr); faultInfo != nil {
+						if flag, ok := faultInfo["isFaulty"].(bool); ok {
+							isFaulty = flag
+						}
+					}
+				}
+
+				msg := "🎯 当前节点是活跃验证者（从数据库）"
+				if isFaulty {
+					msg = "🎯 当前节点是活跃验证者但故障标志为true（从数据库）"
+				} else {
+					msg = "🎯 当前节点是活跃验证者且故障标志为false（从数据库）"
+				}
+
 				// 🆕 使用统一日志间隔（10秒）
-				r.logOnceWithInterval("active_validator_from_db", 10*time.Second, "info", "🎯 当前节点是活跃验证者（从数据库）",
+				r.logOnceWithInterval("active_validator_from_db", 10*time.Second, "info", msg,
 					"address", currentAddr.String(),
 					"votingPower", delegate.VotingPower.String(),
 					"isActive", delegate.IsActive,
+					"isFaulty", isFaulty,
 					"rank", idx+1,
 					"totalValidators", len(dbValidators))
 				return true
