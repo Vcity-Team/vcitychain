@@ -1741,33 +1741,6 @@ func (r *dposRuntime) getValidatorsFromExtraDataForProduction(header *types.Head
 	return nil, fmt.Errorf("no validators available for production")
 }
 
-// getFaultFilteredNextEpochValidators 返回故障检测后过滤的出块者集合副本，用于写入NextEpochValidators
-func (r *dposRuntime) getFaultFilteredNextEpochValidators() validator.AccountSet {
-	// 🆕 优先返回 r.nextEpochValidators（如果存在），因为它包含了从数据库读取的最新验证者集合（包括恢复的验证者）
-	if r.nextEpochValidators != nil && len(r.nextEpochValidators) > 0 {
-		return r.nextEpochValidators.Copy()
-	}
-
-	if r.config == nil || r.config.dposBackend == nil {
-		return nil
-	}
-
-	dposInstance, ok := r.config.dposBackend.(*DPoS)
-	if !ok || dposInstance == nil {
-		return nil
-	}
-
-	if dposInstance.runtime != nil && dposInstance.runtime.delegates != nil && len(dposInstance.runtime.delegates) > 0 {
-		return dposInstance.runtime.delegates.Copy()
-	}
-
-	if len(dposInstance.delegates) > 0 {
-		return dposInstance.delegates.Copy()
-	}
-
-	return nil
-}
-
 // waitForNetworkGrowth 等待网络增长到足够的验证者
 func (r *dposRuntime) waitForNetworkGrowth(checkpointHash types.Hash, proposerAddr types.Address) ([][]byte, bitmap.Bitmap, error) {
 	r.logger.Info("开始等待网络增长", "checkpointHash", checkpointHash.String())

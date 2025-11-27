@@ -2582,21 +2582,6 @@ func (i *Extra) getParentValidators(parent *types.Header, parents []*types.Heade
 		}
 	}
 
-	// 备用方案：从数据库获取（如果可用）
-
-	parentValidators, err := consensusBackend.GetDelegates(parent.Number, parents)
-	if err == nil && len(parentValidators) > 0 {
-		return parentValidators, nil
-	}
-
-	// 最后备用方案：递归获取更早的父区块
-	if parent.Number > 1 {
-
-		// 这里需要获取更早的父区块，但为了简化，我们返回错误
-		// 在实际实现中，可能需要更复杂的递归逻辑
-		return nil, fmt.Errorf("failed to get parent validators, need recursive approach")
-	}
-
 	// 如果父区块是创世区块，从创世文件获取
 	return i.getGenesisValidators(consensusBackend, logger)
 }
