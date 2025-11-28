@@ -149,6 +149,7 @@ func (s *StakeStore) GetValidators() (validator.AccountSet, error) {
 // 🆕 新增：GetValidatorsWithFilter方法，支持控制是否过滤
 func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (validator.AccountSet, error) {
 	var validators validator.AccountSet
+	// 移除详细日志，减少刷屏，只在错误时输出
 
 	err := s.db.View(func(tx *bolt.Tx) error {
 		// 🆕 修改：直接从DelegateInfo表读取验证者信息，不做任何处理
@@ -161,11 +162,13 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
 			var delegateInfo DelegateInfo
 			if err := json.Unmarshal(value, &delegateInfo); err != nil {
+				// 解析失败时静默跳过，不输出日志
 				continue
 			}
 
 			// 应用过滤条件
 			if filterZeroVotingPower && (delegateInfo.VotingPower == nil || delegateInfo.VotingPower.Cmp(big.NewInt(0)) == 0) {
+				// 跳过零权重验证者，不输出日志
 				continue
 			}
 
@@ -186,6 +189,7 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 
 			validators = append(validators, validator)
 		}
+		
 		return nil
 	})
 

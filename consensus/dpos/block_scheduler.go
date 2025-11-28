@@ -115,28 +115,16 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	blockNumber uint64,
 	validatorsSource string, // 🆕 验证者列表来源（用于日志）
 ) bool {
-	// 🆕 在函数开始就输出所有关键参数（10秒间隔）
-	bs.logOnceWithInterval("should_produce_block_now_start", 10*time.Second, "debug",
-		"🔍 ShouldProduceBlockNow 函数开始",
-		"myAddress", myAddress.String(),
-		"blockNumber", blockNumber,
-		"consensusSwitchHeight", bs.consensusSwitchHeight,
-		"validatorsCount", len(validators),
-		"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
-		"blockWindow", bs.blockWindow.String())
-
 	if len(validators) == 0 {
 		bs.logger.Debug("❌ ShouldProduceBlockNow: 验证者列表为空")
 		return false
 	}
 
 	// 检查是否在共识切换高度之后
-	if blockNumber < bs.consensusSwitchHeight {
-		bs.logOnceWithInterval("should_produce_block_now_before_switch", 10*time.Second, "debug",
-			"❌ ShouldProduceBlockNow: 区块高度未达到共识切换高度",
-			"blockNumber", blockNumber,
-			"consensusSwitchHeight", bs.consensusSwitchHeight,
-			"difference", bs.consensusSwitchHeight-blockNumber)
+	// 🆕 修复：blockNumber是当前区块高度，下一个要生产的区块是blockNumber+1
+	// 所以应该检查下一个区块是否达到共识切换高度
+	nextBlockNumber := blockNumber + 1
+	if nextBlockNumber < bs.consensusSwitchHeight {
 		return false
 	}
 
@@ -367,11 +355,6 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		if err != nil || len(validatorsFromExtra) == 0 {
 			// 如果数据库中没有预先计算的验证者集合，回退到实时查询（兼容性）
 			// 这种情况可能发生在：1. 第一次启动 2. 数据库被清空 3. 之前的epoch没有保存
-			// 🆕 使用日志频率限制，10秒一次
-			r.logOnceWithInterval("fallback_to_realtime_query", 1*time.Second, "INFO",
-				"数据库中没有预先计算的epoch验证者集合，回退到实时查询",
-				"blockNumber", currentBlock.Number,
-				"error", err)
 			validatorsFromExtra, err = dposInstance.GetSortedValidatorsWithLimit()
 			validatorsSource = "realtime_query" // 🆕 更新来源为实时查询
 			if err != nil {
@@ -401,16 +384,6 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 
 		// 🆕 调用改进后的方法（直接比较地址）
 		result := r.config.blockScheduler.ShouldProduceBlockNow(myAddress, validators, currentBlock.Number, validatorsSource)
-
-		// 🆕 添加调度器结果日志（使用Debug级别）
-		r.logOnceWithInterval("block_scheduler_result", 5*time.Second, "debug",
-			"🔍 区块调度器结果",
-			"shouldProduce", result,
-			"myAddress", myAddress.String(),
-			"currentBlockNumber", currentBlock.Number,
-			"validatorsCount", len(validators),
-			"validatorsSource", "PrecomputedEpoch", // 🆕 标记数据来源：预先计算的epoch验证者集合
-			"timestamp", time.Now().Format("15:04:05.000"))
 
 		return result
 	}
