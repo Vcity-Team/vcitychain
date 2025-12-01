@@ -297,7 +297,8 @@ func (d *DPoS) updateValidatorStatus(address types.Address, newStake *big.Int) e
 			delegate.VotingPower = new(big.Int).Set(newStake)
 
 			// 关键：根据新stake更新活跃状态
-			if newStake.Cmp(big.NewInt(0)) > 0 {
+			// 🆕 使用统一的零值检查函数
+			if isPositive(newStake) {
 				delegate.IsActive = true // 有stake了，变为活跃
 			} else {
 				delegate.IsActive = false // stake为0，变为不活跃
@@ -322,7 +323,8 @@ func (d *DPoS) updateValidatorStatus(address types.Address, newStake *big.Int) e
 
 // canParticipateInConsensus 检查验证者是否可以参与共识
 func (d *DPoS) canParticipateInConsensus(delegate *validator.ValidatorMetadata) bool {
-	return delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0
+	// 🆕 使用统一的零值检查函数
+	return delegate.IsActive && isPositive(delegate.VotingPower)
 }
 
 // ==================== 委托者注册相关函数 ====================

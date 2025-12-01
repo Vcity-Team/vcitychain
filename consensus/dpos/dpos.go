@@ -1420,14 +1420,9 @@ func (d *DPoS) GetCurrentDelegate() types.Address {
 	}
 
 	// 基于时间slot计算当前委托者
-	if d.runtime != nil && d.runtime.config != nil && d.runtime.config.blockScheduler != nil {
-		now := time.Now()
-		genesisTime := d.runtime.config.blockScheduler.GetGenesisTime()
-		blockWindow := d.runtime.config.blockScheduler.GetBlockWindow()
-		timeSinceGenesis := now.Sub(genesisTime)
-		currentSlot := int(timeSinceGenesis / blockWindow)
-		currentValidatorIndex := currentSlot % len(validators)
-
+	// 🆕 使用统一的 slot 计算函数
+	currentValidatorIndex, err := d.calculateCurrentValidatorIndex(validators)
+	if err == nil && currentValidatorIndex >= 0 && currentValidatorIndex < len(validators) {
 		return validators[currentValidatorIndex].Address
 	}
 
@@ -1838,7 +1833,8 @@ func (c *DPoSConfig) Validate() error {
 	if c.DelegateCount == 0 {
 		return fmt.Errorf("delegate_count must be positive")
 	}
-	if c.MinVotingPower.Cmp(big.NewInt(0)) <= 0 {
+	// 🆕 使用统一的零值检查函数
+	if isNonPositive(c.MinVotingPower) {
 		return fmt.Errorf("min_voting_power must be positive")
 	}
 
@@ -1846,7 +1842,8 @@ func (c *DPoSConfig) Validate() error {
 	if c.RewardAccount == types.ZeroAddress {
 		return fmt.Errorf("reward_account is required")
 	}
-	if c.RewardAmount == nil || c.RewardAmount.Cmp(big.NewInt(0)) <= 0 {
+	// 🆕 使用统一的零值检查函数
+	if isNonPositive(c.RewardAmount) {
 		return fmt.Errorf("reward_amount must be positive")
 	}
 	return nil

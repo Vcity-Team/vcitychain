@@ -181,7 +181,8 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 			}
 
 			// 应用过滤条件
-			if filterZeroVotingPower && (delegateInfo.VotingPower == nil || delegateInfo.VotingPower.Cmp(big.NewInt(0)) == 0) {
+			// 🆕 使用统一的零值检查函数
+			if filterZeroVotingPower && isZeroOrNil(delegateInfo.VotingPower) {
 				// 跳过零权重验证者，不输出日志
 				continue
 			}
@@ -1032,7 +1033,8 @@ func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx, 
 
 			// 🆕 修复：只检查投票权重，必须包含所有有BLS公钥的受托人
 			// 这样可以确保与出块时的受托人顺序完全一致
-			if delegateInfo.VotingPower.Cmp(big.NewInt(0)) <= 0 {
+			// 🆕 使用统一的零值检查函数
+			if isNonPositive(delegateInfo.VotingPower) {
 				s.logger.Debug("getDelegatesAtBlock: 跳过投票权重为0的受托人", "address", delegateInfo.Address.String(), "votingPower", delegateInfo.VotingPower.String())
 				return nil // 跳过
 			}
@@ -1088,7 +1090,8 @@ func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx, 
 				continue
 			}
 
-			if delegateInfo.VotingPower.Cmp(big.NewInt(0)) <= 0 {
+			// 🆕 使用统一的零值检查函数
+			if isNonPositive(delegateInfo.VotingPower) {
 				continue
 			}
 

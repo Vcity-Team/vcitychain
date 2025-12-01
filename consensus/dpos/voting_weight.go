@@ -201,9 +201,10 @@ func (d *DPoS) updateVotingPowerInDatabaseWithTx(delegate types.Address, newPowe
 		ProducedBlocks: 0,
 		MissedBlocks:   0,
 		LastBlockTime:  0,
-		IsActive:       newPower.Cmp(big.NewInt(0)) > 0,
-		IsRegistered:   true, // 假设已注册
-		BlsPublicKey:   nil,  // BLS密钥由其他逻辑处理
+		// 🆕 使用统一的零值检查函数
+		IsActive:     isPositive(newPower),
+		IsRegistered: true, // 假设已注册
+		BlsPublicKey: nil,  // BLS密钥由其他逻辑处理
 	}
 
 	d.populateCommissionFields(delegate, delegateInfo)
@@ -324,7 +325,8 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 		ProducedBlocks: 0,
 		MissedBlocks:   0,
 		LastBlockTime:  0,
-		IsActive:       newPower.Cmp(big.NewInt(0)) > 0,
+		// 🆕 使用统一的零值检查函数
+		IsActive: isPositive(newPower),
 	}
 
 	d.populateCommissionFields(delegate, delegateInfo)
