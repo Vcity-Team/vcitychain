@@ -1,7 +1,6 @@
 package dpos
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -959,11 +958,8 @@ func (d *DPoS) updateStakingInfoInDatabase(stake *StakeInfo, dbTx *bolt.Tx) erro
 		return fmt.Errorf("staking info bucket not found")
 	}
 
-	// 使用复合 key: staker (20 bytes) + delegate (20 bytes) + timestamp (8 bytes) = 48 bytes
-	key := make([]byte, 48)
-	copy(key[0:20], stake.Staker[:])
-	copy(key[20:40], stake.Delegate[:])
-	binary.BigEndian.PutUint64(key[40:48], stake.StartTime)
+	// 🆕 使用统一的复合键构建函数
+	key := buildStakingCompositeKey(stake.Staker, stake.Delegate, stake.StartTime)
 
 	// 序列化更新后的记录
 	data, err := json.Marshal(stake)
@@ -1142,10 +1138,8 @@ func (d *DPoS) updateStakingInfoAfterSlashing(
 			stake.SlashingRecords = append(stake.SlashingRecords, slashingRecord)
 
 			// 6. 保存到数据库（使用复合 key）
-			key := make([]byte, 48)
-			copy(key[0:20], stake.Staker[:])
-			copy(key[20:40], stake.Delegate[:])
-			binary.BigEndian.PutUint64(key[40:48], stake.StartTime)
+			// 🆕 使用统一的复合键构建函数
+			key := buildStakingCompositeKey(stake.Staker, stake.Delegate, stake.StartTime)
 
 			data, err := json.Marshal(stake)
 			if err != nil {

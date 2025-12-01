@@ -418,12 +418,10 @@ func (s *StakeStore) setStakingInfo(staker types.Address, info *StakeInfo, times
 		return WrapError("marshal staking info", err)
 	}
 
-	// 🆕 使用复合 key: staker (20 bytes) + delegate (20 bytes) + timestamp (8 bytes) = 48 bytes
+	// 🆕 使用统一的复合键构建函数
+	// 格式: staker (20 bytes) + delegate (20 bytes) + timestamp (8 bytes) = 48 bytes
 	// 这样每次投票都有唯一 key，不会覆盖历史记录
-	key := make([]byte, 48)
-	copy(key[0:20], staker[:])
-	copy(key[20:40], info.Delegate[:])
-	binary.BigEndian.PutUint64(key[40:48], timestamp)
+	key := buildStakingCompositeKey(staker, info.Delegate, timestamp)
 
 	if err := bucket.Put(key, data); err != nil {
 		return WrapError("save staking info", err)

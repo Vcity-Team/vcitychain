@@ -181,7 +181,8 @@ type RewardSummary struct {
 
 // BlockTrackerStore 出块统计存储
 type BlockTrackerStore struct {
-	db *bolt.DB
+	db       *bolt.DB
+	dbHelper *dbHelper // 🆕 添加 dbHelper
 }
 
 // ParameterCurrentValue 参数当前值存储结构
@@ -377,18 +378,13 @@ func (ps *ProposalStore) GetAllProposals() (map[string]*ParameterProposal, error
 	proposals := make(map[string]*ParameterProposal)
 
 	err := ps.db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("proposals"))
-		if bucket == nil {
-			ps.logger.Error("❌ [ProposalStore.GetAllProposals] proposals bucket not found")
-			return fmt.Errorf("proposals bucket not found")
-		}
-
+		// 🆕 使用 dbHelper 统一处理遍历
 		count := 0
-		err := bucket.ForEach(func(key, value []byte) error {
+		err := ps.dbHelper.forEachInBucket(tx, "proposals", func(key, value []byte) error {
 			var proposal ParameterProposal
 			if err := json.Unmarshal(value, &proposal); err != nil {
 				ps.logger.Error("❌ [ProposalStore.GetAllProposals] 反序列化提案失败", "proposalID", string(key), "error", err)
-				return err
+				return WrapError("unmarshal proposal", err)
 			}
 			proposals[string(key)] = &proposal
 			count++
@@ -396,8 +392,12 @@ func (ps *ProposalStore) GetAllProposals() (map[string]*ParameterProposal, error
 			return nil
 		})
 
+		if err != nil {
+			return err
+		}
+
 		ps.logger.Debug("✅ [ProposalStore.GetAllProposals] 查询完成", "totalCount", count)
-		return err
+		return nil
 	})
 
 	if err != nil {
@@ -411,12 +411,13 @@ func (ps *ProposalStore) GetAllProposals() (map[string]*ParameterProposal, error
 // DeleteProposal 删除提案
 func (ps *ProposalStore) DeleteProposal(proposalID string) error {
 	return ps.db.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("proposals"))
-		if bucket == nil {
-			return fmt.Errorf("proposals bucket not found")
+		// 🆕 使用 dbHelper 统一处理
+		if err := ps.dbHelper.deleteFromBucket(tx, "proposals", []byte(proposalID)); err != nil {
+			ps.logger.Error("❌ [ProposalStore.DeleteProposal] 删除失败", "error", err, "proposalID", proposalID)
+			return WrapError("delete proposal", err)
 		}
-
-		return bucket.Delete([]byte(proposalID))
+		ps.logger.Info("✅ [ProposalStore.DeleteProposal] 提案删除成功", "proposalID", proposalID)
+		return nil
 	})
 }
 
@@ -429,20 +430,12 @@ func (bts *BlockTrackerStore) initialize(tx *bolt.Tx) error {
 // SaveEpochBlocks 保存epoch出块统计
 func (bts *BlockTrackerStore) SaveEpochBlocks(epochNumber uint64, blockCounts map[types.Address]uint64) error {
 	return bts.db.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("blockTracker"))
-		if bucket == nil {
-			return fmt.Errorf("blockTracker bucket not found")
-		}
-
-		// 将map序列化为JSON
-		data, err := json.Marshal(blockCounts)
-		if err != nil {
-			return WrapError("marshal block counts", err)
-		}
-
-		// 使用epochNumber作为key
+		// 🆕 使用 dbHelper 统一处理
 		key := fmt.Sprintf("epoch_%d", epochNumber)
-		return bucket.Put([]byte(key), data)
+		if err := bts.dbHelper.saveToBucket(tx, "blockTracker", []byte(key), blockCounts); err != nil {
+			return WrapError("save epoch blocks", err)
+		}
+		return nil
 	})
 }
 
@@ -451,23 +444,15 @@ func (bts *BlockTrackerStore) LoadEpochBlocks(epochNumber uint64) (map[types.Add
 	var blockCounts map[types.Address]uint64
 
 	err := bts.db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("blockTracker"))
-		if bucket == nil {
-			return fmt.Errorf("blockTracker bucket not found")
-		}
-
+		// 🆕 使用 dbHelper 统一处理（可选读取）
 		key := fmt.Sprintf("epoch_%d", epochNumber)
-		data := bucket.Get([]byte(key))
-		if data == nil {
-			// 没有找到数据，返回空map
-			blockCounts = make(map[types.Address]uint64)
-			return nil
+		if err := bts.dbHelper.getFromBucketOptional(tx, "blockTracker", []byte(key), &blockCounts); err != nil {
+			return WrapError("load epoch blocks", err)
 		}
 
-		// 反序列化JSON
-		err := json.Unmarshal(data, &blockCounts)
-		if err != nil {
-			return WrapError("unmarshal block counts", err)
+		// 如果没有找到数据，返回空map
+		if blockCounts == nil {
+			blockCounts = make(map[types.Address]uint64)
 		}
 
 		return nil

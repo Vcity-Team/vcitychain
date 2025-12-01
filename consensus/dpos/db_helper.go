@@ -77,3 +77,28 @@ func (h *dbHelper) getFromBucketOptional(tx *bolt.Tx, bucketName string, key []b
 
 	return nil
 }
+
+// deleteFromBucket 从 bucket 删除数据
+func (h *dbHelper) deleteFromBucket(tx *bolt.Tx, bucketName string, key []byte) error {
+	bucket := tx.Bucket([]byte(bucketName))
+	if bucket == nil {
+		return WrapErrorf("delete from bucket", "bucket %s not found", bucketName)
+	}
+
+	if err := bucket.Delete(key); err != nil {
+		h.logger.Error("Failed to delete data", "error", err)
+		return WrapError("delete data", err)
+	}
+
+	return nil
+}
+
+// forEachInBucket 遍历 bucket 中的所有键值对
+func (h *dbHelper) forEachInBucket(tx *bolt.Tx, bucketName string, fn func(key, value []byte) error) error {
+	bucket := tx.Bucket([]byte(bucketName))
+	if bucket == nil {
+		return WrapErrorf("forEach in bucket", "bucket %s not found", bucketName)
+	}
+
+	return bucket.ForEach(fn)
+}
