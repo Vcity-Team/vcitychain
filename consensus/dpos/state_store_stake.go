@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"sort"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/bls"
@@ -212,15 +211,7 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 	}
 
 	// 🆕 按权重倒序排序，确保权重高的验证者排在前面
-	sort.Slice(validators, func(i, j int) bool {
-		// 先按权重倒序排序
-		weightCmp := validators[i].VotingPower.Cmp(validators[j].VotingPower)
-		if weightCmp != 0 {
-			return weightCmp > 0 // 权重高的排在前面
-		}
-		// 如果权重相同，按地址排序（确保排序稳定）
-		return validators[i].Address.String() < validators[j].Address.String()
-	})
+	sortValidatorsByVotingPower(validators)
 
 	return validators, nil
 }
@@ -838,6 +829,7 @@ func (s *StakeStore) setDelegateInfo(delegate types.Address, info *DelegateInfo,
 }
 
 // setDelegateInfoInternal 内部实现，避免递归调用
+// 🆕 修复：保存前自动合并现有数据，防止统计字段丢失
 func (s *StakeStore) setDelegateInfoInternal(delegate types.Address, info *DelegateInfo, dbTx *bolt.Tx) error {
 	// 确保 logger 已初始化
 	if s.logger == nil {
@@ -858,6 +850,60 @@ func (s *StakeStore) setDelegateInfoInternal(delegate types.Address, info *Deleg
 		return WrapError("create delegate info bucket", err)
 	}
 
+	// 🆕 修复：先尝试读取现有记录，合并更新以保留统计字段
+	existingInfo, err := s.getDelegateInfo(delegate, dbTx)
+	if err == nil && existingInfo != nil {
+		// 合并更新：保留统计字段和其他重要字段
+		// 1. 保留统计字段（如果新数据为0，使用现有值）
+		if info.ProducedBlocks == 0 && existingInfo.ProducedBlocks > 0 {
+			info.ProducedBlocks = existingInfo.ProducedBlocks
+			s.logger.Debug("保留现有 ProducedBlocks", "value", info.ProducedBlocks)
+		}
+		if info.MissedBlocks == 0 && existingInfo.MissedBlocks > 0 {
+			info.MissedBlocks = existingInfo.MissedBlocks
+			s.logger.Debug("保留现有 MissedBlocks", "value", info.MissedBlocks)
+		}
+		if info.LastBlockTime == 0 && existingInfo.LastBlockTime > 0 {
+			info.LastBlockTime = existingInfo.LastBlockTime
+			s.logger.Debug("保留现有 LastBlockTime", "value", info.LastBlockTime)
+		}
+
+		// 2. 保留注册信息（如果新数据未设置，使用现有值）
+		if !info.IsRegistered && existingInfo.IsRegistered {
+			info.IsRegistered = existingInfo.IsRegistered
+		}
+		if info.RegistrationInfo == nil && existingInfo.RegistrationInfo != nil {
+			info.RegistrationInfo = existingInfo.RegistrationInfo
+		}
+
+		// 3. 保留BLS公钥（如果新数据为空，使用现有值）
+		if len(info.BlsPublicKey) == 0 && len(existingInfo.BlsPublicKey) > 0 {
+			info.BlsPublicKey = existingInfo.BlsPublicKey
+			s.logger.Debug("保留现有 BlsPublicKey", "length", len(info.BlsPublicKey))
+		}
+
+		// 4. 保留佣金信息（如果新数据为0，使用现有值）
+		if info.CommissionRate == 0 && existingInfo.CommissionRate > 0 {
+			info.CommissionRate = existingInfo.CommissionRate
+		}
+		if info.PendingCommissionRate == 0 && existingInfo.PendingCommissionRate > 0 {
+			info.PendingCommissionRate = existingInfo.PendingCommissionRate
+		}
+		if info.CommissionUpdateTime == 0 && existingInfo.CommissionUpdateTime > 0 {
+			info.CommissionUpdateTime = existingInfo.CommissionUpdateTime
+		}
+
+		s.logger.Debug("合并现有数据完成",
+			"producedBlocks", info.ProducedBlocks,
+			"missedBlocks", info.MissedBlocks,
+			"lastBlockTime", info.LastBlockTime)
+	} else if err != nil {
+		// 读取失败但记录不存在是正常的（新创建记录），只记录非"not found"错误
+		if err.Error() != "delegate info not found" {
+			s.logger.Debug("读取现有记录失败（可能是新记录）", "error", err)
+		}
+	}
+
 	data, err := json.Marshal(info)
 	if err != nil {
 		s.logger.Error("Failed to marshal", "error", err)
@@ -872,7 +918,9 @@ func (s *StakeStore) setDelegateInfoInternal(delegate types.Address, info *Deleg
 	s.logger.Debug("setDelegateInfoInternal completed successfully",
 		"delegate", delegate.String(),
 		"votingPower", info.VotingPower.String(),
-		"totalVotes", info.TotalVotes.String())
+		"totalVotes", info.TotalVotes.String(),
+		"producedBlocks", info.ProducedBlocks,
+		"missedBlocks", info.MissedBlocks)
 	return nil
 }
 

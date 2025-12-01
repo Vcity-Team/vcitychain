@@ -1,10 +1,8 @@
 package dpos
 
 import (
-	"bytes"
 	"fmt"
 	"math/big"
-	"sort"
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
@@ -316,15 +314,7 @@ func (r *dposRuntime) initializeDelegates() error {
 				"configDelegateCount", r.config.DelegateCount)
 
 			// 按标准化规则排序，确保所有节点完全一致
-			sort.Slice(r.delegates, func(i, j int) bool {
-				// 1. 首先按票数降序排序
-				votingPowerCmp := r.delegates[i].VotingPower.Cmp(r.delegates[j].VotingPower)
-				if votingPowerCmp != 0 {
-					return votingPowerCmp > 0
-				}
-				// 2. 票数相同，按地址升序排序（确保完全一致）
-				return bytes.Compare(r.delegates[i].Address[:], r.delegates[j].Address[:]) < 0
-			})
+			sortValidatorsByVotingPower(r.delegates)
 
 			// 截取前N个验证者
 			maxDelegates := int(r.config.DelegateCount)
@@ -357,15 +347,10 @@ func (r *dposRuntime) initializeDelegates() error {
 			keyAddr := types.Address(r.config.Key.Address())
 			r.logger.Debug("当前节点地址", "keyAddr", keyAddr.String())
 
-			found := false
-			for i, delegate := range r.delegates {
-				if delegate.Address == keyAddr {
-					r.logger.Debug("找到当前节点在受托人集合中", "index", i, "address", keyAddr.String())
-					found = true
-					break
-				}
-			}
-			if !found {
+			index, found := findValidatorIndex(r.delegates, keyAddr)
+			if found {
+				r.logger.Debug("找到当前节点在受托人集合中", "index", index, "address", keyAddr.String())
+			} else {
 				r.logger.Warn("当前节点不在受托人集合中", "keyAddr", keyAddr.String())
 			}
 		}

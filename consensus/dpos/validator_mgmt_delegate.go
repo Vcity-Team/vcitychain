@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
-	"sort"
 	"strings"
 	"time"
 
@@ -77,15 +76,7 @@ func (d *DPoS) initializeDelegates() error {
 
 			// 🆕 按权重倒序排序
 			d.logger.Info("🔄 开始按权重倒序排序验证者...")
-			sort.Slice(dbValidators, func(i, j int) bool {
-				// 1. 首先按票数降序排序
-				votingPowerCmp := dbValidators[i].VotingPower.Cmp(dbValidators[j].VotingPower)
-				if votingPowerCmp != 0 {
-					return votingPowerCmp > 0
-				}
-				// 2. 票数相同，按地址升序排序（确保完全一致）
-				return bytes.Compare(dbValidators[i].Address[:], dbValidators[j].Address[:]) < 0
-			})
+			sortValidatorsByVotingPower(dbValidators)
 
 			// 🆕 显著日志：显示排序后的验证者
 			d.logger.Info("📈 排序后的验证者列表:")
@@ -1749,15 +1740,7 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 		d.logger.Info("🔄 轮次边界：重新排序验证者集合")
 
 		// 按标准化规则排序，确保所有节点完全一致
-		sort.Slice(d.delegates, func(i, j int) bool {
-			// 1. 首先按票数降序排序
-			votingPowerCmp := d.delegates[i].VotingPower.Cmp(d.delegates[j].VotingPower)
-			if votingPowerCmp != 0 {
-				return votingPowerCmp > 0
-			}
-			// 2. 票数相同，按地址升序排序（确保完全一致）
-			return bytes.Compare(d.delegates[i].Address[:], d.delegates[j].Address[:]) < 0
-		})
+		sortValidatorsByVotingPower(d.delegates)
 
 		d.logger.Info("✅ 轮次边界：验证者集合重新排序完成")
 		for i, delegate := range d.delegates {

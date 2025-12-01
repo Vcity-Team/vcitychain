@@ -1470,13 +1470,11 @@ func (d *DPoS) GetDelegateIndex(delegate types.Address) uint64 {
 	d.lock.RLock()
 	defer d.lock.RUnlock()
 
-	for i, d := range d.delegates {
-		if d.Address == delegate {
-			return uint64(i)
-		}
+	index, found := findValidatorIndex(d.delegates, delegate)
+	if !found {
+		return 0
 	}
-
-	return 0
+	return uint64(index)
 }
 
 // GetState exposes the internal state pointer for read-only operations

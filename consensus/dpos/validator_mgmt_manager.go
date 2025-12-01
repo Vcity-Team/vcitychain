@@ -1,9 +1,7 @@
 package dpos
 
 import (
-	"bytes"
 	"fmt"
-	"sort"
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
@@ -124,14 +122,7 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 	}
 
 	// 按权重倒序排序
-	sort.Slice(validators, func(i, j int) bool {
-		votingPowerCmp := validators[i].VotingPower.Cmp(validators[j].VotingPower)
-		if votingPowerCmp != 0 {
-			return votingPowerCmp > 0
-		}
-		// 权重相同时，按地址升序排序（确保排序稳定）
-		return bytes.Compare(validators[i].Address[:], validators[j].Address[:]) < 0
-	})
+	sortValidatorsByVotingPower(validators)
 
 	// 应用限制（如果配置了）
 	maxValidators := int(d.config.DPoSValidatorsCount)
@@ -147,21 +138,17 @@ func (d *DPoS) isValidator(address types.Address) bool {
 	if d.state != nil && d.state.StakeStore != nil {
 		validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
 		if err == nil {
-			for _, validator := range validators {
-				if validator.Address == address {
-					d.logger.Debug("✅ 验证者身份确认（数据库）", "address", address.String())
-					return true
-				}
+			if containsValidator(validators, address) {
+				d.logger.Debug("✅ 验证者身份确认（数据库）", "address", address.String())
+				return true
 			}
 		}
 	}
 
 	// 检查内存中的验证者
-	for _, delegate := range d.delegates {
-		if delegate.Address == address {
-			d.logger.Debug("✅ 验证者身份确认（内存）", "address", address.String())
-			return true
-		}
+	if containsValidator(d.delegates, address) {
+		d.logger.Debug("✅ 验证者身份确认（内存）", "address", address.String())
+		return true
 	}
 
 	d.logger.Debug("❌ 不是验证者", "address", address.String())
