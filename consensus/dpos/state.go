@@ -200,8 +200,9 @@ type ParameterStore struct {
 
 // ProposalStore 提案存储
 type ProposalStore struct {
-	db     *bolt.DB
-	logger *loggerWrapper
+	db       *bolt.DB
+	logger   *loggerWrapper
+	dbHelper *dbHelper // 🆕 添加 dbHelper
 }
 
 // FreezeInfo 冻结信息
@@ -330,24 +331,13 @@ func (ps *ProposalStore) initialize(tx *bolt.Tx) error {
 func (ps *ProposalStore) SaveProposal(proposal *ParameterProposal) error {
 	ps.logger.Info("💾 [ProposalStore.SaveProposal] 开始保存提案", "proposalID", proposal.ID, "proposalType", proposal.ProposalType)
 	err := ps.db.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("proposals"))
-		if bucket == nil {
-			ps.logger.Error("❌ [ProposalStore.SaveProposal] proposals bucket not found")
-			return fmt.Errorf("proposals bucket not found")
+		// 🆕 使用 dbHelper 统一处理
+		if err := ps.dbHelper.saveToBucket(tx, "proposals", []byte(proposal.ID), proposal); err != nil {
+			ps.logger.Error("❌ [ProposalStore.SaveProposal] 保存失败", "error", err, "proposalID", proposal.ID)
+			return WrapError("save proposal", err)
 		}
 
-		data, err := json.Marshal(proposal)
-		if err != nil {
-			ps.logger.Error("❌ [ProposalStore.SaveProposal] 序列化提案失败", "error", err, "proposalID", proposal.ID)
-			return WrapError("marshal proposal", err)
-		}
-
-		if err := bucket.Put([]byte(proposal.ID), data); err != nil {
-			ps.logger.Error("❌ [ProposalStore.SaveProposal] 写入数据库失败", "error", err, "proposalID", proposal.ID)
-			return err
-		}
-
-		ps.logger.Info("✅ [ProposalStore.SaveProposal] 提案已写入数据库", "proposalID", proposal.ID, "dataSize", len(data))
+		ps.logger.Info("✅ [ProposalStore.SaveProposal] 提案已写入数据库", "proposalID", proposal.ID)
 		return nil
 	})
 	if err != nil {
@@ -364,23 +354,10 @@ func (ps *ProposalStore) GetProposal(proposalID string) (*ParameterProposal, err
 	var proposal ParameterProposal
 
 	err := ps.db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("proposals"))
-		if bucket == nil {
-			ps.logger.Error("❌ [ProposalStore.GetProposal] proposals bucket not found")
-			return fmt.Errorf("proposals bucket not found")
-		}
-
-		data := bucket.Get([]byte(proposalID))
-		if data == nil {
-			ps.logger.Info("❌ [ProposalStore.GetProposal] 提案不存在", "proposalID", proposalID)
-			return fmt.Errorf("proposal not found")
-		}
-
-		ps.logger.Info("✅ [ProposalStore.GetProposal] 找到提案数据", "proposalID", proposalID, "dataSize", len(data))
-
-		if err := json.Unmarshal(data, &proposal); err != nil {
-			ps.logger.Error("❌ [ProposalStore.GetProposal] 反序列化提案失败", "error", err, "proposalID", proposalID)
-			return err
+		// 🆕 使用 dbHelper 统一处理
+		if err := ps.dbHelper.getFromBucket(tx, "proposals", []byte(proposalID), &proposal); err != nil {
+			ps.logger.Info("❌ [ProposalStore.GetProposal] 提案不存在", "proposalID", proposalID, "error", err)
+			return WrapError("get proposal", err)
 		}
 
 		ps.logger.Info("✅ [ProposalStore.GetProposal] 提案查询成功", "proposalID", proposalID, "proposalType", proposal.ProposalType)
@@ -567,12 +544,12 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 			return store
 		}(),
 		ValidatorStore:    &ValidatorStore{db: db, logger: newLoggerWrapper(logger)},
-		RewardStore:       &RewardStore{db: rewardDB, logger: newLoggerWrapper(logger)},             // 🆕 使用独立数据库，使用 logger wrapper
-		BlockTrackerStore: &BlockTrackerStore{db: db},                                               // 🆕 使用主数据库
-		ParameterStore:    &ParameterStore{db: db, dbHelper: newDBHelper(newLoggerWrapper(logger))}, // 🆕 使用主数据库，使用 dbHelper
-		ProposalStore:     &ProposalStore{db: db, logger: newLoggerWrapper(logger)},                 // 🆕 使用主数据库，使用 logger wrapper
-		RegistrationStore: NewRegistrationStore(db, logger),                                         // 🆕 使用主数据库，使用 dbHelper
-		FreezeStore:       NewFreezeStore(db, logger),                                               // 🆕 使用主数据库，使用 dbHelper
+		RewardStore:       &RewardStore{db: rewardDB, logger: newLoggerWrapper(logger)},                                              // 🆕 使用独立数据库，使用 logger wrapper
+		BlockTrackerStore: &BlockTrackerStore{db: db},                                                                                // 🆕 使用主数据库
+		ParameterStore:    &ParameterStore{db: db, dbHelper: newDBHelper(newLoggerWrapper(logger))},                                  // 🆕 使用主数据库，使用 dbHelper
+		ProposalStore:     &ProposalStore{db: db, logger: newLoggerWrapper(logger), dbHelper: newDBHelper(newLoggerWrapper(logger))}, // 🆕 使用主数据库，使用 logger wrapper 和 dbHelper
+		RegistrationStore: NewRegistrationStore(db, logger),                                                                          // 🆕 使用主数据库，使用 dbHelper
+		FreezeStore:       NewFreezeStore(db, logger),                                                                                // 🆕 使用主数据库，使用 dbHelper
 	}
 
 	if err = s.initStorages(); err != nil {
