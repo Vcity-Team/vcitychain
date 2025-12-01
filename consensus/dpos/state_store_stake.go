@@ -52,6 +52,22 @@ func (s *StakeStore) setLogger(logger *loggerWrapper) {
 	s.logger = logger
 }
 
+// withTransaction 统一处理数据库事务（写操作）
+func (s *StakeStore) withTransaction(dbTx *bolt.Tx, fn func(*bolt.Tx) error) error {
+	if dbTx == nil {
+		return s.db.Update(fn)
+	}
+	return fn(dbTx)
+}
+
+// withReadTransaction 统一处理只读事务
+func (s *StakeStore) withReadTransaction(dbTx *bolt.Tx, fn func(*bolt.Tx) error) error {
+	if dbTx == nil {
+		return s.db.View(fn)
+	}
+	return fn(dbTx)
+}
+
 // isGenesisValidator 检查给定的地址是否为创世验证者
 func (s *StakeStore) isGenesisValidator(address types.Address) bool {
 	// 从 DPoS 实例获取创世验证者映射
@@ -97,7 +113,7 @@ func (s *StakeStore) initialize(dbTx *bolt.Tx) error {
 
 	for _, bucketName := range buckets {
 		if _, err := dbTx.CreateBucketIfNotExists([]byte(bucketName)); err != nil {
-			return fmt.Errorf("failed to create bucket %s: %w", bucketName, err)
+			return WrapErrorf("create bucket", "bucket=%s: %w", bucketName, err)
 		}
 	}
 
@@ -108,22 +124,14 @@ func (s *StakeStore) initialize(dbTx *bolt.Tx) error {
 // If the passed tx is already open (not nil), it will use it to insert full validator set
 // If the passed tx is not open (it is nil), it will open a new transaction on db and insert full validator set
 func (s *StakeStore) insertFullValidatorSet(fullValidatorSet validatorSetState, dbTx *bolt.Tx) error {
-	insertFn := func(tx *bolt.Tx) error {
+	return s.withTransaction(dbTx, func(tx *bolt.Tx) error {
 		raw, err := fullValidatorSet.Marshal()
 		if err != nil {
 			return err
 		}
 
 		return tx.Bucket(validatorSetBucket).Put(fullValidatorSetKey, raw)
-	}
-
-	if dbTx == nil {
-		return s.db.Update(func(tx *bolt.Tx) error {
-			return insertFn(tx)
-		})
-	}
-
-	return insertFn(dbTx)
+	})
 }
 
 // getFullValidatorSet returns full validator set from its bucket if exists
@@ -135,22 +143,14 @@ func (s *StakeStore) getFullValidatorSet(dbTx *bolt.Tx) (validatorSetState, erro
 		err              error
 	)
 
-	getFn := func(tx *bolt.Tx) error {
+	err = s.withReadTransaction(dbTx, func(tx *bolt.Tx) error {
 		raw := tx.Bucket(validatorSetBucket).Get(fullValidatorSetKey)
 		if raw == nil {
 			return errNoFullValidatorSet
 		}
 
 		return fullValidatorSet.Unmarshal(raw)
-	}
-
-	if dbTx == nil {
-		err = s.db.View(func(tx *bolt.Tx) error {
-			return getFn(tx)
-		})
-	} else {
-		err = getFn(dbTx)
-	}
+	})
 
 	return fullValidatorSet, err
 }
@@ -203,12 +203,12 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 
 			validators = append(validators, validator)
 		}
-		
+
 		return nil
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to get validators from database: %w", err)
+		return nil, WrapError("get validators from database", err)
 	}
 
 	// 🆕 按权重倒序排序，确保权重高的验证者排在前面
@@ -234,7 +234,7 @@ func (s *StakeStore) SaveSlashingHistory(history *SlashingHistory) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		bucket, err := tx.CreateBucketIfNotExists([]byte("SlashingHistory"))
 		if err != nil {
-			return fmt.Errorf("failed to create slashing history bucket: %w", err)
+			return WrapError("create slashing history bucket", err)
 		}
 
 		// 使用复合 key: validatorAddr (20 bytes) + blockNumber (8 bytes) = 28 bytes
@@ -244,7 +244,7 @@ func (s *StakeStore) SaveSlashingHistory(history *SlashingHistory) error {
 
 		data, err := json.Marshal(history)
 		if err != nil {
-			return fmt.Errorf("failed to marshal slashing history: %w", err)
+			return WrapError("marshal slashing history", err)
 		}
 
 		return bucket.Put(key, data)
@@ -316,7 +316,7 @@ func (s *StakeStore) SaveCurrentEpoch(epochIndex uint64) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		bucket, err := tx.CreateBucketIfNotExists([]byte("DPoSState"))
 		if err != nil {
-			return fmt.Errorf("failed to create DPoSState bucket: %w", err)
+			return WrapError("create DPoSState bucket", err)
 		}
 
 		key := []byte("currentEpoch")
@@ -387,7 +387,7 @@ func (s *StakeStore) GetStakingInfo() ([]*StakeInfo, error) {
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to get staking info: %w", err)
+		return nil, WrapError("get staking info", err)
 	}
 
 	return stakingInfos, nil
@@ -407,7 +407,7 @@ func (s *StakeStore) getStakingInfo(staker types.Address, dbTx *bolt.Tx) (*Stake
 
 	var info StakeInfo
 	if err := json.Unmarshal(data, &info); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal staking info: %w", err)
+		return nil, WrapError("unmarshal staking info", err)
 	}
 
 	return &info, nil
@@ -419,12 +419,12 @@ func (s *StakeStore) getStakingInfo(staker types.Address, dbTx *bolt.Tx) (*Stake
 func (s *StakeStore) setStakingInfo(staker types.Address, info *StakeInfo, timestamp uint64, dbTx *bolt.Tx) error {
 	bucket, err := dbTx.CreateBucketIfNotExists([]byte("StakingInfo"))
 	if err != nil {
-		return fmt.Errorf("failed to create staking info bucket: %w", err)
+		return WrapError("create staking info bucket", err)
 	}
 
 	data, err := json.Marshal(info)
 	if err != nil {
-		return fmt.Errorf("failed to marshal staking info: %w", err)
+		return WrapError("marshal staking info", err)
 	}
 
 	// 🆕 使用复合 key: staker (20 bytes) + delegate (20 bytes) + timestamp (8 bytes) = 48 bytes
@@ -435,7 +435,7 @@ func (s *StakeStore) setStakingInfo(staker types.Address, info *StakeInfo, times
 	binary.BigEndian.PutUint64(key[40:48], timestamp)
 
 	if err := bucket.Put(key, data); err != nil {
-		return fmt.Errorf("failed to save staking info: %w", err)
+		return WrapError("save staking info", err)
 	}
 
 	return nil
@@ -458,7 +458,7 @@ func (s *StakeStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx) (val
 
 	var delegates validator.AccountSet
 	if err := json.Unmarshal(data, &delegates); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal delegates: %w", err)
+		return nil, WrapError("unmarshal delegates", err)
 	}
 
 	return delegates, nil
@@ -491,7 +491,7 @@ func (s *StakeStore) setDelegatesAtBlock(blockNumber uint64, delegates validator
 	bucket, err := dbTx.CreateBucketIfNotExists([]byte("DelegatesAtBlock"))
 	if err != nil {
 		s.logger.Error("❌ setDelegatesAtBlock: 创建桶失败", "error", err)
-		return fmt.Errorf("failed to create delegates at block bucket: %w", err)
+		return WrapError("create delegates at block bucket", err)
 	}
 	s.logger.Debug("✅ setDelegatesAtBlock: 桶创建成功", "blockNumber", blockNumber)
 
@@ -500,7 +500,7 @@ func (s *StakeStore) setDelegatesAtBlock(blockNumber uint64, delegates validator
 	data, err := json.Marshal(delegates)
 	if err != nil {
 		s.logger.Error("❌ setDelegatesAtBlock: 序列化失败", "error", err)
-		return fmt.Errorf("failed to marshal delegates: %w", err)
+		return WrapError("marshal delegates", err)
 	}
 	s.logger.Debug("✅ setDelegatesAtBlock: 序列化成功",
 		"blockNumber", blockNumber,
@@ -518,7 +518,7 @@ func (s *StakeStore) setDelegatesAtBlock(blockNumber uint64, delegates validator
 	s.logger.Debug("🔍 setDelegatesAtBlock: 步骤4-存储数据", "blockNumber", blockNumber)
 	if err := bucket.Put(key, data); err != nil {
 		s.logger.Error("❌ setDelegatesAtBlock: 存储数据失败", "error", err)
-		return fmt.Errorf("failed to save delegates: %w", err)
+		return WrapError("save delegates", err)
 	}
 	s.logger.Debug("✅ setDelegatesAtBlock: 数据存储成功", "blockNumber", blockNumber)
 
@@ -561,7 +561,7 @@ func (s *StakeStore) getVotingPowerAtBlock(blockNumber uint64, delegate types.Ad
 
 	var votingPower big.Int
 	if err := votingPower.UnmarshalJSON(data); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal voting power: %w", err)
+		return nil, WrapError("unmarshal voting power", err)
 	}
 
 	return &votingPower, nil
@@ -571,12 +571,12 @@ func (s *StakeStore) getVotingPowerAtBlock(blockNumber uint64, delegate types.Ad
 func (s *StakeStore) setVotingPowerAtBlock(blockNumber uint64, delegate types.Address, votingPower *big.Int, dbTx *bolt.Tx) error {
 	bucket, err := dbTx.CreateBucketIfNotExists([]byte("VotingPowerAtBlock"))
 	if err != nil {
-		return fmt.Errorf("failed to create voting power at block bucket: %w", err)
+		return WrapError("create voting power at block bucket", err)
 	}
 
 	data, err := votingPower.MarshalJSON()
 	if err != nil {
-		return fmt.Errorf("failed to marshal voting power: %w", err)
+		return WrapError("marshal voting power", err)
 	}
 
 	key := make([]byte, 8+20) // blockNumber + address
@@ -584,7 +584,7 @@ func (s *StakeStore) setVotingPowerAtBlock(blockNumber uint64, delegate types.Ad
 	copy(key[8:], delegate[:])
 
 	if err := bucket.Put(key, data); err != nil {
-		return fmt.Errorf("failed to save voting power: %w", err)
+		return WrapError("save voting power", err)
 	}
 
 	return nil
@@ -604,7 +604,7 @@ func (s *StakeStore) getVoterInfo(voter types.Address, dbTx *bolt.Tx) (*VoterInf
 
 	var info VoterInfo
 	if err := json.Unmarshal(data, &info); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal voter info: %w", err)
+		return nil, WrapError("unmarshal voter info", err)
 	}
 
 	return &info, nil
@@ -612,28 +612,23 @@ func (s *StakeStore) getVoterInfo(voter types.Address, dbTx *bolt.Tx) (*VoterInf
 
 // setVoterInfo 保存投票者信息到数据库
 func (s *StakeStore) setVoterInfo(voter types.Address, info *VoterInfo, dbTx *bolt.Tx) error {
-	// 如果 dbTx 为 nil，使用自己的数据库连接
-	if dbTx == nil {
-		return s.db.Update(func(tx *bolt.Tx) error {
-			return s.setVoterInfo(voter, info, tx)
-		})
-	}
+	return s.withTransaction(dbTx, func(tx *bolt.Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists([]byte("VoterInfo"))
+		if err != nil {
+			return WrapError("create voter info bucket", err)
+		}
 
-	bucket, err := dbTx.CreateBucketIfNotExists([]byte("VoterInfo"))
-	if err != nil {
-		return fmt.Errorf("failed to create voter info bucket: %w", err)
-	}
+		data, err := json.Marshal(info)
+		if err != nil {
+			return WrapError("marshal voter info", err)
+		}
 
-	data, err := json.Marshal(info)
-	if err != nil {
-		return fmt.Errorf("failed to marshal voter info: %w", err)
-	}
+		if err := bucket.Put(voter[:], data); err != nil {
+			return WrapError("save voter info", err)
+		}
 
-	if err := bucket.Put(voter[:], data); err != nil {
-		return fmt.Errorf("failed to save voter info: %w", err)
-	}
-
-	return nil
+		return nil
+	})
 }
 
 // GetVoterInfo 公开方法：从数据库获取投票者信息（自动管理事务）
@@ -687,7 +682,7 @@ func (s *StakeStore) getRewardHistory(staker types.Address, dbTx *bolt.Tx) ([]*R
 
 	var records []*RewardRecord
 	if err := json.Unmarshal(data, &records); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal reward history: %w", err)
+		return nil, WrapError("unmarshal reward history", err)
 	}
 
 	return records, nil
@@ -697,16 +692,16 @@ func (s *StakeStore) getRewardHistory(staker types.Address, dbTx *bolt.Tx) ([]*R
 func (s *StakeStore) setRewardHistory(staker types.Address, records []*RewardRecord, dbTx *bolt.Tx) error {
 	bucket, err := dbTx.CreateBucketIfNotExists([]byte("RewardHistory"))
 	if err != nil {
-		return fmt.Errorf("failed to create reward history bucket: %w", err)
+		return WrapError("create reward history bucket", err)
 	}
 
 	data, err := json.Marshal(records)
 	if err != nil {
-		return fmt.Errorf("failed to marshal reward history: %w", err)
+		return WrapError("marshal reward history", err)
 	}
 
 	if err := bucket.Put(staker[:], data); err != nil {
-		return fmt.Errorf("failed to save reward history: %w", err)
+		return WrapError("save reward history", err)
 	}
 
 	return nil
@@ -746,7 +741,7 @@ func (s *StakeStore) getEpochRewards(epochNumber uint64, dbTx *bolt.Tx) (*EpochR
 
 	var rewards EpochRewards
 	if err := json.Unmarshal(data, &rewards); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal epoch rewards: %w", err)
+		return nil, WrapError("unmarshal epoch rewards", err)
 	}
 
 	return &rewards, nil
@@ -756,19 +751,19 @@ func (s *StakeStore) getEpochRewards(epochNumber uint64, dbTx *bolt.Tx) (*EpochR
 func (s *StakeStore) setEpochRewards(epochNumber uint64, rewards *EpochRewards, dbTx *bolt.Tx) error {
 	bucket, err := dbTx.CreateBucketIfNotExists([]byte("EpochRewards"))
 	if err != nil {
-		return fmt.Errorf("failed to create epoch rewards bucket: %w", err)
+		return WrapError("create epoch rewards bucket", err)
 	}
 
 	data, err := json.Marshal(rewards)
 	if err != nil {
-		return fmt.Errorf("failed to marshal epoch rewards: %w", err)
+		return WrapError("marshal epoch rewards", err)
 	}
 
 	key := make([]byte, 8)
 	binary.BigEndian.PutUint64(key, epochNumber)
 
 	if err := bucket.Put(key, data); err != nil {
-		return fmt.Errorf("failed to save epoch rewards: %w", err)
+		return WrapError("save epoch rewards", err)
 	}
 
 	return nil
@@ -778,12 +773,12 @@ func (s *StakeStore) setEpochRewards(epochNumber uint64, rewards *EpochRewards, 
 func (s *StakeStore) cleanup(currentBlock uint64, dbTx *bolt.Tx) error {
 	// 清理超过1000个区块的投票权重数据
 	if err := s.cleanupVotingPower(currentBlock, dbTx); err != nil {
-		return fmt.Errorf("failed to cleanup voting power: %w", err)
+		return WrapError("cleanup voting power", err)
 	}
 
 	// 清理超过100个周期的奖励数据
 	if err := s.cleanupEpochRewards(currentBlock, dbTx); err != nil {
-		return fmt.Errorf("failed to cleanup epoch rewards: %w", err)
+		return WrapError("cleanup epoch rewards", err)
 	}
 
 	return nil
@@ -802,7 +797,7 @@ func (s *StakeStore) cleanupVotingPower(currentBlock uint64, dbTx *bolt.Tx) erro
 			blockNumber := binary.BigEndian.Uint64(k[:8])
 			if currentBlock-blockNumber > 1000 {
 				if err := cursor.Delete(); err != nil {
-					return fmt.Errorf("failed to delete voting power record: %w", err)
+					return WrapError("delete voting power record", err)
 				}
 			}
 		}
@@ -826,7 +821,7 @@ func (s *StakeStore) cleanupEpochRewards(currentBlock uint64, dbTx *bolt.Tx) err
 			epochNumber := binary.BigEndian.Uint64(k)
 			if currentEpoch-epochNumber > 100 {
 				if err := cursor.Delete(); err != nil {
-					return fmt.Errorf("failed to delete epoch rewards record: %w", err)
+					return WrapError("delete epoch rewards record", err)
 				}
 			}
 		}
@@ -837,14 +832,9 @@ func (s *StakeStore) cleanupEpochRewards(currentBlock uint64, dbTx *bolt.Tx) err
 
 // setDelegateInfo 保存受托人信息到数据库
 func (s *StakeStore) setDelegateInfo(delegate types.Address, info *DelegateInfo, dbTx *bolt.Tx) error {
-	// 如果 dbTx 为 nil，使用自己的数据库连接
-	if dbTx == nil {
-		return s.db.Update(func(tx *bolt.Tx) error {
-			return s.setDelegateInfoInternal(delegate, info, tx)
-		})
-	}
-
-	return s.setDelegateInfoInternal(delegate, info, dbTx)
+	return s.withTransaction(dbTx, func(tx *bolt.Tx) error {
+		return s.setDelegateInfoInternal(delegate, info, tx)
+	})
 }
 
 // setDelegateInfoInternal 内部实现，避免递归调用
@@ -906,7 +896,7 @@ func (s *StakeStore) GetDelegateInfo(delegate types.Address) (*DelegateInfo, err
 
 		var info DelegateInfo
 		if err := json.Unmarshal(data, &info); err != nil {
-			return fmt.Errorf("failed to unmarshal delegate info: %w", err)
+			return WrapError("unmarshal delegate info", err)
 		}
 
 		result = &info
@@ -934,7 +924,7 @@ func (s *StakeStore) getDelegateInfo(delegate types.Address, dbTx *bolt.Tx) (*De
 
 	var info DelegateInfo
 	if err := json.Unmarshal(data, &info); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal delegate info: %w", err)
+		return nil, WrapError("unmarshal delegate info", err)
 	}
 
 	return &info, nil
@@ -1072,7 +1062,7 @@ func (s *ValidatorStore) getVotingPowerAtBlock(blockNumber uint64, delegate type
 
 	var delegateInfo DelegateInfo
 	if err := json.Unmarshal(data, &delegateInfo); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal delegate info: %w", err)
+		return nil, WrapError("unmarshal delegate info", err)
 	}
 
 	// 返回投票权重
@@ -1085,7 +1075,7 @@ func (s *StakeStore) UpdateValidatorFaultStatus(address types.Address, isFaulty 
 		// 获取或创建故障状态bucket
 		bucket, err := tx.CreateBucketIfNotExists([]byte("validatorFaultStatus"))
 		if err != nil {
-			return fmt.Errorf("failed to create fault status bucket: %w", err)
+			return WrapError("create fault status bucket", err)
 		}
 
 		// 创建故障状态信息
@@ -1101,7 +1091,7 @@ func (s *StakeStore) UpdateValidatorFaultStatus(address types.Address, isFaulty 
 		// 序列化并存储
 		data, err := json.Marshal(faultInfo)
 		if err != nil {
-			return fmt.Errorf("failed to marshal fault info: %w", err)
+			return WrapError("marshal fault info", err)
 		}
 
 		return bucket.Put(address.Bytes(), data)
@@ -1155,7 +1145,7 @@ func (s *StakeStore) ClearValidatorFaultStatus(address types.Address, proposalID
 
 		var faultInfo map[string]interface{}
 		if err := json.Unmarshal(data, &faultInfo); err != nil {
-			return fmt.Errorf("failed to unmarshal fault info: %w", err)
+			return WrapError("unmarshal fault info", err)
 		}
 
 		// 🆕 添加恢复信息
@@ -1171,7 +1161,7 @@ func (s *StakeStore) ClearValidatorFaultStatus(address types.Address, proposalID
 		// 保存更新后的记录
 		updatedData, err := json.Marshal(faultInfo)
 		if err != nil {
-			return fmt.Errorf("failed to marshal updated fault info: %w", err)
+			return WrapError("marshal updated fault info", err)
 		}
 
 		return bucket.Put(address.Bytes(), updatedData)
@@ -1184,13 +1174,13 @@ func (s *StakeStore) SaveEpochValidators(validators validator.AccountSet) error 
 		// 获取或创建epoch验证者bucket
 		bucket, err := tx.CreateBucketIfNotExists([]byte("epochValidators"))
 		if err != nil {
-			return fmt.Errorf("failed to create epoch validators bucket: %w", err)
+			return WrapError("create epoch validators bucket", err)
 		}
 
 		// 序列化验证者集合
 		data, err := json.Marshal(validators)
 		if err != nil {
-			return fmt.Errorf("failed to marshal validators: %w", err)
+			return WrapError("marshal validators", err)
 		}
 
 		// 使用当前时间戳作为key

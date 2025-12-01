@@ -582,7 +582,7 @@ func (d *DPoS) Start() error {
 	d.logger.Info("🔑 开始同步获取BLS公钥...")
 	if err := d.syncLoadBLSKeys(); err != nil {
 		d.logger.Error("❌ BLS公钥同步获取失败", "error", err)
-		return fmt.Errorf("failed to sync load BLS keys: %w", err)
+		return WrapError("sync load BLS keys", err)
 	}
 	d.logger.Info("✅ BLS公钥同步获取完成")
 
@@ -594,7 +594,7 @@ func (d *DPoS) Start() error {
 			d.logger.Warn("⚠️ syncer启动遇到topic冲突，但继续启动DPoS runtime", "error", err)
 		} else {
 			d.logger.Error("❌ syncer启动失败（非topic冲突）", "error", err)
-			return fmt.Errorf("failed to start syncer. Error: %w", err)
+			return WrapError("start syncer", err)
 		}
 	} else {
 		d.logger.Info("✅ syncer启动成功")
@@ -644,7 +644,7 @@ func (d *DPoS) Start() error {
 		d.logger.Info("🚀 调用d.runtime.start()...")
 		if err := d.runtime.start(); err != nil {
 			d.logger.Error("❌ 启动DPoS runtime失败", "error", err)
-			return fmt.Errorf("failed to start DPoS runtime: %w", err)
+			return WrapError("start DPoS runtime", err)
 		}
 		d.logger.Info("✅ DPoS runtime启动成功")
 
@@ -1017,7 +1017,7 @@ func (d *DPoS) Initialize() error {
 
 	account, err := wallet.NewAccountFromSecret(d.config.SecretsManager)
 	if err != nil {
-		return fmt.Errorf("failed to read account data. Error: %w", err)
+		return WrapError("read account data", err)
 	}
 
 	d.key = wallet.NewKey(account)
@@ -1133,17 +1133,17 @@ func (d *DPoS) Initialize() error {
 
 	// initialize delegates
 	if err := d.initializeDelegates(); err != nil {
-		return fmt.Errorf("failed to initialize delegates: %w", err)
+		return WrapError("initialize delegates", err)
 	}
 
 	// 🆕 新增：初始化经济系统组件
 	if err := d.initializeEconomicSystem(); err != nil {
-		return fmt.Errorf("failed to initialize economic system: %w", err)
+		return WrapError("initialize economic system", err)
 	}
 
 	// 🆕 新增：初始化治理系统
 	if err := d.InitializeGovernance(); err != nil {
-		return fmt.Errorf("failed to initialize governance: %w", err)
+		return WrapError("initialize governance", err)
 	}
 
 	// 创建DPoS runtime
@@ -1176,13 +1176,13 @@ func (d *DPoS) Initialize() error {
 
 	// 初始化runtime
 	if err := d.runtime.initializeRuntime(); err != nil {
-		return fmt.Errorf("failed to initialize runtime: %w", err)
+		return WrapError("initialize runtime", err)
 	}
 
 	// 设置网络集成
 	if err := d.runtime.setupNetworkIntegration(); err != nil {
 		d.logger.Error("failed to setup network integration", "error", err)
-		return fmt.Errorf("failed to setup network integration: %w", err)
+		return WrapError("setup network integration", err)
 	}
 
 	return nil
@@ -1205,7 +1205,7 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 	// 2. 解析验证者地址
 	ibftValidators, err := d.parseValidatorsFromExtraData(d.genesisExtraData)
 	if err != nil {
-		return fmt.Errorf("failed to parse validators from extraData: %w", err)
+		return WrapError("parse validators from extraData", err)
 	}
 
 	// 3. 设置最小质押门槛
@@ -1322,7 +1322,7 @@ func (d *DPoS) parseValidatorsFromExtraData(extraData []byte) (validator.Account
 		// Get the top-level list
 		elems, err := v.GetElems()
 		if err != nil {
-			return fmt.Errorf("expected array: %w", err)
+			return WrapError("expected array", err)
 		}
 
 		// 找到验证者列表
@@ -1372,7 +1372,7 @@ func (d *DPoS) parseValidatorsFromExtraData(extraData []byte) (validator.Account
 	}, rlpData)
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse RLP data: %w", err)
+		return nil, WrapError("parse RLP data", err)
 	}
 
 	return validator.AccountSet(validatorList), nil
@@ -2031,7 +2031,7 @@ func (d *DPoS) syncDelegateFromDatabase(delegate types.Address) error {
 	// 从数据库获取验证者信息
 	validators, err := store.GetValidatorsWithFilter(false)
 	if err != nil {
-		return fmt.Errorf("failed to get validators from database: %w", err)
+		return WrapError("get validators from database", err)
 	}
 
 	// 查找指定验证者
@@ -2126,7 +2126,7 @@ func (r *dposRuntime) getAccountBalance(address types.Address) (*big.Int, error)
 			snapshot, err := dposInstance.config.Executor.StateAt(currentHeader.StateRoot)
 			if err != nil {
 				r.logger.Error("❌ 无法创建状态快照", "error", err)
-				return big.NewInt(0), fmt.Errorf("failed to create state snapshot: %w", err)
+				return big.NewInt(0), WrapError("create state snapshot", err)
 			}
 
 			account, err := snapshot.GetAccount(address)

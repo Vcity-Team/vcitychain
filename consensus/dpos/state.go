@@ -180,7 +180,8 @@ type RewardRecordExtended struct {
 
 // RewardStore 奖励记录存储
 type RewardStore struct {
-	db *bolt.DB
+	db     *bolt.DB
+	logger *loggerWrapper
 }
 
 // RewardSummary 汇总奖励信息
@@ -224,7 +225,7 @@ type ParameterStore struct {
 // ProposalStore 提案存储
 type ProposalStore struct {
 	db     *bolt.DB
-	logger hclog.Logger
+	logger *loggerWrapper
 }
 
 // FreezeInfo 冻结信息
@@ -382,95 +383,67 @@ func (ps *ProposalStore) initialize(tx *bolt.Tx) error {
 
 // SaveProposal 保存提案
 func (ps *ProposalStore) SaveProposal(proposal *ParameterProposal) error {
-	if ps.logger != nil {
-		ps.logger.Info("💾 [ProposalStore.SaveProposal] 开始保存提案", "proposalID", proposal.ID, "proposalType", proposal.ProposalType)
-	}
+	ps.logger.Info("💾 [ProposalStore.SaveProposal] 开始保存提案", "proposalID", proposal.ID, "proposalType", proposal.ProposalType)
 	err := ps.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("proposals"))
 		if bucket == nil {
-			if ps.logger != nil {
-				ps.logger.Error("❌ [ProposalStore.SaveProposal] proposals bucket not found")
-			}
+			ps.logger.Error("❌ [ProposalStore.SaveProposal] proposals bucket not found")
 			return fmt.Errorf("proposals bucket not found")
 		}
 
 		data, err := json.Marshal(proposal)
 		if err != nil {
-			if ps.logger != nil {
-				ps.logger.Error("❌ [ProposalStore.SaveProposal] 序列化提案失败", "error", err, "proposalID", proposal.ID)
-			}
-			return fmt.Errorf("failed to marshal proposal: %w", err)
+			ps.logger.Error("❌ [ProposalStore.SaveProposal] 序列化提案失败", "error", err, "proposalID", proposal.ID)
+			return WrapError("marshal proposal", err)
 		}
 
 		if err := bucket.Put([]byte(proposal.ID), data); err != nil {
-			if ps.logger != nil {
-				ps.logger.Error("❌ [ProposalStore.SaveProposal] 写入数据库失败", "error", err, "proposalID", proposal.ID)
-			}
+			ps.logger.Error("❌ [ProposalStore.SaveProposal] 写入数据库失败", "error", err, "proposalID", proposal.ID)
 			return err
 		}
 
-		if ps.logger != nil {
-			ps.logger.Info("✅ [ProposalStore.SaveProposal] 提案已写入数据库", "proposalID", proposal.ID, "dataSize", len(data))
-		}
+		ps.logger.Info("✅ [ProposalStore.SaveProposal] 提案已写入数据库", "proposalID", proposal.ID, "dataSize", len(data))
 		return nil
 	})
 	if err != nil {
-		if ps.logger != nil {
-			ps.logger.Error("❌ [ProposalStore.SaveProposal] 数据库事务失败", "error", err, "proposalID", proposal.ID)
-		}
+		ps.logger.Error("❌ [ProposalStore.SaveProposal] 数据库事务失败", "error", err, "proposalID", proposal.ID)
 		return err
 	}
-	if ps.logger != nil {
-		ps.logger.Info("✅ [ProposalStore.SaveProposal] 提案保存成功", "proposalID", proposal.ID)
-	}
+	ps.logger.Info("✅ [ProposalStore.SaveProposal] 提案保存成功", "proposalID", proposal.ID)
 	return nil
 }
 
 // GetProposal 获取提案
 func (ps *ProposalStore) GetProposal(proposalID string) (*ParameterProposal, error) {
-	if ps.logger != nil {
-		ps.logger.Info("🔍 [ProposalStore.GetProposal] 开始查询提案", "proposalID", proposalID)
-	}
+	ps.logger.Info("🔍 [ProposalStore.GetProposal] 开始查询提案", "proposalID", proposalID)
 	var proposal ParameterProposal
 
 	err := ps.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("proposals"))
 		if bucket == nil {
-			if ps.logger != nil {
-				ps.logger.Error("❌ [ProposalStore.GetProposal] proposals bucket not found")
-			}
+			ps.logger.Error("❌ [ProposalStore.GetProposal] proposals bucket not found")
 			return fmt.Errorf("proposals bucket not found")
 		}
 
 		data := bucket.Get([]byte(proposalID))
 		if data == nil {
-			if ps.logger != nil {
-				ps.logger.Info("❌ [ProposalStore.GetProposal] 提案不存在", "proposalID", proposalID)
-			}
+			ps.logger.Info("❌ [ProposalStore.GetProposal] 提案不存在", "proposalID", proposalID)
 			return fmt.Errorf("proposal not found")
 		}
 
-		if ps.logger != nil {
-			ps.logger.Info("✅ [ProposalStore.GetProposal] 找到提案数据", "proposalID", proposalID, "dataSize", len(data))
-		}
+		ps.logger.Info("✅ [ProposalStore.GetProposal] 找到提案数据", "proposalID", proposalID, "dataSize", len(data))
 
 		if err := json.Unmarshal(data, &proposal); err != nil {
-			if ps.logger != nil {
-				ps.logger.Error("❌ [ProposalStore.GetProposal] 反序列化提案失败", "error", err, "proposalID", proposalID)
-			}
+			ps.logger.Error("❌ [ProposalStore.GetProposal] 反序列化提案失败", "error", err, "proposalID", proposalID)
 			return err
 		}
 
-		if ps.logger != nil {
-			ps.logger.Info("✅ [ProposalStore.GetProposal] 提案查询成功", "proposalID", proposalID, "proposalType", proposal.ProposalType)
-		}
+		ps.logger.Info("✅ [ProposalStore.GetProposal] 提案查询成功", "proposalID", proposalID, "proposalType", proposal.ProposalType)
 		return nil
 	})
 
 	if err != nil {
-		if ps.logger != nil {
-			ps.logger.Error("❌ [ProposalStore.GetProposal] 查询失败", "error", err, "proposalID", proposalID)
-		}
+		ps.logger.Error("❌ [ProposalStore.GetProposal] 查询失败", "error", err, "proposalID", proposalID)
 		return nil, err
 	}
 
@@ -484,9 +457,7 @@ func (ps *ProposalStore) GetAllProposals() (map[string]*ParameterProposal, error
 	err := ps.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("proposals"))
 		if bucket == nil {
-			if ps.logger != nil {
-				ps.logger.Error("❌ [ProposalStore.GetAllProposals] proposals bucket not found")
-			}
+			ps.logger.Error("❌ [ProposalStore.GetAllProposals] proposals bucket not found")
 			return fmt.Errorf("proposals bucket not found")
 		}
 
@@ -494,29 +465,21 @@ func (ps *ProposalStore) GetAllProposals() (map[string]*ParameterProposal, error
 		err := bucket.ForEach(func(key, value []byte) error {
 			var proposal ParameterProposal
 			if err := json.Unmarshal(value, &proposal); err != nil {
-				if ps.logger != nil {
-					ps.logger.Error("❌ [ProposalStore.GetAllProposals] 反序列化提案失败", "proposalID", string(key), "error", err)
-				}
+				ps.logger.Error("❌ [ProposalStore.GetAllProposals] 反序列化提案失败", "proposalID", string(key), "error", err)
 				return err
 			}
 			proposals[string(key)] = &proposal
 			count++
-			if ps.logger != nil {
-				ps.logger.Debug("📋 [ProposalStore.GetAllProposals] 找到提案", "proposalID", string(key), "proposalType", proposal.ProposalType, "index", count)
-			}
+			ps.logger.Debug("📋 [ProposalStore.GetAllProposals] 找到提案", "proposalID", string(key), "proposalType", proposal.ProposalType, "index", count)
 			return nil
 		})
 
-		if ps.logger != nil {
-			ps.logger.Debug("✅ [ProposalStore.GetAllProposals] 查询完成", "totalCount", count)
-		}
+		ps.logger.Debug("✅ [ProposalStore.GetAllProposals] 查询完成", "totalCount", count)
 		return err
 	})
 
 	if err != nil {
-		if ps.logger != nil {
-			ps.logger.Error("❌ [ProposalStore.GetAllProposals] 查询失败", "error", err)
-		}
+		ps.logger.Error("❌ [ProposalStore.GetAllProposals] 查询失败", "error", err)
 		return nil, err
 	}
 
@@ -552,7 +515,7 @@ func (bts *BlockTrackerStore) SaveEpochBlocks(epochNumber uint64, blockCounts ma
 		// 将map序列化为JSON
 		data, err := json.Marshal(blockCounts)
 		if err != nil {
-			return fmt.Errorf("failed to marshal block counts: %w", err)
+			return WrapError("marshal block counts", err)
 		}
 
 		// 使用epochNumber作为key
@@ -582,7 +545,7 @@ func (bts *BlockTrackerStore) LoadEpochBlocks(epochNumber uint64) (map[types.Add
 		// 反序列化JSON
 		err := json.Unmarshal(data, &blockCounts)
 		if err != nil {
-			return fmt.Errorf("failed to unmarshal block counts: %w", err)
+			return WrapError("unmarshal block counts", err)
 		}
 
 		return nil
@@ -637,7 +600,7 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 	rewardDB, err := bolt.Open(rewardDBPath, 0666, nil)
 	if err != nil {
 		db.Close() // 清理主数据库
-		return nil, fmt.Errorf("failed to open reward database: %w", err)
+		return nil, WrapError("open reward database", err)
 	}
 
 	s := &State{
@@ -658,13 +621,13 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 			}
 			return store
 		}(),
-		ValidatorStore:        &ValidatorStore{db: db},
-		RewardStore:           &RewardStore{db: rewardDB},             // 🆕 使用独立数据库
-		BlockTrackerStore:     &BlockTrackerStore{db: db},             // 🆕 使用主数据库
-		ParameterStore:        &ParameterStore{db: db},                // 🆕 使用主数据库
-		ProposalStore:         &ProposalStore{db: db, logger: logger}, // 🆕 使用主数据库
-		RegistrationStore:     &RegistrationStore{db: db},             // 🆕 使用主数据库
-		FreezeStore:           NewFreezeStore(db),                     // 🆕 使用主数据库
+		ValidatorStore:    &ValidatorStore{db: db},
+		RewardStore:       &RewardStore{db: rewardDB, logger: newLoggerWrapper(logger)}, // 🆕 使用独立数据库，使用 logger wrapper
+		BlockTrackerStore: &BlockTrackerStore{db: db},                                   // 🆕 使用主数据库
+		ParameterStore:    &ParameterStore{db: db},                                      // 🆕 使用主数据库
+		ProposalStore:     &ProposalStore{db: db, logger: newLoggerWrapper(logger)},     // 🆕 使用主数据库，使用 logger wrapper
+		RegistrationStore: &RegistrationStore{db: db},                                   // 🆕 使用主数据库
+		FreezeStore:       NewFreezeStore(db),                                           // 🆕 使用主数据库
 	}
 
 	if err = s.initStorages(); err != nil {
@@ -705,13 +668,13 @@ func (s *State) EnsureRewardStore(logger hclog.Logger) error {
 		rewardDBPath := dbPath + ".rewards"
 		rewardDB, err := bolt.Open(rewardDBPath, 0666, nil)
 		if err != nil {
-			return fmt.Errorf("failed to open reward database: %w", err)
+			return WrapError("open reward database", err)
 		}
 		s.rewardDB = rewardDB
 	}
 
 	if s.RewardStore == nil {
-		s.RewardStore = &RewardStore{db: s.rewardDB}
+		s.RewardStore = &RewardStore{db: s.rewardDB, logger: newLoggerWrapper(logger)}
 	}
 
 	if err := s.initRewardDatabase(); err != nil {
@@ -721,7 +684,7 @@ func (s *State) EnsureRewardStore(logger hclog.Logger) error {
 		}
 		s.rewardDB = nil
 		s.RewardStore = nil
-		return fmt.Errorf("failed to initialize reward database: %w", err)
+		return WrapError("initialize reward database", err)
 	}
 
 	if logger != nil {
@@ -769,12 +732,12 @@ func (s *State) initStorages() error {
 
 		_, err := tx.CreateBucketIfNotExists(edgeEventsLastProcessedBlockBucket)
 		if err != nil {
-			return fmt.Errorf("failed to create bucket=%s: %w", string(edgeEventsLastProcessedBlockBucket), err)
+			return WrapErrorf("create bucket", "bucket=%s: %w", string(edgeEventsLastProcessedBlockBucket), err)
 		}
 
 		lastProcessedBlock, err := s.getLastProcessedEventsBlock(tx)
 		if err != nil {
-			return fmt.Errorf("failed to get last processed block: %w", err)
+			return WrapError("get last processed block", err)
 		}
 
 		if lastProcessedBlock == 0 {
@@ -782,7 +745,7 @@ func (s *State) initStorages() error {
 			// to not get events from scratch, but start from what other stores have
 			lastSaved, err := s.CheckpointStore.getLastSaved(tx)
 			if err != nil {
-				return fmt.Errorf("could not initialize last processed block bucket: %w", err)
+				return WrapError("initialize last processed block bucket", err)
 			}
 
 			if lastSaved > 0 {
@@ -866,7 +829,7 @@ func bucketStats(bucketName []byte, db *bolt.DB) (*bolt.BucketStats, error) {
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("cannot check bucket stats. Bucket name=%s: %w", string(bucketName), err)
+		return nil, WrapErrorf("check bucket stats", "bucket name=%s: %w", string(bucketName), err)
 	}
 
 	return stats, nil
@@ -882,8 +845,10 @@ func (rs *RewardStore) initialize(tx *bolt.Tx) error {
 
 // RecordReward 记录奖励（简化版）
 func (rs *RewardStore) RecordReward(record *RewardRecordExtended) error {
-	// 获取全局日志器
-	logger := getGlobalLogger()
+	// 确保 logger 已初始化
+	if rs.logger == nil {
+		rs.logger = getGlobalLoggerWrapper()
+	}
 
 	// 生成键：epochNumber_recipient_rewardType
 	key := fmt.Sprintf("%d_%s_%s", record.EpochNumber, record.Recipient, record.RewardType)
@@ -891,33 +856,27 @@ func (rs *RewardStore) RecordReward(record *RewardRecordExtended) error {
 	// 序列化记录
 	data, err := json.Marshal(record)
 	if err != nil {
-		if logger != nil {
-			logger.Error("❌ RecordReward: 序列化失败",
-				"epoch", record.EpochNumber,
-				"recipient", record.Recipient,
-				"error", err)
-		}
+		rs.logger.Error("❌ RecordReward: 序列化失败",
+			"epoch", record.EpochNumber,
+			"recipient", record.Recipient,
+			"error", err)
 		return err
 	}
 
 	// 检查数据库状态
 	if rs.db == nil {
-		if logger != nil {
-			logger.Error("❌ RecordReward: 数据库为nil",
-				"epoch", record.EpochNumber,
-				"recipient", record.Recipient)
-		}
+		rs.logger.Error("❌ RecordReward: 数据库为nil",
+			"epoch", record.EpochNumber,
+			"recipient", record.Recipient)
 		return fmt.Errorf("database is nil")
 	}
 
 	err = rs.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("rewards"))
 		if bucket == nil {
-			if logger != nil {
-				logger.Error("❌ RecordReward: rewards bucket not found",
-					"epoch", record.EpochNumber,
-					"recipient", record.Recipient)
-			}
+			rs.logger.Error("❌ RecordReward: rewards bucket not found",
+				"epoch", record.EpochNumber,
+				"recipient", record.Recipient)
 			return fmt.Errorf("rewards bucket not found")
 		}
 
@@ -934,21 +893,17 @@ func (rs *RewardStore) RecordReward(record *RewardRecordExtended) error {
 		select {
 		case err := <-putDone:
 			if err != nil {
-				if logger != nil {
-					logger.Error("❌ RecordReward: 存储数据失败",
-						"epoch", record.EpochNumber,
-						"recipient", record.Recipient,
-						"error", err)
-				}
+				rs.logger.Error("❌ RecordReward: 存储数据失败",
+					"epoch", record.EpochNumber,
+					"recipient", record.Recipient,
+					"error", err)
 				return err
 			}
 		case <-time.After(5 * time.Second):
-			if logger != nil {
-				logger.Error("❌ RecordReward: 存储数据超时",
-					"epoch", record.EpochNumber,
-					"recipient", record.Recipient,
-					"key", key)
-			}
+			rs.logger.Error("❌ RecordReward: 存储数据超时",
+				"epoch", record.EpochNumber,
+				"recipient", record.Recipient,
+				"key", key)
 			return fmt.Errorf("bucket.Put timeout after 5 seconds")
 		}
 
@@ -956,12 +911,10 @@ func (rs *RewardStore) RecordReward(record *RewardRecordExtended) error {
 	})
 
 	if err != nil {
-		if logger != nil {
-			logger.Error("❌ RecordReward: 数据库更新失败",
-				"epoch", record.EpochNumber,
-				"recipient", record.Recipient,
-				"error", err)
-		}
+		rs.logger.Error("❌ RecordReward: 数据库更新失败",
+			"epoch", record.EpochNumber,
+			"recipient", record.Recipient,
+			"error", err)
 		return err
 	}
 
