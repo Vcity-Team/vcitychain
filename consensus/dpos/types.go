@@ -24,6 +24,11 @@ type DPoSCache struct {
 	delegateCacheTime map[types.Address]time.Time // 委托者缓存时间戳
 	rewardCacheTime   map[types.Address]time.Time // 奖励缓存时间戳
 	maxCacheSize      int                         // 最大缓存大小
+
+	// 🆕 Epoch验证者缓存
+	epochValidatorsCache map[uint64]validator.AccountSet // epoch号 -> 验证者集合
+	epochCacheTime       map[uint64]time.Time            // epoch号 -> 缓存时间戳
+	epochCacheTTL        time.Duration                   // epoch缓存TTL
 }
 
 // BatchProcessor 批量处理器

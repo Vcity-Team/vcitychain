@@ -50,6 +50,14 @@ func (d *DPoS) buildQueryDependencies() querymodule.Dependencies {
 		return convertValidatorSet(validators), nil
 	}
 
+	deps.GetValidatorsForEpoch = func(epochNumber uint64) ([]querymodule.ValidatorInfo, error) {
+		validators, err := d.getValidatorsForEpoch(epochNumber)
+		if err != nil || len(validators) == 0 {
+			return convertValidatorSet(validators), err
+		}
+		return convertValidatorSet(validators), nil
+	}
+
 	if d.blockTracker != nil {
 		deps.GetEpochBlockCounts = func(epochNumber uint64) map[types.Address]uint64 {
 			return d.blockTracker.GetEpochBlockCounts(epochNumber)

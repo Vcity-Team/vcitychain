@@ -1157,11 +1157,6 @@ func (ni *NetworkIntegration) RegisterSignatureCollector(checkpointHash types.Ha
 	ni.collectorManager.RegisterSignatureCollector(checkpointHash, signatureCh, timeout, requiredCount)
 }
 
-// 为了向后兼容，添加一个重载方法
-func (ni *NetworkIntegration) RegisterSignatureCollectorLegacy(checkpointHash types.Hash, signatureCh chan *SignatureResponse, timeout time.Duration) {
-	ni.RegisterSignatureCollector(checkpointHash, signatureCh, timeout, 1)
-}
-
 // SetDPoSRuntime 设置DPoS运行时回调
 func (ni *NetworkIntegration) SetDPoSRuntime(runtime interface{}) {
 	ni.dposRuntime = runtime

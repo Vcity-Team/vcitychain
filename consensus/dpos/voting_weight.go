@@ -227,62 +227,6 @@ func (d *DPoS) updateVotingPowerInDatabaseWithTx(delegate types.Address, newPowe
 	return nil
 }
 
-// updateDelegateVotingPower 更新委托者投票权重（已废弃但保留用于向后兼容）
-func (d *DPoS) updateDelegateVotingPower(delegate types.Address, amount *big.Int) {
-	d.logger.Warn("⚠️ updateDelegateVotingPower已废弃，请使用数据库直接操作",
-		"delegate", delegate.String(),
-		"amount", amount.String(),
-		"note", "此函数保留仅用于向后兼容性")
-
-	// 🆕 检查是否为创世验证者
-	if d.isGenesisValidator(delegate) {
-		d.logger.Info("🔒 创世验证者权重保持不变，跳过更新",
-			"address", delegate.String(),
-			"amount", amount.String(),
-			"note", "创世验证者权重永远不变")
-		return
-	}
-
-	// 🆕 新的实现：直接操作数据库
-	// 1. 从数据库读取当前权重
-	currentPower, err := d.getVotingPowerFromDatabase(delegate)
-	if err != nil {
-		d.logger.Error("❌ 从数据库读取验证者权重失败",
-			"delegate", delegate.String(),
-			"error", err)
-		return
-	}
-
-	// 2. 计算新权重
-	newPower := new(big.Int).Add(currentPower, amount)
-
-	// 3. 直接更新数据库
-	err = d.updateVotingPowerInDatabase(delegate, newPower)
-	if err != nil {
-		d.logger.Error("❌ 更新数据库验证者权重失败",
-			"delegate", delegate.String(),
-			"newPower", newPower.String(),
-			"error", err)
-		return
-	}
-
-	// 4. 数据库更新成功后，同步到内存
-	err = d.syncDelegateFromDatabase(delegate)
-	if err != nil {
-		d.logger.Warn("⚠️ 同步验证者信息到内存失败",
-			"delegate", delegate.String(),
-			"error", err)
-		// 不返回错误，因为数据库更新已经成功
-	}
-
-	d.logger.Info("✅ 验证者投票权重更新完成（数据库直接操作）",
-		"delegate", delegate.String(),
-		"originalPower", currentPower.String(),
-		"addedAmount", amount.String(),
-		"newPower", newPower.String(),
-		"dataSource", "database")
-}
-
 // persistDelegateVotingPower 持久化委托者的投票权重
 func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.Int) error {
 	store, err := d.getStateStore()

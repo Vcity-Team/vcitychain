@@ -23,6 +23,7 @@ type Dependencies struct {
 
 	// 验证者相关
 	GetSortedValidatorsWithLimit func() ([]ValidatorInfo, error)
+	GetValidatorsForEpoch        func(epochNumber uint64) ([]ValidatorInfo, error)
 	GetValidatorFaultInfo        func(address types.Address) map[string]interface{}
 
 	// 区块追踪
@@ -252,27 +253,46 @@ func (m *Manager) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{
 	}
 
 	// 获取验证者信息
+	// 🆕 修复：对于历史epoch，使用该epoch的验证者集合；对于当前epoch，使用当前验证者集合
 	validators := make([]map[string]interface{}, 0)
-	if m.deps.GetSortedValidatorsWithLimit != nil {
-		dbValidators, err := m.deps.GetSortedValidatorsWithLimit()
-		if err == nil && len(dbValidators) > 0 {
-			for i, validator := range dbValidators {
-				faultInfo := make(map[string]interface{})
-				if m.deps.GetValidatorFaultInfo != nil {
-					faultInfo = m.deps.GetValidatorFaultInfo(validator.Address)
-				}
+	var dbValidators []ValidatorInfo
+	var err error
 
-				blocksProducedByValidator := blockCounts[validator.Address]
-
-				validators = append(validators, map[string]interface{}{
-					"index":          i,
-					"address":        validator.Address.String(),
-					"votingPower":    validator.VotingPower,
-					"isActive":       validator.IsActive,
-					"faultFlag":      faultInfo,
-					"blocksProduced": blocksProducedByValidator,
-				})
+	if epochNumber < currentEpoch {
+		// 历史epoch：使用该epoch的验证者集合
+		if m.deps.GetValidatorsForEpoch != nil {
+			dbValidators, err = m.deps.GetValidatorsForEpoch(epochNumber)
+		}
+		// 如果 GetValidatorsForEpoch 不可用，回退到当前验证者集合（兼容性）
+		if err != nil || len(dbValidators) == 0 {
+			if m.deps.GetSortedValidatorsWithLimit != nil {
+				dbValidators, err = m.deps.GetSortedValidatorsWithLimit()
 			}
+		}
+	} else {
+		// 当前epoch或未来epoch：使用当前验证者集合
+		if m.deps.GetSortedValidatorsWithLimit != nil {
+			dbValidators, err = m.deps.GetSortedValidatorsWithLimit()
+		}
+	}
+
+	if err == nil && len(dbValidators) > 0 {
+		for i, validator := range dbValidators {
+			faultInfo := make(map[string]interface{})
+			if m.deps.GetValidatorFaultInfo != nil {
+				faultInfo = m.deps.GetValidatorFaultInfo(validator.Address)
+			}
+
+			blocksProducedByValidator := blockCounts[validator.Address]
+
+			validators = append(validators, map[string]interface{}{
+				"index":          i,
+				"address":        validator.Address.String(),
+				"votingPower":    validator.VotingPower,
+				"isActive":       validator.IsActive,
+				"faultFlag":      faultInfo,
+				"blocksProduced": blocksProducedByValidator,
+			})
 		}
 	}
 
@@ -309,4 +329,3 @@ func (m *Manager) GetValidatorStats(validatorAddress types.Address, epochNumber 
 
 	return stats
 }
-

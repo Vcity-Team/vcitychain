@@ -772,9 +772,27 @@ func (p *blockchainWrapper) updateNextEpochValidatorsFromLocal(block *types.Bloc
 		return fmt.Errorf("stake store not available")
 	}
 
-	if err := p.state.StakeStore.SaveEpochValidators(nextEpochValidators); err != nil {
+	// 🆕 计算下一个epoch号
+	var nextEpochNumber uint64
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+		blocksPerEpoch := dposInstance.getEpochSize()
+		consensusSwitchHeight := dposInstance.config.ConsensusSwitchHeight
+		if block.Number() < consensusSwitchHeight {
+			nextEpochNumber = 1
+		} else {
+			dposBlockNumber := block.Number() - consensusSwitchHeight
+			currentEpoch := (dposBlockNumber / blocksPerEpoch) + 1
+			nextEpochNumber = currentEpoch + 1
+		}
+	} else {
+		// 如果无法获取DPoS实例，使用默认值
+		nextEpochNumber = 1
+	}
+
+	if err := p.state.StakeStore.SaveEpochValidators(nextEpochNumber, nextEpochValidators); err != nil {
 		p.logger.Error("❌ 保存下一个epoch验证者集合失败",
 			"blockNumber", block.Number(),
+			"nextEpochNumber", nextEpochNumber,
 			"error", err)
 		return fmt.Errorf("failed to save next epoch validators: %w", err)
 	}
@@ -861,8 +879,28 @@ func (p *blockchainWrapper) updateValidatorsInDatabase(validators validator.Acco
 		return fmt.Errorf("stake store not available")
 	}
 
-	if err := p.state.StakeStore.SaveEpochValidators(validators); err != nil {
-		p.logger.Error("❌ 保存验证者集合失败", "error", err)
+	// 🆕 计算下一个epoch号
+	var nextEpochNumber uint64
+	if p.config != nil {
+		blocksPerEpoch := p.getEpochSize()
+		consensusSwitchHeight := p.config.ConsensusSwitchHeight
+		currentBlockNumber := uint64(0)
+		if p.blockchain != nil && p.blockchain.Header() != nil {
+			currentBlockNumber = p.blockchain.Header().Number
+		}
+		if currentBlockNumber < consensusSwitchHeight {
+			nextEpochNumber = 1
+		} else {
+			dposBlockNumber := currentBlockNumber - consensusSwitchHeight
+			currentEpoch := (dposBlockNumber / blocksPerEpoch) + 1
+			nextEpochNumber = currentEpoch + 1
+		}
+	} else {
+		nextEpochNumber = 1 // 默认值
+	}
+
+	if err := p.state.StakeStore.SaveEpochValidators(nextEpochNumber, validators); err != nil {
+		p.logger.Error("❌ 保存验证者集合失败", "error", err, "nextEpochNumber", nextEpochNumber)
 		return err
 	}
 

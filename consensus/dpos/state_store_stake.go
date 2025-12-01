@@ -12,7 +12,6 @@ import (
 	"github.com/Vcity-Team/vcitychain/bls"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
-	hclog "github.com/hashicorp/go-hclog"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -24,14 +23,6 @@ var (
 	// error returned if full validator set does not exists in db
 	errNoFullValidatorSet = errors.New("full validator set not in db")
 )
-
-// getGlobalLogger 获取全局logger（已废弃，使用 getGlobalLoggerWrapper 代替）
-func getGlobalLogger() hclog.Logger {
-	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-		return dposInstance.logger
-	}
-	return nil
-}
 
 // getGlobalLoggerWrapper 获取全局logger包装器
 func getGlobalLoggerWrapper() *loggerWrapper {
@@ -1266,8 +1257,8 @@ func (s *StakeStore) ClearValidatorFaultStatus(address types.Address, proposalID
 	})
 }
 
-// 🆕 新增：保存Epoch验证者集合
-func (s *StakeStore) SaveEpochValidators(validators validator.AccountSet) error {
+// 🆕 新增：保存Epoch验证者集合（按epoch号存储）
+func (s *StakeStore) SaveEpochValidators(epochNumber uint64, validators validator.AccountSet) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		// 获取或创建epoch验证者bucket
 		bucket, err := tx.CreateBucketIfNotExists([]byte("epochValidators"))
@@ -1281,15 +1272,41 @@ func (s *StakeStore) SaveEpochValidators(validators validator.AccountSet) error 
 			return WrapError("marshal validators", err)
 		}
 
-		// 使用当前时间戳作为key
+		// 🆕 使用epoch号作为key（而不是时间戳）
 		key := make([]byte, 8)
-		binary.BigEndian.PutUint64(key, uint64(time.Now().Unix()))
+		binary.BigEndian.PutUint64(key, epochNumber)
 
 		return bucket.Put(key, data)
 	})
 }
 
-// 🆕 新增：获取Epoch验证者集合
+// 🆕 新增：按epoch号获取Epoch验证者集合
+func (s *StakeStore) GetEpochValidatorsByEpoch(epochNumber uint64) (validator.AccountSet, error) {
+	var validators validator.AccountSet
+
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("epochValidators"))
+		if bucket == nil {
+			return fmt.Errorf("epoch validators bucket not found")
+		}
+
+		// 使用epoch号作为key
+		key := make([]byte, 8)
+		binary.BigEndian.PutUint64(key, epochNumber)
+
+		data := bucket.Get(key)
+		if data == nil {
+			return fmt.Errorf("no validators found for epoch %d", epochNumber)
+		}
+
+		// 反序列化
+		return json.Unmarshal(data, &validators)
+	})
+
+	return validators, err
+}
+
+// GetEpochValidators 获取最新的Epoch验证者集合（向后兼容，保留用于获取当前epoch）
 func (s *StakeStore) GetEpochValidators() (validator.AccountSet, error) {
 	var validators validator.AccountSet
 
@@ -1299,7 +1316,7 @@ func (s *StakeStore) GetEpochValidators() (validator.AccountSet, error) {
 			return fmt.Errorf("epoch validators bucket not found")
 		}
 
-		// 获取最新的验证者集合（按时间戳倒序）
+		// 获取最新的验证者集合（按时间戳倒序，兼容旧数据）
 		cursor := bucket.Cursor()
 		_, data := cursor.Last()
 		if data == nil {

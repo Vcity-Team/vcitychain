@@ -1466,14 +1466,17 @@ func (d *DPoS) GetState() *State {
 func (d *DPoS) initPerformanceOptimizations() {
 	// 初始化缓存
 	d.cache = &DPoSCache{
-		voterCache:        make(map[types.Address]*VoterInfo),
-		delegateCache:     make(map[types.Address]*validator.ValidatorMetadata),
-		rewardCache:       make(map[types.Address]*big.Int),
-		voterCacheTime:    make(map[types.Address]time.Time),
-		delegateCacheTime: make(map[types.Address]time.Time),
-		rewardCacheTime:   make(map[types.Address]time.Time),
-		cacheTTL:          5 * time.Minute,
-		maxCacheSize:      1000, // 最大缓存1000个条目
+		voterCache:           make(map[types.Address]*VoterInfo),
+		delegateCache:        make(map[types.Address]*validator.ValidatorMetadata),
+		rewardCache:          make(map[types.Address]*big.Int),
+		voterCacheTime:       make(map[types.Address]time.Time),
+		delegateCacheTime:    make(map[types.Address]time.Time),
+		rewardCacheTime:      make(map[types.Address]time.Time),
+		cacheTTL:             5 * time.Minute,
+		maxCacheSize:         1000,                                  // 最大缓存1000个条目
+		epochValidatorsCache: make(map[uint64]validator.AccountSet), // 🆕 初始化epoch验证者缓存
+		epochCacheTime:       make(map[uint64]time.Time),            // 🆕 初始化epoch缓存时间戳
+		epochCacheTTL:        5 * time.Minute,                       // 🆕 默认5分钟TTL
 	}
 
 	// 初始化批量处理器

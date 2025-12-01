@@ -399,31 +399,54 @@ func (d *DPoS) reloadValidatorsAfterRecovery() error {
 	return nil
 }
 
-// getValidatorsForEpoch 获取指定epoch的验证者集合（从该epoch开始区块的ExtraData或数据库获取）
 func (d *DPoS) getValidatorsForEpoch(epochNumber uint64) (validator.AccountSet, error) {
-	if d.blockchain == nil {
-		return nil, fmt.Errorf("blockchain not available")
+	// 先检查缓存
+	if cached := d.getCachedEpochValidators(epochNumber); cached != nil {
+		d.logger.Debug("✅ 从缓存获取epoch验证者集合",
+			"epochNumber", epochNumber,
+			"validatorsCount", len(cached))
+		return cached.Copy(), nil
 	}
 
+	var validators validator.AccountSet
+	var lastErr error
+
+	// 优先从数据库按epoch号获取（最快）
+	if store, err := d.getStateStore(); err == nil {
+		if epochValidators, err := store.GetEpochValidatorsByEpoch(epochNumber); err == nil && len(epochValidators) > 0 {
+			validators = epochValidators
+			d.logger.Debug("✅ 从数据库（按epoch号）获取epoch验证者集合",
+				"epochNumber", epochNumber,
+				"validatorsCount", len(validators))
+			// 缓存结果
+			d.setCachedEpochValidators(epochNumber, validators)
+			return validators, nil
+		} else if err != nil {
+			lastErr = fmt.Errorf("database: %w", err)
+		} else {
+			lastErr = fmt.Errorf("database: no validators found for epoch %d", epochNumber)
+		}
+	} else {
+		lastErr = fmt.Errorf("failed to get state store: %w", err)
+	}
+
+	// 计算该epoch的开始区块号--主要是兼容老逻辑，数据库没取到，后续可以移除
 	blocksPerEpoch := d.getEpochSize()
 	consensusSwitchHeight := d.config.ConsensusSwitchHeight
-
-	// 计算该epoch的开始区块号
-	// epoch 1 从 consensusSwitchHeight 开始
-	// epoch 2 从 consensusSwitchHeight + blocksPerEpoch 开始
-	// epoch N 从 consensusSwitchHeight + (N-1) * blocksPerEpoch 开始
 	epochStartBlock := consensusSwitchHeight
 	if epochNumber > 1 {
 		epochStartBlock = consensusSwitchHeight + (epochNumber-1)*blocksPerEpoch
 	}
 
-	// 方式1：从该epoch开始区块的ExtraData获取验证者集合
-	if header, exists := d.blockchain.GetHeaderByNumber(epochStartBlock); exists {
+	// 从该epoch开始区块的ExtraData获取验证者集合
+	if d.blockchain == nil {
+		lastErr = fmt.Errorf("blockchain not available")
+	} else if header, exists := d.blockchain.GetHeaderByNumber(epochStartBlock); exists {
 		extra := &Extra{}
 		if err := extra.UnmarshalRLP(header.ExtraData); err == nil {
 			// 从ExtraData获取验证者集合
 			if extra.Validators != nil && !extra.Validators.IsEmpty() && len(extra.Validators.Added) > 0 {
-				validators := make(validator.AccountSet, 0, len(extra.Validators.Added))
+				validators = make(validator.AccountSet, 0, len(extra.Validators.Added))
 				for _, v := range extra.Validators.Added {
 					validators = append(validators, &validator.ValidatorMetadata{
 						Address:     v.Address,
@@ -435,32 +458,110 @@ func (d *DPoS) getValidatorsForEpoch(epochNumber uint64) (validator.AccountSet, 
 					"epochNumber", epochNumber,
 					"epochStartBlock", epochStartBlock,
 					"validatorsCount", len(validators))
+				// 🆕 保存到数据库（异步，不阻塞）
+				go d.saveEpochValidatorsToDatabase(epochNumber, validators)
+				// 缓存结果
+				d.setCachedEpochValidators(epochNumber, validators)
 				return validators, nil
+			} else {
+				lastErr = fmt.Errorf("ExtraData has no validators for epoch %d", epochNumber)
+			}
+		} else {
+			lastErr = fmt.Errorf("failed to unmarshal ExtraData for epoch %d: %w", epochNumber, err)
+		}
+	} else {
+		lastErr = fmt.Errorf("block %d (epoch %d start) not found", epochStartBlock, epochNumber)
+	}
+
+	return nil, fmt.Errorf("cannot get validators for epoch %d: %w", epochNumber, lastErr)
+}
+
+// getCachedEpochValidators 从缓存获取epoch验证者集合
+func (d *DPoS) getCachedEpochValidators(epochNumber uint64) validator.AccountSet {
+	if d.cache == nil {
+		return nil
+	}
+	d.cache.lock.RLock()
+	defer d.cache.lock.RUnlock()
+
+	// 检查缓存是否存在且未过期
+	if validators, exists := d.cache.epochValidatorsCache[epochNumber]; exists {
+		if cacheTime, timeExists := d.cache.epochCacheTime[epochNumber]; timeExists {
+			ttl := d.cache.epochCacheTTL
+			if ttl == 0 {
+				ttl = 5 * time.Minute // 默认5分钟
+			}
+			if time.Since(cacheTime) < ttl {
+				return validators
+			}
+			// 缓存过期，删除
+			delete(d.cache.epochValidatorsCache, epochNumber)
+			delete(d.cache.epochCacheTime, epochNumber)
+		}
+	}
+
+	return nil
+}
+
+// setCachedEpochValidators 设置epoch验证者集合到缓存
+func (d *DPoS) setCachedEpochValidators(epochNumber uint64, validators validator.AccountSet) {
+	if d.cache == nil {
+		return
+	}
+
+	d.cache.lock.Lock()
+	defer d.cache.lock.Unlock()
+
+	// 初始化缓存map（如果未初始化）
+	if d.cache.epochValidatorsCache == nil {
+		d.cache.epochValidatorsCache = make(map[uint64]validator.AccountSet)
+		d.cache.epochCacheTime = make(map[uint64]time.Time)
+		d.cache.epochCacheTTL = 5 * time.Minute // 默认5分钟
+	}
+
+	// 限制缓存大小（保留最近的100个epoch）
+	maxCacheSize := 100
+	if len(d.cache.epochValidatorsCache) >= maxCacheSize {
+		// 删除最旧的缓存（按epoch号）
+		oldestEpoch := uint64(0)
+		for epoch := range d.cache.epochValidatorsCache {
+			if oldestEpoch == 0 || epoch < oldestEpoch {
+				oldestEpoch = epoch
 			}
 		}
-	}
-
-	// 方式2：从数据库获取（如果ExtraData中没有）
-	if store, err := d.getStateStore(); err == nil {
-		if validators, err := store.GetEpochValidators(); err == nil && len(validators) > 0 {
-			d.logger.Info("✅ 从数据库获取epoch验证者集合",
-				"epochNumber", epochNumber,
-				"validatorsCount", len(validators))
-			return validators, nil
+		if oldestEpoch > 0 {
+			delete(d.cache.epochValidatorsCache, oldestEpoch)
+			delete(d.cache.epochCacheTime, oldestEpoch)
 		}
 	}
 
-	// 方式3：备用方案 - 使用当前内存中的验证者集合
-	d.logger.Warn("⚠️ 无法从ExtraData或数据库获取epoch验证者集合，使用当前内存中的验证者集合",
-		"epochNumber", epochNumber,
-		"epochStartBlock", epochStartBlock)
-	if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
-		return d.runtime.delegates.Copy(), nil
-	} else if len(d.delegates) > 0 {
-		return d.delegates.Copy(), nil
+	d.cache.epochValidatorsCache[epochNumber] = validators.Copy()
+	d.cache.epochCacheTime[epochNumber] = time.Now()
+}
+
+// saveEpochValidatorsToDatabase 异步保存epoch验证者集合到数据库
+func (d *DPoS) saveEpochValidatorsToDatabase(epochNumber uint64, validators validator.AccountSet) {
+	if len(validators) == 0 {
+		return
 	}
 
-	return nil, fmt.Errorf("cannot get validators for epoch %d", epochNumber)
+	store, err := d.getStateStore()
+	if err != nil {
+		d.logger.Debug("无法获取state store，跳过保存epoch验证者到数据库",
+			"epochNumber", epochNumber,
+			"error", err)
+		return
+	}
+
+	if err := store.SaveEpochValidators(epochNumber, validators); err != nil {
+		d.logger.Warn("异步保存epoch验证者到数据库失败",
+			"epochNumber", epochNumber,
+			"error", err)
+	} else {
+		d.logger.Debug("✅ 异步保存epoch验证者到数据库成功",
+			"epochNumber", epochNumber,
+			"validatorsCount", len(validators))
+	}
 }
 
 func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, startEpoch, endEpoch uint64) (uint64, uint64, uint64) {
@@ -598,6 +699,18 @@ func (d *DPoS) calculateNextEpochValidators(blockNumber uint64) (validator.Accou
 func (d *DPoS) saveNextEpochValidators(validators validator.AccountSet) error {
 	blockNumber := d.getCurrentBlockNumber()
 
+	// 🆕 计算下一个epoch号
+	blocksPerEpoch := d.getEpochSize()
+	consensusSwitchHeight := d.config.ConsensusSwitchHeight
+	var nextEpochNumber uint64
+	if blockNumber < consensusSwitchHeight {
+		nextEpochNumber = 1
+	} else {
+		dposBlockNumber := blockNumber - consensusSwitchHeight
+		currentEpoch := (dposBlockNumber / blocksPerEpoch) + 1
+		nextEpochNumber = currentEpoch + 1
+	}
+
 	if d.stateMgr != nil {
 		if err := d.stateMgr.SaveValidators(blockNumber, validators); err != nil {
 			d.logger.Warn("state manager 保存验证者集合失败，尝试回退",
@@ -606,7 +719,8 @@ func (d *DPoS) saveNextEpochValidators(validators validator.AccountSet) error {
 		} else {
 			d.logger.Info("✅ 下一个epoch验证者集合保存成功（state模块）",
 				"count", len(validators),
-				"blockNumber", blockNumber)
+				"blockNumber", blockNumber,
+				"nextEpochNumber", nextEpochNumber)
 			return nil
 		}
 	}
@@ -616,12 +730,15 @@ func (d *DPoS) saveNextEpochValidators(validators validator.AccountSet) error {
 		return err
 	}
 
-	if err := store.SaveEpochValidators(validators); err != nil {
-		d.logger.Error("❌ 保存下一个epoch验证者集合失败", "error", err)
+	// 🆕 传入epoch号保存
+	if err := store.SaveEpochValidators(nextEpochNumber, validators); err != nil {
+		d.logger.Error("❌ 保存下一个epoch验证者集合失败", "error", err, "nextEpochNumber", nextEpochNumber)
 		return err
 	}
 
-	d.logger.Info("✅ 下一个epoch验证者集合保存成功（legacy）", "count", len(validators))
+	d.logger.Info("✅ 下一个epoch验证者集合保存成功（legacy）",
+		"count", len(validators),
+		"nextEpochNumber", nextEpochNumber)
 	return nil
 }
 

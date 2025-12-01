@@ -517,8 +517,20 @@ func (s *StateManagerAdapter) SaveValidators(blockNumber uint64, validators vali
 		return fmt.Errorf("state store not available")
 	}
 
+	// 🆕 计算epoch号
+	blocksPerEpoch := s.dpos.getEpochSize()
+	consensusSwitchHeight := s.dpos.config.ConsensusSwitchHeight
+	var epochNumber uint64
+	if blockNumber < consensusSwitchHeight {
+		epochNumber = 1
+	} else {
+		dposBlockNumber := blockNumber - consensusSwitchHeight
+		currentEpoch := (dposBlockNumber / blocksPerEpoch) + 1
+		epochNumber = currentEpoch + 1 // 下一个epoch
+	}
+
 	// 使用SaveEpochValidators保存验证者集合
-	return s.dpos.state.StakeStore.SaveEpochValidators(validators)
+	return s.dpos.state.StakeStore.SaveEpochValidators(epochNumber, validators)
 }
 
 // GetValidators 获取验证者集合

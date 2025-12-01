@@ -68,7 +68,18 @@ func (d *DPoS) buildStateModuleDependencies() statemodule.Dependencies {
 			if err != nil {
 				return err
 			}
-			return store.SaveEpochValidators(validators)
+			// 🆕 计算epoch号
+			blocksPerEpoch := d.getEpochSize()
+			consensusSwitchHeight := d.config.ConsensusSwitchHeight
+			var epochNumber uint64
+			if blockNumber < consensusSwitchHeight {
+				epochNumber = 1
+			} else {
+				dposBlockNumber := blockNumber - consensusSwitchHeight
+				currentEpoch := (dposBlockNumber / blocksPerEpoch) + 1
+				epochNumber = currentEpoch + 1 // 下一个epoch
+			}
+			return store.SaveEpochValidators(epochNumber, validators)
 		},
 		LoadValidators: func(filterZeroVotingPower bool) (validator.AccountSet, error) {
 			store, err := d.getStateStore()
