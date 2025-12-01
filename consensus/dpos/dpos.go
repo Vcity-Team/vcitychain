@@ -223,8 +223,8 @@ type DPoS struct {
 	faultyValidators  map[types.Address]bool
 	missedBlocksCount map[types.Address]uint64
 
-	// 最后投票的验证者地址
-	lastVotedDelegate types.Address
+	// 受投票影响的验证者地址集合（解决竞态条件：多次投票时记录所有受影响的验证者）
+	affectedDelegates map[types.Address]bool
 
 	// 奖励分配信息
 	pendingRewardDistribution *RewardDistributionInfo
@@ -281,7 +281,7 @@ func (d *DPoS) SetPendingEpochEndHeader(header *types.Header) {
 	}
 }
 
-// ClearPendingEpochEndHeader 清理缓存，避免跨epoch误用
+// 清理缓存，避免跨epoch误用
 func (d *DPoS) ClearPendingEpochEndHeader(blockNumber uint64) {
 	d.lock.Lock()
 	defer d.lock.Unlock()
@@ -337,12 +337,12 @@ func (d *DPoS) getCurrentBlockNumber() uint64 {
 	return currentHeader.Number
 }
 
-// GetCurrentBlockNumber 获取当前区块号（导出方法，供JSON-RPC使用）
+// GetCurrentBlockNumber 获取当前区块号
 func (d *DPoS) GetCurrentBlockNumber() uint64 {
 	return d.getCurrentBlockNumber()
 }
 
-// GetConsensusSwitchHeight 获取共识切换高度（导出方法，供JSON-RPC使用）
+// GetConsensusSwitchHeight 获取共识切换高度
 func (d *DPoS) GetConsensusSwitchHeight() uint64 {
 	if d.config == nil {
 		return 0
@@ -387,7 +387,6 @@ func (d *DPoS) FilterExtra(extra []byte) ([]byte, error) {
 }
 
 func (d *DPoS) Start() error {
-	// 统一验证所有必需的依赖
 	if err := d.validateDependencies(); err != nil {
 		return WrapError("validate dependencies", err)
 	}
@@ -435,7 +434,6 @@ func (d *DPoS) Start() error {
 			d.logger.Warn("key not available, cannot determine if node is delegate")
 		}
 
-		// 启用状态广播
 		if d.syncer != nil {
 			d.syncer.EnablePublishingPeerStatus()
 			d.logger.Info("✅ 启用状态广播")
@@ -446,7 +444,7 @@ func (d *DPoS) Start() error {
 		d.logger.Warn("transaction pool not available, cannot set sealing state")
 	}
 
-	// 🆕 3. 先同步获取BLS公钥（确保网络集成层已就绪）
+	// 3. 先同步获取BLS公钥（确保网络集成层已就绪）
 	d.logger.Info("🔑 开始同步获取BLS公钥...")
 	if err := d.syncLoadBLSKeys(); err != nil {
 		d.logger.Error("❌ BLS公钥同步获取失败", "error", err)
@@ -454,7 +452,7 @@ func (d *DPoS) Start() error {
 	}
 	d.logger.Info("✅ BLS公钥同步获取完成")
 
-	// 🆕 4. 启动syncer（BLS公钥加载完成后）
+	// 4. 启动syncer（BLS公钥加载完成后）
 	d.logger.Info("🌐 开始启动syncer...")
 	if err := d.syncer.Start(); err != nil {
 		// 🆕 检查是否是topic冲突错误，如果是则忽略
@@ -470,7 +468,7 @@ func (d *DPoS) Start() error {
 
 	// sync concurrently, retrying indefinitely
 	go common.RetryForever(context.Background(), time.Second, func(context.Context) error {
-		// 🆕 在区块同步前检查BLS公钥是否加载完成
+		// 在区块同步前检查BLS公钥是否加载完成
 		if err := d.waitForBLSKeysLoaded(); err != nil {
 			d.logger.Warn("⚠️ 等待BLS公钥加载完成失败，继续尝试同步", "error", err)
 		}
@@ -497,7 +495,6 @@ func (d *DPoS) Start() error {
 			return fmt.Errorf("DPoS runtime not properly initialized: Key is nil")
 		}
 
-		// 🆕 详细检查runtime状态
 		d.logger.Info("🔍 DPoS runtime详细状态检查",
 			"resourceMonitorIsNil", d.runtime.resourceMonitor == nil,
 			"goroutineManagerIsNil", func() bool {
@@ -527,7 +524,6 @@ func (d *DPoS) Start() error {
 		d.logger.Error("❌ DPoS runtime为nil，无法启动出块循环")
 	}
 
-	// start state DB process if available
 	if d.state != nil {
 		go d.state.startStatsReleasing()
 	}
@@ -542,10 +538,8 @@ func (d *DPoS) Start() error {
 		d.logger.Warn("Failed to call command data sources on startup", "error", err)
 	}
 
-	// 初始化性能优化组件
 	d.initPerformanceOptimizations()
 
-	// 统一初始化所有模块
 	if err := d.initializeModules(); err != nil {
 		return err
 	}
@@ -566,7 +560,6 @@ func (d *DPoS) Close() error {
 		d.runtime.close()
 	}
 
-	//  从全局注册表中注销DPoS实例
 	if d.key != nil {
 		key := d.key.Address().String()
 		UnregisterDPoSInstance(key)
@@ -865,6 +858,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 
 	vcity_dpos.voters = make(map[types.Address]*VoterInfo)
 	vcity_dpos.delegates = make(validator.AccountSet, 0)
+	vcity_dpos.affectedDelegates = make(map[types.Address]bool)
 
 	// 初始化双重签名检测器
 	vcity_dpos.doubleSigningDetector = NewDoubleSigningDetector(logger)

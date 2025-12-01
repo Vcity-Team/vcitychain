@@ -732,12 +732,28 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 	}
 
 	// 直接保存当前的 d.delegates 到数据库，不改变受托人集合
-	// 如果是在投票处理过程中，只更新投票的验证者
-	if d.pendingValidatorUpdate && d.lastVotedDelegate != (types.Address{}) {
-		d.logger.Info("🎯 投票处理中，只更新投票的验证者", "targetDelegate", d.lastVotedDelegate.String())
-		if err := d.persistDelegateSetToDatabaseWithTarget(d.delegates, d.lastVotedDelegate); err != nil {
-			d.logger.Error("❌ Failed to persist target delegate to database", "error", err)
-			return err
+	// 如果是在投票处理过程中，只更新受投票影响的验证者
+	d.lock.RLock()
+	hasAffectedDelegates := d.pendingValidatorUpdate && d.affectedDelegates != nil && len(d.affectedDelegates) > 0
+	affectedDelegatesCopy := make(map[types.Address]bool)
+	if hasAffectedDelegates {
+		for addr := range d.affectedDelegates {
+			affectedDelegatesCopy[addr] = true
+		}
+	}
+	d.lock.RUnlock()
+
+	if hasAffectedDelegates {
+		d.logger.Info("🎯 投票处理中，只更新受投票影响的验证者",
+			"affectedDelegatesCount", len(affectedDelegatesCopy))
+
+		// 遍历所有受影响的验证者，逐个持久化
+		for addr := range affectedDelegatesCopy {
+			if err := d.persistDelegateSetToDatabaseWithTarget(d.delegates, addr); err != nil {
+				d.logger.Error("❌ Failed to persist affected delegate to database",
+					"delegate", addr.String(), "error", err)
+				return err
+			}
 		}
 	} else {
 		// 正常情况，保存所有验证者

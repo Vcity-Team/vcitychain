@@ -3,6 +3,8 @@ package dpos
 import (
 	"fmt"
 	"time"
+
+	"github.com/Vcity-Team/vcitychain/types"
 )
 
 // calculateRoundBySlot 基于Slot计算轮次
@@ -146,6 +148,12 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 						}()
 					}
 					dposInstance.pendingValidatorUpdate = false
+					// 🆕 清空受影响的验证者集合
+					dposInstance.lock.Lock()
+					if dposInstance.affectedDelegates != nil {
+						dposInstance.affectedDelegates = make(map[types.Address]bool)
+					}
+					dposInstance.lock.Unlock()
 				}
 			}
 		}
@@ -163,7 +171,3 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 		}
 	}
 }
-
-
-
-

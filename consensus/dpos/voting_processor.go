@@ -56,12 +56,21 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 	// 🆕 方案1+方案2：投票完成后标记需要延迟更新验证者集合
 	d.logger.Debug("🔄 投票完成，标记需要延迟更新验证者集合...")
 	d.pendingValidatorUpdate = true
-	d.lastVotedDelegate = candidate // 记录最后投票的验证者
+
+	// 🆕 将受影响的验证者添加到集合（解决竞态条件：多次投票时记录所有受影响的验证者）
+	d.lock.Lock()
+	if d.affectedDelegates == nil {
+		d.affectedDelegates = make(map[types.Address]bool)
+	}
+	d.affectedDelegates[candidate] = true
+	affectedCount := len(d.affectedDelegates)
+	d.lock.Unlock()
+
 	d.logger.Info("✅ 投票完成，验证者集合将在下一轮更新",
 		"voter", voter.String(),
 		"candidate", candidate.String(),
 		"amount", amount.String(),
-		"lastVotedDelegate", d.lastVotedDelegate.String())
+		"affectedDelegatesCount", affectedCount)
 
 	return nil
 }
@@ -293,7 +302,3 @@ func (d *DPoS) processVoteBatch(votes []*VoteMessage) {
 
 	d.logger.Debug("processed vote batch", "count", len(votes))
 }
-
-
-
-
