@@ -42,10 +42,10 @@
 3. 回退：`store.GetEpochValidators()` (数据库)
 4. 失败：返回错误
 
-**必要性**: ⚠️ **部分必要**
+**必要性**: ✅ **必要**
 - 前两个回退（内存）是必要的，因为内存数据最实时
-- 第三个回退（数据库）可能不准确（返回的是最新 epoch，不是当前 epoch）
-- **建议**: 第三个回退应该使用 `GetEpochValidatorsByEpoch(currentEpoch)`
+- 第三个回退（数据库）用于获取当前 epoch 的验证者集合
+- 注意：`GetEpochValidators()` 返回的是最新保存的验证者集合，对于当前 epoch 来说是正确的
 
 ---
 
@@ -54,26 +54,26 @@
 **调用方**: `calculateMissedBlocksWithActual()`  
 **回退链**:
 1. 优先：`getValidatorsForEpoch(epochNumberForCheck)` (指定 epoch)
-2. 回退：`d.runtime.delegates` (当前内存)
-3. 回退：`d.delegates` (当前内存)
-4. 最后：`validatorsCount = 1` (避免除零)
+2. ~~对于历史 epoch：回退到 `d.runtime.delegates` 或 `d.delegates` (当前内存)~~ ✅ **已移除**
+3. 对于历史 epoch：如果失败，直接返回错误（不使用当前内存验证者，因为不准确）
+4. 对于当前 epoch 或未来 epoch：回退到 `d.runtime.delegates` 或 `d.delegates` (当前内存)
+5. 最后：`validatorsCount = 1` (避免除零)
 
-**必要性**: ⚠️ **部分必要**
-- 对于历史 epoch，使用当前内存验证者集合不准确
-- **建议**: 对于历史 epoch，如果 `getValidatorsForEpoch` 失败，应该返回错误而不是使用当前内存
+**必要性**: ✅ **已优化**
+- ✅ **已修复**: 对于历史 epoch，如果 `getValidatorsForEpoch` 失败，直接返回错误
+- 对于当前 epoch 或未来 epoch，使用当前内存验证者集合是合理的
 
 ---
 
 #### 1.5 `getEpochInfoByNumberLegacy()` - 获取历史 epoch 信息
-**文件**: `consensus/dpos/query_stats.go:395-401`  
-**调用方**: `getEpochInfoByNumberLegacy()`  
+**文件**: `consensus/dpos/query_stats.go` (已删除)  
+**调用方**: 无（函数已删除）  
 **回退链**:
-1. 优先：`getValidatorsForEpoch(epochNumber)` (指定 epoch)
-2. 回退：`GetSortedValidatorsWithLimit()` (当前验证者集合)
+1. ~~优先：`getValidatorsForEpoch(epochNumber)` (指定 epoch)~~ ✅ **已删除**
+2. ~~回退：`GetSortedValidatorsWithLimit()` (当前验证者集合)~~ ✅ **已删除**
 
-**必要性**: ❌ **不必要**
-- 对于历史 epoch，使用当前验证者集合是错误的
-- **建议**: 如果 `getValidatorsForEpoch` 失败，应该返回错误或空列表
+**状态**: ✅ **已删除**
+- 该函数已被删除，逻辑已迁移到 `modules/query/manager.go`
 
 ---
 
@@ -82,13 +82,14 @@
 **调用方**: `GetValidatorsForDetection()`  
 **回退链**:
 1. 优先：`getValidatorsForEpoch(epochNumberForValidators)` (指定 epoch)
-2. 回退：`runtime.delegates` (内存)
-3. 回退：`d.delegates` (内存)
-4. 失败：返回错误
+2. ~~对于历史 epoch：回退到 `runtime.delegates` 或 `d.delegates` (内存)~~ ✅ **已移除**
+3. 对于历史 epoch：如果失败，直接返回错误（不使用当前内存验证者，因为不准确）
+4. 对于当前 epoch 或未来 epoch：回退到 `runtime.delegates` 或 `d.delegates` (内存)
+5. 失败：返回错误
 
-**必要性**: ⚠️ **部分必要**
-- 对于历史 epoch，使用当前内存验证者集合不准确
-- **建议**: 对于历史 epoch，如果 `getValidatorsForEpoch` 失败，应该返回错误
+**必要性**: ✅ **已优化**
+- ✅ **已修复**: 对于历史 epoch，如果 `getValidatorsForEpoch` 失败，直接返回错误
+- 对于当前 epoch 或未来 epoch，使用当前内存验证者集合是合理的
 
 ---
 
@@ -97,95 +98,115 @@
 **调用方**: `Manager.GetEpochInfoByNumber()`  
 **回退链**:
 1. 优先：`GetValidatorsForEpoch(epochNumber)` (指定 epoch)
-2. 回退：`GetSortedValidatorsWithLimit()` (当前验证者集合)
+2. ~~对于历史 epoch：回退到 `GetSortedValidatorsWithLimit()` (当前验证者集合)~~ ✅ **已移除**
+3. 对于历史 epoch：如果失败，不进行回退（validators 将为空列表）
 
-**必要性**: ❌ **不必要**
-- 对于历史 epoch，使用当前验证者集合是错误的
-- **建议**: 如果 `GetValidatorsForEpoch` 失败，应该返回错误或空列表
+**必要性**: ✅ **已优化**
+- ✅ **已修复**: 对于历史 epoch，如果 `GetValidatorsForEpoch` 失败，不再回退到当前验证者集合
+- 调用方可以根据需要处理空列表情况
 
 ---
 
 ### 2. 数据库操作回退逻辑
 
 #### 2.1 `getVoterInfo()` - 获取投票者信息
-**文件**: `consensus/dpos/state_store_stake.go:586-590`  
+**文件**: `consensus/dpos/state_store_stake.go:576-584`  
 **调用方**: `StakeStore.getVoterInfo()`  
 **回退链**:
 1. 优先：`dbHelper.getFromBucket()` (使用 dbHelper)
-2. 回退：直接操作 bucket (兼容性)
+2. ~~回退：直接操作 bucket (兼容性)~~ ✅ **已移除**
 
-**必要性**: ⚠️ **可能不必要**
-- 如果 `dbHelper` 不可用，说明代码有问题
-- **建议**: 移除回退，直接返回错误
+**必要性**: ✅ **已优化**
+- ✅ **已修复**: 移除了回退逻辑，如果 `dbHelper` 为 nil，直接返回错误
+- 如果 `dbHelper` 不可用，说明代码有问题，应该直接失败
 
 ---
 
 #### 2.2 `setVoterInfo()` - 设置投票者信息
-**文件**: `consensus/dpos/state_store_stake.go:616-620`  
+**文件**: `consensus/dpos/state_store_stake.go:605-615`  
 **调用方**: `StakeStore.setVoterInfo()`  
 **回退链**:
 1. 优先：`dbHelper.saveToBucket()` (使用 dbHelper)
-2. 回退：直接操作 bucket (兼容性)
+2. ~~回退：直接操作 bucket (兼容性)~~ ✅ **已移除**
 
-**必要性**: ⚠️ **可能不必要**
-- 如果 `dbHelper` 不可用，说明代码有问题
-- **建议**: 移除回退，直接返回错误
+**必要性**: ✅ **已优化**
+- ✅ **已修复**: 移除了回退逻辑，如果 `dbHelper` 为 nil，直接返回错误
+- 如果 `dbHelper` 不可用，说明代码有问题，应该直接失败
 
 ---
 
 #### 2.3 `getDelegatesAtBlock()` - 获取指定区块的验证者
-**文件**: `consensus/dpos/state_store_stake.go:1066-1070`  
+**文件**: `consensus/dpos/state_store_stake.go:1011-1064`  
 **调用方**: `ValidatorStore.getDelegatesAtBlock()`  
 **回退链**:
-1. 优先：`dbHelper.getFromBucket()` (使用 dbHelper)
-2. 回退：直接操作 bucket (兼容性，不应该发生)
+1. 优先：`dbHelper.forEachInBucketWithUnmarshal()` (使用 dbHelper)
+2. ~~回退：直接操作 bucket (兼容性，不应该发生)~~ ✅ **已移除**
 
-**必要性**: ❌ **不必要**
-- 注释说"不应该发生"，说明这是防御性代码
-- **建议**: 移除回退，直接返回错误
+**必要性**: ✅ **已优化**
+- ✅ **已修复**: 移除了回退逻辑，如果 `dbHelper` 为 nil，直接返回错误
+- 注释说"不应该发生"，说明这是防御性代码，现在直接失败更合理
 
 ---
 
 ### 3. 奖励计算回退逻辑
 
 #### 3.1 `DistributeEpochReward()` - 分发 epoch 奖励
-**文件**: `consensus/dpos/rewards.go:271-282`  
+**文件**: `consensus/dpos/rewards.go:269-280`  
 **调用方**: `DistributeEpochReward()`  
 **回退链**:
 1. 优先：`d.reward.CalculateRewards()` (模块化奖励计算)
-2. 回退：`d.rewardDistributor.CalculateRewards()` (本地奖励分发器)
+2. ~~回退：`d.rewardDistributor.CalculateRewards()` (本地奖励分发器)~~ ✅ **已移除**
 
-**必要性**: ✅ **必要**
-- 模块化奖励计算可能失败或未初始化
-- 需要回退到本地分发器确保奖励能够分发
+**必要性**: ✅ **已优化（严格模块化）**
+- ✅ **已修复**：采用方案2（严格模块化）
+- 如果 `d.reward` 未初始化，直接返回错误：`"reward module not initialized"`
+- 如果 `d.reward.CalculateRewards()` 失败，直接返回错误，不再回退到本地分发器
+- 确保模块化设计的一致性，避免静默回退掩盖问题
 
 ---
 
 #### 3.2 `CalculateEpochRewards()` - 计算 epoch 奖励
-**文件**: `consensus/dpos/rewards.go:433-444`  
+**文件**: `consensus/dpos/rewards.go:424-435`  
 **调用方**: `CalculateEpochRewards()`  
 **回退链**:
 1. 优先：`d.reward.CalculateRewards()` (模块化奖励计算)
-2. 回退：`d.rewardDistributor.CalculateRewards()` (本地奖励分发器)
+2. ~~回退：`d.rewardDistributor.CalculateRewards()` (本地奖励分发器)~~ ✅ **已移除**
 
-**必要性**: ✅ **必要**
-- 与 `DistributeEpochReward()` 相同的回退逻辑
-- 确保奖励计算能够正常工作
+**必要性**: ✅ **已优化（严格模块化）**
+- ✅ **已修复**：采用方案2（严格模块化）
+- 如果 `d.reward` 未初始化，直接返回错误：`"reward module not initialized"`
+- 如果 `d.reward.CalculateRewards()` 失败，直接返回错误，不再回退到本地分发器
+- 与 `DistributeEpochReward()` 保持一致的严格模块化策略
 
 ---
 
 ### 4. 验证者保存回退逻辑
 
 #### 4.1 `saveNextEpochValidators()` - 保存下一个 epoch 验证者
-**文件**: `consensus/dpos/validator_mgmt_fault.go:714-726`  
-**调用方**: `saveNextEpochValidators()`  
+**文件**: `consensus/dpos/validator_mgmt_fault.go:717-762`  
+**调用方**: 
+- `applyNextEpochValidatorsFromExtra()` (从ExtraData应用验证者)
+- `updateNextEpochValidatorsFromLocal()` (从本地计算结果更新)
+- `updateValidatorsInDatabase()` (更新数据库中的验证者)
+- 通过 `epoch_module.go` 注入到 `SaveNextEpochValidators` 依赖
+
 **回退链**:
 1. 优先：`d.stateMgr.SaveValidators()` (state 模块)
 2. 回退：`store.SaveEpochValidators()` (legacy 方式)
 
-**必要性**: ✅ **必要**
-- state 模块可能未初始化或失败
-- 需要回退到 legacy 方式确保验证者能够保存
+**必要性**: ⚠️ **可能不必要**
+- **问题分析**：
+  - `d.stateMgr.SaveValidators()` → `StateManagerAdapter.SaveValidators()` → `store.SaveEpochValidators()`
+  - `store.SaveEpochValidators()` (legacy 方式) → `store.SaveEpochValidators()`
+  - **两种方式实际上调用的是同一个函数 `store.SaveEpochValidators()`**
+  - 唯一的区别是：state 模块会先计算 epoch 号，然后调用 `SaveEpochValidators`；legacy 方式也是先计算 epoch 号，然后调用 `SaveEpochValidators`
+- **当前设计问题**：
+  - state 模块只是一个包装层，没有提供额外的功能或不同的保存逻辑
+  - 如果 state 模块失败，回退到 legacy 方式实际上没有意义（因为两者是同一个实现）
+  - 代码中已经计算了 `nextEpochNumber`，两种方式都会使用相同的 epoch 号
+- **建议**：
+  - **方案1（推荐）**：如果 `d.stateMgr` 已初始化，使用它；如果未初始化，直接使用 `store.SaveEpochValidators()`。不需要"回退"的概念，因为两者最终调用同一个函数。
+  - **方案2**：如果模块化是设计目标，那么 state 模块失败时应该返回错误，而不是静默回退。这样可以确保模块化设计的一致性。
 
 ---
 
@@ -219,15 +240,34 @@
 ---
 
 #### 5.3 `initializeDelegates()` - 配置回退
-**文件**: `consensus/dpos/validator_mgmt_delegate.go:92-94`  
+**文件**: `consensus/dpos/validator_mgmt_delegate.go:91`  
 **调用方**: `initializeDelegates()`  
 **回退链**:
-1. 优先：`d.config.DPoSValidatorsCount` (新配置)
-2. 回退：`d.config.DelegateCount` (旧配置)
+1. ~~优先：`d.config.DPoSValidatorsCount` (新配置)~~ ✅ **已移除**
+2. ~~回退：`d.config.DelegateCount` (旧配置)~~ ✅ **已移除**
 
-**必要性**: ✅ **必要**
-- 向后兼容旧配置
-- 如果新配置为 0，使用旧配置
+**代码位置**:
+```91:91:consensus/dpos/validator_mgmt_delegate.go
+maxDelegates := int(d.config.DPoSValidatorsCount)
+```
+
+**配置字段说明**:
+- `DPoSValidatorsCount`: `dpos_validators_count` - 用于限制验证者数量的配置字段
+- `DelegateCount`: `delegateCount` - 旧版本的配置字段（已废弃，仅用于兼容）
+
+**必要性**: ❌ **不必要（已移除）**
+- **问题分析**：
+  - 在 `dpos.go:743-746` 中，配置解析时会**同时设置**两个字段为相同的值：
+    ```go
+    if count, ok := parser.GetUint64("dposValidatorsCount", "dpos_validators_count"); ok {
+        vcity_dpos.config.DelegateCount = count
+        vcity_dpos.config.DPoSValidatorsCount = count
+    }
+    ```
+  - 如果配置文件中只有 `dpos_validators_count`，两个字段都会被设置为相同的值
+  - 如果配置文件中没有 `dpos_validators_count`，两个字段都是 0
+  - **因此，如果 `DPoSValidatorsCount == 0`，那么 `DelegateCount` 也一定是 0，回退逻辑没有意义**
+- ✅ **已修复**: 移除了回退逻辑，直接使用 `DPoSValidatorsCount`
 
 ---
 
@@ -349,16 +389,29 @@
 
 ### 9. 交易池回退逻辑
 
-#### 9.1 `createDelegateRegistrationTransaction()` - 创建委托注册交易
-**文件**: `consensus/dpos/validator_mgmt_delegate.go:1269-1276`  
-**调用方**: `createDelegateRegistrationTransaction()`  
+#### 9.1 `createDelegateRegistrationTransactionWithChainID()` - 创建委托注册交易
+**文件**: `consensus/dpos/validator_mgmt_delegate.go:1256-1288`  
+**调用方**: `createDelegateRegistrationTransactionWithChainID()`  
 **回退链**:
 1. 优先：添加到交易池 (`txPool.AddTx()`)
-2. 回退：直接更新状态（作为 fallback）
+2. ~~回退：直接更新状态（作为 fallback）~~ ✅ **已移除**
 
-**必要性**: ⚠️ **可能不必要**
-- 如果交易池不支持 `AddTx`，应该返回错误
-- **建议**: 移除回退，直接返回错误
+**代码位置**:
+```1281:1288:consensus/dpos/validator_mgmt_delegate.go
+// 如果交易池添加失败，返回错误（包含原始错误信息）
+if !txAdded {
+    d.logger.Error("❌ 交易池添加失败，无法完成受托人注册", "error", addTxErr)
+    if addTxErr != nil {
+        return fmt.Errorf("failed to add delegate registration transaction to pool: %w", addTxErr)
+    }
+    return fmt.Errorf("failed to add delegate registration transaction to pool")
+}
+```
+
+**必要性**: ✅ **已优化**
+- ✅ **已修复**: 移除了回退逻辑，如果交易池不支持 `AddTx` 或添加失败，直接返回错误
+- 交易池是必需的组件，如果无法添加交易，应该直接失败，而不是静默回退
+- 这样可以确保交易能够正确进入交易池并被广播
 
 ---
 
@@ -374,15 +427,25 @@
 7. 区块构建（缓存失效时）
 8. 配置（默认值）
 
+### 已优化的回退逻辑（✅）
+1. ✅ `calculateMissedBlocksWithActual()` - 对于历史 epoch，如果 `getValidatorsForEpoch` 失败，直接返回错误
+2. ✅ `GetValidatorsForDetection()` - 对于历史 epoch，如果 `getValidatorsForEpoch` 失败，直接返回错误
+3. ✅ `GetEpochInfoByNumber()` (新模块) - 对于历史 epoch，如果 `GetValidatorsForEpoch` 失败，不再回退到当前验证者集合
+4. ✅ `getEpochInfoByNumberLegacy()` - 函数已删除，逻辑已迁移到新模块
+
+### 已优化的回退逻辑（✅）
+1. ✅ `getVoterInfo()` - 移除了数据库操作回退，如果 `dbHelper` 为 nil，直接返回错误
+2. ✅ `setVoterInfo()` - 移除了数据库操作回退，如果 `dbHelper` 为 nil，直接返回错误
+3. ✅ `getDelegatesAtBlock()` - 移除了数据库操作回退，如果 `dbHelper` 为 nil，直接返回错误
+4. ✅ `DistributeEpochReward()` - 移除了奖励计算回退，采用严格模块化策略
+5. ✅ `CalculateEpochRewards()` - 移除了奖励计算回退，采用严格模块化策略
+6. ✅ `saveNextEpochValidators()` - 移除了验证者保存回退，采用严格模块化策略
+7. ✅ `initializeDelegates()` - 移除了配置回退逻辑（`DPoSValidatorsCount` 和 `DelegateCount` 总是同时设置，回退无意义）
+8. ✅ `createDelegateRegistrationTransactionWithChainID()` - 移除了交易池回退，如果交易池不支持 `AddTx` 或添加失败，直接返回错误
+
 ### 不必要的回退逻辑（❌）
-1. 历史 epoch 验证者查询回退到当前验证者（不准确）
-2. 数据库操作回退到直接操作（不应该发生）
+无（已全部优化）
 
 ### 需要改进的回退逻辑（⚠️）
-1. `updateBlockProducersFromFaultFlags()` - 第三个回退应该使用 `GetEpochValidatorsByEpoch`
-2. `calculateMissedBlocksWithActual()` - 历史 epoch 不应该使用当前内存验证者
-3. `getEpochInfoByNumberLegacy()` - 历史 epoch 不应该使用当前验证者集合
-4. `GetValidatorsForDetection()` - 历史 epoch 不应该使用当前内存验证者
-5. `GetEpochInfoByNumber()` (新模块) - 历史 epoch 不应该使用当前验证者集合
-6. 数据库操作回退 - 应该直接返回错误而不是回退
+无（已全部优化）
 

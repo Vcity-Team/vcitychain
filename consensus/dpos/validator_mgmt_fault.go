@@ -256,9 +256,6 @@ func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) er
 
 	// 5. 应用配置限制
 	maxValidators := d.config.DPoSValidatorsCount
-	if maxValidators == 0 {
-		maxValidators = d.config.DelegateCount
-	}
 
 	d.logger.Info("🎯 验证者截取逻辑",
 		"maxValidators", maxValidators,
@@ -363,9 +360,6 @@ func (d *DPoS) reloadValidatorsAfterRecovery() error {
 
 	// 4. 应用配置限制
 	maxValidators := int(d.config.DPoSValidatorsCount)
-	if maxValidators == 0 {
-		maxValidators = int(d.config.DelegateCount)
-	}
 
 	var finalValidators validator.AccountSet
 	if len(activeValidators) <= maxValidators {
@@ -578,12 +572,31 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 		epochToCheck = endEpoch
 		epochNumberForCheck := epochToCheck + 1
 
+		// 计算当前epoch，判断是否为历史epoch
+		currentBlockNumber := d.getCurrentBlockNumber()
+		consensusSwitchHeight := d.config.ConsensusSwitchHeight
+		var currentEpoch uint64
+		if currentBlockNumber < consensusSwitchHeight {
+			currentEpoch = 0
+		} else {
+			dposBlockNumber := currentBlockNumber - consensusSwitchHeight
+			currentEpoch = (dposBlockNumber / blocksPerEpoch) + 1
+		}
+		isHistoricalEpoch := epochNumberForCheck < currentEpoch
+
 		// ✅ 修复：从该epoch开始区块的ExtraData或数据库获取该epoch的验证者集合
 		validatorsCount := uint64(0)
 		if epochValidators, err := d.getValidatorsForEpoch(epochNumberForCheck); err == nil && len(epochValidators) > 0 {
 			validatorsCount = uint64(len(epochValidators))
 		} else {
-			// 备用方案：使用当前内存中的验证者集合
+			// 对于历史epoch，如果获取失败，直接返回错误（不使用当前内存验证者，因为不准确）
+			if isHistoricalEpoch {
+				d.logger.Error("❌ 无法获取历史epoch的验证者集合",
+					"epochNumber", epochNumberForCheck,
+					"error", err)
+				return 0, 0, 0 // 返回零值表示失败
+			}
+			// 对于当前epoch或未来epoch，可以使用当前内存中的验证者集合作为备用
 			if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
 				validatorsCount = uint64(len(d.runtime.delegates))
 			} else if len(d.delegates) > 0 {
@@ -711,33 +724,24 @@ func (d *DPoS) saveNextEpochValidators(validators validator.AccountSet) error {
 		nextEpochNumber = currentEpoch + 1
 	}
 
-	if d.stateMgr != nil {
-		if err := d.stateMgr.SaveValidators(blockNumber, validators); err != nil {
-			d.logger.Warn("state manager 保存验证者集合失败，尝试回退",
-				"error", err,
-				"count", len(validators))
-		} else {
-			d.logger.Info("✅ 下一个epoch验证者集合保存成功（state模块）",
-				"count", len(validators),
-				"blockNumber", blockNumber,
-				"nextEpochNumber", nextEpochNumber)
-			return nil
-		}
+	// 使用 state 模块保存验证者集合
+	if d.stateMgr == nil {
+		d.logger.Error("❌ state模块未初始化", "blockNumber", blockNumber)
+		return fmt.Errorf("state module not initialized")
 	}
 
-	store, err := d.getStateStore()
-	if err != nil {
-		return err
+	if err := d.stateMgr.SaveValidators(blockNumber, validators); err != nil {
+		d.logger.Error("❌ state模块保存验证者集合失败",
+			"error", err,
+			"count", len(validators),
+			"blockNumber", blockNumber,
+			"nextEpochNumber", nextEpochNumber)
+		return fmt.Errorf("failed to save validators via state module: %w", err)
 	}
 
-	// 🆕 传入epoch号保存
-	if err := store.SaveEpochValidators(nextEpochNumber, validators); err != nil {
-		d.logger.Error("❌ 保存下一个epoch验证者集合失败", "error", err, "nextEpochNumber", nextEpochNumber)
-		return err
-	}
-
-	d.logger.Info("✅ 下一个epoch验证者集合保存成功（legacy）",
+	d.logger.Info("✅ 下一个epoch验证者集合保存成功（state模块）",
 		"count", len(validators),
+		"blockNumber", blockNumber,
 		"nextEpochNumber", nextEpochNumber)
 	return nil
 }

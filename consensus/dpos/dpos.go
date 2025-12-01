@@ -1935,16 +1935,9 @@ func (d *DPoS) syncDelegatesToDatabase(delegates validator.AccountSet) error {
 
 // 获取数据目录路径
 func (d *DPoS) getDataDir() string {
-	// 从DPoS实例的数据目录字段获取
 	if d.dataDir != "" {
 		return d.dataDir
 	}
-
-	// 备用方案：从环境变量获取
-	if dataDir := os.Getenv("VCITY_DATA_DIR"); dataDir != "" {
-		return dataDir
-	}
-
 	return "" // 返回空字符串表示未找到
 }
 

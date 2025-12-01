@@ -89,9 +89,6 @@ func (d *DPoS) initializeDelegates() error {
 
 			// 🆕 显著日志：显示截取逻辑
 			maxDelegates := int(d.config.DPoSValidatorsCount)
-			if maxDelegates == 0 {
-				maxDelegates = int(d.config.DelegateCount) // 回退到旧配置
-			}
 			originalCount := len(dbValidators)
 
 			d.logger.Info("🎯 ===== 验证者截取逻辑 =====")
@@ -1266,7 +1263,6 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 			if err := realTxPool.AddTx(tx); err != nil {
 				d.logger.Error("❌ 添加交易到交易池失败", "error", err)
 				addTxErr = err
-				// 继续执行，作为fallback直接更新状态
 			} else {
 				d.logger.Info("🎉 受托人注册交易已成功添加到交易池！",
 					"txHash", tx.Hash.String(),

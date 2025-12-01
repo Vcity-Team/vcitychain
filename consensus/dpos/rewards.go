@@ -266,26 +266,18 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		return fmt.Errorf("rewardDistributor is nil")
 	}
 
-	// 3. 使用 Reward 管理器计算奖励（优先模块，如不可用回退到本地分发器）
-	var rewards map[types.Address]*big.Int
-	if d.reward != nil {
-		moduleRewards, err := d.reward.CalculateRewards(epochNumber)
-		if err != nil {
-			d.logger.Warn("⚠️ 模块化奖励计算失败，回退到本地奖励分发器",
-				"epoch", epochNumber,
-				"error", err)
-		} else {
-			rewards = moduleRewards
-		}
+	// 3. 使用 Reward 管理器计算奖励
+	if d.reward == nil {
+		d.logger.Error("❌ reward模块未初始化", "epoch", epochNumber)
+		return fmt.Errorf("reward module not initialized")
 	}
 
-	if rewards == nil && d.rewardDistributor != nil {
-		rewards = d.rewardDistributor.CalculateRewards(
-			validators,
-			voters,
-			blockCounts,
-			totalBlocks,
-		)
+	rewards, err := d.reward.CalculateRewards(epochNumber)
+	if err != nil {
+		d.logger.Error("❌ 模块化奖励计算失败",
+			"epoch", epochNumber,
+			"error", err)
+		return fmt.Errorf("failed to calculate rewards: %w", err)
 	}
 
 	if rewards == nil {
@@ -424,25 +416,18 @@ func (d *DPoS) calculateAndRecordEpochRewards(epochNumber uint64) error {
 		return nil
 	}
 
-	voters := d.GetVoters()
-	if voters == nil {
-		voters = make(map[types.Address]*VoterInfo)
+	// 使用 Reward 管理器计算奖励-模块内部会自动获取voters信息，不需要外部传入
+	if d.reward == nil {
+		d.logger.Error("❌ reward模块未初始化", "epoch", epochNumber)
+		return fmt.Errorf("reward module not initialized")
 	}
 
-	var rewards map[types.Address]*big.Int
-	if d.reward != nil {
-		moduleRewards, err := d.reward.CalculateRewards(epochNumber)
-		if err != nil {
-			d.logger.Warn("⚠️ 模块化奖励计算失败，回退到本地奖励分发器",
-				"epoch", epochNumber,
-				"error", err)
-		} else {
-			rewards = moduleRewards
-		}
-	}
-
-	if rewards == nil && d.rewardDistributor != nil {
-		rewards = d.rewardDistributor.CalculateRewards(validators, voters, blockCounts, totalBlocks)
+	rewards, err := d.reward.CalculateRewards(epochNumber)
+	if err != nil {
+		d.logger.Error("❌ 模块化奖励计算失败",
+			"epoch", epochNumber,
+			"error", err)
+		return fmt.Errorf("failed to calculate rewards: %w", err)
 	}
 
 	if rewards == nil {

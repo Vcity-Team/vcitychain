@@ -263,12 +263,6 @@ func (m *Manager) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{
 		if m.deps.GetValidatorsForEpoch != nil {
 			dbValidators, err = m.deps.GetValidatorsForEpoch(epochNumber)
 		}
-		// 如果 GetValidatorsForEpoch 不可用，回退到当前验证者集合（兼容性）
-		if err != nil || len(dbValidators) == 0 {
-			if m.deps.GetSortedValidatorsWithLimit != nil {
-				dbValidators, err = m.deps.GetSortedValidatorsWithLimit()
-			}
-		}
 	} else {
 		// 当前epoch或未来epoch：使用当前验证者集合
 		if m.deps.GetSortedValidatorsWithLimit != nil {
