@@ -176,8 +176,8 @@ func (d *DPoS) getValidatorFaultInfo(validatorAddr types.Address) map[string]int
 	}
 
 	// 从数据库读取故障状态
-	if d.state != nil && d.state.StakeStore != nil {
-		dbFaultInfo, err := d.state.StakeStore.GetValidatorFaultStatus(validatorAddr)
+	if store, err := d.getStateStore(); err == nil {
+		dbFaultInfo, err := store.GetValidatorFaultStatus(validatorAddr)
 		if err != nil {
 			d.logger.Warn("⚠️ 读取验证者故障状态失败",
 				"address", validatorAddr.String(),
@@ -233,8 +233,9 @@ func (d *DPoS) getFaultDetector() *FaultDetector {
 
 // saveFaultStatusToDatabase 保存故障状态到数据库的辅助方法
 func (d *DPoS) saveFaultStatusToDatabase(faultFlag FaultFlagInfo) error {
-	if d.state == nil || d.state.StakeStore == nil {
-		return fmt.Errorf("state store not available")
+	store, err := d.getStateStore()
+	if err != nil {
+		return err
 	}
 
 	d.logger.Info("💾 保存验证者故障状态",
@@ -245,7 +246,7 @@ func (d *DPoS) saveFaultStatusToDatabase(faultFlag FaultFlagInfo) error {
 		"epoch", faultFlag.EpochNumber,
 		"reason", faultFlag.Reason)
 
-	return d.state.StakeStore.UpdateValidatorFaultStatus(
+	return store.UpdateValidatorFaultStatus(
 		faultFlag.NodeAddress,
 		faultFlag.IsFaulty,
 		faultFlag.MissedBlocks,
@@ -275,10 +276,6 @@ func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) er
 	d.logger.Info("🔄 开始根据故障标志重新计算出块者列表", "faultFlagsCount", len(faultFlags))
 
 	// 1. 获取所有验证者
-	if d.state == nil || d.state.StakeStore == nil {
-		return fmt.Errorf("state store not available")
-	}
-
 	var allValidators validator.AccountSet
 	if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
 		allValidators = d.runtime.delegates.Copy()
@@ -287,7 +284,16 @@ func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) er
 		allValidators = d.delegates.Copy()
 		d.logger.Info("✅ 使用d.delegates", "count", len(allValidators))
 	} else {
-		return fmt.Errorf("no validators set in memory")
+		if store, err := d.getStateStore(); err == nil {
+			if dbValidators, err := store.GetEpochValidators(); err == nil && len(dbValidators) > 0 {
+				allValidators = dbValidators
+				d.logger.Info("✅ 使用数据库中的验证者", "count", len(allValidators))
+			} else {
+				return fmt.Errorf("no validators set in memory or database")
+			}
+		} else {
+			return fmt.Errorf("no validators set in memory and state store not available")
+		}
 	}
 
 	// 2. 创建故障映射
@@ -518,8 +524,8 @@ func (d *DPoS) getValidatorsForEpoch(epochNumber uint64) (validator.AccountSet, 
 	}
 
 	// 方式2：从数据库获取（如果ExtraData中没有）
-	if d.state != nil && d.state.StakeStore != nil {
-		if validators, err := d.state.StakeStore.GetEpochValidators(); err == nil && len(validators) > 0 {
+	if store, err := d.getStateStore(); err == nil {
+		if validators, err := store.GetEpochValidators(); err == nil && len(validators) > 0 {
 			d.logger.Info("✅ 从数据库获取epoch验证者集合",
 				"epochNumber", epochNumber,
 				"validatorsCount", len(validators))
@@ -688,11 +694,12 @@ func (d *DPoS) saveNextEpochValidators(validators validator.AccountSet) error {
 		}
 	}
 
-	if d.state == nil || d.state.StakeStore == nil {
-		return fmt.Errorf("stake store not available")
+	store, err := d.getStateStore()
+	if err != nil {
+		return err
 	}
 
-	if err := d.state.StakeStore.SaveEpochValidators(validators); err != nil {
+	if err := store.SaveEpochValidators(validators); err != nil {
 		d.logger.Error("❌ 保存下一个epoch验证者集合失败", "error", err)
 		return err
 	}
@@ -744,11 +751,12 @@ func (d *DPoS) applyNextEpochValidatorsFromExtra(validators validator.AccountSet
 
 // getEpochValidatorsFromDatabase 从数据库获取epoch验证者
 func (d *DPoS) getEpochValidatorsFromDatabase() (validator.AccountSet, error) {
-	if d.state == nil || d.state.StakeStore == nil {
-		return nil, fmt.Errorf("stake store not available")
+	store, err := d.getStateStore()
+	if err != nil {
+		return nil, err
 	}
 
-	validators, err := d.state.StakeStore.GetEpochValidators()
+	validators, err := store.GetEpochValidators()
 	if err != nil {
 		// 🆕 使用日志频率限制，10秒一次
 		d.logOnceWithInterval("get_epoch_validators_failed", 10*time.Second, "warn",
@@ -807,12 +815,13 @@ func (d *DPoS) executeSlashing(
 		"epochNumber", epochNumber,
 		"reason", reason)
 
-	if d.state == nil || d.state.StakeStore == nil {
-		return fmt.Errorf("state store not available")
+	store, err := d.getStateStore()
+	if err != nil {
+		return err
 	}
 
 	// 🆕 幂等性检查：检查是否已经执行过该区块的消减
-	if hasHistory, err := d.state.StakeStore.HasSlashingHistory(validatorAddr, blockNumber); err != nil {
+	if hasHistory, err := store.HasSlashingHistory(validatorAddr, blockNumber); err != nil {
 		d.logger.Warn("⚠️ 检查消减历史失败，继续执行（可能重复）",
 			"validator", validatorAddr.String(),
 			"blockNumber", blockNumber,
@@ -827,7 +836,7 @@ func (d *DPoS) executeSlashing(
 	}
 
 	// 1. 获取验证者的当前 VotingPower
-	validator, err := d.state.StakeStore.GetDelegateInfo(validatorAddr)
+	validator, err := store.GetDelegateInfo(validatorAddr)
 	if err != nil || validator == nil {
 		return fmt.Errorf("failed to get validator info: %w", err)
 	}
@@ -843,7 +852,7 @@ func (d *DPoS) executeSlashing(
 		"oldVotingPower", oldVotingPower.String())
 
 	// 2. 获取所有投票给该验证者的质押记录
-	allStakes, err := d.state.StakeStore.GetStakingInfo()
+	allStakes, err := store.GetStakingInfo()
 	if err != nil {
 		return fmt.Errorf("failed to get staking info: %w", err)
 	}
@@ -990,6 +999,12 @@ func (d *DPoS) executeSlashing(
 	}
 
 	// 6. 保存削减历史（验证者级别）
+	store, err2 := d.getStateStore()
+	if err2 != nil {
+		d.logger.Warn("⚠️ 状态存储不可用，无法保存削减历史", "error", err2)
+		return err2
+	}
+
 	slashingHistory := &SlashingHistory{
 		ValidatorAddr:          validatorAddr,
 		BlockNumber:            blockNumber,
@@ -1004,7 +1019,7 @@ func (d *DPoS) executeSlashing(
 		MissedBlocksPercentage: missedBlocksPercentage,
 		DoubleSigningHeight:    doubleSigningHeight,
 	}
-	if err := d.state.StakeStore.SaveSlashingHistory(slashingHistory); err != nil {
+	if err := store.SaveSlashingHistory(slashingHistory); err != nil {
 		d.logger.Warn("⚠️ 保存削减历史失败", "error", err)
 	}
 
@@ -1098,8 +1113,13 @@ func (d *DPoS) updateVoterVoteAmountForValidator(
 	doubleSigningHeight uint64,
 	dbTx *bolt.Tx, // 🆕 使用外部事务，避免嵌套事务
 ) error {
+	store, err := d.getStateStore()
+	if err != nil {
+		return err
+	}
+
 	// 1. 获取 VoterInfo（使用外部事务）
-	voterInfo, err := d.state.StakeStore.getVoterInfo(voterAddr, dbTx)
+	voterInfo, err := store.getVoterInfo(voterAddr, dbTx)
 	if err != nil {
 		return fmt.Errorf("failed to get voter info: %w", err)
 	}
@@ -1145,7 +1165,7 @@ func (d *DPoS) updateVoterVoteAmountForValidator(
 	d.voters[voterAddr] = voterInfo
 
 	// 7. 保存到数据库（使用外部事务）
-	if err := d.state.StakeStore.setVoterInfo(voterAddr, voterInfo, dbTx); err != nil {
+	if err := store.setVoterInfo(voterAddr, voterInfo, dbTx); err != nil {
 		return fmt.Errorf("failed to save voter info: %w", err)
 	}
 
@@ -1161,6 +1181,11 @@ func (d *DPoS) updateStakingInfoAfterSlashing(
 	slashingRecord *SlashingRecord,
 	dbTx *bolt.Tx, // 🆕 使用外部事务，避免嵌套事务
 ) error {
+	store, err := d.getStateStore()
+	if err != nil {
+		return err
+	}
+
 	// 如果 dbTx 为 nil，开启新事务（兼容性）
 	if dbTx == nil {
 		var err error
@@ -1172,7 +1197,7 @@ func (d *DPoS) updateStakingInfoAfterSlashing(
 	}
 
 	// 1. 获取所有 StakeInfo 记录（在事务中读取）
-	allStakes, err := d.state.StakeStore.GetStakingInfo()
+	allStakes, err := store.GetStakingInfo()
 	if err != nil {
 		return fmt.Errorf("failed to get staking info: %w", err)
 	}

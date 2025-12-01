@@ -116,11 +116,16 @@ func (d *DPoS) applyCommissionDefaults(info *DelegateInfo) {
 }
 
 func (d *DPoS) populateCommissionFields(delegate types.Address, info *DelegateInfo) {
-	if info == nil || d == nil || d.state == nil || d.state.StakeStore == nil {
+	if info == nil || d == nil {
 		return
 	}
 
-	existing, err := d.state.StakeStore.GetDelegateInfo(delegate)
+	store, err := d.getStateStore()
+	if err != nil {
+		return
+	}
+
+	existing, err := store.GetDelegateInfo(delegate)
 	if err != nil {
 		d.logger.Debug("⚠️ 获取受托人佣金信息失败，使用默认值",
 			"delegate", delegate.String(),
@@ -1404,11 +1409,12 @@ func (d *DPoS) GetCurrentRound() uint64 {
 func (d *DPoS) GetCurrentDelegate() types.Address {
 	// 🆕 已删除 currentDelegateIndex
 	// 现在完全基于时间slot实时计算
-	if d.state == nil || d.state.StakeStore == nil {
+	store, err := d.getStateStore()
+	if err != nil {
 		return types.ZeroAddress
 	}
 
-	validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	validators, err := store.GetValidatorsWithFilter(false)
 	if err != nil || len(validators) == 0 {
 		return types.ZeroAddress
 	}
@@ -1936,11 +1942,6 @@ func (d *DPoS) callCommandDataSourcesOnStartup() error {
 func (d *DPoS) syncDelegatesToDatabase(delegates validator.AccountSet) error {
 	d.logger.Info("💾 开始将验证者数据同步到数据库...")
 
-	if d.state == nil || d.state.StakeStore == nil {
-		d.logger.Warn("⚠️ 状态存储不可用，无法同步验证者数据到数据库")
-		return fmt.Errorf("state store not available")
-	}
-
 	if len(delegates) == 0 {
 		d.logger.Warn("⚠️ 验证者集合为空，无需同步到数据库")
 		return nil
@@ -2022,12 +2023,13 @@ func (d *DPoS) GetValidators() validator.AccountSet {
 
 // syncDelegateFromDatabase 从数据库同步指定验证者到内存
 func (d *DPoS) syncDelegateFromDatabase(delegate types.Address) error {
-	if d.state == nil || d.state.StakeStore == nil {
-		return fmt.Errorf("state store not available")
+	store, err := d.getStateStore()
+	if err != nil {
+		return err
 	}
 
 	// 从数据库获取验证者信息
-	validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	validators, err := store.GetValidatorsWithFilter(false)
 	if err != nil {
 		return fmt.Errorf("failed to get validators from database: %w", err)
 	}

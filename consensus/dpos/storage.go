@@ -19,7 +19,11 @@ import (
 // debugDatabaseContents 调试数据库内容
 func (d *DPoS) debugDatabaseContents() {
 	if d.state != nil && d.state.StakeStore != nil {
-		d.state.StakeStore.db.View(func(tx *bolt.Tx) error {
+		store, err := d.getStateStore()
+		if err != nil {
+			return
+		}
+		store.db.View(func(tx *bolt.Tx) error {
 			// 检查VoterInfo bucket
 			voterBucket := tx.Bucket([]byte("VoterInfo"))
 			if voterBucket != nil {
@@ -54,15 +58,9 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 		}(),
 		"d.dataDir", d.dataDir)
 
-	if d.state == nil || d.state.StakeStore == nil {
-		return fmt.Errorf("state store not available: d.state=%v, d.state.StakeStore=%v",
-			d.state != nil,
-			func() interface{} {
-				if d.state != nil {
-					return d.state.StakeStore != nil
-				}
-				return "N/A"
-			}())
+	store, err := d.getStateStore()
+	if err != nil {
+		return err
 	}
 
 	// 获取当前投票者信息
@@ -115,7 +113,7 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 
 	// 保存投票者信息到数据库
 	d.logger.Info("💾 Saving voter info to database...")
-	if err := d.state.StakeStore.setVoterInfo(voter, voterInfo, nil); err != nil {
+	if err := store.setVoterInfo(voter, voterInfo, nil); err != nil {
 		d.logger.Error("❌ Failed to save voter info to database", "error", err)
 		return fmt.Errorf("failed to save voter info to database: %w", err)
 	}
@@ -152,7 +150,7 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 
 	// 保存到数据库
 	// 🆕 传入 voterInfo.LastVoteTime 作为 timestamp，确保每次投票都有唯一 key
-	if err := d.state.StakeStore.setStakingInfo(voter, stakeInfo, voterInfo.LastVoteTime, dbTx); err != nil {
+	if err := store.setStakingInfo(voter, stakeInfo, voterInfo.LastVoteTime, dbTx); err != nil {
 		d.logger.Error("❌ Failed to save staking info to database", "error", err)
 		return fmt.Errorf("failed to save staking info to database: %w", err)
 	}
@@ -259,8 +257,9 @@ func (d *DPoS) loadValidatorsFromDatabaseWithLimit() error {
 
 // persistSingleDelegateToDatabase 持久化单个验证者到数据库
 func (d *DPoS) persistSingleDelegateToDatabase(del *validator.ValidatorMetadata) error {
-	if d.state == nil || d.state.StakeStore == nil {
-		d.logger.Warn("State store not available, skipping single delegate persistence")
+	store, err := d.getStateStore()
+	if err != nil {
+		d.logger.Warn("State store not available, skipping single delegate persistence", "error", err)
 		return nil
 	}
 
@@ -382,7 +381,7 @@ func (d *DPoS) persistSingleDelegateToDatabase(del *validator.ValidatorMetadata)
 		}())
 
 	// 保存到数据库
-	if err := d.state.StakeStore.setDelegateInfo(del.Address, delegateInfo, dbTx); err != nil {
+	if err := store.setDelegateInfo(del.Address, delegateInfo, dbTx); err != nil {
 		d.logger.Error("❌ Failed to save single delegate info", "address", del.Address.String(), "error", err)
 		return fmt.Errorf("failed to save single delegate info for %s: %w", del.Address.String(), err)
 	}
@@ -404,8 +403,9 @@ func (d *DPoS) persistDelegateSetToDatabase(delegates validator.AccountSet) erro
 
 // persistDelegateSetToDatabaseWithTarget 持久化验证者集合到数据库（指定目标验证者）
 func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.AccountSet, targetDelegate types.Address) error {
-	if d.state == nil || d.state.StakeStore == nil {
-		d.logger.Warn("State store not available, skipping database persistence")
+	store, err := d.getStateStore()
+	if err != nil {
+		d.logger.Warn("State store not available, skipping database persistence", "error", err)
 		return nil
 	}
 
@@ -579,7 +579,7 @@ func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.Accoun
 			}
 		}
 
-		if err := d.state.StakeStore.setDelegateInfo(del.Address, delegateInfo, dbTx); err != nil {
+		if err := store.setDelegateInfo(del.Address, delegateInfo, dbTx); err != nil {
 			d.logger.Error("❌ Failed to save delegate info", "address", del.Address.String(), "error", err)
 			return fmt.Errorf("failed to save delegate info for %s: %w", del.Address.String(), err)
 		}
@@ -613,9 +613,9 @@ func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.Accoun
 
 // restoreVotingDataFromDatabase 从数据库恢复投票数据
 func (d *DPoS) restoreVotingDataFromDatabase() error {
-	if d.state == nil || d.state.StakeStore == nil {
-		d.logger.Warn("State store not available, cannot restore voting data")
-		return fmt.Errorf("state store not available")
+	if err := d.ensureStateStore(); err != nil {
+		d.logger.Warn("State store not available, cannot restore voting data", "error", err)
+		return err
 	}
 
 	// 恢复投票者信息
@@ -639,8 +639,8 @@ func (d *DPoS) restoreVotingDataFromDatabase() error {
 
 // restoreVotersFromDatabase 从数据库恢复投票者信息
 func (d *DPoS) restoreVotersFromDatabase() error {
-	if d.state == nil || d.state.StakeStore == nil {
-		return fmt.Errorf("state store not available")
+	if err := d.ensureStateStore(); err != nil {
+		return err
 	}
 
 	// 使用数据库事务来读取所有投票者信息
@@ -682,8 +682,8 @@ func (d *DPoS) restoreVotersFromDatabase() error {
 
 // restoreDelegatesFromDatabase 从数据库恢复受托人信息
 func (d *DPoS) restoreDelegatesFromDatabase() error {
-	if d.state == nil || d.state.StakeStore == nil {
-		return fmt.Errorf("state store not available")
+	if err := d.ensureStateStore(); err != nil {
+		return err
 	}
 
 	// 使用数据库事务来读取所有受托人信息

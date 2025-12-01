@@ -64,16 +64,18 @@ func (d *DPoS) buildStateModuleDependencies() statemodule.Dependencies {
 			}, nil
 		},
 		PersistValidators: func(blockNumber uint64, validators validator.AccountSet) error {
-			if d.state == nil || d.state.StakeStore == nil {
-				return fmt.Errorf("stake store not available")
+			store, err := d.getStateStore()
+			if err != nil {
+				return err
 			}
-			return d.state.StakeStore.SaveEpochValidators(validators)
+			return store.SaveEpochValidators(validators)
 		},
 		LoadValidators: func(filterZeroVotingPower bool) (validator.AccountSet, error) {
-			if d.state == nil || d.state.StakeStore == nil {
-				return nil, fmt.Errorf("stake store not available")
+			store, err := d.getStateStore()
+			if err != nil {
+				return nil, err
 			}
-			return d.state.StakeStore.GetValidatorsWithFilter(filterZeroVotingPower)
+			return store.GetValidatorsWithFilter(filterZeroVotingPower)
 		},
 	}
 }

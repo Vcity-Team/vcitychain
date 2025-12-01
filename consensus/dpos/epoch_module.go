@@ -1,7 +1,6 @@
 package dpos
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/core"
@@ -45,10 +44,11 @@ func (d *DPoS) buildEpochLifecycleDependencies() epochmodule.LifecycleDependenci
 			return convertParameterProposalsToCore(d.governanceLoadScheduled(epochNumber))
 		},
 		ClearValidatorFaultStatus: func(address types.Address, proposalID string) error {
-			if d.state == nil || d.state.StakeStore == nil {
-				return fmt.Errorf("stake store not available")
+			store, err := d.getStateStore()
+			if err != nil {
+				return err
 			}
-			return d.state.StakeStore.ClearValidatorFaultStatus(address, proposalID)
+			return store.ClearValidatorFaultStatus(address, proposalID)
 		},
 		ClearMemoryFaultStatus: func(address types.Address) {
 			if d.faultyValidators != nil {
@@ -81,10 +81,11 @@ func (d *DPoS) buildEpochLifecycleDependencies() epochmodule.LifecycleDependenci
 			d.updateMemoryFaultStatus(convertCoreFaultFlagToLocal(flag))
 		},
 		SaveCurrentEpoch: func(epochNumber uint64, blockNumber uint64) error {
-			if d.state == nil || d.state.StakeStore == nil {
-				return fmt.Errorf("stake store not available")
+			store, err := d.getStateStore()
+			if err != nil {
+				return err
 			}
-			return d.state.StakeStore.SaveCurrentEpoch(d.currentEpoch)
+			return store.SaveCurrentEpoch(d.currentEpoch)
 		},
 		UpdateBlockProducers: func(flags []core.FaultFlagInfo) error {
 			return d.updateBlockProducersFromFaultFlags(convertCoreFaultFlagsToLocal(flags))

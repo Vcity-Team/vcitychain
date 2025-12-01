@@ -92,12 +92,13 @@ func (d *DPoS) GetValidatorsWithFilter(filterZeroVotingPower bool) (validator.Ac
 	defer d.lock.RUnlock()
 
 	// Access the stake store directly through d.state.StakeStore
-	if d.state == nil || d.state.StakeStore == nil {
-		return nil, fmt.Errorf("DPoS state or stake store is nil")
+	store, err := d.getStateStore()
+	if err != nil {
+		return nil, err
 	}
 
 	// Get validators from stake store with filtering control
-	validators, err := d.state.StakeStore.GetValidatorsWithFilter(filterZeroVotingPower)
+	validators, err := store.GetValidatorsWithFilter(filterZeroVotingPower)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get validators from stake store: %w", err)
 	}
@@ -107,12 +108,13 @@ func (d *DPoS) GetValidatorsWithFilter(filterZeroVotingPower bool) (validator.Ac
 
 // GetSortedValidatorsWithLimit 获取排序后的验证者集合（带限制）
 func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
-	if d.state == nil || d.state.StakeStore == nil {
-		return nil, fmt.Errorf("stake store not available")
+	store, err := d.getStateStore()
+	if err != nil {
+		return nil, err
 	}
 
 	// 从数据库读取所有验证者
-	validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	validators, err := store.GetValidatorsWithFilter(false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get validators from database: %w", err)
 	}

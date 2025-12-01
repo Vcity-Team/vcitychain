@@ -14,9 +14,10 @@ import (
 func (d *DPoS) saveValidatorsWithBLSKeysToDatabase() error {
 	d.logger.Info("💾 开始保存验证者信息（含BLS公钥）到数据库...")
 
-	if d.state == nil || d.state.StakeStore == nil {
-		d.logger.Warn("⚠️ 状态存储不可用，无法保存验证者信息到数据库")
-		return fmt.Errorf("state store not available")
+	store, err := d.getStateStore()
+	if err != nil {
+		d.logger.Warn("⚠️ 状态存储不可用，无法保存验证者信息到数据库", "error", err)
+		return err
 	}
 
 	validators := d.getAllValidators()
@@ -70,7 +71,7 @@ func (d *DPoS) saveValidatorsWithBLSKeysToDatabase() error {
 		}
 
 		// 保存到数据库
-		if err := d.state.StakeStore.setDelegateInfo(validator.Address, delegateInfo, nil); err != nil {
+		if err := store.setDelegateInfo(validator.Address, delegateInfo, nil); err != nil {
 			d.logger.Warn("⚠️ 保存验证者信息到数据库失败",
 				"address", validator.Address.String(),
 				"error", err)
@@ -112,13 +113,14 @@ func (d *DPoS) saveValidatorsWithBLSKeysToDatabase() error {
 
 // getCurrentDelegateInfo 获取当前的DelegateInfo（只更新BLS公钥时使用）
 func (d *DPoS) getCurrentDelegateInfo(address types.Address) (*DelegateInfo, error) {
-	if d.state == nil || d.state.StakeStore == nil {
-		return nil, fmt.Errorf("state store not available")
+	store, err := d.getStateStore()
+	if err != nil {
+		return nil, err
 	}
 
 	// 从数据库读取当前的DelegateInfo
 	var currentInfo *DelegateInfo
-	err := d.state.StakeStore.db.View(func(tx *bolt.Tx) error {
+	err = store.db.View(func(tx *bolt.Tx) error {
 		delegateBucket := tx.Bucket([]byte("DelegateInfo"))
 		if delegateBucket == nil {
 			return fmt.Errorf("DelegateInfo bucket not found")
@@ -142,8 +144,9 @@ func (d *DPoS) getCurrentDelegateInfo(address types.Address) (*DelegateInfo, err
 
 // saveBLSKeyToDatabase 保存BLS公钥到数据库
 func (d *DPoS) saveBLSKeyToDatabase(address types.Address, blsKey *bls.PublicKey) {
-	if d.state == nil || d.state.StakeStore == nil {
-		d.logger.Warn("⚠️ 状态存储不可用，无法保存BLS公钥到数据库")
+	store, err := d.getStateStore()
+	if err != nil {
+		d.logger.Warn("⚠️ 状态存储不可用，无法保存BLS公钥到数据库", "error", err)
 		return
 	}
 
@@ -177,7 +180,7 @@ func (d *DPoS) saveBLSKeyToDatabase(address types.Address, blsKey *bls.PublicKey
 	}
 
 	// 保存到数据库（只更新BLS公钥，其他字段保持不变）
-	if err := d.state.StakeStore.setDelegateInfo(address, currentInfo, nil); err != nil {
+		if err := store.setDelegateInfo(address, currentInfo, nil); err != nil {
 		d.logger.Error("❌ 保存BLS公钥失败", "address", address.String(), "error", err)
 	} else {
 		d.logger.Info("✅ BLS公钥已保存到数据库（其他字段保持不变）",
@@ -193,13 +196,14 @@ func (d *DPoS) saveBLSKeyToDatabase(address types.Address, blsKey *bls.PublicKey
 func (d *DPoS) loadBLSKeysFromDatabase() error {
 	d.logger.Debug("📚 从数据库加载BLS公钥到缓存...")
 
-	if d.state == nil || d.state.StakeStore == nil {
-		d.logger.Warn("⚠️ 状态存储不可用，无法从数据库加载BLS公钥")
-		return fmt.Errorf("state store not available")
+	store, err := d.getStateStore()
+	if err != nil {
+		d.logger.Warn("⚠️ 状态存储不可用，无法从数据库加载BLS公钥", "error", err)
+		return err
 	}
 
 	// 从数据库获取所有验证者信息
-	validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	validators, err := store.GetValidatorsWithFilter(false)
 	if err != nil {
 		d.logger.Warn("⚠️ 获取验证者信息失败", "error", err)
 		return err
@@ -231,8 +235,9 @@ func (d *DPoS) loadBLSKeysFromDatabase() error {
 
 // persistBLSKeyToStakeStore 将BLS公钥持久化到StakeStore
 func (d *DPoS) persistBLSKeyToStakeStore(address types.Address, blsKeyBytes []byte) error {
-	if d.state == nil || d.state.StakeStore == nil {
-		return fmt.Errorf("StakeStore not available")
+	store, err := d.getStateStore()
+	if err != nil {
+		return err
 	}
 
 	// 🆕 修复：从数据库读取当前的DelegateInfo，保持VotingPower和TotalVotes不变
@@ -262,7 +267,7 @@ func (d *DPoS) persistBLSKeyToStakeStore(address types.Address, blsKeyBytes []by
 		"blsKeyLength", len(blsKeyBytes))
 
 	// 保存到StakeStore
-	if err := d.state.StakeStore.setDelegateInfo(address, currentInfo, nil); err != nil {
+		if err := store.setDelegateInfo(address, currentInfo, nil); err != nil {
 		return fmt.Errorf("failed to save BLS key to StakeStore: %w", err)
 	}
 

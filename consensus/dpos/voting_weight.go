@@ -81,9 +81,9 @@ func (d *DPoS) getTotalVotesForValidator(validatorAddress types.Address) *big.In
 // getVoterVotingWeight 获取投票者的质押权重（所有用户都可以投票）
 func (d *DPoS) getVoterVotingWeight(voter types.Address) *big.Int {
 	// 优先从数据库的DelegateInfo中读取，确保数据最全且一致
-	if d.state != nil && d.state.StakeStore != nil {
+	if store, err := d.getStateStore(); err == nil {
 		// 从数据库获取所有验证者信息
-		validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+		validators, err := store.GetValidatorsWithFilter(false)
 		if err != nil {
 			d.logger.Warn("Failed to get validators from database for voter weight", "error", err)
 			return big.NewInt(0)
@@ -101,7 +101,7 @@ func (d *DPoS) getVoterVotingWeight(voter types.Address) *big.Int {
 		}
 
 		// 如果没找到，说明不是验证者，尝试从质押信息中获取
-		stakingInfo, err := d.state.StakeStore.GetStakingInfo()
+		stakingInfo, err := store.GetStakingInfo()
 		if err != nil {
 			d.logger.Warn("Failed to get staking info for voter weight", "error", err)
 			return big.NewInt(0)
@@ -158,12 +158,13 @@ func (d *DPoS) getVotingPowerFromStateWithTx(blockNumber uint64, delegate types.
 
 // getVotingPowerFromDatabase 从数据库获取验证者的投票权重
 func (d *DPoS) getVotingPowerFromDatabase(delegate types.Address) (*big.Int, error) {
-	if d.state == nil || d.state.StakeStore == nil {
-		return nil, fmt.Errorf("state store not available")
+	store, err := d.getStateStore()
+	if err != nil {
+		return nil, err
 	}
 
 	// 从数据库获取所有验证者信息
-	validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	validators, err := store.GetValidatorsWithFilter(false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get validators from database: %w", err)
 	}
@@ -193,8 +194,9 @@ func (d *DPoS) updateVotingPowerInDatabase(delegate types.Address, newPower *big
 
 // updateVotingPowerInDatabaseWithTx 使用外部事务更新数据库中的验证者投票权重
 func (d *DPoS) updateVotingPowerInDatabaseWithTx(delegate types.Address, newPower *big.Int, dbTx *bolt.Tx) error {
-	if d.state == nil || d.state.StakeStore == nil {
-		return fmt.Errorf("state store not available")
+	store, err := d.getStateStore()
+	if err != nil {
+		return err
 	}
 
 	// 创建或更新验证者信息
@@ -213,7 +215,7 @@ func (d *DPoS) updateVotingPowerInDatabaseWithTx(delegate types.Address, newPowe
 	d.populateCommissionFields(delegate, delegateInfo)
 
 	// 🆕 使用外部事务，避免嵌套事务
-	err := d.state.StakeStore.setDelegateInfo(delegate, delegateInfo, dbTx)
+	err = store.setDelegateInfo(delegate, delegateInfo, dbTx)
 	if err != nil {
 		d.logger.Error("❌ 更新数据库验证者投票权重失败",
 			"delegate", delegate.String(),
@@ -288,8 +290,9 @@ func (d *DPoS) updateDelegateVotingPower(delegate types.Address, amount *big.Int
 
 // persistDelegateVotingPower 持久化委托者的投票权重
 func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.Int) error {
-	if d.state == nil || d.state.StakeStore == nil {
-		return fmt.Errorf("state store not available")
+	store, err := d.getStateStore()
+	if err != nil {
+		return err
 	}
 
 	d.logger.Info("🔄 persistDelegateVotingPower: 开始持久化验证者投票权重",
@@ -341,7 +344,7 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 		"dataSource", "database")
 
 	// 🆕 直接保存到数据库
-	if err := d.state.StakeStore.setDelegateInfo(delegate, delegateInfo, nil); err != nil {
+	if err := store.setDelegateInfo(delegate, delegateInfo, nil); err != nil {
 		d.logger.Error("❌ 保存验证者信息到数据库失败",
 			"delegate", delegate.String(),
 			"newPower", newPower.String(),

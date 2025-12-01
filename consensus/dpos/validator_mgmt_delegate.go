@@ -743,11 +743,12 @@ func (d *DPoS) processCommissionUpdateTransaction(tx *types.Transaction, blockNu
 		return fmt.Errorf("validator %s is not registered", validatorAddr.String())
 	}
 
-	if d.state == nil || d.state.StakeStore == nil {
-		return fmt.Errorf("stake store not available")
+	store, err := d.getStateStore()
+	if err != nil {
+		return err
 	}
 
-	delegateInfo, err := d.state.StakeStore.GetDelegateInfo(validatorAddr)
+	delegateInfo, err := store.GetDelegateInfo(validatorAddr)
 	if err != nil {
 		d.logger.Warn("⚠️ 获取受托人信息失败，使用默认值",
 			"validator", validatorAddr.String(),
@@ -917,13 +918,14 @@ func (d *DPoS) parseDelegateRegistrationTransactionData(tx *types.Transaction) (
 func (d *DPoS) calculateTotalVotedAmount(voter types.Address) *big.Int {
 	d.logger.Debug("🔍 计算投票者总已投票金额", "voter", voter.String())
 
-	if d.state == nil || d.state.StakeStore == nil {
-		d.logger.Warn("StakeStore 不可用", "voter", voter.String())
+	store, err := d.getStateStore()
+	if err != nil {
+		d.logger.Warn("StakeStore 不可用", "voter", voter.String(), "error", err)
 		return big.NewInt(0)
 	}
 
 	// 从 VoterInfo 表直接获取投票者的总投票权重
-	voterInfo, err := d.state.StakeStore.getVoterInfo(voter, nil)
+	voterInfo, err := store.getVoterInfo(voter, nil)
 	if err != nil {
 		d.logger.Warn("从数据库获取投票者信息失败",
 			"voter", voter.String(),

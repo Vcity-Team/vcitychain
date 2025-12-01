@@ -849,37 +849,40 @@ func (s *StakeStore) setDelegateInfo(delegate types.Address, info *DelegateInfo,
 
 // setDelegateInfoInternal 内部实现，避免递归调用
 func (s *StakeStore) setDelegateInfoInternal(delegate types.Address, info *DelegateInfo, dbTx *bolt.Tx) error {
-	// 添加调试日志
-	// 使用debug级别记录调用信息
-	fmt.Printf("🔍 setDelegateInfoInternal called: delegate=%s, dbTx=%v\n", delegate.String(), dbTx != nil)
-	fmt.Printf("  - 受托人地址: %s\n", delegate.String())
-	fmt.Printf("  - 传入的VotingPower: %s (0x%x)\n", info.VotingPower.String(), info.VotingPower.Bytes())
-	fmt.Printf("  - 传入的TotalVotes: %s (0x%x)\n", info.TotalVotes.String(), info.TotalVotes.Bytes())
-	fmt.Printf("  - 传入的IsActive: %v\n", info.IsActive)
-	fmt.Printf("  - 传入的BlsPublicKey长度: %d\n", len(info.BlsPublicKey))
+	// 确保 logger 已初始化
+	if s.logger == nil {
+		s.logger = getGlobalLoggerWrapper()
+	}
+
+	s.logger.Debug("setDelegateInfoInternal called",
+		"delegate", delegate.String(),
+		"dbTx", dbTx != nil,
+		"votingPower", info.VotingPower.String(),
+		"totalVotes", info.TotalVotes.String(),
+		"isActive", info.IsActive,
+		"blsKeyLength", len(info.BlsPublicKey))
 
 	bucket, err := dbTx.CreateBucketIfNotExists([]byte("DelegateInfo"))
 	if err != nil {
-		fmt.Printf("❌ Failed to create bucket: %v\n", err)
-		return fmt.Errorf("failed to create delegate info bucket: %w", err)
+		s.logger.Error("Failed to create bucket", "error", err)
+		return WrapError("create delegate info bucket", err)
 	}
 
 	data, err := json.Marshal(info)
 	if err != nil {
-		fmt.Printf("❌ Failed to marshal: %v\n", err)
-		return fmt.Errorf("failed to marshal delegate info: %w", err)
+		s.logger.Error("Failed to marshal", "error", err)
+		return WrapError("marshal delegate info", err)
 	}
 
 	if err := bucket.Put(delegate[:], data); err != nil {
-		fmt.Printf("❌ Failed to put data: %v\n", err)
-		return fmt.Errorf("failed to save delegate info: %w", err)
+		s.logger.Error("Failed to put data", "error", err)
+		return WrapError("save delegate info", err)
 	}
 
-	fmt.Printf("✅ setDelegateInfoInternal completed successfully\n")
-	fmt.Printf("  - 保存到数据库的VotingPower: %s (0x%x)\n", info.VotingPower.String(), info.VotingPower.Bytes())
-	fmt.Printf("  - 保存到数据库的TotalVotes: %s (0x%x)\n", info.TotalVotes.String(), info.TotalVotes.Bytes())
-	// fmt.Printf("  - 保存到数据库的IsActive: %v\n", info.IsActive)
-	// fmt.Printf("  - 保存到数据库的BlsPublicKey长度: %d\n", len(info.BlsPublicKey))
+	s.logger.Debug("setDelegateInfoInternal completed successfully",
+		"delegate", delegate.String(),
+		"votingPower", info.VotingPower.String(),
+		"totalVotes", info.TotalVotes.String())
 	return nil
 }
 

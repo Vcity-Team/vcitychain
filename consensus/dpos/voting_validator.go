@@ -163,15 +163,16 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 
 	// 2. 检查受托人是否存在且活跃（从数据库查询，不依赖内存）
 	delegateExists := false
-	if d.state == nil || d.state.StakeStore == nil {
-		d.logger.Error("❌ 数据库不可用，无法验证受托人",
+	store, err := d.getStateStore()
+	if err != nil {
+		d.logger.Error("❌ 数据库不可用，无法验证受托人", "error", err,
 			"stateIsNil", d.state == nil,
 			"stakeStoreIsNil", d.state != nil && d.state.StakeStore == nil)
 		return fmt.Errorf("database not available, cannot verify delegate")
 	}
 
 	// 从数据库查询受托人信息
-	validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	validators, err := store.GetValidatorsWithFilter(false)
 	if err != nil {
 		d.logger.Error("❌ 从数据库查询受托人失败", "error", err)
 		return fmt.Errorf("failed to query delegates from database: %w", err)
