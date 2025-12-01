@@ -50,6 +50,22 @@ type StateSyncStore struct {
 	db *bolt.DB
 }
 
+// withTransaction 统一处理数据库事务（写操作）
+func (s *StateSyncStore) withTransaction(dbTx *bolt.Tx, fn func(*bolt.Tx) error) error {
+	if dbTx == nil {
+		return s.db.Update(fn)
+	}
+	return fn(dbTx)
+}
+
+// withReadTransaction 统一处理只读事务
+func (s *StateSyncStore) withReadTransaction(dbTx *bolt.Tx, fn func(*bolt.Tx) error) error {
+	if dbTx == nil {
+		return s.db.View(fn)
+	}
+	return fn(dbTx)
+}
+
 // initialize creates necessary buckets in DB if they don't already exist
 func (s *StateSyncStore) initialize(tx *bolt.Tx) error {
 	if _, err := tx.CreateBucketIfNotExists(stateSyncEventsBucket); err != nil {
@@ -137,7 +153,7 @@ func (s *StateSyncStore) getStateSyncEventsForCommitment(
 		err    error
 	)
 
-	getFn := func(tx *bolt.Tx) error {
+	err = s.withReadTransaction(dbTx, func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(stateSyncEventsBucket)
 		for i := fromIndex; i <= toIndex; i++ {
 			v := bucket.Get(common.EncodeUint64ToBytes(i))
@@ -154,15 +170,7 @@ func (s *StateSyncStore) getStateSyncEventsForCommitment(
 		}
 
 		return nil
-	}
-
-	if dbTx == nil {
-		err = s.db.View(func(tx *bolt.Tx) error {
-			return getFn(tx)
-		})
-	} else {
-		err = getFn(dbTx)
-	}
+	})
 
 	return events, err
 }
@@ -196,7 +204,7 @@ func (s *StateSyncStore) getCommitmentForStateSync(stateSyncID uint64) (*Commitm
 // insertCommitmentMessage inserts signed commitment to db
 func (s *StateSyncStore) insertCommitmentMessage(commitment *CommitmentMessageSigned,
 	dbTx *bolt.Tx) error {
-	insertFn := func(tx *bolt.Tx) error {
+	return s.withTransaction(dbTx, func(tx *bolt.Tx) error {
 		raw, err := json.Marshal(commitment)
 		if err != nil {
 			return err
@@ -208,15 +216,7 @@ func (s *StateSyncStore) insertCommitmentMessage(commitment *CommitmentMessageSi
 		}
 
 		return nil
-	}
-
-	if dbTx == nil {
-		return s.db.Update(func(tx *bolt.Tx) error {
-			return insertFn(tx)
-		})
-	}
-
-	return insertFn(dbTx)
+	})
 }
 
 // getCommitmentMessage queries the signed commitment from the db
@@ -243,7 +243,7 @@ func (s *StateSyncStore) insertMessageVote(epoch uint64, key []byte,
 		err             error
 	)
 
-	insertFn := func(tx *bolt.Tx) error {
+	err = s.withTransaction(dbTx, func(tx *bolt.Tx) error {
 		signatures, err := s.getMessageVotesLocked(tx, epoch, key)
 		if err != nil {
 			return err
@@ -275,15 +275,7 @@ func (s *StateSyncStore) insertMessageVote(epoch uint64, key []byte,
 		numOfSignatures = len(signatures)
 
 		return bucket.Put(key, raw)
-	}
-
-	if dbTx == nil {
-		err = s.db.Update(func(tx *bolt.Tx) error {
-			return insertFn(tx)
-		})
-	} else {
-		err = insertFn(dbTx)
-	}
+	})
 
 	return numOfSignatures, err
 }
@@ -332,7 +324,7 @@ func (s *StateSyncStore) getMessageVotesLocked(tx *bolt.Tx, epoch uint64,
 
 // insertStateSyncProofs inserts the provided state sync proofs to db
 func (s *StateSyncStore) insertStateSyncProofs(stateSyncProof []*StateSyncProof, dbTx *bolt.Tx) error {
-	insertFn := func(tx *bolt.Tx) error {
+	return s.withTransaction(dbTx, func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(stateSyncProofsBucket)
 
 		for _, ssp := range stateSyncProof {
@@ -347,15 +339,7 @@ func (s *StateSyncStore) insertStateSyncProofs(stateSyncProof []*StateSyncProof,
 		}
 
 		return nil
-	}
-
-	if dbTx == nil {
-		return s.db.Update(func(tx *bolt.Tx) error {
-			return insertFn(tx)
-		})
-	}
-
-	return insertFn(dbTx)
+	})
 }
 
 // getStateSyncProof gets state sync proof that are not executed
@@ -405,13 +389,7 @@ func (s *StateSyncStore) updateStateSyncRelayerEvents(
 		return nil
 	}
 
-	if dbTx == nil {
-		return s.db.Update(func(tx *bolt.Tx) error {
-			return updateFn(tx)
-		})
-	}
-
-	return updateFn(dbTx)
+	return s.withTransaction(dbTx, updateFn)
 }
 
 // getAllAvailableEvents retrieves all StateSyncRelayerEventData that should be sent as a transactions

@@ -305,7 +305,7 @@ func (d *DPoS) generateBLSKey() (*bls.PublicKey, error) {
 	privateKeyInt.Mod(privateKeyInt, modulus)
 
 	// 确保私钥不为零
-	if privateKeyInt.Cmp(big.NewInt(0)) == 0 {
+	if isZeroOrNil(privateKeyInt) {
 		privateKeyInt.Set(big.NewInt(1))
 	}
 
@@ -325,6 +325,5 @@ func (d *DPoS) generateBLSKey() (*bls.PublicKey, error) {
 
 // shouldParticipateInBLSSigning 判断是否应该参与BLS签名
 func (d *DPoS) shouldParticipateInBLSSigning(delegate *validator.ValidatorMetadata) bool {
-	return delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0
+	return delegate.IsActive && isPositive(delegate.VotingPower)
 }
-

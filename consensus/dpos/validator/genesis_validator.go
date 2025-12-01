@@ -85,7 +85,7 @@ func (v *GenesisValidator) ToValidatorMetadata() (*ValidatorMetadata, error) {
 	}
 
 	// 检查stake是否足够
-	isActive := v.Stake.Cmp(big.NewInt(0)) > 0
+	isActive := v.Stake != nil && v.Stake.Sign() > 0
 
 	fmt.Printf("🔍 ToValidatorMetadata: 创建ValidatorMetadata address=%s blsKey=%v isActive=%v\n", v.Address.String(), blsKey != nil, isActive)
 

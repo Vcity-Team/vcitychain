@@ -211,7 +211,7 @@ func (c *DPoSMetricsCollector) RecordBlockProduction(blockNumber uint64, blockTi
 	c.lastBlockTime = time.Now()
 	c.blockTime.Observe(blockTime.Seconds())
 
-	if reward != nil && reward.Cmp(big.NewInt(0)) > 0 {
+	if isPositive(reward) {
 		c.blockRewards.Add(float64(reward.Uint64()))
 	}
 

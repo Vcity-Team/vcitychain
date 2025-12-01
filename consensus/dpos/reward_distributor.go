@@ -335,7 +335,7 @@ func (rd *RewardDistributor) batchUpdateBalances(
 
 	// 批量处理所有奖励
 	for recipient, amount := range rewards {
-		if amount.Cmp(big.NewInt(0)) > 0 {
+		if isPositive(amount) {
 			// 增加接收者余额
 			rd.state.AddBalance(recipient, amount)
 

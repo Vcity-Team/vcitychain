@@ -51,7 +51,7 @@ func (rc *RewardCalculator) CalculateBlockReward(blockNumber uint64, proposer ty
 	baseReward := big.NewInt(1000000000000000000) // 1 token
 
 	// 根据投票权重调整奖励
-	if totalVotingPower.Cmp(big.NewInt(0)) > 0 {
+	if isPositive(totalVotingPower) {
 		// 奖励与总投票权重成反比，鼓励更多参与
 		adjustedReward := new(big.Int).Mul(baseReward, big.NewInt(1000000))
 		adjustedReward.Div(adjustedReward, totalVotingPower)
@@ -120,7 +120,7 @@ func (rc *RewardCalculator) CalculateEpochReward(epochNumber uint64, validators 
 
 // CalculateStakeReward 计算质押奖励
 func (rc *RewardCalculator) CalculateStakeReward(staker types.Address, votingPower *big.Int, totalVotingPower *big.Int, epochReward *big.Int) *big.Int {
-	if totalVotingPower.Cmp(big.NewInt(0)) == 0 {
+	if isZeroOrNil(totalVotingPower) {
 		return big.NewInt(0)
 	}
 
@@ -231,7 +231,7 @@ func (rd *LegacyRewardDistributor) DistributeEpochReward(epochNumber uint64, val
 
 	// 按投票权重分配奖励
 	for staker, voter := range voters {
-		if voter.VotingPower.Cmp(big.NewInt(0)) > 0 {
+		if isPositive(voter.VotingPower) {
 			stakeReward := rd.calculator.CalculateStakeReward(staker, voter.VotingPower, totalVotingPower, epochReward)
 
 			// 创建奖励记录
@@ -388,12 +388,12 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 	if paramValue, err := d.getCurrentParameterValue("dpos_reward_amount"); err == nil {
 		switch v := paramValue.(type) {
 		case string:
-			if bigAmount, ok := new(big.Int).SetString(v, 10); ok && bigAmount.Cmp(big.NewInt(0)) > 0 {
+			if bigAmount, ok := new(big.Int).SetString(v, 10); ok && isPositive(bigAmount) {
 				rewardAmount = bigAmount
 				d.logger.Debug("从参数系统读取 reward amount", "amount", v)
 			}
 		case *big.Int:
-			if v != nil && v.Cmp(big.NewInt(0)) > 0 {
+			if isPositive(v) {
 				rewardAmount = new(big.Int).Set(v)
 				d.logger.Debug("从参数系统读取 reward amount", "amount", v.String())
 			}
@@ -491,7 +491,7 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 
 			// 检查是否是投票者
 			isVoter := false
-			if voter, exists := voters[address]; exists && voter.VotingPower.Cmp(big.NewInt(0)) > 0 {
+			if voter, exists := voters[address]; exists && isPositive(voter.VotingPower) {
 				isVoter = true
 			}
 

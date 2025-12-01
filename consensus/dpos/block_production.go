@@ -2,7 +2,6 @@ package dpos
 
 import (
 	"fmt"
-	"math/big"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
@@ -213,7 +212,7 @@ func (r *dposRuntime) produceBlock() error {
 	}
 
 	// 如果当前节点stake为0或不活跃，跳过出块
-	if currentDelegateInfo == nil || !currentDelegateInfo.IsActive || currentDelegateInfo.VotingPower.Cmp(big.NewInt(0)) <= 0 {
+	if currentDelegateInfo == nil || !currentDelegateInfo.IsActive || isNonPositive(currentDelegateInfo.VotingPower) {
 		var isActiveStr string
 		var votingPowerStr string
 		if currentDelegateInfo != nil {
@@ -236,7 +235,7 @@ func (r *dposRuntime) produceBlock() error {
 				if !currentDelegateInfo.IsActive {
 					return "当前节点不活跃"
 				}
-				if currentDelegateInfo.VotingPower.Cmp(big.NewInt(0)) <= 0 {
+				if isNonPositive(currentDelegateInfo.VotingPower) {
 					return "当前节点投票权重为0"
 				}
 				return "未知原因"

@@ -246,7 +246,7 @@ func (p *DPoS) validateVoteMessage(msg *VoteMessage) error {
 	if msg.Delegate == types.ZeroAddress {
 		return errors.New("invalid delegate address")
 	}
-	if msg.Amount == nil || msg.Amount.Cmp(big.NewInt(0)) <= 0 {
+	if isNonPositive(msg.Amount) {
 		return errors.New("invalid vote amount")
 	}
 
@@ -276,7 +276,7 @@ func (p *DPoS) validateDelegateMessage(msg *DelegateMessage) error {
 	if msg.Delegate == types.ZeroAddress {
 		return errors.New("invalid delegate address")
 	}
-	if msg.Stake == nil || msg.Stake.Cmp(big.NewInt(0)) <= 0 {
+	if isNonPositive(msg.Stake) {
 		return errors.New("invalid stake amount")
 	}
 
@@ -598,7 +598,7 @@ func (p *DPoS) generateBLSPrivateKey() (*bls.PrivateKey, error) {
 	privateKeyInt.Mod(privateKeyInt, modulus)
 
 	// 确保私钥不为零
-	if privateKeyInt.Cmp(big.NewInt(0)) == 0 {
+	if isZeroOrNil(privateKeyInt) {
 		privateKeyInt.Set(big.NewInt(1))
 	}
 

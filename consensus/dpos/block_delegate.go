@@ -1,7 +1,6 @@
 package dpos
 
 import (
-	"math/big"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/types"
@@ -72,7 +71,7 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 					if meta.Address == delegate.Address {
 						latestMeta = meta
 						break
-				 }
+					}
 				}
 			} else {
 				r.logger.Warn("⚠️ getCurrentDelegate: 获取最新验证者权重失败",
@@ -88,7 +87,7 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 		}
 
 		// 检查受托人是否活跃且有足够的stake
-		if !latestMeta.IsActive || latestMeta.VotingPower.Cmp(big.NewInt(0)) <= 0 {
+		if !latestMeta.IsActive || isNonPositive(latestMeta.VotingPower) {
 			r.logOnceWithInterval("inactive_delegate", 10*time.Second, "warn",
 				"❌ 当前委托者不活跃或票数不足",
 				"validatorIndex", currentValidatorIndex,

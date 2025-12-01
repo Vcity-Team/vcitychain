@@ -1236,7 +1236,7 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 	// 统计活跃验证者数量
 	activeCount := 0
 	for _, delegate := range r.delegates {
-		if delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
+		if delegate.IsActive && isPositive(delegate.VotingPower) {
 			activeCount++
 		}
 	}
@@ -1668,7 +1668,7 @@ func (r *dposRuntime) getActiveValidatorsCount() int {
 	// 计算真正活跃的验证者数量（有足够stake且IsActive=true）
 	activeValidators := 0
 	for _, delegate := range validators {
-		if delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
+		if delegate.IsActive && isPositive(delegate.VotingPower) {
 			activeValidators++
 		}
 	}
@@ -2072,7 +2072,7 @@ func (r *dposRuntime) isValidator() bool {
 	for idx, delegate := range dbValidators {
 		if delegate.Address == currentAddr {
 			// 关键：检查stake是否足够且是否活跃
-			if delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
+			if delegate.IsActive && isPositive(delegate.VotingPower) {
 				// 额外查询故障标志状态
 				isFaulty := false
 				if dposBackend != nil {

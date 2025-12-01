@@ -664,43 +664,23 @@ func (s *State) initRewardDatabase() error {
 
 // insertLastProcessedEventsBlock inserts the last processed block for events on Edge
 func (s *State) insertLastProcessedEventsBlock(block uint64, dbTx *bolt.Tx) error {
-	insertFn := func(tx *bolt.Tx) error {
+	return s.withTransaction(dbTx, func(tx *bolt.Tx) error {
 		return tx.Bucket(edgeEventsLastProcessedBlockBucket).Put(
 			edgeEventsLastProcessedBlockKey, common.EncodeUint64ToBytes(block))
-	}
-
-	if dbTx == nil {
-		return s.db.Update(func(tx *bolt.Tx) error {
-			return insertFn(tx)
-		})
-	}
-
-	return insertFn(dbTx)
+	})
 }
 
 // getLastProcessedEventsBlock gets the last processed block for events on Edge
 func (s *State) getLastProcessedEventsBlock(dbTx *bolt.Tx) (uint64, error) {
-	var (
-		lastProcessed uint64
-		err           error
-	)
+	var lastProcessed uint64
 
-	getFn := func(tx *bolt.Tx) {
+	err := s.withReadTransaction(dbTx, func(tx *bolt.Tx) error {
 		value := tx.Bucket(edgeEventsLastProcessedBlockBucket).Get(edgeEventsLastProcessedBlockKey)
 		if value != nil {
 			lastProcessed = common.EncodeBytesToUint64(value)
 		}
-	}
-
-	if dbTx == nil {
-		err = s.db.View(func(tx *bolt.Tx) error {
-			getFn(tx)
-
-			return nil
-		})
-	} else {
-		getFn(dbTx)
-	}
+		return nil
+	})
 
 	return lastProcessed, err
 }
@@ -709,6 +689,22 @@ func (s *State) getLastProcessedEventsBlock(dbTx *bolt.Tx) (uint64, error) {
 // Note that transaction needs to be manually rollback or committed
 func (s *State) beginDBTransaction(isWriteTx bool) (*bolt.Tx, error) {
 	return s.db.Begin(isWriteTx)
+}
+
+// withTransaction 统一处理数据库事务（写操作）
+func (s *State) withTransaction(dbTx *bolt.Tx, fn func(*bolt.Tx) error) error {
+	if dbTx == nil {
+		return s.db.Update(fn)
+	}
+	return fn(dbTx)
+}
+
+// withReadTransaction 统一处理只读事务
+func (s *State) withReadTransaction(dbTx *bolt.Tx, fn func(*bolt.Tx) error) error {
+	if dbTx == nil {
+		return s.db.View(fn)
+	}
+	return fn(dbTx)
 }
 
 // bucketStats returns stats for the given bucket in db

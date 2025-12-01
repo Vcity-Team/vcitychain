@@ -484,7 +484,7 @@ func computeMaxMinPriorityDiff(validators []*PrioritizedValidator) *big.Int {
 
 	diff := new(big.Int).Sub(max, min)
 
-	if diff.Cmp(big.NewInt(0)) < 0 {
+	if isNegative(diff) {
 		return diff.Neg(diff)
 	}
 

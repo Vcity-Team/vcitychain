@@ -17,3 +17,7 @@ func isNonPositive(v *big.Int) bool {
 	return v == nil || v.Sign() <= 0
 }
 
+// isNegative 检查 big.Int 是否为负数
+func isNegative(v *big.Int) bool {
+	return v != nil && v.Sign() < 0
+}

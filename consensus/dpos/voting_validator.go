@@ -52,7 +52,7 @@ func (d *DPoS) ValidateVoteOnly(voter types.Address, candidate types.Address, am
 // validateVote 验证投票的有效性
 func (d *DPoS) validateVote(vote *VoteMessage) error {
 	// 1. 检查投票金额边界
-	if vote.Amount.Cmp(big.NewInt(0)) <= 0 {
+	if isNonPositive(vote.Amount) {
 		return errors.New("vote amount must be positive")
 	}
 

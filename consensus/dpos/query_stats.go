@@ -104,11 +104,11 @@ func (d *DPoS) CanWithdrawDelegate(address types.Address) (map[string]interface{
 	}
 
 	details := make(map[string]interface{})
-	details["hasFrozenAmount"] = reg.Deposit.Cmp(big.NewInt(0)) > 0
+	details["hasFrozenAmount"] = isPositive(reg.Deposit)
 	details["frozenAmount"] = reg.Deposit.String()
 
 	// 检查投票
-	hasVotes := reg.TotalVotes.Cmp(big.NewInt(0)) > 0
+	hasVotes := isPositive(reg.TotalVotes)
 	details["hasVotes"] = hasVotes
 	details["totalVotes"] = reg.TotalVotes.String()
 

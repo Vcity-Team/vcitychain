@@ -56,7 +56,7 @@ func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, s
 		}
 	}
 
-	if balance == nil || balance.Cmp(big.NewInt(0)) <= 0 {
+	if isNonPositive(balance) {
 		return fmt.Errorf("voter must have balance to vote (current balance: %s)", func() string {
 			if balance == nil {
 				return "0"
@@ -159,7 +159,7 @@ func (d *DPoS) CheckProposalResult(proposalID string) error {
 	}
 
 	// 计算支持率
-	if totalWeight.Cmp(big.NewInt(0)) == 0 {
+	if isZeroOrNil(totalWeight) {
 		proposal.Status = ProposalRejected
 		d.finalizeProposalLifecycle(proposalID, proposal)
 		return nil

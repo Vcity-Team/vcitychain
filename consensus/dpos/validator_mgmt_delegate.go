@@ -1574,12 +1574,12 @@ func (d *DPoS) getDelegateDepositAmount() *big.Int {
 	if paramValue, err := d.getCurrentParameterValue("dpos_delegate_threshold"); err == nil {
 		switch v := paramValue.(type) {
 		case string:
-			if bigAmount, ok := new(big.Int).SetString(v, 10); ok && bigAmount.Cmp(big.NewInt(0)) > 0 {
+			if bigAmount, ok := new(big.Int).SetString(v, 10); ok && isPositive(bigAmount) {
 				d.logger.Debug("从参数系统读取 delegate threshold", "value", v)
 				return bigAmount
 			}
 		case *big.Int:
-			if v != nil && v.Cmp(big.NewInt(0)) > 0 {
+			if isPositive(v) {
 				d.logger.Debug("从参数系统读取 delegate threshold", "value", v.String())
 				return new(big.Int).Set(v)
 			}
@@ -1587,7 +1587,7 @@ func (d *DPoS) getDelegateDepositAmount() *big.Int {
 	}
 
 	// 如果参数系统没有值，使用配置值
-	if d.config != nil && d.config.MinVotingPower != nil && d.config.MinVotingPower.Cmp(big.NewInt(0)) > 0 {
+	if d.config != nil && d.config.MinVotingPower != nil && isPositive(d.config.MinVotingPower) {
 		return new(big.Int).Set(d.config.MinVotingPower)
 	}
 
@@ -1632,7 +1632,7 @@ func (d *DPoS) WithdrawDelegate(address types.Address) error {
 	}
 
 	// 1. 检查是否还有投票（参考 Tron：要求先手动撤回投票）
-	if reg.TotalVotes.Cmp(big.NewInt(0)) > 0 {
+	if isPositive(reg.TotalVotes) {
 		return fmt.Errorf("cannot withdraw while having votes. Please use dpos_vote to withdraw votes first")
 	}
 

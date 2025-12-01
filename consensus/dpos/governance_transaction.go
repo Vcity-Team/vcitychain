@@ -199,7 +199,7 @@ func (d *DPoS) ProcessProposalVoteTransaction(tx *types.Transaction, blockNumber
 		}
 	}
 
-	if voterWeight == nil || voterWeight.Cmp(big.NewInt(0)) <= 0 {
+	if isNonPositive(voterWeight) {
 		return fmt.Errorf("voter %s has no balance to vote (must have balance to vote, current balance: %s)", tx.From.String(), func() string {
 			if voterWeight == nil {
 				return "0"
