@@ -27,6 +27,12 @@ var (
 	
 	// ErrDelegatesSetEmpty 受托人集合为空错误
 	ErrDelegatesSetEmpty = fmt.Errorf("delegates set is empty")
+	
+	// ErrConfigNotInitialized 配置未初始化错误
+	ErrConfigNotInitialized = fmt.Errorf("config not initialized")
+	
+	// ErrStateNotInitialized 状态未初始化错误
+	ErrStateNotInitialized = fmt.Errorf("state not initialized")
 )
 
 // WrapError 统一错误包装，添加操作上下文

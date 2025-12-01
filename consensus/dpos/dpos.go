@@ -514,6 +514,10 @@ func (d *DPoS) FilterExtra(extra []byte) ([]byte, error) {
 }
 
 func (d *DPoS) Start() error {
+	// 统一验证所有必需的依赖
+	if err := d.validateDependencies(); err != nil {
+		return WrapError("validate dependencies", err)
+	}
 	d.logger.Info("starting dpos consensus", "signer", d.key.String())
 
 	// 1. 初始化BLS加载状态
@@ -718,164 +722,80 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		lastLogTime: make(map[string]time.Time), // 初始化日志频率限制
 	}
 
-	getConfigValue := func(keys ...string) (interface{}, bool) {
-		for _, key := range keys {
-			if val, ok := params.Config.Config[key]; ok {
-				return val, true
-			}
-		}
-		return nil, false
-	}
+	// 创建配置解析器
+	parser := NewConfigParser(params.Config.Config, logger)
 
 	// 直接使用server层已解析的配置（避免重复解析）
 	logger.Info("🔍 开始解析DPoS经济系统配置", "configKeys", len(params.Config.Config))
 
-	// 调试：打印所有配置键
-	// for key, value := range params.Config.Config {
-	//	logger.Info("🔍 配置键值对", "key", key, "type", fmt.Sprintf("%T", value), "value", value)
-	// }
-
 	// 解析共识切换高度
-	if consensusSwitchHeight, exists := params.Config.Config["consensusSwitchHeight"]; exists {
-		if height, ok := consensusSwitchHeight.(float64); ok {
-			vcity_dpos.config.ConsensusSwitchHeight = uint64(height)
-			logger.Debug("🔄 设置共识切换高度", "height", vcity_dpos.config.ConsensusSwitchHeight)
-		}
+	if height, ok := parser.GetUint64("consensusSwitchHeight"); ok {
+		vcity_dpos.config.ConsensusSwitchHeight = height
+		logger.Debug("🔄 设置共识切换高度", "height", height)
 	}
 
-	// 支持驼峰和下划线两种键名
-	var validatorsCountValue interface{}
-	if val, exists := params.Config.Config["dposValidatorsCount"]; exists {
-		validatorsCountValue = val
-	} else if val, exists := params.Config.Config["dpos_validators_count"]; exists {
-		validatorsCountValue = val
-		logger.Info("👥 使用下划线形式的 dpos_validators_count 配置")
-	}
-
-	if validatorsCountValue != nil {
-		logger.Info("🔍 找到 dposValidatorsCount 配置", "type", fmt.Sprintf("%T", validatorsCountValue), "value", validatorsCountValue)
-		switch countVal := validatorsCountValue.(type) {
-		case float64:
-			vcity_dpos.config.DelegateCount = uint64(countVal)
-			vcity_dpos.config.DPoSValidatorsCount = uint64(countVal)
-			logger.Info("👥 设置验证者数量", "count", vcity_dpos.config.DPoSValidatorsCount)
-		case int:
-			vcity_dpos.config.DelegateCount = uint64(countVal)
-			vcity_dpos.config.DPoSValidatorsCount = uint64(countVal)
-			logger.Info("👥 设置验证者数量 (int)", "count", vcity_dpos.config.DPoSValidatorsCount)
-		case uint64:
-			vcity_dpos.config.DelegateCount = countVal
-			vcity_dpos.config.DPoSValidatorsCount = countVal
-			logger.Info("👥 设置验证者数量 (uint64)", "count", vcity_dpos.config.DPoSValidatorsCount)
-		case string:
-			if parsed, err := strconv.ParseUint(countVal, 10, 64); err == nil {
-				vcity_dpos.config.DelegateCount = parsed
-				vcity_dpos.config.DPoSValidatorsCount = parsed
-				logger.Info("👥 设置验证者数量 (string)", "count", vcity_dpos.config.DPoSValidatorsCount)
-			} else {
-				logger.Warn("👥 dposValidatorsCount 解析失败", "value", countVal, "error", err)
-			}
-		default:
-			logger.Warn("👥 dposValidatorsCount 类型不支持", "type", fmt.Sprintf("%T", validatorsCountValue))
-		}
+	// 解析验证者数量（支持驼峰和下划线两种键名）
+	if count, ok := parser.GetUint64("dposValidatorsCount", "dpos_validators_count"); ok {
+		vcity_dpos.config.DelegateCount = count
+		vcity_dpos.config.DPoSValidatorsCount = count
+		logger.Info("👥 设置验证者数量", "count", count)
 	} else {
 		logger.Warn("👥 未找到 dposValidatorsCount 配置")
 	}
 
 	// 解析默认佣金率（从配置文件读取）
-	if commissionValue, exists := getConfigValue("dposCommissionRatio", "dpos_commission_ratio"); exists {
-		if ratio, ok := toUint64(commissionValue); ok && ratio > 0 {
-			vcity_dpos.config.CommissionRateDefault = ratio
-			logger.Info("💼 设置默认佣金率", "ratio", ratio)
-		} else {
-			logger.Warn("💼 dposCommissionRatio 类型或数值无效", "value", commissionValue)
-		}
+	if ratio, ok := parser.GetUint64("dposCommissionRatio", "dpos_commission_ratio"); ok && ratio > 0 {
+		vcity_dpos.config.CommissionRateDefault = ratio
+		logger.Info("💼 设置默认佣金率", "ratio", ratio)
 	}
 
 	// 解析佣金生效周期
-	if effectiveValue, exists := getConfigValue("commissionEffectivePeriod", "dpos_commission_effective"); exists {
-		switch val := effectiveValue.(type) {
-		case time.Duration:
-			if val > 0 {
-				vcity_dpos.config.CommissionEffectivePeriod = val
-				logger.Info("⏳ 设置佣金生效周期（Duration）", "duration", val.String())
-			}
-		case string:
-			if duration, err := parseDurationAllowDays(val); err == nil {
-				vcity_dpos.config.CommissionEffectivePeriod = duration
-				logger.Info("⏳ 设置佣金生效周期（String）", "raw", val, "duration", duration.String())
-			} else {
-				logger.Warn("⏳ 佣金生效周期字符串解析失败", "value", val, "error", err)
-			}
-		case float64:
-			if val > 0 {
-				vcity_dpos.config.CommissionEffectivePeriod = time.Duration(val) * time.Second
-				logger.Info("⏳ 设置佣金生效周期（float秒）", "seconds", val)
-			}
-		default:
-			logger.Warn("⏳ 佣金生效周期类型不支持", "type", fmt.Sprintf("%T", effectiveValue))
-		}
+	if duration, ok := parser.GetDuration("commissionEffectivePeriod", "dpos_commission_effective"); ok && duration > 0 {
+		vcity_dpos.config.CommissionEffectivePeriod = duration
+		logger.Info("⏳ 设置佣金生效周期", "duration", duration.String())
 	}
 
-	if missedBlocksPercentage, exists := getConfigValue("dpos_missed_blocks_percentage", "missed_blocks_percentage"); exists {
-		if percentage, ok := toUint64(missedBlocksPercentage); ok {
-			logger.Info("🔨 从配置文件读取漏块率阈值", "percentage", percentage, "基点")
-		} else {
-			logger.Warn("🔨 dpos_missed_blocks_percentage 类型或数值无效", "value", missedBlocksPercentage)
-		}
+	// 解析漏块率阈值
+	if percentage, ok := parser.GetUint64("dpos_missed_blocks_percentage", "missed_blocks_percentage"); ok {
+		logger.Info("🔨 从配置文件读取漏块率阈值", "percentage", percentage, "基点")
 	} else {
 		logger.Warn("🔨 未找到dpos_missed_blocks_percentage配置，将使用默认值1000 (10%)")
 	}
 
-	if minorOffenseSlashRate, exists := getConfigValue("dpos_minor_offense_slash_rate", "minor_offense_slash_rate"); exists {
-		if rate, ok := toUint64(minorOffenseSlashRate); ok {
-			logger.Info("🔨 从配置文件读取轻度违规削减率", "rate", rate, "基点")
-		} else {
-			logger.Warn("🔨 dpos_minor_offense_slash_rate 类型或数值无效", "value", minorOffenseSlashRate)
-		}
+	// 解析轻度违规削减率
+	if rate, ok := parser.GetUint64("dpos_minor_offense_slash_rate", "minor_offense_slash_rate"); ok {
+		logger.Info("🔨 从配置文件读取轻度违规削减率", "rate", rate, "基点")
 	} else {
 		logger.Warn("🔨 未找到dpos_minor_offense_slash_rate配置，将使用默认值50 (0.5%)")
 	}
 
-	if severeOffenseSlashRate, exists := getConfigValue("dpos_severe_offense_slash_rate", "severe_offense_slash_rate"); exists {
-		if rate, ok := toUint64(severeOffenseSlashRate); ok {
-			logger.Info("🔨 从配置文件读取严重违规削减率", "rate", rate, "基点")
-		} else {
-			logger.Warn("🔨 dpos_severe_offense_slash_rate 类型或数值无效", "value", severeOffenseSlashRate)
-		}
+	// 解析严重违规削减率
+	if rate, ok := parser.GetUint64("dpos_severe_offense_slash_rate", "severe_offense_slash_rate"); ok {
+		logger.Info("🔨 从配置文件读取严重违规削减率", "rate", rate, "基点")
 	} else {
 		logger.Warn("🔨 未找到dpos_severe_offense_slash_rate配置，将使用默认值1000 (10%)")
 	}
 
-	if epochDuration, exists := params.Config.Config["epochDuration"]; exists {
-		logger.Info("🔍 找到epochDuration配置", "type", fmt.Sprintf("%T", epochDuration), "value", epochDuration)
-		if duration, ok := epochDuration.(time.Duration); ok {
-			vcity_dpos.config.EpochDuration = duration
-		} else {
-			logger.Warn("⏰ epochDuration类型断言失败", "type", fmt.Sprintf("%T", epochDuration))
-		}
+	// 解析 Epoch 持续时间
+	if duration, ok := parser.GetDuration("epochDuration"); ok {
+		vcity_dpos.config.EpochDuration = duration
+		logger.Info("⏰ 设置 Epoch 持续时间", "duration", duration.String())
 	} else {
 		logger.Warn("⏰ 未找到epochDuration配置")
 	}
 
-	if rewardAccount, exists := params.Config.Config["rewardAccount"]; exists {
-		logger.Info("🔍 找到rewardAccount配置", "type", fmt.Sprintf("%T", rewardAccount), "value", rewardAccount)
-		if account, ok := rewardAccount.(types.Address); ok {
-			vcity_dpos.config.RewardAccount = account
-		} else {
-			logger.Warn("💰 rewardAccount类型断言失败", "type", fmt.Sprintf("%T", rewardAccount))
-		}
+	// 解析奖励账户
+	if account, ok := parser.GetAddress("rewardAccount"); ok {
+		vcity_dpos.config.RewardAccount = account
+		logger.Info("💰 设置奖励账户", "account", account.String())
 	} else {
 		logger.Warn("💰 未找到rewardAccount配置")
 	}
 
-	if rewardAmount, exists := params.Config.Config["rewardAmount"]; exists {
-		logger.Info("🔍 找到rewardAmount配置", "type", fmt.Sprintf("%T", rewardAmount), "value", rewardAmount)
-		if amount, ok := rewardAmount.(*big.Int); ok {
-			vcity_dpos.config.RewardAmount = amount
-		} else {
-			logger.Warn("💰 rewardAmount类型断言失败", "type", fmt.Sprintf("%T", rewardAmount))
-		}
+	// 解析奖励金额
+	if amount, ok := parser.GetBigInt("rewardAmount"); ok {
+		vcity_dpos.config.RewardAmount = amount
+		logger.Info("💰 设置奖励金额", "amount", amount.String())
 	} else {
 		logger.Warn("💰 未找到rewardAmount配置")
 	}
@@ -985,57 +905,34 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	}
 
 	// 解析区块时间配置
-	if blockTimeStr, exists := params.Config.Config["blockTime"]; exists {
-		logger.Info("🔍 找到blockTime配置", "type", fmt.Sprintf("%T", blockTimeStr), "value", blockTimeStr)
+	if blockTimeStr, exists := parser.GetValue("blockTime"); exists {
 		if blockTime, ok := blockTimeStr.(string); ok {
 			if duration, err := time.ParseDuration(blockTime); err == nil {
 				vcity_dpos.config.BlockTime = common.Duration{Duration: duration}
+				logger.Info("⏰ 设置区块时间", "duration", duration.String())
 			} else {
 				logger.Warn("⏰ blockTime解析失败", "value", blockTime, "error", err)
 			}
 		} else {
-			logger.Warn("⏰ blockTime类型断言失败", "type", fmt.Sprintf("%T", blockTimeStr))
+			logger.Warn("⏰ blockTime类型不支持", "type", fmt.Sprintf("%T", blockTimeStr))
 		}
 	} else {
 		logger.Warn("⏰ 未找到blockTime配置")
 	}
 
 	// 解析冻结相关配置
-	if minFreezePeriod, exists := params.Config.Config["dpos_min_freeze_period"]; exists {
-		logger.Info("🔍 找到dpos_min_freeze_period配置", "type", fmt.Sprintf("%T", minFreezePeriod), "value", minFreezePeriod)
-		if period, ok := minFreezePeriod.(uint64); ok {
-			vcity_dpos.config.MinFreezePeriod = period
-			logger.Info("❄️ 使用server层解析的最小冻结期", "period", period, "seconds", period)
-		} else if period, ok := minFreezePeriod.(int); ok {
-			vcity_dpos.config.MinFreezePeriod = uint64(period)
-			logger.Info("❄️ 使用server层解析的最小冻结期（从int转换）", "period", vcity_dpos.config.MinFreezePeriod, "seconds", vcity_dpos.config.MinFreezePeriod)
-		} else if period, ok := minFreezePeriod.(float64); ok {
-			vcity_dpos.config.MinFreezePeriod = uint64(period)
-			logger.Info("❄️ 使用server层解析的最小冻结期（从float64转换）", "period", vcity_dpos.config.MinFreezePeriod, "seconds", vcity_dpos.config.MinFreezePeriod)
-		} else {
-			logger.Warn("❄️ dpos_min_freeze_period类型不支持", "type", fmt.Sprintf("%T", minFreezePeriod), "使用默认值604800")
-			vcity_dpos.config.MinFreezePeriod = 604800
-		}
+	if period, ok := parser.GetUint64("dpos_min_freeze_period"); ok {
+		vcity_dpos.config.MinFreezePeriod = period
+		logger.Info("❄️ 设置最小冻结期", "period", period, "seconds", period)
 	} else {
 		logger.Warn("❄️ 未找到dpos_min_freeze_period配置，使用默认值604800秒（7天）")
 		vcity_dpos.config.MinFreezePeriod = 604800
 	}
 
-	if unfreezeLockPeriod, exists := params.Config.Config["dpos_unfreeze_lock_period"]; exists {
-		logger.Info("🔍 找到dpos_unfreeze_lock_period配置", "type", fmt.Sprintf("%T", unfreezeLockPeriod), "value", unfreezeLockPeriod)
-		if period, ok := unfreezeLockPeriod.(uint64); ok {
-			vcity_dpos.config.UnfreezeLockPeriod = period
-			logger.Info("🔓 使用server层解析的解冻锁定期", "period", period, "seconds", period)
-		} else if period, ok := unfreezeLockPeriod.(int); ok {
-			vcity_dpos.config.UnfreezeLockPeriod = uint64(period)
-			logger.Info("🔓 使用server层解析的解冻锁定期（从int转换）", "period", vcity_dpos.config.UnfreezeLockPeriod, "seconds", vcity_dpos.config.UnfreezeLockPeriod)
-		} else if period, ok := unfreezeLockPeriod.(float64); ok {
-			vcity_dpos.config.UnfreezeLockPeriod = uint64(period)
-			logger.Info("🔓 使用server层解析的解冻锁定期（从float64转换）", "period", vcity_dpos.config.UnfreezeLockPeriod, "seconds", vcity_dpos.config.UnfreezeLockPeriod)
-		} else {
-			logger.Warn("🔓 dpos_unfreeze_lock_period类型不支持", "type", fmt.Sprintf("%T", unfreezeLockPeriod), "使用默认值1209600")
-			vcity_dpos.config.UnfreezeLockPeriod = 1209600
-		}
+	// 解析解冻锁定期
+	if period, ok := parser.GetUint64("dpos_unfreeze_lock_period", "unfreeze_lock_period"); ok {
+		vcity_dpos.config.UnfreezeLockPeriod = period
+		logger.Info("🔓 设置解冻锁定期", "period", period, "seconds", period)
 	} else {
 		logger.Warn("🔓 未找到dpos_unfreeze_lock_period配置，使用默认值1209600秒（14天）")
 		vcity_dpos.config.UnfreezeLockPeriod = 1209600
