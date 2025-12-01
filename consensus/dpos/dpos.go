@@ -27,7 +27,6 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-// 全局DPoS实例注册表，用于BLS公钥持久化
 var (
 	dposInstances      = make(map[string]*DPoS)
 	dposMutex          sync.RWMutex
@@ -75,14 +74,12 @@ func (d *DPoS) populateCommissionFields(delegate types.Address, info *DelegateIn
 	}
 }
 
-// RegisterDPoSInstance 注册DPoS实例
 func RegisterDPoSInstance(key string, dpos *DPoS) {
 	dposMutex.Lock()
 	defer dposMutex.Unlock()
 	dposInstances[key] = dpos
 }
 
-// GetDPoSInstance 获取DPoS实例
 func GetDPoSInstance(key string) (*DPoS, bool) {
 	dposMutex.RLock()
 	defer dposMutex.RUnlock()
@@ -90,7 +87,6 @@ func GetDPoSInstance(key string) (*DPoS, bool) {
 	return dpos, exists
 }
 
-// GetAllDPoSInstances 获取所有DPoS实例
 func GetAllDPoSInstances() map[string]*DPoS {
 	dposMutex.RLock()
 	defer dposMutex.RUnlock()
@@ -102,83 +98,52 @@ func GetAllDPoSInstances() map[string]*DPoS {
 	return result
 }
 
-// UnregisterDPoSInstance 注销DPoS实例
 func UnregisterDPoSInstance(key string) {
 	dposMutex.Lock()
 	defer dposMutex.Unlock()
 	delete(dposInstances, key)
 }
 
-// dposBackend 接口定义了DPoS需要的方法
 type dposBackend interface {
-	// GetDelegates 获取指定区块的受托人集合--实际参与共识的节点
+	// 获取指定区块的受托人集合--实际参与共识的节点
 	GetDelegates(blockNumber uint64, parents []*types.Header) (validator.AccountSet, error)
-
-	// GetDelegatesWithTx 在数据库事务中获取受托人集合
+	// 数据库事务中获取受托人集合
 	GetDelegatesWithTx(blockNumber uint64, parents []*types.Header, dbTx *bolt.Tx) (validator.AccountSet, error)
-
-	// GetCurrentDelegates 获取当前内存中的受托人集合
+	// 获取当前内存中的受托人集合
 	GetCurrentDelegates() validator.AccountSet
-
-	// GetVotingPower 获取指定区块的投票权重
+	// 获取指定区块的投票权重
 	GetVotingPower(blockNumber uint64, delegate types.Address) (*big.Int, error)
-
-	// GetVotingPowerWithTx 在数据库事务中获取投票权重
+	// 在数据库事务中获取投票权重
 	GetVotingPowerWithTx(blockNumber uint64, delegate types.Address, dbTx *bolt.Tx) (*big.Int, error)
-
-	// GetCurrentRound 获取当前轮次
+	// 获取当前轮次
 	GetCurrentRound() uint64
-
-	// GetCurrentDelegate 获取当前受托人
+	// 获取当前受托人
 	GetCurrentDelegate() types.Address
-
-	// GetDelegateIndex 获取受托人索引
+	// 获取受托人索引
 	GetDelegateIndex(delegate types.Address) uint64
-
-	// SaveValidatorSetForBlockWithValidators 保存指定区块的特定验证者集合到数据库
+	// 保存指定区块的特定验证者集合到数据库
 	SaveValidatorSetForBlockWithValidators(blockNumber uint64, validators validator.AccountSet) error
 }
 
 // DPoSConfig 配置结构
 type DPoSConfig struct {
-	// 受托人数量
-	DelegateCount uint64 `json:"delegateCount"`
-
-	// 区块时间
-	BlockTime common.Duration `json:"blockTime"`
-
+	DelegateCount uint64          `json:"delegateCount"`
+	BlockTime     common.Duration `json:"blockTime"`
 	// 轮次时间 (所有受托人完成一轮的时间)
-	RoundTime common.Duration `json:"roundTime"`
-
-	// DPoS验证者数量配置
-	DPoSValidatorsCount uint64 `json:"dpos_validators_count"`
-
-	// 最大漏块数配置
-	MaxMissedBlocks uint64 `json:"max_missed_blocks"`
-
-	Blockchain *blockchain.Blockchain
-	Logger     hclog.Logger
-	Network    *network.Server
-
-	SecretsManager secrets.SecretsManager
-
-	Executor *state.Executor
-
+	RoundTime           common.Duration `json:"roundTime"`
+	DPoSValidatorsCount uint64          `json:"dpos_validators_count"`
+	Blockchain          *blockchain.Blockchain
+	Logger              hclog.Logger
+	Network             *network.Server
+	SecretsManager      secrets.SecretsManager
+	Executor            *state.Executor
 	// 最小投票权重
-	MinVotingPower *big.Int `json:"minVotingPower"`
-
-	// 初始受托人集合
-	InitialDelegates []*validator.GenesisValidator `json:"initialDelegates"`
-
-	// 投票锁定时间
-	VoteLockTime uint64 `json:"voteLockTime"`
-
-	// 委托奖励比例
-	RewardRatio uint64 `json:"rewardRatio"`
-
-	ConsensusSwitchHeight uint64 `json:"consensusSwitchHeight"`
-
-	ValidatorsCount uint64 `json:"validatorsCount" yaml:"validatorsCount"`
+	MinVotingPower        *big.Int                      `json:"minVotingPower"`
+	InitialDelegates      []*validator.GenesisValidator `json:"initialDelegates"`
+	VoteLockTime          uint64                        `json:"voteLockTime"`
+	RewardRatio           uint64                        `json:"rewardRatio"`
+	ConsensusSwitchHeight uint64                        `json:"consensusSwitchHeight"`
+	ValidatorsCount       uint64                        `json:"validatorsCount" yaml:"validatorsCount"`
 
 	EpochDuration       time.Duration `json:"epochDuration" yaml:"epochDuration"`
 	RewardAccount       types.Address `json:"rewardAccount" yaml:"rewardAccount"`
@@ -208,12 +173,10 @@ func (r *dposRuntime) GetStateSyncProof(stateSyncID uint64) (types.Proof, error)
 }
 
 type DPoS struct {
-	// 复用基础设施
 	state  *State
 	key    *wallet.Key
 	logger hclog.Logger
 
-	// DPoS特有组件
 	config    *DPoSConfig
 	runtime   *dposRuntime
 	rawConfig map[string]interface{} // 存储原始配置，用于读取削减相关参数
@@ -233,37 +196,28 @@ type DPoS struct {
 
 	syncer syncer.Syncer
 
-	// 网络组件
 	consensusTopic *network.Topic
 
-	// 状态管理
 	delegates    validator.AccountSet
 	voters       map[types.Address]*VoterInfo
 	currentRound uint64
 
-	// 同步控制
 	closeCh chan struct{}
 	lock    sync.RWMutex
 
-	// 区块链引用
 	blockchain blockchainBackend
 	txPool     txPoolInterface
 
-	// 区块时间
 	blockTime time.Duration
 
-	// 数据目录
 	dataDir string
 
-	// 添加性能优化相关结构
 	cache          *DPoSCache
 	batchProcessor *BatchProcessor
 	metrics        *DPoSMetrics
 
-	// 延迟验证者集合更新标志
 	pendingValidatorUpdate bool
 
-	// 故障检测相关字段
 	currentEpoch      uint64
 	epochValidators   validator.AccountSet
 	faultyValidators  map[types.Address]bool
@@ -276,48 +230,34 @@ type DPoS struct {
 	pendingRewardDistribution *RewardDistributionInfo
 
 	// 故障消减信息（只包含 missed blocks 的消减，不包含双重签名）
-	pendingSlashingInfo *SlashingInfo
-
-	// 故障检测信息
+	pendingSlashingInfo   *SlashingInfo
 	pendingFaultFlags     []FaultFlagInfo
 	pendingEpochEndHeader *types.Header
 
-	// 经济系统组件
 	epochManager      *TimeBasedEpochManager
 	blockTracker      *BlockProductionTracker
 	rewardDistributor *RewardDistributor
 
-	// 固定时间窗口调度器
-	blockScheduler *BlockScheduler
-
-	// 双重签名检测器
+	blockScheduler        *BlockScheduler
 	doubleSigningDetector *DoubleSigningDetector
+	balanceQuerier        NativeTokenBalanceQuerier
+	minStakeAmount        *big.Int // 最小质押门槛
 
-	// 余额查询器
-	balanceQuerier NativeTokenBalanceQuerier
-
-	// DPoS验证者相关字段
-	minStakeAmount *big.Int // 最小质押门槛
-
-	// 日志频率限制
 	lastLogTime       map[string]time.Time   // 最后日志时间
 	logMutex          sync.RWMutex           // 日志锁
 	genesisExtraData  []byte                 // 创世块extraData
 	genesisValidators map[types.Address]bool // 创世验证者地址映射
 
-	// BLS加载状态管理
 	blsLoadingComplete bool
 	blsLoadingMutex    sync.RWMutex
 	blsLoadingWaitCh   chan struct{}
 
-	// 参数表决机制相关字段
 	parameterProposals map[string]*ParameterProposal // 提案存储
 	parameterUpdates   []*ParameterUpdate            // 参数更新记录
 	activeProposals    map[string]bool               // 活跃提案
 	proposalCounter    uint64                        // 提案计数器
 	votableParameters  map[string]*ParameterInfo     // 可表决参数配置
 
-	// 参数值缓存
 	parameterCurrentValues map[string]interface{} // 参数当前值缓存
 	parameterValuesMutex   sync.RWMutex           // 参数值读写锁
 }
@@ -636,14 +576,11 @@ func (d *DPoS) Close() error {
 	return nil
 }
 
-// DPoS 实现 dposBackend 接口
 var _ dposBackend = (*DPoS)(nil)
 
-// Factory 创建DPoS共识实例
 func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	logger := params.Logger.Named("dpos")
 
-	// 设置自定义哈希函数
 	setupHeaderHashFunc()
 
 	vcity_dpos := &DPoS{
@@ -655,13 +592,10 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		lastLogTime: make(map[string]time.Time), // 初始化日志频率限制
 	}
 
-	// 创建配置解析器
 	parser := NewConfigParser(params.Config.Config, logger)
 
-	// 直接使用server层已解析的配置（避免重复解析）
 	logger.Info("🔍 开始解析DPoS经济系统配置", "configKeys", len(params.Config.Config))
 
-	// 解析共识切换高度
 	if height, ok := parser.GetUint64("consensusSwitchHeight"); ok {
 		vcity_dpos.config.ConsensusSwitchHeight = height
 		logger.Debug("🔄 设置共识切换高度", "height", height)
@@ -939,7 +873,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	return vcity_dpos, nil
 }
 
-// Initialize 初始化DPoS
 func (d *DPoS) Initialize() error {
 	d.logger.Debug("initializing dpos...")
 
@@ -954,16 +887,12 @@ func (d *DPoS) Initialize() error {
 		return fmt.Errorf("failed to create wallet key")
 	}
 
-	// 🆕 注册DPoS实例到全局注册表
-	// 使用固定key和节点地址作为key，确保能够被找到
 	fixedKey := "vcity_dpos"
 	nodeKey := d.key.Address().String()
 	RegisterDPoSInstance(fixedKey, d)
 	RegisterDPoSInstance(nodeKey, d)
 	d.logger.Debug("DPoS实例已注册到全局注册表", "fixedKey", fixedKey, "nodeKey", nodeKey)
 
-	// create and set syncer
-	// blockTimeout 使用3倍的blockTime作为同步超时（参考IBFT和PolyBFT的实现）
 	blockTimeout := d.config.BlockTime.Duration * 3
 	if blockTimeout == 0 {
 		d.logger.Warn("⚠️ blockTimeout为0，使用默认值9秒（3倍默认blockTime）")
@@ -977,7 +906,6 @@ func (d *DPoS) Initialize() error {
 		d.config.ConsensusSwitchHeight,
 	)
 
-	// 🆕 新增：先初始化状态存储
 	d.logger.Debug("Attempting to initialize state store",
 		"dataDir", d.dataDir,
 		"dataDirEmpty", d.dataDir == "",
@@ -987,7 +915,6 @@ func (d *DPoS) Initialize() error {
 		statePath := filepath.Join(d.dataDir, "dpos.db")
 		d.logger.Info("Creating state store", "path", statePath)
 
-		// 确保目录存在
 		if err := os.MkdirAll(filepath.Dir(statePath), 0755); err != nil {
 			d.logger.Error("Failed to create data directory", "path", filepath.Dir(statePath), "error", err)
 		} else {
@@ -997,7 +924,6 @@ func (d *DPoS) Initialize() error {
 		state, err := newState(statePath, d.logger, d.closeCh)
 		if err != nil {
 			d.logger.Error("Failed to initialize state store", "path", statePath, "error", err)
-			// 不返回错误，因为状态存储不是关键组件
 		} else {
 			d.state = state
 			d.logger.Info("✅ State store initialized successfully", "path", statePath)
@@ -1010,18 +936,15 @@ func (d *DPoS) Initialize() error {
 		d.logger.Warn("Data directory not set, state store will not be initialized")
 	}
 
-	// set blockchain backend
 	d.blockchain = &blockchainWrapper{
 		blockchain: d.config.Blockchain,
 		executor:   d.config.Executor,
-		keyAddr:    types.Address(d.key.Address()), // 设置当前节点的地址
-		config:     d.config,                       // 传递DPoS配置
-		logger:     d.logger,                       // 传递logger
-		state:      d.state,                        // 🆕 传递State对象
+		keyAddr:    types.Address(d.key.Address()),
+		config:     d.config,
+		logger:     d.logger,
+		state:      d.state,
 
-		// 🆕 设置验证者更新回调函数
 		onValidatorsUpdated: func(validators validator.AccountSet) error {
-			// 更新 runtime 的验证者集合
 			if d.runtime != nil {
 				d.runtime.delegates = validators.Copy()
 				d.delegates = validators.Copy()
@@ -1031,14 +954,10 @@ func (d *DPoS) Initialize() error {
 		},
 	}
 
-	// 🆕 将blockchain_wrapper设置为blockchain的executor，以启用奖励分配功能
-	// 创建一个适配器，将blockchain_wrapper包装为blockchain.Executor
 	executorAdapter := &executorAdapter{wrapper: d.blockchain.(*blockchainWrapper)}
 	d.config.Blockchain.SetExecutor(executorAdapter)
 	d.logger.Info("✅ 已将blockchain_wrapper设置为blockchain的executor，启用奖励分配功能")
 
-	// 🆕 新增：设置余额查询器（使用真实实现）
-	// 使用 runtime 的 getValidatorBalance 方法实现余额查询
 	if d.runtime != nil {
 		d.balanceQuerier = &runtimeBalanceQuerier{runtime: d.runtime}
 		d.logger.Info("✅ Balance querier initialized with runtime implementation")
@@ -1050,26 +969,18 @@ func (d *DPoS) Initialize() error {
 	// set block time
 	d.blockTime = d.config.BlockTime.Duration
 
-	// 🆕 新增：初始化BLS网络通信
 	if err := d.initializeBLSNetworking(); err != nil {
 		d.logger.Error("Failed to initialize BLS networking", "error", err)
-		// 不返回错误，因为BLS网络初始化失败不应该阻止DPoS启动
 	}
 
-	// 🆕 移除：DPoS验证者解析移到initializeDelegates中进行
-	// 这样可以在数据库没有受托人时才解析extraData，避免重复解析
-
-	// initialize delegates
 	if err := d.initializeDelegates(); err != nil {
 		return WrapError("initialize delegates", err)
 	}
 
-	// 🆕 新增：初始化经济系统组件
 	if err := d.initializeEconomicSystem(); err != nil {
 		return WrapError("initialize economic system", err)
 	}
 
-	// 🆕 新增：初始化治理系统
 	if err := d.InitializeGovernance(); err != nil {
 		return WrapError("initialize governance", err)
 	}
@@ -1084,11 +995,10 @@ func (d *DPoS) Initialize() error {
 		txPool:           d.txPool,
 		DelegateCount:    d.config.DelegateCount,
 		InitialDelegates: d.config.InitialDelegates,
-		blockScheduler:   d.blockScheduler, // 🆕 设置固定时间窗口调度器
+		blockScheduler:   d.blockScheduler,
 		BlockTime:        d.config.BlockTime,
 	}
 
-	// 检查runtime配置是否正确
 	if runtimeConfig.Key == nil {
 		return fmt.Errorf("runtime config Key is nil")
 	}
@@ -1102,12 +1012,10 @@ func (d *DPoS) Initialize() error {
 		voters:  make(map[types.Address]*VoterInfo),
 	}
 
-	// 初始化runtime
 	if err := d.runtime.initializeRuntime(); err != nil {
 		return WrapError("initialize runtime", err)
 	}
 
-	// 设置网络集成
 	if err := d.runtime.setupNetworkIntegration(); err != nil {
 		d.logger.Error("failed to setup network integration", "error", err)
 		return WrapError("setup network integration", err)
@@ -1116,12 +1024,6 @@ func (d *DPoS) Initialize() error {
 	return nil
 }
 
-// 🆕 新增：从创世块解析DPoS验证者
-
-// OnBlockInserted 在区块写入后调用，用于清理交易池和处理区块事件
-// 这个方法在同步区块和本地生产区块时都会被调用，确保交易池状态与链上状态一致
-// 注意：本地生产区块时，consensusRuntime.OnBlockInserted 也会调用 ResetWithHeaders，
-// 这里再次调用是安全的（幂等操作），确保两种路径的行为一致
 func (d *DPoS) OnBlockInserted(fullBlock *types.FullBlock) {
 	if d.txPool == nil {
 		d.logger.Warn("⚠️ [DPoS.OnBlockInserted] txPool 为 nil，跳过交易池清理",
@@ -1135,7 +1037,6 @@ func (d *DPoS) OnBlockInserted(fullBlock *types.FullBlock) {
 		"blockHash", fullBlock.Block.Hash().String()[:16],
 		"txCount", len(fullBlock.Block.Transactions))
 
-	// 调用交易池的 ResetWithHeaders 来清理已打包的交易
 	d.txPool.ResetWithHeaders(fullBlock.Block.Header)
 }
 
@@ -1147,8 +1048,6 @@ func (d *DPoS) GetCurrentRound() uint64 {
 }
 
 func (d *DPoS) GetCurrentDelegate() types.Address {
-	// 🆕 已删除 currentDelegateIndex
-	// 现在完全基于时间slot实时计算
 	store, err := d.getStateStore()
 	if err != nil {
 		return types.ZeroAddress
@@ -1159,8 +1058,6 @@ func (d *DPoS) GetCurrentDelegate() types.Address {
 		return types.ZeroAddress
 	}
 
-	// 基于时间slot计算当前委托者
-	// 🆕 使用统一的 slot 计算函数
 	currentValidatorIndex, err := d.calculateCurrentValidatorIndex(validators)
 	if err == nil && currentValidatorIndex >= 0 && currentValidatorIndex < len(validators) {
 		return validators[currentValidatorIndex].Address
@@ -1177,10 +1074,8 @@ func (d *DPoS) GetVoters() map[types.Address]*VoterInfo {
 	// Create a copy of the voters map to avoid race conditions
 	votersCopy := make(map[types.Address]*VoterInfo)
 	for addr, voter := range d.voters {
-		// 🆕 使用统一的深拷贝函数
 		votersCopy[addr] = copyVoterInfo(voter)
 	}
-
 	return votersCopy
 }
 
@@ -1216,10 +1111,6 @@ func (d *DPoS) GetMetrics() *DPoSMetrics {
 	}
 }
 
-// DefaultDPoSConfig 返回默认配置
-
-// 启动时直接调用和命令一样的数据源方法
-
 // 获取数据目录路径
 func (d *DPoS) getDataDir() string {
 	if d.dataDir != "" {
@@ -1228,17 +1119,9 @@ func (d *DPoS) getDataDir() string {
 	return "" // 返回空字符串表示未找到
 }
 
-// GetValidators 获取DPoS验证者集合（公共方法，供外部调用）
-// 注意：不能通过接口调用，因为GetValidators本身就是接口的实现
-// 直接使用原有逻辑，避免无限递归
 func (d *DPoS) GetValidators() validator.AccountSet {
-	// 直接使用原有逻辑，避免通过接口调用造成无限递归
 	if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
 		return d.runtime.delegates
 	}
-
-	// 如果 runtime 不可用，返回空集合
 	return validator.AccountSet{}
 }
-
-// executeBatchStateUpdate 保留在 dpos.go 中（函数复杂，依赖较多）
