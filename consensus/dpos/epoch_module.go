@@ -121,7 +121,9 @@ func (d *DPoS) updateValidatorCachesFromModule(validators validator.AccountSet) 
 
 	if d.runtime != nil {
 		d.runtime.lock.Lock()
-		d.runtime.delegates = validators.Copy()
+		if err := d.syncDelegatesToRuntime(validators); err != nil {
+			d.logger.Warn("同步delegates到runtime失败", "error", err)
+		}
 		d.runtime.lock.Unlock()
 	}
 }

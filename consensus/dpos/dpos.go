@@ -953,7 +953,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 
 	if vcity_dpos.config.RewardAmount == nil {
 		logger.Warn("⚠️ rewardAmount为nil，设置默认值")
-		vcity_dpos.config.RewardAmount, _ = new(big.Int).SetString("1000000000000000000000", 10) // 1000 VCITY
+		vcity_dpos.config.RewardAmount = DefaultVotingPower() // 1000 VCITY
 	}
 
 	if vcity_dpos.config.CommissionRateDefault == 0 {
@@ -1212,7 +1212,7 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 	d.minStakeAmount = d.config.MinVotingPower
 	if d.minStakeAmount == nil {
 		// 使用默认值：1000 VCITY = 1000 * 1e18 wei
-		d.minStakeAmount, _ = new(big.Int).SetString("1000000000000000000000", 10)
+		d.minStakeAmount = DefaultVotingPower()
 		d.logger.Info("使用默认最小质押门槛", "amount", d.minStakeAmount.String())
 	}
 

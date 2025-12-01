@@ -932,7 +932,8 @@ func (s *StakeStore) getDelegateInfo(delegate types.Address, dbTx *bolt.Tx) (*De
 
 // ValidatorStore represents a store for validator-related data
 type ValidatorStore struct {
-	db *bolt.DB
+	db     *bolt.DB
+	logger *loggerWrapper
 }
 
 // initialize creates necessary buckets in DB if they don't already exist
@@ -966,15 +967,14 @@ func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx, 
 		var delegateInfo DelegateInfo
 		if err := json.Unmarshal(v, &delegateInfo); err != nil {
 			// 记录错误但继续处理其他受托人
-			fmt.Printf("⚠️ 解析受托人信息失败: %v\n", err)
+			s.logger.Warn("解析受托人信息失败", "error", err)
 			continue
 		}
 
 		// 🆕 修复：只检查投票权重，必须包含所有有BLS公钥的受托人
 		// 这样可以确保与出块时的受托人顺序完全一致
 		if delegateInfo.VotingPower.Cmp(big.NewInt(0)) <= 0 {
-			fmt.Printf("🔍 getDelegatesAtBlock: 跳过投票权重为0的受托人 - 地址=%s, votingPower=%s\n",
-				delegateInfo.Address.String(), delegateInfo.VotingPower.String())
+			s.logger.Debug("getDelegatesAtBlock: 跳过投票权重为0的受托人", "address", delegateInfo.Address.String(), "votingPower", delegateInfo.VotingPower.String())
 			continue
 		}
 
@@ -984,14 +984,14 @@ func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx, 
 			var err error
 			blsPublicKey, err = bls.UnmarshalPublicKey(delegateInfo.BlsPublicKey)
 			if err != nil {
-				fmt.Printf("⚠️ ValidatorStore: BLS公钥解析失败 - 地址=%s, 错误=%v\n", delegateInfo.Address.String(), err)
+				s.logger.Warn("ValidatorStore: BLS公钥解析失败", "address", delegateInfo.Address.String(), "error", err)
 				// 即使解析失败也创建对象，但BlsKey为nil
 				blsPublicKey = nil
 			} else {
-				fmt.Printf("✅ ValidatorStore: BLS公钥恢复成功 - 地址=%s, 公钥长度=%d\n", delegateInfo.Address.String(), len(delegateInfo.BlsPublicKey))
+				s.logger.Debug("ValidatorStore: BLS公钥恢复成功", "address", delegateInfo.Address.String(), "keyLength", len(delegateInfo.BlsPublicKey))
 			}
 		} else {
-			fmt.Printf("⚠️ ValidatorStore: 缺少BLS公钥数据 - 地址=%s, 公钥长度=%d\n", delegateInfo.Address.String(), len(delegateInfo.BlsPublicKey))
+			s.logger.Warn("ValidatorStore: 缺少BLS公钥数据", "address", delegateInfo.Address.String(), "keyLength", len(delegateInfo.BlsPublicKey))
 		}
 
 		// 🆕 修复：总是创建验证者元数据，保持索引一致性
@@ -1009,13 +1009,7 @@ func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx, 
 
 	// 🆕 修复：按票数降序排序，如果票数相同则按地址排序，确保与出块时的顺序完全一致
 	// 这样可以避免BLS公钥顺序不一致导致的签名验证失败
-	sort.Slice(delegates, func(i, j int) bool {
-		if delegates[i].VotingPower.Cmp(delegates[j].VotingPower) == 0 {
-			// 票数相同，按地址排序（字节比较）
-			return bytes.Compare(delegates[i].Address[:], delegates[j].Address[:]) < 0
-		}
-		return delegates[i].VotingPower.Cmp(delegates[j].VotingPower) > 0
-	})
+	sortValidatorsByVotingPower(delegates)
 
 	// 🆕 关键修复：应用与出块时相同的DelegateCount限制
 	// 确保验证时使用的受托人数量与出块时完全一致
@@ -1023,17 +1017,15 @@ func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx, 
 		maxDelegates := int(delegateCount)
 		if len(delegates) > maxDelegates {
 			delegates = delegates[:maxDelegates]
-			fmt.Printf("🔍 getDelegatesAtBlock: 应用DelegateCount限制 - 原始数量=%d, 限制数量=%d\n",
-				len(delegates)+len(delegates[maxDelegates:]), maxDelegates)
+			s.logger.Debug("getDelegatesAtBlock: 应用DelegateCount限制", "originalCount", len(delegates)+len(delegates[maxDelegates:]), "maxDelegates", maxDelegates)
 		}
 	}
 
 	// 🆕 添加详细日志：显示从数据库读取的BLS公钥
-	fmt.Printf("🔍 ValidatorStore.getDelegatesAtBlock: 从数据库读取到 %d 个受托人 (区块 %d)\n", len(delegates), blockNumber)
-	fmt.Printf("🔍 这是验证区块 %d 时使用的完整受托人集合:\n", blockNumber)
+	s.logger.Debug("ValidatorStore.getDelegatesAtBlock: 从数据库读取到受托人", "count", len(delegates), "blockNumber", blockNumber)
+	s.logger.Debug("这是验证区块时使用的完整受托人集合", "blockNumber", blockNumber)
 	for i, delegate := range delegates {
-		fmt.Printf("  验证索引=%d, 地址=%s, 票数=%s, 有BLS密钥=%v\n",
-			i, delegate.Address.String(), delegate.VotingPower.String(), delegate.BlsKey != nil)
+		s.logger.Debug("验证者详情", "index", i, "address", delegate.Address.String(), "votingPower", delegate.VotingPower.String(), "hasBlsKey", delegate.BlsKey != nil)
 	}
 
 	// 排序完成

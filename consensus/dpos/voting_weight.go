@@ -315,7 +315,7 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 	// 🆕 检查是否为创世验证者
 	if d.isGenesisValidator(delegate) {
 		fixedVotingPower := new(big.Int)
-		fixedVotingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
+		fixedVotingPower.Set(DefaultVotingPower()) // 1000 VCITY
 		newPower = fixedVotingPower
 		d.logger.Info("🔒 创世验证者使用固定权重",
 			"delegate", delegate.String(),

@@ -1,12 +1,10 @@
 package dpos
 
 import (
-	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"sort"
 	"strconv"
 	"time"
 
@@ -323,9 +321,7 @@ func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) er
 		"activeValidators", len(activeValidators))
 
 	// 4. 按权重倒序排序
-	sort.Slice(activeValidators, func(i, j int) bool {
-		return activeValidators[i].VotingPower.Cmp(activeValidators[j].VotingPower) > 0
-	})
+	sortValidatorsByVotingPower(activeValidators)
 
 	d.logger.Info("📊 排序后的验证者列表:")
 	for i, validator := range activeValidators {
@@ -364,7 +360,9 @@ func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) er
 	// 6.1 同步到runtime，以便出块节点后续流程（如NextEpochValidators写入）使用最新集合
 	if d.runtime != nil {
 		d.runtime.lock.Lock()
-		d.runtime.delegates = finalValidators.Copy()
+		if err := d.syncDelegatesToRuntime(finalValidators); err != nil {
+			d.logger.Warn("同步delegates到runtime失败", "error", err)
+		}
 		d.runtime.lock.Unlock()
 
 		d.logger.Info("🔁 runtime.delegates已同步最新出块者列表",
@@ -438,13 +436,7 @@ func (d *DPoS) reloadValidatorsAfterRecovery() error {
 		"activeValidators", len(activeValidators))
 
 	// 3. 按权重倒序排序（GetSortedValidatorsWithLimit已经排序，但为了确保一致性，再次排序）
-	sort.Slice(activeValidators, func(i, j int) bool {
-		votingPowerCmp := activeValidators[i].VotingPower.Cmp(activeValidators[j].VotingPower)
-		if votingPowerCmp != 0 {
-			return votingPowerCmp > 0
-		}
-		return bytes.Compare(activeValidators[i].Address[:], activeValidators[j].Address[:]) < 0
-	})
+	sortValidatorsByVotingPower(activeValidators)
 
 	// 4. 应用配置限制
 	maxValidators := int(d.config.DPoSValidatorsCount)
@@ -467,7 +459,9 @@ func (d *DPoS) reloadValidatorsAfterRecovery() error {
 	// 6. 同步到runtime
 	if d.runtime != nil {
 		d.runtime.lock.Lock()
-		d.runtime.delegates = finalValidators.Copy()
+		if err := d.syncDelegatesToRuntime(finalValidators); err != nil {
+			d.logger.Warn("同步delegates到runtime失败", "error", err)
+		}
 		d.runtime.lock.Unlock()
 		d.logger.Info("✅ 已同步 runtime.delegates",
 			"runtimeDelegatesCount", len(d.runtime.delegates))

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -144,10 +143,7 @@ func (d *DPoS) initializeDelegates() error {
 		// 如果创世块也失败，使用配置中的初始验证者
 		d.logger.Info("🔄 回退到配置中的初始验证者")
 		for _, genesisValidator := range d.config.InitialDelegates {
-			votingPower, ok := new(big.Int).SetString("1000000000000000000000", 10) // 1000 VCITY
-			if !ok {
-				votingPower = big.NewInt(0)
-			}
+			votingPower := DefaultVotingPower() // 1000 VCITY
 			delegate := &validator.ValidatorMetadata{
 				Address:     types.Address(genesisValidator.Address),
 				VotingPower: votingPower,
@@ -197,15 +193,7 @@ func (d *DPoS) getGenesisValidators() validator.AccountSet {
 	// 从内存中的创世验证者映射创建AccountSet
 	var validators validator.AccountSet
 	for address := range d.genesisValidators {
-		votingPower, ok := new(big.Int).SetString("1000000000000000000000", 10) // 1000 VCITY
-		if !ok {
-			// 如果SetString失败，使用默认值（使用SetString确保不会溢出）
-			defaultPower, _ := new(big.Int).SetString("1000000000000000000000", 10)
-			if defaultPower == nil {
-				defaultPower = big.NewInt(0)
-			}
-			votingPower = defaultPower
-		}
+		votingPower := DefaultVotingPower() // 1000 VCITY
 
 		validatorMetadata := &validator.ValidatorMetadata{
 			Address:     address,
@@ -1546,10 +1534,7 @@ func (d *DPoS) getGenesisValidatorsAsRegistrations() []*DelegateRegistration {
 	// 方法5: 仍未获取到时，回退到配置中的初始验证者
 	if len(genesisValidators) == 0 && d.config != nil && len(d.config.InitialDelegates) > 0 {
 		for _, genesisValidator := range d.config.InitialDelegates {
-			votingPower, ok := new(big.Int).SetString("1000000000000000000000", 10) // 1000 VCITY
-			if !ok {
-				votingPower = big.NewInt(0)
-			}
+			votingPower := DefaultVotingPower() // 1000 VCITY
 
 			genesisValidators = append(genesisValidators, &validator.ValidatorMetadata{
 				Address:     genesisValidator.Address,
@@ -1615,7 +1600,7 @@ func (d *DPoS) getDelegateDepositAmount() *big.Int {
 
 	// 默认保证金：1000 VCITY（与 Tron 的 1000 TRX 一致）
 	depositAmount := new(big.Int)
-	depositAmount.SetString("1000000000000000000000", 10) // 1000 VCITY
+	depositAmount.Set(DefaultVotingPower()) // 1000 VCITY
 	return depositAmount
 }
 
@@ -1661,32 +1646,7 @@ func (d *DPoS) WithdrawDelegate(address types.Address) error {
 	// 2. 检查是否满足最小冻结期要求
 	currentTime := uint64(time.Now().Unix())
 	// 🆕 优先从参数系统读取 min_freeze_period（经过治理流程修改的值是权威数据源）
-	var minFreezePeriod uint64
-	if paramValue, err := d.getCurrentParameterValue("min_freeze_period"); err == nil {
-		switch v := paramValue.(type) {
-		case uint64:
-			minFreezePeriod = v
-		case int64:
-			if v >= 0 {
-				minFreezePeriod = uint64(v)
-			}
-		case float64:
-			if v >= 0 {
-				minFreezePeriod = uint64(v)
-			}
-		case string:
-			if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
-				minFreezePeriod = parsed
-			}
-		}
-	}
-	// 如果参数系统没有值，使用配置值
-	if minFreezePeriod == 0 {
-		minFreezePeriod = d.config.MinFreezePeriod
-		if minFreezePeriod == 0 {
-			minFreezePeriod = 604800 // 默认7天
-		}
-	}
+	minFreezePeriod := d.getParameterUint64("min_freeze_period", d.config.MinFreezePeriod, 604800) // 默认7天
 
 	if reg.FrozenAt > 0 {
 		elapsedTime := currentTime - reg.FrozenAt
@@ -1700,32 +1660,7 @@ func (d *DPoS) WithdrawDelegate(address types.Address) error {
 	// 3. 执行解冻（直接解冻，进入锁定期）
 	unfreezeAt := currentTime
 	// 🆕 优先从参数系统读取 unfreeze_lock_period（经过治理流程修改的值是权威数据源）
-	var unfreezeLockPeriod uint64
-	if paramValue, err := d.getCurrentParameterValue("unfreeze_lock_period"); err == nil {
-		switch v := paramValue.(type) {
-		case uint64:
-			unfreezeLockPeriod = v
-		case int64:
-			if v >= 0 {
-				unfreezeLockPeriod = uint64(v)
-			}
-		case float64:
-			if v >= 0 {
-				unfreezeLockPeriod = uint64(v)
-			}
-		case string:
-			if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
-				unfreezeLockPeriod = parsed
-			}
-		}
-	}
-	// 如果参数系统没有值，使用配置值
-	if unfreezeLockPeriod == 0 {
-		unfreezeLockPeriod = d.config.UnfreezeLockPeriod
-		if unfreezeLockPeriod == 0 {
-			unfreezeLockPeriod = 1209600 // 默认14天
-		}
-	}
+	unfreezeLockPeriod := d.getParameterUint64("unfreeze_lock_period", d.config.UnfreezeLockPeriod, 1209600) // 默认14天
 	unfreezeAvailableAt := unfreezeAt + unfreezeLockPeriod
 
 	// 更新注册信息

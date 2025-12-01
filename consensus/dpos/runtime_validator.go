@@ -45,7 +45,7 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 
 	// 3. 设置最小质押门槛
 	minStakeAmount := big.NewInt(0)
-	minStakeAmount.SetString("1000000000000000000000", 10) // 1000 VCITY
+	minStakeAmount.Set(DefaultVotingPower()) // 1000 VCITY
 
 	validValidatorCount := 0
 	insufficientBalanceCount := 0
@@ -61,7 +61,7 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 		// 创建DPoS验证者（BLS公钥延迟获取）
 		// 🆕 创世验证者使用固定权重1000 VCITY，不受余额影响
 		fixedVotingPower := new(big.Int)
-		fixedVotingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
+		fixedVotingPower.Set(DefaultVotingPower()) // 1000 VCITY
 
 		delegate := &validator.ValidatorMetadata{
 			Address:     address,

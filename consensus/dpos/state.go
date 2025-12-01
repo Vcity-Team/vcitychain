@@ -61,28 +61,22 @@ type State struct {
 
 // RegistrationStore 受托人注册存储
 type RegistrationStore struct {
-	db *bolt.DB
+	db       *bolt.DB
+	dbHelper *dbHelper
 }
 
 // NewRegistrationStore 创建新的受托人注册存储
-func NewRegistrationStore(db *bolt.DB) *RegistrationStore {
-	return &RegistrationStore{db: db}
+func NewRegistrationStore(db *bolt.DB, logger hclog.Logger) *RegistrationStore {
+	return &RegistrationStore{
+		db:       db,
+		dbHelper: newDBHelper(newLoggerWrapper(logger)),
+	}
 }
 
 // SaveRegistration 保存注册信息
 func (s *RegistrationStore) SaveRegistration(reg *DelegateRegistration) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
-		bucket, err := tx.CreateBucketIfNotExists([]byte("delegate_registrations"))
-		if err != nil {
-			return err
-		}
-
-		data, err := json.Marshal(reg)
-		if err != nil {
-			return err
-		}
-
-		return bucket.Put(reg.Address.Bytes(), data)
+		return s.dbHelper.saveToBucket(tx, "delegate_registrations", reg.Address.Bytes(), reg)
 	})
 }
 
@@ -90,21 +84,17 @@ func (s *RegistrationStore) SaveRegistration(reg *DelegateRegistration) error {
 func (s *RegistrationStore) GetRegistration(address types.Address) (*DelegateRegistration, error) {
 	var reg *DelegateRegistration
 	err := s.db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("delegate_registrations"))
-		if bucket == nil {
-			return nil
-		}
-
-		data := bucket.Get(address.Bytes())
-		if data == nil {
-			return nil
-		}
-
 		reg = &DelegateRegistration{}
-		return json.Unmarshal(data, reg)
+		return s.dbHelper.getFromBucketOptional(tx, "delegate_registrations", address.Bytes(), reg)
 	})
 
-	return reg, err
+	if err != nil {
+		return nil, err
+	}
+	if reg.Address == (types.Address{}) {
+		return nil, nil // 未找到
+	}
+	return reg, nil
 }
 
 // GetAllRegistrations 获取所有注册信息
@@ -132,18 +122,8 @@ func (s *RegistrationStore) GetAllRegistrations() ([]*DelegateRegistration, erro
 // UpdateRegistrationStatus 更新注册状态
 func (s *RegistrationStore) UpdateRegistrationStatus(address types.Address, status RegStatus) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("delegate_registrations"))
-		if bucket == nil {
-			return fmt.Errorf("registrations bucket not found")
-		}
-
-		data := bucket.Get(address.Bytes())
-		if data == nil {
-			return fmt.Errorf("registration not found")
-		}
-
 		reg := &DelegateRegistration{}
-		if err := json.Unmarshal(data, reg); err != nil {
+		if err := s.dbHelper.getFromBucket(tx, "delegate_registrations", address.Bytes(), reg); err != nil {
 			return err
 		}
 
@@ -155,12 +135,7 @@ func (s *RegistrationStore) UpdateRegistrationStatus(address types.Address, stat
 			reg.IsActive = false
 		}
 
-		updatedData, err := json.Marshal(reg)
-		if err != nil {
-			return err
-		}
-
-		return bucket.Put(address.Bytes(), updatedData)
+		return s.dbHelper.saveToBucket(tx, "delegate_registrations", address.Bytes(), reg)
 	})
 }
 
@@ -219,7 +194,8 @@ type ParameterCurrentValue struct {
 
 // ParameterStore 参数存储
 type ParameterStore struct {
-	db *bolt.DB
+	db       *bolt.DB
+	dbHelper *dbHelper
 }
 
 // ProposalStore 提案存储
@@ -240,28 +216,22 @@ type FreezeInfo struct {
 
 // FreezeStore 冻结信息存储
 type FreezeStore struct {
-	db *bolt.DB
+	db       *bolt.DB
+	dbHelper *dbHelper
 }
 
 // NewFreezeStore 创建新的冻结信息存储
-func NewFreezeStore(db *bolt.DB) *FreezeStore {
-	return &FreezeStore{db: db}
+func NewFreezeStore(db *bolt.DB, logger hclog.Logger) *FreezeStore {
+	return &FreezeStore{
+		db:       db,
+		dbHelper: newDBHelper(newLoggerWrapper(logger)),
+	}
 }
 
 // SaveFreezeInfo 保存冻结信息
 func (s *FreezeStore) SaveFreezeInfo(info *FreezeInfo) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
-		bucket, err := tx.CreateBucketIfNotExists([]byte("freeze_info"))
-		if err != nil {
-			return err
-		}
-
-		data, err := json.Marshal(info)
-		if err != nil {
-			return err
-		}
-
-		return bucket.Put(info.Address.Bytes(), data)
+		return s.dbHelper.saveToBucket(tx, "freeze_info", info.Address.Bytes(), info)
 	})
 }
 
@@ -269,21 +239,17 @@ func (s *FreezeStore) SaveFreezeInfo(info *FreezeInfo) error {
 func (s *FreezeStore) GetFreezeInfo(address types.Address) (*FreezeInfo, error) {
 	var info *FreezeInfo
 	err := s.db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("freeze_info"))
-		if bucket == nil {
-			return nil
-		}
-
-		data := bucket.Get(address.Bytes())
-		if data == nil {
-			return nil
-		}
-
 		info = &FreezeInfo{}
-		return json.Unmarshal(data, info)
+		return s.dbHelper.getFromBucketOptional(tx, "freeze_info", address.Bytes(), info)
 	})
 
-	return info, err
+	if err != nil {
+		return nil, err
+	}
+	if info.Address == (types.Address{}) {
+		return nil, nil // 未找到
+	}
+	return info, nil
 }
 
 // GetAllFreezeInfo 获取所有冻结信息
@@ -329,24 +295,13 @@ func (ps *ParameterStore) initialize(tx *bolt.Tx) error {
 // SaveParameterValue 保存参数值
 func (ps *ParameterStore) SaveParameterValue(paramName string, value interface{}, source string) error {
 	return ps.db.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("parameters"))
-		if bucket == nil {
-			return fmt.Errorf("parameters bucket not found")
-		}
-
 		paramValue := &ParameterCurrentValue{
 			ParameterName: paramName,
 			CurrentValue:  value,
 			UpdatedAt:     time.Now(),
 			Source:        source,
 		}
-
-		data, err := json.Marshal(paramValue)
-		if err != nil {
-			return err
-		}
-
-		return bucket.Put([]byte(paramName), data)
+		return ps.dbHelper.saveToBucket(tx, "parameters", []byte(paramName), paramValue)
 	})
 }
 
@@ -355,17 +310,7 @@ func (ps *ParameterStore) GetParameterValue(paramName string) (interface{}, erro
 	var paramValue ParameterCurrentValue
 
 	err := ps.db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("parameters"))
-		if bucket == nil {
-			return fmt.Errorf("parameters bucket not found")
-		}
-
-		data := bucket.Get([]byte(paramName))
-		if data == nil {
-			return fmt.Errorf("parameter not found")
-		}
-
-		return json.Unmarshal(data, &paramValue)
+		return ps.dbHelper.getFromBucket(tx, "parameters", []byte(paramName), &paramValue)
 	})
 
 	if err != nil {
@@ -621,13 +566,13 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 			}
 			return store
 		}(),
-		ValidatorStore:    &ValidatorStore{db: db},
-		RewardStore:       &RewardStore{db: rewardDB, logger: newLoggerWrapper(logger)}, // 🆕 使用独立数据库，使用 logger wrapper
-		BlockTrackerStore: &BlockTrackerStore{db: db},                                   // 🆕 使用主数据库
-		ParameterStore:    &ParameterStore{db: db},                                      // 🆕 使用主数据库
-		ProposalStore:     &ProposalStore{db: db, logger: newLoggerWrapper(logger)},     // 🆕 使用主数据库，使用 logger wrapper
-		RegistrationStore: &RegistrationStore{db: db},                                   // 🆕 使用主数据库
-		FreezeStore:       NewFreezeStore(db),                                           // 🆕 使用主数据库
+		ValidatorStore:    &ValidatorStore{db: db, logger: newLoggerWrapper(logger)},
+		RewardStore:       &RewardStore{db: rewardDB, logger: newLoggerWrapper(logger)},             // 🆕 使用独立数据库，使用 logger wrapper
+		BlockTrackerStore: &BlockTrackerStore{db: db},                                               // 🆕 使用主数据库
+		ParameterStore:    &ParameterStore{db: db, dbHelper: newDBHelper(newLoggerWrapper(logger))}, // 🆕 使用主数据库，使用 dbHelper
+		ProposalStore:     &ProposalStore{db: db, logger: newLoggerWrapper(logger)},                 // 🆕 使用主数据库，使用 logger wrapper
+		RegistrationStore: NewRegistrationStore(db, logger),                                         // 🆕 使用主数据库，使用 dbHelper
+		FreezeStore:       NewFreezeStore(db, logger),                                               // 🆕 使用主数据库，使用 dbHelper
 	}
 
 	if err = s.initStorages(); err != nil {
