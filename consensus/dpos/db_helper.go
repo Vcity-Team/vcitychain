@@ -102,3 +102,29 @@ func (h *dbHelper) forEachInBucket(tx *bolt.Tx, bucketName string, fn func(key, 
 
 	return bucket.ForEach(fn)
 }
+
+// forEachInBucketWithUnmarshal 遍历 bucket 中的所有键值对，自动反序列化
+// createItem: 创建新实例的函数，每次调用返回新的对象指针
+// fn: 处理每个反序列化后的项目的函数
+func (h *dbHelper) forEachInBucketWithUnmarshal(tx *bolt.Tx, bucketName string, createItem func() interface{}, fn func(key interface{}, item interface{}) error) error {
+	bucket := tx.Bucket([]byte(bucketName))
+	if bucket == nil {
+		return WrapErrorf("forEach in bucket", "bucket %s not found", bucketName)
+	}
+
+	return bucket.ForEach(func(key, value []byte) error {
+		// 每次创建新实例，避免数据覆盖
+		item := createItem()
+		if err := json.Unmarshal(value, item); err != nil {
+			h.logger.Error("Failed to unmarshal item", "error", err, "key", string(key))
+			return WrapError("unmarshal item", err)
+		}
+
+		// 调用处理函数
+		if err := fn(key, item); err != nil {
+			return err
+		}
+
+		return nil
+	})
+}

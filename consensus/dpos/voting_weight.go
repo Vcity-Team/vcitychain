@@ -32,14 +32,8 @@ func (d *DPoS) getVotersForValidator(validatorAddress types.Address) []*VoterInf
 				"isMatch", votedDelegate == validatorAddress)
 
 			if votedDelegate == validatorAddress {
-				voters = append(voters, &VoterInfo{
-					Address:        voterInfo.Address,
-					VotingPower:    new(big.Int).Set(voterInfo.VotingPower),
-					VotedDelegates: voterInfo.VotedDelegates,
-					LastVoteTime:   voterInfo.LastVoteTime,
-					LockedUntil:    voterInfo.LockedUntil,
-					Nonce:          voterInfo.Nonce,
-				})
+				// 🆕 使用统一的深拷贝函数，避免浅拷贝导致的数据共享问题
+				voters = append(voters, copyVoterInfo(voterInfo))
 				d.logger.Debug("✅ 找到投票者",
 					"voterAddress", voterAddress.String(),
 					"votingPower", voterInfo.VotingPower.String(),

@@ -1442,25 +1442,8 @@ func (d *DPoS) GetVoters() map[types.Address]*VoterInfo {
 	// Create a copy of the voters map to avoid race conditions
 	votersCopy := make(map[types.Address]*VoterInfo)
 	for addr, voter := range d.voters {
-		// Create a deep copy of VoterInfo
-		voterCopy := &VoterInfo{
-			Address:        voter.Address,
-			VotingPower:    new(big.Int).Set(voter.VotingPower),
-			VotedDelegates: make([]types.Address, len(voter.VotedDelegates)),
-			LastVoteTime:   voter.LastVoteTime,
-			LockedUntil:    voter.LockedUntil,
-			Nonce:          make(map[uint64]bool),
-		}
-
-		// Copy voted delegates
-		copy(voterCopy.VotedDelegates, voter.VotedDelegates)
-
-		// Copy nonce map
-		for k, v := range voter.Nonce {
-			voterCopy.Nonce[k] = v
-		}
-
-		votersCopy[addr] = voterCopy
+		// 🆕 使用统一的深拷贝函数
+		votersCopy[addr] = copyVoterInfo(voter)
 	}
 
 	return votersCopy

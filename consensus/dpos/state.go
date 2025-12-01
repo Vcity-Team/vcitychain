@@ -101,16 +101,11 @@ func (s *RegistrationStore) GetRegistration(address types.Address) (*DelegateReg
 func (s *RegistrationStore) GetAllRegistrations() ([]*DelegateRegistration, error) {
 	var registrations []*DelegateRegistration
 	err := s.db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("delegate_registrations"))
-		if bucket == nil {
-			return nil
-		}
-
-		return bucket.ForEach(func(key, value []byte) error {
-			reg := &DelegateRegistration{}
-			if err := json.Unmarshal(value, reg); err != nil {
-				return err
-			}
+		// 🆕 使用 dbHelper 统一处理遍历和反序列化
+		return s.dbHelper.forEachInBucketWithUnmarshal(tx, "delegate_registrations", func() interface{} {
+			return &DelegateRegistration{}
+		}, func(key, item interface{}) error {
+			reg := item.(*DelegateRegistration)
 			registrations = append(registrations, reg)
 			return nil
 		})
@@ -258,16 +253,11 @@ func (s *FreezeStore) GetFreezeInfo(address types.Address) (*FreezeInfo, error) 
 func (s *FreezeStore) GetAllFreezeInfo() ([]*FreezeInfo, error) {
 	var infos []*FreezeInfo
 	err := s.db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("freeze_info"))
-		if bucket == nil {
-			return nil
-		}
-
-		return bucket.ForEach(func(key, value []byte) error {
-			info := &FreezeInfo{}
-			if err := json.Unmarshal(value, info); err != nil {
-				return err
-			}
+		// 🆕 使用 dbHelper 统一处理遍历和反序列化
+		return s.dbHelper.forEachInBucketWithUnmarshal(tx, "freeze_info", func() interface{} {
+			return &FreezeInfo{}
+		}, func(key, item interface{}) error {
+			info := item.(*FreezeInfo)
 			infos = append(infos, info)
 			return nil
 		})
@@ -466,26 +456,19 @@ func (bts *BlockTrackerStore) LoadAllEpochBlocks() (map[uint64]map[types.Address
 	allBlocks := make(map[uint64]map[types.Address]uint64)
 
 	err := bts.db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("blockTracker"))
-		if bucket == nil {
-			return fmt.Errorf("blockTracker bucket not found")
-		}
-
-		return bucket.ForEach(func(k, v []byte) error {
-			key := string(k)
-			if len(key) > 6 && key[:6] == "epoch_" {
+		// 🆕 使用 dbHelper 统一处理遍历和反序列化
+		return bts.dbHelper.forEachInBucketWithUnmarshal(tx, "blockTracker", func() interface{} {
+			return make(map[types.Address]uint64)
+		}, func(key, item interface{}) error {
+			keyStr := string(key.([]byte))
+			if len(keyStr) > 6 && keyStr[:6] == "epoch_" {
 				// 解析epochNumber
 				var epochNumber uint64
-				if _, err := fmt.Sscanf(key, "epoch_%d", &epochNumber); err != nil {
+				if _, err := fmt.Sscanf(keyStr, "epoch_%d", &epochNumber); err != nil {
 					return err
 				}
 
-				// 反序列化数据
-				var blockCounts map[types.Address]uint64
-				if err := json.Unmarshal(v, &blockCounts); err != nil {
-					return err
-				}
-
+				blockCounts := item.(map[types.Address]uint64)
 				allBlocks[epochNumber] = blockCounts
 			}
 			return nil
@@ -528,7 +511,11 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 			}
 			return store
 		}(),
-		ValidatorStore:    &ValidatorStore{db: db, logger: newLoggerWrapper(logger)},
+		ValidatorStore: func() *ValidatorStore {
+			vs := &ValidatorStore{db: db, logger: newLoggerWrapper(logger)}
+			vs.dbHelper = newDBHelper(newLoggerWrapper(logger)) // 🆕 添加 dbHelper
+			return vs
+		}(),
 		RewardStore:       &RewardStore{db: rewardDB, logger: newLoggerWrapper(logger)},                                              // 🆕 使用独立数据库，使用 logger wrapper
 		BlockTrackerStore: &BlockTrackerStore{db: db},                                                                                // 🆕 使用主数据库
 		ParameterStore:    &ParameterStore{db: db, dbHelper: newDBHelper(newLoggerWrapper(logger))},                                  // 🆕 使用主数据库，使用 dbHelper

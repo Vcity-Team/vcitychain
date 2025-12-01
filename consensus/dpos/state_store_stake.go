@@ -42,8 +42,9 @@ func getGlobalLoggerWrapper() *loggerWrapper {
 }
 
 type StakeStore struct {
-	db     *bolt.DB
-	logger *loggerWrapper
+	db       *bolt.DB
+	logger   *loggerWrapper
+	dbHelper *dbHelper // 🆕 添加 dbHelper
 }
 
 // setLogger 设置logger（用于初始化时设置）
@@ -581,6 +582,16 @@ func (s *StakeStore) setVotingPowerAtBlock(blockNumber uint64, delegate types.Ad
 
 // getVoterInfo 从数据库获取投票者信息
 func (s *StakeStore) getVoterInfo(voter types.Address, dbTx *bolt.Tx) (*VoterInfo, error) {
+	// 🆕 使用 dbHelper 统一处理（如果可用）
+	if s.dbHelper != nil {
+		var info VoterInfo
+		if err := s.dbHelper.getFromBucket(dbTx, "VoterInfo", voter[:], &info); err != nil {
+			return nil, WrapError("get voter info", err)
+		}
+		return &info, nil
+	}
+
+	// 回退到直接操作（兼容性）
 	bucket := dbTx.Bucket([]byte("VoterInfo"))
 	if bucket == nil {
 		return nil, errors.New("voter info bucket not found")
@@ -602,6 +613,15 @@ func (s *StakeStore) getVoterInfo(voter types.Address, dbTx *bolt.Tx) (*VoterInf
 // setVoterInfo 保存投票者信息到数据库
 func (s *StakeStore) setVoterInfo(voter types.Address, info *VoterInfo, dbTx *bolt.Tx) error {
 	return s.withTransaction(dbTx, func(tx *bolt.Tx) error {
+		// 🆕 使用 dbHelper 统一处理（如果可用）
+		if s.dbHelper != nil {
+			if err := s.dbHelper.saveToBucket(tx, "VoterInfo", voter[:], info); err != nil {
+				return WrapError("save voter info", err)
+			}
+			return nil
+		}
+
+		// 回退到直接操作（兼容性）
 		bucket, err := tx.CreateBucketIfNotExists([]byte("VoterInfo"))
 		if err != nil {
 			return WrapError("create voter info bucket", err)
@@ -978,8 +998,9 @@ func (s *StakeStore) getDelegateInfo(delegate types.Address, dbTx *bolt.Tx) (*De
 
 // ValidatorStore represents a store for validator-related data
 type ValidatorStore struct {
-	db     *bolt.DB
-	logger *loggerWrapper
+	db       *bolt.DB
+	logger   *loggerWrapper
+	dbHelper *dbHelper // 🆕 添加 dbHelper
 }
 
 // initialize creates necessary buckets in DB if they don't already exist
@@ -995,62 +1016,98 @@ func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx, 
 		return validator.AccountSet{}, fmt.Errorf("database transaction is required")
 	}
 
-	// 从 DelegateInfo bucket 获取所有受托人信息
-	delegateBucket := dbTx.Bucket([]byte("DelegateInfo"))
-	if delegateBucket == nil {
-		// 如果 bucket 不存在，返回空集合
-		return validator.AccountSet{}, nil
-	}
-
+	// 🆕 使用 dbHelper 统一处理遍历和反序列化
 	var delegates validator.AccountSet
-	cursor := delegateBucket.Cursor()
 
-	for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
-		if len(k) != 20 { // 地址长度应该是20字节
-			continue
-		}
-
-		var delegateInfo DelegateInfo
-		if err := json.Unmarshal(v, &delegateInfo); err != nil {
-			// 记录错误但继续处理其他受托人
-			s.logger.Warn("解析受托人信息失败", "error", err)
-			continue
-		}
-
-		// 🆕 修复：只检查投票权重，必须包含所有有BLS公钥的受托人
-		// 这样可以确保与出块时的受托人顺序完全一致
-		if delegateInfo.VotingPower.Cmp(big.NewInt(0)) <= 0 {
-			s.logger.Debug("getDelegatesAtBlock: 跳过投票权重为0的受托人", "address", delegateInfo.Address.String(), "votingPower", delegateInfo.VotingPower.String())
-			continue
-		}
-
-		// 恢复BLS公钥
-		var blsPublicKey *bls.PublicKey
-		if len(delegateInfo.BlsPublicKey) > 0 {
-			var err error
-			blsPublicKey, err = bls.UnmarshalPublicKey(delegateInfo.BlsPublicKey)
-			if err != nil {
-				s.logger.Warn("ValidatorStore: BLS公钥解析失败", "address", delegateInfo.Address.String(), "error", err)
-				// 即使解析失败也创建对象，但BlsKey为nil
-				blsPublicKey = nil
-			} else {
-				s.logger.Debug("ValidatorStore: BLS公钥恢复成功", "address", delegateInfo.Address.String(), "keyLength", len(delegateInfo.BlsPublicKey))
+	if s.dbHelper != nil {
+		err := s.dbHelper.forEachInBucketWithUnmarshal(dbTx, "DelegateInfo", func() interface{} {
+			return &DelegateInfo{}
+		}, func(key, item interface{}) error {
+			k := key.([]byte)
+			if len(k) != 20 { // 地址长度应该是20字节
+				return nil // 跳过
 			}
-		} else {
-			s.logger.Warn("ValidatorStore: 缺少BLS公钥数据", "address", delegateInfo.Address.String(), "keyLength", len(delegateInfo.BlsPublicKey))
+
+			delegateInfo := item.(*DelegateInfo)
+
+			// 🆕 修复：只检查投票权重，必须包含所有有BLS公钥的受托人
+			// 这样可以确保与出块时的受托人顺序完全一致
+			if delegateInfo.VotingPower.Cmp(big.NewInt(0)) <= 0 {
+				s.logger.Debug("getDelegatesAtBlock: 跳过投票权重为0的受托人", "address", delegateInfo.Address.String(), "votingPower", delegateInfo.VotingPower.String())
+				return nil // 跳过
+			}
+
+			// 恢复BLS公钥
+			var blsPublicKey *bls.PublicKey
+			if len(delegateInfo.BlsPublicKey) > 0 {
+				var err error
+				blsPublicKey, err = bls.UnmarshalPublicKey(delegateInfo.BlsPublicKey)
+				if err != nil {
+					s.logger.Warn("ValidatorStore: BLS公钥解析失败", "address", delegateInfo.Address.String(), "error", err)
+					// 即使解析失败也创建对象，但BlsKey为nil
+					blsPublicKey = nil
+				} else {
+					s.logger.Debug("ValidatorStore: BLS公钥恢复成功", "address", delegateInfo.Address.String(), "keyLength", len(delegateInfo.BlsPublicKey))
+				}
+			} else {
+				s.logger.Warn("ValidatorStore: 缺少BLS公钥数据", "address", delegateInfo.Address.String(), "keyLength", len(delegateInfo.BlsPublicKey))
+			}
+
+			// 🆕 修复：总是创建验证者元数据，保持索引一致性
+			validatorMeta := &validator.ValidatorMetadata{
+				Address:     delegateInfo.Address,
+				VotingPower: new(big.Int).Set(delegateInfo.VotingPower),
+				IsActive:    delegateInfo.IsActive,
+				BlsKey:      blsPublicKey, // 可能为nil
+			}
+
+			// 验证者元数据创建完成
+
+			delegates = append(delegates, validatorMeta)
+			return nil
+		})
+		if err != nil {
+			return validator.AccountSet{}, WrapError("get delegates from database", err)
+		}
+	} else {
+		// 回退到直接操作（兼容性，不应该发生）
+		delegateBucket := dbTx.Bucket([]byte("DelegateInfo"))
+		if delegateBucket == nil {
+			return validator.AccountSet{}, nil
 		}
 
-		// 🆕 修复：总是创建验证者元数据，保持索引一致性
-		validatorMeta := &validator.ValidatorMetadata{
-			Address:     delegateInfo.Address,
-			VotingPower: new(big.Int).Set(delegateInfo.VotingPower),
-			IsActive:    delegateInfo.IsActive,
-			BlsKey:      blsPublicKey, // 可能为nil
+		cursor := delegateBucket.Cursor()
+		for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
+			if len(k) != 20 {
+				continue
+			}
+
+			var delegateInfo DelegateInfo
+			if err := json.Unmarshal(v, &delegateInfo); err != nil {
+				s.logger.Warn("解析受托人信息失败", "error", err)
+				continue
+			}
+
+			if delegateInfo.VotingPower.Cmp(big.NewInt(0)) <= 0 {
+				continue
+			}
+
+			var blsPublicKey *bls.PublicKey
+			if len(delegateInfo.BlsPublicKey) > 0 {
+				if key, err := bls.UnmarshalPublicKey(delegateInfo.BlsPublicKey); err == nil {
+					blsPublicKey = key
+				}
+			}
+
+			validatorMeta := &validator.ValidatorMetadata{
+				Address:     delegateInfo.Address,
+				VotingPower: new(big.Int).Set(delegateInfo.VotingPower),
+				IsActive:    delegateInfo.IsActive,
+				BlsKey:      blsPublicKey,
+			}
+
+			delegates = append(delegates, validatorMeta)
 		}
-
-		// 验证者元数据创建完成
-
-		delegates = append(delegates, validatorMeta)
 	}
 
 	// 🆕 修复：按票数降序排序，如果票数相同则按地址排序，确保与出块时的顺序完全一致
