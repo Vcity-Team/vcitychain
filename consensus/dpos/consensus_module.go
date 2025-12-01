@@ -1,8 +1,6 @@
 package dpos
 
 import (
-	"fmt"
-
 	consensusmodule "github.com/Vcity-Team/vcitychain/consensus/dpos/modules/consensus"
 	"github.com/Vcity-Team/vcitychain/types"
 )
@@ -28,28 +26,35 @@ func (d *DPoS) initConsensusModule() {
 
 func (d *DPoS) buildConsensusBlock(parent *types.Header) (*types.FullBlock, error) {
 	if d.runtime == nil {
-		return nil, fmt.Errorf("runtime not initialized")
+		return nil, ErrRuntimeNotInitialized
 	}
-	return d.runtime.buildBlock()
+	block, err := d.runtime.buildBlock()
+	if err != nil {
+		return nil, WrapError("build consensus block", err)
+	}
+	return block, nil
 }
 
 func (d *DPoS) validateConsensusBlock(block *types.Block) error {
 	if d.blockchain == nil {
-		return fmt.Errorf("blockchain wrapper not available")
+		return ErrBlockchainNotAvailable
 	}
 	wrapper, ok := d.blockchain.(*blockchainWrapper)
 	if !ok {
-		return fmt.Errorf("blockchain wrapper not available")
+		return ErrBlockchainNotAvailable
 	}
 	if d.config == nil || d.config.Blockchain == nil {
-		return fmt.Errorf("blockchain config not initialized")
+		return ErrBlockchainConfigNotInitialized
 	}
 	parent := d.config.Blockchain.Header()
 	if parent == nil {
-		return fmt.Errorf("parent header not found")
+		return ErrParentHeaderNotFound
 	}
 	_, err := wrapper.ProcessBlock(parent, block)
-	return err
+	if err != nil {
+		return WrapError("validate consensus block", err)
+	}
+	return nil
 }
 
 func (d *DPoS) shouldProduceConsensusBlock(blockNumber uint64, myAddress types.Address) bool {

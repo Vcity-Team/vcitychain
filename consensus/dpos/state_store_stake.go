@@ -26,7 +26,7 @@ var (
 	errNoFullValidatorSet = errors.New("full validator set not in db")
 )
 
-// getGlobalLogger 获取全局logger
+// getGlobalLogger 获取全局logger（已废弃，使用 getGlobalLoggerWrapper 代替）
 func getGlobalLogger() hclog.Logger {
 	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 		return dposInstance.logger
@@ -34,8 +34,22 @@ func getGlobalLogger() hclog.Logger {
 	return nil
 }
 
+// getGlobalLoggerWrapper 获取全局logger包装器
+func getGlobalLoggerWrapper() *loggerWrapper {
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+		return newLoggerWrapper(dposInstance.logger)
+	}
+	return newLoggerWrapper(nil)
+}
+
 type StakeStore struct {
-	db *bolt.DB
+	db     *bolt.DB
+	logger *loggerWrapper
+}
+
+// setLogger 设置logger（用于初始化时设置）
+func (s *StakeStore) setLogger(logger *loggerWrapper) {
+	s.logger = logger
 }
 
 // isGenesisValidator 检查给定的地址是否为创世验证者
@@ -452,154 +466,80 @@ func (s *StakeStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx) (val
 
 // setDelegatesAtBlock 保存指定区块的受托人集合到数据库
 func (s *StakeStore) setDelegatesAtBlock(blockNumber uint64, delegates validator.AccountSet, dbTx *bolt.Tx) error {
-	// 使用全局logger，通过DPoS实例获取
-	logger := getGlobalLogger()
-	if logger == nil {
-		// 如果没有全局logger，使用默认输出
-		fmt.Printf("🔍 setDelegatesAtBlock: 开始存储验证者集合 blockNumber=%d delegatesCount=%d\n", blockNumber, len(delegates))
-	} else {
-		logger.Debug("🔍 setDelegatesAtBlock: 开始存储验证者集合",
-			"blockNumber", blockNumber,
-			"delegatesCount", len(delegates))
+	// 确保 logger 已初始化
+	if s.logger == nil {
+		s.logger = getGlobalLoggerWrapper()
 	}
+
+	s.logger.Debug("🔍 setDelegatesAtBlock: 开始存储验证者集合",
+		"blockNumber", blockNumber,
+		"delegatesCount", len(delegates))
 
 	// 检查参数
 	if dbTx == nil {
-		if logger != nil {
-			logger.Error("❌ setDelegatesAtBlock: 数据库事务为nil")
-		} else {
-			fmt.Printf("❌ setDelegatesAtBlock: 数据库事务为nil\n")
-		}
+		s.logger.Error("❌ setDelegatesAtBlock: 数据库事务为nil")
 		return fmt.Errorf("database transaction is nil")
 	}
 
 	if len(delegates) == 0 {
-		if logger != nil {
-			logger.Error("❌ setDelegatesAtBlock: 验证者集合为空")
-		} else {
-			fmt.Printf("❌ setDelegatesAtBlock: 验证者集合为空\n")
-		}
+		s.logger.Error("❌ setDelegatesAtBlock: 验证者集合为空")
 		return fmt.Errorf("delegates set is empty")
 	}
 
 	// 创建或获取桶
-	if logger != nil {
-		logger.Debug("🔍 setDelegatesAtBlock: 步骤1-创建桶", "blockNumber", blockNumber)
-	} else {
-		fmt.Printf("🔍 setDelegatesAtBlock: 步骤1-创建桶 blockNumber=%d\n", blockNumber)
-	}
+	s.logger.Debug("🔍 setDelegatesAtBlock: 步骤1-创建桶", "blockNumber", blockNumber)
 	bucket, err := dbTx.CreateBucketIfNotExists([]byte("DelegatesAtBlock"))
 	if err != nil {
-		if logger != nil {
-			logger.Error("❌ setDelegatesAtBlock: 创建桶失败", "error", err)
-		} else {
-			fmt.Printf("❌ setDelegatesAtBlock: 创建桶失败 error=%v\n", err)
-		}
+		s.logger.Error("❌ setDelegatesAtBlock: 创建桶失败", "error", err)
 		return fmt.Errorf("failed to create delegates at block bucket: %w", err)
 	}
-	if logger != nil {
-		logger.Debug("✅ setDelegatesAtBlock: 桶创建成功", "blockNumber", blockNumber)
-	} else {
-		fmt.Printf("✅ setDelegatesAtBlock: 桶创建成功 blockNumber=%d\n", blockNumber)
-	}
+	s.logger.Debug("✅ setDelegatesAtBlock: 桶创建成功", "blockNumber", blockNumber)
 
 	// 序列化验证者集合
-	if logger != nil {
-		logger.Debug("🔍 setDelegatesAtBlock: 步骤2-序列化验证者集合", "blockNumber", blockNumber)
-	} else {
-		fmt.Printf("🔍 setDelegatesAtBlock: 步骤2-序列化验证者集合 blockNumber=%d\n", blockNumber)
-	}
+	s.logger.Debug("🔍 setDelegatesAtBlock: 步骤2-序列化验证者集合", "blockNumber", blockNumber)
 	data, err := json.Marshal(delegates)
 	if err != nil {
-		if logger != nil {
-			logger.Error("❌ setDelegatesAtBlock: 序列化失败", "error", err)
-		} else {
-			fmt.Printf("❌ setDelegatesAtBlock: 序列化失败 error=%v\n", err)
-		}
+		s.logger.Error("❌ setDelegatesAtBlock: 序列化失败", "error", err)
 		return fmt.Errorf("failed to marshal delegates: %w", err)
 	}
-	if logger != nil {
-		logger.Debug("✅ setDelegatesAtBlock: 序列化成功",
-			"blockNumber", blockNumber,
-			"dataSize", len(data))
-	} else {
-		fmt.Printf("✅ setDelegatesAtBlock: 序列化成功 blockNumber=%d dataSize=%d\n", blockNumber, len(data))
-	}
+	s.logger.Debug("✅ setDelegatesAtBlock: 序列化成功",
+		"blockNumber", blockNumber,
+		"dataSize", len(data))
 
 	// 创建键
-	if logger != nil {
-		logger.Debug("🔍 setDelegatesAtBlock: 步骤3-创建键", "blockNumber", blockNumber)
-	} else {
-		fmt.Printf("🔍 setDelegatesAtBlock: 步骤3-创建键 blockNumber=%d\n", blockNumber)
-	}
+	s.logger.Debug("🔍 setDelegatesAtBlock: 步骤3-创建键", "blockNumber", blockNumber)
 	key := make([]byte, 8)
 	binary.BigEndian.PutUint64(key, blockNumber)
-	if logger != nil {
-		logger.Debug("✅ setDelegatesAtBlock: 键创建成功",
-			"blockNumber", blockNumber,
-			"key", fmt.Sprintf("%x", key))
-	} else {
-		fmt.Printf("✅ setDelegatesAtBlock: 键创建成功 blockNumber=%d key=%x\n", blockNumber, key)
-	}
+	s.logger.Debug("✅ setDelegatesAtBlock: 键创建成功",
+		"blockNumber", blockNumber,
+		"key", fmt.Sprintf("%x", key))
 
 	// 存储数据
-	if logger != nil {
-		logger.Debug("🔍 setDelegatesAtBlock: 步骤4-存储数据", "blockNumber", blockNumber)
-	} else {
-		fmt.Printf("🔍 setDelegatesAtBlock: 步骤4-存储数据 blockNumber=%d\n", blockNumber)
-	}
+	s.logger.Debug("🔍 setDelegatesAtBlock: 步骤4-存储数据", "blockNumber", blockNumber)
 	if err := bucket.Put(key, data); err != nil {
-		if logger != nil {
-			logger.Error("❌ setDelegatesAtBlock: 存储数据失败", "error", err)
-		} else {
-			fmt.Printf("❌ setDelegatesAtBlock: 存储数据失败 error=%v\n", err)
-		}
+		s.logger.Error("❌ setDelegatesAtBlock: 存储数据失败", "error", err)
 		return fmt.Errorf("failed to save delegates: %w", err)
 	}
-	if logger != nil {
-		logger.Debug("✅ setDelegatesAtBlock: 数据存储成功", "blockNumber", blockNumber)
-	} else {
-		fmt.Printf("✅ setDelegatesAtBlock: 数据存储成功 blockNumber=%d\n", blockNumber)
-	}
+	s.logger.Debug("✅ setDelegatesAtBlock: 数据存储成功", "blockNumber", blockNumber)
 
 	// 验证存储是否成功
-	if logger != nil {
-		logger.Debug("🔍 setDelegatesAtBlock: 步骤5-验证存储", "blockNumber", blockNumber)
-	} else {
-		fmt.Printf("🔍 setDelegatesAtBlock: 步骤5-验证存储 blockNumber=%d\n", blockNumber)
-	}
+	s.logger.Debug("🔍 setDelegatesAtBlock: 步骤5-验证存储", "blockNumber", blockNumber)
 	storedData := bucket.Get(key)
 	if storedData == nil {
-		if logger != nil {
-			logger.Error("❌ setDelegatesAtBlock: 存储后数据未找到")
-		} else {
-			fmt.Printf("❌ setDelegatesAtBlock: 存储后数据未找到\n")
-		}
+		s.logger.Error("❌ setDelegatesAtBlock: 存储后数据未找到")
 		return fmt.Errorf("stored data not found after save")
 	}
 	if len(storedData) != len(data) {
-		if logger != nil {
-			logger.Error("❌ setDelegatesAtBlock: 存储数据大小不匹配",
-				"expectedSize", len(data),
-				"actualSize", len(storedData))
-		} else {
-			fmt.Printf("❌ setDelegatesAtBlock: 存储数据大小不匹配 expectedSize=%d actualSize=%d\n", len(data), len(storedData))
-		}
+		s.logger.Error("❌ setDelegatesAtBlock: 存储数据大小不匹配",
+			"expectedSize", len(data),
+			"actualSize", len(storedData))
 		return fmt.Errorf("stored data size mismatch")
 	}
-	if logger != nil {
-		logger.Debug("✅ setDelegatesAtBlock: 存储验证成功",
-			"blockNumber", blockNumber,
-			"dataSize", len(storedData))
-	} else {
-		fmt.Printf("✅ setDelegatesAtBlock: 存储验证成功 blockNumber=%d dataSize=%d\n", blockNumber, len(storedData))
-	}
+	s.logger.Debug("✅ setDelegatesAtBlock: 存储验证成功",
+		"blockNumber", blockNumber,
+		"dataSize", len(storedData))
 
-	if logger != nil {
-		logger.Debug("✅ setDelegatesAtBlock: 所有步骤完成", "blockNumber", blockNumber)
-	} else {
-		fmt.Printf("✅ setDelegatesAtBlock: 所有步骤完成 blockNumber=%d\n", blockNumber)
-	}
+	s.logger.Debug("✅ setDelegatesAtBlock: 所有步骤完成", "blockNumber", blockNumber)
 	return nil
 }
 

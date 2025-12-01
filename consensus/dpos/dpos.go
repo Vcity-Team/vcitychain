@@ -668,60 +668,9 @@ func (d *DPoS) Start() error {
 	// 初始化性能优化组件
 	d.initPerformanceOptimizations()
 
-	// 初始化模块
-	if d.consensus == nil {
-		d.initConsensusModule()
-	}
-	if d.consensus == nil {
-		return fmt.Errorf("consensus module not initialized")
-	}
-	if d.validator == nil {
-		d.initValidatorModule()
-	}
-	if d.validator == nil {
-		return fmt.Errorf("validator module not initialized")
-	}
-	if d.epoch == nil {
-		d.initEpochModule()
-	}
-	if d.epoch == nil {
-		return fmt.Errorf("epoch module not initialized")
-	}
-	if d.reward == nil {
-		d.initRewardModule()
-	}
-	if d.fault == nil {
-		d.initFaultModule()
-	}
-	if d.fault == nil {
-		return fmt.Errorf("fault module not initialized")
-	}
-	if d.query == nil {
-		d.initQueryModule()
-	}
-	if d.governance == nil {
-		d.initGovernanceModule()
-	}
-	if d.epochLifecycle == nil {
-		d.initEpochLifecycleModule()
-	}
-	if d.network == nil {
-		d.initNetworkModule()
-	}
-	if d.network == nil {
-		return fmt.Errorf("network module not initialized")
-	}
-	if d.bls == nil {
-		d.initBLSModule()
-	}
-	if d.bls == nil {
-		return fmt.Errorf("bls module not initialized")
-	}
-	if d.stateMgr == nil {
-		d.initStateModule()
-	}
-	if d.stateMgr == nil {
-		return fmt.Errorf("state module not initialized")
+	// 统一初始化所有模块
+	if err := d.initializeModules(); err != nil {
+		return err
 	}
 
 	return nil

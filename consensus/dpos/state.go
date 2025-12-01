@@ -648,7 +648,16 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 		CheckpointStore:       &CheckpointStore{db: db},
 		EpochStore:            &EpochStore{db: db},
 		ProposerSnapshotStore: &ProposerSnapshotStore{db: db},
-		StakeStore:            &StakeStore{db: db},
+		StakeStore: func() *StakeStore {
+			store := &StakeStore{db: db}
+			// 初始化 logger wrapper
+			if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+				store.setLogger(newLoggerWrapper(dposInstance.logger))
+			} else {
+				store.setLogger(newLoggerWrapper(nil))
+			}
+			return store
+		}(),
 		ValidatorStore:        &ValidatorStore{db: db},
 		RewardStore:           &RewardStore{db: rewardDB},             // 🆕 使用独立数据库
 		BlockTrackerStore:     &BlockTrackerStore{db: db},             // 🆕 使用主数据库
