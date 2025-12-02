@@ -48,22 +48,19 @@ type Config struct {
 	NumBlockConfirmations uint64
 	MetricsInterval       time.Duration
 
-	// 🆕 新增：共识切换高度
+	// 共识切换高度
 	ConsensusSwitchHeight uint64 `yaml:"consensus_switch_height"`
 
-	// 🆕 新增：DPoS验证者数量
+	// DPoS验证者数量
 	DPoSValidatorsCount uint64
 
-	// 🆕 新增：DPoS备用验证者数量
-	BackupValidatorsCount uint64
-
-	// 🆕 新增：DPoS最大漏块数
+	// DPoS最大漏块数
 	MaxMissedBlocks uint64
 
-	// 🆕 新增：DPoS最小质押门槛
+	// DPoS最小质押门槛
 	DPoSDelegateThreshold *big.Int
 
-	// 🆕 新增：DPoS经济系统配置
+	// DPoS经济系统配置
 	DPoSEpochDuration       string `yaml:"dpos_epoch_duration"`
 	DPoSRewardDistribution  string `yaml:"dpos_reward_distribution"`   // 奖励分发地址
 	DPoSRewardAmount        string `yaml:"dpos_reward_amount"`         // 每个epoch奖励金额
@@ -72,11 +69,11 @@ type Config struct {
 	DPoSSRThreshold         string `yaml:"dpos_SR_threshold"`          // SR候选人保证金阈值
 	BlockTimeSeconds        uint64 `yaml:"block_time_s"`               // 区块间隔时间（秒）
 
-	// 🆕 新增：DPoS佣金配置
+	// DPoS佣金配置
 	DPoSCommissionRatio     uint64 `yaml:"dpos_commission_ratio"`     // 默认佣金率（基点），验证者未设置时使用
 	DPoSCommissionEffective string `yaml:"dpos_commission_effective"` // 佣金生效周期（如"21d"）
 
-	// 🆕 冻结相关配置
+	// 冻结相关配置
 	DPoSMinFreezePeriod    uint64 `yaml:"dpos_min_freeze_period"`    // 最小冻结期（秒）
 	DPoSUnfreezeLockPeriod uint64 `yaml:"dpos_unfreeze_lock_period"` // 解冻锁定期（秒）
 }

@@ -28,6 +28,10 @@ import (
 )
 
 var (
+	// dposInstances 全局 DPoS 实例注册表
+	// ⚠️ 注意：当前使用全局变量管理实例，在单实例场景下可以正常工作。
+	// 如果未来需要支持多实例场景，应该重构为使用 InstanceRegistry 结构体。
+	// 相关文档: GLOBAL_STATE_MANAGEMENT_EXPLANATION.md
 	dposInstances      = make(map[string]*DPoS)
 	dposMutex          sync.RWMutex
 	ErrBusinessInvalid = errors.New("business invalid")
@@ -151,11 +155,9 @@ type DPoSConfig struct {
 	ProposalVotePeriod  time.Duration `json:"proposalVotePeriod" yaml:"dpos_proposal_vote_period"`   // 提案表决周期
 	ProposalValidPeriod time.Duration `json:"proposalValidPeriod" yaml:"dpos_proposal_valid_period"` // 提案有效期
 
-	// 冻结相关配置
 	MinFreezePeriod    uint64 `json:"min_freeze_period" yaml:"dpos_min_freeze_period"`       // 最小冻结期（秒）
 	UnfreezeLockPeriod uint64 `json:"unfreeze_lock_period" yaml:"dpos_unfreeze_lock_period"` // 解冻锁定期（秒）
 
-	// 佣金默认配置
 	CommissionRateDefault     uint64        // 默认佣金率（基点）
 	CommissionEffectivePeriod time.Duration // 佣金率修改的延迟生效周期
 }
@@ -223,7 +225,7 @@ type DPoS struct {
 	faultyValidators  map[types.Address]bool
 	missedBlocksCount map[types.Address]uint64
 
-	// 受投票影响的验证者地址集合（解决竞态条件：多次投票时记录所有受影响的验证者）
+	// 受投票影响的验证者地址集合
 	affectedDelegates map[types.Address]bool
 
 	// 奖励分配信息
@@ -337,12 +339,10 @@ func (d *DPoS) getCurrentBlockNumber() uint64 {
 	return currentHeader.Number
 }
 
-// GetCurrentBlockNumber 获取当前区块号
 func (d *DPoS) GetCurrentBlockNumber() uint64 {
 	return d.getCurrentBlockNumber()
 }
 
-// GetConsensusSwitchHeight 获取共识切换高度
 func (d *DPoS) GetConsensusSwitchHeight() uint64 {
 	if d.config == nil {
 		return 0
@@ -350,7 +350,6 @@ func (d *DPoS) GetConsensusSwitchHeight() uint64 {
 	return d.config.ConsensusSwitchHeight
 }
 
-// GetCommissionEffectivePeriod 获取佣金生效周期
 func (d *DPoS) GetCommissionEffectivePeriod() time.Duration {
 	if d.config == nil {
 		return 21 * 24 * time.Hour // 默认值
@@ -362,8 +361,6 @@ func (d *DPoS) GetCommissionEffectivePeriod() time.Duration {
 }
 
 func (d *DPoS) PreCommitState(block *types.Block, _ *state.Transition) error {
-	// For DPoS, we don't need to validate commitment state transactions like PolyBFT
-	// This is mainly used for state transition validation
 	d.logger.Debug("pre-commit state validation", "block", block.Number())
 	return nil
 }
@@ -409,7 +406,6 @@ func (d *DPoS) Start() error {
 
 	// 设置交易池为密封状态，允许交易提升和区块构建
 	if d.txPool != nil {
-		// 检查当前节点是否是受托人（出块者）
 		if d.key != nil {
 			keyAddr := types.Address(d.key.Address())
 			isDelegate := false
@@ -505,7 +501,6 @@ func (d *DPoS) Start() error {
 			}(),
 			"delegatesCount", len(d.runtime.delegates))
 
-		// 启动DPoS运行时
 		d.logger.Info("🚀 调用d.runtime.start()...")
 		if err := d.runtime.start(); err != nil {
 			d.logger.Error("❌ 启动DPoS runtime失败", "error", err)
@@ -528,12 +523,10 @@ func (d *DPoS) Start() error {
 		go d.state.startStatsReleasing()
 	}
 
-	// 从数据库恢复投票数据
 	if err := d.restoreVotingDataFromDatabase(); err != nil {
 		d.logger.Error("Failed to restore voting data from database", "error", err)
 	}
 
-	// 启动时直接调用和命令一样的数据源方法
 	if err := d.callCommandDataSourcesOnStartup(); err != nil {
 		d.logger.Warn("Failed to call command data sources on startup", "error", err)
 	}
@@ -580,263 +573,28 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		closeCh:     make(chan struct{}),
 		logger:      logger,
 		txPool:      params.TxPool,
-		config:      &DPoSConfig{},              // 初始化config结构体
 		rawConfig:   params.Config.Config,       // 存储原始配置
 		lastLogTime: make(map[string]time.Time), // 初始化日志频率限制
 	}
 
-	parser := NewConfigParser(params.Config.Config, logger)
-
 	logger.Info("🔍 开始解析DPoS经济系统配置", "configKeys", len(params.Config.Config))
 
-	if height, ok := parser.GetUint64("consensusSwitchHeight"); ok {
-		vcity_dpos.config.ConsensusSwitchHeight = height
-		logger.Debug("🔄 设置共识切换高度", "height", height)
-	}
+	// 使用 ConfigBuilder 解析配置
+	builder := NewConfigBuilder(params.Config.Config, logger)
+	vcity_dpos.config = builder.
+		ParseBasicConfig().
+		ParseCommissionConfig().
+		ParseSlashingConfig().
+		ParseEpochConfig().
+		ParseProposalConfig().
+		ParseFreezeConfig().
+		SetDefaults().
+		Build()
 
-	// 解析验证者数量（支持驼峰和下划线两种键名）
-	if count, ok := parser.GetUint64("dposValidatorsCount", "dpos_validators_count"); ok {
-		vcity_dpos.config.DelegateCount = count
-		vcity_dpos.config.DPoSValidatorsCount = count
-		logger.Info("👥 设置验证者数量", "count", count)
-	} else {
-		logger.Warn("👥 未找到 dposValidatorsCount 配置")
-	}
-
-	// 解析默认佣金率（从配置文件读取）
-	if ratio, ok := parser.GetUint64("dposCommissionRatio", "dpos_commission_ratio"); ok && ratio > 0 {
-		vcity_dpos.config.CommissionRateDefault = ratio
-		logger.Info("💼 设置默认佣金率", "ratio", ratio)
-	}
-
-	// 解析佣金生效周期
-	if duration, ok := parser.GetDuration("commissionEffectivePeriod", "dpos_commission_effective"); ok && duration > 0 {
-		vcity_dpos.config.CommissionEffectivePeriod = duration
-		logger.Info("⏳ 设置佣金生效周期", "duration", duration.String())
-	}
-
-	// 解析漏块率阈值
-	if percentage, ok := parser.GetUint64("dpos_missed_blocks_percentage", "missed_blocks_percentage"); ok {
-		logger.Info("🔨 从配置文件读取漏块率阈值", "percentage", percentage, "基点")
-	} else {
-		logger.Warn("🔨 未找到dpos_missed_blocks_percentage配置，将使用默认值1000 (10%)")
-	}
-
-	// 解析轻度违规削减率
-	if rate, ok := parser.GetUint64("dpos_minor_offense_slash_rate", "minor_offense_slash_rate"); ok {
-		logger.Info("🔨 从配置文件读取轻度违规削减率", "rate", rate, "基点")
-	} else {
-		logger.Warn("🔨 未找到dpos_minor_offense_slash_rate配置，将使用默认值50 (0.5%)")
-	}
-
-	// 解析严重违规削减率
-	if rate, ok := parser.GetUint64("dpos_severe_offense_slash_rate", "severe_offense_slash_rate"); ok {
-		logger.Info("🔨 从配置文件读取严重违规削减率", "rate", rate, "基点")
-	} else {
-		logger.Warn("🔨 未找到dpos_severe_offense_slash_rate配置，将使用默认值1000 (10%)")
-	}
-
-	// 解析 Epoch 持续时间
-	if duration, ok := parser.GetDuration("epochDuration"); ok {
-		vcity_dpos.config.EpochDuration = duration
-		logger.Info("⏰ 设置 Epoch 持续时间", "duration", duration.String())
-	} else {
-		logger.Warn("⏰ 未找到epochDuration配置")
-	}
-
-	// 解析奖励账户
-	if account, ok := parser.GetAddress("rewardAccount"); ok {
-		vcity_dpos.config.RewardAccount = account
-		logger.Info("💰 设置奖励账户", "account", account.String())
-	} else {
-		logger.Warn("💰 未找到rewardAccount配置")
-	}
-
-	// 解析奖励金额
-	if amount, ok := parser.GetBigInt("rewardAmount"); ok {
-		vcity_dpos.config.RewardAmount = amount
-		logger.Info("💰 设置奖励金额", "amount", amount.String())
-	} else {
-		logger.Warn("💰 未找到rewardAmount配置")
-	}
-
-	// 解析提案表决周期配置
-	logger.Info("📋 检查Config中的所有键", "keys", func() []string {
-		keys := make([]string, 0, len(params.Config.Config))
-		for k := range params.Config.Config {
-			keys = append(keys, k)
-		}
-		return keys
-	}())
-
-	if proposalVotePeriod, exists := params.Config.Config["proposalVotePeriod"]; exists {
-		logger.Info("🔍 找到proposalVotePeriod配置", "type", fmt.Sprintf("%T", proposalVotePeriod), "value", proposalVotePeriod)
-		if period, ok := proposalVotePeriod.(time.Duration); ok {
-			vcity_dpos.config.ProposalVotePeriod = period
-			logger.Info("📋 ✅ 使用server层解析的提案表决周期", "period", period.String(), "seconds", period.Seconds())
-		} else {
-			logger.Warn("📋 ❌ proposalVotePeriod类型断言失败",
-				"type", fmt.Sprintf("%T", proposalVotePeriod),
-				"value", proposalVotePeriod,
-				"尝试转换为time.Duration")
-			if periodStr, ok := proposalVotePeriod.(string); ok {
-				// 支持 "d" 单位：转换为小时
-				durationStr := periodStr
-				if strings.Contains(durationStr, "d") {
-					durationStr = strings.TrimSpace(durationStr)
-					var days float64
-					var suffix string
-					if _, err := fmt.Sscanf(durationStr, "%f%s", &days, &suffix); err == nil && strings.HasPrefix(suffix, "d") {
-						remaining := strings.TrimPrefix(suffix, "d")
-						hours := days * 24
-						if remaining != "" {
-							durationStr = fmt.Sprintf("%.0fh%s", hours, remaining)
-						} else {
-							durationStr = fmt.Sprintf("%.0fh", hours)
-						}
-					} else {
-						lastD := strings.LastIndex(durationStr, "d")
-						if lastD > 0 {
-							if _, err := fmt.Sscanf(durationStr[:lastD+1], "%fd", &days); err == nil {
-								hours := days * 24
-								durationStr = fmt.Sprintf("%.0fh%s", hours, durationStr[lastD+1:])
-							}
-						}
-					}
-				}
-				if duration, err := time.ParseDuration(durationStr); err == nil {
-					vcity_dpos.config.ProposalVotePeriod = duration
-					logger.Info("📋 ✅ 从字符串成功解析提案表决周期", "period", duration.String())
-				} else {
-					logger.Warn("📋 ❌ 字符串解析失败", "error", err)
-				}
-			}
-		}
-	} else {
-		logger.Warn("📋 ❌ 未找到proposalVotePeriod配置，将使用默认值")
-	}
-
-	// 解析提案有效期配置
-	if proposalValidPeriod, exists := params.Config.Config["proposalValidPeriod"]; exists {
-		logger.Info("🔍 找到proposalValidPeriod配置", "type", fmt.Sprintf("%T", proposalValidPeriod), "value", proposalValidPeriod)
-		if period, ok := proposalValidPeriod.(time.Duration); ok {
-			vcity_dpos.config.ProposalValidPeriod = period
-			logger.Info("📋 ✅ 使用server层解析的提案有效期", "period", period.String(), "seconds", period.Seconds())
-		} else {
-			logger.Warn("📋 ❌ proposalValidPeriod类型断言失败",
-				"type", fmt.Sprintf("%T", proposalValidPeriod),
-				"value", proposalValidPeriod,
-				"尝试转换为time.Duration")
-			if periodStr, ok := proposalValidPeriod.(string); ok {
-				// 支持 "d" 单位：转换为小时
-				durationStr := periodStr
-				if strings.Contains(durationStr, "d") {
-					durationStr = strings.TrimSpace(durationStr)
-					var days float64
-					var suffix string
-					if _, err := fmt.Sscanf(durationStr, "%f%s", &days, &suffix); err == nil && strings.HasPrefix(suffix, "d") {
-						remaining := strings.TrimPrefix(suffix, "d")
-						hours := days * 24
-						if remaining != "" {
-							durationStr = fmt.Sprintf("%.0fh%s", hours, remaining)
-						} else {
-							durationStr = fmt.Sprintf("%.0fh", hours)
-						}
-					} else {
-						lastD := strings.LastIndex(durationStr, "d")
-						if lastD > 0 {
-							if _, err := fmt.Sscanf(durationStr[:lastD+1], "%fd", &days); err == nil {
-								hours := days * 24
-								durationStr = fmt.Sprintf("%.0fh%s", hours, durationStr[lastD+1:])
-							}
-						}
-					}
-				}
-				if duration, err := time.ParseDuration(durationStr); err == nil {
-					vcity_dpos.config.ProposalValidPeriod = duration
-					logger.Info("📋 ✅ 从字符串成功解析提案有效期", "period", duration.String())
-				} else {
-					logger.Warn("📋 ❌ 字符串解析失败", "error", err)
-				}
-			}
-		}
-	} else {
-		logger.Warn("📋 ❌ 未找到proposalValidPeriod配置，将使用默认值")
-	}
-
-	// 解析区块时间配置
-	if blockTimeStr, exists := parser.GetValue("blockTime"); exists {
-		if blockTime, ok := blockTimeStr.(string); ok {
-			if duration, err := time.ParseDuration(blockTime); err == nil {
-				vcity_dpos.config.BlockTime = common.Duration{Duration: duration}
-				logger.Info("⏰ 设置区块时间", "duration", duration.String())
-			} else {
-				logger.Warn("⏰ blockTime解析失败", "value", blockTime, "error", err)
-			}
-		} else {
-			logger.Warn("⏰ blockTime类型不支持", "type", fmt.Sprintf("%T", blockTimeStr))
-		}
-	} else {
-		logger.Warn("⏰ 未找到blockTime配置")
-	}
-
-	// 解析冻结相关配置
-	if period, ok := parser.GetUint64("dpos_min_freeze_period"); ok {
-		vcity_dpos.config.MinFreezePeriod = period
-		logger.Info("❄️ 设置最小冻结期", "period", period, "seconds", period)
-	} else {
-		logger.Warn("❄️ 未找到dpos_min_freeze_period配置，使用默认值604800秒（7天）")
-		vcity_dpos.config.MinFreezePeriod = 604800
-	}
-
-	// 解析解冻锁定期
-	if period, ok := parser.GetUint64("dpos_unfreeze_lock_period", "unfreeze_lock_period"); ok {
-		vcity_dpos.config.UnfreezeLockPeriod = period
-		logger.Info("🔓 设置解冻锁定期", "period", period, "seconds", period)
-	} else {
-		logger.Warn("🔓 未找到dpos_unfreeze_lock_period配置，使用默认值1209600秒（14天）")
-		vcity_dpos.config.UnfreezeLockPeriod = 1209600
-	}
+	// 设置依赖注入
 	vcity_dpos.config.SecretsManager = params.SecretsManager
 	vcity_dpos.config.Blockchain = params.Blockchain
 	vcity_dpos.config.Logger = params.Logger
-
-	if vcity_dpos.config.EpochDuration == 0 {
-		logger.Warn("⚠️ epochDuration为0，设置默认值86400秒")
-		vcity_dpos.config.EpochDuration = 86400 * time.Second
-	}
-
-	if vcity_dpos.config.RewardAmount == nil {
-		logger.Warn("⚠️ rewardAmount为nil，设置默认值")
-		vcity_dpos.config.RewardAmount = DefaultVotingPower() // 1000 VCITY
-	}
-
-	if vcity_dpos.config.CommissionRateDefault == 0 {
-		logger.Warn("💼 commissionRateDefault为0，设置默认值10% (1000 基点)")
-		vcity_dpos.config.CommissionRateDefault = 1000
-	}
-
-	if vcity_dpos.config.CommissionEffectivePeriod == 0 {
-		defaultCommissionEffective := 21 * 24 * time.Hour
-		logger.Warn("⏳ commissionEffectivePeriod为0，设置默认值21天", "duration", defaultCommissionEffective.String())
-		vcity_dpos.config.CommissionEffectivePeriod = defaultCommissionEffective
-	}
-
-	if vcity_dpos.config.ProposalVotePeriod == 0 {
-		logger.Warn("⚠️ proposalVotePeriod为0，设置默认值24小时")
-		vcity_dpos.config.ProposalVotePeriod = 24 * time.Hour
-	}
-	if vcity_dpos.config.ProposalValidPeriod == 0 {
-		logger.Warn("⚠️ proposalValidPeriod为0，设置默认值7天")
-		vcity_dpos.config.ProposalValidPeriod = 7 * 24 * time.Hour
-	}
-
-	if vcity_dpos.config.BlockTime.Duration == 0 {
-		vcity_dpos.config.BlockTime = common.Duration{Duration: 3 * time.Second}
-		logger.Info("⏰ 使用默认DPoS区块时间3秒", "duration", vcity_dpos.config.BlockTime.Duration.String())
-	} else {
-		logger.Info("⏰ 使用配置文件中的DPoS区块时间", "duration", vcity_dpos.config.BlockTime.Duration.String())
-	}
 	vcity_dpos.config.Network = params.Network
 	vcity_dpos.config.Executor = params.Executor
 
@@ -1060,7 +818,6 @@ func (d *DPoS) GetCurrentDelegate() types.Address {
 	return types.ZeroAddress
 }
 
-// GetVoters returns the current voters map for external access
 func (d *DPoS) GetVoters() map[types.Address]*VoterInfo {
 	d.lock.RLock()
 	defer d.lock.RUnlock()
@@ -1091,7 +848,6 @@ func (d *DPoS) GetState() *State {
 	return d.state
 }
 
-// 获取性能指标
 func (d *DPoS) GetMetrics() *DPoSMetrics {
 	d.metrics.lock.RLock()
 	defer d.metrics.lock.RUnlock()
@@ -1105,7 +861,6 @@ func (d *DPoS) GetMetrics() *DPoSMetrics {
 	}
 }
 
-// 获取数据目录路径
 func (d *DPoS) getDataDir() string {
 	if d.dataDir != "" {
 		return d.dataDir

@@ -106,9 +106,6 @@ type serverParams struct {
 	// 🆕 新增：DPoS验证者数量
 	dposValidatorsCount uint64
 
-	// 🆕 新增：DPoS备用验证者数量
-	backupValidatorsCount uint64
-
 	// 🆕 新增：DPoS最大漏块数
 	maxMissedBlocks uint64
 
@@ -231,8 +228,6 @@ func (p *serverParams) generateConfig() *server.Config {
 		ConsensusSwitchHeight: p.consensusSwitchHeight,
 		// 🆕 新增：DPoS验证者数量
 		DPoSValidatorsCount: p.dposValidatorsCount,
-		// 🆕 新增：DPoS备用验证者数量
-		BackupValidatorsCount: p.backupValidatorsCount,
 		// 🆕 新增：DPoS最大漏块数
 		MaxMissedBlocks: p.maxMissedBlocks,
 		// 🆕 新增：DPoS最小质押门槛

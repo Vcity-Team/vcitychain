@@ -9,9 +9,10 @@ import (
 
 	"github.com/Vcity-Team/vcitychain/command/server/config"
 
+	"strings"
+
 	helperCommon "github.com/Vcity-Team/vcitychain/helper/common"
 	"github.com/Vcity-Team/vcitychain/network/common"
-	"strings"
 
 	"github.com/Vcity-Team/vcitychain/chain"
 	"github.com/Vcity-Team/vcitychain/command/helper"
@@ -117,12 +118,6 @@ func (p *serverParams) initDPoSConfig() {
 		p.dposValidatorsCount = 5 // 默认值
 	}
 
-	// 初始化备用验证者数量
-	p.backupValidatorsCount = p.rawConfig.BackupValidatorsCount
-	if p.backupValidatorsCount == 0 {
-		p.backupValidatorsCount = 10 // 默认值
-	}
-
 	// 初始化最大漏块数
 	p.maxMissedBlocks = p.rawConfig.MaxMissedBlocks
 	if p.maxMissedBlocks == 0 {
@@ -198,7 +193,7 @@ func (p *serverParams) initLondonForkConfig() error {
 // parseBaseFeeConfig 解析 BaseFee 配置字符串
 func parseBaseFeeConfig(baseFeeConfigRaw string) (*baseFeeInfo, error) {
 	// 默认值（参考 command/genesis/utils.go）
-	const defaultBaseFee = 1000000000            // 1 Gwei
+	const defaultBaseFee = 1000000000 // 1 Gwei
 	const defaultBaseFeeEM = 2
 	const defaultBaseFeeChangeDenom = 8
 
