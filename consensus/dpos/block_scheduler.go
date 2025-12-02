@@ -109,11 +109,13 @@ func (bs *BlockScheduler) logOnceWithInterval(key string, interval time.Duration
 }
 
 // ShouldProduceBlockNow 检查指定地址在当前slot是否应该出块
+// 完全基于时间的slot计算：所有节点都使用time.Now()计算slot，重启后虽然slot会跳跃，但所有节点同步跳跃，出块顺序仍然是轮流的
 func (bs *BlockScheduler) ShouldProduceBlockNow(
 	myAddress types.Address,
 	validators []types.Address,
 	blockNumber uint64,
-	validatorsSource string, // 🆕 验证者列表来源（用于日志）
+	currentBlock *types.Header, // 当前区块头，用于获取时间戳进行时间间隔检查
+	validatorsSource string, // 验证者列表来源（用于日志）
 ) bool {
 	if len(validators) == 0 {
 		bs.logger.Debug("❌ ShouldProduceBlockNow: 验证者列表为空")
@@ -121,8 +123,6 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	}
 
 	// 检查是否在共识切换高度之后
-	// 🆕 修复：blockNumber是当前区块高度，下一个要生产的区块是blockNumber+1
-	// 所以应该检查下一个区块是否达到共识切换高度
 	nextBlockNumber := blockNumber + 1
 	if nextBlockNumber < bs.consensusSwitchHeight {
 		return false
@@ -135,13 +135,21 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 		return false
 	}
 
-	// 🆕 修复：完全基于区块号计算应该由哪个验证者出块（不再基于时间slot）
-	// 计算从共识切换高度开始的区块偏移
-	blockOffset := nextBlockNumber - bs.consensusSwitchHeight
-	// 基于区块号计算验证者索引
-	currentValidatorIndex := int(blockOffset) % activeValidatorCount
+	// 1. 完全基于时间计算slot（所有节点都使用time.Now()，NTP同步后所有节点计算的slot一致）
+	now := time.Now()
+	genesisTime := bs.genesisTime
+	blockWindow := bs.blockWindow
+	timeSinceGenesis := now.Sub(genesisTime)
+	currentSlot := int(timeSinceGenesis / blockWindow)
+	if currentSlot < 0 {
+		// 如果slot为负数（在共识切换之前），返回false
+		return false
+	}
 
-	// 检查当前验证者是否是本节点
+	// 2. 计算验证者索引
+	currentValidatorIndex := currentSlot % activeValidatorCount
+
+	// 4. 检查当前验证者是否是本节点
 	if currentValidatorIndex >= len(validators) {
 		bs.logger.Debug("❌ ShouldProduceBlockNow: 验证者索引超出范围",
 			"currentValidatorIndex", currentValidatorIndex,
@@ -158,7 +166,9 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 		bs.logger.Info("🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块",
 			"blockNumber", blockNumber,
 			"nextBlockNumber", nextBlockNumber,
-			"blockOffset", blockOffset,
+			"currentSlot", currentSlot,
+			"timeSinceGenesis", timeSinceGenesis.String(),
+			"currentTime", now.Format("2006-01-02 15:04:05.000"),
 			"activeValidatorCount", activeValidatorCount,
 			"activeValidatorCountSource", validatorsSource, // 🆕 验证者列表来源
 			"myAddress", myAddress.String(),
@@ -173,7 +183,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 				}
 				return vs
 			}(),
-			"note", "基于区块号计算验证者索引，不依赖时间")
+			"note", "完全基于时间计算slot，所有节点同步，重启后出块顺序仍然是轮流的")
 	}
 
 	return isMatch
@@ -300,45 +310,6 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		}
 	}
 
-	// 🆕 检查距离链上最后一个区块的时间间隔，确保至少间隔 blockTime
-	// 使用链上最后一个区块的时间戳，而不是本节点上次出块时间
-	// 这样才能确保整个链上每个区块之间至少间隔 blockTime
-	blockTime := r.config.BlockTime.Duration
-	if blockTime == 0 {
-		blockTime = 3 * time.Second // 默认3秒
-	}
-
-	// 获取链上最后一个区块的时间戳
-	lastBlockTimestamp := time.Unix(int64(currentBlock.Timestamp), 0)
-	now := time.Now()
-	timeSinceLastBlock := now.Sub(lastBlockTimestamp)
-
-	// 🆕 添加时间检查的详细日志（INFO级别，帮助诊断为什么不出块）
-	r.logOnceWithInterval("should_produce_block_now_time_check_detail", 1*time.Second, "info",
-		"⏰ [时间间隔检查] shouldProduceBlockNow",
-		"timeSinceLastBlock", timeSinceLastBlock.String(),
-		"blockTime", blockTime.String(),
-		"lastBlockNumber", currentBlock.Number,
-		"lastBlockTimestamp", lastBlockTimestamp.Format("2006-01-02 15:04:05.000"),
-		"currentTime", now.Format("2006-01-02 15:04:05.000"),
-		"lastBlockTimestampUnix", currentBlock.Timestamp,
-		"currentTimeUnix", now.Unix(),
-		"timeDiffSeconds", now.Unix()-int64(currentBlock.Timestamp),
-		"shouldWait", timeSinceLastBlock < blockTime && timeSinceLastBlock >= 0,
-		"willContinue", timeSinceLastBlock >= blockTime || timeSinceLastBlock < 0)
-
-	if timeSinceLastBlock < blockTime {
-		// 距离链上最后一个区块时间太短，需要等待
-		r.logOnceWithInterval("should_produce_block_now_time_check", 1*time.Second, "info",
-			"⏰ [等待] 距离链上最后一个区块时间太短，等待中",
-			"timeSinceLastBlock", timeSinceLastBlock.String(),
-			"blockTime", blockTime.String(),
-			"remaining", (blockTime - timeSinceLastBlock).String(),
-			"lastBlockNumber", currentBlock.Number,
-			"lastBlockTimestamp", lastBlockTimestamp.Format("2006-01-02 15:04:05.000"))
-		return false
-	}
-
 	// 🆕 添加详细的调试日志（使用Debug级别）
 	r.logOnceWithInterval("should_produce_block_now_debug", 5*time.Second, "debug",
 		"🔍 shouldProduceBlockNow 开始检查",
@@ -397,18 +368,8 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			return false
 		}
 
-		// 🆕 调用改进后的方法（直接比较地址）
-		result := r.config.blockScheduler.ShouldProduceBlockNow(myAddress, validators, currentBlock.Number, validatorsSource)
-
-		// 🆕 添加结果日志（INFO级别）
-		if !result {
-			r.logOnceWithInterval("should_produce_block_now_result_false", 2*time.Second, "info",
-				"❌ [不出块] ShouldProduceBlockNow返回false",
-				"blockNumber", currentBlock.Number,
-				"myAddress", myAddress.String(),
-				"validatorsCount", len(validators),
-				"validatorsSource", validatorsSource)
-		}
+		// 🆕 调用改进后的方法（直接比较地址），传递当前区块头用于时间戳计算
+		result := r.config.blockScheduler.ShouldProduceBlockNow(myAddress, validators, currentBlock.Number, currentBlock, validatorsSource)
 
 		return result
 	}

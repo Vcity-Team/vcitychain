@@ -67,6 +67,12 @@ func (d *DPoS) shouldProduceConsensusBlock(blockNumber uint64, myAddress types.A
 		return false
 	}
 
+	// 获取当前区块头（用于时间间隔检查）
+	var currentBlock *types.Header
+	if d.config != nil && d.config.Blockchain != nil {
+		currentBlock = d.config.Blockchain.Header()
+	}
+
 	addresses := make([]types.Address, len(validators))
 	for i, v := range validators {
 		addresses[i] = v.Address
@@ -76,6 +82,7 @@ func (d *DPoS) shouldProduceConsensusBlock(blockNumber uint64, myAddress types.A
 		myAddress,
 		addresses,
 		blockNumber,
+		currentBlock,
 		"ConsensusModule",
 	)
 }
