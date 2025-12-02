@@ -137,6 +137,22 @@ func (p *serverParams) initDPoSConfig() {
 		p.dposProposalValidPeriod = "7d" // 默认7天
 		fmt.Printf("⚠️ DPoSProposalValidPeriod配置为空，使用默认值: %s\n", p.dposProposalValidPeriod)
 	}
+
+	// 初始化削减相关配置
+	p.dposMissedBlocksPercentage = p.rawConfig.DPoSMissedBlocksPercentage
+	if p.dposMissedBlocksPercentage == 0 {
+		p.dposMissedBlocksPercentage = 1000 // 默认10%（1000基点）
+	}
+
+	p.dposMinorOffenseSlashRate = p.rawConfig.DPoSMinorOffenseSlashRate
+	if p.dposMinorOffenseSlashRate == 0 {
+		p.dposMinorOffenseSlashRate = 50 // 默认0.5%（50基点）
+	}
+
+	p.dposSevereOffenseSlashRate = p.rawConfig.DPoSSevereOffenseSlashRate
+	if p.dposSevereOffenseSlashRate == 0 {
+		p.dposSevereOffenseSlashRate = 1000 // 默认10%（1000基点）
+	}
 }
 
 func (p *serverParams) initBlockGasTarget() error {

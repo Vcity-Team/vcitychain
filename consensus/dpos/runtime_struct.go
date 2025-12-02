@@ -28,7 +28,6 @@ type dposRuntime struct {
 
 	// 运行时状态
 	currentRound            uint64
-	lastProducedSlot        int       // 🆕 记录上次出块的 slot，防止一个 slot 内出多个区块
 	lastBlockProductionTime time.Time // 记录上次本地出块的时间
 	lastBlockNumber         uint64    // 记录上次出块的区块号
 	delegates               validator.AccountSet

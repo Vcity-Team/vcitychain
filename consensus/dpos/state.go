@@ -458,7 +458,8 @@ func (bts *BlockTrackerStore) LoadAllEpochBlocks() (map[uint64]map[types.Address
 	err := bts.db.View(func(tx *bolt.Tx) error {
 		// 🆕 使用 dbHelper 统一处理遍历和反序列化
 		return bts.dbHelper.forEachInBucketWithUnmarshal(tx, "blockTracker", func() interface{} {
-			return make(map[types.Address]uint64)
+			result := make(map[types.Address]uint64)
+			return &result
 		}, func(key, item interface{}) error {
 			keyStr := string(key.([]byte))
 			if len(keyStr) > 6 && keyStr[:6] == "epoch_" {
@@ -468,8 +469,8 @@ func (bts *BlockTrackerStore) LoadAllEpochBlocks() (map[uint64]map[types.Address
 					return err
 				}
 
-				blockCounts := item.(map[types.Address]uint64)
-				allBlocks[epochNumber] = blockCounts
+				blockCountsPtr := item.(*map[types.Address]uint64)
+				allBlocks[epochNumber] = *blockCountsPtr
 			}
 			return nil
 		})
@@ -517,7 +518,7 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 			return vs
 		}(),
 		RewardStore:       &RewardStore{db: rewardDB, logger: newLoggerWrapper(logger)},                                              // 🆕 使用独立数据库，使用 logger wrapper
-		BlockTrackerStore: &BlockTrackerStore{db: db},                                                                                // 🆕 使用主数据库
+		BlockTrackerStore: &BlockTrackerStore{db: db, dbHelper: newDBHelper(newLoggerWrapper(logger))}, // 🆕 使用主数据库，使用 dbHelper
 		ParameterStore:    &ParameterStore{db: db, dbHelper: newDBHelper(newLoggerWrapper(logger))},                                  // 🆕 使用主数据库，使用 dbHelper
 		ProposalStore:     &ProposalStore{db: db, logger: newLoggerWrapper(logger), dbHelper: newDBHelper(newLoggerWrapper(logger))}, // 🆕 使用主数据库，使用 logger wrapper 和 dbHelper
 		RegistrationStore: NewRegistrationStore(db, logger),                                                                          // 🆕 使用主数据库，使用 dbHelper

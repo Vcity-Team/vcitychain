@@ -134,25 +134,6 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 // produceBlock 生产区块
 // 🆕 方案1+2：缩小锁的粒度，使用读写锁
 func (r *dposRuntime) produceBlock() error {
-	// 🆕 方案1：将slot检查移到锁外，使用读锁快速检查
-	var currentSlot int = -1
-	if r.config.blockScheduler != nil {
-		now := time.Now()
-		genesisTime := r.config.blockScheduler.GetGenesisTime()
-		blockWindow := r.config.blockScheduler.GetBlockWindow()
-		timeSinceGenesis := now.Sub(genesisTime)
-		currentSlot = int(timeSinceGenesis / blockWindow)
-
-		// 🆕 使用读锁快速检查
-		r.lock.RLock()
-		lastSlot := r.lastProducedSlot
-		r.lock.RUnlock()
-
-		// 如果当前 slot 已经出过块，跳过
-		if lastSlot >= 0 && lastSlot == currentSlot {
-			return nil
-		}
-	}
 
 	// 获取当前区块
 	currentBlock := r.config.blockchain.CurrentHeader()
@@ -264,16 +245,10 @@ func (r *dposRuntime) produceBlock() error {
 	// 计算下一个要生产的区块号
 	nextBlockNumber := currentBlock.Number + 1
 
-	// 🆕 保存构建开始时的slot和时间（用于超时检查，TRON机制）
-	var buildStartSlot int = -1
+	// 🆕 保存构建开始时间（用于超时检查）
 	var buildStartTime time.Time
 	if r.config.blockScheduler != nil {
-		now := time.Now()
-		genesisTime := r.config.blockScheduler.GetGenesisTime()
-		blockWindow := r.config.blockScheduler.GetBlockWindow()
-		timeSinceGenesis := now.Sub(genesisTime)
-		buildStartSlot = int(timeSinceGenesis / blockWindow)
-		buildStartTime = now
+		buildStartTime = time.Now()
 	}
 
 	// 只对区块1进行特殊检查，防止分叉
@@ -309,32 +284,19 @@ func (r *dposRuntime) produceBlock() error {
 		return fmt.Errorf("failed to build block: %w", err)
 	}
 
-	// 🆕 检查是否超过slot时间（TRON机制：如果构建耗时超过slot时间或slot已变化，丢弃该区块）
-	if r.config.blockScheduler != nil && buildStartSlot >= 0 {
+	// 🆕 检查构建耗时是否过长（如果构建耗时超过blockWindow的3倍，丢弃该区块）
+	if r.config.blockScheduler != nil {
 		now := time.Now()
-		genesisTime := r.config.blockScheduler.GetGenesisTime()
 		blockWindow := r.config.blockScheduler.GetBlockWindow()
-		timeSinceGenesis := now.Sub(genesisTime)
-		currentSlotAfterBuild := int(timeSinceGenesis / blockWindow)
 		buildDuration := now.Sub(buildStartTime)
 
-		// 检查构建耗时是否超过slot时间
-		if buildDuration > blockWindow {
-			r.logger.Warn("⏰ 区块构建耗时超过slot时间，丢弃该区块（TRON机制）",
+		// 检查构建耗时是否过长（超过blockWindow的3倍）
+		if buildDuration > blockWindow*3 {
+			r.logger.Warn("⏰ 区块构建耗时过长，丢弃该区块",
 				"blockNumber", nextBlockNumber,
 				"buildDuration", buildDuration,
 				"blockWindow", blockWindow,
-				"buildStartSlot", buildStartSlot,
-				"currentSlotAfterBuild", currentSlotAfterBuild)
-			return nil
-		}
-
-		// 检查slot是否已变化
-		if currentSlotAfterBuild != buildStartSlot {
-			r.logger.Warn("⏰ slot已变化，丢弃该区块（TRON机制）",
-				"blockNumber", nextBlockNumber,
-				"buildStartSlot", buildStartSlot,
-				"currentSlotAfterBuild", currentSlotAfterBuild)
+				"maxAllowedDuration", blockWindow*3)
 			return nil
 		}
 	}
@@ -367,19 +329,10 @@ func (r *dposRuntime) produceBlock() error {
 		"delegate", r.config.Key.Address().String()[:16])
 
 	// 🆕 方案1：只在更新状态时使用写锁（时间很短）
-	if r.config.blockScheduler != nil && currentSlot >= 0 {
+	if r.config.blockScheduler != nil {
 		r.lock.Lock()
-		// 🆕 再次检查（防止并发问题）
-		now := time.Now()
-		genesisTime := r.config.blockScheduler.GetGenesisTime()
-		blockWindow := r.config.blockScheduler.GetBlockWindow()
-		timeSinceGenesis := now.Sub(genesisTime)
-		actualSlot := int(timeSinceGenesis / blockWindow)
-
-		// 如果slot已经变化，不更新（避免覆盖新的slot）
-		if actualSlot == currentSlot {
-			r.lastProducedSlot = currentSlot
-		}
+		// 🆕 更新最后出块的区块号
+		r.lastBlockNumber = block.Block.Number()
 		r.lock.Unlock()
 	}
 

@@ -17,7 +17,6 @@ func (r *dposRuntime) initializeRuntime() error {
 
 	// 🆕 修复：根据当前区块号计算初始轮次
 	r.currentRound = r.calculateInitialRound()
-	r.lastProducedSlot = -1 // 🆕 初始化为 -1，表示还没出过块
 
 	// 初始化受托人集合
 	if err := r.initializeDelegates(); err != nil {

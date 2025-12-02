@@ -553,6 +553,11 @@ func (d *DPoS) Close() error {
 		d.runtime.close()
 	}
 
+	// 🆕 保存当前epoch的出块记录，确保数据不丢失
+	if d.blockTracker != nil {
+		d.blockTracker.SaveCurrentEpoch()
+	}
+
 	if d.key != nil {
 		key := d.key.Address().String()
 		UnregisterDPoSInstance(key)

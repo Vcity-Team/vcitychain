@@ -121,6 +121,31 @@ func (bpt *BlockProductionTracker) saveEpochToDB(epochNumber uint64, blockCounts
 	}
 }
 
+// SaveCurrentEpoch 保存当前epoch的出块记录（用于程序关闭时）
+func (bpt *BlockProductionTracker) SaveCurrentEpoch() {
+	if bpt.store == nil {
+		bpt.logger.Warn("BlockTrackerStore is nil, skipping current epoch save")
+		return
+	}
+
+	bpt.mutex.Lock()
+	defer bpt.mutex.Unlock()
+
+	if bpt.currentEpoch > 0 && len(bpt.currentEpochBlocks) > 0 {
+		currentSnapshot := make(map[types.Address]uint64)
+		for addr, count := range bpt.currentEpochBlocks {
+			currentSnapshot[addr] = count
+		}
+		
+		err := bpt.store.SaveEpochBlocks(bpt.currentEpoch, currentSnapshot)
+		if err != nil {
+			bpt.logger.Error("Failed to save current epoch on close", "epoch", bpt.currentEpoch, "error", err)
+		} else {
+			bpt.logger.Info("✅ 已保存当前epoch出块记录", "epoch", bpt.currentEpoch, "validatorCount", len(currentSnapshot))
+		}
+	}
+}
+
 // RecordBlockProduction 记录出块
 func (bpt *BlockProductionTracker) RecordBlockProduction(
 	blockNumber uint64,
@@ -222,12 +247,13 @@ func (bpt *BlockProductionTracker) RecordBlockProduction(
 		})
 	}
 
-	bpt.mutex.Unlock()
-
-	// 执行持久化（锁外进行，避免阻塞）
+	// 🆕 执行持久化（在锁内同步保存，确保数据不丢失）
+	// 注意：虽然会阻塞，但可以确保数据完整性，特别是应对 kill -9 的情况
 	for _, snapshot := range persistSnapshots {
 		bpt.saveEpochToDB(snapshot.epoch, snapshot.counts)
 	}
+
+	bpt.mutex.Unlock()
 }
 
 // GetEpochBlockCounts 获取指定epoch的出块统计

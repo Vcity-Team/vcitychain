@@ -752,7 +752,7 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 			if err := d.persistDelegateSetToDatabaseWithTarget(d.delegates, addr); err != nil {
 				d.logger.Error("❌ Failed to persist affected delegate to database",
 					"delegate", addr.String(), "error", err)
-				return err
+			return err
 			}
 		}
 	} else {

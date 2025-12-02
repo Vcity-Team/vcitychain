@@ -66,6 +66,11 @@ type Config struct {
 	DPoSMinFreezePeriod    uint64 `json:"dpos_min_freeze_period" yaml:"dpos_min_freeze_period"`       // 最小冻结期（秒）
 	DPoSUnfreezeLockPeriod uint64 `json:"dpos_unfreeze_lock_period" yaml:"dpos_unfreeze_lock_period"` // 解冻锁定期（秒）
 
+	// 🆕 削减相关配置
+	DPoSMissedBlocksPercentage uint64 `json:"dpos_missed_blocks_percentage" yaml:"dpos_missed_blocks_percentage"` // 漏块率阈值（基点，1000=10%）
+	DPoSMinorOffenseSlashRate   uint64 `json:"dpos_minor_offense_slash_rate" yaml:"dpos_minor_offense_slash_rate"` // 轻度违规削减率（基点，50=0.5%）
+	DPoSSevereOffenseSlashRate  uint64 `json:"dpos_severe_offense_slash_rate" yaml:"dpos_severe_offense_slash_rate"` // 严重违规削减率（基点，1000=10%）
+
 	// London Fork 配置（从 yaml 读取，不改变 genesis hash）
 	BaseFeeConfig string `json:"base_fee_config" yaml:"base_fee_config"` // 格式: "baseFee:baseFeeEM:baseFeeChangeDenom"
 	BurnContract  string `json:"burn_contract" yaml:"burn_contract"`     // 格式: "blockNumber:address[:destinationAddress]"

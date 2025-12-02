@@ -116,6 +116,11 @@ type serverParams struct {
 	dposProposalVotePeriod  string // 提案表决周期
 	dposProposalValidPeriod string // 提案有效期
 
+	// 🆕 削减相关配置
+	dposMissedBlocksPercentage uint64 // 漏块率阈值（基点）
+	dposMinorOffenseSlashRate   uint64 // 轻度违规削减率（基点）
+	dposSevereOffenseSlashRate  uint64 // 严重违规削减率（基点）
+
 	// 🆕 London Fork 配置解析
 	parsedBaseFee      *baseFeeInfo      // 解析后的 BaseFee 信息
 	parsedBurnContract *burnContractInfo // 解析后的 BurnContract 信息
@@ -241,9 +246,12 @@ func (p *serverParams) generateConfig() *server.Config {
 		DPoSCommissionRatio:     p.rawConfig.DPoSCommissionRatio,
 		DPoSCommissionEffective: p.rawConfig.DPoSCommissionEffective,
 		BlockTimeSeconds:        p.rawConfig.BlockTimeSeconds,       // 🆕 传递BlockTimeSeconds配置
-		DPoSMinFreezePeriod:     p.rawConfig.DPoSMinFreezePeriod,    // 🆕 传递最小冻结期配置
-		DPoSUnfreezeLockPeriod:  p.rawConfig.DPoSUnfreezeLockPeriod, // 🆕 传递解冻锁定期配置
-		JSONLogFormat:           p.rawConfig.JSONLogFormat,
+		DPoSMinFreezePeriod:         p.rawConfig.DPoSMinFreezePeriod,    // 🆕 传递最小冻结期配置
+		DPoSUnfreezeLockPeriod:      p.rawConfig.DPoSUnfreezeLockPeriod, // 🆕 传递解冻锁定期配置
+		DPoSMissedBlocksPercentage:  p.dposMissedBlocksPercentage,        // 🆕 传递漏块率阈值配置
+		DPoSMinorOffenseSlashRate:   p.dposMinorOffenseSlashRate,         // 🆕 传递轻度违规削减率配置
+		DPoSSevereOffenseSlashRate:  p.dposSevereOffenseSlashRate,        // 🆕 传递严重违规削减率配置
+		JSONLogFormat:               p.rawConfig.JSONLogFormat,
 		LogFilePath:             p.logFileLocation,
 
 		Relayer:               p.relayer,

@@ -128,11 +128,6 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 		return false
 	}
 
-	// 获取当前时间
-	now := time.Now()
-	timeSinceGenesis := now.Sub(bs.genesisTime)
-	currentSlot := int(timeSinceGenesis / bs.blockWindow)
-
 	// 计算当前slot应该出块的验证者索引
 	activeValidatorCount := len(validators)
 	if activeValidatorCount == 0 {
@@ -140,8 +135,11 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 		return false
 	}
 
-	// 计算当前slot应该出块的验证者索引（TRON方式：完全基于时间slot）
-	currentValidatorIndex := currentSlot % activeValidatorCount
+	// 🆕 修复：完全基于区块号计算应该由哪个验证者出块（不再基于时间slot）
+	// 计算从共识切换高度开始的区块偏移
+	blockOffset := nextBlockNumber - bs.consensusSwitchHeight
+	// 基于区块号计算验证者索引
+	currentValidatorIndex := int(blockOffset) % activeValidatorCount
 
 	// 检查当前验证者是否是本节点
 	if currentValidatorIndex >= len(validators) {
@@ -159,18 +157,15 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 		// ========== 🆕 详细日志：打印ShouldProduceBlockNow中的验证者列表和验证结果（每次出块都打印） ==========
 		bs.logger.Info("🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块",
 			"blockNumber", blockNumber,
-			"currentSlot", currentSlot,
+			"nextBlockNumber", nextBlockNumber,
+			"blockOffset", blockOffset,
 			"activeValidatorCount", activeValidatorCount,
 			"activeValidatorCountSource", validatorsSource, // 🆕 验证者列表来源
 			"myAddress", myAddress.String(),
 			"expectedValidator", fmt.Sprintf("[%d]%s", currentValidatorIndex, expectedValidator.String()),
 			"validatorIndex", currentValidatorIndex,
 			"isMatch", isMatch,
-			"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
-			"now", now.Format("2006-01-02 15:04:05.000"),
-			"timestamp", now.Format("15:04:05.000000"),
-			"timeSinceGenesis", timeSinceGenesis.String(),
-			"blockWindow", bs.blockWindow.String(),
+			"consensusSwitchHeight", bs.consensusSwitchHeight,
 			"validatorsList", func() []string {
 				var vs []string
 				for i, v := range validators {
@@ -178,7 +173,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 				}
 				return vs
 			}(),
-			"note", "用于验证同一时刻只有一个节点出块")
+			"note", "基于区块号计算验证者索引，不依赖时间")
 	}
 
 	return isMatch
@@ -301,25 +296,6 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 	if r.config.dposBackend != nil {
 		networkLatest := r.getNetworkLatestBlockNumber()
 		if networkLatest > currentBlock.Number {
-			return false
-		}
-	}
-
-	// 🆕 方案2：使用读锁快速检查lastProducedSlot（如果使用blockScheduler）
-	if r.config.blockScheduler != nil {
-		now := time.Now()
-		genesisTime := r.config.blockScheduler.GetGenesisTime()
-		blockWindow := r.config.blockScheduler.GetBlockWindow()
-		timeSinceGenesis := now.Sub(genesisTime)
-		currentSlot := int(timeSinceGenesis / blockWindow)
-
-		// 🆕 使用读锁快速检查
-		r.lock.RLock()
-		lastSlot := r.lastProducedSlot
-		r.lock.RUnlock()
-
-		// 如果当前 slot 已经出过块，跳过
-		if lastSlot >= 0 && lastSlot == currentSlot {
 			return false
 		}
 	}

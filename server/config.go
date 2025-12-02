@@ -76,6 +76,11 @@ type Config struct {
 	// 冻结相关配置
 	DPoSMinFreezePeriod    uint64 `yaml:"dpos_min_freeze_period"`    // 最小冻结期（秒）
 	DPoSUnfreezeLockPeriod uint64 `yaml:"dpos_unfreeze_lock_period"` // 解冻锁定期（秒）
+
+	// 削减相关配置
+	DPoSMissedBlocksPercentage uint64 `yaml:"dpos_missed_blocks_percentage"` // 漏块率阈值（基点，1000=10%）
+	DPoSMinorOffenseSlashRate   uint64 `yaml:"dpos_minor_offense_slash_rate"` // 轻度违规削减率（基点，50=0.5%）
+	DPoSSevereOffenseSlashRate  uint64 `yaml:"dpos_severe_offense_slash_rate"` // 严重违规削减率（基点，1000=10%）
 }
 
 // Telemetry holds the config details for metric services
