@@ -331,8 +331,9 @@ func (r *dposRuntime) produceBlock() error {
 	// 🆕 方案1：只在更新状态时使用写锁（时间很短）
 	if r.config.blockScheduler != nil {
 		r.lock.Lock()
-		// 🆕 更新最后出块的区块号
+		// 🆕 更新最后出块的区块号和时间
 		r.lastBlockNumber = block.Block.Number()
+		r.lastBlockProductionTime = time.Now()
 		r.lock.Unlock()
 	}
 

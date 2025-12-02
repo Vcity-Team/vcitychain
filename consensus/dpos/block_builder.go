@@ -1105,11 +1105,11 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		}
 
 		if len(nextEpochValidatorsForExtra) > 0 {
-			r.logger.Info("NextEpochValidators写入ExtraData",
+			r.logger.Debug("NextEpochValidators写入ExtraData",
 				"blockNumber", block.Block.Number(),
 				"nextEpochValidatorsCount", len(nextEpochValidatorsForExtra))
 			for idx, acc := range nextEpochValidatorsForExtra {
-				r.logger.Info("📝 NextEpochValidator写入详情",
+				r.logger.Debug("📝 NextEpochValidator写入详情",
 					"blockNumber", block.Block.Number(),
 					"index", idx,
 					"address", acc.Address.String(),

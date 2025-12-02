@@ -300,6 +300,28 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		}
 	}
 
+	// 🆕 检查距离上次出块的时间间隔，确保至少间隔 blockTime
+	r.lock.RLock()
+	lastBlockTime := r.lastBlockProductionTime
+	blockTime := r.config.BlockTime.Duration
+	if blockTime == 0 {
+		blockTime = 3 * time.Second // 默认3秒
+	}
+	r.lock.RUnlock()
+
+	if !lastBlockTime.IsZero() {
+		timeSinceLastBlock := time.Since(lastBlockTime)
+		if timeSinceLastBlock < blockTime {
+			// 距离上次出块时间太短，需要等待
+			r.logOnceWithInterval("should_produce_block_now_time_check", 1*time.Second, "debug",
+				"⏰ 距离上次出块时间太短，等待中",
+				"timeSinceLastBlock", timeSinceLastBlock.String(),
+				"blockTime", blockTime.String(),
+				"remaining", (blockTime - timeSinceLastBlock).String())
+			return false
+		}
+	}
+
 	// 🆕 添加详细的调试日志（使用Debug级别）
 	r.logOnceWithInterval("should_produce_block_now_debug", 5*time.Second, "debug",
 		"🔍 shouldProduceBlockNow 开始检查",
