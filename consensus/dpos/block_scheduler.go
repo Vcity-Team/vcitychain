@@ -300,26 +300,43 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		}
 	}
 
-	// 🆕 检查距离上次出块的时间间隔，确保至少间隔 blockTime
-	r.lock.RLock()
-	lastBlockTime := r.lastBlockProductionTime
+	// 🆕 检查距离链上最后一个区块的时间间隔，确保至少间隔 blockTime
+	// 使用链上最后一个区块的时间戳，而不是本节点上次出块时间
+	// 这样才能确保整个链上每个区块之间至少间隔 blockTime
 	blockTime := r.config.BlockTime.Duration
 	if blockTime == 0 {
 		blockTime = 3 * time.Second // 默认3秒
 	}
-	r.lock.RUnlock()
 
-	if !lastBlockTime.IsZero() {
-		timeSinceLastBlock := time.Since(lastBlockTime)
-		if timeSinceLastBlock < blockTime {
-			// 距离上次出块时间太短，需要等待
-			r.logOnceWithInterval("should_produce_block_now_time_check", 1*time.Second, "debug",
-				"⏰ 距离上次出块时间太短，等待中",
-				"timeSinceLastBlock", timeSinceLastBlock.String(),
-				"blockTime", blockTime.String(),
-				"remaining", (blockTime - timeSinceLastBlock).String())
-			return false
-		}
+	// 获取链上最后一个区块的时间戳
+	lastBlockTimestamp := time.Unix(int64(currentBlock.Timestamp), 0)
+	now := time.Now()
+	timeSinceLastBlock := now.Sub(lastBlockTimestamp)
+
+	// 🆕 添加时间检查的详细日志（INFO级别，帮助诊断为什么不出块）
+	r.logOnceWithInterval("should_produce_block_now_time_check_detail", 1*time.Second, "info",
+		"⏰ [时间间隔检查] shouldProduceBlockNow",
+		"timeSinceLastBlock", timeSinceLastBlock.String(),
+		"blockTime", blockTime.String(),
+		"lastBlockNumber", currentBlock.Number,
+		"lastBlockTimestamp", lastBlockTimestamp.Format("2006-01-02 15:04:05.000"),
+		"currentTime", now.Format("2006-01-02 15:04:05.000"),
+		"lastBlockTimestampUnix", currentBlock.Timestamp,
+		"currentTimeUnix", now.Unix(),
+		"timeDiffSeconds", now.Unix()-int64(currentBlock.Timestamp),
+		"shouldWait", timeSinceLastBlock < blockTime && timeSinceLastBlock >= 0,
+		"willContinue", timeSinceLastBlock >= blockTime || timeSinceLastBlock < 0)
+
+	if timeSinceLastBlock < blockTime {
+		// 距离链上最后一个区块时间太短，需要等待
+		r.logOnceWithInterval("should_produce_block_now_time_check", 1*time.Second, "info",
+			"⏰ [等待] 距离链上最后一个区块时间太短，等待中",
+			"timeSinceLastBlock", timeSinceLastBlock.String(),
+			"blockTime", blockTime.String(),
+			"remaining", (blockTime - timeSinceLastBlock).String(),
+			"lastBlockNumber", currentBlock.Number,
+			"lastBlockTimestamp", lastBlockTimestamp.Format("2006-01-02 15:04:05.000"))
+		return false
 	}
 
 	// 🆕 添加详细的调试日志（使用Debug级别）
@@ -382,6 +399,16 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 
 		// 🆕 调用改进后的方法（直接比较地址）
 		result := r.config.blockScheduler.ShouldProduceBlockNow(myAddress, validators, currentBlock.Number, validatorsSource)
+
+		// 🆕 添加结果日志（INFO级别）
+		if !result {
+			r.logOnceWithInterval("should_produce_block_now_result_false", 2*time.Second, "info",
+				"❌ [不出块] ShouldProduceBlockNow返回false",
+				"blockNumber", currentBlock.Number,
+				"myAddress", myAddress.String(),
+				"validatorsCount", len(validators),
+				"validatorsSource", validatorsSource)
+		}
 
 		return result
 	}
