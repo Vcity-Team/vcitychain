@@ -123,12 +123,6 @@ func (p *serverParams) initDPoSConfig() {
 		p.backupValidatorsCount = 10 // 默认值
 	}
 
-	// 初始化最大漏块数
-	p.maxMissedBlocks = p.rawConfig.MaxMissedBlocks
-	if p.maxMissedBlocks == 0 {
-		p.maxMissedBlocks = 3 // 默认值
-	}
-
 	// 初始化提案表决周期
 	p.dposProposalVotePeriod = p.rawConfig.DPoSProposalVotePeriod
 	if p.dposProposalVotePeriod == "" {

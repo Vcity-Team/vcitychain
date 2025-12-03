@@ -140,7 +140,6 @@ func (fd *FaultDetector) checkEpochChange(blockNumber uint64) (EpochInfo, bool) 
 		"epochToCheckBlockCount", epochEndBlock-epochStartBlock+1,
 		"consensusSwitchHeight", consensusSwitchHeight,
 		"blocksPerEpoch", blocksPerEpoch,
-		"maxMissedBlocks", fd.dposInstance.config.MaxMissedBlocks,
 		"missedBlocksPercentage", missedBlocksPercentageThreshold)
 
 	// 计算索引（用于存储和后续计算）

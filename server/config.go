@@ -57,9 +57,6 @@ type Config struct {
 	// 🆕 新增：DPoS备用验证者数量
 	BackupValidatorsCount uint64
 
-	// 🆕 新增：DPoS最大漏块数
-	MaxMissedBlocks uint64
-
 	// 🆕 新增：DPoS最小质押门槛
 	DPoSDelegateThreshold *big.Int
 

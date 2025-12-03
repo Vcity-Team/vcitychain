@@ -51,7 +51,6 @@ func (d *DPoS) initializeDelegates() error {
 		"configDelegateCount", d.config.DelegateCount,
 		"initialDelegatesCount", len(d.config.InitialDelegates),
 		"dposValidatorsCount", d.config.DPoSValidatorsCount,
-		"maxMissedBlocks", d.config.MaxMissedBlocks,
 		"currentEpoch", d.currentEpoch)
 
 	// 🆕 首先尝试从数据库读取受托人（真正用于出块）

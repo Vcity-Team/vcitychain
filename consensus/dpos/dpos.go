@@ -220,9 +220,6 @@ type DPoSConfig struct {
 	// DPoS验证者数量配置
 	DPoSValidatorsCount uint64 `json:"dpos_validators_count"`
 
-	// 最大漏块数配置
-	MaxMissedBlocks uint64 `json:"max_missed_blocks"`
-
 	Blockchain *blockchain.Blockchain
 	Logger     hclog.Logger
 	Network    *network.Server
