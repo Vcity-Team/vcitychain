@@ -117,6 +117,70 @@ func (d *DPOS) getGovernanceEngine() (governanceEngine, error) {
 	return engine, nil
 }
 
+// validateProposer 验证提案者：检查私钥是否正确，以及proposer是否是验证者
+func (d *DPOS) validateProposer(proposer types.Address, proposerPrivateKeyHex string) error {
+	// 1. 验证私钥格式
+	if len(proposerPrivateKeyHex) != 64 {
+		return fmt.Errorf("invalid proposer private key length: expected 64, got %d", len(proposerPrivateKeyHex))
+	}
+
+	// 2. 从私钥恢复地址
+	privateKeyBytes, err := hex.DecodeString(proposerPrivateKeyHex)
+	if err != nil {
+		return fmt.Errorf("failed to decode private key: %w", err)
+	}
+
+	if len(privateKeyBytes) != 32 {
+		return fmt.Errorf("invalid private key bytes length: expected 32, got %d", len(privateKeyBytes))
+	}
+
+	// 创建ECDSA私钥对象
+	privateKey := &ecdsa.PrivateKey{
+		PublicKey: ecdsa.PublicKey{
+			Curve: crypto.S256,
+		},
+		D: new(big.Int).SetBytes(privateKeyBytes),
+	}
+
+	// 计算公钥
+	privateKey.PublicKey.X, privateKey.PublicKey.Y = privateKey.Curve.ScalarBaseMult(privateKeyBytes)
+
+	// 从公钥计算地址
+	calculatedAddr := crypto.PubKeyToAddress(&privateKey.PublicKey)
+
+	// 3. 验证私钥对应的地址与提供的proposer地址匹配
+	if calculatedAddr != proposer {
+		return fmt.Errorf("private key does not match proposer address: calculated=%s, expected=%s",
+			calculatedAddr.String(), proposer.String())
+	}
+
+	// 4. 验证proposer是否是验证者（通过store获取验证者列表）
+	validators, err := d.store.GetValidators()
+	if err != nil {
+		// 如果无法获取验证者列表，记录警告但继续（让后续处理验证）
+		d.logger.Warn("⚠️ 无法获取验证者列表，将在交易处理时验证proposer是否是验证者",
+			"proposer", proposer.String(),
+			"error", err)
+		return nil // 允许继续，让后续处理验证
+	}
+
+	// 检查proposer是否在验证者列表中
+	found := false
+	for _, validator := range validators {
+		if validator.Address == proposer {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("proposer %s is not a validator", proposer.String())
+	}
+
+	d.logger.Info("✅ Proposer验证通过", "proposer", proposer.String())
+	return nil
+}
+
 // signTransaction signs a DPoS transaction using the private key
 func (d *DPOS) signTransaction(tx *types.Transaction, expectedAddr types.Address, privateKeyHex string) error {
 	d.logger.Info("🔍 开始签名交易 - 私钥和地址验证")
@@ -4203,7 +4267,12 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 		return nil, err
 	}
 	if !gov.IsParameterVotable(parameter) {
-			return nil, fmt.Errorf("invalid parameter: %s is not a votable parameter", parameter)
+		return nil, fmt.Errorf("invalid parameter: %s is not a votable parameter", parameter)
+	}
+
+	// 🆕 验证私钥和proposer地址，并检查proposer是否是验证者
+	if err := d.validateProposer(proposer, proposerPrivateKeyHex); err != nil {
+		return nil, err
 	}
 
 	// 3. 获取当前区块号（用于后续计算，但暂不需要）
@@ -4238,8 +4307,8 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 
 	// 5. 签名提案（通过治理模块接口）
 	proposerSignature, err := gov.SignProposalForTx(tempProposal, proposerPrivateKeyHex)
-		if err != nil {
-			return nil, fmt.Errorf("failed to sign proposal: %w", err)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign proposal: %w", err)
 	}
 
 	// 6. 创建交易数据
@@ -4379,10 +4448,15 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 	}
 
 	gov, err := d.getGovernanceEngine()
-		if err != nil {
+	if err != nil {
 		return nil, err
-		}
+	}
 	if err := gov.CheckRecoveryPrerequisites(validatorAddr); err != nil {
+		return nil, err
+	}
+
+	// 🆕 验证私钥和proposer地址，并检查proposer是否是验证者
+	if err := d.validateProposer(proposer, proposerPrivateKeyHex); err != nil {
 		return nil, err
 	}
 
@@ -4410,8 +4484,8 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 
 	// 4. 签名提案
 	proposerSignature, err := gov.SignRecoveryProposalForTx(tempProposal, proposerPrivateKeyHex)
-		if err != nil {
-			return nil, fmt.Errorf("failed to sign proposal: %w", err)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign proposal: %w", err)
 	}
 
 	// 5. 创建交易数据
@@ -4549,8 +4623,8 @@ func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) 
 	// 2. 签名投票
 	var voteSignature []byte
 	voteSignature, err = gov.SignVoteForTx(tempVote, privateKeyHex)
-		if err != nil {
-			return nil, fmt.Errorf("failed to sign vote: %w", err)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign vote: %w", err)
 	}
 
 	// 3. 创建交易数据
@@ -4630,41 +4704,41 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 	}
 
 	proposal, err := gov.GetParameterProposal(proposalID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get proposal: %w", err)
-		}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get proposal: %w", err)
+	}
 
-		votes := make(map[string]interface{})
-		var supportVoters []map[string]interface{}
-		var opposeVoters []map[string]interface{}
+	votes := make(map[string]interface{})
+	var supportVoters []map[string]interface{}
+	var opposeVoters []map[string]interface{}
 
-		for addr, vote := range proposal.Votes {
-			voteTime := time.Unix(int64(vote.Timestamp), 0)
-			voteTimeFormatted := voteTime.Format("2006-01-02 15:04:05")
+	for addr, vote := range proposal.Votes {
+		voteTime := time.Unix(int64(vote.Timestamp), 0)
+		voteTimeFormatted := voteTime.Format("2006-01-02 15:04:05")
 
-			voteInfo := map[string]interface{}{
-				"voter":       vote.Voter.String(),
-				"proposalId":  vote.ProposalID,
-				"support":     vote.Support,
-				"weight":      vote.Weight.String(),
+		voteInfo := map[string]interface{}{
+			"voter":       vote.Voter.String(),
+			"proposalId":  vote.ProposalID,
+			"support":     vote.Support,
+			"weight":      vote.Weight.String(),
 			"timestamp":   voteTimeFormatted,
 			"timestampTs": vote.Timestamp,
-			}
-			votes[addr.String()] = voteInfo
-
-			if vote.Support {
-				supportVoters = append(supportVoters, voteInfo)
-			} else {
-				opposeVoters = append(opposeVoters, voteInfo)
-			}
 		}
+		votes[addr.String()] = voteInfo
 
-		totalWeight := big.NewInt(0)
-		supportWeight := big.NewInt(0)
-		for _, vote := range proposal.Votes {
-			totalWeight.Add(totalWeight, vote.Weight)
-			if vote.Support {
-				supportWeight.Add(supportWeight, vote.Weight)
+		if vote.Support {
+			supportVoters = append(supportVoters, voteInfo)
+		} else {
+			opposeVoters = append(opposeVoters, voteInfo)
+		}
+	}
+
+	totalWeight := big.NewInt(0)
+	supportWeight := big.NewInt(0)
+	for _, vote := range proposal.Votes {
+		totalWeight.Add(totalWeight, vote.Weight)
+		if vote.Support {
+			supportWeight.Add(supportWeight, vote.Weight)
 		}
 	}
 
@@ -4717,9 +4791,9 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 		timeInfo["isExpired"] = true
 	}
 
-		return map[string]interface{}{
-			"success": true,
-			"proposal": map[string]interface{}{
+	return map[string]interface{}{
+		"success": true,
+		"proposal": map[string]interface{}{
 			"proposalId":   proposalID,
 			"proposalType": proposal.ProposalType,
 			"parameter":    proposal.Parameter,
@@ -4741,13 +4815,13 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 			"votes":          votes,
 			"voteStats":      voteStats,
 			"timeInfo":       timeInfo,
-				"voterDetails": map[string]interface{}{
-					"supportVoters": supportVoters,
-					"opposeVoters":  opposeVoters,
-					"totalVoters":   len(proposal.Votes),
-				},
+			"voterDetails": map[string]interface{}{
+				"supportVoters": supportVoters,
+				"opposeVoters":  opposeVoters,
+				"totalVoters":   len(proposal.Votes),
 			},
-		}, nil
+		},
+	}, nil
 }
 
 // RegisterDelegate 注册受托人
@@ -5629,35 +5703,35 @@ func (d *DPOS) GetActiveProposals(ctx context.Context, params interface{}) (inte
 	}
 
 	proposals, err := gov.GetActiveProposals()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get active proposals: %w", err)
-		}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get active proposals: %w", err)
+	}
 
 	result := make([]map[string]interface{}, 0, len(proposals))
-		for _, proposal := range proposals {
+	for _, proposal := range proposals {
 		votes := len(proposal.Votes)
 
-			result = append(result, map[string]interface{}{
-				"proposalId":  proposal.ID,
-				"parameter":   proposal.Parameter,
-				"oldValue":    proposal.OldValue,
-				"newValue":    proposal.NewValue,
-				"proposer":    proposal.Proposer.String(),
-				"startBlock":  proposal.StartBlock,
-				"endBlock":    proposal.EndBlock,
-				"status":      proposal.Status.String(),
-				"threshold":   proposal.Threshold,
-				"description": proposal.Description,
-				"createdAt":   proposal.CreatedAt,
-				"votes":       votes,
-			})
-		}
-
-		return map[string]interface{}{
-			"proposals": result,
-			"count":     len(result),
-		}, nil
+		result = append(result, map[string]interface{}{
+			"proposalId":  proposal.ID,
+			"parameter":   proposal.Parameter,
+			"oldValue":    proposal.OldValue,
+			"newValue":    proposal.NewValue,
+			"proposer":    proposal.Proposer.String(),
+			"startBlock":  proposal.StartBlock,
+			"endBlock":    proposal.EndBlock,
+			"status":      proposal.Status.String(),
+			"threshold":   proposal.Threshold,
+			"description": proposal.Description,
+			"createdAt":   proposal.CreatedAt,
+			"votes":       votes,
+		})
 	}
+
+	return map[string]interface{}{
+		"proposals": result,
+		"count":     len(result),
+	}, nil
+}
 
 func (d *DPOS) GetVotableCurrentParameters(ctx context.Context) (interface{}, error) {
 	d.logger.Info("DPoS GetVotableCurrentParameters called")
@@ -5668,23 +5742,23 @@ func (d *DPOS) GetVotableCurrentParameters(ctx context.Context) (interface{}, er
 	}
 
 	parameters := gov.GetVotableCurrentParameters()
-		result := make(map[string]interface{})
-		for key, param := range parameters {
-			result[key] = map[string]interface{}{
-				"name":         param.Name,
-				"type":         param.Type,
-				"minValue":     param.MinValue,
-				"maxValue":     param.MaxValue,
-				"description":  param.Description,
-				"category":     param.Category,
+	result := make(map[string]interface{})
+	for key, param := range parameters {
+		result[key] = map[string]interface{}{
+			"name":         param.Name,
+			"type":         param.Type,
+			"minValue":     param.MinValue,
+			"maxValue":     param.MaxValue,
+			"description":  param.Description,
+			"category":     param.Category,
 			"currentValue": param.CurrentValue,
-			}
 		}
+	}
 
-		return map[string]interface{}{
-			"parameters": result,
-			"count":      len(result),
-		}, nil
+	return map[string]interface{}{
+		"parameters": result,
+		"count":      len(result),
+	}, nil
 }
 
 // ExecuteParameterUpdate 执行参数更新
@@ -5809,9 +5883,9 @@ func (d *DPOS) getCurrentProposalPeriodInfo() string {
 	}
 
 	periodInfo := gov.GetCurrentProposalPeriod()
-		if timeInfo, exists := periodInfo["timeInfo"]; exists {
-			if timeStr, ok := timeInfo.(string); ok {
-				return timeStr
+	if timeInfo, exists := periodInfo["timeInfo"]; exists {
+		if timeStr, ok := timeInfo.(string); ok {
+			return timeStr
 		}
 	}
 
