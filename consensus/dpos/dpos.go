@@ -1256,7 +1256,7 @@ func (d *DPoS) Initialize() error {
 	d.logger.Info("✅ 已将blockchain_wrapper设置为blockchain的executor，启用奖励分配功能")
 
 	// 🆕 新增：设置余额查询器（使用真实实现）
-	// 使用 runtime 的 getValidatorBalance 方法实现余额查询
+	// 使用 runtime 的 getAccountBalance 方法实现余额查询
 	if d.runtime != nil {
 		d.balanceQuerier = &runtimeBalanceQuerier{runtime: d.runtime}
 		d.logger.Info("✅ Balance querier initialized with runtime implementation")

@@ -3,10 +3,8 @@ package dpos
 import (
 	"fmt"
 	"os"
-	"sync"
 	"time"
 
-	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
 )
@@ -28,7 +26,6 @@ type BlockScheduler struct {
 	logger                hclog.Logger
 	// 🆕 日志间隔管理
 	lastLogTime map[string]time.Time
-	logMutex    sync.RWMutex
 }
 
 // NewBlockScheduler 创建新的区块调度器
@@ -77,34 +74,6 @@ func NewBlockScheduler(
 		consensusSwitchHeight: consensusSwitchHeight,
 		logger:                logger,
 		lastLogTime:           make(map[string]time.Time),
-	}
-}
-
-// logOnceWithInterval 防重复日志函数（自定义间隔）
-func (bs *BlockScheduler) logOnceWithInterval(key string, interval time.Duration, level string, message string, args ...interface{}) {
-	bs.logMutex.Lock()
-	lastTime, exists := bs.lastLogTime[key]
-	now := time.Now()
-
-	if !exists || now.Sub(lastTime) >= interval {
-		bs.lastLogTime[key] = now
-		bs.logMutex.Unlock()
-
-		// 根据级别输出日志
-		switch level {
-		case "debug":
-			bs.logger.Debug(message, args...)
-		case "info":
-			bs.logger.Info(message, args...)
-		case "warn":
-			bs.logger.Warn(message, args...)
-		case "error":
-			bs.logger.Error(message, args...)
-		default:
-			bs.logger.Debug(message, args...)
-		}
-	} else {
-		bs.logMutex.Unlock()
 	}
 }
 
@@ -203,88 +172,6 @@ func (bs *BlockScheduler) StartNewEpoch(epochNumber uint64, currentTime time.Tim
 		"currentTime", currentTime.Format("2006-01-02 15:04:05"))
 }
 
-// getValidatorsFromCurrentBlockExtraData 从当前区块（父区块）的ExtraData获取验证者列表
-// 用于 shouldProduceBlockNow，确保所有节点基于同一区块的验证者列表计算
-func (r *dposRuntime) getValidatorsFromCurrentBlockExtraData(currentBlock *types.Header) (validator.AccountSet, error) {
-	// 获取当前区块的ExtraData
-	currentExtra, err := GetIbftExtra(currentBlock.ExtraData)
-	if err != nil {
-		r.logger.Error("❌ 无法解析当前区块ExtraData",
-			"blockNumber", currentBlock.Number,
-			"error", err)
-		return nil, fmt.Errorf("failed to parse ExtraData for block %d: %w", currentBlock.Number, err)
-	}
-
-	// 获取父区块（当前区块的父区块）
-	var parent *types.Header
-	if currentBlock.Number > 0 {
-		parentHeader, exists := r.config.blockchain.GetHeaderByNumber(currentBlock.Number - 1)
-		if exists {
-			parent = parentHeader
-		}
-	}
-
-	// 从当前区块的ExtraData获取验证者列表
-	// 这会应用当前区块中的验证者变化（包括投票交易）
-	validators, err := currentExtra.getValidatorsFromExtraData(
-		currentBlock, // 当前区块（区块N）
-		parent,       // 父区块（区块N-1）
-		nil,          // parents array
-		r.config.dposBackend,
-		r.logger,
-	)
-
-	if err != nil {
-		r.logger.Error("❌ 从ExtraData获取验证者列表失败",
-			"blockNumber", currentBlock.Number,
-			"error", err)
-		return nil, fmt.Errorf("failed to get validators from ExtraData for block %d: %w", currentBlock.Number, err)
-	}
-
-	if len(validators) == 0 {
-		r.logger.Error("❌ ExtraData中的验证者列表为空",
-			"blockNumber", currentBlock.Number)
-		return nil, fmt.Errorf("validators list is empty in ExtraData for block %d", currentBlock.Number)
-	}
-
-	return validators, nil
-}
-
-// getValidatorsFromDatabase 从数据库读取验证者列表（备用方案）
-func (r *dposRuntime) getValidatorsFromDatabase() (validator.AccountSet, error) {
-	if r.config.dposBackend == nil {
-		return nil, fmt.Errorf("dpos backend not available")
-	}
-
-	dposInstance, ok := r.config.dposBackend.(*DPoS)
-	if !ok {
-		return nil, fmt.Errorf("invalid dpos backend type")
-	}
-
-	// 使用 GetSortedValidatorsWithLimit 获取排序和限制后的验证者列表
-	validators, err := dposInstance.GetSortedValidatorsWithLimit()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get validators from database: %w", err)
-	}
-
-	return validators, nil
-}
-
-// applyValidatorLimitAndSort 应用配置限制和排序（从 validator.AccountSet 转换为 []types.Address）
-func (r *dposRuntime) applyValidatorLimitAndSort(validators validator.AccountSet) []types.Address {
-	if len(validators) == 0 {
-		return []types.Address{}
-	}
-
-	// 转换为地址列表
-	addresses := make([]types.Address, 0, len(validators))
-	for _, v := range validators {
-		addresses = append(addresses, v.Address)
-	}
-
-	return addresses
-}
-
 // shouldProduceBlockNow 检查当前节点是否应该现在出块
 // 🆕 方案2：使用读锁，不阻塞其他检查
 func (r *dposRuntime) shouldProduceBlockNow() bool {
@@ -372,8 +259,8 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 
 		// 🆕 直接使用数据库中的验证者集合（已在epoch边界过滤）
 		validators := make([]types.Address, 0, len(validatorsFromExtra))
-		for _, validator := range validatorsFromExtra {
-			validators = append(validators, validator.Address)
+		for _, v := range validatorsFromExtra {
+			validators = append(validators, v.Address)
 		}
 		if len(validators) == 0 {
 			r.logger.Error("❌ shouldProduceBlockNow: 数据库中的验证者集合为空，无法确定出块者",

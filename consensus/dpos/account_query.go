@@ -1,68 +1,11 @@
 package dpos
 
 import (
-	"bytes"
 	"fmt"
 	"math/big"
-	"sort"
 
-	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/types"
 )
-
-// getValidatorBalance 获取验证者余额
-func (d *DPoS) getValidatorBalance(address types.Address) (*big.Int, error) {
-	d.logger.Debug("🔍 开始查询验证者余额", "address", address.String())
-
-	// 检查config和executor
-	if d.config == nil {
-		d.logger.Error("❌ DPoS config is nil")
-		return big.NewInt(0), nil
-	}
-
-	if d.config.Executor == nil {
-		d.logger.Error("❌ DPoS config.Executor is nil")
-		return big.NewInt(0), nil
-	}
-
-	// 获取当前区块头
-	currentHeader := d.config.Blockchain.Header()
-	if currentHeader == nil {
-		d.logger.Error("❌ 无法获取当前区块头")
-		return nil, fmt.Errorf("failed to get current header")
-	}
-
-	d.logger.Debug("📋 当前区块头信息", "number", currentHeader.Number, "stateRoot", currentHeader.StateRoot.String())
-
-	// 通过executor查询余额
-	if d.config.Executor != nil {
-		// 通过state.Executor的StateAt方法直接获取状态快照
-		snapshot, err := d.config.Executor.StateAt(currentHeader.StateRoot)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create snapshot at state root %s: %w", currentHeader.StateRoot.String(), err)
-		}
-
-		account, err := snapshot.GetAccount(address)
-		if err != nil {
-			d.logger.Warn("⚠️ 无法获取账户信息，返回0余额", "address", address.String(), "error", err)
-			return big.NewInt(0), nil
-		}
-
-		// 🆕 检查账户余额是否为空，避免空指针解引用
-		if account == nil || account.Balance == nil {
-			d.logger.Warn("⚠️ 账户或余额为空，返回0余额", "address", address.String())
-			return big.NewInt(0), nil
-		}
-
-		// 返回账户余额
-		d.logger.Debug("✅ 成功查询到验证者余额", "address", address.String(), "balance", account.Balance.String())
-		return account.Balance, nil
-	}
-
-	// 如果无法获取executor，返回0余额
-	d.logger.Warn("无法获取executor，返回0余额", "address", address.String())
-	return big.NewInt(0), nil
-}
 
 // getAccountBalance 获取账户余额
 func (d *DPoS) getAccountBalance(address types.Address) (*big.Int, error) {
@@ -119,31 +62,6 @@ func (d *DPoS) getAccountNonce(address types.Address) (uint64, error) {
 	}
 
 	return 0, fmt.Errorf("failed to get account nonce")
-}
-
-// executeBatchStateUpdate 已保留在 dpos.go 中（函数复杂，依赖较多）
-
-// calculateStateUpdateHash 计算状态更新哈希
-func (d *DPoS) calculateStateUpdateHash(stateUpdates map[types.Address]*big.Int) []byte {
-	// 创建哈希计算器
-	hasher := crypto.NewKeccakState()
-
-	// 按地址排序确保一致性
-	var addresses []types.Address
-	for addr := range stateUpdates {
-		addresses = append(addresses, addr)
-	}
-	sort.Slice(addresses, func(i, j int) bool {
-		return bytes.Compare(addresses[i].Bytes(), addresses[j].Bytes()) < 0
-	})
-
-	// 计算哈希
-	for _, addr := range addresses {
-		hasher.Write(addr.Bytes())
-		hasher.Write(stateUpdates[addr].Bytes())
-	}
-
-	return hasher.Sum(nil)
 }
 
 // syncStateRootToBlockchain 将状态根同步到区块链

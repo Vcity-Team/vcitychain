@@ -87,11 +87,3 @@ func (q *RealBalanceQuerier) GetNativeTokenBalance(address types.Address) (*big.
 	return account.Balance, nil
 }
 
-// getNativeTokenBalance 便捷函数，用于获取原生代币余额
-func getNativeTokenBalance(querier NativeTokenBalanceQuerier, address types.Address) (*big.Int, error) {
-	if querier == nil {
-		return nil, fmt.Errorf("balance querier is nil")
-	}
-	
-	return querier.GetNativeTokenBalance(address)
-}
