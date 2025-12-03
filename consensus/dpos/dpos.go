@@ -2176,8 +2176,33 @@ func (d *DPoS) GetValidators() validator.AccountSet {
 		return d.runtime.delegates
 	}
 
-	// 如果 runtime 不可用，返回空集合
-	d.logger.Warn("⚠️ [DPoS.GetValidators] runtime 不可用或 delegates 为空，返回空集合",
+	// 🆕 如果runtime.delegates为空，尝试从数据库读取（与GetDelegates保持一致）
+	if d.state != nil && d.state.StakeStore != nil {
+		d.logger.Info("🔍 [DPoS.GetValidators] runtime.delegates为空，尝试从数据库读取验证者")
+		if dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false); err == nil && len(dbValidators) > 0 {
+			d.logger.Info("✅ [DPoS.GetValidators] 从数据库成功读取验证者",
+				"count", len(dbValidators),
+				"validatorsList", func() []string {
+					var vs []string
+					for i, v := range dbValidators {
+						vs = append(vs, fmt.Sprintf("[%d]%s", i, v.Address.String()))
+					}
+					return vs
+				}())
+			// 🆕 同步到内存，避免下次再查数据库
+			if d.runtime != nil {
+				d.runtime.delegates = dbValidators.Copy()
+				d.delegates = dbValidators.Copy()
+				d.logger.Info("✅ [DPoS.GetValidators] 已同步验证者数据到内存", "count", len(dbValidators))
+			}
+			return dbValidators
+		} else if err != nil {
+			d.logger.Warn("⚠️ [DPoS.GetValidators] 从数据库读取验证者失败", "error", err)
+		}
+	}
+
+	// 如果 runtime 不可用且数据库读取失败，返回空集合
+	d.logger.Warn("⚠️ [DPoS.GetValidators] runtime 不可用且数据库读取失败，返回空集合",
 		"runtimeIsNil", d.runtime == nil,
 		"delegatesIsNil", d.runtime != nil && d.runtime.delegates == nil,
 		"delegatesLen", func() int {
@@ -2185,7 +2210,9 @@ func (d *DPoS) GetValidators() validator.AccountSet {
 				return len(d.runtime.delegates)
 			}
 			return 0
-		}())
+		}(),
+		"stateIsNil", d.state == nil,
+		"stakeStoreIsNil", d.state != nil && d.state.StakeStore == nil)
 	return validator.AccountSet{}
 }
 
