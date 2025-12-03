@@ -155,27 +155,50 @@ func (d *DPOS) validateProposer(proposer types.Address, proposerPrivateKeyHex st
 	}
 
 	// 4. 验证proposer是否是验证者（通过store获取验证者列表）
+	d.logger.Info("🔍 [validateProposer] 开始获取验证者列表", "proposer", proposer.String())
 	validators, err := d.store.GetValidators()
 	if err != nil {
 		// 如果无法获取验证者列表，记录警告但继续（让后续处理验证）
-		d.logger.Warn("⚠️ 无法获取验证者列表，将在交易处理时验证proposer是否是验证者",
+		d.logger.Warn("⚠️ [validateProposer] 无法获取验证者列表，将在交易处理时验证proposer是否是验证者",
 			"proposer", proposer.String(),
 			"error", err)
 		return nil // 允许继续，让后续处理验证
 	}
 
+	d.logger.Info("📊 [validateProposer] 获取到验证者列表",
+		"proposer", proposer.String(),
+		"validatorsCount", len(validators),
+		"validatorsList", func() []string {
+			var vs []string
+			for i, v := range validators {
+				vs = append(vs, fmt.Sprintf("[%d]%s", i, v.Address.String()))
+			}
+			return vs
+		}())
+
 	// 检查proposer是否在验证者列表中
 	found := false
+	var foundValidator *validator.ValidatorMetadata
 	for _, validator := range validators {
 		if validator.Address == proposer {
 			found = true
+			foundValidator = validator
 			break
 		}
 	}
 
 	if !found {
+		d.logger.Warn("❌ [validateProposer] 验证者不在列表中",
+			"proposer", proposer.String(),
+			"validatorsCount", len(validators),
+			"note", "可能是内存中的验证者列表不完整")
 		return fmt.Errorf("proposer %s is not a validator", proposer.String())
 	}
+
+	d.logger.Info("✅ [validateProposer] 找到验证者",
+		"proposer", proposer.String(),
+		"votingPower", foundValidator.VotingPower.String(),
+		"isActive", foundValidator.IsActive)
 
 	d.logger.Info("✅ Proposer验证通过", "proposer", proposer.String())
 	return nil

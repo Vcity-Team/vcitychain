@@ -2164,10 +2164,28 @@ func (d *DPoS) syncRuntimeDelegatesWithRetry() {
 func (d *DPoS) GetValidators() validator.AccountSet {
 	// 直接使用原有逻辑，避免通过接口调用造成无限递归
 	if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
+		d.logger.Info("📊 [DPoS.GetValidators] 从 runtime.delegates 返回验证者",
+			"count", len(d.runtime.delegates),
+			"validatorsList", func() []string {
+				var vs []string
+				for i, v := range d.runtime.delegates {
+					vs = append(vs, fmt.Sprintf("[%d]%s", i, v.Address.String()))
+				}
+				return vs
+			}())
 		return d.runtime.delegates
 	}
 
 	// 如果 runtime 不可用，返回空集合
+	d.logger.Warn("⚠️ [DPoS.GetValidators] runtime 不可用或 delegates 为空，返回空集合",
+		"runtimeIsNil", d.runtime == nil,
+		"delegatesIsNil", d.runtime != nil && d.runtime.delegates == nil,
+		"delegatesLen", func() int {
+			if d.runtime != nil && d.runtime.delegates != nil {
+				return len(d.runtime.delegates)
+			}
+			return 0
+		}())
 	return validator.AccountSet{}
 }
 

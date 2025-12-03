@@ -862,13 +862,19 @@ func (a *dposStoreAdapter) GetValidators() (validator.AccountSet, error) {
 		if dposEngine, ok := consensusEngine.(interface {
 			GetDelegates() (validator.AccountSet, error)
 		}); ok {
-			return dposEngine.GetDelegates()
+			fmt.Printf("DEBUG: [dposStoreAdapter.GetValidators] 使用 GetDelegates 方法\n")
+			validators, err := dposEngine.GetDelegates()
+			fmt.Printf("DEBUG: [dposStoreAdapter.GetValidators] GetDelegates 返回: count=%d, error=%v\n", len(validators), err)
+			return validators, err
 		}
 
 		if dposEngine, ok := consensusEngine.(interface {
-			GetValidators() (validator.AccountSet, error)
+			GetValidators() validator.AccountSet
 		}); ok {
-			return dposEngine.GetValidators()
+			fmt.Printf("DEBUG: [dposStoreAdapter.GetValidators] 使用 GetValidators 方法\n")
+			validators := dposEngine.GetValidators()
+			fmt.Printf("DEBUG: [dposStoreAdapter.GetValidators] GetValidators 返回: count=%d\n", len(validators))
+			return validators, nil
 		}
 	}
 
