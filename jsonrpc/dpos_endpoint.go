@@ -155,14 +155,41 @@ func (d *DPOS) validateProposer(proposer types.Address, proposerPrivateKeyHex st
 	}
 
 	// 4. 验证proposer是否是验证者（通过store获取验证者列表）
+	// 🆕 直接使用 GetValidatorsWithFilter(false) 从数据库获取所有验证者，更可靠
 	d.logger.Info("🔍 [validateProposer] 开始获取验证者列表", "proposer", proposer.String())
-	validators, err := d.store.GetValidators()
-	if err != nil {
-		// 如果无法获取验证者列表，记录警告但继续（让后续处理验证）
-		d.logger.Warn("⚠️ [validateProposer] 无法获取验证者列表，将在交易处理时验证proposer是否是验证者",
-			"proposer", proposer.String(),
-			"error", err)
-		return nil // 允许继续，让后续处理验证
+	var validators validator.AccountSet
+
+	// 优先使用 GetValidatorsWithFilter(false) 从数据库获取所有验证者
+	if storeWithFilter, ok := d.store.(interface {
+		GetValidatorsWithFilter(filterZeroVotingPower bool) (validator.AccountSet, error)
+	}); ok {
+		d.logger.Info("🔍 [validateProposer] 使用 GetValidatorsWithFilter(false) 从数据库获取验证者")
+		var err error
+		validators, err = storeWithFilter.GetValidatorsWithFilter(false)
+		if err != nil {
+			d.logger.Warn("⚠️ [validateProposer] GetValidatorsWithFilter 失败，尝试 GetValidators",
+				"proposer", proposer.String(),
+				"error", err)
+			// 回退到 GetValidators()
+			validators, err = d.store.GetValidators()
+			if err != nil {
+				d.logger.Warn("⚠️ [validateProposer] 无法获取验证者列表，将在交易处理时验证proposer是否是验证者",
+					"proposer", proposer.String(),
+					"error", err)
+				return nil // 允许继续，让后续处理验证
+			}
+		}
+	} else {
+		// 回退到 GetValidators()
+		d.logger.Info("🔍 [validateProposer] 使用 GetValidators() 获取验证者（可能不完整）")
+		var err error
+		validators, err = d.store.GetValidators()
+		if err != nil {
+			d.logger.Warn("⚠️ [validateProposer] 无法获取验证者列表，将在交易处理时验证proposer是否是验证者",
+				"proposer", proposer.String(),
+				"error", err)
+			return nil // 允许继续，让后续处理验证
+		}
 	}
 
 	d.logger.Info("📊 [validateProposer] 获取到验证者列表",
@@ -191,7 +218,7 @@ func (d *DPOS) validateProposer(proposer types.Address, proposerPrivateKeyHex st
 		d.logger.Warn("❌ [validateProposer] 验证者不在列表中",
 			"proposer", proposer.String(),
 			"validatorsCount", len(validators),
-			"note", "可能是内存中的验证者列表不完整")
+			"note", "验证者可能不在当前epoch的出块列表中，但可能是注册的验证者")
 		return fmt.Errorf("proposer %s is not a validator", proposer.String())
 	}
 
