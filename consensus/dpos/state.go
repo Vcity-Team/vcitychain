@@ -1007,33 +1007,74 @@ func (s *State) Close() error {
 func (rs *RewardStore) GetEpochRewardDetails(epochNumber uint64) ([]RewardRecordExtended, error) {
 	var records []RewardRecordExtended
 
+	// 🆕 添加日志：开始查询
+	logger := getGlobalLogger()
+	if logger != nil {
+		logger.Debug("🔍 [RewardStore.GetEpochRewardDetails] 开始查询", "epochNumber", epochNumber)
+	}
+
 	err := rs.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("rewards"))
 		if bucket == nil {
+			if logger != nil {
+				logger.Warn("⚠️ [RewardStore.GetEpochRewardDetails] rewards bucket not found")
+			}
 			return fmt.Errorf("rewards bucket not found")
 		}
 
+		if logger != nil {
+			logger.Debug("✅ [RewardStore.GetEpochRewardDetails] rewards bucket found, 开始遍历")
+		}
+
 		cursor := bucket.Cursor()
+		processedCount := 0
 		for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
+			processedCount++
 			var record RewardRecordExtended
 			if err := json.Unmarshal(v, &record); err != nil {
+				if logger != nil && processedCount%1000 == 0 {
+					logger.Debug("⚠️ [RewardStore.GetEpochRewardDetails] 反序列化失败", "key", string(k), "error", err, "processedCount", processedCount)
+				}
 				continue
 			}
 
 			if record.EpochNumber == epochNumber {
 				records = append(records, record)
 			}
+
+			// 🆕 每处理1000条记录打印一次日志（避免日志过多）
+			if logger != nil && processedCount%1000 == 0 {
+				logger.Debug("🔄 [RewardStore.GetEpochRewardDetails] 处理中", "processedCount", processedCount, "matchedCount", len(records))
+			}
+		}
+
+		if logger != nil {
+			logger.Info("✅ [RewardStore.GetEpochRewardDetails] 遍历完成", "epochNumber", epochNumber, "totalProcessed", processedCount, "matchedCount", len(records))
 		}
 
 		return nil
 	})
 
+	if err != nil {
+		if logger != nil {
+			logger.Error("❌ [RewardStore.GetEpochRewardDetails] 数据库查询失败", "epochNumber", epochNumber, "error", err)
+		}
+		return nil, err
+	}
+
 	// 按金额降序排列
+	if logger != nil {
+		logger.Debug("🔄 [RewardStore.GetEpochRewardDetails] 开始排序", "recordsCount", len(records))
+	}
 	sort.Slice(records, func(i, j int) bool {
 		amountI, _ := new(big.Int).SetString(records[i].Amount, 10)
 		amountJ, _ := new(big.Int).SetString(records[j].Amount, 10)
 		return amountI.Cmp(amountJ) > 0
 	})
+
+	if logger != nil {
+		logger.Info("✅ [RewardStore.GetEpochRewardDetails] 查询完成", "epochNumber", epochNumber, "recordsCount", len(records))
+	}
 
 	return records, err
 }

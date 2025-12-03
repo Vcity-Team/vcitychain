@@ -3734,16 +3734,27 @@ func (d *DPOS) GetEpochRewardDetails(ctx context.Context, params interface{}) ([
 	// 获取DPoS状态
 	dposState, err := d.store.GetDPoSState()
 	if err != nil {
+		d.logger.Error("❌ GetEpochRewardDetails: 获取DPoS状态失败", "error", err)
 		return nil, fmt.Errorf("failed to get DPoS state: %w", err)
 	}
+	d.logger.Debug("✅ GetEpochRewardDetails: 成功获取DPoS状态")
 
 	dposState, err = d.ensureRewardStore(dposState)
 	if err != nil {
+		d.logger.Error("❌ GetEpochRewardDetails: ensureRewardStore失败", "error", err)
 		return nil, err
 	}
+	d.logger.Debug("✅ GetEpochRewardDetails: ensureRewardStore成功")
 
 	// 调用RewardStore的方法
-	return dposState.RewardStore.GetEpochRewardDetails(epochNumber)
+	d.logger.Info("🔍 GetEpochRewardDetails: 开始查询奖励详情", "epochNumber", epochNumber)
+	records, err := dposState.RewardStore.GetEpochRewardDetails(epochNumber)
+	if err != nil {
+		d.logger.Error("❌ GetEpochRewardDetails: 查询奖励详情失败", "epochNumber", epochNumber, "error", err)
+		return nil, err
+	}
+	d.logger.Info("✅ GetEpochRewardDetails: 查询完成", "epochNumber", epochNumber, "recordsCount", len(records))
+	return records, nil
 }
 
 // GetRewardHistory 获取指定地址在指定epoch区间的奖励汇总

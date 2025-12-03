@@ -602,6 +602,64 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 			p.logger.Info("所有验证者奖励处理完毕",
 				"cnt", cnt)
 		}
+
+		// 🆕 同步节点也需要记录奖励到数据库（用于查询）
+		// 获取DPoS实例和RewardStore
+		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+			if dposInstance.state != nil && dposInstance.state.RewardStore != nil {
+				// 尝试获取出块统计（同步节点可能没有，使用0）
+				blockCounts := make(map[types.Address]uint64)
+				if dposInstance.blockTracker != nil {
+					blockCounts = dposInstance.blockTracker.GetEpochBlockCounts(rewardInfo.EpochNumber)
+				}
+
+				// 记录每个奖励到数据库
+				for addrStr, amount := range rewardInfo.Rewards {
+					addr := types.StringToAddress(addrStr)
+					blocksProduced := blockCounts[addr] // 同步节点可能为0
+
+					// 判断奖励类型（简化：从ExtraData中无法区分验证者和投票者，统一标记为validator）
+					// 如果需要更精确，可以在ExtraData中添加奖励类型信息
+					rewardType := "validator"
+
+					rewardRecord := &RewardRecordExtended{
+						EpochNumber:     rewardInfo.EpochNumber,
+						Recipient:       addrStr,
+						RewardType:      rewardType,
+						Amount:          amount.String(),
+						BlockCount:      blocksProduced,
+						VoteWeight:      "0",
+						Timestamp:       time.Now(),
+						TransactionHash: "",
+						Status:          "completed",
+					}
+
+					if err := dposInstance.state.RewardStore.RecordReward(rewardRecord); err != nil {
+						p.logger.Error("❌ 同步节点记录奖励失败",
+							"blockNumber", block.Number(),
+							"epoch", rewardInfo.EpochNumber,
+							"recipient", addrStr,
+							"error", err)
+					} else {
+						p.logger.Debug("✅ 同步节点记录奖励成功",
+							"blockNumber", block.Number(),
+							"epoch", rewardInfo.EpochNumber,
+							"recipient", addrStr,
+							"amount", amount.String(),
+							"blocksProduced", blocksProduced)
+					}
+				}
+
+				p.logger.Info("✅ 同步节点奖励记录完成",
+					"blockNumber", block.Number(),
+					"epoch", rewardInfo.EpochNumber,
+					"rewardCount", len(rewardInfo.Rewards))
+			} else {
+				p.logger.Warn("⚠️ RewardStore不可用，跳过奖励记录",
+					"blockNumber", block.Number(),
+					"epoch", rewardInfo.EpochNumber)
+			}
+		}
 	} else {
 		p.logger.Warn("⚠️ ExtraData解析后RewardDistribution为nil",
 			"blockNumber", block.Number(),
