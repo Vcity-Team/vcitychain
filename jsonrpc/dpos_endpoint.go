@@ -155,41 +155,69 @@ func (d *DPOS) validateProposer(proposer types.Address, proposerPrivateKeyHex st
 	}
 
 	// 4. 验证proposer是否是验证者（通过store获取验证者列表）
-	// 🆕 直接使用 GetValidatorsWithFilter(false) 从数据库获取所有验证者，更可靠
+	// 🆕 使用与 GetStakingInfo 相同的回退方案，确保能正确获取验证者
 	d.logger.Info("🔍 [validateProposer] 开始获取验证者列表", "proposer", proposer.String())
 	var validators validator.AccountSet
 
-	// 优先使用 GetValidatorsWithFilter(false) 从数据库获取所有验证者
-	if storeWithFilter, ok := d.store.(interface {
-		GetValidatorsWithFilter(filterZeroVotingPower bool) (validator.AccountSet, error)
-	}); ok {
-		d.logger.Info("🔍 [validateProposer] 使用 GetValidatorsWithFilter(false) 从数据库获取验证者")
-		var err error
-		validators, err = storeWithFilter.GetValidatorsWithFilter(false)
-		if err != nil {
-			d.logger.Warn("⚠️ [validateProposer] GetValidatorsWithFilter 失败，尝试 GetValidators",
-				"proposer", proposer.String(),
-				"error", err)
-			// 回退到 GetValidators()
-			validators, err = d.store.GetValidators()
-			if err != nil {
-				d.logger.Warn("⚠️ [validateProposer] 无法获取验证者列表，将在交易处理时验证proposer是否是验证者",
+	// 方法1：尝试从 store 获取
+	if validators1, err1 := d.store.GetValidatorsWithFilter(false); err1 == nil && len(validators1) > 0 {
+		validators = validators1
+		d.logger.Info("✅ [validateProposer] 方法1成功：从 store 获取验证者", "count", len(validators))
+	} else {
+		d.logger.Warn("⚠️ [validateProposer] 方法1失败，尝试方法2",
+			"proposer", proposer.String(),
+			"error", err1,
+			"validatorsCount", len(validators1))
+
+		// 方法2：尝试从 DPoS 引擎直接获取（与 GetStakingInfo 保持一致）
+		if dposState, err2 := d.store.GetDPoSState(); err2 == nil && dposState != nil && dposState.StakeStore != nil {
+			d.logger.Info("🔍 [validateProposer] 方法2：从 DPoS State.StakeStore 获取验证者")
+			if validators2, err2 := dposState.StakeStore.GetValidatorsWithFilter(false); err2 == nil && len(validators2) > 0 {
+				validators = validators2
+				d.logger.Info("✅ [validateProposer] 方法2成功：从 DPoS State.StakeStore 获取验证者", "count", len(validators))
+			} else {
+				d.logger.Warn("⚠️ [validateProposer] 方法2失败",
 					"proposer", proposer.String(),
-					"error", err)
-				return nil // 允许继续，让后续处理验证
+					"error", err2,
+					"validatorsCount", len(validators2))
+			}
+		} else {
+			d.logger.Warn("⚠️ [validateProposer] 无法获取 DPoS State",
+				"proposer", proposer.String(),
+				"error", err2,
+				"dposStateIsNil", dposState == nil,
+				"stakeStoreIsNil", dposState != nil && dposState.StakeStore == nil)
+		}
+
+		// 方法3：尝试通过 GetDPoSEngine 获取
+		if len(validators) == 0 {
+			if dposStore, ok := d.store.(interface {
+				GetDPoSEngine() interface{}
+			}); ok {
+				if dposEngine := dposStore.GetDPoSEngine(); dposEngine != nil {
+					if dpos, ok := dposEngine.(*dpos.DPoS); ok {
+						d.logger.Info("🔍 [validateProposer] 方法3：从 DPoS Engine 获取验证者")
+						if validators3, err3 := dpos.GetValidatorsWithFilter(false); err3 == nil && len(validators3) > 0 {
+							validators = validators3
+							d.logger.Info("✅ [validateProposer] 方法3成功：从 DPoS Engine 获取验证者", "count", len(validators))
+						} else {
+							d.logger.Warn("⚠️ [validateProposer] 方法3失败",
+								"proposer", proposer.String(),
+								"error", err3,
+								"validatorsCount", len(validators3))
+						}
+					}
+				}
 			}
 		}
-	} else {
-		// 回退到 GetValidators()
-		d.logger.Info("🔍 [validateProposer] 使用 GetValidators() 获取验证者（可能不完整）")
-		var err error
-		validators, err = d.store.GetValidators()
-		if err != nil {
-			d.logger.Warn("⚠️ [validateProposer] 无法获取验证者列表，将在交易处理时验证proposer是否是验证者",
-				"proposer", proposer.String(),
-				"error", err)
-			return nil // 允许继续，让后续处理验证
-		}
+	}
+
+	// 如果所有方法都失败，记录警告但继续（让后续处理验证）
+	if len(validators) == 0 {
+		d.logger.Warn("⚠️ [validateProposer] 所有方法都失败，将在交易处理时验证proposer是否是验证者",
+			"proposer", proposer.String(),
+			"validatorsCount", len(validators))
+		return nil // 允许继续，让后续处理验证
 	}
 
 	d.logger.Info("📊 [validateProposer] 获取到验证者列表",
