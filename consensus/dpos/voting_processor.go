@@ -56,12 +56,16 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 	// 🆕 方案1+方案2：投票完成后标记需要延迟更新验证者集合
 	d.logger.Debug("🔄 投票完成，标记需要延迟更新验证者集合...")
 	d.pendingValidatorUpdate = true
-	d.lastVotedDelegate = candidate // 记录最后投票的验证者
+	// 🆕 修复：使用集合保存所有被投票的验证者（而不是只保存最后一个）
+	if d.lastVotedDelegates == nil {
+		d.lastVotedDelegates = make(map[types.Address]bool)
+	}
+	d.lastVotedDelegates[candidate] = true // 添加到被投票的验证者集合
 	d.logger.Info("✅ 投票完成，验证者集合将在下一轮更新",
 		"voter", voter.String(),
 		"candidate", candidate.String(),
 		"amount", amount.String(),
-		"lastVotedDelegate", d.lastVotedDelegate.String())
+		"lastVotedDelegatesCount", len(d.lastVotedDelegates))
 
 	return nil
 }
@@ -280,6 +284,18 @@ func (d *DPoS) processVoteBatch(votes []*VoteMessage) {
 				break
 			}
 		}
+	}
+
+	// 🆕 修复：批量投票时，将所有被投票的验证者添加到集合中
+	if len(delegateUpdates) > 0 {
+		d.pendingValidatorUpdate = true
+		if d.lastVotedDelegates == nil {
+			d.lastVotedDelegates = make(map[types.Address]bool)
+		}
+		for delegate := range delegateUpdates {
+			d.lastVotedDelegates[delegate] = true
+		}
+		d.logger.Info("✅ 批量投票完成，已标记需要更新的验证者", "votedDelegatesCount", len(d.lastVotedDelegates))
 	}
 
 	// 更新缓存

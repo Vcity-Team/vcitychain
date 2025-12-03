@@ -146,6 +146,8 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 						}()
 					}
 					dposInstance.pendingValidatorUpdate = false
+					// 🆕 修复：清空被投票的验证者集合
+					dposInstance.lastVotedDelegates = nil
 				}
 			}
 		}

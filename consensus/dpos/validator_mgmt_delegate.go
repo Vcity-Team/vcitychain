@@ -1872,13 +1872,21 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 	}
 
 	// 直接保存当前的 d.delegates 到数据库，不改变受托人集合
-	// 如果是在投票处理过程中，只更新投票的验证者
-	if d.pendingValidatorUpdate && d.lastVotedDelegate != (types.Address{}) {
-		d.logger.Info("🎯 投票处理中，只更新投票的验证者", "targetDelegate", d.lastVotedDelegate.String())
-		if err := d.persistDelegateSetToDatabaseWithTarget(d.delegates, d.lastVotedDelegate); err != nil {
-			d.logger.Error("❌ Failed to persist target delegate to database", "error", err)
-			return err
+	// 如果是在投票处理过程中，只更新被投票的验证者
+	if d.pendingValidatorUpdate && d.lastVotedDelegates != nil && len(d.lastVotedDelegates) > 0 {
+		// 🆕 修复：遍历所有被投票的验证者，逐个更新
+		affectedCount := 0
+		for targetDelegate := range d.lastVotedDelegates {
+			d.logger.Info("🎯 投票处理中，更新被投票的验证者", "targetDelegate", targetDelegate.String())
+			if err := d.persistDelegateSetToDatabaseWithTarget(d.delegates, targetDelegate); err != nil {
+				d.logger.Error("❌ Failed to persist target delegate to database", "targetDelegate", targetDelegate.String(), "error", err)
+				return err
+			}
+			affectedCount++
 		}
+		d.logger.Info("✅ 已更新所有被投票的验证者", "affectedCount", affectedCount, "totalVotedDelegates", len(d.lastVotedDelegates))
+		// 🆕 更新完成后清空集合
+		d.lastVotedDelegates = nil
 	} else {
 		// 正常情况，保存所有验证者
 		if err := d.persistDelegateSetToDatabase(d.delegates); err != nil {

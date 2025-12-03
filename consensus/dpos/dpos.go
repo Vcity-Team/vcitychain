@@ -336,8 +336,8 @@ type DPoS struct {
 	faultyValidators  map[types.Address]bool
 	missedBlocksCount map[types.Address]uint64
 
-	// 最后投票的验证者地址
-	lastVotedDelegate types.Address
+	// 🆕 最后投票的验证者地址集合（支持多个验证者）
+	lastVotedDelegates map[types.Address]bool
 
 	// 奖励分配信息
 	pendingRewardDistribution *RewardDistributionInfo
