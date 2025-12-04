@@ -612,7 +612,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 					// 清空pending奖励分配信息
 					dposInstance.pendingRewardDistribution = nil
-					r.logger.Info("✅ buildBlock: 已清空pending奖励分配信息")
+					r.logger.Debug("✅ buildBlock: 已清空pending奖励分配信息")
 				} else {
 					r.logger.Info("ℹ️ buildBlock: DPoS实例存在但无待处理的奖励分配信息",
 						"blockNumber", h.Number,
@@ -625,13 +625,13 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 					extra.FaultFlags = make([]FaultFlagInfo, len(dposInstance.pendingFaultFlags))
 					copy(extra.FaultFlags, dposInstance.pendingFaultFlags)
 
-					r.logger.Info("🔧 buildBlock: epoch结束区块，故障检测结果已添加到ExtraData",
+					r.logger.Debug("🔧 buildBlock: epoch结束区块，故障检测结果已添加到ExtraData",
 						"blockNumber", h.Number,
 						"faultFlagsCount", len(extra.FaultFlags))
 
 					// 清空pending故障标志
 					dposInstance.pendingFaultFlags = nil
-					r.logger.Info("✅ buildBlock: 已清空pending故障标志")
+					r.logger.Debug("✅ buildBlock: 已清空pending故障标志")
 				} else {
 					r.logger.Info("ℹ️ buildBlock: DPoS实例存在但无待处理的故障检测信息",
 						"blockNumber", h.Number,
@@ -656,13 +656,13 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 						}
 					}
 
-					r.logger.Info("🔧 buildBlock: epoch结束区块，故障消减信息已添加到ExtraData",
+					r.logger.Debug("🔧 buildBlock: epoch结束区块，故障消减信息已添加到ExtraData",
 						"blockNumber", h.Number,
 						"slashingsCount", len(extra.SlashingInfo.Slashings))
 
 					// 清空pending消减信息
 					dposInstance.pendingSlashingInfo = nil
-					r.logger.Info("✅ buildBlock: 已清空pending消减信息")
+					r.logger.Debug("✅ buildBlock: 已清空pending消减信息")
 				} else {
 					r.logger.Info("ℹ️ buildBlock: DPoS实例存在但无待处理的消减信息",
 						"blockNumber", h.Number,
@@ -688,16 +688,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 					"key", "vcity_dpos")
 			}
 		}
-
-		// 添加调试日志
-		r.logger.Info("🏗️ buildBlock: DPoS区块构建完成",
-			"number", h.Number,
-			"difficulty", h.Difficulty,
-			"gasLimit", h.GasLimit,
-			"timestamp", h.Timestamp,
-			"extraDataLength", len(h.ExtraData),
-			"delegate", keyAddr.String()[:16],
-			"isEpochEndBlock", isEpochEndBlock)
 
 		// 🆕 检查区块头中的状态根
 		r.logger.Info("🔍 检查区块头状态根",

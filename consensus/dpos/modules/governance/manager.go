@@ -121,7 +121,7 @@ func (m *Manager) LoadScheduled(epochNumber uint64) []*core.ParameterProposal {
 	}
 	result, err := m.deps.ListScheduled(epochNumber)
 	if err != nil {
-		m.logger.Warn("failed to list scheduled proposals from store", "epoch", epochNumber, "error", err)
+		m.logger.Debug("failed to list scheduled proposals from store", "epoch", epochNumber, "error", err)
 		return nil
 	}
 	return result

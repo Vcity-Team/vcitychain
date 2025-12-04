@@ -27,12 +27,6 @@ func (d *DPoS) updateRoundState(header *types.Header) {
 
 		if d.runtime != nil {
 			oldRound := d.runtime.currentRound
-
-			d.logger.Info("🔍 更新前轮次状态",
-				"blockNumber", header.Number,
-				"oldRound", oldRound)
-
-			// 🆕 使用区块头部的区块号，确保一致性
 			d.runtime.updateRound(header.Number)
 
 			d.logger.Debug("✅ 轮次状态更新完成",
@@ -57,7 +51,3 @@ func (d *DPoS) updateRoundState(header *types.Header) {
 			}())
 	}
 }
-
-
-
-

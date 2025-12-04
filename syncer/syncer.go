@@ -310,16 +310,6 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 
 		// if the bestPeer does not have a new block continue
 		if bestPeer.Number <= localLatest {
-			// 控制"跳过同步"日志的频率
-			now := time.Now()
-			if now.Sub(lastNoPeerLogTime) > noPeerLogInterval {
-				s.logger.Info("⏭️ 跳过同步：对等节点没有新区块",
-					"peer", bestPeer.ID.String(),
-					"peerNumber", bestPeer.Number,
-					"localLatest", localLatest,
-					"reason", "bestPeer.Number <= localLatest")
-				lastNoPeerLogTime = now
-			}
 			continue
 		}
 

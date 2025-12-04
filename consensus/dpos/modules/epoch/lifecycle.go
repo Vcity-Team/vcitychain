@@ -263,11 +263,5 @@ func (m *lifecycleManager) ApplyNextValidatorsFromExtra(validators validator.Acc
 		m.deps.UpdateValidatorCaches(validators)
 	}
 
-	if m.logger != nil {
-		m.logger.Info("applied next epoch validators from extra data",
-			"blockNumber", blockNumber,
-			"count", len(validators))
-	}
-
 	return nil
 }

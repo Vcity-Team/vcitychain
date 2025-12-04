@@ -780,11 +780,6 @@ func (p *blockchainWrapper) processSlashingInBlock(block *types.Block, transitio
 
 // updateNextEpochValidatorsFromLocal 使用本地计算结果保存下一个epoch验证者集合
 func (p *blockchainWrapper) updateNextEpochValidatorsFromLocal(block *types.Block) error {
-	p.logger.Info("🔄 ===== 开始处理下一个epoch验证者集合 =====",
-		"blockNumber", block.Number(),
-		"blockHash", block.Hash().String()[:16],
-		"extraDataLength", len(block.Header.ExtraData))
-
 	extra := &Extra{}
 	if err := extra.UnmarshalRLP(block.Header.ExtraData); err != nil {
 		p.logger.Error("❌ 解析ExtraData失败",

@@ -668,9 +668,6 @@ func (d *DPoS) saveNextEpochValidators(validators validator.AccountSet) error {
 				"error", err,
 				"count", len(validators))
 		} else {
-			d.logger.Info("✅ 下一个epoch验证者集合保存成功（state模块）",
-				"count", len(validators),
-				"blockNumber", blockNumber)
 			return nil
 		}
 	}
@@ -684,7 +681,6 @@ func (d *DPoS) saveNextEpochValidators(validators validator.AccountSet) error {
 		return err
 	}
 
-	d.logger.Info("✅ 下一个epoch验证者集合保存成功（legacy）", "count", len(validators))
 	return nil
 }
 
