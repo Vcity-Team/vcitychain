@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/Vcity-Team/vcitychain/types"
 )
@@ -208,13 +209,29 @@ func (d *DPoS) ProcessProposalVoteTransaction(tx *types.Transaction, blockNumber
 		}())
 	}
 
-	// 6. 验证投票签名
+	// 6. 获取区块头的时间戳
+	var blockTimestamp uint64
+	if d.config != nil && d.config.Blockchain != nil {
+		if header, ok := d.config.Blockchain.GetHeaderByNumber(blockNumber); ok && header != nil {
+			blockTimestamp = header.Timestamp
+		} else {
+			// 如果获取失败，使用当前时间作为后备
+			blockTimestamp = uint64(time.Now().Unix())
+			d.logger.Warn("Failed to get block header timestamp, using current time", "blockNumber", blockNumber)
+		}
+	} else {
+		// 如果无法获取区块头，使用当前时间
+		blockTimestamp = uint64(time.Now().Unix())
+		d.logger.Warn("Blockchain config not available, using current time for timestamp")
+	}
+
+	// 7. 验证投票签名
 	vote := ParameterVote{
 		Voter:      tx.From,
 		ProposalID: txData.ProposalID,
 		Support:    txData.Support,
 		Weight:     voterWeight,
-		Timestamp:  blockNumber,
+		Timestamp:  blockTimestamp,
 		Signature:  txData.VoteSignature,
 	}
 
@@ -222,10 +239,10 @@ func (d *DPoS) ProcessProposalVoteTransaction(tx *types.Transaction, blockNumber
 		return fmt.Errorf("failed to verify vote signature: %w", err)
 	}
 
-	// 7. 添加投票（所有节点都执行）
+	// 8. 添加投票（所有节点都执行）
 	proposal.Votes[tx.From] = vote
 
-	// 8. 保存到数据库（所有节点都执行）
+	// 9. 保存到数据库（所有节点都执行）
 	if err := d.governanceRecordVote(proposal); err != nil {
 		if errors.Is(err, errProposalStoreUnavailable) {
 			d.logger.Warn("⚠️ [ProcessProposalVoteTransaction] ProposalStore不可用，跳过保存",
