@@ -1105,6 +1105,26 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 		logMessage = "📥📥📥📥📥📥📥📥📥📥 同步新区块写入"
 	}
 
+	// 🆕 尝试获取 epoch 信息并添加到日志中
+	type epochInfoGetter interface {
+		GetEpochInfoForBlock(blockNumber uint64) map[string]interface{}
+	}
+
+	if epochGetter, ok := b.consensus.(epochInfoGetter); ok {
+		epochInfo := epochGetter.GetEpochInfoForBlock(header.Number)
+		if epochInfo != nil {
+			if epochNumber, ok := epochInfo["epochNumber"].(uint64); ok {
+				logArgs = append(logArgs, "epoch", epochNumber)
+			}
+			if remainingBlocks, ok := epochInfo["remainingBlocks"].(int64); ok {
+				logArgs = append(logArgs, "epochRemainingBlocks", remainingBlocks)
+			}
+			if timeRemaining, ok := epochInfo["timeRemaining"].(string); ok {
+				logArgs = append(logArgs, "epochRemainingTime", timeRemaining)
+			}
+		}
+	}
+
 	b.logger.Info(logMessage, logArgs...)
 
 	// 🆕 检查写入的区块状态根

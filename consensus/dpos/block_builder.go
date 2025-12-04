@@ -379,14 +379,27 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		return nil, fmt.Errorf("key not available, cannot build block")
 	}
 
-	// 获取父区块
 	parent := r.config.blockchain.CurrentHeader()
 
-	// 🆕 检查并应用延迟状态更新（只在非epoch结束区块时应用）
+	// 检查并应用延迟状态更新（只在非epoch结束区块时应用）
 	nextBlockNumber := parent.Number + 1
 	isEpochEndBlock := r.isEpochEndBlock(nextBlockNumber)
 
 	if isEpochEndBlock {
+		currentEpoch := r.getEpochForBlock(nextBlockNumber)
+		if currentEpoch != nil {
+			epochSize := r.getEpochSize()
+			firstBlockInEpoch := currentEpoch.FirstBlockInEpoch
+			lastBlockInEpoch := nextBlockNumber
+
+			r.logger.Info("📊 Epoch边界统计信息",
+				"epochNumber", currentEpoch.Number,
+				"epochRange", fmt.Sprintf("[%d, %d]", firstBlockInEpoch, lastBlockInEpoch),
+				"epochSize", epochSize,
+				"firstBlock", firstBlockInEpoch,
+				"lastBlock", lastBlockInEpoch)
+		}
+
 		if r.config != nil && r.config.dposBackend != nil {
 			if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
 				dposInstance.processEpochBoundary(r, parent, nextBlockNumber)

@@ -528,11 +528,6 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 		return fmt.Errorf("failed to unmarshal extra data: %w", err)
 	}
 
-	p.logger.Info("✅ ExtraData解析成功",
-		"blockNumber", block.Number(),
-		"hasRewardDistribution", extra.RewardDistribution != nil,
-		"hasFaultFlags", len(extra.FaultFlags) > 0)
-
 	// 🔍 添加详细的奖励信息日志
 	if extra.RewardDistribution != nil {
 		p.logger.Debug("💰 ExtraData包含奖励信息",
@@ -712,17 +707,12 @@ func (p *blockchainWrapper) processSlashingInBlock(block *types.Block, transitio
 		return fmt.Errorf("failed to unmarshal extra data: %w", err)
 	}
 
-	p.logger.Info("✅ ExtraData解析成功",
-		"blockNumber", block.Number(),
-		"hasSlashingInfo", extra.SlashingInfo != nil)
-
 	if extra.SlashingInfo == nil {
 		p.logger.Info("ℹ️ ExtraData中没有消减信息，跳过处理",
 			"blockNumber", block.Number())
 		return nil
 	}
 
-	// 获取DPoS实例
 	dposInstance, exists := GetDPoSInstance("vcity_dpos")
 	if !exists {
 		return fmt.Errorf("DPoS instance not found")

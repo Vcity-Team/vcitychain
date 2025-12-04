@@ -151,284 +151,65 @@ func (d *DPoS) CanWithdrawDelegate(address types.Address) (map[string]interface{
 
 // ==================== DPoS经济系统JSON-RPC查询方法 ====================
 
-// GetCurrentEpochInfo 获取当前Epoch信息（公共方法，供外部调用）
-// 注意：不能通过接口调用，因为GetCurrentEpochInfo本身就是接口的实现
-// 直接使用原有逻辑，避免无限递归
-func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
-	if d.query != nil {
-		return d.query.GetCurrentEpochInfo()
-	}
-	return d.getCurrentEpochInfoLegacy()
-}
-
-// getCurrentEpochInfoLegacy 获取当前Epoch信息（旧实现，已废弃，保留用于向后兼容）
-// 注意：此方法已不再使用，逻辑已迁移到modules/query/manager.go
-func (d *DPoS) getCurrentEpochInfoLegacy() map[string]interface{} {
-	// 获取当前区块高度
-	currentBlockNumber := uint64(0)
-	if d.config.Blockchain != nil {
-		if header := d.config.Blockchain.Header(); header != nil {
-			currentBlockNumber = header.Number
-		}
-	}
-
-	// 🆕 修复：使用与isEpochEndBlock相同的epoch计算逻辑
+// GetEpochInfoForBlock 获取指定区块的 epoch 信息（供 blockchain 模块调用）
+func (d *DPoS) GetEpochInfoForBlock(blockNumber uint64) map[string]interface{} {
 	consensusSwitchHeight := d.config.ConsensusSwitchHeight
 	epochSize := d.getEpochSize()
 
 	var epochNumber uint64
 	var firstBlockInEpoch uint64
 
-	if currentBlockNumber < consensusSwitchHeight {
+	if blockNumber < consensusSwitchHeight {
 		// 在共识切换之前，epoch为0
 		epochNumber = 0
 		firstBlockInEpoch = 0
 	} else {
 		// 计算DPoS epoch：从共识切换高度开始
-		dposBlockNumber := currentBlockNumber - consensusSwitchHeight
+		dposBlockNumber := blockNumber - consensusSwitchHeight
 		epochNumber = (dposBlockNumber / epochSize) + 1
 		firstBlockInEpoch = consensusSwitchHeight + (epochNumber-1)*epochSize
 	}
 
 	lastBlockInEpoch := firstBlockInEpoch + epochSize - 1
 
-	// 获取epoch时间信息（用于显示）
-	_, lastEpochTime, epochDuration := d.epochManager.GetEpochInfo(currentBlockNumber)
-
-	// 🆕 改进：基于剩余区块数计算剩余时间（以区块为准）
+	// 计算剩余区块数
 	remainingBlocks := int64(0)
-	if currentBlockNumber < lastBlockInEpoch {
-		remainingBlocks = int64(lastBlockInEpoch) - int64(currentBlockNumber)
+	if blockNumber < lastBlockInEpoch {
+		remainingBlocks = int64(lastBlockInEpoch) - int64(blockNumber)
 	}
 
-	// 获取理论出块时间
+	// 计算剩余时间
 	blockTime := d.config.BlockTime.Duration
 	if blockTime == 0 {
 		blockTime = 3 * time.Second // 默认值
 	}
-
-	// 计算剩余时间：剩余区块数 * 理论出块时间
 	timeRemaining := time.Duration(remainingBlocks) * blockTime
 
-	// 计算下一个epoch的估算时间（基于剩余区块数计算的估算值）
-	nextEpochTimeEstimated := time.Now().Add(timeRemaining)
-
-	// 🆕 从数据库读取验证者信息（按权重倒序排序，应用配置限制）
-	validators := make([]map[string]interface{}, 0)
-
-	// 🆕 获取该epoch的出块统计
-	var blockCounts map[types.Address]uint64
-	if d.blockTracker != nil {
-		blockCounts = d.blockTracker.GetEpochBlockCounts(epochNumber)
-	} else {
-		blockCounts = make(map[types.Address]uint64)
-	}
-
-	if d.state != nil && d.state.StakeStore != nil {
-		// 🆕 使用公共函数获取排序和限制后的验证者（包含故障过滤）
-		dbValidators, err := d.GetSortedValidatorsWithLimit()
-		if err == nil && len(dbValidators) > 0 {
-			// 转换为输出格式
-			for i, validator := range dbValidators {
-				// 🆕 获取验证者的故障标志信息
-				faultInfo := d.getValidatorFaultInfo(validator.Address)
-
-				// 🆕 获取该验证者在该epoch的出块数
-				blocksProduced := blockCounts[validator.Address]
-
-				validators = append(validators, map[string]interface{}{
-					"index":          i,
-					"address":        validator.Address.String(),
-					"votingPower":    validator.VotingPower.String(),
-					"isActive":       validator.IsActive,
-					"faultFlag":      faultInfo,      // 🆕 添加故障标志信息
-					"blocksProduced": blocksProduced, // 🆕 添加该epoch的出块数
-				})
-			}
-		}
-	}
-
-	// 🆕 改进：基于区块号判断epoch状态（以区块为准）
-	epochStatus := "active"
-	if currentBlockNumber >= lastBlockInEpoch {
-		epochStatus = "completed"
-	} else if currentBlockNumber < firstBlockInEpoch {
-		epochStatus = "pending"
-	}
-
-	// 计算已出块数
-	blocksProduced := uint64(0)
-	if currentBlockNumber >= firstBlockInEpoch {
-		blocksProduced = currentBlockNumber - firstBlockInEpoch + 1
-		if blocksProduced > epochSize {
-			blocksProduced = epochSize
-		}
-	}
-
 	return map[string]interface{}{
-		"epochNumber":            epochNumber,
-		"epochStatus":            epochStatus, // 🆕 基于区块号判断
-		"epochStartTime":         lastEpochTime.Format(time.RFC3339),
-		"epochDuration":          epochDuration.String(),
-		"firstBlockInEpoch":      firstBlockInEpoch,
-		"lastBlockInEpoch":       lastBlockInEpoch,
-		"currentBlockNumber":     currentBlockNumber,
-		"epochSize":              epochSize,
-		"remainingBlocks":        remainingBlocks,                             // 🆕 新增：剩余区块数
-		"estimatedTimeRemaining": timeRemaining.String(),                      // 🆕 基于剩余区块数计算的剩余时间
-		"nextEpochTimeEstimated": nextEpochTimeEstimated.Format(time.RFC3339), // 🆕 基于剩余区块数计算的估算时间
-		"blocksProduced":         blocksProduced,                              // 🆕 新增：已出块数
-		"validators":             validators,
-		"validatorCount":         len(validators),
-		"consensusSwitchHeight":  d.config.ConsensusSwitchHeight,
+		"epochNumber":     epochNumber,
+		"remainingBlocks": remainingBlocks,
+		"timeRemaining":   timeRemaining.String(),
 	}
+}
+
+// GetCurrentEpochInfo 获取当前Epoch信息（公共方法，供外部调用）
+func (d *DPoS) GetCurrentEpochInfo() map[string]interface{} {
+	if d.query == nil {
+		return map[string]interface{}{
+			"error": "query manager not initialized",
+		}
+	}
+	return d.query.GetCurrentEpochInfo()
 }
 
 // GetEpochInfoByNumber 获取指定Epoch信息（公共方法，供外部调用）
-// 注意：不能通过接口调用，因为GetEpochInfoByNumber本身就是接口的实现
-// 直接使用原有逻辑，避免无限递归
 func (d *DPoS) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{} {
-	if d.query != nil {
-		return d.query.GetEpochInfoByNumber(epochNumber)
-	}
-	return d.getEpochInfoByNumberLegacy(epochNumber)
-}
-
-// getEpochInfoByNumberLegacy 获取指定Epoch信息（旧实现，已废弃，保留用于向后兼容）
-// 注意：此方法已不再使用，逻辑已迁移到modules/query/manager.go
-func (d *DPoS) getEpochInfoByNumberLegacy(epochNumber uint64) map[string]interface{} {
-	// 获取当前区块高度
-	currentBlockNumber := uint64(0)
-	if d.config.Blockchain != nil {
-		if header := d.config.Blockchain.Header(); header != nil {
-			currentBlockNumber = header.Number
+	if d.query == nil {
+		return map[string]interface{}{
+			"error": "query manager not initialized",
 		}
 	}
-
-	// 🆕 修复：使用与isEpochEndBlock相同的epoch计算逻辑获取当前epoch
-	consensusSwitchHeight := d.config.ConsensusSwitchHeight
-	epochSize := d.getEpochSize()
-
-	var currentEpoch uint64
-	if currentBlockNumber < consensusSwitchHeight {
-		currentEpoch = 0
-	} else {
-		dposBlockNumber := currentBlockNumber - consensusSwitchHeight
-		currentEpoch = (dposBlockNumber / epochSize) + 1
-	}
-
-	// 如果请求的是当前Epoch，返回当前信息
-	if epochNumber == currentEpoch {
-		// 直接调用legacy实现，避免通过接口调用造成无限递归
-		return d.getCurrentEpochInfoLegacy()
-	}
-
-	// 计算指定epoch的区块范围（考虑共识切换高度）
-	var firstBlockInEpoch uint64
-	if epochNumber == 0 {
-		firstBlockInEpoch = 0
-	} else {
-		firstBlockInEpoch = consensusSwitchHeight + (epochNumber-1)*epochSize
-	}
-	lastBlockInEpoch := firstBlockInEpoch + epochSize - 1
-
-	// 🆕 改进：基于区块号确定epoch状态
-	epochStatus := "unknown"
-	if epochNumber < currentEpoch {
-		epochStatus = "completed"
-	} else if epochNumber == currentEpoch {
-		epochStatus = "active"
-	} else {
-		epochStatus = "future"
-	}
-
-	// 计算剩余区块数和已出块数
-	remainingBlocks := int64(0)
-	blocksProduced := uint64(0)
-
-	if epochNumber == currentEpoch {
-		// 当前epoch：基于当前区块号计算
-		if currentBlockNumber < lastBlockInEpoch {
-			remainingBlocks = int64(lastBlockInEpoch) - int64(currentBlockNumber)
-		}
-		if currentBlockNumber >= firstBlockInEpoch {
-			blocksProduced = currentBlockNumber - firstBlockInEpoch + 1
-			if blocksProduced > epochSize {
-				blocksProduced = epochSize
-			}
-		}
-	} else if epochNumber < currentEpoch {
-		// 历史epoch：已完成，剩余区块数为0，已出块数为epochSize
-		remainingBlocks = 0
-		blocksProduced = epochSize
-	} else {
-		// 未来epoch：剩余区块数为epochSize，已出块数为0
-		remainingBlocks = int64(epochSize)
-		blocksProduced = 0
-	}
-
-	// 获取epoch时间信息
-	_, _, epochDuration := d.epochManager.GetEpochInfo(currentBlockNumber)
-
-	// 计算剩余时间（基于剩余区块数）
-	blockTime := d.config.BlockTime.Duration
-	if blockTime == 0 {
-		blockTime = 3 * time.Second // 默认值
-	}
-	timeRemaining := time.Duration(remainingBlocks) * blockTime
-
-	// 🆕 获取该epoch的出块统计
-	var blockCounts map[types.Address]uint64
-	if d.blockTracker != nil {
-		blockCounts = d.blockTracker.GetEpochBlockCounts(epochNumber)
-	} else {
-		blockCounts = make(map[types.Address]uint64)
-	}
-
-	// 🆕 从数据库读取验证者信息（按权重倒序排序，应用配置限制）
-	validators := make([]map[string]interface{}, 0)
-	if d.state != nil && d.state.StakeStore != nil {
-		// 🆕 使用公共函数获取排序和限制后的验证者（包含故障过滤）
-		dbValidators, err := d.GetSortedValidatorsWithLimit()
-		if err == nil && len(dbValidators) > 0 {
-			// 转换为输出格式
-			for i, validator := range dbValidators {
-				// 🆕 获取验证者的故障标志信息
-				faultInfo := d.getValidatorFaultInfo(validator.Address)
-
-				// 🆕 获取该验证者在该epoch的出块数
-				blocksProduced := blockCounts[validator.Address]
-
-				validators = append(validators, map[string]interface{}{
-					"index":          i,
-					"address":        validator.Address.String(),
-					"votingPower":    validator.VotingPower.String(),
-					"isActive":       validator.IsActive,
-					"faultFlag":      faultInfo,      // 🆕 添加故障标志信息
-					"blocksProduced": blocksProduced, // 🆕 添加该epoch的出块数
-				})
-			}
-		}
-	}
-
-	// 对于历史Epoch，提供基本信息（包含验证者信息和出块数）
-	return map[string]interface{}{
-		"epochNumber":            epochNumber,
-		"epochStatus":            epochStatus, // 🆕 基于区块号判断
-		"epochDuration":          epochDuration.String(),
-		"firstBlockInEpoch":      firstBlockInEpoch,
-		"lastBlockInEpoch":       lastBlockInEpoch,
-		"epochSize":              epochSize,
-		"remainingBlocks":        remainingBlocks,                                    // 🆕 新增：剩余区块数
-		"estimatedTimeRemaining": timeRemaining.String(),                             // 🆕 基于剩余区块数计算的剩余时间
-		"nextEpochTimeEstimated": time.Now().Add(timeRemaining).Format(time.RFC3339), // 🆕 基于剩余区块数计算的估算时间
-		"blocksProduced":         blocksProduced,                                     // 🆕 新增：已出块数
-		"currentEpoch":           currentEpoch,
-		"currentBlockNumber":     currentBlockNumber,
-		"consensusSwitchHeight":  d.config.ConsensusSwitchHeight,
-		"validators":             validators,      // 🆕 添加验证者信息（包含出块数）
-		"validatorCount":         len(validators), // 🆕 添加验证者数量
-	}
+	return d.query.GetEpochInfoByNumber(epochNumber)
 }
 
 // GetValidatorBlockStats 获取验证者出块统计
