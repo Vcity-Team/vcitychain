@@ -4880,6 +4880,18 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 		timeInfo["isExpired"] = true
 	}
 
+	// 格式化创建时间
+	var createdAtFormatted string
+	var createdAtTs uint64
+	if proposal.CreatedAt > 0 {
+		createdAtTs = proposal.CreatedAt
+		createdAtTime := time.Unix(int64(proposal.CreatedAt), 0)
+		createdAtFormatted = createdAtTime.Format("2006-01-02 15:04:05")
+	} else {
+		createdAtFormatted = ""
+		createdAtTs = 0
+	}
+
 	return map[string]interface{}{
 		"success": true,
 		"proposal": map[string]interface{}{
@@ -4901,6 +4913,8 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 			"endBlock":       proposal.EndBlock,
 			"validEndBlock":  proposal.ValidEndBlock,
 			"status":         proposal.Status.String(),
+			"createdAt":      createdAtFormatted,
+			"createdAtTs":    createdAtTs,
 			"votes":          votes,
 			"voteStats":      voteStats,
 			"timeInfo":       timeInfo,
