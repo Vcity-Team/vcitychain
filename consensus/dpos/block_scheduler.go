@@ -81,7 +81,7 @@ func NewBlockScheduler(
 func (bs *BlockScheduler) ShouldProduceBlockNow(
 	myAddress types.Address,
 	validators []types.Address,
-	blockNumber uint64,
+	blockNumber uint64, // 📍 这是已同步的当前区块号，来自 blockchain.CurrentHeader().Number
 	validatorsSource string, // 🆕 验证者列表来源（用于日志）
 ) bool {
 	if len(validators) == 0 {
@@ -125,15 +125,15 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 
 	// 🆕 只有当本地节点应该出块时才打印详细日志（每次出块都打印，因为频率已经很低）
 	if isMatch {
-		// ========== 🆕 详细日志：打印ShouldProduceBlockNow中的验证者列表和验证结果（每次出块都打印） ==========
 		bs.logger.Info("🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块",
-			"blockNumber", blockNumber,
-			"currentSlot", currentSlot,
+			"blockNumber", blockNumber, // 📍 这个 blockNumber 来自 currentBlock.Number（已同步的区块号）
+			"nextBlockNumber", nextBlockNumber, // 📍 下一个应生产的区块号（blockNumber + 1）
+			"currentSlot", currentSlot, // 📍 基于时间计算的当前slot（第103行）
 			"activeValidatorCount", activeValidatorCount,
 			"activeValidatorCountSource", validatorsSource, // 🆕 验证者列表来源
 			"myAddress", myAddress.String(),
 			"expectedValidator", fmt.Sprintf("[%d]%s", currentValidatorIndex, expectedValidator.String()),
-			"validatorIndex", currentValidatorIndex,
+			"validatorIndex", currentValidatorIndex, // 📍 基于slot计算的验证者索引（第113行）
 			"isMatch", isMatch,
 			"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
 			"now", now.Format("2006-01-02 15:04:05.000"),
