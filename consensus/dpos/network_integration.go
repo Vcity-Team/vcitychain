@@ -2154,6 +2154,30 @@ func (ni *NetworkIntegration) GetValidatorConnectivity(address types.Address) (p
 	return ni.peerRegistry.GetValidatorConnectivity(address, ni.network)
 }
 
+// TryConnectPeer 尝试连接peer（如果peer在peerstore中，则添加到dialQueue）
+func (ni *NetworkIntegration) TryConnectPeer(peerID peer.ID) error {
+	if ni.network == nil {
+		return fmt.Errorf("network server not available")
+	}
+	
+	// 检查peer是否已连接
+	if ni.network.IsConnected(peerID) {
+		return nil // 已连接，无需操作
+	}
+	
+	// 尝试从peerstore获取peer信息
+	peerInfo := ni.network.GetPeerInfo(peerID)
+	if peerInfo == nil || len(peerInfo.Addrs) == 0 {
+		// peer不在peerstore中，无法触发连接
+		return fmt.Errorf("peer %s not in peerstore", peerID.String())
+	}
+	
+	// 将peer添加到dialQueue以触发连接
+	ni.network.TemporaryDialPeer(peerInfo)
+	ni.logger.Debug("🔄 已触发peer连接", "peerID", peerID.String())
+	return nil
+}
+
 // isLocalNode 检查给定的地址是否是本地节点的地址
 func (ni *NetworkIntegration) isLocalNode(address types.Address) bool {
 	// 获取DPoS实例来检查本地节点地址

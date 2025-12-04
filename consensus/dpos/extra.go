@@ -1691,6 +1691,8 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 				maxWaitTime := 15 * time.Second
 				retryInterval := 1 * time.Second
 				maxRetries := int(maxWaitTime / retryInterval)
+				// 🆕 记录已发送请求的地址，避免重复发送
+				requestedAddresses := make(map[types.Address]bool)
 
 				for retry := 0; retry < maxRetries; retry++ {
 					// 检查是否所有BLS公钥都已获取
@@ -1708,7 +1710,65 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 						break
 					}
 
+					// 🆕 在等待期间，检查peer连接状态并重试发送请求
 					if retry < maxRetries-1 {
+						// 检查未获取到BLS公钥的地址的peer连接状态
+						for _, address := range stillMissing {
+							// 检查peer连接状态
+							peerID, hasMapping, isConnected := dposInstance.runtime.networkIntegration.GetValidatorConnectivity(address)
+							
+							if hasMapping && !isConnected {
+								// peer映射存在但未连接，主动触发连接
+								if err := dposInstance.runtime.networkIntegration.TryConnectPeer(peerID); err != nil {
+									logger.Debug("⚠️ 触发peer连接失败",
+										"blockNumber", blockNumber,
+										"address", address.String(),
+										"peerID", peerID.String(),
+										"error", err,
+										"retry", retry+1)
+								} else {
+									logger.Debug("🔄 已触发peer连接，等待连接建立",
+										"blockNumber", blockNumber,
+										"address", address.String(),
+										"peerID", peerID.String(),
+										"retry", retry+1)
+								}
+							} else if hasMapping && isConnected {
+								// peer已连接，如果之前没有发送过请求，则重试发送
+								if !requestedAddresses[address] {
+									logger.Debug("🔄 peer已连接，重试发送BLS公钥请求",
+										"blockNumber", blockNumber,
+										"address", address.String(),
+										"peerID", peerID.String(),
+										"retry", retry+1)
+									if err := dposInstance.runtime.networkIntegration.RequestBLSKey(address, myAddress); err != nil {
+										logger.Debug("⚠️ 重试发送BLS公钥请求失败",
+											"blockNumber", blockNumber,
+											"address", address.String(),
+											"error", err)
+									} else {
+										requestedAddresses[address] = true
+									}
+								}
+							} else {
+								// 没有peer映射，尝试发送请求（可能通过广播）
+								if !requestedAddresses[address] {
+									logger.Debug("🔄 无peer映射，尝试广播BLS公钥请求",
+										"blockNumber", blockNumber,
+										"address", address.String(),
+										"retry", retry+1)
+									if err := dposInstance.runtime.networkIntegration.RequestBLSKey(address, myAddress); err != nil {
+										logger.Debug("⚠️ 广播BLS公钥请求失败",
+											"blockNumber", blockNumber,
+											"address", address.String(),
+											"error", err)
+									} else {
+										requestedAddresses[address] = true
+									}
+								}
+							}
+						}
+
 						logger.Debug("⏳ 继续等待BLS公钥响应",
 							"blockNumber", blockNumber,
 							"stillMissingCount", len(stillMissing),
