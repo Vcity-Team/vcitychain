@@ -749,7 +749,7 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 			// fetch latest nonce from the state
 			latestNonce := p.store.GetNonce(stateRoot, addr)
 
-			p.logger.Info("🔵 [processEvent] 从state获取账户nonce",
+			p.logger.Debug("🔵 [processEvent] 从state获取账户nonce",
 				"addr", addr.String()[:16],
 				"latestNonce", latestNonce,
 				"blockNumber", header.Number,
@@ -1454,7 +1454,7 @@ func (p *TxPool) resetAccounts(stateNonces map[types.Address]uint64) {
 		return
 	}
 
-	p.logger.Info("🔵 [resetAccounts] 开始第二层清理（批量清理过期交易）",
+	p.logger.Debug("🔵 [resetAccounts] 开始第二层清理（批量清理过期交易）",
 		"accountCount", len(stateNonces))
 
 	var (
@@ -1474,7 +1474,7 @@ func (p *TxPool) resetAccounts(stateNonces map[types.Address]uint64) {
 		}
 
 		oldNonce := account.getNonce()
-		p.logger.Info("🔵 [resetAccounts] 重置账户nonce",
+		p.logger.Debug("🔵 [resetAccounts] 重置账户nonce",
 			"addr", addr.String()[:16],
 			"oldNonce", oldNonce,
 			"newNonce", newNonce)
@@ -1498,7 +1498,7 @@ func (p *TxPool) resetAccounts(stateNonces map[types.Address]uint64) {
 		account.resetDemotions()
 	}
 
-	p.logger.Info("🔵 [resetAccounts] 第二层清理汇总",
+	p.logger.Debug("🔵 [resetAccounts] 第二层清理汇总",
 		"totalPrunedPromoted", len(allPrunedPromoted),
 		"totalPrunedEnqueued", len(allPrunedEnqueued))
 
@@ -1553,7 +1553,7 @@ func (p *TxPool) resetAccounts(stateNonces map[types.Address]uint64) {
 		)
 	}
 
-	p.logger.Info("🔵 [resetAccounts] 第二层清理完成")
+	p.logger.Debug("🔵 [resetAccounts] 第二层清理完成")
 }
 
 // updateAccountSkipsCounts update the accounts' skips,

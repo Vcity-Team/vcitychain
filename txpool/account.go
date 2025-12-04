@@ -247,7 +247,7 @@ func (a *account) reset(nonce uint64, promoteCh chan<- promoteRequest, addr type
 ) {
 	oldNonce := a.getNonce()
 	if logger != nil {
-		logger.Info("🔵 [account.reset] 开始重置账户",
+		logger.Debug("🔵 [account.reset] 开始重置账户",
 			"addr", addr.String()[:16],
 			"oldNonce", oldNonce,
 			"newNonce", nonce)
@@ -285,7 +285,7 @@ func (a *account) reset(nonce uint64, promoteCh chan<- promoteRequest, addr type
 	// 注意：enqueued 队列中的交易（nonce >= oldNonce）仍然有效，会在链上 nonce 增长时被 promote
 	if nonce <= oldNonce {
 		if logger != nil {
-			logger.Info("🔵 [account.reset] 只清理promoted队列（newNonce <= oldNonce），但需要更新nextNonce",
+			logger.Debug("🔵 [account.reset] 只清理promoted队列（newNonce <= oldNonce），但需要更新nextNonce",
 				"addr", addr.String()[:16],
 				"oldNonce", oldNonce,
 				"newNonce", nonce)

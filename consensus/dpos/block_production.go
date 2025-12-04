@@ -312,6 +312,16 @@ func (r *dposRuntime) produceBlock() error {
 		return fmt.Errorf("failed to build block: %w", err)
 	}
 
+	// 🆕 记录 buildBlock 返回后的实际耗时（包括等待签名的时间）
+	buildEndTime := time.Now()
+	totalBuildDuration := buildEndTime.Sub(buildStartTime)
+	r.logger.Info("📊 buildBlock返回后的总耗时统计",
+		"blockNumber", nextBlockNumber,
+		"totalBuildDuration", totalBuildDuration.String(),
+		"buildStartTime", buildStartTime.Format("15:04:05.000000"),
+		"buildEndTime", buildEndTime.Format("15:04:05.000000"),
+		"note", "包括区块构建和签名收集的总耗时")
+
 	// 检查是否超过slot时间
 	if r.config.blockScheduler != nil && buildStartSlot >= 0 {
 		now := time.Now()
@@ -320,6 +330,15 @@ func (r *dposRuntime) produceBlock() error {
 		timeSinceGenesis := now.Sub(genesisTime)
 		currentSlotAfterBuild := int(timeSinceGenesis / blockWindow)
 		buildDuration := now.Sub(buildStartTime)
+
+		r.logger.Info("🔍 开始检查slot超时和变化",
+			"blockNumber", nextBlockNumber,
+			"buildStartSlot", buildStartSlot,
+			"currentSlotAfterBuild", currentSlotAfterBuild,
+			"buildDuration", buildDuration.String(),
+			"blockWindow", blockWindow.String(),
+			"timeSinceGenesis", timeSinceGenesis.String(),
+			"now", now.Format("15:04:05.000000"))
 
 		// 检查构建耗时是否超过slot时间
 		if buildDuration > blockWindow {
@@ -339,9 +358,31 @@ func (r *dposRuntime) produceBlock() error {
 				"blockNumber", nextBlockNumber,
 				"buildStartSlot", buildStartSlot,
 				"currentSlotAfterBuild", currentSlotAfterBuild,
+				"buildDuration", buildDuration.String(),
 				"reason", fmt.Sprintf("构建开始时slot=%d，构建完成后slot=%d，slot已变化", buildStartSlot, currentSlotAfterBuild))
 			return nil
 		}
+
+		r.logger.Info("✅ slot检查通过，slot未变化且未超时",
+			"blockNumber", nextBlockNumber,
+			"buildStartSlot", buildStartSlot,
+			"currentSlotAfterBuild", currentSlotAfterBuild,
+			"buildDuration", buildDuration.String())
+	} else {
+		// 🆕 记录为什么跳过了slot检查
+		r.logger.Info("⚠️ 跳过slot检查",
+			"blockNumber", nextBlockNumber,
+			"blockSchedulerIsNil", r.config.blockScheduler == nil,
+			"buildStartSlot", buildStartSlot,
+			"reason", func() string {
+				if r.config.blockScheduler == nil {
+					return "blockScheduler为nil"
+				}
+				if buildStartSlot < 0 {
+					return "buildStartSlot < 0（未初始化）"
+				}
+				return "未知原因"
+			}())
 	}
 
 	// 检查父区块是否已变化（防止其他节点已出块导致分叉）
