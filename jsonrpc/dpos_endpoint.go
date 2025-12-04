@@ -5814,6 +5814,18 @@ func (d *DPOS) GetActiveProposals(ctx context.Context, params interface{}) (inte
 	for _, proposal := range proposals {
 		votes := len(proposal.Votes)
 
+		// 格式化创建时间
+		var createdAtFormatted string
+		var createdAtTs uint64
+		if proposal.CreatedAt > 0 {
+			createdAtTs = proposal.CreatedAt
+			createdAtTime := time.Unix(int64(proposal.CreatedAt), 0)
+			createdAtFormatted = createdAtTime.Format("2006-01-02 15:04:05")
+		} else {
+			createdAtFormatted = ""
+			createdAtTs = 0
+		}
+
 		result = append(result, map[string]interface{}{
 			"proposalId":  proposal.ID,
 			"parameter":   proposal.Parameter,
@@ -5825,10 +5837,22 @@ func (d *DPOS) GetActiveProposals(ctx context.Context, params interface{}) (inte
 			"status":      proposal.Status.String(),
 			"threshold":   proposal.Threshold,
 			"description": proposal.Description,
-			"createdAt":   proposal.CreatedAt,
+			"createdAt":   createdAtFormatted,
+			"createdAtTs": createdAtTs,
 			"votes":       votes,
 		})
 	}
+
+	// 按创建时间倒序排序（最新的在前）
+	sort.Slice(result, func(i, j int) bool {
+		createdAtI, okI := result[i]["createdAtTs"].(uint64)
+		createdAtJ, okJ := result[j]["createdAtTs"].(uint64)
+		if !okI || !okJ {
+			// 如果无法获取时间戳，保持原顺序
+			return false
+		}
+		return createdAtI > createdAtJ // 倒序：大的（新的）在前
+	})
 
 	return map[string]interface{}{
 		"proposals": result,
