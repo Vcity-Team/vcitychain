@@ -16,6 +16,7 @@ type LifecycleDependencies struct {
 	ResolveEpochNumber func(blockNumber uint64) uint64
 
 	LoadScheduledRecoveries       func(epochNumber uint64) []core.RecoveryProposalInfo
+	CheckRecoveryProposal         func(validatorAddress types.Address, currentEpoch uint64) bool
 	ClearValidatorFaultStatus     func(address types.Address, proposalID string) error
 	ClearMemoryFaultStatus        func(address types.Address)
 	ReloadValidatorsAfterRecovery func() error
@@ -68,12 +69,14 @@ func (m *lifecycleManager) ProcessBoundary(ctx core.EpochBoundaryContext) (core.
 		currentEpoch = m.deps.ResolveEpochNumber(ctx.NextBlockNumber - 1)
 	}
 
-	m.applyScheduledRecoveries(currentEpoch, ctx.NextBlockNumber)
-
+	// 🔧 调整顺序：先进行故障检测（此时恢复提案还是未应用状态，CheckRecoveryProposal可以找到），
+	// 然后再应用恢复提案并标记为已应用
 	faultFlags, err := m.runFaultDetection(ctx, currentEpoch)
 	if err != nil {
 		return result, err
 	}
+
+	m.applyScheduledRecoveries(currentEpoch, ctx.NextBlockNumber)
 
 	nextValidators, err := m.prepareNextEpochValidators(ctx.NextBlockNumber)
 	if err != nil {
@@ -179,7 +182,33 @@ func (m *lifecycleManager) runFaultDetection(ctx core.EpochBoundaryContext, epoc
 		}
 	}
 
+	// 🔧 修复：如果验证者有恢复提案，从faultFlags中移除该验证者的故障标志，
+	// 避免写入ExtraData，导致同步节点再次保存旧的故障状态
+	filteredFaultFlags := make([]core.FaultFlagInfo, 0, len(faultFlags))
 	for _, flag := range faultFlags {
+		// 🆕 检查该验证者是否有待生效的恢复提案
+		// 如果有，跳过保存故障状态，避免覆盖恢复结果
+		if m.deps.CheckRecoveryProposal != nil {
+			hasRecoveryProposal := m.deps.CheckRecoveryProposal(flag.ValidatorAddress, epochNumber)
+			if hasRecoveryProposal {
+				m.logger.Info("🔄 [runFaultDetection] 跳过保存故障状态并从faultFlags中移除：验证者有恢复提案",
+					"validator", flag.ValidatorAddress.String(),
+					"currentEpoch", epochNumber,
+					"detectedFaulty", flag.IsFaulty,
+					"detectedMissedBlocks", flag.MissedBlocks)
+				continue // 不添加到filteredFaultFlags，也不保存
+			}
+		}
+
+		// 没有恢复提案，保留该故障标志
+		filteredFaultFlags = append(filteredFaultFlags, flag)
+	}
+
+	// 使用过滤后的faultFlags
+	faultFlags = filteredFaultFlags
+
+	for _, flag := range faultFlags {
+
 		if m.deps.SaveFaultStatus != nil {
 			if err := m.deps.SaveFaultStatus(flag); err != nil {
 				m.logger.Warn("failed to persist fault status",

@@ -182,31 +182,78 @@ func (fd *FaultDetector) detectValidatorFaults(
 		}
 
 		// 如果该验证者已经在上一epoch被标记为故障，跳过重新检测，保留原故障原因
+		// 🔧 但是，如果该验证者有恢复提案，需要重新检测，而不是使用旧的故障信息
 		if faultInfo := fd.dposInstance.getValidatorFaultInfo(validator.Address); faultInfo != nil {
 			if alreadyFaulty, ok := faultInfo["isFaulty"].(bool); ok && alreadyFaulty {
-				existingReason, _ := faultInfo["reason"].(string)
-				existingMissedBlocks := toUint64Safe(faultInfo["missedBlocks"])
-				existingLastUpdate := toUint64Safe(faultInfo["lastUpdateTime"])
-				existingLastFaultyEpoch := toUint64Safe(faultInfo["lastFaultyEpoch"])
+				// 🆕 检查该验证者是否有恢复提案（当前epoch或下一个epoch）
+				hasRecoveryProposal := false
+				currentEpoch := epochInfo.EpochToCheckNumber
+				// 检查当前epoch的恢复提案
+				currentProposals := fd.dposInstance.governanceLoadScheduled(currentEpoch)
+				for _, prop := range currentProposals {
+					if prop != nil && prop.ProposalType == "validator_recovery" {
+						propValidatorAddr := prop.ValidatorAddress
+						if propValidatorAddr == (types.Address{}) && prop.Parameter != "" {
+							propValidatorAddr = types.StringToAddress(prop.Parameter)
+						}
+						if propValidatorAddr == validator.Address {
+							hasRecoveryProposal = true
+							break
+						}
+					}
+				}
+				// 如果当前epoch没有，检查下一个epoch
+				if !hasRecoveryProposal {
+					nextEpoch := currentEpoch + 1
+					nextProposals := fd.dposInstance.governanceLoadScheduled(nextEpoch)
+					for _, prop := range nextProposals {
+						if prop != nil && prop.ProposalType == "validator_recovery" {
+							if prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == nextEpoch && !prop.Schedule.Applied {
+								propValidatorAddr := prop.ValidatorAddress
+								if propValidatorAddr == (types.Address{}) && prop.Parameter != "" {
+									propValidatorAddr = types.StringToAddress(prop.Parameter)
+								}
+								if propValidatorAddr == validator.Address {
+									hasRecoveryProposal = true
+									break
+								}
+							}
+						}
+					}
+				}
 
-				fd.logger.Info("⏭️ 验证者已处于故障状态，跳过本epoch检测",
-					"address", validator.Address.String(),
-					"existingReason", existingReason,
-					"lastFaultyEpoch", existingLastFaultyEpoch)
+				if hasRecoveryProposal {
+					// 🔧 如果有恢复提案，跳过"已处于故障状态"的检查，重新检测该验证者的实际出块情况
+					fd.logger.Info("🔄 验证者有恢复提案，重新检测故障状态（不使用旧的故障信息）",
+						"address", validator.Address.String(),
+						"currentEpoch", currentEpoch)
+					// 继续执行下面的重新检测逻辑
+				} else {
+					// 没有恢复提案，使用旧的故障信息
+					existingReason, _ := faultInfo["reason"].(string)
+					existingMissedBlocks := toUint64Safe(faultInfo["missedBlocks"])
+					existingLastUpdate := toUint64Safe(faultInfo["lastUpdateTime"])
+					existingLastFaultyEpoch := toUint64Safe(faultInfo["lastFaultyEpoch"])
 
-				faultFlags = append(faultFlags, FaultFlagInfo{
-					NodeAddress:            validator.Address,
-					IsFaulty:               true,
-					MissedBlocks:           existingMissedBlocks,
-					ActualBlocks:           0,
-					ExpectedBlocks:         0,
-					MissedBlocksPercentage: 0,
-					LastUpdateTime:         existingLastUpdate,
-					EpochNumber:            epochInfo.EpochToCheckNumber,
-					LastFaultyEpoch:        existingLastFaultyEpoch,
-					Reason:                 existingReason,
-				})
-				continue
+					fd.logger.Info("⏭️ 验证者已处于故障状态，跳过本epoch检测",
+						"address", validator.Address.String(),
+						"existingReason", existingReason,
+						"lastFaultyEpoch", existingLastFaultyEpoch)
+
+					faultFlags = append(faultFlags, FaultFlagInfo{
+						NodeAddress:            validator.Address,
+						IsFaulty:               true,
+						MissedBlocks:           existingMissedBlocks,
+						ActualBlocks:           0,
+						ExpectedBlocks:         0,
+						MissedBlocksPercentage: 0,
+						LastUpdateTime:         existingLastUpdate,
+						EpochNumber:            epochInfo.EpochToCheckNumber,
+						LastFaultyEpoch:        existingLastFaultyEpoch,
+						Reason:                 existingReason,
+					})
+					continue
+				}
 			}
 		}
 

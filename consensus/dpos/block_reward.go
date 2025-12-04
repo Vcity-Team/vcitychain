@@ -98,7 +98,7 @@ func (r *dposRuntime) processRewardDistributionInBlockForBuilder(builder blockBu
 	rewardAccount := dposInstance.config.RewardAccount
 	currentBalance := state.GetBalance(rewardAccount)
 
-	r.logger.Info("💰 奖励账户余额检查",
+	r.logger.Debug("💰 奖励账户余额检查",
 		"address", rewardAccount.String(),
 		"currentBalance", currentBalance.String(),
 		"totalReward", totalReward.String())
@@ -110,7 +110,7 @@ func (r *dposRuntime) processRewardDistributionInBlockForBuilder(builder blockBu
 
 	// 从奖励账户扣除总奖励
 	state.Txn().SubBalance(rewardAccount, totalReward)
-	r.logger.Info("✅ 从奖励账户扣除总奖励",
+	r.logger.Debug("✅ 从奖励账户扣除总奖励",
 		"address", rewardAccount.String(),
 		"amount", totalReward.String())
 
@@ -118,12 +118,12 @@ func (r *dposRuntime) processRewardDistributionInBlockForBuilder(builder blockBu
 	for addrStr, amount := range rewardInfo.Rewards {
 		addr := types.StringToAddress(addrStr)
 		state.Txn().AddBalance(addr, amount)
-		r.logger.Info("✅ 验证者余额增加",
+		r.logger.Debug("✅ 验证者余额增加",
 			"to", addr.String(),
 			"amount", amount.String())
 	}
 
-	r.logger.Info("🎉 生产节点奖励分配完成",
+	r.logger.Debug("🎉 生产节点奖励分配完成",
 		"blockNumber", blockNumber,
 		"rewardCount", len(rewardInfo.Rewards))
 

@@ -6687,7 +6687,8 @@ func (d *DPOS) addProposalTransactionToPool(tx *types.Transaction) error {
 	}); ok {
 		if err := ethStore.AddTx(tx); err != nil {
 			d.logger.Warn("Failed to add proposal transaction to pool", "error", err, "txHash", tx.Hash.String())
-			// 不返回错误，继续尝试广播
+			// 🔧 修复：交易池添加失败时直接返回错误，而不是继续执行
+			return fmt.Errorf("failed to add transaction to pool: %w", err)
 		} else {
 			d.logger.Info("✅ 提案交易已添加到交易池", "txHash", tx.Hash.String())
 		}

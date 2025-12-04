@@ -44,6 +44,55 @@ func (d *DPoS) buildEpochLifecycleDependencies() epochmodule.LifecycleDependenci
 		LoadScheduledRecoveries: func(epochNumber uint64) []core.RecoveryProposalInfo {
 			return convertParameterProposalsToCore(d.governanceLoadScheduled(epochNumber))
 		},
+		CheckRecoveryProposal: func(validatorAddress types.Address, currentEpoch uint64) bool {
+			// 检查当前 epoch 和下一个 epoch 的恢复提案
+			// 🔧 注意：由于执行顺序已调整（先故障检测，后应用恢复提案），
+			// 此时恢复提案还是未应用状态，所以只需要检查未应用的提案即可
+			//
+			// ⚠️ 重要：governanceLoadScheduled 只返回 EffectiveEpoch == currentEpoch && !Applied 的提案，
+			// 所以已应用的恢复提案（即使 EffectiveEpoch 是之前的 epoch）不会影响当前 epoch 的故障检测。
+			// 例如：如果恢复提案在 epoch 6 应用后，节点在 epoch 7 再次故障，不会因为 epoch 6 的已应用提案而跳过保存故障状态。
+
+			// 1. 检查当前 epoch 的恢复提案（待应用）
+			currentProposals := d.governanceLoadScheduled(currentEpoch)
+			for _, prop := range currentProposals {
+				if prop == nil || prop.ProposalType != "validator_recovery" {
+					continue
+				}
+				// 检查是否针对该验证者
+				propValidatorAddr := prop.ValidatorAddress
+				if propValidatorAddr == (types.Address{}) && prop.Parameter != "" {
+					propValidatorAddr = types.StringToAddress(prop.Parameter)
+				}
+				if propValidatorAddr == validatorAddress {
+					// 找到针对该验证者的恢复提案（待应用）
+					return true
+				}
+			}
+
+			// 2. 检查下一个 epoch 的恢复提案（待应用）
+			nextEpoch := currentEpoch + 1
+			nextProposals := d.governanceLoadScheduled(nextEpoch)
+			for _, prop := range nextProposals {
+				if prop == nil || prop.ProposalType != "validator_recovery" {
+					continue
+				}
+				// 只检查待应用的提案
+				if !prop.Schedule.Scheduled || prop.Schedule.EffectiveEpoch != nextEpoch || prop.Schedule.Applied {
+					continue
+				}
+				// 检查是否针对该验证者
+				propValidatorAddr := prop.ValidatorAddress
+				if propValidatorAddr == (types.Address{}) && prop.Parameter != "" {
+					propValidatorAddr = types.StringToAddress(prop.Parameter)
+				}
+				if propValidatorAddr == validatorAddress {
+					// 找到针对该验证者的恢复提案（待应用）
+					return true
+				}
+			}
+			return false
+		},
 		ClearValidatorFaultStatus: func(address types.Address, proposalID string) error {
 			if d.state == nil || d.state.StakeStore == nil {
 				return fmt.Errorf("stake store not available")

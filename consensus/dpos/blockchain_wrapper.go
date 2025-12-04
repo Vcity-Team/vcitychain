@@ -535,7 +535,7 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 
 	// 🔍 添加详细的奖励信息日志
 	if extra.RewardDistribution != nil {
-		p.logger.Info("💰 ExtraData包含奖励信息",
+		p.logger.Debug("💰 ExtraData包含奖励信息",
 			"blockNumber", block.Number(),
 			"epoch", extra.RewardDistribution.EpochNumber,
 			"rewardCount", len(extra.RewardDistribution.Rewards),
@@ -543,7 +543,7 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 
 		rewardInfo := extra.RewardDistribution
 
-		p.logger.Info("1.🎯🎯🎯🎯🎯🎯🎯🎯验证节点开始处理奖励分发",
+		p.logger.Debug("1.🎯🎯🎯🎯🎯🎯🎯🎯验证节点开始处理奖励分发",
 			"blockNumber", block.Number(),
 			"rewardCount", len(rewardInfo.Rewards),
 			"epoch", rewardInfo.EpochNumber,
@@ -556,13 +556,13 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 		totalReward := new(big.Int)
 		for addrStr, amount := range rewardInfo.Rewards {
 			totalReward.Add(totalReward, amount)
-			p.logger.Info("💰 奖励详情",
+			p.logger.Debug("💰 奖励详情",
 				"blockNumber", block.Number(),
 				"validator", addrStr,
 				"amount", amount.String())
 		}
 
-		p.logger.Info("💰 总奖励计算完成",
+		p.logger.Debug("💰 总奖励计算完成",
 			"blockNumber", block.Number(),
 			"totalReward", totalReward.String(),
 			"rewardAccount", rewardAccount.String())
@@ -570,7 +570,7 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 		// 检查奖励账户余额是否足够
 		currentBalance := transition.GetBalance(rewardAccount)
 
-		p.logger.Info("💳 检查奖励账户余额",
+		p.logger.Debug("💳 检查奖励账户余额",
 			"blockNumber", block.Number(),
 			"currentBalance", currentBalance.String(),
 			"requiredAmount", totalReward.String())

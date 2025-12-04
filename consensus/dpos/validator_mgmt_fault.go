@@ -237,14 +237,6 @@ func (d *DPoS) saveFaultStatusToDatabase(faultFlag FaultFlagInfo) error {
 		return fmt.Errorf("state store not available")
 	}
 
-	d.logger.Info("💾 保存验证者故障状态",
-		"address", faultFlag.NodeAddress.String(),
-		"isFaulty", faultFlag.IsFaulty,
-		"missedBlocks", faultFlag.MissedBlocks,
-		"lastUpdateTime", faultFlag.LastUpdateTime,
-		"epoch", faultFlag.EpochNumber,
-		"reason", faultFlag.Reason)
-
 	return d.state.StakeStore.UpdateValidatorFaultStatus(
 		faultFlag.NodeAddress,
 		faultFlag.IsFaulty,
@@ -260,11 +252,6 @@ func (d *DPoS) updateMemoryFaultStatus(faultFlag FaultFlagInfo) {
 	// 更新故障验证者映射
 	if faultFlag.IsFaulty {
 		d.faultyValidators[faultFlag.NodeAddress] = true
-		d.logger.Info("🚨 更新内存故障状态",
-			"address", faultFlag.NodeAddress.String(),
-			"isFaulty", faultFlag.IsFaulty,
-			"missedBlocks", faultFlag.MissedBlocks,
-			"reason", faultFlag.Reason)
 	} else {
 		delete(d.faultyValidators, faultFlag.NodeAddress)
 	}
