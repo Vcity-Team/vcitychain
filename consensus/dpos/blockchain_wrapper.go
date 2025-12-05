@@ -110,8 +110,15 @@ func (p *blockchainWrapper) CurrentHeader() *types.Header {
 
 // CommitBlock commits a block to the chain
 func (p *blockchainWrapper) CommitBlock(block *types.FullBlock) error {
+	p.logger.Info("🔄 [CommitBlock] 开始提交区块到链上", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String()[:16], "txs", len(block.Block.Transactions))
 	// 注意：WriteFullBlock 内部已经有写锁跟踪日志
-	return p.blockchain.WriteFullBlock(block, consensusSource)
+	err := p.blockchain.WriteFullBlock(block, consensusSource)
+	if err != nil {
+		p.logger.Error("❌ [CommitBlock] WriteFullBlock失败", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String()[:16], "error", err)
+		return err
+	}
+	p.logger.Info("✅ [CommitBlock] 区块已成功写入链上", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String()[:16])
+	return nil
 }
 
 // SetBlockProductionStartTime 设置区块生产开始时间（用于统计生产耗时）
@@ -180,14 +187,11 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 	isEpochEnd := p.isEpochEndBlock(block.Number())
 
 	// 🆕 添加详细的奖励分配跟踪日志
-	p.logger.Debug("🔍🔍🔍 ========== blockchain_wrapper.ProcessBlockExecutor 奖励分配检查 ========== 🔍🔍🔍",
-		"blockNumber", block.Number(),
-		"blockHash", block.Hash().String()[:16],
-		"blockCreator", blockCreator.String(),
-		"isEpochEnd", isEpochEnd)
+	p.logger.Info("🔍 [ProcessBlockExecutor] 检查epoch结束", "blockNumber", block.Number(), "isEpochEnd", isEpochEnd)
 
 	// 🆕 如果是epoch结束区块，处理奖励分发
 	if isEpochEnd {
+		p.logger.Info("✅ [ProcessBlockExecutor] 是epoch结束区块，开始处理奖励分配和边界应用提案", "blockNumber", block.Number())
 		p.logger.Debug("🎯🎯🎯 ========== 开始执行奖励分配 ========== 🎯🎯🎯",
 			"blockNumber", block.Number(),
 			"blockHash", block.Hash().String()[:16],
@@ -206,15 +210,44 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			"blockHash", block.Hash().String()[:16])
 
 		// 奖励分配与故障统计完成后，再在边界应用已登记的待生效提案，避免被同区块统计覆盖
+		p.logger.Info("🔍 [ProcessBlockExecutor] 开始边界应用提案流程", "blockNumber", block.Number())
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-			// 计算当前 epoch 编号
-			currentEpochMeta := dposInstance.getEpochForBlock(block.Number())
+			p.logger.Info("✅ [ProcessBlockExecutor] DPoS实例存在", "blockNumber", block.Number())
+			// 🆕 关键修复：在epoch结束区块时，应该查询当前epoch的提案，而不是下一个epoch
+			// 因为提案的effectiveEpoch是在当前epoch结束时生效的
+			// 例如：在epoch 6结束区块（7465）时，应该查询effectiveEpoch=6的提案
+			// 🔧 修复：使用 block.Number() - 1 来获取当前epoch（即将结束的epoch）
+			// 因为 getEpochForBlock(block.Number()) 在epoch结束区块时可能返回下一个epoch
 			var currentEpoch uint64
-			if currentEpochMeta != nil {
-				currentEpoch = currentEpochMeta.Number
+			if block.Number() > 0 {
+				// 使用前一个区块号来获取当前epoch（即将结束的epoch）
+				currentEpochMeta := dposInstance.getEpochForBlock(block.Number() - 1)
+				if currentEpochMeta != nil {
+					currentEpoch = currentEpochMeta.Number
+					p.logger.Info("📊 [ProcessBlockExecutor] 计算epoch信息（使用前一个区块）", "blockNumber", block.Number(), "prevBlockNumber", block.Number()-1, "currentEpoch", currentEpoch, "firstBlockInEpoch", currentEpochMeta.FirstBlockInEpoch)
+				} else {
+					// 如果前一个区块获取失败，尝试使用当前区块号
+					currentEpochMeta = dposInstance.getEpochForBlock(block.Number())
+					if currentEpochMeta != nil {
+						currentEpoch = currentEpochMeta.Number
+						p.logger.Info("📊 [ProcessBlockExecutor] 计算epoch信息（使用当前区块）", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "firstBlockInEpoch", currentEpochMeta.FirstBlockInEpoch)
+					}
+				}
+			} else {
+				// 如果区块号为0，直接使用当前区块号
+				currentEpochMeta := dposInstance.getEpochForBlock(block.Number())
+				if currentEpochMeta != nil {
+					currentEpoch = currentEpochMeta.Number
+					p.logger.Info("📊 [ProcessBlockExecutor] 计算epoch信息", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "firstBlockInEpoch", currentEpochMeta.FirstBlockInEpoch)
+				}
+			}
+			if currentEpoch == 0 {
+				p.logger.Warn("⚠️ [ProcessBlockExecutor] 无法获取epoch信息", "blockNumber", block.Number())
 			}
 
+			p.logger.Info("🔍 [边界应用提案] 开始查询待应用提案", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "isEpochEndBlock", true, "note", "在epoch结束区块时查询当前epoch的提案")
 			scheduledProps := dposInstance.governanceLoadScheduled(currentEpoch)
+			p.logger.Info("🔍 [边界应用提案] 查询结果", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "scheduledCount", len(scheduledProps))
 
 			// 去重（按ID）
 			seen := make(map[string]bool)
@@ -231,8 +264,10 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			}
 
 			for _, prop := range uniq {
+				p.logger.Info("🔍 [边界应用提案] 检查提案", "proposalID", prop.ID, "proposalType", prop.ProposalType, "scheduled", prop.Schedule.Scheduled, "effectiveEpoch", prop.Schedule.EffectiveEpoch, "applied", prop.Schedule.Applied, "currentEpoch", currentEpoch)
 				// 🆕 再次检查 Applied，确保只执行一次
 				if prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == currentEpoch && !prop.Schedule.Applied {
+					p.logger.Info("✅ [边界应用提案] 提案条件满足，开始应用", "proposalID", prop.ID, "proposalType", prop.ProposalType)
 					switch prop.ProposalType {
 					case "validator_recovery":
 						p.logger.Info("开始边界应用恢复提案", "proposalID", prop.ID, "status", prop.Status.String(), "currentEpoch", currentEpoch, "effectiveEpoch", prop.Schedule.EffectiveEpoch)
@@ -284,13 +319,15 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 						}
 					case "parameter":
 						// 应用参数更新
+						p.logger.Info("🔄 [边界应用参数] 开始更新参数", "proposalID", prop.ID, "parameter", prop.Parameter, "oldValue", prop.OldValue, "newValue", prop.NewValue)
+
 						if err := dposInstance.updateParameterValue(prop.Parameter, prop.NewValue, fmt.Sprintf("proposal_%s", prop.ID)); err != nil {
-							p.logger.Error("边界应用参数更新失败", "error", err, "proposalID", prop.ID)
+							p.logger.Error("边界应用参数更新失败", "error", err, "proposalID", prop.ID, "parameter", prop.Parameter)
 						} else {
 							prop.Schedule.Applied = true
 							prop.Schedule.AppliedAtBlock = block.Number()
 							_ = dposInstance.governanceSaveProposal(prop)
-							p.logger.Info("✅ =========================================边界应用参数更新成功", "proposalID", prop.ID, "parameter", prop.Parameter, "appliedAtBlock", block.Number())
+							p.logger.Info("✅ =========================================边界应用参数更新成功", "proposalID", prop.ID, "parameter", prop.Parameter, "oldValue", prop.OldValue, "newValue", prop.NewValue, "appliedAtBlock", block.Number())
 						}
 					}
 				}
@@ -358,8 +395,14 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 							// 投票业务处理失败不影响EVM，静默处理（如重复投票等正常业务校验）
 						}
 					case "execute":
+						executeStartTime := time.Now()
+						p.logger.Info("🔄 [ProcessBlock] 开始处理执行提案交易", "txHash", tx.Hash.String(), "blockNumber", block.Number(), "startTime", executeStartTime.Format("15:04:05.000000"))
 						if e := dposInstance.ProcessProposalExecuteTransaction(tx, block.Number()); e != nil {
-							p.logger.Warn("❌ [ProcessBlock] 提案执行业务处理失败(不影响EVM)", "err", e, "txHash", tx.Hash.String())
+							executeDuration := time.Since(executeStartTime)
+							p.logger.Warn("❌ [ProcessBlock] 提案执行业务处理失败(不影响EVM)", "err", e, "txHash", tx.Hash.String(), "duration", executeDuration.String())
+						} else {
+							executeDuration := time.Since(executeStartTime)
+							p.logger.Info("✅ [ProcessBlock] 提案执行业务处理完成", "txHash", tx.Hash.String(), "blockNumber", block.Number(), "duration", executeDuration.String())
 						}
 					}
 				} else {
@@ -412,6 +455,104 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 				"blockHash", block.Hash().String()[:16],
 				"error", err)
 			// 不返回错误，继续处理其他逻辑
+		}
+
+		// 🆕 奖励分配与故障统计完成后，再在边界应用已登记的待生效提案，避免被同区块统计覆盖
+		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+			// 计算当前 epoch 编号
+			currentEpochMeta := dposInstance.getEpochForBlock(block.Number())
+			var currentEpoch uint64
+			if currentEpochMeta != nil {
+				currentEpoch = currentEpochMeta.Number
+			}
+
+			p.logger.Info("🔍 [边界应用提案] 开始查询待应用提案", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
+			scheduledProps := dposInstance.governanceLoadScheduled(currentEpoch)
+			p.logger.Info("🔍 [边界应用提案] 查询结果", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "scheduledCount", len(scheduledProps))
+
+			// 去重（按ID）
+			seen := make(map[string]bool)
+			uniq := make([]*ParameterProposal, 0, len(scheduledProps))
+			for _, pprop := range scheduledProps {
+				if pprop == nil || pprop.ID == "" {
+					continue
+				}
+				if seen[pprop.ID] {
+					continue
+				}
+				seen[pprop.ID] = true
+				uniq = append(uniq, pprop)
+			}
+
+			for _, prop := range uniq {
+				p.logger.Info("🔍 [边界应用提案] 检查提案", "proposalID", prop.ID, "proposalType", prop.ProposalType, "scheduled", prop.Schedule.Scheduled, "effectiveEpoch", prop.Schedule.EffectiveEpoch, "applied", prop.Schedule.Applied, "currentEpoch", currentEpoch)
+				// 🆕 再次检查 Applied，确保只执行一次
+				if prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == currentEpoch && !prop.Schedule.Applied {
+					p.logger.Info("✅ [边界应用提案] 提案条件满足，开始应用", "proposalID", prop.ID, "proposalType", prop.ProposalType)
+					switch prop.ProposalType {
+					case "validator_recovery":
+						p.logger.Info("开始边界应用恢复提案", "proposalID", prop.ID, "status", prop.Status.String(), "currentEpoch", currentEpoch, "effectiveEpoch", prop.Schedule.EffectiveEpoch)
+
+						// 应用恢复提案：清除验证者故障标志
+						validatorAddr := prop.ValidatorAddress
+						if validatorAddr == (types.Address{}) {
+							validatorAddr = types.StringToAddress(prop.Parameter)
+						}
+						if validatorAddr == (types.Address{}) {
+							p.logger.Error("边界应用恢复提案失败：无法获取验证者地址", "proposalID", prop.ID, "parameter", prop.Parameter)
+						} else {
+							p.logger.Info("准备清除验证者故障标志", "proposalID", prop.ID, "validator", validatorAddr.String())
+
+							// 清除故障标志（数据库和内存）
+							if dposInstance.state != nil && dposInstance.state.StakeStore != nil {
+								if err := dposInstance.state.StakeStore.ClearValidatorFaultStatus(validatorAddr, prop.ID); err != nil {
+									p.logger.Error("边界应用恢复提案失败：清除故障标志失败", "error", err, "proposalID", prop.ID, "validator", validatorAddr.String())
+								} else {
+									p.logger.Info("验证者故障标志已清除（数据库）", "proposalID", prop.ID, "validator", validatorAddr.String())
+
+									// 🆕 同时清除内存中的故障状态
+									if dposInstance.faultyValidators != nil {
+										delete(dposInstance.faultyValidators, validatorAddr)
+										p.logger.Info("验证者故障标志已清除（内存）", "proposalID", prop.ID, "validator", validatorAddr.String())
+									}
+
+									// 🆕 重新加载验证者集合，确保内存缓存与数据库同步
+									if err := dposInstance.reloadValidatorsAfterRecovery(); err != nil {
+										p.logger.Error("重新加载验证者集合失败", "error", err, "proposalID", prop.ID, "validator", validatorAddr.String())
+									} else {
+										p.logger.Info("✅ 验证者集合已重新加载", "proposalID", prop.ID, "validator", validatorAddr.String())
+									}
+
+									prop.Schedule.Applied = true
+									prop.Schedule.AppliedAtBlock = block.Number()
+									prop.Status = ProposalExecuted // 🆕 更新提案状态为已执行
+
+									if err := dposInstance.governanceSaveProposal(prop); err != nil {
+										p.logger.Error("保存提案状态失败", "error", err, "proposalID", prop.ID)
+									} else {
+										p.logger.Info("提案状态已保存", "proposalID", prop.ID, "status", prop.Status.String())
+									}
+									p.logger.Info("✅ =========================================边界应用恢复提案成功", "proposalID", prop.ID, "validator", validatorAddr.String(), "appliedAtBlock", block.Number(), "status", prop.Status.String())
+								}
+							} else {
+								p.logger.Error("边界应用恢复提案失败：StakeStore不可用", "proposalID", prop.ID, "validator", validatorAddr.String())
+							}
+						}
+					case "parameter":
+						// 应用参数更新
+						p.logger.Info("🔄 [边界应用参数] 开始更新参数", "proposalID", prop.ID, "parameter", prop.Parameter, "oldValue", prop.OldValue, "newValue", prop.NewValue)
+
+						if err := dposInstance.updateParameterValue(prop.Parameter, prop.NewValue, fmt.Sprintf("proposal_%s", prop.ID)); err != nil {
+							p.logger.Error("边界应用参数更新失败", "error", err, "proposalID", prop.ID, "parameter", prop.Parameter)
+						} else {
+							prop.Schedule.Applied = true
+							prop.Schedule.AppliedAtBlock = block.Number()
+							_ = dposInstance.governanceSaveProposal(prop)
+							p.logger.Info("✅ =========================================边界应用参数更新成功", "proposalID", prop.ID, "parameter", prop.Parameter, "oldValue", prop.OldValue, "newValue", prop.NewValue, "appliedAtBlock", block.Number())
+						}
+					}
+				}
+			}
 		}
 	} else {
 		p.logger.Debug("ℹ️ 跳过奖励分配",

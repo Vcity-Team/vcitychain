@@ -306,16 +306,18 @@ func (r *dposRuntime) produceBlock() error {
 	// 构建新区块（无锁，不阻塞）
 	// 🆕 记录区块生产开始时间（用于统计生产耗时）
 	r.config.blockchain.SetBlockProductionStartTime()
-	r.logger.Debug("🏗️ DPoS开始构建新区块", "blockNumber", nextBlockNumber)
+	r.logger.Info("🏗️ [produceBlock] 开始构建新区块", "blockNumber", nextBlockNumber, "buildStartSlot", buildStartSlot)
 	block, err := r.buildBlock()
 	if err != nil {
+		r.logger.Error("❌ [produceBlock] buildBlock失败", "blockNumber", nextBlockNumber, "error", err)
 		return fmt.Errorf("failed to build block: %w", err)
 	}
+	r.logger.Info("✅ [produceBlock] buildBlock完成", "blockNumber", nextBlockNumber, "blockHash", block.Block.Hash().String()[:16], "txs", len(block.Block.Transactions))
 
 	// 🆕 记录 buildBlock 返回后的实际耗时（包括等待签名的时间）
 	buildEndTime := time.Now()
 	totalBuildDuration := buildEndTime.Sub(buildStartTime)
-	r.logger.Info("📊 buildBlock返回后的总耗时统计",
+	r.logger.Info("📊 [produceBlock] buildBlock返回后的总耗时统计",
 		"blockNumber", nextBlockNumber,
 		"totalBuildDuration", totalBuildDuration.String(),
 		"buildStartTime", buildStartTime.Format("15:04:05.000000"),
@@ -323,6 +325,7 @@ func (r *dposRuntime) produceBlock() error {
 		"note", "包括区块构建和签名收集的总耗时")
 
 	// 检查是否超过slot时间
+	r.logger.Info("🔍 [produceBlock] 开始检查slot和父区块", "blockNumber", nextBlockNumber, "buildStartSlot", buildStartSlot)
 	if r.config.blockScheduler != nil && buildStartSlot >= 0 {
 		now := time.Now()
 		genesisTime := r.config.blockScheduler.GetGenesisTime()
@@ -331,7 +334,7 @@ func (r *dposRuntime) produceBlock() error {
 		currentSlotAfterBuild := int(timeSinceGenesis / blockWindow)
 		buildDuration := now.Sub(buildStartTime)
 
-		r.logger.Info("🔍 开始检查slot超时和变化",
+		r.logger.Info("🔍 [produceBlock] 开始检查slot超时和变化",
 			"blockNumber", nextBlockNumber,
 			"buildStartSlot", buildStartSlot,
 			"currentSlotAfterBuild", currentSlotAfterBuild,
@@ -342,7 +345,7 @@ func (r *dposRuntime) produceBlock() error {
 
 		// 检查构建耗时是否超过slot时间
 		if buildDuration > blockWindow {
-			r.logger.Info("⏰ 区块被丢弃：构建耗时超过slot时间",
+			r.logger.Info("⏰ [produceBlock] 区块被丢弃：构建耗时超过slot时间",
 				"blockNumber", nextBlockNumber,
 				"buildDuration", buildDuration.String(),
 				"blockWindow", blockWindow.String(),
@@ -354,7 +357,7 @@ func (r *dposRuntime) produceBlock() error {
 
 		// 检查slot是否已变化
 		if currentSlotAfterBuild != buildStartSlot {
-			r.logger.Info("⏰ 区块被丢弃：slot已变化",
+			r.logger.Info("⏰ [produceBlock] 区块被丢弃：slot已变化",
 				"blockNumber", nextBlockNumber,
 				"buildStartSlot", buildStartSlot,
 				"currentSlotAfterBuild", currentSlotAfterBuild,
@@ -363,33 +366,38 @@ func (r *dposRuntime) produceBlock() error {
 			return nil
 		}
 
-		r.logger.Info("✅ slot检查通过，slot未变化且未超时",
+		r.logger.Info("✅ [produceBlock] slot检查通过，slot未变化且未超时",
 			"blockNumber", nextBlockNumber,
 			"buildStartSlot", buildStartSlot,
 			"currentSlotAfterBuild", currentSlotAfterBuild,
 			"buildDuration", buildDuration.String())
 	} else {
 		// 🆕 记录为什么跳过了slot检查
-		r.logger.Info("⚠️ 跳过slot检查",
+		reason := "未知原因"
+		if r.config.blockScheduler == nil {
+			reason = "blockScheduler为nil"
+		} else if buildStartSlot < 0 {
+			reason = "buildStartSlot < 0（未初始化）"
+		}
+		r.logger.Info("⚠️ [produceBlock] 跳过slot检查",
 			"blockNumber", nextBlockNumber,
 			"blockSchedulerIsNil", r.config.blockScheduler == nil,
 			"buildStartSlot", buildStartSlot,
-			"reason", func() string {
-				if r.config.blockScheduler == nil {
-					return "blockScheduler为nil"
-				}
-				if buildStartSlot < 0 {
-					return "buildStartSlot < 0（未初始化）"
-				}
-				return "未知原因"
-			}())
+			"reason", reason)
 	}
 
 	// 检查父区块是否已变化（防止其他节点已出块导致分叉）
 	if r.config.blockScheduler != nil {
 		currentBlock := r.config.blockchain.CurrentHeader()
+		r.logger.Info("🔍 [produceBlock] 检查父区块是否已变化",
+			"blockNumber", block.Block.Number(),
+			"expectedParentHash", block.Block.Header.ParentHash.String()[:16],
+			"expectedParentNumber", block.Block.Header.Number-1,
+			"currentBlockHash", currentBlock.Hash.String()[:16],
+			"currentBlockNumber", currentBlock.Number)
+
 		if currentBlock.Hash != block.Block.Header.ParentHash {
-			r.logger.Info("⏰ 区块被丢弃：父区块已变化，其他节点已出块（防止分叉）",
+			r.logger.Info("⏰ [produceBlock] 区块被丢弃：父区块已变化，其他节点已出块（防止分叉）",
 				"blockNumber", block.Block.Number(),
 				"expectedParent", block.Block.Header.ParentHash.String(),
 				"actualParent", currentBlock.Hash.String(),
@@ -398,15 +406,19 @@ func (r *dposRuntime) produceBlock() error {
 				"reason", fmt.Sprintf("构建时父区块hash=%s，构建完成后父区块hash=%s，其他节点已出块", block.Block.Header.ParentHash.String()[:16], currentBlock.Hash.String()[:16]))
 			return nil // 不提交，避免分叉
 		}
+		r.logger.Info("✅ [produceBlock] 父区块检查通过，父区块未变化", "blockNumber", block.Block.Number())
+	} else {
+		r.logger.Info("⚠️ [produceBlock] 跳过父区块检查（blockScheduler为nil）", "blockNumber", block.Block.Number())
 	}
 
 	// 提交区块（可能需要锁，取决于blockchain的实现）
+	r.logger.Info("🔄 [produceBlock] 准备提交区块", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String()[:16], "txs", len(block.Block.Transactions))
 	if err := r.config.blockchain.CommitBlock(block); err != nil {
-		r.logger.Error("区块提交失败", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String(), "error", err)
+		r.logger.Error("❌ [produceBlock] 区块提交失败", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String(), "error", err)
 		return fmt.Errorf("failed to commit block: %w", err)
 	}
 
-	r.logger.Debug("✅ DPoS区块提交成功",
+	r.logger.Info("✅ [produceBlock] DPoS区块提交成功",
 		"blockNumber", block.Block.Number(),
 		"blockHash", block.Block.Hash().String()[:16],
 		"txs", len(block.Block.Transactions),

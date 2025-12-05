@@ -264,23 +264,42 @@ func (d *DPoS) ProcessProposalVoteTransaction(tx *types.Transaction, blockNumber
 
 // ProcessProposalExecuteTransaction 处理执行提案交易（所有节点都会执行）
 func (d *DPoS) ProcessProposalExecuteTransaction(tx *types.Transaction, blockNumber uint64) error {
+	startTime := time.Now()
+	d.logger.Info("🔒 [ProcessProposalExecuteTransaction] 尝试获取锁", "blockNumber", blockNumber, "startTime", startTime.Format("15:04:05.000000"))
 	d.lock.Lock()
-	defer d.lock.Unlock()
+	lockAcquiredTime := time.Now()
+	lockWaitDuration := lockAcquiredTime.Sub(startTime)
+	if lockWaitDuration > 100*time.Millisecond {
+		d.logger.Warn("⚠️ [ProcessProposalExecuteTransaction] 获取锁耗时较长", "blockNumber", blockNumber, "waitDuration", lockWaitDuration.String())
+	}
+	d.logger.Info("🔓 [ProcessProposalExecuteTransaction] 锁已获取", "blockNumber", blockNumber, "waitDuration", lockWaitDuration.String())
+	defer func() {
+		d.lock.Unlock()
+		totalDuration := time.Since(startTime)
+		d.logger.Info("🔓 [ProcessProposalExecuteTransaction] 锁已释放", "blockNumber", blockNumber, "totalDuration", totalDuration.String())
+	}()
 
 	// 1. 解析交易数据
+	parseStartTime := time.Now()
 	var txData ProposalExecuteTxData
 	if err := json.Unmarshal(tx.Input, &txData); err != nil {
 		return fmt.Errorf("failed to unmarshal proposal execute tx data: %w", err)
 	}
-
-	d.logger.Info("🔄 处理执行提案交易", "from", tx.From.String(), "proposalID", txData.ProposalID, "blockNumber", blockNumber)
+	parseDuration := time.Since(parseStartTime)
+	d.logger.Info("🔄 [ProcessProposalExecuteTransaction] 处理执行提案交易", "from", tx.From.String(), "proposalID", txData.ProposalID, "blockNumber", blockNumber, "parseDuration", parseDuration.String())
 
 	// 2. 获取提案
+	hydrateStartTime := time.Now()
 	proposal, err := d.governanceHydrateProposal(txData.ProposalID)
+	hydrateDuration := time.Since(hydrateStartTime)
+	if hydrateDuration > 100*time.Millisecond {
+		d.logger.Warn("⚠️ [ProcessProposalExecuteTransaction] 加载提案耗时较长", "proposalID", txData.ProposalID, "duration", hydrateDuration.String())
+	}
 	if err != nil || proposal == nil {
-		d.logger.Error("❌ [ProcessProposalExecuteTransaction] 无法加载提案", "proposalID", txData.ProposalID, "error", err)
+		d.logger.Error("❌ [ProcessProposalExecuteTransaction] 无法加载提案", "proposalID", txData.ProposalID, "error", err, "duration", hydrateDuration.String())
 		return fmt.Errorf("proposal not found: %s", txData.ProposalID)
 	}
+	d.logger.Info("📋 [ProcessProposalExecuteTransaction] 提案已加载", "proposalID", txData.ProposalID, "status", proposal.Status.String(), "duration", hydrateDuration.String())
 
 	// 🆕 检查1：投票期必须已结束
 	if blockNumber <= proposal.EndBlock {
@@ -293,15 +312,25 @@ func (d *DPoS) ProcessProposalExecuteTransaction(tx *types.Transaction, blockNum
 
 	// 🆕 检查2：如果投票期已结束但状态未更新，先检查投票结果
 	if proposal.Status != ProposalPassed && proposal.Status != ProposalRejected {
+		checkStartTime := time.Now()
 		d.logger.Info("🔄 [ProcessProposalExecuteTransaction] 投票期已结束但状态未更新，先检查投票结果", "proposalID", txData.ProposalID)
 		if err := d.CheckProposalResult(txData.ProposalID); err != nil {
-			d.logger.Warn("⚠️ [ProcessProposalExecuteTransaction] 检查投票结果失败", "proposalID", txData.ProposalID, "error", err)
+			checkDuration := time.Since(checkStartTime)
+			d.logger.Warn("⚠️ [ProcessProposalExecuteTransaction] 检查投票结果失败", "proposalID", txData.ProposalID, "error", err, "duration", checkDuration.String())
+		} else {
+			checkDuration := time.Since(checkStartTime)
+			if checkDuration > 100*time.Millisecond {
+				d.logger.Warn("⚠️ [ProcessProposalExecuteTransaction] 检查投票结果耗时较长", "proposalID", txData.ProposalID, "duration", checkDuration.String())
+			}
 		}
 		// 重新获取提案以获取更新后的状态
+		reloadStartTime := time.Now()
 		proposal, err = d.governanceHydrateProposal(txData.ProposalID)
+		reloadDuration := time.Since(reloadStartTime)
 		if err != nil || proposal == nil {
 			return fmt.Errorf("failed to get updated proposal: %s", txData.ProposalID)
 		}
+		d.logger.Info("📋 [ProcessProposalExecuteTransaction] 提案已重新加载", "proposalID", txData.ProposalID, "status", proposal.Status.String(), "duration", reloadDuration.String())
 	}
 
 	// 🆕 检查3：提案状态必须为 Passed
@@ -319,20 +348,36 @@ func (d *DPoS) ProcessProposalExecuteTransaction(tx *types.Transaction, blockNum
 		proposal.ProposalType = "parameter"
 	}
 
+	executeStartTime := time.Now()
 	switch proposal.ProposalType {
 	case "parameter":
+		d.logger.Info("🔄 [ProcessProposalExecuteTransaction] 开始执行参数提案", "proposalID", txData.ProposalID)
 		if err := d.executeParameterProposalInTx(txData.ProposalID, proposal); err != nil {
+			executeDuration := time.Since(executeStartTime)
+			d.logger.Error("❌ [ProcessProposalExecuteTransaction] 执行参数提案失败", "proposalID", txData.ProposalID, "error", err, "duration", executeDuration.String())
 			return fmt.Errorf("failed to execute parameter proposal: %w", err)
 		}
+		executeDuration := time.Since(executeStartTime)
+		if executeDuration > 100*time.Millisecond {
+			d.logger.Warn("⚠️ [ProcessProposalExecuteTransaction] 执行参数提案耗时较长", "proposalID", txData.ProposalID, "duration", executeDuration.String())
+		}
 	case "validator_recovery":
+		d.logger.Info("🔄 [ProcessProposalExecuteTransaction] 开始执行恢复提案", "proposalID", txData.ProposalID)
 		if err := d.executeRecoveryProposalInTx(txData.ProposalID, proposal); err != nil {
+			executeDuration := time.Since(executeStartTime)
+			d.logger.Error("❌ [ProcessProposalExecuteTransaction] 执行恢复提案失败", "proposalID", txData.ProposalID, "error", err, "duration", executeDuration.String())
 			return fmt.Errorf("failed to execute recovery proposal: %w", err)
+		}
+		executeDuration := time.Since(executeStartTime)
+		if executeDuration > 100*time.Millisecond {
+			d.logger.Warn("⚠️ [ProcessProposalExecuteTransaction] 执行恢复提案耗时较长", "proposalID", txData.ProposalID, "duration", executeDuration.String())
 		}
 	default:
 		return fmt.Errorf("unknown proposal type: %s", proposal.ProposalType)
 	}
 
-	d.logger.Info("✅ 执行提案交易处理成功", "proposalID", txData.ProposalID)
+	totalDuration := time.Since(startTime)
+	d.logger.Info("✅ [ProcessProposalExecuteTransaction] 执行提案交易处理成功", "proposalID", txData.ProposalID, "totalDuration", totalDuration.String())
 
 	return nil
 }

@@ -113,17 +113,29 @@ func (m *Manager) HydrateProposal(proposalID string) (*core.ParameterProposal, e
 
 // LoadScheduled returns proposals scheduled for the given epoch.
 func (m *Manager) LoadScheduled(epochNumber uint64) []*core.ParameterProposal {
+	// 🔍 添加日志，跟踪传入的epoch参数
+	m.logger.Info("🔍🔍🔍 [Manager.LoadScheduled] 开始查询待应用提案",
+		"epochNumber", epochNumber,
+		"说明", "查询effectiveEpoch等于此值的待应用提案")
+	
 	if scheduled := m.listScheduledFromCache(epochNumber); len(scheduled) > 0 {
+		m.logger.Info("🔍🔍🔍 [Manager.LoadScheduled] 从缓存返回",
+			"epochNumber", epochNumber,
+			"cachedCount", len(scheduled))
 		return scheduled
 	}
 	if m.deps.ListScheduled == nil {
+		m.logger.Warn("⚠️ [Manager.LoadScheduled] ListScheduled依赖不可用", "epochNumber", epochNumber)
 		return nil
 	}
 	result, err := m.deps.ListScheduled(epochNumber)
 	if err != nil {
-		m.logger.Debug("failed to list scheduled proposals from store", "epoch", epochNumber, "error", err)
+		m.logger.Error("❌ [Manager.LoadScheduled] 查询失败", "epoch", epochNumber, "error", err)
 		return nil
 	}
+	m.logger.Info("🔍🔍🔍 [Manager.LoadScheduled] 查询完成",
+		"epochNumber", epochNumber,
+		"resultCount", len(result))
 	return result
 }
 

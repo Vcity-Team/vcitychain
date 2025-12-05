@@ -64,9 +64,19 @@ func (m *lifecycleManager) ProcessBoundary(ctx core.EpochBoundaryContext) (core.
 		return result, fmt.Errorf("next block number is zero")
 	}
 
+	// 🔧 修复：在epoch结束区块时，应该查询当前epoch（即将结束的epoch）的提案
+	// NextBlockNumber 是下一个区块号，当前epoch结束区块是 NextBlockNumber - 1
+	// 例如：NextBlockNumber=7418（下一个区块），当前epoch结束区块=7417（epoch 3的最后一个区块）
+	// 应该使用 NextBlockNumber - 1 来获取当前epoch，而不是 NextBlockNumber
 	currentEpoch := uint64(0)
 	if m.deps.ResolveEpochNumber != nil && ctx.NextBlockNumber > 0 {
+		// 使用 NextBlockNumber - 1 来获取当前epoch（即将结束的epoch）
+		// 因为 NextBlockNumber 是下一个区块号，NextBlockNumber - 1 是当前epoch结束区块
 		currentEpoch = m.deps.ResolveEpochNumber(ctx.NextBlockNumber - 1)
+		m.logger.Info("🔍 [ProcessBoundary] 计算当前epoch",
+			"nextBlockNumber", ctx.NextBlockNumber,
+			"currentBlockNumber", ctx.NextBlockNumber-1,
+			"currentEpoch", currentEpoch)
 	}
 
 	// 🔧 调整顺序：先进行故障检测（此时恢复提案还是未应用状态，CheckRecoveryProposal可以找到），
@@ -176,7 +186,10 @@ func (m *lifecycleManager) runFaultDetection(ctx core.EpochBoundaryContext, epoc
 	var faultFlags []core.FaultFlagInfo
 	if m.deps.DetectFaults != nil {
 		var err error
-		faultFlags, err = m.deps.DetectFaults(ctx.NextBlockNumber)
+		// 🔧 修复：在epoch结束区块时，应该使用当前区块号（NextBlockNumber - 1）来检测故障
+		// 因为 DetectFaults 需要知道当前epoch的区块号，而不是下一个epoch的区块号
+		currentBlockNumber := ctx.NextBlockNumber - 1
+		faultFlags, err = m.deps.DetectFaults(currentBlockNumber)
 		if err != nil {
 			return nil, err
 		}

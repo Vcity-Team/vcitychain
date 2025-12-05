@@ -535,6 +535,87 @@ func (ps *ProposalStore) DeleteProposal(proposalID string) error {
 	})
 }
 
+// ListScheduledByEpoch 根据 EffectiveEpoch 查询待应用的提案
+func (ps *ProposalStore) ListScheduledByEpoch(epochNumber uint64) ([]*ParameterProposal, error) {
+	// 🔍 添加详细日志，跟踪传入的epoch参数
+	if ps.logger != nil {
+		ps.logger.Info("🔍🔍🔍 [ProposalStore.ListScheduledByEpoch] 开始查询提案",
+			"epochNumber", epochNumber,
+			"说明", "查询effectiveEpoch等于此值的待应用提案")
+	}
+
+	var scheduledProposals []*ParameterProposal
+
+	err := ps.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("proposals"))
+		if bucket == nil {
+			if ps.logger != nil {
+				ps.logger.Error("❌ [ProposalStore.ListScheduledByEpoch] proposals bucket not found")
+			}
+			return fmt.Errorf("proposals bucket not found")
+		}
+
+		count := 0
+		err := bucket.ForEach(func(key, value []byte) error {
+			var proposal ParameterProposal
+			if err := json.Unmarshal(value, &proposal); err != nil {
+				if ps.logger != nil {
+					ps.logger.Warn("❌ [ProposalStore.ListScheduledByEpoch] 反序列化提案失败", "proposalID", string(key), "error", err)
+				}
+				// 跳过损坏的提案，继续处理其他提案
+				return nil
+			}
+
+			// 检查是否符合条件：Scheduled=true, Applied=false, EffectiveEpoch=epochNumber
+			// 🔍 添加详细日志，跟踪每个提案的检查过程
+			if ps.logger != nil && (proposal.Schedule.Scheduled || proposal.Schedule.EffectiveEpoch > 0) {
+				ps.logger.Info("🔍 [ProposalStore.ListScheduledByEpoch] 检查提案",
+					"proposalID", proposal.ID,
+					"proposalType", proposal.ProposalType,
+					"scheduled", proposal.Schedule.Scheduled,
+					"applied", proposal.Schedule.Applied,
+					"effectiveEpoch", proposal.Schedule.EffectiveEpoch,
+					"queryEpoch", epochNumber,
+					"match", proposal.Schedule.Scheduled && !proposal.Schedule.Applied && proposal.Schedule.EffectiveEpoch == epochNumber)
+			}
+
+			if proposal.Schedule.Scheduled &&
+				!proposal.Schedule.Applied &&
+				proposal.Schedule.EffectiveEpoch == epochNumber {
+				scheduledProposals = append(scheduledProposals, &proposal)
+				count++
+				if ps.logger != nil {
+					ps.logger.Info("✅ [ProposalStore.ListScheduledByEpoch] 找到待应用提案",
+						"proposalID", proposal.ID,
+						"proposalType", proposal.ProposalType,
+						"effectiveEpoch", proposal.Schedule.EffectiveEpoch,
+						"queryEpoch", epochNumber,
+						"index", count)
+				}
+			}
+
+			return nil
+		})
+
+		if ps.logger != nil {
+			ps.logger.Info("✅ [ProposalStore.ListScheduledByEpoch] 查询完成",
+				"epochNumber", epochNumber,
+				"totalCount", count)
+		}
+
+		return err
+	})
+
+	if err != nil {
+		if ps.logger != nil {
+			ps.logger.Error("❌ [ProposalStore.ListScheduledByEpoch] 查询失败", "error", err, "epochNumber", epochNumber)
+		}
+		return nil, err
+	}
+
+	return scheduledProposals, nil
+}
+
 // initialize 初始化出块统计存储
 func (bts *BlockTrackerStore) initialize(tx *bolt.Tx) error {
 	_, err := tx.CreateBucketIfNotExists([]byte("blockTracker"))

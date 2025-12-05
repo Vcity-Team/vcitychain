@@ -132,36 +132,54 @@ func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, s
 }
 
 // CheckProposalResult 检查提案投票结果
+// ⚠️ 注意：调用此函数时，调用者必须已经持有 d.lock 锁，否则会导致死锁
 func (d *DPoS) CheckProposalResult(proposalID string) error {
-	d.lock.Lock()
-	defer d.lock.Unlock()
+	checkStartTime := time.Now()
+	d.logger.Info("🔍 [CheckProposalResult] 开始检查投票结果", "proposalID", proposalID, "startTime", checkStartTime.Format("15:04:05.000000"))
+
+	// ⚠️ 不再获取锁，因为调用者已经持有锁（ProcessProposalExecuteTransaction已经持有d.lock）
+	// 如果这里再次获取锁，会导致死锁（Go的sync.Mutex不是可重入的）
 
 	proposal, exists := d.parameterProposals[proposalID]
 	if !exists {
+		d.logger.Error("❌ [CheckProposalResult] 提案不存在", "proposalID", proposalID)
 		return fmt.Errorf("proposal not found")
 	}
 
 	// 检查是否在投票期内
 	currentBlock := d.getCurrentBlockNumber()
 	if currentBlock <= proposal.EndBlock {
+		d.logger.Info("ℹ️ [CheckProposalResult] 投票期未结束，跳过检查", "proposalID", proposalID, "currentBlock", currentBlock, "endBlock", proposal.EndBlock)
 		return nil // 投票期未结束
 	}
 
 	// 统计投票结果
+	calcStartTime := time.Now()
 	totalWeight := big.NewInt(0)
 	supportWeight := big.NewInt(0)
 
+	voteCount := len(proposal.Votes)
 	for _, vote := range proposal.Votes {
 		totalWeight.Add(totalWeight, vote.Weight)
 		if vote.Support {
 			supportWeight.Add(supportWeight, vote.Weight)
 		}
 	}
+	calcDuration := time.Since(calcStartTime)
+	d.logger.Info("📊 [CheckProposalResult] 投票统计完成", "proposalID", proposalID, "voteCount", voteCount, "calcDuration", calcDuration.String())
 
 	// 计算支持率
 	if totalWeight.Cmp(big.NewInt(0)) == 0 {
 		proposal.Status = ProposalRejected
+		d.logger.Info("❌ [CheckProposalResult] 提案被拒绝：无投票", "proposalID", proposalID)
+		finalizeStartTime := time.Now()
 		d.finalizeProposalLifecycle(proposalID, proposal)
+		finalizeDuration := time.Since(finalizeStartTime)
+		if finalizeDuration > 100*time.Millisecond {
+			d.logger.Warn("⚠️ [CheckProposalResult] finalizeProposalLifecycle耗时较长", "proposalID", proposalID, "duration", finalizeDuration.String())
+		}
+		totalDuration := time.Since(checkStartTime)
+		d.logger.Info("✅ [CheckProposalResult] 检查完成", "proposalID", proposalID, "totalDuration", totalDuration.String())
 		return nil
 	}
 
@@ -171,19 +189,27 @@ func (d *DPoS) CheckProposalResult(proposalID string) error {
 	// 判断是否通过
 	if supportRate.Cmp(big.NewInt(int64(proposal.Threshold))) >= 0 {
 		proposal.Status = ProposalPassed
-		d.logger.Info("Proposal passed",
+		d.logger.Info("✅ [CheckProposalResult] Proposal passed",
 			"proposalID", proposalID,
 			"supportRate", supportRate.String(),
 			"threshold", proposal.Threshold)
 	} else {
 		proposal.Status = ProposalRejected
-		d.logger.Info("Proposal rejected",
+		d.logger.Info("❌ [CheckProposalResult] Proposal rejected",
 			"proposalID", proposalID,
 			"supportRate", supportRate.String(),
 			"threshold", proposal.Threshold)
 	}
 
+	finalizeStartTime := time.Now()
 	d.finalizeProposalLifecycle(proposalID, proposal)
+	finalizeDuration := time.Since(finalizeStartTime)
+	if finalizeDuration > 100*time.Millisecond {
+		d.logger.Warn("⚠️ [CheckProposalResult] finalizeProposalLifecycle耗时较长", "proposalID", proposalID, "duration", finalizeDuration.String())
+	}
+
+	totalDuration := time.Since(checkStartTime)
+	d.logger.Info("✅ [CheckProposalResult] 检查完成", "proposalID", proposalID, "totalDuration", totalDuration.String(), "status", proposal.Status.String())
 
 	return nil
 }

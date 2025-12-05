@@ -129,14 +129,7 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Description: "Minimum staking threshold (wei)",
 			Category:    "economic",
 		},
-		"dpos_epoch_duration": {
-			Name:        "Epoch Duration",
-			Type:        "string",
-			MinValue:    "10s",
-			MaxValue:    "1h",
-			Description: "Epoch duration",
-			Category:    "consensus",
-		},
+		// 🚫 dpos_epoch_duration 已移除：epoch 时长不应通过提案修改，只能通过配置文件设置
 		// 🆕 治理参数
 		"governance_pass_threshold": {
 			Name:        "Pass Threshold",

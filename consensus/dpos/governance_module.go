@@ -24,7 +24,16 @@ func (d *DPoS) buildGovernanceModuleDependencies() governancemodule.Dependencies
 			if store == nil {
 				return governancemodule.ErrProposalStoreUnavailable
 			}
-			return store.SaveProposal(proposal)
+			// 保存到数据库
+			if err := store.SaveProposal(proposal); err != nil {
+				return err
+			}
+			// 🆕 同时更新内存缓存，确保边界应用时能查询到
+			if d.parameterProposals == nil {
+				d.parameterProposals = make(map[string]*ParameterProposal)
+			}
+			d.parameterProposals[proposal.ID] = proposal
+			return nil
 		},
 		GetProposal: func(id string) (*core.ParameterProposal, error) {
 			store := d.getProposalStore()
@@ -41,16 +50,28 @@ func (d *DPoS) buildGovernanceModuleDependencies() governancemodule.Dependencies
 			return store.GetAllProposals()
 		},
 		ListScheduled: func(epoch uint64) ([]*core.ParameterProposal, error) {
+			// 🔍 添加日志，跟踪传入的epoch参数
+			d.logger.Info("🔍🔍🔍 [buildGovernanceModuleDependencies.ListScheduled] 开始查询",
+				"epoch", epoch,
+				"说明", "查询effectiveEpoch等于此值的待应用提案")
+
 			store := d.getProposalStore()
 			if store == nil {
+				d.logger.Warn("⚠️ [buildGovernanceModuleDependencies.ListScheduled] ProposalStore不可用", "epoch", epoch)
 				return nil, governancemodule.ErrProposalStoreUnavailable
 			}
 			type scheduler interface {
 				ListScheduledByEpoch(uint64) ([]*core.ParameterProposal, error)
 			}
 			if l, ok := interface{}(store).(scheduler); ok {
-				return l.ListScheduledByEpoch(epoch)
+				result, err := l.ListScheduledByEpoch(epoch)
+				d.logger.Info("🔍🔍🔍 [buildGovernanceModuleDependencies.ListScheduled] 查询完成",
+					"epoch", epoch,
+					"resultCount", len(result),
+					"error", err)
+				return result, err
 			}
+			d.logger.Error("❌ [buildGovernanceModuleDependencies.ListScheduled] ProposalStore不支持ListScheduledByEpoch", "epoch", epoch)
 			return nil, fmt.Errorf("proposal store does not support scheduled listing")
 		},
 		CacheGet: func(id string) (*core.ParameterProposal, bool) {
