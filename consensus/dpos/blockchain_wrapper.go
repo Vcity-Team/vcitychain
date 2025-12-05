@@ -355,7 +355,7 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 						}
 					case "vote":
 						if e := dposInstance.ProcessProposalVoteTransaction(tx, block.Number()); e != nil {
-							p.logger.Warn("❌ [ProcessBlock] 提案投票业务处理失败(不影响EVM)", "err", e, "txHash", tx.Hash.String())
+							// 投票业务处理失败不影响EVM，静默处理（如重复投票等正常业务校验）
 						}
 					case "execute":
 						if e := dposInstance.ProcessProposalExecuteTransaction(tx, block.Number()); e != nil {
