@@ -4496,6 +4496,12 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 		}
 	}
 
+	// 🆕 先获取当前区块高度，供 isPassed 使用
+	currentBlockNumber := gov.GetCurrentBlockNumber()
+	if currentBlockNumber == 0 {
+		currentBlockNumber = d.getCurrentBlockHeight()
+	}
+
 	voteStats := map[string]interface{}{
 		"totalVotes":    len(proposal.Votes),
 		"supportVotes":  len(supportVoters),
@@ -4512,12 +4518,24 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 			return fmt.Sprintf("%.2f%%", value)
 		}(),
 		"isPassed": func() bool {
-			if totalWeight.Sign() == 0 {
+			// 🆕 修复：isPassed 必须与 Status 保持一致
+			// 1. 如果投票期未结束，返回 false（即使支持率100%）
+			if currentBlockNumber <= proposal.EndBlock {
 				return false
 			}
-			passRate := new(big.Int).Mul(supportWeight, big.NewInt(100))
-			passRate.Div(passRate, totalWeight)
-			return passRate.Uint64() >= proposal.Threshold
+			// 2. 如果投票期已结束，直接使用 Status 字段（更可靠）
+			// 如果 Status 还未更新，先尝试检查结果
+			if proposal.Status != dpos.ProposalPassed && proposal.Status != dpos.ProposalRejected {
+				// 投票期已结束但状态未更新，计算支持率
+				if totalWeight.Sign() == 0 {
+					return false
+				}
+				passRate := new(big.Int).Mul(supportWeight, big.NewInt(100))
+				passRate.Div(passRate, totalWeight)
+				return passRate.Uint64() >= proposal.Threshold
+			}
+			// 3. 状态已更新，直接使用 Status
+			return proposal.Status == dpos.ProposalPassed
 		}(),
 	}
 
@@ -4525,11 +4543,6 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 		"proposalBlocks": fmt.Sprintf("Blocks %d - %d", proposal.StartBlock, proposal.EndBlock),
 		"proposalPeriod": fmt.Sprintf("%ds (%d blocks)", (proposal.EndBlock-proposal.StartBlock)*3, proposal.EndBlock-proposal.StartBlock),
 		"votingPeriod":   fmt.Sprintf("%ds (%d blocks)", (proposal.EndBlock-proposal.StartBlock)*3, proposal.EndBlock-proposal.StartBlock),
-	}
-
-	currentBlockNumber := gov.GetCurrentBlockNumber()
-	if currentBlockNumber == 0 {
-		currentBlockNumber = d.getCurrentBlockHeight()
 	}
 
 	timeInfo["currentBlock"] = currentBlockNumber
@@ -4544,6 +4557,9 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 		timeInfo["remainingBlocks"] = 0
 		timeInfo["isExpired"] = true
 	}
+
+	// 🆕 保存 currentBlockNumber 供 isPassed 使用
+	voteStats["currentBlockNumber"] = currentBlockNumber
 
 	// 格式化创建时间
 	var createdAtFormatted string
@@ -5618,7 +5634,41 @@ func (d *DPOS) ExecuteParameterUpdate(ctx context.Context, params interface{}) (
 	if proposal.Status == dpos.ProposalExecuted {
 		return nil, fmt.Errorf("proposal %s has already been executed (status: executed), cannot execute again", proposalID)
 	}
-	d.logger.Info("提案状态检查通过", "proposalID", proposalID, "status", proposal.Status.String())
+
+	// 🆕 获取当前区块高度
+	currentBlockNumber := gov.GetCurrentBlockNumber()
+	if currentBlockNumber == 0 {
+		currentBlockNumber = d.getCurrentBlockHeight()
+	}
+
+	// 🆕 检查1：投票期必须已结束
+	if currentBlockNumber <= proposal.EndBlock {
+		return nil, fmt.Errorf("proposal %s voting period has not ended yet (current block %d <= end block %d), cannot execute", proposalID, currentBlockNumber, proposal.EndBlock)
+	}
+
+	// 🆕 检查2：如果投票期已结束但状态未更新，先检查投票结果
+	if proposal.Status != dpos.ProposalPassed && proposal.Status != dpos.ProposalRejected {
+		// 尝试通过 governanceEngine 调用 CheckProposalResult
+		if checkResultEngine, ok := gov.(interface {
+			CheckProposalResult(proposalID string) error
+		}); ok {
+			if err := checkResultEngine.CheckProposalResult(proposalID); err != nil {
+				d.logger.Warn("Failed to check proposal result", "proposalID", proposalID, "error", err)
+			}
+			// 重新获取提案以获取更新后的状态
+			proposal, err = gov.GetParameterProposal(proposalID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get updated proposal: %w", err)
+			}
+		}
+	}
+
+	// 🆕 检查3：提案状态必须为 Passed
+	if proposal.Status != dpos.ProposalPassed {
+		return nil, fmt.Errorf("proposal %s status is %s, must be 'passed' to execute", proposalID, proposal.Status.String())
+	}
+
+	d.logger.Info("提案状态检查通过", "proposalID", proposalID, "status", proposal.Status.String(), "currentBlock", currentBlockNumber, "endBlock", proposal.EndBlock)
 
 	// 🆕 改为通过交易执行提案
 	// 1. 解析执行者地址和私钥（已在上面解析）
@@ -5649,12 +5699,6 @@ func (d *DPOS) ExecuteParameterUpdate(ctx context.Context, params interface{}) (
 	}
 
 	d.logger.Info("✅ 执行提案交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", proposalID)
-
-	// 🆕 获取当前区块高度
-	currentBlockNumber := gov.GetCurrentBlockNumber()
-	if currentBlockNumber == 0 {
-		currentBlockNumber = d.getCurrentBlockHeight()
-	}
 
 	return map[string]interface{}{
 		"success":            true,

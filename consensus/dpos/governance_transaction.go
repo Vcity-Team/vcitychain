@@ -282,6 +282,38 @@ func (d *DPoS) ProcessProposalExecuteTransaction(tx *types.Transaction, blockNum
 		return fmt.Errorf("proposal not found: %s", txData.ProposalID)
 	}
 
+	// 🆕 检查1：投票期必须已结束
+	if blockNumber <= proposal.EndBlock {
+		d.logger.Warn("❌ [ProcessProposalExecuteTransaction] 投票期未结束，拒绝执行",
+			"proposalID", txData.ProposalID,
+			"currentBlock", blockNumber,
+			"endBlock", proposal.EndBlock)
+		return fmt.Errorf("proposal %s voting period has not ended yet (current block %d <= end block %d), cannot execute", txData.ProposalID, blockNumber, proposal.EndBlock)
+	}
+
+	// 🆕 检查2：如果投票期已结束但状态未更新，先检查投票结果
+	if proposal.Status != ProposalPassed && proposal.Status != ProposalRejected {
+		d.logger.Info("🔄 [ProcessProposalExecuteTransaction] 投票期已结束但状态未更新，先检查投票结果", "proposalID", txData.ProposalID)
+		if err := d.CheckProposalResult(txData.ProposalID); err != nil {
+			d.logger.Warn("⚠️ [ProcessProposalExecuteTransaction] 检查投票结果失败", "proposalID", txData.ProposalID, "error", err)
+		}
+		// 重新获取提案以获取更新后的状态
+		proposal, err = d.governanceHydrateProposal(txData.ProposalID)
+		if err != nil || proposal == nil {
+			return fmt.Errorf("failed to get updated proposal: %s", txData.ProposalID)
+		}
+	}
+
+	// 🆕 检查3：提案状态必须为 Passed
+	if proposal.Status != ProposalPassed {
+		d.logger.Warn("❌ [ProcessProposalExecuteTransaction] 提案状态不是 Passed，拒绝执行",
+			"proposalID", txData.ProposalID,
+			"status", proposal.Status.String())
+		return fmt.Errorf("proposal %s status is %s, must be 'passed' to execute", txData.ProposalID, proposal.Status.String())
+	}
+
+	d.logger.Info("✅ [ProcessProposalExecuteTransaction] 提案检查通过，开始执行", "proposalID", txData.ProposalID, "status", proposal.Status.String())
+
 	// 3. 执行提案（所有节点都执行）
 	if proposal.ProposalType == "" {
 		proposal.ProposalType = "parameter"
