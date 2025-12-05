@@ -233,7 +233,7 @@ func runCommand(cmd *cobra.Command, _ []string) error {
 
 // voteForCandidate attempts to vote for a candidate using RPC methods
 func voteForCandidate(client *jsonrpc.Client, voter, candidate string, amount *big.Int, privateKey string) (*VoteResult, error) {
-	// Method 1: Try dpos_vote
+	// Use dpos_vote method
 	result, err := callVoteRPCMethod(client, "dpos_vote", []interface{}{
 		voter,
 		candidate,
@@ -244,29 +244,7 @@ func voteForCandidate(client *jsonrpc.Client, voter, candidate string, amount *b
 		return result, nil
 	}
 
-	// Method 2: Try dpos_stake
-	result, err = callVoteRPCMethod(client, "dpos_stake", []interface{}{
-		voter,
-		candidate,
-		amount.String(),
-		// 注意：dpos_stake 只支持 3 个参数，不包括私钥
-	})
-	if err == nil && result != nil {
-		return result, nil
-	}
-
-	// Method 3: Try dpos_delegate
-	result, err = callVoteRPCMethod(client, "dpos_delegate", []interface{}{
-		voter,
-		candidate,
-		amount.String(),
-		privateKey, // 添加私钥参数
-	})
-	if err == nil && result != nil {
-		return result, nil
-	}
-
-	// If all RPC methods fail, return a simulated result
+	// If RPC method fails, return a simulated result
 	return &VoteResult{
 		Success:     false,
 		Message:     "No DPoS voting RPC methods available on this node",
