@@ -242,11 +242,12 @@ func (a *account) incrementDemotions() {
 
 // reset aligns the account with the new nonce
 // by pruning all transactions with nonce lesser than new.
-// After pruning, a promotion may be signaled if the first
-// enqueued transaction matches the new nonce.
+// Performance optimization: Geth-style direct promote (no async signal delay)
+// After pruning, transactions are directly promoted if eligible.
 func (a *account) reset(nonce uint64, promoteCh chan<- promoteRequest, addr types.Address, logger hclog.Logger) (
 	prunedPromoted,
-	prunedEnqueued []*types.Transaction,
+	prunedEnqueued,
+	promoted []*types.Transaction,
 ) {
 	oldNonce := a.getNonce()
 	if logger != nil {
@@ -291,7 +292,8 @@ func (a *account) reset(nonce uint64, promoteCh chan<- promoteRequest, addr type
 		// 更新 nextNonce 以与链上状态同步（链上状态是权威的）
 		a.setNonce(nonce)
 
-		return
+		// Return with empty promoted slice (no promotion in this case)
+		return prunedPromoted, prunedEnqueued, nil
 	}
 
 	// prune the enqueued txs
@@ -324,18 +326,27 @@ func (a *account) reset(nonce uint64, promoteCh chan<- promoteRequest, addr type
 			"actualNonceAfterSet", newNonceAfterSet)
 	}
 
-	// it is important to signal promotion while
-	// the locks are held to ensure no other
-	// handler will mutate the account
-	if first := a.enqueued.peek(); first != nil && first.Nonce == nonce {
-		// first enqueued tx is expected -> signal promotion
-		if logger != nil {
-			logger.Info("🔵 [account.reset] 触发promotion信号",
-				"addr", addr.String()[:16],
-				"firstTxNonce", first.Nonce,
-				"newNonce", nonce)
-		}
-		promoteCh <- promoteRequest{account: first.From}
+	// Performance optimization: Geth-style direct promote (no async signal delay)
+	// Directly promote eligible transactions instead of sending async signal
+	promoted, prunedDuringPromote := a.promoteInternal()
+
+	if logger != nil && len(promoted) > 0 {
+		logger.Info("🔵 [account.reset] 直接批量promote完成",
+			"addr", addr.String()[:16],
+			"promotedCount", len(promoted),
+			"promotedNonces", func() []uint64 {
+				var nonces []uint64
+				for _, tx := range promoted {
+					nonces = append(nonces, tx.Nonce)
+				}
+				return nonces
+			}(),
+			"newNonce", nonce)
+	}
+
+	// Merge pruned transactions from promotion into prunedEnqueued
+	if len(prunedDuringPromote) > 0 {
+		prunedEnqueued = append(prunedEnqueued, prunedDuringPromote...)
 	}
 
 	if logger != nil {
@@ -344,7 +355,8 @@ func (a *account) reset(nonce uint64, promoteCh chan<- promoteRequest, addr type
 			"oldNonce", oldNonce,
 			"newNonce", nonce,
 			"prunedPromoted", len(prunedPromoted),
-			"prunedEnqueued", len(prunedEnqueued))
+			"prunedEnqueued", len(prunedEnqueued),
+			"promoted", len(promoted))
 	}
 
 	return
@@ -377,16 +389,10 @@ func (a *account) enqueue(tx *types.Transaction, replace bool) {
 	}
 }
 
-// Promote moves eligible transactions from enqueued to promoted.
-//
-// Eligible transactions are all sequential in order of nonce
-// and the first one has to have nonce less (or equal) to the account's
-// nextNonce.
-func (a *account) promote() (promoted []*types.Transaction, pruned []*types.Transaction) {
-	// Use unified lock instead of 2 separate locks
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
+// promoteInternal is the core logic for promoting transactions (without locking).
+// It should only be called when the account lock is already held.
+// Performance optimization: Geth-style direct promote (no async signal delay)
+func (a *account) promoteInternal() (promoted []*types.Transaction, pruned []*types.Transaction) {
 	// sanity check
 	currentNonce := a.getNonce()
 	if a.enqueued.length() == 0 || a.enqueued.peek().Nonce > currentNonce {
@@ -433,6 +439,19 @@ func (a *account) promote() (promoted []*types.Transaction, pruned []*types.Tran
 	a.nonceToTx.remove(pruned...)
 
 	return
+}
+
+// Promote moves eligible transactions from enqueued to promoted.
+//
+// Eligible transactions are all sequential in order of nonce
+// and the first one has to have nonce less (or equal) to the account's
+// nextNonce.
+func (a *account) promote() (promoted []*types.Transaction, pruned []*types.Transaction) {
+	// Use unified lock instead of 2 separate locks
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	return a.promoteInternal()
 }
 
 // resetSkips sets 0 to skips

@@ -1345,6 +1345,8 @@ func (p *TxPool) invokePromotion(tx *types.Transaction, callPromote bool) {
 // handlePromoteRequest handles moving promotable transactions
 // of some account from enqueued to promoted. Can only be
 // invoked by handleEnqueueRequest or resetAccount.
+// Note: This is still used for async promotion triggered by addTx,
+// but reset() now uses direct promote (Geth-style).
 func (p *TxPool) handlePromoteRequest(req promoteRequest) {
 	addr := req.account
 	account := p.accounts.get(addr)
@@ -1358,10 +1360,20 @@ func (p *TxPool) handlePromoteRequest(req promoteRequest) {
 	p.index.remove(pruned...)
 	p.gauge.decrease(slotsRequired(pruned...))
 
-	// update metrics
-	p.updatePending(int64(len(promoted)))
+	// Handle promoted transactions: update executables queue
+	if len(promoted) > 0 {
+		// Add the first promoted transaction to executables queue
+		// (each account has only one primary transaction)
+		// Other transactions will be added automatically when Pop() is called
+		if firstPromoted := promoted[0]; firstPromoted != nil {
+			p.executables.push(firstPromoted)
+		}
 
-	p.eventManager.signalEvent(proto.EventType_PROMOTED, toHash(promoted...)...)
+		// update metrics
+		p.updatePending(int64(len(promoted)))
+
+		p.eventManager.signalEvent(proto.EventType_PROMOTED, toHash(promoted...)...)
+	}
 }
 
 // addGossipTx handles receiving transactions
@@ -1515,13 +1527,37 @@ func (p *TxPool) resetAccounts(stateNonces map[types.Address]uint64) {
 			"oldNonce", oldNonce,
 			"newNonce", newNonce)
 
-		prunedPromoted, prunedEnqueued := account.reset(newNonce, p.promoteReqCh, addr, p.logger)
+		prunedPromoted, prunedEnqueued, promoted := account.reset(newNonce, p.promoteReqCh, addr, p.logger)
 
-		if len(prunedPromoted) > 0 || len(prunedEnqueued) > 0 {
+		if len(prunedPromoted) > 0 || len(prunedEnqueued) > 0 || len(promoted) > 0 {
 			p.logger.Info("🔵 [resetAccounts] 账户清理结果",
 				"addr", addr.String()[:16],
 				"prunedPromotedCount", len(prunedPromoted),
 				"prunedEnqueuedCount", len(prunedEnqueued),
+				"promotedCount", len(promoted),
+				"oldNonce", oldNonce,
+				"newNonce", newNonce)
+		}
+
+		// Handle promoted transactions: update executables queue
+		// Performance optimization: Geth-style direct promote
+		if len(promoted) > 0 {
+			// Add the first promoted transaction to executables queue
+			// (each account has only one primary transaction)
+			// Other transactions will be added automatically when Pop() is called
+			if firstPromoted := promoted[0]; firstPromoted != nil {
+				p.executables.push(firstPromoted)
+			}
+
+			// Update metrics
+			p.updatePending(int64(len(promoted)))
+
+			// Signal promotion event
+			p.eventManager.signalEvent(proto.EventType_PROMOTED, toHash(promoted...)...)
+
+			p.logger.Debug("🔵 [resetAccounts] 账户promote完成",
+				"addr", addr.String()[:16],
+				"promotedCount", len(promoted),
 				"oldNonce", oldNonce,
 				"newNonce", newNonce)
 		}
