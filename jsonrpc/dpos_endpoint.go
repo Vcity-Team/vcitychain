@@ -473,7 +473,6 @@ type UnvoteResponse struct {
 	Error            string                 `json:"error,omitempty"`
 }
 
-
 // Vote handles dpos_vote RPC method
 func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error) {
 	d.logger.Info("DPoS Vote called", "params", params)
@@ -1293,11 +1292,38 @@ func (d *DPOS) createVoteTransactionData(voter, candidate types.Address, amount 
 	return data
 }
 
-// VoteByAddress handles dpos_vote RPC method with single address parameter
+// VoteByAddress handles dpos_voteByAddress RPC method with single address parameter
 // This method is designed to handle the case where only one address is provided
 // It will use the address as both voter and candidate, with a default amount
-func (d *DPOS) VoteByAddress(ctx context.Context, address string) (*VoteResponse, error) {
-	d.logger.Info("DPoS VoteByAddress called", "address", address)
+func (d *DPOS) VoteByAddress(ctx context.Context, params interface{}) (*VoteResponse, error) {
+	d.logger.Info("DPoS VoteByAddress called", "params", params)
+
+	// Parse parameters
+	var address string
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) == 0 {
+			return &VoteResponse{
+				Success: false,
+				Error:   "address is required",
+			}, nil
+		}
+		if addr, ok := p[0].(string); ok {
+			address = addr
+		} else {
+			return &VoteResponse{
+				Success: false,
+				Error:   "first parameter must be a string address",
+			}, nil
+		}
+	case string:
+		address = p
+	default:
+		return &VoteResponse{
+			Success: false,
+			Error:   "invalid parameter format, expected array with address string",
+		}, nil
+	}
 
 	// Validate address
 	if address == "" {
@@ -1310,62 +1336,40 @@ func (d *DPOS) VoteByAddress(ctx context.Context, address string) (*VoteResponse
 	// Parse address
 	addr := types.StringToAddress(address)
 
-	// Check if address is a validator
-	validators, err := d.store.GetValidators()
+	// Query voting information for this address
+	// Check if address exists in staking info (as validator or voter)
+	stakingInfo, err := d.store.GetStakingInfo()
 	if err != nil {
 		return &VoteResponse{
 			Success: false,
-			Error:   fmt.Sprintf("failed to get validators: %v", err),
+			Error:   fmt.Sprintf("failed to get staking info: %v", err),
 		}, nil
 	}
 
-	isValidator := false
-	for _, v := range validators {
-		if v.Address == addr {
-			isValidator = true
+	// Find voting information for this address
+	var foundStakeInfo *dpos.StakeInfo
+	for _, info := range stakingInfo {
+		// Compare addresses (case-insensitive)
+		if info.Staker == addr || strings.EqualFold(info.Staker.String(), addr.String()) {
+			foundStakeInfo = info
 			break
 		}
 	}
 
-	if !isValidator {
+	if foundStakeInfo == nil {
+		// Address not found in staking info
 		return &VoteResponse{
 			Success: false,
-			Error:   "address is not a validator",
+			Error:   fmt.Sprintf("address %s has no voting/staking information", address),
 		}, nil
 	}
 
-	// Check balance
-	balance, err := d.store.GetBalance(types.Hash{}, addr)
-	if err != nil {
-		return &VoteResponse{
-			Success: false,
-			Error:   fmt.Sprintf("failed to get balance: %v", err),
-		}, nil
-	}
-
-	// Use a default voting amount (1 token = 10^18 wei)
-	defaultAmount := new(big.Int).Mul(big.NewInt(1), new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil))
-
-	if balance.Cmp(defaultAmount) < 0 {
-		return &VoteResponse{
-			Success: false,
-			Error:   "insufficient balance for voting",
-		}, nil
-	}
-
-	// TODO: Implement actual voting logic here
-	// This would typically involve:
-	// 1. Creating a transaction
-	// 2. Adding it to the transaction pool
-	// 3. Waiting for it to be mined
-	// 4. Updating the DPoS state
-
-	// For now, return a simulated success response
+	// Return voting information with details
 	return &VoteResponse{
 		Success:     true,
-		Message:     "Vote operation completed successfully with default amount",
-		TxHash:      "0x" + fmt.Sprintf("%064d", 12345), // Simulated tx hash
-		BlockNumber: 0,                                  // Will be filled when transaction is mined
+		Message:     fmt.Sprintf("Address %s is a validator/staker with amount %s", address, foundStakeInfo.Amount.String()),
+		TxHash:      "", // Not applicable for query operations
+		BlockNumber: 0,  // Not applicable for query operations
 	}, nil
 }
 
