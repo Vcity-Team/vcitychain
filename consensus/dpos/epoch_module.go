@@ -49,7 +49,7 @@ func (d *DPoS) buildEpochLifecycleDependencies() epochmodule.LifecycleDependenci
 			// 🔧 注意：由于执行顺序已调整（先故障检测，后应用恢复提案），
 			// 此时恢复提案还是未应用状态，所以只需要检查未应用的提案即可
 			//
-			// ⚠️ 重要：governanceLoadScheduled 只返回 EffectiveEpoch == currentEpoch && !Applied 的提案，
+			// 重要：governanceLoadScheduled 只返回 EffectiveEpoch == currentEpoch && !Applied 的提案，
 			// 所以已应用的恢复提案（即使 EffectiveEpoch 是之前的 epoch）不会影响当前 epoch 的故障检测。
 			// 例如：如果恢复提案在 epoch 6 应用后，节点在 epoch 7 再次故障，不会因为 epoch 6 的已应用提案而跳过保存故障状态。
 

@@ -1187,7 +1187,7 @@ func (a *dposStoreAdapter) GetStakingInfo() ([]*consensusdpos.StakeInfo, error) 
 		fmt.Printf("DEBUG: GetStakingInfo - GetDPoSState 返回错误: %v\n", err)
 	} else if dposState == nil {
 		fmt.Printf("DEBUG: GetStakingInfo - GetDPoSState 返回 nil，尝试直接通过 GetDPoSEngine 获取\n")
-		// 🆕 如果 GetDPoSState 返回 nil，直接通过 GetDPoSEngine 获取 DPoS 引擎
+		// 如果 GetDPoSState 返回 nil，直接通过 GetDPoSEngine 获取 DPoS 引擎
 		if dposEngine := a.GetDPoSEngine(); dposEngine != nil {
 			fmt.Printf("DEBUG: GetStakingInfo - 成功获取 DPoS 引擎: %T\n", dposEngine)
 			if dpos, ok := dposEngine.(*consensusdpos.DPoS); ok {

@@ -256,7 +256,7 @@ func (d *DPoS) GetValidatorBlockStats(validatorAddress types.Address, epochNumbe
 
 // GetValidatorRewardsInfo 获取验证者奖励信息
 func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumber uint64) map[string]interface{} {
-	// 🆕 添加方法开始的调试日志
+	// 添加方法开始的调试日志
 	d.logger.Debug("🔍 GetValidatorRewardsInfo开始",
 		"validatorAddress", validatorAddress.String(),
 		"epochNumber", epochNumber)
@@ -268,7 +268,7 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 		}
 	}
 
-	// 🆕 添加配置值的调试日志
+	// 添加配置值的调试日志
 	d.logger.Debug("🔍 DPoS配置值调试",
 		"RewardAmount", func() string {
 			if d.config.RewardAmount != nil {
@@ -302,7 +302,7 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 	blocksProduced := blockCounts[validatorAddress]
 	totalBlocks := d.blockTracker.GetTotalEpochBlocks(epochNumber)
 
-	// 🆕 添加出块统计的调试日志
+	// 添加出块统计的调试日志
 	d.logger.Debug("🔍 出块统计调试信息",
 		"epochNumber", epochNumber,
 		"blockCounts", blockCounts,
@@ -403,7 +403,7 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 		insufficientFunds = rewardAccountBalance.Cmp(requiredAmount) < 0
 	}
 
-	// 🆕 添加最终结果的调试日志
+	// 添加最终结果的调试日志
 	d.logger.Debug("🔍 GetValidatorRewardsInfo最终结果",
 		"validatorAddress", validatorAddress.String(),
 		"epochNumber", epochNumber,
@@ -434,7 +434,7 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 		"isActive":             isActive,
 		"insufficientFunds":    insufficientFunds,              // 奖励账户资金是否充足
 		"canDistribute":        !insufficientFunds && isActive, // 是否可以分发奖励
-		"voterRewards":         voterRewards,                   // 🆕 投票者详细奖励分配
+		"voterRewards":         voterRewards,                   // 投票者详细奖励分配
 	}
 }
 

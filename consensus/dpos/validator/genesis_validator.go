@@ -51,7 +51,7 @@ func (v *GenesisValidator) UnmarshalJSON(data []byte) (err error) {
 
 // UnmarshalBLSPublicKey unmarshals the hex encoded BLS public key
 func (v *GenesisValidator) UnmarshalBLSPublicKey() (*bls.PublicKey, error) {
-	// 🆕 添加调试日志
+	// 添加调试日志
 	fmt.Printf("🔍 UnmarshalBLSPublicKey: 开始解析地址=%s\n", v.Address.String())
 	fmt.Printf("🔍 UnmarshalBLSPublicKey: 原始BlsKey长度=%d\n", len(v.BlsKey))
 	fmt.Printf("🔍 UnmarshalBLSPublicKey: 原始BlsKey=%s\n", v.BlsKey)

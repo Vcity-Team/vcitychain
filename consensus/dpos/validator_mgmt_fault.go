@@ -45,7 +45,7 @@ func (d *DPoS) getConfigUint64(keys ...string) uint64 {
 
 // getMissedBlocksPercentage 获取漏块率阈值（基点）
 func (d *DPoS) getMissedBlocksPercentage() uint64 {
-	// 🆕 优先从参数系统读取 dpos_missed_blocks_percentage（经过治理流程修改的值是权威数据源）
+	// 优先从参数系统读取 dpos_missed_blocks_percentage（经过治理流程修改的值是权威数据源）
 	if paramValue, err := d.getCurrentParameterValue("dpos_missed_blocks_percentage"); err == nil {
 		switch v := paramValue.(type) {
 		case uint64:
@@ -80,7 +80,7 @@ func (d *DPoS) getMissedBlocksPercentage() uint64 {
 
 // getMinorOffenseSlashRate 获取轻度违规削减率（基点）
 func (d *DPoS) getMinorOffenseSlashRate() uint64 {
-	// 🆕 优先从参数系统读取 dpos_minor_offense_slash_rate（经过治理流程修改的值是权威数据源）
+	// 优先从参数系统读取 dpos_minor_offense_slash_rate（经过治理流程修改的值是权威数据源）
 	if paramValue, err := d.getCurrentParameterValue("dpos_minor_offense_slash_rate"); err == nil {
 		switch v := paramValue.(type) {
 		case uint64:
@@ -115,7 +115,7 @@ func (d *DPoS) getMinorOffenseSlashRate() uint64 {
 
 // getSevereOffenseSlashRate 获取严重违规削减率（基点）
 func (d *DPoS) getSevereOffenseSlashRate() uint64 {
-	// 🆕 优先从参数系统读取 dpos_severe_offense_slash_rate（经过治理流程修改的值是权威数据源）
+	// 优先从参数系统读取 dpos_severe_offense_slash_rate（经过治理流程修改的值是权威数据源）
 	if paramValue, err := d.getCurrentParameterValue("dpos_severe_offense_slash_rate"); err == nil {
 		switch v := paramValue.(type) {
 		case uint64:
@@ -541,7 +541,7 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 		epochToCheck = endEpoch
 		epochNumberForCheck := epochToCheck + 1
 
-		// ✅ 修复：从该epoch开始区块的ExtraData或数据库获取该epoch的验证者集合
+		// 修复：从该epoch开始区块的ExtraData或数据库获取该epoch的验证者集合
 		validatorsCount := uint64(0)
 		if epochValidators, err := d.getValidatorsForEpoch(epochNumberForCheck); err == nil && len(epochValidators) > 0 {
 			validatorsCount = uint64(len(epochValidators))
@@ -568,7 +568,7 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 			actualBlocks = 0
 			consensusSwitchHeight := d.config.ConsensusSwitchHeight
 
-			// 🆕 修复：正确计算epoch对应的区块范围
+			// 修复：正确计算epoch对应的区块范围
 			epochStartBlock := consensusSwitchHeight + epochToCheck*blocksPerEpoch
 			epochEndBlock := consensusSwitchHeight + (epochToCheck+1)*blocksPerEpoch
 
@@ -583,7 +583,7 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 				}
 
 				if exists && header != nil {
-					// 🆕 修复：通过Miner字段检查出块者
+					// 修复：通过Miner字段检查出块者
 					if len(header.Miner) == 20 {
 						minerAddr := types.Address(header.Miner)
 						if minerAddr == validatorAddr {
@@ -733,13 +733,13 @@ func (d *DPoS) getEpochValidatorsFromDatabase() (validator.AccountSet, error) {
 
 	validators, err := d.state.StakeStore.GetEpochValidators()
 	if err != nil {
-		// 🆕 使用日志频率限制，10秒一次
+		// 使用日志频率限制，10秒一次
 		d.logOnceWithInterval("get_epoch_validators_failed", 10*time.Second, "warn",
 			"⚠️ 从数据库获取epoch验证者失败", "error", err)
 		return nil, err
 	}
 
-	// 🆕 使用日志频率限制，10秒一次
+	// 使用日志频率限制，10秒一次
 	d.logOnceWithInterval("get_epoch_validators_success", 10*time.Second, "debug",
 		"✅ 从数据库获取epoch验证者成功", "count", len(validators))
 	return validators, nil
@@ -794,7 +794,7 @@ func (d *DPoS) executeSlashing(
 		return fmt.Errorf("state store not available")
 	}
 
-	// 🆕 幂等性检查：检查是否已经执行过该区块的消减
+	// 幂等性检查：检查是否已经执行过该区块的消减
 	if hasHistory, err := d.state.StakeStore.HasSlashingHistory(validatorAddr, blockNumber); err != nil {
 		d.logger.Warn("⚠️ 检查消减历史失败，继续执行（可能重复）",
 			"validator", validatorAddr.String(),
@@ -931,7 +931,7 @@ func (d *DPoS) executeSlashing(
 					recordNewAmount,
 					stake.Amount,
 					slashingRecord,
-					dbTx, // 🆕 传入外部事务，避免嵌套事务
+					dbTx, // 传入外部事务，避免嵌套事务
 				); err != nil {
 					d.logger.Warn("⚠️ 更新质押记录失败",
 						"voter", voterAddr.String(),
@@ -954,7 +954,7 @@ func (d *DPoS) executeSlashing(
 			missedBlocks,
 			missedBlocksPercentage,
 			doubleSigningHeight,
-			dbTx, // 🆕 传入外部事务，避免嵌套事务
+			dbTx, // 传入外部事务，避免嵌套事务
 		); err != nil {
 			d.logger.Warn("⚠️ 更新投票者信息失败",
 				"voter", voterAddr.String(),
@@ -1079,7 +1079,7 @@ func (d *DPoS) updateVoterVoteAmountForValidator(
 	missedBlocks uint64,
 	missedBlocksPercentage uint64,
 	doubleSigningHeight uint64,
-	dbTx *bolt.Tx, // 🆕 使用外部事务，避免嵌套事务
+	dbTx *bolt.Tx, // 使用外部事务，避免嵌套事务
 ) error {
 	// 1. 获取 VoterInfo（使用外部事务）
 	voterInfo, err := d.state.StakeStore.getVoterInfo(voterAddr, dbTx)
@@ -1142,7 +1142,7 @@ func (d *DPoS) updateStakingInfoAfterSlashing(
 	newAmount *big.Int,
 	oldAmount *big.Int,
 	slashingRecord *SlashingRecord,
-	dbTx *bolt.Tx, // 🆕 使用外部事务，避免嵌套事务
+	dbTx *bolt.Tx, // 使用外部事务，避免嵌套事务
 ) error {
 	// 如果 dbTx 为 nil，开启新事务（兼容性）
 	if dbTx == nil {
@@ -1204,7 +1204,7 @@ func (d *DPoS) updateStakingInfoAfterSlashing(
 		}
 	}
 
-	// 🆕 如果使用的是外部事务，不在这里提交（由调用者提交）
+	// 如果使用的是外部事务，不在这里提交（由调用者提交）
 	// 如果开启的是新事务，需要提交（但这种情况不应该发生，因为现在总是传入事务）
 	// 注意：这里不提交外部事务，由 executeSlashing 统一提交
 

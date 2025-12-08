@@ -44,7 +44,7 @@ func (p *serverParams) initRawParams() error {
 		return err
 	}
 
-	// 🆕 解析 London Fork 配置（必须在 initGenesisConfig 之前）
+	// 解析 London Fork 配置（必须在 initGenesisConfig 之前）
 	if err := p.initLondonForkConfig(); err != nil {
 		return err
 	}
@@ -86,14 +86,14 @@ func (p *serverParams) initLogFileLocation() {
 	}
 }
 
-// 🆕 新增：初始化共识切换高度
+// 新增：初始化共识切换高度
 func (p *serverParams) initConsensusSwitchHeight() {
 	// 如果命令行参数设置了共识切换高度，则使用该值
 	// 如果为0，表示不进行共识切换
 	// 不设置默认值，保持用户的选择
 }
 
-// 🆕 新增：初始化DPoS最小质押门槛
+// 新增：初始化DPoS最小质押门槛
 func (p *serverParams) initDPoSDelegateThreshold() {
 	// 从配置文件读取DPoS最小质押门槛
 	if p.rawConfig.DPoSDelegateThreshold != "" {
@@ -109,7 +109,7 @@ func (p *serverParams) initDPoSDelegateThreshold() {
 	}
 }
 
-// 🆕 新增：初始化DPoS配置
+// 新增：初始化DPoS配置
 func (p *serverParams) initDPoSConfig() {
 	// 初始化DPoS验证者数量
 	p.dposValidatorsCount = p.rawConfig.DPoSValidatorsCount
@@ -166,7 +166,7 @@ func (p *serverParams) initSecretsConfig() error {
 	return nil
 }
 
-// 🆕 initLondonForkConfig 解析 London Fork 配置（BaseFee 和 BurnContract）
+// initLondonForkConfig 解析 London Fork 配置（BaseFee 和 BurnContract）
 func (p *serverParams) initLondonForkConfig() error {
 	// 解析 BaseFee 配置
 	if p.rawConfig.BaseFeeConfig != "" {
@@ -284,14 +284,14 @@ func (p *serverParams) initGenesisConfig() error {
 		p.genesisConfig.Params.BlockGasTarget = p.blockGasTarget
 	}
 
-	// 🆕 如果 yaml 配置了 BaseFee，则覆盖 genesis.json 中的值（不影响 genesis hash）
+	// 如果 yaml 配置了 BaseFee，则覆盖 genesis.json 中的值（不影响 genesis hash）
 	if p.parsedBaseFee != nil {
 		p.genesisConfig.Genesis.BaseFee = p.parsedBaseFee.baseFee
 		p.genesisConfig.Genesis.BaseFeeEM = p.parsedBaseFee.baseFeeEM
 		p.genesisConfig.Genesis.BaseFeeChangeDenom = p.parsedBaseFee.baseFeeChangeDenom
 	}
 
-	// 🆕 如果 yaml 配置了 BurnContract，则覆盖 genesis.json 中的值（不影响 genesis hash）
+	// 如果 yaml 配置了 BurnContract，则覆盖 genesis.json 中的值（不影响 genesis hash）
 	if p.parsedBurnContract != nil {
 		if p.genesisConfig.Params.BurnContract == nil {
 			p.genesisConfig.Params.BurnContract = make(map[uint64]types.Address)

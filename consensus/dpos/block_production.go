@@ -58,7 +58,7 @@ func (r *dposRuntime) startBlockProduction() error {
 
 // continuousBlockMonitoring 持续区块监测
 func (r *dposRuntime) continuousBlockMonitoring() {
-	// 🆕 关键修复：在主循环中周期性更新currentSlot
+	// 关键修复：在主循环中周期性更新currentSlot
 	// 每隔500ms检查一次，确保时间驱动的slot切换正常工作
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -69,7 +69,7 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 			r.logger.Info("🛑 停止区块监测")
 			return
 		case <-ticker.C:
-			// 🆕 关键：定期更新currentDelegateIndex，确保轮流出块
+			// 关键：定期更新currentDelegateIndex，确保轮流出块
 			// 使用静默模式，不打印日志（出块时会调用并打印日志）
 			r.updateRoundSilent()
 		default:
@@ -77,11 +77,11 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 			shouldProduce := r.shouldProduceBlockNow()
 
 			if shouldProduce {
-				// 🆕 优化：立即调用produceBlock，不阻塞出块流程
+				// 优化：立即调用produceBlock，不阻塞出块流程
 				if err := r.produceBlock(); err != nil {
 					r.logger.Error("出块失败", "error", err)
 				} else {
-					// 🆕 异步收集日志信息（不阻塞出块流程）
+					// 异步收集日志信息（不阻塞出块流程）
 					go func() {
 						var genesisStr string
 						var validators []string
@@ -112,7 +112,7 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 					}()
 				}
 			} else {
-				// 🆕 添加为什么不应该出块的详细日志
+				// 添加为什么不应该出块的详细日志
 				r.logOnceWithInterval("should_not_produce_debug", 2*time.Second, "debug",
 					"⏭️ 不应该出块的原因分析",
 					"shouldProduceBlockNow", shouldProduce,
@@ -133,9 +133,9 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 }
 
 // produceBlock 生产区块
-// 🆕 方案1+2：缩小锁的粒度，使用读写锁
+// 方案1+2：缩小锁的粒度，使用读写锁
 func (r *dposRuntime) produceBlock() error {
-	// 🆕 方案1：将slot检查移到锁外，使用读锁快速检查
+	// 方案1：将slot检查移到锁外，使用读锁快速检查
 	var currentSlot int = -1
 	if r.config.blockScheduler != nil {
 		now := time.Now()
@@ -144,7 +144,7 @@ func (r *dposRuntime) produceBlock() error {
 		timeSinceGenesis := now.Sub(genesisTime)
 		currentSlot = int(timeSinceGenesis / blockWindow)
 
-		// 🆕 使用读锁快速检查
+		// 使用读锁快速检查
 		r.lock.RLock()
 		lastSlot := r.lastProducedSlot
 		r.lock.RUnlock()
@@ -246,7 +246,7 @@ func (r *dposRuntime) produceBlock() error {
 
 	// 添加调试日志 - 只有当本节点是当前受托人时才打印
 	if currentDelegate == keyAddr {
-		// 🆕 获取验证者数量（从内存或数据库）
+		// 获取验证者数量（从内存或数据库）
 		delegatesCount := 0
 		r.lock.RLock()
 		if r.delegates != nil {
@@ -265,7 +265,7 @@ func (r *dposRuntime) produceBlock() error {
 	// 计算下一个要生产的区块号
 	nextBlockNumber := currentBlock.Number + 1
 
-	// 🆕 保存构建开始时的slot和时间（用于超时检查，TRON机制）
+	// 保存构建开始时的slot和时间（用于超时检查，TRON机制）
 	var buildStartSlot int = -1
 	var buildStartTime time.Time
 	if r.config.blockScheduler != nil {
@@ -302,9 +302,9 @@ func (r *dposRuntime) produceBlock() error {
 		return nil
 	}
 
-	// 🆕 方案1：构建区块和签名收集不在锁内（避免阻塞）
+	// 方案1：构建区块和签名收集不在锁内（避免阻塞）
 	// 构建新区块（无锁，不阻塞）
-	// 🆕 记录区块生产开始时间（用于统计生产耗时）
+	// 记录区块生产开始时间（用于统计生产耗时）
 	r.config.blockchain.SetBlockProductionStartTime()
 	r.logger.Info("🏗️ [produceBlock] 开始构建新区块", "blockNumber", nextBlockNumber, "buildStartSlot", buildStartSlot)
 	block, err := r.buildBlock()
@@ -314,7 +314,7 @@ func (r *dposRuntime) produceBlock() error {
 	}
 	r.logger.Info("✅ [produceBlock] buildBlock完成", "blockNumber", nextBlockNumber, "blockHash", block.Block.Hash().String()[:16], "txs", len(block.Block.Transactions))
 
-	// 🆕 记录 buildBlock 返回后的实际耗时（包括等待签名的时间）
+	// 记录 buildBlock 返回后的实际耗时（包括等待签名的时间）
 	buildEndTime := time.Now()
 	totalBuildDuration := buildEndTime.Sub(buildStartTime)
 	r.logger.Info("📊 [produceBlock] buildBlock返回后的总耗时统计",
@@ -372,7 +372,7 @@ func (r *dposRuntime) produceBlock() error {
 			"currentSlotAfterBuild", currentSlotAfterBuild,
 			"buildDuration", buildDuration.String())
 	} else {
-		// 🆕 记录为什么跳过了slot检查
+		// 记录为什么跳过了slot检查
 		reason := "未知原因"
 		if r.config.blockScheduler == nil {
 			reason = "blockScheduler为nil"
@@ -427,10 +427,10 @@ func (r *dposRuntime) produceBlock() error {
 		"timestamp", block.Block.Header.Timestamp,
 		"delegate", r.config.Key.Address().String()[:16])
 
-	// 🆕 方案1：只在更新状态时使用写锁（时间很短）
+	// 方案1：只在更新状态时使用写锁（时间很短）
 	if r.config.blockScheduler != nil && currentSlot >= 0 {
 		r.lock.Lock()
-		// 🆕 再次检查（防止并发问题）
+		// 再次检查（防止并发问题）
 		now := time.Now()
 		genesisTime := r.config.blockScheduler.GetGenesisTime()
 		blockWindow := r.config.blockScheduler.GetBlockWindow()

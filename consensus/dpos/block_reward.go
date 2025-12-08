@@ -34,7 +34,7 @@ func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64, c
 		return nil
 	}
 
-	// 🆕 关键修复：在计算奖励之前，先记录epoch结束区块本身的出块
+	// 关键修复：在计算奖励之前，先记录epoch结束区块本身的出块
 	// 因为该区块还没有被处理，所以出块记录还没有被记录到blockTracker中
 	if dposInstance.blockTracker != nil {
 		blockTime := time.Now()

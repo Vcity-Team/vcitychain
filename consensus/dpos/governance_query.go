@@ -57,7 +57,7 @@ func (d *DPoS) GetVotableCurrentParameters() map[string]*ParameterInfo {
 		// 创建副本
 		infoCopy := *info
 
-		// 🆕 添加当前值
+		// 添加当前值
 		d.parameterValuesMutex.RLock()
 		if currentValue, exists := d.parameterCurrentValues[name]; exists {
 			infoCopy.CurrentValue = currentValue
@@ -69,7 +69,7 @@ func (d *DPoS) GetVotableCurrentParameters() map[string]*ParameterInfo {
 			var defaultValue interface{}
 			var err error
 
-			// 🆕 优先从数据库（ParameterStore）读取（经过治理流程修改的值是权威数据源）
+			// 优先从数据库（ParameterStore）读取（经过治理流程修改的值是权威数据源）
 			if d.state != nil && d.state.ParameterStore != nil {
 				if dbValue, dbErr := d.state.ParameterStore.GetParameterValue(name); dbErr == nil {
 					infoCopy.CurrentValue = dbValue

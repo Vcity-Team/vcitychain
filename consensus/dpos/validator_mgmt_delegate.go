@@ -23,11 +23,11 @@ import (
 func (d *DPoS) initializeDelegates() error {
 	d.delegates = make(validator.AccountSet, 0, d.config.DelegateCount)
 
-	// 🆕 初始化故障检测相关字段
+	// 初始化故障检测相关字段
 	d.faultyValidators = make(map[types.Address]bool)
 	d.missedBlocksCount = make(map[types.Address]uint64)
 
-	// 🆕 第一层保护：从数据库加载 currentEpoch（在重置为0之前）
+	// 第一层保护：从数据库加载 currentEpoch（在重置为0之前）
 	if d.state != nil && d.state.StakeStore != nil {
 		if savedEpoch, err := d.state.StakeStore.LoadCurrentEpoch(); err == nil {
 			d.currentEpoch = savedEpoch
@@ -45,7 +45,7 @@ func (d *DPoS) initializeDelegates() error {
 		d.logger.Warn("⚠️ StakeStore不可用，currentEpoch使用默认值0")
 	}
 
-	// 🆕 显著日志：显示当前配置
+	// 显著日志：显示当前配置
 	d.logger.Debug("🚀 ===== DPoS验证者初始化开始 =====")
 	d.logger.Debug("📋 当前配置信息",
 		"configDelegateCount", d.config.DelegateCount,
@@ -53,10 +53,10 @@ func (d *DPoS) initializeDelegates() error {
 		"dposValidatorsCount", d.config.DPoSValidatorsCount,
 		"currentEpoch", d.currentEpoch)
 
-	// 🆕 首先尝试从数据库读取受托人（真正用于出块）
+	// 首先尝试从数据库读取受托人（真正用于出块）
 	if d.state != nil && d.state.StakeStore != nil {
 		d.logger.Info("🔍 开始从数据库读取验证者信息...")
-		// 🆕 使用公共函数获取排序和限制后的验证者（包含故障过滤）
+		// 使用公共函数获取排序和限制后的验证者（包含故障过滤）
 		dbValidators, err := d.GetSortedValidatorsWithLimit()
 		if err != nil {
 			d.logger.Warn("⚠️ 从数据库读取受托人失败，将使用创世文件", "error", err)
@@ -65,17 +65,17 @@ func (d *DPoS) initializeDelegates() error {
 
 			d.logger.Info("📊 数据库验证者详细信息:")
 			for i, validator := range dbValidators {
-				// 🆕 获取验证者的故障标志信息
+				// 获取验证者的故障标志信息
 				faultInfo := d.getValidatorFaultInfo(validator.Address)
 				d.logger.Info("👤 验证者信息",
 					"index", i+1,
 					"address", validator.Address.String(),
 					"votingPower", validator.VotingPower.String(),
 					"isActive", validator.IsActive,
-					"faultFlag", faultInfo) // 🆕 添加故障标志信息
+					"faultFlag", faultInfo) // 添加故障标志信息
 			}
 
-			// 🆕 按权重倒序排序
+			// 按权重倒序排序
 			d.logger.Info("🔄 开始按权重倒序排序验证者...")
 			sort.Slice(dbValidators, func(i, j int) bool {
 				// 1. 首先按票数降序排序
@@ -87,7 +87,7 @@ func (d *DPoS) initializeDelegates() error {
 				return bytes.Compare(dbValidators[i].Address[:], dbValidators[j].Address[:]) < 0
 			})
 
-			// 🆕 显著日志：显示排序后的验证者
+			// 显著日志：显示排序后的验证者
 			d.logger.Info("📈 排序后的验证者列表:")
 			for i, validator := range dbValidators {
 				d.logger.Info("🏆 排序后验证者",
@@ -96,7 +96,7 @@ func (d *DPoS) initializeDelegates() error {
 					"votingPower", validator.VotingPower.String())
 			}
 
-			// 🆕 显著日志：显示截取逻辑
+			// 显著日志：显示截取逻辑
 			maxDelegates := int(d.config.DPoSValidatorsCount)
 			if maxDelegates == 0 {
 				maxDelegates = int(d.config.DelegateCount) // 回退到旧配置
@@ -129,7 +129,7 @@ func (d *DPoS) initializeDelegates() error {
 			d.logger.Info("✅ 验证者集合已从数据库加载并设置到内存",
 				"最终数量", len(d.delegates))
 
-			// 🆕 初始化创世验证者映射（从创世块或配置）
+			// 初始化创世验证者映射（从创世块或配置）
 			d.initializeGenesisValidatorsMap()
 
 			return nil
@@ -154,7 +154,7 @@ func (d *DPoS) initializeDelegates() error {
 			}
 			d.delegates = append(d.delegates, delegate)
 		}
-		// 🆕 初始化创世验证者映射（从配置）
+		// 初始化创世验证者映射（从配置）
 		d.initializeGenesisValidatorsMap()
 	}
 
@@ -225,7 +225,7 @@ func (d *DPoS) getDelegatesFromState(blockNumber uint64) (validator.AccountSet, 
 		"stateIsNil", d.state == nil,
 		"stakeStoreIsNil", d.state != nil && d.state.StakeStore == nil)
 
-	// 🆕 新增：检查是否在共识切换高度之前，如果是则跳过历史验证者集合获取
+	// 新增：检查是否在共识切换高度之前，如果是则跳过历史验证者集合获取
 	if d.config.ConsensusSwitchHeight > 0 && blockNumber < d.config.ConsensusSwitchHeight {
 		d.logger.Debug("🔄 区块在共识切换高度之前，跳过历史验证者集合获取",
 			"blockNumber", blockNumber,
@@ -236,7 +236,7 @@ func (d *DPoS) getDelegatesFromState(blockNumber uint64) (validator.AccountSet, 
 		return d.getGenesisValidators(), nil
 	}
 
-	// 🆕 关键修复：首先尝试从历史数据获取验证者集合
+	// 关键修复：首先尝试从历史数据获取验证者集合
 	if d.state != nil && d.state.StakeStore != nil {
 		d.logger.Debug("🔍 开始数据库事务", "blockNumber", blockNumber)
 
@@ -300,7 +300,7 @@ func (d *DPoS) getDelegatesFromState(blockNumber uint64) (validator.AccountSet, 
 
 // getDelegatesFromStateWithTx 从状态获取历史验证者集合（带事务）
 func (d *DPoS) getDelegatesFromStateWithTx(blockNumber uint64, dbTx *bbolt.Tx) (validator.AccountSet, error) {
-	// 🆕 修复：简化实现，避免数据库事务死锁
+	// 修复：简化实现，避免数据库事务死锁
 	// 直接调用内存版本，避免复杂的数据库操作
 	return d.getDelegatesFromState(blockNumber)
 }
@@ -428,7 +428,7 @@ func (d *DPoS) IsGenesisValidator(address types.Address) bool {
 		d.lock.RUnlock()
 	}
 
-	// 🆕 添加调试日志
+	// 添加调试日志
 	d.logger.Info("🔍 IsGenesisValidator检查",
 		"address", address.String(),
 		"isGenesis", isGenesis,
@@ -578,14 +578,14 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 	}
 	d.logger.Info("✅ 受托人未注册，可以继续处理")
 
-	// 🆕 冻结资金（从账户余额中扣除，但不转账，而是冻结）
+	// 冻结资金（从账户余额中扣除，但不转账，而是冻结）
 	frozenAt := uint64(time.Now().Unix())
 	d.logger.Info("❄️ 开始冻结资金",
 		"address", regInfo.Registrant.String(),
 		"amount", regInfo.Deposit.String(),
 		"frozenAt", frozenAt)
 
-	// 🆕 从账户余额中扣除冻结金额（如果 Executor 可用）
+	// 从账户余额中扣除冻结金额（如果 Executor 可用）
 	if d.config != nil && d.config.Executor != nil && d.config.Blockchain != nil {
 		// 获取当前区块头
 		currentHeader := d.config.Blockchain.Header()
@@ -666,9 +666,9 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 		TotalVotes:          big.NewInt(0),
 		IsActive:            false,
 		LastVoteTime:        0,
-		FrozenAt:            frozenAt, // 🆕 冻结时间
-		UnfreezeAt:          0,        // 🆕 未解冻
-		UnfreezeAvailableAt: 0,        // 🆕 未解冻
+		FrozenAt:            frozenAt, // 冻结时间
+		UnfreezeAt:          0,        // 未解冻
+		UnfreezeAvailableAt: 0,        // 未解冻
 	}
 	d.logger.Info("✅ 受托人候选人对象创建完成")
 
@@ -986,11 +986,11 @@ func (d *DPoS) IsDelegateRegistered(address types.Address) bool {
 }
 
 // IsDelegateCandidate 检查受托人是否为候选人状态（可以接受投票）
-// 🆕 创世验证者可以直接被投票，无需注册
+// 创世验证者可以直接被投票，无需注册
 func (d *DPoS) IsDelegateCandidate(address types.Address) bool {
 	d.logger.Info("🔍 检查受托人候选人状态", "address", address.String())
 
-	// 🆕 创世验证者可以直接被投票，无需检查注册状态
+	// 创世验证者可以直接被投票，无需检查注册状态
 	if d.isGenesisValidator(address) {
 		d.logger.Info("✅ 受托人是创世验证者，可以直接接受投票",
 			"address", address.String())
@@ -1140,10 +1140,10 @@ func (d *DPoS) RegisterDelegateWithKeyAndChainID(registrant types.Address, name,
 
 	// 根据是否有私钥决定是创建交易还是直接更新状态
 	if privateKey != "" {
-		// 🆕 有私钥，创建交易
+		// 有私钥，创建交易
 		return d.createDelegateRegistrationTransactionWithChainID(registrant, name, website, description, depositAmount, privateKey, chainID)
 	} else {
-		// 🆕 没有私钥，无法创建交易
+		// 没有私钥，无法创建交易
 		d.logger.Error("❌ 无私钥提供，无法创建受托人注册交易")
 		return fmt.Errorf("private key is required for delegate registration")
 	}
@@ -1165,7 +1165,7 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 		"deposit", depositAmount.String(),
 		"chainID", chainID)
 
-	// 🆕 从私钥推导地址，确保地址和私钥匹配
+	// 从私钥推导地址，确保地址和私钥匹配
 	privateKeyBytes, err := hex.DecodeString(strings.TrimPrefix(privateKey, "0x"))
 	if err != nil {
 		return fmt.Errorf("failed to decode private key: %w", err)
@@ -1411,7 +1411,7 @@ func (d *DPoS) signTransactionWithChainID(tx *types.Transaction, expectedAddr ty
 }
 
 // GetDelegateRegistrations 获取所有受托人注册信息
-// 🆕 修改：返回所有验证人（包括非活跃的），而不仅仅是出块的验证人
+// 修改：返回所有验证人（包括非活跃的），而不仅仅是出块的验证人
 func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 	if d.state == nil || d.state.RegistrationStore == nil {
 		return nil, fmt.Errorf("registration store not available")
@@ -1589,7 +1589,7 @@ func (d *DPoS) getGenesisValidatorsAsRegistrations() []*DelegateRegistration {
 // getDelegateDepositAmount 获取受托人保证金金额
 // 注意：保证金金额统一使用 dpos_delegate_threshold（MinVotingPower），Tron 只有一个门槛值
 func (d *DPoS) getDelegateDepositAmount() *big.Int {
-	// 🆕 优先从参数系统读取 dpos_delegate_threshold（经过治理流程修改的值是权威数据源）
+	// 优先从参数系统读取 dpos_delegate_threshold（经过治理流程修改的值是权威数据源）
 	if paramValue, err := d.getCurrentParameterValue("dpos_delegate_threshold"); err == nil {
 		switch v := paramValue.(type) {
 		case string:
@@ -1657,7 +1657,7 @@ func (d *DPoS) WithdrawDelegate(address types.Address) error {
 
 	// 2. 检查是否满足最小冻结期要求
 	currentTime := uint64(time.Now().Unix())
-	// 🆕 优先从参数系统读取 min_freeze_period（经过治理流程修改的值是权威数据源）
+	// 优先从参数系统读取 min_freeze_period（经过治理流程修改的值是权威数据源）
 	var minFreezePeriod uint64
 	if paramValue, err := d.getCurrentParameterValue("min_freeze_period"); err == nil {
 		switch v := paramValue.(type) {
@@ -1696,7 +1696,7 @@ func (d *DPoS) WithdrawDelegate(address types.Address) error {
 
 	// 3. 执行解冻（直接解冻，进入锁定期）
 	unfreezeAt := currentTime
-	// 🆕 优先从参数系统读取 unfreeze_lock_period（经过治理流程修改的值是权威数据源）
+	// 优先从参数系统读取 unfreeze_lock_period（经过治理流程修改的值是权威数据源）
 	var unfreezeLockPeriod uint64
 	if paramValue, err := d.getCurrentParameterValue("unfreeze_lock_period"); err == nil {
 		switch v := paramValue.(type) {
@@ -1806,7 +1806,7 @@ func (d *DPoS) updateDelegates(block *types.FullBlock) error {
 func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 	d.logger.Info("🔄 updateDelegatesInternal called", "block", block, "currentDelegatesCount", len(d.delegates))
 
-	// 🆕 方案1+方案2：检查是否需要重新排序验证者集合
+	// 方案1+方案2：检查是否需要重新排序验证者集合
 	if d.pendingValidatorUpdate {
 		d.logger.Info("🔄 轮次边界：重新排序验证者集合")
 
@@ -1830,12 +1830,12 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 				"isActive", delegate.IsActive)
 		}
 
-		// 🆕 已删除 currentDelegateIndex 的重新计算
+		// 已删除 currentDelegateIndex 的重新计算
 		// 现在完全通过 getCurrentDelegate() 基于时间slot实时计算
 		// 只同步验证者集合
 		if d.runtime != nil {
 			if d.runtime.lock.TryLock() {
-				// 🆕 关键修复：同步重新排序后的验证者集合到runtime
+				// 关键修复：同步重新排序后的验证者集合到runtime
 				d.logger.Info("🔄 同步重新排序后的验证者集合到runtime")
 				d.runtime.delegates = make(validator.AccountSet, len(d.delegates))
 				copy(d.runtime.delegates, d.delegates)
@@ -1849,10 +1849,10 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 		}
 	}
 
-	// 🆕 落盘时：直接保存当前受托人集合，不进行排名和截取
+	// 落盘时：直接保存当前受托人集合，不进行排名和截取
 	d.logger.Debug("💾 落盘时：直接保存当前受托人集合，不进行排名和截取")
 
-	// 🆕 详细记录要落盘的见证人信息
+	// 详细记录要落盘的见证人信息
 	d.logger.Info("📋 准备落盘的见证人详情:")
 	for i, delegate := range d.delegates {
 		d.logger.Info("👤 见证人详情",
@@ -1873,7 +1873,7 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 	// 直接保存当前的 d.delegates 到数据库，不改变受托人集合
 	// 如果是在投票处理过程中，只更新被投票的验证者
 	if d.pendingValidatorUpdate && d.lastVotedDelegates != nil && len(d.lastVotedDelegates) > 0 {
-		// 🆕 修复：遍历所有被投票的验证者，逐个更新
+		// 修复：遍历所有被投票的验证者，逐个更新
 		affectedCount := 0
 		for targetDelegate := range d.lastVotedDelegates {
 			d.logger.Info("🎯 投票处理中，更新被投票的验证者", "targetDelegate", targetDelegate.String())
@@ -1884,7 +1884,7 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 			affectedCount++
 		}
 		d.logger.Info("✅ 已更新所有被投票的验证者", "affectedCount", affectedCount, "totalVotedDelegates", len(d.lastVotedDelegates))
-		// 🆕 更新完成后清空集合
+		// 更新完成后清空集合
 		d.lastVotedDelegates = nil
 	} else {
 		// 正常情况，保存所有验证者

@@ -113,7 +113,7 @@ func (m *Manager) HydrateProposal(proposalID string) (*core.ParameterProposal, e
 
 // LoadScheduled returns proposals scheduled for the given epoch.
 func (m *Manager) LoadScheduled(epochNumber uint64) []*core.ParameterProposal {
-	// 🔍 添加日志，跟踪传入的epoch参数
+	// 添加日志，跟踪传入的epoch参数
 	m.logger.Info("🔍🔍🔍 [Manager.LoadScheduled] 开始查询待应用提案",
 		"epochNumber", epochNumber,
 		"说明", "查询effectiveEpoch等于此值的待应用提案")

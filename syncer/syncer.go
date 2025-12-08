@@ -13,7 +13,7 @@ import (
 	"github.com/hashicorp/go-hclog"
 	"github.com/libp2p/go-libp2p/core/peer"
 
-	"os" // 🆕 用于 os.Exit(1)
+	"os" // 用于 os.Exit(1)
 )
 
 const (
@@ -42,10 +42,10 @@ type syncer struct {
 	// Channel to notify Sync that a new status arrived
 	newStatusCh chan struct{}
 
-	// 🆕 新增：共识切换高度
+	// 新增：共识切换高度
 	consensusSwitchHeight uint64
 
-	// 🆕 交易去重机制
+	// 交易去重机制
 	processedTxs map[types.Hash]bool // 已处理的交易哈希
 	txMutex      sync.RWMutex        // 保护交易哈希映射的锁
 }
@@ -68,7 +68,7 @@ func NewSyncer(
 		peerMap:               new(PeerMap),
 		consensusSwitchHeight: consensusSwitchHeight,
 
-		// 🆕 初始化交易去重机制
+		// 初始化交易去重机制
 		processedTxs: make(map[types.Hash]bool),
 	}
 }
@@ -313,7 +313,7 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			continue
 		}
 
-		// 🆕 添加真正开始同步的详细日志
+		// 添加真正开始同步的详细日志
 		s.logger.Debug("🚀 开始同步区块",
 			"peer", bestPeer.ID.String(),
 			"peerNumber", bestPeer.Number,
@@ -454,7 +454,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				continue
 			}
 
-			// 🆕 对区块中的交易进行去重检查
+			// 对区块中的交易进行去重检查
 			if len(block.Transactions) > 0 {
 				filteredTransactions := s.filterProcessedTransactions(block.Transactions)
 
@@ -482,7 +482,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
 				s.logger.Error("区块验证失败", "peer", peerID.String(), "区块号", block.Number(), "error", err)
 
-				// 🆕 区块验证失败时立即退出程序
+				// 区块验证失败时立即退出程序
 				s.logger.Error("💀 区块验证失败，程序将立即退出")
 				os.Exit(1)
 			}
@@ -498,7 +498,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 			s.logger.Debug("✅ 区块同步成功", "peer", peerID.String(), "区块号", block.Number(), "哈希", block.Hash().String()[:16], "交易数", len(block.Transactions))
 			shouldTerminate = newBlockCallback(fullBlock)
 
-			// 🆕 关键：更新localLatest！
+			// 关键：更新localLatest！
 			lastReceivedNumber = block.Number()
 			localLatest = block.Number() // 更新本地最新，确保期望值正确
 		case <-time.After(s.blockTimeout):
@@ -543,14 +543,14 @@ func (s *syncer) isDPoSTransitionHeight(blockNumber uint64) bool {
 	return false
 }
 
-// 🆕 检查交易是否已处理
+// 检查交易是否已处理
 func (s *syncer) isTransactionProcessed(txHash types.Hash) bool {
 	s.txMutex.RLock()
 	defer s.txMutex.RUnlock()
 	return s.processedTxs[txHash]
 }
 
-// 🆕 标记交易为已处理
+// 标记交易为已处理
 func (s *syncer) markTransactionProcessed(txHash types.Hash) {
 	s.txMutex.Lock()
 	defer s.txMutex.Unlock()
@@ -558,7 +558,7 @@ func (s *syncer) markTransactionProcessed(txHash types.Hash) {
 	s.logger.Debug("🔍 标记交易为已处理", "txHash", txHash.String())
 }
 
-// 🆕 清理过期的交易哈希（防止内存泄漏）
+// 清理过期的交易哈希（防止内存泄漏）
 func (s *syncer) cleanupProcessedTxs() {
 	s.txMutex.Lock()
 	defer s.txMutex.Unlock()
@@ -570,7 +570,7 @@ func (s *syncer) cleanupProcessedTxs() {
 	}
 }
 
-// 🆕 过滤已处理的交易
+// 过滤已处理的交易
 func (s *syncer) filterProcessedTransactions(transactions []*types.Transaction) []*types.Transaction {
 	var filtered []*types.Transaction
 	duplicateCount := 0

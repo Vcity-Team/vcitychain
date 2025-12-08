@@ -333,7 +333,7 @@ type DPoS struct {
 	faultyValidators  map[types.Address]bool
 	missedBlocksCount map[types.Address]uint64
 
-	// 🆕 最后投票的验证者地址集合（支持多个验证者）
+	// 最后投票的验证者地址集合（支持多个验证者）
 	lastVotedDelegates map[types.Address]bool
 
 	// 奖励分配信息
@@ -566,7 +566,7 @@ func (d *DPoS) Start() error {
 		d.logger.Warn("transaction pool not available, cannot set sealing state")
 	}
 
-	// 🆕 3. 先同步获取BLS公钥（确保网络集成层已就绪）
+	// 3. 先同步获取BLS公钥（确保网络集成层已就绪）
 	d.logger.Info("🔑 开始同步获取BLS公钥...")
 	if err := d.syncLoadBLSKeys(); err != nil {
 		d.logger.Error("❌ BLS公钥同步获取失败", "error", err)
@@ -574,10 +574,10 @@ func (d *DPoS) Start() error {
 	}
 	d.logger.Info("✅ BLS公钥同步获取完成")
 
-	// 🆕 4. 启动syncer（BLS公钥加载完成后）
+	// 4. 启动syncer（BLS公钥加载完成后）
 	d.logger.Info("🌐 开始启动syncer...")
 	if err := d.syncer.Start(); err != nil {
-		// 🆕 检查是否是topic冲突错误，如果是则忽略
+		// 检查是否是topic冲突错误，如果是则忽略
 		if strings.Contains(err.Error(), "topic already exists") {
 			d.logger.Warn("⚠️ syncer启动遇到topic冲突，但继续启动DPoS runtime", "error", err)
 		} else {
@@ -590,7 +590,7 @@ func (d *DPoS) Start() error {
 
 	// sync concurrently, retrying indefinitely
 	go common.RetryForever(context.Background(), time.Second, func(context.Context) error {
-		// 🆕 在区块同步前检查BLS公钥是否加载完成
+		// 在区块同步前检查BLS公钥是否加载完成
 		if err := d.waitForBLSKeysLoaded(); err != nil {
 			d.logger.Warn("⚠️ 等待BLS公钥加载完成失败，继续尝试同步", "error", err)
 		}
@@ -617,7 +617,7 @@ func (d *DPoS) Start() error {
 			return fmt.Errorf("DPoS runtime not properly initialized: Key is nil")
 		}
 
-		// 🆕 详细检查runtime状态
+		// 详细检查runtime状态
 		d.logger.Info("🔍 DPoS runtime详细状态检查",
 			"resourceMonitorIsNil", d.runtime.resourceMonitor == nil,
 			"goroutineManagerIsNil", func() bool {
@@ -1172,7 +1172,7 @@ func (d *DPoS) Initialize() error {
 		return fmt.Errorf("failed to create wallet key")
 	}
 
-	// 🆕 注册DPoS实例到全局注册表
+	// 注册DPoS实例到全局注册表
 	// 使用固定key和节点地址作为key，确保能够被找到
 	fixedKey := "vcity_dpos"
 	nodeKey := d.key.Address().String()
@@ -1195,7 +1195,7 @@ func (d *DPoS) Initialize() error {
 		d.config.ConsensusSwitchHeight,
 	)
 
-	// 🆕 新增：先初始化状态存储
+	// 新增：先初始化状态存储
 	d.logger.Debug("Attempting to initialize state store",
 		"dataDir", d.dataDir,
 		"dataDirEmpty", d.dataDir == "",
@@ -1235,9 +1235,9 @@ func (d *DPoS) Initialize() error {
 		keyAddr:    types.Address(d.key.Address()), // 设置当前节点的地址
 		config:     d.config,                       // 传递DPoS配置
 		logger:     d.logger,                       // 传递logger
-		state:      d.state,                        // 🆕 传递State对象
+		state:      d.state,                        // 传递State对象
 
-		// 🆕 设置验证者更新回调函数
+		// 设置验证者更新回调函数
 		onValidatorsUpdated: func(validators validator.AccountSet) error {
 			// 更新 runtime 的验证者集合
 			if d.runtime != nil {
@@ -1249,13 +1249,13 @@ func (d *DPoS) Initialize() error {
 		},
 	}
 
-	// 🆕 将blockchain_wrapper设置为blockchain的executor，以启用奖励分配功能
+	// 将blockchain_wrapper设置为blockchain的executor，以启用奖励分配功能
 	// 创建一个适配器，将blockchain_wrapper包装为blockchain.Executor
 	executorAdapter := &executorAdapter{wrapper: d.blockchain.(*blockchainWrapper)}
 	d.config.Blockchain.SetExecutor(executorAdapter)
 	d.logger.Info("✅ 已将blockchain_wrapper设置为blockchain的executor，启用奖励分配功能")
 
-	// 🆕 新增：设置余额查询器（使用真实实现）
+	// 新增：设置余额查询器（使用真实实现）
 	// 使用 runtime 的 getAccountBalance 方法实现余额查询
 	if d.runtime != nil {
 		d.balanceQuerier = &runtimeBalanceQuerier{runtime: d.runtime}
@@ -1268,13 +1268,13 @@ func (d *DPoS) Initialize() error {
 	// set block time
 	d.blockTime = d.config.BlockTime.Duration
 
-	// 🆕 新增：初始化BLS网络通信
+	// 新增：初始化BLS网络通信
 	if err := d.initializeBLSNetworking(); err != nil {
 		d.logger.Error("Failed to initialize BLS networking", "error", err)
 		// 不返回错误，因为BLS网络初始化失败不应该阻止DPoS启动
 	}
 
-	// 🆕 移除：DPoS验证者解析移到initializeDelegates中进行
+	// 移除：DPoS验证者解析移到initializeDelegates中进行
 	// 这样可以在数据库没有受托人时才解析extraData，避免重复解析
 
 	// initialize delegates
@@ -1282,12 +1282,12 @@ func (d *DPoS) Initialize() error {
 		return fmt.Errorf("failed to initialize delegates: %w", err)
 	}
 
-	// 🆕 新增：初始化经济系统组件
+	// 新增：初始化经济系统组件
 	if err := d.initializeEconomicSystem(); err != nil {
 		return fmt.Errorf("failed to initialize economic system: %w", err)
 	}
 
-	// 🆕 新增：初始化治理系统
+	// 新增：初始化治理系统
 	if err := d.InitializeGovernance(); err != nil {
 		return fmt.Errorf("failed to initialize governance: %w", err)
 	}
@@ -1302,7 +1302,7 @@ func (d *DPoS) Initialize() error {
 		txPool:           d.txPool,
 		DelegateCount:    d.config.DelegateCount,
 		InitialDelegates: d.config.InitialDelegates,
-		blockScheduler:   d.blockScheduler, // 🆕 设置固定时间窗口调度器
+		blockScheduler:   d.blockScheduler, // 设置固定时间窗口调度器
 		BlockTime:        d.config.BlockTime,
 	}
 
@@ -1334,7 +1334,7 @@ func (d *DPoS) Initialize() error {
 	return nil
 }
 
-// 🆕 新增：从创世块解析DPoS验证者
+// 新增：从创世块解析DPoS验证者
 func (d *DPoS) parseValidatorsFromGenesis() error {
 	d.logger.Info("🔍 开始从创世块解析DPoS验证者")
 
@@ -1371,7 +1371,7 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 	// 清空现有的delegates
 	d.runtime.delegates = make(validator.AccountSet, 0)
 
-	// 🆕 初始化创世验证者映射（如果尚未初始化）
+	// 初始化创世验证者映射（如果尚未初始化）
 	d.lock.Lock()
 	if d.genesisValidators == nil {
 		d.genesisValidators = make(map[types.Address]bool)
@@ -1391,7 +1391,7 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 		ibftValidator := ibftValidators[i]
 		address := ibftValidator.Address
 
-		// 🆕 创世验证者使用固定权重1000 VCITY，不受余额影响
+		// 创世验证者使用固定权重1000 VCITY，不受余额影响
 		fixedVotingPower := new(big.Int)
 		fixedVotingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
 
@@ -1405,7 +1405,7 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 		// 直接添加到 runtime.delegates
 		d.runtime.delegates = append(d.runtime.delegates, delegate)
 
-		// 🆕 添加到创世验证者映射
+		// 添加到创世验证者映射
 		d.lock.Lock()
 		d.genesisValidators[address] = true
 		d.lock.Unlock()
@@ -1444,7 +1444,7 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 	return nil
 }
 
-// 🆕 新增：从extraData解析验证者地址
+// 新增：从extraData解析验证者地址
 func (d *DPoS) parseValidatorsFromExtraData(extraData []byte) (validator.AccountSet, error) {
 	// 开始解析extraData
 
@@ -1553,7 +1553,7 @@ func (d *DPoS) GetCurrentRound() uint64 {
 }
 
 func (d *DPoS) GetCurrentDelegate() types.Address {
-	// 🆕 已删除 currentDelegateIndex
+	// 已删除 currentDelegateIndex
 	// 现在完全基于时间slot实时计算
 	if d.state == nil || d.state.StakeStore == nil {
 		return types.ZeroAddress
@@ -1666,7 +1666,7 @@ func (d *DPoS) initPerformanceOptimizations() {
 	// 启动缓存清理协程
 	go d.cacheCleanupWorker()
 
-	// 🆕 启动签名去重清理协程
+	// 启动签名去重清理协程
 	if d.runtime != nil {
 		d.runtime.startSignatureCleanup()
 	}
@@ -2033,21 +2033,21 @@ func (c *DPoSConfig) GetConfigSummary() map[string]interface{} {
 
 // 启动时直接调用和命令一样的数据源方法
 func (d *DPoS) callCommandDataSourcesOnStartup() error {
-	// 🆕 数据源1: 从store获取验证者信息 (与命令中的 GetValidators() 一致)
+	// 数据源1: 从store获取验证者信息 (与命令中的 GetValidators() 一致)
 	if d.state != nil && d.state.StakeStore != nil {
 		validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
 		if err != nil {
 			d.logger.Warn("⚠️ 获取验证者信息失败", "error", err)
 		} else {
 
-			// 🆕 获取质押信息用于对比
+			// 获取质押信息用于对比
 			stakingInfo, stakingErr := d.state.StakeStore.GetStakingInfo()
 			if stakingErr != nil {
 				d.logger.Warn("⚠️ 获取质押信息失败，无法显示票数对比", "error", stakingErr)
 			}
 
 			for _, validator := range validators {
-				// 🆕 查找对应的票数信息
+				// 查找对应的票数信息
 				var totalVotes *big.Int
 				var voterCount int
 				for _, stake := range stakingInfo {
@@ -2067,7 +2067,7 @@ func (d *DPoS) callCommandDataSourcesOnStartup() error {
 		d.logger.Warn("⚠️ store不可用，无法获取验证者信息")
 	}
 
-	// 🆕 数据源2: 从store获取质押信息 (与命令中的 GetStakingInfo() 一致)
+	// 数据源2: 从store获取质押信息 (与命令中的 GetStakingInfo() 一致)
 	if d.state != nil && d.state.StakeStore != nil {
 		_, err := d.state.StakeStore.GetStakingInfo()
 		if err != nil {
@@ -2075,7 +2075,7 @@ func (d *DPoS) callCommandDataSourcesOnStartup() error {
 		}
 	}
 
-	// 🆕 对比：显示内存中的受托人信息
+	// 对比：显示内存中的受托人信息
 	d.lock.RLock()
 	defer d.lock.RUnlock()
 
@@ -2083,7 +2083,7 @@ func (d *DPoS) callCommandDataSourcesOnStartup() error {
 	return nil
 }
 
-// 🆕 将验证者数据同步到数据库
+// 将验证者数据同步到数据库
 func (d *DPoS) syncDelegatesToDatabase(delegates validator.AccountSet) error {
 	d.logger.Info("💾 开始将验证者数据同步到数据库...")
 
@@ -2176,7 +2176,7 @@ func (d *DPoS) GetValidators() validator.AccountSet {
 		return d.runtime.delegates
 	}
 
-	// 🆕 如果runtime.delegates为空，尝试从数据库读取（与GetDelegates保持一致）
+	// 如果runtime.delegates为空，尝试从数据库读取（与GetDelegates保持一致）
 	if d.state != nil && d.state.StakeStore != nil {
 		d.logger.Info("🔍 [DPoS.GetValidators] runtime.delegates为空，尝试从数据库读取验证者")
 		if dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false); err == nil && len(dbValidators) > 0 {
@@ -2189,7 +2189,7 @@ func (d *DPoS) GetValidators() validator.AccountSet {
 					}
 					return vs
 				}())
-			// 🆕 同步到内存，避免下次再查数据库
+			// 同步到内存，避免下次再查数据库
 			if d.runtime != nil {
 				d.runtime.delegates = dbValidators.Copy()
 				d.delegates = dbValidators.Copy()
@@ -2329,7 +2329,7 @@ func (r *dposRuntime) getAccountBalance(address types.Address) (*big.Int, error)
 				return big.NewInt(0), nil
 			}
 
-			// 🆕 检查账户余额是否为空，避免空指针解引用
+			// 检查账户余额是否为空，避免空指针解引用
 			if account == nil || account.Balance == nil {
 				r.logger.Warn("⚠️ 账户或余额为空，返回0余额", "address", address.String())
 				return big.NewInt(0), nil

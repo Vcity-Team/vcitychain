@@ -87,7 +87,7 @@ func (m *syncPeerClient) Start() error {
 	// Mark client active.
 	m.closed.Store(false)
 
-	// 🆕 先启动gossip，确保topic初始化完成
+	// 先启动gossip，确保topic初始化完成
 	if err := m.startGossip(); err != nil {
 		// 检查是否是topic冲突错误，如果是则直接创建新的后缀topic
 		if strings.Contains(err.Error(), "topic already exists") {
@@ -102,7 +102,7 @@ func (m *syncPeerClient) Start() error {
 		}
 	}
 
-	// 🆕 然后启动其他goroutine
+	// 然后启动其他goroutine
 	go m.startNewBlockProcess()
 	go m.startPeerEventProcess()
 
@@ -320,7 +320,7 @@ func (m *syncPeerClient) handleStatusUpdate(obj interface{}, from peer.ID) {
 		return
 	}
 
-	// 🆕 添加状态接收日志
+	// 添加状态接收日志
 	m.logger.Debug("📨 收到状态广播",
 		"来源节点", from.String(),
 		"区块高度", status.Number,
@@ -407,14 +407,14 @@ func (m *syncPeerClient) startNewBlockProcess() {
 		if l := len(event.NewChain); l > 0 {
 			latest := event.NewChain[l-1]
 
-			// 🆕 检查topic是否已初始化
+			// 检查topic是否已初始化
 			if m.topic == nil {
 				m.logger.Error("❌ topic未初始化，无法进行状态广播", "区块高度", latest.Number, "节点ID", m.id, "原因", "topic冲突导致无法初始化")
 				m.logger.Error("❌ 这将导致其他节点无法同步此区块", "区块高度", latest.Number, "节点ID", m.id)
 				continue
 			}
 
-			// 🆕 添加详细的状态广播日志
+			// 添加详细的状态广播日志
 			m.logger.Debug("🔔 检测到新区块事件，准备状态广播",
 				"区块高度", latest.Number,
 				"区块哈希", latest.Hash.String()[:16],
@@ -428,7 +428,7 @@ func (m *syncPeerClient) startNewBlockProcess() {
 				continue
 			}
 
-			// 🆕 添加网络连接状态日志
+			// 添加网络连接状态日志
 			m.logger.Debug("🌐 网络连接状态检查",
 				"区块高度", latest.Number,
 				"连接节点数", len(peers),

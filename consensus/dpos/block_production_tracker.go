@@ -13,11 +13,11 @@ type BlockProductionTracker struct {
 	currentEpochBlocks map[types.Address]uint64
 	epochBlocksHistory map[uint64]map[types.Address]uint64
 
-	// 🆕 新增：记录区块时间信息
+	// 新增：记录区块时间信息
 	currentEpochBlockTimes map[types.Address][]time.Time
 	epochBlockTimesHistory map[uint64]map[types.Address][]time.Time
 
-	// 🆕 新增：记录已处理的区块号（用于去重）
+	// 新增：记录已处理的区块号（用于去重）
 	processedBlocks map[uint64]bool
 
 	currentEpoch    uint64
@@ -26,10 +26,10 @@ type BlockProductionTracker struct {
 	mutex           sync.RWMutex
 	logger          hclog.Logger
 
-	// 🆕 新增：数据库存储
+	// 新增：数据库存储
 	store *BlockTrackerStore
 
-	// 🆕 新增：区块时间配置
+	// 新增：区块时间配置
 	blockTime time.Duration
 }
 
@@ -39,19 +39,19 @@ func NewBlockProductionTracker(logger hclog.Logger, store *BlockTrackerStore, bl
 		currentEpochBlocks: make(map[types.Address]uint64),
 		epochBlocksHistory: make(map[uint64]map[types.Address]uint64),
 
-		// 🆕 新增：初始化区块时间记录
+		// 新增：初始化区块时间记录
 		currentEpochBlockTimes: make(map[types.Address][]time.Time),
 		epochBlockTimesHistory: make(map[uint64]map[types.Address][]time.Time),
 
-		// 🆕 新增：初始化已处理区块记录（用于去重）
+		// 新增：初始化已处理区块记录（用于去重）
 		processedBlocks: make(map[uint64]bool),
 
 		logger:    logger,
-		store:     store,     // 🆕 新增：设置数据库存储
-		blockTime: blockTime, // 🆕 新增：设置区块时间配置
+		store:     store,     // 新增：设置数据库存储
+		blockTime: blockTime, // 新增：设置区块时间配置
 	}
 
-	// 🆕 从数据库加载历史数据
+	// 从数据库加载历史数据
 	tracker.loadFromDB()
 
 	return tracker
@@ -135,7 +135,7 @@ func (bpt *BlockProductionTracker) RecordBlockProduction(
 		counts map[types.Address]uint64
 	}
 
-	// 🆕 去重检查：如果该区块已经处理过，跳过
+	// 去重检查：如果该区块已经处理过，跳过
 	if bpt.processedBlocks[blockNumber] {
 		bpt.logger.Debug("⚠️ 区块已记录，跳过重复记录",
 			"blockNumber", blockNumber,
@@ -155,13 +155,13 @@ func (bpt *BlockProductionTracker) RecordBlockProduction(
 			}
 			bpt.epochBlocksHistory[bpt.currentEpoch] = historyCounts
 
-			// 🆕 保存区块时间历史
+			// 保存区块时间历史
 			bpt.epochBlockTimesHistory[bpt.currentEpoch] = make(map[types.Address][]time.Time)
 			for addr, times := range bpt.currentEpochBlockTimes {
 				bpt.epochBlockTimesHistory[bpt.currentEpoch][addr] = times
 			}
 
-			// 🆕 保存到数据库（上一epoch）
+			// 保存到数据库（上一epoch）
 			if bpt.store != nil {
 				persistSnapshots = append(persistSnapshots, struct {
 					epoch  uint64
@@ -179,10 +179,10 @@ func (bpt *BlockProductionTracker) RecordBlockProduction(
 		bpt.epochStartBlock = blockNumber
 		bpt.currentEpochBlocks = make(map[types.Address]uint64)
 
-		// 🆕 重置区块时间记录
+		// 重置区块时间记录
 		bpt.currentEpochBlockTimes = make(map[types.Address][]time.Time)
 
-		// 🆕 清理已处理区块记录（只保留当前epoch的区块，避免内存泄漏）
+		// 清理已处理区块记录（只保留当前epoch的区块，避免内存泄漏）
 		// 清理策略：只保留最近2个epoch的区块记录
 		bpt.cleanupProcessedBlocks(epochNumber)
 
@@ -195,10 +195,10 @@ func (bpt *BlockProductionTracker) RecordBlockProduction(
 	// 记录出块
 	bpt.currentEpochBlocks[producer]++
 
-	// 🆕 标记该区块已处理
+	// 标记该区块已处理
 	bpt.processedBlocks[blockNumber] = true
 
-	// 🆕 记录区块时间
+	// 记录区块时间
 	bpt.currentEpochBlockTimes[producer] = append(bpt.currentEpochBlockTimes[producer], blockTime)
 
 	bpt.logger.Debug("📊 记录出块",
@@ -207,7 +207,7 @@ func (bpt *BlockProductionTracker) RecordBlockProduction(
 		"producer", producer.String(),
 		"totalBlocks", bpt.currentEpochBlocks[producer])
 
-	// 🆕 持久化当前epoch快照
+	// 持久化当前epoch快照
 	if bpt.store != nil && bpt.currentEpoch > 0 {
 		currentSnapshot := make(map[types.Address]uint64)
 		for addr, count := range bpt.currentEpochBlocks {
@@ -251,7 +251,7 @@ func (bpt *BlockProductionTracker) GetEpochBlockCounts(epochNumber uint64) map[t
 		return result
 	}
 
-	// 🆕 如果内存中没有，尝试从数据库加载
+	// 如果内存中没有，尝试从数据库加载
 	if bpt.store != nil {
 		dbBlocks, err := bpt.store.LoadEpochBlocks(epochNumber)
 		if err == nil && len(dbBlocks) > 0 {
@@ -275,7 +275,7 @@ func (bpt *BlockProductionTracker) GetTotalEpochBlocks(epochNumber uint64) uint6
 	return total
 }
 
-// 🆕 新增：获取指定epoch的平均出块时间
+// 新增：获取指定epoch的平均出块时间
 func (bpt *BlockProductionTracker) GetEpochAverageBlockTime(epochNumber uint64) time.Duration {
 	bpt.mutex.RLock()
 	defer bpt.mutex.RUnlock()

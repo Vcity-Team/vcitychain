@@ -16,7 +16,7 @@ type VoteProposalRequest struct {
 	ProposalID string `json:"proposalId"`
 	Voter      string `json:"voter"`
 	Support    bool   `json:"support"`
-	PrivateKey string `json:"privateKey"` // 🆕 私钥字段
+	PrivateKey string `json:"privateKey"` // 私钥字段
 }
 
 // VoteProposalResponse 投票响应

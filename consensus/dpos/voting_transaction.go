@@ -127,7 +127,7 @@ func (d *DPoS) processBlockVotes(block *types.FullBlock) error {
 		return nil
 	}
 
-	// 🆕 修复：统一在区块广播接收后处理投票，确保只计算一次
+	// 修复：统一在区块广播接收后处理投票，确保只计算一次
 	d.logger.Debug("✅ 处理区块中的投票事件",
 		"blockNumber", block.Block.Number(),
 		"blockCreator", func() string {
@@ -203,7 +203,7 @@ func (d *DPoS) processBlockVotes(block *types.FullBlock) error {
 		}
 	}
 
-	// 🆕 新增：处理经济系统逻辑（静默执行）
+	// 新增：处理经济系统逻辑（静默执行）
 	if err := d.processEconomicSystem(block); err != nil {
 		d.logger.Error("❌ 处理经济系统失败", "blockNumber", block.Block.Number(), "error", err)
 		// 不返回错误，继续处理
@@ -219,7 +219,7 @@ func (d *DPoS) processBlockVotesFromHeader(header *types.Header) error {
 		return nil
 	}
 
-	// 🆕 修复：获取完整的区块数据，包括交易信息
+	// 修复：获取完整的区块数据，包括交易信息
 	// 通过区块哈希获取完整的区块数据
 	block, exists := d.blockchain.GetBlockByHash(header.Hash, true)
 	if !exists {

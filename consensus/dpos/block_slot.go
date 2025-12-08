@@ -34,7 +34,7 @@ func (r *dposRuntime) getBlockForSlot(slot int) uint64 {
 
 // isEpochEndBlock 检查是否是epoch的最后一个区块
 func (r *dposRuntime) isEpochEndBlock(blockNumber uint64) bool {
-	// 🆕 修改：基于指定区块号获取epoch信息
+	// 修改：基于指定区块号获取epoch信息
 	currentEpoch := r.getEpochForBlock(blockNumber)
 	if currentEpoch == nil {
 		r.logger.Warn("⚠️ 无法获取当前epoch信息", "blockNumber", blockNumber)
@@ -121,11 +121,11 @@ func (r *dposRuntime) getEpochForSlot(slot int) *epochMetadata {
 
 // getEpochForBlock 获取指定区块号的epoch信息（保持API兼容性）
 func (r *dposRuntime) getEpochForBlock(blockNumber uint64) *epochMetadata {
-	// 🆕 内部转换为slot计算
+	// 内部转换为slot计算
 	slot := r.getSlotForBlock(blockNumber)
 	epochMetadata := r.getEpochForSlot(slot)
 
-	// 🆕 添加区块号信息以保持兼容性
+	// 添加区块号信息以保持兼容性
 	if r.config != nil && r.config.dposBackend != nil {
 		if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
 			consensusSwitchHeight := dposInstance.config.ConsensusSwitchHeight

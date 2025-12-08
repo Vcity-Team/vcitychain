@@ -101,7 +101,7 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 		"votingPower", voterInfo.VotingPower.String(),
 		"votedDelegatesCount", len(voterInfo.VotedDelegates))
 
-	// 🆕 添加详细日志：记录数据库更新前的内存状态
+	// 添加详细日志：记录数据库更新前的内存状态
 	d.logger.Info("🔍 Before database persistence - memory delegates state:")
 	for i, del := range d.delegates {
 		if del.Address == candidate {
@@ -121,12 +121,12 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 	}
 	d.logger.Info("✅ Voter info saved to database successfully")
 
-	// 🆕 移除：不再在这里更新 VotingPower，因为 processVoteInternal 已经更新了
+	// 移除：不再在这里更新 VotingPower，因为 processVoteInternal 已经更新了
 	// VotingPower 的更新已经在 processVoteInternal 中通过 updateVotingPowerInDatabase 完成
 	// 这里再次调用会导致重复累加
 	d.logger.Debug("💾 VotingPower 已在 processVoteInternal 中更新，跳过重复更新")
 
-	// 🆕 保存 StakingInfo 到数据库（投票记录）
+	// 保存 StakingInfo 到数据库（投票记录）
 	// 注意：这里使用 voter 作为 staker，因为投票者就是质押者
 	d.logger.Info("💾 Saving staking info to database...")
 
@@ -151,7 +151,7 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 	}
 
 	// 保存到数据库
-	// 🆕 传入 voterInfo.LastVoteTime 作为 timestamp，确保每次投票都有唯一 key
+	// 传入 voterInfo.LastVoteTime 作为 timestamp，确保每次投票都有唯一 key
 	if err := d.state.StakeStore.setStakingInfo(voter, stakeInfo, voterInfo.LastVoteTime, dbTx); err != nil {
 		d.logger.Error("❌ Failed to save staking info to database", "error", err)
 		return fmt.Errorf("failed to save staking info to database: %w", err)
@@ -173,7 +173,7 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 
 // saveValidatorSetForBlock 已移除数据库保存机制，改为日志记录
 func (d *DPoS) saveValidatorSetForBlock(blockNumber uint64) error {
-	// 🆕 已移除数据库保存机制，改为从 ExtraData 直接读取验证者集合
+	// 已移除数据库保存机制，改为从 ExtraData 直接读取验证者集合
 	d.logger.Info("📝 验证者集合获取方式已更新",
 		"blockNumber", blockNumber,
 		"delegatesCount", len(d.delegates),
@@ -202,7 +202,7 @@ func (d *DPoS) SaveValidatorSetForBlockWithValidators(blockNumber uint64, valida
 
 // saveValidatorSetForBlockWithValidators 已移除数据库保存机制，改为日志记录
 func (d *DPoS) saveValidatorSetForBlockWithValidators(blockNumber uint64, validators validator.AccountSet) error {
-	// 🆕 已移除数据库保存机制，改为从 ExtraData 直接读取验证者集合
+	// 已移除数据库保存机制，改为从 ExtraData 直接读取验证者集合
 	d.logger.Info("📝 验证者集合获取方式已更新",
 		"blockNumber", blockNumber,
 		"validatorsCount", len(validators),
@@ -228,7 +228,7 @@ func (d *DPoS) saveValidatorSetForBlockWithValidators(blockNumber uint64, valida
 func (d *DPoS) loadValidatorsFromDatabaseWithLimit() error {
 	d.logger.Info("🔍 开始从数据库加载验证者并按voterpower排序截取前N个")
 
-	// 🆕 使用公共函数获取排序和限制后的验证者
+	// 使用公共函数获取排序和限制后的验证者
 	dbValidators, err := d.GetSortedValidatorsWithLimit()
 	if err != nil {
 		return fmt.Errorf("failed to get sorted validators with limit: %w", err)
@@ -240,10 +240,10 @@ func (d *DPoS) loadValidatorsFromDatabaseWithLimit() error {
 
 	d.logger.Info("✅ 从数据库成功读取验证者", "count", len(dbValidators))
 
-	// 🆕 添加详细日志：打印从数据库读取的验证者信息
+	// 添加详细日志：打印从数据库读取的验证者信息
 	d.logger.Info("🔍 数据库验证者详细信息:")
 	for i, validator := range dbValidators {
-		// 🆕 获取验证者的故障标志信息
+		// 获取验证者的故障标志信息
 		faultInfo := d.getValidatorFaultInfo(validator.Address)
 		d.logger.Info("🔍 数据库验证者",
 			"index", i,
@@ -251,7 +251,7 @@ func (d *DPoS) loadValidatorsFromDatabaseWithLimit() error {
 			"votingPower", validator.VotingPower.String(),
 			"isActive", validator.IsActive,
 			"hasBlsKey", validator.BlsKey != nil,
-			"faultFlag", faultInfo) // 🆕 添加故障标志信息
+			"faultFlag", faultInfo) // 添加故障标志信息
 	}
 
 	return nil
@@ -339,7 +339,7 @@ func (d *DPoS) persistSingleDelegateToDatabase(del *validator.ValidatorMetadata)
 		}
 	}
 
-	// 🆕 从数据库读取当前的 VotingPower，避免用内存中的错误值覆盖数据库
+	// 从数据库读取当前的 VotingPower，避免用内存中的错误值覆盖数据库
 	dbVotingPower, err := d.getVotingPowerFromDatabase(del.Address)
 	if err != nil {
 		d.logger.Warn("⚠️ 从数据库读取 VotingPower 失败，使用内存中的值",
@@ -356,7 +356,7 @@ func (d *DPoS) persistSingleDelegateToDatabase(del *validator.ValidatorMetadata)
 	// 创建受托人信息
 	delegateInfo := &DelegateInfo{
 		Address:        del.Address,
-		VotingPower:    new(big.Int).Set(dbVotingPower), // 🆕 使用数据库中的值，而不是内存中的值
+		VotingPower:    new(big.Int).Set(dbVotingPower), // 使用数据库中的值，而不是内存中的值
 		TotalVotes:     new(big.Int).Set(dbVotingPower), // 使用VotingPower作为TotalVotes
 		ProducedBlocks: 0,
 		MissedBlocks:   0,
@@ -442,7 +442,7 @@ func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.Accoun
 
 	// 保存每个验证者信息
 	for _, del := range delegates {
-		// 🆕 修改：BLS公钥按需获取，不在验证者集合中强制要求
+		// 修改：BLS公钥按需获取，不在验证者集合中强制要求
 		var blsPublicKey []byte
 		if del.BlsKey != nil {
 			blsPublicKey = del.BlsKey.Marshal()
@@ -450,7 +450,7 @@ func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.Accoun
 				"address", del.Address.String(),
 				"publicKeyLength", len(blsPublicKey))
 		} else {
-			// 🆕 BLS公钥为nil是正常的，将在验证时动态获取
+			// BLS公钥为nil是正常的，将在验证时动态获取
 			d.logger.Debug("🔑 BLS公钥为nil，将在验证时动态获取",
 				"address", del.Address.String(),
 				"note", "BLS公钥按需获取机制")
@@ -508,7 +508,7 @@ func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.Accoun
 			}
 		}
 
-		// 🆕 从数据库读取当前的 VotingPower，避免用内存中的错误值覆盖数据库
+		// 从数据库读取当前的 VotingPower，避免用内存中的错误值覆盖数据库
 		dbVotingPower, err := d.getVotingPowerFromDatabase(del.Address)
 		if err != nil {
 			d.logger.Warn("⚠️ 从数据库读取 VotingPower 失败，使用内存中的值",
@@ -525,18 +525,18 @@ func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.Accoun
 		// 即使BLS公钥为nil，也允许保存受托人信息
 		delegateInfo := &DelegateInfo{
 			Address:        del.Address,
-			VotingPower:    new(big.Int).Set(dbVotingPower), // 🆕 使用数据库中的值，而不是内存中的值
+			VotingPower:    new(big.Int).Set(dbVotingPower), // 使用数据库中的值，而不是内存中的值
 			TotalVotes:     new(big.Int).Set(dbVotingPower), // 使用VotingPower作为TotalVotes
 			ProducedBlocks: 0,
 			MissedBlocks:   0,
 			LastBlockTime:  0,
 			IsActive:       del.IsActive,
-			BlsPublicKey:   blsPublicKey, // 🆕 保存BLS公钥（可以为nil）
+			BlsPublicKey:   blsPublicKey, // 保存BLS公钥（可以为nil）
 		}
 
 		d.populateCommissionFields(del.Address, delegateInfo)
 
-		// 🆕 新增：重点记录持久化时的isActive状态
+		// 新增：重点记录持久化时的isActive状态
 		d.logger.Info("💾 持久化受托人信息到数据库",
 			"address", del.Address.String(),
 			"votingPower", del.VotingPower.String(),
@@ -560,7 +560,7 @@ func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.Accoun
 				"blsKeyLength", len(blsPublicKey))
 		}
 
-		// 🆕 添加详细日志：检查调用setDelegateInfo前的数据
+		// 添加详细日志：检查调用setDelegateInfo前的数据
 		d.logger.Debug("🔍 调用setDelegateInfo前的详细检查 (第二个位置)",
 			"delegate", del.Address.String(),
 			"votingPower", delegateInfo.VotingPower.String(),
@@ -568,7 +568,7 @@ func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.Accoun
 			"isActive", delegateInfo.IsActive,
 			"blsPublicKeyLength", len(delegateInfo.BlsPublicKey))
 
-		// 🆕 检查内存中对应受托人的状态
+		// 检查内存中对应受托人的状态
 		for _, memDel := range d.delegates {
 			if memDel.Address == del.Address {
 				d.logger.Debug("🔍 内存中受托人状态",

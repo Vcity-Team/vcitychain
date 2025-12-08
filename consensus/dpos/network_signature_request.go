@@ -134,7 +134,7 @@ func (r *dposRuntime) handleSignatureRequestMessage(obj interface{}, from peer.I
 		// 如果委托者列表为空，使用默认值
 		delegateCount = 4 // 默认4个委托者
 	}
-	// 🆕 已删除 currentDelegateIndex，使用区块号计算
+	// 已删除 currentDelegateIndex，使用区块号计算
 	currentBlock := r.config.blockchain.CurrentHeader()
 	currentBlockNumber := uint64(0)
 	if currentBlock != nil {

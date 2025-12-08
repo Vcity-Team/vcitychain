@@ -20,14 +20,14 @@ type TimeBasedEpochManager struct {
 	logger                hclog.Logger
 	callback              func(uint64) error
 
-	// 🆕 新增：区块链引用，用于基于区块高度计算Epoch
+	// 新增：区块链引用，用于基于区块高度计算Epoch
 	blockchain interface{} // 区块链接口，用于获取当前区块号
 }
 
 // NewTimeBasedEpochManager 创建基于区块高度的Epoch管理器
 func NewTimeBasedEpochManager(
 	epochDuration time.Duration,
-	blockTime time.Duration, // 🆕 添加blockTime参数
+	blockTime time.Duration, // 添加blockTime参数
 	rewardAccount types.Address,
 	rewardAmount *big.Int,
 	consensusSwitchHeight uint64,
@@ -37,7 +37,7 @@ func NewTimeBasedEpochManager(
 		rewardAccount:         rewardAccount,
 		rewardAmount:          rewardAmount,
 		epochDuration:         epochDuration,
-		blockTime:             blockTime, // 🆕 设置blockTime
+		blockTime:             blockTime, // 设置blockTime
 		consensusSwitchHeight: consensusSwitchHeight,
 		logger:                logger,
 	}
@@ -48,7 +48,7 @@ func (tem *TimeBasedEpochManager) GetCurrentEpoch(blockNumber uint64) uint64 {
 	tem.mutex.RLock()
 	defer tem.mutex.RUnlock()
 
-	// 🆕 修改：基于传入的区块高度计算Epoch，考虑共识切换高度
+	// 修改：基于传入的区块高度计算Epoch，考虑共识切换高度
 	epochSize := tem.getEpochSize()
 	consensusSwitchHeight := tem.consensusSwitchHeight
 
@@ -97,14 +97,14 @@ func (tem *TimeBasedEpochManager) GetEpochSize() uint64 {
 	return tem.getEpochSize()
 }
 
-// 🆕 新增：设置区块链引用
+// 新增：设置区块链引用
 func (tem *TimeBasedEpochManager) SetBlockchain(blockchain interface{}) {
 	tem.mutex.Lock()
 	defer tem.mutex.Unlock()
 	tem.blockchain = blockchain
 }
 
-// 🆕 新增：更新 epochDuration（用于提案执行后更新参数值）
+// 新增：更新 epochDuration（用于提案执行后更新参数值）
 func (tem *TimeBasedEpochManager) UpdateEpochDuration(epochDuration time.Duration) {
 	tem.mutex.Lock()
 	defer tem.mutex.Unlock()
@@ -112,14 +112,14 @@ func (tem *TimeBasedEpochManager) UpdateEpochDuration(epochDuration time.Duratio
 	tem.logger.Info("✅ EpochDuration已更新", "newDuration", epochDuration.String())
 }
 
-// 🆕 新增：设置回调函数
+// 新增：设置回调函数
 func (tem *TimeBasedEpochManager) SetCallback(callback func(uint64) error) {
 	tem.mutex.Lock()
 	defer tem.mutex.Unlock()
 	tem.callback = callback
 }
 
-// 🆕 新增：基于区块高度触发epoch切换
+// 新增：基于区块高度触发epoch切换
 func (tem *TimeBasedEpochManager) TriggerEpochSwitch(blockNumber uint64) {
 	tem.mutex.Lock()
 	defer tem.mutex.Unlock()
@@ -151,7 +151,7 @@ func (tem *TimeBasedEpochManager) GetEpochInfo(blockNumber uint64) (uint64, time
 	tem.mutex.RLock()
 	defer tem.mutex.RUnlock()
 
-	// 🆕 修复：使用与isEpochEndBlock和GetCurrentEpochInfo相同的epoch计算逻辑，考虑共识切换高度
+	// 修复：使用与isEpochEndBlock和GetCurrentEpochInfo相同的epoch计算逻辑，考虑共识切换高度
 	epochSize := tem.getEpochSize()
 	consensusSwitchHeight := tem.consensusSwitchHeight
 

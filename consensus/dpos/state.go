@@ -42,7 +42,7 @@ type TransportMessage struct {
 // State represents a persistence layer which persists consensus data off-chain
 type State struct {
 	db       *bolt.DB
-	rewardDB *bolt.DB // 🆕 新增：奖励数据库
+	rewardDB *bolt.DB // 新增：奖励数据库
 	close    chan struct{}
 
 	StateSyncStore        *StateSyncStore
@@ -51,12 +51,12 @@ type State struct {
 	ProposerSnapshotStore *ProposerSnapshotStore
 	StakeStore            *StakeStore
 	ValidatorStore        *ValidatorStore
-	RewardStore           *RewardStore       // 🆕 新增奖励记录存储
-	BlockTrackerStore     *BlockTrackerStore // 🆕 新增出块统计存储
-	ParameterStore        *ParameterStore    // 🆕 新增参数存储
-	ProposalStore         *ProposalStore     // 🆕 新增提案存储
-	RegistrationStore     *RegistrationStore // 🆕 新增受托人注册存储
-	FreezeStore           *FreezeStore       // 🆕 新增冻结信息存储
+	RewardStore           *RewardStore       // 新增奖励记录存储
+	BlockTrackerStore     *BlockTrackerStore // 新增出块统计存储
+	ParameterStore        *ParameterStore    // 新增参数存储
+	ProposalStore         *ProposalStore     // 新增提案存储
+	RegistrationStore     *RegistrationStore // 新增受托人注册存储
+	FreezeStore           *FreezeStore       // 新增冻结信息存储
 }
 
 // RegistrationStore 受托人注册存储
@@ -537,7 +537,7 @@ func (ps *ProposalStore) DeleteProposal(proposalID string) error {
 
 // ListScheduledByEpoch 根据 EffectiveEpoch 查询待应用的提案
 func (ps *ProposalStore) ListScheduledByEpoch(epochNumber uint64) ([]*ParameterProposal, error) {
-	// 🔍 添加详细日志，跟踪传入的epoch参数
+	// 添加详细日志，跟踪传入的epoch参数
 	if ps.logger != nil {
 		ps.logger.Info("🔍🔍🔍 [ProposalStore.ListScheduledByEpoch] 开始查询提案",
 			"epochNumber", epochNumber,
@@ -567,7 +567,7 @@ func (ps *ProposalStore) ListScheduledByEpoch(epochNumber uint64) ([]*ParameterP
 			}
 
 			// 检查是否符合条件：Scheduled=true, Applied=false, EffectiveEpoch=epochNumber
-			// 🔍 添加详细日志，跟踪每个提案的检查过程
+			// 添加详细日志，跟踪每个提案的检查过程
 			if ps.logger != nil && (proposal.Schedule.Scheduled || proposal.Schedule.EffectiveEpoch > 0) {
 				ps.logger.Info("🔍 [ProposalStore.ListScheduledByEpoch] 检查提案",
 					"proposalID", proposal.ID,
@@ -713,7 +713,7 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 		return nil, err
 	}
 
-	// 🆕 创建独立的奖励数据库
+	// 创建独立的奖励数据库
 	rewardDBPath := path + ".rewards"
 	rewardDB, err := bolt.Open(rewardDBPath, 0666, nil)
 	if err != nil {
@@ -723,7 +723,7 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 
 	s := &State{
 		db:                    db,
-		rewardDB:              rewardDB, // 🆕 新增
+		rewardDB:              rewardDB, // 新增
 		close:                 closeCh,
 		StateSyncStore:        &StateSyncStore{db: db},
 		CheckpointStore:       &CheckpointStore{db: db},
@@ -731,12 +731,12 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 		ProposerSnapshotStore: &ProposerSnapshotStore{db: db},
 		StakeStore:            &StakeStore{db: db},
 		ValidatorStore:        &ValidatorStore{db: db},
-		RewardStore:           &RewardStore{db: rewardDB},             // 🆕 使用独立数据库
-		BlockTrackerStore:     &BlockTrackerStore{db: db},             // 🆕 使用主数据库
-		ParameterStore:        &ParameterStore{db: db},                // 🆕 使用主数据库
-		ProposalStore:         &ProposalStore{db: db, logger: logger}, // 🆕 使用主数据库
-		RegistrationStore:     &RegistrationStore{db: db},             // 🆕 使用主数据库
-		FreezeStore:           NewFreezeStore(db),                     // 🆕 使用主数据库
+		RewardStore:           &RewardStore{db: rewardDB},             // 使用独立数据库
+		BlockTrackerStore:     &BlockTrackerStore{db: db},             // 使用主数据库
+		ParameterStore:        &ParameterStore{db: db},                // 使用主数据库
+		ProposalStore:         &ProposalStore{db: db, logger: logger}, // 使用主数据库
+		RegistrationStore:     &RegistrationStore{db: db},             // 使用主数据库
+		FreezeStore:           NewFreezeStore(db),                     // 使用主数据库
 	}
 
 	if err = s.initStorages(); err != nil {
@@ -744,7 +744,7 @@ func newState(path string, logger hclog.Logger, closeCh chan struct{}) (*State, 
 		return nil, err
 	}
 
-	// 🆕 初始化奖励数据库
+	// 初始化奖励数据库
 	if err = s.initRewardDatabase(); err != nil {
 		s.Close() // 清理数据库
 		return nil, err
@@ -834,7 +834,7 @@ func (s *State) initStorages() error {
 		if err := s.ProposalStore.initialize(tx); err != nil {
 			return err
 		}
-		// 🆕 初始化冻结信息存储
+		// 初始化冻结信息存储
 		if _, err := tx.CreateBucketIfNotExists([]byte("freeze_info")); err != nil {
 			return err
 		}
@@ -869,7 +869,7 @@ func (s *State) initStorages() error {
 // initRewardDatabase 初始化奖励数据库
 func (s *State) initRewardDatabase() error {
 	return s.rewardDB.Update(func(tx *bolt.Tx) error {
-		// 🆕 初始化奖励存储
+		// 初始化奖励存储
 		if err := s.RewardStore.initialize(tx); err != nil {
 			return err
 		}
@@ -1088,7 +1088,7 @@ func (s *State) Close() error {
 func (rs *RewardStore) GetEpochRewardDetails(epochNumber uint64) ([]RewardRecordExtended, error) {
 	var records []RewardRecordExtended
 
-	// 🆕 添加日志：开始查询
+	// 添加日志：开始查询
 	logger := getGlobalLogger()
 	if logger != nil {
 		logger.Debug("🔍 [RewardStore.GetEpochRewardDetails] 开始查询", "epochNumber", epochNumber)
@@ -1123,7 +1123,7 @@ func (rs *RewardStore) GetEpochRewardDetails(epochNumber uint64) ([]RewardRecord
 				records = append(records, record)
 			}
 
-			// 🆕 每处理1000条记录打印一次日志（避免日志过多）
+			// 每处理1000条记录打印一次日志（避免日志过多）
 			if logger != nil && processedCount%1000 == 0 {
 				logger.Debug("🔄 [RewardStore.GetEpochRewardDetails] 处理中", "processedCount", processedCount, "matchedCount", len(records))
 			}

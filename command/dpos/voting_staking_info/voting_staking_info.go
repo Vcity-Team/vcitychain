@@ -86,7 +86,7 @@ func (r *VotingStakingInfoResult) GetOutput() string {
 		output += fmt.Sprintf("\n")
 	}
 
-	// 🆕 显示验证者质押信息（权重倒序，包含故障标志）
+	// 显示验证者质押信息（权重倒序，包含故障标志）
 	var stakingInfo []map[string]interface{}
 	if stakingInfoRaw, ok := r.StakingInfo.([]map[string]interface{}); ok && len(stakingInfoRaw) > 0 {
 		stakingInfo = stakingInfoRaw
@@ -162,7 +162,7 @@ func (r *VotingStakingInfoResult) GetOutput() string {
 
 			output += fmt.Sprintf("   Active: %v\n", stakingMap["isActive"])
 
-			// 🆕 显示故障标志信息
+			// 显示故障标志信息
 			if faultFlag, ok := stakingMap["faultFlag"].(map[string]interface{}); ok {
 				if isFaulty, ok := faultFlag["isFaulty"].(bool); ok {
 					output += fmt.Sprintf("   Faulty: %v\n", isFaulty)
@@ -325,13 +325,13 @@ func runCommand(cmd *cobra.Command, _ []string) error {
 		jsonRPC = jsonRPCFlag.Value.String()
 	}
 
-	// 🆕 使用已存在的 dpos_getStakingInfo 方法
+	// 使用已存在的 dpos_getStakingInfo 方法
 	result, err := callVotingStakingInfoRPCMethodHTTPWithAddress("dpos_getStakingInfo", []interface{}{}, jsonRPC)
 	if err != nil {
 		return fmt.Errorf("failed to get staking info: %w", err)
 	}
 
-	// 🆕 获取当前区块高度
+	// 获取当前区块高度
 	blockHeight, err := getCurrentBlockHeight(jsonRPC)
 	if err == nil {
 		// 更新结果中的 BlockHeight 字段
@@ -455,7 +455,7 @@ func parseVotingStakingInfoResult(result interface{}) (*VotingStakingInfoResult,
 	// Debug: log the raw result
 	// fmt.Printf("DEBUG: Raw result type: %T, value: %+v\n", result, result)
 
-	// 🆕 新逻辑：处理 dpos_getStakingInfo 返回的数组格式
+	// 新逻辑：处理 dpos_getStakingInfo 返回的数组格式
 	if stakingInfoList, ok := result.([]interface{}); ok {
 		// 这是 dpos_getStakingInfo 返回的验证者列表，需要转换为 []map[string]interface{}
 		stakingInfo := make([]map[string]interface{}, 0)
@@ -465,7 +465,7 @@ func parseVotingStakingInfoResult(result interface{}) (*VotingStakingInfoResult,
 			}
 		}
 
-		// 🆕 尝试从 JSON-RPC 获取当前区块高度（如果可用）
+		// 尝试从 JSON-RPC 获取当前区块高度（如果可用）
 		blockHeight := uint64(0)
 		// 注意：这里不直接调用，因为需要 jsonRPC 地址，会在 runCommand 中处理
 

@@ -15,9 +15,9 @@ func (r *dposRuntime) initializeRuntime() error {
 		return fmt.Errorf("runtime config is nil")
 	}
 
-	// 🆕 修复：根据当前区块号计算初始轮次
+	// 修复：根据当前区块号计算初始轮次
 	r.currentRound = r.calculateInitialRound()
-	r.lastProducedSlot = -1 // 🆕 初始化为 -1，表示还没出过块
+	r.lastProducedSlot = -1 // 初始化为 -1，表示还没出过块
 
 	// 初始化受托人集合
 	if err := r.initializeDelegates(); err != nil {
@@ -43,10 +43,10 @@ func (r *dposRuntime) initializeRuntime() error {
 	r.maxConcurrentSignatures = 10 // 最多同时处理10个签名请求
 	r.signatureRequestSemaphore = make(chan struct{}, r.maxConcurrentSignatures)
 
-	// 🆕 初始化防重复日志机制
+	// 初始化防重复日志机制
 	r.lastLogTime = make(map[string]time.Time)
 
-	// 🆕 初始化投票签名验证相关
+	// 初始化投票签名验证相关
 	r.processedVotes = make(map[string]bool)
 
 	// 检查网络服务状态
@@ -77,12 +77,12 @@ func (r *dposRuntime) setupNetworkIntegration() error {
 	// 设置DPoS运行时回调
 	r.networkIntegration.SetDPoSRuntime(r)
 
-	// 🆕 设置DPoS实例引用（如果backend是DPoS实例）
+	// 设置DPoS实例引用（如果backend是DPoS实例）
 	if dpos, ok := r.backend.(*DPoS); ok {
 		r.networkIntegration.SetDPoSInstance(dpos)
 	}
 
-	// 🆕 设置BLS公钥持久化回调函数
+	// 设置BLS公钥持久化回调函数
 	r.networkIntegration.SetBLSKeyPersistCallback(func(address types.Address, blsKeyBytes []byte) error {
 		// 通过backend获取DPoS实例
 		if dpos, ok := r.backend.(*DPoS); ok {
@@ -120,7 +120,7 @@ func (r *dposRuntime) setupNetworkIntegration() error {
 		return fmt.Errorf("DPoS instance not available for BLS key persistence")
 	})
 
-	// 🆕 设置BLS公钥查找回调函数
+	// 设置BLS公钥查找回调函数
 	r.networkIntegration.SetBLSKeyLookupCallback(func(address types.Address) ([]byte, error) {
 		// 通过全局注册表获取DPoS实例
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
@@ -142,7 +142,7 @@ func (r *dposRuntime) setupNetworkIntegration() error {
 		return fmt.Errorf("网络集成启动失败: %w", err)
 	}
 
-	// 🆕 预注册创世验证者的Peer映射
+	// 预注册创世验证者的Peer映射
 	if r.config != nil && len(r.config.InitialDelegates) > 0 {
 		for _, delegate := range r.config.InitialDelegates {
 			if delegate == nil || delegate.MultiAddr == "" {

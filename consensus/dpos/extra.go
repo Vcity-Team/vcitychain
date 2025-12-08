@@ -68,14 +68,14 @@ type FaultFlagInfo struct {
 	NodeAddress            types.Address `json:"node_address"`
 	IsFaulty               bool          `json:"is_faulty"`
 	MissedBlocks           uint64        `json:"missed_blocks"`
-	ActualBlocks           uint64        `json:"actual_blocks"`            // 🆕 实际出块数
-	ExpectedBlocks         uint64        `json:"expected_blocks"`          // 🆕 预期出块数
-	MissedBlocksPercentage uint64        `json:"missed_blocks_percentage"` // 🆕 漏块率（基点）
+	ActualBlocks           uint64        `json:"actual_blocks"`            // 实际出块数
+	ExpectedBlocks         uint64        `json:"expected_blocks"`          // 预期出块数
+	MissedBlocksPercentage uint64        `json:"missed_blocks_percentage"` // 漏块率（基点）
 	LastUpdateTime         uint64        `json:"last_update_time"`
 	EpochNumber            uint64        `json:"epoch_number"`
-	LastFaultyEpoch        uint64        `json:"last_faulty_epoch"` // 🆕 上次故障的epoch（如果之前有故障则保留，否则为0）
+	LastFaultyEpoch        uint64        `json:"last_faulty_epoch"` // 上次故障的epoch（如果之前有故障则保留，否则为0）
 	Reason                 string        `json:"reason"`
-	DoubleSigningHeight    uint64        `json:"double_signing_height,omitempty"` // 🆕 双重签名高度（严重违规）
+	DoubleSigningHeight    uint64        `json:"double_signing_height,omitempty"` // 双重签名高度（严重违规）
 }
 
 // Extra defines the structure of the extra field for Istanbul
@@ -84,15 +84,15 @@ type Extra struct {
 	Parent     *Signature
 	Committed  *Signature
 	Checkpoint *CheckpointData
-	// 🆕 奖励分配信息
+	// 奖励分配信息
 	RewardDistribution *RewardDistributionInfo
-	// 🆕 用于CheckpointHash计算的区块哈希
+	// 用于CheckpointHash计算的区块哈希
 	CheckpointBlockHash types.Hash
-	// 🆕 故障标志信息
+	// 故障标志信息
 	FaultFlags []FaultFlagInfo `json:"fault_flags,omitempty"`
-	// 🆕 下一个epoch的验证者集合（只在epoch边界区块时设置）
+	// 下一个epoch的验证者集合（只在epoch边界区块时设置）
 	NextEpochValidators validator.AccountSet `json:"next_epoch_validators,omitempty"`
-	// 🆕 故障消减信息（只包含 missed blocks 的消减，不包含双重签名）
+	// 故障消减信息（只包含 missed blocks 的消减，不包含双重签名）
 	SlashingInfo *SlashingInfo `json:"slashing_info,omitempty"`
 }
 
@@ -104,14 +104,14 @@ type RewardDistributionInfo struct {
 	Timestamp   uint64              `json:"timestamp"`
 }
 
-// 🆕 SlashingInfo 故障消减信息（只包含 missed blocks 的消减，不包含双重签名）
+// SlashingInfo 故障消减信息（只包含 missed blocks 的消减，不包含双重签名）
 type SlashingInfo struct {
 	EpochNumber uint64               `json:"epochNumber"`
 	Slashings   []*SlashingOperation `json:"slashings"` // 消减操作列表
 	Timestamp   uint64               `json:"timestamp"`
 }
 
-// 🆕 SlashingOperation 单个消减操作（只用于故障检测）
+// SlashingOperation 单个消减操作（只用于故障检测）
 type SlashingOperation struct {
 	ValidatorAddr          types.Address `json:"validatorAddr"`          // 被消减的验证者
 	SlashRate              uint64        `json:"slashRate"`              // 消减率（基点）
@@ -382,14 +382,14 @@ func (i *Extra) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 		vv.Set(i.Checkpoint.MarshalRLPWith(ar))
 	}
 
-	// 🆕 奖励分配信息
+	// 奖励分配信息
 	if i.RewardDistribution == nil {
 		vv.Set(ar.NewNullArray())
 	} else {
 		vv.Set(i.RewardDistribution.MarshalRLPWith(ar))
 	}
 
-	// 🆕 CheckpointBlockHash
+	// CheckpointBlockHash
 	if i.CheckpointBlockHash == (types.Hash{}) {
 		// 修复：使用空字节数组而不是NullArray，确保类型一致
 		vv.Set(ar.NewBytes([]byte{}))
@@ -397,7 +397,7 @@ func (i *Extra) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 		vv.Set(ar.NewBytes(i.CheckpointBlockHash.Bytes()))
 	}
 
-	// 🆕 Element[6] - FaultFlags
+	// Element[6] - FaultFlags
 	if len(i.FaultFlags) == 0 {
 		vv.Set(ar.NewNullArray())
 	} else {
@@ -419,7 +419,7 @@ func (i *Extra) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 		vv.Set(faultFlagsArray)
 	}
 
-	// 🆕 Element[7] - NextEpochValidators（只在epoch边界区块时设置）
+	// Element[7] - NextEpochValidators（只在epoch边界区块时设置）
 	if len(i.NextEpochValidators) == 0 {
 		vv.Set(ar.NewNullArray())
 	} else {
@@ -430,7 +430,7 @@ func (i *Extra) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 		vv.Set(nextEpochValidatorsArray)
 	}
 
-	// 🆕 Element[8] - SlashingInfo（故障消减信息）
+	// Element[8] - SlashingInfo（故障消减信息）
 	if i.SlashingInfo == nil {
 		vv.Set(ar.NewNullArray())
 	} else {
@@ -571,7 +571,7 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		}
 	}
 
-	// 🆕 Element[6] - FaultFlags（只在7个元素时处理）
+	// Element[6] - FaultFlags（只在7个元素时处理）
 	if len(elems) >= 7 && elems[6].Elems() > 0 {
 		faultFlagsElems, err := elems[6].GetElems()
 		if err == nil {
@@ -629,7 +629,7 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		}
 	}
 
-	// 🆕 Element[7] - NextEpochValidators（只在8个或9个元素时处理）
+	// Element[7] - NextEpochValidators（只在8个或9个元素时处理）
 	if len(elems) >= 8 && elems[7].Elems() > 0 {
 		nextEpochValidatorsElems, err := elems[7].GetElems()
 		if err == nil {
@@ -647,7 +647,7 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		}
 	}
 
-	// 🆕 Element[8] - SlashingInfo（只在9个元素时处理）
+	// Element[8] - SlashingInfo（只在9个元素时处理）
 	if len(elems) >= 9 && elems[8].Elems() > 0 {
 		i.SlashingInfo = &SlashingInfo{}
 		if err := i.SlashingInfo.UnmarshalRLPWith(elems[8]); err != nil {
@@ -661,9 +661,9 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 
 // processFaultFlags 处理故障标志并保存到数据库（独立函数，可在多个地方调用）
 func (i *Extra) processFaultFlags(blockNumber uint64, consensusBackend dposBackend, logger hclog.Logger) {
-	// 🆕 处理故障标志（在获取验证者集合之前，确保故障状态被保存）
+	// 处理故障标志（在获取验证者集合之前，确保故障状态被保存）
 	if len(i.FaultFlags) > 0 {
-		// 🆕 统计真正故障的验证者数量（isFaulty=true）
+		// 统计真正故障的验证者数量（isFaulty=true）
 		faultyCount := 0
 		for _, faultFlag := range i.FaultFlags {
 			if faultFlag.IsFaulty {
@@ -671,12 +671,12 @@ func (i *Extra) processFaultFlags(blockNumber uint64, consensusBackend dposBacke
 			}
 		}
 
-		// 🆕 只在有真正故障的验证者时才打印日志
+		// 只在有真正故障的验证者时才打印日志
 		var faultyFlags []FaultFlagInfo
 		savedCount := 0
 
 		for _, faultFlag := range i.FaultFlags {
-			// 🆕 保存故障状态到数据库（验证节点）
+			// 保存故障状态到数据库（验证节点）
 			// 只有当 isFaulty=true 时才保存，避免覆盖已存在的故障状态
 			if faultFlag.IsFaulty {
 				faultyFlags = append(faultyFlags, faultFlag)
@@ -695,20 +695,20 @@ func (i *Extra) processFaultFlags(blockNumber uint64, consensusBackend dposBacke
 						"address", faultFlag.NodeAddress.String())
 				}
 			} else {
-				// 🆕 如果 isFaulty=false，检查数据库中是否已有故障记录
+				// 如果 isFaulty=false，检查数据库中是否已有故障记录
 				// 如果有，说明验证者之前故障过，不应该覆盖（故障状态应该持续存在，直到通过提案恢复）
-				// 🆕 不打印日志，静默处理
+				// 不打印日志，静默处理
 				if dposInstance, ok := consensusBackend.(*DPoS); ok {
 					if dposInstance.state != nil && dposInstance.state.StakeStore != nil {
 						if dbFaultInfo, err := dposInstance.state.StakeStore.GetValidatorFaultStatus(faultFlag.NodeAddress); err == nil && dbFaultInfo != nil {
 							if dbIsFaulty, ok := dbFaultInfo["isFaulty"].(bool); ok && dbIsFaulty {
 								// 数据库中已有故障记录，不覆盖（保持故障状态）
-								// 🆕 不打印日志，静默处理
+								// 不打印日志，静默处理
 								continue
 							}
 						}
 						// 如果数据库中没有故障记录，或者已经是正常状态，可以更新为正常状态
-						// 🆕 不打印日志，静默处理
+						// 不打印日志，静默处理
 					}
 				}
 			}
@@ -749,7 +749,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		return nil
 	}
 
-	// 🆕 新增：检查是否在共识切换高度，如果是则完全跳过所有验证
+	// 新增：检查是否在共识切换高度，如果是则完全跳过所有验证
 	if consensusBackend != nil {
 		if dposBackend, ok := consensusBackend.(*DPoS); ok && dposBackend.config != nil {
 			if dposBackend.config.ConsensusSwitchHeight > 0 && blockNumber == dposBackend.config.ConsensusSwitchHeight {
@@ -791,16 +791,16 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 	}
 
 	// validate current block signatures
-	// 🆕 修复：使用与生产时完全相同的哈希计算方式
+	// 修复：使用与生产时完全相同的哈希计算方式
 	// 生产时使用：checkpoint.Hash(blockchain.GetChainID(), block.Block.Number(), fixedBlockHash)
 	// 验证时使用：i.Checkpoint.Hash(chainID, blockNumber, fixedBlockHash)
 	// 需要确保两者使用相同的参数和计算方式
 
-	// 🆕 使用ExtraData中保存的CheckpointBlockHash（生产时用于计算CheckpointHash的区块哈希）
+	// 使用ExtraData中保存的CheckpointBlockHash（生产时用于计算CheckpointHash的区块哈希）
 	// 确保区块哈希已经计算完成
 	realBlockHash := header.Hash
 
-	// 🆕 如果ExtraData中有CheckpointBlockHash，优先使用它
+	// 如果ExtraData中有CheckpointBlockHash，优先使用它
 	if i.CheckpointBlockHash != (types.Hash{}) {
 		realBlockHash = i.CheckpointBlockHash
 	} else {
@@ -810,20 +810,20 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 			"说明", "ExtraData中没有CheckpointBlockHash，验证时使用区块头哈希")
 	}
 
-	// 🆕 修复：使用传入的chainID参数，确保与生产时一致
+	// 修复：使用传入的chainID参数，确保与生产时一致
 	productionChainID := chainID
 
-	// 🆕 处理故障标志（调用独立函数）
+	// 处理故障标志（调用独立函数）
 	i.processFaultFlags(blockNumber, consensusBackend, logger)
 
-	// 🆕 从 ExtraData 中获取验证者集合
+	// 从 ExtraData 中获取验证者集合
 	validators, err := i.getValidatorsFromExtraData(header, parent, parents, consensusBackend, logger)
 	if err != nil {
 		logger.Error("❌ 从 ExtraData 获取验证者集合失败", "blockNumber", blockNumber, "error", err)
 		return fmt.Errorf("failed to get validators from ExtraData for block %d: %w", blockNumber, err)
 	}
 
-	// 🆕 关键修复：重新计算CheckpointData的哈希值，确保与生产时一致
+	// 关键修复：重新计算CheckpointData的哈希值，确保与生产时一致
 	// 生产时使用r.delegates.Hash()计算CurrentValidatorsHash和NextValidatorsHash
 	// 验证时需要重新计算这些哈希值，确保与生产时完全一致
 
@@ -850,7 +850,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		nextValidatorsHash = types.Hash{}
 	}
 
-	// 🆕 方案2：直接使用ExtraData中的轮次值，确保与生产时完全一致
+	// 方案2：直接使用ExtraData中的轮次值，确保与生产时完全一致
 	// 生产时使用的轮次值已经保存在ExtraData.Checkpoint.BlockRound中
 	// 验证时直接使用这个值，而不是重新计算
 
@@ -887,14 +887,14 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		return fmt.Errorf("failed to calculate proposal hash: %w", err)
 	}
 
-	// 🆕 关键修复：确保验证时使用的验证者集合与生产时完全一致
+	// 关键修复：确保验证时使用的验证者集合与生产时完全一致
 	// 生产时使用 r.delegates 设置位图索引，验证时也应该使用相同的验证者集合
 	logger.Debug("🔍 验证时验证者集合与生产时一致性检查",
 		"blockNumber", blockNumber,
 		"validatorsCount", len(validators),
 		"note", "确保验证者集合与生产时位图索引对应关系一致")
 
-	// 🆕 如果BLS公钥为nil，尝试从创世文件恢复
+	// 如果BLS公钥为nil，尝试从创世文件恢复
 	for i, validator := range validators {
 		if validator.BlsKey == nil {
 			// 尝试从DPoS实例获取BLS公钥
@@ -927,7 +927,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 			"proposalHash", checkpointHash.String(),
 			"error", err)
 
-		// 🆕 区块验证失败时直接退出程序
+		// 区块验证失败时直接退出程序
 		logger.Error("💀 区块验证失败，程序退出")
 		os.Exit(1)
 	}
@@ -943,7 +943,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		logger.Error("❌ ValidateFinalizedData 父区块签名验证失败", "blockNumber", blockNumber, "error", err)
 		return err
 	}
-	// 🆕 新增：检查parentExtra.Checkpoint是否为nil，避免空指针异常
+	// 新增：检查parentExtra.Checkpoint是否为nil，避免空指针异常
 	if parentExtra == nil || parentExtra.Checkpoint == nil {
 		logger.Info("🔄 ValidateFinalizedData 父区块Checkpoint为nil，跳过Checkpoint验证", "blockNumber", blockNumber, "parentBlockNumber", parent.Number)
 		return nil
@@ -955,7 +955,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		return err
 	}
 
-	// 🆕 双重签名检测和削减
+	// 双重签名检测和削减
 	if consensusBackend != nil {
 		if dposBackend, ok := consensusBackend.(*DPoS); ok {
 			// 检查是否有 doubleSigningDetector（通过检查是否有 DetectDoubleSigning 方法）
@@ -1067,7 +1067,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 		return nil
 	}
 
-	// 🆕 新增：检查是否在共识切换高度，如果是则跳过父区块BLS签名验证
+	// 新增：检查是否在共识切换高度，如果是则跳过父区块BLS签名验证
 	// 因为父区块可能使用IBFT共识，没有BLS签名
 	// 但继续执行后续的ValidateFinalizedData，应用方案2的完整修复逻辑
 	if consensusBackend != nil {
@@ -1078,7 +1078,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 					"switchHeight", dposBackend.config.ConsensusSwitchHeight,
 					"parentBlockNumber", parent.Number,
 					"reason", "父区块使用IBFT共识，但当前区块需要DPoS验证并应用方案2修复")
-				// 🆕 修复：在切换高度直接返回nil，跳过父区块BLS签名验证
+				// 修复：在切换高度直接返回nil，跳过父区块BLS签名验证
 				// 这样就不会因为父区块没有BLS签名而报错
 				return nil
 			}
@@ -1111,7 +1111,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 		)
 	}
 
-	// 🔍 打印验证时父区块验证者集合的详细信息
+	// 打印验证时父区块验证者集合的详细信息
 
 	// 使用固定的哈希值避免循环依赖，确保与生产区块时使用相同的checkpointHash
 	// 使用真实的父区块哈希
@@ -1123,7 +1123,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 
 	parentBlockNumber := blockNumber - 1
 	if err := i.Parent.Verify(parentBlockNumber, parentValidators, parentCheckpointHash, domain, logger); err != nil {
-		// 🆕 修复：检查是否是BLS密钥缺失错误，如果是则尝试获取
+		// 修复：检查是否是BLS密钥缺失错误，如果是则尝试获取
 		if strings.Contains(err.Error(), "has nil BLS key but is marked as signer in bitmap") {
 			logger.Warn("⚠️ ValidateParentSignatures - 检测到BLS密钥缺失错误，尝试获取缺失的BLS密钥",
 				"blockNumber", blockNumber,
@@ -1141,7 +1141,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 						"parentBlockNumber", parentBlockNumber,
 						"missingAddress", missingAddress.String())
 
-					// 🆕 修复：优先使用Signature中的DPoS实例引用
+					// 修复：优先使用Signature中的DPoS实例引用
 					var dposInstance *DPoS
 					var found bool
 
@@ -1193,7 +1193,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 							}
 						}
 
-						// 🆕 增强：增加BLS公钥网络请求的等待时间和重试机制
+						// 增强：增加BLS公钥网络请求的等待时间和重试机制
 						maxWaitTime := 10 * time.Second  // 增加等待时间到10秒
 						retryInterval := 2 * time.Second // 每2秒检查一次
 						maxRetries := int(maxWaitTime / retryInterval)
@@ -1231,7 +1231,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 							}
 						}
 
-						// 🆕 增强：重新尝试验证父区块签名，如果失败则继续重试
+						// 增强：重新尝试验证父区块签名，如果失败则继续重试
 						maxVerifyRetries := 3
 						verifySuccess := false
 
@@ -1322,7 +1322,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 type Signature struct {
 	AggregatedSignature []byte
 	Bitmap              bitmap.Bitmap
-	// 🆕 添加：DPoS实例引用，用于BLS密钥获取
+	// 添加：DPoS实例引用，用于BLS密钥获取
 	dposInstance *DPoS
 }
 
@@ -1384,7 +1384,7 @@ func (s *Signature) GetDPoSInstance() *DPoS {
 // tryFetchBLSKeyFromNetwork 尝试从网络获取BLS密钥并保存到验证者对象
 func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, blockNumber uint64, validators validator.AccountSet, logger hclog.Logger) bool {
 
-	// 🆕 获取DPoS实例
+	// 获取DPoS实例
 	var dposInstance *DPoS
 	var found bool
 
@@ -1435,7 +1435,7 @@ func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, bloc
 			"networkIntegrationExists", dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil)
 	}
 
-	// 🆕 等待网络响应
+	// 等待网络响应
 	maxWaitTime := 10 * time.Second  // 等待时间10秒
 	retryInterval := 2 * time.Second // 每2秒检查一次
 	maxRetries := int(maxWaitTime / retryInterval)
@@ -1454,7 +1454,7 @@ func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, bloc
 
 			if cachedBLSKey, exists := dposInstance.runtime.networkIntegration.GetBLSKey(missingAddress); exists {
 
-				// 🆕 关键修复：将获取到的BLS公钥保存到验证者对象中
+				// 关键修复：将获取到的BLS公钥保存到验证者对象中
 
 				if validators != nil {
 					found := false
@@ -1466,12 +1466,12 @@ func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, bloc
 
 							// 解析BLS公钥
 							if blsKey, err := bls.UnmarshalPublicKey(cachedBLSKey); err == nil {
-								// 🆕 关键修复：确保保存到正确的验证者对象
+								// 关键修复：确保保存到正确的验证者对象
 								validator.BlsKey = blsKey
 
 								// 立即验证保存结果
 								if validator.BlsKey != nil {
-									// 🆕 额外验证：检查保存后的公钥长度
+									// 额外验证：检查保存后的公钥长度
 									if marshaled := validator.BlsKey.Marshal(); len(marshaled) > 0 {
 										// BLS公钥保存成功
 									} else {
@@ -1486,7 +1486,7 @@ func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, bloc
 										"validatorIndex", i)
 								}
 
-								// 🆕 保存后验证：检查验证者集合中是否真的保存了BLS公钥
+								// 保存后验证：检查验证者集合中是否真的保存了BLS公钥
 								if found && validator.BlsKey != nil {
 									// BLS公钥已保存到验证者对象
 								}
@@ -1526,7 +1526,7 @@ func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, bloc
 		"address", missingAddress.String(),
 		"note", "将使用备选方案继续验证")
 
-	// 🆕 备选方案：尝试从本地获取BLS公钥
+	// 备选方案：尝试从本地获取BLS公钥
 	logger.Debug("🔍 尝试备选方案：从本地获取BLS公钥",
 		"blockNumber", blockNumber,
 		"address", missingAddress.String())
@@ -1540,7 +1540,7 @@ func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, bloc
 func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 	hash types.Hash, domain []byte, logger hclog.Logger) error {
 
-	// 🆕 新增：检查是否在共识切换高度，如果是则跳过BLS签名验证
+	// 新增：检查是否在共识切换高度，如果是则跳过BLS签名验证
 	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 		if dposInstance.config != nil && dposInstance.config.ConsensusSwitchHeight > 0 && blockNumber == dposInstance.config.ConsensusSwitchHeight {
 			logger.Info("🔄 检测到共识切换高度，跳过BLS签名验证",
@@ -1583,7 +1583,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		return fmt.Errorf("quorum not reached: current signatures %d, required %d", len(signers), requiredQuorumCount)
 	}
 
-	// 🆕 调试日志：打印当前验证者集合和位图信息
+	// 调试日志：打印当前验证者集合和位图信息
 	logger.Debug("🧾 验证节点收到的验证者集合",
 		"blockNumber", blockNumber,
 		"validatorsCount", len(validators))
@@ -1599,7 +1599,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		"bitmapHex", fmt.Sprintf("%x", s.Bitmap),
 		"bitmapLength", len(s.Bitmap))
 
-	// 🆕 修复：先计算位图中设置的位数，然后创建正确长度的数组
+	// 修复：先计算位图中设置的位数，然后创建正确长度的数组
 	bitmapSetCount := 0
 	for i := uint64(0); i < uint64(len(validators)); i++ {
 		if s.Bitmap.IsSet(i) {
@@ -1611,7 +1611,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 	blsPublicKeys := make([]*bls.PublicKey, len(validators))
 	missingBLSKeys := make([]types.Address, 0)
 
-	// 🆕 方案2：统一从网络集成层缓存获取BLS公钥，不依赖validator.BlsKey字段
+	// 方案2：统一从网络集成层缓存获取BLS公钥，不依赖validator.BlsKey字段
 	for i := uint64(0); i < uint64(len(validators)); i++ {
 		if s.Bitmap.IsSet(i) {
 			validator := validators[int(i)]
@@ -1655,7 +1655,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		}
 	}
 
-	// 🆕 方案2：如果还有缺失的BLS公钥，尝试主动获取
+	// 方案2：如果还有缺失的BLS公钥，尝试主动获取
 	if len(missingBLSKeys) > 0 {
 		logger.Info("🔄 发现缺失的BLS公钥，尝试主动获取",
 			"blockNumber", blockNumber,
@@ -1663,7 +1663,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 			"missingAddresses", missingBLSKeys,
 			"note", "BLS公钥未在缓存中找到，将尝试网络获取")
 
-		// 🆕 尝试主动获取缺失的BLS公钥
+		// 尝试主动获取缺失的BLS公钥
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			if dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
 				myAddress := types.Address(dposInstance.key.Address())
@@ -1682,7 +1682,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 					}
 				}
 
-				// 🆕 同步等待BLS公钥获取完成
+				// 同步等待BLS公钥获取完成
 				logger.Info("⏳ 等待BLS公钥网络响应",
 					"blockNumber", blockNumber,
 					"missingCount", len(missingBLSKeys),
@@ -1691,7 +1691,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 				maxWaitTime := 15 * time.Second
 				retryInterval := 1 * time.Second
 				maxRetries := int(maxWaitTime / retryInterval)
-				// 🆕 记录已发送请求的地址，避免重复发送
+				// 记录已发送请求的地址，避免重复发送
 				requestedAddresses := make(map[types.Address]bool)
 
 				for retry := 0; retry < maxRetries; retry++ {
@@ -1710,7 +1710,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 						break
 					}
 
-					// 🆕 在等待期间，检查peer连接状态并重试发送请求
+					// 在等待期间，检查peer连接状态并重试发送请求
 					if retry < maxRetries-1 {
 						// 检查未获取到BLS公钥的地址的peer连接状态
 						for _, address := range stillMissing {
@@ -1797,7 +1797,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 						"blockNumber", blockNumber,
 						"note", "可以继续BLS签名验证")
 
-					// 🆕 重新从缓存获取BLS公钥并更新blsPublicKeys数组
+					// 重新从缓存获取BLS公钥并更新blsPublicKeys数组
 					logger.Info("🔄 重新从缓存获取BLS公钥并更新数组",
 						"blockNumber", blockNumber,
 						"missingCount", len(missingBLSKeys))
@@ -1840,7 +1840,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		}
 	}
 
-	// 🆕 方案2：BLS公钥获取逻辑已简化，所有公钥应在启动时预加载完成
+	// 方案2：BLS公钥获取逻辑已简化，所有公钥应在启动时预加载完成
 
 	aggs, err := bls.UnmarshalSignature(s.AggregatedSignature)
 	if err != nil {
@@ -1848,20 +1848,20 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		return err
 	}
 
-	// 🆕 方案2：BLS公钥获取逻辑已统一到前面的循环中，这里不再需要额外处理
+	// 方案2：BLS公钥获取逻辑已统一到前面的循环中，这里不再需要额外处理
 
-	// 🆕 方案2修复：使用验证者地址映射来重新排列BLS公钥，确保与生产时的签名顺序完全一致
+	// 方案2修复：使用验证者地址映射来重新排列BLS公钥，确保与生产时的签名顺序完全一致
 	// 生产时按位图索引顺序聚合签名，验证时也应该按位图索引顺序排列公钥
 	validBLSKeys := make([]*bls.PublicKey, 0)
 	bitmapOrderedAddresses := make([]types.Address, 0)
 
-	// 🆕 方案2：创建地址到BLS公钥的映射，使用从网络集成层缓存获取的BLS公钥
+	// 方案2：创建地址到BLS公钥的映射，使用从网络集成层缓存获取的BLS公钥
 	addressToBLSKey := make(map[types.Address]*bls.PublicKey)
 	for i := uint64(0); i < uint64(len(validators)); i++ {
 		if s.Bitmap.IsSet(i) && int(i) < len(blsPublicKeys) && blsPublicKeys[i] != nil {
 			validator := validators[int(i)]
 			addressToBLSKey[validator.Address] = blsPublicKeys[i]
-			// 🆕 修复：同时设置validator.BlsKey字段，确保数据同步
+			// 修复：同时设置validator.BlsKey字段，确保数据同步
 			validator.BlsKey = blsPublicKeys[i]
 		}
 	}
@@ -1896,7 +1896,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 			"publicKeysCount", len(blsPublicKeys),
 			"signersCount", len(signers))
 
-		// 🆕 显示参与签名的验证者详情
+		// 显示参与签名的验证者详情
 		logger.Error("🔍 参与签名的验证者详情:")
 		for i, signer := range signers {
 			if i < len(validators) {
@@ -1911,7 +1911,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 			}
 		}
 
-		// 🆕 添加更详细的调试信息
+		// 添加更详细的调试信息
 		logger.Error("🔍 BLS签名验证失败详细信息",
 			"hashBytes", fmt.Sprintf("%x", hash[:]),
 			"hashLength", len(hash[:]),
@@ -1924,7 +1924,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		for i, pubKey := range blsPublicKeys {
 			if pubKey != nil {
 				pubKeyBytes := pubKey.Marshal()
-				// 🆕 修复：直接按位图索引从 validators 数组获取地址，避免访问 signers 数组
+				// 修复：直接按位图索引从 validators 数组获取地址，避免访问 signers 数组
 				var addressStr string
 				if int(i) < len(validators) {
 					addressStr = validators[int(i)].Address.String()
@@ -1937,7 +1937,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 					"publicKeyBytes", fmt.Sprintf("%x", pubKeyBytes),
 					"publicKeyLength", len(pubKeyBytes))
 			} else {
-				// 🆕 修复：直接按位图索引从 validators 数组获取地址，避免访问 signers 数组
+				// 修复：直接按位图索引从 validators 数组获取地址，避免访问 signers 数组
 				var addressStr string
 				var validatorAddress types.Address
 				if int(i) < len(validators) {
@@ -1951,7 +1951,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 					"index", i,
 					"address", addressStr)
 
-				// 🆕 尝试从缓存和创世文件恢复BLS公钥
+				// 尝试从缓存和创世文件恢复BLS公钥
 				if validatorAddress != (types.Address{}) {
 					if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 						var blsKeyBytes []byte
@@ -2066,7 +2066,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 			"blockNumber", blockNumber,
 			"reason", "BLS signature verification failed")
 
-		// 🆕 区块验证失败时直接退出程序
+		// 区块验证失败时直接退出程序
 		logger.Error("💀 区块验证失败，程序退出")
 		os.Exit(1)
 	}
@@ -2301,7 +2301,7 @@ func GetIbftExtra(extraRaw []byte) (*Extra, error) {
 	return extra, nil
 }
 
-// 🆕 辅助函数：获取位图中设置的位位置
+// 辅助函数：获取位图中设置的位位置
 func getBitmapSetPositions(bitmap bitmap.Bitmap) string {
 	positions := make([]string, 0)
 	for i := uint64(0); i < bitmap.Len(); i++ {
@@ -2312,7 +2312,7 @@ func getBitmapSetPositions(bitmap bitmap.Bitmap) string {
 	return strings.Join(positions, ",")
 }
 
-// 🆕 辅助函数：获取位图对应的验证者地址
+// 辅助函数：获取位图对应的验证者地址
 func getExpectedSignerAddresses(bitmap bitmap.Bitmap, validators validator.AccountSet) string {
 	addresses := make([]string, 0)
 	for i := uint64(0); i < uint64(len(validators)); i++ {
@@ -2329,14 +2329,14 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 
 	blockNumber := header.Number
 
-	// 🆕 添加 parent 的 nil 检查
+	// 添加 parent 的 nil 检查
 	if parent == nil {
-		// 🔍 优先从当前区块ExtraData获取生产时的验证者地址集合（实际签名者）
+		// 优先从当前区块ExtraData获取生产时的验证者地址集合（实际签名者）
 		if i.Validators != nil && !i.Validators.IsEmpty() && len(i.Validators.Added) > 0 {
 			// 从ExtraData获取实际签名者地址，然后从创世文件获取BLS公钥
 			validatorAddresses := i.Validators.Added
 
-			// 🆕 从创世文件获取BLS公钥，构建完整的验证者集合
+			// 从创世文件获取BLS公钥，构建完整的验证者集合
 			productionValidators := make(validator.AccountSet, 0, len(validatorAddresses))
 			for _, validatorAddr := range validatorAddresses {
 				// 从创世文件获取BLS公钥
@@ -2348,7 +2348,7 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 				// 构建完整的验证者信息
 				productionValidators = append(productionValidators, &validator.ValidatorMetadata{
 					Address:     validatorAddr.Address,
-					BlsKey:      blsKey, // 🆕 从创世文件获取的BLS公钥
+					BlsKey:      blsKey, // 从创世文件获取的BLS公钥
 					VotingPower: validatorAddr.VotingPower,
 					IsActive:    validatorAddr.IsActive,
 				})
@@ -2393,7 +2393,7 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 
 	// 获取父区块的验证者集合
 
-	// 🆕 如果父区块是区块1，直接返回创世验证者集合，避免无限递归
+	// 如果父区块是区块1，直接返回创世验证者集合，避免无限递归
 	if parent.Number == 1 {
 		logger.Info("📋 父区块是区块1，直接返回创世验证者集合",
 			"blockNumber", blockNumber,
@@ -2411,14 +2411,14 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 		return genesisValidators, nil
 	}
 
-	// 🆕 关键修复：如果当前区块的ExtraData中有验证者地址集合信息，直接使用
+	// 关键修复：如果当前区块的ExtraData中有验证者地址集合信息，直接使用
 	// 这确保验证时使用与生产时完全相同的验证者集合
 	if i.Validators != nil && !i.Validators.IsEmpty() && len(i.Validators.Added) > 0 {
 
 		// 从ExtraData获取验证者地址，然后从创世文件获取BLS公钥
 		validatorAddresses := i.Validators.Added
 
-		// 🆕 从创世文件获取BLS公钥，构建完整的验证者集合
+		// 从创世文件获取BLS公钥，构建完整的验证者集合
 		productionValidators := make(validator.AccountSet, 0, len(validatorAddresses))
 		// 从创世文件获取BLS公钥
 
@@ -2440,7 +2440,7 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 			// 构建完整的验证者信息
 			productionValidators = append(productionValidators, &validator.ValidatorMetadata{
 				Address:     validatorAddr.Address,
-				BlsKey:      blsKey, // 🆕 从创世文件获取的BLS公钥
+				BlsKey:      blsKey, // 从创世文件获取的BLS公钥
 				VotingPower: validatorAddr.VotingPower,
 				IsActive:    validatorAddr.IsActive,
 			})
@@ -2455,7 +2455,7 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 	}
 
 	// 如果没有验证者集合变化，直接返回父区块的验证者集合
-	// 🆕 但是仍然需要处理故障标志（即使没有验证者集合变化）
+	// 但是仍然需要处理故障标志（即使没有验证者集合变化）
 	logger.Info("🔍 getValidatorsFromExtraData 检查故障标志",
 		"blockNumber", blockNumber,
 		"hasValidators", i.Validators != nil && !i.Validators.IsEmpty(),
@@ -2467,7 +2467,7 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 			"parentValidatorsCount", len(parentValidators),
 			"faultFlagsCount", len(i.FaultFlags))
 
-		// 🆕 即使没有验证者集合变化，也要处理故障标志并保存到数据库
+		// 即使没有验证者集合变化，也要处理故障标志并保存到数据库
 		if len(i.FaultFlags) > 0 {
 			logger.Info("🔍 无验证者集合变化，但需要处理故障标志",
 				"blockNumber", blockNumber,
@@ -2483,7 +2483,7 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 						"reason", faultFlag.Reason)
 				}
 
-				// 🆕 保存故障状态到数据库（验证节点）
+				// 保存故障状态到数据库（验证节点）
 				if faultFlag.IsFaulty {
 					if dposInstance, ok := consensusBackend.(*DPoS); ok {
 						logger.Info("💾 验证节点开始保存故障状态到数据库（无验证者集合变化）",
@@ -2511,7 +2511,7 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 							"address", faultFlag.NodeAddress.String())
 					}
 				} else {
-					// 🆕 如果 isFaulty=false，检查数据库中是否已有故障记录
+					// 如果 isFaulty=false，检查数据库中是否已有故障记录
 					// 如果有，说明验证者之前故障过，不应该覆盖（故障状态应该持续存在，直到通过提案恢复）
 					if dposInstance, ok := consensusBackend.(*DPoS); ok {
 						if dposInstance.state != nil && dposInstance.state.StakeStore != nil {
@@ -2576,7 +2576,7 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 func (i *Extra) getGenesisValidators(consensusBackend dposBackend, logger hclog.Logger) (validator.AccountSet, error) {
 	logger.Info("🔍 开始从创世文件获取验证者集合")
 
-	// 🆕 直接从 DPoS 实例的内存中获取当前验证者集合（创世验证者）
+	// 直接从 DPoS 实例的内存中获取当前验证者集合（创世验证者）
 	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 		// 获取当前内存中的验证者集合，这些就是创世验证者
 		currentValidators := dposInstance.GetCurrentDelegates()
@@ -2711,7 +2711,7 @@ func (i *Extra) applyValidatorSetDelta(parentValidators validator.AccountSet, de
 		}
 	}
 
-	// 🆕 4. 处理故障标志
+	// 4. 处理故障标志
 	logger.Info("🔍 applyValidatorSetDelta 检查故障标志",
 		"faultFlagsCount", len(i.FaultFlags),
 		"hasValidators", delta != nil)
@@ -2731,7 +2731,7 @@ func (i *Extra) applyValidatorSetDelta(parentValidators validator.AccountSet, de
 			// 更新验证者故障状态（内存）
 			i.updateValidatorFaultStatus(currentValidators, faultFlag, logger)
 
-			// 🆕 保存故障状态到数据库（验证节点）
+			// 保存故障状态到数据库（验证节点）
 			// 只有当 isFaulty=true 时才保存，避免覆盖已存在的故障状态
 			if faultFlag.IsFaulty {
 				if dposInstance, ok := consensusBackend.(*DPoS); ok {
@@ -2756,7 +2756,7 @@ func (i *Extra) applyValidatorSetDelta(parentValidators validator.AccountSet, de
 						"address", faultFlag.NodeAddress.String())
 				}
 			} else {
-				// 🆕 如果 isFaulty=false，检查数据库中是否已有故障记录
+				// 如果 isFaulty=false，检查数据库中是否已有故障记录
 				// 如果有，说明验证者之前故障过，不应该覆盖（故障状态应该持续存在，直到通过提案恢复）
 				if dposInstance, ok := consensusBackend.(*DPoS); ok {
 					if dposInstance.state != nil && dposInstance.state.StakeStore != nil {

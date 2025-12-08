@@ -11,7 +11,6 @@ import (
 func (d *DPoS) executeParameterProposalInTx(proposalID string, proposal *ParameterProposal) error {
 	d.logger.Info("开始执行参数提案（登记待生效）", "proposalID", proposalID, "parameter", proposal.Parameter)
 
-	// 🆕 优化：压缩到1个epoch延迟
 	// 如果执行时不是epoch结束区块，在当前epoch结束就生效
 	// 如果执行时已经是epoch结束区块，在下一个epoch结束生效
 	currentBlockNumber := d.getCurrentBlockNumber()
@@ -77,7 +76,6 @@ func (d *DPoS) executeRecoveryProposalInTx(proposalID string, proposal *Paramete
 
 	d.logger.Info("开始执行验证者恢复提案（登记待生效）", "proposalID", proposalID, "validator", validatorAddr.String())
 
-	// 🆕 优化：压缩到1个epoch延迟
 	// 如果执行时不是epoch结束区块，在当前epoch结束就生效
 	// 如果执行时已经是epoch结束区块，在下一个epoch结束生效
 	currentBlockNumber := d.getCurrentBlockNumber()

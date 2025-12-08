@@ -37,7 +37,7 @@ type InspectResponse struct {
 	Queued             map[string]map[string]string `json:"queued"`
 	CurrentCapacity    uint64                       `json:"currentCapacity"`
 	MaxCapacity        uint64                       `json:"maxCapacity"`
-	MaxAccountEnqueued uint64                       `json:"maxAccountEnqueued"` // 🆕 每个账户最大enqueued交易数
+	MaxAccountEnqueued uint64                       `json:"maxAccountEnqueued"` // 每个账户最大enqueued交易数
 }
 
 type StatusResponse struct {
@@ -101,7 +101,7 @@ func (t *TxPool) Inspect() (interface{}, error) {
 		Queued:             convertTxMap(queuedTxs),
 		CurrentCapacity:    current,
 		MaxCapacity:        max,
-		MaxAccountEnqueued: maxAccountEnqueued, // 🆕 添加MaxAccountEnqueued字段
+		MaxAccountEnqueued: maxAccountEnqueued, // 添加MaxAccountEnqueued字段
 	}
 
 	return resp, nil

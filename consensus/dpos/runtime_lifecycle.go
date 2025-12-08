@@ -33,7 +33,7 @@ func (r *dposRuntime) start() error {
 	// 启动持久的签名请求监听器 - 确保所有节点都能接收到广播的签名请求
 	go r.listenForSignatureRequests(context.Background())
 
-	// 🆕 启动网络健康监控
+	// 启动网络健康监控
 	r.startNetworkHealthMonitoring()
 
 	r.logger.Debug("🎉 DPoS runtime启动成功")
@@ -48,7 +48,7 @@ func (r *dposRuntime) close() {
 	if r.voteTimer != nil {
 		r.voteTimer.Stop()
 	}
-	// 🆕 停止网络健康监控定时器
+	// 停止网络健康监控定时器
 	if r.networkHealthTimer != nil {
 		r.networkHealthTimer.Stop()
 	}
@@ -86,7 +86,7 @@ func (r *dposRuntime) cleanupRuntime() {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
-	// 🆕 先停止所有定时器，确保没有goroutine在运行
+	// 先停止所有定时器，确保没有goroutine在运行
 	if r.voteTimer != nil {
 		r.voteTimer.Stop()
 		r.voteTimer = nil
@@ -96,7 +96,7 @@ func (r *dposRuntime) cleanupRuntime() {
 		r.networkHealthTimer = nil
 	}
 
-	// 🆕 等待一小段时间，确保正在运行的goroutine能够完成
+	// 等待一小段时间，确保正在运行的goroutine能够完成
 	time.Sleep(100 * time.Millisecond)
 
 	// 清理投票者映射

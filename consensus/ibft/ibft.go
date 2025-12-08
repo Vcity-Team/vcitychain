@@ -117,7 +117,7 @@ type backendIBFT struct {
 	currentValidators validators.Validators // signer at current sequence
 	currentHooks      fork.HooksInterface   // Hooks at current sequence
 
-	// 🆕 新增：共识引擎管理
+	// 新增：共识引擎管理
 	currentEngine     interface{}       // 当前运行的共识引擎
 	engineType        string            // "ibft" 或 "dpos"
 	dposEngineStarter DPoSEngineStarter // DPoS引擎启动器
@@ -161,7 +161,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		quorumSizeBlockNum = uint64(readBlockNum)
 	}
 
-	// 🆕 新增：从配置中读取DPoS验证者数量
+	// 新增：从配置中读取DPoS验证者数量
 	var dposValidatorsCount = uint64(4) // 默认值
 	if rawDPoSValidatorsCount, ok := params.Config.Config["dposValidatorsCount"]; ok {
 		readDPoSValidatorsCount, ok := rawDPoSValidatorsCount.(float64)
@@ -171,7 +171,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		dposValidatorsCount = uint64(readDPoSValidatorsCount)
 	}
 
-	// 🆕 新增：从配置中读取DPoS最小质押门槛
+	// 新增：从配置中读取DPoS最小质押门槛
 	var dposDelegateThreshold *big.Int = nil
 	if rawDPoSDelegateThreshold, ok := params.Config.Config["dposDelegateThreshold"]; ok {
 		if thresholdStr, ok := rawDPoSDelegateThreshold.(string); ok && thresholdStr != "" {
@@ -191,12 +191,12 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		params.Config.Path,
 		epochSize,
 		params.Config.Config,
-		params.Config.DataDir, // 🆕 新增：数据目录参数
-		dposValidatorsCount,   // 🆕 新增：DPoS验证者数量参数（从配置读取）
-		dposDelegateThreshold, // 🆕 新增：DPoS最小质押门槛参数（从配置读取）
-		params.Network,        // 🆕 新增：网络组件参数
-		params.TxPool,         // 🆕 新增：交易池参数
-		params.Config,         // 🆕 新增：配置参数
+		params.Config.DataDir, // 新增：数据目录参数
+		dposValidatorsCount,   // 新增：DPoS验证者数量参数（从配置读取）
+		dposDelegateThreshold, // 新增：DPoS最小质押门槛参数（从配置读取）
+		params.Network,        // 新增：网络组件参数
+		params.TxPool,         // 新增：交易池参数
+		params.Config,         // 新增：配置参数
 	)
 
 	if err != nil {
@@ -215,7 +215,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 			params.Network,
 			params.Blockchain,
 			time.Duration(params.BlockTime)*3*time.Second,
-			forkManager.GetConsensusSwitchHeight(), // 🆕 传入正确的共识切换高度
+			forkManager.GetConsensusSwitchHeight(), // 传入正确的共识切换高度
 		),
 		secretsManager: params.SecretsManager,
 		Grpc:           params.Grpc,
@@ -287,7 +287,7 @@ func (i *backendIBFT) startSyncing() {
 	}()
 
 	callInsertBlockHook := func(fullBlock *types.FullBlock) bool {
-		// 🆕 检查是否是DPoS切换高度，如果是则停止同步
+		// 检查是否是DPoS切换高度，如果是则停止同步
 		if i.forkManager != nil {
 			if shouldStop := i.checkShouldStopIBFT(fullBlock.Block.Number()); shouldStop {
 				i.logger.Info("🛑 syncer检测到DPoS切换，停止IBFT同步", "height", fullBlock.Block.Number())
@@ -346,7 +346,7 @@ func (i *backendIBFT) Start() error {
 	return nil
 }
 
-// 🆕 简化：检查IBFT是否应该停止（通过验证者集合判断）
+// 简化：检查IBFT是否应该停止（通过验证者集合判断）
 func (i *backendIBFT) checkShouldStopIBFT(height uint64) bool {
 	// 通过检查验证者集合是否为空来判断是否需要停止
 	// 当ForkManager返回空验证者集合时，说明已经切换到DPoS
@@ -437,11 +437,11 @@ func (i *backendIBFT) startConsensus() {
 			pending = latest + 1
 		)
 
-		// 🆕 简化：检查是否需要停止IBFT（通过验证者集合判断）
+		// 简化：检查是否需要停止IBFT（通过验证者集合判断）
 		if i.forkManager != nil {
 			if shouldStop := i.checkShouldStopIBFT(pending); shouldStop {
 
-				// 🆕 完全停止IBFT共识引擎
+				// 完全停止IBFT共识引擎
 				i.logger.Info("🛑 ========== 开始完全停止IBFT共识引擎 ==========", "height", pending)
 
 				// 1. 停止IBFT的syncer
@@ -733,7 +733,7 @@ func (i *backendIBFT) ProcessHeaders(headers []*types.Header) error {
 
 // GetBlockCreator retrieves the block signer from the extra data field
 func (i *backendIBFT) GetBlockCreator(header *types.Header) (types.Address, error) {
-	// 🆕 检查是否已经切换到 DPoS
+	// 检查是否已经切换到 DPoS
 	// 如果区块高度 >= 共识切换高度，说明已经是 DPoS 区块，应该从 Miner 字段读取
 	if i.forkManager != nil {
 		consensusSwitchHeight := i.forkManager.GetConsensusSwitchHeight()

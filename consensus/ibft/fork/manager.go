@@ -87,7 +87,7 @@ type ForkManager struct {
 	filePath  string
 	epochSize uint64
 
-	// 🆕 新增：数据目录和共识切换配置
+	// 新增：数据目录和共识切换配置
 	dataDir               string    // 数据目录
 	consensusSwitchHeight uint64    // 共识切换高度
 	dposValidatorsCount   uint64    // DPoS验证者数量
@@ -96,12 +96,12 @@ type ForkManager struct {
 	hasSwitchedToDPoS     bool      // 是否已经切换到DPoS（避免重复日志）
 	lastConsensusFailure  time.Time // 上次共识失败时间（用于延迟重试）
 
-	// 🆕 新增：DPoS引擎相关
+	// 新增：DPoS引擎相关
 	dposEngine      DPoSEngine  // DPoS共识引擎
 	isDPoSRunning   bool        // DPoS引擎是否正在运行
 	consensusEngine interface{} // 当前运行的共识引擎
 
-	// 🆕 新增：DPoS插件所需字段
+	// 新增：DPoS插件所需字段
 	config  interface{} // 配置对象
 	network interface{} // 网络对象
 	txPool  interface{} // 交易池对象
@@ -121,12 +121,12 @@ func NewForkManager(
 	filePath string,
 	epochSize uint64,
 	ibftConfig map[string]interface{},
-	dataDir string, // 🆕 新增：数据目录参数
-	dposValidatorsCount uint64, // 🆕 新增：DPoS验证者数量参数
-	dposDelegateThreshold *big.Int, // 🆕 新增：DPoS最小质押门槛参数
-	network interface{}, // 🆕 新增：网络组件参数
-	txPool interface{}, // 🆕 新增：交易池参数
-	config interface{}, // 🆕 新增：配置参数
+	dataDir string, // 新增：数据目录参数
+	dposValidatorsCount uint64, // 新增：DPoS验证者数量参数
+	dposDelegateThreshold *big.Int, // 新增：DPoS最小质押门槛参数
+	network interface{}, // 新增：网络组件参数
+	txPool interface{}, // 新增：交易池参数
+	config interface{}, // 新增：配置参数
 ) (*ForkManager, error) {
 	forks, err := GetIBFTForks(ibftConfig)
 	if err != nil {
@@ -141,23 +141,23 @@ func NewForkManager(
 		filePath:              filePath,
 		epochSize:             epochSize,
 		forks:                 forks,
-		dataDir:               dataDir,               // 🆕 设置数据目录
-		dposValidatorsCount:   dposValidatorsCount,   // 🆕 设置DPoS验证者数量
-		dposDelegateThreshold: dposDelegateThreshold, // 🆕 设置DPoS最小质押门槛
-		network:               network,               // 🆕 设置网络组件
-		txPool:                txPool,                // 🆕 设置交易池
-		config:                config,                // 🆕 设置配置
+		dataDir:               dataDir,               // 设置数据目录
+		dposValidatorsCount:   dposValidatorsCount,   // 设置DPoS验证者数量
+		dposDelegateThreshold: dposDelegateThreshold, // 设置DPoS最小质押门槛
+		network:               network,               // 设置网络组件
+		txPool:                txPool,                // 设置交易池
+		config:                config,                // 设置配置
 		keyManagers:           make(map[validators.ValidatorType]signer.KeyManager),
 		validatorStores:       make(map[store.SourceType]ValidatorStore),
 		hooksRegisters:        make(map[IBFTType]HooksRegister),
 	}
 
-	// 🆕 读取创世块extraData
+	// 读取创世块extraData
 	if genesisHeader, exists := fm.blockchain.GetHeaderByNumber(0); exists {
 		fm.genesisExtraData = genesisHeader.ExtraData
 	}
 
-	// 🆕 设置共识切换高度（从配置中读取，如果没有则使用0表示不切换）
+	// 设置共识切换高度（从配置中读取，如果没有则使用0表示不切换）
 	if switchHeight, ok := ibftConfig["consensusSwitchHeight"]; ok {
 		if height, ok := switchHeight.(float64); ok {
 			fm.consensusSwitchHeight = uint64(height)
@@ -267,7 +267,7 @@ func (m *ForkManager) GetValidatorStore(height uint64) (ValidatorStore, error) {
 // GetValidators returns validators at specified height
 func (m *ForkManager) GetValidators(height uint64) (validators.Validators, error) {
 
-	// 🆕 检查是否需要切换到DPoS（0表示不进行切换）
+	// 检查是否需要切换到DPoS（0表示不进行切换）
 	if m.consensusSwitchHeight > 0 && height >= m.consensusSwitchHeight {
 		// 如果达到切换高度，返回空验证者集合，让IBFT停止
 		m.logger.Info("🛑 已达到DPoS切换高度，返回空验证者集合让IBFT停止", "height", height)
@@ -586,7 +586,7 @@ func (m *ForkManager) initializeHooksRegister(ibftType IBFTType) {
 	}
 }
 
-// 🆕 新增：读取BLS私钥文件并生成公钥（与测试文件逻辑完全一致）
+// 新增：读取BLS私钥文件并生成公钥（与测试文件逻辑完全一致）
 func (m *ForkManager) readBLSPrivateKeyAndGeneratePublicKey(validatorAddress types.Address) ([]byte, error) {
 	// 1. 构建私钥文件路径
 	keyFilePath := filepath.Join(m.dataDir, "consensus", "validator-bls.key")
@@ -638,7 +638,7 @@ func (m *ForkManager) readBLSPrivateKeyAndGeneratePublicKey(validatorAddress typ
 	return publicKeyBytes, nil
 }
 
-// 🆕 新增：查询验证者VCITY代币余额（通过executor获取，与eth_getBalance行为一致）
+// 新增：查询验证者VCITY代币余额（通过executor获取，与eth_getBalance行为一致）
 func (m *ForkManager) getValidatorBalance(address types.Address) (*big.Int, error) {
 	// 获取当前区块头
 	currentHeader := m.blockchain.Header()
@@ -673,12 +673,12 @@ func (m *ForkManager) getValidatorBalance(address types.Address) (*big.Int, erro
 	return big.NewInt(0), nil
 }
 
-// 🆕 新增：获取切换高度
+// 新增：获取切换高度
 func (m *ForkManager) GetSwitchHeight() uint64 {
 	return m.consensusSwitchHeight
 }
 
-// 🆕 新增：获取DPoS验证者（返回IBFT兼容格式，包含抵押检查）
+// 新增：获取DPoS验证者（返回IBFT兼容格式，包含抵押检查）
 func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, error) {
 	// 1. 从创世文件extraData解析验证者地址
 	ibftValidators, err := m.parseValidatorsFromExtraData(m.genesisExtraData)
@@ -717,7 +717,7 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 		ibftValidator := ibftValidators.At(uint64(i))
 		address := ibftValidator.Addr()
 
-		// 🆕 查询验证者余额
+		// 查询验证者余额
 		balance, err := m.getValidatorBalance(address)
 		if err != nil {
 			m.logger.Error("❌ 余额查询失败",
@@ -726,7 +726,7 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 			continue
 		}
 
-		// 🆕 检查是否满足最小质押要求
+		// 检查是否满足最小质押要求
 		if balance.Cmp(minStakeAmount) < 0 {
 			insufficientBalanceCount++
 			m.logger.Warn("⚠️ 验证者余额不足",
@@ -737,7 +737,7 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 			continue
 		}
 
-		// 🆕 从私钥文件生成BLS公钥
+		// 从私钥文件生成BLS公钥
 		blsPublicKey, err := m.readBLSPrivateKeyAndGeneratePublicKey(address)
 		if err != nil {
 			m.logger.Error("❌ BLS公钥生成失败",
@@ -746,7 +746,7 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 			continue
 		}
 
-		// 🆕 创建IBFT兼容的验证者，但包含BLS公钥
+		// 创建IBFT兼容的验证者，但包含BLS公钥
 		ecdsaValidator := validators.NewECDSAValidatorWithBLS(address, blsPublicKey)
 		validatorSet.Add(ecdsaValidator)
 		validValidatorCount++

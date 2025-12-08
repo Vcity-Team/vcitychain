@@ -72,12 +72,12 @@ type Blockchain struct {
 
 	stream *eventStream // Event subscriptions
 
-	// 🆕 记录上次本地生产的区块信息（用于统计）
+	// 记录上次本地生产的区块信息（用于统计）
 	lastProducedBlockNumber uint64     // 上次生产的区块号
 	lastProducedBlockTime   time.Time  // 上次生产区块的时间
 	lastProducedBlockMutex  sync.Mutex // 保护上次生产区块信息的互斥锁
 
-	// 🆕 记录区块生产开始时间（用于统计生产耗时）
+	// 记录区块生产开始时间（用于统计生产耗时）
 	lastBlockProductionStartTime  time.Time  // 上次区块生产开始的时间
 	lastBlockProductionStartMutex sync.Mutex // 保护生产开始时间的互斥锁
 
@@ -745,7 +745,7 @@ func (b *Blockchain) verifyBlockBody(block *types.Block) ([]*types.Receipt, erro
 		return nil, fmt.Errorf("unable to execute block transactions, %w", executeErr)
 	}
 
-	// 🆕 奖励分配已在 executor.ProcessBlock 中处理，无需重复执行
+	// 奖励分配已在 executor.ProcessBlock 中处理，无需重复执行
 	b.logger.Debug("ℹ️ 奖励分配已在 executor.ProcessBlock 中处理",
 		"blockNumber", block.Number(),
 		"说明", "奖励分配逻辑在 consensus/dpos/blockchain_wrapper.go 的 ProcessBlock 方法中执行")
@@ -768,7 +768,7 @@ func (br *BlockResult) verifyBlockResult(referenceBlock *types.Block) error {
 
 	// Make sure the world state root matches up
 	if br.Root != referenceBlock.Header.StateRoot {
-		// 🆕 详细的状态根对比日志
+		// 详细的状态根对比日志
 		fmt.Printf("🚨🚨🚨 ========== 状态根验证失败 ========== 🚨🚨🚨\n")
 		fmt.Printf("🚨 区块号: %d\n", referenceBlock.Number())
 		fmt.Printf("🚨 区块哈希: %s\n", referenceBlock.Hash().String())
@@ -788,7 +788,7 @@ func (br *BlockResult) verifyBlockResult(referenceBlock *types.Block) error {
 	// Make sure the receipts root matches up
 	receiptsRoot := buildroot.CalculateReceiptsRoot(br.Receipts)
 	if receiptsRoot != referenceBlock.Header.ReceiptsRoot {
-		// 🆕 详细的收据根对比日志
+		// 详细的收据根对比日志
 		fmt.Printf("🚨🚨🚨 ========== 收据根验证失败 ========== 🚨🚨🚨\n")
 		fmt.Printf("🚨 区块号: %d\n", referenceBlock.Number())
 		fmt.Printf("🚨 区块哈希: %s\n", referenceBlock.Hash().String())
@@ -900,7 +900,7 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 
 	b.dispatchEvent(evnt)
 
-	// 🆕 调用共识的 OnBlockInserted 来清理交易池
+	// 调用共识的 OnBlockInserted 来清理交易池
 	// 注意：
 	// 1. 同步区块时（source="syncer"）：必须调用 OnBlockInserted 来清理交易池
 	// 2. 本地生产区块时（source="consensus"）：虽然 consensusRuntime.OnBlockInserted 已经清理了交易池，
@@ -946,7 +946,7 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 			"note", "这可能导致交易池nonce未更新")
 	}
 
-	// 🆕 判断区块类型：空块、交易块、mix块
+	// 判断区块类型：空块、交易块、mix块
 	txCount := len(block.Transactions)
 	stateTxCount := 0
 	normalTxCount := 0
@@ -980,9 +980,9 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 		"hash", header.Hash,
 		"parent", header.ParentHash,
 		"source", source,
-		"blockType", blockType, // 🆕 区块类型：空块、交易块、mix块、状态块
-		"normalTxs", normalTxCount, // 🆕 普通交易数量
-		"stateTxs", stateTxCount, // 🆕 状态交易数量
+		"blockType", blockType, // 区块类型：空块、交易块、mix块、状态块
+		"normalTxs", normalTxCount, // 普通交易数量
+		"stateTxs", stateTxCount, // 状态交易数量
 	}
 
 	if prevHeader, ok := b.GetHeaderByNumber(header.Number - 1); ok {
@@ -990,10 +990,10 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 		logArgs = append(logArgs, "generation_time_in_seconds", diff)
 	}
 
-	// 🆕 根据 source 区分本地生产和同步区块的日志消息
+	// 根据 source 区分本地生产和同步区块的日志消息
 	logMessage := "💎 新区块写入"
 	if source == "consensus" {
-		// 🆕 本地生产区块：计算与上次生产的区块间隔
+		// 本地生产区块：计算与上次生产的区块间隔
 		b.lastProducedBlockMutex.Lock()
 		lastBlockNumber := b.lastProducedBlockNumber
 		lastBlockTime := b.lastProducedBlockTime
@@ -1016,7 +1016,7 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 		b.lastProducedBlockTime = currentBlockTime
 		b.lastProducedBlockMutex.Unlock()
 
-		// 🆕 计算生产耗时（从开始构建到写入完成）
+		// 计算生产耗时（从开始构建到写入完成）
 		var productionDuration time.Duration = 0
 		b.lastBlockProductionStartMutex.Lock()
 		startTime := b.lastBlockProductionStartTime
@@ -1029,15 +1029,15 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 
 		// 添加到日志参数
 		logArgs = append(logArgs,
-			"lastProducedBlockNumber", lastBlockNumber, // 🆕 上次生产的区块号
-			"blockInterval", blockInterval, // 🆕 区块间隔（当前区块号 - 上次区块号）
-			"timeInterval", timeInterval.String(), // 🆕 时间间隔
-			"timeIntervalSeconds", timeInterval.Seconds(), // 🆕 时间间隔（秒）
-			"productionDuration", productionDuration.String(), // 🆕 生产耗时（从开始构建到写入完成）
-			"productionDurationMs", productionDuration.Milliseconds(), // 🆕 生产耗时（毫秒）
+			"lastProducedBlockNumber", lastBlockNumber, // 上次生产的区块号
+			"blockInterval", blockInterval, // 区块间隔（当前区块号 - 上次区块号）
+			"timeInterval", timeInterval.String(), // 时间间隔
+			"timeIntervalSeconds", timeInterval.Seconds(), // 时间间隔（秒）
+			"productionDuration", productionDuration.String(), // 生产耗时（从开始构建到写入完成）
+			"productionDurationMs", productionDuration.Milliseconds(), // 生产耗时（毫秒）
 		)
 
-		// 🆕 尝试获取验证者详情并添加到日志中
+		// 尝试获取验证者详情并添加到日志中
 		// 定义接口来避免循环依赖
 		type validatorDetailGetter interface {
 			GetValidatorDetail(blockNumber uint64) map[string]interface{}
@@ -1093,7 +1093,7 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 				"source", source)
 		}
 
-		// 🆕 根据是否有交易使用不同的表情符号
+		// 根据是否有交易使用不同的表情符号
 		if txCount > 0 {
 			// 有交易：使用 🏭 表情符号
 			logMessage = "🏭 🏭 🏭 🏭 🏭 🏭 🏭  本地生产新区块写入（有交易）"
@@ -1105,7 +1105,7 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 		logMessage = "📥📥📥📥📥📥📥📥📥📥 同步新区块写入"
 	}
 
-	// 🆕 尝试获取 epoch 信息并添加到日志中
+	// 尝试获取 epoch 信息并添加到日志中
 	type epochInfoGetter interface {
 		GetEpochInfoForBlock(blockNumber uint64) map[string]interface{}
 	}
@@ -1127,7 +1127,7 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 
 	b.logger.Info(logMessage, logArgs...)
 
-	// 🆕 检查写入的区块状态根
+	// 检查写入的区块状态根
 	b.logger.Debug("🔍 区块写入完成状态根检查",
 		"blockNumber", header.Number,
 		"stateRoot", header.StateRoot.String(),

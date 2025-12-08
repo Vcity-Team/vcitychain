@@ -99,7 +99,7 @@ type blockchainWrapper struct {
 	logger     hclog.Logger  // 添加logger字段
 	state      *State        // 添加State字段
 
-	// 🆕 添加验证者更新回调函数
+	// 添加验证者更新回调函数
 	onValidatorsUpdated func(validators validator.AccountSet) error
 }
 
@@ -139,9 +139,9 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 
 	// apply transactions from block
 	for _, tx := range block.Transactions {
-		// 🆕 确保从区块读取的交易补齐 From（RLP不含From，需要本地恢复）
+		// 确保从区块读取的交易补齐 From（RLP不含From，需要本地恢复）
 		if tx.From == (types.Address{}) {
-			// 🆕 根据当前区块的 forks 状态创建正确的 signer
+			// 根据当前区块的 forks 状态创建正确的 signer
 			// 这样可以正确处理 EIP-1559 (DynamicFeeTx) 交易
 			forks := p.blockchain.Config().Forks.At(block.Number())
 			chainID := p.GetChainID()
@@ -186,10 +186,10 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 
 	isEpochEnd := p.isEpochEndBlock(block.Number())
 
-	// 🆕 添加详细的奖励分配跟踪日志
+	// 添加详细的奖励分配跟踪日志
 	p.logger.Info("🔍 [ProcessBlockExecutor] 检查epoch结束", "blockNumber", block.Number(), "isEpochEnd", isEpochEnd)
 
-	// 🆕 如果是epoch结束区块，处理奖励分发
+	// 如果是epoch结束区块，处理奖励分发
 	if isEpochEnd {
 		p.logger.Info("✅ [ProcessBlockExecutor] 是epoch结束区块，开始处理奖励分配和边界应用提案", "blockNumber", block.Number())
 		p.logger.Debug("🎯🎯🎯 ========== 开始执行奖励分配 ========== 🎯🎯🎯",
@@ -213,7 +213,7 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 		p.logger.Info("🔍 [ProcessBlockExecutor] 开始边界应用提案流程", "blockNumber", block.Number())
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			p.logger.Info("✅ [ProcessBlockExecutor] DPoS实例存在", "blockNumber", block.Number())
-			// 🆕 关键修复：在epoch结束区块时，应该查询当前epoch的提案，而不是下一个epoch
+			// 关键修复：在epoch结束区块时，应该查询当前epoch的提案，而不是下一个epoch
 			// 因为提案的effectiveEpoch是在当前epoch结束时生效的
 			// 例如：在epoch 6结束区块（7465）时，应该查询effectiveEpoch=6的提案
 			// 🔧 修复：使用 block.Number() - 1 来获取当前epoch（即将结束的epoch）
@@ -265,7 +265,7 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 
 			for _, prop := range uniq {
 				p.logger.Info("🔍 [边界应用提案] 检查提案", "proposalID", prop.ID, "proposalType", prop.ProposalType, "scheduled", prop.Schedule.Scheduled, "effectiveEpoch", prop.Schedule.EffectiveEpoch, "applied", prop.Schedule.Applied, "currentEpoch", currentEpoch)
-				// 🆕 再次检查 Applied，确保只执行一次
+				// 再次检查 Applied，确保只执行一次
 				if prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == currentEpoch && !prop.Schedule.Applied {
 					p.logger.Info("✅ [边界应用提案] 提案条件满足，开始应用", "proposalID", prop.ID, "proposalType", prop.ProposalType)
 					switch prop.ProposalType {
@@ -289,13 +289,13 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 								} else {
 									p.logger.Info("验证者故障标志已清除（数据库）", "proposalID", prop.ID, "validator", validatorAddr.String())
 
-									// 🆕 同时清除内存中的故障状态
+									// 同时清除内存中的故障状态
 									if dposInstance.faultyValidators != nil {
 										delete(dposInstance.faultyValidators, validatorAddr)
 										p.logger.Info("验证者故障标志已清除（内存）", "proposalID", prop.ID, "validator", validatorAddr.String())
 									}
 
-									// 🆕 重新加载验证者集合，确保内存缓存与数据库同步
+									// 重新加载验证者集合，确保内存缓存与数据库同步
 									if err := dposInstance.reloadValidatorsAfterRecovery(); err != nil {
 										p.logger.Error("重新加载验证者集合失败", "error", err, "proposalID", prop.ID, "validator", validatorAddr.String())
 									} else {
@@ -304,7 +304,7 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 
 									prop.Schedule.Applied = true
 									prop.Schedule.AppliedAtBlock = block.Number()
-									prop.Status = ProposalExecuted // 🆕 更新提案状态为已执行
+									prop.Status = ProposalExecuted // 更新提案状态为已执行
 
 									if err := dposInstance.governanceSaveProposal(prop); err != nil {
 										p.logger.Error("保存提案状态失败", "error", err, "proposalID", prop.ID)
@@ -356,9 +356,9 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 
 	// apply transactions from block
 	for _, tx := range block.Transactions {
-		// 🆕 确保从区块读取的交易补齐 From（RLP不含From，需要本地恢复）
+		// 确保从区块读取的交易补齐 From（RLP不含From，需要本地恢复）
 		if tx.From == (types.Address{}) {
-			// 🆕 根据当前区块的 forks 状态创建正确的 signer
+			// 根据当前区块的 forks 状态创建正确的 signer
 			// 这样可以正确处理 EIP-1559 (DynamicFeeTx) 交易
 			forks := p.blockchain.Config().Forks.At(block.Number())
 			chainID := p.GetChainID()
@@ -377,7 +377,7 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 			return nil, fmt.Errorf("process block tx error, tx = %v, err = %w", tx.Hash, err)
 		}
 
-		// 🆕 执行后识别是否为提案交易，并触发 DPoS 业务处理（不影响 EVM 结果）
+		// 执行后识别是否为提案交易，并触发 DPoS 业务处理（不影响 EVM 结果）
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			if len(tx.Input) > 0 && (tx.To != nil) {
 				if kind, err := ParseProposalInput(tx.Input); err == nil {
@@ -418,7 +418,7 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 
 	isEpochEnd := p.isEpochEndBlock(block.Number())
 
-	// 🆕 如果是epoch结束区块且不是生产节点自己生产的区块，处理奖励分发和下一个epoch验证者集合
+	// 如果是epoch结束区块且不是生产节点自己生产的区块，处理奖励分发和下一个epoch验证者集合
 	if isEpochEnd {
 		p.logger.Debug("🎯🎯🎯 ========== 开始执行奖励分配 ========== 🎯🎯🎯",
 			"blockNumber", block.Number(),
@@ -436,7 +436,7 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 			"blockNumber", block.Number(),
 			"blockHash", block.Hash().String()[:16])
 
-		// 🆕 处理故障消减（从ExtraData执行）
+		// 处理故障消减（从ExtraData执行）
 		if err := p.processSlashingInBlock(block, transition); err != nil {
 			p.logger.Error("❌❌❌ ========== 故障消减执行失败 ========== ❌❌❌",
 				"blockNumber", block.Number(),
@@ -457,7 +457,7 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 			// 不返回错误，继续处理其他逻辑
 		}
 
-		// 🆕 奖励分配与故障统计完成后，再在边界应用已登记的待生效提案，避免被同区块统计覆盖
+		// 奖励分配与故障统计完成后，再在边界应用已登记的待生效提案，避免被同区块统计覆盖
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			// 计算当前 epoch 编号
 			currentEpochMeta := dposInstance.getEpochForBlock(block.Number())
@@ -486,7 +486,7 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 
 			for _, prop := range uniq {
 				p.logger.Info("🔍 [边界应用提案] 检查提案", "proposalID", prop.ID, "proposalType", prop.ProposalType, "scheduled", prop.Schedule.Scheduled, "effectiveEpoch", prop.Schedule.EffectiveEpoch, "applied", prop.Schedule.Applied, "currentEpoch", currentEpoch)
-				// 🆕 再次检查 Applied，确保只执行一次
+				// 再次检查 Applied，确保只执行一次
 				if prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == currentEpoch && !prop.Schedule.Applied {
 					p.logger.Info("✅ [边界应用提案] 提案条件满足，开始应用", "proposalID", prop.ID, "proposalType", prop.ProposalType)
 					switch prop.ProposalType {
@@ -510,13 +510,13 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 								} else {
 									p.logger.Info("验证者故障标志已清除（数据库）", "proposalID", prop.ID, "validator", validatorAddr.String())
 
-									// 🆕 同时清除内存中的故障状态
+									// 同时清除内存中的故障状态
 									if dposInstance.faultyValidators != nil {
 										delete(dposInstance.faultyValidators, validatorAddr)
 										p.logger.Info("验证者故障标志已清除（内存）", "proposalID", prop.ID, "validator", validatorAddr.String())
 									}
 
-									// 🆕 重新加载验证者集合，确保内存缓存与数据库同步
+									// 重新加载验证者集合，确保内存缓存与数据库同步
 									if err := dposInstance.reloadValidatorsAfterRecovery(); err != nil {
 										p.logger.Error("重新加载验证者集合失败", "error", err, "proposalID", prop.ID, "validator", validatorAddr.String())
 									} else {
@@ -525,7 +525,7 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 
 									prop.Schedule.Applied = true
 									prop.Schedule.AppliedAtBlock = block.Number()
-									prop.Status = ProposalExecuted // 🆕 更新提案状态为已执行
+									prop.Status = ProposalExecuted // 更新提案状态为已执行
 
 									if err := dposInstance.governanceSaveProposal(prop); err != nil {
 										p.logger.Error("保存提案状态失败", "error", err, "proposalID", prop.ID)
@@ -669,7 +669,7 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 		return fmt.Errorf("failed to unmarshal extra data: %w", err)
 	}
 
-	// 🔍 添加详细的奖励信息日志
+	// 添加详细的奖励信息日志
 	if extra.RewardDistribution != nil {
 		p.logger.Debug("💰 ExtraData包含奖励信息",
 			"blockNumber", block.Number(),
@@ -739,7 +739,7 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 				"cnt", cnt)
 		}
 
-		// 🆕 同步节点也需要记录奖励到数据库（用于查询）
+		// 同步节点也需要记录奖励到数据库（用于查询）
 		// 获取DPoS实例和RewardStore
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			if dposInstance.state != nil && dposInstance.state.RewardStore != nil {
@@ -876,7 +876,7 @@ func (p *blockchainWrapper) processSlashingInBlock(block *types.Block, transitio
 			"missedBlocksPercentage", slashingOp.MissedBlocksPercentage,
 			"reason", slashingOp.Reason)
 
-		// 🆕 executeSlashing 内部已有幂等性检查（基于 blockNumber + validatorAddr）
+		// executeSlashing 内部已有幂等性检查（基于 blockNumber + validatorAddr）
 		// 如果已执行过，会直接返回 nil，不会重复执行
 		if err := dposInstance.executeSlashing(
 			slashingOp.ValidatorAddr,

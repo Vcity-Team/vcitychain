@@ -36,7 +36,7 @@ type GoroutineManager struct {
 		peakGoroutines         int64
 	}
 
-	// 🆕 日志间隔管理
+	// 日志间隔管理
 	lastLogTime map[string]time.Time
 	logMutex    sync.RWMutex
 }
@@ -346,7 +346,7 @@ func (gm *GoroutineManager) detectGoroutineLeaks() {
 	}
 }
 
-// 🆕 防重复日志函数（自定义间隔）
+// 防重复日志函数（自定义间隔）
 func (gm *GoroutineManager) logOnceWithInterval(key string, interval time.Duration, level string, message string, args ...interface{}) {
 	gm.logMutex.Lock()
 	defer gm.logMutex.Unlock()

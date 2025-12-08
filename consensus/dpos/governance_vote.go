@@ -30,7 +30,7 @@ func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, s
 		return fmt.Errorf("voting period has ended or not started")
 	}
 
-	// 🆕 检查投票者是否有余额（允许所有有余额的用户投票）
+	// 检查投票者是否有余额（允许所有有余额的用户投票）
 	var balance *big.Int
 	var err error
 	if d.balanceQuerier != nil {
@@ -70,7 +70,7 @@ func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, s
 		return fmt.Errorf("already voted on this proposal")
 	}
 
-	// 🆕 计算投票权重（基于余额，而不是质押）
+	// 计算投票权重（基于余额，而不是质押）
 	// 使用余额作为投票权重，这样余额越多权重越大
 	weight := balance
 
@@ -132,12 +132,12 @@ func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, s
 }
 
 // CheckProposalResult 检查提案投票结果
-// ⚠️ 注意：调用此函数时，调用者必须已经持有 d.lock 锁，否则会导致死锁
+// 注意：调用此函数时，调用者必须已经持有 d.lock 锁，否则会导致死锁
 func (d *DPoS) CheckProposalResult(proposalID string) error {
 	checkStartTime := time.Now()
 	d.logger.Info("🔍 [CheckProposalResult] 开始检查投票结果", "proposalID", proposalID, "startTime", checkStartTime.Format("15:04:05.000000"))
 
-	// ⚠️ 不再获取锁，因为调用者已经持有锁（ProcessProposalExecuteTransaction已经持有d.lock）
+	// 不再获取锁，因为调用者已经持有锁（ProcessProposalExecuteTransaction已经持有d.lock）
 	// 如果这里再次获取锁，会导致死锁（Go的sync.Mutex不是可重入的）
 
 	proposal, exists := d.parameterProposals[proposalID]

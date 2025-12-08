@@ -155,7 +155,7 @@ func (d *DPOS) validateProposer(proposer types.Address, proposerPrivateKeyHex st
 	}
 
 	// 4. 验证proposer是否是验证者（通过store获取验证者列表）
-	// 🆕 使用与 GetStakingInfo 相同的回退方案，确保能正确获取验证者
+	// 使用与 GetStakingInfo 相同的回退方案，确保能正确获取验证者
 	d.logger.Info("🔍 [validateProposer] 开始获取验证者列表", "proposer", proposer.String())
 	var validators validator.AccountSet
 
@@ -318,7 +318,7 @@ func (d *DPOS) signTransaction(tx *types.Transaction, expectedAddr types.Address
 
 	d.logger.Info("✅ ECDSA私钥对象创建成功", "privateKeyD", privateKey.D.String())
 
-	// 🆕 从私钥计算对应的地址并验证
+	// 从私钥计算对应的地址并验证
 	d.logger.Info("🔍 从私钥计算对应的地址")
 	calculatedAddr := crypto.PubKeyToAddress(&privateKey.PublicKey)
 	d.logger.Info("🔍 私钥对应的地址", "calculatedAddr", calculatedAddr.String())
@@ -812,7 +812,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	}
 	d.logger.Info("Balance check passed")
 
-	// 🆕 新增：受托人候选人验证
+	// 新增：受托人候选人验证
 	d.logger.Info("🔍 开始验证受托人候选人资格",
 		"voter", voterAddr.String(),
 		"candidate", candidateAddr.String(),
@@ -832,12 +832,12 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	if isRegistered, ok := dposEngine.(interface {
 		IsDelegateRegistered(address types.Address) bool
 	}); ok {
-		// 🆕 检查是否为创世验证者
+		// 检查是否为创世验证者
 		isGenesis, okGenesis := dposEngine.(interface {
 			IsGenesisValidator(address types.Address) bool
 		})
 
-		// 🆕 创世验证者可以直接被投票，无需注册
+		// 创世验证者可以直接被投票，无需注册
 		if okGenesis && isGenesis.IsGenesisValidator(candidateAddr) {
 			d.logger.Info("✅ 受托人是创世验证者，跳过注册检查", "candidate", candidateAddr.String())
 		} else if !isRegistered.IsDelegateRegistered(candidateAddr) {
@@ -875,7 +875,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		d.logger.Warn("⚠️ DPoS引擎不支持受托人候选人检查，跳过验证")
 	}
 
-	// 🆕 新增：在创建交易前进行完整的投票验证
+	// 新增：在创建交易前进行完整的投票验证
 	d.logger.Info("🔍 开始预验证投票参数", "voter", voterAddr, "candidate", candidateAddr, "amount", amountInt)
 
 	// 创建投票消息进行预验证
@@ -887,7 +887,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		Timestamp: uint64(time.Now().Unix()),
 	}
 
-	// 🆕 修复：只进行验证，不实际更新状态，避免重复处理
+	// 修复：只进行验证，不实际更新状态，避免重复处理
 	if dposEngineInstance, ok := dposEngine.(*dpos.DPoS); ok {
 		// 只调用验证方法，不更新状态
 		if err := dposEngineInstance.ValidateVoteOnly(voteMessage.Voter, voteMessage.Delegate, voteMessage.Amount); err != nil {
@@ -925,7 +925,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		}, nil
 	}
 
-	// 🆕 如果 amount <= 0，表示解质押，返回削减信息
+	// 如果 amount <= 0，表示解质押，返回削减信息
 	if amountInt == nil || amountInt.Sign() <= 0 {
 		d.logger.Info("🔍 检测到解质押请求", "voter", voterAddr.String(), "validator", candidateAddr.String())
 		unvoteResp, err := d.buildUnvoteResponse(voterAddr, candidateAddr)
@@ -1155,7 +1155,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	}); ok {
 		d.logger.Info("Store has GetConsensus method, attempting to get consensus engine...")
 
-		// 🆕 新增：直接获取DPoS引擎
+		// 新增：直接获取DPoS引擎
 		consensusEngine := d.getDPoSEngineDirectly(consensusStore)
 
 		if consensusEngine == nil {
@@ -1163,7 +1163,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		} else {
 			d.logger.Info("Consensus engine type", "type", fmt.Sprintf("%T", consensusEngine))
 
-			// 🆕 修复：本地投票不直接更新状态，避免重复计算
+			// 修复：本地投票不直接更新状态，避免重复计算
 			// 所有投票都通过区块同步统一处理，确保一致性
 			d.logger.Info("ℹ️ 本地投票已创建交易，状态将在区块同步时更新")
 			d.logger.Info("ℹ️ 这避免了重复计算问题，确保所有节点状态一致")
@@ -1377,7 +1377,7 @@ func (d *DPOS) VoteByAddress(ctx context.Context, params interface{}) (*VoteResp
 func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) ([]*dpos.StakeInfo, error) {
 	d.logger.Info("DPoS GetStakingInfo called", "blockNumber", blockNumber)
 
-	// 🆕 修改：dpos_getStakingInfo 应该返回验证者列表，而不是投票记录
+	// 修改：dpos_getStakingInfo 应该返回验证者列表，而不是投票记录
 	// 尝试多种方式获取验证者列表
 	var validators validator.AccountSet
 	var err error
@@ -1440,7 +1440,7 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) ([]*dpos
 			Staker:    validator.Address,
 			Amount:    new(big.Int).Set(validator.VotingPower),
 			IsActive:  validator.IsActive,
-			FaultFlag: faultInfo, // 🆕 添加故障标志
+			FaultFlag: faultInfo, // 添加故障标志
 		}
 
 		result = append(result, stakingInfo)
@@ -1547,7 +1547,7 @@ func (d *DPOS) GetCurrentRound(ctx context.Context) (uint64, error) {
 			}
 		}
 
-		// 🆕 如果引擎返回0，尝试从DPoS引擎直接获取所需信息进行计算
+		// 如果引擎返回0，尝试从DPoS引擎直接获取所需信息进行计算
 		if dpos, ok := dposEngine.(*dpos.DPoS); ok {
 			// 从DPoS引擎获取当前区块号
 			currentBlockHeight := dpos.GetCurrentBlockNumber()
@@ -1864,7 +1864,7 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		return amountFloat.Text('f', 6)
 	}
 
-	// 🆕 聚合投票记录：按 staker+delegate 聚合，累加 amount
+	// 聚合投票记录：按 staker+delegate 聚合，累加 amount
 	d.logger.Info("🔵 [GetValidatorVotingDetails] 步骤3: 遍历投票记录并聚合", "validator", validatorAddr.String())
 
 	// 聚合结构体
@@ -2047,7 +2047,7 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 
 	// Build validator details
 
-	// 🆕 votingPower 应该等于 totalStakedToMe（totalStakedToMe 已经包含了所有投票，包括自己投给自己的）
+	// votingPower 应该等于 totalStakedToMe（totalStakedToMe 已经包含了所有投票，包括自己投给自己的）
 	votingPower := totalStakedToValidator
 
 	d.logger.Info("🔵 [GetValidatorVotingDetails] 构建返回结果",
@@ -2449,7 +2449,7 @@ func (d *DPOS) broadcastTransaction(tx *types.Transaction) error {
 func (d *DPOS) getDelegatesFromDatabase() []*dpos.StakeInfo {
 	d.logger.Info("🔄 从数据库中查询所有受托人信息...")
 
-	// 🆕 修复：通过全局注册表获取DPoS实例，然后调用其方法
+	// 修复：通过全局注册表获取DPoS实例，然后调用其方法
 	// 使用DPoS实例的公开方法，避免访问未导出的字段
 	if dposInstance, exists := dpos.GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
 		d.logger.Info("✅ 通过全局注册表找到DPoS实例")
@@ -2750,7 +2750,7 @@ func (d *DPOS) extractVotingInfoFromDelegates(delegates validator.AccountSet) []
 	var stakes []*dpos.StakeInfo
 
 	for _, delegate := range delegates {
-		// 🆕 修复：使用创世配置中的质押数量
+		// 修复：使用创世配置中的质押数量
 		// 根据你的创世文件，每个初始验证者的质押数量应该是 1000000000000000000000 (1 ETH)
 		stakeAmount := new(big.Int).Set(delegate.VotingPower)
 
@@ -2795,16 +2795,16 @@ func (d *DPOS) extractVotingInfoFromDelegates(delegates validator.AccountSet) []
 }
 
 // mergeStakingInfo merges static staking info with dynamic voting info
-// 🆕 修复：按受托人地址去重，避免重复累加投票权重
+// 修复：按受托人地址去重，避免重复累加投票权重
 func (d *DPOS) mergeStakingInfo(static []*dpos.StakeInfo, dynamic []*dpos.StakeInfo) []*dpos.StakeInfo {
 	d.logger.Info("Merging staking info", "staticCount", len(static), "dynamicCount", len(dynamic))
 
-	// 🆕 修复：按受托人地址去重，而不是按staker-delegate组合去重
+	// 修复：按受托人地址去重，而不是按staker-delegate组合去重
 	// 这样可以避免同一个受托人的投票信息被重复累加
 	delegateMap := make(map[types.Address]*dpos.StakeInfo)
 	var merged []*dpos.StakeInfo
 
-	// 🆕 修复：让动态投票数据优先，确保正确的委托关系
+	// 修复：让动态投票数据优先，确保正确的委托关系
 	// 先添加动态投票信息（来自实际的投票数据）
 	for _, stake := range dynamic {
 		if stake.Staker != types.ZeroAddress &&
@@ -2812,7 +2812,7 @@ func (d *DPOS) mergeStakingInfo(static []*dpos.StakeInfo, dynamic []*dpos.StakeI
 			stake.Amount != nil &&
 			stake.Amount.Cmp(big.NewInt(0)) > 0 {
 
-			// 🆕 修复：按受托人地址去重，优先使用动态投票数据
+			// 修复：按受托人地址去重，优先使用动态投票数据
 			if existing, exists := delegateMap[stake.Delegate]; !exists || stake.Amount.Cmp(existing.Amount) > 0 {
 				delegateMap[stake.Delegate] = stake
 				d.logger.Info("✅ Added/Updated dynamic voting stake (priority)",
@@ -2830,7 +2830,7 @@ func (d *DPOS) mergeStakingInfo(static []*dpos.StakeInfo, dynamic []*dpos.StakeI
 			stake.Amount != nil &&
 			stake.Amount.Cmp(big.NewInt(0)) > 0 {
 
-			// 🆕 修复：按受托人地址去重，如果动态数据中没有该受托人，则添加静态数据
+			// 修复：按受托人地址去重，如果动态数据中没有该受托人，则添加静态数据
 			if existing, exists := delegateMap[stake.Delegate]; !exists {
 				delegateMap[stake.Delegate] = stake
 				d.logger.Info("✅ Added static stake (delegate not in dynamic data)",
@@ -2847,7 +2847,7 @@ func (d *DPOS) mergeStakingInfo(static []*dpos.StakeInfo, dynamic []*dpos.StakeI
 		}
 	}
 
-	// 🆕 修复：将去重后的数据转换为切片
+	// 修复：将去重后的数据转换为切片
 	for _, stake := range delegateMap {
 		merged = append(merged, stake)
 	}
@@ -3923,7 +3923,7 @@ func (d *DPOS) GetValidatorRewardsInfo(ctx context.Context, params interface{}) 
 	}, nil
 }
 
-// 🆕 治理相关JSON-RPC方法
+// 治理相关JSON-RPC方法
 
 // CreateParameterProposal 创建参数表决提案
 func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) (interface{}, error) {
@@ -4028,7 +4028,7 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 		return nil, fmt.Errorf("invalid parameter: %s is not a votable parameter", parameter)
 	}
 
-	// 🆕 验证私钥和proposer地址，并检查proposer是否是验证者
+	// 验证私钥和proposer地址，并检查proposer是否是验证者
 	if err := d.validateProposer(proposer, proposerPrivateKeyHex); err != nil {
 		return nil, err
 	}
@@ -4095,7 +4095,7 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 
 	d.logger.Info("✅ 参数提案交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", finalProposalID)
 
-	// 🆕 获取当前区块高度
+	// 获取当前区块高度
 	currentBlockNumber := gov.GetCurrentBlockNumber()
 	if currentBlockNumber == 0 {
 		currentBlockNumber = d.getCurrentBlockHeight()
@@ -4213,7 +4213,7 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 		return nil, err
 	}
 
-	// 🆕 验证私钥和proposer地址，并检查proposer是否是验证者
+	// 验证私钥和proposer地址，并检查proposer是否是验证者
 	if err := d.validateProposer(proposer, proposerPrivateKeyHex); err != nil {
 		return nil, err
 	}
@@ -4272,7 +4272,7 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 
 	d.logger.Info("✅ 恢复提案交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", finalProposalID)
 
-	// 🆕 获取当前区块高度
+	// 获取当前区块高度
 	currentBlockNumber := gov.GetCurrentBlockNumber()
 	if currentBlockNumber == 0 {
 		currentBlockNumber = d.getCurrentBlockHeight()
@@ -4369,7 +4369,7 @@ func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) 
 		}
 	}
 
-	// 🆕 改为通过交易进行投票
+	// 改为通过交易进行投票
 	// 1. 创建临时投票对象用于签名
 	tempVote := &dpos.ParameterVote{
 		Voter:      voter,
@@ -4405,7 +4405,7 @@ func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) 
 
 	d.logger.Info("✅ 投票交易已创建并广播", "txHash", tx.Hash.String(), "proposalID", proposalID, "voter", voter.String())
 
-	// 🆕 获取当前区块高度
+	// 获取当前区块高度
 	currentBlockNumber := gov.GetCurrentBlockNumber()
 	if currentBlockNumber == 0 {
 		currentBlockNumber = d.getCurrentBlockHeight()
@@ -4500,7 +4500,7 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 		}
 	}
 
-	// 🆕 先获取当前区块高度，供 isPassed 使用
+	// 先获取当前区块高度，供 isPassed 使用
 	currentBlockNumber := gov.GetCurrentBlockNumber()
 	if currentBlockNumber == 0 {
 		currentBlockNumber = d.getCurrentBlockHeight()
@@ -4522,7 +4522,7 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 			return fmt.Sprintf("%.2f%%", value)
 		}(),
 		"isPassed": func() bool {
-			// 🆕 修复：isPassed 必须与 Status 保持一致
+			// 修复：isPassed 必须与 Status 保持一致
 			// 1. 如果投票期未结束，返回 false（即使支持率100%）
 			if currentBlockNumber <= proposal.EndBlock {
 				return false
@@ -4562,7 +4562,7 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 		timeInfo["isExpired"] = true
 	}
 
-	// 🆕 保存 currentBlockNumber 供 isPassed 使用
+	// 保存 currentBlockNumber 供 isPassed 使用
 	voteStats["currentBlockNumber"] = currentBlockNumber
 
 	// 格式化创建时间
@@ -4679,7 +4679,7 @@ func (d *DPOS) RegisterDelegate(ctx context.Context, params interface{}) (interf
 		}
 		d.logger.Info("🎉 ===== 受托人注册RPC调用成功 =====")
 
-		// 🆕 获取冻结信息
+		// 获取冻结信息
 		frozenAt := uint64(time.Now().Unix())
 		result := map[string]interface{}{
 			"success":      true,
@@ -4811,7 +4811,7 @@ func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interf
 	}); ok {
 		err := withdrawDelegate.WithdrawDelegate(address)
 		if err != nil {
-			// 🆕 检查错误类型，返回详细错误信息
+			// 检查错误类型，返回详细错误信息
 			errStr := err.Error()
 			if strings.Contains(errStr, "cannot withdraw while having votes") {
 				// 有投票，需要先撤回
@@ -4833,7 +4833,7 @@ func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interf
 			return nil, fmt.Errorf("failed to withdraw delegate: %w", err)
 		}
 
-		// 🆕 获取解冻信息
+		// 获取解冻信息
 		result := map[string]interface{}{
 			"success": true,
 			"message": "Delegate withdrawn and unfrozen successfully",
@@ -4967,7 +4967,7 @@ func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (
 		}, nil
 	}
 
-	// 🆕 备用方案：如果 store 返回 nil，尝试从 DPoS engine 或全局注册实例获取
+	// 备用方案：如果 store 返回 nil，尝试从 DPoS engine 或全局注册实例获取
 	if dposState == nil {
 		// 尝试从当前共识引擎获取
 		if engine := d.getDPoSEngine(); engine != nil {
@@ -5017,7 +5017,7 @@ func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (
 		}, nil
 	}
 
-	// 🆕 从 ParameterStore 读取默认佣金率，如果不存在则使用硬编码默认值 1000 (10%)
+	// 从 ParameterStore 读取默认佣金率，如果不存在则使用硬编码默认值 1000 (10%)
 	defaultCommission := uint64(1000)
 	if dposState.ParameterStore != nil {
 		if value, err := dposState.ParameterStore.GetParameterValue("dpos_commission_ratio"); err == nil {
@@ -5032,7 +5032,7 @@ func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (
 		}
 	}
 
-	// 🆕 优先从数据库（ParameterStore）读取佣金生效周期（经过治理流程修改的值是权威数据源）
+	// 优先从数据库（ParameterStore）读取佣金生效周期（经过治理流程修改的值是权威数据源）
 	effectivePeriod := 21 * 24 * time.Hour // 默认值，仅在无法获取配置时使用
 	if dposState.ParameterStore != nil {
 		if value, err := dposState.ParameterStore.GetParameterValue("dpos_commission_effective"); err == nil {
@@ -5043,7 +5043,7 @@ func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (
 		}
 	}
 
-	// 🆕 如果数据库中没有，从 DPoS 引擎配置读取（从配置文件读取的初始值）
+	// 如果数据库中没有，从 DPoS 引擎配置读取（从配置文件读取的初始值）
 	if effectivePeriod == 21*24*time.Hour {
 		if dposEngine := d.getDPoSEngine(); dposEngine != nil {
 			if dpos, ok := dposEngine.(*dpos.DPoS); ok {
@@ -5089,7 +5089,7 @@ func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (
 		status = "default"
 	}
 
-	// 🆕 计算剩余时间（从当前时间到生效时间的剩余时间，等同于 secondsUntilEffective）
+	// 计算剩余时间（从当前时间到生效时间的剩余时间，等同于 secondsUntilEffective）
 	remainTime := secondsUntilEffective
 
 	response := map[string]interface{}{
@@ -5639,18 +5639,18 @@ func (d *DPOS) ExecuteParameterUpdate(ctx context.Context, params interface{}) (
 		return nil, fmt.Errorf("proposal %s has already been executed (status: executed), cannot execute again", proposalID)
 	}
 
-	// 🆕 获取当前区块高度
+	// 获取当前区块高度
 	currentBlockNumber := gov.GetCurrentBlockNumber()
 	if currentBlockNumber == 0 {
 		currentBlockNumber = d.getCurrentBlockHeight()
 	}
 
-	// 🆕 检查1：投票期必须已结束
+	// 检查1：投票期必须已结束
 	if currentBlockNumber <= proposal.EndBlock {
 		return nil, fmt.Errorf("proposal %s voting period has not ended yet (current block %d <= end block %d), cannot execute", proposalID, currentBlockNumber, proposal.EndBlock)
 	}
 
-	// 🆕 检查2：如果投票期已结束但状态未更新，先检查投票结果
+	// 检查2：如果投票期已结束但状态未更新，先检查投票结果
 	if proposal.Status != dpos.ProposalPassed && proposal.Status != dpos.ProposalRejected {
 		// 尝试通过 governanceEngine 调用 CheckProposalResult
 		if checkResultEngine, ok := gov.(interface {
@@ -5667,14 +5667,14 @@ func (d *DPOS) ExecuteParameterUpdate(ctx context.Context, params interface{}) (
 		}
 	}
 
-	// 🆕 检查3：提案状态必须为 Passed
+	// 检查3：提案状态必须为 Passed
 	if proposal.Status != dpos.ProposalPassed {
 		return nil, fmt.Errorf("proposal %s status is %s, must be 'passed' to execute", proposalID, proposal.Status.String())
 	}
 
 	d.logger.Info("提案状态检查通过", "proposalID", proposalID, "status", proposal.Status.String(), "currentBlock", currentBlockNumber, "endBlock", proposal.EndBlock)
 
-	// 🆕 改为通过交易执行提案
+	// 改为通过交易执行提案
 	// 1. 解析执行者地址和私钥（已在上面解析）
 	executor := types.StringToAddress(executorStr)
 	if executor == (types.Address{}) {
@@ -5897,7 +5897,7 @@ func (d *DPOS) GetBlockProducers(ctx context.Context, params interface{}) (map[s
 	return result, nil
 }
 
-// 🆕 提案交易创建辅助函数
+// 提案交易创建辅助函数
 
 // createProposalCreateTransaction 创建创建提案交易
 func (d *DPOS) createProposalCreateTransaction(proposer types.Address, proposerPrivateKeyHex string, txData dpos.ProposalCreateTxData) (*types.Transaction, error) {

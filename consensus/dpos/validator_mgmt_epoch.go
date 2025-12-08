@@ -35,7 +35,7 @@ func (d *DPoS) getCurrentEpoch() *epochMetadata {
 
 // getEpochForBlock 获取指定区块号的epoch信息
 func (d *DPoS) getEpochForBlock(blockNumber uint64) *epochMetadata {
-	// 🆕 修改：基于指定区块号计算epoch
+	// 修改：基于指定区块号计算epoch
 	targetBlockNumber := blockNumber
 	if blockNumber == 0 {
 		// 如果传入0，则使用当前区块号
@@ -94,7 +94,7 @@ func (d *DPoS) getEpochSize() uint64 {
 		return 28800 // 默认值：86400秒 / 3秒 = 28800个区块
 	}
 
-	// 🆕 优先从参数系统读取 dpos_epoch_duration（经过治理流程修改的值是权威数据源）
+	// 优先从参数系统读取 dpos_epoch_duration（经过治理流程修改的值是权威数据源）
 	var epochDuration time.Duration
 	if paramValue, err := d.getCurrentParameterValue("dpos_epoch_duration"); err == nil {
 		// 解析参数值（可能是字符串或数字）

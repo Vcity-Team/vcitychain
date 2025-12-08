@@ -24,7 +24,7 @@ type BlockScheduler struct {
 	blockchain            BlockchainInterface
 	consensusSwitchHeight uint64
 	logger                hclog.Logger
-	// 🆕 日志间隔管理
+	// 日志间隔管理
 	lastLogTime map[string]time.Time
 }
 
@@ -81,8 +81,8 @@ func NewBlockScheduler(
 func (bs *BlockScheduler) ShouldProduceBlockNow(
 	myAddress types.Address,
 	validators []types.Address,
-	blockNumber uint64, // 📍 这是已同步的当前区块号，来自 blockchain.CurrentHeader().Number
-	validatorsSource string, // 🆕 验证者列表来源（用于日志）
+	blockNumber uint64, // 这是已同步的当前区块号，来自 blockchain.CurrentHeader().Number
+	validatorsSource string, // 验证者列表来源（用于日志）
 ) bool {
 	if len(validators) == 0 {
 		bs.logger.Debug("❌ ShouldProduceBlockNow: 验证者列表为空")
@@ -90,7 +90,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	}
 
 	// 检查是否在共识切换高度之后
-	// 🆕 修复：blockNumber是当前区块高度，下一个要生产的区块是blockNumber+1
+	// 修复：blockNumber是当前区块高度，下一个要生产的区块是blockNumber+1
 	// 所以应该检查下一个区块是否达到共识切换高度
 	nextBlockNumber := blockNumber + 1
 	if nextBlockNumber < bs.consensusSwitchHeight {
@@ -123,17 +123,17 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	expectedValidator := validators[currentValidatorIndex]
 	isMatch := expectedValidator == myAddress
 
-	// 🆕 只有当本地节点应该出块时才打印详细日志（每次出块都打印，因为频率已经很低）
+	// 只有当本地节点应该出块时才打印详细日志（每次出块都打印，因为频率已经很低）
 	if isMatch {
 		bs.logger.Info("🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块",
-			"blockNumber", blockNumber, // 📍 这个 blockNumber 来自 currentBlock.Number（已同步的区块号）
-			"nextBlockNumber", nextBlockNumber, // 📍 下一个应生产的区块号（blockNumber + 1）
-			"currentSlot", currentSlot, // 📍 基于时间计算的当前slot（第103行）
+			"blockNumber", blockNumber, // 这个 blockNumber 来自 currentBlock.Number（已同步的区块号）
+			"nextBlockNumber", nextBlockNumber, // 下一个应生产的区块号（blockNumber + 1）
+			"currentSlot", currentSlot, // 基于时间计算的当前slot（第103行）
 			"activeValidatorCount", activeValidatorCount,
-			"activeValidatorCountSource", validatorsSource, // 🆕 验证者列表来源
+			"activeValidatorCountSource", validatorsSource, // 验证者列表来源
 			"myAddress", myAddress.String(),
 			"expectedValidator", fmt.Sprintf("[%d]%s", currentValidatorIndex, expectedValidator.String()),
-			"validatorIndex", currentValidatorIndex, // 📍 基于slot计算的验证者索引（第113行）
+			"validatorIndex", currentValidatorIndex, // 基于slot计算的验证者索引（第113行）
 			"isMatch", isMatch,
 			"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
 			"now", now.Format("2006-01-02 15:04:05.000"),
@@ -173,18 +173,18 @@ func (bs *BlockScheduler) StartNewEpoch(epochNumber uint64, currentTime time.Tim
 }
 
 // shouldProduceBlockNow 检查当前节点是否应该现在出块
-// 🆕 方案2：使用读锁，不阻塞其他检查
+// 方案2：使用读锁，不阻塞其他检查
 func (r *dposRuntime) shouldProduceBlockNow() bool {
 	currentBlock := r.config.blockchain.CurrentHeader()
 	if currentBlock == nil {
-		// 🆕 添加调试日志
+		// 添加调试日志
 		r.logOnceWithInterval("should_produce_block_now_no_header", 10*time.Second, "warn",
 			"❌ shouldProduceBlockNow: 无法获取当前区块头",
 			"timestamp", time.Now().Format("15:04:05.000"))
 		return false
 	}
 
-	// 🆕 新增：检查是否落后，如果落后则先同步再出块
+	// 新增：检查是否落后，如果落后则先同步再出块
 	if r.config.dposBackend != nil {
 		networkLatest := r.getNetworkLatestBlockNumber()
 		if networkLatest > currentBlock.Number {
@@ -192,7 +192,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		}
 	}
 
-	// 🆕 方案2：使用读锁快速检查lastProducedSlot（如果使用blockScheduler）
+	// 方案2：使用读锁快速检查lastProducedSlot（如果使用blockScheduler）
 	if r.config.blockScheduler != nil {
 		now := time.Now()
 		genesisTime := r.config.blockScheduler.GetGenesisTime()
@@ -200,7 +200,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		timeSinceGenesis := now.Sub(genesisTime)
 		currentSlot := int(timeSinceGenesis / blockWindow)
 
-		// 🆕 使用读锁快速检查
+		// 使用读锁快速检查
 		r.lock.RLock()
 		lastSlot := r.lastProducedSlot
 		r.lock.RUnlock()
@@ -211,7 +211,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		}
 	}
 
-	// 🆕 添加详细的调试日志（使用Debug级别）
+	// 添加详细的调试日志（使用Debug级别）
 	r.logOnceWithInterval("should_produce_block_now_debug", 5*time.Second, "debug",
 		"🔍 shouldProduceBlockNow 开始检查",
 		"currentBlockNumber", currentBlock.Number,
@@ -238,12 +238,12 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 
 		// 优先从数据库获取预先计算的epoch验证者集合
 		validatorsFromExtra, err := dposInstance.getEpochValidatorsFromDatabase()
-		validatorsSource := "database" // 🆕 记录验证者列表来源
+		validatorsSource := "database" // 记录验证者列表来源
 		if err != nil || len(validatorsFromExtra) == 0 {
 			// 如果数据库中没有预先计算的验证者集合，回退到实时查询（兼容性）
 			// 这种情况可能发生在：1. 第一次启动 2. 数据库被清空 3. 之前的epoch没有保存
 			validatorsFromExtra, err = dposInstance.GetSortedValidatorsWithLimit()
-			validatorsSource = "realtime_query" // 🆕 更新来源为实时查询
+			validatorsSource = "realtime_query" // 更新来源为实时查询
 			if err != nil {
 				r.logger.Error("❌ 实时查询验证者集合失败",
 					"blockNumber", currentBlock.Number,
@@ -257,7 +257,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			}
 		}
 
-		// 🆕 直接使用数据库中的验证者集合（已在epoch边界过滤）
+		// 直接使用数据库中的验证者集合（已在epoch边界过滤）
 		validators := make([]types.Address, 0, len(validatorsFromExtra))
 		for _, v := range validatorsFromExtra {
 			validators = append(validators, v.Address)
@@ -269,7 +269,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			return false
 		}
 
-		// 🆕 调用改进后的方法（直接比较地址）
+		// 调用改进后的方法（直接比较地址）
 		result := r.config.blockScheduler.ShouldProduceBlockNow(myAddress, validators, currentBlock.Number, validatorsSource)
 
 		return result

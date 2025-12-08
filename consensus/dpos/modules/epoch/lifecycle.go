@@ -199,7 +199,7 @@ func (m *lifecycleManager) runFaultDetection(ctx core.EpochBoundaryContext, epoc
 	// 避免写入ExtraData，导致同步节点再次保存旧的故障状态
 	filteredFaultFlags := make([]core.FaultFlagInfo, 0, len(faultFlags))
 	for _, flag := range faultFlags {
-		// 🆕 检查该验证者是否有待生效的恢复提案
+		// 检查该验证者是否有待生效的恢复提案
 		// 如果有，跳过保存故障状态，避免覆盖恢复结果
 		if m.deps.CheckRecoveryProposal != nil {
 			hasRecoveryProposal := m.deps.CheckRecoveryProposal(flag.ValidatorAddress, epochNumber)

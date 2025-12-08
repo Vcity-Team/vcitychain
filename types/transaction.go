@@ -21,9 +21,9 @@ const (
 	LegacyTx          TxType = 0x0
 	StateTx           TxType = 0x7f
 	DynamicFeeTx      TxType = 0x02
-	ProposalCreateTx  TxType = 0xf0 // 🆕 创建提案交易
-	ProposalVoteTx    TxType = 0xf1 // 🆕 投票交易
-	ProposalExecuteTx TxType = 0xf2 // 🆕 执行提案交易
+	ProposalCreateTx  TxType = 0xf0 // 创建提案交易
+	ProposalVoteTx    TxType = 0xf1 // 投票交易
+	ProposalExecuteTx TxType = 0xf2 // 执行提案交易
 )
 
 func txTypeFromByte(b byte) (TxType, error) {

@@ -28,7 +28,7 @@ type dposRuntime struct {
 
 	// 运行时状态
 	currentRound            uint64
-	lastProducedSlot        int       // 🆕 记录上次出块的 slot，防止一个 slot 内出多个区块
+	lastProducedSlot        int       // 记录上次出块的 slot，防止一个 slot 内出多个区块
 	lastBlockProductionTime time.Time // 记录上次本地出块的时间
 	lastBlockNumber         uint64    // 记录上次出块的区块号
 	delegates               validator.AccountSet
@@ -42,7 +42,7 @@ type dposRuntime struct {
 	// 定时器
 	voteTimer *time.Ticker
 
-	// 🆕 网络健康监控
+	// 网络健康监控
 	networkHealthTimer *time.Ticker
 	lastNetworkCheck   time.Time
 
@@ -64,7 +64,7 @@ type dposRuntime struct {
 	processedSignatureGenerations map[string]time.Time
 	signatureGenerationDedupMutex sync.RWMutex
 
-	// 🆕 缓存第一次成功获取的4个验证者，确保整个区块生产过程中使用相同的验证者集合
+	// 缓存第一次成功获取的4个验证者，确保整个区块生产过程中使用相同的验证者集合
 	cachedProductionValidators validator.AccountSet
 
 	// 私钥缓存 - 避免重复文件读取
@@ -76,7 +76,7 @@ type dposRuntime struct {
 	signatureRequestSemaphore chan struct{}
 	maxConcurrentSignatures   int
 
-	// 🆕 投票签名验证相关
+	// 投票签名验证相关
 	processedVotes map[string]bool // 防重放：已处理的投票nonce
 	voteMutex      sync.RWMutex    // 保护processedVotes的并发访问
 
@@ -86,11 +86,11 @@ type dposRuntime struct {
 	// 资源监控
 	resourceMonitor *ResourceMonitor
 
-	// 🆕 防重复日志机制
+	// 防重复日志机制
 	lastLogTime map[string]time.Time
 	logMutex    sync.RWMutex
 
-	// 🆕 下一个epoch的验证者集合（只在epoch边界区块时设置，用于写入ExtraData）
+	// 下一个epoch的验证者集合（只在epoch边界区块时设置，用于写入ExtraData）
 	nextEpochValidators validator.AccountSet
 }
 

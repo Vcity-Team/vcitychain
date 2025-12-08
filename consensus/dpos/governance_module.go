@@ -28,7 +28,7 @@ func (d *DPoS) buildGovernanceModuleDependencies() governancemodule.Dependencies
 			if err := store.SaveProposal(proposal); err != nil {
 				return err
 			}
-			// 🆕 同时更新内存缓存，确保边界应用时能查询到
+			// 同时更新内存缓存，确保边界应用时能查询到
 			if d.parameterProposals == nil {
 				d.parameterProposals = make(map[string]*ParameterProposal)
 			}
@@ -50,7 +50,7 @@ func (d *DPoS) buildGovernanceModuleDependencies() governancemodule.Dependencies
 			return store.GetAllProposals()
 		},
 		ListScheduled: func(epoch uint64) ([]*core.ParameterProposal, error) {
-			// 🔍 添加日志，跟踪传入的epoch参数
+			// 添加日志，跟踪传入的epoch参数
 			d.logger.Info("🔍🔍🔍 [buildGovernanceModuleDependencies.ListScheduled] 开始查询",
 				"epoch", epoch,
 				"说明", "查询effectiveEpoch等于此值的待应用提案")

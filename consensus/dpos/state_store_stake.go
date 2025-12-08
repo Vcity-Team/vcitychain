@@ -74,11 +74,11 @@ func (s *StakeStore) initialize(dbTx *bolt.Tx) error {
 		"DelegatesAtBlock",
 		"VotingPowerAtBlock",
 		"VoterInfo",
-		"DelegateInfo", // 🆕 新增：受托人信息存储
+		"DelegateInfo", // 新增：受托人信息存储
 		"RewardHistory",
 		"EpochRewards",
-		"SlashingHistory", // 🆕 新增：削减历史记录
-		"DPoSState",       // 🆕 第一层保护：存储 currentEpoch 等状态
+		"SlashingHistory", // 新增：削减历史记录
+		"DPoSState",       // 第一层保护：存储 currentEpoch 等状态
 	}
 
 	for _, bucketName := range buckets {
@@ -141,18 +141,18 @@ func (s *StakeStore) getFullValidatorSet(dbTx *bolt.Tx) (validatorSetState, erro
 	return fullValidatorSet, err
 }
 
-// 🆕 新增：GetValidators方法，实现与命令一致的数据源
+// 新增：GetValidators方法，实现与命令一致的数据源
 func (s *StakeStore) GetValidators() (validator.AccountSet, error) {
 	return s.GetValidatorsWithFilter(true)
 }
 
-// 🆕 新增：GetValidatorsWithFilter方法，支持控制是否过滤
+// 新增：GetValidatorsWithFilter方法，支持控制是否过滤
 func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (validator.AccountSet, error) {
 	var validators validator.AccountSet
 	// 移除详细日志，减少刷屏，只在错误时输出
 
 	err := s.db.View(func(tx *bolt.Tx) error {
-		// 🆕 修改：直接从DelegateInfo表读取验证者信息，不做任何处理
+		// 修改：直接从DelegateInfo表读取验证者信息，不做任何处理
 		delegateBucket := tx.Bucket([]byte("DelegateInfo"))
 		if delegateBucket == nil {
 			return fmt.Errorf("DelegateInfo bucket not found")
@@ -197,7 +197,7 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 		return nil, fmt.Errorf("failed to get validators from database: %w", err)
 	}
 
-	// 🆕 按权重倒序排序，确保权重高的验证者排在前面
+	// 按权重倒序排序，确保权重高的验证者排在前面
 	sort.Slice(validators, func(i, j int) bool {
 		// 先按权重倒序排序
 		weightCmp := validators[i].VotingPower.Cmp(validators[j].VotingPower)
@@ -267,7 +267,7 @@ func (s *StakeStore) GetSlashingHistory(validatorAddr types.Address) ([]*Slashin
 	return histories, err
 }
 
-// 🆕 检查是否已执行过指定区块的消减（幂等性检查）
+// 检查是否已执行过指定区块的消减（幂等性检查）
 func (s *StakeStore) HasSlashingHistory(validatorAddr types.Address, blockNumber uint64) (bool, error) {
 	if s == nil || s.db == nil {
 		return false, fmt.Errorf("stake store not initialized")
@@ -293,7 +293,7 @@ func (s *StakeStore) HasSlashingHistory(validatorAddr types.Address, blockNumber
 	return exists, err
 }
 
-// 🆕 第一层保护：保存当前已检测的epoch索引（防止重复检测）
+// 第一层保护：保存当前已检测的epoch索引（防止重复检测）
 func (s *StakeStore) SaveCurrentEpoch(epochIndex uint64) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("stake store not initialized")
@@ -313,7 +313,7 @@ func (s *StakeStore) SaveCurrentEpoch(epochIndex uint64) error {
 	})
 }
 
-// 🆕 第一层保护：加载当前已检测的epoch索引（防止重复检测）
+// 第一层保护：加载当前已检测的epoch索引（防止重复检测）
 func (s *StakeStore) LoadCurrentEpoch() (uint64, error) {
 	if s == nil || s.db == nil {
 		return 0, fmt.Errorf("stake store not initialized")
@@ -343,7 +343,7 @@ func (s *StakeStore) LoadCurrentEpoch() (uint64, error) {
 	return epochIndex, err
 }
 
-// 🆕 新增：GetStakingInfo方法，直接从数据库读取，不做修改
+// 新增：GetStakingInfo方法，直接从数据库读取，不做修改
 func (s *StakeStore) GetStakingInfo() ([]*StakeInfo, error) {
 	var stakingInfos []*StakeInfo
 
@@ -400,7 +400,7 @@ func (s *StakeStore) getStakingInfo(staker types.Address, dbTx *bolt.Tx) (*Stake
 }
 
 // setStakingInfo 保存质押信息到数据库
-// 🆕 使用复合 key (staker + delegate + timestamp) 来支持历史记录模式
+// 使用复合 key (staker + delegate + timestamp) 来支持历史记录模式
 // 每次投票都会创建独立记录，不会覆盖历史记录
 func (s *StakeStore) setStakingInfo(staker types.Address, info *StakeInfo, timestamp uint64, dbTx *bolt.Tx) error {
 	bucket, err := dbTx.CreateBucketIfNotExists([]byte("StakingInfo"))
@@ -413,7 +413,7 @@ func (s *StakeStore) setStakingInfo(staker types.Address, info *StakeInfo, times
 		return fmt.Errorf("failed to marshal staking info: %w", err)
 	}
 
-	// 🆕 使用复合 key: staker (20 bytes) + delegate (20 bytes) + timestamp (8 bytes) = 48 bytes
+	// 使用复合 key: staker (20 bytes) + delegate (20 bytes) + timestamp (8 bytes) = 48 bytes
 	// 这样每次投票都有唯一 key，不会覆盖历史记录
 	key := make([]byte, 48)
 	copy(key[0:20], staker[:])
@@ -1010,7 +1010,7 @@ func (s *ValidatorStore) initialize(tx *bolt.Tx) error {
 
 // getDelegatesAtBlock returns the delegate set at a specific block
 func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx, delegateCount uint64) (validator.AccountSet, error) {
-	// 🆕 实现从数据库获取指定区块的受托人集合
+	// 实现从数据库获取指定区块的受托人集合
 	if dbTx == nil {
 		return validator.AccountSet{}, fmt.Errorf("database transaction is required")
 	}
@@ -1037,7 +1037,7 @@ func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx, 
 			continue
 		}
 
-		// 🆕 修复：只检查投票权重，必须包含所有有BLS公钥的受托人
+		// 修复：只检查投票权重，必须包含所有有BLS公钥的受托人
 		// 这样可以确保与出块时的受托人顺序完全一致
 		if delegateInfo.VotingPower.Cmp(big.NewInt(0)) <= 0 {
 			fmt.Printf("🔍 getDelegatesAtBlock: 跳过投票权重为0的受托人 - 地址=%s, votingPower=%s\n",
@@ -1061,7 +1061,7 @@ func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx, 
 			fmt.Printf("⚠️ ValidatorStore: 缺少BLS公钥数据 - 地址=%s, 公钥长度=%d\n", delegateInfo.Address.String(), len(delegateInfo.BlsPublicKey))
 		}
 
-		// 🆕 修复：总是创建验证者元数据，保持索引一致性
+		// 修复：总是创建验证者元数据，保持索引一致性
 		validatorMeta := &validator.ValidatorMetadata{
 			Address:     delegateInfo.Address,
 			VotingPower: new(big.Int).Set(delegateInfo.VotingPower),
@@ -1074,7 +1074,7 @@ func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx, 
 		delegates = append(delegates, validatorMeta)
 	}
 
-	// 🆕 修复：按票数降序排序，如果票数相同则按地址排序，确保与出块时的顺序完全一致
+	// 修复：按票数降序排序，如果票数相同则按地址排序，确保与出块时的顺序完全一致
 	// 这样可以避免BLS公钥顺序不一致导致的签名验证失败
 	sort.Slice(delegates, func(i, j int) bool {
 		if delegates[i].VotingPower.Cmp(delegates[j].VotingPower) == 0 {
@@ -1084,7 +1084,7 @@ func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx, 
 		return delegates[i].VotingPower.Cmp(delegates[j].VotingPower) > 0
 	})
 
-	// 🆕 关键修复：应用与出块时相同的DelegateCount限制
+	// 关键修复：应用与出块时相同的DelegateCount限制
 	// 确保验证时使用的受托人数量与出块时完全一致
 	if delegateCount > 0 {
 		maxDelegates := int(delegateCount)
@@ -1095,7 +1095,7 @@ func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx, 
 		}
 	}
 
-	// 🆕 添加详细日志：显示从数据库读取的BLS公钥
+	// 添加详细日志：显示从数据库读取的BLS公钥
 	fmt.Printf("🔍 ValidatorStore.getDelegatesAtBlock: 从数据库读取到 %d 个受托人 (区块 %d)\n", len(delegates), blockNumber)
 	fmt.Printf("🔍 这是验证区块 %d 时使用的完整受托人集合:\n", blockNumber)
 	for i, delegate := range delegates {
@@ -1110,7 +1110,7 @@ func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx, 
 
 // getVotingPowerAtBlock returns the voting power of a delegate at a specific block
 func (s *ValidatorStore) getVotingPowerAtBlock(blockNumber uint64, delegate types.Address, dbTx *bolt.Tx) (*big.Int, error) {
-	// 🆕 实现从数据库获取指定区块的投票权重
+	// 实现从数据库获取指定区块的投票权重
 	if dbTx == nil {
 		return nil, fmt.Errorf("database transaction is required")
 	}
@@ -1136,7 +1136,7 @@ func (s *ValidatorStore) getVotingPowerAtBlock(blockNumber uint64, delegate type
 	return new(big.Int).Set(delegateInfo.VotingPower), nil
 }
 
-// 🆕 新增：更新验证者故障状态
+// 新增：更新验证者故障状态
 func (s *StakeStore) UpdateValidatorFaultStatus(address types.Address, isFaulty bool, missedBlocks uint64, lastUpdateTime uint64, lastFaultyEpoch uint64, reason string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		// 获取或创建故障状态bucket
@@ -1165,7 +1165,7 @@ func (s *StakeStore) UpdateValidatorFaultStatus(address types.Address, isFaulty 
 	})
 }
 
-// 🆕 新增：获取验证者故障状态
+// 新增：获取验证者故障状态
 func (s *StakeStore) GetValidatorFaultStatus(address types.Address) (map[string]interface{}, error) {
 	var faultInfo map[string]interface{}
 	key := address.Bytes()
@@ -1177,7 +1177,7 @@ func (s *StakeStore) GetValidatorFaultStatus(address types.Address) (map[string]
 
 		data := bucket.Get(key)
 		if data == nil {
-			// 🆕 调试：检查是否有其他key（遍历所有key）
+			// 调试：检查是否有其他key（遍历所有key）
 			cursor := bucket.Cursor()
 			for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
 				if bytes.Equal(k, key) {
@@ -1196,7 +1196,7 @@ func (s *StakeStore) GetValidatorFaultStatus(address types.Address) (map[string]
 	return faultInfo, err
 }
 
-// 🆕 清除验证者故障标志（用于恢复提案执行）
+// 清除验证者故障标志（用于恢复提案执行）
 func (s *StakeStore) ClearValidatorFaultStatus(address types.Address, proposalID string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("validatorFaultStatus"))
@@ -1215,7 +1215,7 @@ func (s *StakeStore) ClearValidatorFaultStatus(address types.Address, proposalID
 			return fmt.Errorf("failed to unmarshal fault info: %w", err)
 		}
 
-		// 🆕 添加恢复信息
+		// 添加恢复信息
 		faultInfo["isFaulty"] = false
 		faultInfo["recoveredByProposal"] = proposalID
 		faultInfo["recoveredAt"] = time.Now().Format(time.RFC3339)
@@ -1235,7 +1235,7 @@ func (s *StakeStore) ClearValidatorFaultStatus(address types.Address, proposalID
 	})
 }
 
-// 🆕 新增：保存Epoch验证者集合
+// 新增：保存Epoch验证者集合
 func (s *StakeStore) SaveEpochValidators(validators validator.AccountSet) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		// 获取或创建epoch验证者bucket
@@ -1258,7 +1258,7 @@ func (s *StakeStore) SaveEpochValidators(validators validator.AccountSet) error 
 	})
 }
 
-// 🆕 新增：获取Epoch验证者集合
+// 新增：获取Epoch验证者集合
 func (s *StakeStore) GetEpochValidators() (validator.AccountSet, error) {
 	var validators validator.AccountSet
 

@@ -356,14 +356,14 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 	blockCounts := d.blockTracker.GetEpochBlockCounts(epochNumber)
 	totalBlocks := d.blockTracker.GetTotalEpochBlocks(epochNumber)
 
-	// 🆕 添加详细的出块统计日志
+	// 添加详细的出块统计日志
 	d.logger.Info("🔍 检查出块统计",
 		"epoch", epochNumber,
 		"blockCounts", blockCounts,
 		"totalBlocks", totalBlocks,
 		"validatorsCount", len(validators))
 
-	// 🆕 详细打印每个验证者的出块记录
+	// 详细打印每个验证者的出块记录
 	d.logger.Info("📋 ========== 详细出块记录 ==========",
 		"epoch", epochNumber,
 		"totalBlocks", totalBlocks)
@@ -382,7 +382,7 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		return nil
 	}
 
-	// 🆕 优先从参数系统读取 dpos_reward_amount（经过治理流程修改的值是权威数据源）
+	// 优先从参数系统读取 dpos_reward_amount（经过治理流程修改的值是权威数据源）
 	var rewardAmount *big.Int
 	if paramValue, err := d.getCurrentParameterValue("dpos_reward_amount"); err == nil {
 		switch v := paramValue.(type) {
@@ -409,7 +409,7 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		}
 	}
 
-	// 🆕 更新 RewardDistributor 的奖励金额（确保使用最新值）
+	// 更新 RewardDistributor 的奖励金额（确保使用最新值）
 	if d.rewardDistributor != nil {
 		d.rewardDistributor.UpdateRewardAmount(rewardAmount)
 	}
@@ -429,7 +429,7 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		return fmt.Errorf("insufficient reward account balance")
 	}
 
-	// 🆕 使用 RewardDistributor 统一计算奖励（验证者 + 投票者）
+	// 使用 RewardDistributor 统一计算奖励（验证者 + 投票者）
 	// 1. 获取投票者信息
 	voters := d.GetVoters()
 	if voters == nil {
@@ -474,7 +474,7 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 
 	for address, totalReward := range rewards {
 		if totalReward.Sign() > 0 {
-			// 🆕 简单区分：检查地址是否在 validators 和 voters 中
+			// 简单区分：检查地址是否在 validators 和 voters 中
 			isValidator := false
 			var blocksProduced uint64 = 0
 
@@ -530,7 +530,7 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		}
 	}
 
-	// 🆕 在epoch结束区块准备奖励分发信息（不直接执行状态更新）
+	// 在epoch结束区块准备奖励分发信息（不直接执行状态更新）
 	if len(stateUpdates) > 0 {
 		d.logger.Info("🎯 在epoch结束区块准备奖励分发信息",
 			"epoch", epochNumber,
@@ -542,7 +542,7 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 			totalReward.Add(totalReward, reward)
 		}
 
-		// 🆕 不直接执行状态更新，而是将奖励分发信息存储到pendingRewardDistribution
+		// 不直接执行状态更新，而是将奖励分发信息存储到pendingRewardDistribution
 		// 这样buildBlock可以将其添加到ExtraData中，然后在区块执行时处理
 		d.pendingRewardDistribution = &RewardDistributionInfo{
 			EpochNumber: epochNumber,

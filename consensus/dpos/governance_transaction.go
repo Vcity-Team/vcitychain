@@ -24,7 +24,7 @@ func (d *DPoS) ProcessProposalCreateTransaction(tx *types.Transaction, blockNumb
 	d.logger.Info("🔄 处理创建提案交易", "from", tx.From.String(), "blockNumber", blockNumber, "proposalType", txData.ProposalType)
 
 	// 2. 根据提案类型创建提案
-	// 🆕 使用交易哈希生成确定性的proposalID（所有节点相同）
+	// 使用交易哈希生成确定性的proposalID（所有节点相同）
 	proposalID := fmt.Sprintf("proposal_%s", tx.Hash.String()[:16]) // 使用交易哈希前16个字符
 
 	var proposal *ParameterProposal
@@ -174,7 +174,7 @@ func (d *DPoS) ProcessProposalVoteTransaction(tx *types.Transaction, blockNumber
 		return fmt.Errorf("voter %s has already voted on proposal %s", tx.From.String(), txData.ProposalID)
 	}
 
-	// 🆕 5. 获取投票者余额（允许所有有余额的用户投票，与VoteOnParameterProposal保持一致）
+	// 5. 获取投票者余额（允许所有有余额的用户投票，与VoteOnParameterProposal保持一致）
 	var voterWeight *big.Int
 	var balanceErr error
 	if d.balanceQuerier != nil {
@@ -301,7 +301,7 @@ func (d *DPoS) ProcessProposalExecuteTransaction(tx *types.Transaction, blockNum
 	}
 	d.logger.Info("📋 [ProcessProposalExecuteTransaction] 提案已加载", "proposalID", txData.ProposalID, "status", proposal.Status.String(), "duration", hydrateDuration.String())
 
-	// 🆕 检查1：投票期必须已结束
+	// 检查1：投票期必须已结束
 	if blockNumber <= proposal.EndBlock {
 		d.logger.Warn("❌ [ProcessProposalExecuteTransaction] 投票期未结束，拒绝执行",
 			"proposalID", txData.ProposalID,
@@ -310,7 +310,7 @@ func (d *DPoS) ProcessProposalExecuteTransaction(tx *types.Transaction, blockNum
 		return fmt.Errorf("proposal %s voting period has not ended yet (current block %d <= end block %d), cannot execute", txData.ProposalID, blockNumber, proposal.EndBlock)
 	}
 
-	// 🆕 检查2：如果投票期已结束但状态未更新，先检查投票结果
+	// 检查2：如果投票期已结束但状态未更新，先检查投票结果
 	if proposal.Status != ProposalPassed && proposal.Status != ProposalRejected {
 		checkStartTime := time.Now()
 		d.logger.Info("🔄 [ProcessProposalExecuteTransaction] 投票期已结束但状态未更新，先检查投票结果", "proposalID", txData.ProposalID)
@@ -333,7 +333,7 @@ func (d *DPoS) ProcessProposalExecuteTransaction(tx *types.Transaction, blockNum
 		d.logger.Info("📋 [ProcessProposalExecuteTransaction] 提案已重新加载", "proposalID", txData.ProposalID, "status", proposal.Status.String(), "duration", reloadDuration.String())
 	}
 
-	// 🆕 检查3：提案状态必须为 Passed
+	// 检查3：提案状态必须为 Passed
 	if proposal.Status != ProposalPassed {
 		d.logger.Warn("❌ [ProcessProposalExecuteTransaction] 提案状态不是 Passed，拒绝执行",
 			"proposalID", txData.ProposalID,

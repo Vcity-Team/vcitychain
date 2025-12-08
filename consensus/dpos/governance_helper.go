@@ -34,7 +34,7 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 	}
 	d.parameterValuesMutex.RUnlock()
 
-	// 🆕 如果缓存中没有，优先从数据库（ParameterStore）读取（经过治理流程修改的值是权威数据源）
+	// 如果缓存中没有，优先从数据库（ParameterStore）读取（经过治理流程修改的值是权威数据源）
 	if d.state != nil && d.state.ParameterStore != nil {
 		if dbValue, err := d.state.ParameterStore.GetParameterValue(parameter); err == nil {
 			d.logger.Debug("从数据库读取参数值", "param", parameter, "value", dbValue)
@@ -94,21 +94,21 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 		// 默认值：14天 = 1209600秒
 		return uint64(1209600), nil
 	case "dpos_missed_blocks_percentage":
-		// 🆕 削减参数：漏块率阈值（从配置读取）
+		// 削减参数：漏块率阈值（从配置读取）
 		if val := d.getConfigUint64("dpos_missed_blocks_percentage", "missed_blocks_percentage"); val > 0 {
 			return val, nil
 		}
 		// 默认值：1000基点 = 10%
 		return uint64(1000), nil
 	case "dpos_minor_offense_slash_rate":
-		// 🆕 削减参数：轻度违规削减率（从配置读取）
+		// 削减参数：轻度违规削减率（从配置读取）
 		if val := d.getConfigUint64("dpos_minor_offense_slash_rate", "minor_offense_slash_rate"); val > 0 {
 			return val, nil
 		}
 		// 默认值：50基点 = 0.5%
 		return uint64(50), nil
 	case "dpos_severe_offense_slash_rate":
-		// 🆕 削减参数：严重违规削减率（从配置读取）
+		// 削减参数：严重违规削减率（从配置读取）
 		if val := d.getConfigUint64("dpos_severe_offense_slash_rate", "severe_offense_slash_rate"); val > 0 {
 			return val, nil
 		}
@@ -243,7 +243,7 @@ func (d *DPoS) updateParameterValue(paramName string, value interface{}, source 
 		}
 	}
 
-	// 🆕 根据参数类型更新对应的配置值
+	// 根据参数类型更新对应的配置值
 	switch paramName {
 	case "dpos_epoch_duration":
 		var epochDuration time.Duration
@@ -592,7 +592,7 @@ func (d *DPoS) updateParameterValue(paramName string, value interface{}, source 
 
 // buildProposalMessage 构造提案签名消息
 func (d *DPoS) buildProposalMessage(proposal *ParameterProposal) []byte {
-	// 🆕 修改签名消息格式：不包含proposalID（因为proposalID在交易处理时才确定）
+	// 修改签名消息格式：不包含proposalID（因为proposalID在交易处理时才确定）
 	// 构造签名消息：提案者地址 + 提案类型 + 参数/验证者地址 + 时间戳 + 链ID
 	// 这样签名可以在proposalID确定前后都有效
 	data := make([]byte, 0)

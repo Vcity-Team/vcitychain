@@ -57,7 +57,7 @@ func (d *DPoS) governanceHydrateProposal(proposalID string) (*ParameterProposal,
 }
 
 func (d *DPoS) governanceLoadScheduled(epoch uint64) []*ParameterProposal {
-	// 🔍 添加日志，跟踪传入的epoch参数
+	// 添加日志，跟踪传入的epoch参数
 	d.logger.Info("🔍🔍🔍 [governanceLoadScheduled] 开始查询待应用提案",
 		"epoch", epoch,
 		"说明", "查询effectiveEpoch等于此值的待应用提案")

@@ -16,7 +16,7 @@ type CreateRecoveryRequest struct {
 	RecoveryReason     string `json:"recoveryReason"`
 	Description        string `json:"description"`
 	Proposer           string `json:"proposer"`
-	ProposerPrivateKey string `json:"proposerPrivateKey"` // 🆕 提案者私钥
+	ProposerPrivateKey string `json:"proposerPrivateKey"` // 提案者私钥
 }
 
 // CreateRecoveryResponse 创建恢复提案响应

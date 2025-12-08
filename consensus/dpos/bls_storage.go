@@ -27,7 +27,7 @@ func (d *DPoS) saveValidatorsWithBLSKeysToDatabase() error {
 
 	syncedCount := 0
 	for i, validator := range validators {
-		// 🆕 添加详细日志：打印验证者信息
+		// 添加详细日志：打印验证者信息
 		d.logger.Info("🔍 准备保存验证者信息到数据库",
 			"index", i,
 			"address", validator.Address.String(),
@@ -50,7 +50,7 @@ func (d *DPoS) saveValidatorsWithBLSKeysToDatabase() error {
 
 		d.populateCommissionFields(validator.Address, delegateInfo)
 
-		// 🆕 添加详细日志：打印DelegateInfo信息
+		// 添加详细日志：打印DelegateInfo信息
 		d.logger.Debug("🔍 DelegateInfo详细信息",
 			"address", delegateInfo.Address.String(),
 			"votingPower", delegateInfo.VotingPower.String(),
@@ -76,7 +76,7 @@ func (d *DPoS) saveValidatorsWithBLSKeysToDatabase() error {
 				"error", err)
 		} else {
 			syncedCount++
-			// 🆕 添加详细日志：打印保存成功后的信息
+			// 添加详细日志：打印保存成功后的信息
 			d.logger.Info("✅ 验证者信息已保存到数据库",
 				"address", validator.Address.String(),
 				"votingPower", validator.VotingPower.String(),
@@ -147,7 +147,7 @@ func (d *DPoS) saveBLSKeyToDatabase(address types.Address, blsKey *bls.PublicKey
 		return
 	}
 
-	// 🆕 方案3：只更新BLS公钥，保持其他字段不变
+	// 方案3：只更新BLS公钥，保持其他字段不变
 	// 从数据库读取当前的DelegateInfo
 	currentInfo, err := d.getCurrentDelegateInfo(address)
 	if err != nil {
@@ -235,7 +235,7 @@ func (d *DPoS) persistBLSKeyToStakeStore(address types.Address, blsKeyBytes []by
 		return fmt.Errorf("StakeStore not available")
 	}
 
-	// 🆕 修复：从数据库读取当前的DelegateInfo，保持VotingPower和TotalVotes不变
+	// 修复：从数据库读取当前的DelegateInfo，保持VotingPower和TotalVotes不变
 	currentInfo, err := d.getCurrentDelegateInfo(address)
 	if err != nil {
 		// 如果读取失败，使用默认值

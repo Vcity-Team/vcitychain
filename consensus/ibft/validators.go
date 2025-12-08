@@ -53,7 +53,7 @@ func CalcProposer(
 	round uint64,
 	lastProposer types.Address,
 ) validators.Validator {
-	// 🆕 添加验证者列表为空检查，防止除零错误
+	// 添加验证者列表为空检查，防止除零错误
 	if validators.Len() == 0 {
 		// 返回nil，表示没有验证者（通常发生在DPoS切换后）
 		return nil

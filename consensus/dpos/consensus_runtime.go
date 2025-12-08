@@ -88,10 +88,10 @@ type runtimeConfig struct {
 	// DPoS specific configuration
 	DelegateCount    uint64
 	InitialDelegates []*validator.GenesisValidator
-	ValidatorsCount  uint64          // 🆕 新增：DPoS验证者数量配置
-	BlockTime        common.Duration // 🆕 新增：区块时间配置
+	ValidatorsCount  uint64          // 新增：DPoS验证者数量配置
+	BlockTime        common.Duration // 新增：区块时间配置
 
-	// 🆕 固定时间窗口调度器
+	// 固定时间窗口调度器
 	blockScheduler *BlockScheduler
 }
 

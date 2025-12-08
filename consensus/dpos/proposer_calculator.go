@@ -46,7 +46,7 @@ func NewProposerSnapshotFromState(config *runtimeConfig, dbTx *bolt.Tx) (*Propos
 	}
 
 	if snapshot == nil {
-		// 🆕 不再从数据库获取创世区块验证者集合，改为从内存获取
+		// 不再从数据库获取创世区块验证者集合，改为从内存获取
 		genesisValidatorsSet := config.dposBackend.GetCurrentDelegates()
 		if len(genesisValidatorsSet) == 0 {
 			return nil, fmt.Errorf("failed to get genesis validators from memory")

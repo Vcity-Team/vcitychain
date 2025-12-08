@@ -37,7 +37,7 @@ func (sc *SlashingCollector) CollectSlashingInfo(
 				"thresholdPercentage", sc.dposInstance.getMissedBlocksPercentage(),
 				"reason", faultFlag.Reason)
 
-			// 🆕 去重检查：检查该验证者是否已经在该epoch的pendingSlashingInfo中
+			// 去重检查：检查该验证者是否已经在该epoch的pendingSlashingInfo中
 			if sc.dposInstance.pendingSlashingInfo != nil {
 				// 检查是否是同一个epoch
 				if sc.dposInstance.pendingSlashingInfo.EpochNumber == epochInfo.EpochToCheckNumber {

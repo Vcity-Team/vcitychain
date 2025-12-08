@@ -15,24 +15,24 @@ func (d *DPoS) initializeEconomicSystem() error {
 	// 1. 初始化时间基础Epoch管理器
 	d.epochManager = NewTimeBasedEpochManager(
 		d.config.EpochDuration,
-		d.config.BlockTime.Duration, // 🆕 传递blockTime配置
+		d.config.BlockTime.Duration, // 传递blockTime配置
 		d.config.RewardAccount,
 		d.config.RewardAmount,
 		d.config.ConsensusSwitchHeight,
 		d.logger.Named("epoch_manager"),
 	)
 
-	// 🆕 设置区块链引用，用于基于区块高度计算Epoch
+	// 设置区块链引用，用于基于区块高度计算Epoch
 	d.epochManager.SetBlockchain(d.config.Blockchain)
 
-	// 🆕 设置回调函数
+	// 设置回调函数
 	d.epochManager.SetCallback(d.handleEpochSwitch)
 
 	// 2. 初始化出块统计管理器
 	d.blockTracker = NewBlockProductionTracker(
 		d.logger.Named("block_tracker"),
-		d.state.BlockTrackerStore,   // 🆕 传递数据库存储
-		d.config.BlockTime.Duration, // 🆕 传递blockTime配置
+		d.state.BlockTrackerStore,   // 传递数据库存储
+		d.config.BlockTime.Duration, // 传递blockTime配置
 	)
 
 	// 3. 初始化奖励分发器
@@ -124,7 +124,7 @@ func (d *DPoS) processEconomicSystem(block *types.FullBlock) error {
 	blockTime := time.Unix(int64(block.Block.Header.Timestamp), 0)
 	blockProducer := types.BytesToAddress(block.Block.Header.Miner)
 
-	// 🆕 修改：使用统一的Epoch管理器（现在基于区块高度计算）
+	// 修改：使用统一的Epoch管理器（现在基于区块高度计算）
 	currentEpoch := d.epochManager.GetCurrentEpoch(blockNumber)
 
 	// 1. 记录出块统计（使用统一的Epoch）
@@ -132,7 +132,7 @@ func (d *DPoS) processEconomicSystem(block *types.FullBlock) error {
 		blockNumber,
 		blockTime,
 		blockProducer,
-		currentEpoch, // 🆕 使用统一的Epoch管理器
+		currentEpoch, // 使用统一的Epoch管理器
 	)
 
 	// 2. 添加详细日志

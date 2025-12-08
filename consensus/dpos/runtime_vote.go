@@ -220,14 +220,14 @@ func (r *dposRuntime) updateDelegateVotingPower(delegate types.Address, amount *
 	fmt.Printf("  - 受托人地址: %s\n", delegate.String())
 	fmt.Printf("  - 新增投票权重: %s (0x%x)\n", amount.String(), amount.Bytes())
 
-	// 🆕 详细打印内存中的 r.delegates 数组状态
+	// 详细打印内存中的 r.delegates 数组状态
 	fmt.Printf("🔍 内存中 r.delegates 数组状态 (共%d个):\n", len(r.delegates))
 	for i, d := range r.delegates {
 		fmt.Printf("  - delegates[%d]: 地址=%s, VotingPower=%s (0x%x), IsActive=%v\n",
 			i, d.Address.String(), d.VotingPower.String(), d.VotingPower.Bytes(), d.IsActive)
 	}
 
-	// 🆕 检查是否为创世验证者
+	// 检查是否为创世验证者
 	if r.config != nil && r.config.dposBackend != nil {
 		if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
 			if dposInstance.isGenesisValidator(delegate) {
@@ -240,7 +240,7 @@ func (r *dposRuntime) updateDelegateVotingPower(delegate types.Address, amount *
 		}
 	}
 
-	// 🆕 查找目标受托人并更新
+	// 查找目标受托人并更新
 	found := false
 	for i, d := range r.delegates {
 		if d.Address == delegate {
@@ -262,7 +262,7 @@ func (r *dposRuntime) updateDelegateVotingPower(delegate types.Address, amount *
 		fmt.Printf("  - 当前内存中的delegates数组可能不完整或为空\n")
 	}
 
-	// 🆕 更新后再次打印内存状态
+	// 更新后再次打印内存状态
 	fmt.Printf("🔍 更新后内存中 r.delegates 数组状态:\n")
 	for i, d := range r.delegates {
 		fmt.Printf("  - delegates[%d]: 地址=%s, VotingPower=%s (0x%x), IsActive=%v\n",

@@ -249,7 +249,7 @@ func setFlags(cmd *cobra.Command) {
 		"the interval (in seconds) at which special metrics are generated. a value of zero means the metrics are disabled",
 	)
 
-	// 🆕 新增：共识切换高度参数
+	// 新增：共识切换高度参数
 	cmd.Flags().Uint64Var(
 		&params.consensusSwitchHeight,
 		consensusSwitchHeightFlag,
@@ -257,7 +257,7 @@ func setFlags(cmd *cobra.Command) {
 		"the block height at which to switch from IBFT to DPoS consensus (0 means no switch)",
 	)
 
-	// 🆕 新增：DPoS验证者数量参数
+	// 新增：DPoS验证者数量参数
 	cmd.Flags().Uint64Var(
 		&params.rawConfig.DPoSValidatorsCount,
 		"dpos-validators-count",

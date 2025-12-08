@@ -27,16 +27,16 @@ func (d *DPoS) GetDelegates(blockNumber uint64, parents []*types.Header) (valida
 			return result, nil
 		}
 
-		// 🆕 如果runtime.delegates为空，尝试从数据库读取
+		// 如果runtime.delegates为空，尝试从数据库读取
 		if d.state != nil && d.state.StakeStore != nil {
 			d.logger.Info("🔍 runtime.delegates为空，尝试从数据库读取验证者")
 			if dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false); err == nil && len(dbValidators) > 0 {
 				d.logger.Info("🔍 从数据库成功读取验证者", "count", len(dbValidators))
 
-				// 🆕 添加详细日志：打印从数据库读取的验证者信息
+				// 添加详细日志：打印从数据库读取的验证者信息
 				d.logger.Info("🔍 数据库验证者详细信息:")
 				for i, validator := range dbValidators {
-					// 🆕 获取验证者的故障标志信息
+					// 获取验证者的故障标志信息
 					faultInfo := d.getValidatorFaultInfo(validator.Address)
 
 					d.logger.Info("🔍 数据库验证者",
@@ -46,7 +46,7 @@ func (d *DPoS) GetDelegates(blockNumber uint64, parents []*types.Header) (valida
 						"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
 						"isActive", validator.IsActive,
 						"hasBlsKey", validator.BlsKey != nil,
-						"faultFlag", faultInfo) // 🆕 添加故障标志信息
+						"faultFlag", faultInfo) // 添加故障标志信息
 				}
 
 				return dbValidators, nil
@@ -56,7 +56,7 @@ func (d *DPoS) GetDelegates(blockNumber uint64, parents []*types.Header) (valida
 		return validator.AccountSet{}, nil
 	}
 
-	// 🆕 已移除数据库读取机制，改为从区块 ExtraData 直接解析
+	// 已移除数据库读取机制，改为从区块 ExtraData 直接解析
 	d.logger.Info("📝 GetDelegates 获取方式已更新",
 		"requestedBlockNumber", blockNumber,
 		"currentBlockNumber", currentBlockNumber,

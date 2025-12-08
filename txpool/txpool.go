@@ -224,7 +224,7 @@ func NewTxPool(
 		gauge:              slotGauge{height: 0, max: config.MaxSlots},
 		priceLimit:         config.PriceLimit,
 		chainID:            config.ChainID,
-		maxAccountEnqueued: config.MaxAccountEnqueued, // 🆕 保存配置值，用于RPC查询
+		maxAccountEnqueued: config.MaxAccountEnqueued, // 保存配置值，用于RPC查询
 
 		//	main loop channels
 		promoteReqCh: make(chan promoteRequest),
@@ -429,7 +429,7 @@ func (p *TxPool) Prepare() {
 	// fetch primary from each account
 	primaries := p.accounts.getPrimaries()
 
-	// 🆕 方案2：使用链上nonce过滤primaries，只添加nonce匹配的交易
+	// 方案2：使用链上nonce过滤primaries，只添加nonce匹配的交易
 	// 这样可以减少Fill()循环中的nonce检查失败，提高打包效率
 	stateRoot := p.store.Header().StateRoot
 	validPrimaries := make([]*types.Transaction, 0, len(primaries))
@@ -438,16 +438,16 @@ func (p *TxPool) Prepare() {
 	for _, tx := range primaries {
 		currentNonce := p.store.GetNonce(stateRoot, tx.From)
 		if tx.Nonce == currentNonce {
-			// ✅ nonce匹配，添加到executables队列
+			// nonce匹配，添加到executables队列
 			validPrimaries = append(validPrimaries, tx)
 		} else {
-			// ⚠️ nonce不匹配，不添加到executables队列
+			// ️ nonce不匹配，不添加到executables队列
 			// 交易仍然在promoted队列中，等待下次Prepare()时检查
 			skippedCount++
 		}
 	}
 
-	// 🆕 添加警告日志：如果所有交易都被过滤了
+	// 添加警告日志：如果所有交易都被过滤了
 	if len(primaries) > 0 && len(validPrimaries) == 0 {
 		p.logger.Warn("⚠️ [txpool.Prepare] 过滤了所有交易，可能导致空块",
 			"blockNumber", p.store.Header().Number,
@@ -651,7 +651,7 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 		// remove mined txs from the lookup map
 		p.index.remove(block.Transactions...)
 
-		// 🆕 方案1：直接从promoted队列中移除已打包的交易（必须）
+		// 方案1：直接从promoted队列中移除已打包的交易（必须）
 		// 这样可以确保pending计数准确，避免已打包的交易还在promoted队列中
 		// Extract latest nonces and remove mined transactions from promoted queue
 		for _, tx := range block.Transactions {
@@ -669,7 +669,7 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 				}
 			}
 
-			// 🆕 方案1改进：基于nonce清理，不要求hash匹配（参考以太坊的两层清理机制）
+			// 方案1改进：基于nonce清理，不要求hash匹配（参考以太坊的两层清理机制）
 			// 第一层：如果其他节点打包了某个nonce的交易，本节点应该清理该nonce的所有交易
 			account := p.accounts.get(addr)
 			if account != nil {
@@ -709,7 +709,7 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 								"blockNumber", header.Number)
 						}
 					} else {
-						// 🆕 hash不匹配，说明其他节点打包了不同hash的同nonce交易
+						// hash不匹配，说明其他节点打包了不同hash的同nonce交易
 						// 本节点的交易应该被清理（因为nonce已经被使用）
 						if account.promoted.remove(txInPool.Hash) {
 							account.nonceToTx.remove(txInPool)
@@ -765,7 +765,7 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 		p.SetBaseFee(event.NewChain[ln-1])
 	}
 
-	// 🆕 修复：确保交易池中所有账户的 nonce 都从 state 中更新
+	// 修复：确保交易池中所有账户的 nonce 都从 state 中更新
 	// 因为某些账户可能在链上的 nonce 已经增加（之前的交易被打包），
 	// 但在当前区块中没有新交易，所以不会被添加到 stateNonces 中
 	// 这会导致交易池中的 account nonce 与链上的 nonce 不一致
@@ -796,7 +796,7 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 				"latestNonce", latestNonce,
 				"needsUpdate", latestNonce != currentNonce)
 
-			// 🆕 修复：即使 latestNonce == currentNonce，也要更新以确保状态一致
+			// 修复：即使 latestNonce == currentNonce，也要更新以确保状态一致
 			// 因为链上的状态是权威的，即使值相同，也要通过resetAccounts确保清理过期交易
 			if latestNonce != currentNonce {
 				if latestNonce > currentNonce {
@@ -805,7 +805,7 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 						"currentNonce", currentNonce,
 						"latestNonce", latestNonce)
 				} else {
-					// 🆕 如果state的nonce小于交易池的nonce，说明state的nonce可能过时了
+					// 如果state的nonce小于交易池的nonce，说明state的nonce可能过时了
 					// 但这种情况不应该发生，因为state是权威的
 					p.logger.Warn("⚠️ [processEvent] state的nonce小于交易池的nonce（异常情况）",
 						"addr", addr.String()[:16],
@@ -814,7 +814,7 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 				}
 				stateNonces[addr] = latestNonce
 			} else {
-				// 🆕 即使值相同，也要添加到stateNonces中，确保通过resetAccounts清理过期交易
+				// 即使值相同，也要添加到stateNonces中，确保通过resetAccounts清理过期交易
 				// 这样可以确保promoted队列中的过期交易（nonce < latestNonce）被清理
 				p.logger.Info("🔵 [processEvent] 交易池账户nonce与state一致，但需要清理过期交易",
 					"addr", addr.String()[:16],
@@ -1141,7 +1141,7 @@ func (p *TxPool) addTx(origin txOrigin, tx *types.Transaction) error {
 		tx.ChainID = p.chainID
 	}
 
-	// 🔍 检查交易签名信息
+	// 检查交易签名信息
 	p.logger.Debug("🔍 交易签名信息检查",
 		"origin", origin.String(),
 		"txType", tx.Type,

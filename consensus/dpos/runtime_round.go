@@ -31,7 +31,7 @@ func (r *dposRuntime) calculateRoundBySlot() uint64 {
 
 // calculateInitialRound 根据当前区块号计算初始轮次（保持兼容性）
 func (r *dposRuntime) calculateInitialRound() uint64 {
-	// 🆕 优先使用slot计算
+	// 优先使用slot计算
 	if r.config != nil && r.config.blockScheduler != nil {
 		return r.calculateRoundBySlot()
 	}
@@ -70,7 +70,7 @@ func (r *dposRuntime) updateRoundSilent() {
 		return
 	}
 
-	// 🆕 使用公共函数获取排序和限制后的验证者
+	// 使用公共函数获取排序和限制后的验证者
 	dposBackend, ok := r.backend.(*DPoS)
 	if !ok {
 		return
@@ -80,7 +80,7 @@ func (r *dposRuntime) updateRoundSilent() {
 		return
 	}
 
-	// 🆕 已删除 currentDelegateIndex 的计算和设置
+	// 已删除 currentDelegateIndex 的计算和设置
 	// 现在完全通过 getCurrentDelegate() 基于时间slot实时计算
 	// 此函数保留用于保持代码结构完整性
 	_ = validators // 避免unused variable警告
@@ -88,7 +88,7 @@ func (r *dposRuntime) updateRoundSilent() {
 
 // updateRound 更新轮次（混合方案：区块号触发边界，slot计算轮次）
 func (r *dposRuntime) updateRound(blockNumber ...uint64) {
-	// 🆕 修复：统一使用区块号计算委托者索引，避免不一致
+	// 修复：统一使用区块号计算委托者索引，避免不一致
 	var currentBlockNumber uint64
 
 	if len(blockNumber) > 0 {
@@ -117,11 +117,11 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 		}
 	}
 
-	// 🆕 已删除 currentDelegateIndex 的计算和设置
+	// 已删除 currentDelegateIndex 的计算和设置
 	// 现在完全通过 getCurrentDelegate() 基于时间slot实时计算
 	// 此函数现在只负责更新 currentRound
 
-	// 🆕 混合方案：基于区块号触发轮次边界处理，基于slot计算轮次
+	// 混合方案：基于区块号触发轮次边界处理，基于slot计算轮次
 	if r.config != nil && r.config.DelegateCount > 0 {
 		// 1. 基于区块号触发轮次边界处理（保持原有逻辑）
 		if currentBlockNumber > 0 && currentBlockNumber%uint64(r.config.DelegateCount) == 0 {
@@ -129,7 +129,7 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 				"blockNumber", currentBlockNumber,
 				"delegateCount", r.config.DelegateCount)
 
-			// 🆕 方案1+方案2：轮次边界时处理延迟的验证者集合更新
+			// 方案1+方案2：轮次边界时处理延迟的验证者集合更新
 			if r.backend != nil {
 				// 通过类型断言访问DPoS实例
 				if dposInstance, ok := r.backend.(*DPoS); ok && dposInstance.pendingValidatorUpdate {
@@ -139,14 +139,14 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 					} else {
 						r.logger.Info("✅ 轮次边界：验证者集合更新完成")
 
-						// 🆕 轮次边界：同步新的验证者集合到runtime
+						// 轮次边界：同步新的验证者集合到runtime
 						r.logger.Info("🔄 轮次边界：同步新验证者集合到runtime")
 						go func() {
 							dposInstance.syncRuntimeDelegatesWithRetry()
 						}()
 					}
 					dposInstance.pendingValidatorUpdate = false
-					// 🆕 修复：清空被投票的验证者集合
+					// 修复：清空被投票的验证者集合
 					dposInstance.lastVotedDelegates = nil
 				}
 			}

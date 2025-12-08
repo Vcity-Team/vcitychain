@@ -35,7 +35,7 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 	}
 	d.logger.Debug("✅ processVoteInternal completed successfully")
 
-	// 🆕 新增：持久化投票信息到数据库
+	// 新增：持久化投票信息到数据库
 	d.logger.Debug("🔄 Starting vote persistence to database...")
 	if err := d.persistVoteToDatabase(voter, candidate, amount); err != nil {
 		d.logger.Error("Failed to persist vote to database", "error", err)
@@ -53,10 +53,10 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 		"candidate", candidate.String(),
 		"amount", amount.String())
 
-	// 🆕 方案1+方案2：投票完成后标记需要延迟更新验证者集合
+	// 方案1+方案2：投票完成后标记需要延迟更新验证者集合
 	d.logger.Debug("🔄 投票完成，标记需要延迟更新验证者集合...")
 	d.pendingValidatorUpdate = true
-	// 🆕 修复：使用集合保存所有被投票的验证者（而不是只保存最后一个）
+	// 修复：使用集合保存所有被投票的验证者（而不是只保存最后一个）
 	if d.lastVotedDelegates == nil {
 		d.lastVotedDelegates = make(map[types.Address]bool)
 	}
@@ -149,7 +149,7 @@ func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 		"amount", vote.Amount.String(),
 		"amountHex", fmt.Sprintf("0x%x", vote.Amount.Bytes()))
 
-	// 🆕 从数据库读取原始权重，而不是从内存
+	// 从数据库读取原始权重，而不是从内存
 	originalVotingPower, err := d.getVotingPowerFromDatabase(vote.Delegate)
 	if err != nil {
 		d.logger.Error("❌ 从数据库读取验证者权重失败",
@@ -158,7 +158,7 @@ func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 		return fmt.Errorf("failed to get voting power from database: %w", err)
 	}
 
-	// 🆕 显著日志：显示投票权重更新详情
+	// 显著日志：显示投票权重更新详情
 	d.logger.Info("🎯 ===== 投票权重更新详情 =====",
 		"delegate", vote.Delegate.String(),
 		"originalVotingPower", originalVotingPower.String(),
@@ -168,7 +168,7 @@ func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 		"expectedNewPower", new(big.Int).Add(originalVotingPower, vote.Amount).String(),
 		"dataSource", "database")
 
-	// 🆕 直接更新数据库，然后同步到内存
+	// 直接更新数据库，然后同步到内存
 	newVotingPower := new(big.Int).Add(originalVotingPower, vote.Amount)
 	err = d.updateVotingPowerInDatabase(vote.Delegate, newVotingPower)
 	if err != nil {
@@ -179,7 +179,7 @@ func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 		return fmt.Errorf("failed to update voting power in database: %w", err)
 	}
 
-	// 🆕 数据库更新成功后，同步到内存
+	// 数据库更新成功后，同步到内存
 	err = d.syncDelegateFromDatabase(vote.Delegate)
 	if err != nil {
 		d.logger.Warn("⚠️ 同步验证者信息到内存失败",
@@ -188,7 +188,7 @@ func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 		// 不返回错误，因为数据库更新已经成功
 	}
 
-	// 🆕 显著日志：记录更新完成
+	// 显著日志：记录更新完成
 	d.logger.Info("🎯 ===== 投票权重更新完成 =====",
 		"delegate", vote.Delegate.String(),
 		"originalVotingPower", originalVotingPower.String(),
@@ -286,7 +286,7 @@ func (d *DPoS) processVoteBatch(votes []*VoteMessage) {
 		}
 	}
 
-	// 🆕 修复：批量投票时，将所有被投票的验证者添加到集合中
+	// 修复：批量投票时，将所有被投票的验证者添加到集合中
 	if len(delegateUpdates) > 0 {
 		d.pendingValidatorUpdate = true
 		if d.lastVotedDelegates == nil {

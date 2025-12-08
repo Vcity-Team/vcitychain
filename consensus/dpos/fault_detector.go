@@ -117,7 +117,7 @@ func (fd *FaultDetector) checkEpochChange(blockNumber uint64) (EpochInfo, bool) 
 		previousEpochNumber = 0
 	}
 
-	// 📊 计算检测epoch的区块区间范围
+	// 计算检测epoch的区块区间范围
 	// epoch N 从 consensusSwitchHeight + (N-1) * blocksPerEpoch 开始
 	// epoch N 到 consensusSwitchHeight + N * blocksPerEpoch - 1 结束
 	var epochStartBlock, epochEndBlock uint64
@@ -185,7 +185,7 @@ func (fd *FaultDetector) detectValidatorFaults(
 		// 🔧 但是，如果该验证者有恢复提案，需要重新检测，而不是使用旧的故障信息
 		if faultInfo := fd.dposInstance.getValidatorFaultInfo(validator.Address); faultInfo != nil {
 			if alreadyFaulty, ok := faultInfo["isFaulty"].(bool); ok && alreadyFaulty {
-				// 🆕 检查该验证者是否有恢复提案（当前epoch或下一个epoch）
+				// 检查该验证者是否有恢复提案（当前epoch或下一个epoch）
 				hasRecoveryProposal := false
 				currentEpoch := epochInfo.EpochToCheckNumber
 				// 检查当前epoch的恢复提案

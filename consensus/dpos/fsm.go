@@ -372,14 +372,14 @@ func (f *fsm) Validate(proposal []byte) error {
 		f.logger.Trace("[FSM Validate]", "Block", block.Number(), "parent validators", validators)
 	}
 
-	// 🆕 添加ProcessBlock调用跟踪日志
+	// 添加ProcessBlock调用跟踪日志
 	f.logger.Info("🔍🔍🔍 ========== FSM开始调用backend.ProcessBlock ========== 🔍🔍🔍",
 		"blockNumber", block.Number(),
 		"blockHash", block.Hash().String()[:16],
 		"parentNumber", f.parent.Number,
 		"说明", "fsm.go中调用backend.ProcessBlock")
 
-	// 🆕 添加同步节点ProcessBlock调用跟踪
+	// 添加同步节点ProcessBlock调用跟踪
 	fmt.Printf("🔄🔄🔄 ========== 同步节点FSM调用ProcessBlock ========== 🔄🔄🔄\n")
 	fmt.Printf("🔄 区块号: %d\n", block.Number())
 	fmt.Printf("🔄 区块哈希: %s\n", block.Hash().String()[:16])
@@ -719,7 +719,7 @@ func verifyBridgeCommitmentTx(blockNumber uint64, txHash types.Hash,
 		return fmt.Errorf("quorum size not reached for state tx (%s): got %d need %d", txHash, signers.Len(), requiredQuorumCount)
 	}
 
-	// 🆕 添加BLS公钥等待机制
+	// 添加BLS公钥等待机制
 	fmt.Printf("🔍 verifyBridgeCommitmentTx: 开始检查BLS公钥状态 blockNumber=%d txHash=%s\n", blockNumber, txHash.String()[:16])
 
 	// 检查所有签名者是否有BLS公钥

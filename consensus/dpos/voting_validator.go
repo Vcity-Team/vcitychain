@@ -66,7 +66,7 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		return errors.New("vote amount below minimum")
 	}
 
-	// 🆕 2. 检查投票者VCITY代币余额和剩余可投票数
+	// 2. 检查投票者VCITY代币余额和剩余可投票数
 	if d.balanceQuerier != nil {
 		balance, err := d.balanceQuerier.GetNativeTokenBalance(vote.Voter)
 		if err != nil {
@@ -104,18 +104,18 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		d.logger.Warn("Balance querier not available, skipping balance check")
 	}
 
-	// 🆕 新增：检查受托人是否已注册（创世验证者例外）
+	// 新增：检查受托人是否已注册（创世验证者例外）
 	d.logger.Info("🔍 开始验证受托人注册状态",
 		"delegate", vote.Delegate.String(),
 		"voter", vote.Voter.String(),
 		"amount", vote.Amount.String())
 
-	// 🆕 确保创世验证者映射已初始化
+	// 确保创世验证者映射已初始化
 	if d.genesisValidators == nil || len(d.genesisValidators) == 0 {
 		d.initializeGenesisValidatorsMap()
 	}
 
-	// 🆕 创世验证者可以直接被投票，无需注册
+	// 创世验证者可以直接被投票，无需注册
 	if d.isGenesisValidator(vote.Delegate) {
 		d.logger.Info("✅ 受托人是创世验证者，跳过注册检查",
 			"delegate", vote.Delegate.String(),
@@ -133,17 +133,17 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		"delegate", vote.Delegate.String(),
 		"voter", vote.Voter.String())
 
-	// 🆕 新增：检查受托人是否为候选人状态（可以接受投票，创世验证者例外）
+	// 新增：检查受托人是否为候选人状态（可以接受投票，创世验证者例外）
 	d.logger.Info("🔍 开始验证受托人候选人状态",
 		"delegate", vote.Delegate.String(),
 		"voter", vote.Voter.String())
 
-	// 🆕 确保创世验证者映射已初始化（如果之前没有初始化）
+	// 确保创世验证者映射已初始化（如果之前没有初始化）
 	if d.genesisValidators == nil || len(d.genesisValidators) == 0 {
 		d.initializeGenesisValidatorsMap()
 	}
 
-	// 🆕 创世验证者可以直接被投票，无需检查候选人状态
+	// 创世验证者可以直接被投票，无需检查候选人状态
 	if d.isGenesisValidator(vote.Delegate) {
 		d.logger.Info("✅ 受托人是创世验证者，跳过候选人状态检查",
 			"delegate", vote.Delegate.String(),

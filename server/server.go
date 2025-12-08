@@ -151,8 +151,8 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		"dposValidatorsCount":       float64(s.config.DPoSValidatorsCount), // 使用正确的字段名
 		"dposDelegateThreshold":     s.config.DPoSDelegateThreshold,
 		"backupValidatorsCount":     float64(s.config.BackupValidatorsCount),
-		"dpos_min_freeze_period":    s.config.DPoSMinFreezePeriod,    // 🆕 最小冻结期（秒）
-		"dpos_unfreeze_lock_period": s.config.DPoSUnfreezeLockPeriod, // 🆕 解冻锁定期（秒）
+		"dpos_min_freeze_period":    s.config.DPoSMinFreezePeriod,    // 最小冻结期（秒）
+		"dpos_unfreeze_lock_period": s.config.DPoSUnfreezeLockPeriod, // 解冻锁定期（秒）
 		"dposCommissionRatio":       float64(commissionRatio),
 		"dpos_commission_ratio":     float64(commissionRatio),
 	}
@@ -176,7 +176,7 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		blockTimeDuration = time.Duration(blockTimeSeconds) * time.Second
 		engineConfig["blockTime"] = blockTimeDuration.String()
 	} else {
-		// ❌ 读取不到blockTime配置，返回错误（不允许使用默认值）
+		// 读取不到blockTime配置，返回错误（不允许使用默认值）
 		err := fmt.Errorf("block_time_s configuration is required but not found or invalid (value: %d). Please set block_time_s in your YAML configuration file", blockTimeSeconds)
 		s.logger.Error("❌ 区块时间配置缺失", "error", err)
 		return err
@@ -558,7 +558,7 @@ func NewServer(config *Config) (*Server, error) {
 			Blockchain: m.blockchain,
 		}
 
-		// 🆕 添加日志：输出交易池配置值，用于验证配置是否正确加载
+		// 添加日志：输出交易池配置值，用于验证配置是否正确加载
 		logger.Info("🔧 初始化交易池配置",
 			"MaxSlots", m.config.MaxSlots,
 			"MaxAccountEnqueued", m.config.MaxAccountEnqueued,
@@ -772,16 +772,16 @@ func (s *Server) setupConsensus() error {
 	blockTimeDuration := time.Duration(blockTimeSeconds) * time.Second
 	var epochDurationVal time.Duration
 
-	// 🆕 新增：将共识切换高度添加到engineConfig中
+	// 新增：将共识切换高度添加到engineConfig中
 	engineConfig["consensusSwitchHeight"] = float64(s.config.ConsensusSwitchHeight)
 
-	// 🆕 新增：将DPoS验证者数量添加到engineConfig中
+	// 新增：将DPoS验证者数量添加到engineConfig中
 	engineConfig["dposValidatorsCount"] = float64(s.config.DPoSValidatorsCount)
 
-	// 🆕 新增：将备用验证者数量添加到engineConfig中
+	// 新增：将备用验证者数量添加到engineConfig中
 	engineConfig["backupValidatorsCount"] = float64(s.config.BackupValidatorsCount)
 
-	// 🆕 新增：添加DPoS经济系统配置
+	// 新增：添加DPoS经济系统配置
 	// 从YAML配置中获取epoch duration
 	if epochDurationStr := s.config.DPoSEpochDuration; epochDurationStr != "" {
 		if epochDuration, err := time.ParseDuration(epochDurationStr); err == nil {
@@ -904,7 +904,7 @@ func (s *Server) setupConsensus() error {
 		Params:      s.config.Chain.Params,
 		Config:      engineConfig,
 		Path:        filepath.Join(s.config.DataDir, "consensus"),
-		DataDir:     s.config.DataDir, // 🆕 新增：数据目录
+		DataDir:     s.config.DataDir, // 新增：数据目录
 		IsRelayer:   s.config.Relayer,
 		RPCEndpoint: s.config.JSONRPC.JSONRPCAddr.String(),
 	}
@@ -934,7 +934,7 @@ func (s *Server) setupConsensus() error {
 
 	s.consensus = consensus
 
-	// 🆕 如果是IBFT共识，设置DPoS引擎启动器
+	// 如果是IBFT共识，设置DPoS引擎启动器
 	if engineName == string(IBFTConsensus) {
 		if ibftConsensus, ok := consensus.(interface {
 			SetDPoSEngineStarter(starter consensusIBFT.DPoSEngineStarter)
@@ -994,7 +994,7 @@ type jsonRPCHub struct {
 	consensus.BridgeDataProvider
 	gasprice.GasStore
 
-	// 🆕 新增：Server引用，用于访问DPoS引擎
+	// 新增：Server引用，用于访问DPoS引擎
 	server *Server
 }
 
@@ -1285,7 +1285,7 @@ func (s *Server) setupJSONRPC() error {
 		Server:             s.network,
 		BridgeDataProvider: s.consensus.GetBridgeProvider(),
 		GasStore:           s.gasHelper,
-		server:             s, // 🆕 新增：Server引用
+		server:             s, // 新增：Server引用
 	}
 
 	conf := &jsonrpc.Config{

@@ -104,7 +104,7 @@ func (d *DPoS) asyncLoadBLSKeys() {
 func (d *DPoS) getAllValidators() validator.AccountSet {
 	if d.runtime != nil && len(d.runtime.delegates) > 0 {
 		d.logger.Debug("🔍 getAllValidators: 使用runtime.delegates", "count", len(d.runtime.delegates))
-		// 🆕 添加详细日志：打印每个验证者的VotingPower
+		// 添加详细日志：打印每个验证者的VotingPower
 		for i, validator := range d.runtime.delegates {
 			d.logger.Debug("🔍 runtime.delegates验证者信息",
 				"index", i,
@@ -117,7 +117,7 @@ func (d *DPoS) getAllValidators() validator.AccountSet {
 		return d.runtime.delegates
 	}
 	d.logger.Debug("🔍 getAllValidators: 使用d.delegates", "count", len(d.delegates))
-	// 🆕 添加详细日志：打印每个验证者的VotingPower
+	// 添加详细日志：打印每个验证者的VotingPower
 	for i, validator := range d.delegates {
 		d.logger.Info("🔍 d.delegates验证者信息",
 			"index", i,
@@ -233,7 +233,7 @@ func (d *DPoS) syncLoadBLSKeys() error {
 		}
 	}
 
-	// 🆕 修复：检查所有验证者是否都有BLS公钥
+	// 修复：检查所有验证者是否都有BLS公钥
 	allBLSLoaded := true
 	for _, validator := range validators {
 		if validator.BlsKey == nil {
@@ -273,7 +273,7 @@ func (d *DPoS) syncLoadBLSKeys() error {
 			"stateIsNil", d.state == nil,
 			"stakeStoreIsNil", d.state.StakeStore == nil)
 
-		// 🆕 直接使用GetValidatorsWithFilter(false)查询数据库，避免内存和数据库不一致
+		// 直接使用GetValidatorsWithFilter(false)查询数据库，避免内存和数据库不一致
 		dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
 		d.logger.Info("🔍 GetValidatorsWithFilter(false)结果", "count", len(dbValidators), "error", err)
 
@@ -281,7 +281,7 @@ func (d *DPoS) syncLoadBLSKeys() error {
 			// 打印数据库验证者的详细信息
 			d.logger.Info("🔍 数据库验证者详细信息:")
 			for i, validator := range dbValidators {
-				// 🆕 获取验证者的故障标志信息
+				// 获取验证者的故障标志信息
 				faultInfo := d.getValidatorFaultInfo(validator.Address)
 				d.logger.Info("🔍 数据库验证者",
 					"index", i,
@@ -289,7 +289,7 @@ func (d *DPoS) syncLoadBLSKeys() error {
 					"votingPower", validator.VotingPower.String(),
 					"isActive", validator.IsActive,
 					"hasBlsKey", validator.BlsKey != nil,
-					"faultFlag", faultInfo) // 🆕 添加故障标志信息
+					"faultFlag", faultInfo) // 添加故障标志信息
 			}
 			d.logger.Info("✅ 数据库已有验证者，跳过保存", "count", len(dbValidators))
 		} else {

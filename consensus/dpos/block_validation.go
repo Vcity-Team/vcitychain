@@ -13,13 +13,13 @@ import (
 func (d *DPoS) VerifyHeader(header *types.Header) error {
 	blockNumber := header.Number
 
-	// 🆕 添加：检查是否是共识切换高度
+	// 添加：检查是否是共识切换高度
 	if d.config.ConsensusSwitchHeight > 0 && blockNumber == d.config.ConsensusSwitchHeight {
 		d.logger.Info("🔄 共识切换高度区块，跳过DPoS验证", "blockNumber", blockNumber, "consensusSwitchHeight", d.config.ConsensusSwitchHeight)
 		return nil
 	}
 
-	// 🆕 关键：在验证前等待BLS公钥加载完成
+	// 关键：在验证前等待BLS公钥加载完成
 	if err := d.waitForBLSKeysLoaded(); err != nil {
 		d.logger.Error("❌ 等待BLS公钥加载失败", "blockNumber", blockNumber, "error", err)
 		return fmt.Errorf("BLS keys not loaded: %w", err)
@@ -38,7 +38,7 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 			"parentHash", header.ParentHash.String(),
 			"parentHashHex", fmt.Sprintf("0x%x", header.ParentHash))
 
-		// 🆕 父区块获取失败时立即退出程序
+		// 父区块获取失败时立即退出程序
 		d.logger.Error("💀 无法获取父区块，程序将立即退出")
 		os.Exit(1)
 
@@ -52,7 +52,7 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 	if err != nil {
 		d.logger.Error("❌ DPoS VerifyHeader verifyHeaderImpl失败", "blockNumber", blockNumber, "error", err)
 
-		// 🆕 区块头验证失败时立即退出程序
+		// 区块头验证失败时立即退出程序
 		d.logger.Error("💀 区块头验证失败，程序将立即退出")
 		os.Exit(1)
 
@@ -65,7 +65,7 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift time.Duration, parents []*types.Header) error {
 	// validate header fields
 	if err := validateHeaderFields(parent, header, uint64(blockTimeDrift.Seconds())); err != nil {
-		// 🆕 打印parent区块信息（Info级别）
+		// 打印parent区块信息（Info级别）
 		d.logger.Info("❌ 区块头部字段验证失败 - parent信息",
 			"blockNumber", header.Number,
 			"blockHash", header.Hash.String(),
@@ -111,7 +111,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 	for _, header := range headers {
 		d.logger.Debug("🔄 DPoS处理区块头部", "blockNumber", header.Number, "blockHash", header.Hash.String()[:16])
 
-		// 🆕 检查同步节点接收到的区块状态根
+		// 检查同步节点接收到的区块状态根
 		d.logger.Debug("🔍 同步节点接收区块状态根检查",
 			"blockNumber", header.Number,
 			"stateRoot", header.StateRoot.String(),
@@ -125,7 +125,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		// 同步更新轮次状态（这部分必须同步执行，不能异步）
 		d.updateRoundState(header)
 
-		// 🆕 解析ExtraData并处理故障标志（确保生产节点也能保存故障状态）
+		// 解析ExtraData并处理故障标志（确保生产节点也能保存故障状态）
 		if extra, err := GetIbftExtra(header.ExtraData); err == nil && extra != nil {
 			extra.processFaultFlags(header.Number, d, d.logger)
 		} else if err != nil {
@@ -134,7 +134,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 				"error", err)
 		}
 
-		// 🆕 验证节点执行blockchain_wrapper.ProcessBlock来处理奖励分配
+		// 验证节点执行blockchain_wrapper.ProcessBlock来处理奖励分配
 		if d.config.Blockchain != nil {
 			// 获取完整区块信息
 			block, exists := d.config.Blockchain.GetBlockByHash(header.Hash, true)
@@ -199,7 +199,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 				"blockHash", header.Hash.String()[:16])
 		}
 
-		// 🆕 在区块同步时存储验证者集合到历史数据库
+		// 在区块同步时存储验证者集合到历史数据库
 		if d.state != nil && d.state.StakeStore != nil {
 
 			// 从区块ExtraData解析验证者集合

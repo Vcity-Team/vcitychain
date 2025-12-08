@@ -48,7 +48,7 @@ const (
 
 	metricsIntervalFlag = "metrics-interval"
 
-	// 🆕 新增：共识切换高度参数
+	// 新增：共识切换高度参数
 	consensusSwitchHeightFlag = "consensus-switch-height"
 )
 
@@ -100,23 +100,23 @@ type serverParams struct {
 
 	relayer bool
 
-	// 🆕 新增：共识切换高度
+	// 新增：共识切换高度
 	consensusSwitchHeight uint64
 
-	// 🆕 新增：DPoS验证者数量
+	// 新增：DPoS验证者数量
 	dposValidatorsCount uint64
 
-	// 🆕 新增：DPoS备用验证者数量
+	// 新增：DPoS备用验证者数量
 	backupValidatorsCount uint64
 
-	// 🆕 新增：DPoS最小质押门槛
+	// 新增：DPoS最小质押门槛
 	dposDelegateThreshold *big.Int
 
-	// 🆕 DPoS提案周期
+	// DPoS提案周期
 	dposProposalVotePeriod  string // 提案表决周期
 	dposProposalValidPeriod string // 提案有效期
 
-	// 🆕 London Fork 配置解析
+	// London Fork 配置解析
 	parsedBaseFee      *baseFeeInfo      // 解析后的 BaseFee 信息
 	parsedBurnContract *burnContractInfo // 解析后的 BurnContract 信息
 }
@@ -224,15 +224,15 @@ func (p *serverParams) generateConfig() *server.Config {
 		RestoreFile:        p.getRestoreFilePath(),
 		LogLevel:           hclog.LevelFromString(p.rawConfig.LogLevel),
 
-		// 🆕 新增：共识切换高度
+		// 新增：共识切换高度
 		ConsensusSwitchHeight: p.consensusSwitchHeight,
-		// 🆕 新增：DPoS验证者数量
+		// 新增：DPoS验证者数量
 		DPoSValidatorsCount: p.dposValidatorsCount,
-		// 🆕 新增：DPoS备用验证者数量
+		// 新增：DPoS备用验证者数量
 		BackupValidatorsCount: p.backupValidatorsCount,
-		// 🆕 新增：DPoS最小质押门槛
+		// 新增：DPoS最小质押门槛
 		DPoSDelegateThreshold: p.dposDelegateThreshold,
-		// 🆕 新增：DPoS经济系统配置
+		// 新增：DPoS经济系统配置
 		DPoSEpochDuration:       p.rawConfig.DPoSEpochDuration,
 		DPoSRewardDistribution:  p.rawConfig.DPoSRewardDistribution,
 		DPoSRewardAmount:        p.rawConfig.DPoSRewardAmount,
@@ -240,9 +240,9 @@ func (p *serverParams) generateConfig() *server.Config {
 		DPoSProposalValidPeriod: p.dposProposalValidPeriod,
 		DPoSCommissionRatio:     p.rawConfig.DPoSCommissionRatio,
 		DPoSCommissionEffective: p.rawConfig.DPoSCommissionEffective,
-		BlockTimeSeconds:        p.rawConfig.BlockTimeSeconds,       // 🆕 传递BlockTimeSeconds配置
-		DPoSMinFreezePeriod:     p.rawConfig.DPoSMinFreezePeriod,    // 🆕 传递最小冻结期配置
-		DPoSUnfreezeLockPeriod:  p.rawConfig.DPoSUnfreezeLockPeriod, // 🆕 传递解冻锁定期配置
+		BlockTimeSeconds:        p.rawConfig.BlockTimeSeconds,       // 传递BlockTimeSeconds配置
+		DPoSMinFreezePeriod:     p.rawConfig.DPoSMinFreezePeriod,    // 传递最小冻结期配置
+		DPoSUnfreezeLockPeriod:  p.rawConfig.DPoSUnfreezeLockPeriod, // 传递解冻锁定期配置
 		JSONLogFormat:           p.rawConfig.JSONLogFormat,
 		LogFilePath:             p.logFileLocation,
 

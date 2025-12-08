@@ -738,7 +738,7 @@ func (e *Eth) GetLogs(query *LogQuery) (interface{}, error) {
 }
 
 // GetBalance returns the account's balance at the referenced block.
-// 🆕 修改：扣除冻结金额，返回可用余额
+// 修改：扣除冻结金额，返回可用余额
 func (e *Eth) GetBalance(address types.Address, filter BlockNumberOrHash) (interface{}, error) {
 	header, err := GetHeaderFromBlockNumberOrHash(filter, e.store)
 	if err != nil {
@@ -754,7 +754,7 @@ func (e *Eth) GetBalance(address types.Address, filter BlockNumberOrHash) (inter
 		return nil, err
 	}
 
-	// 🆕 查询冻结信息并扣除冻结金额
+	// 查询冻结信息并扣除冻结金额
 	availableBalance := new(big.Int).Set(acc.Balance)
 
 	// 直接通过全局函数获取DPoS实例并查询冻结信息

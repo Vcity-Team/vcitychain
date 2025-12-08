@@ -93,14 +93,14 @@ type NetworkIntegration struct {
 	// BLS公钥管理（使用BLSKeyManager统一管理）
 	blsKeyManager *BLSKeyManager
 
-	// 🆕 DPOS实例引用，用于持久化操作
+	// DPOS实例引用，用于持久化操作
 	dposInstance interface{}
 
-	// 🆕 日志频率控制
+	// 日志频率控制
 	lastBroadcastLogTime      *time.Time
 	lastBroadcastLogTimeMutex sync.Mutex
 
-	// 🆕 验证者地址与peer映射（使用PeerRegistry统一管理）
+	// 验证者地址与peer映射（使用PeerRegistry统一管理）
 	peerRegistry *PeerRegistry
 }
 
@@ -436,7 +436,7 @@ func (ni *NetworkIntegration) Start() error {
 		return fmt.Errorf("failed to subscribe to topics: %w", err)
 	}
 
-	// 🆕 从数据库恢复BLS公钥到缓存
+	// 从数据库恢复BLS公钥到缓存
 	if err := ni.restoreBLSKeysFromDatabase(); err != nil {
 		ni.logger.Warn("从数据库恢复BLS公钥失败，但网络集成仍可继续运行", "error", err)
 	} else {
@@ -1348,7 +1348,7 @@ func (ni *NetworkIntegration) BroadcastSignatureResponse(response *SignatureResp
 
 	actualTopicName := ni.signatureResponseTopic.GetActualProtoID()
 
-	// 🆕 统一日志间隔控制（10秒）
+	// 统一日志间隔控制（10秒）
 	ni.lastBroadcastLogTimeMutex.Lock()
 	now := time.Now()
 	shouldLog := true
@@ -1651,7 +1651,7 @@ func (ni *NetworkIntegration) sendBLSKeyAck(address types.Address, status, messa
 
 // persistBLSKeyToDatabase 将BLS公钥持久化到数据库
 func (ni *NetworkIntegration) persistBLSKeyToDatabase(address types.Address, blsKeyBytes []byte) error {
-	// 🆕 优先使用DPoS实例直接调用
+	// 优先使用DPoS实例直接调用
 	if ni.dposInstance != nil {
 		if dpos, ok := ni.dposInstance.(*DPoS); ok {
 			if err := dpos.persistBLSKeyToStakeStore(address, blsKeyBytes); err != nil {
@@ -1662,7 +1662,7 @@ func (ni *NetworkIntegration) persistBLSKeyToDatabase(address types.Address, bls
 		}
 	}
 
-	// 🆕 通过全局注册表查找DPoS实例（优先使用固定key）
+	// 通过全局注册表查找DPoS实例（优先使用固定key）
 	if dpos, exists := GetDPoSInstance("vcity_dpos"); exists && dpos != nil {
 		if err := dpos.persistBLSKeyToStakeStore(address, blsKeyBytes); err != nil {
 			return fmt.Errorf("通过全局注册表（固定key）持久化BLS公钥失败: %w", err)
@@ -1671,7 +1671,7 @@ func (ni *NetworkIntegration) persistBLSKeyToDatabase(address types.Address, bls
 		return nil
 	}
 
-	// 🆕 备用方案：通过地址查找DPoS实例
+	// 备用方案：通过地址查找DPoS实例
 	if dpos, exists := GetDPoSInstance(address.String()); exists && dpos != nil {
 		if err := dpos.persistBLSKeyToStakeStore(address, blsKeyBytes); err != nil {
 			return fmt.Errorf("通过全局注册表（地址key）持久化BLS公钥失败: %w", err)
@@ -1680,7 +1680,7 @@ func (ni *NetworkIntegration) persistBLSKeyToDatabase(address types.Address, bls
 		return nil
 	}
 
-	// 🆕 备用方案：使用BLSKeyManager的回调函数进行持久化
+	// 备用方案：使用BLSKeyManager的回调函数进行持久化
 	if ni.blsKeyManager != nil && ni.blsKeyManager.persistCallback != nil {
 		if err := ni.blsKeyManager.persistCallback(address, blsKeyBytes); err != nil {
 			return fmt.Errorf("BLS公钥持久化回调失败: %w", err)
@@ -1755,7 +1755,7 @@ func (ni *NetworkIntegration) restoreBLSKeysFromDatabase() error {
 	return nil
 }
 
-// 🆕 新增：批量恢复BLS公钥
+// 新增：批量恢复BLS公钥
 func (ni *NetworkIntegration) RestoreBLSKeysForDelegates(delegates []*validator.ValidatorMetadata) error {
 	if ni.blsKeyManager == nil {
 		ni.logger.Debug("BLS公钥管理器未设置，跳过批量恢复")
@@ -1797,7 +1797,7 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 			return
 		}
 
-		// 🆕 检查是否是本地节点的请求，如果是则忽略
+		// 检查是否是本地节点的请求，如果是则忽略
 		// 简单判断：如果请求者地址等于请求的地址，可能是本地请求
 		if requestMsg.Requester == requestMsg.RequestedAddress {
 			ni.logger.Debug("🔄 忽略可能的本地BLS公钥请求",
@@ -1909,7 +1909,7 @@ func (ni *NetworkIntegration) handleBLSKeyResponse(obj interface{}, from peer.ID
 			return
 		}
 
-		// 🆕 根据响应更新验证者的peer映射
+		// 根据响应更新验证者的peer映射
 		if from != "" {
 			ni.RegisterValidatorPeer(responseMsg.RequestedAddress, from)
 		}
@@ -1957,7 +1957,7 @@ func (ni *NetworkIntegration) sendBLSKeyResponse(responseMsg *BLSKeyResponseMess
 
 // findBLSKeyFromGenesisFile 从validator-bls.key文件中查找BLS公钥
 func (ni *NetworkIntegration) findBLSKeyFromGenesisFile(address types.Address) ([]byte, error) {
-	// 🆕 修改：不再从创世文件查找，而是从validator-bls.key文件查找
+	// 修改：不再从创世文件查找，而是从validator-bls.key文件查找
 
 	// 1. 获取数据目录路径
 	dataDir := ni.getDataDir()
@@ -2048,7 +2048,7 @@ func (ni *NetworkIntegration) findBLSKeyFromGenesisFile(address types.Address) (
 	return publicKeyBytes, nil
 }
 
-// 🆕 新增：获取数据目录路径
+// 新增：获取数据目录路径
 func (ni *NetworkIntegration) getDataDir() string {
 	// 尝试从DPoS实例获取数据目录
 	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {

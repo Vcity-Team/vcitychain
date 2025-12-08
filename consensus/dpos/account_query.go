@@ -71,7 +71,7 @@ func (d *DPoS) syncStateRootToBlockchain(header *types.Header, newStateRoot []by
 		"oldStateRoot", fmt.Sprintf("0x%x", header.StateRoot),
 		"newStateRoot", fmt.Sprintf("0x%x", newStateRoot))
 
-	// 🆕 关键：确保区块链的当前状态使用新的状态根
+	// 关键：确保区块链的当前状态使用新的状态根
 	// 这里需要强制更新区块链的当前状态，而不仅仅是区块头
 	// 通过重新设置区块头的状态根来触发区块链状态的更新
 
@@ -79,7 +79,7 @@ func (d *DPoS) syncStateRootToBlockchain(header *types.Header, newStateRoot []by
 	header.StateRoot = types.BytesToHash(newStateRoot)
 	header.ComputeHash()
 
-	// 🆕 重要：这里需要确保区块链系统知道状态根已经更新
+	// 重要：这里需要确保区块链系统知道状态根已经更新
 	// 通过调用区块链的相关方法来同步状态
 	if d.config.Blockchain != nil {
 		// 这里可能需要调用区块链的特定方法来更新当前状态

@@ -9,16 +9,16 @@ import (
 
 // getCurrentDelegate 获取当前受托人（基于时间slot实时计算）
 func (r *dposRuntime) getCurrentDelegate() types.Address {
-	// 🆕 修复：使用与shouldProduceBlockNow()完全相同的数据源策略，确保一致性
+	// 修复：使用与shouldProduceBlockNow()完全相同的数据源策略，确保一致性
 	dposBackend, ok := r.backend.(*DPoS)
 	if !ok {
 		r.logger.Error("❌ 无法访问数据库，backend类型错误")
 		return types.ZeroAddress
 	}
 
-	// 🆕 优先从数据库获取预先计算的epoch验证者集合（与shouldProduceBlockNow()保持一致）
+	// 优先从数据库获取预先计算的epoch验证者集合（与shouldProduceBlockNow()保持一致）
 	allValidators, err := dposBackend.getEpochValidatorsFromDatabase()
-	validatorsSource := "database" // 🆕 记录验证者列表来源
+	validatorsSource := "database" // 记录验证者列表来源
 	if err != nil || len(allValidators) == 0 {
 		// 如果数据库中没有预先计算的验证者集合，回退到实时查询（兼容性）
 		// 这种情况可能发生在：1. 第一次启动 2. 数据库被清空 3. 之前的epoch没有保存
@@ -26,7 +26,7 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 			"⚠️ getCurrentDelegate: 数据库中没有预先计算的epoch验证者集合，回退到实时查询",
 			"error", err)
 		allValidators, err = dposBackend.GetSortedValidatorsWithLimit()
-		validatorsSource = "realtime_query" // 🆕 更新来源为实时查询
+		validatorsSource = "realtime_query" // 更新来源为实时查询
 		if err != nil {
 			r.logger.Error("❌ getCurrentDelegate: 实时查询验证者集合失败", "error", err)
 			return types.ZeroAddress
@@ -37,7 +37,7 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 		}
 	}
 
-	// 🆕 直接使用数据库中的验证者集合（已在epoch边界完成过滤）
+	// 直接使用数据库中的验证者集合（已在epoch边界完成过滤）
 	validators := allValidators
 	if len(validators) == 0 {
 		r.logger.Error("❌ getCurrentDelegate: 验证者集合为空，无法确定当前委托者",
@@ -51,7 +51,7 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 		return types.ZeroAddress
 	}
 
-	// 🆕 基于时间slot实时计算当前委托者
+	// 基于时间slot实时计算当前委托者
 	if r.config.blockScheduler != nil {
 		// 获取当前时间
 		now := time.Now()
@@ -64,7 +64,7 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 		currentValidatorIndex := currentSlot % actualDelegateCount
 		delegate := validators[currentValidatorIndex]
 
-		// 🆕 使用最新的数据库信息校验活跃状态和投票权重
+		// 使用最新的数据库信息校验活跃状态和投票权重
 		latestMeta := delegate
 		if validatorsSource != "realtime_query" {
 			if freshValidators, err := dposBackend.GetSortedValidatorsWithLimit(); err == nil {

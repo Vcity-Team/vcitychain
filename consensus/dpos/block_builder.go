@@ -107,7 +107,7 @@ func (b *BlockBuilder) Reset() error {
 		GasLimit:     b.params.GasLimit,
 		BaseFee:      b.params.BaseFee,
 		Timestamp:    uint64(headerTime.Unix()),
-		MixHash:      PolyBFTMixDigest, // 🆕 设置 MixHash 以通过验证
+		MixHash:      PolyBFTMixDigest, // 设置 MixHash 以通过验证
 	}
 
 	transition, err := b.params.Executor.BeginTxn(b.params.Parent.StateRoot, b.header, b.params.Coinbase)
@@ -177,7 +177,7 @@ func (b *BlockBuilder) WriteTx(tx *types.Transaction) error {
 }
 
 // Fill fills the block with transactions from the txpool
-// 🆕 完全对标以太坊：批量打包多笔交易，使用当前区块状态检查nonce
+// 完全对标以太坊：批量打包多笔交易，使用当前区块状态检查nonce
 // 修复：不要每次都调用Prepare()，而是使用当前构建区块的状态来检查nonce
 // 这样可以在一个区块中打包多笔交易，类似以太坊
 func (b *BlockBuilder) Fill() {
@@ -223,7 +223,7 @@ func (b *BlockBuilder) Fill() {
 
 		txCount++
 
-		// 🆕 关键修复：使用当前构建区块的状态来检查nonce（不是父区块状态）
+		// 关键修复：使用当前构建区块的状态来检查nonce（不是父区块状态）
 		// 这样可以看到当前区块已打包交易对nonce的影响
 		accountNonce := b.state.GetNonce(tx.From)
 		if tx.Nonce != accountNonce {
@@ -248,7 +248,7 @@ func (b *BlockBuilder) Fill() {
 		consecutiveSkips = 0
 
 		// execute transactions one by one
-		// 🆕 writeTxPoolTransaction内部会调用Pop()，所以这里不需要再次调用
+		// writeTxPoolTransaction内部会调用Pop()，所以这里不需要再次调用
 		finished, err := b.writeTxPoolTransaction(tx)
 		if err != nil {
 			b.params.Logger.Error("💀 交易填充失败，程序将立即退出",
@@ -259,7 +259,7 @@ func (b *BlockBuilder) Fill() {
 			os.Exit(1)
 		}
 
-		// 🆕 writeTxPoolTransaction内部已经调用了Pop()，会自动将同一账户的下一笔交易添加到executables队列（如果存在）
+		// writeTxPoolTransaction内部已经调用了Pop()，会自动将同一账户的下一笔交易添加到executables队列（如果存在）
 		// 这样就不需要每次都调用Prepare()了
 
 		// 区块已满（GasLimit 达到），立即返回
@@ -271,7 +271,7 @@ func (b *BlockBuilder) Fill() {
 			return
 		}
 
-		// 🆕 修复：不再每次都调用Prepare()
+		// 修复：不再每次都调用Prepare()
 		// 因为：
 		// 1. Pop()会自动将同一账户的下一笔交易添加到executables队列
 		// 2. 我们使用b.state.GetNonce()来检查nonce，这是当前构建区块的状态
@@ -537,7 +537,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			NextValidatorsHash:    currentValidatorsHash, // 暂时使用相同的哈希
 			EventRoot:             types.Hash{},          // 暂时为空
 		},
-		// 🆕 初始化CheckpointBlockHash为空，稍后会设置
+		// 初始化CheckpointBlockHash为空，稍后会设置
 		CheckpointBlockHash: types.Hash{},
 	}
 	// 延迟状态更新机制已移除，奖励分发在epoch结束区块直接执行
@@ -569,7 +569,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				"action", "REWARD_DISTRIBUTION_SUCCESS")
 		}
 
-		// 🆕 注意：故障检测已在前面执行（在计算验证者集合之前），这里不再重复执行
+		// 注意：故障检测已在前面执行（在计算验证者集合之前），这里不再重复执行
 	} else {
 		r.logger.Debug("ℹ️ 不是epoch最后一个区块，跳过奖励分发",
 			"blockNumber", nextBlockNumber,
@@ -599,7 +599,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		h.Difficulty = 1
 		h.ExtraData = extra.MarshalRLPTo(nil)
 
-		// 🆕 如果是epoch结束区块，不预先计算状态根，而是像交易一样在区块执行时处理
+		// 如果是epoch结束区块，不预先计算状态根，而是像交易一样在区块执行时处理
 		if isEpochEndBlock {
 
 			// 通过全局注册表获取DPoS实例，添加奖励信息到ExtraData
@@ -632,7 +632,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 						"isEpochEndBlock", isEpochEndBlock)
 				}
 
-				// 🆕 添加故障检测信息
+				// 添加故障检测信息
 				if len(dposInstance.pendingFaultFlags) > 0 {
 					// 复制FaultFlags，避免引用被清空
 					extra.FaultFlags = make([]FaultFlagInfo, len(dposInstance.pendingFaultFlags))
@@ -651,7 +651,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 						"isEpochEndBlock", isEpochEndBlock)
 				}
 
-				// 🆕 添加故障消减信息
+				// 添加故障消减信息
 				if dposInstance.pendingSlashingInfo != nil {
 					// 复制SlashingInfo，避免引用被清空
 					extra.SlashingInfo = &SlashingInfo{
@@ -682,7 +682,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 						"isEpochEndBlock", isEpochEndBlock)
 				}
 
-				// 🆕 在epoch结束区块中也设置CheckpointBlockHash
+				// 在epoch结束区块中也设置CheckpointBlockHash
 				extra.CheckpointBlockHash = h.Hash
 				r.logger.Info("🔍 ===== epoch结束区块保存CheckpointBlockHash =====",
 					"blockNumber", h.Number,
@@ -702,7 +702,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			}
 		}
 
-		// 🆕 检查区块头中的状态根
+		// 检查区块头中的状态根
 		r.logger.Info("🔍 检查区块头状态根",
 			"blockNumber", h.Number,
 			"stateRoot", h.StateRoot.String(),
@@ -734,10 +734,10 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	block.Block.Header.ComputeHash()
 	realBlockHash := block.Block.Hash()
 
-	// 🆕 保存初始区块哈希到extra中，用于CheckpointHash计算
+	// 保存初始区块哈希到extra中，用于CheckpointHash计算
 	extra.CheckpointBlockHash = realBlockHash
 
-	// 🆕 重新设置ExtraData，确保CheckpointBlockHash被包含
+	// 重新设置ExtraData，确保CheckpointBlockHash被包含
 	block.Block.Header.ExtraData = extra.MarshalRLPTo(nil)
 
 	r.logger.Debug("🔍 生产时开始计算checkpoint哈希",
@@ -749,7 +749,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		"blockRound", checkpoint.BlockRound,
 		"epochNumber", checkpoint.EpochNumber)
 
-	// 🆕 添加详细的CheckpointData内容对比日志
+	// 添加详细的CheckpointData内容对比日志
 	r.logger.Debug("🔍 生产时CheckpointData详细信息",
 		"blockNumber", block.Block.Number(),
 		"chainID", r.config.blockchain.GetChainID(),
@@ -835,7 +835,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		"bitmapLength", len(signatureBitmap),
 		"bitmapBytes", fmt.Sprintf("%x", signatureBitmap))
 
-	// 🆕 关键修复：检查签名收集结果
+	// 关键修复：检查签名收集结果
 	if len(signatures) == 0 || len(signatureBitmap) == 0 {
 		r.logger.Error("签名收集失败，无法提交区块",
 			"signaturesCount", len(signatures),
@@ -849,10 +849,10 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		r.logger.Debug("开始聚合签名",
 			"signatureCount", len(signatures))
 
-		// 🆕 修复：按位图索引顺序聚合签名，确保与验证时公钥顺序一致
+		// 修复：按位图索引顺序聚合签名，确保与验证时公钥顺序一致
 		blsSignatures := make(bls.Signatures, 0, len(signatures))
 
-		// 🆕 关键修复：使用与验证时完全相同的验证者集合获取方法
+		// 关键修复：使用与验证时完全相同的验证者集合获取方法
 		// 验证时使用：consensusBackend.GetDelegates(blockNumber-1, parents)
 		// 生产时也应该使用相同的逻辑：获取父区块信息并传递
 
@@ -870,7 +870,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			}
 		}
 
-		// 🆕 关键修复：使用缓存的验证者集合，确保与第一次获取完全一致
+		// 关键修复：使用缓存的验证者集合，确保与第一次获取完全一致
 		var productionValidators validator.AccountSet
 		if r.cachedProductionValidators != nil && len(r.cachedProductionValidators) > 0 {
 			// 使用缓存的4个验证者
@@ -891,7 +891,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			}
 		}
 
-		// 🆕 关键修复：实时同步r.delegates为productionValidators
+		// 关键修复：实时同步r.delegates为productionValidators
 		// 确保位图索引和保存的验证者集合完全匹配
 		r.delegates = productionValidators
 		r.logger.Debug("🔄 已同步r.delegates为productionValidators",
@@ -900,7 +900,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"productionValidatorsCount", len(productionValidators),
 			"note", "确保位图索引与验证者集合完全匹配")
 
-		// 🆕 验证：确保验证者集合与 r.delegates 一致
+		// 验证：确保验证者集合与 r.delegates 一致
 		if len(productionValidators) != len(r.delegates) {
 			r.logger.Warn("⚠️ 验证者集合数量不一致",
 				"productionValidatorsCount", len(productionValidators),
@@ -912,7 +912,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		bitmapToSignature := make(map[uint64][]byte)
 		signatureIndex := 0
 
-		// 🆕 方案1：先找出实际参与签名的验证者索引（基于位图设置）
+		// 方案1：先找出实际参与签名的验证者索引（基于位图设置）
 		participatingIndices := make([]uint64, 0)
 		for i := uint64(0); i < uint64(len(productionValidators)); i++ {
 			if signatureBitmap.IsSet(i) {
@@ -958,7 +958,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			return nil, fmt.Errorf("aggregated signature length is %d, expected 64", len(aggregatedSignature))
 		}
 
-		// 🆕 测试：验证聚合签名是否可以正确解析
+		// 测试：验证聚合签名是否可以正确解析
 		r.logger.Debug("🔍 测试聚合签名解析...")
 		_, err = bls.UnmarshalSignature(aggregatedSignature)
 		if err != nil {
@@ -1000,7 +1000,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			}
 		}
 
-		// 🆕 计算参与签名的验证者数量（位图设置 AND 有签名）
+		// 计算参与签名的验证者数量（位图设置 AND 有签名）
 		participatingCount := 0
 		for i := uint64(0); i < uint64(len(productionValidators)); i++ {
 			if signatureBitmap.IsSet(i) {
@@ -1011,13 +1011,13 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			}
 		}
 
-		// 🆕 修复：保存全部验证者，确保与生产时使用的验证者集合完全一致
+		// 修复：保存全部验证者，确保与生产时使用的验证者集合完全一致
 		validatorAddresses := make(validator.AccountSet, 0, len(productionValidators))
 		for _, v := range productionValidators {
 			// 保存全部验证者，不仅仅是签名者，确保位图索引与验证者集合匹配
 			validatorAddresses = append(validatorAddresses, &validator.ValidatorMetadata{
 				Address:     v.Address,
-				BlsKey:      nil, // 🆕 不保存BLS公钥，验证时从创世文件获取
+				BlsKey:      nil, // 不保存BLS公钥，验证时从创世文件获取
 				VotingPower: v.VotingPower,
 				IsActive:    v.IsActive,
 			})
@@ -1025,14 +1025,14 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		}
 
 		signingValidatorDelta := &validator.ValidatorSetDelta{
-			Added:   validatorAddresses, // 🆕 保存全部验证者，确保位图索引匹配
+			Added:   validatorAddresses, // 保存全部验证者，确保位图索引匹配
 			Updated: make(validator.AccountSet, 0),
 			Removed: bitmap.Bitmap{},
 		}
 
-		// 🆕 记录参与签名的验证者信息（用于调试）
+		// 记录参与签名的验证者信息（用于调试）
 
-		// 🆕 显著日志：生产时保存到ExtraData的验证者集合和索引
+		// 显著日志：生产时保存到ExtraData的验证者集合和索引
 		r.logger.Debug("🏭 ===== 生产时保存到ExtraData的验证者集合 =====",
 			"blockNumber", block.Block.Number(),
 			"totalValidators", len(validatorAddresses),
@@ -1051,7 +1051,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				"note", "验证者索引与位图索引对应")
 		}
 
-		// 🆕 显著日志：位图索引详情
+		// 显著日志：位图索引详情
 		r.logger.Debug("🏭 ===== 生产时位图索引详情 =====",
 			"blockNumber", block.Block.Number(),
 			"bitmapHex", fmt.Sprintf("%x", signatureBitmap),
@@ -1069,7 +1069,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 		// 静默处理，不打印日志
 
-		// 🆕 关键修复：从当前区块的ExtraData中获取奖励分配信息、故障标志和消减信息
+		// 关键修复：从当前区块的ExtraData中获取奖励分配信息、故障标志和消减信息
 		var rewardDistribution *RewardDistributionInfo
 		var faultFlags []FaultFlagInfo
 		var slashingInfo *SlashingInfo
@@ -1093,18 +1093,18 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 		// 更新区块的ExtraData，包含聚合签名、父区块签名和验证者集合
 		finalExtra := &Extra{
-			Validators: signingValidatorDelta, // 🆕 保存全部验证者集合，确保位图索引匹配
+			Validators: signingValidatorDelta, // 保存全部验证者集合，确保位图索引匹配
 			Parent:     parentSignature,       // 父区块签名
 			Committed: &Signature{
 				AggregatedSignature: aggregatedSignature,
 				Bitmap:              signatureBitmap,
 			},
 			Checkpoint:          checkpoint,
-			RewardDistribution:  rewardDistribution,          // 🆕 从当前区块ExtraData获取的奖励分配信息
-			CheckpointBlockHash: extra.CheckpointBlockHash,   // 🆕 保持CheckpointBlockHash
-			FaultFlags:          faultFlags,                  // 🆕 保持FaultFlags
-			NextEpochValidators: nextEpochValidatorsForExtra, // 🆕 下一个epoch的验证者集合（只在epoch边界区块时设置）
-			SlashingInfo:        slashingInfo,                // 🆕 保持SlashingInfo
+			RewardDistribution:  rewardDistribution,          // 从当前区块ExtraData获取的奖励分配信息
+			CheckpointBlockHash: extra.CheckpointBlockHash,   // 保持CheckpointBlockHash
+			FaultFlags:          faultFlags,                  // 保持FaultFlags
+			NextEpochValidators: nextEpochValidatorsForExtra, // 下一个epoch的验证者集合（只在epoch边界区块时设置）
+			SlashingInfo:        slashingInfo,                // 保持SlashingInfo
 		}
 
 		if len(nextEpochValidatorsForExtra) > 0 {
@@ -1125,7 +1125,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 		block.Block.Header.ExtraData = finalExtra.MarshalRLPTo(nil)
 
-		// 🆕 关键修复：在重新计算区块哈希前，确保状态根正确
+		// 关键修复：在重新计算区块哈希前，确保状态根正确
 		// 从全局变量获取正确的状态根（针对epoch结束区块）
 		globalNewStateRootMutex.RLock()
 		correctStateRoot := globalNewStateRoot
@@ -1141,7 +1141,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				"note", "在重新计算区块哈希前修复状态根")
 		}
 
-		// 🆕 记录重新计算区块哈希前的状态根
+		// 记录重新计算区块哈希前的状态根
 		r.logger.Debug("🔍 重新计算区块哈希前的状态根",
 			"blockNumber", block.Block.Number(),
 			"stateRoot", block.Block.Header.StateRoot.String(),
@@ -1150,13 +1150,13 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		// 重新计算区块哈希，因为ExtraData已经更新
 		block.Block.Header.ComputeHash()
 
-		// 🆕 记录重新计算区块哈希后的状态根
+		// 记录重新计算区块哈希后的状态根
 		r.logger.Debug("🔍 重新计算区块哈希后的状态根",
 			"blockNumber", block.Block.Number(),
 			"stateRoot", block.Block.Header.StateRoot.String(),
 			"说明", "在ComputeHash()之后记录状态根")
 
-		// 🆕 现在清理全局状态根，签名聚合已完成
+		// 现在清理全局状态根，签名聚合已完成
 		globalNewStateRootMutex.Lock()
 		globalNewStateRoot = types.Hash{}
 		globalNewStateRootMutex.Unlock()
@@ -1168,7 +1168,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"newBlockHash", block.Block.Header.Hash.String())
 	}
 
-	// 🆕 清理缓存，为下一个区块做准备
+	// 清理缓存，为下一个区块做准备
 	r.cachedProductionValidators = nil
 
 	return block, nil
@@ -1179,7 +1179,7 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 	signatures := make([][]byte, 0)
 	signatureBitmap := bitmap.Bitmap{}
 
-	// 🆕 确保受托人按票数排序，与验证时保持一致
+	// 确保受托人按票数排序，与验证时保持一致
 
 	myAddress := types.Address(r.config.Key.Address())
 
@@ -1205,7 +1205,7 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 	// 等待一小段时间让BLS公钥请求完成
 	time.Sleep(100 * time.Millisecond)
 
-	// 🆕 尝试从缓存中恢复BLS公钥
+	// 尝试从缓存中恢复BLS公钥
 	r.logger.Debug("🔄 尝试从缓存恢复BLS公钥")
 	if r.networkIntegration != nil {
 		// 使用批量恢复函数
@@ -1214,7 +1214,7 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 		}
 	}
 
-	// 🆕 验证BLS公钥可用性
+	// 验证BLS公钥可用性
 	missingBlsKeys := 0
 	for i, delegate := range r.delegates {
 		if delegate.BlsKey == nil {
@@ -1373,7 +1373,7 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 			} else if len(collectedSignatures) == 0 {
 				r.logger.Warn("验证者数量足够但未收到签名，检查网络连接")
 
-				// 🆕 进行网络健康检查
+				// 进行网络健康检查
 				if !r.checkNetworkHealth() {
 					r.logger.Warn("网络健康检查失败，尝试自动恢复")
 					go r.recoverNetworkConnection()
@@ -1503,7 +1503,7 @@ processSignatures:
 			"signatureHex", fmt.Sprintf("%x", sig))
 	}
 
-	// 🆕 新增：出块前数据一致性验证
+	// 新增：出块前数据一致性验证
 	r.logger.Debug("🔍 出块前验证数据一致性...")
 	if err := r.verifyBlockDataConsistency(); err != nil {
 		r.logger.Error("❌ 出块前数据一致性验证失败", "error", err)
@@ -1580,7 +1580,7 @@ func (r *dposRuntime) verifyBlockDataConsistency() error {
 				"blockIsActive", blockDel.IsActive,
 				"getIsActive", getDel.IsActive)
 
-			// 🆕 添加详细分析日志
+			// 添加详细分析日志
 			r.logger.Error("🔍 Voting power inconsistency analysis:",
 				"address", addr.String(),
 				"memoryValue", blockDel.VotingPower.String(),
@@ -1684,12 +1684,12 @@ func (r *dposRuntime) getActiveValidatorsCount() int {
 		return 0
 	}
 
-	// 🆕 检查实际网络连接状态
+	// 检查实际网络连接状态
 	connectedPeers := r.getConnectedPeersCount()
 	// 网络连接状态检查（静默处理）
 
 	if connectedPeers < activeValidators {
-		// 🆕 修复：如果完全没有网络连接，返回0触发等待网络改善
+		// 修复：如果完全没有网络连接，返回0触发等待网络改善
 		if connectedPeers == 0 {
 			r.logger.Warn("完全没有网络连接，返回0触发等待网络改善",
 				"activeValidators", activeValidators,
@@ -2041,7 +2041,7 @@ func (r *dposRuntime) isValidator() bool {
 
 	currentAddr := types.Address(r.config.Key.Address())
 
-	// 🆕 直接从数据库读取验证者信息，确保数据一致性
+	// 直接从数据库读取验证者信息，确保数据一致性
 	if r.backend == nil {
 		r.logger.Error("❌ backend为nil，无法检查验证者状态")
 		return false
@@ -2059,7 +2059,7 @@ func (r *dposRuntime) isValidator() bool {
 		return false
 	}
 
-	// 🆕 使用公共函数获取排序和限制后的验证者
+	// 使用公共函数获取排序和限制后的验证者
 	dbValidators, err := dposBackend.GetSortedValidatorsWithLimit()
 	if err != nil {
 		r.logger.Error("❌ 从数据库读取验证者失败", "error", err)
@@ -2071,7 +2071,7 @@ func (r *dposRuntime) isValidator() bool {
 		return false
 	}
 
-	// 🆕 在排序截取后的验证者集合中查找当前节点
+	// 在排序截取后的验证者集合中查找当前节点
 	for idx, delegate := range dbValidators {
 		if delegate.Address == currentAddr {
 			// 关键：检查stake是否足够且是否活跃
@@ -2093,7 +2093,7 @@ func (r *dposRuntime) isValidator() bool {
 					msg = "🎯 当前节点是活跃验证者且故障标志为false（从数据库）"
 				}
 
-				// 🆕 使用统一日志间隔（10秒）
+				// 使用统一日志间隔（10秒）
 				r.logOnceWithInterval("active_validator_from_db", 10*time.Second, "info", msg,
 					"address", currentAddr.String(),
 					"votingPower", delegate.VotingPower.String(),
@@ -2118,7 +2118,7 @@ func (r *dposRuntime) isValidator() bool {
 		maxValidators = int(dposBackend.config.DPoSValidatorsCount)
 	}
 
-	// 🆕 详细调试信息
+	// 详细调试信息
 	r.logger.Info("❌ 当前节点不在数据库验证者集合中（可能权重不足被截取）",
 		"address", currentAddr.String(),
 		"maxValidators", maxValidators,
@@ -2126,7 +2126,7 @@ func (r *dposRuntime) isValidator() bool {
 		"configDelegateCount", r.config.DelegateCount,
 		"configDPoSValidatorsCount", dposBackend.config.DPoSValidatorsCount)
 
-	// 🆕 显示所有验证者的详细信息
+	// 显示所有验证者的详细信息
 	r.logger.Info("🔍 截取后的验证者详细信息:")
 	for i, validator := range dbValidators {
 		r.logger.Info("👤 截取后验证者",
@@ -2230,7 +2230,7 @@ func (r *dposRuntime) verifyValidatorSignatureByAddress(validatorAddr types.Addr
 // verifyValidatorSignature 验证验证者签名
 func (r *dposRuntime) verifyValidatorSignature(delegate *validator.ValidatorMetadata, signature []byte, checkpointHash types.Hash) error {
 	if delegate.BlsKey == nil {
-		// 🆕 尝试从持久化存储中获取BLS公钥
+		// 尝试从持久化存储中获取BLS公钥
 		// 静默处理，不打印日志
 
 		// 通过网络集成层获取BLS公钥

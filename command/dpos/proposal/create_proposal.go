@@ -16,7 +16,7 @@ type CreateProposalRequest struct {
 	NewValue           interface{} `json:"newValue"`
 	Description        string      `json:"description"`
 	Proposer           string      `json:"proposer"`
-	ProposerPrivateKey string      `json:"proposerPrivateKey"` // 🆕 提案者私钥
+	ProposerPrivateKey string      `json:"proposerPrivateKey"` // 提案者私钥
 }
 
 // CreateProposalResponse 创建提案响应

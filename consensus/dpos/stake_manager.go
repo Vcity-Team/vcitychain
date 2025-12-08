@@ -190,7 +190,7 @@ func (s *stakeManager) getOrInitValidatorSet(dbTx *bolt.Tx) (validatorSetState, 
 			return validatorSetState{}, err
 		}
 
-		// 🆕 不再从数据库获取区块0的验证者集合，改为从内存获取
+		// 不再从数据库获取区块0的验证者集合，改为从内存获取
 		validators := s.dposBackend.GetCurrentDelegates()
 		if len(validators) == 0 {
 			return validatorSetState{}, fmt.Errorf("failed to get current delegates from memory")

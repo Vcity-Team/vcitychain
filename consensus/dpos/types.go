@@ -123,18 +123,18 @@ const (
 type StakeInfo struct {
 	Staker          types.Address          `json:"staker"`
 	Amount          *big.Int               `json:"amount"`                   // 当前金额（削减后）
-	OriginalAmount  *big.Int               `json:"originalAmount,omitempty"` // 🆕 原始投票金额（第一次投票时的金额，削减前）
+	OriginalAmount  *big.Int               `json:"originalAmount,omitempty"` // 原始投票金额（第一次投票时的金额，削减前）
 	StartTime       uint64                 `json:"startTime"`
 	EndTime         uint64                 `json:"endTime"`
 	IsLocked        bool                   `json:"isLocked"`
 	IsActive        bool                   `json:"isActive"`
 	Rewards         *big.Int               `json:"rewards"`
 	Delegate        types.Address          `json:"delegate"`
-	FaultFlag       map[string]interface{} `json:"faultFlag,omitempty"`       // 🆕 故障标志信息：isFaulty, missedBlocks, reason
-	SlashingRecords []*SlashingRecord      `json:"slashingRecords,omitempty"` // 🆕 削减历史（按时间顺序）
+	FaultFlag       map[string]interface{} `json:"faultFlag,omitempty"`       // 故障标志信息：isFaulty, missedBlocks, reason
+	SlashingRecords []*SlashingRecord      `json:"slashingRecords,omitempty"` // 削减历史（按时间顺序）
 }
 
-// 🆕 参数表决相关数据结构
+// 参数表决相关数据结构
 
 // Governance-related type aliases (re-exported from core for backwards compatibility).
 type ParameterProposal = core.ParameterProposal
@@ -166,7 +166,7 @@ type DelegateRegistration struct {
 	TotalVotes   *big.Int      `json:"totalVotes"`   // 总投票数
 	IsActive     bool          `json:"isActive"`     // 是否为活跃受托人
 	LastVoteTime uint64        `json:"lastVoteTime"` // 最后投票时间
-	// 🆕 冻结相关字段
+	// 冻结相关字段
 	FrozenAt            uint64 `json:"frozenAt"`            // 冻结时间（注册时设置）
 	UnfreezeAt          uint64 `json:"unfreezeAt"`          // 解冻时间（退出时设置，0表示未解冻）
 	UnfreezeAvailableAt uint64 `json:"unfreezeAvailableAt"` // 资金可用时间（解冻时间 + 锁定期，0表示未解冻）
@@ -208,7 +208,7 @@ type ParameterInfo struct {
 	MaxValue     interface{} `json:"maxValue"`
 	Description  string      `json:"description"`
 	Category     string      `json:"category"`     // 参数分类：economic, network, consensus等
-	CurrentValue interface{} `json:"currentValue"` // 🆕 当前值（移除omitempty）
+	CurrentValue interface{} `json:"currentValue"` // 当前值（移除omitempty）
 }
 
 // VoterInfo 投票者信息结构
@@ -216,8 +216,8 @@ type VoterInfo struct {
 	Address         types.Address                       `json:"address"`         // 投票者地址
 	VotingPower     *big.Int                            `json:"votingPower"`     // 投票权重（保留用于兼容）
 	VotedDelegates  []types.Address                     `json:"votedDelegates"`  // 投票的验证者列表（保留用于兼容）
-	DelegateVotes   map[types.Address]*big.Int          `json:"delegateVotes"`   // 🆕 delegate -> 投票金额（削减后）
-	SlashingRecords map[types.Address][]*SlashingRecord `json:"slashingRecords"` // 🆕 削减历史记录
+	DelegateVotes   map[types.Address]*big.Int          `json:"delegateVotes"`   // delegate -> 投票金额（削减后）
+	SlashingRecords map[types.Address][]*SlashingRecord `json:"slashingRecords"` // 削减历史记录
 	LastVoteTime    uint64                              `json:"lastVoteTime"`    // 最后投票时间
 	LockedUntil     uint64                              `json:"lockedUntil"`     // 锁定到期时间
 	Nonce           map[uint64]bool                     `json:"nonce"`           // 防重放
@@ -234,9 +234,9 @@ type DelegateInfo struct {
 	IsActive         bool                  `json:"isActive"`
 	IsRegistered     bool                  `json:"isRegistered"`     // 是否已注册
 	RegistrationInfo *DelegateRegistration `json:"registrationInfo"` // 注册信息
-	// 🆕 新增：BLS公钥，确保签名验证一致性
+	// 新增：BLS公钥，确保签名验证一致性
 	BlsPublicKey []byte `json:"blsPublicKey"`
-	// 🆕 新增：佣金相关字段（基点表示，500 = 5%）
+	// 新增：佣金相关字段（基点表示，500 = 5%）
 	CommissionRate        uint64 `json:"commissionRate"`        // 当前生效的佣金率
 	PendingCommissionRate uint64 `json:"pendingCommissionRate"` // 待生效的佣金率
 	CommissionUpdateTime  uint64 `json:"commissionUpdateTime"`  // 最近一次修改时间（Unix时间戳）

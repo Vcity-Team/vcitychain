@@ -25,12 +25,12 @@ func (d *DPoS) InitializeGovernance() error {
 		d.votableParameters = d.getDefaultVotableParameters()
 	}
 
-	// 🆕 初始化参数缓存（强制从数据库同步）
+	// 初始化参数缓存（强制从数据库同步）
 	if err := d.initializeParameterCache(); err != nil {
 		return fmt.Errorf("failed to initialize parameter cache: %w", err)
 	}
 
-	// 🆕 从数据库加载所有提案
+	// 从数据库加载所有提案
 	if err := d.loadProposalsFromDatabase(); err != nil {
 		return fmt.Errorf("failed to load proposals from database: %w", err)
 	}
@@ -130,7 +130,7 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Category:    "economic",
 		},
 		// 🚫 dpos_epoch_duration 已移除：epoch 时长不应通过提案修改，只能通过配置文件设置
-		// 🆕 治理参数
+		// 治理参数
 		"governance_pass_threshold": {
 			Name:        "Pass Threshold",
 			Type:        "uint64",
@@ -147,7 +147,7 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Description: "Proposal voting period (in blocks)",
 			Category:    "governance",
 		},
-		// 🆕 冻结相关参数
+		// 冻结相关参数
 		"min_freeze_period": {
 			Name:        "Min Freeze Period",
 			Type:        "uint64",
@@ -164,7 +164,7 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Description: "Unfreeze lock period (seconds, 14 days default)",
 			Category:    "governance",
 		},
-		// 🆕 削减相关参数
+		// 削减相关参数
 		"dpos_missed_blocks_percentage": {
 			Name:        "Missed Blocks Percentage",
 			Type:        "uint64",
@@ -205,7 +205,7 @@ func (d *DPoS) getGovernanceParameterValue(paramName string) (interface{}, error
 
 // getVotePeriod 获取当前投票期间长度（区块数）
 func (d *DPoS) getVotePeriod() uint64 {
-	// 🆕 优先从参数系统读取 dpos_proposal_vote_period（经过治理流程修改的值是权威数据源）
+	// 优先从参数系统读取 dpos_proposal_vote_period（经过治理流程修改的值是权威数据源）
 	if paramValue, err := d.getCurrentParameterValue("dpos_proposal_vote_period"); err == nil {
 		switch v := paramValue.(type) {
 		case uint64:
@@ -248,7 +248,7 @@ func (d *DPoS) getVotePeriod() uint64 {
 
 // getValidPeriod 获取提案有效期（区块数）
 func (d *DPoS) getValidPeriod() uint64 {
-	// 🆕 从配置文件获取有效期（YAML配置优先）
+	// 从配置文件获取有效期（YAML配置优先）
 	if d.config != nil && d.config.ProposalValidPeriod > 0 {
 		// 根据区块时间计算区块数
 		blockTime := d.config.BlockTime.Duration
@@ -290,7 +290,7 @@ func (d *DPoS) GetCurrentProposalPeriod() map[string]interface{} {
 
 // getVotingThreshold 获取当前投票通过阈值
 func (d *DPoS) getVotingThreshold() uint64 {
-	// 🆕 优先从参数系统读取 governance_pass_threshold（经过治理流程修改的值是权威数据源）
+	// 优先从参数系统读取 governance_pass_threshold（经过治理流程修改的值是权威数据源）
 	if paramValue, err := d.getCurrentParameterValue("governance_pass_threshold"); err == nil {
 		switch v := paramValue.(type) {
 		case uint64:
@@ -338,7 +338,7 @@ func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 	case "dpos_epoch_duration":
 		return d.config.EpochDuration.String(), nil
 	case "dpos_proposal_vote_period":
-		// 🆕 从YAML配置计算提案表决周期（区块数）
+		// 从YAML配置计算提案表决周期（区块数）
 		if d.config != nil && d.config.ProposalVotePeriod > 0 {
 			blockTime := d.config.BlockTime.Duration
 			if blockTime > 0 {
@@ -352,35 +352,35 @@ func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 		// 兼容旧参数名，重定向到 dpos_proposal_vote_period
 		return d.getConfigParameterValue("dpos_proposal_vote_period")
 	case "min_freeze_period":
-		// 🆕 冻结参数：最小冻结期（从配置读取）
+		// 冻结参数：最小冻结期（从配置读取）
 		if d.config != nil && d.config.MinFreezePeriod > 0 {
 			return d.config.MinFreezePeriod, nil
 		}
 		// 默认值：7天 = 604800秒
 		return uint64(604800), nil
 	case "unfreeze_lock_period":
-		// 🆕 冻结参数：解冻锁定期（从配置读取）
+		// 冻结参数：解冻锁定期（从配置读取）
 		if d.config != nil && d.config.UnfreezeLockPeriod > 0 {
 			return d.config.UnfreezeLockPeriod, nil
 		}
 		// 默认值：14天 = 1209600秒
 		return uint64(1209600), nil
 	case "dpos_missed_blocks_percentage":
-		// 🆕 削减参数：漏块率阈值（从配置读取）
+		// 削减参数：漏块率阈值（从配置读取）
 		if val := d.getConfigUint64("dpos_missed_blocks_percentage", "missed_blocks_percentage"); val > 0 {
 			return val, nil
 		}
 		// 默认值：1000基点 = 10%
 		return uint64(1000), nil
 	case "dpos_minor_offense_slash_rate":
-		// 🆕 削减参数：轻度违规削减率（从配置读取）
+		// 削减参数：轻度违规削减率（从配置读取）
 		if val := d.getConfigUint64("dpos_minor_offense_slash_rate", "minor_offense_slash_rate"); val > 0 {
 			return val, nil
 		}
 		// 默认值：50基点 = 0.5%
 		return uint64(50), nil
 	case "dpos_severe_offense_slash_rate":
-		// 🆕 削减参数：严重违规削减率（从配置读取）
+		// 削减参数：严重违规削减率（从配置读取）
 		if val := d.getConfigUint64("dpos_severe_offense_slash_rate", "severe_offense_slash_rate"); val > 0 {
 			return val, nil
 		}

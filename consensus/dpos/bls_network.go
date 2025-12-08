@@ -10,7 +10,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/types"
 )
 
-// 🆕 保留旧的全局响应处理器（向后兼容，用于旧的handleBLSResponse）
+// 保留旧的全局响应处理器（向后兼容，用于旧的handleBLSResponse）
 var (
 	blsResponseHandlers = make(map[string]chan *bls.PublicKey)
 	blsErrorHandlers    = make(map[string]chan error)
