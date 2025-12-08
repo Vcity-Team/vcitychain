@@ -142,7 +142,7 @@ func (c *DPoSMetricsCollector) healthCheckHandler(w http.ResponseWriter, r *http
 		c.healthStatus = "unhealthy"
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if c.healthStatus == "healthy" {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{"status":"%s","timestamp":"%s"}`, c.healthStatus, time.Now().Format(time.RFC3339))
@@ -157,7 +157,7 @@ func (c *DPoSMetricsCollector) statsHandler(w http.ResponseWriter, r *http.Reque
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	fmt.Fprintf(w, `{
 		"total_votes": %d,
 		"total_delegates": %d,

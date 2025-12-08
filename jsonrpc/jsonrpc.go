@@ -282,7 +282,7 @@ func (j *JSONRPC) handleWs(w http.ResponseWriter, req *http.Request) {
 }
 
 func (j *JSONRPC) handle(w http.ResponseWriter, req *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
 	w.Header().Set(
 		"Access-Control-Allow-Headers",
