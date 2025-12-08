@@ -199,6 +199,10 @@ type TxPool struct {
 
 	// maxAccountEnqueued is the maximum number of enqueued transactions per account
 	maxAccountEnqueued uint64
+
+	// Performance optimization: Caches for validated transactions and balances
+	validatedCache *validatedTxCache // Cache for validated transaction signatures
+	balanceCache   *balanceCache     // Cache for account balances (with TTL)
 }
 
 // NewTxPool returns a new pool for processing incoming transactions.
@@ -216,15 +220,19 @@ func NewTxPool(
 		store:       store,
 		executables: newPricesQueue(0, nil),
 		accounts: accountsMap{
-			maxEnqueuedLimit:  config.MaxAccountEnqueued,
-			accountLastAccess: make(map[types.Address]time.Time),
-			maxAccountCount:   10000, // 最大10000个账户
+			maxEnqueuedLimit: config.MaxAccountEnqueued,
+			// Performance optimization: accountLastAccess is now sync.Map (no initialization needed)
+			maxAccountCount: 10000, // 最大10000个账户
 		},
 		index:              lookupMap{all: make(map[types.Hash]*types.Transaction)},
 		gauge:              slotGauge{height: 0, max: config.MaxSlots},
 		priceLimit:         config.PriceLimit,
 		chainID:            config.ChainID,
 		maxAccountEnqueued: config.MaxAccountEnqueued, // 保存配置值，用于RPC查询
+
+		// Performance optimization: Initialize caches
+		validatedCache: newValidatedTxCache(10000), // Cache up to 10000 validated transactions
+		balanceCache:   newBalanceCache(2 * time.Second), // Balance cache with 2s TTL
 
 		//	main loop channels
 		promoteReqCh: make(chan promoteRequest),
@@ -378,11 +386,12 @@ func (p *TxPool) AddTx(tx *types.Transaction) error {
 		// 如果是 enqueued 限制错误，检查是否已达到最大限制
 		if errors.Is(err, ErrMaxEnqueuedLimitReached) {
 			if account := p.accounts.get(tx.From); account != nil {
-				account.enqueued.lock(false)
+				// Use read lock for read-only operation
+				account.mu.RLock()
 				enqueuedCount := account.enqueued.length()
 				maxEnqueued := account.maxEnqueued
 				accountNonce := account.getNonce()
-				account.enqueued.unlock()
+				account.mu.RUnlock()
 
 				// 添加账户信息到日志字段
 				logFields = append(logFields,
@@ -482,13 +491,9 @@ func (p *TxPool) Pop(tx *types.Transaction) {
 	// fetch the associated account
 	account := p.accounts.get(tx.From)
 
-	account.promoted.lock(true)
-	account.nonceToTx.lock()
-
-	defer func() {
-		account.nonceToTx.unlock()
-		account.promoted.unlock()
-	}()
+	// Use unified lock instead of 2 separate locks
+	account.mu.Lock()
+	defer account.mu.Unlock()
 
 	// pop the top most promoted tx
 	account.promoted.pop()
@@ -524,15 +529,9 @@ func (p *TxPool) Drop(tx *types.Transaction) {
 // signals EventType_DROPPED for provided hash, clears all the slots and metrics
 // and sets nonce to provided nonce
 func (p *TxPool) dropAccount(account *account, nextNonce uint64, tx *types.Transaction) {
-	account.promoted.lock(true)
-	account.enqueued.lock(true)
-	account.nonceToTx.lock()
-
-	defer func() {
-		account.nonceToTx.unlock()
-		account.enqueued.unlock()
-		account.promoted.unlock()
-	}()
+	// Use unified lock instead of 3 separate locks
+	account.mu.Lock()
+	defer account.mu.Unlock()
 
 	// num of all txs dropped
 	droppedCount := 0
@@ -680,8 +679,8 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 					"blockNumber", header.Number)
 
 				// 尝试从promoted队列中移除
-				account.promoted.lock(true)
-				account.nonceToTx.lock()
+				// Use unified lock instead of 2 separate locks
+				account.mu.Lock()
 
 				// 检查是否有该nonce的交易（不管hash是否匹配）
 				txInPool := account.nonceToTx.get(tx.Nonce)
@@ -701,6 +700,10 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 							p.index.remove(txInPool)
 							p.gauge.decrease(slotsRequired(txInPool))
 							p.updatePending(-1)
+							
+							// Performance optimization: Clear caches for this transaction
+							p.validatedCache.remove(tx.Hash)
+							p.balanceCache.remove(tx.From) // Balance may have changed
 
 							p.logger.Debug("✅ [processEvent-第一层清理] 从promoted队列移除已打包的交易（hash匹配）",
 								"txHash", txInPool.Hash.String()[:16],
@@ -716,6 +719,10 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 							p.index.remove(txInPool)
 							p.gauge.decrease(slotsRequired(txInPool))
 							p.updatePending(-1)
+							
+							// Performance optimization: Clear caches
+							p.validatedCache.remove(txInPool.Hash)
+							p.balanceCache.remove(tx.From) // Balance may have changed
 
 							p.logger.Debug("✅ [processEvent-第一层清理] 从promoted队列移除过期交易（nonce已被其他节点使用）",
 								"txHash", txInPool.Hash.String()[:16],
@@ -733,8 +740,7 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 						"minedTxHash", tx.Hash.String()[:16])
 				}
 
-				account.nonceToTx.unlock()
-				account.promoted.unlock()
+				account.mu.Unlock()
 			} else {
 				p.logger.Debug("🔵 [processEvent-第一层清理] 账户不存在于交易池",
 					"from", addr.String(),
@@ -779,11 +785,10 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 		}
 
 		// 如果账户在交易池中有交易，需要从 state 获取最新 nonce 并更新
-		account.promoted.lock(false)
-		account.enqueued.lock(false)
+		// Use read lock for read-only operation
+		account.mu.RLock()
 		hasTxs := account.promoted.length() > 0 || account.enqueued.length() > 0
-		account.enqueued.unlock()
-		account.promoted.unlock()
+		account.mu.RUnlock()
 
 		if hasTxs {
 			// 从 state 获取最新的 nonce
@@ -877,33 +882,43 @@ func (p *TxPool) validateTx(tx *types.Transaction) error {
 
 	// Check if the transaction is signed properly
 
-	// Extract the sender
-	from, signerErr := p.signer.Sender(tx)
-	if signerErr != nil {
-		metrics.IncrCounter([]string{txPoolMetrics, "invalid_signature_txs"}, 1)
-
-		// 添加调试信息
-		p.logger.Error("🚨 CRITICAL: Failed to extract sender from transaction",
-			"error", signerErr,
-			"txType", tx.Type,
-			"nonce", tx.Nonce,
-			"gasPrice", tx.GasPrice.String(),
-			"value", tx.Value.String(),
-			"v", tx.V.String(),
-			"r", tx.R.String(),
-			"s", tx.S.String(),
-			"chainID", p.chainID.String())
-
-		return ErrExtractSignature
-	}
-
-	// If the from field is set, check that
-	// it matches the signer
-	if tx.From != types.ZeroAddress &&
-		tx.From != from {
-		metrics.IncrCounter([]string{txPoolMetrics, "invalid_sender_txs"}, 1)
-
-		return ErrInvalidSender
+	// Performance optimization: Check cache first to avoid repeated signature verification
+	var from types.Address
+	var signerErr error
+	
+	// Check if transaction signature is already validated
+	if p.validatedCache.has(tx.Hash) {
+		// Already validated, use cached From address or recover if not set
+		if tx.From != types.ZeroAddress {
+			from = tx.From
+		} else {
+			// Still need to recover From address
+			from, signerErr = p.signer.Sender(tx)
+			if signerErr != nil {
+				metrics.IncrCounter([]string{txPoolMetrics, "invalid_signature_txs"}, 1)
+				p.logger.Error("🚨 CRITICAL: Failed to extract sender from cached transaction",
+					"error", signerErr, "txHash", tx.Hash.String())
+				return ErrExtractSignature
+			}
+		}
+	} else {
+		// Not cached: Extract the sender (ECDSA recovery)
+		from, signerErr = p.signer.Sender(tx)
+		if signerErr != nil {
+			metrics.IncrCounter([]string{txPoolMetrics, "invalid_signature_txs"}, 1)
+			p.logger.Error("🚨 CRITICAL: Failed to extract sender from transaction",
+				"error", signerErr, "txHash", tx.Hash.String())
+			return ErrExtractSignature
+		}
+		
+		// Verify From matches if already set
+		if tx.From != types.ZeroAddress && tx.From != from {
+			metrics.IncrCounter([]string{txPoolMetrics, "invalid_sender_txs"}, 1)
+			return ErrInvalidSender
+		}
+		
+		// Cache validated transaction (only after successful validation)
+		p.validatedCache.add(tx.Hash)
 	}
 
 	// If no address was set, update it
@@ -1000,11 +1015,21 @@ func (p *TxPool) validateTx(tx *types.Transaction) error {
 		return ErrNonceTooLow
 	}
 
-	accountBalance, balanceErr := p.store.GetBalance(stateRoot, tx.From)
-	if balanceErr != nil {
-		metrics.IncrCounter([]string{txPoolMetrics, "invalid_account_state_tx"}, 1)
-
-		return ErrInvalidAccountState
+	// Performance optimization: Check balance cache first
+	var accountBalance *big.Int
+	var balanceErr error
+	
+	if cached, ok := p.balanceCache.get(tx.From); ok {
+		accountBalance = cached
+	} else {
+		// Cache miss: query from state
+		accountBalance, balanceErr = p.store.GetBalance(stateRoot, tx.From)
+		if balanceErr != nil {
+			metrics.IncrCounter([]string{txPoolMetrics, "invalid_account_state_tx"}, 1)
+			return ErrInvalidAccountState
+		}
+		// Cache the balance
+		p.balanceCache.set(tx.From, accountBalance)
 	}
 
 	// Check if the sender has enough funds to execute the transaction
@@ -1049,11 +1074,9 @@ func (p *TxPool) pruneAccountsWithNonceHoles() {
 		func(_, value interface{}) bool {
 			account, _ := value.(*account)
 
-			account.enqueued.lock(true)
-			defer account.enqueued.unlock()
-
-			account.nonceToTx.lock()
-			defer account.nonceToTx.unlock()
+			// Use unified lock instead of 2 separate locks
+			account.mu.Lock()
+			defer account.mu.Unlock()
 
 			firstTx := account.enqueued.peek()
 
@@ -1141,37 +1164,12 @@ func (p *TxPool) addTx(origin txOrigin, tx *types.Transaction) error {
 		tx.ChainID = p.chainID
 	}
 
-	// 检查交易签名信息
-	p.logger.Debug("🔍 交易签名信息检查",
-		"origin", origin.String(),
-		"txType", tx.Type,
-		"nonce", tx.Nonce,
-		"gasPrice", tx.GasPrice.String(),
-		"value", tx.Value.String(),
-		"from", tx.From.String(),
-		"v", func() string {
-			if tx.V != nil {
-				return tx.V.String()
-			}
-			return "nil"
-		}(),
-		"r", func() string {
-			if tx.R != nil {
-				return tx.R.String()
-			}
-			return "nil"
-		}(),
-		"s", func() string {
-			if tx.S != nil {
-				return tx.S.String()
-			}
-			return "nil"
-		}(),
-		"inputLength", len(tx.Input),
-		"blockNumber", p.store.Header().Number)
-
-	// calculate tx hash
-	tx.ComputeHash(p.store.Header().Number)
+	// Performance optimization: Skip hash calculation if already computed
+	// Most clients send transactions with pre-computed hash
+	if tx.Hash == (types.Hash{}) {
+		// calculate tx hash only if not already computed
+		tx.ComputeHash(p.store.Header().Number)
+	}
 
 	// 🚨 检测哈希计算后的结果
 	if tx.Hash == (types.Hash{}) {
@@ -1196,15 +1194,9 @@ func (p *TxPool) addTx(origin txOrigin, tx *types.Transaction) error {
 	// initialize account for this address once or retrieve existing one
 	account := p.getOrCreateAccount(tx.From)
 
-	account.promoted.lock(true)
-	account.enqueued.lock(true)
-	account.nonceToTx.lock()
-
-	defer func() {
-		account.nonceToTx.unlock()
-		account.enqueued.unlock()
-		account.promoted.unlock()
-	}()
+	// Use unified lock instead of 3 separate locks (performance optimization)
+	account.mu.Lock()
+	defer account.mu.Unlock()
 
 	accountNonce := account.getNonce()
 
