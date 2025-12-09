@@ -712,24 +712,51 @@ func (p *TxPool) Prepare() {
 	validPrimaries := make([]*types.Transaction, 0, len(primaries))
 	skippedCount := 0
 
-	// Performance optimization: Use cached nonce if available, otherwise query and cache
+	// Performance optimization for multi-account scenarios:
+	// 1. Batch collect all cache misses to reduce lock contention
+	// 2. Single lock acquisition for batch cache updates
+	// 3. This significantly improves TPS when there are many accounts
+	
+	// Step 1: Collect all unique accounts and check cache
+	accountNonces := make(map[types.Address]uint64)
+	accountsToQuery := make([]types.Address, 0)
+	
+	// First pass: check cache for all accounts (single lock acquisition)
+	p.prepareNonceCacheMu.RLock()
 	for _, tx := range primaries {
-		var currentNonce uint64
-		
-		// Try to get from cache first
-		p.prepareNonceCacheMu.RLock()
-		cachedNonce, cacheHit := p.prepareNonceCache[tx.From]
-		p.prepareNonceCacheMu.RUnlock()
-		
-		if cacheHit {
-			currentNonce = cachedNonce
+		if cachedNonce, cacheHit := p.prepareNonceCache[tx.From]; cacheHit {
+			accountNonces[tx.From] = cachedNonce
 		} else {
-			// Cache miss: query from state and cache
-			currentNonce = p.store.GetNonce(stateRoot, tx.From)
-			p.prepareNonceCacheMu.Lock()
-			p.prepareNonceCache[tx.From] = currentNonce
-			p.prepareNonceCacheMu.Unlock()
+			// Collect unique addresses that need querying
+			if _, exists := accountNonces[tx.From]; !exists {
+				accountsToQuery = append(accountsToQuery, tx.From)
+				accountNonces[tx.From] = 0 // placeholder
+			}
 		}
+	}
+	p.prepareNonceCacheMu.RUnlock()
+	
+	// Step 2: Batch query nonces for cache misses (outside lock)
+	// This reduces lock contention and improves performance with many accounts
+	if len(accountsToQuery) > 0 {
+		nonceUpdates := make(map[types.Address]uint64, len(accountsToQuery))
+		for _, addr := range accountsToQuery {
+			nonce := p.store.GetNonce(stateRoot, addr)
+			nonceUpdates[addr] = nonce
+			accountNonces[addr] = nonce
+		}
+		
+		// Single lock acquisition for batch cache updates
+		p.prepareNonceCacheMu.Lock()
+		for addr, nonce := range nonceUpdates {
+			p.prepareNonceCache[addr] = nonce
+		}
+		p.prepareNonceCacheMu.Unlock()
+	}
+	
+	// Step 3: Filter primaries using cached/queried nonces
+	for _, tx := range primaries {
+		currentNonce := accountNonces[tx.From]
 		
 		if tx.Nonce == currentNonce {
 			// nonce匹配，添加到executables队列
