@@ -83,6 +83,11 @@ type BlockBuilder struct {
 
 	// state is in memory state transition
 	state *state.Transition
+
+	// Performance optimization: Cache for account nonces within the current block
+	// Key: account address, Value: account nonce (updated as transactions are executed)
+	// This reduces redundant state queries during block filling
+	nonceCache map[types.Address]uint64
 }
 
 // Reset initializes block builder before adding transactions and actual block building
@@ -118,6 +123,10 @@ func (b *BlockBuilder) Reset() error {
 	b.state = transition
 	b.block = nil
 	b.txns = []*types.Transaction{}
+
+	// Performance optimization: Initialize nonce cache for the current block
+	// This cache will be populated as transactions are executed
+	b.nonceCache = make(map[types.Address]uint64)
 
 	return nil
 }
@@ -187,7 +196,9 @@ func (b *BlockBuilder) Fill() {
 	txCount := 0
 	skippedCount := 0
 	blockNumber := b.params.Parent.Number + 1
-	maxConsecutiveSkips := 10 // 最多连续跳过10笔交易后重新Prepare()
+	// Performance optimization: Increase threshold to reduce Prepare() calls
+	// This allows more consecutive skips before re-preparing, reducing overhead
+	maxConsecutiveSkips := 50 // 最多连续跳过50笔交易后重新Prepare()（从10增加到50）
 
 	b.params.Logger.Debug("🔵 [BlockBuilder.Fill] 开始填充区块",
 		"blockNumber", blockNumber)
@@ -223,9 +234,17 @@ func (b *BlockBuilder) Fill() {
 
 		txCount++
 
-		// 关键修复：使用当前构建区块的状态来检查nonce（不是父区块状态）
-		// 这样可以看到当前区块已打包交易对nonce的影响
-		accountNonce := b.state.GetNonce(tx.From)
+		// Performance optimization: Use cached nonce if available, otherwise query and cache
+		// This reduces redundant state queries during block filling
+		var accountNonce uint64
+		if cachedNonce, exists := b.nonceCache[tx.From]; exists {
+			accountNonce = cachedNonce
+		} else {
+			// Cache miss: query from state and cache
+			accountNonce = b.state.GetNonce(tx.From)
+			b.nonceCache[tx.From] = accountNonce
+		}
+
 		if tx.Nonce != accountNonce {
 			// nonce不匹配，跳过这个交易
 			skippedCount++
@@ -257,6 +276,12 @@ func (b *BlockBuilder) Fill() {
 				"from", tx.From.String(),
 				"error", err)
 			os.Exit(1)
+		}
+
+		// Performance optimization: Update nonce cache after successful transaction execution
+		// This ensures the cache reflects the current block state
+		if err == nil {
+			b.nonceCache[tx.From] = tx.Nonce + 1
 		}
 
 		// writeTxPoolTransaction内部已经调用了Pop()，会自动将同一账户的下一笔交易添加到executables队列（如果存在）

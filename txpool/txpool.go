@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -215,6 +216,12 @@ type TxPool struct {
 	// Performance optimization: Caches for validated transactions and balances
 	validatedCache *validatedTxCache // Cache for validated transaction signatures
 	balanceCache   *balanceCache     // Cache for account balances (with TTL)
+
+	// Performance optimization: Cache for chain nonces in Prepare() to reduce state queries
+	// Key: account address, Value: chain nonce (from parent block state)
+	// This cache is cleared when a new block is mined (in processEvent)
+	prepareNonceCache map[types.Address]uint64
+	prepareNonceCacheMu sync.RWMutex // RWMutex for concurrent access to prepareNonceCache
 }
 
 // NewTxPool returns a new pool for processing incoming transactions.
@@ -245,6 +252,7 @@ func NewTxPool(
 		// Performance optimization: Initialize caches
 		validatedCache: newValidatedTxCache(10000), // Cache up to 10000 validated transactions
 		balanceCache:   newBalanceCache(2 * time.Second), // Balance cache with 2s TTL
+		prepareNonceCache: make(map[types.Address]uint64), // Cache for chain nonces in Prepare()
 
 		//	main loop channels
 		promoteReqCh: make(chan promoteRequest),
@@ -474,7 +482,44 @@ func (p *TxPool) processTx(tx *types.Transaction, origin txOrigin) error {
 
 	account.enqueue(tx, oldTxWithSameNonce != nil) // add or replace tx into account
 
-	go p.invokePromotion(tx, tx.Nonce <= accountNonce) // don't signal promotion for higher nonce txs
+	// Signal events (ADDED and ENQUEUED) - same as original invokePromotion()
+	p.eventManager.signalEvent(proto.EventType_ADDED, tx.Hash)
+	p.eventManager.signalEvent(proto.EventType_ENQUEUED, tx.Hash)
+
+	// Performance optimization: Geth-style active promotion
+	// Immediately promote eligible transactions after enqueue (no async delay)
+	// This aligns with Geth's enqueueTx() behavior: promote immediately after adding to enqueued
+	promoted, pruned := account.promoteInternal()
+	
+	// Handle promoted transactions: update executables queue
+	if len(promoted) > 0 {
+		// Add the first promoted transaction to executables queue
+		// (each account has only one primary transaction)
+		// Other transactions will be added automatically when Pop() is called
+		if firstPromoted := promoted[0]; firstPromoted != nil {
+			p.executables.push(firstPromoted)
+		}
+		
+		// Update metrics
+		p.updatePending(int64(len(promoted)))
+		
+		// Signal promotion event
+		p.eventManager.signalEvent(proto.EventType_PROMOTED, toHash(promoted...)...)
+		
+		if p.logger.IsDebug() {
+			p.logger.Debug("🔵 [processTx] 主动promote完成",
+				"from", tx.From.String()[:16],
+				"promotedCount", len(promoted),
+				"txNonce", tx.Nonce,
+				"accountNonce", accountNonce)
+		}
+	}
+	
+	// Handle pruned transactions: cleanup index and gauge
+	if len(pruned) > 0 {
+		p.index.remove(pruned...)
+		p.gauge.decrease(slotsRequired(pruned...))
+	}
 
 	return nil
 }
@@ -667,8 +712,25 @@ func (p *TxPool) Prepare() {
 	validPrimaries := make([]*types.Transaction, 0, len(primaries))
 	skippedCount := 0
 
+	// Performance optimization: Use cached nonce if available, otherwise query and cache
 	for _, tx := range primaries {
-		currentNonce := p.store.GetNonce(stateRoot, tx.From)
+		var currentNonce uint64
+		
+		// Try to get from cache first
+		p.prepareNonceCacheMu.RLock()
+		cachedNonce, cacheHit := p.prepareNonceCache[tx.From]
+		p.prepareNonceCacheMu.RUnlock()
+		
+		if cacheHit {
+			currentNonce = cachedNonce
+		} else {
+			// Cache miss: query from state and cache
+			currentNonce = p.store.GetNonce(stateRoot, tx.From)
+			p.prepareNonceCacheMu.Lock()
+			p.prepareNonceCache[tx.From] = currentNonce
+			p.prepareNonceCacheMu.Unlock()
+		}
+		
 		if tx.Nonce == currentNonce {
 			// nonce匹配，添加到executables队列
 			validPrimaries = append(validPrimaries, tx)
@@ -1074,6 +1136,12 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 		// only non-validator cleanup inactive accounts
 		p.updateAccountSkipsCounts(stateNonces)
 	}
+
+	// Performance optimization: Clear prepareNonceCache when new blocks are mined
+	// This ensures the cache reflects the latest chain state
+	p.prepareNonceCacheMu.Lock()
+	p.prepareNonceCache = make(map[types.Address]uint64)
+	p.prepareNonceCacheMu.Unlock()
 
 	p.logger.Debug("🔵 [processEvent] 处理完成")
 }
