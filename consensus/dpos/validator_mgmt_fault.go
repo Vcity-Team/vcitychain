@@ -460,6 +460,76 @@ func (d *DPoS) reloadValidatorsAfterRecovery() error {
 		"finalCount", len(finalValidators),
 		"maxValidators", maxValidators)
 
+	// 将 epoch validators 与当前配置截取后的集合对齐，避免旧的数量造成期望出块数偏差
+	existingEpochValidators, err := d.getEpochValidatorsFromDatabase()
+	if err != nil {
+		d.logger.Warn("⚠️ 获取已保存的epoch验证者集合失败，跳过对齐",
+			"error", err)
+		return nil
+	}
+
+	// 对已有 epoch 集合按同样规则排序，确保对比稳定
+	if len(existingEpochValidators) > 0 {
+		sort.Slice(existingEpochValidators, func(i, j int) bool {
+			votingPowerCmp := existingEpochValidators[i].VotingPower.Cmp(existingEpochValidators[j].VotingPower)
+			if votingPowerCmp != 0 {
+				return votingPowerCmp > 0
+			}
+			return bytes.Compare(existingEpochValidators[i].Address[:], existingEpochValidators[j].Address[:]) < 0
+		})
+	}
+
+	// 构造地址字符串列表用于对比和日志
+	getAddrList := func(vs validator.AccountSet) []string {
+		addrs := make([]string, 0, len(vs))
+		for _, v := range vs {
+			addrs = append(addrs, v.Address.String())
+		}
+		return addrs
+	}
+
+	existingAddrs := getAddrList(existingEpochValidators)
+	targetAddrs := getAddrList(finalValidators)
+
+	matched := len(existingAddrs) == len(targetAddrs)
+	if matched {
+		for i := range existingAddrs {
+			if existingAddrs[i] != targetAddrs[i] {
+				matched = false
+				break
+			}
+		}
+	}
+
+	if matched {
+		d.logger.Info("✅ epoch 验证者集合已与配置截取后的集合一致",
+			"count", len(targetAddrs))
+		return nil
+	}
+
+	// 不一致时覆盖保存
+	d.logger.Info("⚠️ epoch validators mismatch, overwrite with config-limited set",
+		"oldCount", len(existingAddrs),
+		"newCount", len(targetAddrs),
+		"oldAddrs", existingAddrs,
+		"newAddrs", targetAddrs)
+
+	if err := d.saveNextEpochValidators(finalValidators); err != nil {
+		d.logger.Error("❌ 覆盖保存 epoch 验证者集合失败", "error", err)
+		return err
+	}
+
+	// 再次同步到内存（防止后续读取旧集合）
+	d.delegates = finalValidators.Copy()
+	if d.runtime != nil {
+		d.runtime.lock.Lock()
+		d.runtime.delegates = finalValidators.Copy()
+		d.runtime.lock.Unlock()
+	}
+
+	d.logger.Info("✅ 已覆盖保存 epoch 验证者集合并同步内存",
+		"finalCount", len(finalValidators))
+
 	return nil
 }
 
