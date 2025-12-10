@@ -95,6 +95,15 @@ func (q *maxPriceQueue) Pop() interface{} {
 // @see https://github.com/etclabscore/core-geth/blob/4e2b0e37f89515a4e7b6bafaa40910a296cb38c0/core/txpool/list.go#L458
 // for details why is something implemented like it is
 func (q *maxPriceQueue) Less(i, j int) bool {
+	// Safety check: prevent index out of range
+	// This can happen during concurrent heap operations
+	length := len(q.txs)
+	if i >= length || j >= length || i < 0 || j < 0 {
+		// Invalid indices, return false to maintain heap invariant
+		// This should not happen in normal operation, but protects against race conditions
+		return false
+	}
+	
 	switch cmp(q.txs[i], q.txs[j], q.baseFee) {
 	case -1:
 		return false

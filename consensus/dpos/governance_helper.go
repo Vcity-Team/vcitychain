@@ -54,8 +54,16 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 		}
 		return "0", nil
 	case "dpos_delegate_threshold":
-		if d.config.MinVotingPower != nil {
-			return d.config.MinVotingPower.String(), nil
+		// 从参数系统读取，如果没有则返回默认值
+		if paramValue, err := d.getCurrentParameterValue("dpos_delegate_threshold"); err == nil {
+			switch v := paramValue.(type) {
+			case string:
+				return v, nil
+			case *big.Int:
+				if v != nil {
+					return v.String(), nil
+				}
+			}
 		}
 		return "0", nil
 	case "block_time_s":
@@ -332,11 +340,8 @@ func (d *DPoS) updateParameterValue(paramName string, value interface{}, source 
 			return fmt.Errorf("unsupported delegate threshold type: %T", value)
 		}
 
-		// 更新 d.config.MinVotingPower
-		if d.config != nil {
-			d.config.MinVotingPower = threshold
-			d.logger.Info("✅ 已更新 d.config.MinVotingPower", "newThreshold", threshold.String())
-		}
+		// 注意：MinVotingPower 已删除，值存储在参数系统中
+		d.logger.Info("✅ 已更新 delegate threshold", "newThreshold", threshold.String())
 
 		// 更新 d.minStakeAmount
 		d.minStakeAmount = threshold

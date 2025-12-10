@@ -553,7 +553,6 @@ func (t *Transition) Apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 				"from", msg.From.String(),
 				"error", err,
 				"revertError", revertErr)
-			os.Exit(1)
 			return nil, revertErr
 		}
 		t.logger.Error("💀 交易执行失败，程序将立即退出",
@@ -561,7 +560,6 @@ func (t *Transition) Apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 			"nonce", msg.Nonce,
 			"from", msg.From.String(),
 			"error", err)
-		os.Exit(1)
 	}
 
 	if t.PostHook != nil {

@@ -148,9 +148,9 @@ func (d *DPoS) UpdateParameterValue(parameter string, newValue interface{}) erro
 		}
 	case "dpos_delegate_threshold":
 		if threshold, ok := newValue.(string); ok {
-			if bigThreshold, ok := new(big.Int).SetString(threshold, 10); ok {
-				d.config.MinVotingPower = bigThreshold
+			if _, ok := new(big.Int).SetString(threshold, 10); ok {
 				d.logger.Info("Updated delegate threshold", "newValue", threshold)
+				// 注意：MinVotingPower 已删除，值存储在参数系统中
 			}
 		}
 	case "block_time_s":

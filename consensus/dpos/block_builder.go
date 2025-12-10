@@ -171,12 +171,11 @@ func (b *BlockBuilder) WriteTx(tx *types.Transaction) error {
 	}
 
 	if err := b.state.Write(tx); err != nil {
-		b.params.Logger.Error("💀 交易应用到状态失败，程序将立即退出",
+		b.params.Logger.Error("💀 交易应用到状态失败",
 			"txHash", tx.Hash.String(),
 			"nonce", tx.Nonce,
 			"from", tx.From.String(),
 			"error", err)
-		os.Exit(1)
 		return err
 	}
 

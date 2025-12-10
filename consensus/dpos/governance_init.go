@@ -329,10 +329,14 @@ func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 		}
 		return "0", nil
 	case "dpos_delegate_threshold":
-		if d.config.MinVotingPower != nil {
-			return d.config.MinVotingPower.String(), nil
+		// 从参数系统读取，如果没有则返回默认值
+		if paramValue, err := d.getCurrentParameterValue("dpos_delegate_threshold"); err == nil {
+			if threshold, ok := paramValue.(string); ok {
+				return threshold, nil
+			}
 		}
-		return "1000000000000000000", nil
+		// 默认1000 VCITY
+		return "1000000000000000000000", nil
 	case "block_time_s":
 		return d.config.BlockTime.Duration.Seconds(), nil
 	case "dpos_epoch_duration":

@@ -162,7 +162,8 @@ type TxPool struct {
 	accounts accountsMap
 
 	// all the primaries sorted by max gas price
-	executables *pricedQueue
+	executables     *pricedQueue
+	executablesMu   sync.RWMutex // Protects executables queue from concurrent access
 
 	// lookup map keeping track of all
 	// transactions present in the pool
@@ -497,7 +498,9 @@ func (p *TxPool) processTx(tx *types.Transaction, origin txOrigin) error {
 		// (each account has only one primary transaction)
 		// Other transactions will be added automatically when Pop() is called
 		if firstPromoted := promoted[0]; firstPromoted != nil {
+			p.executablesMu.Lock()
 			p.executables.push(firstPromoted)
+			p.executablesMu.Unlock()
 		}
 		
 		// Update metrics
@@ -601,6 +604,8 @@ func (p *TxPool) GetTopic() interface{} {
 
 // GetExecutablesCount returns the number of transactions in the executables queue
 func (p *TxPool) GetExecutablesCount() int {
+	p.executablesMu.RLock()
+	defer p.executablesMu.RUnlock()
 	if p.executables == nil {
 		return 0
 	}
@@ -712,51 +717,24 @@ func (p *TxPool) Prepare() {
 	validPrimaries := make([]*types.Transaction, 0, len(primaries))
 	skippedCount := 0
 
-	// Performance optimization for multi-account scenarios:
-	// 1. Batch collect all cache misses to reduce lock contention
-	// 2. Single lock acquisition for batch cache updates
-	// 3. This significantly improves TPS when there are many accounts
-	
-	// Step 1: Collect all unique accounts and check cache
-	accountNonces := make(map[types.Address]uint64)
-	accountsToQuery := make([]types.Address, 0)
-	
-	// First pass: check cache for all accounts (single lock acquisition)
-	p.prepareNonceCacheMu.RLock()
+	// Performance optimization: Use cached nonce if available, otherwise query and cache
 	for _, tx := range primaries {
-		if cachedNonce, cacheHit := p.prepareNonceCache[tx.From]; cacheHit {
-			accountNonces[tx.From] = cachedNonce
-		} else {
-			// Collect unique addresses that need querying
-			if _, exists := accountNonces[tx.From]; !exists {
-				accountsToQuery = append(accountsToQuery, tx.From)
-				accountNonces[tx.From] = 0 // placeholder
-			}
-		}
-	}
-	p.prepareNonceCacheMu.RUnlock()
-	
-	// Step 2: Batch query nonces for cache misses (outside lock)
-	// This reduces lock contention and improves performance with many accounts
-	if len(accountsToQuery) > 0 {
-		nonceUpdates := make(map[types.Address]uint64, len(accountsToQuery))
-		for _, addr := range accountsToQuery {
-			nonce := p.store.GetNonce(stateRoot, addr)
-			nonceUpdates[addr] = nonce
-			accountNonces[addr] = nonce
-		}
+		var currentNonce uint64
 		
-		// Single lock acquisition for batch cache updates
-		p.prepareNonceCacheMu.Lock()
-		for addr, nonce := range nonceUpdates {
-			p.prepareNonceCache[addr] = nonce
+		// Try to get from cache first
+		p.prepareNonceCacheMu.RLock()
+		cachedNonce, cacheHit := p.prepareNonceCache[tx.From]
+		p.prepareNonceCacheMu.RUnlock()
+		
+		if cacheHit {
+			currentNonce = cachedNonce
+		} else {
+			// Cache miss: query from state and cache
+			currentNonce = p.store.GetNonce(stateRoot, tx.From)
+			p.prepareNonceCacheMu.Lock()
+			p.prepareNonceCache[tx.From] = currentNonce
+			p.prepareNonceCacheMu.Unlock()
 		}
-		p.prepareNonceCacheMu.Unlock()
-	}
-	
-	// Step 3: Filter primaries using cached/queried nonces
-	for _, tx := range primaries {
-		currentNonce := accountNonces[tx.From]
 		
 		if tx.Nonce == currentNonce {
 			// nonce匹配，添加到executables队列
@@ -780,7 +758,9 @@ func (p *TxPool) Prepare() {
 	}
 
 	// create new executables queue with valid transactions only (nonce matched)
+	p.executablesMu.Lock()
 	p.executables = newPricesQueue(p.GetBaseFee(), validPrimaries)
+	p.executablesMu.Unlock()
 }
 
 // Peek returns the best-price selected
@@ -792,6 +772,8 @@ func (p *TxPool) Peek() *types.Transaction {
 	// The executables queue just provides
 	// insight into which account has the
 	// highest priced tx (head of promoted queue)
+	p.executablesMu.RLock()
+	defer p.executablesMu.RUnlock()
 	return p.executables.pop()
 }
 
@@ -826,7 +808,9 @@ func (p *TxPool) Pop(tx *types.Transaction) {
 	// 参考以太坊：Pop()只负责移除交易，不清理过期交易
 	// 清理过期交易由processEvent()/resetAccounts()负责（基于nonce批量清理）
 	if nextTx := account.promoted.peek(); nextTx != nil {
+		p.executablesMu.Lock()
 		p.executables.push(nextTx)
+		p.executablesMu.Unlock()
 	}
 }
 
@@ -1004,39 +988,43 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 						"minedTxHash", tx.Hash.String()[:16],
 						"hashMatch", txInPool.Hash == tx.Hash)
 
-					// 如果hash匹配，说明是本节点的交易被其他节点打包了
-					if txInPool.Hash == tx.Hash {
-						// 从promoted队列中移除
-						if account.promoted.remove(tx.Hash) {
-							account.nonceToTx.remove(txInPool)
-							p.index.remove(txInPool)
-							p.gauge.decrease(slotsRequired(txInPool))
-							p.updatePending(-1)
-							
-							// Performance optimization: Clear caches for this transaction
-							p.validatedCache.remove(tx.Hash)
-							p.balanceCache.remove(tx.From) // Balance may have changed
+					// 尝试从promoted队列中移除
+					removedFromPromoted := account.promoted.remove(txInPool.Hash)
+					// 如果不在promoted队列，尝试从enqueued队列中移除
+					removedFromEnqueued := false
+					if !removedFromPromoted {
+						removedFromEnqueued = account.enqueued.remove(txInPool.Hash)
+					}
 
-							p.logger.Debug("✅ [processEvent-第一层清理] 从promoted队列移除已打包的交易（hash匹配）",
+					// 如果从任一队列中移除了交易，需要释放slots
+					if removedFromPromoted || removedFromEnqueued {
+						account.nonceToTx.remove(txInPool)
+						p.index.remove(txInPool)
+						p.gauge.decrease(slotsRequired(txInPool))
+						
+						// 只有从promoted队列移除时才减少pending计数
+						// enqueued队列中的交易不计入pending
+						if removedFromPromoted {
+							p.updatePending(-1)
+						}
+						
+						// Performance optimization: Clear caches for this transaction
+						p.validatedCache.remove(txInPool.Hash)
+						p.balanceCache.remove(tx.From) // Balance may have changed
+
+						queueType := "promoted"
+						if removedFromEnqueued {
+							queueType = "enqueued"
+						}
+
+						if txInPool.Hash == tx.Hash {
+							p.logger.Debug("✅ [processEvent-第一层清理] 从"+queueType+"队列移除已打包的交易（hash匹配）",
 								"txHash", txInPool.Hash.String()[:16],
 								"nonce", tx.Nonce,
 								"from", addr.String(),
 								"blockNumber", header.Number)
-						}
-					} else {
-						// hash不匹配，说明其他节点打包了不同hash的同nonce交易
-						// 本节点的交易应该被清理（因为nonce已经被使用）
-						if account.promoted.remove(txInPool.Hash) {
-							account.nonceToTx.remove(txInPool)
-							p.index.remove(txInPool)
-							p.gauge.decrease(slotsRequired(txInPool))
-							p.updatePending(-1)
-							
-							// Performance optimization: Clear caches
-							p.validatedCache.remove(txInPool.Hash)
-							p.balanceCache.remove(tx.From) // Balance may have changed
-
-							p.logger.Debug("✅ [processEvent-第一层清理] 从promoted队列移除过期交易（nonce已被其他节点使用）",
+						} else {
+							p.logger.Debug("✅ [processEvent-第一层清理] 从"+queueType+"队列移除过期交易（nonce已被其他节点使用）",
 								"txHash", txInPool.Hash.String()[:16],
 								"nonce", tx.Nonce,
 								"minedTxHash", tx.Hash.String()[:16],
@@ -1044,6 +1032,17 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 								"blockNumber", header.Number,
 								"note", "其他节点打包了不同hash的同nonce交易")
 						}
+					} else {
+						p.logger.Warn("⚠️ [processEvent-第一层清理] 交易在nonceToTx中但不在promoted或enqueued队列中（异常情况）",
+							"txHash", txInPool.Hash.String()[:16],
+							"nonce", tx.Nonce,
+							"from", addr.String(),
+							"blockNumber", header.Number)
+						
+						// 即使不在队列中，也要清理nonceToTx和index，并释放slots
+						account.nonceToTx.remove(txInPool)
+						p.index.remove(txInPool)
+						p.gauge.decrease(slotsRequired(txInPool))
 					}
 				} else {
 					p.logger.Debug("🔵 [processEvent-第一层清理] 交易池中未找到相同nonce的交易",
@@ -1461,7 +1460,9 @@ func (p *TxPool) handlePromoteRequest(req promoteRequest) {
 		// (each account has only one primary transaction)
 		// Other transactions will be added automatically when Pop() is called
 		if firstPromoted := promoted[0]; firstPromoted != nil {
+			p.executablesMu.Lock()
 			p.executables.push(firstPromoted)
+			p.executablesMu.Unlock()
 		}
 
 		// update metrics
@@ -1641,7 +1642,9 @@ func (p *TxPool) resetAccounts(stateNonces map[types.Address]uint64) {
 			// (each account has only one primary transaction)
 			// Other transactions will be added automatically when Pop() is called
 			if firstPromoted := promoted[0]; firstPromoted != nil {
+				p.executablesMu.Lock()
 				p.executables.push(firstPromoted)
+				p.executablesMu.Unlock()
 			}
 
 			// Update metrics
@@ -1792,18 +1795,70 @@ func toHash(txs ...*types.Transaction) (hashes []types.Hash) {
 // cleanupAccounts 清理不活跃和过多的账户
 func (p *TxPool) cleanupAccounts() {
 	// 清理不活跃的账户（超过30分钟未访问且为空）
-	inactiveCleaned := p.accounts.cleanupInactiveAccounts(30 * time.Minute)
+	inactiveCleaned, inactiveRemovedTxs := p.accounts.cleanupInactiveAccounts(30 * time.Minute)
 
 	// 清理过多的账户
-	oversizedCleaned := p.accounts.cleanupOversizedAccounts()
+	oversizedCleaned, oversizedRemovedTxs := p.accounts.cleanupOversizedAccounts()
 
 	totalCleaned := inactiveCleaned + oversizedCleaned
+
+	// 合并所有被删除账户的交易
+	allRemovedTxs := append(inactiveRemovedTxs, oversizedRemovedTxs...)
+
+	// 释放被删除账户的所有交易的slots
+	// 注意：只释放那些确实存在于index中的交易（避免重复释放）
+	if len(allRemovedTxs) > 0 {
+		// 过滤出那些确实存在于index中的交易（避免重复释放）
+		validTxs := make([]*types.Transaction, 0, len(allRemovedTxs))
+		for _, tx := range allRemovedTxs {
+			// 检查交易是否在index中（通过尝试获取）
+			if _, exists := p.index.get(tx.Hash); exists {
+				validTxs = append(validTxs, tx)
+			}
+		}
+
+		if len(validTxs) > 0 {
+			slotsToRelease := slotsRequired(validTxs...)
+			p.gauge.decrease(slotsToRelease)
+			p.index.remove(validTxs...)
+			
+			// 只计算promoted队列中的交易数量（enqueued不计入pending）
+			pendingCount := 0
+			for _, tx := range validTxs {
+				if account := p.accounts.getWithoutAccess(tx.From); account != nil {
+					account.mu.RLock()
+					// 检查交易是否在promoted队列中
+					for _, promotedTx := range account.promoted.queue {
+						if promotedTx.Hash == tx.Hash {
+							pendingCount++
+							break
+						}
+					}
+					account.mu.RUnlock()
+				}
+			}
+			if pendingCount > 0 {
+				p.updatePending(-1 * int64(pendingCount))
+			}
+
+			p.logger.Info("✅ [cleanupAccounts] 释放被删除账户的slots",
+				"账户数", totalCleaned,
+				"总交易数", len(allRemovedTxs),
+				"有效交易数", len(validTxs),
+				"释放slots", slotsToRelease)
+		} else {
+			p.logger.Debug("🔵 [cleanupAccounts] 被删除账户的交易都已不在index中（可能已被其他清理流程释放）",
+				"账户数", totalCleaned,
+				"交易数", len(allRemovedTxs))
+		}
+	}
 
 	if totalCleaned > 0 {
 		p.logger.Debug("交易池账户清理完成",
 			"不活跃账户清理", inactiveCleaned,
 			"过多账户清理", oversizedCleaned,
 			"总清理数量", totalCleaned,
-			"当前账户数", p.GetAccountsCount())
+			"当前账户数", p.GetAccountsCount(),
+			"释放交易数", len(allRemovedTxs))
 	}
 }

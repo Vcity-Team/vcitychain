@@ -490,10 +490,12 @@ func (m *accountsMap) recordAccess(addr types.Address) {
 
 // cleanupInactiveAccounts 清理不活跃的账户
 // Performance optimization: Use sync.Map.Range for lock-free iteration
-func (m *accountsMap) cleanupInactiveAccounts(maxAge time.Duration) int {
+// 返回被删除账户的所有交易，用于释放slots
+func (m *accountsMap) cleanupInactiveAccounts(maxAge time.Duration) (int, []*types.Transaction) {
 	now := time.Now()
 	cleanedCount := 0
 	inactiveAccounts := make([]types.Address, 0)
+	allRemovedTxs := make([]*types.Transaction, 0)
 
 	// 收集不活跃的账户（使用sync.Map.Range，无锁迭代）
 	m.accountLastAccess.Range(func(key, value interface{}) bool {
@@ -511,23 +513,39 @@ func (m *accountsMap) cleanupInactiveAccounts(maxAge time.Duration) int {
 		return true
 	})
 
-	// 删除不活跃的空账户
+	// 删除不活跃的空账户，并收集所有交易用于释放slots
 	for _, addr := range inactiveAccounts {
-		m.Delete(addr)
-		m.accountLastAccess.Delete(addr)       // sync.Map的Delete操作
-		atomic.AddUint64(&m.count, ^uint64(0)) // 减1
-		cleanedCount++
+		if account := m.getWithoutAccess(addr); account != nil {
+			// 即使账户是"空的"，也要确保收集所有可能的交易
+			// 使用读锁获取所有交易
+			account.mu.RLock()
+			promotedTxs := make([]*types.Transaction, len(account.promoted.queue))
+			copy(promotedTxs, account.promoted.queue)
+			enqueuedTxs := make([]*types.Transaction, len(account.enqueued.queue))
+			copy(enqueuedTxs, account.enqueued.queue)
+			account.mu.RUnlock()
+
+			// 收集所有交易
+			allRemovedTxs = append(allRemovedTxs, promotedTxs...)
+			allRemovedTxs = append(allRemovedTxs, enqueuedTxs...)
+
+			m.Delete(addr)
+			m.accountLastAccess.Delete(addr)       // sync.Map的Delete操作
+			atomic.AddUint64(&m.count, ^uint64(0)) // 减1
+			cleanedCount++
+		}
 	}
 
-	return cleanedCount
+	return cleanedCount, allRemovedTxs
 }
 
 // cleanupOversizedAccounts 清理过多的账户
-func (m *accountsMap) cleanupOversizedAccounts() int {
+// 返回被删除账户的所有交易，用于释放slots
+func (m *accountsMap) cleanupOversizedAccounts() (int, []*types.Transaction) {
 	currentCount := int(atomic.LoadUint64(&m.count))
 
 	if currentCount <= m.maxAccountCount {
-		return 0
+		return 0, nil
 	}
 
 	// 计算需要清理的数量（保留80%的账户）
@@ -535,7 +553,7 @@ func (m *accountsMap) cleanupOversizedAccounts() int {
 	needToClean := currentCount - targetCount
 
 	if needToClean <= 0 {
-		return 0
+		return 0, nil
 	}
 
 	// 按访问时间排序，找出最久未访问的账户（使用sync.Map.Range，无锁迭代）
@@ -555,8 +573,9 @@ func (m *accountsMap) cleanupOversizedAccounts() int {
 		return accountEntries[i].lastAccess.Before(accountEntries[j].lastAccess)
 	})
 
-	// 清理最久未访问的空账户
+	// 清理最久未访问的空账户，并收集所有交易用于释放slots
 	cleanedCount := 0
+	allRemovedTxs := make([]*types.Transaction, 0)
 	for _, entry := range accountEntries {
 		if cleanedCount >= needToClean {
 			break
@@ -564,6 +583,19 @@ func (m *accountsMap) cleanupOversizedAccounts() int {
 
 		if account := m.getWithoutAccess(entry.addr); account != nil {
 			if m.isAccountEmpty(account) {
+				// 即使账户是"空的"，也要确保收集所有可能的交易
+				// 使用读锁获取所有交易
+				account.mu.RLock()
+				promotedTxs := make([]*types.Transaction, len(account.promoted.queue))
+				copy(promotedTxs, account.promoted.queue)
+				enqueuedTxs := make([]*types.Transaction, len(account.enqueued.queue))
+				copy(enqueuedTxs, account.enqueued.queue)
+				account.mu.RUnlock()
+
+				// 收集所有交易
+				allRemovedTxs = append(allRemovedTxs, promotedTxs...)
+				allRemovedTxs = append(allRemovedTxs, enqueuedTxs...)
+
 				m.Delete(entry.addr)
 				m.accountLastAccess.Delete(entry.addr) // sync.Map的Delete操作
 				atomic.AddUint64(&m.count, ^uint64(0)) // 减1
@@ -572,7 +604,7 @@ func (m *accountsMap) cleanupOversizedAccounts() int {
 		}
 	}
 
-	return cleanedCount
+	return cleanedCount, allRemovedTxs
 }
 
 // getWithoutAccess 获取账户但不记录访问时间（用于清理检查）

@@ -569,6 +569,21 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 		"description", regInfo.Description,
 		"deposit", regInfo.Deposit.String())
 
+	// 验证保证金金额是否满足最小要求
+	minDeposit := d.getDelegateDepositAmount()
+	if regInfo.Deposit == nil || regInfo.Deposit.Cmp(minDeposit) < 0 {
+		d.logger.Error("❌ 保证金金额不足",
+			"deposit", regInfo.Deposit.String(),
+			"minDeposit", minDeposit.String())
+		return fmt.Errorf("insufficient deposit: required %s, provided %s",
+			minDeposit.String(), func() string {
+				if regInfo.Deposit == nil {
+					return "0"
+				}
+				return regInfo.Deposit.String()
+			}())
+	}
+
 	// 检查是否已经注册
 	d.logger.Info("🔍 检查受托人是否已注册...")
 	if d.IsDelegateRegistered(regInfo.Registrant) {
@@ -1589,30 +1604,41 @@ func (d *DPoS) getGenesisValidatorsAsRegistrations() []*DelegateRegistration {
 // getDelegateDepositAmount 获取受托人保证金金额
 // 注意：保证金金额统一使用 dpos_delegate_threshold（MinVotingPower），Tron 只有一个门槛值
 func (d *DPoS) getDelegateDepositAmount() *big.Int {
+	// 默认保证金：1000 VCITY（与 Tron 的 1000 TRX 一致）
+	defaultDeposit := new(big.Int)
+	defaultDeposit.SetString("1000000000000000000000", 10) // 1000 VCITY
+
+	var depositAmount *big.Int
+
 	// 优先从参数系统读取 dpos_delegate_threshold（经过治理流程修改的值是权威数据源）
 	if paramValue, err := d.getCurrentParameterValue("dpos_delegate_threshold"); err == nil {
 		switch v := paramValue.(type) {
 		case string:
 			if bigAmount, ok := new(big.Int).SetString(v, 10); ok && bigAmount.Cmp(big.NewInt(0)) > 0 {
+				depositAmount = bigAmount
 				d.logger.Debug("从参数系统读取 delegate threshold", "value", v)
-				return bigAmount
 			}
 		case *big.Int:
 			if v != nil && v.Cmp(big.NewInt(0)) > 0 {
+				depositAmount = new(big.Int).Set(v)
 				d.logger.Debug("从参数系统读取 delegate threshold", "value", v.String())
-				return new(big.Int).Set(v)
 			}
 		}
 	}
 
-	// 如果参数系统没有值，使用配置值
-	if d.config != nil && d.config.MinVotingPower != nil && d.config.MinVotingPower.Cmp(big.NewInt(0)) > 0 {
-		return new(big.Int).Set(d.config.MinVotingPower)
+	// 如果还是没有值，使用默认值
+	if depositAmount == nil {
+		depositAmount = defaultDeposit
 	}
 
-	// 默认保证金：1000 VCITY（与 Tron 的 1000 TRX 一致）
-	depositAmount := new(big.Int)
-	depositAmount.SetString("1000000000000000000000", 10) // 1000 VCITY
+	// 安全检查：确保保证金不小于默认值（防止配置错误导致保证金过小）
+	if depositAmount.Cmp(defaultDeposit) < 0 {
+		d.logger.Warn("⚠️ 保证金金额过小，使用默认值",
+			"provided", depositAmount.String(),
+			"using", defaultDeposit.String())
+		return defaultDeposit
+	}
+
 	return depositAmount
 }
 
@@ -1897,3 +1923,7 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 	d.logger.Debug("✅ 受托人集合落盘完成", "count", len(d.delegates))
 	return nil
 }
+
+
+
+

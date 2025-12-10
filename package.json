@@ -1,0 +1,12 @@
+{
+  "type": "module",
+  "dependencies": {
+    "ethers": "5"
+  }
+}
+
+
+
+
+
+

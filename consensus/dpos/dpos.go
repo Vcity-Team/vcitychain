@@ -228,9 +228,6 @@ type DPoSConfig struct {
 
 	Executor *state.Executor
 
-	// 最小投票权重
-	MinVotingPower *big.Int `json:"minVotingPower"`
-
 	// 初始受托人集合
 	InitialDelegates []*validator.GenesisValidator `json:"initialDelegates"`
 
@@ -1354,13 +1351,21 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 		return fmt.Errorf("failed to parse validators from extraData: %w", err)
 	}
 
-	// 3. 设置最小质押门槛
-	d.minStakeAmount = d.config.MinVotingPower
-	if d.minStakeAmount == nil {
-		// 使用默认值：1000 VCITY = 1000 * 1e18 wei
-		d.minStakeAmount, _ = new(big.Int).SetString("1000000000000000000000", 10)
-		d.logger.Info("使用默认最小质押门槛", "amount", d.minStakeAmount.String())
+	// 3. 设置最小质押门槛（从参数系统或默认值获取）
+	d.minStakeAmount, _ = new(big.Int).SetString("1000000000000000000000", 10) // 默认1000 VCITY
+	if threshold, err := d.getCurrentParameterValue("dpos_delegate_threshold"); err == nil {
+		switch v := threshold.(type) {
+		case string:
+			if bigAmount, ok := new(big.Int).SetString(v, 10); ok && bigAmount.Cmp(big.NewInt(0)) > 0 {
+				d.minStakeAmount = bigAmount
+			}
+		case *big.Int:
+			if v != nil && v.Cmp(big.NewInt(0)) > 0 {
+				d.minStakeAmount = new(big.Int).Set(v)
+			}
+		}
 	}
+	d.logger.Info("使用最小质押门槛", "amount", d.minStakeAmount.String())
 
 	// 4. 直接操作 runtime.delegates（如果runtime已初始化）
 	if d.runtime == nil {
@@ -1979,7 +1984,6 @@ func DefaultDPoSConfig() *DPoSConfig {
 		DelegateCount:             21,
 		BlockTime:                 common.Duration{Duration: 15 * time.Second},
 		RoundTime:                 common.Duration{Duration: 30 * time.Second},
-		MinVotingPower:            big.NewInt(1000000000000000000), // 1 token
 		VoteLockTime:              86400,                           // 24 hours
 		RewardRatio:               100,                             // 1%
 		ProposalVotePeriod:        24 * time.Hour,                  // 默认提案表决周期 24小时
@@ -2002,9 +2006,6 @@ func (c *DPoSConfig) Validate() error {
 	if c.DelegateCount == 0 {
 		return fmt.Errorf("delegate_count must be positive")
 	}
-	if c.MinVotingPower.Cmp(big.NewInt(0)) <= 0 {
-		return fmt.Errorf("min_voting_power must be positive")
-	}
 
 	// 验证经济系统配置
 	if c.RewardAccount == types.ZeroAddress {
@@ -2019,11 +2020,10 @@ func (c *DPoSConfig) Validate() error {
 // GetConfigSummary 获取配置摘要
 func (c *DPoSConfig) GetConfigSummary() map[string]interface{} {
 	return map[string]interface{}{
-		"delegate_count":   c.DelegateCount,
-		"block_time":       c.BlockTime.String(),
-		"round_time":       c.RoundTime.String(),
-		"min_voting_power": c.MinVotingPower.String(),
-		"vote_lock_time":   c.VoteLockTime,
+		"delegate_count": c.DelegateCount,
+		"block_time":     c.BlockTime.String(),
+		"round_time":     c.RoundTime.String(),
+		"vote_lock_time": c.VoteLockTime,
 		"reward_ratio":     c.RewardRatio,
 		"epoch_duration":   c.EpochDuration.String(),
 		"reward_account":   c.RewardAccount.String(),
