@@ -384,8 +384,11 @@ func (d *DPoS) reloadValidatorsAfterRecovery() error {
 
 	d.logger.Info("🔄 恢复提案执行后：开始重新加载验证者集合")
 
-	// 1. 从数据库读取所有验证者
-	allValidators, err := d.GetSortedValidatorsWithLimit()
+	// 1. 从数据库读取所有验证者（不截取，因为需要先过滤故障再截取）
+	if d.state == nil || d.state.StakeStore == nil {
+		return fmt.Errorf("stake store not available")
+	}
+	allValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
 	if err != nil {
 		return fmt.Errorf("failed to get validators from database: %w", err)
 	}
@@ -445,6 +448,18 @@ func (d *DPoS) reloadValidatorsAfterRecovery() error {
 	} else {
 		finalValidators = activeValidators[:maxValidators]
 	}
+
+	// 记录截取后的验证者列表（用于调试）
+	d.logger.Info("📋 [reloadValidatorsAfterRecovery] 截取后的验证者列表",
+		"finalCount", len(finalValidators),
+		"maxValidators", maxValidators,
+		"validatorsList", func() []string {
+			var vs []string
+			for i, v := range finalValidators {
+				vs = append(vs, fmt.Sprintf("[%d]%s(weight:%s)", i, v.Address.String(), v.VotingPower.String()))
+			}
+			return vs
+		}())
 
 	// 5. 更新内存中的验证者集合
 	d.delegates = finalValidators.Copy()
@@ -850,6 +865,18 @@ func (d *DPoS) getEpochValidatorsFromDatabase() (validator.AccountSet, error) {
 			// 2. 票数相同，按地址升序排序（确保完全一致）
 			return bytes.Compare(validators[i].Address[:], validators[j].Address[:]) < 0
 		})
+	}
+
+	// 检查并截取：如果数据库中的验证者数量超过配置，使用配置截取后的集合
+	configLimitedValidators, err2 := d.GetSortedValidatorsWithLimit()
+	if err2 == nil && len(configLimitedValidators) > 0 {
+		expectedCount := len(configLimitedValidators)
+		if len(validators) != expectedCount {
+			d.logger.Warn("⚠️ 数据库中的epoch验证者数量与配置不一致，使用配置截取后的集合",
+				"databaseCount", len(validators),
+				"configCount", expectedCount)
+			validators = configLimitedValidators
+		}
 	}
 
 	// 使用日志频率限制，10秒一次

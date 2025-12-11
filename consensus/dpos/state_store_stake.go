@@ -197,15 +197,15 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 		return nil, fmt.Errorf("failed to get validators from database: %w", err)
 	}
 
-	// 按权重倒序排序，确保权重高的验证者排在前面
+	// 按权重倒序排序，确保权重高的验证者排在前面（权重相同时按地址字节升序排序，确保与GetSortedValidatorsWithLimit一致）
 	sort.Slice(validators, func(i, j int) bool {
 		// 先按权重倒序排序
 		weightCmp := validators[i].VotingPower.Cmp(validators[j].VotingPower)
 		if weightCmp != 0 {
 			return weightCmp > 0 // 权重高的排在前面
 		}
-		// 如果权重相同，按地址排序（确保排序稳定）
-		return validators[i].Address.String() < validators[j].Address.String()
+		// 如果权重相同，按地址字节升序排序（确保排序稳定，与GetSortedValidatorsWithLimit一致）
+		return bytes.Compare(validators[i].Address[:], validators[j].Address[:]) < 0
 	})
 
 	return validators, nil

@@ -1,6 +1,7 @@
 package dpos
 
 import (
+	"bytes"
 	"fmt"
 	"math/big"
 	"os"
@@ -34,10 +35,10 @@ func (vs *ValidatorSet) Hash() (types.Hash, error) {
 		addresses = append(addresses, v.Address)
 	}
 
-	// 对地址进行排序以确保一致性
+	// 对地址进行排序以确保一致性（使用字节比较，与GetSortedValidatorsWithLimit保持一致）
 	for i := 0; i < len(addresses); i++ {
 		for j := i + 1; j < len(addresses); j++ {
-			if addresses[i].String() > addresses[j].String() {
+			if bytes.Compare(addresses[i][:], addresses[j][:]) > 0 {
 				addresses[i], addresses[j] = addresses[j], addresses[i]
 			}
 		}
