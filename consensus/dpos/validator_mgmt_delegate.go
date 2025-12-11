@@ -132,11 +132,6 @@ func (d *DPoS) initializeDelegates() error {
 			// 初始化创世验证者映射（从创世块或配置）
 			d.initializeGenesisValidatorsMap()
 
-			// 对齐 epoch 验证者集合（按照当前配置截取后的集合），并输出明显日志
-			if err := d.reloadValidatorsAfterRecovery(); err != nil {
-				d.logger.Warn("⚠️ reloadValidatorsAfterRecovery 对齐 epoch 验证者集合失败", "error", err)
-			}
-
 			return nil
 		}
 	}

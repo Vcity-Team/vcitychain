@@ -303,9 +303,15 @@ func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) er
 		"faultyValidators", faultyCount,
 		"activeValidators", len(activeValidators))
 
-	// 4. 按权重倒序排序
+	// 4. 按权重倒序排序（权重相同时按地址升序排序，确保所有节点完全一致）
 	sort.Slice(activeValidators, func(i, j int) bool {
-		return activeValidators[i].VotingPower.Cmp(activeValidators[j].VotingPower) > 0
+		// 1. 首先按票数降序排序
+		votingPowerCmp := activeValidators[i].VotingPower.Cmp(activeValidators[j].VotingPower)
+		if votingPowerCmp != 0 {
+			return votingPowerCmp > 0
+		}
+		// 2. 票数相同，按地址升序排序（确保完全一致）
+		return bytes.Compare(activeValidators[i].Address[:], activeValidators[j].Address[:]) < 0
 	})
 
 	d.logger.Info("📊 排序后的验证者列表:")
@@ -720,6 +726,17 @@ func (d *DPoS) calculateNextEpochValidators(blockNumber uint64) (validator.Accou
 		}
 	}
 
+	// 3. 确保排序一致（权重相同时按地址升序排序，确保所有节点完全一致）
+	sort.Slice(activeValidators, func(i, j int) bool {
+		// 1. 首先按票数降序排序
+		votingPowerCmp := activeValidators[i].VotingPower.Cmp(activeValidators[j].VotingPower)
+		if votingPowerCmp != 0 {
+			return votingPowerCmp > 0
+		}
+		// 2. 票数相同，按地址升序排序（确保完全一致）
+		return bytes.Compare(activeValidators[i].Address[:], activeValidators[j].Address[:]) < 0
+	})
+
 	d.logger.Info("✅ 下一个epoch验证者集合计算完成",
 		"totalValidators", len(allValidators),
 		"faultyValidators", faultyCount,
@@ -807,6 +824,19 @@ func (d *DPoS) getEpochValidatorsFromDatabase() (validator.AccountSet, error) {
 		d.logOnceWithInterval("get_epoch_validators_failed", 10*time.Second, "warn",
 			"⚠️ 从数据库获取epoch验证者失败", "error", err)
 		return nil, err
+	}
+
+	// 确保排序一致（权重相同时按地址升序排序，确保所有节点完全一致）
+	if len(validators) > 0 {
+		sort.Slice(validators, func(i, j int) bool {
+			// 1. 首先按票数降序排序
+			votingPowerCmp := validators[i].VotingPower.Cmp(validators[j].VotingPower)
+			if votingPowerCmp != 0 {
+				return votingPowerCmp > 0
+			}
+			// 2. 票数相同，按地址升序排序（确保完全一致）
+			return bytes.Compare(validators[i].Address[:], validators[j].Address[:]) < 0
+		})
 	}
 
 	// 使用日志频率限制，10秒一次
