@@ -879,15 +879,31 @@ func (d *DPoS) getEpochValidatorsFromDatabase() (validator.AccountSet, error) {
 		})
 	}
 
-	// 检查并截取：如果数据库中的验证者数量超过配置，使用配置截取后的集合
+	// 始终使用配置截取后的集合，确保排序和内容都正确
+	// 即使数量一致，也要使用 configLimitedValidators，因为数据库里保存的排序可能不对
 	configLimitedValidators, err2 := d.GetSortedValidatorsWithLimit()
 	if err2 == nil && len(configLimitedValidators) > 0 {
 		expectedCount := len(configLimitedValidators)
-		if len(validators) != expectedCount {
+		oldCount := len(validators)
+		
+		// 检查数量和内容是否一致
+		needUpdate := oldCount != expectedCount
+		if !needUpdate && oldCount == expectedCount {
+			// 即使数量一致，也要检查排序是否正确
+			// 对比地址列表，确保排序一致
+			for i := range validators {
+				if i >= len(configLimitedValidators) || validators[i].Address != configLimitedValidators[i].Address {
+					needUpdate = true
+					break
+				}
+			}
+		}
+		
+		if needUpdate {
 			// 使用日志频率限制，避免刷屏（只在第一次或间隔10秒后打印）
-			d.logOnceWithInterval("epoch_validators_count_mismatch", 10*time.Second, "warn",
-				"⚠️ 数据库中的epoch验证者数量与配置不一致，使用配置截取后的集合",
-				"databaseCount", len(validators),
+			d.logOnceWithInterval("epoch_validators_mismatch", 10*time.Second, "warn",
+				"⚠️ 数据库中的epoch验证者与配置不一致（数量或排序），使用配置截取后的集合",
+				"databaseCount", oldCount,
 				"configCount", expectedCount)
 			validators = configLimitedValidators
 			// 立即保存正确的集合到数据库，避免下次再打印
@@ -896,9 +912,15 @@ func (d *DPoS) getEpochValidatorsFromDatabase() (validator.AccountSet, error) {
 				d.logOnceWithInterval("save_epoch_validators_failed", 10*time.Second, "warn",
 					"⚠️ 保存修正后的epoch验证者集合失败", "error", err)
 			} else {
-				d.logOnceWithInterval("epoch_validators_fixed", 10*time.Second, "info",
-					"✅ 已修正并保存epoch验证者集合到数据库", "count", len(configLimitedValidators))
+				// 使用INFO级别，确保日志明显可见
+				d.logger.Info("✅ [getEpochValidatorsFromDatabase] 已修正并覆盖保存epoch验证者集合到数据库",
+					"oldCount", oldCount,
+					"newCount", len(configLimitedValidators),
+					"count", len(configLimitedValidators))
 			}
+		} else {
+			// 即使一致，也使用 configLimitedValidators 确保排序正确
+			validators = configLimitedValidators
 		}
 	}
 
