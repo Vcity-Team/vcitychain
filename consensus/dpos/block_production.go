@@ -123,7 +123,35 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 						}
 						return 0
 					}(),
-					"timestamp", time.Now().Format("15:04:05.000"))
+					"timestamp", time.Now().Format("15:04:05.000"),
+					"slot", func() int {
+						if r.config != nil && r.config.blockScheduler != nil {
+							now := time.Now()
+							genesisTime := r.config.blockScheduler.GetGenesisTime()
+							blockWindow := r.config.blockScheduler.GetBlockWindow()
+							return int(now.Sub(genesisTime) / blockWindow)
+						}
+						return -1
+					}(),
+					"lastProducedSlot", func() int {
+						r.lock.RLock()
+						defer r.lock.RUnlock()
+						return r.lastProducedSlot
+					}(),
+					"currentDelegate", func() string {
+						if r.config != nil && r.config.Key != nil {
+							return types.Address(r.config.Key.Address()).String()
+						}
+						return ""
+					}(),
+					"expectedDelegate", func() string {
+						if r.config != nil {
+							if del := r.getCurrentDelegate(); del != (types.Address{}) {
+								return del.String()
+							}
+						}
+						return ""
+					}())
 			}
 
 			// 短暂休眠，避免CPU占用过高

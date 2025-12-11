@@ -68,6 +68,11 @@ func (d *DPoS) initializeEconomicSystem() error {
 		d.logger.Named("block_scheduler"),
 	)
 
+	// 将调度器同步到 runtime 配置，避免运行时为 nil
+	if d.runtime != nil && d.runtime.config != nil {
+		d.runtime.config.blockScheduler = d.blockScheduler
+	}
+
 	// 添加调试日志
 	d.logger.Info("🔧 BlockScheduler初始化",
 		"blockWindow", d.config.BlockTime.Duration.String(),
