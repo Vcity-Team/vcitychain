@@ -1235,7 +1235,7 @@ func (s *StakeStore) ClearValidatorFaultStatus(address types.Address, proposalID
 	})
 }
 
-// 新增：保存Epoch验证者集合
+// 新增：保存Epoch验证者集合（使用固定key，确保覆盖而不是新增）
 func (s *StakeStore) SaveEpochValidators(validators validator.AccountSet) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		// 获取或创建epoch验证者bucket
@@ -1250,9 +1250,8 @@ func (s *StakeStore) SaveEpochValidators(validators validator.AccountSet) error 
 			return fmt.Errorf("failed to marshal validators: %w", err)
 		}
 
-		// 使用当前时间戳作为key
-		key := make([]byte, 8)
-		binary.BigEndian.PutUint64(key, uint64(time.Now().Unix()))
+		// 使用固定key "current" 确保覆盖而不是新增
+		key := []byte("current")
 
 		return bucket.Put(key, data)
 	})
@@ -1268,7 +1267,12 @@ func (s *StakeStore) GetEpochValidators() (validator.AccountSet, error) {
 			return fmt.Errorf("epoch validators bucket not found")
 		}
 
-		// 获取最新的验证者集合（按时间戳倒序）
+		// 优先使用固定key "current"
+		if data := bucket.Get([]byte("current")); data != nil {
+			return json.Unmarshal(data, &validators)
+		}
+
+		// 如果没有固定key，获取最新的验证者集合（按时间戳倒序，兼容旧数据）
 		cursor := bucket.Cursor()
 		_, data := cursor.Last()
 		if data == nil {

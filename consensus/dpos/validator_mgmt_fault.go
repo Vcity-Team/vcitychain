@@ -788,7 +788,20 @@ func (d *DPoS) saveNextEpochValidators(validators validator.AccountSet) error {
 
 // applyNextEpochValidatorsFromExtra 使用区块ExtraData中的验证者集合更新本地状态
 func (d *DPoS) applyNextEpochValidatorsFromExtra(validators validator.AccountSet, blockNumber uint64) error {
+	// 强制使用配置截取后的集合（确保数量和排序都与配置一致）
+	// 这样可以避免ExtraData中的旧数据（10个）覆盖新配置（7个）
+	configLimitedValidators, err := d.GetSortedValidatorsWithLimit()
+	if err == nil && len(configLimitedValidators) > 0 {
+		// 无论数量是否相同，都使用配置截取后的集合，确保排序一致
+		validators = configLimitedValidators
+	} else if err != nil {
+		d.logger.Warn("⚠️ 获取配置截取后的验证者集合失败，使用ExtraData中的集合",
+			"blockNumber", blockNumber,
+			"error", err)
+	}
+
 	if d.epochLifecycle != nil {
+		// 传入截取后的验证者集合
 		if err := d.epochLifecycle.ApplyNextValidatorsFromExtra(validators, blockNumber); err != nil {
 			d.logger.Error("❌ 模块化应用下一个epoch验证者集合失败", "blockNumber", blockNumber, "error", err)
 			return err
@@ -804,17 +817,16 @@ func (d *DPoS) applyNextEpochValidatorsFromExtra(validators validator.AccountSet
 		"blockNumber", blockNumber,
 		"nextEpochValidatorsCount", len(validators))
 
-	// 检查并截取：如果ExtraData中的验证者数量超过配置，使用配置截取后的集合
-	configLimitedValidators, err := d.GetSortedValidatorsWithLimit()
-	if err == nil && len(configLimitedValidators) > 0 {
-		expectedCount := len(configLimitedValidators)
-		if len(validators) != expectedCount {
-			d.logger.Warn("⚠️ ExtraData中的验证者数量与配置不一致，使用配置截取后的集合",
-				"blockNumber", blockNumber,
-				"extraDataCount", len(validators),
-				"configCount", expectedCount)
-			validators = configLimitedValidators
-		}
+	// 强制使用配置截取后的集合（确保数量和排序都与配置一致）
+	// 这样可以避免ExtraData中的旧数据（10个）覆盖新配置（7个）
+	configLimitedValidators, err2 := d.GetSortedValidatorsWithLimit()
+	if err2 == nil && len(configLimitedValidators) > 0 {
+		// 无论数量是否相同，都使用配置截取后的集合，确保排序一致
+		validators = configLimitedValidators
+	} else if err2 != nil {
+		d.logger.Warn("⚠️ 获取配置截取后的验证者集合失败，使用ExtraData中的集合",
+			"blockNumber", blockNumber,
+			"error", err2)
 	}
 
 	// 保存到数据库
@@ -872,10 +884,21 @@ func (d *DPoS) getEpochValidatorsFromDatabase() (validator.AccountSet, error) {
 	if err2 == nil && len(configLimitedValidators) > 0 {
 		expectedCount := len(configLimitedValidators)
 		if len(validators) != expectedCount {
-			d.logger.Warn("⚠️ 数据库中的epoch验证者数量与配置不一致，使用配置截取后的集合",
+			// 使用日志频率限制，避免刷屏（只在第一次或间隔10秒后打印）
+			d.logOnceWithInterval("epoch_validators_count_mismatch", 10*time.Second, "warn",
+				"⚠️ 数据库中的epoch验证者数量与配置不一致，使用配置截取后的集合",
 				"databaseCount", len(validators),
 				"configCount", expectedCount)
 			validators = configLimitedValidators
+			// 立即保存正确的集合到数据库，避免下次再打印
+			// SaveEpochValidators 现在使用固定key，确保覆盖而不是新增
+			if err := d.saveNextEpochValidators(configLimitedValidators); err != nil {
+				d.logOnceWithInterval("save_epoch_validators_failed", 10*time.Second, "warn",
+					"⚠️ 保存修正后的epoch验证者集合失败", "error", err)
+			} else {
+				d.logOnceWithInterval("epoch_validators_fixed", 10*time.Second, "info",
+					"✅ 已修正并保存epoch验证者集合到数据库", "count", len(configLimitedValidators))
+			}
 		}
 	}
 

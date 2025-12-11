@@ -35,22 +35,8 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 			r.logger.Error("❌ getCurrentDelegate: 实时查询的验证者集合为空")
 			return types.ZeroAddress
 		}
-	} else {
-		// 检查从数据库读取的验证者数量是否与配置一致
-		// 如果数量超过配置，说明数据库里保存的是旧的验证者集合，需要使用配置截取后的集合
-		configLimitedValidators, err2 := dposBackend.GetSortedValidatorsWithLimit()
-		if err2 == nil && len(configLimitedValidators) > 0 {
-			expectedCount := len(configLimitedValidators)
-			if len(allValidators) != expectedCount {
-				r.logger.Warn("⚠️ getCurrentDelegate: 数据库中的epoch验证者数量与配置不一致，使用配置截取后的集合",
-					"databaseCount", len(allValidators),
-					"configCount", expectedCount,
-					"validatorsSource", "config_limited")
-				allValidators = configLimitedValidators
-				validatorsSource = "config_limited" // 更新来源为配置截取
-			}
-		}
 	}
+	// 注意：getEpochValidatorsFromDatabase() 已经处理了截取和保存，这里不需要重复检查
 
 	// 直接使用数据库中的验证者集合（已在epoch边界完成过滤）
 	validators := allValidators
