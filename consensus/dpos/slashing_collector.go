@@ -3,6 +3,7 @@ package dpos
 import (
 	"time"
 
+	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
 )
 
@@ -24,10 +25,21 @@ func NewSlashingCollector(dposInstance *DPoS, logger hclog.Logger) *SlashingColl
 func (sc *SlashingCollector) CollectSlashingInfo(
 	faultFlags []FaultFlagInfo,
 	epochInfo EpochInfo,
+	validatorMap map[types.Address]bool,
 ) {
 	// 遍历故障标志
 	for _, faultFlag := range faultFlags {
 		if faultFlag.IsFaulty {
+			// 仅对本次检测的验证者集合收集，避免已被剔除的故障节点重复消减
+			if len(validatorMap) > 0 {
+				if _, ok := validatorMap[faultFlag.NodeAddress]; !ok {
+					sc.logger.Info("⏭️ 故障节点不在本次检测验证者集合，跳过消减收集",
+						"validator", faultFlag.NodeAddress.String(),
+						"epochNumber", epochInfo.EpochToCheckNumber)
+					continue
+				}
+			}
+
 			sc.logger.Info("🚨 ===== 检测到故障验证者 =====",
 				"address", faultFlag.NodeAddress.String(),
 				"expectedBlocks", faultFlag.ExpectedBlocks,

@@ -63,8 +63,12 @@ func (fd *FaultDetector) DetectFaults(blockNumber uint64) ([]FaultFlagInfo, erro
 	// 4. 检测每个验证者的故障
 	faultFlags := fd.detectValidatorFaults(epochInfo, validators, previousEpochValidatorMap)
 
-	// 5. 收集消减信息
-	fd.slashingCollector.CollectSlashingInfo(faultFlags, epochInfo)
+	// 5. 收集消减信息（仅针对本次检测的验证者集合）
+	validatorMap := make(map[types.Address]bool, len(validators))
+	for _, v := range validators {
+		validatorMap[v.Address] = true
+	}
+	fd.slashingCollector.CollectSlashingInfo(faultFlags, epochInfo, validatorMap)
 
 	// 6. 更新epoch
 	fd.dposInstance.currentEpoch = epochInfo.CurrentEpoch
