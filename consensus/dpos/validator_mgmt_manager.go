@@ -133,8 +133,24 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 
 	// 应用限制（如果配置了）
 	maxValidators := int(d.config.DPoSValidatorsCount)
+	if maxValidators == 0 {
+		// 如果 DPoSValidatorsCount 为0，回退到 DelegateCount
+		maxValidators = int(d.config.DelegateCount)
+	}
+
+	// 添加调试日志，确保配置正确读取
 	if maxValidators > 0 && len(validators) > maxValidators {
+		d.logger.Info("🔍 [GetSortedValidatorsWithLimit] 截取验证者",
+			"originalCount", len(validators),
+			"maxValidators", maxValidators,
+			"DPoSValidatorsCount", d.config.DPoSValidatorsCount,
+			"DelegateCount", d.config.DelegateCount)
 		validators = validators[:maxValidators]
+	} else if maxValidators == 0 {
+		d.logger.Warn("⚠️ [GetSortedValidatorsWithLimit] 配置为0，不截取验证者",
+			"originalCount", len(validators),
+			"DPoSValidatorsCount", d.config.DPoSValidatorsCount,
+			"DelegateCount", d.config.DelegateCount)
 	}
 
 	return validators, nil
