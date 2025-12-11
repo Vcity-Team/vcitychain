@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
@@ -140,9 +141,10 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 		configSource = "DelegateCount"
 	}
 
-	// 添加调试日志，确保配置正确读取
+	// 添加调试日志，确保配置正确读取（使用限频日志避免刷屏）
 	if maxValidators > 0 && len(validators) > maxValidators {
-		d.logger.Info("🔍 [GetSortedValidatorsWithLimit] 截取验证者",
+		d.logOnceWithInterval("get_sorted_validators_truncate", 10*time.Second, "info",
+			"🔍 [GetSortedValidatorsWithLimit] 截取验证者",
 			"originalCount", len(validators),
 			"maxValidators", maxValidators,
 			"configSource", configSource,
@@ -150,12 +152,14 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 			"DelegateCount", d.config.DelegateCount)
 		validators = validators[:maxValidators]
 	} else if maxValidators == 0 {
-		d.logger.Warn("⚠️ [GetSortedValidatorsWithLimit] 配置为0，不截取验证者",
+		d.logOnceWithInterval("get_sorted_validators_zero_config", 10*time.Second, "warn",
+			"⚠️ [GetSortedValidatorsWithLimit] 配置为0，不截取验证者",
 			"originalCount", len(validators),
 			"DPoSValidatorsCount", d.config.DPoSValidatorsCount,
 			"DelegateCount", d.config.DelegateCount)
 	} else if len(validators) <= maxValidators {
-		d.logger.Debug("✅ [GetSortedValidatorsWithLimit] 验证者数量未超过限制，无需截取",
+		d.logOnceWithInterval("get_sorted_validators_no_truncate", 30*time.Second, "debug",
+			"✅ [GetSortedValidatorsWithLimit] 验证者数量未超过限制，无需截取",
 			"originalCount", len(validators),
 			"maxValidators", maxValidators,
 			"configSource", configSource)
