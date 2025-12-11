@@ -1152,7 +1152,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 
 	// 初始化双重签名检测器
 	vcity_dpos.doubleSigningDetector = NewDoubleSigningDetector(logger)
-	logger.Info("✅ 双重签名检测器已初始化")
+	logger.Debug("双重签名检测器已初始化")
 
 	return vcity_dpos, nil
 }
@@ -1203,13 +1203,13 @@ func (d *DPoS) Initialize() error {
 
 	if d.dataDir != "" {
 		statePath := filepath.Join(d.dataDir, "dpos.db")
-		d.logger.Info("Creating state store", "path", statePath)
+		d.logger.Debug("Creating state store", "path", statePath)
 
 		// 确保目录存在
 		if err := os.MkdirAll(filepath.Dir(statePath), 0755); err != nil {
 			d.logger.Error("Failed to create data directory", "path", filepath.Dir(statePath), "error", err)
 		} else {
-			d.logger.Info("Data directory created/verified", "path", filepath.Dir(statePath))
+			d.logger.Debug("Data directory created/verified", "path", filepath.Dir(statePath))
 		}
 
 		state, err := newState(statePath, d.logger, d.closeCh)

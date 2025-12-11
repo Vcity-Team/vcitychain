@@ -71,31 +71,46 @@ func (d *DPoS) initializeParameterCache() error {
 	d.logger.Info("Starting parameter cache initialization",
 		"votableParamsCount", len(d.votableParameters))
 
+	d.logger.Info("Parameter cache loop begin")
+
 	// 强制从数据库加载所有参数值
 	for paramName := range d.votableParameters {
+		d.logger.Info("Parameter cache: handling param", "param", paramName)
 		// 优先从数据库读取（数据库是权威数据源）
 		dbValue, err := d.state.ParameterStore.GetParameterValue(paramName)
 		if err == nil {
 			// 数据库有值，使用数据库值
 			d.parameterCurrentValues[paramName] = dbValue
-			d.logger.Info("Loaded parameter from database",
+			d.logger.Info("Loaded parameter from database1",
 				"param", paramName,
 				"value", dbValue)
+			continue
+		}
+
+		d.logger.Info("Parameter cache: db miss or error, fallback to config",
+			"param", paramName,
+			"error", err)
+
+		// 数据库没有值，使用配置文件默认值并保存到数据库
+		if defaultValue, cfgErr := d.getConfigParameterValue(paramName); cfgErr == nil {
+			d.parameterCurrentValues[paramName] = defaultValue
+			d.logger.Info("Parameter cache: config value",
+				"param", paramName,
+				"value", defaultValue)
+			saveErr := d.state.ParameterStore.SaveParameterValue(paramName, defaultValue, "config")
+			d.logger.Info("Loaded parameter from config",
+				"param", paramName,
+				"value", defaultValue,
+				"saveError", saveErr)
+			continue
 		} else {
-			// 数据库没有值，使用配置文件默认值并保存到数据库
-			if defaultValue, err := d.getConfigParameterValue(paramName); err == nil {
-				d.parameterCurrentValues[paramName] = defaultValue
-				d.state.ParameterStore.SaveParameterValue(paramName, defaultValue, "config")
-				d.logger.Info("Loaded parameter from config",
-					"param", paramName,
-					"value", defaultValue)
-			} else {
-				d.logger.Error("Failed to get config value for parameter",
-					"param", paramName,
-					"error", err)
-			}
+			d.logger.Error("Failed to get config value for parameter",
+				"param", paramName,
+				"error", cfgErr)
 		}
 	}
+
+	d.logger.Info("Parameter cache loop finished")
 
 	d.logger.Info("Parameter cache initialized",
 		"count", len(d.parameterCurrentValues),
@@ -130,15 +145,6 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Category:    "economic",
 		},
 		// 🚫 dpos_epoch_duration 已移除：epoch 时长不应通过提案修改，只能通过配置文件设置
-		// 治理参数
-		"governance_pass_threshold": {
-			Name:        "Pass Threshold",
-			Type:        "uint64",
-			MinValue:    uint64(30), // 最少30%
-			MaxValue:    uint64(90), // 最多90%
-			Description: "Minimum support rate required for proposal approval (%)",
-			Category:    "governance",
-		},
 		"dpos_proposal_vote_period": {
 			Name:        "Proposal Vote Period",
 			Type:        "uint64",
@@ -189,17 +195,6 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Description: "Slash rate for severe offense (basis points, 1000 = 10%)",
 			Category:    "slashing",
 		},
-	}
-}
-
-// getGovernanceParameterValue 获取治理参数的当前值
-func (d *DPoS) getGovernanceParameterValue(paramName string) (interface{}, error) {
-	switch paramName {
-	case "governance_pass_threshold":
-		// 默认51%的通过门槛
-		return uint64(51), nil
-	default:
-		return nil, fmt.Errorf("unknown governance parameter: %s", paramName)
 	}
 }
 
@@ -290,33 +285,7 @@ func (d *DPoS) GetCurrentProposalPeriod() map[string]interface{} {
 
 // getVotingThreshold 获取当前投票通过阈值
 func (d *DPoS) getVotingThreshold() uint64 {
-	// 优先从参数系统读取 governance_pass_threshold（经过治理流程修改的值是权威数据源）
-	if paramValue, err := d.getCurrentParameterValue("governance_pass_threshold"); err == nil {
-		switch v := paramValue.(type) {
-		case uint64:
-			if v > 0 {
-				d.logger.Debug("从参数系统读取 governance pass threshold", "threshold", v)
-				return v
-			}
-		case int64:
-			if v > 0 {
-				d.logger.Debug("从参数系统读取 governance pass threshold", "threshold", uint64(v))
-				return uint64(v)
-			}
-		case float64:
-			if v > 0 {
-				d.logger.Debug("从参数系统读取 governance pass threshold", "threshold", uint64(v))
-				return uint64(v)
-			}
-		case string:
-			if parsed, err := strconv.ParseUint(v, 10, 64); err == nil && parsed > 0 {
-				d.logger.Debug("从参数系统读取 governance pass threshold", "threshold", parsed)
-				return parsed
-			}
-		}
-	}
-
-	// 如果参数系统没有值，使用默认值
+	// 默认固定 51%，不再从参数系统读取
 	return 51
 }
 
@@ -329,11 +298,9 @@ func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 		}
 		return "0", nil
 	case "dpos_delegate_threshold":
-		// 从参数系统读取，如果没有则返回默认值
-		if paramValue, err := d.getCurrentParameterValue("dpos_delegate_threshold"); err == nil {
-			if threshold, ok := paramValue.(string); ok {
-				return threshold, nil
-			}
+		// 直接读取配置，避免参数缓存初始化时递归持锁
+		if d.config != nil && d.config.DPoSDelegateThreshold != nil {
+			return d.config.DPoSDelegateThreshold.String(), nil
 		}
 		// 默认1000 VCITY
 		return "1000000000000000000000", nil

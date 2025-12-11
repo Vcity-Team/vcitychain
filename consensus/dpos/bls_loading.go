@@ -152,6 +152,8 @@ func (d *DPoS) syncLoadBLSKeys() error {
 	if err := d.loadBLSKeysFromDatabase(); err != nil {
 		d.logger.Warn("⚠️ 从数据库加载BLS公钥失败", "error", err)
 		// 数据库加载失败不阻止启动，继续尝试网络获取
+	} else {
+		d.logger.Info("✅ 数据库BLS公钥加载完成（若存在）")
 	}
 
 	// 2. 获取所有验证者
@@ -227,7 +229,7 @@ func (d *DPoS) syncLoadBLSKeys() error {
 			d.saveBLSKeyToCache(validator.Address, blsKey)
 			d.saveBLSKeyToDatabase(validator.Address, blsKey)
 
-			d.logger.Debug("✅ BLS公钥获取成功", "address", validator.Address.String())
+			d.logger.Info("✅ BLS公钥获取成功", "address", validator.Address.String())
 		} else {
 			d.logger.Debug("✅ BLS公钥已存在", "address", validator.Address.String())
 		}
@@ -244,7 +246,14 @@ func (d *DPoS) syncLoadBLSKeys() error {
 
 	if len(missingValidators) > 0 {
 		d.logger.Warn("⚠️ 部分验证者BLS公钥启动时缺失，将在后续按需获取",
-			"missingCount", len(missingValidators))
+			"missingCount", len(missingValidators),
+			"missingValidators", func() []string {
+				addrs := make([]string, 0, len(missingValidators))
+				for _, addr := range missingValidators {
+					addrs = append(addrs, addr.String())
+				}
+				return addrs
+			}())
 	}
 
 	if !allBLSLoaded {

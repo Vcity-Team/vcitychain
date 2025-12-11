@@ -71,9 +71,23 @@ func (d *DPoS) readBLSPrivateKeyAndGeneratePublicKey(validatorAddress types.Addr
 func (d *DPoS) getBLSKeyForValidator(address types.Address) (*bls.PublicKey, error) {
 	// 检查是否是当前节点
 	if d.key != nil && address == types.Address(d.key.Address()) {
+		dataDir := d.getDataDir()
+		keyFilePath := ""
+		if dataDir != "" {
+			parentDir := filepath.Dir(dataDir) // 获取 "nodeX\\consensus"
+			keyFilePath = filepath.Join(parentDir, "validator-bls.key")
+		}
+		d.logger.Info("📄 本地获取BLS公钥",
+			"address", address.String(),
+			"dataDir", dataDir,
+			"keyFilePath", keyFilePath)
+
 		// 当前节点：从本地文件读取BLS私钥
 		blsPublicKey, err := d.readBLSPrivateKeyAndGeneratePublicKey(address)
 		if err != nil {
+			d.logger.Warn("❌ 本地BLS公钥读取失败",
+				"address", address.String(),
+				"error", err)
 			return nil, fmt.Errorf("failed to read local BLS key: %w", err)
 		}
 
@@ -86,9 +100,15 @@ func (d *DPoS) getBLSKeyForValidator(address types.Address) (*bls.PublicKey, err
 		d.logger.Debug("✅ 本地BLS公钥获取成功", "address", address.String())
 		return blsKey, nil
 	} else {
+		d.logger.Info("🌐 远程请求BLS公钥",
+			"address", address.String(),
+			"localNode", d.key != nil && address == types.Address(d.key.Address()))
 		// 其他节点：通过网络请求BLS公钥
 		blsKey, err := d.requestBLSPublicKeyFromNetwork(address)
 		if err != nil {
+			d.logger.Warn("❌ 远程BLS公钥获取失败",
+				"address", address.String(),
+				"error", err)
 			return nil, fmt.Errorf("failed to request remote BLS key: %w", err)
 		}
 
@@ -327,4 +347,3 @@ func (d *DPoS) generateBLSKey() (*bls.PublicKey, error) {
 func (d *DPoS) shouldParticipateInBLSSigning(delegate *validator.ValidatorMetadata) bool {
 	return delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0
 }
-

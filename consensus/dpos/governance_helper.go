@@ -77,9 +77,6 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 	case "governance_voting_period":
 		// 兼容旧参数名，重定向到 dpos_proposal_vote_period
 		return d.getCurrentParameterValue("dpos_proposal_vote_period")
-	case "governance_pass_threshold":
-		// 治理参数：投票通过阈值
-		return uint64(51), nil
 	case "min_freeze_period":
 		// 冻结参数：最小冻结期（从配置读取）
 		if d.config != nil && d.config.MinFreezePeriod > 0 {
@@ -374,39 +371,6 @@ func (d *DPoS) updateParameterValue(paramName string, value interface{}, source 
 			d.config.ProposalVotePeriod = time.Duration(votePeriod) * d.config.BlockTime.Duration
 			d.logger.Info("✅ 已更新 d.config.ProposalVotePeriod", "newPeriod", d.config.ProposalVotePeriod.String(), "blocks", votePeriod)
 		}
-
-	case "governance_pass_threshold":
-		// 解析提案通过阈值（百分比）
-		var threshold uint64
-		switch v := value.(type) {
-		case string:
-			if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
-				threshold = parsed
-			} else {
-				d.logger.Warn("无法解析 governance pass threshold 值", "value", v, "error", err)
-				return fmt.Errorf("invalid governance pass threshold value: %v", v)
-			}
-		case uint64:
-			threshold = v
-		case int64:
-			if v >= 0 {
-				threshold = uint64(v)
-			} else {
-				return fmt.Errorf("invalid governance pass threshold value: %v", v)
-			}
-		case float64:
-			if v >= 0 {
-				threshold = uint64(v)
-			} else {
-				return fmt.Errorf("invalid governance pass threshold value: %v", v)
-			}
-		default:
-			d.logger.Warn("不支持的 governance pass threshold 类型", "type", fmt.Sprintf("%T", value), "value", value)
-			return fmt.Errorf("unsupported governance pass threshold type: %T", value)
-		}
-
-		// governance_pass_threshold 不需要更新配置，因为它只从参数系统读取
-		d.logger.Info("✅ 已更新 governance_pass_threshold", "newThreshold", threshold)
 
 	case "min_freeze_period":
 		// 解析最小冻结期（秒）
