@@ -54,16 +54,9 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 		}
 		return "0", nil
 	case "dpos_delegate_threshold":
-		// 从参数系统读取，如果没有则返回默认值
-		if paramValue, err := d.getCurrentParameterValue("dpos_delegate_threshold"); err == nil {
-			switch v := paramValue.(type) {
-			case string:
-				return v, nil
-			case *big.Int:
-				if v != nil {
-					return v.String(), nil
-				}
-			}
+		// 直接使用配置值（避免递归调用自身）；若未配置则返回默认 0
+		if d.config != nil && d.config.DPoSDelegateThreshold != nil {
+			return d.config.DPoSDelegateThreshold.String(), nil
 		}
 		return "0", nil
 	case "block_time_s":

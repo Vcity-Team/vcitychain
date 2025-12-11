@@ -241,6 +241,9 @@ type DPoSConfig struct {
 
 	ValidatorsCount uint64 `json:"validatorsCount" yaml:"validatorsCount"`
 
+	// DPoS委托最小质押门槛
+	DPoSDelegateThreshold *big.Int `json:"dpos_delegate_threshold" yaml:"dpos_delegate_threshold"`
+
 	EpochDuration       time.Duration `json:"epochDuration" yaml:"epochDuration"`
 	RewardAccount       types.Address `json:"rewardAccount" yaml:"rewardAccount"`
 	RewardAmount        *big.Int      `json:"rewardAmount" yaml:"rewardAmount"`
@@ -1984,14 +1987,14 @@ func DefaultDPoSConfig() *DPoSConfig {
 		DelegateCount:             21,
 		BlockTime:                 common.Duration{Duration: 15 * time.Second},
 		RoundTime:                 common.Duration{Duration: 30 * time.Second},
-		VoteLockTime:              86400,                           // 24 hours
-		RewardRatio:               100,                             // 1%
-		ProposalVotePeriod:        24 * time.Hour,                  // 默认提案表决周期 24小时
-		ProposalValidPeriod:       7 * 24 * time.Hour,              // 默认提案有效期 7天
-		MinFreezePeriod:           604800,                          // 默认最小冻结期 7天（秒）
-		UnfreezeLockPeriod:        1209600,                         // 默认解冻锁定期 14天（秒）
-		CommissionRateDefault:     1000,                            // 默认佣金率 10%
-		CommissionEffectivePeriod: 21 * 24 * time.Hour,             // 默认佣金生效周期 21天
+		VoteLockTime:              86400,               // 24 hours
+		RewardRatio:               100,                 // 1%
+		ProposalVotePeriod:        24 * time.Hour,      // 默认提案表决周期 24小时
+		ProposalValidPeriod:       7 * 24 * time.Hour,  // 默认提案有效期 7天
+		MinFreezePeriod:           604800,              // 默认最小冻结期 7天（秒）
+		UnfreezeLockPeriod:        1209600,             // 默认解冻锁定期 14天（秒）
+		CommissionRateDefault:     1000,                // 默认佣金率 10%
+		CommissionEffectivePeriod: 21 * 24 * time.Hour, // 默认佣金生效周期 21天
 	}
 }
 
@@ -2024,10 +2027,10 @@ func (c *DPoSConfig) GetConfigSummary() map[string]interface{} {
 		"block_time":     c.BlockTime.String(),
 		"round_time":     c.RoundTime.String(),
 		"vote_lock_time": c.VoteLockTime,
-		"reward_ratio":     c.RewardRatio,
-		"epoch_duration":   c.EpochDuration.String(),
-		"reward_account":   c.RewardAccount.String(),
-		"reward_amount":    c.RewardAmount.String(),
+		"reward_ratio":   c.RewardRatio,
+		"epoch_duration": c.EpochDuration.String(),
+		"reward_account": c.RewardAccount.String(),
+		"reward_amount":  c.RewardAmount.String(),
 	}
 }
 
