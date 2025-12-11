@@ -255,6 +255,22 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 					"blockNumber", currentBlock.Number)
 				return false
 			}
+		} else {
+			// 检查从数据库读取的验证者数量是否与配置一致
+			// 如果数量超过配置，说明数据库里保存的是旧的验证者集合，需要使用配置截取后的集合
+			configLimitedValidators, err2 := dposInstance.GetSortedValidatorsWithLimit()
+			if err2 == nil && len(configLimitedValidators) > 0 {
+				expectedCount := len(configLimitedValidators)
+				if len(validatorsFromExtra) != expectedCount {
+					r.logger.Warn("⚠️ 数据库中的epoch验证者数量与配置不一致，使用配置截取后的集合",
+						"blockNumber", currentBlock.Number,
+						"databaseCount", len(validatorsFromExtra),
+						"configCount", expectedCount,
+						"validatorsSource", "config_limited")
+					validatorsFromExtra = configLimitedValidators
+					validatorsSource = "config_limited" // 更新来源为配置截取
+				}
+			}
 		}
 
 		// 直接使用数据库中的验证者集合（已在epoch边界过滤）

@@ -940,7 +940,20 @@ func (p *blockchainWrapper) updateNextEpochValidatorsFromLocal(block *types.Bloc
 			"votingPower", validator.VotingPower.String())
 	}
 
+	// 检查并截取：如果ExtraData中的验证者数量超过配置，使用配置截取后的集合
 	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+		configLimitedValidators, err2 := dposInstance.GetSortedValidatorsWithLimit()
+		if err2 == nil && len(configLimitedValidators) > 0 {
+			expectedCount := len(configLimitedValidators)
+			if len(nextEpochValidators) != expectedCount {
+				p.logger.Warn("⚠️ ExtraData中的验证者数量与配置不一致，使用配置截取后的集合",
+					"blockNumber", block.Number(),
+					"extraDataCount", len(nextEpochValidators),
+					"configCount", expectedCount)
+				nextEpochValidators = configLimitedValidators
+			}
+		}
+
 		if err := dposInstance.saveNextEpochValidators(nextEpochValidators); err != nil {
 			p.logger.Error("❌ 保存下一个epoch验证者集合失败",
 				"blockNumber", block.Number(),

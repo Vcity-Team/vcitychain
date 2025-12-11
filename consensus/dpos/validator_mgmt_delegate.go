@@ -132,6 +132,17 @@ func (d *DPoS) initializeDelegates() error {
 			// 初始化创世验证者映射（从创世块或配置）
 			d.initializeGenesisValidatorsMap()
 
+			// 对比并覆盖 epoch validators，确保与配置截取后的集合一致
+			d.logger.Info("🔄 [启动时] 开始对齐 epoch validators 与配置截取后的集合",
+				"当前验证者数量", len(d.delegates),
+				"配置最大验证者数量", d.config.DPoSValidatorsCount)
+			if err := d.reloadValidatorsAfterRecovery(); err != nil {
+				d.logger.Warn("⚠️ [启动时] 对齐 epoch validators 失败，但继续启动",
+					"error", err)
+			} else {
+				d.logger.Info("✅ [启动时] epoch validators 对齐完成")
+			}
+
 			return nil
 		}
 	}
@@ -156,6 +167,17 @@ func (d *DPoS) initializeDelegates() error {
 		}
 		// 初始化创世验证者映射（从配置）
 		d.initializeGenesisValidatorsMap()
+	}
+
+	// 对比并覆盖 epoch validators，确保与配置截取后的集合一致
+	d.logger.Info("🔄 [启动时] 开始对齐 epoch validators 与配置截取后的集合",
+		"当前验证者数量", len(d.delegates),
+		"配置最大验证者数量", d.config.DPoSValidatorsCount)
+	if err := d.reloadValidatorsAfterRecovery(); err != nil {
+		d.logger.Warn("⚠️ [启动时] 对齐 epoch validators 失败，但继续启动",
+			"error", err)
+	} else {
+		d.logger.Info("✅ [启动时] epoch validators 对齐完成")
 	}
 
 	d.logger.Info("✅ 验证者初始化完成", "count", len(d.delegates))

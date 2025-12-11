@@ -789,6 +789,19 @@ func (d *DPoS) applyNextEpochValidatorsFromExtra(validators validator.AccountSet
 		"blockNumber", blockNumber,
 		"nextEpochValidatorsCount", len(validators))
 
+	// 检查并截取：如果ExtraData中的验证者数量超过配置，使用配置截取后的集合
+	configLimitedValidators, err := d.GetSortedValidatorsWithLimit()
+	if err == nil && len(configLimitedValidators) > 0 {
+		expectedCount := len(configLimitedValidators)
+		if len(validators) != expectedCount {
+			d.logger.Warn("⚠️ ExtraData中的验证者数量与配置不一致，使用配置截取后的集合",
+				"blockNumber", blockNumber,
+				"extraDataCount", len(validators),
+				"configCount", expectedCount)
+			validators = configLimitedValidators
+		}
+	}
+
 	// 保存到数据库
 	if err := d.saveNextEpochValidators(validators); err != nil {
 		return fmt.Errorf("failed to save next epoch validators from extra: %w", err)
