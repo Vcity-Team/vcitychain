@@ -1265,33 +1265,6 @@ func (d *DPoS) Initialize() error {
 		d.logger.Warn("⚠️ Runtime not available, balance querier disabled")
 	}
 
-	// set block time
-	d.blockTime = d.config.BlockTime.Duration
-
-	// 新增：初始化BLS网络通信
-	if err := d.initializeBLSNetworking(); err != nil {
-		d.logger.Error("Failed to initialize BLS networking", "error", err)
-		// 不返回错误，因为BLS网络初始化失败不应该阻止DPoS启动
-	}
-
-	// 移除：DPoS验证者解析移到initializeDelegates中进行
-	// 这样可以在数据库没有受托人时才解析extraData，避免重复解析
-
-	// initialize delegates
-	if err := d.initializeDelegates(); err != nil {
-		return fmt.Errorf("failed to initialize delegates: %w", err)
-	}
-
-	// 新增：初始化经济系统组件
-	if err := d.initializeEconomicSystem(); err != nil {
-		return fmt.Errorf("failed to initialize economic system: %w", err)
-	}
-
-	// 新增：初始化治理系统
-	if err := d.InitializeGovernance(); err != nil {
-		return fmt.Errorf("failed to initialize governance: %w", err)
-	}
-
 	// 创建DPoS runtime
 	runtimeConfig := &runtimeConfig{
 		DataDir:          d.dataDir,
@@ -1329,6 +1302,30 @@ func (d *DPoS) Initialize() error {
 	if err := d.runtime.setupNetworkIntegration(); err != nil {
 		d.logger.Error("failed to setup network integration", "error", err)
 		return fmt.Errorf("failed to setup network integration: %w", err)
+	}
+
+	// set block time
+	d.blockTime = d.config.BlockTime.Duration
+
+	// 新增：初始化BLS网络通信
+	if err := d.initializeBLSNetworking(); err != nil {
+		d.logger.Error("Failed to initialize BLS networking", "error", err)
+		// 不返回错误，因为BLS网络初始化失败不应该阻止DPoS启动
+	}
+
+	// initialize delegates
+	if err := d.initializeDelegates(); err != nil {
+		return fmt.Errorf("failed to initialize delegates: %w", err)
+	}
+
+	// 新增：初始化经济系统组件
+	if err := d.initializeEconomicSystem(); err != nil {
+		return fmt.Errorf("failed to initialize economic system: %w", err)
+	}
+
+	// 新增：初始化治理系统
+	if err := d.InitializeGovernance(); err != nil {
+		return fmt.Errorf("failed to initialize governance: %w", err)
 	}
 
 	return nil
