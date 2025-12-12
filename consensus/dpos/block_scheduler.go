@@ -3,6 +3,7 @@ package dpos
 import (
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/types"
@@ -26,6 +27,7 @@ type BlockScheduler struct {
 	logger                hclog.Logger
 	// 日志间隔管理
 	lastLogTime map[string]time.Time
+	logMutex    sync.Mutex
 }
 
 // NewBlockScheduler 创建新的区块调度器
@@ -123,6 +125,47 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	expectedValidator := validators[currentValidatorIndex]
 	isMatch := expectedValidator == myAddress
 
+	// 查找本节点在验证者集合中的实际索引位置
+	myActualIndex := -1
+	for i, v := range validators {
+		if v == myAddress {
+			myActualIndex = i
+			break
+		}
+	}
+
+	// 构建验证者集合完整列表（带索引）
+	validatorsList := make([]string, len(validators))
+	for i, v := range validators {
+		marker := ""
+		if i == currentValidatorIndex {
+			marker = " ← 计算出的索引"
+		}
+		if v == myAddress {
+			marker += " ← 本节点"
+		}
+		validatorsList[i] = fmt.Sprintf("[%d]%s%s", i, v.String(), marker)
+	}
+
+	// 添加详细的调试日志（info级别，每3秒输出一次，避免刷屏）
+	bs.logOnceWithInterval("should_produce_block_now_detail", 3*time.Second, "info",
+		"🔍 [出块检查] ShouldProduceBlockNow详细检查",
+		"blockNumber", blockNumber,
+		"nextBlockNumber", nextBlockNumber,
+		"currentSlot", currentSlot,
+		"activeValidatorCount", activeValidatorCount,
+		"validatorsSource", validatorsSource,
+		"myAddress", myAddress.String(),
+		"currentValidatorIndex", currentValidatorIndex,
+		"expectedValidator", fmt.Sprintf("[%d]%s", currentValidatorIndex, expectedValidator.String()),
+		"myActualIndex", myActualIndex,
+		"isMatch", isMatch,
+		"validatorsList", validatorsList,
+		"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
+		"now", now.Format("2006-01-02 15:04:05.000"),
+		"timeSinceGenesis", timeSinceGenesis.String(),
+		"blockWindow", bs.blockWindow.String())
+
 	// 只有当本地节点应该出块时才打印详细日志（每次出块都打印，因为频率已经很低）
 	if isMatch {
 		bs.logger.Info("🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块",
@@ -140,13 +183,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 			"timestamp", now.Format("15:04:05.000000"),
 			"timeSinceGenesis", timeSinceGenesis.String(),
 			"blockWindow", bs.blockWindow.String(),
-			"validatorsList", func() []string {
-				var vs []string
-				for i, v := range validators {
-					vs = append(vs, fmt.Sprintf("[%d]%s", i, v.String()))
-				}
-				return vs
-			}(),
+			"validatorsList", validatorsList,
 			"note", "用于验证同一时刻只有一个节点出块")
 	}
 
@@ -170,6 +207,37 @@ func (bs *BlockScheduler) StartNewEpoch(epochNumber uint64, currentTime time.Tim
 	bs.logger.Debug("启动新epoch",
 		"epochNumber", epochNumber,
 		"currentTime", currentTime.Format("2006-01-02 15:04:05"))
+}
+
+// logOnceWithInterval 防重复日志函数（自定义间隔）
+func (bs *BlockScheduler) logOnceWithInterval(key string, interval time.Duration, level string, message string, args ...interface{}) {
+	bs.logMutex.Lock()
+	defer bs.logMutex.Unlock()
+
+	now := time.Now()
+	if lastTime, exists := bs.lastLogTime[key]; exists {
+		// 如果指定间隔内已经记录过相同key的日志，则跳过
+		if now.Sub(lastTime) < interval {
+			return
+		}
+	}
+
+	// 更新最后记录时间
+	bs.lastLogTime[key] = now
+
+	// 根据级别记录日志
+	switch level {
+	case "debug":
+		bs.logger.Debug(message, args...)
+	case "info":
+		bs.logger.Info(message, args...)
+	case "warn":
+		bs.logger.Warn(message, args...)
+	case "error":
+		bs.logger.Error(message, args...)
+	default:
+		bs.logger.Info(message, args...)
+	}
 }
 
 // shouldProduceBlockNow 检查当前节点是否应该现在出块

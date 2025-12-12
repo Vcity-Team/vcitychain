@@ -190,7 +190,7 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 
 	// 如果是epoch结束区块，处理奖励分发
 	if isEpochEnd {
-		p.logger.Info("✅ =====================是epoch结束区块，开始处理奖励分配和边界应用提案=================", "blockNumber", block.Number())
+		p.logger.Info("✅ =====================epoch结束区块，开始处理奖励分配和边界应用提案=================", "blockNumber", block.Number())
 		p.logger.Debug("🎯========== 开始执行奖励分配 ========== 🎯🎯🎯",
 			"blockNumber", block.Number(),
 			"blockHash", block.Hash().String()[:16],

@@ -1668,11 +1668,8 @@ func (r *dposRuntime) getActiveValidatorsCount() int {
 	// 网络连接状态检查（静默处理）
 
 	if connectedPeers < activeValidators {
-		// 修复：如果完全没有网络连接，返回0触发等待网络改善
+		// 如果完全没有网络连接，返回0触发等待网络改善
 		if connectedPeers == 0 {
-			r.logger.Warn("完全没有网络连接，返回0触发等待网络改善",
-				"activeValidators", activeValidators,
-				"connectedPeers", connectedPeers)
 			return 0
 		}
 

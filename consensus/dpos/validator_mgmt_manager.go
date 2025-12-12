@@ -237,10 +237,27 @@ func (d *DPoS) getValidatorsFromCurrentBlockExtraData(header *types.Header) (val
 				IsActive:    v.IsActive,
 			})
 		}
+
+		// 🔧 关键修复：读取后重新排序，确保与写入时的排序规则完全一致
+		// 排序规则：1. 按权重（VotingPower）降序排序；2. 权重相同时按地址字节升序排序
+		sort.Slice(validators, func(i, j int) bool {
+			votingPowerCmp := validators[i].VotingPower.Cmp(validators[j].VotingPower)
+			if votingPowerCmp != 0 {
+				return votingPowerCmp > 0 // 权重降序
+			}
+			// 权重相同时，按地址升序排序（确保排序稳定）
+			return bytes.Compare(validators[i].Address[:], validators[j].Address[:]) < 0
+		})
+
 		return validators, nil
 	}
 
 	return nil, fmt.Errorf("no validators found in ExtraData")
+}
+
+// GetValidatorsFromBlockExtraData 从指定区块的 ExtraData 读取验证者集合（公共方法）
+func (d *DPoS) GetValidatorsFromBlockExtraData(header *types.Header) (validator.AccountSet, error) {
+	return d.getValidatorsFromCurrentBlockExtraData(header)
 }
 
 // isValidator 检查地址是否是验证者

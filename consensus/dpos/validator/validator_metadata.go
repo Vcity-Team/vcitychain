@@ -280,13 +280,13 @@ func (as AccountSet) HashAddressOnly() (types.Hash, error) {
 	if len(as) == 0 {
 		return types.Hash{}, nil
 	}
-	
+
 	// 只使用地址信息
 	var addresses []types.Address
 	for _, v := range as {
 		addresses = append(addresses, v.Address)
 	}
-	
+
 	// 对地址进行排序以确保一致性（使用字节比较，与GetSortedValidatorsWithLimit保持一致）
 	for i := 0; i < len(addresses); i++ {
 		for j := i + 1; j < len(addresses); j++ {
@@ -295,13 +295,13 @@ func (as AccountSet) HashAddressOnly() (types.Hash, error) {
 			}
 		}
 	}
-	
+
 	// 计算哈希
 	var data []byte
 	for _, addr := range addresses {
 		data = append(data, addr.Bytes()...)
 	}
-	
+
 	return types.BytesToHash(crypto.Keccak256(data)), nil
 }
 

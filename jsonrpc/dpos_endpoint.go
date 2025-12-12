@@ -6417,3 +6417,67 @@ func (d *DPOS) addProposalTransactionToPool(tx *types.Transaction) error {
 
 	return nil
 }
+
+// GetValidatorsFromBlockExtraData 获取指定区块ExtraData中的验证者集合
+func (d *DPOS) GetValidatorsFromBlockExtraData(ctx context.Context, params interface{}) (interface{}, error) {
+	// 解析参数：区块号
+	var blockNumber uint64
+
+	if paramMap, ok := params.(map[string]interface{}); ok {
+		if bn, ok := paramMap["blockNumber"].(float64); ok {
+			blockNumber = uint64(bn)
+		} else {
+			return nil, fmt.Errorf("blockNumber parameter is required and must be a number")
+		}
+	} else if paramArray, ok := params.([]interface{}); ok && len(paramArray) >= 1 {
+		if bn, ok := paramArray[0].(float64); ok {
+			blockNumber = uint64(bn)
+		} else {
+			return nil, fmt.Errorf("blockNumber parameter is required and must be a number")
+		}
+	} else {
+		return nil, fmt.Errorf("invalid parameters format, expected blockNumber")
+	}
+
+	// 获取指定区块的区块头
+	header, exists := d.store.GetHeaderByNumber(blockNumber)
+	if !exists {
+		return nil, fmt.Errorf("block %d not found", blockNumber)
+	}
+
+	// 获取DPoS引擎
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return nil, fmt.Errorf("DPoS engine not available")
+	}
+
+	// 从ExtraData读取验证者集合
+	if getValidators, ok := dposEngine.(interface {
+		GetValidatorsFromBlockExtraData(header *types.Header) (validator.AccountSet, error)
+	}); ok {
+		validators, err := getValidators.GetValidatorsFromBlockExtraData(header)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get validators from block extraData: %w", err)
+		}
+
+		// 转换为JSON格式
+		validatorList := make([]map[string]interface{}, 0, len(validators))
+		for i, v := range validators {
+			validatorList = append(validatorList, map[string]interface{}{
+				"index":       i,
+				"address":     v.Address.String(),
+				"votingPower": v.VotingPower.String(),
+				"isActive":    v.IsActive,
+			})
+		}
+
+		return map[string]interface{}{
+			"success":     true,
+			"blockNumber": blockNumber,
+			"count":       len(validators),
+			"validators":  validatorList,
+		}, nil
+	}
+
+	return nil, fmt.Errorf("DPoS engine does not support GetValidatorsFromBlockExtraData")
+}
