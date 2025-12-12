@@ -3494,13 +3494,13 @@ func (d *DPOS) GetEpochRewardDetails(ctx context.Context, params interface{}) ([
 	d.logger.Debug("✅ GetEpochRewardDetails: ensureRewardStore成功")
 
 	// 调用RewardStore的方法
-	d.logger.Info("🔍 GetEpochRewardDetails: 开始查询奖励详情", "epochNumber", epochNumber)
+	d.logger.Debug("🔍 GetEpochRewardDetails: 开始查询奖励详情", "epochNumber", epochNumber)
 	records, err := dposState.RewardStore.GetEpochRewardDetails(epochNumber)
 	if err != nil {
 		d.logger.Error("❌ GetEpochRewardDetails: 查询奖励详情失败", "epochNumber", epochNumber, "error", err)
 		return nil, err
 	}
-	d.logger.Info("✅ GetEpochRewardDetails: 查询完成", "epochNumber", epochNumber, "recordsCount", len(records))
+	d.logger.Debug("✅ GetEpochRewardDetails: 查询完成", "epochNumber", epochNumber, "recordsCount", len(records))
 	return records, nil
 }
 

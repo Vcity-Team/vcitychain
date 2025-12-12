@@ -116,7 +116,7 @@ func (p *blockchainWrapper) CommitBlock(block *types.FullBlock) error {
 		p.logger.Error("❌ [CommitBlock] WriteFullBlock失败", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String()[:16], "error", err)
 		return err
 	}
-	p.logger.Info("✅ [CommitBlock] 区块已成功写入链上", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String()[:16])
+	p.logger.Debug("✅ [CommitBlock] 区块已成功写入链上", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String()[:16])
 	return nil
 }
 
@@ -190,8 +190,8 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 
 	// 如果是epoch结束区块，处理奖励分发
 	if isEpochEnd {
-		p.logger.Info("✅ [ProcessBlockExecutor] 是epoch结束区块，开始处理奖励分配和边界应用提案", "blockNumber", block.Number())
-		p.logger.Debug("🎯🎯🎯 ========== 开始执行奖励分配 ========== 🎯🎯🎯",
+		p.logger.Info("✅ =====================是epoch结束区块，开始处理奖励分配和边界应用提案=================", "blockNumber", block.Number())
+		p.logger.Debug("🎯========== 开始执行奖励分配 ========== 🎯🎯🎯",
 			"blockNumber", block.Number(),
 			"blockHash", block.Hash().String()[:16],
 			"blockCreator", blockCreator.String())
@@ -212,10 +212,6 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 		p.logger.Info("🔍 [ProcessBlockExecutor] 开始边界应用提案流程", "blockNumber", block.Number())
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			p.logger.Info("✅ [ProcessBlockExecutor] DPoS实例存在", "blockNumber", block.Number())
-			// 关键修复：在epoch结束区块时，应该查询当前epoch的提案，而不是下一个epoch
-			// 因为提案的effectiveEpoch是在当前epoch结束时生效的
-			// 例如：在epoch 6结束区块（7465）时，应该查询effectiveEpoch=6的提案
-			// 🔧 修复：使用 block.Number() - 1 来获取当前epoch（即将结束的epoch）
 			// 因为 getEpochForBlock(block.Number()) 在epoch结束区块时可能返回下一个epoch
 			var currentEpoch uint64
 			if block.Number() > 0 {
@@ -225,7 +221,6 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 					currentEpoch = currentEpochMeta.Number
 					p.logger.Info("📊 [ProcessBlockExecutor] 计算epoch信息（使用前一个区块）", "blockNumber", block.Number(), "prevBlockNumber", block.Number()-1, "currentEpoch", currentEpoch, "firstBlockInEpoch", currentEpochMeta.FirstBlockInEpoch)
 				} else {
-					// 如果前一个区块获取失败，尝试使用当前区块号
 					currentEpochMeta = dposInstance.getEpochForBlock(block.Number())
 					if currentEpochMeta != nil {
 						currentEpoch = currentEpochMeta.Number
@@ -248,7 +243,6 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			scheduledProps := dposInstance.governanceLoadScheduled(currentEpoch)
 			p.logger.Debug("🔍 [边界应用提案] 查询结果", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "scheduledCount", len(scheduledProps))
 
-			// 去重（按ID）
 			seen := make(map[string]bool)
 			uniq := make([]*ParameterProposal, 0, len(scheduledProps))
 			for _, pprop := range scheduledProps {
@@ -726,8 +720,6 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 			cnt++
 		}
 		if cnt == len(rewardInfo.Rewards) {
-			p.logger.Info("所有验证者奖励处理完毕",
-				"cnt", cnt)
 		}
 
 		// 同步节点也需要记录奖励到数据库（用于查询）
@@ -776,11 +768,6 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 							"blocksProduced", blocksProduced)
 					}
 				}
-
-				p.logger.Info("✅ 同步节点奖励记录完成",
-					"blockNumber", block.Number(),
-					"epoch", rewardInfo.EpochNumber,
-					"rewardCount", len(rewardInfo.Rewards))
 			} else {
 				p.logger.Warn("⚠️ RewardStore不可用，跳过奖励记录",
 					"blockNumber", block.Number(),

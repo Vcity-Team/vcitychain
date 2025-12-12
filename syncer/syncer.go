@@ -153,7 +153,7 @@ func (s *syncer) startPeerConnectionEventProcess() {
 		case event.PeerConnected:
 			go s.initNewPeerStatus(peerID)
 		case event.PeerDisconnected:
-			s.logger.Info("节点断开", "peer", peerID.String())
+			s.logger.Debug("节点断开", "peer", peerID.String())
 			s.removeFromPeerMap(peerID)
 		}
 	}

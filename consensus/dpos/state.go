@@ -598,7 +598,7 @@ func (ps *ProposalStore) ListScheduledByEpoch(epochNumber uint64) ([]*ParameterP
 		})
 
 		if ps.logger != nil {
-			ps.logger.Info("✅ [ProposalStore.ListScheduledByEpoch] 查询完成",
+			ps.logger.Debug("✅ [ProposalStore.ListScheduledByEpoch] 查询完成",
 				"epochNumber", epochNumber,
 				"totalCount", count)
 		}
@@ -1154,7 +1154,7 @@ func (rs *RewardStore) GetEpochRewardDetails(epochNumber uint64) ([]RewardRecord
 	})
 
 	if logger != nil {
-		logger.Info("✅ [RewardStore.GetEpochRewardDetails] 查询完成", "epochNumber", epochNumber, "recordsCount", len(records))
+		logger.Debug("✅ [RewardStore.GetEpochRewardDetails] 查询完成", "epochNumber", epochNumber, "recordsCount", len(records))
 	}
 
 	return records, err

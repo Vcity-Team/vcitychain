@@ -638,6 +638,20 @@ func (ni *NetworkIntegration) createTopics() error {
 		}
 	}
 
+	// 关键Topic校验：若关键Topic为nil，视为失败（避免后续“Topic不可用”）
+	if ni.signatureRequestTopic == nil {
+		return fmt.Errorf("critical topic unavailable: dpos-signature-request")
+	}
+	if ni.signatureResponseTopic == nil {
+		return fmt.Errorf("critical topic unavailable: dpos-signature-response")
+	}
+	if ni.blsKeyRequestTopic == nil {
+		return fmt.Errorf("critical topic unavailable: dpos-bls-key-request")
+	}
+	if ni.blsKeyResponseTopic == nil {
+		return fmt.Errorf("critical topic unavailable: dpos-bls-key-response")
+	}
+
 	return nil
 }
 

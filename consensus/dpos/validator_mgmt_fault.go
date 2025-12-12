@@ -298,7 +298,7 @@ func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) er
 		}
 	}
 
-	d.logger.Info("✅ 故障验证者过滤完成",
+	d.logger.Debug("✅ 故障验证者过滤完成",
 		"totalValidators", len(allValidators),
 		"faultyValidators", faultyCount,
 		"activeValidators", len(activeValidators))
@@ -422,7 +422,7 @@ func (d *DPoS) reloadValidatorsAfterRecovery() error {
 		}
 	}
 
-	d.logger.Info("✅ 故障验证者过滤完成",
+	d.logger.Debug("✅ 故障验证者过滤完成",
 		"totalValidators", len(allValidators),
 		"faultyValidators", faultyCount,
 		"activeValidators", len(activeValidators))

@@ -555,16 +555,6 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		d.logger.Warn("⚠️ 没有奖励分发信息", "epoch", epochNumber)
 	}
 
-	// 3. 记录分发统计
-	d.logger.Info("📊 ========== 生产节点中奖励计算信息统计（使用RewardDistributor）==========",
-		"epoch", epochNumber,
-		"validatorsCount", len(validators),
-		"votersCount", len(voters),
-		"validatorRewardCount", validatorRewardCount,
-		"totalBlocks", totalBlocks,
-		"stateUpdateCount", len(stateUpdates),
-		"status", "奖励计算完成（统一使用RewardDistributor）")
-
 	return nil
 }
 

@@ -206,7 +206,7 @@ func (d *DPoS) GetSortedValidatorsWithLimitFilterFaulty() (validator.AccountSet,
 	}
 
 	if faultyCount > 0 {
-		d.logger.Info("✅ [GetSortedValidatorsWithLimitFilterFaulty] 故障验证者过滤完成",
+		d.logger.Debug("✅ [GetSortedValidatorsWithLimitFilterFaulty] 故障验证者过滤完成",
 			"totalValidators", len(allValidators),
 			"faultyValidators", faultyCount,
 			"activeValidators", len(activeValidators))

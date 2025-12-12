@@ -493,7 +493,7 @@ func (s *Server) GetProtocols(peerID peer.ID) ([]string, error) {
 // and updates relevant counters and metrics. It is called from the
 // disconnection callback of the libp2p network bundle (when the connection is closed)
 func (s *Server) removePeer(peerID peer.ID) {
-	s.logger.Info("Peer disconnected", "id", peerID)
+	s.logger.Debug("Peer disconnected", "id", peerID)
 
 	// Remove the peer from the peers map
 	connectionInfo := s.removePeerInfo(peerID)

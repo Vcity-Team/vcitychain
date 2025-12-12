@@ -51,7 +51,6 @@ func NewRewardDistributor(
 // UpdateRewardAmount 更新奖励金额（用于提案执行后更新参数值）
 func (rd *RewardDistributor) UpdateRewardAmount(rewardAmount *big.Int) {
 	rd.rewardAmount = rewardAmount
-	rd.logger.Info("✅ RewardAmount已更新", "newAmount", rewardAmount.String())
 }
 
 func (rd *RewardDistributor) getCommissionRate(address types.Address) uint64 {

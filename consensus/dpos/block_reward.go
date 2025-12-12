@@ -56,10 +56,6 @@ func (r *dposRuntime) executeRewardDistributionForEpochEnd(blockNumber uint64, c
 
 // processRewardDistributionInBlockForBuilder 在区块构建器中处理奖励分发
 func (r *dposRuntime) processRewardDistributionInBlockForBuilder(builder blockBuilder, blockNumber uint64) error {
-	r.logger.Info("🎯 生产节点开始执行奖励分配",
-		"blockNumber", blockNumber,
-		"说明", "生产节点在buildBlock时执行奖励分配")
-
 	// 获取DPoS实例
 	if r.config == nil || r.config.dposBackend == nil {
 		return fmt.Errorf("DPoS backend not available")
@@ -129,7 +125,3 @@ func (r *dposRuntime) processRewardDistributionInBlockForBuilder(builder blockBu
 
 	return nil
 }
-
-
-
-

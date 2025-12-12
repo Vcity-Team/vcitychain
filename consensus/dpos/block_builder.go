@@ -394,9 +394,6 @@ type SignatureResponse struct {
 
 // buildBlock 构建区块并收集验证者签名
 func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
-	buildStartTime := time.Now()
-	r.logger.Info("🏗️ buildBlock函数被调用", "timestamp", buildStartTime.Format("15:04:05.000"))
-
 	// 检查Key是否可用
 	if r.config == nil || r.config.Key == nil {
 		r.logger.Error("key not available, cannot build block")
@@ -706,7 +703,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 				// 在epoch结束区块中也设置CheckpointBlockHash
 				extra.CheckpointBlockHash = h.Hash
-				r.logger.Info("🔍 ===== epoch结束区块保存CheckpointBlockHash =====",
+				r.logger.Debug("🔍 ===== epoch结束区块保存CheckpointBlockHash =====",
 					"blockNumber", h.Number,
 					"checkpointBlockHash", h.Hash.String(),
 					"说明", "epoch结束区块保存用于CheckpointHash计算的初始区块哈希")

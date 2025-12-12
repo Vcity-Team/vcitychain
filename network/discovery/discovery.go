@@ -367,7 +367,7 @@ func (d *DiscoveryService) bootnodePeerDiscovery() {
 	// Find peers from the referenced bootnode
 	foundNodes, err := d.findPeersCall(bootnode.ID, true)
 	if err != nil {
-		d.logger.Error("Unable to execute bootnode peer discovery",
+		d.logger.Debug("Unable to execute bootnode peer discovery",
 			"bootnode", bootnode.ID.String(),
 			"err", err.Error(),
 		)
