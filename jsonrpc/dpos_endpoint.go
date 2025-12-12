@@ -155,7 +155,6 @@ func (d *DPOS) validateProposer(proposer types.Address, proposerPrivateKeyHex st
 	}
 
 	// 4. 验证proposer是否是验证者（通过store获取验证者列表）
-	// 使用与 GetStakingInfo 相同的回退方案，确保能正确获取验证者
 	d.logger.Info("🔍 [validateProposer] 开始获取验证者列表", "proposer", proposer.String())
 	var validators validator.AccountSet
 
@@ -1588,8 +1587,6 @@ func (d *DPOS) GetCurrentRound(ctx context.Context) (uint64, error) {
 			}
 		}
 	}
-
-	// 如果无法从DPoS引擎获取，回退到通过store获取
 	currentBlockHeight := d.getCurrentBlockHeight()
 	if currentBlockHeight == 0 {
 		d.logger.Warn("无法获取当前区块高度，返回默认值1")
@@ -5799,11 +5796,6 @@ func (d *DPOS) GetBlockProducers(ctx context.Context, params interface{}) (map[s
 			if cfg, ok := config.(*dpos.DPoSConfig); ok {
 				consensusSwitchHeight = cfg.ConsensusSwitchHeight
 				epochSize = cfg.DPoSValidatorsCount
-
-				// 如果DPoSValidatorsCount为0，尝试从DelegateCount获取
-				if epochSize == 0 {
-					epochSize = cfg.DelegateCount
-				}
 			}
 		}
 

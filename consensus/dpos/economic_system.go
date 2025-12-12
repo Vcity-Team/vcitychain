@@ -62,7 +62,7 @@ func (d *DPoS) initializeEconomicSystem() error {
 	// 4. 🆕 初始化固定时间窗口调度器
 	d.blockScheduler = NewBlockScheduler(
 		d.config.BlockTime.Duration,
-		int(d.config.DelegateCount),
+		int(d.config.DPoSValidatorsCount),
 		d.config.Blockchain,            // 传入区块链接口（*blockchain.Blockchain实现了BlockchainInterface）
 		d.config.ConsensusSwitchHeight, // 传入共识切换高度
 		d.logger.Named("block_scheduler"),
@@ -76,7 +76,7 @@ func (d *DPoS) initializeEconomicSystem() error {
 	// 添加调试日志
 	d.logger.Info("🔧 BlockScheduler初始化",
 		"blockWindow", d.config.BlockTime.Duration.String(),
-		"delegateCount", d.config.DelegateCount,
+		"dposValidatorsCount", d.config.DPoSValidatorsCount,
 		"blockchain", d.config.Blockchain != nil)
 
 	d.logger.Info("✅ DPoS经济系统组件初始化完成",

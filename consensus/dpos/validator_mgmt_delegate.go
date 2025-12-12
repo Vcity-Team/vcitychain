@@ -21,9 +21,8 @@ import (
 
 // initializeDelegates 初始化受托人集合
 func (d *DPoS) initializeDelegates() error {
-	d.delegates = make(validator.AccountSet, 0, d.config.DelegateCount)
+	d.delegates = make(validator.AccountSet, 0, d.config.DPoSValidatorsCount)
 
-	// 初始化故障检测相关字段
 	d.faultyValidators = make(map[types.Address]bool)
 	d.missedBlocksCount = make(map[types.Address]uint64)
 
@@ -44,11 +43,8 @@ func (d *DPoS) initializeDelegates() error {
 		d.currentEpoch = 0
 		d.logger.Warn("⚠️ StakeStore不可用，currentEpoch使用默认值0")
 	}
-
-	// 显著日志：显示当前配置
-	d.logger.Debug("🚀 ===== DPoS验证者初始化开始 =====")
-	d.logger.Debug("📋 当前配置信息",
-		"configDelegateCount", d.config.DelegateCount,
+	d.logger.Debug("📋 PoS验证者初始化开始，当前配置信息",
+		"dposValidatorsCount", d.config.DPoSValidatorsCount,
 		"initialDelegatesCount", len(d.config.InitialDelegates),
 		"dposValidatorsCount", d.config.DPoSValidatorsCount,
 		"currentEpoch", d.currentEpoch)
@@ -87,7 +83,6 @@ func (d *DPoS) initializeDelegates() error {
 				return bytes.Compare(dbValidators[i].Address[:], dbValidators[j].Address[:]) < 0
 			})
 
-			// 显著日志：显示排序后的验证者
 			d.logger.Info("📈 排序后的验证者列表:")
 			for i, validator := range dbValidators {
 				d.logger.Info("🏆 排序后验证者",
@@ -95,15 +90,8 @@ func (d *DPoS) initializeDelegates() error {
 					"address", validator.Address.String(),
 					"votingPower", validator.VotingPower.String())
 			}
-
-			// 显著日志：显示截取逻辑
 			maxDelegates := int(d.config.DPoSValidatorsCount)
-			if maxDelegates == 0 {
-				maxDelegates = int(d.config.DelegateCount) // 回退到旧配置
-			}
 			originalCount := len(dbValidators)
-
-			d.logger.Info("🎯 ===== 验证者截取逻辑 =====")
 			d.logger.Info("📊 截取前统计",
 				"配置的最大验证者数量", maxDelegates,
 				"数据库中的验证者数量", originalCount)
@@ -119,17 +107,14 @@ func (d *DPoS) initializeDelegates() error {
 					"截取后", maxDelegates)
 			}
 
-			// 应用限制
 			if maxDelegates > 0 && originalCount > maxDelegates {
 				dbValidators = dbValidators[:maxDelegates]
 			}
 
-			// 设置到内存
 			d.delegates = dbValidators
 			d.logger.Info("✅ 验证者集合已从数据库加载并设置到内存",
 				"最终数量", len(d.delegates))
 
-			// 初始化创世验证者映射（从创世块或配置）
 			d.initializeGenesisValidatorsMap()
 
 			// 对比并覆盖 epoch validators，确保与配置截取后的集合一致
@@ -147,12 +132,10 @@ func (d *DPoS) initializeDelegates() error {
 		}
 	}
 
-	// 如果数据库没有，尝试从创世块解析
 	d.logger.Info("🔍 开始从创世块解析验证者...")
 	if err := d.parseValidatorsFromGenesis(); err != nil {
 		d.logger.Warn("⚠️ 从创世块解析验证者失败", "error", err)
 		// 如果创世块也失败，使用配置中的初始验证者
-		d.logger.Info("🔄 回退到配置中的初始验证者")
 		for _, genesisValidator := range d.config.InitialDelegates {
 			votingPower, ok := new(big.Int).SetString("1000000000000000000000", 10) // 1000 VCITY
 			if !ok {
@@ -201,8 +184,6 @@ func (d *DPoS) addDelegateSafely(newDelegate *validator.ValidatorMetadata) {
 			return
 		}
 	}
-
-	// 如果没有重复，直接添加
 	d.delegates = append(d.delegates, newDelegate)
 	d.logger.Debug("✅ 添加新验证者",
 		"address", newDelegate.Address.String(),
@@ -1539,94 +1520,8 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 	return result, nil
 }
 
-// getGenesisValidatorsAsRegistrations 将创世验证者转换为 DelegateRegistration 格式
-func (d *DPoS) getGenesisValidatorsAsRegistrations() []*DelegateRegistration {
-	d.lock.RLock()
-	defer d.lock.RUnlock()
-
-	// 获取创世验证者（优先从内存中的delegates获取，如果为空则从genesisValidators映射获取）
-	var genesisValidators validator.AccountSet
-
-	// 方法1: 从 d.delegates 中筛选创世验证者
-	if len(d.delegates) > 0 {
-		for _, delegate := range d.delegates {
-			if d.isGenesisValidator(delegate.Address) {
-				genesisValidators = append(genesisValidators, delegate)
-			}
-		}
-	}
-
-	// 方法2: 如果方法1没有找到，从 d.runtime.delegates 中筛选
-	if len(genesisValidators) == 0 && d.runtime != nil && len(d.runtime.delegates) > 0 {
-		for _, delegate := range d.runtime.delegates {
-			if d.isGenesisValidator(delegate.Address) {
-				genesisValidators = append(genesisValidators, delegate)
-			}
-		}
-	}
-
-	// 方法3: 如果前两种方法都没有找到，直接从 genesisValidators 映射创建
-	if len(genesisValidators) == 0 && len(d.genesisValidators) > 0 {
-		genesisValidators = d.getGenesisValidators()
-	}
-
-	// 方法4: 如果仍然为空，尝试从数据库中读取验证者信息
-	if len(genesisValidators) == 0 && d.state != nil && d.state.StakeStore != nil {
-		if dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false); err == nil && len(dbValidators) > 0 {
-			genesisValidators = dbValidators
-		}
-	}
-
-	// 方法5: 仍未获取到时，回退到配置中的初始验证者
-	if len(genesisValidators) == 0 && d.config != nil && len(d.config.InitialDelegates) > 0 {
-		for _, genesisValidator := range d.config.InitialDelegates {
-			votingPower, ok := new(big.Int).SetString("1000000000000000000000", 10) // 1000 VCITY
-			if !ok {
-				votingPower = big.NewInt(0)
-			}
-
-			genesisValidators = append(genesisValidators, &validator.ValidatorMetadata{
-				Address:     genesisValidator.Address,
-				VotingPower: votingPower,
-				IsActive:    true,
-			})
-		}
-	}
-
-	// 转换为 DelegateRegistration
-	result := make([]*DelegateRegistration, 0, len(genesisValidators))
-	fixedVotingPower, _ := new(big.Int).SetString("1000000000000000000000", 10) // 1000 VCITY
-	zeroDeposit := big.NewInt(0)
-
-	for _, validator := range genesisValidators {
-		reg := &DelegateRegistration{
-			Address:      validator.Address,
-			Name:         fmt.Sprintf("Genesis Validator %s", validator.Address.String()[:10]),
-			Website:      "",
-			Description:  "Genesis validator with default weight 1000 VCITY",
-			Deposit:      new(big.Int).Set(zeroDeposit), // 创世验证者没有保证金
-			Status:       RegStatusActive,               // 创世验证者默认为活跃状态
-			CreatedAt:    0,                             // 创世时间
-			TotalVotes:   new(big.Int).Set(validator.VotingPower),
-			IsActive:     validator.IsActive,
-			LastVoteTime: 0,
-		}
-
-		// 如果验证者的投票权重不是1000 VCITY，使用实际权重
-		if validator.VotingPower != nil && validator.VotingPower.Cmp(fixedVotingPower) != 0 {
-			reg.TotalVotes = new(big.Int).Set(validator.VotingPower)
-		}
-
-		result = append(result, reg)
-	}
-
-	return result
-}
-
 // getDelegateDepositAmount 获取受托人保证金金额
-// 注意：保证金金额统一使用 dpos_delegate_threshold（MinVotingPower），Tron 只有一个门槛值
 func (d *DPoS) getDelegateDepositAmount() *big.Int {
-	// 默认保证金：1000 VCITY（与 Tron 的 1000 TRX 一致）
 	defaultDeposit := new(big.Int)
 	defaultDeposit.SetString("1000000000000000000000", 10) // 1000 VCITY
 
@@ -1945,7 +1840,3 @@ func (d *DPoS) updateDelegatesInternal(block *types.FullBlock) error {
 	d.logger.Debug("✅ 受托人集合落盘完成", "count", len(d.delegates))
 	return nil
 }
-
-
-
-

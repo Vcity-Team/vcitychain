@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Vcity-Team/vcitychain/types"
 	dposProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
+	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -97,15 +97,13 @@ func (r *dposRuntime) subscribeToSignatureTopic(listener *SignatureListener) err
 	// 获取签名响应主题
 	topic, err := r.getSignatureResponseTopic()
 	if err != nil {
-		r.logger.Warn("failed to get signature response topic, using fallback", "error", err)
-		r.logger.Debug("订阅签名响应主题（回退模式）")
+		r.logger.Warn("failed to get signature response topic", "error", err)
 		return nil
 	}
 
 	// 检查topic是否为nil
 	if topic == nil {
-		r.logger.Warn("signature response topic is nil, using fallback")
-		r.logger.Debug("订阅签名响应主题（回退模式）")
+		r.logger.Warn("signature response topic is nil")
 		return nil
 	}
 
@@ -114,18 +112,14 @@ func (r *dposRuntime) subscribeToSignatureTopic(listener *SignatureListener) err
 		r.handleSignatureResponseMessage(obj, from, listener)
 	}
 	if err := topic.Subscribe(handler); err != nil {
-		r.logger.Warn("failed to subscribe to signature response topic, using fallback", "error", err)
-		r.logger.Debug("订阅签名响应主题（回退模式）")
+		r.logger.Warn("failed to subscribe to signature response topic", "error", err)
 		return nil
 	}
 
-	// 保存主题引用
 	listener.topic = topic
 
 	r.logger.Info("成功订阅签名响应主题")
 
-	// 注意：network.Topic 没有 Unsubscribe 方法，使用 Close() 会自动关闭所有订阅者
-	// 在 SignatureListener.Close() 中会清理 topic 引用，避免内存泄露
 	return nil
 }
 
@@ -144,4 +138,3 @@ func (r *dposRuntime) HandleSignatureResponse(response *SignatureResponse) error
 func (r *dposRuntime) handleSignatureQueryResponse(obj interface{}, from peer.ID) {
 	// 简化的实现，暂时只记录日志
 }
-

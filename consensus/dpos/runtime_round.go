@@ -31,13 +31,16 @@ func (r *dposRuntime) calculateRoundBySlot() uint64 {
 
 // calculateInitialRound 根据当前区块号计算初始轮次（保持兼容性）
 func (r *dposRuntime) calculateInitialRound() uint64 {
-	// 优先使用slot计算
 	if r.config != nil && r.config.blockScheduler != nil {
 		return r.calculateRoundBySlot()
 	}
 
-	// 回退到基于区块号的计算
-	if r.config == nil || r.config.DelegateCount == 0 {
+	// 从 dposBackend 获取 DPoSValidatorsCount
+	dposValidatorsCount := uint64(0)
+	if dposBackend, ok := r.backend.(*DPoS); ok && dposBackend != nil && dposBackend.config != nil {
+		dposValidatorsCount = dposBackend.config.DPoSValidatorsCount
+	}
+	if dposValidatorsCount == 0 {
 		return 1 // 默认从第1轮开始
 	}
 
@@ -49,15 +52,15 @@ func (r *dposRuntime) calculateInitialRound() uint64 {
 		}
 	}
 
-	// 计算轮次：每完成一轮（DelegateCount个区块）轮次+1
-	// 轮次从1开始，所以公式是：1 + (blockNumber - 1) / delegateCount
+	// 计算轮次：每完成一轮（DPoSValidatorsCount个区块）轮次+1
+	// 轮次从1开始，所以公式是：1 + (blockNumber - 1) / dposValidatorsCount
 	if currentBlockNumber > 0 {
-		round := 1 + (currentBlockNumber-1)/uint64(r.config.DelegateCount)
-		r.logger.Debug("🔍 根据区块号计算初始轮次（回退）",
+		round := 1 + (currentBlockNumber-1)/dposValidatorsCount
+		r.logger.Debug("🔍 根据区块号计算初始轮次",
 			"currentBlockNumber", currentBlockNumber,
-			"delegateCount", r.config.DelegateCount,
+			"dposValidatorsCount", dposValidatorsCount,
 			"calculatedRound", round,
-			"formula", fmt.Sprintf("1 + (%d-1)/%d=%d", currentBlockNumber, r.config.DelegateCount, round))
+			"formula", fmt.Sprintf("1 + (%d-1)/%d=%d", currentBlockNumber, dposValidatorsCount, round))
 		return round
 	}
 
@@ -66,9 +69,10 @@ func (r *dposRuntime) calculateInitialRound() uint64 {
 
 // updateRoundSilent 静默更新轮次（不打印日志）
 func (r *dposRuntime) updateRoundSilent() {
-	if r.config == nil || r.config.blockScheduler == nil || r.config.DelegateCount == 0 {
+	if r.config == nil || r.config.blockScheduler == nil {
 		return
 	}
+	// 从 dposBackend 获取 DPoSValidatorsCount（这里不需要检查，因为只是获取验证者列表）
 
 	// 使用公共函数获取排序和限制后的验证者
 	dposBackend, ok := r.backend.(*DPoS)
@@ -122,12 +126,17 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 	// 此函数现在只负责更新 currentRound
 
 	// 混合方案：基于区块号触发轮次边界处理，基于slot计算轮次
-	if r.config != nil && r.config.DelegateCount > 0 {
+	// 从 dposBackend 获取 DPoSValidatorsCount
+	dposValidatorsCount := uint64(0)
+	if dposBackend, ok := r.backend.(*DPoS); ok && dposBackend != nil && dposBackend.config != nil {
+		dposValidatorsCount = dposBackend.config.DPoSValidatorsCount
+	}
+	if r.config != nil && dposValidatorsCount > 0 {
 		// 1. 基于区块号触发轮次边界处理（保持原有逻辑）
-		if currentBlockNumber > 0 && currentBlockNumber%uint64(r.config.DelegateCount) == 0 {
+		if currentBlockNumber > 0 && currentBlockNumber%dposValidatorsCount == 0 {
 			r.logger.Debug("🔄 轮次边界触发（基于区块号）",
 				"blockNumber", currentBlockNumber,
-				"delegateCount", r.config.DelegateCount)
+				"dposValidatorsCount", dposValidatorsCount)
 
 			// 方案1+方案2：轮次边界时处理延迟的验证者集合更新
 			if r.backend != nil {
@@ -165,7 +174,3 @@ func (r *dposRuntime) updateRound(blockNumber ...uint64) {
 		}
 	}
 }
-
-
-
-

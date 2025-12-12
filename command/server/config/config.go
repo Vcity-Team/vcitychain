@@ -41,14 +41,10 @@ type Config struct {
 
 	MetricsInterval time.Duration `json:"metrics_interval" yaml:"metrics_interval"`
 
-	// 新增：DPoS验证者数量配置
-	DPoSValidatorsCount uint64 `json:"dpos_validators_count" yaml:"dpos_validators_count"`
-
-	// 新增：DPoS备用验证者数量配置
-	// 新增：DPoS最小质押门槛配置
+	DPoSValidatorsCount   uint64 `json:"dpos_validators_count" yaml:"dpos_validators_count"`
 	DPoSDelegateThreshold string `json:"dpos_delegate_threshold" yaml:"dpos_delegate_threshold"`
 
-	// 新增：DPoS经济系统配置
+	// DPoS经济系统配置
 	DPoSEpochDuration       string `json:"dpos_epoch_duration" yaml:"dpos_epoch_duration"`
 	DPoSRewardDistribution  string `json:"dpos_reward_distribution" yaml:"dpos_reward_distribution"`     // 奖励分发地址
 	DPoSRewardAmount        string `json:"dpos_reward_amount" yaml:"dpos_reward_amount"`                 // 每个epoch奖励金额
@@ -56,7 +52,7 @@ type Config struct {
 	DPoSProposalValidPeriod string `json:"dpos_proposal_valid_period" yaml:"dpos_proposal_valid_period"` // 提案有效期
 	BlockTimeSeconds        uint64 `json:"block_time_s" yaml:"block_time_s"`                             // 区块间隔时间（秒）
 
-	// 新增：DPoS佣金配置
+	// DPoS佣金配置
 	DPoSCommissionRatio     uint64 `json:"dpos_commission_ratio" yaml:"dpos_commission_ratio"`         // 默认佣金率（基点），验证者未设置时使用
 	DPoSCommissionEffective string `json:"dpos_commission_effective" yaml:"dpos_commission_effective"` // 佣金生效周期（如"21d"）
 

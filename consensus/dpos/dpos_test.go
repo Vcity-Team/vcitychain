@@ -25,7 +25,7 @@ func TestDPoSConfig(t *testing.T) {
 	// 测试默认配置
 	config := DefaultDPoSConfig()
 	assert.NotNil(t, config)
-	assert.Equal(t, uint64(21), config.DelegateCount)
+	assert.Equal(t, uint64(21), config.DPoSValidatorsCount)
 	assert.Equal(t, common.Duration{Duration: 15 * time.Second}, config.BlockTime)
 
 	// 测试配置验证
@@ -330,7 +330,7 @@ func BenchmarkBatchProcessing(b *testing.B) {
 // 创建测试DPoS实例
 func createTestDPoS(t interface{}) *DPoS {
 	config := DefaultDPoSConfig()
-	config.DelegateCount = 10
+	config.DPoSValidatorsCount = 10
 	config.BlockTime = common.Duration{Duration: 1 * time.Second}
 
 	dpos := &DPoS{

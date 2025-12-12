@@ -36,7 +36,6 @@ type GenesisDelegate struct {
 type GenesisEngine struct {
 	Dpos struct {
 		BlockTime        int64             `json:"blockTime"`
-		DelegateCount    int64             `json:"delegateCount"`
 		EpochSize        int64             `json:"epochSize"`
 		InitialDelegates []GenesisDelegate `json:"initialDelegates"`
 	} `json:"dpos"`
@@ -657,23 +656,12 @@ func (ni *NetworkIntegration) createTopics() error {
 
 // tryGetExistingTopics 尝试获取现有主题
 func (ni *NetworkIntegration) tryGetExistingTopics() error {
-	ni.logger.Info("尝试获取现有主题")
-
-	// 由于网络服务器没有GetTopic方法，我们使用一个更简单的策略
-	// 尝试创建主题，如果失败则使用回退模式
-	ni.logger.Info("无法直接获取现有主题，使用回退模式")
-
-	// 设置一个标志，表示我们处于回退模式
-	ni.logger.Warn("网络集成将使用回退模式，某些功能可能受限")
-
-	// 在这种情况下，我们仍然可以尝试创建主题
-	// 如果主题已存在，createTopics会处理这种情况
 	if err := ni.createTopics(); err != nil {
-		ni.logger.Error("回退模式下的主题创建也失败", "error", err)
+		ni.logger.Error("主题创建也失败", "error", err)
 		return err
 	}
 
-	ni.logger.Info("回退模式下成功创建或使用现有主题")
+	ni.logger.Info("成功创建或使用现有主题")
 	return nil
 }
 

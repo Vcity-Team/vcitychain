@@ -2036,17 +2036,13 @@ func (r *dposRuntime) isValidator() bool {
 	}
 
 	// 当前节点不在截取后的验证者集合中
-	maxValidators := int(r.config.DelegateCount)
-	if dposBackend.config != nil && dposBackend.config.DPoSValidatorsCount > 0 {
-		maxValidators = int(dposBackend.config.DPoSValidatorsCount)
-	}
+	maxValidators := int(dposBackend.config.DPoSValidatorsCount)
 
 	// 详细调试信息
 	r.logger.Info("❌ 当前节点不在数据库验证者集合中（可能权重不足被截取）",
 		"address", currentAddr.String(),
 		"maxValidators", maxValidators,
 		"dbValidatorsCount", len(dbValidators),
-		"configDelegateCount", r.config.DelegateCount,
 		"configDPoSValidatorsCount", dposBackend.config.DPoSValidatorsCount)
 
 	// 显示所有验证者的详细信息
@@ -2112,12 +2108,7 @@ func (r *dposRuntime) generateSignatureResponse(request *SignatureRequest) error
 	// 优先使用网络集成层发送消息
 	if r.networkIntegration != nil {
 		if err := r.networkIntegration.BroadcastSignatureResponse(internalResponse); err != nil {
-			r.logger.Warn("通过网络集成层发送签名响应失败，使用回退模式", "error", err)
-			// 回退到日志记录
-			r.logger.Debug("生成签名响应（回退模式）",
-				"validator", types.Address(r.config.Key.Address()).String(),
-				"checkpointHash", request.CheckpointHash.String(),
-				"signatureLength", len(signatureBytes))
+			r.logger.Warn("通过网络集成层发送签名响应失败", "error", err)
 			return nil
 		}
 

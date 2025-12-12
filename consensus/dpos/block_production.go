@@ -132,9 +132,11 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 					"⏭️ 不应该出块的原因分析",
 					"shouldProduceBlockNow", shouldProduce,
 					"actualDelegatesCount", len(r.delegates),
-					"configDelegateCount", func() uint64 {
-						if r.config != nil {
-							return r.config.DelegateCount
+					"configDPoSValidatorsCount", func() uint64 {
+						if r.config != nil && r.config.dposBackend != nil {
+							if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
+								return dposInstance.config.DPoSValidatorsCount
+							}
 						}
 						return 0
 					}(),

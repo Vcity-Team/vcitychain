@@ -277,8 +277,6 @@ func (a *account) reset(nonce uint64, promoteCh chan<- promoteRequest, addr type
 				return nonces
 			}())
 	}
-
-	// 当 newNonce <= oldNonce 时（例如：reorg 导致链上 nonce 回退，或初始化时状态不一致）
 	// 只需要清理 promoted 队列，但必须更新 nextNonce 以与链上状态同步
 	// 注意：enqueued 队列中的交易（nonce >= oldNonce）仍然有效，会在链上 nonce 增长时被 promote
 	if nonce <= oldNonce {

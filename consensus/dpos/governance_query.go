@@ -76,7 +76,6 @@ func (d *DPoS) GetVotableCurrentParameters() map[string]*ParameterInfo {
 					d.logger.Debug("从数据库读取参数值",
 						"param", name,
 						"value", dbValue)
-					// 更新缓存
 					d.parameterValuesMutex.Lock()
 					d.parameterCurrentValues[name] = dbValue
 					d.parameterValuesMutex.Unlock()
@@ -88,21 +87,21 @@ func (d *DPoS) GetVotableCurrentParameters() map[string]*ParameterInfo {
 							"param", name,
 							"value", defaultValue)
 					} else {
-							// 最后尝试使用 getCurrentParameterValue（会再次检查数据库和配置）
-							if defaultValue, err = d.getCurrentParameterValue(name); err == nil {
-								infoCopy.CurrentValue = defaultValue
-								d.logger.Debug("通过getCurrentParameterValue读取参数值",
-									"param", name,
-									"value", defaultValue)
-							} else {
-								d.logger.Debug("无法获取参数值",
-									"param", name,
-									"cacheSize", len(d.parameterCurrentValues))
+						// 最后尝试使用 getCurrentParameterValue（会再次检查数据库和配置）
+						if defaultValue, err = d.getCurrentParameterValue(name); err == nil {
+							infoCopy.CurrentValue = defaultValue
+							d.logger.Debug("通过getCurrentParameterValue读取参数值",
+								"param", name,
+								"value", defaultValue)
+						} else {
+							d.logger.Debug("无法获取参数值",
+								"param", name,
+								"cacheSize", len(d.parameterCurrentValues))
 						}
 					}
 				}
 			} else {
-				// ParameterStore 不可用，回退到配置文件
+				// ParameterStore 不可用，读取配置文件
 				if defaultValue, err = d.getConfigParameterValue(name); err == nil {
 					infoCopy.CurrentValue = defaultValue
 					d.logger.Debug("从配置文件读取参数值（ParameterStore不可用）",

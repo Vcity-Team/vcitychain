@@ -326,9 +326,6 @@ func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) er
 
 	// 5. 应用配置限制
 	maxValidators := d.config.DPoSValidatorsCount
-	if maxValidators == 0 {
-		maxValidators = d.config.DelegateCount
-	}
 
 	d.logger.Info("🎯 验证者截取逻辑",
 		"maxValidators", maxValidators,
@@ -440,9 +437,6 @@ func (d *DPoS) reloadValidatorsAfterRecovery() error {
 
 	// 4. 应用配置限制
 	maxValidators := int(d.config.DPoSValidatorsCount)
-	if maxValidators == 0 {
-		maxValidators = int(d.config.DelegateCount)
-	}
 
 	var finalValidators validator.AccountSet
 	if len(activeValidators) <= maxValidators {

@@ -442,12 +442,12 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		return fmt.Errorf("rewardDistributor is nil")
 	}
 
-	// 3. 使用 Reward 管理器计算奖励（优先模块，如不可用回退到本地分发器）
+	// 3. 使用 Reward 管理器计算奖励
 	var rewards map[types.Address]*big.Int
 	if d.reward != nil {
 		moduleRewards, err := d.reward.CalculateRewards(epochNumber)
 		if err != nil {
-			d.logger.Warn("⚠️ 模块化奖励计算失败，回退到本地奖励分发器",
+			d.logger.Warn("⚠️ 模块化奖励计算失败",
 				"epoch", epochNumber,
 				"error", err)
 		} else {
@@ -592,7 +592,7 @@ func (d *DPoS) calculateAndRecordEpochRewards(epochNumber uint64) error {
 	if d.reward != nil {
 		moduleRewards, err := d.reward.CalculateRewards(epochNumber)
 		if err != nil {
-			d.logger.Warn("⚠️ 模块化奖励计算失败，回退到本地奖励分发器",
+			d.logger.Warn("⚠️ 模块化奖励计算失败",
 				"epoch", epochNumber,
 				"error", err)
 		} else {

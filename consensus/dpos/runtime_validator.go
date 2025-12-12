@@ -273,20 +273,23 @@ func (r *dposRuntime) initializeDelegates() error {
 			return fmt.Errorf("failed to get current delegates from backend: %w", err)
 		}
 
-		// 应用 DelegateCount 限制，只取前N个受托人
-		if r.config != nil && r.config.DelegateCount > 0 {
-			maxDelegates := int(r.config.DelegateCount)
+		// 应用 DPoSValidatorsCount 限制，只取前N个受托人
+		maxDelegates := 0
+		if dposInstance, ok := r.backend.(*DPoS); ok && dposInstance != nil && dposInstance.config != nil {
+			maxDelegates = int(dposInstance.config.DPoSValidatorsCount)
+		}
+		if maxDelegates > 0 {
 			originalCount := len(delegates)
 			if len(delegates) > maxDelegates {
 				delegates = delegates[:maxDelegates]
 				r.logger.Info("🎯 runtime初始化：限制受托人数量为前N个",
 					"originalCount", originalCount,
 					"limitedCount", maxDelegates,
-					"configDelegateCount", r.config.DelegateCount)
+					"configDPoSValidatorsCount", maxDelegates)
 			} else {
 				r.logger.Debug("🎯 runtime初始化：受托人数量未超过限制",
 					"actualCount", originalCount,
-					"configDelegateCount", r.config.DelegateCount)
+					"configDPoSValidatorsCount", maxDelegates)
 			}
 		}
 
@@ -311,9 +314,13 @@ func (r *dposRuntime) initializeDelegates() error {
 
 		// 按voterpower排序并截取前N个验证者
 		if len(r.delegates) > 0 {
+			maxDelegates := 0
+			if dposInstance, ok := r.backend.(*DPoS); ok && dposInstance != nil && dposInstance.config != nil {
+				maxDelegates = int(dposInstance.config.DPoSValidatorsCount)
+			}
 			r.logger.Info("🔍 开始按voterpower排序并截取前N个验证者",
 				"originalCount", len(r.delegates),
-				"configDelegateCount", r.config.DelegateCount)
+				"configDPoSValidatorsCount", maxDelegates)
 
 			// 按标准化规则排序，确保所有节点完全一致
 			sort.Slice(r.delegates, func(i, j int) bool {
@@ -326,15 +333,16 @@ func (r *dposRuntime) initializeDelegates() error {
 				return bytes.Compare(r.delegates[i].Address[:], r.delegates[j].Address[:]) < 0
 			})
 
-			// 截取前N个验证者
-			maxDelegates := int(r.config.DelegateCount)
-			originalCount := len(r.delegates)
-			if len(r.delegates) > maxDelegates {
-				r.delegates = r.delegates[:maxDelegates]
-				r.logger.Info("🎯 限制验证者数量为前N个",
-					"originalCount", originalCount,
-					"limitedCount", maxDelegates,
-					"configDelegateCount", r.config.DelegateCount)
+			// 截取前N个验证者（使用上面已定义的 maxDelegates）
+			if maxDelegates > 0 {
+				originalCount := len(r.delegates)
+				if len(r.delegates) > maxDelegates {
+					r.delegates = r.delegates[:maxDelegates]
+					r.logger.Info("🎯 限制验证者数量为前N个",
+						"originalCount", originalCount,
+						"limitedCount", maxDelegates,
+						"configDPoSValidatorsCount", maxDelegates)
+				}
 			}
 
 			r.logger.Info("✅ 验证者排序和截取完成",

@@ -134,12 +134,6 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 
 	// 应用限制（如果配置了）
 	maxValidators := int(d.config.DPoSValidatorsCount)
-	configSource := "DPoSValidatorsCount"
-	if maxValidators == 0 {
-		// 如果 DPoSValidatorsCount 为0，回退到 DelegateCount
-		maxValidators = int(d.config.DelegateCount)
-		configSource = "DelegateCount"
-	}
 
 	// 添加调试日志，确保配置正确读取（使用限频日志避免刷屏）
 	if maxValidators > 0 && len(validators) > maxValidators {
@@ -147,22 +141,19 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 			"🔍 [GetSortedValidatorsWithLimit] 截取验证者",
 			"originalCount", len(validators),
 			"maxValidators", maxValidators,
-			"configSource", configSource,
-			"DPoSValidatorsCount", d.config.DPoSValidatorsCount,
-			"DelegateCount", d.config.DelegateCount)
+			"DPoSValidatorsCount", d.config.DPoSValidatorsCount)
 		validators = validators[:maxValidators]
 	} else if maxValidators == 0 {
 		d.logOnceWithInterval("get_sorted_validators_zero_config", 10*time.Second, "warn",
 			"⚠️ [GetSortedValidatorsWithLimit] 配置为0，不截取验证者",
 			"originalCount", len(validators),
-			"DPoSValidatorsCount", d.config.DPoSValidatorsCount,
-			"DelegateCount", d.config.DelegateCount)
+			"DPoSValidatorsCount", d.config.DPoSValidatorsCount)
 	} else if len(validators) <= maxValidators {
 		d.logOnceWithInterval("get_sorted_validators_no_truncate", 30*time.Second, "debug",
 			"✅ [GetSortedValidatorsWithLimit] 验证者数量未超过限制，无需截取",
 			"originalCount", len(validators),
 			"maxValidators", maxValidators,
-			"configSource", configSource)
+			"DPoSValidatorsCount", d.config.DPoSValidatorsCount)
 	}
 
 	return validators, nil

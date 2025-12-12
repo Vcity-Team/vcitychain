@@ -86,7 +86,6 @@ type runtimeConfig struct {
 	numBlockConfirmations uint64
 	consensusConfig       *consensus.Config
 	// DPoS specific configuration
-	DelegateCount    uint64
 	InitialDelegates []*validator.GenesisValidator
 	ValidatorsCount  uint64          // 新增：DPoS验证者数量配置
 	BlockTime        common.Duration // 新增：区块时间配置

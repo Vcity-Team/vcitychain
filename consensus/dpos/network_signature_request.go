@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Vcity-Team/vcitychain/types"
 	dposProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
+	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -23,18 +23,14 @@ func (r *dposRuntime) listenForSignatureRequests(ctx context.Context) {
 	topic, err := r.getSignatureRequestTopic()
 	if err != nil {
 		r.logger.Warn("failed to get signature request topic, using fallback", "error", err)
-		r.logger.Info("监听签名请求（回退模式）")
 		<-ctx.Done()
-		r.logger.Debug("签名请求监听器停止（回退模式）")
 		return
 	}
 
 	// 订阅主题
 	if err := topic.Subscribe(r.handleSignatureRequestMessage); err != nil {
 		r.logger.Warn("failed to subscribe to signature request topic, using fallback", "error", err)
-		r.logger.Info("监听签名请求（回退模式）")
 		<-ctx.Done()
-		r.logger.Debug("签名请求监听器停止（回退模式）")
 		return
 	}
 
@@ -232,4 +228,3 @@ func (r *dposRuntime) HandleSignatureRequest(request *SignatureRequest) error {
 		return fmt.Errorf("too many concurrent signature requests")
 	}
 }
-

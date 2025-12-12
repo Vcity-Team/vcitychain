@@ -1084,7 +1084,7 @@ func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx, 
 		return delegates[i].VotingPower.Cmp(delegates[j].VotingPower) > 0
 	})
 
-	// 关键修复：应用与出块时相同的DelegateCount限制
+	// 关键修复：应用与出块时相同的DPoSValidatorsCount限制
 	// 确保验证时使用的受托人数量与出块时完全一致
 	if delegateCount > 0 {
 		maxDelegates := int(delegateCount)

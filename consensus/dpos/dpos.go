@@ -209,9 +209,6 @@ type dposBackend interface {
 
 // DPoSConfig 配置结构
 type DPoSConfig struct {
-	// 受托人数量
-	DelegateCount uint64 `json:"delegateCount"`
-
 	// 区块时间
 	BlockTime common.Duration `json:"blockTime"`
 
@@ -803,20 +800,16 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Info("🔍 找到 dposValidatorsCount 配置", "type", fmt.Sprintf("%T", validatorsCountValue), "value", validatorsCountValue)
 		switch countVal := validatorsCountValue.(type) {
 		case float64:
-			vcity_dpos.config.DelegateCount = uint64(countVal)
 			vcity_dpos.config.DPoSValidatorsCount = uint64(countVal)
 			logger.Info("👥 设置验证者数量", "count", vcity_dpos.config.DPoSValidatorsCount)
 		case int:
-			vcity_dpos.config.DelegateCount = uint64(countVal)
 			vcity_dpos.config.DPoSValidatorsCount = uint64(countVal)
 			logger.Info("👥 设置验证者数量 (int)", "count", vcity_dpos.config.DPoSValidatorsCount)
 		case uint64:
-			vcity_dpos.config.DelegateCount = countVal
 			vcity_dpos.config.DPoSValidatorsCount = countVal
 			logger.Info("👥 设置验证者数量 (uint64)", "count", vcity_dpos.config.DPoSValidatorsCount)
 		case string:
 			if parsed, err := strconv.ParseUint(countVal, 10, 64); err == nil {
-				vcity_dpos.config.DelegateCount = parsed
 				vcity_dpos.config.DPoSValidatorsCount = parsed
 				logger.Info("👥 设置验证者数量 (string)", "count", vcity_dpos.config.DPoSValidatorsCount)
 			} else {
@@ -1272,7 +1265,6 @@ func (d *DPoS) Initialize() error {
 		blockchain:       d.blockchain,
 		dposBackend:      d,
 		txPool:           d.txPool,
-		DelegateCount:    d.config.DelegateCount,
 		InitialDelegates: d.config.InitialDelegates,
 		blockScheduler:   d.blockScheduler, // 设置固定时间窗口调度器
 		BlockTime:        d.config.BlockTime,
@@ -2011,7 +2003,7 @@ func (d *DPoS) GetMetrics() *DPoSMetrics {
 // DefaultDPoSConfig 返回默认配置
 func DefaultDPoSConfig() *DPoSConfig {
 	return &DPoSConfig{
-		DelegateCount:             21,
+		DPoSValidatorsCount:       21,
 		BlockTime:                 common.Duration{Duration: 15 * time.Second},
 		RoundTime:                 common.Duration{Duration: 30 * time.Second},
 		VoteLockTime:              86400,               // 24 hours
@@ -2033,8 +2025,8 @@ func (c *DPoSConfig) Validate() error {
 	if c.RoundTime.Duration <= 0 {
 		return fmt.Errorf("round_time must be positive")
 	}
-	if c.DelegateCount == 0 {
-		return fmt.Errorf("delegate_count must be positive")
+	if c.DPoSValidatorsCount == 0 {
+		return fmt.Errorf("dpos_validators_count must be positive")
 	}
 
 	// 验证经济系统配置
@@ -2050,14 +2042,14 @@ func (c *DPoSConfig) Validate() error {
 // GetConfigSummary 获取配置摘要
 func (c *DPoSConfig) GetConfigSummary() map[string]interface{} {
 	return map[string]interface{}{
-		"delegate_count": c.DelegateCount,
-		"block_time":     c.BlockTime.String(),
-		"round_time":     c.RoundTime.String(),
-		"vote_lock_time": c.VoteLockTime,
-		"reward_ratio":   c.RewardRatio,
-		"epoch_duration": c.EpochDuration.String(),
-		"reward_account": c.RewardAccount.String(),
-		"reward_amount":  c.RewardAmount.String(),
+		"dpos_validators_count": c.DPoSValidatorsCount,
+		"block_time":            c.BlockTime.String(),
+		"round_time":            c.RoundTime.String(),
+		"vote_lock_time":        c.VoteLockTime,
+		"reward_ratio":          c.RewardRatio,
+		"epoch_duration":        c.EpochDuration.String(),
+		"reward_account":        c.RewardAccount.String(),
+		"reward_amount":         c.RewardAmount.String(),
 	}
 }
 
