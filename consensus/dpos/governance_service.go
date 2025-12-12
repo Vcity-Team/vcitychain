@@ -61,7 +61,7 @@ func (d *DPoS) governanceLoadScheduled(epoch uint64) []*ParameterProposal {
 	d.logger.Debug("🔍🔍🔍 [governanceLoadScheduled] 开始查询待应用提案",
 		"epoch", epoch,
 		"说明", "查询effectiveEpoch等于此值的待应用提案")
-
+	
 	mgr := d.ensureGovernanceModule()
 	if mgr == nil {
 		d.logger.Warn("⚠️ [governanceLoadScheduled] GovernanceManager不可用", "epoch", epoch)

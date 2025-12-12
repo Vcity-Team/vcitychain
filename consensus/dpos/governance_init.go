@@ -91,21 +91,21 @@ func (d *DPoS) initializeParameterCache() error {
 			"param", paramName,
 			"error", err)
 
-		// 数据库没有值，使用配置文件默认值并保存到数据库
+			// 数据库没有值，使用配置文件默认值并保存到数据库
 		if defaultValue, cfgErr := d.getConfigParameterValue(paramName); cfgErr == nil {
-			d.parameterCurrentValues[paramName] = defaultValue
+				d.parameterCurrentValues[paramName] = defaultValue
 			d.logger.Info("Parameter cache: config value",
 				"param", paramName,
 				"value", defaultValue)
 			saveErr := d.state.ParameterStore.SaveParameterValue(paramName, defaultValue, "config")
-			d.logger.Info("Loaded parameter from config",
-				"param", paramName,
+				d.logger.Info("Loaded parameter from config",
+					"param", paramName,
 				"value", defaultValue,
 				"saveError", saveErr)
 			continue
-		} else {
-			d.logger.Error("Failed to get config value for parameter",
-				"param", paramName,
+			} else {
+				d.logger.Error("Failed to get config value for parameter",
+					"param", paramName,
 				"error", cfgErr)
 		}
 	}

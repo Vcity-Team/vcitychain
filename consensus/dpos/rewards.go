@@ -532,9 +532,6 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 
 	// 在epoch结束区块准备奖励分发信息（不直接执行状态更新）
 	if len(stateUpdates) > 0 {
-		d.logger.Info("🎯 在epoch结束区块准备奖励分发信息",
-			"epoch", epochNumber,
-			"updateCount", len(stateUpdates))
 
 		// 计算总奖励金额
 		totalReward := big.NewInt(0)
@@ -554,10 +551,6 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		for address, reward := range stateUpdates {
 			d.pendingRewardDistribution.Rewards[address.String()] = reward
 		}
-
-		d.logger.Info("✅ 奖励分发信息已准备完成，等待buildBlock处理",
-			"epoch", epochNumber,
-			"updateCount", len(stateUpdates))
 	} else {
 		d.logger.Warn("⚠️ 没有奖励分发信息", "epoch", epochNumber)
 	}
@@ -644,4 +637,3 @@ func (d *DPoS) getBlocksProducedInEpoch(address types.Address, epochNumber uint6
 	// 简化实现：返回固定值，实际应该从区块跟踪器中获取
 	return 8 // 假设每个验证者生产8个区块
 }
-

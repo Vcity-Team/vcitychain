@@ -110,7 +110,6 @@ func (p *blockchainWrapper) CurrentHeader() *types.Header {
 
 // CommitBlock commits a block to the chain
 func (p *blockchainWrapper) CommitBlock(block *types.FullBlock) error {
-	p.logger.Info("🔄 [CommitBlock] 开始提交区块到链上", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String()[:16], "txs", len(block.Block.Transactions))
 	// 注意：WriteFullBlock 内部已经有写锁跟踪日志
 	err := p.blockchain.WriteFullBlock(block, consensusSource)
 	if err != nil {
@@ -841,7 +840,7 @@ func (p *blockchainWrapper) processSlashingInBlock(block *types.Block, transitio
 	}
 
 	if extra.SlashingInfo == nil {
-		p.logger.Info("ℹ️ ExtraData中没有消减信息，跳过处理",
+		p.logger.Info("ℹ️ ℹ️ ℹ️ ℹ️ ExtraData中没有消减信息，跳过处理",
 			"blockNumber", block.Number())
 		return nil
 	}
@@ -852,14 +851,14 @@ func (p *blockchainWrapper) processSlashingInBlock(block *types.Block, transitio
 	}
 
 	slashingInfo := extra.SlashingInfo
-	p.logger.Info("🔨 开始执行故障消减",
+	p.logger.Info("🔨 🔨 🔨 🔨 开始执行故障消减",
 		"blockNumber", block.Number(),
 		"epochNumber", slashingInfo.EpochNumber,
 		"slashingsCount", len(slashingInfo.Slashings))
 
 	// 对每个消减操作执行消减
 	for i, slashingOp := range slashingInfo.Slashings {
-		p.logger.Info("🔨 执行消减操作",
+		p.logger.Info("🔨 🔨 🔨 🔨 执行消减操作",
 			"blockNumber", block.Number(),
 			"index", i,
 			"validator", slashingOp.ValidatorAddr.String(),
@@ -868,8 +867,6 @@ func (p *blockchainWrapper) processSlashingInBlock(block *types.Block, transitio
 			"missedBlocksPercentage", slashingOp.MissedBlocksPercentage,
 			"reason", slashingOp.Reason)
 
-		// executeSlashing 内部已有幂等性检查（基于 blockNumber + validatorAddr）
-		// 如果已执行过，会直接返回 nil，不会重复执行
 		if err := dposInstance.executeSlashing(
 			slashingOp.ValidatorAddr,
 			slashingOp.SlashRate,

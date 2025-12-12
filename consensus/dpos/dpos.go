@@ -16,6 +16,7 @@ import (
 
 	"github.com/Vcity-Team/vcitychain/blockchain"
 	"github.com/Vcity-Team/vcitychain/consensus"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/bitmap"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/core"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/wallet"
@@ -1633,6 +1634,37 @@ func (d *DPoS) GetState() *State {
 	d.lock.RLock()
 	defer d.lock.RUnlock()
 	return d.state
+}
+
+// GetSignatureCountFromExtraData 从ExtraData解析签名数
+// 这个接口方法用于blockchain包获取签名数，避免循环依赖
+func (d *DPoS) GetSignatureCountFromExtraData(extraData []byte) int {
+	if len(extraData) == 0 {
+		return 0
+	}
+
+	// 解析ExtraData
+	extra, err := GetDposExtra(extraData)
+	if err != nil || extra == nil {
+		return 0
+	}
+
+	// 检查Committed签名是否存在
+	if extra.Committed == nil || len(extra.Committed.Bitmap) == 0 {
+		return 0
+	}
+
+	// 计算Bitmap中设置的位数（签名数）
+	signatureCount := 0
+	bmp := bitmap.Bitmap(extra.Committed.Bitmap)
+	// 遍历可能的验证者索引（最多检查256个，因为bitmap通常不会超过这个范围）
+	for i := uint64(0); i < 256; i++ {
+		if bmp.IsSet(i) {
+			signatureCount++
+		}
+	}
+
+	return signatureCount
 }
 
 // 初始化性能优化组件

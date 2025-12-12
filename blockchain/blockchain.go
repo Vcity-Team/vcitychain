@@ -1125,6 +1125,19 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 		}
 	}
 
+	// 尝试从ExtraData获取签名数（仅对DPoS共识）
+	if source == "consensus" && b.consensus != nil {
+		// 通过接口获取签名数，避免循环依赖
+		type signatureCountGetter interface {
+			GetSignatureCountFromExtraData(extraData []byte) int
+		}
+		if sigGetter, ok := b.consensus.(signatureCountGetter); ok {
+			if signatureCount := sigGetter.GetSignatureCountFromExtraData(header.ExtraData); signatureCount > 0 {
+				logArgs = append(logArgs, "signaturesCount", signatureCount)
+			}
+		}
+	}
+
 	b.logger.Info(logMessage, logArgs...)
 
 	// 检查写入的区块状态根

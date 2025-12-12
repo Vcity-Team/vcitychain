@@ -1653,7 +1653,7 @@ func (r *dposRuntime) getActiveValidatorsCount() int {
 	if r.config != nil && r.config.dposBackend != nil {
 		dposInstance, ok := r.config.dposBackend.(*DPoS)
 		if ok && dposInstance != nil {
-			dbValidators, err := dposInstance.GetSortedValidatorsWithLimit()
+			dbValidators, err := dposInstance.GetSortedValidatorsWithLimitFilterFaulty()
 			if err != nil {
 				r.logger.Error("⚠️ 从数据库读取验证者失败", "error", err)
 				return 0

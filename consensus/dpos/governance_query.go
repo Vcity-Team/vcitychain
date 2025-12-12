@@ -88,16 +88,16 @@ func (d *DPoS) GetVotableCurrentParameters() map[string]*ParameterInfo {
 							"param", name,
 							"value", defaultValue)
 					} else {
-						// 最后尝试使用 getCurrentParameterValue（会再次检查数据库和配置）
-						if defaultValue, err = d.getCurrentParameterValue(name); err == nil {
-							infoCopy.CurrentValue = defaultValue
-							d.logger.Debug("通过getCurrentParameterValue读取参数值",
-								"param", name,
-								"value", defaultValue)
-						} else {
-							d.logger.Debug("无法获取参数值",
-								"param", name,
-								"cacheSize", len(d.parameterCurrentValues))
+							// 最后尝试使用 getCurrentParameterValue（会再次检查数据库和配置）
+							if defaultValue, err = d.getCurrentParameterValue(name); err == nil {
+								infoCopy.CurrentValue = defaultValue
+								d.logger.Debug("通过getCurrentParameterValue读取参数值",
+									"param", name,
+									"value", defaultValue)
+							} else {
+								d.logger.Debug("无法获取参数值",
+									"param", name,
+									"cacheSize", len(d.parameterCurrentValues))
 						}
 					}
 				}

@@ -112,6 +112,29 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 					}()
 				}
 			} else {
+				// 获取从 ExtraData 读取的验证者集合
+				validatorsFromExtra := validator.AccountSet{}
+				validatorsSource := "unknown"
+				if r.config != nil && r.config.blockchain != nil {
+					currentBlock := r.config.blockchain.CurrentHeader()
+					if currentBlock != nil {
+						if r.config.dposBackend != nil {
+							if dposInstance, ok := r.config.dposBackend.(*DPoS); ok && dposInstance != nil {
+								if validators, err := dposInstance.getValidatorsFromCurrentBlockExtraData(currentBlock); err == nil && len(validators) > 0 {
+									validatorsFromExtra = validators
+									validatorsSource = "extra_data"
+								} else {
+									// 回退到实时查询
+									if validators, err := dposInstance.GetSortedValidatorsWithLimitFilterFaulty(); err == nil && len(validators) > 0 {
+										validatorsFromExtra = validators
+										validatorsSource = "realtime_query_filter_faulty"
+									}
+								}
+							}
+						}
+					}
+				}
+
 				// 添加为什么不应该出块的详细日志
 				r.logOnceWithInterval("should_not_produce_debug", 2*time.Second, "debug",
 					"⏭️ 不应该出块的原因分析",
@@ -151,7 +174,16 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 							}
 						}
 						return ""
-					}())
+					}(),
+					"validatorsFromExtra", func() []string {
+						var vs []string
+						for i, v := range validatorsFromExtra {
+							vs = append(vs, fmt.Sprintf("[%d]%s(vp:%s)", i, v.Address.String(), v.VotingPower.String()))
+						}
+						return vs
+					}(),
+					"validatorsFromExtraCount", len(validatorsFromExtra),
+					"validatorsSource", validatorsSource)
 			}
 
 			// 短暂休眠，避免CPU占用过高
@@ -353,7 +385,6 @@ func (r *dposRuntime) produceBlock() error {
 		"note", "包括区块构建和签名收集的总耗时")
 
 	// 检查是否超过slot时间
-	r.logger.Info("🔍 [produceBlock] 开始检查slot和父区块", "blockNumber", nextBlockNumber, "buildStartSlot", buildStartSlot)
 	if r.config.blockScheduler != nil && buildStartSlot >= 0 {
 		now := time.Now()
 		genesisTime := r.config.blockScheduler.GetGenesisTime()
@@ -361,15 +392,6 @@ func (r *dposRuntime) produceBlock() error {
 		timeSinceGenesis := now.Sub(genesisTime)
 		currentSlotAfterBuild := int(timeSinceGenesis / blockWindow)
 		buildDuration := now.Sub(buildStartTime)
-
-		r.logger.Info("🔍 [produceBlock] 开始检查slot超时和变化",
-			"blockNumber", nextBlockNumber,
-			"buildStartSlot", buildStartSlot,
-			"currentSlotAfterBuild", currentSlotAfterBuild,
-			"buildDuration", buildDuration.String(),
-			"blockWindow", blockWindow.String(),
-			"timeSinceGenesis", timeSinceGenesis.String(),
-			"now", now.Format("15:04:05.000000"))
 
 		// 检查构建耗时是否超过slot时间
 		if buildDuration > blockWindow {
@@ -417,12 +439,6 @@ func (r *dposRuntime) produceBlock() error {
 	// 检查父区块是否已变化（防止其他节点已出块导致分叉）
 	if r.config.blockScheduler != nil {
 		currentBlock := r.config.blockchain.CurrentHeader()
-		r.logger.Info("🔍 [produceBlock] 检查父区块是否已变化",
-			"blockNumber", block.Block.Number(),
-			"expectedParentHash", block.Block.Header.ParentHash.String()[:16],
-			"expectedParentNumber", block.Block.Header.Number-1,
-			"currentBlockHash", currentBlock.Hash.String()[:16],
-			"currentBlockNumber", currentBlock.Number)
 
 		if currentBlock.Hash != block.Block.Header.ParentHash {
 			r.logger.Info("⏰ [produceBlock] 区块被丢弃：父区块已变化，其他节点已出块（防止分叉）",
@@ -440,20 +456,10 @@ func (r *dposRuntime) produceBlock() error {
 	}
 
 	// 提交区块（可能需要锁，取决于blockchain的实现）
-	r.logger.Info("🔄 [produceBlock] 准备提交区块", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String()[:16], "txs", len(block.Block.Transactions))
 	if err := r.config.blockchain.CommitBlock(block); err != nil {
 		r.logger.Error("❌ [produceBlock] 区块提交失败", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String(), "error", err)
 		return fmt.Errorf("failed to commit block: %w", err)
 	}
-
-	r.logger.Info("✅ [produceBlock] DPoS区块提交成功",
-		"blockNumber", block.Block.Number(),
-		"blockHash", block.Block.Hash().String()[:16],
-		"txs", len(block.Block.Transactions),
-		"difficulty", block.Block.Header.Difficulty,
-		"gasUsed", block.Block.Header.GasUsed,
-		"timestamp", block.Block.Header.Timestamp,
-		"delegate", r.config.Key.Address().String()[:16])
 
 	// 方案1：只在更新状态时使用写锁（时间很短）
 	if r.config.blockScheduler != nil && currentSlot >= 0 {

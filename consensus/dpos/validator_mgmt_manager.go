@@ -237,9 +237,6 @@ func (d *DPoS) getValidatorsFromCurrentBlockExtraData(header *types.Header) (val
 				IsActive:    v.IsActive,
 			})
 		}
-		d.logger.Debug("✅ 从当前区块ExtraData的Validators读取验证者集合",
-			"blockNumber", header.Number,
-			"validatorsCount", len(validators))
 		return validators, nil
 	}
 
