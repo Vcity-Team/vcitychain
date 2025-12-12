@@ -245,9 +245,9 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 				p.logger.Warn("⚠️ [ProcessBlockExecutor] 无法获取epoch信息", "blockNumber", block.Number())
 			}
 
-			p.logger.Info("🔍 [边界应用提案] 开始查询待应用提案", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "isEpochEndBlock", true, "note", "在epoch结束区块时查询当前epoch的提案")
+			p.logger.Debug("🔍 [边界应用提案] 开始查询待应用提案", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "isEpochEndBlock", true, "note", "在epoch结束区块时查询当前epoch的提案")
 			scheduledProps := dposInstance.governanceLoadScheduled(currentEpoch)
-			p.logger.Info("🔍 [边界应用提案] 查询结果", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "scheduledCount", len(scheduledProps))
+			p.logger.Debug("🔍 [边界应用提案] 查询结果", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "scheduledCount", len(scheduledProps))
 
 			// 去重（按ID）
 			seen := make(map[string]bool)
@@ -466,9 +466,9 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 				currentEpoch = currentEpochMeta.Number
 			}
 
-			p.logger.Info("🔍 [边界应用提案] 开始查询待应用提案", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
+			p.logger.Debug("🔍 [边界应用提案] 开始查询待应用提案", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
 			scheduledProps := dposInstance.governanceLoadScheduled(currentEpoch)
-			p.logger.Info("🔍 [边界应用提案] 查询结果", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "scheduledCount", len(scheduledProps))
+			p.logger.Debug("🔍 [边界应用提案] 查询结果", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "scheduledCount", len(scheduledProps))
 
 			// 去重（按ID）
 			seen := make(map[string]bool)
@@ -942,7 +942,7 @@ func (p *blockchainWrapper) updateNextEpochValidatorsFromLocal(block *types.Bloc
 
 	// 检查并截取：如果ExtraData中的验证者数量超过配置，使用配置截取后的集合
 	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
-		configLimitedValidators, err2 := dposInstance.GetSortedValidatorsWithLimit()
+		/*configLimitedValidators, err2 := dposInstance.GetSortedValidatorsWithLimit()
 		if err2 == nil && len(configLimitedValidators) > 0 {
 			expectedCount := len(configLimitedValidators)
 			if len(nextEpochValidators) != expectedCount {
@@ -952,7 +952,7 @@ func (p *blockchainWrapper) updateNextEpochValidatorsFromLocal(block *types.Bloc
 					"configCount", expectedCount)
 				nextEpochValidators = configLimitedValidators
 			}
-		}
+		}*/
 
 		if err := dposInstance.saveNextEpochValidators(nextEpochValidators); err != nil {
 			p.logger.Error("❌ 保存下一个epoch验证者集合失败",
@@ -960,22 +960,16 @@ func (p *blockchainWrapper) updateNextEpochValidatorsFromLocal(block *types.Bloc
 				"error", err)
 			return fmt.Errorf("failed to save next epoch validators: %w", err)
 		}
+		addrs := make([]string, 0, len(nextEpochValidators))
+		for _, v := range nextEpochValidators {
+			addrs = append(addrs, v.Address.String())
+		}
+		p.logger.Info("ℹ️ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️  block_wrapper 写入下一个epoch验证者集合",
+			"blockNumber", block.Number(),
+			"count", len(nextEpochValidators),
+			"validators", addrs)
 		return nil
 	}
-
-	if p.state == nil || p.state.StakeStore == nil {
-		p.logger.Error("❌ StakeStore不可用",
-			"blockNumber", block.Number())
-		return fmt.Errorf("stake store not available")
-	}
-
-	if err := p.state.StakeStore.SaveEpochValidators(nextEpochValidators); err != nil {
-		p.logger.Error("❌ 保存下一个epoch验证者集合失败",
-			"blockNumber", block.Number(),
-			"error", err)
-		return fmt.Errorf("failed to save next epoch validators: %w", err)
-	}
-
 	return nil
 }
 

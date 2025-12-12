@@ -618,7 +618,7 @@ func (d *DPoS) Start() error {
 		}
 
 		// 详细检查runtime状态
-		d.logger.Info("🔍 DPoS runtime详细状态检查",
+		d.logger.Debug("🔍 DPoS runtime详细状态检查",
 			"resourceMonitorIsNil", d.runtime.resourceMonitor == nil,
 			"goroutineManagerIsNil", func() bool {
 				if d.runtime.resourceMonitor != nil {
@@ -629,7 +629,7 @@ func (d *DPoS) Start() error {
 			"delegatesCount", len(d.runtime.delegates))
 
 		// 启动DPoS运行时
-		d.logger.Info("🚀 调用d.runtime.start()...")
+		d.logger.Debug("🚀 调用d.runtime.start()...")
 		if err := d.runtime.start(); err != nil {
 			d.logger.Error("❌ 启动DPoS runtime失败", "error", err)
 			return fmt.Errorf("failed to start DPoS runtime: %w", err)

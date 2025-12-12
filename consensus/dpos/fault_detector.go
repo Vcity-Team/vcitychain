@@ -63,11 +63,23 @@ func (fd *FaultDetector) DetectFaults(blockNumber uint64) ([]FaultFlagInfo, erro
 	// 4. 检测每个验证者的故障
 	faultFlags := fd.detectValidatorFaults(epochInfo, validators, previousEpochValidatorMap)
 
-	// 5. 收集消减信息（仅针对本次检测的验证者集合）
-	validatorMap := make(map[types.Address]bool, len(validators))
-	for _, v := range validators {
-		validatorMap[v.Address] = true
+	// 5. 收集消减信息：仅针对“本次检测使用的出块者集合”（validators）
+	producerSet := validators
+	if curEpochValidators, err := fd.dposInstance.getValidatorsForEpoch(epochInfo.EpochToCheckNumber); err == nil && len(curEpochValidators) > 0 {
+		producerSet = curEpochValidators
+		fd.logger.Info("ℹ️ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️  slash集合来源: curEpochValidators", "epochToCheck", epochInfo.EpochToCheckNumber, "count", len(producerSet))
 	}
+
+	addrList := make([]string, 0, len(producerSet))
+	validatorMap := make(map[types.Address]bool, len(producerSet))
+	for _, v := range producerSet {
+		validatorMap[v.Address] = true
+		addrList = append(addrList, v.Address.String())
+	}
+	fd.logger.Info("ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ slash收集使用的验证者集合",
+		"epochToCheck", epochInfo.EpochToCheckNumber,
+		"validatorsCount", len(validatorMap),
+		"validators", addrList)
 	fd.slashingCollector.CollectSlashingInfo(faultFlags, epochInfo, validatorMap)
 
 	// 6. 更新epoch

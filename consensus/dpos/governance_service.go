@@ -57,18 +57,18 @@ func (d *DPoS) governanceHydrateProposal(proposalID string) (*ParameterProposal,
 }
 
 func (d *DPoS) governanceLoadScheduled(epoch uint64) []*ParameterProposal {
-	// 添加日志，跟踪传入的epoch参数
-	d.logger.Info("🔍🔍🔍 [governanceLoadScheduled] 开始查询待应用提案",
+	// 降级为DEBUG，避免刷屏
+	d.logger.Debug("🔍🔍🔍 [governanceLoadScheduled] 开始查询待应用提案",
 		"epoch", epoch,
 		"说明", "查询effectiveEpoch等于此值的待应用提案")
-	
+
 	mgr := d.ensureGovernanceModule()
 	if mgr == nil {
 		d.logger.Warn("⚠️ [governanceLoadScheduled] GovernanceManager不可用", "epoch", epoch)
 		return nil
 	}
 	result := mgr.LoadScheduled(epoch)
-	d.logger.Info("🔍🔍🔍 [governanceLoadScheduled] 查询完成",
+	d.logger.Debug("🔍🔍🔍 [governanceLoadScheduled] 查询完成",
 		"epoch", epoch,
 		"resultCount", len(result))
 	return result

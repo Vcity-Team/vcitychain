@@ -778,6 +778,16 @@ func (d *DPoS) saveNextEpochValidators(validators validator.AccountSet) error {
 		return fmt.Errorf("stake store not available")
 	}
 
+	// 记录将要保存的验证者集合，便于定位是否已剔除故障节点
+	addrs := make([]string, 0, len(validators))
+	for _, v := range validators {
+		addrs = append(addrs, v.Address.String())
+	}
+	d.logger.Info("ℹ️ 保存下一个epoch验证者集合到DB",
+		"blockNumber", blockNumber,
+		"count", len(validators),
+		"validators", addrs)
+
 	if err := d.state.StakeStore.SaveEpochValidators(validators); err != nil {
 		d.logger.Error("❌ 保存下一个epoch验证者集合失败", "error", err)
 		return err
@@ -885,7 +895,7 @@ func (d *DPoS) getEpochValidatorsFromDatabase() (validator.AccountSet, error) {
 	if err2 == nil && len(configLimitedValidators) > 0 {
 		expectedCount := len(configLimitedValidators)
 		oldCount := len(validators)
-		
+
 		// 检查数量和内容是否一致
 		needUpdate := oldCount != expectedCount
 		if !needUpdate && oldCount == expectedCount {
@@ -898,7 +908,7 @@ func (d *DPoS) getEpochValidatorsFromDatabase() (validator.AccountSet, error) {
 				}
 			}
 		}
-		
+
 		if needUpdate {
 			// 使用日志频率限制，避免刷屏（只在第一次或间隔10秒后打印）
 			d.logOnceWithInterval("epoch_validators_mismatch", 10*time.Second, "warn",
