@@ -3,7 +3,6 @@ package ibft
 import (
 	"errors"
 	"fmt"
-	"math/big"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/blockchain"
@@ -161,26 +160,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		quorumSizeBlockNum = uint64(readBlockNum)
 	}
 
-	// 新增：从配置中读取DPoS验证者数量
-	var dposValidatorsCount = uint64(4) // 默认值
-	if rawDPoSValidatorsCount, ok := params.Config.Config["dposValidatorsCount"]; ok {
-		readDPoSValidatorsCount, ok := rawDPoSValidatorsCount.(float64)
-		if !ok {
-			return nil, errors.New("invalid type assertion for dposValidatorsCount")
-		}
-		dposValidatorsCount = uint64(readDPoSValidatorsCount)
-	}
-
-	// 新增：从配置中读取DPoS最小质押门槛
-	var dposDelegateThreshold *big.Int = nil
-	if rawDPoSDelegateThreshold, ok := params.Config.Config["dposDelegateThreshold"]; ok {
-		if thresholdStr, ok := rawDPoSDelegateThreshold.(string); ok && thresholdStr != "" {
-			if threshold, ok := new(big.Int).SetString(thresholdStr, 10); ok {
-				dposDelegateThreshold = threshold
-			}
-		}
-	}
-
 	logger := params.Logger.Named("ibft")
 
 	forkManager, err := fork.NewForkManager(
@@ -192,8 +171,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		epochSize,
 		params.Config.Config,
 		params.Config.DataDir, // 新增：数据目录参数
-		dposValidatorsCount,   // 新增：DPoS验证者数量参数（从配置读取）
-		dposDelegateThreshold, // 新增：DPoS最小质押门槛参数（从配置读取）
 		params.Network,        // 新增：网络组件参数
 		params.TxPool,         // 新增：交易池参数
 		params.Config,         // 新增：配置参数

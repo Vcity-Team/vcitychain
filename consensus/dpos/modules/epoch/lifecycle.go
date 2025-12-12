@@ -61,7 +61,7 @@ func (m *lifecycleManager) ProcessBoundary(ctx core.EpochBoundaryContext) (core.
 		return result, fmt.Errorf("next block number is zero")
 	}
 
-	// 🔧 修复：在epoch结束区块时，应该查询当前epoch（即将结束的epoch）的提案
+	// 在epoch结束区块时，应该查询当前epoch（即将结束的epoch）的提案
 	// NextBlockNumber 是下一个区块号，当前epoch结束区块是 NextBlockNumber - 1
 	// 例如：NextBlockNumber=7418（下一个区块），当前epoch结束区块=7417（epoch 3的最后一个区块）
 	// 应该使用 NextBlockNumber - 1 来获取当前epoch，而不是 NextBlockNumber
@@ -70,10 +70,6 @@ func (m *lifecycleManager) ProcessBoundary(ctx core.EpochBoundaryContext) (core.
 		// 使用 NextBlockNumber - 1 来获取当前epoch（即将结束的epoch）
 		// 因为 NextBlockNumber 是下一个区块号，NextBlockNumber - 1 是当前epoch结束区块
 		currentEpoch = m.deps.ResolveEpochNumber(ctx.NextBlockNumber - 1)
-		m.logger.Info("🔍 [ProcessBoundary] 计算当前epoch",
-			"nextBlockNumber", ctx.NextBlockNumber,
-			"currentBlockNumber", ctx.NextBlockNumber-1,
-			"currentEpoch", currentEpoch)
 	}
 
 	// 🔧 调整顺序：先进行故障检测（此时恢复提案还是未应用状态，CheckRecoveryProposal可以找到），

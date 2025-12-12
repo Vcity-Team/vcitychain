@@ -397,12 +397,6 @@ func (d *DPoS) SetPendingEpochEndHeader(header *types.Header) {
 
 	headerCopy := *header
 	d.pendingEpochEndHeader = &headerCopy
-
-	if d.logger != nil {
-		d.logger.Info("📝 缓存epoch结束区块头",
-			"blockNumber", header.Number,
-			"miner", types.BytesToAddress(header.Miner).String())
-	}
 }
 
 // ClearPendingEpochEndHeader 清理缓存，避免跨epoch误用
@@ -415,10 +409,6 @@ func (d *DPoS) ClearPendingEpochEndHeader(blockNumber uint64) {
 	}
 
 	if blockNumber == 0 || d.pendingEpochEndHeader.Number == blockNumber {
-		if d.logger != nil {
-			d.logger.Info("🧹 清空epoch结束区块头缓存",
-				"blockNumber", d.pendingEpochEndHeader.Number)
-		}
 		d.pendingEpochEndHeader = nil
 	}
 }

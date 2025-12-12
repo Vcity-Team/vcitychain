@@ -567,13 +567,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 	isEpochEndBlock = r.isEpochEndBlock(nextBlockNumber)
 	if isEpochEndBlock {
-		r.logger.Info("🎯 EPOCH最后一个区块 + 当前出块者",
-			"blockNumber", nextBlockNumber,
-			"delegate", keyAddr.String()[:16],
-			"isEpochEndBlock", isEpochEndBlock,
-			"isCurrentProducer", true,
-			"timestamp", time.Now().Format("2006-01-02 15:04:05"))
-
 		// 执行奖励分发，传递当前轮次和出块者地址
 		if err := r.executeRewardDistributionForEpochEnd(nextBlockNumber, r.currentRound, keyAddr); err != nil {
 			r.logger.Error("❌ ========== 计算奖励信息失败 ========== ❌",

@@ -79,6 +79,10 @@ func TestNewForkManager(t *testing.T) {
 			"",
 			0,
 			map[string]interface{}{},
+			"",
+			nil,
+			nil,
+			nil,
 		)
 
 		assert.ErrorIs(t, ErrUndefinedIBFTConfig, err)
@@ -111,6 +115,9 @@ func TestNewForkManager(t *testing.T) {
 				"type":           "PoS",
 				"validator_type": "bls",
 			},
+			nil,
+			nil,
+			nil,
 		)
 
 		assert.ErrorIs(t, errTest, err)
@@ -159,6 +166,9 @@ func TestNewForkManager(t *testing.T) {
 				"type":           "PoA",
 				"validator_type": "ecdsa",
 			},
+			nil,
+			nil,
+			nil,
 		)
 
 		assert.NoError(t, err)
@@ -240,6 +250,9 @@ func TestNewForkManager(t *testing.T) {
 				"type":           "PoA",
 				"validator_type": "ecdsa",
 			},
+			nil,
+			nil,
+			nil,
 		)
 
 		assert.NoError(t, err)
@@ -285,6 +298,9 @@ func TestNewForkManager(t *testing.T) {
 				"type":           "PoS",
 				"validator_type": "bls",
 			},
+			nil,
+			nil,
+			nil,
 		)
 
 		assert.NoError(t, err)
