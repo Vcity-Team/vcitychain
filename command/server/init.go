@@ -118,11 +118,6 @@ func (p *serverParams) initDPoSConfig() {
 	}
 
 	// 初始化备用验证者数量
-	p.backupValidatorsCount = p.rawConfig.BackupValidatorsCount
-	if p.backupValidatorsCount == 0 {
-		p.backupValidatorsCount = 10 // 默认值
-	}
-
 	// 初始化提案表决周期
 	p.dposProposalVotePeriod = p.rawConfig.DPoSProposalVotePeriod
 	if p.dposProposalVotePeriod == "" {
@@ -136,6 +131,13 @@ func (p *serverParams) initDPoSConfig() {
 		p.dposProposalValidPeriod = "7d" // 默认7天
 		fmt.Printf("⚠️ DPoSProposalValidPeriod配置为空，使用默认值: %s\n", p.dposProposalValidPeriod)
 	}
+
+	// 漏块率阈值（必须显式配置，不设默认值）
+	p.dposMissedBlocksPercentage = p.rawConfig.DPoSMissedBlocksPercentage
+
+	// 削减率（必须显式配置，不设默认值）
+	p.dposMinorOffenseSlashRate = p.rawConfig.DPoSMinorOffenseSlashRate
+	p.dposSevereOffenseSlashRate = p.rawConfig.DPoSSevereOffenseSlashRate
 }
 
 func (p *serverParams) initBlockGasTarget() error {

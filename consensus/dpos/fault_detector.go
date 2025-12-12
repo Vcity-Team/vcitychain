@@ -40,24 +40,14 @@ func (fd *FaultDetector) DetectFaults(blockNumber uint64) ([]FaultFlagInfo, erro
 	if shouldSkip {
 		return nil, nil
 	}
-
 	// 2. 获取要检测的epoch的验证者集合（应该是上一个epoch的验证者）
-	// 🔧 修复：应该检测上一个epoch的验证者故障，所以获取上一个epoch的验证者集合
 	validators, err := fd.validatorProvider.GetValidatorsForDetection(epochInfo)
 	if err != nil {
 		return nil, err
 	}
-
-	// epochValidators 字段已删除，ExtraData 是唯一数据源
-
 	// 3. 获取上一个epoch的验证者集合，用于判断新加入的验证者
-	// 注意：这里获取的是"上一个epoch"的验证者集合，用于判断哪些验证者是新加入的
 	previousEpochValidators := fd.validatorProvider.GetPreviousEpochValidators(epochInfo.PreviousEpochNumber)
 	previousEpochValidatorMap := fd.validatorProvider.BuildPreviousEpochValidatorMap(previousEpochValidators)
-
-	fd.logger.Info("ℹ️ 上一个epoch验证者映射构建完成",
-		"previousEpoch", epochInfo.PreviousEpochNumber,
-		"validatorCount", len(previousEpochValidatorMap))
 
 	// 4. 检测每个验证者的故障
 	faultFlags := fd.detectValidatorFaults(epochInfo, validators, previousEpochValidatorMap)
@@ -80,7 +70,6 @@ func (fd *FaultDetector) DetectFaults(blockNumber uint64) ([]FaultFlagInfo, erro
 		"validators", addrList)
 	fd.slashingCollector.CollectSlashingInfo(faultFlags, epochInfo, validatorMap)
 
-	// 6. 更新epoch
 	fd.dposInstance.currentEpoch = epochInfo.CurrentEpoch
 
 	return faultFlags, nil

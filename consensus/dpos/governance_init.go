@@ -11,7 +11,6 @@ func (d *DPoS) InitializeGovernance() error {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
-	// 初始化治理相关字段
 	if d.parameterProposals == nil {
 		d.parameterProposals = make(map[string]*ParameterProposal)
 	}
@@ -71,8 +70,6 @@ func (d *DPoS) initializeParameterCache() error {
 	d.logger.Info("Starting parameter cache initialization",
 		"votableParamsCount", len(d.votableParameters))
 
-	d.logger.Info("Parameter cache loop begin")
-
 	// 强制从数据库加载所有参数值
 	for paramName := range d.votableParameters {
 		d.logger.Info("Parameter cache: handling param", "param", paramName)
@@ -91,21 +88,21 @@ func (d *DPoS) initializeParameterCache() error {
 			"param", paramName,
 			"error", err)
 
-			// 数据库没有值，使用配置文件默认值并保存到数据库
+		// 数据库没有值，使用配置文件默认值并保存到数据库
 		if defaultValue, cfgErr := d.getConfigParameterValue(paramName); cfgErr == nil {
-				d.parameterCurrentValues[paramName] = defaultValue
+			d.parameterCurrentValues[paramName] = defaultValue
 			d.logger.Info("Parameter cache: config value",
 				"param", paramName,
 				"value", defaultValue)
 			saveErr := d.state.ParameterStore.SaveParameterValue(paramName, defaultValue, "config")
-				d.logger.Info("Loaded parameter from config",
-					"param", paramName,
+			d.logger.Info("Loaded parameter from config",
+				"param", paramName,
 				"value", defaultValue,
 				"saveError", saveErr)
 			continue
-			} else {
-				d.logger.Error("Failed to get config value for parameter",
-					"param", paramName,
+		} else {
+			d.logger.Error("Failed to get config value for parameter",
+				"param", paramName,
 				"error", cfgErr)
 		}
 	}
@@ -144,7 +141,6 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Description: "Minimum staking threshold (wei)",
 			Category:    "economic",
 		},
-		// 🚫 dpos_epoch_duration 已移除：epoch 时长不应通过提案修改，只能通过配置文件设置
 		"dpos_proposal_vote_period": {
 			Name:        "Proposal Vote Period",
 			Type:        "uint64",
@@ -341,8 +337,7 @@ func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 		if val := d.getConfigUint64("dpos_missed_blocks_percentage", "missed_blocks_percentage"); val > 0 {
 			return val, nil
 		}
-		// 默认值：1000基点 = 10%
-		return uint64(1000), nil
+		return nil, fmt.Errorf("dpos_missed_blocks_percentage 未配置或无效")
 	case "dpos_minor_offense_slash_rate":
 		// 削减参数：轻度违规削减率（从配置读取）
 		if val := d.getConfigUint64("dpos_minor_offense_slash_rate", "minor_offense_slash_rate"); val > 0 {

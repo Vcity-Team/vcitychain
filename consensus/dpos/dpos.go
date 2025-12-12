@@ -778,10 +778,19 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	// 直接使用server层已解析的配置（避免重复解析）
 	logger.Info("🔍 开始解析DPoS经济系统配置", "configKeys", len(params.Config.Config))
 
-	// 调试：打印所有配置键
-	// for key, value := range params.Config.Config {
-	//	logger.Info("🔍 配置键值对", "key", key, "type", fmt.Sprintf("%T", value), "value", value)
-	// }
+	// 临时调试：打印所有配置键值对（帮助确认配置是否正确加载）
+	for key, value := range params.Config.Config {
+		logger.Info("🔍 配置键值对", "key", key, "type", fmt.Sprintf("%T", value), "value", value)
+	}
+
+	// 确保漏块率阈值配置存在且有效
+	if missedBlocksPercentageRaw, exists := getConfigValue("dpos_missed_blocks_percentage", "missed_blocks_percentage"); exists {
+		if percentage, ok := toUint64(missedBlocksPercentageRaw); !ok || percentage == 0 {
+			return nil, fmt.Errorf("invalid dpos_missed_blocks_percentage value: %v", missedBlocksPercentageRaw)
+		}
+	} else {
+		return nil, fmt.Errorf("missing required config: dpos_missed_blocks_percentage")
+	}
 
 	// 解析共识切换高度
 	if consensusSwitchHeight, exists := params.Config.Config["consensusSwitchHeight"]; exists {
@@ -866,13 +875,13 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	}
 
 	if missedBlocksPercentage, exists := getConfigValue("dpos_missed_blocks_percentage", "missed_blocks_percentage"); exists {
-		if percentage, ok := toUint64(missedBlocksPercentage); ok {
+		if percentage, ok := toUint64(missedBlocksPercentage); ok && percentage > 0 {
 			logger.Info("🔨 从配置文件读取漏块率阈值", "percentage", percentage, "基点")
 		} else {
-			logger.Warn("🔨 dpos_missed_blocks_percentage 类型或数值无效", "value", missedBlocksPercentage)
+			return nil, fmt.Errorf("dpos_missed_blocks_percentage 类型或数值无效: %v", missedBlocksPercentage)
 		}
 	} else {
-		logger.Warn("🔨 未找到dpos_missed_blocks_percentage配置，将使用默认值1000 (10%)")
+		return nil, fmt.Errorf("未找到必填配置 dpos_missed_blocks_percentage")
 	}
 
 	if minorOffenseSlashRate, exists := getConfigValue("dpos_minor_offense_slash_rate", "minor_offense_slash_rate"); exists {

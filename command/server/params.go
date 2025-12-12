@@ -100,23 +100,22 @@ type serverParams struct {
 
 	relayer bool
 
-	// 新增：共识切换高度
 	consensusSwitchHeight uint64
 
-	// 新增：DPoS验证者数量
 	dposValidatorsCount uint64
-
-	// 新增：DPoS备用验证者数量
-	backupValidatorsCount uint64
 
 	// 新增：DPoS最小质押门槛
 	dposDelegateThreshold *big.Int
 
-	// DPoS提案周期
+	// 削减相关
+	dposMinorOffenseSlashRate  uint64
+	dposSevereOffenseSlashRate uint64
+
 	dposProposalVotePeriod  string // 提案表决周期
 	dposProposalValidPeriod string // 提案有效期
 
-	// London Fork 配置解析
+	dposMissedBlocksPercentage uint64
+
 	parsedBaseFee      *baseFeeInfo      // 解析后的 BaseFee 信息
 	parsedBurnContract *burnContractInfo // 解析后的 BurnContract 信息
 }
@@ -224,15 +223,10 @@ func (p *serverParams) generateConfig() *server.Config {
 		RestoreFile:        p.getRestoreFilePath(),
 		LogLevel:           hclog.LevelFromString(p.rawConfig.LogLevel),
 
-		// 新增：共识切换高度
 		ConsensusSwitchHeight: p.consensusSwitchHeight,
-		// 新增：DPoS验证者数量
-		DPoSValidatorsCount: p.dposValidatorsCount,
-		// 新增：DPoS备用验证者数量
-		BackupValidatorsCount: p.backupValidatorsCount,
-		// 新增：DPoS最小质押门槛
-		DPoSDelegateThreshold: p.dposDelegateThreshold,
-		// 新增：DPoS经济系统配置
+		DPoSValidatorsCount:   p.dposValidatorsCount,
+
+		DPoSDelegateThreshold:   p.dposDelegateThreshold,
 		DPoSEpochDuration:       p.rawConfig.DPoSEpochDuration,
 		DPoSRewardDistribution:  p.rawConfig.DPoSRewardDistribution,
 		DPoSRewardAmount:        p.rawConfig.DPoSRewardAmount,
@@ -249,5 +243,9 @@ func (p *serverParams) generateConfig() *server.Config {
 		Relayer:               p.relayer,
 		NumBlockConfirmations: p.rawConfig.NumBlockConfirmations,
 		MetricsInterval:       p.rawConfig.MetricsInterval,
+
+		DPoSMissedBlocksPercentage: p.dposMissedBlocksPercentage,
+		DPoSMinorOffenseSlashRate:  p.dposMinorOffenseSlashRate,
+		DPoSSevereOffenseSlashRate: p.dposSevereOffenseSlashRate,
 	}
 }

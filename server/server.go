@@ -146,15 +146,35 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		commissionRatio = 1000 // 如果配置为0，使用默认值 10%
 	}
 
+	if s.config.DPoSMissedBlocksPercentage == 0 {
+		err := fmt.Errorf("dpos_missed_blocks_percentage is required and must be greater than 0")
+		s.logger.Error("❌ 缺少漏块率阈值配置", "error", err)
+		return err
+	}
+
+	if s.config.DPoSMinorOffenseSlashRate == 0 {
+		err := fmt.Errorf("dpos_minor_offense_slash_rate is required and must be greater than 0")
+		s.logger.Error("❌ 缺少轻度违规削减率配置", "error", err)
+		return err
+	}
+
+	if s.config.DPoSSevereOffenseSlashRate == 0 {
+		err := fmt.Errorf("dpos_severe_offense_slash_rate is required and must be greater than 0")
+		s.logger.Error("❌ 缺少严重违规削减率配置", "error", err)
+		return err
+	}
+
 	engineConfig := map[string]interface{}{
-		"consensusSwitchHeight":     float64(s.config.ConsensusSwitchHeight),
-		"dposValidatorsCount":       float64(s.config.DPoSValidatorsCount), // 使用正确的字段名
-		"dposDelegateThreshold":     s.config.DPoSDelegateThreshold,
-		"backupValidatorsCount":     float64(s.config.BackupValidatorsCount),
-		"dpos_min_freeze_period":    s.config.DPoSMinFreezePeriod,    // 最小冻结期（秒）
-		"dpos_unfreeze_lock_period": s.config.DPoSUnfreezeLockPeriod, // 解冻锁定期（秒）
-		"dposCommissionRatio":       float64(commissionRatio),
-		"dpos_commission_ratio":     float64(commissionRatio),
+		"consensusSwitchHeight":          float64(s.config.ConsensusSwitchHeight),
+		"dposValidatorsCount":            float64(s.config.DPoSValidatorsCount), // 使用正确的字段名
+		"dposDelegateThreshold":          s.config.DPoSDelegateThreshold,
+		"dpos_min_freeze_period":         s.config.DPoSMinFreezePeriod,    // 最小冻结期（秒）
+		"dpos_unfreeze_lock_period":      s.config.DPoSUnfreezeLockPeriod, // 解冻锁定期（秒）
+		"dposCommissionRatio":            float64(commissionRatio),
+		"dpos_commission_ratio":          float64(commissionRatio),
+		"dpos_missed_blocks_percentage":  float64(s.config.DPoSMissedBlocksPercentage), // 漏块率阈值（基点）
+		"dpos_minor_offense_slash_rate":  float64(s.config.DPoSMinorOffenseSlashRate),  // 轻度违规削减率（基点）
+		"dpos_severe_offense_slash_rate": float64(s.config.DPoSSevereOffenseSlashRate), // 严重违规削减率（基点）
 	}
 	commissionEffectiveStr := s.config.DPoSCommissionEffective
 	if strings.TrimSpace(commissionEffectiveStr) == "" {
@@ -778,10 +798,29 @@ func (s *Server) setupConsensus() error {
 	// 新增：将DPoS验证者数量添加到engineConfig中
 	engineConfig["dposValidatorsCount"] = float64(s.config.DPoSValidatorsCount)
 
-	// 新增：将备用验证者数量添加到engineConfig中
-	engineConfig["backupValidatorsCount"] = float64(s.config.BackupValidatorsCount)
-
 	// 新增：添加DPoS经济系统配置
+	// 漏块率阈值（必填，不允许为0）
+	if s.config.DPoSMissedBlocksPercentage == 0 {
+		err := fmt.Errorf("dpos_missed_blocks_percentage is required and must be greater than 0")
+		s.logger.Error("❌ 缺少漏块率阈值配置", "error", err)
+		return err
+	}
+	engineConfig["dpos_missed_blocks_percentage"] = float64(s.config.DPoSMissedBlocksPercentage)
+
+	if s.config.DPoSMinorOffenseSlashRate == 0 {
+		err := fmt.Errorf("dpos_minor_offense_slash_rate is required and must be greater than 0")
+		s.logger.Error("❌ 缺少轻度违规削减率配置", "error", err)
+		return err
+	}
+	engineConfig["dpos_minor_offense_slash_rate"] = float64(s.config.DPoSMinorOffenseSlashRate)
+
+	if s.config.DPoSSevereOffenseSlashRate == 0 {
+		err := fmt.Errorf("dpos_severe_offense_slash_rate is required and must be greater than 0")
+		s.logger.Error("❌ 缺少严重违规削减率配置", "error", err)
+		return err
+	}
+	engineConfig["dpos_severe_offense_slash_rate"] = float64(s.config.DPoSSevereOffenseSlashRate)
+
 	// 从YAML配置中获取epoch duration
 	if epochDurationStr := s.config.DPoSEpochDuration; epochDurationStr != "" {
 		if epochDuration, err := time.ParseDuration(epochDurationStr); err == nil {
@@ -1418,7 +1457,6 @@ func (s *Server) createDPoSEngine() (consensus.Consensus, error) {
 	engineConfig := map[string]interface{}{
 		"consensusSwitchHeight": float64(s.config.ConsensusSwitchHeight),
 		"dposValidatorsCount":   float64(s.config.DPoSValidatorsCount),
-		"backupValidatorsCount": float64(s.config.BackupValidatorsCount),
 	}
 
 	config := &consensus.Config{

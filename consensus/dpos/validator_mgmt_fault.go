@@ -71,11 +71,13 @@ func (d *DPoS) getMissedBlocksPercentage() uint64 {
 		}
 	}
 
-	// 如果参数系统没有值，从配置文件读取
+	// 如果参数系统没有值，从配置文件读取；读取不到则视为配置错误
 	if val := d.getConfigUint64("dpos_missed_blocks_percentage", "missed_blocks_percentage"); val > 0 {
 		return val
 	}
-	return 1000 // 默认值 10%
+
+	d.logger.Error("missed blocks percentage 未配置或无效，需在参数系统或配置文件中提供正数")
+	return 0
 }
 
 // getMinorOffenseSlashRate 获取轻度违规削减率（基点）

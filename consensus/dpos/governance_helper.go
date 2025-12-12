@@ -96,8 +96,7 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 		if val := d.getConfigUint64("dpos_missed_blocks_percentage", "missed_blocks_percentage"); val > 0 {
 			return val, nil
 		}
-		// 默认值：1000基点 = 10%
-		return uint64(1000), nil
+		return nil, fmt.Errorf("dpos_missed_blocks_percentage 未配置或无效")
 	case "dpos_minor_offense_slash_rate":
 		// 削减参数：轻度违规削减率（从配置读取）
 		if val := d.getConfigUint64("dpos_minor_offense_slash_rate", "minor_offense_slash_rate"); val > 0 {
