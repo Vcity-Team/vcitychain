@@ -506,7 +506,7 @@ func (d *DPoS) GetBridgeProvider() consensus.BridgeDataProvider {
 }
 
 func (d *DPoS) FilterExtra(extra []byte) ([]byte, error) {
-	return GetIbftExtraClean(extra)
+	return GetDposExtraClean(extra)
 }
 
 func (d *DPoS) Start() error {

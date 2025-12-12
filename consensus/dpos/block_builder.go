@@ -112,7 +112,7 @@ func (b *BlockBuilder) Reset() error {
 		GasLimit:     b.params.GasLimit,
 		BaseFee:      b.params.BaseFee,
 		Timestamp:    uint64(headerTime.Unix()),
-		MixHash:      PolyBFTMixDigest, // 设置 MixHash 以通过验证
+		MixHash:      DPoSMixDigest, // 设置 MixHash 以通过验证
 	}
 
 	transition, err := b.params.Executor.BeginTxn(b.params.Parent.StateRoot, b.header, b.params.Coinbase)
@@ -429,8 +429,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				dposInstance.processEpochBoundary(r, parent, nextBlockNumber)
 			}
 		}
-	} else {
-		r.nextEpochValidators = nil
 	}
 
 	// 创建区块构建器
@@ -1004,7 +1002,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			}
 
 			// 解析父区块的ExtraData
-			parentExtra, err := GetIbftExtra(parentHeader.ExtraData)
+			parentExtra, err := GetDposExtra(parentHeader.ExtraData)
 			if err != nil {
 				r.logger.Error("failed to parse parent extra data", "error", err)
 				return nil, fmt.Errorf("failed to parse parent extra data: %w", err)
@@ -1097,7 +1095,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		var rewardDistribution *RewardDistributionInfo
 		var faultFlags []FaultFlagInfo
 		var slashingInfo *SlashingInfo
-		if currentBlockExtra, err := GetIbftExtra(block.Block.Header.ExtraData); err == nil {
+		if currentBlockExtra, err := GetDposExtra(block.Block.Header.ExtraData); err == nil {
 			rewardDistribution = currentBlockExtra.RewardDistribution
 			faultFlags = currentBlockExtra.FaultFlags
 			slashingInfo = currentBlockExtra.SlashingInfo
@@ -1111,10 +1109,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				"error", err)
 		}
 
-		// 计算写入ExtraData的下一个epoch验证者集合：
-		// 直接使用最新的 r.nextEpochValidators 写入 ExtraData（已被故障过滤覆盖）
-		nextEpochValidatorsForExtra := r.nextEpochValidators
-
 		// 更新区块的ExtraData，包含聚合签名、父区块签名和验证者集合
 		finalExtra := &Extra{
 			Validators: signingValidatorDelta, // 保存全部验证者集合，确保位图索引匹配
@@ -1124,27 +1118,10 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				Bitmap:              signatureBitmap,
 			},
 			Checkpoint:          checkpoint,
-			RewardDistribution:  rewardDistribution,          // 从当前区块ExtraData获取的奖励分配信息
-			CheckpointBlockHash: extra.CheckpointBlockHash,   // 保持CheckpointBlockHash
-			FaultFlags:          faultFlags,                  // 保持FaultFlags
-			NextEpochValidators: nextEpochValidatorsForExtra, // 下一个epoch的验证者集合（只在epoch边界区块时设置）
-			SlashingInfo:        slashingInfo,                // 保持SlashingInfo
-		}
-
-		if len(nextEpochValidatorsForExtra) > 0 {
-			r.logger.Debug("NextEpochValidators写入ExtraData",
-				"blockNumber", block.Block.Number(),
-				"nextEpochValidatorsCount", len(nextEpochValidatorsForExtra))
-			for idx, acc := range nextEpochValidatorsForExtra {
-				r.logger.Debug("📝 NextEpochValidator写入详情",
-					"blockNumber", block.Block.Number(),
-					"index", idx,
-					"address", acc.Address.String(),
-					"votingPower", acc.VotingPower.String())
-			}
-		} else {
-			r.logger.Debug("🆕 NextEpochValidators写入ExtraData: 当前为空",
-				"blockNumber", block.Block.Number())
+			RewardDistribution:  rewardDistribution,        // 从当前区块ExtraData获取的奖励分配信息
+			CheckpointBlockHash: extra.CheckpointBlockHash, // 保持CheckpointBlockHash
+			FaultFlags:          faultFlags,                // 保持FaultFlags
+			SlashingInfo:        slashingInfo,              // 保持SlashingInfo
 		}
 
 		block.Block.Header.ExtraData = finalExtra.MarshalRLPTo(nil)
@@ -1749,14 +1726,14 @@ func (r *dposRuntime) getValidatorsFromExtraDataForProduction(header *types.Head
 	if r.config != nil && r.config.dposBackend != nil {
 		dposInstance, ok := r.config.dposBackend.(*DPoS)
 		if ok && dposInstance != nil {
-			dbValidators, err := dposInstance.GetSortedValidatorsWithLimit()
+			dbValidators, err := dposInstance.GetSortedValidatorsWithLimitFilterFaulty()
 			if err != nil {
 				r.logger.Error("⚠️ 从数据库读取验证者失败", "error", err)
 				return nil, err
 			}
 
 			if len(dbValidators) > 0 {
-				r.logger.Debug("🔍 生产时使用数据库验证者集合", "validatorsCount", len(dbValidators))
+				r.logger.Debug("🔍 生产时使用数据库验证者集合（已过滤故障）", "validatorsCount", len(dbValidators))
 				r.lock.Lock()
 				r.delegates = dbValidators
 				r.lock.Unlock()

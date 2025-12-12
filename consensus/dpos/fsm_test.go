@@ -64,7 +64,7 @@ func TestFSM_ValidateHeader(t *testing.T) {
 
 	// mix digest
 	require.ErrorContains(t, validateHeaderFields(parent, header, blockTimeDrift), "mix digest is not correct")
-	header.MixHash = PolyBFTMixDigest
+	header.MixHash = DPoSMixDigest
 
 	// difficulty
 	header.Difficulty = 0
@@ -346,7 +346,7 @@ func TestFSM_BuildProposal_EpochEndingBlock_ValidatorsDeltaExists(t *testing.T) 
 	assert.NoError(t, err)
 	assert.NotNil(t, proposal)
 
-	blockExtra, err := GetIbftExtra(stateBlock.Block.Header.ExtraData)
+	blockExtra, err := GetDposExtra(stateBlock.Block.Header.ExtraData)
 	assert.NoError(t, err)
 	assert.Len(t, blockExtra.Validators.Added, 2)
 	assert.False(t, blockExtra.Validators.IsEmpty())
@@ -396,7 +396,7 @@ func TestFSM_BuildProposal_NonEpochEndingBlock_ValidatorsDeltaNil(t *testing.T) 
 	assert.NoError(t, err)
 	assert.NotNil(t, proposal)
 
-	blockExtra, err := GetIbftExtra(stateBlock.Block.Header.ExtraData)
+	blockExtra, err := GetDposExtra(stateBlock.Block.Header.ExtraData)
 	assert.NoError(t, err)
 	assert.Nil(t, blockExtra.Validators)
 
@@ -1525,7 +1525,7 @@ func TestFSM_Validate_FailToVerifySignatures(t *testing.T) {
 			Number:     parentBlockNumber + 1,
 			ParentHash: parent.Hash,
 			Timestamp:  parent.Timestamp + 1,
-			MixHash:    PolyBFTMixDigest,
+			MixHash:    DPoSMixDigest,
 			Difficulty: 1,
 			ExtraData:  parent.ExtraData,
 		},
@@ -1549,7 +1549,7 @@ func createDummyStateBlock(blockNumber uint64, parentHash types.Hash, extraData 
 			ParentHash: parentHash,
 			Difficulty: 1,
 			ExtraData:  extraData,
-			MixHash:    PolyBFTMixDigest,
+			MixHash:    DPoSMixDigest,
 		},
 	})
 

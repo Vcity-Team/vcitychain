@@ -44,7 +44,6 @@ func (vs *ValidatorSet) Hash() (types.Hash, error) {
 		}
 	}
 
-	// 计算哈希
 	var data []byte
 	for _, addr := range addresses {
 		data = append(data, addr.Bytes()...)
@@ -56,13 +55,12 @@ func (vs *ValidatorSet) Hash() (types.Hash, error) {
 const (
 	// ExtraVanity represents a fixed number of extra-data bytes reserved for proposer vanity
 	ExtraVanity = 32
-
 	// ExtraSeal represents the fixed number of extra-data bytes reserved for proposer seal
 	ExtraSeal = 65
 )
 
-// PolyBFTMixDigest represents a hash of "PolyBFT Mix" to identify whether the block is from PolyBFT consensus engine
-var PolyBFTMixDigest = types.StringToHash("adce6e5230abe012342a44e4e9b6d05997d6f015387ae0e59be924afc7ec70c1")
+// DPoSMixDigest represents a hash to identify whether the block is from DPoS consensus engine
+var DPoSMixDigest = types.StringToHash("adce6e5230abe012342a44e4e9b6d05997d6f015387ae0e59be924afc7ec70c1")
 
 // FaultFlagInfo 故障标志信息结构
 type FaultFlagInfo struct {
@@ -91,8 +89,6 @@ type Extra struct {
 	CheckpointBlockHash types.Hash
 	// 故障标志信息
 	FaultFlags []FaultFlagInfo `json:"fault_flags,omitempty"`
-	// 下一个epoch的验证者集合（只在epoch边界区块时设置）
-	NextEpochValidators validator.AccountSet `json:"next_epoch_validators,omitempty"`
 	// 故障消减信息（只包含 missed blocks 的消减，不包含双重签名）
 	SlashingInfo *SlashingInfo `json:"slashing_info,omitempty"`
 }
@@ -125,10 +121,8 @@ type SlashingOperation struct {
 func (r *RewardDistributionInfo) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 	vv := ar.NewArray()
 
-	// EpochNumber
 	vv.Set(ar.NewUint(r.EpochNumber))
 
-	// Rewards map
 	rewardsArray := ar.NewArray()
 	for addr, amount := range r.Rewards {
 		rewardItem := ar.NewArray()
@@ -138,10 +132,8 @@ func (r *RewardDistributionInfo) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Valu
 	}
 	vv.Set(rewardsArray)
 
-	// TotalReward
 	vv.Set(ar.NewBigInt(r.TotalReward))
 
-	// Timestamp
 	vv.Set(ar.NewUint(r.Timestamp))
 
 	return vv
@@ -159,14 +151,12 @@ func (r *RewardDistributionInfo) UnmarshalRLPWith(v *fastrlp.Value) error {
 		return err
 	}
 
-	// EpochNumber
 	epochNumber, err := elems[0].GetUint64()
 	if err != nil {
 		return err
 	}
 	r.EpochNumber = epochNumber
 
-	// Rewards map
 	rewardsElems, err := elems[1].GetElems()
 	if err != nil {
 		return err
@@ -191,14 +181,12 @@ func (r *RewardDistributionInfo) UnmarshalRLPWith(v *fastrlp.Value) error {
 		r.Rewards[string(addrBytes)] = amount
 	}
 
-	// TotalReward
 	totalReward := new(big.Int)
 	if err := elems[2].GetBigInt(totalReward); err != nil {
 		return err
 	}
 	r.TotalReward = totalReward
 
-	// Timestamp
 	timestamp, err := elems[3].GetUint64()
 	if err != nil {
 		return err
@@ -212,17 +200,14 @@ func (r *RewardDistributionInfo) UnmarshalRLPWith(v *fastrlp.Value) error {
 func (s *SlashingInfo) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 	vv := ar.NewArray()
 
-	// EpochNumber
 	vv.Set(ar.NewUint(s.EpochNumber))
 
-	// Slashings array
 	slashingsArray := ar.NewArray()
 	for _, op := range s.Slashings {
 		slashingsArray.Set(op.MarshalRLPWith(ar))
 	}
 	vv.Set(slashingsArray)
 
-	// Timestamp
 	vv.Set(ar.NewUint(s.Timestamp))
 
 	return vv
@@ -246,7 +231,6 @@ func (s *SlashingInfo) UnmarshalRLPWith(v *fastrlp.Value) error {
 	}
 	s.EpochNumber = epochNumber
 
-	// Slashings array
 	slashingsElems, err := elems[1].GetElems()
 	if err != nil {
 		return err
@@ -259,7 +243,6 @@ func (s *SlashingInfo) UnmarshalRLPWith(v *fastrlp.Value) error {
 		}
 	}
 
-	// Timestamp
 	timestamp, err := elems[2].GetUint64()
 	if err != nil {
 		return err
@@ -273,19 +256,14 @@ func (s *SlashingInfo) UnmarshalRLPWith(v *fastrlp.Value) error {
 func (s *SlashingOperation) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 	vv := ar.NewArray()
 
-	// ValidatorAddr
 	vv.Set(ar.NewBytes(s.ValidatorAddr.Bytes()))
 
-	// SlashRate
 	vv.Set(ar.NewUint(s.SlashRate))
 
-	// MissedBlocks
 	vv.Set(ar.NewUint(s.MissedBlocks))
 
-	// MissedBlocksPercentage
 	vv.Set(ar.NewUint(s.MissedBlocksPercentage))
 
-	// Reason
 	vv.Set(ar.NewCopyBytes([]byte(s.Reason)))
 
 	return vv
@@ -302,7 +280,6 @@ func (s *SlashingOperation) UnmarshalRLPWith(v *fastrlp.Value) error {
 		return fmt.Errorf("invalid SlashingOperation RLP: expected 5 elements, got %d", len(elems))
 	}
 
-	// ValidatorAddr
 	addrBytes, err := elems[0].GetBytes(nil)
 	if err != nil {
 		return err
@@ -311,28 +288,24 @@ func (s *SlashingOperation) UnmarshalRLPWith(v *fastrlp.Value) error {
 		s.ValidatorAddr = types.BytesToAddress(addrBytes)
 	}
 
-	// SlashRate
 	slashRate, err := elems[1].GetUint64()
 	if err != nil {
 		return err
 	}
 	s.SlashRate = slashRate
 
-	// MissedBlocks
 	missedBlocks, err := elems[2].GetUint64()
 	if err != nil {
 		return err
 	}
 	s.MissedBlocks = missedBlocks
 
-	// MissedBlocksPercentage
 	missedBlocksPercentage, err := elems[3].GetUint64()
 	if err != nil {
 		return err
 	}
 	s.MissedBlocksPercentage = missedBlocksPercentage
 
-	// Reason
 	reasonBytes, err := elems[4].GetBytes(nil)
 	if err != nil {
 		return err
@@ -341,8 +314,6 @@ func (s *SlashingOperation) UnmarshalRLPWith(v *fastrlp.Value) error {
 
 	return nil
 }
-
-// DelayedStateUpdateInfo 结构体已移除，延迟状态更新机制不再需要
 
 // MarshalRLPTo defines the marshal function wrapper for Extra
 func (i *Extra) MarshalRLPTo(dst []byte) []byte {
@@ -355,44 +326,37 @@ func (i *Extra) MarshalRLPTo(dst []byte) []byte {
 func (i *Extra) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 	vv := ar.NewArray()
 
-	// Validators
 	if i.Validators == nil {
 		vv.Set(ar.NewNullArray())
 	} else {
 		vv.Set(i.Validators.MarshalRLPWith(ar))
 	}
 
-	// Parent Signatures
 	if i.Parent == nil {
 		vv.Set(ar.NewNullArray())
 	} else {
 		vv.Set(i.Parent.MarshalRLPWith(ar))
 	}
 
-	// Committed Signatures
 	if i.Committed == nil {
 		vv.Set(ar.NewNullArray())
 	} else {
 		vv.Set(i.Committed.MarshalRLPWith(ar))
 	}
 
-	// Checkpoint
 	if i.Checkpoint == nil {
 		vv.Set(ar.NewNullArray())
 	} else {
 		vv.Set(i.Checkpoint.MarshalRLPWith(ar))
 	}
 
-	// 奖励分配信息
 	if i.RewardDistribution == nil {
 		vv.Set(ar.NewNullArray())
 	} else {
 		vv.Set(i.RewardDistribution.MarshalRLPWith(ar))
 	}
 
-	// CheckpointBlockHash
 	if i.CheckpointBlockHash == (types.Hash{}) {
-		// 修复：使用空字节数组而不是NullArray，确保类型一致
 		vv.Set(ar.NewBytes([]byte{}))
 	} else {
 		vv.Set(ar.NewBytes(i.CheckpointBlockHash.Bytes()))
@@ -420,18 +384,6 @@ func (i *Extra) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 		vv.Set(faultFlagsArray)
 	}
 
-	// Element[7] - NextEpochValidators（只在epoch边界区块时设置）
-	if len(i.NextEpochValidators) == 0 {
-		vv.Set(ar.NewNullArray())
-	} else {
-		nextEpochValidatorsArray := ar.NewArray()
-		for _, validatorAccount := range i.NextEpochValidators {
-			nextEpochValidatorsArray.Set(validatorAccount.MarshalRLPWith(ar))
-		}
-		vv.Set(nextEpochValidatorsArray)
-	}
-
-	// Element[8] - SlashingInfo（故障消减信息）
 	if i.SlashingInfo == nil {
 		vv.Set(ar.NewNullArray())
 	} else {
@@ -453,32 +405,17 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		return err
 	}
 
-	// 动态设置expectedElements
-	expectedElements := 4 // 默认创世区块格式
-	if len(elems) == 5 {
-		expectedElements = 5 // 普通区块格式
-	} else if len(elems) == 6 {
-		expectedElements = 6 // 包含CheckpointBlockHash的格式
-	} else if len(elems) == 7 {
-		expectedElements = 7 // 包含FaultFlags的格式
-	} else if len(elems) == 8 {
-		expectedElements = 8 // 包含NextEpochValidators的格式
-	} else if len(elems) == 9 {
-		expectedElements = 9 // 包含SlashingInfo的格式
-	}
-
-	// 解析RLP元素
-
-	// 处理元素数量不匹配的情况
 	num := len(elems)
-	if num < expectedElements {
-		return fmt.Errorf("incorrect elements count to decode Extra, expected %d but found %d", expectedElements, num)
-	} else if num > expectedElements {
-		// 只使用前expectedElements个元素，忽略额外的元素
-		elems = elems[:expectedElements]
+	if num < 4 {
+		return fmt.Errorf("incorrect elements count to decode Extra, expected at least 4 but found %d", num)
+	}
+	// 区块的 ExtraData 在序列化为 RLP 时是一个数组：最多支持8个元素（Validators, Parent, Committed, Checkpoint, RewardDistribution, CheckpointBlockHash, FaultFlags, SlashingInfo）
+	if num > 8 {
+		// 只使用前8个元素，忽略额外的元素
+		elems = elems[:8]
+		num = 8
 	}
 
-	// Validators
 	if elems[0].Elems() > 0 {
 		validatorElems, err := elems[0].GetElems()
 		if err != nil {
@@ -492,12 +429,10 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 				return err
 			}
 		} else {
-			// 非标准格式，可能是验证者地址列表或其他格式
 			i.Validators = nil
 		}
 	}
 
-	// Parent Signatures
 	if elems[1].Elems() > 0 {
 		i.Parent = &Signature{}
 		if err := i.Parent.UnmarshalRLPWith(elems[1]); err != nil {
@@ -506,7 +441,6 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		}
 	}
 
-	// Committed Signatures
 	if elems[2].Elems() > 0 {
 		committedElems, err := elems[2].GetElems()
 		if err != nil {
@@ -534,8 +468,6 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 			return err
 		}
 
-		// 解析checkpoint元素
-
 		if len(checkpointElems) == 5 {
 			// 标准CheckpointData格式：5个元素
 			i.Checkpoint = &CheckpointData{}
@@ -550,8 +482,8 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		}
 	}
 
-	// Element[4] - 奖励分配信息（只在5个或6个元素时处理）
-	if expectedElements >= 5 && len(elems) > 4 && elems[4].Elems() > 0 {
+	// Element[4] - 奖励分配信息（只在5个或更多元素时处理）
+	if num >= 5 && elems[4].Elems() > 0 {
 		i.RewardDistribution = &RewardDistributionInfo{}
 		if err := i.RewardDistribution.UnmarshalRLPWith(elems[4]); err != nil {
 			// 不返回错误，只是跳过奖励分配信息
@@ -559,8 +491,8 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		}
 	}
 
-	// Element[5] - CheckpointBlockHash（只在6个或7个元素时处理）
-	if expectedElements >= 6 && len(elems) > 5 {
+	// Element[5] - CheckpointBlockHash（只在6个或更多元素时处理）
+	if num >= 6 {
 		if elems[5].Type() == fastrlp.TypeBytes {
 			hashBytes, err := elems[5].GetBytes(nil)
 			if err == nil && len(hashBytes) == 32 {
@@ -572,8 +504,8 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		}
 	}
 
-	// Element[6] - FaultFlags（只在7个元素时处理）
-	if len(elems) >= 7 && elems[6].Elems() > 0 {
+	// Element[6] - FaultFlags（只在7个或更多元素时处理）
+	if num >= 7 && elems[6].Elems() > 0 {
 		faultFlagsElems, err := elems[6].GetElems()
 		if err == nil {
 			i.FaultFlags = make([]FaultFlagInfo, 0, len(faultFlagsElems))
@@ -588,40 +520,20 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 						flag.NodeAddress = types.BytesToAddress(addrBytes)
 					}
 
-					// IsFaulty
 					flag.IsFaulty, _ = flagItemElems[1].GetBool()
-
-					// MissedBlocks
 					flag.MissedBlocks, _ = flagItemElems[2].GetUint64()
-
-					// ActualBlocks
 					flag.ActualBlocks, _ = flagItemElems[3].GetUint64()
-
-					// LastUpdateTime
 					flag.LastUpdateTime, _ = flagItemElems[4].GetUint64()
 
-					// 兼容旧格式与新格式
-					// 旧格式：6个元素（index5 为 Reason，无 EpochNumber 和 LastFaultyEpoch）
-					// 中间格式：7个元素（index5 为 EpochNumber，index6 为 Reason，无 LastFaultyEpoch）
-					// 新格式：8个元素（index5 为 EpochNumber，index6 为 LastFaultyEpoch，index7 为 Reason）
+					// 区块的 ExtraData 在序列化为 RLP 时是一个数组：8个元素（index5 为 EpochNumber，index6 为 LastFaultyEpoch，index7 为 Reason）
 					if len(flagItemElems) >= 8 {
-						// 新格式：包含 LastFaultyEpoch
 						flag.EpochNumber, _ = flagItemElems[5].GetUint64()
 						flag.LastFaultyEpoch, _ = flagItemElems[6].GetUint64()
 						reasonBytes, _ := flagItemElems[7].GetBytes(nil)
 						flag.Reason = string(reasonBytes)
-					} else if len(flagItemElems) >= 7 {
-						// 中间格式：包含 EpochNumber，无 LastFaultyEpoch
-						flag.EpochNumber, _ = flagItemElems[5].GetUint64()
-						flag.LastFaultyEpoch = 0
-						reasonBytes, _ := flagItemElems[6].GetBytes(nil)
-						flag.Reason = string(reasonBytes)
 					} else {
-						// 旧格式：无 EpochNumber 和 LastFaultyEpoch
-						flag.EpochNumber = 0
-						flag.LastFaultyEpoch = 0
-						reasonBytes, _ := flagItemElems[5].GetBytes(nil)
-						flag.Reason = string(reasonBytes)
+						// 格式不正确，跳过该故障标志
+						continue
 					}
 
 					i.FaultFlags = append(i.FaultFlags, flag)
@@ -630,28 +542,10 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		}
 	}
 
-	// Element[7] - NextEpochValidators（只在8个或9个元素时处理）
-	if len(elems) >= 8 && elems[7].Elems() > 0 {
-		nextEpochValidatorsElems, err := elems[7].GetElems()
-		if err == nil {
-			i.NextEpochValidators = make(validator.AccountSet, 0, len(nextEpochValidatorsElems))
-			for _, validatorRaw := range nextEpochValidatorsElems {
-				// Skip null values
-				if validatorRaw.Type() == fastrlp.TypeNull {
-					continue
-				}
-				acc := &validator.ValidatorMetadata{}
-				if err := acc.UnmarshalRLPWith(validatorRaw); err == nil {
-					i.NextEpochValidators = append(i.NextEpochValidators, acc)
-				}
-			}
-		}
-	}
-
-	// Element[8] - SlashingInfo（只在9个元素时处理）
-	if len(elems) >= 9 && elems[8].Elems() > 0 {
+	// Element[7] - SlashingInfo（只在8个元素时处理）
+	if num >= 8 && elems[7].Elems() > 0 {
 		i.SlashingInfo = &SlashingInfo{}
-		if err := i.SlashingInfo.UnmarshalRLPWith(elems[8]); err != nil {
+		if err := i.SlashingInfo.UnmarshalRLPWith(elems[7]); err != nil {
 			// 不返回错误，只是跳过消减信息
 			i.SlashingInfo = nil
 		}
@@ -773,30 +667,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		return fmt.Errorf("failed to verify signatures for block %d, because checkpoint data are not present", blockNumber)
 	}
 
-	// 如果区块中包含NextEpochValidators，更新本地内存缓存（ExtraData是唯一数据源，不再保存到数据库）
-	if len(i.NextEpochValidators) > 0 {
-		if dposBackend, ok := consensusBackend.(*DPoS); ok && dposBackend != nil {
-			// 更新内存缓存
-			dposBackend.delegates = i.NextEpochValidators.Copy()
-			if dposBackend.runtime != nil {
-				dposBackend.runtime.lock.Lock()
-				dposBackend.runtime.delegates = i.NextEpochValidators.Copy()
-				dposBackend.runtime.lock.Unlock()
-			}
-			logger.Debug("✅ 已根据ExtraData更新内存中的验证者集合",
-				"blockNumber", blockNumber,
-				"nextEpochValidatorsCount", len(i.NextEpochValidators))
-		}
-	}
-
-	// validate current block signatures
-	// 修复：使用与生产时完全相同的哈希计算方式
-	// 生产时使用：checkpoint.Hash(blockchain.GetChainID(), block.Block.Number(), fixedBlockHash)
-	// 验证时使用：i.Checkpoint.Hash(chainID, blockNumber, fixedBlockHash)
-	// 需要确保两者使用相同的参数和计算方式
-
-	// 使用ExtraData中保存的CheckpointBlockHash（生产时用于计算CheckpointHash的区块哈希）
-	// 确保区块哈希已经计算完成
 	realBlockHash := header.Hash
 
 	// 如果ExtraData中有CheckpointBlockHash，优先使用它
@@ -808,8 +678,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 			"headerHash", realBlockHash.String(),
 			"说明", "ExtraData中没有CheckpointBlockHash，验证时使用区块头哈希")
 	}
-
-	// 修复：使用传入的chainID参数，确保与生产时一致
 	productionChainID := chainID
 
 	// 处理故障标志（调用独立函数）
@@ -822,11 +690,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		return fmt.Errorf("failed to get validators from ExtraData for block %d: %w", blockNumber, err)
 	}
 
-	// 关键修复：重新计算CheckpointData的哈希值，确保与生产时一致
-	// 生产时使用r.delegates.Hash()计算CurrentValidatorsHash和NextValidatorsHash
-	// 验证时需要重新计算这些哈希值，确保与生产时完全一致
-
-	// 从验证者集合重新计算哈希值，确保与生产时一致
 	var currentValidatorsHash types.Hash
 	var nextValidatorsHash types.Hash
 
@@ -849,29 +712,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		nextValidatorsHash = types.Hash{}
 	}
 
-	// 方案2：直接使用ExtraData中的轮次值，确保与生产时完全一致
-	// 生产时使用的轮次值已经保存在ExtraData.Checkpoint.BlockRound中
-	// 验证时直接使用这个值，而不是重新计算
-
-	// 检查是否为共识切换高度，添加特殊日志
-	isConsensusSwitch := false
-	if consensusBackend != nil {
-		if dposBackend, ok := consensusBackend.(*DPoS); ok && dposBackend.config != nil {
-			if dposBackend.config.ConsensusSwitchHeight > 0 && blockNumber == dposBackend.config.ConsensusSwitchHeight {
-				isConsensusSwitch = true
-			}
-		}
-	}
-
-	if isConsensusSwitch {
-		logger.Debug("🔍 方案2：切换高度使用ExtraData中的轮次值",
-			"blockNumber", blockNumber,
-			"ExtraData轮次", i.Checkpoint.BlockRound,
-			"验证者数量", len(validators),
-			"说明", "切换高度直接使用生产时保存的轮次值，确保checkpointHash一致")
-	} else {
-	}
-
 	recalculatedCheckpoint := &CheckpointData{
 		BlockRound:            i.Checkpoint.BlockRound, // 直接使用生产时的轮次
 		EpochNumber:           i.Checkpoint.EpochNumber,
@@ -886,8 +726,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		return fmt.Errorf("failed to calculate proposal hash: %w", err)
 	}
 
-	// 关键修复：确保验证时使用的验证者集合与生产时完全一致
-	// 生产时使用 r.delegates 设置位图索引，验证时也应该使用相同的验证者集合
 	logger.Debug("🔍 验证时验证者集合与生产时一致性检查",
 		"blockNumber", blockNumber,
 		"validatorsCount", len(validators),
@@ -930,7 +768,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		logger.Error("💀 区块验证失败，程序退出")
 		os.Exit(1)
 	}
-	parentExtra, err := GetIbftExtra(parent.ExtraData)
+	parentExtra, err := GetDposExtra(parent.ExtraData)
 	if err != nil {
 		logger.Error("❌ ValidateFinalizedData 解析父区块ExtraData失败", "blockNumber", blockNumber, "error", err)
 		return fmt.Errorf("failed to verify signatures for block %d: %w", blockNumber, err)
@@ -942,12 +780,10 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		logger.Error("❌ ValidateFinalizedData 父区块签名验证失败", "blockNumber", blockNumber, "error", err)
 		return err
 	}
-	// 新增：检查parentExtra.Checkpoint是否为nil，避免空指针异常
 	if parentExtra == nil || parentExtra.Checkpoint == nil {
 		logger.Info("🔄 ValidateFinalizedData 父区块Checkpoint为nil，跳过Checkpoint验证", "blockNumber", blockNumber, "parentBlockNumber", parent.Number)
 		return nil
 	}
-
 	err = i.Checkpoint.ValidateBasic(parentExtra.Checkpoint)
 	if err != nil {
 		logger.Error("❌ ValidateFinalizedData Checkpoint基本验证失败", "blockNumber", blockNumber, "error", err)
@@ -2263,31 +2099,29 @@ func (c *CheckpointData) Validate(parentCheckpoint *CheckpointData,
 	return nil
 }
 
-// GetIbftExtraClean returns unmarshaled extra field from the passed in header,
+// GetDposExtraClean returns unmarshaled extra field from the passed in header,
 // but without signatures for the given header (it only includes signatures for the parent block)
-func GetIbftExtraClean(extraRaw []byte) ([]byte, error) {
-	extra, err := GetIbftExtra(extraRaw)
+func GetDposExtraClean(extraRaw []byte) ([]byte, error) {
+	extra, err := GetDposExtra(extraRaw)
 	if err != nil {
 		return nil, err
 	}
 
-	ibftExtra := &Extra{
+	dposExtra := &Extra{
 		Parent:     extra.Parent,
 		Validators: extra.Validators,
 		Checkpoint: extra.Checkpoint,
 		Committed:  &Signature{},
 	}
 
-	return ibftExtra.MarshalRLPTo(nil), nil
+	return dposExtra.MarshalRLPTo(nil), nil
 }
 
-// GetIbftExtra returns the istanbul extra data field from the passed in header
-func GetIbftExtra(extraRaw []byte) (*Extra, error) {
+// GetDposExtra returns the DPoS extra data field from the passed in header
+func GetDposExtra(extraRaw []byte) (*Extra, error) {
 	if len(extraRaw) < ExtraVanity {
 		return nil, fmt.Errorf("wrong extra size: %d", len(extraRaw))
 	}
-
-	// 解析extraData
 
 	// 尝试解析RLP数据
 	extra := &Extra{}
@@ -2616,7 +2450,7 @@ func (i *Extra) getParentValidators(parent *types.Header, parents []*types.Heade
 	consensusBackend dposBackend, logger hclog.Logger) (validator.AccountSet, error) {
 
 	// 首先尝试从父区块的 ExtraData 中获取
-	parentExtra, err := GetIbftExtra(parent.ExtraData)
+	parentExtra, err := GetDposExtra(parent.ExtraData)
 	if err == nil && parentExtra != nil {
 
 		// 递归获取父区块的验证者集合，需要获取父区块的父区块
@@ -2807,16 +2641,12 @@ func (i *Extra) updateValidatorFaultStatus(validators validator.AccountSet, faul
 
 // getBLSKeyFromGenesis 从validator-bls.key文件获取BLS公钥
 func (i *Extra) getBLSKeyFromGenesis(address types.Address, logger hclog.Logger) (*bls.PublicKey, error) {
-
-	// 尝试从DPoS实例获取BLS公钥
 	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-		// 从validator-bls.key文件获取BLS公钥字节
 		blsKeyBytes, err := dposInstance.GetBLSKeyBytesFromGenesis(address)
 		if err != nil {
 			return nil, err
 		}
 
-		// 解析BLS公钥
 		blsKey, err := bls.UnmarshalPublicKey(blsKeyBytes)
 		if err != nil {
 			logger.Debug("❌ 解析BLS公钥失败",
@@ -2825,11 +2655,7 @@ func (i *Extra) getBLSKeyFromGenesis(address types.Address, logger hclog.Logger)
 				"error", err)
 			return nil, err
 		}
-
-		// BLS公钥获取成功
-
 		return blsKey, nil
 	}
-
 	return nil, fmt.Errorf("无法获取DPoS实例来从validator-bls.key文件获取BLS公钥")
 }

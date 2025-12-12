@@ -33,8 +33,6 @@ type LifecycleDependencies struct {
 	SaveCurrentEpoch        func(epochNumber uint64, blockNumber uint64) error
 	UpdateBlockProducers    func(flags []core.FaultFlagInfo) error
 
-	CalculateNextEpochValidators func(blockNumber uint64) (validator.AccountSet, error)
-
 	UpdateValidatorCaches func(validators validator.AccountSet)
 }
 
@@ -87,13 +85,7 @@ func (m *lifecycleManager) ProcessBoundary(ctx core.EpochBoundaryContext) (core.
 
 	m.applyScheduledRecoveries(currentEpoch, ctx.NextBlockNumber)
 
-	nextValidators, err := m.prepareNextEpochValidators(ctx.NextBlockNumber)
-	if err != nil {
-		return result, err
-	}
-
 	result.FaultFlags = faultFlags
-	result.NextEpochValidators = nextValidators
 
 	return result, nil
 }
@@ -249,14 +241,6 @@ func (m *lifecycleManager) runFaultDetection(ctx core.EpochBoundaryContext, epoc
 	}
 
 	return faultFlags, nil
-}
-
-func (m *lifecycleManager) prepareNextEpochValidators(nextBlockNumber uint64) (validator.AccountSet, error) {
-	if m.deps.CalculateNextEpochValidators == nil {
-		return nil, fmt.Errorf("calculateNextEpochValidators dependency not provided")
-	}
-
-	return m.deps.CalculateNextEpochValidators(nextBlockNumber)
 }
 
 // ApplyNextValidatorsFromExtra 使用ExtraData中的验证者集合覆盖本地缓存

@@ -79,7 +79,7 @@ func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift tim
 	}
 
 	// decode the extra data
-	extra, err := GetIbftExtra(header.ExtraData)
+	extra, err := GetDposExtra(header.ExtraData)
 	if err != nil {
 		d.logger.Error("解析区块extraData失败", "error", err)
 		return fmt.Errorf("failed to verify header for block %d. get extra error = %w", header.Number, err)
@@ -126,7 +126,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		d.updateRoundState(header)
 
 		// 解析ExtraData并处理故障标志（确保生产节点也能保存故障状态）
-		if extra, err := GetIbftExtra(header.ExtraData); err == nil && extra != nil {
+		if extra, err := GetDposExtra(header.ExtraData); err == nil && extra != nil {
 			extra.processFaultFlags(header.Number, d, d.logger)
 		} else if err != nil {
 			d.logger.Debug("⚠️ ProcessHeaders 解析ExtraData失败，跳过故障标志处理",

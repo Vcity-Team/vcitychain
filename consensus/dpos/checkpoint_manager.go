@@ -149,7 +149,7 @@ func (c *checkpointManager) submitCheckpoint(latestHeader *types.Header, isEndOf
 			return fmt.Errorf("block %d was not found", initialBlockNumber)
 		}
 
-		parentExtra, err = GetIbftExtra(parentHeader.ExtraData)
+		parentExtra, err = GetDposExtra(parentHeader.ExtraData)
 		if err != nil {
 			return err
 		}
@@ -162,7 +162,7 @@ func (c *checkpointManager) submitCheckpoint(latestHeader *types.Header, isEndOf
 			return fmt.Errorf("block %d was not found", blockNumber)
 		}
 
-		currentExtra, err = GetIbftExtra(currentHeader.ExtraData)
+		currentExtra, err = GetDposExtra(currentHeader.ExtraData)
 		if err != nil {
 			return err
 		}
@@ -189,7 +189,7 @@ func (c *checkpointManager) submitCheckpoint(latestHeader *types.Header, isEndOf
 	// (in case there were pending checkpoint blocks)
 	if currentExtra == nil {
 		// we need to send checkpoint for the latest block
-		currentExtra, err = GetIbftExtra(latestHeader.ExtraData)
+		currentExtra, err = GetDposExtra(latestHeader.ExtraData)
 		if err != nil {
 			return err
 		}
@@ -467,7 +467,7 @@ func createExitTree(exitEvents []*ExitEvent) (*merkle.MerkleTree, error) {
 
 // parseExitEvent parses exit event from provided log
 func parseExitEvent(h *types.Header, l *ethgo.Log) (*ExitEvent, bool, error) {
-	extra, err := GetIbftExtra(h.ExtraData)
+	extra, err := GetDposExtra(h.ExtraData)
 	if err != nil {
 		return nil, false,
 			fmt.Errorf("could not get header extra on exit event parsing. Error: %w", err)

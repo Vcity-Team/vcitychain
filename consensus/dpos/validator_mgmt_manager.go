@@ -217,7 +217,6 @@ func (d *DPoS) GetSortedValidatorsWithLimitFilterFaulty() (validator.AccountSet,
 }
 
 // getValidatorsFromCurrentBlockExtraData 从当前区块的 ExtraData 读取验证者集合
-// 优先读取 NextEpochValidators，如果没有则读取 Validators
 func (d *DPoS) getValidatorsFromCurrentBlockExtraData(header *types.Header) (validator.AccountSet, error) {
 	if header == nil {
 		return nil, fmt.Errorf("header is nil")
@@ -228,15 +227,7 @@ func (d *DPoS) getValidatorsFromCurrentBlockExtraData(header *types.Header) (val
 		return nil, fmt.Errorf("failed to unmarshal extra data: %w", err)
 	}
 
-	// 优先使用 NextEpochValidators（如果存在）
-	if len(extra.NextEpochValidators) > 0 {
-		d.logger.Debug("✅ 从当前区块ExtraData的NextEpochValidators读取验证者集合",
-			"blockNumber", header.Number,
-			"validatorsCount", len(extra.NextEpochValidators))
-		return extra.NextEpochValidators.Copy(), nil
-	}
-
-	// 如果没有 NextEpochValidators，尝试从 Validators 读取
+	// 从 Validators 读取
 	if extra.Validators != nil && !extra.Validators.IsEmpty() && len(extra.Validators.Added) > 0 {
 		validators := make(validator.AccountSet, 0, len(extra.Validators.Added))
 		for _, v := range extra.Validators.Added {

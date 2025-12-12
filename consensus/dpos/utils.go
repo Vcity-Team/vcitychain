@@ -91,7 +91,7 @@ func setupHeaderHashFunc() {
 		types.HeaderHash = func(h *types.Header) types.Hash {
 			// when hashing the block for signing we have to remove from
 			// the extra field the seal and committed seal items
-			extra, err := GetIbftExtraClean(h.ExtraData)
+			extra, err := GetDposExtraClean(h.ExtraData)
 			if err != nil {
 				return types.ZeroHash
 			}
@@ -104,4 +104,3 @@ func setupHeaderHashFunc() {
 		}
 	})
 }
-

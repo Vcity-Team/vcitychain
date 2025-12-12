@@ -203,7 +203,7 @@ func (v *validatorsSnapshotCache) computeSnapshot(
 		}
 	}
 
-	extra, err := GetIbftExtra(header.ExtraData)
+	extra, err := GetDposExtra(header.ExtraData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode extra from the block#%d: %w", header.Number, err)
 	}
@@ -225,10 +225,10 @@ func (v *validatorsSnapshotCache) computeSnapshot(
 		// 修复类型不匹配问题
 		// 将PolyBFT的验证者集合转换为DPoS的验证者集合
 		newValidators := make(validator.AccountSet, 0)
-		
+
 		// TODO: 实现从 ValidatorSetDelta 到 AccountSet 的转换
 		// 这里需要根据实际的 ValidatorSetDelta 结构来实现
-		
+
 		// 应用变更
 		snapshot = newValidators
 	} else {

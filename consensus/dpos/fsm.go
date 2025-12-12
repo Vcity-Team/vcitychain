@@ -114,7 +114,7 @@ func (f *fsm) BuildProposal(currentRound uint64) ([]byte, error) {
 
 	parent := f.parent
 
-	extraParent, err := GetIbftExtra(parent.ExtraData)
+	extraParent, err := GetDposExtra(parent.ExtraData)
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +188,7 @@ func (f *fsm) BuildProposal(currentRound uint64) ([]byte, error) {
 
 	stateBlock, err := f.blockBuilder.Build(func(h *types.Header) {
 		h.ExtraData = extra.MarshalRLPTo(nil)
-		h.MixHash = PolyBFTMixDigest
+		h.MixHash = DPoSMixDigest
 	})
 
 	if err != nil {
@@ -309,12 +309,12 @@ func (f *fsm) Validate(proposal []byte) error {
 		)
 	}
 
-	extra, err := GetIbftExtra(block.Header.ExtraData)
+	extra, err := GetDposExtra(block.Header.ExtraData)
 	if err != nil {
 		return fmt.Errorf("cannot get extra data:%w", err)
 	}
 
-	parentExtra, err := GetIbftExtra(f.parent.ExtraData)
+	parentExtra, err := GetDposExtra(f.parent.ExtraData)
 	if err != nil {
 		return err
 	}
@@ -536,7 +536,7 @@ func (f *fsm) Insert(proposal []byte, committedSeals []*messages.CommittedSeal) 
 	// In this function we should try to return little to no errors since
 	// at this point everything we have to do is just commit something that
 	// we should have already computed beforehand.
-	extra, err := GetIbftExtra(newBlock.Block.Header.ExtraData)
+	extra, err := GetDposExtra(newBlock.Block.Header.ExtraData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert proposal, due to not being able to extract extra data: %w", err)
 	}
@@ -798,7 +798,7 @@ func validateHeaderFields(parent *types.Header, header *types.Header, blockTimeD
 		return fmt.Errorf("timestamp older than parent")
 	}
 	// verify mix digest
-	if header.MixHash != PolyBFTMixDigest {
+	if header.MixHash != DPoSMixDigest {
 		return fmt.Errorf("mix digest is not correct")
 	}
 	// difficulty must be > 0

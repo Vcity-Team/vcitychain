@@ -20,7 +20,6 @@ func (d *DPoS) processEpochBoundary(r *dposRuntime, parent *types.Header, nextBl
 				"error", err)
 			return
 		}
-		r.nextEpochValidators = result.NextEpochValidators
 		d.pendingFaultFlags = convertCoreFaultFlagsToLocal(result.FaultFlags)
 		return
 	}
@@ -30,9 +29,6 @@ func (d *DPoS) processEpochBoundary(r *dposRuntime, parent *types.Header, nextBl
 
 	// Run fault detection and persist the results
 	d.runEpochFaultDetection(r, parent, nextBlockNumber)
-
-	// Calculate next epoch validators so ExtraData can carry the future set
-	d.prepareNextEpochValidators(r, nextBlockNumber)
 }
 
 func (d *DPoS) applyScheduledRecoveryProposals(r *dposRuntime, nextBlockNumber uint64) {
@@ -155,35 +151,4 @@ func (d *DPoS) runEpochFaultDetection(r *dposRuntime, parent *types.Header, next
 			"blockNumber", nextBlockNumber,
 			"error", err)
 	}
-}
-
-func (d *DPoS) prepareNextEpochValidators(r *dposRuntime, nextBlockNumber uint64) {
-	if d == nil {
-		return
-	}
-
-	r.logger.Info("🔄 ===== 开始计算下一个epoch的验证者集合 =====",
-		"blockNumber", nextBlockNumber,
-		"note", "故障检测已完成，将排除故障节点")
-
-	nextEpochValidators, err := d.calculateNextEpochValidators(nextBlockNumber)
-	if err != nil {
-		r.logger.Error("❌ 计算下一个epoch验证者集合失败", "blockNumber", nextBlockNumber, "error", err)
-		r.nextEpochValidators = nil
-		return
-	}
-
-	r.logger.Info("========= 下一个epoch验证者集合已计算，将写入ExtraData ========== ✅✅✅",
-		"blockNumber", nextBlockNumber,
-		"nextEpochValidatorsCount", len(nextEpochValidators),
-		"note", "故障节点已被排除")
-
-	for i, validator := range nextEpochValidators {
-		r.logger.Info("📋 下一个epoch验证者",
-			"index", i,
-			"address", validator.Address.String(),
-			"votingPower", validator.VotingPower.String())
-	}
-
-	r.nextEpochValidators = nextEpochValidators
 }

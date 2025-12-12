@@ -217,8 +217,7 @@ type EpochBoundaryContext struct {
 
 // EpochBoundaryResult Epoch边界处理结果
 type EpochBoundaryResult struct {
-	NextEpochValidators validator.AccountSet
-	FaultFlags          []FaultFlagInfo
+	FaultFlags []FaultFlagInfo
 }
 
 // EpochLifecycleManager Epoch生命周期管理器
