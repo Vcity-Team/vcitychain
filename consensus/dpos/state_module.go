@@ -67,7 +67,7 @@ func (d *DPoS) buildStateModuleDependencies() statemodule.Dependencies {
 			if d.state == nil || d.state.StakeStore == nil {
 				return fmt.Errorf("stake store not available")
 			}
-			return d.state.StakeStore.SaveEpochValidators(validators)
+			return nil
 		},
 		LoadValidators: func(filterZeroVotingPower bool) (validator.AccountSet, error) {
 			if d.state == nil || d.state.StakeStore == nil {

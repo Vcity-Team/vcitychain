@@ -773,21 +773,19 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		return fmt.Errorf("failed to verify signatures for block %d, because checkpoint data are not present", blockNumber)
 	}
 
-	// 如果区块中包含NextEpochValidators，先更新本地缓存和数据库
+	// 如果区块中包含NextEpochValidators，更新本地内存缓存（ExtraData是唯一数据源，不再保存到数据库）
 	if len(i.NextEpochValidators) > 0 {
 		if dposBackend, ok := consensusBackend.(*DPoS); ok && dposBackend != nil {
-			if err := dposBackend.applyNextEpochValidatorsFromExtra(i.NextEpochValidators, blockNumber); err != nil {
-				logger.Error("❌ 应用ExtraData中的下一个epoch验证者集合失败",
-					"blockNumber", blockNumber,
-					"error", err)
-			} else {
-				logger.Info("✅ 已根据ExtraData更新下一个epoch验证者集合",
-					"blockNumber", blockNumber,
-					"nextEpochValidatorsCount", len(i.NextEpochValidators))
+			// 更新内存缓存
+			dposBackend.delegates = i.NextEpochValidators.Copy()
+			if dposBackend.runtime != nil {
+				dposBackend.runtime.lock.Lock()
+				dposBackend.runtime.delegates = i.NextEpochValidators.Copy()
+				dposBackend.runtime.lock.Unlock()
 			}
-		} else {
-			logger.Warn("⚠️ 无法应用ExtraData中的下一个epoch验证者集合，DPoS backend不可用",
-				"blockNumber", blockNumber)
+			logger.Debug("✅ 已根据ExtraData更新内存中的验证者集合",
+				"blockNumber", blockNumber,
+				"nextEpochValidatorsCount", len(i.NextEpochValidators))
 		}
 	}
 
@@ -1717,7 +1715,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 						for _, address := range stillMissing {
 							// 检查peer连接状态
 							peerID, hasMapping, isConnected := dposInstance.runtime.networkIntegration.GetValidatorConnectivity(address)
-							
+
 							if hasMapping && !isConnected {
 								// peer映射存在但未连接，主动触发连接
 								if err := dposInstance.runtime.networkIntegration.TryConnectPeer(peerID); err != nil {

@@ -35,8 +35,7 @@ type LifecycleDependencies struct {
 
 	CalculateNextEpochValidators func(blockNumber uint64) (validator.AccountSet, error)
 
-	SaveNextEpochValidators func(validators validator.AccountSet) error
-	UpdateValidatorCaches   func(validators validator.AccountSet)
+	UpdateValidatorCaches func(validators validator.AccountSet)
 }
 
 type lifecycleManager struct {
@@ -264,12 +263,6 @@ func (m *lifecycleManager) prepareNextEpochValidators(nextBlockNumber uint64) (v
 func (m *lifecycleManager) ApplyNextValidatorsFromExtra(validators validator.AccountSet, blockNumber uint64) error {
 	if len(validators) == 0 {
 		return nil
-	}
-
-	if m.deps.SaveNextEpochValidators != nil {
-		if err := m.deps.SaveNextEpochValidators(validators); err != nil {
-			return err
-		}
 	}
 
 	if m.deps.UpdateValidatorCaches != nil {

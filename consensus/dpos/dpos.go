@@ -329,7 +329,6 @@ type DPoS struct {
 
 	// 故障检测相关字段
 	currentEpoch      uint64
-	epochValidators   validator.AccountSet
 	faultyValidators  map[types.Address]bool
 	missedBlocksCount map[types.Address]uint64
 

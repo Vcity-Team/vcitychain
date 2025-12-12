@@ -953,13 +953,6 @@ func (p *blockchainWrapper) updateNextEpochValidatorsFromLocal(block *types.Bloc
 				nextEpochValidators = configLimitedValidators
 			}
 		}*/
-
-		if err := dposInstance.saveNextEpochValidators(nextEpochValidators); err != nil {
-			p.logger.Error("❌ 保存下一个epoch验证者集合失败",
-				"blockNumber", block.Number(),
-				"error", err)
-			return fmt.Errorf("failed to save next epoch validators: %w", err)
-		}
 		addrs := make([]string, 0, len(nextEpochValidators))
 		for _, v := range nextEpochValidators {
 			addrs = append(addrs, v.Address.String())

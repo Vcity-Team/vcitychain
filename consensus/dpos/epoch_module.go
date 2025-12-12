@@ -139,7 +139,6 @@ func (d *DPoS) buildEpochLifecycleDependencies() epochmodule.LifecycleDependenci
 			return d.updateBlockProducersFromFaultFlags(convertCoreFaultFlagsToLocal(flags))
 		},
 		CalculateNextEpochValidators: d.calculateNextEpochValidators,
-		SaveNextEpochValidators:      d.saveNextEpochValidators,
 		UpdateValidatorCaches:        d.updateValidatorCachesFromModule,
 	}
 }

@@ -48,8 +48,7 @@ func (fd *FaultDetector) DetectFaults(blockNumber uint64) ([]FaultFlagInfo, erro
 		return nil, err
 	}
 
-	// 更新dposInstance的epochValidators字段（向后兼容）
-	fd.dposInstance.epochValidators = validators
+	// epochValidators 字段已删除，ExtraData 是唯一数据源
 
 	// 3. 获取上一个epoch的验证者集合，用于判断新加入的验证者
 	// 注意：这里获取的是"上一个epoch"的验证者集合，用于判断哪些验证者是新加入的

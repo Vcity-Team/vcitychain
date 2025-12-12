@@ -481,66 +481,7 @@ func (d *DPoS) reloadValidatorsAfterRecovery() error {
 		"finalCount", len(finalValidators),
 		"maxValidators", maxValidators)
 
-	// 将 epoch validators 与当前配置截取后的集合对齐，避免旧的数量造成期望出块数偏差
-	existingEpochValidators, err := d.getEpochValidatorsFromDatabase()
-	if err != nil {
-		d.logger.Warn("⚠️ 获取已保存的epoch验证者集合失败，跳过对齐",
-			"error", err)
-		return nil
-	}
-
-	// 对已有 epoch 集合按同样规则排序，确保对比稳定
-	if len(existingEpochValidators) > 0 {
-		sort.Slice(existingEpochValidators, func(i, j int) bool {
-			votingPowerCmp := existingEpochValidators[i].VotingPower.Cmp(existingEpochValidators[j].VotingPower)
-			if votingPowerCmp != 0 {
-				return votingPowerCmp > 0
-			}
-			return bytes.Compare(existingEpochValidators[i].Address[:], existingEpochValidators[j].Address[:]) < 0
-		})
-	}
-
-	// 构造地址字符串列表用于对比和日志
-	getAddrList := func(vs validator.AccountSet) []string {
-		addrs := make([]string, 0, len(vs))
-		for _, v := range vs {
-			addrs = append(addrs, v.Address.String())
-		}
-		return addrs
-	}
-
-	existingAddrs := getAddrList(existingEpochValidators)
-	targetAddrs := getAddrList(finalValidators)
-
-	matched := len(existingAddrs) == len(targetAddrs)
-	if matched {
-		for i := range existingAddrs {
-			if existingAddrs[i] != targetAddrs[i] {
-				matched = false
-				break
-			}
-		}
-	}
-
-	if matched {
-		d.logger.Info("✅ epoch 验证者集合已与配置截取后的集合一致",
-			"count", len(targetAddrs))
-		return nil
-	}
-
-	// 不一致时覆盖保存
-	d.logger.Info("⚠️ epoch validators mismatch, overwrite with config-limited set",
-		"oldCount", len(existingAddrs),
-		"newCount", len(targetAddrs),
-		"oldAddrs", existingAddrs,
-		"newAddrs", targetAddrs)
-
-	if err := d.saveNextEpochValidators(finalValidators); err != nil {
-		d.logger.Error("❌ 覆盖保存 epoch 验证者集合失败", "error", err)
-		return err
-	}
-
-	// 再次同步到内存（防止后续读取旧集合）
+	// 同步到内存（不再保存到数据库，ExtraData 是唯一数据源）
 	d.delegates = finalValidators.Copy()
 	if d.runtime != nil {
 		d.runtime.lock.Lock()
@@ -548,7 +489,7 @@ func (d *DPoS) reloadValidatorsAfterRecovery() error {
 		d.runtime.lock.Unlock()
 	}
 
-	d.logger.Info("✅ 已覆盖保存 epoch 验证者集合并同步内存",
+	d.logger.Info("✅ 已同步验证者集合到内存",
 		"finalCount", len(finalValidators))
 
 	return nil
@@ -595,17 +536,7 @@ func (d *DPoS) getValidatorsForEpoch(epochNumber uint64) (validator.AccountSet, 
 		}
 	}
 
-	// 方式2：从数据库获取（如果ExtraData中没有）
-	if d.state != nil && d.state.StakeStore != nil {
-		if validators, err := d.state.StakeStore.GetEpochValidators(); err == nil && len(validators) > 0 {
-			d.logger.Info("✅ 从数据库获取epoch验证者集合",
-				"epochNumber", epochNumber,
-				"validatorsCount", len(validators))
-			return validators, nil
-		}
-	}
-
-	// 方式3：备用方案 - 使用当前内存中的验证者集合
+	// 方式2：备用方案 - 使用当前内存中的验证者集合
 	d.logger.Warn("⚠️ 无法从ExtraData或数据库获取epoch验证者集合，使用当前内存中的验证者集合",
 		"epochNumber", epochNumber,
 		"epochStartBlock", epochStartBlock)
@@ -758,186 +689,6 @@ func (d *DPoS) calculateNextEpochValidators(blockNumber uint64) (validator.Accou
 		"activeValidators", len(activeValidators))
 
 	return activeValidators, nil
-}
-
-// saveNextEpochValidators 保存下一个epoch的验证者集合
-func (d *DPoS) saveNextEpochValidators(validators validator.AccountSet) error {
-	blockNumber := d.getCurrentBlockNumber()
-
-	if d.stateMgr != nil {
-		if err := d.stateMgr.SaveValidators(blockNumber, validators); err != nil {
-			d.logger.Warn("state manager 保存验证者集合失败，尝试回退",
-				"error", err,
-				"count", len(validators))
-		} else {
-			return nil
-		}
-	}
-
-	if d.state == nil || d.state.StakeStore == nil {
-		return fmt.Errorf("stake store not available")
-	}
-
-	// 记录将要保存的验证者集合，便于定位是否已剔除故障节点
-	addrs := make([]string, 0, len(validators))
-	for _, v := range validators {
-		addrs = append(addrs, v.Address.String())
-	}
-	d.logger.Info("ℹ️ 保存下一个epoch验证者集合到DB",
-		"blockNumber", blockNumber,
-		"count", len(validators),
-		"validators", addrs)
-
-	if err := d.state.StakeStore.SaveEpochValidators(validators); err != nil {
-		d.logger.Error("❌ 保存下一个epoch验证者集合失败", "error", err)
-		return err
-	}
-
-	return nil
-}
-
-// applyNextEpochValidatorsFromExtra 使用区块ExtraData中的验证者集合更新本地状态
-func (d *DPoS) applyNextEpochValidatorsFromExtra(validators validator.AccountSet, blockNumber uint64) error {
-	// 强制使用配置截取后的集合（确保数量和排序都与配置一致）
-	// 这样可以避免ExtraData中的旧数据（10个）覆盖新配置（7个）
-	configLimitedValidators, err := d.GetSortedValidatorsWithLimit()
-	if err == nil && len(configLimitedValidators) > 0 {
-		// 无论数量是否相同，都使用配置截取后的集合，确保排序一致
-		validators = configLimitedValidators
-	} else if err != nil {
-		d.logger.Warn("⚠️ 获取配置截取后的验证者集合失败，使用ExtraData中的集合",
-			"blockNumber", blockNumber,
-			"error", err)
-	}
-
-	if d.epochLifecycle != nil {
-		// 传入截取后的验证者集合
-		if err := d.epochLifecycle.ApplyNextValidatorsFromExtra(validators, blockNumber); err != nil {
-			d.logger.Error("❌ 模块化应用下一个epoch验证者集合失败", "blockNumber", blockNumber, "error", err)
-			return err
-		}
-		return nil
-	}
-
-	if len(validators) == 0 {
-		return nil
-	}
-
-	d.logger.Info("🆕 从ExtraData应用下一个epoch验证者集合",
-		"blockNumber", blockNumber,
-		"nextEpochValidatorsCount", len(validators))
-
-	// 强制使用配置截取后的集合（确保数量和排序都与配置一致）
-	// 这样可以避免ExtraData中的旧数据（10个）覆盖新配置（7个）
-	configLimitedValidators, err2 := d.GetSortedValidatorsWithLimit()
-	if err2 == nil && len(configLimitedValidators) > 0 {
-		// 无论数量是否相同，都使用配置截取后的集合，确保排序一致
-		validators = configLimitedValidators
-	} else if err2 != nil {
-		d.logger.Warn("⚠️ 获取配置截取后的验证者集合失败，使用ExtraData中的集合",
-			"blockNumber", blockNumber,
-			"error", err2)
-	}
-
-	// 保存到数据库
-	if err := d.saveNextEpochValidators(validators); err != nil {
-		return fmt.Errorf("failed to save next epoch validators from extra: %w", err)
-	}
-
-	// 更新内存缓存
-	d.delegates = validators.Copy()
-	d.logger.Info("🆕 已用ExtraData验证者集合覆盖本地delegates",
-		"blockNumber", blockNumber,
-		"delegatesCount", len(d.delegates))
-
-	if d.runtime != nil {
-		d.runtime.lock.Lock()
-		d.runtime.delegates = validators.Copy()
-		d.runtime.lock.Unlock()
-		d.logger.Info("🆕 已同步runtime.delegates",
-			"blockNumber", blockNumber,
-			"delegatesCount", len(d.runtime.delegates))
-	}
-
-	return nil
-}
-
-// getEpochValidatorsFromDatabase 从数据库获取epoch验证者
-func (d *DPoS) getEpochValidatorsFromDatabase() (validator.AccountSet, error) {
-	if d.state == nil || d.state.StakeStore == nil {
-		return nil, fmt.Errorf("stake store not available")
-	}
-
-	validators, err := d.state.StakeStore.GetEpochValidators()
-	if err != nil {
-		// 使用日志频率限制，10秒一次
-		d.logOnceWithInterval("get_epoch_validators_failed", 10*time.Second, "warn",
-			"⚠️ 从数据库获取epoch验证者失败", "error", err)
-		return nil, err
-	}
-
-	// 确保排序一致（权重相同时按地址升序排序，确保所有节点完全一致）
-	if len(validators) > 0 {
-		sort.Slice(validators, func(i, j int) bool {
-			// 1. 首先按票数降序排序
-			votingPowerCmp := validators[i].VotingPower.Cmp(validators[j].VotingPower)
-			if votingPowerCmp != 0 {
-				return votingPowerCmp > 0
-			}
-			// 2. 票数相同，按地址升序排序（确保完全一致）
-			return bytes.Compare(validators[i].Address[:], validators[j].Address[:]) < 0
-		})
-	}
-
-	// 始终使用配置截取后的集合，确保排序和内容都正确
-	// 即使数量一致，也要使用 configLimitedValidators，因为数据库里保存的排序可能不对
-	configLimitedValidators, err2 := d.GetSortedValidatorsWithLimit()
-	if err2 == nil && len(configLimitedValidators) > 0 {
-		expectedCount := len(configLimitedValidators)
-		oldCount := len(validators)
-
-		// 检查数量和内容是否一致
-		needUpdate := oldCount != expectedCount
-		if !needUpdate && oldCount == expectedCount {
-			// 即使数量一致，也要检查排序是否正确
-			// 对比地址列表，确保排序一致
-			for i := range validators {
-				if i >= len(configLimitedValidators) || validators[i].Address != configLimitedValidators[i].Address {
-					needUpdate = true
-					break
-				}
-			}
-		}
-
-		if needUpdate {
-			// 使用日志频率限制，避免刷屏（只在第一次或间隔10秒后打印）
-			d.logOnceWithInterval("epoch_validators_mismatch", 10*time.Second, "warn",
-				"⚠️ 数据库中的epoch验证者与配置不一致（数量或排序），使用配置截取后的集合",
-				"databaseCount", oldCount,
-				"configCount", expectedCount)
-			validators = configLimitedValidators
-			// 立即保存正确的集合到数据库，避免下次再打印
-			// SaveEpochValidators 现在使用固定key，确保覆盖而不是新增
-			if err := d.saveNextEpochValidators(configLimitedValidators); err != nil {
-				d.logOnceWithInterval("save_epoch_validators_failed", 10*time.Second, "warn",
-					"⚠️ 保存修正后的epoch验证者集合失败", "error", err)
-			} else {
-				// 使用INFO级别，确保日志明显可见
-				d.logger.Info("✅ [getEpochValidatorsFromDatabase] 已修正并覆盖保存epoch验证者集合到数据库",
-					"oldCount", oldCount,
-					"newCount", len(configLimitedValidators),
-					"count", len(configLimitedValidators))
-			}
-		} else {
-			// 即使一致，也使用 configLimitedValidators 确保排序正确
-			validators = configLimitedValidators
-		}
-	}
-
-	// 使用日志频率限制，10秒一次
-	d.logOnceWithInterval("get_epoch_validators_success", 10*time.Second, "debug",
-		"✅ 从数据库获取epoch验证者成功", "count", len(validators))
-	return validators, nil
 }
 
 // logOnceWithInterval 防重复日志函数（自定义间隔）

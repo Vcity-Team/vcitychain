@@ -236,14 +236,14 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			return false
 		}
 
-		// 优先从数据库获取预先计算的epoch验证者集合
-		validatorsFromExtra, err := dposInstance.getEpochValidatorsFromDatabase()
-		validatorsSource := "database" // 记录验证者列表来源
+		// 优先从当前区块的 ExtraData 读取验证者集合（唯一数据源）
+		validatorsFromExtra, err := dposInstance.getValidatorsFromCurrentBlockExtraData(currentBlock)
+		validatorsSource := "extra_data" // 记录验证者列表来源
 		if err != nil || len(validatorsFromExtra) == 0 {
-			// 如果数据库中没有预先计算的验证者集合，回退到实时查询（兼容性）
-			// 这种情况可能发生在：1. 第一次启动 2. 数据库被清空 3. 之前的epoch没有保存
-			validatorsFromExtra, err = dposInstance.GetSortedValidatorsWithLimit()
-			validatorsSource = "realtime_query" // 更新来源为实时查询
+			// 如果 ExtraData 中没有验证者集合，回退到实时查询（带故障过滤）
+			// 这种情况可能发生在：1. 第一次启动 2. ExtraData 解析失败
+			validatorsFromExtra, err = dposInstance.GetSortedValidatorsWithLimitFilterFaulty()
+			validatorsSource = "realtime_query_filter_faulty" // 更新来源为实时查询（过滤故障）
 			if err != nil {
 				r.logger.Error("❌ 实时查询验证者集合失败",
 					"blockNumber", currentBlock.Number,
@@ -256,9 +256,8 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 				return false
 			}
 		}
-		// 注意：getEpochValidatorsFromDatabase() 已经处理了截取和保存，这里不需要重复检查
 
-		// 直接使用数据库中的验证者集合（已在epoch边界过滤）
+		// 使用从 ExtraData 或实时查询获取的验证者集合
 		validators := make([]types.Address, 0, len(validatorsFromExtra))
 		for _, v := range validatorsFromExtra {
 			validators = append(validators, v.Address)

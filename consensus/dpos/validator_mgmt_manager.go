@@ -168,6 +168,93 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 	return validators, nil
 }
 
+// GetSortedValidatorsWithLimitFilterFaulty 获取排序后的验证者集合（带限制，并过滤故障验证者）
+// 用于出块相关逻辑，确保故障节点不会参与出块
+func (d *DPoS) GetSortedValidatorsWithLimitFilterFaulty() (validator.AccountSet, error) {
+	// 先获取排序和截取后的验证者集合
+	allValidators, err := d.GetSortedValidatorsWithLimit()
+	if err != nil {
+		return nil, err
+	}
+
+	if len(allValidators) == 0 {
+		return validator.AccountSet{}, nil
+	}
+
+	// 过滤掉故障验证者
+	activeValidators := make(validator.AccountSet, 0, len(allValidators))
+	faultyCount := 0
+
+	for _, v := range allValidators {
+		// 检查验证者的故障状态
+		faultInfo := d.getValidatorFaultInfo(v.Address)
+		isFaulty := false
+		if faultInfo != nil && faultInfo["isFaulty"] != nil {
+			if faultValue, ok := faultInfo["isFaulty"].(bool); ok {
+				isFaulty = faultValue
+			}
+		}
+
+		if isFaulty {
+			faultyCount++
+			d.logger.Debug("🚫 [GetSortedValidatorsWithLimitFilterFaulty] 过滤掉故障验证者",
+				"address", v.Address.String(),
+				"votingPower", v.VotingPower.String())
+		} else {
+			activeValidators = append(activeValidators, v)
+		}
+	}
+
+	if faultyCount > 0 {
+		d.logger.Info("✅ [GetSortedValidatorsWithLimitFilterFaulty] 故障验证者过滤完成",
+			"totalValidators", len(allValidators),
+			"faultyValidators", faultyCount,
+			"activeValidators", len(activeValidators))
+	}
+
+	// 注意：过滤后保持原有排序（权重倒序，地址升序），因为已经排序过了
+	return activeValidators, nil
+}
+
+// getValidatorsFromCurrentBlockExtraData 从当前区块的 ExtraData 读取验证者集合
+// 优先读取 NextEpochValidators，如果没有则读取 Validators
+func (d *DPoS) getValidatorsFromCurrentBlockExtraData(header *types.Header) (validator.AccountSet, error) {
+	if header == nil {
+		return nil, fmt.Errorf("header is nil")
+	}
+
+	extra := &Extra{}
+	if err := extra.UnmarshalRLP(header.ExtraData); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal extra data: %w", err)
+	}
+
+	// 优先使用 NextEpochValidators（如果存在）
+	if len(extra.NextEpochValidators) > 0 {
+		d.logger.Debug("✅ 从当前区块ExtraData的NextEpochValidators读取验证者集合",
+			"blockNumber", header.Number,
+			"validatorsCount", len(extra.NextEpochValidators))
+		return extra.NextEpochValidators.Copy(), nil
+	}
+
+	// 如果没有 NextEpochValidators，尝试从 Validators 读取
+	if extra.Validators != nil && !extra.Validators.IsEmpty() && len(extra.Validators.Added) > 0 {
+		validators := make(validator.AccountSet, 0, len(extra.Validators.Added))
+		for _, v := range extra.Validators.Added {
+			validators = append(validators, &validator.ValidatorMetadata{
+				Address:     v.Address,
+				VotingPower: v.VotingPower,
+				IsActive:    v.IsActive,
+			})
+		}
+		d.logger.Debug("✅ 从当前区块ExtraData的Validators读取验证者集合",
+			"blockNumber", header.Number,
+			"validatorsCount", len(validators))
+		return validators, nil
+	}
+
+	return nil, fmt.Errorf("no validators found in ExtraData")
+}
+
 // isValidator 检查地址是否是验证者
 func (d *DPoS) isValidator(address types.Address) bool {
 	if d.state != nil && d.state.StakeStore != nil {

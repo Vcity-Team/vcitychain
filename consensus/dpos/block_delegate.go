@@ -16,17 +16,18 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 		return types.ZeroAddress
 	}
 
-	// 优先从数据库获取预先计算的epoch验证者集合（与shouldProduceBlockNow()保持一致）
-	allValidators, err := dposBackend.getEpochValidatorsFromDatabase()
-	validatorsSource := "database" // 记录验证者列表来源
+	// 优先从当前区块的 ExtraData 读取验证者集合（唯一数据源）
+	currentBlock := r.config.blockchain.CurrentHeader()
+	allValidators, err := dposBackend.getValidatorsFromCurrentBlockExtraData(currentBlock)
+	validatorsSource := "extra_data" // 记录验证者列表来源
 	if err != nil || len(allValidators) == 0 {
-		// 如果数据库中没有预先计算的验证者集合，回退到实时查询（兼容性）
-		// 这种情况可能发生在：1. 第一次启动 2. 数据库被清空 3. 之前的epoch没有保存
+		// 如果 ExtraData 中没有验证者集合，回退到实时查询（带故障过滤）
+		// 这种情况可能发生在：1. 第一次启动 2. ExtraData 解析失败
 		r.logOnceWithInterval("get_current_delegate_fallback", 10*time.Second, "debug",
-			"⚠️ getCurrentDelegate: 数据库中没有预先计算的epoch验证者集合，回退到实时查询",
+			"⚠️ getCurrentDelegate: ExtraData中没有验证者集合，回退到实时查询",
 			"error", err)
-		allValidators, err = dposBackend.GetSortedValidatorsWithLimit()
-		validatorsSource = "realtime_query" // 更新来源为实时查询
+		allValidators, err = dposBackend.GetSortedValidatorsWithLimitFilterFaulty()
+		validatorsSource = "realtime_query_filter_faulty" // 更新来源为实时查询（过滤故障）
 		if err != nil {
 			r.logger.Error("❌ getCurrentDelegate: 实时查询验证者集合失败", "error", err)
 			return types.ZeroAddress
@@ -36,9 +37,8 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 			return types.ZeroAddress
 		}
 	}
-	// 注意：getEpochValidatorsFromDatabase() 已经处理了截取和保存，这里不需要重复检查
 
-	// 直接使用数据库中的验证者集合（已在epoch边界完成过滤）
+	// 使用从 ExtraData 或实时查询获取的验证者集合
 	validators := allValidators
 	if len(validators) == 0 {
 		r.logger.Error("❌ getCurrentDelegate: 验证者集合为空，无法确定当前委托者",
@@ -73,7 +73,7 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 					if meta.Address == delegate.Address {
 						latestMeta = meta
 						break
-				 }
+					}
 				}
 			} else {
 				r.logger.Warn("⚠️ getCurrentDelegate: 获取最新验证者权重失败",

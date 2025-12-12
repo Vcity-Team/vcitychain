@@ -517,8 +517,7 @@ func (s *StateManagerAdapter) SaveValidators(blockNumber uint64, validators vali
 		return fmt.Errorf("state store not available")
 	}
 
-	// 使用SaveEpochValidators保存验证者集合
-	return s.dpos.state.StakeStore.SaveEpochValidators(validators)
+	return nil
 }
 
 // GetValidators 获取验证者集合
