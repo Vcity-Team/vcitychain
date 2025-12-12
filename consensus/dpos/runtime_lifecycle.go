@@ -33,9 +33,6 @@ func (r *dposRuntime) start() error {
 	// 启动持久的签名请求监听器 - 确保所有节点都能接收到广播的签名请求
 	go r.listenForSignatureRequests(context.Background())
 
-	// 启动网络健康监控
-	r.startNetworkHealthMonitoring()
-
 	r.logger.Debug("🎉 DPoS runtime启动成功")
 	return nil
 }
@@ -158,4 +155,3 @@ func (r *dposRuntime) cleanupSignatureMaps() {
 	}
 	r.signatureGenerationDedupMutex.Unlock()
 }
-

@@ -1369,16 +1369,10 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 				r.logger.Warn("验证者数量不足，等待更多节点加入",
 					"activeValidators", activeValidators,
 					"minRequired", minRequiredSignatures)
-				// 重置超时，给更多节点加入的时间
 				timeoutCh = time.After(1 * time.Minute)
 			} else if len(collectedSignatures) == 0 {
 				r.logger.Warn("验证者数量足够但未收到签名，检查网络连接")
-
-				// 进行网络健康检查
 				if !r.checkNetworkHealth() {
-					r.logger.Warn("网络健康检查失败，尝试自动恢复")
-					go r.recoverNetworkConnection()
-					// 给恢复更多时间
 					timeoutCh = time.After(1 * time.Minute)
 				} else {
 					// 网络健康但未收到签名，可能是其他问题，给更多时间
@@ -1387,12 +1381,6 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 			}
 
 		case <-debugTicker.C:
-			// 调试日志：监控通道状态和收集器状态
-			// 检查网络集成层的收集器状态
-			if r.networkIntegration != nil {
-				// 网络集成层状态检查
-			}
-
 		case <-timeoutCh:
 			r.logger.Warn("签名收集超时",
 				"collected", len(collectedSignatures),

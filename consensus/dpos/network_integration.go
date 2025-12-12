@@ -553,7 +553,6 @@ func (ni *NetworkIntegration) createTopics() error {
 		Data: defaultResponseData,
 	})
 	if err != nil {
-		// 检查是否是"topic already exists"错误
 		if strings.Contains(err.Error(), "topic already exists") {
 			ni.logger.Warn("签名响应主题已存在，跳过创建")
 		} else {
@@ -566,7 +565,6 @@ func (ni *NetworkIntegration) createTopics() error {
 			actualProtoID := ni.signatureResponseTopic.GetActualProtoID()
 			ni.logger.Debug("🔍 网络集成层签名响应Topic名称对比", "原始名称", "dpos-signature-response", "实际名称", actualProtoID)
 		}
-		//ni.logger.Info("成功创建签名响应主题")
 	}
 
 	// 创建投票主题 - 使用protobuf序列化
@@ -574,14 +572,11 @@ func (ni *NetworkIntegration) createTopics() error {
 		Data: nil,
 	})
 	if err != nil {
-		// 检查是否是"topic already exists"错误
 		if strings.Contains(err.Error(), "topic already exists") {
 			ni.logger.Warn("投票主题已存在，跳过创建")
 		} else {
 			return fmt.Errorf("failed to create vote topic: %w", err)
 		}
-	} else {
-		//ni.logger.Info("成功创建投票主题")
 	}
 
 	// 创建委托主题 - 使用protobuf序列化
@@ -589,14 +584,11 @@ func (ni *NetworkIntegration) createTopics() error {
 		Data: nil,
 	})
 	if err != nil {
-		// 检查是否是"topic already exists"错误
 		if strings.Contains(err.Error(), "topic already exists") {
 			ni.logger.Warn("委托主题已存在，跳过创建")
 		} else {
 			return fmt.Errorf("failed to create delegate topic: %w", err)
 		}
-	} else {
-		//ni.logger.Info("成功创建委托主题")
 	}
 
 	// 创建BLS公钥广播主题
@@ -604,13 +596,11 @@ func (ni *NetworkIntegration) createTopics() error {
 		Data: nil,
 	})
 	if err != nil {
-		// 检查是否是"topic already exists"错误
 		if strings.Contains(err.Error(), "topic already exists") {
 			ni.logger.Warn("BLS公钥广播主题已存在，跳过创建")
 		} else {
 			return fmt.Errorf("failed to create BLS key broadcast topic: %w", err)
 		}
-	} else {
 	}
 
 	// 创建BLS公钥确认主题
@@ -618,13 +608,11 @@ func (ni *NetworkIntegration) createTopics() error {
 		Data: nil,
 	})
 	if err != nil {
-		// 检查是否是"topic already exists"错误
 		if strings.Contains(err.Error(), "topic already exists") {
 			ni.logger.Warn("BLS公钥确认主题已存在，跳过创建")
 		} else {
 			return fmt.Errorf("failed to create BLS key ack topic: %w", err)
 		}
-	} else {
 	}
 
 	// 创建BLS公钥请求主题
@@ -632,38 +620,22 @@ func (ni *NetworkIntegration) createTopics() error {
 		Data: nil,
 	})
 	if err != nil {
-		// 检查是否是"topic already exists"错误
 		if strings.Contains(err.Error(), "topic already exists") {
 			ni.logger.Warn("BLS公钥请求主题已存在，跳过创建")
 		} else {
 			return fmt.Errorf("failed to create BLS key request topic: %w", err)
 		}
-	} else {
 	}
 
-	// 创建BLS公钥响应主题
 	ni.blsKeyResponseTopic, err = ni.network.NewTopic("dpos-bls-key-response", &DPOSMessage{
 		Data: nil,
 	})
 	if err != nil {
-		// 检查是否是"topic already exists"错误
 		if strings.Contains(err.Error(), "topic already exists") {
 			ni.logger.Warn("BLS公钥响应主题已存在，跳过创建")
 		} else {
 			return fmt.Errorf("failed to create BLS key response topic: %w", err)
 		}
-	} else {
-	}
-
-	// 检查是否至少有一个关键主题可用
-	// 如果主题已存在但无法获取引用，这是可以接受的（主题本身是存在的）
-	// 只有在真正无法创建且无法获取现有主题时才返回错误
-	if ni.signatureRequestTopic == nil && ni.signatureResponseTopic == nil {
-		// 检查是否所有主题创建都因为"topic already exists"而失败
-		// 如果是这种情况，说明主题存在，只是无法获取引用，这是可以接受的
-		ni.logger.Warn("无法创建或获取关键主题引用，但主题可能已存在，继续运行")
-		// 不返回错误，允许继续运行（主题存在但无法获取引用是正常情况）
-		// return fmt.Errorf("failed to create any critical topics")
 	}
 
 	return nil
