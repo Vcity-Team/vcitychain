@@ -51,7 +51,7 @@ func (d *DPoS) buildGovernanceModuleDependencies() governancemodule.Dependencies
 		},
 		ListScheduled: func(epoch uint64) ([]*core.ParameterProposal, error) {
 			// 添加日志，跟踪传入的epoch参数
-			d.logger.Info("🔍🔍🔍 [buildGovernanceModuleDependencies.ListScheduled] 开始查询",
+			d.logger.Debug("🔍🔍🔍 [buildGovernanceModuleDependencies.ListScheduled] 开始查询",
 				"epoch", epoch,
 				"说明", "查询effectiveEpoch等于此值的待应用提案")
 
@@ -65,7 +65,7 @@ func (d *DPoS) buildGovernanceModuleDependencies() governancemodule.Dependencies
 			}
 			if l, ok := interface{}(store).(scheduler); ok {
 				result, err := l.ListScheduledByEpoch(epoch)
-				d.logger.Info("🔍🔍🔍 [buildGovernanceModuleDependencies.ListScheduled] 查询完成",
+				d.logger.Debug("🔍🔍🔍 [buildGovernanceModuleDependencies.ListScheduled] 查询完成",
 					"epoch", epoch,
 					"resultCount", len(result),
 					"error", err)

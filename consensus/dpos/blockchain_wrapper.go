@@ -187,7 +187,7 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 	isEpochEnd := p.isEpochEndBlock(block.Number())
 
 	// 添加详细的奖励分配跟踪日志
-	p.logger.Info("🔍 [ProcessBlockExecutor] 检查epoch结束", "blockNumber", block.Number(), "isEpochEnd", isEpochEnd)
+	p.logger.Debug("🔍 [ProcessBlockExecutor] 检查epoch结束", "blockNumber", block.Number(), "isEpochEnd", isEpochEnd)
 
 	// 如果是epoch结束区块，处理奖励分发
 	if isEpochEnd {
@@ -448,14 +448,6 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 		p.logger.Debug("✅✅✅ ========== 故障消减执行成功 ========== ✅✅✅",
 			"blockNumber", block.Number(),
 			"blockHash", block.Hash().String()[:16])
-
-		if err := p.updateNextEpochValidatorsFromLocal(block); err != nil {
-			p.logger.Error("❌ 处理下一个epoch验证者集合失败",
-				"blockNumber", block.Number(),
-				"blockHash", block.Hash().String()[:16],
-				"error", err)
-			// 不返回错误，继续处理其他逻辑
-		}
 
 		// 奖励分配与故障统计完成后，再在边界应用已登记的待生效提案，避免被同区块统计覆盖
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
@@ -906,63 +898,6 @@ func (p *blockchainWrapper) processSlashingInBlock(block *types.Block, transitio
 		"blockNumber", block.Number(),
 		"slashingsCount", len(slashingInfo.Slashings))
 
-	return nil
-}
-
-// updateNextEpochValidatorsFromLocal 使用本地计算结果保存下一个epoch验证者集合
-func (p *blockchainWrapper) updateNextEpochValidatorsFromLocal(block *types.Block) error {
-	extra := &Extra{}
-	if err := extra.UnmarshalRLP(block.Header.ExtraData); err != nil {
-		p.logger.Error("❌ 解析ExtraData失败",
-			"blockNumber", block.Number(),
-			"error", err)
-		return fmt.Errorf("failed to unmarshal extra data: %w", err)
-	}
-
-	if len(extra.NextEpochValidators) == 0 {
-		p.logger.Warn("⚠️ ExtraData中没有下一个epoch的验证者集合",
-			"blockNumber", block.Number())
-		return nil
-	}
-
-	nextEpochValidators := extra.NextEpochValidators
-
-	p.logger.Info("✅ 确定下一个epoch的验证者集合",
-		"blockNumber", block.Number(),
-		"source", "extra_data",
-		"nextEpochValidatorsCount", len(nextEpochValidators))
-
-	for i, validator := range nextEpochValidators {
-		p.logger.Info("📋 下一个epoch验证者",
-			"blockNumber", block.Number(),
-			"index", i,
-			"address", validator.Address.String(),
-			"votingPower", validator.VotingPower.String())
-	}
-
-	// 检查并截取：如果ExtraData中的验证者数量超过配置，使用配置截取后的集合
-	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
-		/*configLimitedValidators, err2 := dposInstance.GetSortedValidatorsWithLimit()
-		if err2 == nil && len(configLimitedValidators) > 0 {
-			expectedCount := len(configLimitedValidators)
-			if len(nextEpochValidators) != expectedCount {
-				p.logger.Warn("⚠️ ExtraData中的验证者数量与配置不一致，使用配置截取后的集合",
-					"blockNumber", block.Number(),
-					"extraDataCount", len(nextEpochValidators),
-					"configCount", expectedCount)
-				nextEpochValidators = configLimitedValidators
-			}
-		}*/
-		addrs := make([]string, 0, len(nextEpochValidators))
-		for _, v := range nextEpochValidators {
-			addrs = append(addrs, v.Address.String())
-		}
-		p.logger.Info("ℹ️ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️  block_wrapper 写入下一个epoch验证者集合",
-			"blockNumber", block.Number(),
-			"count", len(nextEpochValidators),
-			"validators", addrs)
-		return nil
-	}
 	return nil
 }
 

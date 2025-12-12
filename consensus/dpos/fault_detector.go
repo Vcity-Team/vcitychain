@@ -66,7 +66,7 @@ func (fd *FaultDetector) DetectFaults(blockNumber uint64) ([]FaultFlagInfo, erro
 	producerSet := validators
 	if curEpochValidators, err := fd.dposInstance.getValidatorsForEpoch(epochInfo.EpochToCheckNumber); err == nil && len(curEpochValidators) > 0 {
 		producerSet = curEpochValidators
-		fd.logger.Info("ℹ️ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️  slash集合来源: curEpochValidators", "epochToCheck", epochInfo.EpochToCheckNumber, "count", len(producerSet))
+		fd.logger.Info("ℹ️ℹ️ ℹ️  slash集合来源: curEpochValidators", "epochToCheck", epochInfo.EpochToCheckNumber, "count", len(producerSet))
 	}
 
 	addrList := make([]string, 0, len(producerSet))
@@ -75,7 +75,7 @@ func (fd *FaultDetector) DetectFaults(blockNumber uint64) ([]FaultFlagInfo, erro
 		validatorMap[v.Address] = true
 		addrList = append(addrList, v.Address.String())
 	}
-	fd.logger.Info("ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ ℹ️ slash收集使用的验证者集合",
+	fd.logger.Info("ℹ️ ℹ️ ℹ️ slash收集使用的验证者集合",
 		"epochToCheck", epochInfo.EpochToCheckNumber,
 		"validatorsCount", len(validatorMap),
 		"validators", addrList)

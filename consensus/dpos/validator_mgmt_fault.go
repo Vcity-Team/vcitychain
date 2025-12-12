@@ -495,7 +495,7 @@ func (d *DPoS) reloadValidatorsAfterRecovery() error {
 	return nil
 }
 
-// getValidatorsForEpoch 获取指定epoch的验证者集合（从该epoch开始区块的ExtraData或数据库获取）
+// getValidatorsForEpoch 获取指定epoch的验证者集合（从该epoch开始区块的ExtraData）
 func (d *DPoS) getValidatorsForEpoch(epochNumber uint64) (validator.AccountSet, error) {
 	if d.blockchain == nil {
 		return nil, fmt.Errorf("blockchain not available")
@@ -504,7 +504,6 @@ func (d *DPoS) getValidatorsForEpoch(epochNumber uint64) (validator.AccountSet, 
 	blocksPerEpoch := d.getEpochSize()
 	consensusSwitchHeight := d.config.ConsensusSwitchHeight
 
-	// 计算该epoch的开始区块号
 	// epoch 1 从 consensusSwitchHeight 开始
 	// epoch 2 从 consensusSwitchHeight + blocksPerEpoch 开始
 	// epoch N 从 consensusSwitchHeight + (N-1) * blocksPerEpoch 开始
@@ -536,15 +535,9 @@ func (d *DPoS) getValidatorsForEpoch(epochNumber uint64) (validator.AccountSet, 
 		}
 	}
 
-	// 方式2：备用方案 - 使用当前内存中的验证者集合
 	d.logger.Warn("⚠️ 无法从ExtraData或数据库获取epoch验证者集合，使用当前内存中的验证者集合",
 		"epochNumber", epochNumber,
 		"epochStartBlock", epochStartBlock)
-	if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
-		return d.runtime.delegates.Copy(), nil
-	} else if len(d.delegates) > 0 {
-		return d.delegates.Copy(), nil
-	}
 
 	return nil, fmt.Errorf("cannot get validators for epoch %d", epochNumber)
 }

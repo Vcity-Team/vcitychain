@@ -539,7 +539,7 @@ func (ps *ProposalStore) DeleteProposal(proposalID string) error {
 func (ps *ProposalStore) ListScheduledByEpoch(epochNumber uint64) ([]*ParameterProposal, error) {
 	// 添加详细日志，跟踪传入的epoch参数
 	if ps.logger != nil {
-		ps.logger.Info("🔍🔍🔍 [ProposalStore.ListScheduledByEpoch] 开始查询提案",
+		ps.logger.Debug("🔍🔍🔍 [ProposalStore.ListScheduledByEpoch] 开始查询提案",
 			"epochNumber", epochNumber,
 			"说明", "查询effectiveEpoch等于此值的待应用提案")
 	}
