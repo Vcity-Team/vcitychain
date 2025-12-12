@@ -112,24 +112,16 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 					}()
 				}
 			} else {
-				// 获取从 ExtraData 读取的验证者集合
+				// 获取从数据库读取的验证者集合
 				validatorsFromExtra := validator.AccountSet{}
 				validatorsSource := "unknown"
-				if r.config != nil && r.config.blockchain != nil {
-					currentBlock := r.config.blockchain.CurrentHeader()
-					if currentBlock != nil {
-						if r.config.dposBackend != nil {
-							if dposInstance, ok := r.config.dposBackend.(*DPoS); ok && dposInstance != nil {
-								if validators, err := dposInstance.getValidatorsFromCurrentBlockExtraData(currentBlock); err == nil && len(validators) > 0 {
-									validatorsFromExtra = validators
-									validatorsSource = "extra_data"
-								} else {
-									// 回退到实时查询
-									if validators, err := dposInstance.GetSortedValidatorsWithLimitFilterFaulty(); err == nil && len(validators) > 0 {
-										validatorsFromExtra = validators
-										validatorsSource = "realtime_query_filter_faulty"
-									}
-								}
+				if r.config != nil {
+					// 🔧 修改：直接从数据库读取验证者集合，不再从 ExtraData 读取
+					if r.config.dposBackend != nil {
+						if dposInstance, ok := r.config.dposBackend.(*DPoS); ok && dposInstance != nil {
+							if validators, err := dposInstance.GetSortedValidatorsWithLimitFilterFaulty(); err == nil && len(validators) > 0 {
+								validatorsFromExtra = validators
+								validatorsSource = "database_query_filter_faulty"
 							}
 						}
 					}

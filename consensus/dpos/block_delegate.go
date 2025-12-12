@@ -16,26 +16,16 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 		return types.ZeroAddress
 	}
 
-	// 优先从当前区块的 ExtraData 读取验证者集合（唯一数据源）
-	currentBlock := r.config.blockchain.CurrentHeader()
-	allValidators, err := dposBackend.getValidatorsFromCurrentBlockExtraData(currentBlock)
-	validatorsSource := "extra_data" // 记录验证者列表来源
-	if err != nil || len(allValidators) == 0 {
-		// 如果 ExtraData 中没有验证者集合，回退到实时查询（带故障过滤）
-		// 这种情况可能发生在：1. 第一次启动 2. ExtraData 解析失败
-		r.logOnceWithInterval("get_current_delegate_fallback", 10*time.Second, "debug",
-			"⚠️ getCurrentDelegate: ExtraData中没有验证者集合，回退到实时查询",
-			"error", err)
-		allValidators, err = dposBackend.GetSortedValidatorsWithLimitFilterFaulty()
-		validatorsSource = "realtime_query_filter_faulty" // 更新来源为实时查询（过滤故障）
-		if err != nil {
-			r.logger.Error("❌ getCurrentDelegate: 实时查询验证者集合失败", "error", err)
-			return types.ZeroAddress
-		}
-		if len(allValidators) == 0 {
-			r.logger.Error("❌ getCurrentDelegate: 实时查询的验证者集合为空")
-			return types.ZeroAddress
-		}
+	// 🔧 修改：直接从数据库读取验证者集合，不再从 ExtraData 读取
+	allValidators, err := dposBackend.GetSortedValidatorsWithLimitFilterFaulty()
+	validatorsSource := "database_query_filter_faulty" // 记录验证者列表来源
+	if err != nil {
+		r.logger.Error("❌ getCurrentDelegate: 从数据库查询验证者集合失败", "error", err)
+		return types.ZeroAddress
+	}
+	if len(allValidators) == 0 {
+		r.logger.Error("❌ getCurrentDelegate: 从数据库查询的验证者集合为空")
+		return types.ZeroAddress
 	}
 
 	// 使用从 ExtraData 或实时查询获取的验证者集合

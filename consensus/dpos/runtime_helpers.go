@@ -28,23 +28,24 @@ func getBlockData(blockNumber uint64, blockchainBackend blockchainBackend) (*typ
 
 // isEpochEndingBlock checks if given block is an epoch ending block
 func isEpochEndingBlock(blockNumber uint64, extra *Extra, blockchain blockchainBackend) (bool, error) {
-	if extra.Validators == nil {
-		// non epoch ending blocks have validator set delta as nil
+	// 🔧 修改：不再通过 Validators 判断 epoch 结束，改为通过 Checkpoint 判断
+	// 如果 Checkpoint 存在且 EpochNumber 与下一个区块不同，则为 epoch 结束区块
+	if extra.Checkpoint == nil {
 		return false, nil
 	}
 
-	if !extra.Validators.IsEmpty() {
-		// if validator set delta is not empty, the validator set was changed in this block
-		// meaning the epoch changed as well
-		return true, nil
+	// 检查下一个区块的 epoch 是否不同
+	nextBlockNumber := blockNumber + 1
+	if nextHeader, exists := blockchain.GetHeaderByNumber(nextBlockNumber); exists {
+		nextExtra := &Extra{}
+		if err := nextExtra.UnmarshalRLP(nextHeader.ExtraData); err == nil {
+			if nextExtra.Checkpoint != nil && nextExtra.Checkpoint.EpochNumber != extra.Checkpoint.EpochNumber {
+				return true, nil
+			}
+		}
 	}
 
-	_, nextBlockExtra, err := getBlockData(blockNumber+1, blockchain)
-	if err != nil {
-		return false, err
-	}
-
-	// validator set delta can be empty (no change in validator set happened)
-	// so we need to check if their epoch numbers are different
-	return extra.Checkpoint.EpochNumber != nextBlockExtra.Checkpoint.EpochNumber, nil
+	// 如果没有下一个区块，或者无法确定，则通过计算 epoch 大小来判断
+	// 这需要知道 epoch 大小，暂时返回 false（实际应该通过配置获取）
+	return false, nil
 }

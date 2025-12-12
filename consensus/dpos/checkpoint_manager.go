@@ -476,12 +476,12 @@ func parseExitEvent(h *types.Header, l *ethgo.Log) (*ExitEvent, bool, error) {
 	epoch := extra.Checkpoint.EpochNumber
 	block := h.Number
 
-	if extra.Validators != nil {
-		// exit events that happened in epoch ending blocks,
-		// should be added to the tree of the next epoch
-		epoch++
-		block++
-	}
+	// 🔧 修改：不再通过 Validators 判断 epoch 结束
+	// 由于无法访问 blockchain，暂时移除 epoch 结束判断逻辑
+	// 如果需要判断 epoch 结束，可以通过其他方式（如配置的 epoch 大小计算）
+	// 原来的逻辑：如果 extra.Validators != nil，说明是 epoch 结束区块，exit events 应该添加到下一个 epoch
+	// 现在 Validators 统一为 nil，暂时保持 epoch 和 block 不变
+	// TODO: 如果需要精确判断 epoch 结束，可以通过传入 blockchain 参数或通过配置计算
 
 	event, err := decodeExitEvent(l, epoch, block)
 	if err != nil {

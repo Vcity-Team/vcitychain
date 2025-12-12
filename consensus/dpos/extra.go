@@ -683,11 +683,23 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 	// 处理故障标志（调用独立函数）
 	i.processFaultFlags(blockNumber, consensusBackend, logger)
 
-	// 从 ExtraData 中获取验证者集合
-	validators, err := i.getValidatorsFromExtraData(header, parent, parents, consensusBackend, logger)
-	if err != nil {
-		logger.Error("❌ 从 ExtraData 获取验证者集合失败", "blockNumber", blockNumber, "error", err)
-		return fmt.Errorf("failed to get validators from ExtraData for block %d: %w", blockNumber, err)
+	// 🔧 修改：从数据库读取验证者集合，而不是从 ExtraData
+	// 统一数据源，避免排序不一致问题
+	var validators validator.AccountSet
+	if dposBackend, ok := consensusBackend.(*DPoS); ok && dposBackend != nil {
+		var err error
+		validators, err = dposBackend.GetSortedValidatorsWithLimitFilterFaulty()
+		if err != nil {
+			logger.Error("❌ 从数据库获取验证者集合失败", "blockNumber", blockNumber, "error", err)
+			return fmt.Errorf("failed to get validators from database for block %d: %w", blockNumber, err)
+		}
+		if len(validators) == 0 {
+			logger.Error("❌ 从数据库获取的验证者集合为空", "blockNumber", blockNumber)
+			return fmt.Errorf("validators set is empty from database for block %d", blockNumber)
+		}
+	} else {
+		logger.Error("❌ 无法获取 DPoS backend", "blockNumber", blockNumber)
+		return fmt.Errorf("failed to get DPoS backend for block %d", blockNumber)
 	}
 
 	var currentValidatorsHash types.Hash
@@ -901,8 +913,6 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 		logger.Debug("skipping parent signature validation for block 2 (parent is block 1 which has no parent signature)")
 		return nil
 	}
-
-	// 新增：检查是否在共识切换高度，如果是则跳过父区块BLS签名验证
 	// 因为父区块可能使用IBFT共识，没有BLS签名
 	// 但继续执行后续的ValidateFinalizedData，应用方案2的完整修复逻辑
 	if consensusBackend != nil {
@@ -937,7 +947,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 		}
 	}
 
-	parentValidators, err := parentExtra.getValidatorsFromExtraData(parent, parentParent, parents, consensusBackend, logger)
+	parentValidators, err := parentExtra.getValidatorsFromDatabase(parent, parentParent, parents, consensusBackend, logger)
 	if err != nil {
 		return fmt.Errorf(
 			"failed to get parent validators from ExtraData for block %d: %w",
@@ -946,10 +956,6 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 		)
 	}
 
-	// 打印验证时父区块验证者集合的详细信息
-
-	// 使用固定的哈希值避免循环依赖，确保与生产区块时使用相同的checkpointHash
-	// 使用真实的父区块哈希
 	realParentBlockHash := parent.Hash
 	parentCheckpointHash, err := parentExtra.Checkpoint.Hash(chainID, parent.Number, realParentBlockHash)
 	if err != nil {
@@ -2109,7 +2115,7 @@ func GetDposExtraClean(extraRaw []byte) ([]byte, error) {
 
 	dposExtra := &Extra{
 		Parent:     extra.Parent,
-		Validators: extra.Validators,
+		Validators: nil, // 🔧 修改：不再存储验证者集合，统一从数据库读取
 		Checkpoint: extra.Checkpoint,
 		Committed:  &Signature{},
 	}
@@ -2134,84 +2140,18 @@ func GetDposExtra(extraRaw []byte) (*Extra, error) {
 	return extra, nil
 }
 
-// 辅助函数：获取位图中设置的位位置
-func getBitmapSetPositions(bitmap bitmap.Bitmap) string {
-	positions := make([]string, 0)
-	for i := uint64(0); i < bitmap.Len(); i++ {
-		if bitmap.IsSet(i) {
-			positions = append(positions, fmt.Sprintf("%d", i))
-		}
-	}
-	return strings.Join(positions, ",")
-}
-
-// 辅助函数：获取位图对应的验证者地址
-func getExpectedSignerAddresses(bitmap bitmap.Bitmap, validators validator.AccountSet) string {
-	addresses := make([]string, 0)
-	for i := uint64(0); i < uint64(len(validators)); i++ {
-		if bitmap.IsSet(i) {
-			addresses = append(addresses, validators[int(i)].Address.String())
-		}
-	}
-	return strings.Join(addresses, ",")
-}
-
-// getValidatorsFromExtraData 从区块的 ExtraData 中获取验证者集合
-func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.Header, parents []*types.Header,
+// getValidatorsFromDatabase 从数据库获取验证者集合
+func (i *Extra) getValidatorsFromDatabase(header *types.Header, parent *types.Header, parents []*types.Header,
 	consensusBackend dposBackend, logger hclog.Logger) (validator.AccountSet, error) {
 
 	blockNumber := header.Number
 
-	// 添加 parent 的 nil 检查
-	if parent == nil {
-		// 优先从当前区块ExtraData获取生产时的验证者地址集合（实际签名者）
-		if i.Validators != nil && !i.Validators.IsEmpty() && len(i.Validators.Added) > 0 {
-			// 从ExtraData获取实际签名者地址，然后从创世文件获取BLS公钥
-			validatorAddresses := i.Validators.Added
-
-			// 从创世文件获取BLS公钥，构建完整的验证者集合
-			productionValidators := make(validator.AccountSet, 0, len(validatorAddresses))
-			for _, validatorAddr := range validatorAddresses {
-				// 从创世文件获取BLS公钥
-				blsKey, err := i.getBLSKeyFromGenesis(validatorAddr.Address, logger)
-				if err != nil {
-					// BLS公钥获取失败
-				}
-
-				// 构建完整的验证者信息
-				productionValidators = append(productionValidators, &validator.ValidatorMetadata{
-					Address:     validatorAddr.Address,
-					BlsKey:      blsKey, // 从创世文件获取的BLS公钥
-					VotingPower: validatorAddr.VotingPower,
-					IsActive:    validatorAddr.IsActive,
-				})
-			}
-
-			return productionValidators, nil
-		}
-
-		// 备用方案：返回创世验证者集合
-		logger.Info("📋 parent 为 nil，使用备用方案返回创世验证者集合",
-			"blockNumber", blockNumber)
-
-		genesisValidators, err := i.getGenesisValidators(consensusBackend, logger)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get genesis validators: %w", err)
-		}
-
-		logger.Info("✅ 从创世文件获取验证者集合成功",
-			"blockNumber", blockNumber,
-			"genesisValidatorsCount", len(genesisValidators))
-
-		return genesisValidators, nil
-	}
-
-	// 如果是创世区块或第一个区块，从创世文件获取验证者集合
-	if blockNumber <= 1 {
+	// 🔧 修改：统一从数据库读取验证者集合，不再从 ExtraData 读取
+	// 特殊情况：创世区块或第一个区块，从创世文件获取
+	if blockNumber <= 1 || (parent != nil && parent.Number == 1) || parent == nil {
 		logger.Info("📋 处理创世区块或第一个区块，从创世文件获取验证者集合",
 			"blockNumber", blockNumber)
 
-		// 从创世文件获取初始验证者集合
 		genesisValidators, err := i.getGenesisValidators(consensusBackend, logger)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get genesis validators: %w", err)
@@ -2224,64 +2164,22 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 		return genesisValidators, nil
 	}
 
-	// 获取父区块的验证者集合
-
-	// 如果父区块是区块1，直接返回创世验证者集合，避免无限递归
-	if parent.Number == 1 {
-		logger.Info("📋 父区块是区块1，直接返回创世验证者集合",
-			"blockNumber", blockNumber,
-			"parentBlockNumber", parent.Number)
-
-		genesisValidators, err := i.getGenesisValidators(consensusBackend, logger)
+	// 从数据库读取验证者集合
+	if dposBackend, ok := consensusBackend.(*DPoS); ok && dposBackend != nil {
+		validators, err := dposBackend.GetSortedValidatorsWithLimitFilterFaulty()
 		if err != nil {
-			return nil, fmt.Errorf("failed to get genesis validators: %w", err)
+			logger.Error("❌ 从数据库获取验证者集合失败", "blockNumber", blockNumber, "error", err)
+			return nil, fmt.Errorf("failed to get validators from database for block %d: %w", blockNumber, err)
 		}
-
-		logger.Info("✅ 从创世文件获取验证者集合成功",
-			"blockNumber", blockNumber,
-			"genesisValidatorsCount", len(genesisValidators))
-
-		return genesisValidators, nil
+		if len(validators) > 0 {
+			logger.Debug("✅ 从数据库获取验证者集合成功",
+				"blockNumber", blockNumber,
+				"validatorsCount", len(validators))
+			return validators, nil
+		}
 	}
 
-	// 关键修复：如果当前区块的ExtraData中有验证者地址集合信息，直接使用
-	// 这确保验证时使用与生产时完全相同的验证者集合
-	if i.Validators != nil && !i.Validators.IsEmpty() && len(i.Validators.Added) > 0 {
-
-		// 从ExtraData获取验证者地址，然后从创世文件获取BLS公钥
-		validatorAddresses := i.Validators.Added
-
-		// 从创世文件获取BLS公钥，构建完整的验证者集合
-		productionValidators := make(validator.AccountSet, 0, len(validatorAddresses))
-		// 从创世文件获取BLS公钥
-
-		for idx, validatorAddr := range validatorAddresses {
-			// 从创世文件获取BLS公钥
-			blsKey, err := i.getBLSKeyFromGenesis(validatorAddr.Address, logger)
-			if err != nil {
-				// BLS公钥获取失败，继续处理下一个
-			} else {
-				// BLS公钥获取成功
-				if blsKey == nil {
-					logger.Error("❌ 从创世文件获取的BLS公钥为nil",
-						"blockNumber", blockNumber,
-						"index", idx,
-						"address", validatorAddr.Address.String())
-				}
-			}
-
-			// 构建完整的验证者信息
-			productionValidators = append(productionValidators, &validator.ValidatorMetadata{
-				Address:     validatorAddr.Address,
-				BlsKey:      blsKey, // 从创世文件获取的BLS公钥
-				VotingPower: validatorAddr.VotingPower,
-				IsActive:    validatorAddr.IsActive,
-			})
-		}
-
-		return productionValidators, nil
-	}
-
+	// 如果数据库读取失败，尝试从父区块获取（回退方案）
 	parentValidators, err := i.getParentValidators(parent, parents, consensusBackend, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get parent validators: %w", err)
@@ -2373,36 +2271,7 @@ func (i *Extra) getValidatorsFromExtraData(header *types.Header, parent *types.H
 		return parentValidators, nil
 	}
 
-	// 应用验证者集合变化
-	logger.Info("🔄 开始应用验证者集合变化",
-		"blockNumber", blockNumber,
-		"addedCount", len(i.Validators.Added),
-		"updatedCount", len(i.Validators.Updated),
-		"removedCount", i.Validators.Removed.Len())
-
-	currentValidators := i.applyValidatorSetDelta(parentValidators, i.Validators, consensusBackend, logger)
-
-	logger.Info("✅ 验证者集合变化应用完成",
-		"blockNumber", blockNumber,
-		"originalCount", len(parentValidators),
-		"finalCount", len(currentValidators),
-		"addedCount", len(i.Validators.Added),
-		"updatedCount", len(i.Validators.Updated),
-		"removedCount", i.Validators.Removed.Len())
-
-	// 详细记录最终的验证者集合
-	logger.Info("📋 最终验证者集合详情:")
-	for i, validator := range currentValidators {
-		logger.Info("📝 最终验证者",
-			"blockNumber", blockNumber,
-			"index", i,
-			"address", validator.Address.String(),
-			"votingPower", validator.VotingPower.String(),
-			"isActive", validator.IsActive,
-			"hasBlsKey", validator.BlsKey != nil)
-	}
-
-	return currentValidators, nil
+	return parentValidators, nil
 }
 
 // getGenesisValidators 从创世文件获取验证者集合
@@ -2433,15 +2302,6 @@ func (i *Extra) getGenesisValidators(consensusBackend dposBackend, logger hclog.
 		logger.Warn("⚠️ DPoS 实例内存中验证者集合为空")
 	}
 
-	// 备用方案：尝试从共识后端获取当前验证者集合
-	logger.Info("🔄 尝试从共识后端获取当前验证者集合作为创世验证者")
-	currentValidators, err := consensusBackend.GetDelegates(1, nil) // 使用区块1而不是区块0
-	if err == nil && len(currentValidators) > 0 {
-		logger.Info("✅ 从共识后端获取当前验证者集合成功",
-			"genesisValidatorsCount", len(currentValidators))
-		return currentValidators, nil
-	}
-
 	return nil, fmt.Errorf("failed to get genesis validators from all sources")
 }
 
@@ -2465,7 +2325,7 @@ func (i *Extra) getParentValidators(parent *types.Header, parents []*types.Heade
 			}
 		}
 
-		parentValidators, err := parentExtra.getValidatorsFromExtraData(parent, parentParent, parents, consensusBackend, logger)
+		parentValidators, err := parentExtra.getValidatorsFromDatabase(parent, parentParent, parents, consensusBackend, logger)
 		if err == nil {
 			return parentValidators, nil
 		}
@@ -2473,189 +2333,4 @@ func (i *Extra) getParentValidators(parent *types.Header, parents []*types.Heade
 
 	// 如果父区块是创世区块，从创世文件获取
 	return i.getGenesisValidators(consensusBackend, logger)
-}
-
-// applyValidatorSetDelta 应用验证者集合变化
-func (i *Extra) applyValidatorSetDelta(parentValidators validator.AccountSet, delta *validator.ValidatorSetDelta, consensusBackend dposBackend, logger hclog.Logger) validator.AccountSet {
-	logger.Info("🔄 开始应用验证者集合变化",
-		"parentValidatorsCount", len(parentValidators),
-		"addedCount", len(delta.Added),
-		"updatedCount", len(delta.Updated),
-		"removedCount", delta.Removed.Len())
-
-	// 复制父区块验证者集合
-	currentValidators := parentValidators.Copy()
-
-	// 1. 移除被删除的验证者
-	if delta.Removed != nil && delta.Removed.Len() > 0 {
-		logger.Info("🗑️ 开始移除验证者",
-			"removedBitmapLength", len(delta.Removed))
-
-		// 从后往前遍历，避免索引问题
-		for j := len(currentValidators) - 1; j >= 0; j-- {
-			if delta.Removed.IsSet(uint64(j)) {
-				removedValidator := currentValidators[j]
-				logger.Info("🗑️ 移除验证者",
-					"index", j,
-					"address", removedValidator.Address.String(),
-					"votingPower", removedValidator.VotingPower.String())
-
-				currentValidators = append(currentValidators[:j], currentValidators[j+1:]...)
-			}
-		}
-	}
-
-	// 2. 添加新的验证者
-	if len(delta.Added) > 0 {
-		logger.Info("➕ 开始添加新验证者",
-			"addedCount", len(delta.Added))
-
-		for _, addedValidator := range delta.Added {
-			logger.Info("➕ 添加新验证者",
-				"address", addedValidator.Address.String(),
-				"votingPower", addedValidator.VotingPower.String(),
-				"isActive", addedValidator.IsActive,
-				"hasBlsKey", addedValidator.BlsKey != nil)
-
-			currentValidators = append(currentValidators, addedValidator)
-		}
-	}
-
-	// 3. 更新现有验证者
-	if len(delta.Updated) > 0 {
-		logger.Info("🔄 开始更新验证者",
-			"updatedCount", len(delta.Updated))
-
-		for _, updatedValidator := range delta.Updated {
-			// 找到并更新对应的验证者
-			for j, existingValidator := range currentValidators {
-				if existingValidator.Address == updatedValidator.Address {
-					logger.Info("🔄 更新验证者",
-						"address", updatedValidator.Address.String(),
-						"oldVotingPower", existingValidator.VotingPower.String(),
-						"newVotingPower", updatedValidator.VotingPower.String(),
-						"oldIsActive", existingValidator.IsActive,
-						"newIsActive", updatedValidator.IsActive)
-
-					currentValidators[j] = updatedValidator
-					break
-				}
-			}
-		}
-	}
-
-	// 4. 处理故障标志
-	logger.Info("🔍 applyValidatorSetDelta 检查故障标志",
-		"faultFlagsCount", len(i.FaultFlags),
-		"hasValidators", delta != nil)
-
-	if len(i.FaultFlags) > 0 {
-		logger.Info("🔍 开始处理故障标志", "faultCount", len(i.FaultFlags))
-
-		for _, faultFlag := range i.FaultFlags {
-			if faultFlag.IsFaulty {
-				logger.Info("📝 处理故障标志",
-					"address", faultFlag.NodeAddress.String(),
-					"isFaulty", faultFlag.IsFaulty,
-					"missedBlocks", faultFlag.MissedBlocks,
-					"reason", faultFlag.Reason)
-			}
-
-			// 更新验证者故障状态（内存）
-			i.updateValidatorFaultStatus(currentValidators, faultFlag, logger)
-
-			// 保存故障状态到数据库（验证节点）
-			// 只有当 isFaulty=true 时才保存，避免覆盖已存在的故障状态
-			if faultFlag.IsFaulty {
-				if dposInstance, ok := consensusBackend.(*DPoS); ok {
-					logger.Info("💾 验证节点开始保存故障状态到数据库",
-						"address", faultFlag.NodeAddress.String(),
-						"isFaulty", faultFlag.IsFaulty,
-						"epoch", faultFlag.EpochNumber)
-
-					if err := dposInstance.saveFaultStatusToDatabase(faultFlag); err != nil {
-						logger.Warn("⚠️ 验证节点保存故障状态到数据库失败",
-							"address", faultFlag.NodeAddress.String(),
-							"error", err)
-					} else {
-						logger.Info("✅ 验证节点故障状态已保存到数据库",
-							"address", faultFlag.NodeAddress.String(),
-							"isFaulty", faultFlag.IsFaulty,
-							"epoch", faultFlag.EpochNumber,
-							"missedBlocks", faultFlag.MissedBlocks)
-					}
-				} else {
-					logger.Warn("⚠️ 无法获取DPoS实例，无法保存故障状态到数据库",
-						"address", faultFlag.NodeAddress.String())
-				}
-			} else {
-				// 如果 isFaulty=false，检查数据库中是否已有故障记录
-				// 如果有，说明验证者之前故障过，不应该覆盖（故障状态应该持续存在，直到通过提案恢复）
-				if dposInstance, ok := consensusBackend.(*DPoS); ok {
-					if dposInstance.state != nil && dposInstance.state.StakeStore != nil {
-						if dbFaultInfo, err := dposInstance.state.StakeStore.GetValidatorFaultStatus(faultFlag.NodeAddress); err == nil && dbFaultInfo != nil {
-							if dbIsFaulty, ok := dbFaultInfo["isFaulty"].(bool); ok && dbIsFaulty {
-								// 数据库中已有故障记录，不覆盖（保持故障状态）
-								logger.Info("ℹ️ 验证者当前epoch正常，但数据库中仍有故障记录，保持故障状态",
-									"address", faultFlag.NodeAddress.String(),
-									"currentEpoch", faultFlag.EpochNumber,
-									"lastFaultyEpoch", dbFaultInfo["lastFaultyEpoch"],
-									"reason", "故障状态应持续存在，直到通过提案恢复")
-								continue
-							}
-						}
-						// 如果数据库中没有故障记录，或者已经是正常状态，可以更新为正常状态
-						logger.Debug("ℹ️ 故障标志isFaulty=false，数据库中无故障记录，跳过数据库保存",
-							"address", faultFlag.NodeAddress.String())
-					}
-				}
-			}
-		}
-	}
-
-	logger.Info("✅ 验证者集合变化应用完成",
-		"finalValidatorsCount", len(currentValidators))
-
-	return currentValidators
-}
-
-// updateValidatorFaultStatus 更新验证者故障状态
-func (i *Extra) updateValidatorFaultStatus(validators validator.AccountSet, faultFlag FaultFlagInfo, logger hclog.Logger) {
-	for _, validator := range validators {
-		if validator.Address == faultFlag.NodeAddress {
-			oldStatus := validator.IsActive
-			validator.IsActive = !faultFlag.IsFaulty
-
-			if faultFlag.IsFaulty {
-				logger.Info("🔄 更新验证者故障状态",
-					"address", faultFlag.NodeAddress.String(),
-					"oldStatus", oldStatus,
-					"newStatus", validator.IsActive,
-					"isFaulty", faultFlag.IsFaulty,
-					"missedBlocks", faultFlag.MissedBlocks)
-			}
-			break
-		}
-	}
-}
-
-// getBLSKeyFromGenesis 从validator-bls.key文件获取BLS公钥
-func (i *Extra) getBLSKeyFromGenesis(address types.Address, logger hclog.Logger) (*bls.PublicKey, error) {
-	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-		blsKeyBytes, err := dposInstance.GetBLSKeyBytesFromGenesis(address)
-		if err != nil {
-			return nil, err
-		}
-
-		blsKey, err := bls.UnmarshalPublicKey(blsKeyBytes)
-		if err != nil {
-			logger.Debug("❌ 解析BLS公钥失败",
-				"address", address.String(),
-				"blsKeyLength", len(blsKeyBytes),
-				"error", err)
-			return nil, err
-		}
-		return blsKey, nil
-	}
-	return nil, fmt.Errorf("无法获取DPoS实例来从validator-bls.key文件获取BLS公钥")
 }

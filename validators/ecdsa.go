@@ -45,7 +45,7 @@ func (v *ECDSAValidator) Addr() types.Address {
 func (v *ECDSAValidator) Copy() Validator {
 	blsPubkey := make([]byte, len(v.BLSPublicKey))
 	copy(blsPubkey, v.BLSPublicKey)
-	
+
 	return &ECDSAValidator{
 		Address:      v.Address,
 		BLSPublicKey: blsPubkey,
@@ -87,8 +87,7 @@ func (v *ECDSAValidator) UnmarshalRLPFrom(p *fastrlp.Parser, val *fastrlp.Value)
 		}
 		return nil
 	}
-	
-	// 回退到简单地址格式
+
 	return val.GetAddr(v.Address[:])
 }
 

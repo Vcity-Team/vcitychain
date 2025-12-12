@@ -526,9 +526,9 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	}
 
 	// 用与验证时完全相同的验证者集合获取方法
-	// 验证时：getValidatorsFromExtraData(header, parent, parents, consensusBackend, logger)
-	// 生产时：从当前区块的ExtraData解析验证者集合
-	productionValidators, err := r.getValidatorsFromExtraDataForProduction(currentBlock, parents)
+	// 验证时：getValidatorsFromDatabase(header, parent, parents, consensusBackend, logger)
+	// 生产时：从数据库读取验证者集合
+	productionValidators, err := r.getValidatorsFromDatabaseForProduction(currentBlock, parents)
 	if err != nil {
 		r.logger.Error("❌ 生产时无法获取验证者集合", "blockNumber", currentBlock.Number, "error", err)
 		return nil, fmt.Errorf("failed to get validators for production: %w", err)
@@ -892,7 +892,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			// 如果缓存为空，则重新获取（备用方案）
 			r.logger.Warn("⚠️ 缓存为空，重新获取验证者集合")
 			var err error
-			productionValidators, err = r.getValidatorsFromExtraDataForProduction(block.Block.Header, parents)
+			productionValidators, err = r.getValidatorsFromDatabaseForProduction(block.Block.Header, parents)
 			if err != nil {
 				r.logger.Error("❌ 无法获取当前验证者集合", "blockNumber", block.Block.Number(), "error", err)
 				return nil, fmt.Errorf("failed to get current validators for block %d: %w", block.Block.Number(), err)
@@ -1023,61 +1023,8 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			}
 		}
 
-		// 修复：保存全部验证者，确保与生产时使用的验证者集合完全一致
-		validatorAddresses := make(validator.AccountSet, 0, len(productionValidators))
-		for _, v := range productionValidators {
-			// 保存全部验证者，不仅仅是签名者，确保位图索引与验证者集合匹配
-			validatorAddresses = append(validatorAddresses, &validator.ValidatorMetadata{
-				Address:     v.Address,
-				BlsKey:      nil, // 不保存BLS公钥，验证时从创世文件获取
-				VotingPower: v.VotingPower,
-				IsActive:    v.IsActive,
-			})
-
-		}
-
-		signingValidatorDelta := &validator.ValidatorSetDelta{
-			Added:   validatorAddresses, // 保存全部验证者，确保位图索引匹配
-			Updated: make(validator.AccountSet, 0),
-			Removed: bitmap.Bitmap{},
-		}
-
-		// 记录参与签名的验证者信息（用于调试）
-
-		// 显著日志：生产时保存到ExtraData的验证者集合和索引
-		r.logger.Debug("🏭 ===== 生产时保存到ExtraData的验证者集合 =====",
-			"blockNumber", block.Block.Number(),
-			"totalValidators", len(validatorAddresses),
-			"bitmapHex", fmt.Sprintf("%x", signatureBitmap),
-			"note", "这些验证者将被保存到区块ExtraData中")
-
-		for i, validator := range validatorAddresses {
-			r.logger.Debug("🏭 生产时ExtraData验证者",
-				"blockNumber", block.Block.Number(),
-				"index", i,
-				"address", validator.Address.String(),
-				"votingPower", validator.VotingPower.String(),
-				"isActive", validator.IsActive,
-				"hasBlsKey", validator.BlsKey != nil,
-				"bitmapSet", signatureBitmap.IsSet(uint64(i)),
-				"note", "验证者索引与位图索引对应")
-		}
-
-		// 显著日志：位图索引详情
-		r.logger.Debug("🏭 ===== 生产时位图索引详情 =====",
-			"blockNumber", block.Block.Number(),
-			"bitmapHex", fmt.Sprintf("%x", signatureBitmap),
-			"bitmapLength", len(signatureBitmap),
-			"totalValidators", len(validatorAddresses))
-
-		for i := uint64(0); i < uint64(len(validatorAddresses)); i++ {
-			r.logger.Debug("🏭 位图索引状态",
-				"blockNumber", block.Block.Number(),
-				"bitmapIndex", i,
-				"isSet", signatureBitmap.IsSet(i),
-				"validatorAddress", validatorAddresses[i].Address.String(),
-				"note", "位图索引与验证者集合一一对应")
-		}
+		// 🔧 修改：不再保存验证者集合到 ExtraData，改为从数据库读取
+		// 验证者集合不再写入 ExtraData，所有地方统一从数据库读取
 
 		// 静默处理，不打印日志
 
@@ -1099,10 +1046,10 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				"error", err)
 		}
 
-		// 更新区块的ExtraData，包含聚合签名、父区块签名和验证者集合
+		// 更新区块的ExtraData，包含聚合签名、父区块签名（不再包含验证者集合）
 		finalExtra := &Extra{
-			Validators: signingValidatorDelta, // 保存全部验证者集合，确保位图索引匹配
-			Parent:     parentSignature,       // 父区块签名
+			Validators: nil,             // 🔧 修改：不再存储验证者集合，统一从数据库读取
+			Parent:     parentSignature, // 父区块签名
 			Committed: &Signature{
 				AggregatedSignature: aggregatedSignature,
 				Bitmap:              signatureBitmap,
@@ -1697,7 +1644,7 @@ func (r *dposRuntime) calculateMinRequiredSignatures() int {
 	return minRequired
 }
 
-func (r *dposRuntime) getValidatorsFromExtraDataForProduction(header *types.Header, parents []*types.Header) (validator.AccountSet, error) {
+func (r *dposRuntime) getValidatorsFromDatabaseForProduction(header *types.Header, parents []*types.Header) (validator.AccountSet, error) {
 	if r.config != nil && r.config.dposBackend != nil {
 		dposInstance, ok := r.config.dposBackend.(*DPoS)
 		if ok && dposInstance != nil {

@@ -162,7 +162,8 @@ func (f *fsm) BuildProposal(currentRound uint64) ([]byte, error) {
 			return nil, err
 		}
 
-		extra.Validators = f.newValidatorsDelta
+		// 🔧 修改：不再存储验证者集合到 ExtraData，统一从数据库读取
+		extra.Validators = nil
 	}
 
 	currentValidatorsHash, err := f.validators.Accounts().Hash()
@@ -338,23 +339,27 @@ func (f *fsm) Validate(proposal []byte) error {
 
 	currentValidators := f.validators.Accounts()
 
-	// validate validators delta
-	if f.isEndOfEpoch {
-		if extra.Validators == nil {
-			return errValidatorDeltaNilInEpochEndingBlock
-		}
-
-		if !extra.Validators.Equals(f.newValidatorsDelta) {
-			return errValidatorSetDeltaMismatch
-		}
-	} else if extra.Validators != nil {
-		// delta should be nil in non epoch ending blocks
-		return errValidatorsUpdateInNonEpochEnding
+	// 🔧 修改：不再从 ExtraData 验证 Validators delta，统一从数据库获取验证者集合
+	// 对于 epoch 结束区块，验证者集合变化已经在数据库中了，通过 Checkpoint 的哈希来验证
+	// 对于非 epoch 结束区块，Validators 应该为 nil（不再存储）
+	if !f.isEndOfEpoch && extra.Validators != nil {
+		// 非 epoch 结束区块不应该有 Validators（虽然现在统一为 nil，但保留检查以防万一）
+		f.logger.Debug("⚠️ 非 epoch 结束区块的 ExtraData 中 Validators 不为 nil（已忽略，统一从数据库读取）",
+			"blockNumber", block.Number())
 	}
 
-	nextValidators, err := f.getValidatorsTransition(extra.Validators)
-	if err != nil {
-		return err
+	// 🔧 修改：从数据库获取下一轮验证者集合，而不是从 ExtraData
+	// 对于 epoch 结束区块，使用 ApplyDelta 计算；对于普通区块，直接使用当前验证者集合
+	var nextValidators validator.AccountSet
+	if f.isEndOfEpoch {
+		// epoch 结束区块：应用 delta 计算下一轮验证者集合
+		nextValidators, err = f.getValidatorsTransition(f.newValidatorsDelta)
+		if err != nil {
+			return err
+		}
+	} else {
+		// 普通区块：下一轮验证者集合与当前相同（从数据库获取）
+		nextValidators = currentValidators
 	}
 
 	// validate checkpoint data

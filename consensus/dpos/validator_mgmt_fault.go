@@ -497,51 +497,25 @@ func (d *DPoS) reloadValidatorsAfterRecovery() error {
 	return nil
 }
 
-// getValidatorsForEpoch 获取指定epoch的验证者集合（从该epoch开始区块的ExtraData）
+// getValidatorsForEpoch 获取指定epoch的验证者集合（从数据库读取）
 func (d *DPoS) getValidatorsForEpoch(epochNumber uint64) (validator.AccountSet, error) {
-	if d.blockchain == nil {
-		return nil, fmt.Errorf("blockchain not available")
+	// 🔧 修改：统一从数据库读取验证者集合，不再从 ExtraData 读取
+	validators, err := d.GetSortedValidatorsWithLimitFilterFaulty()
+	if err != nil {
+		d.logger.Warn("⚠️ 无法从数据库获取epoch验证者集合",
+			"epochNumber", epochNumber,
+			"error", err)
+		return nil, fmt.Errorf("cannot get validators for epoch %d from database: %w", epochNumber, err)
 	}
-
-	blocksPerEpoch := d.getEpochSize()
-	consensusSwitchHeight := d.config.ConsensusSwitchHeight
-
-	// epoch 1 从 consensusSwitchHeight 开始
-	// epoch 2 从 consensusSwitchHeight + blocksPerEpoch 开始
-	// epoch N 从 consensusSwitchHeight + (N-1) * blocksPerEpoch 开始
-	epochStartBlock := consensusSwitchHeight
-	if epochNumber > 1 {
-		epochStartBlock = consensusSwitchHeight + (epochNumber-1)*blocksPerEpoch
+	if len(validators) == 0 {
+		d.logger.Warn("⚠️ 从数据库获取的验证者集合为空",
+			"epochNumber", epochNumber)
+		return nil, fmt.Errorf("validators set is empty for epoch %d", epochNumber)
 	}
-
-	// 方式1：从该epoch开始区块的ExtraData获取验证者集合
-	if header, exists := d.blockchain.GetHeaderByNumber(epochStartBlock); exists {
-		extra := &Extra{}
-		if err := extra.UnmarshalRLP(header.ExtraData); err == nil {
-			// 从ExtraData获取验证者集合
-			if extra.Validators != nil && !extra.Validators.IsEmpty() && len(extra.Validators.Added) > 0 {
-				validators := make(validator.AccountSet, 0, len(extra.Validators.Added))
-				for _, v := range extra.Validators.Added {
-					validators = append(validators, &validator.ValidatorMetadata{
-						Address:     v.Address,
-						VotingPower: v.VotingPower,
-						IsActive:    v.IsActive,
-					})
-				}
-				d.logger.Debug("✅ 从ExtraData获取epoch验证者集合",
-					"epochNumber", epochNumber,
-					"epochStartBlock", epochStartBlock,
-					"validatorsCount", len(validators))
-				return validators, nil
-			}
-		}
-	}
-
-	d.logger.Warn("⚠️ 无法从ExtraData或数据库获取epoch验证者集合，使用当前内存中的验证者集合",
+	d.logger.Debug("✅ 从数据库获取epoch验证者集合",
 		"epochNumber", epochNumber,
-		"epochStartBlock", epochStartBlock)
-
-	return nil, fmt.Errorf("cannot get validators for epoch %d", epochNumber)
+		"validatorsCount", len(validators))
+	return validators, nil
 }
 
 func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, startEpoch, endEpoch uint64) (uint64, uint64, uint64) {

@@ -216,43 +216,18 @@ func (d *DPoS) GetSortedValidatorsWithLimitFilterFaulty() (validator.AccountSet,
 	return activeValidators, nil
 }
 
-// getValidatorsFromCurrentBlockExtraData 从当前区块的 ExtraData 读取验证者集合
+// getValidatorsFromCurrentBlockExtraData 从数据库读取验证者集合（不再从 ExtraData 读取）
 func (d *DPoS) getValidatorsFromCurrentBlockExtraData(header *types.Header) (validator.AccountSet, error) {
-	if header == nil {
-		return nil, fmt.Errorf("header is nil")
+	// 🔧 修改：统一从数据库读取验证者集合，不再从 ExtraData 读取
+	// 这样可以确保所有地方使用相同的数据源和排序规则
+	validators, err := d.GetSortedValidatorsWithLimitFilterFaulty()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get validators from database: %w", err)
 	}
-
-	extra := &Extra{}
-	if err := extra.UnmarshalRLP(header.ExtraData); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal extra data: %w", err)
+	if len(validators) == 0 {
+		return nil, fmt.Errorf("validators set is empty from database")
 	}
-
-	// 从 Validators 读取
-	if extra.Validators != nil && !extra.Validators.IsEmpty() && len(extra.Validators.Added) > 0 {
-		validators := make(validator.AccountSet, 0, len(extra.Validators.Added))
-		for _, v := range extra.Validators.Added {
-			validators = append(validators, &validator.ValidatorMetadata{
-				Address:     v.Address,
-				VotingPower: v.VotingPower,
-				IsActive:    v.IsActive,
-			})
-		}
-
-		// 🔧 关键修复：读取后重新排序，确保与写入时的排序规则完全一致
-		// 排序规则：1. 按权重（VotingPower）降序排序；2. 权重相同时按地址字节升序排序
-		sort.Slice(validators, func(i, j int) bool {
-			votingPowerCmp := validators[i].VotingPower.Cmp(validators[j].VotingPower)
-			if votingPowerCmp != 0 {
-				return votingPowerCmp > 0 // 权重降序
-			}
-			// 权重相同时，按地址升序排序（确保排序稳定）
-			return bytes.Compare(validators[i].Address[:], validators[j].Address[:]) < 0
-		})
-
-		return validators, nil
-	}
-
-	return nil, fmt.Errorf("no validators found in ExtraData")
+	return validators, nil
 }
 
 // GetValidatorsFromBlockExtraData 从指定区块的 ExtraData 读取验证者集合（公共方法）
