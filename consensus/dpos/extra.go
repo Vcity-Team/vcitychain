@@ -2145,21 +2145,24 @@ func (i *Extra) getValidatorsFromDatabase(header *types.Header, parent *types.He
 	consensusBackend dposBackend, logger hclog.Logger) (validator.AccountSet, error) {
 	blockNumber := header.Number
 
-	// 特殊情况：创世区块或第一个区块，从创世文件获取
-	if blockNumber <= 1 || (parent != nil && parent.Number == 1) || parent == nil {
-		logger.Info("📋 处理创世区块或第一个区块，从创世文件获取验证者集合",
-			"blockNumber", blockNumber)
+	if dposBackend, ok := consensusBackend.(*DPoS); ok && dposBackend != nil && dposBackend.config != nil {
+		consensusSwitchHeight := dposBackend.config.ConsensusSwitchHeight
+		if consensusSwitchHeight > 0 && blockNumber < consensusSwitchHeight {
+			logger.Debug("📋 处理共识切换高度之前的区块，从创世文件获取验证者集合",
+				"blockNumber", blockNumber,
+				"consensusSwitchHeight", consensusSwitchHeight)
 
-		genesisValidators, err := i.getGenesisValidators(consensusBackend, logger)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get genesis validators: %w", err)
+			genesisValidators, err := i.getGenesisValidators(consensusBackend, logger)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get genesis validators: %w", err)
+			}
+
+			logger.Debug("✅ 从创世文件获取验证者集合成功",
+				"blockNumber", blockNumber,
+				"genesisValidatorsCount", len(genesisValidators))
+
+			return genesisValidators, nil
 		}
-
-		logger.Info("✅ 从创世文件获取验证者集合成功",
-			"blockNumber", blockNumber,
-			"genesisValidatorsCount", len(genesisValidators))
-
-		return genesisValidators, nil
 	}
 
 	// 从数据库读取验证者集合
