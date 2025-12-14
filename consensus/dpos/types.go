@@ -144,6 +144,9 @@ type StakeInfo struct {
 	Delegate        types.Address          `json:"delegate"`
 	FaultFlag       map[string]interface{} `json:"faultFlag,omitempty"`       // 故障标志信息：isFaulty, missedBlocks, reason
 	SlashingRecords []*SlashingRecord      `json:"slashingRecords,omitempty"` // 削减历史（按时间顺序）
+	// 新增：边界应用相关字段
+	EffectiveEpoch  uint64 `json:"effectiveEpoch,omitempty"` // 生效的epoch（边界应用）
+	Applied         bool   `json:"applied,omitempty"`         // 是否已应用
 }
 
 // 参数表决相关数据结构

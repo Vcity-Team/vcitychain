@@ -934,18 +934,7 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 		b.logger.Debug("🔵 [blockchain.WriteFullBlock] OnBlockInserted 调用完成",
 			"blockNumber", header.Number,
 			"source", source)
-	} else {
-		// 如果共识不支持 OnBlockInserted 接口，可能是其他共识类型
-		// 这些共识类型有自己的处理方式，这里不处理
-		b.logger.Info("⚠️ [blockchain.WriteFullBlock] 共识不支持 OnBlockInserted 接口，跳过调用",
-			"blockNumber", header.Number,
-			"source", source,
-			"consensusType", fmt.Sprintf("%T", b.consensus),
-			"typeAssertOk", ok,
-			"handlerIsNil", blockInsertedHandler == nil,
-			"note", "这可能导致交易池nonce未更新")
 	}
-
 	// 判断区块类型：空块、交易块、mix块
 	txCount := len(block.Transactions)
 	stateTxCount := 0

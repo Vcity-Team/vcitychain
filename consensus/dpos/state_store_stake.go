@@ -166,8 +166,9 @@ func (s *StakeStore) GetValidatorsWithFilter(filterZeroVotingPower bool) (valida
 				continue
 			}
 
-			// 应用过滤条件
-			if filterZeroVotingPower && (delegateInfo.VotingPower == nil || delegateInfo.VotingPower.Cmp(big.NewInt(0)) == 0) {
+			// ✅ 修改：默认过滤掉零权重验证者（除非明确指定不过滤）
+			// 这确保未生效的投票不会导致验证者集合包含零权重验证者
+			if delegateInfo.VotingPower == nil || delegateInfo.VotingPower.Cmp(big.NewInt(0)) == 0 {
 				// 跳过零权重验证者，不输出日志
 				continue
 			}

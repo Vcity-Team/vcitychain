@@ -112,8 +112,9 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 		return nil, fmt.Errorf("stake store not available")
 	}
 
-	// 从数据库读取所有验证者
-	validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	// ✅ 修改：默认过滤掉零权重验证者
+	// 从数据库读取所有验证者（过滤零权重）
+	validators, err := d.state.StakeStore.GetValidatorsWithFilter(true) // 改为 true，过滤零权重
 	if err != nil {
 		return nil, fmt.Errorf("failed to get validators from database: %w", err)
 	}

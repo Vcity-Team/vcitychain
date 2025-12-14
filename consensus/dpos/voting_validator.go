@@ -6,7 +6,6 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/types"
 )
@@ -188,18 +187,14 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		}
 	}
 
-	// 如果受托人不在预定义列表中，创建受托人记录（但需要先注册）
+	// ✅ 修改：不在投票时创建验证者记录到数据库
+	// 验证者记录应该在边界应用时创建，而不是在投票时
+	// 这里只检查验证者是否存在，不创建新记录
 	if !delegateExists {
-		newDelegate := &validator.ValidatorMetadata{
-			Address:     vote.Delegate,
-			BlsKey:      nil,           // 暂时设为nil，后续可以更新
-			VotingPower: big.NewInt(0), // 初始化为0，后续会正确更新
-			IsActive:    false,         // 初始化为false，只有获得投票后才设为true
-		}
-		d.logger.Debug("Creating delegate record for registered delegate",
-			"delegate", vote.Delegate.String(), "amount", "0")
-		// 添加到受托人列表（使用安全方法去重）
-		d.addDelegateSafely(newDelegate)
+		d.logger.Debug("⚠️ 受托人不在验证者集合中，将在边界应用时创建",
+			"delegate", vote.Delegate.String(),
+			"note", "投票已记录，将在epoch边界应用时创建验证者记录")
+		// 不再调用 addDelegateSafely，避免创建零权重验证者记录
 	}
 
 	// 3. 检查投票锁定时间（临时跳过用于测试）

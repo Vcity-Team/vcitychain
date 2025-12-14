@@ -649,6 +649,11 @@ func (d *DPoS) Start() error {
 		d.logger.Error("Failed to restore voting data from database", "error", err)
 	}
 
+	// ✅ 新增：从数据库恢复投票记录（用于边界应用）
+	if err := d.restoreVoteRecordsFromDatabase(); err != nil {
+		d.logger.Error("Failed to restore vote records from database", "error", err)
+	}
+
 	// 启动时直接调用和命令一样的数据源方法
 	if err := d.callCommandDataSourcesOnStartup(); err != nil {
 		d.logger.Warn("Failed to call command data sources on startup", "error", err)

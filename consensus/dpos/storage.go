@@ -140,14 +140,16 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 
 	// 创建 StakeInfo
 	stakeInfo := &StakeInfo{
-		Staker:    voter,
-		Amount:    new(big.Int).Set(amount),
-		StartTime: voterInfo.LastVoteTime,
-		EndTime:   voterInfo.LockedUntil,
-		IsLocked:  voterInfo.LockedUntil > uint64(time.Now().Unix()),
-		IsActive:  len(voterInfo.VotedDelegates) > 0,
-		Rewards:   big.NewInt(0), // TODO: 实现奖励计算
-		Delegate:  candidate,     // 投票给哪个 delegate
+		Staker:         voter,
+		Amount:         new(big.Int).Set(amount),
+		StartTime:      voterInfo.LastVoteTime,
+		EndTime:        voterInfo.LockedUntil,
+		IsLocked:       voterInfo.LockedUntil > uint64(time.Now().Unix()),
+		IsActive:       len(voterInfo.VotedDelegates) > 0,
+		Rewards:        big.NewInt(0), // TODO: 实现奖励计算
+		Delegate:       candidate,     // 投票给哪个 delegate
+		EffectiveEpoch: effectiveEpoch, // ✅ 新增：保存生效的epoch
+		Applied:        applied,        // ✅ 新增：保存是否已应用
 	}
 
 	// 保存到数据库
@@ -655,6 +657,56 @@ func (d *DPoS) restoreVotingDataFromDatabase() error {
 	d.logger.Info("✅ Voting data restored from database",
 		"votersCount", len(d.voters),
 		"delegatesCount", len(d.delegates))
+
+	return nil
+}
+
+// restoreVoteRecordsFromDatabase 从数据库恢复投票记录（用于边界应用）
+func (d *DPoS) restoreVoteRecordsFromDatabase() error {
+	if d.state == nil || d.state.StakeStore == nil {
+		d.logger.Warn("State store not available, cannot restore vote records")
+		return fmt.Errorf("state store not available")
+	}
+
+	// 初始化 voteRecords map
+	if d.voteRecords == nil {
+		d.voteRecords = make(map[string]*VoteRecord)
+	}
+
+	// 从数据库读取所有 StakingInfo
+	stakingInfos, err := d.state.StakeStore.GetStakingInfo()
+	if err != nil {
+		d.logger.Warn("Failed to get staking info for vote records", "error", err)
+		return fmt.Errorf("failed to get staking info: %w", err)
+	}
+
+	restoredCount := 0
+	d.voteRecordsMutex.Lock()
+	defer d.voteRecordsMutex.Unlock()
+
+	for _, stakeInfo := range stakingInfos {
+		// 只恢复未应用的投票记录（Applied=false）
+		// 如果 EffectiveEpoch 为 0，说明是旧数据，跳过
+		if stakeInfo.EffectiveEpoch == 0 {
+			continue
+		}
+
+		// 创建投票记录
+		voteKey := fmt.Sprintf("%s_%s_%d", stakeInfo.Staker.String(), stakeInfo.Delegate.String(), stakeInfo.StartTime)
+		d.voteRecords[voteKey] = &VoteRecord{
+			Voter:          stakeInfo.Staker,
+			Delegate:       stakeInfo.Delegate,
+			Amount:         new(big.Int).Set(stakeInfo.Amount),
+			Timestamp:      stakeInfo.StartTime,
+			EffectiveEpoch: stakeInfo.EffectiveEpoch,
+			Applied:        stakeInfo.Applied,
+		}
+		restoredCount++
+	}
+
+	d.logger.Info("✅ Vote records restored from database",
+		"restoredCount", restoredCount,
+		"totalVoteRecords", len(d.voteRecords))
 
 	return nil
 }
