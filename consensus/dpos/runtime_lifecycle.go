@@ -18,6 +18,23 @@ func (r *dposRuntime) start() error {
 	}
 	r.logger.Debug("✅ DPoS runtime状态初始化成功")
 
+	// ✅ 方案2：确保networkIntegration已启动
+	if r.networkIntegration != nil {
+		// 检查关键主题是否可用，判断是否已启动
+		if r.networkIntegration.GetSignatureRequestTopic() == nil && r.networkIntegration.GetSignatureResponseTopic() == nil {
+			r.logger.Info("🔧 networkIntegration未启动，开始启动...")
+			if err := r.networkIntegration.Start(); err != nil {
+				r.logger.Error("❌ networkIntegration启动失败", "error", err)
+				return fmt.Errorf("failed to start network integration: %w", err)
+			}
+			r.logger.Info("✅ networkIntegration启动成功")
+		} else {
+			r.logger.Debug("✅ networkIntegration已启动")
+		}
+	} else {
+		r.logger.Warn("⚠️ networkIntegration为nil，可能影响BLS公钥获取")
+	}
+
 	// 启动区块生产定时器
 	if err := r.startBlockProduction(); err != nil {
 		r.logger.Error("❌ 启动区块生产定时器失败", "error", err)

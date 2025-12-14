@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -419,18 +420,30 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 	if elems[0].Elems() > 0 {
 		validatorElems, err := elems[0].GetElems()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to get validator elements from elems[0]: %w", err)
 		}
 
 		if len(validatorElems) == 3 {
 			// 标准ValidatorSetDelta格式：Added, Updated, Removed
 			i.Validators = &validator.ValidatorSetDelta{}
 			if err := i.Validators.UnmarshalRLPWith(elems[0]); err != nil {
-				return err
+				return fmt.Errorf("failed to unmarshal ValidatorSetDelta: %w (validatorElemsLen=%d)", err, len(validatorElems))
+			}
+			// 🔍 调试日志：记录解析结果
+			// 注意：这里无法获取blockNumber，因为UnmarshalRLPWith没有传递header信息
+			// 详细的日志会在ValidateFinalizedData中记录
+			if len(i.Validators.Added) == 0 {
+				// 注意：这里不返回错误，因为可能是空的Added数组（虽然不应该）
+				// 但会在ValidateFinalizedData中检查并返回错误
 			}
 		} else {
+			// 🔍 调试信息：记录为什么Validators为nil（会在ValidateFinalizedData中记录详细日志）
+			// len(validatorElems) != 3，不符合ValidatorSetDelta格式
 			i.Validators = nil
 		}
+	} else {
+		// 🔍 调试信息：elems[0]为空，Validators保持为nil（会在ValidateFinalizedData中记录详细日志）
+		i.Validators = nil
 	}
 
 	if elems[1].Elems() > 0 {
@@ -638,6 +651,30 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 	// validate committed signatures
 	blockNumber := header.Number
 
+	// 🔍 并发跟踪：记录goroutine ID和Extra实例地址
+	goroutineID := fmt.Sprintf("%d", getGoroutineID())
+	extraInstanceAddr := fmt.Sprintf("%p", i)
+	validatorsAddr := "nil"
+	if i.Validators != nil {
+		validatorsAddr = fmt.Sprintf("%p", i.Validators)
+		addedAddr := "nil"
+		if i.Validators.Added != nil {
+			addedAddr = fmt.Sprintf("%p", i.Validators.Added)
+		}
+		validatorsAddr = fmt.Sprintf("%s(Added:%s,len:%d)", validatorsAddr, addedAddr, len(i.Validators.Added))
+	}
+
+	// 添加info级别日志：记录验证开始
+	logger.Info("🔍 [ValidateFinalizedData] 开始验证区块ExtraData",
+		"blockNumber", blockNumber,
+		"blockHash", header.Hash.String(),
+		"parentNumber", parent.Number,
+		"extraDataLength", len(header.ExtraData),
+		"goroutineID", goroutineID,
+		"extraInstanceAddr", extraInstanceAddr,
+		"validatorsAddr", validatorsAddr,
+		"note", "开始验证区块的ExtraData，包括验证者集合和BLS签名")
+
 	// skip block 1 because genesis does not have committed signatures
 	if blockNumber <= 1 {
 		logger.Info("✅ ValidateFinalizedData 跳过创世区块验证", "blockNumber", blockNumber)
@@ -683,23 +720,172 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 	// 处理故障标志（调用独立函数）
 	i.processFaultFlags(blockNumber, consensusBackend, logger)
 
-	// 🔧 修改：从数据库读取验证者集合，而不是从 ExtraData
-	// 统一数据源，避免排序不一致问题
-	var validators validator.AccountSet
-	if dposBackend, ok := consensusBackend.(*DPoS); ok && dposBackend != nil {
-		var err error
-		validators, err = dposBackend.GetSortedValidatorsWithLimitFilterFaulty()
-		if err != nil {
-			logger.Error("❌ 从数据库获取验证者集合失败", "blockNumber", blockNumber, "error", err)
-			return fmt.Errorf("failed to get validators from database for block %d: %w", blockNumber, err)
-		}
-		if len(validators) == 0 {
-			logger.Error("❌ 从数据库获取的验证者集合为空", "blockNumber", blockNumber)
-			return fmt.Errorf("validators set is empty from database for block %d", blockNumber)
+	// 🔧 修复：必须从ExtraData读取验证者集合，确保与生产时使用的验证者集合一致
+	// 这样可以避免生产与验证之间故障状态变化导致的位图索引不匹配问题
+
+	// 🔍 调试日志：分析为什么读不出来验证者集合
+	// 重新解析ExtraData以获取详细的解析信息
+	var elems0ElemsCount int = -1
+	var validatorElemsCount int = -1
+	var parseErrorStr string
+	if len(header.ExtraData) >= ExtraVanity {
+		// 手动解析RLP数据以获取elems[0]的详细信息
+		rlpData := header.ExtraData[ExtraVanity:]
+		var parser fastrlp.Parser
+		v, err := parser.Parse(rlpData)
+		if err == nil {
+			if elems, err := v.GetElems(); err == nil && len(elems) > 0 {
+				elems0ElemsCount = elems[0].Elems()
+				if elems0ElemsCount > 0 {
+					if validatorElems, err := elems[0].GetElems(); err == nil {
+						validatorElemsCount = len(validatorElems)
+					} else {
+						parseErrorStr = fmt.Sprintf("failed to get validatorElems: %v", err)
+					}
+				}
+			} else if err != nil {
+				parseErrorStr = fmt.Sprintf("failed to get elems: %v", err)
+			}
+		} else {
+			parseErrorStr = fmt.Sprintf("failed to parse RLP: %v", err)
 		}
 	} else {
-		logger.Error("❌ 无法获取 DPoS backend", "blockNumber", blockNumber)
-		return fmt.Errorf("failed to get DPoS backend for block %d", blockNumber)
+		parseErrorStr = fmt.Sprintf("ExtraData too short: %d < %d", len(header.ExtraData), ExtraVanity)
+	}
+
+	logger.Info("🔍 开始分析ExtraData中的验证者集合",
+		"blockNumber", blockNumber,
+		"validatorsIsNil", i.Validators == nil,
+		"validatorsAddedLen", func() int {
+			if i.Validators != nil {
+				return len(i.Validators.Added)
+			}
+			return 0
+		}(),
+		"validatorsUpdatedLen", func() int {
+			if i.Validators != nil {
+				return len(i.Validators.Updated)
+			}
+			return 0
+		}(),
+		"validatorsRemovedLen", func() int {
+			if i.Validators != nil {
+				return len(i.Validators.Removed)
+			}
+			return 0
+		}(),
+		"extraDataLength", len(header.ExtraData),
+		"elems0ElemsCount", elems0ElemsCount,
+		"validatorElemsCount", validatorElemsCount,
+		"parseError", parseErrorStr,
+		"note", func() string {
+			if elems0ElemsCount == 0 {
+				return "elems[0]为空，Validators字段未序列化或序列化为空"
+			} else if validatorElemsCount != 3 && validatorElemsCount != -1 {
+				return fmt.Sprintf("validatorElems长度=%d，不等于3，不符合ValidatorSetDelta格式", validatorElemsCount)
+			} else if validatorElemsCount == 3 && i.Validators == nil {
+				return "validatorElems长度为3，但UnmarshalRLPWith解析失败"
+			} else if validatorElemsCount == 3 && i.Validators != nil && len(i.Validators.Added) == 0 {
+				return "ValidatorSetDelta解析成功，但Added数组为空"
+			}
+			return "未知原因"
+		}())
+
+	var validators validator.AccountSet
+	// 🔍 并发跟踪：记录读取验证者集合前的状态
+	goroutineID2 := fmt.Sprintf("%d", getGoroutineID())
+	extraInstanceAddr2 := fmt.Sprintf("%p", i)
+	validatorsBeforeAddr := "nil"
+	validatorsBeforeLen := 0
+	if i.Validators != nil {
+		validatorsBeforeAddr = fmt.Sprintf("%p", i.Validators)
+		if i.Validators.Added != nil {
+			validatorsBeforeLen = len(i.Validators.Added)
+			validatorsBeforeAddr = fmt.Sprintf("%s(Added:%p,len:%d)", validatorsBeforeAddr, i.Validators.Added, validatorsBeforeLen)
+		}
+	}
+	logger.Info("🔍 [ValidateFinalizedData] 准备读取验证者集合",
+		"blockNumber", blockNumber,
+		"goroutineID", goroutineID2,
+		"extraInstanceAddr", extraInstanceAddr2,
+		"validatorsBeforeAddr", validatorsBeforeAddr,
+		"validatorsBeforeLen", validatorsBeforeLen,
+		"iValidatorsIsNil", i.Validators == nil,
+		"iValidatorsAddr", func() string {
+			if i.Validators != nil {
+				return fmt.Sprintf("%p", i.Validators)
+			}
+			return "nil"
+		}(),
+		"iValidatorsAddedAddr", func() string {
+			if i.Validators != nil && i.Validators.Added != nil {
+				return fmt.Sprintf("%p", i.Validators.Added)
+			}
+			return "nil"
+		}(),
+		"note", "记录读取验证者集合前的状态，包括i.Validators和i.Validators.Added的地址，用于并发跟踪")
+
+	if i.Validators != nil && len(i.Validators.Added) > 0 {
+		// 从ExtraData读取生产时使用的验证者集合
+		validators = i.Validators.Added.Copy()
+		validatorsAfterAddr := fmt.Sprintf("%p", validators)
+		logger.Info("✅ 从ExtraData读取生产时验证者集合",
+			"blockNumber", blockNumber,
+			"validatorsCount", len(validators),
+			"goroutineID", goroutineID2,
+			"extraInstanceAddr", extraInstanceAddr2,
+			"validatorsBeforeAddr", validatorsBeforeAddr,
+			"validatorsAfterAddr", validatorsAfterAddr,
+			"note", "确保与生产时使用的验证者集合一致")
+
+		// 添加详细的验证者列表日志（info级别）
+		for idx, validator := range validators {
+			logger.Info("📋 从ExtraData读取的验证者详情",
+				"blockNumber", blockNumber,
+				"index", idx,
+				"address", validator.Address.String(),
+				"votingPower", validator.VotingPower.String(),
+				"isActive", validator.IsActive,
+				"hasBlsKey", validator.BlsKey != nil)
+		}
+	} else {
+		// ❌ 错误：ExtraData中必须包含验证者集合，否则无法正确验证位图
+		logger.Error("❌ ExtraData中缺少验证者集合",
+			"blockNumber", blockNumber,
+			"validatorsIsNil", i.Validators == nil,
+			"validatorsAddedLen", func() int {
+				if i.Validators != nil {
+					return len(i.Validators.Added)
+				}
+				return 0
+			}(),
+			"validatorsUpdatedLen", func() int {
+				if i.Validators != nil {
+					return len(i.Validators.Updated)
+				}
+				return 0
+			}(),
+			"validatorsRemovedLen", func() int {
+				if i.Validators != nil {
+					return len(i.Validators.Removed)
+				}
+				return 0
+			}(),
+			"extraDataLength", len(header.ExtraData),
+			"extraDataHex", func() string {
+				if len(header.ExtraData) > 100 {
+					return fmt.Sprintf("%x", header.ExtraData[:100]) // 只显示前100字节
+				}
+				return fmt.Sprintf("%x", header.ExtraData)
+			}(),
+			"note", "生产时应该将验证者集合写入ExtraData，验证时必须从ExtraData读取。可能原因：1) ExtraData解析失败 2) Validators字段未正确序列化 3) elems[0]为空或len(validatorElems)!=3")
+		return fmt.Errorf("validators set is missing in ExtraData for block %d: validatorsIsNil=%v, validatorsAddedLen=%d, extraDataLength=%d",
+			blockNumber, i.Validators == nil, func() int {
+				if i.Validators != nil {
+					return len(i.Validators.Added)
+				}
+				return 0
+			}(), len(header.ExtraData))
 	}
 
 	var currentValidatorsHash types.Hash
@@ -738,7 +924,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		return fmt.Errorf("failed to calculate proposal hash: %w", err)
 	}
 
-	logger.Debug("🔍 验证时验证者集合与生产时一致性检查",
+	logger.Info("🔍 验证时验证者集合与生产时一致性检查",
 		"blockNumber", blockNumber,
 		"validatorsCount", len(validators),
 		"note", "确保验证者集合与生产时位图索引对应关系一致")
@@ -770,10 +956,25 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		}
 	}
 
+	// 🔍 并发跟踪：记录调用Signature.Verify前的状态
+	goroutineID3 := fmt.Sprintf("%d", getGoroutineID())
+	validatorsAddrBeforeVerify := fmt.Sprintf("%p", validators)
+	validatorsLenBeforeVerify := len(validators)
+	logger.Info("🔍 [ValidateFinalizedData] 准备调用Signature.Verify",
+		"blockNumber", blockNumber,
+		"goroutineID", goroutineID3,
+		"validatorsAddr", validatorsAddrBeforeVerify,
+		"validatorsLen", validatorsLenBeforeVerify,
+		"checkpointHash", checkpointHash.String(),
+		"note", "记录调用Signature.Verify前的验证者集合状态，用于并发跟踪")
+
 	if err := i.Committed.Verify(blockNumber, validators, checkpointHash, domain, logger); err != nil {
 		logger.Error("🚨 区块签名验证失败，程序将退出",
 			"blockNumber", blockNumber,
 			"proposalHash", checkpointHash.String(),
+			"goroutineID", goroutineID3,
+			"validatorsAddr", validatorsAddrBeforeVerify,
+			"validatorsLen", validatorsLenBeforeVerify,
 			"error", err)
 
 		// 区块验证失败时直接退出程序
@@ -895,6 +1096,30 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 // ValidateParentSignatures validates signatures for parent block
 func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dposBackend, parents []*types.Header,
 	parent *types.Header, parentExtra *Extra, chainID uint64, domain []byte, logger hclog.Logger) error {
+
+	// 🔍 并发跟踪：记录函数开始时的关键信息
+	goroutineID := fmt.Sprintf("%d", getGoroutineID())
+	parentExtraAddr := fmt.Sprintf("%p", parentExtra)
+	parentValidatorsAddr := "nil"
+	parentValidatorsLen := 0
+	if parentExtra.Validators != nil {
+		parentValidatorsAddr = fmt.Sprintf("%p", parentExtra.Validators)
+		if parentExtra.Validators.Added != nil {
+			parentValidatorsLen = len(parentExtra.Validators.Added)
+			parentValidatorsAddr = fmt.Sprintf("%s(Added:%p,len:%d)", parentValidatorsAddr, parentExtra.Validators.Added, parentValidatorsLen)
+		}
+	}
+
+	logger.Info("🔍 [ValidateParentSignatures] 开始验证父区块签名",
+		"blockNumber", blockNumber,
+		"parentBlockNumber", parent.Number,
+		"parentHash", parent.Hash.String(),
+		"goroutineID", goroutineID,
+		"parentExtraAddr", parentExtraAddr,
+		"parentValidatorsAddr", parentValidatorsAddr,
+		"parentValidatorsLen", parentValidatorsLen,
+		"note", "记录父区块验证开始时的状态，用于跟踪验证者集合来源")
+
 	// skip block 1 because genesis does not have committed signatures
 	if blockNumber <= 1 {
 		return nil
@@ -947,13 +1172,100 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 		}
 	}
 
-	parentValidators, err := parentExtra.getValidatorsFromDatabase(parent, parentParent, parents, consensusBackend, logger)
-	if err != nil {
-		return fmt.Errorf(
-			"failed to get parent validators from ExtraData for block %d: %w",
-			blockNumber,
-			err,
-		)
+	// 🔍 关键修复：优先从父区块的ExtraData读取验证者集合，而不是从数据库
+	// 这样可以确保使用父区块生产时的验证者集合，而不是当前数据库中的验证者集合
+	var parentValidators validator.AccountSet
+	var err error
+
+	// 首先尝试从parentExtra.Validators.Added读取（这是父区块生产时写入的验证者集合）
+	if parentExtra.Validators != nil && len(parentExtra.Validators.Added) > 0 {
+		// 🔍 记录读取前的状态
+		addedBeforeCopyAddr := fmt.Sprintf("%p", parentExtra.Validators.Added)
+		addedBeforeCopyLen := len(parentExtra.Validators.Added)
+		addedBeforeCopyCap := cap(parentExtra.Validators.Added)
+
+		parentValidators = parentExtra.Validators.Added.Copy()
+
+		// 🔍 记录读取后的状态
+		parentValidatorsAfterAddr := fmt.Sprintf("%p", parentValidators)
+		parentValidatorsAfterLen := len(parentValidators)
+		parentValidatorsAfterCap := cap(parentValidators)
+
+		// 🔍 记录每个验证者的详细信息
+		validatorsElementAddrs := make([]string, len(parentValidators))
+		validatorsDetails := make([]string, len(parentValidators))
+		for idx, v := range parentValidators {
+			validatorsElementAddrs[idx] = fmt.Sprintf("[%d]%p", idx, v)
+			validatorsDetails[idx] = fmt.Sprintf("[%d]%s", idx, v.Address.String())
+		}
+
+		logger.Info("✅ [ValidateParentSignatures] 从父区块ExtraData读取验证者集合",
+			"blockNumber", blockNumber,
+			"parentBlockNumber", parent.Number,
+			"goroutineID", goroutineID,
+			"parentExtraAddr", parentExtraAddr,
+			"addedBeforeCopyAddr", addedBeforeCopyAddr,
+			"addedBeforeCopyLen", addedBeforeCopyLen,
+			"addedBeforeCopyCap", addedBeforeCopyCap,
+			"parentValidatorsAfterAddr", parentValidatorsAfterAddr,
+			"parentValidatorsAfterLen", parentValidatorsAfterLen,
+			"parentValidatorsAfterCap", parentValidatorsAfterCap,
+			"validatorsElementAddrs", validatorsElementAddrs,
+			"validatorsDetails", validatorsDetails,
+			"note", "优先使用父区块生产时写入的验证者集合，确保与父区块签名时使用的验证者集合一致")
+
+		// 🔍 详细记录每个验证者
+		for idx, validator := range parentValidators {
+			logger.Info("📋 [ValidateParentSignatures] 父区块验证者详情",
+				"blockNumber", blockNumber,
+				"parentBlockNumber", parent.Number,
+				"index", idx,
+				"address", validator.Address.String(),
+				"validatorAddr", fmt.Sprintf("%p", validator),
+				"votingPower", validator.VotingPower.String(),
+				"isActive", validator.IsActive,
+				"hasBlsKey", validator.BlsKey != nil)
+		}
+	} else {
+		// 如果ExtraData中没有验证者集合，才从数据库获取（fallback）
+		logger.Warn("⚠️ [ValidateParentSignatures] 父区块ExtraData中没有验证者集合，从数据库获取",
+			"blockNumber", blockNumber,
+			"parentBlockNumber", parent.Number,
+			"goroutineID", goroutineID,
+			"parentExtraAddr", parentExtraAddr,
+			"parentValidatorsIsNil", parentExtra.Validators == nil,
+			"parentValidatorsAddedLen", func() int {
+				if parentExtra.Validators != nil {
+					return len(parentExtra.Validators.Added)
+				}
+				return 0
+			}(),
+			"note", "这不是期望的情况，父区块应该包含验证者集合")
+		parentValidators, err = parentExtra.getValidatorsFromDatabase(parent, parentParent, parents, consensusBackend, logger)
+		if err != nil {
+			return fmt.Errorf(
+				"failed to get parent validators from ExtraData for block %d: %w",
+				blockNumber,
+				err,
+			)
+		}
+
+		// 🔍 记录从数据库获取的验证者集合
+		parentValidatorsFromDBAddr := fmt.Sprintf("%p", parentValidators)
+		parentValidatorsFromDBLen := len(parentValidators)
+		validatorsFromDBDetails := make([]string, len(parentValidators))
+		for idx, v := range parentValidators {
+			validatorsFromDBDetails[idx] = fmt.Sprintf("[%d]%s", idx, v.Address.String())
+		}
+
+		logger.Info("⚠️ [ValidateParentSignatures] 从数据库获取父区块验证者集合",
+			"blockNumber", blockNumber,
+			"parentBlockNumber", parent.Number,
+			"goroutineID", goroutineID,
+			"parentValidatorsFromDBAddr", parentValidatorsFromDBAddr,
+			"parentValidatorsFromDBLen", parentValidatorsFromDBLen,
+			"validatorsFromDBDetails", validatorsFromDBDetails,
+			"note", "从数据库获取的验证者集合可能与父区块生产时使用的验证者集合不一致")
 	}
 
 	realParentBlockHash := parent.Hash
@@ -963,6 +1275,22 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 	}
 
 	parentBlockNumber := blockNumber - 1
+
+	// 🔍 记录调用Parent.Verify前的状态
+	parentValidatorsBeforeVerifyAddr := fmt.Sprintf("%p", parentValidators)
+	parentValidatorsBeforeVerifyLen := len(parentValidators)
+	parentValidatorsBeforeVerifyCap := cap(parentValidators)
+
+	logger.Info("🔍 [ValidateParentSignatures] 准备调用Parent.Verify验证父区块签名",
+		"blockNumber", blockNumber,
+		"parentBlockNumber", parentBlockNumber,
+		"goroutineID", goroutineID,
+		"parentValidatorsAddr", parentValidatorsBeforeVerifyAddr,
+		"parentValidatorsLen", parentValidatorsBeforeVerifyLen,
+		"parentValidatorsCap", parentValidatorsBeforeVerifyCap,
+		"parentCheckpointHash", parentCheckpointHash.String(),
+		"note", "记录调用Parent.Verify前的验证者集合状态，用于跟踪")
+
 	if err := i.Parent.Verify(parentBlockNumber, parentValidators, parentCheckpointHash, domain, logger); err != nil {
 		// 修复：检查是否是BLS密钥缺失错误，如果是则尝试获取
 		if strings.Contains(err.Error(), "has nil BLS key but is marked as signer in bitmap") {
@@ -1381,6 +1709,25 @@ func (s *Signature) tryFetchBLSKeyFromNetwork(missingAddress types.Address, bloc
 func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 	hash types.Hash, domain []byte, logger hclog.Logger) error {
 
+	// 🔍 并发跟踪：记录goroutine ID和validators地址
+	goroutineID := fmt.Sprintf("%d", getGoroutineID())
+	validatorsAddr := fmt.Sprintf("%p", validators)
+	validatorsLen := len(validators)
+	signatureAddr := fmt.Sprintf("%p", s)
+
+	// 添加info级别日志：记录验证开始时的关键信息
+	logger.Info("🔍 [Signature.Verify] 开始BLS签名验证",
+		"blockNumber", blockNumber,
+		"validatorsCount", validatorsLen,
+		"validatorsAddr", validatorsAddr,
+		"signatureAddr", signatureAddr,
+		"goroutineID", goroutineID,
+		"bitmapHex", fmt.Sprintf("%x", s.Bitmap),
+		"bitmapLength", len(s.Bitmap),
+		"aggregatedSignatureLength", len(s.AggregatedSignature),
+		"hash", hash.String(),
+		"note", "验证时使用的验证者集合和位图，记录地址用于并发跟踪")
+
 	// 新增：检查是否在共识切换高度，如果是则跳过BLS签名验证
 	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 		if dposInstance.config != nil && dposInstance.config.ConsensusSwitchHeight > 0 && blockNumber == dposInstance.config.ConsensusSwitchHeight {
@@ -1424,21 +1771,43 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		return fmt.Errorf("quorum not reached: current signatures %d, required %d", len(signers), requiredQuorumCount)
 	}
 
+	// 🔍 并发跟踪：记录validators的详细信息，用于检测是否被覆盖
+	validatorsAddrAtLog := fmt.Sprintf("%p", validators)
+	validatorsLenAtLog := len(validators)
+	validatorsCapAtLog := cap(validators)
+
 	// 调试日志：打印当前验证者集合和位图信息
-	logger.Debug("🧾 验证节点收到的验证者集合",
+	logger.Info("🧾 验证节点收到的验证者集合",
 		"blockNumber", blockNumber,
-		"validatorsCount", len(validators))
+		"validatorsCount", validatorsLenAtLog,
+		"validatorsAddr", validatorsAddrAtLog,
+		"validatorsCap", validatorsCapAtLog,
+		"goroutineID", goroutineID,
+		"note", "记录validators的地址和容量，用于检测并发覆盖")
 	for idx, validator := range validators {
-		logger.Debug("🧾 验证节点验证者详情",
+		validatorAddr := fmt.Sprintf("%p", validator)
+		logger.Info("🧾 验证节点验证者详情",
 			"blockNumber", blockNumber,
 			"index", idx,
 			"address", validator.Address.String(),
-			"isActive", validator.IsActive)
+			"validatorAddr", validatorAddr,
+			"votingPower", validator.VotingPower.String(),
+			"isActive", validator.IsActive,
+			"hasBlsKey", validator.BlsKey != nil)
 	}
-	logger.Debug("🧾 验证节点位图信息",
+	logger.Info("🧾 验证节点位图信息",
 		"blockNumber", blockNumber,
 		"bitmapHex", fmt.Sprintf("%x", s.Bitmap),
-		"bitmapLength", len(s.Bitmap))
+		"bitmapLength", len(s.Bitmap),
+		"bitmapSetCount", func() int {
+			count := 0
+			for i := uint64(0); i < uint64(len(validators)); i++ {
+				if s.Bitmap.IsSet(i) {
+					count++
+				}
+			}
+			return count
+		}())
 
 	// 修复：先计算位图中设置的位数，然后创建正确长度的数组
 	bitmapSetCount := 0
@@ -1451,6 +1820,51 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 	// 创建与validators数组长度一致的BLS公钥数组，确保位图索引能正确对应
 	blsPublicKeys := make([]*bls.PublicKey, len(validators))
 	missingBLSKeys := make([]types.Address, 0)
+
+	// ✅ 方案1：在验证BLS签名前，如果networkIntegration不可用，等待其就绪
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+		if dposInstance.runtime == nil || dposInstance.runtime.networkIntegration == nil {
+			// networkIntegration不可用，等待其初始化
+			logger.Info("⏳ networkIntegration不可用，等待其初始化",
+				"blockNumber", blockNumber,
+				"waitTime", "10秒")
+
+			waitTimeout := 10 * time.Second
+			waitInterval := 50 * time.Millisecond
+			waitStart := time.Now()
+
+			for time.Since(waitStart) < waitTimeout {
+				if dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
+					// 检查是否已启动（通过检查关键主题）
+					if dposInstance.runtime.networkIntegration.GetSignatureRequestTopic() != nil ||
+						dposInstance.runtime.networkIntegration.GetSignatureResponseTopic() != nil {
+						logger.Info("✅ networkIntegration已就绪",
+							"blockNumber", blockNumber,
+							"waitTime", time.Since(waitStart))
+						break
+					}
+				}
+				time.Sleep(waitInterval)
+			}
+
+			// 如果等待超时后仍未就绪，尝试启动
+			if dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
+				if dposInstance.runtime.networkIntegration.GetSignatureRequestTopic() == nil &&
+					dposInstance.runtime.networkIntegration.GetSignatureResponseTopic() == nil {
+					logger.Warn("⚠️ networkIntegration等待超时，尝试启动",
+						"blockNumber", blockNumber)
+					if err := dposInstance.runtime.networkIntegration.Start(); err != nil {
+						logger.Error("❌ networkIntegration启动失败",
+							"blockNumber", blockNumber,
+							"error", err)
+					} else {
+						logger.Info("✅ networkIntegration启动成功",
+							"blockNumber", blockNumber)
+					}
+				}
+			}
+		}
+	}
 
 	// 方案2：统一从网络集成层缓存获取BLS公钥，不依赖validator.BlsKey字段
 	for i := uint64(0); i < uint64(len(validators)); i++ {
@@ -1707,22 +2121,210 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		}
 	}
 
-	// 🎯 按位图索引顺序收集公钥和地址，只使用实际签名者
+	// ✅ 方案4：按位图索引顺序收集公钥和地址，在验证前立即恢复缺失的BLS公钥
+	logger.Info("🔍 [Signature.Verify] 开始按位图索引收集BLS公钥",
+		"blockNumber", blockNumber,
+		"validatorsCount", len(validators),
+		"bitmapHex", fmt.Sprintf("%x", s.Bitmap),
+		"note", "按位图索引顺序收集公钥，确保与生产时签名顺序一致")
+
+	// 检查位图索引是否超出验证者集合范围
+	maxBitmapIndex := uint64(0)
+	bitmapSetIndices := make([]uint64, 0)
+	for i := uint64(0); i < 256; i++ { // 检查前256位
+		if s.Bitmap.IsSet(i) {
+			if i > maxBitmapIndex {
+				maxBitmapIndex = i
+			}
+			bitmapSetIndices = append(bitmapSetIndices, i)
+		}
+	}
+
+	logger.Info("🔍 [Signature.Verify] 位图索引分析",
+		"blockNumber", blockNumber,
+		"validatorsCount", len(validators),
+		"maxBitmapIndex", maxBitmapIndex,
+		"bitmapSetIndices", bitmapSetIndices,
+		"bitmapHex", fmt.Sprintf("%x", s.Bitmap),
+		"bitmapSetCount", len(bitmapSetIndices),
+		"note", "分析位图索引与验证者集合的对应关系")
+
+	if maxBitmapIndex >= uint64(len(validators)) {
+		logger.Error("🚨 [Signature.Verify] 位图索引超出验证者集合范围",
+			"blockNumber", blockNumber,
+			"maxBitmapIndex", maxBitmapIndex,
+			"validatorsCount", len(validators),
+			"bitmapSetIndices", bitmapSetIndices,
+			"bitmapHex", fmt.Sprintf("%x", s.Bitmap),
+			"note", "位图索引超出范围，可能导致验证失败")
+	} else {
+		logger.Info("✅ [Signature.Verify] 位图索引范围检查通过",
+			"blockNumber", blockNumber,
+			"maxBitmapIndex", maxBitmapIndex,
+			"validatorsCount", len(validators),
+			"bitmapSetIndices", bitmapSetIndices,
+			"note", "所有位图索引都在验证者集合范围内")
+	}
+
 	for i := uint64(0); i < uint64(len(validators)); i++ {
 		if s.Bitmap.IsSet(i) {
 			validatorAddress := validators[int(i)].Address
+			logger.Info("🔍 [Signature.Verify] 位图索引对应的验证者",
+				"blockNumber", blockNumber,
+				"bitmapIndex", i,
+				"validatorAddress", validatorAddress.String(),
+				"validatorIndex", int(i),
+				"validatorsCount", len(validators),
+				"note", "位图索引与验证者集合的对应关系")
+
 			if blsKey, exists := addressToBLSKey[validatorAddress]; exists && blsKey != nil {
 				validBLSKeys = append(validBLSKeys, blsKey)
 				bitmapOrderedAddresses = append(bitmapOrderedAddresses, validatorAddress)
+				logger.Info("✅ [Signature.Verify] 成功添加BLS公钥到验证列表",
+					"blockNumber", blockNumber,
+					"bitmapIndex", i,
+					"validatorAddress", validatorAddress.String(),
+					"validBLSKeysCount", len(validBLSKeys))
 			} else {
-				logger.Warn("⚠️ 位图索引对应的BLS公钥不存在或为nil",
+				// BLS公钥缺失，立即尝试恢复
+				logger.Warn("⚠️ 位图索引对应的BLS公钥不存在或为nil，尝试恢复",
 					"bitmapIndex", i,
 					"address", validatorAddress.String(),
 					"blsPublicKeysLength", len(blsPublicKeys),
-					"hasBlsKey", exists && blsKey != nil,
-					"note", "使用地址映射查找BLS公钥")
+					"hasBlsKey", exists && blsKey != nil)
+
+				// 尝试从缓存和创世文件恢复BLS公钥
+				if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+					var blsKeyBytes []byte
+					var found bool
+
+					// 第一步：尝试从缓存获取BLS公钥
+					if dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
+						if cachedKey, exists := dposInstance.runtime.networkIntegration.GetBLSKey(validatorAddress); exists {
+							blsKeyBytes = cachedKey
+							found = true
+							logger.Debug("✅ 从缓存找到BLS公钥",
+								"bitmapIndex", i,
+								"address", validatorAddress.String(),
+								"blsKeyLength", len(blsKeyBytes))
+						}
+					}
+
+					// 第二步：如果缓存中没有，尝试从创世文件获取（仅限本地节点）
+					if !found {
+						if keyBytes, err := dposInstance.GetBLSKeyBytesFromGenesis(validatorAddress); err == nil {
+							blsKeyBytes = keyBytes
+							found = true
+							logger.Debug("✅ 从创世文件找到BLS公钥",
+								"bitmapIndex", i,
+								"address", validatorAddress.String(),
+								"blsKeyLength", len(blsKeyBytes))
+						}
+					}
+
+					// 第三步：如果缓存和创世文件都没有，尝试通过网络请求获取（仅限远程验证者）
+					if !found {
+						// 检查是否是本地节点
+						isLocalNode := dposInstance.key != nil && validatorAddress == types.Address(dposInstance.key.Address())
+						if !isLocalNode && dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
+							logger.Debug("🌐 尝试通过网络请求获取BLS公钥",
+								"bitmapIndex", i,
+								"address", validatorAddress.String(),
+								"note", "缓存和创世文件都没有，尝试网络请求")
+
+							// 尝试通过网络请求获取BLS公钥（设置较短的超时，避免阻塞太久）
+							if blsKey, err := dposInstance.GetBLSKeyForValidator(validatorAddress); err == nil && blsKey != nil {
+								blsKeyBytes = blsKey.Marshal()
+								found = true
+								logger.Debug("✅ 通过网络请求获取BLS公钥成功",
+									"bitmapIndex", i,
+									"address", validatorAddress.String(),
+									"blsKeyLength", len(blsKeyBytes))
+								// 注意：GetBLSKeyForValidator会自动将BLS公钥保存到networkIntegration的缓存中
+							}
+						}
+					}
+
+					// 第四步：如果找到了BLS公钥，解析并更新
+					if found && len(blsKeyBytes) > 0 {
+						if blsKey, err := bls.UnmarshalPublicKey(blsKeyBytes); err == nil {
+							// 更新validators数组中的BLS公钥
+							validators[int(i)].BlsKey = blsKey
+							blsPublicKeys[i] = blsKey
+							// 更新地址映射
+							addressToBLSKey[validatorAddress] = blsKey
+							// 添加到验证公钥列表
+							validBLSKeys = append(validBLSKeys, blsKey)
+							bitmapOrderedAddresses = append(bitmapOrderedAddresses, validatorAddress)
+							logger.Debug("✅ 成功恢复BLS公钥并添加到验证列表",
+								"bitmapIndex", i,
+								"address", validatorAddress.String(),
+								"blsKeyLength", len(blsKeyBytes))
+						} else {
+							logger.Warn("⚠️ 解析恢复的BLS公钥失败",
+								"bitmapIndex", i,
+								"address", validatorAddress.String(),
+								"error", err)
+						}
+					} else {
+						logger.Warn("⚠️ 无法恢复BLS公钥，将跳过该验证者",
+							"bitmapIndex", i,
+							"address", validatorAddress.String(),
+							"note", "该验证者将不会参与BLS签名验证")
+					}
+				} else {
+					logger.Error("❌ 无法获取DPoS实例来恢复BLS公钥",
+						"bitmapIndex", i,
+						"address", validatorAddress.String())
+				}
 			}
 		}
+	}
+
+	// 执行BLS签名验证前的最终汇总日志
+	logger.Info("🔍 [Signature.Verify] BLS签名验证前的最终汇总",
+		"blockNumber", blockNumber,
+		"validatorsCount", len(validators),
+		"validBLSKeysCount", len(validBLSKeys),
+		"bitmapOrderedAddressesCount", len(bitmapOrderedAddresses),
+		"bitmapHex", fmt.Sprintf("%x", s.Bitmap),
+		"hash", hash.String(),
+		"aggregatedSignatureLength", len(s.AggregatedSignature),
+		"note", "准备执行BLS签名验证")
+
+	// 记录验证者集合的完整信息
+	logger.Info("📋 [Signature.Verify] 验证者集合完整信息",
+		"blockNumber", blockNumber,
+		"validatorsCount", len(validators),
+		"validatorsList", func() []string {
+			list := make([]string, len(validators))
+			for idx, v := range validators {
+				list[idx] = fmt.Sprintf("[%d]%s", idx, v.Address.String())
+			}
+			return list
+		}(),
+		"note", "验证时使用的完整验证者集合")
+
+	// 记录位图索引与验证者地址的对应关系
+	logger.Info("📋 [Signature.Verify] 位图索引与验证者地址对应关系",
+		"blockNumber", blockNumber,
+		"bitmapOrderedAddressesCount", len(bitmapOrderedAddresses),
+		"note", "按位图索引顺序排列的验证者地址")
+	for idx, addr := range bitmapOrderedAddresses {
+		// 找到该地址在validators中的索引
+		validatorIndex := -1
+		for i, v := range validators {
+			if v.Address == addr {
+				validatorIndex = i
+				break
+			}
+		}
+		logger.Info("📋 [Signature.Verify] 位图索引对应的验证者地址",
+			"blockNumber", blockNumber,
+			"signatureIndex", idx,
+			"validatorAddress", addr.String(),
+			"validatorIndexInSet", validatorIndex,
+			"note", "按位图索引顺序排列的验证者地址")
 	}
 
 	// 执行BLS签名验证（只使用有效的公钥）
@@ -2129,15 +2731,61 @@ func GetDposExtra(extraRaw []byte) (*Extra, error) {
 		return nil, fmt.Errorf("wrong extra size: %d", len(extraRaw))
 	}
 
+	// 🔍 并发跟踪：记录goroutine ID和Extra实例创建
+	goroutineID := fmt.Sprintf("%d", getGoroutineID())
+	extraDataHash := fmt.Sprintf("%x", extraRaw[:min(32, len(extraRaw))]) // 只记录前32字节的哈希
+
 	// 尝试解析RLP数据
 	extra := &Extra{}
+	extraInstanceAddr := fmt.Sprintf("%p", extra)
+
+	// 添加info级别日志：记录ExtraData解析开始
+	// 注意：这里无法获取blockNumber，但可以记录实例地址用于并发跟踪
 
 	if err := extra.UnmarshalRLP(extraRaw); err != nil {
 		fmt.Printf("❌ DEBUG UnmarshalRLP failed: %v\n", err)
 		return nil, err
 	}
 
+	// 🔍 并发跟踪：记录解析后的状态
+	validatorsAddr := "nil"
+	validatorsLen := 0
+	if extra.Validators != nil {
+		validatorsAddr = fmt.Sprintf("%p", extra.Validators)
+		if extra.Validators.Added != nil {
+			validatorsLen = len(extra.Validators.Added)
+			validatorsAddr = fmt.Sprintf("%s(Added:%p,len:%d)", validatorsAddr, extra.Validators.Added, validatorsLen)
+		}
+	}
+
+	// 添加info级别日志：记录ExtraData解析结果
+	// 注意：这里无法获取blockNumber，详细的区块号信息会在ValidateFinalizedData中记录
+	if extra.Validators != nil && len(extra.Validators.Added) > 0 {
+		// ExtraData解析成功，包含验证者集合
+		// 详细日志会在ValidateFinalizedData中记录
+	}
+
+	// 🔍 并发跟踪日志
+	_ = goroutineID
+	_ = extraDataHash
+	_ = extraInstanceAddr
+	_ = validatorsAddr
+	_ = validatorsLen
+	// 注意：这里不打印日志，因为无法获取blockNumber，避免日志混乱
+	// 详细的日志会在ValidateFinalizedData中记录
+
 	return extra, nil
+}
+
+// getGoroutineID 获取当前goroutine的ID（用于并发跟踪）
+func getGoroutineID() uint64 {
+	b := make([]byte, 64)
+	b = b[:runtime.Stack(b, false)]
+	// 从堆栈信息中提取goroutine ID
+	// 格式: "goroutine 123 [running]:"
+	var id uint64
+	fmt.Sscanf(string(b), "goroutine %d", &id)
+	return id
 }
 
 // getValidatorsFromDatabase 从数据库获取验证者集合

@@ -1046,9 +1046,22 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				"error", err)
 		}
 
-		// 更新区块的ExtraData，包含聚合签名、父区块签名（不再包含验证者集合）
+		// 更新区块的ExtraData，包含聚合签名、父区块签名和验证者集合
+		// 🔧 修复：将生产时使用的验证者集合写入ExtraData，确保验证时能使用相同的验证者集合
+		var validatorsDelta *validator.ValidatorSetDelta
+		if productionValidators != nil && len(productionValidators) > 0 {
+			validatorsDelta = &validator.ValidatorSetDelta{
+				Added:   productionValidators.Copy(), // 将完整的验证者集合存储在Added字段中
+				Updated: validator.AccountSet{},      // Updated为空
+				Removed: bitmap.Bitmap{},             // Removed为空
+			}
+			r.logger.Info("✅ 已将生产时验证者集合写入ExtraData",
+				"blockNumber", block.Block.Number(),
+				"validatorsCount", len(productionValidators))
+		}
+
 		finalExtra := &Extra{
-			Validators: nil,             // 🔧 修改：不再存储验证者集合，统一从数据库读取
+			Validators: validatorsDelta, // 🔧 修复：存储生产时使用的验证者集合
 			Parent:     parentSignature, // 父区块签名
 			Committed: &Signature{
 				AggregatedSignature: aggregatedSignature,
@@ -1354,11 +1367,25 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 
 processSignatures:
 	// 4. 处理收集到的签名
+	// 🔧 修复：使用与生产区块时相同的验证者集合来设置位图
+	// 优先使用cachedProductionValidators，确保位图索引与验证时验证者集合完全匹配
+	var validatorsForBitmap validator.AccountSet
+	r.lock.RLock()
+	if r.cachedProductionValidators != nil && len(r.cachedProductionValidators) > 0 {
+		validatorsForBitmap = r.cachedProductionValidators.Copy()
+		r.logger.Debug("💾 processSignatures使用缓存的验证者集合设置位图", "validatorsCount", len(validatorsForBitmap))
+	} else {
+		validatorsForBitmap = r.delegates.Copy()
+		r.logger.Debug("⚠️ processSignatures使用r.delegates设置位图（缓存为空）", "validatorsCount", len(validatorsForBitmap))
+	}
+	r.lock.RUnlock()
+
 	r.logger.Debug("🎯 出块时签名收集开始",
-		"totalDelegates", len(r.delegates),
+		"totalDelegates", len(validatorsForBitmap),
 		"checkpointHash", checkpointHash.String())
 
-	for i, delegate := range r.delegates {
+	// 🔧 修复：使用validatorsForBitmap来设置位图，确保与生产区块时验证者集合一致
+	for i, delegate := range validatorsForBitmap {
 		// 静默处理，不打印日志
 
 		if delegate.Address == keyAddr {
@@ -1747,6 +1774,19 @@ func (r *dposRuntime) waitForSignaturesWithContext(ctx context.Context, signatur
 	collectedSignatures := make(map[types.Address][]byte)
 	signatureBitmap := bitmap.Bitmap{}
 
+	// 🔧 修复：使用与生产区块时相同的验证者集合来设置位图
+	// 优先使用cachedProductionValidators，确保位图索引与验证时验证者集合完全匹配
+	var validatorsForBitmap validator.AccountSet
+	r.lock.RLock()
+	if r.cachedProductionValidators != nil && len(r.cachedProductionValidators) > 0 {
+		validatorsForBitmap = r.cachedProductionValidators.Copy()
+		r.logger.Debug("💾 waitForSignaturesWithContext使用缓存的验证者集合设置位图", "validatorsCount", len(validatorsForBitmap))
+	} else {
+		validatorsForBitmap = r.delegates.Copy()
+		r.logger.Debug("⚠️ waitForSignaturesWithContext使用r.delegates设置位图（缓存为空）", "validatorsCount", len(validatorsForBitmap))
+	}
+	r.lock.RUnlock()
+
 	// 设置收集超时
 	collectTimeout := 20 * time.Second
 	timeoutCh := time.After(collectTimeout)
@@ -1767,8 +1807,8 @@ func (r *dposRuntime) waitForSignaturesWithContext(ctx context.Context, signatur
 			// 收集签名
 			collectedSignatures[response.ValidatorAddr] = response.Signature
 
-			// 设置位图
-			for i, delegate := range r.delegates {
+			// 🔧 修复：使用validatorsForBitmap来设置位图，确保与生产区块时验证者集合一致
+			for i, delegate := range validatorsForBitmap {
 				if delegate.Address == response.ValidatorAddr {
 					signatureBitmap.Set(uint64(i))
 					break
@@ -1782,11 +1822,11 @@ func (r *dposRuntime) waitForSignaturesWithContext(ctx context.Context, signatur
 
 			// 检查是否收集到足够的签名
 			if len(collectedSignatures) >= minRequired {
-				// 按位图顺序排列签名
+				// 🔧 修复：使用validatorsForBitmap来排列签名，确保与位图索引一致
 				signatures := make([][]byte, 0, len(collectedSignatures))
-				for i := uint64(0); i < uint64(len(r.delegates)); i++ {
+				for i := uint64(0); i < uint64(len(validatorsForBitmap)); i++ {
 					if signatureBitmap.IsSet(i) {
-						if sig, exists := collectedSignatures[r.delegates[i].Address]; exists {
+						if sig, exists := collectedSignatures[validatorsForBitmap[i].Address]; exists {
 							signatures = append(signatures, sig)
 						}
 					}

@@ -78,12 +78,39 @@ func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift tim
 		return fmt.Errorf("failed to validate header for block %d. error = %w", header.Number, err)
 	}
 
+	// 添加info级别日志：记录开始验证区块
+	d.logger.Info("🔍 [VerifyHeader] 开始验证区块头部",
+		"blockNumber", header.Number,
+		"blockHash", header.Hash.String(),
+		"parentNumber", parent.Number,
+		"extraDataLength", len(header.ExtraData),
+		"note", "开始解析和验证区块的ExtraData")
+
 	// decode the extra data
 	extra, err := GetDposExtra(header.ExtraData)
 	if err != nil {
-		d.logger.Error("解析区块extraData失败", "error", err)
+		d.logger.Error("解析区块extraData失败", 
+			"blockNumber", header.Number,
+			"blockHash", header.Hash.String(),
+			"error", err,
+			"extraDataLength", len(header.ExtraData))
 		return fmt.Errorf("failed to verify header for block %d. get extra error = %w", header.Number, err)
 	}
+
+	// 添加info级别日志：记录ExtraData解析成功
+	d.logger.Info("✅ [VerifyHeader] ExtraData解析成功",
+		"blockNumber", header.Number,
+		"blockHash", header.Hash.String(),
+		"hasValidators", extra.Validators != nil,
+		"validatorsAddedLen", func() int {
+			if extra.Validators != nil {
+				return len(extra.Validators.Added)
+			}
+			return 0
+		}(),
+		"hasCommitted", extra.Committed != nil,
+		"hasCheckpoint", extra.Checkpoint != nil,
+		"note", "ExtraData解析成功，准备调用ValidateFinalizedData")
 
 	// validate extra data
 	err = extra.ValidateFinalizedData(

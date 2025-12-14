@@ -402,6 +402,45 @@ func (ni *NetworkIntegration) Start() error {
 		ni.blsKeyResponseTopic = ni.topicManager.GetTopic("dpos-bls-key-response")
 	} else {
 		ni.logger.Info("using existing topics")
+		// 🔧 修复：即使使用现有主题，也要确保BLS相关主题已创建
+		// 这对于同步节点特别重要，因为它们可能只有签名主题，但没有BLS主题
+		if ni.topicManager == nil {
+			ni.topicManager = NewTopicManager(ni.network, ni.logger)
+		}
+		// 检查并创建缺失的BLS相关主题
+		if ni.blsKeyBroadcastTopic == nil || ni.blsKeyRequestTopic == nil ||
+			ni.blsKeyResponseTopic == nil || ni.blsKeyAckTopic == nil {
+			ni.logger.Info("检测到BLS相关主题缺失，开始创建",
+				"blsKeyBroadcastTopic", ni.blsKeyBroadcastTopic != nil,
+				"blsKeyRequestTopic", ni.blsKeyRequestTopic != nil,
+				"blsKeyResponseTopic", ni.blsKeyResponseTopic != nil,
+				"blsKeyAckTopic", ni.blsKeyAckTopic != nil)
+
+			// 创建所有主题（包括BLS相关主题）
+			if err := ni.topicManager.CreateAllTopics(); err != nil {
+				ni.logger.Warn("所有主题创建失败", "error", err)
+			}
+
+			// 从TopicManager获取BLS相关主题
+			if ni.blsKeyBroadcastTopic == nil {
+				ni.blsKeyBroadcastTopic = ni.topicManager.GetTopic("dpos-bls-key-broadcast")
+			}
+			if ni.blsKeyAckTopic == nil {
+				ni.blsKeyAckTopic = ni.topicManager.GetTopic("dpos-bls-key-ack")
+			}
+			if ni.blsKeyRequestTopic == nil {
+				ni.blsKeyRequestTopic = ni.topicManager.GetTopic("dpos-bls-key-request")
+			}
+			if ni.blsKeyResponseTopic == nil {
+				ni.blsKeyResponseTopic = ni.topicManager.GetTopic("dpos-bls-key-response")
+			}
+
+			ni.logger.Info("✅ BLS相关主题创建完成",
+				"blsKeyBroadcastTopic", ni.blsKeyBroadcastTopic != nil,
+				"blsKeyRequestTopic", ni.blsKeyRequestTopic != nil,
+				"blsKeyResponseTopic", ni.blsKeyResponseTopic != nil,
+				"blsKeyAckTopic", ni.blsKeyAckTopic != nil)
+		}
 	}
 
 	// 检查关键主题是否可用
