@@ -333,6 +333,11 @@ type DPoS struct {
 	// 最后投票的验证者地址集合（支持多个验证者）
 	lastVotedDelegates map[types.Address]bool
 
+	// 投票记录：存储投票的effectiveEpoch和applied状态
+	// key: voter+delegate+timestamp的组合，value: VoteRecord
+	voteRecords map[string]*VoteRecord
+	voteRecordsMutex sync.RWMutex
+
 	// 奖励分配信息
 	pendingRewardDistribution *RewardDistributionInfo
 
@@ -1141,6 +1146,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 
 	vcity_dpos.voters = make(map[types.Address]*VoterInfo)
 	vcity_dpos.delegates = make(validator.AccountSet, 0)
+	vcity_dpos.voteRecords = make(map[string]*VoteRecord)
 
 	// 初始化双重签名检测器
 	vcity_dpos.doubleSigningDetector = NewDoubleSigningDetector(logger)

@@ -190,7 +190,7 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 
 	// 如果是epoch结束区块，处理奖励分发
 	if isEpochEnd {
-		p.logger.Info("✅ =====================epoch结束区块，开始处理奖励分配和边界应用提案=================", "blockNumber", block.Number())
+		p.logger.Info("✅ =====================epoch结束区块，开始处理奖励分配和边界应用提案和投票=================", "blockNumber", block.Number())
 		p.logger.Debug("🎯========== 开始执行奖励分配 ========== 🎯🎯🎯",
 			"blockNumber", block.Number(),
 			"blockHash", block.Hash().String()[:16],
@@ -208,8 +208,8 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			"blockNumber", block.Number(),
 			"blockHash", block.Hash().String()[:16])
 
-		// 奖励分配与故障统计完成后，再在边界应用已登记的待生效提案，避免被同区块统计覆盖
-		p.logger.Info("🔍 [ProcessBlockExecutor] 开始边界应用提案流程", "blockNumber", block.Number())
+		// 奖励分配与故障统计完成后，再在边界应用已登记的待生效提案和投票，避免被同区块统计覆盖
+		p.logger.Info("🔍 [ProcessBlockExecutor] 开始边界应用提案和投票流程", "blockNumber", block.Number())
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			p.logger.Info("✅ [ProcessBlockExecutor] DPoS实例存在", "blockNumber", block.Number())
 			// 因为 getEpochForBlock(block.Number()) 在epoch结束区块时可能返回下一个epoch
@@ -324,6 +324,14 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 						}
 					}
 				}
+			}
+
+			// 边界应用投票
+			p.logger.Info("🔍 [边界应用投票] 开始查询待应用投票", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
+			if err := dposInstance.applyScheduledVotes(currentEpoch, block.Number()); err != nil {
+				p.logger.Error("❌ [边界应用投票] 应用投票失败", "error", err, "blockNumber", block.Number(), "currentEpoch", currentEpoch)
+			} else {
+				p.logger.Info("✅ [边界应用投票] 投票应用完成", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
 			}
 		}
 	} else {
@@ -442,7 +450,7 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 			"blockNumber", block.Number(),
 			"blockHash", block.Hash().String()[:16])
 
-		// 奖励分配与故障统计完成后，再在边界应用已登记的待生效提案，避免被同区块统计覆盖
+		// 奖励分配与故障统计完成后，再在边界应用已登记的待生效提案和投票，避免被同区块统计覆盖
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			// 计算当前 epoch 编号
 			currentEpochMeta := dposInstance.getEpochForBlock(block.Number())
@@ -537,6 +545,14 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 						}
 					}
 				}
+			}
+
+			// 边界应用投票
+			p.logger.Info("🔍 [边界应用投票] 开始查询待应用投票", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
+			if err := dposInstance.applyScheduledVotes(currentEpoch, block.Number()); err != nil {
+				p.logger.Error("❌ [边界应用投票] 应用投票失败", "error", err, "blockNumber", block.Number(), "currentEpoch", currentEpoch)
+			} else {
+				p.logger.Info("✅ [边界应用投票] 投票应用完成", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
 			}
 		}
 	} else {

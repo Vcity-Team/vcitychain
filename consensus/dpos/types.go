@@ -50,12 +50,24 @@ type DPoSMetrics struct {
 
 // VoteMessage 投票消息
 type VoteMessage struct {
-	Voter     types.Address `json:"voter"`
-	Delegate  types.Address `json:"delegate"`
-	Amount    *big.Int      `json:"amount"`
-	Round     uint64        `json:"round"`
-	Signature []byte        `json:"signature"`
-	Timestamp uint64        `json:"timestamp"`
+	Voter          types.Address `json:"voter"`
+	Delegate       types.Address `json:"delegate"`
+	Amount         *big.Int      `json:"amount"`
+	Round          uint64        `json:"round"`
+	Signature      []byte        `json:"signature"`
+	Timestamp      uint64        `json:"timestamp"`
+	EffectiveEpoch uint64        `json:"effectiveEpoch"` // 生效的epoch（边界应用）
+	Applied        bool          `json:"applied"`        // 是否已应用
+}
+
+// VoteRecord 投票记录（用于边界应用）
+type VoteRecord struct {
+	Voter          types.Address `json:"voter"`
+	Delegate       types.Address `json:"delegate"`
+	Amount         *big.Int      `json:"amount"`
+	Timestamp      uint64        `json:"timestamp"`
+	EffectiveEpoch uint64        `json:"effectiveEpoch"`
+	Applied        bool          `json:"applied"`
 }
 
 // DelegateMessage 委托消息

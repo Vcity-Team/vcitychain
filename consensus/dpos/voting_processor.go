@@ -18,13 +18,49 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 		"candidate", candidate.String(),
 		"amount", amount.String())
 
+	// 计算投票生效的epoch（边界应用）
+	currentBlockNumber := d.getCurrentBlockNumber()
+	currentEpochMeta := d.getEpochForBlock(currentBlockNumber)
+	var currentEpoch uint64
+	if currentEpochMeta != nil {
+		currentEpoch = currentEpochMeta.Number
+	} else {
+		currentEpoch = 0
+	}
+
+	// 检查当前区块是否是epoch结束区块
+	isEpochEnd := d.isEpochEndBlock(currentBlockNumber)
+
+	var effectiveEpoch uint64
+	if isEpochEnd {
+		// 已经是epoch结束区块，在下一个epoch结束生效
+		effectiveEpoch = currentEpoch + 1
+		d.logger.Info("🔄 [投票] 执行时是epoch结束区块，将在下一个epoch结束生效",
+			"voter", voter.String(),
+			"candidate", candidate.String(),
+			"currentBlock", currentBlockNumber,
+			"currentEpoch", currentEpoch,
+			"effectiveEpoch", effectiveEpoch)
+	} else {
+		// 不是epoch结束区块，在当前epoch结束就生效（下一个epoch）
+		effectiveEpoch = currentEpoch + 1
+		d.logger.Info("✅ [投票] 执行时不是epoch结束区块，将在下一个epoch结束生效（边界应用）",
+			"voter", voter.String(),
+			"candidate", candidate.String(),
+			"currentBlock", currentBlockNumber,
+			"currentEpoch", currentEpoch,
+			"effectiveEpoch", effectiveEpoch)
+	}
+
 	// 创建投票消息
 	vote := &VoteMessage{
-		Voter:     voter,
-		Delegate:  candidate,
-		Amount:    amount,
-		Round:     d.currentRound,
-		Timestamp: uint64(time.Now().Unix()),
+		Voter:          voter,
+		Delegate:       candidate,
+		Amount:         amount,
+		Round:          d.currentRound,
+		Timestamp:      uint64(time.Now().Unix()),
+		EffectiveEpoch: effectiveEpoch,
+		Applied:        false,
 	}
 
 	// 处理投票（内部调用，不重复加锁）
@@ -35,9 +71,9 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 	}
 	d.logger.Debug("✅ processVoteInternal completed successfully")
 
-	// 新增：持久化投票信息到数据库
+	// 新增：持久化投票信息到数据库（包含EffectiveEpoch和Applied）
 	d.logger.Debug("🔄 Starting vote persistence to database...")
-	if err := d.persistVoteToDatabase(voter, candidate, amount); err != nil {
+	if err := d.persistVoteToDatabase(voter, candidate, amount, effectiveEpoch, false); err != nil {
 		d.logger.Error("Failed to persist vote to database", "error", err)
 		// 注意：这里不返回错误，因为内存更新已经成功
 		// 但记录错误日志以便调试
@@ -45,27 +81,16 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 		d.logger.Debug("✅ Vote successfully persisted to database",
 			"voter", voter.String(),
 			"candidate", candidate.String(),
-			"amount", amount.String())
+			"amount", amount.String(),
+			"effectiveEpoch", effectiveEpoch)
 	}
 
-	d.logger.Debug("Vote added successfully to DPoS state",
-		"voter", voter.String(),
-		"candidate", candidate.String(),
-		"amount", amount.String())
-
-	// 方案1+方案2：投票完成后标记需要延迟更新验证者集合
-	d.logger.Debug("🔄 投票完成，标记需要延迟更新验证者集合...")
-	d.pendingValidatorUpdate = true
-	// 修复：使用集合保存所有被投票的验证者（而不是只保存最后一个）
-	if d.lastVotedDelegates == nil {
-		d.lastVotedDelegates = make(map[types.Address]bool)
-	}
-	d.lastVotedDelegates[candidate] = true // 添加到被投票的验证者集合
-	d.logger.Info("✅ 投票完成，验证者集合将在下一轮更新",
+	d.logger.Info("✅ 投票完成，将在epoch边界应用",
 		"voter", voter.String(),
 		"candidate", candidate.String(),
 		"amount", amount.String(),
-		"lastVotedDelegatesCount", len(d.lastVotedDelegates))
+		"effectiveEpoch", effectiveEpoch,
+		"note", "投票不会立即更新验证者集合，将在下一个epoch边界生效")
 
 	return nil
 }
@@ -308,6 +333,82 @@ func (d *DPoS) processVoteBatch(votes []*VoteMessage) {
 	d.metrics.lock.Unlock()
 
 	d.logger.Debug("processed vote batch", "count", len(votes))
+}
+
+// applyScheduledVotes 在epoch边界应用待生效的投票
+func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	d.logger.Info("🔍 [边界应用投票] 开始查询待应用投票",
+		"blockNumber", blockNumber,
+		"epochNumber", epochNumber)
+
+	// 查询所有待应用的投票
+	d.voteRecordsMutex.RLock()
+	var scheduledVotes []*VoteRecord
+	for _, record := range d.voteRecords {
+		if record.EffectiveEpoch == epochNumber && !record.Applied {
+			scheduledVotes = append(scheduledVotes, record)
+		}
+	}
+	d.voteRecordsMutex.RUnlock()
+
+	d.logger.Info("🔍 [边界应用投票] 查询结果",
+		"blockNumber", blockNumber,
+		"epochNumber", epochNumber,
+		"scheduledVotesCount", len(scheduledVotes))
+
+	if len(scheduledVotes) == 0 {
+		d.logger.Info("ℹ️ [边界应用投票] 没有待应用的投票",
+			"blockNumber", blockNumber,
+			"epochNumber", epochNumber)
+		return nil
+	}
+
+	// 应用投票：标记需要更新验证者集合
+	d.logger.Info("✅ [边界应用投票] 投票条件满足，开始应用",
+		"blockNumber", blockNumber,
+		"epochNumber", epochNumber,
+		"votesCount", len(scheduledVotes))
+
+	// 标记需要更新验证者集合
+	d.pendingValidatorUpdate = true
+	if d.lastVotedDelegates == nil {
+		d.lastVotedDelegates = make(map[types.Address]bool)
+	}
+
+	// 收集所有被投票的验证者
+	for _, vote := range scheduledVotes {
+		d.lastVotedDelegates[vote.Delegate] = true
+		d.logger.Info("✅ [边界应用投票] 应用投票",
+			"voter", vote.Voter.String(),
+			"delegate", vote.Delegate.String(),
+			"amount", vote.Amount.String(),
+			"effectiveEpoch", vote.EffectiveEpoch)
+	}
+
+	// 标记投票为已应用
+	d.voteRecordsMutex.Lock()
+	for _, vote := range scheduledVotes {
+		voteKey := fmt.Sprintf("%s_%s_%d", vote.Voter.String(), vote.Delegate.String(), vote.Timestamp)
+		if record, exists := d.voteRecords[voteKey]; exists {
+			record.Applied = true
+			d.logger.Debug("✅ [边界应用投票] 标记投票为已应用",
+				"voteKey", voteKey,
+				"voter", vote.Voter.String(),
+				"delegate", vote.Delegate.String())
+		}
+	}
+	d.voteRecordsMutex.Unlock()
+
+	d.logger.Info("✅ [边界应用投票] 投票应用成功",
+		"blockNumber", blockNumber,
+		"epochNumber", epochNumber,
+		"appliedVotesCount", len(scheduledVotes),
+		"note", "验证者集合将在下一轮更新时重新排序和截取")
+
+	return nil
 }
 
 

@@ -42,7 +42,7 @@ func (d *DPoS) debugDatabaseContents() {
 }
 
 // persistVoteToDatabase 将投票信息持久化到数据库
-func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Address, amount *big.Int) error {
+func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Address, amount *big.Int, effectiveEpoch uint64, applied bool) error {
 	// 检查状态存储是否可用
 	d.logger.Debug("🔍 Checking state store availability",
 		"d.state", d.state != nil,
@@ -166,7 +166,29 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 	d.logger.Info("✅ Staking info saved to database successfully",
 		"staker", voter.String(),
 		"delegate", candidate.String(),
-		"amount", amount.String())
+		"amount", amount.String(),
+		"effectiveEpoch", effectiveEpoch,
+		"applied", applied)
+
+	// 保存投票记录到内存（用于边界应用）
+	if d.voteRecords == nil {
+		d.voteRecords = make(map[string]*VoteRecord)
+	}
+	voteKey := fmt.Sprintf("%s_%s_%d", voter.String(), candidate.String(), voterInfo.LastVoteTime)
+	d.voteRecordsMutex.Lock()
+	d.voteRecords[voteKey] = &VoteRecord{
+		Voter:          voter,
+		Delegate:       candidate,
+		Amount:         new(big.Int).Set(amount),
+		Timestamp:      voterInfo.LastVoteTime,
+		EffectiveEpoch:   effectiveEpoch,
+		Applied:        applied,
+	}
+	d.voteRecordsMutex.Unlock()
+	d.logger.Debug("✅ Vote record saved to memory",
+		"voteKey", voteKey,
+		"effectiveEpoch", effectiveEpoch,
+		"applied", applied)
 
 	return nil
 }
