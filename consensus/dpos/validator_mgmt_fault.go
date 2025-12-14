@@ -990,14 +990,20 @@ func (d *DPoS) updateVoterVoteAmountForValidator(
 	doubleSigningHeight uint64,
 	dbTx *bolt.Tx, // 使用外部事务，避免嵌套事务
 ) error {
-	// 1. 获取 VoterInfo（使用外部事务）
-	voterInfo, err := d.state.StakeStore.getVoterInfo(voterAddr, dbTx)
-	if err != nil {
-		return fmt.Errorf("failed to get voter info: %w", err)
-	}
-
-	if voterInfo == nil {
-		return fmt.Errorf("voter info not found: %s", voterAddr.String())
+	// 1. 获取或创建 VoterInfo（从内存或创建新的，不再从数据库获取）
+	voterInfo, exists := d.voters[voterAddr]
+	if !exists {
+		// 如果内存中没有，创建新的 VoterInfo
+		voterInfo = &VoterInfo{
+			Address:         voterAddr,
+			VotingPower:     big.NewInt(0),
+			VotedDelegates:  []types.Address{},
+			LastVoteTime:    uint64(time.Now().Unix()),
+			LockedUntil:     uint64(time.Now().Unix()),
+			Nonce:           make(map[uint64]bool),
+			DelegateVotes:   make(map[types.Address]*big.Int),
+			SlashingRecords: make(map[types.Address][]*SlashingRecord),
+		}
 	}
 
 	// 2. 初始化 DelegateVotes 和 SlashingRecords（如果不存在）
@@ -1033,13 +1039,10 @@ func (d *DPoS) updateVoterVoteAmountForValidator(
 		slashingRecord,
 	)
 
-	// 6. 更新内存中的 VoterInfo
+	// 6. 更新内存中的 VoterInfo（仅用于缓存，不保存到数据库）
 	d.voters[voterAddr] = voterInfo
 
-	// 7. 保存到数据库（使用外部事务）
-	if err := d.state.StakeStore.setVoterInfo(voterAddr, voterInfo, dbTx); err != nil {
-		return fmt.Errorf("failed to save voter info: %w", err)
-	}
+	// 7. 不再保存 VoterInfo 到数据库（已删除，投票者不受限制）
 
 	return nil
 }

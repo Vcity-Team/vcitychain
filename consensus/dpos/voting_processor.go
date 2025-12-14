@@ -100,17 +100,7 @@ func (d *DPoS) validateVoteOnly(vote *VoteMessage) error {
 		return fmt.Errorf("vote signature verification failed: %w", err)
 	}
 
-	// 2. 检查投票权重上限（只检查，不更新）
-	totalVotingPower := big.NewInt(0)
-	if voter, exists := d.voters[vote.Voter]; exists {
-		totalVotingPower.Add(totalVotingPower, voter.VotingPower)
-	}
-	totalVotingPower.Add(totalVotingPower, vote.Amount)
-
-	maxVotingPower, _ := new(big.Int).SetString(MaxVotingPower, 10)
-	if totalVotingPower.Cmp(maxVotingPower) > 0 {
-		return fmt.Errorf("total voting power exceeds maximum")
-	}
+	// 2. 投票权重上限检查 - 已删除（投票者不受限制）
 
 	// 3. 检查受托人是否存在（只检查，不创建）
 	validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)

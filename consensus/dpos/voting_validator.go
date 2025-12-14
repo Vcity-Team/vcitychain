@@ -197,32 +197,8 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		// 不再调用 addDelegateSafely，避免创建零权重验证者记录
 	}
 
-	// 3. 检查投票锁定时间（临时跳过用于测试）
-	if voter, exists := d.voters[vote.Voter]; exists {
-		d.logger.Debug("🔍 Checking lock status",
-			"currentTime", uint64(time.Now().Unix()),
-			"lockedUntil", voter.LockedUntil,
-			"isLocked", uint64(time.Now().Unix()) < voter.LockedUntil)
-
-		// 临时注释掉锁定检查用于测试
-		/*
-			if uint64(time.Now().Unix()) < voter.LockedUntil {
-				return errors.New("voter is still locked")
-			}
-		*/
-	}
-
-	// 4. 检查投票权重上限
-	totalVotingPower := big.NewInt(0)
-	if voter, exists := d.voters[vote.Voter]; exists {
-		totalVotingPower.Add(totalVotingPower, voter.VotingPower)
-	}
-	totalVotingPower.Add(totalVotingPower, vote.Amount)
-
-	maxVotingPower, _ := new(big.Int).SetString(MaxVotingPower, 10)
-	if totalVotingPower.Cmp(maxVotingPower) > 0 {
-		return errors.New("total voting power exceeds maximum")
-	}
+	// 3. 投票锁定时间检查 - 已删除（投票者不受限制）
+	// 4. 投票权重上限检查 - 已删除（投票者不受限制）
 
 	return nil
 }

@@ -9,44 +9,76 @@ import (
 )
 
 // getVotersForValidator 获取投票给指定验证者的投票者列表
+// 从 StakeInfo 计算，不再依赖 VoterInfo 数据库
 func (d *DPoS) getVotersForValidator(validatorAddress types.Address) []*VoterInfo {
 	d.logger.Debug("🔍 获取投票者列表", "validatorAddress", validatorAddress.String())
 
 	var voters []*VoterInfo
 
-	// 修复：直接从内存中的d.voters获取数据，而不是从StakingInfo表
-	// 因为StakingInfo表从未被写入数据，投票数据实际存储在VoterInfo表中
-	for voterAddress, voterInfo := range d.voters {
-		d.logger.Debug("🔍 检查投票者",
-			"voterAddress", voterAddress.String(),
-			"votedDelegatesCount", len(voterInfo.VotedDelegates),
-			"targetValidator", validatorAddress.String())
+	// 从 StakeInfo 获取投票记录
+	if d.state == nil || d.state.StakeStore == nil {
+		d.logger.Warn("⚠️ StakeStore 不可用，无法获取投票者列表")
+		return voters
+	}
 
-		// 检查该投票者是否投票给了目标验证者
-		for i, votedDelegate := range voterInfo.VotedDelegates {
-			d.logger.Debug("🔍 比较验证者地址",
-				"voterAddress", voterAddress.String(),
-				"votedDelegateIndex", i,
-				"votedDelegate", votedDelegate.String(),
-				"targetValidator", validatorAddress.String(),
-				"isMatch", votedDelegate == validatorAddress)
+	stakingInfos, err := d.state.StakeStore.GetStakingInfo()
+	if err != nil {
+		d.logger.Warn("⚠️ 获取 StakeInfo 失败", "error", err)
+		return voters
+	}
 
-			if votedDelegate == validatorAddress {
-				voters = append(voters, &VoterInfo{
-					Address:        voterInfo.Address,
-					VotingPower:    new(big.Int).Set(voterInfo.VotingPower),
-					VotedDelegates: voterInfo.VotedDelegates,
-					LastVoteTime:   voterInfo.LastVoteTime,
-					LockedUntil:    voterInfo.LockedUntil,
-					Nonce:          voterInfo.Nonce,
-				})
-				d.logger.Debug("✅ 找到投票者",
-					"voterAddress", voterAddress.String(),
-					"votingPower", voterInfo.VotingPower.String(),
-					"targetValidator", validatorAddress.String())
-				break // 找到后跳出内层循环
+	// 按 staker 分组，计算每个投票者的 VotingPower
+	voterMap := make(map[types.Address]*VoterInfo)
+
+	for _, stake := range stakingInfos {
+		if stake == nil || stake.Staker == (types.Address{}) {
+			continue
+		}
+
+		// 只统计已应用的投票（Applied=true）
+		if !stake.Applied {
+			continue
+		}
+
+		// 只统计投票给目标验证者的记录
+		if stake.Delegate != validatorAddress {
+			continue
+		}
+
+		voterAddr := stake.Staker
+
+		// 如果该投票者不存在，创建新的 VoterInfo
+		if _, exists := voterMap[voterAddr]; !exists {
+			voterMap[voterAddr] = &VoterInfo{
+				Address:        voterAddr,
+				VotingPower:    big.NewInt(0),
+				VotedDelegates: []types.Address{validatorAddress}, // 只包含目标验证者
+				LastVoteTime:   stake.StartTime,
+				LockedUntil:    stake.EndTime,
+				Nonce:          make(map[uint64]bool),
 			}
 		}
+
+		voter := voterMap[voterAddr]
+
+		// 累加 VotingPower
+		if stake.Amount != nil && stake.Amount.Sign() > 0 {
+			voter.VotingPower.Add(voter.VotingPower, stake.Amount)
+		}
+
+		// 更新 LastVoteTime（取最新的）
+		if stake.StartTime > voter.LastVoteTime {
+			voter.LastVoteTime = stake.StartTime
+		}
+		// 更新 LockedUntil（取最新的）
+		if stake.EndTime > voter.LockedUntil {
+			voter.LockedUntil = stake.EndTime
+		}
+	}
+
+	// 转换为列表
+	for _, voter := range voterMap {
+		voters = append(voters, voter)
 	}
 
 	d.logger.Debug("投票者列表获取完成",

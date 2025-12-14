@@ -65,9 +65,6 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 			}())
 	}
 
-	// 获取当前投票者信息
-	d.logger.Debug("🔍 Getting voter info from memory...")
-
 	// 添加 defer 确保能看到是否进入了锁
 	defer func() {
 		if r := recover(); r != nil {
@@ -75,56 +72,12 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 		}
 	}()
 
-	// 🚨 注意：调用者已经持有写锁，所以这里不需要再获取锁
-	d.logger.Debug("🔍 Accessing d.voters map (caller already holds write lock)...")
-
-	voterInfo, exists := d.voters[voter]
-	d.logger.Debug("🔍 Voter lookup completed", "exists", exists)
-
-	d.logger.Debug("🔍 Voter info retrieved",
-		"exists", exists,
-		"voter", voter.String())
-
-	if !exists {
-		d.logger.Error("❌ Voter info not found in memory", "voter", voter.String())
-		return fmt.Errorf("voter info not found in memory for address %s", voter.String())
-	}
-
-	d.logger.Info("✅ Voter info found",
-		"votingPower", voterInfo.VotingPower.String(),
-		"votedDelegatesCount", len(voterInfo.VotedDelegates))
-
 	d.logger.Debug("💾 Persisting vote to database",
 		"voter", voter.String(),
 		"candidate", candidate.String(),
 		"amount", amount.String(),
-		"votingPower", voterInfo.VotingPower.String(),
-		"votedDelegatesCount", len(voterInfo.VotedDelegates))
-
-	// 添加详细日志：记录数据库更新前的内存状态
-	d.logger.Info("🔍 Before database persistence - memory delegates state:")
-	for i, del := range d.delegates {
-		if del.Address == candidate {
-			d.logger.Info("🔍 Target delegate before database persistence",
-				"index", i,
-				"address", del.Address.String(),
-				"votingPower", del.VotingPower.String(),
-				"isActive", del.IsActive)
-		}
-	}
-
-	// 保存投票者信息到数据库
-	d.logger.Info("💾 Saving voter info to database...")
-	if err := d.state.StakeStore.setVoterInfo(voter, voterInfo, nil); err != nil {
-		d.logger.Error("❌ Failed to save voter info to database", "error", err)
-		return fmt.Errorf("failed to save voter info to database: %w", err)
-	}
-	d.logger.Info("✅ Voter info saved to database successfully")
-
-	// 移除：不再在这里更新 VotingPower，因为 processVoteInternal 已经更新了
-	// VotingPower 的更新已经在 processVoteInternal 中通过 updateVotingPowerInDatabase 完成
-	// 这里再次调用会导致重复累加
-	d.logger.Debug("💾 VotingPower 已在 processVoteInternal 中更新，跳过重复更新")
+		"effectiveEpoch", effectiveEpoch,
+		"applied", applied)
 
 	// 保存 StakingInfo 到数据库（投票记录）
 	// 注意：这里使用 voter 作为 staker，因为投票者就是质押者
@@ -138,23 +91,24 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 	}
 	defer dbTx.Rollback()
 
-	// 创建 StakeInfo
+	// 创建 StakeInfo（不再依赖 VoterInfo）
+	now := uint64(time.Now().Unix())
 	stakeInfo := &StakeInfo{
 		Staker:         voter,
 		Amount:         new(big.Int).Set(amount),
-		StartTime:      voterInfo.LastVoteTime,
-		EndTime:        voterInfo.LockedUntil,
-		IsLocked:       voterInfo.LockedUntil > uint64(time.Now().Unix()),
-		IsActive:       len(voterInfo.VotedDelegates) > 0,
-		Rewards:        big.NewInt(0), // TODO: 实现奖励计算
-		Delegate:       candidate,     // 投票给哪个 delegate
+		StartTime:      now,
+		EndTime:        now + d.config.VoteLockTime, // 锁定时间
+		IsLocked:       d.config.VoteLockTime > 0,
+		IsActive:       true,           // 投票记录都是活跃的
+		Rewards:        big.NewInt(0),  // TODO: 实现奖励计算
+		Delegate:       candidate,      // 投票给哪个 delegate
 		EffectiveEpoch: effectiveEpoch, // ✅ 新增：保存生效的epoch
 		Applied:        applied,        // ✅ 新增：保存是否已应用
 	}
 
 	// 保存到数据库
-	// 传入 voterInfo.LastVoteTime 作为 timestamp，确保每次投票都有唯一 key
-	if err := d.state.StakeStore.setStakingInfo(voter, stakeInfo, voterInfo.LastVoteTime, dbTx); err != nil {
+	// 传入 now 作为 timestamp，确保每次投票都有唯一 key
+	if err := d.state.StakeStore.setStakingInfo(voter, stakeInfo, now, dbTx); err != nil {
 		d.logger.Error("❌ Failed to save staking info to database", "error", err)
 		return fmt.Errorf("failed to save staking info to database: %w", err)
 	}
@@ -176,14 +130,14 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 	if d.voteRecords == nil {
 		d.voteRecords = make(map[string]*VoteRecord)
 	}
-	voteKey := fmt.Sprintf("%s_%s_%d", voter.String(), candidate.String(), voterInfo.LastVoteTime)
+	voteKey := fmt.Sprintf("%s_%s_%d", voter.String(), candidate.String(), now)
 	d.voteRecordsMutex.Lock()
 	d.voteRecords[voteKey] = &VoteRecord{
 		Voter:          voter,
 		Delegate:       candidate,
 		Amount:         new(big.Int).Set(amount),
-		Timestamp:      voterInfo.LastVoteTime,
-		EffectiveEpoch:   effectiveEpoch,
+		Timestamp:      now,
+		EffectiveEpoch: effectiveEpoch,
 		Applied:        applied,
 	}
 	d.voteRecordsMutex.Unlock()

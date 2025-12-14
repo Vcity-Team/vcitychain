@@ -931,6 +931,7 @@ func (d *DPoS) parseDelegateRegistrationTransactionData(tx *types.Transaction) (
 }
 
 // calculateTotalVotedAmount 计算投票者的总已投票金额
+// 从 StakeInfo 计算，不再依赖 VoterInfo 数据库
 func (d *DPoS) calculateTotalVotedAmount(voter types.Address) *big.Int {
 	d.logger.Debug("🔍 计算投票者总已投票金额", "voter", voter.String())
 
@@ -939,24 +940,43 @@ func (d *DPoS) calculateTotalVotedAmount(voter types.Address) *big.Int {
 		return big.NewInt(0)
 	}
 
-	// 从 VoterInfo 表直接获取投票者的总投票权重
-	voterInfo, err := d.state.StakeStore.getVoterInfo(voter, nil)
+	// 从 StakeInfo 获取所有投票记录
+	stakingInfos, err := d.state.StakeStore.GetStakingInfo()
 	if err != nil {
-		d.logger.Warn("从数据库获取投票者信息失败",
+		d.logger.Warn("从数据库获取 StakeInfo 失败",
 			"voter", voter.String(),
 			"error", err)
 		return big.NewInt(0)
 	}
 
-	if voterInfo != nil && voterInfo.VotingPower != nil {
-		d.logger.Info("投票者总已投票金额获取成功",
-			"voter", voter.String(),
-			"totalVotedAmount", voterInfo.VotingPower.String())
-		return new(big.Int).Set(voterInfo.VotingPower)
+	// 累加该投票者的所有已应用投票金额
+	totalVotedAmount := big.NewInt(0)
+	for _, stake := range stakingInfos {
+		if stake == nil {
+			continue
+		}
+
+		// 只统计该投票者的记录
+		if stake.Staker != voter {
+			continue
+		}
+
+		// 只统计已应用的投票（Applied=true）
+		if !stake.Applied {
+			continue
+		}
+
+		// 累加金额
+		if stake.Amount != nil && stake.Amount.Sign() > 0 {
+			totalVotedAmount.Add(totalVotedAmount, stake.Amount)
+		}
 	}
 
-	d.logger.Info("投票者无投票记录", "voter", voter.String())
-	return big.NewInt(0)
+	d.logger.Info("投票者总已投票金额获取成功",
+		"voter", voter.String(),
+		"totalVotedAmount", totalVotedAmount.String())
+
+	return totalVotedAmount
 }
 
 // GetDelegateRegistration 获取受托人注册信息

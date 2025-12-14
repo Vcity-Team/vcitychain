@@ -335,7 +335,7 @@ type DPoS struct {
 
 	// 投票记录：存储投票的effectiveEpoch和applied状态
 	// key: voter+delegate+timestamp的组合，value: VoteRecord
-	voteRecords map[string]*VoteRecord
+	voteRecords      map[string]*VoteRecord
 	voteRecordsMutex sync.RWMutex
 
 	// 奖励分配信息
@@ -1587,35 +1587,117 @@ func (d *DPoS) GetCurrentDelegate() types.Address {
 }
 
 // GetVoters returns the current voters map for external access
+// 从 StakeInfo 计算，不再依赖 VoterInfo 数据库
 func (d *DPoS) GetVoters() map[types.Address]*VoterInfo {
 	d.lock.RLock()
 	defer d.lock.RUnlock()
 
-	// Create a copy of the voters map to avoid race conditions
-	votersCopy := make(map[types.Address]*VoterInfo)
-	for addr, voter := range d.voters {
-		// Create a deep copy of VoterInfo
-		voterCopy := &VoterInfo{
-			Address:        voter.Address,
-			VotingPower:    new(big.Int).Set(voter.VotingPower),
-			VotedDelegates: make([]types.Address, len(voter.VotedDelegates)),
-			LastVoteTime:   voter.LastVoteTime,
-			LockedUntil:    voter.LockedUntil,
-			Nonce:          make(map[uint64]bool),
+	// 从 StakeInfo 构建 VoterInfo
+	if d.state == nil || d.state.StakeStore == nil {
+		// 如果 StakeStore 不可用，返回内存中的 voters（向后兼容）
+		votersCopy := make(map[types.Address]*VoterInfo)
+		for addr, voter := range d.voters {
+			voterCopy := &VoterInfo{
+				Address:        voter.Address,
+				VotingPower:    new(big.Int).Set(voter.VotingPower),
+				VotedDelegates: make([]types.Address, len(voter.VotedDelegates)),
+				LastVoteTime:   voter.LastVoteTime,
+				LockedUntil:    voter.LockedUntil,
+				Nonce:          make(map[uint64]bool),
+			}
+			copy(voterCopy.VotedDelegates, voter.VotedDelegates)
+			for k, v := range voter.Nonce {
+				voterCopy.Nonce[k] = v
+			}
+			votersCopy[addr] = voterCopy
 		}
-
-		// Copy voted delegates
-		copy(voterCopy.VotedDelegates, voter.VotedDelegates)
-
-		// Copy nonce map
-		for k, v := range voter.Nonce {
-			voterCopy.Nonce[k] = v
-		}
-
-		votersCopy[addr] = voterCopy
+		return votersCopy
 	}
 
-	return votersCopy
+	// 从 StakeInfo 获取所有投票记录
+	stakingInfos, err := d.state.StakeStore.GetStakingInfo()
+	if err != nil {
+		d.logger.Warn("⚠️ 获取 StakeInfo 失败，使用内存中的 voters", "error", err)
+		// 降级到内存中的 voters
+		votersCopy := make(map[types.Address]*VoterInfo)
+		for addr, voter := range d.voters {
+			voterCopy := &VoterInfo{
+				Address:        voter.Address,
+				VotingPower:    new(big.Int).Set(voter.VotingPower),
+				VotedDelegates: make([]types.Address, len(voter.VotedDelegates)),
+				LastVoteTime:   voter.LastVoteTime,
+				LockedUntil:    voter.LockedUntil,
+				Nonce:          make(map[uint64]bool),
+			}
+			copy(voterCopy.VotedDelegates, voter.VotedDelegates)
+			for k, v := range voter.Nonce {
+				voterCopy.Nonce[k] = v
+			}
+			votersCopy[addr] = voterCopy
+		}
+		return votersCopy
+	}
+
+	// 从 StakeInfo 构建 VoterInfo map
+	votersMap := make(map[types.Address]*VoterInfo)
+
+	// 按 staker 分组，计算 VotingPower 和 VotedDelegates
+	for _, stake := range stakingInfos {
+		if stake == nil || stake.Staker == (types.Address{}) {
+			continue
+		}
+
+		// 只统计已应用的投票（Applied=true）
+		if !stake.Applied {
+			continue
+		}
+
+		voterAddr := stake.Staker
+
+		// 如果该投票者不存在，创建新的 VoterInfo
+		if _, exists := votersMap[voterAddr]; !exists {
+			votersMap[voterAddr] = &VoterInfo{
+				Address:        voterAddr,
+				VotingPower:    big.NewInt(0),
+				VotedDelegates: []types.Address{},
+				LastVoteTime:   stake.StartTime,
+				LockedUntil:    stake.EndTime,
+				Nonce:          make(map[uint64]bool),
+			}
+		}
+
+		voter := votersMap[voterAddr]
+
+		// 累加 VotingPower
+		if stake.Amount != nil && stake.Amount.Sign() > 0 {
+			voter.VotingPower.Add(voter.VotingPower, stake.Amount)
+		}
+
+		// 添加 Delegate 到 VotedDelegates（去重）
+		if stake.Delegate != (types.Address{}) {
+			found := false
+			for _, del := range voter.VotedDelegates {
+				if del == stake.Delegate {
+					found = true
+					break
+				}
+			}
+			if !found {
+				voter.VotedDelegates = append(voter.VotedDelegates, stake.Delegate)
+			}
+		}
+
+		// 更新 LastVoteTime（取最新的）
+		if stake.StartTime > voter.LastVoteTime {
+			voter.LastVoteTime = stake.StartTime
+		}
+		// 更新 LockedUntil（取最新的）
+		if stake.EndTime > voter.LockedUntil {
+			voter.LockedUntil = stake.EndTime
+		}
+	}
+
+	return votersMap
 }
 
 func (d *DPoS) GetDelegateIndex(delegate types.Address) uint64 {
