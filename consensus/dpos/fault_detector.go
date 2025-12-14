@@ -96,16 +96,33 @@ func (fd *FaultDetector) checkEpochChange(blockNumber uint64) (EpochInfo, bool) 
 		previousEpochNumber = 1 // epoch索引0对应编号1
 	}
 
-	// 如果epoch没有变化，则跳过。逻辑的有效场景 1.区块重试：防止同一区块重试时重复检测 同一区块多次处理：防止重复检测（虽然当前代码不适用）
+	// 🔧 修复：防止重复检测，但需要区分"首次检测"和"重复检测"
+	// 逻辑的有效场景：1.区块重试：防止同一区块重试时重复检测 2.同一区块多次处理：防止重复检测
+	// 关键修复：如果 currentEpoch = 0 且 currentEpochIndexForCompare = 0，可能是首次检测，不应跳过
 	currentEpochIndexForCompare := uint64(0)
 	if currentEpochNumber > 0 {
 		currentEpochIndexForCompare = currentEpochNumber - 1
 	}
-	if currentEpochIndexForCompare == fd.dposInstance.currentEpoch {
-		fd.logger.Info("ℹ️ Epoch未变化，跳过故障检测",
+
+	// 🔧 修复：只有当 currentEpoch > 0 且两者相等时，才认为是重复检测，可以跳过
+	// 如果 currentEpoch = 0，说明是首次检测或重启后首次检测，不应跳过
+	if fd.dposInstance.currentEpoch > 0 && currentEpochIndexForCompare == fd.dposInstance.currentEpoch {
+		fd.logger.Info("ℹ️ Epoch未变化，跳过故障检测（防止重复检测）",
 			"currentEpoch", currentEpochNumber,
-			"previousEpoch", previousEpochNumber)
+			"currentEpochIndex", currentEpochIndexForCompare,
+			"fd.dposInstance.currentEpoch", fd.dposInstance.currentEpoch,
+			"previousEpoch", previousEpochNumber,
+			"note", "已检测过该epoch，跳过重复检测")
 		return EpochInfo{}, true
+	}
+
+	// 🔧 修复：如果 currentEpoch = 0 且 currentEpochIndexForCompare = 0，记录为首次检测
+	if fd.dposInstance.currentEpoch == 0 && currentEpochIndexForCompare == 0 {
+		fd.logger.Info("🔍 首次故障检测（currentEpoch=0，允许检测）",
+			"currentEpoch", currentEpochNumber,
+			"currentEpochIndex", currentEpochIndexForCompare,
+			"fd.dposInstance.currentEpoch", fd.dposInstance.currentEpoch,
+			"note", "首次检测或重启后首次检测，允许检测")
 	}
 
 	// 🔧 修复：应该检测当前epoch的故障（因为是在epoch结束区块检测）
