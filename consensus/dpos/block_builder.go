@@ -588,17 +588,40 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			"isEpochEndBlock", isEpochEndBlock)
 	}
 
-	// 如果是epoch结束区块，在生产节点也执行奖励分配
+	// 如果是epoch结束区块，生产节点也要执行边界相关逻辑（奖励分配 + 待应用投票）
 	if isEpochEndBlock {
+		// 奖励分配（原有逻辑）
 		state := builder.GetState()
 		if state != nil {
-			// 执行奖励分配
 			if err := r.processRewardDistributionInBlockForBuilder(builder, nextBlockNumber); err != nil {
 				r.logger.Error("❌ 生产节点奖励分配失败", "blockNumber", nextBlockNumber, "error", err)
 				return nil, fmt.Errorf("failed to process reward distribution in buildBlock: %w", err)
 			}
 		} else {
 			r.logger.Error("❌ 生产节点无法获取状态", "blockNumber", nextBlockNumber)
+		}
+
+		// 边界应用投票（与同步/验证节点保持一致，避免生产者遗漏新委托者）
+		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+			currentEpochInfo := dposInstance.getEpochForBlock(nextBlockNumber - 1)
+			currentEpoch := uint64(0)
+			if currentEpochInfo != nil {
+				currentEpoch = currentEpochInfo.Number
+			}
+			if err := dposInstance.applyScheduledVotes(currentEpoch, nextBlockNumber); err != nil {
+				r.logger.Error("❌ 生产节点边界应用投票失败",
+					"blockNumber", nextBlockNumber,
+					"currentEpoch", currentEpoch,
+					"error", err)
+				// 不阻断出块，但记录错误
+			} else {
+				r.logger.Info("✅ 生产节点边界应用投票完成",
+					"blockNumber", nextBlockNumber,
+					"currentEpoch", currentEpoch)
+			}
+		} else {
+			r.logger.Warn("⚠️ 生产节点边界应用投票失败：DPoS实例不存在",
+				"blockNumber", nextBlockNumber)
 		}
 	}
 

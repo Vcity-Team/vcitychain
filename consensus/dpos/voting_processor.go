@@ -356,15 +356,53 @@ func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error
 		"blockNumber", blockNumber,
 		"epochNumber", epochNumber)
 
-	// 查询所有待应用的投票
-	d.voteRecordsMutex.RLock()
+	// 查询所有待应用的投票（内存 + 数据库）
 	var scheduledVotes []*VoteRecord
+	addVote := func(v *VoteRecord) {
+		if v == nil {
+			return
+		}
+		scheduledVotes = append(scheduledVotes, v)
+	}
+
+	// 1) 内存中的待应用投票
+	d.voteRecordsMutex.RLock()
 	for _, record := range d.voteRecords {
 		if record.EffectiveEpoch == epochNumber && !record.Applied {
-			scheduledVotes = append(scheduledVotes, record)
+			addVote(record)
 		}
 	}
 	d.voteRecordsMutex.RUnlock()
+
+	// 2) 数据库中的待应用投票（Applied=false && EffectiveEpoch==epochNumber）
+	if d.state != nil && d.state.StakeStore != nil {
+		if stakingInfos, err := d.state.StakeStore.GetStakingInfo(); err == nil {
+			for _, stakeInfo := range stakingInfos {
+				if stakeInfo == nil {
+					continue
+				}
+				if stakeInfo.Applied {
+					continue
+				}
+				if stakeInfo.EffectiveEpoch != epochNumber {
+					continue
+				}
+				addVote(&VoteRecord{
+					Voter:          stakeInfo.Staker,
+					Delegate:       stakeInfo.Delegate,
+					Amount:         new(big.Int).Set(stakeInfo.Amount),
+					Timestamp:      stakeInfo.StartTime, // 复用 StartTime 作为唯一键
+					EffectiveEpoch: stakeInfo.EffectiveEpoch,
+					Applied:        stakeInfo.Applied,
+				})
+			}
+		} else {
+			d.logger.Warn("⚠️ [边界应用投票] 从数据库加载待应用投票失败",
+				"blockNumber", blockNumber,
+				"epochNumber", epochNumber,
+				"error", err)
+		}
+	}
 
 	d.logger.Info("🔍 [边界应用投票] 查询结果",
 		"blockNumber", blockNumber,

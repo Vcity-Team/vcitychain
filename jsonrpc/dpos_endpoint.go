@@ -505,10 +505,9 @@ type UnvoteResponse struct {
 
 // Vote handles dpos_vote RPC method
 func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS Vote called", "params", params)
+	d.logger.Debug("DPoS Vote called")
 
 	// Parse parameters
-	d.logger.Info("Starting parameter parsing...")
 	var req VoteRequest
 	switch p := params.(type) {
 	case []interface{}:
@@ -553,7 +552,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 			}
 		} else if len(p) == 4 {
 			// Four parameters: [voter, candidate, amount, privateKey]
-			d.logger.Info("Processing 4 parameters including private key")
 			if voter, ok := p[0].(string); ok {
 				req.Voter = voter
 			} else {
@@ -580,7 +578,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 			}
 			// Store private key for later use in signing
 			if privateKey, ok := p[3].(string); ok {
-				d.logger.Info("Private key parameter received", "length", len(privateKey))
 				// Store private key in the request for later use
 				req.PrivateKey = privateKey
 			} else {
@@ -617,56 +614,41 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	}
 
 	// Validate request
-	d.logger.Info("Validating request parameters...", "voter", req.Voter, "candidate", req.Candidate, "amount", req.Amount)
-
 	if req.Voter == "" {
-		d.logger.Error("Voter address is required")
 		return &VoteResponse{
 			Success: false,
 			Error:   "voter address is required",
 		}, nil
 	}
 	if req.Candidate == "" {
-		d.logger.Error("Candidate address is required")
 		return &VoteResponse{
 			Success: false,
 			Error:   "candidate address is required",
 		}, nil
 	}
 	if req.Amount == "" {
-		d.logger.Error("Amount is required")
 		return &VoteResponse{
 			Success: false,
 			Error:   "amount is required",
 		}, nil
 	}
 
-	d.logger.Info("Request validation passed")
-
 	// Parse addresses
-	d.logger.Info("Parsing addresses and amount...")
 	voterAddr := types.StringToAddress(req.Voter)
 	candidateAddr := types.StringToAddress(req.Candidate)
-	d.logger.Info("Addresses parsed", "voter", voterAddr.String(), "candidate", candidateAddr.String())
 
 	// Parse amount
 	amountInt, ok := new(big.Int).SetString(req.Amount, 10)
 	if !ok {
-		d.logger.Error("Invalid amount format", "amount", req.Amount)
 		return &VoteResponse{
 			Success: false,
 			Error:   "invalid amount format",
 		}, nil
 	}
-	d.logger.Info("Amount parsed successfully", "amount", amountInt.String())
 
 	// Note: In DPoS, users can vote for ANYONE, not just validators
-	// This allows for delegation and voting for regular users
-	d.logger.Info("DPoS voting allows voting for any address - proceeding with vote")
 
 	// Check voter balance
-	d.logger.Info("Checking voter balance...", "voter", voterAddr.String(), "required_amount", amountInt.String())
-
 	// Try to get balance with different approaches
 	var balance *big.Int
 	var err error
@@ -678,10 +660,10 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	if balanceStore, ok := d.store.(interface {
 		GetBalance(root types.Hash, addr types.Address) (*big.Int, error)
 	}); ok {
-		d.logger.Info("Method 1: Store implements GetBalance method")
+		d.logger.Debug("Method 1: Store implements GetBalance method")
 
 		// Try to get balance with different state roots
-		d.logger.Info("Method 1: Trying to get balance with different state roots...")
+		d.logger.Debug("Method 1: Trying to get balance with different state roots...")
 
 		// First, try to get the latest state root from the store
 		var latestRoot types.Hash
@@ -695,7 +677,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 			latestHeader := headerStore.Header()
 			if latestHeader != nil {
 				latestRoot = latestHeader.StateRoot
-				d.logger.Info("Method 1a: Got state root from Header() method", "root", latestRoot.String())
+				d.logger.Debug("Method 1a: Got state root from Header() method", "root", latestRoot.String())
 				foundValidRoot = true
 			}
 		}
@@ -706,7 +688,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 				GetLatestStateRoot() types.Hash
 			}); ok {
 				latestRoot = latestStore.GetLatestStateRoot()
-				d.logger.Info("Method 1b: Got latest state root", "root", latestRoot.String())
+				d.logger.Debug("Method 1b: Got latest state root", "root", latestRoot.String())
 				foundValidRoot = true
 			}
 		}
@@ -719,7 +701,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 				latestHeader := headerStore.GetLatestHeader()
 				if latestHeader != nil {
 					latestRoot = latestHeader.StateRoot
-					d.logger.Info("Method 1c: Got state root from GetLatestHeader", "root", latestRoot.String())
+					d.logger.Debug("Method 1c: Got state root from GetLatestHeader", "root", latestRoot.String())
 					foundValidRoot = true
 				}
 			}
@@ -733,7 +715,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 				latestBlock := blockStore.GetLatestBlock()
 				if latestBlock != nil {
 					latestRoot = latestBlock.Header.StateRoot
-					d.logger.Info("Method 1d: Got state root from GetLatestBlock", "root", latestRoot.String())
+					d.logger.Debug("Method 1d: Got state root from GetLatestBlock", "root", latestRoot.String())
 					foundValidRoot = true
 				}
 			}
@@ -750,7 +732,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 					// Try to get the previous block header as a fallback
 					if prevHeader, ok := headerStore.GetHeaderByNumber(latestHeader.Number - 1); ok {
 						latestRoot = prevHeader.StateRoot
-						d.logger.Info("Method 1e: Got state root from previous block header", "root", latestRoot.String(), "blockNumber", prevHeader.Number)
+						d.logger.Debug("Method 1e: Got state root from previous block header", "root", latestRoot.String(), "blockNumber", prevHeader.Number)
 						foundValidRoot = true
 					}
 				}
@@ -758,23 +740,23 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		}
 
 		if foundValidRoot && latestRoot != (types.Hash{}) {
-			d.logger.Info("Method 1: Trying to get balance with valid state root", "root", latestRoot.String())
+			d.logger.Debug("Method 1: Trying to get balance with valid state root", "root", latestRoot.String())
 			balance, err = balanceStore.GetBalance(latestRoot, voterAddr)
 			if err == nil && balance != nil {
-				d.logger.Info("Method 1: Successfully got balance with valid root", "balance", balance.String())
+				d.logger.Debug("Method 1: Successfully got balance with valid root", "balance", balance.String())
 			} else {
-				d.logger.Info("Method 1: Failed to get balance with valid root", "error", err)
+				d.logger.Debug("Method 1: Failed to get balance with valid root", "error", err)
 			}
 		} else {
-			d.logger.Info("Method 1: No valid state root found, cannot get balance")
+			d.logger.Debug("Method 1: No valid state root found, cannot get balance")
 		}
 	} else {
-		d.logger.Error("Method 1: Store does not implement GetBalance method")
+		d.logger.Debug("Method 1: Store does not implement GetBalance method")
 	}
 
 	// Method 2: If still no balance, try to get from consensus engine directly
 	if balance == nil || err != nil {
-		d.logger.Info("Trying to get balance from consensus engine directly...")
+		d.logger.Debug("Trying to get balance from consensus engine directly...")
 		if hub, ok := d.store.(interface {
 			GetConsensus() interface{}
 		}); ok {
@@ -786,7 +768,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 			}); ok {
 				balance, err = balanceEngine.GetAccountBalance(voterAddr)
 				if err == nil && balance != nil {
-					d.logger.Info("Balance retrieved from consensus engine", "balance", balance.String())
+					d.logger.Debug("Balance retrieved from consensus engine", "balance", balance.String())
 				}
 			}
 
@@ -798,7 +780,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 					dposState, err := dposEngine.GetDPoSState()
 					if err == nil && dposState != nil {
 						// Try to get balance from DPoS state
-						d.logger.Info("Trying to get balance from DPoS state")
+						d.logger.Debug("Trying to get balance from DPoS state")
 						// Note: This would need to be implemented based on actual DPoS state structure
 					}
 				}
@@ -808,16 +790,16 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 
 	// Method 3: Try to get balance using zero hash as fallback (for genesis or initial state)
 	if balance == nil || err != nil {
-		d.logger.Info("Method 3: Trying to get balance with zero hash as fallback...")
+		d.logger.Debug("Method 3: Trying to get balance with zero hash as fallback...")
 		if balanceStore, ok := d.store.(interface {
 			GetBalance(root types.Hash, addr types.Address) (*big.Int, error)
 		}); ok {
 			zeroHash := types.Hash{}
 			balance, err = balanceStore.GetBalance(zeroHash, voterAddr)
 			if err == nil && balance != nil {
-				d.logger.Info("Method 3: Successfully got balance with zero hash", "balance", balance.String())
+				d.logger.Debug("Method 3: Successfully got balance with zero hash", "balance", balance.String())
 			} else {
-				d.logger.Info("Method 3: Failed to get balance with zero hash", "error", err)
+				d.logger.Debug("Method 3: Failed to get balance with zero hash", "error", err)
 			}
 		}
 	}
@@ -831,7 +813,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		}, nil
 	}
 
-	d.logger.Info("Voter balance retrieved", "balance", balance.String())
+	d.logger.Debug("Voter balance retrieved", "balance", balance.String())
 
 	if balance.Cmp(amountInt) < 0 {
 		d.logger.Error("Insufficient balance", "balance", balance.String(), "required", amountInt.String())
@@ -840,7 +822,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 			Error:   "insufficient balance",
 		}, nil
 	}
-	d.logger.Info("Balance check passed")
+	d.logger.Debug("Balance check passed")
 
 	// 新增：受托人候选人验证
 	d.logger.Info("🔍 开始验证受托人候选人资格",
