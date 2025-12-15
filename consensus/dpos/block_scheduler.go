@@ -13,7 +13,6 @@ import (
 // BlockchainInterface 是区块链接口，用于获取当前区块头
 type BlockchainInterface interface {
 	Header() *types.Header
-	// GetHeaderByNumber 获取指定区块号的区块头（用于获取创世区块）
 	GetHeaderByNumber(number uint64) (*types.Header, bool)
 }
 
@@ -92,14 +91,11 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	}
 
 	// 检查是否在共识切换高度之后
-	// 修复：blockNumber是当前区块高度，下一个要生产的区块是blockNumber+1
-	// 所以应该检查下一个区块是否达到共识切换高度
 	nextBlockNumber := blockNumber + 1
 	if nextBlockNumber < bs.consensusSwitchHeight {
 		return false
 	}
 
-	// 获取当前时间
 	now := time.Now()
 	timeSinceGenesis := now.Sub(bs.genesisTime)
 	currentSlot := int(timeSinceGenesis / bs.blockWindow)
@@ -125,15 +121,6 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	expectedValidator := validators[currentValidatorIndex]
 	isMatch := expectedValidator == myAddress
 
-	// 查找本节点在验证者集合中的实际索引位置
-	myActualIndex := -1
-	for i, v := range validators {
-		if v == myAddress {
-			myActualIndex = i
-			break
-		}
-	}
-
 	// 构建验证者集合完整列表（带索引）
 	validatorsList := make([]string, len(validators))
 	for i, v := range validators {
@@ -146,25 +133,6 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 		}
 		validatorsList[i] = fmt.Sprintf("[%d]%s%s", i, v.String(), marker)
 	}
-
-	// 添加详细的调试日志（info级别，每3秒输出一次，避免刷屏）
-	bs.logOnceWithInterval("should_produce_block_now_detail", 3*time.Second, "info",
-		"🔍 [出块检查] ShouldProduceBlockNow详细检查",
-		"blockNumber", blockNumber,
-		"nextBlockNumber", nextBlockNumber,
-		"currentSlot", currentSlot,
-		"activeValidatorCount", activeValidatorCount,
-		"validatorsSource", validatorsSource,
-		"myAddress", myAddress.String(),
-		"currentValidatorIndex", currentValidatorIndex,
-		"expectedValidator", fmt.Sprintf("[%d]%s", currentValidatorIndex, expectedValidator.String()),
-		"myActualIndex", myActualIndex,
-		"isMatch", isMatch,
-		"validatorsList", validatorsList,
-		"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
-		"now", now.Format("2006-01-02 15:04:05.000"),
-		"timeSinceGenesis", timeSinceGenesis.String(),
-		"blockWindow", bs.blockWindow.String())
 
 	// 只有当本地节点应该出块时才打印详细日志（每次出块都打印，因为频率已经很低）
 	if isMatch {

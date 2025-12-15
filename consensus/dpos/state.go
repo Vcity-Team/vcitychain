@@ -993,9 +993,55 @@ func (rs *RewardStore) RecordReward(record *RewardRecordExtended) error {
 			return fmt.Errorf("rewards bucket not found")
 		}
 
+		// 检查是否已存在记录（用于跟踪覆盖）
+		existingData := bucket.Get([]byte(key))
+		isOverwrite := existingData != nil
+		if isOverwrite && logger != nil {
+			var existingRecord RewardRecordExtended
+			if err := json.Unmarshal(existingData, &existingRecord); err == nil {
+				// 🔧 保护：如果旧记录的 BlockCount > 0，而新记录的 BlockCount == 0，则保留旧值
+				if existingRecord.BlockCount > 0 && record.BlockCount == 0 {
+					logger.Info("🛡️ RecordReward: 检测到覆盖风险，保留旧BlockCount",
+						"epoch", record.EpochNumber,
+						"recipient", record.Recipient,
+						"rewardType", record.RewardType,
+						"key", key,
+						"oldBlockCount", existingRecord.BlockCount,
+						"newBlockCount", record.BlockCount,
+						"oldAmount", existingRecord.Amount,
+						"newAmount", record.Amount,
+						"action", "保留旧BlockCount，避免被0覆盖")
+					// 保留旧的 BlockCount
+					record.BlockCount = existingRecord.BlockCount
+				} else {
+					logger.Info("⚠️ RecordReward: 检测到覆盖已有记录",
+						"epoch", record.EpochNumber,
+						"recipient", record.Recipient,
+						"rewardType", record.RewardType,
+						"key", key,
+						"oldBlockCount", existingRecord.BlockCount,
+						"newBlockCount", record.BlockCount,
+						"oldAmount", existingRecord.Amount,
+						"newAmount", record.Amount)
+				}
+			}
+		}
+
 		// 生成唯一ID
 		id, _ := bucket.NextSequence()
 		record.ID = id
+
+		// 记录写入信息
+		if logger != nil {
+			logger.Info("📝 RecordReward: 写入奖励记录",
+				"epoch", record.EpochNumber,
+				"recipient", record.Recipient,
+				"rewardType", record.RewardType,
+				"blockCount", record.BlockCount,
+				"amount", record.Amount,
+				"key", key,
+				"isOverwrite", isOverwrite)
+		}
 
 		// 添加超时机制防止卡死
 		putDone := make(chan error, 1)
@@ -1042,8 +1088,21 @@ func (rs *RewardStore) RecordReward(record *RewardRecordExtended) error {
 
 // GetValidatorRewardHistory 查询验证者奖励历史
 func (rs *RewardStore) GetValidatorRewardHistory(validatorAddress string, fromEpoch, toEpoch uint64) ([]RewardRecordExtended, error) {
+	logger := getGlobalLogger()
+	if logger != nil {
+		logger.Info("🔍 GetValidatorRewardHistory: 开始查询奖励历史",
+			"validatorAddress", validatorAddress,
+			"fromEpoch", fromEpoch,
+			"toEpoch", toEpoch)
+	}
+
 	summary, err := rs.GetRewardSummary(validatorAddress, fromEpoch, toEpoch)
 	if err != nil {
+		if logger != nil {
+			logger.Error("❌ GetValidatorRewardHistory: 查询失败",
+				"validatorAddress", validatorAddress,
+				"error", err)
+		}
 		return nil, err
 	}
 
@@ -1051,6 +1110,21 @@ func (rs *RewardStore) GetValidatorRewardHistory(validatorAddress string, fromEp
 	sort.Slice(records, func(i, j int) bool {
 		return records[i].EpochNumber > records[j].EpochNumber
 	})
+
+	if logger != nil {
+		logger.Info("✅ GetValidatorRewardHistory: 查询完成",
+			"validatorAddress", validatorAddress,
+			"recordsCount", len(records))
+		// 详细记录每个 epoch 的 BlockCount
+		for _, record := range records {
+			logger.Info("📊 GetValidatorRewardHistory: 奖励记录详情",
+				"epoch", record.EpochNumber,
+				"recipient", record.Recipient,
+				"rewardType", record.RewardType,
+				"blockCount", record.BlockCount,
+				"amount", record.Amount)
+		}
+	}
 
 	return records, nil
 }
@@ -1198,6 +1272,18 @@ func (rs *RewardStore) GetRewardSummary(address string, fromEpoch, toEpoch uint6
 			amount, ok := new(big.Int).SetString(record.Amount, 10)
 			if !ok {
 				continue
+			}
+
+			// 记录读取到的奖励记录信息（特别是 BlockCount）
+			logger := getGlobalLogger()
+			if logger != nil {
+				logger.Info("📖 GetRewardSummary: 读取奖励记录",
+					"epoch", record.EpochNumber,
+					"recipient", record.Recipient,
+					"rewardType", record.RewardType,
+					"blockCount", record.BlockCount,
+					"amount", record.Amount,
+					"key", string(k))
 			}
 
 			total.Add(total, amount)

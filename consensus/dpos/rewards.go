@@ -515,6 +515,14 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 				Status:          "completed",
 			}
 
+			d.logger.Info("📝 [distributeEpochRewards] 准备记录奖励到数据库",
+				"epoch", epochNumber,
+				"recipient", address.String(),
+				"rewardType", rewardType,
+				"blockCount", blocksProduced,
+				"amount", totalReward.String(),
+				"source", "生产节点")
+
 			if d.state.RewardStore != nil {
 				if err := d.state.RewardStore.RecordReward(rewardRecord); err != nil {
 					d.logger.Error("❌ 记录奖励失败",
@@ -522,6 +530,11 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 						"recipient", address.String(),
 						"type", rewardType,
 						"error", err)
+				} else {
+					d.logger.Info("✅ [distributeEpochRewards] 奖励记录成功",
+						"epoch", epochNumber,
+						"recipient", address.String(),
+						"blockCount", blocksProduced)
 				}
 			}
 

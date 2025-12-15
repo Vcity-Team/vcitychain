@@ -78,39 +78,16 @@ func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift tim
 		return fmt.Errorf("failed to validate header for block %d. error = %w", header.Number, err)
 	}
 
-	// 添加info级别日志：记录开始验证区块
-	d.logger.Info("🔍 [VerifyHeader] 开始验证区块头部",
-		"blockNumber", header.Number,
-		"blockHash", header.Hash.String(),
-		"parentNumber", parent.Number,
-		"extraDataLength", len(header.ExtraData),
-		"note", "开始解析和验证区块的ExtraData")
-
 	// decode the extra data
 	extra, err := GetDposExtra(header.ExtraData)
 	if err != nil {
-		d.logger.Error("解析区块extraData失败", 
+		d.logger.Error("解析区块extraData失败",
 			"blockNumber", header.Number,
 			"blockHash", header.Hash.String(),
 			"error", err,
 			"extraDataLength", len(header.ExtraData))
 		return fmt.Errorf("failed to verify header for block %d. get extra error = %w", header.Number, err)
 	}
-
-	// 添加info级别日志：记录ExtraData解析成功
-	d.logger.Info("✅ [VerifyHeader] ExtraData解析成功",
-		"blockNumber", header.Number,
-		"blockHash", header.Hash.String(),
-		"hasValidators", extra.Validators != nil,
-		"validatorsAddedLen", func() int {
-			if extra.Validators != nil {
-				return len(extra.Validators.Added)
-			}
-			return 0
-		}(),
-		"hasCommitted", extra.Committed != nil,
-		"hasCheckpoint", extra.Checkpoint != nil,
-		"note", "ExtraData解析成功，准备调用ValidateFinalizedData")
 
 	// validate extra data
 	err = extra.ValidateFinalizedData(
@@ -153,7 +130,7 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		d.updateRoundState(header)
 
 		// 解析ExtraData并处理故障标志（确保生产节点也能保存故障状态）
-		if extra, err := GetDposExtra(header.ExtraData); err == nil && extra != nil {
+/*		if extra, err := GetDposExtra(header.ExtraData); err == nil && extra != nil {
 			extra.processFaultFlags(header.Number, d, d.logger)
 		} else if err != nil {
 			d.logger.Debug("⚠️ ProcessHeaders 解析ExtraData失败，跳过故障标志处理",
@@ -277,3 +254,253 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 
 	return nil
 }
+
+
+		if extra, err := GetDposExtra(header.ExtraData); err == nil && extra != nil {
+
+			extra.processFaultFlags(header.Number, d, d.logger)
+
+		} else if err != nil {
+
+			d.logger.Debug("⚠️ ProcessHeaders 解析ExtraData失败，跳过故障标志处理",
+
+				"blockNumber", header.Number,
+
+				"error", err)
+
+		}
+
+
+
+		// 验证节点执行blockchain_wrapper.ProcessBlock来处理奖励分配
+
+		if d.config.Blockchain != nil {
+
+			// 获取完整区块信息
+
+			block, exists := d.config.Blockchain.GetBlockByHash(header.Hash, true)
+
+
+
+			if exists && block != nil {
+
+				d.logger.Debug("✅ 验证节点成功获取完整区块信息，准备调用blockchain_wrapper.ProcessBlock",
+
+					"blockNumber", header.Number,
+
+					"blockHash", header.Hash.String()[:16],
+
+					"blockExists", exists)
+
+
+
+				// 获取父区块
+
+				parent, exists := d.config.Blockchain.GetHeader(header.ParentHash, header.Number-1)
+
+
+
+				if !exists {
+
+					d.logger.Error("❌ 验证节点无法获取父区块", "blockNumber", header.Number, "parentHash", header.ParentHash.String()[:16])
+
+				} else {
+
+					// 调用blockchain_wrapper.ProcessBlock执行奖励分配
+
+					if fullBlock, err := d.blockchain.ProcessBlock(parent, block); err != nil {
+
+						d.logger.Error("❌ 验证节点blockchain_wrapper.ProcessBlock调用失败", "blockNumber", header.Number, "error", err)
+
+						// 不返回错误，继续处理其他逻辑
+
+					} else {
+
+						d.logger.Debug("✅ 验证节点blockchain_wrapper.ProcessBlock调用成功",
+
+							"blockNumber", header.Number,
+
+							"blockHash", header.Hash.String()[:16],
+
+							"receiptsCount", len(fullBlock.Receipts))
+
+					}
+
+				}
+
+			} else {
+
+				d.logger.Debug("❌ 验证节点无法获取完整区块信息",
+
+					"blockNumber", header.Number,
+
+					"blockHash", header.Hash.String()[:16],
+
+					"exists", exists,
+
+					"blockIsNil", block == nil)
+
+			}
+
+		} else {
+
+			d.logger.Debug("❌ 验证节点blockchain为nil，跳过blockchain_wrapper.ProcessBlock调用",
+
+				"blockNumber", header.Number,
+
+				"blockHash", header.Hash.String()[:16])
+
+		}
+
+
+
+		if d.config.Blockchain != nil {
+
+			if block, exists := d.config.Blockchain.GetBlockByHash(header.Hash, true); exists && block != nil {
+
+				// 构造FullBlock
+
+				fullBlock := &types.FullBlock{
+
+					Block: block,
+
+				}
+
+
+
+				if err := d.processEconomicSystem(fullBlock); err != nil {
+
+					d.logger.Error("❌ 同步时处理经济系统失败", "blockNumber", header.Number, "error", err)
+
+					// 不返回错误，继续处理其他逻辑
+
+				}
+
+			} else {
+
+				d.logger.Warn("⚠️ 无法获取完整区块信息，跳过经济系统处理",
+
+					"blockNumber", header.Number,
+
+					"blockHash", header.Hash.String()[:16],
+
+					"blockExists", exists,
+
+					"blockIsNil", block == nil)
+
+			}
+
+		} else {
+
+			d.logger.Warn("⚠️ Blockchain配置为nil，跳过经济系统处理",
+
+				"blockNumber", header.Number,
+
+				"blockHash", header.Hash.String()[:16])
+
+		}
+
+
+
+		// 在区块同步时存储验证者集合到历史数据库
+
+		if d.state != nil && d.state.StakeStore != nil {
+
+
+
+			// 从区块ExtraData解析验证者集合
+
+			validators, err := d.GetDelegates(header.Number, []*types.Header{header})
+
+			if err != nil {
+
+				d.logger.Warn("⚠️ 从ExtraData解析验证者失败", "blockNumber", header.Number, "error", err)
+
+			} else if len(validators) > 0 {
+
+				// 开始数据库事务
+
+				dbTx, err := d.state.beginDBTransaction(true) // 写事务
+
+				if err != nil {
+
+					d.logger.Warn("⚠️ 无法开始数据库事务", "blockNumber", header.Number, "error", err)
+
+				} else {
+
+					defer dbTx.Rollback()
+
+
+
+					// 临时注释掉setDelegatesAtBlock调用进行测试
+
+					// 存储验证者集合
+
+					// if err := d.state.StakeStore.setDelegatesAtBlock(header.Number, validators, dbTx); err != nil {
+
+					// 	d.logger.Warn("⚠️ 存储验证者集合失败", "blockNumber", header.Number, "error", err)
+
+					// } else {
+
+					// 提交事务 - 添加超时机制
+
+					// d.logger.Debug("🔍 区块同步时开始提交数据库事务", "blockNumber", header.Number)
+
+
+
+					// 使用超时机制防止卡死
+
+					// commitDone := make(chan error, 1)
+
+					// go func() {
+
+					// 	commitDone <- dbTx.Commit()
+
+					// }()
+
+
+
+					// select {
+
+					// case err := <-commitDone:
+
+					// 	if err != nil {
+
+					// 		d.logger.Warn("⚠️ 区块同步时提交事务失败", "blockNumber", header.Number, "error", err)
+
+					// 	} else {
+
+					// 		d.logger.Debug("✅ 区块同步时验证者集合已存储到历史数据库",
+
+					// 			"blockNumber", header.Number,
+
+					// 			"count", len(validators))
+
+					// 	}
+
+					// case <-time.After(3 * time.Second):
+
+					// 	d.logger.Error("❌ 区块同步时数据库事务提交超时，强制回滚", "blockNumber", header.Number)
+
+					// 	dbTx.Rollback()
+
+					// }
+
+				}
+
+			} else {
+
+				d.logger.Warn("⚠️ 从ExtraData解析的验证者集合为空", "blockNumber", header.Number)
+
+			}
+
+		}
+
+	}
+
+
+
+	return nil
+
+}
+*/

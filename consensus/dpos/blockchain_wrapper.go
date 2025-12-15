@@ -687,7 +687,18 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 			"totalReward", rewardInfo.TotalReward.String())
 
 		// 获取奖励账户地址（从配置中获取）
-		rewardAccount := types.StringToAddress("0x4BCBB0e87ff0Bd8c6bD4968617b17b2e2DC12EBe")
+		// 🔧 修复：从DPoS实例获取奖励账户地址，而不是硬编码
+		var rewardAccount types.Address
+		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+			rewardAccount = dposInstance.config.RewardAccount
+			p.logger.Info("✅ 从DPoS配置获取奖励账户地址",
+				"rewardAccount", rewardAccount.String())
+		} else {
+			// 如果无法获取DPoS实例，使用硬编码地址（向后兼容）
+			rewardAccount = types.StringToAddress("0x4BCBB0e87ff0Bd8c6bD4968617b17b2e2DC12EBe")
+			p.logger.Warn("⚠️ 无法获取DPoS实例，使用硬编码奖励账户地址",
+				"rewardAccount", rewardAccount.String())
+		}
 
 		// 计算总奖励金额
 		totalReward := new(big.Int)
@@ -742,20 +753,66 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 		// 获取DPoS实例和RewardStore
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			if dposInstance.state != nil && dposInstance.state.RewardStore != nil {
-				// 尝试获取出块统计（同步节点可能没有，使用0）
+				// 🔧 修复：从区块历史查询出块数，而不是依赖 blockTracker（同步节点可能没有）
+				// 先尝试从 blockTracker 获取（生产节点有）
 				blockCounts := make(map[types.Address]uint64)
 				if dposInstance.blockTracker != nil {
 					blockCounts = dposInstance.blockTracker.GetEpochBlockCounts(rewardInfo.EpochNumber)
 				}
 
+				// 如果 blockTracker 没有数据，从区块历史查询
+				needsQueryFromHistory := false
+				for addrStr := range rewardInfo.Rewards {
+					addr := types.StringToAddress(addrStr)
+					if blockCounts[addr] == 0 {
+						needsQueryFromHistory = true
+						break
+					}
+				}
+
+				// 从区块历史查询出块数（如果 blockTracker 没有数据）
+				if needsQueryFromHistory && p.blockchain != nil && dposInstance.config != nil {
+					blocksPerEpoch := dposInstance.getEpochSize()
+					consensusSwitchHeight := dposInstance.config.ConsensusSwitchHeight
+					epochIndex := rewardInfo.EpochNumber - 1 // epoch 编号转索引（从1开始转为从0开始）
+
+					epochStartBlock := consensusSwitchHeight + epochIndex*blocksPerEpoch
+					epochEndBlock := consensusSwitchHeight + (epochIndex+1)*blocksPerEpoch
+
+					// 遍历该 epoch 的所有区块，统计每个验证者的出块数
+					for blockNum := epochStartBlock; blockNum < epochEndBlock; blockNum++ {
+						header, exists := p.blockchain.GetHeaderByNumber(blockNum)
+						if exists && header != nil && len(header.Miner) == 20 {
+							minerAddr := types.Address(header.Miner)
+							blockCounts[minerAddr]++
+						}
+					}
+
+					p.logger.Info("🔍 从区块历史查询出块统计",
+						"epoch", rewardInfo.EpochNumber,
+						"epochStartBlock", epochStartBlock,
+						"epochEndBlock", epochEndBlock,
+						"blockCounts", blockCounts)
+				}
+
 				// 记录每个奖励到数据库
 				for addrStr, amount := range rewardInfo.Rewards {
 					addr := types.StringToAddress(addrStr)
-					blocksProduced := blockCounts[addr] // 同步节点可能为0
+					blocksProduced := blockCounts[addr]
 
 					// 判断奖励类型（简化：从ExtraData中无法区分验证者和投票者，统一标记为validator）
 					// 如果需要更精确，可以在ExtraData中添加奖励类型信息
 					rewardType := "validator"
+
+					p.logger.Info("📝 [processRewardDistributionInBlock] 准备记录奖励到数据库",
+						"blockNumber", block.Number(),
+						"epoch", rewardInfo.EpochNumber,
+						"recipient", addrStr,
+						"rewardType", rewardType,
+						"blockCount", blocksProduced,
+						"amount", amount.String(),
+						"source", "同步节点",
+						"needsQueryFromHistory", needsQueryFromHistory)
 
 					rewardRecord := &RewardRecordExtended{
 						EpochNumber:     rewardInfo.EpochNumber,
@@ -776,7 +833,7 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 							"recipient", addrStr,
 							"error", err)
 					} else {
-						p.logger.Debug("✅ 同步节点记录奖励成功",
+						p.logger.Info("✅ [processRewardDistributionInBlock] 同步节点记录奖励成功",
 							"blockNumber", block.Number(),
 							"epoch", rewardInfo.EpochNumber,
 							"recipient", addrStr,

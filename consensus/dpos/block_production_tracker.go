@@ -235,34 +235,43 @@ func (bpt *BlockProductionTracker) GetEpochBlockCounts(epochNumber uint64) map[t
 	bpt.mutex.RLock()
 	defer bpt.mutex.RUnlock()
 
-	if epochNumber == bpt.currentEpoch {
-		result := make(map[types.Address]uint64)
-		for addr, count := range bpt.currentEpochBlocks {
-			result[addr] = count
-		}
-		return result
-	}
-
-	if history, exists := bpt.epochBlocksHistory[epochNumber]; exists {
-		result := make(map[types.Address]uint64)
-		for addr, count := range history {
-			result[addr] = count
-		}
-		return result
-	}
-
-	// 如果内存中没有，尝试从数据库加载
 	if bpt.store != nil {
 		dbBlocks, err := bpt.store.LoadEpochBlocks(epochNumber)
 		if err == nil && len(dbBlocks) > 0 {
-			// 将数据库数据加载到内存
-			bpt.epochBlocksHistory[epochNumber] = dbBlocks
-			bpt.logger.Debug("Loaded epoch blocks from database", "epoch", epochNumber)
+			bpt.logger.Info("✅ GetEpochBlockCounts: 从数据库加载成功",
+				"epoch", epochNumber,
+				"validatorsCount", len(dbBlocks),
+				"totalBlocks", bpt.calculateTotalBlocks(dbBlocks))
 			return dbBlocks
 		}
+
+		if err != nil {
+			bpt.logger.Info("⚠️ GetEpochBlockCounts: 数据库查询失败",
+				"epoch", epochNumber,
+				"error", err)
+		} else if len(dbBlocks) == 0 {
+			bpt.logger.Info("⚠️ GetEpochBlockCounts: 数据库中没有数据，返回空map",
+				"epoch", epochNumber,
+				"storeIsNil", bpt.store == nil)
+		}
+	} else {
+		bpt.logger.Info("⚠️ GetEpochBlockCounts: BlockTrackerStore为nil，返回空map",
+			"epoch", epochNumber)
 	}
 
+	bpt.logger.Info("❌ GetEpochBlockCounts: 返回空map",
+		"epoch", epochNumber,
+		"storeIsNil", bpt.store == nil)
 	return make(map[types.Address]uint64)
+}
+
+// calculateTotalBlocks 计算总出块数（辅助函数）
+func (bpt *BlockProductionTracker) calculateTotalBlocks(blockCounts map[types.Address]uint64) uint64 {
+	total := uint64(0)
+	for _, count := range blockCounts {
+		total += count
+	}
+	return total
 }
 
 // GetTotalEpochBlocks 获取指定epoch的总出块数
@@ -275,7 +284,7 @@ func (bpt *BlockProductionTracker) GetTotalEpochBlocks(epochNumber uint64) uint6
 	return total
 }
 
-// 新增：获取指定epoch的平均出块时间
+// 获取指定epoch的平均出块时间
 func (bpt *BlockProductionTracker) GetEpochAverageBlockTime(epochNumber uint64) time.Duration {
 	bpt.mutex.RLock()
 	defer bpt.mutex.RUnlock()
