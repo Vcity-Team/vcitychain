@@ -1784,30 +1784,6 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		"validatorsCap", validatorsCapAtLog,
 		"goroutineID", goroutineID,
 		"note", "记录validators的地址和容量，用于检测并发覆盖")
-	for idx, validator := range validators {
-		validatorAddr := fmt.Sprintf("%p", validator)
-		logger.Info("🧾 验证节点验证者详情",
-			"blockNumber", blockNumber,
-			"index", idx,
-			"address", validator.Address.String(),
-			"validatorAddr", validatorAddr,
-			"votingPower", validator.VotingPower.String(),
-			"isActive", validator.IsActive,
-			"hasBlsKey", validator.BlsKey != nil)
-	}
-	logger.Info("🧾 验证节点位图信息",
-		"blockNumber", blockNumber,
-		"bitmapHex", fmt.Sprintf("%x", s.Bitmap),
-		"bitmapLength", len(s.Bitmap),
-		"bitmapSetCount", func() int {
-			count := 0
-			for i := uint64(0); i < uint64(len(validators)); i++ {
-				if s.Bitmap.IsSet(i) {
-					count++
-				}
-			}
-			return count
-		}())
 
 	// 修复：先计算位图中设置的位数，然后创建正确长度的数组
 	bitmapSetCount := 0
@@ -2122,12 +2098,6 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 	}
 
 	// ✅ 方案4：按位图索引顺序收集公钥和地址，在验证前立即恢复缺失的BLS公钥
-	logger.Info("🔍 [Signature.Verify] 开始按位图索引收集BLS公钥",
-		"blockNumber", blockNumber,
-		"validatorsCount", len(validators),
-		"bitmapHex", fmt.Sprintf("%x", s.Bitmap),
-		"note", "按位图索引顺序收集公钥，确保与生产时签名顺序一致")
-
 	// 检查位图索引是否超出验证者集合范围
 	maxBitmapIndex := uint64(0)
 	bitmapSetIndices := make([]uint64, 0)
@@ -2140,15 +2110,6 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		}
 	}
 
-	logger.Info("🔍 [Signature.Verify] 位图索引分析",
-		"blockNumber", blockNumber,
-		"validatorsCount", len(validators),
-		"maxBitmapIndex", maxBitmapIndex,
-		"bitmapSetIndices", bitmapSetIndices,
-		"bitmapHex", fmt.Sprintf("%x", s.Bitmap),
-		"bitmapSetCount", len(bitmapSetIndices),
-		"note", "分析位图索引与验证者集合的对应关系")
-
 	if maxBitmapIndex >= uint64(len(validators)) {
 		logger.Error("🚨 [Signature.Verify] 位图索引超出验证者集合范围",
 			"blockNumber", blockNumber,
@@ -2157,34 +2118,15 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 			"bitmapSetIndices", bitmapSetIndices,
 			"bitmapHex", fmt.Sprintf("%x", s.Bitmap),
 			"note", "位图索引超出范围，可能导致验证失败")
-	} else {
-		logger.Info("✅ [Signature.Verify] 位图索引范围检查通过",
-			"blockNumber", blockNumber,
-			"maxBitmapIndex", maxBitmapIndex,
-			"validatorsCount", len(validators),
-			"bitmapSetIndices", bitmapSetIndices,
-			"note", "所有位图索引都在验证者集合范围内")
 	}
 
 	for i := uint64(0); i < uint64(len(validators)); i++ {
 		if s.Bitmap.IsSet(i) {
 			validatorAddress := validators[int(i)].Address
-			logger.Info("🔍 [Signature.Verify] 位图索引对应的验证者",
-				"blockNumber", blockNumber,
-				"bitmapIndex", i,
-				"validatorAddress", validatorAddress.String(),
-				"validatorIndex", int(i),
-				"validatorsCount", len(validators),
-				"note", "位图索引与验证者集合的对应关系")
 
 			if blsKey, exists := addressToBLSKey[validatorAddress]; exists && blsKey != nil {
 				validBLSKeys = append(validBLSKeys, blsKey)
 				bitmapOrderedAddresses = append(bitmapOrderedAddresses, validatorAddress)
-				logger.Info("✅ [Signature.Verify] 成功添加BLS公钥到验证列表",
-					"blockNumber", blockNumber,
-					"bitmapIndex", i,
-					"validatorAddress", validatorAddress.String(),
-					"validBLSKeysCount", len(validBLSKeys))
 			} else {
 				// BLS公钥缺失，立即尝试恢复
 				logger.Warn("⚠️ 位图索引对应的BLS公钥不存在或为nil，尝试恢复",
@@ -2279,52 +2221,6 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 				}
 			}
 		}
-	}
-
-	// 执行BLS签名验证前的最终汇总日志
-	logger.Info("🔍 [Signature.Verify] BLS签名验证前的最终汇总",
-		"blockNumber", blockNumber,
-		"validatorsCount", len(validators),
-		"validBLSKeysCount", len(validBLSKeys),
-		"bitmapOrderedAddressesCount", len(bitmapOrderedAddresses),
-		"bitmapHex", fmt.Sprintf("%x", s.Bitmap),
-		"hash", hash.String(),
-		"aggregatedSignatureLength", len(s.AggregatedSignature),
-		"note", "准备执行BLS签名验证")
-
-	// 记录验证者集合的完整信息
-	logger.Info("📋 [Signature.Verify] 验证者集合完整信息",
-		"blockNumber", blockNumber,
-		"validatorsCount", len(validators),
-		"validatorsList", func() []string {
-			list := make([]string, len(validators))
-			for idx, v := range validators {
-				list[idx] = fmt.Sprintf("[%d]%s", idx, v.Address.String())
-			}
-			return list
-		}(),
-		"note", "验证时使用的完整验证者集合")
-
-	// 记录位图索引与验证者地址的对应关系
-	logger.Info("📋 [Signature.Verify] 位图索引与验证者地址对应关系",
-		"blockNumber", blockNumber,
-		"bitmapOrderedAddressesCount", len(bitmapOrderedAddresses),
-		"note", "按位图索引顺序排列的验证者地址")
-	for idx, addr := range bitmapOrderedAddresses {
-		// 找到该地址在validators中的索引
-		validatorIndex := -1
-		for i, v := range validators {
-			if v.Address == addr {
-				validatorIndex = i
-				break
-			}
-		}
-		logger.Info("📋 [Signature.Verify] 位图索引对应的验证者地址",
-			"blockNumber", blockNumber,
-			"signatureIndex", idx,
-			"validatorAddress", addr.String(),
-			"validatorIndexInSet", validatorIndex,
-			"note", "按位图索引顺序排列的验证者地址")
 	}
 
 	// 执行BLS签名验证（只使用有效的公钥）

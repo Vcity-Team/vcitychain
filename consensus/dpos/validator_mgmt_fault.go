@@ -218,14 +218,35 @@ func (d *DPoS) getValidatorFaultInfo(validatorAddr types.Address) map[string]int
 
 // detectValidatorFaults 检测验证者故障（重构后）
 func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error) {
+	d.logger.Info("🚀 ===== 开始检测验证者故障 =====",
+		"blockNumber", blockNumber,
+		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
+
 	// 获取或创建FaultDetector
 	detector := d.getFaultDetector()
 	if detector == nil {
+		d.logger.Error("❌ 故障检测器不可用", "blockNumber", blockNumber)
 		return nil, fmt.Errorf("fault detector not available")
 	}
 
+	d.logger.Info("✅ 故障检测器已创建，开始执行故障检测",
+		"blockNumber", blockNumber)
+
 	// 使用FaultDetector检测故障
-	return detector.DetectFaults(blockNumber)
+	faultFlags, err := detector.DetectFaults(blockNumber)
+	if err != nil {
+		d.logger.Error("❌ 故障检测执行失败",
+			"blockNumber", blockNumber,
+			"error", err)
+		return nil, err
+	}
+
+	d.logger.Info("✅ ===== 验证者故障检测完成 =====",
+		"blockNumber", blockNumber,
+		"faultFlagsCount", len(faultFlags),
+		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
+
+	return faultFlags, nil
 }
 
 // getFaultDetector 获取或创建FaultDetector实例
