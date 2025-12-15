@@ -2217,19 +2217,13 @@ func (d *DPoS) syncDelegatesToDatabase(delegates validator.AccountSet) error {
 	return nil
 }
 
-// 获取数据目录路径
 func (d *DPoS) getDataDir() string {
 	// 从DPoS实例的数据目录字段获取
 	if d.dataDir != "" {
 		return d.dataDir
 	}
 
-	// 备用方案：从环境变量获取
-	if dataDir := os.Getenv("VCITY_DATA_DIR"); dataDir != "" {
-		return dataDir
-	}
-
-	return "" // 返回空字符串表示未找到
+	return ""
 }
 
 // syncRuntimeDelegatesWithRetry 异步同步 dposRuntime 的 delegates 状态，使用重试机制
@@ -2274,8 +2268,6 @@ func (d *DPoS) syncRuntimeDelegatesWithRetry() {
 }
 
 // GetValidators 获取DPoS验证者集合（公共方法，供外部调用）
-// 注意：不能通过接口调用，因为GetValidators本身就是接口的实现
-// 直接使用原有逻辑，避免无限递归
 func (d *DPoS) GetValidators() validator.AccountSet {
 	// 直接使用原有逻辑，避免通过接口调用造成无限递归
 	if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
@@ -2403,7 +2395,6 @@ func (r *dposRuntime) getEpochSize() uint64 {
 	return dposInstance.getEpochSize()
 }
 
-// executeBatchStateUpdate 保留在 dpos.go 中（函数复杂，依赖较多）
 // runtimeBalanceQuerier 实现 NativeTokenBalanceQuerier 接口
 type runtimeBalanceQuerier struct {
 	runtime *dposRuntime

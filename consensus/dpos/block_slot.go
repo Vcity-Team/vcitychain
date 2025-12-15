@@ -3,7 +3,7 @@ package dpos
 // getSlotForBlock 根据区块号获取对应的slot
 func (r *dposRuntime) getSlotForBlock(blockNumber uint64) int {
 	if r.config == nil || r.config.blockScheduler == nil {
-		return int(blockNumber) // 回退方案
+		return int(blockNumber)
 	}
 
 	// 计算区块对应的slot
@@ -20,25 +20,14 @@ func (r *dposRuntime) getSlotForBlock(blockNumber uint64) int {
 
 // isEpochEndBlock 检查是否是epoch的最后一个区块
 func (r *dposRuntime) isEpochEndBlock(blockNumber uint64) bool {
-	// 修改：基于指定区块号获取epoch信息
 	currentEpoch := r.getEpochForBlock(blockNumber)
 	if currentEpoch == nil {
 		r.logger.Warn("⚠️ 无法获取当前epoch信息", "blockNumber", blockNumber)
 		return false
 	}
-
-	// 检查是否是epoch的最后一个区块
-	// 使用配置计算epoch大小
 	epochSize := r.getEpochSize()
 
 	isEpochEnd := currentEpoch.FirstBlockInEpoch+epochSize-1 == blockNumber
-
-	r.logger.Debug("🔍 检查是否是epoch最后一个区块",
-		"blockNumber", blockNumber,
-		"epochNumber", currentEpoch.Number,
-		"firstBlockInEpoch", currentEpoch.FirstBlockInEpoch,
-		"epochSize", epochSize,
-		"isEpochEnd", isEpochEnd)
 
 	return isEpochEnd
 }
@@ -76,12 +65,6 @@ func (r *dposRuntime) getEpochForSlot(slot int) *epochMetadata {
 		// 在共识切换之前，epoch为0
 		currentEpochNumber := uint64(0)
 		firstBlockInEpoch := uint64(0)
-
-		r.logger.Debug("🔍 基于slot计算epoch信息（共识切换前）",
-			"slot", slot,
-			"epochSize", epochSize,
-			"currentEpochNumber", currentEpochNumber,
-			"firstBlockInEpoch", firstBlockInEpoch)
 
 		return &epochMetadata{
 			Number:            currentEpochNumber,

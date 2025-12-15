@@ -140,8 +140,7 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 	for _, tx := range block.Transactions {
 		// 确保从区块读取的交易补齐 From（RLP不含From，需要本地恢复）
 		if tx.From == (types.Address{}) {
-			// 根据当前区块的 forks 状态创建正确的 signer
-			// 这样可以正确处理 EIP-1559 (DynamicFeeTx) 交易
+			// 根据当前区块的 forks 状态创建正确的 signer，这样可以正确处理 EIP-1559 (DynamicFeeTx) 交易
 			forks := p.blockchain.Config().Forks.At(block.Number())
 			chainID := p.GetChainID()
 			signer := crypto.NewSigner(forks, chainID)
@@ -190,11 +189,7 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 
 	// 如果是epoch结束区块，处理奖励分发
 	if isEpochEnd {
-		p.logger.Info("✅ =====================epoch结束区块，开始处理奖励分配和边界应用提案和投票=================", "blockNumber", block.Number())
-		p.logger.Debug("🎯========== 开始执行奖励分配 ========== 🎯🎯🎯",
-			"blockNumber", block.Number(),
-			"blockHash", block.Hash().String()[:16],
-			"blockCreator", blockCreator.String())
+		p.logger.Info("🎯 =====epoch结束区块，开始处理奖励分配和边界应用提案和投票=====", "blockNumber", block.Number())
 
 		if err := p.processRewardDistributionInBlock(block, transition); err != nil {
 			p.logger.Error("❌❌❌ ========== 奖励分配执行失败 ========== ❌❌❌",
@@ -204,7 +199,7 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			return nil, fmt.Errorf("failed to process reward distribution: %w", err)
 		}
 
-		p.logger.Debug("✅✅✅ ========== 奖励分配执行成功 ========== ✅✅✅",
+		p.logger.Debug("✅======= 奖励分配执行成功 ======✅",
 			"blockNumber", block.Number(),
 			"blockHash", block.Hash().String()[:16])
 
@@ -311,7 +306,6 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 							}
 						}
 					case "parameter":
-						// 应用参数更新
 						p.logger.Info("🔄 [边界应用参数] 开始更新参数", "proposalID", prop.ID, "parameter", prop.Parameter, "oldValue", prop.OldValue, "newValue", prop.NewValue)
 
 						if err := dposInstance.updateParameterValue(prop.Parameter, prop.NewValue, fmt.Sprintf("proposal_%s", prop.ID)); err != nil {
@@ -325,7 +319,6 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 					}
 				}
 			}
-
 			// 边界应用投票
 			p.logger.Info("🔍 [边界应用投票] 开始查询待应用投票", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
 			if err := dposInstance.applyScheduledVotes(currentEpoch, block.Number()); err != nil {
@@ -797,29 +790,16 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 
 				// 记录每个奖励到数据库
 				for addrStr, amount := range rewardInfo.Rewards {
-					addr := types.StringToAddress(addrStr)
-					blocksProduced := blockCounts[addr]
-
 					// 判断奖励类型（简化：从ExtraData中无法区分验证者和投票者，统一标记为validator）
 					// 如果需要更精确，可以在ExtraData中添加奖励类型信息
 					rewardType := "validator"
-
-					p.logger.Info("📝 [processRewardDistributionInBlock] 准备记录奖励到数据库",
-						"blockNumber", block.Number(),
-						"epoch", rewardInfo.EpochNumber,
-						"recipient", addrStr,
-						"rewardType", rewardType,
-						"blockCount", blocksProduced,
-						"amount", amount.String(),
-						"source", "同步节点",
-						"needsQueryFromHistory", needsQueryFromHistory)
 
 					rewardRecord := &RewardRecordExtended{
 						EpochNumber:     rewardInfo.EpochNumber,
 						Recipient:       addrStr,
 						RewardType:      rewardType,
 						Amount:          amount.String(),
-						BlockCount:      blocksProduced,
+						BlockCount:      0, // 不再持久化出块数
 						VoteWeight:      "0",
 						Timestamp:       time.Now(),
 						TransactionHash: "",
@@ -832,13 +812,6 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 							"epoch", rewardInfo.EpochNumber,
 							"recipient", addrStr,
 							"error", err)
-					} else {
-						p.logger.Info("✅ [processRewardDistributionInBlock] 同步节点记录奖励成功",
-							"blockNumber", block.Number(),
-							"epoch", rewardInfo.EpochNumber,
-							"recipient", addrStr,
-							"amount", amount.String(),
-							"blocksProduced", blocksProduced)
 					}
 				}
 			} else {

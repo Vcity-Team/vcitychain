@@ -476,13 +476,10 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		if totalReward.Sign() > 0 {
 			// 简单区分：检查地址是否在 validators 和 voters 中
 			isValidator := false
-			var blocksProduced uint64 = 0
-
 			// 检查是否是验证者
 			for _, validator := range validators {
 				if validator.Address == address {
 					isValidator = true
-					blocksProduced = blockCounts[address]
 					validatorRewardCount++
 					break
 				}
@@ -508,8 +505,8 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 				Recipient:       address.String(),
 				RewardType:      rewardType,
 				Amount:          totalReward.String(), // 总奖励（已累加）
-				BlockCount:      blocksProduced,
-				VoteWeight:      "0", // 可以后续优化记录实际投票权重
+				BlockCount:      0,                    // 不再持久化出块数
+				VoteWeight:      "0",
 				Timestamp:       time.Now(),
 				TransactionHash: "",
 				Status:          "completed",
@@ -519,7 +516,6 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 				"epoch", epochNumber,
 				"recipient", address.String(),
 				"rewardType", rewardType,
-				"blockCount", blocksProduced,
 				"amount", totalReward.String(),
 				"source", "生产节点")
 
@@ -533,8 +529,7 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 				} else {
 					d.logger.Info("✅ [distributeEpochRewards] 奖励记录成功",
 						"epoch", epochNumber,
-						"recipient", address.String(),
-						"blockCount", blocksProduced)
+						"recipient", address.String())
 				}
 			}
 

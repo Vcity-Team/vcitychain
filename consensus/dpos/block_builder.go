@@ -1165,23 +1165,6 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 		}
 	}
 
-	// 验证BLS公钥可用性
-	missingBlsKeys := 0
-	for i, delegate := range r.delegates {
-		if delegate.BlsKey == nil {
-			missingBlsKeys++
-			r.logger.Warn("⚠️ 受托人缺少BLS公钥",
-				"index", i,
-				"address", delegate.Address.String())
-		}
-	}
-
-	if missingBlsKeys > 0 {
-		r.logger.Warn("⚠️ 部分受托人缺少BLS公钥，将在验证时按需获取",
-			"missingCount", missingBlsKeys,
-			"totalDelegates", len(r.delegates))
-	}
-
 	r.logger.Debug("开始收集验证者签名",
 		"checkpointHash", checkpointHash.String(),
 		"delegatesCount", len(r.delegates),

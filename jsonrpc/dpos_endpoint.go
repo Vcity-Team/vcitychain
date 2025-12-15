@@ -23,6 +23,37 @@ import (
 	"github.com/hashicorp/go-hclog"
 )
 
+// toUint64Safe 尝试将接口值转为 uint64
+func toUint64Safe(v interface{}) (uint64, bool) {
+	switch t := v.(type) {
+	case uint64:
+		return t, true
+	case int:
+		if t < 0 {
+			return 0, false
+		}
+		return uint64(t), true
+	case int64:
+		if t < 0 {
+			return 0, false
+		}
+		return uint64(t), true
+	case float64:
+		if t < 0 {
+			return 0, false
+		}
+		return uint64(t), true
+	case string:
+		val, err := strconv.ParseUint(t, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return val, true
+	default:
+		return 0, false
+	}
+}
+
 // VoteMessage represents a vote message for validation
 type VoteMessage struct {
 	Voter     types.Address `json:"voter"`
@@ -3413,7 +3444,12 @@ func (d *DPOS) GetValidatorRewardHistory(ctx context.Context, params interface{}
 	}
 
 	// 调用RewardStore的方法
-	return dposState.RewardStore.GetValidatorRewardHistory(validatorAddress, fromEpoch, toEpoch)
+	records, err := dposState.RewardStore.GetValidatorRewardHistory(validatorAddress, fromEpoch, toEpoch)
+	if err != nil {
+		return nil, err
+	}
+
+	return records, nil
 }
 
 // GetVoterRewardHistory 查询投票者奖励历史

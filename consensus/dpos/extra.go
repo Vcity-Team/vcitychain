@@ -801,11 +801,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		return fmt.Errorf("failed to calculate proposal hash: %w", err)
 	}
 
-	logger.Info("🔍 验证时验证者集合与生产时一致性检查",
-		"blockNumber", blockNumber,
-		"validatorsCount", len(validators),
-		"note", "确保验证者集合与生产时位图索引对应关系一致")
-
 	// 如果BLS公钥为nil，尝试从创世文件恢复
 	for i, validator := range validators {
 		if validator.BlsKey == nil {
@@ -972,16 +967,6 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 		}
 	}
 
-	logger.Info("🔍 [ValidateParentSignatures] 开始验证父区块签名",
-		"blockNumber", blockNumber,
-		"parentBlockNumber", parent.Number,
-		"parentHash", parent.Hash.String(),
-		"goroutineID", goroutineID,
-		"parentExtraAddr", parentExtraAddr,
-		"parentValidatorsAddr", parentValidatorsAddr,
-		"parentValidatorsLen", parentValidatorsLen,
-		"note", "记录父区块验证开始时的状态，用于跟踪验证者集合来源")
-
 	// skip block 1 because genesis does not have committed signatures
 	if blockNumber <= 1 {
 		return nil
@@ -1041,41 +1026,7 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 
 	// 首先尝试从parentExtra.Validators.Added读取（这是父区块生产时写入的验证者集合）
 	if parentExtra.Validators != nil && len(parentExtra.Validators.Added) > 0 {
-		// 🔍 记录读取前的状态
-		addedBeforeCopyAddr := fmt.Sprintf("%p", parentExtra.Validators.Added)
-		addedBeforeCopyLen := len(parentExtra.Validators.Added)
-		addedBeforeCopyCap := cap(parentExtra.Validators.Added)
-
 		parentValidators = parentExtra.Validators.Added.Copy()
-
-		// 🔍 记录读取后的状态
-		parentValidatorsAfterAddr := fmt.Sprintf("%p", parentValidators)
-		parentValidatorsAfterLen := len(parentValidators)
-		parentValidatorsAfterCap := cap(parentValidators)
-
-		// 🔍 记录每个验证者的详细信息
-		validatorsElementAddrs := make([]string, len(parentValidators))
-		validatorsDetails := make([]string, len(parentValidators))
-		for idx, v := range parentValidators {
-			validatorsElementAddrs[idx] = fmt.Sprintf("[%d]%p", idx, v)
-			validatorsDetails[idx] = fmt.Sprintf("[%d]%s", idx, v.Address.String())
-		}
-
-		logger.Info("✅ [ValidateParentSignatures] 从父区块ExtraData读取验证者集合",
-			"blockNumber", blockNumber,
-			"parentBlockNumber", parent.Number,
-			"goroutineID", goroutineID,
-			"parentExtraAddr", parentExtraAddr,
-			"addedBeforeCopyAddr", addedBeforeCopyAddr,
-			"addedBeforeCopyLen", addedBeforeCopyLen,
-			"addedBeforeCopyCap", addedBeforeCopyCap,
-			"parentValidatorsAfterAddr", parentValidatorsAfterAddr,
-			"parentValidatorsAfterLen", parentValidatorsAfterLen,
-			"parentValidatorsAfterCap", parentValidatorsAfterCap,
-			"validatorsElementAddrs", validatorsElementAddrs,
-			"validatorsDetails", validatorsDetails,
-			"note", "优先使用父区块生产时写入的验证者集合，确保与父区块签名时使用的验证者集合一致")
-
 	} else {
 		// 如果ExtraData中没有验证者集合，才从数据库获取（fallback）
 		logger.Warn("⚠️ [ValidateParentSignatures] 父区块ExtraData中没有验证者集合，从数据库获取",

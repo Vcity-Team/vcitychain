@@ -16,7 +16,6 @@ type BlockchainInterface interface {
 	GetHeaderByNumber(number uint64) (*types.Header, bool)
 }
 
-// BlockScheduler 是固定时间窗口调度器，用于TRON模式的区块生产调度
 type BlockScheduler struct {
 	blockWindow           time.Duration
 	genesisTime           time.Time
@@ -24,12 +23,10 @@ type BlockScheduler struct {
 	blockchain            BlockchainInterface
 	consensusSwitchHeight uint64
 	logger                hclog.Logger
-	// 日志间隔管理
-	lastLogTime map[string]time.Time
-	logMutex    sync.Mutex
+	lastLogTime           map[string]time.Time
+	logMutex              sync.Mutex
 }
 
-// NewBlockScheduler 创建新的区块调度器
 func NewBlockScheduler(
 	blockWindow time.Duration,
 	delegateCount int,
@@ -43,7 +40,6 @@ func NewBlockScheduler(
 		os.Exit(1)
 	}
 
-	// 优先使用共识切换高度的区块时间戳
 	if consensusSwitchHeight <= 0 {
 		logger.Error("❌ 共识切换高度未配置或为0，无法初始化BlockScheduler", "consensusSwitchHeight", consensusSwitchHeight)
 		os.Exit(1)
@@ -90,7 +86,6 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 		return false
 	}
 
-	// 检查是否在共识切换高度之后
 	nextBlockNumber := blockNumber + 1
 	if nextBlockNumber < bs.consensusSwitchHeight {
 		return false
@@ -107,10 +102,8 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 		return false
 	}
 
-	// 计算当前slot应该出块的验证者索引（TRON方式：完全基于时间slot）
 	currentValidatorIndex := currentSlot % activeValidatorCount
 
-	// 检查当前验证者是否是本节点
 	if currentValidatorIndex >= len(validators) {
 		bs.logger.Debug("❌ ShouldProduceBlockNow: 验证者索引超出范围",
 			"currentValidatorIndex", currentValidatorIndex,
@@ -158,7 +151,6 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	return isMatch
 }
 
-// GetGenesisTime 返回创世时间
 func (bs *BlockScheduler) GetGenesisTime() time.Time {
 	return bs.genesisTime
 }
@@ -170,8 +162,6 @@ func (bs *BlockScheduler) GetBlockWindow() time.Duration {
 
 // StartNewEpoch 启动新的epoch，更新调度器的状态（如果需要）
 func (bs *BlockScheduler) StartNewEpoch(epochNumber uint64, currentTime time.Time) {
-	// 目前不需要特殊处理，因为调度器完全基于时间slot计算
-	// 如果将来需要epoch特定的调度逻辑，可以在这里添加
 	bs.logger.Debug("启动新epoch",
 		"epochNumber", epochNumber,
 		"currentTime", currentTime.Format("2006-01-02 15:04:05"))
@@ -189,11 +179,8 @@ func (bs *BlockScheduler) logOnceWithInterval(key string, interval time.Duration
 			return
 		}
 	}
-
-	// 更新最后记录时间
 	bs.lastLogTime[key] = now
 
-	// 根据级别记录日志
 	switch level {
 	case "debug":
 		bs.logger.Debug(message, args...)
@@ -209,7 +196,6 @@ func (bs *BlockScheduler) logOnceWithInterval(key string, interval time.Duration
 }
 
 // shouldProduceBlockNow 检查当前节点是否应该现在出块
-// 方案2：使用读锁，不阻塞其他检查
 func (r *dposRuntime) shouldProduceBlockNow() bool {
 	currentBlock := r.config.blockchain.CurrentHeader()
 	if currentBlock == nil {
@@ -219,8 +205,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			"timestamp", time.Now().Format("15:04:05.000"))
 		return false
 	}
-
-	// 新增：检查是否落后，如果落后则先同步再出块
+	// 检查是否落后，如果落后则先同步再出块
 	if r.config.dposBackend != nil {
 		networkLatest := r.getNetworkLatestBlockNumber()
 		if networkLatest > currentBlock.Number {
