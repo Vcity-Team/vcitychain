@@ -171,7 +171,6 @@ type RewardRecordExtended struct {
 	Recipient       string    `json:"recipient"`
 	RewardType      string    `json:"reward_type"`      // "validator" 或 "voter"
 	Amount          string    `json:"amount"`           // 奖励金额(Wei)
-	BlockCount      uint64    `json:"block_count"`      // 出块数量
 	VoteWeight      string    `json:"vote_weight"`      // 投票权重
 	Timestamp       time.Time `json:"timestamp"`        // 发放时间
 	TransactionHash string    `json:"transaction_hash"` // 相关交易哈希
@@ -999,31 +998,13 @@ func (rs *RewardStore) RecordReward(record *RewardRecordExtended) error {
 		if isOverwrite && logger != nil {
 			var existingRecord RewardRecordExtended
 			if err := json.Unmarshal(existingData, &existingRecord); err == nil {
-				// 🔧 保护：如果旧记录的 BlockCount > 0，而新记录的 BlockCount == 0，则保留旧值
-				if existingRecord.BlockCount > 0 && record.BlockCount == 0 {
-					logger.Info("🛡️ RecordReward: 检测到覆盖风险，保留旧BlockCount",
-						"epoch", record.EpochNumber,
-						"recipient", record.Recipient,
-						"rewardType", record.RewardType,
-						"key", key,
-						"oldBlockCount", existingRecord.BlockCount,
-						"newBlockCount", record.BlockCount,
-						"oldAmount", existingRecord.Amount,
-						"newAmount", record.Amount,
-						"action", "保留旧BlockCount，避免被0覆盖")
-					// 保留旧的 BlockCount
-					record.BlockCount = existingRecord.BlockCount
-				} else {
-					logger.Info("⚠️ RecordReward: 检测到覆盖已有记录",
-						"epoch", record.EpochNumber,
-						"recipient", record.Recipient,
-						"rewardType", record.RewardType,
-						"key", key,
-						"oldBlockCount", existingRecord.BlockCount,
-						"newBlockCount", record.BlockCount,
-						"oldAmount", existingRecord.Amount,
-						"newAmount", record.Amount)
-				}
+				logger.Info("⚠️ RecordReward: 检测到覆盖已有记录",
+					"epoch", record.EpochNumber,
+					"recipient", record.Recipient,
+					"rewardType", record.RewardType,
+					"key", key,
+					"oldAmount", existingRecord.Amount,
+					"newAmount", record.Amount)
 			}
 		}
 
@@ -1037,7 +1018,6 @@ func (rs *RewardStore) RecordReward(record *RewardRecordExtended) error {
 				"epoch", record.EpochNumber,
 				"recipient", record.Recipient,
 				"rewardType", record.RewardType,
-				"blockCount", record.BlockCount,
 				"amount", record.Amount,
 				"key", key,
 				"isOverwrite", isOverwrite)
@@ -1115,15 +1095,6 @@ func (rs *RewardStore) GetValidatorRewardHistory(validatorAddress string, fromEp
 		logger.Info("✅ GetValidatorRewardHistory: 查询完成",
 			"validatorAddress", validatorAddress,
 			"recordsCount", len(records))
-		// 详细记录每个 epoch 的 BlockCount
-		for _, record := range records {
-			logger.Info("📊 GetValidatorRewardHistory: 奖励记录详情",
-				"epoch", record.EpochNumber,
-				"recipient", record.Recipient,
-				"rewardType", record.RewardType,
-				"blockCount", record.BlockCount,
-				"amount", record.Amount)
-		}
 	}
 
 	return records, nil
@@ -1281,7 +1252,6 @@ func (rs *RewardStore) GetRewardSummary(address string, fromEpoch, toEpoch uint6
 					"epoch", record.EpochNumber,
 					"recipient", record.Recipient,
 					"rewardType", record.RewardType,
-					"blockCount", record.BlockCount,
 					"amount", record.Amount,
 					"key", string(k))
 			}

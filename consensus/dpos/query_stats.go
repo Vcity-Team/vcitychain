@@ -447,7 +447,6 @@ func (d *DPoS) recordRewardsToDatabase(epochNumber uint64, rewards map[types.Add
 			Recipient:       address.String(),
 			RewardType:      "validator",
 			Amount:          reward.String(),
-			BlockCount:      0,
 			VoteWeight:      "0",
 			Timestamp:       time.Now(),
 			TransactionHash: "",

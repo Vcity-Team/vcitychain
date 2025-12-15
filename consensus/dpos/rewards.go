@@ -505,7 +505,6 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 				Recipient:       address.String(),
 				RewardType:      rewardType,
 				Amount:          totalReward.String(), // 总奖励（已累加）
-				BlockCount:      0,                    // 不再持久化出块数
 				VoteWeight:      "0",
 				Timestamp:       time.Now(),
 				TransactionHash: "",

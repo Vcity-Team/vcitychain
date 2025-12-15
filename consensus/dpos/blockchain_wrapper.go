@@ -799,7 +799,6 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 						Recipient:       addrStr,
 						RewardType:      rewardType,
 						Amount:          amount.String(),
-						BlockCount:      0, // 不再持久化出块数
 						VoteWeight:      "0",
 						Timestamp:       time.Now(),
 						TransactionHash: "",
