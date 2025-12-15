@@ -38,7 +38,6 @@ func NewSnapshotValidatorStore(
 	
 	// Try to get validators from genesis block
 	if _, exists := blockchain.GetHeaderByNumber(0); exists {
-		logger.Info("Found genesis block, attempting to parse validators from extraData")
 		
 		// Parse validators from genesis extraData
 		// This is a simplified approach - in reality, we'd need to parse the full extraData
@@ -54,9 +53,6 @@ func NewSnapshotValidatorStore(
 		
 		initialValidators = validators.NewECDSAValidatorSet(validator1, validator2, validator3, validator4)
 		
-		logger.Info("Parsed validators from genesis extraData", 
-			"validator_count", initialValidators.Len(),
-			"validator_type", initialValidators.Type())
 	} else {
 		logger.Warn("No genesis block found, using empty validator set")
 	}

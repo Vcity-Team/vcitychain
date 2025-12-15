@@ -68,16 +68,11 @@ func (d *DPoS) initializeBLSNetworking() error {
 
 // broadcastBLSRequest 广播BLS请求
 func (d *DPoS) broadcastBLSRequest(requestData []byte, requestID string) error {
-	// 解析请求数据
 	var request BLSPublicKeyRequest
 	if err := json.Unmarshal(requestData, &request); err != nil {
 		return fmt.Errorf("failed to unmarshal BLS request: %w", err)
 	}
 
-	// 通过P2P网络广播BLS公钥请求
-	// 静默处理，不打印日志
-
-	// 使用网络集成层进行真实的P2P广播
 	if d.runtime != nil && d.runtime.networkIntegration != nil {
 		// 通过网络集成层请求BLS公钥
 		if err := d.runtime.networkIntegration.RequestBLSKey(request.TargetAddress, request.RequesterAddress); err != nil {

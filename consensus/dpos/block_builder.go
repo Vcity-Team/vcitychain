@@ -1226,22 +1226,12 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 	// 2. 创建签名收集通道和收集器
 	signatureCh := make(chan *SignatureResponse, len(r.delegates))
 
-	// 如果有网络集成，使用网络集成层进行签名收集
 	if r.networkIntegration != nil {
-		r.logger.Debug("使用网络集成层进行签名收集", "checkpointHash", checkpointHash.String())
-
-		// 注册签名收集器到网络集成层
 		timeout := 30 * time.Second
 		requiredCount := r.calculateMinRequiredSignatures()
 		r.networkIntegration.RegisterSignatureCollector(checkpointHash, signatureCh, timeout, requiredCount)
-
-		// 签名收集器已注册到网络集成层
-	} else {
-		// 网络集成不可用，使用原有的签名收集机制
 	}
 
-	// 启动签名收集协程
-	// 签名收集调试信息已移除
 	go r.collectSignaturesAsync(checkpointHash, signatureCh)
 
 	// 等待一小段时间让协程启动
@@ -1895,7 +1885,6 @@ func (r *dposRuntime) collectSignaturesAsync(checkpointHash types.Hash, signatur
 
 	// 注册签名收集器，使用桥接通道
 	if r.networkIntegration != nil {
-
 		r.networkIntegration.RegisterSignatureCollector(
 			checkpointHash,
 			bridgeCh, // 使用桥接通道
@@ -2167,10 +2156,6 @@ func (r *dposRuntime) verifyValidatorSignatureByAddress(validatorAddr types.Addr
 // verifyValidatorSignature 验证验证者签名
 func (r *dposRuntime) verifyValidatorSignature(delegate *validator.ValidatorMetadata, signature []byte, checkpointHash types.Hash) error {
 	if delegate.BlsKey == nil {
-		// 尝试从持久化存储中获取BLS公钥
-		// 静默处理，不打印日志
-
-		// 通过网络集成层获取BLS公钥
 		if r.networkIntegration != nil {
 			blsKeyBytes, exists := r.networkIntegration.GetBLSKey(delegate.Address)
 			if exists && len(blsKeyBytes) > 0 {

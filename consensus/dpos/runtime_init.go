@@ -71,8 +71,13 @@ func (r *dposRuntime) setupNetworkIntegration() error {
 		return fmt.Errorf("网络服务不可用，无法设置网络集成")
 	}
 
+	r.logger.Info("🌐 创建networkIntegration实例",
+		"networkIsNil", r.network == nil)
+
 	// 创建网络集成管理器
 	r.networkIntegration = NewNetworkIntegration(r.network, r.logger)
+	r.logger.Info("🌐 networkIntegration已创建，开始注入回调",
+		"networkIntegrationIsNil", r.networkIntegration == nil)
 
 	// 设置DPoS运行时回调
 	r.networkIntegration.SetDPoSRuntime(r)
@@ -138,9 +143,13 @@ func (r *dposRuntime) setupNetworkIntegration() error {
 	r.topicMutex.RUnlock()
 
 	// 启动网络集成
+	r.logger.Info("🌐 开始启动networkIntegration")
 	if err := r.networkIntegration.Start(); err != nil {
 		return fmt.Errorf("网络集成启动失败: %w", err)
 	}
+	r.logger.Info("✅ networkIntegration启动完成",
+		"sigReqTopicNil", r.networkIntegration.GetSignatureRequestTopic() == nil,
+		"sigRespTopicNil", r.networkIntegration.GetSignatureResponseTopic() == nil)
 
 	// 预注册创世验证者的Peer映射
 	if r.config != nil && len(r.config.InitialDelegates) > 0 {

@@ -147,6 +147,12 @@ func (d *DPoS) populateCommissionFields(delegate types.Address, info *DelegateIn
 func RegisterDPoSInstance(key string, dpos *DPoS) {
 	dposMutex.Lock()
 	defer dposMutex.Unlock()
+	if existing, ok := dposInstances[key]; ok && existing != nil && existing != dpos {
+		// 避免未初始化的新实例覆盖已就绪的实例
+		fmt.Printf("[DPoSRegistry] register skipped, key=%s\n", key)
+		return
+	}
+	fmt.Printf("[DPoSRegistry] register key=%s\n", key)
 	dposInstances[key] = dpos
 }
 
@@ -174,6 +180,7 @@ func GetAllDPoSInstances() map[string]*DPoS {
 func UnregisterDPoSInstance(key string) {
 	dposMutex.Lock()
 	defer dposMutex.Unlock()
+	fmt.Printf("[DPoSRegistry] unregister key=%s\n", key)
 	delete(dposInstances, key)
 }
 
@@ -558,7 +565,7 @@ func (d *DPoS) Start() error {
 		d.logger.Warn("transaction pool not available, cannot set sealing state")
 	}
 
-	// 3. 先同步获取BLS公钥（确保网络集成层已就绪）
+	// 3. 先同步获取BLS公钥
 	d.logger.Info("🔑 开始同步获取BLS公钥...")
 	if err := d.syncLoadBLSKeys(); err != nil {
 		d.logger.Error("❌ BLS公钥同步获取失败", "error", err)
@@ -1301,10 +1308,12 @@ func (d *DPoS) Initialize() error {
 	}
 
 	// 设置网络集成
+	d.logger.Info("🌐 调用runtime.setupNetworkIntegration()")
 	if err := d.runtime.setupNetworkIntegration(); err != nil {
 		d.logger.Error("failed to setup network integration", "error", err)
 		return fmt.Errorf("failed to setup network integration: %w", err)
 	}
+	d.logger.Info("✅ runtime.setupNetworkIntegration()完成")
 
 	// set block time
 	d.blockTime = d.config.BlockTime.Duration

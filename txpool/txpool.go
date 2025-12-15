@@ -162,8 +162,8 @@ type TxPool struct {
 	accounts accountsMap
 
 	// all the primaries sorted by max gas price
-	executables     *pricedQueue
-	executablesMu   sync.RWMutex // Protects executables queue from concurrent access
+	executables   *pricedQueue
+	executablesMu sync.RWMutex // Protects executables queue from concurrent access
 
 	// lookup map keeping track of all
 	// transactions present in the pool
@@ -221,7 +221,7 @@ type TxPool struct {
 	// Performance optimization: Cache for chain nonces in Prepare() to reduce state queries
 	// Key: account address, Value: chain nonce (from parent block state)
 	// This cache is cleared when a new block is mined (in processEvent)
-	prepareNonceCache map[types.Address]uint64
+	prepareNonceCache   map[types.Address]uint64
 	prepareNonceCacheMu sync.RWMutex // RWMutex for concurrent access to prepareNonceCache
 }
 
@@ -251,9 +251,9 @@ func NewTxPool(
 		maxAccountEnqueued: config.MaxAccountEnqueued, // 保存配置值，用于RPC查询
 
 		// Performance optimization: Initialize caches
-		validatedCache: newValidatedTxCache(10000), // Cache up to 10000 validated transactions
-		balanceCache:   newBalanceCache(2 * time.Second), // Balance cache with 2s TTL
-		prepareNonceCache: make(map[types.Address]uint64), // Cache for chain nonces in Prepare()
+		validatedCache:    newValidatedTxCache(10000),       // Cache up to 10000 validated transactions
+		balanceCache:      newBalanceCache(2 * time.Second), // Balance cache with 2s TTL
+		prepareNonceCache: make(map[types.Address]uint64),   // Cache for chain nonces in Prepare()
 
 		//	main loop channels
 		promoteReqCh: make(chan promoteRequest),
@@ -491,7 +491,7 @@ func (p *TxPool) processTx(tx *types.Transaction, origin txOrigin) error {
 	// Immediately promote eligible transactions after enqueue (no async delay)
 	// This aligns with Geth's enqueueTx() behavior: promote immediately after adding to enqueued
 	promoted, pruned := account.promoteInternal()
-	
+
 	// Handle promoted transactions: update executables queue
 	if len(promoted) > 0 {
 		// Add the first promoted transaction to executables queue
@@ -502,13 +502,13 @@ func (p *TxPool) processTx(tx *types.Transaction, origin txOrigin) error {
 			p.executables.push(firstPromoted)
 			p.executablesMu.Unlock()
 		}
-		
+
 		// Update metrics
 		p.updatePending(int64(len(promoted)))
-		
+
 		// Signal promotion event
 		p.eventManager.signalEvent(proto.EventType_PROMOTED, toHash(promoted...)...)
-		
+
 		if p.logger.IsDebug() {
 			p.logger.Debug("🔵 [processTx] 主动promote完成",
 				"from", tx.From.String()[:16],
@@ -517,7 +517,7 @@ func (p *TxPool) processTx(tx *types.Transaction, origin txOrigin) error {
 				"accountNonce", accountNonce)
 		}
 	}
-	
+
 	// Handle pruned transactions: cleanup index and gauge
 	if len(pruned) > 0 {
 		p.index.remove(pruned...)
@@ -528,7 +528,7 @@ func (p *TxPool) processTx(tx *types.Transaction, origin txOrigin) error {
 }
 
 // addTx is the main entry point to the pool
-// for all new transactions. 
+// for all new transactions.
 // Performance optimization: Event-driven architecture (Geth-style)
 // Main path is lock-free: fast validation + async processing via channel
 func (p *TxPool) addTx(origin txOrigin, tx *types.Transaction) error {
@@ -720,12 +720,12 @@ func (p *TxPool) Prepare() {
 	// Performance optimization: Use cached nonce if available, otherwise query and cache
 	for _, tx := range primaries {
 		var currentNonce uint64
-		
+
 		// Try to get from cache first
 		p.prepareNonceCacheMu.RLock()
 		cachedNonce, cacheHit := p.prepareNonceCache[tx.From]
 		p.prepareNonceCacheMu.RUnlock()
-		
+
 		if cacheHit {
 			currentNonce = cachedNonce
 		} else {
@@ -735,7 +735,7 @@ func (p *TxPool) Prepare() {
 			p.prepareNonceCache[tx.From] = currentNonce
 			p.prepareNonceCacheMu.Unlock()
 		}
-		
+
 		if tx.Nonce == currentNonce {
 			// nonce匹配，添加到executables队列
 			validPrimaries = append(validPrimaries, tx)
@@ -1001,13 +1001,13 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 						account.nonceToTx.remove(txInPool)
 						p.index.remove(txInPool)
 						p.gauge.decrease(slotsRequired(txInPool))
-						
+
 						// 只有从promoted队列移除时才减少pending计数
 						// enqueued队列中的交易不计入pending
 						if removedFromPromoted {
 							p.updatePending(-1)
 						}
-						
+
 						// Performance optimization: Clear caches for this transaction
 						p.validatedCache.remove(txInPool.Hash)
 						p.balanceCache.remove(tx.From) // Balance may have changed
@@ -1038,7 +1038,7 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 							"nonce", tx.Nonce,
 							"from", addr.String(),
 							"blockNumber", header.Number)
-						
+
 						// 即使不在队列中，也要清理nonceToTx和index，并释放slots
 						account.nonceToTx.remove(txInPool)
 						p.index.remove(txInPool)
@@ -1202,7 +1202,7 @@ func (p *TxPool) validateTx(tx *types.Transaction) error {
 	// Performance optimization: Check cache first to avoid repeated signature verification
 	var from types.Address
 	var signerErr error
-	
+
 	// Check if transaction signature is already validated
 	if p.validatedCache.has(tx.Hash) {
 		// Already validated, use cached From address or recover if not set
@@ -1227,13 +1227,13 @@ func (p *TxPool) validateTx(tx *types.Transaction) error {
 				"error", signerErr, "txHash", tx.Hash.String())
 			return ErrExtractSignature
 		}
-		
+
 		// Verify From matches if already set
 		if tx.From != types.ZeroAddress && tx.From != from {
 			metrics.IncrCounter([]string{txPoolMetrics, "invalid_sender_txs"}, 1)
 			return ErrInvalidSender
 		}
-		
+
 		// Cache validated transaction (only after successful validation)
 		p.validatedCache.add(tx.Hash)
 	}
@@ -1335,7 +1335,7 @@ func (p *TxPool) validateTx(tx *types.Transaction) error {
 	// Performance optimization: Check balance cache first
 	var accountBalance *big.Int
 	var balanceErr error
-	
+
 	if cached, ok := p.balanceCache.get(tx.From); ok {
 		accountBalance = cached
 	} else {
@@ -1611,8 +1611,6 @@ func (p *TxPool) resetAccounts(stateNonces map[types.Address]uint64) {
 		account := p.accounts.get(addr)
 
 		if account == nil {
-			p.logger.Info("🔵 [resetAccounts] 账户不存在，跳过",
-				"addr", addr.String()[:16])
 			// no updates for this account
 			continue
 		}
@@ -1821,7 +1819,7 @@ func (p *TxPool) cleanupAccounts() {
 			slotsToRelease := slotsRequired(validTxs...)
 			p.gauge.decrease(slotsToRelease)
 			p.index.remove(validTxs...)
-			
+
 			// 只计算promoted队列中的交易数量（enqueued不计入pending）
 			pendingCount := 0
 			for _, tx := range validTxs {

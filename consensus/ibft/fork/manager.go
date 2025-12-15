@@ -169,8 +169,6 @@ func NewForkManager(
 
 // Initialize initializes ForkManager on initialization phase
 func (m *ForkManager) Initialize() error {
-	m.logger.Info("ForkManager.Initialize called")
-
 	if err := m.initializeValidatorStores(); err != nil {
 		m.logger.Error("Failed to initialize validator stores", "error", err)
 		return err
@@ -191,7 +189,6 @@ func (m *ForkManager) Initialize() error {
 				"switchHeight", m.consensusSwitchHeight)
 		}
 	}
-	m.logger.Info("ForkManager.Initialize completed successfully")
 	return nil
 }
 
@@ -357,13 +354,8 @@ func (m *ForkManager) initializeKeyManager(valType validators.ValidatorType) err
 
 // initializeValidatorStores initializes all validator sets based on Fork configuration
 func (m *ForkManager) initializeValidatorStores() error {
-	m.logger.Info("initializeValidatorStores called", "forks_count", len(m.forks))
-
 	for _, fork := range m.forks {
 		sourceType := ibftTypesToSourceType[fork.Type]
-		m.logger.Info("Initializing validator store for fork",
-			"fork_type", fork.Type,
-			"source_type", sourceType)
 
 		if err := m.initializeValidatorStore(sourceType); err != nil {
 			m.logger.Error("Failed to initialize validator store",
@@ -373,17 +365,12 @@ func (m *ForkManager) initializeValidatorStores() error {
 			return err
 		}
 	}
-
-	m.logger.Info("initializeValidatorStores completed successfully")
 	return nil
 }
 
 // initializeValidatorStore initializes the specified validator set
 func (m *ForkManager) initializeValidatorStore(setType store.SourceType) error {
-	m.logger.Info("initializeValidatorStore called", "setType", setType)
-
 	if _, ok := m.validatorStores[setType]; ok {
-		m.logger.Info("Validator store already exists", "setType", setType)
 		return nil
 	}
 
@@ -397,56 +384,26 @@ func (m *ForkManager) initializeValidatorStore(setType store.SourceType) error {
 		// Get validators from the first PoA fork
 		var initialValidators validators.Validators
 		for _, fork := range m.forks {
-			m.logger.Info("Checking fork",
-				"fork_type", fork.Type,
-				"has_validators", fork.Validators != nil,
-				"validator_count", func() int {
-					if fork.Validators != nil {
-						return fork.Validators.Len()
-					}
-					return 0
-				}())
-
 			if fork.Type == PoA && fork.Validators != nil {
 				initialValidators = fork.Validators
-				m.logger.Info("Found PoA fork with validators",
-					"validator_count", initialValidators.Len(),
-					"validator_type", initialValidators.Type())
 				break
 			}
 		}
 
 		// If no validators found in fork config, try to parse from genesis block extraData
 		if initialValidators == nil {
-			m.logger.Info("No PoA fork with validators found, trying to parse from genesis block extraData")
 			if genesisHeader, exists := m.blockchain.GetHeaderByNumber(0); exists {
-				m.logger.Info("Genesis block found",
-					"extraData_length", len(genesisHeader.ExtraData),
-					"extraData_hex", fmt.Sprintf("0x%x", genesisHeader.ExtraData))
-
 				// Parse validators from genesis extraData
 				parsedValidators, err := m.parseValidatorsFromExtraData(genesisHeader.ExtraData)
 				if err != nil {
 					m.logger.Error("Failed to parse validators from genesis extraData", "error", err)
 				} else {
 					initialValidators = parsedValidators
-					m.logger.Info("Parsed validators from genesis extraData",
-						"validator_count", initialValidators.Len(),
-						"validator_type", initialValidators.Type())
 				}
 			} else {
 				m.logger.Warn("Genesis block not found, using nil initialValidators")
 			}
 		}
-
-		m.logger.Info("Creating SnapshotValidatorStoreWrapper",
-			"initialValidators", initialValidators != nil,
-			"initialValidatorsLen", func() int {
-				if initialValidators != nil {
-					return initialValidators.Len()
-				}
-				return 0
-			}())
 
 		valStore, err = NewSnapshotValidatorStoreWrapper(
 			m.logger,

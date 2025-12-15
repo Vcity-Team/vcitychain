@@ -717,7 +717,7 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		// 从ExtraData读取生产时使用的验证者集合
 		validators = i.Validators.Added.Copy()
 		validatorsAfterAddr := fmt.Sprintf("%p", validators)
-		logger.Info("✅ 从ExtraData读取生产时验证者集合",
+		logger.Debug("✅ 从ExtraData读取生产时验证者集合",
 			"blockNumber", blockNumber,
 			"validatorsCount", len(validators),
 			"goroutineID", goroutineID2,
@@ -1538,19 +1538,6 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		return fmt.Errorf("quorum not reached: current signatures %d, required %d", len(signers), requiredQuorumCount)
 	}
 
-	// 🔍 并发跟踪：记录validators的详细信息，用于检测是否被覆盖
-	validatorsAddrAtLog := fmt.Sprintf("%p", validators)
-	validatorsLenAtLog := len(validators)
-	validatorsCapAtLog := cap(validators)
-
-	// 调试日志：打印当前验证者集合和位图信息
-	logger.Info("🧾 验证节点收到的验证者集合",
-		"blockNumber", blockNumber,
-		"validatorsCount", validatorsLenAtLog,
-		"validatorsAddr", validatorsAddrAtLog,
-		"validatorsCap", validatorsCapAtLog,
-		"note", "记录validators的地址和容量，用于检测并发覆盖")
-
 	// 修复：先计算位图中设置的位数，然后创建正确长度的数组
 	bitmapSetCount := 0
 	for i := uint64(0); i < uint64(len(validators)); i++ {
@@ -1569,7 +1556,14 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 			// networkIntegration不可用，等待其初始化
 			logger.Info("⏳ networkIntegration不可用，等待其初始化",
 				"blockNumber", blockNumber,
-				"waitTime", "10秒")
+				"waitTime", "10秒",
+				"runtimeAddr", fmt.Sprintf("%p", dposInstance.runtime),
+				"networkIntegrationAddr", func() string {
+					if dposInstance.runtime == nil {
+						return "<runtime-nil>"
+					}
+					return fmt.Sprintf("%p", dposInstance.runtime.networkIntegration)
+				}())
 
 			waitTimeout := 10 * time.Second
 			waitInterval := 50 * time.Millisecond
@@ -1582,7 +1576,9 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 						dposInstance.runtime.networkIntegration.GetSignatureResponseTopic() != nil {
 						logger.Info("✅ networkIntegration已就绪",
 							"blockNumber", blockNumber,
-							"waitTime", time.Since(waitStart))
+							"waitTime", time.Since(waitStart),
+							"runtimeAddr", fmt.Sprintf("%p", dposInstance.runtime),
+							"networkIntegrationAddr", fmt.Sprintf("%p", dposInstance.runtime.networkIntegration))
 						break
 					}
 				}
@@ -1594,14 +1590,20 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 				if dposInstance.runtime.networkIntegration.GetSignatureRequestTopic() == nil &&
 					dposInstance.runtime.networkIntegration.GetSignatureResponseTopic() == nil {
 					logger.Warn("⚠️ networkIntegration等待超时，尝试启动",
-						"blockNumber", blockNumber)
+						"blockNumber", blockNumber,
+						"runtimeAddr", fmt.Sprintf("%p", dposInstance.runtime),
+						"networkIntegrationAddr", fmt.Sprintf("%p", dposInstance.runtime.networkIntegration))
 					if err := dposInstance.runtime.networkIntegration.Start(); err != nil {
 						logger.Error("❌ networkIntegration启动失败",
 							"blockNumber", blockNumber,
+							"runtimeAddr", fmt.Sprintf("%p", dposInstance.runtime),
+							"networkIntegrationAddr", fmt.Sprintf("%p", dposInstance.runtime.networkIntegration),
 							"error", err)
 					} else {
 						logger.Info("✅ networkIntegration启动成功",
-							"blockNumber", blockNumber)
+							"blockNumber", blockNumber,
+							"runtimeAddr", fmt.Sprintf("%p", dposInstance.runtime),
+							"networkIntegrationAddr", fmt.Sprintf("%p", dposInstance.runtime.networkIntegration))
 					}
 				}
 			}
@@ -1640,7 +1642,14 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 					missingBLSKeys = append(missingBLSKeys, validator.Address)
 					logger.Error("❌ 网络集成层不可用",
 						"blockNumber", blockNumber,
-						"address", validator.Address.String())
+						"address", validator.Address.String(),
+						"runtimeAddr", fmt.Sprintf("%p", dposInstance.runtime),
+						"networkIntegrationAddr", func() string {
+							if dposInstance.runtime == nil {
+								return "<runtime-nil>"
+							}
+							return fmt.Sprintf("%p", dposInstance.runtime.networkIntegration)
+						}())
 				}
 			} else {
 				// DPoS实例不可用
@@ -1660,7 +1669,6 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 			"missingAddresses", missingBLSKeys,
 			"note", "BLS公钥未在缓存中找到，将尝试网络获取")
 
-		// 尝试主动获取缺失的BLS公钥
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			if dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
 				myAddress := types.Address(dposInstance.key.Address())
@@ -1836,18 +1844,11 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 				"note", "将使用现有公钥继续验证")
 		}
 	}
-
-	// 方案2：BLS公钥获取逻辑已简化，所有公钥应在启动时预加载完成
-
 	aggs, err := bls.UnmarshalSignature(s.AggregatedSignature)
 	if err != nil {
 		logger.Error("Signature.Verify - 解析聚合签名失败", "error", err)
 		return err
 	}
-
-	// 方案2：BLS公钥获取逻辑已统一到前面的循环中，这里不再需要额外处理
-
-	// 方案2修复：使用验证者地址映射来重新排列BLS公钥，确保与生产时的签名顺序完全一致
 	// 生产时按位图索引顺序聚合签名，验证时也应该按位图索引顺序排列公钥
 	validBLSKeys := make([]*bls.PublicKey, 0)
 	bitmapOrderedAddresses := make([]types.Address, 0)

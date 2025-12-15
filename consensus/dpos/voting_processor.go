@@ -28,29 +28,14 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 		currentEpoch = 0
 	}
 
-	// 检查当前区块是否是epoch结束区块
-	isEpochEnd := d.isEpochEndBlock(currentBlockNumber)
-
-	var effectiveEpoch uint64
-	if isEpochEnd {
-		// 已经是epoch结束区块，在下一个epoch结束生效
-		effectiveEpoch = currentEpoch + 1
-		d.logger.Info("🔄 [投票] 执行时是epoch结束区块，将在下一个epoch结束生效",
-			"voter", voter.String(),
-			"candidate", candidate.String(),
-			"currentBlock", currentBlockNumber,
-			"currentEpoch", currentEpoch,
-			"effectiveEpoch", effectiveEpoch)
-	} else {
-		// 不是epoch结束区块，在当前epoch结束就生效（下一个epoch）
-		effectiveEpoch = currentEpoch + 1
-		d.logger.Info("✅ [投票] 执行时不是epoch结束区块，将在下一个epoch结束生效（边界应用）",
-			"voter", voter.String(),
-			"candidate", candidate.String(),
-			"currentBlock", currentBlockNumber,
-			"currentEpoch", currentEpoch,
-			"effectiveEpoch", effectiveEpoch)
-	}
+	// 改为：本epoch投票在本epoch末尾应用（effectiveEpoch = currentEpoch）
+	effectiveEpoch := currentEpoch
+	d.logger.Info("✅ [投票] 设置生效epoch为当前epoch（本轮边界应用）",
+		"voter", voter.String(),
+		"candidate", candidate.String(),
+		"currentBlock", currentBlockNumber,
+		"currentEpoch", currentEpoch,
+		"effectiveEpoch", effectiveEpoch)
 
 	// 创建投票消息（用于验证）
 	vote := &VoteMessage{
