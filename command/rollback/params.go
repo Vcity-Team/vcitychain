@@ -14,6 +14,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/blockchain/storage"
 	"github.com/Vcity-Team/vcitychain/blockchain/storage/leveldb"
 	"github.com/Vcity-Team/vcitychain/command"
+	"github.com/Vcity-Team/vcitychain/command/server/config"
 	"github.com/Vcity-Team/vcitychain/helper/common"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
@@ -21,6 +22,7 @@ import (
 )
 
 const (
+	configFlag       = "config"
 	dataDirFlag       = "data-dir"
 	targetHeightFlag  = "target-height"
 	forceFlag         = "force"
@@ -40,6 +42,7 @@ var (
 )
 
 type rollbackParams struct {
+	configPath     string
 	dataDir         string
 	targetHeightRaw string
 	targetHeight    uint64
@@ -57,13 +60,22 @@ type rollbackParams struct {
 }
 
 func (p *rollbackParams) getRequiredFlags() []string {
-	return []string{
-		dataDirFlag,
-		targetHeightFlag,
+	// 如果提供了 config，则 data-dir 不是必需的（可以从配置文件读取）
+	required := []string{targetHeightFlag}
+	if p.configPath == "" {
+		required = append(required, dataDirFlag)
 	}
+	return required
 }
 
 func (p *rollbackParams) validateFlags() error {
+	// 如果提供了配置文件，尝试从配置文件读取 data-dir
+	if p.configPath != "" && p.dataDir == "" {
+		if err := p.loadDataDirFromConfig(); err != nil {
+			return fmt.Errorf("failed to load data-dir from config: %w", err)
+		}
+	}
+
 	if p.dataDir == "" {
 		return errInvalidDataDir
 	}
@@ -282,6 +294,21 @@ func (p *rollbackParams) deleteBlockData(
 		batchWriter.DeleteKey(txLookupKey)
 	}
 
+	return nil
+}
+
+// loadDataDirFromConfig 从配置文件加载 data-dir
+func (p *rollbackParams) loadDataDirFromConfig() error {
+	cfg, err := config.ReadConfigFile(p.configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	if cfg.DataDir == "" {
+		return errors.New("data_dir not found in config file")
+	}
+
+	p.dataDir = cfg.DataDir
 	return nil
 }
 

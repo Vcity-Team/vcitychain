@@ -17,17 +17,25 @@ func GetCommand() *cobra.Command {
 	}
 
 	setFlags(rollbackCmd)
-	helper.SetRequiredFlags(rollbackCmd, params.getRequiredFlags())
+	// 只设置 target-height 为必需，data-dir 可以通过 config 提供
+	helper.SetRequiredFlags(rollbackCmd, []string{targetHeightFlag})
 
 	return rollbackCmd
 }
 
 func setFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(
+		&params.configPath,
+		configFlag,
+		"",
+		"path to the node configuration file (yaml/json). If provided, data-dir will be read from config if not specified via --data-dir",
+	)
+
+	cmd.Flags().StringVar(
 		&params.dataDir,
 		dataDirFlag,
 		"",
-		"the data directory of the node",
+		"the data directory of the node (can be read from config file if --config is provided)",
 	)
 
 	cmd.Flags().StringVar(
