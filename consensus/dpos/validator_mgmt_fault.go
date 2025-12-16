@@ -512,24 +512,46 @@ func (d *DPoS) reloadValidatorsAfterRecovery() error {
 	return nil
 }
 
-// getValidatorsForEpoch 获取指定epoch的验证者集合（从数据库读取）
+// getValidatorsForEpoch 获取指定epoch的验证者集合（从epoch开始区块的ExtraData读取）
 func (d *DPoS) getValidatorsForEpoch(epochNumber uint64) (validator.AccountSet, error) {
-	// 🔧 修改：统一从数据库读取验证者集合，不再从 ExtraData 读取
-	validators, err := d.GetSortedValidatorsWithLimitFilterFaulty()
+	// 计算epoch开始区块号
+	consensusSwitchHeight := d.config.ConsensusSwitchHeight
+	epochSize := d.getEpochSize()
+
+	var epochStartBlock uint64
+	if epochNumber == 0 {
+		epochStartBlock = 0
+	} else {
+		epochStartBlock = consensusSwitchHeight + (epochNumber-1)*epochSize
+	}
+
+	// 获取epoch开始区块的区块头
+	if d.config == nil || d.config.Blockchain == nil {
+		return nil, fmt.Errorf("blockchain not available to get validators for epoch %d", epochNumber)
+	}
+
+	header, exists := d.config.Blockchain.GetHeaderByNumber(epochStartBlock)
+	if !exists || header == nil {
+		return nil, fmt.Errorf("epoch %d start block %d not found", epochNumber, epochStartBlock)
+	}
+
+	// 从ExtraData读取验证者集合
+	extra, err := GetDposExtra(header.ExtraData)
 	if err != nil {
-		d.logger.Warn("⚠️ 无法从数据库获取epoch验证者集合",
-			"epochNumber", epochNumber,
-			"error", err)
-		return nil, fmt.Errorf("cannot get validators for epoch %d from database: %w", epochNumber, err)
+		return nil, fmt.Errorf("failed to parse ExtraData for epoch %d start block %d: %w", epochNumber, epochStartBlock, err)
 	}
-	if len(validators) == 0 {
-		d.logger.Warn("⚠️ 从数据库获取的验证者集合为空",
-			"epochNumber", epochNumber)
-		return nil, fmt.Errorf("validators set is empty for epoch %d", epochNumber)
+
+	// 检查ExtraData中是否有验证者集合
+	if extra.Validators == nil || len(extra.Validators.Added) == 0 {
+		return nil, fmt.Errorf("validators set is missing in ExtraData for epoch %d start block %d", epochNumber, epochStartBlock)
 	}
-	d.logger.Debug("✅ 从数据库获取epoch验证者集合",
+
+	validators := extra.Validators.Added.Copy()
+	d.logger.Info("✅ 从epoch开始区块ExtraData获取验证者集合",
 		"epochNumber", epochNumber,
+		"epochStartBlock", epochStartBlock,
 		"validatorsCount", len(validators))
+
 	return validators, nil
 }
 
@@ -562,11 +584,11 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 		var validatorsSource string
 		var epochValidators validator.AccountSet
 		var err error
-		
+
 		if epochValidators, err = d.getValidatorsForEpoch(epochNumberForCheck); err == nil && len(epochValidators) > 0 {
 			validatorsCount = uint64(len(epochValidators))
 			validatorsSource = "getValidatorsForEpoch(database)"
-			
+
 			// 记录验证者列表
 			validatorList := make([]string, len(epochValidators))
 			for i, v := range epochValidators {
@@ -583,7 +605,7 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 				validatorsCount = uint64(len(d.runtime.delegates))
 				validatorsSource = "runtime.delegates(memory)"
 				epochValidators = d.runtime.delegates
-				
+
 				validatorList := make([]string, len(epochValidators))
 				for i, v := range epochValidators {
 					validatorList[i] = fmt.Sprintf("[%d]%s", i, v.Address.String())
@@ -595,7 +617,7 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 			} else if len(d.delegates) > 0 {
 				validatorsCount = uint64(len(d.delegates))
 				validatorsSource = "d.delegates(memory)"
-				
+
 				validatorList := make([]string, len(d.delegates))
 				for i, v := range d.delegates {
 					validatorList[i] = fmt.Sprintf("[%d]%s", i, v.Address.String())
@@ -620,7 +642,7 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 		if expectedBlocks == 0 {
 			expectedBlocks = 1 // 至少应该出1个块
 		}
-		
+
 		d.logger.Info("🔍 [calculateMissedBlocksWithActual] ExpectedBlocks计算",
 			"blocksPerEpoch", blocksPerEpoch,
 			"validatorsCount", validatorsCount,
@@ -668,7 +690,7 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 			if expectedBlocks > actualBlocks {
 				missedBlocks = expectedBlocks - actualBlocks
 			}
-			
+
 			d.logger.Info("✅ [calculateMissedBlocksWithActual] 出块统计结果",
 				"validatorAddr", validatorAddr.String(),
 				"epochToCheck", epochToCheck,

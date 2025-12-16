@@ -1,6 +1,7 @@
 package query
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/core"
@@ -17,6 +18,7 @@ type Dependencies struct {
 
 	// 区块链接口
 	GetCurrentBlockNumber func() uint64
+	GetHeaderByNumber     func(blockNumber uint64) (*types.Header, bool)
 
 	// Epoch管理器
 	EpochManager core.EpochManager
@@ -24,6 +26,8 @@ type Dependencies struct {
 	// 验证者相关
 	GetSortedValidatorsWithLimit func() ([]ValidatorInfo, error)
 	GetValidatorFaultInfo        func(address types.Address) map[string]interface{}
+	// 从epoch开始区块的ExtraData获取验证者集合（失败返回错误，不fallback到数据库）
+	GetValidatorsFromEpochStartBlock func(epochNumber uint64) ([]ValidatorInfo, error)
 
 	// 区块追踪
 	GetEpochBlockCounts func(epochNumber uint64) map[types.Address]uint64
@@ -107,6 +111,9 @@ func (m *Manager) GetCurrentEpochInfo() map[string]interface{} {
 		blockCounts = make(map[types.Address]uint64)
 	}
 
+	// 计算当前活跃验证者的出块数之和
+	activeValidatorsBlocksProduced := uint64(0)
+
 	if m.deps.GetSortedValidatorsWithLimit != nil {
 		dbValidators, err := m.deps.GetSortedValidatorsWithLimit()
 		if err == nil && len(dbValidators) > 0 {
@@ -117,6 +124,8 @@ func (m *Manager) GetCurrentEpochInfo() map[string]interface{} {
 				}
 
 				blocksProduced := blockCounts[validator.Address]
+				// 累加当前活跃验证者的出块数
+				activeValidatorsBlocksProduced += blocksProduced
 
 				validators = append(validators, map[string]interface{}{
 					"index":          i,
@@ -138,7 +147,7 @@ func (m *Manager) GetCurrentEpochInfo() map[string]interface{} {
 		epochStatus = "pending"
 	}
 
-	// 计算已出块数
+	// 计算已出块数（基于区块高度，用于故障判断）
 	blocksProduced := uint64(0)
 	if currentBlockNumber >= firstBlockInEpoch {
 		blocksProduced = currentBlockNumber - firstBlockInEpoch + 1
@@ -148,21 +157,22 @@ func (m *Manager) GetCurrentEpochInfo() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"epochNumber":            epochNumber,
-		"epochStatus":            epochStatus,
-		"epochStartTime":         lastEpochTime.Format(time.RFC3339),
-		"epochDuration":          epochDuration.String(),
-		"firstBlockInEpoch":      firstBlockInEpoch,
-		"lastBlockInEpoch":       lastBlockInEpoch,
-		"currentBlockNumber":     currentBlockNumber,
-		"epochSize":              epochSize,
-		"remainingBlocks":        remainingBlocks,
-		"estimatedTimeRemaining": timeRemaining.String(),
-		"nextEpochTimeEstimated": nextEpochTimeEstimated.Format(time.RFC3339),
-		"blocksProduced":         blocksProduced,
-		"validators":             validators,
-		"validatorCount":         len(validators),
-		"consensusSwitchHeight":  consensusSwitchHeight,
+		"epochNumber":                    epochNumber,
+		"epochStatus":                    epochStatus,
+		"epochStartTime":                 lastEpochTime.Format(time.RFC3339),
+		"epochDuration":                  epochDuration.String(),
+		"firstBlockInEpoch":              firstBlockInEpoch,
+		"lastBlockInEpoch":               lastBlockInEpoch,
+		"currentBlockNumber":             currentBlockNumber,
+		"epochSize":                      epochSize,
+		"remainingBlocks":                remainingBlocks,
+		"estimatedTimeRemaining":         timeRemaining.String(),
+		"nextEpochTimeEstimated":         nextEpochTimeEstimated.Format(time.RFC3339),
+		"blocksProduced":                 blocksProduced,                 // 实际总出块数（基于区块高度，用于故障判断）
+		"activeValidatorsBlocksProduced": activeValidatorsBlocksProduced, // 当前活跃验证者的出块数之和（与validators列表一致）
+		"validators":                     validators,
+		"validatorCount":                 len(validators),
+		"consensusSwitchHeight":          consensusSwitchHeight,
 	}
 }
 
@@ -251,9 +261,44 @@ func (m *Manager) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{
 		blockCounts = make(map[types.Address]uint64)
 	}
 
+	// 计算当前活跃验证者的出块数之和
+	activeValidatorsBlocksProduced := uint64(0)
+
 	// 获取验证者信息
 	validators := make([]map[string]interface{}, 0)
-	if m.deps.GetSortedValidatorsWithLimit != nil {
+
+	// 如果是历史epoch，从epoch开始区块的ExtraData读取验证者集合
+	if epochNumber < currentEpoch && m.deps.GetValidatorsFromEpochStartBlock != nil {
+		epochValidators, err := m.deps.GetValidatorsFromEpochStartBlock(epochNumber)
+		if err != nil {
+			// 从ExtraData读取失败，返回错误
+			return map[string]interface{}{
+				"error": fmt.Sprintf("failed to get validators from epoch %d start block ExtraData: %v", epochNumber, err),
+			}
+		}
+
+		// 使用历史epoch的验证者集合
+		for i, validator := range epochValidators {
+			faultInfo := make(map[string]interface{})
+			if m.deps.GetValidatorFaultInfo != nil {
+				faultInfo = m.deps.GetValidatorFaultInfo(validator.Address)
+			}
+
+			blocksProducedByValidator := blockCounts[validator.Address]
+			// 累加当前活跃验证者的出块数
+			activeValidatorsBlocksProduced += blocksProducedByValidator
+
+			validators = append(validators, map[string]interface{}{
+				"index":          i,
+				"address":        validator.Address.String(),
+				"votingPower":    validator.VotingPower,
+				"isActive":       validator.IsActive,
+				"faultFlag":      faultInfo,
+				"blocksProduced": blocksProducedByValidator,
+			})
+		}
+	} else if m.deps.GetSortedValidatorsWithLimit != nil {
+		// 当前或未来epoch，使用当前配置的验证者集合
 		dbValidators, err := m.deps.GetSortedValidatorsWithLimit()
 		if err == nil && len(dbValidators) > 0 {
 			for i, validator := range dbValidators {
@@ -263,6 +308,8 @@ func (m *Manager) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{
 				}
 
 				blocksProducedByValidator := blockCounts[validator.Address]
+				// 累加当前活跃验证者的出块数
+				activeValidatorsBlocksProduced += blocksProducedByValidator
 
 				validators = append(validators, map[string]interface{}{
 					"index":          i,
@@ -277,19 +324,20 @@ func (m *Manager) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{
 	}
 
 	return map[string]interface{}{
-		"epochNumber":            epochNumber,
-		"epochStatus":            epochStatus,
-		"epochDuration":          epochDuration.String(),
-		"firstBlockInEpoch":      firstBlockInEpoch,
-		"lastBlockInEpoch":       lastBlockInEpoch,
-		"currentBlockNumber":     currentBlockNumber,
-		"epochSize":              epochSize,
-		"remainingBlocks":        remainingBlocks,
-		"estimatedTimeRemaining": timeRemaining.String(),
-		"blocksProduced":         blocksProduced,
-		"validators":             validators,
-		"validatorCount":         len(validators),
-		"consensusSwitchHeight":  consensusSwitchHeight,
+		"epochNumber":                    epochNumber,
+		"epochStatus":                    epochStatus,
+		"epochDuration":                  epochDuration.String(),
+		"firstBlockInEpoch":              firstBlockInEpoch,
+		"lastBlockInEpoch":               lastBlockInEpoch,
+		"currentBlockNumber":             currentBlockNumber,
+		"epochSize":                      epochSize,
+		"remainingBlocks":                remainingBlocks,
+		"estimatedTimeRemaining":         timeRemaining.String(),
+		"blocksProduced":                 blocksProduced,                 // 实际总出块数（基于区块高度，用于故障判断）
+		"activeValidatorsBlocksProduced": activeValidatorsBlocksProduced, // 当前活跃验证者的出块数之和（与validators列表一致）
+		"validators":                     validators,
+		"validatorCount":                 len(validators),
+		"consensusSwitchHeight":          consensusSwitchHeight,
 	}
 }
 
@@ -309,4 +357,3 @@ func (m *Manager) GetValidatorStats(validatorAddress types.Address, epochNumber 
 
 	return stats
 }
-
