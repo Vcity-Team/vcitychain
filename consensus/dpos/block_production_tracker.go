@@ -235,6 +235,33 @@ func (bpt *BlockProductionTracker) GetEpochBlockCounts(epochNumber uint64) map[t
 	bpt.mutex.RLock()
 	defer bpt.mutex.RUnlock()
 
+	// 1. 优先从内存获取当前epoch的实时数据
+	if epochNumber == bpt.currentEpoch {
+		result := make(map[types.Address]uint64)
+		for addr, count := range bpt.currentEpochBlocks {
+			result[addr] = count
+		}
+		bpt.logger.Debug("✅ GetEpochBlockCounts: 从内存返回当前epoch实时数据",
+			"epoch", epochNumber,
+			"validatorsCount", len(result),
+			"totalBlocks", bpt.calculateTotalBlocks(result))
+		return result
+	}
+
+	// 2. 检查内存历史数据
+	if history, exists := bpt.epochBlocksHistory[epochNumber]; exists {
+		result := make(map[types.Address]uint64)
+		for addr, count := range history {
+			result[addr] = count
+		}
+		bpt.logger.Debug("✅ GetEpochBlockCounts: 从内存历史返回",
+			"epoch", epochNumber,
+			"validatorsCount", len(result),
+			"totalBlocks", bpt.calculateTotalBlocks(result))
+		return result
+	}
+
+	// 3. 从数据库加载（历史epoch）
 	if bpt.store != nil {
 		dbBlocks, err := bpt.store.LoadEpochBlocks(epochNumber)
 		if err == nil && len(dbBlocks) > 0 {
@@ -250,18 +277,18 @@ func (bpt *BlockProductionTracker) GetEpochBlockCounts(epochNumber uint64) map[t
 				"epoch", epochNumber,
 				"error", err)
 		} else if len(dbBlocks) == 0 {
-			bpt.logger.Info("⚠️ GetEpochBlockCounts: 数据库中没有数据，返回空map",
-				"epoch", epochNumber,
-				"storeIsNil", bpt.store == nil)
+			bpt.logger.Info("⚠️ GetEpochBlockCounts: 数据库中没有数据",
+				"epoch", epochNumber)
 		}
 	} else {
-		bpt.logger.Info("⚠️ GetEpochBlockCounts: BlockTrackerStore为nil，返回空map",
+		bpt.logger.Info("⚠️ GetEpochBlockCounts: BlockTrackerStore为nil",
 			"epoch", epochNumber)
 	}
 
+	// 4. 返回空map（没有找到数据）
 	bpt.logger.Info("❌ GetEpochBlockCounts: 返回空map",
 		"epoch", epochNumber,
-		"storeIsNil", bpt.store == nil)
+		"currentEpoch", bpt.currentEpoch)
 	return make(map[types.Address]uint64)
 }
 
