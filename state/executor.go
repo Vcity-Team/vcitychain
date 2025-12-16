@@ -429,10 +429,10 @@ func (t *Transition) SettleSystemTxGas(txn *types.Transaction, gasUsed uint64, s
 	coinbaseFee := new(big.Int).Mul(new(big.Int).SetUint64(gasUsed), effectiveTip)
 	t.state.AddBalance(t.ctx.Coinbase, coinbaseFee)
 
-	// Burn base fee if London
+	// Pay base fee to coinbase (block producer) if London
 	if t.config.London && txn.Type != types.StateTx {
 		burnAmount := new(big.Int).Mul(new(big.Int).SetUint64(gasUsed), t.ctx.BaseFee)
-		t.state.AddBalance(t.ctx.BurnContract, burnAmount)
+		t.state.AddBalance(t.ctx.Coinbase, burnAmount)
 	}
 
 	// 5) Return unused gas to pool
@@ -742,11 +742,11 @@ func (t *Transition) apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 	coinbaseFee := new(big.Int).Mul(new(big.Int).SetUint64(result.GasUsed), effectiveTip)
 	t.state.AddBalance(t.ctx.Coinbase, coinbaseFee)
 
-	// Burn some amount if the london hardfork is applied.
-	// Basically, burn amount is just transferred to the current burn contract.
+	// Pay base fee to coinbase (block producer) if the london hardfork is applied.
+	// Base fee is transferred to the current block producer instead of burn contract.
 	if t.config.London && msg.Type != types.StateTx {
 		burnAmount := new(big.Int).Mul(new(big.Int).SetUint64(result.GasUsed), t.ctx.BaseFee)
-		t.state.AddBalance(t.ctx.BurnContract, burnAmount)
+		t.state.AddBalance(t.ctx.Coinbase, burnAmount)
 	}
 
 	// return gas to the pool
