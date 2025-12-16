@@ -182,15 +182,30 @@ func (m *lifecycleManager) runFaultDetection(ctx core.EpochBoundaryContext, epoc
 		}
 	}
 
+	// 记录故障检测结果统计
+	originalFaultyCount := 0
+	for _, flag := range faultFlags {
+		if flag.IsFaulty {
+			originalFaultyCount++
+		}
+	}
+	m.logger.Info("📊 [runFaultDetection] 故障检测结果统计",
+		"epochNumber", epochNumber,
+		"totalDetected", len(faultFlags),
+		"faultyCount", originalFaultyCount,
+		"normalCount", len(faultFlags)-originalFaultyCount)
+
 	// 🔧 修复：如果验证者有恢复提案，从faultFlags中移除该验证者的故障标志，
 	// 避免写入ExtraData，导致同步节点再次保存旧的故障状态
 	filteredFaultFlags := make([]core.FaultFlagInfo, 0, len(faultFlags))
+	skippedCount := 0
 	for _, flag := range faultFlags {
 		// 检查该验证者是否有待生效的恢复提案
 		// 如果有，跳过保存故障状态，避免覆盖恢复结果
 		if m.deps.CheckRecoveryProposal != nil {
 			hasRecoveryProposal := m.deps.CheckRecoveryProposal(flag.ValidatorAddress, epochNumber)
 			if hasRecoveryProposal {
+				skippedCount++
 				m.logger.Info("🔄 [runFaultDetection] ⚠️ 跳过保存故障状态：验证者有恢复提案（当前epoch或下一个epoch）",
 					"validator", flag.ValidatorAddress.String(),
 					"currentEpoch", epochNumber,
@@ -215,20 +230,71 @@ func (m *lifecycleManager) runFaultDetection(ctx core.EpochBoundaryContext, epoc
 	// 使用过滤后的faultFlags
 	faultFlags = filteredFaultFlags
 
+	// 记录过滤后的统计
+	filteredFaultyCount := 0
 	for _, flag := range faultFlags {
+		if flag.IsFaulty {
+			filteredFaultyCount++
+		}
+	}
+	m.logger.Info("📊 [runFaultDetection] 过滤后故障标志统计",
+		"epochNumber", epochNumber,
+		"originalCount", len(faultFlags)+skippedCount,
+		"filteredCount", len(faultFlags),
+		"skippedCount", skippedCount,
+		"originalFaultyCount", originalFaultyCount,
+		"filteredFaultyCount", filteredFaultyCount)
+
+	// 保存故障状态
+	savedCount := 0
+	failedCount := 0
+	for i, flag := range faultFlags {
+		m.logger.Info("💾 [runFaultDetection] 准备保存故障状态",
+			"index", i+1,
+			"total", len(faultFlags),
+			"validator", flag.ValidatorAddress.String(),
+			"isFaulty", flag.IsFaulty,
+			"epochNumber", flag.EpochNumber,
+			"missedBlocks", flag.MissedBlocks,
+			"actualBlocks", flag.ActualBlocks,
+			"expectedBlocks", flag.ExpectedBlocks,
+			"missedBlocksPercentage", flag.MissedBlocksPercentage,
+			"lastFaultyEpoch", flag.LastFaultyEpoch,
+			"reason", flag.Reason)
 
 		if m.deps.SaveFaultStatus != nil {
 			if err := m.deps.SaveFaultStatus(flag); err != nil {
-				m.logger.Warn("failed to persist fault status",
+				failedCount++
+				m.logger.Warn("❌ [runFaultDetection] 保存故障状态失败",
 					"validator", flag.ValidatorAddress.String(),
+					"isFaulty", flag.IsFaulty,
+					"epochNumber", flag.EpochNumber,
 					"error", err)
+			} else {
+				savedCount++
+				m.logger.Info("✅ [runFaultDetection] 保存故障状态成功",
+					"validator", flag.ValidatorAddress.String(),
+					"isFaulty", flag.IsFaulty,
+					"epochNumber", flag.EpochNumber,
+					"missedBlocks", flag.MissedBlocks,
+					"lastFaultyEpoch", flag.LastFaultyEpoch)
 			}
+		} else {
+			m.logger.Warn("⚠️ [runFaultDetection] SaveFaultStatus 依赖未提供",
+				"validator", flag.ValidatorAddress.String())
 		}
 
 		if m.deps.UpdateMemoryFaultStatus != nil {
 			m.deps.UpdateMemoryFaultStatus(flag)
 		}
 	}
+
+	// 记录保存结果统计
+	m.logger.Info("📊 [runFaultDetection] 故障状态保存结果统计",
+		"epochNumber", epochNumber,
+		"totalToSave", len(faultFlags),
+		"savedCount", savedCount,
+		"failedCount", failedCount)
 
 	if m.deps.SaveCurrentEpoch != nil {
 		if err := m.deps.SaveCurrentEpoch(epochNumber, ctx.NextBlockNumber); err != nil {

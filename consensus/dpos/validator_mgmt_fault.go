@@ -257,10 +257,25 @@ func (d *DPoS) getFaultDetector() *FaultDetector {
 // saveFaultStatusToDatabase 保存故障状态到数据库的辅助方法
 func (d *DPoS) saveFaultStatusToDatabase(faultFlag FaultFlagInfo) error {
 	if d.state == nil || d.state.StakeStore == nil {
+		d.logger.Error("❌ [saveFaultStatusToDatabase] state store不可用",
+			"validator", faultFlag.NodeAddress.String(),
+			"isFaulty", faultFlag.IsFaulty)
 		return fmt.Errorf("state store not available")
 	}
 
-	return d.state.StakeStore.UpdateValidatorFaultStatus(
+	d.logger.Info("💾 [saveFaultStatusToDatabase] 开始保存故障状态到数据库",
+		"validator", faultFlag.NodeAddress.String(),
+		"isFaulty", faultFlag.IsFaulty,
+		"epochNumber", faultFlag.EpochNumber,
+		"missedBlocks", faultFlag.MissedBlocks,
+		"actualBlocks", faultFlag.ActualBlocks,
+		"expectedBlocks", faultFlag.ExpectedBlocks,
+		"missedBlocksPercentage", faultFlag.MissedBlocksPercentage,
+		"lastFaultyEpoch", faultFlag.LastFaultyEpoch,
+		"lastUpdateTime", faultFlag.LastUpdateTime,
+		"reason", faultFlag.Reason)
+
+	err := d.state.StakeStore.UpdateValidatorFaultStatus(
 		faultFlag.NodeAddress,
 		faultFlag.IsFaulty,
 		faultFlag.MissedBlocks,
@@ -268,6 +283,24 @@ func (d *DPoS) saveFaultStatusToDatabase(faultFlag FaultFlagInfo) error {
 		faultFlag.LastFaultyEpoch,
 		faultFlag.Reason,
 	)
+
+	if err != nil {
+		d.logger.Error("❌ [saveFaultStatusToDatabase] 保存故障状态失败",
+			"validator", faultFlag.NodeAddress.String(),
+			"isFaulty", faultFlag.IsFaulty,
+			"epochNumber", faultFlag.EpochNumber,
+			"error", err)
+		return err
+	}
+
+	d.logger.Info("✅ [saveFaultStatusToDatabase] 保存故障状态成功",
+		"validator", faultFlag.NodeAddress.String(),
+		"isFaulty", faultFlag.IsFaulty,
+		"epochNumber", faultFlag.EpochNumber,
+		"missedBlocks", faultFlag.MissedBlocks,
+		"lastFaultyEpoch", faultFlag.LastFaultyEpoch)
+
+	return nil
 }
 
 // updateMemoryFaultStatus 更新内存中的故障状态

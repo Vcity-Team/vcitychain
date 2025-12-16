@@ -55,10 +55,13 @@ func (d *DPoS) buildEpochLifecycleDependencies() epochmodule.LifecycleDependenci
 
 			// 1. 检查当前 epoch 的恢复提案（待应用）
 			currentProposals := d.governanceLoadScheduled(currentEpoch)
-			d.logger.Info("🔍 [CheckRecoveryProposal] 检查当前epoch的恢复提案",
-				"currentEpoch", currentEpoch,
-				"validatorAddress", validatorAddress.String(),
-				"proposalCount", len(currentProposals))
+			// 只在找到提案时打印日志，减少日志噪音
+			if len(currentProposals) > 0 {
+				d.logger.Info("🔍 [CheckRecoveryProposal] 检查当前epoch的恢复提案",
+					"currentEpoch", currentEpoch,
+					"validatorAddress", validatorAddress.String(),
+					"proposalCount", len(currentProposals))
+			}
 
 			// 记录所有查询到的提案（用于调试）
 			for i, prop := range currentProposals {
@@ -108,10 +111,13 @@ func (d *DPoS) buildEpochLifecycleDependencies() epochmodule.LifecycleDependenci
 			// 2. 检查下一个 epoch 的恢复提案（待应用）
 			nextEpoch := currentEpoch + 1
 			nextProposals := d.governanceLoadScheduled(nextEpoch)
-			d.logger.Info("🔍 [CheckRecoveryProposal] 检查下一个epoch的恢复提案",
-				"nextEpoch", nextEpoch,
-				"validatorAddress", validatorAddress.String(),
-				"proposalCount", len(nextProposals))
+			// 只在找到提案时打印日志，减少日志噪音
+			if len(nextProposals) > 0 {
+				d.logger.Info("🔍 [CheckRecoveryProposal] 检查下一个epoch的恢复提案",
+					"nextEpoch", nextEpoch,
+					"validatorAddress", validatorAddress.String(),
+					"proposalCount", len(nextProposals))
+			}
 
 			// 记录所有查询到的提案（用于调试）
 			for i, prop := range nextProposals {
