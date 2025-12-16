@@ -54,6 +54,18 @@ func (fc *FaultCalculator) CalculateFaultFlag(
 	// 使用漏块率判断故障（而不是绝对漏块数）
 	isFaulty := stats.ExpectedBlocks > 0 && missedBlocksPercentage >= missedBlocksPercentageThreshold
 
+	// 记录故障判断过程（info级别日志）
+	fc.logger.Info("🔍 [故障判断] 计算验证者故障状态",
+		"validatorAddress", validator.Address.String(),
+		"epochNumber", epochInfo.EpochToCheckNumber,
+		"expectedBlocks", stats.ExpectedBlocks,
+		"actualBlocks", stats.ActualBlocks,
+		"missedBlocks", stats.MissedBlocks,
+		"missedBlocksPercentage", missedBlocksPercentage,
+		"missedBlocksPercentageThreshold", missedBlocksPercentageThreshold,
+		"isFaulty", isFaulty,
+		"formula", fmt.Sprintf("missedBlocksPercentage (%d bp) >= threshold (%d bp) ? %v", missedBlocksPercentage, missedBlocksPercentageThreshold, isFaulty))
+
 	// 获取上次故障的epoch（从数据库或FaultFlags中）
 	lastFaultyEpoch := uint64(0)
 	if fc.dposInstance.state != nil && fc.dposInstance.state.StakeStore != nil {

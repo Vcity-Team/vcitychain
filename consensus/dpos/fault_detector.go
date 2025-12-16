@@ -269,6 +269,17 @@ func (fd *FaultDetector) detectValidatorFaults(
 		// epochToCheck存储的是索引，直接使用
 		stats := fd.blockCounter.CalculateBlockStats(validator.Address, epochInfo.EpochToCheck, epochInfo.EpochToCheck)
 
+		// 记录出块统计（info级别日志）
+		fd.logger.Info("📊 [故障检测] 验证者出块统计",
+			"validatorIndex", i+1,
+			"totalValidators", len(validators),
+			"validatorAddress", validator.Address.String(),
+			"epochNumber", epochInfo.EpochToCheckNumber,
+			"expectedBlocks", stats.ExpectedBlocks,
+			"actualBlocks", stats.ActualBlocks,
+			"missedBlocks", stats.MissedBlocks,
+			"isNewlyAdded", isNewlyAdded)
+
 		// 更新漏块数计数
 		fd.dposInstance.missedBlocksCount[validator.Address] = stats.MissedBlocks
 
@@ -278,16 +289,27 @@ func (fd *FaultDetector) detectValidatorFaults(
 		faultFlags = append(faultFlags, faultFlag)
 
 		if faultFlag.IsFaulty {
-			fd.logger.Info("⚠️ 验证者故障",
+			fd.logger.Info("⚠️ [故障检测] 验证者故障",
 				"validatorIndex", i+1,
 				"totalValidators", len(validators),
 				"validatorAddress", validator.Address.String(),
+				"epochNumber", epochInfo.EpochToCheckNumber,
 				"expectedBlocks", stats.ExpectedBlocks,
 				"actualBlocks", stats.ActualBlocks,
 				"missedBlocks", stats.MissedBlocks,
 				"missedBlocksPercentage", faultFlag.MissedBlocksPercentage,
 				"reason", faultFlag.Reason,
 				"lastFaultyEpoch", faultFlag.LastFaultyEpoch)
+		} else {
+			fd.logger.Info("✅ [故障检测] 验证者正常",
+				"validatorIndex", i+1,
+				"totalValidators", len(validators),
+				"validatorAddress", validator.Address.String(),
+				"epochNumber", epochInfo.EpochToCheckNumber,
+				"expectedBlocks", stats.ExpectedBlocks,
+				"actualBlocks", stats.ActualBlocks,
+				"missedBlocks", stats.MissedBlocks,
+				"missedBlocksPercentage", faultFlag.MissedBlocksPercentage)
 		}
 	}
 
