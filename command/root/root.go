@@ -18,6 +18,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/command/polybft"
 	"github.com/Vcity-Team/vcitychain/command/polybftsecrets"
 	"github.com/Vcity-Team/vcitychain/command/regenesis"
+	"github.com/Vcity-Team/vcitychain/command/rollback"
 	"github.com/Vcity-Team/vcitychain/command/rootchain"
 	"github.com/Vcity-Team/vcitychain/command/secrets"
 	"github.com/Vcity-Team/vcitychain/command/server"
@@ -63,6 +64,7 @@ func (rc *RootCommand) registerSubCommands() {
 		polybft.GetCommand(),
 		bridge.GetCommand(),
 		regenesis.GetCommand(),
+		rollback.GetCommand(),
 	)
 }
 

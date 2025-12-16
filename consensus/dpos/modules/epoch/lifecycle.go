@@ -191,11 +191,19 @@ func (m *lifecycleManager) runFaultDetection(ctx core.EpochBoundaryContext, epoc
 		if m.deps.CheckRecoveryProposal != nil {
 			hasRecoveryProposal := m.deps.CheckRecoveryProposal(flag.ValidatorAddress, epochNumber)
 			if hasRecoveryProposal {
-				m.logger.Info("🔄 [runFaultDetection] 跳过保存故障状态并从faultFlags中移除：验证者有恢复提案",
+				m.logger.Info("🔄 [runFaultDetection] ⚠️ 跳过保存故障状态：验证者有恢复提案（当前epoch或下一个epoch）",
 					"validator", flag.ValidatorAddress.String(),
 					"currentEpoch", epochNumber,
 					"detectedFaulty", flag.IsFaulty,
-					"detectedMissedBlocks", flag.MissedBlocks)
+					"missedBlocks", flag.MissedBlocks,
+					"actualBlocks", flag.ActualBlocks,
+					"expectedBlocks", flag.ExpectedBlocks,
+					"missedBlocksPercentage", flag.MissedBlocksPercentage,
+					"epochNumber", flag.EpochNumber,
+					"lastFaultyEpoch", flag.LastFaultyEpoch,
+					"faultType", flag.FaultType,
+					"reason", flag.Reason,
+					"note", "由于存在恢复提案，本次故障检测结果不会保存到数据库，也不会写入区块ExtraData")
 				continue // 不添加到filteredFaultFlags，也不保存
 			}
 		}

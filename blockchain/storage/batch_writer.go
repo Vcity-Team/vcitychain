@@ -94,3 +94,8 @@ func (b *BatchWriter) putWithPrefix(p, k, data []byte) {
 func (b *BatchWriter) WriteBatch() error {
 	return b.batch.Write()
 }
+
+// DeleteKey deletes a key from the batch
+func (b *BatchWriter) DeleteKey(key []byte) {
+	b.batch.Delete(key)
+}

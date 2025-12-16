@@ -55,42 +55,112 @@ func (d *DPoS) buildEpochLifecycleDependencies() epochmodule.LifecycleDependenci
 
 			// 1. 检查当前 epoch 的恢复提案（待应用）
 			currentProposals := d.governanceLoadScheduled(currentEpoch)
+			d.logger.Info("🔍 [CheckRecoveryProposal] 检查当前epoch的恢复提案",
+				"currentEpoch", currentEpoch,
+				"validatorAddress", validatorAddress.String(),
+				"proposalCount", len(currentProposals))
+
+			// 记录所有查询到的提案（用于调试）
+			for i, prop := range currentProposals {
+				if prop != nil {
+					d.logger.Debug("🔍 [CheckRecoveryProposal] 查询到的提案详情",
+						"index", i,
+						"proposalID", prop.ID,
+						"proposalType", prop.ProposalType,
+						"scheduled", prop.Schedule.Scheduled,
+						"effectiveEpoch", prop.Schedule.EffectiveEpoch,
+						"applied", prop.Schedule.Applied,
+						"validatorAddress", prop.ValidatorAddress.String())
+				}
+			}
+
 			for _, prop := range currentProposals {
 				if prop == nil || prop.ProposalType != "validator_recovery" {
+					if prop != nil {
+						d.logger.Debug("🔍 [CheckRecoveryProposal] 跳过非恢复提案",
+							"proposalID", prop.ID,
+							"proposalType", prop.ProposalType)
+					}
 					continue
 				}
 				// 检查是否针对该验证者
+				// 注意：governanceLoadScheduled 已经过滤了 Applied=false 和 EffectiveEpoch=currentEpoch 的提案
 				propValidatorAddr := prop.ValidatorAddress
 				if propValidatorAddr == (types.Address{}) && prop.Parameter != "" {
 					propValidatorAddr = types.StringToAddress(prop.Parameter)
 				}
 				if propValidatorAddr == validatorAddress {
-					// 找到针对该验证者的恢复提案（待应用）
+					d.logger.Info("✅ [CheckRecoveryProposal] 找到针对该验证者的恢复提案（当前epoch）",
+						"proposalID", prop.ID,
+						"validatorAddress", validatorAddress.String(),
+						"currentEpoch", currentEpoch,
+						"effectiveEpoch", prop.Schedule.EffectiveEpoch,
+						"applied", prop.Schedule.Applied)
 					return true
+				} else {
+					d.logger.Debug("🔍 [CheckRecoveryProposal] 恢复提案不匹配验证者",
+						"proposalID", prop.ID,
+						"proposalValidator", propValidatorAddr.String(),
+						"targetValidator", validatorAddress.String())
 				}
 			}
 
 			// 2. 检查下一个 epoch 的恢复提案（待应用）
 			nextEpoch := currentEpoch + 1
 			nextProposals := d.governanceLoadScheduled(nextEpoch)
+			d.logger.Info("🔍 [CheckRecoveryProposal] 检查下一个epoch的恢复提案",
+				"nextEpoch", nextEpoch,
+				"validatorAddress", validatorAddress.String(),
+				"proposalCount", len(nextProposals))
+
+			// 记录所有查询到的提案（用于调试）
+			for i, prop := range nextProposals {
+				if prop != nil {
+					d.logger.Debug("🔍 [CheckRecoveryProposal] 查询到的提案详情（下一个epoch）",
+						"index", i,
+						"proposalID", prop.ID,
+						"proposalType", prop.ProposalType,
+						"scheduled", prop.Schedule.Scheduled,
+						"effectiveEpoch", prop.Schedule.EffectiveEpoch,
+						"applied", prop.Schedule.Applied,
+						"validatorAddress", prop.ValidatorAddress.String())
+				}
+			}
+
 			for _, prop := range nextProposals {
 				if prop == nil || prop.ProposalType != "validator_recovery" {
-					continue
-				}
-				// 只检查待应用的提案
-				if !prop.Schedule.Scheduled || prop.Schedule.EffectiveEpoch != nextEpoch || prop.Schedule.Applied {
+					if prop != nil {
+						d.logger.Debug("🔍 [CheckRecoveryProposal] 跳过非恢复提案（下一个epoch）",
+							"proposalID", prop.ID,
+							"proposalType", prop.ProposalType)
+					}
 					continue
 				}
 				// 检查是否针对该验证者
+				// 注意：governanceLoadScheduled 已经过滤了 Applied=false 和 EffectiveEpoch=nextEpoch 的提案
 				propValidatorAddr := prop.ValidatorAddress
 				if propValidatorAddr == (types.Address{}) && prop.Parameter != "" {
 					propValidatorAddr = types.StringToAddress(prop.Parameter)
 				}
 				if propValidatorAddr == validatorAddress {
-					// 找到针对该验证者的恢复提案（待应用）
+					d.logger.Info("✅ [CheckRecoveryProposal] 找到针对该验证者的恢复提案（下一个epoch）",
+						"proposalID", prop.ID,
+						"validatorAddress", validatorAddress.String(),
+						"currentEpoch", currentEpoch,
+						"nextEpoch", nextEpoch,
+						"effectiveEpoch", prop.Schedule.EffectiveEpoch,
+						"applied", prop.Schedule.Applied)
 					return true
+				} else {
+					d.logger.Debug("🔍 [CheckRecoveryProposal] 恢复提案不匹配验证者（下一个epoch）",
+						"proposalID", prop.ID,
+						"proposalValidator", propValidatorAddr.String(),
+						"targetValidator", validatorAddress.String())
 				}
 			}
+			d.logger.Debug("❌ [CheckRecoveryProposal] 未找到针对该验证者的恢复提案",
+				"validatorAddress", validatorAddress.String(),
+				"currentEpoch", currentEpoch)
 			return false
 		},
 		ClearValidatorFaultStatus: func(address types.Address, proposalID string) error {

@@ -1,0 +1,742 @@
+package rollback
+
+import (
+	"bufio"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/Vcity-Team/vcitychain/blockchain/storage"
+	"github.com/Vcity-Team/vcitychain/blockchain/storage/leveldb"
+	"github.com/Vcity-Team/vcitychain/command"
+	"github.com/Vcity-Team/vcitychain/helper/common"
+	"github.com/Vcity-Team/vcitychain/types"
+	"github.com/hashicorp/go-hclog"
+	bolt "go.etcd.io/bbolt"
+)
+
+const (
+	dataDirFlag       = "data-dir"
+	targetHeightFlag  = "target-height"
+	forceFlag         = "force"
+	keepBlocksFlag    = "keep-blocks"
+)
+
+var (
+	params = &rollbackParams{}
+)
+
+var (
+	errInvalidDataDir      = errors.New("data directory is required")
+	errInvalidTargetHeight = errors.New("target height is required")
+	errNodeRunning         = errors.New("node appears to be running, please stop it first")
+	errTargetHeightInvalid = errors.New("target height must be >= 0 and <= current height")
+	errTargetBlockNotFound = errors.New("target block not found")
+)
+
+type rollbackParams struct {
+	dataDir         string
+	targetHeightRaw string
+	targetHeight    uint64
+	force           bool
+	keepBlocks      bool
+
+	currentHeight uint64
+	targetHash    types.Hash
+	blocksDeleted uint64
+
+	// Epoch计算相关参数
+	consensusSwitchHeight uint64
+	epochSize             uint64
+	blockTime             time.Duration
+}
+
+func (p *rollbackParams) getRequiredFlags() []string {
+	return []string{
+		dataDirFlag,
+		targetHeightFlag,
+	}
+}
+
+func (p *rollbackParams) validateFlags() error {
+	if p.dataDir == "" {
+		return errInvalidDataDir
+	}
+
+	if p.targetHeightRaw == "" {
+		return errInvalidTargetHeight
+	}
+
+	var parseErr error
+	if p.targetHeight, parseErr = common.ParseUint64orHex(&p.targetHeightRaw); parseErr != nil {
+		return fmt.Errorf("invalid target height: %w", parseErr)
+	}
+
+	return nil
+}
+
+func (p *rollbackParams) executeRollback() error {
+	logger := hclog.New(&hclog.LoggerOptions{
+		Name:  "rollback",
+		Level: hclog.LevelFromString("INFO"),
+	})
+
+	// 1. 检查节点是否正在运行
+	if err := p.checkNodeRunning(); err != nil {
+		return err
+	}
+
+	// 2. 打开数据库连接
+	blockchainPath := filepath.Join(p.dataDir, "blockchain")
+	storageInstance, err := leveldb.NewLevelDBStorage(blockchainPath, logger)
+	if err != nil {
+		return fmt.Errorf("failed to open blockchain storage: %w", err)
+	}
+	defer storageInstance.Close()
+
+	// 3. 验证目标高度
+	currentHeight, ok := storageInstance.ReadHeadNumber()
+	if !ok {
+		return errors.New("failed to read current chain height")
+	}
+	p.currentHeight = currentHeight
+
+	if p.targetHeight > currentHeight {
+		return fmt.Errorf("%w: target height %d > current height %d", errTargetHeightInvalid, p.targetHeight, currentHeight)
+	}
+
+	// 4. 获取目标区块信息
+	targetHash, ok := storageInstance.ReadCanonicalHash(p.targetHeight)
+	if !ok {
+		return fmt.Errorf("%w: block at height %d", errTargetBlockNotFound, p.targetHeight)
+	}
+	p.targetHash = targetHash
+
+	// 5. 显示回滚信息并确认
+	if !p.force {
+		if err := p.confirmRollback(); err != nil {
+			return err
+		}
+	}
+
+	// 6. 加载配置参数（用于epoch计算）
+	if err := p.loadEpochConfig(p.dataDir, logger); err != nil {
+		logger.Warn("Failed to load epoch config, consensus state cleanup may be skipped",
+			"error", err)
+		// 不中断流程，继续执行
+	}
+
+	// 7. 执行回滚
+	logger.Info("Starting rollback...",
+		"currentHeight", currentHeight,
+		"targetHeight", p.targetHeight,
+		"targetHash", targetHash.String(),
+		"blocksToDelete", currentHeight-p.targetHeight)
+
+	if err := p.performRollback(storageInstance, logger); err != nil {
+		return fmt.Errorf("rollback failed: %w", err)
+	}
+
+	p.blocksDeleted = currentHeight - p.targetHeight
+
+	logger.Info("Rollback completed successfully",
+		"newHeadHeight", p.targetHeight,
+		"newHeadHash", targetHash.String(),
+		"blocksDeleted", p.blocksDeleted)
+
+	return nil
+}
+
+func (p *rollbackParams) checkNodeRunning() error {
+	lockFile := filepath.Join(p.dataDir, "blockchain", "LOCK")
+	if _, err := os.Stat(lockFile); err == nil {
+		return fmt.Errorf("%w: lock file exists at %s", errNodeRunning, lockFile)
+	}
+	return nil
+}
+
+func (p *rollbackParams) confirmRollback() error {
+	fmt.Printf("\n⚠️  WARNING: This operation is IRREVERSIBLE!\n\n")
+	fmt.Printf("Current chain height: %d\n", p.currentHeight)
+	fmt.Printf("Target rollback height: %d\n", p.targetHeight)
+	fmt.Printf("Blocks to be deleted: %d\n", p.currentHeight-p.targetHeight)
+	fmt.Printf("New chain head will be: Block #%d (%s)\n\n", p.targetHeight, p.targetHash.String())
+	fmt.Print("Are you sure you want to proceed? (yes/no): ")
+
+	reader := bufio.NewReader(os.Stdin)
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read confirmation: %w", err)
+	}
+
+	response = strings.TrimSpace(strings.ToLower(response))
+	if response != "yes" && response != "y" {
+		return errors.New("rollback cancelled by user")
+	}
+
+	return nil
+}
+
+func (p *rollbackParams) performRollback(storageInstance storage.Storage, logger hclog.Logger) error {
+	// 创建批量写入器
+	batchWriter := storage.NewBatchWriter(storageInstance)
+
+	// 1. 验证目标区块存在
+	_, err := storageInstance.ReadHeader(p.targetHash)
+	if err != nil {
+		return fmt.Errorf("failed to read target header: %w", err)
+	}
+
+	// 2. 更新链头信息
+	batchWriter.PutHeadHash(p.targetHash)
+	batchWriter.PutHeadNumber(p.targetHeight)
+	batchWriter.PutCanonicalHash(p.targetHeight, p.targetHash)
+
+	logger.Info("Updated chain head",
+		"height", p.targetHeight,
+		"hash", p.targetHash.String())
+
+	// 3. 删除目标高度之后的规范链映射
+	for height := p.targetHeight + 1; height <= p.currentHeight; height++ {
+		canonicalHash, ok := storageInstance.ReadCanonicalHash(height)
+		if !ok {
+			// 如果该高度的规范链映射不存在，跳过
+			continue
+		}
+
+		// 删除规范链映射
+		canonicalKey := append(storage.CANONICAL, common.EncodeUint64ToBytes(height)...)
+		batchWriter.DeleteKey(canonicalKey)
+
+		// 如果 keepBlocks 为 false，删除区块数据
+		if !p.keepBlocks {
+			if err := p.deleteBlockData(storageInstance, batchWriter, canonicalHash, logger); err != nil {
+				logger.Warn("Failed to delete block data",
+					"height", height,
+					"hash", canonicalHash.String(),
+					"error", err)
+				// 继续删除其他区块，不中断流程
+			}
+		}
+	}
+
+	// 4. 清理状态快照（在删除区块数据之后）
+	if !p.keepBlocks {
+		if err := p.cleanupStateSnapshots(storageInstance, batchWriter, logger); err != nil {
+			logger.Warn("Failed to cleanup state snapshots", "error", err)
+			// 不中断流程，继续执行
+		}
+	}
+
+	// 5. 提交所有更改
+	if err := batchWriter.WriteBatch(); err != nil {
+		return fmt.Errorf("failed to write batch: %w", err)
+	}
+
+	// 6. 清理DPoS共识状态（在提交区块链数据之后）
+	if err := p.cleanupDPoSConsensusState(logger); err != nil {
+		logger.Warn("Failed to cleanup DPoS consensus state", "error", err)
+		// 不中断流程，记录警告
+	}
+
+	return nil
+}
+
+func (p *rollbackParams) deleteBlockData(
+	storageInstance storage.Storage,
+	batchWriter *storage.BatchWriter,
+	blockHash types.Hash,
+	logger hclog.Logger,
+) error {
+	// 读取区块体以获取交易列表
+	body, err := storageInstance.ReadBody(blockHash)
+	if err != nil {
+		// 如果区块体不存在，跳过
+		return nil
+	}
+
+	// 删除区块头
+	headerKey := append(storage.HEADER, blockHash.Bytes()...)
+	batchWriter.DeleteKey(headerKey)
+
+	// 删除区块体
+	bodyKey := append(storage.BODY, blockHash.Bytes()...)
+	batchWriter.DeleteKey(bodyKey)
+
+	// 删除收据
+	receiptsKey := append(storage.RECEIPTS, blockHash.Bytes()...)
+	batchWriter.DeleteKey(receiptsKey)
+
+	// 删除总难度
+	difficultyKey := append(storage.DIFFICULTY, blockHash.Bytes()...)
+	batchWriter.DeleteKey(difficultyKey)
+
+	// 删除交易查找索引
+	for _, tx := range body.Transactions {
+		txLookupKey := append(storage.TX_LOOKUP_PREFIX, tx.Hash.Bytes()...)
+		batchWriter.DeleteKey(txLookupKey)
+	}
+
+	return nil
+}
+
+// loadEpochConfig 从配置文件加载epoch相关参数
+func (p *rollbackParams) loadEpochConfig(dataDir string, logger hclog.Logger) error {
+	// 方案1: 尝试从yaml配置文件读取
+	configPath := filepath.Join(dataDir, "node-config.yaml")
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		// 尝试其他可能的配置文件名称
+		configPath = filepath.Join(filepath.Dir(dataDir), "node-config.yaml")
+		if _, err := os.Stat(configPath); os.IsNotExist(err) {
+			configPath = filepath.Join(dataDir, "config.yaml")
+			if _, err := os.Stat(configPath); os.IsNotExist(err) {
+				// 如果配置文件不存在，使用默认值
+				logger.Warn("Config file not found, using default epoch values")
+				p.consensusSwitchHeight = 0
+				p.epochSize = 16 // 默认：48秒 / 3秒 = 16个区块
+				p.blockTime = 3 * time.Second
+				return nil
+			}
+		}
+	}
+
+	// 读取yaml配置
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		logger.Warn("Failed to read config file, using default values", "error", err)
+		p.consensusSwitchHeight = 0
+		p.epochSize = 16
+		p.blockTime = 3 * time.Second
+		return nil
+	}
+
+	// 简单解析yaml（查找关键字段）
+	configStr := string(configData)
+	
+	// 解析 dpos_epoch_duration
+	epochDurationStr := "48s" // 默认值
+	if idx := strings.Index(configStr, "dpos_epoch_duration:"); idx != -1 {
+		line := configStr[idx:]
+		if endIdx := strings.Index(line, "\n"); endIdx != -1 {
+			line = line[:endIdx]
+		}
+		parts := strings.Fields(line)
+		if len(parts) >= 2 {
+			epochDurationStr = strings.Trim(parts[1], `"`)
+		}
+	}
+
+	// 解析 block_time_s
+	blockTimeSeconds := uint64(3) // 默认值
+	if idx := strings.Index(configStr, "block_time_s:"); idx != -1 {
+		line := configStr[idx:]
+		if endIdx := strings.Index(line, "\n"); endIdx != -1 {
+			line = line[:endIdx]
+		}
+		parts := strings.Fields(line)
+		if len(parts) >= 2 {
+			if val, err := common.ParseUint64orHex(&parts[1]); err == nil {
+				blockTimeSeconds = val
+			}
+		}
+	}
+
+	// 解析共识切换高度（如果存在）
+	p.consensusSwitchHeight = 0
+	if idx := strings.Index(configStr, "consensus_switch_height:"); idx != -1 {
+		line := configStr[idx:]
+		if endIdx := strings.Index(line, "\n"); endIdx != -1 {
+			line = line[:endIdx]
+		}
+		parts := strings.Fields(line)
+		if len(parts) >= 2 {
+			if val, err := common.ParseUint64orHex(&parts[1]); err == nil {
+				p.consensusSwitchHeight = val
+			}
+		}
+	}
+
+	// 解析epoch duration
+	epochDuration, err := time.ParseDuration(epochDurationStr)
+	if err != nil {
+		logger.Warn("Failed to parse epoch duration, using default", "value", epochDurationStr, "error", err)
+		epochDuration = 48 * time.Second
+	}
+
+	// 计算epoch大小
+	blockTime := time.Duration(blockTimeSeconds) * time.Second
+	if blockTime == 0 {
+		blockTime = 3 * time.Second
+	}
+	p.epochSize = uint64(epochDuration / blockTime)
+	if p.epochSize == 0 {
+		p.epochSize = 1
+	}
+	p.blockTime = blockTime
+
+	logger.Info("Loaded epoch config",
+		"consensusSwitchHeight", p.consensusSwitchHeight,
+		"epochSize", p.epochSize,
+		"epochDuration", epochDuration.String(),
+		"blockTime", blockTime.String())
+
+	return nil
+}
+
+// cleanupStateSnapshots 清理目标高度之后的状态快照
+func (p *rollbackParams) cleanupStateSnapshots(
+	storageInstance storage.Storage,
+	batchWriter *storage.BatchWriter,
+	logger hclog.Logger,
+) error {
+	logger.Info("Cleaning up state snapshots...")
+
+	// 获取目标区块的状态根（保留）
+	targetHeader, err := storageInstance.ReadHeader(p.targetHash)
+	if err != nil {
+		return fmt.Errorf("failed to read target header: %w", err)
+	}
+	targetStateRoot := targetHeader.StateRoot
+
+	// 遍历目标高度之后的区块，删除其状态快照
+	deletedCount := 0
+	for height := p.targetHeight + 1; height <= p.currentHeight; height++ {
+		canonicalHash, ok := storageInstance.ReadCanonicalHash(height)
+		if !ok {
+			continue
+		}
+
+		header, err := storageInstance.ReadHeader(canonicalHash)
+		if err != nil {
+			continue
+		}
+
+		// 跳过目标区块的状态根（保留）
+		if header.StateRoot == targetStateRoot {
+			continue
+		}
+
+		// 删除该区块的状态快照
+		snapshotKey := append(storage.SNAPSHOTS, header.StateRoot.Bytes()...)
+		batchWriter.DeleteKey(snapshotKey)
+		deletedCount++
+	}
+
+	logger.Info("State snapshots cleanup completed",
+		"deletedCount", deletedCount)
+
+	return nil
+}
+
+// cleanupDPoSConsensusState 清理DPoS共识状态
+func (p *rollbackParams) cleanupDPoSConsensusState(logger hclog.Logger) error {
+	// 如果epoch参数未加载，跳过清理
+	if p.epochSize == 0 {
+		logger.Warn("Epoch config not loaded, skipping DPoS consensus state cleanup")
+		return nil
+	}
+
+	// 计算目标epoch
+	targetEpoch := p.calculateTargetEpoch(p.targetHeight)
+
+	logger.Info("Cleaning up DPoS consensus state...",
+		"targetEpoch", targetEpoch,
+		"targetHeight", p.targetHeight)
+
+	// 打开DPoS数据库
+	dposDBPath := filepath.Join(p.dataDir, "dpos.db")
+	if _, err := os.Stat(dposDBPath); os.IsNotExist(err) {
+		logger.Debug("DPoS database not found, skipping cleanup", "path", dposDBPath)
+		return nil
+	}
+
+	db, err := bolt.Open(dposDBPath, 0666, nil)
+	if err != nil {
+		return fmt.Errorf("failed to open DPoS database: %w", err)
+	}
+	defer db.Close()
+
+	// 清理各个bucket的数据
+	return db.Update(func(tx *bolt.Tx) error {
+		// 清理 epochs bucket
+		if err := p.cleanupEpochsBucket(tx, targetEpoch, logger); err != nil {
+			return err
+		}
+
+		// 清理 validatorSnapshots bucket
+		if err := p.cleanupValidatorSnapshotsBucket(tx, targetEpoch, logger); err != nil {
+			return err
+		}
+
+		// 清理 EpochBlocks bucket
+		if err := p.cleanupEpochBlocksBucket(tx, targetEpoch, logger); err != nil {
+			return err
+		}
+
+		// 清理 VotingPowerAtBlock bucket
+		if err := p.cleanupVotingPowerBucket(tx, p.targetHeight, logger); err != nil {
+			return err
+		}
+
+		// 清理提案数据
+		if err := p.cleanupProposalsBucket(tx, p.targetHeight, logger); err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	// 清理奖励数据库（独立数据库）
+	if err := p.cleanupEpochRewardsBucket(targetEpoch, logger); err != nil {
+		return fmt.Errorf("failed to cleanup epoch rewards: %w", err)
+	}
+
+	return nil
+}
+
+// calculateTargetEpoch 计算目标高度对应的epoch
+func (p *rollbackParams) calculateTargetEpoch(targetHeight uint64) uint64 {
+	if targetHeight < p.consensusSwitchHeight {
+		return 0
+	}
+
+	dposBlockNumber := targetHeight - p.consensusSwitchHeight
+	epochNumber := (dposBlockNumber / p.epochSize) + 1
+
+	return epochNumber
+}
+
+// cleanupEpochsBucket 清理epochs bucket
+func (p *rollbackParams) cleanupEpochsBucket(
+	tx *bolt.Tx,
+	targetEpoch uint64,
+	logger hclog.Logger,
+) error {
+	bucket := tx.Bucket([]byte("epochs"))
+	if bucket == nil {
+		return nil
+	}
+
+	cursor := bucket.Cursor()
+	deletedCount := 0
+	for k, _ := cursor.First(); k != nil; k, _ = cursor.Next() {
+		epochNumber := binary.BigEndian.Uint64(k)
+		if epochNumber > targetEpoch {
+			if err := cursor.Delete(); err != nil {
+				return fmt.Errorf("failed to delete epoch %d: %w", epochNumber, err)
+			}
+			deletedCount++
+		}
+	}
+
+	if deletedCount > 0 {
+		logger.Info("Cleaned up epochs bucket", "deletedCount", deletedCount)
+	}
+
+	return nil
+}
+
+// cleanupValidatorSnapshotsBucket 清理验证者快照
+func (p *rollbackParams) cleanupValidatorSnapshotsBucket(
+	tx *bolt.Tx,
+	targetEpoch uint64,
+	logger hclog.Logger,
+) error {
+	bucket := tx.Bucket([]byte("validatorSnapshots"))
+	if bucket == nil {
+		return nil
+	}
+
+	cursor := bucket.Cursor()
+	deletedCount := 0
+	for k, _ := cursor.First(); k != nil; k, _ = cursor.Next() {
+		epochNumber := binary.BigEndian.Uint64(k)
+		if epochNumber > targetEpoch {
+			if err := cursor.Delete(); err != nil {
+				return fmt.Errorf("failed to delete validator snapshot for epoch %d: %w", epochNumber, err)
+			}
+			deletedCount++
+		}
+	}
+
+	if deletedCount > 0 {
+		logger.Info("Cleaned up validator snapshots bucket", "deletedCount", deletedCount)
+	}
+
+	return nil
+}
+
+// cleanupEpochBlocksBucket 清理出块统计
+func (p *rollbackParams) cleanupEpochBlocksBucket(
+	tx *bolt.Tx,
+	targetEpoch uint64,
+	logger hclog.Logger,
+) error {
+	bucket := tx.Bucket([]byte("EpochBlocks"))
+	if bucket == nil {
+		return nil
+	}
+
+	cursor := bucket.Cursor()
+	deletedCount := 0
+	for k, _ := cursor.First(); k != nil; k, _ = cursor.Next() {
+		epochNumber := binary.BigEndian.Uint64(k)
+		if epochNumber > targetEpoch {
+			if err := cursor.Delete(); err != nil {
+				return fmt.Errorf("failed to delete epoch blocks for epoch %d: %w", epochNumber, err)
+			}
+			deletedCount++
+		}
+	}
+
+	if deletedCount > 0 {
+		logger.Info("Cleaned up epoch blocks bucket", "deletedCount", deletedCount)
+	}
+
+	return nil
+}
+
+// cleanupEpochRewardsBucket 清理奖励记录
+func (p *rollbackParams) cleanupEpochRewardsBucket(
+	targetEpoch uint64,
+	logger hclog.Logger,
+) error {
+	// 奖励数据在独立的数据库中
+	rewardDBPath := filepath.Join(p.dataDir, "dpos.db.rewards")
+	if _, err := os.Stat(rewardDBPath); os.IsNotExist(err) {
+		return nil
+	}
+
+	rewardDB, err := bolt.Open(rewardDBPath, 0666, nil)
+	if err != nil {
+		return fmt.Errorf("failed to open reward database: %w", err)
+	}
+	defer rewardDB.Close()
+
+	return rewardDB.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("EpochRewards"))
+		if bucket == nil {
+			return nil
+		}
+
+		cursor := bucket.Cursor()
+		deletedCount := 0
+		for k, _ := cursor.First(); k != nil; k, _ = cursor.Next() {
+			epochNumber := binary.BigEndian.Uint64(k)
+			if epochNumber > targetEpoch {
+				if err := cursor.Delete(); err != nil {
+					return fmt.Errorf("failed to delete epoch reward for epoch %d: %w", epochNumber, err)
+				}
+				deletedCount++
+			}
+		}
+
+		if deletedCount > 0 {
+			logger.Info("Cleaned up epoch rewards bucket", "deletedCount", deletedCount)
+		}
+
+		return nil
+	})
+}
+
+// cleanupVotingPowerBucket 清理投票权重
+func (p *rollbackParams) cleanupVotingPowerBucket(
+	tx *bolt.Tx,
+	targetHeight uint64,
+	logger hclog.Logger,
+) error {
+	bucket := tx.Bucket([]byte("VotingPowerAtBlock"))
+	if bucket == nil {
+		return nil
+	}
+
+	cursor := bucket.Cursor()
+	deletedCount := 0
+	for k, _ := cursor.First(); k != nil; k, _ = cursor.Next() {
+		if len(k) >= 8 {
+			blockNumber := binary.BigEndian.Uint64(k[:8])
+			if blockNumber > targetHeight {
+				if err := cursor.Delete(); err != nil {
+					return fmt.Errorf("failed to delete voting power for block %d: %w", blockNumber, err)
+				}
+				deletedCount++
+			}
+		}
+	}
+
+	if deletedCount > 0 {
+		logger.Info("Cleaned up voting power bucket", "deletedCount", deletedCount)
+	}
+
+	return nil
+}
+
+// cleanupProposalsBucket 清理提案数据
+func (p *rollbackParams) cleanupProposalsBucket(
+	tx *bolt.Tx,
+	targetHeight uint64,
+	logger hclog.Logger,
+) error {
+	bucket := tx.Bucket([]byte("proposals"))
+	if bucket == nil {
+		return nil
+	}
+
+	// 提案数据结构需要根据实际情况调整
+	// 这里假设提案包含区块高度信息
+	cursor := bucket.Cursor()
+	keysToDelete := [][]byte{}
+
+	for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
+		// 尝试解析提案数据
+		var proposalData map[string]interface{}
+		if err := json.Unmarshal(v, &proposalData); err != nil {
+			// 如果解析失败，跳过
+			continue
+		}
+
+		// 检查提案的区块高度字段
+		// 根据实际提案结构调整字段名
+		if endBlock, ok := proposalData["endBlock"].(float64); ok {
+			if uint64(endBlock) > targetHeight {
+				keysToDelete = append(keysToDelete, k)
+			}
+		} else if startBlock, ok := proposalData["startBlock"].(float64); ok {
+			// 如果只有startBlock，检查是否在目标高度之后
+			if uint64(startBlock) > targetHeight {
+				keysToDelete = append(keysToDelete, k)
+			}
+		}
+	}
+
+	// 删除标记的提案
+	deletedCount := 0
+	for _, key := range keysToDelete {
+		if err := bucket.Delete(key); err != nil {
+			return fmt.Errorf("failed to delete proposal: %w", err)
+		}
+		deletedCount++
+	}
+
+	if deletedCount > 0 {
+		logger.Info("Cleaned up proposals bucket", "deletedCount", deletedCount)
+	}
+
+	return nil
+}
+
+func (p *rollbackParams) getResult() command.CommandResult {
+	return &RollbackResult{
+		CurrentHeight: p.currentHeight,
+		TargetHeight:  p.targetHeight,
+		TargetHash:    p.targetHash.String(),
+		BlocksDeleted: p.blocksDeleted,
+		KeepBlocks:    p.keepBlocks,
+	}
+}
+
