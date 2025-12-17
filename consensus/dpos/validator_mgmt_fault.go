@@ -233,10 +233,6 @@ func (d *DPoS) getValidatorFaultInfo(validatorAddr types.Address) map[string]int
 
 // detectValidatorFaults 检测验证者故障（重构后）
 func (d *DPoS) detectValidatorFaults(blockNumber uint64) ([]FaultFlagInfo, error) {
-	d.logger.Info("🚀 ===== 开始检测验证者故障 =====",
-		"blockNumber", blockNumber,
-		"timestamp", time.Now().Format("2006-01-02 15:04:05"))
-
 	// 获取或创建FaultDetector
 	detector := d.getFaultDetector()
 	if detector == nil {
@@ -574,23 +570,13 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 
 	// 计算每个epoch中该验证者应该出块的次数
 	blocksPerEpoch := d.getEpochSize()
-	d.logger.Info("🔍 [calculateMissedBlocksWithActual] 开始计算出块统计",
-		"validatorAddr", validatorAddr.String(),
-		"startEpoch", startEpoch,
-		"endEpoch", endEpoch,
-		"blocksPerEpoch", blocksPerEpoch)
 
 	// 🔧 修复：当 startEpoch == endEpoch 时也应该计算（单个epoch的统计）
 	if endEpoch >= startEpoch {
 		epochToCheck = endEpoch
 		epochNumberForCheck := epochToCheck + 1
 
-		d.logger.Info("🔍 [calculateMissedBlocksWithActual] Epoch信息",
-			"epochToCheck", epochToCheck,
-			"epochNumberForCheck", epochNumberForCheck,
-			"validatorAddr", validatorAddr.String())
-
-		// 修复：从该epoch开始区块的ExtraData或数据库获取该epoch的验证者集合
+		// 从该epoch开始区块的ExtraData或数据库获取该epoch的验证者集合
 		validatorsCount := uint64(0)
 		var validatorsSource string
 		var epochValidators validator.AccountSet

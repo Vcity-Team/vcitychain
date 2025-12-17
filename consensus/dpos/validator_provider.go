@@ -39,36 +39,22 @@ func (vp *ValidatorProvider) GetValidatorsForDetection(epochInfo EpochInfo) (val
 	var epochValidators validator.AccountSet
 	var err error
 
-	// 🔧 修复：使用 = 而不是 :=，确保使用外部声明的 epochValidators 变量
 	if epochValidators, err = vp.dposInstance.getValidatorsForEpoch(epochNumberForValidators); err == nil && len(epochValidators) > 0 {
 		validatorSource = "ExtraData/StakeStore"
-		vp.logger.Info("✅ 从ExtraData获取要检测epoch的验证者集合",
-			"epoch", epochNumberForValidators,
-			"count", len(epochValidators))
 	} else if vp.dposInstance.runtime != nil && vp.dposInstance.runtime.delegates != nil && len(vp.dposInstance.runtime.delegates) > 0 {
 		// 备用方案：使用 runtime.delegates（最实时）
 		epochValidators = vp.dposInstance.runtime.delegates.Copy()
 		validatorSource = "runtime.delegates"
-		vp.logger.Info("✅ 使用runtime.delegates作为要检测epoch的验证者集合",
-			"epoch", epochNumberForValidators,
-			"count", len(epochValidators))
 	} else if len(vp.dposInstance.delegates) > 0 {
 		// 最后使用 d.delegates
 		epochValidators = vp.dposInstance.delegates.Copy()
 		validatorSource = "d.delegates"
-		vp.logger.Info("✅ 使用d.delegates作为要检测epoch的验证者集合",
-			"epoch", epochNumberForValidators,
-			"count", len(epochValidators))
 	} else {
 		vp.logger.Error("❌ 无法获取要检测epoch的验证者集合",
 			"epoch", epochNumberForValidators)
 		return nil, fmt.Errorf("no validators available for epoch %d", epochNumberForValidators)
 	}
-
-	vp.logger.Info("ℹ️ 要检测epoch的验证者集合来源",
-		"epoch", epochNumberForValidators,
-		"source", validatorSource,
-		"count", len(epochValidators))
+	_ = validatorSource // 保留变量用于调试
 
 	return epochValidators, nil
 }

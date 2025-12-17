@@ -92,10 +92,6 @@ func (d *DPoS) initializeEconomicSystem() error {
 // handleEpochSwitch 处理epoch切换回调
 func (d *DPoS) handleEpochSwitch(epochNumber uint64) error {
 	currentTime := time.Now()
-	d.logger.Info("🔄 处理epoch切换",
-		"epoch", epochNumber,
-		"currentTime", currentTime.Format("2006-01-02 15:04:05"))
-
 	// 1. 启动新epoch的时间调度
 	if d.blockScheduler != nil {
 		d.blockScheduler.StartNewEpoch(epochNumber, currentTime)

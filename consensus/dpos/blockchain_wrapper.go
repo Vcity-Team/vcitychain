@@ -204,9 +204,7 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			"blockHash", block.Hash().String()[:16])
 
 		// 奖励分配与故障统计完成后，再在边界应用已登记的待生效提案和投票，避免被同区块统计覆盖
-		p.logger.Info("🔍 [ProcessBlockExecutor] 开始边界应用提案和投票流程", "blockNumber", block.Number())
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-			p.logger.Info("✅ [ProcessBlockExecutor] DPoS实例存在", "blockNumber", block.Number())
 			// 因为 getEpochForBlock(block.Number()) 在epoch结束区块时可能返回下一个epoch
 			var currentEpoch uint64
 			if block.Number() > 0 {
@@ -214,12 +212,10 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 				currentEpochMeta := dposInstance.getEpochForBlock(block.Number() - 1)
 				if currentEpochMeta != nil {
 					currentEpoch = currentEpochMeta.Number
-					p.logger.Info("📊 [ProcessBlockExecutor] 计算epoch信息（使用前一个区块）", "blockNumber", block.Number(), "prevBlockNumber", block.Number()-1, "currentEpoch", currentEpoch, "firstBlockInEpoch", currentEpochMeta.FirstBlockInEpoch)
 				} else {
 					currentEpochMeta = dposInstance.getEpochForBlock(block.Number())
 					if currentEpochMeta != nil {
 						currentEpoch = currentEpochMeta.Number
-						p.logger.Info("📊 [ProcessBlockExecutor] 计算epoch信息（使用当前区块）", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "firstBlockInEpoch", currentEpochMeta.FirstBlockInEpoch)
 					}
 				}
 			} else {
@@ -227,7 +223,6 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 				currentEpochMeta := dposInstance.getEpochForBlock(block.Number())
 				if currentEpochMeta != nil {
 					currentEpoch = currentEpochMeta.Number
-					p.logger.Info("📊 [ProcessBlockExecutor] 计算epoch信息", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "firstBlockInEpoch", currentEpochMeta.FirstBlockInEpoch)
 				}
 			}
 			if currentEpoch == 0 {
