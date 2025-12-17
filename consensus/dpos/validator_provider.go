@@ -1,7 +1,9 @@
 package dpos
 
 import (
+	"bytes"
 	"fmt"
+	"sort"
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
@@ -32,29 +34,61 @@ type EpochInfo struct {
 }
 
 // GetValidatorsForDetection 获取用于故障检测的验证者集合
+// 🔧 修复：优先使用当前活跃验证者（runtime.delegates），而不是数据库中的历史记录
+// 原因：故障检测的目的是判断"当前应该出块的验证者"是否正常
+// 被剔除的验证者不应该被检测（它们不需要出块）
 func (vp *ValidatorProvider) GetValidatorsForDetection(epochInfo EpochInfo) (validator.AccountSet, error) {
-	// 🔧 修复：应该检测上一个epoch的验证者故障，所以获取要检测的epoch（EpochToCheck）的验证者集合
-	validatorSource := "unknown"
-	epochNumberForValidators := epochInfo.EpochToCheckNumber // 使用要检测的epoch，而不是当前epoch
 	var epochValidators validator.AccountSet
-	var err error
+	validatorSource := "unknown"
 
-	if epochValidators, err = vp.dposInstance.getValidatorsForEpoch(epochNumberForValidators); err == nil && len(epochValidators) > 0 {
-		validatorSource = "ExtraData/StakeStore"
-	} else if vp.dposInstance.runtime != nil && vp.dposInstance.runtime.delegates != nil && len(vp.dposInstance.runtime.delegates) > 0 {
-		// 备用方案：使用 runtime.delegates（最实时）
+	// 🔧 优先使用当前活跃验证者（最准确）
+	if vp.dposInstance.runtime != nil && vp.dposInstance.runtime.delegates != nil && len(vp.dposInstance.runtime.delegates) > 0 {
 		epochValidators = vp.dposInstance.runtime.delegates.Copy()
 		validatorSource = "runtime.delegates"
 	} else if len(vp.dposInstance.delegates) > 0 {
-		// 最后使用 d.delegates
 		epochValidators = vp.dposInstance.delegates.Copy()
 		validatorSource = "d.delegates"
 	} else {
-		vp.logger.Error("❌ 无法获取要检测epoch的验证者集合",
-			"epoch", epochNumberForValidators)
-		return nil, fmt.Errorf("no validators available for epoch %d", epochNumberForValidators)
+		// 备用方案：从数据库获取验证者 A，与配置中的验证者数量 B 比较，返回较小者
+		epochNumberForValidators := epochInfo.EpochToCheckNumber
+		dbValidators, err := vp.dposInstance.getValidatorsForEpoch(epochNumberForValidators)
+		if err != nil || len(dbValidators) == 0 {
+			vp.logger.Error("❌ 无法获取要检测epoch的验证者集合",
+				"epoch", epochNumberForValidators,
+				"error", err)
+			return nil, fmt.Errorf("no validators available for epoch %d", epochNumberForValidators)
+		}
+
+		// 获取配置中的最大验证者数量
+		maxValidators := int(vp.dposInstance.config.DPoSValidatorsCount)
+
+		// 比较 A 和 B，返回较小者
+		if maxValidators > 0 && len(dbValidators) > maxValidators {
+			// A > B，截取前 B 个（按投票权排序后截取）
+			// 先按投票权倒序排序（权重相同时按地址字节升序排序）
+			sort.Slice(dbValidators, func(i, j int) bool {
+				votingPowerCmp := dbValidators[i].VotingPower.Cmp(dbValidators[j].VotingPower)
+				if votingPowerCmp != 0 {
+					return votingPowerCmp > 0
+				}
+				return bytes.Compare(dbValidators[i].Address[:], dbValidators[j].Address[:]) < 0
+			})
+			epochValidators = dbValidators[:maxValidators]
+			validatorSource = fmt.Sprintf("database(truncated:%d->%d)", len(dbValidators), maxValidators)
+			vp.logger.Info("📋 备用方案：从数据库获取验证者并截取",
+				"dbCount", len(dbValidators),
+				"configCount", maxValidators,
+				"finalCount", len(epochValidators))
+		} else {
+			// A <= B，直接返回 A
+			epochValidators = dbValidators
+			validatorSource = "database"
+		}
 	}
-	_ = validatorSource // 保留变量用于调试
+
+	vp.logger.Debug("📋 故障检测使用的验证者集合",
+		"source", validatorSource,
+		"count", len(epochValidators))
 
 	return epochValidators, nil
 }
