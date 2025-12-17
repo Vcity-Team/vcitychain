@@ -2069,26 +2069,7 @@ func (r *dposRuntime) isValidator() bool {
 		}
 	}
 
-	// 当前节点不在截取后的验证者集合中
-	maxValidators := int(dposBackend.config.DPoSValidatorsCount)
-
-	// 详细调试信息
-	r.logger.Info("❌ 当前节点不在数据库验证者集合中（可能权重不足被截取）",
-		"address", currentAddr.String(),
-		"maxValidators", maxValidators,
-		"dbValidatorsCount", len(dbValidators),
-		"configDPoSValidatorsCount", dposBackend.config.DPoSValidatorsCount)
-
-	// 显示所有验证者的详细信息
-	r.logger.Info("🔍 截取后的验证者详细信息:")
-	for i, validator := range dbValidators {
-		r.logger.Info("👤 截取后验证者",
-			"index", i+1,
-			"address", validator.Address.String(),
-			"votingPower", validator.VotingPower.String(),
-			"isActive", validator.IsActive,
-			"isCurrentNode", validator.Address == currentAddr)
-	}
+	// 当前节点不在截取后的验证者集合中（权重不足被截取）
 	return false
 }
 

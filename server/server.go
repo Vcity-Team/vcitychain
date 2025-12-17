@@ -996,23 +996,16 @@ func extractBlockTime(engineConfig map[string]interface{}) (common.Duration, err
 		return common.Duration{}, errBlockTimeMissing
 	}
 
-	// 添加调试日志
-	fmt.Printf("🔍 extractBlockTime: blockTimeGeneric = %v (type: %T)\n", blockTimeGeneric, blockTimeGeneric)
-
 	blockTimeRaw, err := json.Marshal(blockTimeGeneric)
 	if err != nil {
 		return common.Duration{}, errBlockTimeInvalid
 	}
-
-	fmt.Printf("🔍 extractBlockTime: blockTimeRaw = %s\n", string(blockTimeRaw))
 
 	var blockTime common.Duration
 
 	if err := json.Unmarshal(blockTimeRaw, &blockTime); err != nil {
 		return common.Duration{}, errBlockTimeInvalid
 	}
-
-	fmt.Printf("🔍 extractBlockTime: parsed blockTime = %v (seconds: %f)\n", blockTime.Duration, blockTime.Seconds())
 
 	if blockTime.Seconds() < 1 {
 		return common.Duration{}, errBlockTimeInvalid

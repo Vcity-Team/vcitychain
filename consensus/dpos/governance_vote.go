@@ -131,7 +131,6 @@ func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, s
 	return nil
 }
 
-// CheckProposalResult 检查提案投票结果
 // 注意：调用此函数时，调用者必须已经持有 d.lock 锁，否则会导致死锁
 func (d *DPoS) CheckProposalResult(proposalID string) error {
 	checkStartTime := time.Now()
