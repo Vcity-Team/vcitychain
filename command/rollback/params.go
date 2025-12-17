@@ -489,7 +489,7 @@ func (p *rollbackParams) cleanupDPoSConsensusState(logger hclog.Logger) error {
 	defer db.Close()
 
 	// 清理各个bucket的数据
-	return db.Update(func(tx *bolt.Tx) error {
+	err = db.Update(func(tx *bolt.Tx) error {
 		// 清理 epochs bucket
 		if err := p.cleanupEpochsBucket(tx, targetEpoch, logger); err != nil {
 			return err
@@ -510,6 +510,11 @@ func (p *rollbackParams) cleanupDPoSConsensusState(logger hclog.Logger) error {
 			return err
 		}
 
+		// 回滚参数值（必须在清理提案之前，需要用提案的OldValue恢复）
+		if err := p.rollbackParameterValues(tx, targetEpoch, logger); err != nil {
+			return err
+		}
+
 		// 清理提案数据
 		if err := p.cleanupProposalsBucket(tx, p.targetHeight, logger); err != nil {
 			return err
@@ -522,6 +527,10 @@ func (p *rollbackParams) cleanupDPoSConsensusState(logger hclog.Logger) error {
 
 		return nil
 	})
+
+	if err != nil {
+		return fmt.Errorf("failed to cleanup DPoS state: %w", err)
+	}
 
 	// 清理奖励数据库（独立数据库）
 	if err := p.cleanupEpochRewardsBucket(targetEpoch, logger); err != nil {
@@ -811,6 +820,132 @@ func (p *rollbackParams) cleanupValidatorFaultStatusBucket(
 	if deletedCount > 0 {
 		logger.Info("Cleaned up validator fault status bucket",
 			"deletedCount", deletedCount,
+			"targetEpoch", targetEpoch)
+	}
+
+	return nil
+}
+
+// rollbackParameterValues 回滚参数值
+// 找到 effectiveEpoch > targetEpoch 且已执行的参数提案，用 OldValue 恢复参数值
+func (p *rollbackParams) rollbackParameterValues(
+	tx *bolt.Tx,
+	targetEpoch uint64,
+	logger hclog.Logger,
+) error {
+	proposalsBucket := tx.Bucket([]byte("proposals"))
+	if proposalsBucket == nil {
+		return nil
+	}
+
+	parametersBucket := tx.Bucket([]byte("parameters"))
+	if parametersBucket == nil {
+		// 参数bucket不存在，无需回滚
+		return nil
+	}
+
+	cursor := proposalsBucket.Cursor()
+	restoredCount := 0
+
+	for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
+		var proposalData map[string]interface{}
+		if err := json.Unmarshal(v, &proposalData); err != nil {
+			continue
+		}
+
+		// 只处理参数类型的提案
+		proposalType, _ := proposalData["proposalType"].(string)
+		if proposalType != "parameter" {
+			continue
+		}
+
+		// 检查是否已执行
+		schedule, hasSchedule := proposalData["schedule"].(map[string]interface{})
+		if !hasSchedule {
+			continue
+		}
+
+		applied, _ := schedule["applied"].(bool)
+		if !applied {
+			// 未执行的提案不需要回滚
+			continue
+		}
+
+		// 获取 effectiveEpoch
+		effectiveEpoch := uint64(0)
+		if eff, ok := schedule["effectiveEpoch"].(float64); ok {
+			effectiveEpoch = uint64(eff)
+		}
+
+		// 如果提案在目标epoch之后生效，需要回滚
+		if effectiveEpoch > targetEpoch {
+			paramName, _ := proposalData["parameter"].(string)
+			oldValue := proposalData["oldValue"]
+
+			if paramName == "" || oldValue == nil {
+				logger.Warn("Invalid proposal data for rollback",
+					"proposalID", string(k),
+					"parameter", paramName)
+				continue
+			}
+
+			// 构造参数值结构
+			paramValue := map[string]interface{}{
+				"current_value": oldValue,
+				"updated_at":    time.Now().Format(time.RFC3339),
+				"source":        fmt.Sprintf("rollback_to_epoch_%d", targetEpoch),
+			}
+
+			paramData, err := json.Marshal(paramValue)
+			if err != nil {
+				logger.Warn("Failed to marshal parameter value",
+					"parameter", paramName,
+					"error", err)
+				continue
+			}
+
+			// 恢复参数值
+			if err := parametersBucket.Put([]byte(paramName), paramData); err != nil {
+				logger.Warn("Failed to restore parameter value",
+					"parameter", paramName,
+					"error", err)
+				continue
+			}
+
+			// 重置提案的执行状态
+			schedule["applied"] = false
+			schedule["appliedAtBlock"] = nil
+			proposalData["schedule"] = schedule
+			proposalData["status"] = "scheduled" // 重置为已调度状态
+
+			updatedProposal, err := json.Marshal(proposalData)
+			if err != nil {
+				logger.Warn("Failed to marshal updated proposal",
+					"proposalID", string(k),
+					"error", err)
+				continue
+			}
+
+			if err := proposalsBucket.Put(k, updatedProposal); err != nil {
+				logger.Warn("Failed to update proposal status",
+					"proposalID", string(k),
+					"error", err)
+				continue
+			}
+
+			logger.Info("Restored parameter value from proposal",
+				"parameter", paramName,
+				"oldValue", oldValue,
+				"effectiveEpoch", effectiveEpoch,
+				"proposalID", string(k))
+
+			restoredCount++
+		}
+	}
+
+	if restoredCount > 0 {
+		logger.Info("Rolled back parameter values",
+			"restoredCount", restoredCount,
 			"targetEpoch", targetEpoch)
 	}
 
