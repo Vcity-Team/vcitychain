@@ -610,9 +610,9 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 		}
 
 		// 6. 计算漏块数
-		if expectedBlocks > actualBlocks {
-			missedBlocks = expectedBlocks - actualBlocks
-		}
+			if expectedBlocks > actualBlocks {
+				missedBlocks = expectedBlocks - actualBlocks
+			}
 
 		d.logger.Info("📊 [calculateMissedBlocksWithActual] 出块统计",
 			"validator", validatorAddr.String(),

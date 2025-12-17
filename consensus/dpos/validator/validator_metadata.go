@@ -355,7 +355,7 @@ func (as AccountSet) GetFilteredValidators(bitmap bitmap.Bitmap) (AccountSet, er
 	for i := uint64(0); i < effectiveBitmapLen; i++ {
 		if bitmap.IsSet(i) {
 			// BLS key 为 nil 时仍然添加验证者，确保参与法定人数计算
-			filteredValidators = append(filteredValidators, as[i])
+				filteredValidators = append(filteredValidators, as[i])
 		}
 	}
 

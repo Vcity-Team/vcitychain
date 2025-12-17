@@ -221,32 +221,32 @@ func (r *dposRuntime) produceBlock() error {
 
 	var currentDelegateInfo *validator.ValidatorMetadata
 
-	if r.config != nil && r.config.dposBackend != nil {
-		dposInstance, ok := r.config.dposBackend.(*DPoS)
-		if ok && dposInstance != nil {
+		if r.config != nil && r.config.dposBackend != nil {
+			dposInstance, ok := r.config.dposBackend.(*DPoS)
+			if ok && dposInstance != nil {
 			// 使用与验证时相同的验证者集合获取方法（过滤故障的）-确保生产区块和验证区块时使用相同的验证者集合，避免位图索引不匹配
-			dbValidators, err := dposInstance.GetSortedValidatorsWithLimitFilterFaulty()
-			if err != nil {
-				r.logger.Error("❌ 从数据库读取验证者失败", "error", err)
-				return fmt.Errorf("failed to get validators from database: %w", err)
-			}
-
-			// 在数据库验证者集合中查找当前节点
-			for _, delegate := range dbValidators {
-				if delegate.Address == keyAddr {
-					currentDelegateInfo = delegate
-					// 确保IsActive为true（验证者应该都是活跃的）
-					currentDelegateInfo.IsActive = true
-					break
+				dbValidators, err := dposInstance.GetSortedValidatorsWithLimitFilterFaulty()
+				if err != nil {
+					r.logger.Error("❌ 从数据库读取验证者失败", "error", err)
+					return fmt.Errorf("failed to get validators from database: %w", err)
 				}
-			}
 
-			// 如果从数据库找到验证者，更新内存缓存（用于其他非关键逻辑）
-			if len(dbValidators) > 0 {
-				r.lock.Lock()
-				r.delegates = dbValidators
-				r.lock.Unlock()
-			}
+				// 在数据库验证者集合中查找当前节点
+				for _, delegate := range dbValidators {
+					if delegate.Address == keyAddr {
+						currentDelegateInfo = delegate
+						// 确保IsActive为true（验证者应该都是活跃的）
+						currentDelegateInfo.IsActive = true
+						break
+					}
+				}
+
+				// 如果从数据库找到验证者，更新内存缓存（用于其他非关键逻辑）
+				if len(dbValidators) > 0 {
+					r.lock.Lock()
+					r.delegates = dbValidators
+					r.lock.Unlock()
+				}
 		} else {
 			r.logger.Error("❌ dposBackend类型转换失败，无法获取验证者信息")
 			return fmt.Errorf("invalid dpos backend type")

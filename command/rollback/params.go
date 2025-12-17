@@ -23,10 +23,10 @@ import (
 
 const (
 	configFlag       = "config"
-	dataDirFlag       = "data-dir"
-	targetHeightFlag  = "target-height"
-	forceFlag         = "force"
-	keepBlocksFlag    = "keep-blocks"
+	dataDirFlag      = "data-dir"
+	targetHeightFlag = "target-height"
+	forceFlag        = "force"
+	keepBlocksFlag   = "keep-blocks"
 )
 
 var (
@@ -42,7 +42,7 @@ var (
 )
 
 type rollbackParams struct {
-	configPath     string
+	configPath      string
 	dataDir         string
 	targetHeightRaw string
 	targetHeight    uint64
@@ -344,7 +344,7 @@ func (p *rollbackParams) loadEpochConfig(dataDir string, logger hclog.Logger) er
 
 	// 简单解析yaml（查找关键字段）
 	configStr := string(configData)
-	
+
 	// 解析 dpos_epoch_duration
 	epochDurationStr := "48s" // 默认值
 	if idx := strings.Index(configStr, "dpos_epoch_duration:"); idx != -1 {
@@ -512,6 +512,11 @@ func (p *rollbackParams) cleanupDPoSConsensusState(logger hclog.Logger) error {
 
 		// 清理提案数据
 		if err := p.cleanupProposalsBucket(tx, p.targetHeight, logger); err != nil {
+			return err
+		}
+
+		// 清理验证者故障状态（根据 epoch 清理）
+		if err := p.cleanupValidatorFaultStatusBucket(tx, targetEpoch, logger); err != nil {
 			return err
 		}
 
@@ -757,6 +762,61 @@ func (p *rollbackParams) cleanupProposalsBucket(
 	return nil
 }
 
+// cleanupValidatorFaultStatusBucket 清理验证者故障状态
+// 删除 lastFaultyEpoch > targetEpoch 的故障记录
+func (p *rollbackParams) cleanupValidatorFaultStatusBucket(
+	tx *bolt.Tx,
+	targetEpoch uint64,
+	logger hclog.Logger,
+) error {
+	bucket := tx.Bucket([]byte("validatorFaultStatus"))
+	if bucket == nil {
+		return nil
+	}
+
+	cursor := bucket.Cursor()
+	deletedCount := 0
+	var keysToDelete [][]byte
+
+	for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
+		// 解析故障状态信息
+		var faultInfo map[string]interface{}
+		if err := json.Unmarshal(v, &faultInfo); err != nil {
+			logger.Warn("Failed to parse fault status, skipping",
+				"key", fmt.Sprintf("%x", k),
+				"error", err)
+			continue
+		}
+
+		// 获取 lastFaultyEpoch
+		lastFaultyEpoch := uint64(0)
+		if lfe, ok := faultInfo["lastFaultyEpoch"].(float64); ok {
+			lastFaultyEpoch = uint64(lfe)
+		}
+
+		// 如果故障记录的 epoch 大于目标 epoch，删除该记录
+		if lastFaultyEpoch > targetEpoch {
+			keysToDelete = append(keysToDelete, append([]byte{}, k...))
+			deletedCount++
+		}
+	}
+
+	// 删除标记的记录
+	for _, key := range keysToDelete {
+		if err := bucket.Delete(key); err != nil {
+			return fmt.Errorf("failed to delete validator fault status: %w", err)
+		}
+	}
+
+	if deletedCount > 0 {
+		logger.Info("Cleaned up validator fault status bucket",
+			"deletedCount", deletedCount,
+			"targetEpoch", targetEpoch)
+	}
+
+	return nil
+}
+
 func (p *rollbackParams) getResult() command.CommandResult {
 	return &RollbackResult{
 		CurrentHeight: p.currentHeight,
@@ -766,4 +826,3 @@ func (p *rollbackParams) getResult() command.CommandResult {
 		KeepBlocks:    p.keepBlocks,
 	}
 }
-
