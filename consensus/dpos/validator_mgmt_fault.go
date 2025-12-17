@@ -185,15 +185,9 @@ func (d *DPoS) getValidatorFaultInfo(validatorAddr types.Address) map[string]int
 				"address", validatorAddr.String(),
 				"error", err)
 		} else if dbFaultInfo != nil {
-			d.logger.Debug("🔍 从数据库读取到故障状态",
-				"address", validatorAddr.String(),
-				"dbFaultInfo", dbFaultInfo)
 			if isFaulty, ok := dbFaultInfo["isFaulty"].(bool); ok {
 				faultInfo["isFaulty"] = isFaulty
 			}
-		} else {
-			d.logger.Debug("🔍 数据库中没有找到故障状态记录",
-				"address", validatorAddr.String())
 
 			if missedBlocks, ok := dbFaultInfo["missedBlocks"].(float64); ok {
 				faultInfo["missedBlocks"] = uint64(missedBlocks)
@@ -218,9 +212,19 @@ func (d *DPoS) getValidatorFaultInfo(validatorAddr types.Address) map[string]int
 			} else {
 				// 调试：检查reason字段的实际类型和值
 				if reasonValue, exists := dbFaultInfo["reason"]; exists {
+					d.logger.Error("❌ Reason字段类型错误",
+						"address", validatorAddr.String(),
+						"reasonType", fmt.Sprintf("%T", reasonValue),
+						"reasonValue", reasonValue)
 					faultInfo["reason"] = fmt.Sprintf("Type: %T, Value: %v", reasonValue, reasonValue)
+				} else {
+					d.logger.Error("❌ Reason字段不存在",
+						"address", validatorAddr.String())
 				}
 			}
+		} else {
+			d.logger.Debug("🔍 数据库中没有找到故障状态记录",
+				"address", validatorAddr.String())
 		}
 	}
 

@@ -320,7 +320,6 @@ func (m *syncPeerClient) handleStatusUpdate(obj interface{}, from peer.ID) {
 		return
 	}
 
-	// 添加状态接收日志
 	m.logger.Debug("📨 收到状态广播",
 		"来源节点", from.String(),
 		"区块高度", status.Number,
@@ -335,7 +334,6 @@ func (m *syncPeerClient) handleStatusUpdate(obj interface{}, from peer.ID) {
 	m.peerStatusUpdateChLock.Lock()
 	defer m.peerStatusUpdateChLock.Unlock()
 
-	// 监控channel长度，避免积压
 	channelLen := len(m.peerStatusUpdateCh)
 	if channelLen > 50 {
 		m.logger.Warn("peerStatusUpdateCh积压严重", "长度", channelLen, "来源节点", from.String())

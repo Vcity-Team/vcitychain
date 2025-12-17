@@ -176,9 +176,13 @@ func (r *VotingStakingInfoResult) GetOutput() string {
 							// 调试：显示reason字段的实际类型和值
 							if reasonValue, exists := faultFlag["reason"]; exists {
 								output += fmt.Sprintf("   Reason Debug: Type=%T, Value=%v\n", reasonValue, reasonValue)
+							} else {
+								output += fmt.Sprintf("   Reason field missing from faultFlag\n")
 							}
 						}
 					}
+				} else {
+					output += fmt.Sprintf("   Faulty: invalid type\n")
 				}
 			}
 
@@ -457,8 +461,6 @@ func callVotingStakingInfoRPCMethodHTTPWithAddress(method string, methodParams [
 
 // parseVotingStakingInfoResult parses the RPC result into VotingStakingInfoResult
 func parseVotingStakingInfoResult(result interface{}) (*VotingStakingInfoResult, error) {
-	// Debug: log the raw result
-	// fmt.Printf("DEBUG: Raw result type: %T, value: %+v\n", result, result)
 
 	// 新逻辑：处理 dpos_getStakingInfo 返回的数组格式
 	if stakingInfoList, ok := result.([]interface{}); ok {
