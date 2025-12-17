@@ -51,22 +51,16 @@ func (fc *FaultCalculator) CalculateFaultFlag(
 	}
 
 	missedBlocksPercentageThreshold := fc.dposInstance.getMissedBlocksPercentage()
-	// 使用漏块率判断故障（而不是绝对漏块数）
 	isFaulty := stats.ExpectedBlocks > 0 && missedBlocksPercentage >= missedBlocksPercentageThreshold
 
-	// 记录故障判断过程（info级别日志）
-	fc.logger.Info("🔍 [故障判断] 计算验证者故障状态",
-		"validatorAddress", validator.Address.String(),
-		"epochNumber", epochInfo.EpochToCheckNumber,
-		"expectedBlocks", stats.ExpectedBlocks,
-		"actualBlocks", stats.ActualBlocks,
-		"missedBlocks", stats.MissedBlocks,
-		"missedBlocksPercentage", missedBlocksPercentage,
-		"missedBlocksPercentageThreshold", missedBlocksPercentageThreshold,
-		"isFaulty", isFaulty,
-		"formula", fmt.Sprintf("missedBlocksPercentage (%d bp) >= threshold (%d bp) ? %v", missedBlocksPercentage, missedBlocksPercentageThreshold, isFaulty))
+	fc.logger.Info("🔍 [故障判断]",
+		"validator", validator.Address.String(),
+		"epoch", epochInfo.EpochToCheckNumber,
+		"missed", fmt.Sprintf("%d/%d", stats.MissedBlocks, stats.ExpectedBlocks),
+		"pct", fmt.Sprintf("%dbp/%dbp", missedBlocksPercentage, missedBlocksPercentageThreshold),
+		"faulty", isFaulty)
 
-	// 获取上次故障的epoch（从数据库或FaultFlags中）
+	// 获取上次故障的epoch
 	lastFaultyEpoch := uint64(0)
 	if fc.dposInstance.state != nil && fc.dposInstance.state.StakeStore != nil {
 		if dbFaultInfo, err := fc.dposInstance.state.StakeStore.GetValidatorFaultStatus(validator.Address); err == nil && dbFaultInfo != nil {
@@ -82,7 +76,6 @@ func (fc *FaultCalculator) CalculateFaultFlag(
 		lastFaultyEpoch = epochInfo.EpochToCheckNumber
 	}
 
-	// 构建故障原因
 	var reason string
 	if isFaulty {
 		reason = fmt.Sprintf("Epoch %d: missed blocks percentage reached threshold: %d bp >= %d bp (missed %d/%d blocks)",
