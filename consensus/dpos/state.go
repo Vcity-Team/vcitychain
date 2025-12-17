@@ -995,33 +995,13 @@ func (rs *RewardStore) RecordReward(record *RewardRecordExtended) error {
 		// 检查是否已存在记录（用于跟踪覆盖）
 		existingData := bucket.Get([]byte(key))
 		isOverwrite := existingData != nil
-		if isOverwrite && logger != nil {
-			var existingRecord RewardRecordExtended
-			if err := json.Unmarshal(existingData, &existingRecord); err == nil {
-				logger.Info("⚠️ RecordReward: 检测到覆盖已有记录",
-					"epoch", record.EpochNumber,
-					"recipient", record.Recipient,
-					"rewardType", record.RewardType,
-					"key", key,
-					"oldAmount", existingRecord.Amount,
-					"newAmount", record.Amount)
-			}
-		}
+		// 日志已删除：检测到覆盖已有记录
 
 		// 生成唯一ID
 		id, _ := bucket.NextSequence()
 		record.ID = id
 
-		// 记录写入信息
-		if logger != nil {
-			logger.Info("📝 RecordReward: 写入奖励记录",
-				"epoch", record.EpochNumber,
-				"recipient", record.Recipient,
-				"rewardType", record.RewardType,
-				"amount", record.Amount,
-				"key", key,
-				"isOverwrite", isOverwrite)
-		}
+		// 日志已删除：写入奖励记录
 
 		// 添加超时机制防止卡死
 		putDone := make(chan error, 1)

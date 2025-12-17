@@ -329,10 +329,6 @@ func (m *syncPeerClient) handleStatusUpdate(obj interface{}, from peer.ID) {
 
 	// 检查网络连接状态
 	if !m.network.IsConnected(from) {
-		if m.id != from.String() {
-			m.logger.Warn("收到非连接节点的状态，忽略", "来源节点", from.String(), "本地节点", m.id)
-		}
-
 		return
 	}
 
