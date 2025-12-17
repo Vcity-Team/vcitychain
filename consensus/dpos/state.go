@@ -566,12 +566,21 @@ func (ps *ProposalStore) ListScheduledByEpoch(epochNumber uint64) ([]*ParameterP
 			}
 
 			// 检查是否符合条件：Scheduled=true, Applied=false, EffectiveEpoch=epochNumber
-			// 只打印符合条件的提案日志，减少日志噪音
-			matches := proposal.Schedule.Scheduled &&
-				!proposal.Schedule.Applied &&
-				proposal.Schedule.EffectiveEpoch == epochNumber
+			// 添加详细日志，跟踪每个提案的检查过程
+			if ps.logger != nil && (proposal.Schedule.Scheduled || proposal.Schedule.EffectiveEpoch > 0) {
+				ps.logger.Info("🔍 [ProposalStore.ListScheduledByEpoch] 检查提案",
+					"proposalID", proposal.ID,
+					"proposalType", proposal.ProposalType,
+					"scheduled", proposal.Schedule.Scheduled,
+					"applied", proposal.Schedule.Applied,
+					"effectiveEpoch", proposal.Schedule.EffectiveEpoch,
+					"queryEpoch", epochNumber,
+					"match", proposal.Schedule.Scheduled && !proposal.Schedule.Applied && proposal.Schedule.EffectiveEpoch == epochNumber)
+			}
 
-			if matches {
+			if proposal.Schedule.Scheduled &&
+				!proposal.Schedule.Applied &&
+				proposal.Schedule.EffectiveEpoch == epochNumber {
 				scheduledProposals = append(scheduledProposals, &proposal)
 				count++
 				if ps.logger != nil {
@@ -986,31 +995,16 @@ func (rs *RewardStore) RecordReward(record *RewardRecordExtended) error {
 		// 检查是否已存在记录（用于跟踪覆盖）
 		existingData := bucket.Get([]byte(key))
 		isOverwrite := existingData != nil
-		if isOverwrite {
+		if isOverwrite && logger != nil {
 			var existingRecord RewardRecordExtended
 			if err := json.Unmarshal(existingData, &existingRecord); err == nil {
-				// 如果金额相同，直接跳过写入，避免不必要的覆盖
-				if existingRecord.Amount == record.Amount {
-					if logger != nil {
-						logger.Debug("ℹ️ RecordReward: 奖励记录已存在且金额相同，跳过写入",
-							"epoch", record.EpochNumber,
-							"recipient", record.Recipient,
-							"rewardType", record.RewardType,
-							"amount", record.Amount,
-							"key", key)
-					}
-					return nil
-				}
-				// 金额不同时才打印警告
-				if logger != nil {
-					logger.Info("⚠️ RecordReward: 检测到覆盖已有记录（金额不同）",
-						"epoch", record.EpochNumber,
-						"recipient", record.Recipient,
-						"rewardType", record.RewardType,
-						"key", key,
-						"oldAmount", existingRecord.Amount,
-						"newAmount", record.Amount)
-				}
+				logger.Info("⚠️ RecordReward: 检测到覆盖已有记录",
+					"epoch", record.EpochNumber,
+					"recipient", record.Recipient,
+					"rewardType", record.RewardType,
+					"key", key,
+					"oldAmount", existingRecord.Amount,
+					"newAmount", record.Amount)
 			}
 		}
 

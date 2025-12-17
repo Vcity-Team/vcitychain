@@ -2278,21 +2278,11 @@ func (d *DPoS) syncRuntimeDelegatesWithRetry() {
 
 // GetValidators 获取DPoS验证者集合（公共方法，供外部调用）
 func (d *DPoS) GetValidators() validator.AccountSet {
-	// 直接使用原有逻辑，避免通过接口调用造成无限递归
 	if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
-		d.logger.Info("📊 [DPoS.GetValidators] 从 runtime.delegates 返回验证者",
-			"count", len(d.runtime.delegates),
-			"validatorsList", func() []string {
-				var vs []string
-				for i, v := range d.runtime.delegates {
-					vs = append(vs, fmt.Sprintf("[%d]%s", i, v.Address.String()))
-				}
-				return vs
-			}())
 		return d.runtime.delegates
 	}
 
-	// 如果runtime.delegates为空，尝试从数据库读取（与GetDelegates保持一致）
+	// 如果runtime.delegates为空，尝试从数据库读取
 	if d.state != nil && d.state.StakeStore != nil {
 		d.logger.Info("🔍 [DPoS.GetValidators] runtime.delegates为空，尝试从数据库读取验证者")
 		if dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false); err == nil && len(dbValidators) > 0 {
