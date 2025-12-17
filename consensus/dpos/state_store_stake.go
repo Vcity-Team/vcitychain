@@ -1162,16 +1162,7 @@ func (s *StakeStore) UpdateValidatorFaultStatus(address types.Address, isFaulty 
 			return fmt.Errorf("failed to marshal fault info: %w", err)
 		}
 
-		key := address.Bytes()
-		err = bucket.Put(key, data)
-		if err == nil {
-			// 验证是否成功存储
-			if storedData := bucket.Get(key); storedData == nil {
-				return fmt.Errorf("failed to verify fault status storage for address %s", address.String())
-			}
-			fmt.Printf("✅ [UpdateValidatorFaultStatus] 成功保存故障状态: address=%s isFaulty=%v\n", address.String(), isFaulty)
-		}
-		return err
+		return bucket.Put(address.Bytes(), data)
 	})
 }
 
@@ -1179,54 +1170,31 @@ func (s *StakeStore) UpdateValidatorFaultStatus(address types.Address, isFaulty 
 func (s *StakeStore) GetValidatorFaultStatus(address types.Address) (map[string]interface{}, error) {
 	var faultInfo map[string]interface{}
 	key := address.Bytes()
-	fmt.Printf("🔍 [GetValidatorFaultStatus] 开始查询故障状态: address=%s key=%x\n", address.String(), key)
 	err := s.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("validatorFaultStatus"))
 		if bucket == nil {
-			fmt.Printf("⚠️ [GetValidatorFaultStatus] validatorFaultStatus bucket不存在\n")
 			return nil // 没有故障记录
 		}
 
 		data := bucket.Get(key)
 		if data == nil {
-			fmt.Printf("🔍 [GetValidatorFaultStatus] bucket.Get返回nil，开始遍历查找: address=%s\n", address.String())
 			// 调试：检查是否有其他key（遍历所有key）
 			cursor := bucket.Cursor()
-			found := false
 			for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
 				if bytes.Equal(k, key) {
-					fmt.Printf("🔍 [GetValidatorFaultStatus] 通过遍历找到匹配key: address=%s\n", address.String())
 					// 找到了，但之前Get返回nil，可能是key格式问题
 					if err := json.Unmarshal(v, &faultInfo); err == nil {
-						fmt.Printf("✅ [GetValidatorFaultStatus] 成功反序列化故障数据: address=%s faultInfo=%v\n", address.String(), faultInfo)
 						// 成功找到并反序列化数据，返回成功
-						found = true
 						return nil
-					} else {
-						fmt.Printf("❌ [GetValidatorFaultStatus] 反序列化失败: address=%s error=%v\n", address.String(), err)
 					}
 				}
-			}
-			if !found {
-				fmt.Printf("🔍 [GetValidatorFaultStatus] 未找到故障记录: address=%s\n", address.String())
 			}
 			return nil // 该验证者没有故障记录
 		}
 
-		err := json.Unmarshal(data, &faultInfo)
-		if err == nil {
-			fmt.Printf("✅ [GetValidatorFaultStatus] 直接读取成功: address=%s faultInfo=%v\n", address.String(), faultInfo)
-		} else {
-			fmt.Printf("❌ [GetValidatorFaultStatus] 直接读取反序列化失败: address=%s error=%v\n", address.String(), err)
-		}
-		return err
+		return json.Unmarshal(data, &faultInfo)
 	})
 
-	if faultInfo != nil {
-		fmt.Printf("📤 [GetValidatorFaultStatus] 返回结果: address=%s faultInfo=%v\n", address.String(), faultInfo)
-	} else {
-		fmt.Printf("📤 [GetValidatorFaultStatus] 返回空结果: address=%s\n", address.String())
-	}
 	return faultInfo, err
 }
 
