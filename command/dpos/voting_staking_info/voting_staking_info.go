@@ -86,25 +86,15 @@ func (r *VotingStakingInfoResult) GetOutput() string {
 		output += fmt.Sprintf("\n")
 	}
 
-	// 显示验证者质押信息（只显示故障验证者）
+	// 显示验证者质押信息（权重倒序，包含故障标志）
 	var stakingInfo []map[string]interface{}
-	var allStakingInfo []map[string]interface{}
 	if stakingInfoRaw, ok := r.StakingInfo.([]map[string]interface{}); ok && len(stakingInfoRaw) > 0 {
-		allStakingInfo = stakingInfoRaw
+		stakingInfo = stakingInfoRaw
 	} else if stakingInfoRaw2, ok := r.StakingInfo.([]interface{}); ok && len(stakingInfoRaw2) > 0 {
 		// 兼容旧格式：[]interface{}
-		allStakingInfo = make([]map[string]interface{}, 0)
+		stakingInfo = make([]map[string]interface{}, 0)
 		for _, item := range stakingInfoRaw2 {
 			if stakingMap, ok := item.(map[string]interface{}); ok {
-				allStakingInfo = append(allStakingInfo, stakingMap)
-			}
-		}
-	}
-
-	// 过滤出只有故障的验证者
-	for _, stakingMap := range allStakingInfo {
-		if faultFlag, ok := stakingMap["faultFlag"].(map[string]interface{}); ok {
-			if isFaulty, ok := faultFlag["isFaulty"].(bool); ok && isFaulty {
 				stakingInfo = append(stakingInfo, stakingMap)
 			}
 		}
@@ -151,7 +141,7 @@ func (r *VotingStakingInfoResult) GetOutput() string {
 			return si < sj
 		})
 
-		output += fmt.Sprintf("\nFaulty Validators (Sorted by Weight, %d faulty out of %d total):\n", len(stakingInfo), len(allStakingInfo))
+		output += fmt.Sprintf("\nValidator Staking Information (Sorted by Weight, %d total):\n", len(stakingInfo))
 		output += fmt.Sprintf("====================================================\n")
 		for i, stakingMap := range stakingInfo {
 			output += fmt.Sprintf("\n%d. Validator: %v\n", i+1, stakingMap["staker"])
@@ -182,6 +172,11 @@ func (r *VotingStakingInfoResult) GetOutput() string {
 						}
 						if reason, ok := faultFlag["reason"].(string); ok {
 							output += fmt.Sprintf("   Reason: %s\n", reason)
+						} else {
+							// 调试：显示reason字段的实际类型和值
+							if reasonValue, exists := faultFlag["reason"]; exists {
+								output += fmt.Sprintf("   Reason Debug: Type=%T, Value=%v\n", reasonValue, reasonValue)
+							}
 						}
 					}
 				}
@@ -268,8 +263,8 @@ func (r *VotingStakingInfoResult) GetOutput() string {
 func GetCommand() *cobra.Command {
 	votingStakingInfoCmd := &cobra.Command{
 		Use:     "voting-staking-info",
-		Short:   "Get DPoS network faulty validators information",
-		Long:    "Retrieve information about faulty validators in the current DPoS network (only shows validators marked as faulty)",
+		Short:   "Get DPoS network voting and staking information",
+		Long:    "Retrieve comprehensive information about current DPoS network voting and staking status",
 		PreRunE: runPreRun,
 		RunE:    runCommand,
 	}

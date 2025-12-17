@@ -215,6 +215,11 @@ func (d *DPoS) getValidatorFaultInfo(validatorAddr types.Address) map[string]int
 
 			if reason, ok := dbFaultInfo["reason"].(string); ok {
 				faultInfo["reason"] = reason
+			} else {
+				// 调试：检查reason字段的实际类型和值
+				if reasonValue, exists := dbFaultInfo["reason"]; exists {
+					faultInfo["reason"] = fmt.Sprintf("Type: %T, Value: %v", reasonValue, reasonValue)
+				}
 			}
 		}
 	}
