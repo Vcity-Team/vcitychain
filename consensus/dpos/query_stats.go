@@ -181,7 +181,7 @@ func (d *DPoS) GetEpochInfoForBlock(blockNumber uint64) map[string]interface{} {
 	// 计算剩余时间
 	blockTime := d.config.BlockTime.Duration
 	if blockTime == 0 {
-		blockTime = 3 * time.Second // 默认值
+		return nil // blockTime 配置错误
 	}
 	timeRemaining := time.Duration(remainingBlocks) * blockTime
 

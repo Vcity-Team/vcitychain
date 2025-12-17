@@ -453,13 +453,10 @@ func (s *StakeStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx) (val
 
 // setDelegatesAtBlock 保存指定区块的受托人集合到数据库
 func (s *StakeStore) setDelegatesAtBlock(blockNumber uint64, delegates validator.AccountSet, dbTx *bolt.Tx) error {
-	// 使用全局logger，通过DPoS实例获取
 	logger := getGlobalLogger()
-	if logger == nil {
-		// 如果没有全局logger，使用默认输出
-		fmt.Printf("🔍 setDelegatesAtBlock: 开始存储验证者集合 blockNumber=%d delegatesCount=%d\n", blockNumber, len(delegates))
-	} else {
-		logger.Debug("🔍 setDelegatesAtBlock: 开始存储验证者集合",
+
+	if logger != nil {
+		logger.Debug("setDelegatesAtBlock: 开始存储验证者集合",
 			"blockNumber", blockNumber,
 			"delegatesCount", len(delegates))
 	}
@@ -467,140 +464,71 @@ func (s *StakeStore) setDelegatesAtBlock(blockNumber uint64, delegates validator
 	// 检查参数
 	if dbTx == nil {
 		if logger != nil {
-			logger.Error("❌ setDelegatesAtBlock: 数据库事务为nil")
-		} else {
-			fmt.Printf("❌ setDelegatesAtBlock: 数据库事务为nil\n")
+			logger.Error("setDelegatesAtBlock: 数据库事务为nil")
 		}
 		return fmt.Errorf("database transaction is nil")
 	}
 
 	if len(delegates) == 0 {
 		if logger != nil {
-			logger.Error("❌ setDelegatesAtBlock: 验证者集合为空")
-		} else {
-			fmt.Printf("❌ setDelegatesAtBlock: 验证者集合为空\n")
+			logger.Error("setDelegatesAtBlock: 验证者集合为空")
 		}
 		return fmt.Errorf("delegates set is empty")
 	}
 
 	// 创建或获取桶
-	if logger != nil {
-		logger.Debug("🔍 setDelegatesAtBlock: 步骤1-创建桶", "blockNumber", blockNumber)
-	} else {
-		fmt.Printf("🔍 setDelegatesAtBlock: 步骤1-创建桶 blockNumber=%d\n", blockNumber)
-	}
 	bucket, err := dbTx.CreateBucketIfNotExists([]byte("DelegatesAtBlock"))
 	if err != nil {
 		if logger != nil {
-			logger.Error("❌ setDelegatesAtBlock: 创建桶失败", "error", err)
-		} else {
-			fmt.Printf("❌ setDelegatesAtBlock: 创建桶失败 error=%v\n", err)
+			logger.Error("setDelegatesAtBlock: 创建桶失败", "error", err)
 		}
 		return fmt.Errorf("failed to create delegates at block bucket: %w", err)
 	}
-	if logger != nil {
-		logger.Debug("✅ setDelegatesAtBlock: 桶创建成功", "blockNumber", blockNumber)
-	} else {
-		fmt.Printf("✅ setDelegatesAtBlock: 桶创建成功 blockNumber=%d\n", blockNumber)
-	}
 
 	// 序列化验证者集合
-	if logger != nil {
-		logger.Debug("🔍 setDelegatesAtBlock: 步骤2-序列化验证者集合", "blockNumber", blockNumber)
-	} else {
-		fmt.Printf("🔍 setDelegatesAtBlock: 步骤2-序列化验证者集合 blockNumber=%d\n", blockNumber)
-	}
 	data, err := json.Marshal(delegates)
 	if err != nil {
 		if logger != nil {
-			logger.Error("❌ setDelegatesAtBlock: 序列化失败", "error", err)
-		} else {
-			fmt.Printf("❌ setDelegatesAtBlock: 序列化失败 error=%v\n", err)
+			logger.Error("setDelegatesAtBlock: 序列化失败", "error", err)
 		}
 		return fmt.Errorf("failed to marshal delegates: %w", err)
 	}
-	if logger != nil {
-		logger.Debug("✅ setDelegatesAtBlock: 序列化成功",
-			"blockNumber", blockNumber,
-			"dataSize", len(data))
-	} else {
-		fmt.Printf("✅ setDelegatesAtBlock: 序列化成功 blockNumber=%d dataSize=%d\n", blockNumber, len(data))
-	}
 
-	// 创建键
-	if logger != nil {
-		logger.Debug("🔍 setDelegatesAtBlock: 步骤3-创建键", "blockNumber", blockNumber)
-	} else {
-		fmt.Printf("🔍 setDelegatesAtBlock: 步骤3-创建键 blockNumber=%d\n", blockNumber)
-	}
+	// 创建键并存储数据
 	key := make([]byte, 8)
 	binary.BigEndian.PutUint64(key, blockNumber)
-	if logger != nil {
-		logger.Debug("✅ setDelegatesAtBlock: 键创建成功",
-			"blockNumber", blockNumber,
-			"key", fmt.Sprintf("%x", key))
-	} else {
-		fmt.Printf("✅ setDelegatesAtBlock: 键创建成功 blockNumber=%d key=%x\n", blockNumber, key)
-	}
 
-	// 存储数据
-	if logger != nil {
-		logger.Debug("🔍 setDelegatesAtBlock: 步骤4-存储数据", "blockNumber", blockNumber)
-	} else {
-		fmt.Printf("🔍 setDelegatesAtBlock: 步骤4-存储数据 blockNumber=%d\n", blockNumber)
-	}
 	if err := bucket.Put(key, data); err != nil {
 		if logger != nil {
-			logger.Error("❌ setDelegatesAtBlock: 存储数据失败", "error", err)
-		} else {
-			fmt.Printf("❌ setDelegatesAtBlock: 存储数据失败 error=%v\n", err)
+			logger.Error("setDelegatesAtBlock: 存储数据失败", "error", err)
 		}
 		return fmt.Errorf("failed to save delegates: %w", err)
 	}
-	if logger != nil {
-		logger.Debug("✅ setDelegatesAtBlock: 数据存储成功", "blockNumber", blockNumber)
-	} else {
-		fmt.Printf("✅ setDelegatesAtBlock: 数据存储成功 blockNumber=%d\n", blockNumber)
-	}
 
 	// 验证存储是否成功
-	if logger != nil {
-		logger.Debug("🔍 setDelegatesAtBlock: 步骤5-验证存储", "blockNumber", blockNumber)
-	} else {
-		fmt.Printf("🔍 setDelegatesAtBlock: 步骤5-验证存储 blockNumber=%d\n", blockNumber)
-	}
 	storedData := bucket.Get(key)
 	if storedData == nil {
 		if logger != nil {
-			logger.Error("❌ setDelegatesAtBlock: 存储后数据未找到")
-		} else {
-			fmt.Printf("❌ setDelegatesAtBlock: 存储后数据未找到\n")
+			logger.Error("setDelegatesAtBlock: 存储后数据未找到")
 		}
 		return fmt.Errorf("stored data not found after save")
 	}
+
 	if len(storedData) != len(data) {
 		if logger != nil {
-			logger.Error("❌ setDelegatesAtBlock: 存储数据大小不匹配",
+			logger.Error("setDelegatesAtBlock: 存储数据大小不匹配",
 				"expectedSize", len(data),
 				"actualSize", len(storedData))
-		} else {
-			fmt.Printf("❌ setDelegatesAtBlock: 存储数据大小不匹配 expectedSize=%d actualSize=%d\n", len(data), len(storedData))
 		}
 		return fmt.Errorf("stored data size mismatch")
 	}
-	if logger != nil {
-		logger.Debug("✅ setDelegatesAtBlock: 存储验证成功",
-			"blockNumber", blockNumber,
-			"dataSize", len(storedData))
-	} else {
-		fmt.Printf("✅ setDelegatesAtBlock: 存储验证成功 blockNumber=%d dataSize=%d\n", blockNumber, len(storedData))
-	}
 
 	if logger != nil {
-		logger.Debug("✅ setDelegatesAtBlock: 所有步骤完成", "blockNumber", blockNumber)
-	} else {
-		fmt.Printf("✅ setDelegatesAtBlock: 所有步骤完成 blockNumber=%d\n", blockNumber)
+		logger.Debug("setDelegatesAtBlock: 存储完成",
+			"blockNumber", blockNumber,
+			"dataSize", len(storedData))
 	}
+
 	return nil
 }
 
@@ -910,37 +838,46 @@ func (s *StakeStore) setDelegateInfo(delegate types.Address, info *DelegateInfo,
 
 // setDelegateInfoInternal 内部实现，避免递归调用
 func (s *StakeStore) setDelegateInfoInternal(delegate types.Address, info *DelegateInfo, dbTx *bolt.Tx) error {
-	// 添加调试日志
-	// 使用debug级别记录调用信息
-	fmt.Printf("🔍 setDelegateInfoInternal called: delegate=%s, dbTx=%v\n", delegate.String(), dbTx != nil)
-	fmt.Printf("  - 受托人地址: %s\n", delegate.String())
-	fmt.Printf("  - 传入的VotingPower: %s (0x%x)\n", info.VotingPower.String(), info.VotingPower.Bytes())
-	fmt.Printf("  - 传入的TotalVotes: %s (0x%x)\n", info.TotalVotes.String(), info.TotalVotes.Bytes())
-	fmt.Printf("  - 传入的IsActive: %v\n", info.IsActive)
-	fmt.Printf("  - 传入的BlsPublicKey长度: %d\n", len(info.BlsPublicKey))
+	logger := getGlobalLogger()
+
+	if logger != nil {
+		logger.Debug("setDelegateInfoInternal called",
+			"delegate", delegate.String(),
+			"votingPower", info.VotingPower.String(),
+			"totalVotes", info.TotalVotes.String(),
+			"isActive", info.IsActive)
+	}
 
 	bucket, err := dbTx.CreateBucketIfNotExists([]byte("DelegateInfo"))
 	if err != nil {
-		fmt.Printf("❌ Failed to create bucket: %v\n", err)
+		if logger != nil {
+			logger.Error("setDelegateInfoInternal: 创建桶失败", "error", err)
+		}
 		return fmt.Errorf("failed to create delegate info bucket: %w", err)
 	}
 
 	data, err := json.Marshal(info)
 	if err != nil {
-		fmt.Printf("❌ Failed to marshal: %v\n", err)
+		if logger != nil {
+			logger.Error("setDelegateInfoInternal: 序列化失败", "error", err)
+		}
 		return fmt.Errorf("failed to marshal delegate info: %w", err)
 	}
 
 	if err := bucket.Put(delegate[:], data); err != nil {
-		fmt.Printf("❌ Failed to put data: %v\n", err)
+		if logger != nil {
+			logger.Error("setDelegateInfoInternal: 存储失败", "error", err)
+		}
 		return fmt.Errorf("failed to save delegate info: %w", err)
 	}
 
-	fmt.Printf("✅ setDelegateInfoInternal completed successfully\n")
-	fmt.Printf("  - 保存到数据库的VotingPower: %s (0x%x)\n", info.VotingPower.String(), info.VotingPower.Bytes())
-	fmt.Printf("  - 保存到数据库的TotalVotes: %s (0x%x)\n", info.TotalVotes.String(), info.TotalVotes.Bytes())
-	// fmt.Printf("  - 保存到数据库的IsActive: %v\n", info.IsActive)
-	// fmt.Printf("  - 保存到数据库的BlsPublicKey长度: %d\n", len(info.BlsPublicKey))
+	if logger != nil {
+		logger.Debug("setDelegateInfoInternal: 保存成功",
+			"delegate", delegate.String(),
+			"votingPower", info.VotingPower.String(),
+			"totalVotes", info.TotalVotes.String())
+	}
+
 	return nil
 }
 
@@ -1011,15 +948,14 @@ func (s *ValidatorStore) initialize(tx *bolt.Tx) error {
 
 // getDelegatesAtBlock returns the delegate set at a specific block
 func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx, delegateCount uint64) (validator.AccountSet, error) {
-	// 实现从数据库获取指定区块的受托人集合
+	logger := getGlobalLogger()
+
 	if dbTx == nil {
 		return validator.AccountSet{}, fmt.Errorf("database transaction is required")
 	}
 
-	// 从 DelegateInfo bucket 获取所有受托人信息
 	delegateBucket := dbTx.Bucket([]byte("DelegateInfo"))
 	if delegateBucket == nil {
-		// 如果 bucket 不存在，返回空集合
 		return validator.AccountSet{}, nil
 	}
 
@@ -1027,22 +963,24 @@ func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx, 
 	cursor := delegateBucket.Cursor()
 
 	for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
-		if len(k) != 20 { // 地址长度应该是20字节
+		if len(k) != 20 {
 			continue
 		}
 
 		var delegateInfo DelegateInfo
 		if err := json.Unmarshal(v, &delegateInfo); err != nil {
-			// 记录错误但继续处理其他受托人
-			fmt.Printf("⚠️ 解析受托人信息失败: %v\n", err)
+			if logger != nil {
+				logger.Warn("getDelegatesAtBlock: 解析受托人信息失败", "error", err)
+			}
 			continue
 		}
 
-		// 修复：只检查投票权重，必须包含所有有BLS公钥的受托人
-		// 这样可以确保与出块时的受托人顺序完全一致
+		// 跳过投票权重为0的受托人
 		if delegateInfo.VotingPower.Cmp(big.NewInt(0)) <= 0 {
-			fmt.Printf("🔍 getDelegatesAtBlock: 跳过投票权重为0的受托人 - 地址=%s, votingPower=%s\n",
-				delegateInfo.Address.String(), delegateInfo.VotingPower.String())
+			if logger != nil {
+				logger.Debug("getDelegatesAtBlock: 跳过投票权重为0的受托人",
+					"address", delegateInfo.Address.String())
+			}
 			continue
 		}
 
@@ -1052,59 +990,51 @@ func (s *ValidatorStore) getDelegatesAtBlock(blockNumber uint64, dbTx *bolt.Tx, 
 			var err error
 			blsPublicKey, err = bls.UnmarshalPublicKey(delegateInfo.BlsPublicKey)
 			if err != nil {
-				fmt.Printf("⚠️ ValidatorStore: BLS公钥解析失败 - 地址=%s, 错误=%v\n", delegateInfo.Address.String(), err)
-				// 即使解析失败也创建对象，但BlsKey为nil
+				if logger != nil {
+					logger.Warn("getDelegatesAtBlock: BLS公钥解析失败",
+						"address", delegateInfo.Address.String(),
+						"error", err)
+				}
 				blsPublicKey = nil
-			} else {
-				fmt.Printf("✅ ValidatorStore: BLS公钥恢复成功 - 地址=%s, 公钥长度=%d\n", delegateInfo.Address.String(), len(delegateInfo.BlsPublicKey))
 			}
-		} else {
-			fmt.Printf("⚠️ ValidatorStore: 缺少BLS公钥数据 - 地址=%s, 公钥长度=%d\n", delegateInfo.Address.String(), len(delegateInfo.BlsPublicKey))
 		}
 
-		// 修复：总是创建验证者元数据，保持索引一致性
 		validatorMeta := &validator.ValidatorMetadata{
 			Address:     delegateInfo.Address,
 			VotingPower: new(big.Int).Set(delegateInfo.VotingPower),
 			IsActive:    delegateInfo.IsActive,
-			BlsKey:      blsPublicKey, // 可能为nil
+			BlsKey:      blsPublicKey,
 		}
-
-		// 验证者元数据创建完成
 
 		delegates = append(delegates, validatorMeta)
 	}
 
-	// 修复：按票数降序排序，如果票数相同则按地址排序，确保与出块时的顺序完全一致
-	// 这样可以避免BLS公钥顺序不一致导致的签名验证失败
+	// 按票数降序排序，票数相同按地址排序
 	sort.Slice(delegates, func(i, j int) bool {
 		if delegates[i].VotingPower.Cmp(delegates[j].VotingPower) == 0 {
-			// 票数相同，按地址排序（字节比较）
 			return bytes.Compare(delegates[i].Address[:], delegates[j].Address[:]) < 0
 		}
 		return delegates[i].VotingPower.Cmp(delegates[j].VotingPower) > 0
 	})
 
-	// 关键修复：应用与出块时相同的DPoSValidatorsCount限制
-	// 确保验证时使用的受托人数量与出块时完全一致
+	// 应用 DelegateCount 限制
 	if delegateCount > 0 {
 		maxDelegates := int(delegateCount)
 		if len(delegates) > maxDelegates {
+			if logger != nil {
+				logger.Debug("getDelegatesAtBlock: 应用DelegateCount限制",
+					"originalCount", len(delegates),
+					"limitCount", maxDelegates)
+			}
 			delegates = delegates[:maxDelegates]
-			fmt.Printf("🔍 getDelegatesAtBlock: 应用DelegateCount限制 - 原始数量=%d, 限制数量=%d\n",
-				len(delegates)+len(delegates[maxDelegates:]), maxDelegates)
 		}
 	}
 
-	// 添加详细日志：显示从数据库读取的BLS公钥
-	fmt.Printf("🔍 ValidatorStore.getDelegatesAtBlock: 从数据库读取到 %d 个受托人 (区块 %d)\n", len(delegates), blockNumber)
-	fmt.Printf("🔍 这是验证区块 %d 时使用的完整受托人集合:\n", blockNumber)
-	for i, delegate := range delegates {
-		fmt.Printf("  验证索引=%d, 地址=%s, 票数=%s, 有BLS密钥=%v\n",
-			i, delegate.Address.String(), delegate.VotingPower.String(), delegate.BlsKey != nil)
+	if logger != nil {
+		logger.Debug("getDelegatesAtBlock: 读取受托人完成",
+			"blockNumber", blockNumber,
+			"delegateCount", len(delegates))
 	}
-
-	// 排序完成
 
 	return delegates, nil
 }

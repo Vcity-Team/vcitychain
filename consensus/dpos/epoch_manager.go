@@ -71,10 +71,10 @@ func (tem *TimeBasedEpochManager) getEpochSize() uint64 {
 	epochDuration := tem.epochDuration
 	blockTime := tem.blockTime
 
-	// 如果blockTime为0，使用默认值3秒（兜底保护）
+	// blockTime 必须有效
 	if blockTime == 0 {
-		tem.logger.Warn("⚠️ blockTime为0，使用默认值3秒")
-		blockTime = 3 * time.Second
+		tem.logger.Error("❌ blockTime为0，配置错误")
+		return 0
 	}
 
 	epochSize := uint64(epochDuration / blockTime)

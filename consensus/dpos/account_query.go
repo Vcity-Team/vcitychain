@@ -13,7 +13,6 @@ func (d *DPoS) getAccountBalance(address types.Address) (*big.Int, error) {
 		return nil, fmt.Errorf("blockchain wrapper not available")
 	}
 
-	// 获取当前区块头 - 修复：直接使用Header()而不是通过总难度
 	currentHeader := d.config.Blockchain.Header()
 	if currentHeader == nil {
 		return nil, fmt.Errorf("current header not found")
@@ -30,7 +29,6 @@ func (d *DPoS) getAccountBalance(address types.Address) (*big.Int, error) {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
-	// 获取账户余额
 	balance := transition.GetBalance(address)
 
 	d.logger.Debug("✅ 成功获取账户余额",
@@ -96,4 +94,3 @@ func (d *DPoS) syncStateRootToBlockchain(header *types.Header, newStateRoot []by
 
 	return nil
 }
-

@@ -566,18 +566,6 @@ func (ps *ProposalStore) ListScheduledByEpoch(epochNumber uint64) ([]*ParameterP
 			}
 
 			// 检查是否符合条件：Scheduled=true, Applied=false, EffectiveEpoch=epochNumber
-			// 添加详细日志，跟踪每个提案的检查过程
-			if ps.logger != nil && (proposal.Schedule.Scheduled || proposal.Schedule.EffectiveEpoch > 0) {
-				ps.logger.Info("🔍 [ProposalStore.ListScheduledByEpoch] 检查提案",
-					"proposalID", proposal.ID,
-					"proposalType", proposal.ProposalType,
-					"scheduled", proposal.Schedule.Scheduled,
-					"applied", proposal.Schedule.Applied,
-					"effectiveEpoch", proposal.Schedule.EffectiveEpoch,
-					"queryEpoch", epochNumber,
-					"match", proposal.Schedule.Scheduled && !proposal.Schedule.Applied && proposal.Schedule.EffectiveEpoch == epochNumber)
-			}
-
 			if proposal.Schedule.Scheduled &&
 				!proposal.Schedule.Applied &&
 				proposal.Schedule.EffectiveEpoch == epochNumber {

@@ -132,20 +132,20 @@ func (d *DPoS) getEpochSize() uint64 {
 	blockTime := d.config.BlockTime.Duration
 
 	if blockTime == 0 {
-		d.logger.Warn("⚠️ BlockTime为0，使用默认值3秒")
-		blockTime = 3 * time.Second
+		d.logger.Error("❌ blockTime 配置为0，无法计算 epoch 大小")
+		return 0
 	}
 
 	if epochDuration == 0 {
-		d.logger.Warn("⚠️ EpochDuration为0，使用默认值86400秒")
-		epochDuration = 86400 * time.Second
+		d.logger.Error("❌ epochDuration 配置为0，无法计算 epoch 大小")
+		return 0
 	}
 
 	epochSize := uint64(epochDuration / blockTime)
 
 	if epochSize == 0 {
-		d.logger.Warn("⚠️ 计算出的epoch大小为0，使用默认值28800")
-		epochSize = 28800
+		d.logger.Error("❌ 计算出的 epoch 大小为0")
+		return 0
 	}
 
 	return epochSize

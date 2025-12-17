@@ -127,7 +127,10 @@ func (c *DPoSMetricsCollector) startHTTPServer(port int) {
 
 	go func() {
 		if err := c.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fmt.Printf("Metrics server error: %v\n", err)
+			// 指标服务器错误，使用全局 logger
+			if logger := getGlobalLogger(); logger != nil {
+				logger.Error("Metrics server error", "error", err)
+			}
 		}
 	}()
 }

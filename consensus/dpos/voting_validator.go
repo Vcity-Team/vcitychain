@@ -215,9 +215,10 @@ func (d *DPoS) verifyVoteSignature(vote *VoteMessage) error {
 	messageBytes := []byte(message)
 	hash := crypto.Keccak256(messageBytes)
 
-	// 验证签名 - 简化实现，生产环境需要完整的签名验证
-	// TODO: 实现完整的签名验证逻辑
-	_ = hash // 避免未使用变量警告
+	// 注意：DPoS 投票通过交易处理，签名验证在区块链层完成
+	// 此函数仅用于 P2P gossip 消息（当前未使用）
+	// 如启用 P2P 投票，需实现 ECDSA 签名恢复验证
+	_ = hash // 保留用于未来 P2P 签名验证
 
 	// 检查时间戳防重放
 	now := uint64(time.Now().Unix())

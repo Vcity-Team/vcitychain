@@ -431,11 +431,11 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	// 创建区块构建器
 	keyAddr := types.Address(r.config.Key.Address())
 
-	// 从配置读取blockTime，如果没有配置则使用默认值3秒
+	// 从配置读取blockTime
 	blockTime := r.config.BlockTime.Duration
 	if blockTime == 0 {
-		r.logger.Warn("⚠️ blockTime为0，使用默认值3秒")
-		blockTime = 3 * time.Second
+		r.logger.Error("❌ blockTime 配置为0，无法构建区块")
+		return nil, fmt.Errorf("blockTime is not configured or is zero")
 	}
 
 	builder, err := r.config.blockchain.NewBlockBuilder(
@@ -590,7 +590,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 	// 如果是epoch结束区块，生产节点也要执行边界相关逻辑（奖励分配 + 待应用投票）
 	if isEpochEndBlock {
-		// 奖励分配（原有逻辑）
 		state := builder.GetState()
 		if state != nil {
 			if err := r.processRewardDistributionInBlockForBuilder(builder, nextBlockNumber); err != nil {

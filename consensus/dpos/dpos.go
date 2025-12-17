@@ -149,10 +149,8 @@ func RegisterDPoSInstance(key string, dpos *DPoS) {
 	defer dposMutex.Unlock()
 	if existing, ok := dposInstances[key]; ok && existing != nil && existing != dpos {
 		// 避免未初始化的新实例覆盖已就绪的实例
-		fmt.Printf("[DPoSRegistry] register skipped, key=%s\n", key)
 		return
 	}
-	fmt.Printf("[DPoSRegistry] register key=%s\n", key)
 	dposInstances[key] = dpos
 }
 
@@ -180,7 +178,6 @@ func GetAllDPoSInstances() map[string]*DPoS {
 func UnregisterDPoSInstance(key string) {
 	dposMutex.Lock()
 	defer dposMutex.Unlock()
-	fmt.Printf("[DPoSRegistry] unregister key=%s\n", key)
 	delete(dposInstances, key)
 }
 

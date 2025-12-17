@@ -358,10 +358,10 @@ func (bpt *BlockProductionTracker) GetEpochExpectedBlockTime(epochNumber uint64)
 	// 从配置中获取blockTime
 	blockTime := bpt.blockTime
 
-	// 如果blockTime为0，使用默认值3秒（兜底保护）
+	// blockTime 必须有效
 	if blockTime == 0 {
-		bpt.logger.Warn("⚠️ blockTime为0，使用默认值3秒")
-		blockTime = 3 * time.Second
+		bpt.logger.Error("❌ blockTime为0，配置错误")
+		return 0
 	}
 
 	return blockTime
@@ -372,11 +372,15 @@ func (bpt *BlockProductionTracker) GetEpochExpectedBlockTime(epochNumber uint64)
 func (bpt *BlockProductionTracker) cleanupProcessedBlocks(currentEpoch uint64) {
 	// 计算要保留的最小区块号（假设每个epoch最多200个区块，保留2个epoch）
 	// 这是一个保守的估计，实际应该根据epochSize来计算
-	epochSize := uint64(100) // 默认值，实际应该从配置获取
+	// 清理窗口：保留最近 10000 个区块的记录
+	cleanupWindow := uint64(10000)
 	minBlockNumber := uint64(0)
-	if currentEpoch > 2 {
-		// 只保留最近2个epoch的区块记录
-		minBlockNumber = (currentEpoch - 2) * epochSize
+	if currentEpoch > 0 {
+		// 计算当前区块号的估计值并保留最近 cleanupWindow 个区块
+		estimatedCurrentBlock := currentEpoch * 100 // 估算
+		if estimatedCurrentBlock > cleanupWindow {
+			minBlockNumber = estimatedCurrentBlock - cleanupWindow
+		}
 	}
 
 	// 清理过期的区块记录

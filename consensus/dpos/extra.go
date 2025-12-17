@@ -449,7 +449,6 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 	if elems[1].Elems() > 0 {
 		i.Parent = &Signature{}
 		if err := i.Parent.UnmarshalRLPWith(elems[1]); err != nil {
-			fmt.Printf("❌ DEBUG Parent Signature UnmarshalRLP failed: %v\n", err)
 			return err
 		}
 	}
@@ -464,12 +463,10 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 			// 标准Signature格式：AggregatedSignature, Bitmap
 			i.Committed = &Signature{}
 			if err := i.Committed.UnmarshalRLPWith(elems[2]); err != nil {
-				fmt.Printf("❌ DEBUG Committed Signature UnmarshalRLP failed: %v\n", err)
 				return err
 			}
 		} else {
-			// 非标准格式，可能是其他签名相关数据
-			// fmt.Printf("⚠️ DEBUG Non-standard Committed Signature format: %d elements, skipping\n", len(committedElems))
+			// 非标准格式，跳过
 			i.Committed = nil
 		}
 	}
@@ -485,12 +482,10 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 			// 标准CheckpointData格式：5个元素
 			i.Checkpoint = &CheckpointData{}
 			if err := i.Checkpoint.UnmarshalRLPWith(elems[3]); err != nil {
-				fmt.Printf("❌ DEBUG CheckpointData UnmarshalRLP failed: %v\n", err)
 				return err
 			}
 		} else {
 			// 非标准格式，跳过解析
-			// fmt.Printf("⚠️ DEBUG Non-standard Checkpoint format: %d elements, skipping CheckpointData parsing\n", len(checkpointElems))
 			i.Checkpoint = nil
 		}
 	}
@@ -2406,7 +2401,6 @@ func GetDposExtra(extraRaw []byte) (*Extra, error) {
 	// 注意：这里无法获取blockNumber，但可以记录实例地址用于并发跟踪
 
 	if err := extra.UnmarshalRLP(extraRaw); err != nil {
-		fmt.Printf("❌ DEBUG UnmarshalRLP failed: %v\n", err)
 		return nil, err
 	}
 

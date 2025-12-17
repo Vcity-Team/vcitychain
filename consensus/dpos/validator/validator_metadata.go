@@ -119,8 +119,7 @@ func (v *ValidatorMetadata) UnmarshalRLPWith(val *fastrlp.Value) error {
 		} else {
 			blsKey, err := bls.UnmarshalPublicKey(blsKeyRaw)
 			if err != nil {
-				// 如果BLS公钥解析失败，记录警告但继续处理（从创世文件获取）
-				fmt.Printf("WARNING: failed to unmarshal BLS public key (length=%d), will get from genesis: %v\n", len(blsKeyRaw), err)
+				// BLS公钥解析失败，设置为nil（从创世文件获取）
 				v.BlsKey = nil
 			} else {
 				v.BlsKey = blsKey
@@ -346,64 +345,19 @@ func (as AccountSet) GetFilteredValidators(bitmap bitmap.Bitmap) (AccountSet, er
 		return filteredValidators, nil
 	}
 
-	// 添加详细的bitmap解析日志
-	// fmt.Printf("DEBUG: GetFilteredValidators - 开始解析bitmap\n")
-	// fmt.Printf("DEBUG: 验证者总数: %d\n", len(as))
-	// fmt.Printf("DEBUG: bitmap长度: %d\n", bitmap.Len())
-	// fmt.Printf("DEBUG: bitmap内容: %v\n", bitmap)
-
-	// 打印所有验证器的地址和索引
-	// fmt.Printf("DEBUG: 验证器地址列表:\n")
-	// for i, validator := range as {
-	// 	fmt.Printf("DEBUG: 索引 %d: 地址 %s, BLS密钥存在: %v\n",
-	// 		i, validator.Address.String(), validator.BlsKey != nil)
-	// }
-
-	// For early blocks, be more lenient with bitmap validation
-	// Only check validators within the current validator set range
+	// 处理 bitmap 长度超过验证者数量的情况
 	validatorCount := uint64(len(as))
-
-	// If bitmap is longer than validator count, only process the valid portion
-	// and ignore any bits beyond the validator count
 	effectiveBitmapLen := bitmap.Len()
 	if effectiveBitmapLen > validatorCount {
 		effectiveBitmapLen = validatorCount
-		// fmt.Printf("DEBUG: bitmap长度超过验证者数量，截断到: %d\n", effectiveBitmapLen)
 	}
-
-	// fmt.Printf("DEBUG: 开始遍历bitmap位，有效长度: %d\n", effectiveBitmapLen)
 
 	for i := uint64(0); i < effectiveBitmapLen; i++ {
 		if bitmap.IsSet(i) {
-			// fmt.Printf("DEBUG: bitmap位 %d 已设置，验证者地址: %s\n", i, as[i].Address.String())
-
-			// 修复：BLS key为nil时仍然添加验证者，这是可以容忍的
-			if as[i].BlsKey != nil {
-				filteredValidators = append(filteredValidators, as[i])
-				// fmt.Printf("DEBUG: 添加验证者到过滤结果: %s (BLS key存在)\n", as[i].Address.String())
-			} else {
-				// 关键修改：BLS密钥缺失时仍然添加验证者，这是可以容忍的
-				// 这样确保即使缺少BLS密钥的验证者也能参与法定人数计算
-				filteredValidators = append(filteredValidators, as[i])
-				// fmt.Printf("DEBUG: 添加验证者到过滤结果: %s (BLS key缺失，但继续添加)\n", as[i].Address.String())
-			}
-		} else {
-			// fmt.Printf("DEBUG: bitmap位 %d 未设置\n", i)
+			// BLS key 为 nil 时仍然添加验证者，确保参与法定人数计算
+			filteredValidators = append(filteredValidators, as[i])
 		}
 	}
-
-	// fmt.Printf("DEBUG: GetFilteredValidators - 解析完成，过滤后验证者数量: %d\n", len(filteredValidators))
-
-	// 打印过滤后的验证者详细信息
-	// fmt.Printf("DEBUG: 过滤后的验证者详细信息:\n")
-	// for i, validator := range filteredValidators {
-	// 	blsKeyStr := "nil"
-	// 	if validator.BlsKey != nil {
-	// 		blsKeyStr = fmt.Sprintf("%x", validator.BlsKey.Marshal())
-	// 	}
-	// 	fmt.Printf("DEBUG: 过滤后索引 %d: 地址 %s, BLS密钥: %s\n",
-	// 		i, validator.Address.String(), blsKeyStr)
-	// }
 
 	return filteredValidators, nil
 }

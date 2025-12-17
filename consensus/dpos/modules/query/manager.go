@@ -95,7 +95,9 @@ func (m *Manager) GetCurrentEpochInfo() map[string]interface{} {
 
 	blockTime := m.deps.BlockTime
 	if blockTime == 0 {
-		blockTime = 3 * time.Second
+		return map[string]interface{}{
+			"error": "blockTime 配置为0",
+		}
 	}
 
 	timeRemaining := time.Duration(remainingBlocks) * blockTime
@@ -288,7 +290,9 @@ func (m *Manager) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{
 	// 计算剩余时间
 	blockTime := m.deps.BlockTime
 	if blockTime == 0 {
-		blockTime = 3 * time.Second
+		return map[string]interface{}{
+			"error": "blockTime 配置为0",
+		}
 	}
 	timeRemaining := time.Duration(remainingBlocks) * blockTime
 

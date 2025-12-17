@@ -100,7 +100,7 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 		EndTime:        now + d.config.VoteLockTime, // 锁定时间
 		IsLocked:       d.config.VoteLockTime > 0,
 		IsActive:       true,           // 投票记录都是活跃的
-		Rewards:        big.NewInt(0),  // TODO: 实现奖励计算
+		Rewards:        big.NewInt(0),  // 奖励通过 RewardStore 独立存储，此字段保留用于兼容
 		Delegate:       candidate,      // 投票给哪个 delegate
 		EffectiveEpoch: effectiveEpoch, // ✅ 新增：保存生效的epoch
 		Applied:        applied,        // ✅ 新增：保存是否已应用
