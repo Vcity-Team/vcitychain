@@ -3,6 +3,7 @@ package dpos
 import (
 	"context"
 	"fmt"
+	"time"
 
 	dposProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
 	"github.com/Vcity-Team/vcitychain/types"
@@ -154,7 +155,9 @@ func (r *dposRuntime) handleSignatureRequestMessage(obj interface{}, from peer.I
 
 	// 检查自己是否是验证者
 	if !r.isValidator() {
-		r.logger.Info("自己不是验证者，忽略签名请求", "本地节点", types.Address(r.config.Key.Address()).String())
+		r.logOnceWithInterval("not_validator_ignore_sig_req", 10*time.Second, "info",
+			"自己不是验证者，忽略签名请求",
+			"本地节点", types.Address(r.config.Key.Address()).String())
 		return
 	}
 
@@ -203,7 +206,8 @@ func (r *dposRuntime) HandleSignatureRequest(request *SignatureRequest) error {
 
 	// 检查自己是否是验证者
 	if !r.isValidator() {
-		r.logger.Info("自己不是验证者，忽略签名请求")
+		r.logOnceWithInterval("not_validator_ignore_sig_req_2", 10*time.Second, "info",
+			"自己不是验证者，忽略签名请求")
 		return nil
 	}
 
