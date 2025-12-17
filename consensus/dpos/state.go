@@ -993,8 +993,6 @@ func (rs *RewardStore) RecordReward(record *RewardRecordExtended) error {
 		}
 
 		// 检查是否已存在记录（用于跟踪覆盖）
-		existingData := bucket.Get([]byte(key))
-		isOverwrite := existingData != nil
 		// 日志已删除：检测到覆盖已有记录
 
 		// 生成唯一ID
