@@ -1,6 +1,7 @@
 package dpos
 
 import (
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
 )
@@ -30,9 +31,10 @@ type BlockStats struct {
 func (bc *BlockCounter) CalculateBlockStats(
 	validatorAddr types.Address,
 	startEpoch, endEpoch uint64,
+	currentValidators validator.AccountSet,
 ) BlockStats {
 	// 调用 dposInstance.calculateMissedBlocksWithActual
-	missedBlocks, actualBlocks, expectedBlocks := bc.dposInstance.calculateMissedBlocksWithActual(validatorAddr, startEpoch, endEpoch)
+	missedBlocks, actualBlocks, expectedBlocks := bc.dposInstance.calculateMissedBlocksWithActual(validatorAddr, startEpoch, endEpoch, currentValidators)
 
 	return BlockStats{
 		ExpectedBlocks: expectedBlocks,

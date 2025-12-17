@@ -238,7 +238,8 @@ func (fd *FaultDetector) detectValidatorFaults(
 
 		// 计算出块统计
 		// epochToCheck存储的是索引，直接使用
-		stats := fd.blockCounter.CalculateBlockStats(validator.Address, epochInfo.EpochToCheck, epochInfo.EpochToCheck)
+		// 传入当前验证者集合，用于计算被剔除验证者的出块数
+		stats := fd.blockCounter.CalculateBlockStats(validator.Address, epochInfo.EpochToCheck, epochInfo.EpochToCheck, validators)
 
 		// 更新漏块数计数
 		fd.dposInstance.missedBlocksCount[validator.Address] = stats.MissedBlocks

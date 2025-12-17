@@ -557,101 +557,73 @@ func (d *DPoS) getValidatorsForEpoch(epochNumber uint64) (validator.AccountSet, 
 	return validators, nil
 }
 
-func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, startEpoch, endEpoch uint64) (uint64, uint64, uint64) {
+func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, startEpoch, endEpoch uint64, currentValidators validator.AccountSet) (uint64, uint64, uint64) {
 	missedBlocks := uint64(0)
 	var epochToCheck uint64
 	var expectedBlocks uint64
 	var actualBlocks uint64
 
-	// 计算每个epoch中该验证者应该出块的次数
-	blocksPerEpoch := d.getEpochSize()
+	// 🔧 检查 blockTracker 是否可用
+	if d.blockTracker == nil {
+		d.logger.Error("❌ [calculateMissedBlocksWithActual] blockTracker 为 nil")
+		return 0, 0, 0
+	}
 
 	// 🔧 修复：当 startEpoch == endEpoch 时也应该计算（单个epoch的统计）
 	if endEpoch >= startEpoch {
 		epochToCheck = endEpoch
-		epochNumberForCheck := epochToCheck + 1
+		epochNumberForCheck := epochToCheck + 1 // blockTracker 使用 1-based epochNumber
 
-		// 从该epoch开始区块的ExtraData或数据库获取该epoch的验证者集合
-		validatorsCount := uint64(0)
-		var validatorsSource string
-		var epochValidators validator.AccountSet
-		var err error
+		// 1. 从 blockTracker 获取该 epoch 所有出块统计（O(1)）
+		allBlockCounts := d.blockTracker.GetEpochBlockCounts(epochNumberForCheck)
+		if len(allBlockCounts) == 0 {
+			d.logger.Error("❌ [calculateMissedBlocksWithActual] 无法获取出块统计",
+				"epochNumber", epochNumberForCheck)
+			return 0, 0, 0
+		}
 
-		if epochValidators, err = d.getValidatorsForEpoch(epochNumberForCheck); err == nil && len(epochValidators) > 0 {
-			validatorsCount = uint64(len(epochValidators))
-			validatorsSource = "database"
-		} else {
-			// 备用方案：使用当前内存中的验证者集合
-			if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
-				validatorsCount = uint64(len(d.runtime.delegates))
-				validatorsSource = "runtime.delegates"
-				epochValidators = d.runtime.delegates
-			} else if len(d.delegates) > 0 {
-				validatorsCount = uint64(len(d.delegates))
-				validatorsSource = "d.delegates"
-			} else {
-				d.logger.Warn("⚠️ [calculateMissedBlocksWithActual] 无法获取验证者集合",
-					"error", err,
-					"epochNumberForCheck", epochNumberForCheck)
+		// 2. 获取该验证者的实际出块数
+		actualBlocks = allBlockCounts[validatorAddr]
+
+		// 3. 计算被剔除验证者的出块数（不在当前验证者集合中的）
+		removedValidatorsBlocks := uint64(0)
+		for addr, count := range allBlockCounts {
+			if !currentValidators.ContainsAddress(addr) {
+				removedValidatorsBlocks += count
 			}
 		}
+
+		// 4. 计算有效总出块数（排除被剔除验证者）
+		totalBlocks := d.blockTracker.GetTotalEpochBlocks(epochNumberForCheck)
+		effectiveBlocks := totalBlocks - removedValidatorsBlocks
+
+		// 5. 计算期望出块数
+		validatorsCount := uint64(len(currentValidators))
 		if validatorsCount == 0 {
 			validatorsCount = 1 // 避免除零
-			d.logger.Warn("⚠️ [calculateMissedBlocksWithActual] 验证者数量为0，使用默认值1")
 		}
-
-		// 计算该验证者在这个epoch中应该出块的次数
-		expectedBlocks = blocksPerEpoch / validatorsCount
+		if effectiveBlocks > 0 {
+			expectedBlocks = effectiveBlocks / validatorsCount
+		}
 		if expectedBlocks == 0 {
 			expectedBlocks = 1 // 至少应该出1个块
 		}
 
-		// 查询区块历史，计算实际出块数
-		if d.blockchain != nil {
-			actualBlocks = 0
-			consensusSwitchHeight := d.config.ConsensusSwitchHeight
-
-			// 修复：正确计算epoch对应的区块范围
-			epochStartBlock := consensusSwitchHeight + epochToCheck*blocksPerEpoch
-			epochEndBlock := consensusSwitchHeight + (epochToCheck+1)*blocksPerEpoch
-
-			// 查询这个epoch中该验证者实际出块的次数
-			for blockNum := epochStartBlock; blockNum < epochEndBlock; blockNum++ {
-				header, exists := d.blockchain.GetHeaderByNumber(blockNum)
-				if (!exists || header == nil) && blockNum == epochEndBlock-1 {
-					if pendingHeader := d.getPendingEpochEndHeader(blockNum); pendingHeader != nil {
-						header = pendingHeader
-						exists = true
-					}
-				}
-
-				if exists && header != nil {
-					// 修复：通过Miner字段检查出块者
-					if len(header.Miner) == 20 {
-						minerAddr := types.Address(header.Miner)
-						if minerAddr == validatorAddr {
-							actualBlocks++
-						}
-					}
-				}
-			}
-
-			// 计算漏块数
-			if expectedBlocks > actualBlocks {
-				missedBlocks = expectedBlocks - actualBlocks
-			}
-
-			d.logger.Info("📊 [calculateMissedBlocksWithActual] 出块统计",
-				"validator", validatorAddr.String(),
-				"epoch", epochToCheck,
-				"blockRange", fmt.Sprintf("[%d,%d)", epochStartBlock, epochEndBlock),
-				"expected", expectedBlocks,
-				"actual", actualBlocks,
-				"missed", missedBlocks,
-				"validatorsSrc", validatorsSource)
-		} else {
-			d.logger.Warn("⚠️ [calculateMissedBlocksWithActual] blockchain为nil，无法计算实际出块数")
+		// 6. 计算漏块数
+		if expectedBlocks > actualBlocks {
+			missedBlocks = expectedBlocks - actualBlocks
 		}
+
+		d.logger.Info("📊 [calculateMissedBlocksWithActual] 出块统计",
+			"validator", validatorAddr.String(),
+			"epoch", epochToCheck,
+			"expected", expectedBlocks,
+			"actual", actualBlocks,
+			"missed", missedBlocks,
+			"totalBlocks", totalBlocks,
+			"removedBlocks", removedValidatorsBlocks,
+			"effectiveBlocks", effectiveBlocks,
+			"currentValidators", validatorsCount)
 	}
 
 	return missedBlocks, actualBlocks, expectedBlocks
