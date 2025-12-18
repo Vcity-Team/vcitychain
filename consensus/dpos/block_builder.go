@@ -1013,24 +1013,44 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				return nil, fmt.Errorf("failed to get parent header for block %d", block.Block.Number()-1)
 			}
 
-			// 解析父区块的ExtraData
-			parentExtra, err := GetDposExtra(parentHeader.ExtraData)
-			if err != nil {
-				r.logger.Error("failed to parse parent extra data", "error", err)
-				return nil, fmt.Errorf("failed to parse parent extra data: %w", err)
+			// 检查是否是共识切换高度，且父区块是IBFT区块
+			isConsensusSwitchHeight := false
+			if r.config != nil && r.config.dposBackend != nil {
+				if dposInstance, ok := r.config.dposBackend.(*DPoS); ok && dposInstance.config != nil {
+					consensusSwitchHeight := dposInstance.config.ConsensusSwitchHeight
+					if consensusSwitchHeight > 0 && block.Block.Number() == consensusSwitchHeight {
+						isConsensusSwitchHeight = true
+						// 父区块是IBFT区块，没有DPoS格式的ExtraData
+						r.logger.Info("🔄 共识切换高度：父区块是IBFT，跳过ExtraData解析",
+							"blockNumber", block.Block.Number(),
+							"parentNumber", parentHeader.Number,
+							"switchHeight", consensusSwitchHeight)
+						// parentSignature保持为nil，这是正常的
+					}
+				}
 			}
 
-			// 使用父区块的Committed签名作为当前区块的Parent签名
-			if parentExtra.Committed != nil {
-				parentSignature = parentExtra.Committed
-				r.logger.Debug("设置父区块签名",
-					"blockNumber", block.Block.Number(),
-					"parentNumber", parentHeader.Number,
-					"parentSignatureLength", len(parentSignature.AggregatedSignature))
-			} else {
-				r.logger.Debug("父区块没有Committed签名",
-					"blockNumber", block.Block.Number(),
-					"parentNumber", parentHeader.Number)
+			// 如果不是共识切换高度，或者父区块是DPoS区块，则正常解析
+			if !isConsensusSwitchHeight {
+				// 解析父区块的ExtraData
+				parentExtra, err := GetDposExtra(parentHeader.ExtraData)
+				if err != nil {
+					r.logger.Error("failed to parse parent extra data", "error", err)
+					return nil, fmt.Errorf("failed to parse parent extra data: %w", err)
+				}
+
+				// 使用父区块的Committed签名作为当前区块的Parent签名
+				if parentExtra.Committed != nil {
+					parentSignature = parentExtra.Committed
+					r.logger.Debug("设置父区块签名",
+						"blockNumber", block.Block.Number(),
+						"parentNumber", parentHeader.Number,
+						"parentSignatureLength", len(parentSignature.AggregatedSignature))
+				} else {
+					r.logger.Debug("父区块没有Committed签名",
+						"blockNumber", block.Block.Number(),
+						"parentNumber", parentHeader.Number)
+				}
 			}
 		}
 

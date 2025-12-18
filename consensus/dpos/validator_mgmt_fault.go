@@ -223,7 +223,12 @@ func (d *DPoS) getValidatorFaultInfo(validatorAddr types.Address) map[string]int
 				}
 			}
 		} else {
-			d.logger.Debug("🔍 数据库中没有找到故障状态记录",
+			// 使用节流机制，每60秒最多输出一次日志，避免刷屏
+			d.logOnceWithInterval(
+				"no_fault_record_"+validatorAddr.String(),
+				60*time.Second,
+				"debug",
+				"🔍 数据库中没有找到故障状态记录",
 				"address", validatorAddr.String())
 		}
 	}
@@ -610,9 +615,9 @@ func (d *DPoS) calculateMissedBlocksWithActual(validatorAddr types.Address, star
 		}
 
 		// 6. 计算漏块数
-			if expectedBlocks > actualBlocks {
-				missedBlocks = expectedBlocks - actualBlocks
-			}
+		if expectedBlocks > actualBlocks {
+			missedBlocks = expectedBlocks - actualBlocks
+		}
 
 		d.logger.Info("📊 [calculateMissedBlocksWithActual] 出块统计",
 			"validator", validatorAddr.String(),
