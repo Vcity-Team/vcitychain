@@ -2,6 +2,7 @@ package network
 
 import (
 	"encoding/hex"
+	"strings"
 
 	"github.com/Vcity-Team/vcitychain/secrets"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -34,7 +35,9 @@ func GenerateAndEncodeLibp2pKey() (crypto.PrivKey, []byte, error) {
 
 // ParseLibp2pKey converts a byte array to a private key
 func ParseLibp2pKey(key []byte) (crypto.PrivKey, error) {
-	buf, err := hex.DecodeString(string(key))
+	// Trim whitespace (including newlines) that might be present in the key file
+	keyStr := strings.TrimSpace(string(key))
+	buf, err := hex.DecodeString(keyStr)
 	if err != nil {
 		return nil, err
 	}
