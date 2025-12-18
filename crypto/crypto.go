@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hash"
 	"math/big"
+	"strings"
 
 	"github.com/Vcity-Team/vcitychain/helper/hex"
 	"github.com/Vcity-Team/vcitychain/helper/keystore"
@@ -288,9 +289,11 @@ func generateECDSAKeyAndMarshal() ([]byte, error) {
 
 // BytesToECDSAPrivateKey reads the input byte array and constructs a private key if possible
 func BytesToECDSAPrivateKey(input []byte) (*ecdsa.PrivateKey, error) {
-	// The key file on disk should be encoded in Base64,
+	// The key file on disk should be encoded in hex,
 	// so it must be decoded before it can be parsed by ParsePrivateKey
-	decoded, err := hex.DecodeString(string(input))
+	// Trim whitespace (including newlines) that might be present in the key file
+	keyStr := strings.TrimSpace(string(input))
+	decoded, err := hex.DecodeString(keyStr)
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +344,9 @@ func generateBLSKeyAndMarshal() ([]byte, error) {
 func BytesToBLSSecretKey(input []byte) (*bls_sig.SecretKey, error) {
 	// The key file on disk should be encoded in hex,
 	// so it must be decoded before it can be parsed by ParsePrivateKey
-	decoded, err := hex.DecodeString(string(input))
+	// Trim whitespace (including newlines) that might be present in the key file
+	keyStr := strings.TrimSpace(string(input))
+	decoded, err := hex.DecodeString(keyStr)
 	if err != nil {
 		return nil, err
 	}

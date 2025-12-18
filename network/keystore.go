@@ -2,6 +2,7 @@ package network
 
 import (
 	"encoding/hex"
+	"fmt"
 	"strings"
 
 	"github.com/Vcity-Team/vcitychain/secrets"
@@ -37,9 +38,16 @@ func GenerateAndEncodeLibp2pKey() (crypto.PrivKey, []byte, error) {
 func ParseLibp2pKey(key []byte) (crypto.PrivKey, error) {
 	// Trim whitespace (including newlines) that might be present in the key file
 	keyStr := strings.TrimSpace(string(key))
+	if len(keyStr) == 0 {
+		return nil, fmt.Errorf("empty key after trimming whitespace")
+	}
 	buf, err := hex.DecodeString(keyStr)
 	if err != nil {
-		return nil, err
+		previewLen := 20
+		if len(keyStr) < previewLen {
+			previewLen = len(keyStr)
+		}
+		return nil, fmt.Errorf("failed to decode hex key (length: %d, first %d chars: %q): %w", len(keyStr), previewLen, keyStr[:previewLen], err)
 	}
 
 	libp2pKey, err := crypto.UnmarshalPrivateKey(buf)
