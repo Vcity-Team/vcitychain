@@ -19,6 +19,8 @@ import (
 	"github.com/Vcity-Team/vcitychain/types"
 )
 
+const statusTopicName = "syncer/status/0.1"
+
 var (
 	networkConfig = func(c *network.Config) {
 		c.NoDiscover = true

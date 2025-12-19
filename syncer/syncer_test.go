@@ -36,12 +36,15 @@ func (m *mockProgression) GetProgression() *progress.Progression {
 }
 
 type mockBlockchain struct {
-	subscription                blockchain.Subscription
-	headerHandler               func() *types.Header
-	getBlockByNumberHandler     func(uint64, bool) (*types.Block, bool)
-	verifyFinalizedBlockHandler func(*types.Block) (*types.FullBlock, error)
-	writeBlockHandler           func(*types.Block) error
-	writeFullBlockHandler       func(*types.FullBlock) error
+	subscription                      blockchain.Subscription
+	headerHandler                     func() *types.Header
+	getBlockByNumberHandler           func(uint64, bool) (*types.Block, bool)
+	getBlockByHashHandler             func(types.Hash, bool) (*types.Block, bool)
+	verifyFinalizedBlockHandler       func(*types.Block) (*types.FullBlock, error)
+	writeBlockHandler                 func(*types.Block) error
+	writeFullBlockHandler             func(*types.FullBlock) error
+	writeBlockWithoutConsensusHandler func(*types.Block) error
+	getConsensusHandler               func() blockchain.Verifier
 }
 
 func (m *mockBlockchain) SubscribeEvents() blockchain.Subscription {
@@ -59,6 +62,13 @@ func (m *mockBlockchain) GetBlockByNumber(number uint64, full bool) (*types.Bloc
 	return m.getBlockByNumberHandler(number, full)
 }
 
+func (m *mockBlockchain) GetBlockByHash(hash types.Hash, full bool) (*types.Block, bool) {
+	if m.getBlockByHashHandler != nil {
+		return m.getBlockByHashHandler(hash, full)
+	}
+	return nil, false
+}
+
 func (m *mockBlockchain) VerifyFinalizedBlock(b *types.Block) (*types.FullBlock, error) {
 	return m.verifyFinalizedBlockHandler(b)
 }
@@ -69,6 +79,20 @@ func (m *mockBlockchain) WriteBlock(b *types.Block, s string) error {
 
 func (m *mockBlockchain) WriteFullBlock(b *types.FullBlock, s string) error {
 	return m.writeFullBlockHandler(b)
+}
+
+func (m *mockBlockchain) WriteBlockWithoutConsensus(b *types.Block, s string) error {
+	if m.writeBlockWithoutConsensusHandler != nil {
+		return m.writeBlockWithoutConsensusHandler(b)
+	}
+	return nil
+}
+
+func (m *mockBlockchain) GetConsensus() blockchain.Verifier {
+	if m.getConsensusHandler != nil {
+		return m.getConsensusHandler()
+	}
+	return nil
 }
 
 func newSimpleHeaderHandler(num uint64) func() *types.Header {
@@ -93,6 +117,7 @@ type mockSyncPeerClient struct {
 	getPeerStatusHandler                  func(peer.ID) (*NoForkPeer, error)
 	getConnectedPeerStatusesHandler       func() []*NoForkPeer
 	getBlocksHandler                      func(peer.ID, uint64, time.Duration) (<-chan *types.Block, error)
+	getBlockByHashHandler                 func(peer.ID, types.Hash) (*types.Block, error)
 	getPeerStatusUpdateChHandler          func() <-chan *NoForkPeer
 	getPeerConnectionUpdateEventChHandler func() <-chan *event.PeerEvent
 }
@@ -121,6 +146,13 @@ func (m *mockSyncPeerClient) GetBlocks(
 	timeoutPerBlock time.Duration,
 ) (<-chan *types.Block, error) {
 	return m.getBlocksHandler(id, start, timeoutPerBlock)
+}
+
+func (m *mockSyncPeerClient) GetBlockByHash(peerID peer.ID, hash types.Hash) (*types.Block, error) {
+	if m.getBlockByHashHandler != nil {
+		return m.getBlockByHashHandler(peerID, hash)
+	}
+	return nil, fmt.Errorf("GetBlockByHash not implemented in mock")
 }
 
 func (m *mockSyncPeerClient) GetPeerStatusUpdateCh() <-chan *NoForkPeer {
