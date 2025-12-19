@@ -113,6 +113,30 @@ func (s *syncPeerService) GetStatus(
 	}, nil
 }
 
+// GetBlockByHash 按 hash 返回单个区块（服务端实现）
+func (s *syncPeerService) GetBlockByHash(
+	ctx context.Context,
+	req *proto.GetBlockByHashRequest,
+) (*proto.Block, error) {
+	hash := types.BytesToHash(req.Hash)
+
+	// 从本地数据库获取区块
+	block, ok := s.blockchain.GetBlockByHash(hash, true)
+	if !ok {
+		s.logger.Error("区块未找到", "hash", hash.String())
+		return nil, ErrBlockNotFound
+	}
+
+	resp := toProtoBlock(block)
+	metrics.SetGauge([]string{syncerMetrics, "egress_bytes"}, float32(len(resp.Block)))
+
+	s.logger.Debug("✅ 按hash返回区块成功",
+		"hash", hash.String(),
+		"blockNumber", block.Number())
+
+	return resp, nil
+}
+
 // toProtoBlock converts type.Block -> proto.Block
 func toProtoBlock(block *types.Block) *proto.Block {
 	return &proto.Block{

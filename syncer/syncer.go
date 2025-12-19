@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Vcity-Team/vcitychain/blockchain"
 	"github.com/Vcity-Team/vcitychain/helper/progress"
 	"github.com/Vcity-Team/vcitychain/network/event"
 	"github.com/Vcity-Team/vcitychain/types"
@@ -482,9 +483,43 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
 				s.logger.Error("区块验证失败", "peer", peerID.String(), "区块号", block.Number(), "error", err)
 
-				// 区块验证失败时立即退出程序
-				s.logger.Error("💀 区块验证失败，程序将立即退出")
-				os.Exit(1)
+				// 检查是否是 parent 不匹配错误（可能是分叉）
+				if errors.Is(err, blockchain.ErrParentNotFound) || errors.Is(err, blockchain.ErrParentHashMismatch) {
+					// parent 不匹配，触发分叉处理
+					s.logger.Info("🔀 检测到分叉，开始分叉处理",
+						"peer", peerID.String(),
+						"blockNumber", block.Number(),
+						"blockHash", block.Hash().String(),
+						"error", err)
+
+					// 尝试分叉恢复
+					if forkErr := s.handleFork(peerID, block); forkErr != nil {
+						s.logger.Error("分叉处理失败，断开该peer",
+							"peer", peerID.String(),
+							"error", forkErr)
+						// 断开该 peer 连接
+						if err := s.syncPeerClient.CloseStream(peerID); err != nil {
+							s.logger.Debug("关闭peer流失败", "peer", peerID.String(), "error", err)
+						}
+						// 继续尝试其他 peer
+						continue
+					} else {
+						// 分叉处理成功，重新验证并写入
+						s.logger.Info("✅ 分叉处理成功，重新验证区块",
+							"peer", peerID.String(),
+							"blockNumber", block.Number())
+						fullBlock, err = s.blockchain.VerifyFinalizedBlock(block)
+						if err != nil {
+							s.logger.Error("分叉处理后区块验证仍失败", "error", err)
+							continue
+						}
+						// 继续写入流程
+					}
+				} else {
+					// 其他错误才退出程序
+					s.logger.Error("💀 区块验证失败（非分叉错误），程序将立即退出")
+					os.Exit(1)
+				}
 			}
 			s.logger.Debug("✅ 区块验证完成", "peer", peerID.String()[:8], "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
 
@@ -611,4 +646,253 @@ func (s *syncer) filterProcessedTransactions(transactions []*types.Transaction) 
 // GetSyncPeerClient returns the sync peer client for controlling status broadcasting
 func (s *syncer) GetSyncPeerClient() SyncPeerClient {
 	return s.syncPeerClient
+}
+
+// handleFork 处理分叉：回溯找共同祖先，下载分叉链，触发 reorg
+func (s *syncer) handleFork(peerID peer.ID, forkBlock *types.Block) error {
+	s.logger.Info("🔀 [分叉处理] 开始处理分叉",
+		"peer", peerID.String(),
+		"forkBlockNumber", forkBlock.Number(),
+		"forkBlockHash", forkBlock.Hash().String(),
+		"forkBlockParent", forkBlock.ParentHash().String())
+
+	// 步骤1：回溯找共同祖先
+	commonAncestor, err := s.findCommonAncestor(peerID, forkBlock)
+	if err != nil {
+		return fmt.Errorf("failed to find common ancestor: %w", err)
+	}
+
+	s.logger.Info("🔀 [分叉处理] 找到共同祖先",
+		"commonAncestorNumber", commonAncestor.Number,
+		"commonAncestorHash", commonAncestor.Hash.String())
+
+	// 步骤2：下载分叉链（从共同祖先的下一个区块到分叉区块）
+	forkChain, err := s.downloadForkChain(peerID, commonAncestor.Hash, forkBlock.Number())
+	if err != nil {
+		return fmt.Errorf("failed to download fork chain: %w", err)
+	}
+
+	s.logger.Info("🔀 [分叉处理] 分叉链下载完成",
+		"forkChainLength", len(forkChain),
+		"fromBlock", commonAncestor.Number+1,
+		"toBlock", forkBlock.Number())
+
+	// 步骤3：验证并写入分叉链的所有区块
+	for i, block := range forkChain {
+		s.logger.Info("🔀 [分叉处理] 验证分叉链区块",
+			"index", i+1,
+			"total", len(forkChain),
+			"blockNumber", block.Number(),
+			"blockHash", block.Hash().String())
+
+		fullBlock, err := s.blockchain.VerifyFinalizedBlock(block)
+		if err != nil {
+			return fmt.Errorf("failed to verify fork chain block %d: %w", block.Number(), err)
+		}
+
+		// 写入分叉链区块（这会触发 reorg）
+		if err := s.blockchain.WriteFullBlock(fullBlock, syncerName); err != nil {
+			return fmt.Errorf("failed to write fork chain block %d: %w", block.Number(), err)
+		}
+
+		s.logger.Info("🔀 [分叉处理] 分叉链区块写入成功",
+			"blockNumber", block.Number())
+	}
+
+	s.logger.Info("✅ [分叉处理] 分叉处理完成",
+		"forkChainLength", len(forkChain),
+		"newHeadNumber", forkBlock.Number())
+
+	return nil
+}
+
+// findCommonAncestor 回溯找共同祖先
+func (s *syncer) findCommonAncestor(peerID peer.ID, forkBlock *types.Block) (*types.Header, error) {
+	s.logger.Info("🔍 [找共同祖先] 开始回溯",
+		"forkBlockNumber", forkBlock.Number(),
+		"forkBlockHash", forkBlock.Hash().String(),
+		"forkBlockParent", forkBlock.ParentHash().String())
+
+	localHeader := s.blockchain.Header()
+	if localHeader == nil {
+		return nil, fmt.Errorf("failed to get local header")
+	}
+
+	// 从分叉区块的 parent 开始，向上回溯
+	currentHash := forkBlock.ParentHash()
+	currentNumber := forkBlock.Number() - 1
+
+	// 最多回溯 1000 个区块（防止无限循环）
+	maxBacktrack := uint64(1000)
+	backtrackCount := uint64(0)
+
+	for backtrackCount < maxBacktrack && currentNumber > 0 {
+		// 先检查本地是否有该区块
+		localBlock, ok := s.blockchain.GetBlockByNumber(currentNumber, false)
+		if ok {
+			// 检查 hash 是否匹配
+			if localBlock.Hash() == currentHash {
+				// ✅ 找到共同祖先
+				s.logger.Info("✅ [找共同祖先] 找到共同祖先（本地已有）",
+					"blockNumber", currentNumber,
+					"blockHash", currentHash.String())
+				return localBlock.Header, nil
+			}
+			// hash 不匹配，说明是分叉点，继续向上回溯
+			s.logger.Info("🔍 [找共同祖先] 本地区块hash不匹配，继续回溯",
+				"blockNumber", currentNumber,
+				"localHash", localBlock.Hash().String(),
+				"remoteHash", currentHash.String())
+		}
+
+		// 本地没有或hash不匹配，从 peer 请求该区块
+		block, err := s.requestBlockByHash(peerID, currentHash)
+		if err != nil {
+			// 如果请求失败，尝试通过高度请求（fallback）
+			s.logger.Info("🔍 [找共同祖先] 按hash请求失败，尝试按高度请求",
+				"blockNumber", currentNumber,
+				"error", err)
+
+			// 使用 GetBlocks 按高度请求（简化处理）
+			blockCh, err := s.syncPeerClient.GetBlocks(peerID, currentNumber, s.blockTimeout)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get block %d: %w", currentNumber, err)
+			}
+
+			select {
+			case block, ok := <-blockCh:
+				if !ok {
+					return nil, fmt.Errorf("failed to receive block %d from peer", currentNumber)
+				}
+				if block.Number() != currentNumber {
+					return nil, fmt.Errorf("received wrong block: expected %d, got %d", currentNumber, block.Number())
+				}
+				// 检查 hash 是否匹配
+				if block.Hash() != currentHash {
+					// hash 不匹配，继续向上回溯
+					currentHash = block.ParentHash()
+					currentNumber = block.Number() - 1
+					backtrackCount++
+					continue
+				}
+			case <-time.After(s.blockTimeout):
+				return nil, fmt.Errorf("timeout waiting for block %d", currentNumber)
+			}
+		}
+
+		// 检查本地是否有该区块（再次检查，因为可能已经写入）
+		localBlock, ok = s.blockchain.GetBlockByNumber(currentNumber, false)
+		if ok && localBlock.Hash() == currentHash {
+			// ✅ 找到共同祖先
+			s.logger.Info("✅ [找共同祖先] 找到共同祖先",
+				"blockNumber", currentNumber,
+				"blockHash", currentHash.String())
+			return localBlock.Header, nil
+		}
+
+		// 继续向上回溯
+		currentHash = block.ParentHash()
+		currentNumber = block.Number() - 1
+		backtrackCount++
+
+		s.logger.Info("🔍 [找共同祖先] 继续回溯",
+			"backtrackCount", backtrackCount,
+			"currentNumber", currentNumber,
+			"currentHash", currentHash.String())
+	}
+
+	return nil, fmt.Errorf("failed to find common ancestor within %d blocks", maxBacktrack)
+}
+
+// downloadForkChain 下载分叉链（从共同祖先的下一个区块到目标区块）
+func (s *syncer) downloadForkChain(peerID peer.ID, commonAncestorHash types.Hash, toNumber uint64) ([]*types.Block, error) {
+	s.logger.Info("📥 [下载分叉链] 开始下载",
+		"commonAncestorHash", commonAncestorHash.String(),
+		"toNumber", toNumber)
+
+	// 获取共同祖先区块
+	fromBlock, ok := s.blockchain.GetBlockByHash(commonAncestorHash, true)
+	if !ok {
+		return nil, fmt.Errorf("failed to get common ancestor block: %s", commonAncestorHash.String())
+	}
+
+	fromNumber := fromBlock.Number()
+	forkChain := make([]*types.Block, 0)
+
+	// 从共同祖先的下一个区块开始下载
+	for blockNum := fromNumber + 1; blockNum <= toNumber; blockNum++ {
+		// 先检查本地是否已有（可能已经下载过）
+		_, ok := s.blockchain.GetBlockByNumber(blockNum, true)
+		if ok {
+			// 本地已有，检查是否是分叉链的区块
+			// 这里简化：假设需要从 peer 重新获取（因为可能是不同分叉的区块）
+			s.logger.Info("📥 [下载分叉链] 本地已有区块，但需要确认是否是分叉链区块",
+				"blockNumber", blockNum)
+		}
+
+		// 从 peer 请求该区块（使用 GetBlocks 按高度请求，更简单）
+		blockCh, err := s.syncPeerClient.GetBlocks(peerID, blockNum, s.blockTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("failed to request block %d: %w", blockNum, err)
+		}
+
+		// 从 channel 读取第一个区块
+		select {
+		case block, ok := <-blockCh:
+			if !ok {
+				return nil, fmt.Errorf("failed to receive block %d from peer", blockNum)
+			}
+			if block.Number() != blockNum {
+				return nil, fmt.Errorf("received wrong block: expected %d, got %d", blockNum, block.Number())
+			}
+			forkChain = append(forkChain, block)
+			s.logger.Info("📥 [下载分叉链] 下载区块成功",
+				"blockNumber", blockNum,
+				"blockHash", block.Hash().String(),
+				"progress", fmt.Sprintf("%d/%d", len(forkChain), toNumber-fromNumber))
+		case <-time.After(s.blockTimeout):
+			return nil, fmt.Errorf("timeout waiting for block %d", blockNum)
+		}
+	}
+
+	s.logger.Info("✅ [下载分叉链] 分叉链下载完成",
+		"forkChainLength", len(forkChain),
+		"fromBlock", fromNumber+1,
+		"toBlock", toNumber)
+
+	return forkChain, nil
+}
+
+// requestBlockByHash 按 hash 从 peer 请求单个区块
+func (s *syncer) requestBlockByHash(peerID peer.ID, hash types.Hash) (*types.Block, error) {
+	s.logger.Debug("🔍 [请求区块] 按hash请求区块",
+		"peer", peerID.String(),
+		"hash", hash.String())
+
+	// 先检查本地是否已有
+	localBlock, ok := s.blockchain.GetBlockByHash(hash, true)
+	if ok {
+		s.logger.Debug("🔍 [请求区块] 本地已有区块，直接返回",
+			"hash", hash.String(),
+			"blockNumber", localBlock.Number())
+		return localBlock, nil
+	}
+
+	// 本地没有，从 peer 请求
+	block, err := s.syncPeerClient.GetBlockByHash(peerID, hash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get block by hash from peer: %w", err)
+	}
+
+	// 验证 hash 是否匹配
+	if block.Hash() != hash {
+		return nil, fmt.Errorf("block hash mismatch: expected %s, got %s", hash.String(), block.Hash().String())
+	}
+
+	s.logger.Debug("✅ [请求区块] 从peer获取区块成功",
+		"peer", peerID.String(),
+		"hash", hash.String(),
+		"blockNumber", block.Number())
+
+	return block, nil
 }

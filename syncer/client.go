@@ -573,6 +573,41 @@ func (m *syncPeerClient) GetBlocks(
 	return blockCh, nil
 }
 
+// GetBlockByHash 按 hash 从 peer 请求单个区块（P2P 网络请求）
+func (m *syncPeerClient) GetBlockByHash(peerID peer.ID, hash types.Hash) (*types.Block, error) {
+	m.logger.Debug("请求区块（按hash）", "peer", peerID.String(), "hash", hash.String())
+
+	clt, err := m.newSyncPeerClient(peerID)
+	if err != nil {
+		m.logger.Error("创建同步客户端失败", "peer", peerID.String(), "error", err)
+		return nil, fmt.Errorf("failed to create sync peer client: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := clt.GetBlockByHash(ctx, &proto.GetBlockByHashRequest{
+		Hash: hash.Bytes(),
+	})
+	if err != nil {
+		m.logger.Error("请求区块失败", "peer", peerID.String(), "hash", hash.String(), "error", err)
+		return nil, fmt.Errorf("failed to get block by hash: %w", err)
+	}
+
+	block, err := fromProto(resp)
+	if err != nil {
+		m.logger.Error("解析区块失败", "peer", peerID.String(), "error", err)
+		return nil, fmt.Errorf("failed to parse block: %w", err)
+	}
+
+	m.logger.Debug("✅ 按hash请求区块成功",
+		"peer", peerID.String(),
+		"hash", hash.String(),
+		"blockNumber", block.Number())
+
+	return block, nil
+}
+
 // newSyncPeerClient creates gRPC client
 func (m *syncPeerClient) newSyncPeerClient(peerID peer.ID) (proto.SyncPeerClient, error) {
 	conn, err := m.network.NewProtoConnection(syncerProto, peerID)
