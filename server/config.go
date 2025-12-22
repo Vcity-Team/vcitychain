@@ -75,9 +75,12 @@ type Config struct {
 	DPoSUnfreezeLockPeriod uint64 `yaml:"dpos_unfreeze_lock_period"` // 解冻锁定期（秒）
 
 	// 削减相关配置
-	DPoSMissedBlocksPercentage uint64 `yaml:"dpos_missed_blocks_percentage"` // 漏块率阈值（基点）
-	DPoSMinorOffenseSlashRate  uint64 `yaml:"dpos_minor_offense_slash_rate"` // 轻度违规削减率（基点）
+	DPoSMissedBlocksPercentage uint64 `yaml:"dpos_missed_blocks_percentage"`  // 漏块率阈值（基点）
+	DPoSMinorOffenseSlashRate  uint64 `yaml:"dpos_minor_offense_slash_rate"`  // 轻度违规削减率（基点）
 	DPoSSevereOffenseSlashRate uint64 `yaml:"dpos_severe_offense_slash_rate"` // 严重违规削减率（基点）
+
+	// EVM 配置
+	UseGethEVM bool `yaml:"use_geth_evm"` // 是否使用 go-ethereum EVM（true=最新 EVM，false=原生 EVM）
 }
 
 // Telemetry holds the config details for metric services

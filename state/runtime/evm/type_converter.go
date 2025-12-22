@@ -54,3 +54,5 @@ func VcHashToCommon(hash types.Hash) common.Hash {
 func CommonHashToVc(hash common.Hash) types.Hash {
 	return types.BytesToHash(hash.Bytes())
 }
+
+

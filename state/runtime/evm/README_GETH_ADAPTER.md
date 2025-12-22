@@ -125,3 +125,5 @@ go test ./state/runtime/evm/...
 1. 实现混合模式（简单交易用原生 EVM，复杂交易用 go-ethereum EVM）
 2. 性能优化（更多缓存、内联优化）
 3. 支持更多 go-ethereum 特性
+
+

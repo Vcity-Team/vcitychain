@@ -69,6 +69,7 @@ func TestBuildBlockContext(t *testing.T) {
 	assert.NotNil(t, blockCtx.Transfer)
 	assert.NotNil(t, blockCtx.GetHash)
 	assert.Equal(t, uint64(1), blockCtx.BlockNumber.Uint64())
-	assert.Equal(t, int64(1000), blockCtx.Time.Int64())
+	assert.Equal(t, uint64(1000), blockCtx.Time)
 	assert.Equal(t, uint64(1000000), blockCtx.GasLimit)
 }
+

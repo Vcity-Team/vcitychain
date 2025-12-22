@@ -26,3 +26,5 @@ func TestContractRefAdapter_Address(t *testing.T) {
 
 	assert.Equal(t, VcAddressToCommon(addr), commonAddr)
 }
+
+

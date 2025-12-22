@@ -7,6 +7,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/state/runtime"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/holiman/uint256"
 )
 
 var _ runtime.Runtime = &GethEVMAdapter{}
@@ -71,13 +72,17 @@ func (g *GethEVMAdapter) Run(
 	callerAddr := VcAddressToCommon(c.Caller)
 	contractAddr := VcAddressToCommon(c.Address)
 
+	// 将 big.Int 转换为 uint256.Int
+	value := new(uint256.Int)
+	value.SetFromBig(c.Value)
+
 	if c.Type == runtime.Create {
 		// 创建合约
 		ret, contractAddr, gasLeft, err = evm.Create(
 			vm.AccountRef(callerAddr),
 			c.Input,
 			c.Gas,
-			c.Value,
+			value,
 		)
 	} else {
 		// 调用合约
@@ -86,7 +91,7 @@ func (g *GethEVMAdapter) Run(
 			contractAddr,
 			c.Input,
 			c.Gas,
-			c.Value,
+			value,
 		)
 	}
 
@@ -104,3 +109,4 @@ func (g *GethEVMAdapter) Run(
 		Address:     CommonAddressToVc(contractAddr),
 	}
 }
+

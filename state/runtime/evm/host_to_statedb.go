@@ -9,6 +9,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	ethTypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/params"
+	"github.com/holiman/uint256"
 )
 
 // HostToStateDBAdapter 将 runtime.Host 适配成 vm.StateDB
@@ -32,29 +34,37 @@ func (h *HostToStateDBAdapter) CreateAccount(addr common.Address) {
 }
 
 // SubBalance 减少余额
-func (h *HostToStateDBAdapter) SubBalance(addr common.Address, amount *big.Int) {
-	if amount.Sign() == 0 {
+func (h *HostToStateDBAdapter) SubBalance(addr common.Address, amount *uint256.Int) {
+	if amount.IsZero() {
 		return
 	}
 	vcAddr := CommonAddressToVc(addr)
+	// 将 uint256.Int 转换为 big.Int
+	var amountBig *big.Int = amount.ToBig()
 	// 通过 Transfer 实现：从 addr 转到零地址
-	_ = h.host.Transfer(vcAddr, types.ZeroAddress, amount)
+	_ = h.host.Transfer(vcAddr, types.ZeroAddress, amountBig)
 }
 
 // AddBalance 增加余额
-func (h *HostToStateDBAdapter) AddBalance(addr common.Address, amount *big.Int) {
-	if amount.Sign() == 0 {
+func (h *HostToStateDBAdapter) AddBalance(addr common.Address, amount *uint256.Int) {
+	if amount.IsZero() {
 		return
 	}
 	vcAddr := CommonAddressToVc(addr)
+	// 将 uint256.Int 转换为 big.Int
+	var amountBig *big.Int = amount.ToBig()
 	// 通过 Transfer 实现：从零地址转到 addr
-	_ = h.host.Transfer(types.ZeroAddress, vcAddr, amount)
+	_ = h.host.Transfer(types.ZeroAddress, vcAddr, amountBig)
 }
 
 // GetBalance 获取余额
-func (h *HostToStateDBAdapter) GetBalance(addr common.Address) *big.Int {
+func (h *HostToStateDBAdapter) GetBalance(addr common.Address) *uint256.Int {
 	vcAddr := CommonAddressToVc(addr)
-	return h.host.GetBalance(vcAddr)
+	balanceBig := h.host.GetBalance(vcAddr)
+	// 将 big.Int 转换为 uint256.Int
+	balance := new(uint256.Int)
+	balance.SetFromBig(balanceBig)
+	return balance
 }
 
 // GetNonce 获取 nonce
@@ -110,16 +120,32 @@ func (h *HostToStateDBAdapter) SetState(addr common.Address, key, value common.H
 	h.host.SetState(vcAddr, vcKey, vcValue)
 }
 
-// Suicide 销毁账户
+// Suicide 销毁账户（已废弃，使用 SelfDestruct）
 func (h *HostToStateDBAdapter) Suicide(addr common.Address) bool {
-	vcAddr := CommonAddressToVc(addr)
-	// 使用 Selfdestruct，beneficiary 设为零地址
-	h.host.Selfdestruct(vcAddr, types.ZeroAddress)
+	h.SelfDestruct(addr)
 	return true
 }
 
-// HasSuicided 检查账户是否已销毁
+// SelfDestruct 销毁账户
+func (h *HostToStateDBAdapter) SelfDestruct(addr common.Address) {
+	vcAddr := CommonAddressToVc(addr)
+	// 使用 Selfdestruct，beneficiary 设为零地址
+	h.host.Selfdestruct(vcAddr, types.ZeroAddress)
+}
+
+// Selfdestruct6780 销毁账户（EIP-6780）
+func (h *HostToStateDBAdapter) Selfdestruct6780(addr common.Address) {
+	// EIP-6780 的行为与 SelfDestruct 相同，但只在同一交易中有效
+	h.SelfDestruct(addr)
+}
+
+// HasSuicided 检查账户是否已销毁（已废弃，使用 HasSelfDestructed）
 func (h *HostToStateDBAdapter) HasSuicided(addr common.Address) bool {
+	return h.HasSelfDestructed(addr)
+}
+
+// HasSelfDestructed 检查账户是否已销毁
+func (h *HostToStateDBAdapter) HasSelfDestructed(addr common.Address) bool {
 	vcAddr := CommonAddressToVc(addr)
 	return !h.host.AccountExists(vcAddr) && h.host.Empty(vcAddr)
 }
@@ -136,8 +162,13 @@ func (h *HostToStateDBAdapter) Empty(addr common.Address) bool {
 	return h.host.Empty(vcAddr)
 }
 
-// PrepareAccessList 准备访问列表（EIP-2930）
+// PrepareAccessList 准备访问列表（EIP-2930，已废弃，使用 Prepare）
 func (h *HostToStateDBAdapter) PrepareAccessList(sender common.Address, dest *common.Address, precompiles []common.Address, list ethTypes.AccessList) {
+	// vcitychain 可能不支持 AccessList，这里可以空实现
+}
+
+// Prepare 准备访问列表（新版本）
+func (h *HostToStateDBAdapter) Prepare(rules params.Rules, sender, coinbase common.Address, dest *common.Address, precompiles []common.Address, txAccesses ethTypes.AccessList) {
 	// vcitychain 可能不支持 AccessList，这里可以空实现
 }
 
@@ -151,6 +182,28 @@ func (h *HostToStateDBAdapter) AddressInAccessList(addr common.Address) bool {
 func (h *HostToStateDBAdapter) SlotInAccessList(addr common.Address, slot common.Hash) (addressOk bool, slotOk bool) {
 	// vcitychain 可能不支持 AccessList，返回 false
 	return false, false
+}
+
+// AddAddressToAccessList 添加地址到访问列表
+func (h *HostToStateDBAdapter) AddAddressToAccessList(addr common.Address) {
+	// vcitychain 可能不支持 AccessList，这里可以空实现
+}
+
+// AddSlotToAccessList 添加存储槽到访问列表
+func (h *HostToStateDBAdapter) AddSlotToAccessList(addr common.Address, slot common.Hash) {
+	// vcitychain 可能不支持 AccessList，这里可以空实现
+}
+
+// GetTransientState 获取临时状态（用于某些 EIP）
+func (h *HostToStateDBAdapter) GetTransientState(addr common.Address, key common.Hash) common.Hash {
+	// 对于大多数情况，与 GetState 相同
+	return h.GetState(addr, key)
+}
+
+// SetTransientState 设置临时状态（用于某些 EIP）
+func (h *HostToStateDBAdapter) SetTransientState(addr common.Address, key, value common.Hash) {
+	// 对于大多数情况，与 SetState 相同
+	h.SetState(addr, key, value)
 }
 
 // AddRefund 增加退款
@@ -223,3 +276,4 @@ func (h *HostToStateDBAdapter) IntermediateRoot(deleteEmptyObjects bool) common.
 	// 这里返回零哈希
 	return common.Hash{}
 }
+

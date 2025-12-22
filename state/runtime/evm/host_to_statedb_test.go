@@ -6,6 +6,7 @@ import (
 
 	"github.com/Vcity-Team/vcitychain/chain"
 	"github.com/Vcity-Team/vcitychain/types"
+	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -20,7 +21,9 @@ func TestHostToStateDBAdapter_GetBalance(t *testing.T) {
 	commonAddr := VcAddressToCommon(addr)
 
 	balance := adapter.GetBalance(commonAddr)
-	assert.Equal(t, big.NewInt(1000), balance)
+	expected := new(uint256.Int)
+	expected.SetUint64(1000)
+	assert.Equal(t, expected, balance)
 }
 
 func TestHostToStateDBAdapter_GetState(t *testing.T) {
@@ -113,3 +116,4 @@ func TestHostToStateDBAdapter_Empty(t *testing.T) {
 	commonAddr := VcAddressToCommon(addr)
 	assert.False(t, adapter.Empty(commonAddr))
 }
+

@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/holiman/uint256"
 )
 
 // buildBlockContext 构建 BlockContext
@@ -16,11 +17,11 @@ func buildBlockContext(host runtime.Host, header *types.Header) vm.BlockContext 
 	txCtx := host.GetTxContext()
 
 	blockCtx := vm.BlockContext{
-		CanTransfer: func(db vm.StateDB, addr common.Address, amount *big.Int) bool {
+		CanTransfer: func(db vm.StateDB, addr common.Address, amount *uint256.Int) bool {
 			balance := db.GetBalance(addr)
 			return balance.Cmp(amount) >= 0
 		},
-		Transfer: func(db vm.StateDB, sender, recipient common.Address, amount *big.Int) {
+		Transfer: func(db vm.StateDB, sender, recipient common.Address, amount *uint256.Int) {
 			// 通过 StateDB 的 AddBalance 和 SubBalance 实现
 			db.SubBalance(sender, amount)
 			db.AddBalance(recipient, amount)
@@ -31,7 +32,7 @@ func buildBlockContext(host runtime.Host, header *types.Header) vm.BlockContext 
 		},
 		Coinbase:    VcAddressToCommon(txCtx.Coinbase),
 		BlockNumber: new(big.Int).SetUint64(uint64(txCtx.Number)),
-		Time:        new(big.Int).SetInt64(txCtx.Timestamp),
+		Time:        uint64(txCtx.Timestamp),
 		Difficulty:  new(big.Int).SetBytes(txCtx.Difficulty.Bytes()),
 		GasLimit:    uint64(txCtx.GasLimit),
 		BaseFee:     txCtx.BaseFee,
@@ -155,3 +156,4 @@ func buildChainConfigFromParams(chainParams *chain.Params, blockNumber uint64) *
 
 	return chainConfig
 }
+

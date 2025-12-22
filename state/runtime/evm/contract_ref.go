@@ -22,3 +22,5 @@ func NewContractRefAdapter(contract *runtime.Contract) vm.ContractRef {
 func (c *ContractRefAdapter) Address() common.Address {
 	return VcAddressToCommon(c.contract.Address)
 }
+
+
