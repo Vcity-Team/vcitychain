@@ -36,6 +36,7 @@ require (
 	google.golang.org/grpc v1.64.0
 	google.golang.org/protobuf v1.34.0
 	gopkg.in/natefinch/npipe.v2 v2.0.0-20160621034901-c1b8fa8bdcce
+	github.com/ethereum/go-ethereum v1.13.15
 )
 
 require (
