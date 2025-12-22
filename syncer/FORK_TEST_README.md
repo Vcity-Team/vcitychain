@@ -121,3 +121,4 @@ go test -v ./syncer -run "TestHandleFork|TestDownloadForkChain|TestFindCommonAnc
 1. 修复其他测试文件的编译错误（`client_test.go` 中的 `statusTopicName` 未定义）
 2. 运行单元测试验证基本逻辑
 3. 在实际多节点环境中测试分叉处理
+

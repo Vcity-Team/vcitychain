@@ -26,6 +26,23 @@ var (
 	errTimeout = errors.New("timeout awaiting block from peer")
 )
 
+// truncatePeerID 安全地截取 peer ID 的前 n 个字符
+func truncatePeerID(peerID peer.ID, n int) string {
+	idStr := peerID.String()
+	if len(idStr) <= n {
+		return idStr
+	}
+	return idStr[:n]
+}
+
+// truncateString 安全地截取字符串的前 n 个字符
+func truncateString(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
 // XXX: Don't use this syncer for the consensus that may cause fork.
 // This syncer doesn't assume forks
 type syncer struct {
@@ -115,7 +132,7 @@ func (s *syncer) initializePeerMap() {
 		for i, peer := range peerStatuses {
 			s.logger.Debug("对等节点信息",
 				"索引", i,
-				"ID", peer.ID.String()[:16],
+				"ID", truncatePeerID(peer.ID, 16),
 				"区块高度", peer.Number,
 				"距离", peer.Distance.String())
 		}
@@ -396,7 +413,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 			}
 
 			s.logger.Debug("🔍 从区块流接收到区块",
-				"peer", peerID.String()[:8],
+				"peer", truncatePeerID(peerID, 8),
 				"区块号", block.Number(),
 				"期望区块号", localLatest+1,
 				"本地最新", localLatest,
@@ -405,10 +422,10 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 
 			// 打印详细的区块接收日志
 			s.logger.Debug("🔄 同步接收到区块",
-				"peer", peerID.String()[:8],
+				"peer", truncatePeerID(peerID, 8),
 				"区块号", block.Number(),
 				"难度", block.Header.Difficulty,
-				"哈希", block.Hash().String()[:16],
+				"哈希", truncateString(block.Hash().String(), 16),
 				"时间戳", block.Header.Timestamp,
 				"交易数", len(block.Transactions),
 				"Gas限制", block.Header.GasLimit,
@@ -448,7 +465,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				s.logger.Debug("✅ DPoS区块同步成功",
 					"peer", peerID.String(),
 					"区块号", block.Number(),
-					"哈希", block.Hash().String()[:16],
+					"哈希", truncateString(block.Hash().String(), 16),
 					"timestamp", time.Now().Format("15:04:05.000"))
 				shouldTerminate = newBlockCallback(fullBlock)
 				lastReceivedNumber = block.Number()
@@ -462,7 +479,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				// 如果过滤后有交易，创建新的区块
 				if len(filteredTransactions) < len(block.Transactions) {
 					s.logger.Info("🔍 过滤重复交易",
-						"peer", peerID.String()[:8],
+						"peer", truncatePeerID(peerID, 8),
 						"blockNumber", block.Number(),
 						"originalCount", len(block.Transactions),
 						"filteredCount", len(filteredTransactions))
@@ -476,7 +493,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				}
 			}
 
-			s.logger.Debug("🔍 开始验证区块", "peer", peerID.String()[:8], "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
+			s.logger.Debug("🔍 开始验证区块", "peer", truncatePeerID(peerID, 8), "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
 
 			fullBlock, err := s.blockchain.VerifyFinalizedBlock(block)
 			if err != nil {
@@ -521,7 +538,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 					os.Exit(1)
 				}
 			}
-			s.logger.Debug("✅ 区块验证完成", "peer", peerID.String()[:8], "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
+			s.logger.Debug("✅ 区块验证完成", "peer", truncatePeerID(peerID, 8), "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
 
 			if err := s.blockchain.WriteFullBlock(fullBlock, syncerName); err != nil {
 				metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
@@ -530,7 +547,7 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 			}
 
 			updateMetrics(fullBlock)
-			s.logger.Debug("✅ 区块同步成功", "peer", peerID.String(), "区块号", block.Number(), "哈希", block.Hash().String()[:16], "交易数", len(block.Transactions))
+			s.logger.Debug("✅ 区块同步成功", "peer", peerID.String(), "区块号", block.Number(), "哈希", truncateString(block.Hash().String(), 16), "交易数", len(block.Transactions))
 			shouldTerminate = newBlockCallback(fullBlock)
 
 			// 关键：更新localLatest！

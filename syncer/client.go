@@ -409,9 +409,13 @@ func (m *syncPeerClient) startNewBlockProcess() {
 			}
 
 			// 添加详细的状态广播日志
+			hashStr := latest.Hash.String()
+			if len(hashStr) > 16 {
+				hashStr = hashStr[:16]
+			}
 			m.logger.Debug("🔔 检测到新区块事件，准备状态广播",
 				"区块高度", latest.Number,
-				"区块哈希", latest.Hash.String()[:16],
+				"区块哈希", hashStr,
 				"节点ID", m.id,
 				"NewChain长度", l)
 

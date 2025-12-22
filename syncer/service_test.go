@@ -9,6 +9,7 @@ import (
 
 	"github.com/Vcity-Team/vcitychain/syncer/proto"
 	"github.com/Vcity-Team/vcitychain/types"
+	"github.com/hashicorp/go-hclog"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -95,6 +96,7 @@ func Test_syncPeerService_GetBlocks(t *testing.T) {
 			}
 
 			service := &syncPeerService{
+				logger: hclog.NewNullLogger(),
 				blockchain: &mockBlockchain{
 					headerHandler: newSimpleHeaderHandler(test.latest),
 					getBlockByNumberHandler: func(u uint64, _ bool) (*types.Block, bool) {
@@ -142,6 +144,7 @@ func TestGetStatus(t *testing.T) {
 	headerNumber := uint64(10)
 
 	service := &syncPeerService{
+		logger: hclog.NewNullLogger(),
 		blockchain: &mockBlockchain{
 			headerHandler: newSimpleHeaderHandler(headerNumber),
 		},

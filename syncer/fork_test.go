@@ -146,11 +146,46 @@ func TestFindCommonAncestor_LocalExists(t *testing.T) {
 			}
 			return nil, false
 		},
+		getBlockByHashHandler: func(hash types.Hash, full bool) (*types.Block, bool) {
+			// 支持通过 hash 查找本地链上的区块
+			hashStr := hash.String()
+			for num := uint64(0); num <= 10; num++ {
+				expectedHash := types.StringToHash(fmt.Sprintf("0x%03d", num))
+				if hashStr == expectedHash.String() {
+					return &types.Block{
+						Header: &types.Header{
+							Number:     num,
+							ParentHash: types.StringToHash(fmt.Sprintf("0x%03d", num-1)),
+							Hash:       expectedHash,
+						},
+					}, true
+				}
+			}
+			return nil, false
+		},
 	}
 
 	mockClient := &mockSyncPeerClient{
 		getBlockByHashHandler: func(peerID peer.ID, hash types.Hash) (*types.Block, error) {
-			return nil, errors.New("not used")
+			// 模拟从 peer 按 hash 请求区块（用于回溯）
+			// 返回错误，触发 fallback 到 GetBlocks
+			return nil, errors.New("block not found by hash")
+		},
+		getBlocksHandler: func(peerID peer.ID, from uint64, timeout time.Duration) (<-chan *types.Block, error) {
+			// 模拟按高度请求区块（fallback 机制）
+			ch := make(chan *types.Block, 1)
+			go func() {
+				defer close(ch)
+				// 返回请求的区块（简化处理，只返回一个）
+				ch <- &types.Block{
+					Header: &types.Header{
+						Number:     from,
+						ParentHash: types.StringToHash(fmt.Sprintf("0x%03d", from-1)),
+						Hash:       types.StringToHash(fmt.Sprintf("0x%03d", from)),
+					},
+				}
+			}()
+			return ch, nil
 		},
 	}
 
@@ -191,6 +226,19 @@ func TestDownloadForkChain_Basic(t *testing.T) {
 	mockBC := &mockBlockchain{
 		getBlockByHashHandler: func(hash types.Hash, full bool) (*types.Block, bool) {
 			if hash == commonAncestorHash {
+				return &types.Block{
+					Header: &types.Header{
+						Number: 5,
+						Hash:   commonAncestorHash,
+					},
+				}, true
+			}
+			return nil, false
+		},
+		getBlockByNumberHandler: func(num uint64, full bool) (*types.Block, bool) {
+			// 本地没有分叉链的区块（6-10），需要从 peer 下载
+			// 只返回共同祖先区块 5
+			if num == 5 {
 				return &types.Block{
 					Header: &types.Header{
 						Number: 5,

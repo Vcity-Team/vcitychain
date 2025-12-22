@@ -62,6 +62,7 @@ func createTestSyncerService(t *testing.T, chain Blockchain) (*syncPeerService, 
 	srv := newTestNetwork(t)
 
 	service := &syncPeerService{
+		logger:     hclog.NewNullLogger(),
 		blockchain: chain,
 		network:    srv,
 	}
