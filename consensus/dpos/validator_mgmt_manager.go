@@ -189,19 +189,9 @@ func (d *DPoS) GetSortedValidatorsWithLimitFilterFaulty() (validator.AccountSet,
 
 		if isFaulty {
 			faultyCount++
-			d.logger.Debug("🚫 [GetSortedValidatorsWithLimitFilterFaulty] 过滤掉故障验证者",
-				"address", v.Address.String(),
-				"votingPower", v.VotingPower.String())
 		} else {
 			activeValidators = append(activeValidators, v)
 		}
-	}
-
-	if faultyCount > 0 {
-		d.logger.Debug("✅ [GetSortedValidatorsWithLimitFilterFaulty] 故障验证者过滤完成",
-			"totalValidators", len(allValidators),
-			"faultyValidators", faultyCount,
-			"activeValidators", len(activeValidators))
 	}
 
 	// 注意：过滤后保持原有排序（权重倒序，地址升序），因为已经排序过了
