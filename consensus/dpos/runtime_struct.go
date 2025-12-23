@@ -31,6 +31,7 @@ type dposRuntime struct {
 	lastProducedSlot        int       // 记录上次出块的 slot，防止一个 slot 内出多个区块
 	lastBlockProductionTime time.Time // 记录上次本地出块的时间
 	lastBlockNumber         uint64    // 记录上次出块的区块号
+	currentBuildStartSlot   int       // 🔧 修复：记录当前构建开始时的 slot，用于检查 slot 是否已变化（-1 表示未设置）
 	delegates               validator.AccountSet
 	voters                  map[types.Address]*VoterInfo
 	pendingVotes            []*VoteMessage

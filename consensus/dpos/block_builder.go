@@ -844,17 +844,70 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 
 		// 检查是否是验证者数量不足错误
 		if strings.Contains(collectErr.Error(), "insufficient validators") {
+			// 🔧 修复：在等待网络增长前，先检查 slot 是否已变化
+			if r.config != nil && r.config.blockScheduler != nil {
+				r.lock.RLock()
+				buildStartSlot := r.currentBuildStartSlot
+				r.lock.RUnlock()
+
+				if buildStartSlot >= 0 {
+					now := time.Now()
+					genesisTime := r.config.blockScheduler.GetGenesisTime()
+					blockWindow := r.config.blockScheduler.GetBlockWindow()
+					timeSinceGenesis := now.Sub(genesisTime)
+					currentSlot := int(timeSinceGenesis / blockWindow)
+
+					if currentSlot != buildStartSlot {
+						r.logger.Info("⏰ 重试签名收集时 slot 已变化，停止重试",
+							"buildStartSlot", buildStartSlot,
+							"currentSlot", currentSlot,
+							"attempt", attempt+1,
+							"reason", fmt.Sprintf("构建开始时slot=%d，当前slot=%d，slot已变化", buildStartSlot, currentSlot))
+						return nil, fmt.Errorf("slot changed during signature collection retry: buildStartSlot=%d, currentSlot=%d", buildStartSlot, currentSlot)
+					}
+				}
+			}
+
 			r.logger.Debug("验证者数量不足，等待网络改善后重试", "attempt", attempt+1)
-			// 等待网络状态改善
+			// 等待网络状态改善（注意：waitForNetworkGrowth 内部也会检查 slot）
 			_, _, waitErr := r.waitForNetworkGrowth(checkpointHash, keyAddr)
 			if waitErr != nil {
 				r.logger.Debug("等待网络增长失败", "error", waitErr)
+				// 如果等待失败且是因为 slot 变化，直接返回错误
+				if strings.Contains(waitErr.Error(), "slot") {
+					return nil, fmt.Errorf("slot changed during signature collection: %w", waitErr)
+				}
 			}
 			time.Sleep(2 * time.Second) // 等待2秒后重试
 			continue
 		}
 
 		// 其他错误，记录并返回
+		// 🔧 修复：在重试前，先检查 slot 是否已变化
+		if r.config != nil && r.config.blockScheduler != nil {
+			r.lock.RLock()
+			buildStartSlot := r.currentBuildStartSlot
+			r.lock.RUnlock()
+
+			if buildStartSlot >= 0 {
+				now := time.Now()
+				genesisTime := r.config.blockScheduler.GetGenesisTime()
+				blockWindow := r.config.blockScheduler.GetBlockWindow()
+				timeSinceGenesis := now.Sub(genesisTime)
+				currentSlot := int(timeSinceGenesis / blockWindow)
+
+				if currentSlot != buildStartSlot {
+					r.logger.Info("⏰ 重试其他错误时 slot 已变化，停止重试",
+						"buildStartSlot", buildStartSlot,
+						"currentSlot", currentSlot,
+						"attempt", attempt+1,
+						"error", collectErr.Error(),
+						"reason", fmt.Sprintf("构建开始时slot=%d，当前slot=%d，slot已变化", buildStartSlot, currentSlot))
+					return nil, fmt.Errorf("slot changed during signature collection retry: buildStartSlot=%d, currentSlot=%d", buildStartSlot, currentSlot)
+				}
+			}
+		}
+
 		r.logger.Error("failed to collect validator signatures", "error", collectErr, "attempt", attempt+1)
 		if attempt == maxRetries-1 {
 			return nil, fmt.Errorf("failed to collect validator signatures after %d attempts: %w", maxRetries, collectErr)
@@ -1221,6 +1274,31 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 	// 检查是否有足够的验证者
 	minRequired := r.calculateMinRequiredSignatures()
 	if activeValidators < minRequired { // 现在包括提议者自己
+		// 🔧 修复：在返回错误前，先检查 slot 是否已变化
+		if r.config != nil && r.config.blockScheduler != nil {
+			r.lock.RLock()
+			buildStartSlot := r.currentBuildStartSlot
+			r.lock.RUnlock()
+
+			if buildStartSlot >= 0 {
+				now := time.Now()
+				genesisTime := r.config.blockScheduler.GetGenesisTime()
+				blockWindow := r.config.blockScheduler.GetBlockWindow()
+				timeSinceGenesis := now.Sub(genesisTime)
+				currentSlot := int(timeSinceGenesis / blockWindow)
+
+				if currentSlot != buildStartSlot {
+					r.logger.Info("⏰ 签名收集时 slot 已变化，停止收集",
+						"buildStartSlot", buildStartSlot,
+						"currentSlot", currentSlot,
+						"activeValidators", activeValidators,
+						"minRequired", minRequired,
+						"reason", fmt.Sprintf("构建开始时slot=%d，当前slot=%d，slot已变化", buildStartSlot, currentSlot))
+					return nil, nil, fmt.Errorf("slot changed during signature collection: buildStartSlot=%d, currentSlot=%d", buildStartSlot, currentSlot)
+				}
+			}
+		}
+
 		r.logger.Error("验证者数量不足，无法进行签名收集",
 			"activeValidators", activeValidators,
 			"minRequired", minRequired,
@@ -1301,6 +1379,31 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 			}
 
 		case <-checkInterval.C:
+			// 🔧 修复：定期检查时，先检查 slot 是否已变化
+			if r.config != nil && r.config.blockScheduler != nil {
+				r.lock.RLock()
+				buildStartSlot := r.currentBuildStartSlot
+				r.lock.RUnlock()
+
+				if buildStartSlot >= 0 {
+					now := time.Now()
+					genesisTime := r.config.blockScheduler.GetGenesisTime()
+					blockWindow := r.config.blockScheduler.GetBlockWindow()
+					timeSinceGenesis := now.Sub(genesisTime)
+					currentSlot := int(timeSinceGenesis / blockWindow)
+
+					if currentSlot != buildStartSlot {
+						r.logger.Info("⏰ 签名收集循环中 slot 已变化，停止收集",
+							"buildStartSlot", buildStartSlot,
+							"currentSlot", currentSlot,
+							"collectedSignatures", len(collectedSignatures),
+							"requiredSignatures", minRequiredSignatures,
+							"reason", fmt.Sprintf("构建开始时slot=%d，当前slot=%d，slot已变化", buildStartSlot, currentSlot))
+						return nil, nil, fmt.Errorf("slot changed during signature collection loop: buildStartSlot=%d, currentSlot=%d", buildStartSlot, currentSlot)
+					}
+				}
+			}
+
 			// 定期检查网络状态
 			activeValidators := r.getActiveValidatorsCount()
 			r.logger.Debug("定期检查网络状态",
@@ -1327,6 +1430,31 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 
 		case <-debugTicker.C:
 		case <-timeoutCh:
+			// 🔧 修复：超时时，先检查 slot 是否已变化
+			if r.config != nil && r.config.blockScheduler != nil {
+				r.lock.RLock()
+				buildStartSlot := r.currentBuildStartSlot
+				r.lock.RUnlock()
+
+				if buildStartSlot >= 0 {
+					now := time.Now()
+					genesisTime := r.config.blockScheduler.GetGenesisTime()
+					blockWindow := r.config.blockScheduler.GetBlockWindow()
+					timeSinceGenesis := now.Sub(genesisTime)
+					currentSlot := int(timeSinceGenesis / blockWindow)
+
+					if currentSlot != buildStartSlot {
+						r.logger.Info("⏰ 签名收集超时时 slot 已变化，停止收集",
+							"buildStartSlot", buildStartSlot,
+							"currentSlot", currentSlot,
+							"collectedSignatures", len(collectedSignatures),
+							"requiredSignatures", minRequiredSignatures,
+							"reason", fmt.Sprintf("构建开始时slot=%d，当前slot=%d，slot已变化", buildStartSlot, currentSlot))
+						return nil, nil, fmt.Errorf("slot changed during signature collection timeout: buildStartSlot=%d, currentSlot=%d", buildStartSlot, currentSlot)
+					}
+				}
+			}
+
 			r.logger.Warn("签名收集超时",
 				"collected", len(collectedSignatures),
 				"required", minRequiredSignatures,
@@ -1693,6 +1821,21 @@ func (r *dposRuntime) getValidatorsFromDatabaseForProduction(header *types.Heade
 func (r *dposRuntime) waitForNetworkGrowth(checkpointHash types.Hash, proposerAddr types.Address) ([][]byte, bitmap.Bitmap, error) {
 	r.logger.Info("开始等待网络增长", "checkpointHash", checkpointHash.String())
 
+	// 🔧 修复：从 dposRuntime 获取构建开始时的 slot
+	r.lock.RLock()
+	buildStartSlot := r.currentBuildStartSlot
+	r.lock.RUnlock()
+
+	if buildStartSlot < 0 && r.config != nil && r.config.blockScheduler != nil {
+		// 如果无法获取，则使用当前 slot 作为基准
+		now := time.Now()
+		genesisTime := r.config.blockScheduler.GetGenesisTime()
+		blockWindow := r.config.blockScheduler.GetBlockWindow()
+		timeSinceGenesis := now.Sub(genesisTime)
+		buildStartSlot = int(timeSinceGenesis / blockWindow)
+		r.logger.Debug("无法获取 buildStartSlot，使用当前 slot 作为基准", "buildStartSlot", buildStartSlot)
+	}
+
 	// 设置等待超时（10分钟）
 	waitTimeout := 10 * time.Minute
 	ticker := time.NewTicker(30 * time.Second) // 每30秒检查一次
@@ -1703,6 +1846,24 @@ func (r *dposRuntime) waitForNetworkGrowth(checkpointHash types.Hash, proposerAd
 	for {
 		select {
 		case <-ticker.C:
+			// 🔧 修复：每次检查时，先检查 slot 是否已变化
+			if r.config != nil && r.config.blockScheduler != nil && buildStartSlot >= 0 {
+				now := time.Now()
+				genesisTime := r.config.blockScheduler.GetGenesisTime()
+				blockWindow := r.config.blockScheduler.GetBlockWindow()
+				timeSinceGenesis := now.Sub(genesisTime)
+				currentSlot := int(timeSinceGenesis / blockWindow)
+
+				if currentSlot != buildStartSlot {
+					r.logger.Info("⏰ 等待网络增长时 slot 已变化，停止等待",
+						"buildStartSlot", buildStartSlot,
+						"currentSlot", currentSlot,
+						"checkpointHash", checkpointHash.String(),
+						"reason", fmt.Sprintf("构建开始时slot=%d，当前slot=%d，slot已变化", buildStartSlot, currentSlot))
+					return nil, nil, fmt.Errorf("slot changed during network growth wait: buildStartSlot=%d, currentSlot=%d", buildStartSlot, currentSlot)
+				}
+			}
+
 			activeValidators := r.getActiveValidatorsCount()
 			minRequired := r.calculateMinRequiredSignatures()
 
@@ -1782,9 +1943,28 @@ func (r *dposRuntime) waitForSignaturesWithContext(ctx context.Context, signatur
 	}
 	r.lock.RUnlock()
 
+	// 🔧 修复：获取构建开始时的 slot，用于检查 slot 是否已变化
+	r.lock.RLock()
+	buildStartSlot := r.currentBuildStartSlot
+	r.lock.RUnlock()
+
+	if buildStartSlot < 0 && r.config != nil && r.config.blockScheduler != nil {
+		// 如果无法获取，则使用当前 slot 作为基准
+		now := time.Now()
+		genesisTime := r.config.blockScheduler.GetGenesisTime()
+		blockWindow := r.config.blockScheduler.GetBlockWindow()
+		timeSinceGenesis := now.Sub(genesisTime)
+		buildStartSlot = int(timeSinceGenesis / blockWindow)
+		r.logger.Debug("waitForSignaturesWithContext: 无法获取 buildStartSlot，使用当前 slot 作为基准", "buildStartSlot", buildStartSlot)
+	}
+
 	// 设置收集超时
 	collectTimeout := 20 * time.Second
 	timeoutCh := time.After(collectTimeout)
+
+	// 🔧 修复：添加定期检查 slot 的 ticker
+	slotCheckTicker := time.NewTicker(5 * time.Second) // 每5秒检查一次 slot
+	defer slotCheckTicker.Stop()
 
 	for {
 		select {
@@ -1830,7 +2010,46 @@ func (r *dposRuntime) waitForSignaturesWithContext(ctx context.Context, signatur
 				return signatures, signatureBitmap, nil
 			}
 
+		case <-slotCheckTicker.C:
+			// 🔧 修复：定期检查 slot 是否已变化
+			if r.config != nil && r.config.blockScheduler != nil && buildStartSlot >= 0 {
+				now := time.Now()
+				genesisTime := r.config.blockScheduler.GetGenesisTime()
+				blockWindow := r.config.blockScheduler.GetBlockWindow()
+				timeSinceGenesis := now.Sub(genesisTime)
+				currentSlot := int(timeSinceGenesis / blockWindow)
+
+				if currentSlot != buildStartSlot {
+					r.logger.Info("⏰ waitForSignaturesWithContext 中 slot 已变化，停止收集",
+						"buildStartSlot", buildStartSlot,
+						"currentSlot", currentSlot,
+						"collectedSignatures", len(collectedSignatures),
+						"required", minRequired,
+						"reason", fmt.Sprintf("构建开始时slot=%d，当前slot=%d，slot已变化", buildStartSlot, currentSlot))
+					return nil, nil, fmt.Errorf("slot changed during waitForSignaturesWithContext: buildStartSlot=%d, currentSlot=%d", buildStartSlot, currentSlot)
+				}
+			}
+
 		case <-timeoutCh:
+			// 🔧 修复：超时时，先检查 slot 是否已变化
+			if r.config != nil && r.config.blockScheduler != nil && buildStartSlot >= 0 {
+				now := time.Now()
+				genesisTime := r.config.blockScheduler.GetGenesisTime()
+				blockWindow := r.config.blockScheduler.GetBlockWindow()
+				timeSinceGenesis := now.Sub(genesisTime)
+				currentSlot := int(timeSinceGenesis / blockWindow)
+
+				if currentSlot != buildStartSlot {
+					r.logger.Info("⏰ waitForSignaturesWithContext 超时时 slot 已变化，停止收集",
+						"buildStartSlot", buildStartSlot,
+						"currentSlot", currentSlot,
+						"collectedSignatures", len(collectedSignatures),
+						"required", minRequired,
+						"reason", fmt.Sprintf("构建开始时slot=%d，当前slot=%d，slot已变化", buildStartSlot, currentSlot))
+					return nil, nil, fmt.Errorf("slot changed during waitForSignaturesWithContext timeout: buildStartSlot=%d, currentSlot=%d", buildStartSlot, currentSlot)
+				}
+			}
+
 			r.logger.Warn("签名收集超时",
 				"collected", len(collectedSignatures),
 				"required", minRequired)
