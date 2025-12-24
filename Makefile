@@ -33,6 +33,7 @@ protoc: check-protoc
 	 ./server/proto/*.proto \
 	 ./network/proto/*.proto \
 	 ./txpool/proto/*.proto	\
+	 ./syncer/proto/*.proto \
 	 ./consensus/ibft/**/*.proto \
 	 ./consensus/polybft/**/*.proto \
 	 ./consensus/dpos/**/*.proto

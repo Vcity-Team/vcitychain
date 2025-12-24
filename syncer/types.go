@@ -27,6 +27,8 @@ type Blockchain interface {
 	Header() *types.Header
 	// GetBlockByNumber returns block by number
 	GetBlockByNumber(uint64, bool) (*types.Block, bool)
+	// GetBlockByHash returns block by hash
+	GetBlockByHash(types.Hash, bool) (*types.Block, bool)
 	// VerifyFinalizedBlock verifies finalized block
 	VerifyFinalizedBlock(block *types.Block) (*types.FullBlock, error)
 	// WriteBlock writes a given block to chain
@@ -111,6 +113,8 @@ type SyncPeerClient interface {
 	GetConnectedPeerStatuses() []*NoForkPeer
 	// GetBlocks returns a stream of blocks from given height to peer's latest
 	GetBlocks(peer.ID, uint64, time.Duration) (<-chan *types.Block, error)
+	// GetBlockByHash returns a single block by hash from peer
+	GetBlockByHash(peer.ID, types.Hash) (*types.Block, error)
 	// GetPeerStatusUpdateCh returns a channel of peer's status update
 	GetPeerStatusUpdateCh() <-chan *NoForkPeer
 	// GetPeerConnectionUpdateEventCh returns peer's connection change event

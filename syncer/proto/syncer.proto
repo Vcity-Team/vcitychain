@@ -11,12 +11,20 @@ service SyncPeer {
   rpc GetBlocks(GetBlocksRequest) returns (stream Block);
   // Returns server's status
   rpc GetStatus(google.protobuf.Empty) returns (SyncPeerStatus);
+  // Returns a single block by hash
+  rpc GetBlockByHash(GetBlockByHashRequest) returns (Block);
 }
 
 // GetBlocksRequest is a request for GetBlocks
 message GetBlocksRequest {
   // The height of beginning block to sync
   uint64 from = 1;
+}
+
+// GetBlockByHashRequest is a request for GetBlockByHash
+message GetBlockByHashRequest {
+  // Block hash (32 bytes)
+  bytes hash = 1;
 }
 
 // Block contains a block data
