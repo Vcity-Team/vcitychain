@@ -73,32 +73,6 @@ func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift tim
 		return fmt.Errorf("failed to validate header for block %d. error = %w", header.Number, err)
 	}
 
-	// 基于区块 timestamp 的 slot 窗口检查：当前 slot 不应超出区块 slot + 容忍度
-	if d.runtime != nil && d.runtime.config != nil && d.runtime.config.blockScheduler != nil {
-		genesisTime := d.runtime.config.blockScheduler.GetGenesisTime()
-		blockWindow := d.runtime.config.blockScheduler.GetBlockWindow()
-
-		blockTimestamp := time.Unix(int64(header.Timestamp), 0)
-		timeSinceGenesisForBlock := blockTimestamp.Sub(genesisTime)
-		blockSlot := int(timeSinceGenesisForBlock / blockWindow)
-
-		now := time.Now()
-		timeSinceGenesis := now.Sub(genesisTime)
-		currentSlot := int(timeSinceGenesis / blockWindow)
-
-		const slotTolerance = 1
-		if currentSlot > blockSlot+slotTolerance {
-			return fmt.Errorf("block %d is too late for its slot (blockSlot=%d currentSlot=%d tolerance=%d)",
-				header.Number, blockSlot, currentSlot, slotTolerance)
-		}
-
-		d.logger.Debug("slot window check passed",
-			"blockNumber", header.Number,
-			"blockSlot", blockSlot,
-			"currentSlot", currentSlot,
-			"slotTolerance", slotTolerance)
-	}
-
 	// decode the extra data
 	extra, err := GetDposExtra(header.ExtraData)
 	if err != nil {
