@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1486,6 +1487,17 @@ func (b *Blockchain) dispatchEvent(evnt *Event) {
 	b.stream.push(evnt)
 }
 
+// isDPoSMode 检查当前是否是 DPoS 共识模式
+func (b *Blockchain) isDPoSMode() bool {
+	if b.consensus == nil {
+		return false
+	}
+	// 通过类型断言检查是否是 DPoS 共识
+	// 使用字符串匹配类型名称，避免循环依赖
+	consensusType := fmt.Sprintf("%T", b.consensus)
+	return strings.Contains(consensusType, "dpos") || strings.Contains(consensusType, "DPoS")
+}
+
 // writeHeaderImpl writes a block and the data, assumes the genesis is already set
 // Returning parameters (is canonical header, new total difficulty, error)
 func (b *Blockchain) writeHeaderImpl(
@@ -1520,8 +1532,18 @@ func (b *Blockchain) writeHeaderImpl(
 		return false, nil, errors.New("failed to get header difficulty")
 	}
 
-	if incomingTD.Cmp(currentTD) > 0 {
-		// new block has higher difficulty, reorg the chain
+	// 判断是否应该触发 reorg
+	shouldReorg := false
+	if b.isDPoSMode() {
+		// DPoS 模式：使用区块高度比较（难度固定为1，无法用难度比较）
+		shouldReorg = header.Number > currentHeader.Number
+	} else {
+		// IBFT 等其他模式：使用难度比较
+		shouldReorg = incomingTD.Cmp(currentTD) > 0
+	}
+
+	if shouldReorg {
+		// new block has higher difficulty/height, reorg the chain
 		if err := b.handleReorg(batchWriter, evnt, currentHeader, header, incomingTD); err != nil {
 			return false, nil, err
 		}

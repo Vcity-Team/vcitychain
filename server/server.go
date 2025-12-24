@@ -444,6 +444,14 @@ func NewServer(config *Config) (*Server, error) {
 
 	m.executor = state.NewExecutor(config.Chain.Params, st, logger)
 
+	// 根据配置启用或禁用 go-ethereum EVM
+	m.executor.UseGethEVM(config.UseGethEVM)
+	if config.UseGethEVM {
+		logger.Info("✅ 已启用 go-ethereum EVM（包含最新 EIP 支持）")
+	} else {
+		logger.Info("✅ 使用原生 EVM")
+	}
+
 	// custom write genesis hook per consensus engine
 	engineName := m.config.Chain.Params.GetEngine()
 	if factory, exists := genesisCreationFactory[ConsensusType(engineName)]; exists {

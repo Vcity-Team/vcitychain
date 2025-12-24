@@ -247,5 +247,8 @@ func (p *serverParams) generateConfig() *server.Config {
 		DPoSMissedBlocksPercentage: p.dposMissedBlocksPercentage,
 		DPoSMinorOffenseSlashRate:  p.dposMinorOffenseSlashRate,
 		DPoSSevereOffenseSlashRate: p.dposSevereOffenseSlashRate,
+
+		// EVM 配置
+		UseGethEVM: p.rawConfig.UseGethEVM,
 	}
 }

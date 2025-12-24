@@ -42,14 +42,28 @@ type Executor struct {
 
 	PostHook        func(txn *Transition)
 	GenesisPostHook func(*Transition) error
+
+	// useGethEVM 是否使用 go-ethereum EVM（默认 false，使用原生 EVM）
+	useGethEVM bool
 }
 
 // NewExecutor creates a new executor
 func NewExecutor(config *chain.Params, s State, logger hclog.Logger) *Executor {
 	return &Executor{
-		logger: logger,
-		config: config,
-		state:  s,
+		logger:     logger,
+		config:     config,
+		state:      s,
+		useGethEVM: false, // 默认使用原生 EVM
+	}
+}
+
+// UseGethEVM 设置是否使用 go-ethereum EVM
+func (e *Executor) UseGethEVM(enable bool) {
+	e.useGethEVM = enable
+	if enable {
+		e.logger.Info("使用 go-ethereum EVM")
+	} else {
+		e.logger.Info("使用原生 EVM")
 	}
 }
 
@@ -221,7 +235,7 @@ func (e *Executor) BeginTxn(
 		receipts: []*types.Receipt{},
 		totalGas: 0,
 
-		evm:         evm.NewEVM(),
+		evm:         e.createEVM(),
 		precompiles: precompiled.NewPrecompiled(),
 		PostHook:    e.PostHook,
 	}
@@ -276,7 +290,7 @@ type Transition struct {
 	PostHook func(t *Transition)
 
 	// runtimes
-	evm         *evm.EVM
+	evm         runtime.Runtime
 	precompiles *precompiled.Precompiled
 
 	// allow list runtimes
@@ -293,9 +307,17 @@ func NewTransition(config chain.ForksInTime, snap Snapshot, radix *Txn) *Transit
 		config:      config,
 		state:       radix,
 		snap:        snap,
-		evm:         evm.NewEVM(),
+		evm:         evm.NewEVM(), // 默认使用原生 EVM
 		precompiles: precompiled.NewPrecompiled(),
 	}
+}
+
+// createEVM 根据配置创建 EVM 实例
+func (e *Executor) createEVM() runtime.Runtime {
+	if e.useGethEVM {
+		return evm.NewGethEVMAdapter(e.config.ChainID)
+	}
+	return evm.NewEVM()
 }
 
 func (t *Transition) WithStateOverride(override types.StateOverride) error {

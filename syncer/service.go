@@ -66,13 +66,34 @@ func (s *syncPeerService) GetBlocks(
 	if ctx := stream.Context(); ctx != nil {
 		// 尝试从grpc.Context中获取PeerID
 		if grpcCtx, ok := ctx.(*grpc.Context); ok {
-			peerInfo = grpcCtx.PeerID.String()[:8]
+			peerIDStr := grpcCtx.PeerID.String()
+			if len(peerIDStr) > 8 {
+				peerInfo = peerIDStr[:8]
+			} else {
+				peerInfo = peerIDStr
+			}
 		}
+	}
+
+	// 确保 logger 不为 nil
+	if s.logger == nil {
+		s.logger = hclog.NewNullLogger()
+	}
+
+	// 检查 blockchain 是否为 nil
+	if s.blockchain == nil {
+		s.logger.Error("blockchain 未初始化", "peer", peerInfo)
+		return ErrBlockNotFound
 	}
 
 	var blockCount int
 	// from to latest
-	for i := req.From; i <= s.blockchain.Header().Number; i++ {
+	header := s.blockchain.Header()
+	if header == nil {
+		s.logger.Error("无法获取链头", "peer", peerInfo)
+		return ErrBlockNotFound
+	}
+	for i := req.From; i <= header.Number; i++ {
 		block, ok := s.blockchain.GetBlockByNumber(i, true)
 		if !ok {
 			s.logger.Error("区块未找到", "peer", peerInfo, "区块号", i)
@@ -104,13 +125,50 @@ func (s *syncPeerService) GetStatus(
 	req *empty.Empty,
 ) (*proto.SyncPeerStatus, error) {
 	var number uint64
-	if header := s.blockchain.Header(); header != nil {
-		number = header.Number
+	if s.blockchain != nil {
+		if header := s.blockchain.Header(); header != nil {
+			number = header.Number
+		}
 	}
 
 	return &proto.SyncPeerStatus{
 		Number: number,
 	}, nil
+}
+
+// GetBlockByHash 按 hash 返回单个区块（服务端实现）
+func (s *syncPeerService) GetBlockByHash(
+	ctx context.Context,
+	req *proto.GetBlockByHashRequest,
+) (*proto.Block, error) {
+	// 确保 logger 不为 nil
+	if s.logger == nil {
+		s.logger = hclog.NewNullLogger()
+	}
+
+	// 检查 blockchain 是否为 nil
+	if s.blockchain == nil {
+		s.logger.Error("blockchain 未初始化")
+		return nil, ErrBlockNotFound
+	}
+
+	hash := types.BytesToHash(req.Hash)
+
+	// 从本地数据库获取区块
+	block, ok := s.blockchain.GetBlockByHash(hash, true)
+	if !ok {
+		s.logger.Error("区块未找到", "hash", hash.String())
+		return nil, ErrBlockNotFound
+	}
+
+	resp := toProtoBlock(block)
+	metrics.SetGauge([]string{syncerMetrics, "egress_bytes"}, float32(len(resp.Block)))
+
+	s.logger.Debug("✅ 按hash返回区块成功",
+		"hash", hash.String(),
+		"blockNumber", block.Number())
+
+	return resp, nil
 }
 
 // toProtoBlock converts type.Block -> proto.Block

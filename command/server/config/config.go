@@ -67,7 +67,10 @@ type Config struct {
 
 	// London Fork 配置（从 yaml 读取，不改变 genesis hash）
 	BaseFeeConfig string `json:"base_fee_config" yaml:"base_fee_config"` // 格式: "baseFee:baseFeeEM:baseFeeChangeDenom"
-	BurnContract  string `json:"burn_contract" yaml:"burn_contract"`     // 格式: "blockNumber:address[:destinationAddress]"
+	BurnContract  string `json:"burn_contract" yaml:"burn_contract"`     // 格式: "blockNumber:address[:destinationAddress]"`
+
+	// EVM 配置
+	UseGethEVM bool `json:"use_geth_evm" yaml:"use_geth_evm"` // 是否使用 go-ethereum EVM（true=最新 EVM，false=原生 EVM）
 }
 
 // Telemetry holds the config details for metric services.

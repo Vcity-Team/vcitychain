@@ -344,7 +344,7 @@ func (p *rollbackParams) loadEpochConfig(dataDir string, logger hclog.Logger) er
 
 	// 简单解析yaml（查找关键字段）
 	configStr := string(configData)
-
+	
 	// 解析 dpos_epoch_duration
 	epochDurationStr := "48s" // 默认值
 	if idx := strings.Index(configStr, "dpos_epoch_duration:"); idx != -1 {
