@@ -77,7 +77,9 @@ func GetBlsFromSecret(secretsManager secrets.SecretsManager) (*bls.PrivateKey, e
 		return nil, fmt.Errorf("failed to retrieve bls key: %w", err)
 	}
 
-	blsKey, err := bls.UnmarshalPrivateKey(encodedKey)
+	// Trim whitespace (including newlines) that might be present in the key file
+	keyStr := strings.TrimSpace(string(encodedKey))
+	blsKey, err := bls.UnmarshalPrivateKey([]byte(keyStr))
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve bls key: %w", err)
 	}
