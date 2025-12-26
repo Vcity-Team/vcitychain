@@ -17,13 +17,16 @@ import (
 type HostToStateDBAdapter struct {
 	host   runtime.Host
 	config *chain.ForksInTime
+	// 用于调试：记录 AddLog 调用次数
+	addLogCallCount int
 }
 
 // NewHostToStateDBAdapter 创建 StateDB 适配器
 func NewHostToStateDBAdapter(host runtime.Host, config *chain.ForksInTime) vm.StateDB {
 	return &HostToStateDBAdapter{
-		host:   host,
-		config: config,
+		host:            host,
+		config:          config,
+		addLogCallCount: 0,
 	}
 }
 
@@ -243,11 +246,21 @@ func (h *HostToStateDBAdapter) RevertToSnapshot(id int) {
 
 // AddLog 添加日志
 func (h *HostToStateDBAdapter) AddLog(log *ethTypes.Log) {
+	// 🔧 调试：记录日志添加（通过 EmitLog 中的日志来追踪）
+	// 注意：这里不能直接输出日志，因为 HostToStateDBAdapter 没有 logger
+	// 日志会通过 host.EmitLog -> Transition.EmitLog 输出
+	//
+	// 重要：这个函数必须被 go-ethereum EVM 在执行 LOG 指令时调用
+	// 如果没有被调用，说明 go-ethereum EVM 没有执行 LOG 指令，或者日志被收集到了其他地方
+	h.addLogCallCount++
 	vcAddr := CommonAddressToVc(log.Address)
 	topics := make([]types.Hash, len(log.Topics))
 	for i, topic := range log.Topics {
 		topics[i] = CommonHashToVc(topic)
 	}
+	// 🔧 关键：调用 host.EmitLog，这会触发 Transition.EmitLog，从而输出 📝 [EmitLog] 日志
+	// 如果这个函数被调用，说明 go-ethereum EVM 执行了 LOG 指令
+	// Transition.EmitLog 会输出日志，显示这是来自 go-ethereum EVM 的 AddLog
 	h.host.EmitLog(vcAddr, topics, log.Data)
 }
 
@@ -276,4 +289,3 @@ func (h *HostToStateDBAdapter) IntermediateRoot(deleteEmptyObjects bool) common.
 	// 这里返回零哈希
 	return common.Hash{}
 }
-

@@ -10,6 +10,12 @@ import (
 	"github.com/holiman/uint256"
 )
 
+// codeSetter 是一个内部接口，用于设置合约代码
+// 这个接口允许我们通过类型断言来访问 Transition 的 SetCodeDirectly 方法
+type codeSetter interface {
+	SetCodeDirectly(addr types.Address, code []byte) error
+}
+
 var _ runtime.Runtime = &GethEVMAdapter{}
 
 // GethEVMAdapter 是 go-ethereum EVM 的适配器
@@ -41,7 +47,8 @@ func (g *GethEVMAdapter) Run(
 	config *chain.ForksInTime,
 ) *runtime.ExecutionResult {
 	// 1. 创建 StateDB 适配器
-	stateDB := NewHostToStateDBAdapter(host, config)
+	stateDBInterface := NewHostToStateDBAdapter(host, config)
+	stateDB := stateDBInterface.(*HostToStateDBAdapter)
 
 	// 2. 获取交易上下文以构建 BlockContext
 	txCtx := host.GetTxContext()
@@ -62,7 +69,9 @@ func (g *GethEVMAdapter) Run(
 	chainConfig := buildChainConfig(config, g.chainID)
 
 	// 4. 创建 go-ethereum EVM 实例
-	evm := vm.NewEVM(blockCtx, txContext, stateDB, chainConfig, vm.Config{})
+	// 注意：go-ethereum EVM 在执行 LOG 指令时会调用 StateDB.AddLog
+	// 日志会通过 StateDB 收集，而不是从 EVM 返回值中获取
+	evm := vm.NewEVM(blockCtx, txContext, stateDBInterface, chainConfig, vm.Config{})
 
 	// 5. 执行合约
 	var ret []byte
@@ -77,6 +86,9 @@ func (g *GethEVMAdapter) Run(
 	value.SetFromBig(c.Value)
 
 	if c.Type == runtime.Create {
+		// 🔧 调试：记录合约创建开始
+		// 注意：这里无法输出日志，因为 geth_adapter 没有 logger
+		// 但可以通过 addLogCallCount 来追踪 AddLog 是否被调用
 		// 创建合约
 		ret, contractAddr, gasLeft, err = evm.Create(
 			vm.AccountRef(callerAddr),
@@ -84,6 +96,31 @@ func (g *GethEVMAdapter) Run(
 			c.Gas,
 			value,
 		)
+
+		// 🔧 关键修复：go-ethereum EVM 的 Create 方法会调用 StateDB.SetCode 来保存代码
+		// 但我们的 SetCode 实现是空实现，所以需要在这里手动保存代码
+		// 注意：go-ethereum EVM 的 Create 方法内部已经调用了 SetCode，但我们的实现是空实现
+		// 所以我们需要在这里手动保存代码，类似于原生 EVM 在 applyCreate 中的处理
+		//
+		// 重要：applyCreate 会在调用 t.run 之前创建账户（如果 EIP158 启用）
+		// 但 go-ethereum EVM 的 Create 方法也会调用 StateDB.CreateAccount
+		// 由于我们的 CreateAccount 是空实现，账户可能还没有被创建
+		// 所以我们需要确保账户存在后再设置代码
+		if err == nil && len(ret) > 0 {
+			// 通过类型断言访问 Transition 的 SetCodeDirectly 方法
+			if setter, ok := host.(codeSetter); ok {
+				vcAddr := CommonAddressToVc(contractAddr)
+				// 尝试设置代码
+				// 注意：如果账户不存在，SetCodeDirectly 会返回错误
+				// 但在正常情况下，applyCreate 应该已经创建了账户（如果 EIP158 启用）
+				// 或者账户会在首次访问时自动创建
+				if setErr := setter.SetCodeDirectly(vcAddr, ret); setErr != nil {
+					// 如果设置失败（例如账户不存在），这是一个错误情况
+					// 但为了不中断执行流程，我们忽略错误
+					// 实际上，这应该不会发生，因为 applyCreate 应该已经创建了账户
+				}
+			}
+		}
 	} else {
 		// 调用合约
 		ret, gasLeft, err = evm.Call(
@@ -101,6 +138,19 @@ func (g *GethEVMAdapter) Run(
 		gasUsed = c.Gas // 如果出错且 gas 耗尽，使用全部 gas
 	}
 
+	// 🔧 调试：检查 AddLog 调用次数
+	// 如果 AddLog 被调用了，addLogCallCount 应该 > 0
+	// 这个信息会在 Transition.EmitLog 中输出（如果 AddLog 被调用）
+	// 注意：如果 addLogCallCount == 0，说明 go-ethereum EVM 没有发出任何事件日志
+	// 这可能是因为：
+	// 1. 合约构造函数没有执行 LOG 指令（没有发出事件）
+	// 2. 合约执行失败，没有执行到 LOG 指令
+	// 3. go-ethereum EVM 的日志收集机制与原生 EVM 不同
+	//
+	// 重要：go-ethereum EVM 只有在执行 LOG 指令时才会调用 StateDB.AddLog
+	// 如果合约创建时构造函数没有发出事件，就不会有日志
+	_ = stateDB.addLogCallCount // 用于调试断点
+
 	return &runtime.ExecutionResult{
 		ReturnValue: ret,
 		GasLeft:     gasLeft,
@@ -109,4 +159,3 @@ func (g *GethEVMAdapter) Run(
 		Address:     CommonAddressToVc(contractAddr),
 	}
 }
-

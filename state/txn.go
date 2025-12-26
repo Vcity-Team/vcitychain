@@ -212,6 +212,8 @@ func (txn *Txn) EmitLog(addr types.Address, topics []types.Hash, data []byte) {
 
 	logs = append(logs, log)
 	txn.txn.Insert(logIndex, logs)
+	// 📝 [Txn.EmitLog] 发出事件日志: address=%s topicsCount=%d dataLen=%d totalLogs=%d
+	// 注意：Txn 没有 logger，所以这里不能输出日志
 }
 
 // State

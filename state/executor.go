@@ -61,9 +61,9 @@ func NewExecutor(config *chain.Params, s State, logger hclog.Logger) *Executor {
 func (e *Executor) UseGethEVM(enable bool) {
 	e.useGethEVM = enable
 	if enable {
-		e.logger.Info("使用 go-ethereum EVM")
+		e.logger.Info("✅ 已启用 go-ethereum EVM（包含最新 EIP 支持）")
 	} else {
-		e.logger.Info("使用原生 EVM")
+		e.logger.Info("✅ 使用原生 EVM")
 	}
 }
 
@@ -497,6 +497,14 @@ func (t *Transition) Write(txn *types.Transaction) error {
 	t.totalGas += result.GasUsed
 
 	logs := t.state.Logs()
+	// 📋 [Write] 收集交易日志: logsCount=%d txHash=%s
+	// 注意：这个日志在 Transition.Write 中输出，用于跟踪交易执行后的日志收集
+	// 如果日志为空，说明 go-ethereum EVM 的 AddLog 没有被调用（或者合约没有发出事件）
+	if len(logs) > 0 {
+		t.logger.Debug("📋 [Write] 收集交易日志", "logsCount", len(logs), "txHash", txn.Hash.String(), "firstLogAddress", logs[0].Address.String(), "firstLogTopicsCount", len(logs[0].Topics), "blockNumber", t.ctx.Number)
+	} else {
+		t.logger.Debug("📋 [Write] 收集交易日志: 日志为空", "txHash", txn.Hash.String(), "gasUsed", result.GasUsed, "blockNumber", t.ctx.Number, "note", "如果使用go-ethereum EVM，说明AddLog没有被调用")
+	}
 
 	receipt := &types.Receipt{
 		CumulativeGasUsed: t.totalGas,
@@ -1121,6 +1129,18 @@ func (t *Transition) GetBlockHash(number int64) (res types.Hash) {
 }
 
 func (t *Transition) EmitLog(addr types.Address, topics []types.Hash, data []byte) {
+	// 📝 [EmitLog] 发出事件日志
+	// 这个日志会帮助我们确认 AddLog 是否被调用
+	// 注意：这个函数会被 go-ethereum EVM 的 AddLog 调用（通过 host.EmitLog）
+	firstTopic := "none"
+	if len(topics) > 0 {
+		firstTopic = topics[0].String()
+	}
+	// 🔧 调试：记录事件日志来源
+	// 这个日志说明 go-ethereum EVM 的 AddLog 被调用了
+	// 如果看不到这个日志，说明 AddLog 没有被调用
+	// 注意：无法直接区分是同步节点还是生产节点，但可以通过 blockNumber 和 timestamp 结合其他日志来判断
+	t.logger.Debug("📝 [EmitLog] 发出事件日志（来自go-ethereum EVM AddLog）", "address", addr.String(), "topicsCount", len(topics), "dataLen", len(data), "firstTopic", firstTopic, "blockNumber", t.ctx.Number, "timestamp", t.ctx.Timestamp)
 	t.state.EmitLog(addr, topics, data)
 }
 
