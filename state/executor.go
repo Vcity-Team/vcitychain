@@ -589,12 +589,15 @@ func (t *Transition) Apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 				"nonce", msg.Nonce,
 				"from", msg.From.String(),
 				"txGas", msg.Gas,
-				"intrinsicGasCost", intrinsicGasCost,
+				"requiredIntrinsicGas", intrinsicGasCost,
 				"gasDeficit", gasDeficit,
 				"isContractCreation", msg.IsContractCreation(),
 				"inputSize", len(msg.Input),
+				"homestead", t.config.Homestead,
+				"istanbul", t.config.Istanbul,
 				"error", err,
-				"revertError", revertErr)
+				"revertError", revertErr,
+				"note", "EstimateGas估算可能与实际执行环境不一致")
 			return nil, revertErr
 		}
 		t.logger.Error("💀 交易执行失败，程序将立即退出",
@@ -602,11 +605,14 @@ func (t *Transition) Apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 			"nonce", msg.Nonce,
 			"from", msg.From.String(),
 			"txGas", msg.Gas,
-			"intrinsicGasCost", intrinsicGasCost,
+			"requiredIntrinsicGas", intrinsicGasCost,
 			"gasDeficit", gasDeficit,
 			"isContractCreation", msg.IsContractCreation(),
 			"inputSize", len(msg.Input),
-			"error", err)
+			"homestead", t.config.Homestead,
+			"istanbul", t.config.Istanbul,
+			"error", err,
+			"note", "EstimateGas估算可能与实际执行环境不一致")
 	}
 
 	if t.PostHook != nil {
@@ -746,15 +752,18 @@ func (t *Transition) apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 	gasLeft := msg.Gas - intrinsicGasCost
 	// because we are working with unsigned integers for gas, the `>` operator is used instead of the more intuitive `<`
 	if gasLeft > msg.Gas {
-		t.logger.Error("💀 交易执行失败（gas不足）",
+		t.logger.Error("💀💀💀💀💀💀💀💀💀💀💀💀💀交易执行失败（intrinsic gas不足）",
 			"txHash", msg.Hash.String(),
 			"nonce", msg.Nonce,
 			"from", msg.From.String(),
 			"txGas", msg.Gas,
-			"intrinsicGasCost", intrinsicGasCost,
+			"requiredIntrinsicGas", intrinsicGasCost,
 			"gasDeficit", intrinsicGasCost-msg.Gas,
 			"isContractCreation", msg.IsContractCreation(),
-			"inputSize", len(msg.Input))
+			"inputSize", len(msg.Input),
+			"homestead", t.config.Homestead,
+			"istanbul", t.config.Istanbul,
+			"note", "EstimateGas估算值小于实际需要的intrinsic gas，可能是配置不一致导致")
 		return nil, NewTransitionApplicationError(ErrNotEnoughIntrinsicGas, false)
 	}
 

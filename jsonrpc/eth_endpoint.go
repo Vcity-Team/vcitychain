@@ -512,6 +512,11 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 		return nil, err
 	}
 
+	// Create next block header to match actual execution environment
+	// Transactions are executed in the next block, so we need to use next block's configuration
+	nextBlockHeader := header.Copy()
+	nextBlockHeader.Number = header.Number + 1
+
 	// testTransaction should execute tx with nonce always set to the current expected nonce for the account
 	transaction, err := DecodeTxn(arg, header.Number, e.store, true)
 	if err != nil {
@@ -528,7 +533,9 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 		"from", transaction.From,
 		"to", transaction.To,
 		"value", transaction.Value,
-		"gas", transaction.Gas)
+		"gas", transaction.Gas,
+		"estimateBlockNumber", nextBlockHeader.Number,
+		"currentBlockNumber", header.Number)
 
 	// Force transaction gas price if empty
 	if err = e.fillTransactionGasPrice(transaction); err != nil {
@@ -546,9 +553,12 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 	if transaction.Gas != 0 && transaction.Gas >= state.TxGas {
 		hi = transaction.Gas
 	} else {
-		// If not, use the referenced block number
-		hi = header.GasLimit
+		// If not, use the next block's gas limit to match execution environment
+		hi = nextBlockHeader.GasLimit
 	}
+
+	// Save the initial hi value as cap (like go-ethereum)
+	cap := hi
 
 	gasPriceInt := new(big.Int).Set(transaction.GasPrice)
 
@@ -626,7 +636,8 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 
 		transaction.Gas = gas
 
-		result, applyErr := e.store.ApplyTxn(header, transaction, nil, true)
+		// Use next block header to match actual execution environment
+		result, applyErr := e.store.ApplyTxn(nextBlockHeader, transaction, nil, true)
 
 		if result != nil {
 			data = []byte(hex.EncodeToString(result.ReturnValue))
@@ -678,24 +689,45 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 		}
 
 		if failed {
-			// If the transaction failed => increase the gas
-			lo = mid + 1
+			// If the transaction failed => set lo to mid (like go-ethereum)
+			lo = mid
 		} else {
 			// If the transaction didn't fail => make this ok value the high end
 			hi = mid
 		}
 	}
 
-	// Check if the hi is a good value to make the transaction pass
-	failed, retVal, err := testTransaction(hi, false)
-	if failed {
-		// The transaction shouldn't fail, for whatever reason, at hi
-		return retVal, fmt.Errorf(
-			"unable to apply transaction even for the highest gas limit %d: %w",
-			hi,
-			err,
-		)
+	// Reject the transaction as invalid if it still fails at the highest allowance
+	// This matches go-ethereum's behavior exactly
+	if hi == cap {
+		failed, retVal, err := testTransaction(hi, false)
+		if failed {
+			return retVal, fmt.Errorf(
+				"gas required exceeds allowance (%d) or always failing transaction: %w",
+				cap,
+				err,
+			)
+		}
+	} else {
+		// Normal case: verify hi works
+		failed, retVal, err := testTransaction(hi, false)
+		if failed {
+			return retVal, fmt.Errorf(
+				"unable to apply transaction even for the highest gas limit %d: %w",
+				hi,
+				err,
+			)
+		}
 	}
+
+	// Log the final gas estimation result
+	e.logger.Info("🔍 [EstimateGas] estimation completed",
+		"txHash", transaction.Hash.String(),
+		"estimatedGas", hi,
+		"estimateBlockNumber", nextBlockHeader.Number,
+		"currentBlockNumber", header.Number,
+		"isContractCreation", transaction.IsContractCreation(),
+		"inputSize", len(transaction.Input))
 
 	return argUint64(hi), nil
 }
