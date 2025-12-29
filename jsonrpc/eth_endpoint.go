@@ -512,10 +512,23 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 		return nil, err
 	}
 
-	// Create next block header to match actual execution environment
-	// Transactions are executed in the next block, so we need to use next block's configuration
-	nextBlockHeader := header.Copy()
-	nextBlockHeader.Number = header.Number + 1
+	// Use current block header (like go-ethereum)
+	// go-ethereum's EstimateGas uses the current pending block header, not the next block
+	// This matches go-ethereum's behavior exactly
+	estimateHeader := header
+
+	// Get fork config for current block to match go-ethereum
+	forkConfig := e.store.GetForksInTime(header.Number)
+
+	// Log header details for comparison (Info level so it's visible)
+	e.logger.Info("🔍 [EstimateGas] using current block header (like go-ethereum)",
+		"blockNumber", estimateHeader.Number,
+		"stateRoot", estimateHeader.StateRoot.String(),
+		"gasLimit", estimateHeader.GasLimit,
+		"baseFee", estimateHeader.BaseFee,
+		"timestamp", estimateHeader.Timestamp,
+		"homestead", forkConfig.Homestead,
+		"istanbul", forkConfig.Istanbul)
 
 	// testTransaction should execute tx with nonce always set to the current expected nonce for the account
 	transaction, err := DecodeTxn(arg, header.Number, e.store, true)
@@ -534,8 +547,7 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 		"to", transaction.To,
 		"value", transaction.Value,
 		"gas", transaction.Gas,
-		"estimateBlockNumber", nextBlockHeader.Number,
-		"currentBlockNumber", header.Number)
+		"estimateBlockNumber", estimateHeader.Number)
 
 	// Force transaction gas price if empty
 	if err = e.fillTransactionGasPrice(transaction); err != nil {
@@ -553,8 +565,8 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 	if transaction.Gas != 0 && transaction.Gas >= state.TxGas {
 		hi = transaction.Gas
 	} else {
-		// If not, use the next block's gas limit to match execution environment
-		hi = nextBlockHeader.GasLimit
+		// If not, use the current block's gas limit (like go-ethereum)
+		hi = estimateHeader.GasLimit
 	}
 
 	// Save the initial hi value as cap (like go-ethereum)
@@ -636,8 +648,21 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 
 		transaction.Gas = gas
 
-		// Use next block header to match actual execution environment
-		result, applyErr := e.store.ApplyTxn(nextBlockHeader, transaction, nil, true)
+		// Calculate intrinsic gas for logging (before ApplyTxn)
+		testIntrinsicGas, _ := state.TransactionGasCost(transaction, forkConfig.Homestead, forkConfig.Istanbul)
+		if gas == hi || gas == lo+1 { // Log only at key points to avoid spam
+			e.logger.Info("🔍 [EstimateGas] testTransaction",
+				"testGas", gas,
+				"calculatedIntrinsicGas", testIntrinsicGas,
+				"isContractCreation", transaction.IsContractCreation(),
+				"inputSize", len(transaction.Input),
+				"homestead", forkConfig.Homestead,
+				"istanbul", forkConfig.Istanbul,
+				"blockNumber", estimateHeader.Number)
+		}
+
+		// Use current block header (like go-ethereum)
+		result, applyErr := e.store.ApplyTxn(estimateHeader, transaction, nil, true)
 
 		if result != nil {
 			data = []byte(hex.EncodeToString(result.ReturnValue))
@@ -720,14 +745,23 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 		}
 	}
 
-	// Log the final gas estimation result
+	// Calculate final intrinsic gas for logging
+	finalIntrinsicGas, _ := state.TransactionGasCost(transaction, forkConfig.Homestead, forkConfig.Istanbul)
+
+	// Log the final gas estimation result with detailed comparison info
 	e.logger.Info("🔍 [EstimateGas] estimation completed",
 		"txHash", transaction.Hash.String(),
 		"estimatedGas", hi,
-		"estimateBlockNumber", nextBlockHeader.Number,
-		"currentBlockNumber", header.Number,
+		"estimatedIntrinsicGas", finalIntrinsicGas,
+		"blockNumber", estimateHeader.Number,
 		"isContractCreation", transaction.IsContractCreation(),
-		"inputSize", len(transaction.Input))
+		"inputSize", len(transaction.Input),
+		"homestead", forkConfig.Homestead,
+		"istanbul", forkConfig.Istanbul,
+		"stateRoot", estimateHeader.StateRoot.String(),
+		"gasLimit", estimateHeader.GasLimit,
+		"baseFee", estimateHeader.BaseFee,
+		"note", "Using current block header like go-ethereum")
 
 	return argUint64(hi), nil
 }

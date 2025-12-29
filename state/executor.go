@@ -748,6 +748,20 @@ func (t *Transition) apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 		return nil, NewTransitionApplicationError(err, false)
 	}
 
+	// Log execution environment details for comparison with EstimateGas (Info level so it's visible)
+	t.logger.Info("🔍 [Apply] transaction execution environment",
+		"txHash", msg.Hash.String(),
+		"blockNumber", t.ctx.Number,
+		"blockGasLimit", t.ctx.GasLimit,
+		"blockBaseFee", t.ctx.BaseFee.Uint64(),
+		"blockTimestamp", t.ctx.Timestamp,
+		"homestead", t.config.Homestead,
+		"istanbul", t.config.Istanbul,
+		"calculatedIntrinsicGas", intrinsicGasCost,
+		"txGas", msg.Gas,
+		"isContractCreation", msg.IsContractCreation(),
+		"inputSize", len(msg.Input))
+
 	// the purchased gas is enough to cover intrinsic usage
 	gasLeft := msg.Gas - intrinsicGasCost
 	// because we are working with unsigned integers for gas, the `>` operator is used instead of the more intuitive `<`
