@@ -576,11 +576,23 @@ func (t *Transition) Apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 
 	result, err := t.apply(msg)
 	if err != nil {
+		// 计算 intrinsic gas 用于日志（如果计算失败，使用 0）
+		intrinsicGasCost, _ := TransactionGasCost(msg, t.config.Homestead, t.config.Istanbul)
+		gasDeficit := uint64(0)
+		if intrinsicGasCost > msg.Gas {
+			gasDeficit = intrinsicGasCost - msg.Gas
+		}
+
 		if revertErr := t.state.RevertToSnapshot(s); revertErr != nil {
 			t.logger.Error("💀 交易执行失败且无法回滚状态，程序将立即退出",
 				"txHash", msg.Hash.String(),
 				"nonce", msg.Nonce,
 				"from", msg.From.String(),
+				"txGas", msg.Gas,
+				"intrinsicGasCost", intrinsicGasCost,
+				"gasDeficit", gasDeficit,
+				"isContractCreation", msg.IsContractCreation(),
+				"inputSize", len(msg.Input),
 				"error", err,
 				"revertError", revertErr)
 			return nil, revertErr
@@ -589,6 +601,11 @@ func (t *Transition) Apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 			"txHash", msg.Hash.String(),
 			"nonce", msg.Nonce,
 			"from", msg.From.String(),
+			"txGas", msg.Gas,
+			"intrinsicGasCost", intrinsicGasCost,
+			"gasDeficit", gasDeficit,
+			"isContractCreation", msg.IsContractCreation(),
+			"inputSize", len(msg.Input),
 			"error", err)
 	}
 
@@ -729,6 +746,15 @@ func (t *Transition) apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 	gasLeft := msg.Gas - intrinsicGasCost
 	// because we are working with unsigned integers for gas, the `>` operator is used instead of the more intuitive `<`
 	if gasLeft > msg.Gas {
+		t.logger.Error("💀 交易执行失败（gas不足）",
+			"txHash", msg.Hash.String(),
+			"nonce", msg.Nonce,
+			"from", msg.From.String(),
+			"txGas", msg.Gas,
+			"intrinsicGasCost", intrinsicGasCost,
+			"gasDeficit", intrinsicGasCost-msg.Gas,
+			"isContractCreation", msg.IsContractCreation(),
+			"inputSize", len(msg.Input))
 		return nil, NewTransitionApplicationError(ErrNotEnoughIntrinsicGas, false)
 	}
 

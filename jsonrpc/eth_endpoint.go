@@ -281,10 +281,6 @@ func (e *Eth) GetTransactionByHash(hash types.Hash) (interface{}, error) {
 	}
 
 	// Transaction not found in state or TxPool
-	e.logger.Warn(
-		fmt.Sprintf("Transaction with hash [%s] not found", hash),
-	)
-
 	return nil, nil
 }
 
@@ -534,42 +530,24 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 		"value", transaction.Value,
 		"gas", transaction.Gas)
 
-	forksInTime := e.store.GetForksInTime(header.Number)
-
-	if transaction.IsValueTransfer() {
-		// if it is a simple value transfer or a contract creation,
-		// we already know what is the transaction gas cost, no need to apply transaction
-		gasCost, err := state.TransactionGasCost(transaction, forksInTime.Homestead, forksInTime.Istanbul)
-		if err != nil {
-			return nil, err
-		}
-
-		return argUint64(gasCost), nil
-	}
-
 	// Force transaction gas price if empty
 	if err = e.fillTransactionGasPrice(transaction); err != nil {
 		return nil, err
 	}
 
-	var standardGas uint64
-	if transaction.IsContractCreation() && forksInTime.Homestead {
-		standardGas = state.TxGasContractCreation
-	} else {
-		standardGas = state.TxGas
-	}
-
+	// Use the same binary search approach as go-ethereum
+	// Start from TxGas - 1 for all transaction types
 	var (
-		lowEnd  = standardGas
-		highEnd uint64
+		lo = state.TxGas - 1 // 21000 - 1 = 20999
+		hi uint64
 	)
 
 	// If the gas limit was passed in, use it as a ceiling
-	if transaction.Gas != 0 && transaction.Gas >= standardGas {
-		highEnd = transaction.Gas
+	if transaction.Gas != 0 && transaction.Gas >= state.TxGas {
+		hi = transaction.Gas
 	} else {
 		// If not, use the referenced block number
-		highEnd = header.GasLimit
+		hi = header.GasLimit
 	}
 
 	gasPriceInt := new(big.Int).Set(transaction.GasPrice)
@@ -604,16 +582,16 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 		availableBalance.Cmp(big.NewInt(0)) > 0 { // Available balance > 0
 		gasAllowance := new(big.Int).Div(availableBalance, gasPriceInt)
 
-		// Check the gas allowance for this account, make sure high end is capped to it
-		if gasAllowance.IsUint64() && highEnd > gasAllowance.Uint64() {
+		// Check the gas allowance for this account, make sure hi is capped to it
+		if gasAllowance.IsUint64() && hi > gasAllowance.Uint64() {
 			e.logger.Debug(
 				fmt.Sprintf(
-					"Gas estimation high-end capped by allowance [%d]",
+					"Gas estimation hi capped by allowance [%d]",
 					gasAllowance.Uint64(),
 				),
 			)
 
-			highEnd = gasAllowance.Uint64()
+			hi = gasAllowance.Uint64()
 		}
 	}
 
@@ -689,8 +667,8 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 	}
 
 	// Start the binary search for the lowest possible gas price
-	for lowEnd < highEnd {
-		mid := lowEnd + ((highEnd - lowEnd) >> 1) // (lowEnd + highEnd) / 2 can overflow
+	for lo+1 < hi {
+		mid := (lo + hi) / 2
 
 		failed, retVal, testErr := testTransaction(mid, true)
 		if testErr != nil && !isEVMRevertError(testErr) {
@@ -701,25 +679,25 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 
 		if failed {
 			// If the transaction failed => increase the gas
-			lowEnd = mid + 1
+			lo = mid + 1
 		} else {
 			// If the transaction didn't fail => make this ok value the high end
-			highEnd = mid
+			hi = mid
 		}
 	}
 
-	// Check if the highEnd is a good value to make the transaction pass
-	failed, retVal, err := testTransaction(highEnd, false)
+	// Check if the hi is a good value to make the transaction pass
+	failed, retVal, err := testTransaction(hi, false)
 	if failed {
-		// The transaction shouldn't fail, for whatever reason, at highEnd
+		// The transaction shouldn't fail, for whatever reason, at hi
 		return retVal, fmt.Errorf(
 			"unable to apply transaction even for the highest gas limit %d: %w",
-			highEnd,
+			hi,
 			err,
 		)
 	}
 
-	return argUint64(highEnd), nil
+	return argUint64(hi), nil
 }
 
 // GetFilterLogs returns an array of logs for the specified filter
