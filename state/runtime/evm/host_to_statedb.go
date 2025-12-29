@@ -97,8 +97,54 @@ func (h *HostToStateDBAdapter) GetCode(addr common.Address) []byte {
 
 // SetCode 设置代码
 func (h *HostToStateDBAdapter) SetCode(addr common.Address, code []byte) {
-	// vcitychain 的 Host 接口没有 SetCode 方法
-	// 这个操作通常由状态管理器处理
+	// 🔧 关键修复：go-ethereum EVM 的 Create 方法会调用 StateDB.SetCode 来保存合约代码
+	// 但 vcitychain 的 Host 接口没有 SetCode 方法，所以需要通过类型断言访问 Transition.SetCodeDirectly
+	//
+	// 注意：go-ethereum EVM 在创建合约时会：
+	// 1. 调用 StateDB.CreateAccount（我们的实现是空的，但账户会在首次访问时自动创建）
+	// 2. 调用 StateDB.SetCode 来保存代码（这里我们需要真正实现）
+	//
+	// 重要：SetCodeDirectly 需要账户存在，所以我们需要确保账户存在
+	// 如果账户不存在，我们需要先创建账户（通过 SetState 或其他方式触发账户创建）
+
+	vcAddr := CommonAddressToVc(addr)
+
+	// 通过类型断言访问 Transition 的 SetCodeDirectly 方法
+	if setter, ok := h.host.(codeSetter); ok {
+		// 检查账户是否存在，如果不存在则先创建
+		// 注意：通过调用 SetState 可以触发账户创建（如果账户不存在）
+		// 但更简单的方法是直接调用 SetCodeDirectly，如果失败则说明账户不存在
+		// 在这种情况下，我们需要通过其他方式创建账户
+
+		// 🔍 调试：记录 SetCode 调用
+		// 注意：这里无法直接输出日志，因为 HostToStateDBAdapter 没有 logger
+		// 日志会在 Transition.SetCodeDirectly 中输出
+
+		// 尝试设置代码
+		if setErr := setter.SetCodeDirectly(vcAddr, code); setErr != nil {
+			// 如果设置失败（账户不存在），我们需要先创建账户
+			// 通过调用 SetState 可以触发账户创建（upsertAccount 会自动创建账户）
+			// 然后再设置代码
+			if !h.host.AccountExists(vcAddr) {
+				// 账户不存在，通过 SetState 触发账户创建
+				// 使用零值来触发账户创建，不会影响实际状态
+				h.host.SetState(vcAddr, types.ZeroHash, types.ZeroHash)
+				// 再次尝试设置代码
+				if retryErr := setter.SetCodeDirectly(vcAddr, code); retryErr != nil {
+					// 如果还是失败，记录错误但不中断执行
+					// 这应该不会发生，因为 SetState 应该已经创建了账户
+					// 错误会在 Transition.SetCodeDirectly 中记录
+					_ = retryErr
+				}
+			}
+		} else {
+			// 代码设置成功（第一次尝试就成功）
+			// 日志已在 Transition.SetCodeDirectly 中输出
+		}
+	} else {
+		// 无法访问 SetCodeDirectly，这不应该发生
+		// 但这里无法输出日志，因为 HostToStateDBAdapter 没有 logger
+	}
 }
 
 // GetCodeSize 获取代码大小
