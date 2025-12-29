@@ -1,12 +1,15 @@
 package evm
 
 import (
+	"encoding/hex"
+	"fmt"
 	"math/big"
 
 	"github.com/Vcity-Team/vcitychain/chain"
 	"github.com/Vcity-Team/vcitychain/state/runtime"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/hashicorp/go-hclog"
 	"github.com/holiman/uint256"
 )
 
@@ -14,6 +17,12 @@ import (
 // 这个接口允许我们通过类型断言来访问 Transition 的 SetCodeDirectly 方法
 type codeSetter interface {
 	SetCodeDirectly(addr types.Address, code []byte) error
+}
+
+// loggerGetter 是一个内部接口，用于获取 logger
+// 这个接口允许我们通过类型断言来访问 Transition 的 logger
+type loggerGetter interface {
+	GetLogger() hclog.Logger
 }
 
 var _ runtime.Runtime = &GethEVMAdapter{}
@@ -68,6 +77,31 @@ func (g *GethEVMAdapter) Run(
 	txContext := buildTxContext(host)
 	chainConfig := buildChainConfig(config, g.chainID)
 
+	// 🔍 调试：检查 ChainConfig 是否正确设置
+	var logger hclog.Logger
+	if lg, ok := host.(loggerGetter); ok {
+		logger = lg.GetLogger()
+	}
+	if logger != nil {
+		shanghaiTimeStr := "nil"
+		if chainConfig.ShanghaiTime != nil {
+			shanghaiTimeStr = fmt.Sprintf("%d", *chainConfig.ShanghaiTime)
+		}
+		// 🔍 关键：检查 Rules 方法返回的规则（EVM 实际使用的规则）
+		// Rules 方法签名：Rules(num *big.Int, isMerge bool, timestamp uint64) Rules
+		// isMerge 通常为 true（因为我们已经过了 The Merge）
+		rules := chainConfig.Rules(blockCtx.BlockNumber, true, blockCtx.Time)
+		logger.Info("🔍 [GethEVMAdapter] ChainConfig 配置",
+			"chainID", chainConfig.ChainID,
+			"londonBlock", chainConfig.LondonBlock,
+			"shanghaiTime", shanghaiTimeStr,
+			"blockNumber", blockCtx.BlockNumber,
+			"blockTime", blockCtx.Time,
+			"isShanghai", chainConfig.IsShanghai(blockCtx.BlockNumber, blockCtx.Time),
+			"rulesIsShanghai", rules.IsShanghai,
+		)
+	}
+
 	// 4. 创建 go-ethereum EVM 实例
 	// 注意：go-ethereum EVM 在执行 LOG 指令时会调用 StateDB.AddLog
 	// 日志会通过 StateDB 收集，而不是从 EVM 返回值中获取
@@ -86,16 +120,70 @@ func (g *GethEVMAdapter) Run(
 	value.SetFromBig(c.Value)
 
 	if c.Type == runtime.Create {
-		// 🔧 调试：记录合约创建开始
-		// 注意：这里无法输出日志，因为 geth_adapter 没有 logger
-		// 但可以通过 addLogCallCount 来追踪 AddLog 是否被调用
-		// 创建合约
+		// 🔍 获取 logger（如果可能）
+		var logger hclog.Logger
+		if lg, ok := host.(loggerGetter); ok {
+			logger = lg.GetLogger()
+		}
+
+		// 🔍 调试日志：记录合约创建前的状态
+		codeLen := len(c.Code)
+		codePreview := ""
+		if codeLen > 0 {
+			if codeLen > 32 {
+				codePreview = hex.EncodeToString(c.Code[:32]) + "..."
+			} else {
+				codePreview = hex.EncodeToString(c.Code)
+			}
+		}
+		if logger != nil {
+			logger.Info("🔍 [GethEVMAdapter] 准备调用 evm.Create",
+				"caller", callerAddr.Hex(),
+				"contractAddr", contractAddr.Hex(),
+				"codeLen", codeLen,
+				"codePreview", codePreview,
+				"gas", c.Gas,
+				"value", value.String(),
+				"inputLen", len(c.Input),
+			)
+		} else {
+			fmt.Printf("[GethEVMAdapter] 准备调用 evm.Create: caller=%s, contractAddr=%s, codeLen=%d, codePreview=%s, gas=%d, value=%s, inputLen=%d\n",
+				callerAddr.Hex(), contractAddr.Hex(), codeLen, codePreview, c.Gas, value.String(), len(c.Input))
+		}
+
+		// 🔧 关键修复：对于合约创建，初始化代码在 c.Code 中，而不是 c.Input
+		// c.Input 是空的，c.Code 包含合约的初始化代码（bytecode）
 		ret, contractAddr, gasLeft, err = evm.Create(
 			vm.AccountRef(callerAddr),
-			c.Input,
+			c.Code, // 使用 c.Code 而不是 c.Input，因为合约创建时初始化代码在 c.Code 中
 			c.Gas,
 			value,
 		)
+
+		// 🔍 调试日志：记录 evm.Create 的返回值
+		retLen := len(ret)
+		retPreview := ""
+		if retLen > 0 {
+			if retLen > 32 {
+				retPreview = hex.EncodeToString(ret[:32]) + "..."
+			} else {
+				retPreview = hex.EncodeToString(ret)
+			}
+		}
+		gasUsed := c.Gas - gasLeft
+		if logger != nil {
+			logger.Info("🔍 [GethEVMAdapter] evm.Create 返回",
+				"contractAddr", contractAddr.Hex(),
+				"retLen", retLen,
+				"retPreview", retPreview,
+				"gasLeft", gasLeft,
+				"gasUsed", gasUsed,
+				"err", err,
+			)
+		} else {
+			fmt.Printf("[GethEVMAdapter] evm.Create 返回: contractAddr=%s, retLen=%d, retPreview=%s, gasLeft=%d, gasUsed=%d, err=%v\n",
+				contractAddr.Hex(), retLen, retPreview, gasLeft, gasUsed, err)
+		}
 
 		// 🔧 关键修复：go-ethereum EVM 的 Create 方法会调用 StateDB.SetCode 来保存代码
 		// 但我们的 SetCode 实现是空实现，所以需要在这里手动保存代码
@@ -122,6 +210,33 @@ func (g *GethEVMAdapter) Run(
 			}
 		}
 	} else {
+		// 🔍 获取 logger（如果可能）
+		var logger hclog.Logger
+		if lg, ok := host.(loggerGetter); ok {
+			logger = lg.GetLogger()
+		}
+
+		// 🔍 调试日志：记录合约调用前的状态
+		inputLen := len(c.Input)
+		inputPreview := ""
+		if inputLen > 0 {
+			if inputLen > 32 {
+				inputPreview = hex.EncodeToString(c.Input[:32]) + "..."
+			} else {
+				inputPreview = hex.EncodeToString(c.Input)
+			}
+		}
+		if logger != nil {
+			logger.Info("🔍 [GethEVMAdapter] 准备调用 evm.Call",
+				"caller", callerAddr.Hex(),
+				"contractAddr", contractAddr.Hex(),
+				"inputLen", inputLen,
+				"inputPreview", inputPreview,
+				"gas", c.Gas,
+				"value", value.String(),
+			)
+		}
+
 		// 调用合约
 		ret, gasLeft, err = evm.Call(
 			vm.AccountRef(callerAddr),
@@ -130,6 +245,18 @@ func (g *GethEVMAdapter) Run(
 			c.Gas,
 			value,
 		)
+
+		// 🔍 调试日志：记录 evm.Call 的返回值
+		retLen := len(ret)
+		gasUsed := c.Gas - gasLeft
+		if logger != nil {
+			logger.Info("🔍 [GethEVMAdapter] evm.Call 返回",
+				"retLen", retLen,
+				"gasLeft", gasLeft,
+				"gasUsed", gasUsed,
+				"err", err,
+			)
+		}
 	}
 
 	// 6. 转换结果

@@ -16,6 +16,14 @@ import (
 func buildBlockContext(host runtime.Host, header *types.Header) vm.BlockContext {
 	txCtx := host.GetTxContext()
 
+	// 🔧 关键修复：设置 Random 字段以表示已经过了 The Merge
+	// go-ethereum 的 NewEVM 使用 blockCtx.Random != nil 来判断 isMerge
+	// 如果 Random 为 nil，isMerge 为 false，会导致 Rules.IsShanghai = false
+	// 即使 IsShanghai(num, timestamp) 返回 true，Rules.IsShanghai 也需要 isMerge = true
+	// 所以我们需要设置一个非 nil 的 Random 值（可以使用区块哈希或其他值）
+	randomHash := host.GetBlockHash(int64(txCtx.Number))
+	random := VcHashToCommon(randomHash)
+
 	blockCtx := vm.BlockContext{
 		CanTransfer: func(db vm.StateDB, addr common.Address, amount *uint256.Int) bool {
 			balance := db.GetBalance(addr)
@@ -36,6 +44,7 @@ func buildBlockContext(host runtime.Host, header *types.Header) vm.BlockContext 
 		Difficulty:  new(big.Int).SetBytes(txCtx.Difficulty.Bytes()),
 		GasLimit:    uint64(txCtx.GasLimit),
 		BaseFee:     txCtx.BaseFee,
+		Random:      &random, // 🔧 设置 Random 以启用 isMerge，从而启用 Shanghai
 	}
 
 	return blockCtx
@@ -90,6 +99,18 @@ func buildChainConfig(config *chain.ForksInTime, chainID int64) *params.ChainCon
 	}
 	if config.London {
 		chainConfig.LondonBlock = big.NewInt(0)
+	}
+
+	// 🔧 关键修复：启用 Shanghai 升级以支持 PUSH0 操作码（EIP-3855）
+	// Shanghai 是基于时间的升级，使用 ShanghaiTime 而不是 ShanghaiBlock
+	// 设置为 0 表示从创世块开始启用（如果链已经支持 London，通常也应该支持 Shanghai）
+	// 注意：如果链配置中没有明确禁用 Shanghai，我们默认启用它以支持最新的 EIP
+	// 重要：ShanghaiTime 必须 <= 当前区块时间戳，IsShanghai 才会返回 true
+	if config.London {
+		// 如果 London 已启用，我们也启用 Shanghai（Shanghai 是 London 之后的升级）
+		// 使用 0 作为时间戳，表示从创世块开始启用（任何时间戳 >= 0 都会激活）
+		shanghaiTime := uint64(0)
+		chainConfig.ShanghaiTime = &shanghaiTime
 	}
 
 	// 设置其他参数
@@ -156,4 +177,3 @@ func buildChainConfigFromParams(chainParams *chain.Params, blockNumber uint64) *
 
 	return chainConfig
 }
-

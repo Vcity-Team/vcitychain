@@ -19,6 +19,9 @@ type HostToStateDBAdapter struct {
 	config *chain.ForksInTime
 	// 用于调试：记录 AddLog 调用次数
 	addLogCallCount int
+	// 🔧 访问列表：用于跟踪已访问的地址和存储槽（EIP-2929）
+	accessListAddresses map[common.Address]struct{}
+	accessListSlots     map[common.Address]map[common.Hash]struct{}
 }
 
 // NewHostToStateDBAdapter 创建 StateDB 适配器
@@ -158,6 +161,11 @@ func (h *HostToStateDBAdapter) GetState(addr common.Address, key common.Hash) co
 	vcAddr := CommonAddressToVc(addr)
 	vcKey := CommonHashToVc(key)
 	value := h.host.GetStorage(vcAddr, vcKey)
+	
+	// 🔍 调试：记录存储读取（仅对非零值或特定地址记录，避免日志过多）
+	// 注意：这里无法直接输出日志，因为 HostToStateDBAdapter 没有 logger
+	// 如果需要调试，可以通过其他方式（如通过 Host 接口获取 logger）
+	
 	return VcHashToCommon(value)
 }
 
@@ -213,34 +221,125 @@ func (h *HostToStateDBAdapter) Empty(addr common.Address) bool {
 
 // PrepareAccessList 准备访问列表（EIP-2930，已废弃，使用 Prepare）
 func (h *HostToStateDBAdapter) PrepareAccessList(sender common.Address, dest *common.Address, precompiles []common.Address, list ethTypes.AccessList) {
-	// vcitychain 可能不支持 AccessList，这里可以空实现
+	// 初始化访问列表
+	h.accessListAddresses = make(map[common.Address]struct{})
+	h.accessListSlots = make(map[common.Address]map[common.Hash]struct{})
+
+	// 添加发送者地址
+	h.AddAddressToAccessList(sender)
+
+	// 添加目标地址（如果存在）
+	if dest != nil {
+		h.AddAddressToAccessList(*dest)
+	}
+
+	// 添加预编译合约地址
+	for _, addr := range precompiles {
+		h.AddAddressToAccessList(addr)
+	}
+
+	// 添加交易访问列表中的地址和存储槽
+	for _, tuple := range list {
+		h.AddAddressToAccessList(tuple.Address)
+		for _, slot := range tuple.StorageKeys {
+			h.AddSlotToAccessList(tuple.Address, slot)
+		}
+	}
 }
 
 // Prepare 准备访问列表（新版本）
 func (h *HostToStateDBAdapter) Prepare(rules params.Rules, sender, coinbase common.Address, dest *common.Address, precompiles []common.Address, txAccesses ethTypes.AccessList) {
-	// vcitychain 可能不支持 AccessList，这里可以空实现
+	// 初始化访问列表
+	h.accessListAddresses = make(map[common.Address]struct{})
+	h.accessListSlots = make(map[common.Address]map[common.Hash]struct{})
+
+	// 添加发送者地址
+	h.AddAddressToAccessList(sender)
+
+	// 添加目标地址（如果存在）
+	if dest != nil {
+		h.AddAddressToAccessList(*dest)
+	}
+
+	// 添加预编译合约地址
+	for _, addr := range precompiles {
+		h.AddAddressToAccessList(addr)
+	}
+
+	// 添加交易访问列表中的地址和存储槽
+	for _, tuple := range txAccesses {
+		h.AddAddressToAccessList(tuple.Address)
+		for _, slot := range tuple.StorageKeys {
+			h.AddSlotToAccessList(tuple.Address, slot)
+		}
+	}
 }
 
 // AddressInAccessList 检查地址是否在访问列表中
 func (h *HostToStateDBAdapter) AddressInAccessList(addr common.Address) bool {
-	// vcitychain 可能不支持 AccessList，返回 false
-	return false
+	// 🔧 修复：如果访问列表未初始化，返回 false
+	if h.accessListAddresses == nil {
+		return false
+	}
+	_, ok := h.accessListAddresses[addr]
+	return ok
 }
 
 // SlotInAccessList 检查存储槽是否在访问列表中
 func (h *HostToStateDBAdapter) SlotInAccessList(addr common.Address, slot common.Hash) (addressOk bool, slotOk bool) {
-	// vcitychain 可能不支持 AccessList，返回 false
-	return false, false
+	// 🔧 修复：如果访问列表未初始化，返回 false
+	if h.accessListAddresses == nil || h.accessListSlots == nil {
+		return false, false
+	}
+	addressOk = h.AddressInAccessList(addr)
+	if !addressOk {
+		return false, false
+	}
+	slots, ok := h.accessListSlots[addr]
+	if !ok {
+		return true, false
+	}
+	_, slotOk = slots[slot]
+	return true, slotOk
 }
 
 // AddAddressToAccessList 添加地址到访问列表
 func (h *HostToStateDBAdapter) AddAddressToAccessList(addr common.Address) {
-	// vcitychain 可能不支持 AccessList，这里可以空实现
+	// 🔧 修复：确保访问列表已初始化
+	if h.accessListAddresses == nil {
+		h.accessListAddresses = make(map[common.Address]struct{})
+	}
+	if h.accessListSlots == nil {
+		h.accessListSlots = make(map[common.Address]map[common.Hash]struct{})
+	}
+
+	h.accessListAddresses[addr] = struct{}{}
+	// 确保存储槽映射存在
+	if h.accessListSlots[addr] == nil {
+		h.accessListSlots[addr] = make(map[common.Hash]struct{})
+	}
 }
 
 // AddSlotToAccessList 添加存储槽到访问列表
+// 🔧 关键修复：必须确保地址也在访问列表中，否则 go-ethereum 会 panic
 func (h *HostToStateDBAdapter) AddSlotToAccessList(addr common.Address, slot common.Hash) {
-	// vcitychain 可能不支持 AccessList，这里可以空实现
+	// 🔧 修复：确保访问列表已初始化
+	if h.accessListAddresses == nil {
+		h.accessListAddresses = make(map[common.Address]struct{})
+	}
+	if h.accessListSlots == nil {
+		h.accessListSlots = make(map[common.Address]map[common.Hash]struct{})
+	}
+
+	// 先确保地址在访问列表中
+	if !h.AddressInAccessList(addr) {
+		h.AddAddressToAccessList(addr)
+	}
+	// 然后添加存储槽
+	if h.accessListSlots[addr] == nil {
+		h.accessListSlots[addr] = make(map[common.Hash]struct{})
+	}
+	h.accessListSlots[addr][slot] = struct{}{}
 }
 
 // GetTransientState 获取临时状态（用于某些 EIP）

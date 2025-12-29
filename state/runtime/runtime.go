@@ -233,6 +233,7 @@ func NewContractCreation(
 	code []byte,
 ) *Contract {
 	c := NewContract(depth, origin, from, to, value, gas, code)
+	c.Type = Create // 🔧 关键修复：设置 Type 为 Create，否则会默认为 Call（零值）
 
 	return c
 }

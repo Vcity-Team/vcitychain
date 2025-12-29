@@ -1,6 +1,7 @@
 package state
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -501,9 +502,9 @@ func (t *Transition) Write(txn *types.Transaction) error {
 	// 注意：这个日志在 Transition.Write 中输出，用于跟踪交易执行后的日志收集
 	// 如果日志为空，说明 go-ethereum EVM 的 AddLog 没有被调用（或者合约没有发出事件）
 	if len(logs) > 0 {
-		t.logger.Debug("📋 [Write] 收集交易日志", "logsCount", len(logs), "txHash", txn.Hash.String(), "firstLogAddress", logs[0].Address.String(), "firstLogTopicsCount", len(logs[0].Topics), "blockNumber", t.ctx.Number)
+		t.logger.Info("📋 [Write] 收集交易日志", "logsCount", len(logs), "txHash", txn.Hash.String(), "firstLogAddress", logs[0].Address.String(), "firstLogTopicsCount", len(logs[0].Topics), "blockNumber", t.ctx.Number)
 	} else {
-		t.logger.Debug("📋 [Write] 收集交易日志: 日志为空", "txHash", txn.Hash.String(), "gasUsed", result.GasUsed, "blockNumber", t.ctx.Number, "note", "如果使用go-ethereum EVM，说明AddLog没有被调用")
+		t.logger.Info("📋 [Write] 收集交易日志: 日志为空", "txHash", txn.Hash.String(), "gasUsed", result.GasUsed, "blockNumber", t.ctx.Number, "note", "如果使用go-ethereum EVM，说明AddLog没有被调用")
 	}
 
 	receipt := &types.Receipt{
@@ -790,7 +791,34 @@ func (t *Transition) apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 
 	var result *runtime.ExecutionResult
 	if msg.IsContractCreation() {
+		// 🔍 调试：记录完整的字节码信息
+		inputPreview := ""
+		if len(msg.Input) > 0 {
+			if len(msg.Input) > 64 {
+				inputPreview = hex.EncodeToString(msg.Input[:32]) + "..." + hex.EncodeToString(msg.Input[len(msg.Input)-32:])
+			} else {
+				inputPreview = hex.EncodeToString(msg.Input)
+			}
+		}
+		t.logger.Info("🔍 [Apply] calling Create2 with gasLeft",
+			"txHash", msg.Hash.String(),
+			"gasLeft", gasLeft,
+			"inputSize", len(msg.Input),
+			"inputPreview", inputPreview,
+			"inputFirst4Bytes", func() string {
+				if len(msg.Input) >= 4 {
+					return hex.EncodeToString(msg.Input[:4])
+				}
+				return "too short"
+			}(),
+		)
 		result = t.Create2(msg.From, msg.Input, value, gasLeft)
+		t.logger.Info("🔍 [Apply] Create2 returned",
+			"txHash", msg.Hash.String(),
+			"resultGasLeft", result.GasLeft,
+			"resultGasUsed", result.GasUsed,
+			"resultErr", result.Err,
+			"returnValueLen", len(result.ReturnValue))
 	} else {
 		if err := t.state.IncrNonce(msg.From); err != nil {
 			return nil, err
@@ -800,6 +828,12 @@ func (t *Transition) apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 
 	refund := t.state.GetRefund()
 	result.UpdateGasUsed(msg.Gas, refund)
+	t.logger.Info("🔍 [Apply] after UpdateGasUsed",
+		"txHash", msg.Hash.String(),
+		"msgGas", msg.Gas,
+		"finalGasLeft", result.GasLeft,
+		"finalGasUsed", result.GasUsed,
+		"refund", refund)
 
 	if t.ctx.Tracer != nil {
 		t.ctx.Tracer.TxEnd(result.GasLeft)
@@ -840,8 +874,43 @@ func (t *Transition) Create2(
 	value *big.Int,
 	gas uint64,
 ) *runtime.ExecutionResult {
+	// 🔍 调试：记录传入 Create2 的字节码
+	codePreview := ""
+	if len(code) > 0 {
+		if len(code) > 32 {
+			codePreview = hex.EncodeToString(code[:32]) + "..." + hex.EncodeToString(code[len(code)-32:])
+		} else {
+			codePreview = hex.EncodeToString(code)
+		}
+	}
+	t.logger.Info("🔍 [Create2] 接收到的字节码",
+		"caller", caller.String(),
+		"codeLen", len(code),
+		"codePreview", codePreview,
+		"codeFirst4Bytes", func() string {
+			if len(code) >= 4 {
+				return hex.EncodeToString(code[:4])
+			}
+			return "too short"
+		}(),
+	)
+
 	address := crypto.CreateAddress(caller, t.state.GetNonce(caller))
 	contract := runtime.NewContractCreation(1, caller, caller, address, value, gas, code)
+
+	// 🔍 调试：记录传递给 NewContractCreation 后的字节码
+	t.logger.Info("🔍 [Create2] 传递给 NewContractCreation 后的字节码",
+		"contractCodeLen", len(contract.Code),
+		"contractCodePreview", func() string {
+			if len(contract.Code) > 0 {
+				if len(contract.Code) > 32 {
+					return hex.EncodeToString(contract.Code[:32]) + "..." + hex.EncodeToString(contract.Code[len(contract.Code)-32:])
+				}
+				return hex.EncodeToString(contract.Code)
+			}
+			return "empty"
+		}(),
+	)
 
 	return t.applyCreate(contract, t)
 }
@@ -1189,7 +1258,7 @@ func (t *Transition) EmitLog(addr types.Address, topics []types.Hash, data []byt
 	// 这个日志说明 go-ethereum EVM 的 AddLog 被调用了
 	// 如果看不到这个日志，说明 AddLog 没有被调用
 	// 注意：无法直接区分是同步节点还是生产节点，但可以通过 blockNumber 和 timestamp 结合其他日志来判断
-	t.logger.Debug("📝 [EmitLog] 发出事件日志（来自go-ethereum EVM AddLog）", "address", addr.String(), "topicsCount", len(topics), "dataLen", len(data), "firstTopic", firstTopic, "blockNumber", t.ctx.Number, "timestamp", t.ctx.Timestamp)
+	t.logger.Info("📝 [EmitLog] 发出事件日志（来自go-ethereum EVM AddLog）", "address", addr.String(), "topicsCount", len(topics), "dataLen", len(data), "firstTopic", firstTopic, "blockNumber", t.ctx.Number, "timestamp", t.ctx.Timestamp)
 	t.state.EmitLog(addr, topics, data)
 }
 
@@ -1240,6 +1309,11 @@ func (t *Transition) Callx(c *runtime.Contract, h runtime.Host) *runtime.Executi
 	}
 
 	return t.applyCall(c, c.Type, h)
+}
+
+// GetLogger 返回 Transition 的 logger（用于 geth_adapter 调试）
+func (t *Transition) GetLogger() hclog.Logger {
+	return t.logger
 }
 
 // SetAccountDirectly sets an account to the given address
