@@ -526,8 +526,30 @@ func (t *Transition) Write(txn *types.Transaction) error {
 	}
 
 	// if the transaction created a contract, store the creation address in the receipt.
+	// 🔧 修复：按照以太坊实现，使用 evm.Create 返回的实际地址，而不是重新计算
+	// go-ethereum 的 evm.Create 返回的地址是实际创建的合约地址
+	// 如果 result.Address 不为零地址，说明合约创建成功，使用实际地址
+	// 否则使用计算出的地址（用于向后兼容或错误情况）
 	if msg.To == nil {
-		receipt.ContractAddress = crypto.CreateAddress(msg.From, txn.Nonce).Ptr()
+		calculatedAddr := crypto.CreateAddress(msg.From, txn.Nonce)
+		if result.Address != types.ZeroAddress {
+			// 使用 evm.Create 返回的实际地址（与以太坊实现一致）
+			t.logger.Info("🔍 [Write] 设置 receipt.ContractAddress",
+				"txHash", txn.Hash.String(),
+				"resultAddress", result.Address.String(),
+				"calculatedAddress", calculatedAddr.String(),
+				"usingResultAddress", true,
+			)
+			receipt.ContractAddress = result.Address.Ptr()
+		} else {
+			// 回退到计算出的地址（用于向后兼容）
+			t.logger.Info("🔍 [Write] 设置 receipt.ContractAddress (回退到计算地址)",
+				"txHash", txn.Hash.String(),
+				"calculatedAddress", calculatedAddr.String(),
+				"usingResultAddress", false,
+			)
+			receipt.ContractAddress = calculatedAddr.Ptr()
+		}
 	}
 
 	// Set the receipt logs and create a bloom for filtering
@@ -1184,8 +1206,26 @@ func (t *Transition) applyCreate(c *runtime.Contract, host runtime.Host) *runtim
 	}
 
 	result.GasLeft -= gasCost
-	result.Address = c.Address
-	t.state.SetCode(c.Address, result.ReturnValue)
+
+	// 🔧 修复：按照以太坊实现，如果使用 go-ethereum EVM，不应该覆盖 result.Address
+	// go-ethereum 的 evm.Create 已经返回了正确的实际地址
+	// 只有原生 EVM 才需要使用 c.Address（预期地址）
+	if t.evm.Name() != "geth_evm" {
+		// 原生 EVM：使用预期地址
+		result.Address = c.Address
+		t.state.SetCode(c.Address, result.ReturnValue)
+	} else {
+		// go-ethereum EVM：使用返回的实际地址，代码已经在 evm.Create 中保存
+		// 但为了确保代码被保存，我们仍然需要设置代码（如果还没有设置）
+		if result.Address != types.ZeroAddress {
+			// 使用 go-ethereum 返回的实际地址
+			t.state.SetCode(result.Address, result.ReturnValue)
+		} else {
+			// 如果地址为零，回退到预期地址（错误情况）
+			result.Address = c.Address
+			t.state.SetCode(c.Address, result.ReturnValue)
+		}
+	}
 
 	return result
 }
@@ -1226,6 +1266,18 @@ func (t *Transition) handleAllowBlockListsUpdate(contract *runtime.Contract,
 }
 
 func (t *Transition) SetState(addr types.Address, key types.Hash, value types.Hash) {
+	// 🔍 调试：记录合约存储写入（仅对非零值记录）
+	// 检查是否是合约地址（有代码）
+	if t.state.GetCodeSize(addr) > 0 {
+		valueStr := value.String()
+		if valueStr != "0x0000000000000000000000000000000000000000000000000000000000000000" {
+			t.logger.Info("🔍 [Transition.SetState] 合约存储写入",
+				"contractAddr", addr.String(),
+				"key", key.String(),
+				"value", valueStr,
+			)
+		}
+	}
 	t.state.SetState(addr, key, value)
 }
 
@@ -1279,7 +1331,22 @@ func (t *Transition) GetBalance(addr types.Address) *big.Int {
 }
 
 func (t *Transition) GetStorage(addr types.Address, key types.Hash) types.Hash {
-	return t.state.GetState(addr, key)
+	value := t.state.GetState(addr, key)
+
+	// 🔍 调试：记录合约存储读取（仅对非零值记录）
+	// 检查是否是合约地址（有代码）
+	if t.state.GetCodeSize(addr) > 0 {
+		valueStr := value.String()
+		if valueStr != "0x0000000000000000000000000000000000000000000000000000000000000000" {
+			t.logger.Info("🔍 [Transition.GetStorage] 合约存储读取",
+				"contractAddr", addr.String(),
+				"key", key.String(),
+				"value", valueStr,
+			)
+		}
+	}
+
+	return value
 }
 
 func (t *Transition) AccountExists(addr types.Address) bool {
