@@ -1300,49 +1300,7 @@ func (t *Transition) applyCreate(c *runtime.Contract, host runtime.Host) *runtim
 		}
 	}
 
-	// ⚠️ 关键修复：在创建 snapshot 之前，如果账户是空的（只有 nonce=1，没有代码），先删除它
-	// 这是因为：
-	// 1. go-ethereum EVM 的 Create 方法内部会检查地址冲突，如果账户已存在（即使只有 nonce），会判定为冲突
-	// 2. snapshot 会保存当前状态，如果我们在创建 snapshot 之后删除账户，snapshot 中仍然会有账户信息
-	// 3. go-ethereum EVM 的 Create 方法在检查冲突时，可能从 snapshot 中获取账户信息
-	// 所以，我们需要在创建 snapshot 之前删除空账户，这样 snapshot 中就不会有空账户了
-	deletedEmptyAccount := false // 标记是否删除了空账户
-	if t.state.Exist(c.Address) {
-		addrNonce := t.state.GetNonce(c.Address)
-		addrCodeHash := t.state.GetCodeHash(c.Address)
-		addrBalance := t.state.GetBalance(c.Address)
-		addrCodeSize := t.state.GetCodeSize(c.Address)
-
-		// 如果账户是空的（只有 nonce，没有代码，没有余额），先删除它
-		// 这样 go-ethereum EVM 就不会检测到冲突
-		if addrCodeSize == 0 && addrBalance.Sign() == 0 && addrNonce > 0 {
-			t.logger.Info("🔧 [applyCreate] 检测到空账户，在创建 snapshot 之前先删除以允许 go-ethereum EVM 创建",
-				"contractAddress", c.Address.String(),
-				"addrNonce", addrNonce,
-				"addrCodeHash", addrCodeHash.String(),
-				"addrBalance", addrBalance.String(),
-				"addrCodeSize", addrCodeSize,
-				"note", "在创建 snapshot 之前删除空账户，确保 snapshot 中不会有空账户")
-
-			t.state.DeleteAccount(c.Address)
-			deletedEmptyAccount = true // 标记已删除空账户
-
-			// 验证删除是否成功
-			addrNonceAfterDelete := t.state.GetNonce(c.Address)
-			hasAccountAfterDelete := t.state.Exist(c.Address)
-			addrCodeSizeAfterDelete := t.state.GetCodeSize(c.Address)
-			addrCodeHashAfterDelete := t.state.GetCodeHash(c.Address)
-			t.logger.Info("🔧 [applyCreate] 空账户删除完成（在创建 snapshot 之前）",
-				"contractAddress", c.Address.String(),
-				"addrNonceAfterDelete", addrNonceAfterDelete,
-				"hasAccountAfterDelete", hasAccountAfterDelete,
-				"addrCodeSizeAfterDelete", addrCodeSizeAfterDelete,
-				"addrCodeHashAfterDelete", addrCodeHashAfterDelete.String(),
-				"note", "删除成功，现在创建 snapshot，snapshot 中不会有空账户。如果 addrNonceAfterDelete > 0 或 hasAccountAfterDelete = true，说明删除失败")
-		}
-	}
-
-	// Take snapshot of the current state (after deleting empty account if needed)
+	// Take snapshot of the current state
 	snapshot := t.state.Snapshot()
 
 	// ⚠️ 关键修复：不要在调用 go-ethereum EVM 之前创建账户
@@ -1356,26 +1314,6 @@ func (t *Transition) applyCreate(c *runtime.Contract, host runtime.Host) *runtim
 	// 解决方案：
 	// - 不提前创建账户，让 go-ethereum EVM 自己创建账户
 	// - go-ethereum EVM 的 Create 方法会处理 EIP158 的要求（创建账户）
-	// - 我们只需要确保在调用 go-ethereum EVM 之前，地址不存在或已被删除
-	if deletedEmptyAccount {
-		// 如果删除了空账户，跳过账户创建，让 go-ethereum EVM 来创建
-		t.logger.Info("🔧 [applyCreate] 已删除空账户，跳过账户创建，让 go-ethereum EVM 来创建",
-			"contractAddress", c.Address.String(),
-			"note", "go-ethereum EVM 的 Create 方法会创建账户，不会检测到冲突")
-	} else if !t.state.Exist(c.Address) {
-		// 账户不存在，让 go-ethereum EVM 来创建
-		t.logger.Info("🔧 [applyCreate] 账户不存在，让 go-ethereum EVM 来创建",
-			"contractAddress", c.Address.String(),
-			"note", "go-ethereum EVM 的 Create 方法会创建账户并处理 EIP158 的要求")
-	} else {
-		// 账户已存在，记录但不创建
-		t.logger.Info("🔍 [applyCreate] 账户已存在，跳过创建",
-			"contractAddress", c.Address.String(),
-			"addrNonce", t.state.GetNonce(c.Address),
-			"addrCodeSize", t.state.GetCodeSize(c.Address),
-			"addrBalance", t.state.GetBalance(c.Address).String(),
-			"note", "账户已存在，让 go-ethereum EVM 来处理")
-	}
 
 	// Transfer the value
 	if err := t.Transfer(c.Caller, c.Address, c.Value); err != nil {
@@ -1449,35 +1387,11 @@ func (t *Transition) applyCreate(c *runtime.Contract, host runtime.Host) *runtim
 		addrCodeHashAfterRevert := t.state.GetCodeHash(c.Address)
 		hasAccountAfterRevert := t.state.Exist(c.Address)
 
-		// ⚠️ 关键修复：如果回滚后账户仍然存在（nonce != 0），说明回滚不完整
-		// 在这种情况下，我们需要手动清理账户，确保完全回滚
-		if hasAccountAfterRevert && addrNonceAfterRevert != 0 {
-			t.logger.Warn("🔧 [applyCreate] 检测到回滚不完整，手动清理账户",
-				"contractAddress", c.Address.String(),
-				"addrNonceAfterRevert", addrNonceAfterRevert,
-				"addrCodeHashAfterRevert", addrCodeHashAfterRevert.String(),
-				"note", "回滚后账户仍然存在，手动删除以确保完全清理")
-
-			// 手动删除账户：从 radix tree 中删除
-			// 这确保 getStateObject 不会找到这个账户（即使它在 snapshot 中）
-			t.state.DeleteAccount(c.Address)
-
-			// 验证删除是否成功
-			addrNonceAfterDelete := t.state.GetNonce(c.Address)
-			hasAccountAfterDelete := t.state.Exist(c.Address)
-			t.logger.Info("🔧 [applyCreate] 手动删除账户完成",
-				"contractAddress", c.Address.String(),
-				"addrNonceAfterDelete", addrNonceAfterDelete,
-				"hasAccountAfterDelete", hasAccountAfterDelete,
-				"note", "如果 hasAccountAfterDelete=true，说明账户在 snapshot 中，需要进一步处理")
-		}
-
 		t.logger.Info("🔍 [applyCreate] 回滚完成",
 			"contractAddress", c.Address.String(),
 			"addrNonceAfterRevert", addrNonceAfterRevert,
 			"addrCodeHashAfterRevert", addrCodeHashAfterRevert.String(),
-			"hasAccountAfterRevert", hasAccountAfterRevert,
-			"note", "如果 hasAccountAfterRevert=true 或 nonce!=0，说明回滚不完整")
+			"hasAccountAfterRevert", hasAccountAfterRevert)
 
 		return result
 	}
