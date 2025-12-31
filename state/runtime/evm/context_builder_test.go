@@ -53,16 +53,7 @@ func TestBuildBlockContext(t *testing.T) {
 		balances: make(map[types.Address]*big.Int),
 	}
 
-	header := &types.Header{
-		Number:     1,
-		Timestamp:  1000,
-		GasLimit:   1000000,
-		Difficulty: 1000,
-		BaseFee:    1000000000,
-		Miner:      types.ZeroAddress.Bytes(),
-	}
-
-	blockCtx := buildBlockContext(host, header)
+	blockCtx := buildBlockContext(host)
 
 	assert.NotNil(t, blockCtx)
 	assert.NotNil(t, blockCtx.CanTransfer)
@@ -72,4 +63,3 @@ func TestBuildBlockContext(t *testing.T) {
 	assert.Equal(t, uint64(1000), blockCtx.Time)
 	assert.Equal(t, uint64(1000000), blockCtx.GasLimit)
 }
-

@@ -577,8 +577,7 @@ func (t *Transition) Write(txn *types.Transaction) error {
 	t.totalGas += result.GasUsed
 
 	logs := t.state.Logs()
-	// 📋 [Write] 收集交易日志: logsCount=%d txHash=%s
-	// 注意：这个日志在 Transition.Write 中输出，用于跟踪交易执行后的日志收集
+
 	// 如果日志为空，说明 go-ethereum EVM 的 AddLog 没有被调用（或者合约没有发出事件）
 	if len(logs) > 0 {
 		t.logger.Info("📋 [Write] 收集交易日志", "logsCount", len(logs), "txHash", txn.Hash.String(), "firstLogAddress", logs[0].Address.String(), "firstLogTopicsCount", len(logs[0].Topics), "blockNumber", t.ctx.Number)
@@ -604,11 +603,6 @@ func (t *Transition) Write(txn *types.Transaction) error {
 		receipt.SetStatus(types.ReceiptSuccess)
 	}
 
-	// if the transaction created a contract, store the creation address in the receipt.
-	// 🔧 修复：按照以太坊实现，使用 evm.Create 返回的实际地址，而不是重新计算
-	// go-ethereum 的 evm.Create 返回的地址是实际创建的合约地址
-	// 如果 result.Address 不为零地址，说明合约创建成功，使用实际地址
-	// 否则使用计算出的地址（用于向后兼容或错误情况）
 	if msg.To == nil {
 		calculatedAddr := crypto.CreateAddress(msg.From, txn.Nonce)
 		if result.Address != types.ZeroAddress {
@@ -850,7 +844,6 @@ func (t *Transition) apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 		return nil, NewTransitionApplicationError(err, false)
 	}
 
-
 	// the purchased gas is enough to cover intrinsic usage
 	gasLeft := msg.Gas - intrinsicGasCost
 	// because we are working with unsigned integers for gas, the `>` operator is used instead of the more intuitive `<`
@@ -880,7 +873,7 @@ func (t *Transition) apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 	var result *runtime.ExecutionResult
 	if msg.IsContractCreation() {
 		// 合约创建时不需要在这里递增 nonce，go-ethereum EVM 的 Create 方法会自己处理
-		result = t.Create2WithNonce(msg.From, msg.Input, value, gasLeft, msg.Nonce)
+		result = t.CreateWithNonce(msg.From, msg.Input, value, gasLeft, msg.Nonce)
 	} else {
 		if err := t.state.IncrNonce(msg.From); err != nil {
 			return nil, err
@@ -932,12 +925,12 @@ func (t *Transition) Create2(
 ) *runtime.ExecutionResult {
 	// Use state nonce (for backward compatibility and EVM CREATE opcode calls)
 	callerNonce := t.state.GetNonce(caller)
-	return t.Create2WithNonce(caller, code, value, gas, callerNonce)
+	return t.CreateWithNonce(caller, code, value, gas, callerNonce)
 }
 
-// Create2WithNonce creates a contract using the specified nonce (for gas estimation).
+// CreateWithNonce creates a contract using the specified nonce (for gas estimation).
 // This matches go-ethereum's behavior where the transaction nonce is used for address calculation.
-func (t *Transition) Create2WithNonce(
+func (t *Transition) CreateWithNonce(
 	caller types.Address,
 	code []byte,
 	value *big.Int,
@@ -1078,34 +1071,6 @@ func (t *Transition) applyCall(
 	return result
 }
 
-func (t *Transition) hasCodeOrNonce(addr types.Address) bool {
-	// ⚠️ 关键修复：地址冲突检查应该检查账户是否有代码或余额
-	// 空账户（只有 nonce=1，没有代码，没有余额）应该允许覆盖
-	// 这是因为在 gas 估算时，第一次执行可能创建了空账户，回滚不完整导致残留
-	// 第二次执行时，应该允许覆盖这个空账户
-
-	codeHash := t.state.GetCodeHash(addr)
-
-	// 如果账户有代码（真正的合约），判定为冲突
-	if codeHash != types.EmptyCodeHash && codeHash != types.ZeroHash {
-		return true
-	}
-
-	// 检查账户是否有余额（EOA 账户）
-	balance := t.state.GetBalance(addr)
-	if balance.Sign() > 0 {
-		// 有余额的账户应该判定为冲突（EOA 账户）
-		return true
-	}
-
-	// ⚠️ 关键：如果账户只有 nonce（没有代码，没有余额），可能是空账户，允许覆盖
-	// 这种情况通常发生在 gas 估算时，第一次执行创建了账户但执行失败，回滚不完整
-	// 第二次执行时，应该允许覆盖这个空账户
-	// 根据以太坊规范，地址冲突应该检查账户是否有代码或余额
-	// 空账户（只有 nonce，没有代码，没有余额）不应该判定为冲突
-	return false
-}
-
 func (t *Transition) applyCreate(c *runtime.Contract, host runtime.Host) *runtime.ExecutionResult {
 	gasLimit := c.Gas
 
@@ -1115,38 +1080,18 @@ func (t *Transition) applyCreate(c *runtime.Contract, host runtime.Host) *runtim
 			Err:     runtime.ErrDepth,
 		}
 	}
-
-	// 如果 c.Caller 是全零地址，说明这是从 EVM 内部调用 CREATE 操作码的情况
-	// 在这种情况下，应该使用 c.Origin（交易的原始发送者）作为 caller
 	actualCaller := c.Caller
 	if actualCaller == types.ZeroAddress {
 		actualCaller = c.Origin
 	}
 
-	// 计算合约地址：使用递增前的 nonce，与 go-ethereum EVM 保持一致
-	// go-ethereum EVM 的 Create 方法会用递增前的 nonce 计算地址
 	if c.Address == types.ZeroAddress {
 		callerNonce := t.state.GetNonce(actualCaller)
 		c.Address = crypto.CreateAddress(actualCaller, callerNonce)
 	}
 
-	// 检查地址冲突
-	hasCollision := t.hasCodeOrNonce(c.Address)
-
-	if hasCollision {
-		return &runtime.ExecutionResult{
-			GasLeft: 0,
-			Err:     runtime.ErrContractAddressCollision,
-		}
-	}
-
-	// 创建状态快照
 	snapshot := t.state.Snapshot()
 
-	// 注意：不要在调用 go-ethereum EVM 之前创建账户
-	// go-ethereum EVM 的 Create 方法会自己创建账户并处理 EIP158 的要求
-
-	// Transfer the value
 	if err := t.Transfer(c.Caller, c.Address, c.Value); err != nil {
 		return &runtime.ExecutionResult{
 			GasLeft: gasLimit,
@@ -1242,24 +1187,9 @@ func (t *Transition) applyCreate(c *runtime.Contract, host runtime.Host) *runtim
 
 	result.GasLeft -= gasCost
 
-	// 🔧 修复：按照以太坊实现，如果使用 go-ethereum EVM，不应该覆盖 result.Address
-	// go-ethereum 的 evm.Create 已经返回了正确的实际地址
-	// 只有原生 EVM 才需要使用 c.Address（预期地址）
 	if t.evm.Name() != "geth_evm" {
-		// 原生 EVM：使用预期地址
 		result.Address = c.Address
 		t.state.SetCode(c.Address, result.ReturnValue)
-	} else {
-		// go-ethereum EVM：使用返回的实际地址，代码已经在 evm.Create 中保存
-		// 但为了确保代码被保存，我们仍然需要设置代码（如果还没有设置）
-		if result.Address != types.ZeroAddress {
-			// 使用 go-ethereum 返回的实际地址
-			t.state.SetCode(result.Address, result.ReturnValue)
-		} else {
-			// 如果地址为零，回退到预期地址（错误情况）
-			result.Address = c.Address
-			t.state.SetCode(c.Address, result.ReturnValue)
-		}
 	}
 
 	return result
@@ -1301,8 +1231,6 @@ func (t *Transition) handleAllowBlockListsUpdate(contract *runtime.Contract,
 }
 
 func (t *Transition) SetState(addr types.Address, key types.Hash, value types.Hash) {
-	// 🔍 调试：记录合约存储写入（仅对非零值记录）
-	// 检查是否是合约地址（有代码）
 	if t.state.GetCodeSize(addr) > 0 {
 		valueStr := value.String()
 		if valueStr != "0x0000000000000000000000000000000000000000000000000000000000000000" {
@@ -1334,17 +1262,10 @@ func (t *Transition) GetBlockHash(number int64) (res types.Hash) {
 }
 
 func (t *Transition) EmitLog(addr types.Address, topics []types.Hash, data []byte) {
-	// 📝 [EmitLog] 发出事件日志
-	// 这个日志会帮助我们确认 AddLog 是否被调用
-	// 注意：这个函数会被 go-ethereum EVM 的 AddLog 调用（通过 host.EmitLog）
 	firstTopic := "none"
 	if len(topics) > 0 {
 		firstTopic = topics[0].String()
 	}
-	// 🔧 调试：记录事件日志来源
-	// 这个日志说明 go-ethereum EVM 的 AddLog 被调用了
-	// 如果看不到这个日志，说明 AddLog 没有被调用
-	// 注意：无法直接区分是同步节点还是生产节点，但可以通过 blockNumber 和 timestamp 结合其他日志来判断
 	t.logger.Info("📝 [EmitLog] 发出事件日志（来自go-ethereum EVM AddLog）", "address", addr.String(), "topicsCount", len(topics), "dataLen", len(data), "firstTopic", firstTopic, "blockNumber", t.ctx.Number, "timestamp", t.ctx.Timestamp)
 	t.state.EmitLog(addr, topics, data)
 }

@@ -449,6 +449,8 @@ func NewServer(config *Config) (*Server, error) {
 	if config.UseGethEVM {
 		logger.Info("✅ 已启用 go-ethereum EVM（包含最新 EIP 支持）")
 	} else {
+		logger.Warn("⚠️ 警告：正在使用已停止维护的原生 EVM，存在安全风险！")
+		logger.Warn("⚠️ 建议在生产环境启用 go-ethereum EVM（设置 use_geth_evm: true）")
 		logger.Info("✅ 使用原生 EVM")
 	}
 

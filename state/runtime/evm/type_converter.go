@@ -19,10 +19,8 @@ func VcAddressToCommon(addr types.Address) common.Address {
 	if cached, ok := addrCache.Load(addr); ok {
 		return cached.(common.Address)
 	}
-
 	// 转换
 	commonAddr := common.BytesToAddress(addr.Bytes())
-
 	// 缓存结果
 	addrCache.Store(addr, commonAddr)
 
@@ -40,10 +38,8 @@ func VcHashToCommon(hash types.Hash) common.Hash {
 	if cached, ok := hashCache.Load(hash); ok {
 		return cached.(common.Hash)
 	}
-
 	// 转换
 	commonHash := common.BytesToHash(hash.Bytes())
-
 	// 缓存结果
 	hashCache.Store(hash, commonHash)
 
@@ -54,5 +50,3 @@ func VcHashToCommon(hash types.Hash) common.Hash {
 func CommonHashToVc(hash common.Hash) types.Hash {
 	return types.BytesToHash(hash.Bytes())
 }
-
-

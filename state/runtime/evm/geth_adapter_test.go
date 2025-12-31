@@ -189,22 +189,12 @@ func TestGethEVMAdapter_Run_Storage(t *testing.T) {
 	assert.NoError(t, result.Err)
 	assert.True(t, result.GasLeft > 0)
 
-	// 验证存储是否写入（通过 StateDB 适配器写入的，应该已经在 host.storage 中）
-	// 注意：EVM 的存储 key 是 32 字节，PUSH1 0x01 会推入 0x0000000000000000000000000000000000000000000000000000000000000001
 	key := types.StringToHash("0x0000000000000000000000000000000000000000000000000000000000000001")
 	storedValue := host.GetStorage(contractAddr, key)
 	expectedValue := types.StringToHash("0x0000000000000000000000000000000000000000000000000000000000000042")
-	// 注意：go-ethereum 的 EVM 在执行 SSTORE 时，状态变化会立即通过 StateDB 写入
-	// 但可能的问题是：go-ethereum 的 EVM 在执行期间可能使用了快照机制，或者状态变化在 EVM 执行期间没有立即反映到 StateDB 中
-	// 实际上，go-ethereum 的 EVM 在执行期间，状态变化是立即生效的（通过 StateDB 接口），所以应该会写入
-	// 如果存储没有写入，可能是以下原因：
-	// 1. go-ethereum 的 EVM 在执行 SSTORE 时，可能使用了快照机制
-	// 2. 或者，StateDB 适配器的实现有问题
-	// 3. 或者，测试中使用的合约地址不正确
+
 	if storedValue != expectedValue {
 		t.Logf("警告：存储值未写入，期望 %x，实际 %x。这可能是因为 go-ethereum EVM 的实现细节或 StateDB 适配器的问题", expectedValue, storedValue)
-		// 暂时不失败，因为可能是 StateDB 适配器的实现细节
-		// 在实际使用中，状态变化应该会在交易提交时生效
 	}
 }
 
@@ -328,7 +318,7 @@ func TestGethEVMAdapter_Run_Create(t *testing.T) {
 	result := adapter.Run(contract, host, config)
 
 	require.NotNil(t, result)
-	// CREATE 可能成功或失败（取决于 Gas），但不应该有其他错误
+
 	if result.Err != nil {
 		// 允许的错误：Gas 耗尽或代码存储 Gas 耗尽
 		assert.True(t, result.Err == runtime.ErrOutOfGas || result.Err == runtime.ErrCodeStoreOutOfGas,
@@ -663,9 +653,7 @@ func TestGethEVMAdapter_Run_Return(t *testing.T) {
 	require.NotNil(t, result)
 	assert.NoError(t, result.Err)
 	assert.True(t, result.GasLeft > 0)
-	// RETURN 应该返回数据（go-ethereum 的 Call 返回的 ret 就是 RETURN 的数据）
-	// 注意：RETURN 的数据在 result.ReturnValue 中
-	// MSTORE 会将数据右对齐到 32 字节，所以返回的数据应该是 32 字节
+
 	if len(result.ReturnValue) == 0 {
 		t.Logf("警告：RETURN 没有返回数据，但执行成功。这可能是因为 go-ethereum EVM 的实现细节")
 	} else {
