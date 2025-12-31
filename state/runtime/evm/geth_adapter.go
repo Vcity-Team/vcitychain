@@ -57,8 +57,10 @@ func (g *GethEVMAdapter) Run(
 	txContext := buildTxContext(host)
 	chainConfig := buildChainConfig(config, g.chainID)
 
-	// 5. 创建 go-ethereum EVM 实例
-	evm := vm.NewEVM(blockCtx, txContext, stateDBInterface, chainConfig, vm.Config{})
+	// 5. 创建 go-ethereum EVM 实例（v1.16+ 不再需要 TxContext 参数）
+	evm := vm.NewEVM(blockCtx, stateDBInterface, chainConfig, vm.Config{})
+	// 设置交易上下文
+	evm.SetTxContext(txContext)
 
 	// 6. 执行合约
 	var ret []byte
@@ -73,7 +75,7 @@ func (g *GethEVMAdapter) Run(
 
 	if c.Type == runtime.Create {
 		ret, contractAddr, gasLeft, err = evm.Create(
-			vm.AccountRef(callerAddr),
+			callerAddr,
 			c.Code,
 			c.Gas,
 			value,
@@ -85,7 +87,7 @@ func (g *GethEVMAdapter) Run(
 		}
 
 		ret, gasLeft, err = evm.Call(
-			vm.AccountRef(callerAddr),
+			callerAddr,
 			contractAddr,
 			c.Input,
 			c.Gas,

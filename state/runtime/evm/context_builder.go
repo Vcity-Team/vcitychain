@@ -6,6 +6,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/chain"
 	"github.com/Vcity-Team/vcitychain/state/runtime"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
@@ -24,8 +25,9 @@ func buildBlockContext(host runtime.Host) vm.BlockContext {
 			return balance.Cmp(amount) >= 0
 		},
 		Transfer: func(db vm.StateDB, sender, recipient common.Address, amount *uint256.Int) {
-			db.SubBalance(sender, amount)
-			db.AddBalance(recipient, amount)
+			// v1.16+ 需要 BalanceChangeReason 参数，使用 BalanceChangeTransfer 表示转账
+			_ = db.SubBalance(sender, amount, tracing.BalanceChangeTransfer)
+			_ = db.AddBalance(recipient, amount, tracing.BalanceChangeTransfer)
 		},
 		GetHash: func(blockNumber uint64) common.Hash {
 			hash := host.GetBlockHash(int64(blockNumber))

@@ -7,9 +7,13 @@ import (
 	"github.com/Vcity-Team/vcitychain/state/runtime"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/ethereum/go-ethereum/common"
+	ethState "github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/stateless"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	ethTypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/trie/utils"
 	"github.com/holiman/uint256"
 )
 
@@ -44,22 +48,33 @@ func (h *HostToStateDBAdapter) CreateAccount(addr common.Address) {
 	}
 }
 
-func (h *HostToStateDBAdapter) SubBalance(addr common.Address, amount *uint256.Int) {
+// CreateContract 创建合约账户
+func (h *HostToStateDBAdapter) CreateContract(addr common.Address) {
+	vcAddr := CommonAddressToVc(addr)
+	// 确保账户存在，如果不存在则创建
+	if !h.host.AccountExists(vcAddr) {
+		h.host.SetState(vcAddr, types.ZeroHash, types.ZeroHash)
+	}
+}
+
+func (h *HostToStateDBAdapter) SubBalance(addr common.Address, amount *uint256.Int, reason tracing.BalanceChangeReason) uint256.Int {
 	if amount.IsZero() {
-		return
+		return uint256.Int{}
 	}
 	vcAddr := CommonAddressToVc(addr)
 	var amountBig *big.Int = amount.ToBig()
 	_ = h.host.Transfer(vcAddr, types.ZeroAddress, amountBig)
+	return uint256.Int{}
 }
 
-func (h *HostToStateDBAdapter) AddBalance(addr common.Address, amount *uint256.Int) {
+func (h *HostToStateDBAdapter) AddBalance(addr common.Address, amount *uint256.Int, reason tracing.BalanceChangeReason) uint256.Int {
 	if amount.IsZero() {
-		return
+		return uint256.Int{}
 	}
 	vcAddr := CommonAddressToVc(addr)
 	var amountBig *big.Int = amount.ToBig()
 	_ = h.host.Transfer(types.ZeroAddress, vcAddr, amountBig)
+	return uint256.Int{}
 }
 
 func (h *HostToStateDBAdapter) GetBalance(addr common.Address) *uint256.Int {
@@ -76,7 +91,7 @@ func (h *HostToStateDBAdapter) GetNonce(addr common.Address) uint64 {
 	return nonce
 }
 
-func (h *HostToStateDBAdapter) SetNonce(addr common.Address, nonce uint64) {
+func (h *HostToStateDBAdapter) SetNonce(addr common.Address, nonce uint64, reason tracing.NonceChangeReason) {
 	vcAddr := CommonAddressToVc(addr)
 
 	// 尝试通过类型断言访问 Transition 的 SetNonceDirectly 方法
@@ -110,8 +125,11 @@ func (h *HostToStateDBAdapter) GetCode(addr common.Address) []byte {
 	return h.host.GetCode(vcAddr)
 }
 
-func (h *HostToStateDBAdapter) SetCode(addr common.Address, code []byte) {
+func (h *HostToStateDBAdapter) SetCode(addr common.Address, code []byte, reason tracing.CodeChangeReason) []byte {
 	vcAddr := CommonAddressToVc(addr)
+
+	// 获取之前的代码（如果有）
+	previousCode := h.host.GetCode(vcAddr)
 
 	if setter, ok := h.host.(codeSetter); ok {
 		if setErr := setter.SetCodeDirectly(vcAddr, code); setErr != nil {
@@ -123,6 +141,9 @@ func (h *HostToStateDBAdapter) SetCode(addr common.Address, code []byte) {
 			}
 		}
 	}
+
+	// 返回之前的代码
+	return previousCode
 }
 
 // GetCodeSize 获取代码大小
@@ -141,12 +162,27 @@ func (h *HostToStateDBAdapter) GetState(addr common.Address, key common.Hash) co
 	return VcHashToCommon(value)
 }
 
+// GetStateAndCommittedState 获取当前状态和已提交状态（v1.16+ 新增方法）
+func (h *HostToStateDBAdapter) GetStateAndCommittedState(addr common.Address, key common.Hash) (common.Hash, common.Hash) {
+	// vcitychain 没有单独的"已提交状态"概念，返回相同的值
+	current := h.GetState(addr, key)
+	return current, current
+}
+
+// GetStorageRoot 获取存储根（v1.16+ 新增方法）
+func (h *HostToStateDBAdapter) GetStorageRoot(addr common.Address) common.Hash {
+	// vcitychain 没有单独的存储根概念，返回零哈希
+	return common.Hash{}
+}
+
 // SetState 设置存储状态
-func (h *HostToStateDBAdapter) SetState(addr common.Address, key, value common.Hash) {
+func (h *HostToStateDBAdapter) SetState(addr common.Address, key, value common.Hash) common.Hash {
 	vcAddr := CommonAddressToVc(addr)
 	vcKey := CommonHashToVc(key)
 	vcValue := CommonHashToVc(value)
 	h.host.SetState(vcAddr, vcKey, vcValue)
+	// 返回零哈希，因为 vcitychain 的 SetState 不返回之前的值
+	return common.Hash{}
 }
 
 // Suicide 销毁账户（已废弃，使用 SelfDestruct）
@@ -156,15 +192,24 @@ func (h *HostToStateDBAdapter) Suicide(addr common.Address) bool {
 }
 
 // SelfDestruct 销毁账户
-func (h *HostToStateDBAdapter) SelfDestruct(addr common.Address) {
+func (h *HostToStateDBAdapter) SelfDestruct(addr common.Address) uint256.Int {
 	vcAddr := CommonAddressToVc(addr)
+	// 获取账户余额（在销毁前）
+	balance := h.GetBalance(addr)
 	// 使用 Selfdestruct，beneficiary 设为零地址
 	h.host.Selfdestruct(vcAddr, types.ZeroAddress)
+	// 返回销毁前的余额
+	return *balance
 }
 
-// Selfdestruct6780 销毁账户（EIP-6780）
-func (h *HostToStateDBAdapter) Selfdestruct6780(addr common.Address) {
+// SelfDestruct6780 销毁账户（EIP-6780）
+func (h *HostToStateDBAdapter) SelfDestruct6780(addr common.Address) (uint256.Int, bool) {
+	// 获取账户余额（在销毁前）
+	balance := h.GetBalance(addr)
+	// 执行销毁
 	h.SelfDestruct(addr)
+	// 返回余额和销毁标志（总是返回 true，因为 vcitychain 总是执行销毁）
+	return *balance, true
 }
 
 // HasSuicided 检查账户是否已销毁（已废弃，使用 HasSelfDestructed）
@@ -308,6 +353,12 @@ func (h *HostToStateDBAdapter) AddSlotToAccessList(addr common.Address, slot com
 	h.accessListSlots[addr][slot] = struct{}{}
 }
 
+// PointCache 返回点缓存（v1.16+ 新增方法）
+func (h *HostToStateDBAdapter) PointCache() *utils.PointCache {
+	// vcitychain 不使用点缓存，返回 nil
+	return nil
+}
+
 // GetTransientState 获取临时状态（用于某些 EIP）
 func (h *HostToStateDBAdapter) GetTransientState(addr common.Address, key common.Hash) common.Hash {
 	return h.GetState(addr, key)
@@ -360,6 +411,12 @@ func (h *HostToStateDBAdapter) AddLog(log *ethTypes.Log) {
 func (h *HostToStateDBAdapter) AddPreimage(hash common.Hash, preimage []byte) {
 }
 
+// Witness 返回见证（v1.16+ 新增方法）
+func (h *HostToStateDBAdapter) Witness() *stateless.Witness {
+	// vcitychain 不使用无状态见证，返回 nil
+	return nil
+}
+
 // ForEachStorage 遍历存储（用于某些操作）
 func (h *HostToStateDBAdapter) ForEachStorage(addr common.Address, cb func(common.Hash, common.Hash) bool) error {
 	return nil
@@ -373,4 +430,17 @@ func (h *HostToStateDBAdapter) Commit(deleteEmptyObjects bool) (common.Hash, err
 // IntermediateRoot 计算中间根
 func (h *HostToStateDBAdapter) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	return common.Hash{}
+}
+
+// AccessEvents 返回访问事件（v1.16+ 新增方法）
+func (h *HostToStateDBAdapter) AccessEvents() *ethState.AccessEvents {
+	// 返回 nil，因为我们没有实现访问事件追踪
+	return nil
+}
+
+// Finalise 完成状态更改（v1.16+ 新增方法）
+// Finalise must be invoked at the end of a transaction
+func (h *HostToStateDBAdapter) Finalise(deleteEmptyObjects bool) {
+	// vcitychain 的状态管理由底层系统处理，这里不需要额外操作
+	// deleteEmptyObjects 参数用于指示是否删除空对象，但 vcitychain 的状态管理已经处理了这一点
 }
