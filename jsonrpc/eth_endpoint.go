@@ -74,6 +74,19 @@ type ethBlockchainStore interface {
 		nonPayable bool,
 	) (*runtime.ExecutionResult, error)
 
+	// ApplyTxnWithSnapshot applies a transaction using a provided snapshot (for state isolation during gas estimation).
+	// This matches go-ethereum's approach where each execution gets a fresh state copy via State.Copy().
+	ApplyTxnWithSnapshot(
+		snapshot state.Snapshot,
+		header *types.Header,
+		txn *types.Transaction,
+		override types.StateOverride,
+		nonPayable bool,
+	) (*runtime.ExecutionResult, error)
+
+	// GetSnapshotAt returns a snapshot at the given state root (for state isolation during gas estimation).
+	GetSnapshotAt(stateRoot types.Hash) (state.Snapshot, error)
+
 	// GetSyncProgression retrieves the current sync progression, if any
 	GetSyncProgression() *progress.Progression
 }
@@ -501,9 +514,6 @@ func (e *Eth) Call(arg *txnArgs, filter BlockNumberOrHash, apiOverride *stateOve
 
 // EstimateGas estimates the gas needed to execute a transaction
 func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error) {
-	// TODO: Temporary hardcoded value for testing
-	return argUint64(8000000), nil
-
 	number := LatestBlockNumber
 	if rawNum != nil {
 		number = *rawNum
@@ -523,6 +533,34 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 	// Get fork config for current block to match go-ethereum
 	forkConfig := e.store.GetForksInTime(header.Number)
 
+	// ⭐ 关键：获取基础状态 snapshot（只获取一次，类似 go-ethereum 的 StateAndHeaderByNumberOrHash）
+	// 状态隔离将在每次执行前通过 snapshot.Copy() 实现
+	baseSnapshot, err := e.store.GetSnapshotAt(estimateHeader.StateRoot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get base snapshot for gas estimation: %w", err)
+	}
+
+	// 🔍 调试：检查状态快照中的 nonce（如果提供了 From 地址）
+	if arg.From != nil {
+		// 从状态快照中读取账户信息
+		account, err := baseSnapshot.GetAccount(*arg.From)
+		if err == nil && account != nil {
+			e.logger.Info("🔍 [EstimateGas] 状态快照中的账户信息",
+				"from", arg.From.String(),
+				"accountNonce", account.Nonce,
+				"accountBalance", account.Balance.String(),
+				"stateRoot", estimateHeader.StateRoot.String(),
+				"blockNumber", estimateHeader.Number,
+				"note", "如果 accountNonce 不是最新的，说明状态快照不包含最新的交易结果")
+		} else {
+			e.logger.Info("🔍 [EstimateGas] 状态快照中账户不存在或读取失败",
+				"from", arg.From.String(),
+				"error", err,
+				"stateRoot", estimateHeader.StateRoot.String(),
+				"blockNumber", estimateHeader.Number)
+		}
+	}
+
 	// Log header details for comparison (Info level so it's visible)
 	e.logger.Info("🔍 [EstimateGas] using current block header (like go-ethereum)",
 		"blockNumber", estimateHeader.Number,
@@ -537,6 +575,15 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 	transaction, err := DecodeTxn(arg, header.Number, e.store, true)
 	if err != nil {
 		return nil, err
+	}
+
+	// 🔍 调试：记录 gas 估算时获取的 nonce（Info 级别以便可见）
+	if arg.From != nil {
+		e.logger.Info("🔍 [EstimateGas] 获取的 nonce",
+			"from", arg.From.String(),
+			"txNonce", transaction.Nonce,
+			"blockNumber", header.Number,
+			"stateRoot", header.StateRoot.String())
 	}
 
 	// Log the transaction details for gas estimation (including dummy signature values)
@@ -620,6 +667,37 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 		}
 	}
 
+	// If the transaction is a plain value transfer, short circuit estimation and
+	// directly try 21000. Returning 21000 without any execution is dangerous as
+	// some tx field combos might bump the price up even for plain transfers (e.g.
+	// unused access list items). Ever so slightly wasteful, but safer overall.
+	// This matches go-ethereum's gasestimator.Estimate implementation.
+	if len(transaction.Input) == 0 {
+		if transaction.To != nil {
+			// Check if the target address has no code (i.e., it's not a contract)
+			toCode, err := e.store.GetCode(header.StateRoot, *transaction.To)
+			if err == nil && len(toCode) == 0 {
+				// Try executing with TxGas (21000)
+				// ⭐ 关键：每次执行前创建状态副本（类似 go-ethereum 的 dirtyState = opts.State.Copy()）
+				dirtySnapshot := baseSnapshot.Copy()
+				transaction.Gas = state.TxGas
+				testResult, testErr := e.store.ApplyTxnWithSnapshot(dirtySnapshot, estimateHeader, transaction, nil, true)
+
+				// Check if execution succeeded (matches go-ethereum: !failed && err == nil)
+				if testErr == nil && testResult != nil && !testResult.Failed() {
+					e.logger.Debug("🔍 [EstimateGas] plain value transfer detected, returning TxGas",
+						"txGas", state.TxGas,
+						"gasUsed", testResult.GasUsed,
+						"to", transaction.To.String())
+					return argUint64(state.TxGas), nil
+				}
+				// If execution failed, continue with normal binary search
+				// Reset transaction gas for normal estimation
+				transaction.Gas = 0
+			}
+		}
+	}
+
 	// Checks if executor level valid gas errors occurred
 	isGasApplyError := func(err error) bool {
 		if errors.Is(err, state.ErrNotEnoughIntrinsicGas) {
@@ -664,8 +742,10 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 				"blockNumber", estimateHeader.Number)
 		}
 
-		// Use current block header (like go-ethereum)
-		result, applyErr := e.store.ApplyTxn(estimateHeader, transaction, nil, true)
+		// ⭐ 关键：每次执行前创建状态副本（类似 go-ethereum 的 dirtyState = opts.State.Copy()）
+		// 这确保了每次执行都使用完全独立的状态，避免状态污染
+		dirtySnapshot := baseSnapshot.Copy()
+		result, applyErr := e.store.ApplyTxnWithSnapshot(dirtySnapshot, estimateHeader, transaction, nil, true)
 
 		if result != nil {
 			data = []byte(hex.EncodeToString(result.ReturnValue))
@@ -725,7 +805,9 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 	// This helps set a better lower bound for binary search
 	initialGas := hi
 	transaction.Gas = initialGas
-	initialResult, initialErr := e.store.ApplyTxn(estimateHeader, transaction, nil, true)
+	// ⭐ 关键：每次执行前创建状态副本（类似 go-ethereum 的 dirtyState = opts.State.Copy()）
+	dirtySnapshot := baseSnapshot.Copy()
+	initialResult, initialErr := e.store.ApplyTxnWithSnapshot(dirtySnapshot, estimateHeader, transaction, nil, true)
 
 	if initialErr != nil {
 		// If initial execution fails with non-gas error, return it
@@ -767,7 +849,9 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 			optimisticGasLimit := initialResult.GasUsed * 64 / 63
 			if optimisticGasLimit < hi {
 				transaction.Gas = optimisticGasLimit
-				optimisticResult, optimisticErr := e.store.ApplyTxn(estimateHeader, transaction, nil, true)
+				// ⭐ 关键：每次执行前创建状态副本（类似 go-ethereum 的 dirtyState = opts.State.Copy()）
+				dirtySnapshot := baseSnapshot.Copy()
+				optimisticResult, optimisticErr := e.store.ApplyTxnWithSnapshot(dirtySnapshot, estimateHeader, transaction, nil, true)
 				if optimisticErr == nil && optimisticResult != nil && !optimisticResult.Failed() {
 					// Optimistic gas limit works, use it as hi
 					hi = optimisticGasLimit

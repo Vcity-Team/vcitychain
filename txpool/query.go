@@ -17,13 +17,53 @@ import (
 func (p *TxPool) GetNonce(addr types.Address) uint64 {
 	account := p.accounts.get(addr)
 	if account == nil {
-		stateRoot := p.store.Header().StateRoot
+		header := p.store.Header()
+		stateRoot := header.StateRoot
 		stateNonce := p.store.GetNonce(stateRoot, addr)
+
+		// 🔍 调试：记录从链上状态获取的 nonce（Info 级别以便在 gas 估算时可见）
+		// ⚠️ 关键：如果 stateNonce 不是最新的，说明 header.StateRoot 可能不是最新的状态根
+		// 这可能是因为 header 还没有更新到包含最新交易的状态
+		p.logger.Info("🔍 [TxPool.GetNonce] 从链上状态获取 nonce（账户不在TxPool中）",
+			"addr", addr.String(),
+			"blockNumber", header.Number,
+			"stateRoot", stateRoot.String(),
+			"stateNonce", stateNonce,
+			"returning", stateNonce,
+			"note", "如果 stateNonce 不是最新的，说明 header.StateRoot 可能不是最新的状态根")
 
 		return stateNonce
 	}
 
-	return account.getNonce()
+	poolNonce := account.getNonce()
+	header := p.store.Header()
+	stateRoot := header.StateRoot
+	stateNonce := p.store.GetNonce(stateRoot, addr)
+
+	// 🔍 调试：记录从 TxPool 获取的 nonce 和链上 nonce 的对比（Info 级别以便在 gas 估算时可见）
+	// ⚠️ 关键：如果 poolNonce < stateNonce，说明 TxPool 的 nonce 没有及时更新，应该使用 stateNonce
+	p.logger.Info("🔍 [TxPool.GetNonce] 从 TxPool 获取 nonce",
+		"addr", addr.String(),
+		"blockNumber", header.Number,
+		"stateRoot", stateRoot.String(),
+		"poolNonce", poolNonce,
+		"stateNonce", stateNonce,
+		"nonceMismatch", poolNonce != stateNonce,
+		"returning", poolNonce)
+
+	// ⭐ 关键修复：如果 TxPool 的 nonce 小于链上的 nonce，说明 TxPool 没有及时更新
+	// 应该返回链上的 nonce，而不是 TxPool 的 nonce
+	// 这确保了即使 TxPool 没有及时更新，也能获取到正确的 nonce
+	if poolNonce < stateNonce {
+		p.logger.Warn("⚠️ [TxPool.GetNonce] TxPool nonce 小于链上 nonce，使用链上 nonce",
+			"addr", addr.String(),
+			"poolNonce", poolNonce,
+			"stateNonce", stateNonce,
+			"returning", stateNonce)
+		return stateNonce
+	}
+
+	return poolNonce
 }
 
 // GetCapacity returns the current number of slots

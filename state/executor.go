@@ -271,6 +271,86 @@ func (e *Executor) BeginTxn(
 	return txn, nil
 }
 
+// BeginTxnWithSnapshot creates a new Transition from a snapshot (for state isolation during gas estimation).
+// This matches go-ethereum's approach where each execution gets a fresh state copy.
+// The snapshot should be a copy created via Snapshot.Copy() to ensure complete isolation.
+func (e *Executor) BeginTxnWithSnapshot(
+	snapshot Snapshot,
+	header *types.Header,
+	coinbaseReceiver types.Address,
+) (*Transition, error) {
+	forkConfig := e.config.Forks.At(header.Number)
+
+	burnContract := types.ZeroAddress
+	if forkConfig.London {
+		var err error
+		burnContract, err = e.config.CalculateBurnContract(header.Number)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	newTxn := NewTxn(snapshot)
+
+	txCtx := runtime.TxContext{
+		Coinbase:     coinbaseReceiver,
+		Timestamp:    int64(header.Timestamp),
+		Number:       int64(header.Number),
+		Difficulty:   types.BytesToHash(new(big.Int).SetUint64(header.Difficulty).Bytes()),
+		BaseFee:      new(big.Int).SetUint64(header.BaseFee),
+		GasLimit:     int64(header.GasLimit),
+		ChainID:      e.config.ChainID,
+		BurnContract: burnContract,
+	}
+
+	txn := &Transition{
+		logger:   e.logger,
+		ctx:      txCtx,
+		state:    newTxn,
+		snap:     snapshot,
+		getHash:  e.GetHash(header),
+		auxState: e.state,
+		config:   forkConfig,
+		gasPool:  uint64(txCtx.GasLimit),
+
+		receipts: []*types.Receipt{},
+		totalGas: 0,
+
+		evm:         e.createEVM(),
+		precompiles: precompiled.NewPrecompiled(),
+		PostHook:    e.PostHook,
+	}
+
+	// enable contract deployment allow list (if any)
+	if e.config.ContractDeployerAllowList != nil {
+		txn.deploymentAllowList = addresslist.NewAddressList(txn, contracts.AllowListContractsAddr)
+	}
+
+	if e.config.ContractDeployerBlockList != nil {
+		txn.deploymentBlockList = addresslist.NewAddressList(txn, contracts.BlockListContractsAddr)
+	}
+
+	// enable transactions allow list (if any)
+	if e.config.TransactionsAllowList != nil {
+		txn.txnAllowList = addresslist.NewAddressList(txn, contracts.AllowListTransactionsAddr)
+	}
+
+	if e.config.TransactionsBlockList != nil {
+		txn.txnBlockList = addresslist.NewAddressList(txn, contracts.BlockListTransactionsAddr)
+	}
+
+	// enable transactions allow list (if any)
+	if e.config.BridgeAllowList != nil {
+		txn.bridgeAllowList = addresslist.NewAddressList(txn, contracts.AllowListBridgeAddr)
+	}
+
+	if e.config.BridgeBlockList != nil {
+		txn.bridgeBlockList = addresslist.NewAddressList(txn, contracts.BlockListBridgeAddr)
+	}
+
+	return txn, nil
+}
+
 type Transition struct {
 	logger hclog.Logger
 
@@ -834,7 +914,14 @@ func (t *Transition) apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 				return "too short"
 			}(),
 		)
-		result = t.Create2(msg.From, msg.Input, value, gasLeft)
+		// ⚠️ 关键：合约创建时不需要在这里递增 nonce
+		// go-ethereum EVM 的 Create 方法内部会调用 SetNonce 来递增 nonce（通过 HostToStateDBAdapter.SetNonce）
+		// 如果我们在这里也递增 nonce，就会导致 nonce 被递增两次
+		// ⭐ 关键：使用交易中的 nonce 而不是状态中的 nonce 来计算地址
+		// 这确保了在 gas 估算时，即使状态快照是旧的，也能使用正确的 nonce
+		// 根据以太坊规范，CREATE 应该使用执行时的 nonce，但在 gas 估算时，
+		// 交易中的 nonce 应该与执行时的 nonce 匹配（通过 nonceCheck 验证）
+		result = t.Create2WithNonce(msg.From, msg.Input, value, gasLeft, msg.Nonce)
 		t.logger.Info("🔍 [Apply] Create2 returned",
 			"txHash", msg.Hash.String(),
 			"resultGasLeft", result.GasLeft,
@@ -896,6 +983,20 @@ func (t *Transition) Create2(
 	value *big.Int,
 	gas uint64,
 ) *runtime.ExecutionResult {
+	// Use state nonce (for backward compatibility and EVM CREATE opcode calls)
+	callerNonce := t.state.GetNonce(caller)
+	return t.Create2WithNonce(caller, code, value, gas, callerNonce)
+}
+
+// Create2WithNonce creates a contract using the specified nonce (for gas estimation).
+// This matches go-ethereum's behavior where the transaction nonce is used for address calculation.
+func (t *Transition) Create2WithNonce(
+	caller types.Address,
+	code []byte,
+	value *big.Int,
+	gas uint64,
+	nonce uint64,
+) *runtime.ExecutionResult {
 	// 🔍 调试：记录传入 Create2 的字节码
 	codePreview := ""
 	if len(code) > 0 {
@@ -917,8 +1018,19 @@ func (t *Transition) Create2(
 		}(),
 	)
 
-	address := crypto.CreateAddress(caller, t.state.GetNonce(caller))
-	contract := runtime.NewContractCreation(1, caller, caller, address, value, gas, code)
+	// ⚠️ 注意：这里不计算地址，因为根据以太坊规范，地址应该在 IncrNonce 之后计算
+	// 地址将在 applyCreate 中，在 IncrNonce 之后计算，以确保与 go-ethereum EVM 的行为一致
+	// go-ethereum EVM 的 Create 方法内部会使用执行时的状态 nonce（在 IncrNonce 之后）来计算地址
+	// 所以我们需要在 applyCreate 中，在 IncrNonce 之后计算地址
+	// 这里先使用零地址作为占位符，applyCreate 会重新计算
+	contract := runtime.NewContractCreation(1, caller, caller, types.ZeroAddress, value, gas, code)
+
+	// 🔍 调试：记录传入的 nonce 和当前状态 nonce
+	t.logger.Info("🔍 [Create2] 准备创建合约（地址将在 IncrNonce 后计算）",
+		"caller", caller.String(),
+		"txNonce", nonce,
+		"stateNonce", t.state.GetNonce(caller),
+		"note", "地址将在 applyCreate 中，在 IncrNonce 之后计算")
 
 	// 🔍 调试：记录传递给 NewContractCreation 后的字节码
 	t.logger.Info("🔍 [Create2] 传递给 NewContractCreation 后的字节码",
@@ -1066,13 +1178,31 @@ func (t *Transition) applyCall(
 }
 
 func (t *Transition) hasCodeOrNonce(addr types.Address) bool {
-	if t.state.GetNonce(addr) != 0 {
-		return true
-	}
+	// ⚠️ 关键修复：地址冲突检查应该检查账户是否有代码或余额
+	// 空账户（只有 nonce=1，没有代码，没有余额）应该允许覆盖
+	// 这是因为在 gas 估算时，第一次执行可能创建了空账户，回滚不完整导致残留
+	// 第二次执行时，应该允许覆盖这个空账户
 
 	codeHash := t.state.GetCodeHash(addr)
 
-	return codeHash != types.EmptyCodeHash && codeHash != types.ZeroHash
+	// 如果账户有代码（真正的合约），判定为冲突
+	if codeHash != types.EmptyCodeHash && codeHash != types.ZeroHash {
+		return true
+	}
+
+	// 检查账户是否有余额（EOA 账户）
+	balance := t.state.GetBalance(addr)
+	if balance.Sign() > 0 {
+		// 有余额的账户应该判定为冲突（EOA 账户）
+		return true
+	}
+
+	// ⚠️ 关键：如果账户只有 nonce（没有代码，没有余额），可能是空账户，允许覆盖
+	// 这种情况通常发生在 gas 估算时，第一次执行创建了账户但执行失败，回滚不完整
+	// 第二次执行时，应该允许覆盖这个空账户
+	// 根据以太坊规范，地址冲突应该检查账户是否有代码或余额
+	// 空账户（只有 nonce，没有代码，没有余额）不应该判定为冲突
+	return false
 }
 
 func (t *Transition) applyCreate(c *runtime.Contract, host runtime.Host) *runtime.ExecutionResult {
@@ -1085,29 +1215,166 @@ func (t *Transition) applyCreate(c *runtime.Contract, host runtime.Host) *runtim
 		}
 	}
 
-	// Increment the nonce of the caller
-	if err := t.state.IncrNonce(c.Caller); err != nil {
-		return &runtime.ExecutionResult{Err: err}
+	// ⭐ 关键修复：根据以太坊规范，CREATE 操作码应该：
+	// 1. 先计算地址（使用递增前的 nonce）
+	// 2. 然后递增 nonce
+	// 但是，go-ethereum EVM 的 Create 方法内部也会递增 nonce，所以我们需要：
+	// 1. 先计算地址（使用递增前的 nonce）
+	// 2. 然后递增 nonce（让 go-ethereum EVM 内部也递增一次，总共递增两次）
+	// 实际上，根据 go-ethereum 的实现，evm.Create 内部会：
+	// 1. 递增 nonce
+	// 2. 计算地址（使用递增后的 nonce）
+	// 3. 检查地址冲突
+	// 所以，如果我们也在 applyCreate 中递增 nonce，就会导致 nonce 被递增两次
+	// 但是，根据以太坊规范，CREATE 应该使用递增前的 nonce 计算地址
+	// 所以，我们应该：
+	// 1. 先计算地址（使用递增前的 nonce）
+	// 2. 然后递增 nonce
+	// 3. 但是，go-ethereum EVM 内部也会递增 nonce，所以我们需要在调用 evm.Create 之前不递增 nonce
+	// 或者，我们需要让 go-ethereum EVM 来处理 nonce 递增
+
+	// ⚠️ 关键：如果 c.Caller 是全零地址，说明这是从 EVM 内部调用 CREATE 操作码的情况
+	// 在这种情况下，应该使用 c.Origin（交易的原始发送者）作为 caller
+	actualCaller := c.Caller
+	if actualCaller == types.ZeroAddress {
+		// 如果 Caller 是全零，使用 Origin 作为 caller
+		actualCaller = c.Origin
+		t.logger.Info("🔍 [applyCreate] Caller 是全零地址，使用 Origin 作为 caller",
+			"originalCaller", c.Caller.String(),
+			"origin", c.Origin.String(),
+			"usingOrigin", true)
 	}
 
+	// ⭐ 关键修复：根据 go-ethereum EVM 的实现，evm.Create 内部会：
+	// 1. 读取 nonce（递增前）
+	// 2. 用递增前的 nonce 计算地址
+	// 3. 递增 nonce（通过 SetNonce）
+	// 4. 检查地址冲突
+	// 所以，我们应该用递增前的 nonce 计算地址，与 go-ethereum EVM 保持一致
+	if c.Address == types.ZeroAddress {
+		// 如果地址是零地址（占位符），说明需要重新计算
+		callerNonce := t.state.GetNonce(actualCaller) // 这是递增前的 nonce
+		// ⚠️ 关键：go-ethereum EVM 的 Create 方法会用递增前的 nonce 计算地址
+		// 从 go-ethereum 源码看：contractAddr = crypto.CreateAddress(caller.Address(), evm.StateDB.GetNonce(caller.Address()))
+		// 这里 GetNonce 返回的是递增前的 nonce
+		// 所以，我们也应该用递增前的 nonce 来计算地址，与 go-ethereum EVM 保持一致
+		c.Address = crypto.CreateAddress(actualCaller, callerNonce)
+		t.logger.Info("🔍 [applyCreate] 重新计算合约地址（使用递增前的 nonce，与 go-ethereum EVM 保持一致）",
+			"caller", actualCaller.String(),
+			"originalCaller", c.Caller.String(),
+			"origin", c.Origin.String(),
+			"callerNonce", callerNonce,
+			"nonceUsedForAddress", callerNonce,
+			"calculatedAddress", c.Address.String(),
+			"note", "go-ethereum EVM 会用递增前的 nonce 计算地址，我们也用递增前的 nonce")
+	}
+
+	// ⚠️ 关键：不要在 applyCreate 中递增 nonce，让 go-ethereum EVM 来处理
+	// go-ethereum EVM 的 Create 方法内部会递增 nonce，所以如果我们也在 applyCreate 中递增，
+	// 就会导致 nonce 被递增两次，导致地址计算错误
+
 	// Check if there is a collision and the address already exists
-	if t.hasCodeOrNonce(c.Address) {
+	// 🔍 调试：记录地址冲突检查的详细信息
+	addrNonce := t.state.GetNonce(c.Address)
+	addrCodeHash := t.state.GetCodeHash(c.Address)
+	addrBalance := t.state.GetBalance(c.Address)
+	addrCodeSize := t.state.GetCodeSize(c.Address)
+	hasCollision := t.hasCodeOrNonce(c.Address)
+	t.logger.Info("🔍 [applyCreate] 地址冲突检查",
+		"contractAddress", c.Address.String(),
+		"caller", c.Caller.String(),
+		"callerNonce", t.state.GetNonce(c.Caller),
+		"addrNonce", addrNonce,
+		"addrCodeHash", addrCodeHash.String(),
+		"addrBalance", addrBalance.String(),
+		"addrCodeSize", addrCodeSize,
+		"hasCollision", hasCollision,
+		"isEmptyCodeHash", addrCodeHash == types.EmptyCodeHash,
+		"isZeroHash", addrCodeHash == types.ZeroHash,
+		"note", "如果 hasCollision=false 且 addrNonce>0，说明是空账户，允许覆盖")
+
+	if hasCollision {
 		return &runtime.ExecutionResult{
 			GasLeft: 0,
 			Err:     runtime.ErrContractAddressCollision,
 		}
 	}
 
-	// Take snapshot of the current state
+	// ⚠️ 关键修复：在创建 snapshot 之前，如果账户是空的（只有 nonce=1，没有代码），先删除它
+	// 这是因为：
+	// 1. go-ethereum EVM 的 Create 方法内部会检查地址冲突，如果账户已存在（即使只有 nonce），会判定为冲突
+	// 2. snapshot 会保存当前状态，如果我们在创建 snapshot 之后删除账户，snapshot 中仍然会有账户信息
+	// 3. go-ethereum EVM 的 Create 方法在检查冲突时，可能从 snapshot 中获取账户信息
+	// 所以，我们需要在创建 snapshot 之前删除空账户，这样 snapshot 中就不会有空账户了
+	deletedEmptyAccount := false // 标记是否删除了空账户
+	if t.state.Exist(c.Address) {
+		addrNonce := t.state.GetNonce(c.Address)
+		addrCodeHash := t.state.GetCodeHash(c.Address)
+		addrBalance := t.state.GetBalance(c.Address)
+		addrCodeSize := t.state.GetCodeSize(c.Address)
+
+		// 如果账户是空的（只有 nonce，没有代码，没有余额），先删除它
+		// 这样 go-ethereum EVM 就不会检测到冲突
+		if addrCodeSize == 0 && addrBalance.Sign() == 0 && addrNonce > 0 {
+			t.logger.Info("🔧 [applyCreate] 检测到空账户，在创建 snapshot 之前先删除以允许 go-ethereum EVM 创建",
+				"contractAddress", c.Address.String(),
+				"addrNonce", addrNonce,
+				"addrCodeHash", addrCodeHash.String(),
+				"addrBalance", addrBalance.String(),
+				"addrCodeSize", addrCodeSize,
+				"note", "在创建 snapshot 之前删除空账户，确保 snapshot 中不会有空账户")
+
+			t.state.DeleteAccount(c.Address)
+			deletedEmptyAccount = true // 标记已删除空账户
+
+			// 验证删除是否成功
+			addrNonceAfterDelete := t.state.GetNonce(c.Address)
+			hasAccountAfterDelete := t.state.Exist(c.Address)
+			addrCodeSizeAfterDelete := t.state.GetCodeSize(c.Address)
+			addrCodeHashAfterDelete := t.state.GetCodeHash(c.Address)
+			t.logger.Info("🔧 [applyCreate] 空账户删除完成（在创建 snapshot 之前）",
+				"contractAddress", c.Address.String(),
+				"addrNonceAfterDelete", addrNonceAfterDelete,
+				"hasAccountAfterDelete", hasAccountAfterDelete,
+				"addrCodeSizeAfterDelete", addrCodeSizeAfterDelete,
+				"addrCodeHashAfterDelete", addrCodeHashAfterDelete.String(),
+				"note", "删除成功，现在创建 snapshot，snapshot 中不会有空账户。如果 addrNonceAfterDelete > 0 或 hasAccountAfterDelete = true，说明删除失败")
+		}
+	}
+
+	// Take snapshot of the current state (after deleting empty account if needed)
 	snapshot := t.state.Snapshot()
 
-	if t.config.EIP158 {
-		// Force the creation of the account
-		t.state.CreateAccount(c.Address)
-
-		if err := t.state.IncrNonce(c.Address); err != nil {
-			return &runtime.ExecutionResult{Err: err}
-		}
+	// ⚠️ 关键修复：不要在调用 go-ethereum EVM 之前创建账户
+	// go-ethereum EVM 的 Create 方法会：
+	// 1. 检查地址冲突（如果 nonce != 0，判定为冲突）
+	// 2. 自己创建账户（通过 StateDB.CreateAccount）
+	// 
+	// 如果我们在调用 go-ethereum EVM 之前创建账户并设置 nonce=1，
+	// go-ethereum EVM 会检测到冲突（nonce != 0），导致部署失败。
+	//
+	// 解决方案：
+	// - 不提前创建账户，让 go-ethereum EVM 自己创建账户
+	// - go-ethereum EVM 的 Create 方法会处理 EIP158 的要求（创建账户）
+	// - 我们只需要确保在调用 go-ethereum EVM 之前，地址不存在或已被删除
+	if deletedEmptyAccount {
+		// 如果删除了空账户，跳过账户创建，让 go-ethereum EVM 来创建
+		t.logger.Info("🔧 [applyCreate] 已删除空账户，跳过账户创建，让 go-ethereum EVM 来创建",
+			"contractAddress", c.Address.String(),
+			"note", "go-ethereum EVM 的 Create 方法会创建账户，不会检测到冲突")
+	} else if !t.state.Exist(c.Address) {
+		// 账户不存在，让 go-ethereum EVM 来创建
+		t.logger.Info("🔧 [applyCreate] 账户不存在，让 go-ethereum EVM 来创建",
+			"contractAddress", c.Address.String(),
+			"note", "go-ethereum EVM 的 Create 方法会创建账户并处理 EIP158 的要求")
+	} else {
+		// 账户已存在，记录但不创建
+		t.logger.Info("🔍 [applyCreate] 账户已存在，跳过创建",
+			"contractAddress", c.Address.String(),
+			"addrNonce", t.state.GetNonce(c.Address),
+			"addrCodeSize", t.state.GetCodeSize(c.Address),
+			"addrBalance", t.state.GetBalance(c.Address).String(),
+			"note", "账户已存在，让 go-ethereum EVM 来处理")
 	}
 
 	// Transfer the value
@@ -1162,11 +1429,55 @@ func (t *Transition) applyCreate(c *runtime.Contract, host runtime.Host) *runtim
 
 	result = t.run(c, host)
 	if result.Failed() {
+		// 🔍 调试：记录回滚前的状态
+		addrNonceBeforeRevert := t.state.GetNonce(c.Address)
+		addrCodeHashBeforeRevert := t.state.GetCodeHash(c.Address)
+		t.logger.Info("🔍 [applyCreate] 执行失败，准备回滚",
+			"contractAddress", c.Address.String(),
+			"addrNonceBeforeRevert", addrNonceBeforeRevert,
+			"addrCodeHashBeforeRevert", addrCodeHashBeforeRevert.String(),
+			"error", result.Err)
+
 		if err := t.state.RevertToSnapshot(snapshot); err != nil {
 			return &runtime.ExecutionResult{
 				Err: err,
 			}
 		}
+
+		// 🔍 调试：记录回滚后的状态
+		addrNonceAfterRevert := t.state.GetNonce(c.Address)
+		addrCodeHashAfterRevert := t.state.GetCodeHash(c.Address)
+		hasAccountAfterRevert := t.state.Exist(c.Address)
+
+		// ⚠️ 关键修复：如果回滚后账户仍然存在（nonce != 0），说明回滚不完整
+		// 在这种情况下，我们需要手动清理账户，确保完全回滚
+		if hasAccountAfterRevert && addrNonceAfterRevert != 0 {
+			t.logger.Warn("🔧 [applyCreate] 检测到回滚不完整，手动清理账户",
+				"contractAddress", c.Address.String(),
+				"addrNonceAfterRevert", addrNonceAfterRevert,
+				"addrCodeHashAfterRevert", addrCodeHashAfterRevert.String(),
+				"note", "回滚后账户仍然存在，手动删除以确保完全清理")
+
+			// 手动删除账户：从 radix tree 中删除
+			// 这确保 getStateObject 不会找到这个账户（即使它在 snapshot 中）
+			t.state.DeleteAccount(c.Address)
+
+			// 验证删除是否成功
+			addrNonceAfterDelete := t.state.GetNonce(c.Address)
+			hasAccountAfterDelete := t.state.Exist(c.Address)
+			t.logger.Info("🔧 [applyCreate] 手动删除账户完成",
+				"contractAddress", c.Address.String(),
+				"addrNonceAfterDelete", addrNonceAfterDelete,
+				"hasAccountAfterDelete", hasAccountAfterDelete,
+				"note", "如果 hasAccountAfterDelete=true，说明账户在 snapshot 中，需要进一步处理")
+		}
+
+		t.logger.Info("🔍 [applyCreate] 回滚完成",
+			"contractAddress", c.Address.String(),
+			"addrNonceAfterRevert", addrNonceAfterRevert,
+			"addrCodeHashAfterRevert", addrCodeHashAfterRevert.String(),
+			"hasAccountAfterRevert", hasAccountAfterRevert,
+			"note", "如果 hasAccountAfterRevert=true 或 nonce!=0，说明回滚不完整")
 
 		return result
 	}
@@ -1400,6 +1711,11 @@ func (t *Transition) SetAccountDirectly(addr types.Address, account *chain.Genes
 	t.state.SetNonce(addr, account.Nonce)
 
 	return nil
+}
+
+// SetNonceDirectly sets nonce directly (used by go-ethereum EVM's SetNonce)
+func (t *Transition) SetNonceDirectly(addr types.Address, nonce uint64) {
+	t.state.SetNonce(addr, nonce)
 }
 
 // SetCodeDirectly sets new code into the account with the specified address

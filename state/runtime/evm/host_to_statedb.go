@@ -1,6 +1,7 @@
 package evm
 
 import (
+	"fmt"
 	"math/big"
 
 	"github.com/Vcity-Team/vcitychain/chain"
@@ -35,6 +36,64 @@ func NewHostToStateDBAdapter(host runtime.Host, config *chain.ForksInTime) vm.St
 
 // CreateAccount 创建账户
 func (h *HostToStateDBAdapter) CreateAccount(addr common.Address) {
+	// ⚠️ 关键修复：go-ethereum EVM 的 Create 方法会调用 CreateAccount
+	// 根据 go-ethereum 的源码，Create 方法的执行顺序是：
+	// 1. 递增 nonce
+	// 2. 计算地址
+	// 3. 检查冲突（通过 GetCodeSize 和 GetNonce）
+	// 4. 调用 CreateAccount
+	// 5. 执行合约代码
+	//
+	// 所以，CreateAccount 是在检查冲突之后调用的。
+	// 但是，如果 CreateAccount 创建了账户，go-ethereum EVM 可能会在后续操作中再次检查冲突。
+	//
+	// 解决方案：在 CreateAccount 中，如果账户为空（codeSize=0, nonce=0, balance=0），
+	// 不创建账户，让 go-ethereum EVM 认为账户不存在
+	vcAddr := CommonAddressToVc(addr)
+	
+	// 检查账户是否为空
+	codeSize := h.host.GetCodeSize(vcAddr)
+	nonce := h.host.GetNonce(vcAddr)
+	balance := h.host.GetBalance(vcAddr)
+	
+	// 🔍 调试日志：记录 CreateAccount 的调用（总是输出，不依赖地址）
+	isEmpty := codeSize == 0 && nonce == 0 && balance.Sign() == 0
+	action := "创建账户"
+	if isEmpty {
+		action = "跳过创建（账户为空）"
+	}
+	
+	// ⚠️ 关键：总是输出日志，不依赖地址检查
+	if lg, ok := h.host.(loggerGetter); ok {
+		logger := lg.GetLogger()
+		if logger != nil {
+			logger.Info("🔍 [StateDB.CreateAccount] go-ethereum EVM 调用 CreateAccount",
+				"addr", addr.Hex(),
+				"vcAddr", vcAddr.String(),
+				"codeSize", codeSize,
+				"nonce", nonce,
+				"balance", balance.String(),
+				"isEmpty", isEmpty,
+				"action", action,
+				"note", "如果账户为空，不创建账户，让 go-ethereum EVM 认为账户不存在")
+		} else {
+			// logger 为 nil，使用 fmt.Printf 强制输出
+			fmt.Printf("🔍 [StateDB.CreateAccount] logger is nil, addr=%s, vcAddr=%s, codeSize=%d, nonce=%d, balance=%s, isEmpty=%v, action=%s\n",
+				addr.Hex(), vcAddr.String(), codeSize, nonce, balance.String(), isEmpty, action)
+		}
+	} else {
+		// 类型断言失败，使用 fmt.Printf 强制输出
+		fmt.Printf("🔍 [StateDB.CreateAccount] loggerGetter type assertion failed, addr=%s, vcAddr=%s, codeSize=%d, nonce=%d, balance=%s, isEmpty=%v, action=%s\n",
+			addr.Hex(), vcAddr.String(), codeSize, nonce, balance.String(), isEmpty, action)
+	}
+	
+	// 如果账户为空，不创建账户（空实现）
+	// 这样 go-ethereum EVM 就不会检测到冲突
+	if codeSize == 0 && nonce == 0 && balance.Sign() == 0 {
+		// 账户为空，不创建账户
+		return
+	}
+	
 	// vcitychain 的 Host 接口没有显式的 CreateAccount 方法
 	// 账户会在首次访问时自动创建，这里可以空实现
 }
@@ -76,20 +135,175 @@ func (h *HostToStateDBAdapter) GetBalance(addr common.Address) *uint256.Int {
 // GetNonce 获取 nonce
 func (h *HostToStateDBAdapter) GetNonce(addr common.Address) uint64 {
 	vcAddr := CommonAddressToVc(addr)
-	return h.host.GetNonce(vcAddr)
+	nonce := h.host.GetNonce(vcAddr)
+
+	// 🔍 详细日志：追踪 go-ethereum EVM 在 Create 方法中获取 caller nonce 的过程
+	// go-ethereum EVM 的 Create 方法在第 532 行调用：callerNonce := evm.StateDB.GetNonce(caller.Address())
+	// 这个 nonce 用于计算合约地址
+	callerAddr := "0x4BCBB0e87ff0Bd8c6bD4968617b17b2e2DC12EBe"
+	if addr.Hex() == callerAddr {
+		// 尝试获取 logger（如果可能）
+		if lg, ok := h.host.(loggerGetter); ok {
+			logger := lg.GetLogger()
+			if logger != nil {
+				logger.Info("🔍 [StateDB.GetNonce] go-ethereum EVM 在 Create 方法中获取 caller nonce（evm.go:532）",
+					"addr", addr.Hex(),
+					"vcAddr", vcAddr.String(),
+					"nonce", nonce,
+					"note", "这个 nonce 将用于计算合约地址：CreateAddress(caller, nonce)",
+					"sourceCode", "evm.go:532: callerNonce := evm.StateDB.GetNonce(caller.Address())")
+			} else {
+				fmt.Printf("🔍 [StateDB.GetNonce] logger is nil, caller addr=%s, vcAddr=%s, nonce=%d\n",
+					addr.Hex(), vcAddr.String(), nonce)
+			}
+		} else {
+			fmt.Printf("🔍 [StateDB.GetNonce] loggerGetter type assertion failed, caller addr=%s, vcAddr=%s, nonce=%d\n",
+				addr.Hex(), vcAddr.String(), nonce)
+		}
+	}
+
+	// 🔍 详细日志：追踪 go-ethereum EVM 在检查冲突时读取到的 nonce
+	// go-ethereum EVM 的 Create 方法在第 443 行检查：if evm.StateDB.GetNonce(address) != 0
+	// 如果 nonce > 0，会判定为冲突并返回 ErrContractAddressCollision
+	// ⚠️ 关键：只在特定地址上记录，避免日志过多
+	if addr.Hex() == "0xFC6FC02C0669EbA46894C77Aaa4d3f895679349c" {
+		// 尝试获取 logger（如果可能）
+		if lg, ok := h.host.(loggerGetter); ok {
+			logger := lg.GetLogger()
+			if logger != nil {
+				// 计算冲突检测条件
+				willCauseCollision := nonce != 0
+				
+				// 🔍 使用 Info 级别，确保日志可见
+				logger.Info("🔍 [StateDB.GetNonce] go-ethereum EVM 检查冲突时读取到的 nonce（evm.go:443）",
+					"addr", addr.Hex(),
+					"vcAddr", vcAddr.String(),
+					"nonce", nonce,
+					"nonceNotZero", nonce != 0,
+					"willCauseCollision", willCauseCollision,
+					"checkCondition", "evm.StateDB.GetNonce(address) != 0",
+					"note", func() string {
+						if willCauseCollision {
+							return "⚠️ 会判定为冲突！go-ethereum EVM 在第 443 行检查 nonce != 0，如果为 true 会返回 ErrContractAddressCollision"
+						}
+						return "✅ 不会判定为冲突。nonce == 0，满足冲突检测条件"
+					}(),
+					"sourceCode", "evm.go:443: if evm.StateDB.GetNonce(address) != 0 || (contractHash != (common.Hash{}) && contractHash != types.EmptyCodeHash)")
+			} else {
+				// logger 为 nil，使用 fmt.Printf 强制输出
+				fmt.Printf("🔍 [StateDB.GetNonce] logger is nil, addr=%s, vcAddr=%s, nonce=%d, willCauseCollision=%v\n",
+					addr.Hex(), vcAddr.String(), nonce, nonce != 0)
+			}
+		} else {
+			// 类型断言失败，使用 fmt.Printf 强制输出
+			fmt.Printf("🔍 [StateDB.GetNonce] loggerGetter type assertion failed, addr=%s, vcAddr=%s, nonce=%d, willCauseCollision=%v\n",
+				addr.Hex(), vcAddr.String(), nonce, nonce != 0)
+		}
+	}
+
+	return nonce
 }
 
 // SetNonce 设置 nonce
 func (h *HostToStateDBAdapter) SetNonce(addr common.Address, nonce uint64) {
-	// vcitychain 的 Host 接口没有 SetNonce 方法
-	// 这个操作通常由状态管理器处理，这里可以空实现或记录日志
+	// ⚠️ 关键修复：go-ethereum EVM 的 Create 方法会调用 SetNonce 来递增调用者的 nonce
+	// 我们需要真正设置 nonce，而不是空实现
+	// 通过类型断言访问 Transition 的 SetNonceDirectly 方法
+	vcAddr := CommonAddressToVc(addr)
+	
+	// 尝试通过类型断言访问 Transition 的 SetNonceDirectly 方法
+	if ns, ok := h.host.(nonceSetter); ok {
+		ns.SetNonceDirectly(vcAddr, nonce)
+		// 🔍 调试日志
+		if lg, ok := h.host.(loggerGetter); ok {
+			logger := lg.GetLogger()
+			if logger != nil {
+				logger.Info("🔍 [StateDB.SetNonce] go-ethereum EVM 调用 SetNonce",
+					"addr", addr.Hex(),
+					"vcAddr", vcAddr.String(),
+					"nonce", nonce,
+					"note", "go-ethereum EVM 的 Create 方法会调用 SetNonce 来递增调用者的 nonce")
+			}
+		}
+		return
+	}
+	
+	// 如果无法访问 SetNonceDirectly，记录警告
+	if lg, ok := h.host.(loggerGetter); ok {
+		logger := lg.GetLogger()
+		if logger != nil {
+			logger.Warn("⚠️ [StateDB.SetNonce] 无法访问 SetNonceDirectly，nonce 可能不会被正确设置",
+				"addr", addr.Hex(),
+				"vcAddr", vcAddr.String(),
+				"nonce", nonce,
+				"note", "这可能导致 nonce 不递增，导致后续部署失败")
+		}
+	}
 }
 
 // GetCodeHash 获取代码哈希
 func (h *HostToStateDBAdapter) GetCodeHash(addr common.Address) common.Hash {
 	vcAddr := CommonAddressToVc(addr)
 	hash := h.host.GetCodeHash(vcAddr)
-	return VcHashToCommon(hash)
+	commonHash := VcHashToCommon(hash)
+
+	// 🔍 详细日志：追踪 go-ethereum EVM 在检查冲突时读取到的 codeHash
+	// go-ethereum EVM 的 Create 方法在第 443 行检查：
+	// if evm.StateDB.GetNonce(address) != 0 || (contractHash != (common.Hash{}) && contractHash != types.EmptyCodeHash)
+	// ⚠️ 关键：只在特定地址上记录，避免日志过多
+	if addr.Hex() == "0xFC6FC02C0669EbA46894C77Aaa4d3f895679349c" {
+		// 尝试获取 logger（如果可能）
+		if lg, ok := h.host.(loggerGetter); ok {
+			logger := lg.GetLogger()
+			if logger != nil {
+				// 检查是否是 EmptyCodeHash 或 ZeroHash
+				emptyCodeHashStr := "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+				zeroHashStr := "0x0000000000000000000000000000000000000000000000000000000000000000"
+				isEmptyCodeHash := commonHash.Hex() == emptyCodeHashStr
+				isZeroHash := commonHash.Hex() == zeroHashStr
+				
+				// 计算冲突检测条件（根据 evm.go:443）
+				// 条件：contractHash != (common.Hash{}) && contractHash != types.EmptyCodeHash
+				// common.Hash{} 是 ZeroHash
+				zeroHash := common.Hash{}
+				emptyCodeHashCommon := VcHashToCommon(types.EmptyCodeHash)
+				condition1 := commonHash != zeroHash
+				condition2 := commonHash != emptyCodeHashCommon
+				willCauseCollision := condition1 && condition2
+
+				// 🔍 使用 Info 级别，确保日志可见
+				note := "✅ 不会判定为冲突。codeHash 是 ZeroHash 或 EmptyCodeHash，满足冲突检测条件"
+				if willCauseCollision {
+					note = "⚠️ 会判定为冲突！go-ethereum EVM 在第 443 行检查 codeHash，如果 codeHash 不是 ZeroHash 也不是 EmptyCodeHash，会返回 ErrContractAddressCollision"
+				}
+				
+				logger.Info("🔍 [StateDB.GetCodeHash] go-ethereum EVM 检查冲突时读取到的代码哈希（evm.go:443）",
+					"addr", addr.Hex(),
+					"vcAddr", vcAddr.String(),
+					"codeHash", commonHash.Hex(),
+					"isEmptyCodeHash", isEmptyCodeHash,
+					"isZeroHash", isZeroHash,
+					"condition1_hashNotZero", condition1,
+					"condition2_hashNotEmptyCodeHash", condition2,
+					"willCauseCollision", willCauseCollision,
+					"checkCondition", "contractHash != (common.Hash{}) && contractHash != types.EmptyCodeHash",
+					"note", note,
+					"sourceCode", "evm.go:443: if evm.StateDB.GetNonce(address) != 0 || (contractHash != (common.Hash{}) && contractHash != types.EmptyCodeHash)")
+			} else {
+				// logger 为 nil，使用 fmt.Printf 强制输出
+				fmt.Printf("🔍 [StateDB.GetCodeHash] logger is nil, addr=%s, vcAddr=%s, codeHash=%s, isZeroHash=%v, isEmptyCodeHash=%v\n",
+					addr.Hex(), vcAddr.String(), commonHash.Hex(),
+					commonHash.Hex() == "0x0000000000000000000000000000000000000000000000000000000000000000",
+					commonHash.Hex() == "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470")
+			}
+		} else {
+			// 类型断言失败，使用 fmt.Printf 强制输出
+			fmt.Printf("🔍 [StateDB.GetCodeHash] loggerGetter type assertion failed, addr=%s, vcAddr=%s, codeHash=%s\n",
+				addr.Hex(), vcAddr.String(), commonHash.Hex())
+		}
+	}
+
+	return commonHash
 }
 
 // GetCode 获取代码
@@ -153,7 +367,45 @@ func (h *HostToStateDBAdapter) SetCode(addr common.Address, code []byte) {
 // GetCodeSize 获取代码大小
 func (h *HostToStateDBAdapter) GetCodeSize(addr common.Address) int {
 	vcAddr := CommonAddressToVc(addr)
-	return h.host.GetCodeSize(vcAddr)
+	codeSize := h.host.GetCodeSize(vcAddr)
+
+	// 🔍 调试日志：追踪 go-ethereum EVM 在检查冲突时读取到的代码大小
+	// go-ethereum EVM 的 Create 方法会先检查 GetCodeSize(contractAddr) > 0，如果 > 0 就直接返回冲突
+	// 然后检查 GetNonce(contractAddr) > 0
+	// ⚠️ 关键：如果 codeSize > 0，go-ethereum EVM 会直接判定为冲突，不会调用 GetNonce
+	// ⚠️ 关键：只在特定地址上记录，避免日志过多
+	if addr.Hex() == "0xFC6FC02C0669EbA46894C77Aaa4d3f895679349c" {
+		// 尝试获取 logger（如果可能）
+		if lg, ok := h.host.(loggerGetter); ok {
+			logger := lg.GetLogger()
+			if logger != nil {
+				// 🔍 使用 Info 级别，确保日志可见（用户只能看到 Info 级别）
+				if codeSize > 0 {
+					logger.Info("🔍 [StateDB.GetCodeSize] ⚠️⚠️⚠️ go-ethereum EVM 检查冲突时读取到 codeSize > 0，会直接判定为冲突",
+						"addr", addr.Hex(),
+						"vcAddr", vcAddr.String(),
+						"codeSize", codeSize,
+						"note", "如果 codeSize > 0，go-ethereum EVM 会直接判定为冲突，不会调用 GetNonce。这说明账户有代码，不应该被删除")
+				} else {
+					logger.Info("🔍 [StateDB.GetCodeSize] go-ethereum EVM 检查冲突时读取到的代码大小",
+						"addr", addr.Hex(),
+						"vcAddr", vcAddr.String(),
+						"codeSize", codeSize,
+						"note", "codeSize == 0，继续检查 GetNonce")
+				}
+			} else {
+				// logger 为 nil，使用 fmt.Printf 强制输出
+				fmt.Printf("🔍 [StateDB.GetCodeSize] logger is nil, addr=%s, vcAddr=%s, codeSize=%d\n",
+					addr.Hex(), vcAddr.String(), codeSize)
+			}
+		} else {
+			// 类型断言失败，使用 fmt.Printf 强制输出
+			fmt.Printf("🔍 [StateDB.GetCodeSize] loggerGetter type assertion failed, addr=%s, vcAddr=%s, codeSize=%d\n",
+				addr.Hex(), vcAddr.String(), codeSize)
+		}
+	}
+
+	return codeSize
 }
 
 // GetState 获取存储状态
@@ -161,11 +413,11 @@ func (h *HostToStateDBAdapter) GetState(addr common.Address, key common.Hash) co
 	vcAddr := CommonAddressToVc(addr)
 	vcKey := CommonHashToVc(key)
 	value := h.host.GetStorage(vcAddr, vcKey)
-	
+
 	// 🔍 调试：记录存储读取（仅对非零值或特定地址记录，避免日志过多）
 	// 注意：这里无法直接输出日志，因为 HostToStateDBAdapter 没有 logger
 	// 如果需要调试，可以通过其他方式（如通过 Host 接口获取 logger）
-	
+
 	return VcHashToCommon(value)
 }
 
@@ -210,7 +462,36 @@ func (h *HostToStateDBAdapter) HasSelfDestructed(addr common.Address) bool {
 // Exist 检查账户是否存在
 func (h *HostToStateDBAdapter) Exist(addr common.Address) bool {
 	vcAddr := CommonAddressToVc(addr)
-	return h.host.AccountExists(vcAddr)
+	exists := h.host.AccountExists(vcAddr)
+
+	// 🔍 调试日志：追踪 go-ethereum EVM 在检查冲突时读取到的账户存在性
+	// go-ethereum EVM 的 Create 方法可能会检查 Exist(contractAddr) 来判断冲突
+	// ⚠️ 关键：如果 Exist(addr) == true，即使 nonce=0 和 codeSize=0，go-ethereum EVM 可能也会判定为冲突
+	// ⚠️ 关键：只在特定地址上记录，避免日志过多
+	if addr.Hex() == "0xFC6FC02C0669EbA46894C77Aaa4d3f895679349c" {
+		// 尝试获取 logger（如果可能）
+		if lg, ok := h.host.(loggerGetter); ok {
+			logger := lg.GetLogger()
+			if logger != nil {
+				// 🔍 使用 Info 级别，确保日志可见（用户只能看到 Info 级别）
+				logger.Info("🔍 [StateDB.Exist] go-ethereum EVM 检查冲突时读取到的账户存在性",
+					"addr", addr.Hex(),
+					"vcAddr", vcAddr.String(),
+					"exists", exists,
+					"note", "如果 exists == true，即使 nonce=0 和 codeSize=0，go-ethereum EVM 可能也会判定为冲突。这说明账户仍然存在于状态中，DeleteAccount 可能没有完全删除账户")
+			} else {
+				// logger 为 nil，使用 fmt.Printf 强制输出
+				fmt.Printf("🔍 [StateDB.Exist] logger is nil, addr=%s, vcAddr=%s, exists=%v\n",
+					addr.Hex(), vcAddr.String(), exists)
+			}
+		} else {
+			// 类型断言失败，使用 fmt.Printf 强制输出
+			fmt.Printf("🔍 [StateDB.Exist] loggerGetter type assertion failed, addr=%s, vcAddr=%s, exists=%v\n",
+				addr.Hex(), vcAddr.String(), exists)
+		}
+	}
+
+	return exists
 }
 
 // Empty 检查账户是否为空

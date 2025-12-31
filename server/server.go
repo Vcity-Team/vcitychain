@@ -1120,6 +1120,43 @@ func (j *jsonRPCHub) ApplyTxn(
 	return
 }
 
+// ApplyTxnWithSnapshot applies a transaction using a provided snapshot (for state isolation during gas estimation).
+// This matches go-ethereum's approach where each execution gets a fresh state copy via State.Copy().
+func (j *jsonRPCHub) ApplyTxnWithSnapshot(
+	snapshot state.Snapshot,
+	header *types.Header,
+	txn *types.Transaction,
+	override types.StateOverride,
+	nonPayable bool,
+) (result *runtime.ExecutionResult, err error) {
+	blockCreator, err := j.GetConsensus().GetBlockCreator(header)
+	if err != nil {
+		return nil, err
+	}
+
+	transition, err := j.Executor.BeginTxnWithSnapshot(snapshot, header, blockCreator)
+	if err != nil {
+		return
+	}
+
+	if override != nil {
+		if err = transition.WithStateOverride(override); err != nil {
+			return
+		}
+	}
+
+	transition.SetNonPayable(nonPayable)
+
+	result, err = transition.Apply(txn)
+
+	return
+}
+
+// GetSnapshotAt returns a snapshot at the given state root (for state isolation during gas estimation).
+func (j *jsonRPCHub) GetSnapshotAt(stateRoot types.Hash) (state.Snapshot, error) {
+	return j.state.NewSnapshotAt(stateRoot)
+}
+
 // TraceBlock traces all transactions in the given block and returns all results
 func (j *jsonRPCHub) TraceBlock(
 	block *types.Block,
@@ -1265,20 +1302,12 @@ func (j *jsonRPCHub) GetPendingTx(txHash types.Hash) (*types.Transaction, bool) 
 }
 
 // GetNonce returns the next nonce for this address
+// This matches go-ethereum's behavior: for PendingBlockNumber, it should return
+// the nonce that includes pending transactions from the TxPool.
 func (j *jsonRPCHub) GetNonce(addr types.Address) uint64 {
-	// Get the latest header to get the current state root
-	header := j.Header()
-	if header == nil {
-		return 0
-	}
-
-	// Get account from state
-	account, err := j.GetAccount(header.StateRoot, addr)
-	if err != nil {
-		return 0
-	}
-
-	return account.Nonce
+	// Use TxPool.GetNonce to get the next available nonce that includes pending transactions
+	// This ensures that if there are pending transactions, we get the correct next nonce
+	return j.TxPool.GetNonce(addr)
 }
 
 // GetBaseFee returns the current base fee of TxPool

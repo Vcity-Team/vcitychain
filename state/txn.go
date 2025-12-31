@@ -447,6 +447,31 @@ func (txn *Txn) HasSuicided(addr types.Address) bool {
 	return exists && object.Suicide
 }
 
+// DeleteAccount marks an account as deleted
+// This sets the Deleted flag on the StateObject, which will cause getStateObject to return false
+func (txn *Txn) DeleteAccount(addr types.Address) {
+	object, exists := txn.getStateObject(addr)
+	if !exists {
+		// If account doesn't exist, create a new StateObject with Deleted flag
+		object = &StateObject{
+			Account: &Account{
+				Balance:  big.NewInt(0),
+				CodeHash: types.EmptyCodeHash.Bytes(),
+				Root:     emptyStateHash,
+			},
+			Deleted: true,
+		}
+	} else {
+		// Copy the object and set Deleted flag
+		objCopy := object.Copy()
+		objCopy.Deleted = true
+		object = objCopy
+	}
+	
+	// Insert the deleted object into the radix tree
+	txn.txn.Insert(addr.Bytes(), object)
+}
+
 // Refund
 func (txn *Txn) AddRefund(gas uint64) {
 	refund := txn.GetRefund() + gas

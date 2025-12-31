@@ -74,6 +74,18 @@ func (s *Snapshot) GetCode(hash types.Hash) ([]byte, bool) {
 	return s.state.GetCode(hash)
 }
 
+// Copy creates a copy of the snapshot for state isolation during gas estimation.
+// This matches go-ethereum's State.Copy() behavior where each execution gets
+// a fresh state copy to ensure complete isolation.
+func (s *Snapshot) Copy() state.Snapshot {
+	// Since Trie is immutable, we can safely create a new Snapshot pointing to the same trie.
+	// The trie itself won't be modified, and any modifications will create new nodes.
+	return &Snapshot{
+		state: s.state,
+		trie:  s.trie,
+	}
+}
+
 func (s *Snapshot) Commit(objs []*state.Object) (state.Snapshot, []byte, error) {
 	batch := s.state.storage.Batch()
 

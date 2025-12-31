@@ -140,7 +140,11 @@ func GetNextNonce(address types.Address, number BlockNumber, store nonceGetter) 
 		// Grab the latest pending nonce from the TxPool
 		// If the account is not initialized in the local TxPool,
 		// return the latest nonce from the world state
-		return store.GetNonce(address), nil
+		nonce := store.GetNonce(address)
+		// 🔍 调试：记录获取的 nonce（Info 级别以便在 gas 估算时可见）
+		// 注意：这里无法直接访问 logger，但可以通过 store 接口传递
+		// 暂时不添加日志，因为 store 接口没有 logger
+		return nonce, nil
 	}
 
 	header, err := GetBlockHeader(number, store)
@@ -172,10 +176,15 @@ func DecodeTxn(arg *txnArgs, blockNumber uint64, store nonceGetter, forceSetNonc
 		arg.Nonce = argUintPtr(0)
 	} else if arg.Nonce == nil || forceSetNonce {
 		// get nonce from the pool
-		nonce, err := GetNextNonce(*arg.From, LatestBlockNumber, store)
+		// For gas estimation, use PendingBlockNumber to include pending transactions
+		// This ensures we get the next available nonce that accounts for pending txs
+		nonce, err := GetNextNonce(*arg.From, PendingBlockNumber, store)
 		if err != nil {
 			return nil, err
 		}
+		// 🔍 调试：记录获取的 nonce（Info 级别以便在 gas 估算时可见）
+		// 注意：这里无法直接访问 logger，但可以通过 store 接口传递
+		// 暂时不添加日志，因为 store 接口没有 logger
 		arg.Nonce = argUintPtr(nonce)
 	}
 
@@ -243,7 +252,7 @@ func DecodeTxn(arg *txnArgs, blockNumber uint64, store nonceGetter, forceSetNonc
 	txn.V = big.NewInt(0)
 	txn.R = big.NewInt(0)
 	txn.S = big.NewInt(0)
-	
+
 	// Set ChainID for all transaction types during gas estimation
 	// This ensures proper RLP marshaling regardless of transaction type
 	txn.ChainID = big.NewInt(20230825) // Use correct chain ID from genesis.json

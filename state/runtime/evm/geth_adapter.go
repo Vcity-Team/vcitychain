@@ -25,6 +25,12 @@ type loggerGetter interface {
 	GetLogger() hclog.Logger
 }
 
+// nonceSetter 是一个内部接口，用于设置 nonce
+// 这个接口允许我们通过类型断言来访问 Transition 的 SetNonceDirectly 方法
+type nonceSetter interface {
+	SetNonceDirectly(addr types.Address, nonce uint64)
+}
+
 var _ runtime.Runtime = &GethEVMAdapter{}
 
 // GethEVMAdapter 是 go-ethereum EVM 的适配器
@@ -149,6 +155,31 @@ func (g *GethEVMAdapter) Run(
 		} else {
 			fmt.Printf("[GethEVMAdapter] 准备调用 evm.Create: caller=%s, contractAddr=%s, codeLen=%d, codePreview=%s, gas=%d, value=%s, inputLen=%d\n",
 				callerAddr.Hex(), contractAddr.Hex(), codeLen, codePreview, c.Gas, value.String(), len(c.Input))
+		}
+
+		// 🔍 调试：在调用 evm.Create 之前，检查合约地址的状态
+		// 这样可以追踪 go-ethereum EVM 在检查冲突时读取到的状态
+		// ⚠️ 关键：go-ethereum EVM 的 Create 方法会先检查 GetCodeSize，然后检查 GetNonce
+		if contractAddr.Hex() == "0xFC6FC02C0669EbA46894C77Aaa4d3f895679349c" {
+			// 通过 StateDB 接口检查状态（go-ethereum EVM 会使用这个接口）
+			codeSize := stateDBInterface.GetCodeSize(contractAddr)
+			nonce := stateDBInterface.GetNonce(contractAddr)
+			codeHash := stateDBInterface.GetCodeHash(contractAddr)
+			exists := stateDBInterface.Exist(contractAddr)
+
+			if logger != nil {
+				// 🔍 使用 Info 级别，确保日志可见（用户只能看到 Info 级别）
+				logger.Info("🔍 [GethEVMAdapter] ⚠️⚠️⚠️ 调用 evm.Create 之前的状态检查（go-ethereum EVM 会使用这些值检查冲突）",
+					"contractAddr", contractAddr.Hex(),
+					"codeSize", codeSize,
+					"nonce", nonce,
+					"codeHash", codeHash.Hex(),
+					"exists", exists,
+					"note", "如果 nonce > 0 或 codeSize > 0，go-ethereum EVM 会判定为冲突。这些值来自 StateDB 接口，会调用我们的 GetNonce/GetCodeSize")
+			} else {
+				fmt.Printf("🔍 [GethEVMAdapter] ⚠️⚠️⚠️ 调用 evm.Create 之前的状态检查: contractAddr=%s, codeSize=%d, nonce=%d, codeHash=%s, exists=%v\n",
+					contractAddr.Hex(), codeSize, nonce, codeHash.Hex(), exists)
+			}
 		}
 
 		// 🔧 关键修复：对于合约创建，初始化代码在 c.Code 中，而不是 c.Input
