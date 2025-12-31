@@ -56,37 +56,6 @@ func (h *HostToStateDBAdapter) CreateAccount(addr common.Address) {
 	nonce := h.host.GetNonce(vcAddr)
 	balance := h.host.GetBalance(vcAddr)
 	
-	// 🔍 调试日志：记录 CreateAccount 的调用（总是输出，不依赖地址）
-	isEmpty := codeSize == 0 && nonce == 0 && balance.Sign() == 0
-	action := "创建账户"
-	if isEmpty {
-		action = "跳过创建（账户为空）"
-	}
-	
-	// ⚠️ 关键：总是输出日志，不依赖地址检查
-	if lg, ok := h.host.(loggerGetter); ok {
-		logger := lg.GetLogger()
-		if logger != nil {
-			logger.Info("🔍 [StateDB.CreateAccount] go-ethereum EVM 调用 CreateAccount",
-				"addr", addr.Hex(),
-				"vcAddr", vcAddr.String(),
-				"codeSize", codeSize,
-				"nonce", nonce,
-				"balance", balance.String(),
-				"isEmpty", isEmpty,
-				"action", action,
-				"note", "如果账户为空，不创建账户，让 go-ethereum EVM 认为账户不存在")
-		} else {
-			// logger 为 nil，使用 fmt.Printf 强制输出
-			fmt.Printf("🔍 [StateDB.CreateAccount] logger is nil, addr=%s, vcAddr=%s, codeSize=%d, nonce=%d, balance=%s, isEmpty=%v, action=%s\n",
-				addr.Hex(), vcAddr.String(), codeSize, nonce, balance.String(), isEmpty, action)
-		}
-	} else {
-		// 类型断言失败，使用 fmt.Printf 强制输出
-		fmt.Printf("🔍 [StateDB.CreateAccount] loggerGetter type assertion failed, addr=%s, vcAddr=%s, codeSize=%d, nonce=%d, balance=%s, isEmpty=%v, action=%s\n",
-			addr.Hex(), vcAddr.String(), codeSize, nonce, balance.String(), isEmpty, action)
-	}
-	
 	// 如果账户为空，不创建账户（空实现）
 	// 这样 go-ethereum EVM 就不会检测到冲突
 	if codeSize == 0 && nonce == 0 && balance.Sign() == 0 {
@@ -214,17 +183,6 @@ func (h *HostToStateDBAdapter) SetNonce(addr common.Address, nonce uint64) {
 	// 尝试通过类型断言访问 Transition 的 SetNonceDirectly 方法
 	if ns, ok := h.host.(nonceSetter); ok {
 		ns.SetNonceDirectly(vcAddr, nonce)
-		// 🔍 调试日志
-		if lg, ok := h.host.(loggerGetter); ok {
-			logger := lg.GetLogger()
-			if logger != nil {
-				logger.Info("🔍 [StateDB.SetNonce] go-ethereum EVM 调用 SetNonce",
-					"addr", addr.Hex(),
-					"vcAddr", vcAddr.String(),
-					"nonce", nonce,
-					"note", "go-ethereum EVM 的 Create 方法会调用 SetNonce 来递增调用者的 nonce")
-			}
-		}
 		return
 	}
 	
@@ -464,32 +422,6 @@ func (h *HostToStateDBAdapter) Exist(addr common.Address) bool {
 	vcAddr := CommonAddressToVc(addr)
 	exists := h.host.AccountExists(vcAddr)
 
-	// 🔍 调试日志：追踪 go-ethereum EVM 在检查冲突时读取到的账户存在性
-	// go-ethereum EVM 的 Create 方法可能会检查 Exist(contractAddr) 来判断冲突
-	// ⚠️ 关键：如果 Exist(addr) == true，即使 nonce=0 和 codeSize=0，go-ethereum EVM 可能也会判定为冲突
-	// ⚠️ 关键：只在特定地址上记录，避免日志过多
-	if addr.Hex() == "0xFC6FC02C0669EbA46894C77Aaa4d3f895679349c" {
-		// 尝试获取 logger（如果可能）
-		if lg, ok := h.host.(loggerGetter); ok {
-			logger := lg.GetLogger()
-			if logger != nil {
-				// 🔍 使用 Info 级别，确保日志可见（用户只能看到 Info 级别）
-				logger.Info("🔍 [StateDB.Exist] go-ethereum EVM 检查冲突时读取到的账户存在性",
-					"addr", addr.Hex(),
-					"vcAddr", vcAddr.String(),
-					"exists", exists,
-					"note", "如果 exists == true，即使 nonce=0 和 codeSize=0，go-ethereum EVM 可能也会判定为冲突。这说明账户仍然存在于状态中，DeleteAccount 可能没有完全删除账户")
-			} else {
-				// logger 为 nil，使用 fmt.Printf 强制输出
-				fmt.Printf("🔍 [StateDB.Exist] logger is nil, addr=%s, vcAddr=%s, exists=%v\n",
-					addr.Hex(), vcAddr.String(), exists)
-			}
-		} else {
-			// 类型断言失败，使用 fmt.Printf 强制输出
-			fmt.Printf("🔍 [StateDB.Exist] loggerGetter type assertion failed, addr=%s, vcAddr=%s, exists=%v\n",
-				addr.Hex(), vcAddr.String(), exists)
-		}
-	}
 
 	return exists
 }

@@ -1,7 +1,6 @@
 package evm
 
 import (
-	"encoding/hex"
 	"fmt"
 	"math/big"
 
@@ -83,31 +82,6 @@ func (g *GethEVMAdapter) Run(
 	txContext := buildTxContext(host)
 	chainConfig := buildChainConfig(config, g.chainID)
 
-	// 🔍 调试：检查 ChainConfig 是否正确设置
-	var logger hclog.Logger
-	if lg, ok := host.(loggerGetter); ok {
-		logger = lg.GetLogger()
-	}
-	if logger != nil {
-		shanghaiTimeStr := "nil"
-		if chainConfig.ShanghaiTime != nil {
-			shanghaiTimeStr = fmt.Sprintf("%d", *chainConfig.ShanghaiTime)
-		}
-		// 🔍 关键：检查 Rules 方法返回的规则（EVM 实际使用的规则）
-		// Rules 方法签名：Rules(num *big.Int, isMerge bool, timestamp uint64) Rules
-		// isMerge 通常为 true（因为我们已经过了 The Merge）
-		rules := chainConfig.Rules(blockCtx.BlockNumber, true, blockCtx.Time)
-		logger.Info("🔍 [GethEVMAdapter] ChainConfig 配置",
-			"chainID", chainConfig.ChainID,
-			"londonBlock", chainConfig.LondonBlock,
-			"shanghaiTime", shanghaiTimeStr,
-			"blockNumber", blockCtx.BlockNumber,
-			"blockTime", blockCtx.Time,
-			"isShanghai", chainConfig.IsShanghai(blockCtx.BlockNumber, blockCtx.Time),
-			"rulesIsShanghai", rules.IsShanghai,
-		)
-	}
-
 	// 4. 创建 go-ethereum EVM 实例
 	// 注意：go-ethereum EVM 在执行 LOG 指令时会调用 StateDB.AddLog
 	// 日志会通过 StateDB 收集，而不是从 EVM 返回值中获取
@@ -132,30 +106,6 @@ func (g *GethEVMAdapter) Run(
 			logger = lg.GetLogger()
 		}
 
-		// 🔍 调试日志：记录合约创建前的状态
-		codeLen := len(c.Code)
-		codePreview := ""
-		if codeLen > 0 {
-			if codeLen > 32 {
-				codePreview = hex.EncodeToString(c.Code[:32]) + "..."
-			} else {
-				codePreview = hex.EncodeToString(c.Code)
-			}
-		}
-		if logger != nil {
-			logger.Info("🔍 [GethEVMAdapter] 准备调用 evm.Create",
-				"caller", callerAddr.Hex(),
-				"contractAddr", contractAddr.Hex(),
-				"codeLen", codeLen,
-				"codePreview", codePreview,
-				"gas", c.Gas,
-				"value", value.String(),
-				"inputLen", len(c.Input),
-			)
-		} else {
-			fmt.Printf("[GethEVMAdapter] 准备调用 evm.Create: caller=%s, contractAddr=%s, codeLen=%d, codePreview=%s, gas=%d, value=%s, inputLen=%d\n",
-				callerAddr.Hex(), contractAddr.Hex(), codeLen, codePreview, c.Gas, value.String(), len(c.Input))
-		}
 
 		// 🔍 调试：在调用 evm.Create 之前，检查合约地址的状态
 		// 这样可以追踪 go-ethereum EVM 在检查冲突时读取到的状态
@@ -191,30 +141,6 @@ func (g *GethEVMAdapter) Run(
 			value,
 		)
 
-		// 🔍 调试日志：记录 evm.Create 的返回值
-		retLen := len(ret)
-		retPreview := ""
-		if retLen > 0 {
-			if retLen > 32 {
-				retPreview = hex.EncodeToString(ret[:32]) + "..."
-			} else {
-				retPreview = hex.EncodeToString(ret)
-			}
-		}
-		gasUsed := c.Gas - gasLeft
-		if logger != nil {
-			logger.Info("🔍 [GethEVMAdapter] evm.Create 返回",
-				"contractAddr", contractAddr.Hex(),
-				"retLen", retLen,
-				"retPreview", retPreview,
-				"gasLeft", gasLeft,
-				"gasUsed", gasUsed,
-				"err", err,
-			)
-		} else {
-			fmt.Printf("[GethEVMAdapter] evm.Create 返回: contractAddr=%s, retLen=%d, retPreview=%s, gasLeft=%d, gasUsed=%d, err=%v\n",
-				contractAddr.Hex(), retLen, retPreview, gasLeft, gasUsed, err)
-		}
 
 		// 🔧 关键修复：go-ethereum EVM 的 Create 方法会调用 StateDB.SetCode 来保存代码
 		// 但我们的 SetCode 实现是空实现，所以需要在这里手动保存代码
@@ -247,26 +173,6 @@ func (g *GethEVMAdapter) Run(
 			logger = lg.GetLogger()
 		}
 
-		// 🔍 调试日志：记录合约调用前的状态
-		inputLen := len(c.Input)
-		inputPreview := ""
-		if inputLen > 0 {
-			if inputLen > 32 {
-				inputPreview = hex.EncodeToString(c.Input[:32]) + "..."
-			} else {
-				inputPreview = hex.EncodeToString(c.Input)
-			}
-		}
-		if logger != nil {
-			logger.Info("🔍 [GethEVMAdapter] 准备调用 evm.Call",
-				"caller", callerAddr.Hex(),
-				"contractAddr", contractAddr.Hex(),
-				"inputLen", inputLen,
-				"inputPreview", inputPreview,
-				"gas", c.Gas,
-				"value", value.String(),
-			)
-		}
 
 		// 调用合约
 		ret, gasLeft, err = evm.Call(
@@ -277,11 +183,11 @@ func (g *GethEVMAdapter) Run(
 			value,
 		)
 
-		// 🔍 调试日志：记录 evm.Call 的返回值
+		// 记录 evm.Call 的返回值（仅在错误时记录）
 		retLen := len(ret)
 		gasUsed := c.Gas - gasLeft
-		if logger != nil {
-			logger.Info("🔍 [GethEVMAdapter] evm.Call 返回",
+		if logger != nil && err != nil {
+			logger.Debug("🔍 [GethEVMAdapter] evm.Call 返回",
 				"retLen", retLen,
 				"gasLeft", gasLeft,
 				"gasUsed", gasUsed,

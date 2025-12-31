@@ -850,19 +850,6 @@ func (t *Transition) apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 		return nil, NewTransitionApplicationError(err, false)
 	}
 
-	// Log execution environment details for comparison with EstimateGas (Info level so it's visible)
-	t.logger.Info("🔍 [Apply] transaction execution environment",
-		"txHash", msg.Hash.String(),
-		"blockNumber", t.ctx.Number,
-		"blockGasLimit", t.ctx.GasLimit,
-		"blockBaseFee", t.ctx.BaseFee.Uint64(),
-		"blockTimestamp", t.ctx.Timestamp,
-		"homestead", t.config.Homestead,
-		"istanbul", t.config.Istanbul,
-		"calculatedIntrinsicGas", intrinsicGasCost,
-		"txGas", msg.Gas,
-		"isContractCreation", msg.IsContractCreation(),
-		"inputSize", len(msg.Input))
 
 	// the purchased gas is enough to cover intrinsic usage
 	gasLeft := msg.Gas - intrinsicGasCost
@@ -1380,20 +1367,6 @@ func (t *Transition) GetBalance(addr types.Address) *big.Int {
 
 func (t *Transition) GetStorage(addr types.Address, key types.Hash) types.Hash {
 	value := t.state.GetState(addr, key)
-
-	// 🔍 调试：记录合约存储读取（仅对非零值记录）
-	// 检查是否是合约地址（有代码）
-	if t.state.GetCodeSize(addr) > 0 {
-		valueStr := value.String()
-		if valueStr != "0x0000000000000000000000000000000000000000000000000000000000000000" {
-			t.logger.Info("🔍 [Transition.GetStorage] 合约存储读取",
-				"contractAddr", addr.String(),
-				"key", key.String(),
-				"value", valueStr,
-			)
-		}
-	}
-
 	return value
 }
 
