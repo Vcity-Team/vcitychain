@@ -328,6 +328,17 @@ func (r *dposRuntime) produceBlock() error {
 		return nil
 	}
 
+	// 检查网络上是否已经有这个区块号了（避免重复出块导致分叉）
+	networkLatest := r.getNetworkLatestBlockNumber()
+	if networkLatest > 0 && networkLatest >= nextBlockNumber {
+		r.logger.Info("⏰ 区块生产被跳过：网络上已存在该区块，应先同步",
+			"nextBlockNumber", nextBlockNumber,
+			"networkLatestBlock", networkLatest,
+			"localBlockNumber", currentBlock.Number,
+			"reason", "网络上已有该区块号，应通过syncer同步而不是自己生产")
+		return nil
+	}
+
 	// 🔧 修复：设置当前构建的 buildStartSlot，供 buildBlock 内部使用
 	r.lock.Lock()
 	r.currentBuildStartSlot = buildStartSlot
