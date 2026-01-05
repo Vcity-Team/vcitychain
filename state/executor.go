@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"sort"
+	"sync"
 
 	"github.com/hashicorp/go-hclog"
 
@@ -135,7 +137,31 @@ type BlockResult struct {
 	TotalGas uint64
 }
 
+// groupTransactionsByAccount groups transactions by sender address
+// Transactions from the same account are sorted by nonce to maintain order
+func groupTransactionsByAccount(txs []*types.Transaction) map[types.Address][]*types.Transaction {
+	groups := make(map[types.Address][]*types.Transaction)
+	
+	for _, tx := range txs {
+		// Skip transactions without From address (should not happen in normal flow)
+		if tx.From == (types.Address{}) {
+			continue
+		}
+		groups[tx.From] = append(groups[tx.From], tx)
+	}
+	
+	// Sort transactions within each account by nonce
+	for addr := range groups {
+		sort.Slice(groups[addr], func(i, j int) bool {
+			return groups[addr][i].Nonce < groups[addr][j].Nonce
+		})
+	}
+	
+	return groups
+}
+
 // ProcessBlock already does all the handling of the whole process
+// Stage 2: Support parallel execution by account grouping
 func (e *Executor) ProcessBlock(
 	parentRoot types.Hash,
 	block *types.Block,
@@ -146,16 +172,71 @@ func (e *Executor) ProcessBlock(
 		return nil, err
 	}
 
+	// Filter transactions that exceed block gas limit
+	validTxs := make([]*types.Transaction, 0, len(block.Transactions))
 	for _, t := range block.Transactions {
-		if t.Gas > block.Header.GasLimit {
-			continue
+		if t.Gas <= block.Header.GasLimit {
+			validTxs = append(validTxs, t)
 		}
+	}
 
+	// Stage 2: Parallel execution by account grouping
+	if txn.enableParallelExecution && len(validTxs) > 1 {
+		// Group transactions by account
+		accountGroups := groupTransactionsByAccount(validTxs)
+		
+		// If we have multiple accounts, execute in parallel
+		if len(accountGroups) > 1 {
+			return e.processBlockParallel(txn, accountGroups)
+		}
+		// If only one account, fall through to serial execution
+	}
+
+	// Serial execution (original behavior or single account case)
+	for _, t := range validTxs {
 		if err = txn.Write(t); err != nil {
 			return nil, err
 		}
 	}
 
+	return txn, nil
+}
+
+// processBlockParallel executes transactions in parallel by account grouping
+func (e *Executor) processBlockParallel(
+	txn *Transition,
+	accountGroups map[types.Address][]*types.Transaction,
+) (*Transition, error) {
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(accountGroups))
+	
+	// Execute transactions from different accounts in parallel
+	for account, txs := range accountGroups {
+		wg.Add(1)
+		go func(addr types.Address, transactions []*types.Transaction) {
+			defer wg.Done()
+			
+			// Transactions from the same account must be executed serially (by nonce order)
+			for _, tx := range transactions {
+				if err := txn.WriteForAccount(tx, addr); err != nil {
+					errCh <- fmt.Errorf("account %s transaction %s: %w", addr.String(), tx.Hash.String(), err)
+					return
+				}
+			}
+		}(account, txs)
+	}
+	
+	// Wait for all goroutines to complete
+	wg.Wait()
+	close(errCh)
+	
+	// Check for errors
+	for err := range errCh {
+		if err != nil {
+			return nil, err
+		}
+	}
+	
 	return txn, nil
 }
 
@@ -285,15 +366,26 @@ type Transition struct {
 	txnBlockList        *addresslist.AddressList
 	bridgeAllowList     *addresslist.AddressList
 	bridgeBlockList     *addresslist.AddressList
+
+	// Stage 2: Parallel execution by account grouping
+	// Enable parallel execution of transactions from different accounts
+	enableParallelExecution bool // Feature flag to enable/disable parallel execution
+	accountLocks            map[types.Address]*sync.Mutex // Per-account locks for concurrent execution
+	accountLocksMu          sync.Mutex                    // Protects accountLocks map
+	gasPoolMutex            sync.Mutex                   // Protects gas pool for concurrent access
+	receiptsMutex           sync.Mutex                   // Protects receipts slice for concurrent access
+	totalGasMutex           sync.Mutex                   // Protects totalGas for concurrent access
 }
 
 func NewTransition(config chain.ForksInTime, snap Snapshot, radix *Txn) *Transition {
 	return &Transition{
-		config:      config,
-		state:       radix,
-		snap:        snap,
-		evm:         evm.NewEVM(),
-		precompiles: precompiled.NewPrecompiled(),
+		config:                  config,
+		state:                   radix,
+		snap:                    snap,
+		evm:                     evm.NewEVM(),
+		precompiles:             precompiled.NewPrecompiled(),
+		enableParallelExecution: true,
+		accountLocks:            make(map[types.Address]*sync.Mutex),
 	}
 }
 
@@ -366,13 +458,21 @@ func (t *Transition) AppendSystemReceipt(txn *types.Transaction, success bool) {
 	receipt.Logs = nil
 	receipt.LogsBloom = types.CreateBloom([]*types.Receipt{receipt})
 
+	// Stage 2: Thread-safe receipt append
+	t.receiptsMutex.Lock()
 	t.receipts = append(t.receipts, receipt)
+	t.receiptsMutex.Unlock()
 }
 
 // AppendSystemReceiptWithGas appends a receipt with an explicit GasUsed value.
 func (t *Transition) AppendSystemReceiptWithGas(txn *types.Transaction, gasUsed uint64, success bool) {
+	// Stage 2: Thread-safe totalGas read
+	t.totalGasMutex.Lock()
+	cumulativeGas := t.totalGas
+	t.totalGasMutex.Unlock()
+	
 	receipt := &types.Receipt{
-		CumulativeGasUsed: t.totalGas,
+		CumulativeGasUsed: cumulativeGas,
 		// Use the same transaction type as the original tx to align encoding (typed vs legacy)
 		TransactionType: txn.Type,
 		TxHash:          txn.Hash,
@@ -387,7 +487,11 @@ func (t *Transition) AppendSystemReceiptWithGas(txn *types.Transaction, gasUsed 
 
 	receipt.Logs = nil
 	receipt.LogsBloom = types.CreateBloom([]*types.Receipt{receipt})
+	
+	// Stage 2: Thread-safe receipt append
+	t.receiptsMutex.Lock()
 	t.receipts = append(t.receipts, receipt)
+	t.receiptsMutex.Unlock()
 }
 
 // SettleSystemTxGas performs EVM-like gas accounting for system-handled transactions
@@ -446,7 +550,11 @@ func (t *Transition) SettleSystemTxGas(txn *types.Transaction, gasUsed uint64, s
 	t.addGasPool(gasLeft)
 
 	// 6) Update cumulative gas and append receipt
+	// Stage 2: Thread-safe totalGas update
+	t.totalGasMutex.Lock()
 	t.totalGas += gasUsed
+	t.totalGasMutex.Unlock()
+	
 	t.AppendSystemReceiptWithGas(txn, gasUsed, success)
 
 	return nil
@@ -455,7 +563,47 @@ func (t *Transition) SettleSystemTxGas(txn *types.Transaction, gasUsed uint64, s
 var emptyFrom = types.Address{}
 
 // Write writes another transaction to the executor
+// getAccountLock returns the lock for a given account address
+// Creates the lock if it doesn't exist (thread-safe)
+func (t *Transition) getAccountLock(addr types.Address) *sync.Mutex {
+	t.accountLocksMu.Lock()
+	defer t.accountLocksMu.Unlock()
+	
+	lock, exists := t.accountLocks[addr]
+	if !exists {
+		lock = &sync.Mutex{}
+		t.accountLocks[addr] = lock
+	}
+	
+	return lock
+}
+
+// Write writes a transaction to the state (supports both serial and parallel execution)
 func (t *Transition) Write(txn *types.Transaction) error {
+	// If parallel execution is enabled, use account-specific locking
+	if t.enableParallelExecution {
+		return t.WriteForAccount(txn, txn.From)
+	}
+	
+	// Serial execution (original behavior)
+	return t.writeSerial(txn)
+}
+
+// WriteForAccount writes a transaction with account-level locking for parallel execution
+func (t *Transition) WriteForAccount(txn *types.Transaction, accountAddr types.Address) error {
+	// Get or create lock for this account
+	accountLock := t.getAccountLock(accountAddr)
+	
+	// Lock this account (allows other accounts to execute in parallel)
+	accountLock.Lock()
+	defer accountLock.Unlock()
+	
+	// Execute the transaction
+	return t.writeSerial(txn)
+}
+
+// writeSerial executes a transaction serially (internal implementation)
+func (t *Transition) writeSerial(txn *types.Transaction) error {
 	var err error
 
 	if txn.From == emptyFrom &&
@@ -479,12 +627,16 @@ func (t *Transition) Write(txn *types.Transaction) error {
 		return e
 	}
 
+	// Stage 2: Protect shared state updates with mutex
+	t.totalGasMutex.Lock()
 	t.totalGas += result.GasUsed
+	totalGas := t.totalGas
+	t.totalGasMutex.Unlock()
 
 	logs := t.state.Logs()
 
 	receipt := &types.Receipt{
-		CumulativeGasUsed: t.totalGas,
+		CumulativeGasUsed: totalGas,
 		TransactionType:   txn.Type,
 		TxHash:            txn.Hash,
 		GasUsed:           result.GasUsed,
@@ -509,7 +661,11 @@ func (t *Transition) Write(txn *types.Transaction) error {
 	// Set the receipt logs and create a bloom for filtering
 	receipt.Logs = logs
 	receipt.LogsBloom = types.CreateBloom([]*types.Receipt{receipt})
+	
+	// Stage 2: Thread-safe receipt append
+	t.receiptsMutex.Lock()
 	t.receipts = append(t.receipts, receipt)
+	t.receiptsMutex.Unlock()
 
 	return nil
 }
@@ -551,6 +707,10 @@ func (t *Transition) IntermediateRoot() (types.Hash, error) {
 }
 
 func (t *Transition) subGasPool(amount uint64) error {
+	// Stage 2: Thread-safe gas pool access
+	t.gasPoolMutex.Lock()
+	defer t.gasPoolMutex.Unlock()
+	
 	if t.gasPool < amount {
 		return ErrBlockLimitReached
 	}
@@ -561,6 +721,10 @@ func (t *Transition) subGasPool(amount uint64) error {
 }
 
 func (t *Transition) addGasPool(amount uint64) {
+	// Stage 2: Thread-safe gas pool access
+	t.gasPoolMutex.Lock()
+	defer t.gasPoolMutex.Unlock()
+	
 	t.gasPool += amount
 }
 
