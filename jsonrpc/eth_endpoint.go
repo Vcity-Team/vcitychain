@@ -521,6 +521,13 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 		return nil, err
 	}
 
+	// Use on-chain nonce for gas estimation when caller did not specify one.
+	if arg.From != nil && arg.Nonce == nil {
+		if account, accErr := e.store.GetAccount(header.StateRoot, *arg.From); accErr == nil && account != nil {
+			arg.Nonce = argUintPtr(account.Nonce)
+		}
+	}
+
 	// testTransaction should execute tx with nonce always set to the current expected nonce for the account
 	transaction, err := DecodeTxn(arg, header.Number, e.store, true, e.chainID)
 	if err != nil {

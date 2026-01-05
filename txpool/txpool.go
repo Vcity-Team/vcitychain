@@ -812,6 +812,14 @@ func (p *TxPool) Prepare() {
 	p.executablesMu.Unlock()
 }
 
+// ClearPrepareNonceCache clears the prepareNonceCache to force fresh nonce queries
+// This is useful when building a new block to ensure nonce checks use the correct state root
+func (p *TxPool) ClearPrepareNonceCache() {
+	p.prepareNonceCacheMu.Lock()
+	p.prepareNonceCache = make(map[types.Address]uint64)
+	p.prepareNonceCacheMu.Unlock()
+}
+
 // Peek returns the best-price selected
 // transaction ready for execution.
 func (p *TxPool) Peek() *types.Transaction {
