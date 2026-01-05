@@ -571,6 +571,26 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 		"homestead", forkConfig.Homestead,
 		"istanbul", forkConfig.Istanbul)
 
+	// ⭐ 关键修复：EstimateGas 应该使用链上状态的 nonce，而不是交易池的 nonce
+	// 因为 EstimateGas 执行时使用的是 estimateHeader.StateRoot，这个状态根对应的 nonce 是链上的 nonce
+	// 如果使用交易池的 nonce（PendingBlockNumber），可能会导致 nonce 不匹配
+	// 修复：在 DecodeTxn 之前，如果提供了 From 地址，使用链上状态的 nonce 覆盖交易池的 nonce
+	if arg.From != nil && arg.Nonce == nil {
+		// 从链上状态获取 nonce（基于 estimateHeader.StateRoot）
+		account, err := baseSnapshot.GetAccount(*arg.From)
+		if err == nil && account != nil {
+			// 使用链上状态的 nonce，而不是交易池的 nonce
+			stateNonce := account.Nonce
+			arg.Nonce = argUintPtr(stateNonce)
+			e.logger.Info("🔧 [EstimateGas] 使用链上状态的 nonce（修复 nonce 不匹配问题）",
+				"from", arg.From.String(),
+				"stateNonce", stateNonce,
+				"stateRoot", estimateHeader.StateRoot.String(),
+				"blockNumber", estimateHeader.Number,
+				"note", "EstimateGas 执行时使用链上状态，所以 nonce 也应该来自链上状态")
+		}
+	}
+
 	// testTransaction should execute tx with nonce always set to the current expected nonce for the account
 	transaction, err := DecodeTxn(arg, header.Number, e.store, true)
 	if err != nil {
