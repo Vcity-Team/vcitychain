@@ -14,6 +14,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/bls"
 	"github.com/Vcity-Team/vcitychain/consensus"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/bitmap"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/dag"
 	dposProto "github.com/Vcity-Team/vcitychain/consensus/dpos/proto"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/signer"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
@@ -61,7 +62,8 @@ type BlockBuilderParams struct {
 // NewBlockBuilder creates a new block builder
 func NewBlockBuilder(params *BlockBuilderParams) blockBuilder {
 	return &BlockBuilder{
-		params: params,
+		params:             params,
+		enableDAGExecution: true, // Default: enabled for performance improvement
 	}
 }
 
@@ -88,6 +90,9 @@ type BlockBuilder struct {
 	// Key: account address, Value: account nonce (updated as transactions are executed)
 	// This reduces redundant state queries during block filling
 	nonceCache map[types.Address]uint64
+
+	// Stage 3: DAG dependency detection support
+	enableDAGExecution bool // Feature flag to enable/disable DAG execution
 }
 
 // Reset initializes block builder before adding transactions and actual block building
@@ -188,7 +193,24 @@ func (b *BlockBuilder) WriteTx(tx *types.Transaction) error {
 // 完全对标以太坊：批量打包多笔交易，使用当前区块状态检查nonce
 // 修复：不要每次都调用Prepare()，而是使用当前构建区块的状态来检查nonce
 // 这样可以在一个区块中打包多笔交易，类似以太坊
+// Stage 3: Support DAG-based parallel execution
 func (b *BlockBuilder) Fill() {
+	// Stage 3: Try DAG execution if enabled
+	if b.enableDAGExecution {
+		if err := b.fillWithDAG(); err == nil {
+			// DAG execution succeeded
+			return
+		}
+		// DAG execution failed, fall back to original serial execution
+		b.params.Logger.Debug("⚠️ [BlockBuilder.Fill] DAG执行失败，降级到串行执行")
+	}
+	
+	// Original serial execution (fallback)
+	b.fillSerial()
+}
+
+// fillSerial is the original serial transaction filling logic
+func (b *BlockBuilder) fillSerial() {
 	// 只在开始时调用一次Prepare()，初始化executables队列
 	b.params.TxPool.Prepare()
 
@@ -301,6 +323,118 @@ func (b *BlockBuilder) Fill() {
 		// 2. 我们使用b.state.GetNonce()来检查nonce，这是当前构建区块的状态
 		// 3. 这样可以批量打包多笔交易，类似以太坊
 	}
+}
+
+// fillWithDAG fills the block using DAG-based parallel execution
+// Stage 3: DAG dependency detection and parallel execution
+func (b *BlockBuilder) fillWithDAG() error {
+	blockNumber := b.params.Parent.Number + 1
+	b.params.Logger.Debug("🚀 [BlockBuilder.fillWithDAG] 开始DAG模式填充区块", "blockNumber", blockNumber)
+	
+	// Step 1: Collect candidate transactions
+	candidates := b.collectCandidateTransactions()
+	if len(candidates) < 2 {
+		// Not enough transactions for DAG, fall back to serial
+		return fmt.Errorf("not enough transactions for DAG execution: %d", len(candidates))
+	}
+	
+	b.params.Logger.Debug("📊 [BlockBuilder.fillWithDAG] 收集候选交易",
+		"count", len(candidates),
+		"blockNumber", blockNumber)
+	
+	// Step 2: Detect dependencies
+	analyzer := dag.NewDependencyAnalyzer(b.params.Logger)
+	dependencies := analyzer.DetectDependencies(candidates)
+	
+	// Check if there are meaningful dependencies
+	if !analyzer.HasDependencies(dependencies) {
+		// No dependencies detected, can use simpler parallel execution (stage 2)
+		b.params.Logger.Debug("ℹ️ [BlockBuilder.fillWithDAG] 未检测到依赖关系，降级到账户分组并行")
+		return fmt.Errorf("no dependencies detected")
+	}
+	
+	// Step 3: Build DAG
+	transactionDAG, err := dag.BuildDAG(candidates, dependencies)
+	if err != nil {
+		b.params.Logger.Error("❌ [BlockBuilder.fillWithDAG] DAG构建失败", "error", err)
+		return fmt.Errorf("failed to build DAG: %w", err)
+	}
+	
+	b.params.Logger.Debug("✅ [BlockBuilder.fillWithDAG] DAG构建成功",
+		"maxLevel", transactionDAG.GetMaxLevel(),
+		"totalNodes", len(transactionDAG.Nodes))
+	
+	// Step 4: Execute DAG
+	dagExecutor := dag.NewDAGExecutor(b.state, b.params.Logger)
+	if err := dagExecutor.ExecuteDAG(transactionDAG); err != nil {
+		b.params.Logger.Error("❌ [BlockBuilder.fillWithDAG] DAG执行失败", "error", err)
+		return fmt.Errorf("failed to execute DAG: %w", err)
+	}
+	
+	// Step 5: Add executed transactions to block and remove from pool
+	for _, node := range transactionDAG.Nodes {
+		b.txns = append(b.txns, node.Tx)
+		// Remove from pool
+		b.params.TxPool.Pop(node.Tx)
+		// Update nonce cache
+		b.nonceCache[node.Tx.From] = node.Tx.Nonce + 1
+	}
+	
+	b.params.Logger.Info("🎉 [BlockBuilder.fillWithDAG] DAG执行完成",
+		"blockNumber", blockNumber,
+		"txCount", len(b.txns))
+	
+	return nil
+}
+
+// collectCandidateTransactions collects a batch of candidate transactions from the pool
+func (b *BlockBuilder) collectCandidateTransactions() []*types.Transaction {
+	b.params.TxPool.Prepare()
+	
+	candidates := make([]*types.Transaction, 0, 100) // Pre-allocate for 100 transactions
+	maxCandidates := 200                               // Limit to prevent excessive memory usage
+	
+	blockNumber := b.params.Parent.Number + 1
+	
+	for len(candidates) < maxCandidates {
+		tx := b.params.TxPool.Peek()
+		if tx == nil {
+			break
+		}
+		
+		// Check nonce
+		var accountNonce uint64
+		if cachedNonce, exists := b.nonceCache[tx.From]; exists {
+			accountNonce = cachedNonce
+		} else {
+			accountNonce = b.state.GetNonce(tx.From)
+			b.nonceCache[tx.From] = accountNonce
+		}
+		
+		if tx.Nonce != accountNonce {
+			// Skip this transaction
+			b.params.TxPool.Pop(tx)
+			continue
+		}
+		
+		// Check gas limit
+		if tx.Gas > b.params.GasLimit {
+			b.params.TxPool.Pop(tx)
+			continue
+		}
+		
+		// Add to candidates (don't pop yet - we'll execute them via DAG)
+		candidates = append(candidates, tx)
+		
+		// Pop to get next transaction
+		b.params.TxPool.Pop(tx)
+	}
+	
+	b.params.Logger.Debug("📦 [BlockBuilder.collectCandidateTransactions] 收集完成",
+		"count", len(candidates),
+		"blockNumber", blockNumber)
+	
+	return candidates
 }
 
 // Receipts returns the collection of transaction receipts for given block

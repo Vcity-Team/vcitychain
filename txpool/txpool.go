@@ -223,6 +223,10 @@ type TxPool struct {
 	// This cache is cleared when a new block is mined (in processEvent)
 	prepareNonceCache   map[types.Address]uint64
 	prepareNonceCacheMu sync.RWMutex // RWMutex for concurrent access to prepareNonceCache
+
+	// Performance optimization: Parallel transaction validation
+	// Enable parallel validation of transactions (stage 1 optimization)
+	enableParallelValidation bool // Feature flag to enable/disable parallel validation
 }
 
 // NewTxPool returns a new pool for processing incoming transactions.
@@ -263,6 +267,9 @@ func NewTxPool(
 		// Performance optimization: Event-driven architecture (Geth-style)
 		// Buffer size: 1000 transactions (non-blocking for most cases)
 		addTxCh: make(chan *addTxRequest, 1000),
+
+		// Stage 1: Enable parallel validation by default (can be disabled via config if needed)
+		enableParallelValidation: true, // Default: enabled for performance improvement
 	}
 
 	// Attach the event manager
@@ -372,15 +379,43 @@ func (p *TxPool) eventLoop() {
 
 // processTx processes a transaction serially (called only from eventLoop)
 // Performance optimization: No lock needed because only one goroutine processes transactions
+// Stage 1 optimization: Parallel validation of transactions
 func (p *TxPool) processTx(tx *types.Transaction, origin txOrigin) error {
 	if p.logger.IsDebug() {
 		p.logger.Debug("processTx", "origin", origin.String(), "hash", tx.Hash.String())
 	}
 
-	// Full validation (now we can do state queries safely)
-	if err := p.validateTx(tx); err != nil {
-		p.logger.Error("交易验证失败", "err", err, "txHash", tx.Hash.String())
-		return err
+	// Stage 1: Parallel validation optimization
+	// If parallel validation is enabled, validate in a separate goroutine
+	// This allows us to do other work (like hash calculation) while validation runs
+	// Note: validateTx() is read-only and thread-safe (uses cached state queries)
+	var validationErr error
+	if p.enableParallelValidation {
+		// Start validation in a goroutine
+		validationDone := make(chan error, 1)
+		go func() {
+			// validateTx() is safe to call concurrently:
+			// - balanceCache and validatedCache have their own locks
+			// - store.Header(), store.GetNonce(), store.GetBalance() are read-only and thread-safe
+			validationDone <- p.validateTx(tx)
+		}()
+
+		// While validation is running, do other work that doesn't depend on validation result
+		// (e.g., hash calculation if needed)
+		if tx.Hash == (types.Hash{}) {
+			tx.ComputeHash(p.store.Header().Number)
+		}
+
+		// Wait for validation result
+		validationErr = <-validationDone
+	} else {
+		// Original serial validation
+		validationErr = p.validateTx(tx)
+	}
+
+	if validationErr != nil {
+		p.logger.Error("交易验证失败", "err", validationErr, "txHash", tx.Hash.String())
+		return validationErr
 	}
 
 	// add chainID to the tx - only dynamic fee tx
@@ -389,6 +424,7 @@ func (p *TxPool) processTx(tx *types.Transaction, origin txOrigin) error {
 	}
 
 	// Performance optimization: Skip hash calculation if already computed
+	// Note: If parallel validation is enabled, hash may have been computed during validation wait
 	if tx.Hash == (types.Hash{}) {
 		tx.ComputeHash(p.store.Header().Number)
 	}
