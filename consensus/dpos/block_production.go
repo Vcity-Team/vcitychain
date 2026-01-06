@@ -320,6 +320,29 @@ func (r *dposRuntime) produceBlock() error {
 		buildStartTime = now
 	}
 
+	// 🔧 严格比对：检查构建开始时slot是否与判断时slot一致
+	if r.config.blockScheduler != nil && buildStartSlot >= 0 {
+		r.lock.RLock()
+		decisionSlot := r.decisionSlot
+		r.lock.RUnlock()
+
+		// 如果 decisionSlot 已设置，进行严格比对
+		if decisionSlot >= 0 && buildStartSlot != decisionSlot {
+			r.logger.Info("⏰ [produceBlock] 区块被丢弃：构建开始时slot已变化",
+				"blockNumber", nextBlockNumber,
+				"decisionSlot", decisionSlot,
+				"buildStartSlot", buildStartSlot,
+				"reason", fmt.Sprintf("判断时slot=%d，构建开始时slot=%d，slot已变化", decisionSlot, buildStartSlot))
+
+			// 清除 decisionSlot
+			r.lock.Lock()
+			r.decisionSlot = -1
+			r.lock.Unlock()
+
+			return nil
+		}
+	}
+
 	// 如果当前区块号大于等于要生产的区块号，说明区块已存在
 	if currentBlock.Number >= nextBlockNumber {
 		r.logger.Info("⏰ 区块生产被跳过：区块已存在",
@@ -428,7 +451,7 @@ func (r *dposRuntime) produceBlock() error {
 	}
 
 	// 提交区块（可能需要锁，取决于blockchain的实现）
-	// 在提交前再做一次基于区块 timestamp 的 slot 校验，防止“构建完成后长时间滞后”仍被写入
+	// 在提交前再做一次基于区块 timestamp 的 slot 校验，防止"构建完成后长时间滞后"仍被写入
 	if r.config.blockScheduler != nil {
 		genesisTime := r.config.blockScheduler.GetGenesisTime()
 		blockWindow := r.config.blockScheduler.GetBlockWindow()
@@ -438,34 +461,70 @@ func (r *dposRuntime) produceBlock() error {
 		timeSinceGenesisForBlock := blockTimestamp.Sub(genesisTime)
 		blockSlot := int(timeSinceGenesisForBlock / blockWindow)
 
-		// 以当前时间计算本地 slot
+		// 获取 decisionSlot 进行严格比对
+		r.lock.RLock()
+		decisionSlot := r.decisionSlot
+		r.lock.RUnlock()
+
+		// 严格比对：blockSlot 必须等于 decisionSlot（slotTolerance = 0）
+		if decisionSlot >= 0 && blockSlot != decisionSlot {
+			r.logger.Info("⏰ [produceBlock] 区块被丢弃：区块slot与判断slot不一致",
+				"blockNumber", block.Block.Number(),
+				"decisionSlot", decisionSlot,
+				"blockSlot", blockSlot,
+				"blockTimestamp", blockTimestamp.Format("15:04:05.000"),
+				"reason", fmt.Sprintf("判断时slot=%d，区块slot=%d，不一致", decisionSlot, blockSlot))
+
+			// 清除 decisionSlot
+			r.lock.Lock()
+			r.decisionSlot = -1
+			r.lock.Unlock()
+
+			return nil
+		}
+
+		// 以当前时间计算本地 slot（保留原有检查，但更严格）
 		now := time.Now()
 		timeSinceGenesis := now.Sub(genesisTime)
 		currentSlot := int(timeSinceGenesis / blockWindow)
 
-		// 容忍 1 个 slot 漂移（可后续做成配置）
-		const slotTolerance = 1
-
-		if currentSlot > blockSlot+slotTolerance {
-			r.logger.Info("⏰ [produceBlock] 区块被丢弃：提交时已超出允许的slot窗口",
+		// 检查提交时是否已经落后太多（严格检查：不允许落后）
+		if currentSlot > blockSlot {
+			r.logger.Info("⏰ [produceBlock] 区块被丢弃：提交时已超出slot窗口",
 				"blockNumber", block.Block.Number(),
 				"blockSlot", blockSlot,
 				"currentSlot", currentSlot,
-				"slotTolerance", slotTolerance,
 				"blockTimestamp", blockTimestamp.Format("15:04:05.000"),
 				"now", now.Format("15:04:05.000"),
 				"reason", "提交时已落后超过允许的slot漂移")
+
+			// 清除 decisionSlot
+			r.lock.Lock()
+			r.decisionSlot = -1
+			r.lock.Unlock()
+
 			return nil
 		}
 
 		r.logger.Info("✅ [produceBlock] 提交前slot检查通过",
 			"blockNumber", block.Block.Number(),
+			"decisionSlot", decisionSlot,
 			"blockSlot", blockSlot,
-			"currentSlot", currentSlot,
-			"slotTolerance", slotTolerance)
+			"currentSlot", currentSlot)
+
+		// 清除 decisionSlot（成功提交前清除）
+		r.lock.Lock()
+		r.decisionSlot = -1
+		r.lock.Unlock()
 	}
 
 	if err := r.config.blockchain.CommitBlock(block); err != nil {
+		// 提交失败时也要清除 decisionSlot（如果还没清除）
+		if r.config.blockScheduler != nil {
+			r.lock.Lock()
+			r.decisionSlot = -1
+			r.lock.Unlock()
+		}
 		r.logger.Error("❌ [produceBlock] 区块提交失败", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String(), "error", err)
 		return fmt.Errorf("failed to commit block: %w", err)
 	}
