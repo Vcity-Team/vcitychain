@@ -190,7 +190,11 @@ func (b *BlockBuilder) WriteTx(tx *types.Transaction) error {
 // 这样可以在一个区块中打包多笔交易，类似以太坊
 func (b *BlockBuilder) Fill() {
 	// 只在开始时调用一次Prepare()，初始化executables队列
+	b.params.Logger.Debug("🔍 [BlockBuilder.Fill] 调用Prepare()前",
+		"blockNumber", b.params.Parent.Number+1)
 	b.params.TxPool.Prepare()
+	b.params.Logger.Debug("🔍 [BlockBuilder.Fill] Prepare()调用完成",
+		"blockNumber", b.params.Parent.Number+1)
 
 	txCount := 0
 	skippedCount := 0
@@ -203,7 +207,16 @@ func (b *BlockBuilder) Fill() {
 		"blockNumber", blockNumber)
 
 	consecutiveSkips := 0
+	loopIteration := 0
 	for {
+		loopIteration++
+		b.params.Logger.Debug("🔍 [BlockBuilder.Fill] 循环开始",
+			"blockNumber", blockNumber,
+			"loopIteration", loopIteration,
+			"txCount", txCount,
+			"skippedCount", skippedCount,
+			"consecutiveSkips", consecutiveSkips)
+
 		tx := b.params.TxPool.Peek()
 
 		// 如果没有交易，尝试重新Prepare()（因为可能有新交易进入交易池）
@@ -236,13 +249,26 @@ func (b *BlockBuilder) Fill() {
 		// Performance optimization: Use cached nonce if available, otherwise query and cache
 		// This reduces redundant state queries during block filling
 		var accountNonce uint64
+		var nonceSource string
 		if cachedNonce, exists := b.nonceCache[tx.From]; exists {
 			accountNonce = cachedNonce
+			nonceSource = "cache"
 		} else {
 			// Cache miss: query from state and cache
 			accountNonce = b.state.GetNonce(tx.From)
+			nonceSource = "state"
 			b.nonceCache[tx.From] = accountNonce
 		}
+
+		b.params.Logger.Debug("🔍 [BlockBuilder.Fill] 检查交易nonce",
+			"blockNumber", blockNumber,
+			"loopIteration", loopIteration,
+			"txHash", tx.Hash.String()[:16],
+			"from", tx.From.String()[:16],
+			"txNonce", tx.Nonce,
+			"accountNonce", accountNonce,
+			"nonceSource", nonceSource,
+			"nonceMatch", tx.Nonce == accountNonce)
 
 		if tx.Nonce != accountNonce {
 			// nonce不匹配，跳过这个交易
@@ -267,6 +293,13 @@ func (b *BlockBuilder) Fill() {
 
 		// execute transactions one by one
 		// writeTxPoolTransaction内部会调用Pop()，所以这里不需要再次调用
+		b.params.Logger.Debug("🔍 [BlockBuilder.Fill] 开始执行交易",
+			"blockNumber", blockNumber,
+			"loopIteration", loopIteration,
+			"txHash", tx.Hash.String()[:16],
+			"from", tx.From.String()[:16],
+			"nonce", tx.Nonce)
+
 		finished, err := b.writeTxPoolTransaction(tx)
 		if err != nil {
 			b.params.Logger.Error("💀 交易填充失败，程序将立即退出",
@@ -277,10 +310,20 @@ func (b *BlockBuilder) Fill() {
 			os.Exit(1)
 		}
 
+		b.params.Logger.Debug("🔍 [BlockBuilder.Fill] 交易执行完成",
+			"blockNumber", blockNumber,
+			"loopIteration", loopIteration,
+			"txHash", tx.Hash.String()[:16],
+			"finished", finished,
+			"err", err)
+
 		// Performance optimization: Update nonce cache after successful transaction execution
 		// This ensures the cache reflects the current block state
 		if err == nil {
 			b.nonceCache[tx.From] = tx.Nonce + 1
+			b.params.Logger.Debug("🔍 [BlockBuilder.Fill] 更新nonce缓存",
+				"from", tx.From.String()[:16],
+				"newNonce", tx.Nonce+1)
 		}
 
 		// writeTxPoolTransaction内部已经调用了Pop()，会自动将同一账户的下一笔交易添加到executables队列（如果存在）

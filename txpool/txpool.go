@@ -713,13 +713,21 @@ func (p *TxPool) Prepare() {
 
 	// 方案2：使用链上nonce过滤primaries，只添加nonce匹配的交易
 	// 这样可以减少Fill()循环中的nonce检查失败，提高打包效率
-	stateRoot := p.store.Header().StateRoot
+	header := p.store.Header()
+	stateRoot := header.StateRoot
+	blockNumber := header.Number
 	validPrimaries := make([]*types.Transaction, 0, len(primaries))
 	skippedCount := 0
 
+	p.logger.Debug("🔍 [txpool.Prepare] 开始准备交易",
+		"blockNumber", blockNumber,
+		"stateRoot", stateRoot.String()[:16],
+		"primariesCount", len(primaries))
+
 	// Performance optimization: Use cached nonce if available, otherwise query and cache
-	for _, tx := range primaries {
+	for i, tx := range primaries {
 		var currentNonce uint64
+		var nonceSource string
 
 		// Try to get from cache first
 		p.prepareNonceCacheMu.RLock()
@@ -728,28 +736,51 @@ func (p *TxPool) Prepare() {
 
 		if cacheHit {
 			currentNonce = cachedNonce
+			nonceSource = "cache"
 		} else {
 			// Cache miss: query from state and cache
 			currentNonce = p.store.GetNonce(stateRoot, tx.From)
+			nonceSource = "state"
 			p.prepareNonceCacheMu.Lock()
 			p.prepareNonceCache[tx.From] = currentNonce
 			p.prepareNonceCacheMu.Unlock()
 		}
 
-		if tx.Nonce == currentNonce {
+		nonceMatch := tx.Nonce == currentNonce
+		p.logger.Debug("🔍 [txpool.Prepare] 检查交易nonce",
+			"index", i,
+			"txHash", tx.Hash.String()[:16],
+			"from", tx.From.String()[:16],
+			"txNonce", tx.Nonce,
+			"currentNonce", currentNonce,
+			"nonceSource", nonceSource,
+			"nonceMatch", nonceMatch,
+			"blockNumber", blockNumber)
+
+		if nonceMatch {
 			// nonce匹配，添加到executables队列
 			validPrimaries = append(validPrimaries, tx)
+			p.logger.Debug("✅ [txpool.Prepare] nonce匹配，添加到executables队列",
+				"txHash", tx.Hash.String()[:16],
+				"from", tx.From.String()[:16],
+				"nonce", tx.Nonce)
 		} else {
 			// ️ nonce不匹配，不添加到executables队列
 			// 交易仍然在promoted队列中，等待下次Prepare()时检查
 			skippedCount++
+			p.logger.Debug("❌ [txpool.Prepare] nonce不匹配，跳过交易",
+				"txHash", tx.Hash.String()[:16],
+				"from", tx.From.String()[:16],
+				"txNonce", tx.Nonce,
+				"currentNonce", currentNonce,
+				"nonceDiff", int64(tx.Nonce)-int64(currentNonce))
 		}
 	}
 
 	// 添加警告日志：如果所有交易都被过滤了
 	if len(primaries) > 0 && len(validPrimaries) == 0 {
 		p.logger.Warn("⚠️ [txpool.Prepare] 过滤了所有交易，可能导致空块",
-			"blockNumber", p.store.Header().Number,
+			"blockNumber", blockNumber,
 			"primariesCount", len(primaries),
 			"validPrimariesCount", len(validPrimaries),
 			"skippedCount", skippedCount,
@@ -757,10 +788,25 @@ func (p *TxPool) Prepare() {
 			"note", "所有交易的nonce都不匹配链上nonce，executables队列为空")
 	}
 
+	p.logger.Debug("🔍 [txpool.Prepare] 准备完成",
+		"blockNumber", blockNumber,
+		"primariesCount", len(primaries),
+		"validPrimariesCount", len(validPrimaries),
+		"skippedCount", skippedCount,
+		"stateRoot", stateRoot.String()[:16])
+
 	// create new executables queue with valid transactions only (nonce matched)
 	p.executablesMu.Lock()
 	p.executables = newPricesQueue(p.GetBaseFee(), validPrimaries)
+	executablesLength := 0
+	if p.executables != nil {
+		executablesLength = p.executables.length()
+	}
 	p.executablesMu.Unlock()
+
+	p.logger.Debug("🔍 [txpool.Prepare] executables队列已更新",
+		"blockNumber", blockNumber,
+		"executablesLength", executablesLength)
 }
 
 // Peek returns the best-price selected
@@ -773,8 +819,27 @@ func (p *TxPool) Peek() *types.Transaction {
 	// insight into which account has the
 	// highest priced tx (head of promoted queue)
 	p.executablesMu.RLock()
-	defer p.executablesMu.RUnlock()
-	return p.executables.pop()
+	executablesLength := 0
+	if p.executables != nil {
+		executablesLength = p.executables.length()
+	}
+	tx := p.executables.pop()
+	p.executablesMu.RUnlock()
+
+	if p.logger.IsDebug() {
+		if tx != nil {
+			p.logger.Debug("🔍 [txpool.Peek] 返回交易",
+				"txHash", tx.Hash.String()[:16],
+				"from", tx.From.String()[:16],
+				"nonce", tx.Nonce,
+				"executablesLength", executablesLength)
+		} else {
+			p.logger.Debug("🔍 [txpool.Peek] executables队列为空",
+				"executablesLength", executablesLength)
+		}
+	}
+
+	return tx
 }
 
 // Pop removes the given transaction from the
