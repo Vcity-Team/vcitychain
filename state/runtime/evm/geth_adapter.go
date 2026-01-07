@@ -64,12 +64,52 @@ func (g *GethEVMAdapter) Run(
 	}
 
 	// 1. 创建 StateDB 适配器
+	if logger != nil {
+		logger.Debug("🔍 [GethEVMAdapter.Run] 创建 StateDB 适配器",
+			"caller", c.Caller.String()[:16])
+	}
 	stateDBInterface := NewHostToStateDBAdapter(host, config)
+	if logger != nil {
+		logger.Debug("🔍 [GethEVMAdapter.Run] StateDB 适配器创建完成",
+			"caller", c.Caller.String()[:16])
+	}
 
 	// 2. 构建上下文
+	if logger != nil {
+		logger.Debug("🔍 [GethEVMAdapter.Run] 开始构建上下文",
+			"caller", c.Caller.String()[:16])
+	}
+	if logger != nil {
+		logger.Debug("🔍 [GethEVMAdapter.Run] 调用 buildBlockContext",
+			"caller", c.Caller.String()[:16])
+	}
 	blockCtx := buildBlockContext(host)
+	if logger != nil {
+		logger.Debug("🔍 [GethEVMAdapter.Run] buildBlockContext 完成",
+			"caller", c.Caller.String()[:16])
+	}
+	if logger != nil {
+		logger.Debug("🔍 [GethEVMAdapter.Run] 调用 buildTxContext",
+			"caller", c.Caller.String()[:16])
+	}
 	txContext := buildTxContext(host)
+	if logger != nil {
+		logger.Debug("🔍 [GethEVMAdapter.Run] buildTxContext 完成",
+			"caller", c.Caller.String()[:16])
+	}
+	if logger != nil {
+		logger.Debug("🔍 [GethEVMAdapter.Run] 调用 buildChainConfig",
+			"caller", c.Caller.String()[:16])
+	}
 	chainConfig := buildChainConfig(config, g.chainID)
+	if logger != nil {
+		logger.Debug("🔍 [GethEVMAdapter.Run] buildChainConfig 完成",
+			"caller", c.Caller.String()[:16])
+	}
+	if logger != nil {
+		logger.Debug("🔍 [GethEVMAdapter.Run] 上下文构建完成",
+			"caller", c.Caller.String()[:16])
+	}
 
 	// 5. 创建 go-ethereum EVM 实例（v1.16+ 不再需要 TxContext 参数）
 	if logger != nil {

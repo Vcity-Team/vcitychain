@@ -16,6 +16,7 @@ import (
 func buildBlockContext(host runtime.Host) vm.BlockContext {
 	txCtx := host.GetTxContext()
 
+	// 性能监控：GetBlockHash 在高区块号时可能很慢
 	randomHash := host.GetBlockHash(int64(txCtx.Number))
 	random := VcHashToCommon(randomHash)
 

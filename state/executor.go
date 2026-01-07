@@ -1462,7 +1462,15 @@ func (t *Transition) GetTxContext() runtime.TxContext {
 }
 
 func (t *Transition) GetBlockHash(number int64) (res types.Hash) {
-	return t.getHash(uint64(number))
+	t.logger.Debug("🔍 [Transition.GetBlockHash] 开始查询区块哈希",
+		"blockNumber", number,
+		"currentBlockNumber", t.ctx.Number)
+	hash := t.getHash(uint64(number))
+	t.logger.Debug("🔍 [Transition.GetBlockHash] 查询完成",
+		"blockNumber", number,
+		"hash", hash.String()[:16],
+		"currentBlockNumber", t.ctx.Number)
+	return hash
 }
 
 func (t *Transition) EmitLog(addr types.Address, topics []types.Hash, data []byte) {

@@ -486,12 +486,19 @@ func (b *Blockchain) readHeader(hash types.Hash) (*types.Header, bool) {
 			return nil, false
 		}
 
+		b.logger.Debug("🔍 [Blockchain.readHeader] 缓存命中",
+			"hash", hash.String()[:16])
 		return header, true
 	}
 
 	// Cache miss, load it from the DB
+	b.logger.Debug("🔍 [Blockchain.readHeader] 缓存未命中，从数据库读取",
+		"hash", hash.String()[:16])
 	hh, err := b.db.ReadHeader(hash)
 	if err != nil {
+		b.logger.Debug("🔍 [Blockchain.readHeader] ReadHeader 失败",
+			"hash", hash.String()[:16],
+			"error", err)
 		return nil, false
 	}
 
@@ -499,6 +506,9 @@ func (b *Blockchain) readHeader(hash types.Hash) (*types.Header, bool) {
 	hh.ComputeHash()
 	b.headersCache.Add(hash, hh)
 
+	b.logger.Debug("🔍 [Blockchain.readHeader] 数据库读取完成",
+		"hash", hash.String()[:16],
+		"blockNumber", hh.Number)
 	return hh, true
 }
 
@@ -553,16 +563,26 @@ func (b *Blockchain) readTotalDifficulty(headerHash types.Hash) (*big.Int, bool)
 
 // GetHeaderByNumber returns the header using the block number
 func (b *Blockchain) GetHeaderByNumber(n uint64) (*types.Header, bool) {
+	b.logger.Debug("🔍 [Blockchain.GetHeaderByNumber] 开始查询区块头",
+		"blockNumber", n)
 	hash, ok := b.db.ReadCanonicalHash(n)
 	if !ok {
+		b.logger.Debug("🔍 [Blockchain.GetHeaderByNumber] ReadCanonicalHash 失败",
+			"blockNumber", n)
 		return nil, false
 	}
 
 	h, ok := b.readHeader(hash)
 	if !ok {
+		b.logger.Debug("🔍 [Blockchain.GetHeaderByNumber] readHeader 失败",
+			"blockNumber", n,
+			"hash", hash.String()[:16])
 		return nil, false
 	}
 
+	b.logger.Debug("🔍 [Blockchain.GetHeaderByNumber] 查询完成",
+		"blockNumber", n,
+		"hash", hash.String()[:16])
 	return h, true
 }
 
@@ -1442,23 +1462,63 @@ func (b *Blockchain) verifyGasLimit(header *types.Header, parentHeader *types.He
 // GetHashHelper is used by the EVM, so that the SC can get the hash of the header number
 func (b *Blockchain) GetHashHelper(header *types.Header) func(i uint64) (res types.Hash) {
 	return func(i uint64) (res types.Hash) {
+		b.logger.Debug("🔍 [Blockchain.GetHashHelper] 开始查询区块哈希",
+			"requestedBlockNumber", i,
+			"currentBlockNumber", header.Number)
+		
+		// 性能优化：如果请求的区块号距离当前区块很远，使用 GetHashByNumber 直接查询
+		// 这样可以避免循环查找，提高性能
+		if i < header.Number && header.Number-i > 256 {
+			b.logger.Debug("🔍 [Blockchain.GetHashHelper] 使用 GetHashByNumber 直接查询（距离较远）",
+				"requestedBlockNumber", i,
+				"currentBlockNumber", header.Number,
+				"distance", header.Number-i)
+			res = b.GetHashByNumber(i)
+			b.logger.Debug("🔍 [Blockchain.GetHashHelper] GetHashByNumber 查询完成",
+				"requestedBlockNumber", i,
+				"hash", res.String()[:16])
+			return
+		}
+		
 		num, hash := header.Number-1, header.ParentHash
+		iterations := 0
+		maxIterations := 256 // 最多循环256次，避免无限循环
 
 		for {
+			iterations++
+			if iterations > maxIterations {
+				b.logger.Warn("⚠️ [Blockchain.GetHashHelper] 循环次数过多，使用 GetHashByNumber",
+					"requestedBlockNumber", i,
+					"currentBlockNumber", header.Number,
+					"iterations", iterations)
+				res = b.GetHashByNumber(i)
+				return
+			}
+			
 			if num == i {
 				res = hash
-
+				b.logger.Debug("🔍 [Blockchain.GetHashHelper] 循环查找完成",
+					"requestedBlockNumber", i,
+					"hash", res.String()[:16],
+					"iterations", iterations)
 				return
 			}
 
 			h, ok := b.GetHeaderByHash(hash)
 			if !ok {
+				b.logger.Debug("🔍 [Blockchain.GetHashHelper] 区块未找到，使用 GetHashByNumber",
+					"requestedBlockNumber", i,
+					"currentNum", num)
+				res = b.GetHashByNumber(i)
 				return
 			}
 
 			hash = h.ParentHash
 
 			if num == 0 {
+				b.logger.Debug("🔍 [Blockchain.GetHashHelper] 到达创世区块，使用 GetHashByNumber",
+					"requestedBlockNumber", i)
+				res = b.GetHashByNumber(i)
 				return
 			}
 
@@ -1469,12 +1529,20 @@ func (b *Blockchain) GetHashHelper(header *types.Header) func(i uint64) (res typ
 
 // GetHashByNumber returns the block hash using the block number
 func (b *Blockchain) GetHashByNumber(blockNumber uint64) types.Hash {
+	b.logger.Debug("🔍 [Blockchain.GetHashByNumber] 开始查询区块哈希",
+		"blockNumber", blockNumber)
 	block, ok := b.GetBlockByNumber(blockNumber, false)
 	if !ok {
+		b.logger.Debug("🔍 [Blockchain.GetHashByNumber] 区块未找到",
+			"blockNumber", blockNumber)
 		return types.Hash{}
 	}
 
-	return block.Hash()
+	hash := block.Hash()
+	b.logger.Debug("🔍 [Blockchain.GetHashByNumber] 查询完成",
+		"blockNumber", blockNumber,
+		"hash", hash.String()[:16])
+	return hash
 }
 
 // dispatchEvent pushes a new event to the stream
