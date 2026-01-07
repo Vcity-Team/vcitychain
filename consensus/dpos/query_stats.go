@@ -1,12 +1,14 @@
 package dpos
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
+	bolt "go.etcd.io/bbolt"
 )
 
 // GetFreezeInfo 获取冻结信息（智能接口，支持单个和批量）
@@ -438,7 +440,7 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 	}
 }
 
-// recordRewardsToDatabase 记录奖励到数据库（不更新状态）
+// recordRewardsToDatabase 记录奖励到数据库（不更新状态）并更新StakeInfo中的累计奖励
 func (d *DPoS) recordRewardsToDatabase(epochNumber uint64, rewards map[types.Address]*big.Int) error {
 	// 记录验证者奖励到数据库
 	for address, reward := range rewards {
@@ -465,7 +467,81 @@ func (d *DPoS) recordRewardsToDatabase(epochNumber uint64, rewards map[types.Add
 				"epoch", epochNumber,
 				"address", address.String())
 		}
+
+		// 🆕 新增：更新StakeInfo中的累计奖励
+		if d.state.StakeStore != nil {
+			if err := d.updateStakeInfoCumulativeReward(address, reward); err != nil {
+				d.logger.Warn("⚠️ 更新StakeInfo累计奖励失败",
+					"address", address.String(),
+					"reward", reward.String(),
+					"error", err)
+				// 不阻断流程，只记录警告
+			}
+		}
 	}
 
 	return nil
+}
+
+// updateStakeInfoCumulativeReward 更新StakeInfo中的累计奖励
+func (d *DPoS) updateStakeInfoCumulativeReward(address types.Address, reward *big.Int) error {
+	if d.state == nil || d.state.StakeStore == nil {
+		return fmt.Errorf("stakeStore not available")
+	}
+
+	return d.state.StakeStore.db.Update(func(tx *bolt.Tx) error {
+		stakingBucket := tx.Bucket([]byte("StakingInfo"))
+		if stakingBucket == nil {
+			return nil // bucket不存在，跳过
+		}
+
+		// 查找该地址的所有StakeInfo记录（可能有多条，因为使用复合key）
+		cursor := stakingBucket.Cursor()
+		updated := false
+
+		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
+			if len(key) < 20 {
+				continue
+			}
+
+			// 检查地址是否匹配
+			var keyAddr types.Address
+			copy(keyAddr[:], key[:20])
+			if keyAddr != address {
+				continue
+			}
+
+			// 解析并更新
+			var stakeInfo StakeInfo
+			if err := json.Unmarshal(value, &stakeInfo); err != nil {
+				continue
+			}
+
+			// 初始化或累加
+			if stakeInfo.Rewards == nil {
+				stakeInfo.Rewards = new(big.Int).Set(reward)
+			} else {
+				stakeInfo.Rewards.Add(stakeInfo.Rewards, reward)
+			}
+
+			// 保存
+			updatedData, err := json.Marshal(stakeInfo)
+			if err != nil {
+				continue
+			}
+
+			if err := stakingBucket.Put(key, updatedData); err != nil {
+				continue
+			}
+
+			updated = true
+		}
+
+		if !updated {
+			// 如果没有找到记录，这是正常的（可能该地址还没有StakeInfo）
+			// 不返回错误，因为StakeInfo可能在其他地方创建
+		}
+
+		return nil
+	})
 }
