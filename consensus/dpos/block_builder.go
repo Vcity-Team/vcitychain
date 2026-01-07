@@ -163,12 +163,23 @@ func (b *BlockBuilder) Build(handler func(h *types.Header)) (*types.FullBlock, e
 
 // WriteTx applies given transaction to the state. If transaction apply fails, it reverts the saved snapshot.
 func (b *BlockBuilder) WriteTx(tx *types.Transaction) error {
+	b.params.Logger.Debug("🔍 [BlockBuilder.WriteTx] 开始写入交易",
+		"txHash", tx.Hash.String()[:16],
+		"from", tx.From.String()[:16],
+		"nonce", tx.Nonce,
+		"gas", tx.Gas,
+		"gasLimit", b.params.GasLimit,
+		"isContractCreation", tx.To == nil)
+
 	if tx.Gas > b.params.GasLimit {
 		b.params.Logger.Info("Transaction gas limit exceedes block gas limit", "hash", tx.Hash,
 			"tx gas limit", tx.Gas, "block gas limt", b.params.GasLimit)
 
 		return txpool.ErrBlockLimitExceeded
 	}
+
+	b.params.Logger.Debug("🔍 [BlockBuilder.WriteTx] 调用 state.Write()",
+		"txHash", tx.Hash.String()[:16])
 
 	if err := b.state.Write(tx); err != nil {
 		b.params.Logger.Error("💀 交易应用到状态失败",
@@ -179,7 +190,14 @@ func (b *BlockBuilder) WriteTx(tx *types.Transaction) error {
 		return err
 	}
 
+	b.params.Logger.Debug("🔍 [BlockBuilder.WriteTx] state.Write() 完成",
+		"txHash", tx.Hash.String()[:16])
+
 	b.txns = append(b.txns, tx)
+
+	b.params.Logger.Debug("🔍 [BlockBuilder.WriteTx] 交易写入完成",
+		"txHash", tx.Hash.String()[:16],
+		"txnsCount", len(b.txns))
 
 	return nil
 }

@@ -551,21 +551,42 @@ var emptyFrom = types.Address{}
 
 // Write writes another transaction to the executor
 func (t *Transition) Write(txn *types.Transaction) error {
+	t.logger.Debug("🔍 [Transition.Write] 开始写入交易",
+		"txHash", txn.Hash.String()[:16],
+		"from", txn.From.String()[:16],
+		"nonce", txn.Nonce,
+		"gas", txn.Gas,
+		"blockNumber", t.ctx.Number,
+		"isContractCreation", txn.To == nil)
+
 	var err error
 
 	if txn.From == emptyFrom &&
 		(txn.Type == types.LegacyTx || txn.Type == types.DynamicFeeTx) {
 		// Decrypt the from address
+		t.logger.Debug("🔍 [Transition.Write] 从签名恢复发送者地址",
+			"txHash", txn.Hash.String()[:16])
 		signer := crypto.NewSigner(t.config, uint64(t.ctx.ChainID))
 
 		txn.From, err = signer.Sender(txn)
 		if err != nil {
+			t.logger.Error("🔍 [Transition.Write] 恢复发送者地址失败",
+				"txHash", txn.Hash.String()[:16],
+				"error", err)
 			return NewTransitionApplicationError(err, false)
 		}
+		t.logger.Debug("🔍 [Transition.Write] 发送者地址恢复成功",
+			"txHash", txn.Hash.String()[:16],
+			"from", txn.From.String()[:16])
 	}
 
 	// Make a local copy and apply the transaction
 	msg := txn.Copy()
+
+	t.logger.Debug("🔍 [Transition.Write] 调用 Apply()",
+		"txHash", txn.Hash.String()[:16],
+		"from", txn.From.String()[:16],
+		"gas", msg.Gas)
 
 	result, e := t.Apply(msg)
 	if e != nil {
@@ -573,6 +594,13 @@ func (t *Transition) Write(txn *types.Transaction) error {
 
 		return e
 	}
+
+	t.logger.Debug("🔍 [Transition.Write] Apply() 完成",
+		"txHash", txn.Hash.String()[:16],
+		"gasUsed", result.GasUsed,
+		"gasLeft", result.GasLeft,
+		"failed", result.Failed(),
+		"err", result.Err)
 
 	t.totalGas += result.GasUsed
 
@@ -668,9 +696,43 @@ func (t *Transition) Txn() *Txn {
 
 // Apply applies a new transaction
 func (t *Transition) Apply(msg *types.Transaction) (*runtime.ExecutionResult, error) {
+	t.logger.Debug("🔍 [Transition.Apply] 开始应用交易",
+		"txHash", msg.Hash.String()[:16],
+		"from", msg.From.String()[:16],
+		"nonce", msg.Nonce,
+		"gas", msg.Gas,
+		"blockNumber", t.ctx.Number,
+		"isContractCreation", msg.To == nil,
+		"inputSize", len(msg.Input))
+
 	s := t.state.Snapshot()
 
+	t.logger.Debug("🔍 [Transition.Apply] 调用 apply()",
+		"txHash", msg.Hash.String()[:16])
+
 	result, err := t.apply(msg)
+
+	t.logger.Debug("🔍 [Transition.Apply] apply() 完成",
+		"txHash", msg.Hash.String()[:16],
+		"gasUsed", func() uint64 {
+			if result != nil {
+				return result.GasUsed
+			}
+			return 0
+		}(),
+		"gasLeft", func() uint64 {
+			if result != nil {
+				return result.GasLeft
+			}
+			return 0
+		}(),
+		"failed", func() bool {
+			if result != nil {
+				return result.Failed()
+			}
+			return false
+		}(),
+		"err", err)
 	if err != nil {
 		// 计算 intrinsic gas 用于日志（如果计算失败，使用 0）
 		intrinsicGasCost, _ := TransactionGasCost(msg, t.config.Homestead, t.config.Istanbul)
@@ -817,6 +879,14 @@ func NewGasLimitReachedTransitionApplicationError(err error) *GasLimitReachedTra
 }
 
 func (t *Transition) apply(msg *types.Transaction) (*runtime.ExecutionResult, error) {
+	t.logger.Debug("🔍 [Transition.apply] 开始应用交易",
+		"txHash", msg.Hash.String()[:16],
+		"from", msg.From.String()[:16],
+		"nonce", msg.Nonce,
+		"gas", msg.Gas,
+		"blockNumber", t.ctx.Number,
+		"isContractCreation", msg.To == nil)
+
 	var err error
 
 	if msg.Type == types.StateTx {
@@ -826,11 +896,17 @@ func (t *Transition) apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 	}
 
 	if err != nil {
+		t.logger.Debug("🔍 [Transition.apply] checkAndProcessTx 失败",
+			"txHash", msg.Hash.String()[:16],
+			"error", err)
 		return nil, err
 	}
 
 	// the amount of gas required is available in the block
 	if err = t.subGasPool(msg.Gas); err != nil {
+		t.logger.Debug("🔍 [Transition.apply] subGasPool 失败",
+			"txHash", msg.Hash.String()[:16],
+			"error", err)
 		return nil, NewGasLimitReachedTransitionApplicationError(err)
 	}
 
@@ -841,6 +917,9 @@ func (t *Transition) apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 	// 4. there is no overflow when calculating intrinsic gas
 	intrinsicGasCost, err := TransactionGasCost(msg, t.config.Homestead, t.config.Istanbul)
 	if err != nil {
+		t.logger.Debug("🔍 [Transition.apply] TransactionGasCost 失败",
+			"txHash", msg.Hash.String()[:16],
+			"error", err)
 		return nil, NewTransitionApplicationError(err, false)
 	}
 
@@ -870,15 +949,46 @@ func (t *Transition) apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 	t.ctx.GasPrice = types.BytesToHash(gasPrice.Bytes())
 	t.ctx.Origin = msg.From
 
+	t.logger.Debug("🔍 [Transition.apply] 准备执行合约",
+		"txHash", msg.Hash.String()[:16],
+		"isContractCreation", msg.IsContractCreation(),
+		"gasLeft", gasLeft,
+		"intrinsicGasCost", intrinsicGasCost)
+
 	var result *runtime.ExecutionResult
 	if msg.IsContractCreation() {
 		// 合约创建时不需要在这里递增 nonce，go-ethereum EVM 的 Create 方法会自己处理
+		t.logger.Debug("🔍 [Transition.apply] 调用 CreateWithNonce",
+			"txHash", msg.Hash.String()[:16],
+			"from", msg.From.String()[:16],
+			"nonce", msg.Nonce,
+			"inputSize", len(msg.Input),
+			"gasLeft", gasLeft)
 		result = t.CreateWithNonce(msg.From, msg.Input, value, gasLeft, msg.Nonce)
+		t.logger.Debug("🔍 [Transition.apply] CreateWithNonce 完成",
+			"txHash", msg.Hash.String()[:16],
+			"gasUsed", result.GasUsed,
+			"gasLeft", result.GasLeft,
+			"failed", result.Failed(),
+			"err", result.Err)
 	} else {
 		if err := t.state.IncrNonce(msg.From); err != nil {
+			t.logger.Debug("🔍 [Transition.apply] IncrNonce 失败",
+				"txHash", msg.Hash.String()[:16],
+				"error", err)
 			return nil, err
 		}
+		t.logger.Debug("🔍 [Transition.apply] 调用 Call2",
+			"txHash", msg.Hash.String()[:16],
+			"to", msg.To.String()[:16],
+			"gasLeft", gasLeft)
 		result = t.Call2(msg.From, *msg.To, msg.Input, value, gasLeft)
+		t.logger.Debug("🔍 [Transition.apply] Call2 完成",
+			"txHash", msg.Hash.String()[:16],
+			"gasUsed", result.GasUsed,
+			"gasLeft", result.GasLeft,
+			"failed", result.Failed(),
+			"err", result.Err)
 	}
 
 	refund := t.state.GetRefund()
