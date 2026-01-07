@@ -74,12 +74,36 @@ func (g *GethEVMAdapter) Run(
 	value.SetFromBig(c.Value)
 
 	if c.Type == runtime.Create {
+		// 添加日志以追踪 EVM.Create 调用
+		if lg, ok := host.(loggerGetter); ok {
+			logger := lg.GetLogger()
+			if logger != nil {
+				logger.Debug("🔍 [GethEVMAdapter] 调用 evm.Create",
+					"caller", callerAddr.String()[:16],
+					"codeSize", len(c.Code),
+					"gas", c.Gas,
+					"value", value.String())
+			}
+		}
 		ret, contractAddr, gasLeft, err = evm.Create(
 			callerAddr,
 			c.Code,
 			c.Gas,
 			value,
 		)
+		// 添加日志以追踪 EVM.Create 完成
+		if lg, ok := host.(loggerGetter); ok {
+			logger := lg.GetLogger()
+			if logger != nil {
+				logger.Debug("🔍 [GethEVMAdapter] evm.Create 完成",
+					"caller", callerAddr.String()[:16],
+					"contractAddr", contractAddr.String()[:16],
+					"retLen", len(ret),
+					"gasLeft", gasLeft,
+					"gasUsed", c.Gas-gasLeft,
+					"err", err)
+			}
+		}
 	} else {
 		var logger hclog.Logger
 		if lg, ok := host.(loggerGetter); ok {
