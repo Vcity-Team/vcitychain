@@ -49,6 +49,20 @@ func (g *GethEVMAdapter) Run(
 	host runtime.Host,
 	config *chain.ForksInTime,
 ) *runtime.ExecutionResult {
+	// 添加日志以确认进入了 GethEVMAdapter.Run
+	var logger hclog.Logger
+	if lg, ok := host.(loggerGetter); ok {
+		logger = lg.GetLogger()
+		if logger != nil {
+			logger.Debug("🔍 [GethEVMAdapter.Run] 开始执行",
+				"caller", c.Caller.String()[:16],
+				"contractAddress", c.Address.String()[:16],
+				"codeSize", len(c.Code),
+				"gas", c.Gas,
+				"type", c.Type)
+		}
+	}
+
 	// 1. 创建 StateDB 适配器
 	stateDBInterface := NewHostToStateDBAdapter(host, config)
 
@@ -58,9 +72,17 @@ func (g *GethEVMAdapter) Run(
 	chainConfig := buildChainConfig(config, g.chainID)
 
 	// 5. 创建 go-ethereum EVM 实例（v1.16+ 不再需要 TxContext 参数）
+	if logger != nil {
+		logger.Debug("🔍 [GethEVMAdapter.Run] 创建 EVM 实例",
+			"caller", c.Caller.String()[:16])
+	}
 	evm := vm.NewEVM(blockCtx, stateDBInterface, chainConfig, vm.Config{})
 	// 设置交易上下文
 	evm.SetTxContext(txContext)
+	if logger != nil {
+		logger.Debug("🔍 [GethEVMAdapter.Run] EVM 实例创建完成",
+			"caller", c.Caller.String()[:16])
+	}
 
 	// 6. 执行合约
 	var ret []byte

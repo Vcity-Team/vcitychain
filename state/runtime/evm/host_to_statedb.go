@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie/utils"
+	"github.com/hashicorp/go-hclog"
 	"github.com/holiman/uint256"
 )
 
@@ -24,14 +25,24 @@ type HostToStateDBAdapter struct {
 	addLogCallCount     int
 	accessListAddresses map[common.Address]struct{}
 	accessListSlots     map[common.Address]map[common.Hash]struct{}
+	logger              hclog.Logger
+}
+
+type loggerGetterForStateDB interface {
+	GetLogger() hclog.Logger
 }
 
 // NewHostToStateDBAdapter 创建 StateDB 适配器
 func NewHostToStateDBAdapter(host runtime.Host, config *chain.ForksInTime) vm.StateDB {
+	var logger hclog.Logger
+	if lg, ok := host.(loggerGetterForStateDB); ok {
+		logger = lg.GetLogger()
+	}
 	return &HostToStateDBAdapter{
 		host:            host,
 		config:          config,
 		addLogCallCount: 0,
+		logger:          logger,
 	}
 }
 
@@ -78,16 +89,34 @@ func (h *HostToStateDBAdapter) AddBalance(addr common.Address, amount *uint256.I
 }
 
 func (h *HostToStateDBAdapter) GetBalance(addr common.Address) *uint256.Int {
+	if h.logger != nil {
+		h.logger.Debug("🔍 [StateDB.GetBalance] 开始查询余额",
+			"addr", addr.String()[:16])
+	}
 	vcAddr := CommonAddressToVc(addr)
 	balanceBig := h.host.GetBalance(vcAddr)
 	balance := new(uint256.Int)
 	balance.SetFromBig(balanceBig)
+	if h.logger != nil {
+		h.logger.Debug("🔍 [StateDB.GetBalance] 查询完成",
+			"addr", addr.String()[:16],
+			"balance", balance.String())
+	}
 	return balance
 }
 
 func (h *HostToStateDBAdapter) GetNonce(addr common.Address) uint64 {
+	if h.logger != nil {
+		h.logger.Debug("🔍 [StateDB.GetNonce] 开始查询nonce",
+			"addr", addr.String()[:16])
+	}
 	vcAddr := CommonAddressToVc(addr)
 	nonce := h.host.GetNonce(vcAddr)
+	if h.logger != nil {
+		h.logger.Debug("🔍 [StateDB.GetNonce] 查询完成",
+			"addr", addr.String()[:16],
+			"nonce", nonce)
+	}
 	return nonce
 }
 
@@ -121,8 +150,18 @@ func (h *HostToStateDBAdapter) GetCodeHash(addr common.Address) common.Hash {
 }
 
 func (h *HostToStateDBAdapter) GetCode(addr common.Address) []byte {
+	if h.logger != nil {
+		h.logger.Debug("🔍 [StateDB.GetCode] 开始查询代码",
+			"addr", addr.String()[:16])
+	}
 	vcAddr := CommonAddressToVc(addr)
-	return h.host.GetCode(vcAddr)
+	code := h.host.GetCode(vcAddr)
+	if h.logger != nil {
+		h.logger.Debug("🔍 [StateDB.GetCode] 查询完成",
+			"addr", addr.String()[:16],
+			"codeSize", len(code))
+	}
+	return code
 }
 
 func (h *HostToStateDBAdapter) SetCode(addr common.Address, code []byte, reason tracing.CodeChangeReason) []byte {
@@ -148,17 +187,36 @@ func (h *HostToStateDBAdapter) SetCode(addr common.Address, code []byte, reason 
 
 // GetCodeSize 获取代码大小
 func (h *HostToStateDBAdapter) GetCodeSize(addr common.Address) int {
+	if h.logger != nil {
+		h.logger.Debug("🔍 [StateDB.GetCodeSize] 开始查询代码大小",
+			"addr", addr.String()[:16])
+	}
 	vcAddr := CommonAddressToVc(addr)
 	codeSize := h.host.GetCodeSize(vcAddr)
+	if h.logger != nil {
+		h.logger.Debug("🔍 [StateDB.GetCodeSize] 查询完成",
+			"addr", addr.String()[:16],
+			"codeSize", codeSize)
+	}
 	return codeSize
 }
 
 // GetState 获取存储状态
 func (h *HostToStateDBAdapter) GetState(addr common.Address, key common.Hash) common.Hash {
+	if h.logger != nil {
+		h.logger.Debug("🔍 [StateDB.GetState] 开始查询存储",
+			"addr", addr.String()[:16],
+			"key", key.String()[:16])
+	}
 	vcAddr := CommonAddressToVc(addr)
 	vcKey := CommonHashToVc(key)
 	value := h.host.GetStorage(vcAddr, vcKey)
-
+	if h.logger != nil {
+		h.logger.Debug("🔍 [StateDB.GetState] 查询完成",
+			"addr", addr.String()[:16],
+			"key", key.String()[:16],
+			"value", VcHashToCommon(value).String()[:16])
+	}
 	return VcHashToCommon(value)
 }
 
