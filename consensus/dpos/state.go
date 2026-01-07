@@ -1199,7 +1199,8 @@ func (rs *RewardStore) GetRewardSummary(address string, fromEpoch, toEpoch uint6
 				continue
 			}
 
-			if record.Recipient != address {
+			// 地址比较使用不区分大小写的方式（Ethereum地址标准）
+			if !strings.EqualFold(record.Recipient, address) {
 				continue
 			}
 			if record.EpochNumber < fromEpoch || record.EpochNumber > toEpoch {
