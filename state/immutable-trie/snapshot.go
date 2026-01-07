@@ -23,6 +23,13 @@ func (s *Snapshot) GetStorage(addr types.Address, root types.Hash, rawkey types.
 		trie *Trie
 	)
 
+	// 性能监控：记录 GetStorage 调用（仅在非空状态时记录，避免日志过多）
+	if root != emptyStateHash {
+		// 使用 Debug 级别，避免日志过多
+		// 注意：这里没有 logger，所以暂时不添加日志
+		// 如果需要，可以通过 context 或其他方式传递 logger
+	}
+
 	if root == emptyStateHash {
 		trie = s.state.newTrie()
 	} else {

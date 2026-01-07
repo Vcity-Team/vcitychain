@@ -1047,10 +1047,34 @@ func (t *Transition) CreateWithNonce(
 	gas uint64,
 	nonce uint64,
 ) *runtime.ExecutionResult {
+	t.logger.Debug("🔍 [Transition.CreateWithNonce] 开始创建合约",
+		"caller", caller.String()[:16],
+		"nonce", nonce,
+		"codeSize", len(code),
+		"gas", gas,
+		"value", value.String())
+
 	// 使用零地址作为占位符，地址将在 applyCreate 中计算
 	contract := runtime.NewContractCreation(1, caller, caller, types.ZeroAddress, value, gas, code)
 
-	return t.applyCreate(contract, t)
+	t.logger.Debug("🔍 [Transition.CreateWithNonce] 调用 applyCreate",
+		"caller", caller.String()[:16],
+		"nonce", nonce,
+		"codeSize", len(code),
+		"gas", gas)
+
+	result := t.applyCreate(contract, t)
+
+	t.logger.Debug("🔍 [Transition.CreateWithNonce] applyCreate 完成",
+		"caller", caller.String()[:16],
+		"nonce", nonce,
+		"gasUsed", result.GasUsed,
+		"gasLeft", result.GasLeft,
+		"failed", result.Failed(),
+		"err", result.Err,
+		"contractAddress", result.Address.String()[:16])
+
+	return result
 }
 
 func (t *Transition) Call2(
@@ -1107,12 +1131,32 @@ func (t *Transition) run(contract *runtime.Contract, host runtime.Host) *runtime
 
 	// check the precompiles
 	if t.precompiles.CanRun(contract, host, &t.config) {
+		t.logger.Debug("🔍 [Transition.run] 使用 precompiles 执行",
+			"contractAddress", contract.Address.String()[:16],
+			"caller", contract.Caller.String()[:16])
 		return t.precompiles.Run(contract, host, &t.config)
 	}
 	// check the evm
 	if t.evm.CanRun(contract, host, &t.config) {
-		return t.evm.Run(contract, host, &t.config)
+		t.logger.Debug("🔍 [Transition.run] 使用 EVM 执行",
+			"contractAddress", contract.Address.String()[:16],
+			"caller", contract.Caller.String()[:16],
+			"codeSize", len(contract.Code),
+			"gas", contract.Gas,
+			"type", contract.Type)
+		result := t.evm.Run(contract, host, &t.config)
+		t.logger.Debug("🔍 [Transition.run] EVM 执行完成",
+			"contractAddress", contract.Address.String()[:16],
+			"gasUsed", result.GasUsed,
+			"gasLeft", result.GasLeft,
+			"failed", result.Failed(),
+			"err", result.Err)
+		return result
 	}
+
+	t.logger.Debug("🔍 [Transition.run] 未找到可用的 runtime",
+		"contractAddress", contract.Address.String()[:16],
+		"caller", contract.Caller.String()[:16])
 
 	return &runtime.ExecutionResult{
 		Err: fmt.Errorf("runtime not found"),
@@ -1182,9 +1226,18 @@ func (t *Transition) applyCall(
 }
 
 func (t *Transition) applyCreate(c *runtime.Contract, host runtime.Host) *runtime.ExecutionResult {
+	t.logger.Debug("🔍 [Transition.applyCreate] 开始应用合约创建",
+		"caller", c.Caller.String()[:16],
+		"origin", c.Origin.String()[:16],
+		"codeSize", len(c.Code),
+		"gas", c.Gas,
+		"depth", c.Depth)
+
 	gasLimit := c.Gas
 
 	if c.Depth > int(1024)+1 {
+		t.logger.Debug("🔍 [Transition.applyCreate] 深度超限",
+			"depth", c.Depth)
 		return &runtime.ExecutionResult{
 			GasLeft: gasLimit,
 			Err:     runtime.ErrDepth,
@@ -1198,11 +1251,19 @@ func (t *Transition) applyCreate(c *runtime.Contract, host runtime.Host) *runtim
 	if c.Address == types.ZeroAddress {
 		callerNonce := t.state.GetNonce(actualCaller)
 		c.Address = crypto.CreateAddress(actualCaller, callerNonce)
+		t.logger.Debug("🔍 [Transition.applyCreate] 计算合约地址",
+			"caller", actualCaller.String()[:16],
+			"callerNonce", callerNonce,
+			"contractAddress", c.Address.String()[:16])
 	}
 
 	snapshot := t.state.Snapshot()
 
 	if err := t.Transfer(c.Caller, c.Address, c.Value); err != nil {
+		t.logger.Debug("🔍 [Transition.applyCreate] Transfer 失败",
+			"caller", c.Caller.String()[:16],
+			"contractAddress", c.Address.String()[:16],
+			"error", err)
 		return &runtime.ExecutionResult{
 			GasLeft: gasLimit,
 			Err:     err,
@@ -1220,6 +1281,9 @@ func (t *Transition) applyCreate(c *runtime.Contract, host runtime.Host) *runtim
 
 	// check if contract creation allow list is enabled
 	if t.deploymentAllowList != nil {
+		t.logger.Debug("🔍 [Transition.applyCreate] 检查部署白名单",
+			"caller", c.Caller.String()[:16],
+			"contractAddress", c.Address.String()[:16])
 		role := t.deploymentAllowList.GetRole(c.Caller)
 
 		if !role.Enabled() {
@@ -1234,7 +1298,12 @@ func (t *Transition) applyCreate(c *runtime.Contract, host runtime.Host) *runtim
 				Err:     runtime.ErrNotAuth,
 			}
 		}
+		t.logger.Debug("🔍 [Transition.applyCreate] 部署白名单检查通过",
+			"caller", c.Caller.String()[:16])
 	} else if t.deploymentBlockList != nil {
+		t.logger.Debug("🔍 [Transition.applyCreate] 检查部署黑名单",
+			"caller", c.Caller.String()[:16],
+			"contractAddress", c.Address.String()[:16])
 		role := t.deploymentBlockList.GetRole(c.Caller)
 
 		if role == addresslist.EnabledRole {
@@ -1249,11 +1318,36 @@ func (t *Transition) applyCreate(c *runtime.Contract, host runtime.Host) *runtim
 				Err:     runtime.ErrNotAuth,
 			}
 		}
+		t.logger.Debug("🔍 [Transition.applyCreate] 部署黑名单检查通过",
+			"caller", c.Caller.String()[:16])
 	}
 
+	t.logger.Debug("🔍 [Transition.applyCreate] 调用 run() 执行合约代码",
+		"caller", c.Caller.String()[:16],
+		"contractAddress", c.Address.String()[:16],
+		"codeSize", len(c.Code),
+		"gas", c.Gas)
+
 	result = t.run(c, host)
+
+	t.logger.Debug("🔍 [Transition.applyCreate] run() 执行完成",
+		"caller", c.Caller.String()[:16],
+		"contractAddress", c.Address.String()[:16],
+		"gasUsed", result.GasUsed,
+		"gasLeft", result.GasLeft,
+		"failed", result.Failed(),
+		"err", result.Err)
+
 	if result.Failed() {
+		t.logger.Debug("🔍 [Transition.applyCreate] 合约执行失败，回滚状态",
+			"caller", c.Caller.String()[:16],
+			"contractAddress", c.Address.String()[:16],
+			"err", result.Err)
 		if err := t.state.RevertToSnapshot(snapshot); err != nil {
+			t.logger.Debug("🔍 [Transition.applyCreate] 回滚状态失败",
+				"caller", c.Caller.String()[:16],
+				"contractAddress", c.Address.String()[:16],
+				"error", err)
 			return &runtime.ExecutionResult{
 				Err: err,
 			}
