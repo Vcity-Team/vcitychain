@@ -1499,16 +1499,7 @@ func (t *Transition) GetBalance(addr types.Address) *big.Int {
 }
 
 func (t *Transition) GetStorage(addr types.Address, key types.Hash) types.Hash {
-	t.logger.Debug("🔍 [Transition.GetStorage] 开始查询存储",
-		"addr", addr.String()[:16],
-		"key", key.String()[:16],
-		"blockNumber", t.ctx.Number)
 	value := t.state.GetState(addr, key)
-	t.logger.Debug("🔍 [Transition.GetStorage] 查询完成",
-		"addr", addr.String()[:16],
-		"key", key.String()[:16],
-		"value", value.String()[:16],
-		"blockNumber", t.ctx.Number)
 	return value
 }
 

@@ -486,8 +486,6 @@ func (b *Blockchain) readHeader(hash types.Hash) (*types.Header, bool) {
 			return nil, false
 		}
 
-		b.logger.Debug("🔍 [Blockchain.readHeader] 缓存命中",
-			"hash", hash.String()[:16])
 		return header, true
 	}
 

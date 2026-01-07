@@ -89,34 +89,16 @@ func (h *HostToStateDBAdapter) AddBalance(addr common.Address, amount *uint256.I
 }
 
 func (h *HostToStateDBAdapter) GetBalance(addr common.Address) *uint256.Int {
-	if h.logger != nil {
-		h.logger.Debug("🔍 [StateDB.GetBalance] 开始查询余额",
-			"addr", addr.String()[:16])
-	}
 	vcAddr := CommonAddressToVc(addr)
 	balanceBig := h.host.GetBalance(vcAddr)
 	balance := new(uint256.Int)
 	balance.SetFromBig(balanceBig)
-	if h.logger != nil {
-		h.logger.Debug("🔍 [StateDB.GetBalance] 查询完成",
-			"addr", addr.String()[:16],
-			"balance", balance.String())
-	}
 	return balance
 }
 
 func (h *HostToStateDBAdapter) GetNonce(addr common.Address) uint64 {
-	if h.logger != nil {
-		h.logger.Debug("🔍 [StateDB.GetNonce] 开始查询nonce",
-			"addr", addr.String()[:16])
-	}
 	vcAddr := CommonAddressToVc(addr)
 	nonce := h.host.GetNonce(vcAddr)
-	if h.logger != nil {
-		h.logger.Debug("🔍 [StateDB.GetNonce] 查询完成",
-			"addr", addr.String()[:16],
-			"nonce", nonce)
-	}
 	return nonce
 }
 
@@ -203,20 +185,9 @@ func (h *HostToStateDBAdapter) GetCodeSize(addr common.Address) int {
 
 // GetState 获取存储状态
 func (h *HostToStateDBAdapter) GetState(addr common.Address, key common.Hash) common.Hash {
-	if h.logger != nil {
-		h.logger.Debug("🔍 [StateDB.GetState] 开始查询存储",
-			"addr", addr.String()[:16],
-			"key", key.String()[:16])
-	}
 	vcAddr := CommonAddressToVc(addr)
 	vcKey := CommonHashToVc(key)
 	value := h.host.GetStorage(vcAddr, vcKey)
-	if h.logger != nil {
-		h.logger.Debug("🔍 [StateDB.GetState] 查询完成",
-			"addr", addr.String()[:16],
-			"key", key.String()[:16],
-			"value", VcHashToCommon(value).String()[:16])
-	}
 	return VcHashToCommon(value)
 }
 
