@@ -284,8 +284,24 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			return false
 		}
 
+		// 在调用 ShouldProduceBlockNow 之前，计算并保存 decisionSlot
+		now := time.Now()
+		genesisTime := r.config.blockScheduler.GetGenesisTime()
+		blockWindow := r.config.blockScheduler.GetBlockWindow()
+		timeSinceGenesis := now.Sub(genesisTime)
+		decisionSlot := int(timeSinceGenesis / blockWindow)
+
 		// 调用改进后的方法（直接比较地址）
 		result := r.config.blockScheduler.ShouldProduceBlockNow(myAddress, validators, currentBlock.Number, validatorsSource)
+
+		// 如果返回 true，保存 decisionSlot；如果返回 false，清除 decisionSlot
+		r.lock.Lock()
+		if result {
+			r.decisionSlot = decisionSlot
+		} else {
+			r.decisionSlot = -1
+		}
+		r.lock.Unlock()
 
 		return result
 	}
