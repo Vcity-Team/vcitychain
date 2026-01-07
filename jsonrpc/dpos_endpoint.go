@@ -1455,6 +1455,43 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) ([]*dpos
 			FaultFlag: faultInfo, // 添加故障标志
 		}
 
+		// 🆕 尝试从StakeStore获取累计奖励
+		// 逻辑说明：
+		// 1. 优先从StakeStore读取（如果迁移已完成，这里应该有值）
+		// 2. 如果为nil/0，且RewardStore中有该地址的奖励记录，说明可能是迁移未完成，使用fallback
+		// 3. 如果为nil/0，且RewardStore中也没有记录，说明该地址确实没有奖励
+		if dposState, err2 := d.store.GetDPoSState(); err2 == nil && dposState != nil {
+			if dposState.StakeStore != nil {
+				// 从StakeStore读取StakeInfo（可能包含累计奖励）
+				if stakingInfos, err := dposState.StakeStore.GetStakingInfo(); err == nil {
+					for _, si := range stakingInfos {
+						if si.Staker == validator.Address {
+							if si.Rewards != nil && si.Rewards.Sign() > 0 {
+								stakingInfo.Rewards = new(big.Int).Set(si.Rewards)
+								break
+							}
+						}
+					}
+				}
+			}
+
+			// Fallback：如果StakeInfo.Rewards为nil/0，尝试从RewardStore实时计算
+			// 这种情况可能发生在：
+			// 1. 迁移未完成（首次运行）
+			// 2. 迁移后新增的奖励（但updateStakeInfoCumulativeReward应该已经更新了）
+			// 3. 该地址确实没有奖励（GetRewardSummary会返回0，不会设置）
+			if stakingInfo.Rewards == nil || stakingInfo.Rewards.Sign() == 0 {
+				if dposState.RewardStore != nil {
+					summary, err := dposState.RewardStore.GetRewardSummary(validator.Address.String(), 1, 999999)
+					if err == nil && summary != nil && summary.TotalRewardWei != "" && summary.TotalRewardWei != "0" {
+						if totalReward, ok := new(big.Int).SetString(summary.TotalRewardWei, 10); ok {
+							stakingInfo.Rewards = totalReward
+						}
+					}
+				}
+			}
+		}
+
 		result = append(result, stakingInfo)
 	}
 
