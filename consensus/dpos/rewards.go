@@ -609,7 +609,7 @@ func (d *DPoS) calculateAndRecordEpochRewards(epochNumber uint64) error {
 	}
 
 	// 记录奖励到数据库（不更新状态）
-	if err := d.recordRewardsToDatabase(epochNumber, rewards); err != nil {
+	if err := d.recordRewardsToDatabase(epochNumber, rewards, validators, voters); err != nil {
 		return fmt.Errorf("failed to record rewards to database: %w", err)
 	}
 
