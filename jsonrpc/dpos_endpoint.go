@@ -1507,6 +1507,141 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interfa
 	}, nil
 }
 
+// GetAllDelegates handles dpos_getAllDelegates RPC method
+// 返回所有受托人（delegates，接收投票的验证者）的聚合信息
+func (d *DPOS) GetAllDelegates(ctx context.Context, blockNumber *uint64) (interface{}, error) {
+	d.logger.Info("DPoS GetAllDelegates called", "blockNumber", blockNumber)
+
+	// 获取 DPoS 状态
+	dposState, err := d.store.GetDPoSState()
+	if err != nil || dposState == nil || dposState.StakeStore == nil {
+		d.logger.Warn("Failed to get DPoS state", "error", err)
+		return map[string]interface{}{
+			"success": true,
+			"data":    []*dpos.StakeInfo{},
+		}, nil
+	}
+
+	// 从 StakeStore 获取所有投票记录
+	allStakingInfos, err := dposState.StakeStore.GetStakingInfo()
+	if err != nil {
+		d.logger.Warn("Failed to get staking info", "error", err)
+		return map[string]interface{}{
+			"success": true,
+			"data":    []*dpos.StakeInfo{},
+		}, nil
+	}
+
+	// 按受托人地址（Delegate）分组聚合
+	// key: delegate address, value: 聚合后的 StakeInfo
+	delegateMap := make(map[types.Address]*dpos.StakeInfo)
+
+	for _, stakeInfo := range allStakingInfos {
+		if stakeInfo == nil || stakeInfo.Delegate == (types.Address{}) {
+			continue
+		}
+
+		delegateAddr := stakeInfo.Delegate
+
+		// 如果该受托人不存在，创建新的记录
+		if _, exists := delegateMap[delegateAddr]; !exists {
+			delegateMap[delegateAddr] = &dpos.StakeInfo{
+				Staker:    delegateAddr, // 使用 Delegate 地址作为 Staker（因为返回的是受托人信息）
+				Amount:    big.NewInt(0),
+				Rewards:   big.NewInt(0),
+				IsActive:  false,
+				IsLocked:  false,
+				StartTime: 0,
+				EndTime:   0,
+				Delegate:  delegateAddr,
+			}
+		}
+
+		delegate := delegateMap[delegateAddr]
+
+		// 累加投票金额（只统计已应用的投票）
+		// 这是所有质押者投票给该受托人的总金额
+		if stakeInfo.Applied && stakeInfo.Amount != nil && stakeInfo.Amount.Sign() > 0 {
+			if delegate.Amount == nil {
+				delegate.Amount = big.NewInt(0)
+			}
+			delegate.Amount.Add(delegate.Amount, stakeInfo.Amount)
+		}
+
+		// 累加累计奖励（受托人作为验证者获得的奖励）
+		if stakeInfo.Rewards != nil && stakeInfo.Rewards.Sign() > 0 {
+			if delegate.Rewards == nil {
+				delegate.Rewards = big.NewInt(0)
+			}
+			delegate.Rewards.Add(delegate.Rewards, stakeInfo.Rewards)
+		}
+
+		// 更新时间信息（取最新的）
+		if stakeInfo.StartTime > delegate.StartTime {
+			delegate.StartTime = stakeInfo.StartTime
+		}
+		if stakeInfo.EndTime > delegate.EndTime {
+			delegate.EndTime = stakeInfo.EndTime
+		}
+
+		// 更新锁定状态（如果任何投票被锁定，则标记为锁定）
+		if stakeInfo.IsLocked {
+			delegate.IsLocked = true
+		}
+
+		// 更新激活状态（如果任何投票是激活的，则标记为激活）
+		if stakeInfo.IsActive {
+			delegate.IsActive = true
+		}
+	}
+
+	// 转换为数组
+	result := make([]*dpos.StakeInfo, 0, len(delegateMap))
+	for delegateAddr, delegateInfo := range delegateMap {
+		// 如果没有投票金额，设置为 0（而不是 nil）
+		if delegateInfo.Amount == nil {
+			delegateInfo.Amount = big.NewInt(0)
+		}
+
+		// 如果没有奖励，设置为 0（而不是 nil）
+		if delegateInfo.Rewards == nil {
+			delegateInfo.Rewards = big.NewInt(0)
+		}
+
+		// 获取故障标志（如果该受托人是验证者）
+		faultInfo := map[string]interface{}{}
+		if dposStore, ok := d.store.(interface {
+			GetDPoSEngine() interface{}
+		}); ok {
+			if dposEngine := dposStore.GetDPoSEngine(); dposEngine != nil {
+				if dpos, ok := dposEngine.(*dpos.DPoS); ok {
+					faultInfo = dpos.GetValidatorFaultInfo(delegateAddr)
+				}
+			}
+		}
+		delegateInfo.FaultFlag = faultInfo
+
+		// 尝试从 RewardStore 获取累计奖励（如果 StakeInfo 中没有）
+		if delegateInfo.Rewards.Sign() == 0 && dposState.RewardStore != nil {
+			summary, err := dposState.RewardStore.GetRewardSummary(delegateAddr.String(), 1, 999999)
+			if err == nil && summary != nil && summary.TotalRewardWei != "" && summary.TotalRewardWei != "0" {
+				if totalReward, ok := new(big.Int).SetString(summary.TotalRewardWei, 10); ok {
+					delegateInfo.Rewards = totalReward
+				}
+			}
+		}
+
+		result = append(result, delegateInfo)
+	}
+
+	d.logger.Info("GetAllDelegates: 返回所有受托人", "count", len(result))
+
+	return map[string]interface{}{
+		"success": true,
+		"data":    result,
+	}, nil
+}
+
 // GetVotingPower handles dpos_getVotingPower RPC method
 // NOTE: This endpoint is currently intended for internal use only.
 //
