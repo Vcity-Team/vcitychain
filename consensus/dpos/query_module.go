@@ -211,9 +211,17 @@ func (d *DPoS) initializeRewardMigration() {
 // initializeDelegateInfoMigration 初始化 DelegateInfo 迁移（只执行一次）
 // 为所有已注册但没有 DelegateInfo 的受托人创建初始 DelegateInfo
 func (d *DPoS) initializeDelegateInfoMigration() {
+	d.logger.Info("🔍 [DelegateInfo迁移] 开始检查迁移状态...")
+	
 	if d.state == nil || d.state.StakeStore == nil || d.state.RegistrationStore == nil {
+		d.logger.Warn("⚠️ [DelegateInfo迁移] State未初始化，跳过迁移",
+			"state", d.state != nil,
+			"stakeStore", d.state != nil && d.state.StakeStore != nil,
+			"registrationStore", d.state != nil && d.state.RegistrationStore != nil)
 		return // 如果state未初始化，跳过迁移
 	}
+
+	d.logger.Info("✅ [DelegateInfo迁移] State已初始化，继续检查迁移标志位")
 
 	// 检查是否已经迁移过（通过metadata bucket的标志位判断）
 	migrationFlag := []byte("delegate_info_migration_completed")
@@ -224,73 +232,103 @@ func (d *DPoS) initializeDelegateInfoMigration() {
 		metaBucket := tx.Bucket([]byte("metadata"))
 		if metaBucket == nil {
 			// metadata bucket不存在，说明还没有迁移过
+			d.logger.Info("ℹ️ [DelegateInfo迁移] metadata bucket不存在，需要执行首次迁移")
 			return fmt.Errorf("metadata bucket not found")
 		}
 
+		d.logger.Info("✅ [DelegateInfo迁移] metadata bucket存在，检查标志位")
 		flag := metaBucket.Get(migrationFlag)
 		if flag != nil && string(flag) == "true" {
 			migrationCompleted = true
+			d.logger.Info("✅ [DelegateInfo迁移] 标志位已存在且为true，迁移已完成")
 			return nil
 		}
 
+		d.logger.Info("ℹ️ [DelegateInfo迁移] 标志位不存在或不为true，需要执行迁移",
+			"flagValue", func() string {
+				if flag != nil {
+					return string(flag)
+				}
+				return "nil"
+			}())
 		return fmt.Errorf("migration not completed")
 	})
 
 	// 如果已经迁移过，直接返回
 	if err == nil && migrationCompleted {
-		d.logger.Info("ℹ️ DelegateInfo 迁移已完成，跳过（重启后检查）")
+		d.logger.Info("ℹ️ [DelegateInfo迁移] 迁移已完成，跳过（重启后检查）")
 		return
 	}
 
 	if err != nil {
-		d.logger.Info("ℹ️ DelegateInfo 迁移标志未找到，执行首次迁移", "reason", err.Error())
+		d.logger.Info("ℹ️ [DelegateInfo迁移] 迁移标志未找到，执行首次迁移", "reason", err.Error())
 	}
 
 	// 执行迁移
-	d.logger.Info("🔄 开始执行 DelegateInfo 迁移...")
+	d.logger.Info("🔄 [DelegateInfo迁移] 开始执行 DelegateInfo 迁移...")
 	migrationErr := d.migrateDelegateInfos()
 
 	// 无论迁移成功还是失败，都设置标志位
+	d.logger.Info("💾 [DelegateInfo迁移] 开始设置迁移标志位...")
 	setFlagErr := d.state.db.Update(func(tx *bolt.Tx) error {
 		metaBucket, err := tx.CreateBucketIfNotExists([]byte("metadata"))
 		if err != nil {
+			d.logger.Error("❌ [DelegateInfo迁移] 创建metadata bucket失败", "error", err)
 			return err
 		}
-		return metaBucket.Put(migrationFlag, []byte("true"))
+		d.logger.Info("✅ [DelegateInfo迁移] metadata bucket已创建或已存在")
+		
+		if err := metaBucket.Put(migrationFlag, []byte("true")); err != nil {
+			d.logger.Error("❌ [DelegateInfo迁移] 写入标志位失败", "error", err)
+			return err
+		}
+		
+		d.logger.Info("✅ [DelegateInfo迁移] 标志位已写入", "flag", string(migrationFlag))
+		return nil
 	})
 
 	if setFlagErr != nil {
-		d.logger.Warn("⚠️ 设置 DelegateInfo 迁移标志位失败", "error", setFlagErr)
+		d.logger.Warn("⚠️ [DelegateInfo迁移] 设置迁移标志位失败", "error", setFlagErr)
 	} else {
-		d.logger.Info("ℹ️ DelegateInfo 迁移标志位已写入metadata bucket")
+		d.logger.Info("✅ [DelegateInfo迁移] 迁移标志位已成功写入metadata bucket")
 	}
 
 	if migrationErr != nil {
-		d.logger.Warn("⚠️ DelegateInfo 迁移过程中出现错误（但已设置标志位）", "error", migrationErr)
+		d.logger.Warn("⚠️ [DelegateInfo迁移] 迁移过程中出现错误（但已设置标志位）", "error", migrationErr)
 	} else {
-		d.logger.Info("✅ DelegateInfo 迁移完成")
+		d.logger.Info("✅ [DelegateInfo迁移] 迁移完成，无错误")
 	}
 }
 
 // migrateDelegateInfos 为所有已注册但没有 DelegateInfo 的受托人创建初始 DelegateInfo
 func (d *DPoS) migrateDelegateInfos() error {
+	d.logger.Info("🔍 [DelegateInfo迁移] 开始执行迁移逻辑...")
+	
 	if d.state == nil || d.state.StakeStore == nil || d.state.RegistrationStore == nil {
+		d.logger.Error("❌ [DelegateInfo迁移] State store不可用",
+			"state", d.state != nil,
+			"stakeStore", d.state != nil && d.state.StakeStore != nil,
+			"registrationStore", d.state != nil && d.state.RegistrationStore != nil)
 		return fmt.Errorf("state store not available")
 	}
+
+	d.logger.Info("✅ [DelegateInfo迁移] State store可用，开始获取所有已注册的受托人")
 
 	// 获取所有已注册的受托人
 	allRegistrations, err := d.state.RegistrationStore.GetAllRegistrations()
 	if err != nil {
-		d.logger.Warn("⚠️ 获取注册信息失败", "error", err)
+		d.logger.Warn("⚠️ [DelegateInfo迁移] 获取注册信息失败", "error", err)
 		return nil // 不阻断，只记录警告
 	}
 
+	d.logger.Info("📊 [DelegateInfo迁移] 获取注册信息完成", "count", len(allRegistrations))
+
 	if len(allRegistrations) == 0 {
-		d.logger.Info("ℹ️ 没有找到已注册的受托人，跳过迁移")
+		d.logger.Info("ℹ️ [DelegateInfo迁移] 没有找到已注册的受托人，跳过迁移")
 		return nil
 	}
 
-	d.logger.Info("📊 找到已注册的受托人", "count", len(allRegistrations))
+	d.logger.Info("📋 [DelegateInfo迁移] 开始遍历已注册的受托人", "totalCount", len(allRegistrations))
 
 	// 统计信息
 	createdCount := 0
@@ -298,26 +336,46 @@ func (d *DPoS) migrateDelegateInfos() error {
 	errorCount := 0
 
 	// 为每个已注册的受托人检查并创建 DelegateInfo
-	for _, reg := range allRegistrations {
+	for i, reg := range allRegistrations {
 		if reg == nil {
+			d.logger.Warn("⚠️ [DelegateInfo迁移] 跳过nil注册记录", "index", i)
 			continue
 		}
 
+		d.logger.Info("🔍 [DelegateInfo迁移] 处理受托人",
+			"index", i+1,
+			"total", len(allRegistrations),
+			"address", reg.Address.String(),
+			"name", reg.Name)
+
 		// 检查是否已有 DelegateInfo
+		d.logger.Info("🔍 [DelegateInfo迁移] 检查受托人是否已有DelegateInfo", "address", reg.Address.String())
 		existingInfo, err := d.state.StakeStore.GetDelegateInfo(reg.Address)
+		if err != nil {
+			d.logger.Info("ℹ️ [DelegateInfo迁移] 查询DelegateInfo时出错（可能不存在）",
+				"address", reg.Address.String(),
+				"error", err)
+		}
+		
 		if err == nil && existingInfo != nil {
 			// 已有 DelegateInfo，跳过
 			skippedCount++
-			d.logger.Debug("ℹ️ 受托人已有 DelegateInfo，跳过",
+			d.logger.Info("⏭️ [DelegateInfo迁移] 受托人已有DelegateInfo，跳过",
 				"address", reg.Address.String(),
 				"votingPower", func() string {
 					if existingInfo.VotingPower != nil {
 						return existingInfo.VotingPower.String()
 					}
 					return "nil"
-				}())
+				}(),
+				"isRegistered", existingInfo.IsRegistered,
+				"isActive", existingInfo.IsActive)
 			continue
 		}
+
+		d.logger.Info("🆕 [DelegateInfo迁移] 受托人没有DelegateInfo，开始创建",
+			"address", reg.Address.String(),
+			"name", reg.Name)
 
 		// 创建初始 DelegateInfo（投票权重为0）
 		delegateInfo := &DelegateInfo{
@@ -333,30 +391,52 @@ func (d *DPoS) migrateDelegateInfos() error {
 			BlsPublicKey:    nil,  // BLS密钥由其他逻辑处理
 		}
 
+		d.logger.Info("📝 [DelegateInfo迁移] DelegateInfo对象已创建",
+			"address", reg.Address.String(),
+			"votingPower", "0",
+			"isRegistered", true,
+			"isActive", false)
+
 		// 填充佣金字段
+		d.logger.Info("💰 [DelegateInfo迁移] 开始填充佣金字段", "address", reg.Address.String())
 		d.populateCommissionFields(reg.Address, delegateInfo)
+		d.logger.Info("✅ [DelegateInfo迁移] 佣金字段填充完成",
+			"address", reg.Address.String(),
+			"commissionRate", delegateInfo.CommissionRate)
 
 		// 保存到数据库
+		d.logger.Info("💾 [DelegateInfo迁移] 开始保存DelegateInfo到数据库", "address", reg.Address.String())
 		if err := d.state.StakeStore.setDelegateInfo(reg.Address, delegateInfo, nil); err != nil {
 			errorCount++
-			d.logger.Warn("⚠️ 创建初始 DelegateInfo 失败",
+			d.logger.Error("❌ [DelegateInfo迁移] 保存DelegateInfo失败",
 				"address", reg.Address.String(),
 				"error", err)
 			continue
 		}
 
 		createdCount++
-		d.logger.Info("✅ 为已注册受托人创建初始 DelegateInfo",
+		d.logger.Info("✅ [DelegateInfo迁移] 为已注册受托人创建初始DelegateInfo成功",
 			"address", reg.Address.String(),
 			"name", reg.Name,
-			"votingPower", "0")
+			"votingPower", "0",
+			"createdCount", createdCount)
 	}
 
-	d.logger.Info("📊 DelegateInfo 迁移统计",
+	d.logger.Info("📊 [DelegateInfo迁移] 迁移统计",
 		"totalRegistrations", len(allRegistrations),
 		"created", createdCount,
 		"skipped", skippedCount,
 		"errors", errorCount)
+
+	if createdCount > 0 {
+		d.logger.Info("✅ [DelegateInfo迁移] 成功创建了DelegateInfo", "count", createdCount)
+	}
+	if skippedCount > 0 {
+		d.logger.Info("⏭️ [DelegateInfo迁移] 跳过了已有DelegateInfo的受托人", "count", skippedCount)
+	}
+	if errorCount > 0 {
+		d.logger.Warn("⚠️ [DelegateInfo迁移] 迁移过程中出现错误", "count", errorCount)
+	}
 
 	return nil
 }
