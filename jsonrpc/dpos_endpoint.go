@@ -1509,6 +1509,7 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interfa
 
 // GetAllDelegates handles dpos_getAllDelegates RPC method
 // 返回所有受托人（delegates，接收投票的验证者）的聚合信息
+// 包括刚注册但未收到投票的受托人
 func (d *DPOS) GetAllDelegates(ctx context.Context, blockNumber *uint64) (interface{}, error) {
 	d.logger.Info("DPoS GetAllDelegates called", "blockNumber", blockNumber)
 
@@ -1522,20 +1523,50 @@ func (d *DPOS) GetAllDelegates(ctx context.Context, blockNumber *uint64) (interf
 		}, nil
 	}
 
-	// 从 StakeStore 获取所有投票记录
+	// 🆕 第一步：从 DelegateInfo bucket 获取所有注册的受托人（包括零权重的）
+	allDelegateInfos, err := dposState.StakeStore.GetAllDelegateInfos()
+	if err != nil {
+		d.logger.Warn("Failed to get all delegate infos", "error", err)
+		// 如果获取失败，继续使用投票记录的方式（向后兼容）
+		allDelegateInfos = make(map[types.Address]*dpos.DelegateInfo)
+	}
+
+	// 第二步：从 StakeStore 获取所有投票记录（用于聚合投票金额）
 	allStakingInfos, err := dposState.StakeStore.GetStakingInfo()
 	if err != nil {
 		d.logger.Warn("Failed to get staking info", "error", err)
-		return map[string]interface{}{
-			"success": true,
-			"data":    []*dpos.StakeInfo{},
-		}, nil
+		allStakingInfos = []*dpos.StakeInfo{}
 	}
 
-	// 按受托人地址（Delegate）分组聚合
+	// 第三步：初始化 delegateMap，包含所有注册的受托人
 	// key: delegate address, value: 聚合后的 StakeInfo
 	delegateMap := make(map[types.Address]*dpos.StakeInfo)
 
+	// 3.1 从 DelegateInfo 初始化所有注册的受托人（包括未收到投票的）
+	for delegateAddr, delegateInfo := range allDelegateInfos {
+		if delegateInfo == nil {
+			continue
+		}
+
+		delegateMap[delegateAddr] = &dpos.StakeInfo{
+			Staker:    delegateAddr,
+			Amount:    big.NewInt(0),
+			Rewards:   big.NewInt(0),
+			IsActive:  delegateInfo.IsActive,
+			IsLocked:  false, // 从投票记录中更新
+			StartTime: 0,     // 从投票记录中更新
+			EndTime:   0,     // 从投票记录中更新
+			Delegate:  delegateAddr,
+		}
+
+		// 如果 DelegateInfo 中有 VotingPower，可以设置初始金额（但通常从投票记录中聚合更准确）
+		if delegateInfo.VotingPower != nil && delegateInfo.VotingPower.Sign() > 0 {
+			// VotingPower 是总投票权重，可以作为参考
+			// 但为了准确性，我们还是从投票记录中聚合
+		}
+	}
+
+	// 3.2 从投票记录中聚合投票金额和其他信息
 	for _, stakeInfo := range allStakingInfos {
 		if stakeInfo == nil || stakeInfo.Delegate == (types.Address{}) {
 			continue
@@ -1543,10 +1574,11 @@ func (d *DPOS) GetAllDelegates(ctx context.Context, blockNumber *uint64) (interf
 
 		delegateAddr := stakeInfo.Delegate
 
-		// 如果该受托人不存在，创建新的记录
+		// 如果该受托人不存在（理论上不应该发生，因为我们已经从 DelegateInfo 初始化了）
+		// 但为了健壮性，还是创建新记录
 		if _, exists := delegateMap[delegateAddr]; !exists {
 			delegateMap[delegateAddr] = &dpos.StakeInfo{
-				Staker:    delegateAddr, // 使用 Delegate 地址作为 Staker（因为返回的是受托人信息）
+				Staker:    delegateAddr,
 				Amount:    big.NewInt(0),
 				Rewards:   big.NewInt(0),
 				IsActive:  false,
@@ -1568,13 +1600,7 @@ func (d *DPOS) GetAllDelegates(ctx context.Context, blockNumber *uint64) (interf
 			delegate.Amount.Add(delegate.Amount, stakeInfo.Amount)
 		}
 
-		// 累加累计奖励（受托人作为验证者获得的奖励）
-		if stakeInfo.Rewards != nil && stakeInfo.Rewards.Sign() > 0 {
-			if delegate.Rewards == nil {
-				delegate.Rewards = big.NewInt(0)
-			}
-			delegate.Rewards.Add(delegate.Rewards, stakeInfo.Rewards)
-		}
+		// ⚠️ 不再从投票记录中累加奖励，改为直接从 RewardStore 获取（见步骤4）
 
 		// 更新时间信息（取最新的）
 		if stakeInfo.StartTime > delegate.StartTime {
@@ -1595,7 +1621,7 @@ func (d *DPOS) GetAllDelegates(ctx context.Context, blockNumber *uint64) (interf
 		}
 	}
 
-	// 转换为数组
+	// 第四步：转换为数组，并补充奖励信息和故障标志
 	result := make([]*dpos.StakeInfo, 0, len(delegateMap))
 	for delegateAddr, delegateInfo := range delegateMap {
 		// 如果没有投票金额，设置为 0（而不是 nil）
@@ -1603,8 +1629,20 @@ func (d *DPOS) GetAllDelegates(ctx context.Context, blockNumber *uint64) (interf
 			delegateInfo.Amount = big.NewInt(0)
 		}
 
-		// 如果没有奖励，设置为 0（而不是 nil）
-		if delegateInfo.Rewards == nil {
+		// 🆕 修复：直接从 RewardStore 获取受托人的总奖励（而不是从投票记录中累加）
+		// 这是受托人作为验证者获得的奖励，应该从 RewardStore 查询
+		if dposState.RewardStore != nil {
+			summary, err := dposState.RewardStore.GetRewardSummary(delegateAddr.String(), 1, 999999)
+			if err == nil && summary != nil && summary.TotalRewardWei != "" && summary.TotalRewardWei != "0" {
+				if totalReward, ok := new(big.Int).SetString(summary.TotalRewardWei, 10); ok {
+					delegateInfo.Rewards = totalReward
+				}
+			} else {
+				// 如果没有奖励，设置为 0（而不是 nil）
+				delegateInfo.Rewards = big.NewInt(0)
+			}
+		} else {
+			// 如果没有 RewardStore，设置为 0
 			delegateInfo.Rewards = big.NewInt(0)
 		}
 
@@ -1620,16 +1658,6 @@ func (d *DPOS) GetAllDelegates(ctx context.Context, blockNumber *uint64) (interf
 			}
 		}
 		delegateInfo.FaultFlag = faultInfo
-
-		// 尝试从 RewardStore 获取累计奖励（如果 StakeInfo 中没有）
-		if delegateInfo.Rewards.Sign() == 0 && dposState.RewardStore != nil {
-			summary, err := dposState.RewardStore.GetRewardSummary(delegateAddr.String(), 1, 999999)
-			if err == nil && summary != nil && summary.TotalRewardWei != "" && summary.TotalRewardWei != "0" {
-				if totalReward, ok := new(big.Int).SetString(summary.TotalRewardWei, 10); ok {
-					delegateInfo.Rewards = totalReward
-				}
-			}
-		}
 
 		result = append(result, delegateInfo)
 	}

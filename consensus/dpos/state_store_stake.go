@@ -916,6 +916,43 @@ func (s *StakeStore) GetDelegateInfo(delegate types.Address) (*DelegateInfo, err
 	return result, nil
 }
 
+// GetAllDelegateInfos 获取所有受托人信息（包括零权重的，用于获取所有注册的受托人）
+func (s *StakeStore) GetAllDelegateInfos() (map[types.Address]*DelegateInfo, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("stake store not initialized")
+	}
+
+	result := make(map[types.Address]*DelegateInfo)
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("DelegateInfo"))
+		if bucket == nil {
+			return nil // bucket不存在，返回空map
+		}
+
+		cursor := bucket.Cursor()
+		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
+			if len(key) != 20 {
+				continue // 跳过非地址key
+			}
+
+			var info DelegateInfo
+			if err := json.Unmarshal(value, &info); err != nil {
+				continue // 解析失败，跳过
+			}
+
+			result[info.Address] = &info
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get all delegate infos: %w", err)
+	}
+
+	return result, nil
+}
+
 // getDelegateInfo 从数据库获取受托人信息
 func (s *StakeStore) getDelegateInfo(delegate types.Address, dbTx *bolt.Tx) (*DelegateInfo, error) {
 	bucket := dbTx.Bucket([]byte("DelegateInfo"))
