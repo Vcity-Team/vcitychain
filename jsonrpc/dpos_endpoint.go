@@ -1529,6 +1529,12 @@ func (d *DPOS) GetAllDelegates(ctx context.Context, blockNumber *uint64) (interf
 		d.logger.Warn("Failed to get all delegate infos", "error", err)
 		// 如果获取失败，继续使用投票记录的方式（向后兼容）
 		allDelegateInfos = make(map[types.Address]*dpos.DelegateInfo)
+	} else {
+		d.logger.Info("GetAllDelegates: 从 DelegateInfo bucket 读取到受托人", "count", len(allDelegateInfos))
+		// 打印所有受托人地址（用于调试）
+		for addr := range allDelegateInfos {
+			d.logger.Debug("GetAllDelegates: DelegateInfo 中的受托人", "address", addr.String())
+		}
 	}
 
 	// 第二步：从 StakeStore 获取所有投票记录（用于聚合投票金额）
@@ -1543,10 +1549,23 @@ func (d *DPOS) GetAllDelegates(ctx context.Context, blockNumber *uint64) (interf
 	delegateMap := make(map[types.Address]*dpos.StakeInfo)
 
 	// 3.1 从 DelegateInfo 初始化所有注册的受托人（包括未收到投票的）
+	d.logger.Info("GetAllDelegates: 开始从 DelegateInfo 初始化受托人", "delegateInfoCount", len(allDelegateInfos))
 	for delegateAddr, delegateInfo := range allDelegateInfos {
 		if delegateInfo == nil {
+			d.logger.Warn("GetAllDelegates: 跳过 nil delegateInfo", "address", delegateAddr.String())
 			continue
 		}
+
+		d.logger.Debug("GetAllDelegates: 初始化受托人",
+			"address", delegateAddr.String(),
+			"votingPower", func() string {
+				if delegateInfo.VotingPower != nil {
+					return delegateInfo.VotingPower.String()
+				}
+				return "nil"
+			}(),
+			"isRegistered", delegateInfo.IsRegistered,
+			"isActive", delegateInfo.IsActive)
 
 		delegateMap[delegateAddr] = &dpos.StakeInfo{
 			Staker:    delegateAddr,
@@ -1558,13 +1577,8 @@ func (d *DPOS) GetAllDelegates(ctx context.Context, blockNumber *uint64) (interf
 			EndTime:   0,     // 从投票记录中更新
 			Delegate:  delegateAddr,
 		}
-
-		// 如果 DelegateInfo 中有 VotingPower，可以设置初始金额（但通常从投票记录中聚合更准确）
-		if delegateInfo.VotingPower != nil && delegateInfo.VotingPower.Sign() > 0 {
-			// VotingPower 是总投票权重，可以作为参考
-			// 但为了准确性，我们还是从投票记录中聚合
-		}
 	}
+	d.logger.Info("GetAllDelegates: 从 DelegateInfo 初始化完成", "delegateMapCount", len(delegateMap))
 
 	// 3.2 从投票记录中聚合投票金额和其他信息
 	for _, stakeInfo := range allStakingInfos {

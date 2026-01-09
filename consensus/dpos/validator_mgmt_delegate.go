@@ -714,6 +714,52 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 	d.addDelegateSafely(delegate)
 	d.logger.Info("✅ 受托人验证者记录创建完成")
 
+	// 🆕 创建并保存初始 DelegateInfo（投票权重为0，用于 GetAllDelegates 查询）
+	d.logger.Info("💾 开始创建初始 DelegateInfo...")
+	if d.state != nil && d.state.StakeStore != nil {
+		// 获取注册信息（用于填充 DelegateInfo）
+		regInfoForDelegate := registration
+		if regInfoForDelegate == nil {
+			// 如果 registration 为 nil，创建一个基本的
+			regInfoForDelegate = &DelegateRegistration{
+				Address:     regInfo.Registrant,
+				Name:        regInfo.Name,
+				Website:     regInfo.Website,
+				Description: regInfo.Description,
+			}
+		}
+
+		// 创建初始 DelegateInfo（投票权重为0）
+		delegateInfo := &DelegateInfo{
+			Address:        regInfo.Registrant,
+			VotingPower:    big.NewInt(0), // 初始投票权重为0
+			TotalVotes:     big.NewInt(0), // 初始总投票数为0
+			ProducedBlocks: 0,
+			MissedBlocks:   0,
+			LastBlockTime:  0,
+			IsActive:       false, // 初始为非活跃，需要投票激活
+			IsRegistered:   true,  // 已注册
+			RegistrationInfo: regInfoForDelegate, // 保存注册信息
+			BlsPublicKey:    nil,                  // BLS密钥由其他逻辑处理
+		}
+
+		// 填充佣金字段
+		d.populateCommissionFields(regInfo.Registrant, delegateInfo)
+
+		// 保存到数据库
+		if err := d.state.StakeStore.setDelegateInfo(regInfo.Registrant, delegateInfo, nil); err != nil {
+			d.logger.Error("❌ 保存初始 DelegateInfo 失败", "error", err)
+			// 不返回错误，因为这不是关键操作
+		} else {
+			d.logger.Info("✅ 初始 DelegateInfo 已保存到数据库",
+				"address", regInfo.Registrant.String(),
+				"votingPower", "0",
+				"isRegistered", true)
+		}
+	} else {
+		d.logger.Warn("⚠️ StakeStore不可用，跳过创建初始 DelegateInfo")
+	}
+
 	d.logger.Info("🎉 ===== 受托人注册处理完成 =====")
 	d.logger.Info("📊 最终结果",
 		"address", regInfo.Registrant.String(),

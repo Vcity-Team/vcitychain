@@ -2,6 +2,7 @@ package dpos
 
 import (
 	"fmt"
+	"math/big"
 
 	querymodule "github.com/Vcity-Team/vcitychain/consensus/dpos/modules/query"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
@@ -20,6 +21,10 @@ func (d *DPoS) initQueryModule() {
 
 	// 🆕 初始化奖励迁移（只执行一次）
 	d.initializeRewardMigration()
+
+	// 🆕 初始化 DelegateInfo 迁移（只执行一次）
+	// 为所有已注册但没有 DelegateInfo 的受托人创建初始 DelegateInfo
+	d.initializeDelegateInfoMigration()
 }
 
 // buildQueryDependencies prepares the dependency set for the query module.
@@ -201,4 +206,157 @@ func (d *DPoS) initializeRewardMigration() {
 	} else {
 		d.logger.Info("✅ 奖励数据迁移完成")
 	}
+}
+
+// initializeDelegateInfoMigration 初始化 DelegateInfo 迁移（只执行一次）
+// 为所有已注册但没有 DelegateInfo 的受托人创建初始 DelegateInfo
+func (d *DPoS) initializeDelegateInfoMigration() {
+	if d.state == nil || d.state.StakeStore == nil || d.state.RegistrationStore == nil {
+		return // 如果state未初始化，跳过迁移
+	}
+
+	// 检查是否已经迁移过（通过metadata bucket的标志位判断）
+	migrationFlag := []byte("delegate_info_migration_completed")
+	migrationCompleted := false
+
+	// 检查迁移标志位
+	err := d.state.db.View(func(tx *bolt.Tx) error {
+		metaBucket := tx.Bucket([]byte("metadata"))
+		if metaBucket == nil {
+			// metadata bucket不存在，说明还没有迁移过
+			return fmt.Errorf("metadata bucket not found")
+		}
+
+		flag := metaBucket.Get(migrationFlag)
+		if flag != nil && string(flag) == "true" {
+			migrationCompleted = true
+			return nil
+		}
+
+		return fmt.Errorf("migration not completed")
+	})
+
+	// 如果已经迁移过，直接返回
+	if err == nil && migrationCompleted {
+		d.logger.Info("ℹ️ DelegateInfo 迁移已完成，跳过（重启后检查）")
+		return
+	}
+
+	if err != nil {
+		d.logger.Info("ℹ️ DelegateInfo 迁移标志未找到，执行首次迁移", "reason", err.Error())
+	}
+
+	// 执行迁移
+	d.logger.Info("🔄 开始执行 DelegateInfo 迁移...")
+	migrationErr := d.migrateDelegateInfos()
+
+	// 无论迁移成功还是失败，都设置标志位
+	setFlagErr := d.state.db.Update(func(tx *bolt.Tx) error {
+		metaBucket, err := tx.CreateBucketIfNotExists([]byte("metadata"))
+		if err != nil {
+			return err
+		}
+		return metaBucket.Put(migrationFlag, []byte("true"))
+	})
+
+	if setFlagErr != nil {
+		d.logger.Warn("⚠️ 设置 DelegateInfo 迁移标志位失败", "error", setFlagErr)
+	} else {
+		d.logger.Info("ℹ️ DelegateInfo 迁移标志位已写入metadata bucket")
+	}
+
+	if migrationErr != nil {
+		d.logger.Warn("⚠️ DelegateInfo 迁移过程中出现错误（但已设置标志位）", "error", migrationErr)
+	} else {
+		d.logger.Info("✅ DelegateInfo 迁移完成")
+	}
+}
+
+// migrateDelegateInfos 为所有已注册但没有 DelegateInfo 的受托人创建初始 DelegateInfo
+func (d *DPoS) migrateDelegateInfos() error {
+	if d.state == nil || d.state.StakeStore == nil || d.state.RegistrationStore == nil {
+		return fmt.Errorf("state store not available")
+	}
+
+	// 获取所有已注册的受托人
+	allRegistrations, err := d.state.RegistrationStore.GetAllRegistrations()
+	if err != nil {
+		d.logger.Warn("⚠️ 获取注册信息失败", "error", err)
+		return nil // 不阻断，只记录警告
+	}
+
+	if len(allRegistrations) == 0 {
+		d.logger.Info("ℹ️ 没有找到已注册的受托人，跳过迁移")
+		return nil
+	}
+
+	d.logger.Info("📊 找到已注册的受托人", "count", len(allRegistrations))
+
+	// 统计信息
+	createdCount := 0
+	skippedCount := 0
+	errorCount := 0
+
+	// 为每个已注册的受托人检查并创建 DelegateInfo
+	for _, reg := range allRegistrations {
+		if reg == nil {
+			continue
+		}
+
+		// 检查是否已有 DelegateInfo
+		existingInfo, err := d.state.StakeStore.GetDelegateInfo(reg.Address)
+		if err == nil && existingInfo != nil {
+			// 已有 DelegateInfo，跳过
+			skippedCount++
+			d.logger.Debug("ℹ️ 受托人已有 DelegateInfo，跳过",
+				"address", reg.Address.String(),
+				"votingPower", func() string {
+					if existingInfo.VotingPower != nil {
+						return existingInfo.VotingPower.String()
+					}
+					return "nil"
+				}())
+			continue
+		}
+
+		// 创建初始 DelegateInfo（投票权重为0）
+		delegateInfo := &DelegateInfo{
+			Address:        reg.Address,
+			VotingPower:    big.NewInt(0), // 初始投票权重为0
+			TotalVotes:     big.NewInt(0), // 初始总投票数为0
+			ProducedBlocks: 0,
+			MissedBlocks:   0,
+			LastBlockTime:  0,
+			IsActive:       false, // 初始为非活跃，需要投票激活
+			IsRegistered:   true,  // 已注册
+			RegistrationInfo: reg, // 保存注册信息
+			BlsPublicKey:    nil,  // BLS密钥由其他逻辑处理
+		}
+
+		// 填充佣金字段
+		d.populateCommissionFields(reg.Address, delegateInfo)
+
+		// 保存到数据库
+		if err := d.state.StakeStore.setDelegateInfo(reg.Address, delegateInfo, nil); err != nil {
+			errorCount++
+			d.logger.Warn("⚠️ 创建初始 DelegateInfo 失败",
+				"address", reg.Address.String(),
+				"error", err)
+			continue
+		}
+
+		createdCount++
+		d.logger.Info("✅ 为已注册受托人创建初始 DelegateInfo",
+			"address", reg.Address.String(),
+			"name", reg.Name,
+			"votingPower", "0")
+	}
+
+	d.logger.Info("📊 DelegateInfo 迁移统计",
+		"totalRegistrations", len(allRegistrations),
+		"created", createdCount,
+		"skipped", skippedCount,
+		"errors", errorCount)
+
+	return nil
 }
