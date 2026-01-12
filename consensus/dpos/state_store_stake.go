@@ -663,6 +663,51 @@ func (s *StakeStore) GetVoterInfo(voter types.Address) (*VoterInfo, error) {
 	return voterInfo, nil
 }
 
+// GetAllVoterInfo 获取所有投票者信息（遍历 VoterInfo bucket）
+func (s *StakeStore) GetAllVoterInfo() (map[types.Address]*VoterInfo, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("stake store not initialized")
+	}
+
+	result := make(map[types.Address]*VoterInfo)
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("VoterInfo"))
+		if bucket == nil {
+			return nil // bucket不存在，返回空map
+		}
+
+		cursor := bucket.Cursor()
+		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
+			if len(key) != 20 {
+				continue // 跳过非地址key
+			}
+
+			var info VoterInfo
+			if err := json.Unmarshal(value, &info); err != nil {
+				continue // 解析失败，跳过
+			}
+
+			// 初始化 DelegateVotes 和 SlashingRecords（如果不存在）
+			if info.DelegateVotes == nil {
+				info.DelegateVotes = make(map[types.Address]*big.Int)
+			}
+			if info.SlashingRecords == nil {
+				info.SlashingRecords = make(map[types.Address][]*SlashingRecord)
+			}
+
+			result[info.Address] = &info
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get all voter info: %w", err)
+	}
+
+	return result, nil
+}
+
 // getRewardHistory 从数据库获取奖励历史
 func (s *StakeStore) getRewardHistory(staker types.Address, dbTx *bolt.Tx) ([]*RewardRecord, error) {
 	bucket := dbTx.Bucket([]byte("RewardHistory"))

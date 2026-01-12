@@ -2146,69 +2146,62 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 	// 然后对每个 staker 调用 GetVoterInfo 来查找投票记录
 	// 🆕 修复：从 VoterInfo 查找入站投票，确保找到所有投票记录
 	// 因为 StakingInfo 中的 Delegate 字段可能不正确，但 VoterInfo.DelegateVotes 是准确的
+	// 🆕 改进：直接遍历所有 VoterInfo，而不是只从 StakingInfo 中的 staker 地址查找
 	if dposState != nil && dposState.StakeStore != nil {
-		d.logger.Info("🔍 [GetValidatorVotingDetails] 从 VoterInfo 查找入站投票", "validator", validatorAddr.String())
-
-		// 收集所有唯一的 staker 地址（从 StakingInfo 中）
-		stakerSet := make(map[types.Address]bool)
-		for _, stake := range stakingInfo {
-			if stake != nil && stake.Staker != (types.Address{}) {
-				stakerSet[stake.Staker] = true
-			}
-		}
-
-		d.logger.Info("🔍 [GetValidatorVotingDetails] 收集到 staker 地址", "count", len(stakerSet))
-
-		// 遍历所有 staker，查找投票给目标验证者的记录
-		foundCount := 0
-		for stakerAddr := range stakerSet {
-			voterInfo, err := dposState.StakeStore.GetVoterInfo(stakerAddr)
-			if err != nil {
-				d.logger.Debug("🔍 [GetValidatorVotingDetails] GetVoterInfo 失败", "staker", stakerAddr.String(), "error", err)
-				continue
-			}
-			if voterInfo == nil {
-				d.logger.Debug("🔍 [GetValidatorVotingDetails] VoterInfo 为空", "staker", stakerAddr.String())
-				continue
-			}
-
-			// 检查该投票者是否投票给了目标验证者
-			if voterInfo.DelegateVotes != nil {
-				if voteAmount, exists := voterInfo.DelegateVotes[validatorAddr]; exists && voteAmount != nil && voteAmount.Sign() > 0 {
-					key := stakerAddr.String()
-
-					// 如果已经在 inboundStakesMap 中，累加金额
-					if agg, exists := inboundStakesMap[key]; exists {
-						agg.totalAmount.Add(agg.totalAmount, voteAmount)
-						d.logger.Info("✅ [GetValidatorVotingDetails] 累加入站投票",
-							"voter", stakerAddr.String(),
-							"addedAmount", voteAmount.String(),
-							"totalAmount", agg.totalAmount.String())
-					} else {
-						// 创建新的聚合记录
-						inboundStakesMap[key] = &aggregatedStake{
-							staker:      stakerAddr,
-							delegate:    validatorAddr,
-							totalAmount: new(big.Int).Set(voteAmount),
-							startTime:   voterInfo.LastVoteTime,
-							endTime:     voterInfo.LockedUntil,
-							isLocked:    voterInfo.LockedUntil > uint64(time.Now().Unix()),
-							rewards:     big.NewInt(0),
+		d.logger.Info("🔍 [GetValidatorVotingDetails] 从 VoterInfo 查找入站投票（遍历所有投票者）", "validator", validatorAddr.String())
+		
+		// 🆕 直接获取所有 VoterInfo 记录
+		allVoterInfo, err := dposState.StakeStore.GetAllVoterInfo()
+		if err != nil {
+			d.logger.Warn("⚠️ [GetValidatorVotingDetails] GetAllVoterInfo 失败", "error", err)
+		} else {
+			d.logger.Info("🔍 [GetValidatorVotingDetails] 获取到所有 VoterInfo", "count", len(allVoterInfo))
+			
+			// 遍历所有投票者，查找投票给目标验证者的记录
+			foundCount := 0
+			for voterAddr, voterInfo := range allVoterInfo {
+				if voterInfo == nil {
+					continue
+				}
+				
+				// 检查该投票者是否投票给了目标验证者
+				if voterInfo.DelegateVotes != nil {
+					if voteAmount, exists := voterInfo.DelegateVotes[validatorAddr]; exists && voteAmount != nil && voteAmount.Sign() > 0 {
+						key := voterAddr.String()
+						
+						// 如果已经在 inboundStakesMap 中，累加金额
+						if agg, exists := inboundStakesMap[key]; exists {
+							agg.totalAmount.Add(agg.totalAmount, voteAmount)
+							d.logger.Info("✅ [GetValidatorVotingDetails] 累加入站投票",
+								"voter", voterAddr.String(),
+								"addedAmount", voteAmount.String(),
+								"totalAmount", agg.totalAmount.String())
+						} else {
+							// 创建新的聚合记录
+							inboundStakesMap[key] = &aggregatedStake{
+								staker:      voterAddr,
+								delegate:    validatorAddr,
+								totalAmount: new(big.Int).Set(voteAmount),
+								startTime:   voterInfo.LastVoteTime,
+								endTime:     voterInfo.LockedUntil,
+								isLocked:    voterInfo.LockedUntil > uint64(time.Now().Unix()),
+								rewards:     big.NewInt(0),
+							}
+							foundCount++
+							d.logger.Info("✅ [GetValidatorVotingDetails] 从 VoterInfo 找到入站投票",
+								"voter", voterAddr.String(),
+								"validator", validatorAddr.String(),
+								"amount", voteAmount.String())
 						}
-						foundCount++
-						d.logger.Info("✅ [GetValidatorVotingDetails] 从 VoterInfo 找到入站投票",
-							"voter", stakerAddr.String(),
-							"validator", validatorAddr.String(),
-							"amount", voteAmount.String())
 					}
 				}
 			}
+			
+			d.logger.Info("🔍 [GetValidatorVotingDetails] VoterInfo 查找完成", 
+				"checkedVoters", len(allVoterInfo),
+				"foundVotes", foundCount,
+				"totalInboundStakes", len(inboundStakesMap))
 		}
-
-		d.logger.Info("🔍 [GetValidatorVotingDetails] VoterInfo 查找完成",
-			"checkedStakers", len(stakerSet),
-			"foundVotes", foundCount,
-			"totalInboundStakes", len(inboundStakesMap))
 	}
 
 	// 🔍 单独循环打印所有 StakingInfo 记录
