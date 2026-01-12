@@ -1262,15 +1262,10 @@ func (d *DPoS) Initialize() error {
 	d.config.Blockchain.SetExecutor(executorAdapter)
 	d.logger.Info("✅ 已将blockchain_wrapper设置为blockchain的executor，启用奖励分配功能")
 
-	// 新增：设置余额查询器（使用真实实现）
-	// 使用 runtime 的 getAccountBalance 方法实现余额查询
-	if d.runtime != nil {
-		d.balanceQuerier = &runtimeBalanceQuerier{runtime: d.runtime}
-		d.logger.Info("✅ Balance querier initialized with runtime implementation")
-	} else {
-		d.balanceQuerier = nil
-		d.logger.Warn("⚠️ Runtime not available, balance querier disabled")
-	}
+	// 注意：此时 runtime 还未创建，balanceQuerier 暂时设置为 nil
+	// 将在 runtime 创建后重新设置
+	d.balanceQuerier = nil
+	d.logger.Info("ℹ️ Balance querier 将在 runtime 创建后初始化")
 
 	// 创建DPoS runtime
 	runtimeConfig := &runtimeConfig{
@@ -1302,6 +1297,15 @@ func (d *DPoS) Initialize() error {
 	// 初始化runtime
 	if err := d.runtime.initializeRuntime(); err != nil {
 		return fmt.Errorf("failed to initialize runtime: %w", err)
+	}
+
+	// ✅ 修复：在 runtime 创建后，重新设置 balanceQuerier
+	if d.runtime != nil {
+		d.balanceQuerier = &runtimeBalanceQuerier{runtime: d.runtime}
+		d.logger.Info("✅ Balance querier initialized with runtime implementation (after runtime creation)")
+	} else {
+		d.balanceQuerier = nil
+		d.logger.Warn("⚠️ Runtime is nil after creation, balance querier disabled")
 	}
 
 	// 设置网络集成

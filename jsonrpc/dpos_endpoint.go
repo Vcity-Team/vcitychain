@@ -5943,49 +5943,65 @@ func (d *DPOS) buildFreezeInfoResponse(dposEngine interface{}, address types.Add
 
 // GetAccountBalance 查询账户余额（包含冻结）
 func (d *DPOS) GetAccountBalance(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS GetAccountBalance called", "params", params)
+	d.logger.Info("🔵 [GetAccountBalance] RPC 调用开始", "params", params)
 
 	// 解析参数
 	var addressStr string
 	if paramMap, ok := params.(map[string]interface{}); ok {
 		addressStr, _ = paramMap["address"].(string)
+		d.logger.Info("🔵 [GetAccountBalance] 参数格式: map", "address", addressStr)
 	} else if paramArray, ok := params.([]interface{}); ok && len(paramArray) >= 1 {
 		addressStr, _ = paramArray[0].(string)
+		d.logger.Info("🔵 [GetAccountBalance] 参数格式: array", "address", addressStr, "arrayLen", len(paramArray))
 	} else {
+		d.logger.Error("❌ [GetAccountBalance] 无效的参数格式", "paramsType", fmt.Sprintf("%T", params))
 		return nil, fmt.Errorf("invalid parameters format")
 	}
 
 	if addressStr == "" {
+		d.logger.Error("❌ [GetAccountBalance] 地址为空")
 		return nil, fmt.Errorf("address is required")
 	}
 
 	address := types.StringToAddress(addressStr)
+	d.logger.Info("🔵 [GetAccountBalance] 解析地址完成", "address", address.String())
+
 	dposEngine := d.getDPoSEngine()
 	if dposEngine == nil {
+		d.logger.Error("❌ [GetAccountBalance] DPoS 引擎不可用")
 		return nil, fmt.Errorf("DPoS engine not available")
 	}
+	d.logger.Info("✅ [GetAccountBalance] DPoS 引擎获取成功")
 
 	// 调用DPoS引擎的方法
 	if getBalance, ok := dposEngine.(interface {
 		GetAccountBalance(address types.Address) (map[string]interface{}, error)
 	}); ok {
+		d.logger.Info("🔵 [GetAccountBalance] 开始调用 DPoS 引擎的 GetAccountBalance", "address", address.String())
 		balanceInfo, err := getBalance.GetAccountBalance(address)
 		if err != nil {
+			d.logger.Error("❌ [GetAccountBalance] DPoS 引擎调用失败", "error", err.Error())
 			return map[string]interface{}{
 				"success": false,
 				"error":   err.Error(),
 			}, nil
 		}
+		d.logger.Info("✅ [GetAccountBalance] DPoS 引擎调用成功", "balanceInfo", balanceInfo)
+		
 		// 如果返回的数据已经有 success 字段，直接返回；否则包装
 		if _, hasSuccess := balanceInfo["success"]; hasSuccess {
+			d.logger.Info("✅ [GetAccountBalance] 返回结果（已有 success 字段）", "result", balanceInfo)
 			return balanceInfo, nil
 		}
-		return map[string]interface{}{
+		result := map[string]interface{}{
 			"success": true,
 			"data":    balanceInfo,
-		}, nil
+		}
+		d.logger.Info("✅ [GetAccountBalance] 返回结果（包装后）", "result", result)
+		return result, nil
 	}
 
+	d.logger.Error("❌ [GetAccountBalance] DPoS 引擎不支持 GetAccountBalance 方法")
 	return map[string]interface{}{
 		"success": false,
 		"error":   "DPoS engine does not support GetAccountBalance",

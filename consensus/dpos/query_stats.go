@@ -59,23 +59,54 @@ func (d *DPoS) GetAccountBalance(address types.Address) (map[string]interface{},
 	// 获取可用余额（通过余额查询器）
 	availableBalance := big.NewInt(0)
 	if d.balanceQuerier != nil {
+		d.logger.Info("✅ [GetAccountBalance] balanceQuerier 可用，开始查询余额", "address", address.String())
 		balance, err := d.balanceQuerier.GetNativeTokenBalance(address)
 		if err == nil {
 			availableBalance = balance
+			d.logger.Info("✅ [GetAccountBalance] 余额查询成功", 
+				"address", address.String(),
+				"availableBalance", availableBalance.String())
+		} else {
+			d.logger.Warn("⚠️ [GetAccountBalance] 余额查询失败", 
+				"address", address.String(),
+				"error", err.Error())
 		}
+	} else {
+		d.logger.Warn("⚠️ [GetAccountBalance] balanceQuerier 为 nil，无法查询余额", 
+			"address", address.String(),
+			"note", "availableBalance 将返回 0")
 	}
 
 	// 获取冻结余额
 	frozenBalance := big.NewInt(0)
 	if d.state != nil && d.state.FreezeStore != nil {
+		d.logger.Info("🔍 [GetAccountBalance] 开始查询冻结余额", "address", address.String())
 		freezeInfo, err := d.state.FreezeStore.GetFreezeInfo(address)
 		if err == nil && freezeInfo != nil {
 			frozenBalance = freezeInfo.FrozenAmount
+			d.logger.Info("✅ [GetAccountBalance] 冻结余额查询成功", 
+				"address", address.String(),
+				"frozenBalance", frozenBalance.String())
+		} else {
+			d.logger.Debug("ℹ️ [GetAccountBalance] 冻结余额查询失败或为空", 
+				"address", address.String(),
+				"error", err)
 		}
+	} else {
+		d.logger.Debug("ℹ️ [GetAccountBalance] FreezeStore 不可用", 
+			"address", address.String(),
+			"stateIsNil", d.state == nil,
+			"freezeStoreIsNil", d.state != nil && d.state.FreezeStore == nil)
 	}
 
 	// 计算总余额
 	totalBalance := new(big.Int).Add(availableBalance, frozenBalance)
+
+	d.logger.Info("✅ [GetAccountBalance] 查询完成", 
+		"address", address.String(),
+		"availableBalance", availableBalance.String(),
+		"frozenBalance", frozenBalance.String(),
+		"totalBalance", totalBalance.String())
 
 	return map[string]interface{}{
 		"address":          address.String(),
