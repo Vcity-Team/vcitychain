@@ -1507,9 +1507,32 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interfa
 	}, nil
 }
 
+// VoterInfo 投票者信息（用于 GetAllDelegates 返回结果）
+type VoterInfo struct {
+	Staker    types.Address `json:"staker"`    // 投票者地址
+	Amount    *big.Int      `json:"amount"`   // 投票金额
+	StartTime uint64        `json:"startTime"` // 投票开始时间
+	EndTime   uint64        `json:"endTime"`   // 投票结束时间
+	IsLocked  bool          `json:"isLocked"`  // 是否锁定
+}
+
+// DelegateWithVoters 受托人信息（包含投票者列表）
+type DelegateWithVoters struct {
+	Delegate  types.Address          `json:"delegate"`  // 受托人地址
+	Amount    *big.Int              `json:"amount"`    // 总投票金额（聚合所有投票者）
+	Rewards   *big.Int              `json:"rewards"`   // 总奖励
+	IsActive  bool                  `json:"isActive"`  // 是否活跃
+	IsLocked  bool                  `json:"isLocked"` // 是否锁定
+	StartTime uint64                `json:"startTime"` // 最早投票时间
+	EndTime   uint64                `json:"endTime"`   // 最晚投票时间
+	FaultFlag map[string]interface{} `json:"faultFlag,omitempty"` // 故障标志
+	Voters    []*VoterInfo          `json:"voters"`   // 投票者列表
+}
+
 // GetAllDelegates handles dpos_getAllDelegates RPC method
 // 返回所有受托人（delegates，接收投票的验证者）的聚合信息
 // 包括刚注册但未收到投票的受托人
+// 每个受托人包含投票者列表，明确区分投票者（staker）和受托人（delegate）
 func (d *DPOS) GetAllDelegates(ctx context.Context, blockNumber *uint64) (interface{}, error) {
 	d.logger.Info("DPoS GetAllDelegates called", "blockNumber", blockNumber)
 
@@ -1519,7 +1542,7 @@ func (d *DPOS) GetAllDelegates(ctx context.Context, blockNumber *uint64) (interf
 		d.logger.Warn("Failed to get DPoS state", "error", err)
 		return map[string]interface{}{
 			"success": true,
-			"data":    []*dpos.StakeInfo{},
+			"data":    []*DelegateWithVoters{},
 		}, nil
 	}
 
@@ -1537,7 +1560,7 @@ func (d *DPOS) GetAllDelegates(ctx context.Context, blockNumber *uint64) (interf
 		}
 	}
 
-	// 第二步：从 StakeStore 获取所有投票记录（用于聚合投票金额）
+	// 第二步：从 StakeStore 获取所有投票记录（用于聚合投票金额和收集投票者信息）
 	allStakingInfos, err := dposState.StakeStore.GetStakingInfo()
 	if err != nil {
 		d.logger.Warn("Failed to get staking info", "error", err)
@@ -1545,8 +1568,9 @@ func (d *DPOS) GetAllDelegates(ctx context.Context, blockNumber *uint64) (interf
 	}
 
 	// 第三步：初始化 delegateMap，包含所有注册的受托人
-	// key: delegate address, value: 聚合后的 StakeInfo
-	delegateMap := make(map[types.Address]*dpos.StakeInfo)
+	// key: delegate address, value: 受托人信息和投票者列表
+	delegateMap := make(map[types.Address]*DelegateWithVoters)
+	votersMap := make(map[types.Address]map[types.Address]*VoterInfo) // delegate -> staker -> VoterInfo
 
 	// 3.1 从 DelegateInfo 初始化所有注册的受托人（包括未收到投票的）
 	d.logger.Info("GetAllDelegates: 开始从 DelegateInfo 初始化受托人", "delegateInfoCount", len(allDelegateInfos))
@@ -1567,40 +1591,45 @@ func (d *DPOS) GetAllDelegates(ctx context.Context, blockNumber *uint64) (interf
 			"isRegistered", delegateInfo.IsRegistered,
 			"isActive", delegateInfo.IsActive)
 
-		delegateMap[delegateAddr] = &dpos.StakeInfo{
-			Staker:    delegateAddr,
+		delegateMap[delegateAddr] = &DelegateWithVoters{
+			Delegate:  delegateAddr,
 			Amount:    big.NewInt(0),
 			Rewards:   big.NewInt(0),
 			IsActive:  delegateInfo.IsActive,
-			IsLocked:  false, // 从投票记录中更新
-			StartTime: 0,     // 从投票记录中更新
-			EndTime:   0,     // 从投票记录中更新
-			Delegate:  delegateAddr,
+			IsLocked:  false,
+			StartTime: 0,
+			EndTime:   0,
+			FaultFlag: map[string]interface{}{},
+			Voters:    []*VoterInfo{},
 		}
+		votersMap[delegateAddr] = make(map[types.Address]*VoterInfo)
 	}
 	d.logger.Info("GetAllDelegates: 从 DelegateInfo 初始化完成", "delegateMapCount", len(delegateMap))
 
-	// 3.2 从投票记录中聚合投票金额和其他信息
+	// 3.2 从投票记录中聚合投票金额和收集投票者信息
 	for _, stakeInfo := range allStakingInfos {
 		if stakeInfo == nil || stakeInfo.Delegate == (types.Address{}) {
 			continue
 		}
 
 		delegateAddr := stakeInfo.Delegate
+		stakerAddr := stakeInfo.Staker
 
 		// 如果该受托人不存在（理论上不应该发生，因为我们已经从 DelegateInfo 初始化了）
 		// 但为了健壮性，还是创建新记录
 		if _, exists := delegateMap[delegateAddr]; !exists {
-			delegateMap[delegateAddr] = &dpos.StakeInfo{
-				Staker:    delegateAddr,
+			delegateMap[delegateAddr] = &DelegateWithVoters{
+				Delegate:  delegateAddr,
 				Amount:    big.NewInt(0),
 				Rewards:   big.NewInt(0),
 				IsActive:  false,
 				IsLocked:  false,
 				StartTime: 0,
 				EndTime:   0,
-				Delegate:  delegateAddr,
+				FaultFlag: map[string]interface{}{},
+				Voters:    []*VoterInfo{},
 			}
+			votersMap[delegateAddr] = make(map[types.Address]*VoterInfo)
 		}
 
 		delegate := delegateMap[delegateAddr]
@@ -1614,10 +1643,39 @@ func (d *DPOS) GetAllDelegates(ctx context.Context, blockNumber *uint64) (interf
 			delegate.Amount.Add(delegate.Amount, stakeInfo.Amount)
 		}
 
-		// ⚠️ 不再从投票记录中累加奖励，改为直接从 RewardStore 获取（见步骤4）
+		// 收集投票者信息（只统计已应用的投票）
+		if stakeInfo.Applied && stakeInfo.Amount != nil && stakeInfo.Amount.Sign() > 0 {
+			if _, exists := votersMap[delegateAddr][stakerAddr]; !exists {
+				// 创建新的投票者记录
+				votersMap[delegateAddr][stakerAddr] = &VoterInfo{
+					Staker:    stakerAddr,
+					Amount:    big.NewInt(0),
+					StartTime: stakeInfo.StartTime,
+					EndTime:   stakeInfo.EndTime,
+					IsLocked:  stakeInfo.IsLocked,
+				}
+			}
+			// 累加该投票者的投票金额（同一投票者可能有多条记录）
+			voter := votersMap[delegateAddr][stakerAddr]
+			if voter.Amount == nil {
+				voter.Amount = big.NewInt(0)
+			}
+			voter.Amount.Add(voter.Amount, stakeInfo.Amount)
+			// 更新时间信息（取最新的）
+			if stakeInfo.StartTime > voter.StartTime {
+				voter.StartTime = stakeInfo.StartTime
+			}
+			if stakeInfo.EndTime > voter.EndTime {
+				voter.EndTime = stakeInfo.EndTime
+			}
+			// 更新锁定状态
+			if stakeInfo.IsLocked {
+				voter.IsLocked = true
+			}
+		}
 
 		// 更新时间信息（取最新的）
-		if stakeInfo.StartTime > delegate.StartTime {
+		if stakeInfo.StartTime > 0 && (delegate.StartTime == 0 || stakeInfo.StartTime < delegate.StartTime) {
 			delegate.StartTime = stakeInfo.StartTime
 		}
 		if stakeInfo.EndTime > delegate.EndTime {
@@ -1636,7 +1694,7 @@ func (d *DPOS) GetAllDelegates(ctx context.Context, blockNumber *uint64) (interf
 	}
 
 	// 第四步：转换为数组，并补充奖励信息和故障标志
-	result := make([]*dpos.StakeInfo, 0, len(delegateMap))
+	result := make([]*DelegateWithVoters, 0, len(delegateMap))
 	for delegateAddr, delegateInfo := range delegateMap {
 		// 如果没有投票金额，设置为 0（而不是 nil）
 		if delegateInfo.Amount == nil {
@@ -1672,6 +1730,17 @@ func (d *DPOS) GetAllDelegates(ctx context.Context, blockNumber *uint64) (interf
 			}
 		}
 		delegateInfo.FaultFlag = faultInfo
+
+		// 将投票者信息转换为列表
+		if voters, exists := votersMap[delegateAddr]; exists {
+			voterList := make([]*VoterInfo, 0, len(voters))
+			for _, voter := range voters {
+				voterList = append(voterList, voter)
+			}
+			delegateInfo.Voters = voterList
+		} else {
+			delegateInfo.Voters = []*VoterInfo{}
+		}
 
 		result = append(result, delegateInfo)
 	}
