@@ -21,7 +21,6 @@ import (
 	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
-	bolt "go.etcd.io/bbolt"
 )
 
 // toUint64Safe 尝试将接口值转为 uint64
@@ -2143,64 +2142,64 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 	
 	// 🆕 备用方案：如果 StakingInfo 中找不到入站投票，尝试从 VoterInfo 中查找
 	// 遍历所有 VoterInfo，查找所有投票给该验证者的记录
+	// 注意：由于无法直接访问私有 db 字段，我们通过遍历 StakingInfo 中的所有 staker 地址，
+	// 然后对每个 staker 调用 GetVoterInfo 来查找投票记录
+	// 修复：只有在 StakingInfo 中找不到入站投票时才从 VoterInfo 查找，避免重复查找
 	if dposState != nil && dposState.StakeStore != nil {
-		d.logger.Info("🔍 [GetValidatorVotingDetails] 尝试从 VoterInfo 查找入站投票", "validator", validatorAddr.String())
-		// 使用反射访问私有 db 字段
-		stakeStoreValue := reflect.ValueOf(dposState.StakeStore).Elem()
-		dbField := stakeStoreValue.FieldByName("db")
-		if dbField.IsValid() && !dbField.IsNil() {
-			db := dbField.Interface().(*bolt.DB)
-			if db != nil {
-				err := db.View(func(tx *bolt.Tx) error {
-					bucket := tx.Bucket([]byte("VoterInfo"))
-					if bucket == nil {
-						return nil // bucket不存在，跳过
-					}
-					
-					cursor := bucket.Cursor()
-					for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
-						if len(key) != 20 {
-							continue // 跳过非地址key
-						}
+		// 先检查 StakingInfo 中是否有入站投票
+		hasInboundInStakingInfo := false
+		for _, stake := range stakingInfo {
+			if stake != nil && stake.Delegate == validatorAddr {
+				hasInboundInStakingInfo = true
+				break
+			}
+		}
+		
+		// 如果 StakingInfo 中没有入站投票，才从 VoterInfo 查找
+		if !hasInboundInStakingInfo {
+			d.logger.Info("🔍 [GetValidatorVotingDetails] StakingInfo 中未找到入站投票，尝试从 VoterInfo 查找", "validator", validatorAddr.String())
+			
+			// 收集所有唯一的 staker 地址
+			stakerSet := make(map[types.Address]bool)
+			for _, stake := range stakingInfo {
+				if stake != nil && stake.Staker != (types.Address{}) {
+					stakerSet[stake.Staker] = true
+				}
+			}
+			
+			// 遍历所有 staker，查找投票给目标验证者的记录
+			for stakerAddr := range stakerSet {
+				voterInfo, err := dposState.StakeStore.GetVoterInfo(stakerAddr)
+				if err != nil || voterInfo == nil {
+					continue
+				}
+				
+				// 检查该投票者是否投票给了目标验证者
+				if voterInfo.DelegateVotes != nil {
+					if voteAmount, exists := voterInfo.DelegateVotes[validatorAddr]; exists && voteAmount != nil && voteAmount.Sign() > 0 {
+						key := stakerAddr.String()
 						
-						var voterInfo dpos.VoterInfo
-						if err := json.Unmarshal(value, &voterInfo); err != nil {
-							continue // 解析失败，跳过
-						}
-						
-						// 检查该投票者是否投票给了目标验证者
-						if voterInfo.DelegateVotes != nil {
-							if voteAmount, exists := voterInfo.DelegateVotes[validatorAddr]; exists && voteAmount != nil && voteAmount.Sign() > 0 {
-								voterAddr := types.BytesToAddress(key)
-								key := voterAddr.String()
-								
-								// 如果已经在 inboundStakesMap 中，累加金额
-								if agg, exists := inboundStakesMap[key]; exists {
-									agg.totalAmount.Add(agg.totalAmount, voteAmount)
-								} else {
-									// 创建新的聚合记录
-									inboundStakesMap[key] = &aggregatedStake{
-										staker:      voterAddr,
-										delegate:    validatorAddr,
-										totalAmount: new(big.Int).Set(voteAmount),
-										startTime:   voterInfo.LastVoteTime,
-										endTime:     voterInfo.LockedUntil,
-										isLocked:    voterInfo.LockedUntil > uint64(time.Now().Unix()),
-										rewards:     big.NewInt(0),
-									}
-								}
-								
-								d.logger.Info("✅ [GetValidatorVotingDetails] 从 VoterInfo 找到入站投票",
-									"voter", voterAddr.String(),
-									"validator", validatorAddr.String(),
-									"amount", voteAmount.String())
+						// 如果已经在 inboundStakesMap 中，累加金额
+						if agg, exists := inboundStakesMap[key]; exists {
+							agg.totalAmount.Add(agg.totalAmount, voteAmount)
+						} else {
+							// 创建新的聚合记录
+							inboundStakesMap[key] = &aggregatedStake{
+								staker:      stakerAddr,
+								delegate:    validatorAddr,
+								totalAmount: new(big.Int).Set(voteAmount),
+								startTime:   voterInfo.LastVoteTime,
+								endTime:     voterInfo.LockedUntil,
+								isLocked:    voterInfo.LockedUntil > uint64(time.Now().Unix()),
+								rewards:     big.NewInt(0),
 							}
 						}
+						
+						d.logger.Info("✅ [GetValidatorVotingDetails] 从 VoterInfo 找到入站投票",
+							"voter", stakerAddr.String(),
+							"validator", validatorAddr.String(),
+							"amount", voteAmount.String())
 					}
-					return nil
-				})
-				if err != nil {
-					d.logger.Warn("⚠️ [GetValidatorVotingDetails] 从 VoterInfo 查找失败", "error", err)
 				}
 			}
 		}
