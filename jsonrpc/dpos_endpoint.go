@@ -21,6 +21,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
+	bolt "go.etcd.io/bbolt"
 )
 
 // toUint64Safe 尝试将接口值转为 uint64
@@ -1986,9 +1987,10 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 	// 🆕 修复：直接从 DPoS State.StakeStore 获取，确保数据完整
 	d.logger.Info("🔵 [GetValidatorVotingDetails] 步骤2: 从 StakeStore.GetStakingInfo 获取投票记录", "validator", validatorAddr.String())
 	var stakingInfo []*dpos.StakeInfo
+	var dposState *dpos.State
 	
 	// 优先从 DPoS State.StakeStore 直接获取
-	if dposState, err2 := d.store.GetDPoSState(); err2 == nil && dposState != nil && dposState.StakeStore != nil {
+	if dposState, err = d.store.GetDPoSState(); err == nil && dposState != nil && dposState.StakeStore != nil {
 		stakingInfo, err = dposState.StakeStore.GetStakingInfo()
 		if err != nil {
 			d.logger.Error("❌ [GetValidatorVotingDetails] StakeStore.GetStakingInfo 失败", "error", err)
@@ -2001,6 +2003,10 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		if err != nil {
 			d.logger.Error("❌ [GetValidatorVotingDetails] store.GetStakingInfo 失败", "error", err)
 		}
+		// 如果从 store 获取失败，尝试再次获取 dposState
+		if dposState == nil {
+			dposState, _ = d.store.GetDPoSState()
+		}
 	}
 	
 	if err != nil {
@@ -2010,6 +2016,15 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		}, nil
 	}
 	d.logger.Info("🔵 [GetValidatorVotingDetails] GetStakingInfo 返回", "count", len(stakingInfo))
+	
+	// 🆕 备用方案：如果 StakingInfo 中找不到入站投票，尝试从 VoterInfo 中查找
+	// 遍历所有 VoterInfo，查找所有投票给该验证者的记录
+	if dposState != nil && dposState.StakeStore != nil {
+		d.logger.Info("🔍 [GetValidatorVotingDetails] 尝试从 VoterInfo 查找入站投票", "validator", validatorAddr.String())
+		// 注意：这里需要遍历所有 VoterInfo，可能会比较慢，但可以找到所有投票记录
+		// 由于没有直接的方法获取所有 VoterInfo，我们暂时跳过这个方案
+		// 如果 StakingInfo 中确实没有记录，说明数据可能不一致，但 VotingPower 是正确的
+	}
 	
 	// 调试：记录所有 delegate 地址，帮助排查匹配问题
 	delegateSet := make(map[string]int) // 记录每个 delegate 的投票记录数
@@ -2125,6 +2140,71 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 	inboundStakesMap := make(map[string]*aggregatedStake)
 	// 聚合 validator 自己的投票（按 delegate 聚合）
 	outboundVotesMap := make(map[string]*aggregatedStake)
+	
+	// 🆕 备用方案：如果 StakingInfo 中找不到入站投票，尝试从 VoterInfo 中查找
+	// 遍历所有 VoterInfo，查找所有投票给该验证者的记录
+	if dposState != nil && dposState.StakeStore != nil {
+		d.logger.Info("🔍 [GetValidatorVotingDetails] 尝试从 VoterInfo 查找入站投票", "validator", validatorAddr.String())
+		// 使用反射访问私有 db 字段
+		stakeStoreValue := reflect.ValueOf(dposState.StakeStore).Elem()
+		dbField := stakeStoreValue.FieldByName("db")
+		if dbField.IsValid() && !dbField.IsNil() {
+			db := dbField.Interface().(*bolt.DB)
+			if db != nil {
+				err := db.View(func(tx *bolt.Tx) error {
+					bucket := tx.Bucket([]byte("VoterInfo"))
+					if bucket == nil {
+						return nil // bucket不存在，跳过
+					}
+					
+					cursor := bucket.Cursor()
+					for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
+						if len(key) != 20 {
+							continue // 跳过非地址key
+						}
+						
+						var voterInfo dpos.VoterInfo
+						if err := json.Unmarshal(value, &voterInfo); err != nil {
+							continue // 解析失败，跳过
+						}
+						
+						// 检查该投票者是否投票给了目标验证者
+						if voterInfo.DelegateVotes != nil {
+							if voteAmount, exists := voterInfo.DelegateVotes[validatorAddr]; exists && voteAmount != nil && voteAmount.Sign() > 0 {
+								voterAddr := types.BytesToAddress(key)
+								key := voterAddr.String()
+								
+								// 如果已经在 inboundStakesMap 中，累加金额
+								if agg, exists := inboundStakesMap[key]; exists {
+									agg.totalAmount.Add(agg.totalAmount, voteAmount)
+								} else {
+									// 创建新的聚合记录
+									inboundStakesMap[key] = &aggregatedStake{
+										staker:      voterAddr,
+										delegate:    validatorAddr,
+										totalAmount: new(big.Int).Set(voteAmount),
+										startTime:   voterInfo.LastVoteTime,
+										endTime:     voterInfo.LockedUntil,
+										isLocked:    voterInfo.LockedUntil > uint64(time.Now().Unix()),
+										rewards:     big.NewInt(0),
+									}
+								}
+								
+								d.logger.Info("✅ [GetValidatorVotingDetails] 从 VoterInfo 找到入站投票",
+									"voter", voterAddr.String(),
+									"validator", validatorAddr.String(),
+									"amount", voteAmount.String())
+							}
+						}
+					}
+					return nil
+				})
+				if err != nil {
+					d.logger.Warn("⚠️ [GetValidatorVotingDetails] 从 VoterInfo 查找失败", "error", err)
+				}
+			}
+		}
+	}
 
 	for i, stake := range stakingInfo {
 		if stake == nil {
