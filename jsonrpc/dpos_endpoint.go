@@ -2014,15 +2014,51 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 	// 调试：记录所有 delegate 地址，帮助排查匹配问题
 	delegateSet := make(map[string]int) // 记录每个 delegate 的投票记录数
 	validatorAddrStr := validatorAddr.String()
-	for _, stake := range stakingInfo {
-		if stake != nil && stake.Delegate != (types.Address{}) {
-			delegateStr := stake.Delegate.String()
+	validatorAddrLower := strings.ToLower(validatorAddrStr)
+	
+	// 🆕 详细调试：打印所有 StakingInfo 记录的 Delegate 字段
+	d.logger.Info("🔍 [GetValidatorVotingDetails] 开始详细调试：打印所有 StakingInfo 记录")
+	for i, stake := range stakingInfo {
+		if stake == nil {
+			d.logger.Warn("🔍 [GetValidatorVotingDetails] 记录为空", "index", i)
+			continue
+		}
+		
+		delegateStr := stake.Delegate.String()
+		delegateStrLower := strings.ToLower(delegateStr)
+		stakerStr := stake.Staker.String()
+		
+		// 检查地址是否匹配（大小写不敏感）
+		addressMatch := delegateStrLower == validatorAddrLower
+		addressMatchExact := delegateStr == validatorAddrStr
+		
+		d.logger.Info("🔍 [GetValidatorVotingDetails] StakingInfo 记录详情",
+			"index", i,
+			"staker", stakerStr,
+			"delegate", delegateStr,
+			"delegateLower", delegateStrLower,
+			"validatorAddr", validatorAddrStr,
+			"validatorAddrLower", validatorAddrLower,
+			"addressMatchExact", addressMatchExact,
+			"addressMatchCaseInsensitive", addressMatch,
+			"amount", func() string {
+				if stake.Amount != nil {
+					return stake.Amount.String()
+				}
+				return "nil"
+			}(),
+			"applied", stake.Applied,
+			"effectiveEpoch", stake.EffectiveEpoch,
+			"isZeroAddress", stake.Delegate == (types.Address{}))
+		
+		if stake.Delegate != (types.Address{}) {
 			delegateSet[delegateStr]++
-			// 如果匹配，记录详细信息
-			if delegateStr == validatorAddrStr {
-				d.logger.Info("🔵 [GetValidatorVotingDetails] 找到匹配的 delegate",
-					"staker", stake.Staker.String(),
+			// 如果匹配（大小写不敏感），记录详细信息
+			if addressMatch {
+				d.logger.Info("✅ [GetValidatorVotingDetails] 找到匹配的 delegate（大小写不敏感）",
+					"staker", stakerStr,
 					"delegate", delegateStr,
+					"validatorAddr", validatorAddrStr,
 					"amount", func() string {
 						if stake.Amount != nil {
 							return stake.Amount.String()
@@ -2032,10 +2068,11 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 					"applied", stake.Applied,
 					"effectiveEpoch", stake.EffectiveEpoch)
 			}
-		} else if stake != nil {
+		} else {
 			// 记录 Delegate 为空的情况
-			d.logger.Warn("🔵 [GetValidatorVotingDetails] 发现 Delegate 为空的记录",
-				"staker", stake.Staker.String(),
+			d.logger.Warn("⚠️ [GetValidatorVotingDetails] 发现 Delegate 为空的记录",
+				"index", i,
+				"staker", stakerStr,
 				"amount", func() string {
 					if stake.Amount != nil {
 						return stake.Amount.String()
@@ -2099,8 +2136,33 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 			amount = new(big.Int).Set(stake.Amount)
 		}
 
-		// 处理投票给 validator 的记录
-		if stake.Delegate == validatorAddr {
+		// 🆕 详细调试：检查地址比较
+		delegateAddr := stake.Delegate
+		isInboundMatch := delegateAddr == validatorAddr
+		isOutboundMatch := stake.Staker == validatorAddr
+		
+		// 如果接近匹配（用于调试），记录详细信息
+		if !isInboundMatch && !isOutboundMatch {
+			// 检查大小写不敏感的匹配
+			delegateStr := delegateAddr.String()
+			validatorStr := validatorAddr.String()
+			if strings.EqualFold(delegateStr, validatorStr) {
+				d.logger.Warn("⚠️ [GetValidatorVotingDetails] 发现大小写不匹配的地址",
+					"index", i,
+					"stake.Delegate", delegateStr,
+					"validatorAddr", validatorStr,
+					"staker", stake.Staker.String(),
+					"amount", amount.String())
+			}
+		}
+
+		// 处理投票给 validator 的记录（入站投票）
+		if isInboundMatch {
+			d.logger.Info("✅ [GetValidatorVotingDetails] 找到入站投票记录",
+				"index", i,
+				"staker", stake.Staker.String(),
+				"delegate", delegateAddr.String(),
+				"amount", amount.String())
 			key := stake.Staker.String()
 			if agg, exists := inboundStakesMap[key]; exists {
 				// 累加金额
