@@ -491,12 +491,40 @@ func parseVotingStakingInfoResult(result interface{}) (*VotingStakingInfoResult,
 
 	// Try to parse as map first
 	if resultMap, ok := result.(map[string]interface{}); ok {
-		// fmt.Printf("DEBUG: Result is a map with keys: %v\n", getMapKeys(resultMap))
-
-		// Check if it's already in the right format
+		// 检查是否是 dpos_getStakingInfo 返回的格式：{"success": true, "data": [...]}
 		if success, exists := resultMap["success"]; exists {
-			// It's already in the right format, convert it
 			successBool, _ := success.(bool)
+			
+			// 检查是否有 "data" 字段（dpos_getStakingInfo 的返回格式）
+			if dataField, dataExists := resultMap["data"]; dataExists {
+				// 这是 dpos_getStakingInfo 的返回格式：{"success": true, "data": [...]}
+				var stakingInfo []map[string]interface{}
+				
+				if dataList, ok := dataField.([]interface{}); ok {
+					// 转换为 []map[string]interface{}
+					stakingInfo = make([]map[string]interface{}, 0)
+					for _, item := range dataList {
+						if itemMap, ok := item.(map[string]interface{}); ok {
+							stakingInfo = append(stakingInfo, itemMap)
+						}
+					}
+				}
+				
+				return &VotingStakingInfoResult{
+					Success: successBool,
+					NetworkStats: map[string]interface{}{
+						"totalValidators": len(stakingInfo),
+					},
+					Validators:  []map[string]interface{}{},
+					StakingInfo: stakingInfo,
+					DPoSState:   nil,
+					LastUpdated: "now",
+					BlockHeight: 0, // 会在 runCommand 中更新
+				}, nil
+			}
+			
+			// 检查是否是完整的 VotingStakingInfoResult 格式
+			// It's already in the right format, convert it
 			networkStats, _ := resultMap["networkStats"].(map[string]interface{})
 			validators, _ := resultMap["validators"].([]interface{})
 			stakingInfo := resultMap["stakingInfo"]
@@ -504,17 +532,6 @@ func parseVotingStakingInfoResult(result interface{}) (*VotingStakingInfoResult,
 			dposState := resultMap["dposState"]
 			lastUpdated, _ := resultMap["lastUpdated"].(string)
 			blockHeight, _ := resultMap["blockHeight"].(float64)
-
-			// Debug: log stakingInfo details
-			// fmt.Printf("DEBUG: stakingInfo type: %T, value: %+v\n", stakingInfo, stakingInfo)
-			// if stakingInfo != nil {
-			// 	if stakingSlice, ok := stakingInfo.([]interface{}); ok {
-			// 		fmt.Printf("DEBUG: stakingInfo is slice with %d elements\n", len(stakingSlice))
-			// 		for i, item := range stakingSlice {
-			// 			fmt.Printf("DEBUG: stakingInfo[%d] type: %T, value: %+v\n", i, item, item)
-			// 		}
-			// 	}
-			// }
 
 			// Convert validators to the right format
 			validatorsList := make([]map[string]interface{}, 0)
