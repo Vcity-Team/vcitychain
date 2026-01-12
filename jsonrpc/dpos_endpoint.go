@@ -2189,8 +2189,12 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 
 	// Build validator details
 
-	// votingPower 应该等于 totalStakedToMe（totalStakedToMe 已经包含了所有投票，包括自己投给自己的）
-	votingPower := totalStakedToValidator
+	// 🆕 修复：votingPower 应该使用 targetValidator.VotingPower（来自 DelegateInfo，只包含已应用的投票）
+	// 而不是从 StakingInfo 计算的 totalStakedToValidator（因为可能所有投票都是 Applied=false）
+	votingPower := big.NewInt(0)
+	if targetValidator.VotingPower != nil {
+		votingPower = new(big.Int).Set(targetValidator.VotingPower)
+	}
 
 	d.logger.Info("🔵 [GetValidatorVotingDetails] 构建返回结果",
 		"validator", validatorAddr.String(),
