@@ -1986,7 +1986,6 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 	// 🆕 修复：直接从 DPoS State.StakeStore 获取，确保数据完整
 	d.logger.Info("🔵 [GetValidatorVotingDetails] 步骤2: 从 StakeStore.GetStakingInfo 获取投票记录", "validator", validatorAddr.String())
 	var stakingInfo []*dpos.StakeInfo
-	var err error
 	
 	// 优先从 DPoS State.StakeStore 直接获取
 	if dposState, err2 := d.store.GetDPoSState(); err2 == nil && dposState != nil && dposState.StakeStore != nil {
