@@ -249,17 +249,101 @@ func (r *ValidatorVotingDetailsResult) GetOutput() string {
 		if votingPower, exists := r.Validator["votingPower"]; exists {
 			output += fmt.Sprintf("Voting Power: %v\n", votingPower)
 		}
+		if totalStakedToMe, exists := r.Validator["totalStakedToMe"]; exists {
+			output += fmt.Sprintf("Total Staked to Me: %v", totalStakedToMe)
+			if totalStakedToMeEther, exists := r.Validator["totalStakedToMeEther"]; exists {
+				output += fmt.Sprintf(" (%v VCITY)", totalStakedToMeEther)
+			}
+			output += fmt.Sprintf("\n")
+		}
 		if isActive, exists := r.Validator["isActive"]; exists {
 			output += fmt.Sprintf("Active: %v\n", isActive)
-		}
-		if totalStakedToMe, exists := r.Validator["totalStakedToMe"]; exists {
-			output += fmt.Sprintf("Total Staked to Me: %v\n", totalStakedToMe)
 		}
 		if stakeCount, exists := r.Validator["stakeCount"]; exists {
 			output += fmt.Sprintf("Stake Count: %v\n", stakeCount)
 		}
+
+		// 显示入站投票明细（stakes）
+		if stakes, exists := r.Validator["stakes"]; exists {
+			if stakesList, ok := stakes.([]interface{}); ok && len(stakesList) > 0 {
+				output += fmt.Sprintf("\n📥 Inbound Votes (别人投给我的):\n")
+				output += fmt.Sprintf("----------------------------------------\n")
+				for i, stake := range stakesList {
+					if stakeMap, ok := stake.(map[string]interface{}); ok {
+						output += fmt.Sprintf("\n%d. Staker: %v\n", i+1, stakeMap["staker"])
+						if amountEther, exists := stakeMap["amountEther"]; exists {
+							output += fmt.Sprintf("   Amount: %v VCITY", amountEther)
+							if amountWei, exists := stakeMap["amountWei"]; exists {
+								output += fmt.Sprintf(" (%v Wei)", amountWei)
+							}
+							output += fmt.Sprintf("\n")
+						}
+						if startTime, exists := stakeMap["startTime"]; exists {
+							output += fmt.Sprintf("   Start Time: %v\n", startTime)
+						}
+						if endTime, exists := stakeMap["endTime"]; exists {
+							output += fmt.Sprintf("   End Time: %v\n", endTime)
+						}
+						if isLocked, exists := stakeMap["isLocked"]; exists {
+							output += fmt.Sprintf("   Is Locked: %v\n", isLocked)
+						}
+						if rewardsEther, exists := stakeMap["rewardsEther"]; exists {
+							output += fmt.Sprintf("   Rewards: %v VCITY\n", rewardsEther)
+						}
+					}
+				}
+			} else {
+				output += fmt.Sprintf("\n📥 Inbound Votes: None\n")
+			}
+		}
+
+		// 显示出站投票明细（myVotes）
+		if myVotes, exists := r.Validator["myVotes"]; exists {
+			if votesList, ok := myVotes.([]interface{}); ok && len(votesList) > 0 {
+				output += fmt.Sprintf("\n📤 Outbound Votes (我投给别人的):\n")
+				output += fmt.Sprintf("----------------------------------------\n")
+				for i, vote := range votesList {
+					if voteMap, ok := vote.(map[string]interface{}); ok {
+						output += fmt.Sprintf("\n%d. Delegate: %v\n", i+1, voteMap["delegate"])
+						if amountEther, exists := voteMap["amountEther"]; exists {
+							output += fmt.Sprintf("   Amount: %v VCITY", amountEther)
+							if amountWei, exists := voteMap["amountWei"]; exists {
+								output += fmt.Sprintf(" (%v Wei)", amountWei)
+							}
+							output += fmt.Sprintf("\n")
+						}
+						if startTime, exists := voteMap["startTime"]; exists {
+							output += fmt.Sprintf("   Start Time: %v\n", startTime)
+						}
+						if endTime, exists := voteMap["endTime"]; exists {
+							output += fmt.Sprintf("   End Time: %v\n", endTime)
+						}
+						if isLocked, exists := voteMap["isLocked"]; exists {
+							output += fmt.Sprintf("   Is Locked: %v\n", isLocked)
+						}
+						if rewardsEther, exists := voteMap["rewardsEther"]; exists {
+							output += fmt.Sprintf("   Rewards: %v VCITY\n", rewardsEther)
+						}
+					}
+				}
+			} else {
+				output += fmt.Sprintf("\n📤 Outbound Votes: None\n")
+			}
+		}
+
+		if totalVotedByMe, exists := r.Validator["totalVotedByMe"]; exists {
+			output += fmt.Sprintf("\nTotal Voted by Me: %v", totalVotedByMe)
+			if totalVotedByMeEther, exists := r.Validator["totalVotedByMeEther"]; exists {
+				output += fmt.Sprintf(" (%v VCITY)", totalVotedByMeEther)
+			}
+			output += fmt.Sprintf("\n")
+		}
+		if myVoteCount, exists := r.Validator["myVoteCount"]; exists {
+			output += fmt.Sprintf("My Vote Count: %v\n", myVoteCount)
+		}
+
 		if consensusRound, exists := r.Validator["consensusRound"]; exists {
-			output += fmt.Sprintf("Consensus Round: %v\n", consensusRound)
+			output += fmt.Sprintf("\nConsensus Round: %v\n", consensusRound)
 		}
 		if lastBlockProduced, exists := r.Validator["lastBlockProduced"]; exists {
 			output += fmt.Sprintf("Last Block Produced: %v\n", lastBlockProduced)
