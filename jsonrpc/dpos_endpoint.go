@@ -1983,16 +1983,81 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 	}
 
 	// Get staking info for this validator
-	d.logger.Info("🔵 [GetValidatorVotingDetails] 步骤2: 从 GetStakingInfo 获取投票记录", "validator", validatorAddr.String())
-	stakingInfo, err := d.store.GetStakingInfo()
+	// 🆕 修复：直接从 DPoS State.StakeStore 获取，确保数据完整
+	d.logger.Info("🔵 [GetValidatorVotingDetails] 步骤2: 从 StakeStore.GetStakingInfo 获取投票记录", "validator", validatorAddr.String())
+	var stakingInfo []*dpos.StakeInfo
+	var err error
+	
+	// 优先从 DPoS State.StakeStore 直接获取
+	if dposState, err2 := d.store.GetDPoSState(); err2 == nil && dposState != nil && dposState.StakeStore != nil {
+		stakingInfo, err = dposState.StakeStore.GetStakingInfo()
+		if err != nil {
+			d.logger.Error("❌ [GetValidatorVotingDetails] StakeStore.GetStakingInfo 失败", "error", err)
+		} else {
+			d.logger.Info("✅ [GetValidatorVotingDetails] 从 StakeStore.GetStakingInfo 获取成功", "count", len(stakingInfo))
+		}
+	} else {
+		d.logger.Warn("⚠️ [GetValidatorVotingDetails] DPoS State 不可用，尝试从 store.GetStakingInfo 获取")
+		stakingInfo, err = d.store.GetStakingInfo()
+		if err != nil {
+			d.logger.Error("❌ [GetValidatorVotingDetails] store.GetStakingInfo 失败", "error", err)
+		}
+	}
+	
 	if err != nil {
-		d.logger.Error("❌ [GetValidatorVotingDetails] GetStakingInfo 失败", "error", err)
 		return map[string]interface{}{
 			"success": false,
 			"error":   fmt.Sprintf("failed to get staking info: %v", err),
 		}, nil
 	}
 	d.logger.Info("🔵 [GetValidatorVotingDetails] GetStakingInfo 返回", "count", len(stakingInfo))
+	
+	// 调试：记录所有 delegate 地址，帮助排查匹配问题
+	delegateSet := make(map[string]int) // 记录每个 delegate 的投票记录数
+	validatorAddrStr := validatorAddr.String()
+	for _, stake := range stakingInfo {
+		if stake != nil && stake.Delegate != (types.Address{}) {
+			delegateStr := stake.Delegate.String()
+			delegateSet[delegateStr]++
+			// 如果匹配，记录详细信息
+			if delegateStr == validatorAddrStr {
+				d.logger.Info("🔵 [GetValidatorVotingDetails] 找到匹配的 delegate",
+					"staker", stake.Staker.String(),
+					"delegate", delegateStr,
+					"amount", func() string {
+						if stake.Amount != nil {
+							return stake.Amount.String()
+						}
+						return "nil"
+					}(),
+					"applied", stake.Applied,
+					"effectiveEpoch", stake.EffectiveEpoch)
+			}
+		} else if stake != nil {
+			// 记录 Delegate 为空的情况
+			d.logger.Warn("🔵 [GetValidatorVotingDetails] 发现 Delegate 为空的记录",
+				"staker", stake.Staker.String(),
+				"amount", func() string {
+					if stake.Amount != nil {
+						return stake.Amount.String()
+					}
+					return "nil"
+				}())
+		}
+	}
+	d.logger.Info("🔵 [GetValidatorVotingDetails] 调试信息", 
+		"validatorAddr", validatorAddrStr,
+		"totalStakingRecords", len(stakingInfo),
+		"uniqueDelegates", len(delegateSet),
+		"validatorInDelegateSet", delegateSet[validatorAddrStr] > 0,
+		"validatorVoteCount", delegateSet[validatorAddrStr],
+		"allDelegates", func() []string {
+			result := make([]string, 0, len(delegateSet))
+			for addr := range delegateSet {
+				result = append(result, addr)
+			}
+			return result
+		}())
 
 	// Helpers for formatting amounts
 	weiPerEtherInt := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
@@ -2190,23 +2255,28 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 	// Build validator details
 
 	// 🆕 修复：votingPower 应该使用 targetValidator.VotingPower（来自 DelegateInfo，只包含已应用的投票）
-	// 而不是从 StakingInfo 计算的 totalStakedToValidator（因为可能所有投票都是 Applied=false）
+	// totalStakedToMe 也应该使用 votingPower，确保一致性
 	votingPower := big.NewInt(0)
 	if targetValidator.VotingPower != nil {
 		votingPower = new(big.Int).Set(targetValidator.VotingPower)
 	}
 
+	// 🆕 修复：totalStakedToMe 应该等于 votingPower（来自 DelegateInfo）
+	// 因为 VotingPower 是权威数据源，而 totalStakedToValidator 可能因为数据不一致而不准确
+	totalStakedToMe := votingPower
+
 	d.logger.Info("🔵 [GetValidatorVotingDetails] 构建返回结果",
 		"validator", validatorAddr.String(),
 		"votingPower", votingPower.String(),
-		"totalStakedToMe", totalStakedToValidator.String(),
+		"totalStakedToMe", totalStakedToMe.String(),
+		"calculatedTotalStakedToValidator", totalStakedToValidator.String(),
 		"stakeCount", len(validatorStakes))
 	validatorDetail := map[string]interface{}{
 		"address":              targetValidator.Address.String(),
 		"votingPower":          votingPower.String(),
 		"isActive":             targetValidator.IsActive,
-		"totalStakedToMe":      totalStakedToValidator.String(),
-		"totalStakedToMeEther": formatEther(totalStakedToValidator),
+		"totalStakedToMe":      totalStakedToMe.String(),
+		"totalStakedToMeEther": formatEther(totalStakedToMe),
 		"stakeCount":           len(validatorStakes),
 		"stakes":               validatorStakes,
 		"totalVotedByMe":       totalVotedByValidator.String(),
