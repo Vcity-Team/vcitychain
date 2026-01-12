@@ -357,11 +357,26 @@ func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error
 		"epochNumber", epochNumber)
 
 	// 查询所有待应用的投票（内存 + 数据库）
+	// 🆕 修复：使用去重机制，避免同一投票被处理两次
 	var scheduledVotes []*VoteRecord
+	voteKeyMap := make(map[string]bool) // 用于去重：key = "Voter_Delegate_Timestamp"
+	
 	addVote := func(v *VoteRecord) {
 		if v == nil {
 			return
 		}
+		// 生成唯一键：Voter + Delegate + Timestamp
+		voteKey := fmt.Sprintf("%s_%s_%d", v.Voter.String(), v.Delegate.String(), v.Timestamp)
+		if voteKeyMap[voteKey] {
+			// 已存在，跳过（去重）
+			d.logger.Debug("🔄 [边界应用投票] 发现重复投票，跳过",
+				"voter", v.Voter.String(),
+				"delegate", v.Delegate.String(),
+				"timestamp", v.Timestamp,
+				"amount", v.Amount.String())
+			return
+		}
+		voteKeyMap[voteKey] = true
 		scheduledVotes = append(scheduledVotes, v)
 	}
 
