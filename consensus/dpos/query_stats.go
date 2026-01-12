@@ -441,13 +441,36 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 }
 
 // recordRewardsToDatabase 记录奖励到数据库（不更新状态）并更新StakeInfo中的累计奖励
-func (d *DPoS) recordRewardsToDatabase(epochNumber uint64, rewards map[types.Address]*big.Int) error {
-	// 记录验证者奖励到数据库
+func (d *DPoS) recordRewardsToDatabase(epochNumber uint64, rewards map[types.Address]*big.Int, validators validator.AccountSet, voters map[types.Address]*VoterInfo) error {
+	// 记录奖励到数据库
 	for address, reward := range rewards {
+		// 检查是否是验证者
+		isValidator := false
+		for _, validator := range validators {
+			if validator.Address == address {
+				isValidator = true
+				break
+			}
+		}
+
+		// 检查是否是投票者
+		isVoter := false
+		if voter, exists := voters[address]; exists && voter.VotingPower.Cmp(big.NewInt(0)) > 0 {
+			isVoter = true
+		}
+
+		// 确定奖励类型（用于数据库记录）
+		rewardType := "voter"
+		if isValidator && isVoter {
+			rewardType = "validator+voter" // 既是验证者又是投票者
+		} else if isValidator {
+			rewardType = "validator"
+		}
+
 		rewardRecord := &RewardRecordExtended{
 			EpochNumber:     epochNumber,
 			Recipient:       address.String(),
-			RewardType:      "validator",
+			RewardType:      rewardType,
 			Amount:          reward.String(),
 			VoteWeight:      "0",
 			Timestamp:       time.Now(),

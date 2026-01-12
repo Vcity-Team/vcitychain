@@ -783,10 +783,38 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 				}
 
 				// 记录每个奖励到数据库
+				// 🔧 修复：从DPoS实例获取validators和voters信息，动态判断奖励类型
+				validators := dposInstance.GetValidators()
+				voters := dposInstance.GetVoters()
+				if voters == nil {
+					voters = make(map[types.Address]*VoterInfo)
+				}
+
 				for addrStr, amount := range rewardInfo.Rewards {
-					// 判断奖励类型（简化：从ExtraData中无法区分验证者和投票者，统一标记为validator）
-					// 如果需要更精确，可以在ExtraData中添加奖励类型信息
-					rewardType := "validator"
+					addr := types.StringToAddress(addrStr)
+
+					// 检查是否是验证者
+					isValidator := false
+					for _, validator := range validators {
+						if validator.Address == addr {
+							isValidator = true
+							break
+						}
+					}
+
+					// 检查是否是投票者
+					isVoter := false
+					if voter, exists := voters[addr]; exists && voter.VotingPower.Cmp(big.NewInt(0)) > 0 {
+						isVoter = true
+					}
+
+					// 确定奖励类型（用于数据库记录）
+					rewardType := "voter"
+					if isValidator && isVoter {
+						rewardType = "validator+voter" // 既是验证者又是投票者
+					} else if isValidator {
+						rewardType = "validator"
+					}
 
 					rewardRecord := &RewardRecordExtended{
 						EpochNumber:     rewardInfo.EpochNumber,
@@ -804,6 +832,7 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 							"blockNumber", block.Number(),
 							"epoch", rewardInfo.EpochNumber,
 							"recipient", addrStr,
+							"rewardType", rewardType,
 							"error", err)
 					}
 				}

@@ -916,6 +916,72 @@ func (s *StakeStore) GetDelegateInfo(delegate types.Address) (*DelegateInfo, err
 	return result, nil
 }
 
+// GetAllDelegateInfos 获取所有受托人信息（包括零权重的，用于获取所有注册的受托人）
+func (s *StakeStore) GetAllDelegateInfos() (map[types.Address]*DelegateInfo, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("stake store not initialized")
+	}
+
+	logger := getGlobalLogger()
+	result := make(map[types.Address]*DelegateInfo)
+	count := 0
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("DelegateInfo"))
+		if bucket == nil {
+			if logger != nil {
+				logger.Warn("GetAllDelegateInfos: DelegateInfo bucket not found")
+			}
+			return nil // bucket不存在，返回空map
+		}
+
+		cursor := bucket.Cursor()
+		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
+			if len(key) != 20 {
+				if logger != nil {
+					logger.Debug("GetAllDelegateInfos: 跳过非地址key", "keyLen", len(key))
+				}
+				continue // 跳过非地址key
+			}
+
+			var info DelegateInfo
+			if err := json.Unmarshal(value, &info); err != nil {
+				if logger != nil {
+					logger.Warn("GetAllDelegateInfos: 解析失败", "key", fmt.Sprintf("%x", key), "error", err)
+				}
+				continue // 解析失败，跳过
+			}
+
+			result[info.Address] = &info
+			count++
+
+			if logger != nil {
+				logger.Debug("GetAllDelegateInfos: 读取受托人",
+					"address", info.Address.String(),
+					"votingPower", func() string {
+						if info.VotingPower != nil {
+							return info.VotingPower.String()
+						}
+						return "nil"
+					}(),
+					"isRegistered", info.IsRegistered,
+					"isActive", info.IsActive)
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get all delegate infos: %w", err)
+	}
+
+	if logger != nil {
+		logger.Info("GetAllDelegateInfos: 读取完成", "count", count, "resultCount", len(result))
+	}
+
+	return result, nil
+}
+
 // getDelegateInfo 从数据库获取受托人信息
 func (s *StakeStore) getDelegateInfo(delegate types.Address, dbTx *bolt.Tx) (*DelegateInfo, error) {
 	bucket := dbTx.Bucket([]byte("DelegateInfo"))
