@@ -1497,40 +1497,96 @@ func (d *DPoS) signTransactionWithChainID(tx *types.Transaction, expectedAddr ty
 // GetDelegateRegistrations 获取所有受托人注册信息
 // 修改：返回所有验证人（包括非活跃的），而不仅仅是出块的验证人
 func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
+	d.logger.Info("🔍 [GetDelegateRegistrations] 开始获取受托人注册信息...")
+	
 	if d.state == nil || d.state.RegistrationStore == nil {
+		d.logger.Error("❌ [GetDelegateRegistrations] Registration store不可用")
 		return nil, fmt.Errorf("registration store not available")
 	}
 
 	// 1. 从数据库获取已注册的受托人信息
+	d.logger.Info("📋 [GetDelegateRegistrations] 步骤1: 从数据库获取已注册的受托人信息...")
 	dbRegistrations, err := d.state.RegistrationStore.GetAllRegistrations()
 	if err != nil {
+		d.logger.Error("❌ [GetDelegateRegistrations] 获取注册信息失败", "error", err)
 		return nil, fmt.Errorf("failed to get registrations from database: %w", err)
 	}
+	d.logger.Info("✅ [GetDelegateRegistrations] 获取注册信息完成", "count", len(dbRegistrations))
 
 	// 2. 🆕 从数据库获取所有验证者（包括非活跃的），而不仅仅是从内存中获取活跃的验证者
 	// 这样可以确保返回所有验证人，而不仅仅是出块的验证人
+	d.logger.Info("📋 [GetDelegateRegistrations] 步骤2: 从数据库获取所有验证者信息...")
 	var allValidators validator.AccountSet
 	if d.state != nil && d.state.StakeStore != nil {
 		// 使用 GetValidatorsWithFilter(false) 获取所有验证者，包括投票权重为0的
 		if dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false); err == nil && len(dbValidators) > 0 {
 			allValidators = dbValidators
-			d.logger.Debug("从数据库读取所有验证者", "count", len(allValidators))
+			d.logger.Info("✅ [GetDelegateRegistrations] 从数据库读取所有验证者", "count", len(allValidators))
+		} else {
+			d.logger.Warn("⚠️ [GetDelegateRegistrations] 获取验证者失败", "error", err, "count", len(dbValidators))
 		}
 	}
 
-	// 3. 创建已注册地址的映射，用于去重
+	// 3. 🆕 方案1：创建验证者映射（address -> VotingPower, IsActive），用于实时同步
+	d.logger.Info("📋 [GetDelegateRegistrations] 步骤3: 创建验证者映射用于实时同步...")
+	validatorMap := make(map[types.Address]*validator.ValidatorMetadata)
+	for _, v := range allValidators {
+		validatorMap[v.Address] = v
+	}
+	d.logger.Info("✅ [GetDelegateRegistrations] 验证者映射创建完成", "validatorCount", len(validatorMap))
+
+	// 4. 创建已注册地址的映射，用于去重
 	registeredAddresses := make(map[types.Address]bool)
 	for _, reg := range dbRegistrations {
 		registeredAddresses[reg.Address] = true
 	}
 
-	// 4. 将数据库中的所有验证者转换为 DelegateRegistration 格式
+	// 5. 🆕 方案1：实时同步已注册受托人的 TotalVotes 和 IsActive
+	d.logger.Info("📋 [GetDelegateRegistrations] 步骤4: 实时同步已注册受托人的 TotalVotes 和 IsActive...")
+	syncedCount := 0
+	for _, reg := range dbRegistrations {
+		if validator, exists := validatorMap[reg.Address]; exists {
+			// 获取当前值
+			currentTotalVotes := big.NewInt(0)
+			if reg.TotalVotes != nil {
+				currentTotalVotes = reg.TotalVotes
+			}
+			
+			newTotalVotes := big.NewInt(0)
+			if validator.VotingPower != nil {
+				newTotalVotes = validator.VotingPower
+			}
+			
+			oldIsActive := reg.IsActive
+			newIsActive := validator.IsActive
+			
+			// 如果值不同，实时更新（仅在内存中，不写回数据库）
+			if currentTotalVotes.Cmp(newTotalVotes) != 0 || oldIsActive != newIsActive {
+				d.logger.Info("🔄 [GetDelegateRegistrations] 实时同步受托人信息",
+					"address", reg.Address.String(),
+					"name", reg.Name,
+					"oldTotalVotes", currentTotalVotes.String(),
+					"newTotalVotes", newTotalVotes.String(),
+					"oldIsActive", oldIsActive,
+					"newIsActive", newIsActive)
+				
+				reg.TotalVotes = new(big.Int).Set(newTotalVotes)
+				reg.IsActive = newIsActive
+				syncedCount++
+			}
+		}
+	}
+	d.logger.Info("✅ [GetDelegateRegistrations] 实时同步完成", "syncedCount", syncedCount, "totalRegistrations", len(dbRegistrations))
+
+	// 6. 将数据库中的所有验证者转换为 DelegateRegistration 格式
 	// 只添加未在注册表中注册的验证者（已注册的验证者信息更完整，优先使用注册表的数据）
+	d.logger.Info("📋 [GetDelegateRegistrations] 步骤5: 处理未注册的验证者...")
 	result := make([]*DelegateRegistration, 0, len(dbRegistrations)+len(allValidators))
 	result = append(result, dbRegistrations...)
 
 	// 将验证者转换为 DelegateRegistration
 	zeroDeposit := big.NewInt(0)
+	addedCount := 0
 
 	for _, validator := range allValidators {
 		// 如果该验证者已经在注册表中，跳过（注册表的数据更完整）
@@ -1581,8 +1637,11 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 		}
 
 		result = append(result, reg)
+		addedCount++
 	}
+	d.logger.Info("✅ [GetDelegateRegistrations] 处理未注册的验证者完成", "addedCount", addedCount)
 
+	d.logger.Info("✅ [GetDelegateRegistrations] 返回受托人注册信息", "totalCount", len(result))
 	return result, nil
 }
 

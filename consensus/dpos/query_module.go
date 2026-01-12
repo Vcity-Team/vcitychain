@@ -25,6 +25,10 @@ func (d *DPoS) initQueryModule() {
 	// 🆕 初始化 DelegateInfo 迁移（只执行一次）
 	// 为所有已注册但没有 DelegateInfo 的受托人创建初始 DelegateInfo
 	d.initializeDelegateInfoMigration()
+
+	// 🆕 初始化注册表 TotalVotes 迁移（只执行一次）
+	// 将所有注册表中的 TotalVotes 同步更新为验证者集合中的 VotingPower
+	d.initializeRegistrationTotalVotesMigration()
 }
 
 // buildQueryDependencies prepares the dependency set for the query module.
@@ -438,5 +442,278 @@ func (d *DPoS) migrateDelegateInfos() error {
 		d.logger.Warn("⚠️ [DelegateInfo迁移] 迁移过程中出现错误", "count", errorCount)
 	}
 
+	return nil
+}
+
+// initializeRegistrationTotalVotesMigration 初始化注册表 TotalVotes 迁移（只执行一次）
+// 将所有注册表中的 TotalVotes 同步更新为验证者集合中的 VotingPower
+// 通过 metadata bucket 的标志位确保重启后不会重复执行
+func (d *DPoS) initializeRegistrationTotalVotesMigration() {
+	d.logger.Info("🔍 [TotalVotes迁移] 开始检查迁移状态...")
+	
+	if d.state == nil || d.state.StakeStore == nil || d.state.RegistrationStore == nil {
+		d.logger.Warn("⚠️ [TotalVotes迁移] State未初始化，跳过迁移",
+			"state", d.state != nil,
+			"stakeStore", d.state != nil && d.state.StakeStore != nil,
+			"registrationStore", d.state != nil && d.state.RegistrationStore != nil)
+		return
+	}
+
+	d.logger.Info("✅ [TotalVotes迁移] State已初始化，继续检查迁移标志位")
+
+	// 检查是否已经迁移过（通过metadata bucket的标志位判断）
+	migrationFlag := []byte("registration_total_votes_migration_completed")
+	migrationCompleted := false
+
+	// 检查迁移标志位
+	err := d.state.db.View(func(tx *bolt.Tx) error {
+		metaBucket := tx.Bucket([]byte("metadata"))
+		if metaBucket == nil {
+			// metadata bucket不存在，说明还没有迁移过
+			d.logger.Info("ℹ️ [TotalVotes迁移] metadata bucket不存在，需要执行首次迁移")
+			return fmt.Errorf("metadata bucket not found")
+		}
+
+		d.logger.Info("✅ [TotalVotes迁移] metadata bucket存在，检查标志位")
+		flag := metaBucket.Get(migrationFlag)
+		if flag != nil && string(flag) == "true" {
+			migrationCompleted = true
+			d.logger.Info("✅ [TotalVotes迁移] 标志位已存在且为true，迁移已完成，跳过迁移")
+			return nil
+		}
+
+		d.logger.Info("ℹ️ [TotalVotes迁移] 标志位不存在或不为true，需要执行迁移",
+			"flagValue", func() string {
+				if flag != nil {
+					return string(flag)
+				}
+				return "nil"
+			}())
+		return fmt.Errorf("migration not completed")
+	})
+
+	// 如果已经迁移过，直接返回
+	if err == nil && migrationCompleted {
+		d.logger.Info("ℹ️ [TotalVotes迁移] 迁移已完成，跳过（重启后检查）")
+		return
+	}
+
+	if err != nil {
+		d.logger.Info("ℹ️ [TotalVotes迁移] 迁移标志未找到，执行首次迁移", "reason", err.Error())
+	}
+
+	// 执行迁移
+	d.logger.Info("🔄 [TotalVotes迁移] 开始执行 TotalVotes 迁移...")
+	migrationErr := d.migrateRegistrationTotalVotes()
+
+	// 无论迁移成功还是失败，都设置标志位（避免重复执行）
+	d.logger.Info("💾 [TotalVotes迁移] 开始设置迁移标志位...")
+	setFlagErr := d.state.db.Update(func(tx *bolt.Tx) error {
+		metaBucket, err := tx.CreateBucketIfNotExists([]byte("metadata"))
+		if err != nil {
+			d.logger.Error("❌ [TotalVotes迁移] 创建metadata bucket失败", "error", err)
+			return err
+		}
+		d.logger.Info("✅ [TotalVotes迁移] metadata bucket已创建或已存在")
+		
+		if err := metaBucket.Put(migrationFlag, []byte("true")); err != nil {
+			d.logger.Error("❌ [TotalVotes迁移] 写入标志位失败", "error", err)
+			return err
+		}
+		
+		d.logger.Info("✅ [TotalVotes迁移] 标志位已写入", "flag", string(migrationFlag))
+		return nil
+	})
+
+	if setFlagErr != nil {
+		d.logger.Warn("⚠️ [TotalVotes迁移] 设置迁移标志位失败", "error", setFlagErr)
+	} else {
+		d.logger.Info("✅ [TotalVotes迁移] 迁移标志位已成功写入metadata bucket")
+	}
+
+	if migrationErr != nil {
+		d.logger.Warn("⚠️ [TotalVotes迁移] 迁移过程中出现错误（但已设置标志位，避免重复执行）", "error", migrationErr)
+	} else {
+		d.logger.Info("✅ [TotalVotes迁移] 迁移完成，无错误")
+	}
+}
+
+// migrateRegistrationTotalVotes 迁移注册表中的 TotalVotes
+// 将所有注册表中的 TotalVotes 同步更新为验证者集合中的 VotingPower
+func (d *DPoS) migrateRegistrationTotalVotes() error {
+	d.logger.Info("🔍 [TotalVotes迁移] 开始执行迁移逻辑...")
+	
+	if d.state == nil || d.state.StakeStore == nil || d.state.RegistrationStore == nil {
+		d.logger.Error("❌ [TotalVotes迁移] State store不可用",
+			"state", d.state != nil,
+			"stakeStore", d.state != nil && d.state.StakeStore != nil,
+			"registrationStore", d.state != nil && d.state.RegistrationStore != nil)
+		return fmt.Errorf("state store not available")
+	}
+
+	d.logger.Info("✅ [TotalVotes迁移] State store可用，开始获取数据")
+
+	// 1. 获取所有注册信息
+	d.logger.Info("📋 [TotalVotes迁移] 步骤1: 获取所有注册信息...")
+	allRegistrations, err := d.state.RegistrationStore.GetAllRegistrations()
+	if err != nil {
+		d.logger.Warn("⚠️ [TotalVotes迁移] 获取注册信息失败", "error", err)
+		return fmt.Errorf("failed to get registrations: %w", err)
+	}
+
+	d.logger.Info("📊 [TotalVotes迁移] 获取注册信息完成", "count", len(allRegistrations))
+
+	if len(allRegistrations) == 0 {
+		d.logger.Info("ℹ️ [TotalVotes迁移] 没有找到已注册的受托人，跳过迁移")
+		return nil
+	}
+
+	// 2. 获取所有验证者（包括投票权重为0的）
+	d.logger.Info("📋 [TotalVotes迁移] 步骤2: 获取所有验证者信息...")
+	var allValidators validator.AccountSet
+	if d.state.StakeStore != nil {
+		if dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false); err == nil && len(dbValidators) > 0 {
+			allValidators = dbValidators
+			d.logger.Info("✅ [TotalVotes迁移] 从数据库读取所有验证者", "count", len(allValidators))
+		} else {
+			d.logger.Warn("⚠️ [TotalVotes迁移] 获取验证者失败", "error", err, "count", len(dbValidators))
+		}
+	}
+
+	if len(allValidators) == 0 {
+		d.logger.Warn("⚠️ [TotalVotes迁移] 没有找到验证者，跳过迁移")
+		return nil
+	}
+
+	// 3. 创建验证者映射（address -> VotingPower）
+	d.logger.Info("📋 [TotalVotes迁移] 步骤3: 创建验证者映射...")
+	validatorMap := make(map[types.Address]*validator.ValidatorMetadata)
+	for _, v := range allValidators {
+		validatorMap[v.Address] = v
+	}
+	d.logger.Info("✅ [TotalVotes迁移] 验证者映射创建完成", "validatorCount", len(validatorMap))
+
+	d.logger.Info("📋 [TotalVotes迁移] 步骤4: 开始遍历已注册的受托人并更新TotalVotes", "totalCount", len(allRegistrations))
+
+	// 统计信息
+	updatedCount := 0
+	skippedCount := 0
+	errorCount := 0
+	noValidatorCount := 0
+
+	// 4. 更新每个注册信息的 TotalVotes
+	for i, reg := range allRegistrations {
+		if reg == nil {
+			d.logger.Warn("⚠️ [TotalVotes迁移] 跳过nil注册记录", "index", i)
+			continue
+		}
+
+		d.logger.Info("🔍 [TotalVotes迁移] 处理受托人",
+			"index", i+1,
+			"total", len(allRegistrations),
+			"address", reg.Address.String(),
+			"name", reg.Name,
+			"currentTotalVotes", func() string {
+				if reg.TotalVotes != nil {
+					return reg.TotalVotes.String()
+				}
+				return "nil"
+			}())
+
+		// 查找对应的验证者
+		validator, exists := validatorMap[reg.Address]
+		if !exists {
+			d.logger.Info("⚠️ [TotalVotes迁移] 验证者不存在，跳过",
+				"address", reg.Address.String(),
+				"name", reg.Name)
+			noValidatorCount++
+			skippedCount++
+			continue
+		}
+
+		// 检查是否需要更新
+		currentTotalVotes := big.NewInt(0)
+		if reg.TotalVotes != nil {
+			currentTotalVotes = reg.TotalVotes
+		}
+
+		newTotalVotes := big.NewInt(0)
+		if validator.VotingPower != nil {
+			newTotalVotes = validator.VotingPower
+		}
+
+		oldIsActive := reg.IsActive
+		newIsActive := validator.IsActive
+
+		// 如果 TotalVotes 和 IsActive 都已经是最新值，跳过
+		if currentTotalVotes.Cmp(newTotalVotes) == 0 && oldIsActive == newIsActive {
+			d.logger.Info("⏭️ [TotalVotes迁移] TotalVotes和IsActive已是最新值，跳过",
+				"address", reg.Address.String(),
+				"name", reg.Name,
+				"totalVotes", currentTotalVotes.String(),
+				"isActive", oldIsActive)
+			skippedCount++
+			continue
+		}
+
+		// 更新 TotalVotes 和 IsActive
+		reg.TotalVotes = new(big.Int).Set(newTotalVotes)
+		reg.IsActive = validator.IsActive
+
+		d.logger.Info("📝 [TotalVotes迁移] 准备更新注册信息",
+			"address", reg.Address.String(),
+			"name", reg.Name,
+			"oldTotalVotes", currentTotalVotes.String(),
+			"newTotalVotes", newTotalVotes.String(),
+			"oldIsActive", oldIsActive,
+			"newIsActive", newIsActive)
+
+		// 保存回数据库
+		d.logger.Info("💾 [TotalVotes迁移] 开始保存注册信息到数据库",
+			"address", reg.Address.String(),
+			"name", reg.Name)
+		if err := d.state.RegistrationStore.SaveRegistration(reg); err != nil {
+			errorCount++
+			d.logger.Error("❌ [TotalVotes迁移] 保存注册信息失败",
+				"address", reg.Address.String(),
+				"name", reg.Name,
+				"error", err)
+			continue
+		}
+
+		updatedCount++
+		d.logger.Info("✅ [TotalVotes迁移] 更新注册信息成功",
+			"address", reg.Address.String(),
+			"name", reg.Name,
+			"oldTotalVotes", currentTotalVotes.String(),
+			"newTotalVotes", newTotalVotes.String(),
+			"oldIsActive", oldIsActive,
+			"newIsActive", newIsActive,
+			"updatedCount", updatedCount,
+			"progress", fmt.Sprintf("%d/%d", updatedCount+skippedCount+errorCount, len(allRegistrations)))
+	}
+
+	// 输出迁移统计
+	d.logger.Info("📊 [TotalVotes迁移] 迁移统计",
+		"totalRegistrations", len(allRegistrations),
+		"updated", updatedCount,
+		"skipped", skippedCount,
+		"noValidator", noValidatorCount,
+		"errors", errorCount)
+
+	if updatedCount > 0 {
+		d.logger.Info("✅ [TotalVotes迁移] 成功更新了注册信息", "count", updatedCount)
+	}
+	if skippedCount > 0 {
+		d.logger.Info("⏭️ [TotalVotes迁移] 跳过了无需更新的注册信息", "count", skippedCount)
+	}
+	if noValidatorCount > 0 {
+		d.logger.Info("ℹ️ [TotalVotes迁移] 跳过了没有对应验证者的注册信息", "count", noValidatorCount)
+	}
+	if errorCount > 0 {
+		d.logger.Warn("⚠️ [TotalVotes迁移] 迁移过程中出现错误", "count", errorCount)
+	}
+
+	d.logger.Info("✅ [TotalVotes迁移] 迁移逻辑执行完成")
 	return nil
 }
