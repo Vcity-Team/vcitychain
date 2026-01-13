@@ -221,9 +221,13 @@ func (d *DPoS) verifyVoteSignature(vote *VoteMessage) error {
 	_ = hash // 保留用于未来 P2P 签名验证
 
 	// 检查时间戳防重放
-	now := uint64(time.Now().Unix())
-	if vote.Timestamp < now-300 || vote.Timestamp > now+60 { // 5分钟时间窗口
-		return errors.New("vote timestamp out of range")
+	// 延迟应用（Applied=true）的投票已经通过链上交易验证，
+	// 此处跳过时间戳检查，避免旧时间戳导致的误判。
+	if !vote.Applied {
+		now := uint64(time.Now().Unix())
+		if vote.Timestamp < now-300 || vote.Timestamp > now+60 { // 5分钟时间窗口
+			return errors.New("vote timestamp out of range")
+		}
 	}
 
 	return nil
