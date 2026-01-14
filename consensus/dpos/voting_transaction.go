@@ -107,8 +107,10 @@ func (d *DPoS) parseVoteTransactionData(tx *types.Transaction) (*VoteInfo, error
 
 	// 转换金额字节为big.Int（移除前导零）
 	amount := new(big.Int).SetBytes(amountBytes)
-	if amount.Sign() <= 0 {
-		return nil, fmt.Errorf("vote amount must be positive, got %s", amount.String())
+	if amount.Cmp(big.NewInt(-1)) == 0 {
+		// amount = -1 表示撤销全部投票，允许通过
+	} else if amount.Sign() <= 0 {
+		return nil, fmt.Errorf("vote amount must be positive or -1 for unvote, got %s", amount.String())
 	}
 
 	d.logger.Info("DPoS投票数据解析成功", "voter", voter.String(), "candidate", candidate.String(), "amount", amount.String())

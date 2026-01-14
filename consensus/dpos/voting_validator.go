@@ -51,8 +51,11 @@ func (d *DPoS) ValidateVoteOnly(voter types.Address, candidate types.Address, am
 // validateVote 验证投票的有效性
 func (d *DPoS) validateVote(vote *VoteMessage) error {
 	// 1. 检查投票金额边界
-	if vote.Amount.Cmp(big.NewInt(0)) <= 0 {
-		return errors.New("vote amount must be positive")
+	if vote.Amount.Cmp(big.NewInt(-1)) == 0 {
+		// amount = -1 表示撤销全部投票，允许通过
+		// 撤销逻辑将在 AddVote 中处理
+	} else if vote.Amount.Cmp(big.NewInt(0)) <= 0 {
+		return errors.New("vote amount must be positive or -1 for unvote")
 	}
 
 	maxAmount, _ := new(big.Int).SetString(MaxVoteAmount, 10)

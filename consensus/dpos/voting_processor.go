@@ -18,6 +18,12 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 		"candidate", candidate.String(),
 		"amount", amount.String())
 
+	// 检查是否为撤销投票 (amount = -1)
+	if amount.Cmp(big.NewInt(-1)) == 0 {
+		d.logger.Info("🔄 检测到撤销投票请求，开始处理撤销逻辑")
+		return d.processUnvote(voter, candidate)
+	}
+
 	// 计算投票生效的epoch（边界应用）
 	currentBlockNumber := d.getCurrentBlockNumber()
 	currentEpochMeta := d.getEpochForBlock(currentBlockNumber)
@@ -517,6 +523,89 @@ func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error
 		"epochNumber", epochNumber,
 		"appliedVotesCount", len(scheduledVotes),
 		"note", "验证者集合将在下一轮更新时重新排序和截取")
+
+	return nil
+}
+
+// processUnvote 处理撤销投票逻辑（立即生效）
+func (d *DPoS) processUnvote(voter types.Address, candidate types.Address) error {
+	d.logger.Info("🔄 开始处理撤销投票",
+		"voter", voter.String(),
+		"candidate", candidate.String())
+
+	// 1. 获取投票者信息
+	voterInfo, exists := d.voters[voter]
+	if !exists {
+		d.logger.Warn("❌ 投票者不存在，无法撤销",
+			"voter", voter.String())
+		return fmt.Errorf("voter %s has no voting record", voter.String())
+	}
+
+	// 2. 检查是否已投票给该候选人
+	if voterInfo.DelegateVotes == nil {
+		voterInfo.DelegateVotes = make(map[types.Address]*big.Int)
+	}
+
+	currentVoteAmount, hasVote := voterInfo.DelegateVotes[candidate]
+	if !hasVote || currentVoteAmount.Sign() <= 0 {
+		d.logger.Warn("❌ 投票者未投票给该候选人，无法撤销",
+			"voter", voter.String(),
+			"candidate", candidate.String(),
+			"currentVote", currentVoteAmount.String())
+		return fmt.Errorf("no vote found for candidate %s", candidate.String())
+	}
+
+	d.logger.Info("📊 撤销前状态",
+		"voterVotingPower", voterInfo.VotingPower.String(),
+		"candidateVoteAmount", currentVoteAmount.String())
+
+	// 3. 撤销投票：从投票者移除该候选人的投票
+	delete(voterInfo.DelegateVotes, candidate)
+
+	// 4. 重构VotedDelegates列表（移除该候选人）
+	newVotedDelegates := make([]types.Address, 0)
+	for _, delegate := range voterInfo.VotedDelegates {
+		if delegate != candidate {
+			newVotedDelegates = append(newVotedDelegates, delegate)
+		}
+	}
+	voterInfo.VotedDelegates = newVotedDelegates
+
+	// 5. 减少投票者的总投票权重
+	voterInfo.VotingPower = new(big.Int).Sub(voterInfo.VotingPower, currentVoteAmount)
+
+	// 6. 减少候选人的投票权重
+	validatorUpdated := false
+	for i, validator := range d.delegates {
+		if validator.Address == candidate {
+			validator.VotingPower = new(big.Int).Sub(validator.VotingPower, currentVoteAmount)
+			d.delegates[i] = validator // 更新slice中的元素
+			d.logger.Info("✅ 候选人权重已更新",
+				"candidate", candidate.String(),
+				"oldVotingPower", new(big.Int).Add(validator.VotingPower, currentVoteAmount).String(),
+				"newVotingPower", validator.VotingPower.String())
+			validatorUpdated = true
+			break
+		}
+	}
+	if !validatorUpdated {
+		d.logger.Warn("⚠️ 候选人不在验证者列表中，只更新投票者权重",
+			"candidate", candidate.String())
+	}
+
+	// 7. 更新最后投票时间
+	voterInfo.LastVoteTime = uint64(time.Now().Unix())
+
+	// 8. 标记需要更新验证者集合（立即生效）
+	d.pendingValidatorUpdate = true
+
+	// 9. 记录撤销操作（可选，用于审计）
+	d.logger.Info("✅ 撤销投票成功",
+		"voter", voter.String(),
+		"candidate", candidate.String(),
+		"unvotedAmount", currentVoteAmount.String(),
+		"remainingVotingPower", voterInfo.VotingPower.String(),
+		"remainingDelegates", len(voterInfo.VotedDelegates))
 
 	return nil
 }
