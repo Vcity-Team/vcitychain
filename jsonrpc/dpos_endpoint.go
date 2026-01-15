@@ -505,91 +505,51 @@ type UnvoteResponse struct {
 
 // Vote handles dpos_vote RPC method
 func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Debug("DPoS Vote called")
+	d.logger.Debug("DPoS Vote called", "params", params)
 
 	// Parse parameters
 	var req VoteRequest
 	switch p := params.(type) {
 	case []interface{}:
-		// Handle array parameters like ["0x123..."]
-		if len(p) == 1 {
-			// Single address parameter - use as both voter and candidate with default amount
-			if address, ok := p[0].(string); ok {
-				req.Voter = address
-				req.Candidate = address
-				req.Amount = "1000000000000000000" // Default 1 token (1e18 wei)
-			} else {
-				return &VoteResponse{
-					Success: false,
-					Error:   "first parameter must be a string address",
-				}, nil
-			}
-		} else if len(p) == 3 {
-			// Three parameters: [voter, candidate, amount]
-			if voter, ok := p[0].(string); ok {
-				req.Voter = voter
-			} else {
-				return &VoteResponse{
-					Success: false,
-					Error:   "first parameter must be a string address",
-				}, nil
-			}
-			if candidate, ok := p[1].(string); ok {
-				req.Candidate = candidate
-			} else {
-				return &VoteResponse{
-					Success: false,
-					Error:   "second parameter must be a string address",
-				}, nil
-			}
-			if amount, ok := p[2].(string); ok {
-				req.Amount = amount
-			} else {
-				return &VoteResponse{
-					Success: false,
-					Error:   "third parameter must be a string amount",
-				}, nil
-			}
-		} else if len(p) == 4 {
-			// Four parameters: [voter, candidate, amount, privateKey]
-			if voter, ok := p[0].(string); ok {
-				req.Voter = voter
-			} else {
-				return &VoteResponse{
-					Success: false,
-					Error:   "first parameter must be a string address",
-				}, nil
-			}
-			if candidate, ok := p[1].(string); ok {
-				req.Candidate = candidate
-			} else {
-				return &VoteResponse{
-					Success: false,
-					Error:   "second parameter must be a string address",
-				}, nil
-			}
-			if amount, ok := p[2].(string); ok {
-				req.Amount = amount
-			} else {
-				return &VoteResponse{
-					Success: false,
-					Error:   "third parameter must be a string amount",
-				}, nil
-			}
-			// Store private key for later use in signing
-			if privateKey, ok := p[3].(string); ok {
-				// Store private key in the request for later use
-				req.PrivateKey = privateKey
-			} else {
-				return &VoteResponse{
-					Success: false,
-					Error:   "fourth parameter must be a string private key",
-				}, nil
-			}
+		// Handle array parameters: [voter, candidate, amount, privateKey]
+		if len(p) != 4 {
+			return &VoteResponse{
+				Success: false,
+				Error:   fmt.Sprintf("expected 4 parameters [voter, candidate, amount, privateKey], got %d", len(p)),
+			}, nil
+		}
+		// Four parameters: [voter, candidate, amount, privateKey]
+		if voter, ok := p[0].(string); ok {
+			req.Voter = voter
 		} else {
 			return &VoteResponse{
 				Success: false,
-				Error:   fmt.Sprintf("expected 1, 3, or 4 parameters, got %d", len(p)),
+				Error:   "first parameter must be a string address (voter)",
+			}, nil
+		}
+		if candidate, ok := p[1].(string); ok {
+			req.Candidate = candidate
+		} else {
+			return &VoteResponse{
+				Success: false,
+				Error:   "second parameter must be a string address (candidate)",
+			}, nil
+		}
+		if amount, ok := p[2].(string); ok {
+			req.Amount = amount
+		} else {
+			return &VoteResponse{
+				Success: false,
+				Error:   "third parameter must be a string amount",
+			}, nil
+		}
+		// Store private key for later use in signing
+		if privateKey, ok := p[3].(string); ok {
+			req.PrivateKey = privateKey
+		} else {
+			return &VoteResponse{
+				Success: false,
+				Error:   "fourth parameter must be a string private key",
 			}, nil
 		}
 	case map[string]interface{}:
@@ -601,6 +561,9 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		}
 		if amount, ok := p["amount"].(string); ok {
 			req.Amount = amount
+		}
+		if privateKey, ok := p["privateKey"].(string); ok {
+			req.PrivateKey = privateKey
 		}
 	case *VoteRequest:
 		if p != nil {
@@ -632,6 +595,12 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 			Error:   "amount is required",
 		}, nil
 	}
+	if req.PrivateKey == "" {
+		return &VoteResponse{
+			Success: false,
+			Error:   "private key is required",
+		}, nil
+	}
 
 	// Parse addresses
 	voterAddr := types.StringToAddress(req.Voter)
@@ -646,8 +615,23 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		}, nil
 	}
 
-	// Note: In DPoS, users can vote for ANYONE, not just validators
+	// 🔍 调试日志：记录解析后的 amount
+	d.logger.Info("🔍 [RPC] 解析 amount 参数",
+		"原始字符串", req.Amount,
+		"解析后值", amountInt.String(),
+		"Sign()", amountInt.Sign(),
+		"与-1比较", amountInt.Cmp(big.NewInt(-1)),
+		"与0比较", amountInt.Cmp(big.NewInt(0)))
 
+	// amount = 0 不允许，返回错误
+	if amountInt.Sign() == 0 {
+		return &VoteResponse{
+			Success: false,
+			Error:   "amount cannot be zero",
+		}, nil
+	}
+	// amount = -1 表示执行撤销，继续往下走创建交易
+	// amount > 0 表示投票，继续往下走创建交易
 	// Check voter balance
 	// Try to get balance with different approaches
 	var balance *big.Int
@@ -824,13 +808,11 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	}
 	d.logger.Debug("Balance check passed")
 
-	// 新增：受托人候选人验证
 	d.logger.Info("🔍 开始验证受托人候选人资格",
 		"voter", voterAddr.String(),
 		"candidate", candidateAddr.String(),
 		"amount", amountInt.String())
 
-	// 获取DPoS引擎进行受托人验证
 	dposEngine := d.getDPoSEngine()
 	if dposEngine == nil {
 		d.logger.Error("❌ DPoS引擎不可用，无法验证受托人资格")
@@ -839,7 +821,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 			Error:   "DPoS engine not available for delegate validation",
 		}, nil
 	}
-
 	// 检查受托人是否已注册（创世验证者例外）
 	if isRegistered, ok := dposEngine.(interface {
 		IsDelegateRegistered(address types.Address) bool
@@ -886,11 +867,8 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	} else {
 		d.logger.Warn("⚠️ DPoS引擎不支持受托人候选人检查，跳过验证")
 	}
-
-	// 新增：在创建交易前进行完整的投票验证
 	d.logger.Info("🔍 开始预验证投票参数", "voter", voterAddr, "candidate", candidateAddr, "amount", amountInt)
 
-	// 创建投票消息进行预验证
 	voteMessage := &VoteMessage{
 		Voter:     voterAddr,
 		Delegate:  candidateAddr,
@@ -899,7 +877,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		Timestamp: uint64(time.Now().Unix()),
 	}
 
-	// 修复：只进行验证，不实际更新状态，避免重复处理
+	// 只进行验证，不实际更新状态，避免重复处理
 	if dposEngineInstance, ok := dposEngine.(*dpos.DPoS); ok {
 		// 只调用验证方法，不更新状态
 		if err := dposEngineInstance.ValidateVoteOnly(voteMessage.Voter, voteMessage.Delegate, voteMessage.Amount); err != nil {
@@ -936,23 +914,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 			Error:   "candidate address is zero address",
 		}, nil
 	}
-
-	// 如果 amount <= 0，表示解质押，返回削减信息
-	if amountInt == nil || amountInt.Sign() <= 0 {
-		d.logger.Info("🔍 检测到解质押请求", "voter", voterAddr.String(), "validator", candidateAddr.String())
-		unvoteResp, err := d.buildUnvoteResponse(voterAddr, candidateAddr)
-		if err != nil {
-			d.logger.Error("❌ 构建解质押响应失败", "error", err)
-			return &UnvoteResponse{
-				Success:   false,
-				Voter:     voterAddr,
-				Validator: candidateAddr,
-				Error:     fmt.Sprintf("failed to build unvote response: %v", err),
-			}, nil
-		}
-		return unvoteResp, nil
-	}
-
 	// Get account nonce for the voter
 	var nonce uint64
 	if nonceStore, ok := d.store.(interface {
@@ -969,7 +930,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 			}
 		}
 	}
-
 	// Get current gas price
 	var gasPrice *big.Int
 	if gasStore, ok := d.store.(interface {
@@ -980,7 +940,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	} else {
 		gasPrice = big.NewInt(1000000000) // 1 gwei default
 	}
-
 	// Ensure gas price meets minimum price limit (1 gwei = 1000000000 wei)
 	// This prevents "transaction underpriced" errors
 	minGasPrice := big.NewInt(1000000000) // 1 gwei
@@ -988,8 +947,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		gasPrice = minGasPrice
 		d.logger.Info("Gas price adjusted to meet minimum requirement", "gasPrice", gasPrice.String())
 	}
-
-	// Create vote transaction
 	d.logger.Info("=== 标记1: 开始创建投票交易 ===")
 	tx := &types.Transaction{
 		Nonce:    nonce,
@@ -1167,36 +1124,12 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	}); ok {
 		d.logger.Info("Store has GetConsensus method, attempting to get consensus engine...")
 
-		// 新增：直接获取DPoS引擎
 		consensusEngine := d.getDPoSEngineDirectly(consensusStore)
 
 		if consensusEngine == nil {
 			d.logger.Warn("Consensus engine is nil")
 		} else {
 			d.logger.Info("Consensus engine type", "type", fmt.Sprintf("%T", consensusEngine))
-
-			// 修复：本地投票不直接更新状态，避免重复计算
-			// 所有投票都通过区块同步统一处理，确保一致性
-			d.logger.Info("ℹ️ 本地投票已创建交易，状态将在区块同步时更新")
-			d.logger.Info("ℹ️ 这避免了重复计算问题，确保所有节点状态一致")
-
-			// 注释掉本地状态更新，避免重复计算
-			/*
-				if dposEngine, ok := consensusEngine.(interface {
-					AddVote(voter types.Address, candidate types.Address, amount *big.Int) error
-				}); ok {
-					d.logger.Info("✅ DPoS引擎有AddVote方法，尝试更新DPoS状态...")
-					if err := dposEngine.AddVote(voterAddr, candidateAddr, amountInt); err != nil {
-						d.logger.Error("❌ 更新DPoS状态失败", "error", err)
-						// 继续执行，交易已在池中
-					} else {
-						d.logger.Info("✅ DPoS状态更新成功")
-						dposStateUpdated = true
-					}
-				} else {
-					d.logger.Warn("⚠️ DPoS引擎没有AddVote方法")
-				}
-			*/
 		}
 	} else {
 		d.logger.Warn("Store does NOT have GetConsensus method")
@@ -1209,7 +1142,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	} else if !txAdded {
 		successMessage = "Vote operation completed (DPoS state updated directly, transaction pool failed)"
 	} else if !dposStateUpdated {
-		// 修复：由于AddVote被注释是为了避免重复计算，交易池成功添加就表示投票会成功处理
 		successMessage = "Vote operation completed successfully (transaction added to pool, will be processed in next block)"
 	}
 
@@ -1291,13 +1223,25 @@ func (d *DPOS) createVoteTransactionData(voter, candidate types.Address, amount 
 	data = append(data, candidate.Bytes()...)
 
 	// Add amount (32 bytes, padded)
-	amountBytes := amount.Bytes()
-	if len(amountBytes) > 32 {
-		amountBytes = amountBytes[len(amountBytes)-32:] // Take last 32 bytes
-	}
-	// Pad with zeros to 32 bytes
-	for len(amountBytes) < 32 {
-		amountBytes = append([]byte{0}, amountBytes...)
+	// 🔧 修复：支持负数编码（-1 使用全1表示）
+	var amountBytes []byte
+	if amount.Cmp(big.NewInt(-1)) == 0 {
+		// amount = -1 使用 32 字节全 1 (0xFFFFFFFF...) 表示
+		amountBytes = make([]byte, 32)
+		for i := range amountBytes {
+			amountBytes[i] = 0xFF
+		}
+		d.logger.Info("🔧 [编码] amount = -1，使用全1编码", "encoded", fmt.Sprintf("%x", amountBytes))
+	} else {
+		// 正数正常编码
+		amountBytes = amount.Bytes()
+		if len(amountBytes) > 32 {
+			amountBytes = amountBytes[len(amountBytes)-32:] // Take last 32 bytes
+		}
+		// Pad with zeros to 32 bytes
+		for len(amountBytes) < 32 {
+			amountBytes = append([]byte{0}, amountBytes...)
+		}
 	}
 	data = append(data, amountBytes...)
 
@@ -1388,9 +1332,6 @@ func (d *DPOS) VoteByAddress(ctx context.Context, params interface{}) (*VoteResp
 // GetStakingInfo handles dpos_getStakingInfo RPC method
 func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interface{}, error) {
 	d.logger.Info("DPoS GetStakingInfo called", "blockNumber", blockNumber)
-
-	// 修改：dpos_getStakingInfo 应该返回验证者列表，而不是投票记录
-	// 尝试多种方式获取验证者列表
 	var validators validator.AccountSet
 	var err error
 
@@ -1404,7 +1345,6 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interfa
 				d.logger.Info("Successfully retrieved validators from DPoS state", "count", len(validators))
 			}
 		}
-
 		// 方法3：尝试通过 GetDPoSEngine 获取
 		if len(validators) == 0 {
 			if dposStore, ok := d.store.(interface {
@@ -2149,26 +2089,26 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 	// 🆕 改进：直接遍历所有 VoterInfo，而不是只从 StakingInfo 中的 staker 地址查找
 	if dposState != nil && dposState.StakeStore != nil {
 		d.logger.Info("🔍 [GetValidatorVotingDetails] 从 VoterInfo 查找入站投票（遍历所有投票者）", "validator", validatorAddr.String())
-		
+
 		// 🆕 直接获取所有 VoterInfo 记录
 		allVoterInfo, err := dposState.StakeStore.GetAllVoterInfo()
 		if err != nil {
 			d.logger.Warn("⚠️ [GetValidatorVotingDetails] GetAllVoterInfo 失败", "error", err)
 		} else {
 			d.logger.Info("🔍 [GetValidatorVotingDetails] 获取到所有 VoterInfo", "count", len(allVoterInfo))
-			
+
 			// 遍历所有投票者，查找投票给目标验证者的记录
 			foundCount := 0
 			for voterAddr, voterInfo := range allVoterInfo {
 				if voterInfo == nil {
 					continue
 				}
-				
+
 				// 检查该投票者是否投票给了目标验证者
 				if voterInfo.DelegateVotes != nil {
 					if voteAmount, exists := voterInfo.DelegateVotes[validatorAddr]; exists && voteAmount != nil && voteAmount.Sign() > 0 {
 						key := voterAddr.String()
-						
+
 						// 如果已经在 inboundStakesMap 中，累加金额
 						if agg, exists := inboundStakesMap[key]; exists {
 							agg.totalAmount.Add(agg.totalAmount, voteAmount)
@@ -2196,8 +2136,8 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 					}
 				}
 			}
-			
-			d.logger.Info("🔍 [GetValidatorVotingDetails] VoterInfo 查找完成", 
+
+			d.logger.Info("🔍 [GetValidatorVotingDetails] VoterInfo 查找完成",
 				"checkedVoters", len(allVoterInfo),
 				"foundVotes", foundCount,
 				"totalInboundStakes", len(inboundStakesMap))
@@ -2272,13 +2212,27 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		}
 
 		// 处理投票给 validator 的记录（入站投票）
+		// 🔧 修复：如果 VoterInfo.DelegateVotes 中已经有该投票者的记录，就跳过从 StakeInfo 累加
+		// 因为 VoterInfo.DelegateVotes 已经是减去撤销后的有效权重，避免重复计算
 		if isInboundMatch {
-			d.logger.Info("✅ [GetValidatorVotingDetails] 找到入站投票记录",
+			key := stake.Staker.String()
+			// 检查是否已经从 VoterInfo.DelegateVotes 获取了该投票者的记录
+			if _, existsInVoterInfo := inboundStakesMap[key]; existsInVoterInfo {
+				// 如果已经存在，说明是从 VoterInfo.DelegateVotes 获取的（已减去撤销权重），跳过从 StakeInfo 累加
+				d.logger.Debug("🔵 [GetValidatorVotingDetails] 跳过 StakeInfo 累加（已从 VoterInfo 获取有效权重）",
+					"staker", stake.Staker.String(),
+					"delegate", delegateAddr.String(),
+					"note", "VoterInfo.DelegateVotes 已包含减去撤销后的有效权重")
+				continue
+			}
+			
+			// 如果 VoterInfo 中没有，才从 StakeInfo 累加（这种情况应该很少，可能是数据不一致）
+			d.logger.Info("✅ [GetValidatorVotingDetails] 从 StakeInfo 找到入站投票记录（VoterInfo 中不存在）",
 				"index", i,
 				"staker", stake.Staker.String(),
 				"delegate", delegateAddr.String(),
 				"amount", amount.String())
-			key := stake.Staker.String()
+			
 			if agg, exists := inboundStakesMap[key]; exists {
 				// 累加金额
 				agg.totalAmount.Add(agg.totalAmount, amount)
@@ -2662,9 +2616,26 @@ func (d *DPOS) parseVoteTransactionData(tx *types.Transaction) (*VoteInfo, error
 	amountBytes := input[dposPrefixLen+addrLen+addrLen : expectedLength]
 
 	// Convert amount bytes to big.Int (remove leading zeros)
+	// 🔧 修复：支持负数解码（全1表示 -1）
 	amount := new(big.Int).SetBytes(amountBytes)
-	if amount.Sign() <= 0 {
-		return nil, fmt.Errorf("vote amount must be positive, got %s", amount.String())
+	
+	// 检查是否为全1（0xFFFFFFFF...），表示 -1
+	isAllOnes := true
+	for _, b := range amountBytes {
+		if b != 0xFF {
+			isAllOnes = false
+			break
+		}
+	}
+	if isAllOnes {
+		amount = big.NewInt(-1)
+		d.logger.Info("🔧 [解析] 检测到全1编码，解析为 amount = -1")
+	}
+	
+	if amount.Cmp(big.NewInt(-1)) == 0 {
+		// amount = -1 表示撤销全部投票，允许通过
+	} else if amount.Sign() <= 0 {
+		return nil, fmt.Errorf("vote amount must be positive or -1 for unvote, got %s", amount.String())
 	}
 
 	d.logger.Info("DPoS vote data parsed successfully", "voter", voter.String(), "candidate", candidate.String(), "amount", amount.String())
@@ -5987,7 +5958,7 @@ func (d *DPOS) GetAccountBalance(ctx context.Context, params interface{}) (inter
 			}, nil
 		}
 		d.logger.Info("✅ [GetAccountBalance] DPoS 引擎调用成功", "balanceInfo", balanceInfo)
-		
+
 		// 如果返回的数据已经有 success 字段，直接返回；否则包装
 		if _, hasSuccess := balanceInfo["success"]; hasSuccess {
 			d.logger.Info("✅ [GetAccountBalance] 返回结果（已有 success 字段）", "result", balanceInfo)
@@ -6703,127 +6674,6 @@ func (d *DPOS) createProposalExecuteTransaction(executor types.Address, privateK
 	tx.ComputeHash(0)
 
 	return tx, nil
-}
-
-// buildUnvoteResponse 构建解质押响应（包含削减信息）
-func (d *DPOS) buildUnvoteResponse(voterAddr, validatorAddr types.Address) (*UnvoteResponse, error) {
-	d.logger.Info("🔍 构建解质押响应", "voter", voterAddr.String(), "validator", validatorAddr.String())
-
-	// 1. 获取 DPoS 引擎
-	dposEngine := d.getDPoSEngine()
-	if dposEngine == nil {
-		return nil, fmt.Errorf("DPoS engine not available")
-	}
-
-	// 2. 获取 VoterInfo（通过 State）
-	var voterInfo *dpos.VoterInfo
-	if getState, ok := dposEngine.(interface {
-		GetDPoSState() (*dpos.State, error)
-	}); ok {
-		state, err := getState.GetDPoSState()
-		if err != nil || state == nil || state.StakeStore == nil {
-			return nil, fmt.Errorf("failed to get DPoS state: %w", err)
-		}
-		voterInfo, err = state.StakeStore.GetVoterInfo(voterAddr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get voter info from store: %w", err)
-		}
-	} else {
-		return nil, fmt.Errorf("DPoS engine does not support getting state")
-	}
-
-	if voterInfo == nil {
-		return &UnvoteResponse{
-			Success:   false,
-			Voter:     voterAddr,
-			Validator: validatorAddr,
-			Error:     "voter info not found",
-		}, nil
-	}
-
-	// 3. 初始化 DelegateVotes 和 SlashingRecords（如果不存在）
-	if voterInfo.DelegateVotes == nil {
-		voterInfo.DelegateVotes = make(map[types.Address]*big.Int)
-	}
-	if voterInfo.SlashingRecords == nil {
-		voterInfo.SlashingRecords = make(map[types.Address][]*dpos.SlashingRecord)
-	}
-
-	// 4. 获取当前投票金额（从 DelegateVotes）
-	var currentAmount *big.Int
-	if voterInfo.DelegateVotes != nil {
-		currentAmount = voterInfo.DelegateVotes[validatorAddr]
-	}
-	if currentAmount == nil {
-		currentAmount = big.NewInt(0)
-	}
-
-	// 5. 获取削减历史
-	var slashingRecords []*dpos.SlashingRecord
-	if voterInfo.SlashingRecords != nil {
-		slashingRecords = voterInfo.SlashingRecords[validatorAddr]
-	}
-	if slashingRecords == nil {
-		slashingRecords = []*dpos.SlashingRecord{}
-	}
-
-	// 6. 获取 StakeInfo 计算原始金额和总削减金额
-	totalOriginalAmount := big.NewInt(0)
-	totalSlashAmount := big.NewInt(0)
-
-	allStakes, err := d.store.GetStakingInfo()
-	if err == nil {
-		for _, stake := range allStakes {
-			if stake != nil && stake.Staker == voterAddr && stake.Delegate == validatorAddr {
-				if stake.OriginalAmount != nil {
-					totalOriginalAmount.Add(totalOriginalAmount, stake.OriginalAmount)
-				} else if stake.Amount != nil {
-					// 如果没有原始金额，使用当前金额（可能已经被削减）
-					totalOriginalAmount.Add(totalOriginalAmount, stake.Amount)
-				}
-				if stake.SlashingRecords != nil {
-					for _, record := range stake.SlashingRecords {
-						if record.SlashAmount != nil {
-							totalSlashAmount.Add(totalSlashAmount, record.SlashAmount)
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// 如果总原始金额为0，使用当前金额
-	if totalOriginalAmount.Sign() == 0 {
-		totalOriginalAmount = new(big.Int).Set(currentAmount)
-	}
-
-	// 7. 构建响应消息
-	response := &UnvoteResponse{
-		Success:          true,
-		Voter:            voterAddr,
-		Validator:        validatorAddr,
-		WithdrawAmount:   currentAmount,
-		OriginalAmount:   totalOriginalAmount,
-		TotalSlashAmount: totalSlashAmount,
-		SlashCount:       len(slashingRecords),
-		SlashingHistory:  slashingRecords,
-	}
-
-	// 如果金额减少，添加提示信息
-	if totalOriginalAmount.Cmp(currentAmount) > 0 {
-		difference := new(big.Int).Sub(totalOriginalAmount, currentAmount)
-		response.Message = fmt.Sprintf(
-			"您的投票金额因验证者违规被削减。原始金额: %s, 当前金额: %s, 削减金额: %s, 削减次数: %d",
-			totalOriginalAmount.String(),
-			currentAmount.String(),
-			difference.String(),
-			len(slashingRecords),
-		)
-	} else {
-		response.Message = fmt.Sprintf("可提取金额: %s", currentAmount.String())
-	}
-
-	return response, nil
 }
 
 // GetVoterSlashingHistory 获取投票者的削减历史

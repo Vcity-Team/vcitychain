@@ -60,8 +60,8 @@ func TestVoteValidation(t *testing.T) {
 		Signature: []byte("test-signature"),
 	}
 
-	// 测试有效投票
-	err := dpos.validateVote(validVote)
+	// 测试有效投票（完整验证）
+	err := dpos.validateVote(validVote, false, false)
 	assert.NoError(t, err)
 
 	// 测试无效金额
@@ -73,9 +73,9 @@ func TestVoteValidation(t *testing.T) {
 		Timestamp: uint64(time.Now().Unix()),
 		Signature: []byte("test-signature"),
 	}
-	err = dpos.validateVote(invalidAmountVote)
+	err = dpos.validateVote(invalidAmountVote, false, false)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "vote amount must be positive")
+	assert.Contains(t, err.Error(), "vote amount cannot be zero")
 
 	// 测试金额超限
 	tooLargeVote := &VoteMessage{
@@ -86,7 +86,7 @@ func TestVoteValidation(t *testing.T) {
 		Timestamp: uint64(time.Now().Unix()),
 		Signature: []byte("test-signature"),
 	}
-	err = dpos.validateVote(tooLargeVote)
+	err = dpos.validateVote(tooLargeVote, false, false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "vote amount exceeds maximum")
 }

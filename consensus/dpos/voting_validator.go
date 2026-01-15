@@ -24,6 +24,15 @@ func (d *DPoS) ValidateVoteOnly(voter types.Address, candidate types.Address, am
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
+	// 🔍 调试日志：记录传入的 amount 参数
+	d.logger.Info("🔍 [ValidateVoteOnly] 开始验证",
+		"voter", voter.String(),
+		"candidate", candidate.String(),
+		"amount字符串", amount.String(),
+		"amount.Sign()", amount.Sign(),
+		"amount.Cmp(-1)", amount.Cmp(big.NewInt(-1)),
+		"amount.Cmp(0)", amount.Cmp(big.NewInt(0)))
+
 	d.logger.Debug("Validating vote only (no state update)",
 		"voter", voter.String(),
 		"candidate", candidate.String(),
@@ -38,8 +47,8 @@ func (d *DPoS) ValidateVoteOnly(voter types.Address, candidate types.Address, am
 		Timestamp: uint64(time.Now().Unix()),
 	}
 
-	// 只进行验证，不更新状态
-	if err := d.validateVote(vote); err != nil {
+	// 只进行验证，不更新状态（完整验证：检查余额和注册状态）
+	if err := d.validateVote(vote, false, false); err != nil {
 		d.logger.Error("❌ Vote validation failed", "error", err)
 		return fmt.Errorf("vote validation failed: %w", err)
 	}
@@ -49,27 +58,81 @@ func (d *DPoS) ValidateVoteOnly(voter types.Address, candidate types.Address, am
 }
 
 // validateVote 验证投票的有效性
-func (d *DPoS) validateVote(vote *VoteMessage) error {
-	// 1. 检查投票金额边界
-	if vote.Amount.Cmp(big.NewInt(-1)) == 0 {
-		// amount = -1 表示撤销全部投票，允许通过
-		// 撤销逻辑将在 AddVote 中处理
-	} else if vote.Amount.Cmp(big.NewInt(0)) <= 0 {
-		return errors.New("vote amount must be positive or -1 for unvote")
+// skipBalanceCheck: 是否跳过余额检查（用于交易处理时，余额可能已变化）
+// skipRegistrationCheck: 是否跳过注册/候选人状态检查（用于边界应用时，状态可能已变化）
+func (d *DPoS) validateVote(vote *VoteMessage, skipBalanceCheck bool, skipRegistrationCheck bool) error {
+	// 🔍 调试日志：记录函数入口参数
+	d.logger.Info("🔍 [validateVote] 开始验证",
+		"amount字符串", vote.Amount.String(),
+		"amount.Sign()", vote.Amount.Sign(),
+		"amount.Cmp(-1)", vote.Amount.Cmp(big.NewInt(-1)),
+		"amount.Cmp(0)", vote.Amount.Cmp(big.NewInt(0)),
+		"skipBalanceCheck", skipBalanceCheck,
+		"skipRegistrationCheck", skipRegistrationCheck)
+
+	// 1. 检查投票金额边界：合法的 amount 只有 -1（撤销）或正数（投票）
+	cmpMinusOne := vote.Amount.Cmp(big.NewInt(-1))
+	d.logger.Info("🔍 [validateVote] 检查 amount < -1",
+		"amount", vote.Amount.String(),
+		"cmp(-1)结果", cmpMinusOne,
+		"是否< -1", cmpMinusOne < 0)
+	if cmpMinusOne < 0 {
+		return errors.New("vote amount cannot be less than -1")
 	}
 
+	cmpZero := vote.Amount.Cmp(big.NewInt(0))
+	d.logger.Info("🔍 [validateVote] 检查 amount = 0",
+		"amount", vote.Amount.String(),
+		"cmp(0)结果", cmpZero,
+		"是否= 0", cmpZero == 0)
+	if cmpZero == 0 {
+		return errors.New("vote amount cannot be zero")
+	}
+
+	// amount = -1 表示撤销，直接通过
+	d.logger.Info("🔍 [validateVote] 检查 amount = -1",
+		"amount", vote.Amount.String(),
+		"cmp(-1)结果", cmpMinusOne,
+		"是否= -1", cmpMinusOne == 0)
+	if cmpMinusOne == 0 {
+		d.logger.Info("✅ [validateVote] amount = -1，撤销投票，直接通过验证")
+		return nil
+	}
+
+	// amount > 0 时，检查最小/最大金额
+	d.logger.Info("🔍 [validateVote] amount != -1，继续检查最小/最大金额",
+		"amount", vote.Amount.String(),
+		"amount.Sign()", vote.Amount.Sign())
+
 	maxAmount, _ := new(big.Int).SetString(MaxVoteAmount, 10)
-	if vote.Amount.Cmp(maxAmount) > 0 {
+	cmpMax := vote.Amount.Cmp(maxAmount)
+	d.logger.Info("🔍 [validateVote] 检查最大金额",
+		"amount", vote.Amount.String(),
+		"MaxVoteAmount", MaxVoteAmount,
+		"cmp(max)结果", cmpMax,
+		"是否> max", cmpMax > 0)
+	if cmpMax > 0 {
 		return errors.New("vote amount exceeds maximum")
 	}
 
 	minAmount, _ := new(big.Int).SetString(MinVoteAmount, 10)
-	if vote.Amount.Cmp(minAmount) < 0 {
+	cmpMin := vote.Amount.Cmp(minAmount)
+	d.logger.Info("🔍 [validateVote] 检查最小金额",
+		"amount", vote.Amount.String(),
+		"MinVoteAmount", MinVoteAmount,
+		"cmp(min)结果", cmpMin,
+		"是否< min", cmpMin < 0,
+		"⚠️ 如果 amount = -1 但执行到这里，说明逻辑有问题！")
+	if cmpMin < 0 {
+		d.logger.Error("❌ [validateVote] 触发最小金额检查失败",
+			"amount", vote.Amount.String(),
+			"MinVoteAmount", MinVoteAmount,
+			"注意：如果 amount = -1，不应该执行到这里！")
 		return errors.New("vote amount below minimum")
 	}
 
-	// 2. 检查投票者VCITY代币余额和剩余可投票数
-	if d.balanceQuerier != nil {
+	// 2. 检查投票者VCITY代币余额和剩余可投票数（可选）
+	if !skipBalanceCheck && d.balanceQuerier != nil {
 		balance, err := d.balanceQuerier.GetNativeTokenBalance(vote.Voter)
 		if err != nil {
 			d.logger.Error("Failed to query voter balance",
@@ -106,62 +169,66 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 		d.logger.Warn("Balance querier not available, skipping balance check")
 	}
 
-	// 新增：检查受托人是否已注册（创世验证者例外）
-	d.logger.Info("🔍 开始验证受托人注册状态",
-		"delegate", vote.Delegate.String(),
-		"voter", vote.Voter.String(),
-		"amount", vote.Amount.String())
-
-	// 确保创世验证者映射已初始化
-	if d.genesisValidators == nil || len(d.genesisValidators) == 0 {
-		d.initializeGenesisValidatorsMap()
-	}
-
-	// 创世验证者可以直接被投票，无需注册
-	if d.isGenesisValidator(vote.Delegate) {
-		d.logger.Info("✅ 受托人是创世验证者，跳过注册检查",
-			"delegate", vote.Delegate.String(),
-			"voter", vote.Voter.String())
-	} else if !d.IsDelegateRegistered(vote.Delegate) {
-		d.logger.Warn("❌ 受托人未注册，投票被拒绝",
+	// 检查受托人是否已注册（创世验证者例外）
+	if !skipRegistrationCheck {
+		d.logger.Info("🔍 开始验证受托人注册状态",
 			"delegate", vote.Delegate.String(),
 			"voter", vote.Voter.String(),
-			"amount", vote.Amount.String(),
-			"reason", "delegate not registered")
-		return fmt.Errorf("delegate %s is not registered", vote.Delegate.String())
+			"amount", vote.Amount.String())
+
+		// 确保创世验证者映射已初始化
+		if d.genesisValidators == nil || len(d.genesisValidators) == 0 {
+			d.initializeGenesisValidatorsMap()
+		}
+
+		// 创世验证者可以直接被投票，无需注册
+		if d.isGenesisValidator(vote.Delegate) {
+			d.logger.Info("✅ 受托人是创世验证者，跳过注册检查",
+				"delegate", vote.Delegate.String(),
+				"voter", vote.Voter.String())
+		} else if !d.IsDelegateRegistered(vote.Delegate) {
+			d.logger.Warn("❌ 受托人未注册，投票被拒绝",
+				"delegate", vote.Delegate.String(),
+				"voter", vote.Voter.String(),
+				"amount", vote.Amount.String(),
+				"reason", "delegate not registered")
+			return fmt.Errorf("delegate %s is not registered", vote.Delegate.String())
+		}
 	}
 
 	d.logger.Info("✅ 受托人注册状态验证通过",
 		"delegate", vote.Delegate.String(),
 		"voter", vote.Voter.String())
 
-	// 新增：检查受托人是否为候选人状态（可以接受投票，创世验证者例外）
-	d.logger.Info("🔍 开始验证受托人候选人状态",
-		"delegate", vote.Delegate.String(),
-		"voter", vote.Voter.String())
-
-	// 确保创世验证者映射已初始化（如果之前没有初始化）
-	if d.genesisValidators == nil || len(d.genesisValidators) == 0 {
-		d.initializeGenesisValidatorsMap()
-	}
-
-	// 创世验证者可以直接被投票，无需检查候选人状态
-	if d.isGenesisValidator(vote.Delegate) {
-		d.logger.Info("✅ 受托人是创世验证者，跳过候选人状态检查",
+	// 检查受托人是否为候选人状态（可以接受投票，创世验证者例外）
+	if !skipRegistrationCheck {
+		d.logger.Info("🔍 开始验证受托人候选人状态",
 			"delegate", vote.Delegate.String(),
 			"voter", vote.Voter.String())
-	} else if !d.IsDelegateCandidate(vote.Delegate) {
-		d.logger.Warn("❌ 受托人不是候选人状态，投票被拒绝",
-			"delegate", vote.Delegate.String(),
-			"voter", vote.Voter.String(),
-			"amount", vote.Amount.String(),
-			"reason", "delegate not a candidate")
-		return fmt.Errorf("delegate %s is not a candidate", vote.Delegate.String())
-	}
 
-	d.logger.Info("✅ 受托人候选人状态验证通过",
-		"delegate", vote.Delegate.String(),
-		"voter", vote.Voter.String())
+		// 确保创世验证者映射已初始化（如果之前没有初始化）
+		if d.genesisValidators == nil || len(d.genesisValidators) == 0 {
+			d.initializeGenesisValidatorsMap()
+		}
+
+		// 创世验证者可以直接被投票，无需检查候选人状态
+		if d.isGenesisValidator(vote.Delegate) {
+			d.logger.Info("✅ 受托人是创世验证者，跳过候选人状态检查",
+				"delegate", vote.Delegate.String(),
+				"voter", vote.Voter.String())
+		} else if !d.IsDelegateCandidate(vote.Delegate) {
+			d.logger.Warn("❌ 受托人不是候选人状态，投票被拒绝",
+				"delegate", vote.Delegate.String(),
+				"voter", vote.Voter.String(),
+				"amount", vote.Amount.String(),
+				"reason", "delegate not a candidate")
+			return fmt.Errorf("delegate %s is not a candidate", vote.Delegate.String())
+		}
+
+		d.logger.Info("✅ 受托人候选人状态验证通过",
+			"delegate", vote.Delegate.String(),
+			"voter", vote.Voter.String())
+	}
 
 	// 2. 检查受托人是否存在且活跃（从数据库查询，不依赖内存）
 	delegateExists := false
@@ -189,19 +256,13 @@ func (d *DPoS) validateVote(vote *VoteMessage) error {
 			break
 		}
 	}
-
-	// ✅ 修改：不在投票时创建验证者记录到数据库
 	// 验证者记录应该在边界应用时创建，而不是在投票时
-	// 这里只检查验证者是否存在，不创建新记录
 	if !delegateExists {
 		d.logger.Debug("⚠️ 受托人不在验证者集合中，将在边界应用时创建",
 			"delegate", vote.Delegate.String(),
 			"note", "投票已记录，将在epoch边界应用时创建验证者记录")
 		// 不再调用 addDelegateSafely，避免创建零权重验证者记录
 	}
-
-	// 3. 投票锁定时间检查 - 已删除（投票者不受限制）
-	// 4. 投票权重上限检查 - 已删除（投票者不受限制）
 
 	return nil
 }
@@ -217,8 +278,6 @@ func (d *DPoS) verifyVoteSignature(vote *VoteMessage) error {
 
 	messageBytes := []byte(message)
 	hash := crypto.Keccak256(messageBytes)
-
-	// 注意：DPoS 投票通过交易处理，签名验证在区块链层完成
 	// 此函数仅用于 P2P gossip 消息（当前未使用）
 	// 如启用 P2P 投票，需实现 ECDSA 签名恢复验证
 	_ = hash // 保留用于未来 P2P 签名验证

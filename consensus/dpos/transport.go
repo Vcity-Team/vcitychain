@@ -34,8 +34,8 @@ func (p *DPoS) handleVoteMessage(msg *VoteMessage, from peer.ID) error {
 		"amount", msg.Amount.String(),
 		"from", from.String())
 
-	// 1. 验证投票消息
-	if err := p.validateVoteMessage(msg); err != nil {
+	// 1. 验证投票消息（使用统一的验证函数，P2P消息跳过余额检查但检查注册状态）
+	if err := p.validateVote(msg, true, false); err != nil {
 		p.logger.Warn("invalid vote message", "error", err, "voter", msg.Voter)
 		return err
 	}
@@ -140,39 +140,6 @@ func (p *DPoS) handleSignatureResponse(response *SignatureResponse, from peer.ID
 	if err := p.forwardSignatureResponse(response); err != nil {
 		p.logger.Error("转发签名响应失败", "error", err, "from", from.String())
 		return err
-	}
-
-	return nil
-}
-
-// validateVoteMessage 验证投票消息
-func (p *DPoS) validateVoteMessage(msg *VoteMessage) error {
-	// 1. 检查基本字段
-	if msg.Voter == types.ZeroAddress {
-		return errors.New("invalid voter address")
-	}
-	if msg.Delegate == types.ZeroAddress {
-		return errors.New("invalid delegate address")
-	}
-	if msg.Amount == nil || msg.Amount.Cmp(big.NewInt(0)) <= 0 {
-		return errors.New("invalid vote amount")
-	}
-
-	// 2. 检查投票金额边界
-	maxAmount, _ := new(big.Int).SetString(MaxVoteAmount, 10)
-	if msg.Amount.Cmp(maxAmount) > 0 {
-		return errors.New("vote amount exceeds maximum")
-	}
-
-	minAmount, _ := new(big.Int).SetString(MinVoteAmount, 10)
-	if msg.Amount.Cmp(minAmount) < 0 {
-		return errors.New("vote amount below minimum")
-	}
-
-	// 3. 检查时间戳
-	now := uint64(time.Now().Unix())
-	if msg.Timestamp < now-300 || msg.Timestamp > now+60 {
-		return errors.New("vote timestamp out of range")
 	}
 
 	return nil

@@ -106,9 +106,25 @@ func (d *DPoS) parseVoteTransactionData(tx *types.Transaction) (*VoteInfo, error
 	amountBytes := input[dposPrefixLen+addrLen+addrLen : expectedLength]
 
 	// 转换金额字节为big.Int（移除前导零）
+	// 🔧 修复：支持负数解码（全1表示 -1）
 	amount := new(big.Int).SetBytes(amountBytes)
+	
+	// 检查是否为全1（0xFFFFFFFF...），表示 -1
+	isAllOnes := true
+	for _, b := range amountBytes {
+		if b != 0xFF {
+			isAllOnes = false
+			break
+		}
+	}
+	if isAllOnes {
+		amount = big.NewInt(-1)
+		d.logger.Info("🔧 [解析] 检测到全1编码，解析为 amount = -1")
+	}
+	
 	if amount.Cmp(big.NewInt(-1)) == 0 {
 		// amount = -1 表示撤销全部投票，允许通过
+		d.logger.Info("🔧 [解析] amount = -1，撤销投票")
 	} else if amount.Sign() <= 0 {
 		return nil, fmt.Errorf("vote amount must be positive or -1 for unvote, got %s", amount.String())
 	}

@@ -55,8 +55,13 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 	}
 
 	// ✅ 修改：只进行基本验证，不更新数据库（边界应用）
+	// 交易处理时跳过余额检查（余额可能已变化），但检查注册状态
 	d.logger.Debug("🔄 验证投票（不更新数据库）...")
-	if err := d.validateVoteOnly(vote); err != nil {
+	if err := d.verifyVoteSignature(vote); err != nil {
+		d.logger.Error("❌ 投票签名验证失败", "error", err)
+		return fmt.Errorf("vote signature verification failed: %w", err)
+	}
+	if err := d.validateVote(vote, true, false); err != nil {
 		d.logger.Error("❌ 投票验证失败", "error", err)
 		return fmt.Errorf("vote validation failed: %w", err)
 	}
@@ -84,35 +89,6 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 	return nil
 }
 
-// validateVoteOnly 只验证投票，不更新数据库（用于边界应用）
-func (d *DPoS) validateVoteOnly(vote *VoteMessage) error {
-	// 1. 基本验证（签名、格式等）
-	if err := d.verifyVoteSignature(vote); err != nil {
-		return fmt.Errorf("vote signature verification failed: %w", err)
-	}
-
-	// 2. 投票权重上限检查 - 已删除（投票者不受限制）
-
-	// 3. 检查受托人是否存在（只检查，不创建）
-	validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
-	if err == nil {
-		delegateExists := false
-		for _, validator := range validators {
-			if validator.Address == vote.Delegate && validator.IsActive {
-				delegateExists = true
-				break
-			}
-		}
-		if !delegateExists {
-			d.logger.Debug("⚠️ 受托人不在验证者集合中，将在边界应用时创建",
-				"delegate", vote.Delegate.String(),
-				"note", "投票已记录，将在epoch边界应用时创建验证者记录")
-		}
-	}
-
-	return nil
-}
-
 // processVoteInternal 内部投票处理方法（不加锁，由调用者负责）
 func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 	d.logger.Debug("🔄 processVoteInternal started",
@@ -130,7 +106,8 @@ func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 		"amount", vote.Amount.String(),
 		"amountHex", fmt.Sprintf("0x%x", vote.Amount.Bytes()))
 
-	if err := d.validateVote(vote); err != nil {
+	// 边界应用时做完整验证（包括余额和注册状态）
+	if err := d.validateVote(vote, false, false); err != nil {
 		d.logger.Error("❌ Vote validation failed", "error", err)
 		return fmt.Errorf("vote validation failed: %w", err)
 	}
@@ -273,8 +250,8 @@ func (d *DPoS) processVoteBatch(votes []*VoteMessage) {
 	delegateUpdates := make(map[types.Address]*big.Int)
 
 	for _, vote := range votes {
-		// 验证投票
-		if err := d.validateVote(vote); err != nil {
+		// 验证投票（批量处理时做完整验证）
+		if err := d.validateVote(vote, false, false); err != nil {
 			d.logger.Warn("invalid vote in batch", "error", err, "voter", vote.Voter)
 			continue
 		}
@@ -366,7 +343,7 @@ func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error
 	// 🆕 修复：使用去重机制，避免同一投票被处理两次
 	var scheduledVotes []*VoteRecord
 	voteKeyMap := make(map[string]bool) // 用于去重：key = "Voter_Delegate_Timestamp"
-	
+
 	addVote := func(v *VoteRecord) {
 		if v == nil {
 			return
@@ -533,9 +510,77 @@ func (d *DPoS) processUnvote(voter types.Address, candidate types.Address) error
 		"voter", voter.String(),
 		"candidate", candidate.String())
 
-	// 1. 获取投票者信息
-	voterInfo, exists := d.voters[voter]
+	// 1. 直接从数据库获取投票者信息（不依赖内存）
+	var voterInfo *VoterInfo
+	var exists bool
+
+	if d.state == nil || d.state.StakeStore == nil {
+		d.logger.Warn("❌ 数据库不可用，无法撤销投票",
+			"voter", voter.String())
+		return fmt.Errorf("database not available, cannot process unvote")
+	}
+
+	// 1.1 从数据库的 VoterInfo bucket 加载
+	dbVoterInfo, err := d.state.StakeStore.GetVoterInfo(voter)
+	if err != nil {
+		d.logger.Warn("⚠️ 从数据库加载 VoterInfo 失败", "error", err)
+	} else if dbVoterInfo != nil {
+		voterInfo = dbVoterInfo
+		exists = true
+		d.logger.Info("✅ 从数据库加载投票者信息成功",
+			"voter", voter.String(),
+			"votingPower", voterInfo.VotingPower.String())
+	}
+
+	// 1.2 如果 VoterInfo 也没有，从 StakeInfo 构建
 	if !exists {
+		d.logger.Info("🔍 VoterInfo 中未找到，尝试从 StakeInfo 构建",
+			"voter", voter.String(),
+			"candidate", candidate.String())
+
+		stakingInfos, err := d.state.StakeStore.GetStakingInfo()
+		if err == nil {
+			// 查找该投票者对该候选人的所有投票记录（只统计已应用且活跃的）
+			totalVoteAmount := big.NewInt(0)
+			hasVoteRecord := false
+
+			for _, stakeInfo := range stakingInfos {
+				if stakeInfo != nil && stakeInfo.Staker == voter && stakeInfo.Delegate == candidate {
+					// 只统计已应用且活跃的投票（Applied=true && IsActive=true）
+					if stakeInfo.Applied && stakeInfo.IsActive {
+						totalVoteAmount.Add(totalVoteAmount, stakeInfo.Amount)
+						hasVoteRecord = true
+						d.logger.Info("🔍 找到活跃投票记录",
+							"staker", stakeInfo.Staker.String(),
+							"delegate", stakeInfo.Delegate.String(),
+							"amount", stakeInfo.Amount.String(),
+							"applied", stakeInfo.Applied,
+							"isActive", stakeInfo.IsActive)
+					}
+				}
+			}
+
+			if hasVoteRecord && totalVoteAmount.Sign() > 0 {
+				// 构建 VoterInfo
+				voterInfo = &VoterInfo{
+					Address:        voter,
+					VotingPower:    new(big.Int).Set(totalVoteAmount),
+					VotedDelegates: []types.Address{candidate},
+					DelegateVotes:  map[types.Address]*big.Int{candidate: new(big.Int).Set(totalVoteAmount)},
+					LastVoteTime:   uint64(time.Now().Unix()),
+					LockedUntil:    uint64(time.Now().Unix()) + VoteLockTime,
+					Nonce:          make(map[uint64]bool),
+				}
+				exists = true
+				d.logger.Info("✅ 从 StakeInfo 构建投票者信息成功",
+					"voter", voter.String(),
+					"candidate", candidate.String(),
+					"totalVoteAmount", totalVoteAmount.String())
+			}
+		}
+	}
+
+	if !exists || voterInfo == nil {
 		d.logger.Warn("❌ 投票者不存在，无法撤销",
 			"voter", voter.String())
 		return fmt.Errorf("voter %s has no voting record", voter.String())
@@ -548,11 +593,45 @@ func (d *DPoS) processUnvote(voter types.Address, candidate types.Address) error
 
 	currentVoteAmount, hasVote := voterInfo.DelegateVotes[candidate]
 	if !hasVote || currentVoteAmount.Sign() <= 0 {
-		d.logger.Warn("❌ 投票者未投票给该候选人，无法撤销",
-			"voter", voter.String(),
-			"candidate", candidate.String(),
-			"currentVote", currentVoteAmount.String())
-		return fmt.Errorf("no vote found for candidate %s", candidate.String())
+		// 🔧 如果 DelegateVotes 中没有，从 StakeInfo 重新计算（只统计已应用且活跃的）
+		stakingInfos, err := d.state.StakeStore.GetStakingInfo()
+		if err == nil {
+			totalVoteAmount := big.NewInt(0)
+			for _, stakeInfo := range stakingInfos {
+				if stakeInfo != nil && stakeInfo.Staker == voter && stakeInfo.Delegate == candidate {
+					// 只统计已应用且活跃的投票（Applied=true && IsActive=true）
+					if stakeInfo.Applied && stakeInfo.IsActive {
+						totalVoteAmount.Add(totalVoteAmount, stakeInfo.Amount)
+					}
+				}
+			}
+			if totalVoteAmount.Sign() > 0 {
+				// 更新 DelegateVotes
+				if voterInfo.DelegateVotes == nil {
+					voterInfo.DelegateVotes = make(map[types.Address]*big.Int)
+				}
+				voterInfo.DelegateVotes[candidate] = new(big.Int).Set(totalVoteAmount)
+				currentVoteAmount = totalVoteAmount
+				hasVote = true
+				d.logger.Info("✅ 从 StakeInfo 重新计算投票金额",
+					"voter", voter.String(),
+					"candidate", candidate.String(),
+					"amount", totalVoteAmount.String())
+			}
+		}
+
+		if !hasVote || currentVoteAmount.Sign() <= 0 {
+			d.logger.Warn("❌ 投票者未投票给该候选人，无法撤销",
+				"voter", voter.String(),
+				"candidate", candidate.String(),
+				"currentVote", func() string {
+					if currentVoteAmount != nil {
+						return currentVoteAmount.String()
+					}
+					return "nil"
+				}())
+			return fmt.Errorf("no vote found for candidate %s", candidate.String())
+		}
 	}
 
 	d.logger.Info("📊 撤销前状态",
@@ -574,32 +653,148 @@ func (d *DPoS) processUnvote(voter types.Address, candidate types.Address) error
 	// 5. 减少投票者的总投票权重
 	voterInfo.VotingPower = new(big.Int).Sub(voterInfo.VotingPower, currentVoteAmount)
 
-	// 6. 减少候选人的投票权重
-	validatorUpdated := false
-	for i, validator := range d.delegates {
-		if validator.Address == candidate {
-			validator.VotingPower = new(big.Int).Sub(validator.VotingPower, currentVoteAmount)
-			d.delegates[i] = validator // 更新slice中的元素
-			d.logger.Info("✅ 候选人权重已更新",
-				"candidate", candidate.String(),
-				"oldVotingPower", new(big.Int).Add(validator.VotingPower, currentVoteAmount).String(),
-				"newVotingPower", validator.VotingPower.String())
-			validatorUpdated = true
-			break
+	// 6. 减少候选人的投票权重（先更新数据库，再同步到内存）
+	// 🔧 修复：撤销投票时也需要更新数据库中的 DelegateInfo.VotingPower
+	// 从数据库读取当前权重
+	originalVotingPower, err := d.getVotingPowerFromDatabase(candidate)
+	if err != nil || originalVotingPower == nil {
+		d.logger.Warn("⚠️ 从数据库读取验证者权重失败，尝试从内存获取",
+			"candidate", candidate.String(),
+			"error", err)
+		// 如果读取失败，尝试从内存获取
+		originalVotingPower = big.NewInt(0)
+		validatorUpdated := false
+		for _, validator := range d.delegates {
+			if validator.Address == candidate && validator.VotingPower != nil {
+				originalVotingPower = new(big.Int).Set(validator.VotingPower)
+				validatorUpdated = true
+				break
+			}
+		}
+		if !validatorUpdated {
+			d.logger.Warn("⚠️ 候选人不在验证者列表中，使用0作为初始权重",
+				"candidate", candidate.String())
 		}
 	}
-	if !validatorUpdated {
-		d.logger.Warn("⚠️ 候选人不在验证者列表中，只更新投票者权重",
-			"candidate", candidate.String())
+
+	// 计算新的投票权重（减去撤销的金额）
+	newVotingPower := new(big.Int).Sub(originalVotingPower, currentVoteAmount)
+	if newVotingPower.Sign() < 0 {
+		newVotingPower = big.NewInt(0) // 确保不为负数
 	}
+
+	d.logger.Info("🔄 准备更新验证者投票权重（撤销投票）",
+		"candidate", candidate.String(),
+		"originalVotingPower", originalVotingPower.String(),
+		"unvotedAmount", currentVoteAmount.String(),
+		"newVotingPower", newVotingPower.String())
 
 	// 7. 更新最后投票时间
 	voterInfo.LastVoteTime = uint64(time.Now().Unix())
 
-	// 8. 标记需要更新验证者集合（立即生效）
+	// 8. 更新数据库中的 VoterInfo 和 StakeInfo
+	if d.state != nil && d.state.StakeStore != nil {
+		// 8.1 先获取需要更新的 StakeInfo 记录（在事务外获取，避免嵌套事务）
+		stakingInfos, err := d.state.StakeStore.GetStakingInfo()
+		var matchingStakes []*StakeInfo
+		if err == nil {
+			for _, stakeInfo := range stakingInfos {
+				// 只更新已应用且活跃的记录（Applied=true && IsActive=true）
+				if stakeInfo != nil && stakeInfo.Staker == voter && stakeInfo.Delegate == candidate &&
+					stakeInfo.Applied && stakeInfo.IsActive && stakeInfo.Amount != nil && stakeInfo.Amount.Sign() > 0 {
+					matchingStakes = append(matchingStakes, stakeInfo)
+				}
+			}
+		}
+
+		// 8.2 在事务中更新 VoterInfo、StakeInfo 和 DelegateInfo
+		dbTx, err := d.state.beginDBTransaction(true)
+		if err == nil {
+			// 更新 VoterInfo
+			if err := d.state.StakeStore.setVoterInfo(voter, voterInfo, dbTx); err != nil {
+				d.logger.Warn("⚠️ 保存 VoterInfo 到数据库失败", "error", err)
+				dbTx.Rollback()
+			} else {
+				// 更新 StakeInfo：将相关记录的 Amount 设置为 0（保持 IsActive = true）
+				updatedCount := 0
+				for _, stakeInfo := range matchingStakes {
+					// 将 Amount 设置为 0（保持 IsActive = true，OriginalAmount 保留原始金额）
+					oldAmount := new(big.Int).Set(stakeInfo.Amount)
+					stakeInfo.Amount = big.NewInt(0)
+					// 保存更新后的记录
+					if err := d.state.StakeStore.setStakingInfo(voter, stakeInfo, stakeInfo.StartTime, dbTx); err == nil {
+						updatedCount++
+						d.logger.Info("✅ 更新 StakeInfo Amount 为 0（撤销投票）",
+							"staker", stakeInfo.Staker.String(),
+							"delegate", stakeInfo.Delegate.String(),
+							"oldAmount", oldAmount.String(),
+							"newAmount", "0",
+							"originalAmount", func() string {
+								if stakeInfo.OriginalAmount != nil {
+									return stakeInfo.OriginalAmount.String()
+								}
+								return "nil"
+							}(),
+							"startTime", stakeInfo.StartTime,
+							"isActive", stakeInfo.IsActive)
+					} else {
+						d.logger.Warn("⚠️ 保存 StakeInfo 失败", "error", err)
+					}
+				}
+
+				// 🔧 更新 DelegateInfo.VotingPower（在同一事务中）
+				if err := d.updateVotingPowerInDatabaseWithTx(candidate, newVotingPower, dbTx); err != nil {
+					d.logger.Warn("⚠️ 更新 DelegateInfo.VotingPower 失败", "error", err)
+					dbTx.Rollback()
+					return fmt.Errorf("failed to update delegate voting power in database: %w", err)
+				} else {
+					d.logger.Info("✅ DelegateInfo.VotingPower 已更新到数据库",
+						"candidate", candidate.String(),
+						"oldVotingPower", originalVotingPower.String(),
+						"newVotingPower", newVotingPower.String())
+				}
+
+				// 提交事务
+				if err := dbTx.Commit(); err != nil {
+					d.logger.Warn("⚠️ 提交事务失败", "error", err)
+				} else {
+					if updatedCount > 0 {
+						d.logger.Info("✅ VoterInfo、StakeInfo 和 DelegateInfo 已更新到数据库",
+							"voter", voter.String(),
+							"candidate", candidate.String(),
+							"updatedStakeInfoCount", updatedCount,
+							"remainingVotingPower", voterInfo.VotingPower.String(),
+							"candidateNewVotingPower", newVotingPower.String(),
+							"note", "StakeInfo.Amount 已设置为 0，IsActive 保持为 true，OriginalAmount 保留原始金额")
+					} else {
+						d.logger.Info("✅ VoterInfo 和 DelegateInfo 已保存到数据库",
+							"voter", voter.String(),
+							"candidate", candidate.String(),
+							"remainingVotingPower", voterInfo.VotingPower.String(),
+							"candidateNewVotingPower", newVotingPower.String(),
+							"note", "未找到需要更新的 StakeInfo 记录")
+					}
+				}
+			}
+		}
+
+		// 8.3 数据库更新成功后，同步到内存
+		if err := d.syncDelegateFromDatabase(candidate); err != nil {
+			d.logger.Warn("⚠️ 同步验证者信息到内存失败",
+				"candidate", candidate.String(),
+				"error", err)
+			// 不返回错误，因为数据库更新已经成功
+		} else {
+			d.logger.Info("✅ 验证者信息已同步到内存",
+				"candidate", candidate.String(),
+				"votingPower", newVotingPower.String())
+		}
+	}
+
+	// 10. 标记需要更新验证者集合（立即生效）
 	d.pendingValidatorUpdate = true
 
-	// 9. 记录撤销操作（可选，用于审计）
+	// 11. 记录撤销操作（可选，用于审计）
 	d.logger.Info("✅ 撤销投票成功",
 		"voter", voter.String(),
 		"candidate", candidate.String(),
@@ -609,7 +804,3 @@ func (d *DPoS) processUnvote(voter types.Address, candidate types.Address) error
 
 	return nil
 }
-
-
-
-
