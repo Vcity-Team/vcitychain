@@ -2225,14 +2225,14 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 					"note", "VoterInfo.DelegateVotes 已包含减去撤销后的有效权重")
 				continue
 			}
-			
+
 			// 如果 VoterInfo 中没有，才从 StakeInfo 累加（这种情况应该很少，可能是数据不一致）
 			d.logger.Info("✅ [GetValidatorVotingDetails] 从 StakeInfo 找到入站投票记录（VoterInfo 中不存在）",
 				"index", i,
 				"staker", stake.Staker.String(),
 				"delegate", delegateAddr.String(),
 				"amount", amount.String())
-			
+
 			if agg, exists := inboundStakesMap[key]; exists {
 				// 累加金额
 				agg.totalAmount.Add(agg.totalAmount, amount)
@@ -2618,7 +2618,7 @@ func (d *DPOS) parseVoteTransactionData(tx *types.Transaction) (*VoteInfo, error
 	// Convert amount bytes to big.Int (remove leading zeros)
 	// 🔧 修复：支持负数解码（全1表示 -1）
 	amount := new(big.Int).SetBytes(amountBytes)
-	
+
 	// 检查是否为全1（0xFFFFFFFF...），表示 -1
 	isAllOnes := true
 	for _, b := range amountBytes {
@@ -2631,7 +2631,7 @@ func (d *DPOS) parseVoteTransactionData(tx *types.Transaction) (*VoteInfo, error
 		amount = big.NewInt(-1)
 		d.logger.Info("🔧 [解析] 检测到全1编码，解析为 amount = -1")
 	}
-	
+
 	if amount.Cmp(big.NewInt(-1)) == 0 {
 		// amount = -1 表示撤销全部投票，允许通过
 	} else if amount.Sign() <= 0 {

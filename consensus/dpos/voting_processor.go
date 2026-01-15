@@ -34,7 +34,7 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 		currentEpoch = 0
 	}
 
-	// 改为：本epoch投票在本epoch末尾应用（effectiveEpoch = currentEpoch）
+	// 本epoch投票在本epoch末尾应用（effectiveEpoch = currentEpoch）
 	effectiveEpoch := currentEpoch
 	d.logger.Info("✅ [投票] 设置生效epoch为当前epoch（本轮边界应用）",
 		"voter", voter.String(),
@@ -42,8 +42,6 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 		"currentBlock", currentBlockNumber,
 		"currentEpoch", currentEpoch,
 		"effectiveEpoch", effectiveEpoch)
-
-	// 创建投票消息（用于验证）
 	vote := &VoteMessage{
 		Voter:          voter,
 		Delegate:       candidate,
@@ -54,7 +52,6 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 		Applied:        false,
 	}
 
-	// ✅ 修改：只进行基本验证，不更新数据库（边界应用）
 	// 交易处理时跳过余额检查（余额可能已变化），但检查注册状态
 	d.logger.Debug("🔄 验证投票（不更新数据库）...")
 	if err := d.verifyVoteSignature(vote); err != nil {
@@ -67,7 +64,6 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 	}
 	d.logger.Debug("✅ 投票验证通过")
 
-	// ✅ 修改：只保存投票记录到数据库，不更新验证者权重
 	d.logger.Debug("🔄 保存投票记录到数据库（等待边界应用）...")
 	if err := d.persistVoteToDatabase(voter, candidate, amount, effectiveEpoch, false); err != nil {
 		d.logger.Error("Failed to persist vote to database", "error", err)
@@ -177,8 +173,6 @@ func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 			"error", err)
 		return fmt.Errorf("failed to get voting power from database: %w", err)
 	}
-
-	// 显著日志：显示投票权重更新详情
 	d.logger.Info("🎯 ===== 投票权重更新详情 =====",
 		"delegate", vote.Delegate.String(),
 		"originalVotingPower", originalVotingPower.String(),
@@ -188,7 +182,6 @@ func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 		"expectedNewPower", new(big.Int).Add(originalVotingPower, vote.Amount).String(),
 		"dataSource", "database")
 
-	// 直接更新数据库，然后同步到内存
 	newVotingPower := new(big.Int).Add(originalVotingPower, vote.Amount)
 	err = d.updateVotingPowerInDatabase(vote.Delegate, newVotingPower)
 	if err != nil {
@@ -199,7 +192,6 @@ func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 		return fmt.Errorf("failed to update voting power in database: %w", err)
 	}
 
-	// 数据库更新成功后，同步到内存
 	err = d.syncDelegateFromDatabase(vote.Delegate)
 	if err != nil {
 		d.logger.Warn("⚠️ 同步验证者信息到内存失败",
@@ -207,8 +199,6 @@ func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 			"error", err)
 		// 不返回错误，因为数据库更新已经成功
 	}
-
-	// 显著日志：记录更新完成
 	d.logger.Info("🎯 ===== 投票权重更新完成 =====",
 		"delegate", vote.Delegate.String(),
 		"originalVotingPower", originalVotingPower.String(),
@@ -318,10 +308,8 @@ func (d *DPoS) processVoteBatch(votes []*VoteMessage) {
 		d.logger.Info("✅ 批量投票完成，已标记需要更新的验证者", "votedDelegatesCount", len(d.lastVotedDelegates))
 	}
 
-	// 更新缓存
 	d.updateCache(voterUpdates)
 
-	// 更新指标
 	d.metrics.lock.Lock()
 	d.metrics.TotalVotes += uint64(len(votes))
 	d.metrics.ActiveVoters = uint64(len(d.voters))
@@ -340,7 +328,7 @@ func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error
 		"epochNumber", epochNumber)
 
 	// 查询所有待应用的投票（内存 + 数据库）
-	// 🆕 修复：使用去重机制，避免同一投票被处理两次
+	// 使用去重机制，避免同一投票被处理两次
 	var scheduledVotes []*VoteRecord
 	voteKeyMap := make(map[string]bool) // 用于去重：key = "Voter_Delegate_Timestamp"
 
@@ -414,7 +402,7 @@ func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error
 		return nil
 	}
 
-	// ✅ 修改：在边界应用时更新数据库和验证者集合
+	// 在边界应用时更新数据库和验证者集合
 	d.logger.Info("✅ [边界应用投票] 投票条件满足，开始应用",
 		"blockNumber", blockNumber,
 		"epochNumber", epochNumber,
