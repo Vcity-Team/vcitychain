@@ -1142,19 +1142,6 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 		return true
 	})
 
-	p.logger.Debug("🔵 [processEvent] 准备调用resetAccounts进行第二层清理",
-		"accountCount", len(stateNonces),
-		"accountList", func() []string {
-			var addrs []string
-			for addr := range stateNonces {
-				addrs = append(addrs, addr.String()[:16])
-				if len(addrs) >= 10 { // 只显示前10个
-					break
-				}
-			}
-			return addrs
-		}())
-
 	// reset accounts with the new state
 	p.resetAccounts(stateNonces)
 
@@ -1168,8 +1155,6 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 	p.prepareNonceCacheMu.Lock()
 	p.prepareNonceCache = make(map[types.Address]uint64)
 	p.prepareNonceCacheMu.Unlock()
-
-	p.logger.Debug("🔵 [processEvent] 处理完成")
 }
 
 // validateTx ensures the transaction conforms to specific
@@ -1594,7 +1579,6 @@ func (p *TxPool) addGossipTx(obj interface{}, _ peer.ID) {
 // resetAccounts updates existing accounts with the new nonce and prunes stale transactions.
 func (p *TxPool) resetAccounts(stateNonces map[types.Address]uint64) {
 	if len(stateNonces) == 0 {
-		p.logger.Debug("🔵 [resetAccounts] 没有需要重置的账户")
 		return
 	}
 
