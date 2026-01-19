@@ -102,7 +102,7 @@ func (c *state) reset() {
 	c.tmp = c.tmp[:0]
 	c.ret = c.ret[:0]
 	c.code = c.code[:0]
-	//c.returnData = c.returnData[:0]
+	c.returnData = c.returnData[:0]
 	c.memory = c.memory[:0]
 }
 
