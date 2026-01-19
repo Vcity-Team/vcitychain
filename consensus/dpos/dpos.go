@@ -1553,11 +1553,6 @@ func (d *DPoS) OnBlockInserted(fullBlock *types.FullBlock) {
 		return
 	}
 
-	d.logger.Debug("🔵 [DPoS.OnBlockInserted] 清理交易池",
-		"blockNumber", fullBlock.Block.Number(),
-		"blockHash", fullBlock.Block.Hash().String()[:16],
-		"txCount", len(fullBlock.Block.Transactions))
-
 	// 调用交易池的 ResetWithHeaders 来清理已打包的交易
 	d.txPool.ResetWithHeaders(fullBlock.Block.Header)
 }

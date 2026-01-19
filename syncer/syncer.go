@@ -281,12 +281,6 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 		// fetch local latest block
 		if header := s.blockchain.Header(); header != nil {
 			localLatest = header.Number
-			// 减少"同步器状态更新"日志的打印频率
-			now := time.Now()
-			if now.Sub(lastStatusUpdateLogTime) > statusUpdateLogInterval {
-				s.logger.Debug("同步器状态更新", "localLatest", localLatest)
-				lastStatusUpdateLogTime = now
-			}
 		}
 
 		// pick one best peer

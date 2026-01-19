@@ -1091,8 +1091,6 @@ func (ni *NetworkIntegration) handleDelegateMessage(obj interface{}, from peer.I
 
 // processSignatureRequest 处理签名请求
 func (ni *NetworkIntegration) processSignatureRequest(request *SignatureRequest) error {
-	ni.logger.Debug("processing signature request", "blockNumber", request.BlockNumber)
-
 	// 如果有DPoS运行时回调，调用它处理签名请求
 	if ni.dposRuntime != nil {
 		// 使用反射调用DPoS运行时的签名请求处理方法

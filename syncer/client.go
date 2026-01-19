@@ -320,12 +320,6 @@ func (m *syncPeerClient) handleStatusUpdate(obj interface{}, from peer.ID) {
 		return
 	}
 
-	m.logger.Debug("📨 收到状态广播",
-		"来源节点", from.String(),
-		"区块高度", status.Number,
-		"本地节点", m.id,
-		"topic名称", m.statusTopicName)
-
 	// 检查网络连接状态
 	if !m.network.IsConnected(from) {
 		return
