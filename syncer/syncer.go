@@ -270,9 +270,7 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 
 	// 添加日志控制变量
 	lastNoPeerLogTime := time.Time{}
-	lastStatusUpdateLogTime := time.Time{}
-	noPeerLogInterval := 30 * time.Second      // 30秒打印一次
-	statusUpdateLogInterval := 5 * time.Second // 5秒打印一次
+	noPeerLogInterval := 30 * time.Second // 30秒打印一次
 
 	for {
 		// Wait for a new event to arrive
