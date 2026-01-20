@@ -1032,55 +1032,6 @@ func (rs *RewardStore) RecordReward(record *RewardRecordExtended) error {
 	return nil
 }
 
-// GetValidatorRewardHistory 查询验证者奖励历史
-func (rs *RewardStore) GetValidatorRewardHistory(validatorAddress string, fromEpoch, toEpoch uint64) ([]RewardRecordExtended, error) {
-	logger := getGlobalLogger()
-	if logger != nil {
-		logger.Info("🔍 GetValidatorRewardHistory: 开始查询奖励历史",
-			"validatorAddress", validatorAddress,
-			"fromEpoch", fromEpoch,
-			"toEpoch", toEpoch)
-	}
-
-	summary, err := rs.GetRewardSummary(validatorAddress, fromEpoch, toEpoch)
-	if err != nil {
-		if logger != nil {
-			logger.Error("❌ GetValidatorRewardHistory: 查询失败",
-				"validatorAddress", validatorAddress,
-				"error", err)
-		}
-		return nil, err
-	}
-
-	records := summary.ValidatorRecords
-	sort.Slice(records, func(i, j int) bool {
-		return records[i].EpochNumber > records[j].EpochNumber
-	})
-
-	if logger != nil {
-		logger.Info("✅ GetValidatorRewardHistory: 查询完成",
-			"validatorAddress", validatorAddress,
-			"recordsCount", len(records))
-	}
-
-	return records, nil
-}
-
-// GetVoterRewardHistory 查询投票者奖励历史
-func (rs *RewardStore) GetVoterRewardHistory(voterAddress string, fromEpoch, toEpoch uint64) ([]RewardRecordExtended, error) {
-	summary, err := rs.GetRewardSummary(voterAddress, fromEpoch, toEpoch)
-	if err != nil {
-		return nil, err
-	}
-
-	records := summary.VoterRecords
-	sort.Slice(records, func(i, j int) bool {
-		return records[i].EpochNumber > records[j].EpochNumber
-	})
-
-	return records, nil
-}
-
 // Close 关闭数据库连接
 func (s *State) Close() error {
 	var err error

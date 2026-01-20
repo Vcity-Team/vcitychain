@@ -1532,211 +1532,6 @@ func (d *DPOS) GetVotingPower(ctx context.Context, params interface{}) (map[stri
 	}, nil
 }
 
-// GetCurrentRound handles dpos_getCurrentRound RPC method
-func (d *DPOS) GetCurrentRound(ctx context.Context) (interface{}, error) {
-	d.logger.Info("DPoS GetCurrentRound called")
-
-	// 优先尝试从 DPoS 引擎获取当前 round
-	dposEngine := d.getDPoSEngine()
-	if dposEngine != nil {
-		if engine, ok := dposEngine.(interface {
-			GetCurrentRound() uint64
-		}); ok {
-			currentRound := engine.GetCurrentRound()
-			if currentRound > 0 {
-				d.logger.Debug("从DPoS引擎获取当前round", "round", currentRound)
-				return map[string]interface{}{
-					"success":      true,
-					"currentRound": currentRound,
-				}, nil
-			}
-		}
-
-		// 如果引擎返回0，尝试从DPoS引擎直接获取所需信息进行计算
-		if dpos, ok := dposEngine.(*dpos.DPoS); ok {
-			// 从DPoS引擎获取当前区块号
-			currentBlockHeight := dpos.GetCurrentBlockNumber()
-			if currentBlockHeight == 0 {
-				d.logger.Warn("无法从DPoS引擎获取当前区块高度，尝试其他方法")
-				// 继续尝试其他方法
-			} else {
-				// 从DPoS引擎获取共识切换高度
-				consensusSwitchHeight := dpos.GetConsensusSwitchHeight()
-				if currentBlockHeight < consensusSwitchHeight {
-					d.logger.Debug("当前区块高度小于共识切换高度，返回0", "height", currentBlockHeight, "switchHeight", consensusSwitchHeight)
-					return map[string]interface{}{
-						"success":      true,
-						"currentRound": uint64(0),
-					}, nil
-				}
-
-				// 从DPoS引擎获取验证者数量（使用GetDelegates方法）
-				var validatorCount uint64
-				if delegates, err := dpos.GetDelegates(currentBlockHeight, nil); err == nil && len(delegates) > 0 {
-					validatorCount = uint64(len(delegates))
-				}
-
-				if validatorCount == 0 {
-					d.logger.Warn("无法从DPoS引擎获取验证者数量，返回默认值1")
-					return map[string]interface{}{
-						"success":      true,
-						"currentRound": uint64(1),
-					}, nil
-				}
-
-				// 计算 round: (当前区块高度 - 共识切换高度) / 验证者数量 + 1
-				dposBlockNumber := currentBlockHeight - consensusSwitchHeight
-				currentRound := (dposBlockNumber / validatorCount) + 1
-
-				d.logger.Debug("从DPoS引擎计算当前round",
-					"currentBlockHeight", currentBlockHeight,
-					"consensusSwitchHeight", consensusSwitchHeight,
-					"dposBlockNumber", dposBlockNumber,
-					"validatorCount", validatorCount,
-					"currentRound", currentRound)
-
-				return map[string]interface{}{
-					"success":      true,
-					"currentRound": currentRound,
-				}, nil
-			}
-		}
-	}
-	currentBlockHeight := d.getCurrentBlockHeight()
-	if currentBlockHeight == 0 {
-		d.logger.Warn("无法获取当前区块高度，返回默认值1")
-		return map[string]interface{}{
-			"success":      true,
-			"currentRound": uint64(1),
-		}, nil
-	}
-
-	// 获取共识切换高度
-	consensusSwitchHeight := d.getConsensusSwitchHeight()
-	if currentBlockHeight < consensusSwitchHeight {
-		d.logger.Debug("当前区块高度小于共识切换高度，返回0", "height", currentBlockHeight, "switchHeight", consensusSwitchHeight)
-		return map[string]interface{}{
-			"success":      true,
-			"currentRound": uint64(0),
-		}, nil
-	}
-
-	// 获取验证者数量
-	validators, err := d.store.GetValidatorsWithFilter(false)
-	if err != nil {
-		d.logger.Warn("无法获取验证者列表，返回默认值1", "error", err)
-		return map[string]interface{}{
-			"success":      true,
-			"currentRound": uint64(1),
-		}, nil
-	}
-
-	validatorCount := uint64(len(validators))
-	if validatorCount == 0 {
-		d.logger.Warn("验证者数量为0，返回默认值1")
-		return map[string]interface{}{
-			"success":      true,
-			"currentRound": uint64(1),
-		}, nil
-	}
-
-	// 计算 round: (当前区块高度 - 共识切换高度) / 验证者数量 + 1
-	dposBlockNumber := currentBlockHeight - consensusSwitchHeight
-	currentRound := (dposBlockNumber / validatorCount) + 1
-
-	d.logger.Debug("通过store计算当前round",
-		"currentBlockHeight", currentBlockHeight,
-		"consensusSwitchHeight", consensusSwitchHeight,
-		"dposBlockNumber", dposBlockNumber,
-		"validatorCount", validatorCount,
-		"currentRound", currentRound)
-
-	return map[string]interface{}{
-		"success":      true,
-		"currentRound": currentRound,
-	}, nil
-}
-
-// GetCurrentDelegate handles dpos_getCurrentDelegate RPC method
-func (d *DPOS) GetCurrentDelegate(ctx context.Context) (interface{}, error) {
-	d.logger.Info("DPoS GetCurrentDelegate called")
-
-	// Get current DPoS state
-	_, err := d.store.GetDPoSState()
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("failed to get DPoS state: %v", err),
-		}, nil
-	}
-
-	// First try to get the current delegate from active DPoS instances (real-time slot calculation)
-	for instanceKey, instance := range dpos.GetAllDPoSInstances() {
-		if instance == nil {
-			continue
-		}
-
-		currentDelegate := instance.GetCurrentDelegate()
-		if currentDelegate != types.ZeroAddress {
-			d.logger.Info("Returning current delegate from active DPoS instance",
-				"instanceKey", instanceKey,
-				"delegate", currentDelegate.String())
-			return map[string]interface{}{
-				"success":         true,
-				"currentDelegate": currentDelegate.String(),
-			}, nil
-		}
-	}
-
-	// Fallback path: use validator list (will simply return the first validator)
-	// TODO: replace with block-height-based calculation once block scheduler is exposed here
-	validators, err := d.store.GetValidators()
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("failed to get validators: %v", err),
-		}, nil
-	}
-
-	if len(validators) == 0 {
-		d.logger.Warn("No validators returned from store, trying unfiltered fetch")
-		if extendedValidators, err := d.store.GetValidatorsWithFilter(false); err == nil && len(extendedValidators) > 0 {
-			d.logger.Info("Found validators via GetValidatorsWithFilter fallback", "count", len(extendedValidators))
-			validators = extendedValidators
-		}
-	}
-
-	if len(validators) == 0 {
-		d.logger.Warn("Store fallback failed, trying global DPoS instances registry")
-		for instanceKey, instance := range dpos.GetAllDPoSInstances() {
-			if instance == nil {
-				continue
-			}
-
-			instanceValidators := instance.GetValidators()
-			if len(instanceValidators) > 0 {
-				d.logger.Info("Using validators from global DPoS instance",
-					"instanceKey", instanceKey,
-					"count", len(instanceValidators))
-				validators = instanceValidators
-				break
-			}
-		}
-	}
-
-	if len(validators) == 0 {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "no validators found",
-		}, nil
-	}
-
-	return map[string]interface{}{
-		"success":         true,
-		"currentDelegate": validators[0].Address.String(),
-	}, nil
-}
-
 // GetConsensusState handles dpos_getConsensusState RPC method
 func (d *DPOS) GetConsensusState(ctx context.Context) (map[string]interface{}, error) {
 	d.logger.Info("DPoS GetConsensusState called")
@@ -1750,58 +1545,109 @@ func (d *DPOS) GetConsensusState(ctx context.Context) (map[string]interface{}, e
 		}, nil
 	}
 
-	// Get current delegate
-	currentDelegateResult, err := d.GetCurrentDelegate(ctx)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("failed to get current delegate: %v", err),
-		}, nil
-	}
-
-	// Get current round
-	currentRoundResult, err := d.GetCurrentRound(ctx)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("failed to get current round: %v", err),
-		}, nil
-	}
-
-	// Extract currentRound from result
 	var currentRound uint64
-	if roundMap, ok := currentRoundResult.(map[string]interface{}); ok {
-		if success, ok := roundMap["success"].(bool); ok && success {
-			if cr, ok := roundMap["currentRound"].(uint64); ok {
-				currentRound = cr
+	var currentDelegate types.Address
+
+	// 优先尝试从 DPoS 引擎获取当前 round 和 delegate
+	dposEngine := d.getDPoSEngine()
+	if dposEngine != nil {
+		// 获取 currentRound
+		if engine, ok := dposEngine.(interface {
+			GetCurrentRound() uint64
+		}); ok {
+			currentRound = engine.GetCurrentRound()
+			if currentRound > 0 {
+				d.logger.Debug("从DPoS引擎获取当前round", "round", currentRound)
 			}
-		} else {
-			return map[string]interface{}{
-				"success": false,
-				"error":   "failed to get current round",
-			}, nil
+		}
+
+		// 如果引擎返回0，尝试从DPoS引擎直接获取所需信息进行计算
+		if currentRound == 0 {
+			if dpos, ok := dposEngine.(*dpos.DPoS); ok {
+				currentBlockHeight := dpos.GetCurrentBlockNumber()
+				if currentBlockHeight > 0 {
+					consensusSwitchHeight := dpos.GetConsensusSwitchHeight()
+					if currentBlockHeight < consensusSwitchHeight {
+						currentRound = 0
+					} else {
+						if delegates, err := dpos.GetDelegates(currentBlockHeight, nil); err == nil && len(delegates) > 0 {
+							validatorCount := uint64(len(delegates))
+							if validatorCount > 0 {
+								dposBlockNumber := currentBlockHeight - consensusSwitchHeight
+								currentRound = (dposBlockNumber / validatorCount) + 1
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// 如果还是0，使用fallback计算
+		if currentRound == 0 {
+			currentBlockHeight := d.getCurrentBlockHeight()
+			if currentBlockHeight > 0 {
+				consensusSwitchHeight := d.getConsensusSwitchHeight()
+				if currentBlockHeight >= consensusSwitchHeight {
+					if validators, err := d.store.GetValidatorsWithFilter(false); err == nil && len(validators) > 0 {
+						validatorCount := uint64(len(validators))
+						if validatorCount > 0 {
+							dposBlockNumber := currentBlockHeight - consensusSwitchHeight
+							currentRound = (dposBlockNumber / validatorCount) + 1
+						}
+					}
+				}
+			}
+			if currentRound == 0 {
+				currentRound = 1 // 默认值
+			}
+		}
+
+		// 获取 currentDelegate
+		if engine, ok := dposEngine.(interface {
+			GetCurrentDelegate() types.Address
+		}); ok {
+			currentDelegate = engine.GetCurrentDelegate()
 		}
 	}
 
-	// Extract currentDelegate from result
-	var delegateStr string
-	if delegateMap, ok := currentDelegateResult.(map[string]interface{}); ok {
-		if success, ok := delegateMap["success"].(bool); ok && success {
-			if cd, ok := delegateMap["currentDelegate"].(string); ok {
-				delegateStr = cd
+	// Fallback: 如果从引擎获取失败，尝试从全局实例获取
+	if currentDelegate == (types.Address{}) {
+		for _, instance := range dpos.GetAllDPoSInstances() {
+			if instance == nil {
+				continue
 			}
-		} else {
-			return map[string]interface{}{
-				"success": false,
-				"error":   "failed to get current delegate",
-			}, nil
+			currentDelegate = instance.GetCurrentDelegate()
+			if currentDelegate != types.ZeroAddress {
+				break
+			}
+		}
+	}
+
+	// Fallback: 如果还是失败，使用验证者列表的第一个
+	if currentDelegate == (types.Address{}) {
+		validators, err := d.store.GetValidators()
+		if err != nil {
+			validators, _ = d.store.GetValidatorsWithFilter(false)
+		}
+		if len(validators) == 0 {
+			for _, instance := range dpos.GetAllDPoSInstances() {
+				if instance != nil {
+					validators = instance.GetValidators()
+					if len(validators) > 0 {
+						break
+					}
+				}
+			}
+		}
+		if len(validators) > 0 {
+			currentDelegate = validators[0].Address
 		}
 	}
 
 	return map[string]interface{}{
 		"success":              true,
 		"currentRound":         currentRound,
-		"currentDelegate":      delegateStr,
+		"currentDelegate":      currentDelegate.String(),
 		"currentDelegateIndex": 0, // TODO: Calculate actual index
 	}, nil
 }
@@ -3758,135 +3604,6 @@ func (d *DPOS) GetLatestEpochInfo(ctx context.Context) (interface{}, error) {
 
 // ==================== 新增：奖励查询JSON-RPC方法 ====================
 
-// GetValidatorRewardHistory 查询验证者奖励历史
-func (d *DPOS) GetValidatorRewardHistory(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS GetValidatorRewardHistory called", "params", params)
-
-	// 解析参数
-	var validatorAddress string
-	var fromEpoch, toEpoch uint64
-
-	switch p := params.(type) {
-	case []interface{}:
-		if len(p) != 3 {
-			return map[string]interface{}{
-				"success": false,
-				"error":   fmt.Sprintf("expected 3 parameters, got %d", len(p)),
-			}, nil
-		}
-
-		// 第一个参数：验证者地址
-		if addr, ok := p[0].(string); ok {
-			validatorAddress = addr
-		} else {
-			return map[string]interface{}{
-				"success": false,
-				"error":   "first parameter must be a string address",
-			}, nil
-		}
-
-		// 第二个参数：起始epoch
-		if epoch, ok := p[1].(float64); ok {
-			fromEpoch = uint64(epoch)
-		} else {
-			return map[string]interface{}{
-				"success": false,
-				"error":   "second parameter must be a number",
-			}, nil
-		}
-
-		// 第三个参数：结束epoch
-		if epoch, ok := p[2].(float64); ok {
-			toEpoch = uint64(epoch)
-		} else {
-			return map[string]interface{}{
-				"success": false,
-				"error":   "third parameter must be a number",
-			}, nil
-		}
-	default:
-		return map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("invalid parameter type: %T", params),
-		}, nil
-	}
-
-	d.logger.Info("DPoS GetValidatorRewardHistory parameters parsed",
-		"validatorAddress", validatorAddress,
-		"fromEpoch", fromEpoch,
-		"toEpoch", toEpoch)
-
-	// 获取DPoS状态
-	dposState, err := d.store.GetDPoSState()
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("failed to get DPoS state: %v", err),
-		}, nil
-	}
-
-	dposState, err = d.ensureRewardStore(dposState)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   err.Error(),
-		}, nil
-	}
-
-	// 调用RewardStore的方法
-	records, err := dposState.RewardStore.GetValidatorRewardHistory(validatorAddress, fromEpoch, toEpoch)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   err.Error(),
-		}, nil
-	}
-
-	return map[string]interface{}{
-		"success": true,
-		"data":    records,
-	}, nil
-}
-
-// GetVoterRewardHistory 查询投票者奖励历史
-func (d *DPOS) GetVoterRewardHistory(ctx context.Context, voterAddress string, fromEpoch, toEpoch uint64) (interface{}, error) {
-	d.logger.Info("DPoS GetVoterRewardHistory called",
-		"voterAddress", voterAddress,
-		"fromEpoch", fromEpoch,
-		"toEpoch", toEpoch)
-
-	// 获取DPoS状态
-	dposState, err := d.store.GetDPoSState()
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("failed to get DPoS state: %v", err),
-		}, nil
-	}
-
-	dposState, err = d.ensureRewardStore(dposState)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   err.Error(),
-		}, nil
-	}
-
-	// 调用RewardStore的方法
-	records, err := dposState.RewardStore.GetVoterRewardHistory(voterAddress, fromEpoch, toEpoch)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   err.Error(),
-		}, nil
-	}
-
-	return map[string]interface{}{
-		"success": true,
-		"data":    records,
-	}, nil
-}
-
 // GetEpochRewardDetails 查询指定epoch的奖励详情
 func (d *DPOS) GetEpochRewardDetails(ctx context.Context, params interface{}) (interface{}, error) {
 	d.logger.Info("DPoS GetEpochRewardDetails called", "params", params)
@@ -4358,8 +4075,8 @@ func (d *DPOS) GetValidatorRewardsInfo(ctx context.Context, params interface{}) 
 		}
 
 		// 第一个参数：验证者地址
-		if addr, ok := p[0].(string); ok {
-			validatorAddress = addr
+		if addrStr, ok := p[0].(string); ok {
+			validatorAddress = addrStr
 		} else {
 			return map[string]interface{}{
 				"success": false,
@@ -4388,7 +4105,7 @@ func (d *DPOS) GetValidatorRewardsInfo(ctx context.Context, params interface{}) 
 		"epochNumber", epochNumber)
 
 	// 解析地址
-	addr := types.StringToAddress(validatorAddress)
+	validatorAddr := types.StringToAddress(validatorAddress)
 
 	// 获取DPoS引擎
 	dposEngine := d.getDPoSEngine()
@@ -4403,7 +4120,7 @@ func (d *DPOS) GetValidatorRewardsInfo(ctx context.Context, params interface{}) 
 	if engine, ok := dposEngine.(interface {
 		GetValidatorRewardsInfo(validatorAddress types.Address, epochNumber uint64) map[string]interface{}
 	}); ok {
-		rewardsInfo := engine.GetValidatorRewardsInfo(addr, epochNumber)
+		rewardsInfo := engine.GetValidatorRewardsInfo(validatorAddr, epochNumber)
 		// 如果返回的数据已经有 success 字段，直接返回；否则包装
 		if _, hasSuccess := rewardsInfo["success"]; hasSuccess {
 			return rewardsInfo, nil
