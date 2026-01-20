@@ -555,8 +555,12 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		i.SlashingInfo = &SlashingInfo{}
 		if err := i.SlashingInfo.UnmarshalRLPWith(elems[7]); err != nil {
 			// 不返回错误，只是跳过消减信息
+			// 注意：这里没有logger，因为Extra.UnmarshalRLP可能在不同上下文中调用
 			i.SlashingInfo = nil
 		}
+	} else if num >= 8 {
+		// ExtraData有8个元素，但第8个元素（SlashingInfo）为空或格式不正确
+		// 这种情况需要记录日志，但这里没有logger，需要在调用处记录
 	}
 
 	return nil

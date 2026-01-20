@@ -686,7 +686,18 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				}
 
 				// 添加故障消减信息
+				r.logger.Info("🔍 [buildBlock] 检查pendingSlashingInfo",
+					"blockNumber", h.Number,
+					"isEpochEndBlock", isEpochEndBlock,
+					"pendingSlashingInfoIsNil", dposInstance.pendingSlashingInfo == nil)
+
 				if dposInstance.pendingSlashingInfo != nil {
+					r.logger.Info("✅ [buildBlock] 发现pendingSlashingInfo，准备写入ExtraData",
+						"blockNumber", h.Number,
+						"epochNumber", dposInstance.pendingSlashingInfo.EpochNumber,
+						"slashingsCount", len(dposInstance.pendingSlashingInfo.Slashings),
+						"timestamp", dposInstance.pendingSlashingInfo.Timestamp)
+
 					// 复制SlashingInfo，避免引用被清空
 					extra.SlashingInfo = &SlashingInfo{
 						EpochNumber: dposInstance.pendingSlashingInfo.EpochNumber,
@@ -701,19 +712,27 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 							MissedBlocksPercentage: op.MissedBlocksPercentage,
 							Reason:                 op.Reason,
 						}
+						r.logger.Info("📋 [buildBlock] 消减操作详情",
+							"blockNumber", h.Number,
+							"validator", op.ValidatorAddr.String(),
+							"slashRate", op.SlashRate,
+							"missedBlocks", op.MissedBlocks,
+							"reason", op.Reason)
 					}
 
-					r.logger.Debug("🔧 buildBlock: epoch结束区块，故障消减信息已添加到ExtraData",
+					r.logger.Info("🔧 buildBlock: epoch结束区块，故障消减信息已添加到ExtraData",
 						"blockNumber", h.Number,
-						"slashingsCount", len(extra.SlashingInfo.Slashings))
+						"slashingsCount", len(extra.SlashingInfo.Slashings),
+						"epochNumber", extra.SlashingInfo.EpochNumber)
 
 					// 清空pending消减信息
 					dposInstance.pendingSlashingInfo = nil
-					r.logger.Debug("✅ buildBlock: 已清空pending消减信息")
+					r.logger.Info("✅ buildBlock: 已清空pending消减信息", "blockNumber", h.Number)
 				} else {
-					r.logger.Info("ℹ️ buildBlock: DPoS实例存在但无待处理的消减信息",
+					r.logger.Info("ℹ️ ℹ️ ℹ️ ℹ️ [buildBlock] DPoS实例存在但无待处理的消减信息",
 						"blockNumber", h.Number,
-						"isEpochEndBlock", isEpochEndBlock)
+						"isEpochEndBlock", isEpochEndBlock,
+						"reason", "可能原因：1) 没有故障验证者 2) 故障验证者不在验证者集合中 3) 消减信息已在之前的区块被清空 4) CollectSlashingInfo未被调用或未收集到信息")
 				}
 
 				// 在epoch结束区块中也设置CheckpointBlockHash

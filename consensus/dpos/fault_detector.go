@@ -68,7 +68,36 @@ func (fd *FaultDetector) DetectFaults(blockNumber uint64) ([]FaultFlagInfo, erro
 		"epochToCheck", epochInfo.EpochToCheckNumber,
 		"validatorsCount", len(validatorMap),
 		"validators", addrList)
+
+	// 统计故障标志
+	faultyCount := 0
+	for _, flag := range faultFlags {
+		if flag.IsFaulty {
+			faultyCount++
+		}
+	}
+	fd.logger.Info("🔍 [DetectFaults] 准备调用CollectSlashingInfo",
+		"blockNumber", blockNumber,
+		"epochToCheck", epochInfo.EpochToCheckNumber,
+		"faultFlagsCount", len(faultFlags),
+		"faultyCount", faultyCount,
+		"validatorMapSize", len(validatorMap))
+
 	fd.slashingCollector.CollectSlashingInfo(faultFlags, epochInfo, validatorMap)
+
+	// 检查收集后的状态
+	if fd.dposInstance.pendingSlashingInfo != nil {
+		fd.logger.Info("✅ [DetectFaults] CollectSlashingInfo后pendingSlashingInfo已设置",
+			"blockNumber", blockNumber,
+			"epochNumber", fd.dposInstance.pendingSlashingInfo.EpochNumber,
+			"slashingsCount", len(fd.dposInstance.pendingSlashingInfo.Slashings))
+	} else {
+		fd.logger.Info("ℹ️ [DetectFaults] CollectSlashingInfo后pendingSlashingInfo仍为nil",
+			"blockNumber", blockNumber,
+			"epochToCheck", epochInfo.EpochToCheckNumber,
+			"faultyCount", faultyCount,
+			"reason", "没有故障验证者或所有故障验证者都不在验证者集合中")
+	}
 
 	fd.dposInstance.currentEpoch = epochInfo.CurrentEpoch
 

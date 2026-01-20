@@ -203,6 +203,20 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			"blockNumber", block.Number(),
 			"blockHash", block.Hash().String()[:16])
 
+		// 处理故障消减（从ExtraData执行）- 同步节点也需要执行
+		p.logger.Info("🔍 [ProcessBlockExecutor] epoch结束区块，准备处理故障消减", "blockNumber", block.Number(), "extraDataLength", len(block.Header.ExtraData))
+		if err := p.processSlashingInBlock(block, transition); err != nil {
+			p.logger.Error("❌❌❌ [ProcessBlockExecutor] ========== 故障消减执行失败 ========== ❌❌❌",
+				"blockNumber", block.Number(),
+				"blockHash", block.Hash().String()[:16],
+				"error", err)
+			return nil, fmt.Errorf("failed to process slashing: %w", err)
+		}
+
+		p.logger.Info("✅✅✅ [ProcessBlockExecutor] ========== 故障消减执行成功 ========== ✅✅✅",
+			"blockNumber", block.Number(),
+			"blockHash", block.Hash().String()[:16])
+
 		// 奖励分配与故障统计完成后，再在边界应用已登记的待生效提案和投票，避免被同区块统计覆盖
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			// 因为 getEpochForBlock(block.Number()) 在epoch结束区块时可能返回下一个epoch
@@ -426,6 +440,7 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 			"blockHash", block.Hash().String()[:16])
 
 		// 处理故障消减（从ExtraData执行）
+		p.logger.Info("🔍 [ProcessBlock] epoch结束区块，准备处理故障消减", "blockNumber", block.Number(), "extraDataLength", len(block.Header.ExtraData))
 		if err := p.processSlashingInBlock(block, transition); err != nil {
 			p.logger.Error("❌❌❌ ========== 故障消减执行失败 ========== ❌❌❌",
 				"blockNumber", block.Number(),
@@ -434,7 +449,7 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 			return nil, fmt.Errorf("failed to process slashing: %w", err)
 		}
 
-		p.logger.Debug("✅✅✅ ========== 故障消减执行成功 ========== ✅✅✅",
+		p.logger.Info("✅✅✅ ========== 故障消减执行成功 ========== ✅✅✅",
 			"blockNumber", block.Number(),
 			"blockHash", block.Hash().String()[:16])
 
@@ -884,19 +899,42 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 
 // processSlashingInBlock 从ExtraData读取消减信息并执行消减
 func (p *blockchainWrapper) processSlashingInBlock(block *types.Block, transition *state.Transition) error {
+	p.logger.Info("🔍 [processSlashingInBlock] 开始处理消减信息", 
+		"blockNumber", block.Number(),
+		"extraDataLength", len(block.Header.ExtraData))
+	
 	// 解析ExtraData获取消减信息
 	extra := &Extra{}
 	if err := extra.UnmarshalRLP(block.Header.ExtraData); err != nil {
-		p.logger.Error("❌ 解析ExtraData失败",
+		p.logger.Error("❌ [processSlashingInBlock] 解析ExtraData失败",
 			"blockNumber", block.Number(),
 			"error", err,
 			"extraDataLength", len(block.Header.ExtraData))
 		return fmt.Errorf("failed to unmarshal extra data: %w", err)
 	}
 
+	p.logger.Info("🔍 [processSlashingInBlock] ExtraData解析成功",
+		"blockNumber", block.Number(),
+		"hasSlashingInfo", extra.SlashingInfo != nil,
+		"hasRewardDistribution", extra.RewardDistribution != nil,
+		"faultFlagsCount", len(extra.FaultFlags),
+		"hasValidators", extra.Validators != nil,
+		"hasCheckpoint", extra.Checkpoint != nil)
+
 	if extra.SlashingInfo == nil {
-		p.logger.Info("ℹ️ ℹ️ ℹ️ ℹ️ ExtraData中没有消减信息，跳过处理",
-			"blockNumber", block.Number())
+		// 尝试手动解析ExtraData，检查第8个元素是否存在
+		extraRaw := block.Header.ExtraData
+		if len(extraRaw) > 97 { // ExtraVanity = 32, 至少需要一些数据
+			p.logger.Info("ℹ️ ℹ️ ℹ️ ℹ️ [processSlashingInBlock] ExtraData中没有消减信息，跳过处理",
+				"blockNumber", block.Number(),
+				"extraDataLength", len(extraRaw),
+				"note", "生成节点可能没有写入SlashingInfo，或ExtraData格式不正确（需要8个元素，第8个是SlashingInfo）")
+		} else {
+			p.logger.Info("ℹ️ ℹ️ ℹ️ ℹ️ [processSlashingInBlock] ExtraData中没有消减信息，跳过处理",
+				"blockNumber", block.Number(),
+				"extraDataLength", len(extraRaw),
+				"note", "ExtraData长度不足，可能不包含SlashingInfo")
+		}
 		return nil
 	}
 

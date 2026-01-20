@@ -1080,10 +1080,24 @@ func (d *DPoS) updateVoterVoteAmountForValidator(
 		slashingRecord,
 	)
 
-	// 6. 更新内存中的 VoterInfo（仅用于缓存，不保存到数据库）
+	// 6. 更新内存中的 VoterInfo（用于缓存）
 	d.voters[voterAddr] = voterInfo
 
-	// 7. 不再保存 VoterInfo 到数据库（已删除，投票者不受限制）
+	// 7. 保存 VoterInfo 到数据库（包含 SlashingRecords，用于 RPC 查询）
+	if d.state != nil && d.state.StakeStore != nil && dbTx != nil {
+		if err := d.state.StakeStore.setVoterInfo(voterAddr, voterInfo, dbTx); err != nil {
+			d.logger.Warn("⚠️ 保存 VoterInfo 到数据库失败",
+				"voter", voterAddr.String(),
+				"error", err)
+			// 不返回错误，因为消减已经执行，只是查询可能受影响
+		} else {
+			d.logger.Info("✅ 已保存 VoterInfo 到数据库（包含消减记录）",
+				"voter", voterAddr.String(),
+				"validator", validatorAddr.String(),
+				"blockNumber", blockNumber,
+				"slashingsCount", len(voterInfo.SlashingRecords[validatorAddr]))
+		}
+	}
 
 	return nil
 }
