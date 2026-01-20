@@ -1122,6 +1122,91 @@ func (rs *RewardStore) GetEpochRewardDetails(epochNumber uint64) ([]RewardRecord
 	return records, err
 }
 
+// GetEpochRangeRewardDetails 查询指定epoch范围内的所有奖励详情
+func (rs *RewardStore) GetEpochRangeRewardDetails(fromEpoch, toEpoch uint64) ([]RewardRecordExtended, error) {
+	var allRecords []RewardRecordExtended
+
+	// 添加日志：开始查询
+	logger := getGlobalLogger()
+	if logger != nil {
+		logger.Info("🔍 [RewardStore.GetEpochRangeRewardDetails] 开始查询", "fromEpoch", fromEpoch, "toEpoch", toEpoch)
+	}
+
+	// 验证范围
+	if toEpoch < fromEpoch {
+		if logger != nil {
+			logger.Error("❌ [RewardStore.GetEpochRangeRewardDetails] 无效的epoch范围", "fromEpoch", fromEpoch, "toEpoch", toEpoch)
+		}
+		return nil, fmt.Errorf("invalid epoch range: toEpoch (%d) < fromEpoch (%d)", toEpoch, fromEpoch)
+	}
+
+	err := rs.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("rewards"))
+		if bucket == nil {
+			if logger != nil {
+				logger.Warn("⚠️ [RewardStore.GetEpochRangeRewardDetails] rewards bucket not found")
+			}
+			return fmt.Errorf("rewards bucket not found")
+		}
+
+		if logger != nil {
+			logger.Debug("✅ [RewardStore.GetEpochRangeRewardDetails] rewards bucket found, 开始遍历")
+		}
+
+		cursor := bucket.Cursor()
+		processedCount := 0
+		for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
+			processedCount++
+			var record RewardRecordExtended
+			if err := json.Unmarshal(v, &record); err != nil {
+				if logger != nil && processedCount%1000 == 0 {
+					logger.Debug("⚠️ [RewardStore.GetEpochRangeRewardDetails] 反序列化失败", "key", string(k), "error", err, "processedCount", processedCount)
+				}
+				continue
+			}
+
+			// 筛选范围内的记录
+			if record.EpochNumber >= fromEpoch && record.EpochNumber <= toEpoch {
+				allRecords = append(allRecords, record)
+			}
+
+			// 每处理1000条记录打印一次日志（避免日志过多）
+			if logger != nil && processedCount%1000 == 0 {
+				logger.Debug("🔄 [RewardStore.GetEpochRangeRewardDetails] 处理中", "processedCount", processedCount, "matchedCount", len(allRecords))
+			}
+		}
+
+		if logger != nil {
+			logger.Info("✅ [RewardStore.GetEpochRangeRewardDetails] 遍历完成", "fromEpoch", fromEpoch, "toEpoch", toEpoch, "totalProcessed", processedCount, "matchedCount", len(allRecords))
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		if logger != nil {
+			logger.Error("❌ [RewardStore.GetEpochRangeRewardDetails] 数据库查询失败", "fromEpoch", fromEpoch, "toEpoch", toEpoch, "error", err)
+		}
+		return nil, err
+	}
+
+	// 按金额降序排列
+	if logger != nil {
+		logger.Debug("🔄 [RewardStore.GetEpochRangeRewardDetails] 开始排序", "recordsCount", len(allRecords))
+	}
+	sort.Slice(allRecords, func(i, j int) bool {
+		amountI, _ := new(big.Int).SetString(allRecords[i].Amount, 10)
+		amountJ, _ := new(big.Int).SetString(allRecords[j].Amount, 10)
+		return amountI.Cmp(amountJ) > 0
+	})
+
+	if logger != nil {
+		logger.Info("✅ [RewardStore.GetEpochRangeRewardDetails] 查询完成", "fromEpoch", fromEpoch, "toEpoch", toEpoch, "recordsCount", len(allRecords))
+	}
+
+	return allRecords, nil
+}
+
 // GetRewardSummary 汇总指定地址在一定epoch范围内的奖励详情
 func (rs *RewardStore) GetRewardSummary(address string, fromEpoch, toEpoch uint64) (*RewardSummary, error) {
 	sum := &RewardSummary{

@@ -3694,6 +3694,115 @@ func (d *DPOS) GetEpochRewardDetails(ctx context.Context, params interface{}) (i
 	}, nil
 }
 
+// GetEpochRangeRewardDetails 查询指定epoch范围内的所有奖励详情
+func (d *DPOS) GetEpochRangeRewardDetails(ctx context.Context, params interface{}) (interface{}, error) {
+	d.logger.Info("DPoS GetEpochRangeRewardDetails called", "params", params)
+
+	var fromEpoch, toEpoch uint64
+
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) != 2 {
+			return map[string]interface{}{
+				"success": false,
+				"error":   fmt.Sprintf("expected 2 parameters (fromEpoch, toEpoch), got %d", len(p)),
+			}, nil
+		}
+
+		if from, ok := toUint64(p[0]); ok {
+			fromEpoch = from
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "first parameter (fromEpoch) must be a number",
+			}, nil
+		}
+
+		if to, ok := toUint64(p[1]); ok {
+			toEpoch = to
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "second parameter (toEpoch) must be a number",
+			}, nil
+		}
+	case map[string]interface{}:
+		if from, ok := toUint64(p["fromEpoch"]); ok {
+			fromEpoch = from
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "fromEpoch is required and must be a number",
+			}, nil
+		}
+
+		if to, ok := toUint64(p["toEpoch"]); ok {
+			toEpoch = to
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "toEpoch is required and must be a number",
+			}, nil
+		}
+	default:
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("invalid parameter type: %T", params),
+		}, nil
+	}
+
+	// 验证范围
+	if toEpoch < fromEpoch {
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("invalid epoch range: toEpoch (%d) must be greater than or equal to fromEpoch (%d)", toEpoch, fromEpoch),
+		}, nil
+	}
+
+	d.logger.Info("DPoS GetEpochRangeRewardDetails parsed parameters", "fromEpoch", fromEpoch, "toEpoch", toEpoch)
+
+	// 获取DPoS状态
+	dposState, err := d.store.GetDPoSState()
+	if err != nil {
+		d.logger.Error("❌ GetEpochRangeRewardDetails: 获取DPoS状态失败", "error", err)
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("failed to get DPoS state: %v", err),
+		}, nil
+	}
+	d.logger.Debug("✅ GetEpochRangeRewardDetails: 成功获取DPoS状态")
+
+	dposState, err = d.ensureRewardStore(dposState)
+	if err != nil {
+		d.logger.Error("❌ GetEpochRangeRewardDetails: ensureRewardStore失败", "error", err)
+		return map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		}, nil
+	}
+	d.logger.Debug("✅ GetEpochRangeRewardDetails: ensureRewardStore成功")
+
+	// 调用RewardStore的方法
+	d.logger.Debug("🔍 GetEpochRangeRewardDetails: 开始查询奖励详情", "fromEpoch", fromEpoch, "toEpoch", toEpoch)
+	records, err := dposState.RewardStore.GetEpochRangeRewardDetails(fromEpoch, toEpoch)
+	if err != nil {
+		d.logger.Error("❌ GetEpochRangeRewardDetails: 查询奖励详情失败", "fromEpoch", fromEpoch, "toEpoch", toEpoch, "error", err)
+		return map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		}, nil
+	}
+	d.logger.Debug("✅ GetEpochRangeRewardDetails: 查询完成", "fromEpoch", fromEpoch, "toEpoch", toEpoch, "recordsCount", len(records))
+
+	return map[string]interface{}{
+		"success":     true,
+		"fromEpoch":    fromEpoch,
+		"toEpoch":      toEpoch,
+		"totalRecords": len(records),
+		"data":         records,
+	}, nil
+}
+
 // GetRewardHistory 获取指定地址在指定epoch区间的奖励汇总
 func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[string]interface{}, error) {
 	d.logger.Info("DPoS GetRewardHistory called", "params", params)
