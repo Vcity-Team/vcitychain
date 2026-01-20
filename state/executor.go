@@ -12,6 +12,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/chain"
 	"github.com/Vcity-Team/vcitychain/contracts"
 	"github.com/Vcity-Team/vcitychain/crypto"
+	"github.com/Vcity-Team/vcitychain/helper/hex"
 	"github.com/Vcity-Team/vcitychain/state/runtime"
 	"github.com/Vcity-Team/vcitychain/state/runtime/addresslist"
 	"github.com/Vcity-Team/vcitychain/state/runtime/evm"
@@ -462,6 +463,26 @@ func (t *Transition) Write(txn *types.Transaction) error {
 		}
 	}
 
+	// 日志：交易写入入口
+	toAddr := "contract creation"
+	if txn.To != nil {
+		toAddr = txn.To.String()
+	}
+	gasPriceStr := "nil"
+	if txn.GasPrice != nil {
+		gasPriceStr = txn.GasPrice.String()
+	}
+	t.logger.Debug("📥 [Write] 开始处理交易",
+		"txHash", txn.Hash.String(),
+		"nonce", txn.Nonce,
+		"from", txn.From.String(),
+		"to", toAddr,
+		"gas", txn.Gas,
+		"gasPrice", gasPriceStr,
+		"value", txn.Value.String(),
+		"inputLength", len(txn.Input),
+		"blockNumber", t.ctx.Number)
+
 	// Make a local copy and apply the transaction
 	msg := txn.Copy()
 
@@ -490,8 +511,34 @@ func (t *Transition) Write(txn *types.Transaction) error {
 
 	if result.Failed() {
 		receipt.SetStatus(types.ReceiptFailed)
+		
+		// 详细错误日志
+		returnValueHex := ""
+		if len(result.ReturnValue) > 0 {
+			returnValueHex = hex.EncodeToHex(result.ReturnValue)
+		}
+		toAddr := "contract creation"
+		if txn.To != nil {
+			toAddr = txn.To.String()
+		}
+		
+		t.logger.Error("💀 [Write] 交易执行失败（reverted）",
+			"txHash", txn.Hash.String(),
+			"nonce", txn.Nonce,
+			"from", txn.From.String(),
+			"to", toAddr,
+			"gasUsed", result.GasUsed,
+			"gasLimit", txn.Gas,
+			"error", result.Err,
+			"returnValue", returnValueHex,
+			"returnValueLength", len(result.ReturnValue),
+			"blockNumber", t.ctx.Number,
+			"baseFee", t.ctx.BaseFee.Uint64())
 	} else {
 		receipt.SetStatus(types.ReceiptSuccess)
+		t.logger.Debug("✅ [Write] 交易执行成功",
+			"txHash", txn.Hash.String(),
+			"gasUsed", result.GasUsed)
 	}
 
 	// if the transaction created a contract, store the creation address in the receipt.
@@ -542,6 +589,12 @@ func (t *Transition) Txn() *Txn {
 
 // Apply applies a new transaction
 func (t *Transition) Apply(msg *types.Transaction) (*runtime.ExecutionResult, error) {
+	t.logger.Debug("🔄 [Apply] 开始应用交易",
+		"txHash", msg.Hash.String(),
+		"nonce", msg.Nonce,
+		"from", msg.From.String(),
+		"blockNumber", t.ctx.Number)
+	
 	s := t.state.Snapshot()
 
 	result, err := t.apply(msg)
@@ -689,6 +742,12 @@ func (t *Transition) apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 		t.ctx.Tracer.TxStart(msg.Gas)
 	}
 
+	t.logger.Debug("⚙️ [apply] 开始执行交易逻辑",
+		"txHash", msg.Hash.String(),
+		"gasLimit", msg.Gas,
+		"baseFee", t.ctx.BaseFee.Uint64(),
+		"blockNumber", t.ctx.Number)
+
 	// 4. there is no overflow when calculating intrinsic gas
 	intrinsicGasCost, err := TransactionGasCost(msg, t.config.Homestead, t.config.Istanbul)
 	if err != nil {
@@ -709,14 +768,53 @@ func (t *Transition) apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 	t.ctx.GasPrice = types.BytesToHash(gasPrice.Bytes())
 	t.ctx.Origin = msg.From
 
+	isCreation := msg.IsContractCreation()
+	t.logger.Debug("🔍 [apply] 判断执行类型",
+		"txHash", msg.Hash.String(),
+		"isContractCreation", isCreation,
+		"to", func() string {
+			if msg.To != nil {
+				return msg.To.String()
+			}
+			return "nil"
+		}())
+
 	var result *runtime.ExecutionResult
-	if msg.IsContractCreation() {
+	if isCreation {
 		result = t.Create2(msg.From, msg.Input, value, gasLeft)
 	} else {
 		if err := t.state.IncrNonce(msg.From); err != nil {
 			return nil, err
 		}
 		result = t.Call2(msg.From, *msg.To, msg.Input, value, gasLeft)
+	}
+	
+	// 日志：执行结果返回
+	if result != nil {
+		t.logger.Debug("📤 [apply] 执行结果返回",
+			"txHash", msg.Hash.String(),
+			"success", !result.Failed(),
+			"gasUsed", result.GasUsed,
+			"gasLeft", result.GasLeft,
+			"error", func() string {
+				if result.Err != nil {
+					return result.Err.Error()
+				}
+				return "nil"
+			}(),
+			"returnValueLength", len(result.ReturnValue),
+			"returnValue", func() string {
+				if len(result.ReturnValue) > 0 {
+					return hex.EncodeToHex(result.ReturnValue)
+				}
+				return "nil"
+			}(),
+			"address", func() string {
+				if result.Address != (types.Address{}) {
+					return result.Address.String()
+				}
+				return "nil"
+			}())
 	}
 
 	refund := t.state.GetRefund()
@@ -774,12 +872,34 @@ func (t *Transition) Call2(
 	value *big.Int,
 	gas uint64,
 ) *runtime.ExecutionResult {
+	t.logger.Debug("📞 [Call2] 开始调用合约",
+		"caller", caller.String(),
+		"to", to.String(),
+		"value", value.String(),
+		"gas", gas,
+		"inputLength", len(input),
+		"inputHash", func() string {
+			if len(input) > 0 {
+				return hex.EncodeToHex(crypto.Keccak256(input))
+			}
+			return "nil"
+		}(),
+		"blockNumber", t.ctx.Number)
+	
 	c := runtime.NewContractCall(1, caller, caller, to, value, gas, t.state.GetCode(to), input)
 
 	return t.applyCall(c, runtime.Call, t)
 }
 
 func (t *Transition) run(contract *runtime.Contract, host runtime.Host) *runtime.ExecutionResult {
+	t.logger.Debug("🎯 [run] 开始执行合约代码",
+		"contractAddress", contract.Address.String(),
+		"caller", contract.Caller.String(),
+		"gas", contract.Gas,
+		"codeLength", len(contract.Code),
+		"inputLength", len(contract.Input),
+		"blockNumber", t.ctx.Number)
+	
 	if result := t.handleAllowBlockListsUpdate(contract, host); result != nil {
 		return result
 	}
@@ -821,11 +941,45 @@ func (t *Transition) run(contract *runtime.Contract, host runtime.Host) *runtime
 
 	// check the precompiles
 	if t.precompiles.CanRun(contract, host, &t.config) {
-		return t.precompiles.Run(contract, host, &t.config)
+		result := t.precompiles.Run(contract, host, &t.config)
+		if result != nil {
+			t.logger.Debug("📊 [run] Precompiled 执行结果",
+				"contractAddress", contract.Address.String(),
+				"success", !result.Failed(),
+				"gasUsed", contract.Gas - result.GasLeft,
+				"error", func() string {
+					if result.Err != nil {
+						return result.Err.Error()
+					}
+					return "nil"
+				}())
+		}
+		return result
 	}
 	// check the evm
 	if t.evm.CanRun(contract, host, &t.config) {
-		return t.evm.Run(contract, host, &t.config)
+		result := t.evm.Run(contract, host, &t.config)
+		if result != nil {
+			t.logger.Debug("📊 [run] EVM 执行结果",
+				"contractAddress", contract.Address.String(),
+				"success", !result.Failed(),
+				"gasUsed", contract.Gas - result.GasLeft,
+				"gasLeft", result.GasLeft,
+				"error", func() string {
+					if result.Err != nil {
+						return result.Err.Error()
+					}
+					return "nil"
+				}(),
+				"returnValueLength", len(result.ReturnValue),
+				"returnValueHash", func() string {
+					if len(result.ReturnValue) > 0 {
+						return hex.EncodeToHex(crypto.Keccak256(result.ReturnValue))
+					}
+					return "nil"
+				}())
+		}
+		return result
 	}
 
 	return &runtime.ExecutionResult{
@@ -863,6 +1017,16 @@ func (t *Transition) applyCall(
 		}
 	}
 
+	t.logger.Debug("📞 [applyCall] 开始应用合约调用",
+		"contractAddress", c.Address.String(),
+		"caller", c.Caller.String(),
+		"value", c.Value.String(),
+		"gas", c.Gas,
+		"codeLength", len(c.Code),
+		"inputLength", len(c.Input),
+		"callType", callType,
+		"blockNumber", t.ctx.Number)
+
 	snapshot := t.state.Snapshot()
 	t.state.TouchAccount(c.Address)
 
@@ -881,13 +1045,34 @@ func (t *Transition) applyCall(
 	t.captureCallStart(c, callType)
 
 	result = t.run(c, host)
-	if result.Failed() {
+	if result != nil && result.Failed() {
+		t.logger.Debug("📊 [applyCall] 合约调用执行失败",
+			"contractAddress", c.Address.String(),
+			"caller", c.Caller.String(),
+			"gasUsed", c.Gas - result.GasLeft,
+			"gasLeft", result.GasLeft,
+			"error", result.Err,
+			"returnValueLength", len(result.ReturnValue),
+			"returnValue", func() string {
+				if len(result.ReturnValue) > 0 {
+					if len(result.ReturnValue) > 100 {
+						return hex.EncodeToHex(crypto.Keccak256(result.ReturnValue))
+					}
+					return hex.EncodeToHex(result.ReturnValue)
+				}
+				return "nil"
+			}())
+		
 		if err := t.state.RevertToSnapshot(snapshot); err != nil {
 			return &runtime.ExecutionResult{
 				GasLeft: c.Gas,
 				Err:     err,
 			}
 		}
+	} else if result != nil {
+		t.logger.Debug("✅ [applyCall] 合约调用执行成功",
+			"contractAddress", c.Address.String(),
+			"gasUsed", c.Gas - result.GasLeft)
 	}
 
 	t.captureCallEnd(c, result)
@@ -908,6 +1093,21 @@ func (t *Transition) hasCodeOrNonce(addr types.Address) bool {
 func (t *Transition) applyCreate(c *runtime.Contract, host runtime.Host) *runtime.ExecutionResult {
 	gasLimit := c.Gas
 
+	// 日志：applyCreate 入口和地址信息
+	t.logger.Debug("🏗️ [applyCreate] 开始应用合约创建",
+		"contractAddress", c.Address.String(),
+		"caller", c.Caller.String(),
+		"value", c.Value.String(),
+		"gas", c.Gas,
+		"codeLength", len(c.Code),
+		"codeHash", func() string {
+			if len(c.Code) > 0 {
+				return hex.EncodeToHex(crypto.Keccak256(c.Code))
+			}
+			return "nil"
+		}(),
+		"blockNumber", t.ctx.Number)
+
 	if c.Depth > int(1024)+1 {
 		return &runtime.ExecutionResult{
 			GasLeft: gasLimit,
@@ -921,11 +1121,22 @@ func (t *Transition) applyCreate(c *runtime.Contract, host runtime.Host) *runtim
 	}
 
 	// Check if there is a collision and the address already exists
-	if t.hasCodeOrNonce(c.Address) {
+	hasCodeOrNonce := t.hasCodeOrNonce(c.Address)
+	if hasCodeOrNonce {
+		t.logger.Warn("⚠️ [applyCreate] 地址冲突检查失败",
+			"contractAddress", c.Address.String(),
+			"hasCode", t.state.GetCodeSize(c.Address) > 0,
+			"codeSize", t.state.GetCodeSize(c.Address),
+			"nonce", t.state.GetNonce(c.Address),
+			"codeHash", t.state.GetCodeHash(c.Address).String())
+		
 		return &runtime.ExecutionResult{
 			GasLeft: 0,
 			Err:     runtime.ErrContractAddressCollision,
 		}
+	} else {
+		t.logger.Debug("✅ [applyCreate] 地址冲突检查通过",
+			"contractAddress", c.Address.String())
 	}
 
 	// Take snapshot of the current state
@@ -955,6 +1166,32 @@ func (t *Transition) applyCreate(c *runtime.Contract, host runtime.Host) *runtim
 	defer func() {
 		// pass result to be set later
 		t.captureCallEnd(c, result)
+		
+		// 添加日志：合约创建执行结果
+		if result != nil {
+			if result.Failed() {
+				t.logger.Debug("📊 [applyCreate] 合约创建执行失败",
+					"contractAddress", c.Address.String(),
+					"caller", c.Caller.String(),
+					"gasUsed", gasLimit - result.GasLeft,
+					"gasLeft", result.GasLeft,
+					"error", result.Err,
+					"returnValueLength", len(result.ReturnValue),
+					"returnValue", func() string {
+						if len(result.ReturnValue) > 0 {
+							if len(result.ReturnValue) > 100 {
+								return hex.EncodeToHex(crypto.Keccak256(result.ReturnValue))
+							}
+							return hex.EncodeToHex(result.ReturnValue)
+						}
+						return "nil"
+					}())
+			} else {
+				t.logger.Debug("✅ [applyCreate] 合约创建执行成功",
+					"contractAddress", c.Address.String(),
+					"gasUsed", gasLimit - result.GasLeft)
+			}
+		}
 	}()
 
 	// check if contract creation allow list is enabled
