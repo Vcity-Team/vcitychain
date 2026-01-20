@@ -6851,6 +6851,201 @@ func (d *DPOS) GetVoterSlashingHistory(ctx context.Context, params interface{}) 
 	}, nil
 }
 
+// GetValidatorSlashingHistory 获取验证者的所有削减历史（聚合所有投票者）
+// RPC: dpos_getValidatorSlashingHistory
+func (d *DPOS) GetValidatorSlashingHistory(ctx context.Context, params interface{}) (interface{}, error) {
+	d.logger.Info("GetValidatorSlashingHistory called", "params", params)
+
+	// 解析参数
+	var validatorAddress string
+
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) == 1 {
+			if address, ok := p[0].(string); ok {
+				validatorAddress = address
+			} else {
+				return map[string]interface{}{
+					"success": false,
+					"error":   "first parameter must be a string address",
+				}, nil
+			}
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "expected 1 parameter (validator address)",
+			}, nil
+		}
+	case string:
+		validatorAddress = p
+	case map[string]interface{}:
+		if address, ok := p["validator"].(string); ok {
+			validatorAddress = address
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "validator address is required",
+			}, nil
+		}
+	default:
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("invalid parameter type: %T, expected string, array, or map", params),
+		}, nil
+	}
+
+	// 验证地址
+	if validatorAddress == "" {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "validator address is required",
+		}, nil
+	}
+
+	// 解析地址
+	validatorAddr := types.StringToAddress(validatorAddress)
+
+	// 1. 获取 DPoS State
+	state, err := d.store.GetDPoSState()
+	if err != nil || state == nil || state.StakeStore == nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("failed to get DPoS state: %v", err),
+		}, nil
+	}
+
+	// 2. 获取所有质押信息
+	allStakes, err := state.StakeStore.GetStakingInfo()
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("failed to get staking info: %v", err),
+		}, nil
+	}
+
+	// 3. 筛选出投票给该验证者的所有投票者
+	var voters []types.Address
+	voterSet := make(map[types.Address]bool) // 用于去重
+
+	for _, stake := range allStakes {
+		if stake != nil && stake.Delegate == validatorAddr {
+			// 去重：同一个投票者可能有多条质押记录
+			if !voterSet[stake.Staker] {
+				voters = append(voters, stake.Staker)
+				voterSet[stake.Staker] = true
+			}
+		}
+	}
+
+	d.logger.Info("GetValidatorSlashingHistory: found voters", "validator", validatorAddr.String(), "voterCount", len(voters))
+
+	if len(voters) == 0 {
+		return map[string]interface{}{
+			"success":         true,
+			"validator":       validatorAddr.String(),
+			"totalSlashCount": 0,
+			"totalSlashAmount": "0",
+			"lastSlashTime":   nil,
+			"slashingHistory": []interface{}{},
+		}, nil
+	}
+
+	// 4. 查询每个投票者的削减历史
+	var allHistory []interface{}
+
+	for _, voterAddr := range voters {
+		voterInfo, err := state.StakeStore.GetVoterInfo(voterAddr)
+		if err != nil {
+			d.logger.Warn("GetValidatorSlashingHistory: failed to get voter info", "voter", voterAddr.String(), "error", err)
+			continue
+		}
+
+		if voterInfo == nil {
+			continue
+		}
+
+		// 初始化 SlashingRecords（如果不存在）
+		if voterInfo.SlashingRecords == nil {
+			voterInfo.SlashingRecords = make(map[types.Address][]*dpos.SlashingRecord)
+		}
+
+		// 获取该投票者对该验证者的削减记录
+		records := voterInfo.SlashingRecords[validatorAddr]
+		for _, record := range records {
+			allHistory = append(allHistory, map[string]interface{}{
+				"validatorAddr":          record.ValidatorAddr.String(),
+				"voterAddress":            voterAddr.String(), // 添加投票者地址
+				"blockNumber":            record.BlockNumber,
+				"epochNumber":            record.EpochNumber,
+				"timestamp":              record.Timestamp,
+				"slashAmount":            record.SlashAmount.String(),
+				"oldVoteAmount":          record.OldVoteAmount.String(),
+				"newVoteAmount":          record.NewVoteAmount.String(),
+				"slashRate":              record.SlashRate,
+				"reason":                 record.Reason,
+				"missedBlocks":           record.MissedBlocks,
+				"missedBlocksPercentage": record.MissedBlocksPercentage,
+				"doubleSigningHeight":    record.DoubleSigningHeight,
+			})
+		}
+	}
+
+	// 5. 计算统计信息
+	totalSlashAmount := big.NewInt(0)
+	var lastSlashTime uint64 = 0
+
+	for _, record := range allHistory {
+		recordMap := record.(map[string]interface{})
+		
+		// 累加削减金额
+		if slashAmountStr, ok := recordMap["slashAmount"].(string); ok {
+			if slashAmount, ok := new(big.Int).SetString(slashAmountStr, 10); ok {
+				totalSlashAmount.Add(totalSlashAmount, slashAmount)
+			}
+		}
+
+		// 找到最新的削减时间
+		if timestamp, ok := recordMap["timestamp"].(uint64); ok {
+			if timestamp > lastSlashTime {
+				lastSlashTime = timestamp
+			}
+		}
+	}
+
+	// 6. 按时间倒序排序
+	sort.Slice(allHistory, func(i, j int) bool {
+		timeI, okI := allHistory[i].(map[string]interface{})["timestamp"].(uint64)
+		timeJ, okJ := allHistory[j].(map[string]interface{})["timestamp"].(uint64)
+		
+		if !okI || !okJ {
+			return false
+		}
+		return timeI > timeJ // 最新的在前
+	})
+
+	// 7. 返回结果
+	result := map[string]interface{}{
+		"success":         true,
+		"validator":       validatorAddr.String(),
+		"totalSlashCount": len(allHistory),
+		"totalSlashAmount": totalSlashAmount.String(),
+		"slashingHistory": allHistory,
+	}
+
+	if lastSlashTime > 0 {
+		result["lastSlashTime"] = lastSlashTime
+	} else {
+		result["lastSlashTime"] = nil
+	}
+
+	d.logger.Info("GetValidatorSlashingHistory: completed", 
+		"validator", validatorAddr.String(),
+		"totalSlashCount", len(allHistory),
+		"totalSlashAmount", totalSlashAmount.String())
+
+	return result, nil
+}
+
 // addProposalTransactionToPool 将提案交易添加到交易池并广播
 func (d *DPOS) addProposalTransactionToPool(tx *types.Transaction) error {
 	// 添加到交易池
