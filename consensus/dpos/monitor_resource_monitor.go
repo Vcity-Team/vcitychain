@@ -92,10 +92,9 @@ func (rm *ResourceMonitor) cleanupResources() {
 	if currentGoroutines > 1000 {
 		rm.logger.Warn("协程数量过多，可能存在泄漏", "count", currentGoroutines)
 
-		// 如果协程管理器可用，获取其统计信息
+		// 如果协程管理器可用，获取其统计信息（已删除日志）
 		if rm.goroutineManager != nil {
-			stats := rm.goroutineManager.GetStats()
-			rm.logOnceWithInterval("goroutine_manager_stats", 10*time.Second, "warn", "协程管理器统计", "stats", stats)
+			_ = rm.goroutineManager.GetStats()
 		}
 	}
 

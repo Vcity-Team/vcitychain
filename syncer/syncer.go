@@ -134,10 +134,6 @@ func (s *syncer) startPeerStatusUpdateProcess() {
 		// 监控处理速度
 		processedCount++
 		if time.Since(lastLogTime) > 10*time.Second {
-			s.logger.Debug("状态更新处理统计",
-				"处理数量", processedCount,
-				"时间间隔", time.Since(lastLogTime),
-				"处理速率", float64(processedCount)/time.Since(lastLogTime).Seconds())
 			processedCount = 0
 			lastLogTime = time.Now()
 		}
@@ -268,12 +264,6 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 	localLatest := s.blockchain.Header().Number
 	skipList := make(map[peer.ID]bool)
 
-	// 添加日志控制变量
-	lastNoPeerLogTime := time.Time{}
-	lastStatusUpdateLogTime := time.Time{}
-	noPeerLogInterval := 30 * time.Second      // 30秒打印一次
-	statusUpdateLogInterval := 5 * time.Second // 5秒打印一次
-
 	for {
 		// Wait for a new event to arrive
 		<-s.newStatusCh
@@ -281,27 +271,11 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 		// fetch local latest block
 		if header := s.blockchain.Header(); header != nil {
 			localLatest = header.Number
-			// 减少"同步器状态更新"日志的打印频率
-			now := time.Now()
-			if now.Sub(lastStatusUpdateLogTime) > statusUpdateLogInterval {
-				s.logger.Debug("同步器状态更新", "localLatest", localLatest)
-				lastStatusUpdateLogTime = now
-			}
 		}
 
 		// pick one best peer
 		bestPeer := s.peerMap.BestPeer(skipList)
 		if bestPeer == nil {
-			// 控制日志频率，避免刷屏
-			now := time.Now()
-			if now.Sub(lastNoPeerLogTime) > noPeerLogInterval {
-				// 显示 peerMap 的当前状态
-				peerCount := s.getPeerMapSize()
-				s.logger.Debug("没有可用的对等节点",
-					"skipListSize", len(skipList),
-					"peerMapSize", peerCount)
-				lastNoPeerLogTime = now
-			}
 			// Empty skipList map if there are no best peers
 			skipList = make(map[peer.ID]bool)
 
