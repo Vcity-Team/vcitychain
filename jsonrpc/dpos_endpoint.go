@@ -1672,8 +1672,6 @@ func (d *DPOS) validateVoteRequest(req *VoteRequest) error {
 // GetValidatorVotingDetails handles dpos_getValidatorVotingDetails RPC method
 // This method returns detailed voting information for a specific validator
 func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("🔵 [GetValidatorVotingDetails] 开始调用", "params", params)
-
 	var validatorAddress string
 
 	// Parse parameters
@@ -1724,7 +1722,6 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 	validatorAddr := types.StringToAddress(validatorAddress)
 
 	// 获取验证者信息
-	d.logger.Info("🔵 [GetValidatorVotingDetails] 获取验证者信息", "validator", validatorAddr.String())
 	var targetValidator *validator.ValidatorMetadata
 	var validators validator.AccountSet
 	var err error
@@ -1735,10 +1732,8 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		}); ok {
 			if dposEngine := dposStore.GetDPoSEngine(); dposEngine != nil {
 				if dpos, ok := dposEngine.(*dpos.DPoS); ok {
-					if validators, err = dpos.GetValidatorsWithFilter(false); err == nil && len(validators) > 0 {
-						d.logger.Info("✅ [GetValidatorVotingDetails] 成功: 从 DPoS engine 获取", "count", len(validators))
-					} else {
-						d.logger.Warn("⚠️ [GetValidatorVotingDetails] 失败", "error", err, "count", len(validators))
+					if validators, err = dpos.GetValidatorsWithFilter(false); err != nil {
+						d.logger.Warn("⚠️ [GetValidatorVotingDetails] 获取验证者列表失败", "error", err)
 					}
 				}
 			}
@@ -1750,10 +1745,6 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		for _, v := range validators {
 			if v.Address == validatorAddr {
 				targetValidator = v
-				d.logger.Info("✅ [GetValidatorVotingDetails] 找到验证者",
-					"validator", validatorAddr.String(),
-					"votingPower", v.VotingPower.String(),
-					"isActive", v.IsActive)
 				break
 			}
 		}
@@ -1770,7 +1761,6 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 
 	// Get staking info for this validator
 	// 🆕 修复：直接从 DPoS State.StakeStore 获取，确保数据完整
-	d.logger.Info("🔵 [GetValidatorVotingDetails] 步骤2: 从 StakeStore.GetStakingInfo 获取投票记录", "validator", validatorAddr.String())
 	var stakingInfo []*dpos.StakeInfo
 	var dposState *dpos.State
 
@@ -1779,8 +1769,6 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		stakingInfo, err = dposState.StakeStore.GetStakingInfo()
 		if err != nil {
 			d.logger.Error("❌ [GetValidatorVotingDetails] StakeStore.GetStakingInfo 失败", "error", err)
-		} else {
-			d.logger.Info("✅ [GetValidatorVotingDetails] 从 StakeStore.GetStakingInfo 获取成功", "count", len(stakingInfo))
 		}
 	} else {
 		d.logger.Warn("⚠️ [GetValidatorVotingDetails] DPoS State 不可用，尝试从 store.GetStakingInfo 获取")
@@ -1800,100 +1788,6 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 			"error":   fmt.Sprintf("failed to get staking info: %v", err),
 		}, nil
 	}
-	d.logger.Info("🔵 [GetValidatorVotingDetails] GetStakingInfo 返回", "count", len(stakingInfo))
-
-	// 🆕 备用方案：如果 StakingInfo 中找不到入站投票，尝试从 VoterInfo 中查找
-	// 遍历所有 VoterInfo，查找所有投票给该验证者的记录
-	if dposState != nil && dposState.StakeStore != nil {
-		d.logger.Info("🔍 [GetValidatorVotingDetails] 尝试从 VoterInfo 查找入站投票", "validator", validatorAddr.String())
-		// 注意：这里需要遍历所有 VoterInfo，可能会比较慢，但可以找到所有投票记录
-		// 由于没有直接的方法获取所有 VoterInfo，我们暂时跳过这个方案
-		// 如果 StakingInfo 中确实没有记录，说明数据可能不一致，但 VotingPower 是正确的
-	}
-
-	// 调试：记录所有 delegate 地址，帮助排查匹配问题
-	delegateSet := make(map[string]int) // 记录每个 delegate 的投票记录数
-	validatorAddrStr := validatorAddr.String()
-	validatorAddrLower := strings.ToLower(validatorAddrStr)
-
-	// 🆕 详细调试：打印所有 StakingInfo 记录的 Delegate 字段
-	d.logger.Info("🔍 [GetValidatorVotingDetails] 开始详细调试：打印所有 StakingInfo 记录")
-	for i, stake := range stakingInfo {
-		if stake == nil {
-			d.logger.Warn("🔍 [GetValidatorVotingDetails] 记录为空", "index", i)
-			continue
-		}
-
-		delegateStr := stake.Delegate.String()
-		delegateStrLower := strings.ToLower(delegateStr)
-		stakerStr := stake.Staker.String()
-
-		// 检查地址是否匹配（大小写不敏感）
-		addressMatch := delegateStrLower == validatorAddrLower
-		addressMatchExact := delegateStr == validatorAddrStr
-
-		d.logger.Info("🔍 [GetValidatorVotingDetails] StakingInfo 记录详情",
-			"index", i,
-			"staker", stakerStr,
-			"delegate", delegateStr,
-			"delegateLower", delegateStrLower,
-			"validatorAddr", validatorAddrStr,
-			"validatorAddrLower", validatorAddrLower,
-			"addressMatchExact", addressMatchExact,
-			"addressMatchCaseInsensitive", addressMatch,
-			"amount", func() string {
-				if stake.Amount != nil {
-					return stake.Amount.String()
-				}
-				return "nil"
-			}(),
-			"applied", stake.Applied,
-			"effectiveEpoch", stake.EffectiveEpoch,
-			"isZeroAddress", stake.Delegate == (types.Address{}))
-
-		if stake.Delegate != (types.Address{}) {
-			delegateSet[delegateStr]++
-			// 如果匹配（大小写不敏感），记录详细信息
-			if addressMatch {
-				d.logger.Info("✅ [GetValidatorVotingDetails] 找到匹配的 delegate（大小写不敏感）",
-					"staker", stakerStr,
-					"delegate", delegateStr,
-					"validatorAddr", validatorAddrStr,
-					"amount", func() string {
-						if stake.Amount != nil {
-							return stake.Amount.String()
-						}
-						return "nil"
-					}(),
-					"applied", stake.Applied,
-					"effectiveEpoch", stake.EffectiveEpoch)
-			}
-		} else {
-			// 记录 Delegate 为空的情况
-			d.logger.Warn("⚠️ [GetValidatorVotingDetails] 发现 Delegate 为空的记录",
-				"index", i,
-				"staker", stakerStr,
-				"amount", func() string {
-					if stake.Amount != nil {
-						return stake.Amount.String()
-					}
-					return "nil"
-				}())
-		}
-	}
-	d.logger.Info("🔵 [GetValidatorVotingDetails] 调试信息",
-		"validatorAddr", validatorAddrStr,
-		"totalStakingRecords", len(stakingInfo),
-		"uniqueDelegates", len(delegateSet),
-		"validatorInDelegateSet", delegateSet[validatorAddrStr] > 0,
-		"validatorVoteCount", delegateSet[validatorAddrStr],
-		"allDelegates", func() []string {
-			result := make([]string, 0, len(delegateSet))
-			for addr := range delegateSet {
-				result = append(result, addr)
-			}
-			return result
-		}())
 
 	// Helpers for formatting amounts
 	weiPerEtherInt := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
@@ -1908,8 +1802,6 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 	}
 
 	// 聚合投票记录：按 staker+delegate 聚合，累加 amount
-	d.logger.Info("🔵 [GetValidatorVotingDetails] 步骤3: 遍历投票记录并聚合", "validator", validatorAddr.String())
-
 	// 聚合结构体
 	type aggregatedStake struct {
 		staker      types.Address
@@ -1934,17 +1826,12 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 	// 因为 StakingInfo 中的 Delegate 字段可能不正确，但 VoterInfo.DelegateVotes 是准确的
 	// 🆕 改进：直接遍历所有 VoterInfo，而不是只从 StakingInfo 中的 staker 地址查找
 	if dposState != nil && dposState.StakeStore != nil {
-		d.logger.Info("🔍 [GetValidatorVotingDetails] 从 VoterInfo 查找入站投票（遍历所有投票者）", "validator", validatorAddr.String())
-
 		// 🆕 直接获取所有 VoterInfo 记录
 		allVoterInfo, err := dposState.StakeStore.GetAllVoterInfo()
 		if err != nil {
 			d.logger.Warn("⚠️ [GetValidatorVotingDetails] GetAllVoterInfo 失败", "error", err)
 		} else {
-			d.logger.Info("🔍 [GetValidatorVotingDetails] 获取到所有 VoterInfo", "count", len(allVoterInfo))
-
 			// 遍历所有投票者，查找投票给目标验证者的记录
-			foundCount := 0
 			for voterAddr, voterInfo := range allVoterInfo {
 				if voterInfo == nil {
 					continue
@@ -1958,10 +1845,6 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 						// 如果已经在 inboundStakesMap 中，累加金额
 						if agg, exists := inboundStakesMap[key]; exists {
 							agg.totalAmount.Add(agg.totalAmount, voteAmount)
-							d.logger.Info("✅ [GetValidatorVotingDetails] 累加入站投票",
-								"voter", voterAddr.String(),
-								"addedAmount", voteAmount.String(),
-								"totalAmount", agg.totalAmount.String())
 						} else {
 							// 创建新的聚合记录
 							inboundStakesMap[key] = &aggregatedStake{
@@ -1973,61 +1856,15 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 								isLocked:    voterInfo.LockedUntil > uint64(time.Now().Unix()),
 								rewards:     big.NewInt(0),
 							}
-							foundCount++
-							d.logger.Info("✅ [GetValidatorVotingDetails] 从 VoterInfo 找到入站投票",
-								"voter", voterAddr.String(),
-								"validator", validatorAddr.String(),
-								"amount", voteAmount.String())
 						}
 					}
 				}
 			}
-
-			d.logger.Info("🔍 [GetValidatorVotingDetails] VoterInfo 查找完成",
-				"checkedVoters", len(allVoterInfo),
-				"foundVotes", foundCount,
-				"totalInboundStakes", len(inboundStakesMap))
 		}
 	}
 
-	// 🔍 单独循环打印所有 StakingInfo 记录
-	d.logger.Info("🔍 [GetValidatorVotingDetails] ===== 开始打印所有 StakingInfo 记录 =====",
-		"totalCount", len(stakingInfo),
-		"validatorAddr", validatorAddr.String())
-	for i, stake := range stakingInfo {
-		if stake == nil {
-			d.logger.Info("🔍 [GetValidatorVotingDetails] StakingInfo 记录为空", "index", i)
-			continue
-		}
-		d.logger.Info("🔍 [GetValidatorVotingDetails] StakingInfo 详细记录",
-			"index", i,
-			"staker", stake.Staker.String(),
-			"delegate", stake.Delegate.String(),
-			"amount", func() string {
-				if stake.Amount != nil {
-					return stake.Amount.String()
-				}
-				return "nil"
-			}(),
-			"startTime", stake.StartTime,
-			"endTime", stake.EndTime,
-			"isLocked", stake.IsLocked,
-			"isActive", stake.IsActive,
-			"applied", stake.Applied,
-			"effectiveEpoch", stake.EffectiveEpoch,
-			"rewards", func() string {
-				if stake.Rewards != nil {
-					return stake.Rewards.String()
-				}
-				return "nil"
-			}(),
-			"validatorAddr", validatorAddr.String(),
-			"isInboundMatch", stake.Delegate == validatorAddr,
-			"isOutboundMatch", stake.Staker == validatorAddr)
-	}
-	d.logger.Info("🔍 [GetValidatorVotingDetails] ===== 所有 StakingInfo 记录打印完成 =====")
-
-	for i, stake := range stakingInfo {
+	// 处理 StakingInfo：聚合投票记录
+	for _, stake := range stakingInfo {
 		if stake == nil {
 			continue
 		}
@@ -2037,25 +1874,9 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 			amount = new(big.Int).Set(stake.Amount)
 		}
 
-		// 🆕 详细调试：检查地址比较
 		delegateAddr := stake.Delegate
 		isInboundMatch := delegateAddr == validatorAddr
 		isOutboundMatch := stake.Staker == validatorAddr
-
-		// 如果接近匹配（用于调试），记录详细信息
-		if !isInboundMatch && !isOutboundMatch {
-			// 检查大小写不敏感的匹配
-			delegateStr := delegateAddr.String()
-			validatorStr := validatorAddr.String()
-			if strings.EqualFold(delegateStr, validatorStr) {
-				d.logger.Warn("⚠️ [GetValidatorVotingDetails] 发现大小写不匹配的地址",
-					"index", i,
-					"stake.Delegate", delegateStr,
-					"validatorAddr", validatorStr,
-					"staker", stake.Staker.String(),
-					"amount", amount.String())
-			}
-		}
 
 		// 处理投票给 validator 的记录（入站投票）
 		// 🔧 修复：如果 VoterInfo.DelegateVotes 中已经有该投票者的记录，就跳过从 StakeInfo 累加
@@ -2073,12 +1894,6 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 			}
 
 			// 如果 VoterInfo 中没有，才从 StakeInfo 累加（这种情况应该很少，可能是数据不一致）
-			d.logger.Info("✅ [GetValidatorVotingDetails] 从 StakeInfo 找到入站投票记录（VoterInfo 中不存在）",
-				"index", i,
-				"staker", stake.Staker.String(),
-				"delegate", delegateAddr.String(),
-				"amount", amount.String())
-
 			if agg, exists := inboundStakesMap[key]; exists {
 				// 累加金额
 				agg.totalAmount.Add(agg.totalAmount, amount)
@@ -2119,16 +1934,11 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 				if stake.Rewards != nil {
 					inboundStakesMap[key].rewards.Set(stake.Rewards)
 				}
-				d.logger.Info("🔵 [GetValidatorVotingDetails] 找到投票记录",
-					"index", i,
-					"staker", stake.Staker.String(),
-					"delegate", stake.Delegate.String(),
-					"amount", amount.String())
 			}
 		}
 
 		// 处理 validator 自己的投票
-		if stake.Staker == validatorAddr {
+		if isOutboundMatch {
 			key := stake.Delegate.String()
 			if agg, exists := outboundVotesMap[key]; exists {
 				// 累加金额
@@ -2211,12 +2021,6 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 
 	stakeFound := len(validatorStakes) > 0
 
-	d.logger.Info("🔵 [GetValidatorVotingDetails] 投票记录聚合完成",
-		"validator", validatorAddr.String(),
-		"calculatedTotalStakedToValidator", totalStakedToValidator.String(),
-		"stakeCount", len(validatorStakes),
-		"outboundVoteCount", len(outboundVotes))
-
 	// 检查 VotingPower 与计算出的 totalStakedToValidator 是否一致
 	if targetValidator.VotingPower != nil && targetValidator.VotingPower.Sign() > 0 {
 		if totalStakedToValidator.Cmp(targetValidator.VotingPower) != 0 {
@@ -2241,12 +2045,6 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 	// 因为 VotingPower 是权威数据源，而 totalStakedToValidator 可能因为数据不一致而不准确
 	totalStakedToMe := votingPower
 
-	d.logger.Info("🔵 [GetValidatorVotingDetails] 构建返回结果",
-		"validator", validatorAddr.String(),
-		"votingPower", votingPower.String(),
-		"totalStakedToMe", totalStakedToMe.String(),
-		"calculatedTotalStakedToValidator", totalStakedToValidator.String(),
-		"stakeCount", len(validatorStakes))
 	validatorDetail := map[string]interface{}{
 		"address":              targetValidator.Address.String(),
 		"votingPower":          votingPower.String(),
@@ -2268,11 +2066,6 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		"success":   true,
 		"validator": validatorDetail,
 	}
-
-	d.logger.Info("✅ [GetValidatorVotingDetails] 完成",
-		"validator", validatorAddr.String(),
-		"finalTotalStakedToMe", totalStakedToValidator.String(),
-		"finalVotingPower", votingPower.String())
 
 	return response, nil
 }
