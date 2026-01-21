@@ -1740,11 +1740,13 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		}
 	}
 	if targetValidator == nil {
-		d.logger.Error("❌ [GetValidatorVotingDetails] 验证者不存在", "validator", validatorAddr.String())
-		return map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("validator not found: %s", validatorAddr.String()),
-		}, nil
+		// 支持候选人/权重为0的地址：构造默认元数据继续向下聚合投票记录
+		targetValidator = &validator.ValidatorMetadata{
+			Address:     validatorAddr,
+			VotingPower: big.NewInt(0),
+			IsActive:    false,
+			BlsKey:      nil,
+		}
 	}
 	var stakingInfo []*dpos.StakeInfo
 	var dposState *dpos.State
