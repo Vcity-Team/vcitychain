@@ -5601,6 +5601,12 @@ func (d *DPOS) GetActiveProposals(ctx context.Context, params interface{}) (inte
 		}, nil
 	}
 
+	// 获取当前区块高度，用于判断提案是否过期
+	currentBlockNumber := gov.GetCurrentBlockNumber()
+	if currentBlockNumber == 0 {
+		currentBlockNumber = d.getCurrentBlockHeight()
+	}
+
 	result := make([]map[string]interface{}, 0, len(proposals))
 	for _, proposal := range proposals {
 		votes := len(proposal.Votes)
@@ -5617,20 +5623,24 @@ func (d *DPOS) GetActiveProposals(ctx context.Context, params interface{}) (inte
 			createdAtTs = 0
 		}
 
+		// 判断提案执行有效期是否已过期
+		isProposalExpired := currentBlockNumber > proposal.ValidEndBlock
+
 		result = append(result, map[string]interface{}{
-			"proposalId":  proposal.ID,
-			"parameter":   proposal.Parameter,
-			"oldValue":    proposal.OldValue,
-			"newValue":    proposal.NewValue,
-			"proposer":    proposal.Proposer.String(),
-			"startBlock":  proposal.StartBlock,
-			"endBlock":    proposal.EndBlock,
-			"status":      proposal.Status.String(),
-			"threshold":   proposal.Threshold,
-			"description": proposal.Description,
-			"createdAt":   createdAtFormatted,
-			"createdAtTs": createdAtTs,
-			"votes":       votes,
+			"proposalId":       proposal.ID,
+			"parameter":        proposal.Parameter,
+			"oldValue":         proposal.OldValue,
+			"newValue":         proposal.NewValue,
+			"proposer":         proposal.Proposer.String(),
+			"startBlock":       proposal.StartBlock,
+			"endBlock":         proposal.EndBlock,
+			"status":           proposal.Status.String(),
+			"threshold":        proposal.Threshold,
+			"description":      proposal.Description,
+			"createdAt":        createdAtFormatted,
+			"createdAtTs":      createdAtTs,
+			"votes":            votes,
+			"isProposalExpired": isProposalExpired,
 		})
 	}
 
