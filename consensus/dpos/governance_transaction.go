@@ -310,6 +310,15 @@ func (d *DPoS) ProcessProposalExecuteTransaction(tx *types.Transaction, blockNum
 		return fmt.Errorf("proposal %s voting period has not ended yet (current block %d <= end block %d), cannot execute", txData.ProposalID, blockNumber, proposal.EndBlock)
 	}
 
+	// 检查1.5：提案有效期必须未过期
+	if blockNumber > proposal.ValidEndBlock {
+		d.logger.Warn("❌ [ProcessProposalExecuteTransaction] 提案有效期已过期，拒绝执行",
+			"proposalID", txData.ProposalID,
+			"currentBlock", blockNumber,
+			"validEndBlock", proposal.ValidEndBlock)
+		return fmt.Errorf("proposal %s has expired (current block %d > valid end block %d), cannot execute", txData.ProposalID, blockNumber, proposal.ValidEndBlock)
+	}
+
 	// 检查2：如果投票期已结束但状态未更新，先检查投票结果
 	if proposal.Status != ProposalPassed && proposal.Status != ProposalRejected {
 		checkStartTime := time.Now()
