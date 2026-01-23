@@ -2919,29 +2919,53 @@ func (d *DPOS) getConsensusEngineByHeight(consensusStore interface {
 
 // getConsensusSwitchHeight 获取共识切换高度配置
 func (d *DPOS) getConsensusSwitchHeight() uint64 {
-	// 尝试从共识引擎中获取配置
+	// 方法1: 优先尝试从 DPoS 引擎获取（如果已经切换到 DPoS，这是最直接的方式）
+	dposEngine := d.getDPoSEngine()
+	if dposEngine != nil {
+		if dpos, ok := dposEngine.(*dpos.DPoS); ok {
+			height := dpos.GetConsensusSwitchHeight()
+			if height > 0 {
+				d.logger.Debug("从DPoS引擎获取共识切换高度", "height", height)
+				return height
+			}
+		} else if engine, ok := dposEngine.(interface {
+			GetConsensusSwitchHeight() uint64
+		}); ok {
+			height := engine.GetConsensusSwitchHeight()
+			if height > 0 {
+				d.logger.Debug("从DPoS引擎接口获取共识切换高度", "height", height)
+				return height
+			}
+		}
+	}
+
+	// 方法2: 尝试从共识引擎中获取配置
 	if consensusStore, ok := d.store.(interface {
 		GetConsensus() interface{}
 	}); ok {
 		consensusEngine := consensusStore.GetConsensus()
 		d.logger.Debug("获取到共识引擎", "type", fmt.Sprintf("%T", consensusEngine))
 
+		// 尝试从DPoS引擎中获取配置（共识引擎可能就是DPoS）
+		if dposEngine, ok := consensusEngine.(interface {
+			GetConsensusSwitchHeight() uint64
+		}); ok {
+			height := dposEngine.GetConsensusSwitchHeight()
+			if height > 0 {
+				d.logger.Debug("从共识引擎（DPoS）获取共识切换高度", "height", height)
+				return height
+			}
+		}
+
 		// 尝试从IBFT引擎中获取配置
 		if ibftEngine, ok := consensusEngine.(interface {
 			GetConsensusSwitchHeight() uint64
 		}); ok {
 			height := ibftEngine.GetConsensusSwitchHeight()
-			d.logger.Debug("从IBFT引擎获取共识切换高度", "height", height)
-			return height
-		}
-
-		// 尝试从DPoS引擎中获取配置
-		if dposEngine, ok := consensusEngine.(interface {
-			GetConsensusSwitchHeight() uint64
-		}); ok {
-			height := dposEngine.GetConsensusSwitchHeight()
-			d.logger.Debug("从DPoS引擎获取共识切换高度", "height", height)
-			return height
+			if height > 0 {
+				d.logger.Debug("从IBFT引擎获取共识切换高度", "height", height)
+				return height
+			}
 		}
 
 		// 尝试通过反射获取配置
@@ -5698,7 +5722,13 @@ func (d *DPOS) GetVotableCurrentParameters(ctx context.Context) (interface{}, er
 func (d *DPOS) GetConsensusSwitchHeight(ctx context.Context) (interface{}, error) {
 	d.logger.Info("DPoS GetConsensusSwitchHeight called")
 
+	// 尝试多种方式获取共识切换高度
 	consensusSwitchHeight := d.getConsensusSwitchHeight()
+	currentHeight := d.getCurrentBlockHeight()
+
+	d.logger.Info("获取共识切换高度结果",
+		"consensusSwitchHeight", consensusSwitchHeight,
+		"currentHeight", currentHeight)
 
 	// 尝试获取共识切换高度区块的时间戳
 	var switchBlockTimestamp uint64 = 0
@@ -5707,15 +5737,27 @@ func (d *DPOS) GetConsensusSwitchHeight(ctx context.Context) (interface{}, error
 		if header, exists := d.store.GetHeaderByNumber(consensusSwitchHeight); exists && header != nil {
 			switchBlockTimestamp = header.Timestamp
 			switchBlockHash = header.Hash.String()
+			d.logger.Info("成功获取切换高度区块信息",
+				"height", consensusSwitchHeight,
+				"timestamp", switchBlockTimestamp,
+				"hash", switchBlockHash)
+		} else {
+			d.logger.Warn("无法获取切换高度区块头",
+				"height", consensusSwitchHeight)
 		}
+	} else {
+		d.logger.Warn("共识切换高度为0，可能未配置或无法获取")
 	}
+
+	isDPoSActive := consensusSwitchHeight > 0 && currentHeight >= consensusSwitchHeight
 
 	return map[string]interface{}{
 		"success":                true,
 		"consensusSwitchHeight":  consensusSwitchHeight,
 		"switchBlockTimestamp":  switchBlockTimestamp,
 		"switchBlockHash":         switchBlockHash,
-		"isDPoSActive":            consensusSwitchHeight > 0 && d.getCurrentBlockHeight() >= consensusSwitchHeight,
+		"currentBlockHeight":     currentHeight,
+		"isDPoSActive":            isDPoSActive,
 	}, nil
 }
 
