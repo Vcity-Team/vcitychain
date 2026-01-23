@@ -181,6 +181,7 @@ type DelegateRegistration struct {
 	TotalVotes   *big.Int      `json:"totalVotes"`   // 总投票数
 	IsActive     bool          `json:"isActive"`     // 是否为活跃受托人
 	LastVoteTime uint64        `json:"lastVoteTime"` // 最后投票时间
+	Rank         int           `json:"rank"`         // 排名（按 totalVotes 倒序排序后的序号，从1开始）
 	// 冻结相关字段
 	FrozenAt            uint64 `json:"frozenAt"`            // 冻结时间（注册时设置）
 	UnfreezeAt          uint64 `json:"unfreezeAt"`          // 解冻时间（退出时设置，0表示未解冻）

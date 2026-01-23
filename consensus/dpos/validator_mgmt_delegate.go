@@ -1716,6 +1716,34 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 	}
 	d.logger.Info("✅ [GetDelegateRegistrations] 处理未注册的验证者完成", "addedCount", addedCount)
 
+	// 8. 按 totalVotes 倒序排序并添加排名序号
+	d.logger.Info("📋 [GetDelegateRegistrations] 步骤7: 按 totalVotes 排序并添加排名序号...")
+	sort.Slice(result, func(i, j int) bool {
+		// 按 totalVotes 倒序排序（从大到小）
+		// 如果 totalVotes 相同，则按地址排序以保持稳定性
+		if result[i].TotalVotes == nil && result[j].TotalVotes == nil {
+			return result[i].Address.String() < result[j].Address.String()
+		}
+		if result[i].TotalVotes == nil {
+			return false
+		}
+		if result[j].TotalVotes == nil {
+			return true
+		}
+		cmp := result[i].TotalVotes.Cmp(result[j].TotalVotes)
+		if cmp == 0 {
+			// 如果 totalVotes 相同，按地址排序以保持稳定性
+			return result[i].Address.String() < result[j].Address.String()
+		}
+		return cmp > 0 // 倒序：大的在前
+	})
+
+	// 为每个受托人添加排名序号（从1开始）
+	for index, reg := range result {
+		reg.Rank = index + 1
+	}
+	d.logger.Info("✅ [GetDelegateRegistrations] 排序和排名完成", "totalCount", len(result))
+
 	d.logger.Info("✅ [GetDelegateRegistrations] 返回受托人注册信息", "totalCount", len(result))
 	return result, nil
 }
