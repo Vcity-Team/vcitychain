@@ -1541,8 +1541,36 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 		registeredAddresses[reg.Address] = true
 	}
 
-	// 5. 🆕 方案1：实时同步已注册受托人的 TotalVotes 和 IsActive
-	d.logger.Info("📋 [GetDelegateRegistrations] 步骤4: 实时同步已注册受托人的 TotalVotes 和 IsActive...")
+	// 5. 🆕 获取所有 StakeInfo 和共识切换高度时间戳，用于同步 LastVoteTime 和 CreatedAt
+	d.logger.Info("📋 [GetDelegateRegistrations] 步骤4: 获取 StakeInfo 和共识切换高度时间戳...")
+	var allStakingInfos []*StakeInfo
+	if d.state != nil && d.state.StakeStore != nil {
+		if stakingInfos, err := d.state.StakeStore.GetStakingInfo(); err == nil {
+			allStakingInfos = stakingInfos
+			d.logger.Debug("✅ [GetDelegateRegistrations] 获取 StakeInfo 完成", "count", len(allStakingInfos))
+		} else {
+			d.logger.Warn("⚠️ [GetDelegateRegistrations] 获取 StakeInfo 失败", "error", err)
+		}
+	}
+
+	// 获取共识切换高度区块的时间戳（用于创世验证者的 CreatedAt 和 LastVoteTime 默认值）
+	var consensusSwitchTimestamp uint64 = 0
+	if d.config != nil && d.config.ConsensusSwitchHeight > 0 {
+		if d.config.Blockchain != nil {
+			if switchHeader, exists := d.config.Blockchain.GetHeaderByNumber(d.config.ConsensusSwitchHeight); exists && switchHeader != nil {
+				consensusSwitchTimestamp = switchHeader.Timestamp
+				d.logger.Debug("✅ [GetDelegateRegistrations] 获取共识切换高度区块时间戳",
+					"switchHeight", d.config.ConsensusSwitchHeight,
+					"timestamp", consensusSwitchTimestamp)
+			} else {
+				d.logger.Warn("⚠️ [GetDelegateRegistrations] 无法获取共识切换高度区块头",
+					"switchHeight", d.config.ConsensusSwitchHeight)
+			}
+		}
+	}
+
+	// 6. 🆕 实时同步已注册受托人的 TotalVotes、IsActive 和 LastVoteTime
+	d.logger.Info("📋 [GetDelegateRegistrations] 步骤5: 实时同步已注册受托人的 TotalVotes、IsActive 和 LastVoteTime...")
 	syncedCount := 0
 	for _, reg := range dbRegistrations {
 		if validator, exists := validatorMap[reg.Address]; exists {
@@ -1560,27 +1588,46 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 			oldIsActive := reg.IsActive
 			newIsActive := validator.IsActive
 			
+			// 🆕 从 StakeInfo 获取最新的投票时间
+			var latestVoteTime uint64 = 0
+			for _, stake := range allStakingInfos {
+				if stake != nil && stake.Delegate == reg.Address && stake.Applied {
+					if stake.StartTime > latestVoteTime {
+						latestVoteTime = stake.StartTime
+					}
+				}
+			}
+			
 			// 如果值不同，实时更新（仅在内存中，不写回数据库）
-			if currentTotalVotes.Cmp(newTotalVotes) != 0 || oldIsActive != newIsActive {
+			if currentTotalVotes.Cmp(newTotalVotes) != 0 || oldIsActive != newIsActive || reg.LastVoteTime != latestVoteTime {
 				d.logger.Info("🔄 [GetDelegateRegistrations] 实时同步受托人信息",
 					"address", reg.Address.String(),
 					"name", reg.Name,
 					"oldTotalVotes", currentTotalVotes.String(),
 					"newTotalVotes", newTotalVotes.String(),
 					"oldIsActive", oldIsActive,
-					"newIsActive", newIsActive)
+					"newIsActive", newIsActive,
+					"oldLastVoteTime", reg.LastVoteTime,
+					"newLastVoteTime", latestVoteTime)
 				
 				reg.TotalVotes = new(big.Int).Set(newTotalVotes)
 				reg.IsActive = newIsActive
+				if latestVoteTime > 0 {
+					reg.LastVoteTime = latestVoteTime
+				}
+				syncedCount++
+			} else if latestVoteTime > 0 && reg.LastVoteTime != latestVoteTime {
+				// 即使其他字段没变，也要更新 LastVoteTime
+				reg.LastVoteTime = latestVoteTime
 				syncedCount++
 			}
 		}
 	}
 	d.logger.Info("✅ [GetDelegateRegistrations] 实时同步完成", "syncedCount", syncedCount, "totalRegistrations", len(dbRegistrations))
 
-	// 6. 将数据库中的所有验证者转换为 DelegateRegistration 格式
+	// 7. 将数据库中的所有验证者转换为 DelegateRegistration 格式
 	// 只添加未在注册表中注册的验证者（已注册的验证者信息更完整，优先使用注册表的数据）
-	d.logger.Info("📋 [GetDelegateRegistrations] 步骤5: 处理未注册的验证者...")
+	d.logger.Info("📋 [GetDelegateRegistrations] 步骤6: 处理未注册的验证者...")
 	result := make([]*DelegateRegistration, 0, len(dbRegistrations)+len(allValidators))
 	result = append(result, dbRegistrations...)
 
@@ -1611,6 +1658,32 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 		// 获取 deposit：对于创世验证者，也使用 dpos_delegate_threshold 的值（与普通候选人一致）
 		depositAmount := d.getDelegateDepositAmount()
 
+		// 🆕 从 StakeInfo 获取最新的投票时间（如果有投票记录）
+		var latestVoteTime uint64 = 0
+		for _, stake := range allStakingInfos {
+			if stake != nil && stake.Delegate == validator.Address && stake.Applied {
+				if stake.StartTime > latestVoteTime {
+					latestVoteTime = stake.StartTime
+				}
+			}
+		}
+
+		// 🆕 设置 CreatedAt：对于创世验证者，使用共识切换高度的时间戳
+		var createdAt uint64 = 0
+		if isGenesis && consensusSwitchTimestamp > 0 {
+			createdAt = consensusSwitchTimestamp
+		}
+
+		// 🆕 设置 LastVoteTime：
+		// - 如果有投票记录，使用最新的投票时间
+		// - 如果是创世验证者且没有投票记录，使用共识切换高度的时间戳
+		var lastVoteTime uint64 = 0
+		if latestVoteTime > 0 {
+			lastVoteTime = latestVoteTime
+		} else if isGenesis && consensusSwitchTimestamp > 0 {
+			lastVoteTime = consensusSwitchTimestamp
+		}
+
 		reg := &DelegateRegistration{
 			Address: validator.Address,
 			Name:    fmt.Sprintf("Validator %s", validator.Address.String()[:10]),
@@ -1623,10 +1696,10 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 			}(),
 			Deposit:             new(big.Int).Set(depositAmount),
 			Status:              status,
-			CreatedAt:           0,
+			CreatedAt:           createdAt,
 			TotalVotes:          new(big.Int).Set(validator.VotingPower),
 			IsActive:            validator.IsActive,
-			LastVoteTime:        0,
+			LastVoteTime:        lastVoteTime,
 			FrozenAt:            0,
 			UnfreezeAt:          0,
 			UnfreezeAvailableAt: 0,
