@@ -663,6 +663,15 @@ func (d *DPoS) Start() error {
 		d.logger.Warn("Failed to call command data sources on startup", "error", err)
 	}
 
+	// 🔧 启动时自动修复验证者权重（只修复不正确的，不强制更新）
+	// 注意：修复完成后可以删除这段代码，重新部署
+	if err := d.RecalculateAllValidatorsVotingPower(false); err != nil {
+		d.logger.Warn("⚠️ 启动时修复验证者权重失败", "error", err)
+		// 不返回错误，因为修复失败不应该阻止DPoS启动
+	} else {
+		d.logger.Info("✅ 启动时验证者权重修复完成")
+	}
+
 	// 初始化性能优化组件
 	d.initPerformanceOptimizations()
 

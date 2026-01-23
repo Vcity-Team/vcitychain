@@ -341,14 +341,14 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 	// 计算新的投票权重
 	newPower := new(big.Int).Add(currentPower, amount)
 
-	// 检查是否为创世验证者
+	// 注意：创世验证者的权重现在也包含用户投票
+	// 初始权重（1000 ETH）在初始化时设置，后续用户投票会累加在上面
 	if d.isGenesisValidator(delegate) {
-		fixedVotingPower := new(big.Int)
-		fixedVotingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
-		newPower = fixedVotingPower
-		d.logger.Info("🔒 创世验证者使用固定权重",
+		d.logger.Info("✅ 创世验证者权重更新（包含用户投票）",
 			"delegate", delegate.String(),
-			"fixedPower", newPower.String())
+			"oldPower", currentPower.String(),
+			"addedAmount", amount.String(),
+			"newPower", newPower.String())
 	}
 
 	// 创建或更新受托人信息，直接使用计算出的新权重
@@ -386,6 +386,187 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 		"newPower", newPower.String(),
 		"isActive", delegateInfo.IsActive,
 		"dataSource", "database")
+
+	return nil
+}
+
+// RecalculateValidatorVotingPowerFromStakes 从历史投票记录重新计算验证者权重
+// 用于修复创世验证者权重未包含用户投票的问题
+// forceUpdate: 如果为 true，强制更新；如果为 false，只在权重不正确时更新
+func (d *DPoS) RecalculateValidatorVotingPowerFromStakes(validatorAddr types.Address, forceUpdate bool) error {
+	if d.state == nil || d.state.StakeStore == nil {
+		return fmt.Errorf("state store not available")
+	}
+
+	d.logger.Info("🔧 开始重新计算验证者权重",
+		"validator", validatorAddr.String())
+
+	// 1. 获取所有投票记录
+	stakingInfos, err := d.state.StakeStore.GetStakingInfo()
+	if err != nil {
+		return fmt.Errorf("failed to get staking info: %w", err)
+	}
+
+	// 2. 累加所有投票给该验证者的记录（只统计已应用且活跃的）
+	totalVotes := big.NewInt(0)
+	for _, stake := range stakingInfos {
+		if stake == nil {
+			continue
+		}
+		// 只统计已应用且活跃的投票
+		if stake.Delegate == validatorAddr && stake.Applied && stake.IsActive {
+			if stake.Amount != nil && stake.Amount.Sign() > 0 {
+				totalVotes.Add(totalVotes, stake.Amount)
+				d.logger.Debug("累加投票记录",
+					"staker", stake.Staker.String(),
+					"amount", stake.Amount.String(),
+					"totalSoFar", totalVotes.String())
+			}
+		}
+	}
+
+	// 3. 对于创世验证者，需要加上初始的 1000 ETH（注册保证金）
+	// 注意：初始的 1000 ETH 不在 StakeInfo 中，需要单独加上
+	if d.isGenesisValidator(validatorAddr) {
+		genesisBasePower, _ := new(big.Int).SetString("1000000000000000000000", 10) // 1000 VCITY
+		// 总权重 = 基础权重（1000 ETH） + 用户投票
+		totalVotes.Add(totalVotes, genesisBasePower)
+		d.logger.Info("🔧 创世验证者：基础权重 + 用户投票",
+			"validator", validatorAddr.String(),
+			"userVotes", new(big.Int).Sub(totalVotes, genesisBasePower).String(),
+			"genesisBase", genesisBasePower.String(),
+			"totalPower", totalVotes.String())
+	}
+
+	// 4. 检查是否需要更新
+	currentPower, err := d.getVotingPowerFromDatabase(validatorAddr)
+	if err != nil {
+		d.logger.Warn("⚠️ 获取当前权重失败，强制更新",
+			"validator", validatorAddr.String(),
+			"error", err)
+		currentPower = big.NewInt(0)
+	}
+
+	needsUpdate := forceUpdate || currentPower.Cmp(totalVotes) != 0
+
+	if needsUpdate {
+		err = d.updateVotingPowerInDatabase(validatorAddr, totalVotes)
+		if err != nil {
+			return fmt.Errorf("failed to update voting power: %w", err)
+		}
+
+		d.logger.Info("✅ 验证者权重已更新",
+			"validator", validatorAddr.String(),
+			"oldPower", currentPower.String(),
+			"newPower", totalVotes.String())
+	} else {
+		d.logger.Debug("⏭️ 验证者权重已正确，跳过更新",
+			"validator", validatorAddr.String(),
+			"votingPower", currentPower.String())
+	}
+
+	return nil
+}
+
+// RecalculateAllValidatorsVotingPower 重新计算所有验证者的权重
+// forceUpdate: 如果为 true，强制更新所有验证者；如果为 false，只更新权重不正确的验证者
+func (d *DPoS) RecalculateAllValidatorsVotingPower(forceUpdate bool) error {
+	if d.state == nil || d.state.StakeStore == nil {
+		return fmt.Errorf("state store not available")
+	}
+
+	d.logger.Info("🔧 开始重新计算所有验证者权重",
+		"forceUpdate", forceUpdate)
+
+	// 1. 获取所有验证者
+	validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
+	if err != nil {
+		return fmt.Errorf("failed to get validators: %w", err)
+	}
+
+	// 2. 获取所有投票记录
+	stakingInfos, err := d.state.StakeStore.GetStakingInfo()
+	if err != nil {
+		return fmt.Errorf("failed to get staking info: %w", err)
+	}
+
+	// 3. 按验证者聚合投票
+	validatorVotes := make(map[types.Address]*big.Int)
+	for _, stake := range stakingInfos {
+		if stake == nil {
+			continue
+		}
+		// 只统计已应用且活跃的投票
+		if stake.Applied && stake.IsActive && stake.Amount != nil && stake.Amount.Sign() > 0 {
+			if validatorVotes[stake.Delegate] == nil {
+				validatorVotes[stake.Delegate] = big.NewInt(0)
+			}
+			validatorVotes[stake.Delegate].Add(validatorVotes[stake.Delegate], stake.Amount)
+			d.logger.Debug("🔍 统计投票记录",
+				"staker", stake.Staker.String(),
+				"delegate", stake.Delegate.String(),
+				"amount", stake.Amount.String(),
+				"applied", stake.Applied,
+				"isActive", stake.IsActive)
+		} else if stake.Delegate != (types.Address{}) && stake.Amount != nil && stake.Amount.Sign() > 0 {
+			// 记录被跳过的投票（用于调试）
+			d.logger.Debug("⏭️ 跳过投票记录（未应用或非活跃）",
+				"staker", stake.Staker.String(),
+				"delegate", stake.Delegate.String(),
+				"amount", stake.Amount.String(),
+				"applied", stake.Applied,
+				"isActive", stake.IsActive)
+		}
+	}
+
+	// 4. 更新每个验证者的权重
+	genesisBasePower, _ := new(big.Int).SetString("1000000000000000000000", 10) // 1000 VCITY
+	updatedCount := 0
+	skippedCount := 0
+	for _, validator := range validators {
+		userVotes := validatorVotes[validator.Address]
+		if userVotes == nil {
+			userVotes = big.NewInt(0)
+		}
+
+		// 对于创世验证者，总权重 = 基础权重（1000 ETH） + 用户投票
+		if d.isGenesisValidator(validator.Address) {
+			userVotes.Add(userVotes, genesisBasePower)
+		}
+
+		// 检查是否需要更新
+		currentPower := big.NewInt(0)
+		if validator.VotingPower != nil {
+			currentPower = validator.VotingPower
+		}
+
+		needsUpdate := forceUpdate || currentPower.Cmp(userVotes) != 0
+
+		if needsUpdate {
+			err = d.updateVotingPowerInDatabase(validator.Address, userVotes)
+			if err != nil {
+				d.logger.Warn("⚠️ 更新验证者权重失败",
+					"validator", validator.Address.String(),
+					"error", err)
+				continue
+			}
+			updatedCount++
+			d.logger.Info("✅ 验证者权重已更新",
+				"validator", validator.Address.String(),
+				"oldPower", currentPower.String(),
+				"newPower", userVotes.String())
+		} else {
+			skippedCount++
+			d.logger.Debug("⏭️ 验证者权重已正确，跳过更新",
+				"validator", validator.Address.String(),
+				"votingPower", currentPower.String())
+		}
+	}
+
+	d.logger.Info("✅ 所有验证者权重重新计算完成",
+		"totalValidators", len(validators),
+		"updatedCount", updatedCount,
+		"skippedCount", skippedCount)
 
 	return nil
 }
