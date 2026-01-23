@@ -1106,12 +1106,6 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 			latestNonce := p.store.GetNonce(stateRoot, addr)
 			currentNonce := account.getNonce()
 
-			p.logger.Info("🔵 [processEvent] 检查交易池账户nonce",
-				"addr", addr.String()[:16],
-				"currentNonce", currentNonce,
-				"latestNonce", latestNonce,
-				"needsUpdate", latestNonce != currentNonce)
-
 			// 修复：即使 latestNonce == currentNonce，也要更新以确保状态一致
 			// 因为链上的状态是权威的，即使值相同，也要通过resetAccounts确保清理过期交易
 			if latestNonce != currentNonce {
@@ -1132,9 +1126,6 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 			} else {
 				// 即使值相同，也要添加到stateNonces中，确保通过resetAccounts清理过期交易
 				// 这样可以确保promoted队列中的过期交易（nonce < latestNonce）被清理
-				p.logger.Info("🔵 [processEvent] 交易池账户nonce与state一致，但需要清理过期交易",
-					"addr", addr.String()[:16],
-					"nonce", currentNonce)
 				stateNonces[addr] = latestNonce
 			}
 		}
