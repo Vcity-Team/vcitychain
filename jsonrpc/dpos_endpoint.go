@@ -5694,6 +5694,31 @@ func (d *DPOS) GetVotableCurrentParameters(ctx context.Context) (interface{}, er
 	}, nil
 }
 
+// GetConsensusSwitchHeight 获取共识切换高度
+func (d *DPOS) GetConsensusSwitchHeight(ctx context.Context) (interface{}, error) {
+	d.logger.Info("DPoS GetConsensusSwitchHeight called")
+
+	consensusSwitchHeight := d.getConsensusSwitchHeight()
+
+	// 尝试获取共识切换高度区块的时间戳
+	var switchBlockTimestamp uint64 = 0
+	var switchBlockHash string = ""
+	if consensusSwitchHeight > 0 {
+		if header, exists := d.store.GetHeaderByNumber(consensusSwitchHeight); exists && header != nil {
+			switchBlockTimestamp = header.Timestamp
+			switchBlockHash = header.Hash.String()
+		}
+	}
+
+	return map[string]interface{}{
+		"success":                true,
+		"consensusSwitchHeight":  consensusSwitchHeight,
+		"switchBlockTimestamp":  switchBlockTimestamp,
+		"switchBlockHash":         switchBlockHash,
+		"isDPoSActive":            consensusSwitchHeight > 0 && d.getCurrentBlockHeight() >= consensusSwitchHeight,
+	}, nil
+}
+
 // ExecuteParameterUpdate 执行参数更新
 func (d *DPOS) ExecuteParameterUpdate(ctx context.Context, params interface{}) (interface{}, error) {
 	d.logger.Info("DPoS ExecuteParameterUpdate called", "params", params)

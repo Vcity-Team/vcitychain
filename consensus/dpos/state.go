@@ -1248,17 +1248,6 @@ func (rs *RewardStore) GetRewardSummary(address string, fromEpoch, toEpoch uint6
 				continue
 			}
 
-			// 记录读取到的奖励记录信息（特别是 BlockCount）
-			logger := getGlobalLogger()
-			if logger != nil {
-				logger.Info("📖 GetRewardSummary: 读取奖励记录",
-					"epoch", record.EpochNumber,
-					"recipient", record.Recipient,
-					"rewardType", record.RewardType,
-					"amount", record.Amount,
-					"key", string(k))
-			}
-
 			total.Add(total, amount)
 			sum.RecordCount++
 
