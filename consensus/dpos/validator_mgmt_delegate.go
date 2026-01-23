@@ -1585,7 +1585,6 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 	result = append(result, dbRegistrations...)
 
 	// 将验证者转换为 DelegateRegistration
-	zeroDeposit := big.NewInt(0)
 	addedCount := 0
 
 	for _, validator := range allValidators {
@@ -1609,6 +1608,9 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 			status = RegStatusInactive
 		}
 
+		// 获取 deposit：对于创世验证者，也使用 dpos_delegate_threshold 的值（与普通候选人一致）
+		depositAmount := d.getDelegateDepositAmount()
+
 		reg := &DelegateRegistration{
 			Address: validator.Address,
 			Name:    fmt.Sprintf("Validator %s", validator.Address.String()[:10]),
@@ -1619,7 +1621,7 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 				}
 				return "Validator"
 			}(),
-			Deposit:             new(big.Int).Set(zeroDeposit),
+			Deposit:             new(big.Int).Set(depositAmount),
 			Status:              status,
 			CreatedAt:           0,
 			TotalVotes:          new(big.Int).Set(validator.VotingPower),
