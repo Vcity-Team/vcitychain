@@ -123,5 +123,26 @@ func (r *dposRuntime) processRewardDistributionInBlockForBuilder(builder blockBu
 		"blockNumber", blockNumber,
 		"rewardCount", len(rewardInfo.Rewards))
 
+	// 记录奖励到数据库（与同步节点保持一致）
+	if dposInstance.state != nil && dposInstance.state.RewardStore != nil {
+		if err := dposInstance.recordRewardsFromExtraData(rewardInfo); err != nil {
+			r.logger.Error("❌ 生产节点记录奖励失败",
+				"blockNumber", blockNumber,
+				"epoch", rewardInfo.EpochNumber,
+				"error", err)
+			// 不返回错误，因为状态已经修改，只记录日志
+		} else {
+			r.logger.Info("✅ 生产节点奖励已记录到数据库",
+				"blockNumber", blockNumber,
+				"epoch", rewardInfo.EpochNumber,
+				"rewardCount", len(rewardInfo.Rewards),
+				"voterRewardCount", len(rewardInfo.VoterRewards))
+		}
+	} else {
+		r.logger.Warn("⚠️ 生产节点无法记录奖励到数据库：RewardStore不可用",
+			"blockNumber", blockNumber,
+			"epoch", rewardInfo.EpochNumber)
+	}
+
 	return nil
 }
