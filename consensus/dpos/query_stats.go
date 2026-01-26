@@ -490,9 +490,24 @@ func (d *DPoS) recordRewardsFromExtraData(rewardInfo *RewardDistributionInfo) er
 		
 		// 仍然记录验证者奖励（从 Rewards 中获取）
 		validators := d.GetValidators()
+		// 获取出块统计
+		var blockCounts map[types.Address]uint64
+		if d.blockTracker != nil {
+			blockCounts = d.blockTracker.GetEpochBlockCounts(rewardInfo.EpochNumber)
+		}
 		for _, validator := range validators {
 			validatorAddrStr := validator.Address.String()
 			if amount, exists := rewardInfo.Rewards[validatorAddrStr]; exists && amount.Sign() > 0 {
+				// 计算出块数和每块奖励
+				blocksProduced := uint64(0)
+				rewardPerBlock := "0"
+				if blockCounts != nil {
+					blocksProduced = blockCounts[validator.Address]
+					if blocksProduced > 0 {
+						rewardPerBlockBig := new(big.Int).Div(amount, big.NewInt(int64(blocksProduced)))
+						rewardPerBlock = rewardPerBlockBig.String()
+					}
+				}
 				validatorRecord := &RewardRecordExtended{
 					EpochNumber:      rewardInfo.EpochNumber,
 					Recipient:        validatorAddrStr,
@@ -500,8 +515,9 @@ func (d *DPoS) recordRewardsFromExtraData(rewardInfo *RewardDistributionInfo) er
 					Amount:           amount.String(),
 					VoteWeight:       "0",
 					ValidatorAddress: "",
+					BlocksProduced:   blocksProduced,
+					RewardPerBlock:   rewardPerBlock,
 					Timestamp:        time.Now(),
-					TransactionHash:  "",
 					Status:           "completed",
 				}
 
@@ -532,9 +548,24 @@ func (d *DPoS) recordRewardsFromExtraData(rewardInfo *RewardDistributionInfo) er
 
 	// 记录验证者奖励（从 Rewards 中获取）
 	validators := d.GetValidators()
+	// 获取出块统计
+	var blockCounts map[types.Address]uint64
+	if d.blockTracker != nil {
+		blockCounts = d.blockTracker.GetEpochBlockCounts(rewardInfo.EpochNumber)
+	}
 	for _, validator := range validators {
 		validatorAddrStr := validator.Address.String()
 		if amount, exists := rewardInfo.Rewards[validatorAddrStr]; exists && amount.Sign() > 0 {
+			// 计算出块数和每块奖励
+			blocksProduced := uint64(0)
+			rewardPerBlock := "0"
+			if blockCounts != nil {
+				blocksProduced = blockCounts[validator.Address]
+				if blocksProduced > 0 {
+					rewardPerBlockBig := new(big.Int).Div(amount, big.NewInt(int64(blocksProduced)))
+					rewardPerBlock = rewardPerBlockBig.String()
+				}
+			}
 			validatorRecord := &RewardRecordExtended{
 				EpochNumber:      rewardInfo.EpochNumber,
 				Recipient:        validatorAddrStr,
@@ -542,8 +573,9 @@ func (d *DPoS) recordRewardsFromExtraData(rewardInfo *RewardDistributionInfo) er
 				Amount:           amount.String(),
 				VoteWeight:       "0",
 				ValidatorAddress: "", // 验证者自己的奖励，不需要验证者地址
+				BlocksProduced:   blocksProduced,
+				RewardPerBlock:   rewardPerBlock,
 				Timestamp:        time.Now(),
-				TransactionHash:  "",
 				Status:           "completed",
 			}
 
@@ -557,17 +589,72 @@ func (d *DPoS) recordRewardsFromExtraData(rewardInfo *RewardDistributionInfo) er
 	}
 
 	// 记录投票者奖励（从 VoterRewards 中获取，包含 validator_address）
+	// 获取出块统计（如果还没有获取）
+	if blockCounts == nil && d.blockTracker != nil {
+		blockCounts = d.blockTracker.GetEpochBlockCounts(rewardInfo.EpochNumber)
+	}
+	// 如果 VoteWeight 为 nil 或 0，尝试重新计算（用于处理旧数据）
+	var voters map[types.Address]*VoterInfo
+	if d.rewardDistributor != nil {
+		// 检查是否有需要重新计算权重的记录
+		needRecalculate := false
+		for _, voterReward := range rewardInfo.VoterRewards {
+			if voterReward != nil && (voterReward.VoteWeight == nil || voterReward.VoteWeight.Sign() == 0) {
+				needRecalculate = true
+				break
+			}
+		}
+		if needRecalculate {
+			voters = d.GetVoters()
+		}
+	}
 	for _, voterReward := range rewardInfo.VoterRewards {
 		if voterReward != nil && voterReward.Amount != nil && voterReward.Amount.Sign() > 0 {
+			// 获取投票权重
+			voteWeight := "0"
+			if voterReward.VoteWeight != nil && voterReward.VoteWeight.Sign() > 0 {
+				// 如果 VoteWeight 有值且大于 0，直接使用
+				voteWeight = voterReward.VoteWeight.String()
+			} else if d.rewardDistributor != nil && voters != nil {
+				// 如果 VoteWeight 为 nil 或 0，尝试重新计算（处理旧数据或错误数据）
+				validatorAddr := types.StringToAddress(voterReward.ValidatorAddress)
+				voterAddr := types.StringToAddress(voterReward.VoterAddress)
+				voterWeights, _ := d.rewardDistributor.computeVoterWeights(validatorAddr, voters)
+				if weight, exists := voterWeights[voterAddr]; exists && weight != nil && weight.Sign() > 0 {
+					voteWeight = weight.String()
+					d.logger.Info("✅ 重新计算投票权重（ExtraData中VoteWeight为nil或0）",
+						"epoch", rewardInfo.EpochNumber,
+						"voter", voterReward.VoterAddress,
+						"validator", voterReward.ValidatorAddress,
+						"voteWeight", voteWeight)
+				} else {
+					d.logger.Debug("⚠️ 无法重新计算投票权重（投票者可能已撤销投票）",
+						"epoch", rewardInfo.EpochNumber,
+						"voter", voterReward.VoterAddress,
+						"validator", voterReward.ValidatorAddress)
+				}
+			}
+			// 计算验证者的出块数和每块奖励
+			validatorAddr := types.StringToAddress(voterReward.ValidatorAddress)
+			blocksProduced := uint64(0)
+			rewardPerBlock := "0"
+			if blockCounts != nil {
+				blocksProduced = blockCounts[validatorAddr]
+				if blocksProduced > 0 {
+					rewardPerBlockBig := new(big.Int).Div(voterReward.Amount, big.NewInt(int64(blocksProduced)))
+					rewardPerBlock = rewardPerBlockBig.String()
+				}
+			}
 			voterRecord := &RewardRecordExtended{
 				EpochNumber:      rewardInfo.EpochNumber,
 				Recipient:        voterReward.VoterAddress,
 				RewardType:       "voter",
 				Amount:           voterReward.Amount.String(),
-				VoteWeight:       "0",
+				VoteWeight:       voteWeight,
 				ValidatorAddress: voterReward.ValidatorAddress, // ✅ 直接使用 ExtraData 中的验证者地址
+				BlocksProduced:   blocksProduced,
+				RewardPerBlock:   rewardPerBlock,
 				Timestamp:        time.Now(),
-				TransactionHash:  "",
 				Status:           "completed",
 			}
 
@@ -632,6 +719,13 @@ func (d *DPoS) recordRewardsToDatabase(epochNumber uint64, rewards map[types.Add
 
 				// 记录验证者奖励
 				if validatorAmount.Sign() > 0 {
+					// 计算出块数和每块奖励
+					blocksProduced := blockCounts[validator.Address]
+					rewardPerBlock := "0"
+					if blocksProduced > 0 {
+						rewardPerBlockBig := new(big.Int).Div(validatorAmount, big.NewInt(int64(blocksProduced)))
+						rewardPerBlock = rewardPerBlockBig.String()
+					}
 					validatorRecord := &RewardRecordExtended{
 						EpochNumber:      epochNumber,
 						Recipient:        validator.Address.String(),
@@ -639,8 +733,9 @@ func (d *DPoS) recordRewardsToDatabase(epochNumber uint64, rewards map[types.Add
 						Amount:           validatorAmount.String(),
 						VoteWeight:       "0",
 						ValidatorAddress: "", // 验证者自己的奖励，不需要验证者地址
+						BlocksProduced:   blocksProduced,
+						RewardPerBlock:   rewardPerBlock,
 						Timestamp:        time.Now(),
-						TransactionHash:  "",
 						Status:           "completed",
 					}
 
@@ -655,17 +750,32 @@ func (d *DPoS) recordRewardsToDatabase(epochNumber uint64, rewards map[types.Add
 				}
 
 				// 记录投票者奖励（每个验证者-投票者组合单独记录）
+				// 获取投票权重
+				voterWeights, _ := d.rewardDistributor.computeVoterWeights(validator.Address, voters)
+				validatorBlocksProduced := blockCounts[validator.Address]
 				for voterAddr, share := range voterRewards {
 					if share.Sign() > 0 {
+						// 获取投票权重
+						voteWeight := "0"
+						if weight, exists := voterWeights[voterAddr]; exists && weight != nil {
+							voteWeight = weight.String()
+						}
+						// 计算出块数和每块奖励（使用验证者的出块数）
+						rewardPerBlock := "0"
+						if validatorBlocksProduced > 0 {
+							rewardPerBlockBig := new(big.Int).Div(share, big.NewInt(int64(validatorBlocksProduced)))
+							rewardPerBlock = rewardPerBlockBig.String()
+						}
 						voterRecord := &RewardRecordExtended{
 							EpochNumber:      epochNumber,
 							Recipient:        voterAddr.String(),
 							RewardType:       "voter",
 							Amount:           share.String(),
-							VoteWeight:       "0",
+							VoteWeight:       voteWeight,
 							ValidatorAddress: validator.Address.String(), // ✅ 保存验证者地址
+							BlocksProduced:   validatorBlocksProduced,
+							RewardPerBlock:   rewardPerBlock,
 							Timestamp:        time.Now(),
-							TransactionHash:  "",
 							Status:           "completed",
 						}
 
@@ -712,8 +822,9 @@ func (d *DPoS) recordRewardsToDatabase(epochNumber uint64, rewards map[types.Add
 						Amount:           reward.String(),
 						VoteWeight:       "0",
 						ValidatorAddress: "", // 无法确定，因为区块还未完全同步
+						BlocksProduced:   0,  // 无法确定，因为区块还未完全同步
+						RewardPerBlock:   "0", // 无法确定，因为区块还未完全同步
 						Timestamp:        time.Now(),
-						TransactionHash:  "",
 						Status:           "completed",
 					}
 

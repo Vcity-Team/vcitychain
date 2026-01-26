@@ -173,8 +173,9 @@ type RewardRecordExtended struct {
 	Amount          string    `json:"amount"`           // 奖励金额(Wei)
 	VoteWeight      string    `json:"vote_weight"`      // 投票权重
 	ValidatorAddress string   `json:"validator_address,omitempty"` // 验证者地址（投票者奖励时使用）
+	BlocksProduced  uint64    `json:"blocks_produced"`  // 出块数
+	RewardPerBlock  string    `json:"reward_per_block"` // 每块奖励
 	Timestamp       time.Time `json:"timestamp"`        // 发放时间
-	TransactionHash string    `json:"transaction_hash"` // 相关交易哈希
 	Status          string    `json:"status"`           // "completed"
 }
 

@@ -500,12 +500,22 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 			// 为每个验证者计算投票者奖励详情
 			for _, validator := range validators {
 				_, voterRewardsForValidator := d.rewardDistributor.computeRewardsForValidator(validator, voters, blockCounts, totalBlocks)
+				// 获取投票权重
+				voterWeights, _ := d.rewardDistributor.computeVoterWeights(validator.Address, voters)
 				for voterAddr, share := range voterRewardsForValidator {
 					if share.Sign() > 0 {
+						// 获取该投票者的权重
+						var voteWeight *big.Int
+						if weight, exists := voterWeights[voterAddr]; exists && weight != nil {
+							voteWeight = new(big.Int).Set(weight)
+						} else {
+							voteWeight = big.NewInt(0)
+						}
 						voterRewards = append(voterRewards, &VoterRewardDetail{
 							VoterAddress:     voterAddr.String(),
 							ValidatorAddress: validator.Address.String(),
 							Amount:           new(big.Int).Set(share),
+							VoteWeight:       voteWeight,
 						})
 					}
 				}

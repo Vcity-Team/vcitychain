@@ -100,6 +100,7 @@ type VoterRewardDetail struct {
 	VoterAddress     string   `json:"voterAddress"`     // 投票者地址
 	ValidatorAddress string   `json:"validatorAddress"` // 验证者地址
 	Amount           *big.Int `json:"amount"`          // 奖励金额
+	VoteWeight       *big.Int `json:"voteWeight"`     // 投票权重
 }
 
 // RewardDistributionInfo 奖励分配信息
