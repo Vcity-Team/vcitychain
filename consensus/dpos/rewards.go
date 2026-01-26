@@ -468,62 +468,18 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		rewards = map[types.Address]*big.Int{}
 	}
 
-	// 4. 处理奖励结果：区分验证者和投票者，记录到数据库
+	// 4. 准备状态更新（用于奖励分发）
 	stateUpdates := make(map[types.Address]*big.Int)
-	validatorRewardCount := 0
-
 	for address, totalReward := range rewards {
 		if totalReward.Sign() > 0 {
-			// 简单区分：检查地址是否在 validators 和 voters 中
-			isValidator := false
-			// 检查是否是验证者
-			for _, validator := range validators {
-				if validator.Address == address {
-					isValidator = true
-					validatorRewardCount++
-					break
-				}
-			}
-
-			// 检查是否是投票者
-			isVoter := false
-			if voter, exists := voters[address]; exists && voter.VotingPower.Cmp(big.NewInt(0)) > 0 {
-				isVoter = true
-			}
-
-			// 确定奖励类型（用于数据库记录）
-			rewardType := "voter"
-			if isValidator && isVoter {
-				rewardType = "validator+voter" // 既是验证者又是投票者
-			} else if isValidator {
-				rewardType = "validator"
-			}
-
-			// 记录奖励到数据库
-			rewardRecord := &RewardRecordExtended{
-				EpochNumber:     epochNumber,
-				Recipient:       address.String(),
-				RewardType:      rewardType,
-				Amount:          totalReward.String(), // 总奖励（已累加）
-				VoteWeight:      "0",
-				Timestamp:       time.Now(),
-				TransactionHash: "",
-				Status:          "completed",
-			}
-
-			if d.state.RewardStore != nil {
-				if err := d.state.RewardStore.RecordReward(rewardRecord); err != nil {
-					d.logger.Error("❌ 记录奖励失败",
-						"epoch", epochNumber,
-						"recipient", address.String(),
-						"type", rewardType,
-						"error", err)
-				}
-			}
-
-			// totalReward 已经是累加后的总奖励（验证者+投票者），直接使用
 			stateUpdates[address] = totalReward
 		}
+	}
+
+	// 记录奖励到数据库（包含验证者地址信息）
+	if err := d.recordRewardsToDatabase(epochNumber, rewards, validators, voters); err != nil {
+		d.logger.Error("❌ 记录奖励到数据库失败", "epoch", epochNumber, "error", err)
+		// 不阻断流程，继续执行
 	}
 
 	// 在epoch结束区块准备奖励分发信息（不直接执行状态更新）

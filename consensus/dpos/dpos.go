@@ -1659,6 +1659,17 @@ func (d *DPoS) GetVoters() map[types.Address]*VoterInfo {
 
 		// 只统计已应用的投票（Applied=true）
 		if !stake.Applied {
+			d.logger.Info("⚠️ [GetVoters] 投票记录被跳过（Applied=false）",
+				"staker", stake.Staker.String(),
+				"delegate", stake.Delegate.String(),
+				"amount", func() string {
+					if stake.Amount != nil {
+						return stake.Amount.String()
+					}
+					return "nil"
+				}(),
+				"effectiveEpoch", stake.EffectiveEpoch,
+				"applied", stake.Applied)
 			continue
 		}
 
@@ -1694,7 +1705,27 @@ func (d *DPoS) GetVoters() map[types.Address]*VoterInfo {
 			}
 			if !found {
 				voter.VotedDelegates = append(voter.VotedDelegates, stake.Delegate)
+				d.logger.Info("✅ [GetVoters] 添加验证者到投票者的VotedDelegates",
+					"voter", voterAddr.String(),
+					"delegate", stake.Delegate.String(),
+					"amount", func() string {
+						if stake.Amount != nil {
+							return stake.Amount.String()
+						}
+						return "nil"
+					}())
 			}
+		} else {
+			d.logger.Info("⚠️ [GetVoters] 投票记录被跳过（Delegate为空）",
+				"staker", stake.Staker.String(),
+				"delegate", stake.Delegate.String(),
+				"amount", func() string {
+					if stake.Amount != nil {
+						return stake.Amount.String()
+					}
+					return "nil"
+				}(),
+				"applied", stake.Applied)
 		}
 
 		// 更新 LastVoteTime（取最新的）

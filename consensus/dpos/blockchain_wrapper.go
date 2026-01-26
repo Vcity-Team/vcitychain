@@ -832,14 +832,15 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 					}
 
 					rewardRecord := &RewardRecordExtended{
-						EpochNumber:     rewardInfo.EpochNumber,
-						Recipient:       addrStr,
-						RewardType:      rewardType,
-						Amount:          amount.String(),
-						VoteWeight:      "0",
-						Timestamp:       time.Now(),
-						TransactionHash: "",
-						Status:          "completed",
+						EpochNumber:      rewardInfo.EpochNumber,
+						Recipient:        addrStr,
+						RewardType:       rewardType,
+						Amount:           amount.String(),
+						VoteWeight:       "0",
+						ValidatorAddress: "",
+						Timestamp:        time.Now(),
+						TransactionHash:  "",
+						Status:           "completed",
 					}
 
 					if err := dposInstance.state.RewardStore.RecordReward(rewardRecord); err != nil {
@@ -899,10 +900,10 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 
 // processSlashingInBlock 从ExtraData读取消减信息并执行消减
 func (p *blockchainWrapper) processSlashingInBlock(block *types.Block, transition *state.Transition) error {
-	p.logger.Info("🔍 [processSlashingInBlock] 开始处理消减信息", 
+	p.logger.Info("🔍 [processSlashingInBlock] 开始处理消减信息",
 		"blockNumber", block.Number(),
 		"extraDataLength", len(block.Header.ExtraData))
-	
+
 	// 解析ExtraData获取消减信息
 	extra := &Extra{}
 	if err := extra.UnmarshalRLP(block.Header.ExtraData); err != nil {

@@ -1858,7 +1858,9 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 				continue
 			}
 			// 如果 VoterInfo 中没有，才从 StakeInfo 累加（这种情况应该很少，可能是数据不一致）
+			// 注意：这里需要检查是否在之前的 StakeInfo 迭代中已经添加过（用于聚合同一 staker 的多条记录）
 			if agg, exists := inboundStakesMap[key]; exists {
+				// 聚合多条 StakeInfo 记录（同一 staker 可能有多条投票记录）
 				agg.totalAmount.Add(agg.totalAmount, amount)
 				// 保留最早的 startTime
 				if stake.StartTime < agg.startTime {
@@ -3656,17 +3658,210 @@ func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[st
 		}, nil
 	}
 
+	d.logger.Info("🔍 GetRewardHistory: 开始查询奖励汇总",
+		"address", address,
+		"fromEpoch", fromEpoch,
+		"toEpoch", toEpoch)
+
 	summary, err := dposState.RewardStore.GetRewardSummary(address, fromEpoch, toEpoch)
+	if err != nil {
+		d.logger.Error("❌ GetRewardHistory: 查询失败", "error", err)
+		return map[string]interface{}{
+			"error": fmt.Sprintf("failed to get reward summary: %v", err),
+		}, nil
+	}
+
+	d.logger.Info("✅ GetRewardHistory: 查询完成",
+		"address", address,
+		"recordCount", summary.RecordCount,
+		"validatorRecordCount", summary.ValidatorRecordCount,
+		"voterRecordCount", summary.VoterRecordCount,
+		"totalRewardWei", summary.TotalRewardWei)
+
+	return map[string]interface{}{
+		"success": true,
+		"summary": summary,
+	}, nil
+}
+
+// GetVoterRewardByValidator 获取指定投票者投票给指定验证者的奖励详情
+// 参数: [voterAddress, validatorAddress, fromEpoch, toEpoch]
+func (d *DPOS) GetVoterRewardByValidator(ctx context.Context, params interface{}) (map[string]interface{}, error) {
+	d.logger.Info("DPoS GetVoterRewardByValidator called", "params", params)
+
+	var voterAddress, validatorAddress string
+	var fromEpoch, toEpoch uint64
+
+	// 解析参数
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) != 4 {
+			return map[string]interface{}{
+				"error": fmt.Sprintf("expected 4 parameters [voterAddress, validatorAddress, fromEpoch, toEpoch], got %d", len(p)),
+			}, nil
+		}
+
+		if addr, ok := p[0].(string); ok {
+			voterAddress = addr
+		} else {
+			return map[string]interface{}{
+				"error": "first parameter (voterAddress) must be a string",
+			}, nil
+		}
+
+		if addr, ok := p[1].(string); ok {
+			validatorAddress = addr
+		} else {
+			return map[string]interface{}{
+				"error": "second parameter (validatorAddress) must be a string",
+			}, nil
+		}
+
+		from, ok := toUint64(p[2])
+		if !ok {
+			return map[string]interface{}{
+				"error": "third parameter (fromEpoch) must be a number",
+			}, nil
+		}
+		fromEpoch = from
+
+		to, ok := toUint64(p[3])
+		if !ok {
+			return map[string]interface{}{
+				"error": "fourth parameter (toEpoch) must be a number",
+			}, nil
+		}
+		toEpoch = to
+	default:
+		return map[string]interface{}{
+			"error": fmt.Sprintf("invalid parameter type: %T", params),
+		}, nil
+	}
+
+	if voterAddress == "" || validatorAddress == "" {
+		return map[string]interface{}{
+			"error": "voterAddress and validatorAddress are required",
+		}, nil
+	}
+
+	if toEpoch < fromEpoch {
+		return map[string]interface{}{
+			"error": "toEpoch must be greater than or equal to fromEpoch",
+		}, nil
+	}
+
+	// 获取DPoS状态
+	dposState, err := d.store.GetDPoSState()
+	if err != nil {
+		return map[string]interface{}{
+			"error": fmt.Sprintf("failed to get DPoS state: %v", err),
+		}, nil
+	}
+
+	dposState, err = d.ensureRewardStore(dposState)
+	if err != nil {
+		return map[string]interface{}{
+			"error": err.Error(),
+		}, nil
+	}
+
+	// 1. 获取投票者的所有奖励记录
+	allRewards, err := dposState.RewardStore.GetRewardSummary(voterAddress, fromEpoch, toEpoch)
 	if err != nil {
 		return map[string]interface{}{
 			"error": fmt.Sprintf("failed to get reward summary: %v", err),
 		}, nil
 	}
 
-	return map[string]interface{}{
-		"success": true,
-		"summary": summary,
-	}, nil
+	// 2. 获取投票者信息，确认是否投票给了该验证者
+	voterAddr := types.StringToAddress(voterAddress)
+	validatorAddr := types.StringToAddress(validatorAddress)
+
+	var voterInfo *dpos.VoterInfo
+	if dposState.StakeStore != nil {
+		voterInfo, err = dposState.StakeStore.GetVoterInfo(voterAddr)
+		if err != nil {
+			d.logger.Warn("⚠️ GetVoterRewardByValidator: 获取投票者信息失败", "error", err)
+		}
+	}
+
+	// 3. 检查投票者是否投票给了该验证者
+	hasVote := false
+	var voteAmount *big.Int
+	if voterInfo != nil && voterInfo.DelegateVotes != nil {
+		if amount, exists := voterInfo.DelegateVotes[validatorAddr]; exists && amount != nil && amount.Sign() > 0 {
+			hasVote = true
+			voteAmount = amount
+		}
+	}
+
+	// 4. 过滤出该验证者的奖励记录（如果奖励记录中有验证者地址）
+	filteredRecords := []dpos.RewardRecordExtended{}
+	filteredTotal := big.NewInt(0)
+	
+	for _, record := range allRewards.VoterRecords {
+		// 如果记录中有验证者地址，且匹配，则包含
+		if record.ValidatorAddress != "" {
+			if strings.EqualFold(record.ValidatorAddress, validatorAddress) {
+				filteredRecords = append(filteredRecords, record)
+				if amount, ok := new(big.Int).SetString(record.Amount, 10); ok {
+					filteredTotal.Add(filteredTotal, amount)
+				}
+			}
+		} else {
+			// 历史记录没有验证者地址，如果投票者只投票给一个验证者，可以包含
+			// 否则无法确定，不包含
+			if hasVote && len(voterInfo.DelegateVotes) == 1 {
+				// 只投票给一个验证者，可以确定是来自该验证者
+				filteredRecords = append(filteredRecords, record)
+				if amount, ok := new(big.Int).SetString(record.Amount, 10); ok {
+					filteredTotal.Add(filteredTotal, amount)
+				}
+			}
+		}
+	}
+
+	result := map[string]interface{}{
+		"success":          true,
+		"voterAddress":     voterAddress,
+		"validatorAddress": validatorAddress,
+		"fromEpoch":        fromEpoch,
+		"toEpoch":          toEpoch,
+		"hasVote":          hasVote,
+		"filteredRewardWei": filteredTotal.String(),
+		"filteredRewardEther": func() string {
+			weiPerEther := new(big.Float).SetFloat64(1e18)
+			amountFloat := new(big.Float).SetInt(filteredTotal)
+			amountFloat.Quo(amountFloat, weiPerEther)
+			return amountFloat.Text('f', 6)
+		}(),
+		"filteredRecordCount": len(filteredRecords),
+		"voterRecords":       filteredRecords,
+		"note": func() string {
+			if len(allRewards.VoterRecords) > len(filteredRecords) {
+				return fmt.Sprintf("注意：共找到 %d 条奖励记录，其中 %d 条可以确定来自该验证者。历史记录可能没有验证者地址信息。", 
+					len(allRewards.VoterRecords), len(filteredRecords))
+			}
+			return ""
+		}(),
+	}
+
+	// 如果投票者信息可用，添加投票金额信息
+	if voteAmount != nil {
+		result["voteAmountWei"] = voteAmount.String()
+		weiPerEther := new(big.Float).SetFloat64(1e18)
+		amountFloat := new(big.Float).SetInt(voteAmount)
+		amountFloat.Quo(amountFloat, weiPerEther)
+		result["voteAmountEther"] = amountFloat.Text('f', 6)
+	}
+
+	d.logger.Info("✅ GetVoterRewardByValidator: 查询完成",
+		"voterAddress", voterAddress,
+		"validatorAddress", validatorAddress,
+		"hasVote", hasVote,
+		"recordCount", allRewards.VoterRecordCount)
+
+	return result, nil
 }
 
 // ensureRewardStore 保证奖励存储可用，并返回可用的状态实例

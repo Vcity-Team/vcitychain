@@ -63,16 +63,16 @@ func (d *DPoS) GetAccountBalance(address types.Address) (map[string]interface{},
 		balance, err := d.balanceQuerier.GetNativeTokenBalance(address)
 		if err == nil {
 			availableBalance = balance
-			d.logger.Info("✅ [GetAccountBalance] 余额查询成功", 
+			d.logger.Info("✅ [GetAccountBalance] 余额查询成功",
 				"address", address.String(),
 				"availableBalance", availableBalance.String())
 		} else {
-			d.logger.Warn("⚠️ [GetAccountBalance] 余额查询失败", 
+			d.logger.Warn("⚠️ [GetAccountBalance] 余额查询失败",
 				"address", address.String(),
 				"error", err.Error())
 		}
 	} else {
-		d.logger.Warn("⚠️ [GetAccountBalance] balanceQuerier 为 nil，无法查询余额", 
+		d.logger.Warn("⚠️ [GetAccountBalance] balanceQuerier 为 nil，无法查询余额",
 			"address", address.String(),
 			"note", "availableBalance 将返回 0")
 	}
@@ -84,16 +84,16 @@ func (d *DPoS) GetAccountBalance(address types.Address) (map[string]interface{},
 		freezeInfo, err := d.state.FreezeStore.GetFreezeInfo(address)
 		if err == nil && freezeInfo != nil {
 			frozenBalance = freezeInfo.FrozenAmount
-			d.logger.Info("✅ [GetAccountBalance] 冻结余额查询成功", 
+			d.logger.Info("✅ [GetAccountBalance] 冻结余额查询成功",
 				"address", address.String(),
 				"frozenBalance", frozenBalance.String())
 		} else {
-			d.logger.Debug("ℹ️ [GetAccountBalance] 冻结余额查询失败或为空", 
+			d.logger.Debug("ℹ️ [GetAccountBalance] 冻结余额查询失败或为空",
 				"address", address.String(),
 				"error", err)
 		}
 	} else {
-		d.logger.Debug("ℹ️ [GetAccountBalance] FreezeStore 不可用", 
+		d.logger.Debug("ℹ️ [GetAccountBalance] FreezeStore 不可用",
 			"address", address.String(),
 			"stateIsNil", d.state == nil,
 			"freezeStoreIsNil", d.state != nil && d.state.FreezeStore == nil)
@@ -102,7 +102,7 @@ func (d *DPoS) GetAccountBalance(address types.Address) (map[string]interface{},
 	// 计算总余额
 	totalBalance := new(big.Int).Add(availableBalance, frozenBalance)
 
-	d.logger.Info("✅ [GetAccountBalance] 查询完成", 
+	d.logger.Info("✅ [GetAccountBalance] 查询完成",
 		"address", address.String(),
 		"availableBalance", availableBalance.String(),
 		"frozenBalance", frozenBalance.String(),
@@ -473,63 +473,78 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 
 // recordRewardsToDatabase 记录奖励到数据库（不更新状态）并更新StakeInfo中的累计奖励
 func (d *DPoS) recordRewardsToDatabase(epochNumber uint64, rewards map[types.Address]*big.Int, validators validator.AccountSet, voters map[types.Address]*VoterInfo) error {
-	// 记录奖励到数据库
+	// 重新计算奖励，为每个验证者-投票者组合单独记录-这样可以保存验证者地址信息
+	if d.rewardDistributor != nil && d.blockTracker != nil {
+		blockCounts := d.blockTracker.GetEpochBlockCounts(epochNumber)
+		totalBlocks := d.blockTracker.GetTotalEpochBlocks(epochNumber)
+
+		if totalBlocks > 0 {
+			// 为每个验证者单独记录奖励
+			for _, validator := range validators {
+				validatorAmount, voterRewards := d.rewardDistributor.computeRewardsForValidator(validator, voters, blockCounts, totalBlocks)
+
+				// 记录验证者奖励
+				if validatorAmount.Sign() > 0 {
+					validatorRecord := &RewardRecordExtended{
+						EpochNumber:      epochNumber,
+						Recipient:        validator.Address.String(),
+						RewardType:       "validator",
+						Amount:           validatorAmount.String(),
+						VoteWeight:       "0",
+						ValidatorAddress: "", // 验证者自己的奖励，不需要验证者地址
+						Timestamp:        time.Now(),
+						TransactionHash:  "",
+						Status:           "completed",
+					}
+
+					if d.state.RewardStore != nil {
+						if err := d.state.RewardStore.RecordReward(validatorRecord); err != nil {
+							d.logger.Error("❌ 记录验证者奖励失败",
+								"epoch", epochNumber,
+								"validator", validator.Address.String(),
+								"error", err)
+						}
+					}
+				}
+
+				// 记录投票者奖励（每个验证者-投票者组合单独记录）
+				for voterAddr, share := range voterRewards {
+					if share.Sign() > 0 {
+						voterRecord := &RewardRecordExtended{
+							EpochNumber:      epochNumber,
+							Recipient:        voterAddr.String(),
+							RewardType:       "voter",
+							Amount:           share.String(),
+							VoteWeight:       "0",
+							ValidatorAddress: validator.Address.String(), // ✅ 保存验证者地址
+							Timestamp:        time.Now(),
+							TransactionHash:  "",
+							Status:           "completed",
+						}
+
+						if d.state.RewardStore != nil {
+							if err := d.state.RewardStore.RecordReward(voterRecord); err != nil {
+								d.logger.Error("❌ 记录投票者奖励失败",
+									"epoch", epochNumber,
+									"voter", voterAddr.String(),
+									"validator", validator.Address.String(),
+									"error", err)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 更新StakeInfo中的累计奖励（使用原始rewards map）
 	for address, reward := range rewards {
-		// 检查是否是验证者
-		isValidator := false
-		for _, validator := range validators {
-			if validator.Address == address {
-				isValidator = true
-				break
-			}
-		}
-
-		// 检查是否是投票者
-		isVoter := false
-		if voter, exists := voters[address]; exists && voter.VotingPower.Cmp(big.NewInt(0)) > 0 {
-			isVoter = true
-		}
-
-		// 确定奖励类型（用于数据库记录）
-		rewardType := "voter"
-		if isValidator && isVoter {
-			rewardType = "validator+voter" // 既是验证者又是投票者
-		} else if isValidator {
-			rewardType = "validator"
-		}
-
-		rewardRecord := &RewardRecordExtended{
-			EpochNumber:     epochNumber,
-			Recipient:       address.String(),
-			RewardType:      rewardType,
-			Amount:          reward.String(),
-			VoteWeight:      "0",
-			Timestamp:       time.Now(),
-			TransactionHash: "",
-			Status:          "completed",
-		}
-
-		if d.state.RewardStore != nil {
-			if err := d.state.RewardStore.RecordReward(rewardRecord); err != nil {
-				d.logger.Error("❌ 记录奖励失败",
-					"epoch", epochNumber,
-					"address", address.String(),
-					"error", err)
-			}
-		} else {
-			d.logger.Warn("⚠️ RewardStore为nil，跳过记录奖励",
-				"epoch", epochNumber,
-				"address", address.String())
-		}
-
-		// 🆕 新增：更新StakeInfo中的累计奖励
 		if d.state.StakeStore != nil {
 			if err := d.updateStakeInfoCumulativeReward(address, reward); err != nil {
 				d.logger.Warn("⚠️ 更新StakeInfo累计奖励失败",
 					"address", address.String(),
 					"reward", reward.String(),
 					"error", err)
-				// 不阻断流程，只记录警告
 			}
 		}
 	}

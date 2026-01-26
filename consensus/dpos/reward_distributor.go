@@ -140,15 +140,40 @@ func (rd *RewardDistributor) computeVoterWeights(
 
 	for voterAddress, voter := range voters {
 		if voter == nil || voter.VotingPower == nil || voter.VotingPower.Sign() == 0 {
+			rd.logger.Info("⚠️ [奖励计算] 投票者被跳过（VotingPower为0或nil）",
+				"voter", voterAddress.String(),
+				"validator", validator.String(),
+				"votingPower", func() string {
+					if voter != nil && voter.VotingPower != nil {
+						return voter.VotingPower.String()
+					}
+					return "nil"
+				}())
 			continue
 		}
 
 		if !containsDelegate(voter.VotedDelegates, validator) {
+			rd.logger.Info("⚠️ [奖励计算] 投票者被跳过（VotedDelegates中不包含该验证者）",
+				"voter", voterAddress.String(),
+				"validator", validator.String(),
+				"votingPower", voter.VotingPower.String(),
+				"votedDelegatesCount", len(voter.VotedDelegates),
+				"votedDelegates", func() []string {
+					result := make([]string, 0, len(voter.VotedDelegates))
+					for _, del := range voter.VotedDelegates {
+						result = append(result, del.String())
+					}
+					return result
+				}())
 			continue
 		}
 
 		delegateCount := len(voter.VotedDelegates)
 		if delegateCount == 0 {
+			rd.logger.Info("⚠️ [奖励计算] 投票者被跳过（VotedDelegates为空）",
+				"voter", voterAddress.String(),
+				"validator", validator.String(),
+				"votingPower", voter.VotingPower.String())
 			continue
 		}
 
@@ -158,11 +183,23 @@ func (rd *RewardDistributor) computeVoterWeights(
 		}
 
 		if weight.Sign() == 0 {
+			rd.logger.Info("⚠️ [奖励计算] 投票者被跳过（计算后权重为0）",
+				"voter", voterAddress.String(),
+				"validator", validator.String(),
+				"votingPower", voter.VotingPower.String(),
+				"delegateCount", delegateCount,
+				"calculatedWeight", weight.String())
 			continue
 		}
 
 		weights[voterAddress] = weight
 		total.Add(total, weight)
+		rd.logger.Info("✅ [奖励计算] 投票者权重计算成功",
+			"voter", voterAddress.String(),
+			"validator", validator.String(),
+			"votingPower", voter.VotingPower.String(),
+			"delegateCount", delegateCount,
+			"calculatedWeight", weight.String())
 	}
 
 	return weights, total
@@ -214,13 +251,32 @@ func (rd *RewardDistributor) computeRewardsForValidator(
 
 	voterWeights, totalWeight := rd.computeVoterWeights(validator.Address, voters)
 	if totalWeight.Sign() == 0 {
+		rd.logger.Info("⚠️ [奖励计算] 验证者没有投票者权重，所有可分配奖励归验证者",
+			"validator", validator.Address.String(),
+			"distributable", distributable.String(),
+			"voterCount", len(voters))
 		validatorAmount.Add(validatorAmount, distributable)
 		return validatorAmount, voterRewards
 	}
+	
+	rd.logger.Info("✅ [奖励计算] 开始分配投票者分红",
+		"validator", validator.Address.String(),
+		"distributable", distributable.String(),
+		"totalWeight", totalWeight.String(),
+		"voterWeightsCount", len(voterWeights))
 
 	allocated := big.NewInt(0)
 	for voterAddr, weight := range voterWeights {
 		if weight == nil || weight.Sign() == 0 {
+			rd.logger.Info("⚠️ [奖励计算] 投票者分红被跳过（权重为nil或0）",
+				"voter", voterAddr.String(),
+				"validator", validator.Address.String(),
+				"weight", func() string {
+					if weight != nil {
+						return weight.String()
+					}
+					return "nil"
+				}())
 			continue
 		}
 
@@ -228,11 +284,25 @@ func (rd *RewardDistributor) computeRewardsForValidator(
 		share.Div(share, totalWeight)
 
 		if share.Sign() == 0 {
+			rd.logger.Info("⚠️ [奖励计算] 投票者分红被跳过（计算后分红为0）",
+				"voter", voterAddr.String(),
+				"validator", validator.Address.String(),
+				"weight", weight.String(),
+				"distributable", distributable.String(),
+				"totalWeight", totalWeight.String(),
+				"calculatedShare", share.String())
 			continue
 		}
 
 		voterRewards[voterAddr] = share
 		allocated.Add(allocated, share)
+		rd.logger.Info("✅ [奖励计算] 投票者分红计算成功",
+			"voter", voterAddr.String(),
+			"validator", validator.Address.String(),
+			"weight", weight.String(),
+			"share", share.String(),
+			"distributable", distributable.String(),
+			"totalWeight", totalWeight.String())
 	}
 
 	remainder := new(big.Int).Sub(distributable, allocated)
