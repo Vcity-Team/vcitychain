@@ -674,10 +674,11 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 
 	// 添加详细的奖励信息日志
 	if extra.RewardDistribution != nil {
-		p.logger.Debug("💰 ExtraData包含奖励信息",
+		p.logger.Info("💰 ExtraData包含奖励信息",
 			"blockNumber", block.Number(),
 			"epoch", extra.RewardDistribution.EpochNumber,
 			"rewardCount", len(extra.RewardDistribution.Rewards),
+			"voterRewardCount", len(extra.RewardDistribution.VoterRewards),
 			"totalReward", extra.RewardDistribution.TotalReward.String())
 
 		rewardInfo := extra.RewardDistribution
@@ -751,106 +752,31 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 		if cnt == len(rewardInfo.Rewards) {
 		}
 
-		// 同步节点也需要记录奖励到数据库（用于查询）
+		// 同步节点直接使用 ExtraData 中的奖励信息记录到数据库（无需重新计算）
 		// 获取DPoS实例和RewardStore
+		p.logger.Info("🔍 [Epoch奖励诊断] 同步节点收到ExtraData奖励信息",
+			"blockNumber", block.Number(),
+			"epoch", rewardInfo.EpochNumber,
+			"rewardCount", len(rewardInfo.Rewards),
+			"voterRewardCount", len(rewardInfo.VoterRewards),
+			"totalReward", rewardInfo.TotalReward.String())
+		
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			if dposInstance.state != nil && dposInstance.state.RewardStore != nil {
-				// 🔧 修复：从区块历史查询出块数，而不是依赖 blockTracker（同步节点可能没有）
-				// 先尝试从 blockTracker 获取（生产节点有）
-				blockCounts := make(map[types.Address]uint64)
-				if dposInstance.blockTracker != nil {
-					blockCounts = dposInstance.blockTracker.GetEpochBlockCounts(rewardInfo.EpochNumber)
-				}
-
-				// 如果 blockTracker 没有数据，从区块历史查询
-				needsQueryFromHistory := false
-				for addrStr := range rewardInfo.Rewards {
-					addr := types.StringToAddress(addrStr)
-					if blockCounts[addr] == 0 {
-						needsQueryFromHistory = true
-						break
-					}
-				}
-
-				// 从区块历史查询出块数（如果 blockTracker 没有数据）
-				if needsQueryFromHistory && p.blockchain != nil && dposInstance.config != nil {
-					blocksPerEpoch := dposInstance.getEpochSize()
-					consensusSwitchHeight := dposInstance.config.ConsensusSwitchHeight
-					epochIndex := rewardInfo.EpochNumber - 1 // epoch 编号转索引（从1开始转为从0开始）
-
-					epochStartBlock := consensusSwitchHeight + epochIndex*blocksPerEpoch
-					epochEndBlock := consensusSwitchHeight + (epochIndex+1)*blocksPerEpoch
-
-					// 遍历该 epoch 的所有区块，统计每个验证者的出块数
-					for blockNum := epochStartBlock; blockNum < epochEndBlock; blockNum++ {
-						header, exists := p.blockchain.GetHeaderByNumber(blockNum)
-						if exists && header != nil && len(header.Miner) == 20 {
-							minerAddr := types.Address(header.Miner)
-							blockCounts[minerAddr]++
-						}
-					}
-
-					p.logger.Info("🔍 从区块历史查询出块统计",
+				// 直接使用 ExtraData 中的奖励信息记录到数据库（无需重新计算）
+				// 如果 VoterRewards 有数据，直接使用（包含 validator_address）
+				// 否则使用 Rewards（不包含 validator_address，兼容旧版本）
+				if err := dposInstance.recordRewardsFromExtraData(rewardInfo); err != nil {
+					p.logger.Error("❌ 同步节点记录奖励失败",
+						"blockNumber", block.Number(),
 						"epoch", rewardInfo.EpochNumber,
-						"epochStartBlock", epochStartBlock,
-						"epochEndBlock", epochEndBlock,
-						"blockCounts", blockCounts)
-				}
-
-				// 记录每个奖励到数据库
-				// 🔧 修复：从DPoS实例获取validators和voters信息，动态判断奖励类型
-				validators := dposInstance.GetValidators()
-				voters := dposInstance.GetVoters()
-				if voters == nil {
-					voters = make(map[types.Address]*VoterInfo)
-				}
-
-				for addrStr, amount := range rewardInfo.Rewards {
-					addr := types.StringToAddress(addrStr)
-
-					// 检查是否是验证者
-					isValidator := false
-					for _, validator := range validators {
-						if validator.Address == addr {
-							isValidator = true
-							break
-						}
-					}
-
-					// 检查是否是投票者
-					isVoter := false
-					if voter, exists := voters[addr]; exists && voter.VotingPower.Cmp(big.NewInt(0)) > 0 {
-						isVoter = true
-					}
-
-					// 确定奖励类型（用于数据库记录）
-					rewardType := "voter"
-					if isValidator && isVoter {
-						rewardType = "validator+voter" // 既是验证者又是投票者
-					} else if isValidator {
-						rewardType = "validator"
-					}
-
-					rewardRecord := &RewardRecordExtended{
-						EpochNumber:      rewardInfo.EpochNumber,
-						Recipient:        addrStr,
-						RewardType:       rewardType,
-						Amount:           amount.String(),
-						VoteWeight:       "0",
-						ValidatorAddress: "",
-						Timestamp:        time.Now(),
-						TransactionHash:  "",
-						Status:           "completed",
-					}
-
-					if err := dposInstance.state.RewardStore.RecordReward(rewardRecord); err != nil {
-						p.logger.Error("❌ 同步节点记录奖励失败",
-							"blockNumber", block.Number(),
-							"epoch", rewardInfo.EpochNumber,
-							"recipient", addrStr,
-							"rewardType", rewardType,
-							"error", err)
-					}
+						"error", err)
+				} else {
+					p.logger.Info("✅ 同步节点记录奖励成功",
+						"blockNumber", block.Number(),
+						"epoch", rewardInfo.EpochNumber,
+						"rewardCount", len(rewardInfo.Rewards),
+						"voterRewardCount", len(rewardInfo.VoterRewards))
 				}
 			} else {
 				p.logger.Warn("⚠️ RewardStore不可用，跳过奖励记录",
@@ -859,9 +785,29 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 			}
 		}
 	} else {
-		p.logger.Warn("⚠️ ExtraData解析后RewardDistribution为nil",
-			"blockNumber", block.Number(),
-			"extraDataLength", len(block.Header.ExtraData))
+		// 检查是否是 epoch 结束区块
+		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+			epochSize := dposInstance.getEpochSize()
+			consensusSwitchHeight := dposInstance.config.ConsensusSwitchHeight
+			dposBlockNumber := block.Number() - consensusSwitchHeight
+			currentEpoch := (dposBlockNumber / epochSize) + 1
+			firstBlockInEpoch := consensusSwitchHeight + (currentEpoch-1)*epochSize
+			isEpochEndBlock := (block.Number() == firstBlockInEpoch+epochSize-1)
+			
+			if isEpochEndBlock {
+				p.logger.Warn("⚠️ ExtraData解析后RewardDistribution为nil（epoch结束区块）",
+					"blockNumber", block.Number(),
+					"epoch", currentEpoch,
+					"isEpochEndBlock", isEpochEndBlock)
+			} else {
+				p.logger.Debug("ℹ️ ExtraData解析后RewardDistribution为nil（非epoch结束区块）",
+					"blockNumber", block.Number())
+			}
+		} else {
+			p.logger.Warn("⚠️ ExtraData解析后RewardDistribution为nil",
+				"blockNumber", block.Number(),
+				"extraDataLength", len(block.Header.ExtraData))
+		}
 	}
 
 	// 预先收集：需要在本epoch边界应用的恢复提案

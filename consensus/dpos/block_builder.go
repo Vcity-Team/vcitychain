@@ -642,19 +642,31 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				if dposInstance.pendingRewardDistribution != nil {
 					// 复制RewardDistribution，避免引用被清空
 					extra.RewardDistribution = &RewardDistributionInfo{
-						EpochNumber: dposInstance.pendingRewardDistribution.EpochNumber,
-						Rewards:     make(map[string]*big.Int),
-						TotalReward: new(big.Int).Set(dposInstance.pendingRewardDistribution.TotalReward),
-						Timestamp:   dposInstance.pendingRewardDistribution.Timestamp,
+						EpochNumber:  dposInstance.pendingRewardDistribution.EpochNumber,
+						Rewards:      make(map[string]*big.Int),
+						VoterRewards: make([]*VoterRewardDetail, 0, len(dposInstance.pendingRewardDistribution.VoterRewards)),
+						TotalReward:  new(big.Int).Set(dposInstance.pendingRewardDistribution.TotalReward),
+						Timestamp:    dposInstance.pendingRewardDistribution.Timestamp,
 					}
 					// 复制Rewards map
 					for k, v := range dposInstance.pendingRewardDistribution.Rewards {
 						extra.RewardDistribution.Rewards[k] = new(big.Int).Set(v)
 					}
+					// 复制VoterRewards列表（包含验证者-投票者映射）
+					for _, voterReward := range dposInstance.pendingRewardDistribution.VoterRewards {
+						if voterReward != nil {
+							extra.RewardDistribution.VoterRewards = append(extra.RewardDistribution.VoterRewards, &VoterRewardDetail{
+								VoterAddress:     voterReward.VoterAddress,
+								ValidatorAddress: voterReward.ValidatorAddress,
+								Amount:           new(big.Int).Set(voterReward.Amount),
+							})
+						}
+					}
 
 					r.logger.Info("🔧 buildBlock: epoch结束区块，奖励分配信息已添加到ExtraData",
 						"blockNumber", h.Number,
 						"rewardCount", len(extra.RewardDistribution.Rewards),
+						"voterRewardCount", len(extra.RewardDistribution.VoterRewards),
 						"totalReward", extra.RewardDistribution.TotalReward.String())
 
 					// 清空pending奖励分配信息

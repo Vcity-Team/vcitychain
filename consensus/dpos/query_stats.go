@@ -471,14 +471,161 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 	}
 }
 
-// recordRewardsToDatabase 记录奖励到数据库（不更新状态）并更新StakeInfo中的累计奖励
-func (d *DPoS) recordRewardsToDatabase(epochNumber uint64, rewards map[types.Address]*big.Int, validators validator.AccountSet, voters map[types.Address]*VoterInfo) error {
-	// 重新计算奖励，为每个验证者-投票者组合单独记录-这样可以保存验证者地址信息
-	if d.rewardDistributor != nil && d.blockTracker != nil {
-		blockCounts := d.blockTracker.GetEpochBlockCounts(epochNumber)
-		totalBlocks := d.blockTracker.GetTotalEpochBlocks(epochNumber)
+// recordRewardsFromExtraData 直接从 ExtraData 中的奖励信息记录到数据库（无需重新计算）
+func (d *DPoS) recordRewardsFromExtraData(rewardInfo *RewardDistributionInfo) error {
+	if d.state == nil || d.state.RewardStore == nil {
+		return fmt.Errorf("RewardStore not available")
+	}
 
-		if totalBlocks > 0 {
+	// 如果 VoterRewards 为空，说明该 epoch 没有投票者奖励（可能投票者还没有投票，或者投票者权重为 0）
+	// 但仍然应该记录验证者奖励（从 Rewards 中获取）
+	if len(rewardInfo.VoterRewards) == 0 {
+		d.logger.Warn("⚠️ ExtraData中VoterRewards为空，只记录验证者奖励（该epoch可能没有投票者奖励）",
+			"epoch", rewardInfo.EpochNumber,
+			"rewardCount", len(rewardInfo.Rewards))
+		d.logger.Info("🔍 [Epoch奖励诊断] 同步节点收到ExtraData，但VoterRewards为空",
+			"epoch", rewardInfo.EpochNumber,
+			"rewardCount", len(rewardInfo.Rewards),
+			"totalReward", rewardInfo.TotalReward.String())
+		
+		// 仍然记录验证者奖励（从 Rewards 中获取）
+		validators := d.GetValidators()
+		for _, validator := range validators {
+			validatorAddrStr := validator.Address.String()
+			if amount, exists := rewardInfo.Rewards[validatorAddrStr]; exists && amount.Sign() > 0 {
+				validatorRecord := &RewardRecordExtended{
+					EpochNumber:      rewardInfo.EpochNumber,
+					Recipient:        validatorAddrStr,
+					RewardType:       "validator",
+					Amount:           amount.String(),
+					VoteWeight:       "0",
+					ValidatorAddress: "",
+					Timestamp:        time.Now(),
+					TransactionHash:  "",
+					Status:           "completed",
+				}
+
+				if err := d.state.RewardStore.RecordReward(validatorRecord); err != nil {
+					d.logger.Error("❌ 记录验证者奖励失败",
+						"epoch", rewardInfo.EpochNumber,
+						"validator", validatorAddrStr,
+						"error", err)
+				}
+			}
+		}
+		
+		// 更新StakeInfo中的累计奖励（使用 Rewards）
+		for addrStr, reward := range rewardInfo.Rewards {
+			if d.state.StakeStore != nil {
+				addr := types.StringToAddress(addrStr)
+				if err := d.updateStakeInfoCumulativeReward(addr, reward); err != nil {
+					d.logger.Warn("⚠️ 更新StakeInfo累计奖励失败",
+						"address", addrStr,
+						"reward", reward.String(),
+						"error", err)
+				}
+			}
+		}
+		
+		return nil
+	}
+
+	// 记录验证者奖励（从 Rewards 中获取）
+	validators := d.GetValidators()
+	for _, validator := range validators {
+		validatorAddrStr := validator.Address.String()
+		if amount, exists := rewardInfo.Rewards[validatorAddrStr]; exists && amount.Sign() > 0 {
+			validatorRecord := &RewardRecordExtended{
+				EpochNumber:      rewardInfo.EpochNumber,
+				Recipient:        validatorAddrStr,
+				RewardType:       "validator",
+				Amount:           amount.String(),
+				VoteWeight:       "0",
+				ValidatorAddress: "", // 验证者自己的奖励，不需要验证者地址
+				Timestamp:        time.Now(),
+				TransactionHash:  "",
+				Status:           "completed",
+			}
+
+			if err := d.state.RewardStore.RecordReward(validatorRecord); err != nil {
+				d.logger.Error("❌ 记录验证者奖励失败",
+					"epoch", rewardInfo.EpochNumber,
+					"validator", validatorAddrStr,
+					"error", err)
+			}
+		}
+	}
+
+	// 记录投票者奖励（从 VoterRewards 中获取，包含 validator_address）
+	for _, voterReward := range rewardInfo.VoterRewards {
+		if voterReward != nil && voterReward.Amount != nil && voterReward.Amount.Sign() > 0 {
+			voterRecord := &RewardRecordExtended{
+				EpochNumber:      rewardInfo.EpochNumber,
+				Recipient:        voterReward.VoterAddress,
+				RewardType:       "voter",
+				Amount:           voterReward.Amount.String(),
+				VoteWeight:       "0",
+				ValidatorAddress: voterReward.ValidatorAddress, // ✅ 直接使用 ExtraData 中的验证者地址
+				Timestamp:        time.Now(),
+				TransactionHash:  "",
+				Status:           "completed",
+			}
+
+			if err := d.state.RewardStore.RecordReward(voterRecord); err != nil {
+				d.logger.Error("❌ 记录投票者奖励失败",
+					"epoch", rewardInfo.EpochNumber,
+					"voter", voterReward.VoterAddress,
+					"validator", voterReward.ValidatorAddress,
+					"error", err)
+			}
+		}
+	}
+
+	d.logger.Info("✅ 从ExtraData记录奖励成功",
+		"epoch", rewardInfo.EpochNumber,
+		"voterRewardCount", len(rewardInfo.VoterRewards))
+
+	// 更新StakeInfo中的累计奖励（使用 Rewards）
+	for addrStr, reward := range rewardInfo.Rewards {
+		if d.state.StakeStore != nil {
+			addr := types.StringToAddress(addrStr)
+			if err := d.updateStakeInfoCumulativeReward(addr, reward); err != nil {
+				d.logger.Warn("⚠️ 更新StakeInfo累计奖励失败",
+					"address", addrStr,
+					"reward", reward.String(),
+					"error", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// recordRewardsToDatabase 记录奖励到数据库（不更新状态）并更新StakeInfo中的累计奖励
+// blockCounts 和 totalBlocks 为可选参数，如果为 nil/0 则从 blockTracker 获取
+// 注意：此函数用于重新计算奖励，新代码应该使用 recordRewardsFromExtraData
+func (d *DPoS) recordRewardsToDatabase(epochNumber uint64, rewards map[types.Address]*big.Int, validators validator.AccountSet, voters map[types.Address]*VoterInfo, blockCounts map[types.Address]uint64, totalBlocks uint64) error {
+	// 重新计算奖励，为每个验证者-投票者组合单独记录-这样可以保存验证者地址信息
+	if d.rewardDistributor != nil {
+		// 如果没有提供 blockCounts，从 blockTracker 获取
+		if blockCounts == nil {
+			if d.blockTracker != nil {
+				blockCounts = d.blockTracker.GetEpochBlockCounts(epochNumber)
+				totalBlocks = d.blockTracker.GetTotalEpochBlocks(epochNumber)
+			} else {
+				// blockTracker 不可用，无法记录奖励
+				d.logger.Warn("⚠️ blockTracker不可用，无法记录奖励", "epoch", epochNumber)
+				return nil
+			}
+		} else if totalBlocks == 0 {
+			// 如果提供了 blockCounts 但 totalBlocks 为 0，计算 totalBlocks
+			for _, count := range blockCounts {
+				totalBlocks += count
+			}
+		}
+
+		// 如果 totalBlocks > 0，记录奖励（重新计算，包含 validator_address）
+		if totalBlocks > 0 && blockCounts != nil {
 			// 为每个验证者单独记录奖励
 			for _, validator := range validators {
 				validatorAmount, voterRewards := d.rewardDistributor.computeRewardsForValidator(validator, voters, blockCounts, totalBlocks)
@@ -530,6 +677,52 @@ func (d *DPoS) recordRewardsToDatabase(epochNumber uint64, rewards map[types.Add
 									"validator", validator.Address.String(),
 									"error", err)
 							}
+						}
+					}
+				}
+			}
+		} else if len(rewards) > 0 {
+			// 如果 totalBlocks == 0 但 rewards 有数据（区块还未完全同步），直接记录 rewards（不包含 validator_address）
+			// 这种情况发生在同步节点处理 epoch 结束区块时，该 epoch 的区块还没有完全同步
+			d.logger.Warn("⚠️ 区块还未完全同步，直接记录奖励（不包含 validator_address）",
+				"epoch", epochNumber,
+				"rewardCount", len(rewards),
+				"totalBlocks", totalBlocks)
+
+			for address, reward := range rewards {
+				if reward.Sign() > 0 {
+					// 判断是验证者还是投票者
+					isValidator := false
+					for _, validator := range validators {
+						if validator.Address == address {
+							isValidator = true
+							break
+						}
+					}
+
+					rewardType := "voter"
+					if isValidator {
+						rewardType = "validator"
+					}
+
+					record := &RewardRecordExtended{
+						EpochNumber:      epochNumber,
+						Recipient:        address.String(),
+						RewardType:       rewardType,
+						Amount:           reward.String(),
+						VoteWeight:       "0",
+						ValidatorAddress: "", // 无法确定，因为区块还未完全同步
+						Timestamp:        time.Now(),
+						TransactionHash:  "",
+						Status:           "completed",
+					}
+
+					if d.state.RewardStore != nil {
+						if err := d.state.RewardStore.RecordReward(record); err != nil {
+							d.logger.Error("❌ 记录奖励失败（fallback）",
+								"epoch", epochNumber,
+								"address", address.String(),
+								"error", err)
 						}
 					}
 				}

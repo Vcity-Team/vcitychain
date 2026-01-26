@@ -94,12 +94,21 @@ type Extra struct {
 	SlashingInfo *SlashingInfo `json:"slashing_info,omitempty"`
 }
 
+// VoterRewardDetail 投票者奖励详情（包含验证者地址）
+// 注意：一个投票者可能投票给多个验证者，所以需要为每个验证者-投票者组合创建一条记录
+type VoterRewardDetail struct {
+	VoterAddress     string   `json:"voterAddress"`     // 投票者地址
+	ValidatorAddress string   `json:"validatorAddress"` // 验证者地址
+	Amount           *big.Int `json:"amount"`          // 奖励金额
+}
+
 // RewardDistributionInfo 奖励分配信息
 type RewardDistributionInfo struct {
-	EpochNumber uint64              `json:"epochNumber"`
-	Rewards     map[string]*big.Int `json:"rewards"` // 地址 -> 奖励金额
-	TotalReward *big.Int            `json:"totalReward"`
-	Timestamp   uint64              `json:"timestamp"`
+	EpochNumber  uint64                `json:"epochNumber"`
+	Rewards      map[string]*big.Int   `json:"rewards"`      // 地址 -> 奖励金额（聚合值，用于状态更新）
+	VoterRewards []*VoterRewardDetail  `json:"voterRewards"` // 验证者-投票者奖励列表，用于记录到数据库
+	TotalReward  *big.Int              `json:"totalReward"`
+	Timestamp    uint64                `json:"timestamp"`
 }
 
 // SlashingInfo 故障消减信息（只包含 missed blocks 的消减，不包含双重签名）
@@ -124,6 +133,7 @@ func (r *RewardDistributionInfo) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Valu
 
 	vv.Set(ar.NewUint(r.EpochNumber))
 
+	// Rewards (聚合值，用于状态更新)
 	rewardsArray := ar.NewArray()
 	for addr, amount := range r.Rewards {
 		rewardItem := ar.NewArray()
@@ -132,6 +142,19 @@ func (r *RewardDistributionInfo) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Valu
 		rewardsArray.Set(rewardItem)
 	}
 	vv.Set(rewardsArray)
+
+	// VoterRewards (验证者-投票者映射列表，用于记录到数据库)
+	voterRewardsArray := ar.NewArray()
+	for _, detail := range r.VoterRewards {
+		if detail != nil {
+			voterRewardItem := ar.NewArray()
+			voterRewardItem.Set(ar.NewCopyBytes([]byte(detail.VoterAddress)))
+			voterRewardItem.Set(ar.NewCopyBytes([]byte(detail.ValidatorAddress)))
+			voterRewardItem.Set(ar.NewBigInt(detail.Amount))
+			voterRewardsArray.Set(voterRewardItem)
+		}
+	}
+	vv.Set(voterRewardsArray)
 
 	vv.Set(ar.NewBigInt(r.TotalReward))
 
@@ -147,9 +170,10 @@ func (r *RewardDistributionInfo) UnmarshalRLPWith(v *fastrlp.Value) error {
 		return err
 	}
 
+	// 兼容旧版本：如果只有4个元素，说明是旧格式（没有VoterRewards）
+	// 新版本有5个元素：EpochNumber, Rewards, VoterRewards, TotalReward, Timestamp
 	if len(elems) < 4 {
-		err := fmt.Errorf("invalid RewardDistributionInfo RLP: expected 4 elements, got %d", len(elems))
-		return err
+		return fmt.Errorf("invalid RewardDistributionInfo RLP: expected at least 4 elements, got %d", len(elems))
 	}
 
 	epochNumber, err := elems[0].GetUint64()
@@ -158,6 +182,7 @@ func (r *RewardDistributionInfo) UnmarshalRLPWith(v *fastrlp.Value) error {
 	}
 	r.EpochNumber = epochNumber
 
+	// Rewards (聚合值)
 	rewardsElems, err := elems[1].GetElems()
 	if err != nil {
 		return err
@@ -182,13 +207,60 @@ func (r *RewardDistributionInfo) UnmarshalRLPWith(v *fastrlp.Value) error {
 		r.Rewards[string(addrBytes)] = amount
 	}
 
+	// VoterRewards (验证者-投票者映射列表)
+	r.VoterRewards = []*VoterRewardDetail{}
+	if len(elems) >= 5 {
+		// 新版本：有VoterRewards字段
+		voterRewardsElems, err := elems[2].GetElems()
+		if err == nil {
+			for _, voterRewardElem := range voterRewardsElems {
+				voterRewardItemElems, err := voterRewardElem.GetElems()
+				if err != nil || len(voterRewardItemElems) != 3 {
+					continue
+				}
+
+				voterAddrBytes, err := voterRewardItemElems[0].GetBytes(nil)
+				if err != nil {
+					continue
+				}
+
+				validatorAddrBytes, err := voterRewardItemElems[1].GetBytes(nil)
+				if err != nil {
+					continue
+				}
+
+				amount := new(big.Int)
+				if err := voterRewardItemElems[2].GetBigInt(amount); err != nil {
+					continue
+				}
+
+				r.VoterRewards = append(r.VoterRewards, &VoterRewardDetail{
+					VoterAddress:     string(voterAddrBytes),
+					ValidatorAddress: string(validatorAddrBytes),
+					Amount:           amount,
+				})
+			}
+		}
+		// 如果解析失败，VoterRewards 保持为空（兼容旧版本）
+	}
+
+	// TotalReward
+	totalRewardIndex := 2
+	if len(elems) >= 5 {
+		totalRewardIndex = 3 // 新版本：TotalReward在第4个位置
+	}
 	totalReward := new(big.Int)
-	if err := elems[2].GetBigInt(totalReward); err != nil {
+	if err := elems[totalRewardIndex].GetBigInt(totalReward); err != nil {
 		return err
 	}
 	r.TotalReward = totalReward
 
-	timestamp, err := elems[3].GetUint64()
+	// Timestamp
+	timestampIndex := 3
+	if len(elems) >= 5 {
+		timestampIndex = 4 // 新版本：Timestamp在第5个位置
+	}
+	timestamp, err := elems[timestampIndex].GetUint64()
 	if err != nil {
 		return err
 	}

@@ -379,6 +379,10 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 
 	if totalBlocks == 0 {
 		d.logger.Warn("⚠️ 该epoch没有出块记录，跳过奖励计算", "epoch", epochNumber)
+		d.logger.Info("🔍 [Epoch奖励诊断] totalBlocks=0，跳过奖励计算",
+			"epoch", epochNumber,
+			"blockTrackerIsNil", d.blockTracker == nil,
+			"rewardDistributorIsNil", d.rewardDistributor == nil)
 		return nil
 	}
 
@@ -476,11 +480,9 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		}
 	}
 
-	// 记录奖励到数据库（包含验证者地址信息）
-	if err := d.recordRewardsToDatabase(epochNumber, rewards, validators, voters); err != nil {
-		d.logger.Error("❌ 记录奖励到数据库失败", "epoch", epochNumber, "error", err)
-		// 不阻断流程，继续执行
-	}
+	// 不再在生产节点记录奖励，改为在同步节点记录（避免重复）
+	// 奖励信息已写入 pendingRewardDistribution，将在 buildBlock 时写入 ExtraData
+	// 同步节点在 processRewardDistributionInBlock 中会记录奖励
 
 	// 在epoch结束区块准备奖励分发信息（不直接执行状态更新）
 	if len(stateUpdates) > 0 {
@@ -491,18 +493,63 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 			totalReward.Add(totalReward, reward)
 		}
 
+		// 计算验证者-投票者映射关系（用于记录到数据库）
+		// 为每个验证者-投票者组合创建单独记录（支持投票者投票给多个验证者）
+		voterRewards := []*VoterRewardDetail{}
+		if d.rewardDistributor != nil && d.blockTracker != nil && totalBlocks > 0 {
+			// 为每个验证者计算投票者奖励详情
+			for _, validator := range validators {
+				_, voterRewardsForValidator := d.rewardDistributor.computeRewardsForValidator(validator, voters, blockCounts, totalBlocks)
+				for voterAddr, share := range voterRewardsForValidator {
+					if share.Sign() > 0 {
+						voterRewards = append(voterRewards, &VoterRewardDetail{
+							VoterAddress:     voterAddr.String(),
+							ValidatorAddress: validator.Address.String(),
+							Amount:           new(big.Int).Set(share),
+						})
+					}
+				}
+			}
+		} else {
+			d.logger.Warn("⚠️ 无法计算VoterRewards",
+				"epoch", epochNumber,
+				"rewardDistributorIsNil", d.rewardDistributor == nil,
+				"blockTrackerIsNil", d.blockTracker == nil,
+				"totalBlocks", totalBlocks)
+			d.logger.Info("🔍 [Epoch奖励诊断] 无法计算VoterRewards，VoterRewards将为空",
+				"epoch", epochNumber,
+				"rewardDistributorIsNil", d.rewardDistributor == nil,
+				"blockTrackerIsNil", d.blockTracker == nil,
+				"totalBlocks", totalBlocks,
+				"voterCount", len(voters))
+		}
+		
+		d.logger.Info("🔍 [Epoch奖励诊断] 准备奖励分发信息",
+			"epoch", epochNumber,
+			"voterRewardCount", len(voterRewards),
+			"rewardCount", len(stateUpdates),
+			"totalReward", totalReward.String())
+
 		// 不直接执行状态更新，而是将奖励分发信息存储到pendingRewardDistribution
 		// 这样buildBlock可以将其添加到ExtraData中，然后在区块执行时处理
 		d.pendingRewardDistribution = &RewardDistributionInfo{
-			EpochNumber: epochNumber,
-			Rewards:     make(map[string]*big.Int),
-			TotalReward: totalReward,
+			EpochNumber:  epochNumber,
+			Rewards:      make(map[string]*big.Int),
+			VoterRewards: voterRewards,
+			TotalReward:  totalReward,
+			Timestamp:    uint64(time.Now().Unix()),
 		}
 
 		// 转换地址格式
 		for address, reward := range stateUpdates {
 			d.pendingRewardDistribution.Rewards[address.String()] = reward
 		}
+
+		d.logger.Info("✅ 准备奖励分发信息（包含验证者-投票者映射）",
+			"epoch", epochNumber,
+			"rewardCount", len(stateUpdates),
+			"voterRewardCount", len(voterRewards),
+			"totalReward", totalReward.String())
 	} else {
 		d.logger.Warn("⚠️ 没有奖励分发信息", "epoch", epochNumber)
 	}
@@ -564,10 +611,8 @@ func (d *DPoS) calculateAndRecordEpochRewards(epochNumber uint64) error {
 		return nil
 	}
 
-	// 记录奖励到数据库（不更新状态）
-	if err := d.recordRewardsToDatabase(epochNumber, rewards, validators, voters); err != nil {
-		return fmt.Errorf("failed to record rewards to database: %w", err)
-	}
+	// 不再在生产节点记录奖励，改为在同步节点记录（避免重复）
+	// 奖励信息将在同步节点处理区块时记录
 
 	// 延迟状态更新机制已移除，奖励分发在epoch结束区块直接执行
 
