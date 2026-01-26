@@ -267,8 +267,29 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			return false
 		}
 		if len(validatorsFromExtra) == 0 {
-			r.logger.Error("❌ 从数据库查询的验证者集合为空",
-				"blockNumber", currentBlock.Number)
+			// 检查是否在共识切换高度之前
+			isBeforeConsensusSwitch := false
+			if dposInstance != nil && dposInstance.config != nil && dposInstance.config.ConsensusSwitchHeight > 0 {
+				isBeforeConsensusSwitch = currentBlock.Number < dposInstance.config.ConsensusSwitchHeight
+			}
+			
+			if isBeforeConsensusSwitch {
+				// 在共识切换高度之前，验证者集合为空是正常的
+				r.logOnceWithInterval("should_produce_validators_empty_before_switch", 30*time.Second, "debug",
+					"ℹ️ 共识切换前验证者集合为空（正常）",
+					"blockNumber", currentBlock.Number,
+					"consensusSwitchHeight", func() uint64 {
+						if dposInstance != nil && dposInstance.config != nil {
+							return dposInstance.config.ConsensusSwitchHeight
+						}
+						return 0
+					}())
+			} else {
+				// 在共识切换高度之后，验证者集合为空是异常情况
+				r.logOnceWithInterval("should_produce_validators_empty_after_switch", 10*time.Second, "error",
+					"❌ 从数据库查询的验证者集合为空",
+					"blockNumber", currentBlock.Number)
+			}
 			return false
 		}
 

@@ -249,6 +249,7 @@ type DPoSConfig struct {
 	EpochDuration       time.Duration `json:"epochDuration" yaml:"epochDuration"`
 	RewardAccount       types.Address `json:"rewardAccount" yaml:"rewardAccount"`
 	RewardAmount        *big.Int      `json:"rewardAmount" yaml:"rewardAmount"`
+	GenesisRootAccount  types.Address `json:"genesisRootAccount" yaml:"genesisRootAccount"` // 从创世文件alloc中读取的根账户地址
 	ProposalVotePeriod  time.Duration `json:"proposalVotePeriod" yaml:"dpos_proposal_vote_period"`   // 提案表决周期
 	ProposalValidPeriod time.Duration `json:"proposalValidPeriod" yaml:"dpos_proposal_valid_period"` // 提案有效期
 
@@ -630,7 +631,7 @@ func (d *DPoS) Start() error {
 			d.logger.Error("❌ 启动DPoS runtime失败", "error", err)
 			return fmt.Errorf("failed to start DPoS runtime: %w", err)
 		}
-		d.logger.Info("✅ DPoS runtime启动成功")
+		d.logger.Debug("✅ DPoS runtime启动成功")
 
 		// 新节点启动后，主动查询其他节点的待处理签名请求
 		go func() {
@@ -651,12 +652,19 @@ func (d *DPoS) Start() error {
 	// 从数据库恢复投票数据
 	if err := d.restoreVotingDataFromDatabase(); err != nil {
 		d.logger.Error("Failed to restore voting data from database", "error", err)
+	} else {
+		d.logger.Info("✅ 投票数据恢复完成")
 	}
 
 	// ✅ 新增：从数据库恢复投票记录（用于边界应用）
+	d.logger.Info("📊 开始从数据库恢复投票记录...")
 	if err := d.restoreVoteRecordsFromDatabase(); err != nil {
 		d.logger.Error("Failed to restore vote records from database", "error", err)
+	} else {
+		d.logger.Info("✅ 投票记录恢复完成")
 	}
+
+	d.logger.Info("🎉 ========== DPoS Start() 方法执行完成 ==========")
 
 	// 启动时直接调用和命令一样的数据源方法
 	if err := d.callCommandDataSourcesOnStartup(); err != nil {
@@ -923,6 +931,19 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Warn("💰 未找到rewardAccount配置")
 	}
 
+	// 从配置中读取创世根账户地址（从创世文件alloc中读取）
+	if genesisRootAccount, exists := params.Config.Config["genesisRootAccount"]; exists {
+		logger.Info("🔍 找到genesisRootAccount配置", "type", fmt.Sprintf("%T", genesisRootAccount), "value", genesisRootAccount)
+		if account, ok := genesisRootAccount.(types.Address); ok {
+			vcity_dpos.config.GenesisRootAccount = account
+			logger.Info("✅ 设置创世根账户地址", "address", account.String())
+		} else {
+			logger.Warn("💰 genesisRootAccount类型断言失败", "type", fmt.Sprintf("%T", genesisRootAccount))
+		}
+	} else {
+		logger.Warn("💰 未找到genesisRootAccount配置")
+	}
+
 	if rewardAmount, exists := params.Config.Config["rewardAmount"]; exists {
 		logger.Info("🔍 找到rewardAmount配置", "type", fmt.Sprintf("%T", rewardAmount), "value", rewardAmount)
 		if amount, ok := rewardAmount.(*big.Int); ok {
@@ -1094,6 +1115,37 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Warn("🔓 未找到dpos_unfreeze_lock_period配置，使用默认值1209600秒（14天）")
 		vcity_dpos.config.UnfreezeLockPeriod = 1209600
 	}
+
+	// 解析 dpos_delegate_threshold 配置
+	if delegateThresholdValue, exists := getConfigValue("dposDelegateThreshold", "dpos_delegate_threshold"); exists {
+		logger.Info("🔍 找到 dpos_delegate_threshold 配置", "type", fmt.Sprintf("%T", delegateThresholdValue), "value", delegateThresholdValue)
+		switch thresholdVal := delegateThresholdValue.(type) {
+		case string:
+			if bigAmount, ok := new(big.Int).SetString(thresholdVal, 10); ok && bigAmount.Cmp(big.NewInt(0)) > 0 {
+				vcity_dpos.config.DPoSDelegateThreshold = bigAmount
+				logger.Info("✅ 设置 dpos_delegate_threshold", "value", bigAmount.String())
+			} else {
+				logger.Warn("⚠️ dpos_delegate_threshold 字符串解析失败", "value", thresholdVal)
+			}
+		case *big.Int:
+			if thresholdVal != nil && thresholdVal.Cmp(big.NewInt(0)) > 0 {
+				vcity_dpos.config.DPoSDelegateThreshold = new(big.Int).Set(thresholdVal)
+				logger.Info("✅ 设置 dpos_delegate_threshold (big.Int)", "value", thresholdVal.String())
+			}
+		case float64:
+			// 如果配置是数字，转换为字符串再解析
+			thresholdStr := fmt.Sprintf("%.0f", thresholdVal)
+			if bigAmount, ok := new(big.Int).SetString(thresholdStr, 10); ok && bigAmount.Cmp(big.NewInt(0)) > 0 {
+				vcity_dpos.config.DPoSDelegateThreshold = bigAmount
+				logger.Info("✅ 设置 dpos_delegate_threshold (float64)", "value", bigAmount.String())
+			}
+		default:
+			logger.Warn("⚠️ dpos_delegate_threshold 类型不支持", "type", fmt.Sprintf("%T", delegateThresholdValue))
+		}
+	} else {
+		logger.Warn("⚠️ 未找到 dpos_delegate_threshold 配置")
+	}
+
 	vcity_dpos.config.SecretsManager = params.SecretsManager
 	vcity_dpos.config.Blockchain = params.Blockchain
 	vcity_dpos.config.Logger = params.Logger
@@ -1201,6 +1253,14 @@ func (d *DPoS) Initialize() error {
 		blockTimeout,
 		d.config.ConsensusSwitchHeight,
 	)
+
+	// 验证创世根账户地址已配置（从server层传递）
+	if d.config.GenesisRootAccount == (types.Address{}) {
+		d.logger.Warn("⚠️ 创世根账户地址未配置，将在共识切换高度时无法创建投票记录")
+	} else {
+		d.logger.Info("✅ 创世根账户地址已配置",
+			"rootAccount", d.config.GenesisRootAccount.String())
+	}
 
 	// 新增：先初始化状态存储
 	d.logger.Debug("Attempting to initialize state store",
@@ -1363,21 +1423,9 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 		return fmt.Errorf("failed to parse validators from extraData: %w", err)
 	}
 
-	// 3. 设置最小质押门槛（从参数系统或默认值获取）
-	d.minStakeAmount, _ = new(big.Int).SetString("1000000000000000000000", 10) // 默认1000 VCITY
-	if threshold, err := d.getCurrentParameterValue("dpos_delegate_threshold"); err == nil {
-		switch v := threshold.(type) {
-		case string:
-			if bigAmount, ok := new(big.Int).SetString(v, 10); ok && bigAmount.Cmp(big.NewInt(0)) > 0 {
-				d.minStakeAmount = bigAmount
-			}
-		case *big.Int:
-			if v != nil && v.Cmp(big.NewInt(0)) > 0 {
-				d.minStakeAmount = new(big.Int).Set(v)
-			}
-		}
-	}
-	d.logger.Info("使用最小质押门槛", "amount", d.minStakeAmount.String())
+	// 3. 设置最小质押门槛（从配置读取 dpos_delegate_threshold）
+	d.minStakeAmount = d.getDelegateThreshold()
+	d.logger.Info("使用最小质押门槛", "amount", d.minStakeAmount.String(), "source", "dpos_delegate_threshold")
 
 	// 4. 直接操作 runtime.delegates（如果runtime已初始化）
 	if d.runtime == nil {
@@ -1408,14 +1456,14 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 		ibftValidator := ibftValidators[i]
 		address := ibftValidator.Address
 
-		// 创世验证者使用固定权重1000 VCITY，不受余额影响
-		fixedVotingPower := new(big.Int)
-		fixedVotingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
+		// 创世验证者初始权重为0，将在7370高度通过投票记录获得权重
+		// 不再使用硬编码的1000 VCITY，改为从投票记录计算
+		initialVotingPower := big.NewInt(0)
 
 		delegate := &validator.ValidatorMetadata{
 			Address:     address,
-			VotingPower: fixedVotingPower, // 使用固定权重，不依赖余额
-			BlsKey:      nil,              // BLS公钥将在需要时获取
+			VotingPower: initialVotingPower, // 初始为0，将在7370高度通过投票记录更新
+			BlsKey:      nil,                // BLS公钥将在需要时获取
 			IsActive:    true,
 		}
 
@@ -1431,9 +1479,9 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 
 		d.logger.Info("✅ DPoS验证者创建成功（BLS公钥延迟获取）",
 			"address", address.String(),
-			"votingPower", fixedVotingPower.String(),
+			"votingPower", initialVotingPower.String(),
 			"validatorIndex", validValidatorCount,
-			"note", "创世验证者使用固定权重")
+			"note", "创世验证者初始权重为0，将在7370高度通过投票记录获得权重")
 	}
 
 	// 关键日志：DPoS验证者筛选结果汇总

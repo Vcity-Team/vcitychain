@@ -403,6 +403,12 @@ func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) er
 	return nil
 }
 
+// ReloadValidatorsAfterRecovery 恢复提案执行后重新加载验证者集合（公开方法）
+// 从数据库读取最新的验证者集合，过滤掉故障验证者，并更新内存缓存
+func (d *DPoS) ReloadValidatorsAfterRecovery() error {
+	return d.reloadValidatorsAfterRecovery()
+}
+
 // reloadValidatorsAfterRecovery 恢复提案执行后重新加载验证者集合
 // 从数据库读取最新的验证者集合，过滤掉故障验证者，并更新内存缓存
 func (d *DPoS) reloadValidatorsAfterRecovery() error {

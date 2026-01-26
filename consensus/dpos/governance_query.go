@@ -77,6 +77,9 @@ func (d *DPoS) GetVotableCurrentParameters() map[string]*ParameterInfo {
 						"param", name,
 						"value", dbValue)
 					d.parameterValuesMutex.Lock()
+					if d.parameterCurrentValues == nil {
+						d.parameterCurrentValues = make(map[string]interface{})
+					}
 					d.parameterCurrentValues[name] = dbValue
 					d.parameterValuesMutex.Unlock()
 				} else {

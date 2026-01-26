@@ -137,10 +137,9 @@ func (d *DPoS) initializeDelegates() error {
 		d.logger.Warn("⚠️ 从创世块解析验证者失败", "error", err)
 		// 如果创世块也失败，使用配置中的初始验证者
 		for _, genesisValidator := range d.config.InitialDelegates {
-			votingPower, ok := new(big.Int).SetString("1000000000000000000000", 10) // 1000 VCITY
-			if !ok {
-				votingPower = big.NewInt(0)
-			}
+			// 初始权重为0，将在7370高度通过投票记录获得权重
+			// 不再使用硬编码的1000 VCITY
+			votingPower := big.NewInt(0)
 			delegate := &validator.ValidatorMetadata{
 				Address:     types.Address(genesisValidator.Address),
 				VotingPower: votingPower,
@@ -199,14 +198,17 @@ func (d *DPoS) getGenesisValidators() validator.AccountSet {
 	// 从内存中的创世验证者映射创建AccountSet
 	var validators validator.AccountSet
 	for address := range d.genesisValidators {
-		votingPower, ok := new(big.Int).SetString("1000000000000000000000", 10) // 1000 VCITY
-		if !ok {
-			// 如果SetString失败，使用默认值（使用SetString确保不会溢出）
-			defaultPower, _ := new(big.Int).SetString("1000000000000000000000", 10)
-			if defaultPower == nil {
-				defaultPower = big.NewInt(0)
-			}
-			votingPower = defaultPower
+		// 从投票记录计算权重，而不是硬编码1000
+		votingPower := d.getTotalVotesForValidator(address)
+		if votingPower == nil || votingPower.Sign() == 0 {
+			// 如果没有投票记录，权重为0（不再使用默认1000）
+			votingPower = big.NewInt(0)
+			d.logger.Debug("⚠️ 创世验证者没有投票记录，权重为0",
+				"validator", address.String())
+		} else {
+			d.logger.Debug("✅ 从投票记录获取创世验证者权重",
+				"validator", address.String(),
+				"votingPower", votingPower.String())
 		}
 
 		validatorMetadata := &validator.ValidatorMetadata{
@@ -1708,7 +1710,7 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 		// 如果是创世验证者，使用更友好的名称
 		if isGenesis {
 			reg.Name = fmt.Sprintf("Genesis Validator %s", validator.Address.String()[:10])
-			reg.Description = "Genesis validator with default weight 1000 VCITY"
+			reg.Description = "Genesis validator, receives 1000 VCITY vote from root account at consensus switch height"
 		}
 
 		result = append(result, reg)
@@ -1750,33 +1752,11 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 
 // getDelegateDepositAmount 获取受托人保证金金额
 func (d *DPoS) getDelegateDepositAmount() *big.Int {
-	defaultDeposit := new(big.Int)
-	defaultDeposit.SetString("1000000000000000000000", 10) // 1000 VCITY
-
-	var depositAmount *big.Int
-
-	// 优先从参数系统读取 dpos_delegate_threshold（经过治理流程修改的值是权威数据源）
-	if paramValue, err := d.getCurrentParameterValue("dpos_delegate_threshold"); err == nil {
-		switch v := paramValue.(type) {
-		case string:
-			if bigAmount, ok := new(big.Int).SetString(v, 10); ok && bigAmount.Cmp(big.NewInt(0)) > 0 {
-				depositAmount = bigAmount
-				d.logger.Debug("从参数系统读取 delegate threshold", "value", v)
-			}
-		case *big.Int:
-			if v != nil && v.Cmp(big.NewInt(0)) > 0 {
-				depositAmount = new(big.Int).Set(v)
-				d.logger.Debug("从参数系统读取 delegate threshold", "value", v.String())
-			}
-		}
-	}
-
-	// 如果还是没有值，使用默认值
-	if depositAmount == nil {
-		depositAmount = defaultDeposit
-	}
-
+	// 使用统一的 getDelegateThreshold 方法获取委托门槛值
+	depositAmount := d.getDelegateThreshold()
+	
 	// 安全检查：确保保证金不小于默认值（防止配置错误导致保证金过小）
+	defaultDeposit, _ := new(big.Int).SetString("1000000000000000000000", 10) // 默认1000 VCITY
 	if depositAmount.Cmp(defaultDeposit) < 0 {
 		d.logger.Warn("⚠️ 保证金金额过小，使用默认值",
 			"provided", depositAmount.String(),

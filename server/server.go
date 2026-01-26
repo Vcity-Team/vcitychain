@@ -266,6 +266,25 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		engineConfig["proposalValidPeriod"] = 7 * 24 * time.Hour // 默认7天
 	}
 
+	// 从创世文件的 alloc 中读取根账户地址（alloc中只有一个账户）
+	if s.chain != nil && s.chain.Genesis != nil && s.chain.Genesis.Alloc != nil {
+		// alloc中只有一个账户，直接取
+		for addr := range s.chain.Genesis.Alloc {
+			engineConfig["genesisRootAccount"] = addr
+			account := s.chain.Genesis.Alloc[addr]
+			balance := big.NewInt(0)
+			if account != nil && account.Balance != nil {
+				balance = account.Balance
+			}
+			s.logger.Info("✅ 从创世文件alloc中读取根账户地址",
+				"rootAccount", addr.String(),
+				"balance", balance.String())
+			break // 只取第一个账户
+		}
+	} else {
+		s.logger.Warn("⚠️ 创世文件alloc为空，无法读取根账户地址")
+	}
+
 	s.logger.Info("✅ DPoS经济系统配置解析完成",
 		"rewardAccount", engineConfig["rewardAccount"],
 		"rewardAmount", engineConfig["rewardAmount"],
@@ -323,6 +342,34 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 	s.dposEngine = dposEngine
 
 	s.logger.Info("✅ DPoS引擎启动成功", "height", height)
+
+	// ✅ 关键修复：切换到DPoS时立即创建投票记录
+	// 使用共识切换高度作为参数，确保投票记录在正确的高度生效
+	if dposInstance, ok := dposEngine.(*consensusDPoS.DPoS); ok && dposInstance != nil {
+		consensusSwitchHeight := s.config.ConsensusSwitchHeight
+		s.logger.Info("🎯 切换到DPoS，立即创建投票记录",
+			"currentHeight", height,
+			"consensusSwitchHeight", consensusSwitchHeight)
+		if err := dposInstance.CreateGenesisVotesForAllValidators(consensusSwitchHeight); err != nil {
+			s.logger.Error("❌ 切换到DPoS时创建投票记录失败", "error", err)
+			// 不返回错误，因为这是启动时的补充操作
+		} else {
+			s.logger.Info("✅ 切换到DPoS时创建投票记录成功")
+			
+			// ✅ 关键修复：投票创建后，重新加载验证者集合
+			// 因为Start()中加载验证者时还没有投票记录，所以验证者集合是空的
+			s.logger.Info("🔄 投票创建后，重新加载验证者集合...")
+			if err := dposInstance.ReloadValidatorsAfterRecovery(); err != nil {
+				s.logger.Error("❌ 重新加载验证者集合失败", "error", err)
+				// 不返回错误，但记录警告
+			} else {
+				s.logger.Info("✅ 验证者集合重新加载成功")
+			}
+		}
+	} else {
+		s.logger.Warn("⚠️ 无法获取DPoS实例，跳过投票记录创建")
+	}
+
 	return nil
 }
 

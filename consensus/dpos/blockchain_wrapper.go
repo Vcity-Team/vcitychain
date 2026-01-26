@@ -117,6 +117,26 @@ func (p *blockchainWrapper) CommitBlock(block *types.FullBlock) error {
 		return err
 	}
 	p.logger.Debug("✅ [CommitBlock] 区块已成功写入链上", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String()[:16])
+
+	// 在共识切换高度创建根账户对创世验证者的投票记录（生产节点）
+	p.logger.Info("🔍 [CommitBlock] 检查共识切换高度",
+		"blockNumber", block.Block.Number())
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+		p.logger.Info("✅ [CommitBlock] DPoS实例存在，调用CreateGenesisVotesForAllValidators",
+			"blockNumber", block.Block.Number())
+		if err := dposInstance.CreateGenesisVotesForAllValidators(block.Block.Number()); err != nil {
+			p.logger.Error("❌ 创建创世投票记录失败", "blockNumber", block.Block.Number(), "error", err)
+			// 不返回错误，因为区块已经写入，只记录日志
+		} else {
+			p.logger.Info("✅ [CommitBlock] CreateGenesisVotesForAllValidators调用成功",
+				"blockNumber", block.Block.Number())
+		}
+	} else {
+		p.logger.Warn("⚠️ [CommitBlock] DPoS实例不存在",
+			"blockNumber", block.Block.Number(),
+			"exists", exists)
+	}
+
 	return nil
 }
 
@@ -180,6 +200,25 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 				}
 			}
 		}
+	}
+
+	// 检查是否是共识切换高度，如果是则创建根账户对创世验证者的投票记录
+	p.logger.Info("🔍 [ProcessBlockExecutor] 检查共识切换高度",
+		"blockNumber", block.Number())
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+		p.logger.Info("✅ [ProcessBlockExecutor] DPoS实例存在，调用CreateGenesisVotesForAllValidators",
+			"blockNumber", block.Number())
+		if err := dposInstance.CreateGenesisVotesForAllValidators(block.Number()); err != nil {
+			p.logger.Error("❌ 创建创世投票记录失败", "blockNumber", block.Number(), "error", err)
+			// 不返回错误，因为这是共识切换高度的特殊处理，只记录日志
+		} else {
+			p.logger.Info("✅ [ProcessBlockExecutor] CreateGenesisVotesForAllValidators调用成功",
+				"blockNumber", block.Number())
+		}
+	} else {
+		p.logger.Warn("⚠️ [ProcessBlockExecutor] DPoS实例不存在",
+			"blockNumber", block.Number(),
+			"exists", exists)
 	}
 
 	isEpochEnd := p.isEpochEndBlock(block.Number())

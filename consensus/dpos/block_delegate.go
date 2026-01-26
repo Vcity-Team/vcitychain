@@ -19,26 +19,77 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 	// 🔧 修改：直接从数据库读取验证者集合，不再从 ExtraData 读取
 	allValidators, err := dposBackend.GetSortedValidatorsWithLimitFilterFaulty()
 	validatorsSource := "database_query_filter_faulty" // 记录验证者列表来源
+	
+	// 检查当前区块号，判断是否在共识切换高度之前
+	currentBlockNumber := uint64(0)
+	if r.config != nil && r.config.blockchain != nil {
+		if currentHeader := r.config.blockchain.CurrentHeader(); currentHeader != nil {
+			currentBlockNumber = currentHeader.Number
+		}
+	}
+	isBeforeConsensusSwitch := false
+	if dposBackend.config != nil && dposBackend.config.ConsensusSwitchHeight > 0 {
+		isBeforeConsensusSwitch = currentBlockNumber < dposBackend.config.ConsensusSwitchHeight
+	}
+	
 	if err != nil {
-		r.logger.Error("❌ getCurrentDelegate: 从数据库查询验证者集合失败", "error", err)
+		// 使用频率限制日志
+		r.logOnceWithInterval("get_current_delegate_query_error", 10*time.Second, "error",
+			"❌ getCurrentDelegate: 从数据库查询验证者集合失败",
+			"error", err,
+			"blockNumber", currentBlockNumber,
+			"isBeforeConsensusSwitch", isBeforeConsensusSwitch)
 		return types.ZeroAddress
 	}
 	if len(allValidators) == 0 {
-		r.logger.Error("❌ getCurrentDelegate: 从数据库查询的验证者集合为空")
+		// 在共识切换高度之前，验证者集合为空是正常的（还没有投票记录）
+		if isBeforeConsensusSwitch {
+			// 使用DEBUG级别，并限制频率
+			r.logOnceWithInterval("get_current_delegate_empty_before_switch", 30*time.Second, "debug",
+				"ℹ️ getCurrentDelegate: 共识切换前验证者集合为空（正常）",
+				"blockNumber", currentBlockNumber,
+				"consensusSwitchHeight", dposBackend.config.ConsensusSwitchHeight,
+				"note", "在7370高度之前，验证者权重为0，这是正常的")
+		} else {
+			// 在共识切换高度之后，验证者集合为空是异常情况
+			r.logOnceWithInterval("get_current_delegate_empty_after_switch", 10*time.Second, "error",
+				"❌ getCurrentDelegate: 从数据库查询的验证者集合为空",
+				"blockNumber", currentBlockNumber,
+				"consensusSwitchHeight", dposBackend.config.ConsensusSwitchHeight)
+		}
 		return types.ZeroAddress
 	}
 
 	// 使用从 ExtraData 或实时查询获取的验证者集合
 	validators := allValidators
 	if len(validators) == 0 {
-		r.logger.Error("❌ getCurrentDelegate: 验证者集合为空，无法确定当前委托者",
-			"dataSource", validatorsSource)
+		// 这种情况理论上不会发生（上面已经检查过了），但为了安全还是记录
+		if isBeforeConsensusSwitch {
+			r.logOnceWithInterval("get_current_delegate_validators_empty_before_switch", 30*time.Second, "debug",
+				"ℹ️ getCurrentDelegate: 验证者集合为空（共识切换前，正常）",
+				"dataSource", validatorsSource,
+				"blockNumber", currentBlockNumber)
+		} else {
+			r.logOnceWithInterval("get_current_delegate_validators_empty_after_switch", 10*time.Second, "error",
+				"❌ getCurrentDelegate: 验证者集合为空，无法确定当前委托者",
+				"dataSource", validatorsSource,
+				"blockNumber", currentBlockNumber)
+		}
 		return types.ZeroAddress
 	}
 
 	actualDelegateCount := len(validators)
 	if actualDelegateCount == 0 {
-		r.logger.Warn("🔍 getCurrentDelegate: 验证者集合为空")
+		// 这种情况理论上不会发生，但为了安全还是记录
+		if isBeforeConsensusSwitch {
+			r.logOnceWithInterval("get_current_delegate_count_zero_before_switch", 30*time.Second, "debug",
+				"ℹ️ getCurrentDelegate: 验证者集合为空（共识切换前，正常）",
+				"blockNumber", currentBlockNumber)
+		} else {
+			r.logOnceWithInterval("get_current_delegate_count_zero_after_switch", 10*time.Second, "warn",
+				"🔍 getCurrentDelegate: 验证者集合为空",
+				"blockNumber", currentBlockNumber)
+		}
 		return types.ZeroAddress
 	}
 
