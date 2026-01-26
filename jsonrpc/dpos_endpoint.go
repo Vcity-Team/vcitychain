@@ -3658,11 +3658,6 @@ func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[st
 		}, nil
 	}
 
-	d.logger.Info("🔍 GetRewardHistory: 开始查询奖励汇总",
-		"address", address,
-		"fromEpoch", fromEpoch,
-		"toEpoch", toEpoch)
-
 	summary, err := dposState.RewardStore.GetRewardSummary(address, fromEpoch, toEpoch)
 	if err != nil {
 		d.logger.Error("❌ GetRewardHistory: 查询失败", "error", err)
@@ -3670,13 +3665,6 @@ func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[st
 			"error": fmt.Sprintf("failed to get reward summary: %v", err),
 		}, nil
 	}
-
-	d.logger.Info("✅ GetRewardHistory: 查询完成",
-		"address", address,
-		"recordCount", summary.RecordCount,
-		"validatorRecordCount", summary.ValidatorRecordCount,
-		"voterRecordCount", summary.VoterRecordCount,
-		"totalRewardWei", summary.TotalRewardWei)
 
 	return map[string]interface{}{
 		"success": true,

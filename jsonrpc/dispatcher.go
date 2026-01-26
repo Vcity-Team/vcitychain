@@ -823,28 +823,16 @@ func (a *dposStoreAdapter) GetDPoSEngine() interface{} {
 }
 
 func (a *dposStoreAdapter) GetDPoSState() (*consensusdpos.State, error) {
-	fmt.Printf("DEBUG: GetDPoSState - 开始调用\n")
-
 	// 通过 GetDPoSEngine 获取 DPoS 引擎，然后从引擎获取 State
-	fmt.Printf("DEBUG: GetDPoSState - 尝试通过 GetDPoSEngine 获取 State\n")
 	if dposEngine := a.GetDPoSEngine(); dposEngine != nil {
-		fmt.Printf("DEBUG: GetDPoSState - 成功获取 DPoS 引擎: %T\n", dposEngine)
 		if dpos, ok := dposEngine.(*consensusdpos.DPoS); ok {
 			if state := dpos.GetState(); state != nil {
-				fmt.Printf("DEBUG: GetDPoSState - 成功从 DPoS 引擎获取 State\n")
 				return state, nil
-			} else {
-				fmt.Printf("DEBUG: GetDPoSState - DPoS 引擎的 GetState() 返回 nil\n")
 			}
-		} else {
-			fmt.Printf("DEBUG: GetDPoSState - DPoS 引擎类型断言失败: %T\n", dposEngine)
 		}
-	} else {
-		fmt.Printf("DEBUG: GetDPoSState - GetDPoSEngine 返回 nil\n")
 	}
 
 	// This allows the endpoint to work even when the consensus engine is not fully configured
-	fmt.Printf("DEBUG: GetDPoSState 失败，返回 nil\n")
 	return nil, nil
 }
 

@@ -72,57 +72,29 @@ func (d *DPoS) validateVote(vote *VoteMessage, skipBalanceCheck bool, skipRegist
 
 	// 1. 检查投票金额边界：合法的 amount 只有 -1（撤销）或正数（投票）
 	cmpMinusOne := vote.Amount.Cmp(big.NewInt(-1))
-	d.logger.Info("🔍 [validateVote] 检查 amount < -1",
-		"amount", vote.Amount.String(),
-		"cmp(-1)结果", cmpMinusOne,
-		"是否< -1", cmpMinusOne < 0)
 	if cmpMinusOne < 0 {
 		return errors.New("vote amount cannot be less than -1")
 	}
 
 	cmpZero := vote.Amount.Cmp(big.NewInt(0))
-	d.logger.Info("🔍 [validateVote] 检查 amount = 0",
-		"amount", vote.Amount.String(),
-		"cmp(0)结果", cmpZero,
-		"是否= 0", cmpZero == 0)
 	if cmpZero == 0 {
 		return errors.New("vote amount cannot be zero")
 	}
 
 	// amount = -1 表示撤销，直接通过
-	d.logger.Info("🔍 [validateVote] 检查 amount = -1",
-		"amount", vote.Amount.String(),
-		"cmp(-1)结果", cmpMinusOne,
-		"是否= -1", cmpMinusOne == 0)
 	if cmpMinusOne == 0 {
-		d.logger.Info("✅ [validateVote] amount = -1，撤销投票，直接通过验证")
 		return nil
 	}
 
 	// amount > 0 时，检查最小/最大金额
-	d.logger.Info("🔍 [validateVote] amount != -1，继续检查最小/最大金额",
-		"amount", vote.Amount.String(),
-		"amount.Sign()", vote.Amount.Sign())
-
 	maxAmount, _ := new(big.Int).SetString(MaxVoteAmount, 10)
 	cmpMax := vote.Amount.Cmp(maxAmount)
-	d.logger.Info("🔍 [validateVote] 检查最大金额",
-		"amount", vote.Amount.String(),
-		"MaxVoteAmount", MaxVoteAmount,
-		"cmp(max)结果", cmpMax,
-		"是否> max", cmpMax > 0)
 	if cmpMax > 0 {
 		return errors.New("vote amount exceeds maximum")
 	}
 
 	minAmount, _ := new(big.Int).SetString(MinVoteAmount, 10)
 	cmpMin := vote.Amount.Cmp(minAmount)
-	d.logger.Info("🔍 [validateVote] 检查最小金额",
-		"amount", vote.Amount.String(),
-		"MinVoteAmount", MinVoteAmount,
-		"cmp(min)结果", cmpMin,
-		"是否< min", cmpMin < 0,
-		"⚠️ 如果 amount = -1 但执行到这里，说明逻辑有问题！")
 	if cmpMin < 0 {
 		d.logger.Error("❌ [validateVote] 触发最小金额检查失败",
 			"amount", vote.Amount.String(),

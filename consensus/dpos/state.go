@@ -1294,16 +1294,6 @@ func (rs *RewardStore) GetRewardSummary(address string, fromEpoch, toEpoch uint6
 		return nil
 	})
 
-	if logger != nil {
-		logger.Info("✅ [GetRewardSummary] 查询完成",
-			"address", address,
-			"fromEpoch", fromEpoch,
-			"toEpoch", toEpoch,
-			"processedCount", processedCount,
-			"matchedCount", matchedCount,
-			"recordCount", sum.RecordCount)
-	}
-
 	if err != nil {
 		return nil, err
 	}
