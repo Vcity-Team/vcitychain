@@ -137,8 +137,6 @@ func (d *DPoS) initializeDelegates() error {
 		d.logger.Warn("⚠️ 从创世块解析验证者失败", "error", err)
 		// 如果创世块也失败，使用配置中的初始验证者
 		for _, genesisValidator := range d.config.InitialDelegates {
-			// 初始权重为0，将在7370高度通过投票记录获得权重
-			// 不再使用硬编码的1000 VCITY
 			votingPower := big.NewInt(0)
 			delegate := &validator.ValidatorMetadata{
 				Address:     types.Address(genesisValidator.Address),
@@ -733,16 +731,16 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 
 		// 创建初始 DelegateInfo（投票权重为0）
 		delegateInfo := &DelegateInfo{
-			Address:        regInfo.Registrant,
-			VotingPower:    big.NewInt(0), // 初始投票权重为0
-			TotalVotes:     big.NewInt(0), // 初始总投票数为0
-			ProducedBlocks: 0,
-			MissedBlocks:   0,
-			LastBlockTime:  0,
-			IsActive:       false, // 初始为非活跃，需要投票激活
-			IsRegistered:   true,  // 已注册
+			Address:          regInfo.Registrant,
+			VotingPower:      big.NewInt(0), // 初始投票权重为0
+			TotalVotes:       big.NewInt(0), // 初始总投票数为0
+			ProducedBlocks:   0,
+			MissedBlocks:     0,
+			LastBlockTime:    0,
+			IsActive:         false,              // 初始为非活跃，需要投票激活
+			IsRegistered:     true,               // 已注册
 			RegistrationInfo: regInfoForDelegate, // 保存注册信息
-			BlsPublicKey:    nil,                  // BLS密钥由其他逻辑处理
+			BlsPublicKey:     nil,                // BLS密钥由其他逻辑处理
 		}
 
 		// 填充佣金字段
@@ -1500,7 +1498,7 @@ func (d *DPoS) signTransactionWithChainID(tx *types.Transaction, expectedAddr ty
 // 修改：返回所有验证人（包括非活跃的），而不仅仅是出块的验证人
 func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 	d.logger.Info("🔍 [GetDelegateRegistrations] 开始获取受托人注册信息...")
-	
+
 	if d.state == nil || d.state.RegistrationStore == nil {
 		d.logger.Error("❌ [GetDelegateRegistrations] Registration store不可用")
 		return nil, fmt.Errorf("registration store not available")
@@ -1581,15 +1579,15 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 			if reg.TotalVotes != nil {
 				currentTotalVotes = reg.TotalVotes
 			}
-			
+
 			newTotalVotes := big.NewInt(0)
 			if validator.VotingPower != nil {
 				newTotalVotes = validator.VotingPower
 			}
-			
+
 			oldIsActive := reg.IsActive
 			newIsActive := validator.IsActive
-			
+
 			// 🆕 从 StakeInfo 获取最新的投票时间
 			var latestVoteTime uint64 = 0
 			for _, stake := range allStakingInfos {
@@ -1599,7 +1597,7 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 					}
 				}
 			}
-			
+
 			// 如果值不同，实时更新（仅在内存中，不写回数据库）
 			if currentTotalVotes.Cmp(newTotalVotes) != 0 || oldIsActive != newIsActive || reg.LastVoteTime != latestVoteTime {
 				d.logger.Info("🔄 [GetDelegateRegistrations] 实时同步受托人信息",
@@ -1611,7 +1609,7 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 					"newIsActive", newIsActive,
 					"oldLastVoteTime", reg.LastVoteTime,
 					"newLastVoteTime", latestVoteTime)
-				
+
 				reg.TotalVotes = new(big.Int).Set(newTotalVotes)
 				reg.IsActive = newIsActive
 				if latestVoteTime > 0 {
@@ -1754,7 +1752,7 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 func (d *DPoS) getDelegateDepositAmount() *big.Int {
 	// 使用统一的 getDelegateThreshold 方法获取委托门槛值
 	depositAmount := d.getDelegateThreshold()
-	
+
 	// 安全检查：确保保证金不小于默认值（防止配置错误导致保证金过小）
 	defaultDeposit, _ := new(big.Int).SetString("1000000000000000000000", 10) // 默认1000 VCITY
 	if depositAmount.Cmp(defaultDeposit) < 0 {

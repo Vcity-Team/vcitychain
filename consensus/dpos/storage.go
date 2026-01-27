@@ -116,6 +116,40 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 	// ✅ 关键修复：在同一个事务中更新 DelegateInfo 表
 	// 因为 GetValidatorsWithFilter 从 DelegateInfo 表读取，所以需要同步更新
 	if applied {
+		// ✅ 幂等性检查：检查是否已存在相同且已应用的投票记录，避免重复累加 VotingPower
+		// 在事务中遍历 StakingInfo bucket，查找匹配的记录
+		stakingBucket := dbTx.Bucket([]byte("StakingInfo"))
+		if stakingBucket != nil {
+			cursor := stakingBucket.Cursor()
+			for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
+				// key 格式：staker (20 bytes) + delegate (20 bytes) + timestamp (8 bytes)
+				if len(key) >= 40 {
+					keyStaker := types.BytesToAddress(key[0:20])
+					keyDelegate := types.BytesToAddress(key[20:40])
+					
+					// 检查是否匹配当前投票
+					if keyStaker == voter && keyDelegate == candidate {
+						var existingStake StakeInfo
+						if err := json.Unmarshal(value, &existingStake); err == nil {
+							// 检查是否已应用且金额相同
+							if existingStake.Applied && existingStake.Amount != nil && existingStake.Amount.Cmp(amount) == 0 {
+								d.logger.Info("⚠️ 投票记录已存在且已应用，跳过更新 VotingPower（幂等性保护）",
+									"voter", voter.String(),
+									"delegate", candidate.String(),
+									"amount", amount.String())
+								// 提交事务（StakeInfo 已保存，只是跳过 VotingPower 更新）
+								if err := dbTx.Commit(); err != nil {
+									d.logger.Error("❌ Failed to commit staking info transaction", "error", err)
+									return fmt.Errorf("failed to commit transaction: %w", err)
+								}
+								return nil
+							}
+						}
+					}
+				}
+			}
+		}
+		
 		// 从 DelegateInfo 表读取当前权重（在事务中）
 		currentPower := big.NewInt(0)
 		if delegateInfo, err := d.state.StakeStore.getDelegateInfo(candidate, dbTx); err == nil && delegateInfo != nil && delegateInfo.VotingPower != nil {

@@ -249,7 +249,7 @@ type DPoSConfig struct {
 	EpochDuration       time.Duration `json:"epochDuration" yaml:"epochDuration"`
 	RewardAccount       types.Address `json:"rewardAccount" yaml:"rewardAccount"`
 	RewardAmount        *big.Int      `json:"rewardAmount" yaml:"rewardAmount"`
-	GenesisRootAccount  types.Address `json:"genesisRootAccount" yaml:"genesisRootAccount"` // 从创世文件alloc中读取的根账户地址
+	GenesisRootAccount  types.Address `json:"genesisRootAccount" yaml:"genesisRootAccount"`          // 从创世文件alloc中读取的根账户地址
 	ProposalVotePeriod  time.Duration `json:"proposalVotePeriod" yaml:"dpos_proposal_vote_period"`   // 提案表决周期
 	ProposalValidPeriod time.Duration `json:"proposalValidPeriod" yaml:"dpos_proposal_valid_period"` // 提案有效期
 
@@ -1456,13 +1456,11 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 		ibftValidator := ibftValidators[i]
 		address := ibftValidator.Address
 
-		// 创世验证者初始权重为0，将在7370高度通过投票记录获得权重
-		// 不再使用硬编码的1000 VCITY，改为从投票记录计算
 		initialVotingPower := big.NewInt(0)
 
 		delegate := &validator.ValidatorMetadata{
 			Address:     address,
-			VotingPower: initialVotingPower, // 初始为0，将在7370高度通过投票记录更新
+			VotingPower: initialVotingPower, // 初始为0，将在共识切换高度通过投票记录更新
 			BlsKey:      nil,                // BLS公钥将在需要时获取
 			IsActive:    true,
 		}
@@ -1481,7 +1479,7 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 			"address", address.String(),
 			"votingPower", initialVotingPower.String(),
 			"validatorIndex", validValidatorCount,
-			"note", "创世验证者初始权重为0，将在7370高度通过投票记录获得权重")
+			"note", "创世验证者初始权重为0，将在共识切换高度通过投票记录获得权重")
 	}
 
 	// 关键日志：DPoS验证者筛选结果汇总

@@ -337,12 +337,8 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 			"error", err)
 		return fmt.Errorf("failed to get voting power from database: %w", err)
 	}
-
-	// 计算新的投票权重
 	newPower := new(big.Int).Add(currentPower, amount)
 
-	// 注意：创世验证者的权重从投票记录计算
-	// 初始权重为0，在7370高度通过根账户投票获得1000 VCITY，后续用户投票会累加在上面
 	if d.isGenesisValidator(delegate) {
 		d.logger.Info("✅ 创世验证者权重更新（包含用户投票）",
 			"delegate", delegate.String(),

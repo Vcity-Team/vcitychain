@@ -19,7 +19,7 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 	// 🔧 修改：直接从数据库读取验证者集合，不再从 ExtraData 读取
 	allValidators, err := dposBackend.GetSortedValidatorsWithLimitFilterFaulty()
 	validatorsSource := "database_query_filter_faulty" // 记录验证者列表来源
-	
+
 	// 检查当前区块号，判断是否在共识切换高度之前
 	currentBlockNumber := uint64(0)
 	if r.config != nil && r.config.blockchain != nil {
@@ -31,7 +31,7 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 	if dposBackend.config != nil && dposBackend.config.ConsensusSwitchHeight > 0 {
 		isBeforeConsensusSwitch = currentBlockNumber < dposBackend.config.ConsensusSwitchHeight
 	}
-	
+
 	if err != nil {
 		// 使用频率限制日志
 		r.logOnceWithInterval("get_current_delegate_query_error", 10*time.Second, "error",
@@ -49,7 +49,7 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 				"ℹ️ getCurrentDelegate: 共识切换前验证者集合为空（正常）",
 				"blockNumber", currentBlockNumber,
 				"consensusSwitchHeight", dposBackend.config.ConsensusSwitchHeight,
-				"note", "在7370高度之前，验证者权重为0，这是正常的")
+				"note", "在共识切换高度之前，验证者权重为0，这是正常的")
 		} else {
 			// 在共识切换高度之后，验证者集合为空是异常情况
 			r.logOnceWithInterval("get_current_delegate_empty_after_switch", 10*time.Second, "error",
