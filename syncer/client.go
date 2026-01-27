@@ -383,10 +383,6 @@ func (m *syncPeerClient) startNewBlockProcess() {
 		case event = <-eventCh:
 		}
 
-		// 添加事件接收日志
-		if event != nil {
-			m.logger.Debug("📨 收到区块链事件", "节点ID", m.id, "NewChain长度", len(event.NewChain), "shouldEmitBlocks", m.shouldEmitBlocks)
-		}
 
 		if !m.shouldEmitBlocks {
 			m.logger.Info("❌ 跳过状态广播", "节点ID", m.id, "shouldEmitBlocks", m.shouldEmitBlocks, "原因", "shouldEmitBlocks为false")
@@ -403,25 +399,12 @@ func (m *syncPeerClient) startNewBlockProcess() {
 				continue
 			}
 
-			// 添加详细的状态广播日志
-			m.logger.Debug("🔔 检测到新区块事件，准备状态广播",
-				"区块高度", latest.Number,
-				"区块哈希", latest.Hash.String()[:16],
-				"节点ID", m.id,
-				"NewChain长度", l)
-
 			// 检查网络连接状态
 			peers := m.network.Peers()
 			if len(peers) == 0 {
 				m.logger.Info("没有连接的节点，跳过状态广播", "区块高度", latest.Number, "节点ID", m.id)
 				continue
 			}
-
-			// 添加网络连接状态日志
-			m.logger.Debug("🌐 网络连接状态检查",
-				"区块高度", latest.Number,
-				"连接节点数", len(peers),
-				"节点ID", m.id)
 
 			// Publish status with retry mechanism
 			var publishErr error

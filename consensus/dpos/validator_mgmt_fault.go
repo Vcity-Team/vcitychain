@@ -222,9 +222,6 @@ func (d *DPoS) getValidatorFaultInfo(validatorAddr types.Address) map[string]int
 						"address", validatorAddr.String())
 				}
 			}
-		} else {
-			d.logger.Debug("🔍 数据库中没有找到故障状态记录",
-				"address", validatorAddr.String())
 		}
 	}
 
