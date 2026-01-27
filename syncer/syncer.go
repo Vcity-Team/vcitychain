@@ -335,7 +335,6 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 		s.logger.Error("获取区块流失败", "peer", peerID.String(), "error", err)
 		return 0, false, err
 	}
-	s.logger.Debug("✅ 区块流获取成功", "peer", peerID.String(), "从高度", localLatest+1)
 
 	// Create a blockchain subscription for the sync progression and start tracking
 	subscription := s.blockchain.SubscribeEvents()
@@ -367,25 +366,6 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 					"timestamp", time.Now().Format("15:04:05.000"))
 				return lastReceivedNumber, shouldTerminate, nil
 			}
-
-			s.logger.Debug("🔍 从区块流接收到区块",
-				"peer", peerID.String()[:8],
-				"区块号", block.Number(),
-				"期望区块号", localLatest+1,
-				"本地最新", localLatest,
-				"blockNumber==localLatest+1", block.Number() == localLatest+1,
-				"时间戳", time.Now().Format("15:04:05.000"))
-
-			// 打印详细的区块接收日志
-			s.logger.Debug("🔄 同步接收到区块",
-				"peer", peerID.String()[:8],
-				"区块号", block.Number(),
-				"难度", block.Header.Difficulty,
-				"哈希", block.Hash().String()[:16],
-				"时间戳", block.Header.Timestamp,
-				"交易数", len(block.Transactions),
-				"Gas限制", block.Header.GasLimit,
-				"Gas使用", block.Header.GasUsed)
 
 			// safe check
 			if block.Number() == 0 {

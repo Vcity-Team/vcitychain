@@ -106,11 +106,5 @@ func (r *dposRuntime) getEpochForBlock(blockNumber uint64) *epochMetadata {
 		}
 	}
 
-	r.logger.Debug("🔍 基于区块号查询epoch（内部转换slot）",
-		"blockNumber", blockNumber,
-		"slot", slot,
-		"epochNumber", epochMetadata.Number,
-		"firstBlockInEpoch", epochMetadata.FirstBlockInEpoch)
-
 	return epochMetadata
 }

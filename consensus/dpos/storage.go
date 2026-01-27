@@ -816,40 +816,14 @@ func (d *DPoS) CreateGenesisVoteRecord(voter types.Address, delegate types.Addre
 
 // CreateGenesisVotesForAllValidators 在共识切换高度为所有创世验证者创建根账户的投票记录（公开方法）
 func (d *DPoS) CreateGenesisVotesForAllValidators(blockNumber uint64) error {
-	// 添加详细日志
-	d.logger.Info("🔍 [CreateGenesisVotesForAllValidators] 被调用",
-		"blockNumber", blockNumber,
-		"configIsNil", d.config == nil,
-		"consensusSwitchHeight", func() uint64 {
-			if d.config != nil {
-				return d.config.ConsensusSwitchHeight
-			}
-			return 0
-		}())
-
 	// 检查是否是共识切换高度
 	if d.config == nil || d.config.ConsensusSwitchHeight == 0 {
-		d.logger.Warn("⚠️ [CreateGenesisVotesForAllValidators] 配置无效，跳过",
-			"configIsNil", d.config == nil,
-			"consensusSwitchHeight", func() uint64 {
-				if d.config != nil {
-					return d.config.ConsensusSwitchHeight
-				}
-				return 0
-			}())
 		return nil
 	}
 
 	if blockNumber != d.config.ConsensusSwitchHeight {
-		d.logger.Debug("ℹ️ [CreateGenesisVotesForAllValidators] 不是共识切换高度，跳过",
-			"blockNumber", blockNumber,
-			"consensusSwitchHeight", d.config.ConsensusSwitchHeight)
 		return nil
 	}
-
-	d.logger.Info("🎯 检测到共识切换高度，开始创建根账户对创世验证者的投票记录",
-		"blockNumber", blockNumber,
-		"consensusSwitchHeight", d.config.ConsensusSwitchHeight)
 
 	// 根账户地址：从配置中获取（在Initialize时从创世文件alloc中读取并保存）
 	rootAccount := d.config.GenesisRootAccount
@@ -857,15 +831,9 @@ func (d *DPoS) CreateGenesisVotesForAllValidators(blockNumber uint64) error {
 		d.logger.Error("❌ 无法获取根账户地址：GenesisRootAccount未配置（应在Initialize时从创世文件alloc中读取）")
 		return fmt.Errorf("root account address not found: GenesisRootAccount not configured")
 	}
-
-	d.logger.Info("✅ 使用创世根账户地址",
-		"rootAccount", rootAccount.String())
 	
 	// 从配置读取投票金额（使用 dpos_delegate_threshold）
 	voteAmount := d.getDelegateThreshold()
-	d.logger.Info("✅ 从配置读取投票金额",
-		"voteAmount", voteAmount.String(),
-		"source", "dpos_delegate_threshold")
 
 	// 获取创世验证者列表
 	var genesisValidators []types.Address

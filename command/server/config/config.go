@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -182,11 +183,181 @@ func DefaultConfig() *Config {
 	}
 }
 
+// deepMergeConfig 深度合并两个配置字典
+// baseConfig: 基础配置（公共配置）
+// overrideConfig: 覆盖配置（节点特定配置）
+// 返回：合并后的配置字典
+func deepMergeConfig(baseConfig map[string]interface{}, overrideConfig map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+
+	// 先复制基础配置
+	for k, v := range baseConfig {
+		result[k] = v
+	}
+
+	// 再合并覆盖配置
+	for k, v := range overrideConfig {
+		if baseVal, exists := result[k]; exists {
+			// 如果两个值都是 map，递归合并
+			if baseMap, ok := baseVal.(map[string]interface{}); ok {
+				if overrideMap, ok := v.(map[string]interface{}); ok {
+					result[k] = deepMergeConfig(baseMap, overrideMap)
+					continue
+				}
+			}
+		}
+		// 否则直接覆盖
+		result[k] = v
+	}
+
+	return result
+}
+
+// resolveConfigPaths 根据传入的配置文件路径，解析出基础配置和节点特定配置的路径
+// 输入：node-config-validator.yaml 的路径（如 "./node1/node-config-validator.yaml"）
+// 输出：base-config.yaml 路径, node-config-validator.yaml 路径, error
+func resolveConfigPaths(configPath string) (string, string, error) {
+	// 获取配置文件所在目录
+	configDir := filepath.Dir(configPath)
+	configFileName := filepath.Base(configPath)
+
+	// 如果传入的就是 node-config-validator.yaml
+	if configFileName == "node-config-validator.yaml" {
+		// 基础配置文件在 nodes 目录（上一级目录）
+		nodesDir := filepath.Dir(configDir)
+		baseConfigPath := filepath.Join(nodesDir, "base-config.yaml")
+		return baseConfigPath, configPath, nil
+	}
+
+	// 如果传入的是其他配置文件，尝试查找 node-config-validator.yaml
+	// 这种情况保持向后兼容
+	nodeConfigPath := filepath.Join(configDir, "node-config-validator.yaml")
+	if _, err := os.Stat(nodeConfigPath); os.IsNotExist(err) {
+		// 如果 node-config-validator.yaml 不存在，只使用传入的配置文件
+		return "", configPath, nil
+	}
+
+	// 查找 base-config.yaml（在 nodes 目录）
+	nodesDir := filepath.Dir(configDir)
+	baseConfigPath := filepath.Join(nodesDir, "base-config.yaml")
+
+	return baseConfigPath, nodeConfigPath, nil
+}
+
+// readConfigFileAsMap 读取配置文件并解析为 map[string]interface{}
+func readConfigFileAsMap(path string) (map[string]interface{}, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var configMap map[string]interface{}
+
+	switch {
+	case strings.HasSuffix(path, ".hcl"):
+		// HCL 格式不支持 map 转换，应该使用 readConfigFileLegacy
+		return nil, fmt.Errorf("HCL format should use legacy read method")
+	case strings.HasSuffix(path, ".json"):
+		if err := json.Unmarshal(data, &configMap); err != nil {
+			return nil, err
+		}
+	case strings.HasSuffix(path, ".yaml"), strings.HasSuffix(path, ".yml"):
+		if err := yaml.Unmarshal(data, &configMap); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported config file format: %s", path)
+	}
+
+	if configMap == nil {
+		configMap = make(map[string]interface{})
+	}
+
+	return configMap, nil
+}
+
 // ReadConfigFile reads the config file from the specified path, builds a Config object
-// and returns it.
+// and returns it. Now supports reading base-config.yaml and node-config-validator.yaml
+// and merging them.
 //
 // Supported file types: .json, .hcl, .yaml, .yml
 func ReadConfigFile(path string) (*Config, error) {
+	// 如果文件是 HCL 格式，使用原来的逻辑（向后兼容，HCL 不支持合并）
+	if strings.HasSuffix(path, ".hcl") {
+		return readConfigFileLegacy(path)
+	}
+
+	// 1. 确定基础配置文件和节点特定配置文件路径
+	baseConfigPath, nodeConfigPath, err := resolveConfigPaths(path)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. 读取并解析基础配置（base-config.yaml，如果存在）
+	var baseConfigMap map[string]interface{}
+	if baseConfigPath != "" {
+		baseConfigMap, err = readConfigFileAsMap(baseConfigPath)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("failed to read base config: %w", err)
+		}
+		// 如果 base-config.yaml 不存在，baseConfigMap 为 nil，后续只使用节点配置
+	}
+
+	// 3. 读取并解析节点特定配置（node-config-validator.yaml 或传入的配置文件）
+	var overrideConfigMap map[string]interface{}
+	if nodeConfigPath != "" {
+		overrideConfigMap, err = readConfigFileAsMap(nodeConfigPath)
+		if err != nil {
+			// 如果节点配置文件不存在，且没有基础配置，返回错误
+			if baseConfigMap == nil {
+				return nil, fmt.Errorf("failed to read config file: %w", err)
+			}
+			// 否则只使用基础配置
+			overrideConfigMap = nil
+		}
+	} else {
+		// 如果没有解析出节点配置路径，使用传入的路径（向后兼容）
+		overrideConfigMap, err = readConfigFileAsMap(path)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// 4. 深度合并配置
+	var mergedConfigMap map[string]interface{}
+	if baseConfigMap != nil && overrideConfigMap != nil {
+		mergedConfigMap = deepMergeConfig(baseConfigMap, overrideConfigMap)
+	} else if baseConfigMap != nil {
+		mergedConfigMap = baseConfigMap
+	} else if overrideConfigMap != nil {
+		mergedConfigMap = overrideConfigMap
+	} else {
+		return nil, fmt.Errorf("no valid config file found")
+	}
+
+	// 5. 将合并后的配置转换为 YAML 字节，然后解析为 Config 结构体
+	// 这样可以复用现有的 unmarshal 逻辑
+	mergedYAML, err := yaml.Marshal(mergedConfigMap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal merged config: %w", err)
+	}
+
+	// 6. 解析为 Config 结构体
+	config := DefaultConfig()
+	config.Network = new(Network)
+	config.Network.MaxPeers = -1
+	config.Network.MaxInboundPeers = -1
+	config.Network.MaxOutboundPeers = -1
+
+	if err := yaml.Unmarshal(mergedYAML, config); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal merged config: %w", err)
+	}
+
+	return config, nil
+}
+
+// readConfigFileLegacy 使用原来的逻辑读取配置文件（用于 HCL 格式和向后兼容）
+func readConfigFileLegacy(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err

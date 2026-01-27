@@ -426,11 +426,6 @@ func (m *syncPeerClient) startNewBlockProcess() {
 			// Publish status with retry mechanism
 			var publishErr error
 			maxRetries := 3
-			m.logger.Debug("📡 开始状态广播",
-				"区块高度", latest.Number,
-				"最大重试次数", maxRetries,
-				"节点ID", m.id,
-				"topic名称", m.statusTopicName)
 
 			for retry := 0; retry < maxRetries; retry++ {
 				if err := m.topic.Publish(&proto.SyncPeerStatus{
@@ -448,19 +443,12 @@ func (m *syncPeerClient) startNewBlockProcess() {
 					time.Sleep(100 * time.Millisecond)
 				} else {
 					publishErr = nil
-					m.logger.Debug("✅ 状态广播成功",
-						"区块高度", latest.Number,
-						"重试次数", retry+1,
-						"节点ID", m.id,
-						"topic名称", m.statusTopicName)
 					break
 				}
 			}
 
 			if publishErr != nil {
 				m.logger.Error("❌ 状态广播最终失败", "区块高度", latest.Number, "节点ID", m.id, "topic名称", m.statusTopicName, "错误", publishErr)
-			} else {
-				m.logger.Debug("🎉 状态广播完成", "区块高度", latest.Number, "节点ID", m.id, "topic名称", m.statusTopicName)
 			}
 		}
 	}

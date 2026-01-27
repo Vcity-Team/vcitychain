@@ -103,12 +103,10 @@ func (d *DPoS) getEpochSize() uint64 {
 			// 尝试解析为时间字符串（如 "48s", "2m", "1h"）
 			if parsedDuration, parseErr := time.ParseDuration(v); parseErr == nil {
 				epochDuration = parsedDuration
-				d.logger.Debug("从参数系统读取 epoch duration", "value", v, "parsed", epochDuration.String())
 			} else {
 				// 如果不是时间字符串，尝试解析为秒数（如 "48"）
 				if seconds, parseErr := strconv.ParseUint(v, 10, 64); parseErr == nil {
 					epochDuration = time.Duration(seconds) * time.Second
-					d.logger.Debug("从参数系统读取 epoch duration（秒数）", "value", v, "parsed", epochDuration.String())
 				} else {
 					d.logger.Warn("无法解析参数系统中的 epoch duration，使用配置值", "value", v, "error", parseErr)
 					epochDuration = d.config.EpochDuration
