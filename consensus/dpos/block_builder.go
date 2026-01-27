@@ -1098,10 +1098,37 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			}
 
 			// 解析父区块的ExtraData
+			// ✅ 关键修复：如果是共识切换高度，父区块是IBFT格式，解析失败时容错处理
 			parentExtra, err := GetDposExtra(parentHeader.ExtraData)
 			if err != nil {
-				r.logger.Error("failed to parse parent extra data", "error", err)
-				return nil, fmt.Errorf("failed to parse parent extra data: %w", err)
+				// 检查是否是共识切换高度（父区块是IBFT格式）
+				isConsensusSwitchHeight := false
+				if r.config != nil && r.config.dposBackend != nil {
+					if dposInstance, ok := r.config.dposBackend.(*DPoS); ok && dposInstance.config != nil {
+						if dposInstance.config.ConsensusSwitchHeight > 0 && block.Block.Number() == dposInstance.config.ConsensusSwitchHeight {
+							isConsensusSwitchHeight = true
+						}
+					}
+				}
+				
+				if isConsensusSwitchHeight {
+					// 共识切换高度：父区块是IBFT格式，解析失败是正常的
+					// 创建一个空的Extra对象，允许继续执行
+					r.logger.Info("⚠️ 共识切换高度：父区块是IBFT格式，ExtraData解析失败但继续执行",
+						"blockNumber", block.Block.Number(),
+						"parentNumber", parentHeader.Number,
+						"error", err)
+					parentExtra = &Extra{
+						Validators: nil,
+						Parent:     nil,
+						Committed:  nil,
+						Checkpoint: nil,
+					}
+				} else {
+					// 非共识切换高度：解析失败是真正的错误
+					r.logger.Error("failed to parse parent extra data", "error", err)
+					return nil, fmt.Errorf("failed to parse parent extra data: %w", err)
+				}
 			}
 
 			// 使用父区块的Committed签名作为当前区块的Parent签名
