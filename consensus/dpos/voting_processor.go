@@ -52,17 +52,16 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 		Applied:        false,
 	}
 
-	// 交易处理时跳过余额检查（余额可能已变化），但检查注册状态
-	d.logger.Debug("🔄 验证投票（不更新数据库）...")
+	d.logger.Debug("🔄 验证投票（不更新数据库，包含余额检查）...")
 	if err := d.verifyVoteSignature(vote); err != nil {
 		d.logger.Error("❌ 投票签名验证失败", "error", err)
 		return fmt.Errorf("vote signature verification failed: %w", err)
 	}
-	if err := d.validateVote(vote, true, false); err != nil {
+	if err := d.validateVote(vote, false, false); err != nil {
 		d.logger.Error("❌ 投票验证失败", "error", err)
 		return fmt.Errorf("vote validation failed: %w", err)
 	}
-	d.logger.Debug("✅ 投票验证通过")
+	d.logger.Debug("✅ 投票验证通过（余额和注册状态检查通过）")
 
 	d.logger.Debug("🔄 保存投票记录到数据库（等待边界应用）...")
 	if err := d.persistVoteToDatabase(voter, candidate, amount, effectiveEpoch, false); err != nil {
@@ -431,15 +430,12 @@ func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error
 		return nil
 	}
 
-	// 在边界应用时更新数据库和验证者集合
 	d.logger.Info("✅ [边界应用投票] 投票条件满足，开始应用",
 		"blockNumber", blockNumber,
 		"epochNumber", epochNumber,
 		"votesCount", len(scheduledVotes))
 
-	// 应用每个投票：更新数据库和内存
 	for _, voteRecord := range scheduledVotes {
-		// 创建 VoteMessage 用于 processVoteInternal
 		vote := &VoteMessage{
 			Voter:          voteRecord.Voter,
 			Delegate:       voteRecord.Delegate,
@@ -450,7 +446,6 @@ func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error
 			Applied:        true, // 标记为已应用
 		}
 
-		// 调用 processVoteInternal 更新数据库和内存
 		if err := d.processVoteInternal(vote); err != nil {
 			d.logger.Error("❌ [边界应用投票] 应用投票失败",
 				"voter", voteRecord.Voter.String(),

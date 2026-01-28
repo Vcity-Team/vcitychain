@@ -112,6 +112,31 @@ type DPOS struct {
 	chainID uint64
 }
 
+// VoteRecordRequest defines filters for querying raw vote records
+type VoteRecordRequest struct {
+	Voter          string `json:"voter,omitempty"`    // 可选：按投票人过滤
+	Delegate       string `json:"delegate,omitempty"` // 可选：按被投票的验证者过滤
+	OnlyActive     bool   `json:"onlyActive"`         // 只返回 IsActive=true 的记录
+	IncludePending bool   `json:"includePending"`     // 是否包含 Applied=false 的待生效记录
+	Limit          uint64 `json:"limit"`              // 返回条数上限
+	Offset         uint64 `json:"offset"`             // 分页偏移
+	Order          string `json:"order"`              // "asc" / "desc"，按 StartTime 排序
+}
+
+// VoteRecord is a single raw vote / stake record exposed via RPC
+type VoteRecord struct {
+	Voter          string `json:"voter"`
+	Delegate       string `json:"delegate"`
+	AmountWei      string `json:"amountWei"`
+	AmountEther    string `json:"amountEther"`
+	StartTime      uint64 `json:"startTime"`
+	EndTime        uint64 `json:"endTime"`
+	IsLocked       bool   `json:"isLocked"`
+	IsActive       bool   `json:"isActive"`
+	Applied        bool   `json:"applied"`
+	EffectiveEpoch uint64 `json:"effectiveEpoch"`
+}
+
 // NewDPOS creates a new DPOS endpoint
 func NewDPOS(logger hclog.Logger, store dposStore, chainID uint64) *DPOS {
 	logger.Info("Initializing DPoS endpoint", "chainID", chainID)
@@ -1970,6 +1995,192 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		"validator": validatorDetail,
 	}
 	return response, nil
+}
+
+// GetVoteRecords handles dpos_getVoteRecords RPC method
+// This method returns raw vote / staking records with optional filters and pagination
+func (d *DPOS) GetVoteRecords(ctx context.Context, params interface{}) (interface{}, error) {
+	d.logger.Info("DPoS GetVoteRecords called", "params", params)
+
+	// Parse parameters
+	var req VoteRecordRequest
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) > 0 {
+			if m, ok := p[0].(map[string]interface{}); ok {
+				if v, ok2 := m["voter"].(string); ok2 {
+					req.Voter = v
+				}
+				if v, ok2 := m["delegate"].(string); ok2 {
+					req.Delegate = v
+				}
+				if v, ok2 := m["onlyActive"].(bool); ok2 {
+					req.OnlyActive = v
+				} else {
+					req.OnlyActive = true
+				}
+				if v, ok2 := m["includePending"].(bool); ok2 {
+					req.IncludePending = v
+				}
+				if v, ok2 := m["limit"].(float64); ok2 && v > 0 {
+					req.Limit = uint64(v)
+				} else {
+					req.Limit = 100
+				}
+				if v, ok2 := m["offset"].(float64); ok2 && v >= 0 {
+					req.Offset = uint64(v)
+				}
+				if v, ok2 := m["order"].(string); ok2 && v != "" {
+					req.Order = strings.ToLower(v)
+				} else {
+					req.Order = "desc"
+				}
+			}
+		}
+	case map[string]interface{}:
+		if v, ok := p["voter"].(string); ok {
+			req.Voter = v
+		}
+		if v, ok := p["delegate"].(string); ok {
+			req.Delegate = v
+		}
+		if v, ok := p["onlyActive"].(bool); ok {
+			req.OnlyActive = v
+		} else {
+			req.OnlyActive = true
+		}
+		if v, ok := p["includePending"].(bool); ok {
+			req.IncludePending = v
+		}
+		if v, ok := p["limit"].(float64); ok && v > 0 {
+			req.Limit = uint64(v)
+		} else {
+			req.Limit = 100
+		}
+		if v, ok := p["offset"].(float64); ok && v >= 0 {
+			req.Offset = uint64(v)
+		}
+		if v, ok := p["order"].(string); ok && v != "" {
+			req.Order = strings.ToLower(v)
+		} else {
+			req.Order = "desc"
+		}
+	default:
+		// 无参数时，返回错误，防止全网扫描
+		return map[string]interface{}{
+			"success": false,
+			"error":   "invalid params: expected object or [object]",
+		}, nil
+	}
+
+	// 至少需要 voter 或 delegate 之一，避免全量遍历
+	if req.Voter == "" && req.Delegate == "" {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "either voter or delegate must be provided",
+		}, nil
+	}
+
+	// 解析地址
+	var voterAddr, delegateAddr types.Address
+	if req.Voter != "" {
+		voterAddr = types.StringToAddress(req.Voter)
+	}
+	if req.Delegate != "" {
+		delegateAddr = types.StringToAddress(req.Delegate)
+	}
+
+	// 取出所有 StakeInfo
+	allStakes, err := d.store.GetStakingInfo()
+	if err != nil {
+		d.logger.Error("❌ [GetVoteRecords] GetStakingInfo failed", "error", err)
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("failed to get staking info: %v", err),
+		}, nil
+	}
+
+	// 预先准备转换函数
+	weiPerEtherInt := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+	weiPerEtherFloat := new(big.Float).SetInt(weiPerEtherInt)
+	formatEther := func(amount *big.Int) string {
+		if amount == nil || amount.Sign() == 0 {
+			return "0"
+		}
+		amountFloat := new(big.Float).SetInt(amount)
+		amountFloat.Quo(amountFloat, weiPerEtherFloat)
+		return amountFloat.Text('f', 6)
+	}
+
+	// 过滤 & 收集
+	records := make([]*VoteRecord, 0, len(allStakes))
+	for _, s := range allStakes {
+		if s == nil {
+			continue
+		}
+		// 过滤地址
+		if req.Voter != "" && s.Staker != voterAddr {
+			continue
+		}
+		if req.Delegate != "" && s.Delegate != delegateAddr {
+			continue
+		}
+		// 过滤是否 active
+		if req.OnlyActive && !s.IsActive {
+			continue
+		}
+		// 过滤 applied
+		if !req.IncludePending && !s.Applied {
+			continue
+		}
+
+		amount := big.NewInt(0)
+		if s.Amount != nil {
+			amount = new(big.Int).Set(s.Amount)
+		}
+
+		rec := &VoteRecord{
+			Voter:          s.Staker.String(),
+			Delegate:       s.Delegate.String(),
+			AmountWei:      amount.String(),
+			AmountEther:    formatEther(amount),
+			StartTime:      s.StartTime,
+			EndTime:        s.EndTime,
+			IsLocked:       s.IsLocked,
+			IsActive:       s.IsActive,
+			Applied:        s.Applied,
+			EffectiveEpoch: s.EffectiveEpoch,
+		}
+		records = append(records, rec)
+	}
+
+	// 排序
+	sort.Slice(records, func(i, j int) bool {
+		if req.Order == "asc" {
+			return records[i].StartTime < records[j].StartTime
+		}
+		// 默认 desc
+		return records[i].StartTime > records[j].StartTime
+	})
+
+	total := uint64(len(records))
+
+	// 分页
+	start := req.Offset
+	if start > total {
+		start = total
+	}
+	end := start + req.Limit
+	if end > total {
+		end = total
+	}
+	paged := records[start:end]
+
+	return map[string]interface{}{
+		"success": true,
+		"total":   total,
+		"records": paged,
+	}, nil
 }
 
 // GetVoteByHash handles dpos_getVoteByHash RPC method

@@ -249,7 +249,7 @@ type DPoSConfig struct {
 	EpochDuration       time.Duration `json:"epochDuration" yaml:"epochDuration"`
 	RewardAccount       types.Address `json:"rewardAccount" yaml:"rewardAccount"`
 	RewardAmount        *big.Int      `json:"rewardAmount" yaml:"rewardAmount"`
-	GenesisRootAccount  types.Address `json:"genesisRootAccount" yaml:"genesisRootAccount"` // 从创世文件alloc中读取的根账户地址
+	GenesisRootAccount  types.Address `json:"genesisRootAccount" yaml:"genesisRootAccount"`          // 从创世文件alloc中读取的根账户地址
 	ProposalVotePeriod  time.Duration `json:"proposalVotePeriod" yaml:"dpos_proposal_vote_period"`   // 提案表决周期
 	ProposalValidPeriod time.Duration `json:"proposalValidPeriod" yaml:"dpos_proposal_valid_period"` // 提案有效期
 
@@ -656,7 +656,6 @@ func (d *DPoS) Start() error {
 		d.logger.Info("✅ 投票数据恢复完成")
 	}
 
-	// ✅ 新增：从数据库恢复投票记录（用于边界应用）
 	d.logger.Info("📊 开始从数据库恢复投票记录...")
 	if err := d.restoreVoteRecordsFromDatabase(); err != nil {
 		d.logger.Error("Failed to restore vote records from database", "error", err)
@@ -664,17 +663,12 @@ func (d *DPoS) Start() error {
 		d.logger.Info("✅ 投票记录恢复完成")
 	}
 
-	d.logger.Info("🎉 ========== DPoS Start() 方法执行完成 ==========")
-
-	// 启动时直接调用和命令一样的数据源方法
 	if err := d.callCommandDataSourcesOnStartup(); err != nil {
 		d.logger.Warn("Failed to call command data sources on startup", "error", err)
 	}
 
-	// 初始化性能优化组件
 	d.initPerformanceOptimizations()
 
-	// 初始化模块
 	if d.consensus == nil {
 		d.initConsensusModule()
 	}

@@ -600,7 +600,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			r.logger.Error("❌ 生产节点无法获取状态", "blockNumber", nextBlockNumber)
 		}
 
-		// 边界应用投票（与同步/验证节点保持一致，避免生产者遗漏新委托者）
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			currentEpochInfo := dposInstance.getEpochForBlock(nextBlockNumber - 1)
 			currentEpoch := uint64(0)
@@ -1110,7 +1109,7 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 						}
 					}
 				}
-				
+
 				if isConsensusSwitchHeight {
 					// 共识切换高度：父区块是IBFT格式，解析失败是正常的
 					// 创建一个空的Extra对象，允许继续执行

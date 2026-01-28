@@ -263,8 +263,6 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			if currentEpoch == 0 {
 				p.logger.Warn("⚠️ [ProcessBlockExecutor] 无法获取epoch信息", "blockNumber", block.Number())
 			}
-
-			p.logger.Debug("🔍 [边界应用提案] 开始查询待应用提案", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "isEpochEndBlock", true, "note", "在epoch结束区块时查询当前epoch的提案")
 			scheduledProps := dposInstance.governanceLoadScheduled(currentEpoch)
 			p.logger.Debug("🔍 [边界应用提案] 查询结果", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "scheduledCount", len(scheduledProps))
 
@@ -781,7 +779,7 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 			"rewardCount", len(rewardInfo.Rewards),
 			"voterRewardCount", len(rewardInfo.VoterRewards),
 			"totalReward", rewardInfo.TotalReward.String())
-		
+
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			if dposInstance.state != nil && dposInstance.state.RewardStore != nil {
 				// 直接使用 ExtraData 中的奖励信息记录到数据库（无需重新计算）
@@ -814,7 +812,7 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 			currentEpoch := (dposBlockNumber / epochSize) + 1
 			firstBlockInEpoch := consensusSwitchHeight + (currentEpoch-1)*epochSize
 			isEpochEndBlock := (block.Number() == firstBlockInEpoch+epochSize-1)
-			
+
 			if isEpochEndBlock {
 				p.logger.Warn("⚠️ ExtraData解析后RewardDistribution为nil（epoch结束区块）",
 					"blockNumber", block.Number(),
