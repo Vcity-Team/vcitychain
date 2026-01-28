@@ -1797,43 +1797,10 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 	// 聚合 validator 自己的投票（按 delegate 聚合）
 	outboundVotesMap := make(map[string]*aggregatedStake)
 
-	if dposState != nil && dposState.StakeStore != nil {
-		// 🆕 直接获取所有 VoterInfo 记录
-		allVoterInfo, err := dposState.StakeStore.GetAllVoterInfo()
-		if err != nil {
-			d.logger.Warn("⚠️ [GetValidatorVotingDetails] GetAllVoterInfo 失败", "error", err)
-		} else {
-			// 遍历所有投票者，查找投票给目标验证者的记录
-			for voterAddr, voterInfo := range allVoterInfo {
-				if voterInfo == nil {
-					continue
-				}
-
-				// 检查该投票者是否投票给了目标验证者
-				if voterInfo.DelegateVotes != nil {
-					if voteAmount, exists := voterInfo.DelegateVotes[validatorAddr]; exists && voteAmount != nil && voteAmount.Sign() > 0 {
-						key := voterAddr.String()
-
-						// 如果已经在 inboundStakesMap 中，累加金额
-						if agg, exists := inboundStakesMap[key]; exists {
-							agg.totalAmount.Add(agg.totalAmount, voteAmount)
-						} else {
-							// 创建新的聚合记录
-							inboundStakesMap[key] = &aggregatedStake{
-								staker:      voterAddr,
-								delegate:    validatorAddr,
-								totalAmount: new(big.Int).Set(voteAmount),
-								startTime:   voterInfo.LastVoteTime,
-								endTime:     voterInfo.LockedUntil,
-								isLocked:    voterInfo.LockedUntil > uint64(time.Now().Unix()),
-								rewards:     big.NewInt(0),
-							}
-						}
-					}
-				}
-			}
-		}
-	}
+	// 注意：
+	// - `StakingInfo` bucket 使用 (staker + delegate + timestamp) 作为复合 key，每次投票都会写入一条记录（不会覆盖历史记录）
+	// - 实际运行中 `VoterInfo.DelegateVotes` 可能只反映“最后一次投票金额”，用于生成 stakes 会导致多次投票被压缩成 1 笔
+	// 因此这里以 StakeInfo 作为 stakes 的权威来源，再按 staker 聚合展示，确保金额与 votingPower/totalStakedToMe 一致。
 	// 处理 StakingInfo：聚合投票记录
 	for _, stake := range stakingInfo {
 		if stake == nil {
@@ -1846,19 +1813,9 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		delegateAddr := stake.Delegate
 		isInboundMatch := delegateAddr == validatorAddr
 		isOutboundMatch := stake.Staker == validatorAddr
-		// 处理投票给 validator 的记录（入站投票）因为 VoterInfo.DelegateVotes 已经是减去撤销后的有效权重，避免重复计算
+		// 处理投票给 validator 的记录（入站投票）
 		if isInboundMatch {
 			key := stake.Staker.String()
-			if _, existsInVoterInfo := inboundStakesMap[key]; existsInVoterInfo {
-				// 如果已经存在，说明是从 VoterInfo.DelegateVotes 获取的（已减去撤销权重），跳过从 StakeInfo 累加
-				d.logger.Debug("🔵 [GetValidatorVotingDetails] 跳过 StakeInfo 累加（已从 VoterInfo 获取有效权重）",
-					"staker", stake.Staker.String(),
-					"delegate", delegateAddr.String(),
-					"note", "VoterInfo.DelegateVotes 已包含减去撤销后的有效权重")
-				continue
-			}
-			// 如果 VoterInfo 中没有，才从 StakeInfo 累加（这种情况应该很少，可能是数据不一致）
-			// 注意：这里需要检查是否在之前的 StakeInfo 迭代中已经添加过（用于聚合同一 staker 的多条记录）
 			if agg, exists := inboundStakesMap[key]; exists {
 				// 聚合多条 StakeInfo 记录（同一 staker 可能有多条投票记录）
 				agg.totalAmount.Add(agg.totalAmount, amount)
@@ -3786,7 +3743,7 @@ func (d *DPOS) GetVoterRewardByValidator(ctx context.Context, params interface{}
 	// 4. 过滤出该验证者的奖励记录（如果奖励记录中有验证者地址）
 	filteredRecords := []dpos.RewardRecordExtended{}
 	filteredTotal := big.NewInt(0)
-	
+
 	for _, record := range allRewards.VoterRecords {
 		// 如果记录中有验证者地址，且匹配，则包含
 		if record.ValidatorAddress != "" {
@@ -3810,12 +3767,12 @@ func (d *DPOS) GetVoterRewardByValidator(ctx context.Context, params interface{}
 	}
 
 	result := map[string]interface{}{
-		"success":          true,
-		"voterAddress":     voterAddress,
-		"validatorAddress": validatorAddress,
-		"fromEpoch":        fromEpoch,
-		"toEpoch":          toEpoch,
-		"hasVote":          hasVote,
+		"success":           true,
+		"voterAddress":      voterAddress,
+		"validatorAddress":  validatorAddress,
+		"fromEpoch":         fromEpoch,
+		"toEpoch":           toEpoch,
+		"hasVote":           hasVote,
 		"filteredRewardWei": filteredTotal.String(),
 		"filteredRewardEther": func() string {
 			weiPerEther := new(big.Float).SetFloat64(1e18)
@@ -3824,10 +3781,10 @@ func (d *DPOS) GetVoterRewardByValidator(ctx context.Context, params interface{}
 			return amountFloat.Text('f', 6)
 		}(),
 		"filteredRecordCount": len(filteredRecords),
-		"voterRecords":       filteredRecords,
+		"voterRecords":        filteredRecords,
 		"note": func() string {
 			if len(allRewards.VoterRecords) > len(filteredRecords) {
-				return fmt.Sprintf("注意：共找到 %d 条奖励记录，其中 %d 条可以确定来自该验证者。历史记录可能没有验证者地址信息。", 
+				return fmt.Sprintf("注意：共找到 %d 条奖励记录，其中 %d 条可以确定来自该验证者。历史记录可能没有验证者地址信息。",
 					len(allRewards.VoterRecords), len(filteredRecords))
 			}
 			return ""
@@ -5834,19 +5791,19 @@ func (d *DPOS) GetActiveProposals(ctx context.Context, params interface{}) (inte
 		isProposalExpired := currentBlockNumber > proposal.ValidEndBlock
 
 		result = append(result, map[string]interface{}{
-			"proposalId":       proposal.ID,
-			"parameter":        proposal.Parameter,
-			"oldValue":         proposal.OldValue,
-			"newValue":         proposal.NewValue,
-			"proposer":         proposal.Proposer.String(),
-			"startBlock":       proposal.StartBlock,
-			"endBlock":         proposal.EndBlock,
-			"status":           proposal.Status.String(),
-			"threshold":        proposal.Threshold,
-			"description":      proposal.Description,
-			"createdAt":        createdAtFormatted,
-			"createdAtTs":      createdAtTs,
-			"votes":            votes,
+			"proposalId":        proposal.ID,
+			"parameter":         proposal.Parameter,
+			"oldValue":          proposal.OldValue,
+			"newValue":          proposal.NewValue,
+			"proposer":          proposal.Proposer.String(),
+			"startBlock":        proposal.StartBlock,
+			"endBlock":          proposal.EndBlock,
+			"status":            proposal.Status.String(),
+			"threshold":         proposal.Threshold,
+			"description":       proposal.Description,
+			"createdAt":         createdAtFormatted,
+			"createdAtTs":       createdAtTs,
+			"votes":             votes,
 			"isProposalExpired": isProposalExpired,
 		})
 	}
@@ -5935,12 +5892,12 @@ func (d *DPOS) GetConsensusSwitchHeight(ctx context.Context) (interface{}, error
 	isDPoSActive := consensusSwitchHeight > 0 && currentHeight >= consensusSwitchHeight
 
 	return map[string]interface{}{
-		"success":                true,
-		"consensusSwitchHeight":  consensusSwitchHeight,
+		"success":               true,
+		"consensusSwitchHeight": consensusSwitchHeight,
 		"switchBlockTimestamp":  switchBlockTimestamp,
-		"switchBlockHash":         switchBlockHash,
-		"currentBlockHeight":     currentHeight,
-		"isDPoSActive":            isDPoSActive,
+		"switchBlockHash":       switchBlockHash,
+		"currentBlockHeight":    currentHeight,
+		"isDPoSActive":          isDPoSActive,
 	}, nil
 }
 
