@@ -47,8 +47,8 @@ func (d *DPoS) ValidateVoteOnly(voter types.Address, candidate types.Address, am
 		Timestamp: uint64(time.Now().Unix()),
 	}
 
-	// 只进行验证，不更新状态（完整验证：检查余额和注册状态）
-	if err := d.validateVote(vote, false, false); err != nil {
+	// 只进行验证，不更新状态（完整验证：检查余额和注册状态，且把已记账未生效的pending也算进已投）
+	if err := d.validateVote(vote, false, false, true); err != nil {
 		d.logger.Error("❌ Vote validation failed", "error", err)
 		return fmt.Errorf("vote validation failed: %w", err)
 	}
@@ -60,7 +60,8 @@ func (d *DPoS) ValidateVoteOnly(voter types.Address, candidate types.Address, am
 // validateVote 验证投票的有效性
 // skipBalanceCheck: 是否跳过余额检查（用于交易处理时，余额可能已变化）
 // skipRegistrationCheck: 是否跳过注册/候选人状态检查（用于边界应用时，状态可能已变化）
-func (d *DPoS) validateVote(vote *VoteMessage, skipBalanceCheck bool, skipRegistrationCheck bool) error {
+// includePendingInBalance: 余额检查时，是否把已记账但未生效的pending投票金额一起算进“已占用额度”（用于投票阶段防止同一epoch内重复超额）
+func (d *DPoS) validateVote(vote *VoteMessage, skipBalanceCheck bool, skipRegistrationCheck bool, includePendingInBalance bool) error {
 	// 🔍 调试日志：记录函数入口参数
 	d.logger.Info("🔍 [validateVote] 开始验证",
 		"amount字符串", vote.Amount.String(),
@@ -113,11 +114,21 @@ func (d *DPoS) validateVote(vote *VoteMessage, skipBalanceCheck bool, skipRegist
 			return fmt.Errorf("failed to query voter balance: %w", err)
 		}
 
-		// 计算已投票金额（使用 VoterInfo.VotingPower）
+		// 计算已生效的总投票金额（使用 VoterInfo.VotingPower）
 		totalVotedAmount := d.calculateTotalVotedAmount(vote.Voter)
 
-		// 计算剩余可投票数
-		remainingVotableAmount := new(big.Int).Sub(balance, totalVotedAmount)
+		// 可选：再把已记账但未生效的pending金额也算进“已占用额度”
+		effectiveVoted := new(big.Int).Set(totalVotedAmount)
+		var pendingAmount *big.Int
+		if includePendingInBalance {
+			pendingAmount = d.calculatePendingScheduledAmount(vote.Voter)
+			effectiveVoted.Add(effectiveVoted, pendingAmount)
+		} else {
+			pendingAmount = big.NewInt(0)
+		}
+
+		// 计算剩余可投票数：余额 - (已生效 + pending)
+		remainingVotableAmount := new(big.Int).Sub(balance, effectiveVoted)
 
 		// 检查剩余可投票数是否足够
 		if remainingVotableAmount.Cmp(vote.Amount) < 0 {
@@ -126,9 +137,10 @@ func (d *DPoS) validateVote(vote *VoteMessage, skipBalanceCheck bool, skipRegist
 				"required", vote.Amount.String(),
 				"remaining", remainingVotableAmount.String(),
 				"balance", balance.String(),
-				"totalVoted", totalVotedAmount.String())
-			return fmt.Errorf("insufficient remaining votable amount: required %s, remaining %s, balance %s, totalVoted %s",
-				vote.Amount.String(), remainingVotableAmount.String(), balance.String(), totalVotedAmount.String())
+				"totalVoted", totalVotedAmount.String(),
+				"pending", pendingAmount.String())
+			return fmt.Errorf("insufficient remaining votable amount: required %s, remaining %s, balance %s, totalVoted %s, pending %s",
+				vote.Amount.String(), remainingVotableAmount.String(), balance.String(), totalVotedAmount.String(), pendingAmount.String())
 		}
 
 		d.logger.Info("Vote balance and remaining amount check passed",
@@ -136,6 +148,7 @@ func (d *DPoS) validateVote(vote *VoteMessage, skipBalanceCheck bool, skipRegist
 			"voteAmount", vote.Amount.String(),
 			"balance", balance.String(),
 			"totalVoted", totalVotedAmount.String(),
+			"pending", pendingAmount.String(),
 			"remaining", remainingVotableAmount.String())
 	} else {
 		d.logger.Warn("Balance querier not available, skipping balance check")
@@ -237,6 +250,40 @@ func (d *DPoS) validateVote(vote *VoteMessage, skipBalanceCheck bool, skipRegist
 	}
 
 	return nil
+}
+
+// calculatePendingScheduledAmount 计算已记账但未生效（Applied=false）的投票总金额
+// 用于在投票阶段，将同一epoch内已提交但尚未边界应用的投票一并计入额度占用
+func (d *DPoS) calculatePendingScheduledAmount(voter types.Address) *big.Int {
+	if d.state == nil || d.state.StakeStore == nil {
+		return big.NewInt(0)
+	}
+
+	stakingInfos, err := d.state.StakeStore.GetStakingInfo()
+	if err != nil {
+		d.logger.Warn("failed to get staking info for pending amount", "error", err)
+		return big.NewInt(0)
+	}
+
+	total := big.NewInt(0)
+	for _, si := range stakingInfos {
+		if si == nil {
+			continue
+		}
+		if si.Staker != voter {
+			continue
+		}
+		if si.Applied {
+			// 只统计未生效的记录
+			continue
+		}
+		if si.Amount == nil || si.Amount.Sign() <= 0 {
+			continue
+		}
+		total.Add(total, si.Amount)
+	}
+
+	return total
 }
 
 // verifyVoteSignature 验证投票签名

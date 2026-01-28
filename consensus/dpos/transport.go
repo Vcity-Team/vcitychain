@@ -35,7 +35,7 @@ func (p *DPoS) handleVoteMessage(msg *VoteMessage, from peer.ID) error {
 		"from", from.String())
 
 	// 1. 验证投票消息（使用统一的验证函数，P2P消息跳过余额检查但检查注册状态）
-	if err := p.validateVote(msg, true, false); err != nil {
+	if err := p.validateVote(msg, true, false, false); err != nil {
 		p.logger.Warn("invalid vote message", "error", err, "voter", msg.Voter)
 		return err
 	}

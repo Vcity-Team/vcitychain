@@ -52,12 +52,13 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 		Applied:        false,
 	}
 
-	d.logger.Debug("🔄 验证投票（不更新数据库，包含余额检查）...")
+	// 只进行验证，不更新状态（完整验证：检查余额和注册状态，并将已记账未生效的pending也计入占用额度）
+	d.logger.Debug("🔄 验证投票（不更新数据库，包含余额检查并计入pending）...")
 	if err := d.verifyVoteSignature(vote); err != nil {
 		d.logger.Error("❌ 投票签名验证失败", "error", err)
 		return fmt.Errorf("vote signature verification failed: %w", err)
 	}
-	if err := d.validateVote(vote, false, false); err != nil {
+	if err := d.validateVote(vote, false, false, true); err != nil {
 		d.logger.Error("❌ 投票验证失败", "error", err)
 		return fmt.Errorf("vote validation failed: %w", err)
 	}
@@ -101,8 +102,8 @@ func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 		"amount", vote.Amount.String(),
 		"amountHex", fmt.Sprintf("0x%x", vote.Amount.Bytes()))
 
-	// 边界应用时做完整验证（包括余额和注册状态）
-	if err := d.validateVote(vote, false, false); err != nil {
+	// 边界应用时做完整验证（包括余额和注册状态），但此时不再叠加pending（当前正在应用的这批就是pending）
+	if err := d.validateVote(vote, false, false, false); err != nil {
 		d.logger.Error("❌ Vote validation failed", "error", err)
 		return fmt.Errorf("vote validation failed: %w", err)
 	}
@@ -239,8 +240,8 @@ func (d *DPoS) processVoteBatch(votes []*VoteMessage) {
 	delegateUpdates := make(map[types.Address]*big.Int)
 
 	for _, vote := range votes {
-		// 验证投票（批量处理时做完整验证）
-		if err := d.validateVote(vote, false, false); err != nil {
+		// 验证投票（批量处理时做完整验证），但此处不叠加pending（批量数据本身即为待处理集合）
+		if err := d.validateVote(vote, false, false, false); err != nil {
 			d.logger.Warn("invalid vote in batch", "error", err, "voter", vote.Voter)
 			continue
 		}
