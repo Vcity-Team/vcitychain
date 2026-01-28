@@ -3734,17 +3734,23 @@ func (d *DPOS) GetEpochRangeRewardDetails(ctx context.Context, params interface{
 }
 
 // GetRewardHistory 获取指定地址在指定epoch区间的奖励汇总
+// 参数支持两种格式：
+//  1. 数组格式: [address, fromEpoch, toEpoch] 或 [address, fromEpoch, toEpoch, includeRecords]
+//  2. 对象格式: {address, fromEpoch, toEpoch, includeRecords?}
+//
+// includeRecords: 可选，默认true，是否返回明细记录（false时只返回总额，节省带宽）
 func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[string]interface{}, error) {
 	d.logger.Info("DPoS GetRewardHistory called", "params", params)
 
 	var address string
 	var fromEpoch, toEpoch uint64
+	includeRecords := true // 默认返回明细
 
 	switch p := params.(type) {
 	case []interface{}:
-		if len(p) != 3 {
+		if len(p) < 3 || len(p) > 4 {
 			return map[string]interface{}{
-				"error": fmt.Sprintf("expected 3 parameters, got %d", len(p)),
+				"error": fmt.Sprintf("expected 3 or 4 parameters [address, fromEpoch, toEpoch, includeRecords?], got %d", len(p)),
 			}, nil
 		}
 
@@ -3771,6 +3777,13 @@ func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[st
 			}, nil
 		}
 		toEpoch = to
+
+		// 第4个参数可选：includeRecords
+		if len(p) == 4 {
+			if inc, ok := p[3].(bool); ok {
+				includeRecords = inc
+			}
+		}
 	case map[string]interface{}:
 		if addr, ok := p["address"].(string); ok {
 			address = addr
@@ -3794,6 +3807,11 @@ func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[st
 			return map[string]interface{}{
 				"error": "toEpoch is required and must be a number",
 			}, nil
+		}
+
+		// 可选参数：includeRecords
+		if inc, ok := p["includeRecords"].(bool); ok {
+			includeRecords = inc
 		}
 	default:
 		return map[string]interface{}{
@@ -3832,6 +3850,13 @@ func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[st
 		return map[string]interface{}{
 			"error": fmt.Sprintf("failed to get reward summary: %v", err),
 		}, nil
+	}
+
+	// 如果不需要明细，清空明细数组（只保留总额和统计信息）
+	if !includeRecords {
+		summary.ValidatorRecords = []dpos.RewardRecordExtended{}
+		summary.VoterRecords = []dpos.RewardRecordExtended{}
+		summary.OtherRewardRecords = []dpos.RewardRecordExtended{}
 	}
 
 	return map[string]interface{}{
