@@ -824,11 +824,12 @@ func TestDecodeTxn(t *testing.T) {
 				Nonce: &nonce,
 			},
 			store: &debugEndpointMockStore{},
+			// DecodeTxn 对 nil 的 GasPrice/Gas 会填默认值（1 Gwei、3M gas），用于 eth_estimateGas 等场景
 			expected: &types.Transaction{
 				From:      from,
 				To:        &to,
-				Gas:       uint64(0),
-				GasPrice:  new(big.Int),
+				Gas:       3000000,
+				GasPrice:  big.NewInt(1000000000),
 				GasTipCap: new(big.Int),
 				GasFeeCap: new(big.Int),
 				Value:     new(big.Int),
