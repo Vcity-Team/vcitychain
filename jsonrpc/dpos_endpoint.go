@@ -5102,7 +5102,7 @@ func (d *DPOS) RegisterDelegate(ctx context.Context, params interface{}) (interf
 	// 解析参数
 	d.logger.Info("🔍 开始解析RPC参数...")
 	var registrantStr, name, website, description, privateKey string
-	var chainID uint64 = 20230826 // 默认chainID
+	chainID := d.chainID // 默认使用端点配置的链ID（与链配置一致）
 
 	if paramMap, ok := params.(map[string]interface{}); ok {
 		registrantStr, _ = paramMap["registrant"].(string)
@@ -5111,7 +5111,7 @@ func (d *DPOS) RegisterDelegate(ctx context.Context, params interface{}) (interf
 		description, _ = paramMap["description"].(string)
 		privateKey, _ = paramMap["privateKey"].(string)
 
-		// 解析chainID
+		// 解析chainID：若请求中显式传入则覆盖默认值
 		if chainIDInterface, exists := paramMap["chainID"]; exists {
 			if chainIDFloat, ok := chainIDInterface.(float64); ok {
 				chainID = uint64(chainIDFloat)

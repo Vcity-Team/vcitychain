@@ -667,6 +667,8 @@ func TestGetNextNonce(t *testing.T) {
 	}
 }
 
+const testDecodeTxnChainID = 200
+
 func TestDecodeTxn(t *testing.T) {
 	t.Parallel()
 
@@ -685,6 +687,15 @@ func TestDecodeTxn(t *testing.T) {
 
 		testError = errors.New("test error")
 	)
+	// DecodeTxn 会设置 ChainID、V、R、S，expected 需一致以便 assert.Equal 通过
+	setDecodeTxnDummySig := func(tx *types.Transaction) {
+		if tx != nil {
+			tx.ChainID = big.NewInt(int64(testDecodeTxnChainID))
+			tx.V = big.NewInt(0)
+			tx.R = big.NewInt(0)
+			tx.S = big.NewInt(0)
+		}
+	}
 
 	tests := []struct {
 		name     string
@@ -870,10 +881,11 @@ func TestDecodeTxn(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			tx, err := DecodeTxn(test.arg, 1, test.store, false)
+			tx, err := DecodeTxn(test.arg, 1, test.store, false, testDecodeTxnChainID)
 
 			// DecodeTxn computes hash of tx
 			if !test.err {
+				setDecodeTxnDummySig(test.expected)
 				test.expected.ComputeHash(1)
 			}
 

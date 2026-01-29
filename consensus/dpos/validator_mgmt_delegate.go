@@ -733,16 +733,16 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 
 		// 创建初始 DelegateInfo（投票权重为0）
 		delegateInfo := &DelegateInfo{
-			Address:        regInfo.Registrant,
-			VotingPower:    big.NewInt(0), // 初始投票权重为0
-			TotalVotes:     big.NewInt(0), // 初始总投票数为0
-			ProducedBlocks: 0,
-			MissedBlocks:   0,
-			LastBlockTime:  0,
-			IsActive:       false, // 初始为非活跃，需要投票激活
-			IsRegistered:   true,  // 已注册
+			Address:          regInfo.Registrant,
+			VotingPower:      big.NewInt(0), // 初始投票权重为0
+			TotalVotes:       big.NewInt(0), // 初始总投票数为0
+			ProducedBlocks:   0,
+			MissedBlocks:     0,
+			LastBlockTime:    0,
+			IsActive:         false,              // 初始为非活跃，需要投票激活
+			IsRegistered:     true,               // 已注册
 			RegistrationInfo: regInfoForDelegate, // 保存注册信息
-			BlsPublicKey:    nil,                  // BLS密钥由其他逻辑处理
+			BlsPublicKey:     nil,                // BLS密钥由其他逻辑处理
 		}
 
 		// 填充佣金字段
@@ -1170,6 +1170,14 @@ func (d *DPoS) createDelegateRegistrationTransactionData(registrant types.Addres
 	return data
 }
 
+// getChainIDFromConfig 从链配置读取 chainID，供无显式 chainID 的 API 使用
+func (d *DPoS) getChainIDFromConfig() (uint64, bool) {
+	if d.config != nil && d.config.Blockchain != nil {
+		return uint64(d.config.Blockchain.Config().ChainID), true
+	}
+	return 0, false
+}
+
 // RegisterDelegate 注册受托人（改进的TRON风格）
 func (d *DPoS) RegisterDelegate(registrant types.Address, name, website, description string) error {
 	d.logger.Info("🚀 ===== 开始受托人注册（无私钥） =====")
@@ -1187,8 +1195,11 @@ func (d *DPoS) RegisterDelegate(registrant types.Address, name, website, descrip
 
 // RegisterDelegateWithKey 注册受托人（带私钥，用于创建交易）
 func (d *DPoS) RegisterDelegateWithKey(registrant types.Address, name, website, description, privateKey string) error {
-	// 使用默认chainID调用新方法
-	return d.RegisterDelegateWithKeyAndChainID(registrant, name, website, description, privateKey, 20230826)
+	chainID, ok := d.getChainIDFromConfig()
+	if !ok {
+		return fmt.Errorf("blockchain config not available, cannot get chainID for delegate registration")
+	}
+	return d.RegisterDelegateWithKeyAndChainID(registrant, name, website, description, privateKey, chainID)
 }
 
 // RegisterDelegateWithKeyAndChainID 注册受托人（带私钥和chainID，用于创建交易）
@@ -1235,9 +1246,13 @@ func (d *DPoS) RegisterDelegateWithKeyAndChainID(registrant types.Address, name,
 	}
 }
 
-// createDelegateRegistrationTransaction 创建受托人注册交易（使用默认chainID）
+// createDelegateRegistrationTransaction 创建受托人注册交易（从链配置读取 chainID）
 func (d *DPoS) createDelegateRegistrationTransaction(registrant types.Address, name, website, description string, depositAmount *big.Int, privateKey string) error {
-	return d.createDelegateRegistrationTransactionWithChainID(registrant, name, website, description, depositAmount, privateKey, 20230826)
+	chainID, ok := d.getChainIDFromConfig()
+	if !ok {
+		return fmt.Errorf("blockchain config not available, cannot get chainID for delegate registration transaction")
+	}
+	return d.createDelegateRegistrationTransactionWithChainID(registrant, name, website, description, depositAmount, privateKey, chainID)
 }
 
 // createDelegateRegistrationTransactionWithChainID 创建受托人注册交易（带chainID）
@@ -1406,9 +1421,13 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 	return nil
 }
 
-// signTransaction 签名交易（使用默认chainID）
+// signTransaction 签名交易（从链配置读取 chainID）
 func (d *DPoS) signTransaction(tx *types.Transaction, expectedAddr types.Address, privateKeyHex string) error {
-	return d.signTransactionWithChainID(tx, expectedAddr, privateKeyHex, 20230826)
+	chainID, ok := d.getChainIDFromConfig()
+	if !ok {
+		return fmt.Errorf("blockchain config not available, cannot get chainID for transaction signing")
+	}
+	return d.signTransactionWithChainID(tx, expectedAddr, privateKeyHex, chainID)
 }
 
 // signTransactionWithChainID 签名交易（带chainID）
@@ -1500,7 +1519,7 @@ func (d *DPoS) signTransactionWithChainID(tx *types.Transaction, expectedAddr ty
 // 修改：返回所有验证人（包括非活跃的），而不仅仅是出块的验证人
 func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 	d.logger.Info("🔍 [GetDelegateRegistrations] 开始获取受托人注册信息...")
-	
+
 	if d.state == nil || d.state.RegistrationStore == nil {
 		d.logger.Error("❌ [GetDelegateRegistrations] Registration store不可用")
 		return nil, fmt.Errorf("registration store not available")
@@ -1581,15 +1600,15 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 			if reg.TotalVotes != nil {
 				currentTotalVotes = reg.TotalVotes
 			}
-			
+
 			newTotalVotes := big.NewInt(0)
 			if validator.VotingPower != nil {
 				newTotalVotes = validator.VotingPower
 			}
-			
+
 			oldIsActive := reg.IsActive
 			newIsActive := validator.IsActive
-			
+
 			// 🆕 从 StakeInfo 获取最新的投票时间
 			var latestVoteTime uint64 = 0
 			for _, stake := range allStakingInfos {
@@ -1599,7 +1618,7 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 					}
 				}
 			}
-			
+
 			// 如果值不同，实时更新（仅在内存中，不写回数据库）
 			if currentTotalVotes.Cmp(newTotalVotes) != 0 || oldIsActive != newIsActive || reg.LastVoteTime != latestVoteTime {
 				d.logger.Info("🔄 [GetDelegateRegistrations] 实时同步受托人信息",
@@ -1611,7 +1630,7 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 					"newIsActive", newIsActive,
 					"oldLastVoteTime", reg.LastVoteTime,
 					"newLastVoteTime", latestVoteTime)
-				
+
 				reg.TotalVotes = new(big.Int).Set(newTotalVotes)
 				reg.IsActive = newIsActive
 				if latestVoteTime > 0 {
@@ -1754,7 +1773,7 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 func (d *DPoS) getDelegateDepositAmount() *big.Int {
 	// 使用统一的 getDelegateThreshold 方法获取委托门槛值
 	depositAmount := d.getDelegateThreshold()
-	
+
 	// 安全检查：确保保证金不小于默认值（防止配置错误导致保证金过小）
 	defaultDeposit, _ := new(big.Int).SetString("1000000000000000000000", 10) // 默认1000 VCITY
 	if depositAmount.Cmp(defaultDeposit) < 0 {
