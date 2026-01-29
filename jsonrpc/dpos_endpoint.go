@@ -3750,14 +3750,16 @@ func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[st
 	case []interface{}:
 		if len(p) < 3 || len(p) > 4 {
 			return map[string]interface{}{
-				"error": fmt.Sprintf("expected 3 or 4 parameters [address, fromEpoch, toEpoch, includeRecords?], got %d", len(p)),
+				"success": false,
+				"error":   fmt.Sprintf("expected 3 or 4 parameters [address, fromEpoch, toEpoch, includeRecords?], got %d", len(p)),
 			}, nil
 		}
 
 		addr, ok := p[0].(string)
 		if !ok {
 			return map[string]interface{}{
-				"error": "first parameter must be a string address",
+				"success": false,
+				"error":   "first parameter must be a string address",
 			}, nil
 		}
 		address = addr
@@ -3765,7 +3767,8 @@ func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[st
 		from, ok := toUint64(p[1])
 		if !ok {
 			return map[string]interface{}{
-				"error": "second parameter must be a number",
+				"success": false,
+				"error":   "second parameter must be a number",
 			}, nil
 		}
 		fromEpoch = from
@@ -3773,7 +3776,8 @@ func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[st
 		to, ok := toUint64(p[2])
 		if !ok {
 			return map[string]interface{}{
-				"error": "third parameter must be a number",
+				"success": false,
+				"error":   "third parameter must be a number",
 			}, nil
 		}
 		toEpoch = to
@@ -3789,7 +3793,8 @@ func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[st
 			address = addr
 		} else {
 			return map[string]interface{}{
-				"error": "address is required",
+				"success": false,
+				"error":   "address is required",
 			}, nil
 		}
 
@@ -3797,7 +3802,8 @@ func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[st
 			fromEpoch = from
 		} else {
 			return map[string]interface{}{
-				"error": "fromEpoch is required and must be a number",
+				"success": false,
+				"error":   "fromEpoch is required and must be a number",
 			}, nil
 		}
 
@@ -3805,7 +3811,8 @@ func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[st
 			toEpoch = to
 		} else {
 			return map[string]interface{}{
-				"error": "toEpoch is required and must be a number",
+				"success": false,
+				"error":   "toEpoch is required and must be a number",
 			}, nil
 		}
 
@@ -3815,19 +3822,22 @@ func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[st
 		}
 	default:
 		return map[string]interface{}{
-			"error": fmt.Sprintf("invalid parameter type: %T", params),
+			"success": false,
+			"error":   fmt.Sprintf("invalid parameter type: %T", params),
 		}, nil
 	}
 
 	if address == "" {
 		return map[string]interface{}{
-			"error": "address is required",
+			"success": false,
+			"error":   "address is required",
 		}, nil
 	}
 
 	if toEpoch < fromEpoch {
 		return map[string]interface{}{
-			"error": "toEpoch must be greater than or equal to fromEpoch",
+			"success": false,
+			"error":   "toEpoch must be greater than or equal to fromEpoch",
 		}, nil
 	}
 
@@ -3840,7 +3850,8 @@ func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[st
 	dposState, err = d.ensureRewardStore(dposState)
 	if err != nil {
 		return map[string]interface{}{
-			"error": err.Error(),
+			"success": false,
+			"error":   err.Error(),
 		}, nil
 	}
 
@@ -3848,7 +3859,8 @@ func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[st
 	if err != nil {
 		d.logger.Error("❌ GetRewardHistory: 查询失败", "error", err)
 		return map[string]interface{}{
-			"error": fmt.Sprintf("failed to get reward summary: %v", err),
+			"success": false,
+			"error":   fmt.Sprintf("failed to get reward summary: %v", err),
 		}, nil
 	}
 
@@ -3878,7 +3890,8 @@ func (d *DPOS) GetVoterRewardByValidator(ctx context.Context, params interface{}
 	case []interface{}:
 		if len(p) != 4 {
 			return map[string]interface{}{
-				"error": fmt.Sprintf("expected 4 parameters [voterAddress, validatorAddress, fromEpoch, toEpoch], got %d", len(p)),
+				"success": false,
+				"error":   fmt.Sprintf("expected 4 parameters [voterAddress, validatorAddress, fromEpoch, toEpoch], got %d", len(p)),
 			}, nil
 		}
 
@@ -3886,7 +3899,8 @@ func (d *DPOS) GetVoterRewardByValidator(ctx context.Context, params interface{}
 			voterAddress = addr
 		} else {
 			return map[string]interface{}{
-				"error": "first parameter (voterAddress) must be a string",
+				"success": false,
+				"error":   "first parameter (voterAddress) must be a string",
 			}, nil
 		}
 
@@ -3894,14 +3908,16 @@ func (d *DPOS) GetVoterRewardByValidator(ctx context.Context, params interface{}
 			validatorAddress = addr
 		} else {
 			return map[string]interface{}{
-				"error": "second parameter (validatorAddress) must be a string",
+				"success": false,
+				"error":   "second parameter (validatorAddress) must be a string",
 			}, nil
 		}
 
 		from, ok := toUint64(p[2])
 		if !ok {
 			return map[string]interface{}{
-				"error": "third parameter (fromEpoch) must be a number",
+				"success": false,
+				"error":   "third parameter (fromEpoch) must be a number",
 			}, nil
 		}
 		fromEpoch = from
@@ -3909,25 +3925,29 @@ func (d *DPOS) GetVoterRewardByValidator(ctx context.Context, params interface{}
 		to, ok := toUint64(p[3])
 		if !ok {
 			return map[string]interface{}{
-				"error": "fourth parameter (toEpoch) must be a number",
+				"success": false,
+				"error":   "fourth parameter (toEpoch) must be a number",
 			}, nil
 		}
 		toEpoch = to
 	default:
 		return map[string]interface{}{
-			"error": fmt.Sprintf("invalid parameter type: %T", params),
+			"success": false,
+			"error":   fmt.Sprintf("invalid parameter type: %T", params),
 		}, nil
 	}
 
 	if voterAddress == "" || validatorAddress == "" {
 		return map[string]interface{}{
-			"error": "voterAddress and validatorAddress are required",
+			"success": false,
+			"error":   "voterAddress and validatorAddress are required",
 		}, nil
 	}
 
 	if toEpoch < fromEpoch {
 		return map[string]interface{}{
-			"error": "toEpoch must be greater than or equal to fromEpoch",
+			"success": false,
+			"error":   "toEpoch must be greater than or equal to fromEpoch",
 		}, nil
 	}
 
@@ -3935,14 +3955,16 @@ func (d *DPOS) GetVoterRewardByValidator(ctx context.Context, params interface{}
 	dposState, err := d.store.GetDPoSState()
 	if err != nil {
 		return map[string]interface{}{
-			"error": fmt.Sprintf("failed to get DPoS state: %v", err),
+			"success": false,
+			"error":   fmt.Sprintf("failed to get DPoS state: %v", err),
 		}, nil
 	}
 
 	dposState, err = d.ensureRewardStore(dposState)
 	if err != nil {
 		return map[string]interface{}{
-			"error": err.Error(),
+			"success": false,
+			"error":   err.Error(),
 		}, nil
 	}
 
@@ -3950,7 +3972,8 @@ func (d *DPOS) GetVoterRewardByValidator(ctx context.Context, params interface{}
 	allRewards, err := dposState.RewardStore.GetRewardSummary(voterAddress, fromEpoch, toEpoch)
 	if err != nil {
 		return map[string]interface{}{
-			"error": fmt.Sprintf("failed to get reward summary: %v", err),
+			"success": false,
+			"error":   fmt.Sprintf("failed to get reward summary: %v", err),
 		}, nil
 	}
 
