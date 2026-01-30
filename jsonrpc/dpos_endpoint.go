@@ -5023,24 +5023,32 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 			return fmt.Sprintf("%.2f%%", value)
 		}(),
 		"isPassed": func() bool {
-			// 修复：isPassed 必须与 Status 保持一致
-			// 1. 如果投票期未结束，返回 false（即使支持率100%）
+			// 1. 投票期未结束，未通过
 			if currentBlockNumber <= proposal.EndBlock {
 				return false
 			}
-			// 2. 如果投票期已结束，直接使用 Status 字段（更可靠）
-			// 如果 Status 还未更新，先尝试检查结果
-			if proposal.Status != dpos.ProposalPassed && proposal.Status != dpos.ProposalRejected {
-				// 投票期已结束但状态未更新，计算支持率
-				if totalWeight.Sign() == 0 {
-					return false
-				}
-				passRate := new(big.Int).Mul(supportWeight, big.NewInt(100))
-				passRate.Div(passRate, totalWeight)
-				return passRate.Uint64() >= proposal.Threshold
+			// 2. 状态已更新为 Passed/Rejected，与共识一致
+			if proposal.Status == dpos.ProposalPassed {
+				return true
 			}
-			// 3. 状态已更新，直接使用 Status
-			return proposal.Status == dpos.ProposalPassed
+			if proposal.Status == dpos.ProposalRejected {
+				return false
+			}
+			// 3. 投票期已结束但状态仍为 pending：与 CheckProposalResult 一致，按「实际 SR 数量 51%」计算
+			// 一 SR 一票，通过条件：赞成票数 >= ceil(actualSRCount * 0.51)
+			srSet, err := gov.GetSuperRepresentatives()
+			actualSRCount := uint64(0)
+			if err != nil || len(srSet) == 0 {
+				actualSRCount = 21 // 回退默认
+			} else {
+				actualSRCount = uint64(len(srSet))
+			}
+			minRequiredYes := (actualSRCount*51 + 99) / 100
+			if minRequiredYes < 1 {
+				minRequiredYes = 1
+			}
+			yesCount := len(supportVoters)
+			return yesCount >= int(minRequiredYes)
 		}(),
 	}
 

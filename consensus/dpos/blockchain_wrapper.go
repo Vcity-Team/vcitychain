@@ -117,6 +117,19 @@ func (p *blockchainWrapper) CommitBlock(block *types.FullBlock) error {
 		return err
 	}
 
+	// 生产节点路径：BuildBlock 只走了 Executor.BeginTxn + transition.Write，未走 ProcessBlock，
+	// 因此本节点不会执行 ProcessProposalCreateTransaction 等。此处对区块内提案交易做与 ProcessBlock 一致的后置处理，
+	// 保证生产节点本地也能查到刚出的区块中的提案。
+	p.applyProposalTxsInBlock(block.Block)
+
+	// 方案四：生产节点本地也执行故障消减（与奖励一致）。奖励在 BuildBlock 里已执行，消减只在 ProcessBlock 路径执行；
+	// 生产节点不走 ProcessBlock，此处从本区块 Extra 解析并执行消减，保证生产节点与同步节点状态一致。
+	if p.isEpochEndBlock(block.Block.Number()) {
+		if e := p.applySlashingFromBlockExtra(block.Block); e != nil {
+			p.logger.Warn("⚠️ [CommitBlock] 生产节点故障消减后置处理失败(不影响已写入区块)", "blockNumber", block.Block.Number(), "error", e)
+		}
+	}
+
 	// 在共识切换高度创建根账户对创世验证者的投票记录（生产节点）
 	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
 		if err := dposInstance.CreateGenesisVotesForAllValidators(block.Block.Number()); err != nil {
@@ -130,6 +143,81 @@ func (p *blockchainWrapper) CommitBlock(block *types.FullBlock) error {
 	}
 
 	return nil
+}
+
+// applySlashingFromBlockExtra 从区块 Extra 解析 SlashingInfo 并执行消减（与 processSlashingInBlock 逻辑一致），
+// 用于生产节点在 CommitBlock 时补做本机未走的 ProcessBlock 消减处理。
+func (p *blockchainWrapper) applySlashingFromBlockExtra(block *types.Block) error {
+	extra := &Extra{}
+	if err := extra.UnmarshalRLP(block.Header.ExtraData); err != nil {
+		return fmt.Errorf("parse extra for slashing: %w", err)
+	}
+	if extra.SlashingInfo == nil {
+		return nil
+	}
+	dposInstance, exists := GetDPoSInstance("vcity_dpos")
+	if !exists || dposInstance == nil {
+		return fmt.Errorf("DPoS instance not found")
+	}
+	slashingInfo := extra.SlashingInfo
+	for _, slashingOp := range slashingInfo.Slashings {
+		if err := dposInstance.executeSlashing(
+			slashingOp.ValidatorAddr,
+			slashingOp.SlashRate,
+			block.Number(),
+			slashingInfo.EpochNumber,
+			slashingOp.Reason,
+			slashingOp.MissedBlocks,
+			slashingOp.MissedBlocksPercentage,
+			0,
+		); err != nil {
+			p.logger.Warn("⚠️ [CommitBlock] 执行消减失败(生产节点)", "validator", slashingOp.ValidatorAddr.String(), "error", err)
+			// 不返回错误，与 processSlashingInBlock 中“已执行过则跳过”的语义一致，区块已写入
+		}
+	}
+	p.logger.Info("✅ [CommitBlock] 生产节点故障消减后置处理完成", "blockNumber", block.Number(), "slashingsCount", len(slashingInfo.Slashings))
+	return nil
+}
+
+// applyProposalTxsInBlock 对区块内的提案交易执行 DPoS 后置处理（与 ProcessBlock 中逻辑一致），
+// 用于生产节点在 CommitBlock 时补做本机未走的 ProcessBlock 提案处理。
+func (p *blockchainWrapper) applyProposalTxsInBlock(block *types.Block) {
+	dposInstance, exists := GetDPoSInstance("vcity_dpos")
+	if !exists || dposInstance == nil {
+		return
+	}
+	for _, tx := range block.Transactions {
+		if len(tx.Input) == 0 || tx.To == nil {
+			continue
+		}
+		if tx.From == (types.Address{}) {
+			forks := p.blockchain.Config().Forks.At(block.Number())
+			chainID := p.GetChainID()
+			signer := crypto.NewSigner(forks, chainID)
+			if addr, err := signer.Sender(tx); err == nil {
+				tx.From = addr
+			} else {
+				p.logger.Debug("⚠️ [CommitBlock] 无法恢复提案交易 From，跳过", "txHash", tx.Hash.String(), "error", err)
+				continue
+			}
+		}
+		kind, err := ParseProposalInput(tx.Input)
+		if err != nil {
+			continue
+		}
+		switch kind {
+		case "create":
+			if e := dposInstance.ProcessProposalCreateTransaction(tx, block.Number()); e != nil {
+				p.logger.Warn("⚠️ [CommitBlock] 提案创建后置处理失败(不影响已写入区块)", "txHash", tx.Hash.String(), "blockNumber", block.Number(), "error", e)
+			} else {
+				p.logger.Info("✅ [CommitBlock] 提案创建后置处理成功(生产节点)", "txHash", tx.Hash.String(), "blockNumber", block.Number())
+			}
+		case "vote":
+			_ = dposInstance.ProcessProposalVoteTransaction(tx, block.Number())
+		case "execute":
+			_ = dposInstance.ProcessProposalExecuteTransaction(tx, block.Number())
+		}
+	}
 }
 
 // SetBlockProductionStartTime 设置区块生产开始时间（用于统计生产耗时）
