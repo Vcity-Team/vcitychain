@@ -159,6 +159,8 @@ type governanceEngine interface {
 	SignRecoveryProposalForTx(proposal *dpos.ParameterProposal, proposerPrivateKeyHex string) ([]byte, error)
 	SignVoteForTx(vote *dpos.ParameterVote, privateKeyHex string) ([]byte, error)
 	GetCurrentBlockNumber() uint64
+	// GetSuperRepresentatives 返回当前超级代表集合（仅 SR 可对提案投票）
+	GetSuperRepresentatives() (validator.AccountSet, error)
 }
 
 func (d *DPOS) getGovernanceEngine() (governanceEngine, error) {
@@ -4770,7 +4772,7 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 		"description":        description,
 		"currentBlockNumber": currentBlockNumber,
 		"message":            "Recovery proposal transaction created and broadcasted successfully",
-		"note":               "Proposal will be created when transaction is included in a block",
+		"note":               "Proposal will be created when transaction is included in a block. Query dpos_getParameterProposal with the exact proposalId above only after the tx is mined.",
 	}, nil
 }
 
@@ -4849,6 +4851,23 @@ func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) 
 				"existingSupport", existingVote.Support)
 			return nil, fmt.Errorf("voter %s has already voted on proposal %s", voter.String(), proposalID)
 		}
+	}
+
+	// 仅超级代表可对提案投票：投票者必须在当前 SR 集合内
+	srSet, err := gov.GetSuperRepresentatives()
+	if err != nil {
+		d.logger.Warn("❌ [VoteOnParameterProposal RPC] 无法获取超级代表列表", "error", err)
+		return nil, fmt.Errorf("cannot get super representatives: %w", err)
+	}
+	srMap := make(map[types.Address]struct{}, len(srSet))
+	for _, v := range srSet {
+		srMap[v.Address] = struct{}{}
+	}
+	if _, ok := srMap[voter]; !ok {
+		d.logger.Warn("❌ [VoteOnParameterProposal RPC] 投票者不是超级代表，拒绝投票",
+			"proposalID", proposalID,
+			"voter", voter.String())
+		return nil, fmt.Errorf("only super representatives can vote on proposals (voter %s is not an SR)", voter.String())
 	}
 
 	// 改为通过交易进行投票

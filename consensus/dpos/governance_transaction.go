@@ -174,40 +174,21 @@ func (d *DPoS) ProcessProposalVoteTransaction(tx *types.Transaction, blockNumber
 		return fmt.Errorf("voter %s has already voted on proposal %s", tx.From.String(), txData.ProposalID)
 	}
 
-	// 5. 获取投票者余额（允许所有有余额的用户投票，与VoteOnParameterProposal保持一致）
-	var voterWeight *big.Int
-	var balanceErr error
-	if d.balanceQuerier != nil {
-		voterWeight, balanceErr = d.balanceQuerier.GetNativeTokenBalance(tx.From)
-		if balanceErr != nil {
-			d.logger.Warn("Failed to query voter balance for proposal vote transaction", "voter", tx.From.String(), "error", balanceErr)
-			voterWeight = big.NewInt(0)
-		}
-	} else {
-		// 如果没有余额查询器，尝试使用getAccountBalance
-		if d.config != nil && d.config.Executor != nil {
-			currentHeader := d.config.Blockchain.Header()
-			if currentHeader != nil {
-				if snapshot, err2 := d.config.Executor.StateAt(currentHeader.StateRoot); err2 == nil {
-					if account, err2 := snapshot.GetAccount(tx.From); err2 == nil && account != nil {
-						voterWeight = account.Balance
-					}
-				}
-			}
-		}
-		if voterWeight == nil {
-			voterWeight = big.NewInt(0)
-		}
+	// 5. 仅超级代表可对提案投票：投票者必须在配置的 SR 集合（前 DPoSValidatorsCount 个验证者）内
+	srSet, err := d.GetSortedValidatorsWithLimit()
+	if err != nil {
+		d.logger.Warn("Failed to get super representatives for proposal vote transaction", "voter", tx.From.String(), "error", err)
+		return fmt.Errorf("cannot determine super representatives: %w", err)
 	}
-
-	if voterWeight == nil || voterWeight.Cmp(big.NewInt(0)) <= 0 {
-		return fmt.Errorf("voter %s has no balance to vote (must have balance to vote, current balance: %s)", tx.From.String(), func() string {
-			if voterWeight == nil {
-				return "0"
-			}
-			return voterWeight.String()
-		}())
+	srMap := make(map[types.Address]struct{}, len(srSet))
+	for _, v := range srSet {
+		srMap[v.Address] = struct{}{}
 	}
+	if _, ok := srMap[tx.From]; !ok {
+		return fmt.Errorf("voter %s is not a super representative (only SRs can vote on proposals)", tx.From.String())
+	}
+	// 一 SR 一票，权重固定为 1
+	voterWeight := big.NewInt(1)
 
 	// 6. 获取区块头的时间戳
 	var blockTimestamp uint64
