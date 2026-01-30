@@ -10,7 +10,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Vcity-Team/vcitychain/chain"
 	"github.com/Vcity-Team/vcitychain/command"
 	"github.com/Vcity-Team/vcitychain/command/helper"
 )
@@ -123,17 +122,11 @@ func runPreRun(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("failed to get chain-id flag: %w", err)
 	}
 
-	// If chain-id is not specified, try to read from genesis file
+	// 未传 chain-id 时直接报错，不读 genesis
 	if chainID == 0 {
-		chainConfig, err := chain.ImportFromFile(registerParams.genesisPath)
-		if err != nil {
-			return fmt.Errorf("failed to read genesis file at %s: %w. Please specify chain-id manually or provide a valid genesis file", registerParams.genesisPath, err)
-		}
-		registerParams.chainID = uint64(chainConfig.Params.ChainID)
-	} else {
-		// User manually specified chain-id, use the specified value
-		registerParams.chainID = chainID
+		return fmt.Errorf("missing parameter: chain-id is required, please specify --chain-id")
 	}
+	registerParams.chainID = chainID
 
 	return registerParams.validateFlags()
 }
