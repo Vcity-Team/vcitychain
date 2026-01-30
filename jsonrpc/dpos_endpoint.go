@@ -5001,55 +5001,47 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 		}
 	}
 
-	// 先获取当前区块高度，供 isPassed 使用
+	// 当前区块高度
 	currentBlockNumber := gov.GetCurrentBlockNumber()
 	if currentBlockNumber == 0 {
 		currentBlockNumber = d.getCurrentBlockHeight()
 	}
 
+	// 门槛：实际 SR 数量的 51%（一 SR 一票，与 CheckProposalResult 一致）
+	srSet, _ := gov.GetSuperRepresentatives()
+	actualSRCount := uint64(0)
+	if len(srSet) == 0 {
+		actualSRCount = 21
+	} else {
+		actualSRCount = uint64(len(srSet))
+	}
+	minRequiredYes := (actualSRCount*51 + 99) / 100
+	if minRequiredYes < 1 {
+		minRequiredYes = 1
+	}
+	yesCount := len(supportVoters)
+
+	// 是否通过：表决期结束且 赞成票数 >= 门槛
+	isPassedVal := false
+	if currentBlockNumber > proposal.EndBlock {
+		if proposal.Status == dpos.ProposalPassed {
+			isPassedVal = true
+		} else if proposal.Status != dpos.ProposalRejected {
+			isPassedVal = yesCount >= int(minRequiredYes)
+		}
+	}
+
 	voteStats := map[string]interface{}{
-		"totalVotes":    len(proposal.Votes),
-		"supportVotes":  len(supportVoters),
-		"opposeVotes":   len(opposeVoters),
-		"supportWeight": supportWeight.String(),
-		"totalWeight":   totalWeight.String(),
-		"passRate": func() string {
-			if totalWeight.Sign() == 0 {
-				return "0.00%"
-			}
-			passRate := new(big.Float).Quo(new(big.Float).SetInt(supportWeight), new(big.Float).SetInt(totalWeight))
-			passRate.Mul(passRate, big.NewFloat(100))
-			value, _ := passRate.Float64()
-			return fmt.Sprintf("%.2f%%", value)
-		}(),
-		"isPassed": func() bool {
-			// 1. 投票期未结束，未通过
-			if currentBlockNumber <= proposal.EndBlock {
-				return false
-			}
-			// 2. 状态已更新为 Passed/Rejected，与共识一致
-			if proposal.Status == dpos.ProposalPassed {
-				return true
-			}
-			if proposal.Status == dpos.ProposalRejected {
-				return false
-			}
-			// 3. 投票期已结束但状态仍为 pending：与 CheckProposalResult 一致，按「实际 SR 数量 51%」计算
-			// 一 SR 一票，通过条件：赞成票数 >= ceil(actualSRCount * 0.51)
-			srSet, err := gov.GetSuperRepresentatives()
-			actualSRCount := uint64(0)
-			if err != nil || len(srSet) == 0 {
-				actualSRCount = 21 // 回退默认
-			} else {
-				actualSRCount = uint64(len(srSet))
-			}
-			minRequiredYes := (actualSRCount*51 + 99) / 100
-			if minRequiredYes < 1 {
-				minRequiredYes = 1
-			}
-			yesCount := len(supportVoters)
-			return yesCount >= int(minRequiredYes)
-		}(),
+		"currentBlockNumber":  currentBlockNumber,
+		"totalVotes":          len(proposal.Votes),
+		"supportVotes":        yesCount,
+		"opposeVotes":         len(opposeVoters),
+		"supportWeight":       supportWeight.String(),
+		"totalWeight":         totalWeight.String(),
+		"actualSRCount":       actualSRCount,
+		"minRequiredYes":      minRequiredYes,
+		"thresholdProgress":   fmt.Sprintf("%d/%d", yesCount, minRequiredYes),
+		"isPassed":            isPassedVal,
 	}
 
 	timeInfo := map[string]interface{}{
@@ -5070,9 +5062,6 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 		timeInfo["remainingBlocks"] = 0
 		timeInfo["isExpired"] = true
 	}
-
-	// 保存 currentBlockNumber 供 isPassed 使用
-	voteStats["currentBlockNumber"] = currentBlockNumber
 
 	// 格式化创建时间
 	var createdAtFormatted string
