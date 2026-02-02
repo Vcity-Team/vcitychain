@@ -12,8 +12,6 @@ import (
 	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-hclog"
 	"github.com/libp2p/go-libp2p/core/peer"
-
-	"os"
 )
 
 const (
@@ -434,11 +432,8 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 			fullBlock, err := s.blockchain.VerifyFinalizedBlock(block)
 			if err != nil {
 				metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
-				s.logger.Error("区块验证失败", "peer", peerID.String(), "区块号", block.Number(), "error", err)
-
-				// 区块验证失败时立即退出程序
-				s.logger.Error("💀 区块验证失败，程序将立即退出")
-				os.Exit(1)
+				s.logger.Error("区块验证失败，返回错误供上层重试（可换 peer 或稍后重试）", "peer", peerID.String(), "区块号", block.Number(), "error", err)
+				return lastReceivedNumber, false, fmt.Errorf("block verification failed (retry or try another peer): %w", err)
 			}
 			s.logger.Debug("✅ 区块验证完成", "peer", peerID.String()[:8], "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
 
