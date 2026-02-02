@@ -528,10 +528,13 @@ func (d *DPoS) processUnvote(voter types.Address, candidate types.Address) error
 			"voter", voter.String())
 		return fmt.Errorf("database not available, cannot process unvote")
 	}
-
-	// 当前 epoch（与投票生效时机一致）
+	// 当前 epoch：用「下一块」算 epoch，使 unvote 一定在本 epoch 或下一 epoch 边界被应用（避免 tx 进下一块时 UnvoteEffectiveEpoch 仍是上一 epoch 导致永不生效）
 	currentBlockNumber := d.getCurrentBlockNumber()
-	currentEpochMeta := d.getEpochForBlock(currentBlockNumber)
+	blockContainingTx := currentBlockNumber + 1
+	currentEpochMeta := d.getEpochForBlock(blockContainingTx)
+	if currentEpochMeta == nil {
+		currentEpochMeta = d.getEpochForBlock(currentBlockNumber)
+	}
 	var currentEpoch uint64
 	if currentEpochMeta != nil {
 		currentEpoch = currentEpochMeta.Number
@@ -667,6 +670,8 @@ func (d *DPoS) applyScheduledUnvotes(epochNumber uint64, blockNumber uint64) err
 				voterInfo.VotingPower = big.NewInt(0)
 			}
 			_ = d.state.StakeStore.setVoterInfo(voterAddr, voterInfo, dbTx)
+		} else {
+			d.logger.Warn("⚠️ [边界应用撤销] VoterInfo 不存在，仅更新 StakeInfo 与 Delegate 权重", "voter", k.voter, "delegate", k.delegate)
 		}
 		origPower, _ := d.getVotingPowerFromDatabase(delegateAddr)
 		if origPower == nil {
@@ -679,6 +684,7 @@ func (d *DPoS) applyScheduledUnvotes(epochNumber uint64, blockNumber uint64) err
 		_ = d.updateVotingPowerInDatabaseWithTx(delegateAddr, newPower, dbTx)
 		if err := dbTx.Commit(); err != nil {
 			d.logger.Warn("⚠️ [边界应用撤销] 提交事务失败", "error", err)
+			_ = dbTx.Rollback()
 			continue
 		}
 		_ = d.syncDelegateFromDatabase(delegateAddr)

@@ -569,11 +569,19 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 
 		// 奖励分配与故障统计完成后，再在边界应用已登记的待生效提案和投票，避免被同区块统计覆盖
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-			// 计算当前 epoch 编号
-			currentEpochMeta := dposInstance.getEpochForBlock(block.Number())
+			// 与 ProcessBlockExecutor 一致：epoch 结束区块时 getEpochForBlock(block.Number()) 可能返回下一 epoch，用 block.Number()-1 取「即将结束的 epoch」
 			var currentEpoch uint64
-			if currentEpochMeta != nil {
-				currentEpoch = currentEpochMeta.Number
+			if block.Number() > 0 {
+				currentEpochMeta := dposInstance.getEpochForBlock(block.Number() - 1)
+				if currentEpochMeta != nil {
+					currentEpoch = currentEpochMeta.Number
+				} else {
+					if m := dposInstance.getEpochForBlock(block.Number()); m != nil {
+						currentEpoch = m.Number
+					}
+				}
+			} else if m := dposInstance.getEpochForBlock(block.Number()); m != nil {
+				currentEpoch = m.Number
 			}
 
 			p.logger.Debug("🔍 [边界应用提案] 开始查询待应用提案", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
@@ -906,7 +914,6 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 			}
 		}
 	} else {
-		// 检查是否是 epoch 结束区块
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			epochSize := dposInstance.getEpochSize()
 			consensusSwitchHeight := dposInstance.config.ConsensusSwitchHeight
