@@ -435,6 +435,13 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 					}
 				}
 			}
+			// 边界应用撤销（先于投票，避免权重突变）
+			p.logger.Info("🔍 [边界应用撤销] 开始查询待撤销", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
+			if err := dposInstance.applyScheduledUnvotes(currentEpoch, block.Number()); err != nil {
+				p.logger.Error("❌ [边界应用撤销] 应用撤销失败", "error", err, "blockNumber", block.Number(), "currentEpoch", currentEpoch)
+			} else {
+				p.logger.Info("✅ [边界应用撤销] 撤销应用完成", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
+			}
 			// 边界应用投票
 			p.logger.Info("🔍 [边界应用投票] 开始查询待应用投票", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
 			if err := dposInstance.applyScheduledVotes(currentEpoch, block.Number()); err != nil {
@@ -657,6 +664,13 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 				}
 			}
 
+			// 边界应用撤销（先于投票，避免权重突变）
+			p.logger.Info("🔍 [边界应用撤销] 开始查询待撤销", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
+			if err := dposInstance.applyScheduledUnvotes(currentEpoch, block.Number()); err != nil {
+				p.logger.Error("❌ [边界应用撤销] 应用撤销失败", "error", err, "blockNumber", block.Number(), "currentEpoch", currentEpoch)
+			} else {
+				p.logger.Info("✅ [边界应用撤销] 撤销应用完成", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
+			}
 			// 边界应用投票
 			p.logger.Info("🔍 [边界应用投票] 开始查询待应用投票", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
 			if err := dposInstance.applyScheduledVotes(currentEpoch, block.Number()); err != nil {

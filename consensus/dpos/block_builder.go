@@ -606,6 +606,17 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			if currentEpochInfo != nil {
 				currentEpoch = currentEpochInfo.Number
 			}
+			// 边界应用撤销（先于投票）
+			if err := dposInstance.applyScheduledUnvotes(currentEpoch, nextBlockNumber); err != nil {
+				r.logger.Error("❌ 生产节点边界应用撤销失败",
+					"blockNumber", nextBlockNumber,
+					"currentEpoch", currentEpoch,
+					"error", err)
+			} else {
+				r.logger.Info("✅ 生产节点边界应用撤销完成",
+					"blockNumber", nextBlockNumber,
+					"currentEpoch", currentEpoch)
+			}
 			if err := dposInstance.applyScheduledVotes(currentEpoch, nextBlockNumber); err != nil {
 				r.logger.Error("❌ 生产节点边界应用投票失败",
 					"blockNumber", nextBlockNumber,
