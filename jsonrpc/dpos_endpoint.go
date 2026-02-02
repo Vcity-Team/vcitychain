@@ -137,6 +137,9 @@ type VoteRecord struct {
 	IsActive            bool   `json:"isActive"`
 	Applied             bool   `json:"applied"`
 	EffectiveEpoch      uint64 `json:"effectiveEpoch"`
+	// 撤销的边界应用：待撤销时在本 epoch 边界生效，便于前端展示「撤销中，本 epoch 边界生效」
+	PendingUnvote        bool   `json:"pendingUnvote,omitempty"`
+	UnvoteEffectiveEpoch uint64 `json:"unvoteEffectiveEpoch,omitempty"`
 }
 
 // NewDPOS creates a new DPOS endpoint
@@ -1876,17 +1879,19 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 			currentEpoch = dpos.GetCurrentEpochNumber()
 		}
 	}
-	// 聚合投票记录：按 staker+delegate 聚合，累加 amount，并区分已生效/未生效
+	// 聚合投票记录：按 staker+delegate 聚合，累加 amount，并区分已生效/未生效；撤销的边界应用（待撤销在本 epoch 边界生效）
 	type aggregatedStake struct {
-		staker          types.Address
-		delegate        types.Address
-		totalAmount     *big.Int
-		effectiveAmount *big.Int // 已生效金额（Applied && EffectiveEpoch <= currentEpoch）
-		pendingAmount   *big.Int // 未生效金额
-		startTime       uint64
-		endTime         uint64
-		isLocked        bool
-		rewards         *big.Int
+		staker               types.Address
+		delegate             types.Address
+		totalAmount          *big.Int
+		effectiveAmount      *big.Int // 已生效金额（Applied && EffectiveEpoch <= currentEpoch）
+		pendingAmount        *big.Int // 未生效金额
+		startTime            uint64
+		endTime              uint64
+		isLocked             bool
+		rewards              *big.Int
+		hasPendingUnvote     bool   // 是否含有待撤销（本 epoch 边界生效）
+		unvoteEffectiveEpoch uint64 // 撤销生效的 epoch
 	}
 	inboundStakesMap := make(map[string]*aggregatedStake)
 	outboundVotesMap := make(map[string]*aggregatedStake)
@@ -1928,6 +1933,10 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 				} else {
 					agg.pendingAmount.Add(agg.pendingAmount, amount)
 				}
+				if stake.PendingUnvote {
+					agg.hasPendingUnvote = true
+					agg.unvoteEffectiveEpoch = stake.UnvoteEffectiveEpoch
+				}
 				if stake.StartTime < agg.startTime {
 					agg.startTime = stake.StartTime
 				}
@@ -1956,15 +1965,17 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 					pending.Set(amount)
 				}
 				inboundStakesMap[key] = &aggregatedStake{
-					staker:          stake.Staker,
-					delegate:        stake.Delegate,
-					totalAmount:     new(big.Int).Set(amount),
-					effectiveAmount: eff,
-					pendingAmount:   pending,
-					startTime:       stake.StartTime,
-					endTime:         stake.EndTime,
-					isLocked:        stake.IsLocked,
-					rewards:         big.NewInt(0),
+					staker:               stake.Staker,
+					delegate:             stake.Delegate,
+					totalAmount:          new(big.Int).Set(amount),
+					effectiveAmount:      eff,
+					pendingAmount:        pending,
+					startTime:            stake.StartTime,
+					endTime:              stake.EndTime,
+					isLocked:             stake.IsLocked,
+					rewards:              big.NewInt(0),
+					hasPendingUnvote:     stake.PendingUnvote,
+					unvoteEffectiveEpoch: stake.UnvoteEffectiveEpoch,
 				}
 				if stake.Rewards != nil {
 					inboundStakesMap[key].rewards.Set(stake.Rewards)
@@ -1979,6 +1990,10 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 					agg.effectiveAmount.Add(agg.effectiveAmount, amount)
 				} else {
 					agg.pendingAmount.Add(agg.pendingAmount, amount)
+				}
+				if stake.PendingUnvote {
+					agg.hasPendingUnvote = true
+					agg.unvoteEffectiveEpoch = stake.UnvoteEffectiveEpoch
 				}
 				if stake.StartTime < agg.startTime {
 					agg.startTime = stake.StartTime
@@ -2004,15 +2019,17 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 					pending.Set(amount)
 				}
 				outboundVotesMap[key] = &aggregatedStake{
-					staker:          stake.Staker,
-					delegate:        stake.Delegate,
-					totalAmount:     new(big.Int).Set(amount),
-					effectiveAmount: eff,
-					pendingAmount:   pending,
-					startTime:       stake.StartTime,
-					endTime:         stake.EndTime,
-					isLocked:        stake.IsLocked,
-					rewards:         big.NewInt(0),
+					staker:               stake.Staker,
+					delegate:             stake.Delegate,
+					totalAmount:          new(big.Int).Set(amount),
+					effectiveAmount:      eff,
+					pendingAmount:        pending,
+					startTime:            stake.StartTime,
+					endTime:              stake.EndTime,
+					isLocked:             stake.IsLocked,
+					rewards:              big.NewInt(0),
+					hasPendingUnvote:     stake.PendingUnvote,
+					unvoteEffectiveEpoch: stake.UnvoteEffectiveEpoch,
 				}
 				if stake.Rewards != nil {
 					outboundVotesMap[key].rewards.Set(stake.Rewards)
@@ -2035,6 +2052,10 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 			"endTime":              agg.endTime,
 			"isLocked":             agg.isLocked,
 		}
+		if agg.hasPendingUnvote {
+			stakeEntry["pendingUnvote"] = true
+			stakeEntry["unvoteEffectiveEpoch"] = agg.unvoteEffectiveEpoch
+		}
 		if agg.rewards != nil && agg.rewards.Sign() > 0 {
 			stakeEntry["rewardsWei"] = agg.rewards.String()
 			stakeEntry["rewardsEther"] = formatEther(agg.rewards)
@@ -2056,6 +2077,10 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 			"startTime":            agg.startTime,
 			"endTime":              agg.endTime,
 			"isLocked":             agg.isLocked,
+		}
+		if agg.hasPendingUnvote {
+			voteEntry["pendingUnvote"] = true
+			voteEntry["unvoteEffectiveEpoch"] = agg.unvoteEffectiveEpoch
 		}
 		if agg.rewards != nil && agg.rewards.Sign() > 0 {
 			voteEntry["rewardsWei"] = agg.rewards.String()
@@ -2248,16 +2273,18 @@ func (d *DPOS) GetVoteRecords(ctx context.Context, params interface{}) (interfac
 		}
 
 		rec := &VoteRecord{
-			Voter:          s.Staker.String(),
-			Delegate:       s.Delegate.String(),
-			AmountWei:      amount.String(),
-			AmountEther:    formatEther(amount),
-			StartTime:      s.StartTime,
-			EndTime:        s.EndTime,
-			IsLocked:       s.IsLocked,
-			IsActive:       s.IsActive,
-			Applied:        s.Applied,
-			EffectiveEpoch: s.EffectiveEpoch,
+			Voter:                s.Staker.String(),
+			Delegate:             s.Delegate.String(),
+			AmountWei:            amount.String(),
+			AmountEther:          formatEther(amount),
+			StartTime:            s.StartTime,
+			EndTime:              s.EndTime,
+			IsLocked:             s.IsLocked,
+			IsActive:             s.IsActive,
+			Applied:              s.Applied,
+			EffectiveEpoch:       s.EffectiveEpoch,
+			PendingUnvote:        s.PendingUnvote,
+			UnvoteEffectiveEpoch: s.UnvoteEffectiveEpoch,
 		}
 		// 已撤销的投票（Amount=0）：返回当初的投票金额，便于展示「当初投票多少」
 		if s.OriginalAmount != nil && s.OriginalAmount.Sign() > 0 {

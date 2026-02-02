@@ -147,6 +147,9 @@ type StakeInfo struct {
 
 	EffectiveEpoch uint64 `json:"effectiveEpoch,omitempty"` // 生效的epoch（边界应用）
 	Applied        bool   `json:"applied,omitempty"`        // 是否已应用
+
+	PendingUnvote        bool   `json:"pendingUnvote,omitempty"`        // 是否待撤销（边界生效，与投票一致避免权重突变导致分叉）
+	UnvoteEffectiveEpoch uint64 `json:"unvoteEffectiveEpoch,omitempty"` // 撤销生效的 epoch
 }
 
 // 参数表决相关数据结构
