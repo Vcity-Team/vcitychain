@@ -1810,25 +1810,43 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		amountFloat.Quo(amountFloat, weiPerEtherFloat)
 		return amountFloat.Text('f', 6)
 	}
-	// 聚合投票记录：按 staker+delegate 聚合，累加 amount
+	// 获取当前 epoch，用于区分投票已生效 / 未生效（已生效：Applied && EffectiveEpoch <= currentEpoch）
+	var currentEpoch uint64
+	if dposEngine := d.getDPoSEngine(); dposEngine != nil {
+		if dpos, ok := dposEngine.(*dpos.DPoS); ok {
+			currentEpoch = dpos.GetCurrentEpochNumber()
+		}
+	}
+	// 聚合投票记录：按 staker+delegate 聚合，累加 amount，并区分已生效/未生效
 	type aggregatedStake struct {
-		staker      types.Address
-		delegate    types.Address
-		totalAmount *big.Int
-		startTime   uint64 // 最早的投票时间
-		endTime     uint64 // 最晚的解锁时间
-		isLocked    bool   // 如果任一记录锁定，则为 true
-		rewards     *big.Int
+		staker          types.Address
+		delegate        types.Address
+		totalAmount     *big.Int
+		effectiveAmount *big.Int // 已生效金额（Applied && EffectiveEpoch <= currentEpoch）
+		pendingAmount   *big.Int // 未生效金额
+		startTime       uint64
+		endTime         uint64
+		isLocked        bool
+		rewards         *big.Int
 	}
 	inboundStakesMap := make(map[string]*aggregatedStake)
-	// 聚合 validator 自己的投票（按 delegate 聚合）
 	outboundVotesMap := make(map[string]*aggregatedStake)
 
 	// 注意：
 	// - `StakingInfo` bucket 使用 (staker + delegate + timestamp) 作为复合 key，每次投票都会写入一条记录（不会覆盖历史记录）
 	// - 实际运行中 `VoterInfo.DelegateVotes` 可能只反映“最后一次投票金额”，用于生成 stakes 会导致多次投票被压缩成 1 笔
 	// 因此这里以 StakeInfo 作为 stakes 的权威来源，再按 staker 聚合展示，确保金额与 votingPower/totalStakedToMe 一致。
-	// 处理 StakingInfo：聚合投票记录
+	// 判断单条投票是否已生效：Applied 且 (EffectiveEpoch==0 为旧数据视为已生效 或 EffectiveEpoch<=currentEpoch)
+	isEffectiveStake := func(s *dpos.StakeInfo) bool {
+		if !s.Applied {
+			return false
+		}
+		if s.EffectiveEpoch == 0 {
+			return true // 旧数据无 EffectiveEpoch，视为已生效
+		}
+		return s.EffectiveEpoch <= currentEpoch
+	}
+	// 处理 StakingInfo：聚合投票记录，并区分已生效/未生效
 	for _, stake := range stakingInfo {
 		if stake == nil {
 			continue
@@ -1837,6 +1855,7 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		if stake.Amount != nil {
 			amount = new(big.Int).Set(stake.Amount)
 		}
+		effective := isEffectiveStake(stake)
 		delegateAddr := stake.Delegate
 		isInboundMatch := delegateAddr == validatorAddr
 		isOutboundMatch := stake.Staker == validatorAddr
@@ -1844,17 +1863,18 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		if isInboundMatch {
 			key := stake.Staker.String()
 			if agg, exists := inboundStakesMap[key]; exists {
-				// 聚合多条 StakeInfo 记录（同一 staker 可能有多条投票记录）
 				agg.totalAmount.Add(agg.totalAmount, amount)
-				// 保留最早的 startTime
+				if effective {
+					agg.effectiveAmount.Add(agg.effectiveAmount, amount)
+				} else {
+					agg.pendingAmount.Add(agg.pendingAmount, amount)
+				}
 				if stake.StartTime < agg.startTime {
 					agg.startTime = stake.StartTime
 				}
-				// 保留最晚的 endTime
 				if stake.EndTime > agg.endTime {
 					agg.endTime = stake.EndTime
 				}
-				// 如果任一记录锁定，则为锁定
 				if stake.IsLocked {
 					agg.isLocked = true
 				}
@@ -1869,15 +1889,23 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 					"addedAmount", amount.String(),
 					"totalAmount", agg.totalAmount.String())
 			} else {
-				// 创建新的聚合记录
+				eff := big.NewInt(0)
+				pending := big.NewInt(0)
+				if effective {
+					eff.Set(amount)
+				} else {
+					pending.Set(amount)
+				}
 				inboundStakesMap[key] = &aggregatedStake{
-					staker:      stake.Staker,
-					delegate:    stake.Delegate,
-					totalAmount: new(big.Int).Set(amount),
-					startTime:   stake.StartTime,
-					endTime:     stake.EndTime,
-					isLocked:    stake.IsLocked,
-					rewards:     big.NewInt(0),
+					staker:          stake.Staker,
+					delegate:        stake.Delegate,
+					totalAmount:     new(big.Int).Set(amount),
+					effectiveAmount: eff,
+					pendingAmount:   pending,
+					startTime:       stake.StartTime,
+					endTime:         stake.EndTime,
+					isLocked:        stake.IsLocked,
+					rewards:         big.NewInt(0),
 				}
 				if stake.Rewards != nil {
 					inboundStakesMap[key].rewards.Set(stake.Rewards)
@@ -1888,19 +1916,20 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 			key := stake.Delegate.String()
 			if agg, exists := outboundVotesMap[key]; exists {
 				agg.totalAmount.Add(agg.totalAmount, amount)
-				// 保留最早的 startTime
+				if effective {
+					agg.effectiveAmount.Add(agg.effectiveAmount, amount)
+				} else {
+					agg.pendingAmount.Add(agg.pendingAmount, amount)
+				}
 				if stake.StartTime < agg.startTime {
 					agg.startTime = stake.StartTime
 				}
-				// 保留最晚的 endTime
 				if stake.EndTime > agg.endTime {
 					agg.endTime = stake.EndTime
 				}
-				// 如果任一记录锁定，则为锁定
 				if stake.IsLocked {
 					agg.isLocked = true
 				}
-				// 累加奖励
 				if stake.Rewards != nil {
 					if agg.rewards == nil {
 						agg.rewards = big.NewInt(0)
@@ -1908,14 +1937,23 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 					agg.rewards.Add(agg.rewards, stake.Rewards)
 				}
 			} else {
+				eff := big.NewInt(0)
+				pending := big.NewInt(0)
+				if effective {
+					eff.Set(amount)
+				} else {
+					pending.Set(amount)
+				}
 				outboundVotesMap[key] = &aggregatedStake{
-					staker:      stake.Staker,
-					delegate:    stake.Delegate,
-					totalAmount: new(big.Int).Set(amount),
-					startTime:   stake.StartTime,
-					endTime:     stake.EndTime,
-					isLocked:    stake.IsLocked,
-					rewards:     big.NewInt(0),
+					staker:          stake.Staker,
+					delegate:        stake.Delegate,
+					totalAmount:     new(big.Int).Set(amount),
+					effectiveAmount: eff,
+					pendingAmount:   pending,
+					startTime:       stake.StartTime,
+					endTime:         stake.EndTime,
+					isLocked:        stake.IsLocked,
+					rewards:         big.NewInt(0),
 				}
 				if stake.Rewards != nil {
 					outboundVotesMap[key].rewards.Set(stake.Rewards)
@@ -1927,12 +1965,16 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 	totalStakedToValidator := big.NewInt(0)
 	for _, agg := range inboundStakesMap {
 		stakeEntry := map[string]interface{}{
-			"staker":      agg.staker.String(),
-			"amountWei":   agg.totalAmount.String(),
-			"amountEther": formatEther(agg.totalAmount),
-			"startTime":   agg.startTime,
-			"endTime":     agg.endTime,
-			"isLocked":    agg.isLocked,
+			"staker":               agg.staker.String(),
+			"amountWei":            agg.totalAmount.String(),
+			"amountEther":          formatEther(agg.totalAmount),
+			"effectiveAmountWei":   agg.effectiveAmount.String(),
+			"effectiveAmountEther": formatEther(agg.effectiveAmount),
+			"pendingAmountWei":     agg.pendingAmount.String(),
+			"pendingAmountEther":   formatEther(agg.pendingAmount),
+			"startTime":            agg.startTime,
+			"endTime":              agg.endTime,
+			"isLocked":             agg.isLocked,
 		}
 		if agg.rewards != nil && agg.rewards.Sign() > 0 {
 			stakeEntry["rewardsWei"] = agg.rewards.String()
@@ -1945,12 +1987,16 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 	totalVotedByValidator := big.NewInt(0)
 	for _, agg := range outboundVotesMap {
 		voteEntry := map[string]interface{}{
-			"delegate":    agg.delegate.String(),
-			"amountWei":   agg.totalAmount.String(),
-			"amountEther": formatEther(agg.totalAmount),
-			"startTime":   agg.startTime,
-			"endTime":     agg.endTime,
-			"isLocked":    agg.isLocked,
+			"delegate":             agg.delegate.String(),
+			"amountWei":            agg.totalAmount.String(),
+			"amountEther":          formatEther(agg.totalAmount),
+			"effectiveAmountWei":   agg.effectiveAmount.String(),
+			"effectiveAmountEther": formatEther(agg.effectiveAmount),
+			"pendingAmountWei":     agg.pendingAmount.String(),
+			"pendingAmountEther":   formatEther(agg.pendingAmount),
+			"startTime":            agg.startTime,
+			"endTime":              agg.endTime,
+			"isLocked":             agg.isLocked,
 		}
 		if agg.rewards != nil && agg.rewards.Sign() > 0 {
 			voteEntry["rewardsWei"] = agg.rewards.String()
@@ -1991,6 +2037,7 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		"consensusRound":       0,     // TODO: Get current consensus round
 		"lastBlockProduced":    "0x0", // TODO: Get last block hash
 		"hasInboundVotes":      stakeFound,
+		"currentEpoch":         currentEpoch, // 用于区分 effective/pending 的参考 epoch
 	}
 	response := map[string]interface{}{
 		"success":   true,
@@ -5032,16 +5079,16 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 	}
 
 	voteStats := map[string]interface{}{
-		"currentBlockNumber":  currentBlockNumber,
-		"totalVotes":          len(proposal.Votes),
-		"supportVotes":        yesCount,
-		"opposeVotes":         len(opposeVoters),
-		"supportWeight":       supportWeight.String(),
-		"totalWeight":         totalWeight.String(),
-		"actualSRCount":       actualSRCount,
-		"minRequiredYes":      minRequiredYes,
-		"thresholdProgress":   fmt.Sprintf("%d/%d", yesCount, minRequiredYes),
-		"isPassed":            isPassedVal,
+		"currentBlockNumber": currentBlockNumber,
+		"totalVotes":         len(proposal.Votes),
+		"supportVotes":       yesCount,
+		"opposeVotes":        len(opposeVoters),
+		"supportWeight":      supportWeight.String(),
+		"totalWeight":        totalWeight.String(),
+		"actualSRCount":      actualSRCount,
+		"minRequiredYes":     minRequiredYes,
+		"thresholdProgress":  fmt.Sprintf("%d/%d", yesCount, minRequiredYes),
+		"isPassed":           isPassedVal,
 	}
 
 	timeInfo := map[string]interface{}{

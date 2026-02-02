@@ -33,6 +33,15 @@ func (d *DPoS) getCurrentEpoch() *epochMetadata {
 	return d.getEpochForBlock(0) // 0表示使用当前区块号
 }
 
+// GetCurrentEpochNumber 获取当前 epoch 编号（导出方法，供 JSON-RPC 等使用，用于判断投票是否已生效）
+func (d *DPoS) GetCurrentEpochNumber() uint64 {
+	meta := d.getCurrentEpoch()
+	if meta == nil {
+		return 0
+	}
+	return meta.Number
+}
+
 // getEpochForBlock 获取指定区块号的epoch信息
 func (d *DPoS) getEpochForBlock(blockNumber uint64) *epochMetadata {
 	// 修改：基于指定区块号计算epoch
