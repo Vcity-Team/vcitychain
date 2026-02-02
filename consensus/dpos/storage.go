@@ -93,9 +93,11 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 
 	// 创建 StakeInfo（不再依赖 VoterInfo）
 	now := uint64(time.Now().Unix())
+	amountCopy := new(big.Int).Set(amount)
 	stakeInfo := &StakeInfo{
 		Staker:         voter,
-		Amount:         new(big.Int).Set(amount),
+		Amount:         amountCopy,
+		OriginalAmount: new(big.Int).Set(amountCopy), // 当初的投票金额（撤销后仍可查询）
 		StartTime:      now,
 		EndTime:        now + d.config.VoteLockTime, // 锁定时间
 		IsLocked:       d.config.VoteLockTime > 0,
@@ -121,16 +123,16 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 		if delegateInfo, err := d.state.StakeStore.getDelegateInfo(candidate, dbTx); err == nil && delegateInfo != nil && delegateInfo.VotingPower != nil {
 			currentPower = new(big.Int).Set(delegateInfo.VotingPower)
 		}
-		
+
 		// 计算新的投票权重
 		newPower := new(big.Int).Add(currentPower, amount)
-		
+
 		// 更新 DelegateInfo 表
 		if err := d.updateVotingPowerInDatabaseWithTx(candidate, newPower, dbTx); err != nil {
 			d.logger.Error("❌ 更新 DelegateInfo 失败", "error", err)
 			return fmt.Errorf("failed to update delegate info: %w", err)
 		}
-		
+
 		d.logger.Info("✅ DelegateInfo 已更新",
 			"delegate", candidate.String(),
 			"oldPower", currentPower.String(),
@@ -831,7 +833,7 @@ func (d *DPoS) CreateGenesisVotesForAllValidators(blockNumber uint64) error {
 		d.logger.Error("❌ 无法获取根账户地址：GenesisRootAccount未配置（应在Initialize时从创世文件alloc中读取）")
 		return fmt.Errorf("root account address not found: GenesisRootAccount not configured")
 	}
-	
+
 	// 从配置读取投票金额（使用 dpos_delegate_threshold）
 	voteAmount := d.getDelegateThreshold()
 

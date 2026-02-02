@@ -731,8 +731,11 @@ func (d *DPoS) processUnvote(voter types.Address, candidate types.Address) error
 				// 更新 StakeInfo：将相关记录的 Amount 设置为 0（保持 IsActive = true）
 				updatedCount := 0
 				for _, stakeInfo := range matchingStakes {
-					// 将 Amount 设置为 0（保持 IsActive = true，OriginalAmount 保留原始金额）
+					// 将 Amount 设置为 0（保持 IsActive = true）；撤销前把当前金额写入 OriginalAmount，便于查询「当初投票多少」
 					oldAmount := new(big.Int).Set(stakeInfo.Amount)
+					if stakeInfo.OriginalAmount == nil && oldAmount.Sign() > 0 {
+						stakeInfo.OriginalAmount = new(big.Int).Set(oldAmount)
+					}
 					stakeInfo.Amount = big.NewInt(0)
 					// 保存更新后的记录
 					if err := d.state.StakeStore.setStakingInfo(voter, stakeInfo, stakeInfo.StartTime, dbTx); err == nil {

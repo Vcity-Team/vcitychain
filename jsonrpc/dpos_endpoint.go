@@ -125,16 +125,18 @@ type VoteRecordRequest struct {
 
 // VoteRecord is a single raw vote / stake record exposed via RPC
 type VoteRecord struct {
-	Voter          string `json:"voter"`
-	Delegate       string `json:"delegate"`
-	AmountWei      string `json:"amountWei"`
-	AmountEther    string `json:"amountEther"`
-	StartTime      uint64 `json:"startTime"`
-	EndTime        uint64 `json:"endTime"`
-	IsLocked       bool   `json:"isLocked"`
-	IsActive       bool   `json:"isActive"`
-	Applied        bool   `json:"applied"`
-	EffectiveEpoch uint64 `json:"effectiveEpoch"`
+	Voter               string `json:"voter"`
+	Delegate            string `json:"delegate"`
+	AmountWei           string `json:"amountWei"`
+	AmountEther         string `json:"amountEther"`
+	OriginalAmountWei   string `json:"originalAmountWei,omitempty"`   // 撤销前当初的投票金额（仅当已撤销即 amount=0 时有值）
+	OriginalAmountEther string `json:"originalAmountEther,omitempty"` // 同上，ETH 展示
+	StartTime           uint64 `json:"startTime"`
+	EndTime             uint64 `json:"endTime"`
+	IsLocked            bool   `json:"isLocked"`
+	IsActive            bool   `json:"isActive"`
+	Applied             bool   `json:"applied"`
+	EffectiveEpoch      uint64 `json:"effectiveEpoch"`
 }
 
 // NewDPOS creates a new DPOS endpoint
@@ -2256,6 +2258,11 @@ func (d *DPOS) GetVoteRecords(ctx context.Context, params interface{}) (interfac
 			IsActive:       s.IsActive,
 			Applied:        s.Applied,
 			EffectiveEpoch: s.EffectiveEpoch,
+		}
+		// 已撤销的投票（Amount=0）：返回当初的投票金额，便于展示「当初投票多少」
+		if s.OriginalAmount != nil && s.OriginalAmount.Sign() > 0 {
+			rec.OriginalAmountWei = s.OriginalAmount.String()
+			rec.OriginalAmountEther = formatEther(s.OriginalAmount)
 		}
 		records = append(records, rec)
 	}
