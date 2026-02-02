@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"math/big"
-	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -99,17 +98,17 @@ type Extra struct {
 type VoterRewardDetail struct {
 	VoterAddress     string   `json:"voterAddress"`     // 投票者地址
 	ValidatorAddress string   `json:"validatorAddress"` // 验证者地址
-	Amount           *big.Int `json:"amount"`          // 奖励金额
-	VoteWeight       *big.Int `json:"voteWeight"`     // 投票权重
+	Amount           *big.Int `json:"amount"`           // 奖励金额
+	VoteWeight       *big.Int `json:"voteWeight"`       // 投票权重
 }
 
 // RewardDistributionInfo 奖励分配信息
 type RewardDistributionInfo struct {
-	EpochNumber  uint64                `json:"epochNumber"`
-	Rewards      map[string]*big.Int   `json:"rewards"`      // 地址 -> 奖励金额（聚合值，用于状态更新）
-	VoterRewards []*VoterRewardDetail  `json:"voterRewards"` // 验证者-投票者奖励列表，用于记录到数据库
-	TotalReward  *big.Int              `json:"totalReward"`
-	Timestamp    uint64                `json:"timestamp"`
+	EpochNumber  uint64               `json:"epochNumber"`
+	Rewards      map[string]*big.Int  `json:"rewards"`      // 地址 -> 奖励金额（聚合值，用于状态更新）
+	VoterRewards []*VoterRewardDetail `json:"voterRewards"` // 验证者-投票者奖励列表，用于记录到数据库
+	TotalReward  *big.Int             `json:"totalReward"`
+	Timestamp    uint64               `json:"timestamp"`
 }
 
 // SlashingInfo 故障消减信息（只包含 missed blocks 的消减，不包含双重签名）
@@ -915,14 +914,11 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 	}
 
 	if err := i.Committed.Verify(blockNumber, validators, checkpointHash, domain, logger); err != nil {
-		logger.Error("🚨 区块签名验证失败，程序将退出",
+		logger.Error("区块签名验证失败，返回错误由上层处理",
 			"blockNumber", blockNumber,
 			"proposalHash", checkpointHash.String(),
 			"error", err)
-
-		// 区块验证失败时直接退出程序
-		logger.Error("💀 区块验证失败，程序退出")
-		os.Exit(1)
+		return fmt.Errorf("block signature verification failed for block %d: %w", blockNumber, err)
 	}
 	parentExtra, err := GetDposExtra(parent.ExtraData)
 	if err != nil {
@@ -2254,13 +2250,10 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 			}
 		}
 
-		logger.Error("🚨 BLS签名验证失败，程序将退出",
+		logger.Error("BLS签名验证失败，返回错误由上层处理",
 			"blockNumber", blockNumber,
 			"reason", "BLS signature verification failed")
-
-		// 区块验证失败时直接退出程序
-		logger.Error("💀 区块验证失败，程序退出")
-		os.Exit(1)
+		return fmt.Errorf("BLS signature verification failed for block %d", blockNumber)
 	}
 
 	return nil

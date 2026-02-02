@@ -2,7 +2,6 @@ package dpos
 
 import (
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -33,16 +32,16 @@ func NewBlockScheduler(
 	blockchain BlockchainInterface,
 	consensusSwitchHeight uint64,
 	logger hclog.Logger,
-) *BlockScheduler {
+) (*BlockScheduler, error) {
 	var genesisTime time.Time
 	if blockchain == nil {
 		logger.Error("❌ 区块链实例不可用，无法初始化BlockScheduler")
-		os.Exit(1)
+		return nil, fmt.Errorf("blockchain instance is nil, cannot initialize BlockScheduler")
 	}
 
 	if consensusSwitchHeight <= 0 {
 		logger.Error("❌ 共识切换高度未配置或为0，无法初始化BlockScheduler", "consensusSwitchHeight", consensusSwitchHeight)
-		os.Exit(1)
+		return nil, fmt.Errorf("consensus switch height is not configured or is 0 (got %d)", consensusSwitchHeight)
 	}
 
 	// 使用父区块（consensusSwitchHeight - 1）的时间戳作为genesisTime
@@ -52,7 +51,7 @@ func NewBlockScheduler(
 		logger.Error("❌ 无法获取创世时间-共识切换高度父区块的区块头的时间戳作为genesisTime",
 			"consensusSwitchHeight", consensusSwitchHeight,
 			"parentHeight", parentHeight)
-		os.Exit(1)
+		return nil, fmt.Errorf("cannot get parent block header at height %d for genesis time (consensus switch height %d)", parentHeight, consensusSwitchHeight)
 	} else {
 		// 使用父区块的时间戳作为genesisTime
 		genesisTime = time.Unix(int64(parentHeader.Timestamp), 0)
@@ -71,7 +70,7 @@ func NewBlockScheduler(
 		consensusSwitchHeight: consensusSwitchHeight,
 		logger:                logger,
 		lastLogTime:           make(map[string]time.Time),
-	}
+	}, nil
 }
 
 // ShouldProduceBlockNow 检查指定地址在当前slot是否应该出块
@@ -272,7 +271,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			if dposInstance != nil && dposInstance.config != nil && dposInstance.config.ConsensusSwitchHeight > 0 {
 				isBeforeConsensusSwitch = currentBlock.Number < dposInstance.config.ConsensusSwitchHeight
 			}
-			
+
 			if isBeforeConsensusSwitch {
 				// 在共识切换高度之前，验证者集合为空是正常的
 				r.logOnceWithInterval("should_produce_validators_empty_before_switch", 30*time.Second, "debug",

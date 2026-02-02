@@ -188,7 +188,7 @@ func (b *BlockBuilder) WriteTx(tx *types.Transaction) error {
 // 完全对标以太坊：批量打包多笔交易，使用当前区块状态检查nonce
 // 修复：不要每次都调用Prepare()，而是使用当前构建区块的状态来检查nonce
 // 这样可以在一个区块中打包多笔交易，类似以太坊
-func (b *BlockBuilder) Fill() {
+func (b *BlockBuilder) Fill() error {
 	// 只在开始时调用一次Prepare()，初始化executables队列
 	b.params.TxPool.Prepare()
 
@@ -227,7 +227,7 @@ func (b *BlockBuilder) Fill() {
 					"blockNumber", blockNumber,
 					"txCount", txCount,
 					"skippedCount", skippedCount)
-				return
+				return nil
 			}
 		}
 
@@ -269,12 +269,12 @@ func (b *BlockBuilder) Fill() {
 		// writeTxPoolTransaction内部会调用Pop()，所以这里不需要再次调用
 		finished, err := b.writeTxPoolTransaction(tx)
 		if err != nil {
-			b.params.Logger.Error("💀 交易填充失败，程序将立即退出",
+			b.params.Logger.Error("交易填充失败，返回错误由上层处理",
 				"txHash", tx.Hash.String(),
 				"nonce", tx.Nonce,
 				"from", tx.From.String(),
 				"error", err)
-			os.Exit(1)
+			return err
 		}
 
 		// Performance optimization: Update nonce cache after successful transaction execution
@@ -292,7 +292,7 @@ func (b *BlockBuilder) Fill() {
 				"blockNumber", blockNumber,
 				"txCount", txCount,
 				"skippedCount", skippedCount)
-			return
+			return nil
 		}
 
 		// 修复：不再每次都调用Prepare()
@@ -323,15 +323,13 @@ func (b *BlockBuilder) writeTxPoolTransaction(tx *types.Transaction) (bool, erro
 
 			return false, err
 		} else {
-			// 不可恢复错误，退出程序
-			b.params.Logger.Error("💀 交易写入失败，程序将立即退出",
+			// 不可恢复错误，由上层决定是否退出
+			b.params.Logger.Error("交易写入失败，返回错误由上层处理",
 				"txHash", tx.Hash.String(),
 				"nonce", tx.Nonce,
 				"from", tx.From.String(),
 				"error", err)
-			os.Exit(1)
 			b.params.TxPool.Drop(tx)
-
 			return false, err
 		}
 	}
@@ -493,7 +491,10 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		}
 	}
 
-	builder.Fill()
+	if err := builder.Fill(); err != nil {
+		r.logger.Error("❌ buildBlock: 填充交易失败", "error", err)
+		return nil, err
+	}
 
 	// 检查填充后的交易数量
 	if blockBuilder, ok := builder.(interface {

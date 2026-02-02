@@ -266,8 +266,9 @@ func (m *blockBuilderMock) WriteTx(tx *types.Transaction) error {
 	return args.Error(0)
 }
 
-func (m *blockBuilderMock) Fill() {
+func (m *blockBuilderMock) Fill() error {
 	m.Called()
+	return nil
 }
 
 // Receipts returns the collection of transaction receipts for given block

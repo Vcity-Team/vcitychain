@@ -26,7 +26,7 @@ import (
 type blockBuilder interface {
 	Reset() error
 	WriteTx(*types.Transaction) error
-	Fill()
+	Fill() error
 	Build(func(h *types.Header)) (*types.FullBlock, error)
 	GetState() *state.Transition
 	Receipts() []*types.Receipt
@@ -154,7 +154,9 @@ func (f *fsm) BuildProposal(currentRound uint64) ([]byte, error) {
 	}
 
 	// fill the block with transactions
-	f.blockBuilder.Fill()
+	if err := f.blockBuilder.Fill(); err != nil {
+		return nil, err
+	}
 
 	if f.isEndOfEpoch {
 		nextValidators, err = nextValidators.ApplyDelta(f.newValidatorsDelta)

@@ -1,6 +1,7 @@
 package dpos
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/types"
@@ -60,13 +61,17 @@ func (d *DPoS) initializeEconomicSystem() error {
 	)
 
 	// 4. 🆕 初始化固定时间窗口调度器
-	d.blockScheduler = NewBlockScheduler(
+	scheduler, err := NewBlockScheduler(
 		d.config.BlockTime.Duration,
 		int(d.config.DPoSValidatorsCount),
 		d.config.Blockchain,            // 传入区块链接口（*blockchain.Blockchain实现了BlockchainInterface）
 		d.config.ConsensusSwitchHeight, // 传入共识切换高度
 		d.logger.Named("block_scheduler"),
 	)
+	if err != nil {
+		return fmt.Errorf("failed to create block scheduler: %w", err)
+	}
+	d.blockScheduler = scheduler
 
 	// 将调度器同步到 runtime 配置，避免运行时为 nil
 	if d.runtime != nil && d.runtime.config != nil {
