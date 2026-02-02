@@ -158,6 +158,15 @@ func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 	if !found {
 		voter.VotedDelegates = append(voter.VotedDelegates, vote.Delegate)
 	}
+	// 更新 DelegateVotes 便于边界应用时持久化 VoterInfo
+	if voter.DelegateVotes == nil {
+		voter.DelegateVotes = make(map[types.Address]*big.Int)
+	}
+	if prev := voter.DelegateVotes[vote.Delegate]; prev != nil {
+		voter.DelegateVotes[vote.Delegate] = new(big.Int).Add(prev, vote.Amount)
+	} else {
+		voter.DelegateVotes[vote.Delegate] = new(big.Int).Set(vote.Amount)
+	}
 
 	// 7. 更新受托人的投票权重
 	d.logger.Debug("🔄 准备更新受托人投票权重",
@@ -456,23 +465,41 @@ func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error
 			continue
 		}
 
-		// ✅ 更新数据库中的 Applied 状态
+		// ✅ 更新数据库：StakeInfo.Applied + VoterInfo（边界应用后持久化，避免 DB 中 VoterInfo 长期不一致）
 		if d.state != nil && d.state.StakeStore != nil {
-			// 更新 StakeInfo 中的 Applied 字段
 			stakingInfos, err := d.state.StakeStore.GetStakingInfo()
 			if err == nil {
+				var foundStake *StakeInfo
 				for _, stakeInfo := range stakingInfos {
 					if stakeInfo.Staker == voteRecord.Voter &&
 						stakeInfo.Delegate == voteRecord.Delegate &&
 						stakeInfo.StartTime == voteRecord.Timestamp {
 						stakeInfo.Applied = true
-						// 保存更新后的 StakeInfo
-						dbTx, err := d.state.beginDBTransaction(true)
-						if err == nil {
-							d.state.StakeStore.setStakingInfo(voteRecord.Voter, stakeInfo, voteRecord.Timestamp, dbTx)
-							dbTx.Commit()
-						}
+						foundStake = stakeInfo
 						break
+					}
+				}
+				if foundStake != nil {
+					dbTx, err := d.state.beginDBTransaction(true)
+					if err != nil {
+						continue
+					}
+					if err := d.state.StakeStore.setStakingInfo(voteRecord.Voter, foundStake, voteRecord.Timestamp, dbTx); err != nil {
+						d.logger.Warn("⚠️ [边界应用投票] 保存 StakeInfo.Applied 失败", "error", err)
+						_ = dbTx.Rollback()
+						continue
+					}
+					if v, ok := d.voters[voteRecord.Voter]; ok && v != nil {
+						if err := d.state.StakeStore.setVoterInfo(voteRecord.Voter, v, dbTx); err != nil {
+							d.logger.Warn("⚠️ [边界应用投票] 保存 VoterInfo 失败", "error", err)
+							_ = dbTx.Rollback()
+							continue
+						}
+					}
+					if err := dbTx.Commit(); err != nil {
+						d.logger.Warn("⚠️ [边界应用投票] 提交事务失败", "error", err)
+						_ = dbTx.Rollback()
+						continue
 					}
 				}
 			}
@@ -579,7 +606,7 @@ func (d *DPoS) processUnvote(voter types.Address, candidate types.Address) error
 		stakeInfo.UnvoteEffectiveEpoch = currentEpoch
 		if err := d.state.StakeStore.setStakingInfo(voter, stakeInfo, stakeInfo.StartTime, dbTx); err != nil {
 			d.logger.Warn("⚠️ 保存 StakeInfo 待撤销标记失败", "error", err)
-			continue
+			return fmt.Errorf("failed to set staking info for unvote: %w", err)
 		}
 		updatedCount++
 	}
