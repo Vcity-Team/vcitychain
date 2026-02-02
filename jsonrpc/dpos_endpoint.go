@@ -1392,7 +1392,7 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interfa
 		d.logger.Warn("Failed to get validators", "error", err)
 		return map[string]interface{}{
 			"success": true,
-			"data":    []*dpos.StakeInfo{},
+			"data":    []interface{}{},
 		}, nil // 返回空列表而不是错误
 	}
 
@@ -1400,77 +1400,134 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interfa
 		d.logger.Warn("No validators found")
 		return map[string]interface{}{
 			"success": true,
-			"data":    []*dpos.StakeInfo{},
+			"data":    []interface{}{},
 		}, nil // 返回空列表
 	}
 
-	// 转换为StakeInfo格式，包含故障标志
-	result := make([]*dpos.StakeInfo, 0, len(validators))
-	for _, validator := range validators {
-		// 获取故障标志（需要访问DPoS引擎）
-		faultInfo := map[string]interface{}{}
+	// 获取当前 epoch，用于区分已生效/未生效
+	var currentEpoch uint64
+	if dposStore, ok := d.store.(interface {
+		GetDPoSEngine() interface{}
+	}); ok {
+		if dposEngine := dposStore.GetDPoSEngine(); dposEngine != nil {
+			if dpos, ok := dposEngine.(*dpos.DPoS); ok {
+				currentEpoch = dpos.GetCurrentEpochNumber()
+			}
+		}
+	}
 
-		// 通过store访问DPoS引擎获取故障信息
+	// 获取所有投票明细，按 delegate 汇总已生效/未生效金额
+	type delegateSums struct {
+		effective *big.Int
+		pending   *big.Int
+	}
+	delegateEffectivePending := make(map[string]*delegateSums)
+	var allStakes []*dpos.StakeInfo
+	if dposState, err2 := d.store.GetDPoSState(); err2 == nil && dposState != nil && dposState.StakeStore != nil {
+		allStakes, _ = dposState.StakeStore.GetStakingInfo()
+	}
+	if allStakes == nil {
+		allStakes, _ = d.store.GetStakingInfo()
+	}
+	weiPerEther := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+	formatEther := func(amount *big.Int) string {
+		if amount == nil || amount.Sign() == 0 {
+			return "0"
+		}
+		amountFloat := new(big.Float).SetInt(amount)
+		amountFloat.Quo(amountFloat, new(big.Float).SetInt(weiPerEther))
+		return amountFloat.Text('f', 6)
+	}
+	for _, s := range allStakes {
+		if s == nil {
+			continue
+		}
+		key := s.Delegate.String()
+		if delegateEffectivePending[key] == nil {
+			delegateEffectivePending[key] = &delegateSums{effective: big.NewInt(0), pending: big.NewInt(0)}
+		}
+		amount := big.NewInt(0)
+		if s.Amount != nil {
+			amount = new(big.Int).Set(s.Amount)
+		}
+		effective := s.Applied && (s.EffectiveEpoch == 0 || s.EffectiveEpoch <= currentEpoch)
+		if effective {
+			delegateEffectivePending[key].effective.Add(delegateEffectivePending[key].effective, amount)
+		} else {
+			delegateEffectivePending[key].pending.Add(delegateEffectivePending[key].pending, amount)
+		}
+	}
+
+	// 转换为带已生效/未生效的 map 列表，便于 CLI 和前端展示
+	result := make([]map[string]interface{}, 0, len(validators))
+	for _, v := range validators {
+		faultInfo := map[string]interface{}{}
 		if dposStore, ok := d.store.(interface {
 			GetDPoSEngine() interface{}
 		}); ok {
 			if dposEngine := dposStore.GetDPoSEngine(); dposEngine != nil {
 				if dpos, ok := dposEngine.(*dpos.DPoS); ok {
-					faultInfo = dpos.GetValidatorFaultInfo(validator.Address)
+					faultInfo = dpos.GetValidatorFaultInfo(v.Address)
 				}
 			}
 		}
 
-		stakingInfo := &dpos.StakeInfo{
-			Staker:    validator.Address,
-			Amount:    new(big.Int).Set(validator.VotingPower),
-			IsActive:  validator.IsActive,
-			FaultFlag: faultInfo, // 添加故障标志
+		totalAmount := new(big.Int).Set(v.VotingPower)
+		key := v.Address.String()
+		effSum := big.NewInt(0)
+		pendingSum := big.NewInt(0)
+		if sums, ok := delegateEffectivePending[key]; ok {
+			effSum = sums.effective
+			pendingSum = sums.pending
 		}
 
-		// 🆕 尝试从StakeStore获取累计奖励
-		// 逻辑说明：
-		// 1. 优先从StakeStore读取（如果迁移已完成，这里应该有值）
-		// 2. 如果为nil/0，且RewardStore中有该地址的奖励记录，说明可能是迁移未完成，使用fallback
-		// 3. 如果为nil/0，且RewardStore中也没有记录，说明该地址确实没有奖励
+		entry := map[string]interface{}{
+			"staker":               v.Address.String(),
+			"amount":               totalAmount.String(),
+			"amountEther":          formatEther(totalAmount),
+			"effectiveAmountWei":   effSum.String(),
+			"effectiveAmountEther": formatEther(effSum),
+			"pendingAmountWei":     pendingSum.String(),
+			"pendingAmountEther":   formatEther(pendingSum),
+			"isActive":             v.IsActive,
+			"faultFlag":            faultInfo,
+		}
+
+		// 累计奖励（与原先逻辑一致）
 		if dposState, err2 := d.store.GetDPoSState(); err2 == nil && dposState != nil {
+			var rewards *big.Int
 			if dposState.StakeStore != nil {
-				// 从StakeStore读取StakeInfo（可能包含累计奖励）
 				if stakingInfos, err := dposState.StakeStore.GetStakingInfo(); err == nil {
 					for _, si := range stakingInfos {
-						if si.Staker == validator.Address {
-							if si.Rewards != nil && si.Rewards.Sign() > 0 {
-								stakingInfo.Rewards = new(big.Int).Set(si.Rewards)
-								break
-							}
+						if si.Staker == v.Address && si.Rewards != nil && si.Rewards.Sign() > 0 {
+							rewards = new(big.Int).Set(si.Rewards)
+							break
 						}
 					}
 				}
 			}
-
-			// Fallback：如果StakeInfo.Rewards为nil/0，尝试从RewardStore实时计算
-			// 这种情况可能发生在：
-			// 1. 迁移未完成（首次运行）
-			// 2. 迁移后新增的奖励（但updateStakeInfoCumulativeReward应该已经更新了）
-			// 3. 该地址确实没有奖励（GetRewardSummary会返回0，不会设置）
-			if stakingInfo.Rewards == nil || stakingInfo.Rewards.Sign() == 0 {
+			if rewards == nil || rewards.Sign() == 0 {
 				if dposState.RewardStore != nil {
-					summary, err := dposState.RewardStore.GetRewardSummary(validator.Address.String(), 1, 999999)
+					summary, err := dposState.RewardStore.GetRewardSummary(v.Address.String(), 1, 999999)
 					if err == nil && summary != nil && summary.TotalRewardWei != "" && summary.TotalRewardWei != "0" {
 						if totalReward, ok := new(big.Int).SetString(summary.TotalRewardWei, 10); ok {
-							stakingInfo.Rewards = totalReward
+							rewards = totalReward
 						}
 					}
 				}
+			}
+			if rewards != nil && rewards.Sign() > 0 {
+				entry["rewards"] = rewards.String()
 			}
 		}
 
-		result = append(result, stakingInfo)
+		result = append(result, entry)
 	}
 
 	return map[string]interface{}{
-		"success": true,
-		"data":    result,
+		"success":      true,
+		"data":         result,
+		"currentEpoch": currentEpoch,
 	}, nil
 }
 

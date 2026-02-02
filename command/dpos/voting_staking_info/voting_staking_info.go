@@ -160,6 +160,14 @@ func (r *VotingStakingInfoResult) GetOutput() string {
 				}
 			}
 
+			// 已生效/未生效金额（与 dpos_getValidatorVotingDetails 一致）
+			if effectiveEther, ok := stakingMap["effectiveAmountEther"]; ok {
+				output += fmt.Sprintf("   Effective: %v ETH\n", effectiveEther)
+			}
+			if pendingEther, ok := stakingMap["pendingAmountEther"]; ok {
+				output += fmt.Sprintf("   Pending:   %v ETH\n", pendingEther)
+			}
+
 			output += fmt.Sprintf("   Active: %v\n", stakingMap["isActive"])
 
 			// 显示故障标志信息
@@ -494,12 +502,12 @@ func parseVotingStakingInfoResult(result interface{}) (*VotingStakingInfoResult,
 		// 检查是否是 dpos_getStakingInfo 返回的格式：{"success": true, "data": [...]}
 		if success, exists := resultMap["success"]; exists {
 			successBool, _ := success.(bool)
-			
+
 			// 检查是否有 "data" 字段（dpos_getStakingInfo 的返回格式）
 			if dataField, dataExists := resultMap["data"]; dataExists {
 				// 这是 dpos_getStakingInfo 的返回格式：{"success": true, "data": [...]}
 				var stakingInfo []map[string]interface{}
-				
+
 				if dataList, ok := dataField.([]interface{}); ok {
 					// 转换为 []map[string]interface{}
 					stakingInfo = make([]map[string]interface{}, 0)
@@ -509,7 +517,7 @@ func parseVotingStakingInfoResult(result interface{}) (*VotingStakingInfoResult,
 						}
 					}
 				}
-				
+
 				return &VotingStakingInfoResult{
 					Success: successBool,
 					NetworkStats: map[string]interface{}{
@@ -522,7 +530,7 @@ func parseVotingStakingInfoResult(result interface{}) (*VotingStakingInfoResult,
 					BlockHeight: 0, // 会在 runCommand 中更新
 				}, nil
 			}
-			
+
 			// 检查是否是完整的 VotingStakingInfoResult 格式
 			// It's already in the right format, convert it
 			networkStats, _ := resultMap["networkStats"].(map[string]interface{})
