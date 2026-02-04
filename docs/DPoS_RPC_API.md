@@ -33,8 +33,6 @@
 **对象格式支持说明（与代码一致）**  
 - **仅支持对象格式、不支持数组**：`dpos_registerDelegate`（必须传 `{ registrant, name, website, description, privateKey, ... }`）。
 - **不支持对象格式、仅支持数组或字符串**（实现中未解析 `map[string]interface{}`）：
-  - `dpos_voteByAddress`：`[address]` 或 `"address"`；
-  - `dpos_getVoteByHash`：`[txHash]` 或 `"txHash"`；
   - `dpos_getVoterRewardByValidator`：`[voterAddress, validatorAddress, fromEpoch, toEpoch]`；
   - `dpos_getStakingInfo`：`[]` 或 `[blockNumber]`（按位置）；
   - `dpos_getEpochInfoByNumber`：`[epochNumber]`（按位置）；
@@ -504,118 +502,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-### 9. dpos_voteByAddress
-
-**功能说明**  
-根据地址查询该地址是否有投票/质押信息；若有则返回成功及简要说明。
-
-**RPC 方法**  
-`dpos_voteByAddress`
-
-**请求参数**
-
-- 字符串：`"0x..."`
-- 数组：`["0x..."]`
-
-| 参数名  | 类型   | 必填 | 说明 |
-|------------------------|----------|------|--------------------------------------------------------------------------------|
-| address | string | 是   | 投票者/验证者地址 |
-
-**返回结果（成功）**
-
-```json
-{
-  "success": true,
-  "message": "Address 0x... is a validator/staker with amount 1000000000000000000",
-  "txHash": "",
-  "blockNumber": 0
-}
-```
-
-**返回结果（失败）**
-
-```json
-{
-  "success": false,
-  "error": "address 0x... has no voting/staking information"
-}
-```
-
-**返回字段说明**
-
-| 字段名      | 类型   | 说明（中文） |
-|------------------------|----------|--------------------------------------------------------------------------------|
-| success     | boolean | 是否成功 |
-| message     | string | 成功时的说明（含地址与金额） |
-| txHash      | string | 查询操作无交易，为空 |
-| blockNumber | number | 查询操作无区块，为 0 |
-| error       | string | 失败时的错误信息 |
-
-**调用示例**
-
-```bash
-curl -X POST http://localhost:8545 \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"dpos_voteByAddress","params":["0x8f2728e24F8e85e7F4A85616c3CBa3bB14c34127"],"id":1}'
-```
-
----
-
-### 10. dpos_getVoteByHash
-
-**功能说明**  
-根据交易哈希查询单笔投票信息。
-
-**RPC 方法**  
-`dpos_getVoteByHash`
-
-**请求参数**
-
-- 字符串：`"0x..."`
-- 数组：`["0x..."]`
-
-| 参数名  | 类型   | 必填 | 说明 |
-|------------------------|----------|------|--------------------------------------------------------------------------------|
-| txHash  | string | 是   | 投票交易哈希 |
-
-**返回结果**
-
-```json
-{
-  "success": true,
-  "txHash": "0x...",
-  "voter": "0x...",
-  "candidate": "0x...",
-  "amountWei": "1000000000000000000",
-  "amountEther": "1.000000",
-  "voteType": "DPoS Vote",
-  "timestamp": 1704067200
-}
-```
-
-**返回字段说明**
-
-| 字段名            | 类型   | 说明（中文） |
-|------------------------|----------|--------------------------------------------------------------------------------|
-| success           | boolean | 请求是否成功 |
-| txHash            | string | 交易哈希 |
-| voter             | string | 投票者地址（解析自交易） |
-| candidate         | string | 验证者地址（解析自交易） |
-| amountWei / amountEther | string | 投票金额（Wei / Ether 6 位小数） |
-| voteType          | string | 固定为 "DPoS Vote" |
-| timestamp         | number | Unix 时间戳 |
-
-**调用示例**
-
-```bash
-curl -X POST http://localhost:8545 \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"dpos_getVoteByHash","params":["0x2f773b9c6421f6506dadffee8fac82180bf3afcb2e9eea7287bf69979720a355"],"id":1}'
-```
-
----
-
-### 11. dpos_getVoteRecords
+### 9. dpos_getVoteRecords
 
 **功能说明**  
 查询投票/质押记录的明细列表，支持按投票者、被投票验证者过滤，按活跃/生效状态过滤，以及分页和排序。
@@ -706,7 +593,7 @@ curl -X POST https://testnet-rpc.vcity.app \
 
 ## 3 质押相关接口
 
-### 12. dpos_getStakingInfo
+### 10. dpos_getStakingInfo
 
 **功能说明**  
 获取质押信息（验证者列表及各自质押状态）。
@@ -784,7 +671,7 @@ curl -X POST http://localhost:8545 \
 
 ## 4 验证者相关接口
 
-### 13. dpos_getVotingPower
+### 11. dpos_getVotingPower
 
 **功能说明**  
 获取指定验证者的投票权重（总得票）。
@@ -835,7 +722,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-### 14. dpos_getValidatorVotingDetails
+### 12. dpos_getValidatorVotingDetails
 
 **功能说明**  
 查询指定验证者（或任意地址）的投票/质押汇总：该地址收到的投票（别人投给我）、该地址投出的投票（我投给别人）、投票权重、活跃状态等。
@@ -902,7 +789,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-### 15. dpos_registerDelegate
+### 13. dpos_registerDelegate
 
 **功能说明**  
 注册受托人（验证者）信息。
@@ -954,7 +841,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-### 16. dpos_getDelegateRegistrations
+### 14. dpos_getDelegateRegistrations
 
 **功能说明**  
 获取所有受托人注册信息。
@@ -999,7 +886,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-### 17. dpos_withdrawDelegate
+### 15. dpos_withdrawDelegate
 
 **功能说明**  
 撤销受托人注册。
@@ -1045,7 +932,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-### 18. dpos_canWithdrawDelegate
+### 16. dpos_canWithdrawDelegate
 
 **功能说明**  
 检查指定地址是否可以撤销受托人注册。
@@ -1091,7 +978,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-### 19. dpos_getFreezeInfo
+### 17. dpos_getFreezeInfo
 
 **功能说明**  
 获取验证者冻结信息。
@@ -1143,7 +1030,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-### 20. dpos_getValidatorCommission
+### 18. dpos_getValidatorCommission
 
 **功能说明**  
 获取验证者佣金率。
@@ -1191,7 +1078,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-### 21. dpos_updateCommission
+### 19. dpos_updateCommission
 
 **功能说明**  
 更新验证者佣金率。
@@ -1242,7 +1129,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-### 22. dpos_getVoterSlashingHistory
+### 20. dpos_getVoterSlashingHistory
 
 **功能说明**  
 获取投票者惩罚（slash）历史。
@@ -1298,7 +1185,7 @@ curl -X POST http://localhost:8545 \
 
 ## 5 Epoch 相关接口
 
-### 23. dpos_getCurrentEpochInfo
+### 21. dpos_getCurrentEpochInfo
 
 **功能说明**  
 获取当前 Epoch 信息。
@@ -1344,7 +1231,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-### 24. dpos_getEpochInfoByNumber
+### 22. dpos_getEpochInfoByNumber
 
 **功能说明**  
 获取指定 Epoch 信息。
@@ -1374,7 +1261,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-### 25. dpos_getLatestEpochInfo
+### 23. dpos_getLatestEpochInfo
 
 **功能说明**  
 获取最新 Epoch 信息（与 dpos_getCurrentEpochInfo 相同）。
@@ -1400,7 +1287,7 @@ curl -X POST http://localhost:8545 \
 
 ## 6 奖励相关接口
 
-### 26. dpos_getEpochRewardDetails
+### 24. dpos_getEpochRewardDetails
 
 **功能说明**  
 获取指定 Epoch 的奖励详情（内部使用）。
@@ -1443,7 +1330,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-### 27. dpos_getRewardHistory
+### 25. dpos_getRewardHistory
 
 **功能说明**  
 获取指定地址在指定 Epoch 区间内的奖励汇总与明细（通用接口）。
@@ -1506,7 +1393,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-### 28. dpos_getValidatorRewardsInfo
+### 26. dpos_getValidatorRewardsInfo
 
 **功能说明**  
 获取验证者奖励与出块信息汇总（实时计算，含未发放；内部/调试用）。
@@ -1551,7 +1438,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-### 29. dpos_getEpochRangeRewardDetails
+### 27. dpos_getEpochRangeRewardDetails
 
 **功能说明**  
 查询指定 Epoch 范围内所有奖励详情记录（dpos 界面调用）。
@@ -1606,7 +1493,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-### 30. dpos_getVoterRewardByValidator
+### 28. dpos_getVoterRewardByValidator
 
 **功能说明**  
 查询指定投票者在指定验证者处、在给定 Epoch 区间内获得的投票者奖励总额与明细。
@@ -1685,7 +1572,7 @@ curl -X POST https://testnet-rpc.vcity.app \
 
 ## 7 区块生产者相关接口
 
-### 31. dpos_getBlockProducers
+### 29. dpos_getBlockProducers
 
 **功能说明**  
 获取指定区块范围或 Epoch 内的区块生产者及出块分布。
@@ -1741,7 +1628,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-### 32. dpos_getValidatorBlockStats
+### 30. dpos_getValidatorBlockStats
 
 **功能说明**  
 获取指定验证者在指定 Epoch 内的出块统计信息。
@@ -1793,7 +1680,7 @@ curl -X POST http://localhost:8545 \
 
 ## 8 区块削减相关接口
 
-### 33. dpos_getValidatorSlashingHistory
+### 31. dpos_getValidatorSlashingHistory
 
 **功能说明**  
 获取指定验证者的所有削减历史记录（聚合该验证者下所有投票者的削减）。
@@ -1853,7 +1740,7 @@ curl -X POST http://127.0.0.1:8545 \
 
 ## 9 其他查询接口
 
-### 34. dpos_getConsensusState
+### 32. dpos_getConsensusState
 
 **功能说明**  
 获取当前共识状态（轮次、当前出块验证者等）。
@@ -1894,7 +1781,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-### 35. dpos_getAccountBalance
+### 33. dpos_getAccountBalance
 
 **功能说明**  
 获取账户余额。
@@ -1938,7 +1825,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-### 36. dpos_getConsensusSwitchHeight
+### 34. dpos_getConsensusSwitchHeight
 
 **功能说明**  
 获取共识切换高度（DPoS 生效的区块高度）及当前区块高度、是否已切换等信息。
@@ -1983,7 +1870,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-### 37. dpos_getValidatorsFromBlockExtraData
+### 35. dpos_getValidatorsFromBlockExtraData
 
 **功能说明**  
 从指定区块头的 ExtraData 中解析并返回该区块的验证者集合（地址、投票权重、是否活跃）。
@@ -2040,7 +1927,7 @@ curl -X POST http://localhost:8545 \
 
 ---
 
-## 接口索引（共 37 个）
+## 接口索引（共 35 个）
 
 | 序号 | RPC 方法 | 分类 |
 |------|----------|------|
@@ -2052,34 +1939,32 @@ curl -X POST http://localhost:8545 \
 | 6 | dpos_getVotableCurrentParameters | 1 治理 |
 | 7 | dpos_executeParameterUpdate | 1 治理 |
 | 8 | dpos_vote | 2 投票 |
-| 9 | dpos_voteByAddress | 2 投票 |
-| 10 | dpos_getVoteByHash | 2 投票 |
-| 11 | dpos_getVoteRecords | 2 投票 |
-| 12 | dpos_getStakingInfo | 3 质押 |
-| 13 | dpos_getVotingPower | 4 验证者 |
-| 14 | dpos_getValidatorVotingDetails | 4 验证者 |
-| 15 | dpos_registerDelegate | 4 验证者 |
-| 16 | dpos_getDelegateRegistrations | 4 验证者 |
-| 17 | dpos_withdrawDelegate | 4 验证者 |
-| 18 | dpos_canWithdrawDelegate | 4 验证者 |
-| 19 | dpos_getFreezeInfo | 4 验证者 |
-| 20 | dpos_getValidatorCommission | 4 验证者 |
-| 21 | dpos_updateCommission | 4 验证者 |
-| 22 | dpos_getVoterSlashingHistory | 4 验证者 |
-| 23 | dpos_getCurrentEpochInfo | 5 Epoch |
-| 24 | dpos_getEpochInfoByNumber | 5 Epoch |
-| 25 | dpos_getLatestEpochInfo | 5 Epoch |
-| 26 | dpos_getEpochRewardDetails | 6 奖励 |
-| 27 | dpos_getRewardHistory | 6 奖励 |
-| 28 | dpos_getValidatorRewardsInfo | 6 奖励 |
-| 29 | dpos_getEpochRangeRewardDetails | 6 奖励 |
-| 30 | dpos_getVoterRewardByValidator | 6 奖励 |
-| 31 | dpos_getBlockProducers | 7 区块生产者 |
-| 32 | dpos_getValidatorBlockStats | 7 区块生产者 |
-| 33 | dpos_getValidatorSlashingHistory | 8 区块削减 |
-| 34 | dpos_getConsensusState | 9 其他 |
-| 35 | dpos_getAccountBalance | 9 其他 |
-| 36 | dpos_getConsensusSwitchHeight | 9 其他 |
-| 37 | dpos_getValidatorsFromBlockExtraData | 9 其他 |
+| 9 | dpos_getVoteRecords | 2 投票 |
+| 10 | dpos_getStakingInfo | 3 质押 |
+| 11 | dpos_getVotingPower | 4 验证者 |
+| 12 | dpos_getValidatorVotingDetails | 4 验证者 |
+| 13 | dpos_registerDelegate | 4 验证者 |
+| 14 | dpos_getDelegateRegistrations | 4 验证者 |
+| 15 | dpos_withdrawDelegate | 4 验证者 |
+| 16 | dpos_canWithdrawDelegate | 4 验证者 |
+| 17 | dpos_getFreezeInfo | 4 验证者 |
+| 18 | dpos_getValidatorCommission | 4 验证者 |
+| 19 | dpos_updateCommission | 4 验证者 |
+| 20 | dpos_getVoterSlashingHistory | 4 验证者 |
+| 21 | dpos_getCurrentEpochInfo | 5 Epoch |
+| 22 | dpos_getEpochInfoByNumber | 5 Epoch |
+| 23 | dpos_getLatestEpochInfo | 5 Epoch |
+| 24 | dpos_getEpochRewardDetails | 6 奖励 |
+| 25 | dpos_getRewardHistory | 6 奖励 |
+| 26 | dpos_getValidatorRewardsInfo | 6 奖励 |
+| 27 | dpos_getEpochRangeRewardDetails | 6 奖励 |
+| 28 | dpos_getVoterRewardByValidator | 6 奖励 |
+| 29 | dpos_getBlockProducers | 7 区块生产者 |
+| 30 | dpos_getValidatorBlockStats | 7 区块生产者 |
+| 31 | dpos_getValidatorSlashingHistory | 8 区块削减 |
+| 32 | dpos_getConsensusState | 9 其他 |
+| 33 | dpos_getAccountBalance | 9 其他 |
+| 34 | dpos_getConsensusSwitchHeight | 9 其他 |
+| 35 | dpos_getValidatorsFromBlockExtraData | 9 其他 |
 
-说明：接口数量以 `jsonrpc/dpos_endpoint.go` 中 *DPOS 的导出方法为准，共 37 个。
+说明：接口数量以 `jsonrpc/dpos_endpoint.go` 中 *DPOS 的导出方法为准，共 35 个。
