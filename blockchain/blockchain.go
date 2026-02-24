@@ -926,11 +926,6 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 	//    但为了保持一致性，也调用 DPoS.OnBlockInserted（它内部会调用 txPool.ResetWithHeaders）
 	//    DPoS.OnBlockInserted 内部会调用 consensusRuntime.OnBlockInserted，后者有重复处理保护机制
 	//    （lastBuiltBlock.Number >= fullBlock.Block.Number()），所以不会重复处理
-	b.logger.Debug("🔵 [blockchain.WriteFullBlock] 检查是否需要调用 OnBlockInserted",
-		"blockNumber", header.Number,
-		"source", source,
-		"consensusType", fmt.Sprintf("%T", b.consensus),
-		"consensusIsNil", b.consensus == nil)
 
 	// 使用接口类型断言来避免循环依赖
 	// 定义本地接口来避免导入 dpos 包
@@ -938,21 +933,8 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 		OnBlockInserted(fullBlock *types.FullBlock)
 	}
 
-	b.logger.Debug("🔵 [blockchain.WriteFullBlock] 开始类型断言，检查共识是否支持 OnBlockInserted",
-		"blockNumber", header.Number,
-		"source", source,
-		"consensusType", fmt.Sprintf("%T", b.consensus))
-
 	if blockInsertedHandler, ok := b.consensus.(onBlockInsertedInterface); ok && blockInsertedHandler != nil {
-		b.logger.Debug("🔵 [blockchain.WriteFullBlock] 类型断言成功，调用共识 OnBlockInserted",
-			"blockNumber", header.Number,
-			"blockHash", header.Hash.String()[:16],
-			"source", source,
-			"consensusType", fmt.Sprintf("%T", b.consensus))
 		blockInsertedHandler.OnBlockInserted(fblock)
-		b.logger.Debug("🔵 [blockchain.WriteFullBlock] OnBlockInserted 调用完成",
-			"blockNumber", header.Number,
-			"source", source)
 	}
 	// 判断区块类型：空块、交易块、mix块
 	txCount := len(block.Transactions)

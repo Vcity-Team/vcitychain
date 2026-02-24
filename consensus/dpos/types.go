@@ -144,9 +144,12 @@ type StakeInfo struct {
 	Delegate        types.Address          `json:"delegate"`
 	FaultFlag       map[string]interface{} `json:"faultFlag,omitempty"`       // 故障标志信息：isFaulty, missedBlocks, reason
 	SlashingRecords []*SlashingRecord      `json:"slashingRecords,omitempty"` // 削减历史（按时间顺序）
-	// 新增：边界应用相关字段
-	EffectiveEpoch  uint64 `json:"effectiveEpoch,omitempty"` // 生效的epoch（边界应用）
-	Applied         bool   `json:"applied,omitempty"`         // 是否已应用
+
+	EffectiveEpoch uint64 `json:"effectiveEpoch,omitempty"` // 生效的epoch（边界应用）
+	Applied        bool   `json:"applied,omitempty"`        // 是否已应用
+
+	PendingUnvote        bool   `json:"pendingUnvote,omitempty"`        // 是否待撤销（边界生效，与投票一致避免权重突变导致分叉）
+	UnvoteEffectiveEpoch uint64 `json:"unvoteEffectiveEpoch,omitempty"` // 撤销生效的 epoch
 }
 
 // 参数表决相关数据结构
@@ -181,6 +184,7 @@ type DelegateRegistration struct {
 	TotalVotes   *big.Int      `json:"totalVotes"`   // 总投票数
 	IsActive     bool          `json:"isActive"`     // 是否为活跃受托人
 	LastVoteTime uint64        `json:"lastVoteTime"` // 最后投票时间
+	Rank         int           `json:"rank"`         // 排名（按 totalVotes 倒序排序后的序号，从1开始）
 	// 冻结相关字段
 	FrozenAt            uint64 `json:"frozenAt"`            // 冻结时间（注册时设置）
 	UnfreezeAt          uint64 `json:"unfreezeAt"`          // 解冻时间（退出时设置，0表示未解冻）

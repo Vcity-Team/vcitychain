@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"math/big"
-	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -94,12 +93,22 @@ type Extra struct {
 	SlashingInfo *SlashingInfo `json:"slashing_info,omitempty"`
 }
 
+// VoterRewardDetail 投票者奖励详情（包含验证者地址）
+// 注意：一个投票者可能投票给多个验证者，所以需要为每个验证者-投票者组合创建一条记录
+type VoterRewardDetail struct {
+	VoterAddress     string   `json:"voterAddress"`     // 投票者地址
+	ValidatorAddress string   `json:"validatorAddress"` // 验证者地址
+	Amount           *big.Int `json:"amount"`           // 奖励金额
+	VoteWeight       *big.Int `json:"voteWeight"`       // 投票权重
+}
+
 // RewardDistributionInfo 奖励分配信息
 type RewardDistributionInfo struct {
-	EpochNumber uint64              `json:"epochNumber"`
-	Rewards     map[string]*big.Int `json:"rewards"` // 地址 -> 奖励金额
-	TotalReward *big.Int            `json:"totalReward"`
-	Timestamp   uint64              `json:"timestamp"`
+	EpochNumber  uint64               `json:"epochNumber"`
+	Rewards      map[string]*big.Int  `json:"rewards"`      // 地址 -> 奖励金额（聚合值，用于状态更新）
+	VoterRewards []*VoterRewardDetail `json:"voterRewards"` // 验证者-投票者奖励列表，用于记录到数据库
+	TotalReward  *big.Int             `json:"totalReward"`
+	Timestamp    uint64               `json:"timestamp"`
 }
 
 // SlashingInfo 故障消减信息（只包含 missed blocks 的消减，不包含双重签名）
@@ -124,6 +133,7 @@ func (r *RewardDistributionInfo) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Valu
 
 	vv.Set(ar.NewUint(r.EpochNumber))
 
+	// Rewards (聚合值，用于状态更新)
 	rewardsArray := ar.NewArray()
 	for addr, amount := range r.Rewards {
 		rewardItem := ar.NewArray()
@@ -132,6 +142,19 @@ func (r *RewardDistributionInfo) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Valu
 		rewardsArray.Set(rewardItem)
 	}
 	vv.Set(rewardsArray)
+
+	// VoterRewards (验证者-投票者映射列表，用于记录到数据库)
+	voterRewardsArray := ar.NewArray()
+	for _, detail := range r.VoterRewards {
+		if detail != nil {
+			voterRewardItem := ar.NewArray()
+			voterRewardItem.Set(ar.NewCopyBytes([]byte(detail.VoterAddress)))
+			voterRewardItem.Set(ar.NewCopyBytes([]byte(detail.ValidatorAddress)))
+			voterRewardItem.Set(ar.NewBigInt(detail.Amount))
+			voterRewardsArray.Set(voterRewardItem)
+		}
+	}
+	vv.Set(voterRewardsArray)
 
 	vv.Set(ar.NewBigInt(r.TotalReward))
 
@@ -147,9 +170,10 @@ func (r *RewardDistributionInfo) UnmarshalRLPWith(v *fastrlp.Value) error {
 		return err
 	}
 
+	// 兼容旧版本：如果只有4个元素，说明是旧格式（没有VoterRewards）
+	// 新版本有5个元素：EpochNumber, Rewards, VoterRewards, TotalReward, Timestamp
 	if len(elems) < 4 {
-		err := fmt.Errorf("invalid RewardDistributionInfo RLP: expected 4 elements, got %d", len(elems))
-		return err
+		return fmt.Errorf("invalid RewardDistributionInfo RLP: expected at least 4 elements, got %d", len(elems))
 	}
 
 	epochNumber, err := elems[0].GetUint64()
@@ -158,6 +182,7 @@ func (r *RewardDistributionInfo) UnmarshalRLPWith(v *fastrlp.Value) error {
 	}
 	r.EpochNumber = epochNumber
 
+	// Rewards (聚合值)
 	rewardsElems, err := elems[1].GetElems()
 	if err != nil {
 		return err
@@ -182,13 +207,60 @@ func (r *RewardDistributionInfo) UnmarshalRLPWith(v *fastrlp.Value) error {
 		r.Rewards[string(addrBytes)] = amount
 	}
 
+	// VoterRewards (验证者-投票者映射列表)
+	r.VoterRewards = []*VoterRewardDetail{}
+	if len(elems) >= 5 {
+		// 新版本：有VoterRewards字段
+		voterRewardsElems, err := elems[2].GetElems()
+		if err == nil {
+			for _, voterRewardElem := range voterRewardsElems {
+				voterRewardItemElems, err := voterRewardElem.GetElems()
+				if err != nil || len(voterRewardItemElems) != 3 {
+					continue
+				}
+
+				voterAddrBytes, err := voterRewardItemElems[0].GetBytes(nil)
+				if err != nil {
+					continue
+				}
+
+				validatorAddrBytes, err := voterRewardItemElems[1].GetBytes(nil)
+				if err != nil {
+					continue
+				}
+
+				amount := new(big.Int)
+				if err := voterRewardItemElems[2].GetBigInt(amount); err != nil {
+					continue
+				}
+
+				r.VoterRewards = append(r.VoterRewards, &VoterRewardDetail{
+					VoterAddress:     string(voterAddrBytes),
+					ValidatorAddress: string(validatorAddrBytes),
+					Amount:           amount,
+				})
+			}
+		}
+		// 如果解析失败，VoterRewards 保持为空（兼容旧版本）
+	}
+
+	// TotalReward
+	totalRewardIndex := 2
+	if len(elems) >= 5 {
+		totalRewardIndex = 3 // 新版本：TotalReward在第4个位置
+	}
 	totalReward := new(big.Int)
-	if err := elems[2].GetBigInt(totalReward); err != nil {
+	if err := elems[totalRewardIndex].GetBigInt(totalReward); err != nil {
 		return err
 	}
 	r.TotalReward = totalReward
 
-	timestamp, err := elems[3].GetUint64()
+	// Timestamp
+	timestampIndex := 3
+	if len(elems) >= 5 {
+		timestampIndex = 4 // 新版本：Timestamp在第5个位置
+	}
+	timestamp, err := elems[timestampIndex].GetUint64()
 	if err != nil {
 		return err
 	}
@@ -407,8 +479,11 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 	}
 
 	num := len(elems)
-	if num < 4 {
-		return fmt.Errorf("incorrect elements count to decode Extra, expected at least 4 but found %d", num)
+	// ✅ 关键修复：允许至少3个元素，兼容IBFT格式（IBFT的ExtraData至少有3个元素）
+	// IBFT格式：Validators, ProposerSeal, CommittedSeal, ParentCommittedSeal, RoundNumber（至少3个）
+	// DPoS格式：Validators, Parent, Committed, Checkpoint, ...（至少4个）
+	if num < 3 {
+		return fmt.Errorf("incorrect elements count to decode Extra, expected at least 3 but found %d", num)
 	}
 	// 区块的 ExtraData 在序列化为 RLP 时是一个数组：最多支持8个元素（Validators, Parent, Committed, Checkpoint, RewardDistribution, CheckpointBlockHash, FaultFlags, SlashingInfo）
 	if num > 8 {
@@ -427,14 +502,19 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 			// 标准ValidatorSetDelta格式：Added, Updated, Removed
 			i.Validators = &validator.ValidatorSetDelta{}
 			if err := i.Validators.UnmarshalRLPWith(elems[0]); err != nil {
-				return fmt.Errorf("failed to unmarshal ValidatorSetDelta: %w (validatorElemsLen=%d)", err, len(validatorElems))
-			}
-			// 🔍 调试日志：记录解析结果
-			// 注意：这里无法获取blockNumber，因为UnmarshalRLPWith没有传递header信息
-			// 详细的日志会在ValidateFinalizedData中记录
-			if len(i.Validators.Added) == 0 {
-				// 注意：这里不返回错误，因为可能是空的Added数组（虽然不应该）
-				// 但会在ValidateFinalizedData中检查并返回错误
+				// 解析失败，可能是IBFT格式（3个验证者地址）而不是ValidatorSetDelta格式
+				// 这种情况通常发生在共识切换高度的父区块（IBFT区块）
+				// 为了兼容性，将Validators设为nil，允许继续解析其他字段（如Committed签名）
+				// 但只在解析父区块ExtraData时使用（在block_builder.go中会检查是否是共识切换高度）
+				i.Validators = nil
+				// 注意：这里不返回错误，允许继续解析其他字段
+				// 调用者需要自己判断是否是共识切换高度的情况
+			} else {
+				// 解析成功，检查Added数组
+				if len(i.Validators.Added) == 0 {
+					// 注意：这里不返回错误，因为可能是空的Added数组（虽然不应该）
+					// 但会在ValidateFinalizedData中检查并返回错误
+				}
 			}
 		} else {
 			// 🔍 调试信息：记录为什么Validators为nil（会在ValidateFinalizedData中记录详细日志）
@@ -446,24 +526,29 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		i.Validators = nil
 	}
 
-	if elems[1].Elems() > 0 {
+	// ✅ 关键修复：容错处理elems[1]和elems[2]的解析
+	// IBFT格式：elems[1]是ProposerSeal（字节数组），elems[2]是CommittedSeal（Seals格式）
+	// DPoS格式：elems[1]是Parent Signature，elems[2]是Committed Signature
+	// 如果解析失败（可能是IBFT格式），将字段设为nil，允许继续解析其他字段
+	if num >= 2 && elems[1].Elems() > 0 {
 		i.Parent = &Signature{}
 		if err := i.Parent.UnmarshalRLPWith(elems[1]); err != nil {
-			return err
+			// 解析失败，可能是IBFT格式（ProposerSeal），将Parent设为nil
+			i.Parent = nil
 		}
 	}
 
-	if elems[2].Elems() > 0 {
+	if num >= 3 && elems[2].Elems() > 0 {
 		committedElems, err := elems[2].GetElems()
 		if err != nil {
-			return err
-		}
-
-		if len(committedElems) == 2 {
+			// 获取元素失败，可能是IBFT格式（CommittedSeal），将Committed设为nil
+			i.Committed = nil
+		} else if len(committedElems) == 2 {
 			// 标准Signature格式：AggregatedSignature, Bitmap
 			i.Committed = &Signature{}
 			if err := i.Committed.UnmarshalRLPWith(elems[2]); err != nil {
-				return err
+				// 解析失败，可能是IBFT格式（CommittedSeal），将Committed设为nil
+				i.Committed = nil
 			}
 		} else {
 			// 非标准格式，跳过
@@ -472,17 +557,18 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 	}
 
 	// Checkpoint
-	if elems[3].Elems() > 0 {
+	// ✅ 关键修复：检查元素数量，避免访问不存在的elems[3]
+	if num >= 4 && elems[3].Elems() > 0 {
 		checkpointElems, err := elems[3].GetElems()
 		if err != nil {
-			return err
-		}
-
-		if len(checkpointElems) == 5 {
+			// 获取元素失败，跳过Checkpoint解析
+			i.Checkpoint = nil
+		} else if len(checkpointElems) == 5 {
 			// 标准CheckpointData格式：5个元素
 			i.Checkpoint = &CheckpointData{}
 			if err := i.Checkpoint.UnmarshalRLPWith(elems[3]); err != nil {
-				return err
+				// 解析失败，可能是IBFT格式，将Checkpoint设为nil
+				i.Checkpoint = nil
 			}
 		} else {
 			// 非标准格式，跳过解析
@@ -555,8 +641,12 @@ func (i *Extra) UnmarshalRLPWith(v *fastrlp.Value) error {
 		i.SlashingInfo = &SlashingInfo{}
 		if err := i.SlashingInfo.UnmarshalRLPWith(elems[7]); err != nil {
 			// 不返回错误，只是跳过消减信息
+			// 注意：这里没有logger，因为Extra.UnmarshalRLP可能在不同上下文中调用
 			i.SlashingInfo = nil
 		}
+	} else if num >= 8 {
+		// ExtraData有8个元素，但第8个元素（SlashingInfo）为空或格式不正确
+		// 这种情况需要记录日志，但这里没有logger，需要在调用处记录
 	}
 
 	return nil
@@ -824,14 +914,11 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 	}
 
 	if err := i.Committed.Verify(blockNumber, validators, checkpointHash, domain, logger); err != nil {
-		logger.Error("🚨 区块签名验证失败，程序将退出",
+		logger.Error("区块签名验证失败，返回错误由上层处理",
 			"blockNumber", blockNumber,
 			"proposalHash", checkpointHash.String(),
 			"error", err)
-
-		// 区块验证失败时直接退出程序
-		logger.Error("💀 区块验证失败，程序退出")
-		os.Exit(1)
+		return fmt.Errorf("block signature verification failed for block %d: %w", blockNumber, err)
 	}
 	parentExtra, err := GetDposExtra(parent.ExtraData)
 	if err != nil {
@@ -2163,13 +2250,10 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 			}
 		}
 
-		logger.Error("🚨 BLS签名验证失败，程序将退出",
+		logger.Error("BLS签名验证失败，返回错误由上层处理",
 			"blockNumber", blockNumber,
 			"reason", "BLS signature verification failed")
-
-		// 区块验证失败时直接退出程序
-		logger.Error("💀 区块验证失败，程序退出")
-		os.Exit(1)
+		return fmt.Errorf("BLS signature verification failed for block %d", blockNumber)
 	}
 
 	return nil

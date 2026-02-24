@@ -116,8 +116,108 @@ func (p *blockchainWrapper) CommitBlock(block *types.FullBlock) error {
 		p.logger.Error("❌ [CommitBlock] WriteFullBlock失败", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String()[:16], "error", err)
 		return err
 	}
-	p.logger.Debug("✅ [CommitBlock] 区块已成功写入链上", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String()[:16])
+
+	// 生产节点路径：BuildBlock 只走了 Executor.BeginTxn + transition.Write，未走 ProcessBlock，
+	// 因此本节点不会执行 ProcessProposalCreateTransaction 等。此处对区块内提案交易做与 ProcessBlock 一致的后置处理，
+	// 保证生产节点本地也能查到刚出的区块中的提案。
+	p.applyProposalTxsInBlock(block.Block)
+
+	// 方案四：生产节点本地也执行故障消减（与奖励一致）。奖励在 BuildBlock 里已执行，消减只在 ProcessBlock 路径执行；
+	// 生产节点不走 ProcessBlock，此处从本区块 Extra 解析并执行消减，保证生产节点与同步节点状态一致。
+	if p.isEpochEndBlock(block.Block.Number()) {
+		if e := p.applySlashingFromBlockExtra(block.Block); e != nil {
+			p.logger.Warn("⚠️ [CommitBlock] 生产节点故障消减后置处理失败(不影响已写入区块)", "blockNumber", block.Block.Number(), "error", e)
+		}
+	}
+
+	// 在共识切换高度创建根账户对创世验证者的投票记录（生产节点）
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+		if err := dposInstance.CreateGenesisVotesForAllValidators(block.Block.Number()); err != nil {
+			p.logger.Error("❌ 创建创世投票记录失败", "blockNumber", block.Block.Number(), "error", err)
+			// 不返回错误，因为区块已经写入，只记录日志
+		}
+	} else {
+		p.logger.Warn("⚠️ [CommitBlock] DPoS实例不存在",
+			"blockNumber", block.Block.Number(),
+			"exists", exists)
+	}
+
 	return nil
+}
+
+// applySlashingFromBlockExtra 从区块 Extra 解析 SlashingInfo 并执行消减（与 processSlashingInBlock 逻辑一致），
+// 用于生产节点在 CommitBlock 时补做本机未走的 ProcessBlock 消减处理。
+func (p *blockchainWrapper) applySlashingFromBlockExtra(block *types.Block) error {
+	extra := &Extra{}
+	if err := extra.UnmarshalRLP(block.Header.ExtraData); err != nil {
+		return fmt.Errorf("parse extra for slashing: %w", err)
+	}
+	if extra.SlashingInfo == nil {
+		return nil
+	}
+	dposInstance, exists := GetDPoSInstance("vcity_dpos")
+	if !exists || dposInstance == nil {
+		return fmt.Errorf("DPoS instance not found")
+	}
+	slashingInfo := extra.SlashingInfo
+	for _, slashingOp := range slashingInfo.Slashings {
+		if err := dposInstance.executeSlashing(
+			slashingOp.ValidatorAddr,
+			slashingOp.SlashRate,
+			block.Number(),
+			slashingInfo.EpochNumber,
+			slashingOp.Reason,
+			slashingOp.MissedBlocks,
+			slashingOp.MissedBlocksPercentage,
+			0,
+		); err != nil {
+			p.logger.Warn("⚠️ [CommitBlock] 执行消减失败(生产节点)", "validator", slashingOp.ValidatorAddr.String(), "error", err)
+			// 不返回错误，与 processSlashingInBlock 中“已执行过则跳过”的语义一致，区块已写入
+		}
+	}
+	p.logger.Info("✅ [CommitBlock] 生产节点故障消减后置处理完成", "blockNumber", block.Number(), "slashingsCount", len(slashingInfo.Slashings))
+	return nil
+}
+
+// applyProposalTxsInBlock 对区块内的提案交易执行 DPoS 后置处理（与 ProcessBlock 中逻辑一致），
+// 用于生产节点在 CommitBlock 时补做本机未走的 ProcessBlock 提案处理。
+func (p *blockchainWrapper) applyProposalTxsInBlock(block *types.Block) {
+	dposInstance, exists := GetDPoSInstance("vcity_dpos")
+	if !exists || dposInstance == nil {
+		return
+	}
+	for _, tx := range block.Transactions {
+		if len(tx.Input) == 0 || tx.To == nil {
+			continue
+		}
+		if tx.From == (types.Address{}) {
+			forks := p.blockchain.Config().Forks.At(block.Number())
+			chainID := p.GetChainID()
+			signer := crypto.NewSigner(forks, chainID)
+			if addr, err := signer.Sender(tx); err == nil {
+				tx.From = addr
+			} else {
+				p.logger.Debug("⚠️ [CommitBlock] 无法恢复提案交易 From，跳过", "txHash", tx.Hash.String(), "error", err)
+				continue
+			}
+		}
+		kind, err := ParseProposalInput(tx.Input)
+		if err != nil {
+			continue
+		}
+		switch kind {
+		case "create":
+			if e := dposInstance.ProcessProposalCreateTransaction(tx, block.Number()); e != nil {
+				p.logger.Warn("⚠️ [CommitBlock] 提案创建后置处理失败(不影响已写入区块)", "txHash", tx.Hash.String(), "blockNumber", block.Number(), "error", e)
+			} else {
+				p.logger.Info("✅ [CommitBlock] 提案创建后置处理成功(生产节点)", "txHash", tx.Hash.String(), "blockNumber", block.Number())
+			}
+		case "vote":
+			_ = dposInstance.ProcessProposalVoteTransaction(tx, block.Number())
+		case "execute":
+			_ = dposInstance.ProcessProposalExecuteTransaction(tx, block.Number())
+		}
+	}
 }
 
 // SetBlockProductionStartTime 设置区块生产开始时间（用于统计生产耗时）
@@ -182,10 +282,19 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 		}
 	}
 
-	isEpochEnd := p.isEpochEndBlock(block.Number())
+	// 检查是否是共识切换高度，如果是则创建根账户对创世验证者的投票记录
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+		if err := dposInstance.CreateGenesisVotesForAllValidators(block.Number()); err != nil {
+			p.logger.Error("❌ 创建创世投票记录失败", "blockNumber", block.Number(), "error", err)
+			// 不返回错误，因为这是共识切换高度的特殊处理，只记录日志
+		}
+	} else {
+		p.logger.Warn("⚠️ [ProcessBlockExecutor] DPoS实例不存在",
+			"blockNumber", block.Number(),
+			"exists", exists)
+	}
 
-	// 添加详细的奖励分配跟踪日志
-	p.logger.Debug("🔍 [ProcessBlockExecutor] 检查epoch结束", "blockNumber", block.Number(), "isEpochEnd", isEpochEnd)
+	isEpochEnd := p.isEpochEndBlock(block.Number())
 
 	// 如果是epoch结束区块，处理奖励分发
 	if isEpochEnd {
@@ -200,6 +309,20 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 		}
 
 		p.logger.Debug("✅======= 奖励分配执行成功 ======✅",
+			"blockNumber", block.Number(),
+			"blockHash", block.Hash().String()[:16])
+
+		// 处理故障消减（从ExtraData执行）- 同步节点也需要执行
+		p.logger.Info("🔍 [ProcessBlockExecutor] epoch结束区块，准备处理故障消减", "blockNumber", block.Number(), "extraDataLength", len(block.Header.ExtraData))
+		if err := p.processSlashingInBlock(block, transition); err != nil {
+			p.logger.Error("❌❌❌ [ProcessBlockExecutor] ========== 故障消减执行失败 ========== ❌❌❌",
+				"blockNumber", block.Number(),
+				"blockHash", block.Hash().String()[:16],
+				"error", err)
+			return nil, fmt.Errorf("failed to process slashing: %w", err)
+		}
+
+		p.logger.Info("✅✅✅ [ProcessBlockExecutor] ========== 故障消减执行成功 ========== ✅✅✅",
 			"blockNumber", block.Number(),
 			"blockHash", block.Hash().String()[:16])
 
@@ -228,8 +351,6 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			if currentEpoch == 0 {
 				p.logger.Warn("⚠️ [ProcessBlockExecutor] 无法获取epoch信息", "blockNumber", block.Number())
 			}
-
-			p.logger.Debug("🔍 [边界应用提案] 开始查询待应用提案", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "isEpochEndBlock", true, "note", "在epoch结束区块时查询当前epoch的提案")
 			scheduledProps := dposInstance.governanceLoadScheduled(currentEpoch)
 			p.logger.Debug("🔍 [边界应用提案] 查询结果", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "scheduledCount", len(scheduledProps))
 
@@ -313,6 +434,13 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 						}
 					}
 				}
+			}
+			// 边界应用撤销（先于投票，避免权重突变）
+			p.logger.Info("🔍 [边界应用撤销] 开始查询待撤销", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
+			if err := dposInstance.applyScheduledUnvotes(currentEpoch, block.Number()); err != nil {
+				p.logger.Error("❌ [边界应用撤销] 应用撤销失败", "error", err, "blockNumber", block.Number(), "currentEpoch", currentEpoch)
+			} else {
+				p.logger.Info("✅ [边界应用撤销] 撤销应用完成", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
 			}
 			// 边界应用投票
 			p.logger.Info("🔍 [边界应用投票] 开始查询待应用投票", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
@@ -426,6 +554,7 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 			"blockHash", block.Hash().String()[:16])
 
 		// 处理故障消减（从ExtraData执行）
+		p.logger.Info("🔍 [ProcessBlock] epoch结束区块，准备处理故障消减", "blockNumber", block.Number(), "extraDataLength", len(block.Header.ExtraData))
 		if err := p.processSlashingInBlock(block, transition); err != nil {
 			p.logger.Error("❌❌❌ ========== 故障消减执行失败 ========== ❌❌❌",
 				"blockNumber", block.Number(),
@@ -434,17 +563,25 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 			return nil, fmt.Errorf("failed to process slashing: %w", err)
 		}
 
-		p.logger.Debug("✅✅✅ ========== 故障消减执行成功 ========== ✅✅✅",
+		p.logger.Info("✅✅✅ ========== 故障消减执行成功 ========== ✅✅✅",
 			"blockNumber", block.Number(),
 			"blockHash", block.Hash().String()[:16])
 
 		// 奖励分配与故障统计完成后，再在边界应用已登记的待生效提案和投票，避免被同区块统计覆盖
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-			// 计算当前 epoch 编号
-			currentEpochMeta := dposInstance.getEpochForBlock(block.Number())
+			// 与 ProcessBlockExecutor 一致：epoch 结束区块时 getEpochForBlock(block.Number()) 可能返回下一 epoch，用 block.Number()-1 取「即将结束的 epoch」
 			var currentEpoch uint64
-			if currentEpochMeta != nil {
-				currentEpoch = currentEpochMeta.Number
+			if block.Number() > 0 {
+				currentEpochMeta := dposInstance.getEpochForBlock(block.Number() - 1)
+				if currentEpochMeta != nil {
+					currentEpoch = currentEpochMeta.Number
+				} else {
+					if m := dposInstance.getEpochForBlock(block.Number()); m != nil {
+						currentEpoch = m.Number
+					}
+				}
+			} else if m := dposInstance.getEpochForBlock(block.Number()); m != nil {
+				currentEpoch = m.Number
 			}
 
 			p.logger.Debug("🔍 [边界应用提案] 开始查询待应用提案", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
@@ -535,6 +672,13 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 				}
 			}
 
+			// 边界应用撤销（先于投票，避免权重突变）
+			p.logger.Info("🔍 [边界应用撤销] 开始查询待撤销", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
+			if err := dposInstance.applyScheduledUnvotes(currentEpoch, block.Number()); err != nil {
+				p.logger.Error("❌ [边界应用撤销] 应用撤销失败", "error", err, "blockNumber", block.Number(), "currentEpoch", currentEpoch)
+			} else {
+				p.logger.Info("✅ [边界应用撤销] 撤销应用完成", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
+			}
 			// 边界应用投票
 			p.logger.Info("🔍 [边界应用投票] 开始查询待应用投票", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
 			if err := dposInstance.applyScheduledVotes(currentEpoch, block.Number()); err != nil {
@@ -659,10 +803,11 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 
 	// 添加详细的奖励信息日志
 	if extra.RewardDistribution != nil {
-		p.logger.Debug("💰 ExtraData包含奖励信息",
+		p.logger.Info("💰 ExtraData包含奖励信息",
 			"blockNumber", block.Number(),
 			"epoch", extra.RewardDistribution.EpochNumber,
 			"rewardCount", len(extra.RewardDistribution.Rewards),
+			"voterRewardCount", len(extra.RewardDistribution.VoterRewards),
 			"totalReward", extra.RewardDistribution.TotalReward.String())
 
 		rewardInfo := extra.RewardDistribution
@@ -736,105 +881,31 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 		if cnt == len(rewardInfo.Rewards) {
 		}
 
-		// 同步节点也需要记录奖励到数据库（用于查询）
+		// 同步节点直接使用 ExtraData 中的奖励信息记录到数据库（无需重新计算）
 		// 获取DPoS实例和RewardStore
+		p.logger.Info("🔍 [Epoch奖励诊断] 同步节点收到ExtraData奖励信息",
+			"blockNumber", block.Number(),
+			"epoch", rewardInfo.EpochNumber,
+			"rewardCount", len(rewardInfo.Rewards),
+			"voterRewardCount", len(rewardInfo.VoterRewards),
+			"totalReward", rewardInfo.TotalReward.String())
+
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			if dposInstance.state != nil && dposInstance.state.RewardStore != nil {
-				// 🔧 修复：从区块历史查询出块数，而不是依赖 blockTracker（同步节点可能没有）
-				// 先尝试从 blockTracker 获取（生产节点有）
-				blockCounts := make(map[types.Address]uint64)
-				if dposInstance.blockTracker != nil {
-					blockCounts = dposInstance.blockTracker.GetEpochBlockCounts(rewardInfo.EpochNumber)
-				}
-
-				// 如果 blockTracker 没有数据，从区块历史查询
-				needsQueryFromHistory := false
-				for addrStr := range rewardInfo.Rewards {
-					addr := types.StringToAddress(addrStr)
-					if blockCounts[addr] == 0 {
-						needsQueryFromHistory = true
-						break
-					}
-				}
-
-				// 从区块历史查询出块数（如果 blockTracker 没有数据）
-				if needsQueryFromHistory && p.blockchain != nil && dposInstance.config != nil {
-					blocksPerEpoch := dposInstance.getEpochSize()
-					consensusSwitchHeight := dposInstance.config.ConsensusSwitchHeight
-					epochIndex := rewardInfo.EpochNumber - 1 // epoch 编号转索引（从1开始转为从0开始）
-
-					epochStartBlock := consensusSwitchHeight + epochIndex*blocksPerEpoch
-					epochEndBlock := consensusSwitchHeight + (epochIndex+1)*blocksPerEpoch
-
-					// 遍历该 epoch 的所有区块，统计每个验证者的出块数
-					for blockNum := epochStartBlock; blockNum < epochEndBlock; blockNum++ {
-						header, exists := p.blockchain.GetHeaderByNumber(blockNum)
-						if exists && header != nil && len(header.Miner) == 20 {
-							minerAddr := types.Address(header.Miner)
-							blockCounts[minerAddr]++
-						}
-					}
-
-					p.logger.Info("🔍 从区块历史查询出块统计",
+				// 直接使用 ExtraData 中的奖励信息记录到数据库（无需重新计算）
+				// 如果 VoterRewards 有数据，直接使用（包含 validator_address）
+				// 否则使用 Rewards（不包含 validator_address，兼容旧版本）
+				if err := dposInstance.recordRewardsFromExtraData(rewardInfo); err != nil {
+					p.logger.Error("❌ 同步节点记录奖励失败",
+						"blockNumber", block.Number(),
 						"epoch", rewardInfo.EpochNumber,
-						"epochStartBlock", epochStartBlock,
-						"epochEndBlock", epochEndBlock,
-						"blockCounts", blockCounts)
-				}
-
-				// 记录每个奖励到数据库
-				// 🔧 修复：从DPoS实例获取validators和voters信息，动态判断奖励类型
-				validators := dposInstance.GetValidators()
-				voters := dposInstance.GetVoters()
-				if voters == nil {
-					voters = make(map[types.Address]*VoterInfo)
-				}
-
-				for addrStr, amount := range rewardInfo.Rewards {
-					addr := types.StringToAddress(addrStr)
-
-					// 检查是否是验证者
-					isValidator := false
-					for _, validator := range validators {
-						if validator.Address == addr {
-							isValidator = true
-							break
-						}
-					}
-
-					// 检查是否是投票者
-					isVoter := false
-					if voter, exists := voters[addr]; exists && voter.VotingPower.Cmp(big.NewInt(0)) > 0 {
-						isVoter = true
-					}
-
-					// 确定奖励类型（用于数据库记录）
-					rewardType := "voter"
-					if isValidator && isVoter {
-						rewardType = "validator+voter" // 既是验证者又是投票者
-					} else if isValidator {
-						rewardType = "validator"
-					}
-
-					rewardRecord := &RewardRecordExtended{
-						EpochNumber:     rewardInfo.EpochNumber,
-						Recipient:       addrStr,
-						RewardType:      rewardType,
-						Amount:          amount.String(),
-						VoteWeight:      "0",
-						Timestamp:       time.Now(),
-						TransactionHash: "",
-						Status:          "completed",
-					}
-
-					if err := dposInstance.state.RewardStore.RecordReward(rewardRecord); err != nil {
-						p.logger.Error("❌ 同步节点记录奖励失败",
-							"blockNumber", block.Number(),
-							"epoch", rewardInfo.EpochNumber,
-							"recipient", addrStr,
-							"rewardType", rewardType,
-							"error", err)
-					}
+						"error", err)
+				} else {
+					p.logger.Info("✅ 同步节点记录奖励成功",
+						"blockNumber", block.Number(),
+						"epoch", rewardInfo.EpochNumber,
+						"rewardCount", len(rewardInfo.Rewards),
+						"voterRewardCount", len(rewardInfo.VoterRewards))
 				}
 			} else {
 				p.logger.Warn("⚠️ RewardStore不可用，跳过奖励记录",
@@ -843,9 +914,28 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 			}
 		}
 	} else {
-		p.logger.Warn("⚠️ ExtraData解析后RewardDistribution为nil",
-			"blockNumber", block.Number(),
-			"extraDataLength", len(block.Header.ExtraData))
+		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+			epochSize := dposInstance.getEpochSize()
+			consensusSwitchHeight := dposInstance.config.ConsensusSwitchHeight
+			dposBlockNumber := block.Number() - consensusSwitchHeight
+			currentEpoch := (dposBlockNumber / epochSize) + 1
+			firstBlockInEpoch := consensusSwitchHeight + (currentEpoch-1)*epochSize
+			isEpochEndBlock := (block.Number() == firstBlockInEpoch+epochSize-1)
+
+			if isEpochEndBlock {
+				p.logger.Warn("⚠️ ExtraData解析后RewardDistribution为nil（epoch结束区块）",
+					"blockNumber", block.Number(),
+					"epoch", currentEpoch,
+					"isEpochEndBlock", isEpochEndBlock)
+			} else {
+				p.logger.Debug("ℹ️ ExtraData解析后RewardDistribution为nil（非epoch结束区块）",
+					"blockNumber", block.Number())
+			}
+		} else {
+			p.logger.Warn("⚠️ ExtraData解析后RewardDistribution为nil",
+				"blockNumber", block.Number(),
+				"extraDataLength", len(block.Header.ExtraData))
+		}
 	}
 
 	// 预先收集：需要在本epoch边界应用的恢复提案
@@ -884,19 +974,42 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 
 // processSlashingInBlock 从ExtraData读取消减信息并执行消减
 func (p *blockchainWrapper) processSlashingInBlock(block *types.Block, transition *state.Transition) error {
+	p.logger.Info("🔍 [processSlashingInBlock] 开始处理消减信息",
+		"blockNumber", block.Number(),
+		"extraDataLength", len(block.Header.ExtraData))
+
 	// 解析ExtraData获取消减信息
 	extra := &Extra{}
 	if err := extra.UnmarshalRLP(block.Header.ExtraData); err != nil {
-		p.logger.Error("❌ 解析ExtraData失败",
+		p.logger.Error("❌ [processSlashingInBlock] 解析ExtraData失败",
 			"blockNumber", block.Number(),
 			"error", err,
 			"extraDataLength", len(block.Header.ExtraData))
 		return fmt.Errorf("failed to unmarshal extra data: %w", err)
 	}
 
+	p.logger.Info("🔍 [processSlashingInBlock] ExtraData解析成功",
+		"blockNumber", block.Number(),
+		"hasSlashingInfo", extra.SlashingInfo != nil,
+		"hasRewardDistribution", extra.RewardDistribution != nil,
+		"faultFlagsCount", len(extra.FaultFlags),
+		"hasValidators", extra.Validators != nil,
+		"hasCheckpoint", extra.Checkpoint != nil)
+
 	if extra.SlashingInfo == nil {
-		p.logger.Info("ℹ️ ℹ️ ℹ️ ℹ️ ExtraData中没有消减信息，跳过处理",
-			"blockNumber", block.Number())
+		// 尝试手动解析ExtraData，检查第8个元素是否存在
+		extraRaw := block.Header.ExtraData
+		if len(extraRaw) > 97 { // ExtraVanity = 32, 至少需要一些数据
+			p.logger.Info("ℹ️ ℹ️ ℹ️ ℹ️ [processSlashingInBlock] ExtraData中没有消减信息，跳过处理",
+				"blockNumber", block.Number(),
+				"extraDataLength", len(extraRaw),
+				"note", "生成节点可能没有写入SlashingInfo，或ExtraData格式不正确（需要8个元素，第8个是SlashingInfo）")
+		} else {
+			p.logger.Info("ℹ️ ℹ️ ℹ️ ℹ️ [processSlashingInBlock] ExtraData中没有消减信息，跳过处理",
+				"blockNumber", block.Number(),
+				"extraDataLength", len(extraRaw),
+				"note", "ExtraData长度不足，可能不包含SlashingInfo")
+		}
 		return nil
 	}
 

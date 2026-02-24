@@ -70,12 +70,14 @@ type debugStore interface {
 type Debug struct {
 	store      debugStore
 	throttling *Throttling
+	chainID    uint64
 }
 
-func NewDebug(store debugStore, requestsPerSecond uint64) *Debug {
+func NewDebug(store debugStore, requestsPerSecond uint64, chainID uint64) *Debug {
 	return &Debug{
 		store:      store,
 		throttling: NewThrottling(requestsPerSecond, time.Second),
+		chainID:    chainID,
 	}
 }
 
@@ -191,7 +193,7 @@ func (d *Debug) TraceCall(
 				return nil, ErrHeaderNotFound
 			}
 
-			tx, err := DecodeTxn(arg, header.Number, d.store, true)
+			tx, err := DecodeTxn(arg, header.Number, d.store, true, d.chainID)
 			if err != nil {
 				return nil, err
 			}

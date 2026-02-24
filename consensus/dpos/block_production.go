@@ -36,9 +36,12 @@ func (r *dposRuntime) startBlockProduction() error {
 	r.logger.Info("✅ 启动持续区块监测", "blockTime", blockTime.String())
 
 	if r.resourceMonitor != nil && r.resourceMonitor.goroutineManager != nil {
+		r.logger.Info("🚀 启动区块生产goroutine...")
 		r.resourceMonitor.goroutineManager.StartGoroutine("block-production", func() {
+			r.logger.Info("✅ 区块生产goroutine已启动，开始持续监测")
 			r.continuousBlockMonitoring() // 新增持续监测方法
 		})
+		r.logger.Info("✅ 区块生产goroutine启动命令已发送")
 	} else {
 		r.logger.Error("❌ 无法启动区块生产：resourceMonitor或goroutineManager为nil",
 			"resourceMonitor", r.resourceMonitor != nil,

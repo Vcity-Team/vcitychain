@@ -206,7 +206,7 @@ func (b *BlockBuilder) WriteTx(tx *types.Transaction) error {
 // 完全对标以太坊：批量打包多笔交易，使用当前区块状态检查nonce
 // 修复：不要每次都调用Prepare()，而是使用当前构建区块的状态来检查nonce
 // 这样可以在一个区块中打包多笔交易，类似以太坊
-func (b *BlockBuilder) Fill() {
+func (b *BlockBuilder) Fill() error {
 	// 只在开始时调用一次Prepare()，初始化executables队列
 	b.params.Logger.Debug("🔍 [BlockBuilder.Fill] 调用Prepare()前",
 		"blockNumber", b.params.Parent.Number+1)
@@ -258,7 +258,7 @@ func (b *BlockBuilder) Fill() {
 					"blockNumber", blockNumber,
 					"txCount", txCount,
 					"skippedCount", skippedCount)
-				return
+				return nil
 			}
 		}
 
@@ -320,12 +320,12 @@ func (b *BlockBuilder) Fill() {
 
 		finished, err := b.writeTxPoolTransaction(tx)
 		if err != nil {
-			b.params.Logger.Error("💀 交易填充失败，程序将立即退出",
+			b.params.Logger.Error("交易填充失败，返回错误由上层处理",
 				"txHash", tx.Hash.String(),
 				"nonce", tx.Nonce,
 				"from", tx.From.String(),
 				"error", err)
-			os.Exit(1)
+			return err
 		}
 
 		b.params.Logger.Debug("🔍 [BlockBuilder.Fill] 交易执行完成",
@@ -353,7 +353,7 @@ func (b *BlockBuilder) Fill() {
 				"blockNumber", blockNumber,
 				"txCount", txCount,
 				"skippedCount", skippedCount)
-			return
+			return nil
 		}
 
 		// 修复：不再每次都调用Prepare()
@@ -384,15 +384,13 @@ func (b *BlockBuilder) writeTxPoolTransaction(tx *types.Transaction) (bool, erro
 
 			return false, err
 		} else {
-			// 不可恢复错误，退出程序
-			b.params.Logger.Error("💀 交易写入失败，程序将立即退出",
+			// 不可恢复错误，由上层决定是否退出
+			b.params.Logger.Error("交易写入失败，返回错误由上层处理",
 				"txHash", tx.Hash.String(),
 				"nonce", tx.Nonce,
 				"from", tx.From.String(),
 				"error", err)
-			os.Exit(1)
 			b.params.TxPool.Drop(tx)
-
 			return false, err
 		}
 	}
@@ -554,7 +552,10 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		}
 	}
 
-	builder.Fill()
+	if err := builder.Fill(); err != nil {
+		r.logger.Error("❌ buildBlock: 填充交易失败", "error", err)
+		return nil, err
+	}
 
 	// 检查填充后的交易数量
 	if blockBuilder, ok := builder.(interface {
@@ -661,12 +662,22 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			r.logger.Error("❌ 生产节点无法获取状态", "blockNumber", nextBlockNumber)
 		}
 
-		// 边界应用投票（与同步/验证节点保持一致，避免生产者遗漏新委托者）
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			currentEpochInfo := dposInstance.getEpochForBlock(nextBlockNumber - 1)
 			currentEpoch := uint64(0)
 			if currentEpochInfo != nil {
 				currentEpoch = currentEpochInfo.Number
+			}
+			// 边界应用撤销（先于投票）
+			if err := dposInstance.applyScheduledUnvotes(currentEpoch, nextBlockNumber); err != nil {
+				r.logger.Error("❌ 生产节点边界应用撤销失败",
+					"blockNumber", nextBlockNumber,
+					"currentEpoch", currentEpoch,
+					"error", err)
+			} else {
+				r.logger.Info("✅ 生产节点边界应用撤销完成",
+					"blockNumber", nextBlockNumber,
+					"currentEpoch", currentEpoch)
 			}
 			if err := dposInstance.applyScheduledVotes(currentEpoch, nextBlockNumber); err != nil {
 				r.logger.Error("❌ 生产节点边界应用投票失败",
@@ -703,19 +714,31 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				if dposInstance.pendingRewardDistribution != nil {
 					// 复制RewardDistribution，避免引用被清空
 					extra.RewardDistribution = &RewardDistributionInfo{
-						EpochNumber: dposInstance.pendingRewardDistribution.EpochNumber,
-						Rewards:     make(map[string]*big.Int),
-						TotalReward: new(big.Int).Set(dposInstance.pendingRewardDistribution.TotalReward),
-						Timestamp:   dposInstance.pendingRewardDistribution.Timestamp,
+						EpochNumber:  dposInstance.pendingRewardDistribution.EpochNumber,
+						Rewards:      make(map[string]*big.Int),
+						VoterRewards: make([]*VoterRewardDetail, 0, len(dposInstance.pendingRewardDistribution.VoterRewards)),
+						TotalReward:  new(big.Int).Set(dposInstance.pendingRewardDistribution.TotalReward),
+						Timestamp:    dposInstance.pendingRewardDistribution.Timestamp,
 					}
 					// 复制Rewards map
 					for k, v := range dposInstance.pendingRewardDistribution.Rewards {
 						extra.RewardDistribution.Rewards[k] = new(big.Int).Set(v)
 					}
+					// 复制VoterRewards列表（包含验证者-投票者映射）
+					for _, voterReward := range dposInstance.pendingRewardDistribution.VoterRewards {
+						if voterReward != nil {
+							extra.RewardDistribution.VoterRewards = append(extra.RewardDistribution.VoterRewards, &VoterRewardDetail{
+								VoterAddress:     voterReward.VoterAddress,
+								ValidatorAddress: voterReward.ValidatorAddress,
+								Amount:           new(big.Int).Set(voterReward.Amount),
+							})
+						}
+					}
 
 					r.logger.Info("🔧 buildBlock: epoch结束区块，奖励分配信息已添加到ExtraData",
 						"blockNumber", h.Number,
 						"rewardCount", len(extra.RewardDistribution.Rewards),
+						"voterRewardCount", len(extra.RewardDistribution.VoterRewards),
 						"totalReward", extra.RewardDistribution.TotalReward.String())
 
 					// 清空pending奖励分配信息
@@ -747,7 +770,18 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 				}
 
 				// 添加故障消减信息
+				r.logger.Info("🔍 [buildBlock] 检查pendingSlashingInfo",
+					"blockNumber", h.Number,
+					"isEpochEndBlock", isEpochEndBlock,
+					"pendingSlashingInfoIsNil", dposInstance.pendingSlashingInfo == nil)
+
 				if dposInstance.pendingSlashingInfo != nil {
+					r.logger.Info("✅ [buildBlock] 发现pendingSlashingInfo，准备写入ExtraData",
+						"blockNumber", h.Number,
+						"epochNumber", dposInstance.pendingSlashingInfo.EpochNumber,
+						"slashingsCount", len(dposInstance.pendingSlashingInfo.Slashings),
+						"timestamp", dposInstance.pendingSlashingInfo.Timestamp)
+
 					// 复制SlashingInfo，避免引用被清空
 					extra.SlashingInfo = &SlashingInfo{
 						EpochNumber: dposInstance.pendingSlashingInfo.EpochNumber,
@@ -762,19 +796,27 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 							MissedBlocksPercentage: op.MissedBlocksPercentage,
 							Reason:                 op.Reason,
 						}
+						r.logger.Info("📋 [buildBlock] 消减操作详情",
+							"blockNumber", h.Number,
+							"validator", op.ValidatorAddr.String(),
+							"slashRate", op.SlashRate,
+							"missedBlocks", op.MissedBlocks,
+							"reason", op.Reason)
 					}
 
-					r.logger.Debug("🔧 buildBlock: epoch结束区块，故障消减信息已添加到ExtraData",
+					r.logger.Info("🔧 buildBlock: epoch结束区块，故障消减信息已添加到ExtraData",
 						"blockNumber", h.Number,
-						"slashingsCount", len(extra.SlashingInfo.Slashings))
+						"slashingsCount", len(extra.SlashingInfo.Slashings),
+						"epochNumber", extra.SlashingInfo.EpochNumber)
 
 					// 清空pending消减信息
 					dposInstance.pendingSlashingInfo = nil
-					r.logger.Debug("✅ buildBlock: 已清空pending消减信息")
+					r.logger.Info("✅ buildBlock: 已清空pending消减信息", "blockNumber", h.Number)
 				} else {
-					r.logger.Info("ℹ️ buildBlock: DPoS实例存在但无待处理的消减信息",
+					r.logger.Info("ℹ️ ℹ️ ℹ️ ℹ️ [buildBlock] DPoS实例存在但无待处理的消减信息",
 						"blockNumber", h.Number,
-						"isEpochEndBlock", isEpochEndBlock)
+						"isEpochEndBlock", isEpochEndBlock,
+						"reason", "可能原因：1) 没有故障验证者 2) 故障验证者不在验证者集合中 3) 消减信息已在之前的区块被清空 4) CollectSlashingInfo未被调用或未收集到信息")
 				}
 
 				// 在epoch结束区块中也设置CheckpointBlockHash
@@ -1128,10 +1170,37 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 			}
 
 			// 解析父区块的ExtraData
+			// ✅ 关键修复：如果是共识切换高度，父区块是IBFT格式，解析失败时容错处理
 			parentExtra, err := GetDposExtra(parentHeader.ExtraData)
 			if err != nil {
-				r.logger.Error("failed to parse parent extra data", "error", err)
-				return nil, fmt.Errorf("failed to parse parent extra data: %w", err)
+				// 检查是否是共识切换高度（父区块是IBFT格式）
+				isConsensusSwitchHeight := false
+				if r.config != nil && r.config.dposBackend != nil {
+					if dposInstance, ok := r.config.dposBackend.(*DPoS); ok && dposInstance.config != nil {
+						if dposInstance.config.ConsensusSwitchHeight > 0 && block.Block.Number() == dposInstance.config.ConsensusSwitchHeight {
+							isConsensusSwitchHeight = true
+						}
+					}
+				}
+
+				if isConsensusSwitchHeight {
+					// 共识切换高度：父区块是IBFT格式，解析失败是正常的
+					// 创建一个空的Extra对象，允许继续执行
+					r.logger.Info("⚠️ 共识切换高度：父区块是IBFT格式，ExtraData解析失败但继续执行",
+						"blockNumber", block.Block.Number(),
+						"parentNumber", parentHeader.Number,
+						"error", err)
+					parentExtra = &Extra{
+						Validators: nil,
+						Parent:     nil,
+						Committed:  nil,
+						Checkpoint: nil,
+					}
+				} else {
+					// 非共识切换高度：解析失败是真正的错误
+					r.logger.Error("failed to parse parent extra data", "error", err)
+					return nil, fmt.Errorf("failed to parse parent extra data: %w", err)
+				}
 			}
 
 			// 使用父区块的Committed签名作为当前区块的Parent签名

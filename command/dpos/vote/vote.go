@@ -101,7 +101,7 @@ func setFlags(cmd *cobra.Command) {
 	cmd.MarkFlagRequired("voter")
 	cmd.MarkFlagRequired("candidate")
 	cmd.MarkFlagRequired("amount")
-	cmd.MarkFlagRequired("private-key")
+	// private-key is only required for vote/unvote operations, not for queries
 }
 
 // runPreRun runs the pre-run validation
@@ -167,23 +167,28 @@ func (p *voteParams) validateFlags() error {
 		return fmt.Errorf("invalid amount format: %s", p.amount)
 	}
 
-	if amount.Cmp(big.NewInt(0)) <= 0 {
-		return fmt.Errorf("amount must be greater than 0")
+	// Allow amount = 0 (query), amount = -1 (unvote), amount > 0 (vote)
+	if amount.Cmp(big.NewInt(0)) < 0 && amount.Cmp(big.NewInt(-1)) != 0 {
+		return fmt.Errorf("amount can only be 0 (query), -1 (unvote), or positive (vote)")
 	}
 
-	// Validate private key
-	if p.privateKey == "" {
-		return fmt.Errorf("private key is required")
+	// Check if private key is required
+	needsPrivateKey := amount.Cmp(big.NewInt(0)) != 0 // Required for vote (>0) and unvote (-1)
+	if needsPrivateKey && p.privateKey == "" {
+		return fmt.Errorf("private key is required for voting/unvoting operations")
 	}
 
-	// Check if private key is valid hex format (64 characters)
-	if len(p.privateKey) != 64 {
-		return fmt.Errorf("private key must be 64 hex characters, got %d", len(p.privateKey))
-	}
+	// Validate private key when required
+	if needsPrivateKey {
+		// Check if private key is valid hex format (64 characters)
+		if len(p.privateKey) != 64 {
+			return fmt.Errorf("private key must be 64 hex characters, got %d", len(p.privateKey))
+		}
 
-	// Validate hex format
-	if _, err := hex.DecodeString(p.privateKey); err != nil {
-		return fmt.Errorf("invalid private key hex format: %s", err)
+		// Validate hex format
+		if _, err := hex.DecodeString(p.privateKey); err != nil {
+			return fmt.Errorf("invalid private key hex format: %s", err)
+		}
 	}
 
 	return nil
@@ -219,8 +224,14 @@ func runCommand(cmd *cobra.Command, _ []string) error {
 	// Parse amount
 	amount, _ := new(big.Int).SetString(params.amount, 10)
 
+	// For query operations (amount = 0), don't pass private key even if provided
+	privateKey := params.privateKey
+	if amount.Cmp(big.NewInt(0)) == 0 {
+		privateKey = ""
+	}
+
 	// Attempt to vote using RPC methods
-	result, err := voteForCandidate(client, params.voter, params.candidate, amount, params.privateKey)
+	result, err := voteForCandidate(client, params.voter, params.candidate, amount, privateKey)
 	if err != nil {
 		return fmt.Errorf("failed to vote: %w", err)
 	}
@@ -233,21 +244,33 @@ func runCommand(cmd *cobra.Command, _ []string) error {
 
 // voteForCandidate attempts to vote for a candidate using RPC methods
 func voteForCandidate(client *jsonrpc.Client, voter, candidate string, amount *big.Int, privateKey string) (*VoteResult, error) {
-	// Use dpos_vote method
-	result, err := callVoteRPCMethod(client, "dpos_vote", []interface{}{
-		voter,
-		candidate,
-		amount.String(),
-		privateKey, // 添加私钥参数
-	})
+	// Determine operation type and parameters
+	var methodParams []interface{}
+
+	if amount.Cmp(big.NewInt(0)) == 0 {
+		// Query unvote information (3 parameters, no private key)
+		methodParams = []interface{}{voter, candidate, amount.String()}
+	} else {
+		// Vote or unvote transaction (4 parameters, with private key)
+		methodParams = []interface{}{voter, candidate, amount.String(), privateKey}
+	}
+
+	result, err := callVoteRPCMethod(client, "dpos_vote", methodParams)
 	if err == nil && result != nil {
 		return result, nil
 	}
 
 	// If RPC method fails, return a simulated result
+	operationType := "vote"
+	if amount.Cmp(big.NewInt(0)) == 0 {
+		operationType = "query"
+	} else if amount.Cmp(big.NewInt(-1)) == 0 {
+		operationType = "unvote"
+	}
+
 	return &VoteResult{
 		Success:     false,
-		Message:     "No DPoS voting RPC methods available on this node",
+		Message:     fmt.Sprintf("No DPoS %s RPC methods available on this node", operationType),
 		Voter:       voter,
 		Candidate:   candidate,
 		Amount:      amount.String(),
@@ -347,6 +370,7 @@ func parseVoteResult(data interface{}, method string) (*VoteResult, error) {
 	// 检查是否有错误信息
 	if errorMsg, ok := resultMap["error"].(string); ok && errorMsg != "" {
 		message = errorMsg
+		success = false
 	}
 
 	txHash := ""
@@ -357,6 +381,53 @@ func parseVoteResult(data interface{}, method string) (*VoteResult, error) {
 	var blockNumber uint64
 	if block, ok := resultMap["blockNumber"].(float64); ok {
 		blockNumber = uint64(block)
+	}
+
+	// Handle UnvoteResponse format for query operations (amount = 0)
+	if withdrawAmount, hasWithdrawAmount := resultMap["withdrawAmount"]; hasWithdrawAmount {
+		// This is an UnvoteResponse (query result)
+		originalAmount := "0"
+		if origAmt, ok := resultMap["originalAmount"]; ok {
+			if amtStr, ok := origAmt.(string); ok {
+				originalAmount = amtStr
+			}
+		}
+
+		totalSlashAmount := "0"
+		if slashAmt, ok := resultMap["totalSlashAmount"]; ok {
+			if amtStr, ok := slashAmt.(string); ok {
+				totalSlashAmount = amtStr
+			}
+		}
+
+		withdrawAmountStr := "0"
+		if withdrawAmt, ok := withdrawAmount.(string); ok {
+			withdrawAmountStr = withdrawAmt
+		}
+
+		// Format detailed unvote information
+		message = fmt.Sprintf("Unvote Query - Original: %s, Withdrawable: %s, Slashed: %s",
+			originalAmount, withdrawAmountStr, totalSlashAmount)
+
+		return &VoteResult{
+			Success:     success,
+			Message:     message,
+			Voter:       params.voter,
+			Candidate:   params.candidate,
+			Amount:      "0", // Query operation
+			TxHash:      "",
+			BlockNumber: 0,
+		}, nil
+	}
+
+	// Handle VoteResponse format for vote/unvote transactions (amount != 0)
+	if txHash == "" {
+		// Check for transaction hash in different formats
+		if hash, ok := resultMap["txHash"].(string); ok && hash != "" {
+			txHash = hash
+		} else if hash, ok := resultMap["transactionHash"].(string); ok && hash != "" {
+			txHash = hash
+		}
 	}
 
 	result := &VoteResult{

@@ -93,9 +93,11 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 
 	// 创建 StakeInfo（不再依赖 VoterInfo）
 	now := uint64(time.Now().Unix())
+	amountCopy := new(big.Int).Set(amount)
 	stakeInfo := &StakeInfo{
 		Staker:         voter,
-		Amount:         new(big.Int).Set(amount),
+		Amount:         amountCopy,
+		OriginalAmount: new(big.Int).Set(amountCopy), // 当初的投票金额（撤销后仍可查询）
 		StartTime:      now,
 		EndTime:        now + d.config.VoteLockTime, // 锁定时间
 		IsLocked:       d.config.VoteLockTime > 0,
@@ -111,6 +113,31 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 	if err := d.state.StakeStore.setStakingInfo(voter, stakeInfo, now, dbTx); err != nil {
 		d.logger.Error("❌ Failed to save staking info to database", "error", err)
 		return fmt.Errorf("failed to save staking info to database: %w", err)
+	}
+
+	// ✅ 关键修复：在同一个事务中更新 DelegateInfo 表
+	// 因为 GetValidatorsWithFilter 从 DelegateInfo 表读取，所以需要同步更新
+	if applied {
+		// 从 DelegateInfo 表读取当前权重（在事务中）
+		currentPower := big.NewInt(0)
+		if delegateInfo, err := d.state.StakeStore.getDelegateInfo(candidate, dbTx); err == nil && delegateInfo != nil && delegateInfo.VotingPower != nil {
+			currentPower = new(big.Int).Set(delegateInfo.VotingPower)
+		}
+
+		// 计算新的投票权重
+		newPower := new(big.Int).Add(currentPower, amount)
+
+		// 更新 DelegateInfo 表
+		if err := d.updateVotingPowerInDatabaseWithTx(candidate, newPower, dbTx); err != nil {
+			d.logger.Error("❌ 更新 DelegateInfo 失败", "error", err)
+			return fmt.Errorf("failed to update delegate info: %w", err)
+		}
+
+		d.logger.Info("✅ DelegateInfo 已更新",
+			"delegate", candidate.String(),
+			"oldPower", currentPower.String(),
+			"addedAmount", amount.String(),
+			"newPower", newPower.String())
 	}
 
 	// 提交事务
@@ -749,6 +776,164 @@ func (d *DPoS) restoreDelegatesFromDatabase() error {
 	if err != nil {
 		return fmt.Errorf("failed to restore delegates from database: %w", err)
 	}
+
+	return nil
+}
+
+// getDelegateThreshold 获取委托门槛值（dpos_delegate_threshold）
+// 优先级：参数系统 > 配置 > 默认值
+func (d *DPoS) getDelegateThreshold() *big.Int {
+	// 1. 优先从参数系统读取（经过治理流程修改的值是权威数据源）
+	if paramValue, err := d.getCurrentParameterValue("dpos_delegate_threshold"); err == nil {
+		switch v := paramValue.(type) {
+		case string:
+			if bigAmount, ok := new(big.Int).SetString(v, 10); ok && bigAmount.Cmp(big.NewInt(0)) > 0 {
+				d.logger.Debug("从参数系统读取 dpos_delegate_threshold", "value", v)
+				return bigAmount
+			}
+		case *big.Int:
+			if v != nil && v.Cmp(big.NewInt(0)) > 0 {
+				d.logger.Debug("从参数系统读取 dpos_delegate_threshold", "value", v.String())
+				return new(big.Int).Set(v)
+			}
+		}
+	}
+
+	// 2. 从配置读取
+	if d.config != nil && d.config.DPoSDelegateThreshold != nil && d.config.DPoSDelegateThreshold.Cmp(big.NewInt(0)) > 0 {
+		d.logger.Debug("从配置读取 dpos_delegate_threshold", "value", d.config.DPoSDelegateThreshold.String())
+		return new(big.Int).Set(d.config.DPoSDelegateThreshold)
+	}
+
+	// 3. 使用默认值（如果配置和参数系统都没有）
+	defaultValue, _ := new(big.Int).SetString("1000000000000000000000", 10) // 1000 VCITY
+	d.logger.Warn("⚠️ 未找到 dpos_delegate_threshold 配置，使用默认值", "defaultValue", defaultValue.String())
+	return defaultValue
+}
+
+// CreateGenesisVoteRecord 在共识切换高度创建根账户对创世验证者的投票记录（公开方法）
+func (d *DPoS) CreateGenesisVoteRecord(voter types.Address, delegate types.Address, amount *big.Int, effectiveEpoch uint64, applied bool) error {
+	return d.persistVoteToDatabase(voter, delegate, amount, effectiveEpoch, applied)
+}
+
+// CreateGenesisVotesForAllValidators 在共识切换高度为所有创世验证者创建根账户的投票记录（公开方法）
+func (d *DPoS) CreateGenesisVotesForAllValidators(blockNumber uint64) error {
+	// 检查是否是共识切换高度
+	if d.config == nil || d.config.ConsensusSwitchHeight == 0 {
+		return nil
+	}
+
+	if blockNumber != d.config.ConsensusSwitchHeight {
+		return nil
+	}
+
+	// 根账户地址：从配置中获取（在Initialize时从创世文件alloc中读取并保存）
+	rootAccount := d.config.GenesisRootAccount
+	if rootAccount == (types.Address{}) {
+		d.logger.Error("❌ 无法获取根账户地址：GenesisRootAccount未配置（应在Initialize时从创世文件alloc中读取）")
+		return fmt.Errorf("root account address not found: GenesisRootAccount not configured")
+	}
+
+	// 从配置读取投票金额（使用 dpos_delegate_threshold）
+	voteAmount := d.getDelegateThreshold()
+
+	// 获取创世验证者列表
+	var genesisValidators []types.Address
+	if d.config != nil && len(d.config.InitialDelegates) > 0 {
+		for _, gv := range d.config.InitialDelegates {
+			genesisValidators = append(genesisValidators, types.Address(gv.Address))
+		}
+	}
+
+	// 如果配置中没有，尝试从当前验证者集合获取
+	if len(genesisValidators) == 0 {
+		currentValidators := d.GetCurrentDelegates()
+		if len(currentValidators) > 0 {
+			for _, v := range currentValidators {
+				genesisValidators = append(genesisValidators, v.Address)
+			}
+		}
+	}
+
+	if len(genesisValidators) == 0 {
+		d.logger.Warn("⚠️ 创世验证者列表为空，跳过创建投票记录")
+		return nil
+	}
+
+	// 检查是否已创建投票记录（幂等性检查）
+	var stakingInfos []*StakeInfo
+	if d.state != nil && d.state.StakeStore != nil {
+		var err error
+		stakingInfos, err = d.state.StakeStore.GetStakingInfo()
+		if err != nil {
+			d.logger.Warn("⚠️ 获取投票记录失败，将尝试创建", "error", err)
+		}
+	}
+
+	// 检查根账户是否已投票给所有创世验证者
+	hasAllVotes := true
+	for _, validatorAddr := range genesisValidators {
+		hasVote := false
+		for _, stakeInfo := range stakingInfos {
+			if stakeInfo != nil && stakeInfo.Staker == rootAccount && stakeInfo.Delegate == validatorAddr {
+				hasVote = true
+				break
+			}
+		}
+		if !hasVote {
+			hasAllVotes = false
+			break
+		}
+	}
+
+	if hasAllVotes {
+		d.logger.Info("✅ 根账户对创世验证者的投票记录已存在，跳过创建",
+			"blockNumber", blockNumber,
+			"genesisValidatorsCount", len(genesisValidators))
+		return nil
+	}
+
+	// 创建投票记录
+	d.logger.Info("📝 开始创建根账户对创世验证者的投票记录",
+		"blockNumber", blockNumber,
+		"rootAccount", rootAccount.String(),
+		"genesisValidatorsCount", len(genesisValidators),
+		"voteAmount", voteAmount.String())
+
+	createdCount := 0
+	for _, validatorAddr := range genesisValidators {
+		// 再次检查是否已存在（双重检查）
+		hasVote := false
+		for _, stakeInfo := range stakingInfos {
+			if stakeInfo != nil && stakeInfo.Staker == rootAccount && stakeInfo.Delegate == validatorAddr {
+				hasVote = true
+				break
+			}
+		}
+		if hasVote {
+			d.logger.Debug("投票记录已存在，跳过",
+				"validator", validatorAddr.String())
+			continue
+		}
+
+		// 使用公开方法创建投票记录
+		if err := d.CreateGenesisVoteRecord(rootAccount, validatorAddr, voteAmount, 1, true); err != nil {
+			d.logger.Error("❌ 创建投票记录失败",
+				"validator", validatorAddr.String(),
+				"error", err)
+			return fmt.Errorf("failed to create vote record for validator %s: %w", validatorAddr.String(), err)
+		}
+
+		createdCount++
+		d.logger.Info("✅ 创建投票记录成功",
+			"validator", validatorAddr.String(),
+			"amount", voteAmount.String())
+	}
+
+	d.logger.Info("🎉 根账户对创世验证者的投票记录创建完成",
+		"blockNumber", blockNumber,
+		"createdCount", createdCount,
+		"totalValidators", len(genesisValidators))
 
 	return nil
 }

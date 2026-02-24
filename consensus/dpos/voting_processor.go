@@ -18,6 +18,12 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 		"candidate", candidate.String(),
 		"amount", amount.String())
 
+	// 检查是否为撤销投票 (amount = -1)
+	if amount.Cmp(big.NewInt(-1)) == 0 {
+		d.logger.Info("🔄 检测到撤销投票请求，开始处理撤销逻辑")
+		return d.processUnvote(voter, candidate)
+	}
+
 	// 计算投票生效的epoch（边界应用）
 	currentBlockNumber := d.getCurrentBlockNumber()
 	currentEpochMeta := d.getEpochForBlock(currentBlockNumber)
@@ -28,7 +34,7 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 		currentEpoch = 0
 	}
 
-	// 改为：本epoch投票在本epoch末尾应用（effectiveEpoch = currentEpoch）
+	// 本epoch投票在本epoch末尾应用（effectiveEpoch = currentEpoch）
 	effectiveEpoch := currentEpoch
 	d.logger.Info("✅ [投票] 设置生效epoch为当前epoch（本轮边界应用）",
 		"voter", voter.String(),
@@ -36,8 +42,6 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 		"currentBlock", currentBlockNumber,
 		"currentEpoch", currentEpoch,
 		"effectiveEpoch", effectiveEpoch)
-
-	// 创建投票消息（用于验证）
 	vote := &VoteMessage{
 		Voter:          voter,
 		Delegate:       candidate,
@@ -48,15 +52,18 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 		Applied:        false,
 	}
 
-	// ✅ 修改：只进行基本验证，不更新数据库（边界应用）
-	d.logger.Debug("🔄 验证投票（不更新数据库）...")
-	if err := d.validateVoteOnly(vote); err != nil {
+	// 只进行验证，不更新状态（完整验证：检查余额和注册状态，并将已记账未生效的pending也计入占用额度）
+	d.logger.Debug("🔄 验证投票（不更新数据库，包含余额检查并计入pending）...")
+	if err := d.verifyVoteSignature(vote); err != nil {
+		d.logger.Error("❌ 投票签名验证失败", "error", err)
+		return fmt.Errorf("vote signature verification failed: %w", err)
+	}
+	if err := d.validateVote(vote, false, false, true); err != nil {
 		d.logger.Error("❌ 投票验证失败", "error", err)
 		return fmt.Errorf("vote validation failed: %w", err)
 	}
-	d.logger.Debug("✅ 投票验证通过")
+	d.logger.Debug("✅ 投票验证通过（余额和注册状态检查通过）")
 
-	// ✅ 修改：只保存投票记录到数据库，不更新验证者权重
 	d.logger.Debug("🔄 保存投票记录到数据库（等待边界应用）...")
 	if err := d.persistVoteToDatabase(voter, candidate, amount, effectiveEpoch, false); err != nil {
 		d.logger.Error("Failed to persist vote to database", "error", err)
@@ -78,35 +85,6 @@ func (d *DPoS) AddVote(voter types.Address, candidate types.Address, amount *big
 	return nil
 }
 
-// validateVoteOnly 只验证投票，不更新数据库（用于边界应用）
-func (d *DPoS) validateVoteOnly(vote *VoteMessage) error {
-	// 1. 基本验证（签名、格式等）
-	if err := d.verifyVoteSignature(vote); err != nil {
-		return fmt.Errorf("vote signature verification failed: %w", err)
-	}
-
-	// 2. 投票权重上限检查 - 已删除（投票者不受限制）
-
-	// 3. 检查受托人是否存在（只检查，不创建）
-	validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
-	if err == nil {
-		delegateExists := false
-		for _, validator := range validators {
-			if validator.Address == vote.Delegate && validator.IsActive {
-				delegateExists = true
-				break
-			}
-		}
-		if !delegateExists {
-			d.logger.Debug("⚠️ 受托人不在验证者集合中，将在边界应用时创建",
-				"delegate", vote.Delegate.String(),
-				"note", "投票已记录，将在epoch边界应用时创建验证者记录")
-		}
-	}
-
-	return nil
-}
-
 // processVoteInternal 内部投票处理方法（不加锁，由调用者负责）
 func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 	d.logger.Debug("🔄 processVoteInternal started",
@@ -124,7 +102,8 @@ func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 		"amount", vote.Amount.String(),
 		"amountHex", fmt.Sprintf("0x%x", vote.Amount.Bytes()))
 
-	if err := d.validateVote(vote); err != nil {
+	// 边界应用时做完整验证（包括余额和注册状态），但此时不再叠加pending（当前正在应用的这批就是pending）
+	if err := d.validateVote(vote, false, false, false); err != nil {
 		d.logger.Error("❌ Vote validation failed", "error", err)
 		return fmt.Errorf("vote validation failed: %w", err)
 	}
@@ -179,6 +158,15 @@ func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 	if !found {
 		voter.VotedDelegates = append(voter.VotedDelegates, vote.Delegate)
 	}
+	// 更新 DelegateVotes 便于边界应用时持久化 VoterInfo
+	if voter.DelegateVotes == nil {
+		voter.DelegateVotes = make(map[types.Address]*big.Int)
+	}
+	if prev := voter.DelegateVotes[vote.Delegate]; prev != nil {
+		voter.DelegateVotes[vote.Delegate] = new(big.Int).Add(prev, vote.Amount)
+	} else {
+		voter.DelegateVotes[vote.Delegate] = new(big.Int).Set(vote.Amount)
+	}
 
 	// 7. 更新受托人的投票权重
 	d.logger.Debug("🔄 准备更新受托人投票权重",
@@ -194,8 +182,6 @@ func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 			"error", err)
 		return fmt.Errorf("failed to get voting power from database: %w", err)
 	}
-
-	// 显著日志：显示投票权重更新详情
 	d.logger.Info("🎯 ===== 投票权重更新详情 =====",
 		"delegate", vote.Delegate.String(),
 		"originalVotingPower", originalVotingPower.String(),
@@ -205,7 +191,6 @@ func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 		"expectedNewPower", new(big.Int).Add(originalVotingPower, vote.Amount).String(),
 		"dataSource", "database")
 
-	// 直接更新数据库，然后同步到内存
 	newVotingPower := new(big.Int).Add(originalVotingPower, vote.Amount)
 	err = d.updateVotingPowerInDatabase(vote.Delegate, newVotingPower)
 	if err != nil {
@@ -216,7 +201,6 @@ func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 		return fmt.Errorf("failed to update voting power in database: %w", err)
 	}
 
-	// 数据库更新成功后，同步到内存
 	err = d.syncDelegateFromDatabase(vote.Delegate)
 	if err != nil {
 		d.logger.Warn("⚠️ 同步验证者信息到内存失败",
@@ -224,8 +208,6 @@ func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 			"error", err)
 		// 不返回错误，因为数据库更新已经成功
 	}
-
-	// 显著日志：记录更新完成
 	d.logger.Info("🎯 ===== 投票权重更新完成 =====",
 		"delegate", vote.Delegate.String(),
 		"originalVotingPower", originalVotingPower.String(),
@@ -267,8 +249,8 @@ func (d *DPoS) processVoteBatch(votes []*VoteMessage) {
 	delegateUpdates := make(map[types.Address]*big.Int)
 
 	for _, vote := range votes {
-		// 验证投票
-		if err := d.validateVote(vote); err != nil {
+		// 验证投票（批量处理时做完整验证），但此处不叠加pending（批量数据本身即为待处理集合）
+		if err := d.validateVote(vote, false, false, false); err != nil {
 			d.logger.Warn("invalid vote in batch", "error", err, "voter", vote.Voter)
 			continue
 		}
@@ -335,10 +317,8 @@ func (d *DPoS) processVoteBatch(votes []*VoteMessage) {
 		d.logger.Info("✅ 批量投票完成，已标记需要更新的验证者", "votedDelegatesCount", len(d.lastVotedDelegates))
 	}
 
-	// 更新缓存
 	d.updateCache(voterUpdates)
 
-	// 更新指标
 	d.metrics.lock.Lock()
 	d.metrics.TotalVotes += uint64(len(votes))
 	d.metrics.ActiveVoters = uint64(len(d.voters))
@@ -357,11 +337,26 @@ func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error
 		"epochNumber", epochNumber)
 
 	// 查询所有待应用的投票（内存 + 数据库）
+	// 使用去重机制，避免同一投票被处理两次
 	var scheduledVotes []*VoteRecord
+	voteKeyMap := make(map[string]bool) // 用于去重：key = "Voter_Delegate_Timestamp"
+
 	addVote := func(v *VoteRecord) {
 		if v == nil {
 			return
 		}
+		// 生成唯一键：Voter + Delegate + Timestamp
+		voteKey := fmt.Sprintf("%s_%s_%d", v.Voter.String(), v.Delegate.String(), v.Timestamp)
+		if voteKeyMap[voteKey] {
+			// 已存在，跳过（去重）
+			d.logger.Debug("🔄 [边界应用投票] 发现重复投票，跳过",
+				"voter", v.Voter.String(),
+				"delegate", v.Delegate.String(),
+				"timestamp", v.Timestamp,
+				"amount", v.Amount.String())
+			return
+		}
+		voteKeyMap[voteKey] = true
 		scheduledVotes = append(scheduledVotes, v)
 	}
 
@@ -382,9 +377,27 @@ func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error
 					continue
 				}
 				if stakeInfo.Applied {
+					d.logger.Info("ℹ️ [边界应用投票] 投票记录已应用，跳过",
+						"voter", stakeInfo.Staker.String(),
+						"delegate", stakeInfo.Delegate.String(),
+						"effectiveEpoch", stakeInfo.EffectiveEpoch,
+						"currentEpoch", epochNumber,
+						"applied", stakeInfo.Applied)
 					continue
 				}
 				if stakeInfo.EffectiveEpoch != epochNumber {
+					d.logger.Info("⚠️ [边界应用投票] 投票记录被跳过（EffectiveEpoch不匹配）",
+						"voter", stakeInfo.Staker.String(),
+						"delegate", stakeInfo.Delegate.String(),
+						"effectiveEpoch", stakeInfo.EffectiveEpoch,
+						"currentEpoch", epochNumber,
+						"applied", stakeInfo.Applied,
+						"amount", func() string {
+							if stakeInfo.Amount != nil {
+								return stakeInfo.Amount.String()
+							}
+							return "nil"
+						}())
 					continue
 				}
 				addVote(&VoteRecord{
@@ -395,6 +408,17 @@ func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error
 					EffectiveEpoch: stakeInfo.EffectiveEpoch,
 					Applied:        stakeInfo.Applied,
 				})
+				d.logger.Info("✅ [边界应用投票] 找到待应用投票",
+					"voter", stakeInfo.Staker.String(),
+					"delegate", stakeInfo.Delegate.String(),
+					"effectiveEpoch", stakeInfo.EffectiveEpoch,
+					"currentEpoch", epochNumber,
+					"amount", func() string {
+						if stakeInfo.Amount != nil {
+							return stakeInfo.Amount.String()
+						}
+						return "nil"
+					}())
 			}
 		} else {
 			d.logger.Warn("⚠️ [边界应用投票] 从数据库加载待应用投票失败",
@@ -416,15 +440,12 @@ func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error
 		return nil
 	}
 
-	// ✅ 修改：在边界应用时更新数据库和验证者集合
 	d.logger.Info("✅ [边界应用投票] 投票条件满足，开始应用",
 		"blockNumber", blockNumber,
 		"epochNumber", epochNumber,
 		"votesCount", len(scheduledVotes))
 
-	// 应用每个投票：更新数据库和内存
 	for _, voteRecord := range scheduledVotes {
-		// 创建 VoteMessage 用于 processVoteInternal
 		vote := &VoteMessage{
 			Voter:          voteRecord.Voter,
 			Delegate:       voteRecord.Delegate,
@@ -435,7 +456,6 @@ func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error
 			Applied:        true, // 标记为已应用
 		}
 
-		// 调用 processVoteInternal 更新数据库和内存
 		if err := d.processVoteInternal(vote); err != nil {
 			d.logger.Error("❌ [边界应用投票] 应用投票失败",
 				"voter", voteRecord.Voter.String(),
@@ -445,23 +465,41 @@ func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error
 			continue
 		}
 
-		// ✅ 更新数据库中的 Applied 状态
+		// ✅ 更新数据库：StakeInfo.Applied + VoterInfo（边界应用后持久化，避免 DB 中 VoterInfo 长期不一致）
 		if d.state != nil && d.state.StakeStore != nil {
-			// 更新 StakeInfo 中的 Applied 字段
 			stakingInfos, err := d.state.StakeStore.GetStakingInfo()
 			if err == nil {
+				var foundStake *StakeInfo
 				for _, stakeInfo := range stakingInfos {
 					if stakeInfo.Staker == voteRecord.Voter &&
 						stakeInfo.Delegate == voteRecord.Delegate &&
 						stakeInfo.StartTime == voteRecord.Timestamp {
 						stakeInfo.Applied = true
-						// 保存更新后的 StakeInfo
-						dbTx, err := d.state.beginDBTransaction(true)
-						if err == nil {
-							d.state.StakeStore.setStakingInfo(voteRecord.Voter, stakeInfo, voteRecord.Timestamp, dbTx)
-							dbTx.Commit()
-						}
+						foundStake = stakeInfo
 						break
+					}
+				}
+				if foundStake != nil {
+					dbTx, err := d.state.beginDBTransaction(true)
+					if err != nil {
+						continue
+					}
+					if err := d.state.StakeStore.setStakingInfo(voteRecord.Voter, foundStake, voteRecord.Timestamp, dbTx); err != nil {
+						d.logger.Warn("⚠️ [边界应用投票] 保存 StakeInfo.Applied 失败", "error", err)
+						_ = dbTx.Rollback()
+						continue
+					}
+					if v, ok := d.voters[voteRecord.Voter]; ok && v != nil {
+						if err := d.state.StakeStore.setVoterInfo(voteRecord.Voter, v, dbTx); err != nil {
+							d.logger.Warn("⚠️ [边界应用投票] 保存 VoterInfo 失败", "error", err)
+							_ = dbTx.Rollback()
+							continue
+						}
+					}
+					if err := dbTx.Commit(); err != nil {
+						d.logger.Warn("⚠️ [边界应用投票] 提交事务失败", "error", err)
+						_ = dbTx.Rollback()
+						continue
 					}
 				}
 			}
@@ -506,6 +544,180 @@ func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error
 	return nil
 }
 
+// processUnvote 处理撤销投票逻辑（与投票一致：在本 epoch 边界生效，避免权重突变导致分叉）
+func (d *DPoS) processUnvote(voter types.Address, candidate types.Address) error {
+	d.logger.Info("🔄 开始处理撤销投票（边界生效）",
+		"voter", voter.String(),
+		"candidate", candidate.String())
 
+	if d.state == nil || d.state.StakeStore == nil {
+		d.logger.Warn("❌ 数据库不可用，无法撤销投票",
+			"voter", voter.String())
+		return fmt.Errorf("database not available, cannot process unvote")
+	}
+	// 当前 epoch：用「下一块」算 epoch，使 unvote 一定在本 epoch 或下一 epoch 边界被应用（避免 tx 进下一块时 UnvoteEffectiveEpoch 仍是上一 epoch 导致永不生效）
+	currentBlockNumber := d.getCurrentBlockNumber()
+	blockContainingTx := currentBlockNumber + 1
+	currentEpochMeta := d.getEpochForBlock(blockContainingTx)
+	if currentEpochMeta == nil {
+		currentEpochMeta = d.getEpochForBlock(currentBlockNumber)
+	}
+	var currentEpoch uint64
+	if currentEpochMeta != nil {
+		currentEpoch = currentEpochMeta.Number
+	}
 
+	// 找出所有可撤销的 StakeInfo（已应用、活跃、金额>0）
+	stakingInfos, err := d.state.StakeStore.GetStakingInfo()
+	if err != nil {
+		d.logger.Warn("⚠️ 获取 StakeInfo 失败", "error", err)
+		return fmt.Errorf("failed to get staking info: %w", err)
+	}
+	var matchingStakes []*StakeInfo
+	totalToUnvote := big.NewInt(0)
+	for _, s := range stakingInfos {
+		if s == nil || s.Staker != voter || s.Delegate != candidate {
+			continue
+		}
+		if !s.Applied || !s.IsActive || s.Amount == nil || s.Amount.Sign() <= 0 {
+			continue
+		}
+		matchingStakes = append(matchingStakes, s)
+		totalToUnvote.Add(totalToUnvote, s.Amount)
+	}
+	if len(matchingStakes) == 0 || totalToUnvote.Sign() <= 0 {
+		d.logger.Warn("❌ 投票者未投票给该候选人，无法撤销",
+			"voter", voter.String(),
+			"candidate", candidate.String())
+		return fmt.Errorf("no vote found for candidate %s", candidate.String())
+	}
 
+	// 只做「待撤销」标记，不修改 VoterInfo/DelegateInfo/Amount，边界时由 applyScheduledUnvotes 统一生效
+	dbTx, err := d.state.beginDBTransaction(true)
+	if err != nil {
+		d.logger.Warn("⚠️ 开启事务失败", "error", err)
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer dbTx.Rollback()
+
+	updatedCount := 0
+	for _, stakeInfo := range matchingStakes {
+		stakeInfo.PendingUnvote = true
+		stakeInfo.UnvoteEffectiveEpoch = currentEpoch
+		if err := d.state.StakeStore.setStakingInfo(voter, stakeInfo, stakeInfo.StartTime, dbTx); err != nil {
+			d.logger.Warn("⚠️ 保存 StakeInfo 待撤销标记失败", "error", err)
+			return fmt.Errorf("failed to set staking info for unvote: %w", err)
+		}
+		updatedCount++
+	}
+	if err := dbTx.Commit(); err != nil {
+		d.logger.Warn("⚠️ 提交事务失败", "error", err)
+		return fmt.Errorf("failed to commit: %w", err)
+	}
+
+	d.logger.Info("✅ 撤销已登记，将在本 epoch 边界生效",
+		"voter", voter.String(),
+		"candidate", candidate.String(),
+		"unvotedAmount", totalToUnvote.String(),
+		"effectiveEpoch", currentEpoch,
+		"updatedStakeCount", updatedCount,
+		"note", "与投票一致，权重在 epoch 边界统一变化，避免分叉")
+	return nil
+}
+
+// applyScheduledUnvotes 在 epoch 边界应用待撤销的投票（与 applyScheduledVotes 对称，避免权重突变）
+func (d *DPoS) applyScheduledUnvotes(epochNumber uint64, blockNumber uint64) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	if d.state == nil || d.state.StakeStore == nil {
+		return nil
+	}
+	stakingInfos, err := d.state.StakeStore.GetStakingInfo()
+	if err != nil {
+		d.logger.Warn("⚠️ [边界应用撤销] 获取 StakeInfo 失败", "error", err)
+		return nil
+	}
+	type key struct{ voter, delegate string }
+	toUnvote := make(map[key][]*StakeInfo)
+	for _, s := range stakingInfos {
+		if s == nil || !s.PendingUnvote || s.UnvoteEffectiveEpoch != epochNumber {
+			continue
+		}
+		if s.Amount == nil || s.Amount.Sign() <= 0 {
+			continue
+		}
+		k := key{s.Staker.String(), s.Delegate.String()}
+		toUnvote[k] = append(toUnvote[k], s)
+	}
+	if len(toUnvote) == 0 {
+		d.logger.Info("ℹ️ [边界应用撤销] 本 epoch 无待撤销", "epochNumber", epochNumber)
+		return nil
+	}
+	d.logger.Info("🔍 [边界应用撤销] 开始应用", "epochNumber", epochNumber, "blockNumber", blockNumber, "pairs", len(toUnvote))
+
+	for k, stakes := range toUnvote {
+		voterAddr := types.StringToAddress(k.voter)
+		delegateAddr := types.StringToAddress(k.delegate)
+		totalAmount := big.NewInt(0)
+		for _, s := range stakes {
+			if s.Amount != nil {
+				totalAmount.Add(totalAmount, s.Amount)
+			}
+		}
+		if totalAmount.Sign() <= 0 {
+			continue
+		}
+		dbTx, err := d.state.beginDBTransaction(true)
+		if err != nil {
+			d.logger.Warn("⚠️ [边界应用撤销] 开启事务失败", "error", err)
+			continue
+		}
+		for _, s := range stakes {
+			if s.OriginalAmount == nil && s.Amount != nil && s.Amount.Sign() > 0 {
+				s.OriginalAmount = new(big.Int).Set(s.Amount)
+			}
+			s.Amount = big.NewInt(0)
+			s.PendingUnvote = false
+			s.UnvoteEffectiveEpoch = 0
+			_ = d.state.StakeStore.setStakingInfo(voterAddr, s, s.StartTime, dbTx)
+		}
+		voterInfo, _ := d.state.StakeStore.GetVoterInfo(voterAddr)
+		if voterInfo != nil {
+			delete(voterInfo.DelegateVotes, delegateAddr)
+			newDelegates := make([]types.Address, 0)
+			for _, del := range voterInfo.VotedDelegates {
+				if del != delegateAddr {
+					newDelegates = append(newDelegates, del)
+				}
+			}
+			voterInfo.VotedDelegates = newDelegates
+			voterInfo.VotingPower = new(big.Int).Sub(voterInfo.VotingPower, totalAmount)
+			if voterInfo.VotingPower.Sign() < 0 {
+				voterInfo.VotingPower = big.NewInt(0)
+			}
+			_ = d.state.StakeStore.setVoterInfo(voterAddr, voterInfo, dbTx)
+		} else {
+			d.logger.Warn("⚠️ [边界应用撤销] VoterInfo 不存在，仅更新 StakeInfo 与 Delegate 权重", "voter", k.voter, "delegate", k.delegate)
+		}
+		origPower, _ := d.getVotingPowerFromDatabase(delegateAddr)
+		if origPower == nil {
+			origPower = big.NewInt(0)
+		}
+		newPower := new(big.Int).Sub(origPower, totalAmount)
+		if newPower.Sign() < 0 {
+			newPower = big.NewInt(0)
+		}
+		_ = d.updateVotingPowerInDatabaseWithTx(delegateAddr, newPower, dbTx)
+		if err := dbTx.Commit(); err != nil {
+			d.logger.Warn("⚠️ [边界应用撤销] 提交事务失败", "error", err)
+			_ = dbTx.Rollback()
+			continue
+		}
+		_ = d.syncDelegateFromDatabase(delegateAddr)
+		d.logger.Info("✅ [边界应用撤销] 已生效", "voter", k.voter, "delegate", k.delegate, "amount", totalAmount.String())
+	}
+	d.pendingValidatorUpdate = true
+	d.logger.Info("✅ [边界应用撤销] 完成", "epochNumber", epochNumber, "blockNumber", blockNumber)
+	return nil
+}

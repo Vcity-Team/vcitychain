@@ -172,8 +172,10 @@ type RewardRecordExtended struct {
 	RewardType      string    `json:"reward_type"`      // "validator" 或 "voter"
 	Amount          string    `json:"amount"`           // 奖励金额(Wei)
 	VoteWeight      string    `json:"vote_weight"`      // 投票权重
+	ValidatorAddress string   `json:"validator_address,omitempty"` // 验证者地址（投票者奖励时使用）
+	BlocksProduced  uint64    `json:"blocks_produced"`  // 出块数
+	RewardPerBlock  string    `json:"reward_per_block"` // 每块奖励
 	Timestamp       time.Time `json:"timestamp"`        // 发放时间
-	TransactionHash string    `json:"transaction_hash"` // 相关交易哈希
 	Status          string    `json:"status"`           // "completed"
 }
 
@@ -944,8 +946,12 @@ func (rs *RewardStore) RecordReward(record *RewardRecordExtended) error {
 	// 获取全局日志器
 	logger := getGlobalLogger()
 
-	// 生成键：epochNumber_recipient_rewardType
+	// 生成键：epochNumber_recipient_rewardType_validatorAddress（如果存在）
+	// 这样同一个投票者从不同验证者获得的奖励可以分别记录
 	key := fmt.Sprintf("%d_%s_%s", record.EpochNumber, record.Recipient, record.RewardType)
+	if record.ValidatorAddress != "" {
+		key = fmt.Sprintf("%d_%s_%s_%s", record.EpochNumber, record.Recipient, record.RewardType, record.ValidatorAddress)
+	}
 
 	// 序列化记录
 	data, err := json.Marshal(record)
@@ -969,7 +975,7 @@ func (rs *RewardStore) RecordReward(record *RewardRecordExtended) error {
 		return fmt.Errorf("database is nil")
 	}
 
-	err = rs.db.Update(func(tx *bolt.Tx) error {
+		err = rs.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("rewards"))
 		if bucket == nil {
 			if logger != nil {
@@ -980,14 +986,9 @@ func (rs *RewardStore) RecordReward(record *RewardRecordExtended) error {
 			return fmt.Errorf("rewards bucket not found")
 		}
 
-		// 检查是否已存在记录（用于跟踪覆盖）
-		// 日志已删除：检测到覆盖已有记录
-
 		// 生成唯一ID
 		id, _ := bucket.NextSequence()
 		record.ID = id
-
-		// 日志已删除：写入奖励记录
 
 		// 添加超时机制防止卡死
 		putDone := make(chan error, 1)
@@ -1030,55 +1031,6 @@ func (rs *RewardStore) RecordReward(record *RewardRecordExtended) error {
 	}
 
 	return nil
-}
-
-// GetValidatorRewardHistory 查询验证者奖励历史
-func (rs *RewardStore) GetValidatorRewardHistory(validatorAddress string, fromEpoch, toEpoch uint64) ([]RewardRecordExtended, error) {
-	logger := getGlobalLogger()
-	if logger != nil {
-		logger.Info("🔍 GetValidatorRewardHistory: 开始查询奖励历史",
-			"validatorAddress", validatorAddress,
-			"fromEpoch", fromEpoch,
-			"toEpoch", toEpoch)
-	}
-
-	summary, err := rs.GetRewardSummary(validatorAddress, fromEpoch, toEpoch)
-	if err != nil {
-		if logger != nil {
-			logger.Error("❌ GetValidatorRewardHistory: 查询失败",
-				"validatorAddress", validatorAddress,
-				"error", err)
-		}
-		return nil, err
-	}
-
-	records := summary.ValidatorRecords
-	sort.Slice(records, func(i, j int) bool {
-		return records[i].EpochNumber > records[j].EpochNumber
-	})
-
-	if logger != nil {
-		logger.Info("✅ GetValidatorRewardHistory: 查询完成",
-			"validatorAddress", validatorAddress,
-			"recordsCount", len(records))
-	}
-
-	return records, nil
-}
-
-// GetVoterRewardHistory 查询投票者奖励历史
-func (rs *RewardStore) GetVoterRewardHistory(voterAddress string, fromEpoch, toEpoch uint64) ([]RewardRecordExtended, error) {
-	summary, err := rs.GetRewardSummary(voterAddress, fromEpoch, toEpoch)
-	if err != nil {
-		return nil, err
-	}
-
-	records := summary.VoterRecords
-	sort.Slice(records, func(i, j int) bool {
-		return records[i].EpochNumber > records[j].EpochNumber
-	})
-
-	return records, nil
 }
 
 // Close 关闭数据库连接
@@ -1171,8 +1123,95 @@ func (rs *RewardStore) GetEpochRewardDetails(epochNumber uint64) ([]RewardRecord
 	return records, err
 }
 
+// GetEpochRangeRewardDetails 查询指定epoch范围内的所有奖励详情
+func (rs *RewardStore) GetEpochRangeRewardDetails(fromEpoch, toEpoch uint64) ([]RewardRecordExtended, error) {
+	var allRecords []RewardRecordExtended
+
+	// 添加日志：开始查询
+	logger := getGlobalLogger()
+	if logger != nil {
+		logger.Info("🔍 [RewardStore.GetEpochRangeRewardDetails] 开始查询", "fromEpoch", fromEpoch, "toEpoch", toEpoch)
+	}
+
+	// 验证范围
+	if toEpoch < fromEpoch {
+		if logger != nil {
+			logger.Error("❌ [RewardStore.GetEpochRangeRewardDetails] 无效的epoch范围", "fromEpoch", fromEpoch, "toEpoch", toEpoch)
+		}
+		return nil, fmt.Errorf("invalid epoch range: toEpoch (%d) < fromEpoch (%d)", toEpoch, fromEpoch)
+	}
+
+	err := rs.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("rewards"))
+		if bucket == nil {
+			if logger != nil {
+				logger.Warn("⚠️ [RewardStore.GetEpochRangeRewardDetails] rewards bucket not found")
+			}
+			return fmt.Errorf("rewards bucket not found")
+		}
+
+		if logger != nil {
+			logger.Debug("✅ [RewardStore.GetEpochRangeRewardDetails] rewards bucket found, 开始遍历")
+		}
+
+		cursor := bucket.Cursor()
+		processedCount := 0
+		for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
+			processedCount++
+			var record RewardRecordExtended
+			if err := json.Unmarshal(v, &record); err != nil {
+				if logger != nil && processedCount%1000 == 0 {
+					logger.Debug("⚠️ [RewardStore.GetEpochRangeRewardDetails] 反序列化失败", "key", string(k), "error", err, "processedCount", processedCount)
+				}
+				continue
+			}
+
+			// 筛选范围内的记录
+			if record.EpochNumber >= fromEpoch && record.EpochNumber <= toEpoch {
+				allRecords = append(allRecords, record)
+			}
+
+			// 每处理1000条记录打印一次日志（避免日志过多）
+			if logger != nil && processedCount%1000 == 0 {
+				logger.Debug("🔄 [RewardStore.GetEpochRangeRewardDetails] 处理中", "processedCount", processedCount, "matchedCount", len(allRecords))
+			}
+		}
+
+		if logger != nil {
+			logger.Info("✅ [RewardStore.GetEpochRangeRewardDetails] 遍历完成", "fromEpoch", fromEpoch, "toEpoch", toEpoch, "totalProcessed", processedCount, "matchedCount", len(allRecords))
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		if logger != nil {
+			logger.Error("❌ [RewardStore.GetEpochRangeRewardDetails] 数据库查询失败", "fromEpoch", fromEpoch, "toEpoch", toEpoch, "error", err)
+		}
+		return nil, err
+	}
+
+	// 按金额降序排列
+	if logger != nil {
+		logger.Debug("🔄 [RewardStore.GetEpochRangeRewardDetails] 开始排序", "recordsCount", len(allRecords))
+	}
+	sort.Slice(allRecords, func(i, j int) bool {
+		amountI, _ := new(big.Int).SetString(allRecords[i].Amount, 10)
+		amountJ, _ := new(big.Int).SetString(allRecords[j].Amount, 10)
+		return amountI.Cmp(amountJ) > 0
+	})
+
+	if logger != nil {
+		logger.Info("✅ [RewardStore.GetEpochRangeRewardDetails] 查询完成", "fromEpoch", fromEpoch, "toEpoch", toEpoch, "recordsCount", len(allRecords))
+	}
+
+	return allRecords, nil
+}
+
 // GetRewardSummary 汇总指定地址在一定epoch范围内的奖励详情
 func (rs *RewardStore) GetRewardSummary(address string, fromEpoch, toEpoch uint64) (*RewardSummary, error) {
+	logger := getGlobalLogger()
+	
 	sum := &RewardSummary{
 		Address:            address,
 		FromEpoch:          fromEpoch,
@@ -1186,14 +1225,21 @@ func (rs *RewardStore) GetRewardSummary(address string, fromEpoch, toEpoch uint6
 	validatorTotal := big.NewInt(0)
 	voterTotal := big.NewInt(0)
 
+	processedCount := 0
+	matchedCount := 0
+
 	err := rs.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("rewards"))
 		if bucket == nil {
+			if logger != nil {
+				logger.Warn("⚠️ [GetRewardSummary] rewards bucket not found")
+			}
 			return fmt.Errorf("rewards bucket not found")
 		}
 
 		cursor := bucket.Cursor()
 		for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
+			processedCount++
 			var record RewardRecordExtended
 			if err := json.Unmarshal(v, &record); err != nil {
 				continue
@@ -1204,23 +1250,21 @@ func (rs *RewardStore) GetRewardSummary(address string, fromEpoch, toEpoch uint6
 				continue
 			}
 			if record.EpochNumber < fromEpoch || record.EpochNumber > toEpoch {
+				if logger != nil && processedCount%100 == 0 {
+					logger.Debug("🔍 [GetRewardSummary] Epoch范围不匹配",
+						"recordEpoch", record.EpochNumber,
+						"fromEpoch", fromEpoch,
+						"toEpoch", toEpoch,
+						"recipient", record.Recipient)
+				}
 				continue
 			}
+			
+			matchedCount++
 
 			amount, ok := new(big.Int).SetString(record.Amount, 10)
 			if !ok {
 				continue
-			}
-
-			// 记录读取到的奖励记录信息（特别是 BlockCount）
-			logger := getGlobalLogger()
-			if logger != nil {
-				logger.Info("📖 GetRewardSummary: 读取奖励记录",
-					"epoch", record.EpochNumber,
-					"recipient", record.Recipient,
-					"rewardType", record.RewardType,
-					"amount", record.Amount,
-					"key", string(k))
 			}
 
 			total.Add(total, amount)

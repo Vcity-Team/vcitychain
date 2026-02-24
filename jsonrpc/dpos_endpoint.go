@@ -112,6 +112,36 @@ type DPOS struct {
 	chainID uint64
 }
 
+// VoteRecordRequest defines filters for querying raw vote records
+type VoteRecordRequest struct {
+	Voter          string `json:"voter,omitempty"`    // 可选：按投票人过滤
+	Delegate       string `json:"delegate,omitempty"` // 可选：按被投票的验证者过滤
+	OnlyActive     bool   `json:"onlyActive"`         // 只返回 IsActive=true 的记录
+	IncludePending bool   `json:"includePending"`     // 是否包含 Applied=false 的待生效记录
+	Limit          uint64 `json:"limit"`              // 返回条数上限
+	Offset         uint64 `json:"offset"`             // 分页偏移
+	Order          string `json:"order"`              // "asc" / "desc"，按 StartTime 排序
+}
+
+// VoteRecord is a single raw vote / stake record exposed via RPC
+type VoteRecord struct {
+	Voter               string `json:"voter"`
+	Delegate            string `json:"delegate"`
+	AmountWei           string `json:"amountWei"`
+	AmountEther         string `json:"amountEther"`
+	OriginalAmountWei   string `json:"originalAmountWei,omitempty"`   // 撤销前当初的投票金额（仅当已撤销即 amount=0 时有值）
+	OriginalAmountEther string `json:"originalAmountEther,omitempty"` // 同上，ETH 展示
+	StartTime           uint64 `json:"startTime"`
+	EndTime             uint64 `json:"endTime"`
+	IsLocked            bool   `json:"isLocked"`
+	IsActive            bool   `json:"isActive"`
+	Applied             bool   `json:"applied"`
+	EffectiveEpoch      uint64 `json:"effectiveEpoch"`
+	// 撤销的边界应用：待撤销时在本 epoch 边界生效，便于前端展示「撤销中，本 epoch 边界生效」
+	PendingUnvote        bool   `json:"pendingUnvote,omitempty"`
+	UnvoteEffectiveEpoch uint64 `json:"unvoteEffectiveEpoch,omitempty"`
+}
+
 // NewDPOS creates a new DPOS endpoint
 func NewDPOS(logger hclog.Logger, store dposStore, chainID uint64) *DPOS {
 	logger.Info("Initializing DPoS endpoint", "chainID", chainID)
@@ -134,6 +164,8 @@ type governanceEngine interface {
 	SignRecoveryProposalForTx(proposal *dpos.ParameterProposal, proposerPrivateKeyHex string) ([]byte, error)
 	SignVoteForTx(vote *dpos.ParameterVote, privateKeyHex string) ([]byte, error)
 	GetCurrentBlockNumber() uint64
+	// GetSuperRepresentatives 返回当前超级代表集合（仅 SR 可对提案投票）
+	GetSuperRepresentatives() (validator.AccountSet, error)
 }
 
 func (d *DPOS) getGovernanceEngine() (governanceEngine, error) {
@@ -505,91 +537,51 @@ type UnvoteResponse struct {
 
 // Vote handles dpos_vote RPC method
 func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Debug("DPoS Vote called")
+	d.logger.Debug("DPoS Vote called", "params", params)
 
 	// Parse parameters
 	var req VoteRequest
 	switch p := params.(type) {
 	case []interface{}:
-		// Handle array parameters like ["0x123..."]
-		if len(p) == 1 {
-			// Single address parameter - use as both voter and candidate with default amount
-			if address, ok := p[0].(string); ok {
-				req.Voter = address
-				req.Candidate = address
-				req.Amount = "1000000000000000000" // Default 1 token (1e18 wei)
-			} else {
-				return &VoteResponse{
-					Success: false,
-					Error:   "first parameter must be a string address",
-				}, nil
-			}
-		} else if len(p) == 3 {
-			// Three parameters: [voter, candidate, amount]
-			if voter, ok := p[0].(string); ok {
-				req.Voter = voter
-			} else {
-				return &VoteResponse{
-					Success: false,
-					Error:   "first parameter must be a string address",
-				}, nil
-			}
-			if candidate, ok := p[1].(string); ok {
-				req.Candidate = candidate
-			} else {
-				return &VoteResponse{
-					Success: false,
-					Error:   "second parameter must be a string address",
-				}, nil
-			}
-			if amount, ok := p[2].(string); ok {
-				req.Amount = amount
-			} else {
-				return &VoteResponse{
-					Success: false,
-					Error:   "third parameter must be a string amount",
-				}, nil
-			}
-		} else if len(p) == 4 {
-			// Four parameters: [voter, candidate, amount, privateKey]
-			if voter, ok := p[0].(string); ok {
-				req.Voter = voter
-			} else {
-				return &VoteResponse{
-					Success: false,
-					Error:   "first parameter must be a string address",
-				}, nil
-			}
-			if candidate, ok := p[1].(string); ok {
-				req.Candidate = candidate
-			} else {
-				return &VoteResponse{
-					Success: false,
-					Error:   "second parameter must be a string address",
-				}, nil
-			}
-			if amount, ok := p[2].(string); ok {
-				req.Amount = amount
-			} else {
-				return &VoteResponse{
-					Success: false,
-					Error:   "third parameter must be a string amount",
-				}, nil
-			}
-			// Store private key for later use in signing
-			if privateKey, ok := p[3].(string); ok {
-				// Store private key in the request for later use
-				req.PrivateKey = privateKey
-			} else {
-				return &VoteResponse{
-					Success: false,
-					Error:   "fourth parameter must be a string private key",
-				}, nil
-			}
+		// Handle array parameters: [voter, candidate, amount, privateKey]
+		if len(p) != 4 {
+			return &VoteResponse{
+				Success: false,
+				Error:   fmt.Sprintf("expected 4 parameters [voter, candidate, amount, privateKey], got %d", len(p)),
+			}, nil
+		}
+		// Four parameters: [voter, candidate, amount, privateKey]
+		if voter, ok := p[0].(string); ok {
+			req.Voter = voter
 		} else {
 			return &VoteResponse{
 				Success: false,
-				Error:   fmt.Sprintf("expected 1, 3, or 4 parameters, got %d", len(p)),
+				Error:   "first parameter must be a string address (voter)",
+			}, nil
+		}
+		if candidate, ok := p[1].(string); ok {
+			req.Candidate = candidate
+		} else {
+			return &VoteResponse{
+				Success: false,
+				Error:   "second parameter must be a string address (candidate)",
+			}, nil
+		}
+		if amount, ok := p[2].(string); ok {
+			req.Amount = amount
+		} else {
+			return &VoteResponse{
+				Success: false,
+				Error:   "third parameter must be a string amount",
+			}, nil
+		}
+		// Store private key for later use in signing
+		if privateKey, ok := p[3].(string); ok {
+			req.PrivateKey = privateKey
+		} else {
+			return &VoteResponse{
+				Success: false,
+				Error:   "fourth parameter must be a string private key",
 			}, nil
 		}
 	case map[string]interface{}:
@@ -601,6 +593,9 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		}
 		if amount, ok := p["amount"].(string); ok {
 			req.Amount = amount
+		}
+		if privateKey, ok := p["privateKey"].(string); ok {
+			req.PrivateKey = privateKey
 		}
 	case *VoteRequest:
 		if p != nil {
@@ -632,6 +627,12 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 			Error:   "amount is required",
 		}, nil
 	}
+	if req.PrivateKey == "" {
+		return &VoteResponse{
+			Success: false,
+			Error:   "private key is required",
+		}, nil
+	}
 
 	// Parse addresses
 	voterAddr := types.StringToAddress(req.Voter)
@@ -646,8 +647,23 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		}, nil
 	}
 
-	// Note: In DPoS, users can vote for ANYONE, not just validators
+	// 🔍 调试日志：记录解析后的 amount
+	d.logger.Info("🔍 [RPC] 解析 amount 参数",
+		"原始字符串", req.Amount,
+		"解析后值", amountInt.String(),
+		"Sign()", amountInt.Sign(),
+		"与-1比较", amountInt.Cmp(big.NewInt(-1)),
+		"与0比较", amountInt.Cmp(big.NewInt(0)))
 
+	// amount = 0 不允许，返回错误
+	if amountInt.Sign() == 0 {
+		return &VoteResponse{
+			Success: false,
+			Error:   "amount cannot be zero",
+		}, nil
+	}
+	// amount = -1 表示执行撤销，继续往下走创建交易
+	// amount > 0 表示投票，继续往下走创建交易
 	// Check voter balance
 	// Try to get balance with different approaches
 	var balance *big.Int
@@ -824,13 +840,11 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	}
 	d.logger.Debug("Balance check passed")
 
-	// 新增：受托人候选人验证
 	d.logger.Info("🔍 开始验证受托人候选人资格",
 		"voter", voterAddr.String(),
 		"candidate", candidateAddr.String(),
 		"amount", amountInt.String())
 
-	// 获取DPoS引擎进行受托人验证
 	dposEngine := d.getDPoSEngine()
 	if dposEngine == nil {
 		d.logger.Error("❌ DPoS引擎不可用，无法验证受托人资格")
@@ -839,7 +853,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 			Error:   "DPoS engine not available for delegate validation",
 		}, nil
 	}
-
 	// 检查受托人是否已注册（创世验证者例外）
 	if isRegistered, ok := dposEngine.(interface {
 		IsDelegateRegistered(address types.Address) bool
@@ -886,11 +899,8 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	} else {
 		d.logger.Warn("⚠️ DPoS引擎不支持受托人候选人检查，跳过验证")
 	}
-
-	// 新增：在创建交易前进行完整的投票验证
 	d.logger.Info("🔍 开始预验证投票参数", "voter", voterAddr, "candidate", candidateAddr, "amount", amountInt)
 
-	// 创建投票消息进行预验证
 	voteMessage := &VoteMessage{
 		Voter:     voterAddr,
 		Delegate:  candidateAddr,
@@ -899,7 +909,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		Timestamp: uint64(time.Now().Unix()),
 	}
 
-	// 修复：只进行验证，不实际更新状态，避免重复处理
+	// 只进行验证，不实际更新状态，避免重复处理
 	if dposEngineInstance, ok := dposEngine.(*dpos.DPoS); ok {
 		// 只调用验证方法，不更新状态
 		if err := dposEngineInstance.ValidateVoteOnly(voteMessage.Voter, voteMessage.Delegate, voteMessage.Amount); err != nil {
@@ -936,23 +946,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 			Error:   "candidate address is zero address",
 		}, nil
 	}
-
-	// 如果 amount <= 0，表示解质押，返回削减信息
-	if amountInt == nil || amountInt.Sign() <= 0 {
-		d.logger.Info("🔍 检测到解质押请求", "voter", voterAddr.String(), "validator", candidateAddr.String())
-		unvoteResp, err := d.buildUnvoteResponse(voterAddr, candidateAddr)
-		if err != nil {
-			d.logger.Error("❌ 构建解质押响应失败", "error", err)
-			return &UnvoteResponse{
-				Success:   false,
-				Voter:     voterAddr,
-				Validator: candidateAddr,
-				Error:     fmt.Sprintf("failed to build unvote response: %v", err),
-			}, nil
-		}
-		return unvoteResp, nil
-	}
-
 	// Get account nonce for the voter
 	var nonce uint64
 	if nonceStore, ok := d.store.(interface {
@@ -969,7 +962,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 			}
 		}
 	}
-
 	// Get current gas price
 	var gasPrice *big.Int
 	if gasStore, ok := d.store.(interface {
@@ -980,7 +972,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	} else {
 		gasPrice = big.NewInt(1000000000) // 1 gwei default
 	}
-
 	// Ensure gas price meets minimum price limit (1 gwei = 1000000000 wei)
 	// This prevents "transaction underpriced" errors
 	minGasPrice := big.NewInt(1000000000) // 1 gwei
@@ -988,8 +979,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		gasPrice = minGasPrice
 		d.logger.Info("Gas price adjusted to meet minimum requirement", "gasPrice", gasPrice.String())
 	}
-
-	// Create vote transaction
 	d.logger.Info("=== 标记1: 开始创建投票交易 ===")
 	tx := &types.Transaction{
 		Nonce:    nonce,
@@ -1167,36 +1156,12 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	}); ok {
 		d.logger.Info("Store has GetConsensus method, attempting to get consensus engine...")
 
-		// 新增：直接获取DPoS引擎
 		consensusEngine := d.getDPoSEngineDirectly(consensusStore)
 
 		if consensusEngine == nil {
 			d.logger.Warn("Consensus engine is nil")
 		} else {
 			d.logger.Info("Consensus engine type", "type", fmt.Sprintf("%T", consensusEngine))
-
-			// 修复：本地投票不直接更新状态，避免重复计算
-			// 所有投票都通过区块同步统一处理，确保一致性
-			d.logger.Info("ℹ️ 本地投票已创建交易，状态将在区块同步时更新")
-			d.logger.Info("ℹ️ 这避免了重复计算问题，确保所有节点状态一致")
-
-			// 注释掉本地状态更新，避免重复计算
-			/*
-				if dposEngine, ok := consensusEngine.(interface {
-					AddVote(voter types.Address, candidate types.Address, amount *big.Int) error
-				}); ok {
-					d.logger.Info("✅ DPoS引擎有AddVote方法，尝试更新DPoS状态...")
-					if err := dposEngine.AddVote(voterAddr, candidateAddr, amountInt); err != nil {
-						d.logger.Error("❌ 更新DPoS状态失败", "error", err)
-						// 继续执行，交易已在池中
-					} else {
-						d.logger.Info("✅ DPoS状态更新成功")
-						dposStateUpdated = true
-					}
-				} else {
-					d.logger.Warn("⚠️ DPoS引擎没有AddVote方法")
-				}
-			*/
 		}
 	} else {
 		d.logger.Warn("Store does NOT have GetConsensus method")
@@ -1209,7 +1174,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	} else if !txAdded {
 		successMessage = "Vote operation completed (DPoS state updated directly, transaction pool failed)"
 	} else if !dposStateUpdated {
-		// 修复：由于AddVote被注释是为了避免重复计算，交易池成功添加就表示投票会成功处理
 		successMessage = "Vote operation completed successfully (transaction added to pool, will be processed in next block)"
 	}
 
@@ -1291,13 +1255,25 @@ func (d *DPOS) createVoteTransactionData(voter, candidate types.Address, amount 
 	data = append(data, candidate.Bytes()...)
 
 	// Add amount (32 bytes, padded)
-	amountBytes := amount.Bytes()
-	if len(amountBytes) > 32 {
-		amountBytes = amountBytes[len(amountBytes)-32:] // Take last 32 bytes
-	}
-	// Pad with zeros to 32 bytes
-	for len(amountBytes) < 32 {
-		amountBytes = append([]byte{0}, amountBytes...)
+	// 🔧 修复：支持负数编码（-1 使用全1表示）
+	var amountBytes []byte
+	if amount.Cmp(big.NewInt(-1)) == 0 {
+		// amount = -1 使用 32 字节全 1 (0xFFFFFFFF...) 表示
+		amountBytes = make([]byte, 32)
+		for i := range amountBytes {
+			amountBytes[i] = 0xFF
+		}
+		d.logger.Info("🔧 [编码] amount = -1，使用全1编码", "encoded", fmt.Sprintf("%x", amountBytes))
+	} else {
+		// 正数正常编码
+		amountBytes = amount.Bytes()
+		if len(amountBytes) > 32 {
+			amountBytes = amountBytes[len(amountBytes)-32:] // Take last 32 bytes
+		}
+		// Pad with zeros to 32 bytes
+		for len(amountBytes) < 32 {
+			amountBytes = append([]byte{0}, amountBytes...)
+		}
 	}
 	data = append(data, amountBytes...)
 
@@ -1388,9 +1364,6 @@ func (d *DPOS) VoteByAddress(ctx context.Context, params interface{}) (*VoteResp
 // GetStakingInfo handles dpos_getStakingInfo RPC method
 func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interface{}, error) {
 	d.logger.Info("DPoS GetStakingInfo called", "blockNumber", blockNumber)
-
-	// 修改：dpos_getStakingInfo 应该返回验证者列表，而不是投票记录
-	// 尝试多种方式获取验证者列表
 	var validators validator.AccountSet
 	var err error
 
@@ -1404,7 +1377,6 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interfa
 				d.logger.Info("Successfully retrieved validators from DPoS state", "count", len(validators))
 			}
 		}
-
 		// 方法3：尝试通过 GetDPoSEngine 获取
 		if len(validators) == 0 {
 			if dposStore, ok := d.store.(interface {
@@ -1425,7 +1397,7 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interfa
 		d.logger.Warn("Failed to get validators", "error", err)
 		return map[string]interface{}{
 			"success": true,
-			"data":    []*dpos.StakeInfo{},
+			"data":    []interface{}{},
 		}, nil // 返回空列表而不是错误
 	}
 
@@ -1433,77 +1405,134 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interfa
 		d.logger.Warn("No validators found")
 		return map[string]interface{}{
 			"success": true,
-			"data":    []*dpos.StakeInfo{},
+			"data":    []interface{}{},
 		}, nil // 返回空列表
 	}
 
-	// 转换为StakeInfo格式，包含故障标志
-	result := make([]*dpos.StakeInfo, 0, len(validators))
-	for _, validator := range validators {
-		// 获取故障标志（需要访问DPoS引擎）
-		faultInfo := map[string]interface{}{}
+	// 获取当前 epoch，用于区分已生效/未生效
+	var currentEpoch uint64
+	if dposStore, ok := d.store.(interface {
+		GetDPoSEngine() interface{}
+	}); ok {
+		if dposEngine := dposStore.GetDPoSEngine(); dposEngine != nil {
+			if dpos, ok := dposEngine.(*dpos.DPoS); ok {
+				currentEpoch = dpos.GetCurrentEpochNumber()
+			}
+		}
+	}
 
-		// 通过store访问DPoS引擎获取故障信息
+	// 获取所有投票明细，按 delegate 汇总已生效/未生效金额
+	type delegateSums struct {
+		effective *big.Int
+		pending   *big.Int
+	}
+	delegateEffectivePending := make(map[string]*delegateSums)
+	var allStakes []*dpos.StakeInfo
+	if dposState, err2 := d.store.GetDPoSState(); err2 == nil && dposState != nil && dposState.StakeStore != nil {
+		allStakes, _ = dposState.StakeStore.GetStakingInfo()
+	}
+	if allStakes == nil {
+		allStakes, _ = d.store.GetStakingInfo()
+	}
+	weiPerEther := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+	formatEther := func(amount *big.Int) string {
+		if amount == nil || amount.Sign() == 0 {
+			return "0"
+		}
+		amountFloat := new(big.Float).SetInt(amount)
+		amountFloat.Quo(amountFloat, new(big.Float).SetInt(weiPerEther))
+		return amountFloat.Text('f', 6)
+	}
+	for _, s := range allStakes {
+		if s == nil {
+			continue
+		}
+		key := s.Delegate.String()
+		if delegateEffectivePending[key] == nil {
+			delegateEffectivePending[key] = &delegateSums{effective: big.NewInt(0), pending: big.NewInt(0)}
+		}
+		amount := big.NewInt(0)
+		if s.Amount != nil {
+			amount = new(big.Int).Set(s.Amount)
+		}
+		effective := s.Applied && (s.EffectiveEpoch == 0 || s.EffectiveEpoch <= currentEpoch)
+		if effective {
+			delegateEffectivePending[key].effective.Add(delegateEffectivePending[key].effective, amount)
+		} else {
+			delegateEffectivePending[key].pending.Add(delegateEffectivePending[key].pending, amount)
+		}
+	}
+
+	// 转换为带已生效/未生效的 map 列表，便于 CLI 和前端展示
+	result := make([]map[string]interface{}, 0, len(validators))
+	for _, v := range validators {
+		faultInfo := map[string]interface{}{}
 		if dposStore, ok := d.store.(interface {
 			GetDPoSEngine() interface{}
 		}); ok {
 			if dposEngine := dposStore.GetDPoSEngine(); dposEngine != nil {
 				if dpos, ok := dposEngine.(*dpos.DPoS); ok {
-					faultInfo = dpos.GetValidatorFaultInfo(validator.Address)
+					faultInfo = dpos.GetValidatorFaultInfo(v.Address)
 				}
 			}
 		}
 
-		stakingInfo := &dpos.StakeInfo{
-			Staker:    validator.Address,
-			Amount:    new(big.Int).Set(validator.VotingPower),
-			IsActive:  validator.IsActive,
-			FaultFlag: faultInfo, // 添加故障标志
+		totalAmount := new(big.Int).Set(v.VotingPower)
+		key := v.Address.String()
+		effSum := big.NewInt(0)
+		pendingSum := big.NewInt(0)
+		if sums, ok := delegateEffectivePending[key]; ok {
+			effSum = sums.effective
+			pendingSum = sums.pending
 		}
 
-		// 🆕 尝试从StakeStore获取累计奖励
-		// 逻辑说明：
-		// 1. 优先从StakeStore读取（如果迁移已完成，这里应该有值）
-		// 2. 如果为nil/0，且RewardStore中有该地址的奖励记录，说明可能是迁移未完成，使用fallback
-		// 3. 如果为nil/0，且RewardStore中也没有记录，说明该地址确实没有奖励
+		entry := map[string]interface{}{
+			"staker":               v.Address.String(),
+			"amount":               totalAmount.String(),
+			"amountEther":          formatEther(totalAmount),
+			"effectiveAmountWei":   effSum.String(),
+			"effectiveAmountEther": formatEther(effSum),
+			"pendingAmountWei":     pendingSum.String(),
+			"pendingAmountEther":   formatEther(pendingSum),
+			"isActive":             v.IsActive,
+			"faultFlag":            faultInfo,
+		}
+
+		// 累计奖励（与原先逻辑一致）
 		if dposState, err2 := d.store.GetDPoSState(); err2 == nil && dposState != nil {
+			var rewards *big.Int
 			if dposState.StakeStore != nil {
-				// 从StakeStore读取StakeInfo（可能包含累计奖励）
 				if stakingInfos, err := dposState.StakeStore.GetStakingInfo(); err == nil {
 					for _, si := range stakingInfos {
-						if si.Staker == validator.Address {
-							if si.Rewards != nil && si.Rewards.Sign() > 0 {
-								stakingInfo.Rewards = new(big.Int).Set(si.Rewards)
-								break
-							}
+						if si.Staker == v.Address && si.Rewards != nil && si.Rewards.Sign() > 0 {
+							rewards = new(big.Int).Set(si.Rewards)
+							break
 						}
 					}
 				}
 			}
-
-			// Fallback：如果StakeInfo.Rewards为nil/0，尝试从RewardStore实时计算
-			// 这种情况可能发生在：
-			// 1. 迁移未完成（首次运行）
-			// 2. 迁移后新增的奖励（但updateStakeInfoCumulativeReward应该已经更新了）
-			// 3. 该地址确实没有奖励（GetRewardSummary会返回0，不会设置）
-			if stakingInfo.Rewards == nil || stakingInfo.Rewards.Sign() == 0 {
+			if rewards == nil || rewards.Sign() == 0 {
 				if dposState.RewardStore != nil {
-					summary, err := dposState.RewardStore.GetRewardSummary(validator.Address.String(), 1, 999999)
+					summary, err := dposState.RewardStore.GetRewardSummary(v.Address.String(), 1, 999999)
 					if err == nil && summary != nil && summary.TotalRewardWei != "" && summary.TotalRewardWei != "0" {
 						if totalReward, ok := new(big.Int).SetString(summary.TotalRewardWei, 10); ok {
-							stakingInfo.Rewards = totalReward
+							rewards = totalReward
 						}
 					}
 				}
+			}
+			if rewards != nil && rewards.Sign() > 0 {
+				entry["rewards"] = rewards.String()
 			}
 		}
 
-		result = append(result, stakingInfo)
+		result = append(result, entry)
 	}
 
 	return map[string]interface{}{
-		"success": true,
-		"data":    result,
+		"success":      true,
+		"data":         result,
+		"currentEpoch": currentEpoch,
 	}, nil
 }
 
@@ -1592,211 +1621,6 @@ func (d *DPOS) GetVotingPower(ctx context.Context, params interface{}) (map[stri
 	}, nil
 }
 
-// GetCurrentRound handles dpos_getCurrentRound RPC method
-func (d *DPOS) GetCurrentRound(ctx context.Context) (interface{}, error) {
-	d.logger.Info("DPoS GetCurrentRound called")
-
-	// 优先尝试从 DPoS 引擎获取当前 round
-	dposEngine := d.getDPoSEngine()
-	if dposEngine != nil {
-		if engine, ok := dposEngine.(interface {
-			GetCurrentRound() uint64
-		}); ok {
-			currentRound := engine.GetCurrentRound()
-			if currentRound > 0 {
-				d.logger.Debug("从DPoS引擎获取当前round", "round", currentRound)
-				return map[string]interface{}{
-					"success":      true,
-					"currentRound": currentRound,
-				}, nil
-			}
-		}
-
-		// 如果引擎返回0，尝试从DPoS引擎直接获取所需信息进行计算
-		if dpos, ok := dposEngine.(*dpos.DPoS); ok {
-			// 从DPoS引擎获取当前区块号
-			currentBlockHeight := dpos.GetCurrentBlockNumber()
-			if currentBlockHeight == 0 {
-				d.logger.Warn("无法从DPoS引擎获取当前区块高度，尝试其他方法")
-				// 继续尝试其他方法
-			} else {
-				// 从DPoS引擎获取共识切换高度
-				consensusSwitchHeight := dpos.GetConsensusSwitchHeight()
-				if currentBlockHeight < consensusSwitchHeight {
-					d.logger.Debug("当前区块高度小于共识切换高度，返回0", "height", currentBlockHeight, "switchHeight", consensusSwitchHeight)
-					return map[string]interface{}{
-						"success":      true,
-						"currentRound": uint64(0),
-					}, nil
-				}
-
-				// 从DPoS引擎获取验证者数量（使用GetDelegates方法）
-				var validatorCount uint64
-				if delegates, err := dpos.GetDelegates(currentBlockHeight, nil); err == nil && len(delegates) > 0 {
-					validatorCount = uint64(len(delegates))
-				}
-
-				if validatorCount == 0 {
-					d.logger.Warn("无法从DPoS引擎获取验证者数量，返回默认值1")
-					return map[string]interface{}{
-						"success":      true,
-						"currentRound": uint64(1),
-					}, nil
-				}
-
-				// 计算 round: (当前区块高度 - 共识切换高度) / 验证者数量 + 1
-				dposBlockNumber := currentBlockHeight - consensusSwitchHeight
-				currentRound := (dposBlockNumber / validatorCount) + 1
-
-				d.logger.Debug("从DPoS引擎计算当前round",
-					"currentBlockHeight", currentBlockHeight,
-					"consensusSwitchHeight", consensusSwitchHeight,
-					"dposBlockNumber", dposBlockNumber,
-					"validatorCount", validatorCount,
-					"currentRound", currentRound)
-
-				return map[string]interface{}{
-					"success":      true,
-					"currentRound": currentRound,
-				}, nil
-			}
-		}
-	}
-	currentBlockHeight := d.getCurrentBlockHeight()
-	if currentBlockHeight == 0 {
-		d.logger.Warn("无法获取当前区块高度，返回默认值1")
-		return map[string]interface{}{
-			"success":      true,
-			"currentRound": uint64(1),
-		}, nil
-	}
-
-	// 获取共识切换高度
-	consensusSwitchHeight := d.getConsensusSwitchHeight()
-	if currentBlockHeight < consensusSwitchHeight {
-		d.logger.Debug("当前区块高度小于共识切换高度，返回0", "height", currentBlockHeight, "switchHeight", consensusSwitchHeight)
-		return map[string]interface{}{
-			"success":      true,
-			"currentRound": uint64(0),
-		}, nil
-	}
-
-	// 获取验证者数量
-	validators, err := d.store.GetValidatorsWithFilter(false)
-	if err != nil {
-		d.logger.Warn("无法获取验证者列表，返回默认值1", "error", err)
-		return map[string]interface{}{
-			"success":      true,
-			"currentRound": uint64(1),
-		}, nil
-	}
-
-	validatorCount := uint64(len(validators))
-	if validatorCount == 0 {
-		d.logger.Warn("验证者数量为0，返回默认值1")
-		return map[string]interface{}{
-			"success":      true,
-			"currentRound": uint64(1),
-		}, nil
-	}
-
-	// 计算 round: (当前区块高度 - 共识切换高度) / 验证者数量 + 1
-	dposBlockNumber := currentBlockHeight - consensusSwitchHeight
-	currentRound := (dposBlockNumber / validatorCount) + 1
-
-	d.logger.Debug("通过store计算当前round",
-		"currentBlockHeight", currentBlockHeight,
-		"consensusSwitchHeight", consensusSwitchHeight,
-		"dposBlockNumber", dposBlockNumber,
-		"validatorCount", validatorCount,
-		"currentRound", currentRound)
-
-	return map[string]interface{}{
-		"success":      true,
-		"currentRound": currentRound,
-	}, nil
-}
-
-// GetCurrentDelegate handles dpos_getCurrentDelegate RPC method
-func (d *DPOS) GetCurrentDelegate(ctx context.Context) (interface{}, error) {
-	d.logger.Info("DPoS GetCurrentDelegate called")
-
-	// Get current DPoS state
-	_, err := d.store.GetDPoSState()
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("failed to get DPoS state: %v", err),
-		}, nil
-	}
-
-	// First try to get the current delegate from active DPoS instances (real-time slot calculation)
-	for instanceKey, instance := range dpos.GetAllDPoSInstances() {
-		if instance == nil {
-			continue
-		}
-
-		currentDelegate := instance.GetCurrentDelegate()
-		if currentDelegate != types.ZeroAddress {
-			d.logger.Info("Returning current delegate from active DPoS instance",
-				"instanceKey", instanceKey,
-				"delegate", currentDelegate.String())
-			return map[string]interface{}{
-				"success":         true,
-				"currentDelegate": currentDelegate.String(),
-			}, nil
-		}
-	}
-
-	// Fallback path: use validator list (will simply return the first validator)
-	// TODO: replace with block-height-based calculation once block scheduler is exposed here
-	validators, err := d.store.GetValidators()
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("failed to get validators: %v", err),
-		}, nil
-	}
-
-	if len(validators) == 0 {
-		d.logger.Warn("No validators returned from store, trying unfiltered fetch")
-		if extendedValidators, err := d.store.GetValidatorsWithFilter(false); err == nil && len(extendedValidators) > 0 {
-			d.logger.Info("Found validators via GetValidatorsWithFilter fallback", "count", len(extendedValidators))
-			validators = extendedValidators
-		}
-	}
-
-	if len(validators) == 0 {
-		d.logger.Warn("Store fallback failed, trying global DPoS instances registry")
-		for instanceKey, instance := range dpos.GetAllDPoSInstances() {
-			if instance == nil {
-				continue
-			}
-
-			instanceValidators := instance.GetValidators()
-			if len(instanceValidators) > 0 {
-				d.logger.Info("Using validators from global DPoS instance",
-					"instanceKey", instanceKey,
-					"count", len(instanceValidators))
-				validators = instanceValidators
-				break
-			}
-		}
-	}
-
-	if len(validators) == 0 {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "no validators found",
-		}, nil
-	}
-
-	return map[string]interface{}{
-		"success":         true,
-		"currentDelegate": validators[0].Address.String(),
-	}, nil
-}
-
 // GetConsensusState handles dpos_getConsensusState RPC method
 func (d *DPOS) GetConsensusState(ctx context.Context) (map[string]interface{}, error) {
 	d.logger.Info("DPoS GetConsensusState called")
@@ -1810,58 +1634,109 @@ func (d *DPOS) GetConsensusState(ctx context.Context) (map[string]interface{}, e
 		}, nil
 	}
 
-	// Get current delegate
-	currentDelegateResult, err := d.GetCurrentDelegate(ctx)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("failed to get current delegate: %v", err),
-		}, nil
-	}
-
-	// Get current round
-	currentRoundResult, err := d.GetCurrentRound(ctx)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("failed to get current round: %v", err),
-		}, nil
-	}
-
-	// Extract currentRound from result
 	var currentRound uint64
-	if roundMap, ok := currentRoundResult.(map[string]interface{}); ok {
-		if success, ok := roundMap["success"].(bool); ok && success {
-			if cr, ok := roundMap["currentRound"].(uint64); ok {
-				currentRound = cr
+	var currentDelegate types.Address
+
+	// 优先尝试从 DPoS 引擎获取当前 round 和 delegate
+	dposEngine := d.getDPoSEngine()
+	if dposEngine != nil {
+		// 获取 currentRound
+		if engine, ok := dposEngine.(interface {
+			GetCurrentRound() uint64
+		}); ok {
+			currentRound = engine.GetCurrentRound()
+			if currentRound > 0 {
+				d.logger.Debug("从DPoS引擎获取当前round", "round", currentRound)
 			}
-		} else {
-			return map[string]interface{}{
-				"success": false,
-				"error":   "failed to get current round",
-			}, nil
+		}
+
+		// 如果引擎返回0，尝试从DPoS引擎直接获取所需信息进行计算
+		if currentRound == 0 {
+			if dpos, ok := dposEngine.(*dpos.DPoS); ok {
+				currentBlockHeight := dpos.GetCurrentBlockNumber()
+				if currentBlockHeight > 0 {
+					consensusSwitchHeight := dpos.GetConsensusSwitchHeight()
+					if currentBlockHeight < consensusSwitchHeight {
+						currentRound = 0
+					} else {
+						if delegates, err := dpos.GetDelegates(currentBlockHeight, nil); err == nil && len(delegates) > 0 {
+							validatorCount := uint64(len(delegates))
+							if validatorCount > 0 {
+								dposBlockNumber := currentBlockHeight - consensusSwitchHeight
+								currentRound = (dposBlockNumber / validatorCount) + 1
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// 如果还是0，使用fallback计算
+		if currentRound == 0 {
+			currentBlockHeight := d.getCurrentBlockHeight()
+			if currentBlockHeight > 0 {
+				consensusSwitchHeight := d.getConsensusSwitchHeight()
+				if currentBlockHeight >= consensusSwitchHeight {
+					if validators, err := d.store.GetValidatorsWithFilter(false); err == nil && len(validators) > 0 {
+						validatorCount := uint64(len(validators))
+						if validatorCount > 0 {
+							dposBlockNumber := currentBlockHeight - consensusSwitchHeight
+							currentRound = (dposBlockNumber / validatorCount) + 1
+						}
+					}
+				}
+			}
+			if currentRound == 0 {
+				currentRound = 1 // 默认值
+			}
+		}
+
+		// 获取 currentDelegate
+		if engine, ok := dposEngine.(interface {
+			GetCurrentDelegate() types.Address
+		}); ok {
+			currentDelegate = engine.GetCurrentDelegate()
 		}
 	}
 
-	// Extract currentDelegate from result
-	var delegateStr string
-	if delegateMap, ok := currentDelegateResult.(map[string]interface{}); ok {
-		if success, ok := delegateMap["success"].(bool); ok && success {
-			if cd, ok := delegateMap["currentDelegate"].(string); ok {
-				delegateStr = cd
+	// Fallback: 如果从引擎获取失败，尝试从全局实例获取
+	if currentDelegate == (types.Address{}) {
+		for _, instance := range dpos.GetAllDPoSInstances() {
+			if instance == nil {
+				continue
 			}
-		} else {
-			return map[string]interface{}{
-				"success": false,
-				"error":   "failed to get current delegate",
-			}, nil
+			currentDelegate = instance.GetCurrentDelegate()
+			if currentDelegate != types.ZeroAddress {
+				break
+			}
+		}
+	}
+
+	// Fallback: 如果还是失败，使用验证者列表的第一个
+	if currentDelegate == (types.Address{}) {
+		validators, err := d.store.GetValidators()
+		if err != nil {
+			validators, _ = d.store.GetValidatorsWithFilter(false)
+		}
+		if len(validators) == 0 {
+			for _, instance := range dpos.GetAllDPoSInstances() {
+				if instance != nil {
+					validators = instance.GetValidators()
+					if len(validators) > 0 {
+						break
+					}
+				}
+			}
+		}
+		if len(validators) > 0 {
+			currentDelegate = validators[0].Address
 		}
 	}
 
 	return map[string]interface{}{
-		"success":             true,
+		"success":              true,
 		"currentRound":         currentRound,
-		"currentDelegate":      delegateStr,
+		"currentDelegate":      currentDelegate.String(),
 		"currentDelegateIndex": 0, // TODO: Calculate actual index
 	}, nil
 }
@@ -1886,11 +1761,7 @@ func (d *DPOS) validateVoteRequest(req *VoteRequest) error {
 // GetValidatorVotingDetails handles dpos_getValidatorVotingDetails RPC method
 // This method returns detailed voting information for a specific validator
 func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("🔵 [GetValidatorVotingDetails] 开始调用", "params", params)
-
 	var validatorAddress string
-
-	// Parse parameters
 	switch p := params.(type) {
 	case []interface{}:
 		if len(p) == 1 {
@@ -1925,20 +1796,13 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 			"error":   fmt.Sprintf("invalid parameter type: %T, expected string, array, or map", params),
 		}, nil
 	}
-
-	// Validate address
 	if validatorAddress == "" {
 		return map[string]interface{}{
 			"success": false,
 			"error":   "validator address is required",
 		}, nil
 	}
-
-	// Parse address
 	validatorAddr := types.StringToAddress(validatorAddress)
-
-	// 获取验证者信息
-	d.logger.Info("🔵 [GetValidatorVotingDetails] 获取验证者信息", "validator", validatorAddr.String())
 	var targetValidator *validator.ValidatorMetadata
 	var validators validator.AccountSet
 	var err error
@@ -1949,51 +1813,54 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		}); ok {
 			if dposEngine := dposStore.GetDPoSEngine(); dposEngine != nil {
 				if dpos, ok := dposEngine.(*dpos.DPoS); ok {
-					if validators, err = dpos.GetValidatorsWithFilter(false); err == nil && len(validators) > 0 {
-						d.logger.Info("✅ [GetValidatorVotingDetails] 成功: 从 DPoS engine 获取", "count", len(validators))
-					} else {
-						d.logger.Warn("⚠️ [GetValidatorVotingDetails] 失败", "error", err, "count", len(validators))
+					if validators, err = dpos.GetValidatorsWithFilter(false); err != nil {
+						d.logger.Warn("⚠️ [GetValidatorVotingDetails] 获取验证者列表失败", "error", err)
 					}
 				}
 			}
 		}
 	}
-
-	// 从验证者列表中查找目标验证者
 	if len(validators) > 0 {
 		for _, v := range validators {
 			if v.Address == validatorAddr {
 				targetValidator = v
-				d.logger.Info("✅ [GetValidatorVotingDetails] 找到验证者",
-					"validator", validatorAddr.String(),
-					"votingPower", v.VotingPower.String(),
-					"isActive", v.IsActive)
 				break
 			}
 		}
 	}
-
-	// 如果没找到验证者，返回错误
 	if targetValidator == nil {
-		d.logger.Error("❌ [GetValidatorVotingDetails] 验证者不存在", "validator", validatorAddr.String())
-		return map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("validator not found: %s", validatorAddr.String()),
-		}, nil
+		// 支持候选人/权重为0的地址：构造默认元数据继续向下聚合投票记录
+		targetValidator = &validator.ValidatorMetadata{
+			Address:     validatorAddr,
+			VotingPower: big.NewInt(0),
+			IsActive:    false,
+			BlsKey:      nil,
+		}
 	}
-
-	// Get staking info for this validator
-	d.logger.Info("🔵 [GetValidatorVotingDetails] 步骤2: 从 GetStakingInfo 获取投票记录", "validator", validatorAddr.String())
-	stakingInfo, err := d.store.GetStakingInfo()
+	var stakingInfo []*dpos.StakeInfo
+	var dposState *dpos.State
+	if dposState, err = d.store.GetDPoSState(); err == nil && dposState != nil && dposState.StakeStore != nil {
+		stakingInfo, err = dposState.StakeStore.GetStakingInfo()
+		if err != nil {
+			d.logger.Error("❌ [GetValidatorVotingDetails] StakeStore.GetStakingInfo 失败", "error", err)
+		}
+	} else {
+		d.logger.Warn("⚠️ [GetValidatorVotingDetails] DPoS State 不可用，尝试从 store.GetStakingInfo 获取")
+		stakingInfo, err = d.store.GetStakingInfo()
+		if err != nil {
+			d.logger.Error("❌ [GetValidatorVotingDetails] store.GetStakingInfo 失败", "error", err)
+		}
+		// 如果从 store 获取失败，尝试再次获取 dposState
+		if dposState == nil {
+			dposState, _ = d.store.GetDPoSState()
+		}
+	}
 	if err != nil {
-		d.logger.Error("❌ [GetValidatorVotingDetails] GetStakingInfo 失败", "error", err)
 		return map[string]interface{}{
 			"success": false,
 			"error":   fmt.Sprintf("failed to get staking info: %v", err),
 		}, nil
 	}
-	d.logger.Info("🔵 [GetValidatorVotingDetails] GetStakingInfo 返回", "count", len(stakingInfo))
-
 	// Helpers for formatting amounts
 	weiPerEtherInt := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
 	weiPerEtherFloat := new(big.Float).SetInt(weiPerEtherInt)
@@ -2005,55 +1872,80 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		amountFloat.Quo(amountFloat, weiPerEtherFloat)
 		return amountFloat.Text('f', 6)
 	}
-
-	// 聚合投票记录：按 staker+delegate 聚合，累加 amount
-	d.logger.Info("🔵 [GetValidatorVotingDetails] 步骤3: 遍历投票记录并聚合", "validator", validatorAddr.String())
-
-	// 聚合结构体
-	type aggregatedStake struct {
-		staker      types.Address
-		delegate    types.Address
-		totalAmount *big.Int
-		startTime   uint64 // 最早的投票时间
-		endTime     uint64 // 最晚的解锁时间
-		isLocked    bool   // 如果任一记录锁定，则为 true
-		rewards     *big.Int
+	// 获取当前 epoch，用于区分投票已生效 / 未生效（已生效：Applied && EffectiveEpoch <= currentEpoch）
+	var currentEpoch uint64
+	if dposEngine := d.getDPoSEngine(); dposEngine != nil {
+		if dpos, ok := dposEngine.(*dpos.DPoS); ok {
+			currentEpoch = dpos.GetCurrentEpochNumber()
+		}
 	}
-
-	// 聚合投票给 validator 的记录（按 staker 聚合）
+	// 聚合投票记录：按 staker+delegate 聚合，累加 amount，并区分已生效/未生效；撤销的边界应用（待撤销在本 epoch 边界生效）
+	type aggregatedStake struct {
+		staker               types.Address
+		delegate             types.Address
+		totalAmount          *big.Int
+		effectiveAmount      *big.Int // 已生效金额（Applied && EffectiveEpoch <= currentEpoch）
+		pendingAmount        *big.Int // 未生效金额
+		startTime            uint64
+		endTime              uint64
+		isLocked             bool
+		rewards              *big.Int
+		hasPendingUnvote     bool   // 是否含有待撤销（本 epoch 边界生效）
+		unvoteEffectiveEpoch uint64 // 撤销生效的 epoch
+	}
 	inboundStakesMap := make(map[string]*aggregatedStake)
-	// 聚合 validator 自己的投票（按 delegate 聚合）
 	outboundVotesMap := make(map[string]*aggregatedStake)
 
-	for i, stake := range stakingInfo {
+	// 注意：
+	// - `StakingInfo` bucket 使用 (staker + delegate + timestamp) 作为复合 key，每次投票都会写入一条记录（不会覆盖历史记录）
+	// - 实际运行中 `VoterInfo.DelegateVotes` 可能只反映“最后一次投票金额”，用于生成 stakes 会导致多次投票被压缩成 1 笔
+	// 因此这里以 StakeInfo 作为 stakes 的权威来源，再按 staker 聚合展示，确保金额与 votingPower/totalStakedToMe 一致。
+	// 判断单条投票是否已生效：Applied 且 (EffectiveEpoch==0 为旧数据视为已生效 或 EffectiveEpoch<=currentEpoch)
+	isEffectiveStake := func(s *dpos.StakeInfo) bool {
+		if !s.Applied {
+			return false
+		}
+		if s.EffectiveEpoch == 0 {
+			return true // 旧数据无 EffectiveEpoch，视为已生效
+		}
+		return s.EffectiveEpoch <= currentEpoch
+	}
+	// 处理 StakingInfo：聚合投票记录，并区分已生效/未生效
+	for _, stake := range stakingInfo {
 		if stake == nil {
 			continue
 		}
-
 		amount := big.NewInt(0)
 		if stake.Amount != nil {
 			amount = new(big.Int).Set(stake.Amount)
 		}
-
-		// 处理投票给 validator 的记录
-		if stake.Delegate == validatorAddr {
+		effective := isEffectiveStake(stake)
+		delegateAddr := stake.Delegate
+		isInboundMatch := delegateAddr == validatorAddr
+		isOutboundMatch := stake.Staker == validatorAddr
+		// 处理投票给 validator 的记录（入站投票）
+		if isInboundMatch {
 			key := stake.Staker.String()
 			if agg, exists := inboundStakesMap[key]; exists {
-				// 累加金额
 				agg.totalAmount.Add(agg.totalAmount, amount)
-				// 保留最早的 startTime
+				if effective {
+					agg.effectiveAmount.Add(agg.effectiveAmount, amount)
+				} else {
+					agg.pendingAmount.Add(agg.pendingAmount, amount)
+				}
+				if stake.PendingUnvote {
+					agg.hasPendingUnvote = true
+					agg.unvoteEffectiveEpoch = stake.UnvoteEffectiveEpoch
+				}
 				if stake.StartTime < agg.startTime {
 					agg.startTime = stake.StartTime
 				}
-				// 保留最晚的 endTime
 				if stake.EndTime > agg.endTime {
 					agg.endTime = stake.EndTime
 				}
-				// 如果任一记录锁定，则为锁定
 				if stake.IsLocked {
 					agg.isLocked = true
 				}
-				// 累加奖励
 				if stake.Rewards != nil {
 					if agg.rewards == nil {
 						agg.rewards = big.NewInt(0)
@@ -2065,46 +1957,53 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 					"addedAmount", amount.String(),
 					"totalAmount", agg.totalAmount.String())
 			} else {
-				// 创建新的聚合记录
+				eff := big.NewInt(0)
+				pending := big.NewInt(0)
+				if effective {
+					eff.Set(amount)
+				} else {
+					pending.Set(amount)
+				}
 				inboundStakesMap[key] = &aggregatedStake{
-					staker:      stake.Staker,
-					delegate:    stake.Delegate,
-					totalAmount: new(big.Int).Set(amount),
-					startTime:   stake.StartTime,
-					endTime:     stake.EndTime,
-					isLocked:    stake.IsLocked,
-					rewards:     big.NewInt(0),
+					staker:               stake.Staker,
+					delegate:             stake.Delegate,
+					totalAmount:          new(big.Int).Set(amount),
+					effectiveAmount:      eff,
+					pendingAmount:        pending,
+					startTime:            stake.StartTime,
+					endTime:              stake.EndTime,
+					isLocked:             stake.IsLocked,
+					rewards:              big.NewInt(0),
+					hasPendingUnvote:     stake.PendingUnvote,
+					unvoteEffectiveEpoch: stake.UnvoteEffectiveEpoch,
 				}
 				if stake.Rewards != nil {
 					inboundStakesMap[key].rewards.Set(stake.Rewards)
 				}
-				d.logger.Info("🔵 [GetValidatorVotingDetails] 找到投票记录",
-					"index", i,
-					"staker", stake.Staker.String(),
-					"delegate", stake.Delegate.String(),
-					"amount", amount.String())
 			}
 		}
-
-		// 处理 validator 自己的投票
-		if stake.Staker == validatorAddr {
+		if isOutboundMatch {
 			key := stake.Delegate.String()
 			if agg, exists := outboundVotesMap[key]; exists {
-				// 累加金额
 				agg.totalAmount.Add(agg.totalAmount, amount)
-				// 保留最早的 startTime
+				if effective {
+					agg.effectiveAmount.Add(agg.effectiveAmount, amount)
+				} else {
+					agg.pendingAmount.Add(agg.pendingAmount, amount)
+				}
+				if stake.PendingUnvote {
+					agg.hasPendingUnvote = true
+					agg.unvoteEffectiveEpoch = stake.UnvoteEffectiveEpoch
+				}
 				if stake.StartTime < agg.startTime {
 					agg.startTime = stake.StartTime
 				}
-				// 保留最晚的 endTime
 				if stake.EndTime > agg.endTime {
 					agg.endTime = stake.EndTime
 				}
-				// 如果任一记录锁定，则为锁定
 				if stake.IsLocked {
 					agg.isLocked = true
 				}
-				// 累加奖励
 				if stake.Rewards != nil {
 					if agg.rewards == nil {
 						agg.rewards = big.NewInt(0)
@@ -2112,15 +2011,25 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 					agg.rewards.Add(agg.rewards, stake.Rewards)
 				}
 			} else {
-				// 创建新的聚合记录
+				eff := big.NewInt(0)
+				pending := big.NewInt(0)
+				if effective {
+					eff.Set(amount)
+				} else {
+					pending.Set(amount)
+				}
 				outboundVotesMap[key] = &aggregatedStake{
-					staker:      stake.Staker,
-					delegate:    stake.Delegate,
-					totalAmount: new(big.Int).Set(amount),
-					startTime:   stake.StartTime,
-					endTime:     stake.EndTime,
-					isLocked:    stake.IsLocked,
-					rewards:     big.NewInt(0),
+					staker:               stake.Staker,
+					delegate:             stake.Delegate,
+					totalAmount:          new(big.Int).Set(amount),
+					effectiveAmount:      eff,
+					pendingAmount:        pending,
+					startTime:            stake.StartTime,
+					endTime:              stake.EndTime,
+					isLocked:             stake.IsLocked,
+					rewards:              big.NewInt(0),
+					hasPendingUnvote:     stake.PendingUnvote,
+					unvoteEffectiveEpoch: stake.UnvoteEffectiveEpoch,
 				}
 				if stake.Rewards != nil {
 					outboundVotesMap[key].rewards.Set(stake.Rewards)
@@ -2128,18 +2037,24 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 			}
 		}
 	}
-
-	// 转换为返回格式
 	validatorStakes := make([]map[string]interface{}, 0, len(inboundStakesMap))
 	totalStakedToValidator := big.NewInt(0)
 	for _, agg := range inboundStakesMap {
 		stakeEntry := map[string]interface{}{
-			"staker":      agg.staker.String(),
-			"amountWei":   agg.totalAmount.String(),
-			"amountEther": formatEther(agg.totalAmount),
-			"startTime":   agg.startTime,
-			"endTime":     agg.endTime,
-			"isLocked":    agg.isLocked,
+			"staker":               agg.staker.String(),
+			"amountWei":            agg.totalAmount.String(),
+			"amountEther":          formatEther(agg.totalAmount),
+			"effectiveAmountWei":   agg.effectiveAmount.String(),
+			"effectiveAmountEther": formatEther(agg.effectiveAmount),
+			"pendingAmountWei":     agg.pendingAmount.String(),
+			"pendingAmountEther":   formatEther(agg.pendingAmount),
+			"startTime":            agg.startTime,
+			"endTime":              agg.endTime,
+			"isLocked":             agg.isLocked,
+		}
+		if agg.hasPendingUnvote {
+			stakeEntry["pendingUnvote"] = true
+			stakeEntry["unvoteEffectiveEpoch"] = agg.unvoteEffectiveEpoch
 		}
 		if agg.rewards != nil && agg.rewards.Sign() > 0 {
 			stakeEntry["rewardsWei"] = agg.rewards.String()
@@ -2148,17 +2063,24 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		validatorStakes = append(validatorStakes, stakeEntry)
 		totalStakedToValidator.Add(totalStakedToValidator, agg.totalAmount)
 	}
-
 	outboundVotes := make([]map[string]interface{}, 0, len(outboundVotesMap))
 	totalVotedByValidator := big.NewInt(0)
 	for _, agg := range outboundVotesMap {
 		voteEntry := map[string]interface{}{
-			"delegate":    agg.delegate.String(),
-			"amountWei":   agg.totalAmount.String(),
-			"amountEther": formatEther(agg.totalAmount),
-			"startTime":   agg.startTime,
-			"endTime":     agg.endTime,
-			"isLocked":    agg.isLocked,
+			"delegate":             agg.delegate.String(),
+			"amountWei":            agg.totalAmount.String(),
+			"amountEther":          formatEther(agg.totalAmount),
+			"effectiveAmountWei":   agg.effectiveAmount.String(),
+			"effectiveAmountEther": formatEther(agg.effectiveAmount),
+			"pendingAmountWei":     agg.pendingAmount.String(),
+			"pendingAmountEther":   formatEther(agg.pendingAmount),
+			"startTime":            agg.startTime,
+			"endTime":              agg.endTime,
+			"isLocked":             agg.isLocked,
+		}
+		if agg.hasPendingUnvote {
+			voteEntry["pendingUnvote"] = true
+			voteEntry["unvoteEffectiveEpoch"] = agg.unvoteEffectiveEpoch
 		}
 		if agg.rewards != nil && agg.rewards.Sign() > 0 {
 			voteEntry["rewardsWei"] = agg.rewards.String()
@@ -2167,16 +2089,8 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		outboundVotes = append(outboundVotes, voteEntry)
 		totalVotedByValidator.Add(totalVotedByValidator, agg.totalAmount)
 	}
-
 	stakeFound := len(validatorStakes) > 0
 
-	d.logger.Info("🔵 [GetValidatorVotingDetails] 投票记录聚合完成",
-		"validator", validatorAddr.String(),
-		"calculatedTotalStakedToValidator", totalStakedToValidator.String(),
-		"stakeCount", len(validatorStakes),
-		"outboundVoteCount", len(outboundVotes))
-
-	// 检查 VotingPower 与计算出的 totalStakedToValidator 是否一致
 	if targetValidator.VotingPower != nil && targetValidator.VotingPower.Sign() > 0 {
 		if totalStakedToValidator.Cmp(targetValidator.VotingPower) != 0 {
 			d.logger.Warn("⚠️ [GetValidatorVotingDetails] VotingPower 与计算值不一致",
@@ -2187,26 +2101,17 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		}
 	}
 
-	// Build validator details
-
-	// 🆕 修复：votingPower 应该使用 targetValidator.VotingPower（来自 DelegateInfo，只包含已应用的投票）
-	// 而不是从 StakingInfo 计算的 totalStakedToValidator（因为可能所有投票都是 Applied=false）
 	votingPower := big.NewInt(0)
 	if targetValidator.VotingPower != nil {
 		votingPower = new(big.Int).Set(targetValidator.VotingPower)
 	}
-
-	d.logger.Info("🔵 [GetValidatorVotingDetails] 构建返回结果",
-		"validator", validatorAddr.String(),
-		"votingPower", votingPower.String(),
-		"totalStakedToMe", totalStakedToValidator.String(),
-		"stakeCount", len(validatorStakes))
+	totalStakedToMe := votingPower
 	validatorDetail := map[string]interface{}{
 		"address":              targetValidator.Address.String(),
 		"votingPower":          votingPower.String(),
 		"isActive":             targetValidator.IsActive,
-		"totalStakedToMe":      totalStakedToValidator.String(),
-		"totalStakedToMeEther": formatEther(totalStakedToValidator),
+		"totalStakedToMe":      totalStakedToMe.String(),
+		"totalStakedToMeEther": formatEther(totalStakedToMe),
 		"stakeCount":           len(validatorStakes),
 		"stakes":               validatorStakes,
 		"totalVotedByMe":       totalVotedByValidator.String(),
@@ -2216,19 +2121,206 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 		"consensusRound":       0,     // TODO: Get current consensus round
 		"lastBlockProduced":    "0x0", // TODO: Get last block hash
 		"hasInboundVotes":      stakeFound,
+		"currentEpoch":         currentEpoch, // 用于区分 effective/pending 的参考 epoch
 	}
-
 	response := map[string]interface{}{
 		"success":   true,
 		"validator": validatorDetail,
 	}
-
-	d.logger.Info("✅ [GetValidatorVotingDetails] 完成",
-		"validator", validatorAddr.String(),
-		"finalTotalStakedToMe", totalStakedToValidator.String(),
-		"finalVotingPower", votingPower.String())
-
 	return response, nil
+}
+
+// GetVoteRecords handles dpos_getVoteRecords RPC method
+// This method returns raw vote / staking records with optional filters and pagination
+func (d *DPOS) GetVoteRecords(ctx context.Context, params interface{}) (interface{}, error) {
+	d.logger.Info("DPoS GetVoteRecords called", "params", params)
+
+	// Parse parameters
+	var req VoteRecordRequest
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) > 0 {
+			if m, ok := p[0].(map[string]interface{}); ok {
+				if v, ok2 := m["voter"].(string); ok2 {
+					req.Voter = v
+				}
+				if v, ok2 := m["delegate"].(string); ok2 {
+					req.Delegate = v
+				}
+				if v, ok2 := m["onlyActive"].(bool); ok2 {
+					req.OnlyActive = v
+				} else {
+					req.OnlyActive = true
+				}
+				if v, ok2 := m["includePending"].(bool); ok2 {
+					req.IncludePending = v
+				}
+				if v, ok2 := m["limit"].(float64); ok2 && v > 0 {
+					req.Limit = uint64(v)
+				} else {
+					req.Limit = 100
+				}
+				if v, ok2 := m["offset"].(float64); ok2 && v >= 0 {
+					req.Offset = uint64(v)
+				}
+				if v, ok2 := m["order"].(string); ok2 && v != "" {
+					req.Order = strings.ToLower(v)
+				} else {
+					req.Order = "desc"
+				}
+			}
+		}
+	case map[string]interface{}:
+		if v, ok := p["voter"].(string); ok {
+			req.Voter = v
+		}
+		if v, ok := p["delegate"].(string); ok {
+			req.Delegate = v
+		}
+		if v, ok := p["onlyActive"].(bool); ok {
+			req.OnlyActive = v
+		} else {
+			req.OnlyActive = true
+		}
+		if v, ok := p["includePending"].(bool); ok {
+			req.IncludePending = v
+		}
+		if v, ok := p["limit"].(float64); ok && v > 0 {
+			req.Limit = uint64(v)
+		} else {
+			req.Limit = 100
+		}
+		if v, ok := p["offset"].(float64); ok && v >= 0 {
+			req.Offset = uint64(v)
+		}
+		if v, ok := p["order"].(string); ok && v != "" {
+			req.Order = strings.ToLower(v)
+		} else {
+			req.Order = "desc"
+		}
+	default:
+		// 无参数时，返回错误，防止全网扫描
+		return map[string]interface{}{
+			"success": false,
+			"error":   "invalid params: expected object or [object]",
+		}, nil
+	}
+
+	// 至少需要 voter 或 delegate 之一，避免全量遍历
+	if req.Voter == "" && req.Delegate == "" {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "either voter or delegate must be provided",
+		}, nil
+	}
+
+	// 解析地址
+	var voterAddr, delegateAddr types.Address
+	if req.Voter != "" {
+		voterAddr = types.StringToAddress(req.Voter)
+	}
+	if req.Delegate != "" {
+		delegateAddr = types.StringToAddress(req.Delegate)
+	}
+
+	// 取出所有 StakeInfo
+	allStakes, err := d.store.GetStakingInfo()
+	if err != nil {
+		d.logger.Error("❌ [GetVoteRecords] GetStakingInfo failed", "error", err)
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("failed to get staking info: %v", err),
+		}, nil
+	}
+
+	// 预先准备转换函数
+	weiPerEtherInt := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+	weiPerEtherFloat := new(big.Float).SetInt(weiPerEtherInt)
+	formatEther := func(amount *big.Int) string {
+		if amount == nil || amount.Sign() == 0 {
+			return "0"
+		}
+		amountFloat := new(big.Float).SetInt(amount)
+		amountFloat.Quo(amountFloat, weiPerEtherFloat)
+		return amountFloat.Text('f', 6)
+	}
+
+	// 过滤 & 收集
+	records := make([]*VoteRecord, 0, len(allStakes))
+	for _, s := range allStakes {
+		if s == nil {
+			continue
+		}
+		// 过滤地址
+		if req.Voter != "" && s.Staker != voterAddr {
+			continue
+		}
+		if req.Delegate != "" && s.Delegate != delegateAddr {
+			continue
+		}
+		// 过滤是否 active
+		if req.OnlyActive && !s.IsActive {
+			continue
+		}
+		// 过滤 applied
+		if !req.IncludePending && !s.Applied {
+			continue
+		}
+
+		amount := big.NewInt(0)
+		if s.Amount != nil {
+			amount = new(big.Int).Set(s.Amount)
+		}
+
+		rec := &VoteRecord{
+			Voter:                s.Staker.String(),
+			Delegate:             s.Delegate.String(),
+			AmountWei:            amount.String(),
+			AmountEther:          formatEther(amount),
+			StartTime:            s.StartTime,
+			EndTime:              s.EndTime,
+			IsLocked:             s.IsLocked,
+			IsActive:             s.IsActive,
+			Applied:              s.Applied,
+			EffectiveEpoch:       s.EffectiveEpoch,
+			PendingUnvote:        s.PendingUnvote,
+			UnvoteEffectiveEpoch: s.UnvoteEffectiveEpoch,
+		}
+		// 已撤销的投票（Amount=0）：返回当初的投票金额，便于展示「当初投票多少」
+		if s.OriginalAmount != nil && s.OriginalAmount.Sign() > 0 {
+			rec.OriginalAmountWei = s.OriginalAmount.String()
+			rec.OriginalAmountEther = formatEther(s.OriginalAmount)
+		}
+		records = append(records, rec)
+	}
+
+	// 排序
+	sort.Slice(records, func(i, j int) bool {
+		if req.Order == "asc" {
+			return records[i].StartTime < records[j].StartTime
+		}
+		// 默认 desc
+		return records[i].StartTime > records[j].StartTime
+	})
+
+	total := uint64(len(records))
+
+	// 分页
+	start := req.Offset
+	if start > total {
+		start = total
+	}
+	end := start + req.Limit
+	if end > total {
+		end = total
+	}
+	paged := records[start:end]
+
+	return map[string]interface{}{
+		"success": true,
+		"total":   total,
+		"records": paged,
+	}, nil
 }
 
 // GetVoteByHash handles dpos_getVoteByHash RPC method
@@ -2416,9 +2508,26 @@ func (d *DPOS) parseVoteTransactionData(tx *types.Transaction) (*VoteInfo, error
 	amountBytes := input[dposPrefixLen+addrLen+addrLen : expectedLength]
 
 	// Convert amount bytes to big.Int (remove leading zeros)
+	// 🔧 修复：支持负数解码（全1表示 -1）
 	amount := new(big.Int).SetBytes(amountBytes)
-	if amount.Sign() <= 0 {
-		return nil, fmt.Errorf("vote amount must be positive, got %s", amount.String())
+
+	// 检查是否为全1（0xFFFFFFFF...），表示 -1
+	isAllOnes := true
+	for _, b := range amountBytes {
+		if b != 0xFF {
+			isAllOnes = false
+			break
+		}
+	}
+	if isAllOnes {
+		amount = big.NewInt(-1)
+		d.logger.Info("🔧 [解析] 检测到全1编码，解析为 amount = -1")
+	}
+
+	if amount.Cmp(big.NewInt(-1)) == 0 {
+		// amount = -1 表示撤销全部投票，允许通过
+	} else if amount.Sign() <= 0 {
+		return nil, fmt.Errorf("vote amount must be positive or -1 for unvote, got %s", amount.String())
 	}
 
 	d.logger.Info("DPoS vote data parsed successfully", "voter", voter.String(), "candidate", candidate.String(), "amount", amount.String())
@@ -3120,29 +3229,53 @@ func (d *DPOS) getConsensusEngineByHeight(consensusStore interface {
 
 // getConsensusSwitchHeight 获取共识切换高度配置
 func (d *DPOS) getConsensusSwitchHeight() uint64 {
-	// 尝试从共识引擎中获取配置
+	// 方法1: 优先尝试从 DPoS 引擎获取（如果已经切换到 DPoS，这是最直接的方式）
+	dposEngine := d.getDPoSEngine()
+	if dposEngine != nil {
+		if dpos, ok := dposEngine.(*dpos.DPoS); ok {
+			height := dpos.GetConsensusSwitchHeight()
+			if height > 0 {
+				d.logger.Debug("从DPoS引擎获取共识切换高度", "height", height)
+				return height
+			}
+		} else if engine, ok := dposEngine.(interface {
+			GetConsensusSwitchHeight() uint64
+		}); ok {
+			height := engine.GetConsensusSwitchHeight()
+			if height > 0 {
+				d.logger.Debug("从DPoS引擎接口获取共识切换高度", "height", height)
+				return height
+			}
+		}
+	}
+
+	// 方法2: 尝试从共识引擎中获取配置
 	if consensusStore, ok := d.store.(interface {
 		GetConsensus() interface{}
 	}); ok {
 		consensusEngine := consensusStore.GetConsensus()
 		d.logger.Debug("获取到共识引擎", "type", fmt.Sprintf("%T", consensusEngine))
 
+		// 尝试从DPoS引擎中获取配置（共识引擎可能就是DPoS）
+		if dposEngine, ok := consensusEngine.(interface {
+			GetConsensusSwitchHeight() uint64
+		}); ok {
+			height := dposEngine.GetConsensusSwitchHeight()
+			if height > 0 {
+				d.logger.Debug("从共识引擎（DPoS）获取共识切换高度", "height", height)
+				return height
+			}
+		}
+
 		// 尝试从IBFT引擎中获取配置
 		if ibftEngine, ok := consensusEngine.(interface {
 			GetConsensusSwitchHeight() uint64
 		}); ok {
 			height := ibftEngine.GetConsensusSwitchHeight()
-			d.logger.Debug("从IBFT引擎获取共识切换高度", "height", height)
-			return height
-		}
-
-		// 尝试从DPoS引擎中获取配置
-		if dposEngine, ok := consensusEngine.(interface {
-			GetConsensusSwitchHeight() uint64
-		}); ok {
-			height := dposEngine.GetConsensusSwitchHeight()
-			d.logger.Debug("从DPoS引擎获取共识切换高度", "height", height)
-			return height
+			if height > 0 {
+				d.logger.Debug("从IBFT引擎获取共识切换高度", "height", height)
+				return height
+			}
 		}
 
 		// 尝试通过反射获取配置
@@ -3541,135 +3674,6 @@ func (d *DPOS) GetLatestEpochInfo(ctx context.Context) (interface{}, error) {
 
 // ==================== 新增：奖励查询JSON-RPC方法 ====================
 
-// GetValidatorRewardHistory 查询验证者奖励历史
-func (d *DPOS) GetValidatorRewardHistory(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS GetValidatorRewardHistory called", "params", params)
-
-	// 解析参数
-	var validatorAddress string
-	var fromEpoch, toEpoch uint64
-
-	switch p := params.(type) {
-	case []interface{}:
-		if len(p) != 3 {
-			return map[string]interface{}{
-				"success": false,
-				"error":   fmt.Sprintf("expected 3 parameters, got %d", len(p)),
-			}, nil
-		}
-
-		// 第一个参数：验证者地址
-		if addr, ok := p[0].(string); ok {
-			validatorAddress = addr
-		} else {
-			return map[string]interface{}{
-				"success": false,
-				"error":   "first parameter must be a string address",
-			}, nil
-		}
-
-		// 第二个参数：起始epoch
-		if epoch, ok := p[1].(float64); ok {
-			fromEpoch = uint64(epoch)
-		} else {
-			return map[string]interface{}{
-				"success": false,
-				"error":   "second parameter must be a number",
-			}, nil
-		}
-
-		// 第三个参数：结束epoch
-		if epoch, ok := p[2].(float64); ok {
-			toEpoch = uint64(epoch)
-		} else {
-			return map[string]interface{}{
-				"success": false,
-				"error":   "third parameter must be a number",
-			}, nil
-		}
-	default:
-		return map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("invalid parameter type: %T", params),
-		}, nil
-	}
-
-	d.logger.Info("DPoS GetValidatorRewardHistory parameters parsed",
-		"validatorAddress", validatorAddress,
-		"fromEpoch", fromEpoch,
-		"toEpoch", toEpoch)
-
-	// 获取DPoS状态
-	dposState, err := d.store.GetDPoSState()
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("failed to get DPoS state: %v", err),
-		}, nil
-	}
-
-	dposState, err = d.ensureRewardStore(dposState)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   err.Error(),
-		}, nil
-	}
-
-	// 调用RewardStore的方法
-	records, err := dposState.RewardStore.GetValidatorRewardHistory(validatorAddress, fromEpoch, toEpoch)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   err.Error(),
-		}, nil
-	}
-
-	return map[string]interface{}{
-		"success": true,
-		"data":    records,
-	}, nil
-}
-
-// GetVoterRewardHistory 查询投票者奖励历史
-func (d *DPOS) GetVoterRewardHistory(ctx context.Context, voterAddress string, fromEpoch, toEpoch uint64) (interface{}, error) {
-	d.logger.Info("DPoS GetVoterRewardHistory called",
-		"voterAddress", voterAddress,
-		"fromEpoch", fromEpoch,
-		"toEpoch", toEpoch)
-
-	// 获取DPoS状态
-	dposState, err := d.store.GetDPoSState()
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("failed to get DPoS state: %v", err),
-		}, nil
-	}
-
-	dposState, err = d.ensureRewardStore(dposState)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   err.Error(),
-		}, nil
-	}
-
-	// 调用RewardStore的方法
-	records, err := dposState.RewardStore.GetVoterRewardHistory(voterAddress, fromEpoch, toEpoch)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   err.Error(),
-		}, nil
-	}
-
-	return map[string]interface{}{
-		"success": true,
-		"data":    records,
-	}, nil
-}
-
 // GetEpochRewardDetails 查询指定epoch的奖励详情
 func (d *DPOS) GetEpochRewardDetails(ctx context.Context, params interface{}) (interface{}, error) {
 	d.logger.Info("DPoS GetEpochRewardDetails called", "params", params)
@@ -3760,58 +3764,45 @@ func (d *DPOS) GetEpochRewardDetails(ctx context.Context, params interface{}) (i
 	}, nil
 }
 
-// GetRewardHistory 获取指定地址在指定epoch区间的奖励汇总
-func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[string]interface{}, error) {
-	d.logger.Info("DPoS GetRewardHistory called", "params", params)
+// GetEpochRangeRewardDetails 查询指定epoch范围内的所有奖励详情
+func (d *DPOS) GetEpochRangeRewardDetails(ctx context.Context, params interface{}) (interface{}, error) {
+	d.logger.Info("DPoS GetEpochRangeRewardDetails called", "params", params)
 
-	var address string
 	var fromEpoch, toEpoch uint64
 
 	switch p := params.(type) {
 	case []interface{}:
-		if len(p) != 3 {
+		if len(p) != 2 {
 			return map[string]interface{}{
-				"error": fmt.Sprintf("expected 3 parameters, got %d", len(p)),
+				"success": false,
+				"error":   fmt.Sprintf("expected 2 parameters (fromEpoch, toEpoch), got %d", len(p)),
 			}, nil
 		}
 
-		addr, ok := p[0].(string)
-		if !ok {
-			return map[string]interface{}{
-				"error": "first parameter must be a string address",
-			}, nil
-		}
-		address = addr
-
-		from, ok := toUint64(p[1])
-		if !ok {
-			return map[string]interface{}{
-				"error": "second parameter must be a number",
-			}, nil
-		}
-		fromEpoch = from
-
-		to, ok := toUint64(p[2])
-		if !ok {
-			return map[string]interface{}{
-				"error": "third parameter must be a number",
-			}, nil
-		}
-		toEpoch = to
-	case map[string]interface{}:
-		if addr, ok := p["address"].(string); ok {
-			address = addr
+		if from, ok := toUint64(p[0]); ok {
+			fromEpoch = from
 		} else {
 			return map[string]interface{}{
-				"error": "address is required",
+				"success": false,
+				"error":   "first parameter (fromEpoch) must be a number",
 			}, nil
 		}
 
+		if to, ok := toUint64(p[1]); ok {
+			toEpoch = to
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "second parameter (toEpoch) must be a number",
+			}, nil
+		}
+	case map[string]interface{}:
 		if from, ok := toUint64(p["fromEpoch"]); ok {
 			fromEpoch = from
 		} else {
 			return map[string]interface{}{
-				"error": "fromEpoch is required and must be a number",
+				"success": false,
+				"error":   "fromEpoch is required and must be a number",
 			}, nil
 		}
 
@@ -3819,24 +3810,174 @@ func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[st
 			toEpoch = to
 		} else {
 			return map[string]interface{}{
-				"error": "toEpoch is required and must be a number",
+				"success": false,
+				"error":   "toEpoch is required and must be a number",
 			}, nil
 		}
 	default:
 		return map[string]interface{}{
-			"error": fmt.Sprintf("invalid parameter type: %T", params),
+			"success": false,
+			"error":   fmt.Sprintf("invalid parameter type: %T", params),
+		}, nil
+	}
+
+	// 验证范围
+	if toEpoch < fromEpoch {
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("invalid epoch range: toEpoch (%d) must be greater than or equal to fromEpoch (%d)", toEpoch, fromEpoch),
+		}, nil
+	}
+
+	d.logger.Info("DPoS GetEpochRangeRewardDetails parsed parameters", "fromEpoch", fromEpoch, "toEpoch", toEpoch)
+
+	// 获取DPoS状态
+	dposState, err := d.store.GetDPoSState()
+	if err != nil {
+		d.logger.Error("❌ GetEpochRangeRewardDetails: 获取DPoS状态失败", "error", err)
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("failed to get DPoS state: %v", err),
+		}, nil
+	}
+	d.logger.Debug("✅ GetEpochRangeRewardDetails: 成功获取DPoS状态")
+
+	dposState, err = d.ensureRewardStore(dposState)
+	if err != nil {
+		d.logger.Error("❌ GetEpochRangeRewardDetails: ensureRewardStore失败", "error", err)
+		return map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		}, nil
+	}
+	d.logger.Debug("✅ GetEpochRangeRewardDetails: ensureRewardStore成功")
+
+	// 调用RewardStore的方法
+	d.logger.Debug("🔍 GetEpochRangeRewardDetails: 开始查询奖励详情", "fromEpoch", fromEpoch, "toEpoch", toEpoch)
+	records, err := dposState.RewardStore.GetEpochRangeRewardDetails(fromEpoch, toEpoch)
+	if err != nil {
+		d.logger.Error("❌ GetEpochRangeRewardDetails: 查询奖励详情失败", "fromEpoch", fromEpoch, "toEpoch", toEpoch, "error", err)
+		return map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		}, nil
+	}
+	d.logger.Debug("✅ GetEpochRangeRewardDetails: 查询完成", "fromEpoch", fromEpoch, "toEpoch", toEpoch, "recordsCount", len(records))
+
+	return map[string]interface{}{
+		"success":      true,
+		"fromEpoch":    fromEpoch,
+		"toEpoch":      toEpoch,
+		"totalRecords": len(records),
+		"data":         records,
+	}, nil
+}
+
+// GetRewardHistory 获取指定地址在指定epoch区间的奖励汇总
+// 参数支持两种格式：
+//  1. 数组格式: [address, fromEpoch, toEpoch] 或 [address, fromEpoch, toEpoch, includeRecords]
+//  2. 对象格式: {address, fromEpoch, toEpoch, includeRecords?}
+//
+// includeRecords: 可选，默认true，是否返回明细记录（false时只返回总额，节省带宽）
+func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[string]interface{}, error) {
+	d.logger.Info("DPoS GetRewardHistory called", "params", params)
+
+	var address string
+	var fromEpoch, toEpoch uint64
+	includeRecords := true // 默认返回明细
+
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) < 3 || len(p) > 4 {
+			return map[string]interface{}{
+				"success": false,
+				"error":   fmt.Sprintf("expected 3 or 4 parameters [address, fromEpoch, toEpoch, includeRecords?], got %d", len(p)),
+			}, nil
+		}
+
+		addr, ok := p[0].(string)
+		if !ok {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "first parameter must be a string address",
+			}, nil
+		}
+		address = addr
+
+		from, ok := toUint64(p[1])
+		if !ok {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "second parameter must be a number",
+			}, nil
+		}
+		fromEpoch = from
+
+		to, ok := toUint64(p[2])
+		if !ok {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "third parameter must be a number",
+			}, nil
+		}
+		toEpoch = to
+
+		// 第4个参数可选：includeRecords
+		if len(p) == 4 {
+			if inc, ok := p[3].(bool); ok {
+				includeRecords = inc
+			}
+		}
+	case map[string]interface{}:
+		if addr, ok := p["address"].(string); ok {
+			address = addr
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "address is required",
+			}, nil
+		}
+
+		if from, ok := toUint64(p["fromEpoch"]); ok {
+			fromEpoch = from
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "fromEpoch is required and must be a number",
+			}, nil
+		}
+
+		if to, ok := toUint64(p["toEpoch"]); ok {
+			toEpoch = to
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "toEpoch is required and must be a number",
+			}, nil
+		}
+
+		// 可选参数：includeRecords
+		if inc, ok := p["includeRecords"].(bool); ok {
+			includeRecords = inc
+		}
+	default:
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("invalid parameter type: %T", params),
 		}, nil
 	}
 
 	if address == "" {
 		return map[string]interface{}{
-			"error": "address is required",
+			"success": false,
+			"error":   "address is required",
 		}, nil
 	}
 
 	if toEpoch < fromEpoch {
 		return map[string]interface{}{
-			"error": "toEpoch must be greater than or equal to fromEpoch",
+			"success": false,
+			"error":   "toEpoch must be greater than or equal to fromEpoch",
 		}, nil
 	}
 
@@ -3849,21 +3990,222 @@ func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[st
 	dposState, err = d.ensureRewardStore(dposState)
 	if err != nil {
 		return map[string]interface{}{
-			"error": err.Error(),
+			"success": false,
+			"error":   err.Error(),
 		}, nil
 	}
 
 	summary, err := dposState.RewardStore.GetRewardSummary(address, fromEpoch, toEpoch)
 	if err != nil {
+		d.logger.Error("❌ GetRewardHistory: 查询失败", "error", err)
 		return map[string]interface{}{
-			"error": fmt.Sprintf("failed to get reward summary: %v", err),
+			"success": false,
+			"error":   fmt.Sprintf("failed to get reward summary: %v", err),
 		}, nil
+	}
+
+	// 如果不需要明细，清空明细数组（只保留总额和统计信息）
+	if !includeRecords {
+		summary.ValidatorRecords = []dpos.RewardRecordExtended{}
+		summary.VoterRecords = []dpos.RewardRecordExtended{}
+		summary.OtherRewardRecords = []dpos.RewardRecordExtended{}
 	}
 
 	return map[string]interface{}{
 		"success": true,
 		"summary": summary,
 	}, nil
+}
+
+// GetVoterRewardByValidator 获取指定投票者投票给指定验证者的奖励详情
+// 参数: [voterAddress, validatorAddress, fromEpoch, toEpoch]
+func (d *DPOS) GetVoterRewardByValidator(ctx context.Context, params interface{}) (map[string]interface{}, error) {
+	d.logger.Info("DPoS GetVoterRewardByValidator called", "params", params)
+
+	var voterAddress, validatorAddress string
+	var fromEpoch, toEpoch uint64
+
+	// 解析参数
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) != 4 {
+			return map[string]interface{}{
+				"success": false,
+				"error":   fmt.Sprintf("expected 4 parameters [voterAddress, validatorAddress, fromEpoch, toEpoch], got %d", len(p)),
+			}, nil
+		}
+
+		if addr, ok := p[0].(string); ok {
+			voterAddress = addr
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "first parameter (voterAddress) must be a string",
+			}, nil
+		}
+
+		if addr, ok := p[1].(string); ok {
+			validatorAddress = addr
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "second parameter (validatorAddress) must be a string",
+			}, nil
+		}
+
+		from, ok := toUint64(p[2])
+		if !ok {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "third parameter (fromEpoch) must be a number",
+			}, nil
+		}
+		fromEpoch = from
+
+		to, ok := toUint64(p[3])
+		if !ok {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "fourth parameter (toEpoch) must be a number",
+			}, nil
+		}
+		toEpoch = to
+	default:
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("invalid parameter type: %T", params),
+		}, nil
+	}
+
+	if voterAddress == "" || validatorAddress == "" {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "voterAddress and validatorAddress are required",
+		}, nil
+	}
+
+	if toEpoch < fromEpoch {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "toEpoch must be greater than or equal to fromEpoch",
+		}, nil
+	}
+
+	// 获取DPoS状态
+	dposState, err := d.store.GetDPoSState()
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("failed to get DPoS state: %v", err),
+		}, nil
+	}
+
+	dposState, err = d.ensureRewardStore(dposState)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		}, nil
+	}
+
+	// 1. 获取投票者的所有奖励记录
+	allRewards, err := dposState.RewardStore.GetRewardSummary(voterAddress, fromEpoch, toEpoch)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("failed to get reward summary: %v", err),
+		}, nil
+	}
+
+	// 2. 获取投票者信息，确认是否投票给了该验证者
+	voterAddr := types.StringToAddress(voterAddress)
+	validatorAddr := types.StringToAddress(validatorAddress)
+
+	var voterInfo *dpos.VoterInfo
+	if dposState.StakeStore != nil {
+		voterInfo, err = dposState.StakeStore.GetVoterInfo(voterAddr)
+		if err != nil {
+			d.logger.Warn("⚠️ GetVoterRewardByValidator: 获取投票者信息失败", "error", err)
+		}
+	}
+
+	// 3. 检查投票者是否投票给了该验证者
+	hasVote := false
+	var voteAmount *big.Int
+	if voterInfo != nil && voterInfo.DelegateVotes != nil {
+		if amount, exists := voterInfo.DelegateVotes[validatorAddr]; exists && amount != nil && amount.Sign() > 0 {
+			hasVote = true
+			voteAmount = amount
+		}
+	}
+
+	// 4. 过滤出该验证者的奖励记录（如果奖励记录中有验证者地址）
+	filteredRecords := []dpos.RewardRecordExtended{}
+	filteredTotal := big.NewInt(0)
+
+	for _, record := range allRewards.VoterRecords {
+		// 如果记录中有验证者地址，且匹配，则包含
+		if record.ValidatorAddress != "" {
+			if strings.EqualFold(record.ValidatorAddress, validatorAddress) {
+				filteredRecords = append(filteredRecords, record)
+				if amount, ok := new(big.Int).SetString(record.Amount, 10); ok {
+					filteredTotal.Add(filteredTotal, amount)
+				}
+			}
+		} else {
+			// 历史记录没有验证者地址，如果投票者只投票给一个验证者，可以包含
+			// 否则无法确定，不包含
+			if hasVote && len(voterInfo.DelegateVotes) == 1 {
+				// 只投票给一个验证者，可以确定是来自该验证者
+				filteredRecords = append(filteredRecords, record)
+				if amount, ok := new(big.Int).SetString(record.Amount, 10); ok {
+					filteredTotal.Add(filteredTotal, amount)
+				}
+			}
+		}
+	}
+
+	result := map[string]interface{}{
+		"success":           true,
+		"voterAddress":      voterAddress,
+		"validatorAddress":  validatorAddress,
+		"fromEpoch":         fromEpoch,
+		"toEpoch":           toEpoch,
+		"hasVote":           hasVote,
+		"filteredRewardWei": filteredTotal.String(),
+		"filteredRewardEther": func() string {
+			weiPerEther := new(big.Float).SetFloat64(1e18)
+			amountFloat := new(big.Float).SetInt(filteredTotal)
+			amountFloat.Quo(amountFloat, weiPerEther)
+			return amountFloat.Text('f', 6)
+		}(),
+		"filteredRecordCount": len(filteredRecords),
+		"voterRecords":        filteredRecords,
+		"note": func() string {
+			if len(allRewards.VoterRecords) > len(filteredRecords) {
+				return fmt.Sprintf("注意：共找到 %d 条奖励记录，其中 %d 条可以确定来自该验证者。历史记录可能没有验证者地址信息。",
+					len(allRewards.VoterRecords), len(filteredRecords))
+			}
+			return ""
+		}(),
+	}
+
+	// 如果投票者信息可用，添加投票金额信息
+	if voteAmount != nil {
+		result["voteAmountWei"] = voteAmount.String()
+		weiPerEther := new(big.Float).SetFloat64(1e18)
+		amountFloat := new(big.Float).SetInt(voteAmount)
+		amountFloat.Quo(amountFloat, weiPerEther)
+		result["voteAmountEther"] = amountFloat.Text('f', 6)
+	}
+
+	d.logger.Info("✅ GetVoterRewardByValidator: 查询完成",
+		"voterAddress", voterAddress,
+		"validatorAddress", validatorAddress,
+		"hasVote", hasVote,
+		"recordCount", allRewards.VoterRecordCount)
+
+	return result, nil
 }
 
 // ensureRewardStore 保证奖励存储可用，并返回可用的状态实例
@@ -4141,8 +4483,8 @@ func (d *DPOS) GetValidatorRewardsInfo(ctx context.Context, params interface{}) 
 		}
 
 		// 第一个参数：验证者地址
-		if addr, ok := p[0].(string); ok {
-			validatorAddress = addr
+		if addrStr, ok := p[0].(string); ok {
+			validatorAddress = addrStr
 		} else {
 			return map[string]interface{}{
 				"success": false,
@@ -4171,7 +4513,7 @@ func (d *DPOS) GetValidatorRewardsInfo(ctx context.Context, params interface{}) 
 		"epochNumber", epochNumber)
 
 	// 解析地址
-	addr := types.StringToAddress(validatorAddress)
+	validatorAddr := types.StringToAddress(validatorAddress)
 
 	// 获取DPoS引擎
 	dposEngine := d.getDPoSEngine()
@@ -4186,7 +4528,7 @@ func (d *DPOS) GetValidatorRewardsInfo(ctx context.Context, params interface{}) 
 	if engine, ok := dposEngine.(interface {
 		GetValidatorRewardsInfo(validatorAddress types.Address, epochNumber uint64) map[string]interface{}
 	}); ok {
-		rewardsInfo := engine.GetValidatorRewardsInfo(addr, epochNumber)
+		rewardsInfo := engine.GetValidatorRewardsInfo(validatorAddr, epochNumber)
 		// 如果返回的数据已经有 success 字段，直接返回；否则包装
 		if _, hasSuccess := rewardsInfo["success"]; hasSuccess {
 			return rewardsInfo, nil
@@ -4568,7 +4910,7 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 		"description":        description,
 		"currentBlockNumber": currentBlockNumber,
 		"message":            "Recovery proposal transaction created and broadcasted successfully",
-		"note":               "Proposal will be created when transaction is included in a block",
+		"note":               "Proposal will be created when transaction is included in a block. Query dpos_getParameterProposal with the exact proposalId above only after the tx is mined.",
 	}, nil
 }
 
@@ -4647,6 +4989,23 @@ func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) 
 				"existingSupport", existingVote.Support)
 			return nil, fmt.Errorf("voter %s has already voted on proposal %s", voter.String(), proposalID)
 		}
+	}
+
+	// 仅超级代表可对提案投票：投票者必须在当前 SR 集合内
+	srSet, err := gov.GetSuperRepresentatives()
+	if err != nil {
+		d.logger.Warn("❌ [VoteOnParameterProposal RPC] 无法获取超级代表列表", "error", err)
+		return nil, fmt.Errorf("cannot get super representatives: %w", err)
+	}
+	srMap := make(map[types.Address]struct{}, len(srSet))
+	for _, v := range srSet {
+		srMap[v.Address] = struct{}{}
+	}
+	if _, ok := srMap[voter]; !ok {
+		d.logger.Warn("❌ [VoteOnParameterProposal RPC] 投票者不是超级代表，拒绝投票",
+			"proposalID", proposalID,
+			"voter", voter.String())
+		return nil, fmt.Errorf("only super representatives can vote on proposals (voter %s is not an SR)", voter.String())
 	}
 
 	// 改为通过交易进行投票
@@ -4780,47 +5139,47 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 		}
 	}
 
-	// 先获取当前区块高度，供 isPassed 使用
+	// 当前区块高度
 	currentBlockNumber := gov.GetCurrentBlockNumber()
 	if currentBlockNumber == 0 {
 		currentBlockNumber = d.getCurrentBlockHeight()
 	}
 
+	// 门槛：实际 SR 数量的 51%（一 SR 一票，与 CheckProposalResult 一致）
+	srSet, _ := gov.GetSuperRepresentatives()
+	actualSRCount := uint64(0)
+	if len(srSet) == 0 {
+		actualSRCount = 21
+	} else {
+		actualSRCount = uint64(len(srSet))
+	}
+	minRequiredYes := (actualSRCount*51 + 99) / 100
+	if minRequiredYes < 1 {
+		minRequiredYes = 1
+	}
+	yesCount := len(supportVoters)
+
+	// 是否通过：表决期结束且 赞成票数 >= 门槛
+	isPassedVal := false
+	if currentBlockNumber > proposal.EndBlock {
+		if proposal.Status == dpos.ProposalPassed {
+			isPassedVal = true
+		} else if proposal.Status != dpos.ProposalRejected {
+			isPassedVal = yesCount >= int(minRequiredYes)
+		}
+	}
+
 	voteStats := map[string]interface{}{
-		"totalVotes":    len(proposal.Votes),
-		"supportVotes":  len(supportVoters),
-		"opposeVotes":   len(opposeVoters),
-		"supportWeight": supportWeight.String(),
-		"totalWeight":   totalWeight.String(),
-		"passRate": func() string {
-			if totalWeight.Sign() == 0 {
-				return "0.00%"
-			}
-			passRate := new(big.Float).Quo(new(big.Float).SetInt(supportWeight), new(big.Float).SetInt(totalWeight))
-			passRate.Mul(passRate, big.NewFloat(100))
-			value, _ := passRate.Float64()
-			return fmt.Sprintf("%.2f%%", value)
-		}(),
-		"isPassed": func() bool {
-			// 修复：isPassed 必须与 Status 保持一致
-			// 1. 如果投票期未结束，返回 false（即使支持率100%）
-			if currentBlockNumber <= proposal.EndBlock {
-				return false
-			}
-			// 2. 如果投票期已结束，直接使用 Status 字段（更可靠）
-			// 如果 Status 还未更新，先尝试检查结果
-			if proposal.Status != dpos.ProposalPassed && proposal.Status != dpos.ProposalRejected {
-				// 投票期已结束但状态未更新，计算支持率
-				if totalWeight.Sign() == 0 {
-					return false
-				}
-				passRate := new(big.Int).Mul(supportWeight, big.NewInt(100))
-				passRate.Div(passRate, totalWeight)
-				return passRate.Uint64() >= proposal.Threshold
-			}
-			// 3. 状态已更新，直接使用 Status
-			return proposal.Status == dpos.ProposalPassed
-		}(),
+		"currentBlockNumber": currentBlockNumber,
+		"totalVotes":         len(proposal.Votes),
+		"supportVotes":       yesCount,
+		"opposeVotes":        len(opposeVoters),
+		"supportWeight":      supportWeight.String(),
+		"totalWeight":        totalWeight.String(),
+		"actualSRCount":      actualSRCount,
+		"minRequiredYes":     minRequiredYes,
+		"thresholdProgress":  fmt.Sprintf("%d/%d", yesCount, minRequiredYes),
+		"isPassed":           isPassedVal,
 	}
 
 	timeInfo := map[string]interface{}{
@@ -4841,9 +5200,6 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 		timeInfo["remainingBlocks"] = 0
 		timeInfo["isExpired"] = true
 	}
-
-	// 保存 currentBlockNumber 供 isPassed 使用
-	voteStats["currentBlockNumber"] = currentBlockNumber
 
 	// 格式化创建时间
 	var createdAtFormatted string
@@ -4900,7 +5256,7 @@ func (d *DPOS) RegisterDelegate(ctx context.Context, params interface{}) (interf
 	// 解析参数
 	d.logger.Info("🔍 开始解析RPC参数...")
 	var registrantStr, name, website, description, privateKey string
-	var chainID uint64 = 20230826 // 默认chainID
+	chainID := d.chainID // 默认使用端点配置的链ID（与链配置一致）
 
 	if paramMap, ok := params.(map[string]interface{}); ok {
 		registrantStr, _ = paramMap["registrant"].(string)
@@ -4909,7 +5265,7 @@ func (d *DPOS) RegisterDelegate(ctx context.Context, params interface{}) (interf
 		description, _ = paramMap["description"].(string)
 		privateKey, _ = paramMap["privateKey"].(string)
 
-		// 解析chainID
+		// 解析chainID：若请求中显式传入则覆盖默认值
 		if chainIDInterface, exists := paramMap["chainID"]; exists {
 			if chainIDFloat, ok := chainIDInterface.(float64); ok {
 				chainID = uint64(chainIDFloat)
@@ -5212,10 +5568,10 @@ func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (
 	switch p := params.(type) {
 	case []interface{}:
 		if len(p) == 0 {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "validator address parameter is required",
-		}, nil
+			return map[string]interface{}{
+				"success": false,
+				"error":   "validator address parameter is required",
+			}, nil
 		}
 		if addr, ok := p[0].(string); ok {
 			validatorAddress = addr
@@ -5697,49 +6053,65 @@ func (d *DPOS) buildFreezeInfoResponse(dposEngine interface{}, address types.Add
 
 // GetAccountBalance 查询账户余额（包含冻结）
 func (d *DPOS) GetAccountBalance(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS GetAccountBalance called", "params", params)
+	d.logger.Info("🔵 [GetAccountBalance] RPC 调用开始", "params", params)
 
 	// 解析参数
 	var addressStr string
 	if paramMap, ok := params.(map[string]interface{}); ok {
 		addressStr, _ = paramMap["address"].(string)
+		d.logger.Info("🔵 [GetAccountBalance] 参数格式: map", "address", addressStr)
 	} else if paramArray, ok := params.([]interface{}); ok && len(paramArray) >= 1 {
 		addressStr, _ = paramArray[0].(string)
+		d.logger.Info("🔵 [GetAccountBalance] 参数格式: array", "address", addressStr, "arrayLen", len(paramArray))
 	} else {
+		d.logger.Error("❌ [GetAccountBalance] 无效的参数格式", "paramsType", fmt.Sprintf("%T", params))
 		return nil, fmt.Errorf("invalid parameters format")
 	}
 
 	if addressStr == "" {
+		d.logger.Error("❌ [GetAccountBalance] 地址为空")
 		return nil, fmt.Errorf("address is required")
 	}
 
 	address := types.StringToAddress(addressStr)
+	d.logger.Info("🔵 [GetAccountBalance] 解析地址完成", "address", address.String())
+
 	dposEngine := d.getDPoSEngine()
 	if dposEngine == nil {
+		d.logger.Error("❌ [GetAccountBalance] DPoS 引擎不可用")
 		return nil, fmt.Errorf("DPoS engine not available")
 	}
+	d.logger.Info("✅ [GetAccountBalance] DPoS 引擎获取成功")
 
 	// 调用DPoS引擎的方法
 	if getBalance, ok := dposEngine.(interface {
 		GetAccountBalance(address types.Address) (map[string]interface{}, error)
 	}); ok {
+		d.logger.Info("🔵 [GetAccountBalance] 开始调用 DPoS 引擎的 GetAccountBalance", "address", address.String())
 		balanceInfo, err := getBalance.GetAccountBalance(address)
 		if err != nil {
+			d.logger.Error("❌ [GetAccountBalance] DPoS 引擎调用失败", "error", err.Error())
 			return map[string]interface{}{
 				"success": false,
 				"error":   err.Error(),
 			}, nil
 		}
+		d.logger.Info("✅ [GetAccountBalance] DPoS 引擎调用成功", "balanceInfo", balanceInfo)
+
 		// 如果返回的数据已经有 success 字段，直接返回；否则包装
 		if _, hasSuccess := balanceInfo["success"]; hasSuccess {
+			d.logger.Info("✅ [GetAccountBalance] 返回结果（已有 success 字段）", "result", balanceInfo)
 			return balanceInfo, nil
 		}
-		return map[string]interface{}{
+		result := map[string]interface{}{
 			"success": true,
 			"data":    balanceInfo,
-		}, nil
+		}
+		d.logger.Info("✅ [GetAccountBalance] 返回结果（包装后）", "result", result)
+		return result, nil
 	}
 
+	d.logger.Error("❌ [GetAccountBalance] DPoS 引擎不支持 GetAccountBalance 方法")
 	return map[string]interface{}{
 		"success": false,
 		"error":   "DPoS engine does not support GetAccountBalance",
@@ -5806,6 +6178,12 @@ func (d *DPOS) GetActiveProposals(ctx context.Context, params interface{}) (inte
 		}, nil
 	}
 
+	// 获取当前区块高度，用于判断提案是否过期
+	currentBlockNumber := gov.GetCurrentBlockNumber()
+	if currentBlockNumber == 0 {
+		currentBlockNumber = d.getCurrentBlockHeight()
+	}
+
 	result := make([]map[string]interface{}, 0, len(proposals))
 	for _, proposal := range proposals {
 		votes := len(proposal.Votes)
@@ -5822,20 +6200,24 @@ func (d *DPOS) GetActiveProposals(ctx context.Context, params interface{}) (inte
 			createdAtTs = 0
 		}
 
+		// 判断提案执行有效期是否已过期
+		isProposalExpired := currentBlockNumber > proposal.ValidEndBlock
+
 		result = append(result, map[string]interface{}{
-			"proposalId":  proposal.ID,
-			"parameter":   proposal.Parameter,
-			"oldValue":    proposal.OldValue,
-			"newValue":    proposal.NewValue,
-			"proposer":    proposal.Proposer.String(),
-			"startBlock":  proposal.StartBlock,
-			"endBlock":    proposal.EndBlock,
-			"status":      proposal.Status.String(),
-			"threshold":   proposal.Threshold,
-			"description": proposal.Description,
-			"createdAt":   createdAtFormatted,
-			"createdAtTs": createdAtTs,
-			"votes":       votes,
+			"proposalId":        proposal.ID,
+			"parameter":         proposal.Parameter,
+			"oldValue":          proposal.OldValue,
+			"newValue":          proposal.NewValue,
+			"proposer":          proposal.Proposer.String(),
+			"startBlock":        proposal.StartBlock,
+			"endBlock":          proposal.EndBlock,
+			"status":            proposal.Status.String(),
+			"threshold":         proposal.Threshold,
+			"description":       proposal.Description,
+			"createdAt":         createdAtFormatted,
+			"createdAtTs":       createdAtTs,
+			"votes":             votes,
+			"isProposalExpired": isProposalExpired,
 		})
 	}
 
@@ -5886,6 +6268,49 @@ func (d *DPOS) GetVotableCurrentParameters(ctx context.Context) (interface{}, er
 		"success":    true,
 		"parameters": result,
 		"count":      len(result),
+	}, nil
+}
+
+// GetConsensusSwitchHeight 获取共识切换高度
+func (d *DPOS) GetConsensusSwitchHeight(ctx context.Context) (interface{}, error) {
+	d.logger.Info("DPoS GetConsensusSwitchHeight called")
+
+	// 尝试多种方式获取共识切换高度
+	consensusSwitchHeight := d.getConsensusSwitchHeight()
+	currentHeight := d.getCurrentBlockHeight()
+
+	d.logger.Info("获取共识切换高度结果",
+		"consensusSwitchHeight", consensusSwitchHeight,
+		"currentHeight", currentHeight)
+
+	// 尝试获取共识切换高度区块的时间戳
+	var switchBlockTimestamp uint64 = 0
+	var switchBlockHash string = ""
+	if consensusSwitchHeight > 0 {
+		if header, exists := d.store.GetHeaderByNumber(consensusSwitchHeight); exists && header != nil {
+			switchBlockTimestamp = header.Timestamp
+			switchBlockHash = header.Hash.String()
+			d.logger.Info("成功获取切换高度区块信息",
+				"height", consensusSwitchHeight,
+				"timestamp", switchBlockTimestamp,
+				"hash", switchBlockHash)
+		} else {
+			d.logger.Warn("无法获取切换高度区块头",
+				"height", consensusSwitchHeight)
+		}
+	} else {
+		d.logger.Warn("共识切换高度为0，可能未配置或无法获取")
+	}
+
+	isDPoSActive := consensusSwitchHeight > 0 && currentHeight >= consensusSwitchHeight
+
+	return map[string]interface{}{
+		"success":               true,
+		"consensusSwitchHeight": consensusSwitchHeight,
+		"switchBlockTimestamp":  switchBlockTimestamp,
+		"switchBlockHash":       switchBlockHash,
+		"currentBlockHeight":    currentHeight,
+		"isDPoSActive":          isDPoSActive,
 	}, nil
 }
 
@@ -6443,127 +6868,6 @@ func (d *DPOS) createProposalExecuteTransaction(executor types.Address, privateK
 	return tx, nil
 }
 
-// buildUnvoteResponse 构建解质押响应（包含削减信息）
-func (d *DPOS) buildUnvoteResponse(voterAddr, validatorAddr types.Address) (*UnvoteResponse, error) {
-	d.logger.Info("🔍 构建解质押响应", "voter", voterAddr.String(), "validator", validatorAddr.String())
-
-	// 1. 获取 DPoS 引擎
-	dposEngine := d.getDPoSEngine()
-	if dposEngine == nil {
-		return nil, fmt.Errorf("DPoS engine not available")
-	}
-
-	// 2. 获取 VoterInfo（通过 State）
-	var voterInfo *dpos.VoterInfo
-	if getState, ok := dposEngine.(interface {
-		GetDPoSState() (*dpos.State, error)
-	}); ok {
-		state, err := getState.GetDPoSState()
-		if err != nil || state == nil || state.StakeStore == nil {
-			return nil, fmt.Errorf("failed to get DPoS state: %w", err)
-		}
-		voterInfo, err = state.StakeStore.GetVoterInfo(voterAddr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get voter info from store: %w", err)
-		}
-	} else {
-		return nil, fmt.Errorf("DPoS engine does not support getting state")
-	}
-
-	if voterInfo == nil {
-		return &UnvoteResponse{
-			Success:   false,
-			Voter:     voterAddr,
-			Validator: validatorAddr,
-			Error:     "voter info not found",
-		}, nil
-	}
-
-	// 3. 初始化 DelegateVotes 和 SlashingRecords（如果不存在）
-	if voterInfo.DelegateVotes == nil {
-		voterInfo.DelegateVotes = make(map[types.Address]*big.Int)
-	}
-	if voterInfo.SlashingRecords == nil {
-		voterInfo.SlashingRecords = make(map[types.Address][]*dpos.SlashingRecord)
-	}
-
-	// 4. 获取当前投票金额（从 DelegateVotes）
-	var currentAmount *big.Int
-	if voterInfo.DelegateVotes != nil {
-		currentAmount = voterInfo.DelegateVotes[validatorAddr]
-	}
-	if currentAmount == nil {
-		currentAmount = big.NewInt(0)
-	}
-
-	// 5. 获取削减历史
-	var slashingRecords []*dpos.SlashingRecord
-	if voterInfo.SlashingRecords != nil {
-		slashingRecords = voterInfo.SlashingRecords[validatorAddr]
-	}
-	if slashingRecords == nil {
-		slashingRecords = []*dpos.SlashingRecord{}
-	}
-
-	// 6. 获取 StakeInfo 计算原始金额和总削减金额
-	totalOriginalAmount := big.NewInt(0)
-	totalSlashAmount := big.NewInt(0)
-
-	allStakes, err := d.store.GetStakingInfo()
-	if err == nil {
-		for _, stake := range allStakes {
-			if stake != nil && stake.Staker == voterAddr && stake.Delegate == validatorAddr {
-				if stake.OriginalAmount != nil {
-					totalOriginalAmount.Add(totalOriginalAmount, stake.OriginalAmount)
-				} else if stake.Amount != nil {
-					// 如果没有原始金额，使用当前金额（可能已经被削减）
-					totalOriginalAmount.Add(totalOriginalAmount, stake.Amount)
-				}
-				if stake.SlashingRecords != nil {
-					for _, record := range stake.SlashingRecords {
-						if record.SlashAmount != nil {
-							totalSlashAmount.Add(totalSlashAmount, record.SlashAmount)
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// 如果总原始金额为0，使用当前金额
-	if totalOriginalAmount.Sign() == 0 {
-		totalOriginalAmount = new(big.Int).Set(currentAmount)
-	}
-
-	// 7. 构建响应消息
-	response := &UnvoteResponse{
-		Success:          true,
-		Voter:            voterAddr,
-		Validator:        validatorAddr,
-		WithdrawAmount:   currentAmount,
-		OriginalAmount:   totalOriginalAmount,
-		TotalSlashAmount: totalSlashAmount,
-		SlashCount:       len(slashingRecords),
-		SlashingHistory:  slashingRecords,
-	}
-
-	// 如果金额减少，添加提示信息
-	if totalOriginalAmount.Cmp(currentAmount) > 0 {
-		difference := new(big.Int).Sub(totalOriginalAmount, currentAmount)
-		response.Message = fmt.Sprintf(
-			"您的投票金额因验证者违规被削减。原始金额: %s, 当前金额: %s, 削减金额: %s, 削减次数: %d",
-			totalOriginalAmount.String(),
-			currentAmount.String(),
-			difference.String(),
-			len(slashingRecords),
-		)
-	} else {
-		response.Message = fmt.Sprintf("可提取金额: %s", currentAmount.String())
-	}
-
-	return response, nil
-}
-
 // GetVoterSlashingHistory 获取投票者的削减历史
 // RPC: dpos_getVoterSlashingHistory
 func (d *DPOS) GetVoterSlashingHistory(ctx context.Context, params interface{}) (interface{}, error) {
@@ -6737,6 +7041,201 @@ func (d *DPOS) GetVoterSlashingHistory(ctx context.Context, params interface{}) 
 		"slashCount":       len(slashingHistory),
 		"slashingHistory":  slashingHistory,
 	}, nil
+}
+
+// GetValidatorSlashingHistory 获取验证者的所有削减历史（聚合所有投票者）
+// RPC: dpos_getValidatorSlashingHistory
+func (d *DPOS) GetValidatorSlashingHistory(ctx context.Context, params interface{}) (interface{}, error) {
+	d.logger.Info("GetValidatorSlashingHistory called", "params", params)
+
+	// 解析参数
+	var validatorAddress string
+
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) == 1 {
+			if address, ok := p[0].(string); ok {
+				validatorAddress = address
+			} else {
+				return map[string]interface{}{
+					"success": false,
+					"error":   "first parameter must be a string address",
+				}, nil
+			}
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "expected 1 parameter (validator address)",
+			}, nil
+		}
+	case string:
+		validatorAddress = p
+	case map[string]interface{}:
+		if address, ok := p["validator"].(string); ok {
+			validatorAddress = address
+		} else {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "validator address is required",
+			}, nil
+		}
+	default:
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("invalid parameter type: %T, expected string, array, or map", params),
+		}, nil
+	}
+
+	// 验证地址
+	if validatorAddress == "" {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "validator address is required",
+		}, nil
+	}
+
+	// 解析地址
+	validatorAddr := types.StringToAddress(validatorAddress)
+
+	// 1. 获取 DPoS State
+	state, err := d.store.GetDPoSState()
+	if err != nil || state == nil || state.StakeStore == nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("failed to get DPoS state: %v", err),
+		}, nil
+	}
+
+	// 2. 获取所有质押信息
+	allStakes, err := state.StakeStore.GetStakingInfo()
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("failed to get staking info: %v", err),
+		}, nil
+	}
+
+	// 3. 筛选出投票给该验证者的所有投票者
+	var voters []types.Address
+	voterSet := make(map[types.Address]bool) // 用于去重
+
+	for _, stake := range allStakes {
+		if stake != nil && stake.Delegate == validatorAddr {
+			// 去重：同一个投票者可能有多条质押记录
+			if !voterSet[stake.Staker] {
+				voters = append(voters, stake.Staker)
+				voterSet[stake.Staker] = true
+			}
+		}
+	}
+
+	d.logger.Info("GetValidatorSlashingHistory: found voters", "validator", validatorAddr.String(), "voterCount", len(voters))
+
+	if len(voters) == 0 {
+		return map[string]interface{}{
+			"success":          true,
+			"validator":        validatorAddr.String(),
+			"totalSlashCount":  0,
+			"totalSlashAmount": "0",
+			"lastSlashTime":    nil,
+			"slashingHistory":  []interface{}{},
+		}, nil
+	}
+
+	// 4. 查询每个投票者的削减历史
+	var allHistory []interface{}
+
+	for _, voterAddr := range voters {
+		voterInfo, err := state.StakeStore.GetVoterInfo(voterAddr)
+		if err != nil {
+			d.logger.Warn("GetValidatorSlashingHistory: failed to get voter info", "voter", voterAddr.String(), "error", err)
+			continue
+		}
+
+		if voterInfo == nil {
+			continue
+		}
+
+		// 初始化 SlashingRecords（如果不存在）
+		if voterInfo.SlashingRecords == nil {
+			voterInfo.SlashingRecords = make(map[types.Address][]*dpos.SlashingRecord)
+		}
+
+		// 获取该投票者对该验证者的削减记录
+		records := voterInfo.SlashingRecords[validatorAddr]
+		for _, record := range records {
+			allHistory = append(allHistory, map[string]interface{}{
+				"validatorAddr":          record.ValidatorAddr.String(),
+				"voterAddress":           voterAddr.String(), // 添加投票者地址
+				"blockNumber":            record.BlockNumber,
+				"epochNumber":            record.EpochNumber,
+				"timestamp":              record.Timestamp,
+				"slashAmount":            record.SlashAmount.String(),
+				"oldVoteAmount":          record.OldVoteAmount.String(),
+				"newVoteAmount":          record.NewVoteAmount.String(),
+				"slashRate":              record.SlashRate,
+				"reason":                 record.Reason,
+				"missedBlocks":           record.MissedBlocks,
+				"missedBlocksPercentage": record.MissedBlocksPercentage,
+				"doubleSigningHeight":    record.DoubleSigningHeight,
+			})
+		}
+	}
+
+	// 5. 计算统计信息
+	totalSlashAmount := big.NewInt(0)
+	var lastSlashTime uint64 = 0
+
+	for _, record := range allHistory {
+		recordMap := record.(map[string]interface{})
+
+		// 累加削减金额
+		if slashAmountStr, ok := recordMap["slashAmount"].(string); ok {
+			if slashAmount, ok := new(big.Int).SetString(slashAmountStr, 10); ok {
+				totalSlashAmount.Add(totalSlashAmount, slashAmount)
+			}
+		}
+
+		// 找到最新的削减时间
+		if timestamp, ok := recordMap["timestamp"].(uint64); ok {
+			if timestamp > lastSlashTime {
+				lastSlashTime = timestamp
+			}
+		}
+	}
+
+	// 6. 按时间倒序排序
+	sort.Slice(allHistory, func(i, j int) bool {
+		timeI, okI := allHistory[i].(map[string]interface{})["timestamp"].(uint64)
+		timeJ, okJ := allHistory[j].(map[string]interface{})["timestamp"].(uint64)
+
+		if !okI || !okJ {
+			return false
+		}
+		return timeI > timeJ // 最新的在前
+	})
+
+	// 7. 返回结果
+	result := map[string]interface{}{
+		"success":          true,
+		"validator":        validatorAddr.String(),
+		"totalSlashCount":  len(allHistory),
+		"totalSlashAmount": totalSlashAmount.String(),
+		"slashingHistory":  allHistory,
+	}
+
+	if lastSlashTime > 0 {
+		result["lastSlashTime"] = lastSlashTime
+	} else {
+		result["lastSlashTime"] = nil
+	}
+
+	d.logger.Info("GetValidatorSlashingHistory: completed",
+		"validator", validatorAddr.String(),
+		"totalSlashCount", len(allHistory),
+		"totalSlashAmount", totalSlashAmount.String())
+
+	return result, nil
 }
 
 // addProposalTransactionToPool 将提案交易添加到交易池并广播

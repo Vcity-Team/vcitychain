@@ -225,11 +225,7 @@ func (gm *GoroutineManager) monitorLoop() {
 		case <-ticker.C:
 			stats := gm.GetStats()
 
-			// 记录统计信息
-			gm.logOnceWithInterval("goroutine_manager_debug_stats", 10*time.Second, "debug", "协程管理器统计",
-				"active", stats["activeGoroutines"],
-				"peak", stats["peakGoroutines"],
-				"utilization", stats["goroutineUtilization"])
+			// 记录统计信息（已删除日志）
 
 			// 检查协程数量是否过高
 			activeCount := stats["activeGoroutines"].(int64)

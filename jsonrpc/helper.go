@@ -166,7 +166,7 @@ func GetNextNonce(address types.Address, number BlockNumber, store nonceGetter) 
 	return acc.Nonce, nil
 }
 
-func DecodeTxn(arg *txnArgs, blockNumber uint64, store nonceGetter, forceSetNonce bool) (*types.Transaction, error) {
+func DecodeTxn(arg *txnArgs, blockNumber uint64, store nonceGetter, forceSetNonce bool, chainID uint64) (*types.Transaction, error) {
 	if arg == nil {
 		return nil, errors.New("missing value for required argument 0")
 	}
@@ -253,9 +253,8 @@ func DecodeTxn(arg *txnArgs, blockNumber uint64, store nonceGetter, forceSetNonc
 	txn.R = big.NewInt(0)
 	txn.S = big.NewInt(0)
 
-	// Set ChainID for all transaction types during gas estimation
-	// This ensures proper RLP marshaling regardless of transaction type
-	txn.ChainID = big.NewInt(20230825) // Use correct chain ID from genesis.json
+	// Use chainID from caller (same as chain config) for proper RLP and chainid-dependent logic
+	txn.ChainID = new(big.Int).SetUint64(chainID)
 
 	txn.ComputeHash(blockNumber)
 

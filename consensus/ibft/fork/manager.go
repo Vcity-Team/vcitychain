@@ -637,15 +637,13 @@ func (m *ForkManager) getDPoSValidators(height uint64) (validators.Validators, e
 		"successRate", fmt.Sprintf("%.1f%%", float64(validValidatorCount)/float64(ibftValidators.Len())*100))
 
 	if validValidatorCount == 0 {
-		m.logger.Error("❌ 没有可用的DPoS验证者，程序退出",
+		m.logger.Error("❌ 没有可用的DPoS验证者，返回错误由上层处理",
 			"height", height,
 			"totalCandidates", ibftValidators.Len())
 
 		// 记录共识失败时间
 		m.lastConsensusFailure = time.Now()
-
-		// 程序直接退出
-		os.Exit(1)
+		return nil, fmt.Errorf("no available DPoS validators at height %d (total candidates: %d)", height, ibftValidators.Len())
 	}
 	if validValidatorCount < 2 {
 		m.logger.Warn("⚠️ 警告：DPoS验证者数量过少",

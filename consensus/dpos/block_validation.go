@@ -2,7 +2,6 @@ package dpos
 
 import (
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/signer"
@@ -31,15 +30,10 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 
 	parent, ok := d.blockchain.GetHeaderByHash(header.ParentHash)
 	if !ok {
-		d.logger.Error("❌ 无法通过哈希获取父区块",
+		d.logger.Error("❌ 无法通过哈希获取父区块（可能网络抖动或父块未同步到，返回错误供上层重试）",
 			"blockNumber", header.Number,
 			"parentHash", header.ParentHash.String(),
 			"parentHashHex", fmt.Sprintf("0x%x", header.ParentHash))
-
-		// 父区块获取失败时立即退出程序
-		d.logger.Error("💀 无法获取父区块，程序将立即退出")
-		os.Exit(1)
-
 		return fmt.Errorf(
 			"unable to get parent header by hash for block number %d",
 			header.Number,
@@ -49,10 +43,6 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 	err := d.verifyHeaderImpl(parent, header, d.config.BlockTime.Duration, nil)
 	if err != nil {
 		d.logger.Error("❌ DPoS VerifyHeader verifyHeaderImpl失败", "blockNumber", blockNumber, "error", err)
-
-		d.logger.Error("💀 区块头验证失败，程序将立即退出")
-		os.Exit(1)
-
 		return err
 	}
 	return nil

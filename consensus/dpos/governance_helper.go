@@ -38,8 +38,11 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 	if d.state != nil && d.state.ParameterStore != nil {
 		if dbValue, err := d.state.ParameterStore.GetParameterValue(parameter); err == nil {
 			d.logger.Debug("从数据库读取参数值", "param", parameter, "value", dbValue)
-			// 更新缓存
+			// 更新缓存（确保 map 已初始化）
 			d.parameterValuesMutex.Lock()
+			if d.parameterCurrentValues == nil {
+				d.parameterCurrentValues = make(map[string]interface{})
+			}
 			d.parameterCurrentValues[parameter] = dbValue
 			d.parameterValuesMutex.Unlock()
 			return dbValue, nil
@@ -229,6 +232,11 @@ func (d *DPoS) validateParameterValue(parameter string, value interface{}) error
 func (d *DPoS) updateParameterValue(paramName string, value interface{}, source string) error {
 	d.parameterValuesMutex.Lock()
 	defer d.parameterValuesMutex.Unlock()
+
+	// 确保 map 已初始化
+	if d.parameterCurrentValues == nil {
+		d.parameterCurrentValues = make(map[string]interface{})
+	}
 
 	// 更新内存缓存
 	d.parameterCurrentValues[paramName] = value

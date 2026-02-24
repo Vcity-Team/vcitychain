@@ -30,39 +30,18 @@ func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, s
 		return fmt.Errorf("voting period has ended or not started")
 	}
 
-	// 检查投票者是否有余额（允许所有有余额的用户投票）
-	var balance *big.Int
-	var err error
-	if d.balanceQuerier != nil {
-		balance, err = d.balanceQuerier.GetNativeTokenBalance(voter)
-		if err != nil {
-			d.logger.Warn("Failed to query voter balance for proposal vote", "voter", voter.String(), "error", err)
-			balance = big.NewInt(0)
-		}
-	} else {
-		// 如果没有余额查询器，尝试使用getAccountBalance
-		if d.config != nil && d.config.Executor != nil {
-			currentHeader := d.config.Blockchain.Header()
-			if currentHeader != nil {
-				if snapshot, err2 := d.config.Executor.StateAt(currentHeader.StateRoot); err2 == nil {
-					if account, err2 := snapshot.GetAccount(voter); err2 == nil && account != nil {
-						balance = account.Balance
-					}
-				}
-			}
-		}
-		if balance == nil {
-			balance = big.NewInt(0)
-		}
+	// 仅超级代表可对提案投票：投票者必须在配置的 SR 集合（前 DPoSValidatorsCount 个验证者）内
+	srSet, err := d.GetSortedValidatorsWithLimit()
+	if err != nil {
+		d.logger.Warn("Failed to get super representatives for proposal vote", "voter", voter.String(), "error", err)
+		return fmt.Errorf("cannot determine super representatives: %w", err)
 	}
-
-	if balance == nil || balance.Cmp(big.NewInt(0)) <= 0 {
-		return fmt.Errorf("voter must have balance to vote (current balance: %s)", func() string {
-			if balance == nil {
-				return "0"
-			}
-			return balance.String()
-		}())
+	srMap := make(map[types.Address]struct{}, len(srSet))
+	for _, v := range srSet {
+		srMap[v.Address] = struct{}{}
+	}
+	if _, ok := srMap[voter]; !ok {
+		return fmt.Errorf("only super representatives can vote on proposals (voter %s is not an SR)", voter.String())
 	}
 
 	// 检查是否已经投票
@@ -70,9 +49,8 @@ func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, s
 		return fmt.Errorf("already voted on this proposal")
 	}
 
-	// 计算投票权重（基于余额，而不是质押）
-	// 使用余额作为投票权重，这样余额越多权重越大
-	weight := balance
+	// 提案投票采用“一 SR 一票”：权重固定为 1，通过条件为获得固定 SR 数量的 51%
+	weight := big.NewInt(1)
 
 	// 创建投票
 	vote := &ParameterVote{
@@ -152,23 +130,37 @@ func (d *DPoS) CheckProposalResult(proposalID string) error {
 		return nil // 投票期未结束
 	}
 
-	// 统计投票结果
+	// 统计投票结果：提案通过需获得「实际 SR 人数」的 51% 赞成（一 SR 一票）
+	// 使用实际 SR 数量（GetSortedValidatorsWithLimit 返回的个数），这样出块节点少于配置的 21 时仍可达成通过条件
 	calcStartTime := time.Now()
-	totalWeight := big.NewInt(0)
-	supportWeight := big.NewInt(0)
+	srSet, err := d.GetSortedValidatorsWithLimit()
+	actualSRCount := uint64(0)
+	if err != nil || len(srSet) == 0 {
+		// 无法获取实际 SR 集合时回退到配置人数
+		actualSRCount = d.config.DPoSValidatorsCount
+		if actualSRCount == 0 {
+			actualSRCount = 21
+		}
+		d.logger.Warn("⚠️ [CheckProposalResult] 使用配置的 SR 数量作为分母", "actualSRCount", actualSRCount, "error", err)
+	} else {
+		actualSRCount = uint64(len(srSet))
+	}
+	minRequiredYes := (actualSRCount*51 + 99) / 100 // ceil(actualSRCount * 0.51)
+	if minRequiredYes < 1 {
+		minRequiredYes = 1
+	}
 
-	voteCount := len(proposal.Votes)
+	yesCount := 0
 	for _, vote := range proposal.Votes {
-		totalWeight.Add(totalWeight, vote.Weight)
 		if vote.Support {
-			supportWeight.Add(supportWeight, vote.Weight)
+			yesCount++
 		}
 	}
+	voteCount := len(proposal.Votes)
 	calcDuration := time.Since(calcStartTime)
-	d.logger.Info("📊 [CheckProposalResult] 投票统计完成", "proposalID", proposalID, "voteCount", voteCount, "calcDuration", calcDuration.String())
+	d.logger.Info("📊 [CheckProposalResult] 投票统计完成", "proposalID", proposalID, "voteCount", voteCount, "yesCount", yesCount, "actualSRCount", actualSRCount, "minRequiredYes", minRequiredYes, "calcDuration", calcDuration.String())
 
-	// 计算支持率
-	if totalWeight.Cmp(big.NewInt(0)) == 0 {
+	if voteCount == 0 {
 		proposal.Status = ProposalRejected
 		d.logger.Info("❌ [CheckProposalResult] 提案被拒绝：无投票", "proposalID", proposalID)
 		finalizeStartTime := time.Now()
@@ -182,22 +174,22 @@ func (d *DPoS) CheckProposalResult(proposalID string) error {
 		return nil
 	}
 
-	supportRate := new(big.Int).Mul(supportWeight, big.NewInt(100))
-	supportRate.Div(supportRate, totalWeight)
-
-	// 判断是否通过
-	if supportRate.Cmp(big.NewInt(int64(proposal.Threshold))) >= 0 {
+	// 通过条件：赞成票数 >= 实际 SR 数量的 51%
+	passed := yesCount >= int(minRequiredYes)
+	if passed {
 		proposal.Status = ProposalPassed
 		d.logger.Info("✅ [CheckProposalResult] Proposal passed",
 			"proposalID", proposalID,
-			"supportRate", supportRate.String(),
-			"threshold", proposal.Threshold)
+			"yesCount", yesCount,
+			"minRequiredYes", minRequiredYes,
+			"actualSRCount", actualSRCount)
 	} else {
 		proposal.Status = ProposalRejected
 		d.logger.Info("❌ [CheckProposalResult] Proposal rejected",
 			"proposalID", proposalID,
-			"supportRate", supportRate.String(),
-			"threshold", proposal.Threshold)
+			"yesCount", yesCount,
+			"minRequiredYes", minRequiredYes,
+			"actualSRCount", actualSRCount)
 	}
 
 	finalizeStartTime := time.Now()

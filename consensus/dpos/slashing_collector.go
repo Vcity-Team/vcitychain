@@ -27,6 +27,23 @@ func (sc *SlashingCollector) CollectSlashingInfo(
 	epochInfo EpochInfo,
 	validatorMap map[types.Address]bool,
 ) {
+	sc.logger.Info("🔍 [CollectSlashingInfo] 开始收集消减信息",
+		"epochToCheck", epochInfo.EpochToCheckNumber,
+		"faultFlagsCount", len(faultFlags),
+		"validatorMapSize", len(validatorMap))
+
+	// 统计故障验证者数量
+	faultyCount := 0
+	for _, flag := range faultFlags {
+		if flag.IsFaulty {
+			faultyCount++
+		}
+	}
+	sc.logger.Info("📊 [CollectSlashingInfo] 故障标志统计",
+		"epochToCheck", epochInfo.EpochToCheckNumber,
+		"totalFlags", len(faultFlags),
+		"faultyCount", faultyCount)
+
 	// 遍历故障标志
 	for _, faultFlag := range faultFlags {
 		if faultFlag.IsFaulty {
@@ -99,5 +116,18 @@ func (sc *SlashingCollector) CollectSlashingInfo(
 				"基点",
 				"note", "将通过ExtraData传播给所有节点执行")
 		}
+	}
+
+	// 收集完成后的总结日志
+	if sc.dposInstance.pendingSlashingInfo != nil {
+		sc.logger.Info("✅✅✅ [CollectSlashingInfo] 消减信息收集完成",
+			"epochNumber", sc.dposInstance.pendingSlashingInfo.EpochNumber,
+			"slashingsCount", len(sc.dposInstance.pendingSlashingInfo.Slashings),
+			"timestamp", sc.dposInstance.pendingSlashingInfo.Timestamp)
+	} else {
+		sc.logger.Info("ℹ️ [CollectSlashingInfo] 没有收集到消减信息",
+			"epochToCheck", epochInfo.EpochToCheckNumber,
+			"reason", "没有故障验证者或所有故障验证者都不在验证者集合中",
+			"faultyCount", faultyCount)
 	}
 }

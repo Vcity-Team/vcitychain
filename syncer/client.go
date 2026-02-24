@@ -320,12 +320,6 @@ func (m *syncPeerClient) handleStatusUpdate(obj interface{}, from peer.ID) {
 		return
 	}
 
-	m.logger.Debug("📨 收到状态广播",
-		"来源节点", from.String(),
-		"区块高度", status.Number,
-		"本地节点", m.id,
-		"topic名称", m.statusTopicName)
-
 	// 检查网络连接状态
 	if !m.network.IsConnected(from) {
 		return
@@ -388,11 +382,6 @@ func (m *syncPeerClient) startNewBlockProcess() {
 		case event = <-eventCh:
 		}
 
-		// 添加事件接收日志
-		if event != nil {
-			m.logger.Debug("📨 收到区块链事件", "节点ID", m.id, "NewChain长度", len(event.NewChain), "shouldEmitBlocks", m.shouldEmitBlocks)
-		}
-
 		if !m.shouldEmitBlocks {
 			m.logger.Info("❌ 跳过状态广播", "节点ID", m.id, "shouldEmitBlocks", m.shouldEmitBlocks, "原因", "shouldEmitBlocks为false")
 			continue
@@ -408,17 +397,6 @@ func (m *syncPeerClient) startNewBlockProcess() {
 				continue
 			}
 
-			// 添加详细的状态广播日志
-			hashStr := latest.Hash.String()
-			if len(hashStr) > 16 {
-				hashStr = hashStr[:16]
-			}
-			m.logger.Debug("🔔 检测到新区块事件，准备状态广播",
-				"区块高度", latest.Number,
-				"区块哈希", hashStr,
-				"节点ID", m.id,
-				"NewChain长度", l)
-
 			// 检查网络连接状态
 			peers := m.network.Peers()
 			if len(peers) == 0 {
@@ -426,20 +404,9 @@ func (m *syncPeerClient) startNewBlockProcess() {
 				continue
 			}
 
-			// 添加网络连接状态日志
-			m.logger.Debug("🌐 网络连接状态检查",
-				"区块高度", latest.Number,
-				"连接节点数", len(peers),
-				"节点ID", m.id)
-
 			// Publish status with retry mechanism
 			var publishErr error
 			maxRetries := 3
-			m.logger.Debug("📡 开始状态广播",
-				"区块高度", latest.Number,
-				"最大重试次数", maxRetries,
-				"节点ID", m.id,
-				"topic名称", m.statusTopicName)
 
 			for retry := 0; retry < maxRetries; retry++ {
 				if err := m.topic.Publish(&proto.SyncPeerStatus{
@@ -457,19 +424,12 @@ func (m *syncPeerClient) startNewBlockProcess() {
 					time.Sleep(100 * time.Millisecond)
 				} else {
 					publishErr = nil
-					m.logger.Debug("✅ 状态广播成功",
-						"区块高度", latest.Number,
-						"重试次数", retry+1,
-						"节点ID", m.id,
-						"topic名称", m.statusTopicName)
 					break
 				}
 			}
 
 			if publishErr != nil {
 				m.logger.Error("❌ 状态广播最终失败", "区块高度", latest.Number, "节点ID", m.id, "topic名称", m.statusTopicName, "错误", publishErr)
-			} else {
-				m.logger.Debug("🎉 状态广播完成", "区块高度", latest.Number, "节点ID", m.id, "topic名称", m.statusTopicName)
 			}
 		}
 	}
@@ -683,12 +643,6 @@ func (m *syncPeerClient) networkHealthCheck() {
 		case <-ticker.C:
 			peers := m.network.Peers()
 			peerCount := len(peers)
-
-			// // 记录网络状态
-			// m.logger.Info("网络健康检查",
-			// 	"节点ID", m.id,
-			// 	"连接节点数", peerCount,
-			// 	"shouldEmitBlocks", m.shouldEmitBlocks)
 
 			// 如果连接节点数过少，发出警告
 			if peerCount < 2 {

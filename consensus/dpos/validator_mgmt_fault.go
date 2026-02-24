@@ -222,9 +222,6 @@ func (d *DPoS) getValidatorFaultInfo(validatorAddr types.Address) map[string]int
 						"address", validatorAddr.String())
 				}
 			}
-		} else {
-			d.logger.Debug("🔍 数据库中没有找到故障状态记录",
-				"address", validatorAddr.String())
 		}
 	}
 
@@ -401,6 +398,12 @@ func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) er
 	}
 
 	return nil
+}
+
+// ReloadValidatorsAfterRecovery 恢复提案执行后重新加载验证者集合（公开方法）
+// 从数据库读取最新的验证者集合，过滤掉故障验证者，并更新内存缓存
+func (d *DPoS) ReloadValidatorsAfterRecovery() error {
+	return d.reloadValidatorsAfterRecovery()
 }
 
 // reloadValidatorsAfterRecovery 恢复提案执行后重新加载验证者集合
@@ -1080,10 +1083,24 @@ func (d *DPoS) updateVoterVoteAmountForValidator(
 		slashingRecord,
 	)
 
-	// 6. 更新内存中的 VoterInfo（仅用于缓存，不保存到数据库）
+	// 6. 更新内存中的 VoterInfo（用于缓存）
 	d.voters[voterAddr] = voterInfo
 
-	// 7. 不再保存 VoterInfo 到数据库（已删除，投票者不受限制）
+	// 7. 保存 VoterInfo 到数据库（包含 SlashingRecords，用于 RPC 查询）
+	if d.state != nil && d.state.StakeStore != nil && dbTx != nil {
+		if err := d.state.StakeStore.setVoterInfo(voterAddr, voterInfo, dbTx); err != nil {
+			d.logger.Warn("⚠️ 保存 VoterInfo 到数据库失败",
+				"voter", voterAddr.String(),
+				"error", err)
+			// 不返回错误，因为消减已经执行，只是查询可能受影响
+		} else {
+			d.logger.Info("✅ 已保存 VoterInfo 到数据库（包含消减记录）",
+				"voter", voterAddr.String(),
+				"validator", validatorAddr.String(),
+				"blockNumber", blockNumber,
+				"slashingsCount", len(voterInfo.SlashingRecords[validatorAddr]))
+		}
+	}
 
 	return nil
 }

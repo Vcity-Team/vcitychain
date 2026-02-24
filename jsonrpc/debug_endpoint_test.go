@@ -286,7 +286,7 @@ func TestTraceBlockByNumber(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			endpoint := NewDebug(test.store, 100000)
+			endpoint := NewDebug(test.store, 100000, 200)
 
 			res, err := endpoint.TraceBlockByNumber(test.blockNumber, test.config)
 
@@ -355,7 +355,7 @@ func TestTraceBlockByHash(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			endpoint := NewDebug(test.store, 100000)
+			endpoint := NewDebug(test.store, 100000, 200)
 
 			res, err := endpoint.TraceBlockByHash(test.blockHash, test.config)
 
@@ -414,7 +414,7 @@ func TestTraceBlock(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			endpoint := NewDebug(test.store, 100000)
+			endpoint := NewDebug(test.store, 100000, 200)
 
 			res, err := endpoint.TraceBlock(test.input, test.config)
 
@@ -560,7 +560,7 @@ func TestTraceTransaction(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			endpoint := NewDebug(test.store, 100000)
+			endpoint := NewDebug(test.store, 100000, 200)
 
 			res, err := endpoint.TraceTransaction(test.txHash, test.config)
 
@@ -711,7 +711,7 @@ func TestTraceCall(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			endpoint := NewDebug(test.store, 100000)
+			endpoint := NewDebug(test.store, 100000, 200)
 
 			res, err := endpoint.TraceCall(test.arg, test.filter, test.config)
 

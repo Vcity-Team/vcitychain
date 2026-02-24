@@ -43,9 +43,21 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 			"isActive", validator.IsActive)
 	}
 
-	// 3. 设置最小质押门槛
-	minStakeAmount := big.NewInt(0)
-	minStakeAmount.SetString("1000000000000000000000", 10) // 1000 VCITY
+	// 3. 设置最小质押门槛（从配置读取 dpos_delegate_threshold）
+	// 注意：runtime 中没有直接访问 DPoS 实例，需要通过 backend 获取
+	var minStakeAmount *big.Int
+	if r.config != nil && r.config.dposBackend != nil {
+		if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
+			minStakeAmount = dposInstance.getDelegateThreshold()
+		}
+	}
+	// 如果无法从 backend 获取，使用默认值
+	if minStakeAmount == nil {
+		minStakeAmount, _ = new(big.Int).SetString("1000000000000000000000", 10) // 默认1000 VCITY
+		r.logger.Warn("⚠️ 无法从配置读取 dpos_delegate_threshold，使用默认值", "defaultValue", minStakeAmount.String())
+	} else {
+		r.logger.Info("✅ 从配置读取最小质押门槛", "amount", minStakeAmount.String(), "source", "dpos_delegate_threshold")
+	}
 
 	validValidatorCount := 0
 	insufficientBalanceCount := 0
@@ -59,14 +71,14 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 		address := ibftValidator.Address
 
 		// 创建DPoS验证者（BLS公钥延迟获取）
-		// 创世验证者使用固定权重1000 VCITY，不受余额影响
-		fixedVotingPower := new(big.Int)
-		fixedVotingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
+		// 创世验证者初始权重为0，将在7370高度通过投票记录获得权重
+		// 不再使用硬编码的1000 VCITY，改为从投票记录计算
+		initialVotingPower := big.NewInt(0)
 
 		delegate := &validator.ValidatorMetadata{
 			Address:     address,
-			VotingPower: fixedVotingPower, // 使用固定权重，不依赖余额
-			BlsKey:      nil,              // BLS公钥将在需要时获取
+			VotingPower: initialVotingPower, // 初始为0，将在7370高度通过投票记录更新
+			BlsKey:      nil,                // BLS公钥将在需要时获取
 			IsActive:    true,
 		}
 
@@ -76,9 +88,9 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 
 		r.logger.Info("✅ DPoS验证者创建成功（BLS公钥延迟获取）",
 			"address", address.String(),
-			"votingPower", fixedVotingPower.String(),
+			"votingPower", initialVotingPower.String(),
 			"validatorIndex", validValidatorCount,
-			"note", "创世验证者使用固定权重")
+			"note", "创世验证者初始权重为0，将在7370高度通过投票记录获得权重")
 	}
 
 	// DPoS验证者筛选结果汇总
@@ -135,32 +147,10 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 					return addresses
 				}())
 
-			// 立即将创世验证者的固定权重保存到数据库
-			for _, delegate := range r.delegates {
-				// 创建DelegateInfo并保存到数据库
-				delegateInfo := &DelegateInfo{
-					Address:        delegate.Address,
-					VotingPower:    new(big.Int).Set(delegate.VotingPower), // 使用固定权重1000 VCITY
-					TotalVotes:     new(big.Int).Set(delegate.VotingPower), // 使用固定权重1000 VCITY
-					ProducedBlocks: 0,
-					MissedBlocks:   0,
-					LastBlockTime:  0,
-					IsActive:       delegate.IsActive,
-				}
-
-				dposInstance.populateCommissionFields(delegate.Address, delegateInfo)
-
-				// 保存到数据库
-				if err := dposInstance.state.StakeStore.setDelegateInfo(delegate.Address, delegateInfo, nil); err != nil {
-					r.logger.Error("❌ 保存创世验证者权重到数据库失败",
-						"address", delegate.Address.String(),
-						"error", err)
-				} else {
-					r.logger.Info("✅ 创世验证者权重已保存到数据库",
-						"address", delegate.Address.String(),
-						"votingPower", delegate.VotingPower.String())
-				}
-			}
+			// 不再立即保存硬编码的权重到数据库
+			// 权重将在7370高度通过投票记录创建后，从投票记录计算并更新
+			r.logger.Info("ℹ️ 创世验证者初始权重为0，将在7370高度通过投票记录获得权重后更新数据库",
+				"validatorCount", len(r.delegates))
 		}
 	}
 

@@ -6,15 +6,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Vcity-Team/vcitychain/blockchain"
 	"github.com/Vcity-Team/vcitychain/helper/progress"
 	"github.com/Vcity-Team/vcitychain/network/event"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-hclog"
 	"github.com/libp2p/go-libp2p/core/peer"
-
-	"os"
 )
 
 const (
@@ -152,10 +149,6 @@ func (s *syncer) startPeerStatusUpdateProcess() {
 		// 监控处理速度
 		processedCount++
 		if time.Since(lastLogTime) > 10*time.Second {
-			s.logger.Debug("状态更新处理统计",
-				"处理数量", processedCount,
-				"时间间隔", time.Since(lastLogTime),
-				"处理速率", float64(processedCount)/time.Since(lastLogTime).Seconds())
 			processedCount = 0
 			lastLogTime = time.Now()
 		}
@@ -286,12 +279,6 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 	localLatest := s.blockchain.Header().Number
 	skipList := make(map[peer.ID]bool)
 
-	// 添加日志控制变量
-	lastNoPeerLogTime := time.Time{}
-	lastStatusUpdateLogTime := time.Time{}
-	noPeerLogInterval := 30 * time.Second      // 30秒打印一次
-	statusUpdateLogInterval := 5 * time.Second // 5秒打印一次
-
 	for {
 		// Wait for a new event to arrive
 		<-s.newStatusCh
@@ -299,27 +286,11 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 		// fetch local latest block
 		if header := s.blockchain.Header(); header != nil {
 			localLatest = header.Number
-			// 减少"同步器状态更新"日志的打印频率
-			now := time.Now()
-			if now.Sub(lastStatusUpdateLogTime) > statusUpdateLogInterval {
-				s.logger.Debug("同步器状态更新", "localLatest", localLatest)
-				lastStatusUpdateLogTime = now
-			}
 		}
 
 		// pick one best peer
 		bestPeer := s.peerMap.BestPeer(skipList)
 		if bestPeer == nil {
-			// 控制日志频率，避免刷屏
-			now := time.Now()
-			if now.Sub(lastNoPeerLogTime) > noPeerLogInterval {
-				// 显示 peerMap 的当前状态
-				peerCount := s.getPeerMapSize()
-				s.logger.Debug("没有可用的对等节点",
-					"skipListSize", len(skipList),
-					"peerMapSize", peerCount)
-				lastNoPeerLogTime = now
-			}
 			// Empty skipList map if there are no best peers
 			skipList = make(map[peer.ID]bool)
 
@@ -379,7 +350,6 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 		s.logger.Error("获取区块流失败", "peer", peerID.String(), "error", err)
 		return 0, false, err
 	}
-	s.logger.Debug("✅ 区块流获取成功", "peer", peerID.String(), "从高度", localLatest+1)
 
 	// Create a blockchain subscription for the sync progression and start tracking
 	subscription := s.blockchain.SubscribeEvents()
@@ -411,25 +381,6 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 					"timestamp", time.Now().Format("15:04:05.000"))
 				return lastReceivedNumber, shouldTerminate, nil
 			}
-
-			s.logger.Debug("🔍 从区块流接收到区块",
-				"peer", truncatePeerID(peerID, 8),
-				"区块号", block.Number(),
-				"期望区块号", localLatest+1,
-				"本地最新", localLatest,
-				"blockNumber==localLatest+1", block.Number() == localLatest+1,
-				"时间戳", time.Now().Format("15:04:05.000"))
-
-			// 打印详细的区块接收日志
-			s.logger.Debug("🔄 同步接收到区块",
-				"peer", truncatePeerID(peerID, 8),
-				"区块号", block.Number(),
-				"难度", block.Header.Difficulty,
-				"哈希", truncateString(block.Hash().String(), 16),
-				"时间戳", block.Header.Timestamp,
-				"交易数", len(block.Transactions),
-				"Gas限制", block.Header.GasLimit,
-				"Gas使用", block.Header.GasUsed)
 
 			// safe check
 			if block.Number() == 0 {
@@ -498,45 +449,6 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 			fullBlock, err := s.blockchain.VerifyFinalizedBlock(block)
 			if err != nil {
 				metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
-				s.logger.Error("区块验证失败", "peer", peerID.String(), "区块号", block.Number(), "error", err)
-
-				// 检查是否是 parent 不匹配错误（可能是分叉）
-				if errors.Is(err, blockchain.ErrParentNotFound) || errors.Is(err, blockchain.ErrParentHashMismatch) {
-					// parent 不匹配，触发分叉处理
-					s.logger.Info("🔀 检测到分叉，开始分叉处理",
-						"peer", peerID.String(),
-						"blockNumber", block.Number(),
-						"blockHash", block.Hash().String(),
-						"error", err)
-
-					// 尝试分叉恢复
-					if forkErr := s.handleFork(peerID, block); forkErr != nil {
-						s.logger.Error("分叉处理失败，断开该peer",
-							"peer", peerID.String(),
-							"error", forkErr)
-						// 断开该 peer 连接
-						if err := s.syncPeerClient.CloseStream(peerID); err != nil {
-							s.logger.Debug("关闭peer流失败", "peer", peerID.String(), "error", err)
-						}
-						// 继续尝试其他 peer
-						continue
-					} else {
-						// 分叉处理成功，重新验证并写入
-						s.logger.Info("✅ 分叉处理成功，重新验证区块",
-							"peer", peerID.String(),
-							"blockNumber", block.Number())
-						fullBlock, err = s.blockchain.VerifyFinalizedBlock(block)
-						if err != nil {
-							s.logger.Error("分叉处理后区块验证仍失败", "error", err)
-							continue
-						}
-						// 继续写入流程
-					}
-				} else {
-					// 其他错误才退出程序
-					s.logger.Error("💀 区块验证失败（非分叉错误），程序将立即退出")
-					os.Exit(1)
-				}
 			}
 			s.logger.Debug("✅ 区块验证完成", "peer", truncatePeerID(peerID, 8), "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
 

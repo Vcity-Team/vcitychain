@@ -160,6 +160,11 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 	return validators, nil
 }
 
+// GetSuperRepresentatives 返回当前超级代表集合（前 DPoSValidatorsCount 个验证者，供治理投票等使用）
+func (d *DPoS) GetSuperRepresentatives() (validator.AccountSet, error) {
+	return d.GetSortedValidatorsWithLimit()
+}
+
 // GetSortedValidatorsWithLimitFilterFaulty 获取排序后的验证者集合（带限制，并过滤故障验证者）
 // 用于出块相关逻辑，确保故障节点不会参与出块
 func (d *DPoS) GetSortedValidatorsWithLimitFilterFaulty() (validator.AccountSet, error) {

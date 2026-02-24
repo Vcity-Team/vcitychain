@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"os"
 
 	"github.com/hashicorp/go-hclog"
 
@@ -804,12 +803,11 @@ func (t *Transition) nonceCheck(msg *types.Transaction) error {
 	nonce := t.state.GetNonce(msg.From)
 
 	if nonce != msg.Nonce {
-		t.logger.Error("💀 交易nonce错误，程序将立即退出",
+		t.logger.Error("交易nonce错误，返回错误由上层处理",
 			"txHash", msg.Hash.String(),
 			"expectedNonce", nonce,
 			"actualNonce", msg.Nonce,
 			"from", msg.From.String())
-		os.Exit(1)
 		return ErrNonceIncorrect
 	}
 

@@ -341,14 +341,14 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 	// 计算新的投票权重
 	newPower := new(big.Int).Add(currentPower, amount)
 
-	// 检查是否为创世验证者
+	// 注意：创世验证者的权重从投票记录计算
+	// 初始权重为0，在7370高度通过根账户投票获得1000 VCITY，后续用户投票会累加在上面
 	if d.isGenesisValidator(delegate) {
-		fixedVotingPower := new(big.Int)
-		fixedVotingPower.SetString("1000000000000000000000", 10) // 1000 VCITY
-		newPower = fixedVotingPower
-		d.logger.Info("🔒 创世验证者使用固定权重",
+		d.logger.Info("✅ 创世验证者权重更新（包含用户投票）",
 			"delegate", delegate.String(),
-			"fixedPower", newPower.String())
+			"oldPower", currentPower.String(),
+			"addedAmount", amount.String(),
+			"newPower", newPower.String())
 	}
 
 	// 创建或更新受托人信息，直接使用计算出的新权重

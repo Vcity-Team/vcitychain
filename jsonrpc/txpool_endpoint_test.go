@@ -294,6 +294,10 @@ func (s *mockTxPoolStore) GetBaseFee() uint64 {
 	return s.baseFee
 }
 
+func (s *mockTxPoolStore) GetMaxAccountEnqueued() uint64 {
+	return 0
+}
+
 func newTestTransaction(nonce uint64, from types.Address) *types.Transaction {
 	txn := &types.Transaction{
 		Nonce:    nonce,

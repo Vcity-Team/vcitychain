@@ -78,10 +78,10 @@ func (fc *FaultCalculator) CalculateFaultFlag(
 
 	var reason string
 	if isFaulty {
-		reason = fmt.Sprintf("Epoch %d: missed blocks percentage reached threshold: %d bp >= %d bp (missed %d/%d blocks)",
+		reason = fmt.Sprintf("Epoch %d: 漏块率已达到阈值: %d 基点 >= %d 基点 (漏块数: %d/%d)",
 			epochInfo.EpochToCheckNumber, missedBlocksPercentage, missedBlocksPercentageThreshold, stats.MissedBlocks, stats.ExpectedBlocks)
 	} else {
-		reason = fmt.Sprintf("Epoch %d: missed blocks percentage normal: %d bp < %d bp (missed %d/%d blocks)",
+		reason = fmt.Sprintf("Epoch %d: 漏块率正常: %d 基点 < %d 基点 (漏块数: %d/%d)",
 			epochInfo.EpochToCheckNumber, missedBlocksPercentage, missedBlocksPercentageThreshold, stats.MissedBlocks, stats.ExpectedBlocks)
 	}
 

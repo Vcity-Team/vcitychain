@@ -1171,12 +1171,6 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 			latestNonce := p.store.GetNonce(stateRoot, addr)
 			currentNonce := account.getNonce()
 
-			p.logger.Info("🔵 [processEvent] 检查交易池账户nonce",
-				"addr", addr.String()[:16],
-				"currentNonce", currentNonce,
-				"latestNonce", latestNonce,
-				"needsUpdate", latestNonce != currentNonce)
-
 			// 修复：即使 latestNonce == currentNonce，也要更新以确保状态一致
 			// 因为链上的状态是权威的，即使值相同，也要通过resetAccounts确保清理过期交易
 			if latestNonce != currentNonce {
@@ -1197,28 +1191,12 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 			} else {
 				// 即使值相同，也要添加到stateNonces中，确保通过resetAccounts清理过期交易
 				// 这样可以确保promoted队列中的过期交易（nonce < latestNonce）被清理
-				p.logger.Info("🔵 [processEvent] 交易池账户nonce与state一致，但需要清理过期交易",
-					"addr", addr.String()[:16],
-					"nonce", currentNonce)
 				stateNonces[addr] = latestNonce
 			}
 		}
 
 		return true
 	})
-
-	p.logger.Debug("🔵 [processEvent] 准备调用resetAccounts进行第二层清理",
-		"accountCount", len(stateNonces),
-		"accountList", func() []string {
-			var addrs []string
-			for addr := range stateNonces {
-				addrs = append(addrs, addr.String()[:16])
-				if len(addrs) >= 10 { // 只显示前10个
-					break
-				}
-			}
-			return addrs
-		}())
 
 	// reset accounts with the new state
 	p.resetAccounts(stateNonces)
@@ -1233,8 +1211,6 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 	p.prepareNonceCacheMu.Lock()
 	p.prepareNonceCache = make(map[types.Address]uint64)
 	p.prepareNonceCacheMu.Unlock()
-
-	p.logger.Debug("🔵 [processEvent] 处理完成")
 }
 
 // validateTx ensures the transaction conforms to specific
@@ -1659,7 +1635,6 @@ func (p *TxPool) addGossipTx(obj interface{}, _ peer.ID) {
 // resetAccounts updates existing accounts with the new nonce and prunes stale transactions.
 func (p *TxPool) resetAccounts(stateNonces map[types.Address]uint64) {
 	if len(stateNonces) == 0 {
-		p.logger.Debug("🔵 [resetAccounts] 没有需要重置的账户")
 		return
 	}
 

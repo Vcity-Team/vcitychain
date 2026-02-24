@@ -170,7 +170,11 @@ func TestEth_DecodeTxn(t *testing.T) {
 				store.SetAccount(addr, acc)
 			}
 
-			res, err := DecodeTxn(tt.arg, 1, store, false)
+			res, err := DecodeTxn(tt.arg, 1, store, false, 100)
+			if tt.res != nil {
+				tt.res.ChainID = big.NewInt(100)
+				tt.res.V, tt.res.R, tt.res.S = big.NewInt(0), big.NewInt(0), big.NewInt(0)
+			}
 			assert.Equal(t, tt.res, res)
 			assert.Equal(t, tt.err, err)
 		})
@@ -290,7 +294,9 @@ func TestEth_TxnType(t *testing.T) {
 		Nonce:     0,
 		Type:      types.DynamicFeeTx,
 	}
-	res, err := DecodeTxn(args, 1, store, false)
+	res, err := DecodeTxn(args, 1, store, false, 100)
+	expectedRes.ChainID = big.NewInt(100)
+	expectedRes.V, expectedRes.R, expectedRes.S = big.NewInt(0), big.NewInt(0), big.NewInt(0)
 
 	expectedRes.ComputeHash(1)
 	assert.NoError(t, err)
