@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 
 	bolt "go.etcd.io/bbolt"
@@ -23,16 +22,21 @@ func main() {
 	flag.Parse()
 
 	if *dbPath == "" {
-		log.Fatal("请用 -db 指定 dpos.db 路径，例如: -db C:\\work\\nodes\\node0\\consensus\\dpos\\dpos.db")
+		fmt.Fprintln(os.Stderr, "请用 -db 指定 dpos.db 路径，例如: -db /home/testnet/nodes/node1/consensus/dpos/dpos.db")
+		os.Exit(1)
 	}
+
+	fmt.Fprintln(os.Stdout, "[show_dpos_delegate_threshold] 使用数据库路径:", *dbPath)
 
 	if _, err := os.Stat(*dbPath); err != nil {
-		log.Fatalf("数据库文件不存在或无法访问: %v", err)
+		fmt.Fprintln(os.Stderr, "错误: 数据库文件不存在或无法访问:", err)
+		os.Exit(1)
 	}
 
-	db, err := bolt.Open(*dbPath, 0600, &bolt.Options{ReadOnly: true})
+	db, err := bolt.Open(*dbPath, 0444, &bolt.Options{ReadOnly: true})
 	if err != nil {
-		log.Fatalf("打开数据库失败: %v", err)
+		fmt.Fprintln(os.Stderr, "错误: 打开数据库失败（若节点正在运行，请先停节点或复制 dpos.db 再读）:", err)
+		os.Exit(1)
 	}
 	defer db.Close()
 
@@ -49,14 +53,17 @@ func main() {
 		return nil
 	})
 	if err != nil {
-		log.Fatalf("读取失败: %v", err)
+		fmt.Fprintln(os.Stderr, "错误: 读取失败:", err)
+		os.Exit(1)
 	}
 
 	var param parameterCurrentValue
 	if err := json.Unmarshal(raw, &param); err != nil {
-		log.Fatalf("解析 JSON 失败: %v", err)
+		fmt.Fprintln(os.Stderr, "错误: 解析 JSON 失败:", err)
+		os.Exit(1)
 	}
 
-	log.Printf("当前 dpos_delegate_threshold: %v (raw JSON: %s)", param.CurrentValue, string(raw))
+	fmt.Fprintln(os.Stdout, "当前 dpos_delegate_threshold:", param.CurrentValue)
+	fmt.Fprintln(os.Stdout, "raw JSON:", string(raw))
 }
 
