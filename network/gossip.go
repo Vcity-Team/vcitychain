@@ -353,12 +353,16 @@ func (s *Server) NewTopic(protoID string, obj proto.Message) (*Topic, error) {
 	}
 	s.logger.Debug("🔍 Join topic成功", "protoID", protoID)
 
+	maxHandlers := int64(maxMessageHandlers)
+	if s.config != nil && s.config.MaxMessageHandlers > 0 {
+		maxHandlers = s.config.MaxMessageHandlers
+	}
 	tt := &Topic{
 		logger:         s.logger.Named(protoID),
 		topic:          topic,
 		typ:            reflect.TypeOf(obj).Elem(),
 		closeCh:        make(chan struct{}),
-		maxHandlers:    maxMessageHandlers,
+		maxHandlers:    maxHandlers,
 		handlerTimeout: messageHandlerTimeout,
 		messageStats:   make(map[string]int64),
 		actualProtoID:  protoID, // 存储实际使用的protoID

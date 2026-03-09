@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	bolt "go.etcd.io/bbolt"
 )
@@ -33,7 +34,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	db, err := bolt.Open(*dbPath, 0444, &bolt.Options{ReadOnly: true})
+	// 加超时：节点运行时会把 db 锁住，Open 会一直等，这里 3 秒后报错
+	db, err := bolt.Open(*dbPath, 0444, &bolt.Options{
+		ReadOnly: true,
+		Timeout:  3 * time.Second,
+	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "错误: 打开数据库失败（若节点正在运行，请先停节点或复制 dpos.db 再读）:", err)
 		os.Exit(1)

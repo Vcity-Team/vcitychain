@@ -10,16 +10,17 @@ import (
 
 // Config details the params for the base networking server
 type Config struct {
-	NoDiscover       bool                   // flag indicating if the discovery mechanism should be turned on
-	Addr             *net.TCPAddr           // the base address
-	NatAddr          net.IP                 // the NAT address
-	DNS              multiaddr.Multiaddr    // the DNS address
-	DataDir          string                 // the base data directory for the client
-	MaxPeers         int64                  // the maximum number of peer connections
-	MaxInboundPeers  int64                  // the maximum number of inbound peer connections
-	MaxOutboundPeers int64                  // the maximum number of outbound peer connections
-	Chain            *chain.Chain           // the reference to the chain configuration
-	SecretsManager   secrets.SecretsManager // the secrets manager used for key storage
+	NoDiscover         bool                   // flag indicating if the discovery mechanism should be turned on
+	Addr               *net.TCPAddr           // the base address
+	NatAddr            net.IP                 // the NAT address
+	DNS                multiaddr.Multiaddr    // the DNS address
+	DataDir            string                 // the base data directory for the client
+	MaxPeers           int64                  // the maximum number of peer connections
+	MaxInboundPeers    int64                  // the maximum number of inbound peer connections
+	MaxOutboundPeers   int64                  // the maximum number of outbound peer connections
+	MaxMessageHandlers int64                  // 每个 topic 最大并发消息处理数（gossip）
+	Chain              *chain.Chain           // the reference to the chain configuration
+	SecretsManager     secrets.SecretsManager // the secrets manager used for key storage
 }
 
 func DefaultConfig() *Config {
@@ -34,7 +35,8 @@ func DefaultConfig() *Config {
 		// The default ratio for outbound / max peer connections is 0.20
 		MaxPeers: 40,
 		// The default ratio for outbound / inbound connections is 0.25
-		MaxInboundPeers:  32,
-		MaxOutboundPeers: 8,
+		MaxInboundPeers:    32,
+		MaxOutboundPeers:   8,
+		MaxMessageHandlers: 50, // 每个 topic 最大并发消息处理数，可通过配置文件 max_message_handlers 覆盖
 	}
 }

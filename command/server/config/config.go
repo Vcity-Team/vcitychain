@@ -78,13 +78,14 @@ type Telemetry struct {
 
 // Network defines the network configuration params
 type Network struct {
-	NoDiscover       bool   `json:"no_discover" yaml:"no_discover"`
-	Libp2pAddr       string `json:"libp2p_addr" yaml:"libp2p_addr"`
-	NatAddr          string `json:"nat_addr" yaml:"nat_addr"`
-	DNSAddr          string `json:"dns_addr" yaml:"dns_addr"`
-	MaxPeers         int64  `json:"max_peers,omitempty" yaml:"max_peers,omitempty"`
-	MaxOutboundPeers int64  `json:"max_outbound_peers,omitempty" yaml:"max_outbound_peers,omitempty"`
-	MaxInboundPeers  int64  `json:"max_inbound_peers,omitempty" yaml:"max_inbound_peers,omitempty"`
+	NoDiscover         bool   `json:"no_discover" yaml:"no_discover"`
+	Libp2pAddr         string `json:"libp2p_addr" yaml:"libp2p_addr"`
+	NatAddr            string `json:"nat_addr" yaml:"nat_addr"`
+	DNSAddr            string `json:"dns_addr" yaml:"dns_addr"`
+	MaxPeers           int64  `json:"max_peers,omitempty" yaml:"max_peers,omitempty"`
+	MaxOutboundPeers   int64  `json:"max_outbound_peers,omitempty" yaml:"max_outbound_peers,omitempty"`
+	MaxInboundPeers    int64  `json:"max_inbound_peers,omitempty" yaml:"max_inbound_peers,omitempty"`
+	MaxMessageHandlers int64  `json:"max_message_handlers,omitempty" yaml:"max_message_handlers,omitempty"` // 每个 topic 最大并发消息处理数，默认 50
 }
 
 // TxPool defines the TxPool configuration params
@@ -137,10 +138,11 @@ func DefaultConfig() *Config {
 		DataDir:        "",
 		BlockGasTarget: "0x0", // Special value signaling the parent gas limit should be applied
 		Network: &Network{
-			NoDiscover:       defaultNetworkConfig.NoDiscover,
-			MaxPeers:         defaultNetworkConfig.MaxPeers,
-			MaxOutboundPeers: defaultNetworkConfig.MaxOutboundPeers,
-			MaxInboundPeers:  defaultNetworkConfig.MaxInboundPeers,
+			NoDiscover:         defaultNetworkConfig.NoDiscover,
+			MaxPeers:           defaultNetworkConfig.MaxPeers,
+			MaxOutboundPeers:   defaultNetworkConfig.MaxOutboundPeers,
+			MaxInboundPeers:    defaultNetworkConfig.MaxInboundPeers,
+			MaxMessageHandlers: defaultNetworkConfig.MaxMessageHandlers,
 			Libp2pAddr: fmt.Sprintf("%s:%d",
 				defaultNetworkConfig.Addr.IP,
 				defaultNetworkConfig.Addr.Port,
