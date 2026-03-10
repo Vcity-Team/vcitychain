@@ -1769,21 +1769,9 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 	return result, nil
 }
 
-// getDelegateDepositAmount 获取受托人保证金金额
+// getDelegateDepositAmount 获取受托人保证金金额（只读参数系统/配置，不写死最低 1000）
 func (d *DPoS) getDelegateDepositAmount() *big.Int {
-	// 使用统一的 getDelegateThreshold 方法获取委托门槛值
-	depositAmount := d.getDelegateThreshold()
-
-	// 安全检查：确保保证金不小于默认值（防止配置错误导致保证金过小）
-	defaultDeposit, _ := new(big.Int).SetString("1000000000000000000000", 10) // 默认1000 VCITY
-	if depositAmount.Cmp(defaultDeposit) < 0 {
-		d.logger.Warn("⚠️ 保证金金额过小，使用默认值",
-			"provided", depositAmount.String(),
-			"using", defaultDeposit.String())
-		return defaultDeposit
-	}
-
-	return depositAmount
+	return d.getDelegateThreshold()
 }
 
 // getMaxActiveDelegates 获取最大活跃受托人数量
