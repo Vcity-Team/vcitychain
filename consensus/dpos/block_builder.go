@@ -1278,7 +1278,14 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 
 	myAddress := types.Address(r.config.Key.Address())
 
-	for _, delegate := range r.delegates {
+	// BLS 委员会（当前为创世验证者集合）；若为空则退化为 delegates
+	committee := r.getBLSCommittee()
+	if len(committee) == 0 {
+		committee = r.delegates
+	}
+
+	// 主动为委员会中的验证者请求 / 恢复 BLS 公钥
+	for _, delegate := range committee {
 		if delegate.BlsKey == nil {
 
 			// 主动请求BLS公钥
@@ -1303,20 +1310,20 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 	// 尝试从缓存中恢复BLS公钥
 	r.logger.Debug("🔄 尝试从缓存恢复BLS公钥")
 	if r.networkIntegration != nil {
-		// 使用批量恢复函数
-		if err := r.networkIntegration.RestoreBLSKeysForDelegates(r.delegates); err != nil {
+		// 使用批量恢复函数，仅针对 BLS 委员会
+		if err := r.networkIntegration.RestoreBLSKeysForDelegates(committee); err != nil {
 			r.logger.Warn("⚠️ 批量恢复BLS公钥失败", "error", err)
 		}
 	}
 
 	r.logger.Debug("开始收集验证者签名",
 		"checkpointHash", checkpointHash.String(),
-		"delegatesCount", len(r.delegates),
+		"delegatesCount", len(committee),
 		"proposerAddress", keyAddr.String())
 
-	// 统计活跃验证者数量
+	// 统计活跃验证者数量（基于 BLS 委员会）
 	activeCount := 0
-	for _, delegate := range r.delegates {
+	for _, delegate := range committee {
 		if delegate.IsActive && delegate.VotingPower.Cmp(big.NewInt(0)) > 0 {
 			activeCount++
 		}
@@ -1327,7 +1334,7 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 
 	r.logger.Debug("📊 活跃验证者统计",
 		"activeCount", activeCount,
-		"totalDelegates", len(r.delegates),
+		"totalDelegates", len(committee),
 		"activeValidators", activeValidators,
 		"note", "activeCount是本地统计，activeValidators是网络方法返回")
 
@@ -1336,7 +1343,7 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 
 	r.logger.Debug("🌐 出块时网络状态检查",
 		"activeValidators", activeValidators,
-		"totalDelegates", len(r.delegates),
+		"totalDelegates", len(committee),
 		"expectedSignatures", expectedSignatures,
 		"requiredForQuorum", r.calculateMinRequiredSignatures())
 
@@ -1392,8 +1399,8 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 		return nil, nil, fmt.Errorf("failed to broadcast signature request: %w", err)
 	}
 
-	// 2. 创建签名收集通道和收集器
-	signatureCh := make(chan *SignatureResponse, len(r.delegates))
+	// 2. 创建签名收集通道和收集器（缓冲大小基于 BLS 委员会）
+	signatureCh := make(chan *SignatureResponse, len(committee))
 
 	if r.networkIntegration != nil {
 		timeout := 30 * time.Second
@@ -1477,7 +1484,7 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 			activeValidators := r.getActiveValidatorsCount()
 			r.logger.Debug("定期检查网络状态",
 				"activeValidators", activeValidators,
-				"totalDelegates", len(r.delegates),
+				"totalDelegates", len(committee),
 				"collectedSignatures", len(collectedSignatures),
 				"requiredSignatures", minRequiredSignatures)
 
@@ -1529,7 +1536,7 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 				"required", minRequiredSignatures,
 				"checkpointHash", checkpointHash.String(),
 				"activeValidators", r.getActiveValidatorsCount(),
-				"totalDelegates", len(r.delegates))
+				"totalDelegates", len(committee))
 
 			// 记录当前收集到的签名详情
 			for addr, sig := range collectedSignatures {
@@ -1538,9 +1545,9 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 					"signatureLength", len(sig))
 			}
 
-			// 记录缺失的验证者
+			// 记录缺失的验证者（基于 BLS 委员会）
 			missingValidators := make([]string, 0)
-			for _, delegate := range r.delegates {
+			for _, delegate := range committee {
 				if _, exists := collectedSignatures[delegate.Address]; !exists {
 					missingValidators = append(missingValidators, delegate.Address.String())
 				}
@@ -1848,14 +1855,17 @@ func (r *dposRuntime) getActiveValidatorsCount() int {
 
 // calculateMinRequiredSignatures 计算最少需要的签名数量
 func (r *dposRuntime) calculateMinRequiredSignatures() int {
-	// 改为使用实际验证者数量
-	activeValidatorsCount := r.getActiveValidatorsCount()
-	if activeValidatorsCount == 0 {
+	// 使用 BLS 委员会大小作为基数（当前实现为创世验证者集合）
+	committee := r.getBLSCommittee()
+	committeeCount := len(committee)
+
+	if committeeCount == 0 {
+		// 委员会为空时，为避免完全停摆，退化为 1
 		return 1
 	}
 
-	// 计算：实际验证者数量的一半（半数）
-	minRequired := activeValidatorsCount / 2
+	// 计算：委员会大小的一半（半数，向下取整），至少 1
+	minRequired := committeeCount / 2
 	if minRequired < 1 {
 		minRequired = 1
 	}

@@ -191,17 +191,16 @@ func (d *DPoS) addDelegateSafely(newDelegate *validator.ValidatorMetadata) {
 		"totalDelegates", len(d.delegates))
 }
 
-// getGenesisValidators 获取创世验证者集合
+// getGenesisValidators 获取创世验证者集合（内部使用）
 func (d *DPoS) getGenesisValidators() validator.AccountSet {
 	d.logger.Debug("🔍 获取创世验证者集合", "genesisValidatorsCount", len(d.genesisValidators))
 
 	// 从内存中的创世验证者映射创建AccountSet
 	var validators validator.AccountSet
 	for address := range d.genesisValidators {
-		// 从投票记录计算权重，而不是硬编码1000
+		// 从投票记录计算权重，而不是硬编码
 		votingPower := d.getTotalVotesForValidator(address)
 		if votingPower == nil || votingPower.Sign() == 0 {
-			// 如果没有投票记录，权重为0（不再使用默认1000）
 			votingPower = big.NewInt(0)
 			d.logger.Debug("⚠️ 创世验证者没有投票记录，权重为0",
 				"validator", address.String())
@@ -221,6 +220,23 @@ func (d *DPoS) getGenesisValidators() validator.AccountSet {
 
 	d.logger.Debug("✅ 创世验证者集合创建完成", "count", len(validators))
 	return validators
+}
+
+// GetGenesisValidatorSet 获取创世验证者集合（公开方法，供运行时 / 验证路径使用）
+func (d *DPoS) GetGenesisValidatorSet() validator.AccountSet {
+	// 确保创世映射已初始化
+	d.initializeGenesisValidatorsMap()
+
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	if d.genesisValidators == nil || len(d.genesisValidators) == 0 {
+		d.logger.Warn("⚠️ GetGenesisValidatorSet: genesisValidators 为空")
+		return nil
+	}
+
+	// 复用内部构造逻辑
+	return d.getGenesisValidators()
 }
 
 // getDelegatesFromState 从状态获取历史验证者集合

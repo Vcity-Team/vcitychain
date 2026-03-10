@@ -475,8 +475,8 @@ func (p *rollbackParams) cleanupDPoSConsensusState(logger hclog.Logger) error {
 		"targetEpoch", targetEpoch,
 		"targetHeight", p.targetHeight)
 
-	// 打开DPoS数据库
-	dposDBPath := filepath.Join(p.dataDir, "dpos.db")
+	// 打开DPoS数据库（实际路径为 consensus/dpos/dpos.db）
+	dposDBPath := filepath.Join(p.dataDir, "consensus", "dpos", "dpos.db")
 	if _, err := os.Stat(dposDBPath); os.IsNotExist(err) {
 		logger.Debug("DPoS database not found, skipping cleanup", "path", dposDBPath)
 		return nil

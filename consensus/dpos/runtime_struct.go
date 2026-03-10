@@ -92,3 +92,34 @@ type dposRuntime struct {
 	lastLogTime map[string]time.Time
 	logMutex    sync.RWMutex
 }
+
+// getBLSCommittee 返回用于 BLS 签名的验证者委员会
+// 当前实现：只使用创世验证者集合（Genesis Validator Set）
+// 如果获取失败，则回退到当前 delegates 集合作为兜底
+func (r *dposRuntime) getBLSCommittee() validator.AccountSet {
+	// 优先从 DPoS 实例获取创世验证者集合
+	if r.config != nil && r.config.dposBackend != nil {
+		if dposInstance, ok := r.config.dposBackend.(*DPoS); ok && dposInstance != nil {
+			genesisSet := dposInstance.GetGenesisValidatorSet()
+			if len(genesisSet) > 0 {
+				r.logger.Debug("✅ getBLSCommittee: 使用创世验证者集合作为 BLS 委员会",
+					"count", len(genesisSet))
+				return genesisSet
+			}
+			r.logger.Debug("⚠️ getBLSCommittee: 创世验证者集合为空，回退到 delegates")
+		}
+	}
+
+	// 兜底：使用当前 delegates（保持兼容性，避免 panic）
+	r.lock.RLock()
+	defer r.lock.RUnlock()
+
+	if len(r.delegates) == 0 {
+		return nil
+	}
+
+	r.logger.Debug("⚠️ getBLSCommittee: 使用 delegates 作为 BLS 委员会",
+		"count", len(r.delegates))
+
+	return r.delegates.Copy()
+}
