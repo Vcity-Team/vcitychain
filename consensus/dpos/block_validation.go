@@ -30,14 +30,28 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 
 	parent, ok := d.blockchain.GetHeaderByHash(header.ParentHash)
 	if !ok {
-		d.logger.Error("❌ 无法通过哈希获取父区块（可能网络抖动或父块未同步到，返回错误供上层重试）",
-			"blockNumber", header.Number,
-			"parentHash", header.ParentHash.String(),
-			"parentHashHex", fmt.Sprintf("0x%x", header.ParentHash))
-		return fmt.Errorf(
-			"unable to get parent header by hash for block number %d",
-			header.Number,
-		)
+		// 回滚或同步顺序导致按 hash 查不到时，尝试按区块号取父区块
+		if parentByNum, okByNum := d.blockchain.GetHeaderByNumber(blockNumber - 1); okByNum && parentByNum != nil {
+			if parentByNum.Hash == header.ParentHash {
+				parent = parentByNum
+				d.logger.Debug("通过区块号获取父区块", "blockNumber", blockNumber, "parentNumber", blockNumber-1)
+			} else {
+				d.logger.Error("❌ 父区块 hash 不一致（可能分叉）",
+					"blockNumber", blockNumber,
+					"expectedParentHash", header.ParentHash.String(),
+					"localParentHash", parentByNum.Hash.String())
+				return fmt.Errorf("parent hash mismatch for block %d (possible chain fork)", header.Number)
+			}
+		} else {
+			d.logger.Error("❌ 无法通过哈希获取父区块（可能网络抖动或父块未同步到，返回错误供上层重试）",
+				"blockNumber", header.Number,
+				"parentHash", header.ParentHash.String(),
+				"parentHashHex", fmt.Sprintf("0x%x", header.ParentHash))
+			return fmt.Errorf(
+				"unable to get parent header by hash for block number %d",
+				header.Number,
+			)
+		}
 	}
 
 	err := d.verifyHeaderImpl(parent, header, d.config.BlockTime.Duration, nil)
