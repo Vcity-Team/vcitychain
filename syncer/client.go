@@ -67,7 +67,7 @@ func NewSyncPeerClient(
 		blockchain:             blockchain,
 		id:                     nodeID,
 		statusTopicName:        "syncer/status/0.1",             // 所有节点使用相同的topic名称进行状态广播
-		peerStatusUpdateCh:     make(chan *NoForkPeer, 100),     // 增加缓冲区大小避免阻塞
+		peerStatusUpdateCh:     make(chan *NoForkPeer, 500),     // 缓冲足够多 peer 的状态推送，减轻积压
 		peerConnectionUpdateCh: make(chan *event.PeerEvent, 50), // 增加缓冲区大小避免阻塞
 		shouldEmitBlocks:       true,
 		closeCh:                make(chan struct{}),
@@ -330,7 +330,7 @@ func (m *syncPeerClient) handleStatusUpdate(obj interface{}, from peer.ID) {
 	defer m.peerStatusUpdateChLock.Unlock()
 
 	channelLen := len(m.peerStatusUpdateCh)
-	if channelLen > 50 {
+	if channelLen > 400 {
 		m.logger.Warn("peerStatusUpdateCh积压严重", "长度", channelLen, "来源节点", from.String())
 	}
 

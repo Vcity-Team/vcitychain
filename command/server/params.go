@@ -159,14 +159,6 @@ func (p *serverParams) isDNSAddressSet() bool {
 	return p.rawConfig.Network.DNSAddr != ""
 }
 
-// getMaxMessageHandlers 返回 gossip topic 最大并发消息处理数，未配置或 ≤0 时默认 50
-func (p *serverParams) getMaxMessageHandlers() int64 {
-	if p.rawConfig.Network.MaxMessageHandlers > 0 {
-		return p.rawConfig.Network.MaxMessageHandlers
-	}
-	return 50
-}
-
 func (p *serverParams) isLogFileLocationSet() bool {
 	return p.rawConfig.LogFilePath != ""
 }
@@ -220,7 +212,7 @@ func (p *serverParams) generateConfig() *server.Config {
 			MaxPeers:           p.rawConfig.Network.MaxPeers,
 			MaxInboundPeers:    p.rawConfig.Network.MaxInboundPeers,
 			MaxOutboundPeers:   p.rawConfig.Network.MaxOutboundPeers,
-			MaxMessageHandlers: p.getMaxMessageHandlers(),
+			MaxMessageHandlers: p.rawConfig.Network.MaxMessageHandlers, // 未配置为 0，network.NewServer 会直接报错
 			Chain:              p.genesisConfig,
 		},
 		DataDir:            p.rawConfig.DataDir,
