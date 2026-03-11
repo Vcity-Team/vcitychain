@@ -130,6 +130,9 @@ type backendIBFT struct {
 	// Channels
 	closeCh chan struct{} // Channel for closing
 	closed  bool          // 标记是否已经关闭
+
+	// DPoS 切换只执行一次，避免每个区块都重复打印“已切换到DPoS / 启动DPoS引擎”等日志
+	dposSwitchTriggered bool
 }
 
 // Factory implements the base consensus Factory method
@@ -261,9 +264,10 @@ func (i *backendIBFT) startSyncing() {
 	}()
 
 	callInsertBlockHook := func(fullBlock *types.FullBlock) bool {
-		// 检查是否是DPoS切换高度，如果是则停止同步
-		if i.forkManager != nil {
+		// 检查是否是DPoS切换高度，如果是则停止同步（仅在首次触发时执行，避免每个区块重复刷日志）
+		if i.forkManager != nil && !i.dposSwitchTriggered {
 			if shouldStop := i.checkShouldStopIBFT(fullBlock.Block.Number()); shouldStop {
+				i.dposSwitchTriggered = true
 				i.logger.Info("🛑 syncer检测到DPoS切换，停止IBFT同步", "height", fullBlock.Block.Number())
 
 				// 启动DPoS引擎（不在这里关闭syncer，避免重复关闭）
@@ -411,9 +415,12 @@ func (i *backendIBFT) startConsensus() {
 			pending = latest + 1
 		)
 
-		// 简化：检查是否需要停止IBFT（通过验证者集合判断）
-		if i.forkManager != nil {
+		// 简化：检查是否需要停止IBFT（通过验证者集合判断）；仅在首次触发时执行，避免重复刷日志
+		if i.forkManager != nil && !i.dposSwitchTriggered {
 			if shouldStop := i.checkShouldStopIBFT(pending); shouldStop {
+
+				// 标记已切换到DPoS，避免后续重复执行
+				i.dposSwitchTriggered = true
 
 				// 完全停止IBFT共识引擎
 				i.logger.Info("🛑 ========== 开始完全停止IBFT共识引擎 ==========", "height", pending)

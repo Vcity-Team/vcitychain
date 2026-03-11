@@ -255,8 +255,13 @@ func (m *ForkManager) GetValidators(height uint64) (validators.Validators, error
 
 	// 检查是否需要切换到DPoS（0表示不进行切换）
 	if m.consensusSwitchHeight > 0 && height >= m.consensusSwitchHeight {
-		// 如果达到切换高度，返回空验证者集合，让IBFT停止
-		m.logger.Info("🛑 已达到DPoS切换高度，返回空验证者集合让IBFT停止", "height", height)
+		// 只在首次达到切换高度时打印日志，避免每个区块刷屏
+		if !m.hasSwitchedToDPoS {
+			m.hasSwitchedToDPoS = true
+			m.logger.Info("🛑 已达到DPoS切换高度，返回空验证者集合让IBFT停止", "height", height)
+		}
+
+		// 始终返回空验证者集合，让IBFT停止并交由DPoS接管
 		return validators.NewECDSAValidatorSet(), nil
 	}
 
