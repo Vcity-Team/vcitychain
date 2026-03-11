@@ -1,6 +1,7 @@
 package blockchain
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math/big"
@@ -25,6 +26,9 @@ const (
 
 	// defaultCacheSize is the default size for Blockchain LRU cache structures
 	defaultCacheSize int = 100
+
+	// dposForkChoiceTimestampThreshold 同高时时间戳差在此范围内（秒）则用 hash tie-break
+	dposForkChoiceTimestampThreshold uint64 = 1
 )
 
 var (
@@ -39,7 +43,23 @@ var (
 	ErrInvalidStateRoot     = errors.New("invalid block state root")
 	ErrInvalidGasUsed       = errors.New("invalid block gas used")
 	ErrInvalidReceiptsRoot  = errors.New("invalid block receipts root")
+
+	// ErrMissingParent 表示父块在本地不存在（可能分叉，需从 peer 补拉）
+	ErrMissingParent = errors.New("parent block missing (possible fork, need to fetch)")
 )
+
+// MissingParentError 供 syncer 识别并触发缺父块补拉，包含父块高度与 hash
+type MissingParentError struct {
+	BlockNumber  uint64     // 当前块高度
+	ParentNumber uint64     // 缺失的父块高度（= BlockNumber - 1）
+	ParentHash   types.Hash // 缺失的父块 hash
+}
+
+func (e *MissingParentError) Error() string {
+	return fmt.Sprintf("parent block missing: block %d parent %d %s", e.BlockNumber, e.ParentNumber, e.ParentHash)
+}
+
+func (e *MissingParentError) Unwrap() error { return ErrMissingParent }
 
 // Blockchain is a blockchain reference
 type Blockchain struct {
@@ -1522,11 +1542,48 @@ func (b *Blockchain) writeHeaderImpl(
 	batchWriter.PutTotalDifficulty(header.Hash, incomingTD)
 	batchWriter.PutForks(forks)
 
-	// new block has lower difficulty, create a new fork
+	// DPoS fork choice：长度优先，同高则时间更早的胜出，再 tie-break 用 hash
+	if b.dposForkChoice(currentHeader, header) {
+		b.logger.Info("🔄 DPoS fork choice: 竞争链胜出，执行 reorg",
+			"newTip", header.Number, "newHash", header.Hash.String()[:18],
+			"reason", "height_or_timestamp_or_hash")
+		if err := b.handleReorg(batchWriter, evnt, currentHeader, header, incomingTD); err != nil {
+			return false, nil, err
+		}
+		batchWriter.PutCanonicalHeader(header, incomingTD)
+		return true, incomingTD, nil
+	}
+
+	// new block has lower difficulty / lost fork choice, keep as fork only
 	evnt.AddOldHeader(header)
 	evnt.Type = EventFork
 
 	return false, nil, nil
+}
+
+// dposForkChoice 按 DPoS 规则比较两条链的 tip，返回 true 表示 newTip 所在链应胜出并 reorg
+// 规则：1）tip 高度更高者胜；2）同高则 timestamp 更早者胜；3）时间差≤1秒则按 tip hash 字典序 tie-break
+func (b *Blockchain) dposForkChoice(currentTip, newTip *types.Header) bool {
+	if newTip.Number > currentTip.Number {
+		return true
+	}
+	if newTip.Number < currentTip.Number {
+		return false
+	}
+	// 同高：比较时间戳（更早的胜）；时间差在阈值内则用 hash tie-break
+	if newTip.Timestamp < currentTip.Timestamp {
+		return true
+	}
+	if newTip.Timestamp > currentTip.Timestamp {
+		if newTip.Timestamp-currentTip.Timestamp > dposForkChoiceTimestampThreshold {
+			return false
+		}
+		// 时间差 ≤ 1 秒，用 hash 决断
+	}
+	// 时间戳相同或差在阈值内，按 tip hash 字典序（更小者胜）
+	newTip.ComputeHash()
+	currentTip.ComputeHash()
+	return bytes.Compare(newTip.Hash.Bytes(), currentTip.Hash.Bytes()) < 0
 }
 
 // getForksToWrite retrieves new header forks that should be written to the DB

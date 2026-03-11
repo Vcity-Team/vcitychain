@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Vcity-Team/vcitychain/blockchain"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/signer"
 	"github.com/Vcity-Team/vcitychain/types"
 )
@@ -30,27 +31,33 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 
 	parent, ok := d.blockchain.GetHeaderByHash(header.ParentHash)
 	if !ok {
-		// 回滚或同步顺序导致按 hash 查不到时，尝试按区块号取父区块
+		// 回滚或同步顺序导致按 hash 查不到时，尝试按区块号取父区块（仅 canonical）
 		if parentByNum, okByNum := d.blockchain.GetHeaderByNumber(blockNumber - 1); okByNum && parentByNum != nil {
 			if parentByNum.Hash == header.ParentHash {
 				parent = parentByNum
 				d.logger.Debug("通过区块号获取父区块", "blockNumber", blockNumber, "parentNumber", blockNumber-1)
 			} else {
-				d.logger.Error("❌ 父区块 hash 不一致（可能分叉）",
+				// 父块与当前链同一高度块不一致，说明分叉；返回 MissingParentError 供 syncer 补拉父块
+				d.logger.Warn("⚠️ 父区块 hash 不一致（可能分叉），返回 MissingParent 供上层补拉",
 					"blockNumber", blockNumber,
 					"expectedParentHash", header.ParentHash.String(),
-					"localParentHash", parentByNum.Hash.String())
-				return fmt.Errorf("parent hash mismatch for block %d (possible chain fork)", header.Number)
+					"localCanonicalHash", parentByNum.Hash.String())
+				return &blockchain.MissingParentError{
+					BlockNumber:  blockNumber,
+					ParentNumber: blockNumber - 1,
+					ParentHash:   header.ParentHash,
+				}
 			}
 		} else {
-			d.logger.Error("❌ 无法通过哈希获取父区块（可能网络抖动或父块未同步到，返回错误供上层重试）",
+			// 本地完全没有该高度的块，父块缺失，供 syncer 补拉
+			d.logger.Warn("⚠️ 无法通过哈希获取父区块（可能分叉或未同步），返回 MissingParent 供上层补拉",
 				"blockNumber", header.Number,
-				"parentHash", header.ParentHash.String(),
-				"parentHashHex", fmt.Sprintf("0x%x", header.ParentHash))
-			return fmt.Errorf(
-				"unable to get parent header by hash for block number %d",
-				header.Number,
-			)
+				"parentHash", header.ParentHash.String())
+			return &blockchain.MissingParentError{
+				BlockNumber:  blockNumber,
+				ParentNumber: blockNumber - 1,
+				ParentHash:   header.ParentHash,
+			}
 		}
 	}
 

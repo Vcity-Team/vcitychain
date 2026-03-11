@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Vcity-Team/vcitychain/blockchain"
 	"github.com/Vcity-Team/vcitychain/helper/progress"
 	"github.com/Vcity-Team/vcitychain/network/event"
 	"github.com/Vcity-Team/vcitychain/types"
@@ -431,6 +432,18 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 
 			fullBlock, err := s.blockchain.VerifyFinalizedBlock(block)
 			if err != nil {
+				var missingParent *blockchain.MissingParentError
+				if errors.As(err, &missingParent) && missingParent.ParentNumber < block.Number() {
+					s.logger.Warn("⚠️ 缺父块（可能分叉），尝试从 peer 补拉", "peer", peerID.String()[:16], "blockNumber", block.Number(), "parentNumber", missingParent.ParentNumber, "parentHash", missingParent.ParentHash.String()[:18])
+					_ = s.syncPeerClient.CloseStream(peerID)
+					fillLast, fillErr := s.fillGapFromPeer(peerID, missingParent.ParentNumber, peerLatestBlock, newBlockCallback)
+					if fillErr != nil {
+						s.logger.Warn("缺父块补拉失败，供上层换 peer 重试", "peer", peerID.String(), "parentNumber", missingParent.ParentNumber, "error", fillErr)
+						return lastReceivedNumber, false, fmt.Errorf("fill gap failed (try another peer): %w", fillErr)
+					}
+					s.logger.Info("✅ 缺父块补拉完成", "peer", peerID.String()[:16], "fillLastNumber", fillLast)
+					return fillLast, false, nil
+				}
 				metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
 				s.logger.Error("区块验证失败，返回错误供上层重试（可换 peer 或稍后重试）", "peer", peerID.String(), "区块号", block.Number(), "error", err)
 				return lastReceivedNumber, false, fmt.Errorf("block verification failed (retry or try another peer): %w", err)
@@ -454,6 +467,50 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 			return lastReceivedNumber, shouldTerminate, errTimeout
 		}
 	}
+}
+
+// fillGapFromPeer 从指定高度向 peer 拉取区块并验证写入，用于缺父块补拉（不阻塞主同步，单次尝试）
+func (s *syncer) fillGapFromPeer(peerID peer.ID, from uint64, peerLatestBlock uint64,
+	newBlockCallback func(*types.FullBlock) bool) (uint64, error) {
+	blockCh, err := s.syncPeerClient.GetBlocks(peerID, from, s.blockTimeout)
+	if err != nil {
+		return 0, fmt.Errorf("get blocks for fill gap: %w", err)
+	}
+	defer func() { _ = s.syncPeerClient.CloseStream(peerID) }()
+
+	var lastReceivedNumber uint64
+	for block := range blockCh {
+		if block == nil || block.Number() == 0 {
+			continue
+		}
+		if s.isConsensusSwitchHeight(block) {
+			if err := s.blockchain.WriteBlockWithoutConsensus(block, syncerName); err != nil {
+				return lastReceivedNumber, fmt.Errorf("write consensus switch block %d: %w", block.Number(), err)
+			}
+			fullBlock := &types.FullBlock{Block: block, Receipts: []*types.Receipt{}}
+			updateMetrics(fullBlock)
+			newBlockCallback(fullBlock)
+			lastReceivedNumber = block.Number()
+			continue
+		}
+		if len(block.Transactions) > 0 {
+			filtered := s.filterProcessedTransactions(block.Transactions)
+			if len(filtered) < len(block.Transactions) {
+				block = &types.Block{Header: block.Header, Transactions: filtered}
+			}
+		}
+		fullBlock, err := s.blockchain.VerifyFinalizedBlock(block)
+		if err != nil {
+			return lastReceivedNumber, fmt.Errorf("verify block %d: %w", block.Number(), err)
+		}
+		if err := s.blockchain.WriteFullBlock(fullBlock, syncerName); err != nil {
+			return lastReceivedNumber, fmt.Errorf("write block %d: %w", block.Number(), err)
+		}
+		updateMetrics(fullBlock)
+		newBlockCallback(fullBlock)
+		lastReceivedNumber = block.Number()
+	}
+	return lastReceivedNumber, nil
 }
 
 func updateMetrics(fullBlock *types.FullBlock) {
