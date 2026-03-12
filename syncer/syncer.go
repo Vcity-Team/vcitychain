@@ -16,13 +16,23 @@ import (
 )
 
 const (
-	syncerName  = "syncer"
-	syncerProto = "/syncer/0.2"
+	syncerName        = "syncer"
+	syncerProto       = "/syncer/0.2"
+	fillGapRetryDelay = 300 * time.Millisecond // 关流后退避再对同一 peer 重开流，避免 stream reset
 )
 
 var (
 	errTimeout = errors.New("timeout awaiting block from peer")
 )
+
+// ErrNeedFillFrom 表示需从更早高度重试补拉（共同祖先在前方），调用方用 From 重试；同一时刻只开一个 stream。
+type ErrNeedFillFrom struct {
+	From uint64
+}
+
+func (e *ErrNeedFillFrom) Error() string {
+	return fmt.Sprintf("fill gap should start from block %d", e.From)
+}
 
 // XXX: Don't use this syncer for the consensus that may cause fork.
 // This syncer doesn't assume forks
@@ -434,14 +444,40 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 			if err != nil {
 				var missingParent *blockchain.MissingParentError
 				if errors.As(err, &missingParent) && missingParent.ParentNumber < block.Number() {
-					s.logger.Warn("⚠️ 缺父块（可能分叉），尝试从 peer 补拉", "peer", peerID.String()[:16], "blockNumber", block.Number(), "parentNumber", missingParent.ParentNumber, "parentHash", missingParent.ParentHash.String()[:18])
+					s.logger.Warn("⚠️ 缺父块（可能分叉），尝试从 peer 补拉直到共同祖先", "peer", peerID.String()[:16], "blockNumber", block.Number(), "parentNumber", missingParent.ParentNumber, "parentHash", missingParent.ParentHash.String()[:18])
 					_ = s.syncPeerClient.CloseStream(peerID)
-					fillLast, fillErr := s.fillGapFromPeer(peerID, missingParent.ParentNumber, peerLatestBlock, newBlockCallback)
-					if fillErr != nil {
+					fillFrom := missingParent.ParentNumber
+					var fillLast uint64
+					for {
+						var fillErr error
+						fillLast, fillErr = s.fillGapFromPeer(peerID, fillFrom, peerLatestBlock, newBlockCallback)
+						if fillErr == nil {
+							break
+						}
+						var needFrom *ErrNeedFillFrom
+						if errors.As(fillErr, &needFrom) && needFrom.From < fillFrom {
+							time.Sleep(fillGapRetryDelay)
+							fillFrom = needFrom.From
+							continue
+						}
+						// 关键：needFrom.From == fillFrom 说明本地该高度区块已存在但 hash 不一致（分叉），必须回滚到 (fillFrom-1) 才能写入新分支
+						if errors.As(fillErr, &needFrom) && needFrom.From == fillFrom && fillFrom > 0 {
+							if rb, ok := s.blockchain.(interface{ RollbackToHeight(uint64) error }); ok {
+								s.logger.Warn("⚠️ 检测到本地分叉：补拉起点与缺父块高度相同，回滚链头后切换到 peer 分支继续补拉",
+									"peer", peerID.String()[:16],
+									"forkHeight", fillFrom,
+									"rollbackTo", fillFrom-1,
+								)
+								if err := rb.RollbackToHeight(fillFrom - 1); err == nil {
+									time.Sleep(fillGapRetryDelay)
+									continue
+								}
+							}
+						}
 						s.logger.Warn("缺父块补拉失败，供上层换 peer 重试", "peer", peerID.String(), "parentNumber", missingParent.ParentNumber, "error", fillErr)
 						return lastReceivedNumber, false, fmt.Errorf("fill gap failed (try another peer): %w", fillErr)
 					}
-					s.logger.Info("✅ 缺父块补拉完成", "peer", peerID.String()[:16], "fillLastNumber", fillLast)
+					s.logger.Info("✅ 缺父块补拉完成（已到共同祖先并写回）", "peer", peerID.String()[:16], "fillLastNumber", fillLast)
 					return fillLast, false, nil
 				}
 				metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
@@ -469,7 +505,8 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 	}
 }
 
-// fillGapFromPeer 从指定高度向 peer 拉取区块并验证写入，用于缺父块补拉（不阻塞主同步，单次尝试）
+// fillGapFromPeer 从指定高度 from 向 peer 拉取区块并验证写入（单次只开一个 stream）。
+// 遇 MissingParent 时返回 ErrNeedFillFrom，由调用方从更早高度重试，直到从共同祖先开始顺序写回，避免递归开多流导致 stream reset 与协程暴涨。
 func (s *syncer) fillGapFromPeer(peerID peer.ID, from uint64, peerLatestBlock uint64,
 	newBlockCallback func(*types.FullBlock) bool) (uint64, error) {
 	blockCh, err := s.syncPeerClient.GetBlocks(peerID, from, s.blockTimeout)
@@ -501,6 +538,10 @@ func (s *syncer) fillGapFromPeer(peerID peer.ID, from uint64, peerLatestBlock ui
 		}
 		fullBlock, err := s.blockchain.VerifyFinalizedBlock(block)
 		if err != nil {
+			var missingParent *blockchain.MissingParentError
+			if errors.As(err, &missingParent) && missingParent.ParentNumber < block.Number() {
+				return lastReceivedNumber, &ErrNeedFillFrom{From: missingParent.ParentNumber}
+			}
 			return lastReceivedNumber, fmt.Errorf("verify block %d: %w", block.Number(), err)
 		}
 		if err := s.blockchain.WriteFullBlock(fullBlock, syncerName); err != nil {

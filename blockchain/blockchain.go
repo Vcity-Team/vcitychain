@@ -354,6 +354,59 @@ func (b *Blockchain) Header() *types.Header {
 	return b.currentHeader.Load()
 }
 
+// RollbackToHeight updates chain head to targetHeight (inclusive) and deletes
+// canonical mappings above it. Block/receipt data are kept (lightweight reorg support).
+// This is intended for syncer to recover from forks where the local canonical chain
+// diverged but blocks still exist in DB.
+func (b *Blockchain) RollbackToHeight(targetHeight uint64) error {
+	b.writeLock.Lock()
+	defer b.writeLock.Unlock()
+
+	current := b.Header()
+	if current == nil {
+		return fmt.Errorf("rollback: current header is nil")
+	}
+	if targetHeight >= current.Number {
+		return nil
+	}
+
+	targetHash, ok := b.db.ReadCanonicalHash(targetHeight)
+	if !ok {
+		return fmt.Errorf("rollback: canonical hash not found at height %d", targetHeight)
+	}
+
+	targetHeader, ok := b.GetHeaderByHash(targetHash)
+	if !ok || targetHeader == nil {
+		return fmt.Errorf("rollback: header not found at height %d (hash %s)", targetHeight, targetHash.String())
+	}
+
+	targetTD, ok := b.GetTD(targetHash)
+	if !ok || targetTD == nil {
+		return fmt.Errorf("rollback: total difficulty not found at height %d (hash %s)", targetHeight, targetHash.String())
+	}
+
+	batchWriter := storage.NewBatchWriter(b.db)
+	batchWriter.PutHeadHash(targetHash)
+	batchWriter.PutHeadNumber(targetHeight)
+	batchWriter.PutCanonicalHash(targetHeight, targetHash)
+
+	// delete canonical mappings above target
+	for h := targetHeight + 1; h <= current.Number; h++ {
+		key := append(append([]byte{}, storage.CANONICAL...), common.EncodeUint64ToBytes(h)...)
+		batchWriter.DeleteKey(key)
+	}
+
+	if err := batchWriter.WriteBatch(); err != nil {
+		return fmt.Errorf("rollback: write batch failed: %w", err)
+	}
+
+	// Update in-memory head
+	b.setCurrentHeader(targetHeader, targetTD)
+	b.logger.Warn("⚠️ chain head rolled back", "from", current.Number, "to", targetHeight, "hash", targetHash.String())
+
+	return nil
+}
+
 // CurrentTD returns the current total difficulty (atomic)
 func (b *Blockchain) CurrentTD() *big.Int {
 	return b.currentDifficulty.Load()
