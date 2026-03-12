@@ -928,6 +928,12 @@ func (b *Blockchain) executeBlockTransactions(block *types.Block) (*BlockResult,
 // This function is a copy of WriteBlock but with a full block which does not
 // require to compute again the Receipts.
 func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) error {
+	// 防御性检查：避免上层在校验失败后误传入 nil，导致空指针 panic
+	if fblock == nil || fblock.Block == nil {
+		b.logger.Error("WriteFullBlock called with nil fullBlock or nil Block", "source", source)
+		return fmt.Errorf("nil fullBlock passed to WriteFullBlock (source=%s)", source)
+	}
+
 	b.writeLock.Lock()
 	defer b.writeLock.Unlock()
 
