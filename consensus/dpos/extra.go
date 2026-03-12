@@ -1969,6 +1969,9 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 			"note", "位图索引超出范围，可能导致验证失败")
 	}
 
+	// 用于历史验证者 BLS 策略：创世验证者缺 key 必须失败；非创世（历史）验证者缺 key 则放行，避免同步卡住
+	var missingGenesisValidatorKey, hasMissingHistoricalValidatorKey bool
+
 	for i := uint64(0); i < uint64(len(validators)); i++ {
 		if s.Bitmap.IsSet(i) {
 			validatorAddress := validators[int(i)].Address
@@ -2056,12 +2059,25 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 								"bitmapIndex", i,
 								"address", validatorAddress.String(),
 								"error", err)
+							if dposInstance.IsGenesisValidator(validatorAddress) {
+								missingGenesisValidatorKey = true
+							} else {
+								hasMissingHistoricalValidatorKey = true
+								logger.Debug("历史验证者BLS公钥不可用，将放行该区块",
+									"bitmapIndex", i, "address", validatorAddress.String())
+							}
 						}
 					} else {
-						logger.Warn("⚠️ 无法恢复BLS公钥，将跳过该验证者",
-							"bitmapIndex", i,
-							"address", validatorAddress.String(),
-							"note", "该验证者将不会参与BLS签名验证")
+						// 无法恢复 BLS 公钥：创世验证者必须失败，历史验证者放行
+						if dposInstance.IsGenesisValidator(validatorAddress) {
+							missingGenesisValidatorKey = true
+							logger.Warn("⚠️ 创世验证者BLS公钥不可用，验证将失败",
+								"bitmapIndex", i, "address", validatorAddress.String())
+						} else {
+							hasMissingHistoricalValidatorKey = true
+							logger.Debug("历史验证者BLS公钥不可用，将放行该区块",
+								"bitmapIndex", i, "address", validatorAddress.String())
+						}
 					}
 				} else {
 					logger.Error("❌ 无法获取DPoS实例来恢复BLS公钥",
@@ -2070,6 +2086,18 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 				}
 			}
 		}
+	}
+
+	// 创世验证者缺 BLS key：必须失败
+	if missingGenesisValidatorKey {
+		logger.Error("BLS签名验证失败：创世验证者BLS公钥不可用", "blockNumber", blockNumber)
+		return fmt.Errorf("BLS signature verification failed: genesis validator BLS key unavailable for block %d", blockNumber)
+	}
+	// 仅历史验证者缺 key：放行，避免同步卡在旧区块
+	if hasMissingHistoricalValidatorKey {
+		logger.Debug("跳过BLS聚合验证（存在历史验证者缺BLS公钥），放行区块",
+			"blockNumber", blockNumber, "hash", hash.String())
+		return nil
 	}
 
 	// 执行BLS签名验证（只使用有效的公钥）
