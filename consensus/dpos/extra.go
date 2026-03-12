@@ -1743,18 +1743,32 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		}
 	}
 
-	// 方案2：如果还有缺失的BLS公钥，尝试主动获取
-	if len(missingBLSKeys) > 0 {
+	// 方案2：仅对创世验证者尝试主动获取并等待；历史验证者缺 key 验证阶段会直接放行，无需等待
+	missingGenesisBLSKeys := make([]types.Address, 0)
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+		for _, addr := range missingBLSKeys {
+			if dposInstance.IsGenesisValidator(addr) {
+				missingGenesisBLSKeys = append(missingGenesisBLSKeys, addr)
+			}
+		}
+	} else {
+		missingGenesisBLSKeys = missingBLSKeys
+	}
+	if len(missingGenesisBLSKeys) == 0 && len(missingBLSKeys) > 0 {
+		logger.Debug("缺失的BLS公钥均为历史验证者，跳过主动获取与等待",
+			"blockNumber", blockNumber, "missingAddresses", missingBLSKeys)
+	}
+	if len(missingGenesisBLSKeys) > 0 {
 		logger.Info("🔄 发现缺失的BLS公钥，尝试主动获取",
 			"blockNumber", blockNumber,
-			"missingCount", len(missingBLSKeys),
-			"missingAddresses", missingBLSKeys,
-			"note", "BLS公钥未在缓存中找到，将尝试网络获取")
+			"missingCount", len(missingGenesisBLSKeys),
+			"missingAddresses", missingGenesisBLSKeys,
+			"note", "BLS公钥未在缓存中找到，将尝试网络获取（仅创世验证者）")
 
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			if dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
 				myAddress := types.Address(dposInstance.key.Address())
-				for _, missingAddress := range missingBLSKeys {
+				for _, missingAddress := range missingGenesisBLSKeys {
 					if err := dposInstance.runtime.networkIntegration.RequestBLSKey(missingAddress, myAddress); err != nil {
 						logger.Warn("⚠️ 主动获取BLS公钥失败，但继续验证流程",
 							"blockNumber", blockNumber,
@@ -1769,10 +1783,10 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 					}
 				}
 
-				// 同步等待BLS公钥获取完成
+				// 同步等待BLS公钥获取完成（仅创世验证者）
 				logger.Info("⏳ 等待BLS公钥网络响应",
 					"blockNumber", blockNumber,
-					"missingCount", len(missingBLSKeys),
+					"missingCount", len(missingGenesisBLSKeys),
 					"waitTime", "15秒")
 
 				maxWaitTime := 15 * time.Second
@@ -1784,7 +1798,7 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 				for retry := 0; retry < maxRetries; retry++ {
 					// 检查是否所有BLS公钥都已获取
 					stillMissing := make([]types.Address, 0)
-					for _, address := range missingBLSKeys {
+					for _, address := range missingGenesisBLSKeys {
 						if _, exists := dposInstance.runtime.networkIntegration.GetBLSKey(address); !exists {
 							stillMissing = append(stillMissing, address)
 						}
@@ -1865,9 +1879,9 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 					}
 				}
 
-				// 最终检查
+				// 最终检查（仅创世验证者）
 				finalMissing := make([]types.Address, 0)
-				for _, address := range missingBLSKeys {
+				for _, address := range missingGenesisBLSKeys {
 					if _, exists := dposInstance.runtime.networkIntegration.GetBLSKey(address); !exists {
 						finalMissing = append(finalMissing, address)
 					}
@@ -1887,9 +1901,9 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 					// 重新从缓存获取BLS公钥并更新blsPublicKeys数组
 					logger.Info("🔄 重新从缓存获取BLS公钥并更新数组",
 						"blockNumber", blockNumber,
-						"missingCount", len(missingBLSKeys))
+						"missingCount", len(missingGenesisBLSKeys))
 
-					for _, address := range missingBLSKeys {
+					for _, address := range missingGenesisBLSKeys {
 						if cachedBLSKey, exists := dposInstance.runtime.networkIntegration.GetBLSKey(address); exists {
 							if blsKey, err := bls.UnmarshalPublicKey(cachedBLSKey); err == nil {
 								// 找到对应的位图索引
@@ -1980,14 +1994,21 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 				validBLSKeys = append(validBLSKeys, blsKey)
 				bitmapOrderedAddresses = append(bitmapOrderedAddresses, validatorAddress)
 			} else {
-				// BLS公钥缺失，立即尝试恢复
+				// BLS公钥缺失：先判断是否创世验证者，非创世直接 pass，不尝试获取
+				if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && !dposInstance.IsGenesisValidator(validatorAddress) {
+					hasMissingHistoricalValidatorKey = true
+					logger.Debug("历史验证者缺BLS公钥，直接放行不请求",
+						"bitmapIndex", i, "address", validatorAddress.String())
+					continue
+				}
+
+				// 创世验证者或无法获取DPoS：尝试恢复（缓存 → 创世文件 → 网络）
 				logger.Warn("⚠️ 位图索引对应的BLS公钥不存在或为nil，尝试恢复",
 					"bitmapIndex", i,
 					"address", validatorAddress.String(),
 					"blsPublicKeysLength", len(blsPublicKeys),
-					"hasBlsKey", exists && blsKey != nil)
+					"hasBlsKey", false)
 
-				// 尝试从缓存和创世文件恢复BLS公钥
 				if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 					var blsKeyBytes []byte
 					var found bool
@@ -2018,7 +2039,6 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 
 					// 第三步：如果缓存和创世文件都没有，尝试通过网络请求获取（仅限远程验证者）
 					if !found {
-						// 检查是否是本地节点
 						isLocalNode := dposInstance.key != nil && validatorAddress == types.Address(dposInstance.key.Address())
 						if !isLocalNode && dposInstance.runtime != nil && dposInstance.runtime.networkIntegration != nil {
 							logger.Debug("🌐 尝试通过网络请求获取BLS公钥",
@@ -2026,7 +2046,6 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 								"address", validatorAddress.String(),
 								"note", "缓存和创世文件都没有，尝试网络请求")
 
-							// 尝试通过网络请求获取BLS公钥（设置较短的超时，避免阻塞太久）
 							if blsKey, err := dposInstance.GetBLSKeyForValidator(validatorAddress); err == nil && blsKey != nil {
 								blsKeyBytes = blsKey.Marshal()
 								found = true
@@ -2034,7 +2053,6 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 									"bitmapIndex", i,
 									"address", validatorAddress.String(),
 									"blsKeyLength", len(blsKeyBytes))
-								// 注意：GetBLSKeyForValidator会自动将BLS公钥保存到networkIntegration的缓存中
 							}
 						}
 					}
@@ -2042,12 +2060,9 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 					// 第四步：如果找到了BLS公钥，解析并更新
 					if found && len(blsKeyBytes) > 0 {
 						if blsKey, err := bls.UnmarshalPublicKey(blsKeyBytes); err == nil {
-							// 更新validators数组中的BLS公钥
 							validators[int(i)].BlsKey = blsKey
 							blsPublicKeys[i] = blsKey
-							// 更新地址映射
 							addressToBLSKey[validatorAddress] = blsKey
-							// 添加到验证公钥列表
 							validBLSKeys = append(validBLSKeys, blsKey)
 							bitmapOrderedAddresses = append(bitmapOrderedAddresses, validatorAddress)
 							logger.Debug("✅ 成功恢复BLS公钥并添加到验证列表",
@@ -2059,25 +2074,14 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 								"bitmapIndex", i,
 								"address", validatorAddress.String(),
 								"error", err)
-							if dposInstance.IsGenesisValidator(validatorAddress) {
-								missingGenesisValidatorKey = true
-							} else {
-								hasMissingHistoricalValidatorKey = true
-								logger.Debug("历史验证者BLS公钥不可用，将放行该区块",
-									"bitmapIndex", i, "address", validatorAddress.String())
-							}
+							// 此处必为创世验证者（非创世已在上方 continue）
+							missingGenesisValidatorKey = true
 						}
 					} else {
-						// 无法恢复 BLS 公钥：创世验证者必须失败，历史验证者放行
-						if dposInstance.IsGenesisValidator(validatorAddress) {
-							missingGenesisValidatorKey = true
-							logger.Warn("⚠️ 创世验证者BLS公钥不可用，验证将失败",
-								"bitmapIndex", i, "address", validatorAddress.String())
-						} else {
-							hasMissingHistoricalValidatorKey = true
-							logger.Debug("历史验证者BLS公钥不可用，将放行该区块",
-								"bitmapIndex", i, "address", validatorAddress.String())
-						}
+						// 无法恢复：此处必为创世验证者
+						missingGenesisValidatorKey = true
+						logger.Warn("⚠️ 创世验证者BLS公钥不可用，验证将失败",
+							"bitmapIndex", i, "address", validatorAddress.String())
 					}
 				} else {
 					logger.Error("❌ 无法获取DPoS实例来恢复BLS公钥",
