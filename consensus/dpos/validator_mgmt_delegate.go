@@ -499,6 +499,14 @@ func (d *DPoS) isVoteTransaction(tx *types.Transaction) bool {
 		return false
 	}
 
+	// 先排除其他 DPoS 操作类型（如 REG/COM 等），避免误将注册/佣金修改当作投票
+	if len(tx.Input) >= 7 && string(tx.Input[:4]) == "DPOS" {
+		op := string(tx.Input[4:7])
+		if op == "REG" || op == "COM" {
+			return false
+		}
+	}
+
 	// 检查交易输入数据长度（DPoS投票交易格式：4字节"DPOS" + 20字节投票者 + 20字节受托人 + 32字节金额）
 	const (
 		dposPrefixLen  = 4
