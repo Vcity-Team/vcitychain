@@ -764,8 +764,18 @@ func (d *DPoS) executeSlashing(
 
 	// 1. 获取验证者的当前 VotingPower
 	validator, err := d.state.StakeStore.GetDelegateInfo(validatorAddr)
-	if err != nil || validator == nil {
+	if err != nil {
 		return fmt.Errorf("failed to get validator info: %w", err)
+	}
+	if validator == nil {
+		// 兼容历史数据：如果验证者信息不存在，则跳过本次削减，避免同步中断
+		d.logger.Warn("validator not found when executing slashing, skip",
+			"validator", validatorAddr.String(),
+			"blockNumber", blockNumber,
+			"epochNumber", epochNumber,
+			"reason", reason,
+		)
+		return nil
 	}
 
 	oldVotingPower := new(big.Int).Set(validator.VotingPower)
