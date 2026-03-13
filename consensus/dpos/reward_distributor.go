@@ -153,18 +153,6 @@ func (rd *RewardDistributor) computeVoterWeights(
 		}
 
 		if !containsDelegate(voter.VotedDelegates, validator) {
-			rd.logger.Info("⚠️ [奖励计算] 投票者被跳过（VotedDelegates中不包含该验证者）",
-				"voter", voterAddress.String(),
-				"validator", validator.String(),
-				"votingPower", voter.VotingPower.String(),
-				"votedDelegatesCount", len(voter.VotedDelegates),
-				"votedDelegates", func() []string {
-					result := make([]string, 0, len(voter.VotedDelegates))
-					for _, del := range voter.VotedDelegates {
-						result = append(result, del.String())
-					}
-					return result
-				}())
 			continue
 		}
 
