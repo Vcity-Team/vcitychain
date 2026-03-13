@@ -130,20 +130,34 @@ func (d *DPoS) CheckProposalResult(proposalID string) error {
 		return nil // 投票期未结束
 	}
 
-	// 统计投票结果：提案通过需获得「实际 SR 人数」的 51% 赞成（一 SR 一票）
-	// 使用实际 SR 数量（GetSortedValidatorsWithLimit 返回的个数），这样出块节点少于配置的 21 时仍可达成通过条件
+	// 统计投票结果：提案通过需获得「实际有效 SR 人数」的 51% 赞成（一 SR 一票）
+	// 实际有效 SR：当前 SR 集合中 VotingPower > 0、处于活跃且非故障的验证者数量。
+	// 使用带故障过滤的集合（GetSortedValidatorsWithLimitFilterFaulty），这样门槛只按“当前真正有资格出块的验证者”计算。
 	calcStartTime := time.Now()
-	srSet, err := d.GetSortedValidatorsWithLimit()
+	srSet, err := d.GetSortedValidatorsWithLimitFilterFaulty()
 	actualSRCount := uint64(0)
 	if err != nil || len(srSet) == 0 {
-		// 无法获取实际 SR 集合时回退到配置人数
+		// 无法获取 SR 集合时回退到配置人数
 		actualSRCount = d.config.DPoSValidatorsCount
 		if actualSRCount == 0 {
 			actualSRCount = 21
 		}
-		d.logger.Warn("⚠️ [CheckProposalResult] 使用配置的 SR 数量作为分母", "actualSRCount", actualSRCount, "error", err)
+		d.logger.Warn("⚠️ [CheckProposalResult] 使用配置的 SR 数量作为分母（无法获取或无有效SR）", "actualSRCount", actualSRCount, "error", err)
 	} else {
-		actualSRCount = uint64(len(srSet))
+		// 仅统计“真实参与”的 SR（有投票权、且活跃；GetSortedValidatorsWithLimitFilterFaulty 已保证非故障）
+		for _, v := range srSet {
+			if v.VotingPower != nil && v.VotingPower.Sign() > 0 && v.IsActive {
+				actualSRCount++
+			}
+		}
+		// 极端情况下如果统计结果为 0，仍然回退到配置人数，避免分母为 0
+		if actualSRCount == 0 {
+			actualSRCount = d.config.DPoSValidatorsCount
+			if actualSRCount == 0 {
+				actualSRCount = 21
+			}
+			d.logger.Warn("⚠️ [CheckProposalResult] 有 SR 但无有效投票权/非活跃，使用配置的 SR 数量作为分母", "fallbackSRCount", actualSRCount)
+		}
 	}
 	minRequiredYes := (actualSRCount*51 + 99) / 100 // ceil(actualSRCount * 0.51)
 	if minRequiredYes < 1 {
