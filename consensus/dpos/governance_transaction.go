@@ -23,6 +23,22 @@ func (d *DPoS) ProcessProposalCreateTransaction(tx *types.Transaction, blockNumb
 
 	d.logger.Info("🔄 处理创建提案交易", "from", tx.From.String(), "blockNumber", blockNumber, "proposalType", txData.ProposalType)
 
+	// 1.1 提案者必须是当前验证者（与 JSON-RPC 层约束对齐，防止绕过 RPC 直接发交易）
+	validators, err := d.GetSortedValidatorsWithLimit()
+	if err != nil || len(validators) == 0 {
+		return fmt.Errorf("cannot determine validators set for proposal creation: %w", err)
+	}
+	isValidator := false
+	for _, v := range validators {
+		if v.Address == tx.From {
+			isValidator = true
+			break
+		}
+	}
+	if !isValidator {
+		return fmt.Errorf("proposer %s is not a validator", tx.From.String())
+	}
+
 	// 2. 根据提案类型创建提案
 	// 使用交易哈希生成确定性的proposalID（所有节点相同）
 	proposalID := fmt.Sprintf("proposal_%s", tx.Hash.String()[:16]) // 使用交易哈希前16个字符
