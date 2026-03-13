@@ -5146,12 +5146,21 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 	}
 
 	// 门槛：实际 SR 数量的 51%（一 SR 一票，与 CheckProposalResult 一致）
+	// 实际 SR：当前超级代表集合中 VotingPower>0 且 IsActive=true 的非故障验证者数量
 	srSet, _ := gov.GetSuperRepresentatives()
 	actualSRCount := uint64(0)
 	if len(srSet) == 0 {
 		actualSRCount = 21
 	} else {
-		actualSRCount = uint64(len(srSet))
+		for _, v := range srSet {
+			if v.VotingPower != nil && v.VotingPower.Sign() > 0 && v.IsActive {
+				actualSRCount++
+			}
+		}
+		// 极端情况下如果统计结果为 0，回退到默认 21，避免分母为 0
+		if actualSRCount == 0 {
+			actualSRCount = 21
+		}
 	}
 	minRequiredYes := (actualSRCount*51 + 99) / 100
 	if minRequiredYes < 1 {
