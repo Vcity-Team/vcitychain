@@ -481,6 +481,11 @@ func (m *syncPeerClient) CloseStream(peerID peer.ID) error {
 	return m.network.CloseProtocolStream(syncerProto, peerID)
 }
 
+// DisconnectPeer 断开与指定 peer 的连接，促其重连（syncer 开流反复失败时调用）
+func (m *syncPeerClient) DisconnectPeer(peerID peer.ID) {
+	m.network.DisconnectFromPeer(peerID, "syncer stream failed, force reconnect")
+}
+
 // GetBlocks returns a stream of blocks from given height to peer's latest
 func (m *syncPeerClient) GetBlocks(
 	peerID peer.ID,

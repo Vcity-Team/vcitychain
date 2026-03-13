@@ -285,9 +285,15 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 		// pick one best peer
 		bestPeer := s.peerMap.BestPeer(skipList)
 		if bestPeer == nil {
-			// Empty skipList map if there are no best peers
+			// 所有候选 peer 均被跳过（开流失败等）：主动断开这些 peer 促其重连，退避后清空 skipList 再试
+			if len(skipList) > 0 {
+				for pid := range skipList {
+					s.syncPeerClient.DisconnectPeer(pid)
+					s.logger.Info("无可用 peer，主动断开促重连", "peer", pid.String())
+				}
+				time.Sleep(15 * time.Second)
+			}
 			skipList = make(map[peer.ID]bool)
-
 			continue
 		}
 

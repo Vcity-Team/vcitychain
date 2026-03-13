@@ -61,6 +61,8 @@ type Network interface {
 	SaveProtocolStream(protocol string, stream *rawGrpc.ClientConn, peerID peer.ID)
 	// CloseProtocolStream closes stream
 	CloseProtocolStream(protocol string, peerID peer.ID) error
+	// DisconnectFromPeer 主动断开与指定 peer 的连接，便于重连后恢复（如 syncer 开流反复失败时）
+	DisconnectFromPeer(peerID peer.ID, reason string)
 }
 
 type Syncer interface {
@@ -117,6 +119,8 @@ type SyncPeerClient interface {
 	GetPeerConnectionUpdateEventCh() <-chan *event.PeerEvent
 	// CloseStream close a stream
 	CloseStream(peerID peer.ID) error
+	// DisconnectPeer 断开与指定 peer 的连接（用于开流反复失败时促其重连）
+	DisconnectPeer(peerID peer.ID)
 	// DisablePublishingPeerStatus disables publishing status in syncer topic
 	DisablePublishingPeerStatus()
 	// EnablePublishingPeerStatus enables publishing status in syncer topic
