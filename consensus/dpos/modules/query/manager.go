@@ -164,11 +164,6 @@ func (m *Manager) GetCurrentEpochInfo() map[string]interface{} {
 				if isFaulty {
 					faultyValidatorsBlocksProduced += blocksProducedByValidator
 					faultyCount++
-					m.deps.Logger.Info("🔴 [GetCurrentEpochInfo] 故障验证者出块统计",
-						"epochNumber", epochNumber,
-						"validatorAddress", validator.Address.String(),
-						"blocksProduced", blocksProducedByValidator,
-						"isFaulty", isFaulty)
 				} else {
 					activeValidatorsBlocksProduced += blocksProducedByValidator
 					normalCount++
@@ -349,11 +344,6 @@ func (m *Manager) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{
 			if isFaulty {
 				faultyValidatorsBlocksProduced += blocksProducedByValidator
 				faultyCount++
-				m.deps.Logger.Info("🔴 [GetEpochInfoByNumber] 故障验证者出块统计",
-					"epochNumber", epochNumber,
-					"validatorAddress", validator.Address.String(),
-					"blocksProduced", blocksProducedByValidator,
-					"isFaulty", isFaulty)
 			} else {
 				activeValidatorsBlocksProduced += blocksProducedByValidator
 				normalCount++
@@ -409,11 +399,6 @@ func (m *Manager) GetEpochInfoByNumber(epochNumber uint64) map[string]interface{
 				if isFaulty {
 					faultyValidatorsBlocksProduced += blocksProducedByValidator
 					faultyCount++
-					m.deps.Logger.Info("🔴 [GetEpochInfoByNumber] 故障验证者出块统计",
-						"epochNumber", epochNumber,
-						"validatorAddress", validator.Address.String(),
-						"blocksProduced", blocksProducedByValidator,
-						"isFaulty", isFaulty)
 				} else {
 					activeValidatorsBlocksProduced += blocksProducedByValidator
 					normalCount++

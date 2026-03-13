@@ -546,7 +546,7 @@ func (t *Transition) Apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 	result, err := t.apply(msg)
 	if err != nil {
 		if revertErr := t.state.RevertToSnapshot(s); revertErr != nil {
-			t.logger.Error("💀 交易执行失败且无法回滚状态，程序将立即退出",
+			t.logger.Error("交易执行失败",
 				"txHash", msg.Hash.String(),
 				"nonce", msg.Nonce,
 				"from", msg.From.String(),
@@ -554,7 +554,7 @@ func (t *Transition) Apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 				"revertError", revertErr)
 			return nil, revertErr
 		}
-		t.logger.Error("💀 交易执行失败，程序将立即退出",
+		t.logger.Error("交易执行失败",
 			"txHash", msg.Hash.String(),
 			"nonce", msg.Nonce,
 			"from", msg.From.String(),
