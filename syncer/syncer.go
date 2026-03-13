@@ -417,24 +417,15 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				continue
 			}
 
-			// 对区块中的交易进行去重检查
+			// 对区块中的交易做去重记录（仅用于日志与已处理标记）；验证与写入必须使用原始 block，否则 TxRoot 校验会失败
 			if len(block.Transactions) > 0 {
 				filteredTransactions := s.filterProcessedTransactions(block.Transactions)
-
-				// 如果过滤后有交易，创建新的区块
 				if len(filteredTransactions) < len(block.Transactions) {
-					s.logger.Info("🔍 过滤重复交易",
+					s.logger.Info("🔍 过滤重复交易（仅记录，不修改区块）",
 						"peer", peerID.String()[:8],
 						"blockNumber", block.Number(),
 						"originalCount", len(block.Transactions),
 						"filteredCount", len(filteredTransactions))
-
-					// 创建新的区块，只包含未处理的交易
-					newBlock := &types.Block{
-						Header:       block.Header,
-						Transactions: filteredTransactions,
-					}
-					block = newBlock
 				}
 			}
 
@@ -530,10 +521,15 @@ func (s *syncer) fillGapFromPeer(peerID peer.ID, from uint64, peerLatestBlock ui
 			lastReceivedNumber = block.Number()
 			continue
 		}
+		// 仅做去重记录与已处理标记；验证/写入必须用原始 block，否则 TxRoot 校验会失败
 		if len(block.Transactions) > 0 {
 			filtered := s.filterProcessedTransactions(block.Transactions)
 			if len(filtered) < len(block.Transactions) {
-				block = &types.Block{Header: block.Header, Transactions: filtered}
+				s.logger.Info("🔍 过滤重复交易（仅记录，不修改区块）",
+					"peer", peerID.String()[:8],
+					"blockNumber", block.Number(),
+					"originalCount", len(block.Transactions),
+					"filteredCount", len(filtered))
 			}
 		}
 		fullBlock, err := s.blockchain.VerifyFinalizedBlock(block)
