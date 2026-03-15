@@ -605,6 +605,43 @@ func (ps *ProposalStore) ListScheduledByEpoch(epochNumber uint64) ([]*ParameterP
 	return scheduledProposals, nil
 }
 
+// ListScheduledNotAppliedUpTo 返回所有 Scheduled=true, Applied=false, EffectiveEpoch<=maxEpoch 的提案（边界补跑逾期提案用）
+func (ps *ProposalStore) ListScheduledNotAppliedUpTo(maxEpoch uint64) ([]*ParameterProposal, error) {
+	if ps.logger != nil {
+		ps.logger.Debug("🔍 [ProposalStore.ListScheduledNotAppliedUpTo] 开始查询", "maxEpoch", maxEpoch)
+	}
+	var list []*ParameterProposal
+	err := ps.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("proposals"))
+		if bucket == nil {
+			return fmt.Errorf("proposals bucket not found")
+		}
+		return bucket.ForEach(func(key, value []byte) error {
+			var proposal ParameterProposal
+			if err := json.Unmarshal(value, &proposal); err != nil {
+				return nil
+			}
+			if proposal.Schedule.Scheduled &&
+				!proposal.Schedule.Applied &&
+				proposal.Schedule.EffectiveEpoch <= maxEpoch &&
+				proposal.Schedule.EffectiveEpoch > 0 {
+				list = append(list, &proposal)
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		if ps.logger != nil {
+			ps.logger.Error("❌ [ProposalStore.ListScheduledNotAppliedUpTo] 查询失败", "error", err, "maxEpoch", maxEpoch)
+		}
+		return nil, err
+	}
+	if ps.logger != nil {
+		ps.logger.Debug("✅ [ProposalStore.ListScheduledNotAppliedUpTo] 查询完成", "maxEpoch", maxEpoch, "count", len(list))
+	}
+	return list, nil
+}
+
 // initialize 初始化出块统计存储
 func (bts *BlockTrackerStore) initialize(tx *bolt.Tx) error {
 	_, err := tx.CreateBucketIfNotExists([]byte("blockTracker"))

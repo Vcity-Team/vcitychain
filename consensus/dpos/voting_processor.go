@@ -377,12 +377,6 @@ func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error
 					continue
 				}
 				if stakeInfo.Applied {
-					d.logger.Info("ℹ️ [边界应用投票] 投票记录已应用，跳过",
-						"voter", stakeInfo.Staker.String(),
-						"delegate", stakeInfo.Delegate.String(),
-						"effectiveEpoch", stakeInfo.EffectiveEpoch,
-						"currentEpoch", epochNumber,
-						"applied", stakeInfo.Applied)
 					continue
 				}
 				if stakeInfo.EffectiveEpoch != epochNumber {

@@ -74,6 +74,19 @@ func (d *DPoS) buildGovernanceModuleDependencies() governancemodule.Dependencies
 			d.logger.Error("❌ [buildGovernanceModuleDependencies.ListScheduled] ProposalStore不支持ListScheduledByEpoch", "epoch", epoch)
 			return nil, fmt.Errorf("proposal store does not support scheduled listing")
 		},
+		ListScheduledUpTo: func(maxEpoch uint64) ([]*core.ParameterProposal, error) {
+			store := d.getProposalStore()
+			if store == nil {
+				return nil, governancemodule.ErrProposalStoreUnavailable
+			}
+			type schedulerUpTo interface {
+				ListScheduledNotAppliedUpTo(uint64) ([]*ParameterProposal, error)
+			}
+			if s, ok := interface{}(store).(schedulerUpTo); ok {
+				return s.ListScheduledNotAppliedUpTo(maxEpoch)
+			}
+			return nil, fmt.Errorf("proposal store does not support ListScheduledNotAppliedUpTo")
+		},
 		CacheGet: func(id string) (*core.ParameterProposal, bool) {
 			if d.parameterProposals == nil {
 				return nil, false

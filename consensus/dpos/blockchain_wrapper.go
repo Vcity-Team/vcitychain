@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sort"
 	"time"
 
 	"github.com/hashicorp/go-hclog"
@@ -127,6 +128,16 @@ func (p *blockchainWrapper) CommitBlock(block *types.FullBlock) error {
 	if p.isEpochEndBlock(block.Block.Number()) {
 		if e := p.applySlashingFromBlockExtra(block.Block); e != nil {
 			p.logger.Warn("⚠️ [CommitBlock] 生产节点故障消减后置处理失败(不影响已写入区块)", "blockNumber", block.Block.Number(), "error", e)
+		}
+		// 出块/同步节点若未走 ProcessBlock 或 ProcessBlockExecutor，此处在 CommitBlock 统一补做边界应用提案（待生效参数/恢复提案）。
+		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+			p.logger.Info("🔍 [边界应用提案] 开始查询待应用提案", "blockNumber", block.Block.Number(), "source", "CommitBlock")
+			applied, err := dposInstance.ApplyScheduledProposalsUpTo(block.Block.Number())
+			if err != nil {
+				p.logger.Warn("⚠️ [CommitBlock] 边界应用提案失败(不影响已写入区块)", "blockNumber", block.Block.Number(), "error", err)
+			} else if applied > 0 {
+				p.logger.Info("✅ [CommitBlock] 边界应用提案完成", "blockNumber", block.Block.Number(), "appliedCount", applied)
+			}
 		}
 	}
 
@@ -351,8 +362,10 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			if currentEpoch == 0 {
 				p.logger.Warn("⚠️ [ProcessBlockExecutor] 无法获取epoch信息", "blockNumber", block.Number())
 			}
-			scheduledProps := dposInstance.governanceLoadScheduled(currentEpoch)
-			p.logger.Debug("🔍 [边界应用提案] 查询结果", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "scheduledCount", len(scheduledProps))
+			p.logger.Info("🔍 [边界应用提案] 开始查询待应用提案", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
+			// 使用 UpTo 查询，包含本 epoch 及之前未应用的提案（补跑逾期）
+			scheduledProps := dposInstance.governanceLoadScheduledUpTo(currentEpoch)
+			p.logger.Info("🔍 [边界应用提案] 查询结果", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "scheduledCount", len(scheduledProps))
 
 			seen := make(map[string]bool)
 			uniq := make([]*ParameterProposal, 0, len(scheduledProps))
@@ -366,11 +379,13 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 				seen[pprop.ID] = true
 				uniq = append(uniq, pprop)
 			}
+			// 按 EffectiveEpoch 升序应用，先到期的先应用
+			sort.Slice(uniq, func(i, j int) bool { return uniq[i].Schedule.EffectiveEpoch < uniq[j].Schedule.EffectiveEpoch })
 
 			for _, prop := range uniq {
 				p.logger.Info("🔍 [边界应用提案] 检查提案", "proposalID", prop.ID, "proposalType", prop.ProposalType, "scheduled", prop.Schedule.Scheduled, "effectiveEpoch", prop.Schedule.EffectiveEpoch, "applied", prop.Schedule.Applied, "currentEpoch", currentEpoch)
-				// 再次检查 Applied，确保只执行一次
-				if prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == currentEpoch && !prop.Schedule.Applied {
+				// 应用条件：已登记、未应用、且生效 epoch 不晚于当前 epoch（含逾期补跑）
+				if prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch <= currentEpoch && !prop.Schedule.Applied {
 					p.logger.Info("✅ [边界应用提案] 提案条件满足，开始应用", "proposalID", prop.ID, "proposalType", prop.ProposalType)
 					switch prop.ProposalType {
 					case "validator_recovery":
@@ -584,9 +599,10 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 				currentEpoch = m.Number
 			}
 
-			p.logger.Debug("🔍 [边界应用提案] 开始查询待应用提案", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
-			scheduledProps := dposInstance.governanceLoadScheduled(currentEpoch)
-			p.logger.Debug("🔍 [边界应用提案] 查询结果", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "scheduledCount", len(scheduledProps))
+			p.logger.Info("🔍 [边界应用提案] 开始查询待应用提案", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
+			// 使用 UpTo 查询，包含本 epoch 及之前未应用的提案（补跑逾期）
+			scheduledProps := dposInstance.governanceLoadScheduledUpTo(currentEpoch)
+			p.logger.Info("🔍 [边界应用提案] 查询结果", "blockNumber", block.Number(), "currentEpoch", currentEpoch, "scheduledCount", len(scheduledProps))
 
 			// 去重（按ID）
 			seen := make(map[string]bool)
@@ -601,11 +617,13 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 				seen[pprop.ID] = true
 				uniq = append(uniq, pprop)
 			}
+			// 按 EffectiveEpoch 升序应用，先到期的先应用
+			sort.Slice(uniq, func(i, j int) bool { return uniq[i].Schedule.EffectiveEpoch < uniq[j].Schedule.EffectiveEpoch })
 
 			for _, prop := range uniq {
 				p.logger.Info("🔍 [边界应用提案] 检查提案", "proposalID", prop.ID, "proposalType", prop.ProposalType, "scheduled", prop.Schedule.Scheduled, "effectiveEpoch", prop.Schedule.EffectiveEpoch, "applied", prop.Schedule.Applied, "currentEpoch", currentEpoch)
-				// 再次检查 Applied，确保只执行一次
-				if prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch == currentEpoch && !prop.Schedule.Applied {
+				// 应用条件：已登记、未应用、且生效 epoch 不晚于当前 epoch（含逾期补跑）
+				if prop.Schedule.Scheduled && prop.Schedule.EffectiveEpoch <= currentEpoch && !prop.Schedule.Applied {
 					p.logger.Info("✅ [边界应用提案] 提案条件满足，开始应用", "proposalID", prop.ID, "proposalType", prop.ProposalType)
 					switch prop.ProposalType {
 					case "validator_recovery":

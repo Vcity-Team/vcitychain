@@ -163,6 +163,9 @@ type GovernanceManager interface {
 	// LoadScheduled 获取指定epoch的待调度提案
 	LoadScheduled(epochNumber uint64) []*ParameterProposal
 
+	// LoadScheduledUpTo 获取 EffectiveEpoch<=maxEpoch 且未应用的待应用提案（含逾期补跑）
+	LoadScheduledUpTo(maxEpoch uint64) []*ParameterProposal
+
 	// MarkProposalApplied 标记提案已生效
 	MarkProposalApplied(proposalID string, appliedBlock uint64) error
 }

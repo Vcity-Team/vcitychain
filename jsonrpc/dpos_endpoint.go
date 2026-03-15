@@ -6323,6 +6323,48 @@ func (d *DPOS) GetConsensusSwitchHeight(ctx context.Context) (interface{}, error
 	}, nil
 }
 
+// ApplyScheduledProposals 手动触发补跑：应用所有 effectiveEpoch<=当前 epoch 且未应用的提案。无需参数。RPC: dpos_applyScheduledProposals
+func (d *DPOS) ApplyScheduledProposals(ctx context.Context) (interface{}, error) {
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "DPoS engine not available",
+		}, nil
+	}
+	dposInstance, ok := dposEngine.(*dpos.DPoS)
+	if !ok {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "DPoS engine type does not support ApplyScheduledProposalsUpTo",
+		}, nil
+	}
+	blockNum := dposInstance.GetCurrentBlockNumber()
+	if blockNum == 0 {
+		blockNum = d.getCurrentBlockHeight()
+	}
+	if blockNum == 0 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "cannot get current block number",
+		}, nil
+	}
+	applied, err := dposInstance.ApplyScheduledProposalsUpTo(blockNum)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		}, nil
+	}
+	currentEpoch := dposInstance.GetCurrentEpochNumber()
+	return map[string]interface{}{
+		"success":        true,
+		"appliedCount":   applied,
+		"currentBlock":   blockNum,
+		"currentEpoch":   currentEpoch,
+	}, nil
+}
+
 // ExecuteParameterUpdate 执行参数更新
 func (d *DPOS) ExecuteParameterUpdate(ctx context.Context, params interface{}) (interface{}, error) {
 	d.logger.Info("DPoS ExecuteParameterUpdate called", "params", params)

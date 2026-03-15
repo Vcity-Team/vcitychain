@@ -18,7 +18,8 @@ type Dependencies struct {
 	SaveProposal  func(*core.ParameterProposal) error
 	GetProposal   func(string) (*core.ParameterProposal, error)
 	GetAll        func() (map[string]*core.ParameterProposal, error)
-	ListScheduled func(epoch uint64) ([]*core.ParameterProposal, error)
+	ListScheduled    func(epoch uint64) ([]*core.ParameterProposal, error)
+	ListScheduledUpTo func(maxEpoch uint64) ([]*core.ParameterProposal, error)
 
 	CacheGet   func(string) (*core.ParameterProposal, bool)
 	CacheSet   func(string, *core.ParameterProposal)
@@ -125,6 +126,19 @@ func (m *Manager) LoadScheduled(epochNumber uint64) []*core.ParameterProposal {
 	result, err := m.deps.ListScheduled(epochNumber)
 	if err != nil {
 		m.logger.Error("❌ [Manager.LoadScheduled] 查询失败", "epoch", epochNumber, "error", err)
+		return nil
+	}
+	return result
+}
+
+// LoadScheduledUpTo returns all proposals with Scheduled=true, Applied=false, EffectiveEpoch<=maxEpoch (from DB for reliability).
+func (m *Manager) LoadScheduledUpTo(maxEpoch uint64) []*core.ParameterProposal {
+	if m.deps.ListScheduledUpTo == nil {
+		return nil
+	}
+	result, err := m.deps.ListScheduledUpTo(maxEpoch)
+	if err != nil {
+		m.logger.Error("❌ [Manager.LoadScheduledUpTo] 查询失败", "maxEpoch", maxEpoch, "error", err)
 		return nil
 	}
 	return result
