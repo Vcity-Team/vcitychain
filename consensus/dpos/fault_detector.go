@@ -186,6 +186,18 @@ func (fd *FaultDetector) detectValidatorFaults(
 	var faultFlags []FaultFlagInfo
 
 	for _, validator := range validators {
+		// 先排除创世验证者，不对其进行故障检测和标记
+		if fd.dposInstance != nil &&
+			fd.dposInstance.state != nil &&
+			fd.dposInstance.state.StakeStore != nil &&
+			fd.dposInstance.state.StakeStore.isGenesisValidator(validator.Address) {
+			fd.logger.Info("⏭️ 跳过创世验证者的故障检测",
+				"validator", validator.Address.String(),
+				"epoch", epochInfo.EpochToCheckNumber)
+			// 直接跳过，不生成任何故障标记，确保创世验证者不会被误判为故障
+			continue
+		}
+
 		// 判断是否是新加入的验证者
 		isNewlyAdded := false
 		if len(previousEpochValidatorMap) > 0 {
