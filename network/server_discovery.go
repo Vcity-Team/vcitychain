@@ -237,6 +237,13 @@ func (s *Server) setupDiscovery() error {
 	// and instantiates connections to them
 	discoveryService.ConnectToBootnodes(s.bootnodes.getBootnodes())
 
+	// 启动时将所有未连接的 bootnode 加入拨号队列，避免只连一个（MinimumPeerConnections=1 时 keepAlive 只补一个）
+	for _, nodeInfo := range s.bootnodes.getBootnodes() {
+		if !s.hasPeer(nodeInfo.ID) {
+			s.addToDialQueue(nodeInfo, common.PriorityRandomDial)
+		}
+	}
+
 	// Start the discovery service
 	discoveryService.Start()
 
