@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -42,6 +43,18 @@ type syncPeerClient struct {
 	closeCh          chan struct{}
 	closed           atomic.Bool
 
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+
+	activeGetBlocksStreams atomic.Int64
+
+	// 方案C：限制并发与单peer单流，避免抖动时重试风暴导致goroutine爆炸
+	ioSem chan struct{} // global semaphore for RPC/stream operations
+
+	inflightMu        sync.Mutex
+	inflightGetBlocks map[peer.ID]struct{}
+
 	peerStatusUpdateChLock   sync.Mutex
 	peerStatusUpdateChClosed bool
 
@@ -61,6 +74,8 @@ func NewSyncPeerClient(
 	// 记录节点ID信息
 	logger.Debug("创建同步客户端", "节点ID", nodeID)
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	return &syncPeerClient{
 		logger:                 logger.Named(SyncPeerClientLoggerName),
 		network:                network,
@@ -71,6 +86,10 @@ func NewSyncPeerClient(
 		peerConnectionUpdateCh: make(chan *event.PeerEvent, 50), // 增加缓冲区大小避免阻塞
 		shouldEmitBlocks:       true,
 		closeCh:                make(chan struct{}),
+		ctx:                    ctx,
+		cancel:                 cancel,
+		ioSem:                  make(chan struct{}, 16),
+		inflightGetBlocks:      make(map[peer.ID]struct{}),
 
 		peerStatusUpdateChLock:   sync.Mutex{},
 		peerStatusUpdateChClosed: false,
@@ -103,6 +122,7 @@ func (m *syncPeerClient) Start() error {
 	}
 
 	// 然后启动其他goroutine
+	m.wg.Add(2)
 	go m.startNewBlockProcess()
 	go m.startPeerEventProcess()
 
@@ -118,6 +138,11 @@ func (m *syncPeerClient) Close() {
 
 	m.logger.Debug("开始关闭同步客户端", "节点ID", m.id)
 
+	// 先发出取消信号，确保所有使用 ctx 的逻辑尽快退出
+	if m.cancel != nil {
+		m.cancel()
+	}
+
 	// 关闭所有订阅和topic
 	if m.topic != nil {
 		m.topic.Close()
@@ -131,15 +156,19 @@ func (m *syncPeerClient) Close() {
 
 	// 发送关闭信号
 	if m.closeCh != nil {
-		close(m.closeCh)
+		select {
+		case <-m.closeCh:
+			// already closed
+		default:
+			close(m.closeCh)
+		}
 	}
 
 	// 等待goroutine退出（最多等待5秒）
 	timeout := time.After(5 * time.Second)
 	done := make(chan struct{})
 	go func() {
-		// 等待所有goroutine退出
-		time.Sleep(100 * time.Millisecond)
+		m.wg.Wait()
 		close(done)
 	}()
 
@@ -147,7 +176,7 @@ func (m *syncPeerClient) Close() {
 	case <-done:
 		m.logger.Debug("同步客户端goroutine已退出", "节点ID", m.id)
 	case <-timeout:
-		m.logger.Warn("同步客户端关闭超时", "节点ID", m.id)
+		m.logger.Warn("同步客户端关闭超时", "节点ID", m.id, "activeGetBlocksStreams", m.activeGetBlocksStreams.Load(), "goroutines", runtime.NumGoroutine())
 	}
 
 	// 关闭状态更新通道
@@ -182,6 +211,14 @@ func (m *syncPeerClient) EnablePublishingPeerStatus() {
 
 // GetPeerStatus fetches peer status
 func (m *syncPeerClient) GetPeerStatus(peerID peer.ID) (*NoForkPeer, error) {
+	// 方案C：限制并发，避免对大量peer并发GetStatus导致goroutine激增
+	select {
+	case m.ioSem <- struct{}{}:
+		defer func() { <-m.ioSem }()
+	case <-m.ctx.Done():
+		return nil, m.ctx.Err()
+	}
+
 	clt, err := m.newSyncPeerClient(peerID)
 	if err != nil {
 		return nil, err
@@ -365,6 +402,7 @@ func (m *syncPeerClient) startNewBlockProcess() {
 			m.logger.Error("startNewBlockProcess panic", "节点ID", m.id, "error", r)
 		}
 		m.logger.Debug("startNewBlockProcess goroutine已退出", "节点ID", m.id)
+		m.wg.Done()
 	}()
 
 	m.logger.Info("🚀 启动区块事件监听", "节点ID", m.id, "shouldEmitBlocks", m.shouldEmitBlocks)
@@ -445,10 +483,11 @@ func (m *syncPeerClient) startPeerEventProcess() {
 		}
 		close(m.peerConnectionUpdateCh)
 		m.logger.Debug("startPeerEventProcess goroutine已退出", "节点ID", m.id)
+		m.wg.Done()
 	}()
 
 	// 移除超时保护，让同步器持续运行
-	peerEventCh, err := m.network.SubscribeCh(context.Background())
+	peerEventCh, err := m.network.SubscribeCh(m.ctx)
 	if err != nil {
 		m.logger.Error("failed to subscribe", "err", err)
 		return
@@ -494,32 +533,88 @@ func (m *syncPeerClient) GetBlocks(
 ) (<-chan *types.Block, error) {
 	m.logger.Debug("请求区块", "peer", peerID.String(), "起始高度", from)
 
+	// 方案C：同一peer同一时间只允许一个GetBlocks流，避免重连/补拉叠加导致goroutine爆炸
+	m.inflightMu.Lock()
+	if _, exists := m.inflightGetBlocks[peerID]; exists {
+		m.inflightMu.Unlock()
+		return nil, fmt.Errorf("GetBlocks already in progress for peer %s", peerID.String())
+	}
+	m.inflightGetBlocks[peerID] = struct{}{}
+	m.inflightMu.Unlock()
+
+	// 方案C：限制开流并发，避免瞬时开太多stream导致资源耗尽
+	select {
+	case m.ioSem <- struct{}{}:
+		// release after stream established (or error)
+	case <-m.ctx.Done():
+		m.inflightMu.Lock()
+		delete(m.inflightGetBlocks, peerID)
+		m.inflightMu.Unlock()
+		return nil, m.ctx.Err()
+	}
+
 	clt, err := m.newSyncPeerClient(peerID)
 	if err != nil {
+		<-m.ioSem
+		m.inflightMu.Lock()
+		delete(m.inflightGetBlocks, peerID)
+		m.inflightMu.Unlock()
 		m.logger.Error("创建同步客户端失败", "peer", peerID.String(), "error", err)
 		return nil, fmt.Errorf("failed to create sync peer client: %w", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(m.ctx)
 
 	stream, err := clt.GetBlocks(ctx, &proto.GetBlocksRequest{
 		From: from,
 	})
 	if err != nil {
+		<-m.ioSem
+		m.inflightMu.Lock()
+		delete(m.inflightGetBlocks, peerID)
+		m.inflightMu.Unlock()
 		cancel()
 		m.logger.Error("打开区块流失败", "peer", peerID.String(), "error", err)
 		return nil, fmt.Errorf("failed to open GetBlocks stream: %w", err)
 	}
 
+	// stream建立完成，释放并发信号量（后续收块在独立goroutine中进行）
+	<-m.ioSem
+
 	// input channel
-	streamBlockCh, streamErrorCh := blockStreamToChannel(stream)
+	streamBlockCh, streamErrorCh := blockStreamToChannel(ctx, stream)
 
 	// output channel
 	blockCh := make(chan *types.Block, 1)
 
+	m.activeGetBlocksStreams.Add(1)
+
 	go func() {
+		defer m.activeGetBlocksStreams.Add(-1)
 		defer cancel()
 		defer close(blockCh)
+		defer func() { _ = m.CloseStream(peerID) }()
+		defer func() {
+			m.inflightMu.Lock()
+			delete(m.inflightGetBlocks, peerID)
+			m.inflightMu.Unlock()
+		}()
+
+		// 使用可重置的 timer，避免每次 select 都创建新的 time.After
+		timer := time.NewTimer(timeoutPerBlock)
+		defer timer.Stop()
+
+		resetTimer := func() {
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(timeoutPerBlock)
+		}
+
+		resetTimer()
 
 		for {
 			select {
@@ -529,13 +624,28 @@ func (m *syncPeerClient) GetBlocks(
 				}
 
 				blockCh <- block
+				resetTimer()
 			case err := <-streamErrorCh:
-				m.logger.Error("failed to get block from gRPC stream", "peer", peerID, "err", err)
+				if err != nil {
+					m.logger.Error("failed to get block from gRPC stream", "peer", peerID, "err", err)
+					// 对典型的连接类错误，主动断开连接促使重连，避免 stream 残留导致持续 reset
+					errStr := err.Error()
+					if strings.Contains(errStr, "stream reset") ||
+						strings.Contains(errStr, "transport is closing") ||
+						strings.Contains(errStr, "connection error") ||
+						strings.Contains(errStr, "Unavailable") {
+						m.DisconnectPeer(peerID)
+					}
+				}
 
 				return
-			case <-time.After(timeoutPerBlock):
-				m.logger.Warn("block doesn't reach within timeout", "timeout", timeoutPerBlock)
+			case <-timer.C:
+				m.logger.Warn("block doesn't reach within timeout", "peer", peerID, "timeout", timeoutPerBlock)
+				// 超时也断开 peer，避免对端卡住导致一直占用资源
+				m.DisconnectPeer(peerID)
 
+				return
+			case <-ctx.Done():
 				return
 			}
 		}
@@ -566,7 +676,7 @@ func fromProto(protoBlock *proto.Block) (*types.Block, error) {
 	return block, nil
 }
 
-func blockStreamToChannel(stream proto.SyncPeer_GetBlocksClient) (<-chan *types.Block, <-chan error) {
+func blockStreamToChannel(ctx context.Context, stream proto.SyncPeer_GetBlocksClient) (<-chan *types.Block, <-chan error) {
 	blockCh := make(chan *types.Block)
 	errorCh := make(chan error, 1)
 
@@ -574,28 +684,31 @@ func blockStreamToChannel(stream proto.SyncPeer_GetBlocksClient) (<-chan *types.
 		defer close(blockCh)
 
 		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
 			protoBlock, err := stream.Recv()
 			if errors.Is(err, io.EOF) {
-				break
+				return
 			}
 
 			if err != nil {
 				metrics.IncrCounter([]string{syncerMetrics, "bad_message"}, 1)
 				errorCh <- err
-
-				break
+				return
 			}
 
 			block, err := fromProto(protoBlock)
 			if err != nil {
 				metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
 				errorCh <- err
-
-				break
+				return
 			}
 
 			metrics.SetGauge([]string{syncerMetrics, "ingress_bytes"}, float32(len(protoBlock.Block)))
-
 			blockCh <- block
 		}
 	}()
