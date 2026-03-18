@@ -515,8 +515,12 @@ func (m *syncPeerClient) startPeerEventProcess() {
 	}
 }
 
-// CloseStream closes stream
+// CloseStream closes stream and releases the peer's inflight mark so the same peer
+// can be used again immediately (e.g. for fill-gap after MissingParent).
 func (m *syncPeerClient) CloseStream(peerID peer.ID) error {
+	m.inflightMu.Lock()
+	delete(m.inflightGetBlocks, peerID)
+	m.inflightMu.Unlock()
 	return m.network.CloseProtocolStream(syncerProto, peerID)
 }
 
