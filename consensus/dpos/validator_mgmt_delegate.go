@@ -449,8 +449,8 @@ func (d *DPoS) IsGenesisValidator(address types.Address) bool {
 		d.lock.RUnlock()
 	}
 
-	// 添加调试日志
-	d.logger.Info("🔍 IsGenesisValidator检查",
+	// 降级为 Debug，避免在高频校验路径产生大量刷屏日志
+	d.logger.Debug("🔍 IsGenesisValidator检查",
 		"address", address.String(),
 		"isGenesis", isGenesis,
 		"genesisValidatorsCount", func() int {

@@ -2348,8 +2348,8 @@ func (r *dposRuntime) isValidator() bool {
 					msg = "🎯 当前节点是活跃验证者且故障标志为false（从数据库）"
 				}
 
-				// 使用统一日志间隔（10秒）
-				r.logOnceWithInterval("active_validator_from_db", 10*time.Second, "info", msg,
+				// 使用统一日志间隔（10秒），降级为 debug，避免刷屏
+				r.logOnceWithInterval("active_validator_from_db", 10*time.Second, "debug", msg,
 					"address", currentAddr.String(),
 					"votingPower", delegate.VotingPower.String(),
 					"isActive", delegate.IsActive,
