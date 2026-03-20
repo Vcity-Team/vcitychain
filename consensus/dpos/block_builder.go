@@ -1402,13 +1402,10 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 	// 2. 创建签名收集通道和收集器（缓冲大小基于 BLS 委员会）
 	signatureCh := make(chan *SignatureResponse, len(committee))
 
-	if r.networkIntegration != nil {
-		timeout := 30 * time.Second
-		requiredCount := r.calculateMinRequiredSignatures()
-		r.networkIntegration.RegisterSignatureCollector(checkpointHash, signatureCh, timeout, requiredCount)
-	}
+	sigCtx, sigCancel := context.WithCancel(context.Background())
+	defer sigCancel()
 
-	go r.collectSignaturesAsync(checkpointHash, signatureCh)
+	go r.collectSignaturesAsync(sigCtx, sigCancel, checkpointHash, signatureCh)
 
 	// 等待一小段时间让协程启动
 	time.Sleep(100 * time.Millisecond)
@@ -2156,90 +2153,127 @@ func (r *dposRuntime) waitForSignaturesWithContext(ctx context.Context, signatur
 }
 
 // collectSignaturesAsync 异步收集签名
-func (r *dposRuntime) collectSignaturesAsync(checkpointHash types.Hash, signatureCh chan<- *SignatureResponse) {
-	// 计算最小所需签名数量
+// 目标：由外层控制 ctx/cancel，保证外层任何提前 return 都能立刻停止 bridge/monitor 并注销收集器。
+func (r *dposRuntime) collectSignaturesAsync(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	checkpointHash types.Hash,
+	signatureCh chan<- *SignatureResponse,
+) {
 	minRequiredSignatures := r.calculateMinRequiredSignatures()
 
-	// 启动异步签名收集（静默处理）
-
-	// 修复：创建一个双向通道作为桥梁，确保类型兼容性
-	// 同时保持签名响应能够正确传递到collectValidatorSignatures等待的通道
-	bridgeCh := make(chan *SignatureResponse, 1000) // 使用合适的缓冲区大小
-
-	// 启动转发协程，将bridgeCh的消息转发到signatureCh
-	if r.resourceMonitor != nil && r.resourceMonitor.goroutineManager != nil {
-		r.resourceMonitor.goroutineManager.StartGoroutine("signature-bridge", func() {
-			defer close(signatureCh)
-			defer close(bridgeCh)
-
-			// 添加超时控制，避免无限运行
-			timeout := time.After(5 * time.Minute) // 5分钟后自动退出
-
-			for {
-				select {
-				case response, ok := <-bridgeCh:
-					if !ok {
-						r.logger.Debug("桥接通道关闭，停止转发",
-							"checkpointHash", checkpointHash.String())
-						return
-					}
-
-					// 发送到signatureCh
-					select {
-					case signatureCh <- response:
-					case <-time.After(5 * time.Second):
-						r.logger.Error("签名响应桥接转发超时，丢弃响应",
-							"validator", response.ValidatorAddr.String(),
-							"checkpointHash", checkpointHash.String())
-					}
-				case <-timeout:
-					r.logger.Debug("签名桥接协程超时，自动退出",
-						"checkpointHash", checkpointHash.String())
-					return
-				}
-			}
-		})
-	} else {
-		r.logger.Error("资源监控器不可用，无法启动签名桥接协程")
-	}
-
-	// 注册签名收集器，使用桥接通道
-	if r.networkIntegration != nil {
-		r.networkIntegration.RegisterSignatureCollector(
-			checkpointHash,
-			bridgeCh, // 使用桥接通道
-			30*time.Second,
-			minRequiredSignatures,
-		)
-	} else {
+	// 无网络集成层时没有可用的签名收集通道。
+	if r.networkIntegration == nil {
 		r.logger.Error("网络集成层不可用，无法注册签名收集器",
 			"checkpointHash", checkpointHash.String())
+		return
 	}
 
-	// 启动一个监控协程，定期检查收集状态
-	if r.resourceMonitor != nil && r.resourceMonitor.goroutineManager != nil {
-		r.resourceMonitor.goroutineManager.StartGoroutine("signature-monitor", func() {
-			ticker := time.NewTicker(10 * time.Second)
-			defer ticker.Stop()
+	cleanupAndCancel := func() {
+		cancel()
+		// 尽快注销签名收集器，阻止后续签名继续进入桥接通道。
+		if r.networkIntegration != nil {
+			if sc := r.networkIntegration.GetSignatureCollector(checkpointHash); sc != nil {
+				sc.Close()
+			}
+			r.networkIntegration.UnregisterSignatureCollector(checkpointHash)
+		}
+	}
 
-			// 添加超时控制，避免无限运行
-			timeout := time.After(5 * time.Minute) // 5分钟后自动退出
+	// 桥接通道：SignatureCollector 写入此通道；signature-bridge 转发到外层的 signatureCh。
+	bridgeCh := make(chan *SignatureResponse, 1000)
 
-			for {
+	startGoroutine := func(name string, fn func()) {
+		if r.resourceMonitor != nil && r.resourceMonitor.goroutineManager != nil {
+			r.resourceMonitor.goroutineManager.StartGoroutine(name, fn)
+			return
+		}
+		go fn()
+	}
+
+	// 启动转发协程：收够 minRequiredSignatures 后立即退出。
+	startGoroutine("signature-bridge", func() {
+		received := make(map[types.Address]struct{}, minRequiredSignatures)
+		timeoutTimer := time.NewTimer(5 * time.Minute) // 兜底：最多等待 5 分钟
+		defer timeoutTimer.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				cleanupAndCancel()
+				return
+			case <-timeoutTimer.C:
+				// 超时兜底：尝试注销收集器，避免后续继续堆积。
+				cleanupAndCancel()
+				r.logger.Debug("签名桥接协程超时，自动退出",
+					"checkpointHash", checkpointHash.String(),
+					"collectedUnique", len(received),
+					"required", minRequiredSignatures)
+				return
+			case response, ok := <-bridgeCh:
+				if !ok {
+					cleanupAndCancel()
+					return
+				}
+				if response == nil || response.Signature == nil {
+					continue
+				}
+
+				// 注意：signatureCh 由外层读取；这里不主动 close，避免影响外层逻辑。
 				select {
-				case <-ticker.C:
-					// 检查收集器状态
-					if r.networkIntegration != nil {
-						// 静默监控，不打印日志
-					}
-				case <-timeout:
-					r.logger.Debug("签名收集监控超时，自动退出",
-						"checkpointHash", checkpointHash.String())
+				case signatureCh <- response:
+				case <-ctx.Done():
+					cleanupAndCancel()
+					return
+				}
+
+				// 统计“唯一验证者”签名数量；达到门限后立即停止。
+				if _, exists := received[response.ValidatorAddr]; !exists {
+					received[response.ValidatorAddr] = struct{}{}
+				}
+				if len(received) >= minRequiredSignatures {
+					// 关键：收够就立刻退出，不等 5 分钟 timeout。
+					r.logger.Debug("签名收集达标，立刻停止签名协程",
+						"checkpointHash", checkpointHash.String(),
+						"collectedUnique", len(received),
+						"required", minRequiredSignatures)
+					cleanupAndCancel()
 					return
 				}
 			}
-		})
-	}
+		}
+	})
+
+	// 注册签名收集器：写入桥接通道 bridgeCh，由 signature-bridge 决定何时退出。
+	r.networkIntegration.RegisterSignatureCollector(
+		checkpointHash,
+		bridgeCh,
+		30*time.Second,
+		minRequiredSignatures,
+	)
+
+	// 启动签名监控协程：只负责“尽快跟随 ctx.Done 退出”，避免 5 分钟超时堆协程。
+	startGoroutine("signature-monitor", func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		timeoutTimer := time.NewTimer(5 * time.Minute)
+		defer timeoutTimer.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-timeoutTimer.C:
+				// 兜底退出：理论上 ctx 应已触发，但保持健壮性。
+				r.logger.Debug("签名收集监控超时，自动退出",
+					"checkpointHash", checkpointHash.String())
+				return
+			case <-ticker.C:
+				// 静默监控：不打印日志，避免高频刷屏。
+			}
+		}
+	})
 
 }
 
