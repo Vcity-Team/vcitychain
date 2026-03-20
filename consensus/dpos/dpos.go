@@ -2479,7 +2479,6 @@ func (r *dposRuntime) getAccountBalance(address types.Address) (*big.Int, error)
 
 			// 检查账户余额是否为空，避免空指针解引用
 			if account == nil || account.Balance == nil {
-				r.logger.Warn("⚠️ 账户或余额为空，返回0余额", "address", address.String())
 				return big.NewInt(0), nil
 			}
 

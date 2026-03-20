@@ -138,7 +138,7 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 
 	// 添加调试日志，确保配置正确读取（使用限频日志避免刷屏）
 	if maxValidators > 0 && len(validators) > maxValidators {
-		d.logOnceWithInterval("get_sorted_validators_truncate", 10*time.Second, "info",
+		d.logOnceWithInterval("get_sorted_validators_truncate", 10*time.Second, "debug",
 			"🔍 [GetSortedValidatorsWithLimit] 截取验证者",
 			"originalCount", len(validators),
 			"maxValidators", maxValidators,

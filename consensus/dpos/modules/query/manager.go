@@ -137,7 +137,7 @@ func (m *Manager) GetCurrentEpochInfo() map[string]interface{} {
 	if m.deps.GetSortedValidatorsWithLimit != nil {
 		dbValidators, err := m.deps.GetSortedValidatorsWithLimit()
 		if err == nil && len(dbValidators) > 0 {
-			m.deps.Logger.Info("📊 [GetCurrentEpochInfo] 开始统计当前epoch验证者出块数",
+			m.deps.Logger.Debug("📊 [GetCurrentEpochInfo] 开始统计当前epoch验证者出块数",
 				"epochNumber", epochNumber,
 				"validatorsCount", len(dbValidators),
 				"blocksProduced", blocksProduced)
@@ -179,7 +179,7 @@ func (m *Manager) GetCurrentEpochInfo() map[string]interface{} {
 				})
 			}
 
-			m.deps.Logger.Info("📊 [GetCurrentEpochInfo] 当前epoch验证者出块统计完成",
+			m.deps.Logger.Debug("📊 [GetCurrentEpochInfo] 当前epoch验证者出块统计完成",
 				"epochNumber", epochNumber,
 				"totalValidators", len(dbValidators),
 				"normalValidators", normalCount,
