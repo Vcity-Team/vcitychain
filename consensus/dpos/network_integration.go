@@ -135,11 +135,16 @@ type SignatureCollector struct {
 	lastActivity   time.Time     // 最后活动时间
 	cleanupTimeout time.Duration // 清理超时时间
 	maxIdleTime    time.Duration // 最大空闲时间
+
+	// 用于快速停止签名收集器的后台 worker，避免依赖轮询/超时退出
+	workerCtx    context.Context
+	workerCancel context.CancelFunc
 }
 
 // NewSignatureCollector 创建新的签名收集器
 func NewSignatureCollector(checkpointHash types.Hash, signatureCh chan *SignatureResponse, timeout time.Duration, requiredCount int, goroutineManager *GoroutineManager) *SignatureCollector {
 	now := time.Now()
+	workerCtx, workerCancel := context.WithCancel(context.Background())
 	return &SignatureCollector{
 		checkpointHash:   checkpointHash,
 		signatureCh:      signatureCh,
@@ -155,6 +160,9 @@ func NewSignatureCollector(checkpointHash types.Hash, signatureCh chan *Signatur
 		lastActivity:     now,
 		cleanupTimeout:   15 * time.Minute, // 15分钟清理超时
 		maxIdleTime:      5 * time.Minute,  // 5分钟最大空闲时间
+
+		workerCtx:     workerCtx,
+		workerCancel: workerCancel,
 	}
 }
 
@@ -204,6 +212,8 @@ func (sc *SignatureCollector) AddSignature(response *SignatureResponse) bool {
 	sc.mutex.Unlock()
 
 	if completed {
+		// 立即停止对应 collector 的后台 worker（cleanup/status-check），避免 goroutine 继续堆积。
+		sc.Close()
 	}
 
 	// 尝试发送到签名通道，使用非阻塞方式
@@ -293,6 +303,9 @@ func (sc *SignatureCollector) Close() {
 	sc.mutex.Lock()
 	defer sc.mutex.Unlock()
 	sc.isActive = false
+	if sc.workerCancel != nil {
+		sc.workerCancel()
+	}
 }
 
 // NewNetworkIntegration 创建网络集成管理器

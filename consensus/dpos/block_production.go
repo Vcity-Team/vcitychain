@@ -78,36 +78,6 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 				// 立即调用produceBlock，不阻塞出块流程
 				if err := r.produceBlock(); err != nil {
 					r.logger.Error("出块失败", "error", err)
-				} else {
-					// 异步收集日志信息（不阻塞出块流程）
-					go func() {
-						var genesisStr string
-						var validators []string
-						if r.config != nil && r.config.blockScheduler != nil {
-							genesisStr = r.config.blockScheduler.GetGenesisTime().Format("2006-01-02 15:04:05.000")
-							if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-								for _, d := range r.delegates {
-									info := dposInstance.getValidatorFaultInfo(d.Address)
-									isFaulty := false
-									if v, ok := info["isFaulty"].(bool); ok {
-										isFaulty = v
-									}
-									if !isFaulty {
-										validators = append(validators, d.Address.String())
-									}
-								}
-							} else {
-								for _, d := range r.delegates {
-									validators = append(validators, d.Address.String())
-								}
-							}
-						}
-						r.logOnceWithInterval("should_produce_start", 1*time.Second, "info",
-							"✅ shouldProduceBlockNow返回true，开始出块",
-							"timestamp", time.Now().Format("15:04:05.000"),
-							"genesisTime", genesisStr,
-							"validatorsOrdered", validators)
-					}()
 				}
 			} else {
 				// 获取从数据库读取的验证者集合

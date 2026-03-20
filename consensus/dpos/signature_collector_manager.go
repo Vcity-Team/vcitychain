@@ -45,12 +45,12 @@ func (scm *SignatureCollectorManager) RegisterSignatureCollector(checkpointHash 
 	// 启动清理工作器
 	if scm.goroutineManager != nil {
 		scm.goroutineManager.StartGoroutine("collector-cleanup", func() {
-			scm.startCollectorCleanupWorker(context.Background(), checkpointHash)
+			scm.startCollectorCleanupWorker(collector.workerCtx, checkpointHash)
 		})
 
 		// 启动定期状态检查
 		scm.goroutineManager.StartGoroutine("collector-status-check", func() {
-			scm.monitorCollectorStatus(checkpointHash)
+			scm.monitorCollectorStatus(collector.workerCtx, checkpointHash)
 		})
 	}
 }
@@ -64,9 +64,16 @@ func (scm *SignatureCollectorManager) GetSignatureCollector(checkpointHash types
 
 // UnregisterSignatureCollector 注销签名收集器
 func (scm *SignatureCollectorManager) UnregisterSignatureCollector(checkpointHash types.Hash) {
+	var collector *SignatureCollector
 	scm.mutex.Lock()
-	defer scm.mutex.Unlock()
+	collector = scm.collectors[checkpointHash]
 	delete(scm.collectors, checkpointHash)
+	scm.mutex.Unlock()
+
+	// 确保后台 worker 立刻退出（避免只从 map 删除但 ctx 未取消导致延迟退出）
+	if collector != nil {
+		collector.Close()
+	}
 }
 
 // ForwardSignatureResponse 转发签名响应到相应的收集器
@@ -154,7 +161,7 @@ func (scm *SignatureCollectorManager) startCollectorCleanupWorker(ctx context.Co
 }
 
 // monitorCollectorStatus 监控收集器状态
-func (scm *SignatureCollectorManager) monitorCollectorStatus(checkpointHash types.Hash) {
+func (scm *SignatureCollectorManager) monitorCollectorStatus(ctx context.Context, checkpointHash types.Hash) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -162,6 +169,8 @@ func (scm *SignatureCollectorManager) monitorCollectorStatus(checkpointHash type
 
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-timeout:
 			return
 		case <-ticker.C:

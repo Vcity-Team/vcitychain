@@ -91,6 +91,7 @@ type dposRuntime struct {
 	// 防重复日志机制
 	lastLogTime map[string]time.Time
 	logMutex    sync.RWMutex
+
 }
 
 // getBLSCommittee 返回用于 BLS 签名的验证者委员会
