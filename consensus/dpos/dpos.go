@@ -633,6 +633,10 @@ func (d *DPoS) Start() error {
 		}
 		d.logger.Debug("✅ DPoS runtime启动成功")
 
+		// 当与其它验证者失联（syncer 无 best peer）时，自动重建 syncer 网络同步链路。
+		// 同时暂停出块，避免孤岛节点继续出块造成分叉。
+		d.startSyncerIsolationWatchdog(5*time.Second, 3, 10*time.Second)
+
 		// 新节点启动后，主动查询其他节点的待处理签名请求
 		go func() {
 			// 等待一段时间让网络连接稳定
@@ -746,6 +750,124 @@ func (d *DPoS) Close() error {
 		UnregisterDPoSInstance(key)
 		d.logger.Info("DPoS实例已从全局注册表中注销", "address", key)
 	}
+
+	return nil
+}
+
+// startSyncerIsolationWatchdog detects "no best peer" isolation and restarts syncer network chain.
+// Goal: avoid孤岛节点持续出块导致分叉，并能在网络恢复后继续参与出块。
+func (d *DPoS) startSyncerIsolationWatchdog(checkInterval time.Duration, requireConsecutive int, maxWait time.Duration) {
+	if d.runtime == nil {
+		return
+	}
+
+	go func() {
+		ticker := time.NewTicker(checkInterval)
+		defer ticker.Stop()
+
+		consecutiveDown := 0
+		lastRestartAt := time.Time{}
+
+		for {
+			select {
+			case <-d.closeCh:
+				return
+			case <-ticker.C:
+				// 冷却期：避免频繁重启/抖动
+				if !lastRestartAt.IsZero() && time.Since(lastRestartAt) < 30*time.Second {
+					continue
+				}
+
+				if d.syncer == nil {
+					consecutiveDown++
+				} else if !d.syncer.HasSyncPeer() {
+					consecutiveDown++
+				} else {
+					consecutiveDown = 0
+				}
+
+				if consecutiveDown < requireConsecutive {
+					continue
+				}
+
+				// 尝试抢占重启权：已经在重启就不要再重启
+				if !d.runtime.networkRestarting.CompareAndSwap(false, true) {
+					continue
+				}
+
+				lastRestartAt = time.Now()
+				d.logger.Warn("🌐 syncer 进入孤岛状态，重启网络同步链路",
+					"consecutiveDown", consecutiveDown,
+					"checkInterval", checkInterval.String(),
+					"maxWait", maxWait.String())
+
+				// 重建 syncer
+				if err := d.restartSyncerNetwork("isolation-watchdog"); err != nil {
+					d.logger.Error("❌ 重启 syncer 失败", "error", err)
+					// 失败也先等一小段，避免疯狂重启
+					time.Sleep(5 * time.Second)
+					d.runtime.networkRestarting.Store(false)
+					consecutiveDown = 0
+					continue
+				}
+
+				// 等待网络恢复：best peer 连续可用才解除暂停（避免重连瞬断）
+				deadline := time.Now().Add(maxWait)
+				stableCount := 0
+				for time.Now().Before(deadline) {
+					if d.syncer != nil && d.syncer.HasSyncPeer() {
+						stableCount++
+						if stableCount >= 2 {
+							break
+						}
+					} else {
+						stableCount = 0
+					}
+					time.Sleep(2 * time.Second)
+				}
+
+				d.runtime.networkRestarting.Store(false)
+				consecutiveDown = 0
+			}
+		}
+	}()
+}
+
+func (d *DPoS) restartSyncerNetwork(reason string) error {
+	// 1) 停掉旧 syncer
+	old := d.syncer
+	if old != nil {
+		_ = old.Close()
+	}
+
+	// 2) 创建新 syncer（注意：不能复用旧实例，因为 Close 可能影响内部通道/状态）
+	blockTimeout := d.config.BlockTime.Duration * 3
+	if blockTimeout == 0 {
+		blockTimeout = 9 * time.Second
+	}
+
+	newSyncer := syncer.NewSyncer(
+		d.config.Logger.Named("syncer"),
+		d.config.Network,
+		d.config.Blockchain,
+		blockTimeout,
+		d.config.ConsensusSwitchHeight,
+	)
+
+	d.syncer = newSyncer
+
+	// 3) 启动新 syncer
+	if err := newSyncer.Start(); err != nil {
+		// 如果是 topic 冲突，按你们现有逻辑继续运行
+		if strings.Contains(err.Error(), "topic already exists") {
+			d.logger.Warn("⚠️ 重启 syncer 遇到 topic 冲突，但继续运行", "error", err, "reason", reason)
+		} else {
+			return fmt.Errorf("failed to start restarted syncer: %w", err)
+		}
+	}
+
+	// 4) 确保状态广播开启
+	newSyncer.EnablePublishingPeerStatus()
 
 	return nil
 }

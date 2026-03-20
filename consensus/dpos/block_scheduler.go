@@ -204,6 +204,11 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			"timestamp", time.Now().Format("15:04:05.000"))
 		return false
 	}
+
+	// 当 watchdog 触发“重启网络同步链路”时，暂停本地出块
+	if r.networkRestarting.Load() {
+		return false
+	}
 	// 检查是否落后，如果落后则先同步再出块
 	if r.config.dposBackend != nil {
 		networkLatest := r.getNetworkLatestBlockNumber()

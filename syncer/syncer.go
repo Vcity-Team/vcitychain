@@ -51,6 +51,9 @@ type syncer struct {
 	// Channel to notify Sync that a new status arrived
 	newStatusCh chan struct{}
 
+	// stopCh is used to stop the Sync loop cleanly (for "network restart").
+	stopCh chan struct{}
+
 	// 新增：共识切换高度
 	consensusSwitchHeight uint64
 
@@ -74,6 +77,7 @@ func NewSyncer(
 		syncPeerClient:        NewSyncPeerClient(logger, network, blockchain),
 		blockTimeout:          blockTimeout,
 		newStatusCh:           make(chan struct{}),
+		stopCh:                make(chan struct{}),
 		peerMap:               new(PeerMap),
 		consensusSwitchHeight: consensusSwitchHeight,
 
@@ -81,6 +85,8 @@ func NewSyncer(
 		processedTxs: make(map[types.Hash]bool),
 	}
 }
+
+var errSyncerStopped = errors.New("syncer stopped")
 
 // Start starts goroutine processes
 func (s *syncer) Start() error {
@@ -100,7 +106,13 @@ func (s *syncer) Start() error {
 
 // Close terminates goroutine processes
 func (s *syncer) Close() error {
-	close(s.newStatusCh)
+	// Stop sync loop. Do not close newStatusCh; it is used as a wake-up signal.
+	select {
+	case <-s.stopCh:
+		// already stopped
+	default:
+		close(s.stopCh)
+	}
 
 	if err := s.syncPeerService.Close(); err != nil {
 		return err
@@ -274,8 +286,13 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 	skipList := make(map[peer.ID]bool)
 
 	for {
-		// Wait for a new event to arrive
-		<-s.newStatusCh
+		// Wait for a new event to arrive (or stop for "network restart")
+		select {
+		case <-s.newStatusCh:
+			// continue
+		case <-s.stopCh:
+			return errSyncerStopped
+		}
 
 		// fetch local latest block
 		if header := s.blockchain.Header(); header != nil {

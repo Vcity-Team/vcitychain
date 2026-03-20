@@ -24,7 +24,7 @@ import (
 
 const (
 	SyncPeerClientLoggerName = "sync-peer-client"
-	defaultTimeoutForStatus  = 2 * time.Second // 修改为2秒，与区块时间保持一致
+	defaultTimeoutForStatus  = 5 * time.Second // 与网络抖动更容忍，减少 DeadlineExceeded 跳过可用 peer
 )
 
 type syncPeerClient struct {

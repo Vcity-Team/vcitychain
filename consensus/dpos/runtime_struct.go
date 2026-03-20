@@ -2,6 +2,7 @@ package dpos
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/bls"
@@ -50,6 +51,10 @@ type dposRuntime struct {
 
 	// 控制通道
 	closeCh chan struct{}
+
+	// 网络重启/孤岛处理标志：当触发“重建 syncer/网络同步链路”时暂停出块
+	// 避免节点在孤岛期间继续本地出块造成分叉，重连后再恢复出块
+	networkRestarting atomic.Bool
 
 	// 锁
 	lock sync.RWMutex
