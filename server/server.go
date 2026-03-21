@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	_ "net/http/pprof" // registers /debug/pprof on DefaultServeMux for optional diagnostics server
 	"os"
 	"path/filepath"
 	"strings"
@@ -119,6 +120,7 @@ type Server struct {
 	txpool *txpool.TxPool
 
 	prometheusServer *http.Server
+	pprofServer      *http.Server
 
 	// secrets manager
 	secretsManager secrets.SecretsManager
@@ -452,6 +454,10 @@ func NewServer(config *Config) (*Server, error) {
 		}
 
 		m.prometheusServer = m.startPrometheusServer(config.Telemetry.PrometheusAddr)
+	}
+
+	if config.PprofAddr != nil {
+		m.pprofServer = m.startPprofServer(config.PprofAddr)
 	}
 
 	// Set up datadog profiler
@@ -1447,6 +1453,12 @@ func (s *Server) Close() {
 		}
 	}
 
+	if s.pprofServer != nil {
+		if err := s.pprofServer.Shutdown(context.Background()); err != nil {
+			s.logger.Error("pprof HTTP server shutdown error", err)
+		}
+	}
+
 	// Close the txpool's main loop
 	s.txpool.Close()
 
@@ -1478,6 +1490,26 @@ func (s *Server) startPrometheusServer(listenAddr *net.TCPAddr) *http.Server {
 		if err := srv.ListenAndServe(); err != nil {
 			if !errors.Is(err, http.ErrServerClosed) {
 				s.logger.Error("Prometheus HTTP server ListenAndServe", "err", err)
+			}
+		}
+	}()
+
+	return srv
+}
+
+func (s *Server) startPprofServer(listenAddr *net.TCPAddr) *http.Server {
+	srv := &http.Server{
+		Addr:              listenAddr.String(),
+		Handler:           nil, // DefaultServeMux (pprof routes registered by net/http/pprof init)
+		ReadHeaderTimeout: 60 * time.Second,
+	}
+
+	s.logger.Info("pprof HTTP server started", "addr", listenAddr.String())
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil {
+			if !errors.Is(err, http.ErrServerClosed) {
+				s.logger.Error("pprof HTTP server ListenAndServe", "err", err)
 			}
 		}
 	}()

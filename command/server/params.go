@@ -21,6 +21,7 @@ const (
 	dataDirFlag                  = "data-dir"
 	libp2pAddressFlag            = "libp2p"
 	prometheusAddressFlag        = "prometheus"
+	pprofAddressFlag             = "pprof"
 	natFlag                      = "nat"
 	dnsFlag                      = "dns"
 	sealFlag                     = "seal"
@@ -82,6 +83,7 @@ type serverParams struct {
 
 	libp2pAddress     *net.TCPAddr
 	prometheusAddress *net.TCPAddr
+	pprofAddress      *net.TCPAddr
 	natAddress        net.IP
 	dnsAddress        multiaddr.Multiaddr
 	grpcAddress       *net.TCPAddr
@@ -151,6 +153,10 @@ func (p *serverParams) isPrometheusAddressSet() bool {
 	return p.rawConfig.Telemetry.PrometheusAddr != ""
 }
 
+func (p *serverParams) isPprofAddressSet() bool {
+	return p.rawConfig.PprofAddr != ""
+}
+
 func (p *serverParams) isNATAddressSet() bool {
 	return p.rawConfig.Network.NatAddr != ""
 }
@@ -200,6 +206,7 @@ func (p *serverParams) generateConfig() *server.Config {
 		},
 		GRPCAddr:   p.grpcAddress,
 		LibP2PAddr: p.libp2pAddress,
+		PprofAddr:  p.pprofAddress,
 		Telemetry: &server.Telemetry{
 			PrometheusAddr: p.prometheusAddress,
 		},

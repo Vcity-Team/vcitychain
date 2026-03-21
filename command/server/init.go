@@ -389,6 +389,10 @@ func (p *serverParams) initAddresses() error {
 		return err
 	}
 
+	if err := p.initPprofAddress(); err != nil {
+		return err
+	}
+
 	if err := p.initLibp2pAddress(); err != nil {
 		return err
 	}
@@ -418,6 +422,24 @@ func (p *serverParams) initPrometheusAddress() error {
 	if p.prometheusAddress, parseErr = helper.ResolveAddr(
 		p.rawConfig.Telemetry.PrometheusAddr,
 		helper.AllInterfacesBinding,
+	); parseErr != nil {
+		return parseErr
+	}
+
+	return nil
+}
+
+func (p *serverParams) initPprofAddress() error {
+	if !p.isPprofAddressSet() {
+		return nil
+	}
+
+	var parseErr error
+
+	// 仅写端口时默认绑定本机回环，避免误把 pprof 暴露到公网
+	if p.pprofAddress, parseErr = helper.ResolveAddr(
+		p.rawConfig.PprofAddr,
+		helper.LocalHostBinding,
 	); parseErr != nil {
 		return parseErr
 	}

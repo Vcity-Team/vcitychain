@@ -22,6 +22,8 @@ type Config struct {
 	JSONRPC    *JSONRPC
 	GRPCAddr   *net.TCPAddr
 	LibP2PAddr *net.TCPAddr
+	// PprofAddr 非 nil 时在启动阶段监听该地址提供 /debug/pprof（仅用于诊断）
+	PprofAddr *net.TCPAddr
 
 	PriceLimit         uint64
 	MaxAccountEnqueued uint64

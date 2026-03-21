@@ -83,6 +83,14 @@ func setFlags(cmd *cobra.Command) {
 	)
 
 	cmd.Flags().StringVar(
+		&params.rawConfig.PprofAddr,
+		pprofAddressFlag,
+		"",
+		"go net/http/pprof listen address when non-empty (e.g. 127.0.0.1:6060). "+
+			"If only :port is given, binds to 127.0.0.1. Do not expose to the public internet",
+	)
+
+	cmd.Flags().StringVar(
 		&params.rawConfig.Network.NatAddr,
 		natFlag,
 		"",

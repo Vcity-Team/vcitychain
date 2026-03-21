@@ -21,6 +21,8 @@ type Config struct {
 	BlockGasTarget           string     `json:"block_gas_target" yaml:"block_gas_target"`
 	GRPCAddr                 string     `json:"grpc_addr" yaml:"grpc_addr"`
 	JSONRPCAddr              string     `json:"jsonrpc_addr" yaml:"jsonrpc_addr"`
+	// PprofAddr 非空时在本地址启动 net/http/pprof（建议 127.0.0.1:端口，勿对公网暴露）
+	PprofAddr                string     `json:"pprof_addr" yaml:"pprof_addr"`
 	Telemetry                *Telemetry `json:"telemetry" yaml:"telemetry"`
 	Network                  *Network   `json:"network" yaml:"network"`
 	ShouldSeal               bool       `json:"seal" yaml:"seal"`
