@@ -111,8 +111,10 @@ type SyncPeerClient interface {
 	GetPeerStatus(id peer.ID) (*NoForkPeer, error)
 	// GetConnectedPeerStatuses fetches the statuses of all connecting peers
 	GetConnectedPeerStatuses() []*NoForkPeer
-	// GetBlocks returns a stream of blocks from given height to peer's latest
-	GetBlocks(peer.ID, uint64, time.Duration) (<-chan *types.Block, error)
+	// GetBlocks returns a stream of blocks from given height to peer's latest.
+	// Callers must invoke the returned CancelFunc when done (e.g. defer cancel()) so the
+	// producer can exit if the consumer stops reading.
+	GetBlocks(peer.ID, uint64, time.Duration) (<-chan *types.Block, context.CancelFunc, error)
 	// GetPeerStatusUpdateCh returns a channel of peer's status update
 	GetPeerStatusUpdateCh() <-chan *NoForkPeer
 	// GetPeerConnectionUpdateEventCh returns peer's connection change event

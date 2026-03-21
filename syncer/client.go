@@ -534,14 +534,14 @@ func (m *syncPeerClient) GetBlocks(
 	peerID peer.ID,
 	from uint64,
 	timeoutPerBlock time.Duration,
-) (<-chan *types.Block, error) {
+) (<-chan *types.Block, context.CancelFunc, error) {
 	m.logger.Debug("请求区块", "peer", peerID.String(), "起始高度", from)
 
 	// 方案C：同一peer同一时间只允许一个GetBlocks流，避免重连/补拉叠加导致goroutine爆炸
 	m.inflightMu.Lock()
 	if _, exists := m.inflightGetBlocks[peerID]; exists {
 		m.inflightMu.Unlock()
-		return nil, fmt.Errorf("GetBlocks already in progress for peer %s", peerID.String())
+		return nil, nil, fmt.Errorf("GetBlocks already in progress for peer %s", peerID.String())
 	}
 	m.inflightGetBlocks[peerID] = struct{}{}
 	m.inflightMu.Unlock()
@@ -554,7 +554,7 @@ func (m *syncPeerClient) GetBlocks(
 		m.inflightMu.Lock()
 		delete(m.inflightGetBlocks, peerID)
 		m.inflightMu.Unlock()
-		return nil, m.ctx.Err()
+		return nil, nil, m.ctx.Err()
 	}
 
 	clt, err := m.newSyncPeerClient(peerID)
@@ -564,7 +564,7 @@ func (m *syncPeerClient) GetBlocks(
 		delete(m.inflightGetBlocks, peerID)
 		m.inflightMu.Unlock()
 		m.logger.Error("创建同步客户端失败", "peer", peerID.String(), "error", err)
-		return nil, fmt.Errorf("failed to create sync peer client: %w", err)
+		return nil, nil, fmt.Errorf("failed to create sync peer client: %w", err)
 	}
 
 	ctx, cancel := context.WithCancel(m.ctx)
@@ -579,7 +579,7 @@ func (m *syncPeerClient) GetBlocks(
 		m.inflightMu.Unlock()
 		cancel()
 		m.logger.Error("打开区块流失败", "peer", peerID.String(), "error", err)
-		return nil, fmt.Errorf("failed to open GetBlocks stream: %w", err)
+		return nil, nil, fmt.Errorf("failed to open GetBlocks stream: %w", err)
 	}
 
 	// stream建立完成，释放并发信号量（后续收块在独立goroutine中进行）
@@ -627,8 +627,12 @@ func (m *syncPeerClient) GetBlocks(
 					return
 				}
 
-				blockCh <- block
-				resetTimer()
+				select {
+				case blockCh <- block:
+					resetTimer()
+				case <-ctx.Done():
+					return
+				}
 			case err := <-streamErrorCh:
 				if err != nil {
 					m.logger.Error("failed to get block from gRPC stream", "peer", peerID, "err", err)
@@ -655,7 +659,7 @@ func (m *syncPeerClient) GetBlocks(
 		}
 	}()
 
-	return blockCh, nil
+	return blockCh, cancel, nil
 }
 
 // newSyncPeerClient creates gRPC client
@@ -713,7 +717,11 @@ func blockStreamToChannel(ctx context.Context, stream proto.SyncPeer_GetBlocksCl
 			}
 
 			metrics.SetGauge([]string{syncerMetrics, "ingress_bytes"}, float32(len(protoBlock.Block)))
-			blockCh <- block
+			select {
+			case blockCh <- block:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 

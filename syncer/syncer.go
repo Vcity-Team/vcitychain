@@ -345,11 +345,12 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 
 	s.logger.Debug("🔍 准备获取区块流", "peer", peerID.String(), "从高度", localLatest+1, "到高度", peerLatestBlock)
 
-	blockCh, err := s.syncPeerClient.GetBlocks(peerID, localLatest+1, s.blockTimeout)
+	blockCh, cancelGetBlocks, err := s.syncPeerClient.GetBlocks(peerID, localLatest+1, s.blockTimeout)
 	if err != nil {
 		s.logger.Error("获取区块流失败", "peer", peerID.String(), "error", err)
 		return 0, false, err
 	}
+	defer cancelGetBlocks()
 
 	// Create a blockchain subscription for the sync progression and start tracking
 	subscription := s.blockchain.SubscribeEvents()
@@ -442,6 +443,8 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				var missingParent *blockchain.MissingParentError
 				if errors.As(err, &missingParent) && missingParent.ParentNumber < block.Number() {
 					s.logger.Warn("⚠️ 缺父块（可能分叉），尝试从 peer 补拉直到共同祖先", "peer", peerID.String()[:16], "blockNumber", block.Number(), "parentNumber", missingParent.ParentNumber, "parentHash", missingParent.ParentHash.String()[:18])
+					// Stop the GetBlocks producer before opening fill-gap stream (consumer stops reading blockCh).
+					cancelGetBlocks()
 					_ = s.syncPeerClient.CloseStream(peerID)
 					fillFrom := missingParent.ParentNumber
 					var fillLast uint64
@@ -506,10 +509,11 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 // 遇 MissingParent 时返回 ErrNeedFillFrom，由调用方从更早高度重试，直到从共同祖先开始顺序写回，避免递归开多流导致 stream reset 与协程暴涨。
 func (s *syncer) fillGapFromPeer(peerID peer.ID, from uint64, peerLatestBlock uint64,
 	newBlockCallback func(*types.FullBlock) bool) (uint64, error) {
-	blockCh, err := s.syncPeerClient.GetBlocks(peerID, from, s.blockTimeout)
+	blockCh, cancelGetBlocks, err := s.syncPeerClient.GetBlocks(peerID, from, s.blockTimeout)
 	if err != nil {
 		return 0, fmt.Errorf("get blocks for fill gap: %w", err)
 	}
+	defer cancelGetBlocks()
 	defer func() { _ = s.syncPeerClient.CloseStream(peerID) }()
 
 	var lastReceivedNumber uint64

@@ -510,8 +510,9 @@ func Test_syncPeerClient_GetBlocks(t *testing.T) {
 
 	assert.NoError(t, err)
 
-	blockStream, err := client.GetBlocks(peerSrv.AddrInfo().ID, syncFrom, 5*time.Second)
+	blockStream, cancel, err := client.GetBlocks(peerSrv.AddrInfo().ID, syncFrom, 5*time.Second)
 	assert.NoError(t, err)
+	defer cancel()
 
 	blocks := make([]*types.Block, 0, peerLatest)
 	for block := range blockStream {
