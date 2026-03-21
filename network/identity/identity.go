@@ -12,6 +12,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/network/proto"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	rawGrpc "google.golang.org/grpc"
 )
 
 const PeerID = "peerID"
@@ -26,8 +27,8 @@ var (
 type networkingServer interface {
 	// PROTOCOL MANIPULATION //
 
-	// NewIdentityClient returns an identity gRPC client connection
-	NewIdentityClient(peerID peer.ID) (proto.IdentityClient, error)
+	// NewIdentityClient returns a gRPC ClientConn (caller must Close) and IdentityClient.
+	NewIdentityClient(peerID peer.ID) (*rawGrpc.ClientConn, proto.IdentityClient, error)
 
 	// PEER MANIPULATION //
 
@@ -159,12 +160,15 @@ func (i *IdentityService) disconnectFromPeer(peerID peer.ID, reason string) {
 
 // handleConnected handles new network connections (handshakes)
 func (i *IdentityService) handleConnected(peerID peer.ID, direction network.Direction) error {
-	clt, clientErr := i.baseServer.NewIdentityClient(peerID)
+	conn, clt, clientErr := i.baseServer.NewIdentityClient(peerID)
 	if clientErr != nil {
 		return fmt.Errorf(
 			"unable to create new identity client connection, %w",
 			clientErr,
 		)
+	}
+	if conn != nil {
+		defer func() { _ = conn.Close() }()
 	}
 
 	// Construct the response status

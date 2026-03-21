@@ -196,6 +196,11 @@ type PeerConnInfo struct {
 
 // addProtocolStream adds a protocol stream
 func (pci *PeerConnInfo) addProtocolStream(protocol string, stream *rawGrpc.ClientConn) {
+	// 同一 protocol 再次写入时必须先关闭旧 ClientConn，否则 grpc.Dial 产生的 goroutine 会泄漏
+	if old := pci.protocolStreams[protocol]; old != nil {
+		_ = old.Close()
+	}
+
 	// 检查流数量限制
 	if len(pci.protocolStreams) >= pci.maxStreams {
 		// 关闭最旧的流

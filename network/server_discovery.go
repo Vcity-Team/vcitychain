@@ -42,9 +42,8 @@ func (s *Server) GetBootnodeConnCount() int64 {
 	return s.bootnodes.getBootnodeConnCount()
 }
 
-// getProtoStream returns an active protocol stream if present, otherwise
-// it returns nil
-func (s *Server) getProtoStream(protocol string, peerID peer.ID) *rawGrpc.ClientConn {
+// GetProtocolStream returns an active saved gRPC ClientConn for the peer/protocol, or nil.
+func (s *Server) GetProtocolStream(protocol string, peerID peer.ID) *rawGrpc.ClientConn {
 	s.peersLock.Lock()
 	defer s.peersLock.Unlock()
 
@@ -70,7 +69,7 @@ func (s *Server) NewDiscoveryClient(peerID peer.ID) (proto.DiscoveryClient, erro
 	}
 
 	// Check if there is an active stream connection already
-	if protoStream := s.getProtoStream(common.DiscProto, peerID); protoStream != nil {
+	if protoStream := s.GetProtocolStream(common.DiscProto, peerID); protoStream != nil {
 		return proto.NewDiscoveryClient(protoStream), nil
 	}
 

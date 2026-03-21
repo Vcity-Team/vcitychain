@@ -25,6 +25,8 @@ import (
 const (
 	SyncPeerClientLoggerName = "sync-peer-client"
 	defaultTimeoutForStatus  = 5 * time.Second // 对端短暂抖动更宽容，减少误判为不可用peer
+	// 批量拉取 peer status 时的 worker 数，与 ioSem 宽度对齐，避免为每个 peer 各起一个 goroutine
+	maxPeerStatusListWorkers = 16
 )
 
 type syncPeerClient struct {
@@ -241,35 +243,43 @@ func (m *syncPeerClient) GetPeerStatus(peerID peer.ID) (*NoForkPeer, error) {
 
 // GetConnectedPeerStatuses fetches the statuses of all connecting peers
 func (m *syncPeerClient) GetConnectedPeerStatuses() []*NoForkPeer {
+	ps := m.network.Peers()
+	if len(ps) == 0 {
+		return nil
+	}
+
+	workerCount := maxPeerStatusListWorkers
+	if len(ps) < workerCount {
+		workerCount = len(ps)
+	}
+
+	jobs := make(chan *network.PeerConnInfo, len(ps))
+	for _, p := range ps {
+		jobs <- p
+	}
+	close(jobs)
+
 	var (
-		ps            = m.network.Peers()
 		syncPeers     = make([]*NoForkPeer, 0, len(ps))
 		syncPeersLock sync.Mutex
 		wg            sync.WaitGroup
 	)
 
-	for _, p := range ps {
-		p := p
-
+	for w := 0; w < workerCount; w++ {
 		wg.Add(1)
-
 		go func() {
 			defer wg.Done()
-
-			peerID := p.Info.ID
-
-			status, err := m.GetPeerStatus(peerID)
-			if err != nil {
-				m.logger.Warn("failed to get status from a peer, skip", "id", peerID, "err", err)
-
-				return //Skip appending nil status
+			for p := range jobs {
+				peerID := p.Info.ID
+				status, err := m.GetPeerStatus(peerID)
+				if err != nil {
+					m.logger.Warn("failed to get status from a peer, skip", "id", peerID, "err", err)
+					continue
+				}
+				syncPeersLock.Lock()
+				syncPeers = append(syncPeers, status)
+				syncPeersLock.Unlock()
 			}
-
-			syncPeersLock.Lock()
-
-			syncPeers = append(syncPeers, status)
-
-			syncPeersLock.Unlock()
 		}()
 	}
 
@@ -664,6 +674,10 @@ func (m *syncPeerClient) GetBlocks(
 
 // newSyncPeerClient creates gRPC client
 func (m *syncPeerClient) newSyncPeerClient(peerID peer.ID) (proto.SyncPeerClient, error) {
+	if existing := m.network.GetProtocolStream(syncerProto, peerID); existing != nil {
+		return proto.NewSyncPeerClient(existing), nil
+	}
+
 	conn, err := m.network.NewProtoConnection(syncerProto, peerID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open a stream, err %w", err)

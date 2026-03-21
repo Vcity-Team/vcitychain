@@ -53,6 +53,8 @@ type Network interface {
 	// NewProtoConnection opens up a new stream on the set protocol to the peer,
 	// and returns a reference to the connection
 	NewProtoConnection(protocol string, peerID peer.ID) (*rawGrpc.ClientConn, error)
+	// GetProtocolStream returns a previously saved gRPC ClientConn for peer/protocol, or nil.
+	GetProtocolStream(protocol string, peerID peer.ID) *rawGrpc.ClientConn
 	// NewTopic Creates New Topic for gossip
 	NewTopic(protoID string, obj proto.Message) (*network.Topic, error)
 	// IsConnected returns the node is connecting to the peer associated with the given ID

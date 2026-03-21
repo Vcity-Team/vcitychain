@@ -67,7 +67,7 @@ func (m *MockNetworkingServer) GetMockPeerMetrics() *MockPeerMetrics {
 
 // Define the mock hooks //
 // Required for Identity
-type newIdentityClientDelegate func(peer.ID) (proto.IdentityClient, error)
+type newIdentityClientDelegate func(peer.ID) (*grpc.ClientConn, proto.IdentityClient, error)
 type disconnectFromPeerDelegate func(peer.ID, string)
 type addPeerDelegate func(peer.ID, network.Direction)
 type updatePendingConnCountDelegate func(int64, network.Direction)
@@ -98,12 +98,12 @@ func (m *MockNetworkingServer) HookTemporaryDialPeer(fn temporaryDialPeerDelegat
 	m.temporaryDialPeerFn = fn
 }
 
-func (m *MockNetworkingServer) NewIdentityClient(peerID peer.ID) (proto.IdentityClient, error) {
+func (m *MockNetworkingServer) NewIdentityClient(peerID peer.ID) (*grpc.ClientConn, proto.IdentityClient, error) {
 	if m.newIdentityClientFn != nil {
 		return m.newIdentityClientFn(peerID)
 	}
 
-	return m.mockIdentityClient, nil
+	return nil, m.mockIdentityClient, nil
 }
 
 func (m *MockNetworkingServer) HookNewIdentityClient(fn newIdentityClientDelegate) {

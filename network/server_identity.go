@@ -17,16 +17,15 @@ import (
 	rawGrpc "google.golang.org/grpc"
 )
 
-// NewIdentityClient returns a new identity service client connection
-func (s *Server) NewIdentityClient(peerID peer.ID) (proto.IdentityClient, error) {
-	// Create a new stream connection and return it
+// NewIdentityClient returns a new identity service client over a dedicated libp2p stream.
+// The caller must Close the returned ClientConn after the handshake (or on error paths).
+func (s *Server) NewIdentityClient(peerID peer.ID) (*rawGrpc.ClientConn, proto.IdentityClient, error) {
 	protoStream, err := s.NewProtoConnection(common.IdentityProto, peerID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	// Identity protocol connections are temporary and not saved anywhere
-	return proto.NewIdentityClient(protoStream), nil
+	return protoStream, proto.NewIdentityClient(protoStream), nil
 }
 
 // AddPeer adds a new peer to the networking server's peer list,
