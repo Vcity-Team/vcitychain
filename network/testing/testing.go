@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/Vcity-Team/vcitychain/network/common"
 	"github.com/Vcity-Team/vcitychain/network/event"
 	"github.com/Vcity-Team/vcitychain/network/proto"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -32,7 +33,8 @@ type MockNetworkingServer struct {
 	hasFreeConnectionSlotFn  hasFreeConnectionSlotDelegate
 
 	// Discovery Hooks
-	newDiscoveryClientFn       newDiscoveryClientDelegate
+	newDiscoveryClientFn         newDiscoveryClientDelegate
+	openDiscoveryTransportFn     openDiscoveryTransportDelegate
 	getRandomBootnodeFn        getRandomBootnodeDelegate
 	getBootnodeConnCountFn     getBootnodeConnCountDelegate
 	closeProtocolStreamFn      closeProtocolStreamDelegate
@@ -79,6 +81,7 @@ type hasFreeConnectionSlotDelegate func(network.Direction) bool
 type getRandomBootnodeDelegate func() *peer.AddrInfo
 type getBootnodeConnCountDelegate func() int64
 type newDiscoveryClientDelegate func(peer.ID) (proto.DiscoveryClient, error)
+type openDiscoveryTransportDelegate func(peer.ID) (proto.DiscoveryClient, *grpc.ClientConn, common.DiscoveryTransportKind, error)
 type closeProtocolStreamDelegate func(string, peer.ID) error
 type addToPeerStoreDelegate func(*peer.AddrInfo)
 type removeFromPeerStoreDelegate func(peerInfo *peer.AddrInfo)
@@ -208,6 +211,30 @@ func (m *MockNetworkingServer) NewDiscoveryClient(peerID peer.ID) (proto.Discove
 
 func (m *MockNetworkingServer) HookNewDiscoveryClient(fn newDiscoveryClientDelegate) {
 	m.newDiscoveryClientFn = fn
+}
+
+func (m *MockNetworkingServer) OpenDiscoveryTransport(
+	peerID peer.ID,
+) (proto.DiscoveryClient, *grpc.ClientConn, common.DiscoveryTransportKind, error) {
+	if m.openDiscoveryTransportFn != nil {
+		return m.openDiscoveryTransportFn(peerID)
+	}
+
+	if m.newDiscoveryClientFn != nil {
+		clt, err := m.newDiscoveryClientFn(peerID)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+
+		// Simulates a stream registered in the peer map: teardown uses CloseProtocolStream.
+		return clt, nil, common.DiscoveryTransportPersisted, nil
+	}
+
+	return m.mockDiscoveryClient, nil, common.DiscoveryTransportPersisted, nil
+}
+
+func (m *MockNetworkingServer) HookOpenDiscoveryTransport(fn openDiscoveryTransportDelegate) {
+	m.openDiscoveryTransportFn = fn
 }
 
 func (m *MockNetworkingServer) CloseProtocolStream(protocol string, peerID peer.ID) error {

@@ -22,6 +22,18 @@ const (
 	IdentityProto = "/id/0.1"
 )
 
+// DiscoveryTransportKind tells discovery how to release the gRPC transport after FindPeers.
+type DiscoveryTransportKind int
+
+const (
+	// DiscoveryTransportReused: ClientConn is already in the peer protocol map; use CloseProtocolStream.
+	DiscoveryTransportReused DiscoveryTransportKind = iota
+	// DiscoveryTransportPersisted: this call created and saved the stream; use CloseProtocolStream when tearing down.
+	DiscoveryTransportPersisted
+	// DiscoveryTransportEphemeral: stream was not saved; caller must Close the *grpc.ClientConn.
+	DiscoveryTransportEphemeral
+)
+
 // DNSRegex is a regex string to match against a valid dns/dns4/dns6 addr
 const DNSRegex = `^/?(dns)(4|6)?/[^-|^/][A-Za-z0-9-]([^-|^/]?)+([\\-\\.]{1}[a-z0-9]+)*\\.[A-Za-z]{2,}(/?)$`
 

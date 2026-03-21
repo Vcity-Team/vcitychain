@@ -55,8 +55,11 @@ func (s *Server) GetProtocolStream(protocol string, peerID peer.ID) *rawGrpc.Cli
 	return connectionInfo.getProtocolStream(protocol)
 }
 
-// NewDiscoveryClient returns a new or existing discovery service client connection
-func (s *Server) NewDiscoveryClient(peerID peer.ID) (proto.DiscoveryClient, error) {
+// OpenDiscoveryTransport opens or reuses the gRPC transport for discovery to peerID.
+// DiscoveryTransportKind tells the caller how to release resources after FindPeers.
+func (s *Server) OpenDiscoveryTransport(
+	peerID peer.ID,
+) (proto.DiscoveryClient, *rawGrpc.ClientConn, common.DiscoveryTransportKind, error) {
 	// Temporary dials are never added to the peer store,
 	// so they have a special status when doing discovery
 	isTemporaryDial := s.IsTemporaryDial(peerID)
@@ -64,29 +67,42 @@ func (s *Server) NewDiscoveryClient(peerID peer.ID) (proto.DiscoveryClient, erro
 	// Check if there is a peer connection at this point in time,
 	// as there might have been a disconnection previously
 	if !s.IsConnected(peerID) && !isTemporaryDial {
-		return nil, fmt.Errorf("could not initialize new discovery client - peer [%s] not connected",
-			peerID.String())
+		return nil, nil, common.DiscoveryTransportEphemeral,
+			fmt.Errorf("could not initialize new discovery client - peer [%s] not connected",
+				peerID.String())
 	}
 
 	// Check if there is an active stream connection already
 	if protoStream := s.GetProtocolStream(common.DiscProto, peerID); protoStream != nil {
-		return proto.NewDiscoveryClient(protoStream), nil
+		return proto.NewDiscoveryClient(protoStream), protoStream, common.DiscoveryTransportReused, nil
 	}
 
 	// Create a new stream connection and return it
 	protoStream, err := s.NewProtoConnection(common.DiscProto, peerID)
 	if err != nil {
-		return nil, err
+		return nil, nil, common.DiscoveryTransportEphemeral, err
 	}
 
-	// Discovery protocol streams should be saved,
-	// since they are referenced later on,
-	// if they are not temporary
+	// Discovery protocol streams should be saved when not temporary.
+	// If SaveProtocolStream cannot attach (peer missing), treat as ephemeral so we Close the conn.
 	if !isTemporaryDial {
 		s.SaveProtocolStream(common.DiscProto, protoStream, peerID)
+
+		if s.GetProtocolStream(common.DiscProto, peerID) != nil {
+			return proto.NewDiscoveryClient(protoStream), protoStream, common.DiscoveryTransportPersisted, nil
+		}
+
+		return proto.NewDiscoveryClient(protoStream), protoStream, common.DiscoveryTransportEphemeral, nil
 	}
 
-	return proto.NewDiscoveryClient(protoStream), nil
+	return proto.NewDiscoveryClient(protoStream), protoStream, common.DiscoveryTransportEphemeral, nil
+}
+
+// NewDiscoveryClient returns a new or existing discovery service client connection
+func (s *Server) NewDiscoveryClient(peerID peer.ID) (proto.DiscoveryClient, error) {
+	clt, _, _, err := s.OpenDiscoveryTransport(peerID)
+
+	return clt, err
 }
 
 // SaveProtocolStream saves the protocol stream to the peer

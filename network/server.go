@@ -239,6 +239,22 @@ func (pci *PeerConnInfo) getProtocolStream(protocol string) *rawGrpc.ClientConn 
 	return pci.protocolStreams[protocol]
 }
 
+// closeAllProtocolStreams closes and removes every saved gRPC ClientConn for this peer.
+// Call after the peer is removed from the server's peer map (no concurrent access).
+func (pci *PeerConnInfo) closeAllProtocolStreams() {
+	if pci == nil {
+		return
+	}
+
+	for protoKey, stream := range pci.protocolStreams {
+		if stream != nil {
+			_ = stream.Close()
+		}
+
+		delete(pci.protocolStreams, protoKey)
+	}
+}
+
 // cleanupExpiredStreams 清理过期的流
 func (pci *PeerConnInfo) cleanupExpiredStreams() {
 	now := time.Now()
@@ -512,6 +528,9 @@ func (s *Server) removePeer(peerID peer.ID) {
 		// so no action should be taken further
 		return
 	}
+
+	// 显式关闭该 peer 上缓存的所有 gRPC ClientConn，避免 libp2p 断开后仍残留 grpc 内部 goroutine
+	connectionInfo.closeAllProtocolStreams()
 
 	// Emit the event alerting listeners
 	s.emitEvent(peerID, peerEvent.PeerDisconnected)

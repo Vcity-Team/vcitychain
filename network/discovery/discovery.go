@@ -15,6 +15,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/network/proto"
 	kb "github.com/libp2p/go-libp2p-kbucket"
 	"github.com/libp2p/go-libp2p/core/peer"
+	rawGrpc "google.golang.org/grpc"
 )
 
 const (
@@ -46,6 +47,9 @@ type networkingServer interface {
 
 	// NewDiscoveryClient returns a discovery gRPC client connection
 	NewDiscoveryClient(peerID peer.ID) (proto.DiscoveryClient, error)
+
+	// OpenDiscoveryTransport opens or reuses discovery gRPC transport and reports how to release it.
+	OpenDiscoveryTransport(peerID peer.ID) (proto.DiscoveryClient, *rawGrpc.ClientConn, common.DiscoveryTransportKind, error)
 
 	// CloseProtocolStream closes a protocol stream to the peer
 	CloseProtocolStream(protocol string, peerID peer.ID) error
@@ -235,10 +239,26 @@ func (d *DiscoveryService) findPeersCall(
 	peerID peer.ID,
 	shouldCloseConn bool,
 ) ([]string, error) {
-	clt, clientErr := d.baseServer.NewDiscoveryClient(peerID)
+	clt, conn, kind, clientErr := d.baseServer.OpenDiscoveryTransport(peerID)
 	if clientErr != nil {
 		return nil, fmt.Errorf("unable to create new discovery client connection, %w", clientErr)
 	}
+
+	defer func() {
+		// Ephemeral transports are not in the peer protocol map; always Close the ClientConn.
+		if kind == common.DiscoveryTransportEphemeral {
+			if conn != nil {
+				_ = conn.Close()
+			}
+
+			return
+		}
+
+		// Persisted / reused: only tear down when this call owns the lifecycle (e.g. bootnode temp query).
+		if shouldCloseConn {
+			_ = d.baseServer.CloseProtocolStream(common.DiscProto, peerID)
+		}
+	}()
 
 	resp, err := clt.FindPeers(
 		context.Background(),
@@ -248,13 +268,6 @@ func (d *DiscoveryService) findPeersCall(
 	)
 	if err != nil {
 		return nil, err
-	}
-
-	// Check if the connection should be closed after getting the data
-	if shouldCloseConn {
-		if closeErr := d.baseServer.CloseProtocolStream(common.DiscProto, peerID); closeErr != nil {
-			return nil, closeErr
-		}
 	}
 
 	return resp.Nodes, nil
