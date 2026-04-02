@@ -23,6 +23,9 @@ const (
 
 var (
 	errTimeout = errors.New("timeout awaiting block from peer")
+
+	// ErrForkRetryOtherPeer 表示已在本地回滚分叉高度，当前 peer 不宜继续补拉，应交给外层换源。
+	ErrForkRetryOtherPeer = errors.New("syncer: rolled back after fork, retry with another peer")
 )
 
 // ErrNeedFillFrom 表示需从更早高度重试补拉（共同祖先在前方），调用方用 From 重试；同一时刻只开一个 stream。
@@ -319,7 +322,11 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 		// fetch block from the peer
 		lastNumber, shouldTerminate, err := s.bulkSyncWithPeer(bestPeer.ID, bestPeer.Number, callback)
 		if err != nil {
-			s.logger.Warn("failed to complete bulk sync with peer, try to next one", "peer ID", "error", bestPeer.ID, err)
+			s.logger.Warn("failed to complete bulk sync with peer, try to next one", "peer", bestPeer.ID.String(), "error", err)
+			if errors.Is(err, ErrForkRetryOtherPeer) {
+				skipList[bestPeer.ID] = true
+				continue
+			}
 		}
 
 		if lastNumber < bestPeer.Number {
@@ -470,7 +477,11 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 								)
 								if err := rb.RollbackToHeight(fillFrom - 1); err == nil {
 									time.Sleep(fillGapRetryDelay)
-									continue
+									var headN uint64
+									if h := s.blockchain.Header(); h != nil {
+										headN = h.Number
+									}
+									return headN, false, fmt.Errorf("%w: forkHeight=%d", ErrForkRetryOtherPeer, fillFrom)
 								}
 							}
 						}
