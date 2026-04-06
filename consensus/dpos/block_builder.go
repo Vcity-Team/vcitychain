@@ -1384,8 +1384,7 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 		return nil, nil, fmt.Errorf("insufficient validators: got %d, need %d", activeValidators, minRequired)
 	}
 
-	// 1. 广播签名请求给其他验证者
-	// 创建protobuf签名请求消息
+	// 1. 准备 protobuf 签名请求（广播在收集器注册之后执行，见下）
 	protoRequest := &dposProto.SignatureRequest{}
 	protoRequest.BlockNumber = block.Block.Number()
 	protoRequest.BlockHash = block.Block.Header.Hash.Bytes()
@@ -1394,12 +1393,9 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 	protoRequest.Proposer = types.Address(r.config.Key.Address()).Bytes()
 	protoRequest.Timestamp = uint64(time.Now().Unix())
 
-	if err := r.broadcastSignatureRequest(protoRequest); err != nil {
-		r.logger.Error("failed to broadcast signature request", "error", err)
-		return nil, nil, fmt.Errorf("failed to broadcast signature request: %w", err)
-	}
-
-	// 2. 创建签名收集通道和收集器（缓冲大小基于 BLS 委员会）
+	// 2. 先启动收集协程并等待收集器注册，再广播签名请求。
+	// signature_collector_manager.ForwardSignatureResponse 在对应 checkpoint 无收集器时会直接丢弃响应；
+	// 若先广播再注册，同机/低延迟场景下响应可能先于注册到达，导致 collectedSignatures 长期为 0。
 	signatureCh := make(chan *SignatureResponse, len(committee))
 
 	sigCtx, sigCancel := context.WithCancel(context.Background())
@@ -1407,8 +1403,20 @@ func (r *dposRuntime) collectValidatorSignatures(block *types.FullBlock, checkpo
 
 	go r.collectSignaturesAsync(sigCtx, sigCancel, checkpointHash, signatureCh)
 
-	// 等待一小段时间让协程启动
-	time.Sleep(100 * time.Millisecond)
+	const collectorRegisterWait = 2 * time.Second
+	if !r.waitForSignatureCollectorRegistered(checkpointHash, collectorRegisterWait) {
+		r.logger.Error("签名收集器未及时注册，放弃广播签名请求",
+			"checkpointHash", checkpointHash.String(),
+			"wait", collectorRegisterWait)
+		return nil, nil, fmt.Errorf("signature collector not registered within %v", collectorRegisterWait)
+	}
+
+	r.logger.Debug("签名收集器已就绪，广播签名请求", "checkpointHash", checkpointHash.String())
+
+	if err := r.broadcastSignatureRequest(protoRequest); err != nil {
+		r.logger.Error("failed to broadcast signature request", "error", err)
+		return nil, nil, fmt.Errorf("failed to broadcast signature request: %w", err)
+	}
 
 	// 3. 智能等待签名收集完成
 	collectedSignatures := make(map[types.Address][]byte)
@@ -2150,6 +2158,18 @@ func (r *dposRuntime) waitForSignaturesWithContext(ctx context.Context, signatur
 			return nil, nil, fmt.Errorf("signature collection cancelled: %w", ctx.Err())
 		}
 	}
+}
+
+// waitForSignatureCollectorRegistered 轮询直到 NetworkIntegration 已为该 checkpoint 注册收集器。
+func (r *dposRuntime) waitForSignatureCollectorRegistered(checkpointHash types.Hash, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if r.networkIntegration != nil && r.networkIntegration.GetSignatureCollector(checkpointHash) != nil {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return false
 }
 
 // collectSignaturesAsync 异步收集签名
