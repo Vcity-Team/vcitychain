@@ -94,6 +94,13 @@ func (r *dposRuntime) broadcastSignatureRequest(protoRequest *dposProto.Signatur
 		return nil
 	}
 
+	proposerAddr := types.BytesToAddress(protoRequest.Proposer)
+	r.logger.Info("签名请求已发出（Gossip 已发布）",
+		"blockNumber", protoRequest.BlockNumber,
+		"checkpointHash", checkpointHash.String(),
+		"proposer", proposerAddr.String(),
+		"round", protoRequest.Round)
+
 	// 启动基于时间的简单备用传播监控
 	go r.simpleFallbackMonitoring(protoRequest, checkpointHash)
 
@@ -134,11 +141,16 @@ func (r *dposRuntime) broadcastSignatureRequestToPeer(request *SignatureRequest,
 
 	// 发布签名请求
 	actualTopicName := topic.GetActualProtoID()
-	r.logger.Info("🚀 向节点广播签名请求", "peer", peerID.String(), "原始名称", "dpos-signature-request", "实际名称", actualTopicName)
 	if err := topic.Publish(dposMsg); err != nil {
 		r.logger.Warn("failed to publish signature request to peer", "error", err, "peer", peerID.String())
 		return
 	}
+	r.logger.Info("签名请求已发出（定向 peer 已发布）",
+		"peer", peerID.String(),
+		"topic", actualTopicName,
+		"blockNumber", request.BlockNumber,
+		"checkpointHash", request.CheckpointHash.String(),
+		"proposer", request.Proposer.String())
 }
 
 // broadcastSignatureQuery 广播签名查询请求

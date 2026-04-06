@@ -2713,12 +2713,20 @@ func (r *dposRuntime) markSignatureRequestProcessed(proposer types.Address, chec
 // 返回的 release 必须在对应处理协程结束时调用一次（成功或失败均调用）。
 func (r *dposRuntime) acquireSignatureRequestWork(proposer types.Address, checkpointHash types.Hash) (release func(), acquired bool) {
 	if r.isSignatureRequestProcessed(proposer, checkpointHash) {
+		r.logger.Info("签名请求去重：本机近期已成功处理并广播过响应，跳过重复请求",
+			"reason", "dedup_already_processed_within_ttl",
+			"proposer", proposer.String(),
+			"checkpointHash", checkpointHash.String())
 		return nil, false
 	}
 	key := fmt.Sprintf("%s-%s", proposer.String(), checkpointHash.String())
 	r.signatureRequestInFlightMutex.Lock()
 	if _, exists := r.signatureRequestInFlight[key]; exists {
 		r.signatureRequestInFlightMutex.Unlock()
+		r.logger.Info("签名请求去重：同 checkpoint 已有处理协程在飞，跳过重复投递",
+			"reason", "dedup_in_flight",
+			"proposer", proposer.String(),
+			"checkpointHash", checkpointHash.String())
 		return nil, false
 	}
 	r.signatureRequestInFlight[key] = struct{}{}
