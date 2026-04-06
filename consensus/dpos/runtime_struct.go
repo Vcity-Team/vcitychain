@@ -78,6 +78,10 @@ type dposRuntime struct {
 	signatureRequestSemaphore chan struct{}
 	maxConcurrentSignatures   int
 
+	// 同一 (proposer, checkpointHash) 仅允许一个签名任务在飞，避免 Gossip 重复投递占满并发槽
+	signatureRequestInFlight      map[string]struct{}
+	signatureRequestInFlightMutex sync.Mutex
+
 	// 投票签名验证相关
 	processedVotes map[string]bool // 防重放：已处理的投票nonce
 	voteMutex      sync.RWMutex    // 保护processedVotes的并发访问

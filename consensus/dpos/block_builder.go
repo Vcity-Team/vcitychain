@@ -2459,6 +2459,9 @@ func (r *dposRuntime) generateSignatureResponse(request *SignatureRequest) error
 			return nil
 		}
 
+		// 广播成功：与 isSignatureRequestProcessed 对齐，便于入口快速跳过重复 Gossip
+		r.markSignatureRequestProcessed(request.Proposer, request.CheckpointHash)
+
 		// 签名响应已广播
 		return nil
 	}
@@ -2703,6 +2706,28 @@ func (r *dposRuntime) markSignatureRequestProcessed(proposer types.Address, chec
 
 	key := fmt.Sprintf("%s-%s", proposer.String(), checkpointHash.String())
 	r.processedSignatureRequests[key] = time.Now()
+}
+
+// acquireSignatureRequestWork 在抢并发槽之前登记「本机正在处理」的 (proposer, checkpointHash)。
+// Gossip 会对同一请求重复投递：已处理或已在飞则返回 acquired=false，避免占满信号量。
+// 返回的 release 必须在对应处理协程结束时调用一次（成功或失败均调用）。
+func (r *dposRuntime) acquireSignatureRequestWork(proposer types.Address, checkpointHash types.Hash) (release func(), acquired bool) {
+	if r.isSignatureRequestProcessed(proposer, checkpointHash) {
+		return nil, false
+	}
+	key := fmt.Sprintf("%s-%s", proposer.String(), checkpointHash.String())
+	r.signatureRequestInFlightMutex.Lock()
+	if _, exists := r.signatureRequestInFlight[key]; exists {
+		r.signatureRequestInFlightMutex.Unlock()
+		return nil, false
+	}
+	r.signatureRequestInFlight[key] = struct{}{}
+	r.signatureRequestInFlightMutex.Unlock()
+	return func() {
+		r.signatureRequestInFlightMutex.Lock()
+		delete(r.signatureRequestInFlight, key)
+		r.signatureRequestInFlightMutex.Unlock()
+	}, true
 }
 
 // isSignatureResponseBroadcasted 检查签名响应是否已经广播过（去重机制）

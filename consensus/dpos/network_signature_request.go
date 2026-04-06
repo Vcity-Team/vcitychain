@@ -123,8 +123,6 @@ func (r *dposRuntime) handleSignatureRequestMessage(obj interface{}, from peer.I
 		}
 	}
 
-	// 简化处理：直接处理签名请求，不做去重检查
-
 	// 获取当前区块高度
 	delegateCount := uint64(len(r.delegates))
 	if delegateCount == 0 {
@@ -161,18 +159,24 @@ func (r *dposRuntime) handleSignatureRequestMessage(obj interface{}, from peer.I
 		return
 	}
 
+	release, ok := r.acquireSignatureRequestWork(request.Proposer, request.CheckpointHash)
+	if !ok {
+		return
+	}
+
 	// 使用并发控制，限制同时处理的签名请求数量
 	select {
 	case r.signatureRequestSemaphore <- struct{}{}:
-		// 获取到信号量，可以处理签名请求
 		go func() {
-			defer func() { <-r.signatureRequestSemaphore }() // 释放信号量
+			defer release()
+			defer func() { <-r.signatureRequestSemaphore }()
 
 			if err := r.generateSignatureResponse(request); err != nil {
 				r.logger.Error("failed to generate signature response", "error", err)
 			}
 		}()
 	default:
+		release()
 		// 信号量已满，记录警告并跳过处理
 	}
 }
@@ -211,12 +215,17 @@ func (r *dposRuntime) HandleSignatureRequest(request *SignatureRequest) error {
 		return nil
 	}
 
+	release, ok := r.acquireSignatureRequestWork(request.Proposer, request.CheckpointHash)
+	if !ok {
+		return nil
+	}
+
 	// 使用并发控制，限制同时处理的签名请求数量
 	select {
 	case r.signatureRequestSemaphore <- struct{}{}:
-		// 获取到信号量，可以处理签名请求
 		go func() {
-			defer func() { <-r.signatureRequestSemaphore }() // 释放信号量
+			defer release()
+			defer func() { <-r.signatureRequestSemaphore }()
 
 			if err := r.generateSignatureResponse(request); err != nil {
 				r.logger.Error("failed to generate signature response", "error", err)
@@ -224,7 +233,7 @@ func (r *dposRuntime) HandleSignatureRequest(request *SignatureRequest) error {
 		}()
 		return nil
 	default:
-		// 信号量已满，记录警告并跳过处理
+		release()
 		r.logger.Warn("并发签名请求过多，跳过处理",
 			"checkpointHash", request.CheckpointHash.String(),
 			"proposer", request.Proposer.String(),

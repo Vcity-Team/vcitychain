@@ -54,7 +54,7 @@ func DefaultNetworkConfig() *NetworkConfig {
 		TopicCleanupInterval:         5 * time.Second,
 		CollectorCleanupInterval:     10 * time.Second,
 		ConnectionCheckInterval:      30 * time.Second,
-		MaxConcurrentSignatures:      10,
+		MaxConcurrentSignatures:      21,
 		NetworkBufferSize:            5000, // 增加缓冲区大小，避免通道满
 		EnableNetworkMonitoring:      true,
 		EnableSignatureDeduplication: true,
@@ -72,7 +72,7 @@ func OptimizedNetworkConfig() *NetworkConfig {
 		TopicCleanupInterval:         3 * time.Second,
 		CollectorCleanupInterval:     5 * time.Second,
 		ConnectionCheckInterval:      20 * time.Second,
-		MaxConcurrentSignatures:      20,
+		MaxConcurrentSignatures:      21,
 		NetworkBufferSize:            10000, // 生产环境使用更大的缓冲区
 		EnableNetworkMonitoring:      true,
 		EnableSignatureDeduplication: true,

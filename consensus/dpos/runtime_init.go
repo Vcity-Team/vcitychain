@@ -40,8 +40,10 @@ func (r *dposRuntime) initializeRuntime() error {
 	r.processedSignatureGenerations = make(map[string]time.Time)
 
 	// 初始化并发控制
-	r.maxConcurrentSignatures = 10 // 最多同时处理10个签名请求
+	// 与最大验证者规模对齐：最多 21 个出块节点时，允许同时处理同等数量的不同 checkpoint 签名请求
+	r.maxConcurrentSignatures = 21
 	r.signatureRequestSemaphore = make(chan struct{}, r.maxConcurrentSignatures)
+	r.signatureRequestInFlight = make(map[string]struct{})
 
 	// 初始化防重复日志机制
 	r.lastLogTime = make(map[string]time.Time)
