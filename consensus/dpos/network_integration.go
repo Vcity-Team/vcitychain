@@ -1336,19 +1336,9 @@ func (ni *NetworkIntegration) BroadcastSignatureRequest(request *SignatureReques
 		Data: requestData,
 	}
 
-	actualTopicName := ni.signatureRequestTopic.GetActualProtoID()
-
 	if err := ni.signatureRequestTopic.Publish(dposMsg); err != nil {
 		return fmt.Errorf("failed to publish signature request: %w", err)
 	}
-
-	ni.logger.Info("签名请求已发出（网络集成层已发布）",
-		"topic", actualTopicName,
-		"dataLength", len(requestData),
-		"blockNumber", request.BlockNumber,
-		"checkpointHash", request.CheckpointHash.String(),
-		"proposer", request.Proposer.String(),
-		"round", request.Round)
 
 	return nil
 }

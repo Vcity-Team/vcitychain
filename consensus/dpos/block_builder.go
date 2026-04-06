@@ -1901,8 +1901,11 @@ func (r *dposRuntime) getValidatorsFromDatabaseForProduction(header *types.Heade
 	return nil, fmt.Errorf("no validators available for production")
 }
 
-// waitForNetworkGrowth 等待网络增长到足够的验证者
+// waitForNetworkGrowth 仅等待「活跃验证者数量」达到门限，不包含签名收集。
+// 签名收集统一由外层 collectValidatorSignatures 完成（需先 RegisterSignatureCollector 再广播）。
+// 返回 (nil, nil, nil) 表示条件已满足，调用方应继续重试 collectValidatorSignatures；返回值历史上未被使用。
 func (r *dposRuntime) waitForNetworkGrowth(checkpointHash types.Hash, proposerAddr types.Address) ([][]byte, bitmap.Bitmap, error) {
+	_ = proposerAddr // 保留参数兼容现有调用，当前逻辑未使用
 	r.logger.Info("开始等待网络增长", "checkpointHash", checkpointHash.String())
 
 	// 🔧 修复：从 dposRuntime 获取构建开始时的 slot
@@ -1956,206 +1959,19 @@ func (r *dposRuntime) waitForNetworkGrowth(checkpointHash types.Hash, proposerAd
 				"minRequired", minRequired,
 				"totalDelegates", len(r.delegates))
 
-			// 如果网络中有足够的验证者，重新尝试收集签名
+			// 验证者数量已满足：结束等待，由外层循环再次调用 collectValidatorSignatures（与主路径一致）。
 			if activeValidators >= minRequired {
-				r.logger.Info("检测到足够的验证者，重新尝试收集签名",
+				r.logger.Info("检测到足够的验证者，结束网络等待，外层将重试签名收集",
 					"activeValidators", activeValidators,
 					"minRequired", minRequired,
 					"checkpointHash", checkpointHash.String())
-
-				// 重新启动签名收集流程
-				// 使用更短的超时时间，避免长时间等待
-				retryTimeout := 30 * time.Second
-				retryCtx, cancel := context.WithTimeout(context.Background(), retryTimeout)
-				defer cancel()
-
-				// 创建新的签名收集通道
-				signatureCh := make(chan *SignatureResponse, len(r.delegates))
-
-				// 重新广播签名请求
-				currentBlockNumber := r.config.blockchain.CurrentHeader().Number + 1
-				protoRequest := &dposProto.SignatureRequest{
-					BlockNumber:    currentBlockNumber,
-					CheckpointHash: checkpointHash.Bytes(),
-					Round:          r.currentRound,
-					Proposer:       proposerAddr.Bytes(),
-					Timestamp:      uint64(time.Now().Unix()),
-				}
-
-				if err := r.broadcastSignatureRequest(protoRequest); err != nil {
-					r.logger.Error("重新广播签名请求失败", "error", err)
-					return nil, nil, fmt.Errorf("failed to rebroadcast signature request: %w", err)
-				}
-
-				// 等待签名收集
-				signatures, bitmap, err := r.waitForSignaturesWithContext(retryCtx, signatureCh, minRequired)
-				if err != nil {
-					r.logger.Error("重新收集签名失败", "error", err)
-					return nil, nil, fmt.Errorf("failed to collect signatures after network growth: %w", err)
-				}
-
-				r.logger.Info("网络增长后签名收集成功",
-					"signaturesCount", len(signatures),
-					"bitmapLength", len(bitmap))
-
-				return signatures, bitmap, nil
+				return nil, nil, nil
 			}
 
 		case <-timeoutCh:
 			r.logger.Error("等待网络增长超时，需要更多验证者节点")
 			// 超时后，返回错误
 			return nil, nil, fmt.Errorf("network growth timeout: need more validator nodes")
-		}
-	}
-}
-
-// waitForSignaturesWithContext 使用上下文控制的签名收集
-func (r *dposRuntime) waitForSignaturesWithContext(ctx context.Context, signatureCh chan *SignatureResponse, minRequired int) ([][]byte, bitmap.Bitmap, error) {
-	collectedSignatures := make(map[types.Address][]byte)
-	signatureBitmap := bitmap.Bitmap{}
-
-	// 🔧 修复：使用与生产区块时相同的验证者集合来设置位图
-	// 优先使用cachedProductionValidators，确保位图索引与验证时验证者集合完全匹配
-	var validatorsForBitmap validator.AccountSet
-	r.lock.RLock()
-	if r.cachedProductionValidators != nil && len(r.cachedProductionValidators) > 0 {
-		validatorsForBitmap = r.cachedProductionValidators.Copy()
-		r.logger.Debug("💾 waitForSignaturesWithContext使用缓存的验证者集合设置位图", "validatorsCount", len(validatorsForBitmap))
-	} else {
-		validatorsForBitmap = r.delegates.Copy()
-		r.logger.Debug("⚠️ waitForSignaturesWithContext使用r.delegates设置位图（缓存为空）", "validatorsCount", len(validatorsForBitmap))
-	}
-	r.lock.RUnlock()
-
-	// 🔧 修复：获取构建开始时的 slot，用于检查 slot 是否已变化
-	r.lock.RLock()
-	buildStartSlot := r.currentBuildStartSlot
-	r.lock.RUnlock()
-
-	if buildStartSlot < 0 && r.config != nil && r.config.blockScheduler != nil {
-		// 如果无法获取，则使用当前 slot 作为基准
-		now := time.Now()
-		genesisTime := r.config.blockScheduler.GetGenesisTime()
-		blockWindow := r.config.blockScheduler.GetBlockWindow()
-		timeSinceGenesis := now.Sub(genesisTime)
-		buildStartSlot = int(timeSinceGenesis / blockWindow)
-		r.logger.Debug("waitForSignaturesWithContext: 无法获取 buildStartSlot，使用当前 slot 作为基准", "buildStartSlot", buildStartSlot)
-	}
-
-	// 设置收集超时
-	collectTimeout := 20 * time.Second
-	timeoutCh := time.After(collectTimeout)
-
-	// 🔧 修复：添加定期检查 slot 的 ticker
-	slotCheckTicker := time.NewTicker(5 * time.Second) // 每5秒检查一次 slot
-	defer slotCheckTicker.Stop()
-
-	for {
-		select {
-		case response := <-signatureCh:
-			if response == nil {
-				continue
-			}
-
-			// 验证签名响应
-			if err := r.validateSignatureResponse(response); err != nil {
-				r.logger.Warn("签名响应验证失败", "validator", response.ValidatorAddr.String(), "error", err)
-				continue
-			}
-
-			// 收集签名
-			collectedSignatures[response.ValidatorAddr] = response.Signature
-
-			// 🔧 修复：使用validatorsForBitmap来设置位图，确保与生产区块时验证者集合一致
-			for i, delegate := range validatorsForBitmap {
-				if delegate.Address == response.ValidatorAddr {
-					signatureBitmap.Set(uint64(i))
-					break
-				}
-			}
-
-			r.logger.Info("收集到签名",
-				"validator", response.ValidatorAddr.String(),
-				"collectedCount", len(collectedSignatures),
-				"requiredCount", minRequired)
-
-			// 检查是否收集到足够的签名
-			if len(collectedSignatures) >= minRequired {
-				// 🔧 修复：使用validatorsForBitmap来排列签名，确保与位图索引一致
-				signatures := make([][]byte, 0, len(collectedSignatures))
-				for i := uint64(0); i < uint64(len(validatorsForBitmap)); i++ {
-					if signatureBitmap.IsSet(i) {
-						if sig, exists := collectedSignatures[validatorsForBitmap[i].Address]; exists {
-							signatures = append(signatures, sig)
-						}
-					}
-				}
-
-				return signatures, signatureBitmap, nil
-			}
-
-		case <-slotCheckTicker.C:
-			// 🔧 修复：定期检查 slot 是否已变化
-			if r.config != nil && r.config.blockScheduler != nil && buildStartSlot >= 0 {
-				now := time.Now()
-				genesisTime := r.config.blockScheduler.GetGenesisTime()
-				blockWindow := r.config.blockScheduler.GetBlockWindow()
-				timeSinceGenesis := now.Sub(genesisTime)
-				currentSlot := int(timeSinceGenesis / blockWindow)
-
-				if currentSlot != buildStartSlot {
-					r.logger.Info("⏰ waitForSignaturesWithContext 中 slot 已变化，停止收集",
-						"buildStartSlot", buildStartSlot,
-						"currentSlot", currentSlot,
-						"collectedSignatures", len(collectedSignatures),
-						"required", minRequired,
-						"reason", fmt.Sprintf("构建开始时slot=%d，当前slot=%d，slot已变化", buildStartSlot, currentSlot))
-					return nil, nil, fmt.Errorf("slot changed during waitForSignaturesWithContext: buildStartSlot=%d, currentSlot=%d", buildStartSlot, currentSlot)
-				}
-			}
-
-		case <-timeoutCh:
-			// 🔧 修复：超时时，先检查 slot 是否已变化
-			if r.config != nil && r.config.blockScheduler != nil && buildStartSlot >= 0 {
-				now := time.Now()
-				genesisTime := r.config.blockScheduler.GetGenesisTime()
-				blockWindow := r.config.blockScheduler.GetBlockWindow()
-				timeSinceGenesis := now.Sub(genesisTime)
-				currentSlot := int(timeSinceGenesis / blockWindow)
-
-				if currentSlot != buildStartSlot {
-					r.logger.Info("⏰ waitForSignaturesWithContext 超时时 slot 已变化，停止收集",
-						"buildStartSlot", buildStartSlot,
-						"currentSlot", currentSlot,
-						"collectedSignatures", len(collectedSignatures),
-						"required", minRequired,
-						"reason", fmt.Sprintf("构建开始时slot=%d，当前slot=%d，slot已变化", buildStartSlot, currentSlot))
-					return nil, nil, fmt.Errorf("slot changed during waitForSignaturesWithContext timeout: buildStartSlot=%d, currentSlot=%d", buildStartSlot, currentSlot)
-				}
-			}
-
-			r.logger.Warn("签名收集超时",
-				"collected", len(collectedSignatures),
-				"required", minRequired)
-
-			if len(collectedSignatures) >= minRequired {
-				// 即使超时，如果收集到足够的签名就返回
-				signatures := make([][]byte, 0, len(collectedSignatures))
-				for i := uint64(0); i < uint64(len(r.delegates)); i++ {
-					if signatureBitmap.IsSet(i) {
-						if sig, exists := collectedSignatures[r.delegates[i].Address]; exists {
-							signatures = append(signatures, sig)
-						}
-					}
-				}
-				return signatures, signatureBitmap, nil
-			}
-
-			return nil, nil, fmt.Errorf("signature collection timeout: got %d, need %d", len(collectedSignatures), minRequired)
-
-		case <-ctx.Done():
-			r.logger.Warn("签名收集被取消", "error", ctx.Err())
-			return nil, nil, fmt.Errorf("signature collection cancelled: %w", ctx.Err())
 		}
 	}
 }
