@@ -1724,9 +1724,25 @@ func (b *Blockchain) handleReorg(
 
 	batchWriter.PutForks(forks)
 
-	// Update canonical chain numbers
-	for _, h := range newChain {
+	// Update canonical chain numbers (DPoS/IBFT reorg)
+	//
+	// IMPORTANT:
+	// The canonical "height -> hash" mapping must be fully rewritten for every height on the new canonical segment,
+	// from the common ancestor + 1 up to and including the new chain head.
+	//
+	// Previously, only the collected newChain slice was written, which may not include the newChainHead itself,
+	// and may miss some heights depending on how the slice is constructed. This can lead to a broken canonical index
+	// where GetBlockByNumber/GetHeaderByNumber returns a hash from the old branch, while the chain head and its children
+	// are already on the new branch (exactly the issue observed around height 4616614/4616615).
+	commonAncestor := newHeader // at this point oldHeader.Hash == newHeader.Hash
+	h := newChainHead
+	for h.Number > commonAncestor.Number {
 		batchWriter.PutCanonicalHash(h.Number, h.Hash)
+		var ok bool
+		h, ok = b.readHeader(h.ParentHash)
+		if !ok {
+			return fmt.Errorf("header '%s' not found", h.ParentHash.String())
+		}
 	}
 
 	for _, b := range oldChain[:len(oldChain)-1] {

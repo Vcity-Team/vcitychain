@@ -17,6 +17,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/command/peers"
 	"github.com/Vcity-Team/vcitychain/command/polybft"
 	"github.com/Vcity-Team/vcitychain/command/polybftsecrets"
+	"github.com/Vcity-Team/vcitychain/command/rebuildcanonical"
 	"github.com/Vcity-Team/vcitychain/command/regenesis"
 	"github.com/Vcity-Team/vcitychain/command/rollback"
 	"github.com/Vcity-Team/vcitychain/command/rootchain"
@@ -65,6 +66,7 @@ func (rc *RootCommand) registerSubCommands() {
 		bridge.GetCommand(),
 		regenesis.GetCommand(),
 		rollback.GetCommand(),
+		rebuildcanonical.GetCommand(),
 	)
 }
 
