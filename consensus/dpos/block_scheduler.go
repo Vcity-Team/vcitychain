@@ -1,7 +1,9 @@
 package dpos
 
 import (
+	"bytes"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -85,6 +87,15 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 		return false
 	}
 
+	// 出块调度必须确定性一致：
+	// 即使validators成员集合一致，不同节点也可能因为本地数据库/缓存/过滤差异导致validators顺序不一致，
+	// 从而 currentSlot % N 映射到不同地址，触发分叉。
+	// 这里强制按地址字节升序规范化顺序，保证slot->leader映射在所有节点一致。
+	orderedValidators := append([]types.Address(nil), validators...)
+	sort.Slice(orderedValidators, func(i, j int) bool {
+		return bytes.Compare(orderedValidators[i][:], orderedValidators[j][:]) < 0
+	})
+
 	nextBlockNumber := blockNumber + 1
 	if nextBlockNumber < bs.consensusSwitchHeight {
 		return false
@@ -95,7 +106,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	currentSlot := int(timeSinceGenesis / bs.blockWindow)
 
 	// 计算当前slot应该出块的验证者索引
-	activeValidatorCount := len(validators)
+	activeValidatorCount := len(orderedValidators)
 	if activeValidatorCount == 0 {
 		bs.logger.Debug("❌ ShouldProduceBlockNow: 活跃验证者数量为0")
 		return false
@@ -103,19 +114,19 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 
 	currentValidatorIndex := currentSlot % activeValidatorCount
 
-	if currentValidatorIndex >= len(validators) {
+	if currentValidatorIndex >= len(orderedValidators) {
 		bs.logger.Debug("❌ ShouldProduceBlockNow: 验证者索引超出范围",
 			"currentValidatorIndex", currentValidatorIndex,
-			"validatorsCount", len(validators))
+			"validatorsCount", len(orderedValidators))
 		return false
 	}
 
-	expectedValidator := validators[currentValidatorIndex]
+	expectedValidator := orderedValidators[currentValidatorIndex]
 	isMatch := expectedValidator == myAddress
 
 	// 构建验证者集合完整列表（带索引）
-	validatorsList := make([]string, len(validators))
-	for i, v := range validators {
+	validatorsList := make([]string, len(orderedValidators))
+	for i, v := range orderedValidators {
 		marker := ""
 		if i == currentValidatorIndex {
 			marker = " ← 计算出的索引"
