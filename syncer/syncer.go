@@ -76,7 +76,8 @@ func NewSyncer(
 		syncPeerService:       NewSyncPeerService(logger, network, blockchain),
 		syncPeerClient:        NewSyncPeerClient(logger, network, blockchain),
 		blockTimeout:          blockTimeout,
-		newStatusCh:           make(chan struct{}),
+		// 缓冲 1：避免 notify 的非阻塞发送在关键时刻被丢弃，导致 Sync 长期卡在 <-newStatusCh
+		newStatusCh:           make(chan struct{}, 1),
 		peerMap:               new(PeerMap),
 		consensusSwitchHeight: consensusSwitchHeight,
 
@@ -94,6 +95,8 @@ func (s *syncer) Start() error {
 	s.syncPeerService.Start()
 
 	s.initializePeerMap()
+	// 启动补唤醒：initializePeerMap 仅 Put，不会触发 notify；这里主动唤醒一次避免 Sync 初始“等不到事件”
+	s.notifyNewStatusEvent()
 
 	go s.startPeerStatusUpdateProcess()
 	go s.startPeerConnectionEventProcess()
@@ -271,10 +274,22 @@ func (s *syncer) GetBestPeerNumber() uint64 {
 	return 0
 }
 
+func (s *syncer) wakeSyncAfter(backoff time.Duration, reason string, args ...interface{}) {
+	// 仅用于“仍落后/刚失败/无可用 peer”等需要尽快重试的路径
+	if backoff > 0 {
+		time.Sleep(backoff)
+	}
+	// 这里用 Debug，避免正常波动时刷屏；关键路径另有 Warn 说明
+	s.logger.Debug("syncer self-wake", append([]interface{}{"reason", reason, "backoff", backoff.String()}, args...)...)
+	s.notifyNewStatusEvent()
+}
+
 // Sync syncs block with the best peer until callback returns true
 func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 	localLatest := s.blockchain.Header().Number
 	skipList := make(map[peer.ID]bool)
+	// 失败/未完成时的退避（避免 tight loop，同时避免“等不到高度变化就永远不醒”）
+	retryBackoff := 500 * time.Millisecond
 
 	for {
 		// Wait for a new event to arrive
@@ -297,6 +312,12 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 				time.Sleep(15 * time.Second)
 			}
 			skipList = make(map[peer.ID]bool)
+			// 治本点：这里继续等待 newStatusCh 可能永远等不到（peer 高度不变时不会 notify）
+			s.logger.Warn("syncer: no best peer, will self-wake and retry",
+				"localLatest", localLatest,
+				"skipListSize", len(skipList),
+				"backoff", retryBackoff.String())
+			s.wakeSyncAfter(retryBackoff, "no_best_peer", "localLatest", localLatest)
 			continue
 		}
 
@@ -325,6 +346,16 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			s.logger.Warn("failed to complete bulk sync with peer, try to next one", "peer", bestPeer.ID.String(), "error", err)
 			if errors.Is(err, ErrForkRetryOtherPeer) {
 				skipList[bestPeer.ID] = true
+				// 需要立刻换 peer 重试，否则可能卡在 <-newStatusCh（而 peer 高度不变不再 notify）
+				s.logger.Warn("syncer: fork retry requested, will self-wake to pick next peer",
+					"peer", bestPeer.ID.String(),
+					"localLatest", localLatest,
+					"peerNumber", bestPeer.Number,
+					"backoff", retryBackoff.String())
+				s.wakeSyncAfter(retryBackoff, "fork_retry_other_peer",
+					"peer", bestPeer.ID.String(),
+					"localLatest", localLatest,
+					"peerNumber", bestPeer.Number)
 				continue
 			}
 		}
@@ -333,6 +364,19 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			skipList[bestPeer.ID] = true
 
 			// continue to next peer
+			// 治本点：同步未完成（或中途失败）时，若 peer 高度不再变化，等待 newStatusCh 可能永久睡死
+			s.logger.Warn("syncer: bulk sync incomplete, will self-wake and retry with another peer",
+				"peer", bestPeer.ID.String(),
+				"peerNumber", bestPeer.Number,
+				"localLatest", localLatest,
+				"lastReceivedNumber", lastNumber,
+				"error", err,
+				"backoff", retryBackoff.String())
+			s.wakeSyncAfter(retryBackoff, "bulk_sync_incomplete",
+				"peer", bestPeer.ID.String(),
+				"peerNumber", bestPeer.Number,
+				"localLatest", localLatest,
+				"lastReceivedNumber", lastNumber)
 			continue
 		}
 
