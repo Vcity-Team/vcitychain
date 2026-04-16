@@ -3,6 +3,7 @@ package ibft
 import (
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/blockchain"
@@ -428,6 +429,10 @@ func (i *backendIBFT) startConsensus() {
 				// 1. 停止IBFT的syncer
 				if i.syncer != nil {
 					i.logger.Info("🛑 停止IBFT的syncer...")
+					i.logger.Warn("🧯 IBFT stopping syncer (DPoS switch triggered)",
+						"height", pending,
+						"latest", latest,
+						"stack", string(debug.Stack()))
 
 					// 添加超时机制，避免无限等待
 					done := make(chan error, 1)

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -728,6 +729,22 @@ func (d *DPoS) Start() error {
 }
 
 func (d *DPoS) Close() error {
+	// 记录关闭来源，便于定位线上“syncer 为什么会被 Close”
+	d.logger.Warn("🧯 DPoS.Close called",
+		"localLatest", func() uint64 {
+			// d.blockchain 只保证有 CurrentHeader()
+			if d.blockchain != nil {
+				if h := d.blockchain.CurrentHeader(); h != nil {
+					return h.Number
+				}
+			}
+			return 0
+		}(),
+		"hasSyncer", d.syncer != nil,
+		"hasRuntime", d.runtime != nil,
+		"goroutines", runtime.NumGoroutine(),
+		"stack", string(debug.Stack()))
+
 	if d.syncer != nil {
 		if err := d.syncer.Close(); err != nil {
 			return err

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/blockchain"
@@ -54,6 +55,10 @@ type syncer struct {
 	// Channel to notify Sync that a new status arrived
 	newStatusCh chan struct{}
 
+	// closeCh is closed when syncer shuts down (used to unblock Sync)
+	closeCh chan struct{}
+	closed  atomic.Bool
+
 	// 新增：共识切换高度
 	consensusSwitchHeight uint64
 
@@ -78,6 +83,7 @@ func NewSyncer(
 		blockTimeout:          blockTimeout,
 		// 缓冲 1：避免 notify 的非阻塞发送在关键时刻被丢弃，导致 Sync 长期卡在 <-newStatusCh
 		newStatusCh:           make(chan struct{}, 1),
+		closeCh:               make(chan struct{}),
 		peerMap:               new(PeerMap),
 		consensusSwitchHeight: consensusSwitchHeight,
 
@@ -106,7 +112,11 @@ func (s *syncer) Start() error {
 
 // Close terminates goroutine processes
 func (s *syncer) Close() error {
-	close(s.newStatusCh)
+	// Make Close idempotent and unblock Sync
+	if s.closed.Swap(true) {
+		return nil
+	}
+	close(s.closeCh)
 
 	if err := s.syncPeerService.Close(); err != nil {
 		return err
@@ -204,6 +214,11 @@ func (s *syncer) removeFromPeerMap(peerID peer.ID) {
 
 // notifyNewStatusEvent emits signal to newStatusCh
 func (s *syncer) notifyNewStatusEvent() {
+	// If shutting down, don't attempt to notify
+	if s.closed.Load() {
+		return
+	}
+
 	// 使用 recover 捕获 panic，避免向已关闭的 channel 发送数据
 	defer func() {
 		if r := recover(); r != nil {
@@ -279,6 +294,9 @@ func (s *syncer) wakeSyncAfter(backoff time.Duration, reason string, args ...int
 	if backoff > 0 {
 		time.Sleep(backoff)
 	}
+	if s.closed.Load() {
+		return
+	}
 	// 这里用 Debug，避免正常波动时刷屏；关键路径另有 Warn 说明
 	s.logger.Debug("syncer self-wake", append([]interface{}{"reason", reason, "backoff", backoff.String()}, args...)...)
 	s.notifyNewStatusEvent()
@@ -292,8 +310,12 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 	retryBackoff := 500 * time.Millisecond
 
 	for {
-		// Wait for a new event to arrive
-		<-s.newStatusCh
+		// Wait for a new event to arrive (or exit on shutdown)
+		select {
+		case <-s.newStatusCh:
+		case <-s.closeCh:
+			return nil
+		}
 
 		// fetch local latest block
 		if header := s.blockchain.Header(); header != nil {
