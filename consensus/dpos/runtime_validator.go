@@ -24,16 +24,30 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 		return fmt.Errorf("genesis block not found")
 	}
 
-	// 2. 解析验证者地址
-	ibftValidators, err := r.parseValidatorsFromExtraData(genesisHeader.ExtraData)
-	if err != nil {
-		return fmt.Errorf("failed to parse validators from extraData: %w", err)
+	// 2. 解析验证者地址（与 DPoS 启动一致：staking 合约优先，失败回退创世 extraData）
+	var ibftValidators validator.AccountSet
+	source := "genesis_extradata"
+	if r.config != nil && r.config.dposBackend != nil {
+		if dposInstance, ok := r.config.dposBackend.(*DPoS); ok && dposInstance != nil {
+			if bootstrap, src, berr := dposInstance.getBootstrapValidators(); berr == nil && len(bootstrap) > 0 {
+				ibftValidators = bootstrap
+				source = src
+			}
+		}
+	}
+	if ibftValidators == nil {
+		var err error
+		ibftValidators, err = r.parseValidatorsFromExtraData(genesisHeader.ExtraData)
+		if err != nil {
+			return fmt.Errorf("failed to parse validators from extraData: %w", err)
+		}
 	}
 
 	// 打印从创世文件解析出的验证者地址
 	r.logger.Info("🔍 从创世文件ExtraData解析出的验证者地址",
 		"totalCount", ibftValidators.Len(),
-		"extraDataLength", len(genesisHeader.ExtraData))
+		"extraDataLength", len(genesisHeader.ExtraData),
+		"bootstrapSource", source)
 
 	for i, validator := range ibftValidators {
 		r.logger.Info("📝 创世验证者地址",

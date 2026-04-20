@@ -385,19 +385,13 @@ func (d *DPoS) initializeGenesisValidatorsMap() {
 		d.genesisValidators = make(map[types.Address]bool)
 	}
 
-	// 方法1: 尝试从创世块解析
-	if d.config != nil && d.config.Blockchain != nil {
-		genesisHeader, exists := d.config.Blockchain.GetHeaderByNumber(0)
-		if exists && len(genesisHeader.ExtraData) >= 32 {
-			ibftValidators, err := d.parseValidatorsFromExtraData(genesisHeader.ExtraData)
-			if err == nil && len(ibftValidators) > 0 {
-				for _, validator := range ibftValidators {
-					d.genesisValidators[validator.Address] = true
-				}
-				d.logger.Info("✅ 从创世块初始化创世验证者映射", "count", len(d.genesisValidators))
-				return
-			}
+	// 方法1: 使用与 DPoS 启动一致的 bootstrap 规则（staking 合约优先，失败回退创世 extraData）
+	if bootstrap, source, err := d.getBootstrapValidators(); err == nil && len(bootstrap) > 0 {
+		for _, v := range bootstrap {
+			d.genesisValidators[v.Address] = true
 		}
+		d.logger.Info("✅ 初始化创世验证者映射（bootstrap）", "count", len(d.genesisValidators), "source", source)
+		return
 	}
 
 	// 方法2: 从配置中的初始验证者

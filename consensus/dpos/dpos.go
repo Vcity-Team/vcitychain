@@ -26,6 +26,8 @@ import (
 	"github.com/Vcity-Team/vcitychain/network"
 	"github.com/Vcity-Team/vcitychain/secrets"
 	"github.com/Vcity-Team/vcitychain/state"
+	"github.com/Vcity-Team/vcitychain/contracts"
+	"github.com/Vcity-Team/vcitychain/contracts/staking"
 	"github.com/Vcity-Team/vcitychain/syncer"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
@@ -1464,10 +1466,10 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 	d.genesisExtraData = genesisHeader.ExtraData
 	d.logger.Info("📋 创世块extraData已加载", "length", len(d.genesisExtraData))
 
-	// 2. 解析验证者地址
-	ibftValidators, err := d.parseValidatorsFromExtraData(d.genesisExtraData)
+	// 2. 解析验证者地址（优先从 staking 合约 0x1001 读取 validators()；失败再回退到创世 extraData）
+	bootstrapValidators, source, err := d.getBootstrapValidators()
 	if err != nil {
-		return fmt.Errorf("failed to parse validators from extraData: %w", err)
+		return err
 	}
 
 	// 3. 设置最小质押门槛（从配置读取 dpos_delegate_threshold）
@@ -1492,16 +1494,17 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 	d.lock.Unlock()
 
 	d.logger.Info("🚨 DPoS验证者筛选开始",
-		"totalCandidates", ibftValidators.Len(),
+		"totalCandidates", bootstrapValidators.Len(),
+		"bootstrapSource", source,
 		"minStakeAmount", d.minStakeAmount.String())
 
 	validValidatorCount := 0
 	insufficientBalanceCount := 0
 
 	// 5. 为每个验证者地址检查余额并生成BLS公钥
-	for i := 0; i < ibftValidators.Len(); i++ {
-		ibftValidator := ibftValidators[i]
-		address := ibftValidator.Address
+	for i := 0; i < bootstrapValidators.Len(); i++ {
+		v := bootstrapValidators[i]
+		address := v.Address
 
 		// 创世验证者初始权重为0，将在7370高度通过投票记录获得权重
 		// 不再使用硬编码的1000 VCITY，改为从投票记录计算
@@ -1533,14 +1536,15 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 
 	// 关键日志：DPoS验证者筛选结果汇总
 	d.logger.Info("🚨 DPoS验证者筛选完成",
-		"totalCandidates", ibftValidators.Len(),
+		"totalCandidates", bootstrapValidators.Len(),
+		"bootstrapSource", source,
 		"validValidators", validValidatorCount,
 		"insufficientBalance", insufficientBalanceCount,
-		"successRate", fmt.Sprintf("%.1f%%", float64(validValidatorCount)/float64(ibftValidators.Len())*100))
+		"successRate", fmt.Sprintf("%.1f%%", float64(validValidatorCount)/float64(bootstrapValidators.Len())*100))
 
 	if validValidatorCount == 0 {
 		d.logger.Error("❌ 没有验证者满足DPoS质押要求",
-			"totalCandidates", ibftValidators.Len(),
+			"totalCandidates", bootstrapValidators.Len(),
 			"minStakeAmount", d.minStakeAmount.String())
 		return fmt.Errorf("no validators meet DPoS stake requirements")
 	}
@@ -1554,6 +1558,64 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 	d.logger.Info("✅ DPoS验证者解析完成", "count", validValidatorCount)
 
 	return nil
+}
+
+// getBootstrapValidators returns initial validator candidates for DPoS startup.
+// Priority:
+// 1) Read from staking contract (0x1001) method validators() at the current chain head state root
+// 2) Fallback to parsing genesis header extraData (IBFT-style)
+func (d *DPoS) getBootstrapValidators() (validator.AccountSet, string, error) {
+	// 1) contract first
+	if d != nil && d.config != nil && d.config.Executor != nil && d.blockchain != nil {
+		if head := d.blockchain.CurrentHeader(); head != nil {
+			snap, err := d.config.Executor.StateAt(head.StateRoot)
+			if err == nil {
+				forks := d.config.Executor.GetForksInTime(head.Number)
+				t := state.NewTransition(forks, snap, state.NewTxn(snap))
+				vals, qerr := staking.QueryValidators(t, contracts.SystemCaller)
+				if qerr == nil && len(vals) > 0 {
+					set := make(validator.AccountSet, 0, len(vals))
+					for _, addr := range vals {
+						set = append(set, &validator.ValidatorMetadata{
+							Address:     addr,
+							VotingPower: big.NewInt(0),
+							BlsKey:      nil,
+							IsActive:    true,
+						})
+					}
+					d.logger.Info("✅ 从 staking 合约读取 bootstrap 验证者",
+						"contract", "0x0000000000000000000000000000000000001001",
+						"count", len(set),
+						"head", head.Number)
+					return set, "staking_contract_0x1001", nil
+				}
+				if qerr != nil {
+					d.logger.Warn("⚠️ 从 staking 合约读取 validators() 失败，回退到创世 extraData",
+						"error", qerr.Error(),
+						"head", head.Number)
+				} else {
+					d.logger.Warn("⚠️ staking 合约 validators() 返回为空，回退到创世 extraData",
+						"head", head.Number)
+				}
+			} else {
+				d.logger.Warn("⚠️ 获取 head StateAt 失败，回退到创世 extraData", "error", err.Error())
+			}
+		}
+	}
+
+	// 2) fallback genesis extraData
+	genesisHeader, exists := d.config.Blockchain.GetHeaderByNumber(0)
+	if !exists {
+		return nil, "none", fmt.Errorf("genesis block not found")
+	}
+	ibftValidators, err := d.parseValidatorsFromExtraData(genesisHeader.ExtraData)
+	if err != nil {
+		return nil, "genesis_extradata", fmt.Errorf("failed to parse validators from genesis extraData: %w", err)
+	}
+	if len(ibftValidators) == 0 {
+		return nil, "genesis_extradata", fmt.Errorf("no validators found in genesis extraData")
+	}
+	return ibftValidators, "genesis_extradata", nil
 }
 
 // 新增：从extraData解析验证者地址
