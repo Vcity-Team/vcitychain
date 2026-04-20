@@ -43,7 +43,7 @@ func TestDPoSConfig(t *testing.T) {
 	summary := config.GetConfigSummary()
 	assert.NotNil(t, summary)
 	assert.Equal(t, "15s", summary["block_time"])
-	assert.Equal(t, uint64(21), summary["delegate_count"])
+	assert.Equal(t, uint64(21), summary["dpos_validators_count"])
 }
 
 // TestVoteValidation 测试投票验证

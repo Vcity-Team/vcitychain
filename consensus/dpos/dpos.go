@@ -249,7 +249,10 @@ type DPoSConfig struct {
 
 	EpochDuration       time.Duration `json:"epochDuration" yaml:"epochDuration"`
 	RewardAccount       types.Address `json:"rewardAccount" yaml:"rewardAccount"`
-	RewardAmount        *big.Int      `json:"rewardAmount" yaml:"rewardAmount"`
+	// RewardAmount 历史字段：Epoch 奖池现由 VoterTargetAPYBps 与链上质押动态计算，仅作兼容占位（可选）
+	RewardAmount *big.Int `json:"rewardAmount" yaml:"rewardAmount"`
+	// VoterTargetAPYBps 投票者目标年化收益率（基点，10000=100%，例如 500=5%）；为唯一需要配置的奖池相关经济参数
+	VoterTargetAPYBps uint64 `json:"voter_target_apy" yaml:"voter_target_apy"`
 	GenesisRootAccount  types.Address `json:"genesisRootAccount" yaml:"genesisRootAccount"`          // 从创世文件alloc中读取的根账户地址
 	ProposalVotePeriod  time.Duration `json:"proposalVotePeriod" yaml:"dpos_proposal_vote_period"`   // 提案表决周期
 	ProposalValidPeriod time.Duration `json:"proposalValidPeriod" yaml:"dpos_proposal_valid_period"` // 提案有效期
@@ -966,6 +969,34 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Warn("💰 未找到rewardAmount配置")
 	}
 
+	if vta, exists := params.Config.Config["voter_target_apy"]; exists {
+		logger.Info("🔍 找到 voter_target_apy 配置", "type", fmt.Sprintf("%T", vta), "value", vta)
+		switch t := vta.(type) {
+		case float64:
+			if t > 0 {
+				vcity_dpos.config.VoterTargetAPYBps = uint64(t)
+			}
+		case uint64:
+			if t > 0 {
+				vcity_dpos.config.VoterTargetAPYBps = t
+			}
+		case int:
+			if t > 0 {
+				vcity_dpos.config.VoterTargetAPYBps = uint64(t)
+			}
+		case int64:
+			if t > 0 {
+				vcity_dpos.config.VoterTargetAPYBps = uint64(t)
+			}
+		case *big.Int:
+			if t != nil && t.Sign() > 0 {
+				vcity_dpos.config.VoterTargetAPYBps = uint64(t.Uint64())
+			}
+		}
+	} else {
+		logger.Warn("💰 未找到 voter_target_apy，将使用默认值 500（5%）")
+	}
+
 	// 解析提案表决周期配置
 	logger.Info("📋 检查Config中的所有键", "keys", func() []string {
 		keys := make([]string, 0, len(params.Config.Config))
@@ -1166,9 +1197,14 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		vcity_dpos.config.EpochDuration = 86400 * time.Second
 	}
 
+	if vcity_dpos.config.VoterTargetAPYBps == 0 {
+		logger.Info("✅ voter_target_apy 未配置，使用默认 500 基点（5% 年化）")
+		vcity_dpos.config.VoterTargetAPYBps = 500
+	}
+
 	if vcity_dpos.config.RewardAmount == nil {
-		logger.Warn("⚠️ rewardAmount为nil，设置默认值")
-		vcity_dpos.config.RewardAmount, _ = new(big.Int).SetString("1000000000000000000000", 10) // 1000 VCITY
+		logger.Warn("⚠️ rewardAmount为nil，设置占位 1 wei（Epoch 奖池由 voter_target_apy 动态计算）")
+		vcity_dpos.config.RewardAmount = big.NewInt(1)
 	}
 
 	if vcity_dpos.config.CommissionRateDefault == 0 {
@@ -2164,12 +2200,18 @@ func (d *DPoS) GetMetrics() *DPoSMetrics {
 
 // DefaultDPoSConfig 返回默认配置
 func DefaultDPoSConfig() *DPoSConfig {
+	var rewardAcct types.Address
+	rewardAcct[0] = 1
 	return &DPoSConfig{
 		DPoSValidatorsCount:       21,
 		BlockTime:                 common.Duration{Duration: 15 * time.Second},
 		RoundTime:                 common.Duration{Duration: 30 * time.Second},
 		VoteLockTime:              86400,               // 24 hours
 		RewardRatio:               100,                 // 1%
+		EpochDuration:             86400 * time.Second, // 与链上常见默认一致
+		RewardAccount:             rewardAcct,
+		RewardAmount:              big.NewInt(1),
+		VoterTargetAPYBps:         500, // 5% 年化（基点）
 		ProposalVotePeriod:        24 * time.Hour,      // 默认提案表决周期 24小时
 		ProposalValidPeriod:       7 * 24 * time.Hour,  // 默认提案有效期 7天
 		MinFreezePeriod:           604800,              // 默认最小冻结期 7天（秒）
@@ -2195,8 +2237,11 @@ func (c *DPoSConfig) Validate() error {
 	if c.RewardAccount == types.ZeroAddress {
 		return fmt.Errorf("reward_account is required")
 	}
+	if c.VoterTargetAPYBps == 0 || c.VoterTargetAPYBps > 10000 {
+		return fmt.Errorf("voter_target_apy must be between 1 and 10000 basis points (e.g. 500 for 5%%)")
+	}
 	if c.RewardAmount == nil || c.RewardAmount.Cmp(big.NewInt(0)) <= 0 {
-		return fmt.Errorf("reward_amount must be positive")
+		return fmt.Errorf("reward_amount placeholder must be positive (use 1 wei if using voter_target_apy)")
 	}
 	return nil
 }
@@ -2212,6 +2257,7 @@ func (c *DPoSConfig) GetConfigSummary() map[string]interface{} {
 		"epoch_duration":        c.EpochDuration.String(),
 		"reward_account":        c.RewardAccount.String(),
 		"reward_amount":         c.RewardAmount.String(),
+		"voter_target_apy_bps":  c.VoterTargetAPYBps,
 	}
 }
 

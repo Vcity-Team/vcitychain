@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strconv"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/helper/common"
@@ -157,6 +158,30 @@ func (d *DPoS) UpdateParameterValue(parameter string, newValue interface{}) erro
 			if parsedDuration, err := time.ParseDuration(duration); err == nil {
 				d.config.EpochDuration = parsedDuration
 				d.logger.Info("Updated epoch duration", "newValue", duration)
+			}
+		}
+	case "dpos_voter_target_apy":
+		switch v := newValue.(type) {
+		case uint64:
+			if v >= 1 && v <= 10000 {
+				d.config.VoterTargetAPYBps = v
+				d.logger.Info("Updated voter target APY (bps)", "newValue", v)
+			}
+		case int:
+			if v >= 1 && v <= 10000 {
+				d.config.VoterTargetAPYBps = uint64(v)
+				d.logger.Info("Updated voter target APY (bps)", "newValue", v)
+			}
+		case float64:
+			u := uint64(v)
+			if u >= 1 && u <= 10000 {
+				d.config.VoterTargetAPYBps = u
+				d.logger.Info("Updated voter target APY (bps)", "newValue", u)
+			}
+		case string:
+			if u, err := strconv.ParseUint(v, 10, 64); err == nil && u >= 1 && u <= 10000 {
+				d.config.VoterTargetAPYBps = u
+				d.logger.Info("Updated voter target APY (bps)", "newValue", u)
 			}
 		}
 	default:

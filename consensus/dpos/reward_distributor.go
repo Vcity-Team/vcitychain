@@ -53,6 +53,40 @@ func (rd *RewardDistributor) UpdateRewardAmount(rewardAmount *big.Int) {
 	rd.rewardAmount = rewardAmount
 }
 
+// GetRewardAmount 返回当前 Epoch 奖池（最近一次 UpdateRewardAmount 的值）
+func (rd *RewardDistributor) GetRewardAmount() *big.Int {
+	if rd.rewardAmount == nil {
+		return big.NewInt(0)
+	}
+	return new(big.Int).Set(rd.rewardAmount)
+}
+
+// WeightedAverageCommissionBps 按出块数加权平均佣金率（基点，与 getCommissionRate 一致）
+func (rd *RewardDistributor) WeightedAverageCommissionBps(
+	validators validator.AccountSet,
+	blockCounts map[types.Address]uint64,
+	totalBlocks uint64,
+) uint64 {
+	if totalBlocks == 0 {
+		return rd.commissionDefault
+	}
+	weighted := big.NewInt(0)
+	for _, v := range validators {
+		blocks := blockCounts[v.Address]
+		if blocks == 0 {
+			continue
+		}
+		c := rd.getCommissionRate(v.Address)
+		part := new(big.Int).Mul(big.NewInt(int64(blocks)), big.NewInt(int64(c)))
+		weighted.Add(weighted, part)
+	}
+	avg := new(big.Int).Div(weighted, new(big.Int).SetUint64(totalBlocks))
+	if !avg.IsUint64() {
+		return rd.commissionDefault
+	}
+	return avg.Uint64()
+}
+
 func (rd *RewardDistributor) getCommissionRate(address types.Address) uint64 {
 	if rd.stakeStore == nil {
 		return rd.commissionDefault

@@ -3,6 +3,7 @@ package dpos
 import (
 	"fmt"
 	"math/big"
+	"strconv"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
@@ -386,34 +387,16 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		return nil
 	}
 
-	// 优先从参数系统读取 dpos_reward_amount（经过治理流程修改的值是权威数据源）
-	var rewardAmount *big.Int
-	if paramValue, err := d.getCurrentParameterValue("dpos_reward_amount"); err == nil {
-		switch v := paramValue.(type) {
-		case string:
-			if bigAmount, ok := new(big.Int).SetString(v, 10); ok && bigAmount.Cmp(big.NewInt(0)) > 0 {
-				rewardAmount = bigAmount
-				d.logger.Debug("从参数系统读取 reward amount", "amount", v)
-			}
-		case *big.Int:
-			if v != nil && v.Cmp(big.NewInt(0)) > 0 {
-				rewardAmount = new(big.Int).Set(v)
-				d.logger.Debug("从参数系统读取 reward amount", "amount", v.String())
-			}
-		}
+	// Epoch 总奖池：仅由 voter_target_apy（投票者目标年化，基点）与链上总委托质押、epoch 时长、加权佣金反推
+	rewardAmount, err := d.computeEpochRewardPoolFromVoterAPY(validators, blockCounts, totalBlocks)
+	if err != nil {
+		d.logger.Error("❌ 计算动态 Epoch 奖池失败", "epoch", epochNumber, "error", err)
+		return fmt.Errorf("compute epoch reward pool: %w", err)
 	}
-
-	// 如果参数系统没有值，使用配置值
 	if rewardAmount == nil {
-		if d.config.RewardAmount != nil {
-			rewardAmount = d.config.RewardAmount
-		} else {
-			d.logger.Error("❌ 奖励金额配置为空，跳过奖励计算", "epoch", epochNumber)
-			return fmt.Errorf("reward amount is nil")
-		}
+		return fmt.Errorf("epoch reward pool is nil")
 	}
 
-	// 更新 RewardDistributor 的奖励金额（确保使用最新值）
 	if d.rewardDistributor != nil {
 		d.rewardDistributor.UpdateRewardAmount(rewardAmount)
 	}
@@ -633,4 +616,112 @@ func (d *DPoS) calculateAndRecordEpochRewards(epochNumber uint64) error {
 func (d *DPoS) getBlocksProducedInEpoch(address types.Address, epochNumber uint64) uint64 {
 	// 简化实现：返回固定值，实际应该从区块跟踪器中获取
 	return 8 // 假设每个验证者生产8个区块
+}
+
+// totalAppliedDelegatedStake 已应用委托质押总量（用于按投票者目标 APY 反推奖池）
+func (d *DPoS) totalAppliedDelegatedStake() *big.Int {
+	if d.state == nil || d.state.StakeStore == nil {
+		return big.NewInt(0)
+	}
+	stakingInfos, err := d.state.StakeStore.GetStakingInfo()
+	if err != nil {
+		d.logger.Warn("totalAppliedDelegatedStake: GetStakingInfo failed", "error", err)
+		return big.NewInt(0)
+	}
+	total := big.NewInt(0)
+	for _, stake := range stakingInfos {
+		if stake == nil || !stake.Applied {
+			continue
+		}
+		if stake.Amount != nil && stake.Amount.Sign() > 0 {
+			total.Add(total, stake.Amount)
+		}
+	}
+	return total
+}
+
+func (d *DPoS) epochsPerYear() (uint64, error) {
+	ed := d.config.EpochDuration
+	if ed <= 0 {
+		return 0, fmt.Errorf("epochDuration must be positive")
+	}
+	year := 365 * 24 * time.Hour
+	return uint64(year / ed), nil
+}
+
+// getEffectiveVoterTargetAPYBps 优先使用治理参数 dpos_voter_target_apy（ParameterStore/内存缓存），否则使用创世 voter_target_apy。
+func (d *DPoS) getEffectiveVoterTargetAPYBps() uint64 {
+	if v, err := d.getCurrentParameterValue("dpos_voter_target_apy"); err == nil {
+		switch t := v.(type) {
+		case uint64:
+			if t >= 1 && t <= 10000 {
+				return t
+			}
+		case int:
+			if t >= 1 && t <= 10000 {
+				return uint64(t)
+			}
+		case int64:
+			if t >= 1 && t <= 10000 {
+				return uint64(t)
+			}
+		case float64:
+			u := uint64(t)
+			if u >= 1 && u <= 10000 {
+				return u
+			}
+		case string:
+			if u, err := strconv.ParseUint(t, 10, 64); err == nil && u >= 1 && u <= 10000 {
+				return u
+			}
+		}
+	}
+	if d.config != nil && d.config.VoterTargetAPYBps > 0 {
+		return d.config.VoterTargetAPYBps
+	}
+	return 500
+}
+
+// computeEpochRewardPoolFromVoterAPY 按投票者目标年化反推本 Epoch 总奖池：
+// R = voterBps * S / (Y * (10000 - commissionBps))，S 为总委托质押，Y 为每年 epoch 数，commission 为出块加权平均佣金（基点）。
+func (d *DPoS) computeEpochRewardPoolFromVoterAPY(
+	validators validator.AccountSet,
+	blockCounts map[types.Address]uint64,
+	totalBlocks uint64,
+) (*big.Int, error) {
+	voterBps := d.getEffectiveVoterTargetAPYBps()
+	S := d.totalAppliedDelegatedStake()
+	Y, err := d.epochsPerYear()
+	if err != nil {
+		return nil, err
+	}
+	if Y == 0 {
+		return nil, fmt.Errorf("epochsPerYear is zero")
+	}
+	var commBps uint64
+	if d.rewardDistributor != nil && totalBlocks > 0 {
+		commBps = d.rewardDistributor.WeightedAverageCommissionBps(validators, blockCounts, totalBlocks)
+	} else {
+		commBps = d.config.CommissionRateDefault
+	}
+	if commBps >= 10000 {
+		commBps = 9999
+	}
+	denom := 10000 - commBps
+	if denom == 0 {
+		denom = 1
+	}
+	num := new(big.Int).Mul(S, big.NewInt(int64(voterBps)))
+	den := new(big.Int).Mul(big.NewInt(int64(Y)), big.NewInt(int64(denom)))
+	if den.Sign() == 0 {
+		return nil, fmt.Errorf("reward pool denominator is zero")
+	}
+	R := new(big.Int).Div(num, den)
+	d.logger.Info("🔢 动态 Epoch 奖池",
+		"voterTargetAPYBps", voterBps,
+		"totalAppliedStake", S.String(),
+		"epochsPerYear", Y,
+		"weightedCommissionBps", commBps,
+		"rewardPool", R.String())
+	return R, nil
 }

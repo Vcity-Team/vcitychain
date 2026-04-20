@@ -133,6 +133,14 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Description: "Reward amount per epoch (wei)",
 			Category:    "economic",
 		},
+		"dpos_voter_target_apy": {
+			Name:        "Voter Target APY",
+			Type:        "uint64",
+			MinValue:    uint64(1),     // 0.01% 年化
+			MaxValue:    uint64(10000), // 100% 年化（基点制）
+			Description: "Target voter annual yield in basis points (500 = 5%). Overrides genesis voter_target_apy when set by governance.",
+			Category:    "economic",
+		},
 		"dpos_delegate_threshold": {
 			Name:        "Delegate Threshold",
 			Type:        "string",
@@ -293,6 +301,11 @@ func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 			return d.config.RewardAmount.String(), nil
 		}
 		return "0", nil
+	case "dpos_voter_target_apy":
+		if d.config != nil && d.config.VoterTargetAPYBps > 0 {
+			return d.config.VoterTargetAPYBps, nil
+		}
+		return uint64(500), nil
 	case "dpos_delegate_threshold":
 		// 直接读取配置，避免参数缓存初始化时递归持锁
 		if d.config != nil && d.config.DPoSDelegateThreshold != nil {

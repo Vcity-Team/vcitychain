@@ -339,7 +339,7 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 	validatorRewardBig := big.NewInt(0)
 	voterRewardBig := big.NewInt(0)
 
-	if d.config.RewardAmount != nil && blocksProduced > 0 {
+	if d.rewardDistributor != nil && blocksProduced > 0 {
 		validators := d.GetValidators()
 		var targetValidator *validator.ValidatorMetadata
 		for _, val := range validators {
@@ -417,9 +417,11 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 
 	// 检查奖励是否足够
 	insufficientFunds := false
-	if d.config.RewardAmount != nil {
-		requiredAmount := new(big.Int).Set(d.config.RewardAmount)
-		insufficientFunds = rewardAccountBalance.Cmp(requiredAmount) < 0
+	if d.rewardDistributor != nil {
+		requiredAmount := d.rewardDistributor.GetRewardAmount()
+		if requiredAmount != nil {
+			insufficientFunds = rewardAccountBalance.Cmp(requiredAmount) < 0
+		}
 	}
 
 	// 添加最终结果的调试日志

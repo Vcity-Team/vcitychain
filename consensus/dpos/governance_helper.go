@@ -56,6 +56,11 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 			return d.config.RewardAmount.String(), nil
 		}
 		return "0", nil
+	case "dpos_voter_target_apy":
+		if d.config != nil && d.config.VoterTargetAPYBps > 0 {
+			return d.config.VoterTargetAPYBps, nil
+		}
+		return uint64(500), nil
 	case "dpos_delegate_threshold":
 		// 直接使用配置值（避免递归调用自身）；若未配置则返回默认 0
 		if d.config != nil && d.config.DPoSDelegateThreshold != nil {
@@ -317,6 +322,44 @@ func (d *DPoS) updateParameterValue(paramName string, value interface{}, source 
 		// 更新 RewardDistributor.rewardAmount
 		if d.rewardDistributor != nil {
 			d.rewardDistributor.UpdateRewardAmount(rewardAmount)
+		}
+
+	case "dpos_voter_target_apy":
+		var bps uint64
+		switch v := value.(type) {
+		case string:
+			if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
+				bps = parsed
+			} else {
+				d.logger.Warn("无法解析 dpos_voter_target_apy", "value", v, "error", err)
+				return fmt.Errorf("invalid dpos_voter_target_apy: %v", v)
+			}
+		case uint64:
+			bps = v
+		case int:
+			if v < 0 {
+				return fmt.Errorf("invalid dpos_voter_target_apy: %v", v)
+			}
+			bps = uint64(v)
+		case int64:
+			if v < 0 {
+				return fmt.Errorf("invalid dpos_voter_target_apy: %v", v)
+			}
+			bps = uint64(v)
+		case float64:
+			if v < 0 {
+				return fmt.Errorf("invalid dpos_voter_target_apy: %v", v)
+			}
+			bps = uint64(v)
+		default:
+			return fmt.Errorf("unsupported dpos_voter_target_apy type: %T", value)
+		}
+		if bps < 1 || bps > 10000 {
+			return fmt.Errorf("dpos_voter_target_apy must be between 1 and 10000 basis points, got %d", bps)
+		}
+		if d.config != nil {
+			d.config.VoterTargetAPYBps = bps
+			d.logger.Info("✅ 已更新 d.config.VoterTargetAPYBps", "bps", bps)
 		}
 
 	case "dpos_delegate_threshold":
