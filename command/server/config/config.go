@@ -68,6 +68,12 @@ type Config struct {
 	DPoSMinorOffenseSlashRate  uint64 `json:"dpos_minor_offense_slash_rate" yaml:"dpos_minor_offense_slash_rate"`   // 轻度违规削减率（基点）
 	DPoSSevereOffenseSlashRate uint64 `json:"dpos_severe_offense_slash_rate" yaml:"dpos_severe_offense_slash_rate"` // 严重违规削减率（基点）
 
+	// DPoS 奖励与启动引导配置（扩展字段）
+	// voter_target_apy: 投票者目标年化（基点，500=5%）
+	VoterTargetAPYBps uint64 `json:"voter_target_apy" yaml:"voter_target_apy"`
+	// dpos_bootstrap_rpc: 启动时通过 JSON-RPC eth_call 查询 staking 合约 validators() 的端点
+	DPoSBootstrapRPC string `json:"dpos_bootstrap_rpc" yaml:"dpos_bootstrap_rpc"`
+
 	// London Fork 配置（从 yaml 读取，不改变 genesis hash）
 	BaseFeeConfig string `json:"base_fee_config" yaml:"base_fee_config"` // 格式: "baseFee:baseFeeEM:baseFeeChangeDenom"
 	BurnContract  string `json:"burn_contract" yaml:"burn_contract"`     // 格式: "blockNumber:address[:destinationAddress]"

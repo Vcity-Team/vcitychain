@@ -8,15 +8,11 @@ import (
 
 // start 启动DPoS runtime
 func (r *dposRuntime) start() error {
-	r.logger.Info("🚀 开始启动DPoS runtime")
-
 	// 初始化运行时状态
-	r.logger.Info("🔧 开始初始化DPoS runtime状态...")
 	if err := r.initializeRuntime(); err != nil {
 		r.logger.Error("❌ 初始化DPoS runtime失败", "error", err)
 		return fmt.Errorf("failed to initialize runtime: %w", err)
 	}
-	r.logger.Info("✅ DPoS runtime状态初始化成功")
 
 	// ✅ 方案2：确保networkIntegration已启动
 	if r.networkIntegration != nil {
@@ -36,26 +32,19 @@ func (r *dposRuntime) start() error {
 	}
 
 	// 启动区块生产定时器
-	r.logger.Info("🏭 开始启动区块生产...")
 	if err := r.startBlockProduction(); err != nil {
 		r.logger.Error("❌ 启动区块生产定时器失败", "error", err)
 		return fmt.Errorf("failed to start block production: %w", err)
 	}
-	r.logger.Info("✅ 区块生产启动成功")
 
 	// 启动投票统计定时器
-	r.logger.Info("📊 开始启动投票统计...")
 	if err := r.startVoteCollection(); err != nil {
 		r.logger.Error("❌ 启动投票统计定时器失败", "error", err)
 		return fmt.Errorf("failed to start vote collection: %w", err)
 	}
-	r.logger.Info("✅ 投票统计启动成功")
 
 	// 启动持久的签名请求监听器 - 确保所有节点都能接收到广播的签名请求
-	r.logger.Info("📡 启动签名请求监听器...")
 	go r.listenForSignatureRequests(context.Background())
-
-	r.logger.Info("🎉 DPoS runtime启动成功")
 	return nil
 }
 

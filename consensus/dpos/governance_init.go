@@ -67,38 +67,21 @@ func (d *DPoS) initializeParameterCache() error {
 
 	d.parameterCurrentValues = make(map[string]interface{})
 
-	d.logger.Info("Starting parameter cache initialization",
-		"votableParamsCount", len(d.votableParameters))
-
 	// 强制从数据库加载所有参数值
 	for paramName := range d.votableParameters {
-		d.logger.Info("Parameter cache: handling param", "param", paramName)
 		// 优先从数据库读取（数据库是权威数据源）
 		dbValue, err := d.state.ParameterStore.GetParameterValue(paramName)
 		if err == nil {
 			// 数据库有值，使用数据库值
 			d.parameterCurrentValues[paramName] = dbValue
-			d.logger.Info("Loaded parameter from database1",
-				"param", paramName,
-				"value", dbValue)
 			continue
 		}
-
-		d.logger.Info("Parameter cache: db miss or error, fallback to config",
-			"param", paramName,
-			"error", err)
 
 		// 数据库没有值，使用配置文件默认值并保存到数据库
 		if defaultValue, cfgErr := d.getConfigParameterValue(paramName); cfgErr == nil {
 			d.parameterCurrentValues[paramName] = defaultValue
-			d.logger.Info("Parameter cache: config value",
-				"param", paramName,
-				"value", defaultValue)
 			saveErr := d.state.ParameterStore.SaveParameterValue(paramName, defaultValue, "config")
-			d.logger.Info("Loaded parameter from config",
-				"param", paramName,
-				"value", defaultValue,
-				"saveError", saveErr)
+			_ = saveErr // 避免启动阶段刷屏日志；失败会在后续读取时暴露
 			continue
 		} else {
 			d.logger.Error("Failed to get config value for parameter",
@@ -106,8 +89,6 @@ func (d *DPoS) initializeParameterCache() error {
 				"error", cfgErr)
 		}
 	}
-
-	d.logger.Info("Parameter cache loop finished")
 
 	d.logger.Info("Parameter cache initialized",
 		"count", len(d.parameterCurrentValues),

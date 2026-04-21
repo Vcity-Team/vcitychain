@@ -80,6 +80,12 @@ type Config struct {
 	DPoSMissedBlocksPercentage uint64 `yaml:"dpos_missed_blocks_percentage"` // 漏块率阈值（基点）
 	DPoSMinorOffenseSlashRate  uint64 `yaml:"dpos_minor_offense_slash_rate"` // 轻度违规削减率（基点）
 	DPoSSevereOffenseSlashRate uint64 `yaml:"dpos_severe_offense_slash_rate"` // 严重违规削减率（基点）
+
+	// DPoS 奖励与启动引导配置（扩展字段）
+	// voter_target_apy: 投票者目标年化（基点，500=5%）
+	VoterTargetAPYBps uint64 `yaml:"voter_target_apy"`
+	// dpos_bootstrap_rpc: 启动时通过 JSON-RPC eth_call 查询 staking 合约 validators() 的端点
+	DPoSBootstrapRPC string `yaml:"dpos_bootstrap_rpc"`
 }
 
 // Telemetry holds the config details for metric services

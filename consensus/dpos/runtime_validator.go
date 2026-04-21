@@ -23,38 +23,23 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 	if !exists {
 		return fmt.Errorf("genesis block not found")
 	}
+	_ = genesisHeader // 不再读取 extraData，保留获取仅用于存在性校验
 
-	// 2. 解析验证者地址（与 DPoS 启动一致：staking 合约优先，失败回退创世 extraData）
+	// 2. 解析验证者地址（仅允许 staking 合约 JSON-RPC 获取，不允许回退 genesis extraData）
 	var ibftValidators validator.AccountSet
-	source := "genesis_extradata"
+	source := "unknown"
 	if r.config != nil && r.config.dposBackend != nil {
 		if dposInstance, ok := r.config.dposBackend.(*DPoS); ok && dposInstance != nil {
 			if bootstrap, src, berr := dposInstance.getBootstrapValidators(); berr == nil && len(bootstrap) > 0 {
 				ibftValidators = bootstrap
 				source = src
+			} else if berr != nil {
+				return fmt.Errorf("failed to get bootstrap validators from staking contract: %w", berr)
 			}
 		}
 	}
-	if ibftValidators == nil {
-		var err error
-		ibftValidators, err = r.parseValidatorsFromExtraData(genesisHeader.ExtraData)
-		if err != nil {
-			return fmt.Errorf("failed to parse validators from extraData: %w", err)
-		}
-	}
-
-	// 打印从创世文件解析出的验证者地址
-	r.logger.Info("🔍 从创世文件ExtraData解析出的验证者地址",
-		"totalCount", ibftValidators.Len(),
-		"extraDataLength", len(genesisHeader.ExtraData),
-		"bootstrapSource", source)
-
-	for i, validator := range ibftValidators {
-		r.logger.Info("📝 创世验证者地址",
-			"index", i,
-			"address", validator.Address.String(),
-			"votingPower", validator.VotingPower.String(),
-			"isActive", validator.IsActive)
+	if ibftValidators == nil || ibftValidators.Len() == 0 {
+		return fmt.Errorf("bootstrap validators is empty (source=%s)", source)
 	}
 
 	// 3. 设置最小质押门槛（从配置读取 dpos_delegate_threshold）
@@ -127,18 +112,7 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 
 	r.logger.Info("✅ DPoS验证者解析完成", "count", validValidatorCount)
 
-	// 打印最终解析出的创世验证者列表
-	r.logger.Info("🎯 最终解析出的创世验证者列表",
-		"totalCount", len(r.delegates))
-
-	for i, delegate := range r.delegates {
-		r.logger.Info("📋 创世验证者详情",
-			"index", i,
-			"address", delegate.Address.String(),
-			"votingPower", delegate.VotingPower.String(),
-			"isActive", delegate.IsActive,
-			"hasBlsKey", delegate.BlsKey != nil)
-	}
+	// 不再逐条打印创世验证者详情，避免启动刷屏（需要排查时请查看 staking 合约返回）
 
 	// 构建创世验证者映射
 	if r.config != nil && r.config.dposBackend != nil {
@@ -300,20 +274,17 @@ func (r *dposRuntime) initializeDelegates() error {
 		r.delegates = delegates
 		r.logger.Debug("initialized delegates from backend", "count", len(r.delegates))
 
-		// 如果从backend获取的delegates为空，尝试从extraData解析
+		// 如果从 backend 获取的 delegates 为空，执行启动引导解析
 		if len(r.delegates) == 0 {
-			r.logger.Info("🎯 从backend获取的delegates为空，尝试从extraData解析验证者")
-
-			// 直接在dposRuntime中解析extraData验证者
+			// 直接在 dposRuntime 中执行启动引导解析（当前实现：仅允许通过 staking 合约读取）
 			if err := r.parseValidatorsFromGenesis(); err != nil {
 				r.logger.Error("Failed to parse validators from genesis", "error", err)
 				// 继续使用空集合
 			} else {
-				r.logger.Info("✅ 已从extraData解析验证者", "count", len(r.delegates))
-				fromExtraData = true
+				r.logger.Info("✅ 已完成启动引导解析验证者", "count", len(r.delegates))
 			}
 		} else {
-			r.logger.Info("✅ 从backend获取到验证者，跳过extraData解析", "count", len(r.delegates))
+			r.logger.Info("✅ 从backend获取到验证者，跳过启动引导解析", "count", len(r.delegates))
 		}
 
 		// 按voterpower排序并截取前N个验证者

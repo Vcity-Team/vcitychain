@@ -178,6 +178,23 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		"dpos_minor_offense_slash_rate":  float64(s.config.DPoSMinorOffenseSlashRate),  // 轻度违规削减率（基点）
 		"dpos_severe_offense_slash_rate": float64(s.config.DPoSSevereOffenseSlashRate), // 严重违规削减率（基点）
 	}
+
+	// 可选：投票者目标 APY（基点，500=5%）
+	if s.config.VoterTargetAPYBps > 0 {
+		engineConfig["voter_target_apy"] = s.config.VoterTargetAPYBps
+		s.logger.Info("✅ 透传 voter_target_apy 到 DPoS 引擎", "voter_target_apy_bps", s.config.VoterTargetAPYBps)
+	} else {
+		s.logger.Info("ℹ️ 未配置 voter_target_apy，DPoS 将使用默认值", "defaultBps", 500)
+	}
+
+	// 可选：启动引导 RPC（从 staking 合约读取 validators()）
+	if strings.TrimSpace(s.config.DPoSBootstrapRPC) != "" {
+		rpc := strings.TrimSpace(s.config.DPoSBootstrapRPC)
+		engineConfig["dpos_bootstrap_rpc"] = rpc
+		s.logger.Info("✅ 透传 dpos_bootstrap_rpc 到 DPoS 引擎", "rpc", rpc)
+	} else {
+		s.logger.Warn("⚠️ 未配置 dpos_bootstrap_rpc，DPoS 将回退到创世 extraData 解析验证者")
+	}
 	commissionEffectiveStr := s.config.DPoSCommissionEffective
 	if strings.TrimSpace(commissionEffectiveStr) == "" {
 		commissionEffectiveStr = "21d"

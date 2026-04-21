@@ -2,9 +2,14 @@ package dpos
 
 import (
 	"context"
+	"bytes"
 	"errors"
 	"fmt"
+	"encoding/hex"
+	"encoding/json"
+	"io"
 	"math/big"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,8 +31,6 @@ import (
 	"github.com/Vcity-Team/vcitychain/network"
 	"github.com/Vcity-Team/vcitychain/secrets"
 	"github.com/Vcity-Team/vcitychain/state"
-	"github.com/Vcity-Team/vcitychain/contracts"
-	"github.com/Vcity-Team/vcitychain/contracts/staking"
 	"github.com/Vcity-Team/vcitychain/syncer"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
@@ -255,6 +258,8 @@ type DPoSConfig struct {
 	RewardAmount *big.Int `json:"rewardAmount" yaml:"rewardAmount"`
 	// VoterTargetAPYBps 投票者目标年化收益率（基点，10000=100%，例如 500=5%）；为唯一需要配置的奖池相关经济参数
 	VoterTargetAPYBps uint64 `json:"voter_target_apy" yaml:"voter_target_apy"`
+	// BootstrapRPC 可选：启动时从 staking 合约读取 validators() 的 JSON-RPC 端点（用于无法在本地 Transition 中成功调用时的回退）
+	BootstrapRPC string `json:"dpos_bootstrap_rpc" yaml:"dpos_bootstrap_rpc"`
 	GenesisRootAccount  types.Address `json:"genesisRootAccount" yaml:"genesisRootAccount"`          // 从创世文件alloc中读取的根账户地址
 	ProposalVotePeriod  time.Duration `json:"proposalVotePeriod" yaml:"dpos_proposal_vote_period"`   // 提案表决周期
 	ProposalValidPeriod time.Duration `json:"proposalValidPeriod" yaml:"dpos_proposal_valid_period"` // 提案有效期
@@ -803,11 +808,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	// 直接使用server层已解析的配置（避免重复解析）
 	logger.Info("🔍 开始解析DPoS经济系统配置", "configKeys", len(params.Config.Config))
 
-	// 临时调试：打印所有配置键值对（帮助确认配置是否正确加载）
-	for key, value := range params.Config.Config {
-		logger.Info("🔍 配置键值对", "key", key, "type", fmt.Sprintf("%T", value), "value", value)
-	}
-
 	// 确保漏块率阈值配置存在且有效
 	if missedBlocksPercentageRaw, exists := getConfigValue("dpos_missed_blocks_percentage", "missed_blocks_percentage"); exists {
 		if percentage, ok := toUint64(missedBlocksPercentageRaw); !ok || percentage == 0 {
@@ -971,8 +971,16 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Warn("💰 未找到rewardAmount配置")
 	}
 
+	if v, exists := params.Config.Config["dpos_bootstrap_rpc"]; exists {
+		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+			vcity_dpos.config.BootstrapRPC = strings.TrimSpace(s)
+			logger.Info("🔗 设置 dpos_bootstrap_rpc", "url", vcity_dpos.config.BootstrapRPC)
+		} else {
+			logger.Warn("🔗 dpos_bootstrap_rpc 类型断言失败或为空", "type", fmt.Sprintf("%T", v))
+		}
+	}
+
 	if vta, exists := params.Config.Config["voter_target_apy"]; exists {
-		logger.Info("🔍 找到 voter_target_apy 配置", "type", fmt.Sprintf("%T", vta), "value", vta)
 		switch t := vta.(type) {
 		case float64:
 			if t > 0 {
@@ -995,19 +1003,9 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 				vcity_dpos.config.VoterTargetAPYBps = uint64(t.Uint64())
 			}
 		}
-	} else {
-		logger.Warn("💰 未找到 voter_target_apy，将使用默认值 500（5%）")
 	}
 
 	// 解析提案表决周期配置
-	logger.Info("📋 检查Config中的所有键", "keys", func() []string {
-		keys := make([]string, 0, len(params.Config.Config))
-		for k := range params.Config.Config {
-			keys = append(keys, k)
-		}
-		return keys
-	}())
-
 	if proposalVotePeriod, exists := params.Config.Config["proposalVotePeriod"]; exists {
 		logger.Info("🔍 找到proposalVotePeriod配置", "type", fmt.Sprintf("%T", proposalVotePeriod), "value", proposalVotePeriod)
 		if period, ok := proposalVotePeriod.(time.Duration); ok {
@@ -1563,59 +1561,116 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 // getBootstrapValidators returns initial validator candidates for DPoS startup.
 // Priority:
 // 1) Read from staking contract (0x1001) method validators() at the current chain head state root
-// 2) Fallback to parsing genesis header extraData (IBFT-style)
 func (d *DPoS) getBootstrapValidators() (validator.AccountSet, string, error) {
-	// 1) contract first
-	if d != nil && d.config != nil && d.config.Executor != nil && d.blockchain != nil {
-		if head := d.blockchain.CurrentHeader(); head != nil {
-			snap, err := d.config.Executor.StateAt(head.StateRoot)
-			if err == nil {
-				forks := d.config.Executor.GetForksInTime(head.Number)
-				t := state.NewTransition(forks, snap, state.NewTxn(snap))
-				vals, qerr := staking.QueryValidators(t, contracts.SystemCaller)
-				if qerr == nil && len(vals) > 0 {
-					set := make(validator.AccountSet, 0, len(vals))
-					for _, addr := range vals {
-						set = append(set, &validator.ValidatorMetadata{
-							Address:     addr,
-							VotingPower: big.NewInt(0),
-							BlsKey:      nil,
-							IsActive:    true,
-						})
-					}
-					d.logger.Info("✅ 从 staking 合约读取 bootstrap 验证者",
-						"contract", "0x0000000000000000000000000000000000001001",
-						"count", len(set),
-						"head", head.Number)
-					return set, "staking_contract_0x1001", nil
-				}
-				if qerr != nil {
-					d.logger.Warn("⚠️ 从 staking 合约读取 validators() 失败，回退到创世 extraData",
-						"error", qerr.Error(),
-						"head", head.Number)
-				} else {
-					d.logger.Warn("⚠️ staking 合约 validators() 返回为空，回退到创世 extraData",
-						"head", head.Number)
-				}
-			} else {
-				d.logger.Warn("⚠️ 获取 head StateAt 失败，回退到创世 extraData", "error", err.Error())
-			}
-		}
+	// JSON-RPC eth_call (the only supported path)
+	if d == nil || d.config == nil || strings.TrimSpace(d.config.BootstrapRPC) == "" {
+		return nil, "missing_dpos_bootstrap_rpc", fmt.Errorf("dpos_bootstrap_rpc is required (bootstrap validators must be read from staking contract 0x1001.validators())")
 	}
 
-	// 2) fallback genesis extraData
-	genesisHeader, exists := d.config.Blockchain.GetHeaderByNumber(0)
-	if !exists {
-		return nil, "none", fmt.Errorf("genesis block not found")
+	if strings.TrimSpace(d.config.BootstrapRPC) != "" {
+		d.logger.Info("🌐 尝试从 JSON-RPC 获取 bootstrap 验证者",
+			"rpc", d.config.BootstrapRPC,
+			"contract", "0x0000000000000000000000000000000000001001",
+			"method", "validators()")
+		addrs, err := d.queryValidatorsFromRPC(d.config.BootstrapRPC)
+		if err == nil && len(addrs) > 0 {
+			set := make(validator.AccountSet, 0, len(addrs))
+			for _, addr := range addrs {
+				set = append(set, &validator.ValidatorMetadata{
+					Address:     addr,
+					VotingPower: big.NewInt(0),
+					BlsKey:      nil,
+					IsActive:    true,
+				})
+			}
+			d.logger.Info("✅ 从 JSON-RPC 读取 bootstrap 验证者",
+				"rpc", d.config.BootstrapRPC,
+				"contract", "0x0000000000000000000000000000000000001001",
+				"count", len(set))
+			return set, "jsonrpc_eth_call_0x1001", nil
+		}
+
+		if err != nil {
+			d.logger.Error("❌ 从 JSON-RPC 读取 validators() 失败（已禁用 extraData 回退）",
+				"rpc", d.config.BootstrapRPC,
+				"error", err.Error())
+			return nil, "jsonrpc_eth_call_0x1001_failed", err
+		}
+
+		d.logger.Error("❌ 从 JSON-RPC 读取 validators() 返回空列表（已禁用 extraData 回退）",
+			"rpc", d.config.BootstrapRPC)
+		return nil, "jsonrpc_eth_call_0x1001_empty", fmt.Errorf("staking validators() returned empty list")
 	}
-	ibftValidators, err := d.parseValidatorsFromExtraData(genesisHeader.ExtraData)
+
+	// unreachable
+	return nil, "unreachable", fmt.Errorf("unreachable bootstrap path")
+}
+
+func (d *DPoS) queryValidatorsFromRPC(rpcURL string) ([]types.Address, error) {
+	// validators() selector = keccak256("validators()")[:4] = 0xca1e7819
+	reqBody := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "eth_call",
+		"params": []any{
+			map[string]any{
+				"to":   "0x0000000000000000000000000000000000001001",
+				"data": "0xca1e7819",
+			},
+			"latest",
+		},
+	}
+	raw, _ := json.Marshal(reqBody)
+	resp, err := http.Post(rpcURL, "application/json", bytes.NewReader(raw))
 	if err != nil {
-		return nil, "genesis_extradata", fmt.Errorf("failed to parse validators from genesis extraData: %w", err)
+		return nil, err
 	}
-	if len(ibftValidators) == 0 {
-		return nil, "genesis_extradata", fmt.Errorf("no validators found in genesis extraData")
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	var out struct {
+		Result string `json:"result"`
+		Error  any    `json:"error"`
 	}
-	return ibftValidators, "genesis_extradata", nil
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("rpc decode: %w", err)
+	}
+	if out.Error != nil {
+		return nil, fmt.Errorf("rpc returned error: %v", out.Error)
+	}
+	if out.Result == "" || out.Result == "0x" {
+		return nil, fmt.Errorf("empty rpc result")
+	}
+	return decodeABIAddressArray(out.Result)
+}
+
+func decodeABIAddressArray(hexResult string) ([]types.Address, error) {
+	hexResult = strings.TrimPrefix(strings.TrimSpace(hexResult), "0x")
+	b, err := hex.DecodeString(hexResult)
+	if err != nil {
+		return nil, err
+	}
+	if len(b) < 64 {
+		return nil, fmt.Errorf("result too short")
+	}
+	// first 32 bytes: offset
+	offset := new(big.Int).SetBytes(b[:32]).Uint64()
+	if int(offset)+32 > len(b) {
+		return nil, fmt.Errorf("invalid offset")
+	}
+	// at offset: length
+	n := new(big.Int).SetBytes(b[offset : offset+32]).Uint64()
+	start := int(offset) + 32
+	need := start + int(n)*32
+	if need > len(b) {
+		return nil, fmt.Errorf("invalid array length")
+	}
+	addrs := make([]types.Address, 0, n)
+	for i := 0; i < int(n); i++ {
+		word := b[start+i*32 : start+(i+1)*32]
+		addrs = append(addrs, types.BytesToAddress(word[12:32]))
+	}
+	return addrs, nil
 }
 
 // 新增：从extraData解析验证者地址

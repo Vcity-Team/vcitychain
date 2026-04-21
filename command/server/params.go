@@ -255,5 +255,9 @@ func (p *serverParams) generateConfig() *server.Config {
 		DPoSMissedBlocksPercentage: p.dposMissedBlocksPercentage,
 		DPoSMinorOffenseSlashRate:  p.dposMinorOffenseSlashRate,
 		DPoSSevereOffenseSlashRate: p.dposSevereOffenseSlashRate,
+
+		// 扩展：DPoS 启动引导与奖励目标 APY
+		VoterTargetAPYBps:  p.rawConfig.VoterTargetAPYBps,
+		DPoSBootstrapRPC:   p.rawConfig.DPoSBootstrapRPC,
 	}
 }
