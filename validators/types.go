@@ -1,6 +1,7 @@
 package validators
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/Vcity-Team/vcitychain/types"
@@ -24,6 +25,30 @@ func (vt ValidatorType) String() string {
 		return "bls"
 	default:
 		return "unknown"
+	}
+}
+
+// UnmarshalJSON decodes JSON strings ("ecdsa", "bls") or numbers (0, 1) into ValidatorType.
+func (vt *ValidatorType) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		parsed, err := ParseValidatorType(s)
+		if err != nil {
+			return err
+		}
+		*vt = parsed
+		return nil
+	}
+	var n uint8
+	if err := json.Unmarshal(data, &n); err != nil {
+		return err
+	}
+	switch ValidatorType(n) {
+	case ECDSAValidatorType, BLSValidatorType:
+		*vt = ValidatorType(n)
+		return nil
+	default:
+		return fmt.Errorf("invalid validator type: %d", n)
 	}
 }
 
