@@ -114,7 +114,28 @@ func (p *blockchainWrapper) CommitBlock(block *types.FullBlock) error {
 	// 注意：WriteFullBlock 内部已经有写锁跟踪日志
 	err := p.blockchain.WriteFullBlock(block, consensusSource)
 	if err != nil {
-		p.logger.Error("❌ [CommitBlock] WriteFullBlock失败", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String()[:16], "error", err)
+		// 关键诊断信息：parentHash / 本地head / parent是否存在
+		var (
+			parentHash     = block.Block.Header.ParentHash
+			localHead      = p.blockchain.Header()
+			parentExists   = false
+			parentHashText = parentHash.String()
+		)
+
+		if _, ok := p.blockchain.GetHeaderByHash(parentHash); ok {
+			parentExists = true
+		}
+
+		p.logger.Error(
+			"❌ [CommitBlock] WriteFullBlock失败",
+			"blockNumber", block.Block.Number(),
+			"blockHash", block.Block.Hash().String(),
+			"parentHash", parentHashText,
+			"parentExists", parentExists,
+			"localHeadNumber", localHead.Number,
+			"localHeadHash", localHead.Hash.String(),
+			"error", err,
+		)
 		return err
 	}
 
