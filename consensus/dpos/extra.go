@@ -1152,9 +1152,17 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 	}
 
 	realParentBlockHash := parent.Hash
+	if parentExtra.Checkpoint == nil {
+		return fmt.Errorf(
+			"missing parent checkpoint data (parentNumber=%d parentHash=%s)",
+			parent.Number,
+			realParentBlockHash.String(),
+		)
+	}
+
 	parentCheckpointHash, err := parentExtra.Checkpoint.Hash(chainID, parent.Number, realParentBlockHash)
 	if err != nil {
-		return fmt.Errorf("failed to calculate parent proposal hash: %w", err)
+		return fmt.Errorf("failed to calculate parent checkpoint hash: %w", err)
 	}
 
 	parentBlockNumber := blockNumber - 1
@@ -2393,6 +2401,9 @@ func (c *CheckpointData) Copy() *CheckpointData {
 // Hash calculates keccak256 hash of the CheckpointData.
 // CheckpointData is ABI encoded and then hashed.
 func (c *CheckpointData) Hash(chainID uint64, blockNumber uint64, blockHash types.Hash) (types.Hash, error) {
+	if c == nil {
+		return types.ZeroHash, fmt.Errorf("checkpoint data is nil")
+	}
 	checkpointMap := map[string]interface{}{
 		"chainId":               new(big.Int).SetUint64(chainID),
 		"blockNumber":           new(big.Int).SetUint64(blockNumber),
