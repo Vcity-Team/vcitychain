@@ -1153,11 +1153,15 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 
 	realParentBlockHash := parent.Hash
 	if parentExtra.Checkpoint == nil {
-		return fmt.Errorf(
-			"missing parent checkpoint data (parentNumber=%d parentHash=%s)",
-			parent.Number,
-			realParentBlockHash.String(),
-		)
+		// 兼容历史/回滚/导入数据：部分父区块可能缺失 Checkpoint 字段。
+		// 这种情况下无法计算 proposalHash 来验父块签名，只能跳过父块签名验证，
+		// 否则会导致节点因“缺父块 checkpoint”拒绝同步并各自出块形成分叉。
+		logger.Warn("⚠️ [ValidateParentSignatures] 父区块Checkpoint缺失，跳过父区块签名验证",
+			"blockNumber", blockNumber,
+			"parentBlockNumber", parent.Number,
+			"parentHash", realParentBlockHash.String(),
+			"note", "请尽快修复/补齐父区块ExtraData中的Checkpoint字段")
+		return nil
 	}
 
 	parentCheckpointHash, err := parentExtra.Checkpoint.Hash(chainID, parent.Number, realParentBlockHash)
