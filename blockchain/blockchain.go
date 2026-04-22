@@ -1554,11 +1554,19 @@ func (b *Blockchain) writeHeaderImpl(
 	// parent total difficulty of incoming header
 	parentTD, ok := b.readTotalDifficulty(header.ParentHash)
 	if !ok {
-		return false, nil, fmt.Errorf(
-			"parent of %s (%d) not found",
-			header.Hash.String(),
-			header.Number,
-		)
+		// DPoS / PoS 场景下，历史数据可能缺失 TotalDifficulty 条目（例如导入/回滚后未写入 TD）。
+		// 为了避免因为缺 TD 阻塞出块/同步，这里尝试从 parent header 推导并回填 TD。
+		if parentHeader, okHdr := b.readHeader(header.ParentHash); okHdr && parentHeader != nil && parentHeader.Difficulty > 0 {
+			parentTD = new(big.Int).SetUint64(parentHeader.Difficulty)
+			// best-effort 回填，便于后续写块/重组逻辑正常工作
+			batchWriter.PutTotalDifficulty(header.ParentHash, parentTD)
+		} else {
+			return false, nil, fmt.Errorf(
+				"parent of %s (%d) not found",
+				header.Hash.String(),
+				header.Number,
+			)
+		}
 	}
 
 	currentHeader := b.Header()
