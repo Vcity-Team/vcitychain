@@ -1551,6 +1551,36 @@ func (b *Blockchain) dispatchEvent(evnt *Event) {
 // Returning parameters (is canonical header, new total difficulty, error)
 func (b *Blockchain) writeHeaderImpl(
 	batchWriter *storage.BatchWriter, evnt *Event, header *types.Header) (bool, *big.Int, error) {
+	currentHeader := b.Header()
+
+	// Fast-path: most common case during normal operation / block production.
+	// If the parent is the current in-memory head, derive parentTD from memory to avoid relying on DB TD/header presence
+	// (which can be missing after rollback/import, even though head pointers are updated).
+	if header.ParentHash == currentHeader.Hash {
+		parentTD := b.CurrentTD()
+		if parentTD == nil {
+			// best-effort fallback chain:
+			// 1) try DB
+			// 2) derive from head header difficulty (historically used as TD in this codebase)
+			if td, ok := b.readTotalDifficulty(currentHeader.Hash); ok && td != nil {
+				parentTD = td
+			} else if currentHeader.Difficulty > 0 {
+				parentTD = new(big.Int).SetUint64(currentHeader.Difficulty)
+			} else {
+				parentTD = big.NewInt(0)
+			}
+		}
+
+		incomingTD := new(big.Int).Add(new(big.Int).Set(parentTD), new(big.Int).SetUint64(header.Difficulty))
+		batchWriter.PutCanonicalHeader(header, incomingTD)
+
+		evnt.Type = EventHead
+		evnt.AddNewHeader(header)
+		evnt.SetDifficulty(incomingTD)
+
+		return true, incomingTD, nil
+	}
+
 	// parent total difficulty of incoming header
 	parentTD, ok := b.readTotalDifficulty(header.ParentHash)
 	if !ok {
@@ -1569,7 +1599,6 @@ func (b *Blockchain) writeHeaderImpl(
 		}
 	}
 
-	currentHeader := b.Header()
 	incomingTD := new(big.Int).Add(parentTD, new(big.Int).SetUint64(header.Difficulty))
 
 	// if parent of new header is current header just put everything in batch and update event
