@@ -30,27 +30,10 @@ func (d *DPoS) GetDelegates(blockNumber uint64, parents []*types.Header) (valida
 
 		// 如果runtime.delegates为空，尝试从数据库读取
 		if d.state != nil && d.state.StakeStore != nil {
-			d.logger.Info("🔍 runtime.delegates为空，尝试从数据库读取验证者")
-			if dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false); err == nil && len(dbValidators) > 0 {
-				d.logger.Info("🔍 从数据库成功读取验证者", "count", len(dbValidators))
-
-				// 添加详细日志：打印从数据库读取的验证者信息
-				d.logger.Info("🔍 数据库验证者详细信息:")
-				for i, validator := range dbValidators {
-					// 获取验证者的故障标志信息
-					faultInfo := d.getValidatorFaultInfo(validator.Address)
-
-					d.logger.Info("🔍 数据库验证者",
-						"index", i,
-						"address", validator.Address.String(),
-						"votingPower", validator.VotingPower.String(),
-						"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
-						"isActive", validator.IsActive,
-						"hasBlsKey", validator.BlsKey != nil,
-						"faultFlag", faultInfo) // 添加故障标志信息
-				}
-
-				return dbValidators, nil
+			// 统一返回“实际参与出块”的集合（排序/截取/故障过滤），避免 runtime 再次按投票排序把创世验证者挤出
+			d.logger.Info("🔍 runtime.delegates为空，尝试从数据库构建出块验证者集合")
+			if activeSet, err := d.GetSortedValidatorsWithLimitFilterFaulty(); err == nil && len(activeSet) > 0 {
+				return activeSet, nil
 			}
 		}
 
@@ -112,9 +95,8 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 		return nil, fmt.Errorf("stake store not available")
 	}
 
-	// ✅ 修改：默认过滤掉零权重验证者
-	// 从数据库读取所有验证者（过滤零权重）
-	validators, err := d.state.StakeStore.GetValidatorsWithFilter(true) // 改为 true，过滤零权重
+	// 从数据库读取所有验证者（不过滤零权重），后续会按规则保留创世验证者并做截取
+	validators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get validators from database: %w", err)
 	}
@@ -123,27 +105,92 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 		return validator.AccountSet{}, nil
 	}
 
-	// 按权重倒序排序
-	sort.Slice(validators, func(i, j int) bool {
-		votingPowerCmp := validators[i].VotingPower.Cmp(validators[j].VotingPower)
+	// 确保 genesisValidators 已初始化（用于“创世验证者永远保留出块资格”）
+	if d.genesisValidators == nil || len(d.genesisValidators) == 0 {
+		// initializeGenesisValidatorsMap 内部会自带锁，这里不持有 d.lock
+		d.initializeGenesisValidatorsMap()
+	}
+
+	// 分组：创世验证者 vs 非创世验证者
+	genesis := make(validator.AccountSet, 0)
+	others := make(validator.AccountSet, 0, len(validators))
+	seenGenesis := make(map[types.Address]bool)
+
+	d.lock.RLock()
+	for _, v := range validators {
+		if d.genesisValidators != nil && d.genesisValidators[v.Address] {
+			genesis = append(genesis, v)
+			seenGenesis[v.Address] = true
+		} else {
+			// 非创世验证者沿用旧逻辑：默认过滤掉零权重验证者
+			if v.VotingPower != nil && v.VotingPower.Sign() > 0 {
+				others = append(others, v)
+			}
+		}
+	}
+	d.lock.RUnlock()
+
+	// genesis 仅按地址升序，确保确定性
+	sort.Slice(genesis, func(i, j int) bool {
+		return bytes.Compare(genesis[i].Address[:], genesis[j].Address[:]) < 0
+	})
+
+	// others 按权重倒序，再按地址升序
+	sort.Slice(others, func(i, j int) bool {
+		votingPowerCmp := others[i].VotingPower.Cmp(others[j].VotingPower)
 		if votingPowerCmp != 0 {
 			return votingPowerCmp > 0
 		}
-		// 权重相同时，按地址升序排序（确保排序稳定）
-		return bytes.Compare(validators[i].Address[:], validators[j].Address[:]) < 0
+		return bytes.Compare(others[i].Address[:], others[j].Address[:]) < 0
 	})
 
 	// 应用限制（如果配置了）
 	maxValidators := int(d.config.DPoSValidatorsCount)
 
+	// 组合规则：
+	// - 先放入 genesis（在名额内强制保留）
+	// - 剩余名额再按权重选择 others
+	combined := make(validator.AccountSet, 0, len(validators))
+	if maxValidators > 0 {
+		// 先截取 genesis 到 maxValidators（如果 genesis 多于名额）
+		if len(genesis) > maxValidators {
+			genesis = genesis[:maxValidators]
+		}
+		combined = append(combined, genesis...)
+
+		remain := maxValidators - len(combined)
+		if remain > 0 {
+			// 从 others 里补齐剩余名额（跳过 any 重复地址，防御性）
+			for _, v := range others {
+				if remain <= 0 {
+					break
+				}
+				if seenGenesis[v.Address] {
+					continue
+				}
+				combined = append(combined, v)
+				remain--
+			}
+		}
+	} else {
+		// 配置为0表示不截取，但仍然保证 genesis 优先展示在前
+		combined = append(combined, genesis...)
+		for _, v := range others {
+			if seenGenesis[v.Address] {
+				continue
+			}
+			combined = append(combined, v)
+		}
+	}
+
 	// 添加调试日志，确保配置正确读取（使用限频日志避免刷屏）
 	if maxValidators > 0 && len(validators) > maxValidators {
 		d.logOnceWithInterval("get_sorted_validators_truncate", 10*time.Second, "debug",
-			"🔍 [GetSortedValidatorsWithLimit] 截取验证者",
+			"🔍 [GetSortedValidatorsWithLimit] 截取验证者(含创世保留)",
 			"originalCount", len(validators),
 			"maxValidators", maxValidators,
-			"DPoSValidatorsCount", d.config.DPoSValidatorsCount)
-		validators = validators[:maxValidators]
+			"DPoSValidatorsCount", d.config.DPoSValidatorsCount,
+			"genesisKept", len(genesis))
 	} else if maxValidators == 0 {
 		d.logOnceWithInterval("get_sorted_validators_zero_config", 10*time.Second, "warn",
 			"⚠️ [GetSortedValidatorsWithLimit] 配置为0，不截取验证者",
@@ -157,7 +204,7 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 			"DPoSValidatorsCount", d.config.DPoSValidatorsCount)
 	}
 
-	return validators, nil
+	return combined, nil
 }
 
 // GetSuperRepresentatives 返回当前超级代表集合（前 DPoSValidatorsCount 个验证者，供治理投票等使用）

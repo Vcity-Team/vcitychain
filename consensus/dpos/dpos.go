@@ -1562,11 +1562,11 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 // Priority:
 // 1) Read from staking contract (0x1001) method validators() at the current chain head state root
 func (d *DPoS) getBootstrapValidators() (validator.AccountSet, string, error) {
-	// JSON-RPC eth_call (the only supported path)
-	if d == nil || d.config == nil || strings.TrimSpace(d.config.BootstrapRPC) == "" {
-		return nil, "missing_dpos_bootstrap_rpc", fmt.Errorf("dpos_bootstrap_rpc is required (bootstrap validators must be read from staking contract 0x1001.validators())")
+	if d == nil || d.config == nil {
+		return nil, "nil_dpos_config", fmt.Errorf("dpos config is nil")
 	}
 
+	// Priority 1) JSON-RPC eth_call staking contract validators()
 	if strings.TrimSpace(d.config.BootstrapRPC) != "" {
 		d.logger.Info("🌐 尝试从 JSON-RPC 获取 bootstrap 验证者",
 			"rpc", d.config.BootstrapRPC,
@@ -1591,19 +1591,35 @@ func (d *DPoS) getBootstrapValidators() (validator.AccountSet, string, error) {
 		}
 
 		if err != nil {
-			d.logger.Error("❌ 从 JSON-RPC 读取 validators() 失败（已禁用 extraData 回退）",
+			d.logger.Warn("⚠️ 从 JSON-RPC 读取 validators() 失败，回退 genesis extraData",
 				"rpc", d.config.BootstrapRPC,
 				"error", err.Error())
-			return nil, "jsonrpc_eth_call_0x1001_failed", err
+		} else {
+			d.logger.Warn("⚠️ 从 JSON-RPC 读取 validators() 返回空列表，回退 genesis extraData",
+				"rpc", d.config.BootstrapRPC)
 		}
-
-		d.logger.Error("❌ 从 JSON-RPC 读取 validators() 返回空列表（已禁用 extraData 回退）",
-			"rpc", d.config.BootstrapRPC)
-		return nil, "jsonrpc_eth_call_0x1001_empty", fmt.Errorf("staking validators() returned empty list")
 	}
 
-	// unreachable
-	return nil, "unreachable", fmt.Errorf("unreachable bootstrap path")
+	// Priority 2) Fallback to genesis extraData (IBFT extra format)
+	if d.config.Blockchain == nil {
+		return nil, "missing_blockchain", fmt.Errorf("blockchain not available for genesis extraData fallback")
+	}
+	genesisHeader, exists := d.config.Blockchain.GetHeaderByNumber(0)
+	if !exists || genesisHeader == nil {
+		return nil, "genesis_not_found", fmt.Errorf("genesis block not found")
+	}
+	if len(genesisHeader.ExtraData) == 0 {
+		return nil, "genesis_extra_empty", fmt.Errorf("genesis extraData is empty")
+	}
+	set, err := d.parseValidatorsFromExtraData(genesisHeader.ExtraData)
+	if err != nil {
+		return nil, "genesis_extra_parse_failed", fmt.Errorf("parse genesis extraData validators: %w", err)
+	}
+	if len(set) == 0 {
+		return nil, "genesis_extra_empty_validators", fmt.Errorf("genesis extraData validators is empty")
+	}
+	d.logger.Info("✅ 回退：从 genesis extraData 解析 bootstrap 验证者", "count", len(set))
+	return set, "genesis_extraData", nil
 }
 
 func (d *DPoS) queryValidatorsFromRPC(rpcURL string) ([]types.Address, error) {
