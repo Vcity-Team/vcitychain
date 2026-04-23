@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/Vcity-Team/vcitychain/state"
 	"github.com/Vcity-Team/vcitychain/types"
 )
 
@@ -713,5 +714,141 @@ func (d *DPoS) applyScheduledUnvotes(epochNumber uint64, blockNumber uint64) err
 	}
 	d.pendingValidatorUpdate = true
 	d.logger.Info("✅ [边界应用撤销] 完成", "epochNumber", epochNumber, "blockNumber", blockNumber)
+	return nil
+}
+
+// applyScheduledUnvotesWithTransition applies scheduled unvotes at epoch boundary and
+// unfreezes (unlocks) funds by moving them from escrow back to the voter.
+//
+// This must be called during block execution (with the state transition available),
+// so the balance changes are included in the block state root deterministically.
+func (d *DPoS) applyScheduledUnvotesWithTransition(epochNumber uint64, blockNumber uint64, transition *state.Transition) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	if d.state == nil || d.state.StakeStore == nil || transition == nil {
+		return nil
+	}
+
+	stakingInfos, err := d.state.StakeStore.GetStakingInfo()
+	if err != nil {
+		d.logger.Warn("⚠️ [边界应用撤销] 获取 StakeInfo 失败", "error", err)
+		return nil
+	}
+
+	type key struct{ voter, delegate string }
+	toUnvote := make(map[key][]*StakeInfo)
+	for _, s := range stakingInfos {
+		if s == nil || !s.PendingUnvote || s.UnvoteEffectiveEpoch != epochNumber {
+			continue
+		}
+		if s.Amount == nil || s.Amount.Sign() <= 0 {
+			continue
+		}
+		k := key{s.Staker.String(), s.Delegate.String()}
+		toUnvote[k] = append(toUnvote[k], s)
+	}
+
+	if len(toUnvote) == 0 {
+		d.logger.Info("ℹ️ [边界应用撤销] 本 epoch 无待撤销", "epochNumber", epochNumber)
+		return nil
+	}
+
+	escrow := d.getStakeEscrowAddress()
+	d.logger.Info("🔍 [边界应用撤销] 开始应用(含解冻)",
+		"epochNumber", epochNumber,
+		"blockNumber", blockNumber,
+		"pairs", len(toUnvote),
+		"escrow", escrow.String())
+
+	for k, stakes := range toUnvote {
+		voterAddr := types.StringToAddress(k.voter)
+		delegateAddr := types.StringToAddress(k.delegate)
+
+		totalAmount := big.NewInt(0)
+		for _, s := range stakes {
+			if s.Amount != nil {
+				totalAmount.Add(totalAmount, s.Amount)
+			}
+		}
+		if totalAmount.Sign() <= 0 {
+			continue
+		}
+
+		// Unfreeze first (state change), then persist DB changes.
+		if err := transition.Txn().SubBalance(escrow, totalAmount); err != nil {
+			return fmt.Errorf("unfreeze failed: escrow %s insufficient for voter %s amount %s: %w",
+				escrow.String(), voterAddr.String(), totalAmount.String(), err)
+		}
+		transition.Txn().AddBalance(voterAddr, totalAmount)
+		d.logger.Info("🔓 DPoS unvote funds unfrozen",
+			"epochNumber", epochNumber,
+			"blockNumber", blockNumber,
+			"voter", voterAddr.String(),
+			"delegate", delegateAddr.String(),
+			"amountWei", totalAmount.String(),
+			"escrow", escrow.String())
+
+		dbTx, err := d.state.beginDBTransaction(true)
+		if err != nil {
+			d.logger.Warn("⚠️ [边界应用撤销] 开启事务失败", "error", err)
+			continue
+		}
+
+		for _, s := range stakes {
+			if s.OriginalAmount == nil && s.Amount != nil && s.Amount.Sign() > 0 {
+				s.OriginalAmount = new(big.Int).Set(s.Amount)
+			}
+			s.Amount = big.NewInt(0)
+			s.PendingUnvote = false
+			s.UnvoteEffectiveEpoch = 0
+			_ = d.state.StakeStore.setStakingInfo(voterAddr, s, s.StartTime, dbTx)
+		}
+
+		voterInfo, _ := d.state.StakeStore.GetVoterInfo(voterAddr)
+		if voterInfo != nil {
+			delete(voterInfo.DelegateVotes, delegateAddr)
+			newDelegates := make([]types.Address, 0)
+			for _, del := range voterInfo.VotedDelegates {
+				if del != delegateAddr {
+					newDelegates = append(newDelegates, del)
+				}
+			}
+			voterInfo.VotedDelegates = newDelegates
+			voterInfo.VotingPower = new(big.Int).Sub(voterInfo.VotingPower, totalAmount)
+			if voterInfo.VotingPower.Sign() < 0 {
+				voterInfo.VotingPower = big.NewInt(0)
+			}
+			_ = d.state.StakeStore.setVoterInfo(voterAddr, voterInfo, dbTx)
+		} else {
+			d.logger.Warn("⚠️ [边界应用撤销] VoterInfo 不存在，仅更新 StakeInfo 与 Delegate 权重",
+				"voter", k.voter, "delegate", k.delegate)
+		}
+
+		origPower, _ := d.getVotingPowerFromDatabase(delegateAddr)
+		if origPower == nil {
+			origPower = big.NewInt(0)
+		}
+		newPower := new(big.Int).Sub(origPower, totalAmount)
+		if newPower.Sign() < 0 {
+			newPower = big.NewInt(0)
+		}
+		_ = d.updateVotingPowerInDatabaseWithTx(delegateAddr, newPower, dbTx)
+
+		if err := dbTx.Commit(); err != nil {
+			d.logger.Warn("⚠️ [边界应用撤销] 提交事务失败", "error", err)
+			_ = dbTx.Rollback()
+			continue
+		}
+
+		_ = d.syncDelegateFromDatabase(delegateAddr)
+		d.logger.Info("✅ [边界应用撤销] 已生效(含解冻)",
+			"voter", k.voter,
+			"delegate", k.delegate,
+			"amountWei", totalAmount.String())
+	}
+
+	d.pendingValidatorUpdate = true
+	d.logger.Info("✅ [边界应用撤销] 完成(含解冻)", "epochNumber", epochNumber, "blockNumber", blockNumber)
 	return nil
 }

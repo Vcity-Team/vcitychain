@@ -290,6 +290,36 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			return nil, fmt.Errorf("process block tx error, tx = %v, err = %w", tx.Hash, err)
 		}
 
+		// Freeze voting funds at consensus level:
+		// once a vote is included in a block, the voted amount is moved from the voter
+		// to a system escrow address, preventing the voter from spending the same funds.
+		// Unfreeze happens only when unvote is applied at epoch boundary.
+		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+			if dposInstance.isVoteTransaction(tx) {
+				voteInfo, perr := dposInstance.parseVoteTransactionData(tx)
+				if perr != nil {
+					return nil, fmt.Errorf("failed to parse vote tx for freeze: %w", perr)
+				}
+
+				// amount = -1 indicates unvote request (no immediate unfreeze here)
+				if voteInfo.Amount.Sign() > 0 {
+					escrow := dposInstance.getStakeEscrowAddress()
+					if err := transition.Txn().SubBalance(voteInfo.Voter, voteInfo.Amount); err != nil {
+						return nil, fmt.Errorf("freeze vote funds: insufficient balance for voter %s amount %s: %w",
+							voteInfo.Voter.String(), voteInfo.Amount.String(), err)
+					}
+					transition.Txn().AddBalance(escrow, voteInfo.Amount)
+					p.logger.Info("🔒 DPoS vote funds frozen",
+						"blockNumber", block.Number(),
+						"txHash", tx.Hash.String(),
+						"voter", voteInfo.Voter.String(),
+						"delegate", voteInfo.Candidate.String(),
+						"amountWei", voteInfo.Amount.String(),
+						"escrow", escrow.String())
+				}
+			}
+		}
+
 		// 执行后识别是否为提案交易，并触发 DPoS 业务处理（不影响 EVM 结果）
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			if len(tx.Input) > 0 && (tx.To != nil) {
@@ -473,7 +503,7 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			}
 			// 边界应用撤销（先于投票，避免权重突变）
 			p.logger.Info("🔍 [边界应用撤销] 开始查询待撤销", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
-			if err := dposInstance.applyScheduledUnvotes(currentEpoch, block.Number()); err != nil {
+			if err := dposInstance.applyScheduledUnvotesWithTransition(currentEpoch, block.Number(), transition); err != nil {
 				p.logger.Error("❌ [边界应用撤销] 应用撤销失败", "error", err, "blockNumber", block.Number(), "currentEpoch", currentEpoch)
 			} else {
 				p.logger.Info("✅ [边界应用撤销] 撤销应用完成", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
@@ -713,7 +743,7 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 
 			// 边界应用撤销（先于投票，避免权重突变）
 			p.logger.Info("🔍 [边界应用撤销] 开始查询待撤销", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
-			if err := dposInstance.applyScheduledUnvotes(currentEpoch, block.Number()); err != nil {
+			if err := dposInstance.applyScheduledUnvotesWithTransition(currentEpoch, block.Number(), transition); err != nil {
 				p.logger.Error("❌ [边界应用撤销] 应用撤销失败", "error", err, "blockNumber", block.Number(), "currentEpoch", currentEpoch)
 			} else {
 				p.logger.Info("✅ [边界应用撤销] 撤销应用完成", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
