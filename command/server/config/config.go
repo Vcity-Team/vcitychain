@@ -46,6 +46,9 @@ type Config struct {
 
 	DPoSValidatorsCount   uint64 `json:"dpos_validators_count" yaml:"dpos_validators_count"`
 	DPoSDelegateThreshold string `json:"dpos_delegate_threshold" yaml:"dpos_delegate_threshold"`
+	// 创世投票金额（root 账户在共识切换高度给每个创世验证者创建的初始投票记录金额，单位：wei）
+	// 不配置则回退使用 dpos_delegate_threshold（向后兼容）
+	DPoSGenesisVoteAmount string `json:"dpos_genesis_vote_amount" yaml:"dpos_genesis_vote_amount"`
 
 	// DPoS经济系统配置
 	DPoSEpochDuration       string `json:"dpos_epoch_duration" yaml:"dpos_epoch_duration"`
@@ -182,6 +185,9 @@ func DefaultConfig() *Config {
 
 		// DPoS最小质押门槛默认值
 		DPoSDelegateThreshold: "1000000000000000000000", // 默认1000 VCITY
+
+		// 创世投票金额默认空：回退使用 dpos_delegate_threshold
+		DPoSGenesisVoteAmount: "",
 
 		// DPoS经济系统默认值
 		DPoSEpochDuration:       "24h",                    // 默认24小时一个epoch

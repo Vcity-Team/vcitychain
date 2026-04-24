@@ -942,6 +942,14 @@ dpos_proposal_valid_period: "5d"  # 有效期 5 天
 
 dpos_delegate_threshold: "1000000000000000000000"  # 1000 VCITY
 
+# （可选）创世投票金额：root 账户在共识切换高度给“每个创世验证者”创建的初始投票记录金额（wei）
+# 不配置则回退使用 dpos_delegate_threshold（向后兼容）
+dpos_genesis_vote_amount: "1000000000000000000000"  # 1000 VCITY
+
+# （可选）创世投票金额：root 账户在共识切换高度给“每个创世验证者”创建的初始投票记录金额（wei）
+# 不配置则回退使用 dpos_delegate_threshold（向后兼容）
+dpos_genesis_vote_amount: "1000000000000000000000"  # 1000 VCITY
+
 dpos_epoch_duration: "1h"
 
 dpos_reward_distribution: "0x4BCBB0e87ff0Bd8c6bD4968617b17b2e2DC12EBe"  # 奖励分发账户，目前采用创世中的根账户
@@ -988,6 +996,7 @@ dpos_severe_offense_slash_rate
 **受托注册 / 押金门槛**
 
 - dpos_delegate_threshold: 注册成为受托人的保证金（以 wei 表示，1e21 = 1000 VCITY）。同时也是投票阈值（谁拥有 ≥ 该额度可参与投票）。
+- dpos_genesis_vote_amount: 创世根账户在共识切换高度给每个创世验证者创建的初始投票金额（wei）。不配置则回退使用 dpos_delegate_threshold。
 - dpos_epoch_duration: 重新计算排名、发放奖励、轮换委员会的周期（如 "1h" = 1 小时）。
 - dpos_reward_distribution: 奖励发放的系统账户地址（受托奖励从这里发）。
 - dpos_reward_amount: 每个 epoch 要分配到奖励池的总金额（wei），后续再按比例拆给验证者 / 投票者。

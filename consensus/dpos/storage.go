@@ -811,6 +811,35 @@ func (d *DPoS) getDelegateThreshold() *big.Int {
 	return defaultValue
 }
 
+// getGenesisVoteAmount 获取创世根账户给每个创世验证者的初始投票金额
+// 优先级：参数系统 > 配置 > 回退到 dpos_delegate_threshold（向后兼容）
+func (d *DPoS) getGenesisVoteAmount() *big.Int {
+	// 1. 参数系统（如果未来走治理修改，这里会自动生效；未初始化/未配置则忽略）
+	if paramValue, err := d.getCurrentParameterValue("dpos_genesis_vote_amount"); err == nil {
+		switch v := paramValue.(type) {
+		case string:
+			if bigAmount, ok := new(big.Int).SetString(v, 10); ok && bigAmount.Cmp(big.NewInt(0)) > 0 {
+				d.logger.Debug("从参数系统读取 dpos_genesis_vote_amount", "value", v)
+				return bigAmount
+			}
+		case *big.Int:
+			if v != nil && v.Cmp(big.NewInt(0)) > 0 {
+				d.logger.Debug("从参数系统读取 dpos_genesis_vote_amount", "value", v.String())
+				return new(big.Int).Set(v)
+			}
+		}
+	}
+
+	// 2. 配置读取
+	if d.config != nil && d.config.DPoSGenesisVoteAmount != nil && d.config.DPoSGenesisVoteAmount.Cmp(big.NewInt(0)) > 0 {
+		d.logger.Debug("从配置读取 dpos_genesis_vote_amount", "value", d.config.DPoSGenesisVoteAmount.String())
+		return new(big.Int).Set(d.config.DPoSGenesisVoteAmount)
+	}
+
+	// 3. 回退：沿用 dpos_delegate_threshold（历史行为）
+	return d.getDelegateThreshold()
+}
+
 // CreateGenesisVoteRecord 在共识切换高度创建根账户对创世验证者的投票记录（公开方法）
 func (d *DPoS) CreateGenesisVoteRecord(voter types.Address, delegate types.Address, amount *big.Int, effectiveEpoch uint64, applied bool) error {
 	return d.persistVoteToDatabase(voter, delegate, amount, effectiveEpoch, applied)
@@ -834,8 +863,8 @@ func (d *DPoS) CreateGenesisVotesForAllValidators(blockNumber uint64) error {
 		return fmt.Errorf("root account address not found: GenesisRootAccount not configured")
 	}
 
-	// 从配置读取投票金额（使用 dpos_delegate_threshold）
-	voteAmount := d.getDelegateThreshold()
+	// 从配置读取投票金额（优先 dpos_genesis_vote_amount，未配置则回退 dpos_delegate_threshold）
+	voteAmount := d.getGenesisVoteAmount()
 
 	// 获取创世验证者列表
 	var genesisValidators []types.Address

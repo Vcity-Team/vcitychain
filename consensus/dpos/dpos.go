@@ -252,6 +252,10 @@ type DPoSConfig struct {
 	// DPoS委托最小质押门槛
 	DPoSDelegateThreshold *big.Int `json:"dpos_delegate_threshold" yaml:"dpos_delegate_threshold"`
 
+	// 创世投票金额（root 账户在共识切换高度给每个创世验证者的初始投票金额）
+	// 不配置则回退使用 DPoSDelegateThreshold（向后兼容）
+	DPoSGenesisVoteAmount *big.Int `json:"dpos_genesis_vote_amount" yaml:"dpos_genesis_vote_amount"`
+
 	EpochDuration       time.Duration `json:"epochDuration" yaml:"epochDuration"`
 	RewardAccount       types.Address `json:"rewardAccount" yaml:"rewardAccount"`
 	// RewardAmount 历史字段：Epoch 奖池现由 VoterTargetAPYBps 与链上质押动态计算，仅作兼容占位（可选）
@@ -1186,6 +1190,35 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		}
 	} else {
 		logger.Warn("⚠️ 未找到 dpos_delegate_threshold 配置")
+	}
+
+	// 解析 dpos_genesis_vote_amount 配置（可选，不配置则回退使用 dpos_delegate_threshold）
+	if genesisVoteAmountValue, exists := getConfigValue("dposGenesisVoteAmount", "dpos_genesis_vote_amount"); exists {
+		logger.Info("🔍 找到 dpos_genesis_vote_amount 配置", "type", fmt.Sprintf("%T", genesisVoteAmountValue), "value", genesisVoteAmountValue)
+		switch amountVal := genesisVoteAmountValue.(type) {
+		case string:
+			if bigAmount, ok := new(big.Int).SetString(amountVal, 10); ok && bigAmount.Cmp(big.NewInt(0)) > 0 {
+				vcity_dpos.config.DPoSGenesisVoteAmount = bigAmount
+				logger.Info("✅ 设置 dpos_genesis_vote_amount", "value", bigAmount.String())
+			} else {
+				logger.Warn("⚠️ dpos_genesis_vote_amount 字符串解析失败", "value", amountVal)
+			}
+		case *big.Int:
+			if amountVal != nil && amountVal.Cmp(big.NewInt(0)) > 0 {
+				vcity_dpos.config.DPoSGenesisVoteAmount = new(big.Int).Set(amountVal)
+				logger.Info("✅ 设置 dpos_genesis_vote_amount (big.Int)", "value", amountVal.String())
+			}
+		case float64:
+			amountStr := fmt.Sprintf("%.0f", amountVal)
+			if bigAmount, ok := new(big.Int).SetString(amountStr, 10); ok && bigAmount.Cmp(big.NewInt(0)) > 0 {
+				vcity_dpos.config.DPoSGenesisVoteAmount = bigAmount
+				logger.Info("✅ 设置 dpos_genesis_vote_amount (float64)", "value", bigAmount.String())
+			}
+		default:
+			logger.Warn("⚠️ dpos_genesis_vote_amount 类型不支持", "type", fmt.Sprintf("%T", genesisVoteAmountValue))
+		}
+	} else {
+		logger.Info("ℹ️ 未配置 dpos_genesis_vote_amount，将回退使用 dpos_delegate_threshold")
 	}
 
 	vcity_dpos.config.SecretsManager = params.SecretsManager
