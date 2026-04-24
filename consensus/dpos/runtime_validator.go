@@ -117,23 +117,25 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 	// 构建创世验证者映射
 	if r.config != nil && r.config.dposBackend != nil {
 		if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
-			// 初始化创世验证者映射
-			dposInstance.genesisValidators = make(map[types.Address]bool)
-
+			// 初始化创世验证者映射（使用独立锁，避免与 d.lock 互相阻塞）
+			dposInstance.genesisValidatorsMu.Lock()
+			if dposInstance.genesisValidators == nil {
+				dposInstance.genesisValidators = make(map[types.Address]bool)
+			}
 			// 将解析出的验证者添加到映射中
 			for _, delegate := range r.delegates {
 				dposInstance.genesisValidators[delegate.Address] = true
 			}
+			cnt := len(dposInstance.genesisValidators)
+			addresses := make([]string, 0, cnt)
+			for addr := range dposInstance.genesisValidators {
+				addresses = append(addresses, addr.String())
+			}
+			dposInstance.genesisValidatorsMu.Unlock()
 
 			r.logger.Info("✅ 创世验证者映射已构建",
-				"count", len(dposInstance.genesisValidators),
-				"addresses", func() []string {
-					addresses := make([]string, 0, len(dposInstance.genesisValidators))
-					for addr := range dposInstance.genesisValidators {
-						addresses = append(addresses, addr.String())
-					}
-					return addresses
-				}())
+				"count", cnt,
+				"addresses", addresses)
 
 			// 不再立即保存硬编码的权重到数据库
 			// 权重将在7370高度通过投票记录创建后，从投票记录计算并更新

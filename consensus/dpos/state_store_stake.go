@@ -43,26 +43,8 @@ type StakeStore struct {
 func (s *StakeStore) isGenesisValidator(address types.Address) bool {
 	// 从 DPoS 实例获取创世验证者映射
 	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-		if dposInstance.genesisValidators != nil {
-			return dposInstance.genesisValidators[address]
-		}
-
-		// 如果映射为空，尝试从创世文件解析
-		if dposInstance.config != nil && dposInstance.config.Blockchain != nil {
-			genesisHeader, exists := dposInstance.config.Blockchain.GetHeaderByNumber(0)
-			if exists && len(genesisHeader.ExtraData) >= 32 {
-				// 使用现有的解析函数从 ExtraData 解析创世验证者
-				genesisValidators, err := dposInstance.parseValidatorsFromExtraData(genesisHeader.ExtraData)
-				if err == nil && len(genesisValidators) > 0 {
-					// 检查地址是否在解析出的创世验证者中
-					for _, validator := range genesisValidators {
-						if validator.Address == address {
-							return true
-						}
-					}
-				}
-			}
-		}
+		// 使用公开方法（内部会确保初始化且线程安全；优先 staking(0x1001) validators()，失败回退 genesis extraData）
+		return dposInstance.IsGenesisValidator(address)
 	}
 	return false
 }

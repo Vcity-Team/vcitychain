@@ -106,19 +106,15 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 	}
 
 	// 确保 genesisValidators 已初始化（用于“创世验证者永远保留出块资格”）
-	if d.genesisValidators == nil || len(d.genesisValidators) == 0 {
-		// initializeGenesisValidatorsMap 内部会自带锁，这里不持有 d.lock
-		d.initializeGenesisValidatorsMap()
-	}
+	d.initializeGenesisValidatorsMap()
 
 	// 分组：创世验证者 vs 非创世验证者
 	genesis := make(validator.AccountSet, 0)
 	others := make(validator.AccountSet, 0, len(validators))
 	seenGenesis := make(map[types.Address]bool)
 
-	d.lock.RLock()
 	for _, v := range validators {
-		if d.genesisValidators != nil && d.genesisValidators[v.Address] {
+		if d.isGenesisValidator(v.Address) {
 			genesis = append(genesis, v)
 			seenGenesis[v.Address] = true
 		} else {
@@ -128,7 +124,6 @@ func (d *DPoS) GetSortedValidatorsWithLimit() (validator.AccountSet, error) {
 			}
 		}
 	}
-	d.lock.RUnlock()
 
 	// genesis 仅按地址升序，确保确定性
 	sort.Slice(genesis, func(i, j int) bool {

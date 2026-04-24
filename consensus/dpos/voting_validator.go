@@ -161,10 +161,8 @@ func (d *DPoS) validateVote(vote *VoteMessage, skipBalanceCheck bool, skipRegist
 			"voter", vote.Voter.String(),
 			"amount", vote.Amount.String())
 
-		// 确保创世验证者映射已初始化
-		if d.genesisValidators == nil || len(d.genesisValidators) == 0 {
-			d.initializeGenesisValidatorsMap()
-		}
+		// 确保创世验证者映射已初始化（线程安全且不会触发 d.lock 死锁）
+		d.initializeGenesisValidatorsMap()
 
 		// 创世验证者可以直接被投票，无需注册
 		if d.isGenesisValidator(vote.Delegate) {
@@ -191,10 +189,8 @@ func (d *DPoS) validateVote(vote *VoteMessage, skipBalanceCheck bool, skipRegist
 			"delegate", vote.Delegate.String(),
 			"voter", vote.Voter.String())
 
-		// 确保创世验证者映射已初始化（如果之前没有初始化）
-		if d.genesisValidators == nil || len(d.genesisValidators) == 0 {
-			d.initializeGenesisValidatorsMap()
-		}
+		// 确保创世验证者映射已初始化（线程安全且不会触发 d.lock 死锁）
+		d.initializeGenesisValidatorsMap()
 
 		// 创世验证者可以直接被投票，无需检查候选人状态
 		if d.isGenesisValidator(vote.Delegate) {

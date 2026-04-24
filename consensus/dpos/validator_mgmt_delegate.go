@@ -193,11 +193,22 @@ func (d *DPoS) addDelegateSafely(newDelegate *validator.ValidatorMetadata) {
 
 // getGenesisValidators 获取创世验证者集合（内部使用）
 func (d *DPoS) getGenesisValidators() validator.AccountSet {
-	d.logger.Debug("🔍 获取创世验证者集合", "genesisValidatorsCount", len(d.genesisValidators))
+	// 确保创世映射已初始化（不会使用 d.lock，避免死锁）
+	d.initializeGenesisValidatorsMap()
+
+	// 快照地址列表，避免在锁内做重计算
+	d.genesisValidatorsMu.RLock()
+	addresses := make([]types.Address, 0, len(d.genesisValidators))
+	for addr := range d.genesisValidators {
+		addresses = append(addresses, addr)
+	}
+	d.genesisValidatorsMu.RUnlock()
+
+	d.logger.Debug("🔍 获取创世验证者集合", "genesisValidatorsCount", len(addresses))
 
 	// 从内存中的创世验证者映射创建AccountSet
 	var validators validator.AccountSet
-	for address := range d.genesisValidators {
+	for _, address := range addresses {
 		// 从投票记录计算权重，而不是硬编码
 		votingPower := d.getTotalVotesForValidator(address)
 		if votingPower == nil || votingPower.Sign() == 0 {
@@ -227,15 +238,16 @@ func (d *DPoS) GetGenesisValidatorSet() validator.AccountSet {
 	// 确保创世映射已初始化
 	d.initializeGenesisValidatorsMap()
 
-	d.lock.RLock()
-	defer d.lock.RUnlock()
+	d.genesisValidatorsMu.RLock()
+	empty := d.genesisValidators == nil || len(d.genesisValidators) == 0
+	d.genesisValidatorsMu.RUnlock()
 
-	if d.genesisValidators == nil || len(d.genesisValidators) == 0 {
+	if empty {
 		d.logger.Warn("⚠️ GetGenesisValidatorSet: genesisValidators 为空")
 		return nil
 	}
 
-	// 复用内部构造逻辑
+	// 复用内部构造逻辑（内部会做快照）
 	return d.getGenesisValidators()
 }
 
@@ -371,58 +383,72 @@ func (d *DPoS) canParticipateInConsensus(delegate *validator.ValidatorMetadata) 
 // initializeGenesisValidatorsMap 初始化创世验证者映射
 // 从创世块或配置中获取创世验证者列表，并填充到映射中
 func (d *DPoS) initializeGenesisValidatorsMap() {
-	d.lock.Lock()
-	defer d.lock.Unlock()
-
-	// 如果已经初始化过，直接返回
-	if d.genesisValidators != nil && len(d.genesisValidators) > 0 {
-		d.logger.Debug("🔍 创世验证者映射已存在，跳过初始化", "count", len(d.genesisValidators))
-		return
-	}
-
-	// 初始化映射
-	if d.genesisValidators == nil {
-		d.genesisValidators = make(map[types.Address]bool)
-	}
-
-	// 方法1: 使用与 DPoS 启动一致的 bootstrap 规则（staking 合约优先，失败回退创世 extraData）
-	if bootstrap, source, err := d.getBootstrapValidators(); err == nil && len(bootstrap) > 0 {
-		for _, v := range bootstrap {
-			d.genesisValidators[v.Address] = true
+	// 注意：不能用 d.lock 来保护 genesisValidators，否则会在某些持有 d.lock.RLock() 的路径中触发写锁升级导致死锁。
+	d.genesisValidatorsOnce.Do(func() {
+		// 防御：可能在其它启动路径中先写入
+		d.genesisValidatorsMu.RLock()
+		already := d.genesisValidators != nil && len(d.genesisValidators) > 0
+		existingCount := 0
+		if d.genesisValidators != nil {
+			existingCount = len(d.genesisValidators)
 		}
-		d.logger.Info("✅ 初始化创世验证者映射（bootstrap）", "count", len(d.genesisValidators), "source", source)
-		return
-	}
-
-	// 方法2: 从配置中的初始验证者
-	if d.config != nil && len(d.config.InitialDelegates) > 0 {
-		for _, genesisValidator := range d.config.InitialDelegates {
-			d.genesisValidators[genesisValidator.Address] = true
+		d.genesisValidatorsMu.RUnlock()
+		if already {
+			d.logger.Debug("🔍 创世验证者映射已存在，跳过初始化", "count", existingCount)
+			return
 		}
-		d.logger.Info("✅ 从配置初始化创世验证者映射", "count", len(d.genesisValidators))
-		return
-	}
 
-	d.logger.Warn("⚠️ 无法初始化创世验证者映射：创世块和配置都不可用")
+		// 初始化映射
+		d.genesisValidatorsMu.Lock()
+		if d.genesisValidators == nil {
+			d.genesisValidators = make(map[types.Address]bool)
+		}
+		d.genesisValidatorsMu.Unlock()
+
+		// 方法1: 使用与 DPoS 启动一致的 bootstrap 规则（staking 合约优先，失败回退创世 extraData）
+		if bootstrap, source, err := d.getBootstrapValidators(); err == nil && len(bootstrap) > 0 {
+			d.genesisValidatorsMu.Lock()
+			for _, v := range bootstrap {
+				d.genesisValidators[v.Address] = true
+			}
+			cnt := len(d.genesisValidators)
+			d.genesisValidatorsMu.Unlock()
+			d.logger.Info("✅ 初始化创世验证者映射（bootstrap）", "count", cnt, "source", source)
+			return
+		}
+
+		// 方法2: 从配置中的初始验证者
+		if d.config != nil && len(d.config.InitialDelegates) > 0 {
+			d.genesisValidatorsMu.Lock()
+			for _, genesisValidator := range d.config.InitialDelegates {
+				d.genesisValidators[genesisValidator.Address] = true
+			}
+			cnt := len(d.genesisValidators)
+			d.genesisValidatorsMu.Unlock()
+			d.logger.Info("✅ 从配置初始化创世验证者映射", "count", cnt)
+			return
+		}
+
+		d.logger.Warn("⚠️ 无法初始化创世验证者映射：创世块和配置都不可用")
+	})
 }
 
 // isGenesisValidator 检查地址是否为创世验证者（内部方法）
 // 注意：调用此方法前必须已经持有写锁（Lock）或读锁（RLock）
 func (d *DPoS) isGenesisValidator(address types.Address) bool {
-	// 如果映射为空，需要初始化（但此时可能持有读锁，需要特殊处理）
+	// 注意：这里不负责初始化（可能处于其它锁上下文中），只做轻量检查
+	d.genesisValidatorsMu.RLock()
+	defer d.genesisValidatorsMu.RUnlock()
 	if d.genesisValidators == nil || len(d.genesisValidators) == 0 {
-		// 如果映射为空，返回 false，让调用者知道需要初始化
-		// 初始化应该在外部完成（在持有写锁的情况下）
 		return false
 	}
-	// 检查地址是否在创世验证者映射中
 	return d.genesisValidators[address]
 }
 
 // IsGenesisValidator 检查地址是否为创世验证者（公共方法，供RPC调用）
 func (d *DPoS) IsGenesisValidator(address types.Address) bool {
 	// 先尝试读锁检查
-	d.lock.RLock()
+	d.genesisValidatorsMu.RLock()
 	isGenesis := false
 	needsInit := false
 	if d.genesisValidators == nil || len(d.genesisValidators) == 0 {
@@ -430,17 +456,17 @@ func (d *DPoS) IsGenesisValidator(address types.Address) bool {
 	} else {
 		isGenesis = d.genesisValidators[address]
 	}
-	d.lock.RUnlock()
+	d.genesisValidatorsMu.RUnlock()
 
 	// 如果需要初始化，获取写锁并初始化
 	if needsInit {
 		d.initializeGenesisValidatorsMap()
 		// 重新检查
-		d.lock.RLock()
+		d.genesisValidatorsMu.RLock()
 		if d.genesisValidators != nil {
 			isGenesis = d.genesisValidators[address]
 		}
-		d.lock.RUnlock()
+		d.genesisValidatorsMu.RUnlock()
 	}
 
 	// 降级为 Debug，避免在高频校验路径产生大量刷屏日志
@@ -448,16 +474,16 @@ func (d *DPoS) IsGenesisValidator(address types.Address) bool {
 		"address", address.String(),
 		"isGenesis", isGenesis,
 		"genesisValidatorsCount", func() int {
-			d.lock.RLock()
-			defer d.lock.RUnlock()
+			d.genesisValidatorsMu.RLock()
+			defer d.genesisValidatorsMu.RUnlock()
 			if d.genesisValidators == nil {
 				return 0
 			}
 			return len(d.genesisValidators)
 		}(),
 		"genesisValidators", func() []string {
-			d.lock.RLock()
-			defer d.lock.RUnlock()
+			d.genesisValidatorsMu.RLock()
+			defer d.genesisValidatorsMu.RUnlock()
 			if d.genesisValidators == nil {
 				return []string{}
 			}

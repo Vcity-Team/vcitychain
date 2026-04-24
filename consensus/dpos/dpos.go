@@ -389,7 +389,11 @@ type DPoS struct {
 	lastLogTime       map[string]time.Time   // 最后日志时间
 	logMutex          sync.RWMutex           // 日志锁
 	genesisExtraData  []byte                 // 创世块extraData
-	genesisValidators map[types.Address]bool // 创世验证者地址映射
+	// genesisValidators 仅用于“创世验证者永远保留出块资格”等规则。
+	// 注意：该映射不能再由 d.lock 保护，否则会在某些读锁路径中触发写锁升级导致死锁。
+	genesisValidators     map[types.Address]bool // 创世验证者地址映射
+	genesisValidatorsOnce sync.Once
+	genesisValidatorsMu   sync.RWMutex
 
 	// BLS加载状态管理
 	blsLoadingComplete bool
@@ -1517,12 +1521,12 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 	d.runtime.delegates = make(validator.AccountSet, 0)
 
 	// 初始化创世验证者映射（如果尚未初始化）
-	d.lock.Lock()
+	d.genesisValidatorsMu.Lock()
 	if d.genesisValidators == nil {
 		d.genesisValidators = make(map[types.Address]bool)
 		d.logger.Info("🔧 初始化创世验证者映射")
 	}
-	d.lock.Unlock()
+	d.genesisValidatorsMu.Unlock()
 
 	d.logger.Info("🚨 DPoS验证者筛选开始",
 		"totalCandidates", bootstrapValidators.Len(),
@@ -1552,9 +1556,9 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 		d.runtime.delegates = append(d.runtime.delegates, delegate)
 
 		// 添加到创世验证者映射
-		d.lock.Lock()
+		d.genesisValidatorsMu.Lock()
 		d.genesisValidators[address] = true
-		d.lock.Unlock()
+		d.genesisValidatorsMu.Unlock()
 
 		validValidatorCount++
 
