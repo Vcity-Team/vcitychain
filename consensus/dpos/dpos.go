@@ -2410,7 +2410,12 @@ func (c *DPoSConfig) Validate() error {
 	if c.VoterTargetAPYBps == 0 || c.VoterTargetAPYBps > 10000 {
 		return fmt.Errorf("voter_target_apy must be between 1 and 10000 basis points (e.g. 500 for 5%%)")
 	}
-	if c.RewardAmount == nil || c.RewardAmount.Cmp(big.NewInt(0)) <= 0 {
+	// RewardAmount 仅作占位（实际 Epoch 奖池由 voter_target_apy 动态计算并在每个 epoch 结束时 UpdateRewardAmount）。
+	// 为了允许配置中省略 dpos_reward_amount，这里若为空则自动设置为 1 wei。
+	if c.RewardAmount == nil {
+		c.RewardAmount = big.NewInt(1)
+	}
+	if c.RewardAmount.Cmp(big.NewInt(0)) <= 0 {
 		return fmt.Errorf("reward_amount placeholder must be positive (use 1 wei if using voter_target_apy)")
 	}
 	return nil
