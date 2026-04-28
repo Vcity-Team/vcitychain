@@ -800,6 +800,42 @@ func (t *txpoolHub) GetBalance(root types.Hash, addr types.Address) (*big.Int, e
 	return account.Balance, nil
 }
 
+// GetLockedBalance returns the amount of native balance that is locked and therefore
+// not spendable. For DPoS, this corresponds to the sum of active vote amounts.
+func (t *txpoolHub) GetLockedBalance(_ types.Hash, addr types.Address) (*big.Int, error) {
+	consensus := t.Blockchain.GetConsensus()
+	dposEngine, ok := consensus.(*consensusDPoS.DPoS)
+	if !ok || dposEngine == nil {
+		return big.NewInt(0), nil
+	}
+
+	st := dposEngine.GetState()
+	if st == nil || st.StakeStore == nil {
+		return big.NewInt(0), nil
+	}
+
+	infos, err := st.StakeStore.GetStakingInfo()
+	if err != nil {
+		return big.NewInt(0), nil
+	}
+
+	locked := big.NewInt(0)
+	for _, s := range infos {
+		if s == nil || s.Staker != addr {
+			continue
+		}
+		if s.Amount == nil || s.Amount.Sign() <= 0 {
+			continue
+		}
+		if !s.Applied {
+			continue
+		}
+		locked.Add(locked, s.Amount)
+	}
+
+	return locked, nil
+}
+
 // setupSecretsManager sets up the secrets manager
 func (s *Server) setupSecretsManager() error {
 	secretsManagerConfig := s.config.SecretsManager

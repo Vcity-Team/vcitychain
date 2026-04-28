@@ -142,6 +142,19 @@ type VoteRecord struct {
 	UnvoteEffectiveEpoch uint64 `json:"unvoteEffectiveEpoch,omitempty"`
 }
 
+// BalanceInfoRequest queries native balance along with DPoS vote locks.
+type BalanceInfoRequest struct {
+	Address string `json:"address"`
+}
+
+type BalanceInfoResponse struct {
+	Address          string            `json:"address"`
+	BalanceWei       string            `json:"balanceWei"`
+	LockedVoteWei    string            `json:"lockedVoteWei"`
+	SpendableWei     string            `json:"spendableWei"`
+	LockedByDelegate map[string]string `json:"lockedByDelegate,omitempty"` // delegate -> amountWei
+}
+
 // NewDPOS creates a new DPOS endpoint
 func NewDPOS(logger hclog.Logger, store dposStore, chainID uint64) *DPOS {
 	logger.Info("Initializing DPoS endpoint", "chainID", chainID)
@@ -151,6 +164,93 @@ func NewDPOS(logger hclog.Logger, store dposStore, chainID uint64) *DPOS {
 		store:   store,
 		chainID: chainID,
 	}
+}
+
+// GetBalanceInfo returns the current native balance plus the amount locked by active votes.
+// Locked votes are derived from StakeStore records (Applied=true, Amount>0).
+func (d *DPOS) GetBalanceInfo(ctx context.Context, params interface{}) (interface{}, error) {
+	req := BalanceInfoRequest{}
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) < 1 {
+			return nil, fmt.Errorf("missing address parameter")
+		}
+		if s, ok := p[0].(string); ok {
+			req.Address = s
+		} else {
+			return nil, fmt.Errorf("first parameter must be a string address")
+		}
+	case map[string]interface{}:
+		if s, ok := p["address"].(string); ok {
+			req.Address = s
+		} else {
+			return nil, fmt.Errorf("missing address field")
+		}
+	case *BalanceInfoRequest:
+		if p != nil {
+			req = *p
+		}
+	default:
+		return nil, fmt.Errorf("invalid params type")
+	}
+
+	addr := types.StringToAddress(req.Address)
+	if addr == types.ZeroAddress {
+		return nil, fmt.Errorf("invalid address")
+	}
+
+	currentHeight := d.getCurrentBlockHeight()
+	header, ok := d.store.GetHeaderByNumber(currentHeight)
+	if !ok || header == nil {
+		return nil, fmt.Errorf("failed to get current header")
+	}
+
+	bal, err := d.store.GetBalance(header.StateRoot, addr)
+	if err != nil {
+		return nil, err
+	}
+
+	lockedTotal := big.NewInt(0)
+	lockedByDelegate := make(map[string]string)
+
+	if st, err := d.store.GetDPoSState(); err == nil && st != nil && st.StakeStore != nil {
+		infos, ierr := st.StakeStore.GetStakingInfo()
+		if ierr == nil {
+			tmpByDelegate := make(map[types.Address]*big.Int)
+			for _, s := range infos {
+				if s == nil || s.Staker != addr {
+					continue
+				}
+				if s.Amount == nil || s.Amount.Sign() <= 0 || !s.Applied {
+					continue
+				}
+				lockedTotal.Add(lockedTotal, s.Amount)
+				if tmpByDelegate[s.Delegate] == nil {
+					tmpByDelegate[s.Delegate] = big.NewInt(0)
+				}
+				tmpByDelegate[s.Delegate].Add(tmpByDelegate[s.Delegate], s.Amount)
+			}
+			for del, amt := range tmpByDelegate {
+				lockedByDelegate[del.String()] = amt.String()
+			}
+		}
+	}
+
+	spendable := new(big.Int).Set(bal)
+	if spendable.Cmp(lockedTotal) > 0 {
+		spendable.Sub(spendable, lockedTotal)
+	} else {
+		spendable = big.NewInt(0)
+	}
+
+	resp := &BalanceInfoResponse{
+		Address:          addr.String(),
+		BalanceWei:       bal.String(),
+		LockedVoteWei:    lockedTotal.String(),
+		SpendableWei:     spendable.String(),
+		LockedByDelegate: lockedByDelegate,
+	}
+	return resp, nil
 }
 
 type governanceEngine interface {

@@ -96,6 +96,16 @@ type store interface {
 	CalculateBaseFee(parent *types.Header) uint64
 }
 
+// lockedBalanceProvider optionally provides the amount of balance that is locked
+// (not spendable) for the given address at the current chain head.
+//
+// If implemented by the store, TxPool will enforce:
+// spendable = balance - locked
+// and require spendable >= tx.Cost().
+type lockedBalanceProvider interface {
+	GetLockedBalance(root types.Hash, addr types.Address) (*big.Int, error)
+}
+
 type signer interface {
 	Sender(tx *types.Transaction) (types.Address, error)
 }
@@ -1326,7 +1336,18 @@ func (p *TxPool) validateTx(tx *types.Transaction) error {
 	}
 
 	// Check if the sender has enough funds to execute the transaction
-	if accountBalance.Cmp(tx.Cost()) < 0 {
+	spendable := accountBalance
+	if lbp, ok := p.store.(lockedBalanceProvider); ok {
+		if locked, lerr := lbp.GetLockedBalance(stateRoot, tx.From); lerr == nil && locked != nil && locked.Sign() > 0 {
+			if spendable.Cmp(locked) > 0 {
+				spendable = new(big.Int).Sub(spendable, locked)
+			} else {
+				spendable = big.NewInt(0)
+			}
+		}
+	}
+
+	if spendable.Cmp(tx.Cost()) < 0 {
 		metrics.IncrCounter([]string{txPoolMetrics, "insufficient_funds_tx"}, 1)
 
 		return ErrInsufficientFunds
