@@ -160,7 +160,7 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Name:        "Missed Blocks Percentage",
 			Type:        "uint64",
 			MinValue:    uint64(100),   // 最少1%（100基点）
-			MaxValue:    uint64(10000), // 最多100%（10000基点）
+			MaxValue:    uint64(20000), // 最多200%（20000基点）
 			Description: "Missed blocks percentage threshold for slashing (basis points, 1000 = 10%)",
 			Category:    "slashing",
 		},

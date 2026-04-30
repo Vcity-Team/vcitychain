@@ -724,7 +724,7 @@ func (d *DPoS) logOnceWithInterval(key string, interval time.Duration, level str
 	}
 }
 
-// executeSlashing 执行削减惩罚（按比例削减每个投票者的质押金额）
+// executeSlashing 执行削减惩罚（仅削减出块者自身的自投/自质押，不连带削减投票者）
 func (d *DPoS) executeSlashing(
 	validatorAddr types.Address,
 	slashRate uint64,
@@ -788,22 +788,28 @@ func (d *DPoS) executeSlashing(
 		"validator", validatorAddr.String(),
 		"oldVotingPower", oldVotingPower.String())
 
-	// 2. 获取所有投票给该验证者的质押记录
+	// 2. 获取该验证者的质押记录（仅自投：staker == validator）
 	allStakes, err := d.state.StakeStore.GetStakingInfo()
 	if err != nil {
 		return fmt.Errorf("failed to get staking info: %w", err)
 	}
 
-	// 筛选出投票给该验证者的记录
+	// 筛选出验证者对自己的自投记录（不连带削减其他投票者）
 	var validatorStakes []*StakeInfo
 	for _, stake := range allStakes {
-		if stake != nil && stake.Delegate == validatorAddr && stake.Amount != nil && stake.Amount.Sign() > 0 {
+		if stake != nil &&
+			stake.Staker == validatorAddr &&
+			stake.Delegate == validatorAddr &&
+			stake.Amount != nil && stake.Amount.Sign() > 0 {
 			validatorStakes = append(validatorStakes, stake)
 		}
 	}
 
 	if len(validatorStakes) == 0 {
-		d.logger.Warn("⚠️ 没有找到该验证者的质押记录，跳过削减", "validator", validatorAddr.String())
+		d.logger.Warn("⚠️ 没有找到验证者的自投记录，按“只削减出块者”策略跳过削减",
+			"validator", validatorAddr.String(),
+			"blockNumber", blockNumber,
+			"epochNumber", epochNumber)
 		return nil
 	}
 
@@ -811,21 +817,22 @@ func (d *DPoS) executeSlashing(
 		"validator", validatorAddr.String(),
 		"stakesCount", len(validatorStakes))
 
-	// 3. 按投票者聚合（一个投票者可能有多条记录）
-	voterStakesMap := make(map[types.Address]*big.Int) // voter -> 总投票金额
+	// 3. 聚合验证者自投总额（一个验证者可能有多条自投记录）
+	selfOldVoteAmount := big.NewInt(0)
 	for _, stake := range validatorStakes {
 		if stake.Amount != nil && stake.Amount.Sign() > 0 {
-			if existing, exists := voterStakesMap[stake.Staker]; exists {
-				existing.Add(existing, stake.Amount)
-			} else {
-				voterStakesMap[stake.Staker] = new(big.Int).Set(stake.Amount)
-			}
+			selfOldVoteAmount.Add(selfOldVoteAmount, stake.Amount)
 		}
 	}
 
-	// 4. 按比例削减每个投票者的质押金额
-	totalSlashAmount := big.NewInt(0)
-	newVotingPower := big.NewInt(0)
+	// 4. 计算削减金额（仅针对自投金额）
+	totalSlashAmount := new(big.Int).Mul(selfOldVoteAmount, big.NewInt(int64(slashRate)))
+	totalSlashAmount.Div(totalSlashAmount, big.NewInt(10000)) // 基点转换
+
+	// 防御：避免出现负数
+	if totalSlashAmount.Sign() < 0 {
+		totalSlashAmount = big.NewInt(0)
+	}
 
 	// 开始数据库事务
 	dbTx, err := d.state.beginDBTransaction(true)
@@ -834,98 +841,85 @@ func (d *DPoS) executeSlashing(
 	}
 	defer dbTx.Rollback()
 
-	for voterAddr, oldVoteAmount := range voterStakesMap {
-		// 4.1 计算该投票者的削减金额（按比例）
-		voterSlashAmount := new(big.Int).Mul(oldVoteAmount, big.NewInt(int64(slashRate)))
-		voterSlashAmount.Div(voterSlashAmount, big.NewInt(10000)) // 基点转换
+	// 4.1 先计算削减后自投总额（用于更新 VoterInfo 和每条 StakeInfo）
+	selfNewVoteAmount := new(big.Int).Sub(selfOldVoteAmount, totalSlashAmount)
+	if selfNewVoteAmount.Sign() < 0 {
+		selfNewVoteAmount = big.NewInt(0)
+	}
 
-		// 4.2 计算削减后的金额
-		newVoteAmount := new(big.Int).Sub(oldVoteAmount, voterSlashAmount)
-		if newVoteAmount.Sign() < 0 {
-			newVoteAmount = big.NewInt(0)
+	// 4.2 更新验证者自投的每条 StakeInfo（按每条记录分别扣减相同比例）
+	for _, stake := range validatorStakes {
+		// recordSlashAmount = stake.Amount * slashRate / 10000
+		recordSlashAmount := new(big.Int).Mul(stake.Amount, big.NewInt(int64(slashRate)))
+		recordSlashAmount.Div(recordSlashAmount, big.NewInt(10000))
+
+		recordNewAmount := new(big.Int).Sub(stake.Amount, recordSlashAmount)
+		if recordNewAmount.Sign() < 0 {
+			recordNewAmount = big.NewInt(0)
 		}
 
-		totalSlashAmount.Add(totalSlashAmount, voterSlashAmount)
-		newVotingPower.Add(newVotingPower, newVoteAmount)
-
-		d.logger.Info("🔨 削减投票者",
-			"voter", voterAddr.String(),
-			"oldAmount", oldVoteAmount.String(),
-			"slashAmount", voterSlashAmount.String(),
-			"newAmount", newVoteAmount.String())
-
-		// 4.3 更新该投票者的所有 StakeInfo 记录
-		for _, stake := range validatorStakes {
-			if stake.Staker == voterAddr {
-				// 按该记录在总金额中的比例计算削减金额
-				recordSlashAmount := new(big.Int).Mul(stake.Amount, big.NewInt(int64(slashRate)))
-				recordSlashAmount.Div(recordSlashAmount, big.NewInt(10000))
-
-				recordNewAmount := new(big.Int).Sub(stake.Amount, recordSlashAmount)
-				if recordNewAmount.Sign() < 0 {
-					recordNewAmount = big.NewInt(0)
-				}
-
-				// 保存原始金额（如果还没有保存）
-				if stake.OriginalAmount == nil {
-					stake.OriginalAmount = new(big.Int).Set(stake.Amount)
-				}
-
-				// 创建削减记录
-				slashingRecord := &SlashingRecord{
-					ValidatorAddr:          validatorAddr,
-					BlockNumber:            blockNumber,
-					EpochNumber:            epochNumber,
-					Timestamp:              uint64(time.Now().Unix()),
-					SlashAmount:            recordSlashAmount,
-					OldVoteAmount:          new(big.Int).Set(stake.Amount), // 削减前的金额
-					NewVoteAmount:          recordNewAmount,                // 削减后的金额
-					SlashRate:              slashRate,
-					Reason:                 reason,
-					MissedBlocks:           missedBlocks,
-					MissedBlocksPercentage: missedBlocksPercentage,
-					DoubleSigningHeight:    doubleSigningHeight,
-				}
-
-				// 更新 StakeInfo（使用外部事务）
-				if err := d.updateStakingInfoAfterSlashing(
-					voterAddr,
-					validatorAddr,
-					recordNewAmount,
-					stake.Amount,
-					slashingRecord,
-					dbTx, // 传入外部事务，避免嵌套事务
-				); err != nil {
-					d.logger.Warn("⚠️ 更新质押记录失败",
-						"voter", voterAddr.String(),
-						"error", err)
-				}
-			}
+		// 保存原始金额（如果还没有保存）
+		if stake.OriginalAmount == nil {
+			stake.OriginalAmount = new(big.Int).Set(stake.Amount)
 		}
 
-		// 4.4 更新 VoterInfo.DelegateVotes（使用外部事务）
-		if err := d.updateVoterVoteAmountForValidator(
-			voterAddr,
+		// 创建削减记录（只记录出块者自身）
+		slashingRecord := &SlashingRecord{
+			ValidatorAddr:          validatorAddr,
+			BlockNumber:            blockNumber,
+			EpochNumber:            epochNumber,
+			Timestamp:              uint64(time.Now().Unix()),
+			SlashAmount:            recordSlashAmount,
+			OldVoteAmount:          new(big.Int).Set(stake.Amount),
+			NewVoteAmount:          recordNewAmount,
+			SlashRate:              slashRate,
+			Reason:                 reason,
+			MissedBlocks:           missedBlocks,
+			MissedBlocksPercentage: missedBlocksPercentage,
+			DoubleSigningHeight:    doubleSigningHeight,
+		}
+
+		if err := d.updateStakingInfoAfterSlashing(
 			validatorAddr,
-			newVoteAmount,
-			oldVoteAmount,
-			voterSlashAmount,
-			slashRate,
-			blockNumber,
-			epochNumber,
-			reason,
-			missedBlocks,
-			missedBlocksPercentage,
-			doubleSigningHeight,
-			dbTx, // 传入外部事务，避免嵌套事务
+			validatorAddr,
+			recordNewAmount,
+			stake.Amount,
+			slashingRecord,
+			dbTx,
 		); err != nil {
-			d.logger.Warn("⚠️ 更新投票者信息失败",
-				"voter", voterAddr.String(),
+			d.logger.Warn("⚠️ 更新验证者自投质押记录失败",
+				"validator", validatorAddr.String(),
 				"error", err)
 		}
 	}
 
-	// 5. 更新验证者的 VotingPower（使用外部事务）
+	// 4.3 更新验证者自己的 VoterInfo.DelegateVotes（自投）
+	if err := d.updateVoterVoteAmountForValidator(
+		validatorAddr,
+		validatorAddr,
+		selfNewVoteAmount,
+		selfOldVoteAmount,
+		totalSlashAmount,
+		slashRate,
+		blockNumber,
+		epochNumber,
+		reason,
+		missedBlocks,
+		missedBlocksPercentage,
+		doubleSigningHeight,
+		dbTx,
+	); err != nil {
+		d.logger.Warn("⚠️ 更新验证者自投投票信息失败",
+			"validator", validatorAddr.String(),
+			"error", err)
+	}
+
+	// 5. 更新验证者的 VotingPower：仅扣减验证者自投的削减额，其它投票者不受影响
+	newVotingPower := new(big.Int).Sub(oldVotingPower, totalSlashAmount)
+	if newVotingPower.Sign() < 0 {
+		newVotingPower = big.NewInt(0)
+	}
+
 	if err := d.updateVotingPowerInDatabaseWithTx(validatorAddr, newVotingPower, dbTx); err != nil {
 		return fmt.Errorf("failed to update validator voting power: %w", err)
 	}
