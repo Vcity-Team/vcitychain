@@ -471,6 +471,24 @@ func (tp *syncerMock) Sync(func(*types.FullBlock) bool) error {
 	return args.Error(0)
 }
 
+func (tp *syncerMock) EnablePublishingPeerStatus() {
+	tp.Called()
+}
+
+func (tp *syncerMock) DisablePublishingPeerStatus() {
+	tp.Called()
+}
+
+func (tp *syncerMock) GetBestPeerNumber() uint64 {
+	args := tp.Called()
+	return args.Get(0).(uint64) //nolint
+}
+
+func (tp *syncerMock) GetTrustedPeerNumber() uint64 {
+	args := tp.Called()
+	return args.Get(0).(uint64) //nolint
+}
+
 func init() {
 	// setup custom hash header func
 	setupHeaderHashFunc()

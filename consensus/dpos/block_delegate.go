@@ -178,8 +178,8 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 func (r *dposRuntime) getNetworkLatestBlockNumber() uint64 {
 	if r.config.dposBackend != nil {
 		if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil {
-			// 通过 syncer 获取 bestPeer 的最新区块号
-			return dpos.syncer.GetBestPeerNumber()
+			// 使用“近期可信 peer”高度作为门禁信号源，避免 bestPeer 声称高度虚高导致长期误判落后
+			return dpos.syncer.GetTrustedPeerNumber()
 		}
 	}
 	return 0

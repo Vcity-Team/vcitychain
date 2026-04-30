@@ -84,6 +84,9 @@ type Syncer interface {
 	DisablePublishingPeerStatus()
 	// GetBestPeerNumber returns the latest block number from the best peer
 	GetBestPeerNumber() uint64
+	// GetTrustedPeerNumber returns the latest block number from a recently verified peer.
+	// If no peer has been verified recently, it returns 0.
+	GetTrustedPeerNumber() uint64
 }
 
 type Progression interface {

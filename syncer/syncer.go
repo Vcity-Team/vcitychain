@@ -65,7 +65,18 @@ type syncer struct {
 	// 交易去重机制
 	processedTxs map[types.Hash]bool // 已处理的交易哈希
 	txMutex      sync.RWMutex        // 保护交易哈希映射的锁
+
+	// trustedPeers 记录“近期已验证并写入成功”的 peer 高度，用于替代不可信的 bestPeer 声称高度
+	trustedPeersMu sync.RWMutex
+	trustedPeers   map[peer.ID]trustedPeerStat
 }
+
+type trustedPeerStat struct {
+	lastSuccess time.Time
+	lastNumber  uint64
+}
+
+const trustedPeerWindow = 30 * time.Second
 
 func NewSyncer(
 	logger hclog.Logger,
@@ -89,6 +100,8 @@ func NewSyncer(
 
 		// 初始化交易去重机制
 		processedTxs: make(map[types.Hash]bool),
+
+		trustedPeers: make(map[peer.ID]trustedPeerStat),
 	}
 }
 
@@ -287,6 +300,36 @@ func (s *syncer) GetBestPeerNumber() uint64 {
 		return bestPeer.Number
 	}
 	return 0
+}
+
+// GetTrustedPeerNumber returns the highest block number among peers that successfully
+// delivered blocks which were verified and written recently. Returns 0 if none.
+func (s *syncer) GetTrustedPeerNumber() uint64 {
+	cutoff := time.Now().Add(-trustedPeerWindow)
+
+	s.trustedPeersMu.RLock()
+	defer s.trustedPeersMu.RUnlock()
+
+	var max uint64
+	for _, st := range s.trustedPeers {
+		if st.lastSuccess.Before(cutoff) {
+			continue
+		}
+		if st.lastNumber > max {
+			max = st.lastNumber
+		}
+	}
+	return max
+}
+
+func (s *syncer) recordTrustedPeerSuccess(peerID peer.ID, blockNumber uint64) {
+	now := time.Now()
+	s.trustedPeersMu.Lock()
+	s.trustedPeers[peerID] = trustedPeerStat{
+		lastSuccess: now,
+		lastNumber:  blockNumber,
+	}
+	s.trustedPeersMu.Unlock()
 }
 
 func (s *syncer) wakeSyncAfter(backoff time.Duration, reason string, args ...interface{}) {
@@ -569,6 +612,9 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				return lastReceivedNumber, false, fmt.Errorf("failed to write block while bulk syncing: %w", err)
 			}
 
+			// 标记该 peer 为近期可信：已成功验证并写入区块
+			s.recordTrustedPeerSuccess(peerID, block.Number())
+
 			updateMetrics(fullBlock)
 			s.logger.Debug("✅ 区块同步成功", "peer", peerID.String(), "区块号", block.Number(), "哈希", block.Hash().String()[:16], "交易数", len(block.Transactions))
 			shouldTerminate = newBlockCallback(fullBlock)
@@ -630,6 +676,8 @@ func (s *syncer) fillGapFromPeer(peerID peer.ID, from uint64, peerLatestBlock ui
 		if err := s.blockchain.WriteFullBlock(fullBlock, syncerName); err != nil {
 			return lastReceivedNumber, fmt.Errorf("write block %d: %w", block.Number(), err)
 		}
+		// 标记该 peer 为近期可信：已成功验证并写入区块
+		s.recordTrustedPeerSuccess(peerID, block.Number())
 		updateMetrics(fullBlock)
 		newBlockCallback(fullBlock)
 		lastReceivedNumber = block.Number()
