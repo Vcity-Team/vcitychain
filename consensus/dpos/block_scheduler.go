@@ -11,6 +11,16 @@ import (
 	"github.com/hashicorp/go-hclog"
 )
 
+// orderValidatorAddressesForLeaderElection 将验证者地址按字节升序排列，
+// 与 ShouldProduceBlockNow 的规则一致，保证 slot % N 在所有节点映射到同一领导者。
+func orderValidatorAddressesForLeaderElection(addrs []types.Address) []types.Address {
+	ordered := append([]types.Address(nil), addrs...)
+	sort.Slice(ordered, func(i, j int) bool {
+		return bytes.Compare(ordered[i][:], ordered[j][:]) < 0
+	})
+	return ordered
+}
+
 // BlockchainInterface 是区块链接口，用于获取当前区块头
 type BlockchainInterface interface {
 	Header() *types.Header
@@ -91,10 +101,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	// 即使validators成员集合一致，不同节点也可能因为本地数据库/缓存/过滤差异导致validators顺序不一致，
 	// 从而 currentSlot % N 映射到不同地址，触发分叉。
 	// 这里强制按地址字节升序规范化顺序，保证slot->leader映射在所有节点一致。
-	orderedValidators := append([]types.Address(nil), validators...)
-	sort.Slice(orderedValidators, func(i, j int) bool {
-		return bytes.Compare(orderedValidators[i][:], orderedValidators[j][:]) < 0
-	})
+	orderedValidators := orderValidatorAddressesForLeaderElection(validators)
 
 	nextBlockNumber := blockNumber + 1
 	if nextBlockNumber < bs.consensusSwitchHeight {
@@ -219,6 +226,11 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 	if r.config.dposBackend != nil {
 		networkLatest := r.getNetworkLatestBlockNumber()
 		if networkLatest > currentBlock.Number {
+			r.logOnceWithInterval("should_produce_behind_network", 5*time.Second, "info",
+				"⏸️ 本地链高度落后于网络最新高度，暂不出块（sync 追平后再参与生产）",
+				"localBlockNumber", currentBlock.Number,
+				"networkLatestBlockNumber", networkLatest,
+				"lagBlocks", networkLatest-currentBlock.Number)
 			return false
 		}
 	}

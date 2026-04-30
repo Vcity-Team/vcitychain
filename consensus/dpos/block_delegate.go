@@ -4,6 +4,7 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
 )
 
@@ -102,9 +103,33 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 		timeSinceGenesis := now.Sub(genesisTime)
 		currentSlot := int(timeSinceGenesis / blockWindow)
 
-		// 计算当前应该出块的验证者索引
-		currentValidatorIndex := currentSlot % actualDelegateCount
-		delegate := validators[currentValidatorIndex]
+		// 与 ShouldProduceBlockNow 一致：先按地址字节升序再取模（数据库返回顺序≠选举顺序）
+		addresses := make([]types.Address, 0, len(validators))
+		for _, v := range validators {
+			addresses = append(addresses, v.Address)
+		}
+		orderedAddrs := orderValidatorAddressesForLeaderElection(addresses)
+		if len(orderedAddrs) == 0 {
+			return types.ZeroAddress
+		}
+		currentValidatorIndex := currentSlot % len(orderedAddrs)
+		delegateAddr := orderedAddrs[currentValidatorIndex]
+
+		var delegate *validator.ValidatorMetadata
+		for _, v := range validators {
+			if v.Address == delegateAddr {
+				delegate = v
+				break
+			}
+		}
+		if delegate == nil {
+			r.logOnceWithInterval("get_current_delegate_sorted_miss", 30*time.Second, "error",
+				"❌ getCurrentDelegate: 排序后的槽位地址不在活跃集合中",
+				"delegateAddr", delegateAddr.String(),
+				"validatorIndex", currentValidatorIndex,
+				"currentSlot", currentSlot)
+			return types.ZeroAddress
+		}
 
 		// 使用最新的数据库信息校验活跃状态和投票权重
 		latestMeta := delegate
