@@ -6306,6 +6306,7 @@ func (d *DPOS) GetActiveProposals(ctx context.Context, params interface{}) (inte
 			"proposer":          proposal.Proposer.String(),
 			"startBlock":        proposal.StartBlock,
 			"endBlock":          proposal.EndBlock,
+			"currentBlock":      currentBlockNumber,
 			"status":            proposal.Status.String(),
 			"threshold":         proposal.Threshold,
 			"description":       proposal.Description,
@@ -6328,9 +6329,10 @@ func (d *DPOS) GetActiveProposals(ctx context.Context, params interface{}) (inte
 	})
 
 	return map[string]interface{}{
-		"success":   true,
-		"proposals": result,
-		"count":     len(result),
+		"success":      true,
+		"currentBlock": currentBlockNumber,
+		"proposals":    result,
+		"count":        len(result),
 	}, nil
 }
 
