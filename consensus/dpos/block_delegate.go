@@ -178,8 +178,13 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 func (r *dposRuntime) getNetworkLatestBlockNumber() uint64 {
 	if r.config.dposBackend != nil {
 		if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil {
-			// 使用“近期可信 peer”高度作为门禁信号源，避免 bestPeer 声称高度虚高导致长期误判落后
-			return dpos.syncer.GetTrustedPeerNumber()
+			// 优先使用“近期可信 peer”高度作为门禁信号源，避免 bestPeer 声称高度虚高导致长期误判落后。
+			// 但在节点刚启动、尚未成功写入任何区块时，trusted 可能为 0，此时必须回退到 bestPeerNumber，
+			// 否则会误判“不落后”并提前出块，导致单节点出块分叉。
+			if trusted := dpos.syncer.GetTrustedPeerNumber(); trusted > 0 {
+				return trusted
+			}
+			return dpos.syncer.GetBestPeerNumber()
 		}
 	}
 	return 0
