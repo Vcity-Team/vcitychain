@@ -92,6 +92,10 @@ type runtimeConfig struct {
 
 	// 固定时间窗口调度器
 	blockScheduler *BlockScheduler
+
+	// SyncLagRestart*：取自 DPoS 内置常量（当前 50 块滞后 + 30s 本地 tip 不涨则 KickSync）。
+	SyncLagRestartBlocks uint64
+	SyncLagRestartStagnant time.Duration
 }
 
 // consensusRuntime is a struct that provides consensus runtime features like epoch, state and event management

@@ -1,12 +1,12 @@
 package dpos
 
 import (
-	"context"
 	"bytes"
-	"errors"
-	"fmt"
+	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net/http"
@@ -256,14 +256,14 @@ type DPoSConfig struct {
 	// 不配置则回退使用 DPoSDelegateThreshold（向后兼容）
 	DPoSGenesisVoteAmount *big.Int `json:"dpos_genesis_vote_amount" yaml:"dpos_genesis_vote_amount"`
 
-	EpochDuration       time.Duration `json:"epochDuration" yaml:"epochDuration"`
-	RewardAccount       types.Address `json:"rewardAccount" yaml:"rewardAccount"`
+	EpochDuration time.Duration `json:"epochDuration" yaml:"epochDuration"`
+	RewardAccount types.Address `json:"rewardAccount" yaml:"rewardAccount"`
 	// RewardAmount 历史字段：Epoch 奖池现由 VoterTargetAPYBps 与链上质押动态计算，仅作兼容占位（可选）
 	RewardAmount *big.Int `json:"rewardAmount" yaml:"rewardAmount"`
 	// VoterTargetAPYBps 投票者目标年化收益率（基点，10000=100%，例如 500=5%）；为唯一需要配置的奖池相关经济参数
 	VoterTargetAPYBps uint64 `json:"voter_target_apy" yaml:"voter_target_apy"`
 	// BootstrapRPC 可选：启动时从 staking 合约读取 validators() 的 JSON-RPC 端点（用于无法在本地 Transition 中成功调用时的回退）
-	BootstrapRPC string `json:"dpos_bootstrap_rpc" yaml:"dpos_bootstrap_rpc"`
+	BootstrapRPC        string        `json:"dpos_bootstrap_rpc" yaml:"dpos_bootstrap_rpc"`
 	GenesisRootAccount  types.Address `json:"genesisRootAccount" yaml:"genesisRootAccount"`          // 从创世文件alloc中读取的根账户地址
 	ProposalVotePeriod  time.Duration `json:"proposalVotePeriod" yaml:"dpos_proposal_vote_period"`   // 提案表决周期
 	ProposalValidPeriod time.Duration `json:"proposalValidPeriod" yaml:"dpos_proposal_valid_period"` // 提案有效期
@@ -382,13 +382,17 @@ type DPoS struct {
 	// 余额查询器
 	balanceQuerier NativeTokenBalanceQuerier
 
+	// 同步落后软性自愈（KickSync）；由 Params 传入后写入 runtimeConfig
+	syncLagRestartBlocks      uint64
+	syncLagRestartStagnantDur time.Duration
+
 	// DPoS验证者相关字段
 	minStakeAmount *big.Int // 最小质押门槛
 
 	// 日志频率限制
-	lastLogTime       map[string]time.Time   // 最后日志时间
-	logMutex          sync.RWMutex           // 日志锁
-	genesisExtraData  []byte                 // 创世块extraData
+	lastLogTime      map[string]time.Time // 最后日志时间
+	logMutex         sync.RWMutex         // 日志锁
+	genesisExtraData []byte               // 创世块extraData
 	// genesisValidators 仅用于“创世验证者永远保留出块资格”等规则。
 	// 注意：该映射不能再由 d.lock 保护，否则会在某些读锁路径中触发写锁升级导致死锁。
 	genesisValidators     map[types.Address]bool // 创世验证者地址映射
@@ -788,12 +792,22 @@ func (d *DPoS) Close() error {
 // DPoS 实现 dposBackend 接口
 var _ dposBackend = (*DPoS)(nil)
 
+// sync 落后软性自愈（KickSync）阈值：内置固定，不向 yaml 暴露。
+const (
+	syncLagKickThresholdBlocks = uint64(50)
+	syncLagKickStagnant        = 30 * time.Second
+)
+
 // Factory 创建DPoS共识实例
 func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	logger := params.Logger.Named("dpos")
 
 	// 设置自定义哈希函数
 	setupHeaderHashFunc()
+
+	logger.Info("⚙️ 同步落后软性自愈（KickSync）阈值（内置常量）",
+		"thresholdLagBlocks", syncLagKickThresholdBlocks,
+		"stagnantDuration", syncLagKickStagnant.String())
 
 	vcity_dpos := &DPoS{
 		closeCh:     make(chan struct{}),
@@ -802,6 +816,9 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		config:      &DPoSConfig{},              // 初始化config结构体
 		rawConfig:   params.Config.Config,       // 存储原始配置
 		lastLogTime: make(map[string]time.Time), // 初始化日志频率限制
+
+		syncLagRestartBlocks:      syncLagKickThresholdBlocks,
+		syncLagRestartStagnantDur: syncLagKickStagnant,
 	}
 
 	getConfigValue := func(keys ...string) (interface{}, bool) {
@@ -1422,6 +1439,9 @@ func (d *DPoS) Initialize() error {
 		InitialDelegates: d.config.InitialDelegates,
 		blockScheduler:   d.blockScheduler, // 设置固定时间窗口调度器
 		BlockTime:        d.config.BlockTime,
+
+		SyncLagRestartBlocks:   d.syncLagRestartBlocks,
+		SyncLagRestartStagnant: d.syncLagRestartStagnantDur,
 	}
 
 	// 检查runtime配置是否正确
@@ -2381,7 +2401,7 @@ func DefaultDPoSConfig() *DPoSConfig {
 		EpochDuration:             86400 * time.Second, // 与链上常见默认一致
 		RewardAccount:             rewardAcct,
 		RewardAmount:              big.NewInt(1),
-		VoterTargetAPYBps:         500, // 5% 年化（基点）
+		VoterTargetAPYBps:         500,                 // 5% 年化（基点）
 		ProposalVotePeriod:        24 * time.Hour,      // 默认提案表决周期 24小时
 		ProposalValidPeriod:       7 * 24 * time.Hour,  // 默认提案有效期 7天
 		MinFreezePeriod:           604800,              // 默认最小冻结期 7天（秒）

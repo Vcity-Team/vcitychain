@@ -37,6 +37,11 @@ type ResourceMonitor struct {
 	// 日志间隔管理
 	lastLogTime map[string]time.Time
 	logMutex    sync.RWMutex
+
+	syncLagKickMu        sync.Mutex
+	syncLagKickInit      bool
+	syncLagKickLastLocal uint64
+	syncLagKickLastProbe time.Time
 }
 
 // NewResourceMonitor 创建资源监控器
@@ -101,7 +106,72 @@ func (rm *ResourceMonitor) cleanupResources() {
 	// 清理DPoS运行时缓存
 	if rm.dposRuntime != nil {
 		rm.dposRuntime.cleanupExpiredCaches()
+		rm.maybeKickSyncIfStalledBehind()
 	}
+}
+
+// maybeKickSyncIfStalledBehind 当本机落后于网络门禁高度超过配置块差且本机 tip 在停滞时长内不涨时触发 syncer.KickSync。
+func (rm *ResourceMonitor) maybeKickSyncIfStalledBehind() {
+	if rm.dposRuntime == nil || rm.dposRuntime.config == nil {
+		return
+	}
+	cfg := rm.dposRuntime.config
+	if cfg.SyncLagRestartBlocks == 0 || cfg.SyncLagRestartStagnant <= 0 {
+		return
+	}
+	hdr := cfg.blockchain.CurrentHeader()
+	if hdr == nil {
+		return
+	}
+	local := hdr.Number
+	network := rm.dposRuntime.getNetworkLatestBlockNumber()
+
+	rm.syncLagKickMu.Lock()
+	defer rm.syncLagKickMu.Unlock()
+
+	if !rm.syncLagKickInit {
+		rm.syncLagKickInit = true
+		rm.syncLagKickLastLocal = local
+		rm.syncLagKickLastProbe = time.Now()
+		return
+	}
+
+	if local != rm.syncLagKickLastLocal {
+		rm.syncLagKickLastLocal = local
+		rm.syncLagKickLastProbe = time.Now()
+		return
+	}
+
+	if network <= local {
+		return
+	}
+	lag := network - local
+	if lag <= cfg.SyncLagRestartBlocks {
+		return
+	}
+	if time.Since(rm.syncLagKickLastProbe) < cfg.SyncLagRestartStagnant {
+		return
+	}
+
+	dp, ok := cfg.dposBackend.(*DPoS)
+	if !ok || dp == nil || dp.syncer == nil {
+		rm.logger.Warn("sync lag recovery: KickSync skipped (syncer unavailable)",
+			"localBlockNumber", local,
+			"networkLatestBlockNumber", network,
+			"lagBlocks", lag)
+		rm.syncLagKickLastProbe = time.Now()
+		return
+	}
+
+	rm.logger.Warn("sync lag recovery: invoking syncer KickSync",
+		"localBlockNumber", local,
+		"networkLatestBlockNumber", network,
+		"lagBlocks", lag,
+		"thresholdLagBlocks", cfg.SyncLagRestartBlocks,
+		"stagnantDuration", cfg.SyncLagRestartStagnant.String())
+
+	dp.syncer.KickSync("resource-monitor: local tip stalled behind network gateway height")
+	rm.syncLagKickLastProbe = time.Now()
 }
 
 // monitorMemoryUsage 监控内存使用情况
@@ -156,7 +226,3 @@ func (rm *ResourceMonitor) logOnceWithInterval(key string, interval time.Duratio
 		rm.logger.Info(message, args...)
 	}
 }
-
-
-
-

@@ -374,7 +374,7 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 			// 不返回错误，因为这是启动时的补充操作
 		} else {
 			s.logger.Info("✅ 切换到DPoS时创建投票记录成功")
-			
+
 			// ✅ 关键修复：投票创建后，重新加载验证者集合
 			// 因为Start()中加载验证者时还没有投票记录，所以验证者集合是空的
 			s.logger.Info("🔄 投票创建后，重新加载验证者集合...")

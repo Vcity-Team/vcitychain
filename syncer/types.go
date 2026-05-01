@@ -87,6 +87,8 @@ type Syncer interface {
 	// GetTrustedPeerNumber returns the latest block number from a recently verified peer.
 	// If no peer has been verified recently, it returns 0.
 	GetTrustedPeerNumber() uint64
+	// KickSync 进程内软性重启同步：刷新 peer 图、关闭同步链路上的流并多次唤醒 Sync 循环。
+	KickSync(reason string)
 }
 
 type Progression interface {

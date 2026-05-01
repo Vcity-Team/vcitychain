@@ -86,12 +86,12 @@ func NewSyncer(
 	consensusSwitchHeight uint64,
 ) Syncer {
 	return &syncer{
-		logger:                logger.Named(syncerName),
-		blockchain:            blockchain,
-		syncProgression:       progress.NewProgressionWrapper(progress.ChainSyncBulk),
-		syncPeerService:       NewSyncPeerService(logger, network, blockchain),
-		syncPeerClient:        NewSyncPeerClient(logger, network, blockchain),
-		blockTimeout:          blockTimeout,
+		logger:          logger.Named(syncerName),
+		blockchain:      blockchain,
+		syncProgression: progress.NewProgressionWrapper(progress.ChainSyncBulk),
+		syncPeerService: NewSyncPeerService(logger, network, blockchain),
+		syncPeerClient:  NewSyncPeerClient(logger, network, blockchain),
+		blockTimeout:    blockTimeout,
 		// 缓冲 1：避免 notify 的非阻塞发送在关键时刻被丢弃，导致 Sync 长期卡在 <-newStatusCh
 		newStatusCh:           make(chan struct{}, 1),
 		closeCh:               make(chan struct{}),
@@ -343,6 +343,58 @@ func (s *syncer) wakeSyncAfter(backoff time.Duration, reason string, args ...int
 	// 这里用 Debug，避免正常波动时刷屏；关键路径另有 Warn 说明
 	s.logger.Debug("syncer self-wake", append([]interface{}{"reason", reason, "backoff", backoff.String()}, args...)...)
 	s.notifyNewStatusEvent()
+}
+
+// KickSync 在落后于网络且拉块链路疑似僵死时由上层调用：不退出进程，通过关流 / 换人 / 唤醒打破卡死。
+func (s *syncer) KickSync(reason string) {
+	if s.closed.Load() {
+		return
+	}
+
+	local := uint64(0)
+	if h := s.blockchain.Header(); h != nil {
+		local = h.Number
+	}
+
+	s.logger.Warn("syncer KickSync: soft-recovery reset",
+		"reason", reason,
+		"localLatest", local,
+		"peerMapSizeBefore", s.getPeerMapSize())
+
+	for _, st := range s.syncPeerClient.GetConnectedPeerStatuses() {
+		if st != nil {
+			s.putToPeerMap(st)
+		}
+	}
+
+	streamClosed := 0
+	s.peerMap.Range(func(_ interface{}, value interface{}) bool {
+		p, ok := value.(*NoForkPeer)
+		if !ok || p == nil {
+			return true
+		}
+		if err := s.syncPeerClient.CloseStream(p.ID); err != nil {
+			s.logger.Debug("KickSync CloseStream", "peer", p.ID.String(), "err", err)
+		} else {
+			streamClosed++
+		}
+		return true
+	})
+
+	if bp := s.peerMap.BestPeer(nil); streamClosed == 0 && bp != nil && bp.Number > local {
+		s.syncPeerClient.DisconnectPeer(bp.ID)
+		s.logger.Warn("KickSync: disconnected tallest peer to force reconnect",
+			"peer", bp.ID.String(), "theirNumber", bp.Number,
+			"localLatest", local)
+	}
+
+	s.notifyNewStatusEvent()
+	time.AfterFunc(300*time.Millisecond, func() {
+		if s.closed.Load() {
+			return
+		}
+		s.notifyNewStatusEvent()
+	})
 }
 
 // Sync syncs block with the best peer until callback returns true

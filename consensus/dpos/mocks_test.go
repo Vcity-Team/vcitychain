@@ -489,6 +489,8 @@ func (tp *syncerMock) GetTrustedPeerNumber() uint64 {
 	return args.Get(0).(uint64) //nolint
 }
 
+func (tp *syncerMock) KickSync(string) {}
+
 func init() {
 	// setup custom hash header func
 	setupHeaderHashFunc()
