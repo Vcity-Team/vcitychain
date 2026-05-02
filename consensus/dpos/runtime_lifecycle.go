@@ -8,10 +8,12 @@ import (
 
 // start 启动DPoS runtime
 func (r *dposRuntime) start() error {
-	// 初始化运行时状态
-	if err := r.initializeRuntime(); err != nil {
-		r.logger.Error("❌ 初始化DPoS runtime失败", "error", err)
-		return fmt.Errorf("failed to initialize runtime: %w", err)
+	// initializeRuntime 已在 DPoS.Initialize 中调用；此处再调会重复 NewResourceMonitor+Start，遗留未停止的旧 goroutine。
+	if r.resourceMonitor == nil {
+		if err := r.initializeRuntime(); err != nil {
+			r.logger.Error("❌ 初始化DPoS runtime失败", "error", err)
+			return fmt.Errorf("failed to initialize runtime: %w", err)
+		}
 	}
 
 	// ✅ 方案2：确保networkIntegration已启动

@@ -2,7 +2,6 @@ package dpos
 
 import (
 	"bytes"
-	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -327,6 +326,11 @@ type DPoS struct {
 	closeCh chan struct{}
 	lock    sync.RWMutex
 
+	// syncRestartMu：restartSyncerForRecovery 与 runSyncLoop 访问 d.syncer 时串行化。
+	syncRestartMu sync.Mutex
+	// lastSyncHardRestartAt：方案 B 全量重建 syncer 的冷却时间起点。
+	lastSyncHardRestartAt time.Time
+
 	// 区块链引用
 	blockchain blockchainBackend
 	txPool     txPoolInterface
@@ -382,7 +386,7 @@ type DPoS struct {
 	// 余额查询器
 	balanceQuerier NativeTokenBalanceQuerier
 
-	// 同步落后软性自愈（KickSync）；由 Params 传入后写入 runtimeConfig
+	// 同步落后自愈（方案 B / restartSyncerForRecovery）；Factory 内置常量写入 runtimeConfig
 	syncLagRestartBlocks      uint64
 	syncLagRestartStagnantDur time.Duration
 
@@ -608,22 +612,8 @@ func (d *DPoS) Start() error {
 		d.logger.Info("✅ syncer启动成功")
 	}
 
-	// sync concurrently, retrying indefinitely
-	go common.RetryForever(context.Background(), time.Second, func(context.Context) error {
-		// 在区块同步前检查BLS公钥是否加载完成
-		if err := d.waitForBLSKeysLoaded(); err != nil {
-			d.logger.Warn("⚠️ 等待BLS公钥加载完成失败，继续尝试同步", "error", err)
-		}
-
-		blockHandler := func(b *types.FullBlock) bool {
-			return false
-		}
-		if err := d.syncer.Sync(blockHandler); err != nil {
-			d.logger.Error("blocks synchronization failed", "error", err)
-			return err
-		}
-		return nil
-	})
+	// 长期同步循环：不可用 RetryForever（Sync 在 syncer.Close 后返回 nil 会被视为成功从而退出重试；方案 B 需在此循环内换新实例后继续 Sync）。
+	go d.runSyncLoop()
 
 	// start consensus runtime if available
 	if d.runtime != nil {
@@ -771,6 +761,7 @@ func (d *DPoS) Close() error {
 		if err := d.syncer.Close(); err != nil {
 			return err
 		}
+		d.syncer = nil
 	}
 
 	close(d.closeCh)
@@ -789,13 +780,121 @@ func (d *DPoS) Close() error {
 	return nil
 }
 
+// newSyncerFromConfig 与 Initialize 中构造逻辑一致，供方案 B 替换实例时复用。
+func (d *DPoS) newSyncerFromConfig() syncer.Syncer {
+	blockTimeout := d.config.BlockTime.Duration * 3
+	if blockTimeout == 0 {
+		d.logger.Warn("⚠️ blockTimeout为0，使用默认值9秒（3倍默认blockTime）")
+		blockTimeout = 9 * time.Second
+	}
+	return syncer.NewSyncer(
+		d.config.Logger.Named("syncer"),
+		d.config.Network,
+		d.config.Blockchain,
+		blockTimeout,
+		d.config.ConsensusSwitchHeight,
+	)
+}
+
+// runSyncLoop 常驻调用 Sync；方案 B 关闭旧 syncer 后 Sync 返回 nil，本循环用新 d.syncer 继续。
+func (d *DPoS) runSyncLoop() {
+	for {
+		select {
+		case <-d.closeCh:
+			return
+		default:
+		}
+
+		if err := d.waitForBLSKeysLoaded(); err != nil {
+			d.logger.Warn("⚠️ 等待BLS公钥加载完成失败，继续尝试同步", "error", err)
+		}
+
+		d.syncRestartMu.Lock()
+		s := d.syncer
+		d.syncRestartMu.Unlock()
+
+		if s == nil {
+			select {
+			case <-d.closeCh:
+				return
+			default:
+			}
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		blockHandler := func(b *types.FullBlock) bool {
+			return false
+		}
+		if err := s.Sync(blockHandler); err != nil {
+			d.logger.Error("blocks synchronization failed", "error", err)
+			time.Sleep(time.Second)
+			continue
+		}
+
+		select {
+		case <-d.closeCh:
+			return
+		default:
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// restartSyncerForRecovery 方案 B：Close 当前 syncer 后 NewSyncer+Start，重建链路与内部 goroutine。
+func (d *DPoS) restartSyncerForRecovery(reason string) error {
+	d.syncRestartMu.Lock()
+	defer d.syncRestartMu.Unlock()
+
+	if !d.lastSyncHardRestartAt.IsZero() && time.Since(d.lastSyncHardRestartAt) < syncHardRestartMinInterval {
+		d.logger.Info("sync hard restart skipped (cooldown)",
+			"reason", reason,
+			"sinceLast", time.Since(d.lastSyncHardRestartAt).String(),
+			"minInterval", syncHardRestartMinInterval.String())
+		return nil
+	}
+
+	local := uint64(0)
+	if d.blockchain != nil && d.blockchain.CurrentHeader() != nil {
+		local = d.blockchain.CurrentHeader().Number
+	}
+	d.logger.Info("sync hard restart (plan B): replacing syncer instance",
+		"reason", reason,
+		"localLatest", local)
+
+	old := d.syncer
+	if old != nil {
+		if err := old.Close(); err != nil {
+			return fmt.Errorf("close syncer before hard restart: %w", err)
+		}
+	}
+
+	d.syncer = d.newSyncerFromConfig()
+	if err := d.syncer.Start(); err != nil {
+		if strings.Contains(err.Error(), "topic already exists") {
+			d.logger.Info("syncer Start topic conflict after hard restart, continuing", "error", err)
+		} else {
+			d.syncer = nil
+			return fmt.Errorf("syncer.Start after hard restart: %w", err)
+		}
+	}
+
+	if d.txPool != nil {
+		d.syncer.EnablePublishingPeerStatus()
+	}
+
+	d.lastSyncHardRestartAt = time.Now()
+	return nil
+}
+
 // DPoS 实现 dposBackend 接口
 var _ dposBackend = (*DPoS)(nil)
 
-// sync 落后软性自愈（KickSync）阈值：内置固定，不向 yaml 暴露。
+// sync 落后自愈：内置固定，不向 yaml 暴露。滞后超阈值且本地 tip 停滞时触发方案 B（重建 syncer）。
 const (
 	syncLagKickThresholdBlocks = uint64(50)
 	syncLagKickStagnant        = 30 * time.Second
+	syncHardRestartMinInterval = 5 * time.Minute // 方案 B 两次全量重建的最短间隔
 )
 
 // Factory 创建DPoS共识实例
@@ -805,9 +904,10 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	// 设置自定义哈希函数
 	setupHeaderHashFunc()
 
-	logger.Info("⚙️ 同步落后软性自愈（KickSync）阈值（内置常量）",
+	logger.Info("⚙️ 同步落后自愈（方案 B 重建 syncer）阈值（内置常量）",
 		"thresholdLagBlocks", syncLagKickThresholdBlocks,
-		"stagnantDuration", syncLagKickStagnant.String())
+		"stagnantDuration", syncLagKickStagnant.String(),
+		"hardRestartMinInterval", syncHardRestartMinInterval.String())
 
 	vcity_dpos := &DPoS{
 		closeCh:     make(chan struct{}),
@@ -1340,20 +1440,8 @@ func (d *DPoS) Initialize() error {
 	RegisterDPoSInstance(nodeKey, d)
 	d.logger.Debug("DPoS实例已注册到全局注册表", "fixedKey", fixedKey, "nodeKey", nodeKey)
 
-	// create and set syncer
-	// blockTimeout 使用3倍的blockTime作为同步超时（参考IBFT和PolyBFT的实现）
-	blockTimeout := d.config.BlockTime.Duration * 3
-	if blockTimeout == 0 {
-		d.logger.Warn("⚠️ blockTimeout为0，使用默认值9秒（3倍默认blockTime）")
-		blockTimeout = 9 * time.Second
-	}
-	d.syncer = syncer.NewSyncer(
-		d.config.Logger.Named("syncer"),
-		d.config.Network,
-		d.config.Blockchain,
-		blockTimeout,
-		d.config.ConsensusSwitchHeight,
-	)
+	// create and set syncer（参数见 newSyncerFromConfig）
+	d.syncer = d.newSyncerFromConfig()
 
 	// 验证创世根账户地址已配置（从server层传递）
 	if d.config.GenesisRootAccount == (types.Address{}) {

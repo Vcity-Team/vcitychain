@@ -110,7 +110,7 @@ func (rm *ResourceMonitor) cleanupResources() {
 	}
 }
 
-// maybeKickSyncIfStalledBehind 当本机落后于网络门禁高度超过配置块差且本机 tip 在停滞时长内不涨时触发 syncer.KickSync。
+// maybeKickSyncIfStalledBehind 当本机落后于网络门禁高度超过配置块差且本机 tip 在停滞时长内不涨时触发方案 B（DPoS.restartSyncerForRecovery）。
 func (rm *ResourceMonitor) maybeKickSyncIfStalledBehind() {
 	if rm.dposRuntime == nil || rm.dposRuntime.config == nil {
 		return
@@ -154,8 +154,8 @@ func (rm *ResourceMonitor) maybeKickSyncIfStalledBehind() {
 	}
 
 	dp, ok := cfg.dposBackend.(*DPoS)
-	if !ok || dp == nil || dp.syncer == nil {
-		rm.logger.Warn("sync lag recovery: KickSync skipped (syncer unavailable)",
+	if !ok || dp == nil {
+		rm.logger.Info("sync lag recovery: hard restart skipped (DPoS unavailable)",
 			"localBlockNumber", local,
 			"networkLatestBlockNumber", network,
 			"lagBlocks", lag)
@@ -163,14 +163,16 @@ func (rm *ResourceMonitor) maybeKickSyncIfStalledBehind() {
 		return
 	}
 
-	rm.logger.Warn("sync lag recovery: invoking syncer KickSync",
+	rm.logger.Info("sync lag recovery: invoking DPoS restartSyncerForRecovery (plan B)",
 		"localBlockNumber", local,
 		"networkLatestBlockNumber", network,
 		"lagBlocks", lag,
 		"thresholdLagBlocks", cfg.SyncLagRestartBlocks,
 		"stagnantDuration", cfg.SyncLagRestartStagnant.String())
 
-	dp.syncer.KickSync("resource-monitor: local tip stalled behind network gateway height")
+	if err := dp.restartSyncerForRecovery("resource-monitor: local tip stalled behind network gateway height"); err != nil {
+		rm.logger.Info("sync lag recovery: restartSyncerForRecovery failed", "error", err)
+	}
 	rm.syncLagKickLastProbe = time.Now()
 }
 
