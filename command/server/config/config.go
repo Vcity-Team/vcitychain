@@ -76,6 +76,8 @@ type Config struct {
 	VoterTargetAPYBps uint64 `json:"voter_target_apy" yaml:"voter_target_apy"`
 	// dpos_bootstrap_rpc: 启动时通过 JSON-RPC eth_call 查询 staking 合约 validators() 的端点
 	DPoSBootstrapRPC string `json:"dpos_bootstrap_rpc" yaml:"dpos_bootstrap_rpc"`
+	// dpos_disable_double_sign_slashing: 为 true 时关闭双签检测、削减及故障落库（默认 false，可不写）
+	DPoSDisableDoubleSignSlashing bool `json:"dpos_disable_double_sign_slashing" yaml:"dpos_disable_double_sign_slashing"`
 
 	// London Fork 配置（从 yaml 读取，不改变 genesis hash）
 	BaseFeeConfig string `json:"base_fee_config" yaml:"base_fee_config"` // 格式: "baseFee:baseFeeEM:baseFeeChangeDenom"

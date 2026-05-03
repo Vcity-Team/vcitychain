@@ -112,6 +112,34 @@ func toUint64(value interface{}) (uint64, bool) {
 	}
 }
 
+// parseFlexibleBool 解析 genesis/server config 中的布尔（JSON/YAML 常见类型）。
+func parseFlexibleBool(value interface{}) (bool, bool) {
+	switch v := value.(type) {
+	case bool:
+		return v, true
+	case string:
+		s := strings.ToLower(strings.TrimSpace(v))
+		switch s {
+		case "true", "1", "yes", "on":
+			return true, true
+		case "false", "0", "no", "off", "":
+			return false, true
+		default:
+			return false, false
+		}
+	case float64:
+		return v != 0, true
+	case int:
+		return v != 0, true
+	case int64:
+		return v != 0, true
+	case uint64:
+		return v != 0, true
+	default:
+		return false, false
+	}
+}
+
 func (d *DPoS) applyCommissionDefaults(info *DelegateInfo) {
 	if info == nil || d == nil || d.config == nil {
 		return
@@ -380,8 +408,10 @@ type DPoS struct {
 	// 固定时间窗口调度器
 	blockScheduler *BlockScheduler
 
-	// 双重签名检测器
+	// 双重签名检测器（dpos_disable_double_sign_slashing=true 时为 nil）
 	doubleSigningDetector *DoubleSigningDetector
+	// disableDoubleSignSlashing：为 true 时不跑双签检测、削减及 validatorFaultStatus 双签写入（默认 false）
+	disableDoubleSignSlashing bool
 
 	// 余额查询器
 	balanceQuerier NativeTokenBalanceQuerier
@@ -1414,9 +1444,21 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	vcity_dpos.delegates = make(validator.AccountSet, 0)
 	vcity_dpos.voteRecords = make(map[string]*VoteRecord)
 
-	// 初始化双重签名检测器
-	vcity_dpos.doubleSigningDetector = NewDoubleSigningDetector(logger)
-	logger.Debug("双重签名检测器已初始化")
+	if v, ok := getConfigValue("dpos_disable_double_sign_slashing"); ok {
+		if b, parsed := parseFlexibleBool(v); parsed {
+			vcity_dpos.disableDoubleSignSlashing = b
+		} else {
+			logger.Warn("dpos_disable_double_sign_slashing 无法解析，按 false（启用双签削减）处理",
+				"value", v, "type", fmt.Sprintf("%T", v))
+		}
+	}
+	if vcity_dpos.disableDoubleSignSlashing {
+		logger.Info("⚙️ 双签检测与削减已关闭（dpos_disable_double_sign_slashing=true）")
+		vcity_dpos.doubleSigningDetector = nil
+	} else {
+		vcity_dpos.doubleSigningDetector = NewDoubleSigningDetector(logger)
+		logger.Debug("双重签名检测器已初始化")
+	}
 
 	return vcity_dpos, nil
 }

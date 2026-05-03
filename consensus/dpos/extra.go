@@ -942,9 +942,9 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 		return err
 	}
 
-	// 双重签名检测和削减
+	// 双重签名检测和削减（dpos_disable_double_sign_slashing=true 时整段跳过）
 	if consensusBackend != nil {
-		if dposBackend, ok := consensusBackend.(*DPoS); ok {
+		if dposBackend, ok := consensusBackend.(*DPoS); ok && !dposBackend.disableDoubleSignSlashing {
 			// 检查是否有 doubleSigningDetector（通过检查是否有 DetectDoubleSigning 方法）
 			if dposBackend.epochManager != nil {
 				validatorAddr := types.BytesToAddress(header.Miner)

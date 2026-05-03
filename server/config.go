@@ -86,6 +86,8 @@ type Config struct {
 	VoterTargetAPYBps uint64 `yaml:"voter_target_apy"`
 	// dpos_bootstrap_rpc: 启动时通过 JSON-RPC eth_call 查询 staking 合约 validators() 的端点
 	DPoSBootstrapRPC string `yaml:"dpos_bootstrap_rpc"`
+	// dpos_disable_double_sign_slashing: 为 true 时关闭双签检测与削减（由 server 写入 engineConfig）
+	DPoSDisableDoubleSignSlashing bool `yaml:"dpos_disable_double_sign_slashing"`
 }
 
 // Telemetry holds the config details for metric services

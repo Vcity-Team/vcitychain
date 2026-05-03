@@ -178,6 +178,10 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		"dpos_minor_offense_slash_rate":  float64(s.config.DPoSMinorOffenseSlashRate),  // 轻度违规削减率（基点）
 		"dpos_severe_offense_slash_rate": float64(s.config.DPoSSevereOffenseSlashRate), // 严重违规削减率（基点）
 	}
+	if s.config.DPoSDisableDoubleSignSlashing {
+		engineConfig["dpos_disable_double_sign_slashing"] = true
+		s.logger.Info("✅ 透传 dpos_disable_double_sign_slashing=true 到 DPoS（关闭双签削减）")
+	}
 
 	// 可选：投票者目标 APY（基点，500=5%）
 	if s.config.VoterTargetAPYBps > 0 {
@@ -926,6 +930,11 @@ func (s *Server) setupConsensus() error {
 		return err
 	}
 	engineConfig["dpos_severe_offense_slash_rate"] = float64(s.config.DPoSSevereOffenseSlashRate)
+
+	if s.config.DPoSDisableDoubleSignSlashing {
+		engineConfig["dpos_disable_double_sign_slashing"] = true
+		s.logger.Info("✅ setupConsensus: dpos_disable_double_sign_slashing=true 已写入 engineConfig")
+	}
 
 	// 从YAML配置中获取epoch duration
 	if epochDurationStr := s.config.DPoSEpochDuration; epochDurationStr != "" {
