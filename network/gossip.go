@@ -73,8 +73,12 @@ func (t *Topic) Close() {
 
 	// if all subscribers are finished, close the topic
 	if t.topic != nil {
-		t.topic.Close()
+		pt := t.topic
 		t.topic = nil
+		if err := pt.Close(); err != nil {
+			// subscription 未注销时 pubsub 会拒绝 Close 且不释放 topic，后续 Join 报 topic already exists（Plan B 重建 syncer 时易触发）。
+			t.logger.Warn("pubsub Topic.Close returned error", "err", err)
+		}
 	}
 }
 
@@ -150,7 +154,11 @@ func (t *Topic) Subscribe(handler func(obj interface{}, from peer.ID)) error {
 
 func (t *Topic) readLoop(sub *pubsub.Subscription, handler func(obj interface{}, from peer.ID)) {
 	t.waitGroup.Add(1)
-	defer t.waitGroup.Done()
+	defer func() {
+		// 必须 Cancel subscription，否则底层 Topic.Close 失败，Join 同名 topic 会一直报 topic already exists。
+		sub.Cancel()
+		t.waitGroup.Done()
+	}()
 
 	ctx, cancelFn := context.WithCancel(context.Background())
 
