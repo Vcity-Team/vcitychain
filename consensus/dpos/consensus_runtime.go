@@ -93,8 +93,9 @@ type runtimeConfig struct {
 	// 固定时间窗口调度器
 	blockScheduler *BlockScheduler
 
-	// SyncLagRestart*：取自 DPoS 内置常量（当前 50 块滞后 + 30s 本地 tip 不涨则方案 B 重建 syncer）。
-	SyncLagRestartBlocks uint64
+	// SyncLagRestartBlocks：本地落后于网络至少该块数（lag>=）才考虑方案 B。
+	// SyncLagRestartStagnant：本地 tip 连续不涨达到该时长后触发。
+	SyncLagRestartBlocks   uint64
 	SyncLagRestartStagnant time.Duration
 }
 

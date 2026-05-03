@@ -890,11 +890,14 @@ func (d *DPoS) restartSyncerForRecovery(reason string) error {
 // DPoS 实现 dposBackend 接口
 var _ dposBackend = (*DPoS)(nil)
 
-// sync 落后自愈：内置固定，不向 yaml 暴露。滞后超阈值且本地 tip 停滞时触发方案 B（重建 syncer）。
+// sync 落后自愈：内置固定。lag>=阈值 且本地 tip 连续不涨超过停滞时长则触发方案 B（重建 syncer）。
+// 与约 3s 出块间隔对齐：5 块约对应链上 ~15s 量级掉队；10s 停滞减少正常抖动误触发。
 const (
-	syncLagKickThresholdBlocks = uint64(50)
-	syncLagKickStagnant        = 30 * time.Second
+	syncLagKickThresholdBlocks = uint64(5)
+	syncLagKickStagnant        = 10 * time.Second
 	syncHardRestartMinInterval = 5 * time.Minute // 方案 B 两次全量重建的最短间隔
+	// planBStallCheckInterval：须明显小于停滞时长，否则仅依赖 30s cleanup 时「10s 停滞」无法及时判定
+	planBStallCheckInterval = 2 * time.Second
 )
 
 // Factory 创建DPoS共识实例
@@ -905,9 +908,10 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	setupHeaderHashFunc()
 
 	logger.Info("⚙️ 同步落后自愈（方案 B 重建 syncer）阈值（内置常量）",
-		"thresholdLagBlocks", syncLagKickThresholdBlocks,
+		"minLagBlocks", syncLagKickThresholdBlocks,
 		"stagnantDuration", syncLagKickStagnant.String(),
-		"hardRestartMinInterval", syncHardRestartMinInterval.String())
+		"hardRestartMinInterval", syncHardRestartMinInterval.String(),
+		"planBCheckInterval", planBStallCheckInterval.String())
 
 	vcity_dpos := &DPoS{
 		closeCh:     make(chan struct{}),

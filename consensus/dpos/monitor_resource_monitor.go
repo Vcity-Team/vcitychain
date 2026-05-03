@@ -67,6 +67,9 @@ func (rm *ResourceMonitor) monitorLoop(ctx context.Context) {
 	ticker := time.NewTicker(rm.cleanupInterval)
 	defer ticker.Stop()
 
+	planBTicker := time.NewTicker(planBStallCheckInterval)
+	defer planBTicker.Stop()
+
 	// 添加内存监控ticker
 	memoryTicker := time.NewTicker(60 * time.Second)
 	defer memoryTicker.Stop()
@@ -77,6 +80,10 @@ func (rm *ResourceMonitor) monitorLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			rm.cleanupResources()
+		case <-planBTicker.C:
+			if rm.dposRuntime != nil {
+				rm.maybeKickSyncIfStalledBehind()
+			}
 		case <-memoryTicker.C:
 			// 定期内存监控
 			rm.monitorMemoryUsage()
@@ -103,14 +110,13 @@ func (rm *ResourceMonitor) cleanupResources() {
 		}
 	}
 
-	// 清理DPoS运行时缓存
+	// 清理DPoS运行时缓存（方案 B 由 planBTicker 单独检查）
 	if rm.dposRuntime != nil {
 		rm.dposRuntime.cleanupExpiredCaches()
-		rm.maybeKickSyncIfStalledBehind()
 	}
 }
 
-// maybeKickSyncIfStalledBehind 当本机落后于网络门禁高度超过配置块差且本机 tip 在停滞时长内不涨时触发方案 B（DPoS.restartSyncerForRecovery）。
+// maybeKickSyncIfStalledBehind 当 lag>=配置块差且本机 tip 连续超过停滞时长不涨时触发方案 B（DPoS.restartSyncerForRecovery）。
 func (rm *ResourceMonitor) maybeKickSyncIfStalledBehind() {
 	if rm.dposRuntime == nil || rm.dposRuntime.config == nil {
 		return
@@ -146,7 +152,7 @@ func (rm *ResourceMonitor) maybeKickSyncIfStalledBehind() {
 		return
 	}
 	lag := network - local
-	if lag <= cfg.SyncLagRestartBlocks {
+	if lag < cfg.SyncLagRestartBlocks {
 		return
 	}
 	if time.Since(rm.syncLagKickLastProbe) < cfg.SyncLagRestartStagnant {
@@ -167,7 +173,7 @@ func (rm *ResourceMonitor) maybeKickSyncIfStalledBehind() {
 		"localBlockNumber", local,
 		"networkLatestBlockNumber", network,
 		"lagBlocks", lag,
-		"thresholdLagBlocks", cfg.SyncLagRestartBlocks,
+		"minLagBlocks", cfg.SyncLagRestartBlocks,
 		"stagnantDuration", cfg.SyncLagRestartStagnant.String())
 
 	if err := dp.restartSyncerForRecovery("resource-monitor: local tip stalled behind network gateway height"); err != nil {
