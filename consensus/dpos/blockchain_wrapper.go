@@ -492,6 +492,12 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			"isEpochEnd", isEpochEnd)
 	}
 
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+		if err := dposInstance.applyDelegateDepositRefunds(transition, header.Timestamp, block.Number()); err != nil {
+			return nil, err
+		}
+	}
+
 	updateBlockExecutionMetric(start)
 
 	return transition, nil
@@ -736,6 +742,12 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 				}
 				return "未知原因"
 			}())
+	}
+
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+		if err := dposInstance.applyDelegateDepositRefunds(transition, header.Timestamp, block.Number()); err != nil {
+			return nil, err
+		}
 	}
 
 	_, root, err := transition.Commit()

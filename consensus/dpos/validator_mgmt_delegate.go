@@ -14,7 +14,6 @@ import (
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/crypto"
-	"github.com/Vcity-Team/vcitychain/state"
 	"github.com/Vcity-Team/vcitychain/types"
 	"go.etcd.io/bbolt"
 )
@@ -509,6 +508,12 @@ func (d *DPoS) isDelegateRegistrationTransaction(tx *types.Transaction) bool {
 		return false
 	}
 
+	// 新注册：保证金必须转到候选人托管地址。历史 To=nil 仍识别以便同步回放。
+	want := d.getDelegateDepositEscrowAddress()
+	if tx.To != nil && *tx.To != want {
+		return false
+	}
+
 	return true
 }
 
@@ -618,6 +623,13 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 		"description", regInfo.Description,
 		"deposit", regInfo.Deposit.String())
 
+	if tx.From != (types.Address{}) && regInfo.Registrant != (types.Address{}) && tx.From != regInfo.Registrant {
+		d.logger.Error("❌ 注册交易发送者与 input 中的注册者不一致",
+			"txFrom", tx.From.String(), "registrant", regInfo.Registrant.String())
+		return fmt.Errorf("delegate registration sender %s does not match registrant %s in calldata",
+			tx.From.String(), regInfo.Registrant.String())
+	}
+
 	// 验证保证金金额是否满足最小要求
 	minDeposit := d.getDelegateDepositAmount()
 	if regInfo.Deposit == nil || regInfo.Deposit.Cmp(minDeposit) < 0 {
@@ -642,61 +654,21 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 	}
 	d.logger.Info("✅ 受托人未注册，可以继续处理")
 
-	// 冻结资金（从账户余额中扣除，但不转账，而是冻结）
+	// 方案 A：tx.Value 已在区块执行中转入候选人托管地址；不再在此处 SubBalance（避免与主状态脱节）。
+	// 历史 To=nil：保证金在 CREATE 地址，仅 DPoS 记账。
+	if tx.To != nil && *tx.To == d.getDelegateDepositEscrowAddress() {
+		d.logger.Info("✅ 候选人注册保证金已进入托管地址",
+			"escrow", tx.To.String(), "amount", regInfo.Deposit.String())
+	} else if tx.To == nil {
+		d.logger.Warn("⚠️ 历史注册 To=nil，保证金在合约创建地址",
+			"registrant", regInfo.Registrant.String(), "amount", regInfo.Deposit.String())
+	}
+
 	frozenAt := uint64(time.Now().Unix())
-	d.logger.Info("❄️ 开始冻结资金",
+	d.logger.Info("❄️ 开始冻结资金（DPoS 记账）",
 		"address", regInfo.Registrant.String(),
 		"amount", regInfo.Deposit.String(),
 		"frozenAt", frozenAt)
-
-	// 从账户余额中扣除冻结金额（如果 Executor 可用）
-	if d.config != nil && d.config.Executor != nil && d.config.Blockchain != nil {
-		// 获取当前区块头
-		currentHeader := d.config.Blockchain.Header()
-		if currentHeader != nil {
-			// 获取当前状态快照
-			snapshot, err := d.config.Executor.StateAt(currentHeader.StateRoot)
-			if err == nil && snapshot != nil {
-				// 创建状态事务
-				txn := state.NewTxn(snapshot)
-
-				// 从账户余额中扣除冻结金额
-				if err := txn.SubBalance(regInfo.Registrant, regInfo.Deposit); err != nil {
-					d.logger.Error("❌ 扣除冻结金额失败", "error", err)
-					return fmt.Errorf("failed to deduct frozen amount: %w", err)
-				}
-
-				// 提交状态变更
-				objects, err := txn.Commit(true)
-				if err != nil {
-					d.logger.Error("❌ 提交冻结状态变更失败", "error", err)
-					return fmt.Errorf("failed to commit freeze state changes: %w", err)
-				}
-
-				// 更新状态根（如果需要）
-				if len(objects) > 0 {
-					var newSnapshot state.Snapshot
-					var newStateRoot []byte
-					newSnapshot, newStateRoot, err = snapshot.Commit(objects)
-					if err != nil {
-						d.logger.Error("❌ 更新状态根失败", "error", err)
-						return fmt.Errorf("failed to update state root: %w", err)
-					}
-					d.logger.Info("✅ 冻结金额已从账户余额中扣除",
-						"address", regInfo.Registrant.String(),
-						"amount", regInfo.Deposit.String(),
-						"newStateRoot", fmt.Sprintf("%x", newStateRoot[:8]),
-						"newSnapshot", newSnapshot != nil)
-				}
-			} else {
-				d.logger.Warn("⚠️ 无法获取状态快照，跳过余额扣除", "error", err)
-			}
-		} else {
-			d.logger.Warn("⚠️ 无法获取当前区块头，跳过余额扣除")
-		}
-	} else {
-		d.logger.Warn("⚠️ Executor或Blockchain不可用，跳过余额扣除")
-	}
 
 	// 创建冻结信息
 	freezeInfo := &FreezeInfo{
@@ -719,6 +691,7 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 
 	// 创建受托人候选人
 	d.logger.Info("👤 开始创建受托人候选人...")
+	heldInEscrow := tx.To != nil && *tx.To == d.getDelegateDepositEscrowAddress()
 	registration := &DelegateRegistration{
 		Address:             regInfo.Registrant,
 		Name:                regInfo.Name,
@@ -733,6 +706,8 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 		FrozenAt:            frozenAt, // 冻结时间
 		UnfreezeAt:          0,        // 未解冻
 		UnfreezeAvailableAt: 0,        // 未解冻
+		DepositHeldInEscrow: heldInEscrow,
+		DepositRefunded:     false,
 	}
 	d.logger.Info("✅ 受托人候选人对象创建完成")
 
@@ -1356,14 +1331,15 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 	gasPrice := big.NewInt(1000000000) // 1 Gwei
 	d.logger.Info("⛽ Gas设置", "gasPrice", gasPrice.String(), "gasLimit", 100000)
 
-	// 创建受托人注册交易
+	// 方案 A：保证金直接转入候选人托管地址（与投票托管 …FFfD 分离）
+	depositEscrow := d.getDelegateDepositEscrowAddress()
 	d.logger.Info("🔨 开始构建交易对象...")
 	tx := &types.Transaction{
 		Nonce:    nonce,
 		GasPrice: gasPrice,
-		Gas:      100000,        // 固定gas限制
-		To:       nil,           // 合约调用，To为nil
-		Value:    depositAmount, // 保证金作为value
+		Gas:      100000,         // 固定gas限制
+		To:       &depositEscrow, // 托管地址
+		Value:    depositAmount,  // 保证金
 		Input:    d.createDelegateRegistrationTransactionData(registrant, name, website, description),
 		// Don't set From field - let transaction pool recover it from signature
 		// This ensures consistency between From field and signature

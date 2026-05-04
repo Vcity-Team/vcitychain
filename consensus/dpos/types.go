@@ -189,6 +189,9 @@ type DelegateRegistration struct {
 	FrozenAt            uint64 `json:"frozenAt"`            // 冻结时间（注册时设置）
 	UnfreezeAt          uint64 `json:"unfreezeAt"`          // 解冻时间（退出时设置，0表示未解冻）
 	UnfreezeAvailableAt uint64 `json:"unfreezeAvailableAt"` // 资金可用时间（解冻时间 + 锁定期，0表示未解冻）
+	// 保证金托管与链上退款（托管地址见 getDelegateDepositEscrowAddress）
+	DepositHeldInEscrow bool `json:"depositHeldInEscrow,omitempty"` // 注册时 tx.To 为候选人托管地址
+	DepositRefunded     bool `json:"depositRefunded,omitempty"`     // 已在区块 Transition 中退回原生币
 }
 
 // RegStatus 注册状态
