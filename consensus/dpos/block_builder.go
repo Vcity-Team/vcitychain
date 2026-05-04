@@ -137,6 +137,15 @@ func (b *BlockBuilder) Build(handler func(h *types.Header)) (*types.FullBlock, e
 		handler(b.header)
 	}
 
+	// 与 blockchain_wrapper.ProcessBlockExecutor 末尾一致：在提交本块状态前处理候选人托管保证金退回。
+	// 仅走 BlockBuilder 的出块路径若不调此处，则区块 StateRoot 不含退款结果，本地 WriteFullBlock 常不再重放验证，
+	// 链上托管地址余额不会减少、用户余额不会增加（表现为「锁定期过了钱仍卡在托管」）。
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+		if err := dposInstance.applyDelegateDepositRefunds(b.state, b.header.Timestamp, b.header.Number); err != nil {
+			return nil, fmt.Errorf("delegate deposit refunds: %w", err)
+		}
+	}
+
 	_, stateRoot, err := b.state.Commit()
 	if err != nil {
 		return nil, fmt.Errorf("failed to commit the state changes: %w", err)
