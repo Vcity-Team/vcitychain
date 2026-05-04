@@ -294,6 +294,9 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			if err := dposInstance.ApplyDelegateDepositMigrationAfterTx(transition, tx, block.Number()); err != nil {
 				return nil, err
 			}
+			if err := dposInstance.ApplyDelegateCancelRegistrationAfterTx(transition, tx, block.Number()); err != nil {
+				return nil, err
+			}
 		}
 
 		// 执行后识别是否为提案交易，并触发 DPoS 业务处理（不影响 EVM 结果）
@@ -498,11 +501,8 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			"isEpochEnd", isEpochEnd)
 	}
 
-	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
-		if err := dposInstance.applyDelegateDepositRefunds(transition, header.Timestamp, block.Number()); err != nil {
-			return nil, err
-		}
-	}
+	// 不再在区块末按 Bolt 条件自动改 trie：各节点 Bolt/RPC 状态易不一致，会导致同块空块 StateRoot 分叉。
+	// 托管保证金退回仅通过链上 DPOS+CAN 交易（ApplyDelegateCancelRegistrationAfterTx）写入 StateRoot。
 
 	updateBlockExecutionMetric(start)
 
@@ -544,6 +544,9 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
 			if err := dposInstance.ApplyDelegateDepositMigrationAfterTx(transition, tx, block.Number()); err != nil {
+				return nil, err
+			}
+			if err := dposInstance.ApplyDelegateCancelRegistrationAfterTx(transition, tx, block.Number()); err != nil {
 				return nil, err
 			}
 		}
@@ -756,11 +759,7 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 			}())
 	}
 
-	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
-		if err := dposInstance.applyDelegateDepositRefunds(transition, header.Timestamp, block.Number()); err != nil {
-			return nil, err
-		}
-	}
+	// 见 ProcessBlockExecutor：不按 Bolt 在区块末自动退款，避免跨节点 StateRoot 不一致。
 
 	_, root, err := transition.Commit()
 	if err != nil {

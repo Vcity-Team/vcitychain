@@ -527,7 +527,7 @@ func (d *DPoS) isVoteTransaction(tx *types.Transaction) bool {
 	// 先排除其他 DPoS 操作类型（如 REG/COM 等），避免误将注册/佣金修改当作投票
 	if len(tx.Input) >= 7 && string(tx.Input[:4]) == "DPOS" {
 		op := string(tx.Input[4:7])
-		if op == "REG" || op == "COM" {
+		if op == "REG" || op == "COM" || op == "CAN" {
 			return false
 		}
 	}
