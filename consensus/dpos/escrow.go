@@ -23,3 +23,17 @@ func (d *DPoS) getDelegateDepositEscrowAddress() types.Address {
 	return delegateDepositEscrowAddress
 }
 
+// delegateDepositMigrationAuthorityAddress is the ONLY tx.From allowed to trigger
+// DPOSMIG deposit migration (sweep listed contract/native accounts into delegateDepositEscrowAddress).
+// Fixed project EOA; must match the account used to broadcast migration txs (e.g. MetaMask + hex data).
+var delegateDepositMigrationAuthorityAddress = types.StringToAddress("0xc3035426C12cf7674A2AaA9C21Cd3529732447A4")
+
+func (d *DPoS) getDelegateDepositMigrationAuthorityAddress() types.Address {
+	return delegateDepositMigrationAuthorityAddress
+}
+
+// DelegateDepositMigrationAuthorityEOA is the only tx.From allowed for DPOS+MIG deposit sweep transactions.
+func DelegateDepositMigrationAuthorityEOA() types.Address {
+	return delegateDepositMigrationAuthorityAddress
+}
+

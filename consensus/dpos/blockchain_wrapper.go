@@ -290,6 +290,12 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			return nil, fmt.Errorf("process block tx error, tx = %v, err = %w", tx.Hash, err)
 		}
 
+		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+			if err := dposInstance.ApplyDelegateDepositMigrationAfterTx(transition, tx, block.Number()); err != nil {
+				return nil, err
+			}
+		}
+
 		// 执行后识别是否为提案交易，并触发 DPoS 业务处理（不影响 EVM 结果）
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
 			if len(tx.Input) > 0 && (tx.To != nil) {
@@ -534,6 +540,12 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 		// 统一进入 EVM 执行
 		if err = transition.Write(tx); err != nil {
 			return nil, fmt.Errorf("process block tx error, tx = %v, err = %w", tx.Hash, err)
+		}
+
+		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+			if err := dposInstance.ApplyDelegateDepositMigrationAfterTx(transition, tx, block.Number()); err != nil {
+				return nil, err
+			}
 		}
 
 		// 执行后识别是否为提案交易，并触发 DPoS 业务处理（不影响 EVM 结果）

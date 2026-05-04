@@ -1,6 +1,7 @@
 package jsonrpc
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"encoding/hex"
@@ -8,13 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"os"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
-
-	"bytes"
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
@@ -5452,6 +5452,216 @@ func (d *DPOS) RegisterDelegate(ctx context.Context, params interface{}) (interf
 	}
 
 	return nil, fmt.Errorf("DPoS engine does not support delegate registration")
+}
+
+func migrationPKHexCharsOK(s string) bool {
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+func stripTrailingMigrationPrivateKeyParam(elems []interface{}) ([]interface{}, string) {
+	if len(elems) == 0 {
+		return elems, ""
+	}
+	s, ok := elems[len(elems)-1].(string)
+	if !ok {
+		return elems, ""
+	}
+	t := strings.TrimSpace(s)
+	t2 := strings.TrimPrefix(strings.TrimPrefix(t, "0x"), "0X")
+	if len(t2) == 64 && migrationPKHexCharsOK(t2) {
+		return elems[:len(elems)-1], t
+	}
+	return elems, ""
+}
+
+func addressesFromMigrationInterfaceSlice(list []interface{}) ([]types.Address, error) {
+	if len(list) == 0 {
+		return nil, fmt.Errorf("at least one contract address is required")
+	}
+	if len(list) > dpos.DelegateDepositMigrationMaxAddresses {
+		return nil, fmt.Errorf("at most %d addresses per transaction", dpos.DelegateDepositMigrationMaxAddresses)
+	}
+	out := make([]types.Address, 0, len(list))
+	for i, x := range list {
+		s, ok := x.(string)
+		if !ok {
+			return nil, fmt.Errorf("address[%d] must be a string hex address", i)
+		}
+		s = strings.TrimSpace(s)
+		if err := types.IsValidAddress(s); err != nil {
+			return nil, fmt.Errorf("address[%d]: %w", i, err)
+		}
+		out = append(out, types.StringToAddress(s))
+	}
+	return out, nil
+}
+
+func parseSubmitDelegateDepositMigrationParams(params interface{}) ([]types.Address, string, error) {
+	switch p := params.(type) {
+	case map[string]interface{}:
+		var list []interface{}
+		if v, ok := p["addresses"]; ok {
+			list, _ = v.([]interface{})
+		}
+		if list == nil {
+			if v, ok := p["contracts"]; ok {
+				list, _ = v.([]interface{})
+			}
+		}
+		if list == nil {
+			return nil, "", fmt.Errorf("missing \"addresses\" array (alias \"contracts\")")
+		}
+		addrs, err := addressesFromMigrationInterfaceSlice(list)
+		if err != nil {
+			return nil, "", err
+		}
+		pk, _ := p["privateKey"].(string)
+		return addrs, strings.TrimSpace(pk), nil
+	case []interface{}:
+		raw := p
+		if len(raw) == 1 {
+			if inner, ok := raw[0].([]interface{}); ok {
+				raw = inner
+			}
+		}
+		if len(raw) == 0 {
+			return nil, "", fmt.Errorf("missing addresses (non-empty array expected)")
+		}
+		raw, trailingPK := stripTrailingMigrationPrivateKeyParam(raw)
+		addrs, err := addressesFromMigrationInterfaceSlice(raw)
+		if err != nil {
+			return nil, "", err
+		}
+		return addrs, trailingPK, nil
+	default:
+		return nil, "", fmt.Errorf("invalid params: use [\"0x...\"] or {\"addresses\":[\"0x...\"]}")
+	}
+}
+
+func resolveDelegateDepositMigrationPrivateKey(explicit string) (string, error) {
+	pk := strings.TrimSpace(explicit)
+	pk = strings.TrimPrefix(strings.TrimPrefix(pk, "0x"), "0X")
+	if pk != "" {
+		if len(pk) != 64 || !migrationPKHexCharsOK(pk) {
+			return "", fmt.Errorf("privateKey must be 64 hex characters (optionally 0x-prefixed)")
+		}
+		return pk, nil
+	}
+	pk = strings.TrimSpace(os.Getenv("VCITYCHAIN_DPOS_DELEGATE_DEPOSIT_MIGRATION_PRIVATE_KEY"))
+	pk = strings.TrimPrefix(strings.TrimPrefix(pk, "0x"), "0X")
+	if len(pk) != 64 || !migrationPKHexCharsOK(pk) {
+		return "", fmt.Errorf("set environment VCITYCHAIN_DPOS_DELEGATE_DEPOSIT_MIGRATION_PRIVATE_KEY on the node (64 hex chars), or pass privateKey in RPC params / as last array element")
+	}
+	return pk, nil
+}
+
+func estimateDelegateDepositMigrationGas(addrCount int) uint64 {
+	g := uint64(150000) + uint64(addrCount)*80000
+	const capG = uint64(8_000_000)
+	if g > capG {
+		return capG
+	}
+	return g
+}
+
+// SubmitDelegateDepositMigration builds, signs, and submits a DPOS+MIG delegate-deposit sweep transaction.
+// params may be:
+//   - ["0xContract1","0xContract2"] — private key from env VCITYCHAIN_DPOS_DELEGATE_DEPOSIT_MIGRATION_PRIVATE_KEY (64 hex, optional 0x).
+//   - ["0x..",...,"<64-hex-private-key>"] — trailing private key overrides env (same format as other dpos_* signing RPCs).
+//   - {"addresses":["0x.."],"privateKey":"..."} — optional privateKey; alias field "contracts" for addresses.
+//
+// tx.From must match the chain-wide migration authority EOA (see consensus/dpos/escrow.go). Restrict RPC exposure on nodes that set the env var.
+func (d *DPOS) SubmitDelegateDepositMigration(ctx context.Context, params interface{}) (interface{}, error) {
+	authority := dpos.DelegateDepositMigrationAuthorityEOA()
+
+	addrs, explicitPK, err := parseSubmitDelegateDepositMigrationParams(params)
+	if err != nil {
+		return nil, err
+	}
+
+	pk, err := resolveDelegateDepositMigrationPrivateKey(explicitPK)
+	if err != nil {
+		return nil, err
+	}
+
+	calldata, err := dpos.BuildDelegateDepositMigrationCalldata(addrs)
+	if err != nil {
+		return nil, err
+	}
+
+	var nonce uint64
+	if nonceStore, ok := d.store.(interface {
+		GetNonce(addr types.Address) uint64
+	}); ok {
+		nonce = nonceStore.GetNonce(authority)
+	} else if accountStore, ok := d.store.(interface {
+		GetAccount(root types.Hash, addr types.Address) (*Account, error)
+	}); ok {
+		if account, err2 := accountStore.GetAccount(types.Hash{}, authority); err2 == nil && account != nil {
+			nonce = account.Nonce
+		}
+	}
+
+	var gasPrice *big.Int
+	if gasStore, ok := d.store.(interface {
+		GetBaseFee() uint64
+	}); ok {
+		gasPrice = new(big.Int).SetUint64(gasStore.GetBaseFee())
+	} else {
+		gasPrice = big.NewInt(1_000_000_000)
+	}
+	minGasPrice := big.NewInt(1_000_000_000)
+	if gasPrice.Cmp(minGasPrice) < 0 {
+		gasPrice = minGasPrice
+	}
+
+	toAddr := authority
+	tx := &types.Transaction{
+		Nonce:    nonce,
+		GasPrice: gasPrice,
+		Gas:      estimateDelegateDepositMigrationGas(len(addrs)),
+		To:       &toAddr,
+		Value:    big.NewInt(0),
+		Input:    calldata,
+		V:        big.NewInt(0),
+		R:        big.NewInt(0),
+		S:        big.NewInt(0),
+		Hash:     types.Hash{},
+	}
+	tx.Type = types.LegacyTx
+	tx.ComputeHash(0)
+
+	if err := d.signTransaction(tx, authority, pk); err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		}, nil
+	}
+	tx.ComputeHash(0)
+
+	if ethStore, ok := d.store.(interface {
+		AddTx(tx *types.Transaction) error
+	}); ok {
+		if err := ethStore.AddTx(tx); err != nil {
+			return nil, fmt.Errorf("add transaction to pool: %w", err)
+		}
+	} else {
+		return nil, fmt.Errorf("this node's JSON-RPC store does not support submitting transactions (AddTx)")
+	}
+
+	_ = d.broadcastTransaction(tx)
+
+	return map[string]interface{}{
+		"success":      true,
+		"txHash":       tx.Hash.String(),
+		"from":         authority.String(),
+		"addressCount": len(addrs),
+	}, nil
 }
 
 // GetDelegateRegistrations 获取受托人注册列表
