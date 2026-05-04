@@ -1077,17 +1077,25 @@ func (d *DPoS) IsDelegateRegistered(address types.Address) bool {
 		return false
 	}
 
-	isRegistered := reg != nil
-	if isRegistered {
-		d.logger.Info("✅ 受托人已注册",
-			"address", address.String(),
-			"name", reg.Name,
-			"status", reg.Status.String())
-	} else {
+	if reg == nil {
 		d.logger.Warn("❌ 受托人未注册", "address", address.String())
+		return false
 	}
 
-	return isRegistered
+	// 已退出（Withdrawn）的记录仍保留在库中用于解冻/退款审计，不应阻塞再次注册。
+	if reg.Status == RegStatusWithdrawn {
+		d.logger.Info("ℹ️ 受托人曾注册但已退出，视为未在册",
+			"address", address.String(),
+			"name", reg.Name)
+		return false
+	}
+
+	d.logger.Info("✅ 受托人已注册",
+		"address", address.String(),
+		"name", reg.Name,
+		"status", reg.Status.String())
+
+	return true
 }
 
 // IsDelegateCandidate 检查受托人是否为候选人状态（可以接受投票）
