@@ -738,7 +738,12 @@ func (e *Eth) GetLogs(query *LogQuery) (interface{}, error) {
 }
 
 // GetBalance returns the account's balance at the referenced block.
-// 修改：扣除冻结金额，返回可用余额
+// 修改：对「仍在账户余额内的 DPoS 冻结」从余额中扣除，返回可用余额。
+//
+// 候选人保证金走托管地址（DepositHeldInEscrow）时，注册交易的 Value 已从本账户划出，
+// acc.Balance 已不含保证金；FreezeInfo.FrozenAmount 仅为 DPoS 侧质押记账。若再扣除
+// FrozenAmount，会与状态 trie 重复，导致 eth_getBalance 比 dpos_getBalanceInfo 等
+// 少一整档保证金。此类地址不再从余额中减 FrozenAmount。
 func (e *Eth) GetBalance(address types.Address, filter BlockNumberOrHash) (interface{}, error) {
 	header, err := GetHeaderFromBlockNumberOrHash(filter, e.store)
 	if err != nil {
@@ -754,15 +759,18 @@ func (e *Eth) GetBalance(address types.Address, filter BlockNumberOrHash) (inter
 		return nil, err
 	}
 
-	// 查询冻结信息并扣除冻结金额
 	availableBalance := new(big.Int).Set(acc.Balance)
 
-	// 直接通过全局函数获取DPoS实例并查询冻结信息
 	if dposInstance, exists := dpos.GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
-		freezeInfo, err := dposInstance.GetFreezeInfo(address)
-		if err == nil && freezeInfo != nil && freezeInfo.FrozenAmount != nil {
-			// 扣除冻结金额
-			availableBalance.Sub(availableBalance, freezeInfo.FrozenAmount)
+		skipFreezeSub := false
+		if reg, regErr := dposInstance.GetDelegateRegistration(address); regErr == nil && reg != nil && reg.DepositHeldInEscrow {
+			skipFreezeSub = true
+		}
+		if !skipFreezeSub {
+			freezeInfo, ferr := dposInstance.GetFreezeInfo(address)
+			if ferr == nil && freezeInfo != nil && freezeInfo.FrozenAmount != nil {
+				availableBalance.Sub(availableBalance, freezeInfo.FrozenAmount)
+			}
 		}
 	}
 
