@@ -216,12 +216,6 @@ func (rd *RewardDistributor) computeVoterWeights(
 
 		weights[voterAddress] = weight
 		total.Add(total, weight)
-		rd.logger.Info("✅ [奖励计算] 投票者权重计算成功",
-			"voter", voterAddress.String(),
-			"validator", validator.String(),
-			"votingPower", voter.VotingPower.String(),
-			"delegateCount", delegateCount,
-			"calculatedWeight", weight.String())
 	}
 
 	return weights, total
@@ -280,12 +274,6 @@ func (rd *RewardDistributor) computeRewardsForValidator(
 		validatorAmount.Add(validatorAmount, distributable)
 		return validatorAmount, voterRewards
 	}
-	
-	rd.logger.Info("✅ [奖励计算] 开始分配投票者分红",
-		"validator", validator.Address.String(),
-		"distributable", distributable.String(),
-		"totalWeight", totalWeight.String(),
-		"voterWeightsCount", len(voterWeights))
 
 	allocated := big.NewInt(0)
 	for voterAddr, weight := range voterWeights {
@@ -318,28 +306,12 @@ func (rd *RewardDistributor) computeRewardsForValidator(
 
 		voterRewards[voterAddr] = share
 		allocated.Add(allocated, share)
-		rd.logger.Info("✅ [奖励计算] 投票者分红计算成功",
-			"voter", voterAddr.String(),
-			"validator", validator.Address.String(),
-			"weight", weight.String(),
-			"share", share.String(),
-			"distributable", distributable.String(),
-			"totalWeight", totalWeight.String())
 	}
 
 	remainder := new(big.Int).Sub(distributable, allocated)
 	if remainder.Sign() > 0 {
 		validatorAmount.Add(validatorAmount, remainder)
 	}
-
-	rd.logger.Info("🏭 验证者奖励计算详情",
-		"validator", validator.Address.String(),
-		"blocksProduced", blocksProduced,
-		"totalReward", validatorReward.String(),
-		"commissionRate", commissionRate,
-		"commissionAmount", commissionAmount.String(),
-		"distributedToVoters", distributable.String(),
-		"voterCount", len(voterRewards))
 
 	return validatorAmount, voterRewards
 }

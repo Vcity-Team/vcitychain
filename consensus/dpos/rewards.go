@@ -357,33 +357,8 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 	blockCounts := d.blockTracker.GetEpochBlockCounts(epochNumber)
 	totalBlocks := d.blockTracker.GetTotalEpochBlocks(epochNumber)
 
-	// 添加详细的出块统计日志
-	d.logger.Info("🔍 检查出块统计",
-		"epoch", epochNumber,
-		"blockCounts", blockCounts,
-		"totalBlocks", totalBlocks,
-		"validatorsCount", len(validators))
-
-	// 详细打印每个验证者的出块记录
-	d.logger.Info("📋 ========== 详细出块记录 ==========",
-		"epoch", epochNumber,
-		"totalBlocks", totalBlocks)
-
-	for _, validator := range validators {
-		blocksProduced := blockCounts[validator.Address]
-		d.logger.Info("📋 验证者出块记录",
-			"epoch", epochNumber,
-			"validator", validator.Address.String()[:16],
-			"blocksProduced", blocksProduced,
-			"votingPower", validator.VotingPower.String())
-	}
-
 	if totalBlocks == 0 {
 		d.logger.Warn("⚠️ 该epoch没有出块记录，跳过奖励计算", "epoch", epochNumber)
-		d.logger.Info("🔍 [Epoch奖励诊断] totalBlocks=0，跳过奖励计算",
-			"epoch", epochNumber,
-			"blockTrackerIsNil", d.blockTracker == nil,
-			"rewardDistributorIsNil", d.rewardDistributor == nil)
 		return nil
 	}
 
@@ -509,19 +484,7 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 				"rewardDistributorIsNil", d.rewardDistributor == nil,
 				"blockTrackerIsNil", d.blockTracker == nil,
 				"totalBlocks", totalBlocks)
-			d.logger.Info("🔍 [Epoch奖励诊断] 无法计算VoterRewards，VoterRewards将为空",
-				"epoch", epochNumber,
-				"rewardDistributorIsNil", d.rewardDistributor == nil,
-				"blockTrackerIsNil", d.blockTracker == nil,
-				"totalBlocks", totalBlocks,
-				"voterCount", len(voters))
 		}
-		
-		d.logger.Info("🔍 [Epoch奖励诊断] 准备奖励分发信息",
-			"epoch", epochNumber,
-			"voterRewardCount", len(voterRewards),
-			"rewardCount", len(stateUpdates),
-			"totalReward", totalReward.String())
 
 		// 不直接执行状态更新，而是将奖励分发信息存储到pendingRewardDistribution
 		// 这样buildBlock可以将其添加到ExtraData中，然后在区块执行时处理
@@ -537,12 +500,6 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		for address, reward := range stateUpdates {
 			d.pendingRewardDistribution.Rewards[address.String()] = reward
 		}
-
-		d.logger.Info("✅ 准备奖励分发信息（包含验证者-投票者映射）",
-			"epoch", epochNumber,
-			"rewardCount", len(stateUpdates),
-			"voterRewardCount", len(voterRewards),
-			"totalReward", totalReward.String())
 	} else {
 		d.logger.Warn("⚠️ 没有奖励分发信息", "epoch", epochNumber)
 	}
@@ -717,11 +674,5 @@ func (d *DPoS) computeEpochRewardPoolFromVoterAPY(
 		return nil, fmt.Errorf("reward pool denominator is zero")
 	}
 	R := new(big.Int).Div(num, den)
-	d.logger.Info("🔢 动态 Epoch 奖池",
-		"voterTargetAPYBps", voterBps,
-		"totalAppliedStake", S.String(),
-		"epochsPerYear", Y,
-		"weightedCommissionBps", commBps,
-		"rewardPool", R.String())
 	return R, nil
 }
