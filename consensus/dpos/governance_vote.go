@@ -67,8 +67,7 @@ func (d *DPoS) VoteOnParameterProposal(voter types.Address, proposalID string, s
 		"voter", voter.String(),
 		"support", support,
 		"weight", weight.String(),
-		"timestamp", vote.Timestamp,
-		"privateKey", privateKeyHex[:8]+"... (已隐藏)")
+		"timestamp", vote.Timestamp)
 
 	// 签名投票（传递私钥）
 	if err := d.signParameterVote(vote, privateKeyHex); err != nil {

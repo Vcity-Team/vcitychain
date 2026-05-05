@@ -40,13 +40,10 @@ func (d *DPoS) readBLSPrivateKeyAndGeneratePublicKey(validatorAddress types.Addr
 
 	// 5. 检查并修正私钥长度
 	if len(privateKeyHex)%2 != 0 {
-		d.logger.Info("Private key length is odd, adding leading zero",
+		d.logger.Info("BLS key hex length was odd, prepended zero",
 			"originalLength", len(privateKeyHex),
-			"originalKey", privateKeyHex)
+			"correctedLength", len(privateKeyHex)+1)
 		privateKeyHex = "0" + privateKeyHex
-		d.logger.Info("Private key corrected",
-			"correctedLength", len(privateKeyHex),
-			"correctedKey", privateKeyHex)
 	}
 
 	// 6. 解析BLS私钥

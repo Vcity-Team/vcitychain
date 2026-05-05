@@ -54,6 +54,52 @@ func toUint64Safe(v interface{}) (uint64, bool) {
 	}
 }
 
+// redactSensitiveRPCParams returns a shallow copy of params safe for logging (no private keys).
+func redactSensitiveRPCParams(params interface{}) interface{} {
+	switch p := params.(type) {
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(p))
+		for k, v := range p {
+			if isSensitiveRPCParamKey(k) {
+				out[k] = "<redacted>"
+				continue
+			}
+			out[k] = v
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, len(p))
+		copy(out, p)
+		switch len(out) {
+		case 3:
+			out[2] = redactRPCParamMaybePrivateString(out[2])
+		case 4:
+			out[3] = redactRPCParamMaybePrivateString(out[3])
+		case 5:
+			out[4] = redactRPCParamMaybePrivateString(out[4])
+		}
+		return out
+	default:
+		return params
+	}
+}
+
+func isSensitiveRPCParamKey(k string) bool {
+	switch strings.ToLower(strings.TrimSpace(k)) {
+	case "privatekey", "proposerprivatekey", "executorprivatekey":
+		return true
+	default:
+		return false
+	}
+}
+
+func redactRPCParamMaybePrivateString(v interface{}) interface{} {
+	if _, ok := v.(string); ok {
+		return "<redacted>"
+	}
+	return v
+}
+
 // VoteMessage represents a vote message for validation
 type VoteMessage struct {
 	Voter     types.Address `json:"voter"`
@@ -423,51 +469,29 @@ func (d *DPOS) validateProposer(proposer types.Address, proposerPrivateKeyHex st
 
 // signTransaction signs a DPoS transaction using the private key
 func (d *DPOS) signTransaction(tx *types.Transaction, expectedAddr types.Address, privateKeyHex string) error {
-	d.logger.Info("🔍 开始签名交易 - 私钥和地址验证")
-	d.logger.Info("🔍 期望的发送者地址", "expectedAddr", expectedAddr.String())
-	d.logger.Info("🔍 传入的私钥", "privateKeyHex", privateKeyHex, "length", len(privateKeyHex))
-
-	// Force user to provide private key
 	if privateKeyHex == "" {
-		d.logger.Error("❌ 私钥为空")
 		return fmt.Errorf("private key is required for signing DPoS transactions")
 	}
 
-	d.logger.Info("🔍 私钥格式验证开始", "privateKeyHex", privateKeyHex, "length", len(privateKeyHex))
-
-	// Validate hex string first
 	if len(privateKeyHex) != 64 {
-		d.logger.Error("❌ 私钥长度错误", "expected", 64, "actual", len(privateKeyHex))
 		return fmt.Errorf("invalid private key length: expected 64, got %d", len(privateKeyHex))
 	}
 
-	// Check if string contains only valid hex characters
 	for i, char := range privateKeyHex {
 		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
-			d.logger.Error("❌ 私钥包含无效字符", "position", i, "char", string(char), "unicode", fmt.Sprintf("U+%04X", char))
 			return fmt.Errorf("invalid hex character at position %d: %c (U+%04X)", i, char, char)
 		}
 	}
 
-	d.logger.Info("✅ 私钥格式验证通过")
-
 	privateKeyBytes, err := hex.DecodeString(privateKeyHex)
 	if err != nil {
-		d.logger.Error("❌ 私钥解码失败", "error", err)
 		return fmt.Errorf("failed to decode user-provided private key: %w", err)
 	}
 
-	d.logger.Info("✅ 私钥解码成功", "length", len(privateKeyBytes))
-
-	// Use direct ECDSA private key creation instead of crypto.BytesToECDSAPrivateKey
 	if len(privateKeyBytes) != 32 {
-		d.logger.Error("❌ 私钥字节长度错误", "expected", 32, "actual", len(privateKeyBytes))
 		return fmt.Errorf("invalid private key bytes length: expected 32, got %d", len(privateKeyBytes))
 	}
 
-	d.logger.Info("🔍 开始创建ECDSA私钥对象")
-
-	// Create ECDSA private key directly using secp256k1 curve
 	privateKey := &ecdsa.PrivateKey{
 		PublicKey: ecdsa.PublicKey{
 			Curve: crypto.S256,
@@ -475,130 +499,33 @@ func (d *DPOS) signTransaction(tx *types.Transaction, expectedAddr types.Address
 		D: new(big.Int).SetBytes(privateKeyBytes),
 	}
 
-	// Calculate the public key from the private key
 	privateKey.PublicKey.X, privateKey.PublicKey.Y = privateKey.Curve.ScalarBaseMult(privateKeyBytes)
 
-	d.logger.Info("✅ ECDSA私钥对象创建成功", "privateKeyD", privateKey.D.String())
-
-	// 从私钥计算对应的地址并验证
-	d.logger.Info("🔍 从私钥计算对应的地址")
 	calculatedAddr := crypto.PubKeyToAddress(&privateKey.PublicKey)
-	d.logger.Info("🔍 私钥对应的地址", "calculatedAddr", calculatedAddr.String())
-	d.logger.Info("🔍 期望的地址", "expectedAddr", expectedAddr.String())
 
 	if calculatedAddr != expectedAddr {
-		d.logger.Error("❌ 私钥与投票者地址不匹配",
-			"calculatedAddr", calculatedAddr.String(),
-			"expectedAddr", expectedAddr.String(),
-			"match", false)
 		return fmt.Errorf("private key does not match voter address: calculated=%s, expected=%s",
 			calculatedAddr.String(), expectedAddr.String())
 	}
 
-	d.logger.Info("✅ 私钥与投票者地址匹配验证通过")
-
-	// Calculate transaction hash for signing using EIP-155 scheme to match txpool signer
-	// Use the chainID from the DPOS endpoint configuration instead of hardcoded value
 	eip155Signer := crypto.NewEIP155Signer(d.chainID, false)
 
-	d.logger.Info("=== 标记2: 开始签名交易 ===")
-	// For EIP-155 signing, we need to use the signer's SignTx method
-	// This ensures the hash calculation and V value are correct
 	signedTx, err := eip155Signer.SignTx(tx, privateKey)
 	if err != nil {
-		d.logger.Error("Failed to sign transaction with EIP-155 signer", "error", err)
 		return fmt.Errorf("failed to sign transaction with EIP-155 signer: %w", err)
 	}
 
-	// Copy the signature components from the signed transaction
 	tx.R = signedTx.R
 	tx.S = signedTx.S
 	tx.V = signedTx.V
 
-	d.logger.Info("=== 标记3: 签名完成，R=", tx.R.String(), "S=", tx.S.String(), "V=", tx.V.String(), "===")
-	d.logger.Info("Transaction signed successfully with EIP-155 signer", "r", tx.R.String(), "s", tx.S.String(), "v", tx.V.String())
-
-	// Recover sender with the same signer and set tx.From for logging / consistency
-	d.logger.Info("🔍 开始从签名恢复发送者地址")
 	senderAddr, err := eip155Signer.Sender(tx)
-	if err == nil {
-		tx.From = senderAddr
-		d.logger.Info("✅ 发送者地址恢复成功", "recoveredAddr", tx.From.String())
-		d.logger.Info("🔍 地址匹配验证",
-			"recoveredAddr", tx.From.String(),
-			"expectedAddr", expectedAddr.String(),
-			"calculatedAddr", calculatedAddr.String())
-
-		if tx.From != expectedAddr {
-			d.logger.Error("❌ 恢复的地址与期望地址不匹配",
-				"recoveredAddr", tx.From.String(),
-				"expectedAddr", expectedAddr.String())
-		} else {
-			d.logger.Info("✅ 恢复的地址与期望地址匹配")
-		}
-	} else {
-		d.logger.Error("❌ 从签名恢复发送者地址失败", "error", err)
-	}
-
-	// Test signature recovery to ensure it works
-	d.logger.Info("Testing signature recovery...")
-	// Use the EIP-155 signer's Hash method for recovery test
-	hashForRecovery := eip155Signer.Hash(tx)
-
-	// We need to reconstruct the signature from R, S, V for recovery
-	// Extract recovery ID from V value: V = 2*chainID + 35 + recoveryID
-	recoveryID := int(tx.V.Int64() - int64(2*d.chainID) - 35)
-	if recoveryID < 0 || recoveryID > 1 {
-		return fmt.Errorf("invalid recovery ID: %d", recoveryID)
-	}
-
-	// Reconstruct signature: R (32 bytes) + S (32 bytes) + recoveryID (1 byte)
-	// Ensure R and S are padded to 32 bytes
-	signatureForRecovery := make([]byte, 65)
-
-	// Pad R to 32 bytes
-	rBytes := tx.R.Bytes()
-	if len(rBytes) > 32 {
-		return fmt.Errorf("R value too large: %d bytes", len(rBytes))
-	}
-	copy(signatureForRecovery[32-len(rBytes):32], rBytes)
-
-	// Pad S to 32 bytes
-	sBytes := tx.S.Bytes()
-	if len(sBytes) > 32 {
-		return fmt.Errorf("S value too large: %d bytes", len(sBytes))
-	}
-	copy(signatureForRecovery[64-len(sBytes):64], sBytes)
-
-	// Set recovery ID
-	signatureForRecovery[64] = byte(recoveryID)
-
-	d.logger.Info("Signature reconstruction", "rBytes", len(rBytes), "sBytes", len(sBytes), "recoveryID", recoveryID)
-
-	// Now recover using the reconstructed signature
-	recoveredPubKeyBytes, err := crypto.Ecrecover(hashForRecovery.Bytes(), signatureForRecovery)
 	if err != nil {
-		d.logger.Error("Failed to recover public key with reconstructed signature", "error", err)
-		return fmt.Errorf("failed to recover public key with reconstructed signature: %w", err)
+		return fmt.Errorf("failed to recover sender after signing: %w", err)
 	}
-
-	// Derive address directly from recovered public key bytes
-	// Expect uncompressed public key format (0x04 || X || Y) or raw X||Y (64 bytes)
-	rawPub := recoveredPubKeyBytes
-	if len(rawPub) == 65 && rawPub[0] == 0x04 {
-		rawPub = rawPub[1:]
-	}
-	if len(rawPub) != 64 {
-		return fmt.Errorf("invalid recovered public key length: %d (expected 64 or 65)", len(recoveredPubKeyBytes))
-	}
-	// keccak256(X||Y), take last 20 bytes
-	h := crypto.Keccak256(rawPub)
-	recoveredAddr := types.BytesToAddress(h[12:])
-	d.logger.Info("Signature recovery test", "recoveredAddress", recoveredAddr.String(), "expectedAddress", expectedAddr.String(), "match", recoveredAddr == expectedAddr)
-
-	if recoveredAddr != expectedAddr {
-		d.logger.Error("Signature recovery failed", "recoveredAddress", recoveredAddr.String(), "expectedAddress", expectedAddr.String())
-		return fmt.Errorf("signature recovery failed: recovered address %s does not match expected address %s", recoveredAddr.String(), expectedAddr.String())
+	tx.From = senderAddr
+	if senderAddr != expectedAddr {
+		return fmt.Errorf("signature does not match expected address: got %s, want %s", senderAddr.String(), expectedAddr.String())
 	}
 
 	return nil
@@ -637,7 +564,7 @@ type UnvoteResponse struct {
 
 // Vote handles dpos_vote RPC method
 func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Debug("DPoS Vote called", "params", params)
+	d.logger.Debug("DPoS Vote called", "params", redactSensitiveRPCParams(params))
 
 	// Parse parameters
 	var req VoteRequest
@@ -1079,14 +1006,13 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		gasPrice = minGasPrice
 		d.logger.Info("Gas price adjusted to meet minimum requirement", "gasPrice", gasPrice.String())
 	}
-	d.logger.Info("=== 标记1: 开始创建投票交易 ===")
 	tx := &types.Transaction{
 		Nonce:    nonce,
 		GasPrice: gasPrice,
-		Gas:      100000, // 在这里加标记
-		To:       nil,    // 在这里加标记
+		Gas:      100000,
+		To:       nil,
 		Value:    big.NewInt(0),
-		Input:    d.createVoteTransactionData(voterAddr, candidateAddr, amountInt), // 在这里加标记
+		Input:    d.createVoteTransactionData(voterAddr, candidateAddr, amountInt),
 		V:        big.NewInt(0),                                                    // Will be set after signing
 		R:        big.NewInt(0),                                                    // Will be set after signing
 		S:        big.NewInt(0),                                                    // Will be set after signing
@@ -1097,11 +1023,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 
 	// Set transaction type to legacy (0) for compatibility
 	tx.Type = types.LegacyTx
-
-	// Verify that the private key corresponds to the voter address
-	// This ensures the signature will recover the correct address
-	d.logger.Info("Address verification", "voterAddr", voterAddr.String(), "privateKeyHex", "ed7ba26f0568b6b9cd3296ff7dcfe56fc6041fea8963246334bdaa276783add6")
-	d.logger.Info("Transaction pool will automatically recover sender from signature")
 
 	// 🚨 检测交易创建后的哈希
 	tx.ComputeHash(0)
@@ -1120,8 +1041,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 
 	d.logger.Info("Vote transaction created", "txHash", tx.Hash.String(), "nonce", nonce, "gasPrice", gasPrice.String())
 
-	// Step 2: Sign the transaction with private key
-	d.logger.Info("Signing transaction with private key...")
+	// Step 2: Sign the transaction
 	if err := d.signTransaction(tx, voterAddr, req.PrivateKey); err != nil {
 		d.logger.Error("Failed to sign transaction", "error", err)
 		return &VoteResponse{
@@ -1135,23 +1055,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	txHash := txWithHash.Hash
 	d.logger.Info("Transaction signed and hash recalculated", "txHash", txHash.String())
 
-	// Log transaction details for debugging
-	d.logger.Info("Final transaction details",
-		"type", tx.Type,
-		"nonce", tx.Nonce,
-		"gasPrice", tx.GasPrice.String(),
-		"gas", tx.Gas,
-		"value", tx.Value.String(),
-		"v", tx.V.String(),
-		"r", tx.R.String(),
-		"s", tx.S.String(),
-		"hash", tx.Hash.String(),
-		"from", tx.From.String(),
-		"expectedFrom", voterAddr.String())
-
-	// Important: Transaction pool will recover sender from signature
-	d.logger.Info("Transaction pool will verify: recovered address has sufficient balance")
-
 	// Step 3: Add transaction to the transaction pool for proper tracking
 	d.logger.Info("Adding transaction to pool for DPoS voting history...")
 
@@ -1161,7 +1064,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	// Debug: Log the store type to understand what we're working with
 	d.logger.Info("Store type", "type", fmt.Sprintf("%T", d.store))
 
-	d.logger.Info("=== 标记5: 准备加入交易池 ===")
 	// Method 1: Try to access AddTx through ethStore interface
 	if ethStore, ok := d.store.(interface {
 		AddTx(tx *types.Transaction) error
@@ -1194,7 +1096,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	}
 
 	// 无论 AddTx 是否成功，都尝试广播交易到网络
-	d.logger.Info("=== 标记6: 开始强制广播交易 ===")
 	d.logger.Info("Attempting to broadcast transaction to network", "txHash", tx.Hash.String(), "txAdded", txAdded)
 
 	// 强制广播交易到网络（确保其他节点能收到）
@@ -1206,7 +1107,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	}
 
 	// 检查交易池状态，诊断为什么交易没有被共识引擎拉取
-	d.logger.Info("=== 标记9: 检查交易池状态 ===")
 	if txpoolStore, ok := d.store.(interface {
 		GetTxPool() interface{}
 	}); ok {
@@ -1384,7 +1284,7 @@ func (d *DPOS) createVoteTransactionData(voter, candidate types.Address, amount 
 // This method is designed to handle the case where only one address is provided
 // It will use the address as both voter and candidate, with a default amount
 func (d *DPOS) VoteByAddress(ctx context.Context, params interface{}) (*VoteResponse, error) {
-	d.logger.Info("DPoS VoteByAddress called", "params", params)
+	d.logger.Info("DPoS VoteByAddress called", "params", redactSensitiveRPCParams(params))
 
 	// Parse parameters
 	var address string
@@ -1641,7 +1541,7 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interfa
 //
 //	Keep it undocumented until we finalize external exposure.
 func (d *DPOS) GetVotingPower(ctx context.Context, params interface{}) (map[string]interface{}, error) {
-	d.logger.Info("DPoS GetVotingPower called", "params", params)
+	d.logger.Info("DPoS GetVotingPower called", "params", redactSensitiveRPCParams(params))
 
 	// Parse parameters
 	var delegate string
@@ -2231,7 +2131,7 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 // GetVoteRecords handles dpos_getVoteRecords RPC method
 // This method returns raw vote / staking records with optional filters and pagination
 func (d *DPOS) GetVoteRecords(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS GetVoteRecords called", "params", params)
+	d.logger.Info("DPoS GetVoteRecords called", "params", redactSensitiveRPCParams(params))
 
 	// Parse parameters
 	var req VoteRecordRequest
@@ -2424,7 +2324,7 @@ func (d *DPOS) GetVoteRecords(ctx context.Context, params interface{}) (interfac
 // GetVoteByHash handles dpos_getVoteByHash RPC method
 // This method parses DPoS vote transactions and returns human-readable voting information
 func (d *DPOS) GetVoteByHash(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS GetVoteByHash called", "params", params)
+	d.logger.Info("DPoS GetVoteByHash called", "params", redactSensitiveRPCParams(params))
 
 	// Parse parameters
 	var txHash string
@@ -2526,10 +2426,7 @@ func (d *DPOS) GetVoteByHash(ctx context.Context, params interface{}) (interface
 	// Get sender address from transaction
 	sender := tx.From
 	if sender == types.ZeroAddress {
-		d.logger.Info("Sender address is zero, attempting to recover from signature...")
-		// Try to recover sender from signature
 		sender = d.recoverSenderFromTx(tx)
-		d.logger.Info("Sender recovered from signature", "sender", sender.String())
 	}
 
 	// Build response
@@ -2658,7 +2555,6 @@ type VoteInfo struct {
 // broadcastTransaction attempts to broadcast a transaction to the network
 // This is a fallback mechanism to ensure transactions reach other nodes
 func (d *DPOS) broadcastTransaction(tx *types.Transaction) error {
-	d.logger.Info("=== 标记7: 开始尝试广播交易 ===")
 	d.logger.Info("Attempting to broadcast transaction", "txHash", tx.Hash.String())
 
 	// Method 0: Try to access txpool directly and call AddTx to trigger built-in broadcasting
@@ -2793,7 +2689,6 @@ func (d *DPOS) broadcastTransaction(tx *types.Transaction) error {
 		}
 	}
 
-	d.logger.Warn("=== 标记8: 没有找到可用的广播方法 ===")
 	d.logger.Warn("No network broadcast method found, transaction may not reach other nodes")
 	return fmt.Errorf("no network broadcast method available")
 }
@@ -3772,7 +3667,7 @@ func (d *DPOS) GetLatestEpochInfo(ctx context.Context) (interface{}, error) {
 
 // GetEpochRewardDetails 查询指定epoch的奖励详情
 func (d *DPOS) GetEpochRewardDetails(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS GetEpochRewardDetails called", "params", params)
+	d.logger.Info("DPoS GetEpochRewardDetails called", "params", redactSensitiveRPCParams(params))
 
 	var epochNumber uint64
 
@@ -3862,7 +3757,7 @@ func (d *DPOS) GetEpochRewardDetails(ctx context.Context, params interface{}) (i
 
 // GetEpochRangeRewardDetails 查询指定epoch范围内的所有奖励详情
 func (d *DPOS) GetEpochRangeRewardDetails(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS GetEpochRangeRewardDetails called", "params", params)
+	d.logger.Info("DPoS GetEpochRangeRewardDetails called", "params", redactSensitiveRPCParams(params))
 
 	var fromEpoch, toEpoch uint64
 
@@ -3976,7 +3871,7 @@ func (d *DPOS) GetEpochRangeRewardDetails(ctx context.Context, params interface{
 //
 // includeRecords: 可选，默认true，是否返回明细记录（false时只返回总额，节省带宽）
 func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[string]interface{}, error) {
-	d.logger.Info("DPoS GetRewardHistory called", "params", params)
+	d.logger.Info("DPoS GetRewardHistory called", "params", redactSensitiveRPCParams(params))
 
 	var address string
 	var fromEpoch, toEpoch uint64
@@ -4116,7 +4011,7 @@ func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[st
 // GetVoterRewardByValidator 获取指定投票者投票给指定验证者的奖励详情
 // 参数: [voterAddress, validatorAddress, fromEpoch, toEpoch]
 func (d *DPOS) GetVoterRewardByValidator(ctx context.Context, params interface{}) (map[string]interface{}, error) {
-	d.logger.Info("DPoS GetVoterRewardByValidator called", "params", params)
+	d.logger.Info("DPoS GetVoterRewardByValidator called", "params", redactSensitiveRPCParams(params))
 
 	var voterAddress, validatorAddress string
 	var fromEpoch, toEpoch uint64
@@ -4563,7 +4458,7 @@ func (d *DPOS) GetValidatorBlockStats(validatorAddress string, epochNumber uint6
 
 // GetValidatorRewardsInfo 获取验证者奖励信息
 func (d *DPOS) GetValidatorRewardsInfo(ctx context.Context, params interface{}) (map[string]interface{}, error) {
-	d.logger.Info("DPoS GetValidatorRewardsInfo called", "params", params)
+	d.logger.Info("DPoS GetValidatorRewardsInfo called", "params", redactSensitiveRPCParams(params))
 
 	// 解析参数
 	var validatorAddress string
@@ -4645,7 +4540,7 @@ func (d *DPOS) GetValidatorRewardsInfo(ctx context.Context, params interface{}) 
 
 // CreateParameterProposal 创建参数表决提案
 func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS CreateParameterProposal called", "params", params)
+	d.logger.Info("DPoS CreateParameterProposal called", "params", redactSensitiveRPCParams(params))
 
 	var proposerStr, parameter, description, proposerPrivateKeyHex string
 	var newValue interface{}
@@ -4834,7 +4729,7 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 
 // CreateRecoveryProposal 创建验证者恢复提案
 func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS CreateRecoveryProposal called", "params", params)
+	d.logger.Info("DPoS CreateRecoveryProposal called", "params", redactSensitiveRPCParams(params))
 
 	var proposerStr, validatorAddrStr, recoveryReason, description, proposerPrivateKeyHex string
 
@@ -5012,7 +4907,7 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 
 // VoteOnParameterProposal 对参数提案进行投票
 func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS VoteOnParameterProposal called", "params", params)
+	d.logger.Info("DPoS VoteOnParameterProposal called", "params", redactSensitiveRPCParams(params))
 
 	var proposalID, voterStr, privateKeyHex string
 	var support bool
@@ -5160,7 +5055,7 @@ func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) 
 
 // GetParameterProposal 获取提案信息
 func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS GetParameterProposal called", "params", params)
+	d.logger.Info("DPoS GetParameterProposal called", "params", redactSensitiveRPCParams(params))
 
 	var proposalID string
 	switch p := params.(type) {
@@ -5356,7 +5251,7 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 // RegisterDelegate 注册受托人
 func (d *DPOS) RegisterDelegate(ctx context.Context, params interface{}) (interface{}, error) {
 	d.logger.Info("🚀 ===== DPoS受托人注册RPC调用开始 =====")
-	d.logger.Info("📋 接收到的参数", "params", params)
+	d.logger.Info("📋 接收到的参数", "params", redactSensitiveRPCParams(params))
 
 	// 解析参数
 	d.logger.Info("🔍 开始解析RPC参数...")
@@ -6045,7 +5940,7 @@ func (d *DPOS) GetDelegateRegistrations(ctx context.Context) (interface{}, error
 
 // WithdrawDelegate 退出受托人
 func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS WithdrawDelegate called", "params", params)
+	d.logger.Info("DPoS WithdrawDelegate called", "params", redactSensitiveRPCParams(params))
 
 	// 解析参数
 	var addressStr string
@@ -6225,7 +6120,7 @@ func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interf
 
 // GetFreezeInfo 查询冻结信息（支持单个和批量）
 func (d *DPOS) GetFreezeInfo(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS GetFreezeInfo called", "params", params)
+	d.logger.Info("DPoS GetFreezeInfo called", "params", redactSensitiveRPCParams(params))
 
 	// 解析参数
 	var addressStr string
@@ -6291,7 +6186,7 @@ func (d *DPOS) GetFreezeInfo(ctx context.Context, params interface{}) (interface
 
 // GetValidatorCommission 获取验证者佣金率信息
 func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (map[string]interface{}, error) {
-	d.logger.Info("DPoS GetValidatorCommission called", "params", params)
+	d.logger.Info("DPoS GetValidatorCommission called", "params", redactSensitiveRPCParams(params))
 
 	var validatorAddress string
 
@@ -6501,7 +6396,7 @@ func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (
 // commissionRate: 佣金率（基点），范围 500-8000 (5%-80%)
 // privateKey: 验证者私钥（64字符十六进制，不带0x前缀）
 func (d *DPOS) UpdateCommission(ctx context.Context, params interface{}) (map[string]interface{}, error) {
-	d.logger.Info("DPoS UpdateCommission called", "params", params)
+	d.logger.Info("DPoS UpdateCommission called", "params", redactSensitiveRPCParams(params))
 
 	var validatorAddress string
 	var commissionRate uint64
@@ -6840,7 +6735,7 @@ func (d *DPOS) GetAccountBalance(ctx context.Context, params interface{}) (inter
 
 // CanWithdrawDelegate 检查是否可以退出注册
 func (d *DPOS) CanWithdrawDelegate(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS CanWithdrawDelegate called", "params", params)
+	d.logger.Info("DPoS CanWithdrawDelegate called", "params", redactSensitiveRPCParams(params))
 
 	// 解析参数
 	var addressStr string
@@ -7080,7 +6975,7 @@ func (d *DPOS) ApplyScheduledProposals(ctx context.Context) (interface{}, error)
 
 // ExecuteParameterUpdate 执行参数更新
 func (d *DPOS) ExecuteParameterUpdate(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS ExecuteParameterUpdate called", "params", params)
+	d.logger.Info("DPoS ExecuteParameterUpdate called", "params", redactSensitiveRPCParams(params))
 
 	// 解析参数
 	var proposalID, executorStr, executorPrivateKeyHex string
@@ -7242,7 +7137,7 @@ func (d *DPOS) getCurrentProposalPeriodInfo() string {
 // 1. 按区块范围：[startBlock, endBlock]
 // 2. 按Epoch：[{"epoch": epochNumber}]
 func (d *DPOS) GetBlockProducers(ctx context.Context, params interface{}) (map[string]interface{}, error) {
-	d.logger.Info("DPoS GetBlockProducers called", "params", params)
+	d.logger.Info("DPoS GetBlockProducers called", "params", redactSensitiveRPCParams(params))
 
 	var startBlock, endBlock uint64
 	var mode string
@@ -7635,7 +7530,7 @@ func (d *DPOS) createProposalExecuteTransaction(executor types.Address, privateK
 // GetVoterSlashingHistory 获取投票者的削减历史
 // RPC: dpos_getVoterSlashingHistory
 func (d *DPOS) GetVoterSlashingHistory(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("GetVoterSlashingHistory called", "params", params)
+	d.logger.Info("GetVoterSlashingHistory called", "params", redactSensitiveRPCParams(params))
 
 	// 解析参数
 	paramsMap, ok := params.(map[string]interface{})
@@ -7810,7 +7705,7 @@ func (d *DPOS) GetVoterSlashingHistory(ctx context.Context, params interface{}) 
 // GetValidatorSlashingHistory 获取验证者的所有削减历史（聚合所有投票者）
 // RPC: dpos_getValidatorSlashingHistory
 func (d *DPOS) GetValidatorSlashingHistory(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("GetValidatorSlashingHistory called", "params", params)
+	d.logger.Info("GetValidatorSlashingHistory called", "params", redactSensitiveRPCParams(params))
 
 	// 解析参数
 	var validatorAddress string

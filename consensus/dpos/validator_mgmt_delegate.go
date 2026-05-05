@@ -1584,43 +1584,29 @@ func (d *DPoS) signTransaction(tx *types.Transaction, expectedAddr types.Address
 
 // signTransactionWithChainID 签名交易（带chainID）
 func (d *DPoS) signTransactionWithChainID(tx *types.Transaction, expectedAddr types.Address, privateKeyHex string, chainID uint64) error {
-	d.logger.Info("Signing DPoS transaction with user-provided private key")
-
-	// Force user to provide private key
 	if privateKeyHex == "" {
 		return fmt.Errorf("private key is required for signing DPoS transactions")
 	}
 
-	d.logger.Info("Decoding user-provided private key", "privateKeyHex", privateKeyHex, "length", len(privateKeyHex))
-
-	// Validate hex string first
 	if len(privateKeyHex) != 64 {
 		return fmt.Errorf("invalid private key length: expected 64, got %d", len(privateKeyHex))
 	}
 
-	// Check if string contains only valid hex characters
 	for i, char := range privateKeyHex {
 		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
 			return fmt.Errorf("invalid hex character at position %d: %c (U+%04X)", i, char, char)
 		}
 	}
 
-	d.logger.Info("Private key hex string validation passed")
-
 	privateKeyBytes, err := hex.DecodeString(privateKeyHex)
 	if err != nil {
-		d.logger.Error("Failed to decode user-provided private key", "error", err)
 		return fmt.Errorf("failed to decode user-provided private key: %w", err)
 	}
 
-	d.logger.Info("User-provided private key decoded", "length", len(privateKeyBytes))
-
-	// Use direct ECDSA private key creation instead of crypto.BytesToECDSAPrivateKey
 	if len(privateKeyBytes) != 32 {
 		return fmt.Errorf("invalid private key bytes length: expected 32, got %d", len(privateKeyBytes))
 	}
 
-	// Create ECDSA private key directly using secp256k1 curve
 	privateKey := &ecdsa.PrivateKey{
 		PublicKey: ecdsa.PublicKey{
 			Curve: crypto.S256,
@@ -1628,38 +1614,28 @@ func (d *DPoS) signTransactionWithChainID(tx *types.Transaction, expectedAddr ty
 		D: new(big.Int).SetBytes(privateKeyBytes),
 	}
 
-	// Calculate the public key from the private key
 	privateKey.PublicKey.X, privateKey.PublicKey.Y = privateKey.Curve.ScalarBaseMult(privateKeyBytes)
 
-	d.logger.Info("User-provided private key created successfully", "privateKeyD", privateKey.D.String())
+	calculatedAddr := crypto.PubKeyToAddress(&privateKey.PublicKey)
+	if calculatedAddr != expectedAddr {
+		return fmt.Errorf("private key does not match expected address: calculated=%s, expected=%s",
+			calculatedAddr.String(), expectedAddr.String())
+	}
 
-	// Calculate transaction hash for signing using EIP-155 scheme to match txpool signer
-	// Use provided chainID
 	eip155Signer := crypto.NewEIP155Signer(chainID, false)
 
-	d.logger.Info("=== 标记2: 开始签名交易 ===")
-	// For EIP-155 signing, we need to use the signer's SignTx method
-	// This ensures the hash calculation and V value are correct
 	signedTx, err := eip155Signer.SignTx(tx, privateKey)
 	if err != nil {
-		d.logger.Error("Failed to sign transaction with EIP-155 signer", "error", err)
 		return fmt.Errorf("failed to sign transaction with EIP-155 signer: %w", err)
 	}
 
-	// Copy the signature components from the signed transaction
 	tx.R = signedTx.R
 	tx.S = signedTx.S
 	tx.V = signedTx.V
 
-	d.logger.Info("=== 标记3: 签名完成，R=", tx.R.String(), "S=", tx.S.String(), "V=", tx.V.String(), "===")
-	d.logger.Info("Transaction signed successfully with EIP-155 signer", "r", tx.R.String(), "s", tx.S.String(), "v", tx.V.String())
-
-	// Recover sender with the same signer and set tx.From for logging / consistency
 	senderAddr, err := eip155Signer.Sender(tx)
 	if err == nil {
 		tx.From = senderAddr
-		d.logger.Info("=== 标记4: 恢复发送者地址=", tx.From.String(), "===")
-		d.logger.Info("Sender recovered and set on tx", "from", tx.From.String())
 	} else {
 		d.logger.Warn("Failed to recover sender after signing", "error", err)
 	}

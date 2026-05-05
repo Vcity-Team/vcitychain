@@ -560,13 +560,10 @@ func (m *ForkManager) readBLSPrivateKeyAndGeneratePublicKey(validatorAddress typ
 
 	// 5. 检查并修正私钥长度（与测试文件逻辑完全一致）
 	if len(privateKeyHex)%2 != 0 {
-		m.logger.Info("Private key length is odd, adding leading zero",
+		m.logger.Info("BLS key hex length was odd, prepended zero",
 			"originalLength", len(privateKeyHex),
-			"originalKey", privateKeyHex)
+			"correctedLength", len(privateKeyHex)+1)
 		privateKeyHex = "0" + privateKeyHex
-		m.logger.Info("Private key corrected",
-			"correctedLength", len(privateKeyHex),
-			"correctedKey", privateKeyHex)
 	}
 
 	// 6. 解析BLS私钥（与测试文件逻辑完全一致）

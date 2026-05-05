@@ -80,12 +80,12 @@ func DecodePrivateKey(rawKey string) (ethgo.Key, error) {
 
 	dec, err := hex.DecodeString(privateKeyRaw)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode private key string '%s': %w", privateKeyRaw, err)
+		return nil, fmt.Errorf("failed to decode private key hex: %w", err)
 	}
 
 	rootchainAccountKey, err = wallet.NewWalletFromPrivKey(dec)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize key from provided private key '%s': %w", privateKeyRaw, err)
+		return nil, fmt.Errorf("failed to initialize wallet from private key: %w", err)
 	}
 
 	return rootchainAccountKey, nil

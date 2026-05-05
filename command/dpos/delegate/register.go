@@ -152,7 +152,7 @@ func (p *registerDelegateParams) validateFlags() error {
 
 	// Validate private key format
 	if !isValidPrivateKey(p.privateKey) {
-		return fmt.Errorf("invalid private key format: %s", p.privateKey)
+		return fmt.Errorf("invalid private key format: expected 64 hex characters")
 	}
 
 	return nil

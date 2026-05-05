@@ -65,7 +65,7 @@ func runVoteProposal(cmd *cobra.Command, args []string) error {
 	fmt.Printf("🔍 命令行参数解析:\n")
 	fmt.Printf("  - proposalID: %s\n", proposalID)
 	fmt.Printf("  - voter: %s\n", voter)
-	fmt.Printf("  - privateKey: %s... (已隐藏)\n", privateKey[:8])
+	fmt.Printf("  - privateKey: <redacted>\n")
 	fmt.Printf("  - supportStr: '%s'\n", supportStr)
 	fmt.Printf("  - opposeStr: '%s'\n", opposeStr)
 
@@ -112,7 +112,7 @@ func runVoteProposal(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  - ProposalID: %s\n", request.ProposalID)
 	fmt.Printf("  - Voter: %s\n", request.Voter)
 	fmt.Printf("  - Support: %t\n", request.Support)
-	fmt.Printf("  - PrivateKey: %s... (已隐藏)\n", request.PrivateKey[:8])
+	fmt.Printf("  - PrivateKey: <redacted>\n")
 
 	// 调用RPC
 	response, err := callVoteProposalRPC(request)
@@ -142,7 +142,7 @@ func callVoteProposalRPC(request VoteProposalRequest) (*VoteProposalResponse, er
 	fmt.Printf("  - params[0] (proposalID): %s\n", params[0])
 	fmt.Printf("  - params[1] (voter): %s\n", params[1])
 	fmt.Printf("  - params[2] (support): %t\n", params[2])
-	fmt.Printf("  - params[3] (privateKey): %s... (已隐藏)\n", request.PrivateKey[:8])
+	fmt.Printf("  - params[3] (privateKey): <redacted>\n")
 
 	// 序列化请求
 	requestBody, err := json.Marshal(rpcRequest)
