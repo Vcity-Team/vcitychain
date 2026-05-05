@@ -54,52 +54,6 @@ func toUint64Safe(v interface{}) (uint64, bool) {
 	}
 }
 
-// redactSensitiveRPCParams returns a shallow copy of params safe for logging (no private keys).
-func redactSensitiveRPCParams(params interface{}) interface{} {
-	switch p := params.(type) {
-	case map[string]interface{}:
-		out := make(map[string]interface{}, len(p))
-		for k, v := range p {
-			if isSensitiveRPCParamKey(k) {
-				out[k] = "<redacted>"
-				continue
-			}
-			out[k] = v
-		}
-		return out
-	case []interface{}:
-		out := make([]interface{}, len(p))
-		copy(out, p)
-		switch len(out) {
-		case 3:
-			out[2] = redactRPCParamMaybePrivateString(out[2])
-		case 4:
-			out[3] = redactRPCParamMaybePrivateString(out[3])
-		case 5:
-			out[4] = redactRPCParamMaybePrivateString(out[4])
-		}
-		return out
-	default:
-		return params
-	}
-}
-
-func isSensitiveRPCParamKey(k string) bool {
-	switch strings.ToLower(strings.TrimSpace(k)) {
-	case "privatekey", "proposerprivatekey", "executorprivatekey":
-		return true
-	default:
-		return false
-	}
-}
-
-func redactRPCParamMaybePrivateString(v interface{}) interface{} {
-	if _, ok := v.(string); ok {
-		return "<redacted>"
-	}
-	return v
-}
-
 // VoteMessage represents a vote message for validation
 type VoteMessage struct {
 	Voter     types.Address `json:"voter"`
@@ -564,8 +518,6 @@ type UnvoteResponse struct {
 
 // Vote handles dpos_vote RPC method
 func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Debug("DPoS Vote called", "params", redactSensitiveRPCParams(params))
-
 	// Parse parameters
 	var req VoteRequest
 	switch p := params.(type) {
@@ -1284,8 +1236,6 @@ func (d *DPOS) createVoteTransactionData(voter, candidate types.Address, amount 
 // This method is designed to handle the case where only one address is provided
 // It will use the address as both voter and candidate, with a default amount
 func (d *DPOS) VoteByAddress(ctx context.Context, params interface{}) (*VoteResponse, error) {
-	d.logger.Info("DPoS VoteByAddress called", "params", redactSensitiveRPCParams(params))
-
 	// Parse parameters
 	var address string
 	switch p := params.(type) {
@@ -1363,7 +1313,6 @@ func (d *DPOS) VoteByAddress(ctx context.Context, params interface{}) (*VoteResp
 
 // GetStakingInfo handles dpos_getStakingInfo RPC method
 func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interface{}, error) {
-	d.logger.Info("DPoS GetStakingInfo called", "blockNumber", blockNumber)
 	var validators validator.AccountSet
 	var err error
 
@@ -1541,8 +1490,6 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interfa
 //
 //	Keep it undocumented until we finalize external exposure.
 func (d *DPOS) GetVotingPower(ctx context.Context, params interface{}) (map[string]interface{}, error) {
-	d.logger.Info("DPoS GetVotingPower called", "params", redactSensitiveRPCParams(params))
-
 	// Parse parameters
 	var delegate string
 	var blockNumber *uint64
@@ -1592,7 +1539,7 @@ func (d *DPOS) GetVotingPower(ctx context.Context, params interface{}) (map[stri
 		return nil, fmt.Errorf("invalid parameter type: %T", params)
 	}
 
-	d.logger.Info("DPoS GetVotingPower parsed", "delegate", delegate, "blockNumber", blockNumber)
+	_ = blockNumber // RPC accepts optional block tag for compatibility; voting power uses current validator set
 
 	// Parse delegate address
 	delegateAddr := types.StringToAddress(delegate)
@@ -2131,8 +2078,6 @@ func (d *DPOS) GetValidatorVotingDetails(ctx context.Context, params interface{}
 // GetVoteRecords handles dpos_getVoteRecords RPC method
 // This method returns raw vote / staking records with optional filters and pagination
 func (d *DPOS) GetVoteRecords(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS GetVoteRecords called", "params", redactSensitiveRPCParams(params))
-
 	// Parse parameters
 	var req VoteRecordRequest
 	switch p := params.(type) {
@@ -2324,8 +2269,6 @@ func (d *DPOS) GetVoteRecords(ctx context.Context, params interface{}) (interfac
 // GetVoteByHash handles dpos_getVoteByHash RPC method
 // This method parses DPoS vote transactions and returns human-readable voting information
 func (d *DPOS) GetVoteByHash(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS GetVoteByHash called", "params", redactSensitiveRPCParams(params))
-
 	// Parse parameters
 	var txHash string
 	switch v := params.(type) {
@@ -3597,8 +3540,6 @@ func (d *DPOS) GetCurrentEpochInfo() (map[string]interface{}, error) {
 
 // GetEpochInfoByNumber 获取指定Epoch信息
 func (d *DPOS) GetEpochInfoByNumber(epochNumber uint64) (map[string]interface{}, error) {
-	d.logger.Info("DPoS GetEpochInfoByNumber called", "epochNumber", epochNumber)
-
 	// 获取DPoS引擎
 	dposEngine := d.getDPoSEngine()
 	if dposEngine == nil {
@@ -3631,8 +3572,6 @@ func (d *DPOS) GetEpochInfoByNumber(epochNumber uint64) (map[string]interface{},
 
 // GetLatestEpochInfo 获取最新epoch信息（与GetCurrentEpochInfo相同，但名称更明确）
 func (d *DPOS) GetLatestEpochInfo(ctx context.Context) (interface{}, error) {
-	d.logger.Info("DPoS GetLatestEpochInfo called")
-
 	// 获取DPoS引擎
 	dposEngine := d.getDPoSEngine()
 	if dposEngine == nil {
@@ -3667,8 +3606,6 @@ func (d *DPOS) GetLatestEpochInfo(ctx context.Context) (interface{}, error) {
 
 // GetEpochRewardDetails 查询指定epoch的奖励详情
 func (d *DPOS) GetEpochRewardDetails(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS GetEpochRewardDetails called", "params", redactSensitiveRPCParams(params))
-
 	var epochNumber uint64
 
 	switch p := params.(type) {
@@ -3715,8 +3652,6 @@ func (d *DPOS) GetEpochRewardDetails(ctx context.Context, params interface{}) (i
 		}, nil
 	}
 
-	d.logger.Info("DPoS GetEpochRewardDetails parsed parameters", "epochNumber", epochNumber)
-
 	// 获取DPoS状态
 	dposState, err := d.store.GetDPoSState()
 	if err != nil {
@@ -3757,8 +3692,6 @@ func (d *DPOS) GetEpochRewardDetails(ctx context.Context, params interface{}) (i
 
 // GetEpochRangeRewardDetails 查询指定epoch范围内的所有奖励详情
 func (d *DPOS) GetEpochRangeRewardDetails(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS GetEpochRangeRewardDetails called", "params", redactSensitiveRPCParams(params))
-
 	var fromEpoch, toEpoch uint64
 
 	switch p := params.(type) {
@@ -3820,8 +3753,6 @@ func (d *DPOS) GetEpochRangeRewardDetails(ctx context.Context, params interface{
 		}, nil
 	}
 
-	d.logger.Info("DPoS GetEpochRangeRewardDetails parsed parameters", "fromEpoch", fromEpoch, "toEpoch", toEpoch)
-
 	// 获取DPoS状态
 	dposState, err := d.store.GetDPoSState()
 	if err != nil {
@@ -3871,8 +3802,6 @@ func (d *DPOS) GetEpochRangeRewardDetails(ctx context.Context, params interface{
 //
 // includeRecords: 可选，默认true，是否返回明细记录（false时只返回总额，节省带宽）
 func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[string]interface{}, error) {
-	d.logger.Info("DPoS GetRewardHistory called", "params", redactSensitiveRPCParams(params))
-
 	var address string
 	var fromEpoch, toEpoch uint64
 	includeRecords := true // 默认返回明细
@@ -4011,8 +3940,6 @@ func (d *DPOS) GetRewardHistory(ctx context.Context, params interface{}) (map[st
 // GetVoterRewardByValidator 获取指定投票者投票给指定验证者的奖励详情
 // 参数: [voterAddress, validatorAddress, fromEpoch, toEpoch]
 func (d *DPOS) GetVoterRewardByValidator(ctx context.Context, params interface{}) (map[string]interface{}, error) {
-	d.logger.Info("DPoS GetVoterRewardByValidator called", "params", redactSensitiveRPCParams(params))
-
 	var voterAddress, validatorAddress string
 	var fromEpoch, toEpoch uint64
 
@@ -4421,8 +4348,6 @@ func formatRemainTime(seconds uint64) string {
 
 // GetValidatorBlockStats 获取验证者出块统计
 func (d *DPOS) GetValidatorBlockStats(validatorAddress string, epochNumber uint64) (map[string]interface{}, error) {
-	d.logger.Info("DPoS GetValidatorBlockStats called", "validatorAddress", validatorAddress, "epochNumber", epochNumber)
-
 	// 解析地址
 	addr := types.StringToAddress(validatorAddress)
 
@@ -4458,8 +4383,6 @@ func (d *DPOS) GetValidatorBlockStats(validatorAddress string, epochNumber uint6
 
 // GetValidatorRewardsInfo 获取验证者奖励信息
 func (d *DPOS) GetValidatorRewardsInfo(ctx context.Context, params interface{}) (map[string]interface{}, error) {
-	d.logger.Info("DPoS GetValidatorRewardsInfo called", "params", redactSensitiveRPCParams(params))
-
 	// 解析参数
 	var validatorAddress string
 	var epochNumber uint64
@@ -4499,10 +4422,6 @@ func (d *DPOS) GetValidatorRewardsInfo(ctx context.Context, params interface{}) 
 		}, nil
 	}
 
-	d.logger.Info("DPoS GetValidatorRewardsInfo parameters parsed",
-		"validatorAddress", validatorAddress,
-		"epochNumber", epochNumber)
-
 	// 解析地址
 	validatorAddr := types.StringToAddress(validatorAddress)
 
@@ -4540,8 +4459,6 @@ func (d *DPOS) GetValidatorRewardsInfo(ctx context.Context, params interface{}) 
 
 // CreateParameterProposal 创建参数表决提案
 func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS CreateParameterProposal called", "params", redactSensitiveRPCParams(params))
-
 	var proposerStr, parameter, description, proposerPrivateKeyHex string
 	var newValue interface{}
 
@@ -4729,8 +4646,6 @@ func (d *DPOS) CreateParameterProposal(ctx context.Context, params interface{}) 
 
 // CreateRecoveryProposal 创建验证者恢复提案
 func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS CreateRecoveryProposal called", "params", redactSensitiveRPCParams(params))
-
 	var proposerStr, validatorAddrStr, recoveryReason, description, proposerPrivateKeyHex string
 
 	// 支持两种参数格式：数组格式和对象格式
@@ -4907,8 +4822,6 @@ func (d *DPOS) CreateRecoveryProposal(ctx context.Context, params interface{}) (
 
 // VoteOnParameterProposal 对参数提案进行投票
 func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS VoteOnParameterProposal called", "params", redactSensitiveRPCParams(params))
-
 	var proposalID, voterStr, privateKeyHex string
 	var support bool
 
@@ -5055,8 +4968,6 @@ func (d *DPOS) VoteOnParameterProposal(ctx context.Context, params interface{}) 
 
 // GetParameterProposal 获取提案信息
 func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS GetParameterProposal called", "params", redactSensitiveRPCParams(params))
-
 	var proposalID string
 	switch p := params.(type) {
 	case []interface{}:
@@ -5083,8 +4994,6 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 	if proposalID == "" {
 		return nil, fmt.Errorf("proposal ID cannot be empty")
 	}
-
-	d.logger.Info("DPoS GetParameterProposal parsed", "proposalID", proposalID)
 
 	gov, err := d.getGovernanceEngine()
 	if err != nil {
@@ -5251,8 +5160,6 @@ func (d *DPOS) GetParameterProposal(ctx context.Context, params interface{}) (in
 // RegisterDelegate 注册受托人
 func (d *DPOS) RegisterDelegate(ctx context.Context, params interface{}) (interface{}, error) {
 	d.logger.Info("🚀 ===== DPoS受托人注册RPC调用开始 =====")
-	d.logger.Info("📋 接收到的参数", "params", redactSensitiveRPCParams(params))
-
 	// 解析参数
 	d.logger.Info("🔍 开始解析RPC参数...")
 	var registrantStr, name, website, description, privateKey string
@@ -5940,8 +5847,6 @@ func (d *DPOS) GetDelegateRegistrations(ctx context.Context) (interface{}, error
 
 // WithdrawDelegate 退出受托人
 func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS WithdrawDelegate called", "params", redactSensitiveRPCParams(params))
-
 	// 解析参数
 	var addressStr string
 	var privateKey string
@@ -6120,8 +6025,6 @@ func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interf
 
 // GetFreezeInfo 查询冻结信息（支持单个和批量）
 func (d *DPOS) GetFreezeInfo(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS GetFreezeInfo called", "params", redactSensitiveRPCParams(params))
-
 	// 解析参数
 	var addressStr string
 	var addresses []string
@@ -6186,8 +6089,6 @@ func (d *DPOS) GetFreezeInfo(ctx context.Context, params interface{}) (interface
 
 // GetValidatorCommission 获取验证者佣金率信息
 func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (map[string]interface{}, error) {
-	d.logger.Info("DPoS GetValidatorCommission called", "params", redactSensitiveRPCParams(params))
-
 	var validatorAddress string
 
 	switch p := params.(type) {
@@ -6396,8 +6297,6 @@ func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (
 // commissionRate: 佣金率（基点），范围 500-8000 (5%-80%)
 // privateKey: 验证者私钥（64字符十六进制，不带0x前缀）
 func (d *DPOS) UpdateCommission(ctx context.Context, params interface{}) (map[string]interface{}, error) {
-	d.logger.Info("DPoS UpdateCommission called", "params", redactSensitiveRPCParams(params))
-
 	var validatorAddress string
 	var commissionRate uint64
 	var privateKey string
@@ -6735,8 +6634,6 @@ func (d *DPOS) GetAccountBalance(ctx context.Context, params interface{}) (inter
 
 // CanWithdrawDelegate 检查是否可以退出注册
 func (d *DPOS) CanWithdrawDelegate(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS CanWithdrawDelegate called", "params", redactSensitiveRPCParams(params))
-
 	// 解析参数
 	var addressStr string
 	if paramMap, ok := params.(map[string]interface{}); ok {
@@ -6774,7 +6671,6 @@ func (d *DPOS) CanWithdrawDelegate(ctx context.Context, params interface{}) (int
 
 // GetActiveProposals 获取活跃提案列表
 func (d *DPOS) GetActiveProposals(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS GetActiveProposals called")
 	_ = params
 
 	gov, err := d.getGovernanceEngine()
@@ -6857,8 +6753,6 @@ func (d *DPOS) GetActiveProposals(ctx context.Context, params interface{}) (inte
 }
 
 func (d *DPOS) GetVotableCurrentParameters(ctx context.Context) (interface{}, error) {
-	d.logger.Info("DPoS GetVotableCurrentParameters called")
-
 	gov, err := d.getGovernanceEngine()
 	if err != nil {
 		return map[string]interface{}{
@@ -6890,8 +6784,6 @@ func (d *DPOS) GetVotableCurrentParameters(ctx context.Context) (interface{}, er
 
 // GetConsensusSwitchHeight 获取共识切换高度
 func (d *DPOS) GetConsensusSwitchHeight(ctx context.Context) (interface{}, error) {
-	d.logger.Info("DPoS GetConsensusSwitchHeight called")
-
 	// 尝试多种方式获取共识切换高度
 	consensusSwitchHeight := d.getConsensusSwitchHeight()
 	currentHeight := d.getCurrentBlockHeight()
@@ -6975,8 +6867,6 @@ func (d *DPOS) ApplyScheduledProposals(ctx context.Context) (interface{}, error)
 
 // ExecuteParameterUpdate 执行参数更新
 func (d *DPOS) ExecuteParameterUpdate(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("DPoS ExecuteParameterUpdate called", "params", redactSensitiveRPCParams(params))
-
 	// 解析参数
 	var proposalID, executorStr, executorPrivateKeyHex string
 	switch p := params.(type) {
@@ -7023,8 +6913,6 @@ func (d *DPOS) ExecuteParameterUpdate(ctx context.Context, params interface{}) (
 	if proposalID == "" {
 		return nil, fmt.Errorf("proposal ID cannot be empty")
 	}
-
-	d.logger.Info("DPoS ExecuteParameterUpdate parsed", "proposalID", proposalID, "executor", executorStr)
 
 	gov, err := d.getGovernanceEngine()
 	if err != nil {
@@ -7137,8 +7025,6 @@ func (d *DPOS) getCurrentProposalPeriodInfo() string {
 // 1. 按区块范围：[startBlock, endBlock]
 // 2. 按Epoch：[{"epoch": epochNumber}]
 func (d *DPOS) GetBlockProducers(ctx context.Context, params interface{}) (map[string]interface{}, error) {
-	d.logger.Info("DPoS GetBlockProducers called", "params", redactSensitiveRPCParams(params))
-
 	var startBlock, endBlock uint64
 	var mode string
 	var epochNumber uint64
@@ -7530,8 +7416,6 @@ func (d *DPOS) createProposalExecuteTransaction(executor types.Address, privateK
 // GetVoterSlashingHistory 获取投票者的削减历史
 // RPC: dpos_getVoterSlashingHistory
 func (d *DPOS) GetVoterSlashingHistory(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("GetVoterSlashingHistory called", "params", redactSensitiveRPCParams(params))
-
 	// 解析参数
 	paramsMap, ok := params.(map[string]interface{})
 	if !ok {
@@ -7705,8 +7589,6 @@ func (d *DPOS) GetVoterSlashingHistory(ctx context.Context, params interface{}) 
 // GetValidatorSlashingHistory 获取验证者的所有削减历史（聚合所有投票者）
 // RPC: dpos_getValidatorSlashingHistory
 func (d *DPOS) GetValidatorSlashingHistory(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Info("GetValidatorSlashingHistory called", "params", redactSensitiveRPCParams(params))
-
 	// 解析参数
 	var validatorAddress string
 
