@@ -88,6 +88,13 @@ func (d *DPoS) parseVoteTransactionData(tx *types.Transaction) (*VoteInfo, error
 		return nil, fmt.Errorf("not a DPoS vote transaction, prefix=%x", input[:4])
 	}
 
+	if isDelegateDepositMigrationCalldata(input) {
+		return nil, fmt.Errorf("not a DPoS vote transaction: deposit migration calldata")
+	}
+	if isDelegateDepositEscrowPayoutCalldata(input) {
+		return nil, fmt.Errorf("not a DPoS vote transaction: escrow payout calldata")
+	}
+
 	// 预期格式：4字节"DPOS" + 20字节投票者 + 20字节受托人 + 32字节金额
 	const (
 		dposPrefixLen  = 4
@@ -108,7 +115,7 @@ func (d *DPoS) parseVoteTransactionData(tx *types.Transaction) (*VoteInfo, error
 	// 转换金额字节为big.Int（移除前导零）
 	// 🔧 修复：支持负数解码（全1表示 -1）
 	amount := new(big.Int).SetBytes(amountBytes)
-	
+
 	// 检查是否为全1（0xFFFFFFFF...），表示 -1
 	isAllOnes := true
 	for _, b := range amountBytes {
@@ -121,7 +128,7 @@ func (d *DPoS) parseVoteTransactionData(tx *types.Transaction) (*VoteInfo, error
 		amount = big.NewInt(-1)
 		d.logger.Info("🔧 [解析] 检测到全1编码，解析为 amount = -1")
 	}
-	
+
 	if amount.Cmp(big.NewInt(-1)) == 0 {
 		// amount = -1 表示撤销全部投票，允许通过
 		d.logger.Info("🔧 [解析] amount = -1，撤销投票")

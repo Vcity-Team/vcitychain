@@ -965,9 +965,9 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		To:       nil,
 		Value:    big.NewInt(0),
 		Input:    d.createVoteTransactionData(voterAddr, candidateAddr, amountInt),
-		V:        big.NewInt(0),                                                    // Will be set after signing
-		R:        big.NewInt(0),                                                    // Will be set after signing
-		S:        big.NewInt(0),                                                    // Will be set after signing
+		V:        big.NewInt(0), // Will be set after signing
+		R:        big.NewInt(0), // Will be set after signing
+		S:        big.NewInt(0), // Will be set after signing
 		Hash:     types.Hash{},
 		// Don't set From field - let transaction pool recover it from signature
 		// This ensures consistency between From field and signature
@@ -2426,6 +2426,13 @@ func (d *DPOS) parseVoteTransactionData(tx *types.Transaction) (*VoteInfo, error
 	// Check if it's a DPoS vote transaction
 	if !bytes.Equal(input[:4], []byte("DPOS")) {
 		return nil, fmt.Errorf("not a DPoS vote transaction, prefix=%x", input[:4])
+	}
+
+	if dpos.IsDelegateDepositMigrationInput(input) {
+		return nil, fmt.Errorf("not a DPoS vote transaction: deposit migration calldata")
+	}
+	if dpos.IsDelegateDepositEscrowPayoutInput(input) {
+		return nil, fmt.Errorf("not a DPoS vote transaction: escrow payout calldata")
 	}
 
 	// Expected format: 4 bytes "DPOS" + 20 bytes voter + 20 bytes candidate + 32 bytes amount
@@ -5571,6 +5578,294 @@ func (d *DPOS) SubmitDelegateDepositMigration(ctx context.Context, params interf
 	return out, nil
 }
 
+func parseAmountWeiParam(v interface{}) (*big.Int, error) {
+	if v == nil {
+		return nil, fmt.Errorf("amountWei is required")
+	}
+	switch t := v.(type) {
+	case string:
+		s := strings.TrimSpace(t)
+		if s == "" {
+			return nil, fmt.Errorf("amountWei must be a non-empty decimal string")
+		}
+		b, ok := new(big.Int).SetString(s, 10)
+		if !ok {
+			return nil, fmt.Errorf("amountWei: invalid integer string %q", s)
+		}
+		return b, nil
+	case json.Number:
+		return parseAmountWeiParam(t.String())
+	case float64:
+		if t != float64(int64(t)) {
+			return nil, fmt.Errorf("amountWei: use a string for large wei values (float loses precision)")
+		}
+		return big.NewInt(int64(t)), nil
+	default:
+		return nil, fmt.Errorf("amountWei: expected string, got %T", v)
+	}
+}
+
+func trimDecimalTrailingZeros(s string) string {
+	if !strings.Contains(s, ".") {
+		return s
+	}
+	s = strings.TrimRight(s, "0")
+	s = strings.TrimRight(s, ".")
+	if s == "" || s == "-" {
+		return "0"
+	}
+	return s
+}
+
+// parseEtherDecimalStringToWei parses a decimal ETH amount (e.g. "1000", "0.5") into wei (18 decimals).
+func parseEtherDecimalStringToWei(s string) (*big.Int, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, fmt.Errorf("amountEth must be non-empty")
+	}
+	if strings.ContainsAny(s, "eE") {
+		return nil, fmt.Errorf("amountEth: scientific notation not supported; use a decimal string")
+	}
+	if len(s) > 0 && s[0] == '-' {
+		return nil, fmt.Errorf("amountEth must be non-negative")
+	}
+	parts := strings.SplitN(s, ".", 2)
+	intStr := parts[0]
+	if intStr == "" {
+		intStr = "0"
+	}
+	fracStr := ""
+	if len(parts) == 2 {
+		fracStr = parts[1]
+	}
+	for _, c := range intStr {
+		if c < '0' || c > '9' {
+			return nil, fmt.Errorf("amountEth: invalid character in integer part of %q", s)
+		}
+	}
+	for _, c := range fracStr {
+		if c < '0' || c > '9' {
+			return nil, fmt.Errorf("amountEth: invalid character in fractional part of %q", s)
+		}
+	}
+	if len(fracStr) > 18 {
+		fracStr = fracStr[:18]
+	}
+	fracStr = fracStr + strings.Repeat("0", 18-len(fracStr))
+
+	ip := new(big.Int)
+	if _, ok := ip.SetString(intStr, 10); !ok {
+		return nil, fmt.Errorf("amountEth: invalid integer part %q", intStr)
+	}
+	fp := new(big.Int)
+	if _, ok := fp.SetString(fracStr, 10); !ok {
+		return nil, fmt.Errorf("amountEth: invalid fractional part")
+	}
+	weiPerEther := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+	res := new(big.Int).Mul(ip, weiPerEther)
+	res.Add(res, fp)
+	return res, nil
+}
+
+func parseAmountEthParam(v interface{}) (*big.Int, error) {
+	if v == nil {
+		return nil, fmt.Errorf("amountEth is required")
+	}
+	switch t := v.(type) {
+	case string:
+		return parseEtherDecimalStringToWei(t)
+	case json.Number:
+		return parseEtherDecimalStringToWei(t.String())
+	case float64:
+		return parseEtherDecimalStringToWei(strconv.FormatFloat(t, 'f', -1, 64))
+	default:
+		return nil, fmt.Errorf("amountEth: expected string or number, got %T", v)
+	}
+}
+
+func escrowPayoutAmountFromMap(p map[string]interface{}) (*big.Int, error) {
+	_, hasEth := p["amountEth"]
+	_, hasWei := p["amountWei"]
+	if hasEth && hasWei {
+		return nil, fmt.Errorf("specify only one of amountEth (ether per recipient) or amountWei (wei per recipient)")
+	}
+	if hasEth {
+		return parseAmountEthParam(p["amountEth"])
+	}
+	if hasWei {
+		return parseAmountWeiParam(p["amountWei"])
+	}
+	return nil, fmt.Errorf("missing amountEth (ether per recipient, e.g. \"1000\") or amountWei (wei per recipient)")
+}
+
+type escrowPayoutSubmitParams struct {
+	recipients []types.Address
+	amountWei  *big.Int
+	pk         string
+}
+
+func parseSubmitDelegateDepositEscrowPayoutParams(params interface{}) (*escrowPayoutSubmitParams, error) {
+	switch p := params.(type) {
+	case map[string]interface{}:
+		pkStr, _ := p["privateKey"].(string)
+		pkStr = strings.TrimSpace(pkStr)
+		amt, err := escrowPayoutAmountFromMap(p)
+		if err != nil {
+			return nil, err
+		}
+		raw, ok := p["recipients"].([]interface{})
+		if !ok || len(raw) == 0 {
+			return nil, fmt.Errorf("missing non-empty \"recipients\" array")
+		}
+		addrs, err := addressesFromMigrationInterfaceSlice(raw)
+		if err != nil {
+			return nil, err
+		}
+		return &escrowPayoutSubmitParams{recipients: addrs, amountWei: amt, pk: pkStr}, nil
+	case []interface{}:
+		raw := p
+		if len(raw) == 1 {
+			if inner, ok := raw[0].([]interface{}); ok {
+				raw = inner
+			} else if singleMap, ok := raw[0].(map[string]interface{}); ok {
+				// JSON-RPC 常见写法 "params": [ { "recipients": [...], "amountEth": "1" } ]
+				return parseSubmitDelegateDepositEscrowPayoutParams(singleMap)
+			}
+		}
+		if len(raw) < 2 {
+			return nil, fmt.Errorf("invalid params: need [..addresses.., amountEth] or object with recipients and amountEth / amountWei")
+		}
+		raw, trailingPK := stripTrailingMigrationPrivateKeyParam(raw)
+		if len(raw) < 2 {
+			return nil, fmt.Errorf("invalid params: need at least one address and amount (ether)")
+		}
+		last := raw[len(raw)-1]
+		amount, err := parseAmountEthParam(last)
+		if err != nil {
+			return nil, err
+		}
+		addrSlice := raw[:len(raw)-1]
+		if len(addrSlice) == 0 {
+			return nil, fmt.Errorf("at least one recipient address is required")
+		}
+		addrs, err := addressesFromMigrationInterfaceSlice(addrSlice)
+		if err != nil {
+			return nil, err
+		}
+		return &escrowPayoutSubmitParams{recipients: addrs, amountWei: amount, pk: trailingPK}, nil
+	default:
+		return nil, fmt.Errorf("invalid params: use {\"recipients\":[\"0x...\"],\"amountEth\":\"1000\",\"privateKey\":\"...\"} or [\"0x..\",\"1000\"]")
+	}
+}
+
+func estimateDelegateDepositEscrowPayoutGas(addrCount int) uint64 {
+	g := uint64(120000) + uint64(addrCount)*60000
+	const capG = uint64(8_000_000)
+	if g > capG {
+		return capG
+	}
+	return g
+}
+
+// SubmitDelegateDepositEscrowPayout builds, signs, and submits a DPOS+PAY payout from delegate deposit escrow
+// to each listed recipient. Use amountEth as a decimal ether string per recipient (e.g. "1000" = 1000 ETH).
+// For raw wei instead, pass amountWei (do not pass both). Legacy array params [addr,...,amount] use ether decimals.
+// tx.From must be the migration authority EOA (same as dpos_submitDelegateDepositMigration).
+// privateKey: param or env VCITYCHAIN_DPOS_DELEGATE_DEPOSIT_MIGRATION_PRIVATE_KEY.
+func (d *DPOS) SubmitDelegateDepositEscrowPayout(ctx context.Context, params interface{}) (interface{}, error) {
+	authority := dpos.DelegateDepositMigrationAuthorityEOA()
+
+	parsed, err := parseSubmitDelegateDepositEscrowPayoutParams(params)
+	if err != nil {
+		return nil, err
+	}
+
+	pk, err := resolveDelegateDepositMigrationPrivateKey(parsed.pk)
+	if err != nil {
+		return nil, err
+	}
+
+	calldata, err := dpos.BuildDelegateDepositEscrowPayoutCalldata(parsed.recipients, parsed.amountWei)
+	if err != nil {
+		return nil, err
+	}
+
+	var nonce uint64
+	if nonceStore, ok := d.store.(interface {
+		GetNonce(addr types.Address) uint64
+	}); ok {
+		nonce = nonceStore.GetNonce(authority)
+	} else if accountStore, ok := d.store.(interface {
+		GetAccount(root types.Hash, addr types.Address) (*Account, error)
+	}); ok {
+		if account, err2 := accountStore.GetAccount(types.Hash{}, authority); err2 == nil && account != nil {
+			nonce = account.Nonce
+		}
+	}
+
+	var gasPrice *big.Int
+	if gasStore, ok := d.store.(interface {
+		GetBaseFee() uint64
+	}); ok {
+		gasPrice = new(big.Int).SetUint64(gasStore.GetBaseFee())
+	} else {
+		gasPrice = big.NewInt(1_000_000_000)
+	}
+	minGasPrice := big.NewInt(1_000_000_000)
+	if gasPrice.Cmp(minGasPrice) < 0 {
+		gasPrice = minGasPrice
+	}
+
+	toAddr := authority
+	tx := &types.Transaction{
+		Nonce:    nonce,
+		GasPrice: gasPrice,
+		Gas:      estimateDelegateDepositEscrowPayoutGas(len(parsed.recipients)),
+		To:       &toAddr,
+		Value:    big.NewInt(0),
+		Input:    calldata,
+		V:        big.NewInt(0),
+		R:        big.NewInt(0),
+		S:        big.NewInt(0),
+		Hash:     types.Hash{},
+	}
+	tx.Type = types.LegacyTx
+	tx.ComputeHash(0)
+
+	if err := d.signTransaction(tx, authority, pk); err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		}, nil
+	}
+	tx.ComputeHash(0)
+
+	if ethStore, ok := d.store.(interface {
+		AddTx(tx *types.Transaction) error
+	}); ok {
+		if err := ethStore.AddTx(tx); err != nil {
+			return nil, fmt.Errorf("add transaction to pool: %w", err)
+		}
+	} else {
+		return nil, fmt.Errorf("this node's JSON-RPC store does not support submitting transactions (AddTx)")
+	}
+
+	_ = d.broadcastTransaction(tx)
+
+	weiPerEther := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+	rawEth := new(big.Float).Quo(new(big.Float).SetInt(parsed.amountWei), new(big.Float).SetInt(weiPerEther)).Text('f', 18)
+	amountEthDisp := trimDecimalTrailingZeros(rawEth)
+
+	return map[string]interface{}{
+		"success":          true,
+		"txHash":           tx.Hash.String(),
+		"from":             authority.String(),
+		"recipientCount":   len(parsed.recipients),
+		"amountWeiPerAddr": parsed.amountWei.String(),
+		"amountEthPerAddr": amountEthDisp,
+	}, nil
+}
+
 func depositMigrationPairFromRegistration(reg *dpos.DelegateRegistration) map[string]interface{} {
 	if reg == nil {
 		return nil
@@ -6858,10 +7153,10 @@ func (d *DPOS) ApplyScheduledProposals(ctx context.Context) (interface{}, error)
 	}
 	currentEpoch := dposInstance.GetCurrentEpochNumber()
 	return map[string]interface{}{
-		"success":        true,
-		"appliedCount":   applied,
-		"currentBlock":   blockNum,
-		"currentEpoch":   currentEpoch,
+		"success":      true,
+		"appliedCount": applied,
+		"currentBlock": blockNum,
+		"currentEpoch": currentEpoch,
 	}, nil
 }
 

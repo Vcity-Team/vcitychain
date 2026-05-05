@@ -20,6 +20,11 @@ const (
 	delegateDepositMigrationHeader       = 8 // "DPOS"(4) + "MIG"(3) + 0x00(1)
 )
 
+// IsDelegateDepositMigrationInput reports whether input matches DPOS+MIG migration calldata (RPC / parsers).
+func IsDelegateDepositMigrationInput(input []byte) bool {
+	return isDelegateDepositMigrationCalldata(input)
+}
+
 func isDelegateDepositMigrationCalldata(input []byte) bool {
 	if len(input) < delegateDepositMigrationHeader+4 {
 		return false
