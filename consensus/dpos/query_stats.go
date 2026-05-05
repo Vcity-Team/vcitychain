@@ -123,8 +123,22 @@ func (d *DPoS) CanWithdrawDelegate(address types.Address) (map[string]interface{
 	}
 
 	details := make(map[string]interface{})
+	details["status"] = reg.Status.String()
 	details["hasFrozenAmount"] = reg.Deposit.Cmp(big.NewInt(0)) > 0
 	details["frozenAmount"] = reg.Deposit.String()
+
+	if reg.Status == RegStatusWithdrawn {
+		result["canWithdraw"] = false
+		result["reason"] = "already_withdrawn"
+		result["details"] = details
+		return result, nil
+	}
+	if reg.Status != RegStatusCandidate && reg.Status != RegStatusActive {
+		result["canWithdraw"] = false
+		result["reason"] = "not_candidate_or_active"
+		result["details"] = details
+		return result, nil
+	}
 
 	// 检查投票
 	hasVotes := reg.TotalVotes.Cmp(big.NewInt(0)) > 0

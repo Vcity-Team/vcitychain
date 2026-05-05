@@ -1919,6 +1919,14 @@ func (d *DPoS) WithdrawDelegate(address types.Address) error {
 		return fmt.Errorf("delegate not found")
 	}
 
+	if reg.Status == RegStatusWithdrawn {
+		return fmt.Errorf("delegate already withdrawn; cannot withdraw again")
+	}
+	// 候选人或未退出前的活跃受托人均可退出；Inactive 等非在册状态不可
+	if reg.Status != RegStatusCandidate && reg.Status != RegStatusActive {
+		return fmt.Errorf("withdraw allowed only for delegates in candidate or active status; current status: %s", reg.Status.String())
+	}
+
 	// 1. 检查是否还有投票（参考 Tron：要求先手动撤回投票）
 	if reg.TotalVotes.Cmp(big.NewInt(0)) > 0 {
 		return fmt.Errorf("cannot withdraw while having votes. Please use dpos_vote to withdraw votes first")

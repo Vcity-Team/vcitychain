@@ -6136,6 +6136,18 @@ func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interf
 					"error":   errStr,
 					"code":    "MIN_FREEZE_PERIOD_NOT_MET",
 				}, nil
+			} else if strings.Contains(errStr, "delegate already withdrawn") {
+				return map[string]interface{}{
+					"success": false,
+					"error":   errStr,
+					"code":    "ALREADY_WITHDRAWN",
+				}, nil
+			} else if strings.Contains(errStr, "withdraw allowed only for delegates in candidate or active status") {
+				return map[string]interface{}{
+					"success": false,
+					"error":   errStr,
+					"code":    "NOT_CANDIDATE_OR_ACTIVE",
+				}, nil
 			}
 			return nil, fmt.Errorf("failed to withdraw delegate: %w", err)
 		}
