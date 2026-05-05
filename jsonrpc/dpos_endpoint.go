@@ -5664,40 +5664,14 @@ func (d *DPOS) SubmitDelegateDepositMigration(ctx context.Context, params interf
 	}, nil
 }
 
-// SubmitCancelRegisterDelegate 构造并提交 DPOS+CAN 链上取消注册交易（打包后从托管退回原生币到 delegate）。
-// JSON-RPC: dpos_submitCancelRegisterDelegate
-// params: { "delegate": "0x...", "privateKey": "<64 hex>" } 或与 WithdrawDelegate 相同的 address/privateKey 字段。
-func (d *DPOS) SubmitCancelRegisterDelegate(ctx context.Context, params interface{}) (interface{}, error) {
-	var delegateStr, privateKeyHex string
-
-	if paramMap, ok := params.(map[string]interface{}); ok {
-		if s, ok := paramMap["delegate"].(string); ok && s != "" {
-			delegateStr = s
-		} else if s, ok := paramMap["address"].(string); ok {
-			delegateStr = s
-		}
-		if pk, ok := paramMap["privateKey"].(string); ok {
-			privateKeyHex = pk
-		}
-	} else if paramArray, ok := params.([]interface{}); ok && len(paramArray) >= 2 {
-		delegateStr, _ = paramArray[0].(string)
-		if pk, ok := paramArray[1].(string); ok {
-			privateKeyHex = pk
-		}
-	} else {
-		return nil, fmt.Errorf("invalid parameters: expected map{delegate,privateKey} or [delegate,pk]")
-	}
-
-	if strings.TrimSpace(delegateStr) == "" {
-		return nil, fmt.Errorf("delegate address is required")
-	}
+// buildSignedDelegateCancelRegistrationTx builds and signs DPOS+CAN (does not add to pool).
+func (d *DPOS) buildSignedDelegateCancelRegistrationTx(delegate types.Address, privateKeyHex string) (*types.Transaction, types.Address, error) {
 	privateKeyHex = strings.TrimSpace(privateKeyHex)
 	privateKeyHex = strings.TrimPrefix(strings.TrimPrefix(privateKeyHex, "0x"), "0X")
 	if len(privateKeyHex) != 64 {
-		return nil, fmt.Errorf("privateKey must be 64 hex characters")
+		return nil, types.Address{}, fmt.Errorf("privateKey must be 64 hex characters")
 	}
 
-	delegate := types.StringToAddress(delegateStr)
 	calldata := dpos.BuildDelegateCancelRegistrationCalldata(delegate)
 	escrow := dpos.DelegateDepositEscrowAddr()
 
@@ -5744,24 +5718,68 @@ func (d *DPOS) SubmitCancelRegisterDelegate(ctx context.Context, params interfac
 	tx.ComputeHash(0)
 
 	if err := d.signTransaction(tx, delegate, privateKeyHex); err != nil {
+		return nil, escrow, err
+	}
+	tx.ComputeHash(0)
+
+	return tx, escrow, nil
+}
+
+func (d *DPOS) submitSignedTransactionToPool(tx *types.Transaction) error {
+	if ethStore, ok := d.store.(interface {
+		AddTx(tx *types.Transaction) error
+	}); ok {
+		if err := ethStore.AddTx(tx); err != nil {
+			return fmt.Errorf("add transaction to pool: %w", err)
+		}
+	} else {
+		return fmt.Errorf("this node's JSON-RPC store does not support submitting transactions (AddTx)")
+	}
+	_ = d.broadcastTransaction(tx)
+	return nil
+}
+
+// SubmitCancelRegisterDelegate 构造并提交 DPOS+CAN 链上取消注册交易（打包后从托管退回原生币到 delegate）。
+// JSON-RPC: dpos_submitCancelRegisterDelegate
+// params: { "delegate": "0x...", "privateKey": "<64 hex>" } 或与 WithdrawDelegate 相同的 address/privateKey 字段。
+func (d *DPOS) SubmitCancelRegisterDelegate(ctx context.Context, params interface{}) (interface{}, error) {
+	var delegateStr, privateKeyHex string
+
+	if paramMap, ok := params.(map[string]interface{}); ok {
+		if s, ok := paramMap["delegate"].(string); ok && s != "" {
+			delegateStr = s
+		} else if s, ok := paramMap["address"].(string); ok {
+			delegateStr = s
+		}
+		if pk, ok := paramMap["privateKey"].(string); ok {
+			privateKeyHex = pk
+		}
+	} else if paramArray, ok := params.([]interface{}); ok && len(paramArray) >= 2 {
+		delegateStr, _ = paramArray[0].(string)
+		if pk, ok := paramArray[1].(string); ok {
+			privateKeyHex = pk
+		}
+	} else {
+		return nil, fmt.Errorf("invalid parameters: expected map{delegate,privateKey} or [delegate,pk]")
+	}
+
+	if strings.TrimSpace(delegateStr) == "" {
+		return nil, fmt.Errorf("delegate address is required")
+	}
+
+	delegate := types.StringToAddress(delegateStr)
+
+	tx, escrow, err := d.buildSignedDelegateCancelRegistrationTx(delegate, privateKeyHex)
+	if err != nil {
 		return map[string]interface{}{
 			"success": false,
 			"error":   err.Error(),
 		}, nil
 	}
-	tx.ComputeHash(0)
 
-	if ethStore, ok := d.store.(interface {
-		AddTx(tx *types.Transaction) error
-	}); ok {
-		if err := ethStore.AddTx(tx); err != nil {
-			return nil, fmt.Errorf("add transaction to pool: %w", err)
-		}
-	} else {
-		return nil, fmt.Errorf("this node's JSON-RPC store does not support submitting transactions (AddTx)")
+	if err := d.submitSignedTransactionToPool(tx); err != nil {
+		return nil, err
 	}
-
-	_ = d.broadcastTransaction(tx)
 
 	d.logger.Info("✅ 已提交链上取消注册 DPOS+CAN 交易", "txHash", tx.Hash.String(), "delegate", delegate.String(), "escrow", escrow.String())
 
@@ -5894,13 +5912,57 @@ func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interf
 			return nil, fmt.Errorf("failed to withdraw delegate: %w", err)
 		}
 
-		// 获取解冻信息
 		result := map[string]interface{}{
 			"success": true,
 			"message": "Delegate withdrawn and unfrozen successfully",
-			// 链上原生币仍在托管地址，需另发 DPOS+CAN 交易退回（见 dpos_submitCancelRegisterDelegate）
-			"onChainRefundRequired": true,
-			"submitCancelRpc":       "dpos_submitCancelRegisterDelegate",
+		}
+
+		// 托管保证金：成功后自动提交 DPOS+CAN（与 dpos_submitCancelRegisterDelegate 相同）。
+		var skipReason string
+		if ig, ok := dposEngine.(interface {
+			IsGenesisValidator(types.Address) bool
+		}); ok && ig.IsGenesisValidator(address) {
+			skipReason = "genesis_validator"
+		} else if gr, ok := dposEngine.(interface {
+			GetDelegateRegistration(types.Address) (*dpos.DelegateRegistration, error)
+		}); ok {
+			reg, regErr := gr.GetDelegateRegistration(address)
+			if regErr != nil || reg == nil {
+				skipReason = "registration_unavailable"
+			} else if !reg.DepositHeldInEscrow {
+				skipReason = "deposit_not_in_escrow"
+			} else if reg.DepositRefunded {
+				skipReason = "deposit_already_refunded"
+			} else if reg.Deposit == nil || reg.Deposit.Sign() <= 0 {
+				skipReason = "zero_deposit"
+			}
+		} else {
+			skipReason = "registration_api_unavailable"
+		}
+
+		if skipReason != "" {
+			result["onChainCancelSubmitted"] = false
+			result["onChainCancelSkipReason"] = skipReason
+			result["onChainRefundRequired"] = false
+		} else {
+			cancelTx, escrow, buildErr := d.buildSignedDelegateCancelRegistrationTx(address, privateKey)
+			if buildErr != nil {
+				result["onChainCancelSubmitted"] = false
+				result["onChainCancelError"] = buildErr.Error()
+				result["onChainRefundRequired"] = true
+				result["submitCancelRpc"] = "dpos_submitCancelRegisterDelegate"
+			} else if poolErr := d.submitSignedTransactionToPool(cancelTx); poolErr != nil {
+				result["onChainCancelSubmitted"] = false
+				result["onChainCancelError"] = poolErr.Error()
+				result["onChainRefundRequired"] = true
+				result["submitCancelRpc"] = "dpos_submitCancelRegisterDelegate"
+			} else {
+				result["onChainCancelSubmitted"] = true
+				result["onChainRefundRequired"] = false
+				result["cancelRegisterTxHash"] = cancelTx.Hash.String()
+				result["cancelRegisterEscrow"] = escrow.String()
+				d.logger.Info("✅ 已提交链上取消注册 DPOS+CAN 交易（WithdrawDelegate 自动）", "txHash", cancelTx.Hash.String(), "delegate", address.String(), "escrow", escrow.String())
+			}
 		}
 
 		// 尝试获取冻结信息
