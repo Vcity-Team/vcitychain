@@ -836,6 +836,14 @@ func (t *Transition) Transfer(from, to types.Address, amount *big.Int) error {
 		return nil
 	}
 
+	if t.logger != nil && amount.Sign() > 0 {
+		t.logger.Info("STATE native Transfer",
+			"from", from.String(),
+			"to", to.String(),
+			"amountWei", amount.String(),
+		)
+	}
+
 	if err := t.state.SubBalance(from, amount); err != nil {
 		if errors.Is(err, runtime.ErrNotEnoughFunds) {
 			return runtime.ErrInsufficientBalance

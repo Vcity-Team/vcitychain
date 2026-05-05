@@ -15,6 +15,7 @@ func GetCommand() *cobra.Command {
 	// Add subcommands
 	delegateCmd.AddCommand(
 		GetRegisterCommand(),
+		GetDelegateTestCommand(),
 		GetCancelCommand(),
 		GetListCommand(),
 	)
