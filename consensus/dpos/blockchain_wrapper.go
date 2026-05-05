@@ -294,6 +294,11 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			if err := dposInstance.ApplyDelegateDepositMigrationAfterTx(transition, tx, block.Number()); err != nil {
 				return nil, err
 			}
+			if dposInstance.isDelegateRegistrationTransaction(tx) {
+				if err := dposInstance.processDelegateRegistrationTransaction(tx, block.Number(), header.Timestamp); err != nil {
+					return nil, err
+				}
+			}
 			if err := dposInstance.ApplyDelegateCancelRegistrationAfterTx(transition, tx, block.Number()); err != nil {
 				return nil, err
 			}
@@ -545,6 +550,11 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
 			if err := dposInstance.ApplyDelegateDepositMigrationAfterTx(transition, tx, block.Number()); err != nil {
 				return nil, err
+			}
+			if dposInstance.isDelegateRegistrationTransaction(tx) {
+				if err := dposInstance.processDelegateRegistrationTransaction(tx, block.Number(), header.Timestamp); err != nil {
+					return nil, err
+				}
 			}
 			if err := dposInstance.ApplyDelegateCancelRegistrationAfterTx(transition, tx, block.Number()); err != nil {
 				return nil, err

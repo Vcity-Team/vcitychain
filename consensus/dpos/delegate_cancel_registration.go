@@ -99,15 +99,27 @@ func (d *DPoS) ApplyDelegateCancelRegistrationAfterTx(
 	if reg == nil {
 		return fmt.Errorf("delegate cancel: delegate %s not registered", delegate.String())
 	}
+	// RPC WithdrawDelegate 只把 Bolt 标成 Withdrawn，链上托管款要靠本交易退回。
 	if reg.Status == RegStatusWithdrawn {
-		return nil
-	}
-	if !reg.DepositHeldInEscrow {
-		return fmt.Errorf("delegate cancel: only escrow (To=escrow) registrations supported; delegate %s",
-			delegate.String())
-	}
-	if reg.TotalVotes != nil && reg.TotalVotes.Sign() > 0 {
-		return fmt.Errorf("delegate cancel: delegate %s still has votes", delegate.String())
+		if reg.DepositRefunded {
+			return nil
+		}
+		if !reg.DepositHeldInEscrow {
+			return fmt.Errorf("delegate cancel: withdrawn without escrow-held deposit; cannot refund via CAN for %s",
+				delegate.String())
+		}
+		// 已走 RPC 退出时仍要求无投票（与 WithdrawDelegate 前置一致）
+		if reg.TotalVotes != nil && reg.TotalVotes.Sign() > 0 {
+			return fmt.Errorf("delegate cancel: delegate %s still has votes", delegate.String())
+		}
+	} else {
+		if !reg.DepositHeldInEscrow {
+			return fmt.Errorf("delegate cancel: only escrow (To=escrow) registrations supported; delegate %s",
+				delegate.String())
+		}
+		if reg.TotalVotes != nil && reg.TotalVotes.Sign() > 0 {
+			return fmt.Errorf("delegate cancel: delegate %s still has votes", delegate.String())
+		}
 	}
 
 	if reg.Deposit == nil || reg.Deposit.Sign() <= 0 {
@@ -145,8 +157,8 @@ func (d *DPoS) ApplyDelegateCancelRegistrationAfterTx(
 		}
 	}
 
-	// 与历史「候选人保证金已从托管退回」同一语义，便于 grep；仅在有 DPOS+CAN 交易且执行成功时出现。
-	d.logger.Info("✅ ========候选人保证金已从托管退回注册地址（链上取消注册 DPOS+CAN）",
+	// 与历史「候选人保证金已从托管退回」同一语义，便于 grep；仅在本交易成功完成 trie 退款时出现。
+	d.logger.Info("✅ 候选人保证金已从托管退回注册地址（链上取消注册 DPOS+CAN）",
 		"block", blockNumber,
 		"delegate", delegate.String(),
 		"amountWei", amount.String(),

@@ -5664,6 +5664,116 @@ func (d *DPOS) SubmitDelegateDepositMigration(ctx context.Context, params interf
 	}, nil
 }
 
+// SubmitCancelRegisterDelegate 构造并提交 DPOS+CAN 链上取消注册交易（打包后从托管退回原生币到 delegate）。
+// JSON-RPC: dpos_submitCancelRegisterDelegate
+// params: { "delegate": "0x...", "privateKey": "<64 hex>" } 或与 WithdrawDelegate 相同的 address/privateKey 字段。
+func (d *DPOS) SubmitCancelRegisterDelegate(ctx context.Context, params interface{}) (interface{}, error) {
+	var delegateStr, privateKeyHex string
+
+	if paramMap, ok := params.(map[string]interface{}); ok {
+		if s, ok := paramMap["delegate"].(string); ok && s != "" {
+			delegateStr = s
+		} else if s, ok := paramMap["address"].(string); ok {
+			delegateStr = s
+		}
+		if pk, ok := paramMap["privateKey"].(string); ok {
+			privateKeyHex = pk
+		}
+	} else if paramArray, ok := params.([]interface{}); ok && len(paramArray) >= 2 {
+		delegateStr, _ = paramArray[0].(string)
+		if pk, ok := paramArray[1].(string); ok {
+			privateKeyHex = pk
+		}
+	} else {
+		return nil, fmt.Errorf("invalid parameters: expected map{delegate,privateKey} or [delegate,pk]")
+	}
+
+	if strings.TrimSpace(delegateStr) == "" {
+		return nil, fmt.Errorf("delegate address is required")
+	}
+	privateKeyHex = strings.TrimSpace(privateKeyHex)
+	privateKeyHex = strings.TrimPrefix(strings.TrimPrefix(privateKeyHex, "0x"), "0X")
+	if len(privateKeyHex) != 64 {
+		return nil, fmt.Errorf("privateKey must be 64 hex characters")
+	}
+
+	delegate := types.StringToAddress(delegateStr)
+	calldata := dpos.BuildDelegateCancelRegistrationCalldata(delegate)
+	escrow := dpos.DelegateDepositEscrowAddr()
+
+	var nonce uint64
+	if nonceStore, ok := d.store.(interface {
+		GetNonce(addr types.Address) uint64
+	}); ok {
+		nonce = nonceStore.GetNonce(delegate)
+	} else if accountStore, ok := d.store.(interface {
+		GetAccount(root types.Hash, addr types.Address) (*Account, error)
+	}); ok {
+		if account, err2 := accountStore.GetAccount(types.Hash{}, delegate); err2 == nil && account != nil {
+			nonce = account.Nonce
+		}
+	}
+
+	var gasPrice *big.Int
+	if gasStore, ok := d.store.(interface {
+		GetBaseFee() uint64
+	}); ok {
+		gasPrice = new(big.Int).SetUint64(gasStore.GetBaseFee())
+	} else {
+		gasPrice = big.NewInt(1_000_000_000)
+	}
+	minGasPrice := big.NewInt(1_000_000_000)
+	if gasPrice.Cmp(minGasPrice) < 0 {
+		gasPrice = minGasPrice
+	}
+
+	toAddr := escrow
+	tx := &types.Transaction{
+		Nonce:    nonce,
+		GasPrice: gasPrice,
+		Gas:      300_000,
+		To:       &toAddr,
+		Value:    big.NewInt(0),
+		Input:    calldata,
+		V:        big.NewInt(0),
+		R:        big.NewInt(0),
+		S:        big.NewInt(0),
+		Hash:     types.Hash{},
+	}
+	tx.Type = types.LegacyTx
+	tx.ComputeHash(0)
+
+	if err := d.signTransaction(tx, delegate, privateKeyHex); err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		}, nil
+	}
+	tx.ComputeHash(0)
+
+	if ethStore, ok := d.store.(interface {
+		AddTx(tx *types.Transaction) error
+	}); ok {
+		if err := ethStore.AddTx(tx); err != nil {
+			return nil, fmt.Errorf("add transaction to pool: %w", err)
+		}
+	} else {
+		return nil, fmt.Errorf("this node's JSON-RPC store does not support submitting transactions (AddTx)")
+	}
+
+	_ = d.broadcastTransaction(tx)
+
+	d.logger.Info("✅ 已提交链上取消注册 DPOS+CAN 交易", "txHash", tx.Hash.String(), "delegate", delegate.String(), "escrow", escrow.String())
+
+	return map[string]interface{}{
+		"success":  true,
+		"txHash":   tx.Hash.String(),
+		"delegate": delegate.String(),
+		"escrow":   escrow.String(),
+		"note":     "打包确认后 ApplyDelegateCancelRegistrationAfterTx 执行退款，日志关键字：候选人保证金已从托管退回",
+	}, nil
+}
+
 // GetDelegateRegistrations 获取受托人注册列表
 func (d *DPOS) GetDelegateRegistrations(ctx context.Context) (interface{}, error) {
 	dposEngine := d.getDPoSEngine()
@@ -5788,6 +5898,9 @@ func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interf
 		result := map[string]interface{}{
 			"success": true,
 			"message": "Delegate withdrawn and unfrozen successfully",
+			// 链上原生币仍在托管地址，需另发 DPOS+CAN 交易退回（见 dpos_submitCancelRegisterDelegate）
+			"onChainRefundRequired": true,
+			"submitCancelRpc":       "dpos_submitCancelRegisterDelegate",
 		}
 
 		// 尝试获取冻结信息

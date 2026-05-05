@@ -170,7 +170,7 @@ func (d *DPoS) processBlockVotes(block *types.FullBlock) error {
 				d.logger.Info("📍 交易位置", "blockNumber", block.Block.Number(), "txIndex", i, "txHash", tx.Hash.String())
 
 				// 处理受托人注册交易
-				if err := d.processDelegateRegistrationTransaction(tx, block.Block.Number()); err != nil {
+				if err := d.processDelegateRegistrationTransaction(tx, block.Block.Number(), block.Block.Header.Timestamp); err != nil {
 					d.logger.Error("❌ 处理受托人注册交易失败", "blockNumber", block.Block.Number(), "txIndex", i, "txHash", tx.Hash.String(), "error", err)
 					// 不返回错误，继续处理其他交易
 				} else {

@@ -574,8 +574,9 @@ func (d *DPoS) isCommissionUpdateTransaction(tx *types.Transaction) bool {
 	return true
 }
 
-// processDelegateRegistrationTransaction 处理受托人注册交易
-func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blockNumber uint64) error {
+// processDelegateRegistrationTransaction 处理受托人注册交易。
+// blockTimestamp 为区块头时间（秒）；非 0 时用于 FrozenAt/CreatedAt，保证执行路径与重放一致。
+func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blockNumber uint64, blockTimestamp uint64) error {
 	d.logger.Info("🔧 ===== 开始处理受托人注册交易 =====")
 
 	// 🚨 检测受托人注册交易的全零哈希问题
@@ -664,7 +665,10 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 			"registrant", regInfo.Registrant.String(), "amount", regInfo.Deposit.String())
 	}
 
-	frozenAt := uint64(time.Now().Unix())
+	frozenAt := blockTimestamp
+	if frozenAt == 0 {
+		frozenAt = uint64(time.Now().Unix())
+	}
 	d.logger.Info("❄️ 开始冻结资金（DPoS 记账）",
 		"address", regInfo.Registrant.String(),
 		"amount", regInfo.Deposit.String(),

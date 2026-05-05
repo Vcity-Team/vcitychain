@@ -37,3 +37,8 @@ func DelegateDepositMigrationAuthorityEOA() types.Address {
 	return delegateDepositMigrationAuthorityAddress
 }
 
+// DelegateDepositEscrowAddr is the fixed registration deposit escrow (DPOS+REG / DPOS+CAN tx To).
+func DelegateDepositEscrowAddr() types.Address {
+	return delegateDepositEscrowAddress
+}
+
