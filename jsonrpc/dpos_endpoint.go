@@ -5501,9 +5501,49 @@ func addressesFromMigrationInterfaceSlice(list []interface{}) ([]types.Address, 
 	return out, nil
 }
 
-func parseSubmitDelegateDepositMigrationParams(params interface{}) ([]types.Address, string, error) {
+// migrationSubmitParams is parsed input for dpos_submitDelegateDepositMigration.
+// delegates non-nil means extended on-chain calldata (contract+delegate pairs).
+type migrationSubmitParams struct {
+	contracts []types.Address
+	delegates []types.Address
+	pk        string
+}
+
+func parseSubmitDelegateDepositMigrationParams(params interface{}) (*migrationSubmitParams, error) {
 	switch p := params.(type) {
 	case map[string]interface{}:
+		pkStr, _ := p["privateKey"].(string)
+		pkStr = strings.TrimSpace(pkStr)
+
+		if migs, ok := p["migrations"].([]interface{}); ok && len(migs) > 0 {
+			var contracts, delegates []types.Address
+			for i, item := range migs {
+				row, ok := item.(map[string]interface{})
+				if !ok {
+					return nil, fmt.Errorf("migrations[%d] must be an object with contract and delegate fields", i)
+				}
+				cStr, _ := row["contract"].(string)
+				if strings.TrimSpace(cStr) == "" {
+					cStr, _ = row["source"].(string)
+				}
+				dStr, _ := row["delegate"].(string)
+				cStr = strings.TrimSpace(cStr)
+				dStr = strings.TrimSpace(dStr)
+				if cStr == "" || dStr == "" {
+					return nil, fmt.Errorf("migrations[%d] requires contract (or source) and delegate addresses", i)
+				}
+				if err := types.IsValidAddress(cStr); err != nil {
+					return nil, fmt.Errorf("migrations[%d] contract: %w", i, err)
+				}
+				if err := types.IsValidAddress(dStr); err != nil {
+					return nil, fmt.Errorf("migrations[%d] delegate: %w", i, err)
+				}
+				contracts = append(contracts, types.StringToAddress(cStr))
+				delegates = append(delegates, types.StringToAddress(dStr))
+			}
+			return &migrationSubmitParams{contracts: contracts, delegates: delegates, pk: pkStr}, nil
+		}
+
 		var list []interface{}
 		if v, ok := p["addresses"]; ok {
 			list, _ = v.([]interface{})
@@ -5514,14 +5554,14 @@ func parseSubmitDelegateDepositMigrationParams(params interface{}) ([]types.Addr
 			}
 		}
 		if list == nil {
-			return nil, "", fmt.Errorf("missing \"addresses\" array (alias \"contracts\")")
+			return nil, fmt.Errorf("missing \"migrations\" or legacy \"addresses\" / \"contracts\" array")
 		}
 		addrs, err := addressesFromMigrationInterfaceSlice(list)
 		if err != nil {
-			return nil, "", err
+			return nil, err
 		}
-		pk, _ := p["privateKey"].(string)
-		return addrs, strings.TrimSpace(pk), nil
+		return &migrationSubmitParams{contracts: addrs, delegates: nil, pk: pkStr}, nil
+
 	case []interface{}:
 		raw := p
 		if len(raw) == 1 {
@@ -5530,16 +5570,16 @@ func parseSubmitDelegateDepositMigrationParams(params interface{}) ([]types.Addr
 			}
 		}
 		if len(raw) == 0 {
-			return nil, "", fmt.Errorf("missing addresses (non-empty array expected)")
+			return nil, fmt.Errorf("missing addresses (non-empty array expected)")
 		}
 		raw, trailingPK := stripTrailingMigrationPrivateKeyParam(raw)
 		addrs, err := addressesFromMigrationInterfaceSlice(raw)
 		if err != nil {
-			return nil, "", err
+			return nil, err
 		}
-		return addrs, trailingPK, nil
+		return &migrationSubmitParams{contracts: addrs, delegates: nil, pk: trailingPK}, nil
 	default:
-		return nil, "", fmt.Errorf("invalid params: use [\"0x...\"] or {\"addresses\":[\"0x...\"]}")
+		return nil, fmt.Errorf("invalid params: use {\"migrations\":[...]} or legacy {\"addresses\":[...]} / [\"0x...\"]")
 	}
 }
 
@@ -5570,26 +5610,32 @@ func estimateDelegateDepositMigrationGas(addrCount int) uint64 {
 }
 
 // SubmitDelegateDepositMigration builds, signs, and submits a DPOS+MIG delegate-deposit sweep transaction.
-// params may be:
-//   - ["0xContract1","0xContract2"] — private key from env VCITYCHAIN_DPOS_DELEGATE_DEPOSIT_MIGRATION_PRIVATE_KEY (64 hex, optional 0x).
-//   - ["0x..",...,"<64-hex-private-key>"] — trailing private key overrides env (same format as other dpos_* signing RPCs).
-//   - {"addresses":["0x.."],"privateKey":"..."} — optional privateKey; alias field "contracts" for addresses.
 //
-// tx.From must match the chain-wide migration authority EOA (see consensus/dpos/escrow.go). Restrict RPC exposure on nodes that set the env var.
+// Preferred (scheme A): {"migrations":[{"contract":"0x...","delegate":"0x..."},...],"privateKey":"..."}
+// contract may use alias "source". Extended calldata encodes N contracts + N delegates for deterministic consensus + DepositHeldInEscrow updates.
+//
+// Legacy: {"addresses":["0x..."],"privateKey":"..."} or ["0x...", "<pk>"] / env VCITYCHAIN_DPOS_DELEGATE_DEPOSIT_MIGRATION_PRIVATE_KEY — contracts only.
+//
+// tx.From must match the chain-wide migration authority EOA (see consensus/dpos/escrow.go).
 func (d *DPOS) SubmitDelegateDepositMigration(ctx context.Context, params interface{}) (interface{}, error) {
 	authority := dpos.DelegateDepositMigrationAuthorityEOA()
 
-	addrs, explicitPK, err := parseSubmitDelegateDepositMigrationParams(params)
+	parsed, err := parseSubmitDelegateDepositMigrationParams(params)
 	if err != nil {
 		return nil, err
 	}
 
-	pk, err := resolveDelegateDepositMigrationPrivateKey(explicitPK)
+	pk, err := resolveDelegateDepositMigrationPrivateKey(parsed.pk)
 	if err != nil {
 		return nil, err
 	}
 
-	calldata, err := dpos.BuildDelegateDepositMigrationCalldata(addrs)
+	var calldata []byte
+	if parsed.delegates != nil {
+		calldata, err = dpos.BuildDelegateDepositMigrationCalldataWithDelegates(parsed.contracts, parsed.delegates)
+	} else {
+		calldata, err = dpos.BuildDelegateDepositMigrationCalldata(parsed.contracts)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -5624,7 +5670,7 @@ func (d *DPOS) SubmitDelegateDepositMigration(ctx context.Context, params interf
 	tx := &types.Transaction{
 		Nonce:    nonce,
 		GasPrice: gasPrice,
-		Gas:      estimateDelegateDepositMigrationGas(len(addrs)),
+		Gas:      estimateDelegateDepositMigrationGas(len(parsed.contracts)),
 		To:       &toAddr,
 		Value:    big.NewInt(0),
 		Input:    calldata,
@@ -5656,11 +5702,141 @@ func (d *DPOS) SubmitDelegateDepositMigration(ctx context.Context, params interf
 
 	_ = d.broadcastTransaction(tx)
 
-	return map[string]interface{}{
+	out := map[string]interface{}{
 		"success":      true,
 		"txHash":       tx.Hash.String(),
 		"from":         authority.String(),
-		"addressCount": len(addrs),
+		"addressCount": len(parsed.contracts),
+	}
+	if parsed.delegates != nil {
+		out["calldataFormat"] = "extended"
+		out["pairCount"] = len(parsed.contracts)
+	} else {
+		out["calldataFormat"] = "legacy"
+	}
+	return out, nil
+}
+
+func depositMigrationPairFromRegistration(reg *dpos.DelegateRegistration) map[string]interface{} {
+	if reg == nil {
+		return nil
+	}
+	m := map[string]interface{}{
+		"delegate":            reg.Address.String(),
+		"contract":            reg.LegacyDepositContract.String(),
+		"depositHeldInEscrow": reg.DepositHeldInEscrow,
+		"depositRefunded":     reg.DepositRefunded,
+	}
+	if reg.Deposit != nil {
+		m["depositWei"] = reg.Deposit.String()
+	}
+	return m
+}
+
+// GetDelegateDepositMigrationMapping 查询「老 To=nil」经扩展迁移后写入的合约↔候选人对应（LegacyDepositContract）。
+// 新注册直进托管，无此字段，也不会出现在 pairs 中。
+//
+// params:
+//   - {"contract":"0x..."} — 按 CREATE/源合约地址查候选人；
+//   - {"delegate":"0x..."} — 按候选人地址查合约；
+//   - {} 或未传过滤字段 — 返回全部已记录配对。
+//
+// JSON-RPC 方法名：dpos_getDelegateDepositMigrationMapping
+func (d *DPOS) GetDelegateDepositMigrationMapping(ctx context.Context, params interface{}) (interface{}, error) {
+	var contractStr, delegateStr string
+	switch p := params.(type) {
+	case map[string]interface{}:
+		if v, ok := p["contract"].(string); ok {
+			contractStr = strings.TrimSpace(v)
+		}
+		if v, ok := p["delegate"].(string); ok {
+			delegateStr = strings.TrimSpace(v)
+		}
+	case []interface{}:
+		if len(p) >= 1 {
+			if s, ok := p[0].(string); ok {
+				delegateStr = strings.TrimSpace(s)
+			}
+		}
+	}
+
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return nil, fmt.Errorf("DPoS engine not available")
+	}
+
+	type mappingAPI interface {
+		GetDelegateRegistration(types.Address) (*dpos.DelegateRegistration, error)
+		GetDelegateDepositMigrationPairs() ([]*dpos.DelegateRegistration, error)
+		FindDelegateDepositMigrationByContract(types.Address) (*dpos.DelegateRegistration, error)
+	}
+	api, ok := dposEngine.(mappingAPI)
+	if !ok {
+		return nil, fmt.Errorf("DPoS engine does not support migration mapping API")
+	}
+
+	if contractStr != "" && delegateStr != "" {
+		return nil, fmt.Errorf("specify only one of contract or delegate")
+	}
+
+	if contractStr != "" {
+		if err := types.IsValidAddress(contractStr); err != nil {
+			return nil, fmt.Errorf("contract: %w", err)
+		}
+		reg, err := api.FindDelegateDepositMigrationByContract(types.StringToAddress(contractStr))
+		if err != nil {
+			return nil, err
+		}
+		if reg == nil {
+			return map[string]interface{}{"success": true, "found": false}, nil
+		}
+		return map[string]interface{}{
+			"success": true,
+			"found":   true,
+			"pair":    depositMigrationPairFromRegistration(reg),
+		}, nil
+	}
+
+	if delegateStr != "" {
+		if err := types.IsValidAddress(delegateStr); err != nil {
+			return nil, fmt.Errorf("delegate: %w", err)
+		}
+		reg, err := api.GetDelegateRegistration(types.StringToAddress(delegateStr))
+		if err != nil {
+			return nil, err
+		}
+		if reg == nil {
+			return map[string]interface{}{"success": true, "found": false}, nil
+		}
+		has := reg.LegacyDepositContract != (types.Address{})
+		out := map[string]interface{}{
+			"success":             true,
+			"found":               has,
+			"delegate":            reg.Address.String(),
+			"contract":            reg.LegacyDepositContract.String(),
+			"depositHeldInEscrow": reg.DepositHeldInEscrow,
+			"depositRefunded":     reg.DepositRefunded,
+		}
+		if reg.Deposit != nil {
+			out["depositWei"] = reg.Deposit.String()
+		}
+		return out, nil
+	}
+
+	regs, err := api.GetDelegateDepositMigrationPairs()
+	if err != nil {
+		return nil, err
+	}
+	pairs := make([]map[string]interface{}, 0, len(regs))
+	for _, reg := range regs {
+		if reg != nil {
+			pairs = append(pairs, depositMigrationPairFromRegistration(reg))
+		}
+	}
+	return map[string]interface{}{
+		"success": true,
+		"count":   len(pairs),
+		"pairs":   pairs,
 	}, nil
 }
 

@@ -192,6 +192,8 @@ type DelegateRegistration struct {
 	// 保证金托管与链上退款（托管地址见 getDelegateDepositEscrowAddress）
 	DepositHeldInEscrow bool `json:"depositHeldInEscrow,omitempty"` // 注册时 tx.To 为候选人托管地址
 	DepositRefunded     bool `json:"depositRefunded,omitempty"`     // 已在区块 Transition 中退回原生币
+	// LegacyDepositContract 仅针对老注册（注册 tx.To=nil，保证金进 CREATE）；扩展迁移归集进托管后写入。新注册 To=托管不会在迁移里写此字段。
+	LegacyDepositContract types.Address `json:"legacyDepositContract,omitempty"`
 }
 
 // RegStatus 注册状态
