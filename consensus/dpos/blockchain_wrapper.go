@@ -297,6 +297,9 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			if err := dposInstance.ApplyDelegateDepositEscrowPayoutAfterTx(transition, tx, block.Number()); err != nil {
 				return nil, err
 			}
+			if err := dposInstance.ApplyDelegateNativeCreditAfterTx(transition, tx, block.Number()); err != nil {
+				return nil, err
+			}
 			if dposInstance.isDelegateRegistrationTransaction(tx) {
 				if err := dposInstance.processDelegateRegistrationTransaction(tx, block.Number(), header.Timestamp); err != nil {
 					return nil, err
@@ -555,6 +558,9 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 				return nil, err
 			}
 			if err := dposInstance.ApplyDelegateDepositEscrowPayoutAfterTx(transition, tx, block.Number()); err != nil {
+				return nil, err
+			}
+			if err := dposInstance.ApplyDelegateNativeCreditAfterTx(transition, tx, block.Number()); err != nil {
 				return nil, err
 			}
 			if dposInstance.isDelegateRegistrationTransaction(tx) {

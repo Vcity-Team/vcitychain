@@ -11,7 +11,7 @@ import (
 
 // 托管保证金地址（DPOS+REG 收款）向若干地址固定金额转出：与 MIG 对齐 8 字节头 — "DPOS" + "PAY" + 0x00，
 // 随后 uint32(大端) 收款地址数量、uint256 每笔 wei（32 字节大端）、再跟 count×20 字节地址。
-// 仅当 tx.From == delegateDepositMigrationAuthorityAddress 时执行（与迁移同一特权 EOA）。
+// 仅当 tx.From 属于 delegateDepositMigrationAuthorityAddresses 时执行（与迁移同一特权集合）。
 //
 // DelegateDepositEscrowPayoutMaxRecipients caps recipients per tx (gas / DoS).
 const (
@@ -101,11 +101,10 @@ func (d *DPoS) ApplyDelegateDepositEscrowPayoutAfterTx(transition *state.Transit
 	if transition == nil || tx == nil {
 		return nil
 	}
-	auth := d.getDelegateDepositMigrationAuthorityAddress()
-	if auth == (types.Address{}) {
+	if len(delegateDepositMigrationAuthorityAddresses) == 0 {
 		return nil
 	}
-	if tx.From == (types.Address{}) || tx.From != auth {
+	if tx.From == (types.Address{}) || !IsDelegateDepositMigrationAuthority(tx.From) {
 		return nil
 	}
 	if !isDelegateDepositEscrowPayoutCalldata(tx.Input) {

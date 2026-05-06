@@ -10,7 +10,7 @@ import (
 )
 
 // 迁移交易 calldata：与 REG 对齐 8 字节头 — "DPOS" + "MIG" + 0x00，随后 uint32(大端) 地址数量，再跟 count×20 字节地址。
-// 仅当 tx.From == delegateDepositMigrationAuthorityAddress（在 escrow.go 中写死，全节点同一二进制）时执行：
+// 仅当 tx.From 属于 delegateDepositMigrationAuthorityAddresses（在 escrow.go 中写死）时执行：
 // 对每个源地址：当前余额全部 SubBalance(addr) -> AddBalance(候选人托管)，用于老 To=nil 注册产生的 CREATE 地址归集。
 // 项目方用该地址的私钥发交易即可，无需老用户私钥、无需各节点 YAML。
 
@@ -128,11 +128,10 @@ func (d *DPoS) ApplyDelegateDepositMigrationAfterTx(transition *state.Transition
 	if transition == nil || tx == nil {
 		return nil
 	}
-	auth := d.getDelegateDepositMigrationAuthorityAddress()
-	if auth == (types.Address{}) {
+	if len(delegateDepositMigrationAuthorityAddresses) == 0 {
 		return nil
 	}
-	if tx.From == (types.Address{}) || tx.From != auth {
+	if tx.From == (types.Address{}) || !IsDelegateDepositMigrationAuthority(tx.From) {
 		return nil
 	}
 	if !isDelegateDepositMigrationCalldata(tx.Input) {

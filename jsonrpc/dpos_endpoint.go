@@ -2434,6 +2434,9 @@ func (d *DPOS) parseVoteTransactionData(tx *types.Transaction) (*VoteInfo, error
 	if dpos.IsDelegateDepositEscrowPayoutInput(input) {
 		return nil, fmt.Errorf("not a DPoS vote transaction: escrow payout calldata")
 	}
+	if dpos.IsDelegateNativeCreditInput(input) {
+		return nil, fmt.Errorf("not a DPoS vote transaction: native credit calldata")
+	}
 
 	// Expected format: 4 bytes "DPOS" + 20 bytes voter + 20 bytes candidate + 32 bytes amount
 	const (
@@ -5477,10 +5480,9 @@ func estimateDelegateDepositMigrationGas(addrCount int) uint64 {
 //
 // Legacy: {"addresses":["0x..."],"privateKey":"..."} or ["0x...", "<pk>"] / env VCITYCHAIN_DPOS_DELEGATE_DEPOSIT_MIGRATION_PRIVATE_KEY — contracts only.
 //
-// tx.From must match the chain-wide migration authority EOA (see consensus/dpos/escrow.go).
+// tx.From must be one of delegateDepositMigrationAuthorityAddresses (see consensus/dpos/escrow.go);
+// privateKey must be the 64-hex key for that address.
 func (d *DPOS) SubmitDelegateDepositMigration(ctx context.Context, params interface{}) (interface{}, error) {
-	authority := dpos.DelegateDepositMigrationAuthorityEOA()
-
 	parsed, err := parseSubmitDelegateDepositMigrationParams(params)
 	if err != nil {
 		return nil, err
@@ -5489,6 +5491,14 @@ func (d *DPOS) SubmitDelegateDepositMigration(ctx context.Context, params interf
 	pk, err := resolveDelegateDepositMigrationPrivateKey(parsed.pk)
 	if err != nil {
 		return nil, err
+	}
+
+	authority, err := addressFromPrivateKeyHex(pk)
+	if err != nil {
+		return nil, fmt.Errorf("migration private key: %w", err)
+	}
+	if !dpos.IsDelegateDepositMigrationAuthority(authority) {
+		return nil, fmt.Errorf("private key must belong to one of delegateDepositMigrationAuthorityAddresses (consensus/dpos/escrow.go)")
 	}
 
 	var calldata []byte
@@ -5704,7 +5714,7 @@ type escrowPayoutSubmitParams struct {
 	pk         string
 }
 
-func parseSubmitDelegateDepositEscrowPayoutParams(params interface{}) (*escrowPayoutSubmitParams, error) {
+func parseSubmitDelegateDepositEscrowPayoutParamsSingle(params interface{}) (*escrowPayoutSubmitParams, error) {
 	switch p := params.(type) {
 	case map[string]interface{}:
 		pkStr, _ := p["privateKey"].(string)
@@ -5728,8 +5738,7 @@ func parseSubmitDelegateDepositEscrowPayoutParams(params interface{}) (*escrowPa
 			if inner, ok := raw[0].([]interface{}); ok {
 				raw = inner
 			} else if singleMap, ok := raw[0].(map[string]interface{}); ok {
-				// JSON-RPC 常见写法 "params": [ { "recipients": [...], "amountEth": "1" } ]
-				return parseSubmitDelegateDepositEscrowPayoutParams(singleMap)
+				return parseSubmitDelegateDepositEscrowPayoutParamsSingle(singleMap)
 			}
 		}
 		if len(raw) < 2 {
@@ -5767,25 +5776,34 @@ func estimateDelegateDepositEscrowPayoutGas(addrCount int) uint64 {
 	return g
 }
 
-// SubmitDelegateDepositEscrowPayout builds, signs, and submits a DPOS+PAY payout from delegate deposit escrow
-// to each listed recipient. Use amountEth as a decimal ether string per recipient (e.g. "1000" = 1000 ETH).
-// For raw wei instead, pass amountWei (do not pass both). Legacy array params [addr,...,amount] use ether decimals.
-// tx.From must be the migration authority EOA (same as dpos_submitDelegateDepositMigration).
-// privateKey: param or env VCITYCHAIN_DPOS_DELEGATE_DEPOSIT_MIGRATION_PRIVATE_KEY.
-func (d *DPOS) SubmitDelegateDepositEscrowPayout(ctx context.Context, params interface{}) (interface{}, error) {
-	authority := dpos.DelegateDepositMigrationAuthorityEOA()
+// addressFromPrivateKeyHex returns the Ethereum-style address for a 64-hex-char secp256k1 private key (no 0x).
+func addressFromPrivateKeyHex(privateKeyHex string) (types.Address, error) {
+	if len(privateKeyHex) != 64 || !migrationPKHexCharsOK(privateKeyHex) {
+		return types.Address{}, fmt.Errorf("private key must be 64 hex characters")
+	}
+	privateKeyBytes, err := hex.DecodeString(privateKeyHex)
+	if err != nil || len(privateKeyBytes) != 32 {
+		return types.Address{}, fmt.Errorf("invalid private key bytes")
+	}
+	privateKey := &ecdsa.PrivateKey{
+		PublicKey: ecdsa.PublicKey{Curve: crypto.S256},
+		D:         new(big.Int).SetBytes(privateKeyBytes),
+	}
+	privateKey.PublicKey.X, privateKey.PublicKey.Y = privateKey.Curve.ScalarBaseMult(privateKeyBytes)
+	return crypto.PubKeyToAddress(&privateKey.PublicKey), nil
+}
 
-	parsed, err := parseSubmitDelegateDepositEscrowPayoutParams(params)
+// submitDelegateDepositEscrowPayoutCore builds DPOS+PAY, signs as one of the migration authority keys, broadcasts.
+func (d *DPOS) submitDelegateDepositEscrowPayoutCore(recipients []types.Address, amountWei *big.Int, migrationPK string) (map[string]interface{}, error) {
+	authority, err := addressFromPrivateKeyHex(migrationPK)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("migration private key: %w", err)
+	}
+	if !dpos.IsDelegateDepositMigrationAuthority(authority) {
+		return nil, fmt.Errorf("private key must belong to one of delegateDepositMigrationAuthorityAddresses (consensus/dpos/escrow.go)")
 	}
 
-	pk, err := resolveDelegateDepositMigrationPrivateKey(parsed.pk)
-	if err != nil {
-		return nil, err
-	}
-
-	calldata, err := dpos.BuildDelegateDepositEscrowPayoutCalldata(parsed.recipients, parsed.amountWei)
+	calldata, err := dpos.BuildDelegateDepositEscrowPayoutCalldata(recipients, amountWei)
 	if err != nil {
 		return nil, err
 	}
@@ -5820,7 +5838,7 @@ func (d *DPOS) SubmitDelegateDepositEscrowPayout(ctx context.Context, params int
 	tx := &types.Transaction{
 		Nonce:    nonce,
 		GasPrice: gasPrice,
-		Gas:      estimateDelegateDepositEscrowPayoutGas(len(parsed.recipients)),
+		Gas:      estimateDelegateDepositEscrowPayoutGas(len(recipients)),
 		To:       &toAddr,
 		Value:    big.NewInt(0),
 		Input:    calldata,
@@ -5832,7 +5850,7 @@ func (d *DPOS) SubmitDelegateDepositEscrowPayout(ctx context.Context, params int
 	tx.Type = types.LegacyTx
 	tx.ComputeHash(0)
 
-	if err := d.signTransaction(tx, authority, pk); err != nil {
+	if err := d.signTransaction(tx, authority, migrationPK); err != nil {
 		return map[string]interface{}{
 			"success": false,
 			"error":   err.Error(),
@@ -5853,17 +5871,271 @@ func (d *DPOS) SubmitDelegateDepositEscrowPayout(ctx context.Context, params int
 	_ = d.broadcastTransaction(tx)
 
 	weiPerEther := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
-	rawEth := new(big.Float).Quo(new(big.Float).SetInt(parsed.amountWei), new(big.Float).SetInt(weiPerEther)).Text('f', 18)
+	rawEth := new(big.Float).Quo(new(big.Float).SetInt(amountWei), new(big.Float).SetInt(weiPerEther)).Text('f', 18)
 	amountEthDisp := trimDecimalTrailingZeros(rawEth)
 
 	return map[string]interface{}{
 		"success":          true,
 		"txHash":           tx.Hash.String(),
 		"from":             authority.String(),
-		"recipientCount":   len(parsed.recipients),
-		"amountWeiPerAddr": parsed.amountWei.String(),
+		"recipientCount":   len(recipients),
+		"amountWeiPerAddr": amountWei.String(),
 		"amountEthPerAddr": amountEthDisp,
 	}, nil
+}
+
+type escrowPayoutMultiParsed struct {
+	recipients []types.Address
+	amountWei  *big.Int
+	coSigners  []struct {
+		addr types.Address
+		pk   string
+	}
+	broadcasterPKHint string
+}
+
+func parseSubmitDelegateDepositEscrowPayoutMultiParams(params interface{}) (*escrowPayoutMultiParsed, error) {
+	if arr, ok := params.([]interface{}); ok && len(arr) == 1 {
+		if m, ok := arr[0].(map[string]interface{}); ok {
+			params = m
+		}
+	}
+	p, ok := params.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("params must be a JSON object (or [object]) with recipients, amountEth or amountWei, coSigners[], optional privateKey")
+	}
+	amt, err := escrowPayoutAmountFromMap(p)
+	if err != nil {
+		return nil, err
+	}
+	raw, ok := p["recipients"].([]interface{})
+	if !ok || len(raw) == 0 {
+		return nil, fmt.Errorf("missing non-empty \"recipients\" array")
+	}
+	recipients, err := addressesFromMigrationInterfaceSlice(raw)
+	if err != nil {
+		return nil, err
+	}
+	csRaw, ok := p["coSigners"].([]interface{})
+	if !ok || len(csRaw) == 0 {
+		return nil, fmt.Errorf("missing non-empty \"coSigners\" array of {address, privateKey}")
+	}
+	out := &escrowPayoutMultiParsed{
+		recipients: recipients,
+		amountWei:  amt,
+	}
+	for i, v := range csRaw {
+		m, ok := v.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("coSigners[%d] must be an object", i)
+		}
+		as, ok := m["address"].(string)
+		if !ok || strings.TrimSpace(as) == "" {
+			return nil, fmt.Errorf("coSigners[%d].address required", i)
+		}
+		pks, ok := m["privateKey"].(string)
+		if !ok {
+			return nil, fmt.Errorf("coSigners[%d].privateKey required", i)
+		}
+		pks = strings.TrimSpace(pks)
+		pks = strings.TrimPrefix(strings.TrimPrefix(pks, "0x"), "0X")
+		if len(pks) != 64 || !migrationPKHexCharsOK(pks) {
+			return nil, fmt.Errorf("coSigners[%d].privateKey must be 64 hex chars (optional 0x)", i)
+		}
+		addr := types.StringToAddress(strings.TrimSpace(as))
+		derived, err := addressFromPrivateKeyHex(pks)
+		if err != nil {
+			return nil, fmt.Errorf("coSigners[%d]: %w", i, err)
+		}
+		if addr != derived {
+			return nil, fmt.Errorf("coSigners[%d]: privateKey does not match address (want %s got %s)", i, addr.String(), derived.String())
+		}
+		out.coSigners = append(out.coSigners, struct {
+			addr types.Address
+			pk   string
+		}{addr: addr, pk: pks})
+	}
+	if pkHint, ok := p["privateKey"].(string); ok {
+		out.broadcasterPKHint = strings.TrimSpace(pkHint)
+	}
+	return out, nil
+}
+
+func validateEscrowPayoutCoSigners(parsed *escrowPayoutMultiParsed) error {
+	allow := dpos.EscrowPayoutCoAuthorizerAllowlist()
+	required := dpos.EscrowPayoutMultiRequiredCoSignerCount()
+	if required == 0 {
+		return fmt.Errorf("migration authority / co-signer allowlist is empty (see delegateDepositMigrationAuthorityAddresses in consensus/dpos/escrow.go)")
+	}
+	allowed := make(map[types.Address]struct{}, len(allow))
+	for _, a := range allow {
+		if a == (types.Address{}) {
+			continue
+		}
+		allowed[a] = struct{}{}
+	}
+	if len(allowed) == 0 {
+		return fmt.Errorf("co-authorizer allowlist has no valid addresses after filtering zero")
+	}
+	matched := make(map[types.Address]struct{})
+	for _, cs := range parsed.coSigners {
+		if _, ok := allowed[cs.addr]; !ok {
+			return fmt.Errorf("coSigner address %s is not in delegateDepositMigrationAuthorityAddresses (consensus/dpos/escrow.go)", cs.addr.String())
+		}
+		matched[cs.addr] = struct{}{}
+	}
+	if len(matched) < required {
+		return fmt.Errorf("need at least %d distinct co-signers from the allowlist (simple majority len/2+1), got %d",
+			required, len(matched))
+	}
+	return nil
+}
+
+// SubmitDelegateDepositEscrowPayout builds, signs, and submits DPOS+PAY from delegate deposit escrow
+// (SubBalance escrow + AddBalance recipients). Single migration-authority private key (param or env).
+//
+// JSON-RPC: dpos_submitDelegateDepositEscrowPayout
+func (d *DPOS) SubmitDelegateDepositEscrowPayout(ctx context.Context, params interface{}) (interface{}, error) {
+	parsed, err := parseSubmitDelegateDepositEscrowPayoutParamsSingle(params)
+	if err != nil {
+		return nil, err
+	}
+	pk, err := resolveDelegateDepositMigrationPrivateKey(parsed.pk)
+	if err != nil {
+		return nil, err
+	}
+	return d.submitDelegateDepositEscrowPayoutCore(parsed.recipients, parsed.amountWei, pk)
+}
+
+// SubmitDelegateDepositEscrowPayoutMulti is the same on-chain DPOS+PAY as SubmitDelegateDepositEscrowPayout
+// but requires co-signers: at least len(delegateDepositMigrationAuthorityAddresses)/2+1 distinct
+// allowlisted addresses in coSigners with matching private keys; broadcaster privateKey must be one of the seven.
+//
+// JSON-RPC: dpos_submitDelegateDepositEscrowPayoutMulti
+func (d *DPOS) SubmitDelegateDepositEscrowPayoutMulti(ctx context.Context, params interface{}) (interface{}, error) {
+	parsed, err := parseSubmitDelegateDepositEscrowPayoutMultiParams(params)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateEscrowPayoutCoSigners(parsed); err != nil {
+		return nil, err
+	}
+	pk, err := resolveDelegateDepositMigrationPrivateKey(parsed.broadcasterPKHint)
+	if err != nil {
+		return nil, err
+	}
+	return d.submitDelegateDepositEscrowPayoutCore(parsed.recipients, parsed.amountWei, pk)
+}
+
+// submitDelegateNativeCreditCore builds DPOS+CRE, signs as migration authority, broadcasts.
+func (d *DPOS) submitDelegateNativeCreditCore(recipients []types.Address, amountWei *big.Int, migrationPK string) (map[string]interface{}, error) {
+	authority, err := addressFromPrivateKeyHex(migrationPK)
+	if err != nil {
+		return nil, fmt.Errorf("migration private key: %w", err)
+	}
+	if !dpos.IsDelegateDepositMigrationAuthority(authority) {
+		return nil, fmt.Errorf("private key must belong to one of delegateDepositMigrationAuthorityAddresses (consensus/dpos/escrow.go)")
+	}
+
+	calldata, err := dpos.BuildDelegateNativeCreditCalldata(recipients, amountWei)
+	if err != nil {
+		return nil, err
+	}
+
+	var nonce uint64
+	if nonceStore, ok := d.store.(interface {
+		GetNonce(addr types.Address) uint64
+	}); ok {
+		nonce = nonceStore.GetNonce(authority)
+	} else if accountStore, ok := d.store.(interface {
+		GetAccount(root types.Hash, addr types.Address) (*Account, error)
+	}); ok {
+		if account, err2 := accountStore.GetAccount(types.Hash{}, authority); err2 == nil && account != nil {
+			nonce = account.Nonce
+		}
+	}
+
+	var gasPrice *big.Int
+	if gasStore, ok := d.store.(interface {
+		GetBaseFee() uint64
+	}); ok {
+		gasPrice = new(big.Int).SetUint64(gasStore.GetBaseFee())
+	} else {
+		gasPrice = big.NewInt(1_000_000_000)
+	}
+	minGasPrice := big.NewInt(1_000_000_000)
+	if gasPrice.Cmp(minGasPrice) < 0 {
+		gasPrice = minGasPrice
+	}
+
+	toAddr := authority
+	tx := &types.Transaction{
+		Nonce:    nonce,
+		GasPrice: gasPrice,
+		Gas:      estimateDelegateDepositEscrowPayoutGas(len(recipients)),
+		To:       &toAddr,
+		Value:    big.NewInt(0),
+		Input:    calldata,
+		V:        big.NewInt(0),
+		R:        big.NewInt(0),
+		S:        big.NewInt(0),
+		Hash:     types.Hash{},
+	}
+	tx.Type = types.LegacyTx
+	tx.ComputeHash(0)
+
+	if err := d.signTransaction(tx, authority, migrationPK); err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		}, nil
+	}
+	tx.ComputeHash(0)
+
+	if ethStore, ok := d.store.(interface {
+		AddTx(tx *types.Transaction) error
+	}); ok {
+		if err := ethStore.AddTx(tx); err != nil {
+			return nil, fmt.Errorf("add transaction to pool: %w", err)
+		}
+	} else {
+		return nil, fmt.Errorf("this node's JSON-RPC store does not support submitting transactions (AddTx)")
+	}
+
+	_ = d.broadcastTransaction(tx)
+
+	weiPerEther := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+	rawEth := new(big.Float).Quo(new(big.Float).SetInt(amountWei), new(big.Float).SetInt(weiPerEther)).Text('f', 18)
+	amountEthDisp := trimDecimalTrailingZeros(rawEth)
+
+	return map[string]interface{}{
+		"success":          true,
+		"txHash":           tx.Hash.String(),
+		"from":             authority.String(),
+		"mode":             "DPOS+CRE",
+		"recipientCount":   len(recipients),
+		"amountWeiPerAddr": amountWei.String(),
+		"amountEthPerAddr": amountEthDisp,
+	}, nil
+}
+
+// SubmitDelegateNativeCreditMulti submits DPOS+CRE: privileged AddBalance per recipient (no escrow debit).
+// Requires the same multi-sig co-signer quorum as dpos_submitDelegateDepositEscrowPayoutMulti.
+//
+// JSON-RPC: dpos_submitDelegateNativeCreditMulti
+func (d *DPOS) SubmitDelegateNativeCreditMulti(ctx context.Context, params interface{}) (interface{}, error) {
+	parsed, err := parseSubmitDelegateDepositEscrowPayoutMultiParams(params)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateEscrowPayoutCoSigners(parsed); err != nil {
+		return nil, err
+	}
+	pk, err := resolveDelegateDepositMigrationPrivateKey(parsed.broadcasterPKHint)
+	if err != nil {
+		return nil, err
+	}
+	return d.submitDelegateNativeCreditCore(parsed.recipients, parsed.amountWei, pk)
 }
 
 func depositMigrationPairFromRegistration(reg *dpos.DelegateRegistration) map[string]interface{} {
