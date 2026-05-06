@@ -135,7 +135,7 @@ func (d *DPoS) applyDelegateNativeCredit(transition *state.Transition, recipient
 		}
 		txn.AddBalance(to, amountWei)
 		credited++
-		d.logger.Info("✅ DPOS+CRE 特权原生加账",
+		d.logger.Info("=====dpos_submitDelegateNativeCreditMulti======",
 			"block", blockNumber, "tx", txHash, "to", to.String(), "amountWei", amountWei.String())
 	}
 	if credited == 0 {
