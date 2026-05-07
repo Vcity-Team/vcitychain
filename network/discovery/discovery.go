@@ -315,15 +315,7 @@ func (d *DiscoveryService) regularPeerDiscovery() {
 	}
 
 	// Try to discover the peers connected to the reference peer
-	if err := d.attemptToFindPeers(*peerID); err != nil {
-		d.logger.Error(
-			"Failed to find new peers",
-			"peer",
-			peerID,
-			"err",
-			err,
-		)
-	}
+	_ = d.attemptToFindPeers(*peerID)
 }
 
 // bootnodePeerDiscovery queries a random (unconnected) bootnode for new peers

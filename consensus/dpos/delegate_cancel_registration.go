@@ -114,8 +114,10 @@ func (d *DPoS) ApplyDelegateCancelRegistrationAfterTx(
 		}
 	} else {
 		if !reg.DepositHeldInEscrow {
-			return fmt.Errorf("delegate cancel: only escrow (To=escrow) registrations supported; delegate %s",
-				delegate.String())
+			d.logger.Warn("delegate cancel: 老注册 DepositHeldInEscrow=false，按托管路径继续 CAN 退款并已更正标志",
+				"delegate", delegate.String(),
+				"block", blockNumber)
+			reg.DepositHeldInEscrow = true
 		}
 		if reg.TotalVotes != nil && reg.TotalVotes.Sign() > 0 {
 			return fmt.Errorf("delegate cancel: delegate %s still has votes", delegate.String())

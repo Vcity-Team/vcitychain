@@ -82,9 +82,8 @@ func (s *syncPeerService) GetBlocks(
 		resp := toProtoBlock(block)
 		metrics.SetGauge([]string{syncerMetrics, "egress_bytes"}, float32(len(resp.Block)))
 
-		// if client closes stream, context.Canceled is given
+		// if client closes stream, context.Canceled / transport closing is expected
 		if err := stream.Send(resp); err != nil {
-			s.logger.Warn("发送区块失败", "peer", peerInfo, "区块号", i, "error", err)
 			break
 		}
 
