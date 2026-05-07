@@ -174,15 +174,6 @@ func (rd *RewardDistributor) computeVoterWeights(
 
 	for voterAddress, voter := range voters {
 		if voter == nil || voter.VotingPower == nil || voter.VotingPower.Sign() == 0 {
-			rd.logger.Info("⚠️ [奖励计算] 投票者被跳过（VotingPower为0或nil）",
-				"voter", voterAddress.String(),
-				"validator", validator.String(),
-				"votingPower", func() string {
-					if voter != nil && voter.VotingPower != nil {
-						return voter.VotingPower.String()
-					}
-					return "nil"
-				}())
 			continue
 		}
 
@@ -192,10 +183,6 @@ func (rd *RewardDistributor) computeVoterWeights(
 
 		delegateCount := len(voter.VotedDelegates)
 		if delegateCount == 0 {
-			rd.logger.Info("⚠️ [奖励计算] 投票者被跳过（VotedDelegates为空）",
-				"voter", voterAddress.String(),
-				"validator", validator.String(),
-				"votingPower", voter.VotingPower.String())
 			continue
 		}
 
@@ -205,12 +192,6 @@ func (rd *RewardDistributor) computeVoterWeights(
 		}
 
 		if weight.Sign() == 0 {
-			rd.logger.Info("⚠️ [奖励计算] 投票者被跳过（计算后权重为0）",
-				"voter", voterAddress.String(),
-				"validator", validator.String(),
-				"votingPower", voter.VotingPower.String(),
-				"delegateCount", delegateCount,
-				"calculatedWeight", weight.String())
 			continue
 		}
 

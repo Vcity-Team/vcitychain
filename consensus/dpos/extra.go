@@ -894,10 +894,6 @@ func (i *Extra) ValidateFinalizedData(header *types.Header, parent *types.Header
 				if blsKeyBytes, err := dposInstance.GetBLSKeyBytesFromGenesis(validator.Address); err == nil {
 					if blsKey, err := bls.UnmarshalPublicKey(blsKeyBytes); err == nil {
 						validator.BlsKey = blsKey
-						logger.Info("✅ 成功从创世文件恢复BLS公钥",
-							"index", i,
-							"address", validator.Address.String(),
-							"blsKeyLength", len(blsKeyBytes))
 					} else {
 						logger.Error("❌ 解析从创世文件获取的BLS公钥失败",
 							"index", i,

@@ -624,11 +624,6 @@ func (d *DPoS) recordRewardsFromExtraData(rewardInfo *RewardDistributionInfo) er
 				voterWeights, _ := d.rewardDistributor.computeVoterWeights(validatorAddr, voters)
 				if weight, exists := voterWeights[voterAddr]; exists && weight != nil && weight.Sign() > 0 {
 					voteWeight = weight.String()
-					d.logger.Info("✅ 重新计算投票权重（ExtraData中VoteWeight为nil或0）",
-						"epoch", rewardInfo.EpochNumber,
-						"voter", voterReward.VoterAddress,
-						"validator", voterReward.ValidatorAddress,
-						"voteWeight", voteWeight)
 				} else {
 					d.logger.Debug("⚠️ 无法重新计算投票权重（投票者可能已撤销投票）",
 						"epoch", rewardInfo.EpochNumber,

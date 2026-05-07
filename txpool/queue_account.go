@@ -50,15 +50,6 @@ func (q *accountQueue) unlock() {
 func (q *accountQueue) prune(nonce uint64, addr types.Address, logger hclog.Logger, queueType string) (
 	pruned []*types.Transaction,
 ) {
-	initialCount := q.length()
-	if logger != nil && initialCount > 0 {
-		logger.Info("🔵 [accountQueue.prune] 开始清理队列",
-			"addr", addr.String()[:16],
-			"queueType", queueType,
-			"targetNonce", nonce,
-			"initialQueueSize", initialCount)
-	}
-
 	for {
 		tx := q.peek()
 		if tx == nil || tx.Nonce >= nonce {
