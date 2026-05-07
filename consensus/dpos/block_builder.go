@@ -886,29 +886,80 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		"checkpointHash", checkpointHash.String(),
 		"realBlockHash", realBlockHash.String())
 
-	// 实现真实的签名收集机制，支持重试
+	// 实现真实的签名收集机制，支持重试；创世/BLS 委员会成员提议时跳过网络收集
 	var signatures [][]byte
 	var signatureBitmap bitmap.Bitmap
 	var collectErr error
 
-	// 重试机制：最多重试3次
-	maxRetries := 3
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		signatures, signatureBitmap, collectErr = r.collectValidatorSignatures(block, checkpointHash, keyAddr)
-		if collectErr == nil {
-			break // 成功收集签名
+	genesisProposerSkip := false
+	if r.config != nil && r.config.dposBackend != nil {
+		if dposInstance, ok := r.config.dposBackend.(*DPoS); ok && dposInstance.IsGenesisValidator(keyAddr) {
+			genesisProposerSkip = true
+			r.logger.Info("创世/BLS委员会成员提议，跳过网络签名收集，仅使用本地 BLS 签名",
+				"blockNumber", block.Block.Number(),
+				"proposer", keyAddr.String())
+			signatures, signatureBitmap, collectErr = r.localGenesisProposerOnlySignatures(checkpointHash, keyAddr, productionValidators)
 		}
+	}
 
-		// 检查是否是网络增长检测错误
-		if strings.Contains(collectErr.Error(), "network growth detected") {
-			r.logger.Debug("检测到网络增长，重试签名收集", "attempt", attempt+1)
-			time.Sleep(2 * time.Second) // 等待2秒后重试
-			continue
-		}
+	if !genesisProposerSkip {
+		// 重试机制：最多重试3次
+		maxRetries := 3
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			signatures, signatureBitmap, collectErr = r.collectValidatorSignatures(block, checkpointHash, keyAddr)
+			if collectErr == nil {
+				break // 成功收集签名
+			}
 
-		// 检查是否是验证者数量不足错误
-		if strings.Contains(collectErr.Error(), "insufficient validators") {
-			// 🔧 修复：在等待网络增长前，先检查 slot 是否已变化
+			// 检查是否是网络增长检测错误
+			if strings.Contains(collectErr.Error(), "network growth detected") {
+				r.logger.Debug("检测到网络增长，重试签名收集", "attempt", attempt+1)
+				time.Sleep(2 * time.Second) // 等待2秒后重试
+				continue
+			}
+
+			// 检查是否是验证者数量不足错误
+			if strings.Contains(collectErr.Error(), "insufficient validators") {
+				// 🔧 修复：在等待网络增长前，先检查 slot 是否已变化
+				if r.config != nil && r.config.blockScheduler != nil {
+					r.lock.RLock()
+					buildStartSlot := r.currentBuildStartSlot
+					r.lock.RUnlock()
+
+					if buildStartSlot >= 0 {
+						now := time.Now()
+						genesisTime := r.config.blockScheduler.GetGenesisTime()
+						blockWindow := r.config.blockScheduler.GetBlockWindow()
+						timeSinceGenesis := now.Sub(genesisTime)
+						currentSlot := int(timeSinceGenesis / blockWindow)
+
+						if currentSlot != buildStartSlot {
+							r.logger.Info("⏰ 重试签名收集时 slot 已变化，停止重试",
+								"buildStartSlot", buildStartSlot,
+								"currentSlot", currentSlot,
+								"attempt", attempt+1,
+								"reason", fmt.Sprintf("构建开始时slot=%d，当前slot=%d，slot已变化", buildStartSlot, currentSlot))
+							return nil, fmt.Errorf("slot changed during signature collection retry: buildStartSlot=%d, currentSlot=%d", buildStartSlot, currentSlot)
+						}
+					}
+				}
+
+				r.logger.Debug("验证者数量不足，等待网络改善后重试", "attempt", attempt+1)
+				// 等待网络状态改善（注意：waitForNetworkGrowth 内部也会检查 slot）
+				_, _, waitErr := r.waitForNetworkGrowth(checkpointHash, keyAddr)
+				if waitErr != nil {
+					r.logger.Debug("等待网络增长失败", "error", waitErr)
+					// 如果等待失败且是因为 slot 变化，直接返回错误
+					if strings.Contains(waitErr.Error(), "slot") {
+						return nil, fmt.Errorf("slot changed during signature collection: %w", waitErr)
+					}
+				}
+				time.Sleep(2 * time.Second) // 等待2秒后重试
+				continue
+			}
+
+			// 其他错误，记录并返回
+			// 🔧 修复：在重试前，先检查 slot 是否已变化
 			if r.config != nil && r.config.blockScheduler != nil {
 				r.lock.RLock()
 				buildStartSlot := r.currentBuildStartSlot
@@ -922,63 +973,29 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 					currentSlot := int(timeSinceGenesis / blockWindow)
 
 					if currentSlot != buildStartSlot {
-						r.logger.Info("⏰ 重试签名收集时 slot 已变化，停止重试",
+						r.logger.Info("⏰ 重试其他错误时 slot 已变化，停止重试",
 							"buildStartSlot", buildStartSlot,
 							"currentSlot", currentSlot,
 							"attempt", attempt+1,
+							"error", collectErr.Error(),
 							"reason", fmt.Sprintf("构建开始时slot=%d，当前slot=%d，slot已变化", buildStartSlot, currentSlot))
 						return nil, fmt.Errorf("slot changed during signature collection retry: buildStartSlot=%d, currentSlot=%d", buildStartSlot, currentSlot)
 					}
 				}
 			}
 
-			r.logger.Debug("验证者数量不足，等待网络改善后重试", "attempt", attempt+1)
-			// 等待网络状态改善（注意：waitForNetworkGrowth 内部也会检查 slot）
-			_, _, waitErr := r.waitForNetworkGrowth(checkpointHash, keyAddr)
-			if waitErr != nil {
-				r.logger.Debug("等待网络增长失败", "error", waitErr)
-				// 如果等待失败且是因为 slot 变化，直接返回错误
-				if strings.Contains(waitErr.Error(), "slot") {
-					return nil, fmt.Errorf("slot changed during signature collection: %w", waitErr)
-				}
+			r.logger.Error("failed to collect validator signatures", "error", collectErr, "attempt", attempt+1)
+			if attempt == maxRetries-1 {
+				return nil, fmt.Errorf("failed to collect validator signatures after %d attempts: %w", maxRetries, collectErr)
 			}
-			time.Sleep(2 * time.Second) // 等待2秒后重试
-			continue
+
+			// 等待后重试
+			time.Sleep(1 * time.Second)
 		}
+	}
 
-		// 其他错误，记录并返回
-		// 🔧 修复：在重试前，先检查 slot 是否已变化
-		if r.config != nil && r.config.blockScheduler != nil {
-			r.lock.RLock()
-			buildStartSlot := r.currentBuildStartSlot
-			r.lock.RUnlock()
-
-			if buildStartSlot >= 0 {
-				now := time.Now()
-				genesisTime := r.config.blockScheduler.GetGenesisTime()
-				blockWindow := r.config.blockScheduler.GetBlockWindow()
-				timeSinceGenesis := now.Sub(genesisTime)
-				currentSlot := int(timeSinceGenesis / blockWindow)
-
-				if currentSlot != buildStartSlot {
-					r.logger.Info("⏰ 重试其他错误时 slot 已变化，停止重试",
-						"buildStartSlot", buildStartSlot,
-						"currentSlot", currentSlot,
-						"attempt", attempt+1,
-						"error", collectErr.Error(),
-						"reason", fmt.Sprintf("构建开始时slot=%d，当前slot=%d，slot已变化", buildStartSlot, currentSlot))
-					return nil, fmt.Errorf("slot changed during signature collection retry: buildStartSlot=%d, currentSlot=%d", buildStartSlot, currentSlot)
-				}
-			}
-		}
-
-		r.logger.Error("failed to collect validator signatures", "error", collectErr, "attempt", attempt+1)
-		if attempt == maxRetries-1 {
-			return nil, fmt.Errorf("failed to collect validator signatures after %d attempts: %w", maxRetries, collectErr)
-		}
-
-		// 等待后重试
-		time.Sleep(1 * time.Second)
+	if collectErr != nil {
+		return nil, collectErr
 	}
 
 	r.logger.Debug("签名收集完成",
@@ -1289,6 +1306,40 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	r.cachedProductionValidators = nil
 
 	return block, nil
+}
+
+// localGenesisProposerOnlySignatures 创世验证者（与 BLS 委员会同源）出块时仅用本地 BLS 对 checkpoint 签名，
+// 不发起网络收集。validatorsOrder 须与写入区块 / 验证时使用的 productionValidators 顺序一致。
+func (r *dposRuntime) localGenesisProposerOnlySignatures(
+	checkpointHash types.Hash,
+	keyAddr types.Address,
+	validatorsOrder validator.AccountSet,
+) ([][]byte, bitmap.Bitmap, error) {
+	proposerIndex := -1
+	for i, del := range validatorsOrder {
+		if del != nil && del.Address == keyAddr {
+			proposerIndex = i
+			break
+		}
+	}
+	if proposerIndex < 0 {
+		return nil, nil, fmt.Errorf("genesis proposer %s not in production validators (len=%d)", keyAddr.String(), len(validatorsOrder))
+	}
+	blsKey, err := r.getBLSPrivateKey()
+	if err != nil {
+		return nil, nil, fmt.Errorf("genesis proposer BLS key: %w", err)
+	}
+	signature, err := blsKey.Sign(checkpointHash[:], signer.DomainValidatorSet)
+	if err != nil {
+		return nil, nil, fmt.Errorf("genesis proposer sign checkpoint: %w", err)
+	}
+	signatureBytes, err := signature.Marshal()
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal genesis proposer signature: %w", err)
+	}
+	var bm bitmap.Bitmap
+	bm.Set(uint64(proposerIndex))
+	return [][]byte{signatureBytes}, bm, nil
 }
 
 // collectValidatorSignatures 收集验证者签名
