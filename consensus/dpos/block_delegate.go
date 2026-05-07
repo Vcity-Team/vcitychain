@@ -174,17 +174,36 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 	return types.ZeroAddress
 }
 
-// getNetworkLatestBlockNumber 获取网络最新区块号
+// maxPeerAdvertisedLeadOverTrusted 若 peer 宣称高度比「近期已成功写入」的最高块还高这么多，
+// 视为异常（恶意 Status / 错误 gossip），门禁退回 trusted，避免长期误判落后。
+const maxPeerAdvertisedLeadOverTrusted = uint64(500_000)
+
+// getNetworkLatestBlockNumber 返回用于「是否已落后于网络」的门禁高度。
+//
+// GetTrustedPeerNumber：近期从某 peer 成功验证并写入本地的最高块号，大体接近本地链头，不等价于「全网链尖」。
+// GetBestPeerNumber：peer 宣称的链尖（gossip），用于发现「别人已有更高块」从而避免重复高度出块。
+//
+// 旧逻辑在 trusted>0 时只用 trusted、忽略 best，会把门禁高度钉在本地同步水位上，无法发现网络上已有 nextHeight，
+// 从而在他人已产出该高度时仍本地出块，造成分叉。
 func (r *dposRuntime) getNetworkLatestBlockNumber() uint64 {
 	if r.config.dposBackend != nil {
 		if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil {
-			// 优先使用“近期可信 peer”高度作为门禁信号源，避免 bestPeer 声称高度虚高导致长期误判落后。
-			// 但在节点刚启动、尚未成功写入任何区块时，trusted 可能为 0，此时必须回退到 bestPeerNumber，
-			// 否则会误判“不落后”并提前出块，导致单节点出块分叉。
-			if trusted := dpos.syncer.GetTrustedPeerNumber(); trusted > 0 {
+			best := dpos.syncer.GetBestPeerNumber()
+			trusted := dpos.syncer.GetTrustedPeerNumber()
+
+			switch {
+			case best == 0:
+				return trusted
+			case trusted == 0:
+				return best
+			case best > trusted+maxPeerAdvertisedLeadOverTrusted:
+				return trusted
+			default:
+				if best > trusted {
+					return best
+				}
 				return trusted
 			}
-			return dpos.syncer.GetBestPeerNumber()
 		}
 	}
 	return 0
