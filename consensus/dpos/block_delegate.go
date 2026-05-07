@@ -178,6 +178,9 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 // 视为异常（恶意 Status / 错误 gossip），门禁退回 trusted，避免长期误判落后。
 const maxPeerAdvertisedLeadOverTrusted = uint64(500_000)
 
+// peerAdvertisedHeadTTL 在 best 从有到无的短窗口内，仍用最近观测到的 peer 宣称高度参与「是否落后」门禁，避免仅退回 trusted≈本地 而误产出重复高度。
+const peerAdvertisedHeadTTL = 2 * time.Minute
+
 // getNetworkLatestBlockNumber 返回用于「是否已落后于网络」的门禁高度。
 //
 // GetTrustedPeerNumber：近期从某 peer 成功验证并写入本地的最高块号，大体接近本地链头，不等价于「全网链尖」。
@@ -185,26 +188,63 @@ const maxPeerAdvertisedLeadOverTrusted = uint64(500_000)
 //
 // 旧逻辑在 trusted>0 时只用 trusted、忽略 best，会把门禁高度钉在本地同步水位上，无法发现网络上已有 nextHeight，
 // 从而在他人已产出该高度时仍本地出块，造成分叉。
+//
+// 另一常见问题：GetBestPeerNumber 短暂为 0（RPC 超时、peer 图抖动）时若仅返回 trusted，会把门禁钉在≈本地高度，误判已追平而出块。
+// 因此在 TTL 内保留最近一次可信的 peer 宣称高度，与 candidate 取 max；本地链尖追上该高度后清除。
 func (r *dposRuntime) getNetworkLatestBlockNumber() uint64 {
-	if r.config.dposBackend != nil {
-		if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil {
-			best := dpos.syncer.GetBestPeerNumber()
-			trusted := dpos.syncer.GetTrustedPeerNumber()
+	if r.config == nil || r.config.dposBackend == nil {
+		return 0
+	}
+	dpos, ok := r.config.dposBackend.(*DPoS)
+	if !ok || dpos.syncer == nil {
+		return 0
+	}
 
-			switch {
-			case best == 0:
-				return trusted
-			case trusted == 0:
-				return best
-			case best > trusted+maxPeerAdvertisedLeadOverTrusted:
-				return trusted
-			default:
-				if best > trusted {
-					return best
-				}
-				return trusted
-			}
+	best := dpos.syncer.GetBestPeerNumber()
+	trusted := dpos.syncer.GetTrustedPeerNumber()
+
+	var candidate uint64
+	switch {
+	case best == 0:
+		candidate = trusted
+	case trusted == 0:
+		candidate = best
+	case best > trusted+maxPeerAdvertisedLeadOverTrusted:
+		candidate = trusted
+	default:
+		if best > trusted {
+			candidate = best
+		} else {
+			candidate = trusted
 		}
 	}
-	return 0
+
+	now := time.Now()
+
+	r.networkHeadHintMu.Lock()
+	defer r.networkHeadHintMu.Unlock()
+
+	// 仅在非「异常超高宣称」分支更新记忆，避免把垃圾 height 钉进内存
+	if best > 0 && !(trusted > 0 && best > trusted+maxPeerAdvertisedLeadOverTrusted) {
+		if best > r.lastPeerAdvertisedHead {
+			r.lastPeerAdvertisedHead = best
+		}
+		r.lastPeerAdvertisedHeadAt = now
+	}
+
+	if r.lastPeerAdvertisedHead > 0 && now.Sub(r.lastPeerAdvertisedHeadAt) >= peerAdvertisedHeadTTL {
+		r.lastPeerAdvertisedHead = 0
+	}
+
+	if r.lastPeerAdvertisedHead > 0 && now.Sub(r.lastPeerAdvertisedHeadAt) < peerAdvertisedHeadTTL {
+		if r.lastPeerAdvertisedHead > candidate {
+			candidate = r.lastPeerAdvertisedHead
+		}
+	}
+
+	if hdr := r.config.blockchain.CurrentHeader(); hdr != nil && r.lastPeerAdvertisedHead > 0 && hdr.Number >= r.lastPeerAdvertisedHead {
+		r.lastPeerAdvertisedHead = 0
+	}
+
+	return candidate
 }

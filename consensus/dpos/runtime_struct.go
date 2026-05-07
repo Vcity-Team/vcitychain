@@ -96,6 +96,11 @@ type dposRuntime struct {
 	lastLogTime map[string]time.Time
 	logMutex    sync.RWMutex
 
+	// getNetworkLatestBlockNumber：当 syncer 短暂拿不到 best（GetBestPeerNumber==0）时，保留近期观测到的 peer 宣称高度，避免门禁误判「已追平」。
+	networkHeadHintMu        sync.Mutex
+	lastPeerAdvertisedHead   uint64
+	lastPeerAdvertisedHeadAt time.Time
+
 }
 
 // getBLSCommittee 返回用于 BLS 签名的验证者委员会
