@@ -921,13 +921,13 @@ func (d *DPoS) restartSyncerForRecovery(reason string) error {
 var _ dposBackend = (*DPoS)(nil)
 
 // sync 落后自愈：内置固定。lag>=阈值 且本地 tip 连续不涨超过停滞时长则触发方案 B（重建 syncer）。
-// 与约 3s 出块间隔对齐：5 块约对应链上 ~15s 量级掉队；10s 停滞减少正常抖动误触发。
+// lag≥5 块且 tip 约 1s 不涨即触发；检查间隔须小于停滞时长才能贴近该窗口。
 const (
 	syncLagKickThresholdBlocks = uint64(5)
-	syncLagKickStagnant        = 10 * time.Second
+	syncLagKickStagnant        = 1 * time.Second
 	syncHardRestartMinInterval = 5 * time.Minute // 方案 B 两次全量重建的最短间隔
-	// planBStallCheckInterval：须明显小于停滞时长，否则仅依赖 30s cleanup 时「10s 停滞」无法及时判定
-	planBStallCheckInterval = 2 * time.Second
+	// planBStallCheckInterval：须小于 stagnantDuration，否则 ticker 粒度过粗无法及时判定 1s 停滞
+	planBStallCheckInterval = 500 * time.Millisecond
 )
 
 // Factory 创建DPoS共识实例

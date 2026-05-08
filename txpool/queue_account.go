@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 
 	"github.com/Vcity-Team/vcitychain/types"
-	"github.com/hashicorp/go-hclog"
 )
 
 // A thread-safe wrapper of a minNonceQueue.
@@ -47,9 +46,7 @@ func (q *accountQueue) unlock() {
 
 // prune removes all transactions from the queue
 // with nonce lower than given.
-func (q *accountQueue) prune(nonce uint64, addr types.Address, logger hclog.Logger, queueType string) (
-	pruned []*types.Transaction,
-) {
+func (q *accountQueue) prune(nonce uint64) (pruned []*types.Transaction) {
 	for {
 		tx := q.peek()
 		if tx == nil || tx.Nonce >= nonce {
@@ -58,32 +55,6 @@ func (q *accountQueue) prune(nonce uint64, addr types.Address, logger hclog.Logg
 
 		prunedTx := q.pop()
 		pruned = append(pruned, prunedTx)
-
-		if logger != nil {
-			logger.Debug("✅ [accountQueue.prune] 移除过期交易",
-				"addr", addr.String()[:16],
-				"queueType", queueType,
-				"txHash", prunedTx.Hash.String()[:16],
-				"txNonce", prunedTx.Nonce,
-				"targetNonce", nonce,
-				"reason", "txNonce < targetNonce")
-		}
-	}
-
-	if logger != nil && len(pruned) > 0 {
-		logger.Debug("🔵 [accountQueue.prune] 队列清理完成",
-			"addr", addr.String()[:16],
-			"queueType", queueType,
-			"targetNonce", nonce,
-			"prunedCount", len(pruned),
-			"remainingCount", q.length(),
-			"prunedNonces", func() []uint64 {
-				var nonces []uint64
-				for _, tx := range pruned {
-					nonces = append(nonces, tx.Nonce)
-				}
-				return nonces
-			}())
 	}
 
 	return

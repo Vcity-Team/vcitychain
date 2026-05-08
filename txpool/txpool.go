@@ -1620,7 +1620,7 @@ func (p *TxPool) resetAccounts(stateNonces map[types.Address]uint64) {
 		prunedPromoted, prunedEnqueued, promoted := account.reset(newNonce, p.promoteReqCh, addr, p.logger)
 
 		if len(prunedPromoted) > 0 || len(prunedEnqueued) > 0 || len(promoted) > 0 {
-			p.logger.Info("🔵 [resetAccounts] 账户清理结果",
+			p.logger.Debug("🔵 [resetAccounts] 账户清理结果",
 				"addr", addr.String()[:16],
 				"prunedPromotedCount", len(prunedPromoted),
 				"prunedEnqueuedCount", len(prunedEnqueued),
@@ -1674,7 +1674,7 @@ func (p *TxPool) resetAccounts(stateNonces map[types.Address]uint64) {
 
 	// prune pool state
 	if len(allPrunedPromoted) > 0 {
-		p.logger.Info("✅ [resetAccounts] 清理promoted交易",
+		p.logger.Debug("✅ [resetAccounts] 清理promoted交易",
 			"count", len(allPrunedPromoted),
 			"txHashes", func() []string {
 				var hashes []string
@@ -1697,7 +1697,7 @@ func (p *TxPool) resetAccounts(stateNonces map[types.Address]uint64) {
 	}
 
 	if len(allPrunedEnqueued) > 0 {
-		p.logger.Info("✅ [resetAccounts] 清理enqueued交易",
+		p.logger.Debug("✅ [resetAccounts] 清理enqueued交易",
 			"count", len(allPrunedEnqueued),
 			"txHashes", func() []string {
 				var hashes []string

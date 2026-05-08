@@ -262,21 +262,8 @@ func (a *account) reset(nonce uint64, promoteCh chan<- promoteRequest, addr type
 	defer a.mu.Unlock()
 
 	// prune the promoted txs
-	prunedPromoted = a.promoted.prune(nonce, addr, logger, "promoted")
+	prunedPromoted = a.promoted.prune(nonce)
 	a.nonceToTx.remove(prunedPromoted...)
-
-	if logger != nil && len(prunedPromoted) > 0 {
-		logger.Info("🔵 [account.reset] promoted队列清理完成",
-			"addr", addr.String()[:16],
-			"prunedCount", len(prunedPromoted),
-			"prunedNonces", func() []uint64 {
-				var nonces []uint64
-				for _, tx := range prunedPromoted {
-					nonces = append(nonces, tx.Nonce)
-				}
-				return nonces
-			}())
-	}
 	// 只需要清理 promoted 队列，但必须更新 nextNonce 以与链上状态同步
 	// 注意：enqueued 队列中的交易（nonce >= oldNonce）仍然有效，会在链上 nonce 增长时被 promote
 	if nonce <= oldNonce {
@@ -295,66 +282,19 @@ func (a *account) reset(nonce uint64, promoteCh chan<- promoteRequest, addr type
 	}
 
 	// prune the enqueued txs
-	prunedEnqueued = a.enqueued.prune(nonce, addr, logger, "enqueued")
+	prunedEnqueued = a.enqueued.prune(nonce)
 	a.nonceToTx.remove(prunedEnqueued...)
 
-	if logger != nil && len(prunedEnqueued) > 0 {
-		logger.Info("🔵 [account.reset] enqueued队列清理完成",
-			"addr", addr.String()[:16],
-			"prunedCount", len(prunedEnqueued),
-			"prunedNonces", func() []uint64 {
-				var nonces []uint64
-				for _, tx := range prunedEnqueued {
-					nonces = append(nonces, tx.Nonce)
-				}
-				return nonces
-			}())
-	}
-
 	// update nonce expected for this account
-	oldNonceBeforeSet := a.getNonce()
 	a.setNonce(nonce)
-	newNonceAfterSet := a.getNonce()
-
-	if logger != nil {
-		logger.Info("🔵 [account.reset] 更新账户nonce",
-			"addr", addr.String()[:16],
-			"oldNonce", oldNonceBeforeSet,
-			"newNonce", nonce,
-			"actualNonceAfterSet", newNonceAfterSet)
-	}
 
 	// Performance optimization: Geth-style direct promote (no async signal delay)
 	// Directly promote eligible transactions instead of sending async signal
 	promoted, prunedDuringPromote := a.promoteInternal()
 
-	if logger != nil && len(promoted) > 0 {
-		logger.Info("🔵 [account.reset] 直接批量promote完成",
-			"addr", addr.String()[:16],
-			"promotedCount", len(promoted),
-			"promotedNonces", func() []uint64 {
-				var nonces []uint64
-				for _, tx := range promoted {
-					nonces = append(nonces, tx.Nonce)
-				}
-				return nonces
-			}(),
-			"newNonce", nonce)
-	}
-
 	// Merge pruned transactions from promotion into prunedEnqueued
 	if len(prunedDuringPromote) > 0 {
 		prunedEnqueued = append(prunedEnqueued, prunedDuringPromote...)
-	}
-
-	if logger != nil {
-		logger.Info("🔵 [account.reset] 重置完成",
-			"addr", addr.String()[:16],
-			"oldNonce", oldNonce,
-			"newNonce", nonce,
-			"prunedPromoted", len(prunedPromoted),
-			"prunedEnqueued", len(prunedEnqueued),
-			"promoted", len(promoted))
 	}
 
 	return
@@ -418,10 +358,7 @@ func (a *account) promoteInternal() (promoted []*types.Transaction, pruned []*ty
 		nextNonce = tx.Nonce + 1
 
 		// prune the transactions with lower nonce
-		// Note: This is called from promote() which doesn't have logger access
-		// We use a nil logger here since this is an internal cleanup during promotion
-		var dummyLogger hclog.Logger
-		pruned = append(pruned, a.enqueued.prune(nextNonce, tx.From, dummyLogger, "enqueued")...)
+		pruned = append(pruned, a.enqueued.prune(nextNonce)...)
 
 		// update return result
 		promoted = append(promoted, tx)

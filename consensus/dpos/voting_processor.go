@@ -381,18 +381,6 @@ func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error
 					continue
 				}
 				if stakeInfo.EffectiveEpoch != epochNumber {
-					d.logger.Info("⚠️ [边界应用投票] 投票记录被跳过（EffectiveEpoch不匹配）",
-						"voter", stakeInfo.Staker.String(),
-						"delegate", stakeInfo.Delegate.String(),
-						"effectiveEpoch", stakeInfo.EffectiveEpoch,
-						"currentEpoch", epochNumber,
-						"applied", stakeInfo.Applied,
-						"amount", func() string {
-							if stakeInfo.Amount != nil {
-								return stakeInfo.Amount.String()
-							}
-							return "nil"
-						}())
 					continue
 				}
 				addVote(&VoteRecord{
