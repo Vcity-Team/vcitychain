@@ -191,6 +191,8 @@ const peerAdvertisedHeadTTL = 2 * time.Minute
 //
 // 另一常见问题：GetBestPeerNumber 短暂为 0（RPC 超时、peer 图抖动）时若仅返回 trusted，会把门禁钉在≈本地高度，误判已追平而出块。
 // 因此在 TTL 内保留最近一次可信的 peer 宣称高度，与 candidate 取 max；本地链尖追上该高度后清除。
+//
+// 若仍把「历史 hint」在 peer 已回落或 best==0 时继续抬高 candidate，会出现：日志一直报落后、不出块，但 syncer 侧 BestPeer<=本地 根本不会 bulk sync（拉取进度不动）。
 func (r *dposRuntime) getNetworkLatestBlockNumber() uint64 {
 	if r.config == nil || r.config.dposBackend == nil {
 		return 0
@@ -236,13 +238,23 @@ func (r *dposRuntime) getNetworkLatestBlockNumber() uint64 {
 		r.lastPeerAdvertisedHead = 0
 	}
 
-	if r.lastPeerAdvertisedHead > 0 && now.Sub(r.lastPeerAdvertisedHeadAt) < peerAdvertisedHeadTTL {
+	hdr := r.config.blockchain.CurrentHeader()
+	var localNum uint64
+	if hdr != nil {
+		localNum = hdr.Number
+	}
+
+	// 历史 hint 仅在「当前仍能从 gossip 推出更高链尖」或至少「best 仍宣称高于本地」时参与抬高；
+	// best==0：无可用宣称链尖，hint 只会制造「门禁落后但无人可拉」的假掉队。
+	// best<=local：peer 视图已不高于本地，不应再用过期 hint 压住出块与误导运维日志。
+	applyPeerAdvertisedHint := best > 0 && (localNum == 0 || best > localNum)
+	if applyPeerAdvertisedHint && r.lastPeerAdvertisedHead > 0 && now.Sub(r.lastPeerAdvertisedHeadAt) < peerAdvertisedHeadTTL {
 		if r.lastPeerAdvertisedHead > candidate {
 			candidate = r.lastPeerAdvertisedHead
 		}
 	}
 
-	if hdr := r.config.blockchain.CurrentHeader(); hdr != nil && r.lastPeerAdvertisedHead > 0 && hdr.Number >= r.lastPeerAdvertisedHead {
+	if hdr != nil && r.lastPeerAdvertisedHead > 0 && hdr.Number >= r.lastPeerAdvertisedHead {
 		r.lastPeerAdvertisedHead = 0
 	}
 
