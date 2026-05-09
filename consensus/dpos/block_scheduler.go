@@ -288,15 +288,27 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			"timestamp", time.Now().Format("15:04:05.000"))
 		return false
 	}
-	// 检查是否落后，如果落后则先同步再出块
+	// 落后门禁：须与 gossip 水位对齐。仅用 getNetworkLatestBlockNumber 会在 verifiedBest 回落时误判「已追平」；
+	// 追平锁用水位 = max(门禁候选, 原始 GetBestPeerNumber)，直到本地高度达到历史最大值。
 	if r.config.dposBackend != nil {
+		local := currentBlock.Number
 		networkLatest := r.getNetworkLatestBlockNumber()
-		if networkLatest > currentBlock.Number {
-			r.logOnceWithInterval("should_produce_behind_network", 5*time.Second, "info",
-				"⏸️ 本地链高度落后于网络最新高度，暂不出块（sync 追平后再参与生产）",
-				"localBlockNumber", currentBlock.Number,
-				"networkLatestBlockNumber", networkLatest,
-				"lagBlocks", networkLatest-currentBlock.Number)
+		waterline := networkLatest
+		if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil {
+			rawGossip := dpos.syncer.GetBestPeerNumber()
+			if rawGossip > waterline {
+				waterline = rawGossip
+			}
+		}
+		blocked, catchUpTarget := r.updateProductionCatchUpLatch(local, waterline)
+		if blocked {
+			r.logOnceWithInterval("should_produce_catchup_latch", 5*time.Second, "info",
+				"⏸️ 落后追平锁定期，暂不出块（本地须达到曾观测到的门禁/gossip 高度）",
+				"localBlockNumber", local,
+				"catchUpTargetBlockNumber", catchUpTarget,
+				"gateWaterline", waterline,
+				"candidateNetworkLatest", networkLatest,
+				"lagBlocksToTarget", catchUpTarget-local)
 			return false
 		}
 	}

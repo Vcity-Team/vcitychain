@@ -270,3 +270,21 @@ func (r *dposRuntime) getNetworkLatestBlockNumber() uint64 {
 
 	return candidate
 }
+
+// updateProductionCatchUpLatch 在观测到「门禁水位或原始 gossip」高于本地时抬高追平目标；本地达到目标后清除。
+func (r *dposRuntime) updateProductionCatchUpLatch(localHeight, waterline uint64) (blocked bool, catchUpTarget uint64) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	if waterline > localHeight {
+		if waterline > r.productionCatchUpTarget {
+			r.productionCatchUpTarget = waterline
+		}
+	}
+	if r.productionCatchUpTarget > 0 && localHeight >= r.productionCatchUpTarget {
+		r.productionCatchUpTarget = 0
+	}
+	catchUpTarget = r.productionCatchUpTarget
+	blocked = r.productionCatchUpTarget > 0 && localHeight < r.productionCatchUpTarget
+	return blocked, catchUpTarget
+}

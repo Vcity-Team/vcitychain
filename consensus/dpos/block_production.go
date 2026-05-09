@@ -166,6 +166,25 @@ func (r *dposRuntime) produceBlock() error {
 	// 获取当前区块
 	currentBlock := r.config.blockchain.CurrentHeader()
 
+	if r.config != nil && r.config.dposBackend != nil && currentBlock != nil {
+		networkLatest := r.getNetworkLatestBlockNumber()
+		waterline := networkLatest
+		if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil {
+			rawGossip := dpos.syncer.GetBestPeerNumber()
+			if rawGossip > waterline {
+				waterline = rawGossip
+			}
+		}
+		if blocked, catchUp := r.updateProductionCatchUpLatch(currentBlock.Number, waterline); blocked {
+			r.logger.Info("⏰ 区块生产被跳过：落后追平锁定期",
+				"localBlockNumber", currentBlock.Number,
+				"catchUpTargetBlockNumber", catchUp,
+				"gateWaterline", waterline,
+				"candidateNetworkLatest", networkLatest)
+			return nil
+		}
+	}
+
 	// 检查Key是否可用
 	if r.config == nil || r.config.Key == nil {
 		r.logger.Error("❌ key not available, cannot produce block",
