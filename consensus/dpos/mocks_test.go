@@ -484,6 +484,11 @@ func (tp *syncerMock) GetBestPeerNumber() uint64 {
 	return args.Get(0).(uint64) //nolint
 }
 
+func (tp *syncerMock) GetVerifiedBestPeerNumber() uint64 {
+	args := tp.Called()
+	return args.Get(0).(uint64) //nolint
+}
+
 func (tp *syncerMock) GetTrustedPeerNumber() uint64 {
 	args := tp.Called()
 	return args.Get(0).(uint64) //nolint

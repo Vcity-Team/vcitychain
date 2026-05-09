@@ -174,9 +174,15 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 	return types.ZeroAddress
 }
 
-// maxPeerAdvertisedLeadOverTrusted 若 peer 宣称高度比「近期已成功写入」的最高块还高这么多，
-// 视为异常（恶意 Status / 错误 gossip），门禁退回 trusted，避免长期误判落后。
-const maxPeerAdvertisedLeadOverTrusted = uint64(500_000)
+// defaultMaxPeerAdvertisedLeadOverTrusted：peer 宣称相对 trusted 写入高度的默认最大可信超前（可通过 runtimeConfig 覆盖）。
+const defaultMaxPeerAdvertisedLeadOverTrusted = uint64(8192)
+
+func (r *dposRuntime) maxPeerAdvertisedLeadOverTrusted() uint64 {
+	if r.config != nil && r.config.MaxPeerAdvertisedLeadOverTrusted > 0 {
+		return r.config.MaxPeerAdvertisedLeadOverTrusted
+	}
+	return defaultMaxPeerAdvertisedLeadOverTrusted
+}
 
 // peerAdvertisedHeadTTL 在 best 从有到无的短窗口内，仍用最近观测到的 peer 宣称高度参与「是否落后」门禁，避免仅退回 trusted≈本地 而误产出重复高度。
 const peerAdvertisedHeadTTL = 2 * time.Minute
@@ -184,7 +190,8 @@ const peerAdvertisedHeadTTL = 2 * time.Minute
 // getNetworkLatestBlockNumber 返回用于「是否已落后于网络」的门禁高度。
 //
 // GetTrustedPeerNumber：近期从某 peer 成功验证并写入本地的最高块号，大体接近本地链头，不等价于「全网链尖」。
-// GetBestPeerNumber：peer 宣称的链尖（gossip），用于发现「别人已有更高块」从而避免重复高度出块。
+// GetVerifiedBestPeerNumber：对 Best peer 尝试拉取 local+1 验证后再采信其宣称；失败则返回 0（仍可用 gossip hint）。
+// GetBestPeerNumber：原始 gossip 链尖，用于 hint 水印与非门禁逻辑。
 //
 // 旧逻辑在 trusted>0 时只用 trusted、忽略 best，会把门禁高度钉在本地同步水位上，无法发现网络上已有 nextHeight，
 // 从而在他人已产出该高度时仍本地出块，造成分叉。
@@ -202,20 +209,23 @@ func (r *dposRuntime) getNetworkLatestBlockNumber() uint64 {
 		return 0
 	}
 
-	best := dpos.syncer.GetBestPeerNumber()
+	rawGossipBest := dpos.syncer.GetBestPeerNumber()
+	verifiedBest := dpos.syncer.GetVerifiedBestPeerNumber()
 	trusted := dpos.syncer.GetTrustedPeerNumber()
+
+	maxLead := r.maxPeerAdvertisedLeadOverTrusted()
 
 	var candidate uint64
 	switch {
-	case best == 0:
+	case verifiedBest == 0:
 		candidate = trusted
 	case trusted == 0:
-		candidate = best
-	case best > trusted+maxPeerAdvertisedLeadOverTrusted:
+		candidate = verifiedBest
+	case verifiedBest > trusted+maxLead:
 		candidate = trusted
 	default:
-		if best > trusted {
-			candidate = best
+		if verifiedBest > trusted {
+			candidate = verifiedBest
 		} else {
 			candidate = trusted
 		}
@@ -226,10 +236,10 @@ func (r *dposRuntime) getNetworkLatestBlockNumber() uint64 {
 	r.networkHeadHintMu.Lock()
 	defer r.networkHeadHintMu.Unlock()
 
-	// 仅在非「异常超高宣称」分支更新记忆，避免把垃圾 height 钉进内存
-	if best > 0 && !(trusted > 0 && best > trusted+maxPeerAdvertisedLeadOverTrusted) {
-		if best > r.lastPeerAdvertisedHead {
-			r.lastPeerAdvertisedHead = best
+	// 仅在非「异常超高宣称」分支更新记忆（仍用原始 gossip，便于 best==0 时 hint）；门禁 candidate 已用 verifiedBest。
+	if rawGossipBest > 0 && !(trusted > 0 && rawGossipBest > trusted+maxLead) {
+		if rawGossipBest > r.lastPeerAdvertisedHead {
+			r.lastPeerAdvertisedHead = rawGossipBest
 		}
 		r.lastPeerAdvertisedHeadAt = now
 	}
@@ -245,9 +255,9 @@ func (r *dposRuntime) getNetworkLatestBlockNumber() uint64 {
 	}
 
 	// 历史 hint 仅在「当前仍能从 gossip 推出更高链尖」或至少「best 仍宣称高于本地」时参与抬高；
-	// best==0：无可用宣称链尖，hint 只会制造「门禁落后但无人可拉」的假掉队。
-	// best<=local：peer 视图已不高于本地，不应再用过期 hint 压住出块与误导运维日志。
-	applyPeerAdvertisedHint := best > 0 && (localNum == 0 || best > localNum)
+	// rawGossipBest==0：无可用宣称链尖，hint 只会制造「门禁落后但无人可拉」的假掉队。
+	// rawGossipBest<=local：peer 视图已不高于本地，不应再用过期 hint 压住出块与误导运维日志。
+	applyPeerAdvertisedHint := rawGossipBest > 0 && (localNum == 0 || rawGossipBest > localNum)
 	if applyPeerAdvertisedHint && r.lastPeerAdvertisedHead > 0 && now.Sub(r.lastPeerAdvertisedHeadAt) < peerAdvertisedHeadTTL {
 		if r.lastPeerAdvertisedHead > candidate {
 			candidate = r.lastPeerAdvertisedHead

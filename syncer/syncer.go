@@ -69,6 +69,11 @@ type syncer struct {
 	// trustedPeers 记录“近期已验证并写入成功”的 peer 高度，用于替代不可信的 bestPeer 声称高度
 	trustedPeersMu sync.RWMutex
 	trustedPeers   map[peer.ID]trustedPeerStat
+
+	// 宣称高度交付验证（共识门禁）：对 Best peer 拉取 local+1，失败则短期忽略其宣称。
+	advertMu          sync.Mutex
+	advertIgnoreUntil map[peer.ID]time.Time
+	advertVerified    map[peer.ID]advertVerifiedEntry
 }
 
 type trustedPeerStat struct {
@@ -102,6 +107,9 @@ func NewSyncer(
 		processedTxs: make(map[types.Hash]bool),
 
 		trustedPeers: make(map[peer.ID]trustedPeerStat),
+
+		advertIgnoreUntil: make(map[peer.ID]time.Time),
+		advertVerified:    make(map[peer.ID]advertVerifiedEntry),
 	}
 }
 

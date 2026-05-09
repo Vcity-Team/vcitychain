@@ -420,6 +420,9 @@ type DPoS struct {
 	syncLagRestartBlocks      uint64
 	syncLagRestartStagnantDur time.Duration
 
+	// maxPeerAdvertisedLeadBlocks：peer 宣称相对 trusted 的最大可信超前（0 表示 runtime 使用默认 8192）
+	maxPeerAdvertisedLeadBlocks uint64
+
 	// DPoS验证者相关字段
 	minStakeAmount *big.Int // 最小质押门槛
 
@@ -1084,6 +1087,15 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Warn("🔨 未找到dpos_severe_offense_slash_rate配置，将使用默认值1000 (10%)")
 	}
 
+	if maxLeadRaw, exists := getConfigValue("dpos_max_peer_advertised_lead_blocks", "dposMaxPeerAdvertisedLeadBlocks"); exists {
+		if n, ok := toUint64(maxLeadRaw); ok && n > 0 {
+			vcity_dpos.maxPeerAdvertisedLeadBlocks = n
+			logger.Info("📶 dpos_max_peer_advertised_lead_blocks", "blocks", n)
+		} else {
+			logger.Warn("📶 dpos_max_peer_advertised_lead_blocks 无效，使用默认 8192", "value", maxLeadRaw)
+		}
+	}
+
 	if epochDuration, exists := params.Config.Config["epochDuration"]; exists {
 		logger.Info("🔍 找到epochDuration配置", "type", fmt.Sprintf("%T", epochDuration), "value", epochDuration)
 		if duration, ok := epochDuration.(time.Duration); ok {
@@ -1563,6 +1575,11 @@ func (d *DPoS) Initialize() error {
 	d.logger.Info("ℹ️ Balance querier 将在 runtime 创建后初始化")
 
 	// 创建DPoS runtime
+	maxLead := uint64(8192)
+	if d.maxPeerAdvertisedLeadBlocks > 0 {
+		maxLead = d.maxPeerAdvertisedLeadBlocks
+	}
+
 	runtimeConfig := &runtimeConfig{
 		DataDir:          d.dataDir,
 		Key:              d.key,
@@ -1574,8 +1591,9 @@ func (d *DPoS) Initialize() error {
 		blockScheduler:   d.blockScheduler, // 设置固定时间窗口调度器
 		BlockTime:        d.config.BlockTime,
 
-		SyncLagRestartBlocks:   d.syncLagRestartBlocks,
-		SyncLagRestartStagnant: d.syncLagRestartStagnantDur,
+		SyncLagRestartBlocks:             d.syncLagRestartBlocks,
+		SyncLagRestartStagnant:           d.syncLagRestartStagnantDur,
+		MaxPeerAdvertisedLeadOverTrusted: maxLead,
 	}
 
 	// 检查runtime配置是否正确

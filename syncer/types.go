@@ -84,6 +84,9 @@ type Syncer interface {
 	DisablePublishingPeerStatus()
 	// GetBestPeerNumber returns the latest block number from the best peer
 	GetBestPeerNumber() uint64
+	// GetVerifiedBestPeerNumber 对宣称高于本地的 Best peer 尝试拉取 local+1 验证父哈希；失败则短期忽略该 peer 宣称并换 peer。
+	// 无法验证（含同步占用流）时返回 0，由调用方结合 GetTrustedPeerNumber 使用。
+	GetVerifiedBestPeerNumber() uint64
 	// GetTrustedPeerNumber returns the latest block number from a recently verified peer.
 	// If no peer has been verified recently, it returns 0.
 	GetTrustedPeerNumber() uint64

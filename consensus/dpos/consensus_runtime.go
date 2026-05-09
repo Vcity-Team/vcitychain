@@ -97,6 +97,9 @@ type runtimeConfig struct {
 	// SyncLagRestartStagnant：本地 tip 连续不涨达到该时长后触发。
 	SyncLagRestartBlocks   uint64
 	SyncLagRestartStagnant time.Duration
+
+	// MaxPeerAdvertisedLeadOverTrusted：peer 宣称相对 trusted 写入高度的最大可信超前；超过则退回 trusted。0 表示使用默认 8192。
+	MaxPeerAdvertisedLeadOverTrusted uint64
 }
 
 // consensusRuntime is a struct that provides consensus runtime features like epoch, state and event management

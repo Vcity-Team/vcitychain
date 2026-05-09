@@ -401,6 +401,8 @@ func (tp *syncerMock) DisablePublishingPeerStatus() {}
 
 func (tp *syncerMock) GetBestPeerNumber() uint64 { return 0 }
 
+func (tp *syncerMock) GetVerifiedBestPeerNumber() uint64 { return 0 }
+
 func (tp *syncerMock) GetTrustedPeerNumber() uint64 { return 0 }
 
 func (tp *syncerMock) KickSync(string) {}
