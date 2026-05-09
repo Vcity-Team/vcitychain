@@ -85,6 +85,39 @@ func NewBlockScheduler(
 	}, nil
 }
 
+// nextBlockSchedulingInfo 与 BlockBuilder.Reset / effectiveTimeForNextBlock 一致：max(父块时间+blockWindow, now.UTC())
+type nextBlockSchedulingInfo struct {
+	ParentNumber       uint64
+	ParentTimestampUTC time.Time
+	ParentPlusWindow   time.Time // 父块时间 + blockWindow，即 max 左分支候选
+	NowUTC             time.Time
+	EffectiveTime      time.Time // max 结果，与下一区块头 Timestamp 对齐
+	// MaxUsesParentChain 为 true 表示 EffectiveTime==ParentPlusWindow（链上时间轴不早于 now）
+	MaxUsesParentChain bool
+}
+
+func (bs *BlockScheduler) nextBlockSchedulingInfo() nextBlockSchedulingInfo {
+	var info nextBlockSchedulingInfo
+	info.NowUTC = time.Now().UTC()
+	head := bs.blockchain.Header()
+	if head == nil {
+		info.EffectiveTime = info.NowUTC
+		info.MaxUsesParentChain = false
+		return info
+	}
+	info.ParentNumber = head.Number
+	info.ParentTimestampUTC = time.Unix(int64(head.Timestamp), 0).UTC()
+	info.ParentPlusWindow = info.ParentTimestampUTC.Add(bs.blockWindow)
+	if info.ParentPlusWindow.Before(info.NowUTC) {
+		info.EffectiveTime = info.NowUTC
+		info.MaxUsesParentChain = false
+	} else {
+		info.EffectiveTime = info.ParentPlusWindow
+		info.MaxUsesParentChain = true
+	}
+	return info
+}
+
 // ShouldProduceBlockNow 检查指定地址在当前slot是否应该出块
 func (bs *BlockScheduler) ShouldProduceBlockNow(
 	myAddress types.Address,
@@ -109,7 +142,8 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	}
 
 	now := time.Now()
-	schedulingTime := bs.effectiveTimeForNextBlock()
+	schedInfo := bs.nextBlockSchedulingInfo()
+	schedulingTime := schedInfo.EffectiveTime
 	timeSinceGenesis := schedulingTime.Sub(bs.genesisTime)
 	currentSlot := int(timeSinceGenesis / bs.blockWindow)
 
@@ -147,6 +181,19 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 
 	// 只有当本地节点应该出块时才打印详细日志（每次出块都打印，因为频率已经很低）
 	if isMatch {
+		maxBranch := "utc_now"
+		if schedInfo.MaxUsesParentChain {
+			maxBranch = "parent_timestamp_plus_blockWindow"
+		}
+		bs.logger.Info("📐 [出块调度] max(父块时间+blockWindow, now.UTC) 用于下一区块 slot",
+			"parentBlockNumber", schedInfo.ParentNumber,
+			"parentTimestampUTC", schedInfo.ParentTimestampUTC.Format("2006-01-02 15:04:05.000"),
+			"parentPlusWindowUTC", schedInfo.ParentPlusWindow.Format("2006-01-02 15:04:05.000"),
+			"nowUTC", schedInfo.NowUTC.Format("2006-01-02 15:04:05.000"),
+			"effectiveSchedulingTimeUTC", schedInfo.EffectiveTime.Format("2006-01-02 15:04:05.000"),
+			"maxBranch", maxBranch,
+			"blockWindow", bs.blockWindow.String(),
+			"note", "与 BlockBuilder.Reset 一致；maxBranch=parent_* 表示链上时间轴不早于本机 UTC")
 		bs.logger.Info("🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块",
 			"blockNumber", blockNumber, // 这个 blockNumber 来自 currentBlock.Number（已同步的区块号）
 			"nextBlockNumber", nextBlockNumber, // 下一个应生产的区块号（blockNumber + 1）
@@ -178,17 +225,7 @@ func (bs *BlockScheduler) GetGenesisTime() time.Time {
 // parentTime+blockWindow, unless that is still before wall clock — then now.UTC().
 // Scheduling / decisionSlot must use this so leader slot matches the built header timestamp.
 func (bs *BlockScheduler) effectiveTimeForNextBlock() time.Time {
-	head := bs.blockchain.Header()
-	if head == nil {
-		return time.Now().UTC()
-	}
-	parentTime := time.Unix(int64(head.Timestamp), 0)
-	headerTime := parentTime.Add(bs.blockWindow)
-	now := time.Now().UTC()
-	if headerTime.Before(now) {
-		return now
-	}
-	return headerTime
+	return bs.nextBlockSchedulingInfo().EffectiveTime
 }
 
 // CurrentSlotForNextBlock returns the slot index for the next produced block (same basis as header Timestamp).
