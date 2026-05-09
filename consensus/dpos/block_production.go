@@ -151,11 +151,7 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 func (r *dposRuntime) produceBlock() error {
 	var currentSlot int = -1
 	if r.config.blockScheduler != nil {
-		now := time.Now()
-		genesisTime := r.config.blockScheduler.GetGenesisTime()
-		blockWindow := r.config.blockScheduler.GetBlockWindow()
-		timeSinceGenesis := now.Sub(genesisTime)
-		currentSlot = int(timeSinceGenesis / blockWindow)
+		currentSlot = r.config.blockScheduler.CurrentSlotForNextBlock()
 
 		r.lock.RLock()
 		lastSlot := r.lastProducedSlot
@@ -280,12 +276,8 @@ func (r *dposRuntime) produceBlock() error {
 	var buildStartSlot int = -1
 	var buildStartTime time.Time
 	if r.config.blockScheduler != nil {
-		now := time.Now()
-		genesisTime := r.config.blockScheduler.GetGenesisTime()
-		blockWindow := r.config.blockScheduler.GetBlockWindow()
-		timeSinceGenesis := now.Sub(genesisTime)
-		buildStartSlot = int(timeSinceGenesis / blockWindow)
-		buildStartTime = now
+		buildStartSlot = r.config.blockScheduler.CurrentSlotForNextBlock()
+		buildStartTime = time.Now()
 	}
 
 	// 🔧 严格比对：检查构建开始时slot是否与判断时slot一致
@@ -363,10 +355,8 @@ func (r *dposRuntime) produceBlock() error {
 	// 检查是否超过slot时间
 	if r.config.blockScheduler != nil && buildStartSlot >= 0 {
 		now := time.Now()
-		genesisTime := r.config.blockScheduler.GetGenesisTime()
 		blockWindow := r.config.blockScheduler.GetBlockWindow()
-		timeSinceGenesis := now.Sub(genesisTime)
-		currentSlotAfterBuild := int(timeSinceGenesis / blockWindow)
+		currentSlotAfterBuild := r.config.blockScheduler.CurrentSlotForNextBlock()
 		buildDuration := now.Sub(buildStartTime)
 
 		// 检查构建耗时是否超过slot时间

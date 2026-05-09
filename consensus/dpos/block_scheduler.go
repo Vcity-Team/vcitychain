@@ -109,7 +109,8 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	}
 
 	now := time.Now()
-	timeSinceGenesis := now.Sub(bs.genesisTime)
+	schedulingTime := bs.effectiveTimeForNextBlock()
+	timeSinceGenesis := schedulingTime.Sub(bs.genesisTime)
 	currentSlot := int(timeSinceGenesis / bs.blockWindow)
 
 	// 计算当前slot应该出块的验证者索引
@@ -149,7 +150,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 		bs.logger.Info("🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块",
 			"blockNumber", blockNumber, // 这个 blockNumber 来自 currentBlock.Number（已同步的区块号）
 			"nextBlockNumber", nextBlockNumber, // 下一个应生产的区块号（blockNumber + 1）
-			"currentSlot", currentSlot, // 基于时间计算的当前slot（第103行）
+			"currentSlot", currentSlot, // 与下一区块头 timestamp 一致的 slot（effectiveTimeForNextBlock）
 			"activeValidatorCount", activeValidatorCount,
 			"activeValidatorCountSource", validatorsSource, // 验证者列表来源
 			"myAddress", myAddress.String(),
@@ -158,6 +159,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 			"isMatch", isMatch,
 			"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
 			"now", now.Format("2006-01-02 15:04:05.000"),
+			"schedulingTime", schedulingTime.Format("2006-01-02 15:04:05.000"),
 			"timestamp", now.Format("15:04:05.000000"),
 			"timeSinceGenesis", timeSinceGenesis.String(),
 			"blockWindow", bs.blockWindow.String(),
@@ -170,6 +172,33 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 
 func (bs *BlockScheduler) GetGenesisTime() time.Time {
 	return bs.genesisTime
+}
+
+// effectiveTimeForNextBlock matches BlockBuilder.Reset: the next block header time is
+// parentTime+blockWindow, unless that is still before wall clock — then now.UTC().
+// Scheduling / decisionSlot must use this so leader slot matches the built header timestamp.
+func (bs *BlockScheduler) effectiveTimeForNextBlock() time.Time {
+	head := bs.blockchain.Header()
+	if head == nil {
+		return time.Now().UTC()
+	}
+	parentTime := time.Unix(int64(head.Timestamp), 0)
+	headerTime := parentTime.Add(bs.blockWindow)
+	now := time.Now().UTC()
+	if headerTime.Before(now) {
+		return now
+	}
+	return headerTime
+}
+
+// CurrentSlotForNextBlock returns the slot index for the next produced block (same basis as header Timestamp).
+func (bs *BlockScheduler) CurrentSlotForNextBlock() int {
+	t := bs.effectiveTimeForNextBlock()
+	d := t.Sub(bs.genesisTime)
+	if d < 0 {
+		return 0
+	}
+	return int(d / bs.blockWindow)
 }
 
 // GetBlockWindow 返回区块时间窗口
@@ -237,11 +266,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 
 	// 方案2：使用读锁快速检查lastProducedSlot（如果使用blockScheduler）
 	if r.config.blockScheduler != nil {
-		now := time.Now()
-		genesisTime := r.config.blockScheduler.GetGenesisTime()
-		blockWindow := r.config.blockScheduler.GetBlockWindow()
-		timeSinceGenesis := now.Sub(genesisTime)
-		currentSlot := int(timeSinceGenesis / blockWindow)
+		currentSlot := r.config.blockScheduler.CurrentSlotForNextBlock()
 
 		// 使用读锁快速检查
 		r.lock.RLock()
@@ -327,12 +352,8 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			return false
 		}
 
-		// 在调用 ShouldProduceBlockNow 之前，计算并保存 decisionSlot
-		now := time.Now()
-		genesisTime := r.config.blockScheduler.GetGenesisTime()
-		blockWindow := r.config.blockScheduler.GetBlockWindow()
-		timeSinceGenesis := now.Sub(genesisTime)
-		decisionSlot := int(timeSinceGenesis / blockWindow)
+		// 与 BlockBuilder 下一区块头时间一致，保存 decisionSlot
+		decisionSlot := r.config.blockScheduler.CurrentSlotForNextBlock()
 
 		// 调用改进后的方法（直接比较地址）
 		result := r.config.blockScheduler.ShouldProduceBlockNow(myAddress, validators, currentBlock.Number, validatorsSource)
