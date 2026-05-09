@@ -268,6 +268,19 @@ func (r *dposRuntime) getNetworkLatestBlockNumber() uint64 {
 		r.lastPeerAdvertisedHead = 0
 	}
 
+	// 追平锁水位：须包含 TTL 内的 lastPeerAdvertisedHead。若仅依赖瞬时 candidate，在 rawGossipBest==0 时
+	// applyPeerAdvertisedHint 不会抬高 candidate，但内存水印仍高于本地 → 否则会误判「已追平」而出块分叉。
+	if hdr != nil {
+		w := candidate
+		if rawGossipBest > w {
+			w = rawGossipBest
+		}
+		if r.lastPeerAdvertisedHead > 0 && now.Sub(r.lastPeerAdvertisedHeadAt) < peerAdvertisedHeadTTL && r.lastPeerAdvertisedHead > w {
+			w = r.lastPeerAdvertisedHead
+		}
+		r.updateProductionCatchUpLatch(hdr.Number, w)
+	}
+
 	return candidate
 }
 
