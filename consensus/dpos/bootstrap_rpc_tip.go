@@ -45,6 +45,49 @@ func (r *dposRuntime) cachedBootstrapEthBlockNumber() uint64 {
 	return n
 }
 
+// invalidateBootstrapRPCCache 清除 eth_blockNumber 短缓存，供出块前强制拉取最新规范链尖。
+func (r *dposRuntime) invalidateBootstrapRPCCache() {
+	r.bootstrapRPCMu.Lock()
+	defer r.bootstrapRPCMu.Unlock()
+	r.bootstrapRPCCached = 0
+	r.bootstrapRPCCachedAt = time.Time{}
+}
+
+// preProduceBootstrapCanonicalCheck 在真正组装区块前强制刷新 RPC 链尖并打显著日志；
+// 若规范链最新高度已 ≥ 拟出块高度（localTip+1），说明该高度应由同步拉取而非本地构建，返回 true 表示应中止出块。
+func (r *dposRuntime) preProduceBootstrapCanonicalCheck(localTip uint64) bool {
+	if r.config == nil {
+		return false
+	}
+	url := strings.TrimSpace(r.config.BootstrapRPC)
+	if url == "" {
+		return false
+	}
+	nextHeight := localTip + 1
+	r.invalidateBootstrapRPCCache()
+	rpcTip := r.cachedBootstrapEthBlockNumber()
+
+	r.logger.Info("🔭 【出块前 RPC 链尖】eth_blockNumber（已强制刷新短缓存）",
+		"dpos_bootstrap_rpc", url,
+		"localTip", localTip,
+		"plannedNextBlockNumber", nextHeight,
+		"rpcEthBlockNumber", rpcTip)
+
+	if rpcTip == 0 {
+		r.logger.Warn("⚠️ 【出块前 RPC】eth_blockNumber 不可用（0），无法进行规范链尖复核；继续沿用后续门禁",
+			"dpos_bootstrap_rpc", url)
+		return false
+	}
+	if rpcTip >= nextHeight {
+		r.logger.Warn("⏸️ 【出块前跳过出块】规范链高度已不低于拟出块高度，取消本地构建，请依赖同步拉取",
+			"localTip", localTip,
+			"plannedNextBlockNumber", nextHeight,
+			"rpcEthBlockNumber", rpcTip)
+		return true
+	}
+	return false
+}
+
 func fetchEthBlockNumber(ctx context.Context, endpoint string) (uint64, error) {
 	payload := []byte(`{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}`)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
