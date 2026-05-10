@@ -80,6 +80,7 @@ func (s *syncer) advertSkipMap() map[peer.ID]bool {
 			delete(s.advertIgnoreUntil, id)
 		}
 	}
+	s.appendPullDistrustSkips(m, now)
 	return m
 }
 

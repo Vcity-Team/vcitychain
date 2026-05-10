@@ -20,10 +20,18 @@ const (
 	syncerName        = "syncer"
 	syncerProto       = "/syncer/0.2"
 	fillGapRetryDelay = 300 * time.Millisecond // 关流后退避再对同一 peer 重开流，避免 stream reset
+	// getBlocksInflightRetries：与广告探测 GetBlocks / KickSync 关流并发时短暂冲突，退避重试。
+	getBlocksInflightRetries   = 25
+	getBlocksInflightBackoff   = 40 * time.Millisecond
+	kickSyncPostCloseGraceWait = 100 * time.Millisecond // 让 CloseStream 触发的 producer goroutine 摘掉 inflight 后再 notify
 	// syncBestNotAheadWakeInterval：best peer 宣称不高于本地时，仍定时唤醒 Sync。
 	// putToPeerMap 对「同区块高度」的状态更新不 notify，若无更高高度事件，否则会永久阻塞在 newStatusCh，
 	// 与资源监控观测到的网络领先脱节（同步表现为停住）。
 	syncBestNotAheadWakeInterval = 5 * time.Second
+
+	// 反复 bulk 拉取失败（开流失败、超时、验证失败、未完成）则短期不信任该 peer，避免死盯「虚高宣称」节点。
+	pullFailStreakThreshold = 4
+	pullDistrustDuration    = 3 * time.Minute
 )
 
 var (
@@ -78,6 +86,11 @@ type syncer struct {
 	advertMu          sync.Mutex
 	advertIgnoreUntil map[peer.ID]time.Time
 	advertVerified    map[peer.ID]advertVerifiedEntry
+
+	// bulk 拉取反复失败 → 短期不信任（仍保留连接，仅不参与同步源与门禁 verified-best）
+	pullDistrustMu    sync.Mutex
+	pullDistrustUntil map[peer.ID]time.Time
+	pullFailStreak    map[peer.ID]int
 }
 
 type trustedPeerStat struct {
@@ -114,6 +127,9 @@ func NewSyncer(
 
 		advertIgnoreUntil: make(map[peer.ID]time.Time),
 		advertVerified:    make(map[peer.ID]advertVerifiedEntry),
+
+		pullDistrustUntil: make(map[peer.ID]time.Time),
+		pullFailStreak:    make(map[peer.ID]int),
 	}
 }
 
@@ -400,6 +416,9 @@ func (s *syncer) KickSync(reason string) {
 			"localLatest", local)
 	}
 
+	// 避免与仍在收尾的 GetBlocks goroutine 竞态：notify 太快会立刻再次 GetBlocks，仍报 inflight。
+	time.Sleep(kickSyncPostCloseGraceWait)
+
 	s.notifyNewStatusEvent()
 	time.AfterFunc(300*time.Millisecond, func() {
 		if s.closed.Load() {
@@ -407,6 +426,77 @@ func (s *syncer) KickSync(reason string) {
 		}
 		s.notifyNewStatusEvent()
 	})
+}
+
+// pullDistrustSkipMap 返回当前仍在「不信任冷却」内的 peer（用于 Sync 选 Best）。
+func (s *syncer) pullDistrustSkipMap() map[peer.ID]bool {
+	s.pullDistrustMu.Lock()
+	defer s.pullDistrustMu.Unlock()
+	now := time.Now()
+	m := make(map[peer.ID]bool)
+	for id, until := range s.pullDistrustUntil {
+		if until.After(now) {
+			m[id] = true
+		} else {
+			delete(s.pullDistrustUntil, id)
+			delete(s.pullFailStreak, id)
+		}
+	}
+	return m
+}
+
+// appendPullDistrustSkips 将不信任 peer 并入已有 skip 集合（与 advertSkipMap 共用逻辑，需在 advertMu 外单独持 pullDistrustMu）。
+func (s *syncer) appendPullDistrustSkips(m map[peer.ID]bool, now time.Time) {
+	s.pullDistrustMu.Lock()
+	defer s.pullDistrustMu.Unlock()
+	for id, until := range s.pullDistrustUntil {
+		if until.After(now) {
+			m[id] = true
+		} else {
+			delete(s.pullDistrustUntil, id)
+			delete(s.pullFailStreak, id)
+		}
+	}
+}
+
+func (s *syncer) resetPullFailureStreak(id peer.ID) {
+	s.pullDistrustMu.Lock()
+	defer s.pullDistrustMu.Unlock()
+	delete(s.pullFailStreak, id)
+}
+
+func (s *syncer) mergeSkipsForBestPeer(manual map[peer.ID]bool) map[peer.ID]bool {
+	out := make(map[peer.ID]bool)
+	for id, v := range manual {
+		if v {
+			out[id] = true
+		}
+	}
+	for id := range s.pullDistrustSkipMap() {
+		out[id] = true
+	}
+	return out
+}
+
+func (s *syncer) recordBulkPullFailure(peerID peer.ID) {
+	s.pullDistrustMu.Lock()
+	defer s.pullDistrustMu.Unlock()
+	s.pullFailStreak[peerID]++
+	n := s.pullFailStreak[peerID]
+	if n >= pullFailStreakThreshold {
+		s.pullDistrustUntil[peerID] = time.Now().Add(pullDistrustDuration)
+		s.pullFailStreak[peerID] = 0
+		s.logger.Warn("syncer: peer temporarily distrusted after repeated bulk pull failures",
+			"peer", peerID.String(),
+			"cooldown", pullDistrustDuration.String(),
+			"failuresThreshold", pullFailStreakThreshold)
+		go func() {
+			if s.closed.Load() {
+				return
+			}
+			s.notifyNewStatusEvent()
+		}()
+	}
 }
 
 // Sync syncs block with the best peer until callback returns true
@@ -429,8 +519,10 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			localLatest = header.Number
 		}
 
-		// pick one best peer
-		bestPeer := s.peerMap.BestPeer(skipList)
+		headBeforeBulk := localLatest
+
+		// pick one best peer（fork/未完成 的 skip 与「拉取反复失败」的不信任 合并，但不信任不触发「无 best 时全体 Disconnect」）
+		bestPeer := s.peerMap.BestPeer(s.mergeSkipsForBestPeer(skipList))
 		if bestPeer == nil {
 			// 所有候选 peer 均被跳过（开流失败等）：主动断开这些 peer 促其重连，退避后清空 skipList 再试
 			if len(skipList) > 0 {
@@ -479,6 +571,13 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 
 		// fetch block from the peer
 		lastNumber, shouldTerminate, err := s.bulkSyncWithPeer(bestPeer.ID, bestPeer.Number, callback)
+
+		if lastNumber > headBeforeBulk {
+			s.resetPullFailureStreak(bestPeer.ID)
+		} else if err != nil || lastNumber < bestPeer.Number {
+			s.recordBulkPullFailure(bestPeer.ID)
+		}
+
 		if err != nil {
 			s.logger.Warn("failed to complete bulk sync with peer, try to next one", "peer", bestPeer.ID.String(), "error", err)
 			if errors.Is(err, ErrForkRetryOtherPeer) {
