@@ -165,6 +165,9 @@ func (r *dposRuntime) produceBlock() error {
 
 	// 获取当前区块
 	currentBlock := r.config.blockchain.CurrentHeader()
+	if currentBlock != nil && r.mustWaitForBootstrapCanonicalSync(currentBlock.Number) {
+		return nil
+	}
 
 	if r.config != nil && r.config.dposBackend != nil && currentBlock != nil {
 		networkLatest := r.getNetworkLatestBlockNumber()

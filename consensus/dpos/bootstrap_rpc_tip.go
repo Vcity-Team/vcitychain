@@ -14,7 +14,9 @@ import (
 
 const (
 	bootstrapEthBlockNumberCacheTTL = 5 * time.Second
-	bootstrapEthBlockNumberTimeout  = 5 * time.Second
+	bootstrapEthBlockNumberTimeout = 5 * time.Second
+	// bootstrapTipMaxLagBehindLocal：RPC 允许落后于本地的块数（同链延迟）；再大则视为错链，不参与封顶。
+	bootstrapTipMaxLagBehindLocal = uint64(512)
 )
 
 // cachedBootstrapEthBlockNumber returns eth_blockNumber from dpos_bootstrap_rpc with short TTL; 0 if unset or on error.
@@ -80,14 +82,42 @@ func fetchEthBlockNumber(ctx context.Context, endpoint string) (uint64, error) {
 }
 
 // capGateWaterlineWithBootstrapRPC limits gate waterline to canonical tip from dpos_bootstrap_rpc when configured and RPC succeeds.
+// 若 RPC 高度远低于本地链尖，视为错链/错 URL，不用其封顶。
 func (r *dposRuntime) capGateWaterlineWithBootstrapRPC(waterline uint64) uint64 {
 	tip := r.cachedBootstrapEthBlockNumber()
 	if tip == 0 || waterline <= tip {
 		return waterline
 	}
+	var local uint64
+	if r.config != nil && r.config.blockchain != nil {
+		if h := r.config.blockchain.CurrentHeader(); h != nil {
+			local = h.Number
+		}
+	}
+	if local > 0 && tip+bootstrapTipMaxLagBehindLocal < local {
+		r.logOnceWithInterval("bootstrap_rpc_skip_far_below_local", 120*time.Second, "warn",
+			"DPoS: dpos_bootstrap_rpc eth_blockNumber far below local tip — not capping gate",
+			"bootstrapTip", tip, "localTip", local, "waterlineBefore", waterline)
+		return waterline
+	}
 	r.logOnceWithInterval("bootstrap_rpc_gate_cap", 12*time.Second, "info",
 		"DPoS: gate waterline capped by dpos_bootstrap_rpc eth_blockNumber",
 		"waterlineBefore", waterline,
-		"bootstrapCanonicalTip", tip)
+		"bootstrapCanonicalTip", tip,
+		"localTip", local)
 	return tip
+}
+
+// mustWaitForBootstrapCanonicalSync：配置了 dpos_bootstrap_rpc 且 eth_blockNumber 高于本地链尖时，禁止出块直至同步追上。
+func (r *dposRuntime) mustWaitForBootstrapCanonicalSync(localTip uint64) bool {
+	tip := r.cachedBootstrapEthBlockNumber()
+	if tip == 0 || localTip >= tip {
+		return false
+	}
+	r.logOnceWithInterval("behind_bootstrap_canonical", 5*time.Second, "info",
+		"⏸️ 本地链尖落后于 dpos_bootstrap_rpc 链尖，暂不出块（先同步）",
+		"localBlockNumber", localTip,
+		"bootstrapCanonicalTip", tip,
+		"lagBlocks", tip-localTip)
+	return true
 }

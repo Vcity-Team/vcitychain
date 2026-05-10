@@ -288,10 +288,13 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			"timestamp", time.Now().Format("15:04:05.000"))
 		return false
 	}
+	local := currentBlock.Number
+	if r.mustWaitForBootstrapCanonicalSync(local) {
+		return false
+	}
 	// 落后门禁：须与 gossip 水位对齐。仅用 getNetworkLatestBlockNumber 会在 verifiedBest 回落时误判「已追平」；
 	// 追平锁用水位 = max(门禁候选, 原始 GetBestPeerNumber)，直到本地高度达到历史最大值。
 	if r.config.dposBackend != nil {
-		local := currentBlock.Number
 		networkLatest := r.getNetworkLatestBlockNumber()
 		waterline := networkLatest
 		if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil {
