@@ -83,6 +83,28 @@ func fetchEthBlockNumber(ctx context.Context, endpoint string) (uint64, error) {
 
 const bootstrapRPCGateCapLogInterval = 12 * time.Second
 
+// bootstrapRPCGateTip 当配置了 dpos_bootstrap_rpc 且 eth_blockNumber 可读时返回 (tip, true)。
+// 此时「落后门禁 / 追平锁」应以 RPC 为准，不再与 gossip 宣称取 max（避免虚高压顶）。
+func (r *dposRuntime) bootstrapRPCGateTip() (tip uint64, ok bool) {
+	if r.config == nil {
+		return 0, false
+	}
+	if strings.TrimSpace(r.config.BootstrapRPC) == "" {
+		return 0, false
+	}
+	tip = r.cachedBootstrapEthBlockNumber()
+	if tip == 0 {
+		return 0, false
+	}
+	return tip, true
+}
+
+// bootstrapRPCGateAuthoritative 见 bootstrapRPCGateTip。
+func (r *dposRuntime) bootstrapRPCGateAuthoritative() bool {
+	_, ok := r.bootstrapRPCGateTip()
+	return ok
+}
+
 // logGateWaterlineCappedByBootstrapRPC：门禁被 bootstrap RPC 封顶时打 INFO（12s 节流），使用 runtime 主 logger。
 func (r *dposRuntime) logGateWaterlineCappedByBootstrapRPC(waterlineBefore, bootstrapTip, localTip uint64) {
 	const key = "bootstrap_rpc_gate_cap"

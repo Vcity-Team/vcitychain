@@ -172,10 +172,12 @@ func (r *dposRuntime) produceBlock() error {
 	if r.config != nil && r.config.dposBackend != nil && currentBlock != nil {
 		networkLatest := r.getNetworkLatestBlockNumber()
 		waterline := networkLatest
-		if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil {
-			rawGossip := dpos.syncer.GetBestPeerNumber()
-			if rawGossip > waterline {
-				waterline = rawGossip
+		if !r.bootstrapRPCGateAuthoritative() {
+			if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil {
+				rawGossip := dpos.syncer.GetBestPeerNumber()
+				if rawGossip > waterline {
+					waterline = rawGossip
+				}
 			}
 		}
 		waterline = r.capGateWaterlineWithBootstrapRPC(waterline)
