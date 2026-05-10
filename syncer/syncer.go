@@ -440,6 +440,8 @@ func (s *syncer) pullDistrustSkipMap() map[peer.ID]bool {
 		} else {
 			delete(s.pullDistrustUntil, id)
 			delete(s.pullFailStreak, id)
+			s.logger.Info("syncer: pull-distrust cooldown ended; peer eligible again for BestPeer/bulk selection",
+				"peer", id.String())
 		}
 	}
 	return m
@@ -455,6 +457,8 @@ func (s *syncer) appendPullDistrustSkips(m map[peer.ID]bool, now time.Time) {
 		} else {
 			delete(s.pullDistrustUntil, id)
 			delete(s.pullFailStreak, id)
+			s.logger.Info("syncer: pull-distrust cooldown ended; peer eligible again for BestPeer/bulk selection",
+				"peer", id.String())
 		}
 	}
 }
@@ -462,7 +466,13 @@ func (s *syncer) appendPullDistrustSkips(m map[peer.ID]bool, now time.Time) {
 func (s *syncer) resetPullFailureStreak(id peer.ID) {
 	s.pullDistrustMu.Lock()
 	defer s.pullDistrustMu.Unlock()
+	prev, had := s.pullFailStreak[id]
 	delete(s.pullFailStreak, id)
+	if had && prev > 0 {
+		s.logger.Info("syncer: bulk sync advanced local tip; cleared pull failure streak for peer",
+			"peer", id.String(),
+			"previousStreak", prev)
+	}
 }
 
 func (s *syncer) mergeSkipsForBestPeer(manual map[peer.ID]bool) map[peer.ID]bool {
@@ -483,12 +493,18 @@ func (s *syncer) recordBulkPullFailure(peerID peer.ID) {
 	defer s.pullDistrustMu.Unlock()
 	s.pullFailStreak[peerID]++
 	n := s.pullFailStreak[peerID]
+	s.logger.Info("syncer: bulk pull did not advance local tip; incrementing peer failure streak (next BestPeer selection ignores this peer after threshold)",
+		"peer", peerID.String(),
+		"streak", n,
+		"threshold", pullFailStreakThreshold)
 	if n >= pullFailStreakThreshold {
-		s.pullDistrustUntil[peerID] = time.Now().Add(pullDistrustDuration)
+		until := time.Now().Add(pullDistrustDuration)
+		s.pullDistrustUntil[peerID] = until
 		s.pullFailStreak[peerID] = 0
-		s.logger.Warn("syncer: peer temporarily distrusted after repeated bulk pull failures",
+		s.logger.Info("syncer: peer enters pull-distrust cooldown — will not be chosen as BestPeer until expiry",
 			"peer", peerID.String(),
 			"cooldown", pullDistrustDuration.String(),
+			"until", until.Format(time.RFC3339Nano),
 			"failuresThreshold", pullFailStreakThreshold)
 		go func() {
 			if s.closed.Load() {
@@ -522,6 +538,7 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 		headBeforeBulk := localLatest
 
 		// pick one best peer（fork/未完成 的 skip 与「拉取反复失败」的不信任 合并，但不信任不触发「无 best 时全体 Disconnect」）
+		pullDistrustActive := len(s.pullDistrustSkipMap())
 		bestPeer := s.peerMap.BestPeer(s.mergeSkipsForBestPeer(skipList))
 		if bestPeer == nil {
 			// 所有候选 peer 均被跳过（开流失败等）：主动断开这些 peer 促其重连，退避后清空 skipList 再试
@@ -554,6 +571,13 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 				"localLatest", localLatest)
 			continue
 		}
+
+		s.logger.Info("syncer: selected BestPeer for bulk sync (peers in pull-distrust cooldown are excluded from this pick)",
+			"peer", bestPeer.ID.String(),
+			"peerAdvertisedLatest", bestPeer.Number,
+			"localLatest", localLatest,
+			"pullDistrustCooldownPeerCount", pullDistrustActive,
+			"forkOrIncompleteSkipCount", len(skipList))
 
 		// 添加真正开始同步的详细日志
 		s.logger.Debug("🚀 开始同步区块",
