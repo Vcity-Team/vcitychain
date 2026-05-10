@@ -169,7 +169,9 @@ func (rm *ResourceMonitor) maybeKickSyncIfStalledBehind() {
 		return
 	}
 
-	rm.logger.Info("sync lag recovery: invoking DPoS restartSyncerForRecovery (plan B)",
+	// planB ticker 每 500ms 触发；停滞条件满足时每 ~1s 会进来。用间隔日志避免刷屏（仍每次调用 restart 以触发冷却期 KickSync 等）。
+	rm.logOnceWithInterval("sync_lag_recovery_invoke", 15*time.Second, "info",
+		"sync lag recovery: invoking DPoS restartSyncerForRecovery (plan B)",
 		"localBlockNumber", local,
 		"networkLatestBlockNumber", network,
 		"lagBlocks", lag,

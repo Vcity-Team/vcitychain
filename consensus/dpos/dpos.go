@@ -358,6 +358,9 @@ type DPoS struct {
 	syncRestartMu sync.Mutex
 	// lastSyncHardRestartAt：方案 B 全量重建 syncer 的冷却时间起点。
 	lastSyncHardRestartAt time.Time
+	// 冷却期内 KickSync / 跳过日志节流，避免 planB ticker 高频触发时刷屏与过度关流。
+	lastCooldownKickSyncAt time.Time
+	lastCooldownSkipLogAt  time.Time
 
 	// 区块链引用
 	blockchain blockchainBackend
@@ -880,10 +883,19 @@ func (d *DPoS) restartSyncerForRecovery(reason string) error {
 	defer d.syncRestartMu.Unlock()
 
 	if !d.lastSyncHardRestartAt.IsZero() && time.Since(d.lastSyncHardRestartAt) < syncHardRestartMinInterval {
-		d.logger.Info("sync hard restart skipped (cooldown)",
-			"reason", reason,
-			"sinceLast", time.Since(d.lastSyncHardRestartAt).String(),
-			"minInterval", syncHardRestartMinInterval.String())
+		now := time.Now()
+		// 冷却期内仍间歇做软恢复：关流、刷新 peer 图并唤醒 Sync；避免每秒 Kick 打爆对端与日志。
+		if d.syncer != nil && now.Sub(d.lastCooldownKickSyncAt) >= syncCooldownKickMinInterval {
+			d.lastCooldownKickSyncAt = now
+			d.syncer.KickSync(reason + " (cooldown: KickSync)")
+		}
+		if now.Sub(d.lastCooldownSkipLogAt) >= syncCooldownSkipLogInterval {
+			d.lastCooldownSkipLogAt = now
+			d.logger.Info("sync hard restart skipped (cooldown)",
+				"reason", reason,
+				"sinceLast", time.Since(d.lastSyncHardRestartAt).String(),
+				"minInterval", syncHardRestartMinInterval.String())
+		}
 		return nil
 	}
 
@@ -917,6 +929,8 @@ func (d *DPoS) restartSyncerForRecovery(reason string) error {
 	}
 
 	d.lastSyncHardRestartAt = time.Now()
+	d.lastCooldownKickSyncAt = time.Time{}
+	d.lastCooldownSkipLogAt = time.Time{}
 	return nil
 }
 
@@ -931,6 +945,9 @@ const (
 	syncHardRestartMinInterval = 5 * time.Minute // 方案 B 两次全量重建的最短间隔
 	// planBStallCheckInterval：须小于 stagnantDuration，否则 ticker 粒度过粗无法及时判定 1s 停滞
 	planBStallCheckInterval = 500 * time.Millisecond
+	// 冷却窗口内 KickSync 最短间隔（resource-monitor 约每秒可触发一次 restart 调用）
+	syncCooldownKickMinInterval = 10 * time.Second
+	syncCooldownSkipLogInterval = 30 * time.Second
 )
 
 // Factory 创建DPoS共识实例

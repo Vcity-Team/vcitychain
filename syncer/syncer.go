@@ -20,6 +20,10 @@ const (
 	syncerName        = "syncer"
 	syncerProto       = "/syncer/0.2"
 	fillGapRetryDelay = 300 * time.Millisecond // 关流后退避再对同一 peer 重开流，避免 stream reset
+	// syncBestNotAheadWakeInterval：best peer 宣称不高于本地时，仍定时唤醒 Sync。
+	// putToPeerMap 对「同区块高度」的状态更新不 notify，若无更高高度事件，否则会永久阻塞在 newStatusCh，
+	// 与资源监控观测到的网络领先脱节（同步表现为停住）。
+	syncBestNotAheadWakeInterval = 5 * time.Second
 )
 
 var (
@@ -448,6 +452,14 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 
 		// if the bestPeer does not have a new block continue
 		if bestPeer.Number <= localLatest {
+			s.logger.Debug("syncer: best peer not ahead of local, self-wake to avoid stall on unchanged peer heights",
+				"peer", bestPeer.ID.String(),
+				"peerNumber", bestPeer.Number,
+				"localLatest", localLatest)
+			s.wakeSyncAfter(syncBestNotAheadWakeInterval, "best_peer_not_ahead",
+				"peer", bestPeer.ID.String(),
+				"peerNumber", bestPeer.Number,
+				"localLatest", localLatest)
 			continue
 		}
 
