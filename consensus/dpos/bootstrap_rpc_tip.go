@@ -81,6 +81,24 @@ func fetchEthBlockNumber(ctx context.Context, endpoint string) (uint64, error) {
 	return strconv.ParseUint(strings.TrimPrefix(s, "0x"), 16, 64)
 }
 
+const bootstrapRPCGateCapLogInterval = 12 * time.Second
+
+// logGateWaterlineCappedByBootstrapRPC：门禁被 bootstrap RPC 封顶时打 INFO（12s 节流），使用 runtime 主 logger。
+func (r *dposRuntime) logGateWaterlineCappedByBootstrapRPC(waterlineBefore, bootstrapTip, localTip uint64) {
+	const key = "bootstrap_rpc_gate_cap"
+	r.logMutex.Lock()
+	defer r.logMutex.Unlock()
+	now := time.Now()
+	if last, ok := r.lastLogTime[key]; ok && now.Sub(last) < bootstrapRPCGateCapLogInterval {
+		return
+	}
+	r.lastLogTime[key] = now
+	r.logger.Info("DPoS: gate waterline capped by dpos_bootstrap_rpc eth_blockNumber",
+		"waterlineBefore", waterlineBefore,
+		"bootstrapCanonicalTip", bootstrapTip,
+		"localTip", localTip)
+}
+
 // capGateWaterlineWithBootstrapRPC limits gate waterline to canonical tip from dpos_bootstrap_rpc when configured and RPC succeeds.
 // 若 RPC 高度远低于本地链尖，视为错链/错 URL，不用其封顶。
 func (r *dposRuntime) capGateWaterlineWithBootstrapRPC(waterline uint64) uint64 {
@@ -100,11 +118,7 @@ func (r *dposRuntime) capGateWaterlineWithBootstrapRPC(waterline uint64) uint64 
 			"bootstrapTip", tip, "localTip", local, "waterlineBefore", waterline)
 		return waterline
 	}
-	r.logOnceWithInterval("bootstrap_rpc_gate_cap", 12*time.Second, "info",
-		"DPoS: gate waterline capped by dpos_bootstrap_rpc eth_blockNumber",
-		"waterlineBefore", waterline,
-		"bootstrapCanonicalTip", tip,
-		"localTip", local)
+	r.logGateWaterlineCappedByBootstrapRPC(waterline, tip, local)
 	return tip
 }
 

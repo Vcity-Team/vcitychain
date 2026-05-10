@@ -545,11 +545,8 @@ func (s *Server) removePeerInfo(peerID peer.ID) *PeerConnInfo {
 	// Remove the peer from the peers map
 	connectionInfo, ok := s.peers[peerID]
 	if !ok {
-		// Peer is not present in the peers map
-		s.logger.Warn(
-			fmt.Sprintf("Attempted removing missing peer info %s", peerID),
-		)
-
+		// 竞态下重复 remove 或对端已从 map 摘掉 — 属正常现象，无需告警
+		s.logger.Debug("peer info already absent on remove", "id", peerID)
 		return nil
 	}
 

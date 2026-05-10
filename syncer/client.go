@@ -273,7 +273,11 @@ func (m *syncPeerClient) GetConnectedPeerStatuses() []*NoForkPeer {
 				peerID := p.Info.ID
 				status, err := m.GetPeerStatus(peerID)
 				if err != nil {
-					m.logger.Warn("failed to get status from a peer, skip", "id", peerID, "err", err)
+					if isRPCDeadlineExceeded(err) {
+						m.logger.Debug("failed to get status from a peer, skip", "id", peerID, "err", err)
+					} else {
+						m.logger.Warn("failed to get status from a peer, skip", "id", peerID, "err", err)
+					}
 					continue
 				}
 				syncPeersLock.Lock()
@@ -326,12 +330,11 @@ func (m *syncPeerClient) createAlternativeTopic() bool {
 
 // startGossip creates new topic and starts subscribing
 func (m *syncPeerClient) startGossip() error {
-	m.logger.Info("启动gossip", "节点ID", m.id, "topic", m.statusTopicName)
-	m.logger.Info("🔍 调试信息", "节点ID", m.id, "完整topic名称", m.statusTopicName, "节点ID长度", len(m.id))
-
-	// 记录当前连接的节点数量
 	peers := m.network.Peers()
-	m.logger.Info("当前连接节点数量", "节点ID", m.id, "连接数", len(peers))
+	m.logger.Debug("sync gossip topic",
+		"节点ID", m.id,
+		"topic", m.statusTopicName,
+		"连接数", len(peers))
 
 	topic, err := m.network.NewTopic(m.statusTopicName, &proto.SyncPeerStatus{})
 	if err != nil {
@@ -345,11 +348,6 @@ func (m *syncPeerClient) startGossip() error {
 			return fmt.Errorf("unable to subscribe to gossip topic, %w", err)
 		}
 		m.topic = topic
-		m.logger.Info("🚨🚨🚨 m.topic成功设置为真实topic 🚨🚨🚨",
-			"节点ID", m.id,
-			"topic", m.statusTopicName,
-			"m.topic", m.topic)
-		m.logger.Info("gossip启动成功", "节点ID", m.id, "topic", m.statusTopicName)
 	}
 
 	// 启动网络健康检查协程
@@ -415,7 +413,7 @@ func (m *syncPeerClient) startNewBlockProcess() {
 		m.wg.Done()
 	}()
 
-	m.logger.Info("🚀 启动区块事件监听", "节点ID", m.id, "shouldEmitBlocks", m.shouldEmitBlocks)
+	m.logger.Debug("区块事件监听已启动", "节点ID", m.id, "shouldEmitBlocks", m.shouldEmitBlocks)
 
 	// 移除超时保护，让同步器持续运行
 	m.subscription = m.blockchain.SubscribeEvents()
@@ -768,10 +766,7 @@ func (m *syncPeerClient) networkHealthCheck() {
 					"连接节点数", peerCount)
 			}
 
-			// 检查topic状态
-			if m.topic != nil {
-				m.logger.Info("Topic状态正常", "节点ID", m.id, "topic", m.statusTopicName)
-			} else {
+			if m.topic == nil {
 				m.logger.Error("Topic未初始化", "节点ID", m.id)
 			}
 		}

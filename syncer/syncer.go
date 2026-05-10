@@ -171,12 +171,12 @@ func (s *syncer) Close() error {
 // initializePeerMap fetches peer statuses and initializes map
 func (s *syncer) initializePeerMap() {
 	peerStatuses := s.syncPeerClient.GetConnectedPeerStatuses()
-	s.logger.Info("🔍 初始化对等节点映射", "获取到的对等节点数量", len(peerStatuses))
+	s.logger.Debug("初始化对等节点映射", "peerCount", len(peerStatuses))
 
 	if len(peerStatuses) == 0 {
 		s.logger.Warn("⚠️ 没有找到任何对等节点，同步器将等待对等节点连接")
 	} else {
-		s.logger.Info("✅ 成功获取对等节点状态", "数量", len(peerStatuses))
+		s.logger.Debug("已获取对等节点状态", "数量", len(peerStatuses))
 		for i, peer := range peerStatuses {
 			s.logger.Debug("对等节点信息",
 				"索引", i,
@@ -225,8 +225,11 @@ func (s *syncer) startPeerConnectionEventProcess() {
 func (s *syncer) initNewPeerStatus(peerID peer.ID) {
 	status, err := s.syncPeerClient.GetPeerStatus(peerID)
 	if err != nil {
-		s.logger.Warn("failed to get peer status, skip", "id", peerID, "err", err)
-
+		if isRPCDeadlineExceeded(err) {
+			s.logger.Debug("failed to get peer status, skip", "id", peerID, "err", err)
+		} else {
+			s.logger.Warn("failed to get peer status, skip", "id", peerID, "err", err)
+		}
 		return
 	}
 
@@ -296,7 +299,7 @@ func (s *syncer) getPeerMapSize() int {
 func (s *syncer) EnablePublishingPeerStatus() {
 	if s.syncPeerClient != nil {
 		s.syncPeerClient.EnablePublishingPeerStatus()
-		s.logger.Info("✅ 启用状态广播")
+		s.logger.Debug("启用状态广播")
 	} else {
 		s.logger.Warn("⚠️ syncPeerClient为空，无法启用状态广播")
 	}
@@ -306,7 +309,7 @@ func (s *syncer) EnablePublishingPeerStatus() {
 func (s *syncer) DisablePublishingPeerStatus() {
 	if s.syncPeerClient != nil {
 		s.syncPeerClient.DisablePublishingPeerStatus()
-		s.logger.Info("✅ 禁用状态广播")
+		s.logger.Debug("禁用状态广播")
 	} else {
 		s.logger.Warn("⚠️ syncPeerClient为空，无法禁用状态广播")
 	}

@@ -146,14 +146,14 @@ func (d *DPoS) saveBLSKeyToCache(address types.Address, blsKey *bls.PublicKey) {
 
 // syncLoadBLSKeys 同步加载BLS公钥
 func (d *DPoS) syncLoadBLSKeys() error {
-	d.logger.Info("🔑 开始同步加载BLS公钥...")
+	d.logger.Debug("开始同步加载BLS公钥")
 
 	// 1. 从数据库加载已缓存的BLS公钥
 	if err := d.loadBLSKeysFromDatabase(); err != nil {
 		d.logger.Warn("⚠️ 从数据库加载BLS公钥失败", "error", err)
 		// 数据库加载失败不阻止启动，继续尝试网络获取
 	} else {
-		d.logger.Info("✅ 数据库BLS公钥加载完成（若存在）")
+		d.logger.Debug("数据库中的BLS公钥已加载（若存在）")
 	}
 
 	// 2. 获取所有验证者
@@ -177,15 +177,14 @@ func (d *DPoS) syncLoadBLSKeys() error {
 			if !isLocalValidator && d.runtime != nil && d.runtime.networkIntegration != nil {
 				if peerID, has, connected := d.runtime.networkIntegration.GetValidatorConnectivity(validator.Address); has {
 					if !connected {
-						d.logger.Info("⏭️ 跳过BLS请求：验证者未连接",
+						d.logger.Debug("跳过BLS请求（验证者未连接）",
 							"address", validator.Address.String(),
 							"peerID", peerID.String())
 						missingValidators = append(missingValidators, validator.Address)
 						continue
 					}
 				} else {
-					d.logger.Info("⏭️ 跳过BLS请求：未知Peer映射",
-						"address", validator.Address.String())
+					d.logger.Debug("跳过BLS请求（未知Peer映射）", "address", validator.Address.String())
 					missingValidators = append(missingValidators, validator.Address)
 					continue
 				}
@@ -229,7 +228,7 @@ func (d *DPoS) syncLoadBLSKeys() error {
 			d.saveBLSKeyToCache(validator.Address, blsKey)
 			d.saveBLSKeyToDatabase(validator.Address, blsKey)
 
-			d.logger.Info("✅ BLS公钥获取成功", "address", validator.Address.String())
+			d.logger.Debug("BLS公钥获取成功", "address", validator.Address.String())
 		} else {
 			d.logger.Debug("✅ BLS公钥已存在", "address", validator.Address.String())
 		}
@@ -240,12 +239,12 @@ func (d *DPoS) syncLoadBLSKeys() error {
 	for _, validator := range validators {
 		if validator.BlsKey == nil {
 			allBLSLoaded = false
-			d.logger.Warn("⚠️ 验证者BLS公钥未加载", "address", validator.Address.String())
+			d.logger.Debug("验证者BLS公钥未加载", "address", validator.Address.String())
 		}
 	}
 
 	if len(missingValidators) > 0 {
-		d.logger.Warn("⚠️ 部分验证者BLS公钥启动时缺失，将在后续按需获取",
+		d.logger.Warn("部分验证者BLS公钥启动时缺失，将在后续按需获取",
 			"missingCount", len(missingValidators),
 			"missingValidators", func() []string {
 				addrs := make([]string, 0, len(missingValidators))
@@ -257,9 +256,9 @@ func (d *DPoS) syncLoadBLSKeys() error {
 	}
 
 	if !allBLSLoaded {
-		d.logger.Warn("⚠️ 部分验证者BLS公钥未加载完成，但继续启动流程")
+		d.logger.Warn("部分验证者BLS公钥未加载完成，继续启动")
 	} else {
-		d.logger.Info("✅ 所有BLS公钥同步加载完成")
+		d.logger.Debug("所有验证者BLS公钥已加载")
 	}
 
 	d.blsLoadingMutex.Lock()
@@ -274,35 +273,25 @@ func (d *DPoS) syncLoadBLSKeys() error {
 		d.logger.Debug("ℹ️ BLS加载完成信号通道已满")
 	}
 
-	// 4. 检查数据库是否已有验证者，只有没有时才保存
-	d.logger.Info("🔍 开始检查数据库验证者状态...")
+	d.logger.Debug("检查数据库验证者状态…")
 	if d.state != nil && d.state.StakeStore != nil {
-		d.logger.Info("🔍 状态存储可用，开始获取数据库验证者...")
-		d.logger.Info("🔍 当前state和StakeStore状态",
-			"stateIsNil", d.state == nil,
-			"stakeStoreIsNil", d.state.StakeStore == nil)
-
-		// 直接使用GetValidatorsWithFilter(false)查询数据库，避免内存和数据库不一致
 		dbValidators, err := d.state.StakeStore.GetValidatorsWithFilter(false)
-		d.logger.Info("🔍 GetValidatorsWithFilter(false)结果", "count", len(dbValidators), "error", err)
+		d.logger.Debug("GetValidatorsWithFilter(false)", "count", len(dbValidators), "error", err)
 
 		if err == nil && len(dbValidators) > 0 {
-			// 打印数据库验证者的详细信息
-			d.logger.Info("🔍 数据库验证者详细信息:")
 			for i, validator := range dbValidators {
-				// 获取验证者的故障标志信息
 				faultInfo := d.getValidatorFaultInfo(validator.Address)
-				d.logger.Info("🔍 数据库验证者",
+				d.logger.Debug("数据库验证者",
 					"index", i,
 					"address", validator.Address.String(),
 					"votingPower", validator.VotingPower.String(),
 					"isActive", validator.IsActive,
 					"hasBlsKey", validator.BlsKey != nil,
-					"faultFlag", faultInfo) // 添加故障标志信息
+					"faultFlag", faultInfo)
 			}
-			d.logger.Info("✅ 数据库已有验证者，跳过保存", "count", len(dbValidators))
+			d.logger.Debug("数据库已有验证者，跳过保存", "count", len(dbValidators))
 		} else {
-			d.logger.Info("🔍 数据库无验证者或获取失败，准备保存", "count", len(dbValidators), "error", err)
+			d.logger.Debug("数据库无验证者或获取失败，准备保存", "count", len(dbValidators), "error", err)
 			// 数据库没有验证者，保存验证者信息到数据库
 			if err := d.saveValidatorsWithBLSKeysToDatabase(); err != nil {
 				d.logger.Warn("⚠️ 保存验证者信息到数据库失败", "error", err)

@@ -615,10 +615,8 @@ func (d *DPoS) Start() error {
 			d.logger.Warn("key not available, cannot determine if node is delegate")
 		}
 
-		// 启用状态广播
 		if d.syncer != nil {
 			d.syncer.EnablePublishingPeerStatus()
-			d.logger.Info("✅ 启用状态广播")
 		} else {
 			d.logger.Warn("⚠️ syncer为空，无法启用状态广播")
 		}
@@ -626,16 +624,14 @@ func (d *DPoS) Start() error {
 		d.logger.Warn("transaction pool not available, cannot set sealing state")
 	}
 
-	// 3. 先同步获取BLS公钥
-	d.logger.Info("🔑 开始同步获取BLS公钥...")
+	d.logger.Debug("同步加载BLS公钥…")
 	if err := d.syncLoadBLSKeys(); err != nil {
 		d.logger.Error("❌ BLS公钥同步获取失败", "error", err)
 		return fmt.Errorf("failed to sync load BLS keys: %w", err)
 	}
-	d.logger.Info("✅ BLS公钥同步获取完成")
+	d.logger.Debug("BLS公钥同步加载阶段完成")
 
-	// 4. 启动syncer（BLS公钥加载完成后）
-	d.logger.Info("🌐 开始启动syncer...")
+	d.logger.Debug("启动 syncer…")
 	if err := d.syncer.Start(); err != nil {
 		// 检查是否是topic冲突错误，如果是则忽略
 		if strings.Contains(err.Error(), "topic already exists") {
@@ -645,7 +641,7 @@ func (d *DPoS) Start() error {
 			return fmt.Errorf("failed to start syncer. Error: %w", err)
 		}
 	} else {
-		d.logger.Info("✅ syncer启动成功")
+		d.logger.Debug("syncer 启动成功")
 	}
 
 	// 长期同步循环：不可用 RetryForever（Sync 在 syncer.Close 后返回 nil 会被视为成功从而退出重试；方案 B 需在此循环内换新实例后继续 Sync）。
