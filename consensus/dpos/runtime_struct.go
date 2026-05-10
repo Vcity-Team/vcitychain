@@ -103,6 +103,11 @@ type dposRuntime struct {
 
 	// productionCatchUpTarget：曾观测到网络/gossip 高于本地时的追平目标（取历史最大值），本地达到前禁止出块。
 	productionCatchUpTarget uint64
+
+	// dpos_bootstrap_rpc：eth_blockNumber 缓存，用作 canonical 链尖上限（短 TTL，避免热路径打爆 RPC）
+	bootstrapRPCMu       sync.Mutex
+	bootstrapRPCCached   uint64
+	bootstrapRPCCachedAt time.Time
 }
 
 // getBLSCommittee 返回用于 BLS 签名的验证者委员会

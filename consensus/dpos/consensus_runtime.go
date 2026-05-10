@@ -100,6 +100,9 @@ type runtimeConfig struct {
 
 	// MaxPeerAdvertisedLeadOverTrusted：peer 宣称相对 trusted 写入高度的最大可信超前；超过则退回 trusted。0 表示使用默认 8192。
 	MaxPeerAdvertisedLeadOverTrusted uint64
+
+	// BootstrapRPC：可选 JSON-RPC（与创世 dpos_bootstrap_rpc 同源）；用于 eth_blockNumber 作为 canonical 链尖上限，约束追平门禁不被 gossip 虚高压住。
+	BootstrapRPC string
 }
 
 // consensusRuntime is a struct that provides consensus runtime features like epoch, state and event management

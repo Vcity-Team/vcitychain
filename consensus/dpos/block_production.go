@@ -175,6 +175,7 @@ func (r *dposRuntime) produceBlock() error {
 				waterline = rawGossip
 			}
 		}
+		waterline = r.capGateWaterlineWithBootstrapRPC(waterline)
 		if blocked, catchUp := r.updateProductionCatchUpLatch(currentBlock.Number, waterline); blocked {
 			r.logger.Info("⏰ 区块生产被跳过：落后追平锁定期",
 				"localBlockNumber", currentBlock.Number,

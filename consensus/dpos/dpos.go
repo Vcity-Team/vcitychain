@@ -1611,6 +1611,7 @@ func (d *DPoS) Initialize() error {
 		SyncLagRestartBlocks:             d.syncLagRestartBlocks,
 		SyncLagRestartStagnant:           d.syncLagRestartStagnantDur,
 		MaxPeerAdvertisedLeadOverTrusted: maxLead,
+		BootstrapRPC:                     strings.TrimSpace(d.config.BootstrapRPC),
 	}
 
 	// 检查runtime配置是否正确

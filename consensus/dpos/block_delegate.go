@@ -189,6 +189,8 @@ const peerAdvertisedHeadTTL = 2 * time.Minute
 
 // getNetworkLatestBlockNumber 返回用于「是否已落后于网络」的门禁高度。
 //
+// 若配置了 dpos_bootstrap_rpc，会用 eth_blockNumber 结果作为 canonical 链尖上限，避免仅被 gossip 虚高压门禁。
+//
 // GetTrustedPeerNumber：近期从某 peer 成功验证并写入本地的最高块号，大体接近本地链头，不等价于「全网链尖」。
 // GetVerifiedBestPeerNumber：对 Best peer 尝试拉取 local+1 验证后再采信其宣称；失败则返回 0（仍可用 gossip hint）。
 // GetBestPeerNumber：原始 gossip 链尖，用于 hint 水印与非门禁逻辑。
@@ -278,10 +280,11 @@ func (r *dposRuntime) getNetworkLatestBlockNumber() uint64 {
 		if r.lastPeerAdvertisedHead > 0 && now.Sub(r.lastPeerAdvertisedHeadAt) < peerAdvertisedHeadTTL && r.lastPeerAdvertisedHead > w {
 			w = r.lastPeerAdvertisedHead
 		}
+		w = r.capGateWaterlineWithBootstrapRPC(w)
 		r.updateProductionCatchUpLatch(hdr.Number, w)
 	}
 
-	return candidate
+	return r.capGateWaterlineWithBootstrapRPC(candidate)
 }
 
 // updateProductionCatchUpLatch 在观测到「门禁水位或原始 gossip」高于本地时抬高追平目标；本地达到目标后清除。

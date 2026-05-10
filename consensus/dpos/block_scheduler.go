@@ -300,6 +300,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 				waterline = rawGossip
 			}
 		}
+		waterline = r.capGateWaterlineWithBootstrapRPC(waterline)
 		blocked, catchUpTarget := r.updateProductionCatchUpLatch(local, waterline)
 		if blocked {
 			r.logOnceWithInterval("should_produce_catchup_latch", 5*time.Second, "info",
