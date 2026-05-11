@@ -67,11 +67,20 @@ func (r *dposRuntime) preProduceBootstrapCanonicalCheck(localTip uint64) bool {
 	r.invalidateBootstrapRPCCache()
 	rpcTip := r.cachedBootstrapEthBlockNumber()
 
-	r.logger.Info("🔭 【出块前 RPC 链尖】eth_blockNumber（已强制刷新短缓存）",
+	gossipPeak := r.gossipPeakForBootstrapGate()
+	lead := r.maxGossipLeadOverBootstrapRPC()
+	rpcPlusLead := rpcTip + lead
+	blended := gateWaterlineBlendBootstrapRPCGossip(rpcTip, gossipPeak, lead)
+
+	r.logger.Info("🔭 【出块前 RPC 链尖】eth_blockNumber（已强制刷新短缓存）；门禁带宽 gossip vs rpc+lead",
 		"dpos_bootstrap_rpc", url,
 		"localTip", localTip,
 		"plannedNextBlockNumber", nextHeight,
-		"rpcEthBlockNumber", rpcTip)
+		"rpcEthBlockNumber", rpcTip,
+		"gossipPeak", gossipPeak,
+		"maxGossipLeadOverBootstrapRPC", lead,
+		"rpcTipPlusLeadCap", rpcPlusLead,
+		"blendedGateWaterline", blended)
 
 	if rpcTip == 0 {
 		r.logger.Warn("⚠️ 【出块前 RPC】eth_blockNumber 不可用（0），无法进行规范链尖复核；继续沿用后续门禁",
@@ -82,7 +91,11 @@ func (r *dposRuntime) preProduceBootstrapCanonicalCheck(localTip uint64) bool {
 		r.logger.Warn("⏸️ 【出块前跳过出块】规范链高度已不低于拟出块高度，取消本地构建，请依赖同步拉取",
 			"localTip", localTip,
 			"plannedNextBlockNumber", nextHeight,
-			"rpcEthBlockNumber", rpcTip)
+			"rpcEthBlockNumber", rpcTip,
+			"gossipPeak", gossipPeak,
+			"maxGossipLeadOverBootstrapRPC", lead,
+			"rpcTipPlusLeadCap", rpcPlusLead,
+			"blendedGateWaterline", blended)
 		return true
 	}
 	return false

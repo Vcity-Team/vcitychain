@@ -200,6 +200,26 @@ func gateWaterlineBlendBootstrapRPCGossip(rpcTip, gossipMax, lead uint64) uint64
 	return gossipMax
 }
 
+// gossipPeakForBootstrapGate 与 getNetworkLatestBlockNumber 中门禁合成一致：max(原始 gossip，TTL 内 lastPeerAdvertisedHead)。
+func (r *dposRuntime) gossipPeakForBootstrapGate() uint64 {
+	if r.config == nil || r.config.dposBackend == nil {
+		return 0
+	}
+	dpos, ok := r.config.dposBackend.(*DPoS)
+	if !ok || dpos.syncer == nil {
+		return 0
+	}
+	rawGossipBest := dpos.syncer.GetBestPeerNumber()
+	now := time.Now()
+	r.networkHeadHintMu.Lock()
+	defer r.networkHeadHintMu.Unlock()
+	gossipPeak := rawGossipBest
+	if r.lastPeerAdvertisedHead > 0 && now.Sub(r.lastPeerAdvertisedHeadAt) < peerAdvertisedHeadTTL && r.lastPeerAdvertisedHead > gossipPeak {
+		gossipPeak = r.lastPeerAdvertisedHead
+	}
+	return gossipPeak
+}
+
 func (r *dposRuntime) maxPeerAdvertisedLeadOverTrusted() uint64 {
 	if r.config != nil && r.config.MaxPeerAdvertisedLeadOverTrusted > 0 {
 		return r.config.MaxPeerAdvertisedLeadOverTrusted
