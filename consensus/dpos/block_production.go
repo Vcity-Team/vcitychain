@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
+	"github.com/Vcity-Team/vcitychain/syncer"
 	"github.com/Vcity-Team/vcitychain/types"
 )
 
@@ -168,6 +169,15 @@ func (r *dposRuntime) produceBlock() error {
 	if currentBlock != nil {
 		if r.preProduceBootstrapCanonicalCheck(currentBlock.Number) {
 			return nil
+		}
+		// P1：出块前从 P2P 拉取 localTip+1，若 peer 上已存在可衔接块则放弃本轮构建（由同步落块）
+		if r.config != nil && r.config.dposBackend != nil {
+			if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil {
+				probeTO := r.preProducePeerProbeTimeout()
+				if probeTO > 0 && dpos.syncer.TryProbeCanonicalNextBeforeProduce(probeTO) {
+					return nil
+				}
+			}
 		}
 		if r.mustWaitForBootstrapCanonicalSync(currentBlock.Number) {
 			return nil
@@ -584,4 +594,12 @@ func (r *dposRuntime) produceBlock() error {
 	}
 
 	return nil
+}
+
+// preProducePeerProbeTimeout 出块前 P2P 探测超时；0 使用 syncer 默认（500ms）。
+func (r *dposRuntime) preProducePeerProbeTimeout() time.Duration {
+	if r.config != nil && r.config.PreProducePeerProbeTimeout > 0 {
+		return r.config.PreProducePeerProbeTimeout
+	}
+	return syncer.DefaultPreProduceProbeTimeout
 }

@@ -407,6 +407,8 @@ func (tp *syncerMock) GetTrustedPeerNumber() uint64 { return 0 }
 
 func (tp *syncerMock) KickSync(string) {}
 
+func (tp *syncerMock) TryProbeCanonicalNextBeforeProduce(time.Duration) bool { return false }
+
 func init() {
 	// setup custom hash header func
 	setupHeaderHashFunc()

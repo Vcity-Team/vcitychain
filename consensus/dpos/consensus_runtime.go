@@ -103,6 +103,9 @@ type runtimeConfig struct {
 
 	// BootstrapRPC：可选 JSON-RPC（与创世 dpos_bootstrap_rpc 同源）；用于 eth_blockNumber 作为 canonical 链尖上限，约束追平门禁不被 gossip 虚高压住。
 	BootstrapRPC string
+
+	// PreProducePeerProbeTimeout 出块前 P2P 探测「下一高度」的超时；0 表示使用 syncer 默认（500ms）。
+	PreProducePeerProbeTimeout time.Duration
 }
 
 // consensusRuntime is a struct that provides consensus runtime features like epoch, state and event management
