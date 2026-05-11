@@ -148,8 +148,8 @@ func (r *dposRuntime) bootstrapRPCGateAuthoritative() bool {
 	return ok
 }
 
-// logGateWaterlineCappedByBootstrapRPC：门禁被 bootstrap RPC 封顶时打 INFO（12s 节流），使用 runtime 主 logger。
-func (r *dposRuntime) logGateWaterlineCappedByBootstrapRPC(waterlineBefore, bootstrapTip, localTip uint64) {
+// logGateWaterlineCappedByBootstrapRPC：门禁被 bootstrap RPC 带宽封顶时打 INFO（12s 节流），使用 runtime 主 logger。
+func (r *dposRuntime) logGateWaterlineCappedByBootstrapRPC(waterlineBefore, bootstrapTip, localTip, gateCap uint64) {
 	const key = "bootstrap_rpc_gate_cap"
 	r.logMutex.Lock()
 	defer r.logMutex.Unlock()
@@ -158,19 +158,23 @@ func (r *dposRuntime) logGateWaterlineCappedByBootstrapRPC(waterlineBefore, boot
 		return
 	}
 	r.lastLogTime[key] = now
-	r.logger.Info("DPoS: gate waterline capped by dpos_bootstrap_rpc eth_blockNumber",
+	r.logger.Info("DPoS: gate waterline capped to bootstrap RPC band (tip + max gossip lead)",
 		"waterlineBefore", waterlineBefore,
 		"bootstrapCanonicalTip", bootstrapTip,
+		"gateCapTipPlusLead", gateCap,
 		"localTip", localTip)
 }
 
-// capGateWaterlineWithBootstrapRPC limits gate waterline to canonical tip from dpos_bootstrap_rpc when configured and RPC succeeds.
-// 若 RPC 高度远低于本地链尖，视为错链/错 URL，不用其封顶。
+// capGateWaterlineWithBootstrapRPC 在配置了 dpos_bootstrap_rpc 且 eth_blockNumber 可读时，将门禁水位限制在不超过 rpcTip+lead；
+// lead 默认 5（见 maxGossipLeadOverBootstrapRPC）。若 RPC 高度远低于本地链尖，视为错链/错 URL，不按 RPC 收窄。
 func (r *dposRuntime) capGateWaterlineWithBootstrapRPC(waterline uint64) uint64 {
 	tip := r.cachedBootstrapEthBlockNumber()
-	if tip == 0 || waterline <= tip {
+	if tip == 0 {
 		return waterline
 	}
+	lead := r.maxGossipLeadOverBootstrapRPC()
+	maxBand := tip + lead
+
 	var local uint64
 	if r.config != nil && r.config.blockchain != nil {
 		if h := r.config.blockchain.CurrentHeader(); h != nil {
@@ -183,8 +187,12 @@ func (r *dposRuntime) capGateWaterlineWithBootstrapRPC(waterline uint64) uint64 
 			"bootstrapTip", tip, "localTip", local, "waterlineBefore", waterline)
 		return waterline
 	}
-	r.logGateWaterlineCappedByBootstrapRPC(waterline, tip, local)
-	return tip
+
+	if waterline <= maxBand {
+		return waterline
+	}
+	r.logGateWaterlineCappedByBootstrapRPC(waterline, tip, local, maxBand)
+	return maxBand
 }
 
 // mustWaitForBootstrapCanonicalSync：配置了 dpos_bootstrap_rpc 且 eth_blockNumber 高于本地链尖时，禁止出块直至同步追上。

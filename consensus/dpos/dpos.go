@@ -426,6 +426,9 @@ type DPoS struct {
 	// maxPeerAdvertisedLeadBlocks：peer 宣称相对 trusted 的最大可信超前（0 表示 runtime 使用默认 8192）
 	maxPeerAdvertisedLeadBlocks uint64
 
+	// maxGossipLeadOverBootstrapRPCBlocks：gossip 相对 dpos_bootstrap_rpc eth_blockNumber 的最大可信超前（0 表示 runtime 默认 5）
+	maxGossipLeadOverBootstrapRPCBlocks uint64
+
 	// DPoS验证者相关字段
 	minStakeAmount *big.Int // 最小质押门槛
 
@@ -1109,6 +1112,15 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		}
 	}
 
+	if gossipLeadRaw, exists := getConfigValue("dpos_max_gossip_lead_over_bootstrap_rpc", "dposMaxGossipLeadOverBootstrapRPC"); exists {
+		if n, ok := toUint64(gossipLeadRaw); ok && n > 0 {
+			vcity_dpos.maxGossipLeadOverBootstrapRPCBlocks = n
+			logger.Info("📶 dpos_max_gossip_lead_over_bootstrap_rpc", "blocks", n)
+		} else {
+			logger.Warn("📶 dpos_max_gossip_lead_over_bootstrap_rpc 无效，使用默认 5", "value", gossipLeadRaw)
+		}
+	}
+
 	if epochDuration, exists := params.Config.Config["epochDuration"]; exists {
 		logger.Info("🔍 找到epochDuration配置", "type", fmt.Sprintf("%T", epochDuration), "value", epochDuration)
 		if duration, ok := epochDuration.(time.Duration); ok {
@@ -1608,6 +1620,7 @@ func (d *DPoS) Initialize() error {
 		SyncLagRestartStagnant:           d.syncLagRestartStagnantDur,
 		MaxPeerAdvertisedLeadOverTrusted: maxLead,
 		BootstrapRPC:                     strings.TrimSpace(d.config.BootstrapRPC),
+		MaxGossipLeadOverBootstrapRPC:    d.maxGossipLeadOverBootstrapRPCBlocks,
 	}
 
 	// 检查runtime配置是否正确

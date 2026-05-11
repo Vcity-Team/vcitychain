@@ -177,6 +177,29 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 // defaultMaxPeerAdvertisedLeadOverTrusted：peer 宣称相对 trusted 写入高度的默认最大可信超前（可通过 runtimeConfig 覆盖）。
 const defaultMaxPeerAdvertisedLeadOverTrusted = uint64(8192)
 
+// defaultMaxGossipLeadOverBootstrapRPC：gossip 相对 eth_blockNumber 允许的最大超前（块）；可与创世配置 dpos_max_gossip_lead_over_bootstrap_rpc 覆盖。
+const defaultMaxGossipLeadOverBootstrapRPC = uint64(5)
+
+func (r *dposRuntime) maxGossipLeadOverBootstrapRPC() uint64 {
+	if r.config != nil && r.config.MaxGossipLeadOverBootstrapRPC > 0 {
+		return r.config.MaxGossipLeadOverBootstrapRPC
+	}
+	return defaultMaxGossipLeadOverBootstrapRPC
+}
+
+// gateWaterlineBlendBootstrapRPCGossip 将 bootstrap RPC 链尖与 gossip 宣称合成门禁水位：
+// gossip<=rpcTip 时用 rpcTip；gossip>rpcTip 时最高取 min(gossip, rpcTip+lead)，抑制虚报超高。
+func gateWaterlineBlendBootstrapRPCGossip(rpcTip, gossipMax, lead uint64) uint64 {
+	if gossipMax <= rpcTip {
+		return rpcTip
+	}
+	capAt := rpcTip + lead
+	if gossipMax > capAt {
+		return capAt
+	}
+	return gossipMax
+}
+
 func (r *dposRuntime) maxPeerAdvertisedLeadOverTrusted() uint64 {
 	if r.config != nil && r.config.MaxPeerAdvertisedLeadOverTrusted > 0 {
 		return r.config.MaxPeerAdvertisedLeadOverTrusted
@@ -189,8 +212,9 @@ const peerAdvertisedHeadTTL = 2 * time.Minute
 
 // getNetworkLatestBlockNumber 返回用于「是否已落后于网络」的门禁高度。
 //
-// 若配置了 dpos_bootstrap_rpc 且 eth_blockNumber 可读，门禁高度 **仅** 取该 RPC 结果，不再参与 gossip 合成与虚高 hint。
-// 未配置或 RPC 失败时回退为下述 syncer 合成逻辑；capGateWaterlineWithBootstrapRPC 仍处理「错链 RPC 远低于本地」时放弃封顶。
+// 若配置了 dpos_bootstrap_rpc 且 eth_blockNumber 可读：水位 = gateWaterlineBlendBootstrapRPCGossip(rpcTip, gossipPeak, lead)。
+// gossipPeak 为 GetBestPeerNumber 与 TTL 内 lastPeerAdvertisedHead 的较大者；lead 默认 5（可配置 dpos_max_gossip_lead_over_bootstrap_rpc）。
+// 未配置或 RPC 失败时回退为下述 syncer 合成逻辑；capGateWaterlineWithBootstrapRPC 将水位限制在 [rpcTip, rpcTip+lead]（错链 RPC 远低于本地时不收窄）。
 //
 // GetTrustedPeerNumber：近期从某 peer 成功验证并写入本地的最高块号，大体接近本地链头，不等价于「全网链尖」。
 // GetVerifiedBestPeerNumber：对 Best peer 尝试拉取 local+1 验证后再采信其宣称；失败则返回 0（仍可用 gossip hint）。
@@ -210,15 +234,6 @@ func (r *dposRuntime) getNetworkLatestBlockNumber() uint64 {
 	dpos, ok := r.config.dposBackend.(*DPoS)
 	if !ok || dpos.syncer == nil {
 		return 0
-	}
-
-	if tip, rpcGate := r.bootstrapRPCGateTip(); rpcGate {
-		hdr := r.config.blockchain.CurrentHeader()
-		if hdr != nil {
-			w := r.capGateWaterlineWithBootstrapRPC(tip)
-			r.updateProductionCatchUpLatch(hdr.Number, w)
-		}
-		return r.capGateWaterlineWithBootstrapRPC(tip)
 	}
 
 	rawGossipBest := dpos.syncer.GetBestPeerNumber()
@@ -276,8 +291,23 @@ func (r *dposRuntime) getNetworkLatestBlockNumber() uint64 {
 		}
 	}
 
+	gossipPeak := rawGossipBest
+	if r.lastPeerAdvertisedHead > 0 && now.Sub(r.lastPeerAdvertisedHeadAt) < peerAdvertisedHeadTTL && r.lastPeerAdvertisedHead > gossipPeak {
+		gossipPeak = r.lastPeerAdvertisedHead
+	}
+
 	if hdr != nil && r.lastPeerAdvertisedHead > 0 && hdr.Number >= r.lastPeerAdvertisedHead {
 		r.lastPeerAdvertisedHead = 0
+	}
+
+	if tip, rpcGate := r.bootstrapRPCGateTip(); rpcGate {
+		lead := r.maxGossipLeadOverBootstrapRPC()
+		w := gateWaterlineBlendBootstrapRPCGossip(tip, gossipPeak, lead)
+		wFinal := r.capGateWaterlineWithBootstrapRPC(w)
+		if hdr != nil {
+			r.updateProductionCatchUpLatch(hdr.Number, wFinal)
+		}
+		return wFinal
 	}
 
 	// 追平锁水位：须包含 TTL 内的 lastPeerAdvertisedHead。若仅依赖瞬时 candidate，在 rawGossipBest==0 时
