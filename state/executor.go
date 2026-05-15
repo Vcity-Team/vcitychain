@@ -521,6 +521,27 @@ func (t *Transition) Commit() (Snapshot, types.Hash, error) {
 	return s2, types.BytesToHash(root), nil
 }
 
+// IntermediateRoot computes the post-block state root without persisting trie changes (A-lite verify path).
+func (t *Transition) IntermediateRoot() (types.Hash, error) {
+	objs, err := t.state.Commit(t.config.EIP155)
+	if err != nil {
+		return types.ZeroHash, err
+	}
+
+	if computer, ok := t.snap.(interface {
+		ComputeRoot([]*Object) (types.Hash, error)
+	}); ok {
+		return computer.ComputeRoot(objs)
+	}
+
+	_, root, err := t.snap.Commit(objs)
+	if err != nil {
+		return types.ZeroHash, err
+	}
+
+	return types.BytesToHash(root), nil
+}
+
 func (t *Transition) subGasPool(amount uint64) error {
 	if t.gasPool < amount {
 		return ErrBlockLimitReached

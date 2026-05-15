@@ -148,24 +148,26 @@ func (d *DPoS) ApplyDelegateCancelRegistrationAfterTx(
 	reg.UnfreezeAvailableAt = 0
 	reg.DepositRefunded = true
 
-	if err := d.state.RegistrationStore.SaveRegistration(reg); err != nil {
-		return fmt.Errorf("delegate cancel: save registration: %w", err)
-	}
-
-	for i, del := range d.delegates {
-		if del.Address == delegate {
-			d.delegates = append(d.delegates[:i], d.delegates[i+1:]...)
-			break
+	if d.persistBlockSideEffects() {
+		if err := d.state.RegistrationStore.SaveRegistration(reg); err != nil {
+			return fmt.Errorf("delegate cancel: save registration: %w", err)
 		}
-	}
 
-	// 与历史「候选人保证金已从托管退回」同一语义，便于 grep；仅在本交易成功完成 trie 退款时出现。
-	d.logger.Info("✅ 候选人保证金已从托管退回注册地址（链上取消注册 DPOS+CAN）",
-		"block", blockNumber,
-		"delegate", delegate.String(),
-		"amountWei", amount.String(),
-		"escrow", escrow.String(),
-		"txHash", tx.Hash.String())
+		for i, del := range d.delegates {
+			if del.Address == delegate {
+				d.delegates = append(d.delegates[:i], d.delegates[i+1:]...)
+				break
+			}
+		}
+
+		// 与历史「候选人保证金已从托管退回」同一语义，便于 grep；仅在本交易成功完成 trie 退款时出现。
+		d.logger.Info("✅ 候选人保证金已从托管退回注册地址（链上取消注册 DPOS+CAN）",
+			"block", blockNumber,
+			"delegate", delegate.String(),
+			"amountWei", amount.String(),
+			"escrow", escrow.String(),
+			"txHash", tx.Hash.String())
+	}
 
 	return nil
 }

@@ -125,6 +125,20 @@ type Executor interface {
 	ProcessBlock(parentRoot types.Hash, block *types.Block, blockCreator types.Address) (*state.Transition, error)
 }
 
+// ProcessBlockWithMode is the default commit-mode entry for executors that do not implement ExecutorWithMode.
+func ProcessBlockWithMode(
+	executor Executor,
+	parentRoot types.Hash,
+	block *types.Block,
+	blockCreator types.Address,
+	mode ExecutionMode,
+) (*state.Transition, error) {
+	if ex, ok := executor.(ExecutorWithMode); ok {
+		return ex.ProcessBlockWithMode(parentRoot, block, blockCreator, mode)
+	}
+	return executor.ProcessBlock(parentRoot, block, blockCreator)
+}
+
 type TxSigner interface {
 	// Sender returns the sender of the transaction
 	Sender(tx *types.Transaction) (types.Address, error)
@@ -361,50 +375,7 @@ func (b *Blockchain) Header() *types.Header {
 func (b *Blockchain) RollbackToHeight(targetHeight uint64) error {
 	b.writeLock.Lock()
 	defer b.writeLock.Unlock()
-
-	current := b.Header()
-	if current == nil {
-		return fmt.Errorf("rollback: current header is nil")
-	}
-	if targetHeight >= current.Number {
-		return nil
-	}
-
-	targetHash, ok := b.db.ReadCanonicalHash(targetHeight)
-	if !ok {
-		return fmt.Errorf("rollback: canonical hash not found at height %d", targetHeight)
-	}
-
-	targetHeader, ok := b.GetHeaderByHash(targetHash)
-	if !ok || targetHeader == nil {
-		return fmt.Errorf("rollback: header not found at height %d (hash %s)", targetHeight, targetHash.String())
-	}
-
-	targetTD, ok := b.GetTD(targetHash)
-	if !ok || targetTD == nil {
-		return fmt.Errorf("rollback: total difficulty not found at height %d (hash %s)", targetHeight, targetHash.String())
-	}
-
-	batchWriter := storage.NewBatchWriter(b.db)
-	batchWriter.PutHeadHash(targetHash)
-	batchWriter.PutHeadNumber(targetHeight)
-	batchWriter.PutCanonicalHash(targetHeight, targetHash)
-
-	// delete canonical mappings above target
-	for h := targetHeight + 1; h <= current.Number; h++ {
-		key := append(append([]byte{}, storage.CANONICAL...), common.EncodeUint64ToBytes(h)...)
-		batchWriter.DeleteKey(key)
-	}
-
-	if err := batchWriter.WriteBatch(); err != nil {
-		return fmt.Errorf("rollback: write batch failed: %w", err)
-	}
-
-	// Update in-memory head
-	b.setCurrentHeader(targetHeader, targetTD)
-	b.logger.Warn("⚠️ chain head rolled back", "from", current.Number, "to", targetHeight, "hash", targetHash.String())
-
-	return nil
+	return b.rollbackToHeightLocked(targetHeight)
 }
 
 // CurrentTD returns the current total difficulty (atomic)
@@ -813,7 +784,7 @@ func (b *Blockchain) verifyBlockBody(block *types.Block) ([]*types.Receipt, erro
 	}
 
 	// Execute the transactions in the block and grab the result
-	blockResult, executeErr := b.executeBlockTransactions(block)
+	blockResult, executeErr := b.executeBlockTransactions(block, ExecutionVerify)
 	if executeErr != nil {
 		return nil, fmt.Errorf("unable to execute block transactions, %w", executeErr)
 	}
@@ -884,8 +855,14 @@ func (br *BlockResult) verifyBlockResult(referenceBlock *types.Block) error {
 }
 
 // executeBlockTransactions executes the transactions in the block locally,
-// and reports back the block execution result
-func (b *Blockchain) executeBlockTransactions(block *types.Block) (*BlockResult, error) {
+// and reports back the block execution result.
+func (b *Blockchain) executeBlockTransactions(block *types.Block, mode ExecutionMode) (*BlockResult, error) {
+	b.writeLock.Lock()
+	defer b.writeLock.Unlock()
+	return b.executeBlockTransactionsLocked(block, mode)
+}
+
+func (b *Blockchain) executeBlockTransactionsLocked(block *types.Block, mode ExecutionMode) (*BlockResult, error) {
 	header := block.Header
 
 	parent, ok := b.readHeader(header.ParentHash)
@@ -898,23 +875,31 @@ func (b *Blockchain) executeBlockTransactions(block *types.Block) (*BlockResult,
 		return nil, err
 	}
 
-	txn, err := b.executor.ProcessBlock(parent.StateRoot, block, blockCreator)
+	txn, err := ProcessBlockWithMode(b.executor, parent.StateRoot, block, blockCreator, mode)
 	if err != nil {
 		b.logger.Error("❌ executor.ProcessBlock调用失败", "blockNumber", block.Number(), "error", err)
 		return nil, err
 	}
 
-	if err := b.consensus.PreCommitState(block, txn); err != nil {
-		return nil, err
+	var root types.Hash
+	if mode.PersistState() {
+		if err := b.consensus.PreCommitState(block, txn); err != nil {
+			return nil, err
+		}
+		_, root, err = txn.Commit()
+		if err != nil {
+			return nil, fmt.Errorf("failed to commit the state changes: %w", err)
+		}
+	} else {
+		root, err = txn.IntermediateRoot()
+		if err != nil {
+			return nil, fmt.Errorf("failed to compute intermediate state root: %w", err)
+		}
 	}
 
-	_, root, err := txn.Commit()
-	if err != nil {
-		return nil, fmt.Errorf("failed to commit the state changes: %w", err)
+	if mode.PersistState() {
+		b.receiptsCache.Add(header.Hash, txn.Receipts())
 	}
-
-	// Append the receipts to the receipts cache
-	b.receiptsCache.Add(header.Hash, txn.Receipts())
 
 	return &BlockResult{
 		Root:     root,
@@ -943,6 +928,17 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 	if block.Number() <= b.Header().Number {
 		b.logger.Info("block already inserted", "block", block.Number(), "source", source)
 		return nil
+	}
+
+	// A-lite: sync path verifies without persisting state; commit authoritative state on write.
+	if source == "syncer" {
+		if _, ok := b.receiptsCache.Get(block.Hash()); !ok {
+			blockResult, execErr := b.executeBlockTransactionsLocked(block, ExecutionCommit)
+			if execErr != nil {
+				return fmt.Errorf("commit block state before write: %w", execErr)
+			}
+			fblock.Receipts = blockResult.Receipts
+		}
 	}
 
 	// header 已在上面获取（第850行）
@@ -1353,7 +1349,7 @@ func (b *Blockchain) extractBlockReceipts(block *types.Block) ([]*types.Receipt,
 	if !ok {
 		// No receipts found in the cache, execute the transactions from the block
 		// and fetch them
-		blockResult, err := b.executeBlockTransactions(block)
+		blockResult, err := b.executeBlockTransactions(block, ExecutionCommit)
 		if err != nil {
 			return nil, err
 		}

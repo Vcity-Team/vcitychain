@@ -799,8 +799,14 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 					return fillLast, false, nil
 				}
 				metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
-				s.logger.Error("区块验证失败，返回错误供上层重试（可换 peer 或稍后重试）", "peer", peerID.String(), "区块号", block.Number(), "error", err)
-				return lastReceivedNumber, false, fmt.Errorf("block verification failed (retry or try another peer): %w", err)
+				if healed, healErr := s.tryHealStateRootMismatch(block, err); healErr == nil {
+					fullBlock = healed
+					err = nil
+				}
+				if err != nil {
+					s.logger.Error("区块验证失败，返回错误供上层重试（可换 peer 或稍后重试）", "peer", peerID.String(), "区块号", block.Number(), "error", err)
+					return lastReceivedNumber, false, fmt.Errorf("block verification failed (retry or try another peer): %w", err)
+				}
 			}
 			s.logger.Debug("✅ 区块验证完成", "peer", peerID.String()[:8], "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
 
@@ -809,6 +815,8 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 				s.logger.Error("区块写入失败", "peer", peerID.String(), "区块号", block.Number(), "error", err)
 				return lastReceivedNumber, false, fmt.Errorf("failed to write block while bulk syncing: %w", err)
 			}
+
+			s.markBlockTransactionsProcessed(block.Transactions)
 
 			// 标记该 peer 为近期可信：已成功验证并写入区块
 			s.recordTrustedPeerSuccess(peerID, block.Number())
@@ -869,11 +877,18 @@ func (s *syncer) fillGapFromPeer(peerID peer.ID, from uint64, peerLatestBlock ui
 			if errors.As(err, &missingParent) && missingParent.ParentNumber < block.Number() {
 				return lastReceivedNumber, &ErrNeedFillFrom{From: missingParent.ParentNumber}
 			}
-			return lastReceivedNumber, fmt.Errorf("verify block %d: %w", block.Number(), err)
+			if healed, healErr := s.tryHealStateRootMismatch(block, err); healErr == nil {
+				fullBlock = healed
+				err = nil
+			}
+			if err != nil {
+				return lastReceivedNumber, fmt.Errorf("verify block %d: %w", block.Number(), err)
+			}
 		}
 		if err := s.blockchain.WriteFullBlock(fullBlock, syncerName); err != nil {
 			return lastReceivedNumber, fmt.Errorf("write block %d: %w", block.Number(), err)
 		}
+		s.markBlockTransactionsProcessed(block.Transactions)
 		// 标记该 peer 为近期可信：已成功验证并写入区块
 		s.recordTrustedPeerSuccess(peerID, block.Number())
 		updateMetrics(fullBlock)
@@ -946,6 +961,15 @@ func (s *syncer) cleanupProcessedTxs() {
 	}
 }
 
+// 标记区块内交易为已处理（在成功写入后调用）
+func (s *syncer) markBlockTransactionsProcessed(transactions []*types.Transaction) {
+	for _, tx := range transactions {
+		if tx != nil {
+			s.markTransactionProcessed(tx.Hash)
+		}
+	}
+}
+
 // 过滤已处理的交易
 func (s *syncer) filterProcessedTransactions(transactions []*types.Transaction) []*types.Transaction {
 	var filtered []*types.Transaction
@@ -961,10 +985,7 @@ func (s *syncer) filterProcessedTransactions(transactions []*types.Transaction) 
 			continue
 		}
 
-		// 标记交易为已处理
-		s.markTransactionProcessed(tx.Hash)
-
-		// 添加到过滤后的列表
+		// 添加到过滤后的列表（写入成功后再 markTransactionProcessed）
 		filtered = append(filtered, tx)
 	}
 

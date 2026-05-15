@@ -372,6 +372,9 @@ type DPoS struct {
 	// 数据目录
 	dataDir string
 
+	// blockExecPersistSideEffects: when false, block execution skips Bolt side effects (A-lite verify).
+	blockExecPersistSideEffects bool
+
 	// 添加性能优化相关结构
 	cache          *DPoSCache
 	batchProcessor *BatchProcessor

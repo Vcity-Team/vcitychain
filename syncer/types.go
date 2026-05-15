@@ -33,6 +33,8 @@ type Blockchain interface {
 	WriteBlock(*types.Block, string) error
 	// WriteFullBlock writes a given block to chain and saves its receipts to cache
 	WriteFullBlock(*types.FullBlock, string) error
+	// HealCanonicalBlockState rewinds execution state and replays a canonical block (B).
+	HealCanonicalBlockState(block *types.Block) error
 	// WriteBlockWithoutConsensus writes a block without consensus verification
 	WriteBlockWithoutConsensus(*types.Block, string) error
 	// GetConsensus returns the consensus verifier

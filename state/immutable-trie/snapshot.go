@@ -150,3 +150,59 @@ func (s *Snapshot) Commit(objs []*state.Object) (state.Snapshot, []byte, error) 
 
 	return &Snapshot{trie: nTrie, state: s.state}, root, nil
 }
+
+// ComputeRoot returns the post-block state root without writing to storage (verify-only execution).
+func (s *Snapshot) ComputeRoot(objs []*state.Object) (types.Hash, error) {
+	tt := s.trie.Txn(s.state.storage)
+
+	arena := stateArenaPool.Get()
+	defer stateArenaPool.Put(arena)
+
+	for _, obj := range objs {
+		if obj.Deleted {
+			tt.Delete(hashit(obj.Address.Bytes()))
+		} else {
+			account := state.Account{
+				Balance:  obj.Balance,
+				Nonce:    obj.Nonce,
+				CodeHash: obj.CodeHash.Bytes(),
+				Root:     obj.Root,
+			}
+
+			if len(obj.Storage) != 0 {
+				trie, err := s.state.newTrieAt(obj.Root)
+				if err != nil {
+					return types.ZeroHash, fmt.Errorf("compute root failed to create trie: %w", err)
+				}
+
+				localTxn := trie.Txn(s.state.storage)
+
+				for _, entry := range obj.Storage {
+					k := hashit(entry.Key)
+					if entry.Deleted {
+						localTxn.Delete(k)
+					} else {
+						vv := arena.NewBytes(bytes.TrimLeft(entry.Val, "\x00"))
+						localTxn.Insert(k, vv.MarshalTo(nil))
+					}
+				}
+
+				accountStateRoot, _ := localTxn.Hash()
+				account.Root = types.BytesToHash(accountStateRoot)
+			}
+
+			vv := account.MarshalWith(arena)
+			data := vv.MarshalTo(nil)
+
+			tt.Insert(hashit(obj.Address.Bytes()), data)
+			arena.Reset()
+		}
+	}
+
+	root, err := tt.Hash()
+	if err != nil {
+		return types.ZeroHash, fmt.Errorf("compute root can not retrieve hash: %w", err)
+	}
+
+	return types.BytesToHash(root), nil
+}

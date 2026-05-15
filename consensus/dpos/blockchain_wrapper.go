@@ -27,7 +27,17 @@ type executorAdapter struct {
 
 // ProcessBlock 实现 blockchain.Executor 接口
 func (e *executorAdapter) ProcessBlock(parentRoot types.Hash, block *types.Block, blockCreator types.Address) (*state.Transition, error) {
-	return e.wrapper.ProcessBlockExecutor(parentRoot, block, blockCreator)
+	return e.wrapper.ProcessBlockExecutor(parentRoot, block, blockCreator, blockchain.ExecutionCommit)
+}
+
+// ProcessBlockWithMode 实现 blockchain.ExecutorWithMode
+func (e *executorAdapter) ProcessBlockWithMode(
+	parentRoot types.Hash,
+	block *types.Block,
+	blockCreator types.Address,
+	mode blockchain.ExecutionMode,
+) (*state.Transition, error) {
+	return e.wrapper.ProcessBlockExecutor(parentRoot, block, blockCreator, mode)
 }
 
 const (
@@ -258,10 +268,20 @@ func (p *blockchainWrapper) SetBlockProductionStartTime() {
 }
 
 // ProcessBlockExecutor 实现 blockchain.Executor 接口
-func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *types.Block, blockCreator types.Address) (*state.Transition, error) {
+func (p *blockchainWrapper) ProcessBlockExecutor(
+	parentRoot types.Hash,
+	block *types.Block,
+	blockCreator types.Address,
+	mode blockchain.ExecutionMode,
+) (*state.Transition, error) {
 
 	header := block.Header.Copy()
 	start := time.Now().UTC()
+
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+		dposInstance.setBlockExecPersistSideEffects(mode.PersistSideEffects())
+		defer dposInstance.setBlockExecPersistSideEffects(true)
+	}
 
 	transition, err := p.executor.BeginTxn(parentRoot, header, blockCreator)
 	if err != nil {
@@ -300,9 +320,11 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 			if err := dposInstance.ApplyDelegateNativeCreditAfterTx(transition, tx, block.Number()); err != nil {
 				return nil, err
 			}
-			if dposInstance.isDelegateRegistrationTransaction(tx) {
-				if err := dposInstance.processDelegateRegistrationTransaction(tx, block.Number(), header.Timestamp); err != nil {
-					return nil, err
+			if dposInstance.persistBlockSideEffects() {
+				if dposInstance.isDelegateRegistrationTransaction(tx) {
+					if err := dposInstance.processDelegateRegistrationTransaction(tx, block.Number(), header.Timestamp); err != nil {
+						return nil, err
+					}
 				}
 			}
 			if err := dposInstance.ApplyDelegateCancelRegistrationAfterTx(transition, tx, block.Number()); err != nil {
@@ -311,7 +333,7 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 		}
 
 		// 执行后识别是否为提案交易，并触发 DPoS 业务处理（不影响 EVM 结果）
-		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
+		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance.persistBlockSideEffects() {
 			if len(tx.Input) > 0 && (tx.To != nil) {
 				if kind, err := ParseProposalInput(tx.Input); err == nil {
 					p.logger.Info("检测到提案交易(EVM后置处理)", "kind", kind, "txHash", tx.Hash.String())
@@ -335,15 +357,14 @@ func (p *blockchainWrapper) ProcessBlockExecutor(parentRoot types.Hash, block *t
 	}
 
 	// 检查是否是共识切换高度，如果是则创建根账户对创世验证者的投票记录
-	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil && dposInstance.persistBlockSideEffects() {
 		if err := dposInstance.CreateGenesisVotesForAllValidators(block.Number()); err != nil {
 			p.logger.Error("❌ 创建创世投票记录失败", "blockNumber", block.Number(), "error", err)
 			// 不返回错误，因为这是共识切换高度的特殊处理，只记录日志
 		}
-	} else {
+	} else if !exists {
 		p.logger.Warn("⚠️ [ProcessBlockExecutor] DPoS实例不存在",
-			"blockNumber", block.Number(),
-			"exists", exists)
+			"blockNumber", block.Number())
 	}
 
 	isEpochEnd := p.isEpochEndBlock(block.Number())
