@@ -101,9 +101,6 @@ func (d *DPoS) ApplyDelegateCancelRegistrationAfterTx(
 	}
 	// RPC WithdrawDelegate 只把 Bolt 标成 Withdrawn，链上托管款要靠本交易退回。
 	if reg.Status == RegStatusWithdrawn {
-		if reg.DepositRefunded {
-			return nil
-		}
 		if !reg.DepositHeldInEscrow {
 			return fmt.Errorf("delegate cancel: withdrawn without escrow-held deposit; cannot refund via CAN for %s",
 				delegate.String())
@@ -132,6 +129,10 @@ func (d *DPoS) ApplyDelegateCancelRegistrationAfterTx(
 	escrow := d.getDelegateDepositEscrowAddress()
 	escrowBal := transition.GetBalance(escrow)
 	if escrowBal.Cmp(amount) < 0 {
+		// Trie already reflects refund (e.g. replay idempotency); Bolt depositRefunded alone must not skip verify-path execution.
+		if reg.DepositRefunded {
+			return nil
+		}
 		return fmt.Errorf("delegate cancel: escrow balance insufficient (have %s need %s)",
 			escrowBal.String(), amount.String())
 	}

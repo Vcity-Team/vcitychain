@@ -11,12 +11,13 @@ import (
 
 // HealCanonicalBlockState rewinds execution-layer state to the parent of block and replays block (B).
 // Used when VerifyFinalizedBlock fails with state root mismatch but the parent header matches the network.
-func (b *Blockchain) HealCanonicalBlockState(block *types.Block) error {
+// Returns a verified FullBlock ready for WriteFullBlock (receipts are cached).
+func (b *Blockchain) HealCanonicalBlockState(block *types.Block) (*types.FullBlock, error) {
 	if block == nil || block.Header == nil {
-		return errors.New("heal: nil block")
+		return nil, errors.New("heal: nil block")
 	}
 	if block.Number() == 0 {
-		return errors.New("heal: genesis block")
+		return nil, errors.New("heal: genesis block")
 	}
 
 	b.writeLock.Lock()
@@ -27,10 +28,10 @@ func (b *Blockchain) HealCanonicalBlockState(block *types.Block) error {
 
 	parentHeader, ok := b.readHeader(parentHash)
 	if !ok || parentHeader == nil {
-		return fmt.Errorf("heal: parent header not found at %d", parentNumber)
+		return nil, fmt.Errorf("heal: parent header not found at %d", parentNumber)
 	}
 	if parentHeader.Number != parentNumber {
-		return fmt.Errorf("heal: parent number mismatch")
+		return nil, fmt.Errorf("heal: parent number mismatch")
 	}
 
 	currentHead := b.Header()
@@ -42,15 +43,15 @@ func (b *Blockchain) HealCanonicalBlockState(block *types.Block) error {
 				"targetHash", block.Hash().String()[:18],
 			)
 			if err := b.rollbackToHeightLocked(parentNumber); err != nil {
-				return fmt.Errorf("heal: rollback head: %w", err)
+				return nil, fmt.Errorf("heal: rollback head: %w", err)
 			}
 			if healer, ok := b.consensus.(StateHealer); ok {
 				if err := healer.OnRewindToHeight(parentNumber); err != nil {
-					return fmt.Errorf("heal: consensus rewind: %w", err)
+					return nil, fmt.Errorf("heal: consensus rewind: %w", err)
 				}
 				if oldBlock, ok := b.GetBlockByHash(localHash, true); ok && oldBlock != nil {
 					if err := healer.PrepareSameHeightForkReplay(oldBlock); err != nil {
-						return fmt.Errorf("heal: prepare fork replay: %w", err)
+						return nil, fmt.Errorf("heal: prepare fork replay: %w", err)
 					}
 				}
 			}
@@ -59,16 +60,16 @@ func (b *Blockchain) HealCanonicalBlockState(block *types.Block) error {
 
 	if healer, ok := b.consensus.(StateHealer); ok {
 		if err := healer.PrepareSameHeightForkReplay(block); err != nil {
-			return fmt.Errorf("heal: prepare canonical replay: %w", err)
+			return nil, fmt.Errorf("heal: prepare canonical replay: %w", err)
 		}
 	}
 
 	blockResult, err := b.executeBlockTransactionsLocked(block, ExecutionCommit)
 	if err != nil {
-		return fmt.Errorf("heal: execute block: %w", err)
+		return nil, fmt.Errorf("heal: execute block: %w", err)
 	}
 	if err := blockResult.verifyBlockResult(block); err != nil {
-		return fmt.Errorf("heal: verify after replay: %w", err)
+		return nil, fmt.Errorf("heal: verify after replay: %w", err)
 	}
 
 	b.receiptsCache.Add(block.Hash(), blockResult.Receipts)
@@ -78,7 +79,7 @@ func (b *Blockchain) HealCanonicalBlockState(block *types.Block) error {
 		"stateRoot", blockResult.Root.String()[:18],
 	)
 
-	return nil
+	return &types.FullBlock{Block: block, Receipts: blockResult.Receipts}, nil
 }
 
 // rollbackToHeightLocked is RollbackToHeight without acquiring writeLock (caller holds lock).

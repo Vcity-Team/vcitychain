@@ -24,7 +24,7 @@ func (s *syncer) tryHealStateRootMismatch(block *types.Block, verifyErr error) (
 		return nil, verifyErr
 	}
 	healer, ok := s.blockchain.(interface {
-		HealCanonicalBlockState(block *types.Block) error
+		HealCanonicalBlockState(block *types.Block) (*types.FullBlock, error)
 	})
 	if !ok {
 		return nil, verifyErr
@@ -33,14 +33,10 @@ func (s *syncer) tryHealStateRootMismatch(block *types.Block, verifyErr error) (
 		"blockNumber", block.Number(),
 		"blockHash", block.Hash().String()[:18],
 	)
-	if err := healer.HealCanonicalBlockState(block); err != nil {
+	fullBlock, err := healer.HealCanonicalBlockState(block)
+	if err != nil {
 		s.logger.Error("自动状态修复失败", "blockNumber", block.Number(), "error", err)
 		return nil, verifyErr
-	}
-	fullBlock, err := s.blockchain.VerifyFinalizedBlock(block)
-	if err != nil {
-		s.logger.Error("状态修复后仍无法验证区块", "blockNumber", block.Number(), "error", err)
-		return nil, err
 	}
 	s.logger.Info("✅ 自动状态修复成功，区块验证通过",
 		"blockNumber", block.Number(),
