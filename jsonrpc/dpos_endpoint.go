@@ -832,51 +832,59 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 			Error:   "DPoS engine not available for delegate validation",
 		}, nil
 	}
-	// 检查受托人是否已注册（创世验证者例外）
-	if isRegistered, ok := dposEngine.(interface {
-		IsDelegateRegistered(address types.Address) bool
-	}); ok {
-		// 检查是否为创世验证者
-		isGenesis, okGenesis := dposEngine.(interface {
-			IsGenesisValidator(address types.Address) bool
-		})
+	isUnvote := amountInt.Cmp(big.NewInt(-1)) == 0
+	// 撤票（amount=-1）链上不校验 delegate 注册/候选人；仅新投票需要
+	if !isUnvote {
+		// 检查受托人是否已注册（创世验证者例外）
+		if isRegistered, ok := dposEngine.(interface {
+			IsDelegateRegistered(address types.Address) bool
+		}); ok {
+			// 检查是否为创世验证者
+			isGenesis, okGenesis := dposEngine.(interface {
+				IsGenesisValidator(address types.Address) bool
+			})
 
-		// 创世验证者可以直接被投票，无需注册
-		if okGenesis && isGenesis.IsGenesisValidator(candidateAddr) {
-			d.logger.Info("✅ 受托人是创世验证者，跳过注册检查", "candidate", candidateAddr.String())
-		} else if !isRegistered.IsDelegateRegistered(candidateAddr) {
-			d.logger.Warn("❌ 受托人未注册，投票被拒绝",
-				"candidate", candidateAddr.String(),
-				"voter", voterAddr.String(),
-				"amount", amountInt.String())
-			return &VoteResponse{
-				Success: false,
-				Error:   fmt.Sprintf("delegate %s is not registered", candidateAddr.String()),
-			}, nil
+			// 创世验证者可以直接被投票，无需注册
+			if okGenesis && isGenesis.IsGenesisValidator(candidateAddr) {
+				d.logger.Info("✅ 受托人是创世验证者，跳过注册检查", "candidate", candidateAddr.String())
+			} else if !isRegistered.IsDelegateRegistered(candidateAddr) {
+				d.logger.Warn("❌ 受托人未注册，投票被拒绝",
+					"candidate", candidateAddr.String(),
+					"voter", voterAddr.String(),
+					"amount", amountInt.String())
+				return &VoteResponse{
+					Success: false,
+					Error:   fmt.Sprintf("delegate %s is not registered", candidateAddr.String()),
+				}, nil
+			} else {
+				d.logger.Info("✅ 受托人注册状态验证通过", "candidate", candidateAddr.String())
+			}
 		} else {
-			d.logger.Info("✅ 受托人注册状态验证通过", "candidate", candidateAddr.String())
+			d.logger.Warn("⚠️ DPoS引擎不支持受托人注册检查，跳过验证")
 		}
-	} else {
-		d.logger.Warn("⚠️ DPoS引擎不支持受托人注册检查，跳过验证")
-	}
 
-	// 检查受托人是否为候选人状态
-	if isCandidate, ok := dposEngine.(interface {
-		IsDelegateCandidate(address types.Address) bool
-	}); ok {
-		if !isCandidate.IsDelegateCandidate(candidateAddr) {
-			d.logger.Warn("❌ 受托人不是候选人状态，投票被拒绝",
-				"candidate", candidateAddr.String(),
-				"voter", voterAddr.String(),
-				"amount", amountInt.String())
-			return &VoteResponse{
-				Success: false,
-				Error:   fmt.Sprintf("delegate %s is not a candidate", candidateAddr.String()),
-			}, nil
+		// 检查受托人是否为候选人状态
+		if isCandidate, ok := dposEngine.(interface {
+			IsDelegateCandidate(address types.Address) bool
+		}); ok {
+			if !isCandidate.IsDelegateCandidate(candidateAddr) {
+				d.logger.Warn("❌ 受托人不是候选人状态，投票被拒绝",
+					"candidate", candidateAddr.String(),
+					"voter", voterAddr.String(),
+					"amount", amountInt.String())
+				return &VoteResponse{
+					Success: false,
+					Error:   fmt.Sprintf("delegate %s is not a candidate", candidateAddr.String()),
+				}, nil
+			}
+			d.logger.Info("✅ 受托人候选人状态验证通过", "candidate", candidateAddr.String())
+		} else {
+			d.logger.Warn("⚠️ DPoS引擎不支持受托人候选人检查，跳过验证")
 		}
-		d.logger.Info("✅ 受托人候选人状态验证通过", "candidate", candidateAddr.String())
 	} else {
-		d.logger.Warn("⚠️ DPoS引擎不支持受托人候选人检查，跳过验证")
+		d.logger.Info("ℹ️ 撤票请求，跳过受托人注册/候选人 RPC 检查",
+			"candidate", candidateAddr.String(),
+			"voter", voterAddr.String())
 	}
 	d.logger.Info("🔍 开始预验证投票参数", "voter", voterAddr, "candidate", candidateAddr, "amount", amountInt)
 
@@ -1016,8 +1024,34 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	// Debug: Log the store type to understand what we're working with
 	d.logger.Info("Store type", "type", fmt.Sprintf("%T", d.store))
 
-	// Method 1: Try to access AddTx through ethStore interface
-	if ethStore, ok := d.store.(interface {
+	// Method 1: Add to pool (unvote: local-only, no gossip; vote: normal AddTx + broadcast below)
+	if isUnvote {
+		if localStore, ok := d.store.(interface {
+			AddTxLocalOnly(tx *types.Transaction) error
+		}); ok {
+			d.logger.Info("Adding unvote transaction to local pool only (no broadcast)...")
+			if err := localStore.AddTxLocalOnly(tx); err != nil {
+				d.logger.Error("Failed to add unvote transaction to local pool", "error", err)
+				return &VoteResponse{
+					Success: false,
+					Error:   fmt.Sprintf("failed to add unvote to local pool: %v", err),
+				}, nil
+			}
+			d.logger.Info("Unvote transaction added to local pool; will be packaged when this node is proposer")
+			txAdded = true
+		} else if ethStore, ok := d.store.(interface {
+			AddTx(tx *types.Transaction) error
+		}); ok {
+			d.logger.Warn("AddTxLocalOnly not available, falling back to AddTx for unvote")
+			if err := ethStore.AddTx(tx); err != nil {
+				return &VoteResponse{
+					Success: false,
+					Error:   fmt.Sprintf("failed to add unvote to pool: %v", err),
+				}, nil
+			}
+			txAdded = true
+		}
+	} else if ethStore, ok := d.store.(interface {
 		AddTx(tx *types.Transaction) error
 	}); ok {
 		d.logger.Info("Store implements AddTx interface, attempting to add transaction...")
@@ -1047,15 +1081,21 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		d.logger.Warn("Transaction pool not available, will update DPoS state directly")
 	}
 
-	// 无论 AddTx 是否成功，都尝试广播交易到网络
-	d.logger.Info("Attempting to broadcast transaction to network", "txHash", tx.Hash.String(), "txAdded", txAdded)
-
-	// 强制广播交易到网络（确保其他节点能收到）
-	if err := d.broadcastTransaction(tx); err != nil {
-		d.logger.Warn("Failed to broadcast transaction directly", "error", err, "txHash", tx.Hash.String())
-		// 不返回错误，继续执行
+	if isUnvote {
+		d.logger.Info("Unvote kept in local pool only; skipping network broadcast",
+			"txHash", tx.Hash.String(),
+			"txAdded", txAdded)
 	} else {
-		d.logger.Info("Transaction broadcasted successfully", "txHash", tx.Hash.String())
+		// 无论 AddTx 是否成功，都尝试广播交易到网络
+		d.logger.Info("Attempting to broadcast transaction to network", "txHash", tx.Hash.String(), "txAdded", txAdded)
+
+		// 强制广播交易到网络（确保其他节点能收到）
+		if err := d.broadcastTransaction(tx); err != nil {
+			d.logger.Warn("Failed to broadcast transaction directly", "error", err, "txHash", tx.Hash.String())
+			// 不返回错误，继续执行
+		} else {
+			d.logger.Info("Transaction broadcasted successfully", "txHash", tx.Hash.String())
+		}
 	}
 
 	// 检查交易池状态，诊断为什么交易没有被共识引擎拉取

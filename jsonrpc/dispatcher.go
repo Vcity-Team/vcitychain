@@ -709,6 +709,16 @@ func (a *dposStoreAdapter) AddTx(tx *types.Transaction) error {
 	return fmt.Errorf("AddTx method not available on underlying store")
 }
 
+// AddTxLocalOnly adds a transaction to the local pool without gossip broadcast.
+func (a *dposStoreAdapter) AddTxLocalOnly(tx *types.Transaction) error {
+	if addTxStore, ok := a.store.(interface {
+		AddTxLocalOnly(tx *types.Transaction) error
+	}); ok {
+		return addTxStore.AddTxLocalOnly(tx)
+	}
+	return fmt.Errorf("AddTxLocalOnly method not available on underlying store")
+}
+
 // GetPendingTx gets the pending transaction from the transaction pool
 func (a *dposStoreAdapter) GetPendingTx(txHash types.Hash) (*types.Transaction, bool) {
 	// Try to access GetPendingTx through the underlying JSONRPCStore
