@@ -11,7 +11,11 @@ func GetCommand() *cobra.Command {
 	rollbackCmd := &cobra.Command{
 		Use:     "rollback",
 		Short:   "Rollback blockchain to a specific block height",
-		Long:    "Rollback blockchain to a specific block height. This will delete all blocks after the target height and set the target block as the new chain head.",
+		Long: "Rollback blockchain to a specific block height. Updates chain head and canonical index, " +
+			"optionally deletes block data, cleans DPoS metadata, and by default finalizes execution-layer state " +
+			"(verify target stateRoot in trie; same path as sync HealCanonicalBlockState). " +
+			"Use --replay-blocks only to re-execute and re-write blocks above the target (state drift fix); " +
+			"it will re-apply those transactions and is not appropriate when removing unwanted txs.",
 		PreRunE: runPreRun,
 		Run:     runCommand,
 	}
@@ -57,6 +61,20 @@ func setFlags(cmd *cobra.Command) {
 		keepBlocksFlag,
 		false,
 		"keep block data, only update chain head (for debugging)",
+	)
+
+	cmd.Flags().BoolVar(
+		&params.healState,
+		healStateFlag,
+		true,
+		"after metadata rollback, verify target stateRoot in trie and align execution head (requires genesis config via --config or data-dir/genesis.json)",
+	)
+
+	cmd.Flags().BoolVar(
+		&params.replayBlocks,
+		replayBlocksFlag,
+		false,
+		"re-execute and write blocks from target+1 through pre-rollback head using HealCanonicalBlockState (collects blocks before deletion)",
 	)
 }
 

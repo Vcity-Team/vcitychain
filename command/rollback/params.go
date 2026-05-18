@@ -27,6 +27,8 @@ const (
 	targetHeightFlag = "target-height"
 	forceFlag        = "force"
 	keepBlocksFlag   = "keep-blocks"
+	healStateFlag    = "heal-state"
+	replayBlocksFlag = "replay-blocks"
 )
 
 var (
@@ -48,10 +50,17 @@ type rollbackParams struct {
 	targetHeight    uint64
 	force           bool
 	keepBlocks      bool
+	healState       bool
+	replayBlocks    bool
 
 	currentHeight uint64
 	targetHash    types.Hash
 	blocksDeleted uint64
+
+	stateHealed      bool
+	stateRootChecked bool
+	blocksReplayed   uint64
+	finalHeadHeight  uint64
 
 	// Epoch计算相关参数
 	consensusSwitchHeight uint64
@@ -143,6 +152,20 @@ func (p *rollbackParams) executeRollback() error {
 		// 不中断流程，继续执行
 	}
 
+	var blocksToReplay []*types.Block
+	if p.replayBlocks {
+		blocksToReplay, err = p.collectBlocksAboveTarget(storageInstance)
+		if err != nil {
+			return fmt.Errorf("collect blocks for replay: %w", err)
+		}
+
+		logger.Info("Collected blocks for optional replay after rollback",
+			"count", len(blocksToReplay),
+			"fromHeight", p.targetHeight+1,
+			"toHeight", p.currentHeight,
+		)
+	}
+
 	// 7. 执行回滚
 	logger.Info("Starting rollback...",
 		"currentHeight", currentHeight,
@@ -156,10 +179,41 @@ func (p *rollbackParams) executeRollback() error {
 
 	p.blocksDeleted = currentHeight - p.targetHeight
 
+	if p.healState {
+		if !p.replayBlocks {
+			blocksToReplay = nil
+		}
+
+		logger.Info("Finalizing execution-layer state (HealCanonicalBlockState path)...",
+			"targetHeight", p.targetHeight,
+			"replayBlocks", len(blocksToReplay),
+		)
+
+		healResult, healErr := p.finalizeExecutionState(logger, blocksToReplay)
+		if healErr != nil {
+			return fmt.Errorf("rollback metadata succeeded but execution state finalize failed: %w", healErr)
+		}
+
+		p.stateHealed = true
+		p.stateRootChecked = healResult.StateRootVerified
+		p.blocksReplayed = healResult.BlocksReplayed
+		p.finalHeadHeight = healResult.FinalHeadHeight
+
+		logger.Info("Execution state finalize completed",
+			"targetStateRoot", healResult.TargetStateRoot.String(),
+			"blocksReplayed", healResult.BlocksReplayed,
+			"finalHeadHeight", healResult.FinalHeadHeight,
+		)
+	} else {
+		p.finalHeadHeight = p.targetHeight
+	}
+
 	logger.Info("Rollback completed successfully",
 		"newHeadHeight", p.targetHeight,
 		"newHeadHash", targetHash.String(),
-		"blocksDeleted", p.blocksDeleted)
+		"blocksDeleted", p.blocksDeleted,
+		"stateHealed", p.stateHealed,
+	)
 
 	return nil
 }
@@ -953,11 +1007,20 @@ func (p *rollbackParams) rollbackParameterValues(
 }
 
 func (p *rollbackParams) getResult() command.CommandResult {
+	finalHead := p.finalHeadHeight
+	if finalHead == 0 {
+		finalHead = p.targetHeight
+	}
+
 	return &RollbackResult{
-		CurrentHeight: p.currentHeight,
-		TargetHeight:  p.targetHeight,
-		TargetHash:    p.targetHash.String(),
-		BlocksDeleted: p.blocksDeleted,
-		KeepBlocks:    p.keepBlocks,
+		CurrentHeight:    p.currentHeight,
+		TargetHeight:     p.targetHeight,
+		TargetHash:       p.targetHash.String(),
+		BlocksDeleted:    p.blocksDeleted,
+		KeepBlocks:       p.keepBlocks,
+		StateHealed:      p.stateHealed,
+		StateRootChecked: p.stateRootChecked,
+		BlocksReplayed:   p.blocksReplayed,
+		FinalHeadHeight:  finalHead,
 	}
 }
