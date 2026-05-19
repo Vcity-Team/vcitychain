@@ -882,6 +882,7 @@ func (d *DPoS) executeSlashing(
 		if err := d.updateStakingInfoAfterSlashing(
 			validatorAddr,
 			validatorAddr,
+			stake.StartTime,
 			recordNewAmount,
 			stake.Amount,
 			slashingRecord,
@@ -989,34 +990,8 @@ func (d *DPoS) updateStakingInfoInDatabase(stake *StakeInfo, dbTx *bolt.Tx) erro
 			"delegate", stake.Delegate.String(),
 			"newAmount", stake.Amount.String())
 	} else {
-		// 记录不存在，遍历所有记录，找到 staker + delegate 匹配的记录
-		cursor := bucket.Cursor()
-		found := false
-		for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
-			_ = v // 避免未使用变量警告
-			if len(k) >= 40 {
-				// 检查 staker 和 delegate 是否匹配
-				stakerMatch := len(k) >= 20 && types.Address(k[0:20]) == stake.Staker
-				delegateMatch := len(k) >= 40 && types.Address(k[20:40]) == stake.Delegate
-				if stakerMatch && delegateMatch {
-					// 更新这条记录
-					if err := bucket.Put(k, data); err != nil {
-						d.logger.Error("❌ 更新质押记录失败", "error", err)
-						continue
-					}
-					found = true
-					d.logger.Debug("✅ 找到并更新匹配的质押记录",
-						"staker", stake.Staker.String(),
-						"delegate", stake.Delegate.String(),
-						"newAmount", stake.Amount.String())
-				}
-			}
-		}
-		if !found {
-			d.logger.Warn("⚠️ 未找到匹配的质押记录",
-				"staker", stake.Staker.String(),
-				"delegate", stake.Delegate.String())
-		}
+		return fmt.Errorf("staking record not found for staker=%s delegate=%s startTime=%d",
+			stake.Staker.String(), stake.Delegate.String(), stake.StartTime)
 	}
 
 	return nil
@@ -1109,10 +1084,12 @@ func (d *DPoS) updateVoterVoteAmountForValidator(
 	return nil
 }
 
-// updateStakingInfoAfterSlashing 更新StakingInfo记录（削减后）
+// updateStakingInfoAfterSlashing 更新单条 StakeInfo（削减后）。
+// 必须用 startTime 区分同一 staker+delegate 的多笔投票，避免多条自投互相覆盖。
 func (d *DPoS) updateStakingInfoAfterSlashing(
 	voterAddr types.Address,
 	validatorAddr types.Address,
+	startTime uint64,
 	newAmount *big.Int,
 	oldAmount *big.Int,
 	slashingRecord *SlashingRecord,
@@ -1139,43 +1116,47 @@ func (d *DPoS) updateStakingInfoAfterSlashing(
 		return fmt.Errorf("staking info bucket not found")
 	}
 
+	var updated bool
 	for _, stake := range allStakes {
-		if stake != nil && stake.Staker == voterAddr && stake.Delegate == validatorAddr {
-			// 3. 更新金额
-			stake.Amount = newAmount
-
-			// 4. 保存原始金额（如果还没有保存）
-			if stake.OriginalAmount == nil {
-				stake.OriginalAmount = new(big.Int).Set(oldAmount)
-			}
-
-			// 5. 添加削减记录
-			if stake.SlashingRecords == nil {
-				stake.SlashingRecords = make([]*SlashingRecord, 0)
-			}
-			stake.SlashingRecords = append(stake.SlashingRecords, slashingRecord)
-
-			// 6. 保存到数据库（使用复合 key）
-			key := make([]byte, 48)
-			copy(key[0:20], stake.Staker[:])
-			copy(key[20:40], stake.Delegate[:])
-			binary.BigEndian.PutUint64(key[40:48], stake.StartTime)
-
-			data, err := json.Marshal(stake)
-			if err != nil {
-				d.logger.Warn("⚠️ 序列化质押记录失败",
-					"staker", stake.Staker.String(),
-					"error", err)
-				continue
-			}
-
-			if err := bucket.Put(key, data); err != nil {
-				d.logger.Warn("⚠️ 更新质押记录失败",
-					"staker", stake.Staker.String(),
-					"error", err)
-				continue
-			}
+		if stake == nil ||
+			stake.Staker != voterAddr ||
+			stake.Delegate != validatorAddr ||
+			stake.StartTime != startTime {
+			continue
 		}
+
+		stake.Amount = new(big.Int).Set(newAmount)
+
+		if stake.OriginalAmount == nil {
+			stake.OriginalAmount = new(big.Int).Set(oldAmount)
+		}
+
+		if stake.SlashingRecords == nil {
+			stake.SlashingRecords = make([]*SlashingRecord, 0)
+		}
+		stake.SlashingRecords = append(stake.SlashingRecords, slashingRecord)
+
+		key := make([]byte, 48)
+		copy(key[0:20], stake.Staker[:])
+		copy(key[20:40], stake.Delegate[:])
+		binary.BigEndian.PutUint64(key[40:48], stake.StartTime)
+
+		data, err := json.Marshal(stake)
+		if err != nil {
+			return fmt.Errorf("marshal staking info: %w", err)
+		}
+
+		if err := bucket.Put(key, data); err != nil {
+			return fmt.Errorf("update staking info: %w", err)
+		}
+
+		updated = true
+		break
+	}
+
+	if !updated {
+		return fmt.Errorf("staking record not found for slash update: staker=%s delegate=%s startTime=%d",
+			voterAddr.String(), validatorAddr.String(), startTime)
 	}
 
 	// 如果使用的是外部事务，不在这里提交（由调用者提交）
