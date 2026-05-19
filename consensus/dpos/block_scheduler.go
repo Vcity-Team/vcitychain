@@ -289,9 +289,6 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		return false
 	}
 	local := currentBlock.Number
-	if r.mustWaitForTrustedCanonicalSync(local) {
-		return false
-	}
 	// 落后门禁：优先 bootnode 共识链尖；不可用时追平锁用水位取 max(门禁候选, gossip)。
 	if r.config.dposBackend != nil {
 		networkLatest := r.getNetworkLatestBlockNumber()
@@ -418,6 +415,10 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		}
 		r.lock.Unlock()
 
+		if result && r.behindTrustedCanonicalSync(local) {
+			r.logBehindTrustedCanonicalSync(local)
+			return false
+		}
 		return result
 	}
 

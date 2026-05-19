@@ -14,18 +14,23 @@ func (r *dposRuntime) trustedCanonicalTipFromSyncer() uint64 {
 	return dpos.syncer.GetTrustedCanonicalTip()
 }
 
-// mustWaitForTrustedCanonicalSync：创世 bootnode 共识链尖高于本地时，禁止出块直至同步追上。
-func (r *dposRuntime) mustWaitForTrustedCanonicalSync(localTip uint64) bool {
+// behindTrustedCanonicalSync 本地链尖是否落后于创世 bootnode 共识链尖（无日志）。
+func (r *dposRuntime) behindTrustedCanonicalSync(localTip uint64) bool {
+	tip := r.trustedCanonicalTipFromSyncer()
+	return tip > 0 && localTip < tip
+}
+
+// logBehindTrustedCanonicalSync 仅在本轮应当出块但因未追上 bootnode 链尖而跳过时记录。
+func (r *dposRuntime) logBehindTrustedCanonicalSync(localTip uint64) {
 	tip := r.trustedCanonicalTipFromSyncer()
 	if tip == 0 || localTip >= tip {
-		return false
+		return
 	}
 	r.logOnceWithInterval("behind_trusted_bootnode_canonical", 5*time.Second, "info",
 		"⏸️ 本地链尖落后于创世 bootnode 共识链尖，暂不出块（先同步）",
 		"localBlockNumber", localTip,
 		"trustedCanonicalTip", tip,
 		"lagBlocks", tip-localTip)
-	return true
 }
 
 // preProduceTrustedCanonicalCheck 出块前：若 bootnode 共识链尖已不低于拟出块高度，应中止本地构建、依赖同步。

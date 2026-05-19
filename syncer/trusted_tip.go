@@ -18,8 +18,8 @@ const (
 	localAheadWarnBlocks          = 64
 	localAheadForceKickBlocks     = 256
 	trustedTipLogInterval         = 15 * time.Second
-	// quorum 成功 INFO 仅在本机链尖连续未变达到该时长后打印（追块中不刷）。
-	trustedQuorumLogLocalStallInterval = 10 * time.Second
+	// syncer 若干 INFO（quorum / best-not-ahead / force-bulk 等）仅在本机链尖连续未变达到该时长后打印。
+	syncerLocalStallLogInterval = 20 * time.Second
 )
 
 type trustedTipResult struct {
@@ -41,8 +41,8 @@ func (s *syncer) GetTrustedCanonicalTip() uint64 {
 	return s.computeTrustedBootnodeTip(local).Tip
 }
 
-// shouldLogTrustedQuorumSuccess 仅在本地链尖已连续 stall 时长未变时允许打 quorum INFO（追块中高度在变则不打印）。
-func (s *syncer) shouldLogTrustedQuorumSuccess(local uint64) bool {
+// shouldLogOnLocalChainStall 本地链尖已连续 stall 时长未变（追块中高度在变则返回 false）。
+func (s *syncer) shouldLogOnLocalChainStall(local uint64) bool {
 	s.trustedQuorumLogMu.Lock()
 	defer s.trustedQuorumLogMu.Unlock()
 	now := time.Now()
@@ -51,7 +51,19 @@ func (s *syncer) shouldLogTrustedQuorumSuccess(local uint64) bool {
 		s.trustedQuorumLogLocalSince = now
 		return false
 	}
-	return now.Sub(s.trustedQuorumLogLocalSince) >= trustedQuorumLogLocalStallInterval
+	return now.Sub(s.trustedQuorumLogLocalSince) >= syncerLocalStallLogInterval
+}
+
+func (s *syncer) shouldLogTrustedQuorumSuccess(local uint64) bool {
+	return s.shouldLogOnLocalChainStall(local)
+}
+
+// logSyncInfoOnLocalStall 本地链尖 stall 后再按时间节流打 syncer INFO。
+func (s *syncer) logSyncInfoOnLocalStall(local uint64, fn func()) {
+	if !s.shouldLogOnLocalChainStall(local) {
+		return
+	}
+	s.logBestPeerNotAheadStatusThrottled(fn)
 }
 
 func (s *syncer) logTrustedQuorumSuccess(local, tip uint64, logFn func()) {

@@ -189,7 +189,7 @@ func (r *dposRuntime) produceBlock() error {
 				}
 			}
 		}
-		if r.mustWaitForTrustedCanonicalSync(currentBlock.Number) {
+		if r.behindTrustedCanonicalSync(currentBlock.Number) {
 			return nil
 		}
 	}

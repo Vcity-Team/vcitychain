@@ -651,14 +651,16 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 
 		forceBulk := syncTarget > localLatest
 		if forceBulk {
-			s.logger.Info("syncer: behind trusted bootnode tip, will force bulk sync",
-				"localLatest", localLatest,
-				"trustedTip", trustedTip,
-				"syncTarget", syncTarget,
-				"maxBootHeight", trustedMeta.MaxBootHeight,
-				"quorum", trustedMeta.Quorum,
-				"connectedBootnodes", trustedMeta.ConnectedBoots,
-				"reportingBootnodes", trustedMeta.ReportingBoots)
+			s.logSyncInfoOnLocalStall(localLatest, func() {
+				s.logger.Info("syncer: behind trusted bootnode tip, will force bulk sync",
+					"localLatest", localLatest,
+					"trustedTip", trustedTip,
+					"syncTarget", syncTarget,
+					"maxBootHeight", trustedMeta.MaxBootHeight,
+					"quorum", trustedMeta.Quorum,
+					"connectedBootnodes", trustedMeta.ConnectedBoots,
+					"reportingBootnodes", trustedMeta.ReportingBoots)
+			})
 		}
 
 		// pick one best peer（fork/未完成 的 skip 与「拉取反复失败」的不信任 合并，但不信任不触发「无 best 时全体 Disconnect」）
@@ -701,7 +703,7 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 				continue
 			}
 		} else if bestPeer.Number <= localLatest {
-			s.logBestPeerNotAheadStatusThrottled(func() {
+			s.logSyncInfoOnLocalStall(localLatest, func() {
 				s.logger.Info("syncer: best peer not ahead of local, self-wake to avoid stall on unchanged peer heights",
 					"peer", bestPeer.ID.String(),
 					"peerNumber", bestPeer.Number,
@@ -716,16 +718,18 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			continue
 		}
 
-		s.logger.Info("syncer: selected peer for bulk sync (bootnode preferred when behind trusted tip)",
-			"peer", bestPeer.ID.String(),
-			"peerAdvertisedLatest", bestPeer.Number,
-			"bulkTargetHeight", peerTarget,
-			"localLatest", localLatest,
-			"trustedTip", trustedTip,
-			"syncTarget", syncTarget,
-			"forceBulk", forceBulk,
-			"pullDistrustCooldownPeerCount", pullDistrustActive,
-			"forkOrIncompleteSkipCount", len(skipList))
+		s.logSyncInfoOnLocalStall(localLatest, func() {
+			s.logger.Info("syncer: selected peer for bulk sync (bootnode preferred when behind trusted tip)",
+				"peer", bestPeer.ID.String(),
+				"peerAdvertisedLatest", bestPeer.Number,
+				"bulkTargetHeight", peerTarget,
+				"localLatest", localLatest,
+				"trustedTip", trustedTip,
+				"syncTarget", syncTarget,
+				"forceBulk", forceBulk,
+				"pullDistrustCooldownPeerCount", pullDistrustActive,
+				"forkOrIncompleteSkipCount", len(skipList))
+		})
 
 		// 添加真正开始同步的详细日志
 		s.logger.Debug("🚀 开始同步区块",
@@ -850,10 +854,6 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 			}
 
 			blockCount++
-			// 只在每10个区块或关键节点记录日志
-			if blockCount%10 == 0 || block.Number()%100 == 0 {
-				s.logger.Info("区块同步进度", "peer", peerID.String(), "当前区块", block.Number(), "已同步", blockCount)
-			}
 
 			// 检查是否是共识切换高度，如果是则使用WriteBlockWithoutConsensus
 			if s.isConsensusSwitchHeight(block) {
