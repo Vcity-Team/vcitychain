@@ -22,6 +22,7 @@ const (
 
 type trustedTipResult struct {
 	Tip                uint64
+	MaxBootHeight      uint64 // 任一已连接 bootnode 宣称的最高高度（可高于 quorum Tip）
 	Quorum             bool
 	ConnectedBoots     int
 	ReportingBoots     int
@@ -95,6 +96,7 @@ func (s *syncer) computeTrustedBootnodeTip(local uint64) trustedTipResult {
 	median := heights[len(heights)/2]
 	out.Median = median
 	minH, maxH := heights[0], heights[len(heights)-1]
+	out.MaxBootHeight = maxH
 
 	// 1) max 簇 quorum：至少 K 台落在 [maxH-spread, maxH]
 	if maxH-minH <= maxBootnodeHeightSpread {

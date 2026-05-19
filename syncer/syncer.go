@@ -27,7 +27,8 @@ const (
 	// syncBestNotAheadWakeInterval：best peer 宣称不高于本地时，仍定时唤醒 Sync。
 	// putToPeerMap 对「同区块高度」的状态更新不 notify，若无更高高度事件，否则会永久阻塞在 newStatusCh，
 	// 与资源监控观测到的网络领先脱节（同步表现为停住）。
-	syncBestNotAheadWakeInterval = 5 * time.Second
+	// 宜 ≤ 出块间隔（如 3s），且须非阻塞 wake（见 wakeSyncAfter）；过长会导致「追一块睡一整段」。
+	syncBestNotAheadWakeInterval = 3 * time.Second
 
 	// 反复 bulk 拉取失败（开流失败、超时、验证失败、未完成）则短期不信任该 peer，避免死盯「虚高宣称」节点。
 	pullFailStreakThreshold = 4
@@ -383,22 +384,34 @@ func (s *syncer) recordTrustedPeerSuccess(peerID peer.ID, blockNumber uint64) {
 }
 
 func (s *syncer) wakeSyncAfter(backoff time.Duration, reason string, args ...interface{}) {
-	// 仅用于“仍落后/刚失败/无可用 peer”等需要尽快重试的路径
-	if backoff > 0 {
-		time.Sleep(backoff)
-	}
 	if s.closed.Load() {
 		return
 	}
-	// best_peer_not_ahead 等卡死排查路径用 INFO；其余 self-wake 仍用 Debug 避免刷屏
-	selfWakeArgs := append([]interface{}{"reason", reason, "backoff", backoff.String()}, args...)
-	switch reason {
-	case "best_peer_not_ahead", "trusted_ahead_no_serving_peer", "local_ahead_trusted_tip":
-		s.logger.Info("syncer self-wake", selfWakeArgs...)
-	default:
-		s.logger.Debug("syncer self-wake", selfWakeArgs...)
+	fire := func() {
+		if s.closed.Load() {
+			return
+		}
+		selfWakeArgs := append([]interface{}{"reason", reason, "backoff", backoff.String()}, args...)
+		switch reason {
+		case "best_peer_not_ahead", "trusted_ahead_no_serving_peer", "local_ahead_trusted_tip":
+			s.logger.Info("syncer self-wake", selfWakeArgs...)
+		default:
+			s.logger.Debug("syncer self-wake", selfWakeArgs...)
+		}
+		s.notifyNewStatusEvent()
 	}
-	s.notifyNewStatusEvent()
+	// 长退避必须异步：若在 Sync 循环内 Sleep，会挡住 newStatusCh，peer 高度更新也要等睡完（表现为约 5s 才追一块）。
+	if backoff >= time.Second {
+		go func() {
+			time.Sleep(backoff)
+			fire()
+		}()
+		return
+	}
+	if backoff > 0 {
+		time.Sleep(backoff)
+	}
+	fire()
 }
 
 // KickSync 在落后于网络且拉块链路疑似僵死时由上层调用：不退出进程，通过关流 / 换人 / 唤醒打破卡死。
@@ -567,6 +580,10 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 
 		trustedMeta := s.computeTrustedBootnodeTip(localLatest)
 		trustedTip := trustedMeta.Tip
+		syncTarget := trustedTip
+		if trustedMeta.MaxBootHeight > syncTarget {
+			syncTarget = trustedMeta.MaxBootHeight
+		}
 
 		if trustedTip > 0 && localLatest > trustedTip+localAheadForceKickBlocks {
 			s.logger.Info("syncer: local chain ahead of trusted bootnode tip; KickSync to avoid stall",
@@ -586,11 +603,13 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 				"aheadBlocks", localLatest-trustedTip)
 		}
 
-		forceBulk := trustedTip > localLatest
+		forceBulk := syncTarget > localLatest
 		if forceBulk {
 			s.logger.Info("syncer: behind trusted bootnode tip, will force bulk sync",
 				"localLatest", localLatest,
 				"trustedTip", trustedTip,
+				"syncTarget", syncTarget,
+				"maxBootHeight", trustedMeta.MaxBootHeight,
 				"quorum", trustedMeta.Quorum,
 				"connectedBootnodes", trustedMeta.ConnectedBoots,
 				"reportingBootnodes", trustedMeta.ReportingBoots)
@@ -598,7 +617,7 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 
 		// pick one best peer（fork/未完成 的 skip 与「拉取反复失败」的不信任 合并，但不信任不触发「无 best 时全体 Disconnect」）
 		pullDistrustActive := len(s.pullDistrustSkipMap())
-		bestPeer := s.pickSyncPeerForTarget(localLatest, trustedTip, skipList)
+		bestPeer := s.pickSyncPeerForTarget(localLatest, syncTarget, skipList)
 		if bestPeer == nil {
 			// 所有候选 peer 均被跳过（开流失败等）：主动断开这些 peer 促其重连，退避后清空 skipList 再试
 			if len(skipList) > 0 {
@@ -620,13 +639,14 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 
 		peerTarget := bestPeer.Number
 		if forceBulk {
-			if peerTarget < trustedTip {
-				peerTarget = trustedTip
+			if peerTarget < syncTarget {
+				peerTarget = syncTarget
 			}
 			if peerTarget <= localLatest {
 				s.logger.Info("syncer: trusted tip ahead but no peer can serve blocks yet, will retry",
 					"localLatest", localLatest,
 					"trustedTip", trustedTip,
+					"syncTarget", syncTarget,
 					"bestPeer", bestPeer.ID.String(),
 					"peerNumber", bestPeer.Number)
 				s.wakeSyncAfter(retryBackoff, "trusted_ahead_no_serving_peer",
@@ -639,7 +659,8 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 				"peer", bestPeer.ID.String(),
 				"peerNumber", bestPeer.Number,
 				"localLatest", localLatest,
-				"trustedTip", trustedTip)
+				"trustedTip", trustedTip,
+				"syncTarget", syncTarget)
 			s.wakeSyncAfter(syncBestNotAheadWakeInterval, "best_peer_not_ahead",
 				"peer", bestPeer.ID.String(),
 				"peerNumber", bestPeer.Number,
@@ -653,6 +674,7 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			"bulkTargetHeight", peerTarget,
 			"localLatest", localLatest,
 			"trustedTip", trustedTip,
+			"syncTarget", syncTarget,
 			"forceBulk", forceBulk,
 			"pullDistrustCooldownPeerCount", pullDistrustActive,
 			"forkOrIncompleteSkipCount", len(skipList))
