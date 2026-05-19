@@ -626,14 +626,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		}, nil
 	}
 
-	// 🔍 调试日志：记录解析后的 amount
-	d.logger.Info("🔍 [RPC] 解析 amount 参数",
-		"原始字符串", req.Amount,
-		"解析后值", amountInt.String(),
-		"Sign()", amountInt.Sign(),
-		"与-1比较", amountInt.Cmp(big.NewInt(-1)),
-		"与0比较", amountInt.Cmp(big.NewInt(0)))
-
 	// amount = 0 不允许，返回错误
 	if amountInt.Sign() == 0 {
 		return &VoteResponse{
@@ -649,17 +641,9 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	var err error
 
 	// Method 1: Try to get balance using available methods
-	d.logger.Info("Method 1: Attempting to get balance...")
-
-	// Try to get balance directly using the available methods
 	if balanceStore, ok := d.store.(interface {
 		GetBalance(root types.Hash, addr types.Address) (*big.Int, error)
 	}); ok {
-		d.logger.Debug("Method 1: Store implements GetBalance method")
-
-		// Try to get balance with different state roots
-		d.logger.Debug("Method 1: Trying to get balance with different state roots...")
-
 		// First, try to get the latest state root from the store
 		var latestRoot types.Hash
 		var foundValidRoot bool
@@ -672,7 +656,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 			latestHeader := headerStore.Header()
 			if latestHeader != nil {
 				latestRoot = latestHeader.StateRoot
-				d.logger.Debug("Method 1a: Got state root from Header() method", "root", latestRoot.String())
 				foundValidRoot = true
 			}
 		}
@@ -683,7 +666,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 				GetLatestStateRoot() types.Hash
 			}); ok {
 				latestRoot = latestStore.GetLatestStateRoot()
-				d.logger.Debug("Method 1b: Got latest state root", "root", latestRoot.String())
 				foundValidRoot = true
 			}
 		}
@@ -696,7 +678,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 				latestHeader := headerStore.GetLatestHeader()
 				if latestHeader != nil {
 					latestRoot = latestHeader.StateRoot
-					d.logger.Debug("Method 1c: Got state root from GetLatestHeader", "root", latestRoot.String())
 					foundValidRoot = true
 				}
 			}
@@ -710,7 +691,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 				latestBlock := blockStore.GetLatestBlock()
 				if latestBlock != nil {
 					latestRoot = latestBlock.Header.StateRoot
-					d.logger.Debug("Method 1d: Got state root from GetLatestBlock", "root", latestRoot.String())
 					foundValidRoot = true
 				}
 			}
@@ -727,7 +707,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 					// Try to get the previous block header as a fallback
 					if prevHeader, ok := headerStore.GetHeaderByNumber(latestHeader.Number - 1); ok {
 						latestRoot = prevHeader.StateRoot
-						d.logger.Debug("Method 1e: Got state root from previous block header", "root", latestRoot.String(), "blockNumber", prevHeader.Number)
 						foundValidRoot = true
 					}
 				}
@@ -735,23 +714,12 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		}
 
 		if foundValidRoot && latestRoot != (types.Hash{}) {
-			d.logger.Debug("Method 1: Trying to get balance with valid state root", "root", latestRoot.String())
 			balance, err = balanceStore.GetBalance(latestRoot, voterAddr)
-			if err == nil && balance != nil {
-				d.logger.Debug("Method 1: Successfully got balance with valid root", "balance", balance.String())
-			} else {
-				d.logger.Debug("Method 1: Failed to get balance with valid root", "error", err)
-			}
-		} else {
-			d.logger.Debug("Method 1: No valid state root found, cannot get balance")
 		}
-	} else {
-		d.logger.Debug("Method 1: Store does not implement GetBalance method")
 	}
 
 	// Method 2: If still no balance, try to get from consensus engine directly
 	if balance == nil || err != nil {
-		d.logger.Debug("Trying to get balance from consensus engine directly...")
 		if hub, ok := d.store.(interface {
 			GetConsensus() interface{}
 		}); ok {
@@ -762,40 +730,17 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 				GetAccountBalance(addr types.Address) (*big.Int, error)
 			}); ok {
 				balance, err = balanceEngine.GetAccountBalance(voterAddr)
-				if err == nil && balance != nil {
-					d.logger.Debug("Balance retrieved from consensus engine", "balance", balance.String())
-				}
-			}
-
-			// If no balance method, try to get from DPoS state
-			if balance == nil {
-				if dposEngine, ok := consensusEngine.(interface {
-					GetDPoSState() (*dpos.State, error)
-				}); ok {
-					dposState, err := dposEngine.GetDPoSState()
-					if err == nil && dposState != nil {
-						// Try to get balance from DPoS state
-						d.logger.Debug("Trying to get balance from DPoS state")
-						// Note: This would need to be implemented based on actual DPoS state structure
-					}
-				}
 			}
 		}
 	}
 
 	// Method 3: Try to get balance using zero hash as fallback (for genesis or initial state)
 	if balance == nil || err != nil {
-		d.logger.Debug("Method 3: Trying to get balance with zero hash as fallback...")
 		if balanceStore, ok := d.store.(interface {
 			GetBalance(root types.Hash, addr types.Address) (*big.Int, error)
 		}); ok {
 			zeroHash := types.Hash{}
 			balance, err = balanceStore.GetBalance(zeroHash, voterAddr)
-			if err == nil && balance != nil {
-				d.logger.Debug("Method 3: Successfully got balance with zero hash", "balance", balance.String())
-			} else {
-				d.logger.Debug("Method 3: Failed to get balance with zero hash", "error", err)
-			}
 		}
 	}
 
@@ -808,8 +753,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		}, nil
 	}
 
-	d.logger.Debug("Voter balance retrieved", "balance", balance.String())
-
 	if balance.Cmp(amountInt) < 0 {
 		d.logger.Error("Insufficient balance", "balance", balance.String(), "required", amountInt.String())
 		return &VoteResponse{
@@ -817,12 +760,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 			Error:   "insufficient balance",
 		}, nil
 	}
-	d.logger.Debug("Balance check passed")
-
-	d.logger.Info("🔍 开始验证受托人候选人资格",
-		"voter", voterAddr.String(),
-		"candidate", candidateAddr.String(),
-		"amount", amountInt.String())
 
 	dposEngine := d.getDPoSEngine()
 	if dposEngine == nil {
@@ -846,7 +783,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 
 			// 创世验证者可以直接被投票，无需注册
 			if okGenesis && isGenesis.IsGenesisValidator(candidateAddr) {
-				d.logger.Info("✅ 受托人是创世验证者，跳过注册检查", "candidate", candidateAddr.String())
+				// genesis validators may receive votes without registration
 			} else if !isRegistered.IsDelegateRegistered(candidateAddr) {
 				d.logger.Warn("❌ 受托人未注册，投票被拒绝",
 					"candidate", candidateAddr.String(),
@@ -856,8 +793,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 					Success: false,
 					Error:   fmt.Sprintf("delegate %s is not registered", candidateAddr.String()),
 				}, nil
-			} else {
-				d.logger.Info("✅ 受托人注册状态验证通过", "candidate", candidateAddr.String())
 			}
 		} else {
 			d.logger.Warn("⚠️ DPoS引擎不支持受托人注册检查，跳过验证")
@@ -877,16 +812,10 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 					Error:   fmt.Sprintf("delegate %s is not a candidate", candidateAddr.String()),
 				}, nil
 			}
-			d.logger.Info("✅ 受托人候选人状态验证通过", "candidate", candidateAddr.String())
 		} else {
 			d.logger.Warn("⚠️ DPoS引擎不支持受托人候选人检查，跳过验证")
 		}
-	} else {
-		d.logger.Info("ℹ️ 撤票请求，跳过受托人注册/候选人 RPC 检查",
-			"candidate", candidateAddr.String(),
-			"voter", voterAddr.String())
 	}
-	d.logger.Info("🔍 开始预验证投票参数", "voter", voterAddr, "candidate", candidateAddr, "amount", amountInt)
 
 	voteMessage := &VoteMessage{
 		Voter:     voterAddr,
@@ -906,17 +835,11 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 				Error:   fmt.Sprintf("vote validation failed: %v", err),
 			}, nil
 		}
-		d.logger.Info("✅ 投票预验证通过")
 	} else {
 		d.logger.Warn("⚠️ DPoS引擎类型不匹配，跳过预验证")
 	}
 
-	// Implement actual voting logic
-	d.logger.Info("Vote validation completed", "voter", voterAddr, "candidate", candidateAddr, "amount", amountInt)
-
 	// Step 1: Create a vote transaction
-	d.logger.Info("Creating vote transaction...")
-
 	// 🚨 检测投票参数
 	if voterAddr == (types.Address{}) {
 		d.logger.Error("🚨 CRITICAL: voter address is zero address")
@@ -964,7 +887,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	minGasPrice := big.NewInt(1000000000) // 1 gwei
 	if gasPrice.Cmp(minGasPrice) < 0 {
 		gasPrice = minGasPrice
-		d.logger.Info("Gas price adjusted to meet minimum requirement", "gasPrice", gasPrice.String())
 	}
 	tx := &types.Transaction{
 		Nonce:    nonce,
@@ -999,8 +921,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		}, nil
 	}
 
-	d.logger.Info("Vote transaction created", "txHash", tx.Hash.String(), "nonce", nonce, "gasPrice", gasPrice.String())
-
 	// Step 2: Sign the transaction
 	if err := d.signTransaction(tx, voterAddr, req.PrivateKey); err != nil {
 		d.logger.Error("Failed to sign transaction", "error", err)
@@ -1013,23 +933,15 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	// Recalculate hash after signing
 	txWithHash := tx.ComputeHash(0)
 	txHash := txWithHash.Hash
-	d.logger.Info("Transaction signed and hash recalculated", "txHash", txHash.String())
 
 	// Step 3: Add transaction to the transaction pool for proper tracking
-	d.logger.Info("Adding transaction to pool for DPoS voting history...")
-
-	// Try to get transaction pool from store
 	var txAdded bool
-
-	// Debug: Log the store type to understand what we're working with
-	d.logger.Info("Store type", "type", fmt.Sprintf("%T", d.store))
 
 	// Method 1: Add to pool (unvote: local-only, no gossip; vote: normal AddTx + broadcast below)
 	if isUnvote {
 		if localStore, ok := d.store.(interface {
 			AddTxLocalOnly(tx *types.Transaction) error
 		}); ok {
-			d.logger.Info("Adding unvote transaction to local pool only (no broadcast)...")
 			if err := localStore.AddTxLocalOnly(tx); err != nil {
 				d.logger.Error("Failed to add unvote transaction to local pool", "error", err)
 				return &VoteResponse{
@@ -1037,7 +949,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 					Error:   fmt.Sprintf("failed to add unvote to local pool: %v", err),
 				}, nil
 			}
-			d.logger.Info("Unvote transaction added to local pool; will be packaged when this node is proposer")
 			txAdded = true
 		} else if ethStore, ok := d.store.(interface {
 			AddTx(tx *types.Transaction) error
@@ -1054,12 +965,10 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	} else if ethStore, ok := d.store.(interface {
 		AddTx(tx *types.Transaction) error
 	}); ok {
-		d.logger.Info("Store implements AddTx interface, attempting to add transaction...")
 		if err := ethStore.AddTx(tx); err != nil {
 			d.logger.Error("Failed to add transaction to pool", "error", err)
 			// Continue anyway, we'll update DPoS state directly as fallback
 		} else {
-			d.logger.Info("Transaction added to pool successfully")
 			txAdded = true
 		}
 	} else {
@@ -1081,80 +990,24 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		d.logger.Warn("Transaction pool not available, will update DPoS state directly")
 	}
 
-	if isUnvote {
-		d.logger.Info("Unvote kept in local pool only; skipping network broadcast",
-			"txHash", tx.Hash.String(),
-			"txAdded", txAdded)
-	} else {
+	if !isUnvote {
 		// 无论 AddTx 是否成功，都尝试广播交易到网络
-		d.logger.Info("Attempting to broadcast transaction to network", "txHash", tx.Hash.String(), "txAdded", txAdded)
-
-		// 强制广播交易到网络（确保其他节点能收到）
 		if err := d.broadcastTransaction(tx); err != nil {
 			d.logger.Warn("Failed to broadcast transaction directly", "error", err, "txHash", tx.Hash.String())
-			// 不返回错误，继续执行
-		} else {
-			d.logger.Info("Transaction broadcasted successfully", "txHash", tx.Hash.String())
 		}
 	}
-
-	// 检查交易池状态，诊断为什么交易没有被共识引擎拉取
-	if txpoolStore, ok := d.store.(interface {
-		GetTxPool() interface{}
-	}); ok {
-		txpool := txpoolStore.GetTxPool()
-		if txpool != nil {
-			if debugTxPool, ok := txpool.(interface {
-				DebugInfo() map[string]interface{}
-			}); ok {
-				debugInfo := debugTxPool.DebugInfo()
-				d.logger.Info("Transaction pool debug info", "debugInfo", debugInfo)
-
-				// 特别关注关键指标
-				if executablesCount, ok := debugInfo["executablesCount"].(int); ok {
-					d.logger.Info("Executables queue count", "count", executablesCount)
-				}
-				if pendingCount, ok := debugInfo["pendingCount"].(int64); ok {
-					d.logger.Info("Pending transactions count", "count", pendingCount)
-				}
-				if hasTopic, ok := debugInfo["hasTopic"].(bool); ok {
-					d.logger.Info("Transaction pool has topic", "hasTopic", hasTopic)
-				}
-				if isSealing, ok := debugInfo["isSealing"].(bool); ok {
-					d.logger.Info("Transaction pool is sealing", "isSealing", isSealing)
-				}
-
-				// 如果 executables 队列为空但有 pending 交易，记录警告但不手动干预
-				if executablesCount, ok := debugInfo["executablesCount"].(int); ok {
-					if executablesCount == 0 {
-						d.logger.Warn("Executables queue is empty - this may indicate a transaction promotion issue")
-						d.logger.Info("Note: Manual intervention removed to avoid interfering with consensus flow")
-						d.logger.Info("Transactions should be promoted automatically by the consensus engine")
-					}
-				}
-			}
-		}
-	}
-
-	// Step 4: Update DPoS state immediately (for immediate effect)
-	d.logger.Info("Updating DPoS state...")
 
 	// Try to update the consensus engine state
 	var dposStateUpdated bool
 
-	// Debug: Check if store has GetConsensus method
 	if consensusStore, ok := d.store.(interface {
 		GetConsensus() interface{}
 	}); ok {
-		d.logger.Info("Store has GetConsensus method, attempting to get consensus engine...")
-
 		consensusEngine := d.getDPoSEngineDirectly(consensusStore)
-
 		if consensusEngine == nil {
 			d.logger.Warn("Consensus engine is nil")
-		} else {
-			d.logger.Info("Consensus engine type", "type", fmt.Sprintf("%T", consensusEngine))
 		}
+		_ = consensusEngine
 	} else {
 		d.logger.Warn("Store does NOT have GetConsensus method")
 	}
@@ -1168,8 +1021,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	} else if !dposStateUpdated {
 		successMessage = "Vote operation completed successfully (transaction added to pool, will be processed in next block)"
 	}
-
-	d.logger.Info("Vote operation completed successfully", "txHash", txHash.String(), "txAdded", txAdded, "dposStateUpdated", dposStateUpdated)
 
 	// Try to get the actual block number if transaction is already mined
 	var blockNumber uint64
@@ -1188,39 +1039,25 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 				if block, ok := blockchainStore.GetBlockByHash(blockHash, false); ok {
 					blockNumber = block.Number()
 					blockStatus = "mined"
-					d.logger.Info("Transaction found in blockchain", "blockNumber", blockNumber, "blockHash", blockHash.String())
 				} else {
 					blockStatus = "block_found_but_no_details"
-					d.logger.Info("Block found but could not retrieve block details")
-					// If block found but can't get details, try to get current block height
 					blockNumber = d.getCurrentBlockHeight()
 				}
 			} else {
-				// Transaction is pending, return current block height instead of 0
 				blockNumber = d.getCurrentBlockHeight()
 				blockStatus = "pending"
-				d.logger.Info("Transaction not yet mined, returning current block height", "blockNumber", blockNumber)
 			}
 		} else {
-			// Store doesn't support ReadTxLookup, get current block height
 			blockNumber = d.getCurrentBlockHeight()
 			blockStatus = "store_not_supported"
-			d.logger.Info("Store does not support ReadTxLookup/GetBlockByHash, using current block height", "blockNumber", blockNumber)
 		}
 	} else {
-		// Transaction was not added, still return current block height
 		blockNumber = d.getCurrentBlockHeight()
 		blockStatus = "tx_not_added"
-		d.logger.Info("Transaction was not added to pool, returning current block height", "blockNumber", blockNumber)
 	}
 
-	// Log the final status
-	d.logger.Info("Final transaction status",
-		"txHash", txHash.String(),
-		"blockNumber", blockNumber,
-		"blockStatus", blockStatus,
-		"txAdded", txAdded,
-		"dposStateUpdated", dposStateUpdated)
+	_ = blockStatus
+	_ = dposStateUpdated
 
 	return &VoteResponse{
 		Success:     true,
@@ -1255,7 +1092,6 @@ func (d *DPOS) createVoteTransactionData(voter, candidate types.Address, amount 
 		for i := range amountBytes {
 			amountBytes[i] = 0xFF
 		}
-		d.logger.Info("🔧 [编码] amount = -1，使用全1编码", "encoded", fmt.Sprintf("%x", amountBytes))
 	} else {
 		// 正数正常编码
 		amountBytes = amount.Bytes()
@@ -1357,14 +1193,11 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interfa
 	var err error
 
 	// 方法1：尝试从 store 获取
-	if validators, err = d.store.GetValidatorsWithFilter(false); err == nil && len(validators) > 0 {
-		d.logger.Info("Successfully retrieved validators from store", "count", len(validators))
-	} else {
+	validators, err = d.store.GetValidatorsWithFilter(false)
+	if err != nil || len(validators) == 0 {
 		// 方法2：尝试从 DPoS 引擎直接获取
 		if dposState, err2 := d.store.GetDPoSState(); err2 == nil && dposState != nil && dposState.StakeStore != nil {
-			if validators, err = dposState.StakeStore.GetValidatorsWithFilter(false); err == nil && len(validators) > 0 {
-				d.logger.Info("Successfully retrieved validators from DPoS state", "count", len(validators))
-			}
+			validators, err = dposState.StakeStore.GetValidatorsWithFilter(false)
 		}
 		// 方法3：尝试通过 GetDPoSEngine 获取
 		if len(validators) == 0 {
@@ -1373,9 +1206,7 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interfa
 			}); ok {
 				if dposEngine := dposStore.GetDPoSEngine(); dposEngine != nil {
 					if dpos, ok := dposEngine.(*dpos.DPoS); ok {
-						if validators, err = dpos.GetValidatorsWithFilter(false); err == nil && len(validators) > 0 {
-							d.logger.Info("Successfully retrieved validators from DPoS engine", "count", len(validators))
-						}
+						validators, err = dpos.GetValidatorsWithFilter(false)
 					}
 				}
 			}
@@ -1630,9 +1461,6 @@ func (d *DPOS) GetConsensusState(ctx context.Context) (map[string]interface{}, e
 			GetCurrentRound() uint64
 		}); ok {
 			currentRound = engine.GetCurrentRound()
-			if currentRound > 0 {
-				d.logger.Debug("从DPoS引擎获取当前round", "round", currentRound)
-			}
 		}
 
 		// 如果引擎返回0，尝试从DPoS引擎直接获取所需信息进行计算
@@ -2328,76 +2156,45 @@ func (d *DPOS) GetVoteByHash(ctx context.Context, params interface{}) (interface
 		return nil, fmt.Errorf("transaction hash is required")
 	}
 
-	d.logger.Info("Transaction hash extracted", "txHash", txHash)
-
-	// Parse transaction hash
 	hash := types.StringToHash(txHash)
 	if hash == types.ZeroHash {
 		return nil, fmt.Errorf("invalid transaction hash: %s", txHash)
 	}
 
-	d.logger.Info("Transaction hash parsed", "hash", hash.String())
-
-	// Try to get transaction from store
 	var tx *types.Transaction
 	var blockNumber *uint64
 	var isPending bool
 
-	// First try to get from pending transactions
-	d.logger.Info("Checking pending transaction pool...")
 	if pendingTx, found := d.store.GetPendingTx(hash); found {
 		tx = pendingTx
 		isPending = true
-		d.logger.Info("Found transaction in pending pool", "tx", tx.Hash.String())
-	} else {
-		d.logger.Info("Transaction not found in pending pool")
-
-		// Try to get from blockchain using the correct approach
-		if blockchainStore, ok := d.store.(interface {
-			ReadTxLookup(txnHash types.Hash) (types.Hash, bool)
-			GetBlockByHash(hash types.Hash, full bool) (*types.Block, bool)
-		}); ok {
-			d.logger.Info("Checking blockchain for confirmed transaction using ReadTxLookup...")
-
-			// Step 1: Find the block hash containing this transaction
-			if blockHash, found := blockchainStore.ReadTxLookup(hash); found {
-				d.logger.Info("Found block hash for transaction", "blockHash", blockHash.String())
-
-				// Step 2: Get the block to extract transaction details
-				if block, ok := blockchainStore.GetBlockByHash(blockHash, true); ok {
-					d.logger.Info("Found block", "blockNumber", block.Number(), "txCount", len(block.Transactions))
-
-					// Step 3: Find the specific transaction in the block
-					for i, blockTx := range block.Transactions {
-						if blockTx.Hash == hash {
-							tx = blockTx
-							isPending = false
-							blockNum := block.Number()
-							blockNumber = &blockNum
-							d.logger.Info("Found transaction in blockchain", "blockNumber", blockNum, "txIndex", i)
-							break
-						}
+	} else if blockchainStore, ok := d.store.(interface {
+		ReadTxLookup(txnHash types.Hash) (types.Hash, bool)
+		GetBlockByHash(hash types.Hash, full bool) (*types.Block, bool)
+	}); ok {
+		if blockHash, found := blockchainStore.ReadTxLookup(hash); found {
+			if block, ok := blockchainStore.GetBlockByHash(blockHash, true); ok {
+				for _, blockTx := range block.Transactions {
+					if blockTx.Hash == hash {
+						tx = blockTx
+						isPending = false
+						blockNum := block.Number()
+						blockNumber = &blockNum
+						break
 					}
-
-					if tx == nil {
-						d.logger.Warn("Transaction hash found in block but transaction not found in block transactions")
-					}
-				} else {
-					d.logger.Warn("Block found but could not retrieve block details")
+				}
+				if tx == nil {
+					d.logger.Warn("Transaction hash found in block but transaction not found in block transactions")
 				}
 			} else {
-				d.logger.Info("Transaction not found in blockchain (ReadTxLookup returned false)")
+				d.logger.Warn("Block found but could not retrieve block details")
 			}
-		} else {
-			d.logger.Info("Store does not support ReadTxLookup/GetBlockByHash")
 		}
 	}
 
 	if tx == nil {
 		return nil, fmt.Errorf("transaction not found in pending pool or blockchain. Hash: %s", txHash)
 	}
-
-	d.logger.Info("Transaction found", "hash", tx.Hash.String(), "isPending", isPending, "blockNumber", blockNumber)
 
 	// Parse DPoS vote data from transaction input
 	voteInfo, err := d.parseVoteTransactionData(tx)
@@ -2446,8 +2243,6 @@ func (d *DPOS) GetVoteByHash(ctx context.Context, params interface{}) (interface
 		"voteType":    "DPoS Vote",
 		"timestamp":   time.Now().Unix(),
 	}
-
-	d.logger.Info("DPoS vote parsed successfully", "voter", voteInfo.Voter, "candidate", voteInfo.Candidate, "amount", voteInfo.Amount)
 
 	return response, nil
 }
@@ -2509,7 +2304,6 @@ func (d *DPOS) parseVoteTransactionData(tx *types.Transaction) (*VoteInfo, error
 	}
 	if isAllOnes {
 		amount = big.NewInt(-1)
-		d.logger.Info("🔧 [解析] 检测到全1编码，解析为 amount = -1")
 	}
 
 	if amount.Cmp(big.NewInt(-1)) == 0 {
@@ -2517,8 +2311,6 @@ func (d *DPOS) parseVoteTransactionData(tx *types.Transaction) (*VoteInfo, error
 	} else if amount.Sign() <= 0 {
 		return nil, fmt.Errorf("vote amount must be positive or -1 for unvote, got %s", amount.String())
 	}
-
-	d.logger.Info("DPoS vote data parsed successfully", "voter", voter.String(), "candidate", candidate.String(), "amount", amount.String())
 
 	return &VoteInfo{
 		Voter:     voter,
@@ -2548,134 +2340,72 @@ type VoteInfo struct {
 // broadcastTransaction attempts to broadcast a transaction to the network
 // This is a fallback mechanism to ensure transactions reach other nodes
 func (d *DPOS) broadcastTransaction(tx *types.Transaction) error {
-	d.logger.Info("Attempting to broadcast transaction", "txHash", tx.Hash.String())
-
 	// Method 0: Try to access txpool directly and call AddTx to trigger built-in broadcasting
 	if txpoolStore, ok := d.store.(interface {
 		GetTxPool() interface{}
 	}); ok {
-		d.logger.Info("Store has GetTxPool method, attempting to access txpool...")
 		txpool := txpoolStore.GetTxPool()
-
 		if txpool != nil {
-			d.logger.Info("TxPool found", "type", fmt.Sprintf("%T", txpool))
-
-			// Check if txpool has a topic for broadcasting (this is what enables broadcasting in txpool.AddTx)
 			if txpoolWithTopic, ok := txpool.(interface {
 				GetTopic() interface{}
 			}); ok {
-				d.logger.Info("TxPool has GetTopic method, checking broadcasting capability...")
-				topic := txpoolWithTopic.GetTopic()
-				if topic != nil {
-					d.logger.Info("TxPool topic found, broadcasting should work through normal AddTx", "topic", fmt.Sprintf("%T", topic))
-					return nil // Broadcasting is handled by txpool.AddTx internally
-				} else {
-					d.logger.Warn("TxPool topic is nil, broadcasting may not work")
+				if topic := txpoolWithTopic.GetTopic(); topic != nil {
+					return nil
 				}
+				d.logger.Warn("TxPool topic is nil, broadcasting may not work")
 			}
-
-			// Try to call AddTx method on txpool to trigger built-in broadcasting
-			// Note: This may fail with "already known" if called multiple times
 			if txpoolAddTx, ok := txpool.(interface {
 				AddTx(tx *types.Transaction) error
 			}); ok {
-				d.logger.Info("TxPool has AddTx method, calling it to trigger broadcasting...")
 				if err := txpoolAddTx.AddTx(tx); err != nil {
 					if err.Error() == "already known" {
-						d.logger.Info("Transaction already in pool, broadcasting should work through normal flow")
 						return nil
 					}
 					d.logger.Warn("TxPool.AddTx failed during broadcasting", "error", err)
 				} else {
-					d.logger.Info("Transaction broadcasted through TxPool.AddTx (built-in broadcasting)")
 					return nil
 				}
 			}
 		}
 	}
 
-	// Method 1: Try to access network layer through store
 	if networkStore, ok := d.store.(interface {
 		GetNetwork() interface{}
 	}); ok {
-		d.logger.Info("Store has GetNetwork method, attempting to broadcast...")
 		network := networkStore.GetNetwork()
-
 		if network != nil {
-			d.logger.Info("Network layer found", "type", fmt.Sprintf("%T", network))
-
-			// Try to call broadcast method on network
 			if broadcaster, ok := network.(interface {
 				BroadcastTransaction(tx *types.Transaction) error
 			}); ok {
-				d.logger.Info("Network has BroadcastTransaction method, calling it...")
 				if err := broadcaster.BroadcastTransaction(tx); err != nil {
 					d.logger.Warn("Network.BroadcastTransaction failed", "error", err)
 				} else {
-					d.logger.Info("Transaction broadcasted through network layer")
 					return nil
 				}
 			}
-
-			// Try alternative broadcast method
 			if broadcaster, ok := network.(interface {
 				BroadcastTx(tx *types.Transaction) error
 			}); ok {
-				d.logger.Info("Network has BroadcastTx method, calling it...")
 				if err := broadcaster.BroadcastTx(tx); err != nil {
 					d.logger.Warn("Network.BroadcastTx failed", "error", err)
 				} else {
-					d.logger.Info("Transaction broadcasted through network layer")
 					return nil
 				}
 			}
 		}
 	}
 
-	// Method 2: Try to access network through embedded fields
-	if hub, ok := d.store.(interface {
-		GetNetwork() interface{}
-	}); ok {
-		d.logger.Info("Store has GetNetwork method through hub, attempting to broadcast...")
-		network := hub.GetNetwork()
-
-		if network != nil {
-			d.logger.Info("Network layer found through hub", "type", fmt.Sprintf("%T", network))
-
-			// Try to call broadcast method on network
-			if broadcaster, ok := network.(interface {
-				BroadcastTransaction(tx *types.Transaction) error
-			}); ok {
-				d.logger.Info("Network has BroadcastTransaction method, calling it...")
-				if err := broadcaster.BroadcastTransaction(tx); err != nil {
-					d.logger.Warn("Network.BroadcastTransaction failed", "error", err)
-				} else {
-					d.logger.Info("Transaction broadcasted through network layer")
-					return nil
-				}
-			}
-		}
-	}
-
-	// Method 3: Try to access server directly
 	if serverStore, ok := d.store.(interface {
 		GetServer() interface{}
 	}); ok {
-		d.logger.Info("Store has GetServer method, attempting to broadcast...")
 		server := serverStore.GetServer()
-
 		if server != nil {
-			d.logger.Info("Server found", "type", fmt.Sprintf("%T", server))
-
-			// Try to call broadcast method on server
 			if broadcaster, ok := server.(interface {
 				BroadcastTransaction(tx *types.Transaction) error
 			}); ok {
-				d.logger.Info("Server has BroadcastTransaction method, calling it...")
 				if err := broadcaster.BroadcastTransaction(tx); err != nil {
 					d.logger.Warn("Server.BroadcastTransaction failed", "error", err)
 				} else {
-					d.logger.Info("Transaction broadcasted through server")
 					return nil
 				}
 			}
@@ -3187,29 +2917,16 @@ func (d *DPOS) sortVotingDetailsByTotalVotes(votingDetails []map[string]interfac
 func (d *DPOS) getConsensusEngineByHeight(consensusStore interface {
 	GetConsensus() interface{}
 }, currentHeight uint64) interface{} {
-	d.logger.Debug("Current block height", "height", currentHeight)
-
-	// 获取共识切换高度配置
 	consensusSwitchHeight := d.getConsensusSwitchHeight()
-	d.logger.Debug("Consensus switch height", "switchHeight", consensusSwitchHeight)
 
 	// 如果当前高度 >= 切换高度，尝试获取DPoS引擎
 	if consensusSwitchHeight > 0 && currentHeight >= consensusSwitchHeight {
-		d.logger.Info("🔄 当前高度已达到DPoS切换高度，尝试获取DPoS引擎",
-			"currentHeight", currentHeight,
-			"switchHeight", consensusSwitchHeight)
-
-		// 尝试获取DPoS引擎
 		if dposEngine := d.getDPoSEngine(); dposEngine != nil {
-			d.logger.Info("✅ 成功获取DPoS引擎")
 			return dposEngine
 		}
-
 		d.logger.Warn("⚠️ 无法获取DPoS引擎，使用默认共识引擎")
 	}
 
-	// 否则使用默认共识引擎
-	d.logger.Debug("使用默认共识引擎", "height", currentHeight)
 	return consensusStore.GetConsensus()
 }
 
@@ -3221,7 +2938,6 @@ func (d *DPOS) getConsensusSwitchHeight() uint64 {
 		if dpos, ok := dposEngine.(*dpos.DPoS); ok {
 			height := dpos.GetConsensusSwitchHeight()
 			if height > 0 {
-				d.logger.Debug("从DPoS引擎获取共识切换高度", "height", height)
 				return height
 			}
 		} else if engine, ok := dposEngine.(interface {
@@ -3229,7 +2945,6 @@ func (d *DPOS) getConsensusSwitchHeight() uint64 {
 		}); ok {
 			height := engine.GetConsensusSwitchHeight()
 			if height > 0 {
-				d.logger.Debug("从DPoS引擎接口获取共识切换高度", "height", height)
 				return height
 			}
 		}
@@ -3240,7 +2955,6 @@ func (d *DPOS) getConsensusSwitchHeight() uint64 {
 		GetConsensus() interface{}
 	}); ok {
 		consensusEngine := consensusStore.GetConsensus()
-		d.logger.Debug("获取到共识引擎", "type", fmt.Sprintf("%T", consensusEngine))
 
 		// 尝试从DPoS引擎中获取配置（共识引擎可能就是DPoS）
 		if dposEngine, ok := consensusEngine.(interface {
@@ -3248,26 +2962,20 @@ func (d *DPOS) getConsensusSwitchHeight() uint64 {
 		}); ok {
 			height := dposEngine.GetConsensusSwitchHeight()
 			if height > 0 {
-				d.logger.Debug("从共识引擎（DPoS）获取共识切换高度", "height", height)
 				return height
 			}
 		}
 
-		// 尝试从IBFT引擎中获取配置
 		if ibftEngine, ok := consensusEngine.(interface {
 			GetConsensusSwitchHeight() uint64
 		}); ok {
 			height := ibftEngine.GetConsensusSwitchHeight()
 			if height > 0 {
-				d.logger.Debug("从IBFT引擎获取共识切换高度", "height", height)
 				return height
 			}
 		}
 
-		// 尝试通过反射获取配置
-		d.logger.Debug("尝试通过反射获取共识切换高度配置")
 		if height := d.getConsensusSwitchHeightByReflection(consensusEngine); height > 0 {
-			d.logger.Debug("通过反射获取共识切换高度", "height", height)
 			return height
 		}
 	}
@@ -3289,18 +2997,13 @@ func (d *DPOS) getConsensusSwitchHeightByReflection(consensusEngine interface{})
 	for i := 0; i < consensusType.NumMethod(); i++ {
 		method := consensusType.Method(i)
 		if method.Name == "GetConsensusSwitchHeight" {
-			d.logger.Debug("找到GetConsensusSwitchHeight方法")
-			// 调用方法
 			results := consensusValue.Method(i).Call([]reflect.Value{})
 			if len(results) > 0 && results[0].Kind() == reflect.Uint64 {
-				height := results[0].Uint()
-				d.logger.Debug("通过反射获取共识切换高度", "height", height)
-				return height
+				return results[0].Uint()
 			}
 		}
 	}
 
-	d.logger.Debug("未找到GetConsensusSwitchHeight方法")
 	return 0
 }
 
@@ -3310,9 +3013,7 @@ func (d *DPOS) getDPoSEngine() interface{} {
 	if dposStore, ok := d.store.(interface {
 		GetDPoSEngine() interface{}
 	}); ok {
-		dposEngine := dposStore.GetDPoSEngine()
-		if dposEngine != nil {
-			d.logger.Debug("从store获取DPoS引擎成功")
+		if dposEngine := dposStore.GetDPoSEngine(); dposEngine != nil {
 			return dposEngine
 		}
 	}
@@ -3327,9 +3028,7 @@ func (d *DPOS) getDPoSEngine() interface{} {
 		if ibftEngine, ok := consensusEngine.(interface {
 			GetDPoSEngine() interface{}
 		}); ok {
-			dposEngine := ibftEngine.GetDPoSEngine()
-			if dposEngine != nil {
-				d.logger.Debug("从IBFT引擎获取DPoS引擎成功")
+			if dposEngine := ibftEngine.GetDPoSEngine(); dposEngine != nil {
 				return dposEngine
 			}
 		}
@@ -3347,9 +3046,7 @@ func (d *DPOS) getCurrentBlockHeight() uint64 {
 		if engine, ok := dposEngine.(interface {
 			GetCurrentBlockNumber() uint64
 		}); ok {
-			blockNumber := engine.GetCurrentBlockNumber()
-			if blockNumber > 0 {
-				d.logger.Debug("从DPoS引擎获取当前区块高度", "height", blockNumber)
+			if blockNumber := engine.GetCurrentBlockNumber(); blockNumber > 0 {
 				return blockNumber
 			}
 		}
@@ -3359,9 +3056,7 @@ func (d *DPOS) getCurrentBlockHeight() uint64 {
 	if blockchainStore, ok := d.store.(interface {
 		Header() *types.Header
 	}); ok {
-		header := blockchainStore.Header()
-		if header != nil {
-			d.logger.Debug("从ethBlockchainStore.Header()方法获取区块高度", "height", header.Number)
+		if header := blockchainStore.Header(); header != nil {
 			return header.Number
 		}
 	}
@@ -3370,9 +3065,7 @@ func (d *DPOS) getCurrentBlockHeight() uint64 {
 	if headerStore, ok := d.store.(interface {
 		GetLatestHeader() *types.Header
 	}); ok {
-		header := headerStore.GetLatestHeader()
-		if header != nil {
-			d.logger.Debug("从GetLatestHeader()方法获取区块高度", "height", header.Number)
+		if header := headerStore.GetLatestHeader(); header != nil {
 			return header.Number
 		}
 	}
@@ -3381,9 +3074,7 @@ func (d *DPOS) getCurrentBlockHeight() uint64 {
 	if blockStore, ok := d.store.(interface {
 		GetLatestBlock() *types.Block
 	}); ok {
-		block := blockStore.GetLatestBlock()
-		if block != nil {
-			d.logger.Debug("从GetLatestBlock()方法获取区块高度", "height", block.Header.Number)
+		if block := blockStore.GetLatestBlock(); block != nil {
 			return block.Header.Number
 		}
 	}
@@ -3396,15 +3087,12 @@ func (d *DPOS) getCurrentBlockHeight() uint64 {
 		if ibftEngine, ok := consensusEngine.(interface {
 			GetCurrentHeight() uint64
 		}); ok {
-			height := ibftEngine.GetCurrentHeight()
-			if height > 0 {
-				d.logger.Debug("从IBFT引擎获取当前高度", "height", height)
+			if height := ibftEngine.GetCurrentHeight(); height > 0 {
 				return height
 			}
 		}
 	}
 
-	// 如果无法获取，返回0
 	d.logger.Warn("无法获取当前区块高度，返回0")
 	return 0
 }
@@ -3421,23 +3109,16 @@ func (d *DPOS) getCurrentBlockHeightFromExternal() uint64 {
 		if ibftEngine, ok := consensusEngine.(interface {
 			GetCurrentHeight() uint64
 		}); ok {
-			height := ibftEngine.GetCurrentHeight()
-			d.logger.Debug("从IBFT引擎获取当前高度", "height", height)
-			return height
+			return ibftEngine.GetCurrentHeight()
 		}
 
-		// 尝试从DPoS引擎中获取当前高度
 		if dposEngine, ok := consensusEngine.(interface {
 			GetCurrentHeight() uint64
 		}); ok {
-			height := dposEngine.GetCurrentHeight()
-			d.logger.Debug("从DPoS引擎获取当前高度", "height", height)
-			return height
+			return dposEngine.GetCurrentHeight()
 		}
 
-		// 尝试通过反射获取当前高度
 		if height := d.getCurrentHeightByReflection(consensusEngine); height > 0 {
-			d.logger.Debug("通过反射获取当前高度", "height", height)
 			return height
 		}
 	}
@@ -3464,18 +3145,13 @@ func (d *DPOS) getCurrentHeightByReflection(consensusEngine interface{}) uint64 
 	for i := 0; i < consensusType.NumMethod(); i++ {
 		method := consensusType.Method(i)
 		if method.Name == "GetCurrentHeight" {
-			d.logger.Debug("找到GetCurrentHeight方法")
-			// 调用方法
 			results := consensusValue.Method(i).Call([]reflect.Value{})
 			if len(results) > 0 && results[0].Kind() == reflect.Uint64 {
-				height := results[0].Uint()
-				d.logger.Debug("通过反射获取当前高度", "height", height)
-				return height
+				return results[0].Uint()
 			}
 		}
 	}
 
-	d.logger.Debug("未找到GetCurrentHeight方法")
 	return 0
 }
 
@@ -3483,42 +3159,29 @@ func (d *DPOS) getCurrentHeightByReflection(consensusEngine interface{}) uint64 
 func (d *DPOS) getDPoSEngineDirectly(consensusStore interface {
 	GetConsensus() interface{}
 }) interface{} {
-	d.logger.Info("🔄 直接尝试获取DPoS引擎")
-
-	// 方法1: 尝试从store中获取DPoS引擎
 	if dposStore, ok := d.store.(interface {
 		GetDPoSEngine() interface{}
 	}); ok {
-		dposEngine := dposStore.GetDPoSEngine()
-		if dposEngine != nil {
-			d.logger.Info("✅ 从store获取DPoS引擎成功")
+		if dposEngine := dposStore.GetDPoSEngine(); dposEngine != nil {
 			return dposEngine
 		}
 	}
 
-	// 方法2: 尝试从共识引擎中获取DPoS引擎
 	consensusEngine := consensusStore.GetConsensus()
 	if consensusEngine == nil {
 		d.logger.Warn("共识引擎为nil")
 		return nil
 	}
 
-	d.logger.Debug("获取到共识引擎", "type", fmt.Sprintf("%T", consensusEngine))
-
-	// 尝试从IBFT引擎中获取DPoS引擎
 	if ibftEngine, ok := consensusEngine.(interface {
 		GetDPoSEngine() interface{}
 	}); ok {
-		dposEngine := ibftEngine.GetDPoSEngine()
-		if dposEngine != nil {
-			d.logger.Info("✅ 从IBFT引擎获取DPoS引擎成功")
+		if dposEngine := ibftEngine.GetDPoSEngine(); dposEngine != nil {
 			return dposEngine
 		}
 	}
 
-	// 方法3: 尝试通过反射获取DPoS引擎
 	if dposEngine := d.getDPoSEngineByReflection(consensusEngine); dposEngine != nil {
-		d.logger.Info("✅ 通过反射获取DPoS引擎成功")
 		return dposEngine
 	}
 
@@ -3539,18 +3202,13 @@ func (d *DPOS) getDPoSEngineByReflection(consensusEngine interface{}) interface{
 	for i := 0; i < consensusType.NumMethod(); i++ {
 		method := consensusType.Method(i)
 		if method.Name == "GetDPoSEngine" {
-			d.logger.Debug("找到GetDPoSEngine方法")
-			// 调用方法
 			results := consensusValue.Method(i).Call([]reflect.Value{})
 			if len(results) > 0 && !results[0].IsNil() {
-				dposEngine := results[0].Interface()
-				d.logger.Debug("通过反射获取DPoS引擎", "type", fmt.Sprintf("%T", dposEngine))
-				return dposEngine
+				return results[0].Interface()
 			}
 		}
 	}
 
-	d.logger.Debug("未找到GetDPoSEngine方法")
 	return nil
 }
 
@@ -7395,10 +7053,6 @@ func (d *DPOS) GetConsensusSwitchHeight(ctx context.Context) (interface{}, error
 	consensusSwitchHeight := d.getConsensusSwitchHeight()
 	currentHeight := d.getCurrentBlockHeight()
 
-	d.logger.Info("获取共识切换高度结果",
-		"consensusSwitchHeight", consensusSwitchHeight,
-		"currentHeight", currentHeight)
-
 	// 尝试获取共识切换高度区块的时间戳
 	var switchBlockTimestamp uint64 = 0
 	var switchBlockHash string = ""
@@ -7406,10 +7060,6 @@ func (d *DPOS) GetConsensusSwitchHeight(ctx context.Context) (interface{}, error
 		if header, exists := d.store.GetHeaderByNumber(consensusSwitchHeight); exists && header != nil {
 			switchBlockTimestamp = header.Timestamp
 			switchBlockHash = header.Hash.String()
-			d.logger.Info("成功获取切换高度区块信息",
-				"height", consensusSwitchHeight,
-				"timestamp", switchBlockTimestamp,
-				"hash", switchBlockHash)
 		} else {
 			d.logger.Warn("无法获取切换高度区块头",
 				"height", consensusSwitchHeight)

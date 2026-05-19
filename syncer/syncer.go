@@ -105,6 +105,10 @@ type syncer struct {
 	bestNotAheadLogMu           sync.Mutex
 	lastBestNotAheadStatusLogAt time.Time
 	bestNotAheadWakePending     atomic.Bool
+
+	trustedQuorumLogMu        sync.Mutex
+	trustedQuorumLogLocalHeight uint64
+	trustedQuorumLogLocalSince  time.Time
 }
 
 type trustedPeerStat struct {

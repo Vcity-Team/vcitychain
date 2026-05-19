@@ -18,6 +18,8 @@ const (
 	localAheadWarnBlocks          = 64
 	localAheadForceKickBlocks     = 256
 	trustedTipLogInterval         = 15 * time.Second
+	// quorum 成功 INFO 仅在本机链尖连续未变达到该时长后打印（追块中不刷）。
+	trustedQuorumLogLocalStallInterval = 10 * time.Second
 )
 
 type trustedTipResult struct {
@@ -37,6 +39,30 @@ func (s *syncer) GetTrustedCanonicalTip() uint64 {
 		local = h.Number
 	}
 	return s.computeTrustedBootnodeTip(local).Tip
+}
+
+// shouldLogTrustedQuorumSuccess 仅在本地链尖已连续 stall 时长未变时允许打 quorum INFO（追块中高度在变则不打印）。
+func (s *syncer) shouldLogTrustedQuorumSuccess(local uint64) bool {
+	s.trustedQuorumLogMu.Lock()
+	defer s.trustedQuorumLogMu.Unlock()
+	now := time.Now()
+	if local != s.trustedQuorumLogLocalHeight {
+		s.trustedQuorumLogLocalHeight = local
+		s.trustedQuorumLogLocalSince = now
+		return false
+	}
+	return now.Sub(s.trustedQuorumLogLocalSince) >= trustedQuorumLogLocalStallInterval
+}
+
+func (s *syncer) logTrustedQuorumSuccess(local, tip uint64, logFn func()) {
+	if !s.shouldLogTrustedQuorumSuccess(local) {
+		return
+	}
+	if tip == s.lastLoggedTrustedTip {
+		return
+	}
+	s.lastLoggedTrustedTip = tip
+	logFn()
 }
 
 func (s *syncer) logTrustedTipThrottled(key string, fn func()) {
@@ -113,20 +139,17 @@ func (s *syncer) computeTrustedBootnodeTip(local uint64) trustedTipResult {
 		if nearMax >= trustedBootnodeQuorumK {
 			out.Tip = maxH
 			out.Quorum = true
-			if out.Tip != s.lastLoggedTrustedTip {
-				s.lastLoggedTrustedTip = out.Tip
-				s.logTrustedTipThrottled(fmt.Sprintf("quorum-max:%d", out.Tip), func() {
-					s.logger.Info("syncer: trusted bootnode canonical tip (max-cluster quorum)",
-						"trustedTip", out.Tip,
-						"nearMaxCount", nearMax,
-						"requiredK", trustedBootnodeQuorumK,
-						"maxSpreadSlack", trustedBootnodeMaxSpreadSlack,
-						"reportingBoots", out.ReportingBoots,
-						"connectedBoots", out.ConnectedBoots,
-						"localLatest", local,
-						"heights", heights)
-				})
-			}
+			s.logTrustedQuorumSuccess(local, out.Tip, func() {
+				s.logger.Info("syncer: trusted bootnode canonical tip (max-cluster quorum)",
+					"trustedTip", out.Tip,
+					"nearMaxCount", nearMax,
+					"requiredK", trustedBootnodeQuorumK,
+					"maxSpreadSlack", trustedBootnodeMaxSpreadSlack,
+					"reportingBoots", out.ReportingBoots,
+					"connectedBoots", out.ConnectedBoots,
+					"localLatest", local,
+					"heights", heights)
+			})
 			return out
 		}
 	}
@@ -141,17 +164,14 @@ func (s *syncer) computeTrustedBootnodeTip(local uint64) trustedTipResult {
 	if len(cluster) >= trustedBootnodeQuorumK {
 		out.Tip = cluster[len(cluster)-1]
 		out.Quorum = true
-		if out.Tip != s.lastLoggedTrustedTip {
-			s.lastLoggedTrustedTip = out.Tip
-			s.logTrustedTipThrottled(fmt.Sprintf("quorum-median:%d", out.Tip), func() {
-				s.logger.Info("syncer: trusted bootnode canonical tip (median-cluster quorum)",
-					"trustedTip", out.Tip,
-					"median", median,
-					"clusterSize", len(cluster),
-					"reportingBoots", out.ReportingBoots,
-					"localLatest", local)
-			})
-		}
+		s.logTrustedQuorumSuccess(local, out.Tip, func() {
+			s.logger.Info("syncer: trusted bootnode canonical tip (median-cluster quorum)",
+				"trustedTip", out.Tip,
+				"median", median,
+				"clusterSize", len(cluster),
+				"reportingBoots", out.ReportingBoots,
+				"localLatest", local)
+		})
 		return out
 	}
 
