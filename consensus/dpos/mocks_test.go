@@ -494,6 +494,11 @@ func (tp *syncerMock) GetTrustedPeerNumber() uint64 {
 	return args.Get(0).(uint64) //nolint
 }
 
+func (tp *syncerMock) GetTrustedCanonicalTip() uint64 {
+	args := tp.Called()
+	return args.Get(0).(uint64) //nolint
+}
+
 func (tp *syncerMock) KickSync(string) {}
 
 func (tp *syncerMock) TryProbeCanonicalNextBeforeProduce(time.Duration) bool {

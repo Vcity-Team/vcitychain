@@ -189,8 +189,8 @@ const peerAdvertisedHeadTTL = 2 * time.Minute
 
 // getNetworkLatestBlockNumber 返回用于「是否已落后于网络」的门禁高度。
 //
-// 若配置了 dpos_bootstrap_rpc 且 eth_blockNumber 可读，门禁高度 **仅** 取该 RPC 结果，不再参与 gossip 合成与虚高 hint。
-// 未配置或 RPC 失败时回退为下述 syncer 合成逻辑；capGateWaterlineWithBootstrapRPC 仍处理「错链 RPC 远低于本地」时放弃封顶。
+// 优先使用 syncer 创世 bootnode median+K=2 共识链尖（不读 dpos_bootstrap_rpc eth_blockNumber）。
+// 不可用时回退为下述 gossip 合成逻辑。
 //
 // GetTrustedPeerNumber：近期从某 peer 成功验证并写入本地的最高块号，大体接近本地链头，不等价于「全网链尖」。
 // GetVerifiedBestPeerNumber：对 Best peer 尝试拉取 local+1 验证后再采信其宣称；失败则返回 0（仍可用 gossip hint）。
@@ -212,13 +212,12 @@ func (r *dposRuntime) getNetworkLatestBlockNumber() uint64 {
 		return 0
 	}
 
-	if tip, rpcGate := r.bootstrapRPCGateTip(); rpcGate {
+	if tip := dpos.syncer.GetTrustedCanonicalTip(); tip > 0 {
 		hdr := r.config.blockchain.CurrentHeader()
 		if hdr != nil {
-			w := r.capGateWaterlineWithBootstrapRPC(tip)
-			r.updateProductionCatchUpLatch(hdr.Number, w)
+			r.updateProductionCatchUpLatch(hdr.Number, tip)
 		}
-		return r.capGateWaterlineWithBootstrapRPC(tip)
+		return tip
 	}
 
 	rawGossipBest := dpos.syncer.GetBestPeerNumber()
@@ -290,11 +289,10 @@ func (r *dposRuntime) getNetworkLatestBlockNumber() uint64 {
 		if r.lastPeerAdvertisedHead > 0 && now.Sub(r.lastPeerAdvertisedHeadAt) < peerAdvertisedHeadTTL && r.lastPeerAdvertisedHead > w {
 			w = r.lastPeerAdvertisedHead
 		}
-		w = r.capGateWaterlineWithBootstrapRPC(w)
 		r.updateProductionCatchUpLatch(hdr.Number, w)
 	}
 
-	return r.capGateWaterlineWithBootstrapRPC(candidate)
+	return candidate
 }
 
 // updateProductionCatchUpLatch 在观测到「门禁水位或原始 gossip」高于本地时抬高追平目标；本地达到目标后清除。

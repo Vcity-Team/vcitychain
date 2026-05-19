@@ -33,6 +33,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/syncer"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/umbracle/fastrlp"
 	bolt "go.etcd.io/bbolt"
 )
@@ -822,12 +823,17 @@ func (d *DPoS) newSyncerFromConfig() syncer.Syncer {
 		d.logger.Warn("⚠️ blockTimeout为0，使用默认值9秒（3倍默认blockTime）")
 		blockTimeout = 9 * time.Second
 	}
+	bootnodeIDs := []peer.ID(nil)
+	if d.config.Network != nil {
+		bootnodeIDs = d.config.Network.BootnodePeerIDs()
+	}
 	return syncer.NewSyncer(
 		d.config.Logger.Named("syncer"),
 		d.config.Network,
 		d.config.Blockchain,
 		blockTimeout,
 		d.config.ConsensusSwitchHeight,
+		bootnodeIDs,
 	)
 }
 

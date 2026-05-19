@@ -289,22 +289,19 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		return false
 	}
 	local := currentBlock.Number
-	if r.mustWaitForBootstrapCanonicalSync(local) {
+	if r.mustWaitForTrustedCanonicalSync(local) {
 		return false
 	}
-	// 落后门禁：配置了 dpos_bootstrap_rpc 且可读时仅以 RPC eth_blockNumber 为准；否则追平锁用水位取 max(门禁候选, gossip)。
+	// 落后门禁：优先 bootnode 共识链尖；不可用时追平锁用水位取 max(门禁候选, gossip)。
 	if r.config.dposBackend != nil {
 		networkLatest := r.getNetworkLatestBlockNumber()
 		waterline := networkLatest
-		if !r.bootstrapRPCGateAuthoritative() {
-			if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil {
-				rawGossip := dpos.syncer.GetBestPeerNumber()
-				if rawGossip > waterline {
-					waterline = rawGossip
-				}
+		if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil && dpos.syncer.GetTrustedCanonicalTip() == 0 {
+			rawGossip := dpos.syncer.GetBestPeerNumber()
+			if rawGossip > waterline {
+				waterline = rawGossip
 			}
 		}
-		waterline = r.capGateWaterlineWithBootstrapRPC(waterline)
 		blocked, catchUpTarget := r.updateProductionCatchUpLatch(local, waterline)
 		if blocked {
 			r.logOnceWithInterval("should_produce_catchup_latch", 5*time.Second, "info",

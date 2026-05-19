@@ -167,7 +167,7 @@ func (r *dposRuntime) produceBlock() error {
 	// 获取当前区块
 	currentBlock := r.config.blockchain.CurrentHeader()
 	if currentBlock != nil {
-		if r.preProduceBootstrapCanonicalCheck(currentBlock.Number) {
+		if r.preProduceTrustedCanonicalCheck(currentBlock.Number) {
 			return nil
 		}
 		// P1：出块前从 P2P 拉取 localTip+1，若 peer 上已存在可衔接块则放弃本轮构建（由同步落块）
@@ -189,7 +189,7 @@ func (r *dposRuntime) produceBlock() error {
 				}
 			}
 		}
-		if r.mustWaitForBootstrapCanonicalSync(currentBlock.Number) {
+		if r.mustWaitForTrustedCanonicalSync(currentBlock.Number) {
 			return nil
 		}
 	}
@@ -197,15 +197,12 @@ func (r *dposRuntime) produceBlock() error {
 	if r.config != nil && r.config.dposBackend != nil && currentBlock != nil {
 		networkLatest := r.getNetworkLatestBlockNumber()
 		waterline := networkLatest
-		if !r.bootstrapRPCGateAuthoritative() {
-			if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil {
-				rawGossip := dpos.syncer.GetBestPeerNumber()
-				if rawGossip > waterline {
-					waterline = rawGossip
-				}
+		if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil && dpos.syncer.GetTrustedCanonicalTip() == 0 {
+			rawGossip := dpos.syncer.GetBestPeerNumber()
+			if rawGossip > waterline {
+				waterline = rawGossip
 			}
 		}
-		waterline = r.capGateWaterlineWithBootstrapRPC(waterline)
 		if blocked, catchUp := r.updateProductionCatchUpLatch(currentBlock.Number, waterline); blocked {
 			r.logger.Info("⏰ 区块生产被跳过：落后追平锁定期",
 				"localBlockNumber", currentBlock.Number,
