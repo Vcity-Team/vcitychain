@@ -92,9 +92,12 @@ type syncer struct {
 	pullDistrustUntil map[peer.ID]time.Time
 	pullFailStreak    map[peer.ID]int
 
-	// trustedBootnodeIDs：创世 bootnodes 的 peer.ID，用于 median+K=2 规范链尖（不读 dpos_bootstrap_rpc 高度）。
+	// trustedBootnodeIDs：创世 bootnodes 的 peer.ID，用于 bootnode 共识链尖（不读 dpos_bootstrap_rpc 高度）。
 	trustedBootnodeIDs map[peer.ID]struct{}
 	lastLoggedTrustedTip uint64
+	trustedTipLogMu      sync.Mutex
+	lastTrustedTipLogAt  time.Time
+	lastTrustedTipLogKey string
 }
 
 type trustedPeerStat struct {
@@ -143,7 +146,7 @@ func NewSyncer(
 		trustedBootnodeIDs: bootSet,
 	}
 	if len(bootSet) > 0 {
-		logger.Named(syncerName).Info("syncer: trusted canonical tip source = genesis bootnodes (median+K=2, no bootstrap RPC height)",
+		logger.Named(syncerName).Info("syncer: trusted canonical tip source = genesis bootnodes (max-cluster K=2, no bootstrap RPC height)",
 			"bootnodeCount", len(bootSet))
 	}
 	return s
