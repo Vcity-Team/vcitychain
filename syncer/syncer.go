@@ -29,6 +29,8 @@ const (
 	// 与资源监控观测到的网络领先脱节（同步表现为停住）。
 	// 宜 ≤ 出块间隔（如 3s），且须非阻塞 wake（见 wakeSyncAfter）；过长会导致「追一块睡一整段」。
 	syncBestNotAheadWakeInterval = 3 * time.Second
+	// best_peer_not_ahead 已追平时状态日志节流（避免异步 wake 后 tight loop 刷屏）。
+	bestPeerNotAheadLogInterval = 20 * time.Second
 
 	// 反复 bulk 拉取失败（开流失败、超时、验证失败、未完成）则短期不信任该 peer，避免死盯「虚高宣称」节点。
 	pullFailStreakThreshold = 4
@@ -99,6 +101,10 @@ type syncer struct {
 	trustedTipLogMu      sync.Mutex
 	lastTrustedTipLogAt  time.Time
 	lastTrustedTipLogKey string
+
+	bestNotAheadLogMu           sync.Mutex
+	lastBestNotAheadStatusLogAt time.Time
+	bestNotAheadWakePending     atomic.Bool
 }
 
 type trustedPeerStat struct {
@@ -383,8 +389,44 @@ func (s *syncer) recordTrustedPeerSuccess(peerID peer.ID, blockNumber uint64) {
 	s.trustedPeersMu.Unlock()
 }
 
+func (s *syncer) logBestPeerNotAheadStatusThrottled(fn func()) {
+	s.bestNotAheadLogMu.Lock()
+	defer s.bestNotAheadLogMu.Unlock()
+	if time.Since(s.lastBestNotAheadStatusLogAt) < bestPeerNotAheadLogInterval {
+		return
+	}
+	s.lastBestNotAheadStatusLogAt = time.Now()
+	fn()
+}
+
+// scheduleBestNotAheadWake 仅保留一个在途的异步 wake，避免 notify 风暴下每秒 spawn 大量 goroutine/日志。
+func (s *syncer) scheduleBestNotAheadWake(backoff time.Duration, args ...interface{}) {
+	if s.closed.Load() {
+		return
+	}
+	if !s.bestNotAheadWakePending.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer s.bestNotAheadWakePending.Store(false)
+		time.Sleep(backoff)
+		if s.closed.Load() {
+			return
+		}
+		selfWakeArgs := append([]interface{}{"reason", "best_peer_not_ahead", "backoff", backoff.String()}, args...)
+		s.logBestPeerNotAheadStatusThrottled(func() {
+			s.logger.Info("syncer self-wake", selfWakeArgs...)
+		})
+		s.notifyNewStatusEvent()
+	}()
+}
+
 func (s *syncer) wakeSyncAfter(backoff time.Duration, reason string, args ...interface{}) {
 	if s.closed.Load() {
+		return
+	}
+	if reason == "best_peer_not_ahead" {
+		s.scheduleBestNotAheadWake(backoff, args...)
 		return
 	}
 	fire := func() {
@@ -393,14 +435,14 @@ func (s *syncer) wakeSyncAfter(backoff time.Duration, reason string, args ...int
 		}
 		selfWakeArgs := append([]interface{}{"reason", reason, "backoff", backoff.String()}, args...)
 		switch reason {
-		case "best_peer_not_ahead", "trusted_ahead_no_serving_peer", "local_ahead_trusted_tip":
+		case "trusted_ahead_no_serving_peer", "local_ahead_trusted_tip":
 			s.logger.Info("syncer self-wake", selfWakeArgs...)
 		default:
 			s.logger.Debug("syncer self-wake", selfWakeArgs...)
 		}
 		s.notifyNewStatusEvent()
 	}
-	// 长退避必须异步：若在 Sync 循环内 Sleep，会挡住 newStatusCh，peer 高度更新也要等睡完（表现为约 5s 才追一块）。
+	// 长退避必须异步：若在 Sync 循环内 Sleep，会挡住 newStatusCh，peer 高度更新也要等睡完。
 	if backoff >= time.Second {
 		go func() {
 			time.Sleep(backoff)
@@ -655,13 +697,15 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 				continue
 			}
 		} else if bestPeer.Number <= localLatest {
-			s.logger.Info("syncer: best peer not ahead of local, self-wake to avoid stall on unchanged peer heights",
-				"peer", bestPeer.ID.String(),
-				"peerNumber", bestPeer.Number,
-				"localLatest", localLatest,
-				"trustedTip", trustedTip,
-				"syncTarget", syncTarget)
-			s.wakeSyncAfter(syncBestNotAheadWakeInterval, "best_peer_not_ahead",
+			s.logBestPeerNotAheadStatusThrottled(func() {
+				s.logger.Info("syncer: best peer not ahead of local, self-wake to avoid stall on unchanged peer heights",
+					"peer", bestPeer.ID.String(),
+					"peerNumber", bestPeer.Number,
+					"localLatest", localLatest,
+					"trustedTip", trustedTip,
+					"syncTarget", syncTarget)
+			})
+			s.scheduleBestNotAheadWake(syncBestNotAheadWakeInterval,
 				"peer", bestPeer.ID.String(),
 				"peerNumber", bestPeer.Number,
 				"localLatest", localLatest)
