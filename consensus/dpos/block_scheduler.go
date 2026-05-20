@@ -97,6 +97,11 @@ type nextBlockSchedulingInfo struct {
 	MaxUsesParentChain bool
 }
 
+// SlotAt returns the slot index for a timestamp (same basis as block header / leader election).
+func (bs *BlockScheduler) SlotAt(t time.Time) int {
+	return bs.slotAt(t)
+}
+
 func (bs *BlockScheduler) slotAt(t time.Time) int {
 	d := t.Sub(bs.genesisTime)
 	if d < 0 {

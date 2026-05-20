@@ -472,13 +472,9 @@ func (r *dposRuntime) produceBlock() error {
 	// 提交区块（可能需要锁，取决于blockchain的实现）
 	// 在提交前再做一次基于区块 timestamp 的 slot 校验，防止"构建完成后长时间滞后"仍被写入
 	if r.config.blockScheduler != nil {
-		genesisTime := r.config.blockScheduler.GetGenesisTime()
-		blockWindow := r.config.blockScheduler.GetBlockWindow()
-
-		// 依据区块头时间戳推算它所属的 slot
-		blockTimestamp := time.Unix(int64(block.Block.Header.Timestamp), 0)
-		timeSinceGenesisForBlock := blockTimestamp.Sub(genesisTime)
-		blockSlot := int(timeSinceGenesisForBlock / blockWindow)
+		// 依据区块头时间戳推算 slot（与 BlockScheduler 一致）
+		blockTimestamp := time.Unix(int64(block.Block.Header.Timestamp), 0).UTC()
+		blockSlot := r.config.blockScheduler.SlotAt(blockTimestamp)
 
 		// 获取 decisionSlot 进行严格比对
 		r.lock.RLock()
@@ -568,11 +564,10 @@ func (r *dposRuntime) produceBlock() error {
 		return fmt.Errorf("failed to commit block: %w", err)
 	}
 
-	// 记录本块在链时间轴上的 slot（与块头 Timestamp 一致，不用墙钟）
+	// 记录本块在链时间轴上的 slot（与块头 Timestamp 一致）
 	if r.config.blockScheduler != nil {
-		genesisTime := r.config.blockScheduler.GetGenesisTime()
-		blockWindow := r.config.blockScheduler.GetBlockWindow()
-		producedSlot := int(time.Unix(int64(block.Block.Header.Timestamp), 0).Sub(genesisTime) / blockWindow)
+		producedSlot := r.config.blockScheduler.SlotAt(
+			time.Unix(int64(block.Block.Header.Timestamp), 0).UTC())
 		r.lock.Lock()
 		r.lastProducedSlot = producedSlot
 		r.lock.Unlock()

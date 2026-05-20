@@ -94,14 +94,9 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 		return types.ZeroAddress
 	}
 
-	// 基于时间slot实时计算当前委托者
+	// 基于时间 slot 计算当前委托者（与 ShouldProduceBlockNow / 块头时间戳同一坐标系）
 	if r.config.blockScheduler != nil {
-		// 获取当前时间
-		now := time.Now()
-		genesisTime := r.config.blockScheduler.GetGenesisTime()
-		blockWindow := r.config.blockScheduler.GetBlockWindow()
-		timeSinceGenesis := now.Sub(genesisTime)
-		currentSlot := int(timeSinceGenesis / blockWindow)
+		currentSlot := r.config.blockScheduler.CurrentSlotForNextBlock()
 
 		// 与 ShouldProduceBlockNow 一致：先按地址字节升序再取模（数据库返回顺序≠选举顺序）
 		addresses := make([]types.Address, 0, len(validators))
