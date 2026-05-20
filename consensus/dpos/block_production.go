@@ -10,6 +10,9 @@ import (
 	"github.com/Vcity-Team/vcitychain/types"
 )
 
+// preCommitPeerProbeTimeout 提交前 P2P 探测下一高度的超时（改法 C）。
+const preCommitPeerProbeTimeout = 300 * time.Millisecond
+
 // startBlockProduction 启动区块生产
 func (r *dposRuntime) startBlockProduction() error {
 	if r.config == nil || r.config.Key == nil {
@@ -532,6 +535,31 @@ func (r *dposRuntime) produceBlock() error {
 		r.lock.Lock()
 		r.decisionSlot = -1
 		r.lock.Unlock()
+	}
+
+	// C：提交前再探测 localTip+1，若 peer 已有可衔接块则放弃提交（避免构建窗口内竞态）
+	if r.config != nil && r.config.dposBackend != nil {
+		if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil {
+			commitProbeTO := preCommitPeerProbeTimeout
+			if custom := r.preProducePeerProbeTimeout(); custom > 0 && custom < commitProbeTO {
+				commitProbeTO = custom
+			}
+			localTip := r.config.blockchain.CurrentHeader()
+			if localTip != nil && dpos.syncer.TryProbeCanonicalNextBeforeProduce(commitProbeTO) {
+				r.logger.Info("🔭 【提交前 P2P 探测】已从 peer 拉到可衔接下一高度，放弃提交",
+					"localTip", localTip.Number,
+					"plannedBlockNumber", block.Block.Number(),
+					"plannedBlockHash", block.Block.Hash().String(),
+					"probeTimeout", commitProbeTO.String())
+				return nil
+			}
+			if localTip != nil {
+				r.logger.Info("🔭 【提交前 P2P 探测】未从 peer 拉到可衔接下一高度，继续提交",
+					"localTip", localTip.Number,
+					"plannedBlockNumber", block.Block.Number(),
+					"probeTimeout", commitProbeTO.String())
+			}
+		}
 	}
 
 	if err := r.config.blockchain.CommitBlock(block); err != nil {

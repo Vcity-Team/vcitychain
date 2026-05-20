@@ -92,13 +92,10 @@ type BlockBuilder struct {
 
 // Reset initializes block builder before adding transactions and actual block building
 func (b *BlockBuilder) Reset() error {
-	// set the timestamp
-	parentTime := time.Unix(int64(b.params.Parent.Timestamp), 0)
+	// 与 BlockScheduler.effectiveTimeForNextBlock 一致：始终 parent+blockWindow。
+	// 链尖落后墙钟时不抬到 now.UTC()，避免与已跟上链的节点同高不同时间戳/ slot 分叉。
+	parentTime := time.Unix(int64(b.params.Parent.Timestamp), 0).UTC()
 	headerTime := parentTime.Add(b.params.BlockTime)
-
-	if headerTime.Before(time.Now().UTC()) {
-		headerTime = time.Now().UTC()
-	}
 
 	b.header = &types.Header{
 		ParentHash:   b.params.Parent.Hash,

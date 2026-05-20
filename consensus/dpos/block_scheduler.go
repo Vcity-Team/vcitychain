@@ -85,15 +85,24 @@ func NewBlockScheduler(
 	}, nil
 }
 
-// nextBlockSchedulingInfo 与 BlockBuilder.Reset / effectiveTimeForNextBlock 一致：max(父块时间+blockWindow, now.UTC())
+// nextBlockSchedulingInfo 描述父块与墙钟关系。出块时间戳/轮值见 effectiveTimeForNextBlock：
+// 链尖落后墙钟时不使用 utc_now 抬时间轴，而用 ParentPlusWindow，避免与已同步节点同高不同 slot 分叉。
 type nextBlockSchedulingInfo struct {
 	ParentNumber       uint64
 	ParentTimestampUTC time.Time
-	ParentPlusWindow   time.Time // 父块时间 + blockWindow，即 max 左分支候选
+	ParentPlusWindow   time.Time // 父块时间 + blockWindow
 	NowUTC             time.Time
-	EffectiveTime      time.Time // max 结果，与下一区块头 Timestamp 对齐
-	// MaxUsesParentChain 为 true 表示 EffectiveTime==ParentPlusWindow（链上时间轴不早于 now）
+	EffectiveTime      time.Time // max(父+window, now)，仅用于对比墙钟 slot
+	// MaxUsesParentChain 为 true 表示父+window 不早于墙钟，可与 EffectiveTime 一致用于出块
 	MaxUsesParentChain bool
+}
+
+func (bs *BlockScheduler) slotAt(t time.Time) int {
+	d := t.Sub(bs.genesisTime)
+	if d < 0 {
+		return 0
+	}
+	return int(d / bs.blockWindow)
 }
 
 func (bs *BlockScheduler) nextBlockSchedulingInfo() nextBlockSchedulingInfo {
@@ -143,9 +152,9 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 
 	now := time.Now()
 	schedInfo := bs.nextBlockSchedulingInfo()
-	schedulingTime := schedInfo.EffectiveTime
+	schedulingTime := bs.effectiveTimeForNextBlock()
 	timeSinceGenesis := schedulingTime.Sub(bs.genesisTime)
-	currentSlot := int(timeSinceGenesis / bs.blockWindow)
+	currentSlot := bs.slotAt(schedulingTime)
 
 	// 计算当前slot应该出块的验证者索引
 	activeValidatorCount := len(orderedValidators)
@@ -166,6 +175,32 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	expectedValidator := orderedValidators[currentValidatorIndex]
 	isMatch := expectedValidator == myAddress
 
+	if !schedInfo.MaxUsesParentChain {
+		wallSlot := bs.slotAt(schedInfo.EffectiveTime)
+		wallLeader := orderedValidators[wallSlot%activeValidatorCount]
+		lag := schedInfo.NowUTC.Sub(schedInfo.ParentPlusWindow)
+		logArgs := []interface{}{
+			"parentBlockNumber", schedInfo.ParentNumber,
+			"parentTimestampUTC", schedInfo.ParentTimestampUTC.Format("2006-01-02 15:04:05.000"),
+			"parentPlusWindowUTC", schedInfo.ParentPlusWindow.Format("2006-01-02 15:04:05.000"),
+			"nowUTC", schedInfo.NowUTC.Format("2006-01-02 15:04:05.000"),
+			"wallClockLag", lag.String(),
+			"chainSlot", currentSlot,
+			"wallSlot", wallSlot,
+			"chainLeader", fmt.Sprintf("[%d]%s", currentValidatorIndex, expectedValidator.String()),
+			"wallLeader", fmt.Sprintf("[%d]%s", wallSlot%activeValidatorCount, wallLeader.String()),
+			"myAddress", myAddress.String(),
+			"isMatchOnChainTime", isMatch,
+			"nextBlockNumber", nextBlockNumber,
+			"note", "链尖落后墙钟时轮值/块头时间戳用 parent+blockWindow，不用 utc_now",
+		}
+		if wallLeader == myAddress && !isMatch {
+			bs.logger.Info("⏸️ [出块调度] 若按墙钟 utc_now 轮到本节点，但按链时间不应出块，跳过", logArgs...)
+		} else {
+			bs.logger.Info("⏸️ [出块调度] 链尖时间落后墙钟，下一区块按 parent+blockWindow 调度", logArgs...)
+		}
+	}
+
 	// 构建验证者集合完整列表（带索引）
 	validatorsList := make([]string, len(orderedValidators))
 	for i, v := range orderedValidators {
@@ -181,19 +216,24 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 
 	// 只有当本地节点应该出块时才打印详细日志（每次出块都打印，因为频率已经很低）
 	if isMatch {
-		maxBranch := "utc_now"
+		maxBranch := "parent_timestamp_plus_blockWindow"
+		leaderTimeUTC := schedInfo.ParentPlusWindow
 		if schedInfo.MaxUsesParentChain {
 			maxBranch = "parent_timestamp_plus_blockWindow"
+			leaderTimeUTC = schedInfo.EffectiveTime
+		} else {
+			maxBranch = "catch_up_chain_time"
 		}
-		bs.logger.Info("📐 [出块调度] max(父块时间+blockWindow, now.UTC) 用于下一区块 slot",
+		bs.logger.Info("📐 [出块调度] 下一区块 slot/时间戳基准",
 			"parentBlockNumber", schedInfo.ParentNumber,
 			"parentTimestampUTC", schedInfo.ParentTimestampUTC.Format("2006-01-02 15:04:05.000"),
 			"parentPlusWindowUTC", schedInfo.ParentPlusWindow.Format("2006-01-02 15:04:05.000"),
 			"nowUTC", schedInfo.NowUTC.Format("2006-01-02 15:04:05.000"),
-			"effectiveSchedulingTimeUTC", schedInfo.EffectiveTime.Format("2006-01-02 15:04:05.000"),
+			"wallClockEffectiveUTC", schedInfo.EffectiveTime.Format("2006-01-02 15:04:05.000"),
+			"leaderElectionTimeUTC", leaderTimeUTC.Format("2006-01-02 15:04:05.000"),
 			"maxBranch", maxBranch,
 			"blockWindow", bs.blockWindow.String(),
-			"note", "与 BlockBuilder.Reset 一致；maxBranch=parent_* 表示链上时间轴不早于本机 UTC")
+			"note", "catch_up_chain_time=链尖落后墙钟，不用 utc_now 抬 slot；与 BlockBuilder.Reset 一致")
 		bs.logger.Info("🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块",
 			"blockNumber", blockNumber, // 这个 blockNumber 来自 currentBlock.Number（已同步的区块号）
 			"nextBlockNumber", nextBlockNumber, // 下一个应生产的区块号（blockNumber + 1）
@@ -221,11 +261,15 @@ func (bs *BlockScheduler) GetGenesisTime() time.Time {
 	return bs.genesisTime
 }
 
-// effectiveTimeForNextBlock matches BlockBuilder.Reset: the next block header time is
-// parentTime+blockWindow, unless that is still before wall clock — then now.UTC().
-// Scheduling / decisionSlot must use this so leader slot matches the built header timestamp.
+// effectiveTimeForNextBlock matches BlockBuilder.Reset.
+// When parent+blockWindow is before wall clock (chain tip lags), use parent+blockWindow only —
+// do not jump to now.UTC(), so leader slot matches in-sync producers and avoids duplicate height forks.
 func (bs *BlockScheduler) effectiveTimeForNextBlock() time.Time {
-	return bs.nextBlockSchedulingInfo().EffectiveTime
+	info := bs.nextBlockSchedulingInfo()
+	if !info.MaxUsesParentChain {
+		return info.ParentPlusWindow.UTC()
+	}
+	return info.EffectiveTime.UTC()
 }
 
 // CurrentSlotForNextBlock returns the slot index for the next produced block (same basis as header Timestamp).
