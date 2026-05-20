@@ -1349,9 +1349,19 @@ func (j *jsonRPCHub) GetSyncProgression() *progress.Progression {
 		return restoreProg
 	}
 
-	// consensus sync progression
-	if consensusSyncProg := j.Consensus.GetSyncProgression(); consensusSyncProg != nil {
-		return consensusSyncProg
+	// After IBFT→DPoS switch, IBFT syncer is closed; use DPoS syncer for eth_syncing.
+	if j.server != nil && j.server.dposEngine != nil {
+		if prog := j.server.dposEngine.GetSyncProgression(); prog != nil {
+			return prog
+		}
+		return nil
+	}
+
+	// Pre-switch: IBFT sync progression
+	if j.Consensus != nil {
+		if consensusSyncProg := j.Consensus.GetSyncProgression(); consensusSyncProg != nil {
+			return consensusSyncProg
+		}
 	}
 
 	return nil

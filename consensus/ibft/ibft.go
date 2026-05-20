@@ -350,6 +350,9 @@ func (i *backendIBFT) checkShouldStopIBFT(height uint64) bool {
 
 // GetSyncProgression gets the latest sync progression, if any
 func (i *backendIBFT) GetSyncProgression() *progress.Progression {
+	if i.syncer == nil {
+		return nil
+	}
 	return i.syncer.GetSyncProgression()
 }
 
