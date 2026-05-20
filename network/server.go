@@ -174,7 +174,6 @@ func NewServer(logger hclog.Logger, config *Config) (*Server, error) {
 	if config == nil || config.MaxMessageHandlers <= 0 {
 		return nil, fmt.Errorf("network 配置缺少 max_message_handlers 或值无效（需 > 0），请在 config 的 network 下配置，例如: max_message_handlers: 200")
 	}
-	logger.Info("gossip topic 最大消息处理器数", "max_message_handlers", config.MaxMessageHandlers)
 
 	return srv, nil
 }

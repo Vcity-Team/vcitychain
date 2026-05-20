@@ -452,10 +452,6 @@ func NewServer(config *Config) (*Server, error) {
 		restoreProgression: progress.NewProgressionWrapper(progress.ChainSyncRestore),
 	}
 
-	if config.Chain.Params.GetEngine() == string(IBFTConsensus) {
-		m.logger.Info(common.IBFTImportantNotice)
-	}
-
 	m.logger.Info("Data dir", "path", config.DataDir)
 
 	var dirPaths = []string{
@@ -1551,13 +1547,17 @@ func (s *Server) startPrometheusServer(listenAddr *net.TCPAddr) *http.Server {
 		ReadHeaderTimeout: 60 * time.Second,
 	}
 
-	s.logger.Info("Prometheus server started", "addr=", listenAddr.String())
-
 	go func() {
 		if err := srv.ListenAndServe(); err != nil {
-			if !errors.Is(err, http.ErrServerClosed) {
-				s.logger.Error("Prometheus HTTP server ListenAndServe", "err", err)
+			if errors.Is(err, http.ErrServerClosed) {
+				return
 			}
+			// 端口仍被旧进程占用时（supervisor 快速重启）属预期，不必打 ERROR
+			if strings.Contains(err.Error(), "address already in use") {
+				s.logger.Debug("Prometheus HTTP server not started (port in use)", "addr", listenAddr.String(), "err", err)
+				return
+			}
+			s.logger.Error("Prometheus HTTP server ListenAndServe", "err", err)
 		}
 	}()
 
