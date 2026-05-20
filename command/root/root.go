@@ -3,10 +3,10 @@ package root
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 
+	cmdroot "github.com/Vcity-Team/vcitychain/command"
 	"github.com/Vcity-Team/vcitychain/command/backup"
 	"github.com/Vcity-Team/vcitychain/command/bridge"
 	"github.com/Vcity-Team/vcitychain/command/dpos"
@@ -74,19 +74,10 @@ func (rc *RootCommand) registerSubCommands() {
 func (rc *RootCommand) Execute() {
 	if err := rc.baseCmd.Execute(); err != nil {
 		// 快速重启时端口仍被占用，避免裸打 stderr（无 logger 前缀）刷屏
-		if !isQuietStartupBindError(err) {
+		if !cmdroot.IsQuietStartupBindError(err) {
 			_, _ = fmt.Fprintln(os.Stderr, err)
 		}
 
 		os.Exit(1)
 	}
-}
-
-func isQuietStartupBindError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "address already in use") ||
-		strings.Contains(msg, "resource temporarily unavailable")
 }

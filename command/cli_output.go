@@ -18,7 +18,9 @@ func newCLIOutput() *cliOutput {
 // WriteOutput implements OutputFormatter interface
 func (cli *cliOutput) WriteOutput() {
 	if cli.errorOutput != nil {
-		_, _ = fmt.Fprintln(os.Stderr, cli.getErrorOutput())
+		if !IsQuietStartupBindError(cli.errorOutput) {
+			_, _ = fmt.Fprintln(os.Stderr, cli.getErrorOutput())
+		}
 
 		// return proper error exit code for cli error output
 		os.Exit(1)
