@@ -1,10 +1,8 @@
 package dpos
 
 import (
-	"math/big"
 	"time"
 
-	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/types"
 )
 
@@ -107,62 +105,12 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 		if len(orderedAddrs) == 0 {
 			return types.ZeroAddress
 		}
-		currentValidatorIndex := currentSlot % len(orderedAddrs)
-		delegateAddr := orderedAddrs[currentValidatorIndex]
-
-		var delegate *validator.ValidatorMetadata
-		for _, v := range validators {
-			if v.Address == delegateAddr {
-				delegate = v
-				break
-			}
-		}
-		if delegate == nil {
-			r.logOnceWithInterval("get_current_delegate_sorted_miss", 30*time.Second, "error",
-				"❌ getCurrentDelegate: 排序后的槽位地址不在活跃集合中",
-				"delegateAddr", delegateAddr.String(),
-				"validatorIndex", currentValidatorIndex,
-				"currentSlot", currentSlot)
+		eligible := dposBackend.productionEligibilityChecker(validators)
+		delegateAddr, _, ok := pickLeaderForSlot(currentSlot, orderedAddrs, eligible)
+		if !ok {
 			return types.ZeroAddress
 		}
-
-		// 使用最新的数据库信息校验活跃状态和投票权重
-		latestMeta := delegate
-		if validatorsSource != "realtime_query" {
-			if freshValidators, err := dposBackend.GetSortedValidatorsWithLimit(); err == nil {
-				for _, meta := range freshValidators {
-					if meta.Address == delegate.Address {
-						latestMeta = meta
-						break
-					}
-				}
-			} else {
-				r.logger.Warn("⚠️ getCurrentDelegate: 获取最新验证者权重失败",
-					"address", delegate.Address.String(),
-					"error", err)
-			}
-		}
-
-		if latestMeta == nil {
-			r.logger.Error("❌ getCurrentDelegate: 无法获取当前委托者元数据",
-				"address", delegate.Address.String())
-			return types.ZeroAddress
-		}
-
-		// 检查受托人是否活跃且有足够的stake
-		if !latestMeta.IsActive || latestMeta.VotingPower.Cmp(big.NewInt(0)) <= 0 {
-			r.logOnceWithInterval("inactive_delegate", 10*time.Second, "warn",
-				"❌ 当前委托者不活跃或票数不足",
-				"validatorIndex", currentValidatorIndex,
-				"address", latestMeta.Address.String(),
-				"isActive", latestMeta.IsActive,
-				"votingPower", latestMeta.VotingPower.String(),
-				"dataSource", validatorsSource,
-				"timestamp", time.Now().Format("15:04:05.000"))
-			return types.ZeroAddress
-		}
-
-		return latestMeta.Address
+		return delegateAddr
 	}
 
 	r.logger.Error("❌ blockScheduler不可用")
@@ -288,6 +236,33 @@ func (r *dposRuntime) getNetworkLatestBlockNumber() uint64 {
 	}
 
 	return candidate
+}
+
+// networkLatestHeaderForScheduling 返回用于出块 slot/时间戳的「网络最新区块」头。
+// 高度取自 getNetworkLatestBlockNumber；本地 DB 已有该高度块头则返回，否则回退本地链尖（无 peer 时即单机链）。
+func (r *dposRuntime) networkLatestHeaderForScheduling() *types.Header {
+	if r.config == nil || r.config.blockchain == nil {
+		return nil
+	}
+	local := r.config.blockchain.CurrentHeader()
+	if local == nil {
+		return nil
+	}
+	netNum := r.getNetworkLatestBlockNumber()
+	if netNum == 0 {
+		return local
+	}
+	if h, ok := r.config.blockchain.GetHeaderByNumber(netNum); ok && h != nil {
+		return h
+	}
+	if netNum <= local.Number {
+		return local
+	}
+	r.logOnceWithInterval("network_sched_ref_header_missing", 30*time.Second, "warn",
+		"⚠️ [出块调度] 网络门禁高度块头未在本地，回退本地链尖作为时间参照",
+		"networkRefBlockNumber", netNum,
+		"localBlockNumber", local.Number)
+	return local
 }
 
 // updateProductionCatchUpLatch 在观测到「门禁水位或原始 gossip」高于本地时抬高追平目标；本地达到目标后清除。

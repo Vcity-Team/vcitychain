@@ -72,6 +72,7 @@ func (d *DPoS) shouldProduceConsensusBlock(blockNumber uint64, myAddress types.A
 		addresses,
 		blockNumber,
 		"ConsensusModule",
+		nil,
 	)
 }
 

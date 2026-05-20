@@ -56,6 +56,9 @@ type BlockBuilderParams struct {
 
 	// BaseFee is the base fee
 	BaseFee uint64
+
+	// SchedulingTimestamp 下一区块头时间（网络最新块 timestamp+blockWindow）；零值则回退 parent+BlockTime。
+	SchedulingTimestamp time.Time
 }
 
 // NewBlockBuilder creates a new block builder
@@ -92,10 +95,12 @@ type BlockBuilder struct {
 
 // Reset initializes block builder before adding transactions and actual block building
 func (b *BlockBuilder) Reset() error {
-	// 与 BlockScheduler.effectiveTimeForNextBlock 一致：始终 parent+blockWindow。
-	// 链尖落后墙钟时不抬到 now.UTC()，避免与已跟上链的节点同高不同时间戳/ slot 分叉。
-	parentTime := time.Unix(int64(b.params.Parent.Timestamp), 0).UTC()
-	headerTime := parentTime.Add(b.params.BlockTime)
+	// 与 BlockScheduler.effectiveTimeForNextBlock 一致：网络最新块时间+blockWindow（A 方案）。
+	headerTime := b.params.SchedulingTimestamp.UTC()
+	if headerTime.IsZero() {
+		parentTime := time.Unix(int64(b.params.Parent.Timestamp), 0).UTC()
+		headerTime = parentTime.Add(b.params.BlockTime)
+	}
 
 	b.header = &types.Header{
 		ParentHash:   b.params.Parent.Hash,
@@ -465,6 +470,9 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	if err != nil {
 		r.logger.Error("❌ buildBlock: 创建区块构建器失败", "error", err)
 		return nil, fmt.Errorf("failed to create block builder: %w", err)
+	}
+	if bb, ok := builder.(*BlockBuilder); ok && r.config.blockScheduler != nil {
+		bb.params.SchedulingTimestamp = r.config.blockScheduler.effectiveTimeForNextBlock()
 	}
 
 	// 重置构建器

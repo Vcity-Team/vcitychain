@@ -77,6 +77,10 @@ func (d *DPoS) initializeEconomicSystem() error {
 	if d.runtime != nil && d.runtime.config != nil {
 		d.runtime.config.blockScheduler = d.blockScheduler
 	}
+	// A 方案：轮值/块头时间戳以「网络最新块时间 + blockWindow」为参照（由 runtime 解析网络链尖块头）
+	if d.runtime != nil && d.blockScheduler != nil {
+		d.blockScheduler.SetNetworkHeadResolver(d.runtime.networkLatestHeaderForScheduling)
+	}
 
 	// 添加调试日志
 	d.logger.Info("🔧 BlockScheduler初始化",

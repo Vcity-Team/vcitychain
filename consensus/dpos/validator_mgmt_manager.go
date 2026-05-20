@@ -246,6 +246,34 @@ func (d *DPoS) GetSortedValidatorsWithLimitFilterFaulty() (validator.AccountSet,
 	return activeValidators, nil
 }
 
+// productionEligibilityChecker 返回与出块调度一致的 eligibility 判断（活跃、有票权、非故障）。
+func (d *DPoS) productionEligibilityChecker(set validator.AccountSet) func(types.Address) bool {
+	metaByAddr := make(map[types.Address]*validator.ValidatorMetadata, len(set))
+	for _, v := range set {
+		if v != nil {
+			metaByAddr[v.Address] = v
+		}
+	}
+	return func(addr types.Address) bool {
+		meta, ok := metaByAddr[addr]
+		if !ok || meta == nil {
+			return false
+		}
+		if !meta.IsActive || meta.VotingPower == nil || meta.VotingPower.Sign() <= 0 {
+			return false
+		}
+		if faultInfo := d.getValidatorFaultInfo(addr); faultInfo != nil {
+			if faultValue, ok := faultInfo["isFaulty"].(bool); ok && faultValue {
+				return false
+			}
+		}
+		if d.faultyValidators != nil && d.faultyValidators[addr] {
+			return false
+		}
+		return true
+	}
+}
+
 // getValidatorsFromCurrentBlockExtraData 从数据库读取验证者集合（不再从 ExtraData 读取）
 func (d *DPoS) getValidatorsFromCurrentBlockExtraData(header *types.Header) (validator.AccountSet, error) {
 	// 🔧 修改：统一从数据库读取验证者集合，不再从 ExtraData 读取
