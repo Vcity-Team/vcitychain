@@ -502,22 +502,17 @@ func (r *dposRuntime) produceBlock() error {
 			return nil
 		}
 
-		// 以当前时间计算本地 slot（保留原有检查，但更严格）
-		now := time.Now()
-		timeSinceGenesis := now.Sub(genesisTime)
-		currentSlot := int(timeSinceGenesis / blockWindow)
-
-		// 检查提交时是否已经落后太多（严格检查：不允许落后）
-		if currentSlot > blockSlot {
-			r.logger.Info("⏰ [produceBlock] 区块被丢弃：提交时已超出slot窗口",
+		// 与 ShouldProduceBlockNow / BlockBuilder 同一坐标系：用调度器下一区块 slot，不用墙钟。
+		// 链尖落后墙钟时块头是 parent+blockWindow，墙钟 slot 会远大于 blockSlot，旧逻辑会误丢弃。
+		commitSlot := r.config.blockScheduler.CurrentSlotForNextBlock()
+		if commitSlot > blockSlot {
+			r.logger.Info("⏰ [produceBlock] 区块被丢弃：提交时调度 slot 已前进",
 				"blockNumber", block.Block.Number(),
 				"blockSlot", blockSlot,
-				"currentSlot", currentSlot,
+				"commitSlot", commitSlot,
 				"blockTimestamp", blockTimestamp.Format("15:04:05.000"),
-				"now", now.Format("15:04:05.000"),
-				"reason", "提交时已落后超过允许的slot漂移")
+				"reason", "构建期间链时间轴上的 slot 已变化")
 
-			// 清除 decisionSlot
 			r.lock.Lock()
 			r.decisionSlot = -1
 			r.lock.Unlock()
@@ -529,7 +524,7 @@ func (r *dposRuntime) produceBlock() error {
 			"blockNumber", block.Block.Number(),
 			"decisionSlot", decisionSlot,
 			"blockSlot", blockSlot,
-			"currentSlot", currentSlot)
+			"commitSlot", commitSlot)
 
 		// 清除 decisionSlot（成功提交前清除）
 		r.lock.Lock()
@@ -573,20 +568,13 @@ func (r *dposRuntime) produceBlock() error {
 		return fmt.Errorf("failed to commit block: %w", err)
 	}
 
-	// 只在更新状态时使用写锁（时间很短）
-	if r.config.blockScheduler != nil && currentSlot >= 0 {
-		r.lock.Lock()
-		// 再次检查（防止并发问题）
-		now := time.Now()
+	// 记录本块在链时间轴上的 slot（与块头 Timestamp 一致，不用墙钟）
+	if r.config.blockScheduler != nil {
 		genesisTime := r.config.blockScheduler.GetGenesisTime()
 		blockWindow := r.config.blockScheduler.GetBlockWindow()
-		timeSinceGenesis := now.Sub(genesisTime)
-		actualSlot := int(timeSinceGenesis / blockWindow)
-
-		// 如果slot已经变化，不更新（避免覆盖新的slot）
-		if actualSlot == currentSlot {
-			r.lastProducedSlot = currentSlot
-		}
+		producedSlot := int(time.Unix(int64(block.Block.Header.Timestamp), 0).Sub(genesisTime) / blockWindow)
+		r.lock.Lock()
+		r.lastProducedSlot = producedSlot
 		r.lock.Unlock()
 	}
 	r.logger.Debug("🔔 区块提交完成，等待区块链事件触发状态广播", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())

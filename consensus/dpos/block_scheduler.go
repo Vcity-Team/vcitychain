@@ -175,32 +175,6 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	expectedValidator := orderedValidators[currentValidatorIndex]
 	isMatch := expectedValidator == myAddress
 
-	if !schedInfo.MaxUsesParentChain {
-		wallSlot := bs.slotAt(schedInfo.EffectiveTime)
-		wallLeader := orderedValidators[wallSlot%activeValidatorCount]
-		lag := schedInfo.NowUTC.Sub(schedInfo.ParentPlusWindow)
-		logArgs := []interface{}{
-			"parentBlockNumber", schedInfo.ParentNumber,
-			"parentTimestampUTC", schedInfo.ParentTimestampUTC.Format("2006-01-02 15:04:05.000"),
-			"parentPlusWindowUTC", schedInfo.ParentPlusWindow.Format("2006-01-02 15:04:05.000"),
-			"nowUTC", schedInfo.NowUTC.Format("2006-01-02 15:04:05.000"),
-			"wallClockLag", lag.String(),
-			"chainSlot", currentSlot,
-			"wallSlot", wallSlot,
-			"chainLeader", fmt.Sprintf("[%d]%s", currentValidatorIndex, expectedValidator.String()),
-			"wallLeader", fmt.Sprintf("[%d]%s", wallSlot%activeValidatorCount, wallLeader.String()),
-			"myAddress", myAddress.String(),
-			"isMatchOnChainTime", isMatch,
-			"nextBlockNumber", nextBlockNumber,
-			"note", "链尖落后墙钟时轮值/块头时间戳用 parent+blockWindow，不用 utc_now",
-		}
-		if wallLeader == myAddress && !isMatch {
-			bs.logger.Info("⏸️ [出块调度] 若按墙钟 utc_now 轮到本节点，但按链时间不应出块，跳过", logArgs...)
-		} else {
-			bs.logger.Info("⏸️ [出块调度] 链尖时间落后墙钟，下一区块按 parent+blockWindow 调度", logArgs...)
-		}
-	}
-
 	// 构建验证者集合完整列表（带索引）
 	validatorsList := make([]string, len(orderedValidators))
 	for i, v := range orderedValidators {
