@@ -79,6 +79,7 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 					r.logger.Error("出块失败", "error", err)
 				}
 			} else {
+				r.sleepUntilNextProduceWindow()
 				// 获取从数据库读取的验证者集合
 				validatorsFromExtra := validator.AccountSet{}
 				validatorsSource := "unknown"
@@ -146,23 +147,47 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 					"validatorsFromExtraCount", len(validatorsFromExtra),
 					"validatorsSource", validatorsSource)
 			}
-			time.Sleep(10 * time.Millisecond) // 10毫秒监测一次
 		}
 	}
+}
+
+// sleepUntilNextProduceWindow 避免监测循环空转；若未到最早出块时刻则短睡等待。
+func (r *dposRuntime) sleepUntilNextProduceWindow() {
+	if r.config == nil || r.config.blockScheduler == nil {
+		time.Sleep(50 * time.Millisecond)
+		return
+	}
+	r.lock.RLock()
+	lastWall := r.lastBlockProductionTime
+	r.lock.RUnlock()
+	wait := time.Until(r.config.blockScheduler.EarliestProduceTime(lastWall))
+	if wait <= 0 {
+		time.Sleep(50 * time.Millisecond)
+		return
+	}
+	if wait > 500*time.Millisecond {
+		time.Sleep(500 * time.Millisecond)
+		return
+	}
+	time.Sleep(wait)
 }
 
 // produceBlock 生产区块
 func (r *dposRuntime) produceBlock() error {
 	var currentSlot int = -1
 	if r.config.blockScheduler != nil {
-		currentSlot = r.config.blockScheduler.CurrentSlotForNextBlock()
+		currentSlot = r.config.blockScheduler.LeaderElectionSlot()
 
 		r.lock.RLock()
 		lastSlot := r.lastProducedSlot
+		lastWallProduce := r.lastBlockProductionTime
 		r.lock.RUnlock()
 
-		// 如果当前 slot 已经出过块，跳过
+		// 如果当前 leader 轮值 slot 已经出过块，跳过
 		if lastSlot >= 0 && lastSlot == currentSlot {
+			return nil
+		}
+		if nowUTC := time.Now().UTC(); nowUTC.Before(r.config.blockScheduler.EarliestProduceTime(lastWallProduce)) {
 			return nil
 		}
 	}
@@ -326,7 +351,7 @@ func (r *dposRuntime) produceBlock() error {
 	var buildStartSlot int = -1
 	var buildStartTime time.Time
 	if r.config.blockScheduler != nil {
-		buildStartSlot = r.config.blockScheduler.CurrentSlotForNextBlock()
+		buildStartSlot = r.config.blockScheduler.LeaderElectionSlot()
 		buildStartTime = time.Now()
 	}
 
@@ -406,7 +431,7 @@ func (r *dposRuntime) produceBlock() error {
 	if r.config.blockScheduler != nil && buildStartSlot >= 0 {
 		now := time.Now()
 		blockWindow := r.config.blockScheduler.GetBlockWindow()
-		currentSlotAfterBuild := r.config.blockScheduler.CurrentSlotForNextBlock()
+		currentSlotAfterBuild := r.config.blockScheduler.LeaderElectionSlot()
 		buildDuration := now.Sub(buildStartTime)
 
 		// 检查构建耗时是否超过slot时间
@@ -470,7 +495,8 @@ func (r *dposRuntime) produceBlock() error {
 	}
 
 	// 提交区块（可能需要锁，取决于blockchain的实现）
-	// 在提交前再做一次基于区块 timestamp 的 slot 校验，防止"构建完成后长时间滞后"仍被写入
+	var savedLeaderSlot int = -1
+	// 在提交前再做一次 leader 轮值 slot 校验
 	if r.config.blockScheduler != nil {
 		// 依据区块头时间戳推算 slot（与 BlockScheduler 一致）
 		blockTimestamp := time.Unix(int64(block.Block.Header.Timestamp), 0).UTC()
@@ -481,33 +507,16 @@ func (r *dposRuntime) produceBlock() error {
 		decisionSlot := r.decisionSlot
 		r.lock.RUnlock()
 
-		// 严格比对：blockSlot 必须等于 decisionSlot（slotTolerance = 0）
-		if decisionSlot >= 0 && blockSlot != decisionSlot {
-			r.logger.Info("⏰ [produceBlock] 区块被丢弃：区块slot与判断slot不一致",
+		// leader 轮值 slot 须在提交时未变；块头 slot（链上时间）可小于 decisionSlot（墙钟空耗窗口）。
+		commitLeaderSlot := r.config.blockScheduler.LeaderElectionSlot()
+		if decisionSlot >= 0 && commitLeaderSlot != decisionSlot {
+			r.logger.Info("⏰ [produceBlock] 区块被丢弃：leader 轮值 slot 已变化",
 				"blockNumber", block.Block.Number(),
 				"decisionSlot", decisionSlot,
+				"commitLeaderSlot", commitLeaderSlot,
 				"blockSlot", blockSlot,
 				"blockTimestamp", blockTimestamp.Format("15:04:05.000"),
-				"reason", fmt.Sprintf("判断时slot=%d，区块slot=%d，不一致", decisionSlot, blockSlot))
-
-			// 清除 decisionSlot
-			r.lock.Lock()
-			r.decisionSlot = -1
-			r.lock.Unlock()
-
-			return nil
-		}
-
-		// 与 ShouldProduceBlockNow / BlockBuilder 同一坐标系：用调度器下一区块 slot，不用墙钟。
-		// 链尖落后墙钟时块头是 parent+blockWindow，墙钟 slot 会远大于 blockSlot，旧逻辑会误丢弃。
-		commitSlot := r.config.blockScheduler.CurrentSlotForNextBlock()
-		if commitSlot > blockSlot {
-			r.logger.Info("⏰ [produceBlock] 区块被丢弃：提交时调度 slot 已前进",
-				"blockNumber", block.Block.Number(),
-				"blockSlot", blockSlot,
-				"commitSlot", commitSlot,
-				"blockTimestamp", blockTimestamp.Format("15:04:05.000"),
-				"reason", "构建期间链时间轴上的 slot 已变化")
+				"reason", fmt.Sprintf("判断时 leaderSlot=%d，提交时 leaderSlot=%d", decisionSlot, commitLeaderSlot))
 
 			r.lock.Lock()
 			r.decisionSlot = -1
@@ -519,10 +528,13 @@ func (r *dposRuntime) produceBlock() error {
 		r.logger.Info("✅ [produceBlock] 提交前slot检查通过",
 			"blockNumber", block.Block.Number(),
 			"decisionSlot", decisionSlot,
-			"blockSlot", blockSlot,
-			"commitSlot", commitSlot)
+			"commitLeaderSlot", commitLeaderSlot,
+			"blockSlot", blockSlot)
 
-		// 清除 decisionSlot（成功提交前清除）
+		savedLeaderSlot = decisionSlot
+		if savedLeaderSlot < 0 {
+			savedLeaderSlot = commitLeaderSlot
+		}
 		r.lock.Lock()
 		r.decisionSlot = -1
 		r.lock.Unlock()
@@ -564,12 +576,12 @@ func (r *dposRuntime) produceBlock() error {
 		return fmt.Errorf("failed to commit block: %w", err)
 	}
 
-	// 记录本块在链时间轴上的 slot（与块头 Timestamp 一致）
 	if r.config.blockScheduler != nil {
-		producedSlot := r.config.blockScheduler.SlotAt(
-			time.Unix(int64(block.Block.Header.Timestamp), 0).UTC())
 		r.lock.Lock()
-		r.lastProducedSlot = producedSlot
+		if savedLeaderSlot >= 0 {
+			r.lastProducedSlot = savedLeaderSlot
+		}
+		r.lastBlockProductionTime = time.Now().UTC()
 		r.lock.Unlock()
 	}
 	r.logger.Debug("🔔 区块提交完成，等待区块链事件触发状态广播", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String())
@@ -620,4 +632,23 @@ func (r *dposRuntime) preProducePeerProbeTimeout() time.Duration {
 		return r.config.PreProducePeerProbeTimeout
 	}
 	return syncer.DefaultPreProduceProbeTimeout
+}
+
+// noteCanonicalTipProductionPace 链尖高度前进时刷新本节点墙钟出块节流（含 syncer 写入）。
+func (d *DPoS) noteCanonicalTipProductionPace(height uint64) {
+	if d == nil {
+		return
+	}
+	d.canonicalTipPaceMu.Lock()
+	defer d.canonicalTipPaceMu.Unlock()
+	if height <= d.lastCanonicalTipPaceAt {
+		return
+	}
+	d.lastCanonicalTipPaceAt = height
+	if d.runtime != nil {
+		now := time.Now().UTC()
+		d.runtime.lock.Lock()
+		d.runtime.lastBlockProductionTime = now
+		d.runtime.lock.Unlock()
+	}
 }

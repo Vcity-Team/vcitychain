@@ -389,6 +389,10 @@ type DPoS struct {
 	faultyValidators  map[types.Address]bool
 	missedBlocksCount map[types.Address]uint64
 
+	// 链尖前进时刷新墙钟出块节流（syncer / 本地插入）
+	canonicalTipPaceMu     sync.RWMutex
+	lastCanonicalTipPaceAt uint64
+
 	// 最后投票的验证者地址集合（支持多个验证者）
 	lastVotedDelegates map[types.Address]bool
 
@@ -2006,6 +2010,9 @@ func (d *DPoS) parseValidatorsFromExtraData(extraData []byte) (validator.Account
 // 注意：本地生产区块时，consensusRuntime.OnBlockInserted 也会调用 ResetWithHeaders，
 // 这里再次调用是安全的（幂等操作），确保两种路径的行为一致
 func (d *DPoS) OnBlockInserted(fullBlock *types.FullBlock) {
+	if fullBlock != nil && fullBlock.Block != nil {
+		d.noteCanonicalTipProductionPace(fullBlock.Block.Number())
+	}
 	if d.txPool == nil {
 		d.logger.Warn("⚠️ [DPoS.OnBlockInserted] txPool 为 nil，跳过交易池清理",
 			"blockNumber", fullBlock.Block.Number(),

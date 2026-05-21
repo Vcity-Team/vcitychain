@@ -94,7 +94,7 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 
 	// 基于时间 slot 计算当前委托者（与 ShouldProduceBlockNow / 块头时间戳同一坐标系）
 	if r.config.blockScheduler != nil {
-		currentSlot := r.config.blockScheduler.CurrentSlotForNextBlock()
+		leaderSlot := r.config.blockScheduler.LeaderElectionSlot()
 
 		// 与 ShouldProduceBlockNow 一致：先按地址字节升序再取模（数据库返回顺序≠选举顺序）
 		addresses := make([]types.Address, 0, len(validators))
@@ -105,12 +105,8 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 		if len(orderedAddrs) == 0 {
 			return types.ZeroAddress
 		}
-		eligible := dposBackend.productionEligibilityChecker(validators)
-		delegateAddr, _, ok := pickLeaderForSlot(currentSlot, orderedAddrs, eligible)
-		if !ok {
-			return types.ZeroAddress
-		}
-		return delegateAddr
+		idx := leaderSlot % len(orderedAddrs)
+		return orderedAddrs[idx]
 	}
 
 	r.logger.Error("❌ blockScheduler不可用")

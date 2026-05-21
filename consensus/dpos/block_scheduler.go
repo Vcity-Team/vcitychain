@@ -21,31 +21,6 @@ func orderValidatorAddressesForLeaderElection(addrs []types.Address) []types.Add
 	return ordered
 }
 
-// pickLeaderForSlot 在有序验证者全集上按 slot 轮询，跳过 isEligible==false 的节点。
-// 保证各节点在相同 slot、相同有序列表、相同 eligibility 规则下选出同一出块者。
-func pickLeaderForSlot(
-	slot int,
-	ordered []types.Address,
-	isEligible func(types.Address) bool,
-) (leader types.Address, pickedIndex int, ok bool) {
-	n := len(ordered)
-	if n == 0 {
-		return types.ZeroAddress, -1, false
-	}
-	if slot < 0 {
-		slot = 0
-	}
-	start := slot % n
-	for k := 0; k < n; k++ {
-		idx := (start + k) % n
-		addr := ordered[idx]
-		if isEligible == nil || isEligible(addr) {
-			return addr, idx, true
-		}
-	}
-	return types.ZeroAddress, -1, false
-}
-
 // BlockchainInterface 是区块链接口，用于获取当前区块头
 type BlockchainInterface interface {
 	Header() *types.Header
@@ -171,7 +146,6 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	refHeader := bs.schedulingReferenceHeader()
 	schedulingTime := bs.effectiveTimeForNextBlock()
 	timeSinceGenesis := schedulingTime.Sub(bs.genesisTime)
-	currentSlot := bs.slotAt(schedulingTime)
 
 	activeValidatorCount := len(orderedValidators)
 	if activeValidatorCount == 0 {
@@ -179,29 +153,22 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 		return false
 	}
 
-	naiveIndex := currentSlot % activeValidatorCount
-	naiveLeader := orderedValidators[naiveIndex]
-
-	expectedValidator, currentValidatorIndex, hasLeader := pickLeaderForSlot(currentSlot, orderedValidators, isEligible)
-	if !hasLeader {
-		bs.logOnceWithInterval("no_eligible_leader", 10*time.Second, "error",
-			"❌ [出块调度] 当前轮值窗口内无可用验证者（均故障/不活跃/无票权）",
-			"currentSlot", currentSlot,
-			"validatorsCount", activeValidatorCount,
-			"nextBlockNumber", nextBlockNumber)
-		return false
-	}
+	chainSlot := bs.slotAt(schedulingTime)
+	leaderSlot := bs.LeaderElectionSlot()
+	currentValidatorIndex := leaderSlot % activeValidatorCount
+	expectedValidator := orderedValidators[currentValidatorIndex]
 
 	isMatch := expectedValidator == myAddress
+	if isMatch && isEligible != nil && !isEligible(expectedValidator) {
+		isMatch = false
+	}
 
-	if naiveLeader != expectedValidator {
-		bs.logOnceWithInterval("leader_skip_ineligible", 30*time.Second, "info",
-			"⏭️ [出块调度] 轮值跳过不可出块验证者",
-			"currentSlot", currentSlot,
-			"skippedValidator", naiveLeader.String(),
-			"leaderValidator", expectedValidator.String(),
-			"skippedIndex", naiveIndex,
-			"leaderIndex", currentValidatorIndex,
+	if leaderSlot > chainSlot {
+		bs.logOnceWithInterval("leader_slot_wall_ahead", 30*time.Second, "info",
+			"⏭️ [出块调度] 墙钟 slot 领先链上调度 slot，空耗已过轮值窗口",
+			"leaderSlot", leaderSlot,
+			"chainSlot", chainSlot,
+			"expectedValidator", fmt.Sprintf("[%d]%s", currentValidatorIndex, expectedValidator.String()),
 			"nextBlockNumber", nextBlockNumber)
 	}
 
@@ -217,7 +184,8 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 			"networkRefBlockNumber", refNum,
 			"networkRefTimestampUTC", refTS,
 			"leaderElectionTimeUTC", schedulingTime.Format("2006-01-02 15:04:05.000"),
-			"currentSlot", currentSlot,
+			"leaderSlot", leaderSlot,
+			"chainSlot", chainSlot,
 			"expectedValidator", fmt.Sprintf("[%d]%s", currentValidatorIndex, expectedValidator.String()),
 			"myAddress", myAddress.String(),
 			"nextBlockNumber", nextBlockNumber)
@@ -253,7 +221,8 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 		bs.logger.Info("🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块",
 			"blockNumber", blockNumber, // 这个 blockNumber 来自 currentBlock.Number（已同步的区块号）
 			"nextBlockNumber", nextBlockNumber, // 下一个应生产的区块号（blockNumber + 1）
-			"currentSlot", currentSlot,
+			"leaderSlot", leaderSlot,
+			"chainSlot", chainSlot,
 			"activeValidatorCount", activeValidatorCount,
 			"activeValidatorCountSource", validatorsSource, // 验证者列表来源
 			"myAddress", myAddress.String(),
@@ -286,9 +255,36 @@ func (bs *BlockScheduler) effectiveTimeForNextBlock() time.Time {
 	return time.Unix(int64(ref.Timestamp), 0).UTC().Add(bs.blockWindow)
 }
 
+// EarliestProduceTime 本节点最早可开始下一轮出块的 UTC 时刻：
+// max(网络链尖+blockWindow 的调度时间, 本地上次成功提交+blockWindow)。
+// 链上时间戳落后墙钟时，仍保证约 blockWindow 的墙钟出块间隔（避免追块时连发空块）。
+func (bs *BlockScheduler) EarliestProduceTime(lastLocalProduce time.Time) time.Time {
+	chainDue := bs.effectiveTimeForNextBlock()
+	if lastLocalProduce.IsZero() {
+		return chainDue
+	}
+	wallDue := lastLocalProduce.UTC().Add(bs.blockWindow)
+	if wallDue.After(chainDue) {
+		return wallDue
+	}
+	return chainDue
+}
+
 // CurrentSlotForNextBlock returns the slot index for the next produced block (same basis as header Timestamp).
 func (bs *BlockScheduler) CurrentSlotForNextBlock() int {
 	return bs.slotAt(bs.effectiveTimeForNextBlock())
+}
+
+// LeaderElectionSlot 决定「谁可以出下一块」的 slot：max(链上调度 slot, 墙钟 slot)。
+// 链时间落后墙钟时，离线 SR 的 slot 在墙钟上被空耗过去，下一在线 SR 获得出块权（不顺延、不 pickLeader 扫描）。
+// 块头时间戳仍用 effectiveTimeForNextBlock（Plan A），与 CurrentSlotForNextBlock 一致。
+func (bs *BlockScheduler) LeaderElectionSlot() int {
+	chainSlot := bs.CurrentSlotForNextBlock()
+	wallSlot := bs.slotAt(time.Now().UTC())
+	if wallSlot > chainSlot {
+		return wallSlot
+	}
+	return chainSlot
 }
 
 // GetBlockWindow 返回区块时间窗口
@@ -367,15 +363,34 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 
 	// 方案2：使用读锁快速检查lastProducedSlot（如果使用blockScheduler）
 	if r.config.blockScheduler != nil {
-		currentSlot := r.config.blockScheduler.CurrentSlotForNextBlock()
+		leaderSlot := r.config.blockScheduler.LeaderElectionSlot()
 
 		// 使用读锁快速检查
 		r.lock.RLock()
 		lastSlot := r.lastProducedSlot
 		r.lock.RUnlock()
 
-		// 如果当前 slot 已经出过块，跳过
-		if lastSlot >= 0 && lastSlot == currentSlot {
+		// 如果当前 leader 轮值 slot 已经出过块，跳过
+		if lastSlot >= 0 && lastSlot == leaderSlot {
+			return false
+		}
+
+		// 墙钟节流：链上调度时间已过期时，仍须距本地上次提交至少一个 blockWindow。
+		r.lock.RLock()
+		lastWallProduce := r.lastBlockProductionTime
+		r.lock.RUnlock()
+		earliest := r.config.blockScheduler.EarliestProduceTime(lastWallProduce)
+		nowUTC := time.Now().UTC()
+		if nowUTC.Before(earliest) {
+			r.logOnceWithInterval("should_produce_wall_pace", 5*time.Second, "info",
+				"⏳ [出块调度] 等待出块间隔（链上调度时间或本地上次出块/链尖前进+blockWindow）",
+				"earliestProduceUTC", earliest.Format("2006-01-02 15:04:05.000"),
+				"chainSchedulingUTC", r.config.blockScheduler.effectiveTimeForNextBlock().Format("2006-01-02 15:04:05.000"),
+				"nowUTC", nowUTC.Format("2006-01-02 15:04:05.000"),
+				"waitRemaining", earliest.Sub(nowUTC).String(),
+				"blockWindow", r.config.blockScheduler.GetBlockWindow().String(),
+				"localBlockNumber", local,
+				"note", "日志时间为 UTC；与 +0800 墙钟相差 8h")
 			return false
 		}
 	}
@@ -453,10 +468,9 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			return false
 		}
 
-		// 与 BlockBuilder 下一区块头时间一致，保存 decisionSlot
-		decisionSlot := r.config.blockScheduler.CurrentSlotForNextBlock()
-
-		eligible := dposInstance.productionEligibilityChecker(validatorsFromExtra)
+		// 严格轮流：仅 leaderSlot%N 对应地址可出块；墙钟领先链上 slot 时空耗已过窗口。
+		eligible := dposInstance.productionEligibilityCheckerBase(validatorsFromExtra)
+		decisionSlot := r.config.blockScheduler.LeaderElectionSlot()
 		result := r.config.blockScheduler.ShouldProduceBlockNow(
 			myAddress, validators, currentBlock.Number, validatorsSource, eligible)
 
