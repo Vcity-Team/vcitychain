@@ -254,10 +254,6 @@ func (r *dposRuntime) networkLatestHeaderForScheduling() *types.Header {
 	if netNum <= local.Number {
 		return local
 	}
-	r.logOnceWithInterval("network_sched_ref_header_missing", 30*time.Second, "warn",
-		"⚠️ [出块调度] 网络门禁高度块头未在本地，回退本地链尖作为时间参照",
-		"networkRefBlockNumber", netNum,
-		"localBlockNumber", local.Number)
 	return local
 }
 

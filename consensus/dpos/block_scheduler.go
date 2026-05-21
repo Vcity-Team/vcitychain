@@ -173,22 +173,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	}
 
 	if !isMatch {
-		refNum := uint64(0)
-		refTS := ""
-		if refHeader != nil {
-			refNum = refHeader.Number
-			refTS = time.Unix(int64(refHeader.Timestamp), 0).UTC().Format("2006-01-02 15:04:05.000")
-		}
-		bs.logOnceWithInterval("should_produce_not_leader_network_time", 5*time.Second, "info",
-			"⏸️ [出块调度] 按网络最新块时间+blockWindow 轮值，本节点非当前 slot 出块者",
-			"networkRefBlockNumber", refNum,
-			"networkRefTimestampUTC", refTS,
-			"leaderElectionTimeUTC", schedulingTime.Format("2006-01-02 15:04:05.000"),
-			"leaderSlot", leaderSlot,
-			"chainSlot", chainSlot,
-			"expectedValidator", fmt.Sprintf("[%d]%s", currentValidatorIndex, expectedValidator.String()),
-			"myAddress", myAddress.String(),
-			"nextBlockNumber", nextBlockNumber)
+		return false
 	}
 
 	// 构建验证者集合完整列表（带索引）
@@ -204,42 +189,39 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 		validatorsList[i] = fmt.Sprintf("[%d]%s%s", i, v.String(), marker)
 	}
 
-	// 只有当本地节点应该出块时才打印详细日志（每次出块都打印，因为频率已经很低）
-	if isMatch {
-		refNum := uint64(0)
-		refTS := ""
-		if refHeader != nil {
-			refNum = refHeader.Number
-			refTS = time.Unix(int64(refHeader.Timestamp), 0).UTC().Format("2006-01-02 15:04:05.000")
-		}
-		bs.logger.Info("📐 [出块调度] 网络最新块时间+blockWindow 确定下一区块 slot",
-			"networkRefBlockNumber", refNum,
-			"networkRefTimestampUTC", refTS,
-			"leaderElectionTimeUTC", schedulingTime.Format("2006-01-02 15:04:05.000"),
-			"blockWindow", bs.blockWindow.String(),
-			"note", "与 BlockBuilder.Reset 一致；无 peer 时 networkRef=本地链尖")
-		bs.logger.Info("🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块",
-			"blockNumber", blockNumber, // 这个 blockNumber 来自 currentBlock.Number（已同步的区块号）
-			"nextBlockNumber", nextBlockNumber, // 下一个应生产的区块号（blockNumber + 1）
-			"leaderSlot", leaderSlot,
-			"chainSlot", chainSlot,
-			"activeValidatorCount", activeValidatorCount,
-			"activeValidatorCountSource", validatorsSource, // 验证者列表来源
-			"myAddress", myAddress.String(),
-			"expectedValidator", fmt.Sprintf("[%d]%s", currentValidatorIndex, expectedValidator.String()),
-			"validatorIndex", currentValidatorIndex, // 基于slot计算的验证者索引（第113行）
-			"isMatch", isMatch,
-			"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
-			"now", now.Format("2006-01-02 15:04:05.000"),
-			"schedulingTime", schedulingTime.Format("2006-01-02 15:04:05.000"),
-			"timestamp", now.Format("15:04:05.000000"),
-			"timeSinceGenesis", timeSinceGenesis.String(),
-			"blockWindow", bs.blockWindow.String(),
-			"validatorsList", validatorsList,
-			"note", "用于验证同一时刻只有一个节点出块")
+	refNum := uint64(0)
+	refTS := ""
+	if refHeader != nil {
+		refNum = refHeader.Number
+		refTS = time.Unix(int64(refHeader.Timestamp), 0).UTC().Format("2006-01-02 15:04:05.000")
 	}
+	bs.logger.Info("📐 [出块调度] 网络最新块时间+blockWindow 确定下一区块 slot",
+		"networkRefBlockNumber", refNum,
+		"networkRefTimestampUTC", refTS,
+		"leaderElectionTimeUTC", schedulingTime.Format("2006-01-02 15:04:05.000"),
+		"blockWindow", bs.blockWindow.String(),
+		"note", "与 BlockBuilder.Reset 一致；无 peer 时 networkRef=本地链尖")
+	bs.logger.Info("🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块",
+		"blockNumber", blockNumber,
+		"nextBlockNumber", nextBlockNumber,
+		"leaderSlot", leaderSlot,
+		"chainSlot", chainSlot,
+		"activeValidatorCount", activeValidatorCount,
+		"activeValidatorCountSource", validatorsSource,
+		"myAddress", myAddress.String(),
+		"expectedValidator", fmt.Sprintf("[%d]%s", currentValidatorIndex, expectedValidator.String()),
+		"validatorIndex", currentValidatorIndex,
+		"isMatch", isMatch,
+		"genesisTime", bs.genesisTime.Format("2006-01-02 15:04:05.000"),
+		"now", now.Format("2006-01-02 15:04:05.000"),
+		"schedulingTime", schedulingTime.Format("2006-01-02 15:04:05.000"),
+		"timestamp", now.Format("15:04:05.000000"),
+		"timeSinceGenesis", timeSinceGenesis.String(),
+		"blockWindow", bs.blockWindow.String(),
+		"validatorsList", validatorsList,
+		"note", "用于验证同一时刻只有一个节点出块")
 
-	return isMatch
+	return true
 }
 
 func (bs *BlockScheduler) GetGenesisTime() time.Time {
