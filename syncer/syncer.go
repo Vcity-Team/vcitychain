@@ -646,7 +646,16 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			s.logger.Info("syncer: local chain ahead of trusted bootnode tip (warn)",
 				"localLatest", localLatest,
 				"trustedTip", trustedTip,
-				"aheadBlocks", localLatest-trustedTip)
+				"aheadBlocks", localLatest-trustedTip,
+				"trustedTipBranch", trustedMeta.Branch,
+				"heightsUsedInQuorum", trustedMeta.Heights,
+				"maxBootHeight", trustedMeta.MaxBootHeight,
+				"configuredBootnodes", len(s.trustedBootnodeIDs),
+				"connectedBootsInPeerMap", trustedMeta.ConnectedBoots,
+				"reportingBootsUsedInQuorum", trustedMeta.ReportingBoots,
+				"maxClusterNearMax", trustedMeta.MaxClusterNearMax,
+				"maxClusterFloor", trustedMeta.MaxClusterFloor,
+				"note", "详见 syncer: trustedTip calculation detail")
 		}
 
 		forceBulk := syncTarget > localLatest
