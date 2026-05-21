@@ -112,11 +112,16 @@ type syncer struct {
 	trustedQuorumLogLocalHeight uint64
 	trustedQuorumLogLocalSince  time.Time
 
-	// trustedTip 高度缓存：优先 GetStatus 直查 boot，避免仅用滞后 gossip
+	// trustedTip 高度缓存：boot eth_blockNumber
 	trustedBootHeightMu       sync.Mutex
 	trustedBootHeightCachedAt time.Time
 	trustedBootHeightReports  []trustedBootPeerReport
 	trustedBootHeightHeights  []uint64
+
+	trustedBootRPCHeight   map[peer.ID]uint64
+	trustedBootRPCHeightMu sync.RWMutex
+	lastBootP2PRefreshMu   sync.Mutex
+	lastBootP2PRefreshAt   time.Time
 }
 
 type trustedPeerStat struct {
@@ -459,7 +464,9 @@ func (s *syncer) wakeSyncAfter(backoff time.Duration, reason string, args ...int
 		}
 		selfWakeArgs := append([]interface{}{"reason", reason, "backoff", backoff.String()}, args...)
 		switch reason {
-		case "trusted_ahead_no_serving_peer", "local_ahead_trusted_tip":
+		case "trusted_ahead_no_serving_peer":
+			s.logger.Debug("syncer self-wake", selfWakeArgs...)
+		case "local_ahead_trusted_tip":
 			s.logger.Info("syncer self-wake", selfWakeArgs...)
 		default:
 			s.logger.Debug("syncer self-wake", selfWakeArgs...)
@@ -693,7 +700,15 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 
 		// pick one best peer（fork/未完成 的 skip 与「拉取反复失败」的不信任 合并，但不信任不触发「无 best 时全体 Disconnect」）
 		pullDistrustActive := len(s.pullDistrustSkipMap())
+		if forceBulk && trustedTip > localLatest {
+			s.refreshTrustedBootP2PStatus(localLatest, false)
+		}
 		bestPeer := s.pickSyncPeerForTarget(localLatest, syncTarget, skipList, forceBulk)
+		if bestPeer == nil && forceBulk && trustedTip > localLatest {
+			if s.refreshTrustedBootP2PStatus(localLatest, true) > 0 {
+				bestPeer = s.pickSyncPeerForTarget(localLatest, syncTarget, skipList, forceBulk)
+			}
+		}
 		if bestPeer == nil {
 			if forceBulk && trustedTip > localLatest {
 				s.logSyncInfoOnLocalStall(localLatest, func() {
@@ -703,7 +718,7 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 						"syncTarget", syncTarget,
 						"requiredMinPeerNumber", localLatest+1)
 				})
-				s.wakeSyncAfter(retryBackoff, "trusted_ahead_no_serving_peer",
+				s.wakeSyncAfter(trustedAheadNoServingBackoff, "trusted_ahead_no_serving_peer",
 					"localLatest", localLatest,
 					"trustedTip", trustedTip)
 				continue

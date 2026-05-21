@@ -111,6 +111,7 @@ func (s *syncer) fetchTrustedBootHeightsDirect(local uint64) ([]trustedBootPeerR
 		rep.Number = n
 		rep.HeightSource = heightSourceJSONRPC
 		jsonRpcOK++
+		s.setTrustedBootRPCHeight(id, n)
 		if rep.InPeerMap {
 			if local > 0 && rep.Number > local+maxTrustedLeadOverLocal {
 				rep.SkippedOutlier = true
@@ -394,6 +395,22 @@ func (s *syncer) computeTrustedBootnodeQuorum(local uint64, reports []trustedBoo
 	return out
 }
 
+// isBetterBulkBootThan 在均可供块时优先更高 P2P 高度，同高则优先 RPC 更高的 boot。
+func (p *NoForkPeer) isBetterBulkBootThan(other *NoForkPeer, s *syncer) bool {
+	if other == nil {
+		return true
+	}
+	if p.Number != other.Number {
+		return p.Number > other.Number
+	}
+	rpcA, okA := s.getTrustedBootRPCHeight(p.ID)
+	rpcB, okB := s.getTrustedBootRPCHeight(other.ID)
+	if okA && okB && rpcA != rpcB {
+		return rpcA > rpcB
+	}
+	return p.Distance != nil && other.Distance != nil && p.Distance.Cmp(other.Distance) < 0
+}
+
 func (s *syncer) isTrustedBootnode(id peer.ID) bool {
 	_, ok := s.trustedBootnodeIDs[id]
 	return ok
@@ -412,7 +429,7 @@ func (s *syncer) pickSyncPeerForTarget(local, syncTarget uint64, skip map[peer.I
 		if p.Number <= local {
 			return true
 		}
-		if bestBoot == nil || p.Number > bestBoot.Number {
+		if bestBoot == nil || p.isBetterBulkBootThan(bestBoot, s) {
 			bestBoot = p
 		}
 		return true
