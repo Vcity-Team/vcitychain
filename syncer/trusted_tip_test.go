@@ -54,6 +54,18 @@ func TestComputeTrustedBootnodeTip_MedianCluster(t *testing.T) {
 	require.Equal(t, uint64(101), res.Tip)
 }
 
+func TestTryLocalMaxBootAgree(t *testing.T) {
+	tip, ok := tryLocalMaxBootAgree(15905892, 15905892, 1, 6)
+	require.True(t, ok)
+	require.Equal(t, uint64(15905892), tip)
+
+	_, ok = tryLocalMaxBootAgree(15905892, 15905892, 1, 1)
+	require.False(t, ok)
+
+	_, ok = tryLocalMaxBootAgree(15905800, 15905892, 1, 6)
+	require.False(t, ok)
+}
+
 func TestComputeTrustedBootnodeTip_SingleBootFallback(t *testing.T) {
 	b1 := peer.ID("bootnode-1")
 	s := &syncer{

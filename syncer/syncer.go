@@ -109,6 +109,12 @@ type syncer struct {
 	trustedQuorumLogMu        sync.Mutex
 	trustedQuorumLogLocalHeight uint64
 	trustedQuorumLogLocalSince  time.Time
+
+	// trustedTip 高度缓存：优先 GetStatus 直查 boot，避免仅用滞后 gossip
+	trustedBootHeightMu       sync.Mutex
+	trustedBootHeightCachedAt time.Time
+	trustedBootHeightReports  []trustedBootPeerReport
+	trustedBootHeightHeights  []uint64
 }
 
 type trustedPeerStat struct {

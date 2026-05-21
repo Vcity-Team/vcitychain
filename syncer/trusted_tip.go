@@ -20,23 +20,33 @@ const (
 	localAheadForceKickBlocks     = 256
 	trustedTipLogInterval         = 15 * time.Second
 	trustedTipCalcLogInterval     = 5 * time.Second
+	trustedBootHeightCacheTTL     = 2 * time.Second // GetStatus 直查 boot 高度的缓存时间
 	// syncer 若干 INFO（quorum / best-not-ahead / force-bulk 等）仅在本机链尖连续未变达到该时长后打印。
 	syncerLocalStallLogInterval = 20 * time.Second
 )
 
 const (
-	trustedTipBranchNoConfig     = "no_configured_bootnodes"
-	trustedTipBranchNoHeight     = "no_boot_height_in_peer_map"
-	trustedTipBranchMaxCluster   = "max_cluster_quorum"
-	trustedTipBranchMedianCluster = "median_cluster_quorum"
-	trustedTipBranchSingleBoot   = "single_boot_fallback"
-	trustedTipBranchNoQuorum     = "no_quorum"
+	trustedTipBranchNoConfig       = "no_configured_bootnodes"
+	trustedTipBranchNoHeight         = "no_boot_height"
+	trustedTipBranchMaxCluster       = "max_cluster_quorum"
+	trustedTipBranchMedianCluster    = "median_cluster_quorum"
+	trustedTipBranchSingleBoot       = "single_boot_fallback"
+	trustedTipBranchLocalMaxAgree    = "local_max_boot_agree"
+	trustedTipBranchNoQuorum         = "no_quorum"
+	localMaxBootAgreeHeightSlack     = 3 // 本机链尖与 peerMap 最高 boot 高度差上限
+)
+
+const (
+	heightSourceNone      = "none"
+	heightSourceGetStatus = "get_status" // P2P SyncPeer.GetStatus，等同主动查对端链尖（非 gossip）
+	heightSourceGossip    = "gossip"
 )
 
 type trustedBootPeerReport struct {
 	PeerID         string
 	InPeerMap      bool
 	Number         uint64
+	HeightSource   string
 	SkippedOutlier bool
 }
 
@@ -63,6 +73,111 @@ func (s *syncer) GetTrustedCanonicalTip() uint64 {
 		local = h.Number
 	}
 	return s.computeTrustedBootnodeTip(local).Tip
+}
+
+// fetchTrustedBootHeightsDirect 对每个创世 boot 优先 SyncPeer.GetStatus（读对端当前链尖），失败再回退 peerMap gossip。
+func (s *syncer) fetchTrustedBootHeightsDirect(local uint64) ([]trustedBootPeerReport, []uint64) {
+	reports := make([]trustedBootPeerReport, 0, len(s.trustedBootnodeIDs))
+	heights := make([]uint64, 0, len(s.trustedBootnodeIDs))
+	rpcOK := 0
+	gossipFallback := 0
+
+	for id := range s.trustedBootnodeIDs {
+		rep := trustedBootPeerReport{
+			PeerID:       id.String(),
+			HeightSource: heightSourceNone,
+		}
+		usedRPC := false
+		if s.syncPeerClient != nil {
+			if status, err := s.syncPeerClient.GetPeerStatus(id); err == nil && status != nil {
+				rep.InPeerMap = true
+				rep.Number = status.Number
+				rep.HeightSource = heightSourceGetStatus
+				s.putToPeerMap(status)
+				usedRPC = true
+				rpcOK++
+			}
+		}
+		if !usedRPC {
+			if v, ok := s.peerMap.Load(id.String()); ok {
+				if p, _ := v.(*NoForkPeer); p != nil {
+					rep.InPeerMap = true
+					rep.Number = p.Number
+					rep.HeightSource = heightSourceGossip
+					gossipFallback++
+				}
+			}
+		}
+		if rep.InPeerMap {
+			if local > 0 && rep.Number > local+maxTrustedLeadOverLocal {
+				rep.SkippedOutlier = true
+				key := fmt.Sprintf("outlier:%s:%d", rep.PeerID, rep.Number)
+				s.logTrustedTipThrottled(key, func() {
+					s.logger.Info("syncer: ignore bootnode height far above local (outlier)",
+						"peer", rep.PeerID,
+						"peerNumber", rep.Number,
+						"heightSource", rep.HeightSource,
+						"localLatest", local,
+						"maxLead", maxTrustedLeadOverLocal)
+				})
+			} else {
+				heights = append(heights, rep.Number)
+			}
+		}
+		reports = append(reports, rep)
+	}
+
+	sort.Slice(reports, func(i, j int) bool { return reports[i].PeerID < reports[j].PeerID })
+	sort.Slice(heights, func(i, j int) bool { return heights[i] < heights[j] })
+
+	s.logTrustedTipThrottled(fmt.Sprintf("direct:%d:%d:%d", rpcOK, gossipFallback, len(heights)), func() {
+		s.logger.Info("syncer: trusted boot heights collected (GetStatus first, gossip fallback)",
+			"configuredBootnodes", len(s.trustedBootnodeIDs),
+			"getStatusOK", rpcOK,
+			"gossipFallback", gossipFallback,
+			"heightsForQuorum", heights,
+			"localLatest", local)
+	})
+	return reports, heights
+}
+
+func (s *syncer) collectTrustedBootHeights(local uint64) ([]trustedBootPeerReport, []uint64) {
+	s.trustedBootHeightMu.Lock()
+	if time.Since(s.trustedBootHeightCachedAt) < trustedBootHeightCacheTTL &&
+		len(s.trustedBootHeightHeights) > 0 {
+		reports := append([]trustedBootPeerReport(nil), s.trustedBootHeightReports...)
+		heights := append([]uint64(nil), s.trustedBootHeightHeights...)
+		s.trustedBootHeightMu.Unlock()
+		return reports, heights
+	}
+	s.trustedBootHeightMu.Unlock()
+
+	reports, heights := s.fetchTrustedBootHeightsDirect(local)
+
+	if len(heights) > 0 {
+		s.trustedBootHeightMu.Lock()
+		s.trustedBootHeightCachedAt = time.Now()
+		s.trustedBootHeightReports = reports
+		s.trustedBootHeightHeights = heights
+		s.trustedBootHeightMu.Unlock()
+	}
+	return reports, heights
+}
+
+// tryLocalMaxBootAgree 本机链尖与 peerMap 最高 boot 接近，且至少一台 boot 落在 max 簇窗口内时采信 maxH。
+// 用于多台 boot gossip 大面积滞后、仅一台已跟上链尖的场景（避免误 no_quorum）。
+func tryLocalMaxBootAgree(local, maxH uint64, nearMax, reportingBoots int) (uint64, bool) {
+	if maxH == 0 || nearMax < 1 || reportingBoots < trustedBootnodeQuorumK {
+		return 0, false
+	}
+	if local > maxH {
+		if local-maxH > localMaxBootAgreeHeightSlack {
+			return 0, false
+		}
+	} else if maxH-local > localMaxBootAgreeHeightSlack {
+		return 0, false
+	}
+	return maxH, true
 }
 
 // shouldLogOnLocalChainStall 本地链尖已连续 stall 时长未变（追块中高度在变则返回 false）。
@@ -131,31 +246,6 @@ func (s *syncer) logTrustedTipCalcThrottled(local uint64, out trustedTipResult, 
 	fn()
 }
 
-func (s *syncer) collectTrustedBootPeerReports(local uint64) (reports []trustedBootPeerReport, heights []uint64) {
-	reports = make([]trustedBootPeerReport, 0, len(s.trustedBootnodeIDs))
-	for id := range s.trustedBootnodeIDs {
-		rep := trustedBootPeerReport{
-			PeerID: id.String(),
-		}
-		if v, ok := s.peerMap.Load(id.String()); ok {
-			p, _ := v.(*NoForkPeer)
-			if p != nil {
-				rep.InPeerMap = true
-				rep.Number = p.Number
-				if local > 0 && p.Number > local+maxTrustedLeadOverLocal {
-					rep.SkippedOutlier = true
-				} else {
-					heights = append(heights, p.Number)
-				}
-			}
-		}
-		reports = append(reports, rep)
-	}
-	sort.Slice(reports, func(i, j int) bool { return reports[i].PeerID < reports[j].PeerID })
-	sort.Slice(heights, func(i, j int) bool { return heights[i] < heights[j] })
-	return reports, heights
-}
-
 func formatTrustedBootPeerReports(reports []trustedBootPeerReport) string {
 	parts := make([]string, 0, len(reports))
 	for _, r := range reports {
@@ -167,9 +257,9 @@ func formatTrustedBootPeerReports(reports []trustedBootPeerReport) string {
 		case !r.InPeerMap:
 			parts = append(parts, fmt.Sprintf("%s:not_in_peer_map", shortID))
 		case r.SkippedOutlier:
-			parts = append(parts, fmt.Sprintf("%s:%d(outlier_skip)", shortID, r.Number))
+			parts = append(parts, fmt.Sprintf("%s:%d(%s,outlier_skip)", shortID, r.Number, r.HeightSource))
 		default:
-			parts = append(parts, fmt.Sprintf("%s:%d", shortID, r.Number))
+			parts = append(parts, fmt.Sprintf("%s:%d(%s)", shortID, r.Number, r.HeightSource))
 		}
 	}
 	return strings.Join(parts, " ")
@@ -202,32 +292,65 @@ func (s *syncer) logTrustedTipCalculation(local uint64, out trustedTipResult, re
 			"maxTrustedLeadOverLocal", maxTrustedLeadOverLocal,
 			"aheadOfTrustedBlocks", ahead,
 			"bootPeerReports", formatTrustedBootPeerReports(reports),
-			"note", "trustedTip 仅来自创世 bootnode 且在 peerMap 中的 Number；未连接 boot 显示 not_in_peer_map")
+			"note", "heights 优先 SyncPeer.GetStatus 直查；失败再用 peerMap gossip。get_status≈对端 RPC 链尖，非 HTTP curl")
 	})
 }
 
 func (s *syncer) computeTrustedBootnodeTip(local uint64) trustedTipResult {
+	reports, heights := s.collectTrustedBootHeights(local)
+	out := s.computeTrustedBootnodeQuorum(local, reports, heights)
+	if out.Branch != trustedTipBranchNoQuorum {
+		s.logTrustedTipCalculation(local, out, reports, false)
+		return out
+	}
+	if tip, ok := tryLocalMaxBootAgree(local, out.MaxBootHeight, out.MaxClusterNearMax, out.ReportingBoots); ok {
+		out.Tip = tip
+		out.Quorum = true
+		out.Branch = trustedTipBranchLocalMaxAgree
+		s.logTrustedTipThrottled(fmt.Sprintf("local-agree:%d", tip), func() {
+			s.logger.Info("syncer: trusted bootnode tip (local agrees with max boot gossip height)",
+				"trustedTip", tip,
+				"localLatest", local,
+				"maxBootHeight", out.MaxBootHeight,
+				"nearMaxCount", out.MaxClusterNearMax,
+				"note", "gossip 大面积滞后时 max-cluster K=2 未满足，本机与最高 boot 一致则采信 maxH")
+		})
+		s.logTrustedTipCalculation(local, out, reports, false)
+		return out
+	}
+	s.logTrustedTipThrottled(fmt.Sprintf("no-quorum:%d:%v", out.MaxBootHeight, out.Heights), func() {
+		s.logger.Info("syncer: bootnode heights lack quorum; trusted tip unavailable (will fall back to gossip)",
+			"median", out.Median,
+			"minHeight", func() uint64 {
+				if len(out.Heights) > 0 {
+					return out.Heights[0]
+				}
+				return 0
+			}(),
+			"maxHeight", out.MaxBootHeight,
+			"nearMaxCount", out.MaxClusterNearMax,
+			"nearMaxRequiredK", trustedBootnodeQuorumK,
+			"maxClusterFloor", out.MaxClusterFloor,
+			"maxSpreadSlack", trustedBootnodeMaxSpreadSlack,
+			"maxClusterSpreadOK", out.MaxClusterSpreadOK,
+			"reportingBoots", out.ReportingBoots,
+			"localLatest", local,
+			"heights", out.Heights)
+	})
+	s.logTrustedTipCalculation(local, out, reports, false)
+	return out
+}
+
+func (s *syncer) computeTrustedBootnodeQuorum(local uint64, reports []trustedBootPeerReport, heights []uint64) trustedTipResult {
 	out := trustedTipResult{}
 	if len(s.trustedBootnodeIDs) == 0 {
 		out.Branch = trustedTipBranchNoConfig
-		s.logTrustedTipCalculation(local, out, nil, false)
 		return out
 	}
 
-	reports, heights := s.collectTrustedBootPeerReports(local)
 	for _, r := range reports {
 		if r.InPeerMap {
 			out.ConnectedBoots++
-		}
-		if r.InPeerMap && r.SkippedOutlier {
-			key := fmt.Sprintf("outlier:%s:%d", r.PeerID, r.Number)
-			s.logTrustedTipThrottled(key, func() {
-				s.logger.Info("syncer: ignore bootnode height far above local (outlier)",
-					"peer", r.PeerID,
-					"peerNumber", r.Number,
-					"localLatest", local,
-					"maxLead", maxTrustedLeadOverLocal)
-			})
 		}
 	}
 
@@ -288,6 +411,20 @@ func (s *syncer) computeTrustedBootnodeTip(local uint64) trustedTipResult {
 			s.logTrustedTipCalculation(local, out, reports, forceLog)
 			return out
 		}
+		if tip, ok := tryLocalMaxBootAgree(local, maxH, nearMax, out.ReportingBoots); ok {
+			out.Tip = tip
+			out.Quorum = true
+			out.Branch = trustedTipBranchLocalMaxAgree
+			s.logTrustedTipThrottled(fmt.Sprintf("local-agree:%d", tip), func() {
+				s.logger.Info("syncer: trusted bootnode tip (local agrees with max boot gossip height)",
+					"trustedTip", tip,
+					"localLatest", local,
+					"nearMaxCount", nearMax,
+					"maxBootHeight", maxH)
+			})
+			s.logTrustedTipCalculation(local, out, reports, forceLog)
+			return out
+		}
 	}
 
 	// 2) median±slack 紧簇（高度非常接近时）
@@ -335,21 +472,7 @@ func (s *syncer) computeTrustedBootnodeTip(local uint64) trustedTipResult {
 	}
 
 	out.Branch = trustedTipBranchNoQuorum
-	s.logTrustedTipThrottled(fmt.Sprintf("no-quorum:%d:%v", maxH, heights), func() {
-		s.logger.Info("syncer: bootnode heights lack quorum; trusted tip unavailable (will fall back to gossip)",
-			"median", median,
-			"minHeight", minH,
-			"maxHeight", maxH,
-			"nearMaxCount", out.MaxClusterNearMax,
-			"nearMaxRequiredK", trustedBootnodeQuorumK,
-			"maxClusterFloor", out.MaxClusterFloor,
-			"maxSpreadSlack", trustedBootnodeMaxSpreadSlack,
-			"maxClusterSpreadOK", out.MaxClusterSpreadOK,
-			"reportingBoots", out.ReportingBoots,
-			"localLatest", local,
-			"heights", heights)
-	})
-	s.logTrustedTipCalculation(local, out, reports, true)
+	out.Median = median
 	return out
 }
 
