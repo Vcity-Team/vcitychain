@@ -1034,6 +1034,11 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 	if prevHeader, ok := b.GetHeaderByNumber(header.Number - 1); ok {
 		diff := header.Timestamp - prevHeader.Timestamp
 		logArgs = append(logArgs, "generation_time_in_seconds", diff)
+		if source == "syncer" {
+			logArgs = appendSyncBlockTimestampFields(logArgs, header, prevHeader)
+		}
+	} else if source == "syncer" {
+		logArgs = appendSyncBlockTimestampFields(logArgs, header, nil)
 	}
 
 	// 根据 source 区分本地生产和同步区块的日志消息
@@ -1909,4 +1914,22 @@ func (b *Blockchain) writeBatchAndUpdate(
 	}
 
 	return nil
+}
+
+// appendSyncBlockTimestampFields 为同步写入日志解码块头/父块链上时间戳（UTC），便于与 DPoS 调度日志比对。
+func appendSyncBlockTimestampFields(logArgs []interface{}, header, prevHeader *types.Header) []interface{} {
+	blockTS := time.Unix(int64(header.Timestamp), 0).UTC()
+	logArgs = append(logArgs,
+		"blockTimestampUnix", header.Timestamp,
+		"blockTimestampUTC", blockTS.Format("2006-01-02 15:04:05.000"),
+	)
+	if prevHeader != nil {
+		parentTS := time.Unix(int64(prevHeader.Timestamp), 0).UTC()
+		logArgs = append(logArgs,
+			"parentBlockNumber", prevHeader.Number,
+			"parentBlockTimestampUnix", prevHeader.Timestamp,
+			"parentBlockTimestampUTC", parentTS.Format("2006-01-02 15:04:05.000"),
+		)
+	}
+	return logArgs
 }

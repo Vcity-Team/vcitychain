@@ -660,8 +660,7 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 				"connectedBootsInPeerMap", trustedMeta.ConnectedBoots,
 				"reportingBootsUsedInQuorum", trustedMeta.ReportingBoots,
 				"maxClusterNearMax", trustedMeta.MaxClusterNearMax,
-				"maxClusterFloor", trustedMeta.MaxClusterFloor,
-				"note", "详见 syncer: trustedTip calculation detail")
+				"maxClusterFloor", trustedMeta.MaxClusterFloor)
 		}
 
 		forceBulk := syncTarget > localLatest

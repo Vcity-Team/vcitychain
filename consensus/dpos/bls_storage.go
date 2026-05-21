@@ -254,23 +254,9 @@ func (d *DPoS) persistBLSKeyToStakeStore(address types.Address, blsKeyBytes []by
 	// 只更新BLS公钥，保持其他字段不变
 	currentInfo.BlsPublicKey = blsKeyBytes
 
-	d.logger.Info("🔍 persistBLSKeyToStakeStore: 准备保存BLS公钥（保持其他字段不变）",
-		"address", address.String(),
-		"votingPower", currentInfo.VotingPower.String(),
-		"totalVotes", currentInfo.TotalVotes.String(),
-		"isActive", currentInfo.IsActive,
-		"blsKeyLength", len(blsKeyBytes))
-
-	// 保存到StakeStore
 	if err := d.state.StakeStore.setDelegateInfo(address, currentInfo, nil); err != nil {
 		return fmt.Errorf("failed to save BLS key to StakeStore: %w", err)
 	}
-
-	d.logger.Info("✅ BLS公钥已保存到StakeStore（其他字段保持不变）",
-		"address", address.String(),
-		"votingPower", currentInfo.VotingPower.String(),
-		"totalVotes", currentInfo.TotalVotes.String(),
-		"blsKeyLength", len(blsKeyBytes))
 
 	return nil
 }

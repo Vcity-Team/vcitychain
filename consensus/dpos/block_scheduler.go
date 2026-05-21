@@ -380,17 +380,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		lastWallProduce := r.lastBlockProductionTime
 		r.lock.RUnlock()
 		earliest := r.config.blockScheduler.EarliestProduceTime(lastWallProduce)
-		nowUTC := time.Now().UTC()
-		if nowUTC.Before(earliest) {
-			r.logOnceWithInterval("should_produce_wall_pace", 5*time.Second, "info",
-				"⏳ [出块调度] 等待出块间隔（链上调度时间或本地上次出块/链尖前进+blockWindow）",
-				"earliestProduceUTC", earliest.Format("2006-01-02 15:04:05.000"),
-				"chainSchedulingUTC", r.config.blockScheduler.effectiveTimeForNextBlock().Format("2006-01-02 15:04:05.000"),
-				"nowUTC", nowUTC.Format("2006-01-02 15:04:05.000"),
-				"waitRemaining", earliest.Sub(nowUTC).String(),
-				"blockWindow", r.config.blockScheduler.GetBlockWindow().String(),
-				"localBlockNumber", local,
-				"note", "日志时间为 UTC；与 +0800 墙钟相差 8h")
+		if time.Now().UTC().Before(earliest) {
 			return false
 		}
 	}
