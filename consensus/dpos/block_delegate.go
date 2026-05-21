@@ -245,12 +245,14 @@ func (r *dposRuntime) networkLatestHeaderForScheduling() *types.Header {
 		return nil
 	}
 	netNum := r.getNetworkLatestBlockNumber()
-	if netNum == 0 || netNum < local.Number {
-		// gossip/门禁可能短暂低于本地链尖；不可用更低高度的块做 ref+window，否则下一块时间戳会 ≤ 父块。
+	if netNum == 0 {
 		return local
 	}
 	if h, ok := r.config.blockchain.GetHeaderByNumber(netNum); ok && h != nil {
 		return h
+	}
+	if netNum <= local.Number {
+		return local
 	}
 	return local
 }

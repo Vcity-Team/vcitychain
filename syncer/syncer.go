@@ -95,8 +95,10 @@ type syncer struct {
 	pullDistrustUntil map[peer.ID]time.Time
 	pullFailStreak    map[peer.ID]int
 
-	// trustedBootnodeIDs：创世 bootnodes 的 peer.ID，用于 bootnode 共识链尖（不读 dpos_bootstrap_rpc 高度）。
+	// trustedBootnodeIDs：创世 bootnodes 的 peer.ID，用于 bootnode 共识链尖。
 	trustedBootnodeIDs map[peer.ID]struct{}
+	// trustedBootJSONRPC：peer.ID -> HTTP JSON-RPC（boot multiaddr IP + 本节点 jsonrpc_addr 端口）。
+	trustedBootJSONRPC map[peer.ID]string
 	lastLoggedTrustedTip uint64
 	trustedTipLogMu      sync.Mutex
 	lastTrustedTipLogAt  time.Time
@@ -131,10 +133,14 @@ func NewSyncer(
 	blockTimeout time.Duration,
 	consensusSwitchHeight uint64,
 	trustedBootnodeIDs []peer.ID,
+	trustedBootJSONRPC map[peer.ID]string,
 ) Syncer {
 	bootSet := make(map[peer.ID]struct{}, len(trustedBootnodeIDs))
 	for _, id := range trustedBootnodeIDs {
 		bootSet[id] = struct{}{}
+	}
+	if trustedBootJSONRPC == nil {
+		trustedBootJSONRPC = make(map[peer.ID]string)
 	}
 	s := &syncer{
 		logger:          logger.Named(syncerName),
@@ -161,10 +167,18 @@ func NewSyncer(
 		pullFailStreak:    make(map[peer.ID]int),
 
 		trustedBootnodeIDs: bootSet,
+		trustedBootJSONRPC: trustedBootJSONRPC,
 	}
 	if len(bootSet) > 0 {
-		logger.Named(syncerName).Info("syncer: trusted canonical tip source = genesis bootnodes (max-cluster K=2, no bootstrap RPC height)",
-			"bootnodeCount", len(bootSet))
+		rpcBoots := 0
+		for id := range bootSet {
+			if trustedBootJSONRPC[id] != "" {
+				rpcBoots++
+			}
+		}
+		logger.Named(syncerName).Info("syncer: trusted canonical tip = boot multiaddr IP + jsonrpc_addr port, eth_blockNumber only",
+			"bootnodeCount", len(bootSet),
+			"bootJsonRpcEndpoints", rpcBoots)
 	}
 	return s
 }

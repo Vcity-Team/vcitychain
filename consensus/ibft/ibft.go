@@ -198,6 +198,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 			time.Duration(params.BlockTime)*3*time.Second,
 			forkManager.GetConsensusSwitchHeight(), // 传入正确的共识切换高度
 			nil,
+			nil,
 		),
 		secretsManager: params.SecretsManager,
 		Grpc:           params.Grpc,

@@ -95,12 +95,11 @@ type BlockBuilder struct {
 
 // Reset initializes block builder before adding transactions and actual block building
 func (b *BlockBuilder) Reset() error {
-	// 与 BlockScheduler.effectiveTimeForNextBlock 一致，且必须严格大于父块时间戳。
-	parentTime := time.Unix(int64(b.params.Parent.Timestamp), 0).UTC()
-	parentFloor := parentTime.Add(b.params.BlockTime)
+	// 与 BlockScheduler.effectiveTimeForNextBlock 一致：网络最新块时间+blockWindow（A 方案）。
 	headerTime := b.params.SchedulingTimestamp.UTC()
-	if headerTime.IsZero() || !headerTime.After(parentTime) {
-		headerTime = parentFloor
+	if headerTime.IsZero() {
+		parentTime := time.Unix(int64(b.params.Parent.Timestamp), 0).UTC()
+		headerTime = parentTime.Add(b.params.BlockTime)
 	}
 
 	b.header = &types.Header{

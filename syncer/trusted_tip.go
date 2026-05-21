@@ -1,6 +1,7 @@
 package syncer
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"time"
@@ -73,39 +74,43 @@ func (s *syncer) GetTrustedCanonicalTip() uint64 {
 	return s.computeTrustedBootnodeTip(local).Tip
 }
 
-// fetchTrustedBootHeightsDirect 对每个创世 boot 优先 SyncPeer.GetStatus（读对端当前链尖），失败再回退 peerMap gossip。
+// fetchTrustedBootHeightsDirect 对每个创世 boot：genesis bootnodes 中的 IP + 本节点 jsonrpc_addr 端口，HTTP eth_blockNumber。
 func (s *syncer) fetchTrustedBootHeightsDirect(local uint64) ([]trustedBootPeerReport, []uint64) {
 	reports := make([]trustedBootPeerReport, 0, len(s.trustedBootnodeIDs))
 	heights := make([]uint64, 0, len(s.trustedBootnodeIDs))
-	rpcOK := 0
-	gossipFallback := 0
-
+	jsonRpcOK := 0
+	jsonRpcFail := 0
+	noURL := 0
 	for id := range s.trustedBootnodeIDs {
 		rep := trustedBootPeerReport{
 			PeerID:       id.String(),
 			HeightSource: heightSourceNone,
 		}
-		usedRPC := false
-		if s.syncPeerClient != nil {
-			if status, err := s.syncPeerClient.GetPeerStatus(id); err == nil && status != nil {
-				rep.InPeerMap = true
-				rep.Number = status.Number
-				rep.HeightSource = heightSourceGetStatus
-				s.putToPeerMap(status)
-				usedRPC = true
-				rpcOK++
-			}
+		rpcURL := s.trustedBootJSONRPC[id]
+		if rpcURL == "" {
+			noURL++
+			reports = append(reports, rep)
+			continue
 		}
-		if !usedRPC {
-			if v, ok := s.peerMap.Load(id.String()); ok {
-				if p, _ := v.(*NoForkPeer); p != nil {
-					rep.InPeerMap = true
-					rep.Number = p.Number
-					rep.HeightSource = heightSourceGossip
-					gossipFallback++
-				}
-			}
+		ctx, cancel := context.WithTimeout(context.Background(), bootJSONRPCTimeout)
+		n, err := fetchEthBlockNumber(ctx, rpcURL)
+		cancel()
+		if err != nil {
+			jsonRpcFail++
+			key := fmt.Sprintf("boot-jsonrpc-fail:%s", id.String())
+			s.logTrustedTipThrottled(key, func() {
+				s.logger.Warn("syncer: bootnode eth_blockNumber failed (no fallback)",
+					"peer", id.String(),
+					"jsonRpc", normalizeJSONRPCEndpoint(rpcURL),
+					"err", err)
+			})
+			reports = append(reports, rep)
+			continue
 		}
+		rep.InPeerMap = true
+		rep.Number = n
+		rep.HeightSource = heightSourceJSONRPC
+		jsonRpcOK++
 		if rep.InPeerMap {
 			if local > 0 && rep.Number > local+maxTrustedLeadOverLocal {
 				rep.SkippedOutlier = true
@@ -128,11 +133,12 @@ func (s *syncer) fetchTrustedBootHeightsDirect(local uint64) ([]trustedBootPeerR
 	sort.Slice(reports, func(i, j int) bool { return reports[i].PeerID < reports[j].PeerID })
 	sort.Slice(heights, func(i, j int) bool { return heights[i] < heights[j] })
 
-	s.logTrustedTipThrottled(fmt.Sprintf("direct:%d:%d:%d", rpcOK, gossipFallback, len(heights)), func() {
-		s.logger.Info("syncer: trusted boot heights collected (GetStatus first, gossip fallback)",
+	s.logTrustedTipThrottled(fmt.Sprintf("direct:%d:%d:%d", jsonRpcOK, jsonRpcFail, len(heights)), func() {
+		s.logger.Info("syncer: trusted boot heights collected (boot IP + jsonrpc_addr port, eth_blockNumber only)",
 			"configuredBootnodes", len(s.trustedBootnodeIDs),
-			"getStatusOK", rpcOK,
-			"gossipFallback", gossipFallback,
+			"jsonRpcOK", jsonRpcOK,
+			"jsonRpcFail", jsonRpcFail,
+			"noJsonRpcURL", noURL,
 			"heightsForQuorum", heights,
 			"localLatest", local)
 	})

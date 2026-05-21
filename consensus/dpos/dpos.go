@@ -291,7 +291,9 @@ type DPoSConfig struct {
 	// VoterTargetAPYBps 投票者目标年化收益率（基点，10000=100%，例如 500=5%）；为唯一需要配置的奖池相关经济参数
 	VoterTargetAPYBps uint64 `json:"voter_target_apy" yaml:"voter_target_apy"`
 	// BootstrapRPC 可选：启动时从 staking 合约读取 validators() 的 JSON-RPC 端点（用于无法在本地 Transition 中成功调用时的回退）
-	BootstrapRPC        string        `json:"dpos_bootstrap_rpc" yaml:"dpos_bootstrap_rpc"`
+	BootstrapRPC string `json:"dpos_bootstrap_rpc" yaml:"dpos_bootstrap_rpc"`
+	// JSONRPCListen 本节点 jsonrpc_addr（server RPCEndpoint）；trusted tip 用 boot multiaddr IP + 该端口。
+	JSONRPCListen       string        `json:"-"`
 	GenesisRootAccount  types.Address `json:"genesisRootAccount" yaml:"genesisRootAccount"`          // 从创世文件alloc中读取的根账户地址
 	ProposalVotePeriod  time.Duration `json:"proposalVotePeriod" yaml:"dpos_proposal_vote_period"`   // 提案表决周期
 	ProposalValidPeriod time.Duration `json:"proposalValidPeriod" yaml:"dpos_proposal_valid_period"` // 提案有效期
@@ -828,8 +830,10 @@ func (d *DPoS) newSyncerFromConfig() syncer.Syncer {
 		blockTimeout = 9 * time.Second
 	}
 	bootnodeIDs := []peer.ID(nil)
+	bootJSONRPC := map[peer.ID]string(nil)
 	if d.config.Network != nil {
 		bootnodeIDs = d.config.Network.BootnodePeerIDs()
+		bootJSONRPC = d.config.Network.BootnodeJSONRPCByPeerID(d.config.JSONRPCListen)
 	}
 	return syncer.NewSyncer(
 		d.config.Logger.Named("syncer"),
@@ -838,6 +842,7 @@ func (d *DPoS) newSyncerFromConfig() syncer.Syncer {
 		blockTimeout,
 		d.config.ConsensusSwitchHeight,
 		bootnodeIDs,
+		bootJSONRPC,
 	)
 }
 
@@ -1461,6 +1466,9 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	}
 	vcity_dpos.config.Network = params.Network
 	vcity_dpos.config.Executor = params.Executor
+	if params.Config != nil {
+		vcity_dpos.config.JSONRPCListen = params.Config.RPCEndpoint
+	}
 
 	vcity_dpos.logger.Debug("Config details",
 		"ConfigPath", params.Config.Path,

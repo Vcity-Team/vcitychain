@@ -228,38 +228,13 @@ func (bs *BlockScheduler) GetGenesisTime() time.Time {
 	return bs.genesisTime
 }
 
-// effectiveTimeForNextBlock 下一区块头时间戳：max(调度参照.Timestamp+blockWindow, 本地链尖.Timestamp+blockWindow)。
-// 保证严格大于出块父块时间戳（避免 ref 取到低于本地链尖的高度时 ref+window == parent.T）。
+// effectiveTimeForNextBlock 下一区块头时间戳：schedulingReferenceHeader.Timestamp + blockWindow。
 func (bs *BlockScheduler) effectiveTimeForNextBlock() time.Time {
-	var chainDue time.Time
 	ref := bs.schedulingReferenceHeader()
 	if ref == nil {
-		chainDue = time.Now().UTC()
-	} else {
-		chainDue = time.Unix(int64(ref.Timestamp), 0).UTC().Add(bs.blockWindow)
+		return time.Now().UTC()
 	}
-
-	if bs.blockchain != nil {
-		if local := bs.blockchain.Header(); local != nil {
-			parentFloor := time.Unix(int64(local.Timestamp), 0).UTC().Add(bs.blockWindow)
-			if parentFloor.After(chainDue) {
-				bs.logOnceWithInterval("effective_time_parent_floor", 30*time.Second, "debug",
-					"📐 [出块调度] 调度时间抬升至本地链尖+blockWindow（ref 低于链尖或时间偏旧）",
-					"localNumber", local.Number,
-					"localTimestampUTC", time.Unix(int64(local.Timestamp), 0).UTC().Format("2006-01-02 15:04:05.000"),
-					"refNumber", func() uint64 {
-						if ref != nil {
-							return ref.Number
-						}
-						return 0
-					}(),
-					"chainDueUTC", chainDue.Format("2006-01-02 15:04:05.000"),
-					"parentFloorUTC", parentFloor.Format("2006-01-02 15:04:05.000"))
-				return parentFloor
-			}
-		}
-	}
-	return chainDue
+	return time.Unix(int64(ref.Timestamp), 0).UTC().Add(bs.blockWindow)
 }
 
 // EarliestProduceTime 本节点最早可开始下一轮出块的 UTC 时刻：
