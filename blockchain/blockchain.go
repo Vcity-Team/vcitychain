@@ -1031,14 +1031,16 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 		"stateTxs", stateTxCount, // 状态交易数量
 	}
 
-	if prevHeader, ok := b.GetHeaderByNumber(header.Number - 1); ok {
-		diff := header.Timestamp - prevHeader.Timestamp
-		logArgs = append(logArgs, "generation_time_in_seconds", diff)
-		if source == "syncer" {
-			logArgs = appendSyncBlockTimestampFields(logArgs, header, prevHeader)
-		}
-	} else if source == "syncer" {
-		logArgs = appendSyncBlockTimestampFields(logArgs, header, nil)
+	var prevHeader *types.Header
+	if ph, ok := b.GetHeaderByNumber(header.Number - 1); ok {
+		prevHeader = ph
+		logArgs = append(logArgs, "generation_time_in_seconds", header.Timestamp-prevHeader.Timestamp)
+	}
+	if source == "syncer" || source == "consensus" {
+		logArgs = appendBlockTimestampLogFields(logArgs, header, prevHeader)
+	}
+	if source == "syncer" {
+		logArgs = appendBlockMinerLogField(logArgs, header)
 	}
 
 	// 根据 source 区分本地生产和同步区块的日志消息
@@ -1916,8 +1918,8 @@ func (b *Blockchain) writeBatchAndUpdate(
 	return nil
 }
 
-// appendSyncBlockTimestampFields 为同步写入日志解码块头/父块链上时间戳（UTC），便于与 DPoS 调度日志比对。
-func appendSyncBlockTimestampFields(logArgs []interface{}, header, prevHeader *types.Header) []interface{} {
+// appendBlockTimestampLogFields 解码块头/父块链上时间戳（UTC），便于与 DPoS 调度日志比对。
+func appendBlockTimestampLogFields(logArgs []interface{}, header, prevHeader *types.Header) []interface{} {
 	blockTS := time.Unix(int64(header.Timestamp), 0).UTC()
 	logArgs = append(logArgs,
 		"blockTimestampUnix", header.Timestamp,
@@ -1932,4 +1934,13 @@ func appendSyncBlockTimestampFields(logArgs []interface{}, header, prevHeader *t
 		)
 	}
 	return logArgs
+}
+
+// appendBlockMinerLogField 记录块头 Miner（出块者地址）。
+func appendBlockMinerLogField(logArgs []interface{}, header *types.Header) []interface{} {
+	miner := ""
+	if len(header.Miner) > 0 {
+		miner = types.BytesToAddress(header.Miner).String()
+	}
+	return append(logArgs, "miner", miner)
 }
