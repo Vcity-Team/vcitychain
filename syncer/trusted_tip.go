@@ -399,8 +399,9 @@ func (s *syncer) isTrustedBootnode(id peer.ID) bool {
 	return ok
 }
 
-// pickSyncPeerForTarget chooses a peer to bulk-sync from, preferring connected bootnodes that can serve blocks.
-func (s *syncer) pickSyncPeerForTarget(local, trusted uint64, skip map[peer.ID]bool) *NoForkPeer {
+// pickSyncPeerForTarget chooses a peer to bulk-sync from.
+// When forceBulk (behind trusted boot RPC tip): only genesis bootnodes with P2P Number > local; no anyBoot/BestPeer fallback.
+func (s *syncer) pickSyncPeerForTarget(local, syncTarget uint64, skip map[peer.ID]bool, forceBulk bool) *NoForkPeer {
 	var bestBoot *NoForkPeer
 
 	s.peerMap.Range(func(_ interface{}, value interface{}) bool {
@@ -420,19 +421,8 @@ func (s *syncer) pickSyncPeerForTarget(local, trusted uint64, skip map[peer.ID]b
 		return bestBoot
 	}
 
-	var anyBoot *NoForkPeer
-	s.peerMap.Range(func(_ interface{}, value interface{}) bool {
-		p, _ := value.(*NoForkPeer)
-		if p == nil || skip[p.ID] || !s.isTrustedBootnode(p.ID) {
-			return true
-		}
-		if anyBoot == nil || p.Number > anyBoot.Number {
-			anyBoot = p
-		}
-		return true
-	})
-	if trusted > local && anyBoot != nil {
-		return anyBoot
+	if forceBulk {
+		return nil
 	}
 
 	return s.peerMap.BestPeer(s.mergeSkipsForBestPeer(skip))

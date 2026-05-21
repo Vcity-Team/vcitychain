@@ -693,8 +693,21 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 
 		// pick one best peer（fork/未完成 的 skip 与「拉取反复失败」的不信任 合并，但不信任不触发「无 best 时全体 Disconnect」）
 		pullDistrustActive := len(s.pullDistrustSkipMap())
-		bestPeer := s.pickSyncPeerForTarget(localLatest, syncTarget, skipList)
+		bestPeer := s.pickSyncPeerForTarget(localLatest, syncTarget, skipList, forceBulk)
 		if bestPeer == nil {
+			if forceBulk && trustedTip > localLatest {
+				s.logSyncInfoOnLocalStall(localLatest, func() {
+					s.logger.Info("syncer: trusted tip ahead but no boot P2P peer can serve local+1 yet, will retry",
+						"localLatest", localLatest,
+						"trustedTip", trustedTip,
+						"syncTarget", syncTarget,
+						"requiredMinPeerNumber", localLatest+1)
+				})
+				s.wakeSyncAfter(retryBackoff, "trusted_ahead_no_serving_peer",
+					"localLatest", localLatest,
+					"trustedTip", trustedTip)
+				continue
+			}
 			// 所有候选 peer 均被跳过（开流失败等）：主动断开这些 peer 促其重连，退避后清空 skipList 再试
 			if len(skipList) > 0 {
 				for pid := range skipList {
@@ -713,24 +726,21 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			continue
 		}
 
-		peerTarget := bestPeer.Number
-		if forceBulk {
-			if peerTarget < syncTarget {
-				peerTarget = syncTarget
-			}
-			if peerTarget <= localLatest {
-				s.logger.Info("syncer: trusted tip ahead but no peer can serve blocks yet, will retry",
-					"localLatest", localLatest,
-					"trustedTip", trustedTip,
-					"syncTarget", syncTarget,
-					"bestPeer", bestPeer.ID.String(),
-					"peerNumber", bestPeer.Number)
+		if bestPeer.Number <= localLatest {
+			if forceBulk {
+				s.logSyncInfoOnLocalStall(localLatest, func() {
+					s.logger.Info("syncer: trusted tip ahead but selected boot cannot serve local+1, will retry",
+						"localLatest", localLatest,
+						"trustedTip", trustedTip,
+						"syncTarget", syncTarget,
+						"bestPeer", bestPeer.ID.String(),
+						"peerNumber", bestPeer.Number)
+				})
 				s.wakeSyncAfter(retryBackoff, "trusted_ahead_no_serving_peer",
 					"localLatest", localLatest,
 					"trustedTip", trustedTip)
 				continue
 			}
-		} else if bestPeer.Number <= localLatest {
 			s.logSyncInfoOnLocalStall(localLatest, func() {
 				s.logger.Info("syncer: best peer not ahead of local, self-wake to avoid stall on unchanged peer heights",
 					"peer", bestPeer.ID.String(),
@@ -744,6 +754,12 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 				"peerNumber", bestPeer.Number,
 				"localLatest", localLatest)
 			continue
+		}
+
+		// 只拉到 peer 实际宣称的高度；勿将 bulkTarget 抬到 syncTarget 若 peerNumber 更低（避免对 15911800 空拉 15911801）。
+		peerTarget := bestPeer.Number
+		if forceBulk && syncTarget < peerTarget {
+			peerTarget = syncTarget
 		}
 
 		s.logSyncInfoOnLocalStall(localLatest, func() {

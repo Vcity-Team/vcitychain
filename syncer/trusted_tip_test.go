@@ -1,6 +1,7 @@
 package syncer
 
 import (
+	"math/big"
 	"testing"
 
 	"github.com/hashicorp/go-hclog"
@@ -35,6 +36,35 @@ func TestTryLocalMaxBootAgree(t *testing.T) {
 	_, ok = tryLocalMaxBootAgree(15905800, 15905892, 1, 6)
 	require.False(t, ok)
 }
+
+func TestPickSyncPeerForTarget_ForceBulkBootOnly(t *testing.T) {
+	bootAhead := peer.ID("boot-ahead")
+	bootStale := peer.ID("boot-stale")
+	nonBoot := peer.ID("non-boot-high")
+
+	s := &syncer{
+		logger:             hclog.NewNullLogger(),
+		peerMap:            new(PeerMap),
+		trustedBootnodeIDs: map[peer.ID]struct{}{bootAhead: {}, bootStale: {}},
+	}
+	s.peerMap.Put(
+		&NoForkPeer{ID: bootAhead, Number: 100, Distance: bigZero()},
+		&NoForkPeer{ID: bootStale, Number: 99, Distance: bigZero()},
+		&NoForkPeer{ID: nonBoot, Number: 200, Distance: bigZero()},
+	)
+
+	p := s.pickSyncPeerForTarget(99, 102, nil, true)
+	require.NotNil(t, p)
+	require.Equal(t, bootAhead, p.ID)
+
+	require.Nil(t, s.pickSyncPeerForTarget(100, 102, nil, true))
+
+	p = s.pickSyncPeerForTarget(99, 102, nil, false)
+	require.NotNil(t, p)
+	require.Equal(t, nonBoot, p.ID)
+}
+
+func bigZero() *big.Int { return big.NewInt(0) }
 
 func TestComputeTrustedBootnodeTip_SingleBootFallback(t *testing.T) {
 	b1 := peer.ID("bootnode-1")
