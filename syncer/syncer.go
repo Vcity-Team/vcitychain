@@ -756,6 +756,9 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 					"trustedTip", trustedTip)
 				continue
 			}
+			if s.tryAdvancePeerViewForNextBlock(localLatest) {
+				continue
+			}
 			s.logSyncInfoOnLocalStall(localLatest, func() {
 				s.logger.Info("syncer: best peer not ahead of local, self-wake to avoid stall on unchanged peer heights",
 					"peer", bestPeer.ID.String(),

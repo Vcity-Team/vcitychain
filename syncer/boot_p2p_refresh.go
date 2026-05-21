@@ -80,3 +80,62 @@ func (s *syncer) refreshTrustedBootP2PStatus(local uint64, force bool) int {
 	}
 	return refreshed
 }
+
+func (s *syncer) invalidateTrustedBootHeightCache() {
+	s.trustedBootHeightMu.Lock()
+	s.trustedBootHeightCachedAt = time.Time{}
+	s.trustedBootHeightMu.Unlock()
+}
+
+// refreshBootP2PWhenCaughtUp 在 best_peer_not_ahead（P2P 高度<=local）时刷新 genesis boot GetStatus。
+// force 时对所有 P2P<=local 的 boot 拉状态；否则仅 RPC 已高于 local 的 boot（与 refreshTrustedBootP2PStatus 一致）。
+func (s *syncer) refreshBootP2PWhenCaughtUp(local uint64, force bool) int {
+	if len(s.trustedBootnodeIDs) == 0 {
+		return 0
+	}
+	s.lastBootP2PRefreshMu.Lock()
+	if time.Since(s.lastBootP2PRefreshAt) < bootP2PRefreshMinInterval {
+		s.lastBootP2PRefreshMu.Unlock()
+		return 0
+	}
+	s.lastBootP2PRefreshAt = time.Now()
+	s.lastBootP2PRefreshMu.Unlock()
+
+	refreshed := 0
+	for id := range s.trustedBootnodeIDs {
+		before := uint64(0)
+		if v, exists := s.peerMap.Load(id.String()); exists {
+			if p, _ := v.(*NoForkPeer); p != nil {
+				if p.Number > local {
+					continue
+				}
+				before = p.Number
+			}
+		}
+		rpcH, hasRPC := s.getTrustedBootRPCHeight(id)
+		if !force {
+			if !hasRPC || rpcH <= local {
+				continue
+			}
+		}
+		status, err := s.syncPeerClient.GetPeerStatus(id)
+		if err != nil {
+			continue
+		}
+		if status == nil {
+			continue
+		}
+		s.putToPeerMap(status)
+		if status.Number > before || status.Number > local {
+			refreshed++
+		}
+	}
+	return refreshed
+}
+
+// tryAdvancePeerViewForNextBlock 追平后等待 local+1：刷新 boot RPC 缓存并对所有 P2P<=local 的 boot GetStatus。
+func (s *syncer) tryAdvancePeerViewForNextBlock(local uint64) bool {
+	s.invalidateTrustedBootHeightCache()
+	s.collectTrustedBootHeights(local)
+	return s.refreshBootP2PWhenCaughtUp(local, true) > 0
+}
