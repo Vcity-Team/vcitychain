@@ -208,8 +208,14 @@ func (d *DPoS) GetSuperRepresentatives() (validator.AccountSet, error) {
 	return d.GetSortedValidatorsWithLimitFilterFaulty()
 }
 
+// isGenesisValidatorProductionExempt 创世验证者（含 0x1b05c37c 等 bootstrap 集合）在出块轮值中
+// 不因 isFaulty、双签等严重故障标记被剔除，保证各节点 leaderSlot%N 的 N 一致。
+func (d *DPoS) isGenesisValidatorProductionExempt(address types.Address) bool {
+	return d.IsGenesisValidator(address)
+}
+
 // GetSortedValidatorsWithLimitFilterFaulty 获取排序后的验证者集合（带限制，并过滤故障验证者）
-// 用于出块相关逻辑，确保故障节点不会参与出块
+// 用于出块相关逻辑；非创世验证者被标故障时剔除，创世验证者始终保留在 DPoSValidatorsCount 名额内。
 func (d *DPoS) GetSortedValidatorsWithLimitFilterFaulty() (validator.AccountSet, error) {
 	// 先获取排序和截取后的验证者集合
 	allValidators, err := d.GetSortedValidatorsWithLimit()
@@ -221,9 +227,10 @@ func (d *DPoS) GetSortedValidatorsWithLimitFilterFaulty() (validator.AccountSet,
 		return validator.AccountSet{}, nil
 	}
 
-	// 过滤掉故障验证者
+	// 过滤掉故障验证者（创世验证者豁免）
 	activeValidators := make(validator.AccountSet, 0, len(allValidators))
 	faultyCount := 0
+	genesisFaultExempt := 0
 
 	for _, v := range allValidators {
 		// 检查验证者的故障状态
@@ -234,19 +241,46 @@ func (d *DPoS) GetSortedValidatorsWithLimitFilterFaulty() (validator.AccountSet,
 				isFaulty = faultValue
 			}
 		}
+		if !isFaulty && d.faultyValidators != nil && d.faultyValidators[v.Address] {
+			isFaulty = true
+		}
+
+		if isFaulty && d.isGenesisValidatorProductionExempt(v.Address) {
+			genesisFaultExempt++
+			exemptReason := ""
+			if faultInfo != nil {
+				if r, ok := faultInfo["reason"].(string); ok {
+					exemptReason = r
+				}
+			}
+			d.logOnceWithInterval("genesis_fault_exempt_"+v.Address.String(), 60*time.Second, "info",
+				"ℹ️ [GetSortedValidatorsWithLimitFilterFaulty] 创世验证者保留出块候选（忽略故障标记）",
+				"address", v.Address.String(),
+				"reason", exemptReason)
+			activeValidators = append(activeValidators, v)
+			continue
+		}
 
 		if isFaulty {
 			faultyCount++
-		} else {
-			activeValidators = append(activeValidators, v)
+			continue
 		}
+		activeValidators = append(activeValidators, v)
+	}
+
+	if genesisFaultExempt > 0 {
+		d.logOnceWithInterval("genesis_fault_exempt_summary", 60*time.Second, "debug",
+			"🔍 [GetSortedValidatorsWithLimitFilterFaulty] 创世故障豁免统计",
+			"genesisFaultExempt", genesisFaultExempt,
+			"faultyFiltered", faultyCount,
+			"activeCount", len(activeValidators))
 	}
 
 	// 注意：过滤后保持原有排序（权重倒序，地址升序），因为已经排序过了
 	return activeValidators, nil
 }
 
-// productionEligibilityCheckerBase 活跃、有票权、已标故障（不含漏轮临时跳过）。
+// productionEligibilityCheckerBase 活跃、有票权；非创世验证者需未标故障（创世验证者豁免故障标记）。
 func (d *DPoS) productionEligibilityCheckerBase(set validator.AccountSet) func(types.Address) bool {
 	metaByAddr := make(map[types.Address]*validator.ValidatorMetadata, len(set))
 	for _, v := range set {
@@ -261,6 +295,9 @@ func (d *DPoS) productionEligibilityCheckerBase(set validator.AccountSet) func(t
 		}
 		if !meta.IsActive || meta.VotingPower == nil || meta.VotingPower.Sign() <= 0 {
 			return false
+		}
+		if d.isGenesisValidatorProductionExempt(addr) {
+			return true
 		}
 		if faultInfo := d.getValidatorFaultInfo(addr); faultInfo != nil {
 			if faultValue, ok := faultInfo["isFaulty"].(bool); ok && faultValue {
