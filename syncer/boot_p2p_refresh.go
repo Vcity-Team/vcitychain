@@ -76,14 +76,6 @@ func (s *syncer) refreshTrustedBootP2PStatus(local uint64, force bool) int {
 		s.putToPeerMap(status)
 		if status.Number > before {
 			refreshed++
-			s.logTrustedTipThrottled("boot-p2p-refresh:"+id.String(), func() {
-				s.logger.Info("syncer: boot P2P height refreshed from GetStatus (RPC was ahead)",
-					"peer", id.String(),
-					"rpcHeight", rpcH,
-					"p2pBefore", before,
-					"p2pAfter", status.Number,
-					"localLatest", local)
-			})
 		}
 	}
 	return refreshed
