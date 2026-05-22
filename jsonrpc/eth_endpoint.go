@@ -51,6 +51,9 @@ type ethBlockchainStore interface {
 	// GetHeaderByNumber gets a header using the provided number
 	GetHeaderByNumber(uint64) (*types.Header, bool)
 
+	// CalculateBaseFee returns the expected base fee for a child of parent.
+	CalculateBaseFee(parent *types.Header) uint64
+
 	// GetBlockByHash gets a block using the provided hash
 	GetBlockByHash(hash types.Hash, full bool) (*types.Block, bool)
 
@@ -143,7 +146,7 @@ func (e *Eth) GetBlockByNumber(number BlockNumber, fullTx bool) (interface{}, er
 		return nil, err
 	}
 
-	return toBlock(block, fullTx), nil
+	return toBlockWithDisplayBaseFee(block, fullTx, displayBaseFeeForHeader(e.store, block.Header)), nil
 }
 
 // GetBlockByHash returns information about a block by hash
@@ -157,7 +160,7 @@ func (e *Eth) GetBlockByHash(hash types.Hash, fullTx bool) (interface{}, error) 
 		return nil, err
 	}
 
-	return toBlock(block, fullTx), nil
+	return toBlockWithDisplayBaseFee(block, fullTx, displayBaseFeeForHeader(e.store, block.Header)), nil
 }
 
 func (e *Eth) filterExtra(block *types.Block) error {
@@ -389,7 +392,9 @@ func (e *Eth) getGasPrice() (uint64, error) {
 			return 0, err
 		}
 
-		return common.Max(e.priceLimit, priorityFee.Uint64()+e.store.GetBaseFee()), nil
+		total := priorityFee.Uint64() + e.store.GetBaseFee()
+		total = common.Max(e.priceLimit, total)
+		return capLondonRPCGasPrice(total), nil
 	}
 
 	// Fetch average gas price in uint64

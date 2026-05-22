@@ -268,3 +268,10 @@ func (b *backendMock) Config() *chain.Params {
 		Forks:   chain.AllForksEnabled,
 	}
 }
+
+func (b *backendMock) CalculateBaseFee(parent *types.Header) uint64 {
+	if parent == nil || parent.BaseFee == 0 {
+		return chain.GenesisBaseFee
+	}
+	return parent.BaseFee
+}

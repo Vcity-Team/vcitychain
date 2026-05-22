@@ -140,6 +140,10 @@ func (b *block) Copy() *block {
 }
 
 func toBlock(b *types.Block, fullTx bool) *block {
+	return toBlockWithDisplayBaseFee(b, fullTx, b.Header.BaseFee)
+}
+
+func toBlockWithDisplayBaseFee(b *types.Block, fullTx bool, displayBaseFee uint64) *block {
 	h := b.Header
 	res := &block{
 		ParentHash:      h.ParentHash,
@@ -162,12 +166,12 @@ func toBlock(b *types.Block, fullTx bool) *block {
 		Hash:            h.Hash,
 		Transactions:    []transactionOrHash{},
 		Uncles:          []types.Hash{},
-		BaseFee:         argUint64(h.BaseFee),
+		BaseFee:         argUint64(displayBaseFee),
 	}
 
 	for idx, txn := range b.Transactions {
 		if fullTx {
-			txn.GasPrice = txn.GetGasPrice(b.Header.BaseFee)
+			txn.GasPrice = txn.GetGasPrice(displayBaseFee)
 			res.Transactions = append(
 				res.Transactions,
 				toTransaction(

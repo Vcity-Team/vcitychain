@@ -49,6 +49,7 @@ type Blockchain interface {
 	GetBlockByHash(hash types.Hash, full bool) (*types.Block, bool)
 	Header() *types.Header
 	Config() *chain.Params
+	CalculateBaseFee(parent *types.Header) uint64
 }
 
 // GasStore interface is providing functions regarding gas and fees
@@ -150,6 +151,11 @@ func (g *GasHelper) MaxPriorityFeePerGas() (*big.Int, error) {
 		blockTxPrices := make([]*big.Int, 0)
 
 		for _, tx := range txSorter.txs {
+			// Legacy gasPrice must not drive EIP-1559 priority fee (avoids 800+ Gwei spikes on empty windows).
+			if tx.Type != types.DynamicFeeTx {
+				continue
+			}
+
 			tip := tx.EffectiveGasTip(baseFee)
 
 			if tip.Cmp(g.ignorePrice) == -1 {
@@ -174,20 +180,7 @@ func (g *GasHelper) MaxPriorityFeePerGas() (*big.Int, error) {
 		}
 
 		if len(blockTxPrices) == 0 {
-			// 空块时添加衰减后的价格，促进 PriorityFee 下降
-			if lastPrice.Cmp(big.NewInt(0)) > 0 {
-				// 使用 lastPrice 的一部分（例如 50%），促进下降
-				decayedPrice := new(big.Int).Div(lastPrice, big.NewInt(2))
-				// 但不要低于最小值（例如 1 Gwei）
-				minTip := new(big.Int).SetUint64(1e9) // 1 Gwei
-				if decayedPrice.Cmp(minTip) < 0 {
-					decayedPrice = minTip
-				}
-				blockTxPrices = append(blockTxPrices, decayedPrice)
-			} else {
-				// 如果 lastPrice 为 0，使用最小 tip
-				blockTxPrices = append(blockTxPrices, new(big.Int).SetUint64(1e9))
-			}
+			blockTxPrices = append(blockTxPrices, new(big.Int).SetUint64(chain.GenesisBaseFee))
 		}
 
 		// add the block prices to the slice of all prices
@@ -235,6 +228,11 @@ func (g *GasHelper) MaxPriorityFeePerGas() (*big.Int, error) {
 		// if price is larger than the configured max price
 		// return max price
 		price = new(big.Int).Set(g.maxPrice)
+	}
+
+	walletCap := new(big.Int).SetUint64(chain.GenesisBaseFee)
+	if price.Cmp(walletCap) > 0 {
+		price = walletCap
 	}
 
 	// cache the calculated price and header hash

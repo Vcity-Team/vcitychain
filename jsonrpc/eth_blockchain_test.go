@@ -655,6 +655,13 @@ func (m *mockBlockStore) GetBaseFee() uint64 {
 	return m.baseFee
 }
 
+func (m *mockBlockStore) CalculateBaseFee(parent *types.Header) uint64 {
+	if m.baseFee > 0 {
+		return m.baseFee
+	}
+	return chain.GenesisBaseFee
+}
+
 func (m *mockBlockStore) GetForksInTime(block uint64) chain.ForksInTime {
 	return m.forksInTime
 }

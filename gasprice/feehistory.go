@@ -107,7 +107,7 @@ func (g *GasHelper) FeeHistory(blockCount uint64, newestBlock uint64, rewardPerc
 			return &FeeHistoryReturn{0, nil, nil, nil}, ErrBlockNotFound
 		}
 
-		baseFeePerGas[i-oldestBlock] = block.Header.BaseFee
+		baseFeePerGas[i-oldestBlock] = g.effectiveHeaderBaseFee(block.Header)
 		gasUsedRatio[i-oldestBlock] = float64(block.Header.GasUsed) / float64(block.Header.GasLimit)
 
 		if math.IsNaN(gasUsedRatio[i-oldestBlock]) {
@@ -130,7 +130,8 @@ func (g *GasHelper) FeeHistory(blockCount uint64, newestBlock uint64, rewardPerc
 		}
 
 		sorter := make([]*txGasAndReward, len(block.Transactions))
-		baseFee := new(big.Int).SetUint64(block.Header.BaseFee)
+		blockBaseFee := g.effectiveHeaderBaseFee(block.Header)
+		baseFee := new(big.Int).SetUint64(blockBaseFee)
 
 		for j, tx := range block.Transactions {
 			cost := tx.Cost()
@@ -161,13 +162,18 @@ func (g *GasHelper) FeeHistory(blockCount uint64, newestBlock uint64, rewardPerc
 
 		blockFees := &processedFees{
 			reward:       reward[i-oldestBlock],
-			baseFee:      block.Header.BaseFee,
+			baseFee:      blockBaseFee,
 			gasUsedRatio: gasUsedRatio[i-oldestBlock],
 		}
 		g.historyCache.Add(cacheKey, blockFees)
 	}
 
-	baseFeePerGas[blockCount] = g.backend.Header().BaseFee
+	newestHeader, ok := g.backend.GetBlockByNumber(newestBlock, false)
+	if ok && newestHeader != nil {
+		baseFeePerGas[blockCount] = g.backend.CalculateBaseFee(newestHeader.Header)
+	} else {
+		baseFeePerGas[blockCount] = g.backend.CalculateBaseFee(g.backend.Header())
+	}
 
 	return &FeeHistoryReturn{oldestBlock, baseFeePerGas, gasUsedRatio, reward}, nil
 }

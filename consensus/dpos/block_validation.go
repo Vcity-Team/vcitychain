@@ -84,6 +84,10 @@ func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift tim
 		return fmt.Errorf("failed to validate header for block %d. error = %w", header.Number, err)
 	}
 
+	if err := d.validateBaseFee(parent, header); err != nil {
+		return fmt.Errorf("failed to validate header for block %d. base fee error = %w", header.Number, err)
+	}
+
 	// decode the extra data
 	extra, err := GetDposExtra(header.ExtraData)
 	if err != nil {
@@ -108,6 +112,32 @@ func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift tim
 		return fmt.Errorf("block extraData validation failed: %w", err)
 	}
 	d.logger.Debug("区块extraData验证成功")
+	return nil
+}
+
+// validateBaseFee enforces EIP-1559 base fee on new segments while allowing legacy zero headers.
+func (d *DPoS) validateBaseFee(parent, header *types.Header) error {
+	if d.config.Blockchain == nil {
+		return nil
+	}
+
+	forks := d.config.Blockchain.Config().Forks.At(parent.Number)
+	if !forks.London {
+		return nil
+	}
+
+	expected := d.config.Blockchain.CalculateBaseFee(parent)
+
+	if header.BaseFee != 0 && header.BaseFee != expected {
+		return fmt.Errorf("invalid base fee: have %d, want %d", header.BaseFee, expected)
+	}
+
+	// After the chain carries a non-zero base fee, children must match the calculated fee.
+	if parent.BaseFee != 0 && header.BaseFee != expected {
+		return fmt.Errorf("invalid base fee: have %d, want %d", header.BaseFee, expected)
+	}
+
+	// Legacy segment: parent and child both stored 0 — keep syncing historical blocks.
 	return nil
 }
 
