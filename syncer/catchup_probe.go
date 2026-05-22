@@ -10,7 +10,6 @@ import (
 )
 
 const (
-	// catchUpProbeTimeout：RPC 已超前、P2P 仍滞后时，对 boot 单块 GetBlocks 的超时。
 	catchUpProbeTimeout = 2 * time.Second
 )
 
@@ -22,18 +21,8 @@ const (
 	catchUpProbeFork
 )
 
-// catchUpProbeAllowed P0-3：至少 quorum 链尖或 K 台 boot RPC 报告 nextNum，避免单台 RPC 虚高。
-func (s *syncer) catchUpProbeAllowed(nextNum uint64, meta trustedTipResult) bool {
-	if meta.Tip >= nextNum {
-		return true
-	}
-	if countHeightsAtLeast(meta.Heights, nextNum) >= trustedBootnodeQuorumK {
-		return true
-	}
-	return s.bootsRPCAtLeast(nextNum) >= trustedBootnodeQuorumK
-}
-
-func (s *syncer) orderedBootCatchUpCandidates(nextNum uint64) []peer.ID {
+// orderedBootCatchUpCandidates 全部 genesis boot，按 RPC 高度（无则 P2P）降序，逐个尝试拉块。
+func (s *syncer) orderedBootCatchUpCandidates() []peer.ID {
 	type cand struct {
 		id peer.ID
 		h  uint64
@@ -42,7 +31,6 @@ func (s *syncer) orderedBootCatchUpCandidates(nextNum uint64) []peer.ID {
 	for id := range s.trustedBootnodeIDs {
 		h, ok := s.getTrustedBootRPCHeight(id)
 		if !ok {
-			h = 0
 			if v, exists := s.peerMap.Load(id.String()); exists {
 				if p, _ := v.(*NoForkPeer); p != nil {
 					h = p.Number
@@ -59,21 +47,14 @@ func (s *syncer) orderedBootCatchUpCandidates(nextNum uint64) []peer.ID {
 	})
 	out := make([]peer.ID, 0, len(list))
 	for _, c := range list {
-		if c.h >= nextNum {
-			out = append(out, c.id)
-		}
-	}
-	if len(out) == 0 {
-		for _, c := range list {
-			out = append(out, c.id)
-		}
+		out = append(out, c.id)
 	}
 	return out
 }
 
-// tryCatchUpNextBlockFromBoot 从 genesis boot 拉取并验证写入 local+1（仅 trusted boot，完整 VerifyFinalizedBlock）。
+// tryCatchUpNextBlockFromBoot：trusted 已超前 → 对 boot 拉 local+1 并验块写入（不等待 P2P 宣称 > local）。
 func (s *syncer) tryCatchUpNextBlockFromBoot(local uint64, meta trustedTipResult, callback func(*types.FullBlock) bool) bool {
-	if !s.trustedQuorumIndicatesNextBlock(local, meta) {
+	if !trustedAheadOfLocal(meta, local) {
 		return false
 	}
 	hdr := s.blockchain.Header()
@@ -81,12 +62,9 @@ func (s *syncer) tryCatchUpNextBlockFromBoot(local uint64, meta trustedTipResult
 		return false
 	}
 	nextNum := local + 1
-	if !s.catchUpProbeAllowed(nextNum, meta) {
-		return false
-	}
 	localHash := hdr.Hash
 
-	for _, pid := range s.orderedBootCatchUpCandidates(nextNum) {
+	for _, pid := range s.orderedBootCatchUpCandidates() {
 		blk, class := s.fetchCanonicalNextForCatchUp(pid, nextNum, localHash, catchUpProbeTimeout)
 		switch class {
 		case catchUpProbeOK:
@@ -94,18 +72,20 @@ func (s *syncer) tryCatchUpNextBlockFromBoot(local uint64, meta trustedTipResult
 				continue
 			}
 			if s.ingestCatchUpBlock(pid, blk, callback) {
-				s.logger.Info("syncer: catch-up wrote next block from boot probe",
+				s.logger.Info("syncer: catch-up wrote next block from boot (trusted height ahead)",
 					"peer", pid.String(),
-					"blockNumber", nextNum)
+					"blockNumber", nextNum,
+					"trustedTip", meta.Tip,
+					"maxBootHeight", meta.MaxBootHeight)
 				s.notifyNewStatusEvent()
 				return true
 			}
 		case catchUpProbeFork:
-			s.logger.Debug("syncer: catch-up boot probe parent mismatch, try next boot",
+			s.logger.Debug("syncer: catch-up boot parent mismatch, try next boot",
 				"peer", pid.String(),
 				"nextHeight", nextNum)
 		default:
-			s.logger.Debug("syncer: catch-up boot probe did not deliver block",
+			s.logger.Debug("syncer: catch-up boot did not deliver block",
 				"peer", pid.String(),
 				"nextHeight", nextNum)
 		}
@@ -155,10 +135,6 @@ func (s *syncer) ingestCatchUpBlock(peerID peer.ID, block *types.Block, callback
 	}
 	if s.isConsensusSwitchHeight(block) {
 		if err := s.blockchain.WriteBlockWithoutConsensus(block, syncerName); err != nil {
-			s.logger.Debug("syncer: catch-up consensus switch write failed",
-				"peer", peerID.String(),
-				"blockNumber", block.Number(),
-				"err", err)
 			return false
 		}
 		fullBlock := &types.FullBlock{Block: block, Receipts: []*types.Receipt{}}
@@ -175,18 +151,10 @@ func (s *syncer) ingestCatchUpBlock(peerID peer.ID, block *types.Block, callback
 			err = nil
 		}
 		if err != nil {
-			s.logger.Debug("syncer: catch-up block verify failed",
-				"peer", peerID.String(),
-				"blockNumber", block.Number(),
-				"err", err)
 			return false
 		}
 	}
 	if err := s.blockchain.WriteFullBlock(fullBlock, syncerName); err != nil {
-		s.logger.Debug("syncer: catch-up block write failed",
-			"peer", peerID.String(),
-			"blockNumber", block.Number(),
-			"err", err)
 		return false
 	}
 	s.markBlockTransactionsProcessed(block.Transactions)
