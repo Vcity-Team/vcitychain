@@ -24,7 +24,10 @@ const (
 	preProduceProbeFail
 )
 
-// TryProbeCanonicalNextBeforeProduce 出块前从 P2P 拉取下一高度；若成功且可接到本地链尖，则返回 true（调用方应放弃本地构建）。
+// syncNoopBlockCallback Sync 主循环外的落块路径（出块前探测 ingest）不终止 Sync。
+func syncNoopBlockCallback(*types.FullBlock) bool { return false }
+
+// TryProbeCanonicalNextBeforeProduce 出块前从 P2P 拉取下一高度；校验通过后写入本地并返回 true（放弃本轮本地构建）。
 func (s *syncer) TryProbeCanonicalNextBeforeProduce(probeTimeout time.Duration) bool {
 	if probeTimeout <= 0 {
 		probeTimeout = DefaultPreProduceProbeTimeout
@@ -52,14 +55,31 @@ func (s *syncer) TryProbeCanonicalNextBeforeProduce(probeTimeout time.Duration) 
 		"candidateCount", len(candidates))
 
 	for _, pid := range candidates {
-		class, blockHash := s.probeOnePeerPreProduce(pid, nextNum, localHash, probeTimeout)
+		class, blk := s.probeOnePeerPreProduce(pid, nextNum, localHash, probeTimeout)
 		switch class {
 		case preProduceProbeOK:
-			s.logger.Info("⏸️ 【出块前 P2P 探测】放弃本轮本地构建（某 peer 已持有可衔接的下一高度）",
+			if blk == nil {
+				continue
+			}
+			if reason := s.preProduceProbeRejectReason(blk, localHash, localNum); reason != "" {
+				s.logger.Warn("pre-produce P2P probe: peer block failed header checks, try next peer",
+					"peer", pid.String(),
+					"nextHeight", nextNum,
+					"blockHash", blk.Hash().String(),
+					"reason", reason)
+				continue
+			}
+			if s.ingestCatchUpBlock(pid, blk, syncNoopBlockCallback) {
+				s.notifyNewStatusEvent()
+				s.logger.Info("✅ 【出块前 P2P 探测】已从 peer 写入下一高度，放弃本轮本地出块",
+					"peer", pid.String(),
+					"nextHeight", nextNum,
+					"blockHash", blk.Hash().String())
+				return true
+			}
+			s.logger.Warn("pre-produce P2P probe: block passed checks but ingest failed, try next peer",
 				"peer", pid.String(),
-				"nextHeight", nextNum,
-				"blockHash", blockHash.String())
-			return true
+				"nextHeight", nextNum)
 		case preProduceProbeFork:
 			s.logger.Warn("pre-produce P2P probe: parent mismatch (fork view), try next peer",
 				"peer", pid.String(),
@@ -71,6 +91,32 @@ func (s *syncer) TryProbeCanonicalNextBeforeProduce(probeTimeout time.Duration) 
 		}
 	}
 	return false
+}
+
+// preProduceProbeRejectReason 非空表示该块不可作为 local+1 落链（父哈希/时间戳/共识 VerifyHeader）。
+func (s *syncer) preProduceProbeRejectReason(blk *types.Block, localHash types.Hash, localNum uint64) string {
+	if blk == nil {
+		return "nil block"
+	}
+	if blk.Number() != localNum+1 {
+		return "unexpected block number"
+	}
+	if blk.ParentHash() != localHash {
+		return "parent hash mismatch"
+	}
+	parent := s.blockchain.Header()
+	if parent == nil || parent.Number != localNum {
+		return "local tip changed"
+	}
+	if blk.Header.Timestamp <= parent.Timestamp {
+		return "timestamp older than parent"
+	}
+	if v := s.blockchain.GetConsensus(); v != nil {
+		if err := v.VerifyHeader(blk.Header); err != nil {
+			return err.Error()
+		}
+	}
+	return ""
 }
 
 // peersAdvertisingAboveLocal 返回所有宣称高度 **高于** 本地链尖的 peer，按 Number 降序、再按 ID 升序（稳定、可复现）。
@@ -103,8 +149,7 @@ func (s *syncer) peersAdvertisingAboveLocal(localNum uint64, skip map[peer.ID]bo
 	return out
 }
 
-func (s *syncer) probeOnePeerPreProduce(peerID peer.ID, nextNum uint64, localHash types.Hash, probeTimeout time.Duration) (preProduceProbeClass, types.Hash) {
-	var zero types.Hash
+func (s *syncer) probeOnePeerPreProduce(peerID peer.ID, nextNum uint64, localHash types.Hash, probeTimeout time.Duration) (preProduceProbeClass, *types.Block) {
 	for attempt := 0; attempt < preProduceProbeInflightTries; attempt++ {
 		blockCh, cancel, err := s.syncPeerClient.GetBlocks(peerID, nextNum, probeTimeout)
 		if err != nil {
@@ -116,7 +161,7 @@ func (s *syncer) probeOnePeerPreProduce(peerID peer.ID, nextNum uint64, localHas
 			}
 			s.logger.Debug("pre-produce P2P probe: GetBlocks open failed",
 				"peer", peerID.String(), "err", err)
-			return preProduceProbeFail, zero
+			return preProduceProbeFail, nil
 		}
 
 		timer := time.NewTimer(probeTimeout)
@@ -127,24 +172,24 @@ func (s *syncer) probeOnePeerPreProduce(peerID peer.ID, nextNum uint64, localHas
 				<-timer.C
 			}
 			if blk == nil {
-				return preProduceProbeFail, zero
+				return preProduceProbeFail, nil
 			}
 			if blk.Number() != nextNum {
 				s.logger.Debug("pre-produce P2P probe: unexpected block number",
 					"peer", peerID.String(), "want", nextNum, "got", blk.Number())
-				return preProduceProbeFail, zero
+				return preProduceProbeFail, nil
 			}
 			if blk.ParentHash() != localHash {
-				return preProduceProbeFork, zero
+				return preProduceProbeFork, nil
 			}
-			return preProduceProbeOK, blk.Hash()
+			return preProduceProbeOK, blk
 		case <-timer.C:
 			cancel()
 			s.logger.Debug("pre-produce P2P probe: timeout waiting first block",
 				"peer", peerID.String(), "nextHeight", nextNum)
-			return preProduceProbeFail, zero
+			return preProduceProbeFail, nil
 		}
 	}
 	s.logger.Debug("pre-produce P2P probe: exhausted inflight retries", "peer", peerID.String())
-	return preProduceProbeFail, zero
+	return preProduceProbeFail, nil
 }

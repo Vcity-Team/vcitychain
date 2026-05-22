@@ -1,0 +1,63 @@
+package syncer
+
+import (
+	"testing"
+	"time"
+
+	"github.com/Vcity-Team/vcitychain/blockchain"
+	"github.com/Vcity-Team/vcitychain/types"
+	"github.com/hashicorp/go-hclog"
+	"github.com/stretchr/testify/require"
+)
+
+type stubPreProduceBlockchain struct {
+	header *types.Header
+}
+
+func (s *stubPreProduceBlockchain) SubscribeEvents() blockchain.Subscription { return nil }
+func (s *stubPreProduceBlockchain) UnsubscribeEvents(blockchain.Subscription) {}
+func (s *stubPreProduceBlockchain) Header() *types.Header                      { return s.header }
+func (s *stubPreProduceBlockchain) GetBlockByNumber(uint64, bool) (*types.Block, bool) {
+	return nil, false
+}
+func (s *stubPreProduceBlockchain) VerifyFinalizedBlock(*types.Block) (*types.FullBlock, error) {
+	return nil, nil
+}
+func (s *stubPreProduceBlockchain) WriteBlock(*types.Block, string) error      { return nil }
+func (s *stubPreProduceBlockchain) WriteFullBlock(*types.FullBlock, string) error { return nil }
+func (s *stubPreProduceBlockchain) HealCanonicalBlockState(*types.Block) (*types.FullBlock, error) {
+	return nil, nil
+}
+func (s *stubPreProduceBlockchain) WriteBlockWithoutConsensus(*types.Block, string) error {
+	return nil
+}
+func (s *stubPreProduceBlockchain) GetConsensus() blockchain.Verifier { return nil }
+
+func TestPreProduceProbeRejectReason_TimestampOlderThanParent(t *testing.T) {
+	parentTS := time.Date(2026, 5, 22, 12, 48, 46, 0, time.UTC)
+	parent := &types.Header{
+		Number:    15921378,
+		Timestamp: parentTS.Unix(),
+	}
+	parent.Hash = types.HeaderHash(parent)
+
+	child := &types.Header{
+		Number:       15921379,
+		ParentHash:   parent.Hash,
+		Timestamp:    parentTS.Unix(),
+		Nonce:        types.ZeroNonce,
+		MixHash:      types.Hash{},
+		ExtraData:    make([]byte, 32),
+		GasLimit:     1,
+		Difficulty:   1,
+		Transactions: []*types.Transaction{},
+	}
+	child.Hash = types.HeaderHash(child)
+
+	s := &syncer{
+		logger:     hclog.NewNullLogger(),
+		blockchain: &stubPreProduceBlockchain{header: parent},
+	}
+	reason := s.preProduceProbeRejectReason(&types.Block{Header: child}, parent.Hash, parent.Number)
+	require.Equal(t, "timestamp older than parent", reason)
+}

@@ -203,7 +203,7 @@ func (r *dposRuntime) produceBlock() error {
 			if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil {
 				probeTO := r.preProducePeerProbeTimeout()
 				if probeTO > 0 && dpos.syncer.TryProbeCanonicalNextBeforeProduce(probeTO) {
-					r.logger.Info("🔭 【出块前 P2P 探测】已从 peer 拉到可衔接下一高度，放弃本轮本地出块",
+					r.logger.Info("🔭 【出块前 P2P 探测】已从 peer 写入或可衔接下一高度，放弃本轮本地出块",
 						"localTip", currentBlock.Number,
 						"plannedNextBlockNumber", currentBlock.Number+1,
 						"probeTimeout", probeTO.String())
