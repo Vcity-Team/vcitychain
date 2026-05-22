@@ -397,10 +397,10 @@ func (e *Eth) getGasPrice() (uint64, error) {
 		return capLondonRPCGasPrice(total), nil
 	}
 
-	// Fetch average gas price in uint64
+	// Fetch average gas price in uint64 (legacy path when London fork is off).
 	avgGasPrice := e.store.GetAvgGasPrice().Uint64()
 
-	return common.Max(e.priceLimit, avgGasPrice), nil
+	return capRPCGasPrice(common.Max(e.priceLimit, avgGasPrice)), nil
 }
 
 // fillTransactionGasPrice fills transaction gas price if no provided

@@ -21,4 +21,10 @@ func TestEffectiveHeaderBaseFee(t *testing.T) {
 
 	header.BaseFee = 5
 	assert.Equal(t, uint64(5), EffectiveHeaderBaseFee(header, parent, london, nil))
+
+	noLondon := ForksInTime{}
+	header.BaseFee = 0
+	assert.Equal(t, GenesisBaseFee, RPCDisplayBaseFee(header, parent, noLondon, nil))
+	header.BaseFee = 5
+	assert.Equal(t, uint64(5), RPCDisplayBaseFee(header, parent, noLondon, nil))
 }

@@ -23,5 +23,5 @@ func displayBaseFeeForHeader(store baseFeeCalculator, header *types.Header) uint
 
 	forks := store.GetForksInTime(header.Number)
 
-	return chain.EffectiveHeaderBaseFee(header, parent, forks, store.CalculateBaseFee)
+	return chain.RPCDisplayBaseFee(header, parent, forks, store.CalculateBaseFee)
 }

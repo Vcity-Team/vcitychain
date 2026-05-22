@@ -123,7 +123,7 @@ type block struct {
 	Hash            types.Hash          `json:"hash"`
 	Transactions    []transactionOrHash `json:"transactions"`
 	Uncles          []types.Hash        `json:"uncles"`
-	BaseFee         argUint64           `json:"baseFeePerGas,omitempty"`
+	BaseFee         argUint64           `json:"baseFeePerGas"`
 }
 
 func (b *block) Copy() *block {

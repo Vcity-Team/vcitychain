@@ -19,5 +19,5 @@ func (g *GasHelper) effectiveHeaderBaseFee(header *types.Header) uint64 {
 		}
 	}
 
-	return chain.EffectiveHeaderBaseFee(header, parent, forks, g.backend.CalculateBaseFee)
+	return chain.RPCDisplayBaseFee(header, parent, forks, g.backend.CalculateBaseFee)
 }

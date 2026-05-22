@@ -28,3 +28,27 @@ func EffectiveHeaderBaseFee(
 
 	return GenesisBaseFee
 }
+
+// RPCDisplayBaseFee is the base fee exposed via JSON-RPC (eth_getBlock*, eth_feeHistory).
+// Many Vcity deployments store BaseFee==0 without enabling the London fork; wallets still
+// expect a non-zero baseFeePerGas for fee estimation.
+func RPCDisplayBaseFee(
+	header *types.Header,
+	parent *types.Header,
+	forks ForksInTime,
+	calc func(parent *types.Header) uint64,
+) uint64 {
+	if header == nil {
+		return 0
+	}
+
+	if header.BaseFee != 0 {
+		return header.BaseFee
+	}
+
+	if forks.London {
+		return EffectiveHeaderBaseFee(header, parent, forks, calc)
+	}
+
+	return GenesisBaseFee
+}
