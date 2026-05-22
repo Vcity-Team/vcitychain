@@ -379,13 +379,20 @@ func (s *syncer) HasSyncPeer() bool {
 	return bestPeer != nil && bestPeer.Number > header.Number
 }
 
-// GetBestPeerNumber returns the latest block number from the best peer
+// GetBestPeerNumber returns the effective peer waterline: max(P2P gossip, boot 共识链尖, 近期验证写入高度)。
+// 不含 GetVerifiedBestPeerNumber（避免与 getNetworkLatestBlockNumber 重复探测）。
 func (s *syncer) GetBestPeerNumber() uint64 {
-	bestPeer := s.peerMap.BestPeer(nil)
-	if bestPeer != nil {
-		return bestPeer.Number
+	var max uint64
+	if bestPeer := s.peerMap.BestPeer(nil); bestPeer != nil {
+		max = bestPeer.Number
 	}
-	return 0
+	if tip := s.GetTrustedCanonicalTip(); tip > max {
+		max = tip
+	}
+	if trusted := s.GetTrustedPeerNumber(); trusted > max {
+		max = trusted
+	}
+	return max
 }
 
 // GetTrustedPeerNumber returns the highest block number among peers that successfully
@@ -698,10 +705,12 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			})
 		}
 
-		// trusted 已知超前：不等待 P2P 宣称变高，按 boot RPC 高度排序逐个 P2P 拉 local+1。
+		// trusted 已知超前：lag<2 时 burst catch-up；lag>=2 走 bulk（不饿死 bulkSyncWithPeer）。
 		if trustedAheadOfLocal(trustedMeta, localLatest) {
-			if s.tryCatchUpNextBlockFromBoot(localLatest, trustedMeta, callback) {
-				continue
+			if trustedCatchUpLag(trustedMeta, localLatest) < catchUpBulkMinLag {
+				if s.tryCatchUpBurstFromBoot(localLatest, trustedMeta, callback) {
+					continue
+				}
 			}
 		}
 

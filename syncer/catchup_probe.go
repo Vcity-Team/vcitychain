@@ -1,16 +1,14 @@
 package syncer
 
 import (
+	"context"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/libp2p/go-libp2p/core/peer"
-)
-
-const (
-	catchUpProbeTimeout = 2 * time.Second
 )
 
 type catchUpProbeClass int
@@ -52,8 +50,39 @@ func (s *syncer) orderedBootCatchUpCandidates() []peer.ID {
 	return out
 }
 
+// tryCatchUpBurstFromBoot：lag < bulkMinLag 时每轮连续 catch-up 多块；lag >= bulkMinLag 由 bulk 处理。
+func (s *syncer) tryCatchUpBurstFromBoot(local uint64, meta trustedTipResult, callback func(*types.FullBlock) bool) bool {
+	if !trustedAheadOfLocal(meta, local) {
+		return false
+	}
+	if trustedCatchUpLag(meta, local) >= catchUpBulkMinLag {
+		return false
+	}
+	wrote := false
+	for burst := 0; burst < catchUpBurstMaxBlocks; burst++ {
+		if !trustedAheadOfLocal(meta, local) {
+			break
+		}
+		if !s.tryCatchUpNextBlockFromBoot(local, meta, callback, false) {
+			break
+		}
+		wrote = true
+		if hdr := s.blockchain.Header(); hdr != nil {
+			local = hdr.Number
+		}
+	}
+	if wrote {
+		s.notifyNewStatusEvent()
+		s.logger.Info("syncer: catch-up burst completed from boot",
+			"localLatest", local,
+			"trustedTip", meta.Tip,
+			"maxBootHeight", meta.MaxBootHeight)
+	}
+	return wrote
+}
+
 // tryCatchUpNextBlockFromBoot：trusted 已超前 → 对 boot 拉 local+1 并验块写入（不等待 P2P 宣称 > local）。
-func (s *syncer) tryCatchUpNextBlockFromBoot(local uint64, meta trustedTipResult, callback func(*types.FullBlock) bool) bool {
+func (s *syncer) tryCatchUpNextBlockFromBoot(local uint64, meta trustedTipResult, callback func(*types.FullBlock) bool, notify bool) bool {
 	if !trustedAheadOfLocal(meta, local) {
 		return false
 	}
@@ -64,33 +93,113 @@ func (s *syncer) tryCatchUpNextBlockFromBoot(local uint64, meta trustedTipResult
 	nextNum := local + 1
 	localHash := hdr.Hash
 
-	for _, pid := range s.orderedBootCatchUpCandidates() {
-		blk, class := s.fetchCanonicalNextForCatchUp(pid, nextNum, localHash, catchUpProbeTimeout)
-		switch class {
-		case catchUpProbeOK:
-			if blk == nil {
-				continue
-			}
-			if s.ingestCatchUpBlock(pid, blk, callback) {
-				s.logger.Info("syncer: catch-up wrote next block from boot (trusted height ahead)",
-					"peer", pid.String(),
-					"blockNumber", nextNum,
-					"trustedTip", meta.Tip,
-					"maxBootHeight", meta.MaxBootHeight)
-				s.notifyNewStatusEvent()
-				return true
-			}
-		case catchUpProbeFork:
-			s.logger.Debug("syncer: catch-up boot parent mismatch, try next boot",
-				"peer", pid.String(),
-				"nextHeight", nextNum)
-		default:
-			s.logger.Debug("syncer: catch-up boot did not deliver block",
-				"peer", pid.String(),
-				"nextHeight", nextNum)
+	candidates := s.orderedBootCatchUpCandidates()
+	blk, pid, class := s.fetchCanonicalNextFromBoots(candidates, nextNum, localHash, catchUpProbeTimeout)
+	switch class {
+	case catchUpProbeOK:
+		if blk == nil {
+			return false
 		}
+		if s.ingestCatchUpBlock(pid, blk, callback) {
+			s.logger.Info("syncer: catch-up wrote next block from boot (trusted height ahead)",
+				"peer", pid.String(),
+				"blockNumber", nextNum,
+				"trustedTip", meta.Tip,
+				"maxBootHeight", meta.MaxBootHeight)
+			if notify {
+				s.notifyNewStatusEvent()
+			}
+			return true
+		}
+	case catchUpProbeFork:
+		s.logger.Debug("syncer: catch-up boot parent mismatch",
+			"peer", pid.String(),
+			"nextHeight", nextNum)
+	default:
+		s.logger.Debug("syncer: catch-up boot did not deliver block",
+			"nextHeight", nextNum,
+			"bootCandidates", len(candidates))
 	}
 	return false
+}
+
+// fetchCanonicalNextFromBoots 并行探测 Top-N boot，取首个成功交付的 canonical next。
+func (s *syncer) fetchCanonicalNextFromBoots(candidates []peer.ID, nextNum uint64, localHash types.Hash, probeTimeout time.Duration) (*types.Block, peer.ID, catchUpProbeClass) {
+	if len(candidates) == 0 {
+		return nil, "", catchUpProbeFail
+	}
+	parallel := catchUpBootParallel
+	if parallel < 1 {
+		parallel = 1
+	}
+	if parallel >= len(candidates) {
+		for _, pid := range candidates {
+			blk, class := s.fetchCanonicalNextForCatchUp(pid, nextNum, localHash, probeTimeout)
+			if class == catchUpProbeOK && blk != nil {
+				return blk, pid, class
+			}
+			if class == catchUpProbeFork {
+				return nil, pid, class
+			}
+		}
+		return nil, "", catchUpProbeFail
+	}
+
+	type probeResult struct {
+		blk   *types.Block
+		pid   peer.ID
+		class catchUpProbeClass
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+
+	results := make(chan probeResult, parallel)
+	var wg sync.WaitGroup
+	for i := 0; i < parallel && i < len(candidates); i++ {
+		pid := candidates[i]
+		wg.Add(1)
+		go func(id peer.ID) {
+			defer wg.Done()
+			blk, class := s.fetchCanonicalNextForCatchUp(id, nextNum, localHash, probeTimeout)
+			select {
+			case results <- probeResult{blk: blk, pid: id, class: class}:
+			case <-ctx.Done():
+			}
+		}(pid)
+	}
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	var sawFork bool
+	var forkPID peer.ID
+	for res := range results {
+		switch res.class {
+		case catchUpProbeOK:
+			if res.blk != nil {
+				cancel()
+				return res.blk, res.pid, catchUpProbeOK
+			}
+		case catchUpProbeFork:
+			sawFork = true
+			forkPID = res.pid
+		}
+	}
+	if sawFork {
+		return nil, forkPID, catchUpProbeFork
+	}
+	for _, pid := range candidates[parallel:] {
+		blk, class := s.fetchCanonicalNextForCatchUp(pid, nextNum, localHash, probeTimeout)
+		if class == catchUpProbeOK && blk != nil {
+			return blk, pid, class
+		}
+		if class == catchUpProbeFork {
+			return nil, pid, class
+		}
+	}
+	return nil, "", catchUpProbeFail
 }
 
 func (s *syncer) fetchCanonicalNextForCatchUp(peerID peer.ID, nextNum uint64, localHash types.Hash, probeTimeout time.Duration) (*types.Block, catchUpProbeClass) {

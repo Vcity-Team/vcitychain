@@ -575,6 +575,7 @@ func (r *dposRuntime) produceBlock() error {
 		r.logger.Error("❌ [produceBlock] 区块提交失败", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String(), "error", err)
 		return fmt.Errorf("failed to commit block: %w", err)
 	}
+	r.recordLocallyMinedBlock(block.Block.Number())
 
 	if r.config.blockScheduler != nil {
 		r.lock.Lock()

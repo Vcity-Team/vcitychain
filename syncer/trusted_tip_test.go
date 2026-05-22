@@ -57,7 +57,10 @@ func TestPickSyncPeerForTarget_ForceBulkBootOnly(t *testing.T) {
 	require.NotNil(t, p)
 	require.Equal(t, bootAhead, p.ID)
 
-	require.Nil(t, s.pickSyncPeerForTarget(100, 102, nil, true))
+	// forceBulk 且 syncTarget>local：P2P 不超前时仍用 boot + syncTarget 作 bulk 逻辑高度
+	p = s.pickSyncPeerForTarget(100, 102, nil, true)
+	require.NotNil(t, p)
+	require.True(t, p.Number > 100)
 
 	p = s.pickSyncPeerForTarget(99, 102, nil, false)
 	require.NotNil(t, p)

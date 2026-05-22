@@ -257,8 +257,14 @@ func (r *dposRuntime) networkLatestHeaderForScheduling() *types.Header {
 	return local
 }
 
+const (
+	// productionCatchUpMinLag：仅当网络超前至少该块数时才抬高追平目标（套餐 C1）。
+	productionCatchUpMinLag = uint64(2)
+)
+
 // updateProductionCatchUpLatch 在观测到「门禁水位或原始 gossip」高于本地时抬高追平目标；本地达到目标后清除。
 // 当 bootstrap RPC 等权威水位低于先前 gossip 虚高形成的追平目标时，同步下调目标，否则会出现「RPC 已是链尖仍卡在旧高度」。
+// lag==1 且上一块为本节点所出时不锁（套餐 C2）。
 func (r *dposRuntime) updateProductionCatchUpLatch(localHeight, waterline uint64) (blocked bool, catchUpTarget uint64) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
@@ -272,7 +278,12 @@ func (r *dposRuntime) updateProductionCatchUpLatch(localHeight, waterline uint64
 	}
 
 	if waterline > localHeight {
-		if waterline > r.productionCatchUpTarget {
+		lag := waterline - localHeight
+		shouldLatch := lag >= productionCatchUpMinLag
+		if lag == 1 && r.lastLocallyMinedBlockHeight == localHeight {
+			shouldLatch = false
+		}
+		if shouldLatch && waterline > r.productionCatchUpTarget {
 			r.productionCatchUpTarget = waterline
 		}
 	}
@@ -281,5 +292,15 @@ func (r *dposRuntime) updateProductionCatchUpLatch(localHeight, waterline uint64
 	}
 	catchUpTarget = r.productionCatchUpTarget
 	blocked = r.productionCatchUpTarget > 0 && localHeight < r.productionCatchUpTarget
+	if blocked && catchUpTarget == localHeight+1 && r.lastLocallyMinedBlockHeight == localHeight {
+		blocked = false
+	}
 	return blocked, catchUpTarget
+}
+
+// recordLocallyMinedBlock 在本地成功提交出块后调用，供追平锁 lag=1 豁免。
+func (r *dposRuntime) recordLocallyMinedBlock(height uint64) {
+	r.lock.Lock()
+	r.lastLocallyMinedBlockHeight = height
+	r.lock.Unlock()
 }

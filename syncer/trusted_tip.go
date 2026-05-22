@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"sort"
 	"time"
 
@@ -438,9 +439,61 @@ func (s *syncer) pickSyncPeerForTarget(local, syncTarget uint64, skip map[peer.I
 		return bestBoot
 	}
 
+	if forceBulk && syncTarget > local {
+		if p := s.pickBootPeerForTrustedBulk(local, syncTarget); p != nil && p.Number > local {
+			return p
+		}
+	}
+
 	if forceBulk {
 		return nil
 	}
 
 	return s.peerMap.BestPeer(s.mergeSkipsForBestPeer(skip))
+}
+
+// pickBootPeerForTrustedBulk 在 P2P 宣称不超前时，用 boot RPC/syncTarget 作为 bulk 逻辑高度选源。
+func (s *syncer) pickBootPeerForTrustedBulk(local, syncTarget uint64) *NoForkPeer {
+	if syncTarget <= local {
+		return nil
+	}
+	type cand struct {
+		id peer.ID
+		h  uint64
+	}
+	var list []cand
+	for id := range s.trustedBootnodeIDs {
+		h := syncTarget
+		if rpc, ok := s.getTrustedBootRPCHeight(id); ok && rpc > h {
+			h = rpc
+		}
+		if h <= local {
+			continue
+		}
+		list = append(list, cand{id: id, h: h})
+	}
+	if len(list) == 0 {
+		return nil
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].h != list[j].h {
+			return list[i].h > list[j].h
+		}
+		return list[i].id.String() < list[j].id.String()
+	})
+	best := list[0]
+	var base *NoForkPeer
+	if v, ok := s.peerMap.Load(best.id.String()); ok {
+		if p, _ := v.(*NoForkPeer); p != nil {
+			cp := *p
+			base = &cp
+		}
+	}
+	if base == nil {
+		base = &NoForkPeer{ID: best.id, Distance: big.NewInt(0)}
+	}
+	if best.h > base.Number {
+		base.Number = best.h
+	}
+	return base
 }
