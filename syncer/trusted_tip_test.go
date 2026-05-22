@@ -81,6 +81,28 @@ func TestPickSyncPeerForTarget_ForceBulkBootOnly(t *testing.T) {
 	require.Equal(t, bootStale, p.ID)
 }
 
+func TestPickBootPeerForTrustedBulk_PrefersHighestRPC(t *testing.T) {
+	bootLow := peer.ID("boot-low")
+	bootHigh := peer.ID("boot-high")
+	s := &syncer{
+		logger:             hclog.NewNullLogger(),
+		peerMap:            new(PeerMap),
+		trustedBootnodeIDs: map[peer.ID]struct{}{bootLow: {}, bootHigh: {}},
+	}
+	s.setTrustedBootRPCHeight(bootLow, 15921244)
+	s.setTrustedBootRPCHeight(bootHigh, 15921249)
+
+	p := s.pickBootPeerForTrustedBulk(15921244, 15921249, nil)
+	require.NotNil(t, p)
+	require.Equal(t, bootHigh, p.ID)
+	require.Equal(t, uint64(15921249), p.Number)
+
+	s.bulkBootRotateIdx.Store(1)
+	p2 := s.pickBootPeerForTrustedBulk(15921244, 15921249, nil)
+	require.NotNil(t, p2)
+	require.Equal(t, bootLow, p2.ID)
+}
+
 func bigZero() *big.Int { return big.NewInt(0) }
 
 func TestComputeTrustedBootnodeTip_SingleBootFallback(t *testing.T) {

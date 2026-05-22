@@ -55,7 +55,7 @@ type syncPeerClient struct {
 	ioSem chan struct{} // global semaphore for RPC/stream operations
 
 	inflightMu        sync.Mutex
-	inflightGetBlocks map[peer.ID]struct{}
+	inflightGetBlocks map[peer.ID]time.Time // 占坑时刻；超时强制 CloseStream 释放，避免僵死需进程重启
 
 	peerStatusUpdateChLock   sync.Mutex
 	peerStatusUpdateChClosed bool
@@ -91,7 +91,7 @@ func NewSyncPeerClient(
 		ctx:                    ctx,
 		cancel:                 cancel,
 		ioSem:                  make(chan struct{}, 16),
-		inflightGetBlocks:      make(map[peer.ID]struct{}),
+		inflightGetBlocks:      make(map[peer.ID]time.Time),
 
 		peerStatusUpdateChLock:   sync.Mutex{},
 		peerStatusUpdateChClosed: false,
@@ -547,11 +547,22 @@ func (m *syncPeerClient) GetBlocks(
 
 	// 方案C：同一peer同一时间只允许一个GetBlocks流，避免重连/补拉叠加导致goroutine爆炸
 	m.inflightMu.Lock()
-	if _, exists := m.inflightGetBlocks[peerID]; exists {
+	if started, exists := m.inflightGetBlocks[peerID]; exists {
+		if time.Since(started) < getBlocksInflightMaxAge {
+			m.inflightMu.Unlock()
+			return nil, nil, fmt.Errorf("GetBlocks already in progress for peer %s", peerID.String())
+		}
 		m.inflightMu.Unlock()
-		return nil, nil, fmt.Errorf("GetBlocks already in progress for peer %s", peerID.String())
+		m.logger.Warn("GetBlocks inflight stale, forcing CloseStream",
+			"peer", peerID.String(),
+			"age", time.Since(started).String(),
+			"maxAge", getBlocksInflightMaxAge.String())
+		if err := m.CloseStream(peerID); err != nil {
+			m.logger.Debug("stale inflight CloseStream", "peer", peerID.String(), "err", err)
+		}
+		m.inflightMu.Lock()
 	}
-	m.inflightGetBlocks[peerID] = struct{}{}
+	m.inflightGetBlocks[peerID] = time.Now()
 	m.inflightMu.Unlock()
 
 	// 方案C：限制开流并发，避免瞬时开太多stream导致资源耗尽

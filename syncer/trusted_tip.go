@@ -471,29 +471,38 @@ func (s *syncer) pickBootPeerForTrustedBulk(local, syncTarget uint64, bulkSkip m
 		return nil
 	}
 	type cand struct {
-		id peer.ID
-		h  uint64
+		id    peer.ID
+		rpcH  uint64
+		bulkH uint64
 	}
 	var list []cand
 	for id := range s.trustedBootnodeIDs {
 		if s.peerExcludedFromBulkPull(id, bulkSkip) {
 			continue
 		}
-		h := syncTarget
-		if rpc, ok := s.getTrustedBootRPCHeight(id); ok && rpc > h {
-			h = rpc
+		rpcH := uint64(0)
+		if rpc, ok := s.getTrustedBootRPCHeight(id); ok {
+			rpcH = rpc
 		}
-		if h <= local {
+		bulkH := syncTarget
+		if rpcH > bulkH {
+			bulkH = rpcH
+		}
+		if bulkH <= local {
 			continue
 		}
-		list = append(list, cand{id: id, h: h})
+		list = append(list, cand{id: id, rpcH: rpcH, bulkH: bulkH})
 	}
 	if len(list) == 0 {
 		return nil
 	}
+	// 优先 RPC 最高的 boot（链尖在 JSON-RPC 上领先的那台），再按 bulk 逻辑高度；避免 5 台 15921244 + 1 台 15921249 时先打到落后源。
 	sort.Slice(list, func(i, j int) bool {
-		if list[i].h != list[j].h {
-			return list[i].h > list[j].h
+		if list[i].rpcH != list[j].rpcH {
+			return list[i].rpcH > list[j].rpcH
+		}
+		if list[i].bulkH != list[j].bulkH {
+			return list[i].bulkH > list[j].bulkH
 		}
 		return list[i].id.String() < list[j].id.String()
 	})
@@ -511,8 +520,8 @@ func (s *syncer) pickBootPeerForTrustedBulk(local, syncTarget uint64, bulkSkip m
 		if base == nil {
 			base = &NoForkPeer{ID: best.id, Distance: big.NewInt(0)}
 		}
-		if best.h > base.Number {
-			base.Number = best.h
+		if best.bulkH > base.Number {
+			base.Number = best.bulkH
 		}
 		return base
 	}

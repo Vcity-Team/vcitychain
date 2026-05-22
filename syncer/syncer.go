@@ -23,6 +23,7 @@ const (
 	// getBlocksInflightRetries：与广告探测 GetBlocks / KickSync 关流并发时短暂冲突，退避重试。
 	getBlocksInflightRetries   = 25
 	getBlocksInflightBackoff   = 40 * time.Millisecond
+	getBlocksInflightMaxAge    = 90 * time.Second // 单 peer GetBlocks 占坑超过此时长则强制关流释放
 	kickSyncPostCloseGraceWait = 100 * time.Millisecond // 让 CloseStream 触发的 producer goroutine 摘掉 inflight 后再 notify
 	// syncBestNotAheadWakeInterval：best peer 宣称不高于本地时，仍定时唤醒 Sync。
 	// putToPeerMap 对「同区块高度」的状态更新不 notify，若无更高高度事件，否则会永久阻塞在 newStatusCh，
@@ -713,12 +714,14 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			})
 		}
 
-		// trusted 已知超前：lag<2 时 burst catch-up；lag>=2 走 bulk（不饿死 bulkSyncWithPeer）。
+		// trusted 已知超前：lag<2 时 burst catch-up；lag>=2 每轮先尝试单块 catch-up，再走 bulk。
 		if trustedAheadOfLocal(trustedMeta, localLatest) {
 			if trustedCatchUpLag(trustedMeta, localLatest) < catchUpBulkMinLag {
 				if s.tryCatchUpBurstFromBoot(localLatest, trustedMeta, callback) {
 					continue
 				}
+			} else if s.tryCatchUpNextBlockFromBoot(localLatest, trustedMeta, callback, true) {
+				continue
 			}
 		}
 
@@ -735,6 +738,9 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 		}
 		if bestPeer == nil {
 			if trustedAheadOfLocal(trustedMeta, localLatest) {
+				if s.tryCatchUpNextBlockFromBoot(localLatest, trustedMeta, callback, true) {
+					continue
+				}
 				s.logSyncInfoOnLocalStall(localLatest, func() {
 					s.logger.Info("syncer: trusted ahead but direct pull local+1 failed, will retry",
 						"localLatest", localLatest,
@@ -767,6 +773,9 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 
 		if bestPeer.Number <= localLatest {
 			if trustedAheadOfLocal(trustedMeta, localLatest) {
+				if s.tryCatchUpNextBlockFromBoot(localLatest, trustedMeta, callback, true) {
+					continue
+				}
 				s.wakeSyncAfter(s.catchUpRetryBackoff(localLatest, trustedMeta), "trusted_ahead_no_serving_peer",
 					"localLatest", localLatest,
 					"trustedTip", trustedTip)
