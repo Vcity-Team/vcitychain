@@ -305,6 +305,9 @@ type DPoSConfig struct {
 	// 佣金默认配置
 	CommissionRateDefault     uint64        // 默认佣金率（基点）
 	CommissionEffectivePeriod time.Duration // 佣金率修改的延迟生效周期
+
+	// WallClockSlotAlignment 为 true 时，块头/调度时间戳 additionally 对齐墙钟 slot（node-config: dpos_wall_clock_slot_alignment）。
+	WallClockSlotAlignment bool `json:"dpos_wall_clock_slot_alignment" yaml:"dpos_wall_clock_slot_alignment"`
 }
 
 // GenerateExitProof 生成退出证明（占位符实现，满足 BridgeDataProvider 接口要求）
@@ -1504,6 +1507,18 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	} else {
 		vcity_dpos.doubleSigningDetector = NewDoubleSigningDetector(logger)
 		logger.Debug("双重签名检测器已初始化")
+	}
+
+	if v, ok := getConfigValue("dpos_wall_clock_slot_alignment"); ok {
+		if b, parsed := parseFlexibleBool(v); parsed {
+			vcity_dpos.config.WallClockSlotAlignment = b
+		} else {
+			logger.Warn("dpos_wall_clock_slot_alignment 无法解析，按 false 处理",
+				"value", v, "type", fmt.Sprintf("%T", v))
+		}
+	}
+	if vcity_dpos.config.WallClockSlotAlignment {
+		logger.Info("⏰ 已启用墙钟 slot 对齐出块时间戳（dpos_wall_clock_slot_alignment=true）")
 	}
 
 	return vcity_dpos, nil

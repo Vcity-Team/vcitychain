@@ -38,11 +38,18 @@ type BlockScheduler struct {
 	logMutex              sync.Mutex
 	// networkHeadResolver 返回用于出块调度的「网络最新区块」头（无 peer 时通常为本地链尖）。
 	networkHeadResolver func() *types.Header
+	// wallClockSlotAlignment 为 true 时，下一区块时间戳 additionally 对齐墙钟 slot（见 effectiveTimeForNextBlock）。
+	wallClockSlotAlignment bool
 }
 
 // SetNetworkHeadResolver 设置网络最新区块头解析器（由 dposRuntime 注入）。
 func (bs *BlockScheduler) SetNetworkHeadResolver(resolver func() *types.Header) {
 	bs.networkHeadResolver = resolver
+}
+
+// SetWallClockSlotAlignment 启用/关闭墙钟 slot 对齐（由节点配置 dpos_wall_clock_slot_alignment 注入）。
+func (bs *BlockScheduler) SetWallClockSlotAlignment(enabled bool) {
+	bs.wallClockSlotAlignment = enabled
 }
 
 func NewBlockScheduler(
@@ -228,13 +235,46 @@ func (bs *BlockScheduler) GetGenesisTime() time.Time {
 	return bs.genesisTime
 }
 
-// effectiveTimeForNextBlock 下一区块头时间戳：schedulingReferenceHeader.Timestamp + blockWindow。
+// schedulingBaseTimestamp 调度参照时间戳：max(网络/解析参照块, 本地链尖)，避免参照落后于实际父块。
+func (bs *BlockScheduler) schedulingBaseTimestamp() uint64 {
+	var base uint64
+	if ref := bs.schedulingReferenceHeader(); ref != nil {
+		base = ref.Timestamp
+	}
+	if bs.blockchain != nil {
+		if local := bs.blockchain.Header(); local != nil && local.Timestamp > base {
+			base = local.Timestamp
+		}
+	}
+	return base
+}
+
+// wallDueTime 墙钟对齐的下一 slot 起始时刻：genesis + (slotAt(now)+1)*blockWindow。
+func (bs *BlockScheduler) wallDueTime() time.Time {
+	now := time.Now().UTC()
+	slot := bs.slotAt(now)
+	return bs.genesisTime.UTC().Add(time.Duration(slot+1) * bs.blockWindow)
+}
+
+// effectiveTimeForNextBlock 下一区块头时间戳：max(参照+blockWindow[, 墙钟 slot 对齐])。
+// 未启用墙钟时仅为链上调度；启用时为 max(chainDue, wallDue)，与 BlockBuilder.Reset 一致。
 func (bs *BlockScheduler) effectiveTimeForNextBlock() time.Time {
-	ref := bs.schedulingReferenceHeader()
-	if ref == nil {
+	base := bs.schedulingBaseTimestamp()
+	if base == 0 {
+		if bs.wallClockSlotAlignment {
+			return bs.wallDueTime()
+		}
 		return time.Now().UTC()
 	}
-	return time.Unix(int64(ref.Timestamp), 0).UTC().Add(bs.blockWindow)
+	chainDue := time.Unix(int64(base), 0).UTC().Add(bs.blockWindow)
+	if !bs.wallClockSlotAlignment {
+		return chainDue
+	}
+	wallDue := bs.wallDueTime()
+	if wallDue.After(chainDue) {
+		return wallDue
+	}
+	return chainDue
 }
 
 // EarliestProduceTime 本节点最早可开始下一轮出块的 UTC 时刻：
@@ -259,7 +299,7 @@ func (bs *BlockScheduler) CurrentSlotForNextBlock() int {
 
 // LeaderElectionSlot 决定「谁可以出下一块」的 slot：max(链上调度 slot, 墙钟 slot)。
 // 链时间落后墙钟时，离线 SR 的 slot 在墙钟上被空耗过去，下一在线 SR 获得出块权（不顺延、不 pickLeader 扫描）。
-// 块头时间戳仍用 effectiveTimeForNextBlock（Plan A），与 CurrentSlotForNextBlock 一致。
+// 块头时间戳用 effectiveTimeForNextBlock（链上或墙钟对齐），与 CurrentSlotForNextBlock 一致。
 func (bs *BlockScheduler) LeaderElectionSlot() int {
 	chainSlot := bs.CurrentSlotForNextBlock()
 	wallSlot := bs.slotAt(time.Now().UTC())

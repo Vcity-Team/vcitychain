@@ -78,6 +78,8 @@ type Config struct {
 	DPoSBootstrapRPC string `json:"dpos_bootstrap_rpc" yaml:"dpos_bootstrap_rpc"`
 	// dpos_disable_double_sign_slashing: 为 true 时关闭双签检测、削减及故障落库（默认 false，可不写）
 	DPoSDisableDoubleSignSlashing bool `json:"dpos_disable_double_sign_slashing" yaml:"dpos_disable_double_sign_slashing"`
+	// dpos_wall_clock_slot_alignment: 为 true 时块头时间戳对齐墙钟 slot（默认 false，可不写；SR 可逐台开启）
+	DPoSWallClockSlotAlignment bool `json:"dpos_wall_clock_slot_alignment" yaml:"dpos_wall_clock_slot_alignment"`
 
 	// London Fork 配置（从 yaml 读取，不改变 genesis hash）
 	BaseFeeConfig string `json:"base_fee_config" yaml:"base_fee_config"` // 格式: "baseFee:baseFeeEM:baseFeeChangeDenom"

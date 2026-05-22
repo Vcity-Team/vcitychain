@@ -81,12 +81,16 @@ func (d *DPoS) initializeEconomicSystem() error {
 	if d.runtime != nil && d.blockScheduler != nil {
 		d.blockScheduler.SetNetworkHeadResolver(d.runtime.networkLatestHeaderForScheduling)
 	}
+	if d.blockScheduler != nil {
+		d.blockScheduler.SetWallClockSlotAlignment(d.config.WallClockSlotAlignment)
+	}
 
 	// 添加调试日志
 	d.logger.Info("🔧 BlockScheduler初始化",
 		"blockWindow", d.config.BlockTime.Duration.String(),
 		"dposValidatorsCount", d.config.DPoSValidatorsCount,
-		"blockchain", d.config.Blockchain != nil)
+		"blockchain", d.config.Blockchain != nil,
+		"wallClockSlotAlignment", d.config.WallClockSlotAlignment)
 
 	d.logger.Info("✅ DPoS经济系统组件初始化完成",
 		"epochDuration", d.config.EpochDuration.String(),

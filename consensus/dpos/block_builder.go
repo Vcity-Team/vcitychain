@@ -101,6 +101,10 @@ func (b *BlockBuilder) Reset() error {
 		parentTime := time.Unix(int64(b.params.Parent.Timestamp), 0).UTC()
 		headerTime = parentTime.Add(b.params.BlockTime)
 	}
+	parentFloor := time.Unix(int64(b.params.Parent.Timestamp), 0).UTC().Add(b.params.BlockTime)
+	if headerTime.Before(parentFloor) {
+		headerTime = parentFloor
+	}
 
 	b.header = &types.Header{
 		ParentHash:   b.params.Parent.Hash,

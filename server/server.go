@@ -182,6 +182,10 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		engineConfig["dpos_disable_double_sign_slashing"] = true
 		s.logger.Info("✅ 透传 dpos_disable_double_sign_slashing=true 到 DPoS（关闭双签削减）")
 	}
+	if s.config.DPoSWallClockSlotAlignment {
+		engineConfig["dpos_wall_clock_slot_alignment"] = true
+		s.logger.Info("✅ 透传 dpos_wall_clock_slot_alignment=true 到 DPoS（墙钟 slot 对齐块头时间戳）")
+	}
 
 	// 可选：投票者目标 APY（基点，500=5%）
 	if s.config.VoterTargetAPYBps > 0 {
@@ -930,6 +934,10 @@ func (s *Server) setupConsensus() error {
 	if s.config.DPoSDisableDoubleSignSlashing {
 		engineConfig["dpos_disable_double_sign_slashing"] = true
 		s.logger.Info("✅ setupConsensus: dpos_disable_double_sign_slashing=true 已写入 engineConfig")
+	}
+	if s.config.DPoSWallClockSlotAlignment {
+		engineConfig["dpos_wall_clock_slot_alignment"] = true
+		s.logger.Info("✅ setupConsensus: dpos_wall_clock_slot_alignment=true 已写入 engineConfig")
 	}
 
 	// 从YAML配置中获取epoch duration

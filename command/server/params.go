@@ -261,5 +261,6 @@ func (p *serverParams) generateConfig() *server.Config {
 		DPoSBootstrapRPC:  p.rawConfig.DPoSBootstrapRPC,
 
 		DPoSDisableDoubleSignSlashing: p.rawConfig.DPoSDisableDoubleSignSlashing,
+		DPoSWallClockSlotAlignment:    p.rawConfig.DPoSWallClockSlotAlignment,
 	}
 }
