@@ -3,6 +3,7 @@ package syncer
 import (
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -65,6 +66,19 @@ func TestPickSyncPeerForTarget_ForceBulkBootOnly(t *testing.T) {
 	p = s.pickSyncPeerForTarget(99, 102, nil, false)
 	require.NotNil(t, p)
 	require.Equal(t, nonBoot, p.ID)
+
+	// skip 与 pull-distrust 应让 force-bulk 换到另一 boot，而非死磕最高 RPC 源
+	skipBoot := map[peer.ID]bool{bootAhead: true}
+	p = s.pickSyncPeerForTarget(99, 102, skipBoot, true)
+	require.NotNil(t, p)
+	require.Equal(t, bootStale, p.ID)
+
+	s.pullDistrustMu.Lock()
+	s.pullDistrustUntil[bootAhead] = time.Now().Add(time.Minute)
+	s.pullDistrustMu.Unlock()
+	p = s.pickSyncPeerForTarget(99, 102, nil, true)
+	require.NotNil(t, p)
+	require.Equal(t, bootStale, p.ID)
 }
 
 func bigZero() *big.Int { return big.NewInt(0) }

@@ -122,6 +122,9 @@ type syncer struct {
 	trustedBootRPCHeightMu sync.RWMutex
 	lastBootP2PRefreshMu   sync.Mutex
 	lastBootP2PRefreshAt   time.Time
+
+	// bulkBootRotateIdx：bulk 未推进链尖时轮换 boot 源 / catch-up 候选顺序，避免死磕同一 peer。
+	bulkBootRotateIdx atomic.Uint32
 }
 
 type trustedPeerStat struct {
@@ -609,7 +612,12 @@ func (s *syncer) mergeSkipsForBestPeer(manual map[peer.ID]bool) map[peer.ID]bool
 	return out
 }
 
+func (s *syncer) bumpBulkBootRotate() {
+	s.bulkBootRotateIdx.Add(1)
+}
+
 func (s *syncer) recordBulkPullFailure(peerID peer.ID) {
+	s.bumpBulkBootRotate()
 	s.pullDistrustMu.Lock()
 	defer s.pullDistrustMu.Unlock()
 	s.pullFailStreak[peerID]++
@@ -844,6 +852,13 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 
 		if lastNumber < peerTarget {
 			skipList[bestPeer.ID] = true
+
+			// bulk 未推进链尖：轮换 boot catch-up 拉 local+1，避免仅 500ms 自唤醒仍选同一 P2P 源。
+			if lastNumber <= headBeforeBulk && trustedAheadOfLocal(trustedMeta, localLatest) {
+				if s.tryCatchUpNextBlockFromBoot(localLatest, trustedMeta, callback, true) {
+					continue
+				}
+			}
 
 			// continue to next peer
 			// 治本点：同步未完成（或中途失败）时，若 peer 高度不再变化，等待 newStatusCh 可能永久睡死

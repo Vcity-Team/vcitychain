@@ -50,6 +50,28 @@ func (s *syncer) orderedBootCatchUpCandidates() []peer.ID {
 	return out
 }
 
+// rotatePeerIDs 将 ids 左旋 offset 位（offset mod len），用于 bulk 失败后轮换 boot 尝试顺序。
+func rotatePeerIDs(ids []peer.ID, offset int) []peer.ID {
+	n := len(ids)
+	if n == 0 {
+		return nil
+	}
+	off := offset % n
+	if off == 0 {
+		out := make([]peer.ID, n)
+		copy(out, ids)
+		return out
+	}
+	out := make([]peer.ID, n)
+	copy(out, ids[off:])
+	copy(out[n-off:], ids[:off])
+	return out
+}
+
+func (s *syncer) orderedBootCatchUpCandidatesRotated() []peer.ID {
+	return rotatePeerIDs(s.orderedBootCatchUpCandidates(), int(s.bulkBootRotateIdx.Load()))
+}
+
 // tryCatchUpBurstFromBoot：lag < bulkMinLag 时每轮连续 catch-up 多块；lag >= bulkMinLag 由 bulk 处理。
 func (s *syncer) tryCatchUpBurstFromBoot(local uint64, meta trustedTipResult, callback func(*types.FullBlock) bool) bool {
 	if !trustedAheadOfLocal(meta, local) {
@@ -93,7 +115,7 @@ func (s *syncer) tryCatchUpNextBlockFromBoot(local uint64, meta trustedTipResult
 	nextNum := local + 1
 	localHash := hdr.Hash
 
-	candidates := s.orderedBootCatchUpCandidates()
+	candidates := s.orderedBootCatchUpCandidatesRotated()
 	blk, pid, class := s.fetchCanonicalNextFromBoots(candidates, nextNum, localHash, catchUpProbeTimeout)
 	switch class {
 	case catchUpProbeOK:

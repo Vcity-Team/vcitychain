@@ -417,14 +417,26 @@ func (s *syncer) isTrustedBootnode(id peer.ID) bool {
 	return ok
 }
 
+// peerExcludedFromBulkPull 为 true 时该 peer 不参与 force-bulk 选源（skipList + pull-distrust 冷却）。
+func (s *syncer) peerExcludedFromBulkPull(id peer.ID, skip map[peer.ID]bool) bool {
+	if skip != nil && skip[id] {
+		return true
+	}
+	s.pullDistrustMu.Lock()
+	until, inCooldown := s.pullDistrustUntil[id]
+	s.pullDistrustMu.Unlock()
+	return inCooldown && until.After(time.Now())
+}
+
 // pickSyncPeerForTarget chooses a peer to bulk-sync from.
 // When forceBulk (behind trusted boot RPC tip): only genesis bootnodes with P2P Number > local; no anyBoot/BestPeer fallback.
 func (s *syncer) pickSyncPeerForTarget(local, syncTarget uint64, skip map[peer.ID]bool, forceBulk bool) *NoForkPeer {
+	bulkSkip := s.mergeSkipsForBestPeer(skip)
 	var bestBoot *NoForkPeer
 
 	s.peerMap.Range(func(_ interface{}, value interface{}) bool {
 		p, _ := value.(*NoForkPeer)
-		if p == nil || skip[p.ID] || !s.isTrustedBootnode(p.ID) {
+		if p == nil || s.peerExcludedFromBulkPull(p.ID, bulkSkip) || !s.isTrustedBootnode(p.ID) {
 			return true
 		}
 		if p.Number <= local {
@@ -440,7 +452,7 @@ func (s *syncer) pickSyncPeerForTarget(local, syncTarget uint64, skip map[peer.I
 	}
 
 	if forceBulk && syncTarget > local {
-		if p := s.pickBootPeerForTrustedBulk(local, syncTarget); p != nil && p.Number > local {
+		if p := s.pickBootPeerForTrustedBulk(local, syncTarget, bulkSkip); p != nil && p.Number > local {
 			return p
 		}
 	}
@@ -453,7 +465,8 @@ func (s *syncer) pickSyncPeerForTarget(local, syncTarget uint64, skip map[peer.I
 }
 
 // pickBootPeerForTrustedBulk 在 P2P 宣称不超前时，用 boot RPC/syncTarget 作为 bulk 逻辑高度选源。
-func (s *syncer) pickBootPeerForTrustedBulk(local, syncTarget uint64) *NoForkPeer {
+// 按 bulkBootRotateIdx 轮换同高度 boot；跳过 bulkSkip 与 pull-distrust 中的 peer。
+func (s *syncer) pickBootPeerForTrustedBulk(local, syncTarget uint64, bulkSkip map[peer.ID]bool) *NoForkPeer {
 	if syncTarget <= local {
 		return nil
 	}
@@ -463,6 +476,9 @@ func (s *syncer) pickBootPeerForTrustedBulk(local, syncTarget uint64) *NoForkPee
 	}
 	var list []cand
 	for id := range s.trustedBootnodeIDs {
+		if s.peerExcludedFromBulkPull(id, bulkSkip) {
+			continue
+		}
 		h := syncTarget
 		if rpc, ok := s.getTrustedBootRPCHeight(id); ok && rpc > h {
 			h = rpc
@@ -481,19 +497,24 @@ func (s *syncer) pickBootPeerForTrustedBulk(local, syncTarget uint64) *NoForkPee
 		}
 		return list[i].id.String() < list[j].id.String()
 	})
-	best := list[0]
-	var base *NoForkPeer
-	if v, ok := s.peerMap.Load(best.id.String()); ok {
-		if p, _ := v.(*NoForkPeer); p != nil {
-			cp := *p
-			base = &cp
+	n := len(list)
+	start := int(s.bulkBootRotateIdx.Load()) % n
+	for i := 0; i < n; i++ {
+		best := list[(start+i)%n]
+		var base *NoForkPeer
+		if v, ok := s.peerMap.Load(best.id.String()); ok {
+			if p, _ := v.(*NoForkPeer); p != nil {
+				cp := *p
+				base = &cp
+			}
 		}
+		if base == nil {
+			base = &NoForkPeer{ID: best.id, Distance: big.NewInt(0)}
+		}
+		if best.h > base.Number {
+			base.Number = best.h
+		}
+		return base
 	}
-	if base == nil {
-		base = &NoForkPeer{ID: best.id, Distance: big.NewInt(0)}
-	}
-	if best.h > base.Number {
-		base.Number = best.h
-	}
-	return base
+	return nil
 }
