@@ -139,3 +139,14 @@ func (s *syncer) tryAdvancePeerViewForNextBlock(local uint64) bool {
 	s.collectTrustedBootHeights(local)
 	return s.refreshBootP2PWhenCaughtUp(local, true) > 0
 }
+
+// prepareCatchUpRound P0-1：绕过 RPC 高度缓存，刷新 boot P2P，并返回最新 trusted meta。
+func (s *syncer) prepareCatchUpRound(local uint64) trustedTipResult {
+	s.invalidateTrustedBootHeightCache()
+	meta := s.computeTrustedBootnodeTip(local)
+	if s.trustedQuorumIndicatesNextBlock(local, meta) {
+		s.refreshTrustedBootP2PStatus(local, true)
+	}
+	s.refreshBootP2PWhenCaughtUp(local, true)
+	return meta
+}

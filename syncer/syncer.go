@@ -718,7 +718,7 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 						"syncTarget", syncTarget,
 						"requiredMinPeerNumber", localLatest+1)
 				})
-				s.wakeSyncAfter(trustedAheadNoServingBackoff, "trusted_ahead_no_serving_peer",
+				s.wakeSyncAfter(s.catchUpRetryBackoff(localLatest, trustedMeta), "trusted_ahead_no_serving_peer",
 					"localLatest", localLatest,
 					"trustedTip", trustedTip)
 				continue
@@ -751,27 +751,64 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 						"bestPeer", bestPeer.ID.String(),
 						"peerNumber", bestPeer.Number)
 				})
-				s.wakeSyncAfter(retryBackoff, "trusted_ahead_no_serving_peer",
+				s.wakeSyncAfter(s.catchUpRetryBackoff(localLatest, trustedMeta), "trusted_ahead_no_serving_peer",
 					"localLatest", localLatest,
 					"trustedTip", trustedTip)
 				continue
 			}
-			if s.tryAdvancePeerViewForNextBlock(localLatest) {
+
+			// P0-1：强制刷新 boot RPC + P2P，避免 2s 缓存与 gossip 滞后导致误判已追平。
+			trustedMeta = s.prepareCatchUpRound(localLatest)
+			trustedTip = trustedMeta.Tip
+			syncTarget = trustedTip
+			if trustedMeta.MaxBootHeight > syncTarget {
+				syncTarget = trustedMeta.MaxBootHeight
+			}
+			forceBulk = syncTarget > localLatest && s.trustedQuorumIndicatesNextBlock(localLatest, trustedMeta)
+
+			// P0-3：quorum/RPC 已确认 local+1 存在时，对 boot 单块拉取（完整验证后写入）。
+			if s.tryCatchUpNextBlockFromBoot(localLatest, trustedMeta, callback) {
 				continue
 			}
-			s.logSyncInfoOnLocalStall(localLatest, func() {
-				s.logger.Info("syncer: best peer not ahead of local, self-wake to avoid stall on unchanged peer heights",
+
+			resumeBulk := false
+			if forceBulk {
+				s.refreshTrustedBootP2PStatus(localLatest, false)
+				if bp := s.pickSyncPeerForTarget(localLatest, syncTarget, skipList, forceBulk); bp != nil && bp.Number > localLatest {
+					bestPeer = bp
+					resumeBulk = true
+				} else {
+					s.logSyncInfoOnLocalStall(localLatest, func() {
+						s.logger.Info("syncer: trusted tip ahead but no boot P2P peer can serve local+1 after catch-up refresh, will retry",
+							"localLatest", localLatest,
+							"trustedTip", trustedTip,
+							"syncTarget", syncTarget)
+					})
+					s.wakeSyncAfter(s.catchUpRetryBackoff(localLatest, trustedMeta), "trusted_ahead_no_serving_peer",
+						"localLatest", localLatest,
+						"trustedTip", trustedTip)
+					continue
+				}
+			}
+			if !resumeBulk {
+				if s.tryAdvancePeerViewForNextBlock(localLatest) {
+					continue
+				}
+				s.logSyncInfoOnLocalStall(localLatest, func() {
+					s.logger.Info("syncer: best peer not ahead of local, self-wake to avoid stall on unchanged peer heights",
+						"peer", bestPeer.ID.String(),
+						"peerNumber", bestPeer.Number,
+						"localLatest", localLatest,
+						"trustedTip", trustedTip,
+						"syncTarget", syncTarget)
+				})
+				// P0-2：网络已超前时短退避，真追平仍 3s。
+				s.scheduleBestNotAheadWake(s.catchUpRetryBackoff(localLatest, trustedMeta),
 					"peer", bestPeer.ID.String(),
 					"peerNumber", bestPeer.Number,
-					"localLatest", localLatest,
-					"trustedTip", trustedTip,
-					"syncTarget", syncTarget)
-			})
-			s.scheduleBestNotAheadWake(syncBestNotAheadWakeInterval,
-				"peer", bestPeer.ID.String(),
-				"peerNumber", bestPeer.Number,
-				"localLatest", localLatest)
-			continue
+					"localLatest", localLatest)
+				continue
+			}
 		}
 
 		// 只拉到 peer 实际宣称的高度；勿将 bulkTarget 抬到 syncTarget 若 peerNumber 更低（避免对 15911800 空拉 15911801）。
