@@ -186,6 +186,10 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		engineConfig["dpos_wall_clock_slot_alignment"] = true
 		s.logger.Info("✅ 透传 dpos_wall_clock_slot_alignment=true 到 DPoS（墙钟 slot 对齐块头时间戳）")
 	}
+	if s.config.DPoSRelaxHeaderTimestampOrder {
+		engineConfig["dpos_relax_header_timestamp_order"] = true
+		s.logger.Warn("⚠️ 透传 dpos_relax_header_timestamp_order=true 到 DPoS（临时放宽块头时间戳校验）")
+	}
 
 	// 可选：投票者目标 APY（基点，500=5%）
 	if s.config.VoterTargetAPYBps > 0 {
@@ -938,6 +942,10 @@ func (s *Server) setupConsensus() error {
 	if s.config.DPoSWallClockSlotAlignment {
 		engineConfig["dpos_wall_clock_slot_alignment"] = true
 		s.logger.Info("✅ setupConsensus: dpos_wall_clock_slot_alignment=true 已写入 engineConfig")
+	}
+	if s.config.DPoSRelaxHeaderTimestampOrder {
+		engineConfig["dpos_relax_header_timestamp_order"] = true
+		s.logger.Warn("⚠️ setupConsensus: dpos_relax_header_timestamp_order=true 已写入 engineConfig")
 	}
 
 	// 从YAML配置中获取epoch duration

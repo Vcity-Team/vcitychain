@@ -90,6 +90,8 @@ type Config struct {
 	DPoSDisableDoubleSignSlashing bool `yaml:"dpos_disable_double_sign_slashing"`
 	// dpos_wall_clock_slot_alignment: 为 true 时块头时间戳对齐墙钟 slot（默认 false，SR 可逐台开启）
 	DPoSWallClockSlotAlignment bool `yaml:"dpos_wall_clock_slot_alignment"`
+	// dpos_relax_header_timestamp_order: 为 true 时临时接受子块时间戳<=父块（默认 false）
+	DPoSRelaxHeaderTimestampOrder bool `yaml:"dpos_relax_header_timestamp_order"`
 }
 
 // Telemetry holds the config details for metric services

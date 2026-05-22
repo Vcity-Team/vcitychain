@@ -108,9 +108,7 @@ func (s *syncer) preProduceProbeRejectReason(blk *types.Block, localHash types.H
 	if parent == nil || parent.Number != localNum {
 		return "local tip changed"
 	}
-	if blk.Header.Timestamp <= parent.Timestamp {
-		return "timestamp older than parent"
-	}
+	// 时间戳单调性由共识 VerifyHeader 统一校验（可通过 dpos_relax_header_timestamp_order 临时放宽）
 	if v := s.blockchain.GetConsensus(); v != nil {
 		if err := v.VerifyHeader(blk.Header); err != nil {
 			return err.Error()

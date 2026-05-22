@@ -2,6 +2,7 @@ package dpos
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/blockchain"
@@ -61,8 +62,7 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 		}
 	}
 
-	err := d.verifyHeaderImpl(parent, header, d.config.BlockTime.Duration, nil)
-	if err != nil {
+	if err := d.verifyHeaderImpl(parent, header, d.config.BlockTime.Duration, nil); err != nil {
 		d.logger.Error("❌ DPoS VerifyHeader verifyHeaderImpl失败", "blockNumber", blockNumber, "error", err)
 		return err
 	}
@@ -73,15 +73,26 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 func (d *DPoS) verifyHeaderImpl(parent, header *types.Header, blockTimeDrift time.Duration, parents []*types.Header) error {
 	// validate header fields
 	if err := validateHeaderFields(parent, header, uint64(blockTimeDrift.Seconds())); err != nil {
-		d.logger.Error("❌ 区块头部字段验证失败 - parent信息",
-			"blockNumber", header.Number,
-			"blockHash", header.Hash.String(),
-			"blockTimestamp", time.Unix(int64(header.Timestamp), 0).Format("15:04:05"),
-			"parentNumber", parent.Number,
-			"parentHash", parent.Hash.String(),
-			"parentTimestamp", time.Unix(int64(parent.Timestamp), 0).Format("15:04:05"),
-			"error", err)
-		return fmt.Errorf("failed to validate header for block %d. error = %w", header.Number, err)
+		if d.config.RelaxHeaderTimestampOrder && strings.Contains(err.Error(), "timestamp older than parent") {
+			d.logger.Warn("⚠️ 块头时间戳单调性放宽：接受子块时间戳不大于父块（dpos_relax_header_timestamp_order=true）",
+				"blockNumber", header.Number,
+				"blockHash", header.Hash.String(),
+				"blockTimestamp", time.Unix(int64(header.Timestamp), 0).Format("2006-01-02 15:04:05"),
+				"parentNumber", parent.Number,
+				"parentHash", parent.Hash.String(),
+				"parentTimestamp", time.Unix(int64(parent.Timestamp), 0).Format("2006-01-02 15:04:05"),
+				"timestampLagSeconds", int64(parent.Timestamp)-int64(header.Timestamp))
+		} else {
+			d.logger.Error("❌ 区块头部字段验证失败 - parent信息",
+				"blockNumber", header.Number,
+				"blockHash", header.Hash.String(),
+				"blockTimestamp", time.Unix(int64(header.Timestamp), 0).Format("15:04:05"),
+				"parentNumber", parent.Number,
+				"parentHash", parent.Hash.String(),
+				"parentTimestamp", time.Unix(int64(parent.Timestamp), 0).Format("15:04:05"),
+				"error", err)
+			return fmt.Errorf("failed to validate header for block %d. error = %w", header.Number, err)
+		}
 	}
 
 	// decode the extra data

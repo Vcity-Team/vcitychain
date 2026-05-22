@@ -262,5 +262,6 @@ func (p *serverParams) generateConfig() *server.Config {
 
 		DPoSDisableDoubleSignSlashing: p.rawConfig.DPoSDisableDoubleSignSlashing,
 		DPoSWallClockSlotAlignment:    p.rawConfig.DPoSWallClockSlotAlignment,
+		DPoSRelaxHeaderTimestampOrder: p.rawConfig.DPoSRelaxHeaderTimestampOrder,
 	}
 }

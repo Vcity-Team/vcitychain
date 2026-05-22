@@ -308,6 +308,8 @@ type DPoSConfig struct {
 
 	// WallClockSlotAlignment 为 true 时，块头/调度时间戳 additionally 对齐墙钟 slot（node-config: dpos_wall_clock_slot_alignment）。
 	WallClockSlotAlignment bool `json:"dpos_wall_clock_slot_alignment" yaml:"dpos_wall_clock_slot_alignment"`
+	// RelaxHeaderTimestampOrder 为 true 时，VerifyHeader 暂不拒绝「子块时间戳<=父块」（临时运维开关，链上坏块消化后应关闭）。
+	RelaxHeaderTimestampOrder bool `json:"dpos_relax_header_timestamp_order" yaml:"dpos_relax_header_timestamp_order"`
 }
 
 // GenerateExitProof 生成退出证明（占位符实现，满足 BridgeDataProvider 接口要求）
@@ -1519,6 +1521,18 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	}
 	if vcity_dpos.config.WallClockSlotAlignment {
 		logger.Info("⏰ 已启用墙钟 slot 对齐出块时间戳（dpos_wall_clock_slot_alignment=true）")
+	}
+
+	if v, ok := getConfigValue("dpos_relax_header_timestamp_order"); ok {
+		if b, parsed := parseFlexibleBool(v); parsed {
+			vcity_dpos.config.RelaxHeaderTimestampOrder = b
+		} else {
+			logger.Warn("dpos_relax_header_timestamp_order 无法解析，按 false 处理",
+				"value", v, "type", fmt.Sprintf("%T", v))
+		}
+	}
+	if vcity_dpos.config.RelaxHeaderTimestampOrder {
+		logger.Warn("⚠️ 已启用块头时间戳单调性放宽（dpos_relax_header_timestamp_order=true），仅建议临时消化链上坏块后关闭")
 	}
 
 	return vcity_dpos, nil

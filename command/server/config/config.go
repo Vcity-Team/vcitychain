@@ -80,6 +80,8 @@ type Config struct {
 	DPoSDisableDoubleSignSlashing bool `json:"dpos_disable_double_sign_slashing" yaml:"dpos_disable_double_sign_slashing"`
 	// dpos_wall_clock_slot_alignment: 为 true 时块头时间戳对齐墙钟 slot（默认 false，可不写；SR 可逐台开启）
 	DPoSWallClockSlotAlignment bool `json:"dpos_wall_clock_slot_alignment" yaml:"dpos_wall_clock_slot_alignment"`
+	// dpos_relax_header_timestamp_order: 为 true 时 sync 可接受子块时间戳<=父块（默认 false，仅临时消化坏块）
+	DPoSRelaxHeaderTimestampOrder bool `json:"dpos_relax_header_timestamp_order" yaml:"dpos_relax_header_timestamp_order"`
 
 	// London Fork 配置（从 yaml 读取，不改变 genesis hash）
 	BaseFeeConfig string `json:"base_fee_config" yaml:"base_fee_config"` // 格式: "baseFee:baseFeeEM:baseFeeChangeDenom"

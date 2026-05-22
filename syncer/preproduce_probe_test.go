@@ -1,6 +1,7 @@
 package syncer
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -10,8 +11,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type stubTimestampVerifier struct{}
+
+func (stubTimestampVerifier) VerifyHeader(*types.Header) error {
+	return fmt.Errorf("timestamp older than parent")
+}
+
+func (stubTimestampVerifier) ProcessHeaders([]*types.Header) error { return nil }
+
 type stubPreProduceBlockchain struct {
-	header *types.Header
+	header   *types.Header
+	verifier blockchain.Verifier
 }
 
 func (s *stubPreProduceBlockchain) SubscribeEvents() blockchain.Subscription { return nil }
@@ -31,7 +41,7 @@ func (s *stubPreProduceBlockchain) HealCanonicalBlockState(*types.Block) (*types
 func (s *stubPreProduceBlockchain) WriteBlockWithoutConsensus(*types.Block, string) error {
 	return nil
 }
-func (s *stubPreProduceBlockchain) GetConsensus() blockchain.Verifier { return nil }
+func (s *stubPreProduceBlockchain) GetConsensus() blockchain.Verifier { return s.verifier }
 
 func TestPreProduceProbeRejectReason_TimestampOlderThanParent(t *testing.T) {
 	parentTS := time.Date(2026, 5, 22, 12, 48, 46, 0, time.UTC)
@@ -55,8 +65,11 @@ func TestPreProduceProbeRejectReason_TimestampOlderThanParent(t *testing.T) {
 	child.Hash = types.HeaderHash(child)
 
 	s := &syncer{
-		logger:     hclog.NewNullLogger(),
-		blockchain: &stubPreProduceBlockchain{header: parent},
+		logger: hclog.NewNullLogger(),
+		blockchain: &stubPreProduceBlockchain{
+			header:   parent,
+			verifier: stubTimestampVerifier{},
+		},
 	}
 	reason := s.preProduceProbeRejectReason(&types.Block{Header: child}, parent.Hash, parent.Number)
 	require.Equal(t, "timestamp older than parent", reason)
