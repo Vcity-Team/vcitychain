@@ -38,6 +38,17 @@ func TestTryLocalMaxBootAgree(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestComputeTrustedBootnodeTip_FarBehindLocalStillQuorums(t *testing.T) {
+	// 本地大幅落后时仍应采信 boot RPC 高度（不再按 local+2048 过滤 outlier）。
+	heights := []uint64{15927776, 15927776, 15927776, 15927776, 15927776, 15927776, 15927776}
+	s := &syncer{logger: hclog.NewNullLogger()}
+	local := uint64(15921556)
+	res := s.computeTrustedBootnodeQuorum(local, nil, heights)
+	require.True(t, res.Quorum)
+	require.Equal(t, uint64(15927776), res.Tip)
+	require.Equal(t, uint64(15927776), res.MaxBootHeight)
+}
+
 func TestPickSyncPeerForTarget_ForceBulkBootOnly(t *testing.T) {
 	bootAhead := peer.ID("boot-ahead")
 	bootStale := peer.ID("boot-stale")

@@ -15,7 +15,6 @@ const (
 	trustedBootnodeMedianSlack = 1
 	// 链尖簇：至少 K 台 bootnode 高度落在 [maxH-spread, maxH]（gossip 有先后差，median±1 过严）。
 	trustedBootnodeMaxSpreadSlack = 128
-	maxTrustedLeadOverLocal       = 2048
 	maxBootnodeHeightSpread       = 2048 // bootnode 间高度差超过此值视为分裂视图，不采信 max 簇
 	localAheadWarnBlocks          = 64
 	localAheadForceKickBlocks     = 256
@@ -43,11 +42,10 @@ const (
 )
 
 type trustedBootPeerReport struct {
-	PeerID         string
-	InPeerMap      bool
-	Number         uint64
-	HeightSource   string
-	SkippedOutlier bool
+	PeerID       string
+	InPeerMap    bool
+	Number       uint64
+	HeightSource string
 }
 
 type trustedTipResult struct {
@@ -114,20 +112,7 @@ func (s *syncer) fetchTrustedBootHeightsDirect(local uint64) ([]trustedBootPeerR
 		jsonRpcOK++
 		s.setTrustedBootRPCHeight(id, n)
 		if rep.InPeerMap {
-			if local > 0 && rep.Number > local+maxTrustedLeadOverLocal {
-				rep.SkippedOutlier = true
-				key := fmt.Sprintf("outlier:%s:%d", rep.PeerID, rep.Number)
-				s.logTrustedTipThrottled(key, func() {
-					s.logger.Info("syncer: ignore bootnode height far above local (outlier)",
-						"peer", rep.PeerID,
-						"peerNumber", rep.Number,
-						"heightSource", rep.HeightSource,
-						"localLatest", local,
-						"maxLead", maxTrustedLeadOverLocal)
-				})
-			} else {
-				heights = append(heights, rep.Number)
-			}
+			heights = append(heights, rep.Number)
 		}
 		reports = append(reports, rep)
 	}
