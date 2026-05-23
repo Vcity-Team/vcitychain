@@ -286,9 +286,6 @@ func (d *DPoS) updateMemoryFaultStatus(faultFlag FaultFlagInfo) {
 
 // updateBlockProducersFromFaultFlags 根据故障标志重新计算出块者列表
 func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) error {
-	d.logger.Info("🔄 开始根据故障标志重新计算出块者列表", "faultFlagsCount", len(faultFlags))
-
-	// 1. 获取所有验证者
 	if d.state == nil || d.state.StakeStore == nil {
 		return fmt.Errorf("state store not available")
 	}
@@ -296,10 +293,8 @@ func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) er
 	var allValidators validator.AccountSet
 	if d.runtime != nil && d.runtime.delegates != nil && len(d.runtime.delegates) > 0 {
 		allValidators = d.runtime.delegates.Copy()
-		d.logger.Info("✅ 使用runtime.delegates", "count", len(allValidators))
 	} else if len(d.delegates) > 0 {
 		allValidators = d.delegates.Copy()
-		d.logger.Info("✅ 使用d.delegates", "count", len(allValidators))
 	} else {
 		return fmt.Errorf("no validators set in memory")
 	}
@@ -317,9 +312,6 @@ func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) er
 	for _, validator := range allValidators {
 		if isFaulty, exists := faultMap[validator.Address]; exists && isFaulty {
 			faultyCount++
-			d.logger.Info("🚫 过滤掉故障验证者",
-				"address", validator.Address.String(),
-				"votingPower", validator.VotingPower.String())
 		} else {
 			activeValidators = append(activeValidators, validator)
 		}
@@ -341,32 +333,14 @@ func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) er
 		return bytes.Compare(activeValidators[i].Address[:], activeValidators[j].Address[:]) < 0
 	})
 
-	d.logger.Info("📊 排序后的验证者列表:")
-	for i, validator := range activeValidators {
-		d.logger.Info("🏆 排序后验证者",
-			"rank", i+1,
-			"address", validator.Address.String(),
-			"votingPower", validator.VotingPower.String())
-	}
-
 	// 5. 应用配置限制
 	maxValidators := d.config.DPoSValidatorsCount
-
-	d.logger.Info("🎯 验证者截取逻辑",
-		"maxValidators", maxValidators,
-		"activeValidators", len(activeValidators))
 
 	var finalValidators validator.AccountSet
 	if len(activeValidators) <= int(maxValidators) {
 		finalValidators = activeValidators
-		d.logger.Info("✅ 验证者数量 <= 配置数量，取全部验证者",
-			"取用数量", len(activeValidators),
-			"配置数量", maxValidators)
 	} else {
 		finalValidators = activeValidators[:maxValidators]
-		d.logger.Info("✂️ 验证者数量 > 配置数量，截取前N个",
-			"取用数量", len(finalValidators),
-			"配置数量", maxValidators)
 	}
 
 	// 6. 更新内存中的出块者列表
@@ -378,23 +352,6 @@ func (d *DPoS) updateBlockProducersFromFaultFlags(faultFlags []FaultFlagInfo) er
 		d.runtime.delegates = finalValidators.Copy()
 		d.runtime.lock.Unlock()
 
-		d.logger.Info("🔁 runtime.delegates已同步最新出块者列表",
-			"delegatesCount", len(d.runtime.delegates))
-	} else {
-		d.logger.Debug("ℹ️ runtime为空，无法同步delegates")
-	}
-
-	d.logger.Info("🎉 出块者列表更新完成",
-		"finalCount", len(finalValidators),
-		"maxValidators", maxValidators)
-
-	// 7. 记录最终出块者列表
-	d.logger.Info("📋 最终出块者列表:")
-	for i, validator := range finalValidators {
-		d.logger.Info("🎖️ 最终出块者",
-			"index", i+1,
-			"address", validator.Address.String(),
-			"votingPower", validator.VotingPower.String())
 	}
 
 	return nil
@@ -411,8 +368,6 @@ func (d *DPoS) ReloadValidatorsAfterRecovery() error {
 func (d *DPoS) reloadValidatorsAfterRecovery() error {
 	d.lock.Lock()
 	defer d.lock.Unlock()
-
-	d.logger.Info("🔄 恢复提案执行后：开始重新加载验证者集合")
 
 	// 1. 从数据库读取所有验证者（不截取，因为需要先过滤故障再截取）
 	if d.state == nil || d.state.StakeStore == nil {
@@ -444,18 +399,10 @@ func (d *DPoS) reloadValidatorsAfterRecovery() error {
 
 		if isFaulty {
 			faultyCount++
-			d.logger.Info("🚫 过滤掉故障验证者",
-				"address", validator.Address.String(),
-				"votingPower", validator.VotingPower.String())
 		} else {
 			activeValidators = append(activeValidators, validator)
 		}
 	}
-
-	d.logger.Debug("✅ 故障验证者过滤完成",
-		"totalValidators", len(allValidators),
-		"faultyValidators", faultyCount,
-		"activeValidators", len(activeValidators))
 
 	// 3. 按权重倒序排序（GetSortedValidatorsWithLimit已经排序，但为了确保一致性，再次排序）
 	sort.Slice(activeValidators, func(i, j int) bool {
@@ -476,48 +423,15 @@ func (d *DPoS) reloadValidatorsAfterRecovery() error {
 		finalValidators = activeValidators[:maxValidators]
 	}
 
-	// 记录截取后的验证者列表（用于调试）
-	d.logger.Info("📋 [reloadValidatorsAfterRecovery] 截取后的验证者列表",
-		"finalCount", len(finalValidators),
-		"maxValidators", maxValidators,
-		"validatorsList", func() []string {
-			var vs []string
-			for i, v := range finalValidators {
-				vs = append(vs, fmt.Sprintf("[%d]%s(weight:%s)", i, v.Address.String(), v.VotingPower.String()))
-			}
-			return vs
-		}())
-
 	// 5. 更新内存中的验证者集合
 	d.delegates = finalValidators.Copy()
-	d.logger.Info("✅ 已更新 d.delegates",
-		"delegatesCount", len(d.delegates))
 
 	// 6. 同步到runtime
 	if d.runtime != nil {
 		d.runtime.lock.Lock()
 		d.runtime.delegates = finalValidators.Copy()
 		d.runtime.lock.Unlock()
-		d.logger.Info("✅ 已同步 runtime.delegates",
-			"runtimeDelegatesCount", len(d.runtime.delegates))
-	} else {
-		d.logger.Debug("ℹ️ runtime为空，无法同步delegates")
 	}
-
-	d.logger.Info("🎉 验证者集合重新加载完成",
-		"finalCount", len(finalValidators),
-		"maxValidators", maxValidators)
-
-	// 同步到内存（不再保存到数据库，ExtraData 是唯一数据源）
-	d.delegates = finalValidators.Copy()
-	if d.runtime != nil {
-		d.runtime.lock.Lock()
-		d.runtime.delegates = finalValidators.Copy()
-		d.runtime.lock.Unlock()
-	}
-
-	d.logger.Info("✅ 已同步验证者集合到内存",
-		"finalCount", len(finalValidators))
 
 	return nil
 }
@@ -647,8 +561,6 @@ func (d *DPoS) getCurrentEpochByBlock(blockNumber uint64) uint64 {
 
 // calculateNextEpochValidators 计算下一个epoch的验证者集合
 func (d *DPoS) calculateNextEpochValidators(blockNumber uint64) (validator.AccountSet, error) {
-	d.logger.Info("计算下一个epoch的验证者集合", "blockNumber", blockNumber)
-
 	// 1. 获取所有验证者（包括故障的）
 	allValidators, err := d.GetSortedValidatorsWithLimit()
 	if err != nil {
@@ -671,9 +583,6 @@ func (d *DPoS) calculateNextEpochValidators(blockNumber uint64) (validator.Accou
 
 		if isFaulty {
 			faultyCount++
-			d.logger.Info("🚫 过滤掉故障验证者",
-				"address", validator.Address.String(),
-				"votingPower", validator.VotingPower.String())
 		} else {
 			activeValidators = append(activeValidators, validator)
 		}
@@ -689,11 +598,6 @@ func (d *DPoS) calculateNextEpochValidators(blockNumber uint64) (validator.Accou
 		// 2. 票数相同，按地址升序排序（确保完全一致）
 		return bytes.Compare(activeValidators[i].Address[:], activeValidators[j].Address[:]) < 0
 	})
-
-	d.logger.Info("✅ 下一个epoch验证者集合计算完成",
-		"totalValidators", len(allValidators),
-		"faultyValidators", faultyCount,
-		"activeValidators", len(activeValidators))
 
 	return activeValidators, nil
 }

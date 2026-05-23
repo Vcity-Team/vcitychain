@@ -231,9 +231,6 @@ func (d *DPoS) saveValidatorSetForBlockWithValidators(blockNumber uint64, valida
 
 // loadValidatorsFromDatabaseWithLimit 从数据库加载验证者并按voterpower排序截取前N个
 func (d *DPoS) loadValidatorsFromDatabaseWithLimit() error {
-	d.logger.Info("🔍 开始从数据库加载验证者并按voterpower排序截取前N个")
-
-	// 使用公共函数获取排序和限制后的验证者
 	dbValidators, err := d.GetSortedValidatorsWithLimit()
 	if err != nil {
 		return fmt.Errorf("failed to get sorted validators with limit: %w", err)
@@ -241,22 +238,6 @@ func (d *DPoS) loadValidatorsFromDatabaseWithLimit() error {
 
 	if len(dbValidators) == 0 {
 		return fmt.Errorf("no validators in database")
-	}
-
-	d.logger.Info("✅ 从数据库成功读取验证者", "count", len(dbValidators))
-
-	// 添加详细日志：打印从数据库读取的验证者信息
-	d.logger.Info("🔍 数据库验证者详细信息:")
-	for i, validator := range dbValidators {
-		// 获取验证者的故障标志信息
-		faultInfo := d.getValidatorFaultInfo(validator.Address)
-		d.logger.Info("🔍 数据库验证者",
-			"index", i,
-			"address", validator.Address.String(),
-			"votingPower", validator.VotingPower.String(),
-			"isActive", validator.IsActive,
-			"hasBlsKey", validator.BlsKey != nil,
-			"faultFlag", faultInfo) // 添加故障标志信息
 	}
 
 	return nil

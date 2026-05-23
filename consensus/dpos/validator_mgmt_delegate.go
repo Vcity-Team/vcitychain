@@ -50,88 +50,35 @@ func (d *DPoS) initializeDelegates() error {
 
 	// 首先尝试从数据库读取受托人（真正用于出块）
 	if d.state != nil && d.state.StakeStore != nil {
-		d.logger.Info("🔍 开始从数据库读取验证者信息...")
-		// 使用公共函数获取排序和限制后的验证者（包含故障过滤）
 		dbValidators, err := d.GetSortedValidatorsWithLimit()
 		if err != nil {
 			d.logger.Warn("⚠️ 从数据库读取受托人失败，将使用创世文件", "error", err)
 		} else if len(dbValidators) > 0 {
-			d.logger.Info("✅ 从数据库成功读取验证者", "count", len(dbValidators))
-
-			d.logger.Info("📊 数据库验证者详细信息:")
-			for i, validator := range dbValidators {
-				// 获取验证者的故障标志信息
-				faultInfo := d.getValidatorFaultInfo(validator.Address)
-				d.logger.Info("👤 验证者信息",
-					"index", i+1,
-					"address", validator.Address.String(),
-					"votingPower", validator.VotingPower.String(),
-					"isActive", validator.IsActive,
-					"faultFlag", faultInfo) // 添加故障标志信息
-			}
-
-			// 按权重倒序排序
-			d.logger.Info("🔄 开始按权重倒序排序验证者...")
 			sort.Slice(dbValidators, func(i, j int) bool {
-				// 1. 首先按票数降序排序
 				votingPowerCmp := dbValidators[i].VotingPower.Cmp(dbValidators[j].VotingPower)
 				if votingPowerCmp != 0 {
 					return votingPowerCmp > 0
 				}
-				// 2. 票数相同，按地址升序排序（确保完全一致）
 				return bytes.Compare(dbValidators[i].Address[:], dbValidators[j].Address[:]) < 0
 			})
 
-			d.logger.Info("📈 排序后的验证者列表:")
-			for i, validator := range dbValidators {
-				d.logger.Info("🏆 排序后验证者",
-					"rank", i+1,
-					"address", validator.Address.String(),
-					"votingPower", validator.VotingPower.String())
-			}
 			maxDelegates := int(d.config.DPoSValidatorsCount)
-			originalCount := len(dbValidators)
-			d.logger.Info("📊 截取前统计",
-				"配置的最大验证者数量", maxDelegates,
-				"数据库中的验证者数量", originalCount)
-
-			if originalCount <= maxDelegates {
-				d.logger.Info("✅ 数据库验证者数量 <= 配置数量，取全部验证者",
-					"取用数量", originalCount,
-					"配置数量", maxDelegates)
-			} else {
-				d.logger.Info("✂️ 数据库验证者数量 > 配置数量，截取前N个",
-					"截取前", maxDelegates,
-					"原始数量", originalCount,
-					"截取后", maxDelegates)
-			}
-
-			if maxDelegates > 0 && originalCount > maxDelegates {
+			if maxDelegates > 0 && len(dbValidators) > maxDelegates {
 				dbValidators = dbValidators[:maxDelegates]
 			}
 
 			d.delegates = dbValidators
-			d.logger.Info("✅ 验证者集合已从数据库加载并设置到内存",
-				"最终数量", len(d.delegates))
 
 			d.initializeGenesisValidatorsMap()
 
-			// 对比并覆盖 epoch validators，确保与配置截取后的集合一致
-			d.logger.Info("🔄 [启动时] 开始对齐 epoch validators 与配置截取后的集合",
-				"当前验证者数量", len(d.delegates),
-				"配置最大验证者数量", d.config.DPoSValidatorsCount)
 			if err := d.reloadValidatorsAfterRecovery(); err != nil {
-				d.logger.Warn("⚠️ [启动时] 对齐 epoch validators 失败，但继续启动",
-					"error", err)
-			} else {
-				d.logger.Info("✅ [启动时] epoch validators 对齐完成")
+				d.logger.Warn("⚠️ [启动时] 对齐 epoch validators 失败，但继续启动", "error", err)
 			}
 
 			return nil
 		}
 	}
 
-	d.logger.Info("🔍 开始从创世块解析验证者...")
 	if err := d.parseValidatorsFromGenesis(); err != nil {
 		d.logger.Warn("⚠️ 从创世块解析验证者失败", "error", err)
 		// 如果创世块也失败，使用配置中的初始验证者
@@ -150,18 +97,10 @@ func (d *DPoS) initializeDelegates() error {
 		d.initializeGenesisValidatorsMap()
 	}
 
-	// 对比并覆盖 epoch validators，确保与配置截取后的集合一致
-	d.logger.Info("🔄 [启动时] 开始对齐 epoch validators 与配置截取后的集合",
-		"当前验证者数量", len(d.delegates),
-		"配置最大验证者数量", d.config.DPoSValidatorsCount)
 	if err := d.reloadValidatorsAfterRecovery(); err != nil {
-		d.logger.Warn("⚠️ [启动时] 对齐 epoch validators 失败，但继续启动",
-			"error", err)
-	} else {
-		d.logger.Info("✅ [启动时] epoch validators 对齐完成")
+		d.logger.Warn("⚠️ [启动时] 对齐 epoch validators 失败，但继续启动", "error", err)
 	}
 
-	d.logger.Info("✅ 验证者初始化完成", "count", len(d.delegates))
 	return nil
 }
 

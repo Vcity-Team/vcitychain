@@ -579,11 +579,11 @@ func (s *Server) updateBootnodeConnCount(peerID peer.ID, delta int64) {
 	s.bootnodes.increaseBootnodeConnCount(delta)
 }
 
-// DisconnectFromPeer disconnects the networking server from the specified peer
+// DisconnectFromPeer disconnects the networking server from the specified peer.
+// reason 仅供调用方语义，不记日志（身份握手失败等会高频断连，打 INFO 易刷屏）。
 func (s *Server) DisconnectFromPeer(peer peer.ID, reason string) {
+	_ = reason
 	if s.host.Network().Connectedness(peer) == network.Connected {
-		s.logger.Info("Closing connection", "id", peer, "reason", reason)
-
 		if err := s.host.Network().ClosePeer(peer); err != nil {
 			s.logger.Error("Unable to gracefully close connection", "id", peer, "err", err)
 		}
