@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -18,8 +19,9 @@ const (
 	maxBootnodeHeightSpread       = 2048 // bootnode 间高度差超过此值视为分裂视图，不采信 max 簇
 	localAheadWarnBlocks          = 64
 	localAheadForceKickBlocks     = 256
-	trustedTipLogInterval         = 15 * time.Second
-	trustedBootHeightCacheTTL     = 2 * time.Second // GetStatus 直查 boot 高度的缓存时间
+	trustedTipLogInterval              = 15 * time.Second
+	trustedBootHeightCacheTTL          = 2 * time.Second // 常态下 boot eth_blockNumber 缓存
+	trustedBootHeightCacheTTLCatchUp   = 8 * time.Second // 追块中降低 RPC 频率
 	// syncer 若干 INFO（quorum / best-not-ahead / force-bulk 等）仅在本机链尖连续未变达到该时长后打印。
 	syncerLocalStallLogInterval = 20 * time.Second
 )
@@ -73,48 +75,97 @@ func (s *syncer) GetTrustedCanonicalTip() uint64 {
 	return s.computeTrustedBootnodeTip(local).Tip
 }
 
-// fetchTrustedBootHeightsDirect 对每个创世 boot：genesis bootnodes 中的 IP + 本节点 jsonrpc_addr 端口，HTTP eth_blockNumber。
+type bootHeightFetchResult struct {
+	rep      trustedBootPeerReport
+	height   uint64
+	hasHeight bool
+	jsonOK   bool
+	jsonFail bool
+	noURL    bool
+	failPeer peer.ID
+	failRPC  string
+	failErr  error
+}
+
+// fetchTrustedBootHeightsDirect 对每个创世 boot 并行 HTTP eth_blockNumber（boot IP + jsonrpc 端口）。
 func (s *syncer) fetchTrustedBootHeightsDirect(local uint64) ([]trustedBootPeerReport, []uint64) {
-	reports := make([]trustedBootPeerReport, 0, len(s.trustedBootnodeIDs))
-	heights := make([]uint64, 0, len(s.trustedBootnodeIDs))
-	jsonRpcOK := 0
-	jsonRpcFail := 0
-	noURL := 0
+	ids := make([]peer.ID, 0, len(s.trustedBootnodeIDs))
 	for id := range s.trustedBootnodeIDs {
+		ids = append(ids, id)
+	}
+	results := make([]bootHeightFetchResult, len(ids))
+	var wg sync.WaitGroup
+	for i, id := range ids {
+		i, id := i, id
 		rep := trustedBootPeerReport{
 			PeerID:       id.String(),
 			HeightSource: heightSourceNone,
 		}
 		rpcURL := s.trustedBootJSONRPC[id]
 		if rpcURL == "" {
-			noURL++
-			reports = append(reports, rep)
+			results[i] = bootHeightFetchResult{rep: rep, noURL: true}
 			continue
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), bootJSONRPCTimeout)
-		n, err := fetchEthBlockNumber(ctx, rpcURL)
-		cancel()
-		if err != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), bootJSONRPCTimeout)
+			n, err := fetchEthBlockNumber(ctx, rpcURL)
+			cancel()
+			if err != nil {
+				results[i] = bootHeightFetchResult{
+					rep:      rep,
+					jsonFail: true,
+					failPeer: id,
+					failRPC:  rpcURL,
+					failErr:  err,
+				}
+				return
+			}
+			rep.InPeerMap = true
+			rep.Number = n
+			rep.HeightSource = heightSourceJSONRPC
+			s.setTrustedBootRPCHeight(id, n)
+			results[i] = bootHeightFetchResult{
+				rep:       rep,
+				height:    n,
+				hasHeight: true,
+				jsonOK:    true,
+			}
+		}()
+	}
+	wg.Wait()
+
+	reports := make([]trustedBootPeerReport, 0, len(ids))
+	heights := make([]uint64, 0, len(ids))
+	jsonRpcOK := 0
+	jsonRpcFail := 0
+	noURL := 0
+	for _, res := range results {
+		if res.noURL {
+			noURL++
+			reports = append(reports, res.rep)
+			continue
+		}
+		if res.jsonFail {
 			jsonRpcFail++
-			key := fmt.Sprintf("boot-jsonrpc-fail:%s", id.String())
+			key := fmt.Sprintf("boot-jsonrpc-fail:%s", res.failPeer.String())
 			s.logTrustedTipThrottled(key, func() {
 				s.logger.Warn("syncer: bootnode eth_blockNumber failed (no fallback)",
-					"peer", id.String(),
-					"jsonRpc", normalizeJSONRPCEndpoint(rpcURL),
-					"err", err)
+					"peer", res.failPeer.String(),
+					"jsonRpc", normalizeJSONRPCEndpoint(res.failRPC),
+					"err", res.failErr)
 			})
-			reports = append(reports, rep)
+			reports = append(reports, res.rep)
 			continue
 		}
-		rep.InPeerMap = true
-		rep.Number = n
-		rep.HeightSource = heightSourceJSONRPC
-		jsonRpcOK++
-		s.setTrustedBootRPCHeight(id, n)
-		if rep.InPeerMap {
-			heights = append(heights, rep.Number)
+		if res.jsonOK {
+			jsonRpcOK++
 		}
-		reports = append(reports, rep)
+		reports = append(reports, res.rep)
+		if res.hasHeight {
+			heights = append(heights, res.height)
+		}
 	}
 
 	sort.Slice(reports, func(i, j int) bool { return reports[i].PeerID < reports[j].PeerID })
@@ -132,9 +183,24 @@ func (s *syncer) fetchTrustedBootHeightsDirect(local uint64) ([]trustedBootPeerR
 	return reports, heights
 }
 
-func (s *syncer) collectTrustedBootHeights(local uint64) ([]trustedBootPeerReport, []uint64) {
+func (s *syncer) trustedBootHeightCacheTTLFor(local uint64) time.Duration {
+	if s.syncCatchUpActive.Load() > 0 {
+		return trustedBootHeightCacheTTLCatchUp
+	}
 	s.trustedBootHeightMu.Lock()
-	if time.Since(s.trustedBootHeightCachedAt) < trustedBootHeightCacheTTL &&
+	defer s.trustedBootHeightMu.Unlock()
+	for _, h := range s.trustedBootHeightHeights {
+		if h > local {
+			return trustedBootHeightCacheTTLCatchUp
+		}
+	}
+	return trustedBootHeightCacheTTL
+}
+
+func (s *syncer) collectTrustedBootHeights(local uint64) ([]trustedBootPeerReport, []uint64) {
+	ttl := s.trustedBootHeightCacheTTLFor(local)
+	s.trustedBootHeightMu.Lock()
+	if time.Since(s.trustedBootHeightCachedAt) < ttl &&
 		len(s.trustedBootHeightHeights) > 0 {
 		reports := append([]trustedBootPeerReport(nil), s.trustedBootHeightReports...)
 		heights := append([]uint64(nil), s.trustedBootHeightHeights...)

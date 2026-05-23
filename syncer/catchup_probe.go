@@ -72,17 +72,18 @@ func (s *syncer) orderedBootCatchUpCandidatesRotated() []peer.ID {
 	return rotatePeerIDs(s.orderedBootCatchUpCandidates(), int(s.bulkBootRotateIdx.Load()))
 }
 
-// tryCatchUpBurstFromBoot：lag < bulkMinLag 时每轮连续 catch-up；lag 在 [bulkMinLag, largeLagBurst) 走 bulk/单块；lag >= largeLagBurst 仍允许 burst。
+// tryCatchUpBurstFromBoot：trusted 超前时按 lag 连续 catch-up（小 lag 每轮最多 catchUpBurstSmallLagMax 块）。
 func (s *syncer) tryCatchUpBurstFromBoot(local uint64, meta trustedTipResult, callback func(*types.FullBlock) bool) bool {
 	if !trustedAheadOfLocal(meta, local) {
 		return false
 	}
 	lag := trustedCatchUpLag(meta, local)
-	if lag >= catchUpBulkMinLag && lag < catchUpLargeLagBurst {
+	burstMax := catchUpBurstLimit(lag)
+	if burstMax <= 0 {
 		return false
 	}
 	wrote := false
-	for burst := 0; burst < catchUpBurstMaxBlocks; burst++ {
+	for burst := 0; burst < burstMax; burst++ {
 		if !trustedAheadOfLocal(meta, local) {
 			break
 		}
@@ -124,7 +125,7 @@ func (s *syncer) tryCatchUpNextBlockFromBoot(local uint64, meta trustedTipResult
 			return false
 		}
 		if s.ingestCatchUpBlock(pid, blk, callback) {
-			s.logger.Info("syncer: catch-up wrote next block from boot (trusted height ahead)",
+			s.logger.Debug("syncer: catch-up wrote next block from boot (trusted height ahead)",
 				"peer", pid.String(),
 				"blockNumber", nextNum,
 				"trustedTip", meta.Tip,

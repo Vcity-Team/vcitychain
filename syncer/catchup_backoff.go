@@ -4,7 +4,7 @@ import "time"
 
 const (
 	// trustedAheadCatchUpRetryBackoff：quorum/RPC 已确认网络超前时，短退避重试（避免固定 3s 空等）。
-	trustedAheadCatchUpRetryBackoff = 1 * time.Second
+	trustedAheadCatchUpRetryBackoff = 500 * time.Millisecond
 )
 
 // trustedAheadOfLocal boot RPC/quorum 已表明网络高于本地 → 可直接对 boot 拉 local+1。

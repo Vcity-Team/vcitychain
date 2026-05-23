@@ -108,6 +108,7 @@ type syncer struct {
 	bestNotAheadLogMu           sync.Mutex
 	lastBestNotAheadStatusLogAt time.Time
 	bestNotAheadWakePending     atomic.Bool
+	syncWakePending             atomic.Bool
 
 	trustedQuorumLogMu        sync.Mutex
 	trustedQuorumLogLocalHeight uint64
@@ -160,8 +161,8 @@ func NewSyncer(
 		syncPeerService: NewSyncPeerService(logger, network, blockchain),
 		syncPeerClient:  NewSyncPeerClient(logger, network, blockchain),
 		blockTimeout:    blockTimeout,
-		// 缓冲 1：避免 notify 的非阻塞发送在关键时刻被丢弃，导致 Sync 长期卡在 <-newStatusCh
-		newStatusCh:           make(chan struct{}, 1),
+		// 缓冲：合并连续 notify，减少「写一块后丢唤醒」导致空等 self-wake。
+		newStatusCh:           make(chan struct{}, 8),
 		closeCh:               make(chan struct{}),
 		peerMap:               new(PeerMap),
 		consensusSwitchHeight: consensusSwitchHeight,
@@ -332,13 +333,19 @@ func (s *syncer) notifyNewStatusEvent() {
 		}
 	}()
 
-	// 使用非阻塞发送，避免频繁触发
-	select {
-	case s.newStatusCh <- struct{}{}:
-		// 成功发送
-	default:
-		// channel 已满或已关闭，忽略
+	for attempt := 0; attempt < 3; attempt++ {
+		select {
+		case s.newStatusCh <- struct{}{}:
+			s.syncWakePending.Store(false)
+			return
+		default:
+		}
+		select {
+		case <-s.newStatusCh:
+		default:
+		}
 	}
+	s.syncWakePending.Store(true)
 }
 
 // GetSyncProgression returns progression
@@ -678,11 +685,21 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 
 	for {
 		// Wait for a new event to arrive (or exit on shutdown)
-		select {
-		case <-s.newStatusCh:
-		case <-s.closeCh:
-			return nil
+		if !s.syncWakePending.Swap(false) {
+			select {
+			case <-s.newStatusCh:
+			case <-s.closeCh:
+				return nil
+			}
 		}
+		for {
+			select {
+			case <-s.newStatusCh:
+			default:
+				goto syncIteration
+			}
+		}
+	syncIteration:
 
 		// fetch local latest block
 		if header := s.blockchain.Header(); header != nil {
@@ -738,14 +755,9 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			})
 		}
 
-		// trusted 已知超前：lag<2 或 lag>=largeLagBurst 时 burst；中间段单块 catch-up + bulk。
+		// trusted 已知超前：优先 boot burst（小 lag 每轮最多 catchUpBurstSmallLagMax 块），失败再走 bulk。
 		if trustedAheadOfLocal(trustedMeta, localLatest) {
-			lag := trustedCatchUpLag(trustedMeta, localLatest)
-			if lag < catchUpBulkMinLag || lag >= catchUpLargeLagBurst {
-				if s.tryCatchUpBurstFromBoot(localLatest, trustedMeta, callback) {
-					continue
-				}
-			} else if s.tryCatchUpNextBlockFromBoot(localLatest, trustedMeta, callback, true) {
+			if s.tryCatchUpBurstFromBoot(localLatest, trustedMeta, callback) {
 				continue
 			}
 		}

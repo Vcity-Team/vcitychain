@@ -6,8 +6,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTrustedCatchUpLag(t *testing.T) {
-	meta := trustedTipResult{Branch: trustedTipBranchMaxCluster, Tip: 105, MaxBootHeight: 103}
-	require.Equal(t, uint64(2), trustedCatchUpLag(meta, 103))
-	require.Equal(t, uint64(0), trustedCatchUpLag(meta, 105))
+func TestCatchUpBurstLimit(t *testing.T) {
+	require.Equal(t, 0, catchUpBurstLimit(0))
+	require.Equal(t, 1, catchUpBurstLimit(1))
+	require.Equal(t, 4, catchUpBurstLimit(4))
+	require.Equal(t, catchUpBurstSmallLagMax, catchUpBurstLimit(20))
+	require.Equal(t, catchUpBurstMaxBlocks, catchUpBurstLimit(100))
 }
