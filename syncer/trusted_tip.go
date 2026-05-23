@@ -285,6 +285,12 @@ func (s *syncer) logTrustedTipThrottled(key string, fn func()) {
 	fn()
 }
 
+// refreshTrustedMetaForCatchUp 强制刷新 boot RPC 高度后重算 quorum tip（用于 catch-up burst，避免缓存 tip 误判已追平）。
+func (s *syncer) refreshTrustedMetaForCatchUp(local uint64) trustedTipResult {
+	s.invalidateTrustedBootHeightCache()
+	return s.computeTrustedBootnodeTip(local)
+}
+
 func (s *syncer) computeTrustedBootnodeTip(local uint64) trustedTipResult {
 	reports, heights := s.collectTrustedBootHeights(local)
 	out := s.computeTrustedBootnodeQuorum(local, reports, heights)

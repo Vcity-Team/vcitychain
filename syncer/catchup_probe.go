@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -72,35 +73,82 @@ func (s *syncer) orderedBootCatchUpCandidatesRotated() []peer.ID {
 	return rotatePeerIDs(s.orderedBootCatchUpCandidates(), int(s.bulkBootRotateIdx.Load()))
 }
 
+// logCatchUpBurstBreak 记录 burst 提前结束原因（限频 INFO，便于与「误判追平」区分）。
+func (s *syncer) logCatchUpBurstBreak(reason string, local uint64, meta trustedTipResult, extra ...interface{}) {
+	key := fmt.Sprintf("burst-break:%s:%d", reason, local)
+	s.logTrustedTipThrottled(key, func() {
+		args := append([]interface{}{
+			"reason", reason,
+			"localLatest", local,
+			"trustedTip", meta.Tip,
+			"maxBootHeight", meta.MaxBootHeight,
+			"trustedBranch", meta.Branch,
+		}, extra...)
+		s.logger.Info("syncer: catch-up burst stopped", args...)
+	})
+}
+
 // tryCatchUpBurstFromBoot：trusted 超前时按 lag 连续 catch-up（小 lag 每轮最多 catchUpBurstSmallLagMax 块）。
-func (s *syncer) tryCatchUpBurstFromBoot(local uint64, meta trustedTipResult, callback func(*types.FullBlock) bool) bool {
+// 入口强制刷新 boot 高度；若 local 已达旧 tip 但网络仍超前，再条件刷新一次 meta，避免「trustedTip==local」误停。
+func (s *syncer) tryCatchUpBurstFromBoot(local uint64, _ trustedTipResult, callback func(*types.FullBlock) bool) bool {
+	meta := s.refreshTrustedMetaForCatchUp(local)
 	if !trustedAheadOfLocal(meta, local) {
 		return false
 	}
+	startTip := meta.Tip
 	lag := trustedCatchUpLag(meta, local)
 	burstMax := catchUpBurstLimit(lag)
 	if burstMax <= 0 {
 		return false
 	}
+	if burstMax > catchUpBurstMaxBlocks {
+		burstMax = catchUpBurstMaxBlocks
+	}
+
 	wrote := false
-	for burst := 0; burst < burstMax; burst++ {
+	blocksWritten := 0
+	for burst := 0; burst < burstMax; {
 		if !trustedAheadOfLocal(meta, local) {
+			if local >= startTip && local >= meta.Tip {
+				fresh := s.refreshTrustedMetaForCatchUp(local)
+				if trustedAheadOfLocal(fresh, local) {
+					meta = fresh
+					if extra := catchUpBurstLimit(trustedCatchUpLag(meta, local)); extra > 0 {
+						need := burst + extra
+						if need > burstMax {
+							if need > catchUpBurstMaxBlocks {
+								need = catchUpBurstMaxBlocks
+							}
+							burstMax = need
+						}
+					}
+					continue
+				}
+				s.logCatchUpBurstBreak("not_ahead_after_refresh", local, meta)
+			} else {
+				s.logCatchUpBurstBreak("not_ahead", local, meta)
+			}
 			break
 		}
 		if !s.tryCatchUpNextBlockFromBoot(local, meta, callback, false) {
+			s.logCatchUpBurstBreak("fetch_fail", local, meta, "nextHeight", local+1)
 			break
 		}
 		wrote = true
+		blocksWritten++
+		burst++
 		if hdr := s.blockchain.Header(); hdr != nil {
 			local = hdr.Number
 		}
 	}
 	if wrote {
 		s.notifyNewStatusEvent()
+		meta = s.computeTrustedBootnodeTip(local)
 		s.logger.Info("syncer: catch-up burst completed from boot",
 			"localLatest", local,
 			"trustedTip", meta.Tip,
-			"maxBootHeight", meta.MaxBootHeight)
+			"maxBootHeight", meta.MaxBootHeight,
+			"blocksWritten", blocksWritten)
 	}
 	return wrote
 }
