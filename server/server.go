@@ -182,9 +182,9 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		engineConfig["dpos_disable_double_sign_slashing"] = true
 		s.logger.Info("✅ 透传 dpos_disable_double_sign_slashing=true 到 DPoS（关闭双签削减）")
 	}
-	if s.config.DPoSWallClockSlotAlignment {
-		engineConfig["dpos_wall_clock_slot_alignment"] = true
-		s.logger.Info("✅ 透传 dpos_wall_clock_slot_alignment=true 到 DPoS（墙钟 slot 对齐块头时间戳）")
+	engineConfig["dpos_wall_clock_slot_alignment"] = s.config.DPoSWallClockSlotAlignment
+	if !s.config.DPoSWallClockSlotAlignment {
+		s.logger.Info("ℹ️ dpos_wall_clock_slot_alignment=false，关闭墙钟 slot 对齐")
 	}
 	if s.config.DPoSRelaxHeaderTimestampOrder {
 		engineConfig["dpos_relax_header_timestamp_order"] = true
@@ -939,9 +939,9 @@ func (s *Server) setupConsensus() error {
 		engineConfig["dpos_disable_double_sign_slashing"] = true
 		s.logger.Info("✅ setupConsensus: dpos_disable_double_sign_slashing=true 已写入 engineConfig")
 	}
-	if s.config.DPoSWallClockSlotAlignment {
-		engineConfig["dpos_wall_clock_slot_alignment"] = true
-		s.logger.Info("✅ setupConsensus: dpos_wall_clock_slot_alignment=true 已写入 engineConfig")
+	engineConfig["dpos_wall_clock_slot_alignment"] = s.config.DPoSWallClockSlotAlignment
+	if !s.config.DPoSWallClockSlotAlignment {
+		s.logger.Info("ℹ️ setupConsensus: dpos_wall_clock_slot_alignment=false，关闭墙钟 slot 对齐")
 	}
 	if s.config.DPoSRelaxHeaderTimestampOrder {
 		engineConfig["dpos_relax_header_timestamp_order"] = true

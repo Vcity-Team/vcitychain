@@ -78,7 +78,7 @@ type Config struct {
 	DPoSBootstrapRPC string `json:"dpos_bootstrap_rpc" yaml:"dpos_bootstrap_rpc"`
 	// dpos_disable_double_sign_slashing: 为 true 时关闭双签检测、削减及故障落库（默认 false，可不写）
 	DPoSDisableDoubleSignSlashing bool `json:"dpos_disable_double_sign_slashing" yaml:"dpos_disable_double_sign_slashing"`
-	// dpos_wall_clock_slot_alignment: 为 true 时块头时间戳对齐墙钟 slot（默认 false，可不写；SR 可逐台开启）
+	// dpos_wall_clock_slot_alignment: 块头时间戳对齐墙钟 slot（默认 true，可不写；显式 false 可关闭）
 	DPoSWallClockSlotAlignment bool `json:"dpos_wall_clock_slot_alignment" yaml:"dpos_wall_clock_slot_alignment"`
 	// dpos_relax_header_timestamp_order: 为 true 时 sync 可接受子块时间戳<=父块（默认 false，仅临时消化坏块）
 	DPoSRelaxHeaderTimestampOrder bool `json:"dpos_relax_header_timestamp_order" yaml:"dpos_relax_header_timestamp_order"`
@@ -201,7 +201,8 @@ func DefaultConfig() *Config {
 		DPoSRewardAmount:        "1000000000000000000000", // 默认1000 VCITY
 		BlockTimeSeconds:        3,                        // 默认3秒一个区块
 		DPoSCommissionRatio:     1000,                     // 默认佣金 10%（验证者未设置时使用）
-		DPoSCommissionEffective: "21d",                    // 默认21天生效
+		DPoSCommissionEffective:    "21d", // 默认21天生效
+		DPoSWallClockSlotAlignment: true,  // 块头时间戳默认对齐墙钟 slot
 	}
 }
 

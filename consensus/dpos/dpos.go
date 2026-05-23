@@ -306,7 +306,7 @@ type DPoSConfig struct {
 	CommissionRateDefault     uint64        // 默认佣金率（基点）
 	CommissionEffectivePeriod time.Duration // 佣金率修改的延迟生效周期
 
-	// WallClockSlotAlignment 为 true 时，块头/调度时间戳 additionally 对齐墙钟 slot（node-config: dpos_wall_clock_slot_alignment）。
+	// WallClockSlotAlignment 块头时间戳对齐墙钟 slot；未配置时默认 true（升级无需改 yaml）。
 	WallClockSlotAlignment bool `json:"dpos_wall_clock_slot_alignment" yaml:"dpos_wall_clock_slot_alignment"`
 	// RelaxHeaderTimestampOrder 为 true 时，VerifyHeader 暂不拒绝「子块时间戳<=父块」（临时运维开关，链上坏块消化后应关闭）。
 	RelaxHeaderTimestampOrder bool `json:"dpos_relax_header_timestamp_order" yaml:"dpos_relax_header_timestamp_order"`
@@ -986,7 +986,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		closeCh:     make(chan struct{}),
 		logger:      logger,
 		txPool:      params.TxPool,
-		config:      &DPoSConfig{},              // 初始化config结构体
+		config:      &DPoSConfig{WallClockSlotAlignment: true},
 		rawConfig:   params.Config.Config,       // 存储原始配置
 		lastLogTime: make(map[string]time.Time), // 初始化日志频率限制
 
@@ -1515,12 +1515,14 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		if b, parsed := parseFlexibleBool(v); parsed {
 			vcity_dpos.config.WallClockSlotAlignment = b
 		} else {
-			logger.Warn("dpos_wall_clock_slot_alignment 无法解析，按 false 处理",
+			logger.Warn("dpos_wall_clock_slot_alignment 无法解析，保持默认 true",
 				"value", v, "type", fmt.Sprintf("%T", v))
 		}
 	}
 	if vcity_dpos.config.WallClockSlotAlignment {
-		logger.Info("⏰ 已启用墙钟 slot 对齐出块时间戳（dpos_wall_clock_slot_alignment=true）")
+		logger.Info("⏰ 墙钟 slot 对齐已启用（默认 true；未配置或升级后无需改 yaml）")
+	} else {
+		logger.Info("ℹ️ 墙钟 slot 对齐已关闭（dpos_wall_clock_slot_alignment=false）")
 	}
 
 	if v, ok := getConfigValue("dpos_relax_header_timestamp_order"); ok {

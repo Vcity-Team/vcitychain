@@ -89,13 +89,14 @@ func NewBlockScheduler(
 	}
 
 	return &BlockScheduler{
-		blockWindow:           blockWindow,
-		genesisTime:           genesisTime,
-		delegateCount:         delegateCount,
-		blockchain:            blockchain,
-		consensusSwitchHeight: consensusSwitchHeight,
-		logger:                logger,
-		lastLogTime:           make(map[string]time.Time),
+		blockWindow:            blockWindow,
+		genesisTime:            genesisTime,
+		delegateCount:          delegateCount,
+		blockchain:             blockchain,
+		consensusSwitchHeight:  consensusSwitchHeight,
+		logger:                 logger,
+		lastLogTime:            make(map[string]time.Time),
+		wallClockSlotAlignment: true,
 	}, nil
 }
 

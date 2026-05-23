@@ -88,7 +88,7 @@ type Config struct {
 	DPoSBootstrapRPC string `yaml:"dpos_bootstrap_rpc"`
 	// dpos_disable_double_sign_slashing: 为 true 时关闭双签检测与削减（由 server 写入 engineConfig）
 	DPoSDisableDoubleSignSlashing bool `yaml:"dpos_disable_double_sign_slashing"`
-	// dpos_wall_clock_slot_alignment: 为 true 时块头时间戳对齐墙钟 slot（默认 false，SR 可逐台开启）
+	// dpos_wall_clock_slot_alignment: 块头时间戳对齐墙钟 slot（默认 true，可不写；显式 false 可关闭）
 	DPoSWallClockSlotAlignment bool `yaml:"dpos_wall_clock_slot_alignment"`
 	// dpos_relax_header_timestamp_order: 为 true 时临时接受子块时间戳<=父块（默认 false）
 	DPoSRelaxHeaderTimestampOrder bool `yaml:"dpos_relax_header_timestamp_order"`
