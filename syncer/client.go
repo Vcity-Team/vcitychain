@@ -532,6 +532,29 @@ func (m *syncPeerClient) CloseStream(peerID peer.ID) error {
 	return m.network.CloseProtocolStream(syncerProto, peerID)
 }
 
+// CloseStaleGetBlocksStreams closes GetBlocks streams only when inflight age exceeds maxAge.
+func (m *syncPeerClient) CloseStaleGetBlocksStreams(maxAge time.Duration) int {
+	now := time.Now()
+	var stale []peer.ID
+	m.inflightMu.Lock()
+	for pid, started := range m.inflightGetBlocks {
+		if now.Sub(started) >= maxAge {
+			stale = append(stale, pid)
+		}
+	}
+	m.inflightMu.Unlock()
+
+	closed := 0
+	for _, pid := range stale {
+		if err := m.CloseStream(pid); err != nil {
+			m.logger.Debug("CloseStaleGetBlocksStreams", "peer", pid.String(), "err", err)
+			continue
+		}
+		closed++
+	}
+	return closed
+}
+
 // DisconnectPeer 断开与指定 peer 的连接，促其重连（syncer 开流反复失败时调用）
 func (m *syncPeerClient) DisconnectPeer(peerID peer.ID) {
 	m.network.DisconnectFromPeer(peerID, "syncer stream failed, force reconnect")

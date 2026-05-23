@@ -72,12 +72,13 @@ func (s *syncer) orderedBootCatchUpCandidatesRotated() []peer.ID {
 	return rotatePeerIDs(s.orderedBootCatchUpCandidates(), int(s.bulkBootRotateIdx.Load()))
 }
 
-// tryCatchUpBurstFromBoot：lag < bulkMinLag 时每轮连续 catch-up 多块；lag >= bulkMinLag 由 bulk 处理。
+// tryCatchUpBurstFromBoot：lag < bulkMinLag 时每轮连续 catch-up；lag 在 [bulkMinLag, largeLagBurst) 走 bulk/单块；lag >= largeLagBurst 仍允许 burst。
 func (s *syncer) tryCatchUpBurstFromBoot(local uint64, meta trustedTipResult, callback func(*types.FullBlock) bool) bool {
 	if !trustedAheadOfLocal(meta, local) {
 		return false
 	}
-	if trustedCatchUpLag(meta, local) >= catchUpBulkMinLag {
+	lag := trustedCatchUpLag(meta, local)
+	if lag >= catchUpBulkMinLag && lag < catchUpLargeLagBurst {
 		return false
 	}
 	wrote := false
@@ -261,6 +262,8 @@ func (s *syncer) fetchCanonicalNextForCatchUp(peerID peer.ID, nextNum uint64, lo
 }
 
 func (s *syncer) ingestCatchUpBlock(peerID peer.ID, block *types.Block, callback func(*types.FullBlock) bool) bool {
+	s.beginSyncCatchUp()
+	defer s.endSyncCatchUp()
 	if block == nil {
 		return false
 	}

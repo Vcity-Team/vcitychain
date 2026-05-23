@@ -369,6 +369,8 @@ type DPoS struct {
 	// 冷却期内 KickSync / 跳过日志节流，避免 planB ticker 高频触发时刷屏与过度关流。
 	lastCooldownKickSyncAt time.Time
 	lastCooldownSkipLogAt  time.Time
+	// lastSyncHardRestartBypassAt：极大落后时允许突破 5min 硬重启冷却的上次时间。
+	lastSyncHardRestartBypassAt time.Time
 
 	// 区块链引用
 	blockchain blockchainBackend
@@ -896,15 +898,38 @@ func (d *DPoS) runSyncLoop() {
 	}
 }
 
+// syncLagStagnantForLag 按落后块数选择 tip 停滞判定窗口（大落后更耐心，少 KickSync）。
+func syncLagStagnantForLag(lag uint64) time.Duration {
+	if lag >= syncLagLargeLagThreshold {
+		return syncLagKickStagnantLarge
+	}
+	return syncLagKickStagnantSmall
+}
+
 // restartSyncerForRecovery 方案 B：Close 当前 syncer 后 NewSyncer+Start，重建链路与内部 goroutine。
 func (d *DPoS) restartSyncerForRecovery(reason string) error {
 	d.syncRestartMu.Lock()
 	defer d.syncRestartMu.Unlock()
 
-	if !d.lastSyncHardRestartAt.IsZero() && time.Since(d.lastSyncHardRestartAt) < syncHardRestartMinInterval {
+	local := uint64(0)
+	if d.blockchain != nil && d.blockchain.CurrentHeader() != nil {
+		local = d.blockchain.CurrentHeader().Number
+	}
+	var lag uint64
+	if d.runtime != nil {
+		if network := d.runtime.getNetworkLatestBlockNumber(); network > local {
+			lag = network - local
+		}
+	}
+
+	inCooldown := !d.lastSyncHardRestartAt.IsZero() && time.Since(d.lastSyncHardRestartAt) < syncHardRestartMinInterval
+	hugeLagBypass := lag >= syncLagHugeLagThreshold &&
+		(d.lastSyncHardRestartBypassAt.IsZero() || time.Since(d.lastSyncHardRestartBypassAt) >= syncHardRestartBypassMinInterval)
+
+	if inCooldown && !hugeLagBypass {
 		now := time.Now()
-		// 冷却期内仍间歇做软恢复：关流、刷新 peer 图并唤醒 Sync；避免每秒 Kick 打爆对端与日志。
-		if d.syncer != nil && now.Sub(d.lastCooldownKickSyncAt) >= syncCooldownKickMinInterval {
+		// 大落后冷却期内不再 KickSync，避免打断 catch-up / bulk。
+		if lag < syncLagLargeLagThreshold && d.syncer != nil && now.Sub(d.lastCooldownKickSyncAt) >= syncCooldownKickMinInterval {
 			d.lastCooldownKickSyncAt = now
 			d.syncer.KickSync(reason + " (cooldown: KickSync)")
 		}
@@ -912,15 +937,20 @@ func (d *DPoS) restartSyncerForRecovery(reason string) error {
 			d.lastCooldownSkipLogAt = now
 			d.logger.Info("sync hard restart skipped (cooldown)",
 				"reason", reason,
+				"lagBlocks", lag,
 				"sinceLast", time.Since(d.lastSyncHardRestartAt).String(),
-				"minInterval", syncHardRestartMinInterval.String())
+				"minInterval", syncHardRestartMinInterval.String(),
+				"kickSyncSuppressed", lag >= syncLagLargeLagThreshold)
 		}
 		return nil
 	}
 
-	local := uint64(0)
-	if d.blockchain != nil && d.blockchain.CurrentHeader() != nil {
-		local = d.blockchain.CurrentHeader().Number
+	if hugeLagBypass && inCooldown {
+		d.logger.Warn("sync hard restart bypassing cooldown (huge lag)",
+			"reason", reason,
+			"lagBlocks", lag,
+			"sinceLastHardRestart", time.Since(d.lastSyncHardRestartAt).String())
+		d.lastSyncHardRestartBypassAt = time.Now()
 	}
 	d.logger.Info("sync hard restart (plan B): replacing syncer instance",
 		"reason", reason,
@@ -960,12 +990,16 @@ var _ dposBackend = (*DPoS)(nil)
 // lag≥5 块且 tip 约 1s 不涨即触发；检查间隔须小于停滞时长才能贴近该窗口。
 const (
 	syncLagKickThresholdBlocks = uint64(5)
-	syncLagKickStagnant        = 1 * time.Second
-	syncHardRestartMinInterval = 5 * time.Minute // 方案 B 两次全量重建的最短间隔
-	// planBStallCheckInterval：须小于 stagnantDuration，否则 ticker 粒度过粗无法及时判定 1s 停滞
+	syncLagKickStagnantSmall   = 30 * time.Second // lag < 32：tip 停滞多久才触发方案 B
+	syncLagKickStagnantLarge   = 60 * time.Second // lag >= 32
+	syncLagLargeLagThreshold   = uint64(32)       // 冷却期内不再 KickSync
+	syncLagHugeLagThreshold    = uint64(128)      // 可突破 5min 硬重启冷却
+	syncHardRestartMinInterval = 5 * time.Minute  // 方案 B 两次全量重建的最短间隔
+	syncHardRestartBypassMinInterval = 15 * time.Minute
+	// planBStallCheckInterval：须小于最小 stagnant，否则 ticker 粒度过粗无法及时判定停滞
 	planBStallCheckInterval = 500 * time.Millisecond
-	// 冷却窗口内 KickSync 最短间隔（resource-monitor 约每秒可触发一次 restart 调用）
-	syncCooldownKickMinInterval = 10 * time.Second
+	// 冷却窗口内 KickSync 最短间隔
+	syncCooldownKickMinInterval = 60 * time.Second
 	syncCooldownSkipLogInterval = 30 * time.Second
 )
 
@@ -978,8 +1012,12 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 
 	logger.Info("⚙️ 同步落后自愈（方案 B 重建 syncer）阈值（内置常量）",
 		"minLagBlocks", syncLagKickThresholdBlocks,
-		"stagnantDuration", syncLagKickStagnant.String(),
+		"stagnantSmallLag", syncLagKickStagnantSmall.String(),
+		"stagnantLargeLag", syncLagKickStagnantLarge.String(),
+		"largeLagNoKickThreshold", syncLagLargeLagThreshold,
+		"hugeLagBypassThreshold", syncLagHugeLagThreshold,
 		"hardRestartMinInterval", syncHardRestartMinInterval.String(),
+		"cooldownKickMinInterval", syncCooldownKickMinInterval.String(),
 		"planBCheckInterval", planBStallCheckInterval.String())
 
 	vcity_dpos := &DPoS{
@@ -991,7 +1029,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		lastLogTime: make(map[string]time.Time), // 初始化日志频率限制
 
 		syncLagRestartBlocks:      syncLagKickThresholdBlocks,
-		syncLagRestartStagnantDur: syncLagKickStagnant,
+		syncLagRestartStagnantDur: syncLagKickStagnantSmall,
 	}
 
 	getConfigValue := func(keys ...string) (interface{}, bool) {

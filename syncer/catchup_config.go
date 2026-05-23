@@ -7,6 +7,8 @@ const (
 	catchUpBurstMaxBlocks = 32
 	// catchUpBulkMinLag：落后至少该块数时优先 bulk，跳过单块 catch-up（套餐 B）。
 	catchUpBulkMinLag = 2
+	// catchUpLargeLagBurst：落后达到该块数时仍允许 boot burst（避免大落后只单块 + 反复 KickSync）。
+	catchUpLargeLagBurst = 32
 	// catchUpBootParallel：单高度并行向 Top-N boot 拉块（套餐 E1）。
 	catchUpBootParallel = 3
 	// catchUpProbeTimeout：boot catch-up / 并行探测超时。

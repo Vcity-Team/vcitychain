@@ -126,6 +126,8 @@ type syncer struct {
 
 	// bulkBootRotateIdx：bulk 未推进链尖时轮换 boot 源 / catch-up 候选顺序，避免死磕同一 peer。
 	bulkBootRotateIdx atomic.Uint32
+	// syncCatchUpActive：boot catch-up / bulk 写入进行中；>0 时 KickSync 仅关僵尸流并唤醒，避免打断追块。
+	syncCatchUpActive atomic.Int32
 }
 
 type trustedPeerStat struct {
@@ -498,6 +500,14 @@ func (s *syncer) wakeSyncAfter(backoff time.Duration, reason string, args ...int
 	fire()
 }
 
+func (s *syncer) beginSyncCatchUp() {
+	s.syncCatchUpActive.Add(1)
+}
+
+func (s *syncer) endSyncCatchUp() {
+	s.syncCatchUpActive.Add(-1)
+}
+
 // KickSync 在落后于网络且拉块链路疑似僵死时由上层调用：不退出进程，通过关流 / 换人 / 唤醒打破卡死。
 func (s *syncer) KickSync(reason string) {
 	if s.closed.Load() {
@@ -509,10 +519,18 @@ func (s *syncer) KickSync(reason string) {
 		local = h.Number
 	}
 
-	s.logger.Warn("syncer KickSync: soft-recovery reset",
-		"reason", reason,
-		"localLatest", local,
-		"peerMapSizeBefore", s.getPeerMapSize())
+	soft := s.syncCatchUpActive.Load() > 0
+	if soft {
+		s.logger.Warn("syncer KickSync: soft mode (catch-up active), close stale streams only",
+			"reason", reason,
+			"localLatest", local,
+			"catchUpActive", s.syncCatchUpActive.Load())
+	} else {
+		s.logger.Warn("syncer KickSync: soft-recovery reset",
+			"reason", reason,
+			"localLatest", local,
+			"peerMapSizeBefore", s.getPeerMapSize())
+	}
 
 	for _, st := range s.syncPeerClient.GetConnectedPeerStatuses() {
 		if st != nil {
@@ -521,25 +539,31 @@ func (s *syncer) KickSync(reason string) {
 	}
 
 	streamClosed := 0
-	s.peerMap.Range(func(_ interface{}, value interface{}) bool {
-		p, ok := value.(*NoForkPeer)
-		if !ok || p == nil {
+	if soft {
+		streamClosed = s.syncPeerClient.CloseStaleGetBlocksStreams(getBlocksInflightMaxAge)
+	} else {
+		s.peerMap.Range(func(_ interface{}, value interface{}) bool {
+			p, ok := value.(*NoForkPeer)
+			if !ok || p == nil {
+				return true
+			}
+			if err := s.syncPeerClient.CloseStream(p.ID); err != nil {
+				s.logger.Debug("KickSync CloseStream", "peer", p.ID.String(), "err", err)
+			} else {
+				streamClosed++
+			}
 			return true
-		}
-		if err := s.syncPeerClient.CloseStream(p.ID); err != nil {
-			s.logger.Debug("KickSync CloseStream", "peer", p.ID.String(), "err", err)
-		} else {
-			streamClosed++
-		}
-		return true
-	})
+		})
 
-	if bp := s.peerMap.BestPeer(nil); streamClosed == 0 && bp != nil && bp.Number > local {
-		s.syncPeerClient.DisconnectPeer(bp.ID)
-		s.logger.Warn("KickSync: disconnected tallest peer to force reconnect",
-			"peer", bp.ID.String(), "theirNumber", bp.Number,
-			"localLatest", local)
+		if bp := s.peerMap.BestPeer(nil); streamClosed == 0 && bp != nil && bp.Number > local {
+			s.syncPeerClient.DisconnectPeer(bp.ID)
+			s.logger.Warn("KickSync: disconnected tallest peer to force reconnect",
+				"peer", bp.ID.String(), "theirNumber", bp.Number,
+				"localLatest", local)
+		}
 	}
+
+	_ = streamClosed // soft path may close 0 streams; still wake sync loop below
 
 	// 避免与仍在收尾的 GetBlocks goroutine 竞态：notify 太快会立刻再次 GetBlocks，仍报 inflight。
 	time.Sleep(kickSyncPostCloseGraceWait)
@@ -714,9 +738,10 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			})
 		}
 
-		// trusted 已知超前：lag<2 时 burst catch-up；lag>=2 每轮先尝试单块 catch-up，再走 bulk。
+		// trusted 已知超前：lag<2 或 lag>=largeLagBurst 时 burst；中间段单块 catch-up + bulk。
 		if trustedAheadOfLocal(trustedMeta, localLatest) {
-			if trustedCatchUpLag(trustedMeta, localLatest) < catchUpBulkMinLag {
+			lag := trustedCatchUpLag(trustedMeta, localLatest)
+			if lag < catchUpBulkMinLag || lag >= catchUpLargeLagBurst {
 				if s.tryCatchUpBurstFromBoot(localLatest, trustedMeta, callback) {
 					continue
 				}
@@ -899,6 +924,9 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 // bulkSyncWithPeer syncs block with a given peer
 func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 	newBlockCallback func(*types.FullBlock) bool) (uint64, bool, error) {
+	s.beginSyncCatchUp()
+	defer s.endSyncCatchUp()
+
 	localLatest := s.blockchain.Header().Number
 	shouldTerminate := false
 

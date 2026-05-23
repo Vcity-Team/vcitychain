@@ -137,6 +137,8 @@ type SyncPeerClient interface {
 	GetPeerConnectionUpdateEventCh() <-chan *event.PeerEvent
 	// CloseStream close a stream
 	CloseStream(peerID peer.ID) error
+	// CloseStaleGetBlocksStreams closes GetBlocks streams only when inflight age exceeds maxAge.
+	CloseStaleGetBlocksStreams(maxAge time.Duration) int
 	// DisconnectPeer 断开与指定 peer 的连接（用于开流反复失败时促其重连）
 	DisconnectPeer(peerID peer.ID)
 	// DisablePublishingPeerStatus disables publishing status in syncer topic

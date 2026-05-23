@@ -155,7 +155,8 @@ func (rm *ResourceMonitor) maybeKickSyncIfStalledBehind() {
 	if lag < cfg.SyncLagRestartBlocks {
 		return
 	}
-	if time.Since(rm.syncLagKickLastProbe) < cfg.SyncLagRestartStagnant {
+	stagnant := syncLagStagnantForLag(lag)
+	if time.Since(rm.syncLagKickLastProbe) < stagnant {
 		return
 	}
 
@@ -176,7 +177,7 @@ func (rm *ResourceMonitor) maybeKickSyncIfStalledBehind() {
 		"networkLatestBlockNumber", network,
 		"lagBlocks", lag,
 		"minLagBlocks", cfg.SyncLagRestartBlocks,
-		"stagnantDuration", cfg.SyncLagRestartStagnant.String())
+		"stagnantDuration", stagnant.String())
 
 	if err := dp.restartSyncerForRecovery("resource-monitor: local tip stalled behind network gateway height"); err != nil {
 		rm.logger.Info("sync lag recovery: restartSyncerForRecovery failed", "error", err)
