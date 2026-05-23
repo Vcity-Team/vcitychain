@@ -256,6 +256,16 @@ func (bs *BlockScheduler) wallDueTime() time.Time {
 	return bs.genesisTime.UTC().Add(time.Duration(slot+1) * bs.blockWindow)
 }
 
+// chainSchedulingDue 纯链上调度：参照块 timestamp + blockWindow（不含墙钟 wallDue）。
+// 用于 EarliestProduceTime；块头时间戳仍用 effectiveTimeForNextBlock。
+func (bs *BlockScheduler) chainSchedulingDue() time.Time {
+	base := bs.schedulingBaseTimestamp()
+	if base == 0 {
+		return time.Now().UTC()
+	}
+	return time.Unix(int64(base), 0).UTC().Add(bs.blockWindow)
+}
+
 // effectiveTimeForNextBlock 下一区块头时间戳：max(参照+blockWindow[, 墙钟 slot 对齐])。
 // 未启用墙钟时仅为链上调度；启用时为 max(chainDue, wallDue)，与 BlockBuilder.Reset 一致。
 func (bs *BlockScheduler) effectiveTimeForNextBlock() time.Time {
@@ -278,16 +288,16 @@ func (bs *BlockScheduler) effectiveTimeForNextBlock() time.Time {
 }
 
 // EarliestProduceTime 本节点最早可开始下一轮出块的 UTC 时刻：
-// max(网络链尖+blockWindow 的调度时间, 本地上次成功提交+blockWindow)。
-// 链上时间戳落后墙钟时，仍保证约 blockWindow 的墙钟出块间隔（避免追块时连发空块）。
+// max(链上调度 chainSchedulingDue, 本地上次成功提交+blockWindow)。
+// 不使用 effectiveTimeForNextBlock/wallDue：墙钟下一 slot 起点恒在未来，会导致 now<earliest 永真。
 func (bs *BlockScheduler) EarliestProduceTime(lastLocalProduce time.Time) time.Time {
-	chainDue := bs.effectiveTimeForNextBlock()
+	chainDue := bs.chainSchedulingDue()
 	if lastLocalProduce.IsZero() {
 		return chainDue
 	}
-	wallDue := lastLocalProduce.UTC().Add(bs.blockWindow)
-	if wallDue.After(chainDue) {
-		return wallDue
+	intervalDue := lastLocalProduce.UTC().Add(bs.blockWindow)
+	if intervalDue.After(chainDue) {
+		return intervalDue
 	}
 	return chainDue
 }

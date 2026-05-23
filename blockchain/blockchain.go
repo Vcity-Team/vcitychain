@@ -1038,8 +1038,6 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 	}
 	if source == "syncer" || source == "consensus" {
 		logArgs = appendBlockTimestampLogFields(logArgs, header, prevHeader)
-	}
-	if source == "syncer" {
 		logArgs = appendBlockMinerLogField(logArgs, header)
 	}
 
@@ -1918,12 +1916,16 @@ func (b *Blockchain) writeBatchAndUpdate(
 	return nil
 }
 
-// appendBlockTimestampLogFields 解码块头/父块链上时间戳（UTC），便于与 DPoS 调度日志比对。
+// appendBlockTimestampLogFields 解码块头/父块链上时间戳（UTC），并附带写入时刻墙钟便于对比。
 func appendBlockTimestampLogFields(logArgs []interface{}, header, prevHeader *types.Header) []interface{} {
 	blockTS := time.Unix(int64(header.Timestamp), 0).UTC()
+	wallNow := time.Now().UTC()
+	lag := wallNow.Sub(blockTS)
 	logArgs = append(logArgs,
 		"blockTimestampUnix", header.Timestamp,
 		"blockTimestampUTC", blockTS.Format("2006-01-02 15:04:05.000"),
+		"writeWallClockUTC", wallNow.Format("2006-01-02 15:04:05.000"),
+		"blockTimeLagFromWallClock", lag.String(),
 	)
 	if prevHeader != nil {
 		parentTS := time.Unix(int64(prevHeader.Timestamp), 0).UTC()

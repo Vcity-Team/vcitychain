@@ -63,6 +63,31 @@ func TestEffectiveTimeForNextBlock_WallClockAlignmentWhenEnabled(t *testing.T) {
 	require.True(t, got.After(time.Unix(int64(local.Timestamp), 0)))
 }
 
+func TestEarliestProduceTime_WallClockAlignmentNotAlwaysFuture(t *testing.T) {
+	genesis := time.Unix(0, 0).UTC()
+	ref := &types.Header{Number: 10, Timestamp: 100}
+	local := &types.Header{Number: 11, Timestamp: 103}
+
+	bs := &BlockScheduler{
+		blockWindow:            3 * time.Second,
+		genesisTime:            genesis,
+		blockchain:             &schedulerChainMock{local: local},
+		logger:                 hclog.NewNullLogger(),
+		wallClockSlotAlignment: true,
+	}
+	bs.SetNetworkHeadResolver(func() *types.Header { return ref })
+
+	earliest := bs.EarliestProduceTime(time.Time{})
+	now := time.Now().UTC()
+	require.False(t, now.Before(earliest),
+		"墙钟对齐时 EarliestProduceTime 不得恒在未来；earliest=%s now=%s",
+		earliest.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+
+	headerDue := bs.effectiveTimeForNextBlock()
+	require.True(t, headerDue.After(earliest) || headerDue.Equal(earliest),
+		"块头调度时间仍应使用墙钟对齐的 effectiveTimeForNextBlock")
+}
+
 func TestNextHeaderTimeFromScheduling_ClampedToParentFloor(t *testing.T) {
 	parentTS := uint64(10_000)
 	blockTime := 3 * time.Second

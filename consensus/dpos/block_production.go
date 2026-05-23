@@ -575,6 +575,15 @@ func (r *dposRuntime) produceBlock() error {
 		r.logger.Error("❌ [produceBlock] 区块提交失败", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String(), "error", err)
 		return fmt.Errorf("failed to commit block: %w", err)
 	}
+	blockTS := time.Unix(int64(block.Block.Header.Timestamp), 0).UTC()
+	wallNow := time.Now().UTC()
+	r.logger.Info("✅ [produceBlock] 区块已提交",
+		"blockNumber", block.Block.Number(),
+		"blockHash", block.Block.Hash().String(),
+		"blockTimestampUnix", block.Block.Header.Timestamp,
+		"blockTimestampUTC", blockTS.Format("2006-01-02 15:04:05.000"),
+		"commitWallClockUTC", wallNow.Format("2006-01-02 15:04:05.000"),
+		"blockTimeLagFromWallClock", wallNow.Sub(blockTS).String())
 	r.recordLocallyMinedBlock(block.Block.Number())
 
 	if r.config.blockScheduler != nil {
