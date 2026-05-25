@@ -22,6 +22,7 @@ const (
 	trustedTipLogInterval              = 15 * time.Second
 	trustedBootHeightCacheTTL          = 2 * time.Second // 常态下 boot eth_blockNumber 缓存
 	trustedBootHeightCacheTTLCatchUp   = 8 * time.Second // 追块中降低 RPC 频率
+	bootJSONRPCFailLogInterval         = 10 * time.Second // boot eth_blockNumber 失败 WARN 合并节流
 	// syncer 若干 INFO（quorum / best-not-ahead / force-bulk 等）仅在本机链尖连续未变达到该时长后打印。
 	syncerLocalStallLogInterval = 20 * time.Second
 )
@@ -141,6 +142,7 @@ func (s *syncer) fetchTrustedBootHeightsDirect(local uint64) ([]trustedBootPeerR
 	jsonRpcOK := 0
 	jsonRpcFail := 0
 	noURL := 0
+	var jsonRpcFails []bootJSONRPCFailReport
 	for _, res := range results {
 		if res.noURL {
 			noURL++
@@ -149,12 +151,10 @@ func (s *syncer) fetchTrustedBootHeightsDirect(local uint64) ([]trustedBootPeerR
 		}
 		if res.jsonFail {
 			jsonRpcFail++
-			key := fmt.Sprintf("boot-jsonrpc-fail:%s", res.failPeer.String())
-			s.logTrustedTipThrottled(key, func() {
-				s.logger.Warn("syncer: bootnode eth_blockNumber failed (no fallback)",
-					"peer", res.failPeer.String(),
-					"jsonRpc", normalizeJSONRPCEndpoint(res.failRPC),
-					"err", res.failErr)
+			jsonRpcFails = append(jsonRpcFails, bootJSONRPCFailReport{
+				peer: res.failPeer,
+				rpc:  res.failRPC,
+				err:  res.failErr,
 			})
 			reports = append(reports, res.rep)
 			continue
@@ -170,6 +170,10 @@ func (s *syncer) fetchTrustedBootHeightsDirect(local uint64) ([]trustedBootPeerR
 
 	sort.Slice(reports, func(i, j int) bool { return reports[i].PeerID < reports[j].PeerID })
 	sort.Slice(heights, func(i, j int) bool { return heights[i] < heights[j] })
+
+	if len(jsonRpcFails) > 0 {
+		s.logBootJSONRPCFailuresThrottled(jsonRpcFails)
+	}
 
 	s.logTrustedTipThrottled(fmt.Sprintf("direct:%d:%d:%d", jsonRpcOK, jsonRpcFail, len(heights)), func() {
 		s.logger.Info("syncer: trusted boot heights collected (boot IP + jsonrpc_addr port, eth_blockNumber only)",
@@ -283,6 +287,35 @@ func (s *syncer) logTrustedTipThrottled(key string, fn func()) {
 	s.lastTrustedTipLogKey = key
 	s.lastTrustedTipLogAt = now
 	fn()
+}
+
+type bootJSONRPCFailReport struct {
+	peer peer.ID
+	rpc  string
+	err  error
+}
+
+// logBootJSONRPCFailuresThrottled 合并打印本轮所有 boot RPC 失败，全局最多每 10 秒一条 WARN。
+func (s *syncer) logBootJSONRPCFailuresThrottled(fails []bootJSONRPCFailReport) {
+	if len(fails) == 0 {
+		return
+	}
+	s.bootJSONRPCFailLogMu.Lock()
+	defer s.bootJSONRPCFailLogMu.Unlock()
+	now := time.Now()
+	if !s.lastBootJSONRPCFailLogAt.IsZero() && now.Sub(s.lastBootJSONRPCFailLogAt) < bootJSONRPCFailLogInterval {
+		return
+	}
+	s.lastBootJSONRPCFailLogAt = now
+
+	details := make([]string, 0, len(fails))
+	for _, f := range fails {
+		details = append(details, fmt.Sprintf("peer=%s jsonRpc=%s err=%v",
+			f.peer.String(), normalizeJSONRPCEndpoint(f.rpc), f.err))
+	}
+	s.logger.Warn("syncer: bootnode eth_blockNumber failed (no fallback)",
+		"failCount", len(fails),
+		"failures", details)
 }
 
 // refreshTrustedMetaForCatchUp 强制刷新 boot RPC 高度后重算 quorum tip（用于 catch-up burst，避免缓存 tip 误判已追平）。

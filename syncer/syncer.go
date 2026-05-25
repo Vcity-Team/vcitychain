@@ -125,6 +125,9 @@ type syncer struct {
 	lastBootP2PRefreshMu   sync.Mutex
 	lastBootP2PRefreshAt   time.Time
 
+	bootJSONRPCFailLogMu      sync.Mutex
+	lastBootJSONRPCFailLogAt  time.Time
+
 	// bulkBootRotateIdx：bulk 未推进链尖时轮换 boot 源 / catch-up 候选顺序，避免死磕同一 peer。
 	bulkBootRotateIdx atomic.Uint32
 	// syncCatchUpActive：boot catch-up / bulk 写入进行中；>0 时 KickSync 仅关僵尸流并唤醒，避免打断追块。
