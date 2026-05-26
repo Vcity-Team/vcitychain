@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -65,6 +66,10 @@ type trustedTipResult struct {
 	MaxClusterNearMax  int
 	MaxClusterFloor    uint64
 	MaxClusterSpreadOK bool
+	// hash 多数表决（local 高度）
+	MajorityHash  types.Hash
+	MajorityVotes int
+	HashOutliers  []peer.ID
 }
 
 // GetTrustedCanonicalTip returns the canonical chain tip from connected genesis bootnodes.
@@ -326,11 +331,56 @@ func (s *syncer) refreshTrustedMetaForCatchUp(local uint64) trustedTipResult {
 
 func (s *syncer) computeTrustedBootnodeTip(local uint64) trustedTipResult {
 	reports, heights := s.collectTrustedBootHeights(local)
+
+	var hashReports []bootHashReport
+	var hashMaj bootHashMajorityResult
+	if local > 0 {
+		hashReports = s.collectTrustedBootHashReports(local)
+		hashMaj = computeBootHashMajority(local, hashReports)
+		if hashMaj.ok {
+			return s.trustedTipFromHashMajority(local, reports, heights, hashReports, hashMaj)
+		}
+		if hashMaj.totalVotes > 0 {
+			s.logTrustedTipThrottled(fmt.Sprintf("hash-split:%d", local), func() {
+				s.logger.Warn("syncer: boot hash split at local height, no majority; trusted tip withheld",
+					"localLatest", local,
+					"hashVotes", hashMaj.totalVotes,
+					"requiredVotes", hashQuorumRequiredVotes(hashMaj.totalVotes),
+					"heightsForQuorum", heights)
+			})
+		}
+	}
+
 	out := s.computeTrustedBootnodeQuorum(local, reports, heights)
-	if out.Branch != trustedTipBranchNoQuorum {
+	if hashMaj.totalVotes > 0 && !hashMaj.ok && len(heights) >= 2 && out.Branch == trustedTipBranchMaxCluster {
+		sorted := append([]uint64(nil), heights...)
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+		if sorted[len(sorted)-1]-sorted[0] > forkSplitHeightThreshold {
+			s.logTrustedTipThrottled(fmt.Sprintf("height-split:%d", local), func() {
+				s.logger.Warn("syncer: boot height spread too large without hash majority; ignore max-cluster tip",
+					"localLatest", local,
+					"minHeight", sorted[0],
+					"maxHeight", sorted[len(sorted)-1],
+					"wouldBeTip", out.Tip,
+					"heights", heights)
+			})
+			out.Quorum = false
+			out.Tip = 0
+			out.Branch = trustedTipBranchHashSplit
+		}
+	}
+	if out.Branch != trustedTipBranchNoQuorum && out.Branch != trustedTipBranchHashSplit {
 		return out
 	}
-	if tip, ok := tryLocalMaxBootAgree(local, out.MaxBootHeight, out.MaxClusterNearMax, out.ReportingBoots); ok {
+	// hash 已分裂时勿用 lone max 高度旁路（否则 6×487+1×52556 仍可能采信 52556）
+	if hashMaj.totalVotes > 0 && !hashMaj.ok {
+		s.logTrustedTipThrottled(fmt.Sprintf("no-local-max-agree-hash-split:%d", local), func() {
+			s.logger.Warn("syncer: skip local-max-boot-agree because boot hash has no majority",
+				"localLatest", local,
+				"hashVotes", hashMaj.totalVotes,
+				"heightsForQuorum", heights)
+		})
+	} else if tip, ok := tryLocalMaxBootAgree(local, out.MaxBootHeight, out.MaxClusterNearMax, out.ReportingBoots); ok {
 		out.Tip = tip
 		out.Quorum = true
 		out.Branch = trustedTipBranchLocalMaxAgree
@@ -512,6 +562,9 @@ func (s *syncer) peerExcludedFromBulkPull(id peer.ID, skip map[peer.ID]bool) boo
 	if skip != nil && skip[id] {
 		return true
 	}
+	if s.isBootHashOutlier(id) {
+		return true
+	}
 	s.pullDistrustMu.Lock()
 	until, inCooldown := s.pullDistrustUntil[id]
 	s.pullDistrustMu.Unlock()
@@ -567,7 +620,7 @@ func (s *syncer) pickBootPeerForTrustedBulk(local, syncTarget uint64, bulkSkip m
 	}
 	var list []cand
 	for id := range s.trustedBootnodeIDs {
-		if s.peerExcludedFromBulkPull(id, bulkSkip) {
+		if s.peerExcludedFromBulkPull(id, bulkSkip) || s.isBootHashOutlier(id) {
 			continue
 		}
 		rpcH := uint64(0)
@@ -586,7 +639,7 @@ func (s *syncer) pickBootPeerForTrustedBulk(local, syncTarget uint64, bulkSkip m
 	if len(list) == 0 {
 		return nil
 	}
-	// 优先 RPC 最高的 boot（链尖在 JSON-RPC 上领先的那台），再按 bulk 逻辑高度；避免 5 台 15921244 + 1 台 15921249 时先打到落后源。
+	// 在多数派 boot 中选较高 RPC（排除 hash outlier 后），避免 lone max 孤链源。
 	sort.Slice(list, func(i, j int) bool {
 		if list[i].rpcH != list[j].rpcH {
 			return list[i].rpcH > list[j].rpcH

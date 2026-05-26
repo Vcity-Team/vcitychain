@@ -10,7 +10,7 @@ const (
 // trustedAheadOfLocal boot RPC/quorum 已表明网络高于本地 → 可直接对 boot 拉 local+1。
 func trustedAheadOfLocal(meta trustedTipResult, local uint64) bool {
 	switch meta.Branch {
-	case trustedTipBranchNoQuorum, trustedTipBranchNoHeight, trustedTipBranchNoConfig:
+	case trustedTipBranchNoQuorum, trustedTipBranchNoHeight, trustedTipBranchNoConfig, trustedTipBranchHashSplit:
 		return false
 	}
 	if meta.MaxBootHeight > local {

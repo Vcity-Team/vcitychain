@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/blockchain"
+	"github.com/Vcity-Team/vcitychain/state"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
 	"github.com/stretchr/testify/require"
@@ -18,6 +19,12 @@ func (stubTimestampVerifier) VerifyHeader(*types.Header) error {
 }
 
 func (stubTimestampVerifier) ProcessHeaders([]*types.Header) error { return nil }
+
+func (stubTimestampVerifier) GetBlockCreator(*types.Header) (types.Address, error) {
+	return types.ZeroAddress, nil
+}
+
+func (stubTimestampVerifier) PreCommitState(*types.Block, *state.Transition) error { return nil }
 
 type stubPreProduceBlockchain struct {
 	header   *types.Header
@@ -47,20 +54,19 @@ func TestPreProduceProbeRejectReason_TimestampOlderThanParent(t *testing.T) {
 	parentTS := time.Date(2026, 5, 22, 12, 48, 46, 0, time.UTC)
 	parent := &types.Header{
 		Number:    15921378,
-		Timestamp: parentTS.Unix(),
+		Timestamp: uint64(parentTS.Unix()),
 	}
 	parent.Hash = types.HeaderHash(parent)
 
 	child := &types.Header{
-		Number:       15921379,
-		ParentHash:   parent.Hash,
-		Timestamp:    parentTS.Unix(),
-		Nonce:        types.ZeroNonce,
-		MixHash:      types.Hash{},
-		ExtraData:    make([]byte, 32),
-		GasLimit:     1,
-		Difficulty:   1,
-		Transactions: []*types.Transaction{},
+		Number:     15921379,
+		ParentHash: parent.Hash,
+		Timestamp:  uint64(parentTS.Unix()),
+		Nonce:      types.ZeroNonce,
+		MixHash:    types.Hash{},
+		ExtraData:  make([]byte, 32),
+		GasLimit:   1,
+		Difficulty: 1,
 	}
 	child.Hash = types.HeaderHash(child)
 

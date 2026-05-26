@@ -128,10 +128,20 @@ type syncer struct {
 	bootJSONRPCFailLogMu      sync.Mutex
 	lastBootJSONRPCFailLogAt  time.Time
 
+	// bootHashOutlierUntil：boot 在 local 高度 block hash 与多数派不一致，短期不参与 bulk/catch-up。
+	bootHashOutlierMu      sync.Mutex
+	bootHashOutlierUntil   map[peer.ID]time.Time
+	trustedBootHashMu      sync.Mutex
+	trustedBootHashCachedAt time.Time
+	trustedBootHashLocal    uint64
+	trustedBootHashReports  []bootHashReport
+
 	// bulkBootRotateIdx：bulk 未推进链尖时轮换 boot 源 / catch-up 候选顺序，避免死磕同一 peer。
 	bulkBootRotateIdx atomic.Uint32
 	// syncCatchUpActive：boot catch-up / bulk 写入进行中；>0 时 KickSync 仅关僵尸流并唤醒，避免打断追块。
 	syncCatchUpActive atomic.Int32
+
+	lastPreProduceSawFork atomic.Bool
 }
 
 type trustedPeerStat struct {
@@ -714,7 +724,8 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 		trustedMeta := s.computeTrustedBootnodeTip(localLatest)
 		trustedTip := trustedMeta.Tip
 		syncTarget := trustedTip
-		if trustedMeta.MaxBootHeight > syncTarget {
+		// hash 多数表决时 Tip 已是多数派可达高度；勿再用 MaxBootHeight（可能含 outlier 的 eth_blockNumber）抬高 syncTarget。
+		if trustedMeta.Branch != trustedTipBranchHashMajority && trustedMeta.MaxBootHeight > syncTarget {
 			syncTarget = trustedMeta.MaxBootHeight
 		}
 

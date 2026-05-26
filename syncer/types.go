@@ -98,6 +98,10 @@ type Syncer interface {
 	KickSync(reason string)
 	// TryProbeCanonicalNextBeforeProduce 出块前 P1：从 peer 拉取 localTip+1，校验通过后写入本地；成功则返回 true（放弃本轮本地出块）。
 	TryProbeCanonicalNextBeforeProduce(probeTimeout time.Duration) bool
+	// PreProduceAllowLocalBuild 出块前：boot hash 多数表决下本机是否在主链；minority 时返回 false。
+	PreProduceAllowLocalBuild(sawPeerFork bool) bool
+	// PreProduceProbeSawFork 上一轮出块前 P2P 探测是否遇到 fork 视图。
+	PreProduceProbeSawFork() bool
 }
 
 type Progression interface {

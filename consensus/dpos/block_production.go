@@ -202,11 +202,22 @@ func (r *dposRuntime) produceBlock() error {
 		if r.config != nil && r.config.dposBackend != nil {
 			if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil {
 				probeTO := r.preProducePeerProbeTimeout()
+				sawPeerFork := false
 				if probeTO > 0 && dpos.syncer.TryProbeCanonicalNextBeforeProduce(probeTO) {
 					r.logger.Info("🔭 【出块前 P2P 探测】已从 peer 写入或可衔接下一高度，放弃本轮本地出块",
 						"localTip", currentBlock.Number,
 						"plannedNextBlockNumber", currentBlock.Number+1,
 						"probeTimeout", probeTO.String())
+					return nil
+				}
+				if probeTO > 0 {
+					sawPeerFork = dpos.syncer.PreProduceProbeSawFork()
+				}
+				if probeTO > 0 && !dpos.syncer.PreProduceAllowLocalBuild(sawPeerFork) {
+					r.logger.Info("⏸️ 【出块前跳过出块】boot hash 多数表决不允许本地构建",
+						"localTip", currentBlock.Number,
+						"plannedNextBlockNumber", currentBlock.Number+1,
+						"sawPeerFork", sawPeerFork)
 					return nil
 				}
 				if probeTO > 0 {
@@ -557,6 +568,14 @@ func (r *dposRuntime) produceBlock() error {
 				return nil
 			}
 			if localTip != nil {
+				sawPeerFork := dpos.syncer.PreProduceProbeSawFork()
+				if !dpos.syncer.PreProduceAllowLocalBuild(sawPeerFork) {
+					r.logger.Info("⏸️ 【提交前跳过提交】boot hash 多数表决不允许提交",
+						"localTip", localTip.Number,
+						"plannedBlockNumber", block.Block.Number(),
+						"sawPeerFork", sawPeerFork)
+					return nil
+				}
 				r.logger.Info("🔭 【提交前 P2P 探测】未从 peer 拉到可衔接下一高度，继续提交",
 					"localTip", localTip.Number,
 					"plannedBlockNumber", block.Block.Number(),

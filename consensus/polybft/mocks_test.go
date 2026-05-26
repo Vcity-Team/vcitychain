@@ -411,6 +411,10 @@ func (tp *syncerMock) KickSync(string) {}
 
 func (tp *syncerMock) TryProbeCanonicalNextBeforeProduce(time.Duration) bool { return false }
 
+func (tp *syncerMock) PreProduceAllowLocalBuild(bool) bool { return true }
+
+func (tp *syncerMock) PreProduceProbeSawFork() bool { return false }
+
 func init() {
 	// setup custom hash header func
 	setupHeaderHashFunc()

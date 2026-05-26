@@ -28,6 +28,9 @@ func (s *syncer) orderedBootCatchUpCandidates() []peer.ID {
 	}
 	var list []cand
 	for id := range s.trustedBootnodeIDs {
+		if s.isBootHashOutlier(id) {
+			continue
+		}
 		h, ok := s.getTrustedBootRPCHeight(id)
 		if !ok {
 			if v, exists := s.peerMap.Load(id.String()); exists {
@@ -132,6 +135,7 @@ func (s *syncer) tryCatchUpBurstFromBoot(local uint64, _ trustedTipResult, callb
 		}
 		if !s.tryCatchUpNextBlockFromBoot(local, meta, callback, false) {
 			s.logCatchUpBurstBreak("fetch_fail", local, meta, "nextHeight", local+1)
+			s.maybeRollbackIfMinorityFork("catch_up_burst")
 			break
 		}
 		wrote = true
@@ -184,9 +188,11 @@ func (s *syncer) tryCatchUpNextBlockFromBoot(local uint64, meta trustedTipResult
 			return true
 		}
 	case catchUpProbeFork:
-		s.logger.Debug("syncer: catch-up boot parent mismatch",
+		s.logger.Warn("syncer: catch-up boot parent mismatch (fork)",
 			"peer", pid.String(),
-			"nextHeight", nextNum)
+			"nextHeight", nextNum,
+			"localHeadHash", localHash.String())
+		s.maybeRollbackIfMinorityFork("catch_up_boot_fork")
 	default:
 		s.logger.Debug("syncer: catch-up boot did not deliver block",
 			"nextHeight", nextNum,

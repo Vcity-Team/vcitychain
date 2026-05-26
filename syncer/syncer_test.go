@@ -72,6 +72,18 @@ func (m *mockBlockchain) WriteFullBlock(b *types.FullBlock, s string) error {
 	return m.writeFullBlockHandler(b)
 }
 
+func (m *mockBlockchain) HealCanonicalBlockState(block *types.Block) (*types.FullBlock, error) {
+	return m.VerifyFinalizedBlock(block)
+}
+
+func (m *mockBlockchain) WriteBlockWithoutConsensus(b *types.Block, s string) error {
+	return m.WriteBlock(b, s)
+}
+
+func (m *mockBlockchain) GetConsensus() blockchain.Verifier {
+	return nil
+}
+
 func newSimpleHeaderHandler(num uint64) func() *types.Header {
 	return func() *types.Header {
 		return &types.Header{

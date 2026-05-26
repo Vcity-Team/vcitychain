@@ -32,6 +32,7 @@ func (s *syncer) TryProbeCanonicalNextBeforeProduce(probeTimeout time.Duration) 
 	if probeTimeout <= 0 {
 		probeTimeout = DefaultPreProduceProbeTimeout
 	}
+	s.lastPreProduceSawFork.Store(false)
 	hdr := s.blockchain.Header()
 	if hdr == nil {
 		return false
@@ -81,6 +82,7 @@ func (s *syncer) TryProbeCanonicalNextBeforeProduce(probeTimeout time.Duration) 
 				"peer", pid.String(),
 				"nextHeight", nextNum)
 		case preProduceProbeFork:
+			s.lastPreProduceSawFork.Store(true)
 			s.logger.Warn("pre-produce P2P probe: parent mismatch (fork view), try next peer",
 				"peer", pid.String(),
 				"nextHeight", nextNum)
@@ -91,6 +93,11 @@ func (s *syncer) TryProbeCanonicalNextBeforeProduce(probeTimeout time.Duration) 
 		}
 	}
 	return false
+}
+
+// PreProduceProbeSawFork 上一轮 TryProbeCanonicalNextBeforeProduce 是否遇到过 parent mismatch。
+func (s *syncer) PreProduceProbeSawFork() bool {
+	return s.lastPreProduceSawFork.Load()
 }
 
 // preProduceProbeRejectReason 非空表示该块不可作为 local+1 落链（父哈希/时间戳/共识 VerifyHeader）。

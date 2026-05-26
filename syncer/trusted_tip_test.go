@@ -10,9 +10,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func testSyncerWithBoots() *syncer {
+	return &syncer{
+		logger:             hclog.NewNullLogger(),
+		trustedBootnodeIDs: map[peer.ID]struct{}{peer.ID("test-boot"): {}},
+	}
+}
+
 func TestComputeTrustedBootnodeTip_MaxClusterQuorum(t *testing.T) {
 	heights := []uint64{15878201, 15878201, 15878241, 15878297, 15878321, 15878415}
-	s := &syncer{logger: hclog.NewNullLogger()}
+	s := testSyncerWithBoots()
 	res := s.computeTrustedBootnodeQuorum(15878415, nil, heights)
 	require.True(t, res.Quorum)
 	require.Equal(t, uint64(15878415), res.Tip)
@@ -20,7 +27,7 @@ func TestComputeTrustedBootnodeTip_MaxClusterQuorum(t *testing.T) {
 
 func TestComputeTrustedBootnodeTip_MedianCluster(t *testing.T) {
 	heights := []uint64{100, 101, 99}
-	s := &syncer{logger: hclog.NewNullLogger()}
+	s := testSyncerWithBoots()
 	res := s.computeTrustedBootnodeQuorum(90, nil, heights)
 	require.True(t, res.Quorum)
 	require.Equal(t, uint64(101), res.Tip)
@@ -41,7 +48,7 @@ func TestTryLocalMaxBootAgree(t *testing.T) {
 func TestComputeTrustedBootnodeTip_FarBehindLocalStillQuorums(t *testing.T) {
 	// 本地大幅落后时仍应采信 boot RPC 高度（不再按 local+2048 过滤 outlier）。
 	heights := []uint64{15927776, 15927776, 15927776, 15927776, 15927776, 15927776, 15927776}
-	s := &syncer{logger: hclog.NewNullLogger()}
+	s := testSyncerWithBoots()
 	local := uint64(15921556)
 	res := s.computeTrustedBootnodeQuorum(local, nil, heights)
 	require.True(t, res.Quorum)

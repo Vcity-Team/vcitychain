@@ -294,7 +294,7 @@ func TestPeerConnectionUpdateEventCh(t *testing.T) {
 	assert.NoError(t, peerClient2.startGossip())
 
 	// create topic
-	topic, err := peerSrv3.NewTopic(statusTopicName, &proto.SyncPeerStatus{})
+	topic, err := peerSrv3.NewTopic("syncer/status/0.1", &proto.SyncPeerStatus{})
 	assert.NoError(t, err)
 
 	var wgForGossip sync.WaitGroup
@@ -436,7 +436,7 @@ func Test_shouldEmitBlocks(t *testing.T) {
 	}
 
 	// create topic & subscribe in peer
-	topic, err := peerSrv.NewTopic(statusTopicName, &proto.SyncPeerStatus{})
+	topic, err := peerSrv.NewTopic("syncer/status/0.1", &proto.SyncPeerStatus{})
 	assert.NoError(t, err)
 
 	testGossip := func(t *testing.T, shouldEmit bool) {
@@ -594,7 +594,7 @@ func Test_EmitMultipleBlocks(t *testing.T) {
 	}
 
 	// create topic & subscribe in peer
-	topic, err := peerSrv.NewTopic(statusTopicName, &proto.SyncPeerStatus{})
+	topic, err := peerSrv.NewTopic("syncer/status/0.1", &proto.SyncPeerStatus{})
 	assert.NoError(t, err)
 
 	testGossip := func(t *testing.T, blocksNum int) {

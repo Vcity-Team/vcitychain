@@ -85,6 +85,7 @@ func (s *syncer) invalidateTrustedBootHeightCache() {
 	s.trustedBootHeightMu.Lock()
 	s.trustedBootHeightCachedAt = time.Time{}
 	s.trustedBootHeightMu.Unlock()
+	s.invalidateTrustedBootHashCache()
 }
 
 // refreshBootP2PWhenCaughtUp 在 best_peer_not_ahead（P2P 高度<=local）时刷新 genesis boot GetStatus。

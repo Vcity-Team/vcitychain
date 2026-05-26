@@ -2,7 +2,6 @@ package syncer
 
 import (
 	"testing"
-	"time"
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/stretchr/testify/require"
