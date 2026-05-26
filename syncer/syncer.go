@@ -1105,7 +1105,6 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 			}
 			s.logger.Debug("✅ 区块验证完成", "peer", peerID.String()[:8], "区块号", block.Number(), "时间戳", time.Now().Format("15:04:05.000"))
 
-			s.blockchain.StageSyncReceipts(block.Hash(), fullBlock.Receipts)
 			if err := s.blockchain.WriteFullBlock(fullBlock, syncerName); err != nil {
 				metrics.IncrCounter([]string{syncerMetrics, "bad_block"}, 1)
 				s.logger.Error("区块写入失败", "peer", peerID.String(), "区块号", block.Number(), "error", err)
@@ -1181,7 +1180,6 @@ func (s *syncer) fillGapFromPeer(peerID peer.ID, from uint64, peerLatestBlock ui
 				return lastReceivedNumber, fmt.Errorf("verify block %d: %w", block.Number(), err)
 			}
 		}
-		s.blockchain.StageSyncReceipts(block.Hash(), fullBlock.Receipts)
 		if err := s.blockchain.WriteFullBlock(fullBlock, syncerName); err != nil {
 			return lastReceivedNumber, fmt.Errorf("write block %d: %w", block.Number(), err)
 		}

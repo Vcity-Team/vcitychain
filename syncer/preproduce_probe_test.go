@@ -40,7 +40,6 @@ func (s *stubPreProduceBlockchain) GetBlockByNumber(uint64, bool) (*types.Block,
 func (s *stubPreProduceBlockchain) VerifyFinalizedBlock(*types.Block) (*types.FullBlock, error) {
 	return nil, nil
 }
-func (s *stubPreProduceBlockchain) StageSyncReceipts(types.Hash, []*types.Receipt) {}
 func (s *stubPreProduceBlockchain) WriteBlock(*types.Block, string) error      { return nil }
 func (s *stubPreProduceBlockchain) WriteFullBlock(*types.FullBlock, string) error { return nil }
 func (s *stubPreProduceBlockchain) HealCanonicalBlockState(*types.Block) (*types.FullBlock, error) {

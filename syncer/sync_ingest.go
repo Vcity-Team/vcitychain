@@ -32,7 +32,8 @@ func (s *syncer) syncIngestBlock(peerID peer.ID, block *types.Block, callback fu
 			return false, false
 		}
 	}
-	s.blockchain.StageSyncReceipts(block.Hash(), fullBlock.Receipts)
+	// Do not cache verify receipts before write: ExecutionVerify does not persist trie state;
+	// WriteFullBlock must run ExecutionCommit when receipts are not from a prior commit (see heal path).
 	if err := s.blockchain.WriteFullBlock(fullBlock, syncerName); err != nil {
 		return false, false
 	}

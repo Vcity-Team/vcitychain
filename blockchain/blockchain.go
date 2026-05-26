@@ -908,12 +908,6 @@ func (b *Blockchain) executeBlockTransactionsLocked(block *types.Block, mode Exe
 	}, nil
 }
 
-// StageSyncReceipts caches receipts from VerifyFinalizedBlock so WriteFullBlock
-// (source=syncer) can commit state once instead of re-executing transactions.
-func (b *Blockchain) StageSyncReceipts(blockHash types.Hash, receipts []*types.Receipt) {
-	b.receiptsCache.Add(blockHash, receipts)
-}
-
 // WriteFullBlock writes a single block to the local blockchain.
 // It doesn't do any kind of verification, only commits the block to the DB
 // This function is a copy of WriteBlock but with a full block which does not

@@ -64,8 +64,6 @@ func (m *mockBlockchain) VerifyFinalizedBlock(b *types.Block) (*types.FullBlock,
 	return m.verifyFinalizedBlockHandler(b)
 }
 
-func (m *mockBlockchain) StageSyncReceipts(types.Hash, []*types.Receipt) {}
-
 func (m *mockBlockchain) WriteBlock(b *types.Block, s string) error {
 	return m.writeBlockHandler(b)
 }
