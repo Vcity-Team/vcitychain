@@ -91,6 +91,22 @@ func (s *syncer) logCatchUpBurstBreak(reason string, local uint64, meta trustedT
 	})
 }
 
+// tryTrustedAheadCatchUpAfterRefresh 强制刷新 boot 高度；仍超前则 burst→单块。
+// progressed：已写入块；stillAhead：仍落后且未写入（调用方应短退避，勿走 3s best_peer_not_ahead）。
+func (s *syncer) tryTrustedAheadCatchUpAfterRefresh(local uint64, callback func(*types.FullBlock) bool) (fresh trustedTipResult, progressed, stillAhead bool) {
+	fresh = s.refreshTrustedMetaForCatchUp(local)
+	if !trustedAheadOfLocal(fresh, local) {
+		return fresh, false, false
+	}
+	if s.tryCatchUpBurstFromBoot(local, fresh, callback) {
+		return fresh, true, false
+	}
+	if s.tryCatchUpNextBlockFromBoot(local, fresh, callback, true) {
+		return fresh, true, false
+	}
+	return fresh, false, true
+}
+
 // tryCatchUpBurstFromBoot：trusted 超前时按 lag 对 boot 开长流连续 catch-up。
 // 入口强制刷新 boot 高度；若 local 已达旧 tip 但网络仍超前，再条件刷新一次 meta，避免「trustedTip==local」误停。
 func (s *syncer) tryCatchUpBurstFromBoot(local uint64, _ trustedTipResult, callback func(*types.FullBlock) bool) bool {

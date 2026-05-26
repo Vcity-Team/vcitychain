@@ -507,6 +507,10 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		r.lock.Unlock()
 
 		if result && r.behindTrustedCanonicalSync(local) {
+			tip := r.trustedCanonicalTipFromSyncer()
+			if tip > local && tip-local == 1 && dposInstance.syncer != nil {
+				dposInstance.syncer.KickSync("lag=1: prioritize sync before produce")
+			}
 			r.logBehindTrustedCanonicalSync(local)
 			return false
 		}

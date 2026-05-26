@@ -769,9 +769,19 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			})
 		}
 
-		// trusted 已知超前：优先 boot 长流 burst（lag 分档 + 时间预算），失败再走 bulk。
+		// trusted 已知超前：优先 boot 长流 burst（lag 分档 + 时间预算），失败再单块 / 短退避（勿误判为已追平睡 3s）。
 		if trustedAheadOfLocal(trustedMeta, localLatest) {
 			if s.tryCatchUpBurstFromBoot(localLatest, trustedMeta, callback) {
+				continue
+			}
+			freshMeta, progressed, stillAhead := s.tryTrustedAheadCatchUpAfterRefresh(localLatest, callback)
+			if progressed {
+				continue
+			}
+			if stillAhead {
+				s.wakeSyncAfter(s.catchUpRetryBackoff(localLatest, freshMeta), "trusted_ahead_burst_failed",
+					"localLatest", localLatest,
+					"trustedTip", freshMeta.Tip)
 				continue
 			}
 		}
@@ -823,13 +833,14 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 		}
 
 		if bestPeer.Number <= localLatest {
-			if trustedAheadOfLocal(trustedMeta, localLatest) {
-				if s.tryCatchUpNextBlockFromBoot(localLatest, trustedMeta, callback, true) {
-					continue
-				}
-				s.wakeSyncAfter(s.catchUpRetryBackoff(localLatest, trustedMeta), "trusted_ahead_no_serving_peer",
+			freshMeta, progressed, stillAhead := s.tryTrustedAheadCatchUpAfterRefresh(localLatest, callback)
+			if progressed {
+				continue
+			}
+			if stillAhead {
+				s.wakeSyncAfter(s.catchUpRetryBackoff(localLatest, freshMeta), "trusted_ahead_no_serving_peer",
 					"localLatest", localLatest,
-					"trustedTip", trustedTip)
+					"trustedTip", freshMeta.Tip)
 				continue
 			}
 			if s.tryAdvancePeerViewForNextBlock(localLatest) {
@@ -840,10 +851,10 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 					"peer", bestPeer.ID.String(),
 					"peerNumber", bestPeer.Number,
 					"localLatest", localLatest,
-					"trustedTip", trustedTip,
+					"trustedTip", freshMeta.Tip,
 					"syncTarget", syncTarget)
 			})
-			s.scheduleBestNotAheadWake(s.catchUpRetryBackoff(localLatest, trustedMeta),
+			s.scheduleBestNotAheadWake(syncBestNotAheadWakeInterval,
 				"peer", bestPeer.ID.String(),
 				"peerNumber", bestPeer.Number,
 				"localLatest", localLatest)

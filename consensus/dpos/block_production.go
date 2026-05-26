@@ -438,39 +438,47 @@ func (r *dposRuntime) produceBlock() error {
 		"buildEndTime", buildEndTime.Format("15:04:05.000000"),
 		"note", "包括区块构建和签名收集的总耗时")
 
-	// 检查是否超过slot时间
+	// 检查是否超过 slot 时间；slot 一致性以区块头时间戳为准（勿用墙钟 LeaderElectionSlot，避免构建 <1s 仍被误判跨 slot）。
 	if r.config.blockScheduler != nil && buildStartSlot >= 0 {
-		now := time.Now()
 		blockWindow := r.config.blockScheduler.GetBlockWindow()
-		currentSlotAfterBuild := r.config.blockScheduler.LeaderElectionSlot()
-		buildDuration := now.Sub(buildStartTime)
+		buildDuration := time.Since(buildStartTime)
 
-		// 检查构建耗时是否超过slot时间
 		if buildDuration > blockWindow {
 			r.logger.Info("⏰ [produceBlock] 区块被丢弃：构建耗时超过slot时间",
 				"blockNumber", nextBlockNumber,
 				"buildDuration", buildDuration.String(),
 				"blockWindow", blockWindow.String(),
 				"buildStartSlot", buildStartSlot,
-				"currentSlotAfterBuild", currentSlotAfterBuild,
 				"reason", fmt.Sprintf("构建耗时 %v 超过slot时间窗口 %v", buildDuration, blockWindow))
 			return nil
 		}
 
-		if currentSlotAfterBuild != buildStartSlot {
-			r.logger.Info("⏰ [produceBlock] 区块被丢弃：slot已变化",
+		blockTimestamp := time.Unix(int64(block.Block.Header.Timestamp), 0).UTC()
+		blockSlot := r.config.blockScheduler.SlotAt(blockTimestamp)
+		r.lock.RLock()
+		decisionSlot := r.decisionSlot
+		r.lock.RUnlock()
+		expectedSlot := buildStartSlot
+		if decisionSlot >= 0 {
+			expectedSlot = decisionSlot
+		}
+		if blockSlot != expectedSlot {
+			r.logger.Info("⏰ [produceBlock] 区块被丢弃：区块时间戳 slot 与决策 slot 不一致",
 				"blockNumber", nextBlockNumber,
 				"buildStartSlot", buildStartSlot,
-				"currentSlotAfterBuild", currentSlotAfterBuild,
+				"decisionSlot", decisionSlot,
+				"blockSlot", blockSlot,
+				"expectedSlot", expectedSlot,
 				"buildDuration", buildDuration.String(),
-				"reason", fmt.Sprintf("构建开始时slot=%d，构建完成后slot=%d，slot已变化", buildStartSlot, currentSlotAfterBuild))
+				"reason", fmt.Sprintf("区块时间戳 slot=%d，期望 slot=%d", blockSlot, expectedSlot))
 			return nil
 		}
 
-		r.logger.Info("✅ [produceBlock] slot检查通过，slot未变化且未超时",
+		r.logger.Info("✅ [produceBlock] slot检查通过，区块时间戳 slot 与决策 slot 一致且未超时",
 			"blockNumber", nextBlockNumber,
 			"buildStartSlot", buildStartSlot,
-			"currentSlotAfterBuild", currentSlotAfterBuild,
+			"decisionSlot", decisionSlot,
+			"blockSlot", blockSlot,
 			"buildDuration", buildDuration.String())
 	} else {
 		reason := "未知原因"
