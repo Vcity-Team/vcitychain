@@ -91,7 +91,7 @@ func (s *syncer) logCatchUpBurstBreak(reason string, local uint64, meta trustedT
 	})
 }
 
-// tryCatchUpBurstFromBoot：trusted 超前时按 lag 连续 catch-up（小 lag 每轮最多 catchUpBurstSmallLagMax 块）。
+// tryCatchUpBurstFromBoot：trusted 超前时按 lag 对 boot 开长流连续 catch-up。
 // 入口强制刷新 boot 高度；若 local 已达旧 tip 但网络仍超前，再条件刷新一次 meta，避免「trustedTip==local」误停。
 func (s *syncer) tryCatchUpBurstFromBoot(local uint64, _ trustedTipResult, callback func(*types.FullBlock) bool) bool {
 	meta := s.refreshTrustedMetaForCatchUp(local)
@@ -100,29 +100,32 @@ func (s *syncer) tryCatchUpBurstFromBoot(local uint64, _ trustedTipResult, callb
 	}
 	startTip := meta.Tip
 	lag := trustedCatchUpLag(meta, local)
-	burstMax := catchUpBurstLimit(lag)
-	if burstMax <= 0 {
+	sessionMax := catchUpBurstLimit(lag)
+	if sessionMax <= 0 {
 		return false
 	}
-	if burstMax > catchUpBurstMaxBlocks {
-		burstMax = catchUpBurstMaxBlocks
-	}
+
+	start := time.Now()
+	deadline := start.Add(catchUpBurstTimeBudget)
+	s.beginSyncCatchUp()
+	defer s.endSyncCatchUp()
 
 	wrote := false
 	blocksWritten := 0
-	for burst := 0; burst < burstMax; {
+	for blocksWritten < sessionMax && time.Now().Before(deadline) {
 		if !trustedAheadOfLocal(meta, local) {
 			if local >= startTip && local >= meta.Tip {
 				fresh := s.refreshTrustedMetaForCatchUp(local)
 				if trustedAheadOfLocal(fresh, local) {
 					meta = fresh
-					if extra := catchUpBurstLimit(trustedCatchUpLag(meta, local)); extra > 0 {
-						need := burst + extra
-						if need > burstMax {
-							if need > catchUpBurstMaxBlocks {
-								need = catchUpBurstMaxBlocks
+					lag = trustedCatchUpLag(meta, local)
+					if extra := catchUpBurstLimit(lag); extra > 0 {
+						need := blocksWritten + extra
+						if need > sessionMax {
+							sessionMax = need
+							if sessionMax > catchUpBurstBlocksHuge {
+								sessionMax = catchUpBurstBlocksHuge
 							}
-							burstMax = need
 						}
 					}
 					continue
@@ -133,14 +136,36 @@ func (s *syncer) tryCatchUpBurstFromBoot(local uint64, _ trustedTipResult, callb
 			}
 			break
 		}
-		if !s.tryCatchUpNextBlockFromBoot(local, meta, callback, false) {
+		hdr := s.blockchain.Header()
+		if hdr == nil {
+			break
+		}
+		local = hdr.Number
+		remaining := sessionMax - blocksWritten
+		lag = trustedCatchUpLag(meta, local)
+		s.logger.Debug("syncer: catch-up boot stream started",
+			"localLatest", local,
+			"sessionMax", sessionMax,
+			"remaining", remaining,
+			"lag", lag,
+			"timeBudget", catchUpBurstTimeBudget.String(),
+			"trustedTip", meta.Tip)
+		n, sawFork := s.runBootCatchUpStream(local, hdr.Hash, remaining, deadline, callback)
+		if sawFork {
+			s.maybeRollbackIfMinorityFork("catch_up_boot_stream_fork")
+			if n > 0 {
+				wrote = true
+				blocksWritten += n
+			}
+			break
+		}
+		if n == 0 {
 			s.logCatchUpBurstBreak("fetch_fail", local, meta, "nextHeight", local+1)
 			s.maybeRollbackIfMinorityFork("catch_up_burst")
 			break
 		}
 		wrote = true
-		blocksWritten++
-		burst++
+		blocksWritten += n
 		if hdr := s.blockchain.Header(); hdr != nil {
 			local = hdr.Number
 		}
@@ -148,11 +173,18 @@ func (s *syncer) tryCatchUpBurstFromBoot(local uint64, _ trustedTipResult, callb
 	if wrote {
 		s.notifyNewStatusEvent()
 		meta = s.computeTrustedBootnodeTip(local)
+		elapsed := time.Since(start)
+		avgMs := int64(0)
+		if blocksWritten > 0 {
+			avgMs = elapsed.Milliseconds() / int64(blocksWritten)
+		}
 		s.logger.Info("syncer: catch-up burst completed from boot",
 			"localLatest", local,
 			"trustedTip", meta.Tip,
 			"maxBootHeight", meta.MaxBootHeight,
-			"blocksWritten", blocksWritten)
+			"blocksWritten", blocksWritten,
+			"duration", elapsed.String(),
+			"avgBlockMs", avgMs)
 	}
 	return wrote
 }
@@ -319,36 +351,6 @@ func (s *syncer) fetchCanonicalNextForCatchUp(peerID peer.ID, nextNum uint64, lo
 func (s *syncer) ingestCatchUpBlock(peerID peer.ID, block *types.Block, callback func(*types.FullBlock) bool) bool {
 	s.beginSyncCatchUp()
 	defer s.endSyncCatchUp()
-	if block == nil {
-		return false
-	}
-	if s.isConsensusSwitchHeight(block) {
-		if err := s.blockchain.WriteBlockWithoutConsensus(block, syncerName); err != nil {
-			return false
-		}
-		fullBlock := &types.FullBlock{Block: block, Receipts: []*types.Receipt{}}
-		updateMetrics(fullBlock)
-		callback(fullBlock)
-		s.recordTrustedPeerSuccess(peerID, block.Number())
-		return true
-	}
-
-	fullBlock, err := s.blockchain.VerifyFinalizedBlock(block)
-	if err != nil {
-		if healed, healErr := s.tryHealStateRootMismatch(block, err); healErr == nil {
-			fullBlock = healed
-			err = nil
-		}
-		if err != nil {
-			return false
-		}
-	}
-	if err := s.blockchain.WriteFullBlock(fullBlock, syncerName); err != nil {
-		return false
-	}
-	s.markBlockTransactionsProcessed(block.Transactions)
-	s.recordTrustedPeerSuccess(peerID, block.Number())
-	updateMetrics(fullBlock)
-	callback(fullBlock)
-	return true
+	ok, _ := s.syncIngestBlock(peerID, block, callback)
+	return ok
 }

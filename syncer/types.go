@@ -29,6 +29,8 @@ type Blockchain interface {
 	GetBlockByNumber(uint64, bool) (*types.Block, bool)
 	// VerifyFinalizedBlock verifies finalized block
 	VerifyFinalizedBlock(block *types.Block) (*types.FullBlock, error)
+	// StageSyncReceipts caches verify receipts so WriteFullBlock can commit without re-execution.
+	StageSyncReceipts(blockHash types.Hash, receipts []*types.Receipt)
 	// WriteBlock writes a given block to chain
 	WriteBlock(*types.Block, string) error
 	// WriteFullBlock writes a given block to chain and saves its receipts to cache

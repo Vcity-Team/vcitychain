@@ -3,13 +3,20 @@ package syncer
 import "time"
 
 const (
-	// catchUpBurstMaxBlocks：trusted 大幅超前时每轮 Sync 连续 catch-up 的上限。
-	catchUpBurstMaxBlocks = 32
-	// catchUpBurstSmallLagMax：落后块数在 (0, largeLagBurst) 时每轮 burst 上限（避免 lag=2～4 时一块一轮）。
+	// catchUpBurstSmallLagMax：落后块数在 (0, catchUpLagTierMedium) 时每轮 burst 上限（避免 lag=2～4 时一块一轮）。
 	catchUpBurstSmallLagMax = 8
-	// catchUpLargeLagBurst：落后达到该块数时 burst 上限提升至 catchUpBurstMaxBlocks。
-	catchUpLargeLagBurst = 32
-	// catchUpBootParallel：单高度并行向 Top-N boot 拉块（套餐 E1）。
+	// catchUpLagTierMedium：达到该 lag 后每轮至少可写 catchUpBurstBlocksMedium 块。
+	catchUpLagTierMedium = 32
+	// catchUpLagTierLarge：达到该 lag 后每轮可写 catchUpBurstBlocksLarge 块。
+	catchUpLagTierLarge = 256
+	// catchUpLagTierHuge：达到该 lag 后每轮可写 catchUpBurstBlocksHuge 块（硬顶）。
+	catchUpLagTierHuge = 1024
+	catchUpBurstBlocksMedium = 32
+	catchUpBurstBlocksLarge  = 128
+	catchUpBurstBlocksHuge   = 256
+	// catchUpBurstTimeBudget：单轮 Sync catch-up 最长连续写入时间（与块数上限先到先停）。
+	catchUpBurstTimeBudget = 45 * time.Second
+	// catchUpBootParallel：单高度并行向 Top-N boot 拉块（单块 fallback / 探测）。
 	catchUpBootParallel = 3
 	// catchUpProbeTimeout：boot catch-up / 并行探测超时。
 	catchUpProbeTimeout = 3 * time.Second
@@ -20,16 +27,19 @@ func catchUpBurstLimit(lag uint64) int {
 	if lag == 0 {
 		return 0
 	}
-	if lag >= catchUpLargeLagBurst {
-		if lag > catchUpBurstMaxBlocks {
-			return catchUpBurstMaxBlocks
-		}
+	if lag <= catchUpBurstSmallLagMax {
 		return int(lag)
 	}
-	if lag > catchUpBurstSmallLagMax {
+	if lag < catchUpLagTierMedium {
 		return catchUpBurstSmallLagMax
 	}
-	return int(lag)
+	if lag < catchUpLagTierLarge {
+		return catchUpBurstBlocksMedium
+	}
+	if lag < catchUpLagTierHuge {
+		return catchUpBurstBlocksLarge
+	}
+	return catchUpBurstBlocksHuge
 }
 
 // trustedCatchUpLag 返回 trusted 相对本地的落后块数（0 表示未超前）。
