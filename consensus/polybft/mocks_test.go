@@ -409,6 +409,8 @@ func (tp *syncerMock) GetTrustedCanonicalTip() uint64 { return 0 }
 
 func (tp *syncerMock) KickSync(string) {}
 
+func (tp *syncerMock) SyncCatchUpActive() bool { return false }
+
 func (tp *syncerMock) TryProbeCanonicalNextBeforeProduce(time.Duration) bool { return false }
 
 func (tp *syncerMock) PreProduceAllowLocalBuild(bool) bool { return true }

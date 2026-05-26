@@ -96,6 +96,8 @@ type Syncer interface {
 	GetTrustedCanonicalTip() uint64
 	// KickSync 进程内软性重启同步：刷新 peer 图、关闭同步链路上的流并多次唤醒 Sync 循环。
 	KickSync(reason string)
+	// SyncCatchUpActive boot catch-up / bulk 写入是否进行中。
+	SyncCatchUpActive() bool
 	// TryProbeCanonicalNextBeforeProduce 出块前 P1：从 peer 拉取 localTip+1，校验通过后写入本地；成功则返回 true（放弃本轮本地出块）。
 	TryProbeCanonicalNextBeforeProduce(probeTimeout time.Duration) bool
 	// PreProduceAllowLocalBuild 出块前：boot hash 多数表决下本机是否在主链；minority 时返回 false。

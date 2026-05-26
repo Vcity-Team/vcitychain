@@ -501,6 +501,8 @@ func (tp *syncerMock) GetTrustedCanonicalTip() uint64 {
 
 func (tp *syncerMock) KickSync(string) {}
 
+func (tp *syncerMock) SyncCatchUpActive() bool { return false }
+
 func (tp *syncerMock) PreProduceAllowLocalBuild(bool) bool { return true }
 
 func (tp *syncerMock) PreProduceProbeSawFork() bool { return false }

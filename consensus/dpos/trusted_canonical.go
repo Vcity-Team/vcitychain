@@ -1,6 +1,24 @@
 package dpos
 
-import "time"
+import (
+	"time"
+
+	"github.com/Vcity-Team/vcitychain/syncer"
+)
+
+// waitForSyncCatchUpDrain 等待进行中的 boot catch-up 收尾（lag=1 时 burst 通常 <1s 完成）。
+func (r *dposRuntime) waitForSyncCatchUpDrain(syncSvc syncer.Syncer, maxWait time.Duration) {
+	if syncSvc == nil || !syncSvc.SyncCatchUpActive() {
+		return
+	}
+	deadline := time.Now().Add(maxWait)
+	for time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+		if !syncSvc.SyncCatchUpActive() {
+			return
+		}
+	}
+}
 
 // trustedCanonicalTipFromSyncer returns syncer bootnode quorum tip for gate/sync (no dpos_bootstrap_rpc height).
 func (r *dposRuntime) trustedCanonicalTipFromSyncer() uint64 {

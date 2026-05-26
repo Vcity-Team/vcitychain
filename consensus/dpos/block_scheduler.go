@@ -509,7 +509,18 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		if result && r.behindTrustedCanonicalSync(local) {
 			tip := r.trustedCanonicalTipFromSyncer()
 			if tip > local && tip-local == 1 && dposInstance.syncer != nil {
-				dposInstance.syncer.KickSync("lag=1: prioritize sync before produce")
+				if dposInstance.syncer.SyncCatchUpActive() {
+					r.waitForSyncCatchUpDrain(dposInstance.syncer, 800*time.Millisecond)
+				} else {
+					dposInstance.syncer.KickSync("lag=1: prioritize sync before produce")
+					r.waitForSyncCatchUpDrain(dposInstance.syncer, 800*time.Millisecond)
+				}
+			}
+			if hdr := r.config.blockchain.CurrentHeader(); hdr != nil {
+				local = hdr.Number
+			}
+			if !r.behindTrustedCanonicalSync(local) {
+				return result
 			}
 			r.logBehindTrustedCanonicalSync(local)
 			return false

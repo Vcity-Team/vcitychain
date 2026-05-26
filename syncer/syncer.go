@@ -528,6 +528,11 @@ func (s *syncer) endSyncCatchUp() {
 	s.syncCatchUpActive.Add(-1)
 }
 
+// SyncCatchUpActive reports whether boot catch-up / bulk ingest is in progress.
+func (s *syncer) SyncCatchUpActive() bool {
+	return s.syncCatchUpActive.Load() > 0
+}
+
 // KickSync 在落后于网络且拉块链路疑似僵死时由上层调用：不退出进程，通过关流 / 换人 / 唤醒打破卡死。
 func (s *syncer) KickSync(reason string) {
 	if s.closed.Load() {
