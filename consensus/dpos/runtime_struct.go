@@ -101,11 +101,6 @@ type dposRuntime struct {
 	lastPeerAdvertisedHead   uint64
 	lastPeerAdvertisedHeadAt time.Time
 
-	// productionCatchUpTarget：曾观测到网络/gossip 高于本地时的追平目标（取历史最大值），本地达到前禁止出块。
-	productionCatchUpTarget uint64
-	// lastLocallyMinedBlockHeight：本节点最近一次成功提交的出块高度（套餐 C2）。
-	lastLocallyMinedBlockHeight uint64
-
 	// dpos_bootstrap_rpc：eth_blockNumber 缓存，用作 canonical 链尖上限（短 TTL，避免热路径打爆 RPC）
 	bootstrapRPCMu       sync.Mutex
 	bootstrapRPCCached   uint64

@@ -371,28 +371,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		return false
 	}
 	local := currentBlock.Number
-	// 落后门禁：优先 bootnode 共识链尖；不可用时追平锁用水位取 max(门禁候选, gossip)。
-	if r.config.dposBackend != nil {
-		networkLatest := r.getNetworkLatestBlockNumber()
-		waterline := networkLatest
-		if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil && dpos.syncer.GetTrustedCanonicalTip() == 0 {
-			rawGossip := dpos.syncer.GetBestPeerNumber()
-			if rawGossip > waterline {
-				waterline = rawGossip
-			}
-		}
-		blocked, catchUpTarget := r.updateProductionCatchUpLatch(local, waterline)
-		if blocked {
-			r.logOnceWithInterval("should_produce_catchup_latch", 5*time.Second, "info",
-				"⏸️ 落后追平锁定期，暂不出块（本地须达到门禁水位）",
-				"localBlockNumber", local,
-				"catchUpTargetBlockNumber", catchUpTarget,
-				"gateWaterline", waterline,
-				"candidateNetworkLatest", networkLatest,
-				"lagBlocksToTarget", catchUpTarget-local)
-			return false
-		}
-	}
+	r.nudgeSyncIfBehind(local)
 
 	// 方案2：使用读锁快速检查lastProducedSlot（如果使用blockScheduler）
 	if r.config.blockScheduler != nil {
@@ -506,23 +485,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		}
 		r.lock.Unlock()
 
-		if result && r.behindTrustedCanonicalSync(local) {
-			tip := r.trustedCanonicalTipFromSyncer()
-			if tip > local && tip-local == 1 && dposInstance.syncer != nil {
-				if dposInstance.syncer.SyncCatchUpActive() {
-					r.waitForSyncCatchUpDrain(dposInstance.syncer, 800*time.Millisecond)
-				} else {
-					dposInstance.syncer.KickSync("lag=1: prioritize sync before produce")
-					r.waitForSyncCatchUpDrain(dposInstance.syncer, 800*time.Millisecond)
-				}
-			}
-			if hdr := r.config.blockchain.CurrentHeader(); hdr != nil {
-				local = hdr.Number
-			}
-			if !r.behindTrustedCanonicalSync(local) {
-				return result
-			}
-			r.logBehindTrustedCanonicalSync(local)
+		if result && r.blockProductionIfBehindTrustedCanonical(local) {
 			return false
 		}
 		return result

@@ -228,26 +228,7 @@ func (r *dposRuntime) produceBlock() error {
 				}
 			}
 		}
-		if r.behindTrustedCanonicalSync(currentBlock.Number) {
-			return nil
-		}
-	}
-
-	if r.config != nil && r.config.dposBackend != nil && currentBlock != nil {
-		networkLatest := r.getNetworkLatestBlockNumber()
-		waterline := networkLatest
-		if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil && dpos.syncer.GetTrustedCanonicalTip() == 0 {
-			rawGossip := dpos.syncer.GetBestPeerNumber()
-			if rawGossip > waterline {
-				waterline = rawGossip
-			}
-		}
-		if blocked, catchUp := r.updateProductionCatchUpLatch(currentBlock.Number, waterline); blocked {
-			r.logger.Info("⏰ 区块生产被跳过：落后追平锁定期",
-				"localBlockNumber", currentBlock.Number,
-				"catchUpTargetBlockNumber", catchUp,
-				"gateWaterline", waterline,
-				"candidateNetworkLatest", networkLatest)
+		if r.blockProductionIfBehindTrustedCanonical(currentBlock.Number) {
 			return nil
 		}
 	}
@@ -611,7 +592,6 @@ func (r *dposRuntime) produceBlock() error {
 		"blockTimestampUTC", blockTS.Format("2006-01-02 15:04:05.000"),
 		"commitWallClockUTC", wallNow.Format("2006-01-02 15:04:05.000"),
 		"blockTimeLagFromWallClock", wallNow.Sub(blockTS).String())
-	r.recordLocallyMinedBlock(block.Block.Number())
 
 	if r.config.blockScheduler != nil {
 		r.lock.Lock()
