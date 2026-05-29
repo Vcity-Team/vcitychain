@@ -30,6 +30,11 @@ func defHeaderHash(h *Header) (hash Hash) {
 	return
 }
 
+// DefaultHeaderHash computes the keccak hash of the full header RLP (pre-consensus wrappers).
+func DefaultHeaderHash(h *Header) Hash {
+	return defHeaderHash(h)
+}
+
 // ComputeHash computes the hash of the header
 func (h *Header) ComputeHash() *Header {
 	h.Hash = HeaderHash(h)

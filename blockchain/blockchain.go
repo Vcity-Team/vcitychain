@@ -523,11 +523,12 @@ func (b *Blockchain) readHeader(hash types.Hash) (*types.Header, bool) {
 	// Try to find a hit in the headers cache
 	h, ok := b.headersCache.Get(hash)
 	if ok {
-		// Hit, return the3 header
 		header, ok := h.(*types.Header)
 		if !ok {
 			return nil, false
 		}
+
+		b.finalizeReadHeaderHash(header, hash)
 
 		return header, true
 	}
@@ -538,11 +539,32 @@ func (b *Blockchain) readHeader(hash types.Hash) (*types.Header, bool) {
 		return nil, false
 	}
 
-	// Compute the header hash and update the cache
-	hh.ComputeHash()
+	b.finalizeReadHeaderHash(hh, hash)
 	b.headersCache.Add(hash, hh)
 
 	return hh, true
+}
+
+// finalizeReadHeaderHash sets the header hash for RPC/serve paths.
+// Stored blocks are keyed by canonical hash in the DB; prefer that over recomputation,
+// because historical pre-DPoS blocks may use extra layouts that DPoS hash routing cannot reproduce.
+func (b *Blockchain) finalizeReadHeaderHash(h *types.Header, lookupHash types.Hash) {
+	if h == nil {
+		return
+	}
+
+	if lookupHash == types.ZeroHash && h.Number > 0 {
+		if canonical, ok := b.db.ReadCanonicalHash(h.Number); ok && canonical != types.ZeroHash {
+			lookupHash = canonical
+		}
+	}
+
+	if lookupHash != types.ZeroHash {
+		h.Hash = lookupHash
+		return
+	}
+
+	h.ComputeHash()
 }
 
 // readBody reads the block's body, using the block hash

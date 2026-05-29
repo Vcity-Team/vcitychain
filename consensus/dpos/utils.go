@@ -7,7 +7,6 @@ import (
 	"math/big"
 	"sync"
 
-	ibftsigner "github.com/Vcity-Team/vcitychain/consensus/ibft/signer"
 	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/types"
 )
@@ -83,17 +82,6 @@ func verifyECDSASignature(publicKey *ecdsa.PublicKey, hash []byte, signature []b
 
 var setupHeaderHashFuncOnce sync.Once
 
-func hashHeaderWithCleanExtra(
-	h *types.Header,
-	cleanExtra []byte,
-	originalHeaderHash func(*types.Header) types.Hash,
-) types.Hash {
-	hh := h.Copy()
-	hh.ExtraData = cleanExtra
-
-	return originalHeaderHash(hh)
-}
-
 // getLegacyPolyBFTExtraClean strips seals from polybft/dpos-style extra while keeping validators.
 // Pre-DPoS blocks may use this layout instead of the post-switch DPoS clean format.
 func getLegacyPolyBFTExtraClean(extraRaw []byte) ([]byte, error) {
@@ -116,27 +104,6 @@ func getLegacyPolyBFTExtraClean(extraRaw []byte) ([]byte, error) {
 // because of the extraData field
 func setupHeaderHashFunc() {
 	setupHeaderHashFuncOnce.Do(func() {
-		originalHeaderHash := types.HeaderHash
-
-		types.HeaderHash = func(h *types.Header) types.Hash {
-			// when hashing the block for signing we have to remove from
-			// the extra field the seal and committed seal items
-			if extra, err := GetDposExtraClean(h.ExtraData); err == nil {
-				return hashHeaderWithCleanExtra(h, extra, originalHeaderHash)
-			}
-
-			// polybft-era extra (ValidatorSetDelta) on historical blocks
-			if extra, err := getLegacyPolyBFTExtraClean(h.ExtraData); err == nil {
-				return hashHeaderWithCleanExtra(h, extra, originalHeaderHash)
-			}
-
-			// istanbul/IBFT-era blocks before consensus switch
-			if hash, err := ibftsigner.HeaderHashLegacyIBFT(h); err == nil && hash != types.ZeroHash {
-				return hash
-			}
-
-			// Last resort: default keccak over full header (never return ZeroHash here).
-			return originalHeaderHash(h)
-		}
+		types.HeaderHash = computeHeaderHash
 	})
 }
