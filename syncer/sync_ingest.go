@@ -11,6 +11,17 @@ func (s *syncer) syncIngestBlock(peerID peer.ID, block *types.Block, callback fu
 	if block == nil {
 		return false, false
 	}
+	if match, majority, votes := s.blockMatchesBootMajority(block); !match {
+		s.logger.Warn("syncer: reject block — hash != boot majority at height",
+			"peer", peerID.String(),
+			"height", block.Number(),
+			"blockHash", block.Hash().String(),
+			"majorityHash", majority.String(),
+			"majorityVotes", votes)
+		s.markBootHashOutliers([]peer.ID{peerID})
+		s.invalidateTrustedBootHashCache()
+		return false, false
+	}
 	if s.isConsensusSwitchHeight(block) {
 		if err := s.blockchain.WriteBlockWithoutConsensus(block, syncerName); err != nil {
 			return false, false

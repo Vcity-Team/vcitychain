@@ -24,8 +24,9 @@ func (d *DPoS) VerifyHeader(header *types.Header) error {
 		return fmt.Errorf("BLS keys not loaded: %w", err)
 	}
 
-	// Short circuit if the header is known
-	if _, ok := d.blockchain.GetHeaderByHash(header.Hash); ok {
+	// Short circuit only when this hash is already the canonical block at this height.
+	// Fork blocks may remain in DB after rollback; hash-only lookup must not skip verification.
+	if canonical, ok := d.blockchain.GetHeaderByNumber(blockNumber); ok && canonical != nil && canonical.Hash == header.Hash {
 		d.logger.Info("✅ DPoS VerifyHeader 区块已存在，跳过验证", "blockNumber", blockNumber)
 		return nil
 	}

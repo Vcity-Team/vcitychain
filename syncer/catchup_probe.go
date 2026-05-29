@@ -173,7 +173,9 @@ func (s *syncer) tryCatchUpBurstFromBoot(local uint64, _ trustedTipResult, callb
 				wrote = true
 				blocksWritten += n
 			}
-			break
+			s.bulkBootRotateIdx.Add(1)
+			s.invalidateTrustedBootHashCache()
+			continue
 		}
 		if n == 0 {
 			s.logCatchUpBurstBreak("fetch_fail", local, meta, "nextHeight", local+1)
