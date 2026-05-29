@@ -15,6 +15,89 @@ import (
 	"github.com/umbracle/fastrlp"
 )
 
+// HeaderHashLegacyIBFT computes the block hash for pre-DPoS Istanbul/IBFT headers.
+// Used when serving historical blocks after the node switches to DPoS header hashing.
+func HeaderHashLegacyIBFT(header *types.Header) (types.Hash, error) {
+	extra, err := unmarshalIBFTExtraFromHeader(header)
+	if err != nil {
+		return types.ZeroHash, err
+	}
+
+	filtered := filterHeaderForHashLegacy(header, extra)
+
+	return calculateHeaderHash(filtered), nil
+}
+
+func unmarshalIBFTExtraFromHeader(header *types.Header) (*IstanbulExtra, error) {
+	if err := verifyIBFTExtraSize(header); err != nil {
+		return nil, err
+	}
+
+	data := header.ExtraData[IstanbulExtraVanity:]
+
+	tryUnmarshal := func(useBLS bool) (*IstanbulExtra, error) {
+		extra := &IstanbulExtra{
+			ProposerSeal: []byte{},
+		}
+
+		if useBLS {
+			extra.Validators = validators.NewBLSValidatorSet()
+			extra.CommittedSeals = &AggregatedSeal{}
+			if header.Number > 1 {
+				extra.ParentCommittedSeals = &AggregatedSeal{}
+			}
+		} else {
+			extra.Validators = validators.NewECDSAValidatorSet()
+			extra.CommittedSeals = &SerializedSeal{}
+			if header.Number > 1 {
+				extra.ParentCommittedSeals = &SerializedSeal{}
+			}
+		}
+
+		if err := extra.UnmarshalRLP(data); err != nil {
+			return nil, err
+		}
+
+		return extra, nil
+	}
+
+	if extra, err := tryUnmarshal(false); err == nil {
+		return extra, nil
+	}
+
+	if extra, err := tryUnmarshal(true); err == nil {
+		return extra, nil
+	}
+
+	return nil, fmt.Errorf("cannot unmarshal istanbul extra")
+}
+
+func filterHeaderForHashLegacy(header *types.Header, extra *IstanbulExtra) *types.Header {
+	clone := header.Copy()
+
+	parentCommittedSeals := extra.ParentCommittedSeals
+	if parentCommittedSeals != nil && parentCommittedSeals.Num() == 0 {
+		parentCommittedSeals = nil
+	}
+
+	var emptyCommittedSeals Seals
+	switch extra.CommittedSeals.(type) {
+	case *AggregatedSeal:
+		emptyCommittedSeals = &AggregatedSeal{}
+	default:
+		emptyCommittedSeals = &SerializedSeal{}
+	}
+
+	putIbftExtra(clone, &IstanbulExtra{
+		Validators:           extra.Validators,
+		ProposerSeal:         []byte{},
+		CommittedSeals:       emptyCommittedSeals,
+		ParentCommittedSeals: parentCommittedSeals,
+	})
+
+	return clone
+}
+
 const (
 	// legacyCommitCode is the value that is contained in
 	// legacy committed seals, so it needs to be preserved in order

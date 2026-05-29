@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"sync"
 
+	ibftsigner "github.com/Vcity-Team/vcitychain/consensus/ibft/signer"
 	"github.com/Vcity-Team/vcitychain/crypto"
 	"github.com/Vcity-Team/vcitychain/types"
 )
@@ -82,6 +83,35 @@ func verifyECDSASignature(publicKey *ecdsa.PublicKey, hash []byte, signature []b
 
 var setupHeaderHashFuncOnce sync.Once
 
+func hashHeaderWithCleanExtra(
+	h *types.Header,
+	cleanExtra []byte,
+	originalHeaderHash func(*types.Header) types.Hash,
+) types.Hash {
+	hh := h.Copy()
+	hh.ExtraData = cleanExtra
+
+	return originalHeaderHash(hh)
+}
+
+// getLegacyPolyBFTExtraClean strips seals from polybft/dpos-style extra while keeping validators.
+// Pre-DPoS blocks may use this layout instead of the post-switch DPoS clean format.
+func getLegacyPolyBFTExtraClean(extraRaw []byte) ([]byte, error) {
+	extra, err := GetDposExtra(extraRaw)
+	if err != nil {
+		return nil, err
+	}
+
+	clean := &Extra{
+		Parent:     extra.Parent,
+		Validators: extra.Validators,
+		Checkpoint: extra.Checkpoint,
+		Committed:  &Signature{},
+	}
+
+	return clean.MarshalRLPTo(nil), nil
+}
+
 // polyBFTHeaderHash defines the custom implementation for getting the header hash,
 // because of the extraData field
 func setupHeaderHashFunc() {
@@ -91,16 +121,22 @@ func setupHeaderHashFunc() {
 		types.HeaderHash = func(h *types.Header) types.Hash {
 			// when hashing the block for signing we have to remove from
 			// the extra field the seal and committed seal items
-			extra, err := GetDposExtraClean(h.ExtraData)
-			if err != nil {
-				return types.ZeroHash
+			if extra, err := GetDposExtraClean(h.ExtraData); err == nil {
+				return hashHeaderWithCleanExtra(h, extra, originalHeaderHash)
 			}
 
-			// override extra data without seals and committed seal items
-			hh := h.Copy()
-			hh.ExtraData = extra
+			// polybft-era extra (ValidatorSetDelta) on historical blocks
+			if extra, err := getLegacyPolyBFTExtraClean(h.ExtraData); err == nil {
+				return hashHeaderWithCleanExtra(h, extra, originalHeaderHash)
+			}
 
-			return originalHeaderHash(hh)
+			// istanbul/IBFT-era blocks before consensus switch
+			if hash, err := ibftsigner.HeaderHashLegacyIBFT(h); err == nil && hash != types.ZeroHash {
+				return hash
+			}
+
+			// Last resort: default keccak over full header (never return ZeroHash here).
+			return originalHeaderHash(h)
 		}
 	})
 }
