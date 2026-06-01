@@ -851,6 +851,17 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 			if s.tryAdvancePeerViewForNextBlock(localLatest) {
 				continue
 			}
+			s.refreshTrustedBootP2PStatus(localLatest, false)
+			if rescan := s.refreshTrustedMetaForCatchUp(localLatest); trustedAheadOfLocal(rescan, localLatest) {
+				if s.tryCatchUpBurstFromBoot(localLatest, rescan, callback) ||
+					s.tryCatchUpNextBlockFromBoot(localLatest, rescan, callback, true) {
+					continue
+				}
+				s.wakeSyncAfter(trustedAheadCatchUpRetryBackoff, "trusted_ahead_rescan_before_idle",
+					"localLatest", localLatest,
+					"trustedTip", rescan.Tip)
+				continue
+			}
 			s.logSyncInfoOnLocalStall(localLatest, func() {
 				s.logger.Info("syncer: best peer not ahead of local, self-wake to avoid stall on unchanged peer heights",
 					"peer", bestPeer.ID.String(),

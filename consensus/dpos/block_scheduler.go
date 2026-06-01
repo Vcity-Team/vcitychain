@@ -126,6 +126,32 @@ func (bs *BlockScheduler) schedulingReferenceHeader() *types.Header {
 	return nil
 }
 
+// DesignatedProposerForNext 本节点是否为 localTip+1 的轮值 proposer（无日志，供 sync 豁免等热路径）。
+func (bs *BlockScheduler) DesignatedProposerForNext(
+	localTip uint64,
+	myAddress types.Address,
+	validators []types.Address,
+	isEligible func(types.Address) bool,
+) bool {
+	orderedValidators := orderValidatorAddressesForLeaderElection(validators)
+	n := len(orderedValidators)
+	if n == 0 {
+		return false
+	}
+	if localTip+1 < bs.consensusSwitchHeight {
+		return false
+	}
+	idx := bs.LeaderElectionSlot() % n
+	expected := orderedValidators[idx]
+	if expected != myAddress {
+		return false
+	}
+	if isEligible != nil && !isEligible(expected) {
+		return false
+	}
+	return true
+}
+
 // ShouldProduceBlockNow 检查指定地址在当前slot是否应该出块
 func (bs *BlockScheduler) ShouldProduceBlockNow(
 	myAddress types.Address,
@@ -371,7 +397,9 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		return false
 	}
 	local := currentBlock.Number
-	r.nudgeSyncIfBehind(local)
+	if !r.designatedProduceSyncExempt(local) {
+		r.nudgeSyncIfBehind(local)
+	}
 
 	// 方案2：使用读锁快速检查lastProducedSlot（如果使用blockScheduler）
 	if r.config.blockScheduler != nil {
@@ -473,18 +501,31 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		// 严格轮流：仅 leaderSlot%N 对应地址可出块；墙钟领先链上 slot 时空耗已过窗口。
 		eligible := dposInstance.productionEligibilityCheckerBase(validatorsFromExtra)
 		decisionSlot := r.config.blockScheduler.LeaderElectionSlot()
+		decisionLocalTip := currentBlock.Number
 		result := r.config.blockScheduler.ShouldProduceBlockNow(
-			myAddress, validators, currentBlock.Number, validatorsSource, eligible)
+			myAddress, validators, decisionLocalTip, validatorsSource, eligible)
 
 		// 如果返回 true，保存 decisionSlot；如果返回 false，清除 decisionSlot
 		r.lock.Lock()
 		if result {
 			r.decisionSlot = decisionSlot
+			r.decisionLocalTip = decisionLocalTip
 		} else {
 			r.decisionSlot = -1
+			r.decisionLocalTip = 0
 		}
 		r.lock.Unlock()
 
+		if result && r.produceDecisionObsoletedByChainAdvance(decisionLocalTip) {
+			r.lock.Lock()
+			r.decisionSlot = -1
+			r.decisionLocalTip = 0
+			r.lock.Unlock()
+			return false
+		}
+		if hdr := r.config.blockchain.CurrentHeader(); hdr != nil {
+			local = hdr.Number
+		}
 		if result && r.blockProductionIfBehindTrustedCanonical(local) {
 			return false
 		}

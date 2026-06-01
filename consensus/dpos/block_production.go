@@ -195,10 +195,18 @@ func (r *dposRuntime) produceBlock() error {
 	// 获取当前区块
 	currentBlock := r.config.blockchain.CurrentHeader()
 	if currentBlock != nil {
-		if r.preProduceTrustedCanonicalCheck(currentBlock.Number) {
+		r.lock.RLock()
+		decisionLocalTip := r.decisionLocalTip
+		r.lock.RUnlock()
+		if decisionLocalTip > 0 && r.produceDecisionObsoletedByChainAdvance(decisionLocalTip) {
+			r.lock.Lock()
+			r.decisionSlot = -1
+			r.decisionLocalTip = 0
+			r.lock.Unlock()
 			return nil
 		}
-		// P1：出块前从 P2P 拉取 localTip+1，若 peer 上已存在可衔接块则放弃本轮构建（由同步落块）
+		designatedExempt := r.designatedProduceSyncExempt(currentBlock.Number)
+		// 保守：一律先 P2P 探测 next；peer 上已有可衔接块则 ingest 并放弃本地出块（避免 reorg）。
 		if r.config != nil && r.config.dposBackend != nil {
 			if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil {
 				probeTO := r.preProducePeerProbeTimeout()
@@ -207,7 +215,8 @@ func (r *dposRuntime) produceBlock() error {
 					r.logger.Info("🔭 【出块前 P2P 探测】已从 peer 写入或可衔接下一高度，放弃本轮本地出块",
 						"localTip", currentBlock.Number,
 						"plannedNextBlockNumber", currentBlock.Number+1,
-						"probeTimeout", probeTO.String())
+						"probeTimeout", probeTO.String(),
+						"designatedExempt", designatedExempt)
 					return nil
 				}
 				if probeTO > 0 {
@@ -224,9 +233,26 @@ func (r *dposRuntime) produceBlock() error {
 					r.logger.Info("🔭 【出块前 P2P 探测】未从 peer 拉到可衔接下一高度，继续本地出块",
 						"localTip", currentBlock.Number,
 						"plannedNextBlockNumber", currentBlock.Number+1,
-						"probeTimeout", probeTO.String())
+						"probeTimeout", probeTO.String(),
+						"designatedExempt", designatedExempt)
 				}
 			}
+		}
+		if hdr := r.config.blockchain.CurrentHeader(); hdr != nil {
+			if decisionLocalTip > 0 && hdr.Number >= decisionLocalTip+1 {
+				r.lock.Lock()
+				r.decisionSlot = -1
+				r.decisionLocalTip = 0
+				r.lock.Unlock()
+				r.logger.Info("⏭️ 【出块跳过】P2P 探测后链尖已推进，放弃本地出块",
+					"decisionLocalTip", decisionLocalTip,
+					"currentLocalTip", hdr.Number)
+				return nil
+			}
+			currentBlock = hdr
+		}
+		if r.preProduceTrustedCanonicalCheck(currentBlock.Number) {
+			return nil
 		}
 		if r.blockProductionIfBehindTrustedCanonical(currentBlock.Number) {
 			return nil
@@ -364,6 +390,7 @@ func (r *dposRuntime) produceBlock() error {
 			// 清除 decisionSlot
 			r.lock.Lock()
 			r.decisionSlot = -1
+			r.decisionLocalTip = 0
 			r.lock.Unlock()
 
 			return nil
@@ -520,6 +547,7 @@ func (r *dposRuntime) produceBlock() error {
 
 			r.lock.Lock()
 			r.decisionSlot = -1
+			r.decisionLocalTip = 0
 			r.lock.Unlock()
 
 			return nil
@@ -537,6 +565,7 @@ func (r *dposRuntime) produceBlock() error {
 		}
 		r.lock.Lock()
 		r.decisionSlot = -1
+		r.decisionLocalTip = 0
 		r.lock.Unlock()
 	}
 
@@ -578,6 +607,7 @@ func (r *dposRuntime) produceBlock() error {
 		if r.config.blockScheduler != nil {
 			r.lock.Lock()
 			r.decisionSlot = -1
+			r.decisionLocalTip = 0
 			r.lock.Unlock()
 		}
 		r.logger.Error("❌ [produceBlock] 区块提交失败", "blockNumber", block.Block.Number(), "blockHash", block.Block.Hash().String(), "error", err)
