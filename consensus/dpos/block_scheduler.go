@@ -500,6 +500,11 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 
 		// 严格轮流：仅 leaderSlot%N 对应地址可出块；墙钟领先链上 slot 时空耗已过窗口。
 		eligible := dposInstance.productionEligibilityCheckerBase(validatorsFromExtra)
+		// sync 可能在查验证者期间写入下一块；出块判定前刷新链尖，避免 blockNumber 与 schedulingReference 不一致。
+		if hdr := r.config.blockchain.CurrentHeader(); hdr != nil {
+			currentBlock = hdr
+			local = hdr.Number
+		}
 		decisionSlot := r.config.blockScheduler.LeaderElectionSlot()
 		decisionLocalTip := currentBlock.Number
 		result := r.config.blockScheduler.ShouldProduceBlockNow(
