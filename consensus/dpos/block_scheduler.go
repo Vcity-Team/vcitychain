@@ -141,7 +141,7 @@ func (bs *BlockScheduler) DesignatedProposerForNext(
 	if localTip+1 < bs.consensusSwitchHeight {
 		return false
 	}
-	idx := bs.LeaderElectionSlot() % n
+	idx := bs.ProposerSlotForNextBlock() % n
 	expected := orderedValidators[idx]
 	if expected != myAddress {
 		return false
@@ -188,8 +188,12 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	}
 
 	chainSlot := bs.slotAt(schedulingTime)
+	wallSlot := bs.slotAt(now.UTC())
 	leaderSlot := bs.LeaderElectionSlot()
-	currentValidatorIndex := leaderSlot % activeValidatorCount
+	// 下一块 miner 由块头 schedulingTime 对应 slot 决定（与 sync 落块、CurrentSlotForNextBlock 一致），
+	// 不用 LeaderElectionSlot（墙钟 max）——否则 chainDue 前墙钟已推进时会永久轮空 chain proposer。
+	proposerSlot := chainSlot
+	currentValidatorIndex := proposerSlot % activeValidatorCount
 	expectedValidator := orderedValidators[currentValidatorIndex]
 
 	isMatch := expectedValidator == myAddress
@@ -197,27 +201,19 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 		isMatch = false
 	}
 
-	if leaderSlot > chainSlot {
+	if wallSlot > chainSlot {
+		wallIdx := wallSlot % activeValidatorCount
 		bs.logOnceWithInterval("leader_slot_wall_ahead", 30*time.Second, "info",
 			"⏭️ [出块调度] 墙钟 slot 领先链上调度 slot，空耗已过轮值窗口",
 			"leaderSlot", leaderSlot,
 			"chainSlot", chainSlot,
-			"expectedValidator", fmt.Sprintf("[%d]%s", currentValidatorIndex, expectedValidator.String()),
+			"wallSlot", wallSlot,
+			"chainProposer", fmt.Sprintf("[%d]%s", currentValidatorIndex, expectedValidator.String()),
+			"wallProposer", fmt.Sprintf("[%d]%s", wallIdx, orderedValidators[wallIdx].String()),
 			"nextBlockNumber", nextBlockNumber)
 	}
 
 	if !isMatch {
-		return false
-	}
-
-	chainDue := bs.chainSchedulingDue()
-	if now.UTC().Before(chainDue) {
-		bs.logOnceWithInterval("should_produce_before_chain_due", 5*time.Second, "debug",
-			"⏳ [出块调度] 轮值匹配但未到 chainSchedulingDue，暂不出块",
-			"nextBlockNumber", nextBlockNumber,
-			"chainSchedulingDueUTC", chainDue.Format("2006-01-02 15:04:05.000"),
-			"nowUTC", now.UTC().Format("2006-01-02 15:04:05.000"),
-			"waitRemaining", chainDue.Sub(now.UTC()).String())
 		return false
 	}
 
@@ -249,8 +245,10 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	bs.logger.Info("🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块",
 		"blockNumber", blockNumber,
 		"nextBlockNumber", nextBlockNumber,
+		"proposerSlot", proposerSlot,
 		"leaderSlot", leaderSlot,
 		"chainSlot", chainSlot,
+		"wallSlot", wallSlot,
 		"activeValidatorCount", activeValidatorCount,
 		"activeValidatorCountSource", validatorsSource,
 		"myAddress", myAddress.String(),
@@ -343,6 +341,11 @@ func (bs *BlockScheduler) EarliestProduceTime(lastLocalProduce time.Time) time.T
 // CurrentSlotForNextBlock returns the slot index for the next produced block (same basis as header Timestamp).
 func (bs *BlockScheduler) CurrentSlotForNextBlock() int {
 	return bs.slotAt(bs.effectiveTimeForNextBlock())
+}
+
+// ProposerSlotForNextBlock 下一块合法 proposer 的 slot（= 块头 schedulingTime 对应 slot，与 miner 一致）。
+func (bs *BlockScheduler) ProposerSlotForNextBlock() int {
+	return bs.CurrentSlotForNextBlock()
 }
 
 // LeaderElectionSlot 决定「谁可以出下一块」的 slot：max(链上调度 slot, 墙钟 slot)。
@@ -521,7 +524,7 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 				"waitRemaining", earliest.Sub(time.Now().UTC()).String())
 			return false
 		}
-		decisionSlot := r.config.blockScheduler.LeaderElectionSlot()
+		decisionSlot := r.config.blockScheduler.ProposerSlotForNextBlock()
 		decisionLocalTip := currentBlock.Number
 		result := r.config.blockScheduler.ShouldProduceBlockNow(
 			myAddress, validators, decisionLocalTip, validatorsSource, eligible)
