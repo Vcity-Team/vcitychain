@@ -25,7 +25,7 @@ const (
 	getBlocksInflightBackoff   = 40 * time.Millisecond
 	getBlocksInflightMaxAge    = 90 * time.Second // 单 peer GetBlocks 占坑超过此时长则强制关流释放
 	kickSyncPostCloseGraceWait = 100 * time.Millisecond // 让 CloseStream 触发的 producer goroutine 摘掉 inflight 后再 notify
-	// syncBestNotAheadWakeInterval：best peer 宣称不高于本地时，仍定时唤醒 Sync。
+	// syncBestNotAheadWakeInterval：blockTimeout 未知时的 fallback；正常路径用 caughtUpWakeBackoff()。
 	// putToPeerMap 对「同区块高度」的状态更新不 notify，若无更高高度事件，否则会永久阻塞在 newStatusCh，
 	// 与资源监控观测到的网络领先脱节（同步表现为停住）。
 	// 宜 ≤ 出块间隔（如 3s），且须非阻塞 wake（见 wakeSyncAfter）；过长会导致「追一块睡一整段」。
@@ -859,7 +859,7 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 					"trustedTip", freshMeta.Tip,
 					"syncTarget", syncTarget)
 			})
-			s.scheduleBestNotAheadWake(syncBestNotAheadWakeInterval,
+			s.scheduleBestNotAheadWake(s.caughtUpWakeBackoff(),
 				"peer", bestPeer.ID.String(),
 				"peerNumber", bestPeer.Number,
 				"localLatest", localLatest)
