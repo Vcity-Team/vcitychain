@@ -187,7 +187,13 @@ func (r *dposRuntime) produceBlock() error {
 		if lastSlot >= 0 && lastSlot == currentSlot {
 			return nil
 		}
-		if nowUTC := time.Now().UTC(); nowUTC.Before(r.config.blockScheduler.EarliestProduceTime(lastWallProduce)) {
+		earliest := r.config.blockScheduler.EarliestProduceTime(lastWallProduce)
+		if nowUTC := time.Now().UTC(); nowUTC.Before(earliest) {
+			r.logOnceWithInterval("produce_block_before_earliest", 2*time.Second, "info",
+				"⏳ [produceBlock] 未到最早出块时刻，跳过",
+				"nowUTC", nowUTC.Format("2006-01-02 15:04:05.000"),
+				"earliestProduceUTC", earliest.Format("2006-01-02 15:04:05.000"),
+				"waitRemaining", earliest.Sub(nowUTC).String())
 			return nil
 		}
 	}

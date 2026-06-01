@@ -210,6 +210,17 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 		return false
 	}
 
+	chainDue := bs.chainSchedulingDue()
+	if now.UTC().Before(chainDue) {
+		bs.logOnceWithInterval("should_produce_before_chain_due", 5*time.Second, "debug",
+			"⏳ [出块调度] 轮值匹配但未到 chainSchedulingDue，暂不出块",
+			"nextBlockNumber", nextBlockNumber,
+			"chainSchedulingDueUTC", chainDue.Format("2006-01-02 15:04:05.000"),
+			"nowUTC", now.UTC().Format("2006-01-02 15:04:05.000"),
+			"waitRemaining", chainDue.Sub(now.UTC()).String())
+		return false
+	}
+
 	// 构建验证者集合完整列表（带索引）
 	validatorsList := make([]string, len(orderedValidators))
 	for i, v := range orderedValidators {
@@ -414,15 +425,6 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		if lastSlot >= 0 && lastSlot == leaderSlot {
 			return false
 		}
-
-		// 墙钟节流：链上调度时间已过期时，仍须距本地上次提交至少一个 blockWindow。
-		r.lock.RLock()
-		lastWallProduce := r.lastBlockProductionTime
-		r.lock.RUnlock()
-		earliest := r.config.blockScheduler.EarliestProduceTime(lastWallProduce)
-		if time.Now().UTC().Before(earliest) {
-			return false
-		}
 	}
 
 	// 添加详细的调试日志（使用Debug级别）
@@ -504,6 +506,20 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		if hdr := r.config.blockchain.CurrentHeader(); hdr != nil {
 			currentBlock = hdr
 			local = hdr.Number
+		}
+		// 与 ShouldProduceBlockNow / produceBlock 使用同一链尖估算 EarliestProduceTime。
+		r.lock.RLock()
+		lastWallProduce := r.lastBlockProductionTime
+		r.lock.RUnlock()
+		if earliest := r.config.blockScheduler.EarliestProduceTime(lastWallProduce); time.Now().UTC().Before(earliest) {
+			r.logOnceWithInterval("should_produce_before_earliest", 5*time.Second, "debug",
+				"⏳ [出块监测] 未到 EarliestProduceTime，暂不出块",
+				"localTip", currentBlock.Number,
+				"plannedNextBlockNumber", currentBlock.Number+1,
+				"earliestProduceUTC", earliest.Format("2006-01-02 15:04:05.000"),
+				"nowUTC", time.Now().UTC().Format("2006-01-02 15:04:05.000"),
+				"waitRemaining", earliest.Sub(time.Now().UTC()).String())
+			return false
 		}
 		decisionSlot := r.config.blockScheduler.LeaderElectionSlot()
 		decisionLocalTip := currentBlock.Number
