@@ -240,6 +240,24 @@ func (s *syncer) clearBootHashOutlier(id peer.ID) {
 	delete(s.bootHashOutlierUntil, id)
 }
 
+// blockMatchesBootMajority returns true when boot quorum agrees on this block hash at its height,
+// or when quorum data is unavailable (caller may still ingest).
+func (s *syncer) blockMatchesBootMajority(block *types.Block) (ok bool, majority types.Hash, votes int) {
+	if block == nil || block.Header == nil {
+		return true, types.Hash{}, 0
+	}
+	height := block.Number()
+	if height == 0 {
+		return true, types.Hash{}, 0
+	}
+	reports := s.collectTrustedBootHashReports(height)
+	maj := computeBootHashMajority(height, reports)
+	if !maj.ok {
+		return true, types.Hash{}, 0
+	}
+	return block.Hash() == maj.majorityHash, maj.majorityHash, maj.majorityVotes
+}
+
 func (s *syncer) clearBootHashOutliersMatching(majority types.Hash, reports []bootHashReport) {
 	for _, r := range reports {
 		if r.hashOK && r.hash == majority {

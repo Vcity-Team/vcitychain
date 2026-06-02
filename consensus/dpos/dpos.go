@@ -1057,6 +1057,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	if consensusSwitchHeight, exists := params.Config.Config["consensusSwitchHeight"]; exists {
 		if height, ok := consensusSwitchHeight.(float64); ok {
 			vcity_dpos.config.ConsensusSwitchHeight = uint64(height)
+			setHeaderHashSwitchHeight(vcity_dpos.config.ConsensusSwitchHeight)
 			logger.Debug("🔄 设置共识切换高度", "height", vcity_dpos.config.ConsensusSwitchHeight)
 		}
 	}

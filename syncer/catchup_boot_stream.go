@@ -97,6 +97,8 @@ func (s *syncer) bootCatchUpStreamFromPeer(
 					"height", expectedNum,
 					"expectedParent", expectedParent.String(),
 					"gotParent", block.ParentHash().String())
+				s.markBootHashOutliers([]peer.ID{peerID})
+				s.invalidateTrustedBootHashCache()
 				return written, true
 			}
 			okIngest, terminate := s.syncIngestBlock(peerID, block, callback)

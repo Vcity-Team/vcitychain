@@ -35,5 +35,5 @@ func Test_setupHeaderHashFunc(t *testing.T) {
 	assert.Equal(t, notFullExtraHash, fullExtraHash)
 
 	header.ExtraData = []byte{1, 2, 3, 4, 100, 200, 255}
-	assert.Equal(t, types.ZeroHash, types.HeaderHash(header)) // to small extra data
+	assert.NotEqual(t, types.ZeroHash, types.HeaderHash(header)) // falls back to default header hash
 }
