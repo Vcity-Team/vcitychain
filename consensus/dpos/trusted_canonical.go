@@ -163,11 +163,12 @@ func (r *dposRuntime) produceDecisionObsoletedByChainAdvance(decisionLocalTip ui
 		return false
 	}
 	plannedNext := decisionLocalTip + 1
-	if hdr.Number >= plannedNext {
+	if hdr.Number >= plannedNext || r.localHasCanonicalBlock(plannedNext) {
 		r.logger.Info("⏭️ 【出块跳过】链尖已推进，拟出块高度已存在或已被同步掠过",
 			"decisionLocalTip", decisionLocalTip,
 			"plannedNextBlockNumber", plannedNext,
-			"currentLocalTip", hdr.Number)
+			"currentLocalTip", hdr.Number,
+			"nextHeightInDB", r.localHasCanonicalBlock(plannedNext))
 		return true
 	}
 	return false

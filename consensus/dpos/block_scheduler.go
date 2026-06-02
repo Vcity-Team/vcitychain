@@ -141,7 +141,7 @@ func (bs *BlockScheduler) DesignatedProposerForNext(
 	if localTip+1 < bs.consensusSwitchHeight {
 		return false
 	}
-	idx := bs.ProposerSlotForNextBlock() % n
+	idx := bs.ProposerSlotForTip(localTip) % n
 	expected := orderedValidators[idx]
 	if expected != myAddress {
 		return false
@@ -175,10 +175,15 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	if nextBlockNumber < bs.consensusSwitchHeight {
 		return false
 	}
+	if bs.blockchain != nil {
+		if _, ok := bs.blockchain.GetHeaderByNumber(nextBlockNumber); ok {
+			return false
+		}
+	}
 
 	now := time.Now()
-	refHeader := bs.schedulingReferenceHeader()
-	schedulingTime := bs.effectiveTimeForNextBlock()
+	refHeader := bs.tipHeaderForScheduling(blockNumber)
+	schedulingTime := bs.schedulingTimeForTip(blockNumber)
 	timeSinceGenesis := schedulingTime.Sub(bs.genesisTime)
 
 	activeValidatorCount := len(orderedValidators)
@@ -236,12 +241,12 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 		refNum = refHeader.Number
 		refTS = time.Unix(int64(refHeader.Timestamp), 0).UTC().Format("2006-01-02 15:04:05.000")
 	}
-	bs.logger.Info("📐 [出块调度] 网络最新块时间+blockWindow 确定下一区块 slot",
-		"networkRefBlockNumber", refNum,
-		"networkRefTimestampUTC", refTS,
+	bs.logger.Info("📐 [出块调度] 决策链尖时间+blockWindow 确定下一区块 slot",
+		"decisionTipBlockNumber", refNum,
+		"decisionTipTimestampUTC", refTS,
 		"leaderElectionTimeUTC", schedulingTime.Format("2006-01-02 15:04:05.000"),
 		"blockWindow", bs.blockWindow.String(),
-		"note", "与 BlockBuilder.Reset 一致；无 peer 时 networkRef=本地链尖")
+		"note", "与 produce 决策 localTip 一致，不用超前 networkRef")
 	bs.logger.Info("🎯 [出块验证] ShouldProduceBlockNow返回true，本节点应该出块",
 		"blockNumber", blockNumber,
 		"nextBlockNumber", nextBlockNumber,
@@ -346,6 +351,45 @@ func (bs *BlockScheduler) CurrentSlotForNextBlock() int {
 // ProposerSlotForNextBlock 下一块合法 proposer 的 slot（= 块头 schedulingTime 对应 slot，与 miner 一致）。
 func (bs *BlockScheduler) ProposerSlotForNextBlock() int {
 	return bs.CurrentSlotForNextBlock()
+}
+
+// tipHeaderForScheduling 返回出块决策参照的链尖块头（严格等于 blockNumber，不用超前 networkRef）。
+func (bs *BlockScheduler) tipHeaderForScheduling(blockNumber uint64) *types.Header {
+	if bs.blockchain == nil {
+		return nil
+	}
+	if h, ok := bs.blockchain.GetHeaderByNumber(blockNumber); ok && h != nil {
+		return h
+	}
+	if h := bs.blockchain.Header(); h != nil && h.Number == blockNumber {
+		return h
+	}
+	return nil
+}
+
+// schedulingTimeForTip 基于 decisionLocalTip 的下一区块调度时刻（与 ShouldProduceBlockNow 入参 blockNumber 一致）。
+func (bs *BlockScheduler) schedulingTimeForTip(blockNumber uint64) time.Time {
+	var base uint64
+	if tip := bs.tipHeaderForScheduling(blockNumber); tip != nil {
+		base = tip.Timestamp
+	}
+	if base == 0 {
+		return bs.effectiveTimeForNextBlock()
+	}
+	chainDue := time.Unix(int64(base), 0).UTC().Add(bs.blockWindow)
+	if !bs.wallClockSlotAlignment {
+		return chainDue
+	}
+	wallDue := bs.wallDueTime()
+	if wallDue.After(chainDue) {
+		return wallDue
+	}
+	return chainDue
+}
+
+// ProposerSlotForTip 基于 decisionLocalTip 的下一块 proposer slot（与 ShouldProduceBlockNow 一致）。
+func (bs *BlockScheduler) ProposerSlotForTip(blockNumber uint64) int {
+	return bs.slotAt(bs.schedulingTimeForTip(blockNumber))
 }
 
 // LeaderElectionSlot 决定「谁可以出下一块」的 slot：max(链上调度 slot, 墙钟 slot)。
@@ -524,8 +568,11 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 				"waitRemaining", earliest.Sub(time.Now().UTC()).String())
 			return false
 		}
-		decisionSlot := r.config.blockScheduler.ProposerSlotForNextBlock()
 		decisionLocalTip := currentBlock.Number
+		if r.produceDecisionObsoletedByChainAdvance(decisionLocalTip) {
+			return false
+		}
+		decisionSlot := r.config.blockScheduler.ProposerSlotForTip(decisionLocalTip)
 		result := r.config.blockScheduler.ShouldProduceBlockNow(
 			myAddress, validators, decisionLocalTip, validatorsSource, eligible)
 
@@ -539,14 +586,6 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			r.decisionLocalTip = 0
 		}
 		r.lock.Unlock()
-
-		if result && r.produceDecisionObsoletedByChainAdvance(decisionLocalTip) {
-			r.lock.Lock()
-			r.decisionSlot = -1
-			r.decisionLocalTip = 0
-			r.lock.Unlock()
-			return false
-		}
 		if hdr := r.config.blockchain.CurrentHeader(); hdr != nil {
 			local = hdr.Number
 		}
