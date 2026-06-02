@@ -169,6 +169,7 @@ func (p *blockchainWrapper) CommitBlock(block *types.FullBlock) error {
 			} else if applied > 0 {
 				p.logger.Info("✅ [CommitBlock] 边界应用提案完成", "blockNumber", block.Block.Number(), "appliedCount", applied)
 			}
+			// vote/unvote 边界 apply 已统一在 ProcessHeaders 登记后执行（applyScheduledVoteChangesAtEpochEndBlock）。
 		}
 	}
 
@@ -185,6 +186,15 @@ func (p *blockchainWrapper) CommitBlock(block *types.FullBlock) error {
 	}
 
 	return nil
+}
+
+// boundaryApplyEpochForBlock 返回 epoch 边界块对应的「即将结束的 epoch」编号。
+func (p *blockchainWrapper) boundaryApplyEpochForBlock(blockNumber uint64) uint64 {
+	dposInstance, exists := GetDPoSInstance("vcity_dpos")
+	if !exists || dposInstance == nil {
+		return 0
+	}
+	return dposInstance.boundaryApplyEpochForBlock(blockNumber)
 }
 
 // applySlashingFromBlockExtra 从区块 Extra 解析 SlashingInfo 并执行消减（与 processSlashingInBlock 逻辑一致），
@@ -512,20 +522,7 @@ func (p *blockchainWrapper) ProcessBlockExecutor(
 					}
 				}
 			}
-			// 边界应用撤销（先于投票，避免权重突变）
-			p.logger.Info("🔍 [边界应用撤销] 开始查询待撤销", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
-			if err := dposInstance.applyScheduledUnvotes(currentEpoch, block.Number()); err != nil {
-				p.logger.Error("❌ [边界应用撤销] 应用撤销失败", "error", err, "blockNumber", block.Number(), "currentEpoch", currentEpoch)
-			} else {
-				p.logger.Info("✅ [边界应用撤销] 撤销应用完成", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
-			}
-			// 边界应用投票
-			p.logger.Info("🔍 [边界应用投票] 开始查询待应用投票", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
-			if err := dposInstance.applyScheduledVotes(currentEpoch, block.Number()); err != nil {
-				p.logger.Error("❌ [边界应用投票] 应用投票失败", "error", err, "blockNumber", block.Number(), "currentEpoch", currentEpoch)
-			} else {
-				p.logger.Info("✅ [边界应用投票] 投票应用完成", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
-			}
+			// vote/unvote 边界 apply 已移至 ProcessHeaders（登记后再 apply，避免同步节点漏应用本块 vote）。
 		}
 	} else {
 		p.logger.Debug("ℹ️ 不是epoch结束区块，跳过奖励分配",
@@ -775,20 +772,7 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 				}
 			}
 
-			// 边界应用撤销（先于投票，避免权重突变）
-			p.logger.Info("🔍 [边界应用撤销] 开始查询待撤销", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
-			if err := dposInstance.applyScheduledUnvotes(currentEpoch, block.Number()); err != nil {
-				p.logger.Error("❌ [边界应用撤销] 应用撤销失败", "error", err, "blockNumber", block.Number(), "currentEpoch", currentEpoch)
-			} else {
-				p.logger.Info("✅ [边界应用撤销] 撤销应用完成", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
-			}
-			// 边界应用投票
-			p.logger.Info("🔍 [边界应用投票] 开始查询待应用投票", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
-			if err := dposInstance.applyScheduledVotes(currentEpoch, block.Number()); err != nil {
-				p.logger.Error("❌ [边界应用投票] 应用投票失败", "error", err, "blockNumber", block.Number(), "currentEpoch", currentEpoch)
-			} else {
-				p.logger.Info("✅ [边界应用投票] 投票应用完成", "blockNumber", block.Number(), "currentEpoch", currentEpoch)
-			}
+			// vote/unvote 边界应用仅在 ProcessBlockExecutor 执行（见上方），ProcessBlock 不再重复。
 		}
 	} else {
 		p.logger.Debug("ℹ️ 跳过奖励分配",

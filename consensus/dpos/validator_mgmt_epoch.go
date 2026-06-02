@@ -42,6 +42,19 @@ func (d *DPoS) GetCurrentEpochNumber() uint64 {
 	return meta.Number
 }
 
+// boundaryApplyEpochForBlock 返回 epoch 边界块对应的「即将结束的 epoch」编号（与边界 apply 一致）。
+func (d *DPoS) boundaryApplyEpochForBlock(blockNumber uint64) uint64 {
+	if blockNumber > 0 {
+		if meta := d.getEpochForBlock(blockNumber - 1); meta != nil {
+			return meta.Number
+		}
+	}
+	if meta := d.getEpochForBlock(blockNumber); meta != nil {
+		return meta.Number
+	}
+	return 0
+}
+
 // getEpochForBlock 获取指定区块号的epoch信息
 func (d *DPoS) getEpochForBlock(blockNumber uint64) *epochMetadata {
 	// 修改：基于指定区块号计算epoch

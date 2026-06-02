@@ -140,6 +140,8 @@ func (d *DPoS) ProcessHeaders(headers []*types.Header) error {
 		if err := d.processBlockVotesFromHeader(header); err != nil {
 			d.logger.Error("failed to process block votes from header", "blockNumber", header.Number, "blockHash", header.Hash, "error", err)
 		}
+		// 边界 vote/unvote 必须在 processBlockVotes 登记之后再 apply（同步节点 WriteFullBlock 里 ProcessHeaders 晚于 ProcessBlockExecutor）。
+		d.applyScheduledVoteChangesAtEpochEndBlock(header.Number, "ProcessHeaders")
 		// 同步更新轮次状态
 		d.updateRoundState(header)
 	}
