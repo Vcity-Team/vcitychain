@@ -316,7 +316,7 @@ func Test_toReceipt(t *testing.T) {
 
 		header := createTestHeader(15, nil)
 		rec := createTestReceipt(nil, cumulativeGasUsed, gasUsed, tx.Hash)
-		testReceipt("testsuite/receipt-no-logs.json", toReceipt(rec, tx, 0, header, nil))
+		testReceipt("testsuite/receipt-no-logs.json", toReceipt(rec, tx, 0, header, nil, header.Hash))
 	})
 
 	t.Run("with contract address", func(t *testing.T) {
@@ -327,7 +327,7 @@ func Test_toReceipt(t *testing.T) {
 		header := createTestHeader(20, nil)
 		rec := createTestReceipt(nil, cumulativeGasUsed, gasUsed, tx.Hash)
 		rec.ContractAddress = &contractAddr
-		testReceipt("testsuite/receipt-contract-deployment.json", toReceipt(rec, tx, 0, header, nil))
+		testReceipt("testsuite/receipt-contract-deployment.json", toReceipt(rec, tx, 0, header, nil, header.Hash))
 	})
 
 	t.Run("with logs", func(t *testing.T) {
@@ -340,7 +340,7 @@ func Test_toReceipt(t *testing.T) {
 		logs := createTestLogs(2, recipient)
 		originReceipt := createTestReceipt(logs, cumulativeGasUsed, gasUsed, tx.Hash)
 		txIdx := uint64(1)
-		receipt := toReceipt(originReceipt, tx, txIdx, header, toLogs(logs, 0, txIdx, header, tx.Hash))
+		receipt := toReceipt(originReceipt, tx, txIdx, header, toLogs(logs, 0, txIdx, header, tx.Hash, header.Hash), header.Hash)
 		testReceipt("testsuite/receipt-with-logs.json", receipt)
 	})
 }
@@ -359,7 +359,7 @@ func Test_toBlock(t *testing.T) {
 		},
 	}
 
-	b := toBlock(block, true)
+	b := toBlock(block, true, types.ZeroHash)
 	require.NotNil(t, b)
 
 	res, err := json.Marshal(b)

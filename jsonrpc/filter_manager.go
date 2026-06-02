@@ -353,7 +353,7 @@ func NewFilterManager(logger hclog.Logger, store filterManagerStore, blockRangeL
 	// start blockstream with the current header
 	header := store.Header()
 
-	block := toBlock(&types.Block{Header: header}, false)
+	block := toBlock(&types.Block{Header: header}, false, types.ZeroHash)
 	m.blockStream = newBlockStream(block)
 
 	// start the head watcher
@@ -502,7 +502,7 @@ func (f *FilterManager) getLogsFromBlock(query *LogQuery, block *types.Block) ([
 	for idx, receipt := range receipts {
 		for _, log := range receipt.Logs {
 			if query.Match(log) {
-				logs = append(logs, toLog(log, logIdx, uint64(idx), block.Header, block.Transactions[idx].Hash))
+				logs = append(logs, toLog(log, logIdx, uint64(idx), block.Header, block.Transactions[idx].Hash, block.Header.Hash))
 			}
 
 			logIdx++
@@ -800,7 +800,7 @@ func (f *FilterManager) processBlockEvent(evnt *blockchain.Event) {
 	defer f.RUnlock()
 
 	for _, header := range evnt.NewChain {
-		block := toBlock(&types.Block{Header: header}, false)
+		block := toBlock(&types.Block{Header: header}, false, types.ZeroHash)
 
 		// first include all the new headers in the blockstream for BlockFilter
 		f.blockStream.push(block)
@@ -850,7 +850,7 @@ func (f *FilterManager) appendLogsToFilters(header *block) error {
 		for _, log := range receipt.Logs {
 			for _, f := range logFilters {
 				if f.query.Match(log) {
-					f.appendLog(toLog(log, logIndex, uint64(indx), block.Header, receipt.TxHash))
+					f.appendLog(toLog(log, logIndex, uint64(indx), block.Header, receipt.TxHash, block.Header.Hash))
 				}
 			}
 

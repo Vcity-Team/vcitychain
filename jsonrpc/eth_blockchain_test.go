@@ -601,6 +601,15 @@ func (m *mockBlockStore) ReadTxLookup(txnHash types.Hash) (types.Hash, bool) {
 	return types.ZeroHash, false
 }
 
+func (m *mockBlockStore) ReadCanonicalHash(num uint64) (types.Hash, bool) {
+	for _, block := range m.blocks {
+		if block.Number() == num {
+			return block.Hash(), true
+		}
+	}
+	return types.ZeroHash, false
+}
+
 func (m *mockBlockStore) GetPendingTx(txHash types.Hash) (*types.Transaction, bool) {
 	for _, txn := range m.pendingTxns {
 		if txn.Hash == txHash {

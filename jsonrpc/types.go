@@ -139,8 +139,11 @@ func (b *block) Copy() *block {
 	return bb
 }
 
-func toBlock(b *types.Block, fullTx bool) *block {
+func toBlock(b *types.Block, fullTx bool, displayHash types.Hash) *block {
 	h := b.Header
+	if displayHash == types.ZeroHash {
+		displayHash = h.Hash
+	}
 	res := &block{
 		ParentHash:      h.ParentHash,
 		Sha3Uncles:      h.Sha3Uncles,
@@ -159,7 +162,7 @@ func toBlock(b *types.Block, fullTx bool) *block {
 		ExtraData:       argBytes(h.ExtraData),
 		MixHash:         h.MixHash,
 		Nonce:           h.Nonce,
-		Hash:            h.Hash,
+		Hash:            displayHash,
 		Transactions:    []transactionOrHash{},
 		Uncles:          []types.Hash{},
 		BaseFee:         argUint64(h.BaseFee),
@@ -173,7 +176,7 @@ func toBlock(b *types.Block, fullTx bool) *block {
 				toTransaction(
 					txn,
 					argUintPtr(b.Number()),
-					argHashPtr(b.Hash()),
+					argHashPtr(displayHash),
 					&idx,
 				),
 			)
@@ -209,7 +212,10 @@ type receipt struct {
 }
 
 func toReceipt(src *types.Receipt, tx *types.Transaction,
-	txIndex uint64, header *types.Header, logs []*Log) *receipt {
+	txIndex uint64, header *types.Header, logs []*Log, blockHash types.Hash) *receipt {
+	if blockHash == types.ZeroHash && header != nil {
+		blockHash = header.Hash
+	}
 	return &receipt{
 		Root:              src.Root,
 		CumulativeGasUsed: argUint64(src.CumulativeGasUsed),
@@ -217,7 +223,7 @@ func toReceipt(src *types.Receipt, tx *types.Transaction,
 		Status:            argUint64(*src.Status),
 		TxHash:            tx.Hash,
 		TxIndex:           argUint64(txIndex),
-		BlockHash:         header.Hash,
+		BlockHash:         blockHash,
 		BlockNumber:       argUint64(header.Number),
 		GasUsed:           argUint64(src.GasUsed),
 		ContractAddress:   src.ContractAddress,
@@ -239,22 +245,25 @@ type Log struct {
 	Removed     bool          `json:"removed"`
 }
 
-func toLogs(srcLogs []*types.Log, baseIdx, txIdx uint64, header *types.Header, txHash types.Hash) []*Log {
+func toLogs(srcLogs []*types.Log, baseIdx, txIdx uint64, header *types.Header, txHash, blockHash types.Hash) []*Log {
 	logs := make([]*Log, len(srcLogs))
 	for i, srcLog := range srcLogs {
-		logs[i] = toLog(srcLog, baseIdx+uint64(i), txIdx, header, txHash)
+		logs[i] = toLog(srcLog, baseIdx+uint64(i), txIdx, header, txHash, blockHash)
 	}
 
 	return logs
 }
 
-func toLog(src *types.Log, logIdx, txIdx uint64, header *types.Header, txHash types.Hash) *Log {
+func toLog(src *types.Log, logIdx, txIdx uint64, header *types.Header, txHash, blockHash types.Hash) *Log {
+	if blockHash == types.ZeroHash && header != nil {
+		blockHash = header.Hash
+	}
 	return &Log{
 		Address:     src.Address,
 		Topics:      src.Topics,
 		Data:        argBytes(src.Data),
 		BlockNumber: argUint64(header.Number),
-		BlockHash:   header.Hash,
+		BlockHash:   blockHash,
 		TxHash:      txHash,
 		TxIndex:     argUint64(txIdx),
 		LogIndex:    argUint64(logIdx),

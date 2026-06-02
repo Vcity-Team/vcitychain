@@ -104,6 +104,20 @@ func getLegacyPolyBFTExtraClean(extraRaw []byte) ([]byte, error) {
 // because of the extraData field
 func setupHeaderHashFunc() {
 	setupHeaderHashFuncOnce.Do(func() {
-		types.HeaderHash = computeHeaderHash
+		originalHeaderHash := types.HeaderHash
+
+		types.HeaderHash = func(h *types.Header) types.Hash {
+			// when hashing the block for signing we have to remove from
+			// the extra field the seal and committed seal items
+			extra, err := GetDposExtraClean(h.ExtraData)
+			if err != nil {
+				return types.ZeroHash
+			}
+
+			hh := h.Copy()
+			hh.ExtraData = extra
+
+			return originalHeaderHash(hh)
+		}
 	})
 }

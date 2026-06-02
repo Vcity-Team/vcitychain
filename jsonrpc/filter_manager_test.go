@@ -875,7 +875,7 @@ func Test_appendLogsToFilters(t *testing.T) {
 		createTestTransaction(types.StringToHash("tx3")),
 	}
 
-	b := toBlock(&types.Block{Header: block.Header, Transactions: txs}, false)
+	b := toBlock(&types.Block{Header: block.Header, Transactions: txs}, false, types.ZeroHash)
 	err := f.appendLogsToFilters(b)
 
 	require.NoError(t, err)

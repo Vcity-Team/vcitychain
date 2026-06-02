@@ -60,7 +60,13 @@ func tryLegacyIBFTHeaderHash(h *types.Header) types.Hash {
 	return hash
 }
 
-func computeHeaderHash(h *types.Header) types.Hash {
+// DisplayHeaderHash computes a block hash for JSON-RPC display only.
+// It must not be used for consensus, sync, or block storage.
+func DisplayHeaderHash(h *types.Header) types.Hash {
+	return displayHeaderHash(h)
+}
+
+func displayHeaderHash(h *types.Header) types.Hash {
 	switchHeight := headerHashSwitchHeight.Load()
 
 	tryInOrder := func(fns ...func(*types.Header) types.Hash) types.Hash {

@@ -60,6 +60,9 @@ type ethBlockchainStore interface {
 	// ReadTxLookup returns a block hash in which a given txn was mined
 	ReadTxLookup(txnHash types.Hash) (types.Hash, bool)
 
+	// ReadCanonicalHash returns the canonical block hash at the given height
+	ReadCanonicalHash(uint64) (types.Hash, bool)
+
 	// GetReceiptsByHash returns the receipts for a block hash
 	GetReceiptsByHash(hash types.Hash) ([]*types.Receipt, error)
 
@@ -143,7 +146,7 @@ func (e *Eth) GetBlockByNumber(number BlockNumber, fullTx bool) (interface{}, er
 		return nil, err
 	}
 
-	return toBlock(block, fullTx), nil
+	return toBlock(block, fullTx, resolveRPCBlockHash(e.store, block.Header)), nil
 }
 
 // GetBlockByHash returns information about a block by hash
@@ -157,7 +160,7 @@ func (e *Eth) GetBlockByHash(hash types.Hash, fullTx bool) (interface{}, error) 
 		return nil, err
 	}
 
-	return toBlock(block, fullTx), nil
+	return toBlock(block, fullTx, resolveRPCBlockHash(e.store, block.Header)), nil
 }
 
 func (e *Eth) filterExtra(block *types.Block) error {
@@ -246,11 +249,12 @@ func (e *Eth) GetTransactionByHash(hash types.Hash) (interface{}, error) {
 		// Find the transaction within the block
 		if txn, idx := types.FindTxByHash(block.Transactions, hash); txn != nil {
 			txn.GasPrice = txn.GetGasPrice(block.Header.BaseFee)
+			displayHash := resolveRPCBlockHash(e.store, block.Header)
 
 			return toTransaction(
 				txn,
 				argUintPtr(block.Number()),
-				argHashPtr(block.Hash()),
+				argHashPtr(displayHash),
 				&idx,
 			)
 		}
@@ -340,9 +344,10 @@ func (e *Eth) GetTransactionReceipt(hash types.Hash) (interface{}, error) {
 	}
 
 	raw := receipts[txIndex]
-	logs := toLogs(raw.Logs, uint64(logIndex), uint64(txIndex), block.Header, hash)
+	displayHash := resolveRPCBlockHash(e.store, block.Header)
+	logs := toLogs(raw.Logs, uint64(logIndex), uint64(txIndex), block.Header, hash, displayHash)
 
-	return toReceipt(raw, txn, uint64(txIndex), block.Header, logs), nil
+	return toReceipt(raw, txn, uint64(txIndex), block.Header, logs, displayHash), nil
 }
 
 // GetStorageAt returns the contract storage at the index position

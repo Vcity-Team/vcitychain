@@ -35,5 +35,5 @@ func Test_setupHeaderHashFunc(t *testing.T) {
 	assert.Equal(t, notFullExtraHash, fullExtraHash)
 
 	header.ExtraData = []byte{1, 2, 3, 4, 100, 200, 255}
-	assert.NotEqual(t, types.ZeroHash, types.HeaderHash(header)) // falls back to default header hash
+	assert.Equal(t, types.ZeroHash, types.HeaderHash(header)) // invalid extra for consensus hash
 }

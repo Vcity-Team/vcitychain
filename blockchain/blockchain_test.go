@@ -1521,17 +1521,3 @@ func TestBlockchain_WriteFullBlock(t *testing.T) {
 	require.NotNil(t, db[hex.EncodeToHex(getKey(storage.CANONICAL, common.EncodeUint64ToBytes(header.Number)))])
 	require.NotNil(t, db[hex.EncodeToHex(getKey(storage.RECEIPTS, header.Hash.Bytes()))])
 }
-
-func Test_finalizeReadHeaderHash_usesCanonicalLookup(t *testing.T) {
-	b := NewTestBlockchain(t, nil)
-
-	canonical := types.StringToHash("0x67427e217962e46eea55ac76336524d0b5c13272a38bfbf97eb14b8725fa2d55")
-	header := &types.Header{
-		Number:     15400000,
-		Difficulty: 15400000,
-		ExtraData:  []byte{0x01},
-	}
-
-	b.finalizeReadHeaderHash(header, canonical)
-	require.Equal(t, canonical, header.Hash)
-}

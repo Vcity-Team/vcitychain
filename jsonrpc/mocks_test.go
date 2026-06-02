@@ -181,6 +181,16 @@ func (m *mockStore) GetBlockByNumber(num uint64, full bool) (*types.Block, bool)
 	return &types.Block{Header: header}, header != nil
 }
 
+func (m *mockStore) ReadCanonicalHash(num uint64) (types.Hash, bool) {
+	header := m.headerLoop(func(header *types.Header) bool {
+		return header.Number == num
+	})
+	if header == nil {
+		return types.Hash{}, false
+	}
+	return header.Hash, true
+}
+
 func (m *mockStore) GetTxs(inclQueued bool) (
 	map[types.Address][]*types.Transaction,
 	map[types.Address][]*types.Transaction,
