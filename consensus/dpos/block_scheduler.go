@@ -315,14 +315,70 @@ func (bs *BlockScheduler) wallDueTime() time.Time {
 	return bs.genesisTime.UTC().Add(time.Duration(slot+1) * bs.blockWindow)
 }
 
-// chainSchedulingDue 纯链上调度：参照块 timestamp + blockWindow（不含墙钟 wallDue）。
-// 用于 EarliestProduceTime；块头时间戳仍用 effectiveTimeForNextBlock。
+// chainSchedulingDue 纯链上调度：参照块 timestamp + blockWindow（绝对 UTC，用于块头时间戳下界）。
 func (bs *BlockScheduler) chainSchedulingDue() time.Time {
 	base := bs.schedulingBaseTimestamp()
 	if base == 0 {
 		return time.Now().UTC()
 	}
 	return time.Unix(int64(base), 0).UTC().Add(bs.blockWindow)
+}
+
+// chainTipAheadOfWall 链尖块头 timestamp 相对墙钟的超前量（sync 落块时常 >0）。
+func (bs *BlockScheduler) chainTipAheadOfWall(now time.Time) time.Duration {
+	base := bs.schedulingBaseTimestamp()
+	if base == 0 {
+		return 0
+	}
+	ahead := time.Unix(int64(base), 0).UTC().Sub(now)
+	if ahead <= 0 {
+		return 0
+	}
+	return ahead
+}
+
+// earliestProduceWallUTC 本节点墙钟上最早可开始构建下一块的时刻。
+// 链尖 timestamp 已超前墙钟时：不必等到绝对 chainDue（= tip+blockWindow 的 UTC 读数），
+// 而约为 now+blockWindow（等价于 chainDue - 超前量）。块头 timestamp 仍用 chainSchedulingDue/effectiveTime。
+func (bs *BlockScheduler) earliestProduceWallUTC(now time.Time) time.Time {
+	chainDue := bs.chainSchedulingDue()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	if skew := bs.chainTipAheadOfWall(now); skew > 0 {
+		adjusted := chainDue.Add(-skew) // = now + blockWindow
+		if adjusted.Before(now) {
+			return now
+		}
+		return adjusted
+	}
+	return chainDue
+}
+
+// ChainSchedulingDueUTC 下一区块链上调度时刻（绝对 UTC，块头时间下界）。
+func (bs *BlockScheduler) ChainSchedulingDueUTC() time.Time {
+	return bs.chainSchedulingDue()
+}
+
+// EarliestProduceWallUTC 导出：墙钟上最早可开始出块。
+func (bs *BlockScheduler) EarliestProduceWallUTC() time.Time {
+	return bs.earliestProduceWallUTC(time.Now().UTC())
+}
+
+// EarliestProduceTime 本节点最早可开始下一轮出块的墙钟 UTC 时刻：
+// max(earliestProduceWallUTC, 本地上次成功提交+blockWindow)。
+func (bs *BlockScheduler) EarliestProduceTime(lastLocalProduce time.Time) time.Time {
+	wallDue := bs.earliestProduceWallUTC(time.Now().UTC())
+	if lastLocalProduce.IsZero() {
+		return wallDue
+	}
+	intervalDue := lastLocalProduce.UTC().Add(bs.blockWindow)
+	if intervalDue.After(wallDue) {
+		return intervalDue
+	}
+	return wallDue
 }
 
 // effectiveTimeForNextBlock 下一区块头时间戳：max(参照+blockWindow[, 墙钟 slot 对齐])。
@@ -342,21 +398,6 @@ func (bs *BlockScheduler) effectiveTimeForNextBlock() time.Time {
 	wallDue := bs.wallDueTime()
 	if wallDue.After(chainDue) {
 		return wallDue
-	}
-	return chainDue
-}
-
-// EarliestProduceTime 本节点最早可开始下一轮出块的 UTC 时刻：
-// max(链上调度 chainSchedulingDue, 本地上次成功提交+blockWindow)。
-// 不使用 effectiveTimeForNextBlock/wallDue：墙钟下一 slot 起点恒在未来，会导致 now<earliest 永真。
-func (bs *BlockScheduler) EarliestProduceTime(lastLocalProduce time.Time) time.Time {
-	chainDue := bs.chainSchedulingDue()
-	if lastLocalProduce.IsZero() {
-		return chainDue
-	}
-	intervalDue := lastLocalProduce.UTC().Add(bs.blockWindow)
-	if intervalDue.After(chainDue) {
-		return intervalDue
 	}
 	return chainDue
 }
@@ -575,12 +616,15 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		r.lock.RLock()
 		lastWallProduce := r.lastBlockProductionTime
 		r.lock.RUnlock()
-		if earliest := r.config.blockScheduler.EarliestProduceTime(lastWallProduce); time.Now().UTC().Before(earliest) {
+		nowUTC := time.Now().UTC()
+		if earliest := r.config.blockScheduler.EarliestProduceTime(lastWallProduce); nowUTC.Before(earliest) {
 			r.traceMyProposerTurnBlocked("pre_should_produce", "before_earliest_produce_time",
 				currentBlock.Number, validators, myAddress, eligible,
-				"earliestProduceUTC", earliest.Format("2006-01-02 15:04:05.000"),
-				"nowUTC", time.Now().UTC().Format("2006-01-02 15:04:05.000"),
-				"waitRemaining", earliest.Sub(time.Now().UTC()).String(),
+				"earliestProduceWallUTC", earliest.Format("2006-01-02 15:04:05.000"),
+				"chainSchedulingDueAbsoluteUTC", r.config.blockScheduler.ChainSchedulingDueUTC().Format("2006-01-02 15:04:05.000"),
+				"chainTipAheadOfWall", r.config.blockScheduler.chainTipAheadOfWall(nowUTC).String(),
+				"nowUTC", nowUTC.Format("2006-01-02 15:04:05.000"),
+				"waitRemaining", earliest.Sub(nowUTC).String(),
 				"lastBlockProductionTimeUTC", lastWallProduce.Format("2006-01-02 15:04:05.000"))
 			r.logOnceWithInterval("should_produce_before_earliest", 5*time.Second, "debug",
 				"⏳ [出块监测] 未到 EarliestProduceTime，暂不出块",

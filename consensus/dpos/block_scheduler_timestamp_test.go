@@ -63,6 +63,30 @@ func TestEffectiveTimeForNextBlock_WallClockAlignmentWhenEnabled(t *testing.T) {
 	require.True(t, got.After(time.Unix(int64(local.Timestamp), 0)))
 }
 
+func TestEarliestProduceTime_SyncedTipAheadOfWallUsesNowPlusBlockWindow(t *testing.T) {
+	// 模拟：墙钟 06:53:10 sync 写入块头 06:53:13 的链尖 → 下一块墙钟约 now+3s，而非绝对 06:53:16。
+	parentTS := time.Date(2026, 6, 3, 6, 53, 13, 0, time.UTC)
+	now := time.Date(2026, 6, 3, 6, 53, 10, 767_000_000, time.UTC)
+	local := &types.Header{Number: 16064232, Timestamp: uint64(parentTS.Unix())}
+
+	bs := &BlockScheduler{
+		blockWindow: 3 * time.Second,
+		genesisTime: time.Unix(0, 0).UTC(),
+		blockchain:  &schedulerChainMock{local: local},
+		logger:      hclog.NewNullLogger(),
+	}
+
+	chainDue := bs.ChainSchedulingDueUTC()
+	require.Equal(t, time.Date(2026, 6, 3, 6, 53, 16, 0, time.UTC), chainDue)
+
+	got := bs.earliestProduceWallUTC(now)
+	want := now.Add(3 * time.Second)
+	require.Equal(t, want, got)
+
+	ahead := bs.chainTipAheadOfWall(now)
+	require.InDelta(t, 2.233, ahead.Seconds(), 0.01)
+}
+
 func TestEarliestProduceTime_WallClockAlignmentNotAlwaysFuture(t *testing.T) {
 	genesis := time.Unix(0, 0).UTC()
 	ref := &types.Header{Number: 10, Timestamp: 100}
