@@ -87,6 +87,23 @@ func TestEarliestProduceTime_SyncedTipAheadOfWallUsesNowPlusBlockWindow(t *testi
 	require.InDelta(t, 2.233, ahead.Seconds(), 0.01)
 }
 
+func TestEarliestProduceTime_WallPastTipBeforeChainDueAllowsNow(t *testing.T) {
+	// 墙钟已 >= 父块 timestamp，但绝对 chainDue 仍未到：应立即允许（不再跳回 chainDue 等待）。
+	parentTS := time.Date(2026, 6, 3, 7, 21, 34, 0, time.UTC)
+	now := time.Date(2026, 6, 3, 7, 21, 36, 0, time.UTC)
+	local := &types.Header{Number: 16064495, Timestamp: uint64(parentTS.Unix())}
+
+	bs := &BlockScheduler{
+		blockWindow: 3 * time.Second,
+		genesisTime: time.Unix(0, 0).UTC(),
+		blockchain:  &schedulerChainMock{local: local},
+		logger:      hclog.NewNullLogger(),
+	}
+
+	require.Equal(t, time.Date(2026, 6, 3, 7, 21, 37, 0, time.UTC), bs.ChainSchedulingDueUTC())
+	require.Equal(t, now, bs.earliestProduceWallUTC(now))
+}
+
 func TestEarliestProduceTime_WallClockAlignmentNotAlwaysFuture(t *testing.T) {
 	genesis := time.Unix(0, 0).UTC()
 	ref := &types.Header{Number: 10, Timestamp: 100}

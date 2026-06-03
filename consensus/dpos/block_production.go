@@ -151,7 +151,7 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 	}
 }
 
-// sleepUntilNextProduceWindow 避免监测循环空转；若未到最早出块时刻则短睡等待。
+// sleepUntilNextProduceWindow 避免监测循环空转；轮值 proposer 精确睡到 earliest，其余短睡。
 func (r *dposRuntime) sleepUntilNextProduceWindow() {
 	if r.config == nil || r.config.blockScheduler == nil {
 		time.Sleep(50 * time.Millisecond)
@@ -162,7 +162,16 @@ func (r *dposRuntime) sleepUntilNextProduceWindow() {
 	r.lock.RUnlock()
 	wait := time.Until(r.config.blockScheduler.EarliestProduceTime(lastWall))
 	if wait <= 0 {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
+		return
+	}
+	if r.isDesignatedProposerForNext() {
+		const maxWait = 30 * time.Second
+		if wait > maxWait {
+			time.Sleep(500 * time.Millisecond)
+			return
+		}
+		time.Sleep(wait)
 		return
 	}
 	if wait > 500*time.Millisecond {
@@ -170,6 +179,32 @@ func (r *dposRuntime) sleepUntilNextProduceWindow() {
 		return
 	}
 	time.Sleep(wait)
+}
+
+// isDesignatedProposerForNext 本节点是否为 localTip+1 的轮值 proposer。
+func (r *dposRuntime) isDesignatedProposerForNext() bool {
+	if r.config == nil || r.config.blockScheduler == nil || r.config.Key == nil || r.config.blockchain == nil {
+		return false
+	}
+	hdr := r.config.blockchain.CurrentHeader()
+	if hdr == nil || r.localHasCanonicalBlock(hdr.Number+1) {
+		return false
+	}
+	myAddress := types.Address(r.config.Key.Address())
+	dpos, ok := r.config.dposBackend.(*DPoS)
+	if !ok || dpos == nil {
+		return false
+	}
+	set, err := dpos.GetSortedValidatorsWithLimitFilterFaulty()
+	if err != nil || len(set) == 0 {
+		return false
+	}
+	addrs := make([]types.Address, len(set))
+	for i, v := range set {
+		addrs[i] = v.Address
+	}
+	eligible := dpos.productionEligibilityCheckerBase(set)
+	return r.config.blockScheduler.DesignatedProposerForNext(hdr.Number, myAddress, addrs, eligible)
 }
 
 // produceBlock 生产区块
@@ -212,12 +247,12 @@ func (r *dposRuntime) produceBlock() error {
 			return nil
 		}
 		designatedExempt := r.designatedProduceSyncExempt(currentBlock.Number)
-		// 保守：一律先 P2P 探测 next；peer 上已有可衔接块则 ingest 并放弃本地出块（避免 reorg）。
+		skipPreProduceProbe := designatedExempt && r.lagBehindCanonicalGate(currentBlock.Number) == 0
 		if r.config != nil && r.config.dposBackend != nil {
 			if dpos, ok := r.config.dposBackend.(*DPoS); ok && dpos.syncer != nil {
 				probeTO := r.preProducePeerProbeTimeout()
 				sawPeerFork := false
-				if probeTO > 0 && dpos.syncer.TryProbeCanonicalNextBeforeProduce(probeTO) {
+				if !skipPreProduceProbe && probeTO > 0 && dpos.syncer.TryProbeCanonicalNextBeforeProduce(probeTO) {
 					r.logger.Info("🔭 【出块前 P2P 探测】已从 peer 写入或可衔接下一高度，放弃本轮本地出块",
 						"localTip", currentBlock.Number,
 						"plannedNextBlockNumber", currentBlock.Number+1,
@@ -240,7 +275,8 @@ func (r *dposRuntime) produceBlock() error {
 						"localTip", currentBlock.Number,
 						"plannedNextBlockNumber", currentBlock.Number+1,
 						"probeTimeout", probeTO.String(),
-						"designatedExempt", designatedExempt)
+						"designatedExempt", designatedExempt,
+						"skipPreProduceProbe", skipPreProduceProbe)
 				}
 			}
 		}
@@ -687,21 +723,30 @@ func (r *dposRuntime) preProducePeerProbeTimeout() time.Duration {
 	return syncer.DefaultPreProduceProbeTimeout
 }
 
-// noteCanonicalTipProductionPace 链尖高度前进时刷新本节点墙钟出块节流（含 syncer 写入）。
-func (d *DPoS) noteCanonicalTipProductionPace(height uint64) {
-	if d == nil {
+// noteCanonicalTipProductionPace 链尖前进时刷新墙钟出块节流；仅 miner 为本节点时刷新。
+func (d *DPoS) noteCanonicalTipProductionPace(block *types.Block) {
+	if d == nil || block == nil {
 		return
 	}
+	height := block.Number()
 	d.canonicalTipPaceMu.Lock()
 	defer d.canonicalTipPaceMu.Unlock()
 	if height <= d.lastCanonicalTipPaceAt {
 		return
 	}
 	d.lastCanonicalTipPaceAt = height
-	if d.runtime != nil {
-		now := time.Now().UTC()
-		d.runtime.lock.Lock()
-		d.runtime.lastBlockProductionTime = now
-		d.runtime.lock.Unlock()
+	if d.runtime == nil || d.runtime.config == nil || d.runtime.config.Key == nil {
+		return
 	}
+	if len(block.Header.Miner) == 0 {
+		return
+	}
+	myAddr := types.Address(d.runtime.config.Key.Address())
+	if types.BytesToAddress(block.Header.Miner) != myAddr {
+		return
+	}
+	now := time.Now().UTC()
+	d.runtime.lock.Lock()
+	d.runtime.lastBlockProductionTime = now
+	d.runtime.lock.Unlock()
 }

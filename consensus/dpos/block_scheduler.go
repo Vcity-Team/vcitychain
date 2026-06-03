@@ -338,8 +338,10 @@ func (bs *BlockScheduler) chainTipAheadOfWall(now time.Time) time.Duration {
 }
 
 // earliestProduceWallUTC 本节点墙钟上最早可开始构建下一块的时刻。
-// 链尖 timestamp 已超前墙钟时：不必等到绝对 chainDue（= tip+blockWindow 的 UTC 读数），
-// 而约为 now+blockWindow（等价于 chainDue - 超前量）。块头 timestamp 仍用 chainSchedulingDue/effectiveTime。
+//
+// sync 落块后链尖 timestamp 常超前墙钟。下一块：
+//   - 块头时间下界仍为 chainSchedulingDue（绝对 UTC = tip+blockWindow）
+//   - 墙钟最早开建时刻 ≈ sync 后 now+blockWindow；墙钟已≥父块 timestamp 时不应再等到绝对 chainDue
 func (bs *BlockScheduler) earliestProduceWallUTC(now time.Time) time.Time {
 	chainDue := bs.chainSchedulingDue()
 	if now.IsZero() {
@@ -347,14 +349,18 @@ func (bs *BlockScheduler) earliestProduceWallUTC(now time.Time) time.Time {
 	} else {
 		now = now.UTC()
 	}
-	if skew := bs.chainTipAheadOfWall(now); skew > 0 {
-		adjusted := chainDue.Add(-skew) // = now + blockWindow
-		if adjusted.Before(now) {
-			return now
-		}
-		return adjusted
+	base := bs.schedulingBaseTimestamp()
+	if base == 0 {
+		return chainDue
 	}
-	return chainDue
+	tipTS := time.Unix(int64(base), 0).UTC()
+	if tipTS.After(now) {
+		return now.Add(bs.blockWindow)
+	}
+	if now.Before(chainDue) {
+		return now
+	}
+	return now
 }
 
 // ChainSchedulingDueUTC 下一区块链上调度时刻（绝对 UTC，块头时间下界）。
