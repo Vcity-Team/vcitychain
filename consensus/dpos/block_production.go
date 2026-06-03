@@ -55,11 +55,20 @@ func (r *dposRuntime) startBlockProduction() error {
 	return nil
 }
 
-// continuousBlockMonitoring 持续区块监测
+const (
+	blockProductionPollInterval   = 500 * time.Millisecond
+	blockProductionRecheckDelay   = 10 * time.Millisecond
+	blockProductionFallbackDelay  = 50 * time.Millisecond
+	blockProductionMaxDesignatedWait = 30 * time.Second
+)
+
+// continuousBlockMonitoring 持续区块监测：ticker 与 produceTimer 任意唤醒均做出块判定，避免 Sleep+default 丢窗口。
 func (r *dposRuntime) continuousBlockMonitoring() {
-	// 在主循环中周期性更新currentSlot
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(blockProductionPollInterval)
 	defer ticker.Stop()
+
+	produceTimer := time.NewTimer(0)
+	defer produceTimer.Stop()
 
 	for {
 		select {
@@ -67,118 +76,159 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 			r.logger.Info("🛑 停止区块监测")
 			return
 		case <-ticker.C:
-			// 定期更新currentDelegateIndex，确保轮流出块
 			r.updateRoundSilent()
-		default:
-			// 持续监测出块时机
-			shouldProduce := r.shouldProduceBlockNow()
-
-			if shouldProduce {
-				// 立即调用produceBlock，不阻塞出块流程
-				if err := r.produceBlock(); err != nil {
-					r.logger.Error("出块失败", "error", err)
-				}
-			} else {
-				r.sleepUntilNextProduceWindow()
-				// 获取从数据库读取的验证者集合
-				validatorsFromExtra := validator.AccountSet{}
-				validatorsSource := "unknown"
-				if r.config != nil {
-					// 直接从数据库读取验证者集合，不再从 ExtraData 读取
-					if r.config.dposBackend != nil {
-						if dposInstance, ok := r.config.dposBackend.(*DPoS); ok && dposInstance != nil {
-							if validators, err := dposInstance.GetSortedValidatorsWithLimitFilterFaulty(); err == nil && len(validators) > 0 {
-								validatorsFromExtra = validators
-								validatorsSource = "database_query_filter_faulty"
-							}
-						}
-					}
-				}
-
-				// 添加为什么不应该出块的详细日志
-				r.logOnceWithInterval("should_not_produce_debug", 2*time.Second, "debug",
-					"⏭️ 不应该出块的原因分析",
-					"shouldProduceBlockNow", shouldProduce,
-					"actualDelegatesCount", len(r.delegates),
-					"configDPoSValidatorsCount", func() uint64 {
-						if r.config != nil && r.config.dposBackend != nil {
-							if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
-								return dposInstance.config.DPoSValidatorsCount
-							}
-						}
-						return 0
-					}(),
-					"timestamp", time.Now().Format("15:04:05.000"),
-					"slot", func() int {
-						if r.config != nil && r.config.blockScheduler != nil {
-							now := time.Now()
-							genesisTime := r.config.blockScheduler.GetGenesisTime()
-							blockWindow := r.config.blockScheduler.GetBlockWindow()
-							return int(now.Sub(genesisTime) / blockWindow)
-						}
-						return -1
-					}(),
-					"lastProducedSlot", func() int {
-						r.lock.RLock()
-						defer r.lock.RUnlock()
-						return r.lastProducedSlot
-					}(),
-					"currentDelegate", func() string {
-						if r.config != nil && r.config.Key != nil {
-							return types.Address(r.config.Key.Address()).String()
-						}
-						return ""
-					}(),
-					"expectedDelegate", func() string {
-						if r.config != nil {
-							if del := r.getCurrentDelegate(); del != (types.Address{}) {
-								return del.String()
-							}
-						}
-						return ""
-					}(),
-					"validatorsFromExtra", func() []string {
-						var vs []string
-						for i, v := range validatorsFromExtra {
-							vs = append(vs, fmt.Sprintf("[%d]%s(vp:%s)", i, v.Address.String(), v.VotingPower.String()))
-						}
-						return vs
-					}(),
-					"validatorsFromExtraCount", len(validatorsFromExtra),
-					"validatorsSource", validatorsSource)
-			}
+		case <-produceTimer.C:
 		}
+		r.runBlockProductionOnce()
+		r.rearmProduceTimer(produceTimer)
 	}
 }
 
-// sleepUntilNextProduceWindow 避免监测循环空转；轮值 proposer 精确睡到 earliest，其余短睡。
-func (r *dposRuntime) sleepUntilNextProduceWindow() {
-	if r.config == nil || r.config.blockScheduler == nil {
-		time.Sleep(50 * time.Millisecond)
+// runBlockProductionOnce 单次出块监测：判定 + 生产或 debug 日志。
+func (r *dposRuntime) runBlockProductionOnce() {
+	r.logDesignatedProposerEarliestReached()
+
+	shouldProduce := r.shouldProduceBlockNow()
+	if shouldProduce {
+		if err := r.produceBlock(); err != nil {
+			r.logger.Error("出块失败", "error", err)
+		}
 		return
+	}
+
+	validatorsFromExtra := validator.AccountSet{}
+	validatorsSource := "unknown"
+	if r.config != nil && r.config.dposBackend != nil {
+		if dposInstance, ok := r.config.dposBackend.(*DPoS); ok && dposInstance != nil {
+			if validators, err := dposInstance.GetSortedValidatorsWithLimitFilterFaulty(); err == nil && len(validators) > 0 {
+				validatorsFromExtra = validators
+				validatorsSource = "database_query_filter_faulty"
+			}
+		}
+	}
+
+	r.logOnceWithInterval("should_not_produce_debug", 2*time.Second, "debug",
+		"⏭️ 不应该出块的原因分析",
+		"shouldProduceBlockNow", shouldProduce,
+		"actualDelegatesCount", len(r.delegates),
+		"configDPoSValidatorsCount", func() uint64 {
+			if r.config != nil && r.config.dposBackend != nil {
+				if dposInstance, ok := r.config.dposBackend.(*DPoS); ok {
+					return dposInstance.config.DPoSValidatorsCount
+				}
+			}
+			return 0
+		}(),
+		"timestamp", time.Now().Format("15:04:05.000"),
+		"slot", func() int {
+			if r.config != nil && r.config.blockScheduler != nil {
+				now := time.Now()
+				genesisTime := r.config.blockScheduler.GetGenesisTime()
+				blockWindow := r.config.blockScheduler.GetBlockWindow()
+				return int(now.Sub(genesisTime) / blockWindow)
+			}
+			return -1
+		}(),
+		"lastProducedSlot", func() int {
+			r.lock.RLock()
+			defer r.lock.RUnlock()
+			return r.lastProducedSlot
+		}(),
+		"currentDelegate", func() string {
+			if r.config != nil && r.config.Key != nil {
+				return types.Address(r.config.Key.Address()).String()
+			}
+			return ""
+		}(),
+		"expectedDelegate", func() string {
+			if r.config != nil {
+				if del := r.getCurrentDelegate(); del != (types.Address{}) {
+					return del.String()
+				}
+			}
+			return ""
+		}(),
+		"validatorsFromExtra", func() []string {
+			var vs []string
+			for i, v := range validatorsFromExtra {
+				vs = append(vs, fmt.Sprintf("[%d]%s(vp:%s)", i, v.Address.String(), v.VotingPower.String()))
+			}
+			return vs
+		}(),
+		"validatorsFromExtraCount", len(validatorsFromExtra),
+		"validatorsSource", validatorsSource)
+}
+
+// logDesignatedProposerEarliestReached 轮值 proposer 到达 EarliestProduceTime 时打一条 Info，便于区分「未判定」与「判定 false」。
+func (r *dposRuntime) logDesignatedProposerEarliestReached() {
+	if r.config == nil || r.config.blockScheduler == nil || r.config.blockchain == nil {
+		return
+	}
+	if !r.isDesignatedProposerForNext() {
+		return
+	}
+	hdr := r.config.blockchain.CurrentHeader()
+	if hdr == nil {
+		return
+	}
+	r.lock.RLock()
+	lastWall := r.lastBlockProductionTime
+	r.lock.RUnlock()
+	nowUTC := time.Now().UTC()
+	earliest := r.config.blockScheduler.EarliestProduceTime(lastWall)
+	if nowUTC.Before(earliest) {
+		return
+	}
+	plannedNext := hdr.Number + 1
+	r.logOnceWithInterval(
+		fmt.Sprintf("proposer_earliest_reached_%d", plannedNext),
+		24*time.Hour,
+		"info",
+		"🔔 [出块追踪] earliest 已到，开始出块判定",
+		"plannedNext", plannedNext,
+		"localTip", hdr.Number,
+		"earliestProduceWallUTC", earliest.Format("2006-01-02 15:04:05.000"),
+		"nowUTC", nowUTC.Format("2006-01-02 15:04:05.000"),
+	)
+}
+
+// produceWakeDuration 下次 produceTimer 唤醒间隔（不 blocking sleep）。
+func (r *dposRuntime) produceWakeDuration() time.Duration {
+	if r.config == nil || r.config.blockScheduler == nil {
+		return blockProductionFallbackDelay
 	}
 	r.lock.RLock()
 	lastWall := r.lastBlockProductionTime
 	r.lock.RUnlock()
 	wait := time.Until(r.config.blockScheduler.EarliestProduceTime(lastWall))
 	if wait <= 0 {
-		time.Sleep(10 * time.Millisecond)
-		return
+		return blockProductionRecheckDelay
 	}
 	if r.isDesignatedProposerForNext() {
-		const maxWait = 30 * time.Second
-		if wait > maxWait {
-			time.Sleep(500 * time.Millisecond)
-			return
+		if wait > blockProductionMaxDesignatedWait {
+			return blockProductionPollInterval
 		}
-		time.Sleep(wait)
+		return wait
+	}
+	if wait > blockProductionPollInterval {
+		return blockProductionPollInterval
+	}
+	return wait
+}
+
+// rearmProduceTimer 在每次监测 tick 后重置 produceTimer。
+func (r *dposRuntime) rearmProduceTimer(t *time.Timer) {
+	if t == nil {
 		return
 	}
-	if wait > 500*time.Millisecond {
-		time.Sleep(500 * time.Millisecond)
-		return
+	d := r.produceWakeDuration()
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
 	}
-	time.Sleep(wait)
+	t.Reset(d)
 }
 
 // isDesignatedProposerForNext 本节点是否为 localTip+1 的轮值 proposer。
