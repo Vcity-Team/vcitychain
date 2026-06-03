@@ -175,11 +175,6 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	if nextBlockNumber < bs.consensusSwitchHeight {
 		return false
 	}
-	if bs.blockchain != nil {
-		if _, ok := bs.blockchain.GetHeaderByNumber(nextBlockNumber); ok {
-			return false
-		}
-	}
 
 	now := time.Now()
 	refHeader := bs.tipHeaderForScheduling(blockNumber)
@@ -195,15 +190,38 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 	chainSlot := bs.slotAt(schedulingTime)
 	wallSlot := bs.slotAt(now.UTC())
 	leaderSlot := bs.LeaderElectionSlot()
-	// 下一块 miner 由块头 schedulingTime 对应 slot 决定（与 sync 落块、CurrentSlotForNextBlock 一致），
-	// 不用 LeaderElectionSlot（墙钟 max）——否则 chainDue 前墙钟已推进时会永久轮空 chain proposer。
 	proposerSlot := chainSlot
 	currentValidatorIndex := proposerSlot % activeValidatorCount
 	expectedValidator := orderedValidators[currentValidatorIndex]
 
 	isMatch := expectedValidator == myAddress
 	if isMatch && isEligible != nil && !isEligible(expectedValidator) {
+		bs.logOnceWithInterval("should_produce_not_eligible_"+myAddress.String(), 10*time.Second, "info",
+			"🚧 [出块追踪] ShouldProduceBlockNow: 轮值匹配但 eligibility 未通过",
+			"blockNumber", blockNumber,
+			"nextBlockNumber", nextBlockNumber,
+			"myAddress", myAddress.String(),
+			"validatorIndex", currentValidatorIndex,
+			"proposerSlot", proposerSlot,
+			"blockedReason", "not_eligible")
 		isMatch = false
+	}
+
+	if bs.blockchain != nil {
+		if existing, ok := bs.blockchain.GetHeaderByNumber(nextBlockNumber); ok {
+			if expectedValidator == myAddress {
+				bs.logOnceWithInterval("should_produce_next_exists_"+myAddress.String(), 10*time.Second, "info",
+					"🚧 [出块追踪] ShouldProduceBlockNow: 轮值匹配但下一块已在本地 DB",
+					"blockNumber", blockNumber,
+					"nextBlockNumber", nextBlockNumber,
+					"myAddress", myAddress.String(),
+					"validatorIndex", currentValidatorIndex,
+					"proposerSlot", proposerSlot,
+					"existingNextHash", existing.Hash.String(),
+					"blockedReason", "next_block_already_in_db")
+			}
+			return false
+		}
 	}
 
 	if wallSlot > chainSlot {
@@ -459,21 +477,6 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		r.nudgeSyncIfBehind(local)
 	}
 
-	// 方案2：使用读锁快速检查lastProducedSlot（如果使用blockScheduler）
-	if r.config.blockScheduler != nil {
-		leaderSlot := r.config.blockScheduler.LeaderElectionSlot()
-
-		// 使用读锁快速检查
-		r.lock.RLock()
-		lastSlot := r.lastProducedSlot
-		r.lock.RUnlock()
-
-		// 如果当前 leader 轮值 slot 已经出过块，跳过
-		if lastSlot >= 0 && lastSlot == leaderSlot {
-			return false
-		}
-	}
-
 	// 添加详细的调试日志（使用Debug级别）
 	r.logOnceWithInterval("should_produce_block_now_debug", 5*time.Second, "debug",
 		"🔍 shouldProduceBlockNow 开始检查",
@@ -547,8 +550,22 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			return false
 		}
 
-		// 严格轮流：仅 leaderSlot%N 对应地址可出块；墙钟领先链上 slot 时空耗已过窗口。
 		eligible := dposInstance.productionEligibilityCheckerBase(validatorsFromExtra)
+		r.emitProposerSlotDiagnostic(currentBlock.Number, validators, myAddress, eligible)
+
+		// 方案2：使用读锁快速检查lastProducedSlot（如果使用blockScheduler）
+		leaderSlot := r.config.blockScheduler.LeaderElectionSlot()
+		r.lock.RLock()
+		lastSlot := r.lastProducedSlot
+		r.lock.RUnlock()
+		if lastSlot >= 0 && lastSlot == leaderSlot {
+			r.traceMyProposerTurnBlocked("pre_should_produce", "last_produced_slot_equals_leader_slot",
+				currentBlock.Number, validators, myAddress, eligible,
+				"lastProducedSlot", lastSlot,
+				"leaderSlot", leaderSlot)
+			return false
+		}
+
 		// sync 可能在查验证者期间写入下一块；出块判定前刷新链尖，避免 blockNumber 与 schedulingReference 不一致。
 		if hdr := r.config.blockchain.CurrentHeader(); hdr != nil {
 			currentBlock = hdr
@@ -559,6 +576,12 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		lastWallProduce := r.lastBlockProductionTime
 		r.lock.RUnlock()
 		if earliest := r.config.blockScheduler.EarliestProduceTime(lastWallProduce); time.Now().UTC().Before(earliest) {
+			r.traceMyProposerTurnBlocked("pre_should_produce", "before_earliest_produce_time",
+				currentBlock.Number, validators, myAddress, eligible,
+				"earliestProduceUTC", earliest.Format("2006-01-02 15:04:05.000"),
+				"nowUTC", time.Now().UTC().Format("2006-01-02 15:04:05.000"),
+				"waitRemaining", earliest.Sub(time.Now().UTC()).String(),
+				"lastBlockProductionTimeUTC", lastWallProduce.Format("2006-01-02 15:04:05.000"))
 			r.logOnceWithInterval("should_produce_before_earliest", 5*time.Second, "debug",
 				"⏳ [出块监测] 未到 EarliestProduceTime，暂不出块",
 				"localTip", currentBlock.Number,
@@ -570,11 +593,21 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 		}
 		decisionLocalTip := currentBlock.Number
 		if r.produceDecisionObsoletedByChainAdvance(decisionLocalTip) {
+			r.traceMyProposerTurnBlocked("pre_should_produce", "produce_decision_obsoleted_by_chain_advance",
+				decisionLocalTip, validators, myAddress, eligible,
+				"nextHeightInDB", r.localHasCanonicalBlock(decisionLocalTip+1))
 			return false
 		}
 		decisionSlot := r.config.blockScheduler.ProposerSlotForTip(decisionLocalTip)
 		result := r.config.blockScheduler.ShouldProduceBlockNow(
 			myAddress, validators, decisionLocalTip, validatorsSource, eligible)
+
+		if !result {
+			r.traceMyProposerTurnBlocked("should_produce_block_now", "should_produce_block_now_returned_false",
+				decisionLocalTip, validators, myAddress, eligible,
+				"decisionSlot", decisionSlot,
+				"validatorsSource", validatorsSource)
+		}
 
 		// 如果返回 true，保存 decisionSlot；如果返回 false，清除 decisionSlot
 		r.lock.Lock()
@@ -590,6 +623,10 @@ func (r *dposRuntime) shouldProduceBlockNow() bool {
 			local = hdr.Number
 		}
 		if result && r.blockProductionIfBehindTrustedCanonical(local) {
+			r.traceMyProposerTurnBlocked("post_should_produce", "behind_trusted_canonical_gate",
+				local, validators, myAddress, eligible,
+				"trustedCanonicalTip", r.canonicalGateTip(),
+				"lagBlocks", r.lagBehindCanonicalGate(local))
 			return false
 		}
 		return result
