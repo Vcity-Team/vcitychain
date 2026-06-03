@@ -100,23 +100,7 @@ func (r *dposRuntime) runBlockProductionOnce() {
 		}
 		r.markDesignatedEarliestProduceAttempted(ctx.plannedNext)
 		r.armDesignatedProduceDecision(ctx.localTip)
-		r.logOnceWithInterval(
-			fmt.Sprintf("proposer_earliest_reached_%d", ctx.plannedNext),
-			24*time.Hour,
-			"info",
-			"🔔 [出块追踪] designated earliest 已到，直接出块",
-			"plannedNext", ctx.plannedNext,
-			"localTip", ctx.localTip,
-			"decisionSlot", func() int {
-				r.lock.RLock()
-				defer r.lock.RUnlock()
-				return r.decisionSlot
-			}(),
-			"parentBlockTimestampUTC", ctx.tipTS.Format("2006-01-02 15:04:05.000"),
-			"earliestProduceWallUTC", ctx.earliest.Format("2006-01-02 15:04:05.000"),
-			"chainSchedulingDueAbsoluteUTC", r.config.blockScheduler.ChainSchedulingDueUTC().Format("2006-01-02 15:04:05.000"),
-			"nowUTC", ctx.nowUTC.Format("2006-01-02 15:04:05.000"),
-		)
+		r.logDesignatedEarliestProduce(ctx)
 		if err := r.produceBlock(); err != nil {
 			r.logger.Error("出块失败", "error", err)
 		}
@@ -264,6 +248,64 @@ func (r *dposRuntime) armDesignatedProduceDecision(localTip uint64) {
 	r.decisionSlot = slot
 	r.decisionLocalTip = localTip
 	r.lock.Unlock()
+}
+
+// logDesignatedEarliestProduce 🔔 直接出块前日志（含与 ShouldProduceBlockNow 一致的 validatorsList）。
+func (r *dposRuntime) logDesignatedEarliestProduce(ctx designatedEarliestContext) {
+	if r.config == nil || r.config.blockScheduler == nil || r.config.Key == nil || r.config.dposBackend == nil {
+		return
+	}
+	dpos, ok := r.config.dposBackend.(*DPoS)
+	if !ok || dpos == nil {
+		return
+	}
+	set, err := dpos.GetSortedValidatorsWithLimitFilterFaulty()
+	if err != nil || len(set) == 0 {
+		r.logOnceWithInterval(
+			fmt.Sprintf("proposer_earliest_reached_%d", ctx.plannedNext),
+			24*time.Hour,
+			"info",
+			"🔔 [出块追踪] designated earliest 已到，直接出块",
+			"plannedNext", ctx.plannedNext,
+			"localTip", ctx.localTip,
+			"validatorsList", "unavailable",
+			"validatorsListError", fmt.Sprintf("%v", err),
+		)
+		return
+	}
+	addrs := make([]types.Address, len(set))
+	for i, v := range set {
+		addrs[i] = v.Address
+	}
+	myAddress := types.Address(r.config.Key.Address())
+	bs := r.config.blockScheduler
+	validatorsList, proposerSlot, proposerIndex, expected, schedulingTime := bs.ProposerElectionDetailForTip(
+		ctx.localTip, addrs, myAddress)
+	r.lock.RLock()
+	decisionSlot := r.decisionSlot
+	r.lock.RUnlock()
+	r.logOnceWithInterval(
+		fmt.Sprintf("proposer_earliest_reached_%d", ctx.plannedNext),
+		24*time.Hour,
+		"info",
+		"🔔 [出块追踪] designated earliest 已到，直接出块",
+		"plannedNext", ctx.plannedNext,
+		"localTip", ctx.localTip,
+		"decisionSlot", decisionSlot,
+		"proposerSlot", proposerSlot,
+		"proposerIndex", proposerIndex,
+		"expectedValidator", fmt.Sprintf("[%d]%s", proposerIndex, expected.String()),
+		"myAddress", myAddress.String(),
+		"myValidatorIndex", myValidatorElectionIndex(addrs, myAddress),
+		"schedulingTimeUTC", schedulingTime.Format("2006-01-02 15:04:05.000"),
+		"parentBlockTimestampUTC", ctx.tipTS.Format("2006-01-02 15:04:05.000"),
+		"earliestProduceWallUTC", ctx.earliest.Format("2006-01-02 15:04:05.000"),
+		"chainSchedulingDueAbsoluteUTC", bs.ChainSchedulingDueUTC().Format("2006-01-02 15:04:05.000"),
+		"nowUTC", ctx.nowUTC.Format("2006-01-02 15:04:05.000"),
+		"activeValidatorCount", len(validatorsList),
+		"validatorsList", validatorsList,
+		"note", "与 ShouldProduceBlockNow 相同排序与 slot 映射",
+	)
 }
 
 // produceWakeDuration 下次 produceTimer 唤醒间隔（不 blocking sleep）。

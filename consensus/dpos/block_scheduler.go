@@ -152,6 +152,45 @@ func (bs *BlockScheduler) DesignatedProposerForNext(
 	return true
 }
 
+// formatProposerValidatorsList 与 ShouldProduceBlockNow 相同格式的带索引出块者列表。
+func formatProposerValidatorsList(ordered []types.Address, proposerIndex int, myAddress types.Address) []string {
+	validatorsList := make([]string, len(ordered))
+	for i, v := range ordered {
+		marker := ""
+		if i == proposerIndex {
+			marker = " ← 轮值索引"
+		}
+		if v == myAddress {
+			marker += " ← 本节点"
+		}
+		validatorsList[i] = fmt.Sprintf("[%d]%s%s", i, v.String(), marker)
+	}
+	return validatorsList
+}
+
+// ProposerElectionDetailForTip 与 ShouldProduceBlockNow 相同规则下的轮值详情（供 designated earliest 等日志复用）。
+func (bs *BlockScheduler) ProposerElectionDetailForTip(
+	blockNumber uint64,
+	validators []types.Address,
+	myAddress types.Address,
+) (
+	validatorsList []string,
+	proposerSlot, proposerIndex int,
+	expectedValidator types.Address,
+	schedulingTime time.Time,
+) {
+	ordered := orderValidatorAddressesForLeaderElection(validators)
+	if len(ordered) == 0 {
+		return nil, 0, 0, types.Address{}, time.Time{}
+	}
+	schedulingTime = bs.schedulingTimeForTip(blockNumber)
+	proposerSlot = bs.ProposerSlotForTip(blockNumber)
+	proposerIndex = proposerSlot % len(ordered)
+	expectedValidator = ordered[proposerIndex]
+	validatorsList = formatProposerValidatorsList(ordered, proposerIndex, myAddress)
+	return validatorsList, proposerSlot, proposerIndex, expectedValidator, schedulingTime
+}
+
 // ShouldProduceBlockNow 检查指定地址在当前slot是否应该出块
 func (bs *BlockScheduler) ShouldProduceBlockNow(
 	myAddress types.Address,
@@ -240,18 +279,7 @@ func (bs *BlockScheduler) ShouldProduceBlockNow(
 		return false
 	}
 
-	// 构建验证者集合完整列表（带索引）
-	validatorsList := make([]string, len(orderedValidators))
-	for i, v := range orderedValidators {
-		marker := ""
-		if i == currentValidatorIndex {
-			marker = " ← 轮值索引"
-		}
-		if v == myAddress {
-			marker += " ← 本节点"
-		}
-		validatorsList[i] = fmt.Sprintf("[%d]%s%s", i, v.String(), marker)
-	}
+	validatorsList := formatProposerValidatorsList(orderedValidators, currentValidatorIndex, myAddress)
 
 	refNum := uint64(0)
 	refTS := ""
