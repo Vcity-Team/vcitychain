@@ -9,14 +9,16 @@ import (
 
 // proposerTurnTraceState 按 plannedNext 高度去重，避免 500ms 监测循环刷屏。
 type proposerTurnTraceState struct {
-	lastSlotDiagPlanned uint64
-	lastBlockStages     map[uint64]map[string]struct{} // plannedNext -> stage set
+	lastSlotDiagPlanned              uint64
+	lastBlockStages                  map[uint64]map[string]struct{} // plannedNext -> stage set
+	designatedEarliestProduceAttempt map[uint64]struct{}            // plannedNext 已走 designated 直接出块
 }
 
 func (r *dposRuntime) proposerTraceState() *proposerTurnTraceState {
 	if r.proposerTurnTrace == nil {
 		r.proposerTurnTrace = &proposerTurnTraceState{
-			lastBlockStages: make(map[uint64]map[string]struct{}),
+			lastBlockStages:                  make(map[uint64]map[string]struct{}),
+			designatedEarliestProduceAttempt: make(map[uint64]struct{}),
 		}
 	}
 	return r.proposerTurnTrace
@@ -97,14 +99,6 @@ func (r *dposRuntime) emitProposerSlotDiagnostic(
 		return
 	}
 	planned := localTip + 1
-	r.proposerTraceMu.Lock()
-	st := r.proposerTraceState()
-	if st.lastSlotDiagPlanned == planned {
-		r.proposerTraceMu.Unlock()
-		return
-	}
-	st.lastSlotDiagPlanned = planned
-	r.proposerTraceMu.Unlock()
 
 	bs := r.config.blockScheduler
 	ordered := orderValidatorAddressesForLeaderElection(validators)
@@ -120,6 +114,20 @@ func (r *dposRuntime) emitProposerSlotDiagnostic(
 	isMyTurn := expected == myAddress
 	if isMyTurn && eligible != nil && !eligible(expected) {
 		isMyTurn = false
+	}
+
+	r.proposerTraceMu.Lock()
+	st := r.proposerTraceState()
+	if st.lastSlotDiagPlanned == planned {
+		r.proposerTraceMu.Unlock()
+		return
+	}
+	st.lastSlotDiagPlanned = planned
+	r.proposerTraceMu.Unlock()
+
+	// 仅在本节点轮值时打快照，避免 sync 追块时每个高度都刷 📊
+	if !isMyTurn {
+		return
 	}
 
 	nextExists := false

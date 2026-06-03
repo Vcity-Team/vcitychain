@@ -84,9 +84,49 @@ func (r *dposRuntime) continuousBlockMonitoring() {
 	}
 }
 
-// runBlockProductionOnce 单次出块监测：判定 + 生产或 debug 日志。
+// runBlockProductionOnce 单次出块监测。
+//
+// earliest 未到：走 shouldProduceBlockNow（仅 designated 时打 📊/🚧）。
+// earliest 已到且 designated：每 plannedNext 仅一次 🔔+直接 produceBlock（标志 designatedEarliestProduceAttempt）。
+// earliest 已到但非 designated：静默返回，不打 🔔、不出块。
 func (r *dposRuntime) runBlockProductionOnce() {
-	r.logDesignatedProposerEarliestReached()
+	ctx, ok := r.designatedEarliestContext()
+	if ok && ctx.ready {
+		if !ctx.designated {
+			return
+		}
+		if r.designatedEarliestProduceAttempted(ctx.plannedNext) {
+			return
+		}
+		r.markDesignatedEarliestProduceAttempted(ctx.plannedNext)
+		r.armDesignatedProduceDecision(ctx.localTip)
+		r.logOnceWithInterval(
+			fmt.Sprintf("proposer_earliest_reached_%d", ctx.plannedNext),
+			24*time.Hour,
+			"info",
+			"🔔 [出块追踪] designated earliest 已到，直接出块",
+			"plannedNext", ctx.plannedNext,
+			"localTip", ctx.localTip,
+			"decisionSlot", func() int {
+				r.lock.RLock()
+				defer r.lock.RUnlock()
+				return r.decisionSlot
+			}(),
+			"parentBlockTimestampUTC", ctx.tipTS.Format("2006-01-02 15:04:05.000"),
+			"earliestProduceWallUTC", ctx.earliest.Format("2006-01-02 15:04:05.000"),
+			"chainSchedulingDueAbsoluteUTC", r.config.blockScheduler.ChainSchedulingDueUTC().Format("2006-01-02 15:04:05.000"),
+			"nowUTC", ctx.nowUTC.Format("2006-01-02 15:04:05.000"),
+		)
+		if err := r.produceBlock(); err != nil {
+			r.logger.Error("出块失败", "error", err)
+		}
+		return
+	}
+
+	// 非轮值 proposer：不打 📊/🚧、不跑 shouldProduceBlockNow
+	if !r.isDesignatedProposerForNext() {
+		return
+	}
 
 	shouldProduce := r.shouldProduceBlockNow()
 	if shouldProduce {
@@ -159,45 +199,71 @@ func (r *dposRuntime) runBlockProductionOnce() {
 		"validatorsSource", validatorsSource)
 }
 
-// logDesignatedProposerEarliestReached 墙钟到达可出块窗口时打一条 Info（每 plannedNext 一条）。
-//
-// 注意：链尖 timestamp 超前墙钟时 EarliestProduceTime 每次重算为 now+blockWindow（滑动目标），
-// 仅用 now.Before(earliest) 会导致 🔔 永远不打。此处额外判定墙钟已追上父块 timestamp。
-func (r *dposRuntime) logDesignatedProposerEarliestReached() {
+// designatedEarliestContext 轮值窗口上下文；第二返回值 false 表示配置/链尖不可用。
+type designatedEarliestContext struct {
+	ready       bool
+	designated  bool
+	localTip    uint64
+	plannedNext uint64
+	earliest    time.Time
+	tipTS       time.Time
+	nowUTC      time.Time
+}
+
+func (r *dposRuntime) designatedEarliestContext() (designatedEarliestContext, bool) {
+	var ctx designatedEarliestContext
 	if r.config == nil || r.config.blockScheduler == nil || r.config.blockchain == nil {
-		return
+		return ctx, false
 	}
 	hdr := r.config.blockchain.CurrentHeader()
 	if hdr == nil {
-		return
+		return ctx, false
 	}
 	r.lock.RLock()
 	lastWall := r.lastBlockProductionTime
 	r.lock.RUnlock()
-	nowUTC := time.Now().UTC()
-	earliest := r.config.blockScheduler.EarliestProduceTime(lastWall)
-	tipTS := time.Unix(int64(hdr.Timestamp), 0).UTC()
-	// 滑动 earliest 未到时，若墙钟已 ≥ 父块 timestamp 也视为窗口已到。
-	earliestReady := !nowUTC.Before(earliest) || !tipTS.After(nowUTC)
-	if !earliestReady {
+	ctx.nowUTC = time.Now().UTC()
+	ctx.earliest = r.config.blockScheduler.EarliestProduceTime(lastWall)
+	ctx.tipTS = time.Unix(int64(hdr.Timestamp), 0).UTC()
+	ctx.localTip = hdr.Number
+	ctx.plannedNext = hdr.Number + 1
+	ctx.ready = !ctx.nowUTC.Before(ctx.earliest) || !ctx.tipTS.After(ctx.nowUTC)
+	if ctx.ready {
+		ctx.designated = r.isDesignatedProposerForNext()
+	}
+	return ctx, true
+}
+
+func (r *dposRuntime) designatedEarliestProduceAttempted(plannedNext uint64) bool {
+	r.proposerTraceMu.Lock()
+	defer r.proposerTraceMu.Unlock()
+	_, ok := r.proposerTraceState().designatedEarliestProduceAttempt[plannedNext]
+	return ok
+}
+
+func (r *dposRuntime) markDesignatedEarliestProduceAttempted(plannedNext uint64) {
+	r.proposerTraceMu.Lock()
+	defer r.proposerTraceMu.Unlock()
+	st := r.proposerTraceState()
+	st.designatedEarliestProduceAttempt[plannedNext] = struct{}{}
+	if len(st.designatedEarliestProduceAttempt) > 256 {
+		for h := range st.designatedEarliestProduceAttempt {
+			if h+256 < plannedNext {
+				delete(st.designatedEarliestProduceAttempt, h)
+			}
+		}
+	}
+}
+
+func (r *dposRuntime) armDesignatedProduceDecision(localTip uint64) {
+	if r.config == nil || r.config.blockScheduler == nil {
 		return
 	}
-	plannedNext := hdr.Number + 1
-	designated := r.isDesignatedProposerForNext()
-	r.logOnceWithInterval(
-		fmt.Sprintf("proposer_earliest_reached_%d", plannedNext),
-		24*time.Hour,
-		"info",
-		"🔔 [出块追踪] earliest 已到，开始出块判定",
-		"plannedNext", plannedNext,
-		"localTip", hdr.Number,
-		"isDesignatedProposerForNext", designated,
-		"parentBlockTimestampUTC", tipTS.Format("2006-01-02 15:04:05.000"),
-		"earliestProduceWallUTC", earliest.Format("2006-01-02 15:04:05.000"),
-		"chainSchedulingDueAbsoluteUTC", r.config.blockScheduler.ChainSchedulingDueUTC().Format("2006-01-02 15:04:05.000"),
-		"chainTipAheadOfWall", r.config.blockScheduler.chainTipAheadOfWall(nowUTC).String(),
-		"nowUTC", nowUTC.Format("2006-01-02 15:04:05.000"),
-	)
+	slot := r.config.blockScheduler.ProposerSlotForTip(localTip)
+	r.lock.Lock()
+	r.decisionSlot = slot
+	r.decisionLocalTip = localTip
+	r.lock.Unlock()
 }
 
 // produceWakeDuration 下次 produceTimer 唤醒间隔（不 blocking sleep）。
@@ -469,7 +535,16 @@ func (r *dposRuntime) produceBlock() error {
 	var buildStartSlot int = -1
 	var buildStartTime time.Time
 	if r.config.blockScheduler != nil {
-		buildStartSlot = r.config.blockScheduler.LeaderElectionSlot()
+		r.lock.RLock()
+		decisionLocalTip := r.decisionLocalTip
+		decisionSlot := r.decisionSlot
+		r.lock.RUnlock()
+		// designated earliest 直接出块时使用 decisionSlot，避免 LeaderElectionSlot 墙钟漂移导致丢弃
+		if decisionSlot >= 0 && decisionLocalTip > 0 && currentBlock != nil && decisionLocalTip == currentBlock.Number {
+			buildStartSlot = decisionSlot
+		} else {
+			buildStartSlot = r.config.blockScheduler.LeaderElectionSlot()
+		}
 		buildStartTime = time.Now()
 	}
 
