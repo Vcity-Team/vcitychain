@@ -159,12 +159,12 @@ func (r *dposRuntime) runBlockProductionOnce() {
 		"validatorsSource", validatorsSource)
 }
 
-// logDesignatedProposerEarliestReached 轮值 proposer 到达 EarliestProduceTime 时打一条 Info，便于区分「未判定」与「判定 false」。
+// logDesignatedProposerEarliestReached 墙钟到达可出块窗口时打一条 Info（每 plannedNext 一条）。
+//
+// 注意：链尖 timestamp 超前墙钟时 EarliestProduceTime 每次重算为 now+blockWindow（滑动目标），
+// 仅用 now.Before(earliest) 会导致 🔔 永远不打。此处额外判定墙钟已追上父块 timestamp。
 func (r *dposRuntime) logDesignatedProposerEarliestReached() {
 	if r.config == nil || r.config.blockScheduler == nil || r.config.blockchain == nil {
-		return
-	}
-	if !r.isDesignatedProposerForNext() {
 		return
 	}
 	hdr := r.config.blockchain.CurrentHeader()
@@ -176,10 +176,14 @@ func (r *dposRuntime) logDesignatedProposerEarliestReached() {
 	r.lock.RUnlock()
 	nowUTC := time.Now().UTC()
 	earliest := r.config.blockScheduler.EarliestProduceTime(lastWall)
-	if nowUTC.Before(earliest) {
+	tipTS := time.Unix(int64(hdr.Timestamp), 0).UTC()
+	// 滑动 earliest 未到时，若墙钟已 ≥ 父块 timestamp 也视为窗口已到。
+	earliestReady := !nowUTC.Before(earliest) || !tipTS.After(nowUTC)
+	if !earliestReady {
 		return
 	}
 	plannedNext := hdr.Number + 1
+	designated := r.isDesignatedProposerForNext()
 	r.logOnceWithInterval(
 		fmt.Sprintf("proposer_earliest_reached_%d", plannedNext),
 		24*time.Hour,
@@ -187,7 +191,11 @@ func (r *dposRuntime) logDesignatedProposerEarliestReached() {
 		"🔔 [出块追踪] earliest 已到，开始出块判定",
 		"plannedNext", plannedNext,
 		"localTip", hdr.Number,
+		"isDesignatedProposerForNext", designated,
+		"parentBlockTimestampUTC", tipTS.Format("2006-01-02 15:04:05.000"),
 		"earliestProduceWallUTC", earliest.Format("2006-01-02 15:04:05.000"),
+		"chainSchedulingDueAbsoluteUTC", r.config.blockScheduler.ChainSchedulingDueUTC().Format("2006-01-02 15:04:05.000"),
+		"chainTipAheadOfWall", r.config.blockScheduler.chainTipAheadOfWall(nowUTC).String(),
 		"nowUTC", nowUTC.Format("2006-01-02 15:04:05.000"),
 	)
 }
