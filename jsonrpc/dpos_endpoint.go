@@ -635,6 +635,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	}
 	// amount = -1 表示执行撤销，继续往下走创建交易
 	// amount > 0 表示投票，继续往下走创建交易
+	isUnvote := amountInt.Cmp(big.NewInt(-1)) == 0
 	// Check voter balance
 	// Try to get balance with different approaches
 	var balance *big.Int
@@ -753,7 +754,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		}, nil
 	}
 
-	if balance.Cmp(amountInt) < 0 {
+	if !isUnvote && balance.Cmp(amountInt) < 0 {
 		d.logger.Error("Insufficient balance", "balance", balance.String(), "required", amountInt.String())
 		return &VoteResponse{
 			Success: false,
@@ -769,7 +770,6 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 			Error:   "DPoS engine not available for delegate validation",
 		}, nil
 	}
-	isUnvote := amountInt.Cmp(big.NewInt(-1)) == 0
 	// 撤票（amount=-1）链上不校验 delegate 注册/候选人；仅新投票需要
 	if !isUnvote {
 		// 检查受托人是否已注册（创世验证者例外）
@@ -888,10 +888,33 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	if gasPrice.Cmp(minGasPrice) < 0 {
 		gasPrice = minGasPrice
 	}
+
+	const voteTxGasLimit uint64 = 100000
+	if isUnvote {
+		locked := d.getLockedVoteWei(voterAddr)
+		spendable := computeSpendableWei(balance, locked)
+		txCost := new(big.Int).Mul(gasPrice, new(big.Int).SetUint64(voteTxGasLimit))
+		if spendable.Cmp(txCost) < 0 {
+			d.logger.Warn("insufficient spendable balance for unvote gas",
+				"voter", voterAddr.String(),
+				"spendable", spendable.String(),
+				"required", txCost.String(),
+				"balance", balance.String(),
+				"locked", locked.String())
+			return &VoteResponse{
+				Success: false,
+				Error: fmt.Sprintf(
+					"insufficient spendable balance for unvote gas: need at least %s wei, available %s wei (balance %s, locked vote %s)",
+					txCost.String(), spendable.String(), balance.String(), locked.String(),
+				),
+			}, nil
+		}
+	}
+
 	tx := &types.Transaction{
 		Nonce:    nonce,
 		GasPrice: gasPrice,
-		Gas:      100000,
+		Gas:      voteTxGasLimit,
 		To:       nil,
 		Value:    big.NewInt(0),
 		Input:    d.createVoteTransactionData(voterAddr, candidateAddr, amountInt),
@@ -934,137 +957,98 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	txWithHash := tx.ComputeHash(0)
 	txHash := txWithHash.Hash
 
-	// Step 3: Add transaction to the transaction pool for proper tracking
-	var txAdded bool
-
-	// Method 1: Add to pool (unvote: local-only, no gossip; vote: normal AddTx + broadcast below)
-	if isUnvote {
-		if localStore, ok := d.store.(interface {
-			AddTxLocalOnly(tx *types.Transaction) error
-		}); ok {
-			if err := localStore.AddTxLocalOnly(tx); err != nil {
-				d.logger.Error("Failed to add unvote transaction to local pool", "error", err)
-				return &VoteResponse{
-					Success: false,
-					Error:   fmt.Sprintf("failed to add unvote to local pool: %v", err),
-				}, nil
-			}
-			txAdded = true
-		} else if ethStore, ok := d.store.(interface {
-			AddTx(tx *types.Transaction) error
-		}); ok {
-			d.logger.Warn("AddTxLocalOnly not available, falling back to AddTx for unvote")
-			if err := ethStore.AddTx(tx); err != nil {
-				return &VoteResponse{
-					Success: false,
-					Error:   fmt.Sprintf("failed to add unvote to pool: %v", err),
-				}, nil
-			}
-			txAdded = true
-		}
-	} else if ethStore, ok := d.store.(interface {
+	// Step 3: Add transaction to the transaction pool and broadcast (vote and unvote alike)
+	if ethStore, ok := d.store.(interface {
 		AddTx(tx *types.Transaction) error
-	}); ok {
-		if err := ethStore.AddTx(tx); err != nil {
-			d.logger.Error("Failed to add transaction to pool", "error", err)
-			// Continue anyway, we'll update DPoS state directly as fallback
-		} else {
-			txAdded = true
-		}
-	} else {
-		d.logger.Warn("Store does NOT implement AddTx interface")
-		d.logger.Warn("Available methods on store:")
-
-		// Try to get more information about what methods are available
-		storeValue := reflect.ValueOf(d.store)
-		if storeValue.Kind() == reflect.Ptr {
-			storeValue = storeValue.Elem()
-		}
-
-		storeType := storeValue.Type()
-		for i := 0; i < storeType.NumMethod(); i++ {
-			method := storeType.Method(i)
-			d.logger.Warn("Available method", "name", method.Name, "type", method.Type.String())
-		}
-
-		d.logger.Warn("Transaction pool not available, will update DPoS state directly")
+	}); !ok {
+		d.logger.Error("Store does NOT implement AddTx interface")
+		return &VoteResponse{
+			Success: false,
+			Error:   "transaction pool not available",
+		}, nil
+	} else if err := ethStore.AddTx(tx); err != nil {
+		d.logger.Error("Failed to add transaction to pool", "error", err, "isUnvote", isUnvote)
+		return &VoteResponse{
+			Success: false,
+			Error:   fmt.Sprintf("failed to add transaction to pool: %v", err),
+		}, nil
 	}
 
-	if !isUnvote {
-		// 无论 AddTx 是否成功，都尝试广播交易到网络
-		if err := d.broadcastTransaction(tx); err != nil {
-			d.logger.Warn("Failed to broadcast transaction directly", "error", err, "txHash", tx.Hash.String())
-		}
+	if err := d.broadcastTransaction(tx); err != nil {
+		d.logger.Warn("Failed to broadcast transaction", "error", err, "txHash", tx.Hash.String(), "isUnvote", isUnvote)
 	}
 
-	// Try to update the consensus engine state
-	var dposStateUpdated bool
-
-	if consensusStore, ok := d.store.(interface {
-		GetConsensus() interface{}
-	}); ok {
-		consensusEngine := d.getDPoSEngineDirectly(consensusStore)
-		if consensusEngine == nil {
-			d.logger.Warn("Consensus engine is nil")
-		}
-		_ = consensusEngine
-	} else {
-		d.logger.Warn("Store does NOT have GetConsensus method")
-	}
-
-	// Step 5: Return success response with transaction details
-	successMessage := "Vote operation completed successfully"
-	if !txAdded && !dposStateUpdated {
-		successMessage = "Vote operation failed (both transaction pool and DPoS state update failed)"
-	} else if !txAdded {
-		successMessage = "Vote operation completed (DPoS state updated directly, transaction pool failed)"
-	} else if !dposStateUpdated {
-		successMessage = "Vote operation completed successfully (transaction added to pool, will be processed in next block)"
+	successMessage := "Vote operation completed successfully (transaction added to pool, will be processed in next block)"
+	if isUnvote {
+		successMessage = "Unvote transaction submitted (pending block inclusion; effective at epoch boundary after mined)"
 	}
 
 	// Try to get the actual block number if transaction is already mined
 	var blockNumber uint64
 	var blockStatus string
 
-	if txAdded {
-		// Check if transaction is already in a block using available methods
-		// Try to access ethBlockchainStore methods through type assertion
-		if blockchainStore, ok := d.store.(interface {
-			ReadTxLookup(txnHash types.Hash) (types.Hash, bool)
-			GetBlockByHash(hash types.Hash, full bool) (*types.Block, bool)
-		}); ok {
-			// First try to find the block hash containing this transaction
-			if blockHash, found := blockchainStore.ReadTxLookup(txHash); found {
-				// Then get the block to extract the block number
-				if block, ok := blockchainStore.GetBlockByHash(blockHash, false); ok {
-					blockNumber = block.Number()
-					blockStatus = "mined"
-				} else {
-					blockStatus = "block_found_but_no_details"
-					blockNumber = d.getCurrentBlockHeight()
-				}
+	// Check if transaction is already in a block using available methods
+	if blockchainStore, ok := d.store.(interface {
+		ReadTxLookup(txnHash types.Hash) (types.Hash, bool)
+		GetBlockByHash(hash types.Hash, full bool) (*types.Block, bool)
+	}); ok {
+		if blockHash, found := blockchainStore.ReadTxLookup(txHash); found {
+			if block, ok := blockchainStore.GetBlockByHash(blockHash, false); ok {
+				blockNumber = block.Number()
+				blockStatus = "mined"
 			} else {
+				blockStatus = "block_found_but_no_details"
 				blockNumber = d.getCurrentBlockHeight()
-				blockStatus = "pending"
 			}
 		} else {
 			blockNumber = d.getCurrentBlockHeight()
-			blockStatus = "store_not_supported"
+			blockStatus = "pending"
 		}
 	} else {
 		blockNumber = d.getCurrentBlockHeight()
-		blockStatus = "tx_not_added"
+		blockStatus = "store_not_supported"
 	}
 
 	_ = blockStatus
-	_ = dposStateUpdated
 
 	return &VoteResponse{
 		Success:     true,
 		Message:     successMessage,
 		TxHash:      txHash.String(),
-		BlockNumber: blockNumber, // Real block number if mined, current block height if pending
+		BlockNumber: blockNumber,
 	}, nil
+}
+
+// getLockedVoteWei returns the sum of applied active vote amounts for a voter.
+func (d *DPOS) getLockedVoteWei(voter types.Address) *big.Int {
+	lockedTotal := big.NewInt(0)
+	if st, err := d.store.GetDPoSState(); err == nil && st != nil && st.StakeStore != nil {
+		infos, ierr := st.StakeStore.GetStakingInfo()
+		if ierr == nil {
+			for _, s := range infos {
+				if s == nil || s.Staker != voter {
+					continue
+				}
+				if s.Amount == nil || s.Amount.Sign() <= 0 || !s.Applied {
+					continue
+				}
+				lockedTotal.Add(lockedTotal, s.Amount)
+			}
+		}
+	}
+	return lockedTotal
+}
+
+func computeSpendableWei(balance, locked *big.Int) *big.Int {
+	spendable := new(big.Int).Set(balance)
+	if locked == nil || locked.Sign() <= 0 {
+		return spendable
+	}
+	if spendable.Cmp(locked) > 0 {
+		spendable.Sub(spendable, locked)
+		return spendable
+	}
+	return big.NewInt(0)
 }
 
 // createVoteTransactionData creates the transaction data for a vote operation

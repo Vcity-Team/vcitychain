@@ -1388,11 +1388,6 @@ func (j *jsonRPCHub) AddTx(tx *types.Transaction) error {
 	return j.TxPool.AddTx(tx)
 }
 
-// AddTxLocalOnly adds a transaction to the local pool without P2P broadcast.
-func (j *jsonRPCHub) AddTxLocalOnly(tx *types.Transaction) error {
-	return j.TxPool.AddTxLocalOnly(tx)
-}
-
 // GetPendingTx gets the pending transaction from the transaction pool
 func (j *jsonRPCHub) GetPendingTx(txHash types.Hash) (*types.Transaction, bool) {
 	return j.TxPool.GetPendingTx(txHash)

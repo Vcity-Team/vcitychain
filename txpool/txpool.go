@@ -1,7 +1,6 @@
 package txpool
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"math/big"
@@ -655,38 +654,6 @@ func (p *TxPool) SetSigner(s signer) {
 // SetSealing sets the sealing flag
 func (p *TxPool) SetSealing(sealing bool) {
 	p.sealing.CompareAndSwap(p.sealing.Load(), sealing)
-}
-
-const dposVoteTxInputLen = 4 + 20 + 20 + 32
-
-// isDPoSUnvoteTx reports a DPoS vote tx with amount=-1 (32-byte 0xFF… encoding).
-// Unvote only needs gas; stake lock must not reduce spendable balance at pool admission.
-func isDPoSUnvoteTx(tx *types.Transaction) bool {
-	if tx == nil || len(tx.Input) < dposVoteTxInputLen {
-		return false
-	}
-	if !bytes.Equal(tx.Input[:4], []byte("DPOS")) {
-		return false
-	}
-	if len(tx.Input) >= 7 {
-		switch string(tx.Input[4:7]) {
-		case "REG", "COM", "CAN", "MIG", "PAY":
-			return false
-		}
-	}
-	amount := tx.Input[len(tx.Input)-32:]
-	for _, b := range amount {
-		if b != 0xff {
-			return false
-		}
-	}
-	return true
-}
-
-// AddTxLocalOnly adds a transaction to the local pool without gossip broadcast.
-// Used for DPoS unvote on a validator that will package the tx when it is proposer.
-func (p *TxPool) AddTxLocalOnly(tx *types.Transaction) error {
-	return p.addTx(local, tx)
 }
 
 // AddTx adds a new transaction to the pool (sent from json-RPC/gRPC endpoints)
@@ -1370,14 +1337,12 @@ func (p *TxPool) validateTx(tx *types.Transaction) error {
 
 	// Check if the sender has enough funds to execute the transaction
 	spendable := accountBalance
-	if !isDPoSUnvoteTx(tx) {
-		if lbp, ok := p.store.(lockedBalanceProvider); ok {
-			if locked, lerr := lbp.GetLockedBalance(stateRoot, tx.From); lerr == nil && locked != nil && locked.Sign() > 0 {
-				if spendable.Cmp(locked) > 0 {
-					spendable = new(big.Int).Sub(spendable, locked)
-				} else {
-					spendable = big.NewInt(0)
-				}
+	if lbp, ok := p.store.(lockedBalanceProvider); ok {
+		if locked, lerr := lbp.GetLockedBalance(stateRoot, tx.From); lerr == nil && locked != nil && locked.Sign() > 0 {
+			if spendable.Cmp(locked) > 0 {
+				spendable = new(big.Int).Sub(spendable, locked)
+			} else {
+				spendable = big.NewInt(0)
 			}
 		}
 	}
