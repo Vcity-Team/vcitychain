@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/syncer"
+	"github.com/Vcity-Team/vcitychain/types"
 )
 
 // catchUpWaitForLag 按落后块数估算 sync burst 收尾等待上限（与 syncer catchUpBurstTimeBudget 对齐）。
@@ -115,8 +116,69 @@ func (r *dposRuntime) waitForCanonicalCatchUp(local uint64, maxWait time.Duratio
 	return local
 }
 
+func (r *dposRuntime) localHasCanonicalBlock(height uint64) bool {
+	if r.config == nil || r.config.blockchain == nil {
+		return false
+	}
+	_, ok := r.config.blockchain.GetHeaderByNumber(height)
+	return ok
+}
+
+// designatedProduceSyncExempt 轮值 proposer 且本地尚无 next：可绕过 lag=1 的 sync 门禁（blockProductionIfBehind/nudgeSync）。
+// trustedTip>=next 时仍须先 P2P 探测；仅探测不到 valid next 时才允许本地 build（保守，防 reorg）。
+func (r *dposRuntime) designatedProduceSyncExempt(localTip uint64) bool {
+	if r.config == nil || r.config.Key == nil || r.config.blockScheduler == nil || r.config.dposBackend == nil {
+		return false
+	}
+	dpos, ok := r.config.dposBackend.(*DPoS)
+	if !ok || dpos == nil {
+		return false
+	}
+	validators, err := dpos.GetSortedValidatorsWithLimitFilterFaulty()
+	if err != nil || len(validators) == 0 {
+		return false
+	}
+	addrs := make([]types.Address, len(validators))
+	for i, v := range validators {
+		addrs[i] = v.Address
+	}
+	myAddress := types.Address(r.config.Key.Address())
+	eligible := dpos.productionEligibilityCheckerBase(validators)
+	if !r.config.blockScheduler.DesignatedProposerForNext(localTip, myAddress, addrs, eligible) {
+		return false
+	}
+	if r.localHasCanonicalBlock(localTip + 1) {
+		return false
+	}
+	return true
+}
+
+// produceDecisionObsoletedByChainAdvance sync 已写入拟出块高度（或已超过）时放弃本轮 produce。
+func (r *dposRuntime) produceDecisionObsoletedByChainAdvance(decisionLocalTip uint64) bool {
+	if r.config == nil || r.config.blockchain == nil || decisionLocalTip == 0 {
+		return false
+	}
+	hdr := r.config.blockchain.CurrentHeader()
+	if hdr == nil {
+		return false
+	}
+	plannedNext := decisionLocalTip + 1
+	if hdr.Number >= plannedNext || r.localHasCanonicalBlock(plannedNext) {
+		r.logger.Info("⏭️ 【出块跳过】链尖已推进，拟出块高度已存在或已被同步掠过",
+			"decisionLocalTip", decisionLocalTip,
+			"plannedNextBlockNumber", plannedNext,
+			"currentLocalTip", hdr.Number,
+			"nextHeightInDB", r.localHasCanonicalBlock(plannedNext))
+		return true
+	}
+	return false
+}
+
 // blockProductionIfBehindTrustedCanonical 落后时 KickSync 并等待；仍落后则返回 true（应跳过出块）。
 func (r *dposRuntime) blockProductionIfBehindTrustedCanonical(local uint64) bool {
+	if r.designatedProduceSyncExempt(local) {
+		return false
+	}
 	if !r.behindCanonicalGate(local) {
 		return false
 	}
@@ -146,6 +208,7 @@ func (r *dposRuntime) logBehindTrustedCanonicalSync(localTip uint64) {
 }
 
 // preProduceTrustedCanonicalCheck 出块前：若门禁高度已不低于拟出块高度，应中止本地构建、依赖同步。
+// 调用方须先完成出块前 P2P 探测且未拉到可衔接 next；designated 在该前提下才可继续（保守路径）。
 func (r *dposRuntime) preProduceTrustedCanonicalCheck(localTip uint64) bool {
 	tip := r.canonicalGateTip()
 	if tip == 0 {
@@ -156,12 +219,19 @@ func (r *dposRuntime) preProduceTrustedCanonicalCheck(localTip uint64) bool {
 		"localTip", localTip,
 		"plannedNextBlockNumber", nextHeight,
 		"trustedCanonicalTip", tip)
-	if tip >= nextHeight {
-		r.logger.Info("⏸️ 【出块前跳过出块】bootnode 共识高度已不低于拟出块高度，请依赖同步拉取",
+	if tip < nextHeight {
+		return false
+	}
+	if r.designatedProduceSyncExempt(localTip) {
+		r.logger.Info("🔭 【出块前 bootnode 共识链尖】designated 保守路径：trusted 已超前但 P2P 未拉到可衔接 next，继续本地出块",
 			"localTip", localTip,
 			"plannedNextBlockNumber", nextHeight,
 			"trustedCanonicalTip", tip)
-		return true
+		return false
 	}
-	return false
+	r.logger.Info("⏸️ 【出块前跳过出块】bootnode 共识高度已不低于拟出块高度，请依赖同步拉取",
+		"localTip", localTip,
+		"plannedNextBlockNumber", nextHeight,
+		"trustedCanonicalTip", tip)
+	return true
 }

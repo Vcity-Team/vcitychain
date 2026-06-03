@@ -2088,7 +2088,7 @@ func (d *DPoS) parseValidatorsFromExtraData(extraData []byte) (validator.Account
 // 这里再次调用是安全的（幂等操作），确保两种路径的行为一致
 func (d *DPoS) OnBlockInserted(fullBlock *types.FullBlock) {
 	if fullBlock != nil && fullBlock.Block != nil {
-		d.noteCanonicalTipProductionPace(fullBlock.Block.Number())
+		d.noteCanonicalTipProductionPace(fullBlock.Block)
 	}
 	if d.txPool == nil {
 		d.logger.Warn("⚠️ [DPoS.OnBlockInserted] txPool 为 nil，跳过交易池清理",

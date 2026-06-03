@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"testing"
+	"time"
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/stretchr/testify/require"
@@ -25,4 +26,21 @@ func TestCatchUpRetryBackoff(t *testing.T) {
 
 	caught := trustedTipResult{Branch: trustedTipBranchMaxCluster, Tip: 100}
 	require.Equal(t, syncBestNotAheadWakeInterval, s.catchUpRetryBackoff(100, caught))
+
+	s9 := &syncer{logger: hclog.NewNullLogger(), blockTimeout: 9 * time.Second}
+	require.Equal(t, time.Second, s9.caughtUpWakeBackoff())
+	require.Equal(t, time.Second, s9.catchUpRetryBackoff(100, caught))
+}
+
+func TestCaughtUpWakeBackoff(t *testing.T) {
+	require.Equal(t, syncBestNotAheadWakeInterval, (&syncer{}).caughtUpWakeBackoff())
+
+	s := &syncer{blockTimeout: 9 * time.Second}
+	require.Equal(t, time.Second, s.caughtUpWakeBackoff())
+
+	sShort := &syncer{blockTimeout: 2 * time.Second}
+	require.Equal(t, syncCaughtUpMinWakeInterval, sShort.caughtUpWakeBackoff())
+
+	sLong := &syncer{blockTimeout: 60 * time.Second}
+	require.Equal(t, syncCaughtUpMaxWakeInterval, sLong.caughtUpWakeBackoff())
 }

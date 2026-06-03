@@ -33,6 +33,7 @@ type dposRuntime struct {
 	lastBlockNumber         uint64    // 记录上次出块的区块号
 	currentBuildStartSlot   int       // 🔧 修复：记录当前构建开始时的 slot，用于检查 slot 是否已变化（-1 表示未设置）
 	decisionSlot            int       // 保存 ShouldProduceBlockNow 判断时的 slot，用于严格比对（-1 表示未设置）
+	decisionLocalTip        uint64    // 与 decisionSlot 同时保存的 localTip，用于 sync/produce 竞态复核
 	delegates               validator.AccountSet
 	voters                  map[types.Address]*VoterInfo
 	pendingVotes            []*VoteMessage
@@ -100,6 +101,10 @@ type dposRuntime struct {
 	networkHeadHintMu        sync.Mutex
 	lastPeerAdvertisedHead   uint64
 	lastPeerAdvertisedHeadAt time.Time
+
+	// 出块轮值追踪：诊断「为何未打出 [出块验证]」
+	proposerTraceMu   sync.Mutex
+	proposerTurnTrace *proposerTurnTraceState
 
 	// dpos_bootstrap_rpc：eth_blockNumber 缓存，用作 canonical 链尖上限（短 TTL，避免热路径打爆 RPC）
 	bootstrapRPCMu       sync.Mutex
