@@ -253,6 +253,12 @@ func checkAddress(client *http.Client, cfg *config, st *addressState) {
 		_ = sendFeishuAlert(client, cfg.FeishuWebhookURL, msg)
 		st.lowAlertSent = false
 		fmt.Fprintf(os.Stderr, "RECOVER balance: %s balance=%s\n", st.spec.Name, formatNativeAmount(balance))
+		return
+	}
+
+	if !isLow {
+		fmt.Fprintf(os.Stderr, "ok %s balance=%s min=%s\n",
+			st.spec.Name, formatNativeAmount(balance), formatNativeAmount(threshold))
 	}
 }
 
