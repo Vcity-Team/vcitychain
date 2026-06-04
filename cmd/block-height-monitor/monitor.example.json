@@ -1,15 +1,39 @@
 {
-  "poll_interval_seconds": 10,
-  "stale_threshold_seconds": 60,
-  "feishu_webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "poll_interval_seconds": 5,
+  "stale_threshold_seconds": 15,
+  "feishu_webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/5c690b93-5d7b-4a32-b6e4-f08f15baddf8",
   "nodes": [
     {
-      "name": "mainnet-rpc-1",
+      "name": "mainnet-rpc",
       "url": "https://mainnet-rpc.vcity.app"
     },
     {
-      "name": "mainnet-rpc-2",
-      "url": "https://another-mainnet-rpc.example.com"
-    }
+      "name": "mainnet-aws1",
+      "url": "http://35.86.157.73:9546"
+    },
+    {
+      "name": "mainnet-aws2",
+      "url": "http://35.89.227.178:9546"             
+    },
+    {
+      "name": "mainnet-aws3",
+      "url": "http://54.213.195.113:9546"
+    },
+    {
+      "name": "mainnet-node4-1号机房29号机器99.199.77.45",
+      "url": "http://99.199.77.45:9546"
+    },
+{
+      "name": "mainnet-node5-2号机房41号机器209.53.43.251",
+      "url": "http://209.53.43.251:9546"
+    },
+{
+      "name": "mainnet-node6-3号机房42号机器205.250.35.226",
+      "url": "http://205.250.35.226:9546"
+    },
+{
+      "name": "mainnet-node7-1号机房39号机器207.102.185.81",
+      "url": "http://207.102.185.81:9546"
+    },
   ]
 }
