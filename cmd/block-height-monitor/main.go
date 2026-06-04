@@ -10,6 +10,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -94,7 +95,7 @@ func run() error {
 	fmt.Fprintf(os.Stderr, "monitoring %d node(s), poll=%s, stale_threshold=%s\n",
 		len(cfg.Nodes), pollInterval, staleThreshold)
 
-	ctx, stop := signal.NotifyContext(nil, os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	ticker := time.NewTicker(pollInterval)
