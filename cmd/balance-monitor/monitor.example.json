@@ -1,0 +1,13 @@
+{
+  "poll_interval_seconds": 60,
+  "rpc_url": "https://mainnet-rpc.vcity.app",
+  "feishu_webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/57b822de-db49-4caa-b642-27bc87d6f3c2",
+  "default_min_balance": "80",
+  "addresses": [
+    {
+      "name": "reward-sender",
+      "address": "0x4BCBB0e87ff0Bd8c6bD4968617b17b2e2DC12EBe",
+      "min_balance": "80"
+    }
+  ]
+}
