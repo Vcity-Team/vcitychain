@@ -1,0 +1,15 @@
+{
+  "poll_interval_seconds": 10,
+  "stale_threshold_seconds": 60,
+  "feishu_webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "nodes": [
+    {
+      "name": "mainnet-rpc-1",
+      "url": "https://mainnet-rpc.vcity.app"
+    },
+    {
+      "name": "mainnet-rpc-2",
+      "url": "https://another-mainnet-rpc.example.com"
+    }
+  ]
+}

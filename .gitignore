@@ -4,6 +4,7 @@ manifest.json
 secretsManagerConfig.json
 *-packr.go
 config*.json
+!cmd/**/monitor.example.json
 vcitychain
 
 bin/
@@ -17,6 +18,7 @@ vcity-chain*
 dist/
 main.exe
 main
+cmd/**/*.exe
 
 # MacOS Leftovers
 .DS_Store
