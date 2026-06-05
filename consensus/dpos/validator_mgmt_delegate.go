@@ -674,7 +674,6 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 		Deposit:             regInfo.Deposit,
 		Status:              RegStatusCandidate, // 候选人状态
 		CreatedAt:           frozenAt,
-		TotalVotes:          big.NewInt(0),
 		IsActive:            false,
 		LastVoteTime:        0,
 		FrozenAt:            frozenAt, // 冻结时间
@@ -1646,19 +1645,15 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 		}
 	}
 
-	// 6. 实时同步已注册受托人的 TotalVotes、IsActive 和 LastVoteTime
+	// 6. 同步 IsActive、LastVoteTime；votingPower 在步骤 8 从 StakeStore 填充（不写入 RegistrationStore）
 	for _, reg := range dbRegistrations {
+		if reg.Status == RegStatusWithdrawn {
+			reg.IsActive = false
+		}
 		if validator, exists := validatorMap[reg.Address]; exists {
-			currentTotalVotes := big.NewInt(0)
-			if reg.TotalVotes != nil {
-				currentTotalVotes = reg.TotalVotes
+			if reg.Status != RegStatusWithdrawn {
+				reg.IsActive = validator.IsActive
 			}
-			newTotalVotes := big.NewInt(0)
-			if validator.VotingPower != nil {
-				newTotalVotes = validator.VotingPower
-			}
-			oldIsActive := reg.IsActive
-			newIsActive := validator.IsActive
 			var latestVoteTime uint64 = 0
 			for _, stake := range allStakingInfos {
 				if stake != nil && stake.Delegate == reg.Address && stake.Applied {
@@ -1667,13 +1662,7 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 					}
 				}
 			}
-			if currentTotalVotes.Cmp(newTotalVotes) != 0 || oldIsActive != newIsActive || reg.LastVoteTime != latestVoteTime {
-				reg.TotalVotes = new(big.Int).Set(newTotalVotes)
-				reg.IsActive = newIsActive
-				if latestVoteTime > 0 {
-					reg.LastVoteTime = latestVoteTime
-				}
-			} else if latestVoteTime > 0 && reg.LastVoteTime != latestVoteTime {
+			if latestVoteTime > 0 {
 				reg.LastVoteTime = latestVoteTime
 			}
 		}
@@ -1749,7 +1738,6 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 			Deposit:             new(big.Int).Set(depositAmount),
 			Status:              status,
 			CreatedAt:           createdAt,
-			TotalVotes:          new(big.Int).Set(validator.VotingPower),
 			IsActive:            validator.IsActive,
 			LastVoteTime:        lastVoteTime,
 			FrozenAt:            0,
@@ -1767,25 +1755,29 @@ func (d *DPoS) GetDelegateRegistrations() ([]*DelegateRegistration, error) {
 		addedCount++
 	}
 
-	// 8. 按 totalVotes 倒序排序并添加排名序号
+	// 8. 从 StakeStore 填充 votingPower，按 votingPower 倒序排序并添加排名
+	for _, reg := range result {
+		power := big.NewInt(0)
+		if v, ok := validatorMap[reg.Address]; ok && v.VotingPower != nil {
+			power = new(big.Int).Set(v.VotingPower)
+		}
+		reg.VotingPower = power
+	}
 	sort.Slice(result, func(i, j int) bool {
-		// 按 totalVotes 倒序排序（从大到小）
-		// 如果 totalVotes 相同，则按地址排序以保持稳定性
-		if result[i].TotalVotes == nil && result[j].TotalVotes == nil {
+		if result[i].VotingPower == nil && result[j].VotingPower == nil {
 			return result[i].Address.String() < result[j].Address.String()
 		}
-		if result[i].TotalVotes == nil {
+		if result[i].VotingPower == nil {
 			return false
 		}
-		if result[j].TotalVotes == nil {
+		if result[j].VotingPower == nil {
 			return true
 		}
-		cmp := result[i].TotalVotes.Cmp(result[j].TotalVotes)
+		cmp := result[i].VotingPower.Cmp(result[j].VotingPower)
 		if cmp == 0 {
-			// 如果 totalVotes 相同，按地址排序以保持稳定性
 			return result[i].Address.String() < result[j].Address.String()
 		}
-		return cmp > 0 // 倒序：大的在前
+		return cmp > 0
 	})
 
 	// 为每个受托人添加排名序号（从1开始）
@@ -1842,8 +1834,12 @@ func (d *DPoS) WithdrawDelegate(address types.Address) error {
 		return fmt.Errorf("withdraw allowed only for delegates in candidate or active status; current status: %s", reg.Status.String())
 	}
 
-	// 1. 检查是否还有投票（参考 Tron：要求先手动撤回投票）
-	if reg.TotalVotes.Cmp(big.NewInt(0)) > 0 {
+	// 1. 检查是否还有得票（以 StakeStore VotingPower 为准，非 RegistrationStore）
+	votingPower, err := d.getVotingPowerFromDatabase(address)
+	if err != nil {
+		return fmt.Errorf("failed to get voting power for withdraw check: %w", err)
+	}
+	if votingPower != nil && votingPower.Sign() > 0 {
 		return fmt.Errorf("cannot withdraw while having votes. Please use dpos_vote to withdraw votes first")
 	}
 

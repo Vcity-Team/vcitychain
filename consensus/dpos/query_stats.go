@@ -140,10 +140,18 @@ func (d *DPoS) CanWithdrawDelegate(address types.Address) (map[string]interface{
 		return result, nil
 	}
 
-	// 检查投票
-	hasVotes := reg.TotalVotes.Cmp(big.NewInt(0)) > 0
+	// 检查得票（StakeStore VotingPower 为准）
+	votingPower, vpErr := d.getVotingPowerFromDatabase(address)
+	if vpErr != nil {
+		result["canWithdraw"] = false
+		result["reason"] = "voting_power_lookup_failed"
+		details["error"] = vpErr.Error()
+		result["details"] = details
+		return result, nil
+	}
+	hasVotes := votingPower != nil && votingPower.Sign() > 0
 	details["hasVotes"] = hasVotes
-	details["totalVotes"] = reg.TotalVotes.String()
+	details["votingPower"] = votingPower.String()
 
 	if hasVotes {
 		result["canWithdraw"] = false

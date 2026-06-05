@@ -33,7 +33,7 @@ type DelegateRegistration struct {
 	Description  string `json:"description"`
 	Status       int    `json:"status"`     // RPC returns number, not string
 	Deposit      json.Number `json:"deposit"`    // 可能返回科学计数法，使用 json.Number
-	TotalVotes   json.Number `json:"totalVotes"` // 同上
+	VotingPower  json.Number `json:"votingPower"` // 查询时从 StakeStore 填充
 	IsActive     bool   `json:"isActive"`
 	LastVoteTime int64  `json:"lastVoteTime"` // RPC returns number, not string
 	CreatedAt    int64  `json:"createdAt"`    // RPC returns number, not string
@@ -217,7 +217,7 @@ func (r *ListDelegateResult) GetOutput() string {
 		output += fmt.Sprintf("   Description: %s\n", reg.Description)
 		output += fmt.Sprintf("   Status: %s\n", statusStr)
 		output += fmt.Sprintf("   Deposit: %s\n", reg.Deposit.String())
-		output += fmt.Sprintf("   Total Votes: %s\n", reg.TotalVotes.String())
+		output += fmt.Sprintf("   Voting Power: %s\n", reg.VotingPower.String())
 		output += fmt.Sprintf("   Is Active: %t\n", reg.IsActive)
 		output += fmt.Sprintf("   Last Vote Time: %s\n", lastVoteTimeStr)
 		output += fmt.Sprintf("   Created At: %s\n", createdAtStr)

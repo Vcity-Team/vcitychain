@@ -6752,9 +6752,17 @@ func (d *DPOS) buildFreezeInfoResponse(dposEngine interface{}, address types.Add
 								"deposit":   reg.Deposit.String(),
 								"createdAt": reg.CreatedAt,
 							}
+							votingPower := "0"
+							hasVotes := false
+							if dpos, ok := dposEngine.(*dpos.DPoS); ok {
+								if vp, vpErr := dpos.GetVotingPower(0, address); vpErr == nil && vp != nil && vp.Sign() > 0 {
+									votingPower = vp.String()
+									hasVotes = true
+								}
+							}
 							result["voteInfo"] = map[string]interface{}{
-								"totalVotes": reg.TotalVotes.String(),
-								"hasVotes":   reg.TotalVotes.Cmp(big.NewInt(0)) > 0,
+								"votingPower": votingPower,
+								"hasVotes":    hasVotes,
 							}
 						}
 					}

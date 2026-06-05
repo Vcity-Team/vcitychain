@@ -105,8 +105,10 @@ func (d *DPoS) ApplyDelegateCancelRegistrationAfterTx(
 			return fmt.Errorf("delegate cancel: withdrawn without escrow-held deposit; cannot refund via CAN for %s",
 				delegate.String())
 		}
-		// 已走 RPC 退出时仍要求无投票（与 WithdrawDelegate 前置一致）
-		if reg.TotalVotes != nil && reg.TotalVotes.Sign() > 0 {
+		// 已走 RPC 退出时仍要求无得票（StakeStore 为准，与 WithdrawDelegate 一致）
+		if power, pErr := d.getVotingPowerFromDatabase(delegate); pErr != nil {
+			return fmt.Errorf("delegate cancel: voting power lookup: %w", pErr)
+		} else if power != nil && power.Sign() > 0 {
 			return fmt.Errorf("delegate cancel: delegate %s still has votes", delegate.String())
 		}
 	} else {
@@ -116,7 +118,9 @@ func (d *DPoS) ApplyDelegateCancelRegistrationAfterTx(
 				"block", blockNumber)
 			reg.DepositHeldInEscrow = true
 		}
-		if reg.TotalVotes != nil && reg.TotalVotes.Sign() > 0 {
+		if power, pErr := d.getVotingPowerFromDatabase(delegate); pErr != nil {
+			return fmt.Errorf("delegate cancel: voting power lookup: %w", pErr)
+		} else if power != nil && power.Sign() > 0 {
 			return fmt.Errorf("delegate cancel: delegate %s still has votes", delegate.String())
 		}
 	}
