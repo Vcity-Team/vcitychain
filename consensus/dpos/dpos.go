@@ -2140,62 +2140,95 @@ func (d *DPoS) GetCurrentDelegate() types.Address {
 	return types.ZeroAddress
 }
 
+// copyVoterInfo returns a deep copy of VoterInfo for read-only consumers (e.g. reward calculation).
+func copyVoterInfo(voter *VoterInfo) *VoterInfo {
+	if voter == nil {
+		return nil
+	}
+	voterCopy := &VoterInfo{
+		Address:        voter.Address,
+		VotingPower:    new(big.Int).Set(voter.VotingPower),
+		VotedDelegates: make([]types.Address, len(voter.VotedDelegates)),
+		LastVoteTime:   voter.LastVoteTime,
+		LockedUntil:    voter.LockedUntil,
+		Nonce:          make(map[uint64]bool),
+	}
+	copy(voterCopy.VotedDelegates, voter.VotedDelegates)
+	for k, v := range voter.Nonce {
+		voterCopy.Nonce[k] = v
+	}
+	if voter.DelegateVotes != nil {
+		voterCopy.DelegateVotes = make(map[types.Address]*big.Int, len(voter.DelegateVotes))
+		for delegate, amount := range voter.DelegateVotes {
+			if amount != nil {
+				voterCopy.DelegateVotes[delegate] = new(big.Int).Set(amount)
+			}
+		}
+	}
+	return voterCopy
+}
+
+func addAppliedStakeToVoter(voter *VoterInfo, stake *StakeInfo) {
+	if voter == nil || stake == nil || stake.Amount == nil || stake.Amount.Sign() <= 0 {
+		return
+	}
+	if stake.Delegate == (types.Address{}) {
+		return
+	}
+
+	voter.VotingPower.Add(voter.VotingPower, stake.Amount)
+
+	if voter.DelegateVotes == nil {
+		voter.DelegateVotes = make(map[types.Address]*big.Int)
+	}
+	if prev, ok := voter.DelegateVotes[stake.Delegate]; ok && prev != nil {
+		voter.DelegateVotes[stake.Delegate].Add(prev, stake.Amount)
+	} else {
+		voter.DelegateVotes[stake.Delegate] = new(big.Int).Set(stake.Amount)
+	}
+
+	found := false
+	for _, del := range voter.VotedDelegates {
+		if del == stake.Delegate {
+			found = true
+			break
+		}
+	}
+	if !found {
+		voter.VotedDelegates = append(voter.VotedDelegates, stake.Delegate)
+	}
+}
+
 // GetVoters returns the current voters map for external access
 // 从 StakeInfo 计算，不再依赖 VoterInfo 数据库
 func (d *DPoS) GetVoters() map[types.Address]*VoterInfo {
 	d.lock.RLock()
 	defer d.lock.RUnlock()
 
-	// 从 StakeInfo 构建 VoterInfo
-	if d.state == nil || d.state.StakeStore == nil {
-		// 如果 StakeStore 不可用，返回内存中的 voters（向后兼容）
-		votersCopy := make(map[types.Address]*VoterInfo)
-		for addr, voter := range d.voters {
-			voterCopy := &VoterInfo{
-				Address:        voter.Address,
-				VotingPower:    new(big.Int).Set(voter.VotingPower),
-				VotedDelegates: make([]types.Address, len(voter.VotedDelegates)),
-				LastVoteTime:   voter.LastVoteTime,
-				LockedUntil:    voter.LockedUntil,
-				Nonce:          make(map[uint64]bool),
-			}
-			copy(voterCopy.VotedDelegates, voter.VotedDelegates)
-			for k, v := range voter.Nonce {
-				voterCopy.Nonce[k] = v
-			}
-			votersCopy[addr] = voterCopy
+	copyVotersMap := func(source map[types.Address]*VoterInfo) map[types.Address]*VoterInfo {
+		votersCopy := make(map[types.Address]*VoterInfo, len(source))
+		for addr, voter := range source {
+			votersCopy[addr] = copyVoterInfo(voter)
 		}
 		return votersCopy
+	}
+
+	// 从 StakeInfo 构建 VoterInfo
+	if d.state == nil || d.state.StakeStore == nil {
+		return copyVotersMap(d.voters)
 	}
 
 	// 从 StakeInfo 获取所有投票记录
 	stakingInfos, err := d.state.StakeStore.GetStakingInfo()
 	if err != nil {
 		d.logger.Warn("⚠️ 获取 StakeInfo 失败，使用内存中的 voters", "error", err)
-		// 降级到内存中的 voters
-		votersCopy := make(map[types.Address]*VoterInfo)
-		for addr, voter := range d.voters {
-			voterCopy := &VoterInfo{
-				Address:        voter.Address,
-				VotingPower:    new(big.Int).Set(voter.VotingPower),
-				VotedDelegates: make([]types.Address, len(voter.VotedDelegates)),
-				LastVoteTime:   voter.LastVoteTime,
-				LockedUntil:    voter.LockedUntil,
-				Nonce:          make(map[uint64]bool),
-			}
-			copy(voterCopy.VotedDelegates, voter.VotedDelegates)
-			for k, v := range voter.Nonce {
-				voterCopy.Nonce[k] = v
-			}
-			votersCopy[addr] = voterCopy
-		}
-		return votersCopy
+		return copyVotersMap(d.voters)
 	}
 
 	// 从 StakeInfo 构建 VoterInfo map
 	votersMap := make(map[types.Address]*VoterInfo)
 
-	// 按 staker 分组，计算 VotingPower 和 VotedDelegates
+	// 按 staker 分组：VotingPower 为全账户质押之和；DelegateVotes 为各 SR 质押（用于分红权重）
 	for _, stake := range stakingInfos {
 		if stake == nil || stake.Staker == (types.Address{}) {
 			continue
@@ -2214,6 +2247,7 @@ func (d *DPoS) GetVoters() map[types.Address]*VoterInfo {
 				Address:        voterAddr,
 				VotingPower:    big.NewInt(0),
 				VotedDelegates: []types.Address{},
+				DelegateVotes:  make(map[types.Address]*big.Int),
 				LastVoteTime:   stake.StartTime,
 				LockedUntil:    stake.EndTime,
 				Nonce:          make(map[uint64]bool),
@@ -2221,25 +2255,7 @@ func (d *DPoS) GetVoters() map[types.Address]*VoterInfo {
 		}
 
 		voter := votersMap[voterAddr]
-
-		// 累加 VotingPower
-		if stake.Amount != nil && stake.Amount.Sign() > 0 {
-			voter.VotingPower.Add(voter.VotingPower, stake.Amount)
-		}
-
-		// 添加 Delegate 到 VotedDelegates（去重）
-		if stake.Delegate != (types.Address{}) {
-			found := false
-			for _, del := range voter.VotedDelegates {
-				if del == stake.Delegate {
-					found = true
-					break
-				}
-			}
-			if !found {
-				voter.VotedDelegates = append(voter.VotedDelegates, stake.Delegate)
-			}
-		}
+		addAppliedStakeToVoter(voter, stake)
 
 		// 更新 LastVoteTime（取最新的）
 		if stake.StartTime > voter.LastVoteTime {

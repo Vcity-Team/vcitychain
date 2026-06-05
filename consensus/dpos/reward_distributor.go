@@ -156,13 +156,16 @@ func (rd *RewardDistributor) addReward(rewards map[types.Address]*big.Int, addre
 	}
 }
 
-func containsDelegate(delegates []types.Address, target types.Address) bool {
-	for _, addr := range delegates {
-		if addr == target {
-			return true
-		}
+// voterStakeOnDelegate returns the voter's effective stake on a specific SR (delegate).
+func voterStakeOnDelegate(voter *VoterInfo, delegate types.Address) *big.Int {
+	if voter == nil || voter.DelegateVotes == nil {
+		return nil
 	}
-	return false
+	amount, ok := voter.DelegateVotes[delegate]
+	if !ok || amount == nil || amount.Sign() <= 0 {
+		return nil
+	}
+	return new(big.Int).Set(amount)
 }
 
 func (rd *RewardDistributor) computeVoterWeights(
@@ -173,25 +176,8 @@ func (rd *RewardDistributor) computeVoterWeights(
 	total := big.NewInt(0)
 
 	for voterAddress, voter := range voters {
-		if voter == nil || voter.VotingPower == nil || voter.VotingPower.Sign() == 0 {
-			continue
-		}
-
-		if !containsDelegate(voter.VotedDelegates, validator) {
-			continue
-		}
-
-		delegateCount := len(voter.VotedDelegates)
-		if delegateCount == 0 {
-			continue
-		}
-
-		weight := new(big.Int).Set(voter.VotingPower)
-		if delegateCount > 1 {
-			weight.Div(weight, big.NewInt(int64(delegateCount)))
-		}
-
-		if weight.Sign() == 0 {
+		weight := voterStakeOnDelegate(voter, validator)
+		if weight == nil || weight.Sign() == 0 {
 			continue
 		}
 
