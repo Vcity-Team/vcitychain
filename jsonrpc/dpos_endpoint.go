@@ -6018,59 +6018,6 @@ func (d *DPOS) submitSignedTransactionToPool(tx *types.Transaction) error {
 	return nil
 }
 
-// SubmitCancelRegisterDelegate 构造并提交 DPOS+CAN 链上取消注册交易（打包后从托管退回原生币到 delegate）。
-// JSON-RPC: dpos_submitCancelRegisterDelegate
-// params: { "delegate": "0x...", "privateKey": "<64 hex>" } 或与 WithdrawDelegate 相同的 address/privateKey 字段。
-func (d *DPOS) SubmitCancelRegisterDelegate(ctx context.Context, params interface{}) (interface{}, error) {
-	var delegateStr, privateKeyHex string
-
-	if paramMap, ok := params.(map[string]interface{}); ok {
-		if s, ok := paramMap["delegate"].(string); ok && s != "" {
-			delegateStr = s
-		} else if s, ok := paramMap["address"].(string); ok {
-			delegateStr = s
-		}
-		if pk, ok := paramMap["privateKey"].(string); ok {
-			privateKeyHex = pk
-		}
-	} else if paramArray, ok := params.([]interface{}); ok && len(paramArray) >= 2 {
-		delegateStr, _ = paramArray[0].(string)
-		if pk, ok := paramArray[1].(string); ok {
-			privateKeyHex = pk
-		}
-	} else {
-		return nil, fmt.Errorf("invalid parameters: expected map{delegate,privateKey} or [delegate,pk]")
-	}
-
-	if strings.TrimSpace(delegateStr) == "" {
-		return nil, fmt.Errorf("delegate address is required")
-	}
-
-	delegate := types.StringToAddress(delegateStr)
-
-	tx, escrow, err := d.buildSignedDelegateCancelRegistrationTx(delegate, privateKeyHex)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   err.Error(),
-		}, nil
-	}
-
-	if err := d.submitSignedTransactionToPool(tx); err != nil {
-		return nil, err
-	}
-
-	d.logger.Info("✅ 已提交链上取消注册 DPOS+CAN 交易", "txHash", tx.Hash.String(), "delegate", delegate.String(), "escrow", escrow.String())
-
-	return map[string]interface{}{
-		"success":  true,
-		"txHash":   tx.Hash.String(),
-		"delegate": delegate.String(),
-		"escrow":   escrow.String(),
-		"note":     "打包确认后 ApplyDelegateCancelRegistrationAfterTx 执行退款，日志关键字：候选人保证金已从托管退回",
-	}, nil
-}
-
 // GetDelegateRegistrations 获取受托人注册列表
 func (d *DPOS) GetDelegateRegistrations(ctx context.Context) (interface{}, error) {
 	dposEngine := d.getDPoSEngine()
@@ -6206,7 +6153,7 @@ func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interf
 			"message": "Delegate withdrawn and unfrozen successfully",
 		}
 
-		// 托管保证金：成功后自动提交 DPOS+CAN（与 dpos_submitCancelRegisterDelegate 相同）。
+		// 托管保证金：成功后自动提交 DPOS+CAN 链上退款交易。
 		var skipReason string
 		if ig, ok := dposEngine.(interface {
 			IsGenesisValidator(types.Address) bool
@@ -6239,12 +6186,12 @@ func (d *DPOS) WithdrawDelegate(ctx context.Context, params interface{}) (interf
 				result["onChainCancelSubmitted"] = false
 				result["onChainCancelError"] = buildErr.Error()
 				result["onChainRefundRequired"] = true
-				result["submitCancelRpc"] = "dpos_submitCancelRegisterDelegate"
+				result["note"] = "Automatic on-chain refund failed; contact chain operator for escrow payout (dpos_submitDelegateDepositEscrowPayout)"
 			} else if poolErr := d.submitSignedTransactionToPool(cancelTx); poolErr != nil {
 				result["onChainCancelSubmitted"] = false
 				result["onChainCancelError"] = poolErr.Error()
 				result["onChainRefundRequired"] = true
-				result["submitCancelRpc"] = "dpos_submitCancelRegisterDelegate"
+				result["note"] = "Automatic on-chain refund failed; contact chain operator for escrow payout (dpos_submitDelegateDepositEscrowPayout)"
 			} else {
 				result["onChainCancelSubmitted"] = true
 				result["onChainRefundRequired"] = false
