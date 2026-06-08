@@ -88,16 +88,6 @@ func (d *DPoS) parseVoteTransactionData(tx *types.Transaction) (*VoteInfo, error
 		return nil, fmt.Errorf("not a DPoS vote transaction, prefix=%x", input[:4])
 	}
 
-	if isDelegateDepositMigrationCalldata(input) {
-		return nil, fmt.Errorf("not a DPoS vote transaction: deposit migration calldata")
-	}
-	if isDelegateDepositEscrowPayoutCalldata(input) {
-		return nil, fmt.Errorf("not a DPoS vote transaction: escrow payout calldata")
-	}
-	if isDelegateNativeCreditCalldata(input) {
-		return nil, fmt.Errorf("not a DPoS vote transaction: native credit calldata")
-	}
-
 	// 预期格式：4字节"DPOS" + 20字节投票者 + 20字节受托人 + 32字节金额
 	const (
 		dposPrefixLen  = 4
