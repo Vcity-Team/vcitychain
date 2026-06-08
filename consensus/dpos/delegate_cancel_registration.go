@@ -113,10 +113,8 @@ func (d *DPoS) ApplyDelegateCancelRegistrationAfterTx(
 		}
 	} else {
 		if !reg.DepositHeldInEscrow {
-			d.logger.Warn("delegate cancel: 老注册 DepositHeldInEscrow=false，按托管路径继续 CAN 退款并已更正标志",
-				"delegate", delegate.String(),
-				"block", blockNumber)
-			reg.DepositHeldInEscrow = true
+			return fmt.Errorf("delegate cancel: deposit not held in escrow; cannot refund via CAN for %s",
+				delegate.String())
 		}
 		if power, pErr := d.getVotingPowerFromDatabase(delegate); pErr != nil {
 			return fmt.Errorf("delegate cancel: voting power lookup: %w", pErr)

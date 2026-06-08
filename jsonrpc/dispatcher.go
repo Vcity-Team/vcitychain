@@ -422,7 +422,7 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 			// For interface{} parameters, pass the raw params directly
 			var paramValue interface{}
 			if err := json.Unmarshal(req.Params, &paramValue); err != nil {
-				d.logger.Error("failed to unmarshal params", "error", err, "params", string(req.Params))
+				d.logger.Error("failed to unmarshal params", "error", err, "params", redactRPCParamsForLog(req.Params))
 				return nil, NewInvalidParamsError("Invalid Params")
 			}
 
@@ -430,7 +430,7 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 			if paramValue == nil {
 				d.logger.Error("params is nil, cannot proceed",
 					"method", req.Method,
-					"params", string(req.Params))
+					"params", redactRPCParamsForLog(req.Params))
 				return nil, NewInvalidParamsError("Params cannot be null")
 			}
 
@@ -441,7 +441,7 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 						d.logger.Error("params array contains nil value",
 							"method", req.Method,
 							"index", i,
-							"params", string(req.Params))
+							"params", redactRPCParamsForLog(req.Params))
 						return nil, NewInvalidParamsError(fmt.Sprintf("Param at index %d cannot be null", i))
 					}
 				}
@@ -1256,4 +1256,58 @@ func (a *dposStoreAdapter) GetHeaderByNumber(number uint64) (*types.Header, bool
 	}
 
 	return nil, false
+}
+
+func redactRPCParamsForLog(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var v interface{}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return "<unparseable params>"
+	}
+	redactSensitiveRPCFields(v)
+	out, err := json.Marshal(v)
+	if err != nil {
+		return "<redacted>"
+	}
+	return string(out)
+}
+
+func redactSensitiveRPCFields(v interface{}) {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		for k, val := range t {
+			lk := strings.ToLower(k)
+			if strings.Contains(lk, "privatekey") || strings.Contains(lk, "private_key") {
+				t[k] = "<redacted>"
+				continue
+			}
+			redactSensitiveRPCFields(val)
+		}
+	case []interface{}:
+		for i := range t {
+			redactSensitiveRPCFields(t[i])
+		}
+		if n := len(t); n > 0 {
+			if s, ok := t[n-1].(string); ok && looksLikePrivateKeyHex(s) {
+				t[n-1] = "<redacted>"
+			}
+		}
+	}
+}
+
+func looksLikePrivateKeyHex(s string) bool {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(strings.TrimPrefix(s, "0x"), "0X")
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') {
+			continue
+		}
+		return false
+	}
+	return true
 }

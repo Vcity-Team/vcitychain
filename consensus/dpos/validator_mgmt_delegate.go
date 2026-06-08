@@ -488,7 +488,7 @@ func (d *DPoS) isVoteTransaction(tx *types.Transaction) bool {
 	// 先排除其他 DPoS 操作类型（如 REG/COM 等），避免误将注册/佣金修改当作投票
 	if len(tx.Input) >= 7 && string(tx.Input[:4]) == "DPOS" {
 		op := string(tx.Input[4:7])
-		if op == "REG" || op == "COM" || op == "CAN" || op == "MIG" || op == "PAY" {
+		if op == "REG" || op == "COM" || op == "CAN" {
 			return false
 		}
 	}
@@ -1272,9 +1272,7 @@ func (d *DPoS) RegisterDelegateWithKeyAndChainID(registrant types.Address, name,
 
 	// 根据是否有私钥决定是创建交易还是直接更新状态
 	if privateKey != "" {
-		// 有私钥，创建交易
-		_, err := d.createDelegateRegistrationTransactionWithChainID(registrant, name, website, description, depositAmount, privateKey, chainID, false)
-		return err
+		return d.createDelegateRegistrationTransactionWithChainID(registrant, name, website, description, depositAmount, privateKey, chainID)
 	} else {
 		// 没有私钥，无法创建交易
 		d.logger.Error("❌ 无私钥提供，无法创建受托人注册交易")
@@ -1288,48 +1286,11 @@ func (d *DPoS) createDelegateRegistrationTransaction(registrant types.Address, n
 	if !ok {
 		return fmt.Errorf("blockchain config not available, cannot get chainID for delegate registration transaction")
 	}
-	_, err := d.createDelegateRegistrationTransactionWithChainID(registrant, name, website, description, depositAmount, privateKey, chainID, false)
-	return err
+	return d.createDelegateRegistrationTransactionWithChainID(registrant, name, website, description, depositAmount, privateKey, chainID)
 }
 
-// RegisterDelegateLegacyToNilTest 本地/测试网专用：注册交易 To=crypto.CreateAddress(发送者,nonce)，保证金转入该合约地址。正式环境请用 RegisterDelegateWithKeyAndChainID（To=托管）。
-// 返回值即 tx.To（与链上收款地址一致）。
-func (d *DPoS) RegisterDelegateLegacyToNilTest(registrant types.Address, name, website, description, privateKey string, chainID uint64) (types.Address, error) {
-	d.lock.Lock()
-	defer d.lock.Unlock()
-
-	d.logger.Warn("RegisterDelegateLegacyToNilTest: legacy To=deposit-contract-address — FOR LOCAL OR REGRESSION TEST ONLY")
-
-	d.logger.Info("📝 Legacy test registrant",
-		"registrant", registrant.String(),
-		"name", name,
-		"chainID", chainID)
-
-	if d.IsDelegateRegistered(registrant) {
-		return types.Address{}, fmt.Errorf("delegate %s already registered", registrant.String())
-	}
-
-	depositAmount := d.getDelegateDepositAmount()
-	if d.balanceQuerier != nil {
-		balance, err := d.balanceQuerier.GetNativeTokenBalance(registrant)
-		if err != nil {
-			return types.Address{}, fmt.Errorf("failed to query balance: %w", err)
-		}
-		if balance.Cmp(depositAmount) < 0 {
-			return types.Address{}, fmt.Errorf("insufficient balance for delegate registration: required %s, available %s",
-				depositAmount.String(), balance.String())
-		}
-	}
-	if privateKey == "" {
-		return types.Address{}, fmt.Errorf("private key is required for delegate registration")
-	}
-	return d.createDelegateRegistrationTransactionWithChainID(registrant, name, website, description, depositAmount, privateKey, chainID, true)
-}
-
-// createDelegateRegistrationTransactionWithChainID 创建受托人注册交易（带chainID）。
-// legacyToNil 为 true 时 To=crypto.CreateAddress(发送者,nonce)（老路径保证金进该合约地址）；false 时 To=候选人托管地址。
-// 返回值：legacyToNil 时为上述合约地址；否则为零地址。
-func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types.Address, name, website, description string, depositAmount *big.Int, privateKey string, chainID uint64, legacyToNil bool) (types.Address, error) {
+// createDelegateRegistrationTransactionWithChainID 创建受托人注册交易（带chainID），保证金 To=候选人托管地址。
+func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types.Address, name, website, description string, depositAmount *big.Int, privateKey string, chainID uint64) error {
 	d.logger.Info("🚀 ===== 开始创建受托人注册交易（带chainID） =====")
 	d.logger.Info("📝 受托人注册信息",
 		"registrant", registrant.String(),
@@ -1342,17 +1303,17 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 	// 从私钥推导地址，确保地址和私钥匹配
 	privateKeyBytes, err := hex.DecodeString(strings.TrimPrefix(privateKey, "0x"))
 	if err != nil {
-		return types.Address{}, fmt.Errorf("failed to decode private key: %w", err)
+		return fmt.Errorf("failed to decode private key: %w", err)
 	}
 	if len(privateKeyBytes) != 32 {
-		return types.Address{}, fmt.Errorf("invalid private key length: expected 32 bytes, got %d", len(privateKeyBytes))
+		return fmt.Errorf("invalid private key length: expected 32 bytes, got %d", len(privateKeyBytes))
 	}
 
 	// 从私钥推导公钥和地址
 	// 注意：privateKeyBytes 已经是解码后的32字节，直接使用 ParseECDSAPrivateKey
 	privKey, err := crypto.ParseECDSAPrivateKey(privateKeyBytes)
 	if err != nil {
-		return types.Address{}, fmt.Errorf("failed to create ECDSA private key: %w", err)
+		return fmt.Errorf("failed to create ECDSA private key: %w", err)
 	}
 	derivedAddress := crypto.PubKeyToAddress(&privKey.PublicKey)
 
@@ -1370,12 +1331,9 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 	senderAddress := registrant
 	d.logger.Info("🔍 使用发送者地址", "senderAddress", senderAddress.String())
 
-	// 尝试从区块链获取 nonce（老路径 To=nil 必须准确，否则 CreateAddress 与链上部署地址不一致）
+	// 尝试从区块链获取 nonce
 	nonce, err := d.getAccountNonce(senderAddress)
 	if err != nil {
-		if legacyToNil {
-			return types.Address{}, fmt.Errorf("cannot get on-chain nonce for legacy delegate registration (required for contract address): %w", err)
-		}
 		d.logger.Warn("⚠️ 无法获取账户nonce，使用默认nonce 0", "error", err)
 		nonce = 0
 	} else {
@@ -1388,20 +1346,9 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 	gasPrice := big.NewInt(1000000000) // 1 Gwei
 	d.logger.Info("⛽ Gas设置", "gasPrice", gasPrice.String(), "gasLimit", 100000)
 
-	var toPtr *types.Address
-	var predictedLegacyContract types.Address
-	if legacyToNil {
-		predictedLegacyContract = crypto.CreateAddress(senderAddress, nonce)
-		toPtr = &predictedLegacyContract
-		d.logger.Warn("🔧 Legacy delegateTest: To = deposit contract address",
-			"contractAddress", predictedLegacyContract.String(),
-			"sender", senderAddress.String(),
-			"nonce", nonce)
-	} else {
-		depositEscrow := d.getDelegateDepositEscrowAddress()
-		toPtr = &depositEscrow
-		d.logger.Info("🔨 To=候选人托管", "escrow", depositEscrow.String())
-	}
+	depositEscrow := d.getDelegateDepositEscrowAddress()
+	toPtr := &depositEscrow
+	d.logger.Info("🔨 To=候选人托管", "escrow", depositEscrow.String())
 
 	d.logger.Info("🔨 开始构建交易对象...")
 	tx := &types.Transaction{
@@ -1434,7 +1381,7 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 			"gasPrice", gasPrice.String(),
 			"registrant", registrant.String(),
 			"name", name)
-		return types.Address{}, fmt.Errorf("transaction hash is zero after creation")
+		return fmt.Errorf("transaction hash is zero after creation")
 	}
 
 	d.logger.Info("✅ 交易哈希计算成功", "txHash", tx.Hash.String())
@@ -1449,7 +1396,7 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 	d.logger.Info("✍️ 开始签名交易...")
 	if err := d.signTransactionWithChainID(tx, registrant, privateKey, chainID); err != nil {
 		d.logger.Error("❌ 交易签名失败", "error", err)
-		return types.Address{}, fmt.Errorf("failed to sign transaction: %w", err)
+		return fmt.Errorf("failed to sign transaction: %w", err)
 	}
 	d.logger.Info("✅ 交易签名成功")
 
@@ -1493,9 +1440,9 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 	if !txAdded {
 		d.logger.Error("❌ 交易池添加失败，无法完成受托人注册", "error", addTxErr)
 		if addTxErr != nil {
-			return types.Address{}, fmt.Errorf("failed to add delegate registration transaction to pool: %w", addTxErr)
+			return fmt.Errorf("failed to add delegate registration transaction to pool: %w", addTxErr)
 		}
-		return types.Address{}, fmt.Errorf("failed to add delegate registration transaction to pool")
+		return fmt.Errorf("failed to add delegate registration transaction to pool")
 	}
 
 	d.logger.Info("🎊 ===== 受托人注册交易提交成功 =====")
@@ -1508,7 +1455,7 @@ func (d *DPoS) createDelegateRegistrationTransactionWithChainID(registrant types
 		"txAdded", txAdded)
 	d.logger.Info("🌐 交易将被广播到网络并等待打包进区块")
 
-	return predictedLegacyContract, nil
+	return nil
 }
 
 // signTransaction 签名交易（从链配置读取 chainID）

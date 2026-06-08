@@ -4937,58 +4937,6 @@ func (d *DPOS) RegisterDelegate(ctx context.Context, params interface{}) (interf
 	return nil, fmt.Errorf("DPoS engine does not support delegate registration")
 }
 
-// RegisterDelegateLegacyTest builds legacy registration with To = CreateAddress(sender, nonce) (deposit to that contract address). For local/regression testing only.
-// Params match RegisterDelegate (registrant, name, website, description, privateKey, chainID).
-func (d *DPOS) RegisterDelegateLegacyTest(ctx context.Context, params interface{}) (interface{}, error) {
-	d.logger.Warn("RegisterDelegateLegacyTest RPC — To=nil registration for testing only")
-
-	var registrantStr, name, website, description, privateKey string
-	chainID := d.chainID
-
-	if paramMap, ok := params.(map[string]interface{}); ok {
-		registrantStr, _ = paramMap["registrant"].(string)
-		name, _ = paramMap["name"].(string)
-		website, _ = paramMap["website"].(string)
-		description, _ = paramMap["description"].(string)
-		privateKey, _ = paramMap["privateKey"].(string)
-		if chainIDInterface, exists := paramMap["chainID"]; exists {
-			if chainIDFloat, ok := chainIDInterface.(float64); ok {
-				chainID = uint64(chainIDFloat)
-			}
-		}
-	} else {
-		return nil, fmt.Errorf("invalid parameters format")
-	}
-
-	if registrantStr == "" {
-		return nil, fmt.Errorf("registrant address is required")
-	}
-	if privateKey == "" {
-		return nil, fmt.Errorf("private key is required")
-	}
-
-	registrant := types.StringToAddress(registrantStr)
-	dposEngine := d.getDPoSEngine()
-	if dposEngine == nil {
-		return nil, fmt.Errorf("DPoS engine not available")
-	}
-
-	if fn, ok := dposEngine.(interface {
-		RegisterDelegateLegacyToNilTest(registrant types.Address, name, website, description, privateKey string, chainID uint64) (types.Address, error)
-	}); ok {
-		contractAddr, err := fn.RegisterDelegateLegacyToNilTest(registrant, name, website, description, privateKey, chainID)
-		if err != nil {
-			return nil, fmt.Errorf("legacy test registration failed: %w", err)
-		}
-		return map[string]interface{}{
-			"success":         true,
-			"contractAddress": contractAddr.String(),
-		}, nil
-	}
-
-	return nil, fmt.Errorf("DPoS engine does not support RegisterDelegateLegacyToNilTest")
-}
-
 // buildSignedDelegateCancelRegistrationTx builds and signs DPOS+CAN (does not add to pool).
 func (d *DPOS) buildSignedDelegateCancelRegistrationTx(delegate types.Address, privateKeyHex string) (*types.Transaction, types.Address, error) {
 	privateKeyHex = strings.TrimSpace(privateKeyHex)
