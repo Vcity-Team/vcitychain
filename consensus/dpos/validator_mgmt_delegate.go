@@ -1033,7 +1033,7 @@ func (d *DPoS) GetDelegateRegistration(address types.Address) (*DelegateRegistra
 	return reg, nil
 }
 
-// GetDelegateDepositMigrationPairs 返回已记录 LegacyDepositContract 的注册（仅老 To=nil 经扩展迁移后会有）。
+// GetDelegateDepositMigrationPairs 返回 Bolt 中已记录 LegacyDepositContract 的注册（历史主网数据；链上 MIG 已下线，只读查询）。
 func (d *DPoS) GetDelegateDepositMigrationPairs() ([]*DelegateRegistration, error) {
 	if d.state == nil || d.state.RegistrationStore == nil {
 		return nil, fmt.Errorf("registration store not available")
@@ -1051,7 +1051,7 @@ func (d *DPoS) GetDelegateDepositMigrationPairs() ([]*DelegateRegistration, erro
 	return out, nil
 }
 
-// FindDelegateDepositMigrationByContract 按 CREATE/源合约地址查找对应候选人注册行。
+// FindDelegateDepositMigrationByContract 按 CREATE/源合约地址查历史 LegacyDepositContract 映射（只读；链上 MIG 已下线）。
 func (d *DPoS) FindDelegateDepositMigrationByContract(contract types.Address) (*DelegateRegistration, error) {
 	if d.state == nil || d.state.RegistrationStore == nil {
 		return nil, fmt.Errorf("registration store not available")
