@@ -61,6 +61,16 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 			return d.config.VoterTargetAPYBps, nil
 		}
 		return uint64(500), nil
+	case "dpos_block_producer_reward_per_block":
+		if d.config != nil && d.config.BlockProducerRewardPerBlock != nil {
+			return d.config.BlockProducerRewardPerBlock.String(), nil
+		}
+		return "0", nil
+	case "dpos_producer_reward_activation_epoch":
+		if d.config != nil {
+			return d.config.ProducerRewardActivationEpoch, nil
+		}
+		return uint64(0), nil
 	case "dpos_delegate_threshold":
 		// 直接使用配置值（避免递归调用自身）；若未配置则返回默认 0
 		if d.config != nil && d.config.DPoSDelegateThreshold != nil {
@@ -196,7 +206,7 @@ func (d *DPoS) validateParameterValue(parameter string, value interface{}) error
 		}
 
 		// 对于大整数字符串，需要特殊处理
-		if parameter == "dpos_reward_amount" || parameter == "dpos_delegate_threshold" {
+		if parameter == "dpos_reward_amount" || parameter == "dpos_delegate_threshold" || parameter == "dpos_block_producer_reward_per_block" {
 			bigVal, ok := new(big.Int).SetString(val, 10)
 			if !ok {
 				return fmt.Errorf("invalid big integer string: %s", val)
@@ -360,6 +370,50 @@ func (d *DPoS) updateParameterValue(paramName string, value interface{}, source 
 		if d.config != nil {
 			d.config.VoterTargetAPYBps = bps
 			d.logger.Info("✅ 已更新 d.config.VoterTargetAPYBps", "bps", bps)
+		}
+
+	case "dpos_block_producer_reward_per_block":
+		rewardPerBlock, err := parseWeiParameterValue(value)
+		if err != nil {
+			return fmt.Errorf("invalid dpos_block_producer_reward_per_block: %w", err)
+		}
+		if d.config != nil {
+			d.config.BlockProducerRewardPerBlock = rewardPerBlock
+			d.logger.Info("✅ 已更新 d.config.BlockProducerRewardPerBlock", "wei", rewardPerBlock.String())
+		}
+
+	case "dpos_producer_reward_activation_epoch":
+		var epoch uint64
+		switch v := value.(type) {
+		case uint64:
+			epoch = v
+		case int:
+			if v < 0 {
+				return fmt.Errorf("invalid dpos_producer_reward_activation_epoch: %v", v)
+			}
+			epoch = uint64(v)
+		case int64:
+			if v < 0 {
+				return fmt.Errorf("invalid dpos_producer_reward_activation_epoch: %v", v)
+			}
+			epoch = uint64(v)
+		case float64:
+			if v < 0 {
+				return fmt.Errorf("invalid dpos_producer_reward_activation_epoch: %v", v)
+			}
+			epoch = uint64(v)
+		case string:
+			parsed, err := strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				return fmt.Errorf("invalid dpos_producer_reward_activation_epoch: %v", v)
+			}
+			epoch = parsed
+		default:
+			return fmt.Errorf("unsupported dpos_producer_reward_activation_epoch type: %T", value)
+		}
+		if d.config != nil {
+			d.config.ProducerRewardActivationEpoch = epoch
+			d.logger.Info("✅ 已更新 d.config.ProducerRewardActivationEpoch", "epoch", epoch)
 		}
 
 	case "dpos_delegate_threshold":

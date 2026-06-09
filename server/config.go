@@ -84,6 +84,10 @@ type Config struct {
 	// DPoS 奖励与启动引导配置（扩展字段）
 	// voter_target_apy: 投票者目标年化（基点，500=5%）
 	VoterTargetAPYBps uint64 `yaml:"voter_target_apy"`
+	// block_producer_reward_per_block: 节点出块奖励 wei/块（独立于质押池）
+	BlockProducerRewardPerBlock string `yaml:"block_producer_reward_per_block"`
+	// producer_reward_activation_epoch: 节点出块奖励激活 epoch（0=配置后立即生效）
+	ProducerRewardActivationEpoch uint64 `yaml:"producer_reward_activation_epoch"`
 	// dpos_bootstrap_rpc: 启动时通过 JSON-RPC eth_call 查询 staking 合约 validators() 的端点
 	DPoSBootstrapRPC string `yaml:"dpos_bootstrap_rpc"`
 	// dpos_disable_double_sign_slashing: 为 true 时关闭双签检测与削减（由 server 写入 engineConfig）

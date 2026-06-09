@@ -288,8 +288,12 @@ type DPoSConfig struct {
 	RewardAccount types.Address `json:"rewardAccount" yaml:"rewardAccount"`
 	// RewardAmount 历史字段：Epoch 奖池现由 VoterTargetAPYBps 与链上质押动态计算，仅作兼容占位（可选）
 	RewardAmount *big.Int `json:"rewardAmount" yaml:"rewardAmount"`
-	// VoterTargetAPYBps 投票者目标年化收益率（基点，10000=100%，例如 500=5%）；为唯一需要配置的奖池相关经济参数
+	// VoterTargetAPYBps 投票者目标年化收益率（基点，10000=100%，例如 500=5%）；质押投票池经济参数
 	VoterTargetAPYBps uint64 `json:"voter_target_apy" yaml:"voter_target_apy"`
+	// BlockProducerRewardPerBlock 节点出块奖励（wei/块），独立于质押池；0 或未配置表示不发放
+	BlockProducerRewardPerBlock *big.Int `json:"block_producer_reward_per_block" yaml:"block_producer_reward_per_block"`
+	// ProducerRewardActivationEpoch 节点出块奖励激活 epoch；0 表示 perBlock>0 后立即生效
+	ProducerRewardActivationEpoch uint64 `json:"producer_reward_activation_epoch" yaml:"producer_reward_activation_epoch"`
 	// BootstrapRPC 可选：启动时从 staking 合约读取 validators() 的 JSON-RPC 端点（用于无法在本地 Transition 中成功调用时的回退）
 	BootstrapRPC string `json:"dpos_bootstrap_rpc" yaml:"dpos_bootstrap_rpc"`
 	// JSONRPCListen 本节点 jsonrpc_addr（server RPCEndpoint）；trusted tip 用 boot multiaddr IP + 该端口。
@@ -1246,6 +1250,38 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		case *big.Int:
 			if t != nil && t.Sign() > 0 {
 				vcity_dpos.config.VoterTargetAPYBps = uint64(t.Uint64())
+			}
+		}
+	}
+
+	if v, exists := params.Config.Config["block_producer_reward_per_block"]; exists {
+		if amount, err := parseWeiParameterValue(v); err == nil {
+			vcity_dpos.config.BlockProducerRewardPerBlock = amount
+			logger.Info("✅ 设置 block_producer_reward_per_block", "wei", amount.String())
+		} else {
+			logger.Warn("⚠️ block_producer_reward_per_block 解析失败", "error", err)
+		}
+	}
+
+	if v, exists := params.Config.Config["producer_reward_activation_epoch"]; exists {
+		switch t := v.(type) {
+		case uint64:
+			vcity_dpos.config.ProducerRewardActivationEpoch = t
+		case int:
+			if t >= 0 {
+				vcity_dpos.config.ProducerRewardActivationEpoch = uint64(t)
+			}
+		case int64:
+			if t >= 0 {
+				vcity_dpos.config.ProducerRewardActivationEpoch = uint64(t)
+			}
+		case float64:
+			if t >= 0 {
+				vcity_dpos.config.ProducerRewardActivationEpoch = uint64(t)
+			}
+		case string:
+			if u, err := strconv.ParseUint(t, 10, 64); err == nil {
+				vcity_dpos.config.ProducerRewardActivationEpoch = u
 			}
 		}
 	}
@@ -2676,7 +2712,9 @@ func DefaultDPoSConfig() *DPoSConfig {
 		EpochDuration:             86400 * time.Second, // 与链上常见默认一致
 		RewardAccount:             rewardAcct,
 		RewardAmount:              big.NewInt(1),
-		VoterTargetAPYBps:         500,                 // 5% 年化（基点）
+		VoterTargetAPYBps:              500,           // 5% 年化（基点）
+		BlockProducerRewardPerBlock:    big.NewInt(0), // 默认不发放节点轨
+		ProducerRewardActivationEpoch:  0,
 		ProposalVotePeriod:        24 * time.Hour,      // 默认提案表决周期 24小时
 		ProposalValidPeriod:       7 * 24 * time.Hour,  // 默认提案有效期 7天
 		MinFreezePeriod:           604800,              // 默认最小冻结期 7天（秒）
@@ -2727,8 +2765,17 @@ func (c *DPoSConfig) GetConfigSummary() map[string]interface{} {
 		"epoch_duration":        c.EpochDuration.String(),
 		"reward_account":        c.RewardAccount.String(),
 		"reward_amount":         c.RewardAmount.String(),
-		"voter_target_apy_bps":  c.VoterTargetAPYBps,
+		"voter_target_apy_bps":               c.VoterTargetAPYBps,
+		"block_producer_reward_per_block":    formatBigIntConfig(c.BlockProducerRewardPerBlock),
+		"producer_reward_activation_epoch":   c.ProducerRewardActivationEpoch,
 	}
+}
+
+func formatBigIntConfig(v *big.Int) string {
+	if v == nil {
+		return "0"
+	}
+	return v.String()
 }
 
 // 启动时直接调用和命令一样的数据源方法

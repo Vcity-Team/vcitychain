@@ -169,7 +169,7 @@ type RewardRecordExtended struct {
 	ID              uint64    `json:"id"`
 	EpochNumber     uint64    `json:"epoch_number"`
 	Recipient       string    `json:"recipient"`
-	RewardType      string    `json:"reward_type"`      // "validator" 或 "voter"
+	RewardType      string    `json:"reward_type"`      // "validator"(佣金) / "voter" / "block_producer"
 	Amount          string    `json:"amount"`           // 奖励金额(Wei)
 	VoteWeight      string    `json:"vote_weight"`      // 投票权重
 	ValidatorAddress string   `json:"validator_address,omitempty"` // 验证者地址（投票者奖励时使用）

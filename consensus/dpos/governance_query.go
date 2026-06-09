@@ -184,6 +184,28 @@ func (d *DPoS) UpdateParameterValue(parameter string, newValue interface{}) erro
 				d.logger.Info("Updated voter target APY (bps)", "newValue", u)
 			}
 		}
+	case "dpos_block_producer_reward_per_block":
+		if amount, err := parseWeiParameterValue(newValue); err == nil && d.config != nil {
+			d.config.BlockProducerRewardPerBlock = amount
+			d.logger.Info("Updated block producer reward per block", "newValue", amount.String())
+		}
+	case "dpos_producer_reward_activation_epoch":
+		switch v := newValue.(type) {
+		case uint64:
+			d.config.ProducerRewardActivationEpoch = v
+		case int:
+			if v >= 0 {
+				d.config.ProducerRewardActivationEpoch = uint64(v)
+			}
+		case float64:
+			if v >= 0 {
+				d.config.ProducerRewardActivationEpoch = uint64(v)
+			}
+		case string:
+			if u, err := strconv.ParseUint(v, 10, 64); err == nil {
+				d.config.ProducerRewardActivationEpoch = u
+			}
+		}
 	default:
 		return fmt.Errorf("unknown parameter: %s", parameter)
 	}

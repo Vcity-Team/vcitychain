@@ -199,6 +199,19 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		s.logger.Info("ℹ️ 未配置 voter_target_apy，DPoS 将使用默认值", "defaultBps", 500)
 	}
 
+	if strings.TrimSpace(s.config.BlockProducerRewardPerBlock) != "" {
+		if rewardPerBlock, ok := new(big.Int).SetString(strings.TrimSpace(s.config.BlockProducerRewardPerBlock), 10); ok {
+			engineConfig["block_producer_reward_per_block"] = rewardPerBlock
+			s.logger.Info("✅ 透传 block_producer_reward_per_block 到 DPoS 引擎", "wei", rewardPerBlock.String())
+		} else {
+			return fmt.Errorf("invalid block_producer_reward_per_block: %s", s.config.BlockProducerRewardPerBlock)
+		}
+	}
+	if s.config.ProducerRewardActivationEpoch > 0 {
+		engineConfig["producer_reward_activation_epoch"] = s.config.ProducerRewardActivationEpoch
+		s.logger.Info("✅ 透传 producer_reward_activation_epoch 到 DPoS 引擎", "epoch", s.config.ProducerRewardActivationEpoch)
+	}
+
 	// 可选：启动引导 RPC（从 staking 合约读取 validators()）
 	if strings.TrimSpace(s.config.DPoSBootstrapRPC) != "" {
 		rpc := strings.TrimSpace(s.config.DPoSBootstrapRPC)

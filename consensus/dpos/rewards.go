@@ -376,18 +376,39 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		d.rewardDistributor.UpdateRewardAmount(rewardAmount)
 	}
 
-	// 检查奖励账户余额
+	producerPool := big.NewInt(0)
+	var producerRewards map[types.Address]*big.Int
+	var producerDetails []*ProducerRewardDetail
+	if d.isProducerRewardActive(epochNumber) {
+		perBlock := d.getEffectiveBlockProducerRewardPerBlock()
+		producerPool = d.computeProducerRewardPool(totalBlocks)
+		producerRewards, producerDetails = d.calculateProducerRewards(blockCounts, perBlock)
+		d.logger.Info("📦 节点出块奖池（独立于质押池）",
+			"epoch", epochNumber,
+			"producerPool", producerPool.String(),
+			"rewardPerBlock", perBlock.String(),
+			"producerCount", len(producerDetails))
+	}
+
+	requiredTotal := new(big.Int).Set(rewardAmount)
+	if producerPool.Sign() > 0 {
+		requiredTotal.Add(requiredTotal, producerPool)
+	}
+
+	// 检查奖励账户余额（质押池 + 节点池）
 	rewardAccountBalance, err := d.getAccountBalance(d.config.RewardAccount)
 	if err != nil {
 		d.logger.Error("❌ 获取奖励账户余额失败", "account", d.config.RewardAccount.String(), "error", err)
 		return fmt.Errorf("failed to get reward account balance: %w", err)
 	}
 
-	if rewardAccountBalance.Cmp(rewardAmount) < 0 {
+	if rewardAccountBalance.Cmp(requiredTotal) < 0 {
 		d.logger.Error("❌ 奖励账户余额不足",
 			"account", d.config.RewardAccount.String(),
 			"balance", rewardAccountBalance.String(),
-			"required", rewardAmount.String())
+			"voterPool", rewardAmount.String(),
+			"producerPool", producerPool.String(),
+			"required", requiredTotal.String())
 		return fmt.Errorf("insufficient reward account balance")
 	}
 
@@ -428,6 +449,10 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 
 	if rewards == nil {
 		rewards = map[types.Address]*big.Int{}
+	}
+
+	if len(producerRewards) > 0 {
+		mergeRewardMaps(rewards, producerRewards)
 	}
 
 	// 4. 准备状态更新（用于奖励分发）
@@ -489,11 +514,14 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		// 不直接执行状态更新，而是将奖励分发信息存储到pendingRewardDistribution
 		// 这样buildBlock可以将其添加到ExtraData中，然后在区块执行时处理
 		d.pendingRewardDistribution = &RewardDistributionInfo{
-			EpochNumber:  epochNumber,
-			Rewards:      make(map[string]*big.Int),
-			VoterRewards: voterRewards,
-			TotalReward:  totalReward,
-			Timestamp:    uint64(time.Now().Unix()),
+			EpochNumber:       epochNumber,
+			Rewards:           make(map[string]*big.Int),
+			VoterRewards:      voterRewards,
+			ProducerRewards:   producerDetails,
+			VoterPoolTotal:    new(big.Int).Set(rewardAmount),
+			ProducerPoolTotal: new(big.Int).Set(producerPool),
+			TotalReward:       totalReward,
+			Timestamp:         uint64(time.Now().Unix()),
 		}
 
 		// 转换地址格式

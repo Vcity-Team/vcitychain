@@ -257,8 +257,10 @@ func (p *serverParams) generateConfig() *server.Config {
 		DPoSSevereOffenseSlashRate: p.dposSevereOffenseSlashRate,
 
 		// 扩展：DPoS 启动引导与奖励目标 APY
-		VoterTargetAPYBps: p.rawConfig.VoterTargetAPYBps,
-		DPoSBootstrapRPC:  p.rawConfig.DPoSBootstrapRPC,
+		VoterTargetAPYBps:             p.rawConfig.VoterTargetAPYBps,
+		BlockProducerRewardPerBlock:   p.rawConfig.BlockProducerRewardPerBlock,
+		ProducerRewardActivationEpoch: p.rawConfig.ProducerRewardActivationEpoch,
+		DPoSBootstrapRPC:              p.rawConfig.DPoSBootstrapRPC,
 
 		DPoSDisableDoubleSignSlashing: p.rawConfig.DPoSDisableDoubleSignSlashing,
 		DPoSWallClockSlotAlignment:    p.rawConfig.DPoSWallClockSlotAlignment,

@@ -481,6 +481,93 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 	}
 }
 
+// recordProducerAndCommissionFromExtraData 记录节点出块奖励与 SR 佣金（分开记账）。
+func (d *DPoS) recordProducerAndCommissionFromExtraData(
+	rewardInfo *RewardDistributionInfo,
+	blockCounts map[types.Address]uint64,
+) {
+	if d.state == nil || d.state.RewardStore == nil || rewardInfo == nil {
+		return
+	}
+
+	producerByAddr := producerAmountByAddress(rewardInfo.ProducerRewards)
+	for _, detail := range rewardInfo.ProducerRewards {
+		if detail == nil || detail.Amount == nil || detail.Amount.Sign() <= 0 {
+			continue
+		}
+		perBlock := "0"
+		if detail.RewardPerBlock != nil {
+			perBlock = detail.RewardPerBlock.String()
+		}
+		record := &RewardRecordExtended{
+			EpochNumber:      rewardInfo.EpochNumber,
+			Recipient:        detail.ProducerAddress,
+			RewardType:       "block_producer",
+			Amount:           detail.Amount.String(),
+			VoteWeight:       "0",
+			ValidatorAddress: "",
+			BlocksProduced:   detail.BlocksProduced,
+			RewardPerBlock:   perBlock,
+			Timestamp:        time.Now(),
+			Status:           "completed",
+		}
+		if err := d.state.RewardStore.RecordReward(record); err != nil {
+			d.logger.Error("❌ 记录节点出块奖励失败",
+				"epoch", rewardInfo.EpochNumber,
+				"producer", detail.ProducerAddress,
+				"error", err)
+		}
+	}
+
+	validators := d.GetValidators()
+	for _, validator := range validators {
+		validatorAddrStr := validator.Address.String()
+		total, exists := rewardInfo.Rewards[validatorAddrStr]
+		if !exists || total == nil || total.Sign() <= 0 {
+			continue
+		}
+
+		amount := new(big.Int).Set(total)
+		if len(rewardInfo.ProducerRewards) > 0 {
+			if producerAmt, ok := producerByAddr[validatorAddrStr]; ok {
+				amount.Sub(amount, producerAmt)
+			}
+		}
+		if amount.Sign() <= 0 {
+			continue
+		}
+
+		blocksProduced := uint64(0)
+		rewardPerBlock := "0"
+		if blockCounts != nil {
+			blocksProduced = blockCounts[validator.Address]
+			if blocksProduced > 0 {
+				rewardPerBlockBig := new(big.Int).Div(amount, big.NewInt(int64(blocksProduced)))
+				rewardPerBlock = rewardPerBlockBig.String()
+			}
+		}
+
+		validatorRecord := &RewardRecordExtended{
+			EpochNumber:      rewardInfo.EpochNumber,
+			Recipient:        validatorAddrStr,
+			RewardType:       "validator",
+			Amount:           amount.String(),
+			VoteWeight:       "0",
+			ValidatorAddress: "",
+			BlocksProduced:   blocksProduced,
+			RewardPerBlock:   rewardPerBlock,
+			Timestamp:        time.Now(),
+			Status:           "completed",
+		}
+		if err := d.state.RewardStore.RecordReward(validatorRecord); err != nil {
+			d.logger.Error("❌ 记录验证者佣金失败",
+				"epoch", rewardInfo.EpochNumber,
+				"validator", validatorAddrStr,
+				"error", err)
+		}
+	}
+}
+
 // recordRewardsFromExtraData 直接从 ExtraData 中的奖励信息记录到数据库（无需重新计算）
 func (d *DPoS) recordRewardsFromExtraData(rewardInfo *RewardDistributionInfo) error {
 	if d.state == nil || d.state.RewardStore == nil {
@@ -498,48 +585,12 @@ func (d *DPoS) recordRewardsFromExtraData(rewardInfo *RewardDistributionInfo) er
 			"rewardCount", len(rewardInfo.Rewards),
 			"totalReward", rewardInfo.TotalReward.String())
 		
-		// 仍然记录验证者奖励（从 Rewards 中获取）
-		validators := d.GetValidators()
-		// 获取出块统计
 		var blockCounts map[types.Address]uint64
 		if d.blockTracker != nil {
 			blockCounts = d.blockTracker.GetEpochBlockCounts(rewardInfo.EpochNumber)
 		}
-		for _, validator := range validators {
-			validatorAddrStr := validator.Address.String()
-			if amount, exists := rewardInfo.Rewards[validatorAddrStr]; exists && amount.Sign() > 0 {
-				// 计算出块数和每块奖励
-				blocksProduced := uint64(0)
-				rewardPerBlock := "0"
-				if blockCounts != nil {
-					blocksProduced = blockCounts[validator.Address]
-					if blocksProduced > 0 {
-						rewardPerBlockBig := new(big.Int).Div(amount, big.NewInt(int64(blocksProduced)))
-						rewardPerBlock = rewardPerBlockBig.String()
-					}
-				}
-				validatorRecord := &RewardRecordExtended{
-					EpochNumber:      rewardInfo.EpochNumber,
-					Recipient:        validatorAddrStr,
-					RewardType:       "validator",
-					Amount:           amount.String(),
-					VoteWeight:       "0",
-					ValidatorAddress: "",
-					BlocksProduced:   blocksProduced,
-					RewardPerBlock:   rewardPerBlock,
-					Timestamp:        time.Now(),
-					Status:           "completed",
-				}
+		d.recordProducerAndCommissionFromExtraData(rewardInfo, blockCounts)
 
-				if err := d.state.RewardStore.RecordReward(validatorRecord); err != nil {
-					d.logger.Error("❌ 记录验证者奖励失败",
-						"epoch", rewardInfo.EpochNumber,
-						"validator", validatorAddrStr,
-						"error", err)
-				}
-			}
-		}
-		
 		// 更新StakeInfo中的累计奖励（使用 Rewards）
 		for addrStr, reward := range rewardInfo.Rewards {
 			if d.state.StakeStore != nil {
@@ -556,47 +607,11 @@ func (d *DPoS) recordRewardsFromExtraData(rewardInfo *RewardDistributionInfo) er
 		return nil
 	}
 
-	// 记录验证者奖励（从 Rewards 中获取）
-	validators := d.GetValidators()
-	// 获取出块统计
 	var blockCounts map[types.Address]uint64
 	if d.blockTracker != nil {
 		blockCounts = d.blockTracker.GetEpochBlockCounts(rewardInfo.EpochNumber)
 	}
-	for _, validator := range validators {
-		validatorAddrStr := validator.Address.String()
-		if amount, exists := rewardInfo.Rewards[validatorAddrStr]; exists && amount.Sign() > 0 {
-			// 计算出块数和每块奖励
-			blocksProduced := uint64(0)
-			rewardPerBlock := "0"
-			if blockCounts != nil {
-				blocksProduced = blockCounts[validator.Address]
-				if blocksProduced > 0 {
-					rewardPerBlockBig := new(big.Int).Div(amount, big.NewInt(int64(blocksProduced)))
-					rewardPerBlock = rewardPerBlockBig.String()
-				}
-			}
-			validatorRecord := &RewardRecordExtended{
-				EpochNumber:      rewardInfo.EpochNumber,
-				Recipient:        validatorAddrStr,
-				RewardType:       "validator",
-				Amount:           amount.String(),
-				VoteWeight:       "0",
-				ValidatorAddress: "", // 验证者自己的奖励，不需要验证者地址
-				BlocksProduced:   blocksProduced,
-				RewardPerBlock:   rewardPerBlock,
-				Timestamp:        time.Now(),
-				Status:           "completed",
-			}
-
-			if err := d.state.RewardStore.RecordReward(validatorRecord); err != nil {
-				d.logger.Error("❌ 记录验证者奖励失败",
-					"epoch", rewardInfo.EpochNumber,
-					"validator", validatorAddrStr,
-					"error", err)
-			}
-		}
-	}
+	d.recordProducerAndCommissionFromExtraData(rewardInfo, blockCounts)
 
 	// 记录投票者奖励（从 VoterRewards 中获取，包含 validator_address）
 	// 获取出块统计（如果还没有获取）

@@ -122,6 +122,22 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Description: "Target voter annual yield in basis points (500 = 5%). Overrides genesis voter_target_apy when set by governance.",
 			Category:    "economic",
 		},
+		"dpos_block_producer_reward_per_block": {
+			Name:        "Block Producer Reward Per Block",
+			Type:        "string",
+			MinValue:    "0",
+			MaxValue:    "1000000000000000000000000", // 100万 VCITY/块
+			Description: "Block producer reward per block in wei. Separate from voter staking pool.",
+			Category:    "economic",
+		},
+		"dpos_producer_reward_activation_epoch": {
+			Name:        "Producer Reward Activation Epoch",
+			Type:        "uint64",
+			MinValue:    uint64(0),
+			MaxValue:    uint64(100000000),
+			Description: "Epoch when block producer rewards activate. 0 means active immediately when per-block reward is set.",
+			Category:    "economic",
+		},
 		"dpos_delegate_threshold": {
 			Name:        "Delegate Threshold",
 			Type:        "string",
@@ -287,6 +303,16 @@ func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 			return d.config.VoterTargetAPYBps, nil
 		}
 		return uint64(500), nil
+	case "dpos_block_producer_reward_per_block":
+		if d.config != nil && d.config.BlockProducerRewardPerBlock != nil {
+			return d.config.BlockProducerRewardPerBlock.String(), nil
+		}
+		return "0", nil
+	case "dpos_producer_reward_activation_epoch":
+		if d.config != nil {
+			return d.config.ProducerRewardActivationEpoch, nil
+		}
+		return uint64(0), nil
 	case "dpos_delegate_threshold":
 		// 直接读取配置，避免参数缓存初始化时递归持锁
 		if d.config != nil && d.config.DPoSDelegateThreshold != nil {
