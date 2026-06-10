@@ -260,7 +260,8 @@ func (p *serverParams) generateConfig() *server.Config {
 		VoterTargetAPYBps:             p.rawConfig.VoterTargetAPYBps,
 		BlockProducerRewardPerBlock:   p.rawConfig.BlockProducerRewardPerBlock,
 		ProducerRewardActivationEpoch: p.rawConfig.ProducerRewardActivationEpoch,
-		VoteLockActivationEpoch:       p.rawConfig.VoteLockActivationEpoch,
+		VoteLockActivationEpoch:              p.rawConfig.VoteLockActivationEpoch,
+		CommissionRemovalActivationEpoch: p.rawConfig.CommissionRemovalActivationEpoch,
 		DPoSBootstrapRPC:              p.rawConfig.DPoSBootstrapRPC,
 
 		DPoSDisableDoubleSignSlashing: p.rawConfig.DPoSDisableDoubleSignSlashing,

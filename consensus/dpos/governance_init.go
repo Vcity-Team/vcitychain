@@ -146,6 +146,14 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Description: "Epoch when in-account vote balance locking activates. 0 means disabled.",
 			Category:    "economic",
 		},
+		"dpos_commission_removal_activation_epoch": {
+			Name:        "Commission Removal Activation Epoch",
+			Type:        "uint64",
+			MinValue:    uint64(0),
+			MaxValue:    uint64(100000000),
+			Description: "Epoch when SR commission on staking pool is removed (0% to voters). 0 means commission remains active.",
+			Category:    "economic",
+		},
 		"dpos_delegate_threshold": {
 			Name:        "Delegate Threshold",
 			Type:        "string",
@@ -324,6 +332,11 @@ func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 	case "dpos_vote_lock_activation_epoch":
 		if d.config != nil {
 			return d.config.VoteLockActivationEpoch, nil
+		}
+		return uint64(0), nil
+	case "dpos_commission_removal_activation_epoch":
+		if d.config != nil {
+			return d.config.CommissionRemovalActivationEpoch, nil
 		}
 		return uint64(0), nil
 	case "dpos_delegate_threshold":

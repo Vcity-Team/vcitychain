@@ -145,8 +145,16 @@ func (d *DPoS) applyCommissionDefaults(info *DelegateInfo) {
 	if info == nil || d == nil || d.config == nil {
 		return
 	}
+	if d.IsCommissionRemoved() {
+		info.CommissionRate = 0
+		info.PendingCommissionRate = 0
+		return
+	}
 	if info.CommissionRate == 0 {
 		info.CommissionRate = d.config.CommissionRateDefault
+		if info.CommissionRate == 0 {
+			info.CommissionRate = 1000
+		}
 	}
 }
 
@@ -296,6 +304,8 @@ type DPoSConfig struct {
 	ProducerRewardActivationEpoch uint64 `json:"producer_reward_activation_epoch" yaml:"producer_reward_activation_epoch"`
 	// VoteLockActivationEpoch 投票余额锁定激活 epoch；0 表示未启用账内锁定
 	VoteLockActivationEpoch uint64 `json:"vote_lock_activation_epoch" yaml:"vote_lock_activation_epoch"`
+	// CommissionRemovalActivationEpoch 关闭佣金激活 epoch；0 表示仍沿用佣金逻辑
+	CommissionRemovalActivationEpoch uint64 `json:"commission_removal_activation_epoch" yaml:"commission_removal_activation_epoch"`
 	// BootstrapRPC 可选：启动时从 staking 合约读取 validators() 的 JSON-RPC 端点（用于无法在本地 Transition 中成功调用时的回退）
 	BootstrapRPC string `json:"dpos_bootstrap_rpc" yaml:"dpos_bootstrap_rpc"`
 	// JSONRPCListen 本节点 jsonrpc_addr（server RPCEndpoint）；trusted tip 用 boot multiaddr IP + 该端口。
@@ -1307,6 +1317,29 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		case string:
 			if u, err := strconv.ParseUint(t, 10, 64); err == nil {
 				vcity_dpos.config.VoteLockActivationEpoch = u
+			}
+		}
+	}
+
+	if v, exists := params.Config.Config["commission_removal_activation_epoch"]; exists {
+		switch t := v.(type) {
+		case uint64:
+			vcity_dpos.config.CommissionRemovalActivationEpoch = t
+		case int:
+			if t >= 0 {
+				vcity_dpos.config.CommissionRemovalActivationEpoch = uint64(t)
+			}
+		case int64:
+			if t >= 0 {
+				vcity_dpos.config.CommissionRemovalActivationEpoch = uint64(t)
+			}
+		case float64:
+			if t >= 0 {
+				vcity_dpos.config.CommissionRemovalActivationEpoch = uint64(t)
+			}
+		case string:
+			if u, err := strconv.ParseUint(t, 10, 64); err == nil {
+				vcity_dpos.config.CommissionRemovalActivationEpoch = u
 			}
 		}
 	}
@@ -2744,7 +2777,7 @@ func DefaultDPoSConfig() *DPoSConfig {
 		ProposalValidPeriod:       7 * 24 * time.Hour,  // 默认提案有效期 7天
 		MinFreezePeriod:           604800,              // 默认最小冻结期 7天（秒）
 		UnfreezeLockPeriod:        1209600,             // 默认解冻锁定期 14天（秒）
-		CommissionRateDefault:     1000,                // 默认佣金率 10%
+		CommissionRateDefault:     1000,                // 默认佣金率 10%（关闭前生效）
 		CommissionEffectivePeriod: 21 * 24 * time.Hour, // 默认佣金生效周期 21天
 	}
 }
@@ -2793,7 +2826,8 @@ func (c *DPoSConfig) GetConfigSummary() map[string]interface{} {
 		"voter_target_apy_bps":               c.VoterTargetAPYBps,
 		"block_producer_reward_per_block":    formatBigIntConfig(c.BlockProducerRewardPerBlock),
 		"producer_reward_activation_epoch":   c.ProducerRewardActivationEpoch,
-		"vote_lock_activation_epoch":         c.VoteLockActivationEpoch,
+		"vote_lock_activation_epoch":              c.VoteLockActivationEpoch,
+		"commission_removal_activation_epoch":     c.CommissionRemovalActivationEpoch,
 	}
 }
 

@@ -363,7 +363,11 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 	}
 
 	// Epoch 总奖池：仅由 voter_target_apy（投票者目标年化，基点）与链上总委托质押、epoch 时长、加权佣金反推
-	rewardAmount, err := d.computeEpochRewardPoolFromVoterAPY(validators, blockCounts, totalBlocks)
+	if d.rewardDistributor != nil {
+		d.rewardDistributor.SetDistributionEpoch(epochNumber)
+	}
+
+	rewardAmount, err := d.computeEpochRewardPoolFromVoterAPY(epochNumber, validators, blockCounts, totalBlocks)
 	if err != nil {
 		d.logger.Error("❌ 计算动态 Epoch 奖池失败", "epoch", epochNumber, "error", err)
 		return fmt.Errorf("compute epoch reward pool: %w", err)
@@ -439,6 +443,7 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 	}
 
 	if rewards == nil && d.rewardDistributor != nil {
+		d.rewardDistributor.SetDistributionEpoch(epochNumber)
 		rewards = d.rewardDistributor.CalculateRewards(
 			validators,
 			voters,
@@ -578,6 +583,7 @@ func (d *DPoS) calculateAndRecordEpochRewards(epochNumber uint64) error {
 	}
 
 	if rewards == nil && d.rewardDistributor != nil {
+		d.rewardDistributor.SetDistributionEpoch(epochNumber)
 		rewards = d.rewardDistributor.CalculateRewards(validators, voters, blockCounts, totalBlocks)
 	}
 
@@ -668,8 +674,10 @@ func (d *DPoS) getEffectiveVoterTargetAPYBps() uint64 {
 }
 
 // computeEpochRewardPoolFromVoterAPY 按投票者目标年化反推本 Epoch 总奖池：
-// R = voterBps * S / (Y * (10000 - commissionBps))，S 为总委托质押，Y 为每年 epoch 数，commission 为出块加权平均佣金（基点）。
+// 关闭佣金前: R = voterBps * S / (Y * (10000 - commissionBps))
+// 关闭佣金后: R = voterBps * S / (Y * 10000)
 func (d *DPoS) computeEpochRewardPoolFromVoterAPY(
+	epochNumber uint64,
 	validators validator.AccountSet,
 	blockCounts map[types.Address]uint64,
 	totalBlocks uint64,
@@ -683,11 +691,18 @@ func (d *DPoS) computeEpochRewardPoolFromVoterAPY(
 	if Y == 0 {
 		return nil, fmt.Errorf("epochsPerYear is zero")
 	}
+
 	var commBps uint64
-	if d.rewardDistributor != nil && totalBlocks > 0 {
+	if d.isCommissionRemovedAtEpoch(epochNumber) {
+		commBps = 0
+	} else if d.rewardDistributor != nil && totalBlocks > 0 {
+		d.rewardDistributor.SetDistributionEpoch(epochNumber)
 		commBps = d.rewardDistributor.WeightedAverageCommissionBps(validators, blockCounts, totalBlocks)
 	} else {
 		commBps = d.config.CommissionRateDefault
+		if commBps == 0 {
+			commBps = 1000
+		}
 	}
 	if commBps >= 10000 {
 		commBps = 9999
@@ -696,6 +711,7 @@ func (d *DPoS) computeEpochRewardPoolFromVoterAPY(
 	if denom == 0 {
 		denom = 1
 	}
+
 	num := new(big.Int).Mul(S, big.NewInt(int64(voterBps)))
 	den := new(big.Int).Mul(big.NewInt(int64(Y)), big.NewInt(int64(denom)))
 	if den.Sign() == 0 {

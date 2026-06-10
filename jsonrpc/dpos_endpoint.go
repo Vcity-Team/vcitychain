@@ -6385,7 +6385,35 @@ func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (
 		}, nil
 	}
 
-	// 从 ParameterStore 读取默认佣金率，如果不存在则使用硬编码默认值 1000 (10%)
+	if d.chainCommissionRemoved() {
+		now := uint64(time.Now().Unix())
+		removalEpoch := uint64(0)
+		currentEpoch := uint64(0)
+		if eng := d.getDPoSEngine(); eng != nil {
+			if inst, ok := eng.(*dpos.DPoS); ok {
+				removalEpoch = inst.GetCommissionRemovalActivationEpoch()
+				currentEpoch = inst.GetCurrentEpochNumber()
+			}
+		}
+		return map[string]interface{}{
+			"success":                           true,
+			"validator":                         validatorAddress,
+			"commissionDisabled":                true,
+			"commissionRemovalActivationEpoch": removalEpoch,
+			"currentEpoch":                     currentEpoch,
+			"commissionRate":                   uint64(0),
+			"commissionRatePercent":             "0%",
+			"pendingCommissionRate":             uint64(0),
+			"pendingCommissionRatePercent":        "0%",
+			"defaultCommissionRate":             uint64(0),
+			"defaultCommissionRatePercent":        "0%",
+			"status":                            "disabled",
+			"currentTimestamp":                  now,
+			"currentTimestampHumanReadable":     formatTimestamp(now),
+			"message":                           "commission removed at configured activation epoch; SR keeps block producer rewards only",
+		}, nil
+	}
+
 	defaultCommission := uint64(1000)
 	if dposState.ParameterStore != nil {
 		if value, err := dposState.ParameterStore.GetParameterValue("dpos_commission_ratio"); err == nil {
@@ -6393,32 +6421,25 @@ func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (
 				defaultCommission = parsed
 			}
 		} else if value, err := dposState.ParameterStore.GetParameterValue("dpos_commission_radio"); err == nil {
-			// 兼容拼写错误
 			if parsed, ok := toUint64(value); ok && parsed > 0 {
 				defaultCommission = parsed
 			}
 		}
 	}
 
-	// 优先从数据库（ParameterStore）读取佣金生效周期（经过治理流程修改的值是权威数据源）
-	effectivePeriod := 21 * 24 * time.Hour // 默认值，仅在无法获取配置时使用
+	effectivePeriod := 21 * 24 * time.Hour
 	if dposState.ParameterStore != nil {
 		if value, err := dposState.ParameterStore.GetParameterValue("dpos_commission_effective"); err == nil {
 			if seconds, ok := parseDurationSeconds(value); ok {
 				effectivePeriod = time.Duration(seconds) * time.Second
-				d.logger.Debug("从数据库（ParameterStore）读取佣金生效周期", "period", effectivePeriod.String())
 			}
 		}
 	}
-
-	// 如果数据库中没有，从 DPoS 引擎配置读取（从配置文件读取的初始值）
 	if effectivePeriod == 21*24*time.Hour {
 		if dposEngine := d.getDPoSEngine(); dposEngine != nil {
-			if dpos, ok := dposEngine.(*dpos.DPoS); ok {
-				configPeriod := dpos.GetCommissionEffectivePeriod()
-				if configPeriod > 0 {
+			if inst, ok := dposEngine.(*dpos.DPoS); ok {
+				if configPeriod := inst.GetCommissionEffectivePeriod(); configPeriod > 0 {
 					effectivePeriod = configPeriod
-					d.logger.Debug("从DPoS引擎配置（配置文件）读取佣金生效周期", "period", effectivePeriod.String())
 				}
 			}
 		}
@@ -6426,29 +6447,24 @@ func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (
 
 	now := uint64(time.Now().Unix())
 	effectiveSeconds := uint64(effectivePeriod.Seconds())
-
 	commissionRate := delegateInfo.CommissionRate
 	if commissionRate == 0 {
 		commissionRate = defaultCommission
 	}
-
 	pendingRate := delegateInfo.PendingCommissionRate
 	updateTime := delegateInfo.CommissionUpdateTime
 
 	var pendingEffectiveAt uint64
 	var secondsUntilEffective uint64
 	status := "active"
-
 	if pendingRate != 0 {
 		if effectiveSeconds == 0 {
 			pendingEffectiveAt = updateTime
 		} else {
 			pendingEffectiveAt = updateTime + effectiveSeconds
 		}
-
 		if pendingEffectiveAt <= now {
 			status = "pending_ready"
-			secondsUntilEffective = 0
 		} else {
 			status = "pending"
 			secondsUntilEffective = pendingEffectiveAt - now
@@ -6457,11 +6473,10 @@ func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (
 		status = "default"
 	}
 
-	// 计算剩余时间（从当前时间到生效时间的剩余时间，等同于 secondsUntilEffective）
-	remainTime := secondsUntilEffective
-
-	response := map[string]interface{}{
+	return map[string]interface{}{
+		"success":                           true,
 		"validator":                         validatorAddress,
+		"commissionDisabled":                false,
 		"commissionRate":                    commissionRate,
 		"commissionRatePercent":             formatBasisPoints(commissionRate),
 		"pendingCommissionRate":             pendingRate,
@@ -6477,29 +6492,40 @@ func (d *DPOS) GetValidatorCommission(ctx context.Context, params interface{}) (
 		"effectivePeriodHumanReadable":      effectivePeriod.String(),
 		"currentTimestamp":                  now,
 		"currentTimestampHumanReadable":     formatTimestamp(now),
-		"remainTime":                        remainTime,
-		"remainTimeHumanReadable":           formatRemainTime(remainTime),
+		"remainTime":                        secondsUntilEffective,
+		"remainTimeHumanReadable":           formatRemainTime(secondsUntilEffective),
 		"status":                            status,
 		"hasPendingCommissionRate":          pendingRate != 0,
 		"pendingReadyForActivation":         pendingRate != 0 && pendingEffectiveAt <= now,
 		"commissionRateBasisPoints":         commissionRate,
 		"pendingCommissionRateBasisPoints":  pendingRate,
 		"defaultCommissionRateBasisPoints":  defaultCommission,
-	}
-
-	return response, nil
+	}, nil
 }
 
-// UpdateCommission 更新验证者佣金率（一行搞定，像 CLI 一样简单）
-// 参数: [validatorAddress, commissionRate, privateKey]
-// commissionRate: 佣金率（基点），范围 500-8000 (5%-80%)
-// privateKey: 验证者私钥（64字符十六进制，不带0x前缀）
+func (d *DPOS) chainCommissionRemoved() bool {
+	if eng := d.getDPoSEngine(); eng != nil {
+		if inst, ok := eng.(*dpos.DPoS); ok {
+			return inst.IsCommissionRemoved()
+		}
+	}
+	return false
+}
+
+// UpdateCommission 更新验证者佣金率。激活 epoch 到达后不可再修改。
 func (d *DPOS) UpdateCommission(ctx context.Context, params interface{}) (map[string]interface{}, error) {
+	if d.chainCommissionRemoved() {
+		return map[string]interface{}{
+			"success":            false,
+			"commissionDisabled": true,
+			"error":              "commission has been removed at the configured activation epoch",
+		}, nil
+	}
+
 	var validatorAddress string
 	var commissionRate uint64
 	var privateKey string
 
-	// 解析参数
 	switch p := params.(type) {
 	case []interface{}:
 		if len(p) < 3 {
@@ -6519,7 +6545,6 @@ func (d *DPOS) UpdateCommission(ctx context.Context, params interface{}) (map[st
 		if rate, ok := p[1].(float64); ok {
 			commissionRate = uint64(rate)
 		} else if rate, ok := p[1].(string); ok {
-			// 支持十六进制字符串
 			parsed, err := strconv.ParseUint(strings.TrimPrefix(rate, "0x"), 16, 64)
 			if err != nil {
 				return map[string]interface{}{
@@ -6549,7 +6574,6 @@ func (d *DPOS) UpdateCommission(ctx context.Context, params interface{}) (map[st
 		}, nil
 	}
 
-	// 验证佣金率范围
 	if commissionRate < 500 || commissionRate > 8000 {
 		return map[string]interface{}{
 			"success": false,
@@ -6558,23 +6582,18 @@ func (d *DPOS) UpdateCommission(ctx context.Context, params interface{}) (map[st
 	}
 
 	validatorAddr := types.StringToAddress(validatorAddress)
-
-	// 构造交易数据: "DPOS" + "COM" + 佣金率(2字节 BigEndian)
 	inputData := []byte("DPOSCOM")
 	rateBytes := make([]byte, 2)
-	rateBytes[0] = byte(commissionRate >> 8)   // 高字节
-	rateBytes[1] = byte(commissionRate & 0xFF) // 低字节
+	rateBytes[0] = byte(commissionRate >> 8)
+	rateBytes[1] = byte(commissionRate & 0xFF)
 	inputData = append(inputData, rateBytes...)
 
-	// 获取 nonce（使用 GetNonce 方法，而不是 GetAccount）
 	var nonce uint64
 	if nonceStore, ok := d.store.(interface {
 		GetNonce(addr types.Address) uint64
 	}); ok {
 		nonce = nonceStore.GetNonce(validatorAddr)
 	} else {
-		// 如果 store 不支持 GetNonce，尝试通过 GetAccount 获取（使用当前区块的状态根）
-		// 首先尝试获取当前区块头
 		var stateRoot types.Hash
 		if headerStore, ok := d.store.(interface {
 			Header() *types.Header
@@ -6583,10 +6602,7 @@ func (d *DPOS) UpdateCommission(ctx context.Context, params interface{}) (map[st
 				stateRoot = header.StateRoot
 			}
 		}
-
-		// 如果无法获取当前区块头，尝试获取最新区块
 		if stateRoot == (types.Hash{}) {
-			// 尝试获取一个较大的区块号（实际应该获取最新区块）
 			for blockNum := uint64(1000000); blockNum > 0; blockNum-- {
 				if header, exists := d.store.GetHeaderByNumber(blockNum); exists && header != nil {
 					stateRoot = header.StateRoot
@@ -6594,7 +6610,6 @@ func (d *DPOS) UpdateCommission(ctx context.Context, params interface{}) (map[st
 				}
 			}
 		}
-
 		if stateRoot != (types.Hash{}) {
 			if account, err := d.store.GetAccount(stateRoot, validatorAddr); err == nil {
 				nonce = account.Nonce
@@ -6612,28 +6627,15 @@ func (d *DPOS) UpdateCommission(ctx context.Context, params interface{}) (map[st
 		}
 	}
 
-	// 获取 gas price
-	gasPrice := big.NewInt(1000000000) // 1 Gwei
-
-	// 计算 gas limit：基础 gas (21000) + 数据 gas (每字节 68 gas for non-zero, 4 gas for zero)
-	// Input 数据: "DPOSCOM" (7字节) + 佣金率(2字节) = 9字节
-	// 假设都是非零字节，需要 9 * 68 = 612 gas
-	// 基础交易需要 21000 gas
-	// 总共至少需要 21000 + 612 = 21612，我们设置 100000 以确保足够
-	gasLimit := uint64(100000)
-
-	// 创建交易
 	tx := &types.Transaction{
 		Nonce:    nonce,
-		GasPrice: gasPrice,
-		Gas:      gasLimit,
+		GasPrice: big.NewInt(1000000000),
+		Gas:      100000,
 		To:       nil,
 		Value:    big.NewInt(0),
 		Input:    inputData,
 		Type:     types.LegacyTx,
 	}
-
-	// 计算交易哈希
 	tx.ComputeHash(0)
 	if tx.Hash == (types.Hash{}) {
 		return map[string]interface{}{
@@ -6641,20 +6643,14 @@ func (d *DPOS) UpdateCommission(ctx context.Context, params interface{}) (map[st
 			"error":   "transaction hash is zero after creation",
 		}, nil
 	}
-
-	// 签名交易
 	if err := d.signTransaction(tx, validatorAddr, privateKey); err != nil {
 		return map[string]interface{}{
 			"success": false,
 			"error":   fmt.Sprintf("failed to sign transaction: %v", err),
 		}, nil
 	}
-
-	// 重新计算哈希（签名后）
 	tx.ComputeHash(0)
 
-	// 发送交易到交易池
-	// 尝试通过 store 的 AddTx 方法发送
 	if addTxStore, ok := d.store.(interface {
 		AddTx(tx *types.Transaction) error
 	}); ok {
@@ -6664,30 +6660,27 @@ func (d *DPOS) UpdateCommission(ctx context.Context, params interface{}) (map[st
 				"error":   fmt.Sprintf("failed to send transaction: %v", err),
 			}, nil
 		}
-	} else {
-		// 如果 store 不支持 AddTx，尝试通过 GetTxPool 获取交易池
-		if txPool := d.store.GetTxPool(); txPool != nil {
-			if txPoolAddTx, ok := txPool.(interface {
-				AddTx(tx *types.Transaction) error
-			}); ok {
-				if err := txPoolAddTx.AddTx(tx); err != nil {
-					return map[string]interface{}{
-						"success": false,
-						"error":   fmt.Sprintf("failed to send transaction: %v", err),
-					}, nil
-				}
-			} else {
+	} else if txPool := d.store.GetTxPool(); txPool != nil {
+		if txPoolAddTx, ok := txPool.(interface {
+			AddTx(tx *types.Transaction) error
+		}); ok {
+			if err := txPoolAddTx.AddTx(tx); err != nil {
 				return map[string]interface{}{
 					"success": false,
-					"error":   "transaction pool does not support AddTx method",
+					"error":   fmt.Sprintf("failed to send transaction: %v", err),
 				}, nil
 			}
 		} else {
 			return map[string]interface{}{
 				"success": false,
-				"error":   "transaction pool not available",
+				"error":   "transaction pool does not support AddTx method",
 			}, nil
 		}
+	} else {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "transaction pool not available",
+		}, nil
 	}
 
 	return map[string]interface{}{

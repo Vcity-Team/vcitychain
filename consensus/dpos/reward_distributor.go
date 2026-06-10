@@ -22,6 +22,9 @@ type RewardDistributor struct {
 	commissionEffective   time.Duration
 	commissionDenominator *big.Int
 	logger                hclog.Logger
+
+	distributionEpoch          uint64
+	isCommissionRemovedAtEpoch func(epochNumber uint64) bool
 }
 
 // NewRewardDistributor 创建奖励分发器
@@ -61,14 +64,31 @@ func (rd *RewardDistributor) GetRewardAmount() *big.Int {
 	return new(big.Int).Set(rd.rewardAmount)
 }
 
-// WeightedAverageCommissionBps 按出块数加权平均佣金率（基点，与 getCommissionRate 一致）
+// SetCommissionRemovedAtEpochChecker 设置按 epoch 判断是否已关闭佣金。
+func (rd *RewardDistributor) SetCommissionRemovedAtEpochChecker(fn func(epochNumber uint64) bool) {
+	rd.isCommissionRemovedAtEpoch = fn
+}
+
+// SetDistributionEpoch 设置当前奖励计算/分发对应的 epoch。
+func (rd *RewardDistributor) SetDistributionEpoch(epochNumber uint64) {
+	rd.distributionEpoch = epochNumber
+}
+
+func (rd *RewardDistributor) commissionDisabledForDistribution() bool {
+	if rd.isCommissionRemovedAtEpoch == nil {
+		return false
+	}
+	return rd.isCommissionRemovedAtEpoch(rd.distributionEpoch)
+}
+
+// WeightedAverageCommissionBps 按出块数加权平均佣金率（基点）。
 func (rd *RewardDistributor) WeightedAverageCommissionBps(
 	validators validator.AccountSet,
 	blockCounts map[types.Address]uint64,
 	totalBlocks uint64,
 ) uint64 {
-	if totalBlocks == 0 {
-		return rd.commissionDefault
+	if rd.commissionDisabledForDistribution() || totalBlocks == 0 {
+		return 0
 	}
 	weighted := big.NewInt(0)
 	for _, v := range validators {
@@ -88,6 +108,9 @@ func (rd *RewardDistributor) WeightedAverageCommissionBps(
 }
 
 func (rd *RewardDistributor) getCommissionRate(address types.Address) uint64 {
+	if rd.commissionDisabledForDistribution() {
+		return 0
+	}
 	if rd.stakeStore == nil {
 		return rd.commissionDefault
 	}
@@ -310,6 +333,8 @@ func (rd *RewardDistributor) DistributeEpochRewards(
 		rd.logger.Warn("⚠️ Epoch没有出块记录，跳过奖励分发", "epoch", epochNumber)
 		return nil
 	}
+
+	rd.SetDistributionEpoch(epochNumber)
 
 	// 4. 计算奖励分配
 	rewards := rd.calculateRewards(validators, voters, blockCounts, totalBlocks)

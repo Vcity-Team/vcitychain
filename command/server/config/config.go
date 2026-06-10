@@ -80,6 +80,8 @@ type Config struct {
 	ProducerRewardActivationEpoch uint64 `json:"producer_reward_activation_epoch" yaml:"producer_reward_activation_epoch"`
 	// vote_lock_activation_epoch: 投票余额账内锁定激活 epoch（0=未启用）
 	VoteLockActivationEpoch uint64 `json:"vote_lock_activation_epoch" yaml:"vote_lock_activation_epoch"`
+	// commission_removal_activation_epoch: 关闭佣金激活 epoch（0=仍沿用佣金）
+	CommissionRemovalActivationEpoch uint64 `json:"commission_removal_activation_epoch" yaml:"commission_removal_activation_epoch"`
 	// dpos_bootstrap_rpc: 启动时通过 JSON-RPC eth_call 查询 staking 合约 validators() 的端点
 	DPoSBootstrapRPC string `json:"dpos_bootstrap_rpc" yaml:"dpos_bootstrap_rpc"`
 	// dpos_disable_double_sign_slashing: 为 true 时关闭双签检测、削减及故障落库（默认 false，可不写）
@@ -206,7 +208,7 @@ func DefaultConfig() *Config {
 		DPoSRewardDistribution:  "",                       // 奖励分发地址，默认空，需要配置
 		DPoSRewardAmount:        "1000000000000000000000", // 默认1000 VCITY
 		BlockTimeSeconds:        3,                        // 默认3秒一个区块
-		DPoSCommissionRatio:     1000,                     // 默认佣金 10%（验证者未设置时使用）
+		DPoSCommissionRatio:     1000,                     // 默认佣金 10%（关闭前生效）
 		DPoSCommissionEffective:    "21d", // 默认21天生效
 		DPoSWallClockSlotAlignment: true,  // 块头时间戳默认对齐墙钟 slot
 	}

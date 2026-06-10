@@ -109,7 +109,7 @@ func TestRewardDistributor_WithVoters(t *testing.T) {
 	rewards := rd.CalculateRewards(validators, voters, blockCounts, 10)
 	require.Len(t, rewards, 3)
 
-	commissionExpected := big.NewInt(100) // 10% of 1000
+	commissionExpected := big.NewInt(100)
 	voterShareExpected := big.NewInt(450)
 
 	require.Zero(t, commissionExpected.Cmp(rewards[validatorAddr]))
@@ -190,7 +190,7 @@ func TestRewardDistributor_StakeRatioOnSameValidator(t *testing.T) {
 
 	rewards := rd.CalculateRewards(validators, voters, blockCounts, 10)
 
-	distributable := big.NewInt(900) // 1000 - 10% commission
+	distributable := big.NewInt(900)
 	expectedLarge := new(big.Int).Mul(distributable, big.NewInt(200))
 	expectedLarge.Div(expectedLarge, big.NewInt(300))
 	expectedSmall := new(big.Int).Mul(distributable, big.NewInt(100))

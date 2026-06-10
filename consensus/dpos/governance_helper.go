@@ -71,6 +71,11 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 			return d.config.ProducerRewardActivationEpoch, nil
 		}
 		return uint64(0), nil
+	case "dpos_commission_removal_activation_epoch":
+		if d.config != nil {
+			return d.config.CommissionRemovalActivationEpoch, nil
+		}
+		return uint64(0), nil
 	case "dpos_delegate_threshold":
 		// 直接使用配置值（避免递归调用自身）；若未配置则返回默认 0
 		if d.config != nil && d.config.DPoSDelegateThreshold != nil {
@@ -414,6 +419,40 @@ func (d *DPoS) updateParameterValue(paramName string, value interface{}, source 
 		if d.config != nil {
 			d.config.ProducerRewardActivationEpoch = epoch
 			d.logger.Info("✅ 已更新 d.config.ProducerRewardActivationEpoch", "epoch", epoch)
+		}
+
+	case "dpos_commission_removal_activation_epoch":
+		var epoch uint64
+		switch v := value.(type) {
+		case uint64:
+			epoch = v
+		case int:
+			if v < 0 {
+				return fmt.Errorf("invalid dpos_commission_removal_activation_epoch: %v", v)
+			}
+			epoch = uint64(v)
+		case int64:
+			if v < 0 {
+				return fmt.Errorf("invalid dpos_commission_removal_activation_epoch: %v", v)
+			}
+			epoch = uint64(v)
+		case float64:
+			if v < 0 {
+				return fmt.Errorf("invalid dpos_commission_removal_activation_epoch: %v", v)
+			}
+			epoch = uint64(v)
+		case string:
+			parsed, err := strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				return fmt.Errorf("invalid dpos_commission_removal_activation_epoch: %v", v)
+			}
+			epoch = parsed
+		default:
+			return fmt.Errorf("unsupported dpos_commission_removal_activation_epoch type: %T", value)
+		}
+		if d.config != nil {
+			d.config.CommissionRemovalActivationEpoch = epoch
+			d.logger.Info("✅ 已更新 d.config.CommissionRemovalActivationEpoch", "epoch", epoch)
 		}
 
 	case "dpos_vote_lock_activation_epoch":

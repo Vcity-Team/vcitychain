@@ -178,6 +178,7 @@ func (r *RewardManagerAdapter) CalculateRewards(epochNumber uint64) (map[types.A
 	totalBlocks := r.dpos.blockTracker.GetTotalEpochBlocks(epochNumber)
 
 	// 计算奖励
+	r.rewardDistributor.SetDistributionEpoch(epochNumber)
 	rewards := r.rewardDistributor.CalculateRewards(validators, voters, blockCounts, totalBlocks)
 	return rewards, nil
 }

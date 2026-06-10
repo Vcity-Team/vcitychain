@@ -145,7 +145,7 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 	// 创建DPoS引擎配置
 	commissionRatio := s.config.DPoSCommissionRatio
 	if commissionRatio == 0 {
-		commissionRatio = 1000 // 如果配置为0，使用默认值 10%
+		commissionRatio = 1000
 	}
 
 	if s.config.DPoSMissedBlocksPercentage == 0 {
@@ -214,6 +214,10 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 	if s.config.VoteLockActivationEpoch > 0 {
 		engineConfig["vote_lock_activation_epoch"] = s.config.VoteLockActivationEpoch
 		s.logger.Info("✅ 透传 vote_lock_activation_epoch 到 DPoS 引擎", "epoch", s.config.VoteLockActivationEpoch)
+	}
+	if s.config.CommissionRemovalActivationEpoch > 0 {
+		engineConfig["commission_removal_activation_epoch"] = s.config.CommissionRemovalActivationEpoch
+		s.logger.Info("✅ 透传 commission_removal_activation_epoch 到 DPoS 引擎", "epoch", s.config.CommissionRemovalActivationEpoch)
 	}
 
 	// 可选：启动引导 RPC（从 staking 合约读取 validators()）

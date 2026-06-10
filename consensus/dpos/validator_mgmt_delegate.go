@@ -767,13 +767,20 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 	return nil
 }
 
-// processCommissionUpdateTransaction 处理佣金率修改交易
+// processCommissionUpdateTransaction 处理佣金率修改交易。
 func (d *DPoS) processCommissionUpdateTransaction(tx *types.Transaction, blockNumber uint64) error {
-	d.logger.Info("🔧 ===== 开始处理佣金率修改交易 =====")
-
 	if tx == nil {
 		return fmt.Errorf("nil transaction")
 	}
+	if d.IsCommissionRemoved() {
+		d.logger.Info("ℹ️ 佣金已按计划关闭，忽略佣金修改交易",
+			"blockNumber", blockNumber,
+			"txHash", tx.Hash.String(),
+			"from", tx.From.String())
+		return nil
+	}
+
+	d.logger.Info("🔧 ===== 开始处理佣金率修改交易 =====")
 
 	if len(tx.Input) < 9 {
 		return fmt.Errorf("invalid commission transaction payload length: %d", len(tx.Input))
@@ -795,7 +802,6 @@ func (d *DPoS) processCommissionUpdateTransaction(tx *types.Transaction, blockNu
 		"validator", validatorAddr.String(),
 		"newRate", newRate)
 
-	// 验证者必须已注册或是创世验证者
 	if !d.IsDelegateRegistered(validatorAddr) && !d.isGenesisValidator(validatorAddr) {
 		return fmt.Errorf("validator %s is not registered", validatorAddr.String())
 	}
