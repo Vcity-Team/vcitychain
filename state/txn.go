@@ -30,12 +30,22 @@ var (
 	refundIndex = types.BytesToHash([]byte{3}).Bytes()
 )
 
+// LockedBalanceGetter returns the amount of native balance locked for an address.
+type LockedBalanceGetter func(addr types.Address) *big.Int
+
 // Txn is a reference of the state
 type Txn struct {
 	snapshot  readSnapshot
 	snapshots []*iradix.Tree
 	txn       *iradix.Txn
 	codeCache *lru.Cache
+
+	lockedBalanceGetter LockedBalanceGetter
+}
+
+// SetLockedBalanceGetter configures spendable-balance enforcement for SubBalance.
+func (txn *Txn) SetLockedBalanceGetter(getter LockedBalanceGetter) {
+	txn.lockedBalanceGetter = getter
 }
 
 func NewTxn(snapshot Snapshot) *Txn {
@@ -164,8 +174,18 @@ func (txn *Txn) SubBalance(addr types.Address, amount *big.Int) error {
 		return nil
 	}
 
-	// Check if we have enough balance to deduce amount from
-	if balance := txn.GetBalance(addr); balance.Cmp(amount) < 0 {
+	balance := txn.GetBalance(addr)
+	spendable := balance
+	if txn.lockedBalanceGetter != nil {
+		locked := txn.lockedBalanceGetter(addr)
+		if locked != nil && locked.Sign() > 0 {
+			spendable = new(big.Int).Sub(balance, locked)
+			if spendable.Sign() < 0 {
+				spendable = big.NewInt(0)
+			}
+		}
+	}
+	if spendable.Cmp(amount) < 0 {
 		return runtime.ErrNotEnoughFunds
 	}
 

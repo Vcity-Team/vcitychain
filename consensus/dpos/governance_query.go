@@ -206,6 +206,23 @@ func (d *DPoS) UpdateParameterValue(parameter string, newValue interface{}) erro
 				d.config.ProducerRewardActivationEpoch = u
 			}
 		}
+	case "dpos_vote_lock_activation_epoch":
+		switch v := newValue.(type) {
+		case uint64:
+			d.config.VoteLockActivationEpoch = v
+		case int:
+			if v >= 0 {
+				d.config.VoteLockActivationEpoch = uint64(v)
+			}
+		case float64:
+			if v >= 0 {
+				d.config.VoteLockActivationEpoch = uint64(v)
+			}
+		case string:
+			if u, err := strconv.ParseUint(v, 10, 64); err == nil {
+				d.config.VoteLockActivationEpoch = u
+			}
+		}
 	default:
 		return fmt.Errorf("unknown parameter: %s", parameter)
 	}

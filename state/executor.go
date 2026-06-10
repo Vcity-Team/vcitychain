@@ -297,6 +297,14 @@ func NewTransition(config chain.ForksInTime, snap Snapshot, radix *Txn) *Transit
 	}
 }
 
+// SetLockedBalanceGetter enforces spendable = balance - locked on SubBalance.
+func (t *Transition) SetLockedBalanceGetter(getter LockedBalanceGetter) {
+	if t == nil || t.state == nil {
+		return
+	}
+	t.state.SetLockedBalanceGetter(getter)
+}
+
 func (t *Transition) WithStateOverride(override types.StateOverride) error {
 	for addr, o := range override {
 		if o.State != nil && o.StateDiff != nil {

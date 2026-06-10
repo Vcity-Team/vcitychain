@@ -166,8 +166,8 @@ func NewDPOS(logger hclog.Logger, store dposStore, chainID uint64) *DPOS {
 	}
 }
 
-// GetBalanceInfo returns the current native balance plus the amount locked by active votes.
-// Locked votes are derived from StakeStore records (Applied=true, Amount>0).
+// GetBalanceInfo returns the current native balance plus the amount locked by votes.
+// When vote lock is active, pending votes are included in locked; otherwise only applied votes.
 func (d *DPOS) GetBalanceInfo(ctx context.Context, params interface{}) (interface{}, error) {
 	req := BalanceInfoRequest{}
 	switch p := params.(type) {
@@ -212,6 +212,14 @@ func (d *DPOS) GetBalanceInfo(ctx context.Context, params interface{}) (interfac
 
 	lockedTotal := big.NewInt(0)
 	lockedByDelegate := make(map[string]string)
+	voteLockActive := false
+
+	if dposEngine := d.getDPoSEngine(); dposEngine != nil {
+		if inst, ok := dposEngine.(*dpos.DPoS); ok {
+			lockedTotal = inst.ComputeLockedVoteWei(addr)
+			voteLockActive = inst.IsVoteLockActive()
+		}
+	}
 
 	if st, err := d.store.GetDPoSState(); err == nil && st != nil && st.StakeStore != nil {
 		infos, ierr := st.StakeStore.GetStakingInfo()
@@ -221,10 +229,9 @@ func (d *DPOS) GetBalanceInfo(ctx context.Context, params interface{}) (interfac
 				if s == nil || s.Staker != addr {
 					continue
 				}
-				if s.Amount == nil || s.Amount.Sign() <= 0 || !s.Applied {
+				if !dpos.StakeCountsTowardLocked(s, voteLockActive) {
 					continue
 				}
-				lockedTotal.Add(lockedTotal, s.Amount)
 				if tmpByDelegate[s.Delegate] == nil {
 					tmpByDelegate[s.Delegate] = big.NewInt(0)
 				}
@@ -232,6 +239,11 @@ func (d *DPOS) GetBalanceInfo(ctx context.Context, params interface{}) (interfac
 			}
 			for del, amt := range tmpByDelegate {
 				lockedByDelegate[del.String()] = amt.String()
+			}
+			if lockedTotal.Sign() == 0 {
+				for _, amt := range tmpByDelegate {
+					lockedTotal.Add(lockedTotal, amt)
+				}
 			}
 		}
 	}
@@ -1019,24 +1031,14 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 	}, nil
 }
 
-// getLockedVoteWei returns the sum of applied active vote amounts for a voter.
+// getLockedVoteWei returns the sum of locked vote amounts for a voter.
 func (d *DPOS) getLockedVoteWei(voter types.Address) *big.Int {
-	lockedTotal := big.NewInt(0)
-	if st, err := d.store.GetDPoSState(); err == nil && st != nil && st.StakeStore != nil {
-		infos, ierr := st.StakeStore.GetStakingInfo()
-		if ierr == nil {
-			for _, s := range infos {
-				if s == nil || s.Staker != voter {
-					continue
-				}
-				if s.Amount == nil || s.Amount.Sign() <= 0 || !s.Applied {
-					continue
-				}
-				lockedTotal.Add(lockedTotal, s.Amount)
-			}
+	if dposEngine := d.getDPoSEngine(); dposEngine != nil {
+		if inst, ok := dposEngine.(*dpos.DPoS); ok {
+			return inst.ComputeLockedVoteWei(voter)
 		}
 	}
-	return lockedTotal
+	return big.NewInt(0)
 }
 
 func computeSpendableWei(balance, locked *big.Int) *big.Int {
@@ -7016,6 +7018,140 @@ func (d *DPOS) GetConsensusSwitchHeight(ctx context.Context) (interface{}, error
 		"switchBlockHash":       switchBlockHash,
 		"currentBlockHeight":    currentHeight,
 		"isDPoSActive":          isDPoSActive,
+	}, nil
+}
+
+// ApplyScheduledVotesUpTo 手动补跑逾期/待生效投票。RPC: dpos_applyScheduledVotesUpTo
+// 可选参数: { "maxCount": 100 }
+func (d *DPOS) ApplyScheduledVotesUpTo(ctx context.Context, params interface{}) (interface{}, error) {
+	maxCount := 0
+	switch p := params.(type) {
+	case nil:
+	case map[string]interface{}:
+		if v, ok := p["maxCount"]; ok {
+			switch n := v.(type) {
+			case float64:
+				maxCount = int(n)
+			case int:
+				maxCount = n
+			case int64:
+				maxCount = int(n)
+			case string:
+				if parsed, err := strconv.ParseInt(n, 10, 64); err == nil {
+					maxCount = int(parsed)
+				}
+			}
+		}
+	case []interface{}:
+		if len(p) > 0 {
+			if n, ok := p[0].(float64); ok {
+				maxCount = int(n)
+			}
+		}
+	}
+
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "DPoS engine not available",
+		}, nil
+	}
+	dposInstance, ok := dposEngine.(*dpos.DPoS)
+	if !ok {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "DPoS engine type does not support ApplyScheduledVotesUpTo",
+		}, nil
+	}
+	blockNum := dposInstance.GetCurrentBlockNumber()
+	if blockNum == 0 {
+		blockNum = d.getCurrentBlockHeight()
+	}
+	applied, voided, err := dposInstance.ApplyScheduledVotesUpTo(blockNum, maxCount)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		}, nil
+	}
+	return map[string]interface{}{
+		"success":      true,
+		"appliedCount": applied,
+		"voidedCount":  voided,
+		"currentBlock": blockNum,
+		"currentEpoch": dposInstance.GetCurrentEpochNumber(),
+		"maxCount":     maxCount,
+	}, nil
+}
+
+// ReconcileVoter 对单个投票者做对账（补跑 pending + 裁剪超额 applied）。RPC: dpos_reconcileVoter
+func (d *DPOS) ReconcileVoter(ctx context.Context, params interface{}) (interface{}, error) {
+	var voterStr string
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) < 1 {
+			return nil, fmt.Errorf("missing voter address parameter")
+		}
+		if s, ok := p[0].(string); ok {
+			voterStr = s
+		} else {
+			return nil, fmt.Errorf("first parameter must be a string address")
+		}
+	case map[string]interface{}:
+		if s, ok := p["voter"].(string); ok {
+			voterStr = s
+		} else if s, ok := p["address"].(string); ok {
+			voterStr = s
+		} else {
+			return nil, fmt.Errorf("missing voter/address field")
+		}
+	default:
+		return nil, fmt.Errorf("invalid params type")
+	}
+
+	voter := types.StringToAddress(voterStr)
+	if voter == types.ZeroAddress {
+		return nil, fmt.Errorf("invalid voter address")
+	}
+
+	dposEngine := d.getDPoSEngine()
+	if dposEngine == nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "DPoS engine not available",
+		}, nil
+	}
+	dposInstance, ok := dposEngine.(*dpos.DPoS)
+	if !ok {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "DPoS engine type does not support ReconcileVoter",
+		}, nil
+	}
+	blockNum := dposInstance.GetCurrentBlockNumber()
+	if blockNum == 0 {
+		blockNum = d.getCurrentBlockHeight()
+	}
+	stats, err := dposInstance.ReconcileVoter(voter, blockNum)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		}, nil
+	}
+	return map[string]interface{}{
+		"success":           true,
+		"voter":             stats.Voter.String(),
+		"appliedCount":      stats.AppliedCount,
+		"voidedCount":       stats.VoidedCount,
+		"pendingFixed":      stats.PendingFixed,
+		"appliedOverdue":    stats.AppliedOverdue,
+		"trimmedWei":        stats.TrimmedWei.String(),
+		"remainingApplied":  stats.RemainingApplied.String(),
+		"remainingPending":  stats.RemainingPending.String(),
+		"currentBlock":      blockNum,
+		"currentEpoch":      dposInstance.GetCurrentEpochNumber(),
 	}, nil
 }
 

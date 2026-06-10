@@ -298,6 +298,15 @@ func (p *blockchainWrapper) ProcessBlockExecutor(
 		return nil, err
 	}
 
+	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
+		transition.SetLockedBalanceGetter(func(addr types.Address) *big.Int {
+			if !dposInstance.isVoteLockActive() {
+				return big.NewInt(0)
+			}
+			return dposInstance.ComputeLockedVoteWei(addr)
+		})
+	}
+
 	// apply transactions from block
 	for _, tx := range block.Transactions {
 		// 确保从区块读取的交易补齐 From（RLP不含From，需要本地恢复）

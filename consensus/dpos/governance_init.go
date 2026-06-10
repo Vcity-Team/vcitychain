@@ -138,6 +138,14 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Description: "Epoch when block producer rewards activate. 0 means active immediately when per-block reward is set.",
 			Category:    "economic",
 		},
+		"dpos_vote_lock_activation_epoch": {
+			Name:        "Vote Lock Activation Epoch",
+			Type:        "uint64",
+			MinValue:    uint64(0),
+			MaxValue:    uint64(100000000),
+			Description: "Epoch when in-account vote balance locking activates. 0 means disabled.",
+			Category:    "economic",
+		},
 		"dpos_delegate_threshold": {
 			Name:        "Delegate Threshold",
 			Type:        "string",
@@ -311,6 +319,11 @@ func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 	case "dpos_producer_reward_activation_epoch":
 		if d.config != nil {
 			return d.config.ProducerRewardActivationEpoch, nil
+		}
+		return uint64(0), nil
+	case "dpos_vote_lock_activation_epoch":
+		if d.config != nil {
+			return d.config.VoteLockActivationEpoch, nil
 		}
 		return uint64(0), nil
 	case "dpos_delegate_threshold":

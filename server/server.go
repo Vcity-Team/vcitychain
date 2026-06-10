@@ -211,6 +211,10 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		engineConfig["producer_reward_activation_epoch"] = s.config.ProducerRewardActivationEpoch
 		s.logger.Info("✅ 透传 producer_reward_activation_epoch 到 DPoS 引擎", "epoch", s.config.ProducerRewardActivationEpoch)
 	}
+	if s.config.VoteLockActivationEpoch > 0 {
+		engineConfig["vote_lock_activation_epoch"] = s.config.VoteLockActivationEpoch
+		s.logger.Info("✅ 透传 vote_lock_activation_epoch 到 DPoS 引擎", "epoch", s.config.VoteLockActivationEpoch)
+	}
 
 	// 可选：启动引导 RPC（从 staking 合约读取 validators()）
 	if strings.TrimSpace(s.config.DPoSBootstrapRPC) != "" {
@@ -830,31 +834,11 @@ func (t *txpoolHub) GetLockedBalance(_ types.Hash, addr types.Address) (*big.Int
 		return big.NewInt(0), nil
 	}
 
-	st := dposEngine.GetState()
-	if st == nil || st.StakeStore == nil {
+	if st := dposEngine.GetState(); st == nil || st.StakeStore == nil {
 		return big.NewInt(0), nil
 	}
 
-	infos, err := st.StakeStore.GetStakingInfo()
-	if err != nil {
-		return big.NewInt(0), nil
-	}
-
-	locked := big.NewInt(0)
-	for _, s := range infos {
-		if s == nil || s.Staker != addr {
-			continue
-		}
-		if s.Amount == nil || s.Amount.Sign() <= 0 {
-			continue
-		}
-		if !s.Applied {
-			continue
-		}
-		locked.Add(locked, s.Amount)
-	}
-
-	return locked, nil
+	return dposEngine.ComputeLockedVoteWei(addr), nil
 }
 
 // setupSecretsManager sets up the secrets manager

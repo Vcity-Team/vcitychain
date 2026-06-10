@@ -78,6 +78,8 @@ type Config struct {
 	BlockProducerRewardPerBlock string `json:"block_producer_reward_per_block" yaml:"block_producer_reward_per_block"`
 	// producer_reward_activation_epoch: 节点出块奖励激活 epoch（0=配置后立即生效）
 	ProducerRewardActivationEpoch uint64 `json:"producer_reward_activation_epoch" yaml:"producer_reward_activation_epoch"`
+	// vote_lock_activation_epoch: 投票余额账内锁定激活 epoch（0=未启用）
+	VoteLockActivationEpoch uint64 `json:"vote_lock_activation_epoch" yaml:"vote_lock_activation_epoch"`
 	// dpos_bootstrap_rpc: 启动时通过 JSON-RPC eth_call 查询 staking 合约 validators() 的端点
 	DPoSBootstrapRPC string `json:"dpos_bootstrap_rpc" yaml:"dpos_bootstrap_rpc"`
 	// dpos_disable_double_sign_slashing: 为 true 时关闭双签检测、削减及故障落库（默认 false，可不写）

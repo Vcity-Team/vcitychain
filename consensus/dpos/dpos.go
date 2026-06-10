@@ -294,6 +294,8 @@ type DPoSConfig struct {
 	BlockProducerRewardPerBlock *big.Int `json:"block_producer_reward_per_block" yaml:"block_producer_reward_per_block"`
 	// ProducerRewardActivationEpoch 节点出块奖励激活 epoch；0 表示 perBlock>0 后立即生效
 	ProducerRewardActivationEpoch uint64 `json:"producer_reward_activation_epoch" yaml:"producer_reward_activation_epoch"`
+	// VoteLockActivationEpoch 投票余额锁定激活 epoch；0 表示未启用账内锁定
+	VoteLockActivationEpoch uint64 `json:"vote_lock_activation_epoch" yaml:"vote_lock_activation_epoch"`
 	// BootstrapRPC 可选：启动时从 staking 合约读取 validators() 的 JSON-RPC 端点（用于无法在本地 Transition 中成功调用时的回退）
 	BootstrapRPC string `json:"dpos_bootstrap_rpc" yaml:"dpos_bootstrap_rpc"`
 	// JSONRPCListen 本节点 jsonrpc_addr（server RPCEndpoint）；trusted tip 用 boot multiaddr IP + 该端口。
@@ -1282,6 +1284,29 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		case string:
 			if u, err := strconv.ParseUint(t, 10, 64); err == nil {
 				vcity_dpos.config.ProducerRewardActivationEpoch = u
+			}
+		}
+	}
+
+	if v, exists := params.Config.Config["vote_lock_activation_epoch"]; exists {
+		switch t := v.(type) {
+		case uint64:
+			vcity_dpos.config.VoteLockActivationEpoch = t
+		case int:
+			if t >= 0 {
+				vcity_dpos.config.VoteLockActivationEpoch = uint64(t)
+			}
+		case int64:
+			if t >= 0 {
+				vcity_dpos.config.VoteLockActivationEpoch = uint64(t)
+			}
+		case float64:
+			if t >= 0 {
+				vcity_dpos.config.VoteLockActivationEpoch = uint64(t)
+			}
+		case string:
+			if u, err := strconv.ParseUint(t, 10, 64); err == nil {
+				vcity_dpos.config.VoteLockActivationEpoch = u
 			}
 		}
 	}
@@ -2768,6 +2793,7 @@ func (c *DPoSConfig) GetConfigSummary() map[string]interface{} {
 		"voter_target_apy_bps":               c.VoterTargetAPYBps,
 		"block_producer_reward_per_block":    formatBigIntConfig(c.BlockProducerRewardPerBlock),
 		"producer_reward_activation_epoch":   c.ProducerRewardActivationEpoch,
+		"vote_lock_activation_epoch":         c.VoteLockActivationEpoch,
 	}
 }
 

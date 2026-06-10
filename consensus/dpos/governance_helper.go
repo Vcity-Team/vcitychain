@@ -416,6 +416,40 @@ func (d *DPoS) updateParameterValue(paramName string, value interface{}, source 
 			d.logger.Info("✅ 已更新 d.config.ProducerRewardActivationEpoch", "epoch", epoch)
 		}
 
+	case "dpos_vote_lock_activation_epoch":
+		var epoch uint64
+		switch v := value.(type) {
+		case uint64:
+			epoch = v
+		case int:
+			if v < 0 {
+				return fmt.Errorf("invalid dpos_vote_lock_activation_epoch: %v", v)
+			}
+			epoch = uint64(v)
+		case int64:
+			if v < 0 {
+				return fmt.Errorf("invalid dpos_vote_lock_activation_epoch: %v", v)
+			}
+			epoch = uint64(v)
+		case float64:
+			if v < 0 {
+				return fmt.Errorf("invalid dpos_vote_lock_activation_epoch: %v", v)
+			}
+			epoch = uint64(v)
+		case string:
+			parsed, err := strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				return fmt.Errorf("invalid dpos_vote_lock_activation_epoch: %v", v)
+			}
+			epoch = parsed
+		default:
+			return fmt.Errorf("unsupported dpos_vote_lock_activation_epoch type: %T", value)
+		}
+		if d.config != nil {
+			d.config.VoteLockActivationEpoch = epoch
+			d.logger.Info("✅ 已更新 d.config.VoteLockActivationEpoch", "epoch", epoch)
+		}
+
 	case "dpos_delegate_threshold":
 		// 解析最小质押门槛（字符串格式的 wei）
 		var threshold *big.Int

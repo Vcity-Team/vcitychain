@@ -102,9 +102,9 @@ func (d *DPoS) processVoteInternal(vote *VoteMessage) error {
 		"amount", vote.Amount.String(),
 		"amountHex", fmt.Sprintf("0x%x", vote.Amount.Bytes()))
 
-	// 边界应用：登记阶段已校验；此处机械生效，跳过余额/候选人二次校验。
+	// 边界应用：仍校验余额，仅跳过候选人注册状态二次校验。
 	if vote.Applied {
-		if err := d.validateVote(vote, true, true, false); err != nil {
+		if err := d.validateVote(vote, false, true, false); err != nil {
 			d.logger.Error("❌ Vote validation failed at boundary apply", "error", err)
 			return fmt.Errorf("vote validation failed at boundary: %w", err)
 		}
@@ -397,7 +397,7 @@ func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error
 		if stakeInfo.Applied {
 			continue
 		}
-		if stakeInfo.EffectiveEpoch != epochNumber {
+		if stakeInfo.EffectiveEpoch > epochNumber {
 			continue
 		}
 		scheduledVotes = append(scheduledVotes, &VoteRecord{
@@ -441,42 +441,25 @@ func (d *DPoS) applyScheduledVotes(epochNumber uint64, blockNumber uint64) error
 	var appliedSuccessfully []*VoteRecord
 
 	for _, voteRecord := range scheduledVotes {
-		if d.isBoundaryStakeApplied(voteRecord.Voter, voteRecord.Delegate, voteRecord.Timestamp) {
-			d.logger.Info("ℹ️ [边界应用投票] 数据库已标记 Applied，跳过重复应用",
-				"voter", voteRecord.Voter.String(),
-				"delegate", voteRecord.Delegate.String(),
-				"timestamp", voteRecord.Timestamp)
-			appliedSuccessfully = append(appliedSuccessfully, voteRecord)
-			continue
-		}
-
-		vote := &VoteMessage{
-			Voter:          voteRecord.Voter,
-			Delegate:       voteRecord.Delegate,
-			Amount:         voteRecord.Amount,
-			Round:          d.currentRound,
-			Timestamp:      voteRecord.Timestamp,
-			EffectiveEpoch: voteRecord.EffectiveEpoch,
-			Applied:        true,
-		}
-
-		if err := d.processVoteInternal(vote); err != nil {
+		ok, voided, applyErr := d.applyOrVoidPendingVoteRecord(voteRecord, blockNumber)
+		if applyErr != nil {
 			d.logger.Error("❌ [边界应用投票] 应用投票失败",
 				"voter", voteRecord.Voter.String(),
 				"delegate", voteRecord.Delegate.String(),
-				"error", err)
+				"error", applyErr)
 			continue
 		}
-
-		if !d.persistBoundaryVoteApplied(voteRecord) {
-			d.logger.Warn("⚠️ [边界应用投票] StakeInfo.Applied 未持久化，不标记内存 Applied",
+		if voided {
+			d.logger.Info("ℹ️ [边界应用投票] 余额不足，已作废待应用投票",
 				"voter", voteRecord.Voter.String(),
-				"delegate", voteRecord.Delegate.String())
+				"delegate", voteRecord.Delegate.String(),
+				"amount", voteRecord.Amount.String())
 			continue
 		}
-
+		if !ok {
+			continue
+		}
 		appliedSuccessfully = append(appliedSuccessfully, voteRecord)
-
 		d.logger.Info("✅ [边界应用投票] 投票应用成功",
 			"voter", voteRecord.Voter.String(),
 			"delegate", voteRecord.Delegate.String(),
