@@ -399,16 +399,24 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		requiredTotal.Add(requiredTotal, producerPool)
 	}
 
+	rewardAccount := d.GetEffectiveRewardAccountForEpoch(epochNumber)
+	d.logger.Info("💰 epoch 奖励扣款账户",
+		"epoch", epochNumber,
+		"rewardAccount", rewardAccount.String(),
+		"configAccount", d.config.RewardAccount.String(),
+		"governedAccount", d.config.GovernedRewardDistributionAccount.String(),
+		"activationEpoch", d.GetRewardAccountActivationEpoch())
+
 	// 检查奖励账户余额（质押池 + 节点池）
-	rewardAccountBalance, err := d.getAccountBalance(d.config.RewardAccount)
+	rewardAccountBalance, err := d.getAccountBalance(rewardAccount)
 	if err != nil {
-		d.logger.Error("❌ 获取奖励账户余额失败", "account", d.config.RewardAccount.String(), "error", err)
+		d.logger.Error("❌ 获取奖励账户余额失败", "account", rewardAccount.String(), "error", err)
 		return fmt.Errorf("failed to get reward account balance: %w", err)
 	}
 
 	if rewardAccountBalance.Cmp(requiredTotal) < 0 {
 		d.logger.Error("❌ 奖励账户余额不足",
-			"account", d.config.RewardAccount.String(),
+			"account", rewardAccount.String(),
 			"balance", rewardAccountBalance.String(),
 			"voterPool", rewardAmount.String(),
 			"producerPool", producerPool.String(),

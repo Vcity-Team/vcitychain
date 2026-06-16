@@ -69,6 +69,11 @@ func (rd *RewardDistributor) SetCommissionRemovedAtEpochChecker(fn func(epochNum
 	rd.isCommissionRemovedAtEpoch = fn
 }
 
+// SetRewardAccount 设置本 epoch 奖励扣款账户（治理切换后按 epoch 解析）。
+func (rd *RewardDistributor) SetRewardAccount(addr types.Address) {
+	rd.rewardAccount = addr
+}
+
 // SetDistributionEpoch 设置当前奖励计算/分发对应的 epoch。
 func (rd *RewardDistributor) SetDistributionEpoch(epochNumber uint64) {
 	rd.distributionEpoch = epochNumber

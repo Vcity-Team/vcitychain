@@ -322,8 +322,10 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 		"CommissionRateDefault", d.config.CommissionRateDefault,
 		"CommissionEffectivePeriod", d.config.CommissionEffectivePeriod.String())
 
+	rewardAccount := d.GetEffectiveRewardAccountForEpoch(epochNumber)
+
 	// 从真实状态获取奖励账户余额
-	rewardAccountBalance, err := d.getAccountBalance(d.config.RewardAccount)
+	rewardAccountBalance, err := d.getAccountBalance(rewardAccount)
 	if err != nil {
 		return map[string]interface{}{
 			"error": fmt.Sprintf("failed to get reward account balance: %v", err),
@@ -470,7 +472,7 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 		"totalEpochBlocks":     totalBlocks,
 		"rewardPercentage":     rewardPercentage,
 		"rewardPerBlock":       rewardPerBlock,
-		"rewardAccount":        d.config.RewardAccount.String(),
+		"rewardAccount":        rewardAccount.String(),
 		"rewardAccountBalance": rewardAccountBalance.String(),
 		"validatorBalance":     validatorBalance.String(),
 		"votingPower":          votingPower,

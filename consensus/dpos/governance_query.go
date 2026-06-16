@@ -240,6 +240,23 @@ func (d *DPoS) UpdateParameterValue(parameter string, newValue interface{}) erro
 				d.config.CommissionRemovalActivationEpoch = u
 			}
 		}
+	case "dpos_reward_distribution_activation_epoch":
+		switch v := newValue.(type) {
+		case uint64:
+			d.config.RewardAccountActivationEpoch = v
+		case int:
+			if v >= 0 {
+				d.config.RewardAccountActivationEpoch = uint64(v)
+			}
+		case float64:
+			if v >= 0 {
+				d.config.RewardAccountActivationEpoch = uint64(v)
+			}
+		case string:
+			if u, err := strconv.ParseUint(v, 10, 64); err == nil {
+				d.config.RewardAccountActivationEpoch = u
+			}
+		}
 	default:
 		return fmt.Errorf("unknown parameter: %s", parameter)
 	}

@@ -61,7 +61,8 @@ type Config struct {
 
 	// 新增：DPoS经济系统配置
 	DPoSEpochDuration       string `yaml:"dpos_epoch_duration"`
-	DPoSRewardDistribution  string `yaml:"dpos_reward_distribution"`   // 奖励分发地址
+	DPoSRewardDistribution  string `yaml:"dpos_reward_distribution"`   // 奖励分发地址（切换前/默认账户）
+	DPoSRewardDistributionAccount string `yaml:"dpos_reward_distribution_account"` // 治理切换后的新奖励账户（本地种子，主网建议走提案）
 	DPoSRewardAmount        string `yaml:"dpos_reward_amount"`         // 每个epoch奖励金额
 	DPoSProposalVotePeriod  string `yaml:"dpos_proposal_vote_period"`  // 提案表决周期（时间字符串，如"2m", "24h"）
 	DPoSProposalValidPeriod string `yaml:"dpos_proposal_valid_period"` // 提案有效期（时间字符串，如"1d", "7d"）
@@ -92,6 +93,9 @@ type Config struct {
 	VoteLockActivationEpoch uint64 `yaml:"vote_lock_activation_epoch"`
 	// commission_removal_activation_epoch: 关闭佣金激活 epoch（0=仍沿用佣金）
 	CommissionRemovalActivationEpoch uint64 `yaml:"commission_removal_activation_epoch"`
+	// reward_account_activation_epoch / reward_distribution_activation_epoch: 奖励账户切换激活 epoch（0=始终用 dpos_reward_distribution）
+	RewardAccountActivationEpoch uint64 `yaml:"reward_account_activation_epoch"`
+	RewardDistributionActivationEpoch uint64 `yaml:"reward_distribution_activation_epoch"`
 	// dpos_bootstrap_rpc: 启动时通过 JSON-RPC eth_call 查询 staking 合约 validators() 的端点
 	DPoSBootstrapRPC string `yaml:"dpos_bootstrap_rpc"`
 	// dpos_disable_double_sign_slashing: 为 true 时关闭双签检测与削减（由 server 写入 engineConfig）

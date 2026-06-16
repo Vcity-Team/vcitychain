@@ -294,6 +294,8 @@ type DPoSConfig struct {
 
 	EpochDuration time.Duration `json:"epochDuration" yaml:"epochDuration"`
 	RewardAccount types.Address `json:"rewardAccount" yaml:"rewardAccount"`
+	// GovernedRewardDistributionAccount 治理切换后的奖励账户（yaml/提案种子；激活前仍用 RewardAccount 发奖）
+	GovernedRewardDistributionAccount types.Address `json:"governed_reward_distribution_account" yaml:"governed_reward_distribution_account"`
 	// RewardAmount 历史字段：Epoch 奖池现由 VoterTargetAPYBps 与链上质押动态计算，仅作兼容占位（可选）
 	RewardAmount *big.Int `json:"rewardAmount" yaml:"rewardAmount"`
 	// VoterTargetAPYBps 投票者目标年化收益率（基点，10000=100%，例如 500=5%）；质押投票池经济参数
@@ -306,6 +308,8 @@ type DPoSConfig struct {
 	VoteLockActivationEpoch uint64 `json:"vote_lock_activation_epoch" yaml:"vote_lock_activation_epoch"`
 	// CommissionRemovalActivationEpoch 关闭佣金激活 epoch；0 表示仍沿用佣金逻辑
 	CommissionRemovalActivationEpoch uint64 `json:"commission_removal_activation_epoch" yaml:"commission_removal_activation_epoch"`
+	// RewardAccountActivationEpoch 奖励账户切换激活 epoch；0 表示始终使用 RewardAccount 配置
+	RewardAccountActivationEpoch uint64 `json:"reward_account_activation_epoch" yaml:"reward_account_activation_epoch"`
 	// BootstrapRPC 可选：启动时从 staking 合约读取 validators() 的 JSON-RPC 端点（用于无法在本地 Transition 中成功调用时的回退）
 	BootstrapRPC string `json:"dpos_bootstrap_rpc" yaml:"dpos_bootstrap_rpc"`
 	// JSONRPCListen 本节点 jsonrpc_addr（server RPCEndpoint）；trusted tip 用 boot multiaddr IP + 该端口。
@@ -1208,6 +1212,13 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		logger.Warn("💰 未找到rewardAccount配置")
 	}
 
+	if governedAccount, exists := params.Config.Config["governed_reward_distribution_account"]; exists {
+		if account, ok := governedAccount.(types.Address); ok && account != types.ZeroAddress {
+			vcity_dpos.config.GovernedRewardDistributionAccount = account
+			logger.Info("✅ 设置治理切换奖励账户种子", "address", account.String())
+		}
+	}
+
 	// 从配置中读取创世根账户地址（从创世文件alloc中读取）
 	if genesisRootAccount, exists := params.Config.Config["genesisRootAccount"]; exists {
 		logger.Info("🔍 找到genesisRootAccount配置", "type", fmt.Sprintf("%T", genesisRootAccount), "value", genesisRootAccount)
@@ -1340,6 +1351,29 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		case string:
 			if u, err := strconv.ParseUint(t, 10, 64); err == nil {
 				vcity_dpos.config.CommissionRemovalActivationEpoch = u
+			}
+		}
+	}
+
+	if v, exists := params.Config.Config["reward_account_activation_epoch"]; exists {
+		switch t := v.(type) {
+		case uint64:
+			vcity_dpos.config.RewardAccountActivationEpoch = t
+		case int:
+			if t >= 0 {
+				vcity_dpos.config.RewardAccountActivationEpoch = uint64(t)
+			}
+		case int64:
+			if t >= 0 {
+				vcity_dpos.config.RewardAccountActivationEpoch = uint64(t)
+			}
+		case float64:
+			if t >= 0 {
+				vcity_dpos.config.RewardAccountActivationEpoch = uint64(t)
+			}
+		case string:
+			if u, err := strconv.ParseUint(t, 10, 64); err == nil {
+				vcity_dpos.config.RewardAccountActivationEpoch = u
 			}
 		}
 	}
@@ -2828,6 +2862,7 @@ func (c *DPoSConfig) GetConfigSummary() map[string]interface{} {
 		"producer_reward_activation_epoch":   c.ProducerRewardActivationEpoch,
 		"vote_lock_activation_epoch":              c.VoteLockActivationEpoch,
 		"commission_removal_activation_epoch":     c.CommissionRemovalActivationEpoch,
+		"reward_account_activation_epoch": c.RewardAccountActivationEpoch,
 	}
 }
 

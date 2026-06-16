@@ -262,6 +262,13 @@ func (p *serverParams) generateConfig() *server.Config {
 		ProducerRewardActivationEpoch: p.rawConfig.ProducerRewardActivationEpoch,
 		VoteLockActivationEpoch:              p.rawConfig.VoteLockActivationEpoch,
 		CommissionRemovalActivationEpoch: p.rawConfig.CommissionRemovalActivationEpoch,
+		RewardAccountActivationEpoch: func() uint64 {
+			if p.rawConfig.RewardAccountActivationEpoch > 0 {
+				return p.rawConfig.RewardAccountActivationEpoch
+			}
+			return p.rawConfig.RewardDistributionActivationEpoch
+		}(),
+		DPoSRewardDistributionAccount: p.rawConfig.DPoSRewardDistributionAccount,
 		DPoSBootstrapRPC:              p.rawConfig.DPoSBootstrapRPC,
 
 		DPoSDisableDoubleSignSlashing: p.rawConfig.DPoSDisableDoubleSignSlashing,

@@ -90,8 +90,7 @@ func (r *dposRuntime) processRewardDistributionInBlockForBuilder(builder blockBu
 		totalReward = big.NewInt(0)
 	}
 
-	// 检查奖励账户余额
-	rewardAccount := dposInstance.config.RewardAccount
+	rewardAccount := dposInstance.GetEffectiveRewardAccountForEpoch(rewardInfo.EpochNumber)
 	currentBalance := state.GetBalance(rewardAccount)
 
 	r.logger.Debug("💰 奖励账户余额检查",

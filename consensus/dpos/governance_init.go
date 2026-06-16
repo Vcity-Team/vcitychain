@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+
+	"github.com/Vcity-Team/vcitychain/types"
 )
 
 // InitializeGovernance 初始化治理系统
@@ -152,6 +154,22 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			MinValue:    uint64(0),
 			MaxValue:    uint64(100000000),
 			Description: "Epoch when SR commission on staking pool is removed (0% to voters). 0 means commission remains active.",
+			Category:    "economic",
+		},
+		"dpos_reward_distribution_account": {
+			Name:        "Reward Account",
+			Type:        "address",
+			MinValue:    "",
+			MaxValue:    "",
+			Description: "Governed reward distribution account address. Takes effect at dpos_reward_distribution_activation_epoch.",
+			Category:    "economic",
+		},
+		"dpos_reward_distribution_activation_epoch": {
+			Name:        "Reward Account Activation Epoch",
+			Type:        "uint64",
+			MinValue:    uint64(0),
+			MaxValue:    uint64(100000000),
+			Description: "Epoch when reward distribution switches to dpos_reward_distribution_account. 0 means keep using server yaml dpos_reward_distribution.",
 			Category:    "economic",
 		},
 		"dpos_delegate_threshold": {
@@ -337,6 +355,19 @@ func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 	case "dpos_commission_removal_activation_epoch":
 		if d.config != nil {
 			return d.config.CommissionRemovalActivationEpoch, nil
+		}
+		return uint64(0), nil
+	case "dpos_reward_distribution_account":
+		if d.config != nil && d.config.GovernedRewardDistributionAccount != types.ZeroAddress {
+			return d.config.GovernedRewardDistributionAccount.String(), nil
+		}
+		if d.config != nil && d.config.RewardAccount != types.ZeroAddress {
+			return d.config.RewardAccount.String(), nil
+		}
+		return "", nil
+	case "dpos_reward_distribution_activation_epoch":
+		if d.config != nil {
+			return d.config.RewardAccountActivationEpoch, nil
 		}
 		return uint64(0), nil
 	case "dpos_delegate_threshold":

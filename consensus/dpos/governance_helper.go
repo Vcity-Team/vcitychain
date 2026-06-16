@@ -76,6 +76,19 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 			return d.config.CommissionRemovalActivationEpoch, nil
 		}
 		return uint64(0), nil
+	case "dpos_reward_distribution_account":
+		if d.config != nil && d.config.GovernedRewardDistributionAccount != types.ZeroAddress {
+			return d.config.GovernedRewardDistributionAccount.String(), nil
+		}
+		if d.config != nil && d.config.RewardAccount != types.ZeroAddress {
+			return d.config.RewardAccount.String(), nil
+		}
+		return "", nil
+	case "dpos_reward_distribution_activation_epoch":
+		if d.config != nil {
+			return d.config.RewardAccountActivationEpoch, nil
+		}
+		return uint64(0), nil
 	case "dpos_delegate_threshold":
 		// 直接使用配置值（避免递归调用自身）；若未配置则返回默认 0
 		if d.config != nil && d.config.DPoSDelegateThreshold != nil {
@@ -239,6 +252,21 @@ func (d *DPoS) validateParameterValue(parameter string, value interface{}) error
 			if bigVal.Cmp(minVal) < 0 || bigVal.Cmp(maxVal) > 0 {
 				return fmt.Errorf("value %s out of range [%s, %s]", val, minValStr, maxValStr)
 			}
+		}
+
+	case "address":
+		var addrStr string
+		switch v := value.(type) {
+		case string:
+			addrStr = v
+		default:
+			return fmt.Errorf("invalid type %T for address parameter", value)
+		}
+		if err := types.IsValidAddress(addrStr); err != nil {
+			return fmt.Errorf("invalid reward account address: %w", err)
+		}
+		if types.StringToAddress(addrStr) == types.ZeroAddress {
+			return fmt.Errorf("reward account cannot be zero address")
 		}
 
 	default:
@@ -487,6 +515,47 @@ func (d *DPoS) updateParameterValue(paramName string, value interface{}, source 
 		if d.config != nil {
 			d.config.VoteLockActivationEpoch = epoch
 			d.logger.Info("✅ 已更新 d.config.VoteLockActivationEpoch", "epoch", epoch)
+		}
+
+	case "dpos_reward_distribution_account":
+		addr, err := parseAddressParameterValue(value)
+		if err != nil {
+			return fmt.Errorf("invalid dpos_reward_distribution_account: %w", err)
+		}
+		d.logger.Info("✅ 已更新治理奖励账户参数", "address", addr.String())
+
+	case "dpos_reward_distribution_activation_epoch":
+		var epoch uint64
+		switch v := value.(type) {
+		case uint64:
+			epoch = v
+		case int:
+			if v < 0 {
+				return fmt.Errorf("invalid dpos_reward_distribution_activation_epoch: %v", v)
+			}
+			epoch = uint64(v)
+		case int64:
+			if v < 0 {
+				return fmt.Errorf("invalid dpos_reward_distribution_activation_epoch: %v", v)
+			}
+			epoch = uint64(v)
+		case float64:
+			if v < 0 {
+				return fmt.Errorf("invalid dpos_reward_distribution_activation_epoch: %v", v)
+			}
+			epoch = uint64(v)
+		case string:
+			parsed, err := strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				return fmt.Errorf("invalid dpos_reward_distribution_activation_epoch: %v", v)
+			}
+			epoch = parsed
+		default:
+			return fmt.Errorf("unsupported dpos_reward_distribution_activation_epoch type: %T", value)
+		}
+		if d.config != nil {
+			d.config.RewardAccountActivationEpoch = epoch
+			d.logger.Info("✅ 已更新 d.config.RewardAccountActivationEpoch", "epoch", epoch)
 		}
 
 	case "dpos_delegate_threshold":

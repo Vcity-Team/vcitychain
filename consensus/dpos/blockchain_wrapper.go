@@ -916,18 +916,17 @@ func (p *blockchainWrapper) processRewardDistributionInBlock(block *types.Block,
 			"epoch", rewardInfo.EpochNumber,
 			"totalReward", rewardInfo.TotalReward.String())
 
-		// 获取奖励账户地址（从配置中获取）
-		// 🔧 修复：从DPoS实例获取奖励账户地址，而不是硬编码
 		var rewardAccount types.Address
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists {
-			rewardAccount = dposInstance.config.RewardAccount
-			p.logger.Info("✅ 从DPoS配置获取奖励账户地址",
+			rewardAccount = dposInstance.GetEffectiveRewardAccountForEpoch(rewardInfo.EpochNumber)
+			p.logger.Info("✅ 获取 epoch 奖励账户地址",
+				"epoch", rewardInfo.EpochNumber,
 				"rewardAccount", rewardAccount.String())
 		} else {
-			// 如果无法获取DPoS实例，使用硬编码地址（向后兼容）
-			rewardAccount = types.StringToAddress("0x4BCBB0e87ff0Bd8c6bD4968617b17b2e2DC12EBe")
-			p.logger.Warn("⚠️ 无法获取DPoS实例，使用硬编码奖励账户地址",
-				"rewardAccount", rewardAccount.String())
+			return fmt.Errorf("DPoS instance not available for reward account resolution at epoch %d", rewardInfo.EpochNumber)
+		}
+		if rewardAccount == types.ZeroAddress {
+			return fmt.Errorf("reward account is zero for epoch %d", rewardInfo.EpochNumber)
 		}
 
 		// 计算总奖励金额

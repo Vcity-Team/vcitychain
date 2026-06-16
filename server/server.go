@@ -219,6 +219,22 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		engineConfig["commission_removal_activation_epoch"] = s.config.CommissionRemovalActivationEpoch
 		s.logger.Info("✅ 透传 commission_removal_activation_epoch 到 DPoS 引擎", "epoch", s.config.CommissionRemovalActivationEpoch)
 	}
+	rewardAcctActivationEpoch := s.config.RewardAccountActivationEpoch
+	if rewardAcctActivationEpoch == 0 {
+		rewardAcctActivationEpoch = s.config.RewardDistributionActivationEpoch
+	}
+	if rewardAcctActivationEpoch > 0 {
+		engineConfig["reward_account_activation_epoch"] = rewardAcctActivationEpoch
+		s.logger.Info("✅ 透传 reward_account_activation_epoch 到 DPoS 引擎", "epoch", rewardAcctActivationEpoch)
+	}
+	if governedRewardAcct := strings.TrimSpace(s.config.DPoSRewardDistributionAccount); governedRewardAcct != "" {
+		if err := types.IsValidAddress(governedRewardAcct); err == nil {
+			engineConfig["governed_reward_distribution_account"] = types.StringToAddress(governedRewardAcct)
+			s.logger.Info("✅ 透传 dpos_reward_distribution_account 到 DPoS 引擎", "address", governedRewardAcct)
+		} else {
+			return fmt.Errorf("invalid dpos_reward_distribution_account: %s", governedRewardAcct)
+		}
+	}
 
 	// 可选：启动引导 RPC（从 staking 合约读取 validators()）
 	if strings.TrimSpace(s.config.DPoSBootstrapRPC) != "" {
