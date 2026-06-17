@@ -132,6 +132,58 @@ type Server struct {
 	gasHelper *gasprice.GasHelper
 }
 
+// applyOptionalDPoSRuntimeConfig 将 server.yaml 中仅在运行时生效、且不在 genesis engine 块里的 DPoS 字段写入 engineConfig。
+// setupConsensus（日常重启）与 StartDPoSEngine（IBFT→DPoS 切换）均须调用，否则 yaml 改了也不进 DPoS。
+func (s *Server) applyOptionalDPoSRuntimeConfig(engineConfig map[string]interface{}) error {
+	if engineConfig == nil {
+		return fmt.Errorf("engineConfig is nil")
+	}
+
+	if s.config.VoterTargetAPYBps > 0 {
+		engineConfig["voter_target_apy"] = s.config.VoterTargetAPYBps
+		s.logger.Info("✅ 透传 voter_target_apy 到 DPoS 引擎", "voter_target_apy_bps", s.config.VoterTargetAPYBps)
+	}
+
+	if strings.TrimSpace(s.config.BlockProducerRewardPerBlock) != "" {
+		if rewardPerBlock, ok := new(big.Int).SetString(strings.TrimSpace(s.config.BlockProducerRewardPerBlock), 10); ok {
+			engineConfig["block_producer_reward_per_block"] = rewardPerBlock
+			s.logger.Info("✅ 透传 block_producer_reward_per_block 到 DPoS 引擎", "wei", rewardPerBlock.String())
+		} else {
+			return fmt.Errorf("invalid block_producer_reward_per_block: %s", s.config.BlockProducerRewardPerBlock)
+		}
+	}
+	if s.config.ProducerRewardActivationEpoch > 0 {
+		engineConfig["producer_reward_activation_epoch"] = s.config.ProducerRewardActivationEpoch
+		s.logger.Info("✅ 透传 producer_reward_activation_epoch 到 DPoS 引擎", "epoch", s.config.ProducerRewardActivationEpoch)
+	}
+	if s.config.VoteLockActivationEpoch > 0 {
+		engineConfig["vote_lock_activation_epoch"] = s.config.VoteLockActivationEpoch
+		s.logger.Info("✅ 透传 vote_lock_activation_epoch 到 DPoS 引擎", "epoch", s.config.VoteLockActivationEpoch)
+	}
+	if s.config.CommissionRemovalActivationEpoch > 0 {
+		engineConfig["commission_removal_activation_epoch"] = s.config.CommissionRemovalActivationEpoch
+		s.logger.Info("✅ 透传 commission_removal_activation_epoch 到 DPoS 引擎", "epoch", s.config.CommissionRemovalActivationEpoch)
+	}
+	rewardAcctActivationEpoch := s.config.RewardAccountActivationEpoch
+	if rewardAcctActivationEpoch == 0 {
+		rewardAcctActivationEpoch = s.config.RewardDistributionActivationEpoch
+	}
+	if rewardAcctActivationEpoch > 0 {
+		engineConfig["reward_account_activation_epoch"] = rewardAcctActivationEpoch
+		s.logger.Info("✅ 透传 reward_account_activation_epoch 到 DPoS 引擎", "epoch", rewardAcctActivationEpoch)
+	}
+	if governedRewardAcct := strings.TrimSpace(s.config.DPoSRewardDistributionAccount); governedRewardAcct != "" {
+		if err := types.IsValidAddress(governedRewardAcct); err == nil {
+			engineConfig["governed_reward_distribution_account"] = types.StringToAddress(governedRewardAcct)
+			s.logger.Info("✅ 透传 dpos_reward_distribution_account 到 DPoS 引擎", "address", governedRewardAcct)
+		} else {
+			return fmt.Errorf("invalid dpos_reward_distribution_account: %s", governedRewardAcct)
+		}
+	}
+
+	return nil
+}
+
 // StartDPoSEngine 实现DPoSEngineStarter接口，启动DPoS引擎
 func (s *Server) StartDPoSEngine(height uint64) error {
 	s.logger.Info("🚀 开始启动DPoS引擎", "height", height)
@@ -191,49 +243,11 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		s.logger.Warn("⚠️ 透传 dpos_relax_header_timestamp_order=true 到 DPoS（临时放宽块头时间戳校验）")
 	}
 
-	// 可选：投票者目标 APY（基点，500=5%）
-	if s.config.VoterTargetAPYBps > 0 {
-		engineConfig["voter_target_apy"] = s.config.VoterTargetAPYBps
-		s.logger.Info("✅ 透传 voter_target_apy 到 DPoS 引擎", "voter_target_apy_bps", s.config.VoterTargetAPYBps)
-	} else {
+	if s.config.VoterTargetAPYBps == 0 {
 		s.logger.Info("ℹ️ 未配置 voter_target_apy，DPoS 将使用默认值", "defaultBps", 500)
 	}
-
-	if strings.TrimSpace(s.config.BlockProducerRewardPerBlock) != "" {
-		if rewardPerBlock, ok := new(big.Int).SetString(strings.TrimSpace(s.config.BlockProducerRewardPerBlock), 10); ok {
-			engineConfig["block_producer_reward_per_block"] = rewardPerBlock
-			s.logger.Info("✅ 透传 block_producer_reward_per_block 到 DPoS 引擎", "wei", rewardPerBlock.String())
-		} else {
-			return fmt.Errorf("invalid block_producer_reward_per_block: %s", s.config.BlockProducerRewardPerBlock)
-		}
-	}
-	if s.config.ProducerRewardActivationEpoch > 0 {
-		engineConfig["producer_reward_activation_epoch"] = s.config.ProducerRewardActivationEpoch
-		s.logger.Info("✅ 透传 producer_reward_activation_epoch 到 DPoS 引擎", "epoch", s.config.ProducerRewardActivationEpoch)
-	}
-	if s.config.VoteLockActivationEpoch > 0 {
-		engineConfig["vote_lock_activation_epoch"] = s.config.VoteLockActivationEpoch
-		s.logger.Info("✅ 透传 vote_lock_activation_epoch 到 DPoS 引擎", "epoch", s.config.VoteLockActivationEpoch)
-	}
-	if s.config.CommissionRemovalActivationEpoch > 0 {
-		engineConfig["commission_removal_activation_epoch"] = s.config.CommissionRemovalActivationEpoch
-		s.logger.Info("✅ 透传 commission_removal_activation_epoch 到 DPoS 引擎", "epoch", s.config.CommissionRemovalActivationEpoch)
-	}
-	rewardAcctActivationEpoch := s.config.RewardAccountActivationEpoch
-	if rewardAcctActivationEpoch == 0 {
-		rewardAcctActivationEpoch = s.config.RewardDistributionActivationEpoch
-	}
-	if rewardAcctActivationEpoch > 0 {
-		engineConfig["reward_account_activation_epoch"] = rewardAcctActivationEpoch
-		s.logger.Info("✅ 透传 reward_account_activation_epoch 到 DPoS 引擎", "epoch", rewardAcctActivationEpoch)
-	}
-	if governedRewardAcct := strings.TrimSpace(s.config.DPoSRewardDistributionAccount); governedRewardAcct != "" {
-		if err := types.IsValidAddress(governedRewardAcct); err == nil {
-			engineConfig["governed_reward_distribution_account"] = types.StringToAddress(governedRewardAcct)
-			s.logger.Info("✅ 透传 dpos_reward_distribution_account 到 DPoS 引擎", "address", governedRewardAcct)
-		} else {
-			return fmt.Errorf("invalid dpos_reward_distribution_account: %s", governedRewardAcct)
-		}
+	if err := s.applyOptionalDPoSRuntimeConfig(engineConfig); err != nil {
+		return err
 	}
 
 	// 可选：启动引导 RPC（从 staking 合约读取 validators()）
@@ -963,6 +977,10 @@ func (s *Server) setupConsensus() error {
 	if s.config.DPoSRelaxHeaderTimestampOrder {
 		engineConfig["dpos_relax_header_timestamp_order"] = true
 		s.logger.Warn("⚠️ setupConsensus: dpos_relax_header_timestamp_order=true 已写入 engineConfig")
+	}
+
+	if err := s.applyOptionalDPoSRuntimeConfig(engineConfig); err != nil {
+		return err
 	}
 
 	// 从YAML配置中获取epoch duration
