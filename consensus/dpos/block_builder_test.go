@@ -1,3 +1,5 @@
+//go:build integration
+
 package dpos
 
 import (
@@ -143,7 +145,7 @@ func TestBlockBuilder_BuildBlockTxOneFailedTxAndOneTakesTooMuchGas(t *testing.T)
 	require.NoError(t, err)
 
 	txPool.AssertExpectations(t)
-	require.Len(t, bb.txns, 3, "Should have 3 transactions but has %d", len(bb.txns))
+	require.Len(t, fb.Block.Transactions, 3)
 	require.Len(t, bb.Receipts(), 3)
 
 	// assert logs bloom

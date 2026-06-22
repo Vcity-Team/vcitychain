@@ -208,7 +208,7 @@ func TestRewardDistributor_StakeRatioOnSameValidator_ZeroCommission(t *testing.T
 
 	require.Zero(t, expectedLarge.Cmp(rewards[voterLarge]))
 	require.Zero(t, expectedSmall.Cmp(rewards[voterSmall]))
-	require.Equal(t, 2, new(big.Int).Div(expectedLarge, expectedSmall).Int64())
+	require.Equal(t, int64(2), new(big.Int).Div(expectedLarge, expectedSmall).Int64())
 
 	// 整除余数归验证者（零佣金下无佣金截留）
 	remainder := new(big.Int).Sub(distributable, new(big.Int).Add(expectedLarge, expectedSmall))
@@ -278,8 +278,8 @@ func TestRewardDistributor_MultiDelegateNoDilution_ZeroCommission(t *testing.T) 
 
 	validatorAmount, voterRewards := rd.computeRewardsForValidator(target, voters, validators, blockCounts, 10)
 
-	// SR A 池 500，零佣金全部分 voter；权重 2000 vs 1000 => 2:1
-	distributable := big.NewInt(500)
+	// SR A 有效质押 = 2000+1000=3000，SR B=1000；R 按 3:1 分 => SR A 池 750
+	distributable := big.NewInt(750)
 	expectedMulti := new(big.Int).Mul(distributable, big.NewInt(2000))
 	expectedMulti.Div(expectedMulti, big.NewInt(3000))
 	expectedCompetitor := new(big.Int).Mul(distributable, big.NewInt(1000))
@@ -287,7 +287,7 @@ func TestRewardDistributor_MultiDelegateNoDilution_ZeroCommission(t *testing.T) 
 
 	require.Zero(t, expectedMulti.Cmp(voterRewards[multiVoter]))
 	require.Zero(t, expectedCompetitor.Cmp(voterRewards[competitor]))
-	require.Equal(t, 2, new(big.Int).Div(expectedMulti, expectedCompetitor).Int64())
+	require.Equal(t, int64(2), new(big.Int).Div(expectedMulti, expectedCompetitor).Int64())
 
 	remainder := new(big.Int).Sub(distributable, new(big.Int).Add(expectedMulti, expectedCompetitor))
 	require.Zero(t, remainder.Cmp(validatorAmount))
@@ -411,7 +411,7 @@ func TestRewardDistributor_ZeroCommission_StakeWeightAndInternalSplit(t *testing
 	require.Zero(t, expectedLargeA.Cmp(rewards[voterLargeA]))
 	require.Zero(t, expectedLargeB.Cmp(rewards[voterLargeB]))
 	require.Zero(t, big.NewInt(250).Cmp(rewards[voterSmall]))
-	require.Equal(t, 2, new(big.Int).Div(expectedLargeA, expectedLargeB).Int64())
+	require.Equal(t, int64(2), new(big.Int).Div(expectedLargeA, expectedLargeB).Int64())
 	require.Nil(t, rewards[largeSR])
 	require.Nil(t, rewards[smallSR])
 }

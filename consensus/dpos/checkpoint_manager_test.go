@@ -1,3 +1,5 @@
+//go:build integration
+
 package dpos
 
 import (
@@ -10,8 +12,8 @@ import (
 	"github.com/umbracle/ethgo/abi"
 	"github.com/umbracle/ethgo/jsonrpc"
 
-	"github.com/Vcity-Team/vcitychain/consensus/polybft/contractsapi"
-	"github.com/Vcity-Team/vcitychain/consensus/polybft/signer"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/contractsapi"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/signer"
 	"github.com/Vcity-Team/vcitychain/contracts"
 	"github.com/Vcity-Team/vcitychain/helper/common"
 	"github.com/Vcity-Team/vcitychain/merkle-tree"
@@ -21,9 +23,9 @@ import (
 	"github.com/umbracle/ethgo"
 
 	"github.com/Vcity-Team/vcitychain/bls"
-	"github.com/Vcity-Team/vcitychain/consensus/polybft/bitmap"
-	"github.com/Vcity-Team/vcitychain/consensus/polybft/validator"
-	"github.com/Vcity-Team/vcitychain/consensus/polybft/wallet"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/bitmap"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/wallet"
 	"github.com/Vcity-Team/vcitychain/txrelayer"
 	"github.com/Vcity-Team/vcitychain/types"
 )

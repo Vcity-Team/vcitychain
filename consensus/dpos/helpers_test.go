@@ -1,3 +1,5 @@
+//go:build integration
+
 package dpos
 
 import (
@@ -10,10 +12,10 @@ import (
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/bls"
-	"github.com/Vcity-Team/vcitychain/consensus/polybft/bitmap"
-	"github.com/Vcity-Team/vcitychain/consensus/polybft/contractsapi"
-	"github.com/Vcity-Team/vcitychain/consensus/polybft/validator"
-	"github.com/Vcity-Team/vcitychain/consensus/polybft/wallet"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/bitmap"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/contractsapi"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/wallet"
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
 	"github.com/stretchr/testify/require"

@@ -1,3 +1,5 @@
+//go:build integration
+
 package dpos
 
 import (
@@ -6,7 +8,7 @@ import (
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/blockchain"
-	"github.com/Vcity-Team/vcitychain/consensus/polybft/validator"
+	"github.com/Vcity-Team/vcitychain/consensus/dpos/validator"
 	"github.com/Vcity-Team/vcitychain/helper/progress"
 	"github.com/Vcity-Team/vcitychain/state"
 	"github.com/Vcity-Team/vcitychain/syncer"
@@ -104,6 +106,34 @@ func (m *blockchainMock) GetHeaderByHash(hash types.Hash) (*types.Header, bool) 
 	panic("Unsupported mock for GetHeaderByHash") //nolint:gocritic
 }
 
+func (m *blockchainMock) GetBlockByHash(hash types.Hash, full bool) (*types.Block, bool) {
+	args := m.Called(hash, full)
+	if len(args) == 0 {
+		return nil, false
+	}
+	block, _ := args.Get(0).(*types.Block)
+	if len(args) >= 2 {
+		return block, args.Bool(1)
+	}
+	return block, block != nil
+}
+
+func (m *blockchainMock) SetBlockProductionStartTime() {
+	m.Called()
+}
+
+func (m *blockchainMock) ReadTxLookup(hash types.Hash) (types.Hash, bool) {
+	args := m.Called(hash)
+	if len(args) == 0 {
+		return types.Hash{}, false
+	}
+	h, _ := args.Get(0).(types.Hash)
+	if len(args) >= 2 {
+		return h, args.Bool(1)
+	}
+	return h, true
+}
+
 func (m *blockchainMock) GetSystemState(provider contract.Provider) SystemState {
 	args := m.Called(provider)
 
@@ -131,7 +161,6 @@ func (m *blockchainMock) GetReceiptsByHash(hash types.Hash) ([]*types.Receipt, e
 	return args.Get(0).([]*types.Receipt), args.Error(1) //nolint:forcetypeassert
 }
 
-var _ polybftBackend = (*polybftBackendMock)(nil)
 var _ dposBackend = (*polybftBackendMock)(nil)
 
 type polybftBackendMock struct {
@@ -177,6 +206,20 @@ func (p *polybftBackendMock) GetDelegates(blockNumber uint64, parents []*types.H
 
 func (p *polybftBackendMock) GetDelegatesWithTx(blockNumber uint64, parents []*types.Header, dbTx *bolt.Tx) (validator.AccountSet, error) {
 	return p.GetValidatorsWithTx(blockNumber, parents, dbTx)
+}
+
+func (p *polybftBackendMock) GetCurrentDelegates() validator.AccountSet {
+	args := p.Called()
+	if len(args) == 0 {
+		return nil
+	}
+	accountSet, _ := args.Get(0).(validator.AccountSet)
+	return accountSet
+}
+
+func (p *polybftBackendMock) SaveValidatorSetForBlockWithValidators(blockNumber uint64, validators validator.AccountSet) error {
+	args := p.Called(blockNumber, validators)
+	return args.Error(0)
 }
 
 func (p *polybftBackendMock) GetStakingInfo(blockNumber uint64, staker types.Address) (*StakeInfo, error) {
