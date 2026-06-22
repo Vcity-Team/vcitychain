@@ -495,7 +495,7 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 		if d.rewardDistributor != nil && d.blockTracker != nil && totalBlocks > 0 {
 			// 为每个验证者计算投票者奖励详情
 			for _, validator := range validators {
-				_, voterRewardsForValidator := d.rewardDistributor.computeRewardsForValidator(validator, voters, blockCounts, totalBlocks)
+				_, voterRewardsForValidator := d.rewardDistributor.computeRewardsForValidator(validator, voters, validators, blockCounts, totalBlocks)
 				// 获取投票权重
 				voterWeights, _ := d.rewardDistributor.computeVoterWeights(validator.Address, voters)
 				for voterAddr, share := range voterRewardsForValidator {

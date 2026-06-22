@@ -386,7 +386,7 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 			voters = make(map[types.Address]*VoterInfo)
 		}
 
-		validatorAmount, voterAmounts := d.rewardDistributor.computeRewardsForValidator(targetValidator, voters, blockCounts, totalBlocks)
+		validatorAmount, voterAmounts := d.rewardDistributor.computeRewardsForValidator(targetValidator, voters, validators, blockCounts, totalBlocks)
 
 		validatorRewardBig = new(big.Int).Set(validatorAmount)
 		voterRewardBig = big.NewInt(0)
@@ -737,7 +737,7 @@ func (d *DPoS) recordRewardsToDatabase(epochNumber uint64, rewards map[types.Add
 		if totalBlocks > 0 && blockCounts != nil {
 			// 为每个验证者单独记录奖励
 			for _, validator := range validators {
-				validatorAmount, voterRewards := d.rewardDistributor.computeRewardsForValidator(validator, voters, blockCounts, totalBlocks)
+				validatorAmount, voterRewards := d.rewardDistributor.computeRewardsForValidator(validator, voters, validators, blockCounts, totalBlocks)
 
 				// 记录验证者奖励
 				if validatorAmount.Sign() > 0 {

@@ -216,9 +216,137 @@ func (rd *RewardDistributor) computeVoterWeights(
 	return weights, total
 }
 
+// srDelegatedStake returns effective delegated stake on an SR (voter weights first, else VotingPower).
+func (rd *RewardDistributor) srDelegatedStake(
+	v *validator.ValidatorMetadata,
+	voters map[types.Address]*VoterInfo,
+) *big.Int {
+	if v == nil {
+		return big.NewInt(0)
+	}
+	_, total := rd.computeVoterWeights(v.Address, voters)
+	if total.Sign() > 0 {
+		return total
+	}
+	if v.VotingPower != nil && v.VotingPower.Sign() > 0 {
+		return new(big.Int).Set(v.VotingPower)
+	}
+	return big.NewInt(0)
+}
+
+// computeExpectedBlocksForValidator mirrors fault/block stats: fair share of effective epoch blocks.
+func computeExpectedBlocksForValidator(
+	blockCounts map[types.Address]uint64,
+	totalBlocks uint64,
+	validators validator.AccountSet,
+) uint64 {
+	if totalBlocks == 0 || len(validators) == 0 {
+		return 0
+	}
+
+	active := make(map[types.Address]struct{}, len(validators))
+	activeCount := uint64(0)
+	for _, v := range validators {
+		if v == nil || !v.IsActive {
+			continue
+		}
+		if v.VotingPower == nil || v.VotingPower.Sign() <= 0 {
+			continue
+		}
+		active[v.Address] = struct{}{}
+		activeCount++
+	}
+	if activeCount == 0 {
+		activeCount = 1
+	}
+
+	removedBlocks := uint64(0)
+	for addr, count := range blockCounts {
+		if _, ok := active[addr]; !ok {
+			removedBlocks += count
+		}
+	}
+	effectiveBlocks := totalBlocks - removedBlocks
+	if effectiveBlocks == 0 {
+		return 0
+	}
+
+	expected := effectiveBlocks / activeCount
+	if expected == 0 {
+		expected = 1
+	}
+	return expected
+}
+
+// blockCompletionBps returns completion in basis points (10000 = 100%).
+func blockCompletionBps(actualBlocks, expectedBlocks uint64) uint64 {
+	if expectedBlocks == 0 || actualBlocks == 0 {
+		return 0
+	}
+	if actualBlocks >= expectedBlocks {
+		return 10000
+	}
+	return actualBlocks * 10000 / expectedBlocks
+}
+
+// computeValidatorPoolAllocations splits epoch voter pool R by SR stake weight × block completion.
+// Unallocated portion (low completion SRs) is redistributed to remaining SRs via normalized weights.
+func (rd *RewardDistributor) computeValidatorPoolAllocations(
+	validators validator.AccountSet,
+	voters map[types.Address]*VoterInfo,
+	blockCounts map[types.Address]uint64,
+	totalBlocks uint64,
+) map[types.Address]*big.Int {
+	allocations := make(map[types.Address]*big.Int)
+	if rd.rewardAmount == nil || rd.rewardAmount.Sign() == 0 || totalBlocks == 0 {
+		return allocations
+	}
+
+	expectedBlocks := computeExpectedBlocksForValidator(blockCounts, totalBlocks, validators)
+	totalWeighted := big.NewInt(0)
+	weightedStake := make(map[types.Address]*big.Int)
+
+	for _, v := range validators {
+		if v == nil || !v.IsActive {
+			continue
+		}
+		stake := rd.srDelegatedStake(v, voters)
+		if stake.Sign() == 0 {
+			continue
+		}
+		actual := blockCounts[v.Address]
+		completionBps := blockCompletionBps(actual, expectedBlocks)
+		if completionBps == 0 {
+			continue
+		}
+
+		weighted := new(big.Int).Mul(stake, big.NewInt(int64(completionBps)))
+		weighted.Div(weighted, big.NewInt(10000))
+		if weighted.Sign() == 0 {
+			continue
+		}
+		weightedStake[v.Address] = weighted
+		totalWeighted.Add(totalWeighted, weighted)
+	}
+
+	if totalWeighted.Sign() == 0 {
+		return allocations
+	}
+
+	for addr, weighted := range weightedStake {
+		pool := new(big.Int).Mul(rd.rewardAmount, weighted)
+		pool.Div(pool, totalWeighted)
+		if pool.Sign() > 0 {
+			allocations[addr] = pool
+		}
+	}
+	return allocations
+}
+
 func (rd *RewardDistributor) computeRewardsForValidator(
 	validator *validator.ValidatorMetadata,
 	voters map[types.Address]*VoterInfo,
+	validators validator.AccountSet,
 	blockCounts map[types.Address]uint64,
 	totalBlocks uint64,
 ) (*big.Int, map[types.Address]*big.Int) {
@@ -229,86 +357,13 @@ func (rd *RewardDistributor) computeRewardsForValidator(
 		return validatorAmount, voterRewards
 	}
 
-	blocksProduced := blockCounts[validator.Address]
-	if blocksProduced == 0 {
+	pools := rd.computeValidatorPoolAllocations(validators, voters, blockCounts, totalBlocks)
+	validatorPool := pools[validator.Address]
+	if validatorPool == nil || validatorPool.Sign() == 0 {
 		return validatorAmount, voterRewards
 	}
 
-	validatorBlocks := new(big.Int).SetUint64(blocksProduced)
-	totalBlocksBig := new(big.Int).SetUint64(totalBlocks)
-
-	validatorReward := new(big.Int).Mul(validatorBlocks, rd.rewardAmount)
-	validatorReward.Div(validatorReward, totalBlocksBig)
-
-	if validatorReward.Sign() == 0 {
-		return validatorAmount, voterRewards
-	}
-
-	commissionRate := rd.getCommissionRate(validator.Address)
-	if commissionRate > 10000 {
-		commissionRate = 10000
-	}
-
-	commissionAmount := new(big.Int).Mul(validatorReward, big.NewInt(int64(commissionRate)))
-	commissionAmount.Div(commissionAmount, rd.commissionDenominator)
-	if commissionAmount.Sign() > 0 {
-		validatorAmount.Add(validatorAmount, commissionAmount)
-	}
-
-	distributable := new(big.Int).Sub(validatorReward, commissionAmount)
-	if distributable.Sign() <= 0 {
-		return validatorAmount, voterRewards
-	}
-
-	voterWeights, totalWeight := rd.computeVoterWeights(validator.Address, voters)
-	if totalWeight.Sign() == 0 {
-		rd.logger.Info("⚠️ [奖励计算] 验证者没有投票者权重，所有可分配奖励归验证者",
-			"validator", validator.Address.String(),
-			"distributable", distributable.String(),
-			"voterCount", len(voters))
-		validatorAmount.Add(validatorAmount, distributable)
-		return validatorAmount, voterRewards
-	}
-
-	allocated := big.NewInt(0)
-	for voterAddr, weight := range voterWeights {
-		if weight == nil || weight.Sign() == 0 {
-			rd.logger.Info("⚠️ [奖励计算] 投票者分红被跳过（权重为nil或0）",
-				"voter", voterAddr.String(),
-				"validator", validator.Address.String(),
-				"weight", func() string {
-					if weight != nil {
-						return weight.String()
-					}
-					return "nil"
-				}())
-			continue
-		}
-
-		share := new(big.Int).Mul(distributable, weight)
-		share.Div(share, totalWeight)
-
-		if share.Sign() == 0 {
-			rd.logger.Info("⚠️ [奖励计算] 投票者分红被跳过（计算后分红为0）",
-				"voter", voterAddr.String(),
-				"validator", validator.Address.String(),
-				"weight", weight.String(),
-				"distributable", distributable.String(),
-				"totalWeight", totalWeight.String(),
-				"calculatedShare", share.String())
-			continue
-		}
-
-		voterRewards[voterAddr] = share
-		allocated.Add(allocated, share)
-	}
-
-	remainder := new(big.Int).Sub(distributable, allocated)
-	if remainder.Sign() > 0 {
-		validatorAmount.Add(validatorAmount, remainder)
-	}
-
-	return validatorAmount, voterRewards
+	return rd.splitValidatorPoolReward(validator, voters, validatorPool)
 }
 
 // DistributeEpochRewards 分发Epoch奖励
@@ -361,10 +416,18 @@ func (rd *RewardDistributor) calculateRewards(
 		return rewards
 	}
 
-	for _, validator := range validators {
-		validatorAmount, voterRewards := rd.computeRewardsForValidator(validator, voters, blockCounts, totalBlocks)
+	poolAllocations := rd.computeValidatorPoolAllocations(validators, voters, blockCounts, totalBlocks)
+	for _, v := range validators {
+		if v == nil {
+			continue
+		}
+		pool := poolAllocations[v.Address]
+		if pool == nil || pool.Sign() == 0 {
+			continue
+		}
+		validatorAmount, voterRewards := rd.splitValidatorPoolReward(v, voters, pool)
 
-		rd.addReward(rewards, validator.Address, validatorAmount)
+		rd.addReward(rewards, v.Address, validatorAmount)
 
 		for voterAddr, share := range voterRewards {
 			rd.addReward(rewards, voterAddr, share)
@@ -372,6 +435,88 @@ func (rd *RewardDistributor) calculateRewards(
 	}
 
 	return rewards
+}
+
+// splitValidatorPoolReward splits one SR's voter-pool share between commission and voters.
+func (rd *RewardDistributor) splitValidatorPoolReward(
+	v *validator.ValidatorMetadata,
+	voters map[types.Address]*VoterInfo,
+	validatorPool *big.Int,
+) (*big.Int, map[types.Address]*big.Int) {
+	validatorAmount := big.NewInt(0)
+	voterRewards := make(map[types.Address]*big.Int)
+
+	if v == nil || validatorPool == nil || validatorPool.Sign() == 0 {
+		return validatorAmount, voterRewards
+	}
+
+	validatorReward := new(big.Int).Set(validatorPool)
+
+	commissionRate := rd.getCommissionRate(v.Address)
+	if commissionRate > 10000 {
+		commissionRate = 10000
+	}
+
+	commissionAmount := new(big.Int).Mul(validatorReward, big.NewInt(int64(commissionRate)))
+	commissionAmount.Div(commissionAmount, rd.commissionDenominator)
+	if commissionAmount.Sign() > 0 {
+		validatorAmount.Add(validatorAmount, commissionAmount)
+	}
+
+	distributable := new(big.Int).Sub(validatorReward, commissionAmount)
+	if distributable.Sign() <= 0 {
+		return validatorAmount, voterRewards
+	}
+
+	voterWeights, totalWeight := rd.computeVoterWeights(v.Address, voters)
+	if totalWeight.Sign() == 0 {
+		rd.logger.Info("⚠️ [奖励计算] 验证者没有投票者权重，所有可分配奖励归验证者",
+			"validator", v.Address.String(),
+			"distributable", distributable.String(),
+			"voterCount", len(voters))
+		validatorAmount.Add(validatorAmount, distributable)
+		return validatorAmount, voterRewards
+	}
+
+	allocated := big.NewInt(0)
+	for voterAddr, weight := range voterWeights {
+		if weight == nil || weight.Sign() == 0 {
+			rd.logger.Info("⚠️ [奖励计算] 投票者分红被跳过（权重为nil或0）",
+				"voter", voterAddr.String(),
+				"validator", v.Address.String(),
+				"weight", func() string {
+					if weight != nil {
+						return weight.String()
+					}
+					return "nil"
+				}())
+			continue
+		}
+
+		share := new(big.Int).Mul(distributable, weight)
+		share.Div(share, totalWeight)
+
+		if share.Sign() == 0 {
+			rd.logger.Info("⚠️ [奖励计算] 投票者分红被跳过（计算后分红为0）",
+				"voter", voterAddr.String(),
+				"validator", v.Address.String(),
+				"weight", weight.String(),
+				"distributable", distributable.String(),
+				"totalWeight", totalWeight.String(),
+				"calculatedShare", share.String())
+			continue
+		}
+
+		voterRewards[voterAddr] = share
+		allocated.Add(allocated, share)
+	}
+
+	remainder := new(big.Int).Sub(distributable, allocated)
+	if remainder.Sign() > 0 {
+		validatorAmount.Add(validatorAmount, remainder)
+	}
+
+	return validatorAmount, voterRewards
 }
 
 // CalculateRewards 计算奖励（公开方法，用于外部调用）

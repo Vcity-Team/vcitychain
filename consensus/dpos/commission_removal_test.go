@@ -1,6 +1,7 @@
 package dpos
 
 import (
+	"math/big"
 	"testing"
 	"time"
 

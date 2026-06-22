@@ -29,6 +29,18 @@ func createTestStakeStore(t *testing.T) *StakeStore {
 	return &StakeStore{db: db}
 }
 
+const testCommissionRemovalEpoch = uint64(700)
+
+// newZeroCommissionRewardDistributor 模拟主网已关闭佣金后的奖励分发器。
+func newZeroCommissionRewardDistributor(stakeStore *StakeStore, rewardAmount *big.Int) *RewardDistributor {
+	rd := NewRewardDistributor(nil, types.ZeroAddress, rewardAmount, nil, stakeStore, 1000, 21*24*time.Hour, hclog.NewNullLogger())
+	rd.SetCommissionRemovedAtEpochChecker(func(epoch uint64) bool {
+		return epoch >= testCommissionRemovalEpoch
+	})
+	rd.SetDistributionEpoch(testCommissionRemovalEpoch)
+	return rd
+}
+
 func TestRewardDistributor_NoVoters(t *testing.T) {
 	stakeStore := createTestStakeStore(t)
 	validatorAddr := types.StringToAddress("0x1")
@@ -43,7 +55,7 @@ func TestRewardDistributor_NoVoters(t *testing.T) {
 	require.NoError(t, stakeStore.setDelegateInfo(validatorAddr, delegateInfo, nil))
 
 	rewardAmount := big.NewInt(1000)
-	rd := NewRewardDistributor(nil, types.ZeroAddress, rewardAmount, nil, stakeStore, 1000, 21*24*time.Hour, hclog.NewNullLogger())
+	rd := newZeroCommissionRewardDistributor(stakeStore, rewardAmount)
 
 	validators := validator.AccountSet{
 		{
@@ -63,7 +75,7 @@ func TestRewardDistributor_NoVoters(t *testing.T) {
 	require.Zero(t, expected.Cmp(actual))
 }
 
-func TestRewardDistributor_WithVoters(t *testing.T) {
+func TestRewardDistributor_WithVoters_ZeroCommission(t *testing.T) {
 	stakeStore := createTestStakeStore(t)
 	validatorAddr := types.StringToAddress("0x2")
 
@@ -73,12 +85,12 @@ func TestRewardDistributor_WithVoters(t *testing.T) {
 		TotalVotes:     big.NewInt(200),
 		IsActive:       true,
 		IsRegistered:   true,
-		CommissionRate: 1000, // 10%
+		CommissionRate: 1000, // 链上仍可能有历史佣金率，但 epoch 已关闭佣金
 	}
 	require.NoError(t, stakeStore.setDelegateInfo(validatorAddr, delegateInfo, nil))
 
 	rewardAmount := big.NewInt(1000)
-	rd := NewRewardDistributor(nil, types.ZeroAddress, rewardAmount, nil, stakeStore, 1000, 21*24*time.Hour, hclog.NewNullLogger())
+	rd := newZeroCommissionRewardDistributor(stakeStore, rewardAmount)
 
 	validators := validator.AccountSet{
 		{
@@ -107,14 +119,12 @@ func TestRewardDistributor_WithVoters(t *testing.T) {
 	}
 
 	rewards := rd.CalculateRewards(validators, voters, blockCounts, 10)
-	require.Len(t, rewards, 3)
+	require.Len(t, rewards, 2)
 
-	commissionExpected := big.NewInt(100)
-	voterShareExpected := big.NewInt(450)
-
-	require.Zero(t, commissionExpected.Cmp(rewards[validatorAddr]))
+	voterShareExpected := big.NewInt(500)
 	require.Zero(t, voterShareExpected.Cmp(rewards[voter1Addr]))
 	require.Zero(t, voterShareExpected.Cmp(rewards[voter2Addr]))
+	require.Nil(t, rewards[validatorAddr])
 }
 
 func TestRewardDistributor_CommissionAutoTurn(t *testing.T) {
@@ -149,7 +159,7 @@ func TestRewardDistributor_CommissionAutoTurn(t *testing.T) {
 	require.NotZero(t, updatedInfo.CommissionUpdateTime)
 }
 
-func TestRewardDistributor_StakeRatioOnSameValidator(t *testing.T) {
+func TestRewardDistributor_StakeRatioOnSameValidator_ZeroCommission(t *testing.T) {
 	stakeStore := createTestStakeStore(t)
 	validatorAddr := types.StringToAddress("0x6")
 
@@ -164,7 +174,7 @@ func TestRewardDistributor_StakeRatioOnSameValidator(t *testing.T) {
 	require.NoError(t, stakeStore.setDelegateInfo(validatorAddr, delegateInfo, nil))
 
 	rewardAmount := big.NewInt(1000)
-	rd := NewRewardDistributor(nil, types.ZeroAddress, rewardAmount, nil, stakeStore, 1000, 21*24*time.Hour, hclog.NewNullLogger())
+	rd := newZeroCommissionRewardDistributor(stakeStore, rewardAmount)
 
 	validators := validator.AccountSet{
 		{Address: validatorAddr, VotingPower: big.NewInt(300), IsActive: true},
@@ -190,7 +200,7 @@ func TestRewardDistributor_StakeRatioOnSameValidator(t *testing.T) {
 
 	rewards := rd.CalculateRewards(validators, voters, blockCounts, 10)
 
-	distributable := big.NewInt(900)
+	distributable := big.NewInt(1000)
 	expectedLarge := new(big.Int).Mul(distributable, big.NewInt(200))
 	expectedLarge.Div(expectedLarge, big.NewInt(300))
 	expectedSmall := new(big.Int).Mul(distributable, big.NewInt(100))
@@ -199,9 +209,13 @@ func TestRewardDistributor_StakeRatioOnSameValidator(t *testing.T) {
 	require.Zero(t, expectedLarge.Cmp(rewards[voterLarge]))
 	require.Zero(t, expectedSmall.Cmp(rewards[voterSmall]))
 	require.Equal(t, 2, new(big.Int).Div(expectedLarge, expectedSmall).Int64())
+
+	// 整除余数归验证者（零佣金下无佣金截留）
+	remainder := new(big.Int).Sub(distributable, new(big.Int).Add(expectedLarge, expectedSmall))
+	require.Zero(t, remainder.Cmp(rewards[validatorAddr]))
 }
 
-func TestRewardDistributor_MultiDelegateNoDilution(t *testing.T) {
+func TestRewardDistributor_MultiDelegateNoDilution_ZeroCommission(t *testing.T) {
 	stakeStore := createTestStakeStore(t)
 	validatorAddr := types.StringToAddress("0x9")
 	otherValidator := types.StringToAddress("0xa")
@@ -219,7 +233,7 @@ func TestRewardDistributor_MultiDelegateNoDilution(t *testing.T) {
 	}
 
 	rewardAmount := big.NewInt(1000)
-	rd := NewRewardDistributor(nil, types.ZeroAddress, rewardAmount, nil, stakeStore, 1000, 21*24*time.Hour, hclog.NewNullLogger())
+	rd := newZeroCommissionRewardDistributor(stakeStore, rewardAmount)
 
 	validators := validator.AccountSet{
 		{Address: validatorAddr, VotingPower: big.NewInt(100), IsActive: true},
@@ -262,10 +276,10 @@ func TestRewardDistributor_MultiDelegateNoDilution(t *testing.T) {
 	}
 	require.NotNil(t, target)
 
-	_, voterRewards := rd.computeRewardsForValidator(target, voters, blockCounts, 10)
+	validatorAmount, voterRewards := rd.computeRewardsForValidator(target, voters, validators, blockCounts, 10)
 
-	// validator pool: 500 total, 450 distributable; weights 2000 vs 1000 => 2:1
-	distributable := big.NewInt(450)
+	// SR A 池 500，零佣金全部分 voter；权重 2000 vs 1000 => 2:1
+	distributable := big.NewInt(500)
 	expectedMulti := new(big.Int).Mul(distributable, big.NewInt(2000))
 	expectedMulti.Div(expectedMulti, big.NewInt(3000))
 	expectedCompetitor := new(big.Int).Mul(distributable, big.NewInt(1000))
@@ -273,7 +287,131 @@ func TestRewardDistributor_MultiDelegateNoDilution(t *testing.T) {
 
 	require.Zero(t, expectedMulti.Cmp(voterRewards[multiVoter]))
 	require.Zero(t, expectedCompetitor.Cmp(voterRewards[competitor]))
-
-	// Under old logic (VotingPower/2), multi weight would be 1500 and ratio would be 1.5:1.
 	require.Equal(t, 2, new(big.Int).Div(expectedMulti, expectedCompetitor).Int64())
+
+	remainder := new(big.Int).Sub(distributable, new(big.Int).Add(expectedMulti, expectedCompetitor))
+	require.Zero(t, remainder.Cmp(validatorAmount))
+}
+
+func TestRewardDistributor_StakeWeightedBetweenValidators_ZeroCommission(t *testing.T) {
+	stakeStore := createTestStakeStore(t)
+	largeSR := types.StringToAddress("0xd1")
+	smallSR := types.StringToAddress("0xd2")
+
+	for addr, stake := range map[types.Address]*big.Int{
+		largeSR: big.NewInt(300),
+		smallSR: big.NewInt(100),
+	} {
+		info := &DelegateInfo{
+			Address:      addr,
+			VotingPower:  new(big.Int).Set(stake),
+			TotalVotes:   new(big.Int).Set(stake),
+			IsActive:     true,
+			IsRegistered: true,
+		}
+		require.NoError(t, stakeStore.setDelegateInfo(addr, info, nil))
+	}
+
+	rewardAmount := big.NewInt(1000)
+	rd := newZeroCommissionRewardDistributor(stakeStore, rewardAmount)
+
+	validators := validator.AccountSet{
+		{Address: largeSR, VotingPower: big.NewInt(300), IsActive: true},
+		{Address: smallSR, VotingPower: big.NewInt(100), IsActive: true},
+	}
+	blockCounts := map[types.Address]uint64{
+		largeSR: 5,
+		smallSR: 5,
+	}
+
+	voterLarge := types.StringToAddress("0xd3")
+	voterSmall := types.StringToAddress("0xd4")
+	voters := map[types.Address]*VoterInfo{
+		voterLarge: {
+			Address:        voterLarge,
+			VotingPower:    big.NewInt(300),
+			VotedDelegates: []types.Address{largeSR},
+			DelegateVotes:  map[types.Address]*big.Int{largeSR: big.NewInt(300)},
+		},
+		voterSmall: {
+			Address:        voterSmall,
+			VotingPower:    big.NewInt(100),
+			VotedDelegates: []types.Address{smallSR},
+			DelegateVotes:  map[types.Address]*big.Int{smallSR: big.NewInt(100)},
+		},
+	}
+
+	rewards := rd.CalculateRewards(validators, voters, blockCounts, 10)
+
+	// 出块相同、质押 3:1 => 大 SR 750，小 SR 250；零佣金下 voter 拿满各自 SR 池
+	require.Zero(t, big.NewInt(750).Cmp(rewards[voterLarge]))
+	require.Zero(t, big.NewInt(250).Cmp(rewards[voterSmall]))
+}
+
+func TestRewardDistributor_ZeroCommission_StakeWeightAndInternalSplit(t *testing.T) {
+	stakeStore := createTestStakeStore(t)
+	largeSR := types.StringToAddress("0xe1")
+	smallSR := types.StringToAddress("0xe2")
+
+	for addr, stake := range map[types.Address]*big.Int{
+		largeSR: big.NewInt(300),
+		smallSR: big.NewInt(100),
+	} {
+		info := &DelegateInfo{
+			Address:        addr,
+			VotingPower:    new(big.Int).Set(stake),
+			TotalVotes:     new(big.Int).Set(stake),
+			IsActive:       true,
+			IsRegistered:   true,
+			CommissionRate: 1000,
+		}
+		require.NoError(t, stakeStore.setDelegateInfo(addr, info, nil))
+	}
+
+	rd := newZeroCommissionRewardDistributor(stakeStore, big.NewInt(1000))
+
+	validators := validator.AccountSet{
+		{Address: largeSR, VotingPower: big.NewInt(300), IsActive: true},
+		{Address: smallSR, VotingPower: big.NewInt(100), IsActive: true},
+	}
+	blockCounts := map[types.Address]uint64{largeSR: 5, smallSR: 5}
+
+	voterLargeA := types.StringToAddress("0xe3")
+	voterLargeB := types.StringToAddress("0xe4")
+	voterSmall := types.StringToAddress("0xe5")
+	voters := map[types.Address]*VoterInfo{
+		voterLargeA: {
+			Address:        voterLargeA,
+			VotingPower:    big.NewInt(200),
+			VotedDelegates: []types.Address{largeSR},
+			DelegateVotes:  map[types.Address]*big.Int{largeSR: big.NewInt(200)},
+		},
+		voterLargeB: {
+			Address:        voterLargeB,
+			VotingPower:    big.NewInt(100),
+			VotedDelegates: []types.Address{largeSR},
+			DelegateVotes:  map[types.Address]*big.Int{largeSR: big.NewInt(100)},
+		},
+		voterSmall: {
+			Address:        voterSmall,
+			VotingPower:    big.NewInt(100),
+			VotedDelegates: []types.Address{smallSR},
+			DelegateVotes:  map[types.Address]*big.Int{smallSR: big.NewInt(100)},
+		},
+	}
+
+	rewards := rd.CalculateRewards(validators, voters, blockCounts, 10)
+
+	largePool := big.NewInt(750)
+	expectedLargeA := new(big.Int).Mul(largePool, big.NewInt(200))
+	expectedLargeA.Div(expectedLargeA, big.NewInt(300))
+	expectedLargeB := new(big.Int).Mul(largePool, big.NewInt(100))
+	expectedLargeB.Div(expectedLargeB, big.NewInt(300))
+
+	require.Zero(t, expectedLargeA.Cmp(rewards[voterLargeA]))
+	require.Zero(t, expectedLargeB.Cmp(rewards[voterLargeB]))
+	require.Zero(t, big.NewInt(250).Cmp(rewards[voterSmall]))
+	require.Equal(t, 2, new(big.Int).Div(expectedLargeA, expectedLargeB).Int64())
+	require.Nil(t, rewards[largeSR])
+	require.Nil(t, rewards[smallSR])
 }
