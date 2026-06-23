@@ -366,6 +366,7 @@ func (d *DPoS) distributeEpochRewards(epochNumber uint64, currentRound uint64) e
 	if d.rewardDistributor != nil {
 		d.rewardDistributor.SetDistributionEpoch(epochNumber)
 	}
+	d.logVoterPoolStakeWeightActivationIfNeeded(epochNumber)
 
 	rewardAmount, err := d.computeEpochRewardPoolFromVoterAPY(epochNumber, validators, blockCounts, totalBlocks)
 	if err != nil {

@@ -308,6 +308,8 @@ type DPoSConfig struct {
 	VoteLockActivationEpoch uint64 `json:"vote_lock_activation_epoch" yaml:"vote_lock_activation_epoch"`
 	// CommissionRemovalActivationEpoch 关闭佣金激活 epoch；0 表示仍沿用佣金逻辑
 	CommissionRemovalActivationEpoch uint64 `json:"commission_removal_activation_epoch" yaml:"commission_removal_activation_epoch"`
+	// VoterPoolStakeWeightActivationEpoch 质押池按 SR 质押权重分配的激活 epoch；0 表示仍按出块数分配
+	VoterPoolStakeWeightActivationEpoch uint64 `json:"voter_pool_stake_weight_activation_epoch" yaml:"voter_pool_stake_weight_activation_epoch"`
 	// RewardAccountActivationEpoch 奖励账户切换激活 epoch；0 表示始终使用 RewardAccount 配置
 	RewardAccountActivationEpoch uint64 `json:"reward_account_activation_epoch" yaml:"reward_account_activation_epoch"`
 	// BootstrapRPC 可选：启动时从 staking 合约读取 validators() 的 JSON-RPC 端点（用于无法在本地 Transition 中成功调用时的回退）
@@ -1351,6 +1353,29 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		case string:
 			if u, err := strconv.ParseUint(t, 10, 64); err == nil {
 				vcity_dpos.config.CommissionRemovalActivationEpoch = u
+			}
+		}
+	}
+
+	if v, exists := params.Config.Config["voter_pool_stake_weight_activation_epoch"]; exists {
+		switch t := v.(type) {
+		case uint64:
+			vcity_dpos.config.VoterPoolStakeWeightActivationEpoch = t
+		case int:
+			if t >= 0 {
+				vcity_dpos.config.VoterPoolStakeWeightActivationEpoch = uint64(t)
+			}
+		case int64:
+			if t >= 0 {
+				vcity_dpos.config.VoterPoolStakeWeightActivationEpoch = uint64(t)
+			}
+		case float64:
+			if t >= 0 {
+				vcity_dpos.config.VoterPoolStakeWeightActivationEpoch = uint64(t)
+			}
+		case string:
+			if u, err := strconv.ParseUint(t, 10, 64); err == nil {
+				vcity_dpos.config.VoterPoolStakeWeightActivationEpoch = u
 			}
 		}
 	}
@@ -2870,6 +2895,7 @@ func (c *DPoSConfig) GetConfigSummary() map[string]interface{} {
 		"producer_reward_activation_epoch":   c.ProducerRewardActivationEpoch,
 		"vote_lock_activation_epoch":              c.VoteLockActivationEpoch,
 		"commission_removal_activation_epoch":     c.CommissionRemovalActivationEpoch,
+		"voter_pool_stake_weight_activation_epoch": c.VoterPoolStakeWeightActivationEpoch,
 		"reward_account_activation_epoch": c.RewardAccountActivationEpoch,
 	}
 }

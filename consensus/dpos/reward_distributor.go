@@ -23,8 +23,9 @@ type RewardDistributor struct {
 	commissionDenominator *big.Int
 	logger                hclog.Logger
 
-	distributionEpoch          uint64
-	isCommissionRemovedAtEpoch func(epochNumber uint64) bool
+	distributionEpoch                 uint64
+	isCommissionRemovedAtEpoch        func(epochNumber uint64) bool
+	isStakeWeightPoolSplitAtEpoch     func(epochNumber uint64) bool
 }
 
 // NewRewardDistributor 创建奖励分发器
@@ -69,6 +70,11 @@ func (rd *RewardDistributor) SetCommissionRemovedAtEpochChecker(fn func(epochNum
 	rd.isCommissionRemovedAtEpoch = fn
 }
 
+// SetStakeWeightPoolSplitAtEpochChecker 设置按 epoch 判断是否启用 SR 质押权重分配 voter 池。
+func (rd *RewardDistributor) SetStakeWeightPoolSplitAtEpochChecker(fn func(epochNumber uint64) bool) {
+	rd.isStakeWeightPoolSplitAtEpoch = fn
+}
+
 // SetRewardAccount 设置本 epoch 奖励扣款账户（治理切换后按 epoch 解析）。
 func (rd *RewardDistributor) SetRewardAccount(addr types.Address) {
 	rd.rewardAccount = addr
@@ -84,6 +90,13 @@ func (rd *RewardDistributor) commissionDisabledForDistribution() bool {
 		return false
 	}
 	return rd.isCommissionRemovedAtEpoch(rd.distributionEpoch)
+}
+
+func (rd *RewardDistributor) useStakeWeightPoolSplit() bool {
+	if rd.isStakeWeightPoolSplitAtEpoch == nil {
+		return false
+	}
+	return rd.isStakeWeightPoolSplitAtEpoch(rd.distributionEpoch)
 }
 
 // WeightedAverageCommissionBps 按出块数加权平均佣金率（基点）。
@@ -289,9 +302,55 @@ func blockCompletionBps(actualBlocks, expectedBlocks uint64) uint64 {
 	return actualBlocks * 10000 / expectedBlocks
 }
 
-// computeValidatorPoolAllocations splits epoch voter pool R by SR stake weight × block completion.
-// Unallocated portion (low completion SRs) is redistributed to remaining SRs via normalized weights.
+// computeValidatorPoolAllocations splits epoch voter pool R between SRs.
+// Before activation epoch: proportional to block count. After activation: stake weight × completion.
 func (rd *RewardDistributor) computeValidatorPoolAllocations(
+	validators validator.AccountSet,
+	voters map[types.Address]*VoterInfo,
+	blockCounts map[types.Address]uint64,
+	totalBlocks uint64,
+) map[types.Address]*big.Int {
+	if !rd.useStakeWeightPoolSplit() {
+		return rd.computeValidatorPoolAllocationsByBlocks(validators, blockCounts, totalBlocks)
+	}
+
+	rd.logger.Info("📊 voter 池 SR 间分配：质押权重×完成度",
+		"epoch", rd.distributionEpoch,
+		"totalPool", rd.rewardAmount.String(),
+		"totalBlocks", totalBlocks)
+
+	return rd.computeValidatorPoolAllocationsByStakeWeight(validators, voters, blockCounts, totalBlocks)
+}
+
+func (rd *RewardDistributor) computeValidatorPoolAllocationsByBlocks(
+	validators validator.AccountSet,
+	blockCounts map[types.Address]uint64,
+	totalBlocks uint64,
+) map[types.Address]*big.Int {
+	allocations := make(map[types.Address]*big.Int)
+	if rd.rewardAmount == nil || rd.rewardAmount.Sign() == 0 || totalBlocks == 0 {
+		return allocations
+	}
+
+	totalBlocksBig := new(big.Int).SetUint64(totalBlocks)
+	for _, v := range validators {
+		if v == nil || !v.IsActive {
+			continue
+		}
+		blocksProduced := blockCounts[v.Address]
+		if blocksProduced == 0 {
+			continue
+		}
+		pool := new(big.Int).Mul(new(big.Int).SetUint64(blocksProduced), rd.rewardAmount)
+		pool.Div(pool, totalBlocksBig)
+		if pool.Sign() > 0 {
+			allocations[v.Address] = pool
+		}
+	}
+	return allocations
+}
+
+func (rd *RewardDistributor) computeValidatorPoolAllocationsByStakeWeight(
 	validators validator.AccountSet,
 	voters map[types.Address]*VoterInfo,
 	blockCounts map[types.Address]uint64,

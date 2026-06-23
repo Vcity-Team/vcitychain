@@ -262,6 +262,7 @@ func (p *serverParams) generateConfig() *server.Config {
 		ProducerRewardActivationEpoch: p.rawConfig.ProducerRewardActivationEpoch,
 		VoteLockActivationEpoch:              p.rawConfig.VoteLockActivationEpoch,
 		CommissionRemovalActivationEpoch: p.rawConfig.CommissionRemovalActivationEpoch,
+		VoterPoolStakeWeightActivationEpoch: p.rawConfig.VoterPoolStakeWeightActivationEpoch,
 		RewardAccountActivationEpoch: func() uint64 {
 			if p.rawConfig.RewardAccountActivationEpoch > 0 {
 				return p.rawConfig.RewardAccountActivationEpoch

@@ -76,6 +76,11 @@ func (d *DPoS) getCurrentParameterValue(parameter string) (interface{}, error) {
 			return d.config.CommissionRemovalActivationEpoch, nil
 		}
 		return uint64(0), nil
+	case "dpos_voter_pool_stake_weight_activation_epoch":
+		if d.config != nil {
+			return d.config.VoterPoolStakeWeightActivationEpoch, nil
+		}
+		return uint64(0), nil
 	case "dpos_reward_distribution_account":
 		if d.config != nil && d.config.GovernedRewardDistributionAccount != types.ZeroAddress {
 			return d.config.GovernedRewardDistributionAccount.String(), nil
@@ -481,6 +486,45 @@ func (d *DPoS) updateParameterValue(paramName string, value interface{}, source 
 		if d.config != nil {
 			d.config.CommissionRemovalActivationEpoch = epoch
 			d.logger.Info("✅ 已更新 d.config.CommissionRemovalActivationEpoch", "epoch", epoch)
+		}
+
+	case "dpos_voter_pool_stake_weight_activation_epoch":
+		var epoch uint64
+		switch v := value.(type) {
+		case uint64:
+			epoch = v
+		case int:
+			if v < 0 {
+				return fmt.Errorf("invalid dpos_voter_pool_stake_weight_activation_epoch: %v", v)
+			}
+			epoch = uint64(v)
+		case int64:
+			if v < 0 {
+				return fmt.Errorf("invalid dpos_voter_pool_stake_weight_activation_epoch: %v", v)
+			}
+			epoch = uint64(v)
+		case float64:
+			if v < 0 {
+				return fmt.Errorf("invalid dpos_voter_pool_stake_weight_activation_epoch: %v", v)
+			}
+			epoch = uint64(v)
+		case string:
+			parsed, err := strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				return fmt.Errorf("invalid dpos_voter_pool_stake_weight_activation_epoch: %v", v)
+			}
+			epoch = parsed
+		default:
+			return fmt.Errorf("unsupported dpos_voter_pool_stake_weight_activation_epoch type: %T", value)
+		}
+		if d.config != nil {
+			d.config.VoterPoolStakeWeightActivationEpoch = epoch
+			d.logger.Info("🎯🎯🎯 ========== 治理已设置质押池 SR 分配规则激活 epoch ==========",
+				"activationEpoch", epoch,
+				"governanceParam", "dpos_voter_pool_stake_weight_activation_epoch",
+				"beforeEpoch", "voter_pool_split_by_block_count",
+				"fromEpoch", "voter_pool_split_by_stake_weight_times_completion",
+				"note", "到达该 epoch 时分发将切换为按 SR 质押权重×完成度分配")
 		}
 
 	case "dpos_vote_lock_activation_epoch":

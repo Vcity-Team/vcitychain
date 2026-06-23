@@ -164,6 +164,10 @@ func (s *Server) applyOptionalDPoSRuntimeConfig(engineConfig map[string]interfac
 		engineConfig["commission_removal_activation_epoch"] = s.config.CommissionRemovalActivationEpoch
 		s.logger.Info("✅ 透传 commission_removal_activation_epoch 到 DPoS 引擎", "epoch", s.config.CommissionRemovalActivationEpoch)
 	}
+	if s.config.VoterPoolStakeWeightActivationEpoch > 0 {
+		engineConfig["voter_pool_stake_weight_activation_epoch"] = s.config.VoterPoolStakeWeightActivationEpoch
+		s.logger.Info("✅ 透传 voter_pool_stake_weight_activation_epoch 到 DPoS 引擎", "epoch", s.config.VoterPoolStakeWeightActivationEpoch)
+	}
 	rewardAcctActivationEpoch := s.config.RewardAccountActivationEpoch
 	if rewardAcctActivationEpoch == 0 {
 		rewardAcctActivationEpoch = s.config.RewardDistributionActivationEpoch

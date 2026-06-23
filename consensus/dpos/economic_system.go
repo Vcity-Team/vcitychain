@@ -60,6 +60,7 @@ func (d *DPoS) initializeEconomicSystem() error {
 		d.logger.Named("reward_distributor"),
 	)
 	d.rewardDistributor.SetCommissionRemovedAtEpochChecker(d.isCommissionRemovedAtEpoch)
+	d.rewardDistributor.SetStakeWeightPoolSplitAtEpochChecker(d.isVoterPoolStakeWeightSplitAtEpoch)
 
 	// 4. 🆕 初始化固定时间窗口调度器
 	scheduler, err := NewBlockScheduler(

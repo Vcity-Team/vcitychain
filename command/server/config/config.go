@@ -83,6 +83,8 @@ type Config struct {
 	VoteLockActivationEpoch uint64 `json:"vote_lock_activation_epoch" yaml:"vote_lock_activation_epoch"`
 	// commission_removal_activation_epoch: 关闭佣金激活 epoch（0=仍沿用佣金）
 	CommissionRemovalActivationEpoch uint64 `json:"commission_removal_activation_epoch" yaml:"commission_removal_activation_epoch"`
+	// voter_pool_stake_weight_activation_epoch: 质押池按 SR 质押权重分配激活 epoch（0=仍按出块数）
+	VoterPoolStakeWeightActivationEpoch uint64 `json:"voter_pool_stake_weight_activation_epoch" yaml:"voter_pool_stake_weight_activation_epoch"`
 	// reward_account_activation_epoch: 奖励账户治理切换激活 epoch（0=始终用 dpos_reward_distribution）
 	RewardAccountActivationEpoch uint64 `json:"reward_account_activation_epoch" yaml:"reward_account_activation_epoch"`
 	RewardDistributionActivationEpoch uint64 `json:"reward_distribution_activation_epoch" yaml:"reward_distribution_activation_epoch"`

@@ -156,6 +156,14 @@ func (d *DPoS) getDefaultVotableParameters() map[string]*ParameterInfo {
 			Description: "Epoch when SR commission on staking pool is removed (0% to voters). 0 means commission remains active.",
 			Category:    "economic",
 		},
+		"dpos_voter_pool_stake_weight_activation_epoch": {
+			Name:        "Voter Pool Stake-Weight Split Activation Epoch",
+			Type:        "uint64",
+			MinValue:    uint64(0),
+			MaxValue:    uint64(100000000),
+			Description: "Epoch when voter pool is split between SRs by delegated stake weight × block completion. 0 keeps legacy block-count split.",
+			Category:    "economic",
+		},
 		"dpos_reward_distribution_account": {
 			Name:        "Reward Account",
 			Type:        "address",
@@ -355,6 +363,11 @@ func (d *DPoS) getConfigParameterValue(paramName string) (interface{}, error) {
 	case "dpos_commission_removal_activation_epoch":
 		if d.config != nil {
 			return d.config.CommissionRemovalActivationEpoch, nil
+		}
+		return uint64(0), nil
+	case "dpos_voter_pool_stake_weight_activation_epoch":
+		if d.config != nil {
+			return d.config.VoterPoolStakeWeightActivationEpoch, nil
 		}
 		return uint64(0), nil
 	case "dpos_reward_distribution_account":

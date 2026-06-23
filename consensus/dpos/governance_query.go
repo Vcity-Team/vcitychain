@@ -240,6 +240,23 @@ func (d *DPoS) UpdateParameterValue(parameter string, newValue interface{}) erro
 				d.config.CommissionRemovalActivationEpoch = u
 			}
 		}
+	case "dpos_voter_pool_stake_weight_activation_epoch":
+		switch v := newValue.(type) {
+		case uint64:
+			d.config.VoterPoolStakeWeightActivationEpoch = v
+		case int:
+			if v >= 0 {
+				d.config.VoterPoolStakeWeightActivationEpoch = uint64(v)
+			}
+		case float64:
+			if v >= 0 {
+				d.config.VoterPoolStakeWeightActivationEpoch = uint64(v)
+			}
+		case string:
+			if u, err := strconv.ParseUint(v, 10, 64); err == nil {
+				d.config.VoterPoolStakeWeightActivationEpoch = u
+			}
+		}
 	case "dpos_reward_distribution_activation_epoch":
 		switch v := newValue.(type) {
 		case uint64:

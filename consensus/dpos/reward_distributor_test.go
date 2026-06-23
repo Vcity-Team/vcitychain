@@ -30,14 +30,25 @@ func createTestStakeStore(t *testing.T) *StakeStore {
 }
 
 const testCommissionRemovalEpoch = uint64(700)
+const testStakeWeightActivationEpoch = uint64(700)
 
-// newZeroCommissionRewardDistributor 模拟主网已关闭佣金后的奖励分发器。
+// newZeroCommissionRewardDistributor 模拟主网已关闭佣金且已启用质押权重 SR 池分配的分发器。
 func newZeroCommissionRewardDistributor(stakeStore *StakeStore, rewardAmount *big.Int) *RewardDistributor {
 	rd := NewRewardDistributor(nil, types.ZeroAddress, rewardAmount, nil, stakeStore, 1000, 21*24*time.Hour, hclog.NewNullLogger())
 	rd.SetCommissionRemovedAtEpochChecker(func(epoch uint64) bool {
 		return epoch >= testCommissionRemovalEpoch
 	})
+	rd.SetStakeWeightPoolSplitAtEpochChecker(func(epoch uint64) bool {
+		return epoch >= testStakeWeightActivationEpoch
+	})
 	rd.SetDistributionEpoch(testCommissionRemovalEpoch)
+	return rd
+}
+
+// newBlockCountSplitRewardDistributor 模拟激活 epoch 之前：零佣金但 SR 间仍按出块数分配 voter 池。
+func newBlockCountSplitRewardDistributor(stakeStore *StakeStore, rewardAmount *big.Int) *RewardDistributor {
+	rd := newZeroCommissionRewardDistributor(stakeStore, rewardAmount)
+	rd.SetStakeWeightPoolSplitAtEpochChecker(func(uint64) bool { return false })
 	return rd
 }
 
@@ -346,6 +357,57 @@ func TestRewardDistributor_StakeWeightedBetweenValidators_ZeroCommission(t *test
 	// 出块相同、质押 3:1 => 大 SR 750，小 SR 250；零佣金下 voter 拿满各自 SR 池
 	require.Zero(t, big.NewInt(750).Cmp(rewards[voterLarge]))
 	require.Zero(t, big.NewInt(250).Cmp(rewards[voterSmall]))
+}
+
+func TestRewardDistributor_BeforeStakeWeightActivationUsesBlockSplit(t *testing.T) {
+	stakeStore := createTestStakeStore(t)
+	largeSR := types.StringToAddress("0xf1")
+	smallSR := types.StringToAddress("0xf2")
+
+	for addr, stake := range map[types.Address]*big.Int{
+		largeSR: big.NewInt(300),
+		smallSR: big.NewInt(100),
+	} {
+		info := &DelegateInfo{
+			Address:      addr,
+			VotingPower:  new(big.Int).Set(stake),
+			TotalVotes:   new(big.Int).Set(stake),
+			IsActive:     true,
+			IsRegistered: true,
+		}
+		require.NoError(t, stakeStore.setDelegateInfo(addr, info, nil))
+	}
+
+	rd := newBlockCountSplitRewardDistributor(stakeStore, big.NewInt(1000))
+
+	validators := validator.AccountSet{
+		{Address: largeSR, VotingPower: big.NewInt(300), IsActive: true},
+		{Address: smallSR, VotingPower: big.NewInt(100), IsActive: true},
+	}
+	blockCounts := map[types.Address]uint64{largeSR: 5, smallSR: 5}
+
+	voterLarge := types.StringToAddress("0xf3")
+	voterSmall := types.StringToAddress("0xf4")
+	voters := map[types.Address]*VoterInfo{
+		voterLarge: {
+			Address:        voterLarge,
+			VotingPower:    big.NewInt(300),
+			VotedDelegates: []types.Address{largeSR},
+			DelegateVotes:  map[types.Address]*big.Int{largeSR: big.NewInt(300)},
+		},
+		voterSmall: {
+			Address:        voterSmall,
+			VotingPower:    big.NewInt(100),
+			VotedDelegates: []types.Address{smallSR},
+			DelegateVotes:  map[types.Address]*big.Int{smallSR: big.NewInt(100)},
+		},
+	}
+
+	rewards := rd.CalculateRewards(validators, voters, blockCounts, 10)
+
+	// 出块相同 => 各 500，与质押 3:1 无关（激活 epoch 之前）
+	require.Zero(t, big.NewInt(500).Cmp(rewards[voterLarge]))
+	require.Zero(t, big.NewInt(500).Cmp(rewards[voterSmall]))
 }
 
 func TestRewardDistributor_ZeroCommission_StakeWeightAndInternalSplit(t *testing.T) {
