@@ -104,6 +104,9 @@ type Blockchain struct {
 	gpAverage *gasPriceAverage // A reference to the average gas price
 
 	writeLock sync.Mutex
+
+	lastInsertEventMu sync.Mutex
+	lastInsertEvent   *Event
 }
 
 // gasPriceAverage keeps track of the average gas price (rolling average)
@@ -979,6 +982,7 @@ func (b *Blockchain) WriteFullBlock(fblock *types.FullBlock, source string) erro
 	}
 
 	b.dispatchEvent(evnt)
+	b.setLastInsertEvent(evnt)
 
 	// 调用共识的 OnBlockInserted 来清理交易池
 	// 注意：
@@ -1551,6 +1555,29 @@ func (b *Blockchain) dispatchEvent(evnt *Event) {
 		b.logger.Debug("🔔 区块链事件分发", "区块高度", latest.Number, "区块哈希", latest.Hash.String(), "来源", evnt.Source, "NewChain长度", len(evnt.NewChain))
 	}
 	b.stream.push(evnt)
+}
+
+// setLastInsertEvent stores the blockchain event for the txpool to consume after insert/reorg.
+func (b *Blockchain) setLastInsertEvent(evnt *Event) {
+	if evnt == nil {
+		return
+	}
+
+	b.lastInsertEventMu.Lock()
+	defer b.lastInsertEventMu.Unlock()
+
+	b.lastInsertEvent = evnt
+}
+
+// ConsumeLastInsertEvent returns and clears the event from the most recent WriteFullBlock.
+func (b *Blockchain) ConsumeLastInsertEvent() *Event {
+	b.lastInsertEventMu.Lock()
+	defer b.lastInsertEventMu.Unlock()
+
+	ev := b.lastInsertEvent
+	b.lastInsertEvent = nil
+
+	return ev
 }
 
 // writeHeaderImpl writes a block and the data, assumes the genesis is already set

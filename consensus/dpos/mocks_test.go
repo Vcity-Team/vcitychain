@@ -118,6 +118,15 @@ func (m *blockchainMock) GetBlockByHash(hash types.Hash, full bool) (*types.Bloc
 	return block, block != nil
 }
 
+func (m *blockchainMock) ConsumeLastInsertEvent() *blockchain.Event {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil
+	}
+
+	return args.Get(0).(*blockchain.Event) //nolint:forcetypeassert
+}
+
 func (m *blockchainMock) SetBlockProductionStartTime() {
 	m.Called()
 }
@@ -476,6 +485,10 @@ func (tp *txPoolMock) SetSealing(v bool) {
 
 func (tp *txPoolMock) ResetWithHeaders(values ...*types.Header) {
 	tp.Called(values)
+}
+
+func (tp *txPoolMock) ResetWithEvent(event *blockchain.Event) {
+	tp.Called(event)
 }
 
 var _ syncer.Syncer = (*syncerMock)(nil)

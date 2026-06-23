@@ -2230,8 +2230,16 @@ func (d *DPoS) OnBlockInserted(fullBlock *types.FullBlock) {
 		"blockHash", fullBlock.Block.Hash().String()[:16],
 		"txCount", len(fullBlock.Block.Transactions))
 
-	// 调用交易池的 ResetWithHeaders 来清理已打包的交易
-	d.txPool.ResetWithHeaders(fullBlock.Block.Header)
+	// 调用交易池 ResetWithEvent（含 reorg OldChain）或 fallback 单 header
+	if d.config != nil && d.config.Blockchain != nil {
+		if event := d.config.Blockchain.ConsumeLastInsertEvent(); event != nil {
+			d.txPool.ResetWithEvent(event)
+		} else {
+			d.txPool.ResetWithHeaders(fullBlock.Block.Header)
+		}
+	} else {
+		d.txPool.ResetWithHeaders(fullBlock.Block.Header)
+	}
 }
 
 func (d *DPoS) GetCurrentRound() uint64 {

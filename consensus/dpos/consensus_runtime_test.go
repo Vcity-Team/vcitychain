@@ -201,6 +201,7 @@ func TestConsensusRuntime_OnBlockInserted_EndOfEpoch(t *testing.T) {
 	blockchainMock.On("GetStateProviderForBlock", mock.Anything).Return(new(stateProviderMock)).Once()
 	blockchainMock.On("GetSystemState", mock.Anything, mock.Anything).Return(systemStateMock)
 	blockchainMock.On("GetHeaderByNumber", mock.Anything).Return(headerMap.getHeader)
+	blockchainMock.On("ConsumeLastInsertEvent").Return(nil).Once()
 
 	polybftBackendMock := new(polybftBackendMock)
 	polybftBackendMock.On("GetValidatorsWithTx", mock.Anything, mock.Anything, mock.Anything).Return(validatorSet).Times(3)
@@ -262,6 +263,7 @@ func TestConsensusRuntime_OnBlockInserted_MiddleOfEpoch(t *testing.T) {
 
 	blockchainMock := new(blockchainMock)
 	blockchainMock.On("GetHeaderByNumber", mock.Anything).Return(builtBlock.Header, true).Once()
+	blockchainMock.On("ConsumeLastInsertEvent").Return(nil).Once()
 
 	polybftBackendMock := new(polybftBackendMock)
 	polybftBackendMock.On("GetValidatorsWithTx", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()

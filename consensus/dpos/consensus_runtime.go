@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Vcity-Team/vcitychain/blockchain"
 	"github.com/Vcity-Team/vcitychain/consensus"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/contractsapi"
 	"github.com/Vcity-Team/vcitychain/consensus/dpos/signer"
@@ -49,6 +50,7 @@ type txPoolInterface interface {
 	Demote(*types.Transaction)
 	SetSealing(bool)
 	ResetWithHeaders(...*types.Header)
+	ResetWithEvent(*blockchain.Event)
 }
 
 // epochMetadata is the static info for epoch currently being processed
@@ -369,7 +371,13 @@ func (c *consensusRuntime) OnBlockInserted(fullBlock *types.FullBlock) {
 	}
 
 	// after the block has been written we reset the txpool so that the old transactions are removed
-	c.config.txPool.ResetWithHeaders(fullBlock.Block.Header)
+	if event := c.config.blockchain.(interface {
+		ConsumeLastInsertEvent() *blockchain.Event
+	}).ConsumeLastInsertEvent(); event != nil {
+		c.config.txPool.ResetWithEvent(event)
+	} else {
+		c.config.txPool.ResetWithHeaders(fullBlock.Block.Header)
+	}
 
 	var (
 		epoch = c.epoch

@@ -74,6 +74,7 @@ type txOrigin int
 const (
 	local  txOrigin = iota // json-RPC/gRPC endpoints
 	gossip                 // gossip protocol
+	reorg                  // re-added after chain reorganization
 )
 
 func (o txOrigin) String() (s string) {
@@ -82,6 +83,8 @@ func (o txOrigin) String() (s string) {
 		s = "local"
 	case gossip:
 		s = "gossip"
+	case reorg:
+		s = "reorg"
 	}
 
 	return
@@ -905,27 +908,27 @@ func (p *TxPool) Demote(tx *types.Transaction) {
 	p.eventManager.signalEvent(proto.EventType_DEMOTED, tx.Hash)
 }
 
+// ResetWithEvent syncs the pool with a blockchain insert/reorg event.
+func (p *TxPool) ResetWithEvent(event *blockchain.Event) {
+	if event == nil {
+		p.processEvent(&blockchain.Event{})
+
+		return
+	}
+
+	p.logger.Debug("🔵 [ResetWithEvent] 开始处理区块链事件",
+		"newChainCount", len(event.NewChain),
+		"oldChainCount", len(event.OldChain),
+		"eventType", event.Type,
+		"source", event.Source)
+
+	p.processEvent(event)
+}
+
 // ResetWithHeaders processes the transactions from the new
 // headers to sync the pool with the new state.
 func (p *TxPool) ResetWithHeaders(headers ...*types.Header) {
-	p.logger.Debug("🔵 [ResetWithHeaders] 开始处理新区块头",
-		"headerCount", len(headers),
-		"firstBlock", func() uint64 {
-			if len(headers) > 0 {
-				return headers[0].Number
-			}
-			return 0
-		}(),
-		"lastBlock", func() uint64 {
-			if len(headers) > 0 {
-				return headers[len(headers)-1].Number
-			}
-			return 0
-		}())
-
-	// process the txs in the event
-	// to make sure the pool is up-to-date
-	p.processEvent(&blockchain.Event{
+	p.ResetWithEvent(&blockchain.Event{
 		NewChain: headers,
 	})
 }
@@ -933,9 +936,17 @@ func (p *TxPool) ResetWithHeaders(headers ...*types.Header) {
 // processEvent collects the latest nonces for each account contained
 // in the received event. Resets all known accounts with the new nonce.
 func (p *TxPool) processEvent(event *blockchain.Event) {
+	if event == nil {
+		event = &blockchain.Event{}
+	}
+
 	p.logger.Debug("🔵 [processEvent] 开始处理区块链事件",
 		"newChainCount", len(event.NewChain),
+		"oldChainCount", len(event.OldChain),
 		"source", event.Source)
+
+	reorgIndex := buildReorgChainIndex(p, event.NewChain)
+	p.reinjectDiscarded(event.OldChain, reorgIndex)
 
 	// Grab the latest state root now that the block has been inserted
 	stateRoot := p.store.Header().StateRoot

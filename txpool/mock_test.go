@@ -18,7 +18,9 @@ type defaultMockStore struct {
 
 	getBlockByHashFn   func(types.Hash, bool) (*types.Block, bool)
 	calculateBaseFeeFn func(*types.Header) uint64
+	getNonceFn         func(types.Hash, types.Address) uint64
 	nonce              uint64
+	nonces             map[types.Address]uint64
 }
 
 func NewDefaultMockStore(header *types.Header) defaultMockStore {
@@ -34,7 +36,17 @@ func (m defaultMockStore) Header() *types.Header {
 	return m.DefaultHeader
 }
 
-func (m defaultMockStore) GetNonce(types.Hash, types.Address) uint64 {
+func (m defaultMockStore) GetNonce(_ types.Hash, addr types.Address) uint64 {
+	if m.getNonceFn != nil {
+		return m.getNonceFn(m.DefaultHeader.StateRoot, addr)
+	}
+
+	if m.nonces != nil {
+		if n, ok := m.nonces[addr]; ok {
+			return n
+		}
+	}
+
 	return m.nonce
 }
 
