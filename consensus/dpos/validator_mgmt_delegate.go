@@ -1039,41 +1039,6 @@ func (d *DPoS) GetDelegateRegistration(address types.Address) (*DelegateRegistra
 	return reg, nil
 }
 
-// GetDelegateDepositMigrationPairs 返回已记录 LegacyDepositContract 的注册（仅老 To=nil 经扩展迁移后会有）。
-func (d *DPoS) GetDelegateDepositMigrationPairs() ([]*DelegateRegistration, error) {
-	if d.state == nil || d.state.RegistrationStore == nil {
-		return nil, fmt.Errorf("registration store not available")
-	}
-	all, err := d.state.RegistrationStore.GetAllRegistrations()
-	if err != nil {
-		return nil, err
-	}
-	var out []*DelegateRegistration
-	for _, reg := range all {
-		if reg != nil && reg.LegacyDepositContract != (types.Address{}) {
-			out = append(out, reg)
-		}
-	}
-	return out, nil
-}
-
-// FindDelegateDepositMigrationByContract 按 CREATE/源合约地址查找对应候选人注册行。
-func (d *DPoS) FindDelegateDepositMigrationByContract(contract types.Address) (*DelegateRegistration, error) {
-	if d.state == nil || d.state.RegistrationStore == nil {
-		return nil, fmt.Errorf("registration store not available")
-	}
-	all, err := d.state.RegistrationStore.GetAllRegistrations()
-	if err != nil {
-		return nil, err
-	}
-	for _, reg := range all {
-		if reg != nil && reg.LegacyDepositContract == contract {
-			return reg, nil
-		}
-	}
-	return nil, nil
-}
-
 // IsDelegateRegistered 检查受托人是否已注册
 func (d *DPoS) IsDelegateRegistered(address types.Address) bool {
 	d.logger.Info("🔍 检查受托人注册状态", "address", address.String())

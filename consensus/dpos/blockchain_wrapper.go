@@ -330,15 +330,6 @@ func (p *blockchainWrapper) ProcessBlockExecutor(
 		}
 
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
-			if err := dposInstance.ApplyDelegateDepositMigrationAfterTx(transition, tx, block.Number()); err != nil {
-				return nil, err
-			}
-			if err := dposInstance.ApplyDelegateDepositEscrowPayoutAfterTx(transition, tx, block.Number()); err != nil {
-				return nil, err
-			}
-			if err := dposInstance.ApplyDelegateNativeCreditAfterTx(transition, tx, block.Number()); err != nil {
-				return nil, err
-			}
 			if dposInstance.persistBlockSideEffects() {
 				if dposInstance.isDelegateRegistrationTransaction(tx) {
 					if err := dposInstance.processDelegateRegistrationTransaction(tx, block.Number(), header.Timestamp); err != nil {
@@ -581,15 +572,6 @@ func (p *blockchainWrapper) ProcessBlock(parent *types.Header, block *types.Bloc
 		}
 
 		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
-			if err := dposInstance.ApplyDelegateDepositMigrationAfterTx(transition, tx, block.Number()); err != nil {
-				return nil, err
-			}
-			if err := dposInstance.ApplyDelegateDepositEscrowPayoutAfterTx(transition, tx, block.Number()); err != nil {
-				return nil, err
-			}
-			if err := dposInstance.ApplyDelegateNativeCreditAfterTx(transition, tx, block.Number()); err != nil {
-				return nil, err
-			}
 			if dposInstance.isDelegateRegistrationTransaction(tx) {
 				if err := dposInstance.processDelegateRegistrationTransaction(tx, block.Number(), header.Timestamp); err != nil {
 					return nil, err

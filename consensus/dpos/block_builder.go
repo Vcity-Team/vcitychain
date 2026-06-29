@@ -188,15 +188,6 @@ func (b *BlockBuilder) WriteTx(tx *types.Transaction) error {
 	}
 
 	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance != nil {
-		if err := dposInstance.ApplyDelegateDepositMigrationAfterTx(b.state, tx, b.header.Number); err != nil {
-			return err
-		}
-		if err := dposInstance.ApplyDelegateDepositEscrowPayoutAfterTx(b.state, tx, b.header.Number); err != nil {
-			return err
-		}
-		if err := dposInstance.ApplyDelegateNativeCreditAfterTx(b.state, tx, b.header.Number); err != nil {
-			return err
-		}
 		if dposInstance.isDelegateRegistrationTransaction(tx) {
 			if err := dposInstance.processDelegateRegistrationTransaction(tx, b.header.Number, b.header.Timestamp); err != nil {
 				return err
