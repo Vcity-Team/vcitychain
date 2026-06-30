@@ -123,6 +123,10 @@ func setupParallelBlockBuilderTest(t *testing.T, fundAccounts []*wallet.Account)
 }
 
 func signedTransfer(t *testing.T, signer crypto.TxSigner, from *wallet.Account, to types.Address, amount int64) *types.Transaction {
+	return signedTransferWithNonce(t, signer, from, to, 0, amount)
+}
+
+func signedTransferWithNonce(t *testing.T, signer crypto.TxSigner, from *wallet.Account, to types.Address, nonce uint64, amount int64) *types.Transaction {
 	t.Helper()
 
 	pk, err := from.GetEcdsaPrivateKey()
@@ -133,7 +137,7 @@ func signedTransfer(t *testing.T, signer crypto.TxSigner, from *wallet.Account, 
 		Value:    big.NewInt(amount),
 		GasPrice: big.NewInt(1),
 		Gas:      state.TxGas,
-		Nonce:    0,
+		Nonce:    nonce,
 		To:       &to,
 		From:     fromAddr,
 	}
@@ -282,4 +286,50 @@ func TestBlockBuilder_parallelFillMatchesSerialFillStateRoot(t *testing.T) {
 		buildRoot(executorSerial, parentSerial, false),
 		buildRoot(executorDAG, parentDAG, true),
 	)
+}
+
+func TestBlockBuilder_FillWithDAG_transferChainABC(t *testing.T) {
+	// A -> B -> C in one block: B is unfunded until A's transfer lands.
+	walletA := testWalletAccount(t)
+	walletB := testWalletAccount(t)
+	finalRecv := types.Address(testWalletAccount(t).Ecdsa.Address())
+
+	const (
+		amountAB = int64(800_000_000_000_000)
+		amountBC = int64(300_000_000_000_000)
+	)
+
+	executor, parent, signer := setupParallelBlockBuilderTest(t, []*wallet.Account{walletA})
+	addrB := types.Address(walletB.Ecdsa.Address())
+
+	txAB := signedTransfer(t, signer, walletA, addrB, amountAB)
+	txBC := signedTransferWithNonce(t, signer, walletB, finalRecv, 0, amountBC)
+
+	pool := newStubTxPool(txAB, txBC)
+	logger := hclog.NewNullLogger()
+
+	builder := NewBlockBuilder(&BlockBuilderParams{
+		BlockTime: time.Second,
+		Parent:    parent,
+		Coinbase:  types.ZeroAddress,
+		Executor:  executor,
+		GasLimit:  parent.GasLimit,
+		TxPool:    pool,
+		Logger:    logger,
+	})
+
+	bb := builder.(*BlockBuilder)
+	require.NoError(t, bb.Reset())
+	require.NoError(t, bb.Fill())
+
+	require.Len(t, bb.txns, 2)
+	require.Len(t, bb.Receipts(), 2)
+	for _, r := range bb.Receipts() {
+		require.NotNil(t, r.Status)
+		require.Equal(t, types.ReceiptSuccess, *r.Status)
+	}
+
+	fb, err := bb.Build(nil)
+	require.NoError(t, err)
+	require.NotEqual(t, types.ZeroHash, fb.Block.Header.StateRoot)
 }

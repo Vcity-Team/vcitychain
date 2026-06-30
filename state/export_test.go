@@ -48,3 +48,7 @@ func (t *Transition) AccountNonceForTest(addr types.Address) uint64 {
 func (t *Transition) AccountBalanceForTest(addr types.Address) *big.Int {
 	return t.state.GetBalance(addr)
 }
+
+func (t *Transition) SetCodeForTest(addr types.Address, code []byte) {
+	t.state.SetCode(addr, code)
+}

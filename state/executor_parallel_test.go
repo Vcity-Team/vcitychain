@@ -17,11 +17,13 @@ import (
 var (
 	parallelSenderA = types.StringToAddress("0x1000000000000000000000000000000000000001")
 	parallelSenderB = types.StringToAddress("0x1000000000000000000000000000000000000002")
+	parallelSenderC = types.StringToAddress("0x1000000000000000000000000000000000000003")
 	parallelRecvC   = types.StringToAddress("0x2000000000000000000000000000000000000003")
 	parallelRecvD   = types.StringToAddress("0x2000000000000000000000000000000000000004")
+	parallelRecvE   = types.StringToAddress("0x2000000000000000000000000000000000000005")
 )
 
-func newParallelTestExecutor(t *testing.T) (*state.Executor, types.Hash) {
+func newParallelTestExecutorWithGenesis(t *testing.T, genesisAlloc map[types.Address]*chain.GenesisAccount) (*state.Executor, types.Hash) {
 	t.Helper()
 
 	forks := &chain.Forks{}
@@ -36,15 +38,36 @@ func newParallelTestExecutor(t *testing.T) (*state.Executor, types.Hash) {
 	executor := state.NewExecutor(mchain.Params, mstate, logger)
 	state.SetupExecutorGetHash(executor)
 
-	genesisAlloc := map[types.Address]*chain.GenesisAccount{
-		parallelSenderA: {Balance: big.NewInt(1_000_000_000_000_000_000)},
-		parallelSenderB: {Balance: big.NewInt(1_000_000_000_000_000_000)},
-	}
 	root, err := executor.WriteGenesis(genesisAlloc, types.ZeroHash)
 	require.NoError(t, err)
 	require.NotEqual(t, types.ZeroHash, root)
 
 	return executor, root
+}
+
+func newParallelTestExecutor(t *testing.T) (*state.Executor, types.Hash) {
+	t.Helper()
+
+	genesisAlloc := map[types.Address]*chain.GenesisAccount{
+		parallelSenderA: {Balance: big.NewInt(1_000_000_000_000_000_000)},
+		parallelSenderB: {Balance: big.NewInt(1_000_000_000_000_000_000)},
+		parallelSenderC: {Balance: big.NewInt(1_000_000_000_000_000_000)},
+	}
+	return newParallelTestExecutorWithGenesis(t, genesisAlloc)
+}
+
+func processBlockAndCommit(t *testing.T, executor *state.Executor, parentRoot types.Hash, number uint64, txs ...*types.Transaction) types.Hash {
+	t.Helper()
+
+	block := &types.Block{
+		Header:       &types.Header{Number: number, GasLimit: 30_000_000},
+		Transactions: txs,
+	}
+	transition, err := executor.ProcessBlock(parentRoot, block, types.ZeroAddress)
+	require.NoError(t, err)
+	_, root, err := transition.Commit()
+	require.NoError(t, err)
+	return root
 }
 
 func valueTransfer(from, to types.Address, nonce uint64, amount int64) *types.Transaction {
@@ -303,4 +326,208 @@ func TestDAGExecutor_executeMatchesProcessBlockStateRoot(t *testing.T) {
 	}
 
 	require.Equal(t, processBlockRoot(), dagRoot())
+}
+
+// --- Scenarios mapped from local testnet checklist ---
+
+func TestProcessBlock_threeAccountsSameBlock(t *testing.T) {
+	t.Parallel()
+
+	executor, parentRoot := newParallelTestExecutor(t)
+
+	const amount = int64(1_000_000_000_000_000)
+	const gasCost = int64(state.TxGas)
+	txA := valueTransfer(parallelSenderA, parallelRecvC, 0, amount)
+	txB := valueTransfer(parallelSenderB, parallelRecvD, 0, amount)
+	txC := valueTransfer(parallelSenderC, parallelRecvE, 0, amount)
+
+	block := &types.Block{
+		Header:       &types.Header{Number: 1, GasLimit: 30_000_000},
+		Transactions: []*types.Transaction{txA, txB, txC},
+	}
+
+	transition, err := executor.ProcessBlock(parentRoot, block, types.ZeroAddress)
+	require.NoError(t, err)
+	require.Len(t, transition.Receipts(), 3)
+	for _, r := range transition.Receipts() {
+		require.NotNil(t, r.Status)
+		require.Equal(t, types.ReceiptSuccess, *r.Status)
+	}
+
+	snap, _, err := transition.Commit()
+	require.NoError(t, err)
+
+	for _, addr := range []types.Address{parallelSenderA, parallelSenderB, parallelSenderC} {
+		acct, err := snap.GetAccount(addr)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), acct.Nonce)
+		require.Equal(t, big.NewInt(1_000_000_000_000_000_000-amount-gasCost), acct.Balance)
+	}
+	for _, pair := range []struct {
+		addr types.Address
+		want int64
+	}{
+		{parallelRecvC, amount},
+		{parallelRecvD, amount},
+		{parallelRecvE, amount},
+	} {
+		acct, err := snap.GetAccount(pair.addr)
+		require.NoError(t, err)
+		require.Equal(t, big.NewInt(pair.want), acct.Balance)
+	}
+}
+
+func TestProcessBlock_singleAccountThreeNonceChain(t *testing.T) {
+	t.Parallel()
+
+	executor, parentRoot := newParallelTestExecutor(t)
+
+	const amount = int64(500_000_000_000_000)
+	tx0 := valueTransfer(parallelSenderA, parallelRecvC, 0, amount)
+	tx1 := valueTransfer(parallelSenderA, parallelRecvD, 1, amount)
+	tx2 := valueTransfer(parallelSenderA, parallelRecvE, 2, amount)
+
+	block := &types.Block{
+		Header:       &types.Header{Number: 1, GasLimit: 30_000_000},
+		Transactions: []*types.Transaction{tx0, tx1, tx2},
+	}
+
+	transition, err := executor.ProcessBlock(parentRoot, block, types.ZeroAddress)
+	require.NoError(t, err)
+	require.Len(t, transition.Receipts(), 3)
+	for _, r := range transition.Receipts() {
+		require.NotNil(t, r.Status)
+		require.Equal(t, types.ReceiptSuccess, *r.Status)
+	}
+
+	snap, _, err := transition.Commit()
+	require.NoError(t, err)
+
+	acctA, err := snap.GetAccount(parallelSenderA)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), acctA.Nonce)
+
+	const gasCost = int64(state.TxGas)
+	totalSent := amount * 3
+	require.Equal(t, big.NewInt(1_000_000_000_000_000_000-totalSent-gasCost*3), acctA.Balance)
+	require.Equal(t, big.NewInt(amount), mustBalance(t, snap, parallelRecvC))
+	require.Equal(t, big.NewInt(amount), mustBalance(t, snap, parallelRecvD))
+	require.Equal(t, big.NewInt(amount), mustBalance(t, snap, parallelRecvE))
+}
+
+func TestProcessBlock_nonceChainAcrossBlocks(t *testing.T) {
+	t.Parallel()
+
+	executor, parentRoot := newParallelTestExecutor(t)
+
+	const amount = int64(1_000_000_000_000_000)
+	tx0 := valueTransfer(parallelSenderA, parallelRecvC, 0, amount)
+	root1 := processBlockAndCommit(t, executor, parentRoot, 1, tx0)
+
+	tx1 := valueTransfer(parallelSenderA, parallelRecvD, 1, amount)
+	root2 := processBlockAndCommit(t, executor, root1, 2, tx1)
+
+	tx2 := valueTransfer(parallelSenderA, parallelRecvE, 2, amount)
+	transition, err := executor.ProcessBlock(root2, &types.Block{
+		Header:       &types.Header{Number: 3, GasLimit: 30_000_000},
+		Transactions: []*types.Transaction{tx2},
+	}, types.ZeroAddress)
+	require.NoError(t, err)
+	require.Len(t, transition.Receipts(), 1)
+
+	snap, _, err := transition.Commit()
+	require.NoError(t, err)
+
+	acctA, err := snap.GetAccount(parallelSenderA)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), acctA.Nonce)
+}
+
+func TestDAGExecutor_transferChainABC(t *testing.T) {
+	t.Parallel()
+
+	// A -> B -> C: B must receive from A before paying C (DAG level ordering).
+	const (
+		amountAB = int64(800_000_000_000_000)
+		amountBC = int64(300_000_000_000_000)
+		gasCost  = int64(state.TxGas)
+	)
+	preState := map[types.Address]*state.PreState{
+		parallelSenderA: {Balance: 1_000_000_000_000_000_000, Nonce: 0},
+		parallelRecvC:   {Balance: 0, Nonce: 0}, // B (intermediate)
+		parallelRecvD:   {Balance: 0, Nonce: 0}, // C (final)
+	}
+	transition := state.NewParallelTestTransition(preState)
+	logger := hclog.NewNullLogger()
+
+	txAB := valueTransfer(parallelSenderA, parallelRecvC, 0, amountAB)
+	txBC := valueTransfer(parallelRecvC, parallelRecvD, 0, amountBC)
+	txs := []*types.Transaction{txAB, txBC}
+
+	analyzer := dag.NewDependencyAnalyzer(logger)
+	deps := analyzer.DetectDependencies(txs)
+	require.Contains(t, deps[txBC], txAB)
+	require.True(t, analyzer.HasDependencies(deps))
+
+	d, err := dag.BuildDAG(txs, deps)
+	require.NoError(t, err)
+	require.Equal(t, 1, d.GetMaxLevel(), "A->B and B->C must run on different DAG levels")
+
+	require.NoError(t, dag.NewDAGExecutor(transition, logger).ExecuteDAG(d))
+
+	require.Equal(t, big.NewInt(amountBC), transition.AccountBalanceForTest(parallelRecvD))
+	require.Equal(t, big.NewInt(amountAB-amountBC-gasCost), transition.AccountBalanceForTest(parallelRecvC))
+}
+
+func TestProcessBlock_transferChainABC_serialWriteMatchesDAG(t *testing.T) {
+	t.Parallel()
+
+	// ProcessBlock uses account grouping only (no transfer-chain deps). Serial Write order is the correctness baseline.
+	const (
+		amountAB = int64(800_000_000_000_000)
+		amountBC = int64(300_000_000_000_000)
+	)
+	executor, parentRoot := newParallelTestExecutorWithGenesis(t, map[types.Address]*chain.GenesisAccount{
+		parallelSenderA: {Balance: big.NewInt(1_000_000_000_000_000_000)},
+	})
+
+	txAB := valueTransfer(parallelSenderA, parallelRecvC, 0, amountAB)
+	txBC := valueTransfer(parallelRecvC, parallelRecvD, 0, amountBC)
+	block := &types.Block{
+		Header:       &types.Header{Number: 1, GasLimit: 30_000_000},
+		Transactions: []*types.Transaction{txAB, txBC},
+	}
+
+	serialRoot := func() types.Hash {
+		transition, err := executor.BeginTxn(parentRoot, block.Header, types.ZeroAddress)
+		require.NoError(t, err)
+		for _, tx := range block.Transactions {
+			require.NoError(t, transition.Write(tx))
+		}
+		_, root, err := transition.Commit()
+		require.NoError(t, err)
+		return root
+	}
+
+	dagRoot := func() types.Hash {
+		transition, err := executor.BeginTxn(parentRoot, block.Header, types.ZeroAddress)
+		require.NoError(t, err)
+		analyzer := dag.NewDependencyAnalyzer(hclog.NewNullLogger())
+		deps := analyzer.DetectDependencies(block.Transactions)
+		d, err := dag.BuildDAG(block.Transactions, deps)
+		require.NoError(t, err)
+		require.NoError(t, dag.NewDAGExecutor(transition, hclog.NewNullLogger()).ExecuteDAG(d))
+		_, root, err := transition.Commit()
+		require.NoError(t, err)
+		return root
+	}
+
+	require.Equal(t, serialRoot(), dagRoot())
+}
+
+func mustBalance(t *testing.T, snap state.Snapshot, addr types.Address) *big.Int {
+	t.Helper()
+	acct, err := snap.GetAccount(addr)
+	require.NoError(t, err)
+	return acct.Balance
 }
