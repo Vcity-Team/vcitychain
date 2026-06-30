@@ -375,6 +375,7 @@ type Transition struct {
 	enableParallelExecution bool // Feature flag to enable/disable parallel execution
 	accountLocks            map[types.Address]*sync.Mutex // Per-account locks for concurrent execution
 	accountLocksMu          sync.Mutex                    // Protects accountLocks map
+	stateWriteMu            sync.Mutex                    // Serializes Txn mutations (trie is not goroutine-safe)
 	gasPoolMutex            sync.Mutex                   // Protects gas pool for concurrent access
 	receiptsMutex           sync.Mutex                   // Protects receipts slice for concurrent access
 	totalGasMutex           sync.Mutex                   // Protects totalGas for concurrent access
@@ -607,6 +608,11 @@ func (t *Transition) WriteForAccount(txn *types.Transaction, accountAddr types.A
 
 // writeSerial executes a transaction serially (internal implementation)
 func (t *Transition) writeSerial(txn *types.Transaction) error {
+	if t.enableParallelExecution {
+		t.stateWriteMu.Lock()
+		defer t.stateWriteMu.Unlock()
+	}
+
 	var err error
 
 	if txn.From == emptyFrom &&
