@@ -304,6 +304,9 @@ func (e *Executor) BeginTxn(
 		evm:         evm.NewEVM(),
 		precompiles: precompiled.NewPrecompiled(),
 		PostHook:    e.PostHook,
+
+		enableParallelExecution: true,
+		accountLocks:            make(map[types.Address]*sync.Mutex),
 	}
 
 	// enable contract deployment allow list (if any)
