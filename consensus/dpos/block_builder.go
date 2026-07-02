@@ -244,6 +244,7 @@ func (b *BlockBuilder) Fill() error {
 					"skippedCount", skippedCount,
 					"consecutiveSkips", consecutiveSkips,
 					"note", "尝试重新准备交易")
+				b.params.TxPool.SyncPrepareNonces(b.nonceCache)
 				b.params.TxPool.Prepare()
 				tx = b.params.TxPool.Peek()
 				consecutiveSkips = 0 // 重置连续跳过计数
@@ -286,8 +287,9 @@ func (b *BlockBuilder) Fill() error {
 				"txCount", txCount,
 				"consecutiveSkips", consecutiveSkips,
 				"note", "当前区块状态nonce已更新，交易nonce不匹配")
-			b.params.TxPool.Pop(tx) // 移除这个交易，Pop()会自动将下一笔交易添加到executables队列
-			continue                // 继续处理下一个交易
+			// 仅从 executables 移除过期项；不可 Pop promoted 队头，否则会删掉正确 nonce 的交易
+			b.params.TxPool.DiscardExecutable(tx)
+			continue
 		}
 
 		// nonce匹配，重置连续跳过计数
