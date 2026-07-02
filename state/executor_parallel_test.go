@@ -36,6 +36,7 @@ func newParallelTestExecutorWithGenesis(t *testing.T, genesisAlloc map[types.Add
 	mstate := itrie.NewState(itrie.NewMemoryStorage())
 	logger := hclog.NewNullLogger()
 	executor := state.NewExecutor(mchain.Params, mstate, logger)
+	executor.SetEnableParallelExecution(true)
 	state.SetupExecutorGetHash(executor)
 
 	root, err := executor.WriteGenesis(genesisAlloc, types.ZeroHash)

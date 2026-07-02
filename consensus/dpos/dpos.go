@@ -332,6 +332,11 @@ type DPoSConfig struct {
 	WallClockSlotAlignment bool `json:"dpos_wall_clock_slot_alignment" yaml:"dpos_wall_clock_slot_alignment"`
 	// RelaxHeaderTimestampOrder 为 true 时，VerifyHeader 暂不拒绝「子块时间戳<=父块」（临时运维开关，链上坏块消化后应关闭）。
 	RelaxHeaderTimestampOrder bool `json:"dpos_relax_header_timestamp_order" yaml:"dpos_relax_header_timestamp_order"`
+
+	// EnableDAGExecution 出块 Fill 是否走 DAG/并行打包（默认 true）
+	EnableDAGExecution bool `json:"enableDAGExecution" yaml:"enable_dag_execution"`
+	// EnableParallelExecution ProcessBlock 是否按账户并行执行（默认 true）
+	EnableParallelExecution bool `json:"enableParallelExecution" yaml:"enable_parallel_execution"`
 }
 
 // GenerateExitProof 生成退出证明（占位符实现，满足 BridgeDataProvider 接口要求）
@@ -1046,7 +1051,11 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		closeCh:     make(chan struct{}),
 		logger:      logger,
 		txPool:      params.TxPool,
-		config:      &DPoSConfig{WallClockSlotAlignment: true},
+		config:      &DPoSConfig{
+			WallClockSlotAlignment:  true,
+			EnableDAGExecution:      true,
+			EnableParallelExecution: true,
+		},
 		rawConfig:   params.Config.Config,       // 存储原始配置
 		lastLogTime: make(map[string]time.Time), // 初始化日志频率限制
 
@@ -1726,6 +1735,29 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	}
 	if vcity_dpos.config.RelaxHeaderTimestampOrder {
 		logger.Warn("⚠️ 已启用块头时间戳单调性放宽（dpos_relax_header_timestamp_order=true），仅建议临时消化链上坏块后关闭")
+	}
+
+	if v, ok := getConfigValue("enableDAGExecution", "enable_dag_execution"); ok {
+		if b, parsed := parseFlexibleBool(v); parsed {
+			vcity_dpos.config.EnableDAGExecution = b
+		} else {
+			logger.Warn("enable_dag_execution 无法解析，保持默认 true",
+				"value", v, "type", fmt.Sprintf("%T", v))
+		}
+	}
+	if v, ok := getConfigValue("enableParallelExecution", "enable_parallel_execution"); ok {
+		if b, parsed := parseFlexibleBool(v); parsed {
+			vcity_dpos.config.EnableParallelExecution = b
+		} else {
+			logger.Warn("enable_parallel_execution 无法解析，保持默认 true",
+				"value", v, "type", fmt.Sprintf("%T", v))
+		}
+	}
+	logger.Info("⚙️ 并行执行配置",
+		"enableDAGExecution", vcity_dpos.config.EnableDAGExecution,
+		"enableParallelExecution", vcity_dpos.config.EnableParallelExecution)
+	if vcity_dpos.config.Executor != nil {
+		vcity_dpos.config.Executor.SetEnableParallelExecution(vcity_dpos.config.EnableParallelExecution)
 	}
 
 	return vcity_dpos, nil

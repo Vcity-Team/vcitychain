@@ -45,13 +45,14 @@ func newDAGBlockBuilder(t *testing.T, executor *state.Executor, parent *types.He
 	t.Helper()
 
 	builder := NewBlockBuilder(&BlockBuilderParams{
-		BlockTime: time.Second,
-		Parent:    parent,
-		Coinbase:  types.ZeroAddress,
-		Executor:  executor,
-		GasLimit:  parent.GasLimit,
-		TxPool:    pool,
-		Logger:    hclog.NewNullLogger(),
+		BlockTime:          time.Second,
+		Parent:             parent,
+		Coinbase:           types.ZeroAddress,
+		Executor:           executor,
+		GasLimit:           parent.GasLimit,
+		TxPool:             pool,
+		Logger:             hclog.NewNullLogger(),
+		EnableDAGExecution: true,
 	})
 	bb := builder.(*BlockBuilder)
 	require.True(t, bb.enableDAGExecution)

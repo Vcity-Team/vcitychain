@@ -106,6 +106,10 @@ type Config struct {
 	DPoSWallClockSlotAlignment bool `yaml:"dpos_wall_clock_slot_alignment"`
 	// dpos_relax_header_timestamp_order: 为 true 时临时接受子块时间戳<=父块（默认 false）
 	DPoSRelaxHeaderTimestampOrder bool `yaml:"dpos_relax_header_timestamp_order"`
+	// enable_dag_execution: 出块 Fill 是否走 DAG/并行打包（默认 true）
+	EnableDAGExecution bool `yaml:"enable_dag_execution"`
+	// enable_parallel_execution: ProcessBlock 是否按账户并行执行（默认 true）
+	EnableParallelExecution bool `yaml:"enable_parallel_execution"`
 }
 
 // Telemetry holds the config details for metric services

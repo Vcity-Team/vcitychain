@@ -1185,14 +1185,15 @@ func (p *blockchainWrapper) NewBlockBuilder(
 	}
 
 	return NewBlockBuilder(&BlockBuilderParams{
-		BlockTime: blockTime,
-		Parent:    parent,
-		Coinbase:  coinbase,
-		Executor:  p.executor,
-		GasLimit:  gasLimit,
-		BaseFee:   p.blockchain.CalculateBaseFee(parent),
-		TxPool:    txPool,
-		Logger:    logger,
+		BlockTime:            blockTime,
+		Parent:               parent,
+		Coinbase:             coinbase,
+		Executor:             p.executor,
+		GasLimit:             gasLimit,
+		BaseFee:              p.blockchain.CalculateBaseFee(parent),
+		TxPool:               txPool,
+		Logger:               logger,
+		EnableDAGExecution:   p.config.EnableDAGExecution,
 	}), nil
 }
 

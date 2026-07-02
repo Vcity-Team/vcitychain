@@ -43,6 +43,16 @@ type Executor struct {
 
 	PostHook        func(txn *Transition)
 	GenesisPostHook func(*Transition) error
+
+	enableParallelExecution bool
+}
+
+// SetEnableParallelExecution configures whether ProcessBlock runs txs in parallel by account.
+func (e *Executor) SetEnableParallelExecution(v bool) {
+	if e == nil {
+		return
+	}
+	e.enableParallelExecution = v
 }
 
 // NewExecutor creates a new executor
@@ -305,7 +315,7 @@ func (e *Executor) BeginTxn(
 		precompiles: precompiled.NewPrecompiled(),
 		PostHook:    e.PostHook,
 
-		enableParallelExecution: true,
+		enableParallelExecution: e.enableParallelExecution,
 		accountLocks:            make(map[types.Address]*sync.Mutex),
 	}
 
@@ -388,7 +398,7 @@ func NewTransition(config chain.ForksInTime, snap Snapshot, radix *Txn) *Transit
 		snap:                    snap,
 		evm:                     evm.NewEVM(),
 		precompiles:             precompiled.NewPrecompiled(),
-		enableParallelExecution: true,
+		enableParallelExecution: false,
 		accountLocks:            make(map[types.Address]*sync.Mutex),
 	}
 }

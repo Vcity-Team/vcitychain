@@ -490,6 +490,7 @@ func (p *TxPool) processTx(tx *types.Transaction, origin txOrigin) error {
 
 	if oldTxWithSameNonce != nil {
 		p.index.remove(oldTxWithSameNonce)
+		p.removeFromExecutables(oldTxWithSameNonce.Hash)
 	} else {
 		metrics.SetGauge([]string{txPoolMetrics, "added_tx"}, 1)
 	}
@@ -718,6 +719,19 @@ func (p *TxPool) AddTx(tx *types.Transaction) error {
 	return nil
 }
 
+// SyncPrepareNonces overlays nonce hints used by Prepare().
+func (p *TxPool) SyncPrepareNonces(nonces map[types.Address]uint64) {
+	if len(nonces) == 0 {
+		return
+	}
+
+	p.prepareNonceCacheMu.Lock()
+	for addr, nonce := range nonces {
+		p.prepareNonceCache[addr] = nonce
+	}
+	p.prepareNonceCacheMu.Unlock()
+}
+
 // Prepare generates all the transactions
 // ready for execution. (primaries)
 func (p *TxPool) Prepare() {
@@ -784,18 +798,33 @@ func (p *TxPool) ClearPrepareNonceCache() {
 	p.prepareNonceCacheMu.Unlock()
 }
 
-// Peek returns the best-price selected
-// transaction ready for execution.
+// Peek returns the best-price selected transaction ready for execution
+// without removing it from the executables queue.
 func (p *TxPool) Peek() *types.Transaction {
-	// Popping the executables queue
-	// does not remove the actual tx
-	// from the pool.
-	// The executables queue just provides
-	// insight into which account has the
-	// highest priced tx (head of promoted queue)
 	p.executablesMu.RLock()
 	defer p.executablesMu.RUnlock()
-	return p.executables.pop()
+	if p.executables == nil {
+		return nil
+	}
+
+	return p.executables.peek()
+}
+
+func (p *TxPool) removeFromExecutables(hash types.Hash) {
+	p.executablesMu.Lock()
+	defer p.executablesMu.Unlock()
+	if p.executables != nil {
+		p.executables.removeByHash(hash)
+	}
+}
+
+// DiscardExecutable removes a stale transaction from the executables queue only.
+func (p *TxPool) DiscardExecutable(tx *types.Transaction) {
+	if tx == nil {
+		return
+	}
+
+	p.removeFromExecutables(tx.Hash)
 }
 
 // Pop removes the given transaction from the
@@ -824,6 +853,8 @@ func (p *TxPool) Pop(tx *types.Transaction) {
 
 	// update metrics
 	p.updatePending(-1)
+
+	p.removeFromExecutables(tx.Hash)
 
 	// update executables
 	// 参考以太坊：Pop()只负责移除交易，不清理过期交易

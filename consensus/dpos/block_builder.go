@@ -7,8 +7,10 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Vcity-Team/vcitychain/bls"
@@ -60,13 +62,16 @@ type BlockBuilderParams struct {
 
 	// SchedulingTimestamp 下一区块头时间（网络最新块 timestamp+blockWindow）；零值则回退 parent+BlockTime。
 	SchedulingTimestamp time.Time
+
+	// EnableDAGExecution 出块 Fill 是否走 DAG/并行打包
+	EnableDAGExecution bool
 }
 
 // NewBlockBuilder creates a new block builder
 func NewBlockBuilder(params *BlockBuilderParams) blockBuilder {
 	return &BlockBuilder{
 		params:             params,
-		enableDAGExecution: true, // Default: enabled for performance improvement
+		enableDAGExecution: params.EnableDAGExecution,
 	}
 }
 
@@ -258,6 +263,7 @@ func (b *BlockBuilder) fillSerial() error {
 					"skippedCount", skippedCount,
 					"consecutiveSkips", consecutiveSkips,
 					"note", "尝试重新准备交易")
+				b.params.TxPool.SyncPrepareNonces(b.nonceCache)
 				b.params.TxPool.Prepare()
 				tx = b.params.TxPool.Peek()
 				consecutiveSkips = 0 // 重置连续跳过计数
@@ -300,8 +306,9 @@ func (b *BlockBuilder) fillSerial() error {
 				"txCount", txCount,
 				"consecutiveSkips", consecutiveSkips,
 				"note", "当前区块状态nonce已更新，交易nonce不匹配")
-			b.params.TxPool.Pop(tx) // 移除这个交易，Pop()会自动将下一笔交易添加到executables队列
-			continue                // 继续处理下一个交易
+			// 仅从 executables 移除过期项；不可 Pop promoted 队头
+			b.params.TxPool.DiscardExecutable(tx)
+			continue
 		}
 
 		// nonce匹配，重置连续跳过计数
@@ -345,163 +352,239 @@ func (b *BlockBuilder) fillSerial() error {
 	}
 }
 
-// fillWithDAG fills the block using DAG-based parallel execution
-// Stage 3: DAG dependency detection and parallel execution
+// fillWithDAG fills the block using DAG-based parallel execution, looping until gas
+// is exhausted or no more valid transactions are available (same as serial Fill).
 func (b *BlockBuilder) fillWithDAG() error {
 	blockNumber := b.params.Parent.Number + 1
 	b.params.Logger.Debug("🚀 [BlockBuilder.fillWithDAG] 开始DAG模式填充区块", "blockNumber", blockNumber)
-	
-	// Step 1: Collect candidate transactions
-	candidates := b.collectCandidateTransactions()
-	if len(candidates) < 2 {
-		// Not enough transactions for DAG, fall back to serial
-		return fmt.Errorf("not enough transactions for DAG execution: %d", len(candidates))
-	}
-	
-	b.params.Logger.Debug("📊 [BlockBuilder.fillWithDAG] 收集候选交易",
-		"count", len(candidates),
-		"blockNumber", blockNumber)
-	
-	// Step 2: Detect dependencies
-	analyzer := dag.NewDependencyAnalyzer(b.params.Logger)
-	dependencies := analyzer.DetectDependencies(candidates)
-	
-	// Check if there are meaningful dependencies
-	if !analyzer.HasDependencies(dependencies) {
-		// No dependencies detected, execute transactions using account grouping (Stage 2 style)
-		// 修复：即使没有依赖关系，也应该执行这些交易，而不是直接返回错误
-		// 使用账户分组并行执行（更安全，使用账户级别的锁）
-		b.params.Logger.Debug("ℹ️ [BlockBuilder.fillWithDAG] 未检测到依赖关系，使用账户分组并行执行",
-			"count", len(candidates),
-			"blockNumber", blockNumber)
-		
-		// Group transactions by account
-		accountGroups := make(map[types.Address][]*types.Transaction)
-		for _, tx := range candidates {
-			accountGroups[tx.From] = append(accountGroups[tx.From], tx)
+
+	const (
+		maxCandidatesPerBatch = 200
+		maxRePrepareAttempts  = 50
+	)
+
+	refreshPool := true
+	rePrepareAttempts := 0
+	startTxCount := len(b.txns)
+
+	for {
+		if b.blockGasRemaining() == 0 {
+			break
 		}
-		
-		// Execute transactions from different accounts in parallel
-		var wg sync.WaitGroup
-		errCh := make(chan error, len(accountGroups))
-		
-		for account, txs := range accountGroups {
-			wg.Add(1)
-			go func(addr types.Address, transactions []*types.Transaction) {
-				defer wg.Done()
-				// Transactions from the same account must be executed serially (by nonce order)
-				for _, tx := range transactions {
-					if err := b.state.WriteForAccount(tx, addr); err != nil {
-						errCh <- fmt.Errorf("account %s transaction %s: %w", addr.String(), tx.Hash.String(), err)
-						return
-					}
-				}
-			}(account, txs)
-		}
-		
-		wg.Wait()
-		close(errCh)
-		
-		// Check for errors
-		for err := range errCh {
-			if err != nil {
-				b.params.Logger.Error("❌ [BlockBuilder.fillWithDAG] 账户分组并行执行失败", "error", err)
-				// Restore executables queue on error
+
+		candidates := b.collectCandidateTransactions(refreshPool, maxCandidatesPerBatch)
+		refreshPool = false
+
+		if len(candidates) == 0 {
+			if rePrepareAttempts < maxRePrepareAttempts {
+				b.params.TxPool.SyncPrepareNonces(b.nonceCache)
 				b.params.TxPool.Prepare()
-				return fmt.Errorf("account grouping parallel execution failed: %w", err)
+				rePrepareAttempts++
+				candidates = b.collectCandidateTransactions(false, maxCandidatesPerBatch)
+			}
+			if len(candidates) == 0 {
+				break
 			}
 		}
-		
-		// Add executed transactions to block and remove from pool
-		for _, tx := range candidates {
+
+		rePrepareAttempts = 0
+
+		candidates, gasFull := b.filterCandidatesByRemainingGas(candidates)
+		if len(candidates) == 0 {
+			if gasFull {
+				break
+			}
+			continue
+		}
+
+		executed, batchGasFull, err := b.executeDAGBatch(candidates, blockNumber)
+		if err != nil {
+			b.params.TxPool.Prepare()
+			return err
+		}
+
+		for _, tx := range executed {
 			b.txns = append(b.txns, tx)
 			b.params.TxPool.Pop(tx)
 			b.nonceCache[tx.From] = tx.Nonce + 1
 		}
-		
-		b.params.Logger.Info("🎉 [BlockBuilder.fillWithDAG] 账户分组并行执行完成",
-			"blockNumber", blockNumber,
-			"txCount", len(b.txns),
-			"accountCount", len(accountGroups))
-		
-		return nil
+
+		if batchGasFull || b.blockGasRemaining() == 0 {
+			break
+		}
 	}
-	
-	// Step 3: Build DAG
-	transactionDAG, err := dag.BuildDAG(candidates, dependencies)
-	if err != nil {
-		b.params.Logger.Error("❌ [BlockBuilder.fillWithDAG] DAG构建失败", "error", err)
-		return fmt.Errorf("failed to build DAG: %w", err)
+
+	if len(b.txns) == startTxCount {
+		return fmt.Errorf("not enough transactions for DAG execution: 0")
 	}
-	
-	b.params.Logger.Debug("✅ [BlockBuilder.fillWithDAG] DAG构建成功",
-		"maxLevel", transactionDAG.GetMaxLevel(),
-		"totalNodes", len(transactionDAG.Nodes))
-	
-	// Step 4: Execute DAG
-	dagExecutor := dag.NewDAGExecutor(b.state, b.params.Logger)
-	if err := dagExecutor.ExecuteDAG(transactionDAG); err != nil {
-		b.params.Logger.Error("❌ [BlockBuilder.fillWithDAG] DAG执行失败", "error", err)
-		// 修复：DAG执行失败时，需要恢复executables队列
-		// 因为collectCandidateTransactions中的Peek()已经从executables移除了交易
-		// 但交易仍在promoted队列中，重新Prepare()可以重建executables队列
-		b.params.TxPool.Prepare()
-		return fmt.Errorf("failed to execute DAG: %w", err)
-	}
-	
-	// Step 5: Add executed transactions to block and remove from pool
-	// 修复：仅在确认交易已添加到区块后，才从交易池中Pop
-	// 这确保了如果区块构建失败，交易仍在池中
-	for _, node := range transactionDAG.Nodes {
-		b.txns = append(b.txns, node.Tx)
-		// 确认交易已添加到区块后，从promoted队列中移除
-		// 这是唯一应该Pop的地方，确保状态一致性
-		b.params.TxPool.Pop(node.Tx)
-		// Update nonce cache
-		b.nonceCache[node.Tx.From] = node.Tx.Nonce + 1
-	}
-	
-	b.params.Logger.Info("🎉 [BlockBuilder.fillWithDAG] DAG执行完成",
+
+	b.params.Logger.Info("🎉 [BlockBuilder.fillWithDAG] 填充完成",
 		"blockNumber", blockNumber,
-		"txCount", len(b.txns),
-		"note", "交易已添加到区块并从交易池中移除")
-	
+		"txCount", len(b.txns)-startTxCount,
+		"totalTxCount", len(b.txns))
+
 	return nil
 }
 
-// collectCandidateTransactions collects a batch of candidate transactions from the pool
-// 修复：清除 Prepare() 的 nonce 缓存，确保使用正确的状态根检查 nonce
-func (b *BlockBuilder) collectCandidateTransactions() []*types.Transaction {
-	blockNumber := b.params.Parent.Number + 1
-	
-	// 修复：清除 Prepare() 的 nonce 缓存，确保使用最新的状态根查询 nonce
-	// 这样可以避免使用旧的 nonce 缓存导致所有交易被过滤
-	if txPool, ok := b.params.TxPool.(interface {
-		ClearPrepareNonceCache()
-	}); ok {
-		txPool.ClearPrepareNonceCache()
-		b.params.Logger.Debug("🔧 [BlockBuilder.collectCandidateTransactions] 已清除Prepare()的nonce缓存",
-			"blockNumber", blockNumber,
-			"note", "确保使用正确的状态根查询nonce")
+func (b *BlockBuilder) blockGasRemaining() uint64 {
+	used := b.state.TotalGas()
+	if used >= b.params.GasLimit {
+		return 0
 	}
-	
-	// 调用 Prepare() 构建 executables 队列
-	// 清除缓存后，Prepare() 会使用 p.store.Header().StateRoot 重新查询 nonce
-	b.params.TxPool.Prepare()
-	
-	candidates := make([]*types.Transaction, 0, 100) // Pre-allocate for 100 transactions
-	maxCandidates := 200                               // Limit to prevent excessive memory usage
-	
-	// 从 executables 队列收集交易
+
+	return b.params.GasLimit - used
+}
+
+func (b *BlockBuilder) filterCandidatesByRemainingGas(candidates []*types.Transaction) ([]*types.Transaction, bool) {
+	remaining := b.blockGasRemaining()
+	if remaining == 0 {
+		return nil, true
+	}
+
+	filtered := make([]*types.Transaction, 0, len(candidates))
+	for _, tx := range candidates {
+		if tx.Gas > remaining {
+			return filtered, true
+		}
+
+		filtered = append(filtered, tx)
+		remaining -= tx.Gas
+	}
+
+	return filtered, false
+}
+
+func (b *BlockBuilder) executeDAGBatch(candidates []*types.Transaction, blockNumber uint64) ([]*types.Transaction, bool, error) {
+	analyzer := dag.NewDependencyAnalyzer(b.params.Logger)
+	dependencies := analyzer.DetectDependencies(candidates)
+
+	if !analyzer.HasDependencies(dependencies) {
+		b.params.Logger.Debug("ℹ️ [BlockBuilder.fillWithDAG] 账户分组并行执行",
+			"count", len(candidates),
+			"blockNumber", blockNumber)
+
+		return b.executeAccountGroupBatch(candidates)
+	}
+
+	b.params.Logger.Debug("✅ [BlockBuilder.fillWithDAG] DAG执行",
+		"count", len(candidates),
+		"blockNumber", blockNumber)
+
+	transactionDAG, err := dag.BuildDAG(candidates, dependencies)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to build DAG: %w", err)
+	}
+
+	dagExecutor := dag.NewDAGExecutor(b.state, b.params.Logger)
+	if err := dagExecutor.ExecuteDAG(transactionDAG); err != nil {
+		var gasErr *state.GasLimitReachedTransitionApplicationError
+		if errors.As(err, &gasErr) {
+			return dagExecutedTransactions(transactionDAG), true, nil
+		}
+
+		return nil, false, fmt.Errorf("failed to execute DAG: %w", err)
+	}
+
+	return dagExecutedTransactions(transactionDAG), false, nil
+}
+
+func dagExecutedTransactions(transactionDAG *dag.DAG) []*types.Transaction {
+	executed := make([]*types.Transaction, 0, len(transactionDAG.Nodes))
+	for _, node := range transactionDAG.Nodes {
+		if node.IsExecuted() {
+			executed = append(executed, node.Tx)
+		}
+	}
+
+	return executed
+}
+
+func (b *BlockBuilder) executeAccountGroupBatch(candidates []*types.Transaction) ([]*types.Transaction, bool, error) {
+	accountGroups := make(map[types.Address][]*types.Transaction)
+	for _, tx := range candidates {
+		accountGroups[tx.From] = append(accountGroups[tx.From], tx)
+	}
+
+	for addr := range accountGroups {
+		sort.Slice(accountGroups[addr], func(i, j int) bool {
+			return accountGroups[addr][i].Nonce < accountGroups[addr][j].Nonce
+		})
+	}
+
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		executed []*types.Transaction
+		gasFull  atomic.Bool
+	)
+
+	errCh := make(chan error, 1)
+
+	for account, txs := range accountGroups {
+		wg.Add(1)
+		go func(addr types.Address, transactions []*types.Transaction) {
+			defer wg.Done()
+
+			for _, tx := range transactions {
+				if gasFull.Load() {
+					return
+				}
+
+				if err := b.state.WriteForAccount(tx, addr); err != nil {
+					if _, ok := err.(*state.GasLimitReachedTransitionApplicationError); ok {
+						gasFull.Store(true)
+						return
+					}
+
+					select {
+					case errCh <- fmt.Errorf("account %s transaction %s: %w", addr.String(), tx.Hash.String(), err):
+					default:
+					}
+
+					return
+				}
+
+				mu.Lock()
+				executed = append(executed, tx)
+				mu.Unlock()
+			}
+		}(account, txs)
+	}
+
+	wg.Wait()
+
+	select {
+	case err := <-errCh:
+		return nil, false, err
+	default:
+	}
+
+	return executed, gasFull.Load(), nil
+}
+
+// collectCandidateTransactions collects candidate transactions from the pool.
+// refreshPool: only the first batch (or after re-Prepare) should rebuild executables via Prepare().
+func (b *BlockBuilder) collectCandidateTransactions(refreshPool bool, maxCandidates int) []*types.Transaction {
+	blockNumber := b.params.Parent.Number + 1
+
+	if refreshPool {
+		if txPool, ok := b.params.TxPool.(interface {
+			ClearPrepareNonceCache()
+		}); ok {
+			txPool.ClearPrepareNonceCache()
+		}
+
+		b.params.TxPool.Prepare()
+	}
+
+	candidates := make([]*types.Transaction, 0, maxCandidates)
+
 	for len(candidates) < maxCandidates {
 		tx := b.params.TxPool.Peek()
 		if tx == nil {
 			break
 		}
-		
-		// Check nonce using b.state (not Prepare()'s cache)
-		// 注意：b.state 使用 b.params.Parent.StateRoot，而 Prepare() 使用 p.store.Header().StateRoot
-		// 理论上这两个应该是一样的，但为了确保一致性，我们使用 b.state.GetNonce()
+
 		var accountNonce uint64
 		if cachedNonce, exists := b.nonceCache[tx.From]; exists {
 			accountNonce = cachedNonce
@@ -509,32 +592,30 @@ func (b *BlockBuilder) collectCandidateTransactions() []*types.Transaction {
 			accountNonce = b.state.GetNonce(tx.From)
 			b.nonceCache[tx.From] = accountNonce
 		}
-		
+
 		if tx.Nonce != accountNonce {
-			// Skip this transaction (nonce mismatch)
-			b.params.TxPool.Pop(tx)
+			b.params.TxPool.DiscardExecutable(tx)
 			continue
 		}
-		
-		// Check gas limit
+
 		if tx.Gas > b.params.GasLimit {
-			b.params.TxPool.Pop(tx)
+			b.params.TxPool.DiscardExecutable(tx)
 			continue
 		}
-		
-		// Add to candidates (don't pop yet - we'll pop only after successful execution)
-		// Note: Peek() already removed it from executables queue, but it's still in promoted queue
+
+		if tx.Gas > b.blockGasRemaining() {
+			break
+		}
+
 		candidates = append(candidates, tx)
-		
-		// Don't pop here - we'll pop after DAG execution succeeds and transactions are added to block
-		// This ensures transactions remain in pool if DAG execution fails
+		b.params.TxPool.DiscardExecutable(tx)
 	}
-	
+
 	b.params.Logger.Debug("📦 [BlockBuilder.collectCandidateTransactions] 收集完成",
 		"count", len(candidates),
 		"blockNumber", blockNumber,
-		"note", "交易已从executables移除，但仍在promoted队列中，等待执行成功后Pop")
-	
+		"refreshPool", refreshPool)
+
 	return candidates
 }
 

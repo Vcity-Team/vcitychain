@@ -37,6 +37,10 @@ func (s *stubTxPool) Prepare() {
 	s.pos = 0
 }
 
+func (s *stubTxPool) SyncPrepareNonces(map[types.Address]uint64) {}
+
+func (s *stubTxPool) DiscardExecutable(*types.Transaction) {}
+
 func (s *stubTxPool) Length() uint64 {
 	var n uint64
 	for _, tx := range s.txs {
@@ -61,6 +65,7 @@ func (s *stubTxPool) Peek() *types.Transaction {
 func (s *stubTxPool) Pop(tx *types.Transaction) {
 	s.pops = append(s.pops, tx)
 	s.popped[tx] = true
+	s.pos = 0
 }
 
 func (s *stubTxPool) Drop(*types.Transaction) {}
@@ -163,13 +168,14 @@ func TestBlockBuilder_FillWithDAG_multiAccountParallel(t *testing.T) {
 	logger := hclog.NewNullLogger()
 
 	builder := NewBlockBuilder(&BlockBuilderParams{
-		BlockTime: time.Second,
-		Parent:    parent,
-		Coinbase:  types.ZeroAddress,
-		Executor:  executor,
-		GasLimit:  parent.GasLimit,
-		TxPool:    pool,
-		Logger:    logger,
+		BlockTime:          time.Second,
+		Parent:             parent,
+		Coinbase:           types.ZeroAddress,
+		Executor:           executor,
+		GasLimit:           parent.GasLimit,
+		TxPool:             pool,
+		Logger:             logger,
+		EnableDAGExecution: true,
 	})
 
 	bb, ok := builder.(*BlockBuilder)
@@ -203,13 +209,14 @@ func TestBlockBuilder_FillWithDAG_sameRecipientUsesDAGLevels(t *testing.T) {
 	logger := hclog.NewNullLogger()
 
 	builder := NewBlockBuilder(&BlockBuilderParams{
-		BlockTime: time.Second,
-		Parent:    parent,
-		Coinbase:  types.ZeroAddress,
-		Executor:  executor,
-		GasLimit:  parent.GasLimit,
-		TxPool:    pool,
-		Logger:    logger,
+		BlockTime:          time.Second,
+		Parent:             parent,
+		Coinbase:           types.ZeroAddress,
+		Executor:           executor,
+		GasLimit:           parent.GasLimit,
+		TxPool:             pool,
+		Logger:             logger,
+		EnableDAGExecution: true,
 	})
 
 	bb := builder.(*BlockBuilder)
@@ -232,13 +239,14 @@ func TestBlockBuilder_FillWithDAG_fallsBackToSerialOnSingleTx(t *testing.T) {
 	logger := hclog.NewNullLogger()
 
 	builder := NewBlockBuilder(&BlockBuilderParams{
-		BlockTime: time.Second,
-		Parent:    parent,
-		Coinbase:  types.ZeroAddress,
-		Executor:  executor,
-		GasLimit:  parent.GasLimit,
-		TxPool:    pool,
-		Logger:    logger,
+		BlockTime:          time.Second,
+		Parent:             parent,
+		Coinbase:           types.ZeroAddress,
+		Executor:           executor,
+		GasLimit:           parent.GasLimit,
+		TxPool:             pool,
+		Logger:             logger,
+		EnableDAGExecution: true,
 	})
 
 	bb := builder.(*BlockBuilder)
@@ -247,6 +255,40 @@ func TestBlockBuilder_FillWithDAG_fallsBackToSerialOnSingleTx(t *testing.T) {
 
 	require.Len(t, bb.txns, 1)
 	require.Len(t, bb.Receipts(), 1)
+}
+
+func TestBlockBuilder_FillWithDAG_nonceChainSameBlock(t *testing.T) {
+	sender := testWalletAccount(t)
+	recv := types.Address(testWalletAccount(t).Ecdsa.Address())
+
+	executor, parent, signer := setupParallelBlockBuilderTest(t, []*wallet.Account{sender})
+
+	tx0 := signedTransferWithNonce(t, signer, sender, recv, 0, 1000)
+	tx1 := signedTransferWithNonce(t, signer, sender, recv, 1, 1000)
+	tx2 := signedTransferWithNonce(t, signer, sender, recv, 2, 1000)
+
+	pool := newStubTxPool(tx0, tx1, tx2)
+	logger := hclog.NewNullLogger()
+
+	builder := NewBlockBuilder(&BlockBuilderParams{
+		BlockTime:          time.Second,
+		Parent:             parent,
+		Coinbase:           types.ZeroAddress,
+		Executor:           executor,
+		GasLimit:           parent.GasLimit,
+		TxPool:             pool,
+		Logger:             logger,
+		EnableDAGExecution: true,
+	})
+
+	bb := builder.(*BlockBuilder)
+	require.NoError(t, bb.Reset())
+	require.NoError(t, bb.Fill())
+
+	require.Len(t, bb.txns, 3)
+	require.Equal(t, uint64(0), bb.txns[0].Nonce)
+	require.Equal(t, uint64(1), bb.txns[1].Nonce)
+	require.Equal(t, uint64(2), bb.txns[2].Nonce)
 }
 
 func TestBlockBuilder_parallelFillMatchesSerialFillStateRoot(t *testing.T) {
@@ -309,13 +351,14 @@ func TestBlockBuilder_FillWithDAG_transferChainABC(t *testing.T) {
 	logger := hclog.NewNullLogger()
 
 	builder := NewBlockBuilder(&BlockBuilderParams{
-		BlockTime: time.Second,
-		Parent:    parent,
-		Coinbase:  types.ZeroAddress,
-		Executor:  executor,
-		GasLimit:  parent.GasLimit,
-		TxPool:    pool,
-		Logger:    logger,
+		BlockTime:          time.Second,
+		Parent:             parent,
+		Coinbase:           types.ZeroAddress,
+		Executor:           executor,
+		GasLimit:           parent.GasLimit,
+		TxPool:             pool,
+		Logger:             logger,
+		EnableDAGExecution: true,
 	})
 
 	bb := builder.(*BlockBuilder)

@@ -96,6 +96,10 @@ type Config struct {
 	DPoSWallClockSlotAlignment bool `json:"dpos_wall_clock_slot_alignment" yaml:"dpos_wall_clock_slot_alignment"`
 	// dpos_relax_header_timestamp_order: 为 true 时 sync 可接受子块时间戳<=父块（默认 false，仅临时消化坏块）
 	DPoSRelaxHeaderTimestampOrder bool `json:"dpos_relax_header_timestamp_order" yaml:"dpos_relax_header_timestamp_order"`
+	// enable_dag_execution: 出块 Fill 是否走 DAG/并行打包（默认 true）
+	EnableDAGExecution bool `json:"enable_dag_execution" yaml:"enable_dag_execution"`
+	// enable_parallel_execution: ProcessBlock 是否按账户并行执行（默认 true）
+	EnableParallelExecution bool `json:"enable_parallel_execution" yaml:"enable_parallel_execution"`
 
 	// London Fork 配置（从 yaml 读取，不改变 genesis hash）
 	BaseFeeConfig string `json:"base_fee_config" yaml:"base_fee_config"` // 格式: "baseFee:baseFeeEM:baseFeeChangeDenom"
@@ -217,6 +221,8 @@ func DefaultConfig() *Config {
 		DPoSCommissionRatio:     1000,                     // 默认佣金 10%（关闭前生效）
 		DPoSCommissionEffective:    "21d", // 默认21天生效
 		DPoSWallClockSlotAlignment: true,  // 块头时间戳默认对齐墙钟 slot
+		EnableDAGExecution:         true,  // 默认启用 DAG 出块填充
+		EnableParallelExecution:    true,  // 默认启用账户并行执行
 	}
 }
 
