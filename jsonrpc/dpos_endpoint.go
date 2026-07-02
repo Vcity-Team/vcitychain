@@ -112,6 +112,17 @@ type DPOS struct {
 	chainID uint64
 }
 
+const stakingInfoMaxLimit = 500
+
+// StakingInfoRequest defines filters and pagination for dpos_getStakingInfo.
+type StakingInfoRequest struct {
+	BlockNumber *uint64 `json:"blockNumber,omitempty"`
+	PageNumber  uint64  `json:"pageNumber"` // 从 1 开始；pageSize>0 且未传时默认 1
+	PageSize    uint64  `json:"pageSize"`   // 每页条数；0 表示不分页，返回全部
+	Order       string  `json:"order"`      // "asc" / "desc", sort by effectiveAmountWei
+	OnlyActive  bool    `json:"onlyActive"`
+}
+
 // VoteRecordRequest defines filters for querying raw vote records
 type VoteRecordRequest struct {
 	Voter          string `json:"voter,omitempty"`    // 可选：按投票人过滤
@@ -1173,8 +1184,80 @@ func (d *DPOS) VoteByAddress(ctx context.Context, params interface{}) (*VoteResp
 	}, nil
 }
 
+func applyStakingInfoRequestMap(req *StakingInfoRequest, m map[string]interface{}) {
+	if v, ok := m["blockNumber"]; ok {
+		if n, ok2 := toUint64Safe(v); ok2 {
+			req.BlockNumber = &n
+		}
+	}
+	if v, ok := m["pageNumber"]; ok {
+		if n, ok2 := toUint64Safe(v); ok2 && n > 0 {
+			req.PageNumber = n
+		}
+	}
+	if v, ok := m["pageSize"]; ok {
+		if n, ok2 := toUint64Safe(v); ok2 && n > 0 {
+			req.PageSize = n
+		}
+	}
+	if v, ok := m["order"].(string); ok && v != "" {
+		req.Order = strings.ToLower(v)
+	}
+	if v, ok := m["onlyActive"].(bool); ok {
+		req.OnlyActive = v
+	}
+}
+
+func parseStakingInfoRequest(params interface{}) StakingInfoRequest {
+	req := StakingInfoRequest{Order: "desc"}
+
+	switch p := params.(type) {
+	case []interface{}:
+		if len(p) == 0 {
+			return req
+		}
+		if m, ok := p[0].(map[string]interface{}); ok {
+			applyStakingInfoRequestMap(&req, m)
+			return req
+		}
+		if n, ok := toUint64Safe(p[0]); ok {
+			req.BlockNumber = &n
+		}
+	case map[string]interface{}:
+		applyStakingInfoRequestMap(&req, p)
+	}
+
+	return req
+}
+
+func paginateMapResultsByPage(items []map[string]interface{}, pageNumber, pageSize uint64) ([]map[string]interface{}, uint64, uint64, uint64) {
+	total := uint64(len(items))
+	if pageSize == 0 {
+		return items, total, 0, 0
+	}
+	if pageSize > stakingInfoMaxLimit {
+		pageSize = stakingInfoMaxLimit
+	}
+	if pageNumber == 0 {
+		pageNumber = 1
+	}
+	offset := (pageNumber - 1) * pageSize
+	if offset > total {
+		offset = total
+	}
+	end := offset + pageSize
+	if end > total {
+		end = total
+	}
+	totalPages := (total + pageSize - 1) / pageSize
+	return items[offset:end], total, pageSize, totalPages
+}
+
 // GetStakingInfo handles dpos_getStakingInfo RPC method
-func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interface{}, error) {
+func (d *DPOS) GetStakingInfo(ctx context.Context, params interface{}) (interface{}, error) {
+	req := parseStakingInfoRequest(params)
+	_ = req.BlockNumber // reserved for historical block queries
+
 	var validators validator.AccountSet
 	var err error
 
@@ -1187,13 +1270,9 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interfa
 		}
 		// 方法3：尝试通过 GetDPoSEngine 获取
 		if len(validators) == 0 {
-			if dposStore, ok := d.store.(interface {
-				GetDPoSEngine() interface{}
-			}); ok {
-				if dposEngine := dposStore.GetDPoSEngine(); dposEngine != nil {
-					if dpos, ok := dposEngine.(*dpos.DPoS); ok {
-						validators, err = dpos.GetValidatorsWithFilter(false)
-					}
+			if dposEngine := d.getDPoSEngine(); dposEngine != nil {
+				if dposInst, ok := dposEngine.(*dpos.DPoS); ok {
+					validators, err = dposInst.GetValidatorsWithFilter(false)
 				}
 			}
 		}
@@ -1215,16 +1294,18 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interfa
 		}, nil // 返回空列表
 	}
 
+	var dposInstance *dpos.DPoS
+	var dposState *dpos.State
+	if dposState, err = d.store.GetDPoSState(); err == nil && dposState != nil {
+		if dposEngine := d.getDPoSEngine(); dposEngine != nil {
+			dposInstance, _ = dposEngine.(*dpos.DPoS)
+		}
+	}
+
 	// 获取当前 epoch，用于区分已生效/未生效
 	var currentEpoch uint64
-	if dposStore, ok := d.store.(interface {
-		GetDPoSEngine() interface{}
-	}); ok {
-		if dposEngine := dposStore.GetDPoSEngine(); dposEngine != nil {
-			if dpos, ok := dposEngine.(*dpos.DPoS); ok {
-				currentEpoch = dpos.GetCurrentEpochNumber()
-			}
-		}
+	if dposInstance != nil {
+		currentEpoch = dposInstance.GetCurrentEpochNumber()
 	}
 
 	// 获取所有投票明细，按 delegate 汇总已生效/未生效金额
@@ -1233,8 +1314,9 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interfa
 		pending   *big.Int
 	}
 	delegateEffectivePending := make(map[string]*delegateSums)
+	validatorRewards := make(map[string]*big.Int)
 	var allStakes []*dpos.StakeInfo
-	if dposState, err2 := d.store.GetDPoSState(); err2 == nil && dposState != nil && dposState.StakeStore != nil {
+	if dposState != nil && dposState.StakeStore != nil {
 		allStakes, _ = dposState.StakeStore.GetStakingInfo()
 	}
 	if allStakes == nil {
@@ -1267,20 +1349,24 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interfa
 		} else {
 			delegateEffectivePending[key].pending.Add(delegateEffectivePending[key].pending, amount)
 		}
+		if s.Rewards != nil && s.Rewards.Sign() > 0 {
+			stakerKey := s.Staker.String()
+			if _, exists := validatorRewards[stakerKey]; !exists {
+				validatorRewards[stakerKey] = new(big.Int).Set(s.Rewards)
+			}
+		}
 	}
 
 	// 转换为带已生效/未生效的 map 列表，便于 CLI 和前端展示
 	result := make([]map[string]interface{}, 0, len(validators))
 	for _, v := range validators {
+		if req.OnlyActive && !v.IsActive {
+			continue
+		}
+
 		faultInfo := map[string]interface{}{}
-		if dposStore, ok := d.store.(interface {
-			GetDPoSEngine() interface{}
-		}); ok {
-			if dposEngine := dposStore.GetDPoSEngine(); dposEngine != nil {
-				if dpos, ok := dposEngine.(*dpos.DPoS); ok {
-					faultInfo = dpos.GetValidatorFaultInfo(v.Address)
-				}
-			}
+		if dposInstance != nil {
+			faultInfo = dposInstance.GetValidatorFaultInfo(v.Address)
 		}
 
 		totalAmount := new(big.Int).Set(v.VotingPower)
@@ -1304,42 +1390,56 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, blockNumber *uint64) (interfa
 			"faultFlag":            faultInfo,
 		}
 
-		// 累计奖励（与原先逻辑一致）
-		if dposState, err2 := d.store.GetDPoSState(); err2 == nil && dposState != nil {
-			var rewards *big.Int
-			if dposState.StakeStore != nil {
-				if stakingInfos, err := dposState.StakeStore.GetStakingInfo(); err == nil {
-					for _, si := range stakingInfos {
-						if si.Staker == v.Address && si.Rewards != nil && si.Rewards.Sign() > 0 {
-							rewards = new(big.Int).Set(si.Rewards)
-							break
-						}
-					}
+		rewards := validatorRewards[key]
+		if (rewards == nil || rewards.Sign() == 0) && dposState != nil && dposState.RewardStore != nil {
+			summary, summaryErr := dposState.RewardStore.GetRewardSummary(key, 1, 999999)
+			if summaryErr == nil && summary != nil && summary.TotalRewardWei != "" && summary.TotalRewardWei != "0" {
+				if totalReward, ok := new(big.Int).SetString(summary.TotalRewardWei, 10); ok {
+					rewards = totalReward
 				}
 			}
-			if rewards == nil || rewards.Sign() == 0 {
-				if dposState.RewardStore != nil {
-					summary, err := dposState.RewardStore.GetRewardSummary(v.Address.String(), 1, 999999)
-					if err == nil && summary != nil && summary.TotalRewardWei != "" && summary.TotalRewardWei != "0" {
-						if totalReward, ok := new(big.Int).SetString(summary.TotalRewardWei, 10); ok {
-							rewards = totalReward
-						}
-					}
-				}
-			}
-			if rewards != nil && rewards.Sign() > 0 {
-				entry["rewards"] = rewards.String()
-			}
+		}
+		if rewards != nil && rewards.Sign() > 0 {
+			entry["rewards"] = rewards.String()
 		}
 
 		result = append(result, entry)
 	}
 
-	return map[string]interface{}{
+	sort.Slice(result, func(i, j int) bool {
+		ai, _ := new(big.Int).SetString(result[i]["effectiveAmountWei"].(string), 10)
+		aj, _ := new(big.Int).SetString(result[j]["effectiveAmountWei"].(string), 10)
+		if ai == nil {
+			ai = big.NewInt(0)
+		}
+		if aj == nil {
+			aj = big.NewInt(0)
+		}
+		if req.Order == "asc" {
+			return ai.Cmp(aj) < 0
+		}
+		return ai.Cmp(aj) > 0
+	})
+
+	paged, total, pageSize, totalPages := paginateMapResultsByPage(result, req.PageNumber, req.PageSize)
+
+	resp := map[string]interface{}{
 		"success":      true,
-		"data":         result,
+		"data":         paged,
 		"currentEpoch": currentEpoch,
-	}, nil
+	}
+	if req.PageSize > 0 {
+		pageNumber := req.PageNumber
+		if pageNumber == 0 {
+			pageNumber = 1
+		}
+		resp["total"] = total
+		resp["pageNumber"] = pageNumber
+		resp["pageSize"] = pageSize
+		resp["totalPages"] = totalPages
+	}
+
+	return resp, nil
 }
 
 // GetVotingPower handles dpos_getVotingPower RPC method
