@@ -141,32 +141,26 @@ func (s *Server) applyOptionalDPoSRuntimeConfig(engineConfig map[string]interfac
 
 	if s.config.VoterTargetAPYBps > 0 {
 		engineConfig["voter_target_apy"] = s.config.VoterTargetAPYBps
-		s.logger.Info("✅ 透传 voter_target_apy 到 DPoS 引擎", "voter_target_apy_bps", s.config.VoterTargetAPYBps)
 	}
 
 	if strings.TrimSpace(s.config.BlockProducerRewardPerBlock) != "" {
 		if rewardPerBlock, ok := new(big.Int).SetString(strings.TrimSpace(s.config.BlockProducerRewardPerBlock), 10); ok {
 			engineConfig["block_producer_reward_per_block"] = rewardPerBlock
-			s.logger.Info("✅ 透传 block_producer_reward_per_block 到 DPoS 引擎", "wei", rewardPerBlock.String())
 		} else {
 			return fmt.Errorf("invalid block_producer_reward_per_block: %s", s.config.BlockProducerRewardPerBlock)
 		}
 	}
 	if s.config.ProducerRewardActivationEpoch > 0 {
 		engineConfig["producer_reward_activation_epoch"] = s.config.ProducerRewardActivationEpoch
-		s.logger.Info("✅ 透传 producer_reward_activation_epoch 到 DPoS 引擎", "epoch", s.config.ProducerRewardActivationEpoch)
 	}
 	if s.config.VoteLockActivationEpoch > 0 {
 		engineConfig["vote_lock_activation_epoch"] = s.config.VoteLockActivationEpoch
-		s.logger.Info("✅ 透传 vote_lock_activation_epoch 到 DPoS 引擎", "epoch", s.config.VoteLockActivationEpoch)
 	}
 	if s.config.CommissionRemovalActivationEpoch > 0 {
 		engineConfig["commission_removal_activation_epoch"] = s.config.CommissionRemovalActivationEpoch
-		s.logger.Info("✅ 透传 commission_removal_activation_epoch 到 DPoS 引擎", "epoch", s.config.CommissionRemovalActivationEpoch)
 	}
 	if s.config.VoterPoolStakeWeightActivationEpoch > 0 {
 		engineConfig["voter_pool_stake_weight_activation_epoch"] = s.config.VoterPoolStakeWeightActivationEpoch
-		s.logger.Info("✅ 透传 voter_pool_stake_weight_activation_epoch 到 DPoS 引擎", "epoch", s.config.VoterPoolStakeWeightActivationEpoch)
 	}
 	rewardAcctActivationEpoch := s.config.RewardAccountActivationEpoch
 	if rewardAcctActivationEpoch == 0 {
@@ -174,12 +168,10 @@ func (s *Server) applyOptionalDPoSRuntimeConfig(engineConfig map[string]interfac
 	}
 	if rewardAcctActivationEpoch > 0 {
 		engineConfig["reward_account_activation_epoch"] = rewardAcctActivationEpoch
-		s.logger.Info("✅ 透传 reward_account_activation_epoch 到 DPoS 引擎", "epoch", rewardAcctActivationEpoch)
 	}
 	if governedRewardAcct := strings.TrimSpace(s.config.DPoSRewardDistributionAccount); governedRewardAcct != "" {
 		if err := types.IsValidAddress(governedRewardAcct); err == nil {
 			engineConfig["governed_reward_distribution_account"] = types.StringToAddress(governedRewardAcct)
-			s.logger.Info("✅ 透传 dpos_reward_distribution_account 到 DPoS 引擎", "address", governedRewardAcct)
 		} else {
 			return fmt.Errorf("invalid dpos_reward_distribution_account: %s", governedRewardAcct)
 		}
@@ -236,7 +228,6 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 	}
 	if s.config.DPoSDisableDoubleSignSlashing {
 		engineConfig["dpos_disable_double_sign_slashing"] = true
-		s.logger.Info("✅ 透传 dpos_disable_double_sign_slashing=true 到 DPoS（关闭双签削减）")
 	}
 	engineConfig["dpos_wall_clock_slot_alignment"] = s.config.DPoSWallClockSlotAlignment
 	if !s.config.DPoSWallClockSlotAlignment {
@@ -250,12 +241,7 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 	engineConfig["enable_dag_execution"] = s.config.EnableDAGExecution
 	engineConfig["enableParallelExecution"] = s.config.EnableParallelExecution
 	engineConfig["enable_parallel_execution"] = s.config.EnableParallelExecution
-	s.logger.Info("✅ 透传 enable_dag_execution 到 DPoS 引擎", "enable_dag_execution", s.config.EnableDAGExecution)
-	s.logger.Info("✅ 透传 enable_parallel_execution 到 DPoS 引擎", "enable_parallel_execution", s.config.EnableParallelExecution)
 
-	if s.config.VoterTargetAPYBps == 0 {
-		s.logger.Info("ℹ️ 未配置 voter_target_apy，DPoS 将使用默认值", "defaultBps", 500)
-	}
 	if err := s.applyOptionalDPoSRuntimeConfig(engineConfig); err != nil {
 		return err
 	}
@@ -355,24 +341,11 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 		// alloc中只有一个账户，直接取
 		for addr := range s.chain.Genesis.Alloc {
 			engineConfig["genesisRootAccount"] = addr
-			account := s.chain.Genesis.Alloc[addr]
-			balance := big.NewInt(0)
-			if account != nil && account.Balance != nil {
-				balance = account.Balance
-			}
-			s.logger.Info("✅ 从创世文件alloc中读取根账户地址",
-				"rootAccount", addr.String(),
-				"balance", balance.String())
 			break // 只取第一个账户
 		}
 	} else {
 		s.logger.Warn("⚠️ 创世文件alloc为空，无法读取根账户地址")
 	}
-
-	s.logger.Info("✅ DPoS经济系统配置解析完成",
-		"rewardAccount", engineConfig["rewardAccount"],
-		"rewardAmount", engineConfig["rewardAmount"],
-		"proposalPeriod", engineConfig["proposalPeriod"])
 
 	// 获取区块时间
 	blockTime, err := extractBlockTime(engineConfig)
@@ -512,8 +485,6 @@ func NewServer(config *Config) (*Server, error) {
 		grpcServer:         grpc.NewServer(grpc.UnaryInterceptor(unaryInterceptor)),
 		restoreProgression: progress.NewProgressionWrapper(progress.ChainSyncRestore),
 	}
-
-	m.logger.Info("Data dir", "path", config.DataDir)
 
 	var dirPaths = []string{
 		"blockchain",
@@ -708,13 +679,6 @@ func NewServer(config *Config) (*Server, error) {
 			state:      m.state,
 			Blockchain: m.blockchain,
 		}
-
-		// 添加日志：输出交易池配置值，用于验证配置是否正确加载
-		logger.Info("🔧 初始化交易池配置",
-			"MaxSlots", m.config.MaxSlots,
-			"MaxAccountEnqueued", m.config.MaxAccountEnqueued,
-			"PriceLimit", m.config.PriceLimit,
-		)
 
 		// start transaction pool
 		m.txpool, err = txpool.NewTxPool(
@@ -935,10 +899,6 @@ func (s *Server) setupConsensus() error {
 		engineConfig = map[string]interface{}{}
 	}
 
-	blockTimeSeconds := s.config.BlockTimeSeconds
-	blockTimeDuration := time.Duration(blockTimeSeconds) * time.Second
-	var epochDurationVal time.Duration
-
 	// 新增：将共识切换高度添加到engineConfig中
 	engineConfig["consensusSwitchHeight"] = float64(s.config.ConsensusSwitchHeight)
 
@@ -970,7 +930,6 @@ func (s *Server) setupConsensus() error {
 
 	if s.config.DPoSDisableDoubleSignSlashing {
 		engineConfig["dpos_disable_double_sign_slashing"] = true
-		s.logger.Info("✅ setupConsensus: dpos_disable_double_sign_slashing=true 已写入 engineConfig")
 	}
 	engineConfig["dpos_wall_clock_slot_alignment"] = s.config.DPoSWallClockSlotAlignment
 	if !s.config.DPoSWallClockSlotAlignment {
@@ -984,8 +943,6 @@ func (s *Server) setupConsensus() error {
 	engineConfig["enable_dag_execution"] = s.config.EnableDAGExecution
 	engineConfig["enableParallelExecution"] = s.config.EnableParallelExecution
 	engineConfig["enable_parallel_execution"] = s.config.EnableParallelExecution
-	s.logger.Info("✅ setupConsensus: 透传 enable_dag_execution 到 DPoS 引擎", "enable_dag_execution", s.config.EnableDAGExecution)
-	s.logger.Info("✅ setupConsensus: 透传 enable_parallel_execution 到 DPoS 引擎", "enable_parallel_execution", s.config.EnableParallelExecution)
 
 	if err := s.applyOptionalDPoSRuntimeConfig(engineConfig); err != nil {
 		return err
@@ -995,7 +952,6 @@ func (s *Server) setupConsensus() error {
 	if epochDurationStr := s.config.DPoSEpochDuration; epochDurationStr != "" {
 		if epochDuration, err := time.ParseDuration(epochDurationStr); err == nil {
 			engineConfig["epochDuration"] = epochDuration
-			epochDurationVal = epochDuration
 		}
 	}
 
@@ -1024,24 +980,17 @@ func (s *Server) setupConsensus() error {
 		return fmt.Errorf("dpos_reward_amount is required in config file")
 	}
 
-	// 记录提案周期和阈值解析结果，供最后汇总日志使用
+	// 从YAML配置中获取提案表决周期（时间字符串）
 	var (
 		proposalVotePeriodDuration  = 24 * time.Hour
-		proposalVotePeriodSeconds   = proposalVotePeriodDuration.Seconds()
-		proposalVotePeriodStrUsed   = "24h"
 		proposalValidPeriodDuration = 7 * 24 * time.Hour
-		proposalValidPeriodSeconds  = proposalValidPeriodDuration.Seconds()
-		proposalValidPeriodStrUsed  = "7d"
 		srThresholdValue            = big.NewInt(0)
 	)
 
-	// 从YAML配置中获取提案表决周期（时间字符串）
 	if proposalVotePeriodStr := s.config.DPoSProposalVotePeriod; proposalVotePeriodStr != "" {
 		if proposalVotePeriod, err := parseDurationWithDays(proposalVotePeriodStr); err == nil {
 			engineConfig["proposalVotePeriod"] = proposalVotePeriod
 			proposalVotePeriodDuration = proposalVotePeriod
-			proposalVotePeriodSeconds = proposalVotePeriod.Seconds()
-			proposalVotePeriodStrUsed = proposalVotePeriodStr
 		} else {
 			s.logger.Error("❌ 无效的提案表决周期", "period", proposalVotePeriodStr, "error", err)
 			return fmt.Errorf("invalid proposal vote period: %s", proposalVotePeriodStr)
@@ -1056,8 +1005,6 @@ func (s *Server) setupConsensus() error {
 		if proposalValidPeriod, err := parseDurationWithDays(proposalValidPeriodStr); err == nil {
 			engineConfig["proposalValidPeriod"] = proposalValidPeriod
 			proposalValidPeriodDuration = proposalValidPeriod
-			proposalValidPeriodSeconds = proposalValidPeriod.Seconds()
-			proposalValidPeriodStrUsed = proposalValidPeriodStr
 		} else {
 			s.logger.Error("❌ 无效的提案有效期", "period", proposalValidPeriodStr, "error", err)
 			return fmt.Errorf("invalid proposal valid period: %s", proposalValidPeriodStr)
@@ -1080,20 +1027,6 @@ func (s *Server) setupConsensus() error {
 		// 默认不需要保证金
 		engineConfig["srThreshold"] = srThresholdValue
 	}
-
-	s.logger.Info("✅ DPoS经济系统配置解析完成",
-		"blockTimeSeconds", blockTimeSeconds,
-		"blockTimeDuration", blockTimeDuration.String(),
-		"epochDuration", epochDurationVal.String(),
-		"rewardAccount", engineConfig["rewardAccount"],
-		"rewardAmount", engineConfig["rewardAmount"],
-		"dposProposalVotePeriod", proposalVotePeriodStrUsed,
-		"proposalVoteDuration", proposalVotePeriodDuration.String(),
-		"proposalVoteSeconds", proposalVotePeriodSeconds,
-		"dposProposalValidPeriod", proposalValidPeriodStrUsed,
-		"proposalValidDuration", proposalValidPeriodDuration.String(),
-		"proposalValidSeconds", proposalValidPeriodSeconds,
-		"srThreshold", srThresholdValue.String())
 
 	var (
 		blockTime = common.Duration{Duration: 0}

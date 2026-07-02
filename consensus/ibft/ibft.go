@@ -362,7 +362,6 @@ func (i *backendIBFT) safeClose() {
 	if !i.closed {
 		i.closed = true
 		close(i.closeCh)
-		i.logger.Info("🛑 IBFT closeCh已安全关闭")
 	} else {
 		i.logger.Debug("🛑 IBFT closeCh已经关闭，跳过重复关闭")
 	}

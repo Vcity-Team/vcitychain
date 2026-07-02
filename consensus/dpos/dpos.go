@@ -1073,7 +1073,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	}
 
 	// 直接使用server层已解析的配置（避免重复解析）
-	logger.Info("🔍 开始解析DPoS经济系统配置", "configKeys", len(params.Config.Config))
 
 	// 确保漏块率阈值配置存在且有效
 	if missedBlocksPercentageRaw, exists := getConfigValue("dpos_missed_blocks_percentage", "missed_blocks_percentage"); exists {
@@ -1098,25 +1097,19 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		validatorsCountValue = val
 	} else if val, exists := params.Config.Config["dpos_validators_count"]; exists {
 		validatorsCountValue = val
-		logger.Info("👥 使用下划线形式的 dpos_validators_count 配置")
 	}
 
 	if validatorsCountValue != nil {
-		logger.Info("🔍 找到 dposValidatorsCount 配置", "type", fmt.Sprintf("%T", validatorsCountValue), "value", validatorsCountValue)
 		switch countVal := validatorsCountValue.(type) {
 		case float64:
 			vcity_dpos.config.DPoSValidatorsCount = uint64(countVal)
-			logger.Info("👥 设置验证者数量", "count", vcity_dpos.config.DPoSValidatorsCount)
 		case int:
 			vcity_dpos.config.DPoSValidatorsCount = uint64(countVal)
-			logger.Info("👥 设置验证者数量 (int)", "count", vcity_dpos.config.DPoSValidatorsCount)
 		case uint64:
 			vcity_dpos.config.DPoSValidatorsCount = countVal
-			logger.Info("👥 设置验证者数量 (uint64)", "count", vcity_dpos.config.DPoSValidatorsCount)
 		case string:
 			if parsed, err := strconv.ParseUint(countVal, 10, 64); err == nil {
 				vcity_dpos.config.DPoSValidatorsCount = parsed
-				logger.Info("👥 设置验证者数量 (string)", "count", vcity_dpos.config.DPoSValidatorsCount)
 			} else {
 				logger.Warn("👥 dposValidatorsCount 解析失败", "value", countVal, "error", err)
 			}
@@ -1131,7 +1124,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	if commissionValue, exists := getConfigValue("dposCommissionRatio", "dpos_commission_ratio"); exists {
 		if ratio, ok := toUint64(commissionValue); ok && ratio > 0 {
 			vcity_dpos.config.CommissionRateDefault = ratio
-			logger.Info("💼 设置默认佣金率", "ratio", ratio)
 		} else {
 			logger.Warn("💼 dposCommissionRatio 类型或数值无效", "value", commissionValue)
 		}
@@ -1143,19 +1135,16 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		case time.Duration:
 			if val > 0 {
 				vcity_dpos.config.CommissionEffectivePeriod = val
-				logger.Info("⏳ 设置佣金生效周期（Duration）", "duration", val.String())
 			}
 		case string:
 			if duration, err := parseDurationAllowDays(val); err == nil {
 				vcity_dpos.config.CommissionEffectivePeriod = duration
-				logger.Info("⏳ 设置佣金生效周期（String）", "raw", val, "duration", duration.String())
 			} else {
 				logger.Warn("⏳ 佣金生效周期字符串解析失败", "value", val, "error", err)
 			}
 		case float64:
 			if val > 0 {
 				vcity_dpos.config.CommissionEffectivePeriod = time.Duration(val) * time.Second
-				logger.Info("⏳ 设置佣金生效周期（float秒）", "seconds", val)
 			}
 		default:
 			logger.Warn("⏳ 佣金生效周期类型不支持", "type", fmt.Sprintf("%T", effectiveValue))
@@ -1163,9 +1152,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	}
 
 	if missedBlocksPercentage, exists := getConfigValue("dpos_missed_blocks_percentage", "missed_blocks_percentage"); exists {
-		if percentage, ok := toUint64(missedBlocksPercentage); ok && percentage > 0 {
-			logger.Info("🔨 从配置文件读取漏块率阈值", "percentage", percentage, "基点")
-		} else {
+		if percentage, ok := toUint64(missedBlocksPercentage); !ok || percentage == 0 {
 			return nil, fmt.Errorf("dpos_missed_blocks_percentage 类型或数值无效: %v", missedBlocksPercentage)
 		}
 	} else {
@@ -1173,9 +1160,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	}
 
 	if minorOffenseSlashRate, exists := getConfigValue("dpos_minor_offense_slash_rate", "minor_offense_slash_rate"); exists {
-		if rate, ok := toUint64(minorOffenseSlashRate); ok {
-			logger.Info("🔨 从配置文件读取轻度违规削减率", "rate", rate, "基点")
-		} else {
+		if _, ok := toUint64(minorOffenseSlashRate); !ok {
 			logger.Warn("🔨 dpos_minor_offense_slash_rate 类型或数值无效", "value", minorOffenseSlashRate)
 		}
 	} else {
@@ -1183,9 +1168,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	}
 
 	if severeOffenseSlashRate, exists := getConfigValue("dpos_severe_offense_slash_rate", "severe_offense_slash_rate"); exists {
-		if rate, ok := toUint64(severeOffenseSlashRate); ok {
-			logger.Info("🔨 从配置文件读取严重违规削减率", "rate", rate, "基点")
-		} else {
+		if _, ok := toUint64(severeOffenseSlashRate); !ok {
 			logger.Warn("🔨 dpos_severe_offense_slash_rate 类型或数值无效", "value", severeOffenseSlashRate)
 		}
 	} else {
@@ -1195,14 +1178,12 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	if maxLeadRaw, exists := getConfigValue("dpos_max_peer_advertised_lead_blocks", "dposMaxPeerAdvertisedLeadBlocks"); exists {
 		if n, ok := toUint64(maxLeadRaw); ok && n > 0 {
 			vcity_dpos.maxPeerAdvertisedLeadBlocks = n
-			logger.Info("📶 dpos_max_peer_advertised_lead_blocks", "blocks", n)
 		} else {
 			logger.Warn("📶 dpos_max_peer_advertised_lead_blocks 无效，使用默认 8192", "value", maxLeadRaw)
 		}
 	}
 
 	if epochDuration, exists := params.Config.Config["epochDuration"]; exists {
-		logger.Info("🔍 找到epochDuration配置", "type", fmt.Sprintf("%T", epochDuration), "value", epochDuration)
 		if duration, ok := epochDuration.(time.Duration); ok {
 			vcity_dpos.config.EpochDuration = duration
 		} else {
@@ -1213,7 +1194,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	}
 
 	if rewardAccount, exists := params.Config.Config["rewardAccount"]; exists {
-		logger.Info("🔍 找到rewardAccount配置", "type", fmt.Sprintf("%T", rewardAccount), "value", rewardAccount)
 		if account, ok := rewardAccount.(types.Address); ok {
 			vcity_dpos.config.RewardAccount = account
 		} else {
@@ -1226,16 +1206,13 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	if governedAccount, exists := params.Config.Config["governed_reward_distribution_account"]; exists {
 		if account, ok := governedAccount.(types.Address); ok && account != types.ZeroAddress {
 			vcity_dpos.config.GovernedRewardDistributionAccount = account
-			logger.Info("✅ 设置治理切换奖励账户种子", "address", account.String())
 		}
 	}
 
 	// 从配置中读取创世根账户地址（从创世文件alloc中读取）
 	if genesisRootAccount, exists := params.Config.Config["genesisRootAccount"]; exists {
-		logger.Info("🔍 找到genesisRootAccount配置", "type", fmt.Sprintf("%T", genesisRootAccount), "value", genesisRootAccount)
 		if account, ok := genesisRootAccount.(types.Address); ok {
 			vcity_dpos.config.GenesisRootAccount = account
-			logger.Info("✅ 设置创世根账户地址", "address", account.String())
 		} else {
 			logger.Warn("💰 genesisRootAccount类型断言失败", "type", fmt.Sprintf("%T", genesisRootAccount))
 		}
@@ -1244,7 +1221,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	}
 
 	if rewardAmount, exists := params.Config.Config["rewardAmount"]; exists {
-		logger.Info("🔍 找到rewardAmount配置", "type", fmt.Sprintf("%T", rewardAmount), "value", rewardAmount)
 		if amount, ok := rewardAmount.(*big.Int); ok {
 			vcity_dpos.config.RewardAmount = amount
 		} else {
@@ -1257,7 +1233,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	if v, exists := params.Config.Config["dpos_bootstrap_rpc"]; exists {
 		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
 			vcity_dpos.config.BootstrapRPC = strings.TrimSpace(s)
-			logger.Info("🔗 设置 dpos_bootstrap_rpc", "url", vcity_dpos.config.BootstrapRPC)
 		} else {
 			logger.Warn("🔗 dpos_bootstrap_rpc 类型断言失败或为空", "type", fmt.Sprintf("%T", v))
 		}
@@ -1291,7 +1266,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	if v, exists := params.Config.Config["block_producer_reward_per_block"]; exists {
 		if amount, err := parseWeiParameterValue(v); err == nil {
 			vcity_dpos.config.BlockProducerRewardPerBlock = amount
-			logger.Info("✅ 设置 block_producer_reward_per_block", "wei", amount.String())
 		} else {
 			logger.Warn("⚠️ block_producer_reward_per_block 解析失败", "error", err)
 		}
@@ -1414,10 +1388,8 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 
 	// 解析提案表决周期配置
 	if proposalVotePeriod, exists := params.Config.Config["proposalVotePeriod"]; exists {
-		logger.Info("🔍 找到proposalVotePeriod配置", "type", fmt.Sprintf("%T", proposalVotePeriod), "value", proposalVotePeriod)
 		if period, ok := proposalVotePeriod.(time.Duration); ok {
 			vcity_dpos.config.ProposalVotePeriod = period
-			logger.Info("📋 ✅ 使用server层解析的提案表决周期", "period", period.String(), "seconds", period.Seconds())
 		} else {
 			logger.Warn("📋 ❌ proposalVotePeriod类型断言失败",
 				"type", fmt.Sprintf("%T", proposalVotePeriod),
@@ -1450,7 +1422,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 				}
 				if duration, err := time.ParseDuration(durationStr); err == nil {
 					vcity_dpos.config.ProposalVotePeriod = duration
-					logger.Info("📋 ✅ 从字符串成功解析提案表决周期", "period", duration.String())
 				} else {
 					logger.Warn("📋 ❌ 字符串解析失败", "error", err)
 				}
@@ -1462,10 +1433,8 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 
 	// 解析提案有效期配置
 	if proposalValidPeriod, exists := params.Config.Config["proposalValidPeriod"]; exists {
-		logger.Info("🔍 找到proposalValidPeriod配置", "type", fmt.Sprintf("%T", proposalValidPeriod), "value", proposalValidPeriod)
 		if period, ok := proposalValidPeriod.(time.Duration); ok {
 			vcity_dpos.config.ProposalValidPeriod = period
-			logger.Info("📋 ✅ 使用server层解析的提案有效期", "period", period.String(), "seconds", period.Seconds())
 		} else {
 			logger.Warn("📋 ❌ proposalValidPeriod类型断言失败",
 				"type", fmt.Sprintf("%T", proposalValidPeriod),
@@ -1498,7 +1467,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 				}
 				if duration, err := time.ParseDuration(durationStr); err == nil {
 					vcity_dpos.config.ProposalValidPeriod = duration
-					logger.Info("📋 ✅ 从字符串成功解析提案有效期", "period", duration.String())
 				} else {
 					logger.Warn("📋 ❌ 字符串解析失败", "error", err)
 				}
@@ -1510,7 +1478,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 
 	// 解析区块时间配置
 	if blockTimeStr, exists := params.Config.Config["blockTime"]; exists {
-		logger.Info("🔍 找到blockTime配置", "type", fmt.Sprintf("%T", blockTimeStr), "value", blockTimeStr)
 		if blockTime, ok := blockTimeStr.(string); ok {
 			if duration, err := time.ParseDuration(blockTime); err == nil {
 				vcity_dpos.config.BlockTime = common.Duration{Duration: duration}
@@ -1526,16 +1493,12 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 
 	// 解析冻结相关配置
 	if minFreezePeriod, exists := params.Config.Config["dpos_min_freeze_period"]; exists {
-		logger.Info("🔍 找到dpos_min_freeze_period配置", "type", fmt.Sprintf("%T", minFreezePeriod), "value", minFreezePeriod)
 		if period, ok := minFreezePeriod.(uint64); ok {
 			vcity_dpos.config.MinFreezePeriod = period
-			logger.Info("❄️ 使用server层解析的最小冻结期", "period", period, "seconds", period)
 		} else if period, ok := minFreezePeriod.(int); ok {
 			vcity_dpos.config.MinFreezePeriod = uint64(period)
-			logger.Info("❄️ 使用server层解析的最小冻结期（从int转换）", "period", vcity_dpos.config.MinFreezePeriod, "seconds", vcity_dpos.config.MinFreezePeriod)
 		} else if period, ok := minFreezePeriod.(float64); ok {
 			vcity_dpos.config.MinFreezePeriod = uint64(period)
-			logger.Info("❄️ 使用server层解析的最小冻结期（从float64转换）", "period", vcity_dpos.config.MinFreezePeriod, "seconds", vcity_dpos.config.MinFreezePeriod)
 		} else {
 			logger.Warn("❄️ dpos_min_freeze_period类型不支持", "type", fmt.Sprintf("%T", minFreezePeriod), "使用默认值604800")
 			vcity_dpos.config.MinFreezePeriod = 604800
@@ -1546,16 +1509,12 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	}
 
 	if unfreezeLockPeriod, exists := params.Config.Config["dpos_unfreeze_lock_period"]; exists {
-		logger.Info("🔍 找到dpos_unfreeze_lock_period配置", "type", fmt.Sprintf("%T", unfreezeLockPeriod), "value", unfreezeLockPeriod)
 		if period, ok := unfreezeLockPeriod.(uint64); ok {
 			vcity_dpos.config.UnfreezeLockPeriod = period
-			logger.Info("🔓 使用server层解析的解冻锁定期", "period", period, "seconds", period)
 		} else if period, ok := unfreezeLockPeriod.(int); ok {
 			vcity_dpos.config.UnfreezeLockPeriod = uint64(period)
-			logger.Info("🔓 使用server层解析的解冻锁定期（从int转换）", "period", vcity_dpos.config.UnfreezeLockPeriod, "seconds", vcity_dpos.config.UnfreezeLockPeriod)
 		} else if period, ok := unfreezeLockPeriod.(float64); ok {
 			vcity_dpos.config.UnfreezeLockPeriod = uint64(period)
-			logger.Info("🔓 使用server层解析的解冻锁定期（从float64转换）", "period", vcity_dpos.config.UnfreezeLockPeriod, "seconds", vcity_dpos.config.UnfreezeLockPeriod)
 		} else {
 			logger.Warn("🔓 dpos_unfreeze_lock_period类型不支持", "type", fmt.Sprintf("%T", unfreezeLockPeriod), "使用默认值1209600")
 			vcity_dpos.config.UnfreezeLockPeriod = 1209600
@@ -1567,26 +1526,21 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 
 	// 解析 dpos_delegate_threshold 配置
 	if delegateThresholdValue, exists := getConfigValue("dposDelegateThreshold", "dpos_delegate_threshold"); exists {
-		logger.Info("🔍 找到 dpos_delegate_threshold 配置", "type", fmt.Sprintf("%T", delegateThresholdValue), "value", delegateThresholdValue)
 		switch thresholdVal := delegateThresholdValue.(type) {
 		case string:
 			if bigAmount, ok := new(big.Int).SetString(thresholdVal, 10); ok && bigAmount.Cmp(big.NewInt(0)) > 0 {
 				vcity_dpos.config.DPoSDelegateThreshold = bigAmount
-				logger.Info("✅ 设置 dpos_delegate_threshold", "value", bigAmount.String())
 			} else {
 				logger.Warn("⚠️ dpos_delegate_threshold 字符串解析失败", "value", thresholdVal)
 			}
 		case *big.Int:
 			if thresholdVal != nil && thresholdVal.Cmp(big.NewInt(0)) > 0 {
 				vcity_dpos.config.DPoSDelegateThreshold = new(big.Int).Set(thresholdVal)
-				logger.Info("✅ 设置 dpos_delegate_threshold (big.Int)", "value", thresholdVal.String())
 			}
 		case float64:
-			// 如果配置是数字，转换为字符串再解析
 			thresholdStr := fmt.Sprintf("%.0f", thresholdVal)
 			if bigAmount, ok := new(big.Int).SetString(thresholdStr, 10); ok && bigAmount.Cmp(big.NewInt(0)) > 0 {
 				vcity_dpos.config.DPoSDelegateThreshold = bigAmount
-				logger.Info("✅ 设置 dpos_delegate_threshold (float64)", "value", bigAmount.String())
 			}
 		default:
 			logger.Warn("⚠️ dpos_delegate_threshold 类型不支持", "type", fmt.Sprintf("%T", delegateThresholdValue))
@@ -1597,31 +1551,25 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 
 	// 解析 dpos_genesis_vote_amount 配置（可选，不配置则回退使用 dpos_delegate_threshold）
 	if genesisVoteAmountValue, exists := getConfigValue("dposGenesisVoteAmount", "dpos_genesis_vote_amount"); exists {
-		logger.Info("🔍 找到 dpos_genesis_vote_amount 配置", "type", fmt.Sprintf("%T", genesisVoteAmountValue), "value", genesisVoteAmountValue)
 		switch amountVal := genesisVoteAmountValue.(type) {
 		case string:
 			if bigAmount, ok := new(big.Int).SetString(amountVal, 10); ok && bigAmount.Cmp(big.NewInt(0)) > 0 {
 				vcity_dpos.config.DPoSGenesisVoteAmount = bigAmount
-				logger.Info("✅ 设置 dpos_genesis_vote_amount", "value", bigAmount.String())
 			} else {
 				logger.Warn("⚠️ dpos_genesis_vote_amount 字符串解析失败", "value", amountVal)
 			}
 		case *big.Int:
 			if amountVal != nil && amountVal.Cmp(big.NewInt(0)) > 0 {
 				vcity_dpos.config.DPoSGenesisVoteAmount = new(big.Int).Set(amountVal)
-				logger.Info("✅ 设置 dpos_genesis_vote_amount (big.Int)", "value", amountVal.String())
 			}
 		case float64:
 			amountStr := fmt.Sprintf("%.0f", amountVal)
 			if bigAmount, ok := new(big.Int).SetString(amountStr, 10); ok && bigAmount.Cmp(big.NewInt(0)) > 0 {
 				vcity_dpos.config.DPoSGenesisVoteAmount = bigAmount
-				logger.Info("✅ 设置 dpos_genesis_vote_amount (float64)", "value", bigAmount.String())
 			}
 		default:
 			logger.Warn("⚠️ dpos_genesis_vote_amount 类型不支持", "type", fmt.Sprintf("%T", genesisVoteAmountValue))
 		}
-	} else {
-		logger.Info("ℹ️ 未配置 dpos_genesis_vote_amount，将回退使用 dpos_delegate_threshold")
 	}
 
 	vcity_dpos.config.SecretsManager = params.SecretsManager
@@ -1634,7 +1582,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	}
 
 	if vcity_dpos.config.VoterTargetAPYBps == 0 {
-		logger.Info("✅ voter_target_apy 未配置，使用默认 500 基点（5% 年化）")
 		vcity_dpos.config.VoterTargetAPYBps = 500
 	}
 
@@ -1666,8 +1613,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	if vcity_dpos.config.BlockTime.Duration == 0 {
 		vcity_dpos.config.BlockTime = common.Duration{Duration: 3 * time.Second}
 		logger.Info("⏰ 使用默认DPoS区块时间3秒", "duration", vcity_dpos.config.BlockTime.Duration.String())
-	} else {
-		logger.Info("⏰ 使用配置文件中的DPoS区块时间", "duration", vcity_dpos.config.BlockTime.Duration.String())
 	}
 	vcity_dpos.config.Network = params.Network
 	vcity_dpos.config.Executor = params.Executor
@@ -1719,9 +1664,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 				"value", v, "type", fmt.Sprintf("%T", v))
 		}
 	}
-	if vcity_dpos.config.WallClockSlotAlignment {
-		logger.Info("⏰ 墙钟 slot 对齐已启用（默认 true；未配置或升级后无需改 yaml）")
-	} else {
+	if !vcity_dpos.config.WallClockSlotAlignment {
 		logger.Info("ℹ️ 墙钟 slot 对齐已关闭（dpos_wall_clock_slot_alignment=false）")
 	}
 

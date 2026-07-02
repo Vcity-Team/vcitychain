@@ -92,16 +92,6 @@ func (d *DPoS) initializeParameterCache() error {
 		}
 	}
 
-	d.logger.Info("Parameter cache initialized",
-		"count", len(d.parameterCurrentValues),
-		"cacheKeys", func() []string {
-			keys := make([]string, 0, len(d.parameterCurrentValues))
-			for k := range d.parameterCurrentValues {
-				keys = append(keys, k)
-			}
-			return keys
-		}())
-
 	return nil
 }
 

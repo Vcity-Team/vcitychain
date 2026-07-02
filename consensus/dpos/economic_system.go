@@ -87,20 +87,6 @@ func (d *DPoS) initializeEconomicSystem() error {
 		d.blockScheduler.SetWallClockSlotAlignment(d.config.WallClockSlotAlignment)
 	}
 
-	// 添加调试日志
-	d.logger.Info("🔧 BlockScheduler初始化",
-		"blockWindow", d.config.BlockTime.Duration.String(),
-		"dposValidatorsCount", d.config.DPoSValidatorsCount,
-		"blockchain", d.config.Blockchain != nil,
-		"wallClockSlotAlignment", d.config.WallClockSlotAlignment)
-
-	d.logger.Info("✅ DPoS经济系统组件初始化完成",
-		"epochDuration", d.config.EpochDuration.String(),
-		"rewardAccount", d.config.RewardAccount.String(),
-		"rewardAmount", d.config.RewardAmount.String(),
-		"commissionDefault", d.config.CommissionRateDefault,
-		"commissionEffectivePeriod", d.config.CommissionEffectivePeriod.String())
-
 	return nil
 }
 
