@@ -1166,9 +1166,6 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 		"realBlockHash", realBlockHash.String())
 
 	// 提议者本地 BLS 单签：与链上验块一致；3s blockWindow 下不做网络签名收集。
-	r.logger.Info("提议者本地 BLS 单签，跳过网络签名收集",
-		"blockNumber", block.Block.Number(),
-		"proposer", keyAddr.String())
 	signatures, signatureBitmap, collectErr := r.localProposerOnlySignatures(checkpointHash, keyAddr, productionValidators)
 
 	if collectErr != nil {

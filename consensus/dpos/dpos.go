@@ -615,8 +615,6 @@ func (d *DPoS) FilterExtra(extra []byte) ([]byte, error) {
 }
 
 func (d *DPoS) Start() error {
-	d.logger.Info("starting dpos consensus", "signer", d.key.String())
-
 	// 1. 初始化BLS加载状态
 	d.initializeBLSLoadingState()
 
@@ -650,10 +648,8 @@ func (d *DPoS) Start() error {
 
 			if isDelegate {
 				d.txPool.SetSealing(true)
-				d.logger.Info("transaction pool sealing state set to true (node is delegate)")
 			} else {
 				d.txPool.SetSealing(false)
-				d.logger.Info("transaction pool sealing state set to false (node is not delegate)")
 			}
 		} else {
 			d.logger.Warn("key not available, cannot determine if node is delegate")
@@ -693,8 +689,6 @@ func (d *DPoS) Start() error {
 
 	// start consensus runtime if available
 	if d.runtime != nil {
-		d.logger.Info("🔧 开始启动DPoS runtime...")
-
 		// 检查runtime是否已正确初始化
 		if d.runtime.config == nil || d.runtime.config.Key == nil {
 			d.logger.Error("❌ DPoS runtime未正确初始化",
@@ -741,15 +735,10 @@ func (d *DPoS) Start() error {
 	// 从数据库恢复投票数据
 	if err := d.restoreVotingDataFromDatabase(); err != nil {
 		d.logger.Error("Failed to restore voting data from database", "error", err)
-	} else {
-		d.logger.Info("✅ 投票数据恢复完成")
 	}
 
-	d.logger.Info("📊 开始从数据库恢复投票记录...")
 	if err := d.restoreVoteRecordsFromDatabase(); err != nil {
 		d.logger.Error("Failed to restore vote records from database", "error", err)
-	} else {
-		d.logger.Info("✅ 投票记录恢复完成")
 	}
 
 	if err := d.callCommandDataSourcesOnStartup(); err != nil {
@@ -1735,9 +1724,6 @@ func (d *DPoS) Initialize() error {
 	// 验证创世根账户地址已配置（从server层传递）
 	if d.config.GenesisRootAccount == (types.Address{}) {
 		d.logger.Warn("⚠️ 创世根账户地址未配置，将在共识切换高度时无法创建投票记录")
-	} else {
-		d.logger.Info("✅ 创世根账户地址已配置",
-			"rootAccount", d.config.GenesisRootAccount.String())
 	}
 
 	// 新增：先初始化状态存储
@@ -1763,7 +1749,6 @@ func (d *DPoS) Initialize() error {
 			// 不返回错误，因为状态存储不是关键组件
 		} else {
 			d.state = state
-			d.logger.Info("✅ State store initialized successfully", "path", statePath)
 
 			if d.rewardDistributor != nil {
 				d.rewardDistributor.stakeStore = d.state.StakeStore
@@ -1798,12 +1783,10 @@ func (d *DPoS) Initialize() error {
 	// 创建一个适配器，将blockchain_wrapper包装为blockchain.Executor
 	executorAdapter := &executorAdapter{wrapper: d.blockchain.(*blockchainWrapper)}
 	d.config.Blockchain.SetExecutor(executorAdapter)
-	d.logger.Info("✅ 已将blockchain_wrapper设置为blockchain的executor，启用奖励分配功能")
 
 	// 注意：此时 runtime 还未创建，balanceQuerier 暂时设置为 nil
 	// 将在 runtime 创建后重新设置
 	d.balanceQuerier = nil
-	d.logger.Info("ℹ️ Balance querier 将在 runtime 创建后初始化")
 
 	// 创建DPoS runtime
 	maxLead := uint64(8192)
@@ -1850,19 +1833,15 @@ func (d *DPoS) Initialize() error {
 	// ✅ 修复：在 runtime 创建后，重新设置 balanceQuerier
 	if d.runtime != nil {
 		d.balanceQuerier = &runtimeBalanceQuerier{runtime: d.runtime}
-		d.logger.Info("✅ Balance querier initialized with runtime implementation (after runtime creation)")
 	} else {
 		d.balanceQuerier = nil
 		d.logger.Warn("⚠️ Runtime is nil after creation, balance querier disabled")
 	}
 
-	// 设置网络集成
-	d.logger.Info("🌐 调用runtime.setupNetworkIntegration()")
 	if err := d.runtime.setupNetworkIntegration(); err != nil {
 		d.logger.Error("failed to setup network integration", "error", err)
 		return fmt.Errorf("failed to setup network integration: %w", err)
 	}
-	d.logger.Info("✅ runtime.setupNetworkIntegration()完成")
 
 	// set block time
 	d.blockTime = d.config.BlockTime.Duration

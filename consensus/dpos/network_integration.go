@@ -734,8 +734,6 @@ func (ni *NetworkIntegration) subscribeToTopics() error {
 
 	// 订阅签名响应主题
 	if ni.signatureResponseTopic != nil {
-		actualTopicName := ni.signatureResponseTopic.GetActualProtoID()
-		ni.logger.Info("📡 订阅签名响应主题", "原始名称", "dpos-signature-response", "实际名称", actualTopicName)
 		if err := ni.signatureResponseTopic.Subscribe(func(obj interface{}, from peer.ID) {
 			ni.handleSignatureResponse(obj, from)
 		}); err != nil {

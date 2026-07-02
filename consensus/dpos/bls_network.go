@@ -58,11 +58,6 @@ func (d *DPoS) initializeBLSNetworking() error {
 		return fmt.Errorf("network not available")
 	}
 
-	d.logger.Info("🌐 初始化BLS网络通信")
-
-	// 由于BLS消息不是protobuf类型，我们使用简化的网络通信
-	// 这里暂时跳过Topic创建，直接使用JSON序列化进行网络通信
-	d.logger.Info("✅ BLS网络通信初始化完成（使用JSON序列化）")
 	return nil
 }
 

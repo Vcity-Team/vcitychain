@@ -295,9 +295,6 @@ func (r *dposRuntime) initializeDelegates() error {
 			if dposInstance, ok := r.backend.(*DPoS); ok && dposInstance != nil && dposInstance.config != nil {
 				maxDelegates = int(dposInstance.config.DPoSValidatorsCount)
 			}
-			r.logger.Info("🔍 开始按voterpower排序并截取前N个验证者",
-				"originalCount", len(r.delegates),
-				"configDPoSValidatorsCount", maxDelegates)
 
 			// 按标准化规则排序，确保所有节点完全一致
 			sort.Slice(r.delegates, func(i, j int) bool {
@@ -312,19 +309,10 @@ func (r *dposRuntime) initializeDelegates() error {
 
 			// 截取前N个验证者（使用上面已定义的 maxDelegates）
 			if maxDelegates > 0 {
-				originalCount := len(r.delegates)
 				if len(r.delegates) > maxDelegates {
 					r.delegates = r.delegates[:maxDelegates]
-					r.logger.Info("🎯 限制验证者数量为前N个",
-						"originalCount", originalCount,
-						"limitedCount", maxDelegates,
-						"configDPoSValidatorsCount", maxDelegates)
 				}
 			}
-
-			r.logger.Info("✅ 验证者排序和截取完成",
-				"finalCount", len(r.delegates),
-				"maxDelegates", maxDelegates)
 		}
 
 		r.logger.Debug("=== 受托人集合详细信息 ===")
@@ -335,7 +323,6 @@ func (r *dposRuntime) initializeDelegates() error {
 				"votingPower", delegate.VotingPower.String(),
 				"isActive", delegate.IsActive)
 		}
-		r.logger.Info("=== 受托人集合详细信息结束 ===")
 
 		// 检查当前节点的地址是否在受托人集合中
 		if r.config != nil && r.config.Key != nil {
@@ -367,17 +354,12 @@ func (r *dposRuntime) initializeDelegates() error {
 		if dposInstance, ok := r.backend.(*DPoS); ok && dposInstance.runtime != nil {
 			dposInstance.runtime.delegates = r.delegates.Copy()
 			dposInstance.delegates = r.delegates.Copy()
-			r.logger.Info("✅ 已同步验证者数据到 d.runtime.delegates 和 d.delegates", "count", len(dposInstance.runtime.delegates))
 
 			// 只有在从extraData解析验证者时才同步到数据库
 			if fromExtraData {
 				if err := dposInstance.syncDelegatesToDatabase(r.delegates); err != nil {
 					r.logger.Warn("⚠️ 同步验证者数据到数据库失败", "error", err)
-				} else {
-					r.logger.Info("✅ 验证者数据已准备，将在BLS公钥获取完成后保存到数据库", "count", len(r.delegates))
 				}
-			} else {
-				r.logger.Info("✅ 验证者数据来自数据库，无需同步", "count", len(r.delegates))
 			}
 		} else {
 			r.logger.Warn("⚠️ 无法访问 d.runtime，验证者数据同步失败")
@@ -386,6 +368,5 @@ func (r *dposRuntime) initializeDelegates() error {
 		r.logger.Warn("⚠️ backend为nil，无法同步验证者数据")
 	}
 
-	r.logger.Info("✅ dposRuntime.initializeDelegates 结束")
 	return nil
 }

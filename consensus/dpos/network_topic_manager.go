@@ -65,7 +65,6 @@ func (r *dposRuntime) getSignatureRequestTopic() (*network.Topic, error) {
 	// 首先检查网络集成层是否已经有现有主题
 	if r.networkIntegration != nil {
 		if existingTopic := r.networkIntegration.GetSignatureRequestTopic(); existingTopic != nil {
-			r.logger.Info("🔗 复用网络集成层的签名请求主题", "topic", "dpos-signature-request")
 			r.signatureRequestTopic = existingTopic
 			return existingTopic, nil
 		}

@@ -260,12 +260,6 @@ func (i *backendIBFT) Initialize() error {
 
 // sync runs the syncer in the background to receive blocks from advanced peers
 func (i *backendIBFT) startSyncing() {
-	// 监听停止信号
-	go func() {
-		<-i.closeCh
-		i.logger.Info("🛑 IBFT syncer收到停止信号，退出同步")
-	}()
-
 	callInsertBlockHook := func(fullBlock *types.FullBlock) bool {
 		// 检查是否是DPoS切换高度，如果是则停止同步（仅在首次触发时执行，避免每个区块重复刷日志）
 		if i.forkManager != nil && !i.dposSwitchTriggered {
@@ -392,7 +386,6 @@ func (i *backendIBFT) startConsensus() {
 					syncerBlockCh <- struct{}{}
 				}
 			case <-i.closeCh:
-				i.logger.Info("🛑 IBFT事件监听goroutine收到停止信号，退出")
 				return
 			}
 		}
@@ -448,8 +441,6 @@ func (i *backendIBFT) startConsensus() {
 					case err := <-done:
 						if err != nil {
 							i.logger.Error("❌ 停止IBFT的syncer失败", "error", err)
-						} else {
-							i.logger.Info("✅ IBFT的syncer已停止")
 						}
 					case <-time.After(5 * time.Second):
 						i.logger.Warn("⚠️ 停止IBFT的syncer超时，强制继续")
@@ -461,18 +452,14 @@ func (i *backendIBFT) startConsensus() {
 
 				// 2. 停止IBFT的共识协议
 				if i.consensus != nil {
-					i.logger.Info("🛑 停止IBFT的共识协议...")
 					// 这里可以添加停止共识协议的逻辑
 					// 目前go-ibft没有明确的停止方法，但goroutine会自然退出
 				}
 
 				// 3. 启动DPoS引擎
 				if i.dposEngineStarter != nil {
-					i.logger.Info("🚀 启动DPoS引擎接管共识...")
 					if err := i.dposEngineStarter.StartDPoSEngine(pending); err != nil {
 						i.logger.Error("❌ 启动DPoS引擎失败", "error", err)
-					} else {
-						i.logger.Info("✅ DPoS引擎启动成功，已完全接管共识")
 					}
 				} else {
 					i.logger.Warn("⚠️ DPoS引擎启动器未设置，无法启动DPoS引擎")

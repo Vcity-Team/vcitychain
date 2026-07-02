@@ -46,7 +46,6 @@ func (d *DPoS) InitializeGovernance() error {
 
 // loadProposalsFromDatabase 从数据库加载所有提案
 func (d *DPoS) loadProposalsFromDatabase() error {
-	d.logger.Info("🔍 [loadProposalsFromDatabase] 开始从数据库加载所有提案")
 	if err := d.governanceLoadAllIntoMemory(); err != nil {
 		if errors.Is(err, errProposalStoreUnavailable) {
 			d.logger.Warn("⚠️ [loadProposalsFromDatabase] ProposalStore不可用，跳过加载",
@@ -58,7 +57,6 @@ func (d *DPoS) loadProposalsFromDatabase() error {
 		return fmt.Errorf("failed to load proposals from database: %w", err)
 	}
 
-	d.logger.Info("✅ [loadProposalsFromDatabase] 从数据库加载提案完成", "loadedToMemory", len(d.parameterProposals))
 	return nil
 }
 

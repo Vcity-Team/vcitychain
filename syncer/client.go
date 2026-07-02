@@ -208,7 +208,6 @@ func (m *syncPeerClient) DisablePublishingPeerStatus() {
 // EnablePublishingPeerStatus enables publishing own status via gossip
 func (m *syncPeerClient) EnablePublishingPeerStatus() {
 	m.shouldEmitBlocks = true
-	m.logger.Info("✅ 状态广播已启用", "节点ID", m.id, "shouldEmitBlocks", m.shouldEmitBlocks)
 }
 
 // GetPeerStatus fetches peer status

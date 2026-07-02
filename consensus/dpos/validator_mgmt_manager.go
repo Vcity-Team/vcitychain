@@ -31,7 +31,6 @@ func (d *DPoS) GetDelegates(blockNumber uint64, parents []*types.Header) (valida
 		// 如果runtime.delegates为空，尝试从数据库读取
 		if d.state != nil && d.state.StakeStore != nil {
 			// 统一返回“实际参与出块”的集合（排序/截取/故障过滤），避免 runtime 再次按投票排序把创世验证者挤出
-			d.logger.Info("🔍 runtime.delegates为空，尝试从数据库构建出块验证者集合")
 			if activeSet, err := d.GetSortedValidatorsWithLimitFilterFaulty(); err == nil && len(activeSet) > 0 {
 				return activeSet, nil
 			}

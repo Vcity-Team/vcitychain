@@ -92,18 +92,11 @@ func (bpt *BlockProductionTracker) loadFromDB() {
 			bpt.currentEpochBlocks[addr] = count
 		}
 		delete(allBlocks, latestEpoch)
-		bpt.logger.Info("恢复当前Epoch出块统计",
-			"epoch", latestEpoch,
-			"validatorCount", len(bpt.currentEpochBlocks))
 	}
 
 	for epochNumber, blockCounts := range allBlocks {
 		bpt.epochBlocksHistory[epochNumber] = blockCounts
 	}
-
-	bpt.logger.Info("从数据库加载出块统计",
-		"historicalEpochs", len(allBlocks),
-		"currentEpochRestored", latestEpoch)
 }
 
 // saveEpochToDB 保存epoch数据到数据库

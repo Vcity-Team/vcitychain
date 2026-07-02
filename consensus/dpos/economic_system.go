@@ -11,8 +11,6 @@ import (
 
 // initializeEconomicSystem 初始化经济系统组件
 func (d *DPoS) initializeEconomicSystem() error {
-	d.logger.Info("💰 开始初始化DPoS经济系统组件")
-
 	// 1. 初始化时间基础Epoch管理器
 	d.epochManager = NewTimeBasedEpochManager(
 		d.config.EpochDuration,

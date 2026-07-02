@@ -182,11 +182,8 @@ func (s *Server) applyOptionalDPoSRuntimeConfig(engineConfig map[string]interfac
 
 // StartDPoSEngine 实现DPoSEngineStarter接口，启动DPoS引擎
 func (s *Server) StartDPoSEngine(height uint64) error {
-	s.logger.Info("🚀 开始启动DPoS引擎", "height", height)
-
 	// 如果DPoS引擎已经存在，先停止它
 	if s.dposEngine != nil {
-		s.logger.Info("🛑 目前已有DPoS引擎")
 		return nil
 	}
 
