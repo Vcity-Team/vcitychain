@@ -116,11 +116,12 @@ const stakingInfoMaxLimit = 500
 
 // StakingInfoRequest defines filters and pagination for dpos_getStakingInfo.
 type StakingInfoRequest struct {
-	BlockNumber *uint64 `json:"blockNumber,omitempty"`
-	PageNumber  uint64  `json:"pageNumber"` // 从 1 开始；pageSize>0 且未传时默认 1
-	PageSize    uint64  `json:"pageSize"`   // 每页条数；0 表示不分页，返回全部
-	Order       string  `json:"order"`      // "asc" / "desc", sort by effectiveAmountWei
-	OnlyActive  bool    `json:"onlyActive"`
+	BlockNumber    *uint64 `json:"blockNumber,omitempty"`
+	PageNumber     uint64  `json:"pageNumber"`     // 从 1 开始；pageSize>0 且未传时默认 1
+	PageSize       uint64  `json:"pageSize"`       // 每页条数；0 表示不分页，返回全部
+	Order          string  `json:"order"`          // "asc" / "desc", sort by effectiveAmountWei
+	OnlyActive     bool    `json:"onlyActive"`
+	IncludeRewards bool    `json:"includeRewards"` // 默认 true；列表页可传 false 跳过 rewards 查询
 }
 
 // VoteRecordRequest defines filters for querying raw vote records
@@ -1206,10 +1207,13 @@ func applyStakingInfoRequestMap(req *StakingInfoRequest, m map[string]interface{
 	if v, ok := m["onlyActive"].(bool); ok {
 		req.OnlyActive = v
 	}
+	if v, ok := m["includeRewards"].(bool); ok {
+		req.IncludeRewards = v
+	}
 }
 
 func parseStakingInfoRequest(params interface{}) StakingInfoRequest {
-	req := StakingInfoRequest{Order: "desc"}
+	req := StakingInfoRequest{Order: "desc", IncludeRewards: true}
 
 	switch p := params.(type) {
 	case []interface{}:
@@ -1230,10 +1234,54 @@ func parseStakingInfoRequest(params interface{}) StakingInfoRequest {
 	return req
 }
 
-func paginateMapResultsByPage(items []map[string]interface{}, pageNumber, pageSize uint64) ([]map[string]interface{}, uint64, uint64, uint64) {
-	total := uint64(len(items))
+type stakingDelegateSums struct {
+	effective *big.Int
+	pending   *big.Int
+}
+
+func effectiveAmountForDelegate(sums map[string]*stakingDelegateSums, delegateKey string) *big.Int {
+	if sums == nil {
+		return big.NewInt(0)
+	}
+	if entry, ok := sums[delegateKey]; ok && entry != nil && entry.effective != nil {
+		return new(big.Int).Set(entry.effective)
+	}
+	return big.NewInt(0)
+}
+
+func filterValidatorsForStakingInfo(validators validator.AccountSet, onlyActive bool) validator.AccountSet {
+	if !onlyActive {
+		return validators
+	}
+	filtered := make(validator.AccountSet, 0, len(validators))
+	for _, v := range validators {
+		if v != nil && v.IsActive {
+			filtered = append(filtered, v)
+		}
+	}
+	return filtered
+}
+
+func sortValidatorsByEffectiveAmount(validators validator.AccountSet, sums map[string]*stakingDelegateSums, order string) {
+	sort.Slice(validators, func(i, j int) bool {
+		ai := effectiveAmountForDelegate(sums, validators[i].Address.String())
+		aj := effectiveAmountForDelegate(sums, validators[j].Address.String())
+		cmp := ai.Cmp(aj)
+		if cmp == 0 {
+			// 票数相同时按地址稳定排序，避免翻页时顺序抖动
+			return strings.ToLower(validators[i].Address.String()) < strings.ToLower(validators[j].Address.String())
+		}
+		if order == "asc" {
+			return cmp < 0
+		}
+		return cmp > 0
+	})
+}
+
+func paginateValidators(validators validator.AccountSet, pageNumber, pageSize uint64) (validator.AccountSet, uint64, uint64, uint64) {
+	total := uint64(len(validators))
 	if pageSize == 0 {
-		return items, total, 0, 0
+		return validators, total, 0, 0
 	}
 	if pageSize > stakingInfoMaxLimit {
 		pageSize = stakingInfoMaxLimit
@@ -1250,7 +1298,64 @@ func paginateMapResultsByPage(items []map[string]interface{}, pageNumber, pageSi
 		end = total
 	}
 	totalPages := (total + pageSize - 1) / pageSize
-	return items[offset:end], total, pageSize, totalPages
+	return validators[offset:end], total, pageSize, totalPages
+}
+
+func (d *DPOS) buildStakingInfoEntry(
+	v *validator.ValidatorMetadata,
+	delegateSums map[string]*stakingDelegateSums,
+	stakeRewards map[string]*big.Int,
+	rewardTotals map[string]*big.Int,
+	includeRewards bool,
+	dposInstance *dpos.DPoS,
+	formatEther func(*big.Int) string,
+) map[string]interface{} {
+	key := v.Address.String()
+	effSum := big.NewInt(0)
+	pendingSum := big.NewInt(0)
+	if sums, ok := delegateSums[key]; ok && sums != nil {
+		if sums.effective != nil {
+			effSum = new(big.Int).Set(sums.effective)
+		}
+		if sums.pending != nil {
+			pendingSum = new(big.Int).Set(sums.pending)
+		}
+	}
+
+	totalAmount := new(big.Int).Set(v.VotingPower)
+	faultInfo := map[string]interface{}{}
+	if dposInstance != nil {
+		faultInfo = dposInstance.GetValidatorFaultInfo(v.Address)
+	}
+
+	entry := map[string]interface{}{
+		"staker":               key,
+		"amount":               totalAmount.String(),
+		"amountEther":          formatEther(totalAmount),
+		"effectiveAmountWei":   effSum.String(),
+		"effectiveAmountEther": formatEther(effSum),
+		"pendingAmountWei":     pendingSum.String(),
+		"pendingAmountEther":   formatEther(pendingSum),
+		"isActive":             v.IsActive,
+		"faultFlag":            faultInfo,
+	}
+
+	if !includeRewards {
+		return entry
+	}
+
+	rewards := stakeRewards[key]
+	if rewards == nil || rewards.Sign() == 0 {
+		if rewardTotals != nil {
+			if totalReward, ok := rewardTotals[strings.ToLower(key)]; ok && totalReward != nil && totalReward.Sign() > 0 {
+				rewards = totalReward
+			}
+		}
+	}
+	if rewards != nil && rewards.Sign() > 0 {
+		entry["rewards"] = rewards.String()
+	}
+	return entry
 }
 
 // GetStakingInfo handles dpos_getStakingInfo RPC method
@@ -1309,12 +1414,8 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, params interface{}) (interfac
 	}
 
 	// 获取所有投票明细，按 delegate 汇总已生效/未生效金额
-	type delegateSums struct {
-		effective *big.Int
-		pending   *big.Int
-	}
-	delegateEffectivePending := make(map[string]*delegateSums)
-	validatorRewards := make(map[string]*big.Int)
+	delegateEffectivePending := make(map[string]*stakingDelegateSums)
+	stakeRewards := make(map[string]*big.Int)
 	var allStakes []*dpos.StakeInfo
 	if dposState != nil && dposState.StakeStore != nil {
 		allStakes, _ = dposState.StakeStore.GetStakingInfo()
@@ -1337,7 +1438,7 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, params interface{}) (interfac
 		}
 		key := s.Delegate.String()
 		if delegateEffectivePending[key] == nil {
-			delegateEffectivePending[key] = &delegateSums{effective: big.NewInt(0), pending: big.NewInt(0)}
+			delegateEffectivePending[key] = &stakingDelegateSums{effective: big.NewInt(0), pending: big.NewInt(0)}
 		}
 		amount := big.NewInt(0)
 		if s.Amount != nil {
@@ -1351,81 +1452,42 @@ func (d *DPOS) GetStakingInfo(ctx context.Context, params interface{}) (interfac
 		}
 		if s.Rewards != nil && s.Rewards.Sign() > 0 {
 			stakerKey := s.Staker.String()
-			if _, exists := validatorRewards[stakerKey]; !exists {
-				validatorRewards[stakerKey] = new(big.Int).Set(s.Rewards)
+			if _, exists := stakeRewards[stakerKey]; !exists {
+				stakeRewards[stakerKey] = new(big.Int).Set(s.Rewards)
 			}
 		}
 	}
 
-	// 转换为带已生效/未生效的 map 列表，便于 CLI 和前端展示
-	result := make([]map[string]interface{}, 0, len(validators))
-	for _, v := range validators {
-		if req.OnlyActive && !v.IsActive {
+	var rewardTotals map[string]*big.Int
+	if req.IncludeRewards && dposState != nil && dposState.RewardStore != nil {
+		if totals, totalsErr := dposState.RewardStore.GetRewardTotalsByRecipient(1, 999999); totalsErr == nil {
+			rewardTotals = totals
+		}
+	}
+
+	filteredValidators := filterValidatorsForStakingInfo(validators, req.OnlyActive)
+	sortValidatorsByEffectiveAmount(filteredValidators, delegateEffectivePending, req.Order)
+	pagedValidators, total, pageSize, totalPages := paginateValidators(filteredValidators, req.PageNumber, req.PageSize)
+
+	result := make([]map[string]interface{}, 0, len(pagedValidators))
+	for _, v := range pagedValidators {
+		if v == nil {
 			continue
 		}
-
-		faultInfo := map[string]interface{}{}
-		if dposInstance != nil {
-			faultInfo = dposInstance.GetValidatorFaultInfo(v.Address)
-		}
-
-		totalAmount := new(big.Int).Set(v.VotingPower)
-		key := v.Address.String()
-		effSum := big.NewInt(0)
-		pendingSum := big.NewInt(0)
-		if sums, ok := delegateEffectivePending[key]; ok {
-			effSum = sums.effective
-			pendingSum = sums.pending
-		}
-
-		entry := map[string]interface{}{
-			"staker":               v.Address.String(),
-			"amount":               totalAmount.String(),
-			"amountEther":          formatEther(totalAmount),
-			"effectiveAmountWei":   effSum.String(),
-			"effectiveAmountEther": formatEther(effSum),
-			"pendingAmountWei":     pendingSum.String(),
-			"pendingAmountEther":   formatEther(pendingSum),
-			"isActive":             v.IsActive,
-			"faultFlag":            faultInfo,
-		}
-
-		rewards := validatorRewards[key]
-		if (rewards == nil || rewards.Sign() == 0) && dposState != nil && dposState.RewardStore != nil {
-			summary, summaryErr := dposState.RewardStore.GetRewardSummary(key, 1, 999999)
-			if summaryErr == nil && summary != nil && summary.TotalRewardWei != "" && summary.TotalRewardWei != "0" {
-				if totalReward, ok := new(big.Int).SetString(summary.TotalRewardWei, 10); ok {
-					rewards = totalReward
-				}
-			}
-		}
-		if rewards != nil && rewards.Sign() > 0 {
-			entry["rewards"] = rewards.String()
-		}
-
-		result = append(result, entry)
+		result = append(result, d.buildStakingInfoEntry(
+			v,
+			delegateEffectivePending,
+			stakeRewards,
+			rewardTotals,
+			req.IncludeRewards,
+			dposInstance,
+			formatEther,
+		))
 	}
-
-	sort.Slice(result, func(i, j int) bool {
-		ai, _ := new(big.Int).SetString(result[i]["effectiveAmountWei"].(string), 10)
-		aj, _ := new(big.Int).SetString(result[j]["effectiveAmountWei"].(string), 10)
-		if ai == nil {
-			ai = big.NewInt(0)
-		}
-		if aj == nil {
-			aj = big.NewInt(0)
-		}
-		if req.Order == "asc" {
-			return ai.Cmp(aj) < 0
-		}
-		return ai.Cmp(aj) > 0
-	})
-
-	paged, total, pageSize, totalPages := paginateMapResultsByPage(result, req.PageNumber, req.PageSize)
 
 	resp := map[string]interface{}{
 		"success":      true,
-		"data":         paged,
+		"data":         result,
 		"currentEpoch": currentEpoch,
 	}
 	if req.PageSize > 0 {
