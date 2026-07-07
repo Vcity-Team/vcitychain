@@ -395,8 +395,6 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 	s.blockchain.SetConsensus(dposEngine)
 	s.dposEngine = dposEngine
 
-	s.logger.Info("✅ DPoS引擎启动成功", "height", height)
-
 	// ✅ 关键修复：切换到DPoS时立即创建投票记录
 	// 使用共识切换高度作为参数，确保投票记录在正确的高度生效
 	if dposInstance, ok := dposEngine.(*consensusDPoS.DPoS); ok && dposInstance != nil {
@@ -416,8 +414,6 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 			if err := dposInstance.ReloadValidatorsAfterRecovery(); err != nil {
 				s.logger.Error("❌ 重新加载验证者集合失败", "error", err)
 				// 不返回错误，但记录警告
-			} else {
-				s.logger.Info("✅ 验证者集合重新加载成功")
 			}
 		}
 	} else {

@@ -29,9 +29,6 @@ func (d *DPoS) initializeDelegates() error {
 	if d.state != nil && d.state.StakeStore != nil {
 		if savedEpoch, err := d.state.StakeStore.LoadCurrentEpoch(); err == nil {
 			d.currentEpoch = savedEpoch
-			d.logger.Info("✅ 从数据库恢复currentEpoch（第一层保护：防止重复检测）",
-				"epoch", savedEpoch,
-				"note", "重启后恢复已检测的epoch，避免重复检测")
 		} else {
 			d.logger.Warn("⚠️ 从数据库加载currentEpoch失败，使用默认值0",
 				"error", err,

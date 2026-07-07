@@ -468,7 +468,6 @@ func (i *backendIBFT) startConsensus() {
 				// 4. 安全关闭IBFT的closeCh，通知其他组件IBFT已停止
 				i.safeClose()
 
-				i.logger.Info("✅ ========== IBFT共识引擎已完全停止，DPoS已接管 ==========", "height", pending)
 				return
 			}
 		}

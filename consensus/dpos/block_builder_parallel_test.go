@@ -78,14 +78,14 @@ func (s *stubTxPool) ResetWithHeaders(...*types.Header) {}
 
 func (s *stubTxPool) ResetWithEvent(*blockchain.Event) {}
 
-func testWalletAccount(t *testing.T) *wallet.Account {
+func testWalletAccount(t testing.TB) *wallet.Account {
 	t.Helper()
 	acc, err := wallet.GenerateAccount()
 	require.NoError(t, err)
 	return acc
 }
 
-func setupParallelBlockBuilderTest(t *testing.T, fundAccounts []*wallet.Account) (*state.Executor, *types.Header, crypto.TxSigner) {
+func setupParallelBlockBuilderTest(t testing.TB, fundAccounts []*wallet.Account) (*state.Executor, *types.Header, crypto.TxSigner) {
 	t.Helper()
 
 	const chainID = 100
@@ -127,11 +127,11 @@ func setupParallelBlockBuilderTest(t *testing.T, fundAccounts []*wallet.Account)
 	return executor, parent, signer
 }
 
-func signedTransfer(t *testing.T, signer crypto.TxSigner, from *wallet.Account, to types.Address, amount int64) *types.Transaction {
+func signedTransfer(t testing.TB, signer crypto.TxSigner, from *wallet.Account, to types.Address, amount int64) *types.Transaction {
 	return signedTransferWithNonce(t, signer, from, to, 0, amount)
 }
 
-func signedTransferWithNonce(t *testing.T, signer crypto.TxSigner, from *wallet.Account, to types.Address, nonce uint64, amount int64) *types.Transaction {
+func signedTransferWithNonce(t testing.TB, signer crypto.TxSigner, from *wallet.Account, to types.Address, nonce uint64, amount int64) *types.Transaction {
 	t.Helper()
 
 	pk, err := from.GetEcdsaPrivateKey()

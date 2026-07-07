@@ -1026,16 +1026,6 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 	// 设置自定义哈希函数
 	setupHeaderHashFunc()
 
-	logger.Info("⚙️ 同步落后自愈（方案 B 重建 syncer）阈值（内置常量）",
-		"minLagBlocks", syncLagKickThresholdBlocks,
-		"stagnantSmallLag", syncLagKickStagnantSmall.String(),
-		"stagnantLargeLag", syncLagKickStagnantLarge.String(),
-		"largeLagNoKickThreshold", syncLagLargeLagThreshold,
-		"hugeLagBypassThreshold", syncLagHugeLagThreshold,
-		"hardRestartMinInterval", syncHardRestartMinInterval.String(),
-		"cooldownKickMinInterval", syncCooldownKickMinInterval.String(),
-		"planBCheckInterval", planBStallCheckInterval.String())
-
 	vcity_dpos := &DPoS{
 		closeCh:     make(chan struct{}),
 		logger:      logger,
