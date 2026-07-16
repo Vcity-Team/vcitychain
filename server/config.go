@@ -110,6 +110,10 @@ type Config struct {
 	EnableDAGExecution bool `yaml:"enable_dag_execution"`
 	// enable_parallel_execution: ProcessBlock 是否按账户并行执行（默认 true）
 	EnableParallelExecution bool `yaml:"enable_parallel_execution"`
+
+	MainnetEligibilityRPC           string `yaml:"mainnet_eligibility_rpc"`
+	MainnetMinStakeWei              string `yaml:"mainnet_min_stake_wei"`
+	MainnetEligibilityTimeoutMs     uint64 `yaml:"mainnet_eligibility_timeout_ms"`
 }
 
 // Telemetry holds the config details for metric services

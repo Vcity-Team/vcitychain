@@ -107,24 +107,42 @@ func (d *DPoS) runEpochFaultDetection(r *dposRuntime, parent *types.Header, next
 	}
 	d.ClearPendingEpochEndHeader(nextBlockNumber)
 
+	// 公测：主网质押复查合并进 FaultFlags（RPC 失败跳过，不影响漏块故障）
+	if mainnetFlags := d.detectMainnetEligibilityFaults(nextBlockNumber); len(mainnetFlags) > 0 {
+		faultFlags = MergeFaultFlags(faultFlags, mainnetFlags)
+		r.logger.Info("🔗 [epochBoundary] 已合并主网准入故障标志",
+			"blockNumber", nextBlockNumber,
+			"mainnetFlags", len(mainnetFlags),
+			"totalFlags", len(faultFlags))
+	}
+
 	for _, faultFlag := range faultFlags {
-		if !faultFlag.IsFaulty {
+		if faultFlag.IsFaulty {
+			if err := d.saveFaultStatusToDatabase(faultFlag); err != nil {
+				r.logger.Warn("⚠️ [epochBoundary] 保存故障状态到数据库失败",
+					"blockNumber", nextBlockNumber,
+					"address", faultFlag.NodeAddress.String(),
+					"error", err)
+			} else {
+				r.logger.Info("✅ [epochBoundary] 故障状态已保存到数据库",
+					"blockNumber", nextBlockNumber,
+					"address", faultFlag.NodeAddress.String(),
+					"isFaulty", faultFlag.IsFaulty,
+					"epoch", faultFlag.EpochNumber,
+					"missedBlocks", faultFlag.MissedBlocks,
+					"reason", faultFlag.Reason)
+			}
+			d.updateMemoryFaultStatus(faultFlag)
 			continue
 		}
-		if err := d.saveFaultStatusToDatabase(faultFlag); err != nil {
-			r.logger.Warn("⚠️ [epochBoundary] 保存故障状态到数据库失败",
+
+		// 主网质押恢复：允许清故障（仅主网类 reason）；漏块故障仍须走恢复提案
+		if d.applyMainnetStakeFaultClear(faultFlag) {
+			r.logger.Info("✅ [epochBoundary] 已清除主网质押类故障",
 				"blockNumber", nextBlockNumber,
 				"address", faultFlag.NodeAddress.String(),
-				"error", err)
-		} else {
-			r.logger.Info("✅ [epochBoundary] 故障状态已保存到数据库",
-				"blockNumber", nextBlockNumber,
-				"address", faultFlag.NodeAddress.String(),
-				"isFaulty", faultFlag.IsFaulty,
-				"epoch", faultFlag.EpochNumber,
-				"missedBlocks", faultFlag.MissedBlocks)
+				"reason", faultFlag.Reason)
 		}
-		d.updateMemoryFaultStatus(faultFlag)
 	}
 
 	d.pendingFaultFlags = faultFlags
@@ -150,5 +168,18 @@ func (d *DPoS) runEpochFaultDetection(r *dposRuntime, parent *types.Header, next
 		r.logger.Error("❌ [epochBoundary] 本地更新出块者列表失败",
 			"blockNumber", nextBlockNumber,
 			"error", err)
+	}
+
+	// 有清故障时重新从 DB 加载名单（把已恢复的 SR 加回）
+	for _, faultFlag := range faultFlags {
+		if faultFlag.IsFaulty {
+			continue
+		}
+		if faultFlag.Reason == FaultReasonMainnetStakeRestored {
+			if err := d.reloadValidatorsAfterRecovery(); err != nil {
+				r.logger.Error("❌ [epochBoundary] 主网恢复后重新加载验证者失败", "error", err)
+			}
+			break
+		}
 	}
 }

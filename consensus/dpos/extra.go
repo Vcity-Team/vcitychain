@@ -726,6 +726,7 @@ func (i *Extra) processFaultFlags(blockNumber uint64, consensusBackend dposBacke
 		var faultyFlags []FaultFlagInfo
 		savedCount := 0
 
+		clearedMainnet := false
 		for _, faultFlag := range i.FaultFlags {
 			// 保存故障状态到数据库（验证节点）
 			// 只有当 isFaulty=true 时才保存，避免覆盖已存在的故障状态
@@ -746,21 +747,22 @@ func (i *Extra) processFaultFlags(blockNumber uint64, consensusBackend dposBacke
 						"address", faultFlag.NodeAddress.String())
 				}
 			} else {
-				// 如果 isFaulty=false，检查数据库中是否已有故障记录
-				// 如果有，说明验证者之前故障过，不应该覆盖（故障状态应该持续存在，直到通过提案恢复）
-				// 不打印日志，静默处理
+				// isFaulty=false：默认保留既有故障（漏块等需治理恢复）。
+				// 例外：mainnet stake restored 且当前 DB 为主网质押类故障时可清除。
 				if dposInstance, ok := consensusBackend.(*DPoS); ok {
-					if dposInstance.state != nil && dposInstance.state.StakeStore != nil {
-						if dbFaultInfo, err := dposInstance.state.StakeStore.GetValidatorFaultStatus(faultFlag.NodeAddress); err == nil && dbFaultInfo != nil {
-							if dbIsFaulty, ok := dbFaultInfo["isFaulty"].(bool); ok && dbIsFaulty {
-								// 数据库中已有故障记录，不覆盖（保持故障状态）
-								// 不打印日志，静默处理
-								continue
-							}
-						}
-						// 如果数据库中没有故障记录，或者已经是正常状态，可以更新为正常状态
-						// 不打印日志，静默处理
+					if dposInstance.applyMainnetStakeFaultClear(faultFlag) {
+						clearedMainnet = true
+						logger.Info("processFaultFlags cleared mainnet stake fault",
+							"blockNumber", blockNumber,
+							"address", faultFlag.NodeAddress.String())
 					}
+				}
+			}
+		}
+		if clearedMainnet {
+			if dposInstance, ok := consensusBackend.(*DPoS); ok {
+				if err := dposInstance.reloadValidatorsAfterRecovery(); err != nil {
+					logger.Warn("processFaultFlags reload validators after mainnet clear failed", "error", err)
 				}
 			}
 		}

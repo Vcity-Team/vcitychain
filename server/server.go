@@ -177,6 +177,16 @@ func (s *Server) applyOptionalDPoSRuntimeConfig(engineConfig map[string]interfac
 		}
 	}
 
+	if rpc := strings.TrimSpace(s.config.MainnetEligibilityRPC); rpc != "" {
+		engineConfig["mainnet_eligibility_rpc"] = rpc
+	}
+	if minStake := strings.TrimSpace(s.config.MainnetMinStakeWei); minStake != "" {
+		engineConfig["mainnet_min_stake_wei"] = minStake
+	}
+	if s.config.MainnetEligibilityTimeoutMs > 0 {
+		engineConfig["mainnet_eligibility_timeout_ms"] = s.config.MainnetEligibilityTimeoutMs
+	}
+
 	return nil
 }
 

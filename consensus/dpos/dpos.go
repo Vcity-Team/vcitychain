@@ -337,6 +337,11 @@ type DPoSConfig struct {
 	EnableDAGExecution bool `json:"enableDAGExecution" yaml:"enable_dag_execution"`
 	// EnableParallelExecution ProcessBlock 是否按账户并行执行（默认 true）
 	EnableParallelExecution bool `json:"enableParallelExecution" yaml:"enable_parallel_execution"`
+
+	// 公测主网准入（默认全关，正式主网不受影响）
+	MainnetEligibilityRPC           string   `json:"mainnet_eligibility_rpc" yaml:"mainnet_eligibility_rpc"`
+	MainnetMinStakeWei              *big.Int `json:"mainnet_min_stake_wei" yaml:"mainnet_min_stake_wei"`
+	MainnetEligibilityTimeout       time.Duration
 }
 
 // GenerateExitProof 生成退出证明（占位符实现，满足 BridgeDataProvider 接口要求）
@@ -1675,6 +1680,47 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 				"value", v, "type", fmt.Sprintf("%T", v))
 		}
 	}
+
+	if v, ok := getConfigValue("mainnet_eligibility_rpc"); ok {
+		if s, ok := v.(string); ok {
+			vcity_dpos.config.MainnetEligibilityRPC = strings.TrimSpace(s)
+		}
+	}
+	if v, ok := getConfigValue("mainnet_min_stake_wei"); ok {
+		if amount, err := parseWeiParameterValue(v); err == nil {
+			vcity_dpos.config.MainnetMinStakeWei = amount
+		} else {
+			logger.Warn("⚠️ mainnet_min_stake_wei 解析失败", "error", err)
+		}
+	}
+	if v, ok := getConfigValue("mainnet_eligibility_timeout_ms"); ok {
+		switch t := v.(type) {
+		case float64:
+			if t > 0 {
+				vcity_dpos.config.MainnetEligibilityTimeout = time.Duration(t) * time.Millisecond
+			}
+		case uint64:
+			if t > 0 {
+				vcity_dpos.config.MainnetEligibilityTimeout = time.Duration(t) * time.Millisecond
+			}
+		case int:
+			if t > 0 {
+				vcity_dpos.config.MainnetEligibilityTimeout = time.Duration(t) * time.Millisecond
+			}
+		}
+	}
+	if strings.TrimSpace(vcity_dpos.config.MainnetEligibilityRPC) != "" {
+		logger.Info("⚙️ 公测主网准入配置",
+			"rpc", vcity_dpos.config.MainnetEligibilityRPC,
+			"minStakeWei", func() string {
+				if vcity_dpos.config.MainnetMinStakeWei == nil {
+					return "0"
+				}
+				return vcity_dpos.config.MainnetMinStakeWei.String()
+			}(),
+			"timeout", vcity_dpos.config.MainnetEligibilityTimeout.String())
+	}
+
 	logger.Info("⚙️ 并行执行配置",
 		"enableDAGExecution", vcity_dpos.config.EnableDAGExecution,
 		"enableParallelExecution", vcity_dpos.config.EnableParallelExecution)

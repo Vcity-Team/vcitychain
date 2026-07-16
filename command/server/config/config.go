@@ -101,6 +101,11 @@ type Config struct {
 	// enable_parallel_execution: ProcessBlock 是否按账户并行执行（默认 true）
 	EnableParallelExecution bool `json:"enable_parallel_execution" yaml:"enable_parallel_execution"`
 
+	// 公测主网准入（默认 false；指向主网 JSON-RPC 校验质押）
+	MainnetEligibilityRPC           string `json:"mainnet_eligibility_rpc" yaml:"mainnet_eligibility_rpc"`
+	MainnetMinStakeWei              string `json:"mainnet_min_stake_wei" yaml:"mainnet_min_stake_wei"`
+	MainnetEligibilityTimeoutMs     uint64 `json:"mainnet_eligibility_timeout_ms" yaml:"mainnet_eligibility_timeout_ms"`
+
 	// London Fork 配置（从 yaml 读取，不改变 genesis hash）
 	BaseFeeConfig string `json:"base_fee_config" yaml:"base_fee_config"` // 格式: "baseFee:baseFeeEM:baseFeeChangeDenom"
 	BurnContract  string `json:"burn_contract" yaml:"burn_contract"`     // 格式: "blockNumber:address[:destinationAddress]"

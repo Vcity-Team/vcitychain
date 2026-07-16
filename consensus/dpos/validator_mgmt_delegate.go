@@ -1207,6 +1207,11 @@ func (d *DPoS) RegisterDelegateWithKey(registrant types.Address, name, website, 
 
 // RegisterDelegateWithKeyAndChainID 注册受托人（带私钥和chainID，用于创建交易）
 func (d *DPoS) RegisterDelegateWithKeyAndChainID(registrant types.Address, name, website, description, privateKey string, chainID uint64) error {
+	// 主网准入查外网，勿在 d.lock 内执行
+	if err := d.EnforceMainnetEligibilityForRegister(registrant); err != nil {
+		return err
+	}
+
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
@@ -1263,6 +1268,10 @@ func (d *DPoS) createDelegateRegistrationTransaction(registrant types.Address, n
 // RegisterDelegateLegacyToNilTest 本地/测试网专用：注册交易 To=crypto.CreateAddress(发送者,nonce)，保证金转入该合约地址。正式环境请用 RegisterDelegateWithKeyAndChainID（To=托管）。
 // 返回值即 tx.To（与链上收款地址一致）。
 func (d *DPoS) RegisterDelegateLegacyToNilTest(registrant types.Address, name, website, description, privateKey string, chainID uint64) (types.Address, error) {
+	if err := d.EnforceMainnetEligibilityForRegister(registrant); err != nil {
+		return types.Address{}, err
+	}
+
 	d.lock.Lock()
 	defer d.lock.Unlock()
 

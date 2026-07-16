@@ -4894,6 +4894,15 @@ func (d *DPOS) RegisterDelegate(ctx context.Context, params interface{}) (interf
 	}
 	d.logger.Info("✅ DPoS引擎获取成功")
 
+	if enforce, ok := dposEngine.(interface {
+		EnforceMainnetEligibilityForRegister(registrant types.Address) error
+	}); ok {
+		if err := enforce.EnforceMainnetEligibilityForRegister(registrant); err != nil {
+			d.logger.Error("❌ 主网准入校验失败", "error", err, "registrant", registrant.String())
+			return nil, err
+		}
+	}
+
 	d.logger.Info("🔧 开始调用DPoS引擎注册受托人...")
 	if registerDelegate, ok := dposEngine.(interface {
 		RegisterDelegateWithKeyAndChainID(registrant types.Address, name, website, description, privateKey string, chainID uint64) error
