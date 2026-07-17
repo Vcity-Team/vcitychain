@@ -613,6 +613,15 @@ func (d *DPoS) processDelegateRegistrationTransaction(tx *types.Transaction, blo
 	}
 	d.logger.Info("✅ 受托人未注册，可以继续处理")
 
+	// 第二层保护：区块执行路径也必须执行主网准入校验。
+	// 防止绕过 dpos_registerDelegate / CLI 直接广播注册交易导致上链成功。
+	if err := d.EnforceMainnetEligibilityForRegister(regInfo.Registrant); err != nil {
+		d.logger.Error("❌ [主网准入] 拒绝注册（区块执行路径）",
+			"registrant", regInfo.Registrant.String(),
+			"error", err)
+		return err
+	}
+
 	// 方案 A：tx.Value 已在区块执行中转入候选人托管地址；不再在此处 SubBalance（避免与主状态脱节）。
 	// 历史：To=nil（CREATE）或 To=CreateAddress(from,nonce)（显式合约地址）；保证金在该合约地址，仅 DPoS 记账。
 	if tx.To != nil && *tx.To == d.getDelegateDepositEscrowAddress() {

@@ -174,12 +174,21 @@ func (d *DPOS) GetBalanceInfo(ctx context.Context, params interface{}) (interfac
 		if len(p) < 1 {
 			return nil, fmt.Errorf("missing address parameter")
 		}
-		if s, ok := p[0].(string); ok {
-			req.Address = s
-		} else {
-			return nil, fmt.Errorf("first parameter must be a string address")
+		switch first := p[0].(type) {
+		case string:
+			req.Address = first
+		case map[string]interface{}:
+			// 兼容 params: [{"address":"0x..."}]
+			if s, ok := first["address"].(string); ok {
+				req.Address = s
+			} else {
+				return nil, fmt.Errorf("missing address field")
+			}
+		default:
+			return nil, fmt.Errorf("first parameter must be a string address or {address}")
 		}
 	case map[string]interface{}:
+		// 兼容 params: {"address":"0x..."}（现有应用常用）
 		if s, ok := p["address"].(string); ok {
 			req.Address = s
 		} else {

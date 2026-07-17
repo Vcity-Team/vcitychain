@@ -422,7 +422,7 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 			// For interface{} parameters, pass the raw params directly
 			var paramValue interface{}
 			if err := json.Unmarshal(req.Params, &paramValue); err != nil {
-				d.logger.Error("failed to unmarshal params", "error", err, "params", string(req.Params))
+				d.logger.Error("failed to unmarshal params", "error", err, "params", redactSensitiveRPCParams(req.Params))
 				return nil, NewInvalidParamsError("Invalid Params")
 			}
 
@@ -430,7 +430,7 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 			if paramValue == nil {
 				d.logger.Error("params is nil, cannot proceed",
 					"method", req.Method,
-					"params", string(req.Params))
+					"params", redactSensitiveRPCParams(req.Params))
 				return nil, NewInvalidParamsError("Params cannot be null")
 			}
 
@@ -441,7 +441,7 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 						d.logger.Error("params array contains nil value",
 							"method", req.Method,
 							"index", i,
-							"params", string(req.Params))
+							"params", redactSensitiveRPCParams(req.Params))
 						return nil, NewInvalidParamsError(fmt.Sprintf("Param at index %d cannot be null", i))
 					}
 				}
@@ -539,6 +539,61 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 
 func (d *Dispatcher) logInternalError(method string, err error) {
 	// d.logger.Warn("failed to dispatch", "method", method, "err", err)
+}
+
+// redactSensitiveRPCParams 日志用：擦除 params 中可能出现的私钥字段，避免落盘泄露。
+func redactSensitiveRPCParams(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var v interface{}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return "<unredactable>"
+	}
+	redactSensitiveValue(v)
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "<unredactable>"
+	}
+	return string(b)
+}
+
+func redactSensitiveValue(v interface{}) {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		for k, child := range t {
+			lk := strings.ToLower(k)
+			if strings.Contains(lk, "privatekey") ||
+				strings.Contains(lk, "private_key") ||
+				lk == "privkey" {
+				t[k] = "<redacted>"
+				continue
+			}
+			redactSensitiveValue(child)
+		}
+	case []interface{}:
+		for i, child := range t {
+			if s, ok := child.(string); ok && looksLikePrivateKeyHex(s) {
+				t[i] = "<redacted>"
+				continue
+			}
+			redactSensitiveValue(child)
+		}
+	}
+}
+
+func looksLikePrivateKeyHex(s string) bool {
+	s = strings.TrimPrefix(strings.TrimSpace(s), "0x")
+	s = strings.TrimPrefix(s, "0X")
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 func (d *Dispatcher) registerService(serviceName string, service interface{}) error {
