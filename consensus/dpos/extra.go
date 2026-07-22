@@ -1207,7 +1207,6 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 			"note", "从数据库获取的验证者集合可能与父区块生产时使用的验证者集合不一致")
 	}
 
-	realParentBlockHash := parent.Hash
 	if parentExtra.Checkpoint == nil {
 		// 兼容历史/回滚/导入数据：部分父区块可能缺失 Checkpoint 字段。
 		// 这种情况下无法计算 proposalHash 来验父块签名，只能跳过父块签名验证，
@@ -1215,9 +1214,15 @@ func (i *Extra) ValidateParentSignatures(blockNumber uint64, consensusBackend dp
 		logger.Warn("⚠️ [ValidateParentSignatures] 父区块Checkpoint缺失，跳过父区块签名验证",
 			"blockNumber", blockNumber,
 			"parentBlockNumber", parent.Number,
-			"parentHash", realParentBlockHash.String(),
+			"parentHash", parent.Hash.String(),
 			"note", "请尽快修复/补齐父区块ExtraData中的Checkpoint字段")
 		return nil
+	}
+
+	realParentBlockHash := parent.Hash
+	// 与 ValidateFinalizedData / 出块签名一致：BLS 对 CheckpointBlockHash（签名前块哈希）计算
+	if parentExtra.CheckpointBlockHash != (types.Hash{}) {
+		realParentBlockHash = parentExtra.CheckpointBlockHash
 	}
 
 	parentCheckpointHash, err := parentExtra.Checkpoint.Hash(chainID, parent.Number, realParentBlockHash)
