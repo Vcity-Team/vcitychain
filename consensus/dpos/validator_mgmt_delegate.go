@@ -80,8 +80,8 @@ func (d *DPoS) initializeDelegates() error {
 		d.logger.Warn("⚠️ 从创世块解析验证者失败", "error", err)
 		// 如果创世块也失败，使用配置中的初始验证者
 		for _, genesisValidator := range d.config.InitialDelegates {
-			// 初始权重为0，将在7370高度通过投票记录获得权重
-			// 不再使用硬编码的1000 VCITY
+			// 初始权重为0，将在共识切换高度通过投票记录获得权重
+			// 不再使用硬编码的初始质押量
 			votingPower := big.NewInt(0)
 			delegate := &validator.ValidatorMetadata{
 				Address:     types.Address(genesisValidator.Address),

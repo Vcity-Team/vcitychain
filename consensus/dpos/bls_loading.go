@@ -296,8 +296,6 @@ func (d *DPoS) syncLoadBLSKeys() error {
 			if err := d.saveValidatorsWithBLSKeysToDatabase(); err != nil {
 				d.logger.Warn("⚠️ 保存验证者信息到数据库失败", "error", err)
 				// 不返回错误，继续启动流程
-			} else {
-				d.logger.Info("✅ 验证者信息（含BLS公钥）已保存到数据库")
 			}
 		}
 	} else {

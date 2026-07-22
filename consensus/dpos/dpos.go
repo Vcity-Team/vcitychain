@@ -1962,14 +1962,13 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 		v := bootstrapValidators[i]
 		address := v.Address
 
-		// 创世验证者初始权重为0，将在7370高度通过投票记录获得权重
-		// 不再使用硬编码的1000 VCITY，改为从投票记录计算
+		// 创世验证者初始权重为0，在共识切换高度由 CreateGenesisVotes 写入投票后再有权重
 		initialVotingPower := big.NewInt(0)
 
 		delegate := &validator.ValidatorMetadata{
 			Address:     address,
-			VotingPower: initialVotingPower, // 初始为0，将在7370高度通过投票记录更新
-			BlsKey:      nil,                // BLS公钥将在需要时获取
+			VotingPower: initialVotingPower,
+			BlsKey:      nil, // BLS公钥将在需要时获取
 			IsActive:    true,
 		}
 
@@ -1982,12 +1981,6 @@ func (d *DPoS) parseValidatorsFromGenesis() error {
 		d.genesisValidatorsMu.Unlock()
 
 		validValidatorCount++
-
-		d.logger.Info("✅ DPoS验证者创建成功（BLS公钥延迟获取）",
-			"address", address.String(),
-			"votingPower", initialVotingPower.String(),
-			"validatorIndex", validValidatorCount,
-			"note", "创世验证者初始权重为0，将在7370高度通过投票记录获得权重")
 	}
 
 	// 关键日志：DPoS验证者筛选结果汇总

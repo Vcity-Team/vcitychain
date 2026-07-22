@@ -342,9 +342,9 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 	newPower := new(big.Int).Add(currentPower, amount)
 
 	// 注意：创世验证者的权重从投票记录计算
-	// 初始权重为0，在7370高度通过根账户投票获得1000 VCITY，后续用户投票会累加在上面
+	// 初始权重为0，在共识切换高度通过根账户投票获得初始权重，后续用户投票会累加
 	if d.isGenesisValidator(delegate) {
-		d.logger.Info("✅ 创世验证者权重更新（包含用户投票）",
+		d.logger.Debug("创世验证者权重更新",
 			"delegate", delegate.String(),
 			"oldPower", currentPower.String(),
 			"addedAmount", amount.String(),
@@ -364,14 +364,6 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 
 	d.populateCommissionFields(delegate, delegateInfo)
 
-	d.logger.Info("🔍 准备保存验证者信息到数据库",
-		"delegate", delegate.String(),
-		"originalPower", currentPower.String(),
-		"addedAmount", amount.String(),
-		"newPower", newPower.String(),
-		"isActive", delegateInfo.IsActive,
-		"dataSource", "database")
-
 	// 直接保存到数据库
 	if err := d.state.StakeStore.setDelegateInfo(delegate, delegateInfo, nil); err != nil {
 		d.logger.Error("❌ 保存验证者信息到数据库失败",
@@ -380,12 +372,6 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 			"error", err)
 		return fmt.Errorf("failed to save delegate info to database: %w", err)
 	}
-
-	d.logger.Info("✅ 验证者信息已成功保存到数据库",
-		"delegate", delegate.String(),
-		"newPower", newPower.String(),
-		"isActive", delegateInfo.IsActive,
-		"dataSource", "database")
 
 	return nil
 }

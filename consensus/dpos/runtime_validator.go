@@ -69,27 +69,19 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 		ibftValidator := ibftValidators[i]
 		address := ibftValidator.Address
 
-		// 创建DPoS验证者（BLS公钥延迟获取）
-		// 创世验证者初始权重为0，将在7370高度通过投票记录获得权重
-		// 不再使用硬编码的1000 VCITY，改为从投票记录计算
+		// 创世验证者初始权重为0，在共识切换高度由 CreateGenesisVotes 写入投票后再有权重
 		initialVotingPower := big.NewInt(0)
 
 		delegate := &validator.ValidatorMetadata{
 			Address:     address,
-			VotingPower: initialVotingPower, // 初始为0，将在7370高度通过投票记录更新
-			BlsKey:      nil,                // BLS公钥将在需要时获取
+			VotingPower: initialVotingPower,
+			BlsKey:      nil, // BLS公钥将在需要时获取
 			IsActive:    true,
 		}
 
 		// 直接添加到 delegates
 		r.delegates = append(r.delegates, delegate)
 		validValidatorCount++
-
-		r.logger.Info("✅ DPoS验证者创建成功（BLS公钥延迟获取）",
-			"address", address.String(),
-			"votingPower", initialVotingPower.String(),
-			"validatorIndex", validValidatorCount,
-			"note", "创世验证者初始权重为0，将在7370高度通过投票记录获得权重")
 	}
 
 	// DPoS验证者筛选结果汇总
@@ -137,10 +129,15 @@ func (r *dposRuntime) parseValidatorsFromGenesis() error {
 				"count", cnt,
 				"addresses", addresses)
 
-			// 不再立即保存硬编码的权重到数据库
-			// 权重将在7370高度通过投票记录创建后，从投票记录计算并更新
-			r.logger.Info("ℹ️ 创世验证者初始权重为0，将在7370高度通过投票记录获得权重后更新数据库",
-				"validatorCount", len(r.delegates))
+			// 权重在共识切换高度创建创世投票后再从投票记录计算并更新
+			r.logger.Debug("创世验证者初始权重为0，将在共识切换高度通过投票记录更新",
+				"validatorCount", len(r.delegates),
+				"consensusSwitchHeight", func() uint64 {
+					if dposInstance.config != nil {
+						return dposInstance.config.ConsensusSwitchHeight
+					}
+					return 0
+				}())
 		}
 	}
 

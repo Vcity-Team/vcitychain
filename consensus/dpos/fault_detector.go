@@ -127,7 +127,7 @@ func (fd *FaultDetector) checkEpochChange(blockNumber uint64) (EpochInfo, bool) 
 
 	// 🔧 修复：应该检测当前epoch的故障（因为是在epoch结束区块检测）
 	// 区块7417是epoch 6的最后一个区块，应该检测epoch 6的故障
-	// epoch编号从1开始：共识切换高度7370是epoch 1的开始
+	// epoch 编号从 1 开始：共识切换高度是 epoch 1 的开始
 	epochToCheckNumber := currentEpochNumber
 
 	// 🔧 修复：重新计算 previousEpochNumber，应该使用 epochToCheckNumber - 1 来判断新加入的验证者

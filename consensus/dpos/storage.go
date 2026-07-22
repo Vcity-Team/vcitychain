@@ -81,7 +81,6 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 
 	// 保存 StakingInfo 到数据库（投票记录）
 	// 注意：这里使用 voter 作为 staker，因为投票者就是质押者
-	d.logger.Info("💾 Saving staking info to database...")
 
 	// 开始数据库事务
 	dbTx, err := d.state.beginDBTransaction(true)
@@ -133,11 +132,6 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 			return fmt.Errorf("failed to update delegate info: %w", err)
 		}
 
-		d.logger.Info("✅ DelegateInfo 已更新",
-			"delegate", candidate.String(),
-			"oldPower", currentPower.String(),
-			"addedAmount", amount.String(),
-			"newPower", newPower.String())
 	}
 
 	// 提交事务
@@ -146,7 +140,7 @@ func (d *DPoS) persistVoteToDatabase(voter types.Address, candidate types.Addres
 		return fmt.Errorf("failed to commit staking info transaction: %w", err)
 	}
 
-	d.logger.Info("✅ Staking info saved to database successfully",
+	d.logger.Debug("Staking info saved to database successfully",
 		"staker", voter.String(),
 		"delegate", candidate.String(),
 		"amount", amount.String(),
@@ -904,7 +898,7 @@ func (d *DPoS) CreateGenesisVotesForAllValidators(blockNumber uint64) error {
 	}
 
 	// 创建投票记录
-	d.logger.Info("📝 开始创建根账户对创世验证者的投票记录",
+	d.logger.Debug("开始创建根账户对创世验证者的投票记录",
 		"blockNumber", blockNumber,
 		"rootAccount", rootAccount.String(),
 		"genesisValidatorsCount", len(genesisValidators),
@@ -935,12 +929,9 @@ func (d *DPoS) CreateGenesisVotesForAllValidators(blockNumber uint64) error {
 		}
 
 		createdCount++
-		d.logger.Info("✅ 创建投票记录成功",
-			"validator", validatorAddr.String(),
-			"amount", voteAmount.String())
 	}
 
-	d.logger.Info("🎉 根账户对创世验证者的投票记录创建完成",
+	d.logger.Debug("根账户对创世验证者的投票记录创建完成",
 		"blockNumber", blockNumber,
 		"createdCount", createdCount,
 		"totalValidators", len(genesisValidators))

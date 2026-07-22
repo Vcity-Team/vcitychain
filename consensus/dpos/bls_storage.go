@@ -12,8 +12,6 @@ import (
 
 // saveValidatorsWithBLSKeysToDatabase 保存验证者信息（含BLS公钥）到数据库
 func (d *DPoS) saveValidatorsWithBLSKeysToDatabase() error {
-	d.logger.Info("💾 开始保存验证者信息（含BLS公钥）到数据库...")
-
 	if d.state == nil || d.state.StakeStore == nil {
 		d.logger.Warn("⚠️ 状态存储不可用，无法保存验证者信息到数据库")
 		return fmt.Errorf("state store not available")
@@ -26,17 +24,7 @@ func (d *DPoS) saveValidatorsWithBLSKeysToDatabase() error {
 	}
 
 	syncedCount := 0
-	for i, validator := range validators {
-		// 添加详细日志：打印验证者信息
-		d.logger.Info("🔍 准备保存验证者信息到数据库",
-			"index", i,
-			"address", validator.Address.String(),
-			"votingPower", validator.VotingPower.String(),
-			"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
-			"isActive", validator.IsActive,
-			"hasBlsKey", validator.BlsKey != nil)
-
-		// 创建DelegateInfo结构
+	for _, validator := range validators {
 		delegateInfo := &DelegateInfo{
 			Address:        validator.Address,
 			VotingPower:    new(big.Int).Set(validator.VotingPower),
@@ -50,63 +38,20 @@ func (d *DPoS) saveValidatorsWithBLSKeysToDatabase() error {
 
 		d.populateCommissionFields(validator.Address, delegateInfo)
 
-		// 添加详细日志：打印DelegateInfo信息
-		d.logger.Debug("🔍 DelegateInfo详细信息",
-			"address", delegateInfo.Address.String(),
-			"votingPower", delegateInfo.VotingPower.String(),
-			"votingPowerHex", fmt.Sprintf("0x%x", delegateInfo.VotingPower.Bytes()),
-			"totalVotes", delegateInfo.TotalVotes.String(),
-			"totalVotesHex", fmt.Sprintf("0x%x", delegateInfo.TotalVotes.Bytes()),
-			"isActive", delegateInfo.IsActive,
-			"blsPublicKeyLength", len(delegateInfo.BlsPublicKey))
-
-		// 如果有BLS公钥，保存到DelegateInfo中
 		if validator.BlsKey != nil {
-			blsKeyBytes := validator.BlsKey.Marshal()
-			delegateInfo.BlsPublicKey = blsKeyBytes
-			d.logger.Debug("✅ 保存验证者BLS公钥到数据库",
-				"address", validator.Address.String(),
-				"blsKeyLength", len(blsKeyBytes))
+			delegateInfo.BlsPublicKey = validator.BlsKey.Marshal()
 		}
 
-		// 保存到数据库
 		if err := d.state.StakeStore.setDelegateInfo(validator.Address, delegateInfo, nil); err != nil {
 			d.logger.Warn("⚠️ 保存验证者信息到数据库失败",
 				"address", validator.Address.String(),
 				"error", err)
 		} else {
 			syncedCount++
-			// 添加详细日志：打印保存成功后的信息
-			d.logger.Info("✅ 验证者信息已保存到数据库",
-				"address", validator.Address.String(),
-				"votingPower", validator.VotingPower.String(),
-				"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
-				"isActive", validator.IsActive,
-				"hasBlsKey", validator.BlsKey != nil)
-
-			// 打印BLS公钥详细信息
-			if validator.BlsKey != nil {
-				blsKeyBytes := validator.BlsKey.Marshal()
-				d.logger.Info("✅ 验证者信息（含BLS公钥）已保存到数据库",
-					"address", validator.Address.String(),
-					"votingPower", validator.VotingPower.String(),
-					"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
-					"isActive", validator.IsActive,
-					"hasBlsKey", true,
-					"blsKeyLength", len(blsKeyBytes),
-					"blsKeyHex", fmt.Sprintf("%x", blsKeyBytes[:16])+"...")
-			} else {
-				d.logger.Info("✅ 验证者信息（无BLS公钥）已保存到数据库",
-					"address", validator.Address.String(),
-					"votingPower", validator.VotingPower.String(),
-					"votingPowerHex", fmt.Sprintf("0x%x", validator.VotingPower.Bytes()),
-					"isActive", validator.IsActive,
-					"hasBlsKey", false)
-			}
 		}
 	}
 
-	d.logger.Info("💾 验证者信息（含BLS公钥）保存到数据库完成", "syncedCount", syncedCount, "totalValidators", len(validators))
+	d.logger.Debug("验证者信息保存到数据库完成", "syncedCount", syncedCount, "totalValidators", len(validators))
 	return nil
 }
 

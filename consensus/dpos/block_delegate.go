@@ -48,7 +48,7 @@ func (r *dposRuntime) getCurrentDelegate() types.Address {
 				"ℹ️ getCurrentDelegate: 共识切换前验证者集合为空（正常）",
 				"blockNumber", currentBlockNumber,
 				"consensusSwitchHeight", dposBackend.config.ConsensusSwitchHeight,
-				"note", "在7370高度之前，验证者权重为0，这是正常的")
+				"note", "共识切换前验证者权重为0是正常的")
 		} else {
 			// 在共识切换高度之后，验证者集合为空是异常情况
 			r.logOnceWithInterval("get_current_delegate_empty_after_switch", 10*time.Second, "error",
