@@ -1170,6 +1170,9 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	if collectErr != nil {
 		return nil, collectErr
 	}
+	if bitmapBits := countSignatureBitmapBits(signatureBitmap); bitmapBits != len(signatures) {
+		return nil, fmt.Errorf("proposer seal bitmap mismatch: bitmapBits=%d signatures=%d", bitmapBits, len(signatures))
+	}
 
 	r.logger.Debug("签名收集完成",
 		"totalSignatures", len(signatures),
@@ -1479,6 +1482,17 @@ func (r *dposRuntime) buildBlock() (*types.FullBlock, error) {
 	r.cachedProductionValidators = nil
 
 	return block, nil
+}
+
+// countSignatureBitmapBits 统计位图中置 1 的签名者数量。
+func countSignatureBitmapBits(bm bitmap.Bitmap) int {
+	n := 0
+	for i := uint64(0); i < bm.Len(); i++ {
+		if bm.IsSet(i) {
+			n++
+		}
+	}
+	return n
 }
 
 // localProposerOnlySignatures 提议者用本地 BLS 对 checkpoint 签名，不发起网络收集。

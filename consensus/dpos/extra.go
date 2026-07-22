@@ -1656,36 +1656,38 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		}
 	}
 
-	// 直接使用所有验证者作为签名者
-	signers := validators
-
-	// 统一门槛：使用运行时 calculateMinRequiredSignatures()
-	requiredQuorumCount := 0
-	if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance.runtime != nil {
-		requiredQuorumCount = dposInstance.runtime.calculateMinRequiredSignatures()
-	} else {
-		// 兜底（不期望走到这里）：按当前验证者数一半+1
-		requiredQuorumCount = len(validators)/2 + 1
+	// 按位图过滤真实签名者（单签 DPoS 仅 proposer 一位为 1）
+	signers, err := validators.GetFilteredValidators(s.Bitmap)
+	if err != nil {
+		return fmt.Errorf("failed to get signers from bitmap for block %d: %w", blockNumber, err)
+	}
+	bitmapSignerCount := signers.Len()
+	if bitmapSignerCount == 0 {
+		return fmt.Errorf("no signers marked in signature bitmap for block %d", blockNumber)
 	}
 
-	if len(signers) < requiredQuorumCount {
-		quorumCalculation := fmt.Sprintf("统一门槛：active/validators 一半+1 = %d", requiredQuorumCount)
+	// 单签模式（位图仅 1 位）：最低门槛 1；多位聚合时沿用 committee 半数门槛
+	requiredQuorumCount := 1
+	if bitmapSignerCount > 1 {
+		if dposInstance, exists := GetDPoSInstance("vcity_dpos"); exists && dposInstance.runtime != nil {
+			requiredQuorumCount = dposInstance.runtime.calculateMinRequiredSignatures()
+		} else {
+			requiredQuorumCount = len(validators)/2 + 1
+		}
+	}
+
+	if bitmapSignerCount < requiredQuorumCount {
+		quorumCalculation := fmt.Sprintf("位图签名者=%d, 需要=%d", bitmapSignerCount, requiredQuorumCount)
 
 		logger.Error("Signature.Verify - 法定人数不足",
 			"blockNumber", blockNumber,
-			"signersCount", len(signers),
+			"bitmapSignerCount", bitmapSignerCount,
 			"requiredQuorumCount", requiredQuorumCount,
 			"totalValidators", len(validators),
 			"quorumCalculation", quorumCalculation,
 			"signerAddresses", signers.GetAddresses())
 
-		logger.Error("🚨 区块验证失败 - 法定人数不足，将返回错误让上层处理",
-			"blockNumber", blockNumber,
-			"reason", "quorum not reached",
-			"quorumDetails", fmt.Sprintf("当前签名数: %d, 需要签名数: %d, 差距: %d",
-				len(signers), requiredQuorumCount, requiredQuorumCount-len(signers)))
-
-		return fmt.Errorf("quorum not reached: current signatures %d, required %d", len(signers), requiredQuorumCount)
+		return fmt.Errorf("quorum not reached: bitmap signers %d, required %d", bitmapSignerCount, requiredQuorumCount)
 	}
 
 	// 修复：先计算位图中设置的位数，然后创建正确长度的数组
@@ -2173,9 +2175,11 @@ func (s *Signature) Verify(blockNumber uint64, validators validator.AccountSet,
 		logger.Error("BLS签名验证失败，返回错误由上层处理",
 			"blockNumber", blockNumber,
 			"hash", hash.String(),
-			"signersCount", len(signers),
-			"publicKeysCount", len(blsPublicKeys),
-			"aggregatedSignatureLength", len(s.AggregatedSignature))
+			"bitmapSignerCount", bitmapSignerCount,
+			"validBLSKeysCount", len(validBLSKeys),
+			"totalValidators", len(validators),
+			"aggregatedSignatureLength", len(s.AggregatedSignature),
+			"bitmapHex", fmt.Sprintf("%x", s.Bitmap))
 		return fmt.Errorf("BLS signature verification failed for block %d", blockNumber)
 	}
 
