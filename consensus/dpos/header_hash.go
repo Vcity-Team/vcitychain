@@ -15,8 +15,13 @@ func InitHeaderHash() {
 }
 
 // ConfigureHeaderHashSwitchHeight sets the block height where DPoS header hashing takes precedence.
+// Also (re)installs the DPoS hash router so IBFT's earlier SetHeaderHash cannot remain in effect
+// after the consensus switch.
 func ConfigureHeaderHashSwitchHeight(height uint64) {
 	setHeaderHashSwitchHeight(height)
+	types.HeaderHash = func(h *types.Header) types.Hash {
+		return displayHeaderHash(h)
+	}
 }
 
 func setHeaderHashSwitchHeight(height uint64) {

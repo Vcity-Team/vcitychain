@@ -131,7 +131,7 @@ func (s *SignerImpl) GetIBFTExtra(header *types.Header) (*IstanbulExtra, error) 
 		CommittedSeals: s.keyManager.NewEmptyCommittedSeals(),
 	}
 
-	if header.Number > 1 {
+	if header.Number > 1 && s.parentKeyManager != nil {
 		extra.ParentCommittedSeals = s.parentKeyManager.NewEmptyCommittedSeals()
 	}
 
@@ -170,8 +170,13 @@ func (s *SignerImpl) parseDPoSCompatibleExtra(data []byte, extra *IstanbulExtra)
 	// 对于DPoS区块，我们创建一个简化的IstanbulExtra
 	// 只设置必要的字段，其他字段保持默认值
 	extra.ProposerSeal = []byte{} // DPoS不使用ProposerSeal
-	extra.CommittedSeals = s.keyManager.NewEmptyCommittedSeals()
-	extra.ParentCommittedSeals = s.parentKeyManager.NewEmptyCommittedSeals()
+	if s.keyManager != nil {
+		extra.CommittedSeals = s.keyManager.NewEmptyCommittedSeals()
+	}
+	// height==1 时 ForkManager 不会注入 parentKeyManager（nil），必须判空
+	if s.parentKeyManager != nil {
+		extra.ParentCommittedSeals = s.parentKeyManager.NewEmptyCommittedSeals()
+	}
 	extra.RoundNumber = nil
 
 	// 尝试从DPoS Extra中提取验证者信息

@@ -1074,6 +1074,8 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 			logger.Debug("🔄 设置共识切换高度", "height", vcity_dpos.config.ConsensusSwitchHeight)
 		}
 	}
+	// 必须配置，否则 IBFT→DPoS 切换后仍可能用错 header hash 路由
+	ConfigureHeaderHashSwitchHeight(vcity_dpos.config.ConsensusSwitchHeight)
 
 	// 支持驼峰和下划线两种键名
 	var validatorsCountValue interface{}
