@@ -820,6 +820,47 @@ func (d *DPoS) CreateGenesisVoteRecord(voter types.Address, delegate types.Addre
 	return d.persistVoteToDatabase(voter, delegate, amount, effectiveEpoch, applied)
 }
 
+// collectGenesisValidatorAddresses 收集创世验证者地址（Initialize 后 runtime 已有、delegates 可能尚未同步）。
+func (d *DPoS) collectGenesisValidatorAddresses() []types.Address {
+	seen := make(map[types.Address]struct{})
+	out := make([]types.Address, 0)
+
+	addAddr := func(addr types.Address) {
+		if addr == (types.Address{}) {
+			return
+		}
+		if _, ok := seen[addr]; ok {
+			return
+		}
+		seen[addr] = struct{}{}
+		out = append(out, addr)
+	}
+	addSet := func(set validator.AccountSet) {
+		for _, v := range set {
+			if v != nil {
+				addAddr(v.Address)
+			}
+		}
+	}
+
+	if d.config != nil {
+		for _, gv := range d.config.InitialDelegates {
+			addAddr(types.Address(gv.Address))
+		}
+	}
+	addSet(d.GetCurrentDelegates())
+	if d.runtime != nil {
+		addSet(d.runtime.delegates)
+	}
+	addSet(d.GetGenesisValidatorSet())
+	if len(out) == 0 {
+		if bootstrap, _, err := d.getBootstrapValidators(); err == nil {
+			addSet(bootstrap)
+		}
+	}
+	return out
+}
+
 // CreateGenesisVotesForAllValidators 在共识切换高度为所有创世验证者创建根账户的投票记录（公开方法）
 func (d *DPoS) CreateGenesisVotesForAllValidators(blockNumber uint64) error {
 	// 检查是否是共识切换高度
@@ -841,28 +882,24 @@ func (d *DPoS) CreateGenesisVotesForAllValidators(blockNumber uint64) error {
 	// 从配置读取投票金额（优先 dpos_genesis_vote_amount，未配置则回退 dpos_delegate_threshold）
 	voteAmount := d.getGenesisVoteAmount()
 
-	// 获取创世验证者列表
-	var genesisValidators []types.Address
-	if d.config != nil && len(d.config.InitialDelegates) > 0 {
-		for _, gv := range d.config.InitialDelegates {
-			genesisValidators = append(genesisValidators, types.Address(gv.Address))
-		}
-	}
-
-	// 如果配置中没有，尝试从当前验证者集合获取
-	if len(genesisValidators) == 0 {
-		currentValidators := d.GetCurrentDelegates()
-		if len(currentValidators) > 0 {
-			for _, v := range currentValidators {
-				genesisValidators = append(genesisValidators, v.Address)
-			}
-		}
-	}
+	// 从配置 / 内存 / runtime / bootstrap 收集创世验证者
+	genesisValidators := d.collectGenesisValidatorAddresses()
 
 	if len(genesisValidators) == 0 {
-		d.logger.Warn("⚠️ 创世验证者列表为空，跳过创建投票记录")
-		return nil
+		d.logger.Error("❌ 创世验证者列表为空，无法创建投票记录",
+			"blockNumber", blockNumber,
+			"runtimeDelegates", func() int {
+				if d.runtime != nil {
+					return len(d.runtime.delegates)
+				}
+				return 0
+			}())
+		return fmt.Errorf("genesis validator list is empty at consensus switch height %d", blockNumber)
 	}
+
+	d.logger.Info("📋 准备为创世验证者创建投票记录",
+		"blockNumber", blockNumber,
+		"genesisValidatorsCount", len(genesisValidators))
 
 	// 检查是否已创建投票记录（幂等性检查）
 	var stakingInfos []*StakeInfo
@@ -931,7 +968,7 @@ func (d *DPoS) CreateGenesisVotesForAllValidators(blockNumber uint64) error {
 		createdCount++
 	}
 
-	d.logger.Debug("根账户对创世验证者的投票记录创建完成",
+	d.logger.Info("✅ 根账户对创世验证者的投票记录创建完成",
 		"blockNumber", blockNumber,
 		"createdCount", createdCount,
 		"totalValidators", len(genesisValidators))

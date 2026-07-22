@@ -92,6 +92,9 @@ func (d *DPoS) initializeDelegates() error {
 		}
 		// 初始化创世验证者映射（从配置）
 		d.initializeGenesisValidatorsMap()
+	} else if d.runtime != nil && len(d.runtime.delegates) > 0 {
+		// parseValidatorsFromGenesis 写入 runtime；同步到 d.delegates 供 Start 前 CreateGenesisVotes 使用
+		d.delegates = d.runtime.delegates.Copy()
 	}
 
 	if err := d.reloadValidatorsAfterRecovery(); err != nil {
