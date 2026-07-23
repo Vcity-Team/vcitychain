@@ -486,6 +486,7 @@ func NewServer(config *Config) (*Server, error) {
 	var dirPaths = []string{
 		"blockchain",
 		"trie",
+		"dpos", // DPoS 状态库（与 consensus/ 私钥目录分离）
 	}
 
 	// Generate all the paths in the dataDir
@@ -1595,8 +1596,8 @@ func (s *Server) createDPoSEngine() (consensus.Consensus, error) {
 	config := &consensus.Config{
 		Params:      s.config.Chain.Params,
 		Config:      engineConfig,
-		Path:        filepath.Join(s.config.DataDir, "dpos"),
-		DataDir:     s.config.DataDir,
+		Path:        filepath.Join(s.config.DataDir, "consensus"), // secrets only
+		DataDir:     s.config.DataDir,                             // node root; DPoS state → DataDir/dpos
 		IsRelayer:   s.config.Relayer,
 		RPCEndpoint: s.config.JSONRPC.JSONRPCAddr.String(),
 	}

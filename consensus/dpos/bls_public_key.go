@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math/big"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/Vcity-Team/vcitychain/bls"
@@ -15,13 +14,14 @@ import (
 
 // readBLSPrivateKeyAndGeneratePublicKey 从私钥文件生成BLS公钥
 func (d *DPoS) readBLSPrivateKeyAndGeneratePublicKey(validatorAddress types.Address) ([]byte, error) {
-	// 1. 构建私钥文件路径 - 为每个验证者生成独立的BLS私钥文件
-	parentDir := filepath.Dir(d.dataDir) // 获取 "node1\consensus"
-	keyFilePath := filepath.Join(parentDir, "validator-bls.key")
+	keyFilePath := d.validatorBLSKeyPath()
+	if keyFilePath == "" {
+		return nil, fmt.Errorf("BLS private key path unavailable")
+	}
 
 	d.logger.Debug("🔍 BLS私钥文件路径",
 		"dataDir", d.dataDir,
-		"parentDir", parentDir,
+		"nodeDataDir", d.getNodeDataDir(),
 		"keyFilePath", keyFilePath)
 
 	// 2. 检查文件是否存在
@@ -68,15 +68,11 @@ func (d *DPoS) readBLSPrivateKeyAndGeneratePublicKey(validatorAddress types.Addr
 func (d *DPoS) getBLSKeyForValidator(address types.Address) (*bls.PublicKey, error) {
 	// 检查是否是当前节点
 	if d.key != nil && address == types.Address(d.key.Address()) {
-		dataDir := d.getDataDir()
-		keyFilePath := ""
-		if dataDir != "" {
-			parentDir := filepath.Dir(dataDir) // 获取 "nodeX\\consensus"
-			keyFilePath = filepath.Join(parentDir, "validator-bls.key")
-		}
+		keyFilePath := d.validatorBLSKeyPath()
 		d.logger.Info("📄 本地获取BLS公钥",
 			"address", address.String(),
-			"dataDir", dataDir,
+			"dataDir", d.getDataDir(),
+			"nodeDataDir", d.getNodeDataDir(),
 			"keyFilePath", keyFilePath)
 
 		// 当前节点：从本地文件读取BLS私钥
@@ -166,15 +162,11 @@ func (d *DPoS) GetBLSKeyBytesFromGenesis(address types.Address) ([]byte, error) 
 		return nil, fmt.Errorf("只有本地节点才能从validator-bls.key文件获取BLS公钥，请求地址: %s", address.String())
 	}
 
-	// 2. 获取数据目录路径
-	dataDir := d.getDataDir()
-	if dataDir == "" {
+	// 2. 构建 BLS 私钥路径（始终在 nodeRoot/consensus/，与 dpos 状态目录分离）
+	keyFilePath := d.validatorBLSKeyPath()
+	if keyFilePath == "" {
 		return nil, fmt.Errorf("data directory not available")
 	}
-
-	// 3. 构建BLS私钥文件路径 - 从dataDir的父目录找consensus
-	parentDir := filepath.Dir(dataDir) // 获取 "node1\consensus"
-	keyFilePath := filepath.Join(parentDir, "validator-bls.key")
 
 	// 4. 检查文件是否存在
 	if _, err := os.Stat(keyFilePath); os.IsNotExist(err) {
@@ -235,13 +227,8 @@ func (d *DPoS) getBLSKeyBytes() ([]byte, error) {
 	}
 
 	// 如果密钥管理器没有，尝试从validator-bls.key文件获取
-	dataDir := d.getDataDir()
-	if dataDir != "" {
-		// 构建BLS私钥文件路径 - 从dataDir的父目录找consensus
-		// dataDir = "node1\consensus\dpos"，需要回到 "node1\consensus"
-		parentDir := filepath.Dir(dataDir) // 获取 "node1\consensus"
-		keyFilePath := filepath.Join(parentDir, "validator-bls.key")
-
+	keyFilePath := d.validatorBLSKeyPath()
+	if keyFilePath != "" {
 		// 检查文件是否存在
 		if _, err := os.Stat(keyFilePath); err == nil {
 			d.logger.Info("从validator-bls.key文件获取BLS公钥",
@@ -269,12 +256,11 @@ func (d *DPoS) getBLSKeyBytes() ([]byte, error) {
 						"address", d.key.Address().String(),
 						"publicKeyLength", len(blsKeyBytes))
 					return blsKeyBytes, nil
-				} else {
-					d.logger.Warn("解析validator-bls.key文件失败",
-						"address", d.key.Address().String(),
-						"filePath", keyFilePath,
-						"error", err)
 				}
+				d.logger.Warn("解析validator-bls.key文件失败",
+					"address", d.key.Address().String(),
+					"filePath", keyFilePath,
+					"error", err)
 			} else {
 				d.logger.Warn("读取validator-bls.key文件失败",
 					"address", d.key.Address().String(),

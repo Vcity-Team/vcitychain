@@ -3,7 +3,6 @@ package dpos
 import (
 	"encoding/binary"
 	"fmt"
-	"path/filepath"
 
 	"github.com/Vcity-Team/vcitychain/types"
 	"github.com/hashicorp/go-hclog"
@@ -60,8 +59,20 @@ func (d *DPoS) PrepareSameHeightForkReplay(replacedBlock *types.Block) error {
 	return nil
 }
 
-func rollbackDPoSMetadataAboveHeight(dataDir string, targetHeight uint64, logger hclog.Logger) error {
-	dposDBPath := filepath.Join(dataDir, "consensus", "dpos", "dpos.db")
+func rollbackDPoSMetadataAboveHeight(dposDataDir string, targetHeight uint64, logger hclog.Logger) error {
+	dposDBPath := DPoSDBPath(dposDataDir)
+	if !fileExists(dposDBPath) {
+		// Offline heal may receive node root; try resolve.
+		if p, dir, ok := ResolveDPoSDBPathForNode(dposDataDir); ok {
+			dposDBPath = p
+			_ = dir
+		} else {
+			if logger != nil {
+				logger.Debug("DPoS db not found for heal, skip", "path", dposDBPath)
+			}
+			return nil
+		}
+	}
 	db, err := bolt.Open(dposDBPath, 0666, nil)
 	if err != nil {
 		return fmt.Errorf("open dpos db: %w", err)

@@ -80,7 +80,8 @@ type guardedDataDTO struct {
 // runtimeConfig is a struct that holds configuration data for given consensus runtime
 type runtimeConfig struct {
 	PolyBFTConfig         *PolyBFTConfig
-	DataDir               string
+	DataDir               string // DPoS 状态目录（node1/dpos）
+	NodeDataDir           string // 节点根目录（node1），用于 consensus/validator*.key
 	Key                   *wallet.Key
 	State                 *State
 	blockchain            blockchainBackend

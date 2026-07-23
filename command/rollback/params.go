@@ -66,6 +66,9 @@ type rollbackParams struct {
 	consensusSwitchHeight uint64
 	epochSize             uint64
 	blockTime             time.Duration
+
+	// 解析到的 DPoS 状态目录（node/dpos 或兼容旧路径 node/consensus/dpos）
+	dposDataDir string
 }
 
 func (p *rollbackParams) getRequiredFlags() []string {
@@ -529,18 +532,23 @@ func (p *rollbackParams) cleanupDPoSConsensusState(logger hclog.Logger) error {
 		"targetEpoch", targetEpoch,
 		"targetHeight", p.targetHeight)
 
-	// 打开DPoS数据库（实际路径为 consensus/dpos/dpos.db）
-	dposDBPath := filepath.Join(p.dataDir, "consensus", "dpos", "dpos.db")
-	if _, err := os.Stat(dposDBPath); os.IsNotExist(err) {
-		logger.Debug("DPoS database not found, skipping cleanup", "path", dposDBPath)
+	// 打开 DPoS 数据库（优先 node/dpos/dpos.db，兼容旧路径 node/consensus/dpos/dpos.db）
+	dposDBPath, dposDataDir, ok := resolveRollbackDPoSPaths(p.dataDir)
+	if !ok {
+		logger.Debug("DPoS database not found, skipping cleanup",
+			"triedNew", filepath.Join(p.dataDir, "dpos", "dpos.db"),
+			"triedLegacy", filepath.Join(p.dataDir, "consensus", "dpos", "dpos.db"))
 		return nil
 	}
+	p.dposDataDir = dposDataDir
 
 	db, err := bolt.Open(dposDBPath, 0666, nil)
 	if err != nil {
 		return fmt.Errorf("failed to open DPoS database: %w", err)
 	}
 	defer db.Close()
+
+	logger.Info("Opened DPoS database for rollback cleanup", "path", dposDBPath)
 
 	// 清理各个bucket的数据
 	err = db.Update(func(tx *bolt.Tx) error {
@@ -701,8 +709,15 @@ func (p *rollbackParams) cleanupEpochRewardsBucket(
 	targetEpoch uint64,
 	logger hclog.Logger,
 ) error {
-	// 奖励数据在独立的数据库中
-	rewardDBPath := filepath.Join(p.dataDir, "dpos.db.rewards")
+	// 奖励数据在独立的数据库中（与 dpos.db 同目录）
+	rewardDBPath := filepath.Join(p.dposDataDir, "dpos.db.rewards")
+	if p.dposDataDir == "" {
+		if _, dir, ok := resolveRollbackDPoSPaths(p.dataDir); ok {
+			rewardDBPath = filepath.Join(dir, "dpos.db.rewards")
+		} else {
+			return nil
+		}
+	}
 	if _, err := os.Stat(rewardDBPath); os.IsNotExist(err) {
 		return nil
 	}
@@ -1023,4 +1038,22 @@ func (p *rollbackParams) getResult() command.CommandResult {
 		BlocksReplayed:   p.blocksReplayed,
 		FinalHeadHeight:  finalHead,
 	}
+}
+
+// resolveRollbackDPoSPaths 优先新路径 node/dpos，兼容旧路径 node/consensus/dpos。
+func resolveRollbackDPoSPaths(nodeDataDir string) (dbPath, dposDataDir string, ok bool) {
+	if nodeDataDir == "" {
+		return "", "", false
+	}
+	candidates := []string{
+		filepath.Join(nodeDataDir, "dpos"),
+		filepath.Join(nodeDataDir, "consensus", "dpos"),
+	}
+	for _, dir := range candidates {
+		p := filepath.Join(dir, "dpos.db")
+		if _, err := os.Stat(p); err == nil {
+			return p, dir, true
+		}
+	}
+	return "", "", false
 }

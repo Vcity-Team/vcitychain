@@ -411,8 +411,10 @@ type DPoS struct {
 	// 区块时间
 	blockTime time.Duration
 
-	// 数据目录
+	// 数据目录：DPoS 状态库目录（node1/dpos，兼容期也可能是 node1/consensus/dpos）
 	dataDir string
+	// 节点根目录（node1），用于定位 consensus/validator*.key，与 DPoS 状态目录分离
+	nodeDataDir string
 
 	// blockExecPersistSideEffects: when false, block execution skips Bolt side effects (A-lite verify).
 	blockExecPersistSideEffects bool
@@ -1611,15 +1613,32 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 		"ConfigType", fmt.Sprintf("%T", params.Config),
 		"ConfigContent", fmt.Sprintf("%+v", params.Config))
 
-	if params.Config.Path != "" {
-		vcity_dpos.dataDir = filepath.Join(params.Config.Path, "dpos")
-		vcity_dpos.logger.Debug("DPoS data directory set", "path", vcity_dpos.dataDir)
+	nodeDataDir := ResolveNodeDataDir(params.Config)
+	vcity_dpos.nodeDataDir = nodeDataDir
+	if nodeDataDir != "" {
+		res, err := ResolveDPoSDataDir(nodeDataDir, vcity_dpos.logger)
+		if err != nil {
+			vcity_dpos.logger.Error("failed to resolve DPoS data directory",
+				"nodeDataDir", nodeDataDir, "error", err)
+			vcity_dpos.dataDir = NewDPoSDataDir(nodeDataDir)
+		} else {
+			vcity_dpos.dataDir = res.DataDir
+			if res.Migrated {
+				vcity_dpos.logger.Info("DPoS state migrated to top-level dpos/",
+					"path", res.DataDir)
+			}
+			if res.UsedLegacyFallback {
+				vcity_dpos.logger.Warn("using legacy DPoS path under consensus/; retry migration after fixing disk/permissions",
+					"path", res.DataDir)
+			}
+		}
+		vcity_dpos.logger.Info("DPoS data directory set",
+			"nodeDataDir", nodeDataDir,
+			"dposDataDir", vcity_dpos.dataDir,
+			"db", DPoSDBPath(vcity_dpos.dataDir))
 	} else {
-		vcity_dpos.logger.Warn("Config path not set, DPoS data directory will not be available")
-
-		defaultPath := "./dpos"
-		vcity_dpos.dataDir = defaultPath
-		vcity_dpos.logger.Info("Using default DPoS data directory", "path", defaultPath)
+		vcity_dpos.logger.Warn("node data dir not set, using default ./dpos")
+		vcity_dpos.dataDir = "./dpos"
 	}
 
 	vcity_dpos.voters = make(map[types.Address]*VoterInfo)
@@ -1771,7 +1790,7 @@ func (d *DPoS) Initialize() error {
 		"dataDirLength", len(d.dataDir))
 
 	if d.dataDir != "" {
-		statePath := filepath.Join(d.dataDir, "dpos.db")
+		statePath := DPoSDBPath(d.dataDir)
 		d.logger.Debug("Creating state store", "path", statePath)
 
 		// 确保目录存在
@@ -1834,6 +1853,7 @@ func (d *DPoS) Initialize() error {
 
 	runtimeConfig := &runtimeConfig{
 		DataDir:          d.dataDir,
+		NodeDataDir:      d.getNodeDataDir(),
 		Key:              d.key,
 		State:            d.state,
 		blockchain:       d.blockchain,
@@ -2970,6 +2990,18 @@ func (d *DPoS) getDataDir() string {
 	}
 
 	return ""
+}
+
+func (d *DPoS) getNodeDataDir() string {
+	if d.nodeDataDir != "" {
+		return d.nodeDataDir
+	}
+	return NodeDataDirFromDPoSDataDir(d.dataDir)
+}
+
+// validatorBLSKeyPath 返回本节点 BLS 私钥路径（始终在 nodeRoot/consensus/ 下，与 dpos 状态库分离）。
+func (d *DPoS) validatorBLSKeyPath() string {
+	return ValidatorBLSKeyPath(d.getNodeDataDir())
 }
 
 // syncRuntimeDelegatesWithRetry 异步同步 dposRuntime 的 delegates 状态，使用重试机制

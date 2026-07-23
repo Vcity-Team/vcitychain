@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/big"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -268,14 +267,8 @@ func (d *DPoS) persistSingleDelegateToDatabase(del *validator.ValidatorMetadata)
 		d.logger.Debug("ℹ️ 受托人BLS公钥为nil，尝试从创世文件恢复",
 			"address", del.Address.String())
 
-		// 从validator-bls.key文件中查找BLS公钥
-		dataDir := d.getDataDir()
-		if dataDir != "" {
-			// 构建BLS私钥文件路径 - 从dataDir的父目录找consensus
-			// dataDir = "node1\dpos"，需要回到 "node1\consensus"
-			parentDir := filepath.Dir(dataDir) // 获取 "node1"
-			keyFilePath := filepath.Join(parentDir, "consensus", "validator-bls.key")
-
+		// 从validator-bls.key文件中查找BLS公钥（始终在 nodeRoot/consensus/）
+		if keyFilePath := d.validatorBLSKeyPath(); keyFilePath != "" {
 			// 检查文件是否存在
 			if _, err := os.Stat(keyFilePath); err == nil {
 				// 读取私钥文件
@@ -437,14 +430,8 @@ func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.Accoun
 			d.logger.Debug("ℹ️ 受托人BLS公钥为nil，尝试从创世文件恢复",
 				"address", del.Address.String())
 
-			// 从validator-bls.key文件中查找BLS公钥
-			dataDir := d.getDataDir()
-			if dataDir != "" {
-				// 构建BLS私钥文件路径 - 从dataDir的父目录找consensus
-				// dataDir = "node1\dpos"，需要回到 "node1\consensus"
-				parentDir := filepath.Dir(dataDir) // 获取 "node1"
-				keyFilePath := filepath.Join(parentDir, "consensus", "validator-bls.key")
-
+			// 从validator-bls.key文件中查找BLS公钥（始终在 nodeRoot/consensus/）
+			if keyFilePath := d.validatorBLSKeyPath(); keyFilePath != "" {
 				// 检查文件是否存在
 				if _, err := os.Stat(keyFilePath); err == nil {
 					// 读取私钥文件

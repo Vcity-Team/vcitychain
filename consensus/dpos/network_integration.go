@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -1871,16 +1870,7 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 			if isLocalRequest {
 
 				// 先获取文件路径用于日志
-				dataDir := ni.getDataDir()
-				var keyFilePath string
-				if dataDir != "" {
-					if strings.Contains(dataDir, "consensus") {
-						keyFilePath = filepath.Join(dataDir, "validator-bls.key")
-					} else {
-						parentDir := filepath.Dir(dataDir)
-						keyFilePath = filepath.Join(parentDir, "consensus", "validator-bls.key")
-					}
-				}
+				keyFilePath := ValidatorBLSKeyPath(NodeDataDirFromDPoSDataDir(ni.getDataDir()))
 
 				if keyBytes, err := ni.findBLSKeyFromGenesisFile(requestMsg.RequestedAddress); err == nil && len(keyBytes) > 0 {
 					found = true
@@ -1979,32 +1969,9 @@ func (ni *NetworkIntegration) sendBLSKeyResponse(responseMsg *BLSKeyResponseMess
 func (ni *NetworkIntegration) findBLSKeyFromGenesisFile(address types.Address) ([]byte, error) {
 	// 修改：不再从创世文件查找，而是从validator-bls.key文件查找
 
-	// 1. 获取数据目录路径
-	dataDir := ni.getDataDir()
-	if dataDir == "" {
+	keyFilePath := ValidatorBLSKeyPath(NodeDataDirFromDPoSDataDir(ni.getDataDir()))
+	if keyFilePath == "" {
 		return nil, fmt.Errorf("data directory not available")
-	}
-
-	// 2. 构建BLS私钥文件路径
-	// 需要确保路径是 nodeX\consensus\validator-bls.key
-	var keyFilePath string
-
-	// 检查dataDir的结构
-	if strings.Contains(dataDir, "consensus") {
-		// dataDir包含consensus，需要检查是否还有dpos子目录
-		if strings.Contains(dataDir, "dpos") {
-			// dataDir = "node4\consensus\dpos"，需要回到 "node4\consensus"
-			parentDir := filepath.Dir(dataDir) // 获取 "node4\consensus"
-			keyFilePath = filepath.Join(parentDir, "validator-bls.key")
-		} else {
-			// dataDir = "node4\consensus"，直接使用
-			keyFilePath = filepath.Join(dataDir, "validator-bls.key")
-		}
-	} else {
-		// dataDir不包含consensus目录，需要添加
-		// dataDir = "node1\dpos"，需要回到 "node1\consensus"
-		parentDir := filepath.Dir(dataDir) // 获取 "node1"
-		keyFilePath = filepath.Join(parentDir, "consensus", "validator-bls.key")
 	}
 
 	// 3. 检查文件是否存在

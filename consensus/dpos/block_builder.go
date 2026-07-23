@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+<<<<<<< Updated upstream
 	"path/filepath"
 	"sort"
+=======
+>>>>>>> Stashed changes
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2630,32 +2633,25 @@ func (r *dposRuntime) verifyValidatorSignature(delegate *validator.ValidatorMeta
 				r.logger.Warn("⚠️ 本地验证者缺少BLS公钥，尝试从validator-bls.key文件恢复",
 					"validator", delegate.Address.String())
 
-				if r.config != nil && r.config.DataDir != "" {
-					// 构建BLS私钥文件路径
-					parentDir := filepath.Dir(r.config.DataDir)
-					keyFilePath := filepath.Join(parentDir, "validator-bls.key")
-
-					// 检查文件是否存在
+				keyFilePath := ""
+				if r.config != nil {
+					keyFilePath = ValidatorBLSKeyPath(r.config.NodeDataDir)
+					if keyFilePath == "" {
+						keyFilePath = ValidatorBLSKeyPath(NodeDataDirFromDPoSDataDir(r.config.DataDir))
+					}
+				}
+				if keyFilePath != "" {
 					if _, err := os.Stat(keyFilePath); err == nil {
-						// 读取私钥文件
 						privateKeyData, err := os.ReadFile(keyFilePath)
 						if err == nil {
-							// 获取十六进制字符串（去除可能的换行符）
 							privateKeyHex := strings.TrimSpace(string(privateKeyData))
-
-							// 检查并修正私钥长度
 							if len(privateKeyHex)%2 != 0 {
 								privateKeyHex = "0" + privateKeyHex
 							}
-
-							// 解析BLS私钥
 							privateKey, err := bls.UnmarshalPrivateKey([]byte(privateKeyHex))
 							if err == nil {
-								// 从私钥生成公钥
 								publicKey := privateKey.PublicKey()
 								delegate.BlsKey = publicKey
-
-								// 将BLS公钥保存到网络集成层缓存
 								if r.networkIntegration != nil {
 									publicKeyBytes := publicKey.Marshal()
 									if err := r.networkIntegration.saveBLSKey(delegate.Address, publicKeyBytes); err != nil {
@@ -2664,7 +2660,6 @@ func (r *dposRuntime) verifyValidatorSignature(delegate *validator.ValidatorMeta
 											"error", err)
 									}
 								}
-
 								r.logger.Info("✅ 本地验证者BLS公钥恢复成功",
 									"validator", delegate.Address.String(),
 									"filePath", keyFilePath)
