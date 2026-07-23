@@ -6,11 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
-<<<<<<< Updated upstream
-	"path/filepath"
 	"sort"
-=======
->>>>>>> Stashed changes
 	"strings"
 	"sync"
 	"sync/atomic"
