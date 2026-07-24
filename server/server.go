@@ -248,6 +248,13 @@ func (s *Server) StartDPoSEngine(height uint64) error {
 	engineConfig["enable_dag_execution"] = s.config.EnableDAGExecution
 	engineConfig["enableParallelExecution"] = s.config.EnableParallelExecution
 	engineConfig["enable_parallel_execution"] = s.config.EnableParallelExecution
+	if mode := strings.TrimSpace(s.config.ParallelSameToMode); mode != "" {
+		engineConfig["parallelSameToMode"] = mode
+		engineConfig["parallel_same_to_mode"] = mode
+	} else {
+		engineConfig["parallelSameToMode"] = "strict"
+		engineConfig["parallel_same_to_mode"] = "strict"
+	}
 
 	if err := s.applyOptionalDPoSRuntimeConfig(engineConfig); err != nil {
 		return err
@@ -941,6 +948,13 @@ func (s *Server) setupConsensus() error {
 	engineConfig["enable_dag_execution"] = s.config.EnableDAGExecution
 	engineConfig["enableParallelExecution"] = s.config.EnableParallelExecution
 	engineConfig["enable_parallel_execution"] = s.config.EnableParallelExecution
+	if mode := strings.TrimSpace(s.config.ParallelSameToMode); mode != "" {
+		engineConfig["parallelSameToMode"] = mode
+		engineConfig["parallel_same_to_mode"] = mode
+	} else {
+		engineConfig["parallelSameToMode"] = "strict"
+		engineConfig["parallel_same_to_mode"] = "strict"
+	}
 
 	if err := s.applyOptionalDPoSRuntimeConfig(engineConfig); err != nil {
 		return err

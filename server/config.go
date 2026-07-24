@@ -110,6 +110,8 @@ type Config struct {
 	EnableDAGExecution bool `yaml:"enable_dag_execution"`
 	// enable_parallel_execution: ProcessBlock 是否按账户并行执行（默认 true）
 	EnableParallelExecution bool `yaml:"enable_parallel_execution"`
+	// parallel_same_to_mode: strict | relaxed | aggressive（默认 strict；同 To 依赖严格度）
+	ParallelSameToMode string `yaml:"parallel_same_to_mode"`
 
 	MainnetEligibilityRPC           string `yaml:"mainnet_eligibility_rpc"`
 	MainnetMinStakeWei              string `yaml:"mainnet_min_stake_wei"`

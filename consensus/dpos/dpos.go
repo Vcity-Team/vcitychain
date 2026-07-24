@@ -337,6 +337,8 @@ type DPoSConfig struct {
 	EnableDAGExecution bool `json:"enableDAGExecution" yaml:"enable_dag_execution"`
 	// EnableParallelExecution ProcessBlock 是否按账户并行执行（默认 true）
 	EnableParallelExecution bool `json:"enableParallelExecution" yaml:"enable_parallel_execution"`
+	// ParallelSameToMode: strict | relaxed | aggressive（默认 strict；控制同 To 是否强制串行）
+	ParallelSameToMode string `json:"parallelSameToMode" yaml:"parallel_same_to_mode"`
 
 	// 公测主网准入（默认全关，正式主网不受影响）
 	MainnetEligibilityRPC           string   `json:"mainnet_eligibility_rpc" yaml:"mainnet_eligibility_rpc"`
@@ -1041,6 +1043,7 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 			WallClockSlotAlignment:  true,
 			EnableDAGExecution:      true,
 			EnableParallelExecution: true,
+			ParallelSameToMode:      "strict",
 		},
 		rawConfig:   params.Config.Config,       // 存储原始配置
 		lastLogTime: make(map[string]time.Time), // 初始化日志频率限制
@@ -1701,6 +1704,14 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 				"value", v, "type", fmt.Sprintf("%T", v))
 		}
 	}
+	if v, ok := getConfigValue(
+		"parallelSameToMode", "parallel_same_to_mode",
+		"parallelDependencyMode", "parallel_dependency_mode", // legacy aliases
+	); ok {
+		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+			vcity_dpos.config.ParallelSameToMode = strings.TrimSpace(s)
+		}
+	}
 
 	if v, ok := getConfigValue("mainnet_eligibility_rpc"); ok {
 		if s, ok := v.(string); ok {
@@ -1744,7 +1755,8 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 
 	logger.Info("⚙️ 并行执行配置",
 		"enableDAGExecution", vcity_dpos.config.EnableDAGExecution,
-		"enableParallelExecution", vcity_dpos.config.EnableParallelExecution)
+		"enableParallelExecution", vcity_dpos.config.EnableParallelExecution,
+		"parallelSameToMode", vcity_dpos.config.ParallelSameToMode)
 	if vcity_dpos.config.Executor != nil {
 		vcity_dpos.config.Executor.SetEnableParallelExecution(vcity_dpos.config.EnableParallelExecution)
 	}

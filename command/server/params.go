@@ -277,6 +277,7 @@ func (p *serverParams) generateConfig() *server.Config {
 		DPoSRelaxHeaderTimestampOrder: p.rawConfig.DPoSRelaxHeaderTimestampOrder,
 		EnableDAGExecution:            p.rawConfig.EnableDAGExecution,
 		EnableParallelExecution:       p.rawConfig.EnableParallelExecution,
+		ParallelSameToMode:            p.rawConfig.ParallelSameToMode,
 
 		MainnetEligibilityRPC:           p.rawConfig.MainnetEligibilityRPC,
 		MainnetMinStakeWei:              p.rawConfig.MainnetMinStakeWei,

@@ -64,6 +64,9 @@ type BlockBuilderParams struct {
 
 	// EnableDAGExecution 出块 Fill 是否走 DAG/并行打包
 	EnableDAGExecution bool
+
+	// ParallelSameToMode: strict | relaxed | aggressive（默认 strict）
+	ParallelSameToMode string
 }
 
 // NewBlockBuilder creates a new block builder
@@ -71,6 +74,7 @@ func NewBlockBuilder(params *BlockBuilderParams) blockBuilder {
 	return &BlockBuilder{
 		params:             params,
 		enableDAGExecution: params.EnableDAGExecution,
+		dependencyMode:     dag.ParseSameToMode(params.ParallelSameToMode),
 	}
 }
 
@@ -100,6 +104,7 @@ type BlockBuilder struct {
 
 	// Stage 3: DAG dependency detection support
 	enableDAGExecution bool // Feature flag to enable/disable DAG execution
+	dependencyMode     dag.SameToMode
 }
 
 // Reset initializes block builder before adding transactions and actual block building
@@ -453,25 +458,54 @@ func (b *BlockBuilder) filterCandidatesByRemainingGas(candidates []*types.Transa
 }
 
 func (b *BlockBuilder) executeDAGBatch(candidates []*types.Transaction, blockNumber uint64) ([]*types.Transaction, bool, error) {
-	analyzer := dag.NewDependencyAnalyzer(b.params.Logger)
-	dependencies := analyzer.DetectDependencies(candidates)
+	analyzer := dag.NewDependencyAnalyzerWithMode(b.dependencyMode, b.params.Logger)
+	dependencies, depStats := analyzer.DetectDependenciesWithStats(candidates)
+
+	b.params.Logger.Info("📊 [BlockBuilder] parallel dependency stats",
+		"blockNumber", blockNumber,
+		"mode", depStats.Mode,
+		"txCount", depStats.TxCount,
+		"nonceEdges", depStats.NonceEdges,
+		"transferEdges", depStats.TransferEdges,
+		"sameToEdges", depStats.SameToEdges,
+		"totalDepEdges", depStats.TotalDepEdges,
+		"dependentTxs", depStats.DependentTxs,
+		"independentTxs", depStats.IndependentTxs)
 
 	if !analyzer.HasDependencies(dependencies) {
 		b.params.Logger.Debug("ℹ️ [BlockBuilder.fillWithDAG] 账户分组并行执行",
 			"count", len(candidates),
-			"blockNumber", blockNumber)
+			"blockNumber", blockNumber,
+			"mode", depStats.Mode)
 
 		return b.executeAccountGroupBatch(candidates)
 	}
 
 	b.params.Logger.Debug("✅ [BlockBuilder.fillWithDAG] DAG执行",
 		"count", len(candidates),
-		"blockNumber", blockNumber)
+		"blockNumber", blockNumber,
+		"mode", depStats.Mode)
 
 	transactionDAG, err := dag.BuildDAG(candidates, dependencies)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to build DAG: %w", err)
 	}
+
+	levelCount := 0
+	maxWidth := 0
+	if transactionDAG != nil && transactionDAG.LevelGroups != nil {
+		levelCount = len(transactionDAG.LevelGroups)
+		for _, group := range transactionDAG.LevelGroups {
+			if len(group) > maxWidth {
+				maxWidth = len(group)
+			}
+		}
+	}
+	b.params.Logger.Info("📊 [BlockBuilder] DAG topology",
+		"blockNumber", blockNumber,
+		"dagLevels", levelCount,
+		"maxLevelWidth", maxWidth,
+		"sameToEdges", depStats.SameToEdges)
 
 	dagExecutor := dag.NewDAGExecutor(b.state, b.params.Logger)
 	if err := dagExecutor.ExecuteDAG(transactionDAG); err != nil {

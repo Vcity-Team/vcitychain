@@ -1193,7 +1193,8 @@ func (p *blockchainWrapper) NewBlockBuilder(
 		BaseFee:              p.blockchain.CalculateBaseFee(parent),
 		TxPool:               txPool,
 		Logger:               logger,
-		EnableDAGExecution:   p.config.EnableDAGExecution,
+		EnableDAGExecution:     p.config.EnableDAGExecution,
+		ParallelSameToMode: p.config.ParallelSameToMode,
 	}), nil
 }
 

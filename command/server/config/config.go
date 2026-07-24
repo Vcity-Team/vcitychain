@@ -100,6 +100,8 @@ type Config struct {
 	EnableDAGExecution bool `json:"enable_dag_execution" yaml:"enable_dag_execution"`
 	// enable_parallel_execution: ProcessBlock 是否按账户并行执行（默认 true）
 	EnableParallelExecution bool `json:"enable_parallel_execution" yaml:"enable_parallel_execution"`
+	// parallel_same_to_mode: strict | relaxed | aggressive（默认 strict；同 To 依赖严格度）
+	ParallelSameToMode string `json:"parallel_same_to_mode" yaml:"parallel_same_to_mode"`
 
 	// 公测主网准入（默认 false；指向主网 JSON-RPC 校验质押）
 	MainnetEligibilityRPC           string `json:"mainnet_eligibility_rpc" yaml:"mainnet_eligibility_rpc"`
@@ -228,6 +230,7 @@ func DefaultConfig() *Config {
 		DPoSWallClockSlotAlignment: true,  // 块头时间戳默认对齐墙钟 slot
 		EnableDAGExecution:         true,  // 默认启用 DAG 出块填充
 		EnableParallelExecution:    true,  // 默认启用账户并行执行
+		ParallelSameToMode:         "strict",
 	}
 }
 
