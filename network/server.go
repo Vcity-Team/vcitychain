@@ -90,6 +90,8 @@ type Server struct {
 	temporaryDials sync.Map // map of temporary connections; peerID -> bool
 
 	bootnodes *bootnodesWrapper // reference of all bootnodes for the node
+
+	ipGater *ipConnectionGater // per-IP inbound connection limiter
 }
 
 // NewServer returns a new instance of the networking server
@@ -120,12 +122,15 @@ func NewServer(logger hclog.Logger, config *Config) (*Server, error) {
 		return addrs
 	}
 
+	ipGater := newIPConnectionGater(maxConnectionsPerIP)
+
 	host, err := libp2p.New(
 		// Use noise as the encryption protocol
 		libp2p.Security(noise.ID, noise.New),
 		libp2p.ListenAddrs(listenAddr),
 		libp2p.AddrsFactory(addrsFactory),
 		libp2p.Identity(key),
+		libp2p.ConnectionGater(ipGater),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create libp2p stack: %w", err)
@@ -156,6 +161,7 @@ func NewServer(logger hclog.Logger, config *Config) (*Server, error) {
 			config.MaxInboundPeers,
 			config.MaxOutboundPeers,
 		),
+		ipGater: ipGater,
 	}
 
 	// start gossip protocol
@@ -320,11 +326,15 @@ func (s *Server) Start() error {
 	go s.runDial()
 	go s.keepAliveMinimumPeerConnections()
 
-	// watch for disconnected peers
+	// watch for connected/disconnected peers
 	s.host.Network().Notify(&network.NotifyBundle{
+		ConnectedF: func(net network.Network, conn network.Conn) {
+			s.ipGater.onConnected(ipFromMultiaddr(conn.RemoteMultiaddr()))
+		},
 		DisconnectedF: func(net network.Network, conn network.Conn) {
 			// Update the local connection metrics
 			s.removePeer(conn.RemotePeer())
+			s.ipGater.onDisconnected(ipFromMultiaddr(conn.RemoteMultiaddr()))
 		},
 	})
 
