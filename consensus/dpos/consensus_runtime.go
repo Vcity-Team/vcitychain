@@ -43,9 +43,11 @@ var (
 // txPoolInterface is an abstraction of transaction pool
 type txPoolInterface interface {
 	Prepare()
+	SyncPrepareNonces(map[types.Address]uint64)
 	Length() uint64
 	Peek() *types.Transaction
 	Pop(*types.Transaction)
+	DiscardExecutable(*types.Transaction)
 	Drop(*types.Transaction)
 	Demote(*types.Transaction)
 	SetSealing(bool)

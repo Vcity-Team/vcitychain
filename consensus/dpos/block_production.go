@@ -13,6 +13,10 @@ import (
 // preCommitPeerProbeTimeout 提交前 P2P 探测下一高度的超时（改法 C）。
 const preCommitPeerProbeTimeout = 300 * time.Millisecond
 
+// epochEndBuildTimeout epoch 末块允许的最大构建耗时（奖励计算可能超过 1 个 blockWindow）。
+// 仅作用于 isEpochEndBlock；普通块仍受 blockWindow 约束。
+const epochEndBuildTimeout = 30 * time.Second
+
 // startBlockProduction 启动区块生产
 func (r *dposRuntime) startBlockProduction() error {
 	if r.config == nil || r.config.Key == nil {
@@ -667,14 +671,21 @@ func (r *dposRuntime) produceBlock() error {
 	if r.config.blockScheduler != nil && buildStartSlot >= 0 {
 		blockWindow := r.config.blockScheduler.GetBlockWindow()
 		buildDuration := time.Since(buildStartTime)
+		isEpochEnd := r.isEpochEndBlock(nextBlockNumber)
+		maxBuildDuration := blockWindow
+		if isEpochEnd {
+			maxBuildDuration = epochEndBuildTimeout
+		}
 
-		if buildDuration > blockWindow {
+		if buildDuration > maxBuildDuration {
 			r.logger.Info("⏰ [produceBlock] 区块被丢弃：构建耗时超过slot时间",
 				"blockNumber", nextBlockNumber,
 				"buildDuration", buildDuration.String(),
 				"blockWindow", blockWindow.String(),
+				"maxBuildDuration", maxBuildDuration.String(),
+				"isEpochEndBlock", isEpochEnd,
 				"buildStartSlot", buildStartSlot,
-				"reason", fmt.Sprintf("构建耗时 %v 超过slot时间窗口 %v", buildDuration, blockWindow))
+				"reason", fmt.Sprintf("构建耗时 %v 超过允许上限 %v", buildDuration, maxBuildDuration))
 			return nil
 		}
 
@@ -752,29 +763,40 @@ func (r *dposRuntime) produceBlock() error {
 		r.lock.RUnlock()
 
 		// leader 轮值 slot 须在提交时未变；块头 slot（链上时间）可小于 decisionSlot（墙钟空耗窗口）。
+		// epoch 末块奖励计算可能跨多个墙钟 slot：跳过 commitLeaderSlot 漂移丢弃，避免算完仍交不出去。
 		commitLeaderSlot := r.config.blockScheduler.LeaderElectionSlot()
+		isEpochEndCommit := r.isEpochEndBlock(block.Block.Number())
 		if decisionSlot >= 0 && commitLeaderSlot != decisionSlot {
-			r.logger.Info("⏰ [produceBlock] 区块被丢弃：leader 轮值 slot 已变化",
+			if !isEpochEndCommit {
+				r.logger.Info("⏰ [produceBlock] 区块被丢弃：leader 轮值 slot 已变化",
+					"blockNumber", block.Block.Number(),
+					"decisionSlot", decisionSlot,
+					"commitLeaderSlot", commitLeaderSlot,
+					"blockSlot", blockSlot,
+					"blockTimestamp", blockTimestamp.Format("15:04:05.000"),
+					"reason", fmt.Sprintf("判断时 leaderSlot=%d，提交时 leaderSlot=%d", decisionSlot, commitLeaderSlot))
+
+				r.lock.Lock()
+				r.decisionSlot = -1
+				r.decisionLocalTip = 0
+				r.lock.Unlock()
+
+				return nil
+			}
+			r.logger.Info("ℹ️ [produceBlock] epoch末块跳过 commitLeaderSlot 漂移检查",
 				"blockNumber", block.Block.Number(),
 				"decisionSlot", decisionSlot,
 				"commitLeaderSlot", commitLeaderSlot,
 				"blockSlot", blockSlot,
-				"blockTimestamp", blockTimestamp.Format("15:04:05.000"),
-				"reason", fmt.Sprintf("判断时 leaderSlot=%d，提交时 leaderSlot=%d", decisionSlot, commitLeaderSlot))
-
-			r.lock.Lock()
-			r.decisionSlot = -1
-			r.decisionLocalTip = 0
-			r.lock.Unlock()
-
-			return nil
+				"buildDurationHint", "epoch-end reward may exceed one blockWindow")
 		}
 
 		r.logger.Info("✅ [produceBlock] 提交前slot检查通过",
 			"blockNumber", block.Block.Number(),
 			"decisionSlot", decisionSlot,
 			"commitLeaderSlot", commitLeaderSlot,
-			"blockSlot", blockSlot)
+			"blockSlot", blockSlot,
+			"isEpochEndBlock", isEpochEndCommit)
 
 		savedLeaderSlot = decisionSlot
 		if savedLeaderSlot < 0 {

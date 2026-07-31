@@ -455,6 +455,10 @@ func (tp *txPoolMock) Prepare() {
 	tp.Called()
 }
 
+func (tp *txPoolMock) SyncPrepareNonces(nonces map[types.Address]uint64) {
+	tp.Called(nonces)
+}
+
 func (tp *txPoolMock) Length() uint64 {
 	args := tp.Called()
 
@@ -468,6 +472,10 @@ func (tp *txPoolMock) Peek() *types.Transaction {
 }
 
 func (tp *txPoolMock) Pop(tx *types.Transaction) {
+	tp.Called(tx)
+}
+
+func (tp *txPoolMock) DiscardExecutable(tx *types.Transaction) {
 	tp.Called(tx)
 }
 

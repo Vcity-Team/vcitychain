@@ -30,7 +30,16 @@ func (q *pricedQueue) push(tx *types.Transaction) {
 	heap.Push(q.queue, tx)
 }
 
-// Pop removes the first transaction from the queue
+// peek returns the highest-priority transaction without removing it.
+func (q *pricedQueue) peek() *types.Transaction {
+	if q.length() == 0 {
+		return nil
+	}
+
+	return q.queue.Peek()
+}
+
+// pop removes the highest-priority transaction from the queue
 // or nil if the queue is empty.
 func (q *pricedQueue) pop() *types.Transaction {
 	if q.length() == 0 {
@@ -43,6 +52,22 @@ func (q *pricedQueue) pop() *types.Transaction {
 	}
 
 	return transaction
+}
+
+// removeByHash drops a transaction from the priced queue by hash.
+func (q *pricedQueue) removeByHash(hash types.Hash) {
+	if q.length() == 0 {
+		return
+	}
+
+	filtered := q.queue.txs[:0]
+	for _, tx := range q.queue.txs {
+		if tx.Hash != hash {
+			filtered = append(filtered, tx)
+		}
+	}
+	q.queue.txs = filtered
+	heap.Init(q.queue)
 }
 
 // length returns the number of transactions in the queue.

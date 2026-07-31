@@ -1245,6 +1245,43 @@ func (rs *RewardStore) GetEpochRangeRewardDetails(fromEpoch, toEpoch uint64) ([]
 	return allRecords, nil
 }
 
+// GetRewardTotalsByRecipient scans the rewards bucket once and sums amounts per recipient.
+func (rs *RewardStore) GetRewardTotalsByRecipient(fromEpoch, toEpoch uint64) (map[string]*big.Int, error) {
+	totals := make(map[string]*big.Int)
+
+	err := rs.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("rewards"))
+		if bucket == nil {
+			return nil
+		}
+
+		cursor := bucket.Cursor()
+		for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
+			var record RewardRecordExtended
+			if err := json.Unmarshal(v, &record); err != nil {
+				continue
+			}
+			if record.EpochNumber < fromEpoch || record.EpochNumber > toEpoch {
+				continue
+			}
+			amount, ok := new(big.Int).SetString(record.Amount, 10)
+			if !ok {
+				continue
+			}
+			key := strings.ToLower(record.Recipient)
+			if totals[key] == nil {
+				totals[key] = big.NewInt(0)
+			}
+			totals[key].Add(totals[key], amount)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return totals, nil
+}
+
 // GetRewardSummary 汇总指定地址在一定epoch范围内的奖励详情
 func (rs *RewardStore) GetRewardSummary(address string, fromEpoch, toEpoch uint64) (*RewardSummary, error) {
 	logger := getGlobalLogger()

@@ -255,6 +255,7 @@ func (d *DPoS) queryVoterNativeBalance(voter types.Address) *big.Int {
 }
 
 // voidStakeRecord 将质押记录置为无效；若已 applied 则同步扣减 delegate 权重。
+// 作废后 Applied=true 且 IsActive=false，保留痕迹且不再进入边界 pending 扫描。
 func (d *DPoS) voidStakeRecord(voter, delegate types.Address, startTime uint64, dbTx *bolt.Tx) error {
 	if d.state == nil || d.state.StakeStore == nil {
 		return fmt.Errorf("stake store not available")
@@ -299,8 +300,11 @@ func (d *DPoS) voidStakeRecord(voter, delegate types.Address, startTime uint64, 
 		}
 	}
 
+	// 作废：清零金额并标为不活跃；同时 Applied=true，避免每轮边界把同一条
+	// pending 反复扫出并刷「余额不足，已作废」日志。
 	stake.Amount = big.NewInt(0)
 	stake.IsActive = false
+	stake.Applied = true
 	if err := d.state.StakeStore.setStakingInfo(voter, stake, startTime, dbTx); err != nil {
 		return err
 	}

@@ -235,6 +235,7 @@ func (b *BlockBuilder) Fill() error {
 					"skippedCount", skippedCount,
 					"consecutiveSkips", consecutiveSkips,
 					"note", "尝试重新准备交易")
+				b.params.TxPool.SyncPrepareNonces(b.nonceCache)
 				b.params.TxPool.Prepare()
 				tx = b.params.TxPool.Peek()
 				consecutiveSkips = 0 // 重置连续跳过计数
@@ -277,8 +278,9 @@ func (b *BlockBuilder) Fill() error {
 				"txCount", txCount,
 				"consecutiveSkips", consecutiveSkips,
 				"note", "当前区块状态nonce已更新，交易nonce不匹配")
-			b.params.TxPool.Pop(tx) // 移除这个交易，Pop()会自动将下一笔交易添加到executables队列
-			continue                // 继续处理下一个交易
+			// 仅从 executables 移除过期项；不可 Pop promoted 队头，否则会删掉正确 nonce 的交易
+			b.params.TxPool.DiscardExecutable(tx)
+			continue
 		}
 
 		// nonce匹配，重置连续跳过计数
@@ -287,6 +289,21 @@ func (b *BlockBuilder) Fill() error {
 		// execute transactions one by one
 		// writeTxPoolTransaction内部会调用Pop()，所以这里不需要再次调用
 		finished, err := b.writeTxPoolTransaction(tx)
+		if finished {
+			if err != nil {
+				b.params.Logger.Debug("🔵 [BlockBuilder.Fill] 区块 gas 已满，停止填充",
+					"blockNumber", blockNumber,
+					"txCount", txCount,
+					"skippedCount", skippedCount,
+					"lastError", err)
+			} else {
+				b.params.Logger.Info("🔵 [BlockBuilder.Fill] 区块已满（GasLimit），停止填充",
+					"blockNumber", blockNumber,
+					"txCount", txCount,
+					"skippedCount", skippedCount)
+			}
+			return nil
+		}
 		if err != nil {
 			b.params.Logger.Error("交易填充失败，返回错误由上层处理",
 				"txHash", tx.Hash.String(),
@@ -296,23 +313,10 @@ func (b *BlockBuilder) Fill() error {
 			return err
 		}
 
-		// Performance optimization: Update nonce cache after successful transaction execution
-		// This ensures the cache reflects the current block state
-		if err == nil {
-			b.nonceCache[tx.From] = tx.Nonce + 1
-		}
+		b.nonceCache[tx.From] = tx.Nonce + 1
 
 		// writeTxPoolTransaction内部已经调用了Pop()，会自动将同一账户的下一笔交易添加到executables队列（如果存在）
 		// 这样就不需要每次都调用Prepare()了
-
-		// 区块已满（GasLimit 达到），立即返回
-		if finished {
-			b.params.Logger.Info("🔵 [BlockBuilder.Fill] 区块已满（GasLimit），停止填充",
-				"blockNumber", blockNumber,
-				"txCount", txCount,
-				"skippedCount", skippedCount)
-			return nil
-		}
 
 		// 修复：不再每次都调用Prepare()
 		// 因为：
