@@ -49,17 +49,17 @@ type Topic struct {
 	actualProtoID string
 }
 
-func (t *Topic) createObj() proto.Message {
+func (t *Topic) createObj() (proto.Message, error) {
 	if t.typ == nil {
-		return nil
+		return nil, fmt.Errorf("topic type is nil")
 	}
 
 	message, ok := reflect.New(t.typ).Interface().(proto.Message)
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("type %v does not implement proto.Message", t.typ)
 	}
 
-	return message
+	return message, nil
 }
 
 func (t *Topic) Close() {
@@ -203,7 +203,12 @@ func (t *Topic) readLoop(sub *pubsub.Subscription, handler func(obj interface{},
 			go func() {
 				defer close(done)
 
-				obj := t.createObj()
+				obj, err := t.createObj()
+				if err != nil {
+					t.logger.Error("failed to create topic object", "err", err)
+					metrics.IncrCounter([]string{networkMetrics, "bad_messages"}, float32(1))
+					return
+				}
 				if err := proto.Unmarshal(msg.Data, obj); err != nil {
 					t.logger.Error("failed to unmarshal topic", "err", err)
 					metrics.IncrCounter([]string{networkMetrics, "bad_messages"}, float32(1))
