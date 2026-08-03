@@ -2,7 +2,6 @@ package dpos
 
 import (
 	"crypto/ecdsa"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -236,45 +235,17 @@ func (d *DPoS) finalizeProposalLifecycle(proposalID string, proposal *ParameterP
 
 // buildVoteMessage 构造投票签名消息
 func (d *DPoS) buildVoteMessage(vote *ParameterVote) []byte {
-	// 构造签名消息：投票者地址 + 提案ID + 支持/反对 + 链ID（去掉时间戳，避免时序不一致）
-	data := make([]byte, 0)
-
-	// 1. 投票者地址 (20字节)
-	data = append(data, vote.Voter.Bytes()...)
-
-	// 2. 提案ID (变长，添加长度前缀以避免冲突)
-	proposalIDBytes := []byte(vote.ProposalID)
-	proposalIDLen := make([]byte, 4)
-	binary.BigEndian.PutUint32(proposalIDLen, uint32(len(proposalIDBytes)))
-	data = append(data, proposalIDLen...)
-	data = append(data, proposalIDBytes...)
-
-	// 3. 支持/反对 (1字节: 0x01=true, 0x00=false)
-	if vote.Support {
-		data = append(data, byte(0x01))
-	} else {
-		data = append(data, byte(0x00))
-	}
-
-	// 4. 链ID (8字节，如果config中有chainID)
 	var chainID uint64
 	if d.config != nil && d.config.Blockchain != nil && d.config.Blockchain.Config() != nil {
 		chainID = uint64(d.config.Blockchain.Config().ChainID)
 	}
-	chainIDBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(chainIDBytes, chainID)
-	data = append(data, chainIDBytes...)
-
-	// 计算Keccak256哈希
-	message := crypto.Keccak256(data)
-
+	message := BuildVoteDomainHash(chainID, vote)
 	d.logger.Debug("🔍 构造投票签名消息",
 		"voter", vote.Voter.String(),
 		"proposalID", vote.ProposalID,
 		"support", vote.Support,
 		"chainID", chainID,
 		"messageHash", hex.EncodeToString(message))
-
 	return message
 }
 

@@ -2,7 +2,6 @@ package dpos
 
 import (
 	"crypto/ecdsa"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"math/big"
@@ -844,58 +843,11 @@ func (d *DPoS) updateParameterValue(paramName string, value interface{}, source 
 
 // buildProposalMessage 构造提案签名消息
 func (d *DPoS) buildProposalMessage(proposal *ParameterProposal) []byte {
-	// 修改签名消息格式：不包含proposalID（因为proposalID在交易处理时才确定）
-	// 构造签名消息：提案者地址 + 提案类型 + 参数/验证者地址 + 时间戳 + 链ID
-	// 这样签名可以在proposalID确定前后都有效
-	data := make([]byte, 0)
-
-	// 1. 提案者地址 (20字节)
-	data = append(data, proposal.Proposer.Bytes()...)
-
-	// 2. 提案ID (移除，改为不包含，让签名与proposalID无关)
-	// proposalIDBytes := []byte(proposal.ID)
-	// proposalIDLen := make([]byte, 4)
-	// binary.BigEndian.PutUint32(proposalIDLen, uint32(len(proposalIDBytes)))
-	// data = append(data, proposalIDLen...)
-	// data = append(data, proposalIDBytes...)
-
-	// 3. 提案类型 (变长，添加长度前缀)
-	proposalTypeBytes := []byte(proposal.ProposalType)
-	proposalTypeLen := make([]byte, 4)
-	binary.BigEndian.PutUint32(proposalTypeLen, uint32(len(proposalTypeBytes)))
-	data = append(data, proposalTypeLen...)
-	data = append(data, proposalTypeBytes...)
-
-	// 4. 参数或验证者地址（根据类型）
-	if proposal.ProposalType == "validator_recovery" && proposal.ValidatorAddress != (types.Address{}) {
-		// 恢复提案：使用验证者地址
-		data = append(data, proposal.ValidatorAddress.Bytes()...)
-	} else {
-		// 参数提案：使用参数名
-		parameterBytes := []byte(proposal.Parameter)
-		parameterLen := make([]byte, 4)
-		binary.BigEndian.PutUint32(parameterLen, uint32(len(parameterBytes)))
-		data = append(data, parameterLen...)
-		data = append(data, parameterBytes...)
-	}
-
-	// 5. 时间戳 (8字节)
-	timestampBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(timestampBytes, proposal.CreatedAt)
-	data = append(data, timestampBytes...)
-
-	// 6. 链ID (8字节，如果config中有chainID)
 	var chainID uint64
 	if d.config != nil && d.config.Blockchain != nil && d.config.Blockchain.Config() != nil {
 		chainID = uint64(d.config.Blockchain.Config().ChainID)
 	}
-	chainIDBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(chainIDBytes, chainID)
-	data = append(data, chainIDBytes...)
-
-	// 计算Keccak256哈希
-	message := crypto.Keccak256(data)
-
+	message := BuildProposalDomainHash(chainID, proposal)
 	d.logger.Debug("🔍 构造提案签名消息",
 		"proposer", proposal.Proposer.String(),
 		"proposalType", proposal.ProposalType,
@@ -903,7 +855,6 @@ func (d *DPoS) buildProposalMessage(proposal *ParameterProposal) []byte {
 		"createdAt", proposal.CreatedAt,
 		"chainID", chainID,
 		"messageHash", hex.EncodeToString(message))
-
 	return message
 }
 

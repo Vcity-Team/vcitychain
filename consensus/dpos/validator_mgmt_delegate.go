@@ -1127,53 +1127,7 @@ func (d *DPoS) IsDelegateCandidate(address types.Address) bool {
 
 // createDelegateRegistrationTransactionData 创建受托人注册交易数据
 func (d *DPoS) createDelegateRegistrationTransactionData(registrant types.Address, name, website, description string) []byte {
-	// 创建DPoS受托人注册交易的标识数据
-	data := make([]byte, 0, 128) // 预分配足够空间
-
-	// 添加DPoS受托人注册标识符 (4 bytes)
-	data = append(data, []byte("DPOS")...)
-
-	// 添加操作类型标识 (4 bytes) - "REG" + 0x00
-	data = append(data, []byte("REG")...)
-	data = append(data, 0x00)
-
-	// 添加注册者地址 (20 bytes)
-	data = append(data, registrant.Bytes()...)
-
-	// 添加名称长度和名称 (4 bytes + name)
-	nameBytes := []byte(name)
-	nameLen := uint32(len(nameBytes))
-	data = append(data, []byte{
-		byte(nameLen >> 24),
-		byte(nameLen >> 16),
-		byte(nameLen >> 8),
-		byte(nameLen),
-	}...)
-	data = append(data, nameBytes...)
-
-	// 添加网站长度和网站 (4 bytes + website)
-	websiteBytes := []byte(website)
-	websiteLen := uint32(len(websiteBytes))
-	data = append(data, []byte{
-		byte(websiteLen >> 24),
-		byte(websiteLen >> 16),
-		byte(websiteLen >> 8),
-		byte(websiteLen),
-	}...)
-	data = append(data, websiteBytes...)
-
-	// 添加描述长度和描述 (4 bytes + description)
-	descBytes := []byte(description)
-	descLen := uint32(len(descBytes))
-	data = append(data, []byte{
-		byte(descLen >> 24),
-		byte(descLen >> 16),
-		byte(descLen >> 8),
-		byte(descLen),
-	}...)
-	data = append(data, descBytes...)
-
-	return data
+	return BuildDelegateRegistrationCalldata(registrant, name, website, description)
 }
 
 // getChainIDFromConfig 从链配置读取 chainID，供无显式 chainID 的 API 使用

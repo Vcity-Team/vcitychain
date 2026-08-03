@@ -539,435 +539,23 @@ type UnvoteResponse struct {
 	Error            string                 `json:"error,omitempty"`
 }
 
-// Vote handles dpos_vote RPC method
+// Vote handles dpos_vote RPC method (server-side signing; legacy).
+// Prefer: dpos_createVoteTransaction → client EIP-155 sign → eth_sendRawTransaction.
 func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error) {
-	// Parse parameters
-	var req VoteRequest
-	switch p := params.(type) {
-	case []interface{}:
-		// Handle array parameters: [voter, candidate, amount, privateKey]
-		if len(p) != 4 {
-			return &VoteResponse{
-				Success: false,
-				Error:   fmt.Sprintf("expected 4 parameters [voter, candidate, amount, privateKey], got %d", len(p)),
-			}, nil
-		}
-		// Four parameters: [voter, candidate, amount, privateKey]
-		if voter, ok := p[0].(string); ok {
-			req.Voter = voter
-		} else {
-			return &VoteResponse{
-				Success: false,
-				Error:   "first parameter must be a string address (voter)",
-			}, nil
-		}
-		if candidate, ok := p[1].(string); ok {
-			req.Candidate = candidate
-		} else {
-			return &VoteResponse{
-				Success: false,
-				Error:   "second parameter must be a string address (candidate)",
-			}, nil
-		}
-		if amount, ok := p[2].(string); ok {
-			req.Amount = amount
-		} else {
-			return &VoteResponse{
-				Success: false,
-				Error:   "third parameter must be a string amount",
-			}, nil
-		}
-		// Store private key for later use in signing
-		if privateKey, ok := p[3].(string); ok {
-			req.PrivateKey = privateKey
-		} else {
-			return &VoteResponse{
-				Success: false,
-				Error:   "fourth parameter must be a string private key",
-			}, nil
-		}
-	case map[string]interface{}:
-		if voter, ok := p["voter"].(string); ok {
-			req.Voter = voter
-		}
-		if candidate, ok := p["candidate"].(string); ok {
-			req.Candidate = candidate
-		}
-		if amount, ok := p["amount"].(string); ok {
-			req.Amount = amount
-		}
-		if privateKey, ok := p["privateKey"].(string); ok {
-			req.PrivateKey = privateKey
-		}
-	case *VoteRequest:
-		if p != nil {
-			req = *p
-		}
-	default:
-		return &VoteResponse{
-			Success: false,
-			Error:   fmt.Sprintf("invalid parameter type: %T, expected array, map, or VoteRequest", params),
-		}, nil
+	req, errResp := d.parseVoteRequest(params, true)
+	if errResp != nil {
+		return errResp, nil
 	}
 
-	// Validate request
-	if req.Voter == "" {
-		return &VoteResponse{
-			Success: false,
-			Error:   "voter address is required",
-		}, nil
-	}
-	if req.Candidate == "" {
-		return &VoteResponse{
-			Success: false,
-			Error:   "candidate address is required",
-		}, nil
-	}
-	if req.Amount == "" {
-		return &VoteResponse{
-			Success: false,
-			Error:   "amount is required",
-		}, nil
-	}
-	if req.PrivateKey == "" {
-		return &VoteResponse{
-			Success: false,
-			Error:   "private key is required",
-		}, nil
+	built, errResp := d.buildUnsignedVoteTransaction(req)
+	if errResp != nil {
+		return errResp, nil
 	}
 
-	// Parse addresses
-	voterAddr := types.StringToAddress(req.Voter)
-	candidateAddr := types.StringToAddress(req.Candidate)
+	tx := built.tx
+	voterAddr := built.voter
+	isUnvote := built.isUnvote
 
-	// Parse amount
-	amountInt, ok := new(big.Int).SetString(req.Amount, 10)
-	if !ok {
-		return &VoteResponse{
-			Success: false,
-			Error:   "invalid amount format",
-		}, nil
-	}
-
-	// amount = 0 不允许，返回错误
-	if amountInt.Sign() == 0 {
-		return &VoteResponse{
-			Success: false,
-			Error:   "amount cannot be zero",
-		}, nil
-	}
-	// amount = -1 表示执行撤销，继续往下走创建交易
-	// amount > 0 表示投票，继续往下走创建交易
-	isUnvote := amountInt.Cmp(big.NewInt(-1)) == 0
-	// Check voter balance
-	// Try to get balance with different approaches
-	var balance *big.Int
-	var err error
-
-	// Method 1: Try to get balance using available methods
-	if balanceStore, ok := d.store.(interface {
-		GetBalance(root types.Hash, addr types.Address) (*big.Int, error)
-	}); ok {
-		// First, try to get the latest state root from the store
-		var latestRoot types.Hash
-		var foundValidRoot bool
-
-		// Try to get latest state root from different possible interfaces
-		// Method 1a: Try to get from ethBlockchainStore.Header() method
-		if headerStore, ok := d.store.(interface {
-			Header() *types.Header
-		}); ok {
-			latestHeader := headerStore.Header()
-			if latestHeader != nil {
-				latestRoot = latestHeader.StateRoot
-				foundValidRoot = true
-			}
-		}
-
-		// Method 1b: Try to get from GetLatestStateRoot method (if exists)
-		if !foundValidRoot {
-			if latestStore, ok := d.store.(interface {
-				GetLatestStateRoot() types.Hash
-			}); ok {
-				latestRoot = latestStore.GetLatestStateRoot()
-				foundValidRoot = true
-			}
-		}
-
-		// Method 1c: Try to get from GetLatestHeader method (if exists)
-		if !foundValidRoot {
-			if headerStore, ok := d.store.(interface {
-				GetLatestHeader() *types.Header
-			}); ok {
-				latestHeader := headerStore.GetLatestHeader()
-				if latestHeader != nil {
-					latestRoot = latestHeader.StateRoot
-					foundValidRoot = true
-				}
-			}
-		}
-
-		// Method 1d: Try to get from GetLatestBlock method (if exists)
-		if !foundValidRoot {
-			if blockStore, ok := d.store.(interface {
-				GetLatestBlock() *types.Block
-			}); ok {
-				latestBlock := blockStore.GetLatestBlock()
-				if latestBlock != nil {
-					latestRoot = latestBlock.Header.StateRoot
-					foundValidRoot = true
-				}
-			}
-		}
-
-		// Method 1e: Try to get from GetHeaderByNumber method with latest block number
-		if !foundValidRoot {
-			if headerStore, ok := d.store.(interface {
-				Header() *types.Header
-				GetHeaderByNumber(uint64) (*types.Header, bool)
-			}); ok {
-				latestHeader := headerStore.Header()
-				if latestHeader != nil && latestHeader.Number > 0 {
-					// Try to get the previous block header as a fallback
-					if prevHeader, ok := headerStore.GetHeaderByNumber(latestHeader.Number - 1); ok {
-						latestRoot = prevHeader.StateRoot
-						foundValidRoot = true
-					}
-				}
-			}
-		}
-
-		if foundValidRoot && latestRoot != (types.Hash{}) {
-			balance, err = balanceStore.GetBalance(latestRoot, voterAddr)
-		}
-	}
-
-	// Method 2: If still no balance, try to get from consensus engine directly
-	if balance == nil || err != nil {
-		if hub, ok := d.store.(interface {
-			GetConsensus() interface{}
-		}); ok {
-			consensusEngine := hub.GetConsensus()
-
-			// Try to get account balance from consensus engine
-			if balanceEngine, ok := consensusEngine.(interface {
-				GetAccountBalance(addr types.Address) (*big.Int, error)
-			}); ok {
-				balance, err = balanceEngine.GetAccountBalance(voterAddr)
-			}
-		}
-	}
-
-	// Method 3: Try to get balance using zero hash as fallback (for genesis or initial state)
-	if balance == nil || err != nil {
-		if balanceStore, ok := d.store.(interface {
-			GetBalance(root types.Hash, addr types.Address) (*big.Int, error)
-		}); ok {
-			zeroHash := types.Hash{}
-			balance, err = balanceStore.GetBalance(zeroHash, voterAddr)
-		}
-	}
-
-	// Check if we successfully retrieved balance
-	if balance == nil {
-		d.logger.Error("Failed to retrieve voter balance - cannot proceed with vote")
-		return &VoteResponse{
-			Success: false,
-			Error:   "unable to verify voter balance - cannot proceed with vote",
-		}, nil
-	}
-
-	if !isUnvote && balance.Cmp(amountInt) < 0 {
-		d.logger.Error("Insufficient balance", "balance", balance.String(), "required", amountInt.String())
-		return &VoteResponse{
-			Success: false,
-			Error:   "insufficient balance",
-		}, nil
-	}
-
-	dposEngine := d.getDPoSEngine()
-	if dposEngine == nil {
-		d.logger.Error("❌ DPoS引擎不可用，无法验证受托人资格")
-		return &VoteResponse{
-			Success: false,
-			Error:   "DPoS engine not available for delegate validation",
-		}, nil
-	}
-	// 撤票（amount=-1）链上不校验 delegate 注册/候选人；仅新投票需要
-	if !isUnvote {
-		// 检查受托人是否已注册（创世验证者例外）
-		if isRegistered, ok := dposEngine.(interface {
-			IsDelegateRegistered(address types.Address) bool
-		}); ok {
-			// 检查是否为创世验证者
-			isGenesis, okGenesis := dposEngine.(interface {
-				IsGenesisValidator(address types.Address) bool
-			})
-
-			// 创世验证者可以直接被投票，无需注册
-			if okGenesis && isGenesis.IsGenesisValidator(candidateAddr) {
-				// genesis validators may receive votes without registration
-			} else if !isRegistered.IsDelegateRegistered(candidateAddr) {
-				d.logger.Warn("❌ 受托人未注册，投票被拒绝",
-					"candidate", candidateAddr.String(),
-					"voter", voterAddr.String(),
-					"amount", amountInt.String())
-				return &VoteResponse{
-					Success: false,
-					Error:   fmt.Sprintf("delegate %s is not registered", candidateAddr.String()),
-				}, nil
-			}
-		} else {
-			d.logger.Warn("⚠️ DPoS引擎不支持受托人注册检查，跳过验证")
-		}
-
-		// 检查受托人是否为候选人状态
-		if isCandidate, ok := dposEngine.(interface {
-			IsDelegateCandidate(address types.Address) bool
-		}); ok {
-			if !isCandidate.IsDelegateCandidate(candidateAddr) {
-				d.logger.Warn("❌ 受托人不是候选人状态，投票被拒绝",
-					"candidate", candidateAddr.String(),
-					"voter", voterAddr.String(),
-					"amount", amountInt.String())
-				return &VoteResponse{
-					Success: false,
-					Error:   fmt.Sprintf("delegate %s is not a candidate", candidateAddr.String()),
-				}, nil
-			}
-		} else {
-			d.logger.Warn("⚠️ DPoS引擎不支持受托人候选人检查，跳过验证")
-		}
-	}
-
-	voteMessage := &VoteMessage{
-		Voter:     voterAddr,
-		Delegate:  candidateAddr,
-		Amount:    amountInt,
-		Round:     0, // 使用当前轮次
-		Timestamp: uint64(time.Now().Unix()),
-	}
-
-	// 只进行验证，不实际更新状态，避免重复处理
-	if dposEngineInstance, ok := dposEngine.(*dpos.DPoS); ok {
-		// 只调用验证方法，不更新状态
-		if err := dposEngineInstance.ValidateVoteOnly(voteMessage.Voter, voteMessage.Delegate, voteMessage.Amount); err != nil {
-			d.logger.Error("❌ 投票预验证失败", "error", err)
-			return &VoteResponse{
-				Success: false,
-				Error:   fmt.Sprintf("vote validation failed: %v", err),
-			}, nil
-		}
-	} else {
-		d.logger.Warn("⚠️ DPoS引擎类型不匹配，跳过预验证")
-	}
-
-	// Step 1: Create a vote transaction
-	// 🚨 检测投票参数
-	if voterAddr == (types.Address{}) {
-		d.logger.Error("🚨 CRITICAL: voter address is zero address")
-		return &VoteResponse{
-			Success: false,
-			Error:   "voter address is zero address",
-		}, nil
-	}
-
-	if candidateAddr == (types.Address{}) {
-		d.logger.Error("🚨 CRITICAL: candidate address is zero address")
-		return &VoteResponse{
-			Success: false,
-			Error:   "candidate address is zero address",
-		}, nil
-	}
-	// Get account nonce for the voter
-	var nonce uint64
-	if nonceStore, ok := d.store.(interface {
-		GetNonce(addr types.Address) uint64
-	}); ok {
-		nonce = nonceStore.GetNonce(voterAddr)
-	} else {
-		// Fallback: try to get nonce from account
-		if accountStore, ok := d.store.(interface {
-			GetAccount(root types.Hash, addr types.Address) (*Account, error)
-		}); ok {
-			if account, err := accountStore.GetAccount(types.Hash{}, voterAddr); err == nil {
-				nonce = account.Nonce
-			}
-		}
-	}
-	// Get current gas price
-	var gasPrice *big.Int
-	if gasStore, ok := d.store.(interface {
-		GetBaseFee() uint64
-	}); ok {
-		baseFee := gasStore.GetBaseFee()
-		gasPrice = new(big.Int).SetUint64(baseFee)
-	} else {
-		gasPrice = big.NewInt(1000000000) // 1 gwei default
-	}
-	// Ensure gas price meets minimum price limit (1 gwei = 1000000000 wei)
-	// This prevents "transaction underpriced" errors
-	minGasPrice := big.NewInt(1000000000) // 1 gwei
-	if gasPrice.Cmp(minGasPrice) < 0 {
-		gasPrice = minGasPrice
-	}
-
-	const voteTxGasLimit uint64 = 100000
-	if isUnvote {
-		locked := d.getLockedVoteWei(voterAddr)
-		spendable := computeSpendableWei(balance, locked)
-		txCost := new(big.Int).Mul(gasPrice, new(big.Int).SetUint64(voteTxGasLimit))
-		if spendable.Cmp(txCost) < 0 {
-			d.logger.Warn("insufficient spendable balance for unvote gas",
-				"voter", voterAddr.String(),
-				"spendable", spendable.String(),
-				"required", txCost.String(),
-				"balance", balance.String(),
-				"locked", locked.String())
-			return &VoteResponse{
-				Success: false,
-				Error: fmt.Sprintf(
-					"insufficient spendable balance for unvote gas: need at least %s wei, available %s wei (balance %s, locked vote %s)",
-					txCost.String(), spendable.String(), balance.String(), locked.String(),
-				),
-			}, nil
-		}
-	}
-
-	tx := &types.Transaction{
-		Nonce:    nonce,
-		GasPrice: gasPrice,
-		Gas:      voteTxGasLimit,
-		To:       nil,
-		Value:    big.NewInt(0),
-		Input:    d.createVoteTransactionData(voterAddr, candidateAddr, amountInt),
-		V:        big.NewInt(0), // Will be set after signing
-		R:        big.NewInt(0), // Will be set after signing
-		S:        big.NewInt(0), // Will be set after signing
-		Hash:     types.Hash{},
-		// Don't set From field - let transaction pool recover it from signature
-		// This ensures consistency between From field and signature
-	}
-
-	// Set transaction type to legacy (0) for compatibility
-	tx.Type = types.LegacyTx
-
-	// 🚨 检测交易创建后的哈希
-	tx.ComputeHash(0)
-	if tx.Hash == (types.Hash{}) {
-		d.logger.Error("🚨 CRITICAL: vote transaction has zero hash after creation",
-			"nonce", nonce,
-			"gasPrice", gasPrice.String(),
-			"voter", voterAddr.String(),
-			"candidate", candidateAddr.String(),
-			"amount", amountInt.String())
-		return &VoteResponse{
-			Success: false,
-			Error:   "transaction hash is zero after creation",
-		}, nil
-	}
-
-	// Step 2: Sign the transaction
 	if err := d.signTransaction(tx, voterAddr, req.PrivateKey); err != nil {
 		d.logger.Error("Failed to sign transaction", "error", err)
 		return &VoteResponse{
@@ -976,11 +564,9 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		}, nil
 	}
 
-	// Recalculate hash after signing
 	txWithHash := tx.ComputeHash(0)
 	txHash := txWithHash.Hash
 
-	// Step 3: Add transaction to the transaction pool and broadcast (vote and unvote alike)
 	if ethStore, ok := d.store.(interface {
 		AddTx(tx *types.Transaction) error
 	}); !ok {
@@ -1006,11 +592,7 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		successMessage = "Unvote transaction submitted (pending block inclusion; effective at epoch boundary after mined)"
 	}
 
-	// Try to get the actual block number if transaction is already mined
 	var blockNumber uint64
-	var blockStatus string
-
-	// Check if transaction is already in a block using available methods
 	if blockchainStore, ok := d.store.(interface {
 		ReadTxLookup(txnHash types.Hash) (types.Hash, bool)
 		GetBlockByHash(hash types.Hash, full bool) (*types.Block, bool)
@@ -1018,21 +600,15 @@ func (d *DPOS) Vote(ctx context.Context, params interface{}) (interface{}, error
 		if blockHash, found := blockchainStore.ReadTxLookup(txHash); found {
 			if block, ok := blockchainStore.GetBlockByHash(blockHash, false); ok {
 				blockNumber = block.Number()
-				blockStatus = "mined"
 			} else {
-				blockStatus = "block_found_but_no_details"
 				blockNumber = d.getCurrentBlockHeight()
 			}
 		} else {
 			blockNumber = d.getCurrentBlockHeight()
-			blockStatus = "pending"
 		}
 	} else {
 		blockNumber = d.getCurrentBlockHeight()
-		blockStatus = "store_not_supported"
 	}
-
-	_ = blockStatus
 
 	return &VoteResponse{
 		Success:     true,
@@ -5790,11 +5366,7 @@ func (d *DPOS) UpdateCommission(ctx context.Context, params interface{}) (map[st
 	}
 
 	validatorAddr := types.StringToAddress(validatorAddress)
-	inputData := []byte("DPOSCOM")
-	rateBytes := make([]byte, 2)
-	rateBytes[0] = byte(commissionRate >> 8)
-	rateBytes[1] = byte(commissionRate & 0xFF)
-	inputData = append(inputData, rateBytes...)
+	inputData := dpos.BuildCommissionUpdateCalldata(uint16(commissionRate))
 
 	var nonce uint64
 	if nonceStore, ok := d.store.(interface {
