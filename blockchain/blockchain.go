@@ -1356,14 +1356,16 @@ func (b *Blockchain) WriteBlockWithoutConsensus(block *types.Block, source strin
 	return nil
 }
 
-// extractBlockReceipts extracts the receipts from the passed in block
+// extractBlockReceipts extracts the receipts from the passed in block.
+// Caller must already hold writeLock (e.g. WriteBlock): executeBlockTransactions
+// takes the same lock and would self-deadlock here (develop regression in c2e483448).
 func (b *Blockchain) extractBlockReceipts(block *types.Block) ([]*types.Receipt, error) {
 	// Check the cache for the block receipts
 	receipts, ok := b.receiptsCache.Get(block.Header.Hash)
 	if !ok {
 		// No receipts found in the cache, execute the transactions from the block
-		// and fetch them
-		blockResult, err := b.executeBlockTransactions(block, ExecutionCommit)
+		// and fetch them. Use Locked variant — WriteBlock already holds writeLock.
+		blockResult, err := b.executeBlockTransactionsLocked(block, ExecutionCommit)
 		if err != nil {
 			return nil, err
 		}
