@@ -1,0 +1,109 @@
+package state
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/Vcity-Team/vcitychain/contracts"
+	"github.com/Vcity-Team/vcitychain/state/runtime/addresslist"
+	"github.com/Vcity-Team/vcitychain/types"
+)
+
+type memoryStateRef struct {
+	storage map[types.Address]map[types.Hash]types.Hash
+}
+
+func newMemoryStateRef() *memoryStateRef {
+	return &memoryStateRef{storage: map[types.Address]map[types.Hash]types.Hash{}}
+}
+
+func (m *memoryStateRef) SetState(addr types.Address, key, value types.Hash) {
+	slots, ok := m.storage[addr]
+	if !ok {
+		slots = map[types.Hash]types.Hash{}
+		m.storage[addr] = slots
+	}
+
+	slots[key] = value
+}
+
+func (m *memoryStateRef) GetStorage(addr types.Address, key types.Hash) types.Hash {
+	if slots, ok := m.storage[addr]; ok {
+		return slots[key]
+	}
+
+	return types.ZeroHash
+}
+
+func TestTransition_isTxBlocked(t *testing.T) {
+	t.Parallel()
+
+	from := types.StringToAddress("0x1111")
+	to := types.StringToAddress("0x2222")
+	admin := types.StringToAddress("0x3333")
+	blockListAddr := contracts.BlockListTransactionsAddr
+
+	st := newMemoryStateRef()
+	list := addresslist.NewAddressList(st, blockListAddr)
+	list.SetRole(admin, addresslist.AdminRole)
+
+	tr := &Transition{txnBlockList: list}
+
+	t.Run("allows clean addresses", func(t *testing.T) {
+		t.Parallel()
+		require.NoError(t, tr.isTxBlocked(from, &to))
+	})
+
+	t.Run("blocks enabled from", func(t *testing.T) {
+		t.Parallel()
+		localSt := newMemoryStateRef()
+		localList := addresslist.NewAddressList(localSt, blockListAddr)
+		localList.SetRole(from, addresslist.EnabledRole)
+		localTr := &Transition{txnBlockList: localList}
+		require.ErrorIs(t, localTr.isTxBlocked(from, &to), addresslist.ErrAccountBlacklisted)
+	})
+
+	t.Run("blocks enabled to", func(t *testing.T) {
+		t.Parallel()
+		localSt := newMemoryStateRef()
+		localList := addresslist.NewAddressList(localSt, blockListAddr)
+		localList.SetRole(to, addresslist.EnabledRole)
+		localTr := &Transition{txnBlockList: localList}
+		require.ErrorIs(t, localTr.isTxBlocked(from, &to), addresslist.ErrAccountBlacklisted)
+	})
+
+	t.Run("admin not blocked", func(t *testing.T) {
+		t.Parallel()
+		require.NoError(t, tr.isTxBlocked(admin, &to))
+	})
+
+	t.Run("system caller exempt", func(t *testing.T) {
+		t.Parallel()
+		localSt := newMemoryStateRef()
+		localList := addresslist.NewAddressList(localSt, blockListAddr)
+		localList.SetRole(contracts.SystemCaller, addresslist.EnabledRole)
+		localTr := &Transition{txnBlockList: localList}
+		require.NoError(t, localTr.isTxBlocked(contracts.SystemCaller, &to))
+	})
+
+	t.Run("blocklist contract calls exempt", func(t *testing.T) {
+		t.Parallel()
+		localSt := newMemoryStateRef()
+		localList := addresslist.NewAddressList(localSt, blockListAddr)
+		localList.SetRole(from, addresslist.EnabledRole)
+		localTr := &Transition{txnBlockList: localList}
+		require.NoError(t, localTr.isTxBlocked(from, &blockListAddr))
+	})
+
+	t.Run("create only checks from", func(t *testing.T) {
+		t.Parallel()
+		require.NoError(t, tr.isTxBlocked(from, nil))
+
+		localSt := newMemoryStateRef()
+		localList := addresslist.NewAddressList(localSt, blockListAddr)
+		localList.SetRole(from, addresslist.EnabledRole)
+		localTr := &Transition{txnBlockList: localList}
+		require.ErrorIs(t, localTr.isTxBlocked(from, nil), addresslist.ErrAccountBlacklisted)
+	})
+}

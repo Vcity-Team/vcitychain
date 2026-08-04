@@ -726,10 +726,12 @@ func NewServer(config *Config) (*Server, error) {
 			m.grpcServer,
 			m.network,
 			&txpool.Config{
-				MaxSlots:           m.config.MaxSlots,
-				PriceLimit:         m.config.PriceLimit,
-				MaxAccountEnqueued: m.config.MaxAccountEnqueued,
-				ChainID:            big.NewInt(m.config.Chain.Params.ChainID),
+				MaxSlots:              m.config.MaxSlots,
+				PriceLimit:            m.config.PriceLimit,
+				MaxAccountEnqueued:    m.config.MaxAccountEnqueued,
+				ChainID:               big.NewInt(m.config.Chain.Params.ChainID),
+				TransactionsBlockList: m.config.Chain.Params.TransactionsBlockList,
+				TransactionsAllowList: m.config.Chain.Params.TransactionsAllowList,
 			},
 		)
 		if err != nil {
@@ -861,6 +863,26 @@ func (t *txpoolHub) GetBalance(root types.Hash, addr types.Address) (*big.Int, e
 	}
 
 	return account.Balance, nil
+}
+
+// GetStorage returns a storage slot for the given account at state root.
+// Missing accounts yield the zero hash (NoRole for address-list lookups).
+func (t *txpoolHub) GetStorage(root types.Hash, addr types.Address, slot types.Hash) (types.Hash, error) {
+	account, err := getAccountImpl(t.state, root, addr)
+	if err != nil {
+		if errors.Is(err, jsonrpc.ErrStateNotFound) {
+			return types.ZeroHash, nil
+		}
+
+		return types.ZeroHash, err
+	}
+
+	snap, err := t.state.NewSnapshotAt(root)
+	if err != nil {
+		return types.ZeroHash, err
+	}
+
+	return snap.GetStorage(addr, account.Root, slot), nil
 }
 
 // GetLockedBalance returns the amount of native balance that is locked and therefore

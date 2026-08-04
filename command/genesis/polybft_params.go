@@ -278,6 +278,14 @@ func (p *genesisParams) generatePolyBftChainConfig(o command.OutputFormatter) er
 			AdminAddresses:   stringSliceToAddressSlice(p.transactionsBlockListAdmin),
 			EnabledAddresses: stringSliceToAddressSlice(p.transactionsBlockListEnabled),
 		}
+
+		// Ensure the transactionsBlockList fork is present (genesis activation at block 0).
+		// Live networks that enable the list later should set forks.transactionsBlockList.block = H.
+		if chainConfig.Params.Forks != nil {
+			if _, exists := (*chainConfig.Params.Forks)[chain.TransactionsBlockList]; !exists {
+				chainConfig.Params.Forks.SetFork(chain.TransactionsBlockList, chain.NewFork(0))
+			}
+		}
 	}
 
 	if len(p.bridgeAllowListAdmin) != 0 {

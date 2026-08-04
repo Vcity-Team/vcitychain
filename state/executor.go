@@ -239,8 +239,10 @@ func (e *Executor) BeginTxn(
 		txn.txnAllowList = addresslist.NewAddressList(txn, contracts.AllowListTransactionsAddr)
 	}
 
-	if e.config.TransactionsBlockList != nil {
+	// transactions block list (gated by optional hardfork)
+	if e.config.IsTransactionsBlockListActive(header.Number) {
 		txn.txnBlockList = addresslist.NewAddressList(txn, contracts.BlockListTransactionsAddr)
+		e.maybeApplyTransactionsBlockListFork(txn, header.Number)
 	}
 
 	// enable transactions allow list (if any)
@@ -253,6 +255,36 @@ func (e *Executor) BeginTxn(
 	}
 
 	return txn, nil
+}
+
+// maybeApplyTransactionsBlockListFork writes Admin/Enabled roles from chain params
+// into state at the exact transactionsBlockList fork activation block.
+// This allows live chains to enable the block list via hardfork without regenerating genesis state.
+func (e *Executor) maybeApplyTransactionsBlockListFork(txn *Transition, blockNum uint64) {
+	cfg := e.config.TransactionsBlockList
+	if cfg == nil || txn.txnBlockList == nil {
+		return
+	}
+
+	forkBlock, ok := e.config.TransactionsBlockListForkBlock()
+	if !ok || blockNum != forkBlock {
+		return
+	}
+
+	for _, addr := range cfg.EnabledAddresses {
+		txn.txnBlockList.SetRole(addr, addresslist.EnabledRole)
+	}
+
+	for _, addr := range cfg.AdminAddresses {
+		txn.txnBlockList.SetRole(addr, addresslist.AdminRole)
+	}
+
+	e.logger.Info(
+		"Applied transactions block list roles at hardfork",
+		"block", blockNum,
+		"admins", len(cfg.AdminAddresses),
+		"enabled", len(cfg.EnabledAddresses),
+	)
 }
 
 type Transition struct {
@@ -829,19 +861,18 @@ func (t *Transition) run(contract *runtime.Contract, host runtime.Host) *runtime
 			}
 		}
 	} else if t.txnBlockList != nil {
-		if contract.Caller != contracts.SystemCaller {
-			role := t.txnBlockList.GetRole(contract.Caller)
-			if role == addresslist.EnabledRole {
-				t.logger.Debug(
-					"Failing transaction. Caller is in the transaction blocklist",
-					"contract.Caller", contract.Caller,
-					"contract.Address", contract.Address,
-				)
+		to := contract.Address
+		if err := t.isTxBlocked(contract.Caller, &to); err != nil {
+			t.logger.Debug(
+				"Failing transaction. Address is in the transaction blocklist",
+				"contract.Caller", contract.Caller,
+				"contract.Address", contract.Address,
+				"err", err,
+			)
 
-				return &runtime.ExecutionResult{
-					GasLeft: 0,
-					Err:     runtime.ErrNotAuth,
-				}
+			return &runtime.ExecutionResult{
+				GasLeft: 0,
+				Err:     err,
 			}
 		}
 	}
@@ -1276,6 +1307,13 @@ func TransactionGasCost(msg *types.Transaction, isHomestead, isIstanbul bool) (u
 // 1. the nonce of the message caller is correct
 // 2. caller has enough balance to cover transaction fee(gaslimit * gasprice * val) or fee(gasfeecap * gasprice * val)
 func checkAndProcessTx(msg *types.Transaction, t *Transition) error {
+	// 0. transactions block list (From + To) — early reject before fee deduction
+	if t.txnAllowList == nil && t.txnBlockList != nil {
+		if err := t.isTxBlocked(msg.From, msg.To); err != nil {
+			return NewTransitionApplicationError(err, false)
+		}
+	}
+
 	// 1. the nonce of the message caller is correct
 	if err := t.nonceCheck(msg); err != nil {
 		return NewTransitionApplicationError(err, true)
@@ -1296,6 +1334,16 @@ func checkAndProcessTx(msg *types.Transaction, t *Transition) error {
 	}
 
 	return nil
+}
+
+// isTxBlocked returns an error when From or To is on the transactions block list.
+// SystemCaller and calls to the block-list contract itself are exempt.
+func (t *Transition) isTxBlocked(from types.Address, to *types.Address) error {
+	if t.txnBlockList == nil {
+		return nil
+	}
+
+	return addresslist.CheckBlockedTx(t.txnBlockList.GetRole, from, to)
 }
 
 func checkAndProcessStateTx(msg *types.Transaction) error {

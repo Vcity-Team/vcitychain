@@ -72,6 +72,10 @@ func (m defaultMockStore) CalculateBaseFee(header *types.Header) uint64 {
 	return 0
 }
 
+func (m defaultMockStore) GetStorage(types.Hash, types.Address, types.Hash) (types.Hash, error) {
+	return types.ZeroHash, nil
+}
+
 type faultyMockStore struct {
 }
 
@@ -93,6 +97,10 @@ func (fms faultyMockStore) GetBalance(root types.Hash, addr types.Address) (*big
 
 func (fms faultyMockStore) CalculateBaseFee(*types.Header) uint64 {
 	return 0
+}
+
+func (fms faultyMockStore) GetStorage(types.Hash, types.Address, types.Hash) (types.Hash, error) {
+	return types.ZeroHash, nil
 }
 
 type mockSigner struct {
