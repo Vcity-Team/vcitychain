@@ -161,6 +161,15 @@ func TestExecutor_maybeApplyTransactionsBlockListFork(t *testing.T) {
 		require.Equal(t, addresslist.EnabledRole, txn.txnBlockList.GetRole(victim))
 	})
 
+	t.Run("noop when admin already present at exact fork height", func(t *testing.T) {
+		t.Parallel()
+		exec, txn, _ := newExec()
+		txn.txnBlockList.SetRole(admin, addresslist.AdminRole)
+		exec.maybeApplyTransactionsBlockListFork(txn, forkBlock)
+		require.Equal(t, addresslist.AdminRole, txn.txnBlockList.GetRole(admin))
+		require.Equal(t, addresslist.NoRole, txn.txnBlockList.GetRole(victim))
+	})
+
 	t.Run("noop when admin already present after fork", func(t *testing.T) {
 		t.Parallel()
 		exec, txn, _ := newExec()

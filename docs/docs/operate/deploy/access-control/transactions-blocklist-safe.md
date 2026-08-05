@@ -87,6 +87,7 @@ All validators must upgrade with the **same** genesis params. Prefer activating 
 - Set **both** `params.transactionsBlockList` and `forks.transactionsBlockList.block = H` with **H > 0**.
 - Do **not** use `block: 0` on an already-running chain: that path is for new genesis only.
 - When `H > 0`, the node **does not** rewrite genesis allocs (avoids `genesis file does not match current genesis`). Roles are injected at height `H`, with a deterministic catch-up on the first block `>= H` if the exact fork block was missed.
+- Hardfork injection also sets a 1-wei balance on `0x0300…0002` (same as genesis allocs) so EIP-161 empty-account cleanup cannot wipe role storage.
 - If you add the params object **without** the fork key, enforcement starts immediately on upgrade and genesis allocs are applied (unsafe on live chains).
 
 :::

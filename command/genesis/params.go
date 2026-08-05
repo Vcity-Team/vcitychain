@@ -493,9 +493,38 @@ func (p *genesisParams) initGenesisConfig() error {
 		}
 	}
 
+	// IBFT / Dev / Dummy genesis: apply transactions block list (and related ACLs)
+	// so --transactions-block-list-admin works outside the PolyBFT path too.
+	p.applyTransactionsBlockListConfig(chainConfig)
+
 	p.genesisConfig = chainConfig
 
 	return nil
+}
+
+// applyTransactionsBlockListConfig wires TransactionsBlockList params (+ fork at 0)
+// when --transactions-block-list-admin is set. Live IBFT→DPoS networks that enable
+// the list later should instead patch genesis forks.transactionsBlockList.block = H
+// with H > 0 (roles are injected at H; genesis allocs are skipped).
+func (p *genesisParams) applyTransactionsBlockListConfig(chainConfig *chain.Chain) {
+	if chainConfig == nil || chainConfig.Params == nil {
+		return
+	}
+
+	if len(p.transactionsBlockListAdmin) == 0 {
+		return
+	}
+
+	chainConfig.Params.TransactionsBlockList = &chain.AddressListConfig{
+		AdminAddresses:   stringSliceToAddressSlice(p.transactionsBlockListAdmin),
+		EnabledAddresses: stringSliceToAddressSlice(p.transactionsBlockListEnabled),
+	}
+
+	if chainConfig.Params.Forks != nil {
+		if _, exists := (*chainConfig.Params.Forks)[chain.TransactionsBlockList]; !exists {
+			chainConfig.Params.Forks.SetFork(chain.TransactionsBlockList, chain.NewFork(0))
+		}
+	}
 }
 
 func (p *genesisParams) shouldPredeployStakingSC() bool {
@@ -766,6 +795,10 @@ func (p *genesisParams) generateDPoSChainConfig(o command.OutputFormatter) error
 	fmt.Printf("DEBUG: Genesis extraData after vanity prefix: %x\n", genesisExtraData[dpos.ExtraVanity:min(dpos.ExtraVanity+20, len(genesisExtraData))])
 
 	chainConfig.Genesis.ExtraData = genesisExtraData
+
+	// Apply transactions block list when generating a pure-DPoS genesis.
+	// IBFT→DPoS live networks should keep IBFT genesis and enable the list via hardfork.
+	p.applyTransactionsBlockListConfig(chainConfig)
 
 	// Write genesis configuration to disk
 	if err := helper.WriteGenesisConfigToDisk(chainConfig, p.genesisPath); err != nil {

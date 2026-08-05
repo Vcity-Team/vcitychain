@@ -271,22 +271,7 @@ func (p *genesisParams) generatePolyBftChainConfig(o command.OutputFormatter) er
 		}
 	}
 
-	if len(p.transactionsBlockListAdmin) != 0 {
-		// only enable block list if there is at least one address as **admin**, otherwise
-		// the block list could never be updated
-		chainConfig.Params.TransactionsBlockList = &chain.AddressListConfig{
-			AdminAddresses:   stringSliceToAddressSlice(p.transactionsBlockListAdmin),
-			EnabledAddresses: stringSliceToAddressSlice(p.transactionsBlockListEnabled),
-		}
-
-		// Ensure the transactionsBlockList fork is present (genesis activation at block 0).
-		// Live networks that enable the list later should set forks.transactionsBlockList.block = H.
-		if chainConfig.Params.Forks != nil {
-			if _, exists := (*chainConfig.Params.Forks)[chain.TransactionsBlockList]; !exists {
-				chainConfig.Params.Forks.SetFork(chain.TransactionsBlockList, chain.NewFork(0))
-			}
-		}
-	}
+	p.applyTransactionsBlockListConfig(chainConfig)
 
 	if len(p.bridgeAllowListAdmin) != 0 {
 		// only enable allow list if there is at least one address as **admin**, otherwise

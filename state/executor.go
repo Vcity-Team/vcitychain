@@ -263,6 +263,9 @@ func (e *Executor) BeginTxn(
 // If nodes upgrade after height H (missed the exact fork block), the first
 // processed block at height >= H that still lacks the configured Admin role(s)
 // performs a deterministic catch-up write so the list remains operable.
+//
+// The contract account is given a 1-wei balance (same as ApplyGenesisAllocs) so
+// EIP-161 empty-account deletion does not wipe the role storage at block end.
 func (e *Executor) maybeApplyTransactionsBlockListFork(txn *Transition, blockNum uint64) {
 	cfg := e.config.TransactionsBlockList
 	if cfg == nil || txn.txnBlockList == nil {
@@ -274,7 +277,9 @@ func (e *Executor) maybeApplyTransactionsBlockListFork(txn *Transition, blockNum
 		return
 	}
 
-	if blockNum > forkBlock && transactionsBlockListAdminsPresent(txn.txnBlockList, cfg) {
+	// Idempotent: once any configured Admin is present in state, skip.
+	// (Also covers catch-up after upgrading past H, and IBFT re-seals of height H.)
+	if transactionsBlockListAdminsPresent(txn.txnBlockList, cfg) {
 		return
 	}
 
@@ -284,6 +289,12 @@ func (e *Executor) maybeApplyTransactionsBlockListFork(txn *Transition, blockNum
 
 	for _, addr := range cfg.AdminAddresses {
 		txn.txnBlockList.SetRole(addr, addresslist.AdminRole)
+	}
+
+	// Prevent EIP-161 empty-account cleanup from discarding role storage.
+	contractAddr := contracts.BlockListTransactionsAddr
+	if txn.state != nil && txn.state.GetBalance(contractAddr).Sign() == 0 {
+		txn.state.SetBalance(contractAddr, big.NewInt(1))
 	}
 
 	e.logger.Info(
