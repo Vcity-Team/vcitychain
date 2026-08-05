@@ -601,8 +601,10 @@ func NewServer(config *Config) (*Server, error) {
 			m.config.Chain.Params.TransactionsAllowList)
 	}
 
-	// apply transactions execution block list genesis data
-	if m.config.Chain.Params.TransactionsBlockList != nil {
+	// apply transactions execution block list genesis data.
+	// Skip when forks.transactionsBlockList.block > 0 so live networks can enable
+	// the list via hardfork without rewriting the genesis state root / hash.
+	if m.config.Chain.Params.ShouldApplyTransactionsBlockListGenesisAllocs() {
 		addresslist.ApplyGenesisAllocs(m.config.Chain.Genesis, contracts.BlockListTransactionsAddr,
 			m.config.Chain.Params.TransactionsBlockList)
 	}

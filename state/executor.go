@@ -258,8 +258,11 @@ func (e *Executor) BeginTxn(
 }
 
 // maybeApplyTransactionsBlockListFork writes Admin/Enabled roles from chain params
-// into state at the exact transactionsBlockList fork activation block.
-// This allows live chains to enable the block list via hardfork without regenerating genesis state.
+// into state at the transactionsBlockList fork activation block.
+//
+// If nodes upgrade after height H (missed the exact fork block), the first
+// processed block at height >= H that still lacks the configured Admin role(s)
+// performs a deterministic catch-up write so the list remains operable.
 func (e *Executor) maybeApplyTransactionsBlockListFork(txn *Transition, blockNum uint64) {
 	cfg := e.config.TransactionsBlockList
 	if cfg == nil || txn.txnBlockList == nil {
@@ -267,7 +270,11 @@ func (e *Executor) maybeApplyTransactionsBlockListFork(txn *Transition, blockNum
 	}
 
 	forkBlock, ok := e.config.TransactionsBlockListForkBlock()
-	if !ok || blockNum != forkBlock {
+	if !ok || blockNum < forkBlock {
+		return
+	}
+
+	if blockNum > forkBlock && transactionsBlockListAdminsPresent(txn.txnBlockList, cfg) {
 		return
 	}
 
@@ -282,9 +289,27 @@ func (e *Executor) maybeApplyTransactionsBlockListFork(txn *Transition, blockNum
 	e.logger.Info(
 		"Applied transactions block list roles at hardfork",
 		"block", blockNum,
+		"forkBlock", forkBlock,
+		"catchUp", blockNum > forkBlock,
 		"admins", len(cfg.AdminAddresses),
 		"enabled", len(cfg.EnabledAddresses),
 	)
+}
+
+// transactionsBlockListAdminsPresent reports whether at least one configured
+// Admin address already has AdminRole in state (bootstrap already applied).
+func transactionsBlockListAdminsPresent(list *addresslist.AddressList, cfg *chain.AddressListConfig) bool {
+	if list == nil || cfg == nil {
+		return false
+	}
+
+	for _, addr := range cfg.AdminAddresses {
+		if list.GetRole(addr) == addresslist.AdminRole {
+			return true
+		}
+	}
+
+	return false
 }
 
 type Transition struct {

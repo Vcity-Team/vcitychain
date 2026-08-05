@@ -61,7 +61,7 @@ cast call 0x0300000000000000000000000000000000000002 \
 
 ## Hardfork (live network)
 
-All validators must upgrade **before** height `H` with the **same** genesis params:
+All validators must upgrade with the **same** genesis params. Prefer activating at a **future** height `H` (H > current tip).
 
 1. Deploy Safe on the live chain; record its address.
 2. Edit every node’s `genesis.json`:
@@ -79,13 +79,15 @@ All validators must upgrade **before** height `H` with the **same** genesis para
 ```
 
 3. Rolling-restart / upgrade binaries that include From+To filtering and fork injection.
-4. At block `H`, nodes write Admin roles into state and start enforcing the list.
-5. Confirm `readAddressList(Safe) == 2` after `H`.
+4. At block `H` (or the first block after upgrade if `H` was already passed), nodes write Admin roles into state and start enforcing the list.
+5. Confirm `readAddressList(Safe) == 2` after activation.
 
 :::warning
 
-- Set **both** `params.transactionsBlockList` and `forks.transactionsBlockList.block = H`.
-- If you add the params object **without** the fork key, enforcement starts immediately on upgrade (no height gate).
+- Set **both** `params.transactionsBlockList` and `forks.transactionsBlockList.block = H` with **H > 0**.
+- Do **not** use `block: 0` on an already-running chain: that path is for new genesis only.
+- When `H > 0`, the node **does not** rewrite genesis allocs (avoids `genesis file does not match current genesis`). Roles are injected at height `H`, with a deterministic catch-up on the first block `>= H` if the exact fork block was missed.
+- If you add the params object **without** the fork key, enforcement starts immediately on upgrade and genesis allocs are applied (unsafe on live chains).
 
 :::
 

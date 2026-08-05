@@ -3,8 +3,10 @@ package state
 import (
 	"testing"
 
+	"github.com/hashicorp/go-hclog"
 	"github.com/stretchr/testify/require"
 
+	"github.com/Vcity-Team/vcitychain/chain"
 	"github.com/Vcity-Team/vcitychain/contracts"
 	"github.com/Vcity-Team/vcitychain/state/runtime/addresslist"
 	"github.com/Vcity-Team/vcitychain/types"
@@ -105,5 +107,67 @@ func TestTransition_isTxBlocked(t *testing.T) {
 		localList.SetRole(from, addresslist.EnabledRole)
 		localTr := &Transition{txnBlockList: localList}
 		require.ErrorIs(t, localTr.isTxBlocked(from, nil), addresslist.ErrAccountBlacklisted)
+	})
+}
+
+func TestExecutor_maybeApplyTransactionsBlockListFork(t *testing.T) {
+	t.Parallel()
+
+	admin := types.StringToAddress("0xaaaa")
+	victim := types.StringToAddress("0xbbbb")
+	forkBlock := uint64(100)
+
+	newExec := func() (*Executor, *Transition, *memoryStateRef) {
+		st := newMemoryStateRef()
+		list := addresslist.NewAddressList(st, contracts.BlockListTransactionsAddr)
+		params := &chain.Params{
+			TransactionsBlockList: &chain.AddressListConfig{
+				AdminAddresses:   []types.Address{admin},
+				EnabledAddresses: []types.Address{victim},
+			},
+			Forks: &chain.Forks{
+				chain.TransactionsBlockList: chain.NewFork(forkBlock),
+			},
+		}
+		exec := &Executor{
+			config: params,
+			logger: hclog.NewNullLogger(),
+		}
+		txn := &Transition{txnBlockList: list}
+
+		return exec, txn, st
+	}
+
+	t.Run("skips before fork height", func(t *testing.T) {
+		t.Parallel()
+		exec, txn, _ := newExec()
+		exec.maybeApplyTransactionsBlockListFork(txn, forkBlock-1)
+		require.Equal(t, addresslist.NoRole, txn.txnBlockList.GetRole(admin))
+	})
+
+	t.Run("applies at exact fork height", func(t *testing.T) {
+		t.Parallel()
+		exec, txn, _ := newExec()
+		exec.maybeApplyTransactionsBlockListFork(txn, forkBlock)
+		require.Equal(t, addresslist.AdminRole, txn.txnBlockList.GetRole(admin))
+		require.Equal(t, addresslist.EnabledRole, txn.txnBlockList.GetRole(victim))
+	})
+
+	t.Run("catch-up after missed fork height", func(t *testing.T) {
+		t.Parallel()
+		exec, txn, _ := newExec()
+		exec.maybeApplyTransactionsBlockListFork(txn, forkBlock+50)
+		require.Equal(t, addresslist.AdminRole, txn.txnBlockList.GetRole(admin))
+		require.Equal(t, addresslist.EnabledRole, txn.txnBlockList.GetRole(victim))
+	})
+
+	t.Run("noop when admin already present after fork", func(t *testing.T) {
+		t.Parallel()
+		exec, txn, _ := newExec()
+		txn.txnBlockList.SetRole(admin, addresslist.AdminRole)
+		// victim not set — catch-up must not re-apply enabled list once any admin exists
+		exec.maybeApplyTransactionsBlockListFork(txn, forkBlock+1)
+		require.Equal(t, addresslist.AdminRole, txn.txnBlockList.GetRole(admin))
+		require.Equal(t, addresslist.NoRole, txn.txnBlockList.GetRole(victim))
 	})
 }

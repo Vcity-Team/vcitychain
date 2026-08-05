@@ -43,3 +43,24 @@ func (p *Params) TransactionsBlockListForkBlock() (uint64, bool) {
 
 	return fork.Block, true
 }
+
+// ShouldApplyTransactionsBlockListGenesisAllocs reports whether Admin/Enabled
+// roles should be baked into genesis allocs.
+//
+// Live IBFT→DPoS networks enable the list via forks.transactionsBlockList.block = H
+// with H > 0. Writing allocs in that case changes the genesis state root and makes
+// existing nodes fail with "genesis file does not match current genesis".
+// For H > 0, roles are injected at (or after) H by the executor instead.
+func (p *Params) ShouldApplyTransactionsBlockListGenesisAllocs() bool {
+	if p == nil || p.TransactionsBlockList == nil {
+		return false
+	}
+
+	forkBlock, ok := p.TransactionsBlockListForkBlock()
+	if !ok {
+		// No fork key → config-only path, active from genesis.
+		return true
+	}
+
+	return forkBlock == 0
+}
