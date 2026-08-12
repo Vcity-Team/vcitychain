@@ -2,16 +2,22 @@ package dpos
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/Vcity-Team/vcitychain/bls"
 	"github.com/Vcity-Team/vcitychain/secrets"
 )
 
+// blsKeyCacheTTL controls how long the BLS private key stays in memory
+// before it is reloaded from the secrets manager.
+const blsKeyCacheTTL = 30 * time.Minute
+
 // getBLSPrivateKey 获取BLS私钥（从运行时缓存或密钥管理器）
 func (r *dposRuntime) getBLSPrivateKey() (*bls.PrivateKey, error) {
 	// 首先检查缓存
 	r.blsPrivateKeyCacheMutex.RLock()
-	if r.blsPrivateKeyCache != nil {
+	if r.blsPrivateKeyCache != nil && !r.blsPrivateKeyCacheTime.IsZero() &&
+		time.Since(r.blsPrivateKeyCacheTime) <= blsKeyCacheTTL {
 		defer r.blsPrivateKeyCacheMutex.RUnlock()
 		return r.blsPrivateKeyCache, nil
 	}
@@ -22,7 +28,8 @@ func (r *dposRuntime) getBLSPrivateKey() (*bls.PrivateKey, error) {
 	defer r.blsPrivateKeyCacheMutex.Unlock()
 
 	// 双重检查，防止在获取写锁期间其他goroutine已经加载了缓存
-	if r.blsPrivateKeyCache != nil {
+	if r.blsPrivateKeyCache != nil && !r.blsPrivateKeyCacheTime.IsZero() &&
+		time.Since(r.blsPrivateKeyCacheTime) <= blsKeyCacheTTL {
 		return r.blsPrivateKeyCache, nil
 	}
 
@@ -46,10 +53,10 @@ func (r *dposRuntime) getBLSPrivateKey() (*bls.PrivateKey, error) {
 
 	// 缓存私钥
 	r.blsPrivateKeyCache = privateKey
+	r.blsPrivateKeyCacheTime = time.Now()
 
 	return privateKey, nil
 }
-
 
 
 
