@@ -23,7 +23,7 @@ func (cli *cliOutput) WriteOutput() {
 		}
 
 		// return proper error exit code for cli error output
-		os.Exit(1)
+		os.Exit(ExitCodeInternal)
 	}
 
 	_, _ = fmt.Fprintln(os.Stdout, cli.getCommandOutput())
