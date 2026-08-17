@@ -149,3 +149,40 @@ func (ci *ConnectionInfo) HasFreeConnectionSlot(direction network.Direction) boo
 
 	return false
 }
+
+// TryReservePendingSlot atomically reserves a pending connection slot in the
+// given direction. Callers must release with UpdatePendingConnCountByDirection(-1, ...)
+// when the handshake finishes or fails. This closes the check-then-act race on slots.
+func (ci *ConnectionInfo) TryReservePendingSlot(direction network.Direction) bool {
+	var pendingPtr *int64
+	var max, active int64
+
+	switch direction {
+	case network.DirInbound:
+		pendingPtr = &ci.pendingInboundConnectionCount
+		max = ci.maxInboundConnCount()
+		active = ci.GetInboundConnCount()
+	case network.DirOutbound:
+		pendingPtr = &ci.pendingOutboundConnectionCount
+		max = ci.maxOutboundConnCount()
+		active = ci.GetOutboundConnCount()
+	default:
+		return false
+	}
+
+	for {
+		pending := atomic.LoadInt64(pendingPtr)
+		if active+pending >= max {
+			return false
+		}
+		if atomic.CompareAndSwapInt64(pendingPtr, pending, pending+1) {
+			return true
+		}
+		// active may have changed; refresh for next attempt
+		if direction == network.DirInbound {
+			active = ci.GetInboundConnCount()
+		} else {
+			active = ci.GetOutboundConnCount()
+		}
+	}
+}

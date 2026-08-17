@@ -173,6 +173,10 @@ func (m *MockNetworkingServer) HasFreeConnectionSlot(direction network.Direction
 	return true
 }
 
+func (m *MockNetworkingServer) TryReserveConnectionSlot(direction network.Direction) bool {
+	return m.HasFreeConnectionSlot(direction)
+}
+
 func (m *MockNetworkingServer) HookHasFreeConnectionSlot(fn hasFreeConnectionSlotDelegate) {
 	m.hasFreeConnectionSlotFn = fn
 }
