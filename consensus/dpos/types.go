@@ -103,19 +103,21 @@ type BLSKeyAckMessage struct {
 
 // BLS公钥请求消息
 type BLSKeyRequestMessage struct {
-	RequestedAddress types.Address `json:"requestedAddress"` // 请求的地址
-	Requester        types.Address `json:"requester"`        // 请求者地址
-	Timestamp        uint64        `json:"timestamp"`        // 时间戳
+	RequestID        string        `json:"requestId,omitempty"` // 请求关联 ID（同步等待路径必填）
+	RequestedAddress types.Address `json:"requestedAddress"`    // 请求的地址
+	Requester        types.Address `json:"requester"`           // 请求者地址
+	Timestamp        uint64        `json:"timestamp"`           // 请求方时间戳
 }
 
 // BLS公钥响应消息
 type BLSKeyResponseMessage struct {
-	RequestedAddress types.Address `json:"requestedAddress"` // 被请求的地址
-	Requester        types.Address `json:"requester"`        // 请求者地址
-	BLSPublicKey     []byte        `json:"blsPublicKey"`     // BLS公钥（如果有的话）
-	Found            bool          `json:"found"`            // 是否找到公钥
-	BlockNumber      uint64        `json:"blockNumber"`      // 请求的区块高度
-	Timestamp        uint64        `json:"timestamp"`        // 时间戳
+	RequestID        string        `json:"requestId,omitempty"` // 回显请求 ID，供等待方匹配
+	RequestedAddress types.Address `json:"requestedAddress"`    // 被请求的地址
+	Requester        types.Address `json:"requester"`           // 请求者地址
+	BLSPublicKey     []byte        `json:"blsPublicKey"`        // BLS公钥（如果有的话）
+	Found            bool          `json:"found"`               // 是否找到公钥
+	BlockNumber      uint64        `json:"blockNumber"`         // 请求的区块高度
+	Timestamp        uint64        `json:"timestamp"`           // 应答方时间戳
 }
 
 // 消息类型常量

@@ -30,26 +30,57 @@ func (d *DPoS) requestBLSPublicKeyFromNetwork(address types.Address) (*bls.Publi
 	return requester.RequestBLSKey(ctx, address)
 }
 
-// getBLSKeyRequester 获取或创建BLSKeyRequester实例
+// getBLSKeyRequester 获取或创建BLSKeyRequester实例（进程内单例）
 func (d *DPoS) getBLSKeyRequester() *BLSKeyRequester {
-	// 如果runtime或networkIntegration不可用，返回nil
 	if d.runtime == nil || d.runtime.networkIntegration == nil {
 		return nil
 	}
 
-	// 获取BLSKeyManager
-	var blsKeyManager *BLSKeyManager
-	if d.runtime.networkIntegration.blsKeyManager != nil {
-		blsKeyManager = d.runtime.networkIntegration.blsKeyManager
+	d.blsKeyRequesterOnce.Do(func() {
+		var blsKeyManager *BLSKeyManager
+		if d.runtime.networkIntegration.blsKeyManager != nil {
+			blsKeyManager = d.runtime.networkIntegration.blsKeyManager
+		}
+		d.blsKeyRequester = NewBLSKeyRequester(
+			d,
+			d.runtime.networkIntegration,
+			blsKeyManager,
+			d.logger,
+		)
+	})
+
+	// runtime/network 可能在 Once 之后才补齐 blsKeyManager，延迟刷新引用
+	if d.blsKeyRequester != nil && d.blsKeyRequester.blsKeyManager == nil &&
+		d.runtime.networkIntegration.blsKeyManager != nil {
+		d.blsKeyRequester.blsKeyManager = d.runtime.networkIntegration.blsKeyManager
+		d.blsKeyRequester.requestSender.blsKeyManager = d.runtime.networkIntegration.blsKeyManager
 	}
 
-	// 创建BLSKeyRequester
-	return NewBLSKeyRequester(
-		d,
-		d.runtime.networkIntegration,
-		blsKeyManager,
-		d.logger,
-	)
+	return d.blsKeyRequester
+}
+
+// handleBLSError 将错误投递给等待中的 BLS 请求
+func (d *DPoS) handleBLSError(requestID string, err error) error {
+	requester := d.getBLSKeyRequester()
+	if requester != nil {
+		if herr := requester.HandleBLSError(requestID, err); herr == nil {
+			return nil
+		}
+	}
+
+	blsHandlerMutex.RLock()
+	errorCh, exists := blsErrorHandlers[requestID]
+	blsHandlerMutex.RUnlock()
+	if !exists {
+		return fmt.Errorf("BLS error handler not found for requestID: %s", requestID)
+	}
+
+	select {
+	case errorCh <- err:
+		return nil
+	default:
+		return fmt.Errorf("BLS error channel is full")
+	}
 }
 
 // initializeBLSNetworking 初始化BLS网络通信

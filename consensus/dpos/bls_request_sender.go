@@ -52,23 +52,23 @@ func (brs *BLSRequestSender) CheckConnectivity(address types.Address) Connectivi
 	}
 }
 
-// SendRequest 发送请求
+// SendRequest 发送请求（保留 request.RequestID 以便响应匹配）
 func (brs *BLSRequestSender) SendRequest(
 	request *BLSPublicKeyRequest,
 ) error {
-	// 优先使用BLSKeyManager（已完成的组件）
 	if brs.blsKeyManager != nil {
-		return brs.blsKeyManager.RequestBLSKey(
+		return brs.blsKeyManager.RequestBLSKeyWithID(
 			request.TargetAddress,
 			request.RequesterAddress,
+			request.RequestID,
 		)
 	}
 
-	// 备用方案：使用NetworkIntegration
 	if brs.networkIntegration != nil {
-		return brs.networkIntegration.RequestBLSKey(
+		return brs.networkIntegration.RequestBLSKeyWithID(
 			request.TargetAddress,
 			request.RequesterAddress,
+			request.RequestID,
 		)
 	}
 

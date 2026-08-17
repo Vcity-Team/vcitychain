@@ -1841,20 +1841,7 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 		if isLocalRequest {
 			// 静默处理，不打印日志
 		} else {
-			// 非本地节点请求，完全静默处理，不打印任何日志
-			// 直接发送"未找到"响应
-			responseMsg := &BLSKeyResponseMessage{
-				RequestedAddress: requestMsg.RequestedAddress,
-				Requester:        requestMsg.Requester,
-				BLSPublicKey:     nil,
-				Found:            false,
-				Timestamp:        uint64(time.Now().Unix()),
-			}
-
-			// 发送响应
-			if err := ni.sendBLSKeyResponse(responseMsg); err != nil {
-				ni.logger.Error("❌ 发送BLS公钥响应失败", "error", err)
-			}
+			// 非目标节点：静默忽略，不回 Found:false（避免噪声干扰同步等待）
 			return
 		}
 
@@ -1903,8 +1890,9 @@ func (ni *NetworkIntegration) handleBLSKeyRequest(obj interface{}, from peer.ID)
 			}
 		}
 
-		// 发送响应消息
+		// 发送响应消息（回显 RequestID，供等待方匹配）
 		responseMsg := &BLSKeyResponseMessage{
+			RequestID:        requestMsg.RequestID,
 			RequestedAddress: requestMsg.RequestedAddress,
 			Requester:        requestMsg.Requester,
 			BLSPublicKey:     blsPublicKey,
@@ -1940,11 +1928,13 @@ func (ni *NetworkIntegration) handleBLSKeyResponse(obj interface{}, from peer.ID
 			// 保存BLS公钥到缓存和数据库
 			if err := ni.saveBLSKey(responseMsg.RequestedAddress, responseMsg.BLSPublicKey); err != nil {
 				ni.logger.Error("保存BLS公钥失败", "error", err)
-			}
-
-			// 将响应转发给DPoS实例的BLS请求处理器
-			if err := ni.forwardBLSResponseToDPoS(&responseMsg); err != nil {
+			} else if err := ni.forwardBLSResponseToDPoS(&responseMsg); err != nil {
 				//ni.logger.Error("转发BLS响应到DPoS失败", "error", err)
+			}
+		} else if responseMsg.RequestID != "" {
+			// 目标节点明确未找到：唤醒同步等待方，避免空等超时
+			if err := ni.forwardBLSErrorToDPoS(responseMsg.RequestID, fmt.Errorf("bls key not found for %s", responseMsg.RequestedAddress.String())); err != nil {
+				ni.logger.Debug("转发BLS未找到错误失败", "error", err, "requestID", responseMsg.RequestID)
 			}
 		}
 	} else {
@@ -2117,6 +2107,11 @@ func getAvailableFields(v reflect.Value) []string {
 
 // RequestBLSKey 请求BLS公钥
 func (ni *NetworkIntegration) RequestBLSKey(requestedAddress types.Address, requester types.Address) error {
+	return ni.RequestBLSKeyWithID(requestedAddress, requester, "")
+}
+
+// RequestBLSKeyWithID 请求BLS公钥并携带关联 ID
+func (ni *NetworkIntegration) RequestBLSKeyWithID(requestedAddress types.Address, requester types.Address, requestID string) error {
 	// 🔧 修复：确保BLS相关主题已初始化
 	if ni.blsKeyRequestTopic == nil && ni.topicManager != nil {
 		ni.blsKeyRequestTopic = ni.topicManager.GetTopic("dpos-bls-key-request")
@@ -2149,7 +2144,7 @@ func (ni *NetworkIntegration) RequestBLSKey(requestedAddress types.Address, requ
 			ni.blsKeyAckTopic,
 		)
 	}
-	return ni.blsKeyManager.RequestBLSKey(requestedAddress, requester)
+	return ni.blsKeyManager.RequestBLSKeyWithID(requestedAddress, requester, requestID)
 }
 
 // RegisterValidatorPeerFromMultiAddr 使用MultiAddr注册验证者与peer的映射
@@ -2221,10 +2216,13 @@ func (ni *NetworkIntegration) forwardBLSResponseToDPoS(responseMsg *BLSKeyRespon
 			return fmt.Errorf("failed to unmarshal BLS public key: %w", err)
 		}
 
-		// 构造请求ID（与发送请求时保持一致）
-		requestID := fmt.Sprintf("bls_request_%s_%d",
-			responseMsg.RequestedAddress.String(),
-			responseMsg.Timestamp)
+		requestID := responseMsg.RequestID
+		if requestID == "" {
+			// 兼容旧对等节点（无 requestId）：无法安全匹配等待方，跳过 channel 唤醒
+			ni.logger.Debug("BLS响应缺少 requestId，仅写入缓存，跳过同步唤醒",
+				"requestedAddress", responseMsg.RequestedAddress.String())
+			return nil
+		}
 
 		// 将响应发送给等待的请求处理器
 		if err := dposInstance.handleBLSResponse(requestID, blsKey); err != nil {
@@ -2239,4 +2237,16 @@ func (ni *NetworkIntegration) forwardBLSResponseToDPoS(responseMsg *BLSKeyRespon
 	}
 
 	return nil
+}
+
+// forwardBLSErrorToDPoS 将BLS错误转发给等待中的请求处理器
+func (ni *NetworkIntegration) forwardBLSErrorToDPoS(requestID string, err error) error {
+	if requestID == "" {
+		return nil
+	}
+	dposInstance, exists := GetDPoSInstance("vcity_dpos")
+	if !exists || dposInstance == nil {
+		return fmt.Errorf("DPoS instance not found")
+	}
+	return dposInstance.handleBLSError(requestID, err)
 }

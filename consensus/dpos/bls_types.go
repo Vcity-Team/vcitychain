@@ -4,8 +4,9 @@ import (
 	"github.com/Vcity-Team/vcitychain/types"
 )
 
-// BLSPublicKeyRequest BLS公钥请求消息
+// BLSPublicKeyRequest BLS公钥请求消息（本地同步等待路径）
 type BLSPublicKeyRequest struct {
+	RequestID        string        `json:"request_id"`
 	RequesterAddress types.Address `json:"requester_address"`
 	TargetAddress    types.Address `json:"target_address"`
 	Timestamp        uint64        `json:"timestamp"`
