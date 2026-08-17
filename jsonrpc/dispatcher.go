@@ -69,6 +69,10 @@ type dispatcherParams struct {
 	blockRangeLimit         uint64
 
 	concurrentRequestsDebug uint64
+
+	// enabledAPIs restricts registered JSON-RPC namespaces (eth, net, web3, ...).
+	// Empty / nil means DefaultJSONRPCAPIs.
+	enabledAPIs map[string]struct{}
 }
 
 func (dp dispatcherParams) isExceedingBatchLengthLimit(value uint64) bool {
@@ -98,6 +102,16 @@ func newDispatcher(
 }
 
 func (d *Dispatcher) registerEndpoints(store JSONRPCStore) error {
+	enabled := d.params.enabledAPIs
+	if len(enabled) == 0 {
+		enabled = parseJSONRPCAPIList(DefaultJSONRPCAPIs)
+	}
+
+	apiEnabled := func(name string) bool {
+		_, ok := enabled[name]
+		return ok
+	}
+
 	d.endpoints.Eth = &Eth{
 		d.logger,
 		store,
@@ -125,31 +139,47 @@ func (d *Dispatcher) registerEndpoints(store JSONRPCStore) error {
 
 	var err error
 
-	if err = d.registerService("eth", d.endpoints.Eth); err != nil {
-		return err
+	if apiEnabled("eth") {
+		if err = d.registerService("eth", d.endpoints.Eth); err != nil {
+			return err
+		}
 	}
 
-	if err = d.registerService("net", d.endpoints.Net); err != nil {
-		return err
+	if apiEnabled("net") {
+		if err = d.registerService("net", d.endpoints.Net); err != nil {
+			return err
+		}
 	}
 
-	if err = d.registerService("web3", d.endpoints.Web3); err != nil {
-		return err
+	if apiEnabled("web3") {
+		if err = d.registerService("web3", d.endpoints.Web3); err != nil {
+			return err
+		}
 	}
 
-	if err = d.registerService("txpool", d.endpoints.TxPool); err != nil {
-		return err
+	if apiEnabled("txpool") {
+		if err = d.registerService("txpool", d.endpoints.TxPool); err != nil {
+			return err
+		}
 	}
 
-	if err = d.registerService("bridge", d.endpoints.Bridge); err != nil {
-		return err
+	if apiEnabled("bridge") {
+		if err = d.registerService("bridge", d.endpoints.Bridge); err != nil {
+			return err
+		}
 	}
 
-	if err = d.registerService("debug", d.endpoints.Debug); err != nil {
-		return err
+	if apiEnabled("debug") {
+		if err = d.registerService("debug", d.endpoints.Debug); err != nil {
+			return err
+		}
 	}
 
-	return d.registerService("dpos", d.endpoints.DPOS)
+	if apiEnabled("dpos") {
+		return d.registerService("dpos", d.endpoints.DPOS)
+	}
+
+	return nil
 }
 
 func (d *Dispatcher) getFnHandler(req Request) (*serviceData, *funcData, Error) {
@@ -422,15 +452,22 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 			// For interface{} parameters, pass the raw params directly
 			var paramValue interface{}
 			if err := json.Unmarshal(req.Params, &paramValue); err != nil {
-				d.logger.Error("failed to unmarshal params", "error", err, "params", string(req.Params))
+				plen, preview := paramsLogMeta(req.Params)
+				d.logger.Error("failed to unmarshal params",
+					"error", err,
+					"method", req.Method,
+					"params_len", plen,
+					"params_preview", preview)
 				return nil, NewInvalidParamsError("Invalid Params")
 			}
 
 			// Check if paramValue is nil or contains nil values and return error if so
 			if paramValue == nil {
+				plen, preview := paramsLogMeta(req.Params)
 				d.logger.Error("params is nil, cannot proceed",
 					"method", req.Method,
-					"params", string(req.Params))
+					"params_len", plen,
+					"params_preview", preview)
 				return nil, NewInvalidParamsError("Params cannot be null")
 			}
 
@@ -438,10 +475,12 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 			if arr, ok := paramValue.([]interface{}); ok {
 				for i, v := range arr {
 					if v == nil {
+						plen, preview := paramsLogMeta(req.Params)
 						d.logger.Error("params array contains nil value",
 							"method", req.Method,
 							"index", i,
-							"params", string(req.Params))
+							"params_len", plen,
+							"params_preview", preview)
 						return nil, NewInvalidParamsError(fmt.Sprintf("Param at index %d cannot be null", i))
 					}
 				}
@@ -517,12 +556,12 @@ func (d *Dispatcher) handleReq(req Request) ([]byte, Error) {
 			data, ok = res.([]byte)
 
 			if !ok {
-				return nil, NewInternalError(err.Error())
+				return nil, NewInternalError(sanitizeRPCErrorMessage(err.Error()))
 			}
 		}
 
-		// Use InternalError for application errors to preserve full error message
-		return data, NewInternalError(err.Error())
+		// Sanitize client-facing messages (may include hex keys from callers).
+		return data, NewInternalError(sanitizeRPCErrorMessage(err.Error()))
 	}
 
 	if res := output[0].Interface(); res != nil {

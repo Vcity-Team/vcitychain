@@ -33,8 +33,11 @@ type Config struct {
 	LogFilePath              string     `json:"log_to" yaml:"log_to"`
 	JSONRPCBatchRequestLimit uint64     `json:"json_rpc_batch_request_limit" yaml:"json_rpc_batch_request_limit"`
 	JSONRPCBlockRangeLimit   uint64     `json:"json_rpc_block_range_limit" yaml:"json_rpc_block_range_limit"`
-	JSONLogFormat            bool       `json:"json_log_format" yaml:"json_log_format"`
-	CorsAllowedOrigins       []string   `json:"cors_allowed_origins" yaml:"cors_allowed_origins"`
+	// JSONRPCAPIs restricts registered namespaces (eth,net,web3,txpool,dpos,debug,bridge).
+	// Empty uses defaults (debug/bridge excluded).
+	JSONRPCAPIs        []string `json:"jsonrpc_apis" yaml:"jsonrpc_apis"`
+	JSONLogFormat      bool     `json:"json_log_format" yaml:"json_log_format"`
+	CorsAllowedOrigins []string `json:"cors_allowed_origins" yaml:"cors_allowed_origins"`
 
 	Relayer               bool   `json:"relayer" yaml:"relayer"`
 	NumBlockConfirmations uint64 `json:"num_block_confirmations" yaml:"num_block_confirmations"`
@@ -189,11 +192,14 @@ func DefaultConfig() *Config {
 		LogLevel:    "INFO",
 		RestoreFile: "",
 		Headers: &Headers{
-			AccessControlAllowOrigins: []string{"*"},
+			// Empty default: no browser CORS. Operators must set access-control-allow-origins explicitly.
+		// Docker / local demos may still pass "*".
+		AccessControlAllowOrigins: []string{},
 		},
 		LogFilePath:              "",
 		JSONRPCBatchRequestLimit: DefaultJSONRPCBatchRequestLimit,
 		JSONRPCBlockRangeLimit:   DefaultJSONRPCBlockRangeLimit,
+		JSONRPCAPIs:              []string{"eth", "net", "web3", "txpool", "dpos"},
 		Relayer:                  false,
 		NumBlockConfirmations:    DefaultNumBlockConfirmations,
 		ConcurrentRequestsDebug:  DefaultConcurrentRequestsDebug,

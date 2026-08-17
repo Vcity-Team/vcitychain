@@ -196,25 +196,31 @@ func toBlock(b *types.Block, fullTx bool, displayHash types.Hash) *block {
 }
 
 type receipt struct {
-	Root              types.Hash     `json:"root"`
-	CumulativeGasUsed argUint64      `json:"cumulativeGasUsed"`
-	LogsBloom         types.Bloom    `json:"logsBloom"`
-	Logs              []*Log         `json:"logs"`
-	Status            argUint64      `json:"status"`
-	TxHash            types.Hash     `json:"transactionHash"`
-	TxIndex           argUint64      `json:"transactionIndex"`
-	BlockHash         types.Hash     `json:"blockHash"`
-	BlockNumber       argUint64      `json:"blockNumber"`
-	GasUsed           argUint64      `json:"gasUsed"`
+	Root              types.Hash    `json:"root"`
+	CumulativeGasUsed argUint64     `json:"cumulativeGasUsed"`
+	LogsBloom         types.Bloom   `json:"logsBloom"`
+	Logs              []*Log        `json:"logs"`
+	Status            argUint64     `json:"status"`
+	TxHash            types.Hash    `json:"transactionHash"`
+	TxIndex           argUint64     `json:"transactionIndex"`
+	BlockHash         types.Hash    `json:"blockHash"`
+	BlockNumber       argUint64     `json:"blockNumber"`
+	GasUsed           argUint64     `json:"gasUsed"`
 	ContractAddress   *types.Address `json:"contractAddress"`
-	FromAddr          types.Address  `json:"from"`
+	FromAddr          types.Address `json:"from"`
 	ToAddr            *types.Address `json:"to"`
+	// EIP-2718 tx type — required by foundry cast / ethclient receipt decode
+	Type argUint64 `json:"type"`
 }
 
 func toReceipt(src *types.Receipt, tx *types.Transaction,
 	txIndex uint64, header *types.Header, logs []*Log, blockHash types.Hash) *receipt {
 	if blockHash == types.ZeroHash && header != nil {
 		blockHash = header.Hash
+	}
+	txType := argUint64(src.TransactionType)
+	if tx != nil {
+		txType = argUint64(tx.Type)
 	}
 	return &receipt{
 		Root:              src.Root,
@@ -230,6 +236,7 @@ func toReceipt(src *types.Receipt, tx *types.Transaction,
 		FromAddr:          tx.From,
 		ToAddr:            tx.To,
 		Logs:              logs,
+		Type:              txType,
 	}
 }
 
