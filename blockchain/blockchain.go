@@ -541,8 +541,11 @@ func (b *Blockchain) readHeader(hash types.Hash) (*types.Header, bool) {
 		return nil, false
 	}
 
-	// Compute the header hash and update the cache
-	hh.ComputeHash()
+	// The header RLP does not carry its hash. Keep the storage lookup hash
+	// instead of recalculating it with the current global header-hash function.
+	// Historical blocks may have been written under a different consensus hash
+	// scheme; recalculating those hashes breaks body and receipt lookups.
+	hh.Hash = hash
 	b.headersCache.Add(hash, hh)
 
 	return hh, true

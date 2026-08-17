@@ -35,6 +35,32 @@ func TestGenesis(t *testing.T) {
 	assert.Equal(t, header.Hash, genesis.Hash)
 }
 
+func TestReadHeaderPreservesStorageHash(t *testing.T) {
+	b := NewTestBlockchain(t, nil)
+
+	storedHash := types.StringToHash("0x1234")
+	header := &types.Header{
+		Hash:       storedHash,
+		Difficulty: 1,
+		Number:     1,
+	}
+	batchWriter := storage.NewBatchWriter(b.db)
+	batchWriter.PutHeader(header)
+	require.NoError(t, batchWriter.WriteBatch())
+
+	originalHeaderHash := types.HeaderHash
+	t.Cleanup(func() {
+		types.HeaderHash = originalHeaderHash
+	})
+	types.HeaderHash = func(*types.Header) types.Hash {
+		return types.StringToHash("0xabcd")
+	}
+
+	readHeader, ok := b.readHeader(storedHash)
+	require.True(t, ok)
+	assert.Equal(t, storedHash, readHeader.Hash)
+}
+
 type dummyChain struct {
 	headers map[byte]*types.Header
 }
