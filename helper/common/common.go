@@ -371,6 +371,20 @@ func SafeAddUint64(a, b uint64) (uint64, bool) {
 	return sum, false
 }
 
+// SafeMulUint64 multiplies two uint64 values. On overflow it returns 0 and true.
+func SafeMulUint64(a, b uint64) (uint64, bool) {
+	if a == 0 || b == 0 {
+		return 0, false
+	}
+
+	product := a * b
+	if product/a != b {
+		return 0, true
+	}
+
+	return product, false
+}
+
 // EncodeUint64ToBytes encodes provided uint64 to big endian byte slice
 func EncodeUint64ToBytes(value uint64) []byte {
 	result := make([]byte, 8)

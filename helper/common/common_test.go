@@ -166,3 +166,23 @@ func Test_SafeAddUint64(t *testing.T) {
 		})
 	}
 }
+
+func Test_SafeMulUint64(t *testing.T) {
+	cases := []struct {
+		a, b     uint64
+		result   uint64
+		overflow bool
+	}{
+		{2, 3, 6, false},
+		{0, 100, 0, false},
+		{math.MaxUint64, 2, 0, true},
+	}
+
+	for i, c := range cases {
+		t.Run(fmt.Sprintf("%d case", i+1), func(t *testing.T) {
+			got, overflow := SafeMulUint64(c.a, c.b)
+			require.Equal(t, c.result, got)
+			require.Equal(t, c.overflow, overflow)
+		})
+	}
+}

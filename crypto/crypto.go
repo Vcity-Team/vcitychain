@@ -172,6 +172,10 @@ func RecoverPubkey(signature, hash []byte) (*ecdsa.PublicKey, error) {
 // Sign produces a compact signature of the data in hash with the given
 // private key on the secp256k1 curve.
 func Sign(priv *ecdsa.PrivateKey, hash []byte) ([]byte, error) {
+	if len(hash) != types.HashLength {
+		return nil, errHashOfInvalidLength
+	}
+
 	sig, err := btcec.SignCompact(S256, (*btcec.PrivateKey)(priv), hash, false)
 	if err != nil {
 		return nil, err
