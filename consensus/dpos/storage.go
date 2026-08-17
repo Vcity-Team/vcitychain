@@ -339,16 +339,27 @@ func (d *DPoS) persistSingleDelegateToDatabase(del *validator.ValidatorMetadata)
 			"memoryVotingPower", del.VotingPower.String())
 	}
 
+	// RMW：内存未带 Bls 时保留 DB 中已有公钥与计数器
+	var existingProduced, existingMissed, existingLast uint64
+	if existing, eerr := d.state.StakeStore.GetDelegateInfo(del.Address); eerr == nil && existing != nil {
+		if len(blsPublicKey) == 0 && len(existing.BlsPublicKey) > 0 {
+			blsPublicKey = append([]byte(nil), existing.BlsPublicKey...)
+		}
+		existingProduced = existing.ProducedBlocks
+		existingMissed = existing.MissedBlocks
+		existingLast = existing.LastBlockTime
+	}
+
 	// 创建受托人信息
 	delegateInfo := &DelegateInfo{
 		Address:        del.Address,
 		VotingPower:    new(big.Int).Set(dbVotingPower), // 使用数据库中的值，而不是内存中的值
 		TotalVotes:     new(big.Int).Set(dbVotingPower), // 使用VotingPower作为TotalVotes
-		ProducedBlocks: 0,
-		MissedBlocks:   0,
-		LastBlockTime:  0,
+		ProducedBlocks: existingProduced,
+		MissedBlocks:   existingMissed,
+		LastBlockTime:  existingLast,
 		IsActive:       del.IsActive,
-		BlsPublicKey:   blsPublicKey, // 保存BLS公钥（可以为nil）
+		BlsPublicKey:   blsPublicKey, // 保存BLS公钥（可以为nil）；空则已尽量从 DB 保留
 	}
 
 	d.populateCommissionFields(del.Address, delegateInfo)
@@ -508,16 +519,27 @@ func (d *DPoS) persistDelegateSetToDatabaseWithTarget(delegates validator.Accoun
 				"memoryVotingPower", del.VotingPower.String())
 		}
 
+		// RMW：内存未带 Bls 时保留 DB 中已有公钥与计数器
+		var existingProduced, existingMissed, existingLast uint64
+		if existing, eerr := d.state.StakeStore.GetDelegateInfo(del.Address); eerr == nil && existing != nil {
+			if len(blsPublicKey) == 0 && len(existing.BlsPublicKey) > 0 {
+				blsPublicKey = append([]byte(nil), existing.BlsPublicKey...)
+			}
+			existingProduced = existing.ProducedBlocks
+			existingMissed = existing.MissedBlocks
+			existingLast = existing.LastBlockTime
+		}
+
 		// 即使BLS公钥为nil，也允许保存受托人信息
 		delegateInfo := &DelegateInfo{
 			Address:        del.Address,
 			VotingPower:    new(big.Int).Set(dbVotingPower), // 使用数据库中的值，而不是内存中的值
 			TotalVotes:     new(big.Int).Set(dbVotingPower), // 使用VotingPower作为TotalVotes
-			ProducedBlocks: 0,
-			MissedBlocks:   0,
-			LastBlockTime:  0,
+			ProducedBlocks: existingProduced,
+			MissedBlocks:   existingMissed,
+			LastBlockTime:  existingLast,
 			IsActive:       del.IsActive,
-			BlsPublicKey:   blsPublicKey, // 保存BLS公钥（可以为nil）
+			BlsPublicKey:   blsPublicKey, // 保存BLS公钥（可以为nil）；空则已尽量从 DB 保留
 		}
 
 		d.populateCommissionFields(del.Address, delegateInfo)
