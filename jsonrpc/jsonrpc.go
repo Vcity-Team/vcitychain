@@ -2,6 +2,7 @@ package jsonrpc
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -37,9 +38,10 @@ func (s serverType) String() string {
 
 // JSONRPC is an API consensus
 type JSONRPC struct {
-	logger     hclog.Logger
-	config     *Config
-	dispatcher dispatcher
+	logger      hclog.Logger
+	config      *Config
+	dispatcher  dispatcher
+	rateLimiter *ipRateLimiter
 }
 
 type dispatcher interface {
@@ -71,10 +73,21 @@ type Config struct {
 
 	ConcurrentRequestsDebug uint64
 	WebSocketReadLimit      uint64
+
+	// APIs lists enabled JSON-RPC namespaces. Empty uses DefaultJSONRPCAPIs.
+	APIs []string
+
+	// HTTPRequestsPerSecond caps requests per client IP (0 = default 200/s).
+	HTTPRequestsPerSecond int
 }
 
 // NewJSONRPC returns the JSONRPC http server
 func NewJSONRPC(logger hclog.Logger, config *Config) (*JSONRPC, error) {
+	apis := config.APIs
+	if len(apis) == 0 {
+		apis = DefaultJSONRPCAPIs
+	}
+
 	d, err := newDispatcher(
 		logger,
 		config.Store,
@@ -85,6 +98,7 @@ func NewJSONRPC(logger hclog.Logger, config *Config) (*JSONRPC, error) {
 			jsonRPCBatchLengthLimit: config.BatchLengthLimit,
 			blockRangeLimit:         config.BlockRangeLimit,
 			concurrentRequestsDebug: config.ConcurrentRequestsDebug,
+			enabledAPIs:             parseJSONRPCAPIList(apis),
 		},
 	)
 
@@ -93,9 +107,10 @@ func NewJSONRPC(logger hclog.Logger, config *Config) (*JSONRPC, error) {
 	}
 
 	srv := &JSONRPC{
-		logger:     logger.Named("jsonrpc"),
-		config:     config,
-		dispatcher: d,
+		logger:      logger.Named("jsonrpc"),
+		config:      config,
+		dispatcher:  d,
+		rateLimiter: newIPRateLimiter(config.HTTPRequestsPerSecond, time.Second),
 	}
 
 	// start http server
@@ -108,6 +123,9 @@ func NewJSONRPC(logger hclog.Logger, config *Config) (*JSONRPC, error) {
 
 func (j *JSONRPC) setupHTTP() error {
 	j.logger.Info("http server started", "addr", j.config.Addr.String())
+	if j.config.Addr != nil && j.config.Addr.IP != nil && j.config.Addr.IP.IsUnspecified() {
+		j.logger.Warn("JSON-RPC is bound to all interfaces; restrict with firewall or bind 127.0.0.1 in production")
+	}
 
 	lis, err := net.Listen("tcp", j.config.Addr.String())
 	if err != nil {
@@ -128,6 +146,10 @@ func (j *JSONRPC) setupHTTP() error {
 	srv := http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 60 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	go func() {
@@ -212,11 +234,11 @@ func isSupportedWSType(messageType int) bool {
 }
 
 func (j *JSONRPC) handleWs(w http.ResponseWriter, req *http.Request) {
-	// CORS rule - Allow requests from anywhere
-	wsUpgrader.CheckOrigin = func(r *http.Request) bool { return true }
+	upgrader := wsUpgrader
+	upgrader.CheckOrigin = j.allowedWSOrigin
 
 	// Upgrade the connection to a WS one
-	ws, err := wsUpgrader.Upgrade(w, req, nil)
+	ws, err := upgrader.Upgrade(w, req, nil)
 	if err != nil {
 		j.logger.Error(fmt.Sprintf("Unable to upgrade to a WS connection, %s", err.Error()))
 
@@ -302,10 +324,23 @@ func (j *JSONRPC) handle(w http.ResponseWriter, req *http.Request) {
 }
 
 func (j *JSONRPC) handleJSONRPCRequest(w http.ResponseWriter, req *http.Request) {
+	if j.rateLimiter != nil && !j.rateLimiter.allow(clientIP(req)) {
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
+		return
+	}
+
+	// Cap request body to limit memory exhaustion (JSON-RPC params may be large but not unbounded).
+	const maxJSONRPCBody = 5 << 20 // 5 MiB
+	req.Body = http.MaxBytesReader(w, req.Body, maxJSONRPCBody)
+
 	data, err := io.ReadAll(req.Body)
 	if err != nil {
-		_, _ = w.Write([]byte(err.Error()))
-
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "request body unreadable", http.StatusBadRequest)
 		return
 	}
 
@@ -315,6 +350,24 @@ func (j *JSONRPC) handleJSONRPCRequest(w http.ResponseWriter, req *http.Request)
 	} else {
 		_, _ = w.Write(resp)
 	}
+}
+
+// allowedWSOrigin mirrors AccessControlAllowOrigin for browser WebSocket upgrades.
+// Empty Origin (non-browser clients) is allowed. "*" in the allowlist keeps legacy open behavior.
+func (j *JSONRPC) allowedWSOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	if j.config == nil {
+		return false
+	}
+	for _, allowed := range j.config.AccessControlAllowOrigin {
+		if allowed == "*" || allowed == origin {
+			return true
+		}
+	}
+	return false
 }
 
 type GetResponse struct {

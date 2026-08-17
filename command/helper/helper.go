@@ -210,8 +210,8 @@ func ParseGRPCAddress(grpcAddress string) (*net.TCPAddr, error) {
 func RegisterJSONRPCFlag(cmd *cobra.Command) {
 	cmd.PersistentFlags().String(
 		command.JSONRPCFlag,
-		fmt.Sprintf("http://%s:%d", AllInterfacesBinding, server.DefaultJSONRPCPort),
-		"the JSON-RPC interface",
+		fmt.Sprintf("http://%s:%d", LocalHostBinding, server.DefaultJSONRPCPort),
+		"the JSON-RPC interface (default localhost; use 0.0.0.0 only behind a firewall)",
 	)
 }
 

@@ -334,6 +334,7 @@ type FilterManager struct {
 	maxFilters    int           // 最大过滤器数量
 	filterTimeout time.Duration // 过滤器超时时间
 	closeCh       chan struct{}
+	closeOnce     sync.Once
 }
 
 func NewFilterManager(logger hclog.Logger, store filterManagerStore, blockRangeLimit uint64) *FilterManager {
@@ -435,7 +436,9 @@ func (f *FilterManager) Run() {
 
 // Close closed closeCh so that terminate worker
 func (f *FilterManager) Close() {
-	close(f.closeCh)
+	f.closeOnce.Do(func() {
+		close(f.closeCh)
+	})
 }
 
 // NewBlockFilter adds new BlockFilter

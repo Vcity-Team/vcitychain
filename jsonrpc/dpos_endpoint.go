@@ -5103,7 +5103,11 @@ func (d *DPOS) RegisterDelegate(ctx context.Context, params interface{}) (interf
 
 // RegisterDelegateLegacyTest builds legacy registration with To = CreateAddress(sender, nonce) (deposit to that contract address). For local/regression testing only.
 // Params match RegisterDelegate (registrant, name, website, description, privateKey, chainID).
+// Disabled by default — set VCITY_ENABLE_DPOS_ADMIN_RPC=1 to enable.
 func (d *DPOS) RegisterDelegateLegacyTest(ctx context.Context, params interface{}) (interface{}, error) {
+	if !enableDPoSAdminRPC() {
+		return nil, errDPoSAdminRPCDisabled("dpos_registerDelegateLegacyTest")
+	}
 	d.logger.Warn("RegisterDelegateLegacyTest RPC — To=nil registration for testing only")
 
 	var registrantStr, name, website, description, privateKey string
@@ -6224,7 +6228,11 @@ func (d *DPOS) GetConsensusSwitchHeight(ctx context.Context) (interface{}, error
 
 // ApplyScheduledVotesUpTo 手动补跑逾期/待生效投票。RPC: dpos_applyScheduledVotesUpTo
 // 可选参数: { "maxCount": 100 }
+// Disabled by default — set VCITY_ENABLE_DPOS_ADMIN_RPC=1 to enable.
 func (d *DPOS) ApplyScheduledVotesUpTo(ctx context.Context, params interface{}) (interface{}, error) {
+	if !enableDPoSAdminRPC() {
+		return nil, errDPoSAdminRPCDisabled("dpos_applyScheduledVotesUpTo")
+	}
 	maxCount := 0
 	switch p := params.(type) {
 	case nil:
@@ -6287,7 +6295,11 @@ func (d *DPOS) ApplyScheduledVotesUpTo(ctx context.Context, params interface{}) 
 }
 
 // ReconcileVoter 对单个投票者做对账（补跑 pending + 裁剪超额 applied）。RPC: dpos_reconcileVoter
+// Disabled by default — set VCITY_ENABLE_DPOS_ADMIN_RPC=1 to enable.
 func (d *DPOS) ReconcileVoter(ctx context.Context, params interface{}) (interface{}, error) {
+	if !enableDPoSAdminRPC() {
+		return nil, errDPoSAdminRPCDisabled("dpos_reconcileVoter")
+	}
 	var voterStr string
 	switch p := params.(type) {
 	case []interface{}:
@@ -6357,7 +6369,11 @@ func (d *DPOS) ReconcileVoter(ctx context.Context, params interface{}) (interfac
 }
 
 // ApplyScheduledProposals 手动触发补跑：应用所有 effectiveEpoch<=当前 epoch 且未应用的提案。无需参数。RPC: dpos_applyScheduledProposals
+// Disabled by default — set VCITY_ENABLE_DPOS_ADMIN_RPC=1 to enable.
 func (d *DPOS) ApplyScheduledProposals(ctx context.Context) (interface{}, error) {
+	if !enableDPoSAdminRPC() {
+		return nil, errDPoSAdminRPCDisabled("dpos_applyScheduledProposals")
+	}
 	dposEngine := d.getDPoSEngine()
 	if dposEngine == nil {
 		return map[string]interface{}{

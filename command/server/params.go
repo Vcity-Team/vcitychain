@@ -194,15 +194,21 @@ func (p *serverParams) setJSONLogFormat(jsonLogFormat bool) {
 }
 
 func (p *serverParams) generateConfig() *server.Config {
+	corsOrigins := p.rawConfig.CorsAllowedOrigins
+	if len(corsOrigins) == 0 && p.rawConfig.Headers != nil {
+		corsOrigins = p.rawConfig.Headers.AccessControlAllowOrigins
+	}
+
 	return &server.Config{
 		Chain: p.genesisConfig,
 		JSONRPC: &server.JSONRPC{
 			JSONRPCAddr:              p.jsonRPCAddress,
-			AccessControlAllowOrigin: p.rawConfig.CorsAllowedOrigins,
+			AccessControlAllowOrigin: corsOrigins,
 			BatchLengthLimit:         p.rawConfig.JSONRPCBatchRequestLimit,
 			BlockRangeLimit:          p.rawConfig.JSONRPCBlockRangeLimit,
 			ConcurrentRequestsDebug:  p.rawConfig.ConcurrentRequestsDebug,
 			WebSocketReadLimit:       p.rawConfig.WebSocketReadLimit,
+			APIs:                     p.rawConfig.JSONRPCAPIs,
 		},
 		GRPCAddr:   p.grpcAddress,
 		LibP2PAddr: p.libp2pAddress,
