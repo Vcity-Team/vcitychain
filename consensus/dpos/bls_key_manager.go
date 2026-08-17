@@ -169,16 +169,27 @@ func (bkm *BLSKeyManager) BroadcastBLSKey(address types.Address, blsKeyBytes []b
 	return nil
 }
 
-// RequestBLSKey 请求BLS公钥
+// RequestBLSKey 请求BLS公钥（fire-and-forget；内部生成 RequestID）
 func (bkm *BLSKeyManager) RequestBLSKey(requestedAddress types.Address, requester types.Address) error {
+	return bkm.RequestBLSKeyWithID(requestedAddress, requester, "")
+}
+
+// RequestBLSKeyWithID 请求BLS公钥并携带关联 ID（空则自动生成）
+func (bkm *BLSKeyManager) RequestBLSKeyWithID(requestedAddress types.Address, requester types.Address, requestID string) error {
 	if bkm.requestTopic == nil {
 		return fmt.Errorf("BLS公钥请求主题不可用")
 	}
 
+	now := time.Now()
+	if requestID == "" {
+		requestID = fmt.Sprintf("bls_request_%s_%d", requestedAddress.String(), now.UnixNano())
+	}
+
 	requestMsg := &BLSKeyRequestMessage{
+		RequestID:        requestID,
 		RequestedAddress: requestedAddress,
 		Requester:        requester,
-		Timestamp:        uint64(time.Now().Unix()),
+		Timestamp:        uint64(now.Unix()),
 	}
 
 	data, err := json.Marshal(requestMsg)
@@ -196,7 +207,8 @@ func (bkm *BLSKeyManager) RequestBLSKey(requestedAddress types.Address, requeste
 
 	bkm.logger.Debug("📨 已广播BLS公钥请求",
 		"requestedAddress", requestedAddress.String(),
-		"requester", requester.String())
+		"requester", requester.String(),
+		"requestID", requestID)
 
 	return nil
 }

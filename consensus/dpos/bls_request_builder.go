@@ -20,15 +20,16 @@ func NewBLSRequestBuilder(dposInstance *DPoS) *BLSRequestBuilder {
 	}
 }
 
-// BuildRequest 构建请求消息
+// BuildRequest 构建请求消息（RequestID 使用 UnixNano，避免同秒冲突）
 func (brb *BLSRequestBuilder) BuildRequest(targetAddress types.Address) (*BLSPublicKeyRequest, string) {
+	now := time.Now()
+	requestID := fmt.Sprintf("bls_request_%s_%d", targetAddress.String(), now.UnixNano())
 	request := &BLSPublicKeyRequest{
+		RequestID:        requestID,
 		RequesterAddress: types.Address(brb.dposInstance.key.Address()),
 		TargetAddress:    targetAddress,
-		Timestamp:        uint64(time.Now().Unix()),
+		Timestamp:        uint64(now.Unix()),
 	}
-
-	requestID := fmt.Sprintf("bls_request_%s_%d", targetAddress.String(), request.Timestamp)
 	return request, requestID
 }
 

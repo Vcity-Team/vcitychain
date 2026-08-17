@@ -394,6 +394,10 @@ type DPoS struct {
 	// lastSyncHardRestartBypassAt：极大落后时允许突破 5min 硬重启冷却的上次时间。
 	lastSyncHardRestartBypassAt time.Time
 
+	// BLS 同步请求器（单例，保证 responseManager 跨请求/响应存活）
+	blsKeyRequester     *BLSKeyRequester
+	blsKeyRequesterOnce sync.Once
+
 	// 区块链引用
 	blockchain blockchainBackend
 	txPool     txPoolInterface

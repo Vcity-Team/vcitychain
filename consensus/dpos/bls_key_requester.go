@@ -104,7 +104,7 @@ func (bkr *BLSKeyRequester) RequestBLSKey(
 
 // validateNetwork 验证网络可用性
 func (bkr *BLSKeyRequester) validateNetwork() error {
-	if bkr.dposInstance.config.Network == nil {
+	if bkr.dposInstance == nil || bkr.dposInstance.config == nil || bkr.dposInstance.config.Network == nil {
 		return fmt.Errorf("network not available")
 	}
 	return nil
