@@ -214,6 +214,7 @@ type TxPool struct {
 
 	// shutdown channel
 	shutdownCh chan struct{}
+	closeOnce  sync.Once
 
 	// flag indicating if the current node is a sealer,
 	// and should therefore gossip transactions
@@ -253,10 +254,11 @@ type TxPool struct {
 	transactionsBlockList *chain.AddressListConfig
 	transactionsAllowList *chain.AddressListConfig
 
-	// short-lived role cache keyed by account; invalidated when head height changes
+	// short-lived role cache keyed by account; invalidated when head height or state root changes
 	blockListRoleCache   map[types.Address]addresslist.Role
 	blockListRoleCacheMu sync.Mutex
 	blockListCacheHeight uint64
+	blockListCacheRoot   types.Hash
 }
 
 // NewTxPool returns a new pool for processing incoming transactions.
@@ -632,8 +634,10 @@ func (p *TxPool) validateTxFast(tx *types.Transaction) error {
 
 // Close shuts down the pool's main loop.
 func (p *TxPool) Close() {
-	p.eventManager.Close()
-	close(p.shutdownCh)
+	p.closeOnce.Do(func() {
+		p.eventManager.Close()
+		close(p.shutdownCh)
+	})
 }
 
 // GetTopic returns the network topic for transaction broadcasting
@@ -1503,9 +1507,10 @@ func (p *TxPool) getBlockListRole(
 	p.blockListRoleCacheMu.Lock()
 	defer p.blockListRoleCacheMu.Unlock()
 
-	if p.blockListCacheHeight != blockNum {
+	if p.blockListCacheHeight != blockNum || p.blockListCacheRoot != stateRoot {
 		p.blockListRoleCache = make(map[types.Address]addresslist.Role)
 		p.blockListCacheHeight = blockNum
+		p.blockListCacheRoot = stateRoot
 	}
 
 	if role, ok := p.blockListRoleCache[addr]; ok {
@@ -1515,9 +1520,10 @@ func (p *TxPool) getBlockListRole(
 	slot := types.BytesToHash(addr.Bytes())
 	value, err := p.store.GetStorage(stateRoot, contracts.BlockListTransactionsAddr, slot)
 	if err != nil {
-		p.logger.Debug("failed to read block list role", "addr", addr, "err", err)
+		// Fail closed while the block list fork is active: treat as blocked until storage recovers.
+		p.logger.Warn("failed to read block list role; treating as blacklisted", "addr", addr, "err", err)
 
-		return addresslist.NoRole
+		return addresslist.EnabledRole
 	}
 
 	role := addresslist.Role(value)
