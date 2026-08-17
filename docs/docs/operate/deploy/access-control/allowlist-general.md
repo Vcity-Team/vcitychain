@@ -5,10 +5,11 @@ ACLs or Access Control Lists are a way of managing permissions in your Edge-powe
 
 :::info Keep in mind
 
-- **Enabling Lists**: Allowlists and blocklists are enabled or disabled exclusively during network initialization through the genesis command. Changes to the configuration cannot be made dynamically.
-- **Admin Role**: To enable a list, an admin role must be set in the genesis command. The admin manages the list and can only be specified during the network's initial setup.
+- **Enabling Lists**: Allowlists and most blocklists are enabled at genesis. The **transactions block list** can also be activated later via the `transactionsBlockList` hardfork (see [transactions-blocklist-safe.md](./transactions-blocklist-safe.md)).
+- **Admin Role**: To enable a list, an admin role must be set (genesis or hardfork injection). Prefer a Safe multisig as the sole transactions-block-list Admin.
 - **Exclusive Enablement**: It is not valid to enable both allowlists and blocklists for a given list type. If both lists are set, the allowlist takes precedence, and the blocklist is ignored.
 - **System Transaction Address**: The system transaction address (0xffffFFFfFFffffffffffffffFfFFFfffFFFfFFfE) is excluded from allowlist and blocklist validation. It is always allowed to perform actions and is not subject to list checks.
+- **Transactions block list**: Blocks both **From** and **To** when the role is `Enabled`. Calls to the block-list contract itself remain possible so Admin can `setNone`.
 - **Impact on Validators and System Transactions**: The impact of allowlists and blocklists on validators and system transactions can vary depending on network implementation.
 
 :::

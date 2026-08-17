@@ -213,6 +213,8 @@ func (e *Eth) SendRawTransaction(buf argBytes) (interface{}, error) {
 	}
 
 	// tx hash will be calculated inside e.store.AddTx
+	// Block-list rejection (account is blacklisted) is enforced in the txpool
+	// against the current StateDB roles before the tx is accepted.
 	if err := e.store.AddTx(tx); err != nil {
 		return nil, err
 	}

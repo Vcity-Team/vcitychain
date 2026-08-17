@@ -271,14 +271,7 @@ func (p *genesisParams) generatePolyBftChainConfig(o command.OutputFormatter) er
 		}
 	}
 
-	if len(p.transactionsBlockListAdmin) != 0 {
-		// only enable block list if there is at least one address as **admin**, otherwise
-		// the block list could never be updated
-		chainConfig.Params.TransactionsBlockList = &chain.AddressListConfig{
-			AdminAddresses:   stringSliceToAddressSlice(p.transactionsBlockListAdmin),
-			EnabledAddresses: stringSliceToAddressSlice(p.transactionsBlockListEnabled),
-		}
-	}
+	p.applyTransactionsBlockListConfig(chainConfig)
 
 	if len(p.bridgeAllowListAdmin) != 0 {
 		// only enable allow list if there is at least one address as **admin**, otherwise

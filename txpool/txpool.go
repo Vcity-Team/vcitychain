@@ -16,10 +16,12 @@ import (
 
 	"github.com/Vcity-Team/vcitychain/blockchain"
 	"github.com/Vcity-Team/vcitychain/chain"
+	"github.com/Vcity-Team/vcitychain/contracts"
 	"github.com/Vcity-Team/vcitychain/forkmanager"
 	"github.com/Vcity-Team/vcitychain/network"
 	"github.com/Vcity-Team/vcitychain/state"
 	"github.com/Vcity-Team/vcitychain/state/runtime"
+	"github.com/Vcity-Team/vcitychain/state/runtime/addresslist"
 	"github.com/Vcity-Team/vcitychain/txpool/proto"
 	"github.com/Vcity-Team/vcitychain/types"
 )
@@ -66,6 +68,9 @@ var (
 	ErrNonceExistsInPool       = errors.New("tx with the same nonce is already present")
 	ErrReplacementUnderpriced  = errors.New("replacement tx underpriced")
 	ErrDynamicTxNotAllowed     = errors.New("dynamic tx not allowed currently")
+
+	// ErrAccountBlacklisted is returned when From or To is on the transactions block list
+	ErrAccountBlacklisted = addresslist.ErrAccountBlacklisted
 )
 
 // indicates origin of a transaction
@@ -97,6 +102,9 @@ type store interface {
 	GetBalance(root types.Hash, addr types.Address) (*big.Int, error)
 	GetBlockByHash(types.Hash, bool) (*types.Block, bool)
 	CalculateBaseFee(parent *types.Header) uint64
+	// GetStorage returns the storage slot value for an account at the given state root.
+	// Missing accounts should return the zero hash without error.
+	GetStorage(root types.Hash, addr types.Address, slot types.Hash) (types.Hash, error)
 }
 
 // lockedBalanceProvider optionally provides the amount of balance that is locked
@@ -118,6 +126,10 @@ type Config struct {
 	MaxSlots           uint64
 	MaxAccountEnqueued uint64
 	ChainID            *big.Int
+
+	// Optional transactions ACL config (early reject against StateDB roles)
+	TransactionsBlockList *chain.AddressListConfig
+	TransactionsAllowList *chain.AddressListConfig
 }
 
 /* All requests are passed to the main loop
@@ -202,6 +214,7 @@ type TxPool struct {
 
 	// shutdown channel
 	shutdownCh chan struct{}
+	closeOnce  sync.Once
 
 	// flag indicating if the current node is a sealer,
 	// and should therefore gossip transactions
@@ -236,6 +249,16 @@ type TxPool struct {
 	// This cache is cleared when a new block is mined (in processEvent)
 	prepareNonceCache   map[types.Address]uint64
 	prepareNonceCacheMu sync.RWMutex // RWMutex for concurrent access to prepareNonceCache
+
+	// transactions block list (optional)
+	transactionsBlockList *chain.AddressListConfig
+	transactionsAllowList *chain.AddressListConfig
+
+	// short-lived role cache keyed by account; invalidated when head height or state root changes
+	blockListRoleCache   map[types.Address]addresslist.Role
+	blockListRoleCacheMu sync.Mutex
+	blockListCacheHeight uint64
+	blockListCacheRoot   types.Hash
 }
 
 // NewTxPool returns a new pool for processing incoming transactions.
@@ -267,6 +290,10 @@ func NewTxPool(
 		validatedCache:    newValidatedTxCache(10000),       // Cache up to 10000 validated transactions
 		balanceCache:      newBalanceCache(2 * time.Second), // Balance cache with 2s TTL
 		prepareNonceCache: make(map[types.Address]uint64),   // Cache for chain nonces in Prepare()
+
+		transactionsBlockList: config.TransactionsBlockList,
+		transactionsAllowList: config.TransactionsAllowList,
+		blockListRoleCache:    make(map[types.Address]addresslist.Role),
 
 		//	main loop channels
 		promoteReqCh: make(chan promoteRequest),
@@ -607,8 +634,10 @@ func (p *TxPool) validateTxFast(tx *types.Transaction) error {
 
 // Close shuts down the pool's main loop.
 func (p *TxPool) Close() {
-	p.eventManager.Close()
-	close(p.shutdownCh)
+	p.closeOnce.Do(func() {
+		p.eventManager.Close()
+		close(p.shutdownCh)
+	})
 }
 
 // GetTopic returns the network topic for transaction broadcasting
@@ -1418,7 +1447,89 @@ func (p *TxPool) validateTx(tx *types.Transaction) error {
 		return ErrBlockLimitExceeded
 	}
 
+	// Reject transactions involving blocklisted accounts early (StateDB is source of truth)
+	if err := p.checkTransactionsBlockList(stateRoot, currentBlockNumber, tx.From, tx.To); err != nil {
+		metrics.IncrCounter([]string{txPoolMetrics, "blacklisted_tx"}, 1)
+		p.logger.Debug("rejecting blacklisted transaction",
+			"from", tx.From,
+			"to", tx.To,
+			"err", err,
+		)
+
+		return err
+	}
+
 	return nil
+}
+
+func (p *TxPool) isTransactionsBlockListActive(block uint64) bool {
+	if p.transactionsBlockList == nil {
+		return false
+	}
+
+	if p.transactionsAllowList != nil {
+		return false
+	}
+
+	if p.forks == nil {
+		return true
+	}
+
+	if _, exists := (*p.forks)[chain.TransactionsBlockList]; !exists {
+		return true
+	}
+
+	return p.forks.IsActive(chain.TransactionsBlockList, block)
+}
+
+func (p *TxPool) checkTransactionsBlockList(
+	stateRoot types.Hash,
+	blockNum uint64,
+	from types.Address,
+	to *types.Address,
+) error {
+	if !p.isTransactionsBlockListActive(blockNum) {
+		return nil
+	}
+
+	getRole := func(addr types.Address) addresslist.Role {
+		return p.getBlockListRole(stateRoot, blockNum, addr)
+	}
+
+	return addresslist.CheckBlockedTx(getRole, from, to)
+}
+
+func (p *TxPool) getBlockListRole(
+	stateRoot types.Hash,
+	blockNum uint64,
+	addr types.Address,
+) addresslist.Role {
+	p.blockListRoleCacheMu.Lock()
+	defer p.blockListRoleCacheMu.Unlock()
+
+	if p.blockListCacheHeight != blockNum || p.blockListCacheRoot != stateRoot {
+		p.blockListRoleCache = make(map[types.Address]addresslist.Role)
+		p.blockListCacheHeight = blockNum
+		p.blockListCacheRoot = stateRoot
+	}
+
+	if role, ok := p.blockListRoleCache[addr]; ok {
+		return role
+	}
+
+	slot := types.BytesToHash(addr.Bytes())
+	value, err := p.store.GetStorage(stateRoot, contracts.BlockListTransactionsAddr, slot)
+	if err != nil {
+		// Fail closed while the block list fork is active: treat as blocked until storage recovers.
+		p.logger.Warn("failed to read block list role; treating as blacklisted", "addr", addr, "err", err)
+
+		return addresslist.EnabledRole
+	}
+
+	role := addresslist.Role(value)
+	p.blockListRoleCache[addr] = role
+
+	return role
 }
 
 func (p *TxPool) signalPruning() {
