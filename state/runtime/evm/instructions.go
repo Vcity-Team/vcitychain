@@ -1045,11 +1045,13 @@ func opLog(size int) instruction {
 
 		c.host.EmitLog(c.msg.Address, topics, c.tmp)
 
-		if !c.consumeGas(uint64(size) * 375) {
+		topicGas, overflow := common.SafeMulUint64(uint64(size), 375)
+		if overflow || !c.consumeGas(topicGas) {
 			return
 		}
 
-		if !c.consumeGas(mSize.Uint64() * 8) {
+		dataGas, overflow := common.SafeMulUint64(mSize.Uint64(), 8)
+		if overflow || !c.consumeGas(dataGas) {
 			return
 		}
 	}
