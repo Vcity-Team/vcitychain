@@ -223,29 +223,38 @@ func (d *DPoS) updateVotingPowerInDatabase(delegate types.Address, newPower *big
 	return d.updateVotingPowerInDatabaseWithTx(delegate, newPower, nil)
 }
 
-// updateVotingPowerInDatabaseWithTx 使用外部事务更新数据库中的验证者投票权重
+// updateVotingPowerInDatabaseWithTx 使用外部事务更新数据库中的验证者投票权重。
+// read-modify-write：只改权重/活跃状态，保留已有 BlsPublicKey、出块计数、注册与佣金等字段，
+// 避免整行覆盖把 BLS 公钥抹成 nil（会导致出块 Extra 缺 key / soft-pass 风险）。
 func (d *DPoS) updateVotingPowerInDatabaseWithTx(delegate types.Address, newPower *big.Int, dbTx *bolt.Tx) error {
 	if d.state == nil || d.state.StakeStore == nil {
 		return fmt.Errorf("state store not available")
 	}
 
-	// 创建或更新验证者信息
-	delegateInfo := &DelegateInfo{
-		Address:        delegate,
-		VotingPower:    new(big.Int).Set(newPower),
-		TotalVotes:     new(big.Int).Set(newPower), // 修复：初始化TotalVotes字段
-		ProducedBlocks: 0,
-		MissedBlocks:   0,
-		LastBlockTime:  0,
-		IsActive:       newPower.Cmp(big.NewInt(0)) > 0,
-		IsRegistered:   true, // 假设已注册
-		BlsPublicKey:   nil,  // BLS密钥由其他逻辑处理
+	apply := func(tx *bolt.Tx) error {
+		info, err := d.state.StakeStore.getDelegateInfo(delegate, tx)
+		if err != nil || info == nil {
+			info = &DelegateInfo{
+				Address:      delegate,
+				IsRegistered: true,
+			}
+		}
+		info.Address = delegate
+		info.VotingPower = new(big.Int).Set(newPower)
+		info.TotalVotes = new(big.Int).Set(newPower)
+		info.IsActive = newPower.Cmp(big.NewInt(0)) > 0
+		// BlsPublicKey / ProducedBlocks / MissedBlocks / LastBlockTime /
+		// RegistrationInfo / commission* 保持原样（新建记录时为零值）
+		d.populateCommissionFields(delegate, info)
+		return d.state.StakeStore.setDelegateInfoInternal(delegate, info, tx)
 	}
 
-	d.populateCommissionFields(delegate, delegateInfo)
-
-	// 使用外部事务，避免嵌套事务
-	err := d.state.StakeStore.setDelegateInfo(delegate, delegateInfo, dbTx)
+	var err error
+	if dbTx != nil {
+		err = apply(dbTx)
+	} else {
+		err = d.state.StakeStore.db.Update(apply)
+	}
 	if err != nil {
 		d.logger.Error("❌ 更新数据库验证者投票权重失败",
 			"delegate", delegate.String(),
@@ -351,29 +360,15 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 			"newPower", newPower.String())
 	}
 
-	// 创建或更新受托人信息，直接使用计算出的新权重
-	delegateInfo := &DelegateInfo{
-		Address:        delegate,
-		VotingPower:    new(big.Int).Set(newPower),
-		TotalVotes:     new(big.Int).Set(newPower), // TotalVotes等于VotingPower
-		ProducedBlocks: 0,
-		MissedBlocks:   0,
-		LastBlockTime:  0,
-		IsActive:       newPower.Cmp(big.NewInt(0)) > 0,
-	}
-
-	d.populateCommissionFields(delegate, delegateInfo)
-
 	d.logger.Info("🔍 准备保存验证者信息到数据库",
 		"delegate", delegate.String(),
 		"originalPower", currentPower.String(),
 		"addedAmount", amount.String(),
 		"newPower", newPower.String(),
-		"isActive", delegateInfo.IsActive,
 		"dataSource", "database")
 
-	// 直接保存到数据库
-	if err := d.state.StakeStore.setDelegateInfo(delegate, delegateInfo, nil); err != nil {
+	// 走 RMW 路径，避免整行覆盖清空 BlsPublicKey
+	if err := d.updateVotingPowerInDatabase(delegate, newPower); err != nil {
 		d.logger.Error("❌ 保存验证者信息到数据库失败",
 			"delegate", delegate.String(),
 			"newPower", newPower.String(),
@@ -384,7 +379,7 @@ func (d *DPoS) persistDelegateVotingPower(delegate types.Address, amount *big.In
 	d.logger.Info("✅ 验证者信息已成功保存到数据库",
 		"delegate", delegate.String(),
 		"newPower", newPower.String(),
-		"isActive", delegateInfo.IsActive,
+		"isActive", newPower.Cmp(big.NewInt(0)) > 0,
 		"dataSource", "database")
 
 	return nil

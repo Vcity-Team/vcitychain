@@ -45,12 +45,33 @@ func (d *DPoS) saveValidatorsWithBLSKeysToDatabase() error {
 			MissedBlocks:   0,
 			LastBlockTime:  0,
 			IsActive:       validator.IsActive,
-			BlsPublicKey:   []byte{}, // 初始为空
+			BlsPublicKey:   []byte{}, // 初始为空；若内存无 key 则保留 DB 已有值
 		}
 
 		d.populateCommissionFields(validator.Address, delegateInfo)
 
-		// 添加详细日志：打印DelegateInfo信息
+		// RMW：内存缺 BlsKey 时不要用空值覆盖库里已有公钥
+		if existing, err := d.getCurrentDelegateInfo(validator.Address); err == nil && existing != nil {
+			if len(delegateInfo.BlsPublicKey) == 0 && len(existing.BlsPublicKey) > 0 {
+				delegateInfo.BlsPublicKey = append([]byte(nil), existing.BlsPublicKey...)
+			}
+			if existing.ProducedBlocks > 0 {
+				delegateInfo.ProducedBlocks = existing.ProducedBlocks
+			}
+			if existing.MissedBlocks > 0 {
+				delegateInfo.MissedBlocks = existing.MissedBlocks
+			}
+			if existing.LastBlockTime > 0 {
+				delegateInfo.LastBlockTime = existing.LastBlockTime
+			}
+			if existing.IsRegistered {
+				delegateInfo.IsRegistered = true
+			}
+			if existing.RegistrationInfo != nil && delegateInfo.RegistrationInfo == nil {
+				delegateInfo.RegistrationInfo = existing.RegistrationInfo
+			}
+		}
+
 		d.logger.Debug("🔍 DelegateInfo详细信息",
 			"address", delegateInfo.Address.String(),
 			"votingPower", delegateInfo.VotingPower.String(),
