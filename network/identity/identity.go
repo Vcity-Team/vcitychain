@@ -53,6 +53,9 @@ type networkingServer interface {
 
 	// HasFreeConnectionSlot checks if there are available outbound connection slots [Thread safe]
 	HasFreeConnectionSlot(direction network.Direction) bool
+
+	// TryReserveConnectionSlot atomically reserves a pending connection slot [Thread safe]
+	TryReserveConnectionSlot(direction network.Direction) bool
 }
 
 // IdentityService is a networking service used to handle peer handshaking.
@@ -93,19 +96,21 @@ func (i *IdentityService) GetNotifyBundle() *network.NotifyBundle {
 				return
 			}
 
-			if !i.baseServer.HasFreeConnectionSlot(conn.Stat().Direction) {
+			direction := conn.Stat().Direction
+			// Atomically reserve a pending slot before starting the handshake.
+			if !i.baseServer.TryReserveConnectionSlot(direction) {
 				i.disconnectFromPeer(peerID, ErrNoAvailableSlots.Error())
 
 				return
 			}
 
-			// Mark the peer as pending (pending handshake)
-			i.addPendingStatus(peerID, conn.Stat().Direction)
+			// Mark the peer as pending (slot already reserved — do not double-count).
+			i.addPendingStatusReserved(peerID, direction)
 
 			go func() {
 				eventType := event.PeerDialCompleted
 
-				if err := i.handleConnected(peerID, conn.Stat().Direction); err != nil {
+				if err := i.handleConnected(peerID, direction); err != nil {
 					// Close the connection to the peer
 					i.disconnectFromPeer(peerID, err.Error())
 
@@ -150,6 +155,15 @@ func (i *IdentityService) removePendingStatus(peerID peer.ID) {
 func (i *IdentityService) addPendingStatus(id peer.ID, direction network.Direction) {
 	if _, loaded := i.pendingPeerConnections.LoadOrStore(id, direction); !loaded {
 		i.baseServer.UpdatePendingConnCount(1, direction)
+	}
+}
+
+// addPendingStatusReserved records a peer as pending after a slot was already reserved
+// via TryReserveConnectionSlot (avoids double-incrementing the pending counter).
+func (i *IdentityService) addPendingStatusReserved(id peer.ID, direction network.Direction) {
+	if _, loaded := i.pendingPeerConnections.LoadOrStore(id, direction); loaded {
+		// Peer was already pending; release the extra reservation.
+		i.baseServer.UpdatePendingConnCount(-1, direction)
 	}
 }
 

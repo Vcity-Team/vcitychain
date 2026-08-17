@@ -183,6 +183,11 @@ func (s *Server) HasFreeConnectionSlot(direction network.Direction) bool {
 	return s.connectionCounts.HasFreeConnectionSlot(direction)
 }
 
+// TryReserveConnectionSlot atomically reserves a pending slot for a handshake.
+func (s *Server) TryReserveConnectionSlot(direction network.Direction) bool {
+	return s.connectionCounts.TryReservePendingSlot(direction)
+}
+
 // PeerConnInfo holds the connection information about the peer
 type PeerConnInfo struct {
 	Info peer.AddrInfo
