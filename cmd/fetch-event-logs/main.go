@@ -25,6 +25,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Vcity-Team/vcitychain/command"
 )
 
 const topic0Transfer = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
@@ -45,21 +47,21 @@ type rpcResponse struct {
 }
 
 type logRow struct {
-	Address         string   `json:"address"`
-	TxHash          string   `json:"transactionHash"`
-	BlockNumber     string   `json:"blockNumber"`
-	BlockHash       string   `json:"blockHash"`
-	LogIndex        string   `json:"logIndex"`
-	TransactionIndex string  `json:"transactionIndex"`
-	Topics          []string `json:"topics"`
-	Data            string   `json:"data"`
-	Removed         bool     `json:"removed"`
+	Address          string   `json:"address"`
+	TxHash           string   `json:"transactionHash"`
+	BlockNumber      string   `json:"blockNumber"`
+	BlockHash        string   `json:"blockHash"`
+	LogIndex         string   `json:"logIndex"`
+	TransactionIndex string   `json:"transactionIndex"`
+	Topics           []string `json:"topics"`
+	Data             string   `json:"data"`
+	Removed          bool     `json:"removed"`
 }
 
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		os.Exit(command.ExitCodeInternal)
 	}
 }
 

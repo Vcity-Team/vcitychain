@@ -24,6 +24,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/Vcity-Team/vcitychain/command"
 )
 
 type config struct {
@@ -58,19 +60,19 @@ type nodeState struct {
 
 	mu sync.Mutex
 
-	lastHeight      uint64
-	lastChangeAt    time.Time
-	staleAlertSent  bool
-	errorAlertSent  bool
-	lastError       string
-	lastErrorAt     time.Time
-	initialized     bool
+	lastHeight     uint64
+	lastChangeAt   time.Time
+	staleAlertSent bool
+	errorAlertSent bool
+	lastError      string
+	lastErrorAt    time.Time
+	initialized    bool
 }
 
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		os.Exit(command.ExitCodeInternal)
 	}
 }
 

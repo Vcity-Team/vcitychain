@@ -24,6 +24,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/Vcity-Team/vcitychain/command"
 )
 
 const nativeDecimals = 18
@@ -37,9 +39,9 @@ type config struct {
 }
 
 type addressSpec struct {
-	Name        string `json:"name"`
-	Address     string `json:"address"`
-	MinBalance  string `json:"min_balance"`
+	Name          string `json:"name"`
+	Address       string `json:"address"`
+	MinBalance    string `json:"min_balance"`
 	minBalanceWei *big.Int
 }
 
@@ -63,17 +65,17 @@ type addressState struct {
 
 	mu sync.Mutex
 
-	lowAlertSent  bool
+	lowAlertSent   bool
 	errorAlertSent bool
-	lastError     string
-	initialized   bool
-	lastBalance   *big.Int
+	lastError      string
+	initialized    bool
+	lastBalance    *big.Int
 }
 
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		os.Exit(command.ExitCodeInternal)
 	}
 }
 
