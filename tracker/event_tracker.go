@@ -84,8 +84,12 @@ func (e *EventTracker) Start(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
-		blockTracker.Close()
-		store.Close()
+		if err := blockTracker.Close(); err != nil {
+			e.logger.Warn("failed to close block tracker", "error", err)
+		}
+		if err := store.Close(); err != nil {
+			e.logger.Warn("failed to close event tracker store", "error", err)
+		}
 	}()
 
 	// Init and start block tracker concurrently, retrying indefinitely
