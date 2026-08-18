@@ -78,6 +78,6 @@ func (rc *RootCommand) Execute() {
 			_, _ = fmt.Fprintln(os.Stderr, err)
 		}
 
-		os.Exit(1)
+		os.Exit(cmdroot.ExitCodeInternal)
 	}
 }

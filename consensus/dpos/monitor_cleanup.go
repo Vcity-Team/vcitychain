@@ -29,9 +29,9 @@ func (r *dposRuntime) cleanupExpiredCaches() {
 	}
 	r.logMutex.Unlock()
 
-	// 清理过期的BLS私钥缓存（超过30分钟）
+	// 清理过期的BLS私钥缓存
 	r.blsPrivateKeyCacheMutex.Lock()
-	if !r.blsPrivateKeyCacheTime.IsZero() && now.Sub(r.blsPrivateKeyCacheTime) > 30*time.Minute {
+	if !r.blsPrivateKeyCacheTime.IsZero() && now.Sub(r.blsPrivateKeyCacheTime) > blsKeyCacheTTL {
 		r.blsPrivateKeyCache = nil
 		r.blsPrivateKeyCacheTime = time.Time{}
 	}
@@ -74,4 +74,3 @@ func (r *dposRuntime) cleanupSignatureCollectionResources(checkpointHash types.H
 
 	// 签名收集资源已清理
 }
-
