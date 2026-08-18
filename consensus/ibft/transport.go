@@ -19,6 +19,12 @@ func (g *gossipTransport) Multicast(msg *proto.Message) error {
 	return g.topic.Publish(msg)
 }
 
+func (g *gossipTransport) Close() {
+	if g.topic != nil {
+		g.topic.Close()
+	}
+}
+
 func (i *backendIBFT) Multicast(msg *proto.Message) {
 	if err := i.transport.Multicast(msg); err != nil {
 		i.logger.Error("fail to gossip", "err", err)

@@ -686,6 +686,13 @@ func (p *Polybft) Close() error {
 	close(p.closeCh)
 	p.runtime.close()
 
+	if p.consensusTopic != nil {
+		p.consensusTopic.Close()
+	}
+	if p.bridgeTopic != nil {
+		p.bridgeTopic.Close()
+	}
+
 	return nil
 }
 
