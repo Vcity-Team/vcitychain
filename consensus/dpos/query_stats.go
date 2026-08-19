@@ -483,6 +483,52 @@ func (d *DPoS) GetValidatorRewardsInfo(validatorAddress types.Address, epochNumb
 	}
 }
 
+// voterRewardAmountByRecipient sums VoterRewards credited to each recipient address.
+// Used when deriving SR commission/remainder from Rewards[addr] (which may also include
+// that address's voter-pool share, e.g. self-vote or votes cast to other SRs).
+func voterRewardAmountByRecipient(details []*VoterRewardDetail) map[string]*big.Int {
+	out := make(map[string]*big.Int)
+	for _, detail := range details {
+		if detail == nil || detail.Amount == nil || detail.Amount.Sign() <= 0 {
+			continue
+		}
+		if detail.VoterAddress == "" {
+			continue
+		}
+		if existing, ok := out[detail.VoterAddress]; ok {
+			out[detail.VoterAddress] = new(big.Int).Add(existing, detail.Amount)
+		} else {
+			out[detail.VoterAddress] = new(big.Int).Set(detail.Amount)
+		}
+	}
+	return out
+}
+
+// validatorCommissionFromMergedReward derives SR commission/remainder only:
+// Rewards[addr] − producer − voter shares already attributed to addr.
+// Without subtracting voter shares, self-votes (and any votes cast by the SR)
+// are double-counted when summing RewardStore rows by type.
+func validatorCommissionFromMergedReward(
+	total *big.Int,
+	producerAmt *big.Int,
+	voterAmt *big.Int,
+) *big.Int {
+	if total == nil || total.Sign() <= 0 {
+		return big.NewInt(0)
+	}
+	amount := new(big.Int).Set(total)
+	if producerAmt != nil && producerAmt.Sign() > 0 {
+		amount.Sub(amount, producerAmt)
+	}
+	if voterAmt != nil && voterAmt.Sign() > 0 {
+		amount.Sub(amount, voterAmt)
+	}
+	if amount.Sign() < 0 {
+		return big.NewInt(0)
+	}
+	return amount
+}
+
 // recordProducerAndCommissionFromExtraData 记录节点出块奖励与 SR 佣金（分开记账）。
 func (d *DPoS) recordProducerAndCommissionFromExtraData(
 	rewardInfo *RewardDistributionInfo,
@@ -493,6 +539,7 @@ func (d *DPoS) recordProducerAndCommissionFromExtraData(
 	}
 
 	producerByAddr := producerAmountByAddress(rewardInfo.ProducerRewards)
+	voterByRecipient := voterRewardAmountByRecipient(rewardInfo.VoterRewards)
 	for _, detail := range rewardInfo.ProducerRewards {
 		if detail == nil || detail.Amount == nil || detail.Amount.Sign() <= 0 {
 			continue
@@ -529,12 +576,11 @@ func (d *DPoS) recordProducerAndCommissionFromExtraData(
 			continue
 		}
 
-		amount := new(big.Int).Set(total)
-		if len(rewardInfo.ProducerRewards) > 0 {
-			if producerAmt, ok := producerByAddr[validatorAddrStr]; ok {
-				amount.Sub(amount, producerAmt)
-			}
-		}
+		amount := validatorCommissionFromMergedReward(
+			total,
+			producerByAddr[validatorAddrStr],
+			voterByRecipient[validatorAddrStr],
+		)
 		if amount.Sign() <= 0 {
 			continue
 		}
