@@ -264,7 +264,19 @@ func (j *JSONRPC) handleWs(w http.ResponseWriter, req *http.Request) {
 		}
 
 		if isSupportedWSType(msgType) {
-			go func() {
+			// Capture loop vars (Go <1.22) and recover so a handler panic cannot kill the process.
+			msgType, message := msgType, message
+			go func(msgType int, message []byte) {
+				defer func() {
+					if r := recover(); r != nil {
+						j.logger.Error(fmt.Sprintf("WS request panic recovered: %v", r))
+						_ = wrapConn.WriteMessage(
+							msgType,
+							[]byte(`{"jsonrpc":"2.0","error":{"code":-32603,"message":"internal error"},"id":null}`),
+						)
+					}
+				}()
+
 				resp, handleErr := j.dispatcher.HandleWs(message, wrapConn)
 				if handleErr != nil {
 					j.logger.Error(fmt.Sprintf("Unable to handle WS request, %s", handleErr.Error()))
@@ -276,7 +288,7 @@ func (j *JSONRPC) handleWs(w http.ResponseWriter, req *http.Request) {
 				} else {
 					_ = wrapConn.WriteMessage(msgType, resp)
 				}
-			}()
+			}(msgType, message)
 		}
 	}
 }
