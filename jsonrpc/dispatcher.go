@@ -218,6 +218,12 @@ func (d *Dispatcher) handleSubscribe(req Request, conn wsConn) (string, Error) {
 	if subscribeMethod == "newHeads" {
 		filterID = d.filterManager.NewBlockFilter(conn)
 	} else if subscribeMethod == "logs" {
+		// Filter object is required: eth_subscribe ["logs", {...}].
+		// Missing params[1] previously panicked (index out of range) and crashed the node.
+		if len(params) < 2 {
+			return "", NewInvalidParamsError("Invalid params")
+		}
+
 		logQuery, err := decodeLogQueryFromInterface(params[1])
 		if err != nil {
 			return "", NewInternalError(err.Error())
