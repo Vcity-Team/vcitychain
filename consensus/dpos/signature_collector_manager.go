@@ -11,18 +11,20 @@ import (
 
 // SignatureCollectorManager 管理签名收集器
 type SignatureCollectorManager struct {
-	collectors      map[types.Hash]*SignatureCollector
-	mutex           sync.RWMutex
-	logger          hclog.Logger
+	collectors       map[types.Hash]*SignatureCollector
+	mutex            sync.RWMutex
+	logger           hclog.Logger
 	goroutineManager *GoroutineManager
+	ctx              context.Context
 }
 
 // NewSignatureCollectorManager 创建签名收集器管理器
-func NewSignatureCollectorManager(logger hclog.Logger, goroutineManager *GoroutineManager) *SignatureCollectorManager {
+func NewSignatureCollectorManager(ctx context.Context, logger hclog.Logger, goroutineManager *GoroutineManager) *SignatureCollectorManager {
 	return &SignatureCollectorManager{
-		collectors:        make(map[types.Hash]*SignatureCollector),
-		logger:            logger,
-		goroutineManager:  goroutineManager,
+		collectors:       make(map[types.Hash]*SignatureCollector),
+		logger:           logger,
+		goroutineManager: goroutineManager,
+		ctx:              ctx,
 	}
 }
 
@@ -37,7 +39,7 @@ func (scm *SignatureCollectorManager) RegisterSignatureCollector(checkpointHash 
 	}
 
 	// 创建新的签名收集器
-	collector := NewSignatureCollector(checkpointHash, signatureCh, timeout, requiredCount, scm.goroutineManager)
+	collector := NewSignatureCollector(scm.ctx, checkpointHash, signatureCh, timeout, requiredCount, scm.goroutineManager)
 	collector.logger = scm.logger.Named("signature-collector")
 
 	scm.collectors[checkpointHash] = collector

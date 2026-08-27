@@ -33,6 +33,9 @@ func (c *IBFTConsensus) runSequence(height uint64) <-chan struct{} {
 	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 
+	if c.cancelSequence != nil {
+		c.cancelSequence()
+	}
 	c.cancelSequence = cancel
 
 	c.wg.Add(1)
@@ -52,6 +55,8 @@ func (c *IBFTConsensus) runSequence(height uint64) <-chan struct{} {
 
 // stopSequence terminates the running IBFT sequence gracefully and waits for it to return
 func (c *IBFTConsensus) stopSequence() {
-	c.cancelSequence()
+	if c.cancelSequence != nil {
+		c.cancelSequence()
+	}
 	c.wg.Wait()
 }
