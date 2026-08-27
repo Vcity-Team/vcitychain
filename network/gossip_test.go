@@ -108,3 +108,20 @@ func Test_RepeatedClose(t *testing.T) {
 	topic.Close()
 	topic.Close()
 }
+
+func Test_SubscribeRejectedWhenClosedOrNil(t *testing.T) {
+	t.Parallel()
+
+	closedTopic := &Topic{closeCh: make(chan struct{})}
+	closedTopic.closed.Store(true)
+	require.Error(t, closedTopic.Subscribe(func(interface{}, peer.ID) {}))
+	require.False(t, closedTopic.subscribed.Load())
+
+	nilTopic := &Topic{closeCh: make(chan struct{})}
+	require.Error(t, nilTopic.Subscribe(func(interface{}, peer.ID) {}))
+	require.False(t, nilTopic.subscribed.Load(), "failed Subscribe must not stick subscribed=true")
+
+	// Retry after failure must not get "already subscribed"
+	require.Error(t, nilTopic.Subscribe(func(interface{}, peer.ID) {}))
+	require.False(t, nilTopic.subscribed.Load())
+}
