@@ -142,9 +142,9 @@ type SignatureCollector struct {
 }
 
 // NewSignatureCollector 创建新的签名收集器
-func NewSignatureCollector(checkpointHash types.Hash, signatureCh chan *SignatureResponse, timeout time.Duration, requiredCount int, goroutineManager *GoroutineManager) *SignatureCollector {
+func NewSignatureCollector(ctx context.Context, checkpointHash types.Hash, signatureCh chan *SignatureResponse, timeout time.Duration, requiredCount int, goroutineManager *GoroutineManager) *SignatureCollector {
 	now := time.Now()
-	workerCtx, workerCancel := context.WithCancel(context.Background())
+	workerCtx, workerCancel := context.WithCancel(ctx)
 	return &SignatureCollector{
 		checkpointHash:   checkpointHash,
 		signatureCh:      signatureCh,
@@ -314,7 +314,7 @@ func NewNetworkIntegration(network *network.Server, logger hclog.Logger) *Networ
 		logger:           logger.Named("network-integration"),
 		network:          network,
 		handlers:         make(map[string]MessageHandler),
-		goroutineManager: NewGoroutineManager(logger, 1000, 100), // 最大1000个协程，100个重试工作器
+		goroutineManager: NewGoroutineManager(context.Background(), logger, 1000, 100), // 最大1000个协程，100个重试工作器
 		peerRegistry:     NewPeerRegistry(),
 	}
 
@@ -363,7 +363,7 @@ func NewNetworkIntegrationWithExistingTopics(network *network.Server, logger hcl
 		logger:           logger.Named("network-integration"),
 		network:          network,
 		handlers:         make(map[string]MessageHandler),
-		goroutineManager: NewGoroutineManager(logger, 1000, 100), // 最大1000个协程，100个重试工作器
+		goroutineManager: NewGoroutineManager(context.Background(), logger, 1000, 100), // 最大1000个协程，100个重试工作器
 		peerRegistry:     NewPeerRegistry(),
 	}
 
@@ -465,9 +465,9 @@ func (ni *NetworkIntegration) Start() error {
 	// 初始化签名收集器管理器
 	if ni.collectorManager == nil {
 		if ni.goroutineManager == nil {
-			ni.goroutineManager = NewGoroutineManager(ni.logger, 1000, 100)
+			ni.goroutineManager = NewGoroutineManager(context.Background(), ni.logger, 1000, 100)
 		}
-		ni.collectorManager = NewSignatureCollectorManager(ni.logger, ni.goroutineManager)
+		ni.collectorManager = NewSignatureCollectorManager(context.Background(), ni.logger, ni.goroutineManager)
 	}
 
 	// 初始化BLS公钥管理器
@@ -1169,9 +1169,9 @@ func (ni *NetworkIntegration) processDelegateMessage(delegate *DelegateMessage) 
 func (ni *NetworkIntegration) forwardSignatureResponse(response *SignatureResponse) {
 	if ni.collectorManager == nil {
 		if ni.goroutineManager == nil {
-			ni.goroutineManager = NewGoroutineManager(ni.logger, 1000, 100)
+			ni.goroutineManager = NewGoroutineManager(context.Background(), ni.logger, 1000, 100)
 		}
-		ni.collectorManager = NewSignatureCollectorManager(ni.logger, ni.goroutineManager)
+		ni.collectorManager = NewSignatureCollectorManager(context.Background(), ni.logger, ni.goroutineManager)
 	}
 	ni.collectorManager.ForwardSignatureResponse(response)
 }
@@ -1180,9 +1180,9 @@ func (ni *NetworkIntegration) forwardSignatureResponse(response *SignatureRespon
 func (ni *NetworkIntegration) RegisterSignatureCollector(checkpointHash types.Hash, signatureCh chan *SignatureResponse, timeout time.Duration, requiredCount int) {
 	if ni.collectorManager == nil {
 		if ni.goroutineManager == nil {
-			ni.goroutineManager = NewGoroutineManager(ni.logger, 1000, 100)
+			ni.goroutineManager = NewGoroutineManager(context.Background(), ni.logger, 1000, 100)
 		}
-		ni.collectorManager = NewSignatureCollectorManager(ni.logger, ni.goroutineManager)
+		ni.collectorManager = NewSignatureCollectorManager(context.Background(), ni.logger, ni.goroutineManager)
 	}
 	ni.collectorManager.RegisterSignatureCollector(checkpointHash, signatureCh, timeout, requiredCount)
 }

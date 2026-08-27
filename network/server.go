@@ -786,7 +786,10 @@ func (s *Server) SubscribeCh(ctx context.Context) (<-chan *peerEvent.PeerEvent, 
 	}
 
 	go func() {
-		<-s.closeCh
+		select {
+		case <-s.closeCh:
+		case <-ctx.Done():
+		}
 
 		cleanup()
 	}()

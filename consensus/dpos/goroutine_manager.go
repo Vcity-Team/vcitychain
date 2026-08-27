@@ -42,8 +42,8 @@ type GoroutineManager struct {
 }
 
 // NewGoroutineManager 创建协程管理器
-func NewGoroutineManager(logger hclog.Logger, maxGoroutines int64, maxRetryWorkers int) *GoroutineManager {
-	ctx, cancel := context.WithCancel(context.Background())
+func NewGoroutineManager(ctx context.Context, logger hclog.Logger, maxGoroutines int64, maxRetryWorkers int) *GoroutineManager {
+	ctx, cancel := context.WithCancel(ctx)
 
 	gm := &GoroutineManager{
 		logger:          logger.Named("goroutine-manager"),

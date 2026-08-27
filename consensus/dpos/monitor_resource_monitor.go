@@ -48,7 +48,7 @@ type ResourceMonitor struct {
 func NewResourceMonitor(logger hclog.Logger, dposRuntime *dposRuntime) *ResourceMonitor {
 	return &ResourceMonitor{
 		logger:           logger.Named("resource-monitor"),
-		goroutineManager: NewGoroutineManager(logger, 2000, 200), // 最大2000个协程，200个重试工作器
+		goroutineManager: NewGoroutineManager(context.Background(), logger, 2000, 200), // 最大2000个协程，200个重试工作器
 		lastLogTime:      make(map[string]time.Time),
 		cleanupInterval:  30 * time.Second,
 		dposRuntime:      dposRuntime,
