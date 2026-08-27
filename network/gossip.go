@@ -36,6 +36,7 @@ type Topic struct {
 	typ       reflect.Type
 	closeCh   chan struct{}
 	closed    atomic.Bool
+	subscribed atomic.Bool
 	waitGroup sync.WaitGroup
 
 	// 消息处理监控
@@ -139,13 +140,25 @@ func (t *Topic) Publish(obj proto.Message) error {
 }
 
 func (t *Topic) Subscribe(handler func(obj interface{}, from peer.ID)) error {
-	sub, err := t.topic.Subscribe(pubsub.WithBufferSize(subscribeOutputBufferSize))
-	if err != nil {
-		return err
+	if t.closed.Load() {
+		return errors.New("topic already closed")
+	}
+	if !t.subscribed.CompareAndSwap(false, true) {
+		return errors.New("topic already subscribed")
 	}
 
-	// Mark topic active.
-	t.closed.Store(false)
+	// Close may race after the CAS: topic can be nil, or closed may flip true.
+	if t.closed.Load() || t.topic == nil {
+		t.subscribed.Store(false)
+		return errors.New("topic already closed")
+	}
+
+	sub, err := t.topic.Subscribe(pubsub.WithBufferSize(subscribeOutputBufferSize))
+	if err != nil {
+		// Allow a later retry; otherwise subscribed stays true forever.
+		t.subscribed.Store(false)
+		return err
+	}
 
 	go t.readLoop(sub, handler)
 

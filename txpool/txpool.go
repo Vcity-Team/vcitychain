@@ -608,6 +608,9 @@ func (p *TxPool) validateTxFast(tx *types.Transaction) error {
 // Close shuts down the pool's main loop.
 func (p *TxPool) Close() {
 	p.eventManager.Close()
+	if p.topic != nil {
+		p.topic.Close()
+	}
 	close(p.shutdownCh)
 }
 

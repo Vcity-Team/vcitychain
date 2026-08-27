@@ -773,6 +773,12 @@ func (i *backendIBFT) Close() error {
 	// 使用安全的关闭方法
 	i.safeClose()
 
+	if i.transport != nil {
+		if closer, ok := i.transport.(interface{ Close() }); ok {
+			closer.Close()
+		}
+	}
+
 	if i.syncer != nil {
 		if err := i.syncer.Close(); err != nil {
 			return err
