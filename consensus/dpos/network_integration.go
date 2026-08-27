@@ -101,6 +101,10 @@ type NetworkIntegration struct {
 
 	// 验证者地址与peer映射（使用PeerRegistry统一管理）
 	peerRegistry *PeerRegistry
+
+	// 生命周期：Stop() 时 cancel，联动 goroutineManager 与 signature collectors
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // MessageHandler 消息处理器接口
@@ -310,18 +314,30 @@ func (sc *SignatureCollector) Close() {
 
 // NewNetworkIntegration 创建网络集成管理器
 func NewNetworkIntegration(network *network.Server, logger hclog.Logger) *NetworkIntegration {
+	ctx, cancel := context.WithCancel(context.Background())
 	ni := &NetworkIntegration{
 		logger:           logger.Named("network-integration"),
 		network:          network,
 		handlers:         make(map[string]MessageHandler),
-		goroutineManager: NewGoroutineManager(context.Background(), logger, 1000, 100), // 最大1000个协程，100个重试工作器
+		goroutineManager: NewGoroutineManager(ctx, logger, 1000, 100), // 最大1000个协程，100个重试工作器
 		peerRegistry:     NewPeerRegistry(),
+		ctx:              ctx,
+		cancel:           cancel,
 	}
 
 	// 注册消息处理器
 	ni.registerHandlers()
 
 	return ni
+}
+
+func (ni *NetworkIntegration) ensureCollectorManager() {
+	if ni.goroutineManager == nil {
+		ni.goroutineManager = NewGoroutineManager(ni.ctx, ni.logger, 1000, 100)
+	}
+	if ni.collectorManager == nil {
+		ni.collectorManager = NewSignatureCollectorManager(ni.ctx, ni.logger, ni.goroutineManager)
+	}
 }
 
 // SetBLSKeyPersistCallback 设置BLS公钥持久化回调函数
@@ -359,12 +375,15 @@ func (ni *NetworkIntegration) SetDPoSInstance(dposInstance interface{}) {
 
 // NewNetworkIntegrationWithExistingTopics 创建使用现有主题的网络集成管理器
 func NewNetworkIntegrationWithExistingTopics(network *network.Server, logger hclog.Logger, runtime interface{}) *NetworkIntegration {
+	ctx, cancel := context.WithCancel(context.Background())
 	ni := &NetworkIntegration{
 		logger:           logger.Named("network-integration"),
 		network:          network,
 		handlers:         make(map[string]MessageHandler),
-		goroutineManager: NewGoroutineManager(context.Background(), logger, 1000, 100), // 最大1000个协程，100个重试工作器
+		goroutineManager: NewGoroutineManager(ctx, logger, 1000, 100), // 最大1000个协程，100个重试工作器
 		peerRegistry:     NewPeerRegistry(),
+		ctx:              ctx,
+		cancel:           cancel,
 	}
 
 	// 注册消息处理器
@@ -463,12 +482,7 @@ func (ni *NetworkIntegration) Start() error {
 	}
 
 	// 初始化签名收集器管理器
-	if ni.collectorManager == nil {
-		if ni.goroutineManager == nil {
-			ni.goroutineManager = NewGoroutineManager(context.Background(), ni.logger, 1000, 100)
-		}
-		ni.collectorManager = NewSignatureCollectorManager(context.Background(), ni.logger, ni.goroutineManager)
-	}
+	ni.ensureCollectorManager()
 
 	// 初始化BLS公钥管理器
 	if ni.blsKeyManager == nil {
@@ -500,9 +514,17 @@ func (ni *NetworkIntegration) Start() error {
 func (ni *NetworkIntegration) Stop() error {
 	ni.logger.Info("stopping DPoS network integration")
 
+	if ni.collectorManager != nil {
+		ni.collectorManager.Clear()
+	}
+
 	// 关闭协程管理器
 	if ni.goroutineManager != nil {
 		ni.goroutineManager.Close()
+	}
+
+	if ni.cancel != nil {
+		ni.cancel()
 	}
 
 	// 使用TopicManager统一关闭所有主题
@@ -1167,23 +1189,13 @@ func (ni *NetworkIntegration) processDelegateMessage(delegate *DelegateMessage) 
 
 // forwardSignatureResponse 转发签名响应到相应的收集器
 func (ni *NetworkIntegration) forwardSignatureResponse(response *SignatureResponse) {
-	if ni.collectorManager == nil {
-		if ni.goroutineManager == nil {
-			ni.goroutineManager = NewGoroutineManager(context.Background(), ni.logger, 1000, 100)
-		}
-		ni.collectorManager = NewSignatureCollectorManager(context.Background(), ni.logger, ni.goroutineManager)
-	}
+	ni.ensureCollectorManager()
 	ni.collectorManager.ForwardSignatureResponse(response)
 }
 
 // RegisterSignatureCollector 注册签名收集器
 func (ni *NetworkIntegration) RegisterSignatureCollector(checkpointHash types.Hash, signatureCh chan *SignatureResponse, timeout time.Duration, requiredCount int) {
-	if ni.collectorManager == nil {
-		if ni.goroutineManager == nil {
-			ni.goroutineManager = NewGoroutineManager(context.Background(), ni.logger, 1000, 100)
-		}
-		ni.collectorManager = NewSignatureCollectorManager(context.Background(), ni.logger, ni.goroutineManager)
-	}
+	ni.ensureCollectorManager()
 	ni.collectorManager.RegisterSignatureCollector(checkpointHash, signatureCh, timeout, requiredCount)
 }
 
