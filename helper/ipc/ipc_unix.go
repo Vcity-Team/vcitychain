@@ -28,7 +28,9 @@ func Listen(path string) (net.Listener, error) {
 		return nil, err
 	}
 
-	if removeErr := os.Remove(path); removeErr != nil {
+	// Remove a stale socket left by a previous run. A missing socket file is
+	// expected on first start and should not prevent listening.
+	if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
 		return nil, removeErr
 	}
 
