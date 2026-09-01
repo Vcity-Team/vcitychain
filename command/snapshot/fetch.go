@@ -14,9 +14,29 @@ import (
 	"time"
 )
 
-// fetchSnapshot downloads url plus its ".sha256" sidecar, verifies the checksum,
-// and saves the result to out. Existing out files are not overwritten.
-func fetchSnapshot(ctx context.Context, url, out string) error {
+// fetchSnapshot tries each URL in order, downloading it plus its ".sha256"
+// sidecar, verifying the checksum, and saving the first valid result to out.
+// Existing out files are not overwritten.
+func fetchSnapshot(ctx context.Context, urls []string, out string) error {
+	if _, err := os.Stat(out); err == nil {
+		return fmt.Errorf("output file %q already exists", out)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	var errs []error
+	for _, url := range urls {
+		if err := tryFetch(ctx, url, out); err == nil {
+			return nil
+		} else {
+			errs = append(errs, fmt.Errorf("%s: %w", url, err))
+		}
+	}
+
+	return fmt.Errorf("failed to fetch snapshot from any URL: %v", errs)
+}
+
+func tryFetch(ctx context.Context, url, out string) error {
 	client := &http.Client{Timeout: 30 * time.Second}
 
 	tmp, err := os.CreateTemp(filepath.Dir(out), ".snapshot-*")
@@ -71,12 +91,6 @@ func fetchSnapshot(ctx context.Context, url, out string) error {
 	}
 	if !strings.EqualFold(fields[0], hex.EncodeToString(actual[:])) {
 		return errors.New("snapshot checksum mismatch")
-	}
-
-	if _, err := os.Stat(out); err == nil {
-		return fmt.Errorf("output file %q already exists", out)
-	} else if !os.IsNotExist(err) {
-		return err
 	}
 
 	return os.Rename(tmp.Name(), out)

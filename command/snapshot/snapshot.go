@@ -36,11 +36,11 @@ func GetCommand() *cobra.Command {
 		"",
 		"snapshot archive input path",
 	)
-	snapshotCmd.Flags().StringVar(
-		&params.url,
+	snapshotCmd.Flags().StringArrayVar(
+		&params.urls,
 		urlFlag,
-		"",
-		"snapshot archive download URL",
+		[]string{},
+		"snapshot archive download URL; may be repeated to provide mirrors",
 	)
 
 	return snapshotCmd
@@ -70,7 +70,7 @@ func runCommand(cmd *cobra.Command, args []string) {
 		err = archive.CreateSnapshot(params.dataDir, params.out)
 		resultPath = params.out
 	case "fetch":
-		err = fetchSnapshot(cmd.Context(), params.url, params.out)
+		err = fetchSnapshot(cmd.Context(), params.urls, params.out)
 		resultPath = params.out
 	case "restore":
 		err = archive.RestoreSnapshot(params.snapshot, params.dataDir)

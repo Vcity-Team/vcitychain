@@ -26,7 +26,7 @@ type snapshotParams struct {
 	dataDir  string
 	out      string
 	snapshot string
-	url      string
+	urls     []string
 }
 
 func validateAction(action string) error {
@@ -57,7 +57,7 @@ func (p *snapshotParams) validateRestoreFlags() error {
 }
 
 func (p *snapshotParams) validateFetchFlags() error {
-	if p.url == "" {
+	if len(p.urls) == 0 {
 		return errURLRequired
 	}
 	if p.out == "" {
