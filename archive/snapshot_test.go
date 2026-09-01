@@ -50,6 +50,43 @@ func TestSnapshotEmptyDir(t *testing.T) {
 	}
 }
 
+// TestSnapshotRealisticDataDir verifies the snapshot helpers against a
+// node-like data directory layout instead of a flat temp dir.
+func TestSnapshotRealisticDataDir(t *testing.T) {
+	src := t.TempDir()
+	writeFile(t, filepath.Join(src, "config.yaml"), []byte("chain_config: genesis.json\n"))
+	writeFile(t, filepath.Join(src, "consensus", "validator.key"), []byte("0123456789abcdef"))
+	writeFile(t, filepath.Join(src, "consensus", "validator-bls.key"), []byte("bls-private-key"))
+	writeFile(t, filepath.Join(src, "libp2p", "libp2p.key"), []byte("libp2p-private-key"))
+	writeFile(t, filepath.Join(src, "db", "blockchain.db"), []byte("blockchain-database-bytes"))
+
+	snapshot := filepath.Join(t.TempDir(), "node-snapshot.tar.gz")
+	if err := CreateSnapshot(src, snapshot); err != nil {
+		t.Fatalf("CreateSnapshot failed for realistic datadir: %v", err)
+	}
+	if err := VerifySnapshot(snapshot); err != nil {
+		t.Fatalf("VerifySnapshot failed for realistic datadir: %v", err)
+	}
+
+	restored := filepath.Join(t.TempDir(), "restored-node")
+	if err := RestoreSnapshot(snapshot, restored); err != nil {
+		t.Fatalf("RestoreSnapshot failed for realistic datadir: %v", err)
+	}
+
+	checks := map[string]string{
+		"config.yaml":                 "chain_config: genesis.json\n",
+		"consensus/validator.key":     "0123456789abcdef",
+		"consensus/validator-bls.key": "bls-private-key",
+		"libp2p/libp2p.key":           "libp2p-private-key",
+		"db/blockchain.db":            "blockchain-database-bytes",
+	}
+	for rel, want := range checks {
+		if got := string(readFile(t, filepath.Join(restored, filepath.FromSlash(rel)))); got != want {
+			t.Fatalf("restored %s = %q, want %q", rel, got, want)
+		}
+	}
+}
+
 func TestCreateSnapshotMissingSource(t *testing.T) {
 	err := CreateSnapshot(filepath.Join(t.TempDir(), "missing"), filepath.Join(t.TempDir(), "s.tar.gz"))
 	if err == nil {

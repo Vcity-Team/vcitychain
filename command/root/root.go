@@ -24,6 +24,7 @@ import (
 	"github.com/Vcity-Team/vcitychain/command/rootchain"
 	"github.com/Vcity-Team/vcitychain/command/secrets"
 	"github.com/Vcity-Team/vcitychain/command/server"
+	"github.com/Vcity-Team/vcitychain/command/snapshot"
 	"github.com/Vcity-Team/vcitychain/command/status"
 	"github.com/Vcity-Team/vcitychain/command/txpool"
 	"github.com/Vcity-Team/vcitychain/command/version"
@@ -65,6 +66,7 @@ func (rc *RootCommand) registerSubCommands() {
 		polybftsecrets.GetCommand(),
 		polybft.GetCommand(),
 		bridge.GetCommand(),
+		snapshot.GetCommand(),
 		regenesis.GetCommand(),
 		rollback.GetCommand(),
 		rebuildcanonical.GetCommand(),
