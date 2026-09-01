@@ -195,6 +195,20 @@ func RestoreSnapshot(snapshotFile, dstDir string) error {
 	}
 }
 
+// RestoreSnapshotIfEmpty restores snapshotFile into dataDir only when dataDir
+// is missing or empty, so an existing node's data is never overwritten.
+func RestoreSnapshotIfEmpty(snapshotFile, dataDir string) error {
+	entries, err := os.ReadDir(dataDir)
+	if err == nil && len(entries) > 0 {
+		return fmt.Errorf("data dir %q is not empty; refusing to restore snapshot", dataDir)
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	return RestoreSnapshot(snapshotFile, dataDir)
+}
+
 func sha256File(path string) ([32]byte, error) {
 	var sum [32]byte
 

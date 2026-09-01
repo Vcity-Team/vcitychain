@@ -34,6 +34,7 @@ type Config struct {
 
 	DataDir     string
 	RestoreFile *string
+	RestoreSnapshotFile *string
 
 	Seal bool
 

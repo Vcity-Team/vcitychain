@@ -125,6 +125,12 @@ func setFlags(cmd *cobra.Command) {
 		"",
 		"the path to the archive blockchain data to restore on initialization",
 	)
+	cmd.Flags().StringVar(
+		&params.rawConfig.RestoreSnapshotFile,
+		restoreSnapshotFlag,
+		"",
+		"the path to a node data directory snapshot to restore on initialization when the data dir is empty",
+	)
 
 	cmd.Flags().BoolVar(
 		&params.rawConfig.ShouldSeal,

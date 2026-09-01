@@ -9,13 +9,15 @@ const (
 	dataDirFlag  = "data-dir"
 	outFlag      = "out"
 	snapshotFlag = "snapshot"
+	urlFlag      = "url"
 )
 
 var (
 	errDataDirRequired  = errors.New("data-dir is required")
 	errOutRequired      = errors.New("out is required")
 	errSnapshotRequired = errors.New("snapshot is required")
-	errUnknownAction    = errors.New("unknown action; use create or restore")
+	errURLRequired      = errors.New("url is required")
+	errUnknownAction    = errors.New("unknown action; use create, restore or fetch")
 )
 
 var params = &snapshotParams{}
@@ -24,10 +26,11 @@ type snapshotParams struct {
 	dataDir  string
 	out      string
 	snapshot string
+	url      string
 }
 
 func validateAction(action string) error {
-	if action != "create" && action != "restore" {
+	if action != "create" && action != "restore" && action != "fetch" {
 		return fmt.Errorf("%w: %s", errUnknownAction, action)
 	}
 	return nil
@@ -49,6 +52,16 @@ func (p *snapshotParams) validateRestoreFlags() error {
 	}
 	if p.dataDir == "" {
 		return errDataDirRequired
+	}
+	return nil
+}
+
+func (p *snapshotParams) validateFetchFlags() error {
+	if p.url == "" {
+		return errURLRequired
+	}
+	if p.out == "" {
+		return errOutRequired
 	}
 	return nil
 }

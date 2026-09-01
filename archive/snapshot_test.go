@@ -194,6 +194,69 @@ func TestRestoreSnapshotRejectsUnsafePath(t *testing.T) {
 	}
 }
 
+func TestRestoreSnapshotIfEmptyEmptyDir(t *testing.T) {
+	src := t.TempDir()
+	writeFile(t, filepath.Join(src, "a.txt"), []byte("alpha"))
+
+	snapshot := filepath.Join(t.TempDir(), "snapshot.tar.gz")
+	if err := CreateSnapshot(src, snapshot); err != nil {
+		t.Fatalf("CreateSnapshot failed: %v", err)
+	}
+
+	dataDir := filepath.Join(t.TempDir(), "empty-data")
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		t.Fatalf("failed to create empty data dir: %v", err)
+	}
+	if err := RestoreSnapshotIfEmpty(snapshot, dataDir); err != nil {
+		t.Fatalf("RestoreSnapshotIfEmpty failed for empty data dir: %v", err)
+	}
+	if got := string(readFile(t, filepath.Join(dataDir, "a.txt"))); got != "alpha" {
+		t.Fatalf("restored a.txt = %q, want %q", got, "alpha")
+	}
+}
+
+func TestRestoreSnapshotIfEmptyMissingDir(t *testing.T) {
+	src := t.TempDir()
+	writeFile(t, filepath.Join(src, "a.txt"), []byte("alpha"))
+
+	snapshot := filepath.Join(t.TempDir(), "snapshot.tar.gz")
+	if err := CreateSnapshot(src, snapshot); err != nil {
+		t.Fatalf("CreateSnapshot failed: %v", err)
+	}
+
+	dataDir := filepath.Join(t.TempDir(), "missing-data")
+	if err := RestoreSnapshotIfEmpty(snapshot, dataDir); err != nil {
+		t.Fatalf("RestoreSnapshotIfEmpty failed for missing data dir: %v", err)
+	}
+	if got := string(readFile(t, filepath.Join(dataDir, "a.txt"))); got != "alpha" {
+		t.Fatalf("restored a.txt = %q, want %q", got, "alpha")
+	}
+}
+
+func TestRestoreSnapshotIfEmptyNonEmptyDir(t *testing.T) {
+	src := t.TempDir()
+	writeFile(t, filepath.Join(src, "a.txt"), []byte("alpha"))
+	snapshot := filepath.Join(t.TempDir(), "snapshot.tar.gz")
+	if err := CreateSnapshot(src, snapshot); err != nil {
+		t.Fatalf("CreateSnapshot failed: %v", err)
+	}
+
+	dataDir := t.TempDir()
+	writeFile(t, filepath.Join(dataDir, "existing"), []byte("keep"))
+	if err := RestoreSnapshotIfEmpty(snapshot, dataDir); err == nil {
+		t.Fatal("RestoreSnapshotIfEmpty should refuse non-empty data dir")
+	}
+	if got := string(readFile(t, filepath.Join(dataDir, "existing"))); got != "keep" {
+		t.Fatalf("existing file was modified: %q", got)
+	}
+}
+
+func TestRestoreSnapshotIfEmptyMissingSnapshot(t *testing.T) {
+	if err := RestoreSnapshotIfEmpty(filepath.Join(t.TempDir(), "missing.tar.gz"), t.TempDir()); err == nil {
+		t.Fatal("RestoreSnapshotIfEmpty should fail for missing snapshot")
+	}
+}
+
 func writeTarEntry(t *testing.T, snapshot, name string, data []byte) {
 	t.Helper()
 

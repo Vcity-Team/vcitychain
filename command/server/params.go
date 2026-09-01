@@ -36,6 +36,7 @@ const (
 	blockGasTargetFlag           = "block-gas-target"
 	secretsConfigFlag            = "secrets-config"
 	restoreFlag                  = "restore"
+	restoreSnapshotFlag          = "restore-snapshot"
 	devIntervalFlag              = "dev-interval"
 	devFlag                      = "dev"
 	corsOriginFlag               = "access-control-allow-origins"
@@ -181,6 +182,14 @@ func (p *serverParams) getRestoreFilePath() *string {
 	return nil
 }
 
+func (p *serverParams) getRestoreSnapshotFilePath() *string {
+	if p.rawConfig.RestoreSnapshotFile != "" {
+		return &p.rawConfig.RestoreSnapshotFile
+	}
+
+	return nil
+}
+
 func (p *serverParams) setRawGRPCAddress(grpcAddress string) {
 	p.rawConfig.GRPCAddr = grpcAddress
 }
@@ -229,6 +238,7 @@ func (p *serverParams) generateConfig() *server.Config {
 		MaxAccountEnqueued: p.rawConfig.TxPool.MaxAccountEnqueued,
 		SecretsManager:     p.secretsConfig,
 		RestoreFile:        p.getRestoreFilePath(),
+		RestoreSnapshotFile: p.getRestoreSnapshotFilePath(),
 		LogLevel:           hclog.LevelFromString(p.rawConfig.LogLevel),
 
 		ConsensusSwitchHeight: p.consensusSwitchHeight,

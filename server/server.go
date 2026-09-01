@@ -517,6 +517,12 @@ func NewServer(config *Config) (*Server, error) {
 
 	m.logger.Info("Data dir", "path", config.DataDir)
 
+	// Restore a data directory snapshot before creating local directories so
+	// the snapshot is only applied to a brand-new data dir.
+	if err := m.restoreSnapshot(); err != nil {
+		return nil, fmt.Errorf("failed to restore snapshot: %w", err)
+	}
+
 	var dirPaths = []string{
 		"blockchain",
 		"trie",
@@ -813,6 +819,17 @@ func (s *Server) restoreChain() error {
 	}
 
 	return nil
+}
+
+func (s *Server) restoreSnapshot() error {
+	if s.config.RestoreSnapshotFile == nil || *s.config.RestoreSnapshotFile == "" {
+		return nil
+	}
+	if s.config.DataDir == "" {
+		return errors.New("data dir is empty; cannot restore snapshot")
+	}
+
+	return archive.RestoreSnapshotIfEmpty(*s.config.RestoreSnapshotFile, s.config.DataDir)
 }
 
 type txpoolHub struct {
