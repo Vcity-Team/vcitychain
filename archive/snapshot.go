@@ -12,9 +12,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Vcity-Team/vcitychain/secrets"
 )
 
 const snapshotChecksumSuffix = ".sha256"
+
+// snapshotExcludedFiles are node-local secrets that must never leave the node
+// through a distributable snapshot.
+var snapshotExcludedFiles = map[string]struct{}{
+	secrets.ValidatorKeyLocal:    {},
+	secrets.ValidatorBLSKeyLocal: {},
+	secrets.NetworkKeyLocal:      {},
+}
 
 // SnapshotInfo describes an existing snapshot file without re-hashing it.
 type SnapshotInfo struct {
@@ -79,6 +89,11 @@ func CreateSnapshot(srcDir, dstFile string) error {
 		}
 		if rel == "." {
 			return nil
+		}
+		if !entry.IsDir() {
+			if _, excluded := snapshotExcludedFiles[entry.Name()]; excluded {
+				return nil
+			}
 		}
 
 		info, err := entry.Info()

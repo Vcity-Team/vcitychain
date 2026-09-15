@@ -74,17 +74,74 @@ func TestSnapshotRealisticDataDir(t *testing.T) {
 	}
 
 	checks := map[string]string{
-		"config.yaml":                 "chain_config: genesis.json\n",
-		"consensus/validator.key":     "0123456789abcdef",
-		"consensus/validator-bls.key": "bls-private-key",
-		"libp2p/libp2p.key":           "libp2p-private-key",
-		"db/blockchain.db":            "blockchain-database-bytes",
+		"config.yaml":      "chain_config: genesis.json\n",
+		"db/blockchain.db": "blockchain-database-bytes",
 	}
 	for rel, want := range checks {
 		if got := string(readFile(t, filepath.Join(restored, filepath.FromSlash(rel)))); got != want {
 			t.Fatalf("restored %s = %q, want %q", rel, got, want)
 		}
 	}
+
+	for _, secret := range []string{
+		"consensus/validator.key",
+		"consensus/validator-bls.key",
+		"libp2p/libp2p.key",
+	} {
+		if _, err := os.Stat(filepath.Join(restored, filepath.FromSlash(secret))); !os.IsNotExist(err) {
+			t.Fatalf("secret %s must not be restored from a snapshot (err=%v)", secret, err)
+		}
+	}
+}
+
+func TestCreateSnapshotExcludesSecrets(t *testing.T) {
+	src := t.TempDir()
+	writeFile(t, filepath.Join(src, "blockchain", "chain.db"), []byte("chain-data"))
+	writeFile(t, filepath.Join(src, "consensus", "validator.key"), []byte("ecdsa-private-key"))
+	writeFile(t, filepath.Join(src, "consensus", "validator-bls.key"), []byte("bls-private-key"))
+	writeFile(t, filepath.Join(src, "libp2p", "libp2p.key"), []byte("network-private-key"))
+
+	snapshot := filepath.Join(t.TempDir(), "snapshot.tar.gz")
+	if err := CreateSnapshot(src, snapshot); err != nil {
+		t.Fatalf("CreateSnapshot failed: %v", err)
+	}
+
+	names := snapshotEntryNames(t, snapshot)
+	for _, secret := range []string{"consensus/validator.key", "consensus/validator-bls.key", "libp2p/libp2p.key"} {
+		if _, ok := names[secret]; ok {
+			t.Fatalf("snapshot must not contain secret file %s", secret)
+		}
+	}
+	if _, ok := names["blockchain/chain.db"]; !ok {
+		t.Fatal("snapshot must contain blockchain data")
+	}
+}
+
+func snapshotEntryNames(t *testing.T, snapshot string) map[string]struct{} {
+	t.Helper()
+
+	f, err := os.Open(snapshot)
+	if err != nil {
+		t.Fatalf("failed to open snapshot: %v", err)
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatalf("failed to open gzip: %v", err)
+	}
+	defer gz.Close()
+
+	names := make(map[string]struct{})
+	tr := tar.NewReader(gz)
+	for {
+		header, err := tr.Next()
+		if err != nil {
+			break
+		}
+		names[header.Name] = struct{}{}
+	}
+	return names
 }
 
 func TestCreateSnapshotMissingSource(t *testing.T) {
