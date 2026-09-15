@@ -2,6 +2,7 @@ package snapshot
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/Vcity-Team/vcitychain/archive"
@@ -42,6 +43,30 @@ func GetCommand() *cobra.Command {
 		[]string{},
 		"snapshot archive download URL; may be repeated to provide mirrors",
 	)
+	snapshotCmd.Flags().StringVar(
+		&params.height,
+		heightFlag,
+		"",
+		"latest block height recorded in the snapshot metadata",
+	)
+	snapshotCmd.Flags().StringVar(
+		&params.hash,
+		hashFlag,
+		"",
+		"latest block hash recorded in the snapshot metadata",
+	)
+	snapshotCmd.Flags().StringVar(
+		&params.keyFile,
+		keyFileFlag,
+		"",
+		"Ed25519 key file used for snapshot signing",
+	)
+	snapshotCmd.Flags().StringVar(
+		&params.pubkey,
+		pubkeyFlag,
+		"",
+		"Ed25519 public key (hex) used to verify a snapshot signature",
+	)
 
 	return snapshotCmd
 }
@@ -59,6 +84,12 @@ func runPreRun(_ *cobra.Command, args []string) error {
 	if args[0] == "verify" || args[0] == "info" {
 		return params.validateSnapshotFileFlag()
 	}
+	if args[0] == "keygen" {
+		return params.validateKeygenFlags()
+	}
+	if args[0] == "sign" {
+		return params.validateSignFlags()
+	}
 	return params.validateRestoreFlags()
 }
 
@@ -71,7 +102,15 @@ func runCommand(cmd *cobra.Command, args []string) {
 	var resultFields []string
 	switch args[0] {
 	case "create":
-		err = archive.CreateSnapshot(params.dataDir, params.out)
+		metadata := &archive.SnapshotMetadata{LatestHash: params.hash}
+		if params.height != "" {
+			metadata.LatestBlock, err = strconv.ParseUint(params.height, 10, 64)
+			if err != nil {
+				outputter.SetError(fmt.Errorf("invalid height: %w", err))
+				return
+			}
+		}
+		err = archive.CreateSnapshotWithMetadata(params.dataDir, params.out, metadata)
 		resultPath = params.out
 	case "fetch":
 		err = fetchSnapshot(cmd.Context(), params.urls, params.out)
@@ -92,6 +131,29 @@ func runCommand(cmd *cobra.Command, args []string) {
 				fmt.Sprintf("Size|%d", info.Size),
 				fmt.Sprintf("Checksum|%s", info.Checksum),
 			}
+			if info.Metadata != nil {
+				resultFields = append(resultFields,
+					fmt.Sprintf("CreatedAt|%s", info.Metadata.CreatedAt.Format("2006-01-02T15:04:05Z07:00")),
+					fmt.Sprintf("LatestBlock|%d", info.Metadata.LatestBlock),
+					fmt.Sprintf("LatestHash|%s", info.Metadata.LatestHash),
+				)
+			}
+		}
+	case "keygen":
+		var publicKey string
+		publicKey, err = archive.GenerateSnapshotKeypair(params.keyFile)
+		resultPath = params.keyFile
+		if publicKey != "" {
+			resultFields = []string{fmt.Sprintf("PublicKey|%s", publicKey)}
+		}
+	case "sign":
+		err = archive.SignSnapshot(params.snapshot, params.keyFile)
+		resultPath = params.snapshot
+	}
+	if err == nil && args[0] == "verify" && params.pubkey != "" {
+		err = archive.VerifySnapshotSignature(params.snapshot, params.pubkey)
+		if err == nil {
+			resultFields = append(resultFields, "Signature|verified")
 		}
 	}
 	if err != nil {

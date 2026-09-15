@@ -10,6 +10,10 @@ const (
 	outFlag      = "out"
 	snapshotFlag = "snapshot"
 	urlFlag      = "url"
+	heightFlag   = "height"
+	hashFlag     = "hash"
+	keyFileFlag  = "key-file"
+	pubkeyFlag   = "pubkey"
 )
 
 var (
@@ -17,7 +21,8 @@ var (
 	errOutRequired      = errors.New("out is required")
 	errSnapshotRequired = errors.New("snapshot is required")
 	errURLRequired      = errors.New("url is required")
-	errUnknownAction    = errors.New("unknown action; use create, restore, fetch, verify or info")
+	errKeyFileRequired  = errors.New("key-file is required")
+	errUnknownAction    = errors.New("unknown action; use create, restore, fetch, verify, info, keygen or sign")
 )
 
 var params = &snapshotParams{}
@@ -27,11 +32,15 @@ type snapshotParams struct {
 	out      string
 	snapshot string
 	urls     []string
+	height   string
+	hash     string
+	keyFile  string
+	pubkey   string
 }
 
 func validateAction(action string) error {
 	switch action {
-	case "create", "restore", "fetch", "verify", "info":
+	case "create", "restore", "fetch", "verify", "info", "keygen", "sign":
 		return nil
 	default:
 		return fmt.Errorf("%w: %s", errUnknownAction, action)
@@ -71,6 +80,23 @@ func (p *snapshotParams) validateFetchFlags() error {
 func (p *snapshotParams) validateSnapshotFileFlag() error {
 	if p.snapshot == "" {
 		return errSnapshotRequired
+	}
+	return nil
+}
+
+func (p *snapshotParams) validateKeygenFlags() error {
+	if p.keyFile == "" {
+		return errKeyFileRequired
+	}
+	return nil
+}
+
+func (p *snapshotParams) validateSignFlags() error {
+	if p.snapshot == "" {
+		return errSnapshotRequired
+	}
+	if p.keyFile == "" {
+		return errKeyFileRequired
 	}
 	return nil
 }

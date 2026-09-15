@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,11 +13,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Vcity-Team/vcitychain/secrets"
 )
 
 const snapshotChecksumSuffix = ".sha256"
+
+// snapshotMetadataName is the archive entry holding snapshot metadata. It is
+// stored inside the tar so it travels with the snapshot.
+const snapshotMetadataName = "SNAPSHOT_METADATA.json"
 
 // snapshotExcludedFiles are node-local secrets that must never leave the node
 // through a distributable snapshot.
@@ -31,6 +37,14 @@ type SnapshotInfo struct {
 	Path     string
 	Size     int64
 	Checksum string
+	Metadata *SnapshotMetadata
+}
+
+// SnapshotMetadata describes the chain position a snapshot was taken at.
+type SnapshotMetadata struct {
+	CreatedAt   time.Time `json:"createdAt"`
+	LatestBlock uint64    `json:"latestBlock,omitempty"`
+	LatestHash  string    `json:"latestHash,omitempty"`
 }
 
 // InspectSnapshot reads snapshot metadata from disk. Use VerifySnapshot for a
@@ -50,10 +64,16 @@ func InspectSnapshot(snapshotFile string) (*SnapshotInfo, error) {
 		return nil, errors.New("invalid snapshot checksum format")
 	}
 
+	metadata, err := readSnapshotMetadata(snapshotFile)
+	if err != nil {
+		return nil, err
+	}
+
 	return &SnapshotInfo{
 		Path:     snapshotFile,
 		Size:     fileInfo.Size(),
 		Checksum: fields[0],
+		Metadata: metadata,
 	}, nil
 }
 
@@ -61,8 +81,17 @@ func InspectSnapshot(snapshotFile string) (*SnapshotInfo, error) {
 // writes dstFile+".sha256" containing its SHA-256 checksum. It refuses to
 // overwrite an existing dstFile and removes partial output on failure.
 func CreateSnapshot(srcDir, dstFile string) error {
+	return CreateSnapshotWithMetadata(srcDir, dstFile, &SnapshotMetadata{})
+}
+
+// CreateSnapshotWithMetadata behaves like CreateSnapshot and additionally
+// stores chain position metadata inside the archive.
+func CreateSnapshotWithMetadata(srcDir, dstFile string, metadata *SnapshotMetadata) error {
 	if _, err := os.Stat(srcDir); err != nil {
 		return fmt.Errorf("snapshot source %q: %w", srcDir, err)
+	}
+	if err := ensureDataDirNotLocked(srcDir); err != nil {
+		return err
 	}
 
 	file, err := os.OpenFile(dstFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
@@ -126,6 +155,15 @@ func CreateSnapshot(srcDir, dstFile string) error {
 	if walkErr != nil {
 		cleanup()
 		return walkErr
+	}
+	if metadata != nil {
+		if metadata.CreatedAt.IsZero() {
+			metadata.CreatedAt = time.Now().UTC()
+		}
+		if err := writeSnapshotMetadata(tarWriter, metadata); err != nil {
+			cleanup()
+			return err
+		}
 	}
 	if err := tarWriter.Close(); err != nil {
 		cleanup()
@@ -216,6 +254,9 @@ func RestoreSnapshot(snapshotFile, dstDir string) error {
 		if filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
 			return fmt.Errorf("snapshot contains unsafe path %q", header.Name)
 		}
+		if name == snapshotMetadataName {
+			continue
+		}
 		target := filepath.Join(dstDir, name)
 
 		switch header.Typeflag {
@@ -242,6 +283,64 @@ func RestoreSnapshot(snapshotFile, dstDir string) error {
 		default:
 			return fmt.Errorf("snapshot contains unsupported entry %q (type %d)", header.Name, header.Typeflag)
 		}
+	}
+}
+
+func writeSnapshotMetadata(writer *tar.Writer, metadata *SnapshotMetadata) error {
+	data, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	header := &tar.Header{
+		Name:     snapshotMetadataName,
+		Mode:     0644,
+		Size:     int64(len(data)),
+		Typeflag: tar.TypeReg,
+	}
+	if err := writer.WriteHeader(header); err != nil {
+		return err
+	}
+	_, err = writer.Write(data)
+
+	return err
+}
+
+func readSnapshotMetadata(snapshotFile string) (*SnapshotMetadata, error) {
+	file, err := os.Open(snapshotFile)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	gzipReader, err := gzip.NewReader(file)
+	if err != nil {
+		return nil, err
+	}
+	defer gzipReader.Close()
+
+	tarReader := tar.NewReader(gzipReader)
+	for {
+		header, err := tarReader.Next()
+		if errors.Is(err, io.EOF) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if header.Name != snapshotMetadataName {
+			continue
+		}
+
+		data, err := io.ReadAll(io.LimitReader(tarReader, header.Size))
+		if err != nil {
+			return nil, err
+		}
+		metadata := &SnapshotMetadata{}
+		if err := json.Unmarshal(data, metadata); err != nil {
+			return nil, err
+		}
+
+		return metadata, nil
 	}
 }
 

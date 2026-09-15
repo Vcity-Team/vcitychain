@@ -419,6 +419,64 @@ func TestInspectSnapshotMissingChecksum(t *testing.T) {
 	}
 }
 
+func TestSnapshotMetadataRoundTrip(t *testing.T) {
+	src := t.TempDir()
+	writeFile(t, filepath.Join(src, "chain.db"), []byte("blocks"))
+
+	snapshot := filepath.Join(t.TempDir(), "snapshot.tar.gz")
+	if err := CreateSnapshotWithMetadata(src, snapshot, &SnapshotMetadata{
+		LatestBlock: 12345,
+		LatestHash:  "0xabc123",
+	}); err != nil {
+		t.Fatalf("CreateSnapshotWithMetadata failed: %v", err)
+	}
+
+	info, err := InspectSnapshot(snapshot)
+	if err != nil {
+		t.Fatalf("InspectSnapshot failed: %v", err)
+	}
+	if info.Metadata == nil {
+		t.Fatal("snapshot metadata should be present")
+	}
+	if info.Metadata.LatestBlock != 12345 {
+		t.Fatalf("LatestBlock = %d, want 12345", info.Metadata.LatestBlock)
+	}
+	if info.Metadata.LatestHash != "0xabc123" {
+		t.Fatalf("LatestHash = %q, want %q", info.Metadata.LatestHash, "0xabc123")
+	}
+	if info.Metadata.CreatedAt.IsZero() {
+		t.Fatal("CreatedAt should be set")
+	}
+
+	restored := filepath.Join(t.TempDir(), "restored")
+	if err := RestoreSnapshot(snapshot, restored); err != nil {
+		t.Fatalf("RestoreSnapshot failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(restored, snapshotMetadataName)); !os.IsNotExist(err) {
+		t.Fatalf("metadata file must not be restored into the data dir (err=%v)", err)
+	}
+	if got := string(readFile(t, filepath.Join(restored, "chain.db"))); got != "blocks" {
+		t.Fatalf("restored chain.db = %q, want %q", got, "blocks")
+	}
+}
+
+func TestCreateSnapshotSetsCreatedAt(t *testing.T) {
+	src := t.TempDir()
+	writeFile(t, filepath.Join(src, "a.txt"), []byte("alpha"))
+
+	snapshot := filepath.Join(t.TempDir(), "snapshot.tar.gz")
+	if err := CreateSnapshot(src, snapshot); err != nil {
+		t.Fatalf("CreateSnapshot failed: %v", err)
+	}
+	info, err := InspectSnapshot(snapshot)
+	if err != nil {
+		t.Fatalf("InspectSnapshot failed: %v", err)
+	}
+	if info.Metadata == nil || info.Metadata.CreatedAt.IsZero() {
+		t.Fatal("CreateSnapshot should record CreatedAt")
+	}
+}
+
 func writeTarEntry(t *testing.T, snapshot, name string, data []byte) {
 	t.Helper()
 
