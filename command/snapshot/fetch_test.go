@@ -3,11 +3,13 @@ package snapshot
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -175,6 +177,162 @@ func TestFetchSnapshotAllMirrorsFail(t *testing.T) {
 	}, filepath.Join(t.TempDir(), "snapshot.tar.gz"))
 	if err == nil {
 		t.Fatal("fetchSnapshot should fail when all mirrors fail")
+	}
+}
+
+func TestFetchSnapshotResumesPartialDownload(t *testing.T) {
+	data := []byte("0123456789abcdef")
+	const etag = `"v1"`
+	var rangeHeader string
+	server := newRangeSnapshotServer(t, data, etag, &rangeHeader)
+	defer server.Close()
+
+	dir := t.TempDir()
+	out := filepath.Join(dir, "snapshot.tar.gz")
+	writePartial(t, out, data[:6], server.URL+"/snapshot.tar.gz", etag)
+
+	if err := fetchSnapshot(context.Background(), []string{server.URL + "/snapshot.tar.gz"}, out); err != nil {
+		t.Fatalf("fetchSnapshot should resume partial download: %v", err)
+	}
+	if got := string(readTestFile(t, out)); got != string(data) {
+		t.Fatalf("fetched file = %q, want %q", got, data)
+	}
+	if rangeHeader != "bytes=6-" {
+		t.Fatalf("Range header = %q, want %q", rangeHeader, "bytes=6-")
+	}
+	if _, err := os.Stat(out + ".part"); !os.IsNotExist(err) {
+		t.Fatalf(".part file should be removed after success (err=%v)", err)
+	}
+}
+
+func TestFetchSnapshotRestartsWhenServerIgnoresRange(t *testing.T) {
+	data := []byte("0123456789abcdef")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".sha256") {
+			_, _ = w.Write([]byte(fmt.Sprintf("%x  %s\n", sha256Sum(data), "snapshot.tar.gz")))
+			return
+		}
+		// Ignore Range: always return the full body.
+		_, _ = w.Write(data)
+	}))
+	defer server.Close()
+
+	out := filepath.Join(t.TempDir(), "snapshot.tar.gz")
+	writePartial(t, out, data[:4], server.URL+"/snapshot.tar.gz", `"v1"`)
+
+	if err := fetchSnapshot(context.Background(), []string{server.URL + "/snapshot.tar.gz"}, out); err != nil {
+		t.Fatalf("fetchSnapshot should restart when server ignores Range: %v", err)
+	}
+	if got := string(readTestFile(t, out)); got != string(data) {
+		t.Fatalf("fetched file = %q, want %q", got, data)
+	}
+}
+
+func TestFetchSnapshotRestartsWhenValidatorChanges(t *testing.T) {
+	data := []byte("new-content")
+	const etag = `"v2"`
+	server := newRangeSnapshotServer(t, data, etag, nil)
+	defer server.Close()
+
+	out := filepath.Join(t.TempDir(), "snapshot.tar.gz")
+	writePartial(t, out, []byte("stale"), server.URL+"/snapshot.tar.gz", `"v1"`)
+
+	if err := fetchSnapshot(context.Background(), []string{server.URL + "/snapshot.tar.gz"}, out); err != nil {
+		t.Fatalf("fetchSnapshot should restart when validator changes: %v", err)
+	}
+	if got := string(readTestFile(t, out)); got != string(data) {
+		t.Fatalf("fetched file = %q, want %q", got, data)
+	}
+}
+
+func TestFetchSnapshotKeepsPartialOnInterruptedDownload(t *testing.T) {
+	data := []byte("0123456789abcdef")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".sha256") {
+			_, _ = w.Write([]byte(fmt.Sprintf("%x  %s\n", sha256Sum(data), "snapshot.tar.gz")))
+			return
+		}
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+		_, _ = w.Write(data[:5])
+	}))
+	defer server.Close()
+
+	out := filepath.Join(t.TempDir(), "snapshot.tar.gz")
+	if err := fetchSnapshot(context.Background(), []string{server.URL + "/snapshot.tar.gz"}, out); err == nil {
+		t.Fatal("fetchSnapshot should fail on interrupted download")
+	}
+	part := readTestFile(t, out+".part")
+	if len(part) == 0 {
+		t.Fatal("partial data should be kept for resume")
+	}
+}
+
+func TestFetchSnapshotRemovesPartialOnChecksumMismatch(t *testing.T) {
+	data := []byte("0123456789abcdef")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".sha256") {
+			_, _ = w.Write([]byte(fmt.Sprintf("%x  %s\n", sha256Sum([]byte("other")), "snapshot.tar.gz")))
+			return
+		}
+		w.Header().Set("ETag", `"v1"`)
+		_, _ = w.Write(data)
+	}))
+	defer server.Close()
+
+	out := filepath.Join(t.TempDir(), "snapshot.tar.gz")
+	if err := fetchSnapshot(context.Background(), []string{server.URL + "/snapshot.tar.gz"}, out); err == nil {
+		t.Fatal("fetchSnapshot should fail on checksum mismatch")
+	}
+	if _, err := os.Stat(out + ".part"); !os.IsNotExist(err) {
+		t.Fatalf(".part file should be removed on checksum mismatch (err=%v)", err)
+	}
+}
+
+func newRangeSnapshotServer(t *testing.T, data []byte, etag string, rangeHeader *string) *httptest.Server {
+	t.Helper()
+
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".sha256") {
+			_, _ = w.Write([]byte(fmt.Sprintf("%x  %s\n", sha256Sum(data), "snapshot.tar.gz")))
+			return
+		}
+
+		w.Header().Set("ETag", etag)
+
+		if r.Header.Get("If-Range") != "" && r.Header.Get("If-Range") != etag {
+			_, _ = w.Write(data)
+			return
+		}
+
+		rangeValue := r.Header.Get("Range")
+		if rangeHeader != nil {
+			*rangeHeader = rangeValue
+		}
+		if rangeValue != "" {
+			var start int
+			if _, err := fmt.Sscanf(rangeValue, "bytes=%d-", &start); err == nil {
+				w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, len(data)-1, len(data)))
+				w.WriteHeader(http.StatusPartialContent)
+				_, _ = w.Write(data[start:])
+				return
+			}
+		}
+		_, _ = w.Write(data)
+	}))
+}
+
+func writePartial(t *testing.T, out string, data []byte, url, validator string) {
+	t.Helper()
+
+	if err := os.WriteFile(out+".part", data, 0644); err != nil {
+		t.Fatalf("failed to write partial file: %v", err)
+	}
+	meta, err := json.Marshal(partialDownload{URL: url, Validator: validator})
+	if err != nil {
+		t.Fatalf("failed to marshal partial meta: %v", err)
+	}
+	if err := os.WriteFile(out+".part.meta", meta, 0644); err != nil {
+		t.Fatalf("failed to write partial meta: %v", err)
 	}
 }
 
