@@ -56,6 +56,9 @@ func runPreRun(_ *cobra.Command, args []string) error {
 	if args[0] == "fetch" {
 		return params.validateFetchFlags()
 	}
+	if args[0] == "verify" || args[0] == "info" {
+		return params.validateSnapshotFileFlag()
+	}
 	return params.validateRestoreFlags()
 }
 
@@ -65,6 +68,7 @@ func runCommand(cmd *cobra.Command, args []string) {
 
 	var err error
 	var resultPath string
+	var resultFields []string
 	switch args[0] {
 	case "create":
 		err = archive.CreateSnapshot(params.dataDir, params.out)
@@ -75,6 +79,20 @@ func runCommand(cmd *cobra.Command, args []string) {
 	case "restore":
 		err = archive.RestoreSnapshot(params.snapshot, params.dataDir)
 		resultPath = params.dataDir
+	case "verify":
+		err = archive.VerifySnapshot(params.snapshot)
+		resultPath = params.snapshot
+		resultFields = []string{"Verified|true"}
+	case "info":
+		var info *archive.SnapshotInfo
+		info, err = archive.InspectSnapshot(params.snapshot)
+		if info != nil {
+			resultPath = info.Path
+			resultFields = []string{
+				fmt.Sprintf("Size|%d", info.Size),
+				fmt.Sprintf("Checksum|%s", info.Checksum),
+			}
+		}
 	}
 	if err != nil {
 		outputter.SetError(err)
@@ -84,14 +102,20 @@ func runCommand(cmd *cobra.Command, args []string) {
 	outputter.SetCommandResult(&snapshotResult{
 		action: args[0],
 		path:   resultPath,
+		fields: resultFields,
 	})
 }
 
 type snapshotResult struct {
 	action string
 	path   string
+	fields []string
 }
 
 func (r *snapshotResult) GetOutput() string {
-	return fmt.Sprintf("\n[%s SNAPSHOT]\nPath|%s\n", strings.ToUpper(r.action), r.path)
+	output := fmt.Sprintf("\n[%s SNAPSHOT]\nPath|%s\n", strings.ToUpper(r.action), r.path)
+	for _, field := range r.fields {
+		output += field + "\n"
+	}
+	return output
 }

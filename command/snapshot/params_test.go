@@ -56,3 +56,24 @@ func TestValidateUnknownAction(t *testing.T) {
 		t.Fatal("validateAction should reject unknown actions")
 	}
 }
+
+func TestValidateSnapshotFileFlag(t *testing.T) {
+	tests := []struct {
+		name     string
+		snapshot string
+		wantErr  bool
+	}{
+		{name: "snapshot set", snapshot: "/snap.tar.gz", wantErr: false},
+		{name: "snapshot missing", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &snapshotParams{snapshot: tt.snapshot}
+			err := p.validateSnapshotFileFlag()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateSnapshotFileFlag() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}

@@ -16,6 +16,37 @@ import (
 
 const snapshotChecksumSuffix = ".sha256"
 
+// SnapshotInfo describes an existing snapshot file without re-hashing it.
+type SnapshotInfo struct {
+	Path     string
+	Size     int64
+	Checksum string
+}
+
+// InspectSnapshot reads snapshot metadata from disk. Use VerifySnapshot for a
+// full checksum verification.
+func InspectSnapshot(snapshotFile string) (*SnapshotInfo, error) {
+	fileInfo, err := os.Stat(snapshotFile)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot %q: %w", snapshotFile, err)
+	}
+	checksumData, err := os.ReadFile(snapshotFile + snapshotChecksumSuffix)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot checksum %q: %w", snapshotFile+snapshotChecksumSuffix, err)
+	}
+
+	fields := strings.Fields(string(checksumData))
+	if len(fields) < 1 {
+		return nil, errors.New("invalid snapshot checksum format")
+	}
+
+	return &SnapshotInfo{
+		Path:     snapshotFile,
+		Size:     fileInfo.Size(),
+		Checksum: fields[0],
+	}, nil
+}
+
 // CreateSnapshot archives srcDir into dstFile as a gzip-compressed tar and
 // writes dstFile+".sha256" containing its SHA-256 checksum. It refuses to
 // overwrite an existing dstFile and removes partial output on failure.

@@ -17,7 +17,7 @@ var (
 	errOutRequired      = errors.New("out is required")
 	errSnapshotRequired = errors.New("snapshot is required")
 	errURLRequired      = errors.New("url is required")
-	errUnknownAction    = errors.New("unknown action; use create, restore or fetch")
+	errUnknownAction    = errors.New("unknown action; use create, restore, fetch, verify or info")
 )
 
 var params = &snapshotParams{}
@@ -30,10 +30,12 @@ type snapshotParams struct {
 }
 
 func validateAction(action string) error {
-	if action != "create" && action != "restore" && action != "fetch" {
+	switch action {
+	case "create", "restore", "fetch", "verify", "info":
+		return nil
+	default:
 		return fmt.Errorf("%w: %s", errUnknownAction, action)
 	}
-	return nil
 }
 
 func (p *snapshotParams) validateCreateFlags() error {
@@ -62,6 +64,13 @@ func (p *snapshotParams) validateFetchFlags() error {
 	}
 	if p.out == "" {
 		return errOutRequired
+	}
+	return nil
+}
+
+func (p *snapshotParams) validateSnapshotFileFlag() error {
+	if p.snapshot == "" {
+		return errSnapshotRequired
 	}
 	return nil
 }

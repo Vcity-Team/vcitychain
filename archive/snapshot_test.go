@@ -257,6 +257,46 @@ func TestRestoreSnapshotIfEmptyMissingSnapshot(t *testing.T) {
 	}
 }
 
+func TestInspectSnapshot(t *testing.T) {
+	src := t.TempDir()
+	writeFile(t, filepath.Join(src, "a.txt"), []byte("alpha"))
+
+	snapshot := filepath.Join(t.TempDir(), "snapshot.tar.gz")
+	if err := CreateSnapshot(src, snapshot); err != nil {
+		t.Fatalf("CreateSnapshot failed: %v", err)
+	}
+
+	info, err := InspectSnapshot(snapshot)
+	if err != nil {
+		t.Fatalf("InspectSnapshot failed: %v", err)
+	}
+	if info.Path != snapshot {
+		t.Fatalf("info.Path = %q, want %q", info.Path, snapshot)
+	}
+	if info.Size <= 0 {
+		t.Fatalf("info.Size = %d, want > 0", info.Size)
+	}
+	if len(info.Checksum) != 64 {
+		t.Fatalf("info.Checksum length = %d, want 64", len(info.Checksum))
+	}
+}
+
+func TestInspectSnapshotMissingFile(t *testing.T) {
+	if _, err := InspectSnapshot(filepath.Join(t.TempDir(), "missing.tar.gz")); err == nil {
+		t.Fatal("InspectSnapshot should fail for missing snapshot")
+	}
+}
+
+func TestInspectSnapshotMissingChecksum(t *testing.T) {
+	dir := t.TempDir()
+	snapshot := filepath.Join(dir, "snapshot.tar.gz")
+	writeFile(t, snapshot, []byte("data"))
+
+	if _, err := InspectSnapshot(snapshot); err == nil {
+		t.Fatal("InspectSnapshot should fail when checksum file is missing")
+	}
+}
+
 func writeTarEntry(t *testing.T, snapshot, name string, data []byte) {
 	t.Helper()
 
