@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -161,6 +162,70 @@ func TestCreateSnapshotRejectsExistingOutput(t *testing.T) {
 
 	if err := CreateSnapshot(src, snapshot); err == nil {
 		t.Fatal("CreateSnapshot should reject an existing output file")
+	}
+}
+
+func TestCreateSnapshotRejectsUnsupportedEntry(t *testing.T) {
+	src := t.TempDir()
+	writeFile(t, filepath.Join(src, "a.txt"), []byte("alpha"))
+	if err := os.Symlink("a.txt", filepath.Join(src, "link.txt")); err != nil {
+		t.Skipf("symlink not supported on this platform: %v", err)
+	}
+
+	snapshot := filepath.Join(t.TempDir(), "snapshot.tar.gz")
+	if err := CreateSnapshot(src, snapshot); err == nil {
+		t.Fatal("CreateSnapshot should reject symlinks instead of silently dropping them")
+	}
+}
+
+func TestRestoreSnapshotRejectsUnsupportedEntry(t *testing.T) {
+	dir := t.TempDir()
+	snapshot := filepath.Join(dir, "symlink.tar.gz")
+	writeTarSymlink(t, snapshot, "link.txt", "target.txt")
+	writeSnapshotChecksum(t, snapshot)
+
+	if err := RestoreSnapshot(snapshot, filepath.Join(dir, "restored")); err == nil {
+		t.Fatal("RestoreSnapshot should reject unsupported entry types")
+	}
+}
+
+func writeSnapshotChecksum(t *testing.T, snapshot string) {
+	t.Helper()
+
+	sum, err := sha256File(snapshot)
+	if err != nil {
+		t.Fatalf("failed to hash snapshot: %v", err)
+	}
+	checksum := fmt.Sprintf("%x  %s\n", sum, filepath.Base(snapshot))
+	if err := os.WriteFile(snapshot+".sha256", []byte(checksum), 0644); err != nil {
+		t.Fatalf("failed to write checksum: %v", err)
+	}
+}
+
+func writeTarSymlink(t *testing.T, snapshot, name, target string) {
+	t.Helper()
+
+	f, err := os.Create(snapshot)
+	if err != nil {
+		t.Fatalf("failed to create snapshot: %v", err)
+	}
+	defer f.Close()
+
+	gw := gzip.NewWriter(f)
+	tw := tar.NewWriter(gw)
+	if err := tw.WriteHeader(&tar.Header{
+		Name:     name,
+		Mode:     0777,
+		Typeflag: tar.TypeSymlink,
+		Linkname: target,
+	}); err != nil {
+		t.Fatalf("failed to write symlink header: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("failed to close tar: %v", err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatalf("failed to close gzip: %v", err)
 	}
 }
 

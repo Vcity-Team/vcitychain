@@ -77,7 +77,7 @@ func runCommand(cmd *cobra.Command, args []string) {
 		err = fetchSnapshot(cmd.Context(), params.urls, params.out)
 		resultPath = params.out
 	case "restore":
-		err = archive.RestoreSnapshot(params.snapshot, params.dataDir)
+		err = archive.RestoreSnapshotIfEmpty(params.snapshot, params.dataDir)
 		resultPath = params.dataDir
 	case "verify":
 		err = archive.VerifySnapshot(params.snapshot)

@@ -90,15 +90,17 @@ func CreateSnapshot(srcDir, dstFile string) error {
 		if rel == "." {
 			return nil
 		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
 		if !entry.IsDir() {
 			if _, excluded := snapshotExcludedFiles[entry.Name()]; excluded {
 				return nil
 			}
-		}
-
-		info, err := entry.Info()
-		if err != nil {
-			return err
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("snapshot source contains unsupported entry %q (mode %s)", rel, info.Mode())
+			}
 		}
 		header, err := tar.FileInfoHeader(info, "")
 		if err != nil {
@@ -237,6 +239,8 @@ func RestoreSnapshot(snapshotFile, dstDir string) error {
 			if err := out.Close(); err != nil {
 				return err
 			}
+		default:
+			return fmt.Errorf("snapshot contains unsupported entry %q (type %d)", header.Name, header.Typeflag)
 		}
 	}
 }
